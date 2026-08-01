@@ -3,15 +3,15 @@
 //!
 //! Circuit exposes an OpenAI-compatible inference gateway and an on-chain data API,
 //! both metered with x402 and settled in CIRC (a Token-2022 mint) on Solana. This crate
-//! makes both first-class, paid Covenant tools: it runs the x402 pay-and-retry loop,
-//! enforces capability scoping (per-call cap, treasury pin, endpoint allowlist, and a
-//! cumulative budget) before any CIRC leaves the wallet, and settles through a
-//! [`CircPayer`] so a Covenant-paid call lands in Circuit's treasury identically to a
-//! first-party one — feeding their staking and operator rewards, untouched.
+//! provides explicit clients, an x402 pay-and-retry loop, and an optional tool factory.
+//! It enforces process-local capability scoping (per-call cap, treasury pin, endpoint
+//! allowlist, and cumulative budget) before calling a [`CircPayer`].
 //!
 //! The pay-loop and clients are runtime- and Solana-free; the actual on-chain CIRC
 //! transfer lives behind [`CircPayer`], with the real Token-2022 settling payer supplied
-//! by the daemon or the live example so a funding key never enters this library.
+//! only by an explicit caller or live example. Covenantd does not register these tools or
+//! construct a Circuit payer: its daemon-owned path is parked until authorization and
+//! prepayment state are transaction-bound, durable, and idempotent.
 
 mod capability;
 mod config;

@@ -1,10 +1,10 @@
 //! Circuit as native Covenant tools.
 //!
 //! Each tool is a thin marshal of arguments into an x402-paid Circuit call, plus a
-//! `circuit` block on the way out carrying the settling signature and CIRC spent, so the
-//! daemon's governance handler can turn a call into a settlement receipt and audit row.
-//! A tool never holds a funding key — payment goes through the [`CircPayer`](crate::CircPayer)
-//! baked into the shared clients.
+//! `circuit` result block carrying the reported settling signature and CIRC spent. These
+//! are explicit library surfaces; covenantd neither advertises nor invokes them. A tool
+//! never holds a funding key itself — payment goes through the
+//! [`CircPayer`](crate::CircPayer) baked into the shared clients.
 
 use std::sync::Arc;
 
@@ -24,8 +24,9 @@ pub const MARKET_OVERVIEW_TOOL: &str = "circuit.data.market_overview";
 
 type CircuitOutput = (Value, Option<String>, Option<u64>, Option<String>);
 
-/// Build the Circuit tool set permitted by `cfg.allow`, over shared inference + data
-/// clients. Empty when the config is disabled.
+/// Build an explicit Circuit tool set permitted by `cfg.allow`, over shared inference +
+/// data clients. Empty when the config is disabled. This does not register the tools with
+/// covenantd.
 pub fn circuit_tools(
     inference: Arc<Inference>,
     data: Arc<DataClient>,

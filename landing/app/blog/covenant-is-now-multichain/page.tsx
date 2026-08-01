@@ -5,14 +5,14 @@ import { SiteHeader } from "../../SiteHeader";
 export const metadata: Metadata = {
   title: "Covenant is now multi-chain. The token isn't.",
   description:
-    "Covenant's trust layer is live on Base while $CVNT stays a single Solana mint. Only signed data crosses chains, verifiable with a plain ecrecover.",
+    "Selected Covenant registrations and signed statements are readable on Base while $CVNT stays on Solana. ecrecover proves only that a configured address signed the bytes, not publisher identity or claim truth.",
   alternates: { canonical: "/blog/covenant-is-now-multichain" },
   openGraph: {
     type: "article",
     url: "https://opencovenant.org/blog/covenant-is-now-multichain",
     title: "Covenant is now multi-chain. The token isn't.",
     description:
-      "The trust layer is live on Base while $CVNT stays a single Solana mint. Only signed data crosses chains, verifiable with a plain ecrecover.",
+      "Selected registrations and statements signed under configured keys are readable on Base while $CVNT stays on Solana.",
     images: [
       {
         url: "/og/covenant-is-now-multichain.png",
@@ -27,7 +27,7 @@ export const metadata: Metadata = {
     site: "@OpenCovenant",
     creator: "@OpenCovenant",
     title: "Covenant is now multi-chain. The token isn't.",
-    description: "Trust crosses to Base. The token stays on Solana.",
+    description: "Signed evidence reaches Base. The token stays on Solana.",
     images: "/og/covenant-is-now-multichain.png",
   },
 };
@@ -54,14 +54,16 @@ export default function MultichainLaunchPost() {
         </h1>
 
         <p className="mt-6 max-w-2xl text-pretty text-lg font-light leading-relaxed text-neutral-300 sm:text-xl">
-          Trust crosses to Base. The token stays on Solana.
+          Signed evidence reaches Base. The token stays on Solana.
         </p>
 
         <article className="prose-docs mt-12 max-w-2xl">
           <p>
-            Covenant&apos;s trust layer is live on Base. $CVNT stays a single Solana mint. What
-            crosses to Base is proof, not value: signed statements about an agent that any EVM
-            contract can check for a fraction of a cent.
+            Selected Covenant registrations, schemas, and signed statements are
+            readable on Base. $CVNT stays a single Solana mint.{" "}
+            <code>ecrecover</code> can prove that a configured address signed the
+            bytes; it does not establish the publisher&apos;s identity or prove the
+            underlying score or claim.
           </p>
 
           <h2>Going multi-chain usually means moving the token</h2>
@@ -72,54 +74,60 @@ export default function MultichainLaunchPost() {
             drained.
           </p>
           <p>
-            An agent trust layer does not need to move value across chains. It needs to move facts:
-            who an agent is, what it has done, what it has staked. Facts are signatures, and
-            signatures do not need a bridge.
+            Signed evidence does not require moving the protocol token. A
+            signature can bind bytes to a configured key without bridging
+            value, but it cannot identify the publisher or turn a claim into a
+            fact.
           </p>
 
-          <h2>Bridge the trust, not the token</h2>
+          <h2>Project signed evidence, not the token</h2>
           <p>
-            Covenant keeps one canonical identity and one hash-chained audit history authoritative
-            on Solana. Base holds verifiable projections of them, never the source of truth and never
-            the token. An agent&apos;s identity, reputation, provenance, and bonds each cross as a
-            signed statement a contract verifies on arrival. Only signed data crosses, never a
-            wrapped token and never custody. Per-call value stays chain-local: USDC on the chain of
-            the call, never $CVNT.
+            Covenant treats configured Solana identity and audit-root records as
+            canonical references for this projection. Base holds registrations
+            and signed statements, never the token. Consumers verify a
+            configured signing key and then apply their own policy to the claim.
+            Key attribution is a separate trust decision. Per-call
+            value stays chain-local: USDC on the chain of the call, never $CVNT.
           </p>
 
-          <h2>One identity an EVM can check for ~3k gas</h2>
+          <h2>An issuer key an EVM can verify</h2>
           <p>
-            Verifying a Solana signature on an EVM costs about 2 million gas, enough to make
-            cross-chain verification pointless. So Covenant gives each identity a second key on the
-            curve Ethereum already speaks, which an EVM recovers with a plain ecrecover at around 3
-            thousand gas, and binds it bidirectionally to the canonical Solana identity. Every
-            cross-chain record is signed by that key. A consumer recovers the signer with one call
-            and checks it against Covenant&apos;s published address. One agent, one record, provable
-            on both chains, for a fraction of a cent.
+            Verifying a Solana signature on an EVM costs about 2 million gas,
+            enough to make cross-chain verification pointless. So Covenant gives
+            each identity a second key on the curve Ethereum already speaks,
+            which an EVM recovers with a plain ecrecover at around 3 thousand
+            gas. Covenant records associate that issuer with the configured
+            Solana identifier. Recovering the configured key proves only that
+            the corresponding private key signed the bytes, not who controls it
+            or whether the statement is true.
           </p>
 
           <h2>What is live on Base today</h2>
           <p>
-            The agent is registered in the ERC-8004 Identity Registry, so EVM tooling discovers a
-            Covenant identity whose record points back to Solana. The issuer identity, a
-            non-transferable reputation schema bound to a Solana anchor, and a bond-receipt verifier
-            are all deployed. A real Covenant provenance record already verifies under Base&apos;s own
-            attestation stack and recovers to the issuer key. The entire surface went through an
-            internal adversarial security audit and hardening before any of it shipped.
+            The agent is registered in the ERC-8004 Identity Registry, so EVM
+            tooling discovers a Covenant registration whose record points to a
+            Solana address. The issuer record, EAS score schema, and
+            bond-receipt verifier are deployed. A Covenant audit-root statement
+            recovers to the configured issuer key. Deployment and internal
+            review do not establish the truth of a signed claim, and onchain
+            score writes and funded bonds are not exercised.
           </p>
           <p>
-            opencovenant.eth resolves to the Covenant identity, and per-agent names resolve to each
-            agent&apos;s Solana identity through a CCIP-Read gateway. Agents pay and charge per call
-            in USDC on Base over x402, gasless through an EIP-3009 authorization so an agent needs
-            only USDC.
+            opencovenant.eth and the per-agent CCIP-Read names resolve to
+            configured Solana addresses. These are pointers, not proof of who
+            controls or operates an agent. Covenant operates a Base x402-v2
+            seller that can charge callers per request in USDC using EIP-3009
+            authorization. Reusable outbound primitives exist, but the
+            production daemon does not currently make Base x402 payments.
           </p>
 
           <h2>$CVNT never leaves Solana</h2>
           <p>
-            $CVNT is one mint, one market. It is never bridged, wrapped, or minted on any other
-            chain, and no per-call fee is ever denominated in it. This is enforced in code and
-            checked on every build. Multi-chain grows the surface that consumes Covenant&apos;s trust
-            without ever fragmenting the token or the trust root.
+            $CVNT is one mint, one market. It is never bridged, wrapped, or
+            minted on any other chain, and no current per-call fee is
+            denominated in it. Known mint literals and named bridge patterns are
+            guarded in repository validation. That guard is a tripwire, not
+            proof against every future integration.
           </p>
 
           <h2>What is next</h2>
@@ -130,10 +138,11 @@ export default function MultichainLaunchPost() {
           </p>
 
           <p>
-            Not trust by claim. Trust checked against the key. The token and its market stay whole on
-            Solana; the proof travels everywhere else. The full architecture and the Base mainnet
+            A key check proves key possession, not publisher identity or claim
+            truth. The token and its market stay on Solana; selected signed
+            evidence can be consumed elsewhere. The architecture and Base mainnet
             address sheet, with how to check every claim yourself, are in the{" "}
-            <a href="/docs/multichain">multi-chain trust</a> docs.
+            <a href="/docs/multichain">multi-chain signed-evidence</a> docs.
           </p>
         </article>
 

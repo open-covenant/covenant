@@ -61,7 +61,10 @@ In another terminal:
 ./target/release/covenant audit verify
 ```
 
-The audit log is a locally hash-chained record of every step. `audit verify` walks the chain and reports any tampering.
+The audit log is a locally hash-chained record of events emitted by audited
+Covenant paths. `audit verify` checks the supplied event log and sidecar for
+inconsistent or unmatched local edits. It does not prove event completeness or
+detect coordinated replacement or rollback of both files.
 
 ## Run the test suite
 

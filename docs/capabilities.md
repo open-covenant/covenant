@@ -2,7 +2,17 @@
 
 Capability tokens bind an agent subject, an action string, an optional JSON scope, an issuer, and an optional expiry into one signed object. The signature covers `scope`, so scope fields are tamper-evident.
 
-Current enforcement boundary: the daemon validates non-empty scopes for known action namespaces before signing a grant, then enforces action presence, expiry, signature validity, subject matching, revocation, the `tool.call.*` `arguments.allow` predicate, the `audit.purge` and `capabilities.purge` `before_ms` cutoffs, stable memory predicates for `memory.read`, `memory.read.<tier>`, `memory.write`, `memory.purge`, `memory.repair.*`, `memory.compact.*`, and `memory.backfill.*`, stable A2A predicates for send, receive-admission, respond, and repair flows, peer predicates for delegated list/revoke flows plus purge retention, chain predicates for receipt reads, receipt batch reads, and receipt flushing, the `settlement.backfill.*` predicate for receipt backfill, the `x402.outbound.pay` destination-class predicate for outbound paid-call egress, and the `secret.access` named-secret predicate for daemon-mediated secret reads at dispatch.
+## Current grant-authority limit
+
+Any authenticated peer can request a capability for itself through
+`GrantCapability`; the daemon signs and stores that self-request without a
+separate operator-approval gate. The resulting token proves the daemon recorded
+a scoped request for that peer, not that an operator approved the action.
+Capabilities issued this way must not be treated as W009 approval or authority
+to spend funds. Operator-authorized delegation requires a distinct grantor
+check and subject-selection contract that is not yet implemented.
+
+Current enforcement boundary: the daemon validates non-empty scopes for known action namespaces before signing a grant, then enforces action presence, expiry, signature validity, subject matching, revocation, the `tool.call.*` `arguments.allow` predicate, the `audit.purge` and `capabilities.purge` `before_ms` cutoffs, stable memory predicates for `memory.read`, `memory.read.<tier>`, `memory.write`, `memory.purge`, `memory.repair.*`, `memory.compact.*`, and `memory.backfill.*`, stable A2A predicates for send, receive-admission, respond, and repair flows, peer predicates for delegated list/revoke flows plus purge retention, chain predicates for receipt reads, receipt batch reads, and receipt flushing, the `settlement.backfill.*` predicate for receipt backfill, the legacy `x402.outbound.pay` destination-class predicate before an unconditional parked boundary, and the `secret.access` named-secret predicate for daemon-mediated secret reads at dispatch. No x402 capability currently authorizes funds to move.
 
 ## Action Grammar
 
@@ -247,7 +257,9 @@ Rules:
 
 ### `x402.*`
 
-Use to bound an agent's outbound paid-call egress to a destination class.
+Legacy schema for an outbound paid-call destination class. The production
+daemon payment path is parked; this capability cannot currently authorize a
+payment.
 
 ```json
 {
@@ -258,10 +270,10 @@ Use to bound an agent's outbound paid-call egress to a destination class.
 
 Rules:
 
-- `x402.outbound.pay` authorizes the daemon to make an outbound x402 paid call on the caller's behalf. The call's `provider` and `endpoint` are caller-supplied, so an unscoped grant authorizes payment to *any* destination.
+- `x402.outbound.pay` is still required to reach the legacy handler, but a grant does not authorize funds to move. Every otherwise admissible call returns `LEGACY_OUTBOUND_PARKED` before config parsing, signer construction, or network I/O.
 - `provider` binds the grant to one destination class: a scoped grant only authorizes calls whose provider matches. An empty scope, or one that omits `provider` (or sets it to `null`), keeps the unbounded blanket behavior. The field must be a non-empty string or `null`. The bound is the logical `provider` label, not the `endpoint` URL — a granted provider can still be paired with any endpoint, so treat `provider` as the destination-class boundary, not a per-URL allowlist.
 - Capabilities are additive, so several destinations are expressed as several grants — the same shape as per-tool `tool.call.<name>` grants.
-- The `PayX402` dispatch enforces this scope at dispatch, after the action check and before the dispatch-config check: a call to a provider outside the granted class is refused with a `CapabilityScopeRejected` audit event, so a denied egress is recorded for incident review even on a daemon with no funding-key sidecar wired. Hyre's paid calls egress through `tool.call.hyre.*` and are already bound by that tool scope.
+- The `PayX402` dispatch still checks provider scope after the action check so denied probes retain a `CapabilityScopeRejected` audit event. A permitted provider then reaches the unconditional parked boundary. Hyre paid tools are not advertised by the daemon.
 
 ### `secret.*`
 

@@ -2,20 +2,17 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Witness } from "./types";
 
-// Anchor 3 — settlement-program anchor. Looks for a ReceiptBatch PDA on the
-// settlement program holding this commit's Merkle leaf in a confirmed batch. The
-// light is green only when the batch carries a PDA, a tx, and a merkle_root that
-// equals the run's audit_root_hex; a batch whose committed root does not match
-// the run, or an unreadable manifest, fails closed to red.
+// Anchor 3 legacy manifest reader. It compares two repository files but does
+// not fetch or decode the claimed PDA, transaction, slot, or finality. A
+// structurally consistent manifest is therefore yellow, never chain-verified.
 export function checkAnchor3Solana(repoRoot: string, sha: string): Witness {
   const manifestPath = join(repoRoot, "landing", "public", "witness", "settlement", `${sha}.json`);
   if (!existsSync(manifestPath)) {
     return {
       key: "solana_anchor",
-      label: "Solana settlement anchor",
+      label: "Published settlement report",
       state: "yellow",
-      detail:
-        "No settlement batch anchored for this commit yet. A receipt batch on cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y commits the audit root on-chain; until it lands this light reads yellow.",
+      detail: "No settlement manifest is published for this commit.",
       drillHref: `https://solscan.io/account/cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y?cluster=devnet`,
     };
   }
@@ -38,7 +35,7 @@ export function checkAnchor3Solana(repoRoot: string, sha: string): Witness {
     if (!m.batch_pda || !m.tx || !m.merkle_root || m.merkle_root !== auditRoot) {
       return {
         key: "solana_anchor",
-        label: "Solana settlement anchor",
+        label: "Published settlement report",
         state: "red",
         detail: "Settlement batch present but its committed root does not match the run's audit root.",
         drillHref,
@@ -46,15 +43,15 @@ export function checkAnchor3Solana(repoRoot: string, sha: string): Witness {
     }
     return {
       key: "solana_anchor",
-      label: "Solana settlement anchor",
-      state: "green",
-      detail: `Receipt batch ${m.batch_pda.slice(0, 12)}… on devnet commits audit root ${m.merkle_root.slice(0, 12)}… at slot ${m.slot ?? "?"}. Decode the PDA on-chain to check.`,
+      label: "Published settlement report",
+      state: "yellow",
+      detail: `The mutable manifest reports batch ${m.batch_pda.slice(0, 12)}… on ${cluster}, transaction ${m.tx.slice(0, 12)}…, and the same root as the run file at slot ${m.slot ?? "?"}. This page has not fetched or decoded the PDA or established transaction finality.`,
       drillHref,
     };
   } catch {
     return {
       key: "solana_anchor",
-      label: "Solana settlement anchor",
+      label: "Published settlement report",
       state: "red",
       detail: "Settlement manifest unreadable.",
     };

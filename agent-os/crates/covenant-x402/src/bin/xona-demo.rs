@@ -104,11 +104,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let signer = SolanaSigner::new(keypair, cfg.rpc_url);
-    let client = Client::new(reqwest::Client::new());
+    let client = Client::new();
     let body = serde_json::json!({ "prompt": cfg.prompt });
 
-    // One call resolves the endpoint, enforces the cap, and runs the
-    // 402-then-pay loop — the same path the daemon uses.
+    // One explicit development call resolves the endpoint, enforces the cap,
+    // and runs the 402-then-pay loop. The daemon-owned path is parked.
     let resp = catalog
         .discover_and_pay(
             &client,

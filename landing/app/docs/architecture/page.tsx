@@ -387,10 +387,10 @@ export default function ArchitecturePage() {
               <code>covenant-identity</code>
             </td>
             <td>
-              ed25519 identity: keypair generation, on-disk persistence,
-              signing, and verification helpers. The same key signs
-              on-chain settlement transactions, so there is no second
-              keypair system.
+              Local ed25519 identity: keypair generation, on-disk persistence,
+              signing, and verification helpers for capability, audit,
+              registration, and statement protocols. Payment funding keys are
+              separate.
             </td>
           </tr>
           <tr>

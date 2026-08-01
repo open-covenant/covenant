@@ -2,9 +2,9 @@ use serde::Deserialize;
 
 use crate::CircuitCapability;
 
-/// Daemon-facing Circuit config. Deserialized from the daemon's provider config; disabled
-/// by default, so Circuit tools register only when explicitly turned on. The capability
-/// fields become the [`CircuitCapability`] every tool call is bound by.
+/// Legacy Circuit tool-factory config retained for explicit library callers and tests.
+/// Covenantd does not consume this config or advertise Circuit tools. `enabled` controls
+/// only [`crate::circuit_tools`] when a caller constructs the clients itself.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct CircuitConfig {
@@ -27,9 +27,9 @@ pub struct CircuitConfig {
     /// Allowed endpoint hosts.
     pub allowed_hosts: Vec<String>,
 
-    /// Funding keypair path for the on-chain CIRC payer (used by the `solana` payer).
+    /// Funding keypair path for an explicit on-chain CIRC payer integration.
     pub keypair_path: Option<String>,
-    /// Solana RPC the payer submits to.
+    /// Solana RPC an explicit payer integration submits to.
     pub rpc_url: Option<String>,
 }
 

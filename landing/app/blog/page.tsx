@@ -5,7 +5,7 @@ import { SiteHeader } from "../SiteHeader";
 export const metadata: Metadata = {
   title: "Blog",
   description:
-    "Notes from the Covenant build: integrations, the primitives behind the trust layer, and what actually ships.",
+    "Notes from the Covenant build: integrations, evidence and policy primitives, and what actually ships.",
   alternates: { canonical: "/blog" },
   openGraph: {
     type: "website",
@@ -31,13 +31,13 @@ const POSTS: Post[] = [
     slug: "covenant-is-now-multichain",
     date: "7 July 2026",
     title: "Covenant is now multi-chain. The token isn't.",
-    dek: "The trust layer is live on Base while $CVNT stays a single Solana mint. Only signed data crosses chains, verifiable with a plain ecrecover.",
+    dek: "Selected registrations and signed statements are readable on Base while $CVNT stays a single Solana mint. ecrecover proves only that a configured address signed the bytes; it does not establish publisher identity or claim truth.",
   },
   {
     slug: "covenant-payai",
-    date: "21 June 2026",
-    title: "Proof of work on the payment rail",
-    dek: "PayAI moves the money. Covenant proves the work. A trust layer over PayAI's x402 rail: signed work-receipts and reputation from real on-chain settlements.",
+    date: "31 July 2026",
+    title: "Correction: what payment evidence proves",
+    dek: "A chain-confirmed transfer proves funds moved. A seller-signed receipt proves only that its signing key signed a statement. Neither proves delivery, quality, or reputation.",
   },
 ];
 

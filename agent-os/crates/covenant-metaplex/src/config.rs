@@ -84,7 +84,7 @@ pub struct MetaplexConfig {
     pub agent_registration: String,
     /// Per-action ceiling in lamports. A signer request whose estimated
     /// cost (rent + protocol fee) exceeds this is refused before signing.
-    /// `0` defers to the sidecar's built-in cap.
+    /// `0` disables daemon write tools.
     #[serde(default)]
     pub per_action_cap_lamports: u64,
     /// Tool allowlist by short slug (`das.get_asset`, `attest.audit_root`).
@@ -156,9 +156,13 @@ impl MetaplexConfig {
     }
 
     /// Whether the write tools (mint/attest) should be advertised: the
-    /// profile is on and both the signer sidecar and an RPC are set.
+    /// profile is on, both the signer sidecar and an RPC are set, and the
+    /// operator configured a positive per-action cap.
     pub fn writes_enabled(&self) -> bool {
-        self.enabled && !self.signer_binary.is_empty() && !self.rpc_url.is_empty()
+        self.enabled
+            && !self.signer_binary.is_empty()
+            && !self.rpc_url.is_empty()
+            && self.per_action_cap_lamports > 0
     }
 
     /// Whether `slug` is permitted by the allowlist.
@@ -196,6 +200,8 @@ mod tests {
         c.signer_binary = "/bin/covenant-metaplex-signer".into();
         assert!(!c.writes_enabled(), "still no rpc");
         c.rpc_url = "https://api.devnet.solana.com".into();
+        assert!(!c.writes_enabled(), "zero cap keeps writes disabled");
+        c.per_action_cap_lamports = 20_000_000;
         assert!(c.writes_enabled());
     }
 
@@ -292,7 +298,8 @@ mod tests {
         assert!(on.enabled);
         assert_eq!(on.cluster, "mainnet-beta");
 
-        // A numeric cap parses; a non-numeric cap defers to the sidecar (0).
+        // A positive numeric cap enables the signer gate. Invalid and zero
+        // values fail closed by leaving daemon writes disabled.
         assert_eq!(
             resolve(&[("COVENANT_METAPLEX_PER_ACTION_CAP_LAMPORTS", "123")])
                 .per_action_cap_lamports,
@@ -301,6 +308,20 @@ mod tests {
         assert_eq!(
             resolve(&[("COVENANT_METAPLEX_PER_ACTION_CAP_LAMPORTS", "abc")])
                 .per_action_cap_lamports,
+            0
+        );
+        let invalid_cap = resolve(&[
+            ("COVENANT_METAPLEX_ENABLED", "true"),
+            ("COVENANT_METAPLEX_RPC_URL", "https://rpc.example"),
+            (
+                "COVENANT_METAPLEX_SIGNER_BIN",
+                "/bin/covenant-metaplex-signer",
+            ),
+            ("COVENANT_METAPLEX_PER_ACTION_CAP_LAMPORTS", "abc"),
+        ]);
+        assert!(!invalid_cap.writes_enabled());
+        assert_eq!(
+            resolve(&[("COVENANT_METAPLEX_PER_ACTION_CAP_LAMPORTS", "0")]).per_action_cap_lamports,
             0
         );
 

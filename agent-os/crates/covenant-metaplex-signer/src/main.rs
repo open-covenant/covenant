@@ -28,7 +28,8 @@
 //! - `COVENANT_METAPLEX_CLUSTER`: `devnet` | `mainnet-beta`. Default devnet.
 //! - `COVENANT_METAPLEX_COLLECTION`: MPL Core collection (optional).
 //! - `COVENANT_METAPLEX_PER_ACTION_CAP_LAMPORTS`: refuse a write whose
-//!   estimated cost exceeds this. `0`/unset uses the built-in cap.
+//!   estimated cost exceeds this. Unset uses the built-in cap; `0` and
+//!   invalid values refuse to start.
 
 use std::process::ExitCode;
 use std::str::FromStr;
@@ -114,18 +115,14 @@ async fn run() -> Result<SignerResponse> {
         MPL_AGENT_IDENTITY_PROGRAM_ID,
     )?;
 
+    let cap = resolve_per_action_cap(std::env::var("COVENANT_METAPLEX_PER_ACTION_CAP_LAMPORTS"))?;
+
     let keypair_path = std::env::var("COVENANT_METAPLEX_KEYPAIR")
         .map_err(|_| anyhow!("COVENANT_METAPLEX_KEYPAIR is not set"))?;
     let rpc_url = std::env::var("COVENANT_METAPLEX_RPC_URL")
         .map_err(|_| anyhow!("COVENANT_METAPLEX_RPC_URL is not set"))?;
     let cluster =
         std::env::var("COVENANT_METAPLEX_CLUSTER").unwrap_or_else(|_| "devnet".to_string());
-    let cap = std::env::var("COVENANT_METAPLEX_PER_ACTION_CAP_LAMPORTS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .filter(|c| *c > 0)
-        .unwrap_or(DEFAULT_CAP_LAMPORTS);
-
     let payer = load_keypair(&keypair_path)?;
 
     // On mainnet the public verifier rejects any record whose on-chain
@@ -182,6 +179,23 @@ async fn run() -> Result<SignerResponse> {
         asset: built.asset.pubkey().to_string(),
         cluster,
     })
+}
+
+fn resolve_per_action_cap(value: Result<String, std::env::VarError>) -> Result<u64> {
+    let raw = match value {
+        Ok(raw) => raw,
+        Err(std::env::VarError::NotPresent) => return Ok(DEFAULT_CAP_LAMPORTS),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            bail!("COVENANT_METAPLEX_PER_ACTION_CAP_LAMPORTS must be a positive u64")
+        }
+    };
+    let cap = raw
+        .parse::<u64>()
+        .map_err(|_| anyhow!("COVENANT_METAPLEX_PER_ACTION_CAP_LAMPORTS must be a positive u64"))?;
+    if cap == 0 {
+        bail!("COVENANT_METAPLEX_PER_ACTION_CAP_LAMPORTS=0 disables Metaplex writes");
+    }
+    Ok(cap)
 }
 
 /// A ready-to-sign transaction: the instructions, the fresh asset keypair
@@ -468,4 +482,28 @@ async fn confirm_signature(http: &reqwest::Client, url: &str, signature: &str) -
         }
     }
     bail!("transaction {signature} not confirmed within timeout; check it on-chain")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cap_defaults_only_when_unset() {
+        assert_eq!(
+            resolve_per_action_cap(Err(std::env::VarError::NotPresent)).unwrap(),
+            DEFAULT_CAP_LAMPORTS
+        );
+        assert_eq!(resolve_per_action_cap(Ok("42".into())).unwrap(), 42);
+    }
+
+    #[test]
+    fn cap_rejects_zero_invalid_and_out_of_range_values() {
+        for value in ["0", "", "abc", "-1", "18446744073709551616"] {
+            assert!(
+                resolve_per_action_cap(Ok(value.into())).is_err(),
+                "{value:?} must fail closed"
+            );
+        }
+    }
 }

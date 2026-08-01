@@ -33,13 +33,15 @@
 //!
 //! ## Compaction
 //!
-//! [`BudgetLedger::compact_older_than`] drops `BudgetEvent::Debit`
-//! events older than the cutoff and emits one per-agent
-//! `BudgetEvent::Snapshot` capturing the bucket's `(capacity,
-//! tokens_remaining, last_refill_ms)` at the cutoff. Replay treats
-//! Snapshot as authoritative for that agent, so reopening a compacted
-//! ledger reconstructs the same bucket state as before the rewrite —
-//! compaction is non-destructive of bucket state.
+//! [`BudgetLedger::compact_older_than`] replaces `BudgetEvent::Debit`
+//! events older than the cutoff with durable `BudgetEvent::DebitTombstone`
+//! rows and emits one per-agent `BudgetEvent::Snapshot` capturing the
+//! bucket's `(capacity, tokens_remaining, last_refill_ms)` at the cutoff.
+//! Replay treats Snapshot as authoritative for that agent, so reopening a
+//! compacted ledger reconstructs the same bucket state as before the rewrite.
+//! Tombstones retain each debit's idempotency key and immutable accounting
+//! facts even after its operator-facing history row is compacted. Settlement
+//! claims are also retained; both sets grow for the lifetime of the ledger.
 //!
 //! [`tokens_remaining`]: BudgetLedger::tokens_remaining
 //! [`would_exceed`]: BudgetLedger::would_exceed
@@ -82,6 +84,10 @@ pub enum BudgetError {
         tokens_remaining: u64,
         refill_eta_ms: u64,
     },
+    #[error("settlement fact claims are not supported by this budget ledger")]
+    SettlementClaimsUnsupported,
+    #[error("paired receipt {paired_receipt} already belongs to different settlement facts")]
+    IdempotencyConflict { paired_receipt: Uuid },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -193,6 +199,85 @@ pub struct BudgetDebit {
     pub at_ms: u64,
 }
 
+/// Result of binding a settlement's immutable caller-reported facts to its
+/// deterministic receipt id. A claim does not reserve or debit capacity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DebitClaimOutcome {
+    Inserted,
+    Existing,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct BudgetDebitClaim {
+    agent: AgentId,
+    credits: u64,
+    paired_receipt: Uuid,
+    binding_sha256: String,
+    at_ms: u64,
+}
+
+fn debit_already_recorded(
+    debits: &[BudgetDebit],
+    tombstones: &HashMap<Uuid, BudgetDebit>,
+    agent: &AgentId,
+    credits: u64,
+    paired_receipt: Uuid,
+) -> Result<bool, BudgetError> {
+    let mut found = false;
+    for debit in debits
+        .iter()
+        .filter(|debit| debit.paired_receipt == paired_receipt)
+    {
+        found = true;
+        if debit.agent.pubkey != agent.pubkey || debit.credits != credits {
+            return Err(BudgetError::IdempotencyConflict { paired_receipt });
+        }
+    }
+    if let Some(debit) = tombstones.get(&paired_receipt) {
+        found = true;
+        if debit.agent.pubkey != agent.pubkey || debit.credits != credits {
+            return Err(BudgetError::IdempotencyConflict { paired_receipt });
+        }
+    }
+    Ok(found)
+}
+
+fn claim_outcome(
+    claims: &HashMap<Uuid, BudgetDebitClaim>,
+    agent: &AgentId,
+    credits: u64,
+    paired_receipt: Uuid,
+    binding_sha256: &str,
+) -> Result<DebitClaimOutcome, BudgetError> {
+    let Some(claim) = claims.get(&paired_receipt) else {
+        return Ok(DebitClaimOutcome::Inserted);
+    };
+    if claim.agent.pubkey == agent.pubkey
+        && claim.credits == credits
+        && claim.binding_sha256 == binding_sha256
+    {
+        Ok(DebitClaimOutcome::Existing)
+    } else {
+        Err(BudgetError::IdempotencyConflict { paired_receipt })
+    }
+}
+
+fn insert_tombstone(
+    tombstones: &mut HashMap<Uuid, BudgetDebit>,
+    debit: BudgetDebit,
+) -> Result<(), BudgetError> {
+    if let Some(existing) = tombstones.get(&debit.paired_receipt) {
+        if existing.agent.pubkey != debit.agent.pubkey || existing.credits != debit.credits {
+            return Err(BudgetError::IdempotencyConflict {
+                paired_receipt: debit.paired_receipt,
+            });
+        }
+        return Ok(());
+    }
+    tombstones.insert(debit.paired_receipt, debit);
+    Ok(())
+}
+
 /// Per-agent debit-rate observation over the `[since_ms, now_ms]` window,
 /// returned by [`BudgetLedger::debit_rate_since`]. Packages the three
 /// observation inputs of [`project_overshoot`] — `current_debit`,
@@ -224,7 +309,12 @@ enum BudgetEvent {
         credits_per_hour: u64,
         at_ms: u64,
     },
+    DebitClaim(BudgetDebitClaim),
     Debit(BudgetDebit),
+    /// Durable idempotency marker for a debit whose operator-facing history
+    /// row has been compacted into a [`BudgetEvent::Snapshot`]. Replay does
+    /// not subtract it from the bucket a second time.
+    DebitTombstone(BudgetDebit),
     /// Synthetic checkpoint emitted by [`BudgetLedger::compact_older_than`]
     /// before pre-cutoff [`BudgetEvent::Debit`] events are dropped.
     /// Replay overwrites the bucket's state with these fields, so the
@@ -268,11 +358,46 @@ pub trait BudgetLedger: Send + Sync {
     async fn set_capacity(&self, agent: &AgentId, credits_per_hour: u64)
         -> Result<(), BudgetError>;
 
-    /// Atomic predicate-then-debit. Returns `Ok(())` on a successful
-    /// debit; returns [`BudgetError::Exhausted`] when the debit would
-    /// drive `tokens_remaining` negative; returns
-    /// [`BudgetError::NoCapacity`] when the agent has no bucket.
-    /// Persists a [`BudgetDebit`] to the underlying log.
+    /// Persistently bind a receipt id to the payer, credits, and a caller-defined
+    /// SHA-256 commitment over the complete settlement facts before any debit is
+    /// attempted. Exact crash durability depends on the backend. A matching
+    /// repeat returns [`DebitClaimOutcome::Existing`];
+    /// reusing the receipt id with different facts returns
+    /// [`BudgetError::IdempotencyConflict`]. This does not reserve or consume
+    /// budget capacity. The default fails closed with
+    /// [`BudgetError::SettlementClaimsUnsupported`].
+    async fn claim_debit(
+        &self,
+        _agent: &AgentId,
+        _credits: u64,
+        _paired_receipt: Uuid,
+        _binding_sha256: &str,
+    ) -> Result<DebitClaimOutcome, BudgetError> {
+        Err(BudgetError::SettlementClaimsUnsupported)
+    }
+
+    /// Check an existing settlement-fact claim without creating one. Returns
+    /// `false` when the receipt id has never been claimed and an idempotency
+    /// conflict when it is claimed with different facts. The default fails
+    /// closed with [`BudgetError::SettlementClaimsUnsupported`].
+    async fn debit_claim_matches(
+        &self,
+        _agent: &AgentId,
+        _credits: u64,
+        _paired_receipt: Uuid,
+        _binding_sha256: &str,
+    ) -> Result<bool, BudgetError> {
+        Err(BudgetError::SettlementClaimsUnsupported)
+    }
+
+    /// Atomic predicate-then-debit, idempotent on `paired_receipt` when the
+    /// existing payer and credit amount match. Returns `Ok(())` on a new or
+    /// matching prior debit; returns [`BudgetError::IdempotencyConflict`] when
+    /// the receipt key was reused for different debit facts; returns
+    /// [`BudgetError::Exhausted`] when a new debit would drive
+    /// `tokens_remaining` negative; returns [`BudgetError::NoCapacity`] when
+    /// the agent has no bucket. Persists a new [`BudgetDebit`] to the
+    /// underlying log.
     async fn try_debit(
         &self,
         agent: &AgentId,
@@ -320,8 +445,9 @@ pub trait BudgetLedger: Send + Sync {
         now_ms: u64,
     ) -> Result<DebitRateSignal, BudgetError>;
 
-    /// Drop debit events with `at_ms < before_ms`. See module docs for
-    /// the snapshot-based non-destructive compaction model.
+    /// Drop operator-facing debit events with `at_ms < before_ms` while
+    /// retaining their receipt-key tombstones. See module docs for the
+    /// snapshot-based non-destructive compaction model.
     async fn compact_older_than(&self, before_ms: u64) -> Result<u64, BudgetError>;
 }
 
@@ -410,6 +536,8 @@ fn debit_rate_signal(
 pub struct InMemoryLedger {
     buckets: Mutex<HashMap<[u8; 32], Bucket>>,
     debits: Mutex<Vec<BudgetDebit>>,
+    debit_claims: Mutex<HashMap<Uuid, BudgetDebitClaim>>,
+    debit_tombstones: Mutex<HashMap<Uuid, BudgetDebit>>,
 }
 
 impl Default for InMemoryLedger {
@@ -423,6 +551,8 @@ impl InMemoryLedger {
         Self {
             buckets: Mutex::new(HashMap::new()),
             debits: Mutex::new(Vec::new()),
+            debit_claims: Mutex::new(HashMap::new()),
+            debit_tombstones: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -464,6 +594,44 @@ impl BudgetLedger for InMemoryLedger {
         Ok(())
     }
 
+    async fn claim_debit(
+        &self,
+        agent: &AgentId,
+        credits: u64,
+        paired_receipt: Uuid,
+        binding_sha256: &str,
+    ) -> Result<DebitClaimOutcome, BudgetError> {
+        let mut claims = self.debit_claims.lock().await;
+        let outcome = claim_outcome(&claims, agent, credits, paired_receipt, binding_sha256)?;
+        if outcome == DebitClaimOutcome::Inserted {
+            claims.insert(
+                paired_receipt,
+                BudgetDebitClaim {
+                    agent: agent.clone(),
+                    credits,
+                    paired_receipt,
+                    binding_sha256: binding_sha256.to_owned(),
+                    at_ms: epoch_ms(),
+                },
+            );
+        }
+        Ok(outcome)
+    }
+
+    async fn debit_claim_matches(
+        &self,
+        agent: &AgentId,
+        credits: u64,
+        paired_receipt: Uuid,
+        binding_sha256: &str,
+    ) -> Result<bool, BudgetError> {
+        let claims = self.debit_claims.lock().await;
+        Ok(
+            claim_outcome(&claims, agent, credits, paired_receipt, binding_sha256)?
+                == DebitClaimOutcome::Existing,
+        )
+    }
+
     async fn try_debit(
         &self,
         agent: &AgentId,
@@ -471,6 +639,11 @@ impl BudgetLedger for InMemoryLedger {
         paired_receipt: Uuid,
     ) -> Result<(), BudgetError> {
         let now = epoch_ms();
+        let mut debits = self.debits.lock().await;
+        let tombstones = self.debit_tombstones.lock().await;
+        if debit_already_recorded(&debits, &tombstones, agent, credits, paired_receipt)? {
+            return Ok(());
+        }
         let mut buckets = self.buckets.lock().await;
         let bucket = buckets
             .get_mut(&agent.pubkey)
@@ -483,8 +656,7 @@ impl BudgetLedger for InMemoryLedger {
             });
         }
         bucket.tokens_remaining -= credits;
-        drop(buckets);
-        self.debits.lock().await.push(BudgetDebit {
+        debits.push(BudgetDebit {
             agent: agent.clone(),
             credits,
             paired_receipt,
@@ -545,7 +717,11 @@ impl BudgetLedger for InMemoryLedger {
 
     async fn compact_older_than(&self, before_ms: u64) -> Result<u64, BudgetError> {
         let mut debits = self.debits.lock().await;
+        let mut tombstones = self.debit_tombstones.lock().await;
         let before = debits.len();
+        for debit in debits.iter().filter(|debit| debit.at_ms < before_ms) {
+            insert_tombstone(&mut tombstones, debit.clone())?;
+        }
         debits.retain(|d| d.at_ms >= before_ms);
         Ok((before - debits.len()) as u64)
     }
@@ -566,6 +742,8 @@ pub struct JsonlLedger {
     path: PathBuf,
     buckets: Mutex<HashMap<[u8; 32], Bucket>>,
     debits: Mutex<Vec<BudgetDebit>>,
+    debit_claims: Mutex<HashMap<Uuid, BudgetDebitClaim>>,
+    debit_tombstones: Mutex<HashMap<Uuid, BudgetDebit>>,
     file_lock: Arc<Mutex<()>>,
 }
 
@@ -804,6 +982,8 @@ impl JsonlLedger {
 
         let mut buckets: HashMap<[u8; 32], Bucket> = HashMap::new();
         let mut debits: Vec<BudgetDebit> = Vec::new();
+        let mut debit_claims: HashMap<Uuid, BudgetDebitClaim> = HashMap::new();
+        let mut debit_tombstones: HashMap<Uuid, BudgetDebit> = HashMap::new();
         let f = fs::File::open(&path).await?;
         let mut reader = BufReader::new(f);
         let mut line = String::new();
@@ -837,13 +1017,43 @@ impl JsonlLedger {
                     }
                     entry.last_refill_ms = at_ms;
                 }
-                BudgetEvent::Debit(debit) => {
-                    if let Some(bucket) = buckets.get_mut(&debit.agent.pubkey) {
-                        refill(bucket, debit.at_ms);
-                        bucket.tokens_remaining =
-                            bucket.tokens_remaining.saturating_sub(debit.credits);
+                BudgetEvent::DebitClaim(claim) => {
+                    let outcome = claim_outcome(
+                        &debit_claims,
+                        &claim.agent,
+                        claim.credits,
+                        claim.paired_receipt,
+                        &claim.binding_sha256,
+                    )?;
+                    if outcome == DebitClaimOutcome::Inserted {
+                        debit_claims.insert(claim.paired_receipt, claim);
                     }
-                    debits.push(debit);
+                }
+                BudgetEvent::Debit(debit) => {
+                    if !debit_already_recorded(
+                        &debits,
+                        &debit_tombstones,
+                        &debit.agent,
+                        debit.credits,
+                        debit.paired_receipt,
+                    )? {
+                        if let Some(bucket) = buckets.get_mut(&debit.agent.pubkey) {
+                            refill(bucket, debit.at_ms);
+                            bucket.tokens_remaining =
+                                bucket.tokens_remaining.saturating_sub(debit.credits);
+                        }
+                        debits.push(debit);
+                    }
+                }
+                BudgetEvent::DebitTombstone(debit) => {
+                    debit_already_recorded(
+                        &debits,
+                        &debit_tombstones,
+                        &debit.agent,
+                        debit.credits,
+                        debit.paired_receipt,
+                    )?;
+                    insert_tombstone(&mut debit_tombstones, debit)?;
                 }
                 BudgetEvent::Snapshot {
                     agent,
@@ -869,6 +1079,8 @@ impl JsonlLedger {
             path,
             buckets: Mutex::new(buckets),
             debits: Mutex::new(debits),
+            debit_claims: Mutex::new(debit_claims),
+            debit_tombstones: Mutex::new(debit_tombstones),
             file_lock: Arc::new(Mutex::new(())),
         })
     }
@@ -935,6 +1147,49 @@ impl BudgetLedger for JsonlLedger {
         Ok(())
     }
 
+    async fn claim_debit(
+        &self,
+        agent: &AgentId,
+        credits: u64,
+        paired_receipt: Uuid,
+        binding_sha256: &str,
+    ) -> Result<DebitClaimOutcome, BudgetError> {
+        let _g = self.file_lock.lock().await;
+        {
+            let claims = self.debit_claims.lock().await;
+            let outcome = claim_outcome(&claims, agent, credits, paired_receipt, binding_sha256)?;
+            if outcome == DebitClaimOutcome::Existing {
+                return Ok(outcome);
+            }
+        }
+
+        let claim = BudgetDebitClaim {
+            agent: agent.clone(),
+            credits,
+            paired_receipt,
+            binding_sha256: binding_sha256.to_owned(),
+            at_ms: epoch_ms(),
+        };
+        self.append(&BudgetEvent::DebitClaim(claim.clone())).await?;
+        self.debit_claims.lock().await.insert(paired_receipt, claim);
+        Ok(DebitClaimOutcome::Inserted)
+    }
+
+    async fn debit_claim_matches(
+        &self,
+        agent: &AgentId,
+        credits: u64,
+        paired_receipt: Uuid,
+        binding_sha256: &str,
+    ) -> Result<bool, BudgetError> {
+        let _g = self.file_lock.lock().await;
+        let claims = self.debit_claims.lock().await;
+        Ok(
+            claim_outcome(&claims, agent, credits, paired_receipt, binding_sha256)?
+                == DebitClaimOutcome::Existing,
+        )
+    }
+
     async fn try_debit(
         &self,
         agent: &AgentId,
@@ -942,6 +1197,13 @@ impl BudgetLedger for JsonlLedger {
         paired_receipt: Uuid,
     ) -> Result<(), BudgetError> {
         let _g = self.file_lock.lock().await;
+        {
+            let debits = self.debits.lock().await;
+            let tombstones = self.debit_tombstones.lock().await;
+            if debit_already_recorded(&debits, &tombstones, agent, credits, paired_receipt)? {
+                return Ok(());
+            }
+        }
         let now = epoch_ms();
         let (would_pass, snapshot) = {
             let mut buckets = self.buckets.lock().await;
@@ -1052,6 +1314,7 @@ impl BudgetLedger for JsonlLedger {
         // stream, no Snapshot needed.
         let mut state: HashMap<[u8; 32], Bucket> = HashMap::new();
         let mut affected: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
+        let mut seen_debits: HashMap<Uuid, BudgetDebit> = HashMap::new();
         let mut dropped: u64 = 0;
         for ev in &events {
             match ev {
@@ -1074,13 +1337,23 @@ impl BudgetLedger for JsonlLedger {
                     }
                     entry.last_refill_ms = *at_ms;
                 }
-                BudgetEvent::Debit(d) if d.at_ms < before_ms => {
-                    if let Some(bucket) = state.get_mut(&d.agent.pubkey) {
-                        refill(bucket, d.at_ms);
-                        bucket.tokens_remaining = bucket.tokens_remaining.saturating_sub(d.credits);
+                BudgetEvent::Debit(d) => {
+                    let already_accounted = seen_debits.contains_key(&d.paired_receipt);
+                    insert_tombstone(&mut seen_debits, d.clone())?;
+                    if d.at_ms < before_ms {
+                        dropped += 1;
+                        if !already_accounted {
+                            if let Some(bucket) = state.get_mut(&d.agent.pubkey) {
+                                refill(bucket, d.at_ms);
+                                bucket.tokens_remaining =
+                                    bucket.tokens_remaining.saturating_sub(d.credits);
+                            }
+                            affected.insert(d.agent.pubkey);
+                        }
                     }
-                    affected.insert(d.agent.pubkey);
-                    dropped += 1;
+                }
+                BudgetEvent::DebitTombstone(d) => {
+                    insert_tombstone(&mut seen_debits, d.clone())?;
                 }
                 BudgetEvent::Snapshot {
                     agent,
@@ -1106,19 +1379,25 @@ impl BudgetLedger for JsonlLedger {
             return Ok(0);
         }
 
-        // Rewrite the event stream:
-        //   1. Pre-cutoff CapacitySet and Snapshot rows are kept (replay
-        //      will set the bucket up; the new Snapshot for affected
-        //      agents comes after and overwrites them).
-        //   2. Pre-cutoff Debit rows are dropped.
-        //   3. One Snapshot per affected agent at at_ms = before_ms - 1.
-        //   4. All post-cutoff events kept verbatim.
-        // Post-cutoff Snapshot insertion order is determined by sort
-        // over pubkeys for cross-run determinism.
+        // Rewrite the event stream. Claims and prior tombstones are retained
+        // regardless of age. Each dropped Debit gets a tombstone carrying the
+        // same immutable receipt key, payer, and credits; the per-agent
+        // Snapshot carries its bucket effect. Post-cutoff Debit history stays
+        // operator-visible. Snapshot order is sorted by pubkey for
+        // deterministic output.
         let snapshot_at = before_ms.saturating_sub(1);
         let mut rewritten: Vec<BudgetEvent> = Vec::new();
+        let mut tombstones: HashMap<Uuid, BudgetDebit> = HashMap::new();
         for ev in &events {
             match ev {
+                BudgetEvent::DebitClaim(_) => rewritten.push(ev.clone()),
+                BudgetEvent::DebitTombstone(debit) => {
+                    let was_present = tombstones.contains_key(&debit.paired_receipt);
+                    insert_tombstone(&mut tombstones, debit.clone())?;
+                    if !was_present {
+                        rewritten.push(ev.clone());
+                    }
+                }
                 BudgetEvent::CapacitySet { at_ms, .. } if *at_ms < before_ms => {
                     rewritten.push(ev.clone());
                 }
@@ -1126,6 +1405,17 @@ impl BudgetLedger for JsonlLedger {
                     rewritten.push(ev.clone());
                 }
                 _ => {}
+            }
+        }
+        for ev in &events {
+            if let BudgetEvent::Debit(debit) = ev {
+                if debit.at_ms < before_ms {
+                    let was_present = tombstones.contains_key(&debit.paired_receipt);
+                    insert_tombstone(&mut tombstones, debit.clone())?;
+                    if !was_present {
+                        rewritten.push(BudgetEvent::DebitTombstone(debit.clone()));
+                    }
+                }
             }
         }
         let mut affected_sorted: Vec<[u8; 32]> = affected.iter().copied().collect();
@@ -1146,6 +1436,7 @@ impl BudgetLedger for JsonlLedger {
                 BudgetEvent::CapacitySet { at_ms, .. } => *at_ms,
                 BudgetEvent::Debit(d) => d.at_ms,
                 BudgetEvent::Snapshot { at_ms, .. } => *at_ms,
+                BudgetEvent::DebitClaim(_) | BudgetEvent::DebitTombstone(_) => continue,
             };
             if at >= before_ms {
                 rewritten.push(ev.clone());
@@ -1169,6 +1460,10 @@ impl BudgetLedger for JsonlLedger {
         fs::rename(&tmp_path, &self.path).await?;
 
         let mut debits = self.debits.lock().await;
+        let mut tombstones = self.debit_tombstones.lock().await;
+        for debit in debits.iter().filter(|debit| debit.at_ms < before_ms) {
+            insert_tombstone(&mut tombstones, debit.clone())?;
+        }
         debits.retain(|d| d.at_ms >= before_ms);
         Ok(dropped)
     }
@@ -1522,6 +1817,32 @@ mod tests {
                 serde_json::from_value::<BudgetEvent>(serde_json::Value::Object(missing)).is_err(),
                 "BudgetEvent::Debit wire form must reject a payload missing {required:?}; a stray #[serde(default)] on paired_receipt would let a malformed row decode with Uuid::nil() and the settlement-receipt-join would silently dereference a missing receipt",
             );
+        }
+    }
+
+    #[test]
+    fn budget_idempotency_events_round_trip_with_stable_discriminators() {
+        let payer = agent("payer@local");
+        let receipt_id = Uuid::from_u128(0xabc);
+        let claim = BudgetEvent::DebitClaim(BudgetDebitClaim {
+            agent: payer.clone(),
+            credits: 3,
+            paired_receipt: receipt_id,
+            binding_sha256: "ab".repeat(32),
+            at_ms: 123,
+        });
+        let tombstone = BudgetEvent::DebitTombstone(BudgetDebit {
+            agent: payer,
+            credits: 3,
+            paired_receipt: receipt_id,
+            at_ms: 124,
+        });
+
+        for (event, event_type) in [(claim, "debit_claim"), (tombstone, "debit_tombstone")] {
+            let wire = serde_json::to_value(&event).unwrap();
+            assert_eq!(wire["type"], event_type);
+            assert_eq!(wire["paired_receipt"], receipt_id.to_string());
+            assert_eq!(serde_json::from_value::<BudgetEvent>(wire).unwrap(), event);
         }
     }
 
@@ -3236,6 +3557,239 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn in_memory_try_debit_is_idempotent_on_paired_receipt() {
+        let ledger = InMemoryLedger::new();
+        let payer = agent("payer@local");
+        let receipt_id = Uuid::from_u128(0xabc);
+        ledger.set_capacity(&payer, 10).await.unwrap();
+
+        ledger.try_debit(&payer, 3, receipt_id).await.unwrap();
+        ledger.try_debit(&payer, 3, receipt_id).await.unwrap();
+
+        assert_eq!(ledger.tokens_remaining(&payer).await.unwrap(), 7);
+        assert_eq!(ledger.recent_debits(&payer, 10).await.unwrap().len(), 1);
+
+        let error = ledger.try_debit(&payer, 4, receipt_id).await.unwrap_err();
+        assert!(matches!(
+            error,
+            BudgetError::IdempotencyConflict {
+                paired_receipt
+            } if paired_receipt == receipt_id
+        ));
+    }
+
+    #[tokio::test]
+    async fn jsonl_try_debit_is_idempotent_after_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("budget").join("ledger.jsonl");
+        let payer = agent("payer@local");
+        let receipt_id = Uuid::from_u128(0xabc);
+
+        {
+            let ledger = JsonlLedger::open(path.clone()).await.unwrap();
+            ledger.set_capacity(&payer, 10).await.unwrap();
+            ledger.try_debit(&payer, 3, receipt_id).await.unwrap();
+        }
+
+        let reopened = JsonlLedger::open(path).await.unwrap();
+        reopened.try_debit(&payer, 3, receipt_id).await.unwrap();
+
+        assert_eq!(reopened.tokens_remaining(&payer).await.unwrap(), 7);
+        assert_eq!(reopened.recent_debits(&payer, 10).await.unwrap().len(), 1);
+
+        let error = reopened.try_debit(&payer, 4, receipt_id).await.unwrap_err();
+        assert!(matches!(
+            error,
+            BudgetError::IdempotencyConflict {
+                paired_receipt
+            } if paired_receipt == receipt_id
+        ));
+    }
+
+    #[tokio::test]
+    async fn in_memory_compaction_retains_claim_and_debit_tombstone() {
+        let ledger = InMemoryLedger::new();
+        let payer = agent("payer@local");
+        let receipt_id = Uuid::from_u128(0xabc);
+        ledger.set_capacity(&payer, 10).await.unwrap();
+
+        assert_eq!(
+            ledger
+                .claim_debit(&payer, 3, receipt_id, "binding-a")
+                .await
+                .unwrap(),
+            DebitClaimOutcome::Inserted
+        );
+        ledger.try_debit(&payer, 3, receipt_id).await.unwrap();
+        ledger.debits.lock().await[0].at_ms = 50;
+        assert_eq!(ledger.compact_older_than(100).await.unwrap(), 1);
+        assert!(ledger.recent_debits(&payer, 10).await.unwrap().is_empty());
+
+        assert!(ledger
+            .debit_claim_matches(&payer, 3, receipt_id, "binding-a")
+            .await
+            .unwrap());
+        assert_eq!(
+            ledger
+                .claim_debit(&payer, 3, receipt_id, "binding-a")
+                .await
+                .unwrap(),
+            DebitClaimOutcome::Existing
+        );
+        ledger.try_debit(&payer, 3, receipt_id).await.unwrap();
+        assert_eq!(ledger.tokens_remaining(&payer).await.unwrap(), 7);
+
+        let error = ledger
+            .claim_debit(&payer, 3, receipt_id, "binding-b")
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            BudgetError::IdempotencyConflict {
+                paired_receipt
+            } if paired_receipt == receipt_id
+        ));
+    }
+
+    #[tokio::test]
+    async fn jsonl_compaction_retains_claim_and_debit_tombstone_after_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("budget").join("ledger.jsonl");
+        let payer = agent("payer@local");
+        let receipt_id = Uuid::from_u128(0xabc);
+        let shifted_at = epoch_ms();
+        let cutoff = shifted_at.saturating_add(1);
+
+        {
+            let ledger = JsonlLedger::open(path.clone()).await.unwrap();
+            ledger.set_capacity(&payer, 10).await.unwrap();
+            assert_eq!(
+                ledger
+                    .claim_debit(&payer, 3, receipt_id, "binding-a")
+                    .await
+                    .unwrap(),
+                DebitClaimOutcome::Inserted
+            );
+            ledger.try_debit(&payer, 3, receipt_id).await.unwrap();
+        }
+
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let mut shifted = Vec::new();
+        for line in raw.lines() {
+            let mut event: BudgetEvent = serde_json::from_str(line).unwrap();
+            match &mut event {
+                BudgetEvent::CapacitySet { at_ms, .. } => *at_ms = shifted_at,
+                BudgetEvent::Debit(debit) => debit.at_ms = shifted_at,
+                _ => {}
+            }
+            shifted.push(serde_json::to_string(&event).unwrap());
+        }
+        std::fs::write(&path, shifted.join("\n") + "\n").unwrap();
+
+        let ledger = JsonlLedger::open(path.clone()).await.unwrap();
+        assert_eq!(ledger.compact_older_than(cutoff).await.unwrap(), 1);
+        drop(ledger);
+
+        let events = std::fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .map(serde_json::from_str::<BudgetEvent>)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, BudgetEvent::DebitClaim(_))));
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, BudgetEvent::DebitTombstone(_))));
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, BudgetEvent::Debit(_))));
+
+        let reopened = JsonlLedger::open(path.clone()).await.unwrap();
+        assert!(reopened
+            .debit_claim_matches(&payer, 3, receipt_id, "binding-a")
+            .await
+            .unwrap());
+        assert_eq!(
+            reopened
+                .claim_debit(&payer, 3, receipt_id, "binding-a")
+                .await
+                .unwrap(),
+            DebitClaimOutcome::Existing
+        );
+        reopened.try_debit(&payer, 3, receipt_id).await.unwrap();
+        assert!(reopened.recent_debits(&payer, 10).await.unwrap().is_empty());
+        assert_eq!(reopened.tokens_remaining(&payer).await.unwrap(), 7);
+        assert_eq!(reopened.compact_older_than(u64::MAX).await.unwrap(), 0);
+        drop(reopened);
+
+        let reopened_again = JsonlLedger::open(path).await.unwrap();
+        reopened_again
+            .try_debit(&payer, 3, receipt_id)
+            .await
+            .unwrap();
+        assert_eq!(reopened_again.tokens_remaining(&payer).await.unwrap(), 7);
+        let error = reopened_again
+            .claim_debit(&payer, 3, receipt_id, "binding-b")
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            BudgetError::IdempotencyConflict {
+                paired_receipt
+            } if paired_receipt == receipt_id
+        ));
+    }
+
+    #[tokio::test]
+    async fn jsonl_compaction_does_not_reapply_duplicate_legacy_debit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.jsonl");
+        let payer = agent("payer@local");
+        let receipt_id = Uuid::from_u128(0xabc);
+        let at_ms = epoch_ms();
+        let debit = BudgetDebit {
+            agent: payer.clone(),
+            credits: 3,
+            paired_receipt: receipt_id,
+            at_ms,
+        };
+        let events = [
+            BudgetEvent::CapacitySet {
+                agent: payer.clone(),
+                credits_per_hour: 10,
+                at_ms,
+            },
+            BudgetEvent::Debit(debit.clone()),
+            BudgetEvent::Debit(debit),
+        ];
+        let body = events
+            .iter()
+            .map(|event| serde_json::to_string(event).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&path, body + "\n").unwrap();
+
+        let ledger = JsonlLedger::open(path.clone()).await.unwrap();
+        assert_eq!(ledger.tokens_remaining(&payer).await.unwrap(), 7);
+        assert_eq!(
+            ledger
+                .compact_older_than(at_ms.saturating_add(1))
+                .await
+                .unwrap(),
+            2
+        );
+        drop(ledger);
+
+        let reopened = JsonlLedger::open(path).await.unwrap();
+        assert_eq!(reopened.tokens_remaining(&payer).await.unwrap(), 7);
+        assert!(reopened.recent_debits(&payer, 10).await.unwrap().is_empty());
+        reopened.try_debit(&payer, 3, receipt_id).await.unwrap();
+        assert_eq!(reopened.tokens_remaining(&payer).await.unwrap(), 7);
+    }
+
+    #[tokio::test]
     async fn in_memory_compact_drops_old_debits_only() {
         let l = InMemoryLedger::new();
         let a = agent("a@local");
@@ -3616,7 +4170,9 @@ mod tests {
             let mut ev: BudgetEvent = serde_json::from_str(line).unwrap();
             match &mut ev {
                 BudgetEvent::CapacitySet { at_ms, .. } => *at_ms = t,
+                BudgetEvent::DebitClaim(claim) => claim.at_ms = t,
                 BudgetEvent::Debit(d) => d.at_ms = t,
+                BudgetEvent::DebitTombstone(d) => d.at_ms = t,
                 BudgetEvent::Snapshot { at_ms, .. } => *at_ms = t,
             }
             t += 10;

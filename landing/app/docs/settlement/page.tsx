@@ -184,15 +184,20 @@ curl -s '127.0.0.1:8421/receipts/recent?limit=20&since_ms=1714938000000' | jq`}<
       <h2>x402 payment rail</h2>
       <p>
         Distinct from the internal receipt flush above, the agent-to-service
-        payment rail over HTTP 402 (x402) is live. The daemon can pay for
-        metered x402 resources outbound, and Covenant operates a deployed
-        x402 seller that settles in USDC on Solana mainnet &mdash; selling
-        Covenant-Verified attestations, on-chain identity passports, and
-        reputation reads, with the seller&rsquo;s signing key published at
-        <code>/.well-known/x402</code> &mdash; alongside an escrow service and
-        an Ephemeral-Rollup credit facilitator. This is a
-        separate concern from anchoring internal resource receipts: the
-        payment rail being live does not make the receipt flush production.
+        payment rail over HTTP 402 (x402) is live. The daemon has a legacy-v1
+        outbound signer path that is parked pending transaction-bound approval
+        and crash-safe prepayment reservation, while Covenant operates a
+        deployed x402-v2 seller that settles in USDC on Solana mainnet. Its paid
+        endpoints return registration observations, publisher-signed
+        caller-supplied statements, bounded PayAI-linked transfer observations,
+        and seller-reported DCAP-monitor results. A signature proves only that
+        bytes were signed by the accompanying key; Covenant attribution requires
+        an expected key pinned through a trusted external channel. Registration,
+        payment, and monitor observations do not prove identity, delivery,
+        quality, reputation, or enclave origin. Covenant also operates an escrow
+        service and an Ephemeral-Rollup credit facilitator. This is a separate
+        concern from anchoring internal resource receipts: the inbound payment
+        rail being live does not make the receipt flush production.
       </p>
 
       <h2>Release</h2>
@@ -211,13 +216,14 @@ curl -s '127.0.0.1:8421/receipts/recent?limit=20&since_ms=1714938000000' | jq`}<
           settlement program in the broader system map.
         </li>
         <li>
-          <Link href="/identity">Identity and keys</Link>: the
-          same local identity signs capability grants today and is the
-          planned signer boundary for future settlement transactions.
+          <Link href="/identity">Identity and keys</Link>: local identity signs
+          protocol statements and capability grants. Payment funding and future
+          settlement signer keys remain separate custody boundaries.
         </li>
         <li>
-          <Link href="/audit">Audit log</Link>: settlement
-          receipts pair 1:1 with memory writes; drift shows up here.
+          <Link href="/audit">Audit log</Link>: receipt correlations with memory
+          writes and the drift reported when a fail-soft receipt write is
+          missing.
         </li>
       </ul>
     </>

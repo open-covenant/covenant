@@ -30,4 +30,6 @@ pub use request::{
     SignerResponse, ATTESTATION_HASH_ALG, ATTESTATION_SCHEMA, ATTESTATION_TYPE, SUBJECT_REGISTRY,
 };
 pub use tools::{metaplex_specs, metaplex_tool, MetaplexSigner};
-pub use verify::{verify_agent, verify_attestation, AgentVerdict, AttestationVerdict};
+pub use verify::{
+    inspect_agent_records, inspect_record, AgentRecordObservation, RecordObservation,
+};

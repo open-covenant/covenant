@@ -1,29 +1,20 @@
-//! Live HTTP coverage for `POST /x402/pay` — the daemon's sole
-//! outbound-spend trigger — proving it fails closed over the gateway.
+//! Live HTTP coverage proving the legacy `POST /x402/pay` trigger remains
+//! parked even when its old environment opt-in and capability are present.
 //!
 //! `pay_x402_route` (covenantd/src/http.rs) deserializes a `PayX402Body`
 //! and forwards `Request::PayX402` to the same `Server::respond` the unix
-//! socket uses. The handler gates in strict order (covenant lib.rs): the
-//! `x402.outbound.pay` capability, a scope-allowed provider, a
-//! configured+enabled dispatch, a valid method, and only then
-//! `per_call_cap.parse::<u128>()`, which rejects a malformed cap *before*
-//! any signer subprocess is constructed or network call is made. A
+//! socket uses. The handler preserves the capability and provider-scope gates,
+//! then stops at the unconditional parked boundary before config parsing,
+//! signer construction, or network I/O. A
 //! daemon-level rejection surfaces over HTTP as a 200 response whose body
 //! is `{"kind":"error", ...}` — not a 4xx — so the assertions read the
 //! JSON envelope, not the status line.
 //!
-//! This mirrors `live_ipc_pay_x402_invalid_cap.rs` (which pins the same
-//! fail-closed path over the socket) across the HTTP boundary: it proves
-//! the route's body deserialization, the capability gate, and the
-//! cap-parse rejection end to end over the gateway. The two-step gate
-//! proof — an ungranted call rejected by the capability gate, and only
-//! after the grant the cap-parse becoming the rejecting gate — is what
-//! pins the ordering rather than a single after-the-fact assertion.
+//! This mirrors `live_ipc_pay_x402_invalid_cap.rs` across the HTTP boundary:
+//! an ungranted call still fails at the capability gate, while a granted call
+//! returns the precise parked reason.
 //!
-//! Hermetic — x402 dispatch is enabled from env alone (`COVENANT_X402_ENABLED`
-//! and a `/bin/true` signer so `x402_dispatch_config_from_env` resolves
-//! `Some`); the malformed-cap path short-circuits before the signer is
-//! constructed, so no real signer, Solana RPC, or x402 endpoint is touched.
+//! Hermetic — the old x402 env is set, but the daemon ignores it.
 //! `#[ignore]`'d. Run with
 //! `cargo test -p covenantd --test live_http_x402_pay_fail_closed -- --ignored live_`.
 
@@ -84,11 +75,9 @@ struct Daemon {
     _home: tempfile::TempDir,
 }
 
-/// Spawn covenantd with x402 dispatch enabled from env. Inherited
-/// `COVENANT_X402_*` are cleared first so the dispatch config is
-/// host-independent; only `ENABLED` + a `/bin/true` signer are set, which
-/// is enough for the config gate to resolve `Some` while the malformed-cap
-/// path short-circuits before the signer is ever constructed.
+/// Spawn covenantd with the old x402 opt-in set. Inherited `COVENANT_X402_*`
+/// values are cleared first so the regression is host-independent; the daemon
+/// must ignore the explicit replacement values and remain parked.
 async fn spawn_daemon_with_x402() -> Daemon {
     let home = tempfile::tempdir().expect("tempdir");
     let port = pick_free_port();
@@ -150,8 +139,8 @@ fn malformed_pay_body(per_call_cap: &str) -> Value {
 }
 
 #[tokio::test]
-#[ignore = "live: spawns covenantd with x402 enabled + drives POST /x402/pay over HTTP, pinning the x402.outbound.pay capability gate then the per_call_cap u128 parse rejection over the gateway"]
-async fn live_http_x402_pay_rejects_ungranted_then_malformed_cap() {
+#[ignore = "live: spawns covenantd with the legacy x402 env + proves POST /x402/pay remains parked"]
+async fn live_http_x402_pay_rejects_ungranted_then_parked() {
     let daemon = spawn_daemon_with_x402().await;
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
@@ -208,10 +197,8 @@ async fn live_http_x402_pay_rejects_ungranted_then_malformed_cap() {
         "operator self-grant of x402.outbound.pay must succeed: {grant:?}",
     );
 
-    // Step 3 — capability, scope, config, and method gates now all clear, so
-    // the per_call_cap parse is the rejecting gate. It must fail closed (no
-    // signer spawn, no network) with the cap-specific message echoing the
-    // bad value.
+    // Step 3 — after capability and scope, the parked boundary wins before
+    // parsing even an intentionally malformed cap.
     let malformed: Value = pay("not_a_number")
         .send()
         .await
@@ -224,36 +211,7 @@ async fn live_http_x402_pay_rejects_ungranted_then_malformed_cap() {
         "a malformed cap must come back as a kind==error envelope: {malformed:?}",
     );
     let message = malformed["message"].as_str().unwrap_or_default();
-    assert!(
-        message.contains("invalid per_call_cap (must be decimal u128)"),
-        "after the grant the malformed cap must be rejected by the u128 parse gate over HTTP: \
-         {malformed:?}",
-    );
-    assert!(
-        message.contains("not_a_number"),
-        "the parse error must echo the offending cap value: {malformed:?}",
-    );
-
-    // Step 4 — a value past u128::MAX proves the gate is a real numeric parse,
-    // not an is-empty / is-ascii-digit check a 40-digit string would slip past.
-    let overflow = "9".repeat(40);
-    let overflow_resp: Value = pay(&overflow)
-        .send()
-        .await
-        .expect("send overflow-cap /x402/pay")
-        .json()
-        .await
-        .expect("overflow body json");
-    assert_eq!(
-        overflow_resp["kind"], "error",
-        "an overflow cap must come back as a kind==error envelope: {overflow_resp:?}",
-    );
-    assert!(
-        overflow_resp["message"]
-            .as_str()
-            .is_some_and(|m| m.contains("invalid per_call_cap (must be decimal u128)")),
-        "a cap past u128::MAX must fail the same parse gate, not be admitted: {overflow_resp:?}",
-    );
+    assert_eq!(message, covenantd::x402::LEGACY_OUTBOUND_PARKED);
 
     daemon.shutdown().await;
 }

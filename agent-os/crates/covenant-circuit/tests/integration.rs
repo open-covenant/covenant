@@ -54,8 +54,7 @@ fn inference(
     payer: Arc<MockCircPayer>,
     ledger: Arc<SpendLedger>,
 ) -> Inference {
-    Inference::new(reqwest::Client::new(), payer, cap, ledger)
-        .with_base_url(format!("{}/v1", server.uri()))
+    Inference::new(payer, cap, ledger).with_base_url(format!("{}/v1", server.uri()))
 }
 
 #[tokio::test]
@@ -79,6 +78,94 @@ async fn pays_on_402_and_returns_content() {
     assert!(r.payment_tx.is_some());
     assert_eq!(payer.total_paid(), 300_000);
     assert_eq!(ledger.spent_raw(), 300_000);
+}
+
+#[tokio::test]
+async fn paid_retry_does_not_follow_redirect_or_leak_payment_header() {
+    let sink = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/capture"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "choices": [{ "message": { "content": "redirected" } }]
+        })))
+        .mount(&sink)
+        .await;
+
+    let source = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(402).set_body_json(json!({
+            "payment": { "recipient": TREASURY, "amountRaw": "300000" }
+        })))
+        .up_to_n_times(1)
+        .mount(&source)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .and(header_exists("X-Payment-Signature"))
+        .respond_with(
+            ResponseTemplate::new(307).insert_header("location", format!("{}/capture", sink.uri())),
+        )
+        .mount(&source)
+        .await;
+
+    let payer = Arc::new(MockCircPayer::new());
+    let inf = inference(
+        &source,
+        cap_allowing(&source),
+        payer.clone(),
+        Arc::new(SpendLedger::new()),
+    );
+    let err = inf
+        .chat(ChatParams::new(vec![ChatMessage::user("hi")]))
+        .await
+        .expect_err("redirect response must be surfaced");
+
+    assert!(err.to_string().contains("unexpected status 307"), "{err}");
+    assert_eq!(payer.total_paid(), 300_000, "one transfer settles");
+    assert!(
+        sink.received_requests().await.unwrap().is_empty(),
+        "the paid retry and X-Payment-Signature must not follow the redirect"
+    );
+}
+
+#[tokio::test]
+async fn post_payment_server_error_gets_one_paid_attempt_without_retry() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(402).set_body_json(json!({
+            "payment": { "recipient": TREASURY, "amountRaw": "300000" }
+        })))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .and(header_exists("X-Payment-Signature"))
+        .respond_with(ResponseTemplate::new(503).set_body_string("try later"))
+        .mount(&server)
+        .await;
+
+    let payer = Arc::new(MockCircPayer::new());
+    let inf = inference(
+        &server,
+        cap_allowing(&server),
+        payer.clone(),
+        Arc::new(SpendLedger::new()),
+    );
+    let err = inf
+        .chat(ChatParams::new(vec![ChatMessage::user("hi")]))
+        .await
+        .expect_err("503 must be surfaced without retry");
+
+    assert!(err.to_string().contains("unexpected status 503"), "{err}");
+    assert_eq!(payer.total_paid(), 300_000, "one transfer settles");
+    assert_eq!(
+        server.received_requests().await.unwrap().len(),
+        2,
+        "one free challenge plus exactly one paid request; a retry needs an explicit idempotency contract"
+    );
 }
 
 #[tokio::test]
@@ -182,7 +269,6 @@ async fn free_endpoint_returns_without_payment() {
         .await;
     let payer = Arc::new(MockCircPayer::new());
     let data = DataClient::new(
-        reqwest::Client::new(),
         payer.clone(),
         cap_allowing(&server),
         Arc::new(SpendLedger::new()),
@@ -205,7 +291,6 @@ async fn inference_tool_returns_content_and_circuit_block() {
     ));
     let data = Arc::new(
         DataClient::new(
-            reqwest::Client::new(),
             Arc::new(MockCircPayer::new()),
             cap_allowing(&server),
             Arc::new(SpendLedger::new()),
@@ -247,13 +332,11 @@ async fn inference_tool_returns_content_and_circuit_block() {
 #[tokio::test]
 async fn disabled_config_registers_no_tools() {
     let inf = Arc::new(Inference::new(
-        reqwest::Client::new(),
         Arc::new(MockCircPayer::new()),
         CircuitCapability::new(),
         Arc::new(SpendLedger::new()),
     ));
     let data = Arc::new(DataClient::new(
-        reqwest::Client::new(),
         Arc::new(MockCircPayer::new()),
         CircuitCapability::new(),
         Arc::new(SpendLedger::new()),

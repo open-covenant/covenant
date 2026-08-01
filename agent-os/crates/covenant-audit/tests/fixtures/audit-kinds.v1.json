@@ -222,8 +222,8 @@
       "name": "peer_enrollment_rejected"
     },
     {
-      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-00000000002d\",\"timestamp_ms\":1700000000045,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"spend_authorization_decided\",\"provider\":\"xona\",\"network\":\"solana\",\"asset\":\"USDC\",\"amount\":\"0.25\",\"credits\":250,\"destination\":\"So11111111111111111111111111111111111111112\",\"approved\":true,\"reason\":\"within per-call cap\",\"decision_id\":\"5e111ed0-0000-0000-0000-000000000001\"}}",
-      "event_hash_hex": "69a1ff374ab455711bf12501bce4aeb9ae1ba07a30a194091375cfe8441bca79",
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-00000000002d\",\"timestamp_ms\":1700000000045,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"spend_authorization_decided\",\"provider\":\"xona\",\"payer\":{\"display\":\"payer@wallet\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"network\":\"solana\",\"asset\":\"USDC\",\"amount\":\"0.25\",\"credits\":250,\"destination\":\"So11111111111111111111111111111111111111112\",\"approved\":true,\"reason\":\"within per-call cap\",\"decision_id\":\"5e111ed0-0000-0000-0000-000000000001\"}}",
+      "event_hash_hex": "eceb7e7a81ca21218aa92c53c62ff1f8280ea67c652f229cd32d417be5b88a46",
       "name": "spend_authorization_decided"
     },
     {

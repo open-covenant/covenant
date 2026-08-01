@@ -30,6 +30,9 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 reqwest = { workspace = true }
 url = "2"
+bs58 = { workspace = true }
+serde_jcs = { workspace = true }
+sha2 = { workspace = true }
 
 # EVM (Base) signer support. EIP-3009 TransferWithAuthorization signed via
 # EIP-712 is gasless and never touches an RPC, so it needs only secp256k1,

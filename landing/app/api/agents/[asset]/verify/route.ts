@@ -1,22 +1,29 @@
-// /api/agents/[asset]/verify. "Covenant Verified": is this a valid Covenant
-// validation record, or an accountable agent? DAS-only, no Covenant
-// infrastructure in the trust path, the same check the Rust
-// `covenant_metaplex::verify` engine runs, ported so a browser, the Metaplex
-// agent directory, or anyone can call it over HTTP.
-//
-// Trust anchor: MPL Core only lets the AppData `data_authority` write the data,
-// so authorship is a chain fact. The record check lives in `_attest.ts`; the
-// optional on-chain enforcement read lives in `_gate.ts`.
+// /api/agents/[asset]/verify returns bounded structural observations from the
+// configured DAS and RPC providers. A matching record envelope is not an
+// authenticated Core proof and does not establish claim truth or agent safety.
 
 import { NextResponse } from "next/server";
 import { PublicKey } from "@solana/web3.js";
 import { COVENANT_DATA_AUTHORITY } from "@/app/agents/_registry";
-import { appData, findAccountability, verifyAttestation } from "@/app/agents/_attest";
+import {
+  appData,
+  findValidationRecords,
+  inspectValidationRecord,
+} from "@/app/agents/_attest";
 import { readAuditGate } from "@/app/agents/_gate";
 import { rpc, isAssetNotFound } from "@/app/agents/_rpc";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+function objects(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value)
+    ? value.filter(
+        (item): item is Record<string, unknown> =>
+          Boolean(item) && typeof item === "object",
+      )
+    : [];
+}
 
 export async function GET(
   _req: Request,
@@ -47,16 +54,21 @@ export async function GET(
   // is most likely to cache, so it must never be served stale.
   const noStore = { headers: { "Cache-Control": "no-store" } };
 
-  // If the asset itself carries our record AppData, verify it directly.
+  // If the asset itself carries AppData, inspect the reported envelope.
   if (appData(das)) {
-    return NextResponse.json({ kind: "attestation", ...verifyAttestation(das, COVENANT_DATA_AUTHORITY) }, noStore);
+    return NextResponse.json(
+      {
+        kind: "record_observation",
+        ...inspectValidationRecord(das, COVENANT_DATA_AUTHORITY),
+      },
+      noStore,
+    );
   }
 
-  // Otherwise treat it as an agent: accountable iff the Covenant validator has
-  // minted a verified record whose subject is this asset.
-  let accountability;
+  // Otherwise look for DAS-reported records whose envelope names this asset.
+  let records;
   try {
-    accountability = await findAccountability(rpc, asset, COVENANT_DATA_AUTHORITY);
+    records = await findValidationRecords(rpc, asset, COVENANT_DATA_AUTHORITY);
   } catch {
     return NextResponse.json({ error: "DAS endpoint unavailable" }, { status: 502 });
   }
@@ -64,16 +76,20 @@ export async function GET(
   // Enforcement: is this agent's lifecycle gated on its live audit verdict?
   const gate = await readAuditGate(
     rpc,
-    (das["external_plugins"] ?? []) as Array<Record<string, unknown>>,
+    objects(das["external_plugins"]),
     assetPk,
   );
 
-  return NextResponse.json({
-    kind: "agent",
-    agent: asset,
-    accountable: accountability.accountable,
-    attestationCount: accountability.count,
-    latest: accountability.latest,
-    gate,
-  }, noStore);
+  return NextResponse.json(
+    {
+      kind: "agent_observation",
+      evidenceSource: "configured_das_and_rpc",
+      agent: asset,
+      hasMatchingRecord: records.hasMatchingRecord,
+      recordCount: records.count,
+      latest: records.latest,
+      gate,
+    },
+    noStore,
+  );
 }

@@ -487,6 +487,9 @@ fn golden_audit_kind_records() -> Vec<AuditEvent> {
                 network: "solana".into(),
                 asset: "USDC".into(),
                 amount: "1000000".into(),
+                pay_to: None,
+                scheme: None,
+                fee_payer: None,
                 receipt_id: Uuid::from_u128(0xE1),
             },
         ),
@@ -581,6 +584,7 @@ fn golden_audit_kind_records() -> Vec<AuditEvent> {
             45,
             AuditKind::SpendAuthorizationDecided {
                 provider: "xona".into(),
+                payer: Some(AgentId::new("payer@wallet", [7u8; 32])),
                 network: "solana".into(),
                 asset: "USDC".into(),
                 amount: "0.25".into(),

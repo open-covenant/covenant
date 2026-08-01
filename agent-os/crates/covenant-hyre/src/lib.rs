@@ -12,16 +12,15 @@
 //!   same registry shape the gateway already drives, plus a richer
 //!   endpoint index the tool layer reads for argument schemas.
 //! - [`tools`] generates one [`covenant_mcp::Tool`] per endpoint and a
-//!   single high-level `hyre.ask` tool, wired to a [`PaidExecutor`] the
-//!   daemon supplies. The daemon is the only signer; this crate never
-//!   touches a funding key.
+//!   single high-level `hyre.ask` tool, wired to a [`PaidExecutor`]. The
+//!   production daemon does not advertise these tools or supply an executor;
+//!   the trait remains for lower-level development use.
 //! - [`publish`] emits per-tool resale descriptors for the SAP bridge,
 //!   a no-op when the bridge is off.
 //!
-//! Settlement, budget, attestation, and audit are not re-implemented
-//! here: a Hyre call runs through the daemon's existing x402 accounting
-//! path, so its receipt rolls into the same Merkle batch and optional
-//! Synapse mirror as every other paid call.
+//! This crate does not provide wallet authorization, durable reservation,
+//! settlement reconciliation, or production accounting.
+//! The legacy daemon adapter is parked before signer construction or network I/O.
 
 #![deny(unsafe_code)]
 

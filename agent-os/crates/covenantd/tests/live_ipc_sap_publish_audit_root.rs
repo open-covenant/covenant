@@ -1,30 +1,7 @@
-//! Live integration test: spawns covenantd against a tempdir HOME and drives
-//! `Request::SapPublishAuditRoot` over the raw IPC socket, pinning the success
-//! `Response::SapPublishedAuditRoot { ledger_pda, signature }` frame plus the
-//! disabled-bridge and malformed-root-hash `Response::Error` frames.
-//!
-//! `sap_publish_audit_root` (covenantd/src/lib.rs:1337) anchors a Covenant
-//! audit root through the SAP bridge: it calls `require_enabled`, pre-validates
-//! `root_hash_hex` (64 lowercase hex chars; covenant-sap-bridge attestation.rs:36)
-//! before any subprocess, stamps `recorded_at` server-side, drives the worker's
-//! `attest-root` command, and relays the worker envelope into the response. The
-//! verb is covered at the bridge level by `covenant-sap-bridge`'s worker tests,
-//! but is never exercised over the Unix socket the CLI is built on; this pins
-//! that wire contract — the ledger receipt an operator reads back.
-//!
-//! `PublishedAuditRoot` is `#[serde(rename_all = "camelCase")]`, so the worker
-//! emits `{"ledgerPda","signature"}` and the daemon must relay them into the
-//! snake_case response fields. The success test uses distinct sentinels so a
-//! field swap or a wrong camelCase key ships a silently wrong receipt and fails
-//! an assert. `main.rs:310` always wires the bridge, so the reachable
-//! fail-closed path over the socket is `BridgeError::Disabled` ("synapse bridge
-//! is disabled"), not the unit-test-only "not wired" arm.
-//!
-//! Hermetic — no network, no Solana RPC, no real signer. The success and
-//! malformed-root tests enable the bridge and point `COVENANT_SAP_WORKER_CMD`
-//! at a shell stub that drains stdin and prints a fixed success envelope,
-//! exactly as `live_ipc_sap_publish_agent.rs` does; the disabled test spawns
-//! the daemon with the bridge left off. `#[ignore]`'d. Run with
+//! Live integration coverage for the parked `SapPublishAuditRoot`
+//! compatibility request. It pins the same stable refusal with the bridge on
+//! or off and before root validation or worker invocation. Hermetic and
+//! ignored; run with
 //! `cargo test -p covenantd --test live_ipc_sap_publish_audit_root -- --ignored live_`.
 
 use covenant_ipc::{read_frame, write_frame, Request, Response};
@@ -94,11 +71,8 @@ async fn spawn_daemon(home: &Path, env: &[(&str, &str)]) -> Child {
     child
 }
 
-/// Write an executable shell-stub worker into `home` and spawn covenantd with
-/// the SAP bridge enabled and pointed at it. The stub drains stdin (so the
-/// daemon's `write_all` + `shutdown` never hits a broken pipe) and prints the
-/// `attest-root` success envelope as its last stdout line — `data` carries the
-/// camelCase `PublishedAuditRoot` shape `worker::invoke` parses. No signer.
+/// Spawn with an enabled bridge and a worker that would return success if the
+/// parked daemon boundary accidentally invoked it.
 async fn spawn_with_stub_worker(home: &Path) -> Child {
     let stub = home.join("sap-worker.sh");
     std::fs::write(
@@ -157,30 +131,17 @@ fn audit_root_request(root_hash_hex: String) -> Request {
 }
 
 #[tokio::test]
-#[ignore = "live: spawns covenantd with a stub SAP worker + drives Request::SapPublishAuditRoot over the socket, pinning Response::SapPublishedAuditRoot"]
-async fn live_ipc_sap_publish_audit_root_returns_published_receipt() {
+#[ignore = "live: proves SapPublishAuditRoot is parked before an enabled success worker"]
+async fn live_ipc_sap_publish_audit_root_is_parked_before_worker_invocation() {
     let home = tempfile::tempdir().expect("tempdir");
     let mut child = spawn_with_stub_worker(home.path()).await;
 
     let mut stream = authenticated_stream(home.path()).await;
     match req(&mut stream, audit_root_request(valid_root_hash_hex())).await {
-        Response::SapPublishedAuditRoot {
-            ledger_pda,
-            signature,
-        } => {
-            // Distinct sentinels: a handler that swaps the two fields, or maps
-            // the worker's data{ledgerPda,signature} to the wrong response
-            // field, fails one assert and ships a silently wrong receipt.
-            assert_eq!(
-                ledger_pda, "LedgerPda111",
-                "ledger_pda must relay the worker envelope's ledgerPda verbatim"
-            );
-            assert_eq!(
-                signature, "AuditRootSig222",
-                "signature must relay the worker envelope's signature verbatim"
-            );
+        Response::Error { message } => {
+            assert_eq!(message, covenantd::SAP_DIRECT_PUBLISH_PARKED)
         }
-        other => panic!("expected Response::SapPublishedAuditRoot, got {other:?}"),
+        other => panic!("expected parked Response::Error, got {other:?}"),
     }
 
     drop(stream);
@@ -189,8 +150,8 @@ async fn live_ipc_sap_publish_audit_root_returns_published_receipt() {
 }
 
 #[tokio::test]
-#[ignore = "live: spawns covenantd with the SAP bridge disabled + asserts Request::SapPublishAuditRoot flattens onto Response::Error"]
-async fn live_ipc_sap_publish_audit_root_rejects_disabled_bridge() {
+#[ignore = "live: proves SapPublishAuditRoot returns the same parked error with SAP disabled"]
+async fn live_ipc_sap_publish_audit_root_is_parked_before_bridge_state() {
     let home = tempfile::tempdir().expect("tempdir");
     // No COVENANT_SAP_ENABLED: main.rs still wires the bridge (lib.rs:310), so
     // require_enabled is what rejects, not the unit-test-only "not wired" arm.
@@ -199,12 +160,9 @@ async fn live_ipc_sap_publish_audit_root_rejects_disabled_bridge() {
     let mut stream = authenticated_stream(home.path()).await;
     match req(&mut stream, audit_root_request(valid_root_hash_hex())).await {
         Response::Error { message } => {
-            assert!(
-                message.contains("disabled"),
-                "a disabled bridge must surface as the fail-closed Disabled error, got: {message}"
-            );
+            assert_eq!(message, covenantd::SAP_DIRECT_PUBLISH_PARKED);
         }
-        other => panic!("expected Response::Error, got {other:?}"),
+        other => panic!("expected parked Response::Error, got {other:?}"),
     }
 
     drop(stream);
@@ -213,8 +171,8 @@ async fn live_ipc_sap_publish_audit_root_rejects_disabled_bridge() {
 }
 
 #[tokio::test]
-#[ignore = "live: spawns covenantd with a stub SAP worker + asserts a malformed root_hash_hex flattens onto Response::Error before any worker round-trip"]
-async fn live_ipc_sap_publish_audit_root_rejects_malformed_root_hash() {
+#[ignore = "live: proves SapPublishAuditRoot is parked before root validation"]
+async fn live_ipc_sap_publish_audit_root_parks_before_root_validation() {
     let home = tempfile::tempdir().expect("tempdir");
     let mut child = spawn_with_stub_worker(home.path()).await;
 
@@ -223,12 +181,9 @@ async fn live_ipc_sap_publish_audit_root_rejects_malformed_root_hash() {
     let mut stream = authenticated_stream(home.path()).await;
     match req(&mut stream, audit_root_request("zz".repeat(32))).await {
         Response::Error { message } => {
-            assert!(
-                message.contains("root_hash_hex must be"),
-                "a non-hex root must be rejected by the pre-worker hex guard, got: {message}"
-            );
+            assert_eq!(message, covenantd::SAP_DIRECT_PUBLISH_PARKED);
         }
-        other => panic!("expected Response::Error, got {other:?}"),
+        other => panic!("expected parked Response::Error, got {other:?}"),
     }
 
     drop(stream);

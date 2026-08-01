@@ -4,28 +4,32 @@
 // MPL Agent identity registry ("014 Registry") program.
 export const AGENT_IDENTITY_PROGRAM = "1DREGFgysWYxLnRnKQnwrxnJQeSMk2HmGaC6whw2B2p";
 
-// The Covenant minting key: the only address allowed to write Covenant
-// attestation AppData. An attestation is Covenant-authored iff its AppData
-// authority is exactly this address.
-export const COVENANT_DATA_AUTHORITY = "DKxXrxxCzAwLSXRUWzUouiW46GNf4PR2mjjhAbtCAkcK";
+// Expected AppData authority for the Covenant records shown by this site.
+// A match attributes the observed bytes to this configured key; it does not
+// establish that the payload's claim is true.
+export const COVENANT_DATA_AUTHORITY =
+  "DKxXrxxCzAwLSXRUWzUouiW46GNf4PR2mjjhAbtCAkcK";
 
 // The Covenant Agents MPL Core collection on mainnet.
 export const COVENANT_COLLECTION = "Duqs6dq1wXPcRqJVUCgSZxrkLRdg3oBfZ3ViER1kt6gC";
 
-// The Covenant Oracle program: gates a gated agent's Core lifecycle events on a
-// live audit verdict via the Core Oracle external plugin (one ["oracle", asset]
-// PDA per agent). Source-verified on mainnet (see osecVerifyUrl).
-export const COVENANT_ORACLE_PROGRAM = "2PJFAtPsVzgLrmvj2Hwx7x1DuUXSjgW44qSR35MZshaD";
+// Prototype Core Oracle program. Its configured plugin can veto selected Core
+// asset lifecycle events. It does not mediate agent execution, signing, or
+// payments. The deployed program has a source-build record (see osecVerifyUrl).
+export const COVENANT_ORACLE_PROGRAM =
+  "2PJFAtPsVzgLrmvj2Hwx7x1DuUXSjgW44qSR35MZshaD";
 
-// The registered production agent + a known attestation, featured on /agents.
-export const FEATURED_AGENT_ASSET = "4XtUrwvPWAzMGnsKenMpTMATXN3e2quJV11Jg2dab2dc";
-export const FEATURED_ATTESTATION_ASSET = "4A2fdNqmPiQrv3iYv6WY2mQ9eSQuBERhdeg4vk7G8vGG";
+// Featured mainnet identity and AppData record shown on /agents.
+export const FEATURED_AGENT_ASSET =
+  "4XtUrwvPWAzMGnsKenMpTMATXN3e2quJV11Jg2dab2dc";
+export const FEATURED_ATTESTATION_ASSET =
+  "4A2fdNqmPiQrv3iYv6WY2mQ9eSQuBERhdeg4vk7G8vGG";
 
-// A validation record is an ERC-8004 validation attestation in Core AppData.
-// `type` is the ERC-8004 discriminator, `schema` versions the record, and
-// `hashAlg` declares the commitment algorithm. The "Covenant Verified" check
-// (and the passport) key on these.
-export const ATTESTATION_TYPE = "https://eips.ethereum.org/EIPS/eip-8004#validation-v1";
+// Historical experimental record identifiers. The ERC-8004 URI is an opaque
+// application type tag here; matching it does not provide ERC interoperability.
+// The parser uses these constants only for structural field checks.
+export const ATTESTATION_TYPE =
+  "https://eips.ethereum.org/EIPS/eip-8004#validation-v1";
 export const ATTESTATION_SCHEMA_V2 = "covenant.audit-root.appdata.v2";
 export const ATTESTATION_HASH_ALG = "sha256-merkle";
 

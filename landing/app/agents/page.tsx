@@ -1,7 +1,5 @@
-// /agents: proof of agent. The index explains the trust model in three
-// moves (registered, authored, reproducible) and hands the reader the
-// same verifier we use ourselves. The only color on these pages is earned
-// by a check passing.
+// /agents reports structural observations from the configured DAS/RPC
+// sources. It does not turn those observations into a global trust verdict.
 
 import type { Metadata } from "next";
 import Link from "next/link";
@@ -15,26 +13,26 @@ import {
 } from "@/app/agents/_registry";
 
 export const metadata: Metadata = {
-  title: "Proof of agent: Covenant",
+  title: "Agent records: Covenant",
   description:
-    "Covenant agents register on Metaplex's 014 Registry and anchor their audit roots as MPL Core attestations. Verify any of it in your browser.",
+    "Inspect configured DAS/RPC observations for Covenant identity and AppData records. Structural checks do not prove claim truth or runtime enforcement.",
 };
 
 const MOVES = [
   {
     term: "Registered",
     gloss:
-      "A tamper-evident PDA under the 014 Registry program binds the agent's Core asset to its registration. Anyone can derive the address and check it.",
+      "The configured registry program and asset derive to a PDA whose owner and bytes can be observed over RPC. This checks structure, not agent behavior.",
   },
   {
-    term: "Authored",
+    term: "Authority match",
     gloss:
-      "Attestations live in MPL Core AppData that only Covenant's signer may write. MPL Core enforces the authority at write time. Authorship is a chain fact.",
+      "The supplied AppData view reports an authority that is compared with Covenant's configured key. A match attributes the observed bytes; it does not make their claim true.",
   },
   {
-    term: "Reproducible",
+    term: "Record match",
     gloss:
-      "Each attested root recomputes, SHA-256 by SHA-256, from the published witness chain, in your browser, with no server verdict involved.",
+      "A bounded DAS query compares reported AppData fields with Covenant's expected record envelope and subject. It does not authenticate the account or prove the claim.",
   },
 ] as const;
 
@@ -47,13 +45,14 @@ export default function AgentsPage() {
         <div className="mb-12 flex flex-col gap-3">
           <p className="text-[11px] uppercase tracking-[3px] text-neutral-500">Agent registry</p>
           <h1 className="text-3xl font-light tracking-tight text-white sm:text-4xl">
-            Proof of agent
+            Agent records
           </h1>
           <p className="max-w-3xl text-[14px] font-light leading-relaxed text-neutral-400">
-            Covenant agents register on Metaplex&apos;s 014 Registry and anchor their
-            audit roots as MPL Core attestations, indexed by DAS and checkable by anyone.
-            A registry tells you an agent exists. Proof tells you what it did. This page
-            does both, and never asks you to take a server&apos;s word for it.
+            This page reports configured DAS/RPC observations for Metaplex 014
+            Registry identities and MPL Core AppData commitments. The checks
+            cover reported account structure, authority matches, and reported
+            record envelopes. They do not prove semantic correctness, log
+            completeness, runtime mediation, or W009/W011 enforcement.
           </p>
         </div>
 
@@ -76,7 +75,7 @@ export default function AgentsPage() {
         <div className="mb-12 grid gap-4 sm:grid-cols-2">
           <div className="flex flex-col gap-3 border border-neutral-800 bg-neutral-950/60 p-5">
             <p className="text-[10px] uppercase tracking-[2px] text-neutral-500">
-              Registered production agent
+              Featured mainnet identity record
             </p>
             <p className="text-[15px] font-light text-white">Covenant Foundation Agent</p>
             <p className="break-all font-mono text-[12px] text-neutral-400">
@@ -87,7 +86,7 @@ export default function AgentsPage() {
                 href={`/agents/${FEATURED_AGENT_ASSET}`}
                 className="text-[11px] uppercase tracking-[1.5px] text-neutral-300 underline-offset-4 hover:text-white hover:underline"
               >
-                Open passport →
+                Inspect record →
               </Link>
               <a
                 href={metaplexAgentUrl(FEATURED_AGENT_ASSET)}
@@ -101,9 +100,11 @@ export default function AgentsPage() {
           </div>
           <div className="flex flex-col gap-3 border border-neutral-800 bg-neutral-950/60 p-5">
             <p className="text-[10px] uppercase tracking-[2px] text-neutral-500">
-              Latest anchored audit root
+              Featured AppData commitment
             </p>
-            <p className="text-[15px] font-light text-white">Witness-loop attestation</p>
+            <p className="text-[15px] font-light text-white">
+              Recorded audit-root commitment
+            </p>
             <p className="break-all font-mono text-[12px] text-neutral-400">
               {FEATURED_ATTESTATION_ASSET}
             </p>
@@ -112,7 +113,7 @@ export default function AgentsPage() {
                 href={`/agents/${FEATURED_ATTESTATION_ASSET}`}
                 className="text-[11px] uppercase tracking-[1.5px] text-neutral-300 underline-offset-4 hover:text-white hover:underline"
               >
-                Verify it in your browser →
+                Inspect supplied evidence →
               </Link>
             </div>
           </div>
@@ -120,10 +121,11 @@ export default function AgentsPage() {
 
         <div className="mb-4 flex flex-col gap-2">
           <h2 className="text-[11px] font-light uppercase tracking-[2px] text-neutral-300">
-            Verify any agent
+            Inspect a registered asset
           </h2>
           <p className="text-[13px] font-light text-neutral-500">
-            Works for every asset bound to the 014 Registry, not just ours.
+            Queries the configured DAS/RPC sources for assets bound to the 014
+            Registry.
           </p>
         </div>
         <LookupForm />

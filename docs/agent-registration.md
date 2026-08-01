@@ -1,23 +1,27 @@
 # Agent registration document
 
-A Covenant agent can publish one JSON document that is simultaneously a valid
-**A2A AgentCard** and an **ERC-8004 registration file**. A single document lets
-any A2A-aware client, any EVM/ERC-8004 client, and any CAIP-aware wallet
-discover and trust the same agent — without Covenant infrastructure in the trust
-path, and without maintaining two divergent identity documents.
+A Covenant agent can generate one self-authored JSON document that matches the
+pinned historical **A2A AgentCard** and **ERC-8004 registration-file** shapes
+used by this implementation. It can advertise endpoints and registration
+identifiers to compatible readers. It does not make those claims true, prove
+who operates the agent, or give a client a reason to trust it.
 
 The builder lives in `covenant-identity` (`src/registration.rs`) as
 [`AgentRegistration`]. It is derived from the agent's canonical ed25519 identity
-— the same key used for local signing and on-chain settlement — so the document
-needs no second keypair system.
+used for Covenant-local protocol statements. Solana and EVM payment funding keys
+are separate and remain in their signer paths. A valid self-signature
+authenticates the key that authored the document; it does not independently bind
+that key to a person, organization, capability, endpoint, or onchain
+registration.
 
-## Why one document validates as both
+## Pinned dual-schema shape
 
-The A2A AgentCard schema does not forbid extra properties, and every ERC-8004
+At the pinned commits below, the A2A AgentCard schema does not forbid extra properties, and every ERC-8004
 registration field except `supportedTrust` is mandatory. So a document that
 carries the **union** of both schemas' required fields validates as both: an A2A
-client reads the A2A fields and ignores the rest; an ERC-8004 client reads the
-ERC-8004 fields and ignores the rest.
+client can read the A2A fields and ignore the rest; an ERC-8004 client can read
+the ERC-8004 fields and ignore the rest. This is a fixture compatibility result,
+not a guarantee for later revisions of either specification.
 
 | Field group | Members |
 |---|---|
@@ -63,16 +67,17 @@ bound to the agent's Solana address (its ed25519 public key):
 { "name": "DID", "endpoint": "did:pkh:solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp:<pubkey>", "version": "v1" }
 ```
 
-`agentId` is `0` until the agent is registered on-chain; the caller supplies the
-real `agentId` and `<CovenantRegistry>` address once the registry exists.
+`agentId` is `0` until the agent is registered onchain; the caller supplies the
+later `agentId` and `<CovenantRegistry>` address. A consumer must verify those
+values against the named registry rather than trusting the document.
 
 ## Signing
 
 The document is signed with a detached JWS (RFC 7515, `alg=EdDSA`) over the
 RFC 8785 JCS canonicalization of the body with the `signatures` array removed.
-The signature is stored in the A2A `signatures` array, so it is A2A-native and
-verifiable by any RFC 7515 consumer. JCS gives a deterministic byte string, so
-independent signers and verifiers agree on the signed bytes.
+The signature is stored in the A2A `signatures` array. A consumer with the
+expected public key can verify authorship and detect changed bytes. JCS gives a
+deterministic byte string; it does not validate the document's claims.
 
 ```rust
 use covenant_identity::{LocalIdentity, RegistrationParams};
@@ -95,7 +100,8 @@ doc.verify(&vk)?;
 
 ## Scope
 
-Generation, signing, and verification are **local only** and implemented today.
+Generation, self-signing, and verification against an explicitly supplied key
+are **local only** and implemented today.
 Publishing the document to a public `/.well-known/agent-registration.json`
 endpoint or registering the agent in an on-chain ERC-8004 registry is **planned**
 and tracked under the multichain roadmap (registry deployment is operator-gated).

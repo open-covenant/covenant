@@ -16,9 +16,11 @@ export default function SecurityPage() {
         Covenant is a local-first daemon. The model assumes the operator
         owns the host and trusts their own user account; it does not defend
         against an adversary that has already obtained shell access as the
-        operator. Within that boundary, Covenant provides hard guarantees
+        operator. Within that boundary, Covenant provides structural checks
         over Covenant-mediated actions: ed25519-signed capability tokens,
-        an append-only audit log, and enforcement at dispatch. Trusted-local
+        an append-only audit log, and enforcement at dispatch. Because an
+        authenticated peer can currently self-request a grant, those checks
+        are not operator authorization. Trusted-local
         subprocess execution is not process isolation. The runtime crate has
         an initial Linux gVisor runner, daemon-selectable backend
         configuration, and opt-in live Linux coverage; repeatable CI
@@ -61,9 +63,11 @@ export default function SecurityPage() {
             <td>Agent → daemon</td>
             <td>Partial</td>
             <td>
-              Agents only see what the daemon hands them on stdin.
-              They cannot mutate state directly; everything goes
-              through the daemon.
+              Within the Covenant protocol, daemon-side checks gate
+              mediated mutations. A trusted-local agent still runs as
+              the host user with host filesystem, forwarded environment,
+              and host-permitted network access; the daemon cannot
+              mediate direct host activity.
             </td>
           </tr>
           <tr>
@@ -124,8 +128,11 @@ export default function SecurityPage() {
           orphan subprocess; recovery on restart is a documented gap.
         </li>
         <li>
-          A registered agent injecting forged audit entries.
-          Impossible: agents do not write to the audit log directly.
+          A registered trusted-local agent modifying audit files out of band.
+          The Covenant protocol does not expose a direct audit-append operation,
+          but a same-user agent can modify files that the host user can access.
+          Local verification can detect unmatched changes, not coordinated
+          replacement or rollback of the event log and sidecar.
         </li>
         <li>
           Out-of-band edits to capability files producing tokens
@@ -214,9 +221,10 @@ export default function SecurityPage() {
           server with the narrowest scope appropriate to the task.
         </li>
         <li>
-          Treat capability grants as deliberate authorization decisions.
-          Each grant is recorded in the audit log; new grants should be
-          reviewed and justified rather than issued ad hoc.
+          Do not treat the current capability grant as operator approval. Any
+          authenticated peer can request a daemon-signed capability for itself.
+          Until grantor authorization is implemented, use separate external
+          controls for funds, signers, and privileged host actions.
         </li>
         <li>
           Inspect the audit log on a regular cadence.{" "}
@@ -258,8 +266,8 @@ export default function SecurityPage() {
           how dispatch is gated.
         </li>
         <li>
-          <Link href="/audit">Audit log</Link>: the system&apos;s
-          ground truth and how to read it.
+          <Link href="/audit">Audit log</Link>: the local audit record,
+          operation-specific coverage, and integrity model.
         </li>
         <li>
           <Link href="/gvisor-live-runner">Linux gVisor runner</Link>:

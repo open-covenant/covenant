@@ -1,22 +1,9 @@
-//! Live CLI coverage for `covenant sap publish --manifest <file> [--json]`.
-//!
-//! `sap publish` reads a manifest file, pre-validates it locally with a
-//! parse-roundtrip (rejecting malformed JSON before the daemon is contacted),
-//! sends `Request::SapPublishAgent`, and renders the daemon's
-//! `Response::SapPublishedAgent` as either a compact
-//! `{ kind: "sap_published_agent", agent_pda, signature }` JSON line or two
-//! labeled text lines. The IPC socket path is pinned by
-//! `live_ipc_sap_publish_agent.rs` and `sap status` by
-//! `live_cli_sap_status_json.rs`, but the CLI `publish` layer — its two output
-//! shapes and its local manifest validation — was never driven end to end.
-//!
-//! Hermetic — the daemon's SAP bridge is enabled and pointed at an executable
-//! shell stub that drains stdin and prints a fixed publish envelope (the same
-//! stub `live_ipc_sap_publish_agent.rs` uses), so no Solana RPC, signer, or
-//! network is touched. Build the CLI first (`cargo build -p covenant`); run
-//! with `cargo test -p covenantd --test live_cli_sap_publish -- --ignored live_`.
+//! Live CLI coverage for the parked `covenant sap publish` compatibility
+//! command and its local manifest validation. The daemon is pointed at a
+//! success worker; the CLI must surface the stable parked error without a
+//! receipt. Build the CLI first (`cargo build -p covenant`), then run with
+//! `cargo test -p covenantd --test live_cli_sap_publish -- --ignored live_`.
 
-use serde_json::Value;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -140,8 +127,8 @@ async fn run_publish(cli: &Path, home: &Path, extra: &[&str]) -> (bool, String, 
 }
 
 #[tokio::test]
-#[ignore = "live: spawns covenantd + stub worker and asserts `covenant sap publish` renders the receipt as JSON and text"]
-async fn live_cli_sap_publish_renders_receipt_json_and_text() {
+#[ignore = "live: proves `covenant sap publish` surfaces the parked daemon boundary"]
+async fn live_cli_sap_publish_surfaces_parked_boundary() {
     let home = tempfile::tempdir().expect("tempdir");
     let mut child = spawn_with_stub_worker(home.path()).await;
     let cli = covenant_cli_bin();
@@ -154,38 +141,25 @@ async fn live_cli_sap_publish_renders_receipt_json_and_text() {
     .expect("write manifest");
     let mpath = manifest.to_str().expect("manifest path utf8");
 
-    // --json: a single compact JSON line carrying the stub worker's receipt.
     let (ok, stdout, stderr) =
         run_publish(&cli, home.path(), &["--manifest", mpath, "--json"]).await;
     assert!(
-        ok,
-        "sap publish --json failed: stdout={stdout:?} stderr={stderr:?}"
+        !ok,
+        "parked sap publish --json unexpectedly succeeded: stdout={stdout:?} stderr={stderr:?}"
     );
-    let v: Value = serde_json::from_str(stdout.trim())
-        .expect("sap publish --json must emit one valid JSON line");
-    assert_eq!(v["kind"], "sap_published_agent", "envelope kind: {v:?}");
-    // Distinct sentinels catch a CLI-side key rename (agentPda vs agent_pda) or
-    // a field transposition before the receipt reaches the operator.
-    assert_eq!(
-        v["agent_pda"], "AgentPda111",
-        "agent_pda must relay the worker envelope verbatim: {v:?}"
-    );
-    assert_eq!(
-        v["signature"], "PublishSig222",
-        "signature must relay the worker envelope verbatim: {v:?}"
+    assert!(
+        stderr.contains(covenantd::SAP_DIRECT_PUBLISH_PARKED),
+        "CLI must preserve the daemon's parked reason: {stderr:?}"
     );
 
-    // Default (text): exactly two labeled lines, same receipt.
     let (ok, stdout, stderr) = run_publish(&cli, home.path(), &["--manifest", mpath]).await;
     assert!(
-        ok,
-        "sap publish (text) failed: stdout={stdout:?} stderr={stderr:?}"
+        !ok,
+        "parked sap publish unexpectedly succeeded: stdout={stdout:?} stderr={stderr:?}"
     );
-    let lines: Vec<&str> = stdout.lines().collect();
-    assert_eq!(
-        lines,
-        vec!["agent_pda: AgentPda111", "signature: PublishSig222"],
-        "text output drifted from the two-line agent_pda/signature contract: {stdout:?}"
+    assert!(
+        stderr.contains(covenantd::SAP_DIRECT_PUBLISH_PARKED),
+        "CLI must preserve the daemon's parked reason: {stderr:?}"
     );
 
     let _ = child.kill().await;

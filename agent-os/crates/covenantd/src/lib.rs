@@ -22,6 +22,59 @@ pub mod stream_dispatch;
 pub mod stream_tracker;
 pub mod x402;
 
+/// Stable failure for every daemon-owned Circuit tool path. The lower-level
+/// `covenant-circuit` clients and explicit examples remain available, but the
+/// production daemon must not advertise, invoke, sign for, or account for a
+/// `circuit.*` tool until authorization and prepayment state are durable.
+pub const CIRCUIT_DAEMON_OUTBOUND_PARKED: &str = "daemon-owned Circuit x402 is parked: transaction-bound authorization and a durable prepayment reservation/idempotency record are required before signing";
+
+/// Stable failure for direct SAP write requests. Automatic funded anchors are
+/// parked too; daemon callers cannot reach the bridge worker, RPC, or signer.
+pub const SAP_DIRECT_PUBLISH_PARKED: &str =
+    "direct SAP publishing is parked: scoped authorization and action-specific audit evidence are required before bridge invocation";
+
+/// Stable failure for daemon-owned Metaplex and SNS writes. Read-only
+/// observations stay available; funded writes remain explicit lower-level
+/// development surfaces until the signer consumes an exact one-use grant.
+pub const SOLANA_FUNDED_TOOL_PARKED: &str = "daemon-owned Solana funded writes are parked: exact transaction-bound authorization, durable reservation, and action-specific audit evidence are required before signing";
+
+/// Stable startup boundary for timer-driven funded anchors.
+pub const AUTOMATIC_FUNDED_ANCHOR_PARKED: &str = "automatic funded anchoring is parked: cumulative budgets, durable reservation, and idempotent reconciliation are required before signing";
+
+fn is_parked_circuit_tool(name: &str) -> bool {
+    name.starts_with("circuit.")
+}
+
+fn is_parked_hyre_tool(name: &str) -> bool {
+    name.starts_with("hyre.")
+}
+
+fn is_parked_solana_funded_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "metaplex.attest.audit_root"
+            | "metaplex.identity.register"
+            | "sns.register_subdomain"
+            | "sns.set_record"
+    )
+}
+
+#[cfg(test)]
+fn is_provider_read_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "metaplex.das.get_asset"
+            | "metaplex.das.assets_by_owner"
+            | "metaplex.das.search"
+            | "metaplex.das.get_asset_proof"
+            | "metaplex.observe.record"
+            | "metaplex.observe.agent_records"
+            | "sns.resolve"
+            | "sns.reverse"
+            | "sns.record"
+    )
+}
+
 use anyhow::{Context, Result};
 use covenant_a2a::Mailbox;
 use covenant_audit::{
@@ -229,14 +282,10 @@ pub fn sap_bridge_config_from_env() -> SapBridgeConfig {
     SapBridgeConfig::from_env(std::env::vars())
 }
 
-/// Config for the autonomous SAP audit-root anchoring driver.
+/// Legacy SAP automatic-anchor settings.
 ///
-/// Default OFF. When enabled (`COVENANT_SAP_AUTO_ATTEST=1`), the daemon
-/// periodically reads its current audit-integrity root and appends it to
-/// the SAP ledger — but only when the root has CHANGED since the last
-/// anchor, so it never re-writes an unchanged root or spends SOL on a
-/// no-op. Anchoring costs SOL, so this is strictly opt-in and is also a
-/// silent no-op whenever the bridge itself is disabled.
+/// The daemon still parses these values so it can report an explicit parked
+/// boundary. It never starts a funded anchor from them.
 #[derive(Debug, Clone)]
 pub struct SapAttestConfig {
     pub enabled: bool,
@@ -286,10 +335,10 @@ pub fn sap_attest_config_from_values(
     config
 }
 
-/// Config for the autonomous Metaplex audit-root anchoring driver — the
-/// second, DAS-discoverable anchor beside SAP. Same shape and defaults as
-/// [`SapAttestConfig`]; tracked separately so either anchor can run, fail,
-/// and retry independently of the other.
+/// Legacy Metaplex automatic-anchor settings.
+///
+/// These remain separate from [`SapAttestConfig`] so an operator warning can
+/// identify the requested integration. They never enable a funded driver.
 #[derive(Debug, Clone)]
 pub struct MetaplexAttestConfig {
     pub enabled: bool,
@@ -788,119 +837,35 @@ pub fn spawn_projection_tick_driver(
     })
 }
 
-/// Path the auto-attest driver uses to remember the last audit root it
-/// anchored, so a daemon restart doesn't re-anchor (and re-pay for) an
-/// unchanged root. Resolved as a sibling of the worker's stats file when
-/// `COVENANT_SAP_STATS_PATH` is set, else under `COVENANT_HOME` /
-/// `~/.covenant`.
-fn sap_last_root_path() -> std::path::PathBuf {
-    if let Ok(p) = std::env::var("COVENANT_SAP_STATS_PATH") {
-        let trimmed = p.trim();
-        if !trimmed.is_empty() {
-            if let Some(dir) = std::path::Path::new(trimmed).parent() {
-                return dir.join("sap-last-attested-root");
-            }
-        }
-    }
-    let home = std::env::var("COVENANT_HOME")
-        .ok()
-        .map(|h| h.trim().to_string())
-        .filter(|h| !h.is_empty())
-        .unwrap_or_else(|| {
-            let h = std::env::var("HOME").unwrap_or_default();
-            format!("{h}/.covenant")
-        });
-    std::path::PathBuf::from(home).join("sap-last-attested-root")
-}
-
-fn read_sap_last_root() -> Option<String> {
-    std::fs::read_to_string(sap_last_root_path())
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-}
-
-fn write_sap_last_root(root: &str) {
-    let path = sap_last_root_path();
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    let _ = std::fs::write(path, root);
-}
-
-/// Autonomous SAP audit-root anchoring driver.
+/// Compatibility entry point for the parked SAP automatic anchor.
 ///
-/// On each tick it reads the current audit-integrity root and, if it has
-/// changed since the last anchor, appends it to the SAP ledger so the
-/// daemon's provenance accumulates on-chain without operator action. The
-/// last-anchored root is tracked in memory and persisted to disk, so a
-/// restart never re-anchors an unchanged root. Strictly opt-in
-/// (`COVENANT_SAP_AUTO_ATTEST`) and a silent no-op when the bridge is
-/// disabled — see [`SapAttestConfig`].
+/// It returns a completed task and never reads a signer, opens a connection,
+/// or writes anchor state.
 pub fn spawn_sap_attest_driver(
-    server: Server,
-    config: SapAttestConfig,
+    _server: Server,
+    _config: SapAttestConfig,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(config.interval);
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        let mut last_root = read_sap_last_root();
-        loop {
-            interval.tick().await;
-            server.run_sap_attest_iteration(&mut last_root).await;
-        }
+        warn!(
+            reason = AUTOMATIC_FUNDED_ANCHOR_PARKED,
+            "SAP automatic anchor was requested through the library but no driver was started"
+        );
     })
 }
 
-/// Path the Metaplex auto-attest driver uses to remember the last audit
-/// root it anchored. Deliberately separate from the SAP file: the two
-/// anchors are independent sinks of the same root, so one failing (or
-/// being enabled later) must not suppress or replay the other.
-fn metaplex_last_root_path() -> std::path::PathBuf {
-    let home = std::env::var("COVENANT_HOME")
-        .ok()
-        .map(|h| h.trim().to_string())
-        .filter(|h| !h.is_empty())
-        .unwrap_or_else(|| {
-            let h = std::env::var("HOME").unwrap_or_default();
-            format!("{h}/.covenant")
-        });
-    std::path::PathBuf::from(home).join("metaplex-last-attested-root")
-}
-
-fn read_metaplex_last_root() -> Option<String> {
-    std::fs::read_to_string(metaplex_last_root_path())
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-}
-
-fn write_metaplex_last_root(root: &str) {
-    let path = metaplex_last_root_path();
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    let _ = std::fs::write(path, root);
-}
-
-/// Autonomous Metaplex audit-root anchoring driver — the DAS-discoverable
-/// anchor beside SAP. On each tick it reads the current audit-integrity
-/// root and, if it has changed since the last Metaplex anchor, writes it
-/// as an MPL Core AppData attestation through the signer sidecar. Strictly
-/// opt-in (`COVENANT_METAPLEX_AUTO_ATTEST`) and a silent no-op when the
-/// Metaplex write surface is not configured — see [`MetaplexAttestConfig`].
+/// Compatibility entry point for the parked Metaplex automatic anchor.
+///
+/// It returns a completed task and never reads a signer, opens a connection,
+/// or writes anchor state.
 pub fn spawn_metaplex_attest_driver(
-    server: Server,
-    config: MetaplexAttestConfig,
+    _server: Server,
+    _config: MetaplexAttestConfig,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(config.interval);
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        let mut last_root = read_metaplex_last_root();
-        loop {
-            interval.tick().await;
-            server.run_metaplex_attest_iteration(&mut last_root).await;
-        }
+        warn!(
+            reason = AUTOMATIC_FUNDED_ANCHOR_PARKED,
+            "Metaplex automatic anchor was requested through the library but no driver was started"
+        );
     })
 }
 
@@ -1303,18 +1268,16 @@ pub struct Server {
     /// — they go through the storage traits — so unit tests that don't
     /// exercise rotation leave this `None`.
     home: Option<PathBuf>,
-    /// Opt-in outbound x402 dispatch config. None when no operator
-    /// has wired up the funding-key sidecar; in that state every
-    /// `Request::PayX402` returns a "not configured" error and no
-    /// USDC is ever spent.
-    x402_dispatch: Option<Arc<x402::X402Config>>,
+    /// Legacy outbound x402 config retained for compatibility and tests. The
+    /// daemon handler is parked even when this is `Some` and enabled.
+    _x402_dispatch: Option<Arc<x402::X402Config>>,
     /// Opt-in spend-authorization surface. None when no operator has
     /// enabled it; in that state every `Request::AuthorizeSpend` returns a
     /// "not configured" error and no spend is ever authorized.
     spend_authz: Option<Arc<spend_authz::SpendAuthzConfig>>,
     /// Opt-in escrow surface. When `None` the daemon never issued a
-    /// completion proof; `Request::ProveCompletion` returns a "not
-    /// configured" error and no release signal is ever produced.
+    /// escrow statement; `Request::ProveCompletion` returns a "not
+    /// configured" error otherwise.
     escrow: Option<Arc<escrow::EscrowConfig>>,
     /// Opt-in secret broker backend. `None` when no operator has wired a
     /// secret source; in that state every `Request::GetSecret` returns a
@@ -1390,7 +1353,7 @@ impl Server {
             stream_tracker: Arc::new(stream_tracker::StreamTracker::new()),
             subprocess_tracker: Arc::new(covenant_runtime::SubprocessTracker::new()),
             home: None,
-            x402_dispatch: None,
+            _x402_dispatch: None,
             spend_authz: None,
             escrow: None,
             secret_source: None,
@@ -1492,12 +1455,10 @@ impl Server {
         self
     }
 
-    /// Wire the outbound x402 dispatch config. Without this, every
-    /// `Request::PayX402` returns a "not configured" error and no
-    /// paid call leaves the daemon. The daemon's `main` calls this
-    /// after [`Server::new`] when the operator has opted in via env.
+    /// Retain a legacy outbound x402 config for embedded tests. This does not
+    /// unpark [`Request::PayX402`] or Hyre payment execution.
     pub fn with_x402_dispatch(mut self, config: x402::X402Config) -> Self {
-        self.x402_dispatch = Some(Arc::new(config));
+        self._x402_dispatch = Some(Arc::new(config));
         self
     }
 
@@ -1511,12 +1472,11 @@ impl Server {
         self
     }
 
-    /// Enable the escrow surface. Once wired, an authenticated peer holding
-    /// `escrow.completion.prove` can ask the daemon to issue a signed
-    /// completion proof an external escrow releases against, and a peer
-    /// holding `escrow.release.record` can report the release back into the
-    /// audit chain. Covenant holds no funds. Opt-in and off by default,
-    /// mirroring [`Self::with_spend_authz`].
+    /// Enable the escrow completion-statement surface. Once wired, an
+    /// authenticated peer holding `escrow.completion.prove` can ask the daemon
+    /// to sign a local dispatch observation plus caller-supplied context. The
+    /// legacy release reporter remains parked and writes no state. Opt-in and
+    /// off by default, mirroring [`Self::with_spend_authz`].
     pub fn with_escrow(mut self, config: escrow::EscrowConfig) -> Self {
         self.escrow = Some(Arc::new(config));
         self
@@ -1529,29 +1489,23 @@ impl Server {
         self
     }
 
-    /// Enable the Hyre provider profile. Advertises one `hyre.*` MCP
-    /// tool per catalog endpoint and routes their calls through the
-    /// outbound x402 path. Requires [`Self::with_x402_dispatch`] for
-    /// the funding-key sidecar; without it a `hyre.*` call returns a
-    /// "not configured" error.
+    /// Install a Hyre catalog for embedded tests. The daemon binary does not
+    /// advertise it while legacy outbound x402 execution is parked, and tool
+    /// execution remains fail-closed even when installed programmatically.
     pub fn with_hyre(mut self, state: hyre::HyreState) -> Self {
         self.hyre = Some(Arc::new(state));
         self
     }
 
-    /// Enable the Metaplex profile. Advertises the `metaplex.das.*` read
-    /// tools whenever a DAS endpoint is configured, and the
-    /// `metaplex.attest.*` / `metaplex.identity.*` write tools whenever
-    /// the signer sidecar and an RPC are configured. Reads never touch a
-    /// key; writes are delegated to the `covenant-metaplex-signer`
-    /// sidecar, which holds the minting key out of the daemon.
+    /// Enable read-only Metaplex observations. Funded write tools are filtered
+    /// from discovery and refused before capability, sidecar, RPC, or key use.
     pub fn with_metaplex(mut self, state: metaplex::MetaplexState) -> Self {
         self.metaplex = Some(Arc::new(state));
         self
     }
 
-    /// Enable the SNS profile. Advertises the read-only `sns.*` resolve
-    /// tools over the hosted resolver; no key and no spend.
+    /// Enable read-only SNS resolution. Funded write tools are filtered from
+    /// discovery and refused before capability, sidecar, RPC, or key use.
     pub fn with_sns(mut self, state: sns::SnsState) -> Self {
         self.sns = Some(Arc::new(state));
         self
@@ -1574,25 +1528,17 @@ impl Server {
         self
     }
 
-    /// Attach the Synapse Agent Protocol bridge. Daemon `main` calls
-    /// this once at boot with the bridge from [`sap_bridge_config_from_env`],
-    /// so it is always attached; the config's `enabled` flag governs
-    /// behavior, and a disabled bridge surfaces `BridgeDisabledError`.
+    /// Attach the resolved Synapse Agent Protocol configuration for status
+    /// reporting and retained compatibility plumbing. Direct writes and
+    /// automatic funded anchors are parked regardless of `enabled`.
     pub fn with_sap_bridge(mut self, bridge: SapBridge) -> Self {
         self.sap_bridge = Some(bridge);
         self
     }
 
-    /// Returns the attached SAP bridge, if any. Handlers should treat
-    /// `None` the same as a disabled bridge — a soft no-op surfaced as
-    /// `BridgeDisabledError` to the caller.
-    pub fn sap_bridge(&self) -> Option<&SapBridge> {
-        self.sap_bridge.as_ref()
-    }
-
-    /// Resolve the SAP bridge status. Returns a disabled snapshot when
-    /// no bridge was wired in at boot — handlers must never panic on
-    /// `sap_bridge().is_none()`.
+    /// Resolve the SAP configuration snapshot. `enabled` and `has_signer`
+    /// report configuration only; neither implies a reachable write path.
+    /// Returns a disabled snapshot when no bridge was wired in at boot.
     pub(crate) fn sap_status(&self) -> Response {
         match self.sap_bridge.as_ref() {
             Some(bridge) => {
@@ -1623,220 +1569,40 @@ impl Server {
         }
     }
 
-    /// Publish an agent through the SAP bridge. Errors (disabled
-    /// bridge, RPC failure, missing signer, etc.) flatten onto
-    /// `Response::Error` with the bridge's own message so the CLI
-    /// renders them consistently with other failures.
-    pub(crate) async fn sap_publish_agent(&self, manifest_json: String) -> Response {
-        let Some(bridge) = self.sap_bridge.as_ref() else {
-            return Response::Error {
-                message: "sap bridge is not wired into this daemon".into(),
-            };
-        };
-        let manifest: covenant_sap_bridge::identity::AgentManifest =
-            match serde_json::from_str(&manifest_json) {
-                Ok(m) => m,
-                Err(e) => {
-                    return Response::Error {
-                        message: format!("invalid manifest JSON: {e}"),
-                    }
-                }
-            };
-        match bridge.publish_agent(&manifest).await {
-            Ok(published) => Response::SapPublishedAgent {
-                agent_pda: published.agent_pda,
-                signature: published.signature,
-            },
-            Err(e) => Response::Error {
-                message: format!("sap publish_agent: {e}"),
-            },
+    /// Refuse direct SAP agent publication before parsing caller input or
+    /// consulting the configured bridge.
+    pub(crate) async fn sap_publish_agent(&self, _manifest_json: String) -> Response {
+        Response::Error {
+            message: SAP_DIRECT_PUBLISH_PARKED.into(),
         }
     }
 
-    /// One iteration of the autonomous audit-root anchor (driven by
-    /// [`spawn_sap_attest_driver`]). Reads the current audit-integrity
-    /// root; if it changed since `last_root`, anchors it to the SAP
-    /// ledger and advances `last_root` in memory and on disk. Every
-    /// failure mode (bridge disabled / no signer / RPC error) is logged
-    /// and swallowed so the driver keeps ticking.
-    pub(crate) async fn run_sap_attest_iteration(&self, last_root: &mut Option<String>) {
-        let root = match self.audit.verify_integrity().await {
-            Ok(report) => report.root_hash_hex,
-            Err(e) => {
-                warn!(error = %e, "sap auto-attest: audit integrity check failed; skipping tick");
-                return;
-            }
-        };
-        // Nothing to do when the chain is empty or the root is unchanged.
-        if root.is_empty() || last_root.as_deref() == Some(root.as_str()) {
-            return;
-        }
-        let Some(bridge) = self.sap_bridge.as_ref() else {
-            return; // bridge not wired into this daemon
-        };
-        let attestation = covenant_sap_bridge::attestation::AuditRootAttestation {
-            root_hash_hex: root.clone(),
-            release_target: "covenant".to_string(),
-            release_subject: "witness-loop".to_string(),
-            release_scope: "audit".to_string(),
-            recorded_at: epoch_ms() / 1000,
-        };
-        match bridge.publish_audit_root(&attestation).await {
-            Ok(published) => {
-                info!(
-                    ledger_pda = %published.ledger_pda,
-                    signature = %published.signature,
-                    root = %root,
-                    "sap auto-anchored audit root"
-                );
-                *last_root = Some(root.clone());
-                write_sap_last_root(&root);
-            }
-            Err(covenant_sap_bridge::BridgeError::Disabled) => {
-                // Auto-attest is on but the bridge itself is off. Stay
-                // quiet and do NOT advance last_root, so the current root
-                // anchors as soon as the bridge is enabled.
-            }
-            Err(e) => {
-                warn!(error = %e, root = %root, "sap auto-attest: anchor failed; will retry next tick");
-            }
-        }
-    }
-
-    /// One iteration of the autonomous Metaplex audit-root anchor (driven
-    /// by [`spawn_metaplex_attest_driver`]). Mirrors
-    /// [`Self::run_sap_attest_iteration`] against the second anchor: the
-    /// changed root is written as an MPL Core AppData attestation via the
-    /// signer sidecar, with its own last-root tracking so the two anchors
-    /// never gate each other. Every failure mode (profile off / writes not
-    /// configured / signer error) is logged and swallowed so the driver
-    /// keeps ticking.
-    pub(crate) async fn run_metaplex_attest_iteration(&self, last_root: &mut Option<String>) {
-        let root = match self.audit.verify_integrity().await {
-            Ok(report) => report.root_hash_hex,
-            Err(e) => {
-                warn!(error = %e, "metaplex auto-attest: audit integrity check failed; skipping tick");
-                return;
-            }
-        };
-        // An empty chain reports the all-zeros genesis root — not worth
-        // paying rent to anchor. Skip it alongside empty/unchanged roots.
-        if root.is_empty()
-            || root.bytes().all(|b| b == b'0')
-            || last_root.as_deref() == Some(root.as_str())
-        {
-            return;
-        }
-        let Some(state) = self.metaplex.as_ref() else {
-            return; // metaplex profile not wired into this daemon
-        };
-        if !state.config.allows("attest.audit_root") {
-            return; // attestation writes excluded by the allowlist
-        }
-        let Some(signer) = state.signer() else {
-            return; // write surface not configured
-        };
-        let payload = covenant_metaplex::AttestationPayload::new(
-            root.clone(),
-            "covenant",
-            "witness-loop",
-            "audit",
-            epoch_ms() / 1000,
-        )
-        .with_subject(
-            (!state.config.agent_asset.is_empty()).then(|| state.config.agent_asset.clone()),
-            (!state.config.agent_registration.is_empty())
-                .then(|| state.config.agent_registration.clone()),
-        );
-        let request = covenant_metaplex::SignerRequest::AttestAuditRoot {
-            payload: Box::new(payload),
-            asset: None,
-            // The sidecar resolves the collection from its own env
-            // (COVENANT_METAPLEX_COLLECTION), same as tool-driven writes.
-            collection: None,
-        };
-        match signer.sign(request).await {
-            Ok(response) => {
-                info!(
-                    asset = %response.asset,
-                    signature = %response.signature,
-                    cluster = %response.cluster,
-                    root = %root,
-                    "metaplex auto-anchored audit root"
-                );
-                *last_root = Some(root.clone());
-                write_metaplex_last_root(&root);
-            }
-            Err(e) => {
-                warn!(error = %e, root = %root, "metaplex auto-attest: anchor failed; will retry next tick");
-            }
-        }
-    }
-
-    /// Anchor a Covenant audit root through the SAP bridge. Mirrors
-    /// [`Self::sap_publish_agent`]: a missing bridge or any bridge error
-    /// flattens onto `Response::Error`. The daemon stamps `recorded_at`
-    /// itself so the on-chain timestamp is server-authoritative.
+    /// Refuse direct SAP audit-root publication before constructing an
+    /// attestation or consulting the configured bridge. Automatic funded
+    /// anchors are parked at the same boundary.
     pub(crate) async fn sap_publish_audit_root(
         &self,
-        root_hash_hex: String,
-        release_target: String,
-        release_subject: String,
-        release_scope: String,
+        _root_hash_hex: String,
+        _release_target: String,
+        _release_subject: String,
+        _release_scope: String,
     ) -> Response {
-        let Some(bridge) = self.sap_bridge.as_ref() else {
-            return Response::Error {
-                message: "sap bridge is not wired into this daemon".into(),
-            };
-        };
-        let attestation = covenant_sap_bridge::attestation::AuditRootAttestation {
-            root_hash_hex,
-            release_target,
-            release_subject,
-            release_scope,
-            recorded_at: epoch_ms() / 1000,
-        };
-        match bridge.publish_audit_root(&attestation).await {
-            Ok(published) => Response::SapPublishedAuditRoot {
-                ledger_pda: published.ledger_pda,
-                signature: published.signature,
-            },
-            Err(e) => Response::Error {
-                message: format!("sap publish_audit_root: {e}"),
-            },
+        Response::Error {
+            message: SAP_DIRECT_PUBLISH_PARKED.into(),
         }
     }
 
-    /// Publish a cross-party attestation through the SAP bridge (signed by
-    /// the separately-keyed verifier). Mirrors [`Self::sap_publish_agent`].
+    /// Refuse direct SAP attestation publication before constructing an
+    /// attestation or consulting the configured verifier bridge.
     pub(crate) async fn sap_publish_attestation(
         &self,
-        agent_pda: String,
-        root_hash_hex: String,
-        attestation_type: Option<String>,
-        expires_at_unix: Option<u64>,
+        _agent_pda: String,
+        _root_hash_hex: String,
+        _attestation_type: Option<String>,
+        _expires_at_unix: Option<u64>,
     ) -> Response {
-        let Some(bridge) = self.sap_bridge.as_ref() else {
-            return Response::Error {
-                message: "sap bridge is not wired into this daemon".into(),
-            };
-        };
-        let attestation = covenant_sap_bridge::attestation::AgentAttestation {
-            agent_pda,
-            root_hash_hex,
-            attestation_type,
-            expires_at_unix,
-        };
-        match bridge.publish_attestation(&attestation).await {
-            Ok(published) => Response::SapPublishedAttestation {
-                attestation_pda: published.attestation_pda,
-                attester: published.attester,
-                agent_pda: published.agent_pda,
-                signature: published.signature,
-            },
-            Err(e) => Response::Error {
-                message: format!("sap publish_attestation: {e}"),
-            },
+        Response::Error {
+            message: SAP_DIRECT_PUBLISH_PARKED.into(),
         }
     }
 
@@ -4388,8 +4154,9 @@ impl Server {
     }
 
     /// Build a chain-inclusion proof for one audit event (e.g. an
-    /// `AceDataGeneration` row) so it can be verified offline against the
-    /// audit root the SAP bridge anchors on-chain. Operator-only, matching
+    /// `AceDataGeneration` row) against the current local audit root. A caller
+    /// may compare that root with a separately published commitment, if any;
+    /// the production daemon does not automatically anchor it. Operator-only, matching
     /// [`Self::verify_audit_integrity`]: the proof discloses the event's
     /// full serialized line, which is the operator's own audit trail.
     async fn prove_audit_inclusion(&self, event_id: Uuid, peer: &AgentId) -> Response {
@@ -4407,12 +4174,13 @@ impl Server {
     }
 
     /// Operator-only provenance query (mirrors
-    /// [`Self::verify_audit_integrity`]'s operator gate): returns every
-    /// privileged action in the requested window, projected from the
-    /// capability family of audit kinds and narrowed by
+    /// [`Self::verify_audit_integrity`]'s operator gate): returns recorded
+    /// capability-family actions in the requested window, projected from the
+    /// corresponding audit kinds and narrowed by
     /// [`ProvenanceFilter`]. The audit hash-chain is verified in the same
-    /// call and the verdict travels in the response, so a provenance
-    /// answer is never silently read from tampered rows. `limit` bounds
+    /// call and the verdict travels in the response. This establishes local
+    /// consistency, not completeness or resistance to a coherent rewrite by
+    /// the same filesystem authority. `limit` bounds
     /// the result to the most recent matching rows (chronological order,
     /// matching `recent_audit`); `scanned` reports how many in-window
     /// events were examined so the cost and coverage are visible.
@@ -4540,6 +4308,7 @@ impl Server {
 
     fn list_tools(&self) -> Response {
         let mut tools = self.tools.list_specs();
+        tools.retain(|tool| !is_parked_circuit_tool(&tool.name));
         if let Some(state) = &self.hyre {
             tools.extend(covenant_hyre::hyre_specs(&state.catalog, &state.config));
         }
@@ -4549,6 +4318,9 @@ impl Server {
         if let Some(state) = &self.sns {
             tools.extend(covenant_sns::sns_specs(&state.config));
         }
+        tools.retain(|tool| {
+            !is_parked_hyre_tool(&tool.name) && !is_parked_solana_funded_tool(&tool.name)
+        });
         Response::ToolList { tools }
     }
 
@@ -4558,6 +4330,22 @@ impl Server {
         arguments: serde_json::Value,
         peer: &AgentId,
     ) -> Response {
+        if is_parked_circuit_tool(&name) {
+            return Response::Error {
+                message: CIRCUIT_DAEMON_OUTBOUND_PARKED.into(),
+            };
+        }
+        if is_parked_hyre_tool(&name) {
+            return Response::Error {
+                message: x402::LEGACY_OUTBOUND_PARKED.into(),
+            };
+        }
+        if is_parked_solana_funded_tool(&name) {
+            return Response::Error {
+                message: SOLANA_FUNDED_TOOL_PARKED.into(),
+            };
+        }
+
         let action = format!("tool.call.{name}");
         let required = vec![action.clone()];
         let check = self
@@ -4623,10 +4411,6 @@ impl Server {
         if name.starts_with("acedata.") {
             return self.acedata_tool_call(name, arguments, peer).await;
         }
-        if name.starts_with("circuit.") {
-            return self.circuit_tool_call(name, arguments, peer).await;
-        }
-
         // Validate arguments against the tool's published input schema before
         // invoking it. Back-compatible: only object schemas that declare
         // required fields or typed properties are enforced, and only clear
@@ -4812,78 +4596,6 @@ impl Server {
         }
     }
 
-    /// Execute a Circuit tool, adding settlement governance on top of the
-    /// generic `tool.call.<name>` capability already enforced by
-    /// [`Self::call_tool`]. Circuit self-settles the CIRC (Token-2022)
-    /// payment inside the tool call and reports it in a `circuit` provenance
-    /// block; the spend gate itself lives in the crate's capability layer,
-    /// before the transfer. On a paid call this records a
-    /// [`AuditKind::ExternalPaymentSettled`] row and a [`SettlementReceipt`]
-    /// carrying the real on-chain signature. Free endpoints report no
-    /// `paymentTx`, so no receipt or audit row is written.
-    async fn circuit_tool_call(
-        &self,
-        name: String,
-        arguments: serde_json::Value,
-        peer: &AgentId,
-    ) -> Response {
-        match self.tools.call(&name, arguments).await {
-            Ok(r) => {
-                if !r.is_error {
-                    if let Some(prov) = extract_circuit_provenance(&r.content) {
-                        if let Some(sig) = prov.payment_tx.clone() {
-                            let now = epoch_ms();
-                            let receipt_id = Uuid::new_v4();
-                            let receipt = SettlementReceipt {
-                                id: receipt_id,
-                                payer: peer.clone(),
-                                resource: ResourceKind::Tool,
-                                memory_record_id: None,
-                                credits_consumed: 0,
-                                settled_at: now,
-                                chain: Some("solana".into()),
-                                cluster: Some("mainnet".into()),
-                                batch_id: None,
-                                merkle_root: None,
-                                tx_sig: Some(sig.clone()),
-                                slot: None,
-                                confirmed_at: Some(now),
-                                onchain_sig: Some(sig),
-                            };
-                            if let Err(e) = self.settlement.record(receipt).await {
-                                warn!(error = %e, "circuit settlement record failed");
-                            }
-                            let event = AuditEvent {
-                                id: Uuid::new_v4(),
-                                timestamp_ms: now,
-                                issuer: peer.clone(),
-                                kind: AuditKind::ExternalPaymentSettled {
-                                    provider: "circuit".into(),
-                                    endpoint: prov.endpoint.unwrap_or_else(|| name.clone()),
-                                    network: "solana".into(),
-                                    asset: prov.token.unwrap_or_else(|| "CIRC".into()),
-                                    amount: prov
-                                        .spent_raw
-                                        .map(|n| n.to_string())
-                                        .unwrap_or_default(),
-                                    receipt_id,
-                                },
-                            };
-                            self.record_peer_event(peer, event).await;
-                        }
-                    }
-                }
-                Response::ToolResult {
-                    content: r.content,
-                    is_error: r.is_error,
-                }
-            }
-            Err(e) => Response::Error {
-                message: format!("tool: {e}"),
-            },
-        }
-    }
-
     /// Scan the caller's capabilities for one that grants `action` and
     /// whose scope permits `model` under
     /// [`permission_acedata_generate_scope_allows`]. Mirrors
@@ -4928,74 +4640,44 @@ impl Server {
         }
     }
 
-    /// Execute a Hyre tool on the caller's behalf. The `tool.call.<name>`
-    /// capability and scope are already enforced by [`Self::call_tool`];
-    /// this binds the caller as payer and runs the resolved call through
-    /// the outbound x402 path, so the budget debit, settlement receipt,
-    /// and audit event land against the agent that invoked the tool.
+    /// Refuse Hyre execution while daemon-owned outbound payments are parked.
     async fn hyre_tool_call(
         &self,
         name: String,
         arguments: serde_json::Value,
         peer: &AgentId,
     ) -> Response {
-        let Some(state) = self.hyre.clone() else {
+        let Some(_state) = self.hyre.clone() else {
             return Response::Error {
                 message: "hyre provider is not enabled on this daemon.".into(),
             };
         };
-        let Some(x402) = self.x402_dispatch.clone() else {
-            return Response::Error {
-                message: "hyre requires the x402 funding-key sidecar. \
-                          Wire it via Server::with_x402_dispatch and restart."
-                    .into(),
-            };
-        };
-
-        let executor = Arc::new(hyre::DaemonHyreExecutor::new(
-            self.settlement.clone(),
-            self.audit.clone(),
-            self.budget.clone(),
-            x402,
-            self.identity.agent_id(),
-            peer.clone(),
-        ));
-        let Some(tool) = covenant_hyre::hyre_tool(&state.catalog, &state.config, &name, executor)
-        else {
-            return Response::Error {
-                message: format!("unknown hyre tool: {name}"),
-            };
-        };
-        match tool.call(arguments).await {
-            Ok(r) => Response::ToolResult {
-                content: r.content,
-                is_error: r.is_error,
-            },
-            Err(e) => Response::Error {
-                message: format!("tool: {e}"),
-            },
+        let _ = (name, arguments, peer);
+        Response::Error {
+            message: x402::LEGACY_OUTBOUND_PARKED.into(),
         }
     }
 
-    /// Execute a Metaplex tool on the caller's behalf. The
-    /// `tool.call.<name>` capability and scope are already enforced by
-    /// [`Self::call_tool`]. Reads run a DAS query; writes are delegated
-    /// to the `covenant-metaplex-signer` sidecar. The minting key never
-    /// enters the daemon's address space.
+    /// Execute a read-only Metaplex observation. Funded names are refused
+    /// again here as defense in depth before sidecar construction.
     async fn metaplex_tool_call(&self, name: String, arguments: serde_json::Value) -> Response {
+        if is_parked_solana_funded_tool(&name) {
+            return Response::Error {
+                message: SOLANA_FUNDED_TOOL_PARKED.into(),
+            };
+        }
         let Some(state) = self.metaplex.clone() else {
             return Response::Error {
                 message: "metaplex profile is not enabled on this daemon.".into(),
             };
         };
-        let signer = state.signer();
         let Some(tool) =
-            covenant_metaplex::metaplex_tool(&state.config, &name, state.das.clone(), signer)
+            covenant_metaplex::metaplex_tool(&state.config, &name, state.das.clone(), None)
         else {
             return Response::Error {
                 message: format!(
-                    "unknown or disabled metaplex tool: {name} (reads need \
-                     COVENANT_METAPLEX_DAS_URL; writes need the signer sidecar + RPC)"
+                    "unknown or disabled metaplex read tool: {name} \
+                     (reads need COVENANT_METAPLEX_DAS_URL; funded writes are parked)"
                 ),
             };
         };
@@ -5011,19 +4693,22 @@ impl Server {
     }
 
     async fn sns_tool_call(&self, name: String, arguments: serde_json::Value) -> Response {
+        if is_parked_solana_funded_tool(&name) {
+            return Response::Error {
+                message: SOLANA_FUNDED_TOOL_PARKED.into(),
+            };
+        }
         let Some(state) = self.sns.clone() else {
             return Response::Error {
                 message: "sns profile is not enabled on this daemon.".into(),
             };
         };
-        let signer = state.signer();
-        let Some(tool) =
-            covenant_sns::sns_tool(&state.config, &name, state.resolver.clone(), signer)
+        let Some(tool) = covenant_sns::sns_tool(&state.config, &name, state.resolver.clone(), None)
         else {
             return Response::Error {
                 message: format!(
-                    "unknown or disabled sns tool: {name} (reads need COVENANT_SNS_ENABLED=1; \
-                     writes need the signer sidecar + RPC)"
+                    "unknown or disabled sns read tool: {name} \
+                     (reads need COVENANT_SNS_ENABLED=1; funded writes are parked)"
                 ),
             };
         };
@@ -6784,30 +6469,24 @@ impl Server {
         }
     }
 
-    /// Dispatch an outbound x402 paid call on the peer's behalf.
+    /// Refuse the legacy daemon-owned outbound x402 path.
     ///
-    /// Gated by the `x402.outbound.pay` capability. Builds a
-    /// [`x402::SubprocessSigner`] from the daemon's
-    /// [`x402::X402Config`] (the funding key never enters the daemon
-    /// process), runs the 402-then-pay loop, and records the linked
-    /// budget debit + settlement receipt + audit event on success.
-    /// The receipt id surfaces back to the caller for join-keys.
-    ///
-    /// v1: the receipt amount is recorded as the operator-authorized
-    /// `per_call_cap`, not the live signed amount. A follow-up that
-    /// surfaces the chosen [`covenant_x402::PaymentRequirements`]
-    /// from `request_paid` will tighten that to the exact amount.
+    /// Authentication and provider scope are still checked so unauthorized
+    /// probes retain their established errors and audit trail. Every otherwise
+    /// admissible call stops before config parsing, signer construction, or
+    /// network I/O. Re-enabling requires transaction-bound authorization plus
+    /// a durable prepayment reservation and idempotency record.
     #[allow(clippy::too_many_arguments)]
     async fn pay_x402(
         &self,
         provider: String,
-        endpoint: String,
-        method: String,
-        body: Option<serde_json::Value>,
-        network: String,
-        asset: String,
-        per_call_cap: String,
-        credits: u64,
+        _endpoint: String,
+        _method: String,
+        _body: Option<serde_json::Value>,
+        _network: String,
+        _asset: String,
+        _per_call_cap: String,
+        _credits: u64,
         peer: &AgentId,
     ) -> Response {
         let check = self
@@ -6861,94 +6540,8 @@ impl Server {
             }
         }
 
-        let Some(config) = self.x402_dispatch.clone() else {
-            return Response::Error {
-                message: "x402 dispatch is not configured on this daemon. \
-                          Wire the funding-key sidecar via Server::with_x402_dispatch \
-                          and restart."
-                    .into(),
-            };
-        };
-        if !config.enabled {
-            return Response::Error {
-                message: "x402 dispatch is disabled in this daemon's config.".into(),
-            };
-        }
-
-        let http_method = match method.parse::<reqwest::Method>() {
-            Ok(m) => m,
-            Err(_) => {
-                return Response::Error {
-                    message: format!("invalid HTTP method: {method:?}"),
-                }
-            }
-        };
-        let per_call_cap_u: u128 = match per_call_cap.parse() {
-            Ok(n) => n,
-            Err(_) => {
-                return Response::Error {
-                    message: format!(
-                        "invalid per_call_cap (must be decimal u128): {per_call_cap:?}"
-                    ),
-                }
-            }
-        };
-
-        let mut signer = x402::SubprocessSigner::new(&config.signer_binary);
-        for (k, v) in &config.signer_env {
-            signer = signer.env(k.clone(), v.clone());
-        }
-
-        let capability = covenant_x402::Capability {
-            provider: provider.clone(),
-            network: network.clone(),
-            asset: asset.clone(),
-            per_call_cap: per_call_cap_u,
-        };
-        let call = x402::PaidCall {
-            provider: &provider,
-            endpoint: &endpoint,
-            method: http_method,
-            capability,
-            body: body.as_ref(),
-            amount: per_call_cap.clone(),
-            network: network.clone(),
-            asset: asset.clone(),
-            credits,
-        };
-
-        let issuer = self.identity.agent_id();
-        let context = x402::SettlementContext {
-            settlement: self.settlement.as_ref(),
-            audit: self.audit.as_ref(),
-            budget: self.budget.as_ref(),
-            issuer: &issuer,
-        };
-
-        let client = covenant_x402::Client::new(covenant_x402::http_client());
-        let outcome =
-            match x402::pay_and_record(&context, &config, &client, &signer, peer, &call).await {
-                Ok(outcome) => outcome,
-                Err(e) => {
-                    return Response::Error {
-                        message: format!("x402 dispatch failed: {e}"),
-                    }
-                }
-            };
-        let status = outcome.response.status().as_u16();
-        let body_text = match x402::read_response_body(outcome.response).await {
-            Ok(t) => t,
-            Err(e) => {
-                return Response::Error {
-                    message: format!("read upstream body: {e}"),
-                }
-            }
-        };
-        let receipt_id = outcome.receipt_id.unwrap_or_else(Uuid::nil);
-        Response::X402Paid {
-            receipt_id,
-            status,
-            body: body_text,
+        Response::Error {
+            message: x402::LEGACY_OUTBOUND_PARKED.into(),
         }
     }
 
@@ -7168,23 +6761,11 @@ impl Server {
         }
     }
 
-    async fn record_escrow_release(&self, facts: escrow::ReleaseFacts, peer: &AgentId) -> Response {
-        let check = self
-            .check_capabilities(
-                "escrow:release".into(),
-                vec!["escrow.release.record".into()],
-                peer,
-            )
-            .await;
-        if !check.passed {
-            return Response::Error {
-                message: "recording an escrow release requires capability \
-                          \"escrow.release.record\". Grant it with \
-                          `covenant capabilities grant escrow.release.record`."
-                    .into(),
-            };
-        }
-
+    async fn record_escrow_release(
+        &self,
+        _facts: escrow::ReleaseFacts,
+        _peer: &AgentId,
+    ) -> Response {
         let Some(config) = self.escrow.clone() else {
             return Response::Error {
                 message: "the escrow surface is not configured on this daemon. \
@@ -7198,14 +6779,7 @@ impl Server {
             };
         }
 
-        let issuer = self.identity.agent_id();
-        let context = escrow::ReleaseContext {
-            settlement: self.settlement.as_ref(),
-            audit: self.audit.as_ref(),
-            issuer: &issuer,
-        };
-
-        match escrow::record_escrow_release(&context, config.as_ref(), peer, &facts).await {
+        match escrow::record_escrow_release(config.as_ref()) {
             Ok(recorded_at) => Response::EscrowReleased {
                 recorded_at: recorded_at.to_string(),
             },
@@ -7565,7 +7139,7 @@ impl Server {
                                     .into(),
                                 id: Some(event.id.to_string()),
                                 message: format!(
-                                    "audit event {} has kind = AuditKind::IntentDispatched with result_hash_hex = {result_hash_hex:?} but its matched memory record {intent_id} (memory.id == intent_id) has text whose covenant_audit::hash_hex is {expected}; the sole production IntentDispatched write at dispatch_intent (covenantd/src/lib.rs:4233) sets result_hash_hex = hash_hex(text_out.as_bytes()) for the very text_out it stores as the memory record's text (lib.rs:4189, same dispatch, same intent_id), and memory record text is immutable after first write, so a well-formed 64-char lowercase-hex result_hash_hex that does not equal hash_hex(memory.text) is a pairing no production write emits",
+                                    "audit event {} has kind = AuditKind::IntentDispatched with result_hash_hex = {result_hash_hex:?} but its matched memory record {intent_id} (memory.id == intent_id) has text whose covenant_audit::hash_hex is {expected}; the sole production IntentDispatched write at dispatch_intent (covenantd/src/lib.rs:4233) sets result_hash_hex = hash_hex(text_out.as_bytes()) for the very text_out it stores as the memory record's text (lib.rs:4189, same dispatch, same intent_id), and memory record text is immutable after first write, so a well-formed 64-char lowercase-hex result_hash_hex that does not equal hash_hex(memory.text) is a pairing no recognized in-repository writer emits",
                                     event.id
                                 ),
                                 repair: "review the audit JSONL row and the memory record it joins by intent_id; production dispatch stores record.text = text_out and records IntentDispatched.result_hash_hex = covenant_audit::hash_hex(text_out.as_bytes()) in the same dispatch, so a matched pair whose result_hash_hex != hash_hex(memory.text) is out-of-band evidence of a JSONL edit that rewrote the dispatch digest, an import tool that paired an audit row with a foreign result digest, or a serde regression that hydrated result_hash_hex from a different row; this arm recomputes through the same covenant_audit::hash_hex the producer calls so it cannot drift from the production formula, and it fires only when result_hash_hex is canonical (exactly 64 chars, all lowercase hex 0-9a-f, not the all-zeros sentinel) so it is strictly disjoint from the audit_intent_dispatched_result_hash_hex_empty, _wrong_length, _not_lowercase_hex, and _all_zeros shape arms, and only on a matched intent_id present in both stores so a windowed-out record routes to the memory_without_audit / audit_without_memory orphan arms instead".into(),
@@ -7596,7 +7170,7 @@ impl Server {
                             kind: "intent_dispatched_issuer_not_matching_memory_owner".into(),
                             id: Some(event.id.to_string()),
                             message: format!(
-                                "audit event {} has kind = AuditKind::IntentDispatched joined by intent_id to memory record {intent_id}, but the event's issuer.pubkey (base58 {}) does not equal that memory record's owner.pubkey (base58 {}); the sole production IntentDispatched write at dispatch_intent_run (covenantd/src/lib.rs:3921) binds let issuer = peer.clone(), stores the memory record with owner = issuer.clone() (lib.rs:4188), and records the AuditEvent with issuer = issuer.clone() (lib.rs:4228) in the same dispatch, and record_peer_event asserts event.issuer.pubkey == peer.pubkey at every audit write (lib.rs:1838), so every production dispatch satisfies audit.issuer.pubkey == memory.owner.pubkey — a matched pair whose issuer and owner pubkeys disagree is a pairing no production write emits",
+                                "audit event {} has kind = AuditKind::IntentDispatched joined by intent_id to memory record {intent_id}, but the event's issuer.pubkey (base58 {}) does not equal that memory record's owner.pubkey (base58 {}); the sole production IntentDispatched write at dispatch_intent_run (covenantd/src/lib.rs:3921) binds let issuer = peer.clone(), stores the memory record with owner = issuer.clone() (lib.rs:4188), and records the AuditEvent with issuer = issuer.clone() (lib.rs:4228) in the same dispatch, and record_peer_event asserts event.issuer.pubkey == peer.pubkey at every audit write (lib.rs:1838), so every production dispatch satisfies audit.issuer.pubkey == memory.owner.pubkey — a matched pair whose issuer and owner pubkeys disagree is a pairing no recognized in-repository writer emits",
                                 event.id,
                                 event.issuer.pubkey_base58(),
                                 memory.owner.pubkey_base58()
@@ -7632,7 +7206,7 @@ impl Server {
                             kind: "intent_dispatched_issuer_display_not_matching_memory_owner".into(),
                             id: Some(event.id.to_string()),
                             message: format!(
-                                "audit event {} has kind = AuditKind::IntentDispatched joined by intent_id to memory record {intent_id} and the event's issuer.pubkey equals that memory record's owner.pubkey, but the event's issuer.display ({:?}) does not equal that memory record's owner.display ({:?}); the sole production IntentDispatched write at dispatch_intent_run (covenantd/src/lib.rs:3921) binds let issuer = peer.clone() and clones that one AgentId into the memory record's owner (lib.rs:4188) and the AuditEvent's issuer (lib.rs:4228) in the same dispatch, so every production dispatch satisfies audit.issuer.display == memory.owner.display — a matched pair whose pubkeys agree but whose display labels disagree is a pairing no production write emits",
+                                "audit event {} has kind = AuditKind::IntentDispatched joined by intent_id to memory record {intent_id} and the event's issuer.pubkey equals that memory record's owner.pubkey, but the event's issuer.display ({:?}) does not equal that memory record's owner.display ({:?}); the sole production IntentDispatched write at dispatch_intent_run (covenantd/src/lib.rs:3921) binds let issuer = peer.clone() and clones that one AgentId into the memory record's owner (lib.rs:4188) and the AuditEvent's issuer (lib.rs:4228) in the same dispatch, so every production dispatch satisfies audit.issuer.display == memory.owner.display — a matched pair whose pubkeys agree but whose display labels disagree is a pairing no recognized in-repository writer emits",
                                 event.id, event.issuer.display, memory.owner.display
                             ),
                             repair: "review the audit JSONL row and the memory record it joins by intent_id; production dispatch (dispatch_intent_run) clones one issuer = peer.clone() AgentId into the memory record's owner and the IntentDispatched audit issuer in the same call, and record_peer_event asserts event.issuer.pubkey == peer.pubkey at write time but never the display, so a matched pair whose audit issuer.pubkey equals the memory owner.pubkey while their display labels differ is out-of-band evidence of a JSONL edit that relabeled the recorded dispatcher's display on the operator-facing /audit feed (misattributing which named identity ran an intent) while preserving the cryptographic identity, or a serde regression that hydrated event.issuer.display from a different row; the pubkey-mismatch arm intent_dispatched_issuer_not_matching_memory_owner cannot catch this (the pubkeys agree) and the display is well-formed by the AgentId Deserialize gate so no shape arm catches it, making this cross-record display binding the sole detector; it fires only when the pubkeys are equal and non-zero so it is strictly disjoint from the pubkey-mismatch arm and from the audit_event_issuer_pubkey_zeroed (Check 7) and memory_record_owner_pubkey_zeroed (Check 5) shape arms, and only on a matched intent_id present in both stores so a windowed-out record routes to the memory_without_audit / audit_without_memory orphan arms instead".into(),
@@ -7670,7 +7244,7 @@ impl Server {
                                     .into(),
                                 id: Some(event.id.to_string()),
                                 message: format!(
-                                    "audit event {} has kind = AuditKind::IntentDispatched with intent_text = {intent_text:?} joined by intent_id to memory record {intent_id}, but that memory record's metadata.intent_text = {metadata_intent_text:?}; the sole production IntentDispatched write at dispatch_intent_run (covenantd/src/lib.rs:4185-4236) writes the MemoryRecord with metadata = serde_json::json!({{ \"intent_text\": text, .. }}) (lib.rs:4192) and records the AuditEvent with intent_text = text.clone() (lib.rs:4231) from the one `text` variable in the same dispatch, so every production dispatch satisfies memory.metadata[\"intent_text\"] == audit.intent_text — a matched pair whose two recorded request texts disagree is a pairing no production write emits",
+                                    "audit event {} has kind = AuditKind::IntentDispatched with intent_text = {intent_text:?} joined by intent_id to memory record {intent_id}, but that memory record's metadata.intent_text = {metadata_intent_text:?}; the sole production IntentDispatched write at dispatch_intent_run (covenantd/src/lib.rs:4185-4236) writes the MemoryRecord with metadata = serde_json::json!({{ \"intent_text\": text, .. }}) (lib.rs:4192) and records the AuditEvent with intent_text = text.clone() (lib.rs:4231) from the one `text` variable in the same dispatch, so every production dispatch satisfies memory.metadata[\"intent_text\"] == audit.intent_text — a matched pair whose two recorded request texts disagree is a pairing no recognized in-repository writer emits",
                                     event.id
                                 ),
                                 repair: "review the audit JSONL row and the memory record it joins by intent_id; production dispatch (dispatch_intent_run) stamps both the memory record's metadata.intent_text and the IntentDispatched audit intent_text from the same caller-supplied text in one call, so a matched pair whose two request texts differ is out-of-band evidence of a JSONL edit that rewrote the recorded request on one feed (misrepresenting on the /audit feed or in the memory store what an agent was asked to do) while leaving the other intact, an import tool that paired an audit row with a foreign memory record, or a serde regression that hydrated one copy from a different row; intent_text is free user text with no within-row shape arm (SubmitIntent is ungated) so no shape arm catches this, and the memory metadata column is mutated only by insert-only production paths (BackfillProvenance inserts \"provenance\", compaction stale-marking inserts \"stale_context\", receipt-correlation backfill inserts \"receipt_id\"; each preserves sibling keys verbatim) so a legitimate backfill or compaction never rewrites the intent_text sub-key, making this cross-record binding the sole detector; it fires only when the memory metadata carries a string intent_text (so a legacy/non-object metadata is owned by the Check 2 metadata_non_object arm and a dropped sub-key is left alone) and only on a matched intent_id present in both stores (so a windowed-out record routes to the memory_without_audit / audit_without_memory orphan arms instead)".into(),
@@ -7720,7 +7294,7 @@ impl Server {
                                             .into(),
                                     id: Some(event.id.to_string()),
                                     message: format!(
-                                        "audit event {} has kind = AuditKind::IntentDispatched with matched_agent = {matched_agent:?} joined by intent_id to memory record {intent_id}, but that memory record's metadata.agent_id = {metadata_agent_id}; the sole production IntentDispatched write at dispatch_intent_run (covenantd/src/lib.rs:4185-4236) sets the MemoryRecord metadata \"agent_id\" key (lib.rs:4193) and the AuditEvent matched_agent (lib.rs:4232) both from the one card.map(|c| c.id.clone()) in the same dispatch, so every production dispatch satisfies memory.metadata[\"agent_id\"] == matched_agent (a JSON string when an agent matched, JSON null when none did) — a matched pair whose recorded handling agent disagrees is a pairing no production write emits",
+                                        "audit event {} has kind = AuditKind::IntentDispatched with matched_agent = {matched_agent:?} joined by intent_id to memory record {intent_id}, but that memory record's metadata.agent_id = {metadata_agent_id}; the sole production IntentDispatched write at dispatch_intent_run (covenantd/src/lib.rs:4185-4236) sets the MemoryRecord metadata \"agent_id\" key (lib.rs:4193) and the AuditEvent matched_agent (lib.rs:4232) both from the one card.map(|c| c.id.clone()) in the same dispatch, so every production dispatch satisfies memory.metadata[\"agent_id\"] == matched_agent (a JSON string when an agent matched, JSON null when none did) — a matched pair whose recorded handling agent disagrees is a pairing no recognized in-repository writer emits",
                                         event.id
                                     ),
                                     repair: "review the audit JSONL row and the memory record it joins by intent_id; production dispatch (dispatch_intent_run) stamps both the memory record's metadata.agent_id and the IntentDispatched audit matched_agent from the same card.map(|c| c.id.clone()) in one call, so a matched pair whose recorded handling agents differ is out-of-band evidence of a JSONL edit that relabeled which named agent handled an intent on one feed (misattributing on the /audit feed or in the memory store which agent ran the work) while leaving the other intact, an import tool that paired an audit row with a foreign memory record, or a serde regression that hydrated one copy from a different row; the within-row matched_agent arms (audit_intent_dispatched_matched_agent_empty, audit_intent_dispatched_matched_agent_not_manifest_id_charset) constrain the audit value's shape but never its agreement with the memory record, so this cross-record binding is the sole detector; it fires only when the audit matched_agent is in its production shape (None or a well-formed manifest id, so malformed audit values are owned by the shape arms) and the memory metadata carries an agent_id key whose value is a JSON string or JSON null (the two shapes card.map serializes to, so a legacy/non-object metadata is owned by the Check 2 metadata_non_object arm and a malformed agent_id value is left alone), and only on a matched intent_id present in both stores (so a windowed-out record routes to the memory_without_audit / audit_without_memory orphan arms instead)".into(),
@@ -7755,7 +7329,7 @@ impl Server {
                                         .into(),
                                     id: Some(event.id.to_string()),
                                     message: format!(
-                                        "audit event {} has kind = AuditKind::IntentDispatched with status = {status:?} joined by intent_id to memory record {intent_id}, but that memory record's metadata.status = {metadata_status:?}; the sole production IntentDispatched write at dispatch_intent_run (covenantd/src/lib.rs:4185-4236) writes the MemoryRecord metadata \"status\" key as the literal \"ok\" (lib.rs:4194) and records the AuditEvent status as \"ok\".into() (lib.rs:4234) — the same hardcoded literal in the same dispatch — so every production dispatch satisfies memory.metadata[\"status\"] == audit.status; a matched pair whose two recorded dispatch outcomes disagree is a pairing no production write emits",
+                                        "audit event {} has kind = AuditKind::IntentDispatched with status = {status:?} joined by intent_id to memory record {intent_id}, but that memory record's metadata.status = {metadata_status:?}; the sole production IntentDispatched write at dispatch_intent_run (covenantd/src/lib.rs:4185-4236) writes the MemoryRecord metadata \"status\" key as the literal \"ok\" (lib.rs:4194) and records the AuditEvent status as \"ok\".into() (lib.rs:4234) — the same hardcoded literal in the same dispatch — so every production dispatch satisfies memory.metadata[\"status\"] == audit.status; a matched pair whose two recorded dispatch outcomes disagree is a pairing no recognized in-repository writer emits",
                                         event.id
                                     ),
                                     repair: "review the audit JSONL row and the memory record it joins by intent_id; production dispatch (dispatch_intent_run) stamps both the memory record's metadata.status and the IntentDispatched audit status from the same hardcoded \"ok\" literal in one call, so a matched pair whose recorded dispatch outcomes differ is out-of-band evidence of a JSONL edit that relabeled a completed dispatch's status on one feed (misrepresenting on the /audit feed or in the memory store whether an intent completed) while leaving the other intact, an import tool that paired an audit row with a foreign memory record, or a serde regression that hydrated one copy from a different row; the within-row audit_intent_dispatched_status_empty and audit_intent_dispatched_status_not_ok arms constrain the audit value but never its agreement with the memory record, and no arm checks the memory metadata status sub-key at all, so this cross-record binding is the sole detector of a memory-side status relabel; it fires only when the audit status is the canonical \"ok\" (so audit-side deviation is owned by the within-row status arms) and the memory metadata carries a string status sub-key (so a legacy/non-object metadata is owned by the Check 2 metadata_non_object arm and a dropped or non-string status sub-key is left alone), and only on a matched intent_id present in both stores (so a windowed-out record routes to the memory_without_audit / audit_without_memory orphan arms instead)".into(),
@@ -7786,7 +7360,7 @@ impl Server {
                             kind: "intent_dispatched_timestamp_before_memory_created".into(),
                             id: Some(event.id.to_string()),
                             message: format!(
-                                "audit event {} has kind = AuditKind::IntentDispatched with timestamp_ms = {} joined by intent_id to memory record {intent_id}, but that memory record's created_at = {} is later; the sole production IntentDispatched write at dispatch_intent_run (covenantd/src/lib.rs:3921-4237) reads let issued_at = epoch_ms() (lib.rs:3927) at the top of the dispatch and stamps it into the MemoryRecord.created_at (lib.rs:4196), then reads the wall clock again into the AuditEvent.timestamp_ms = epoch_ms() (lib.rs:4227) at the end of the same dispatch — strictly after the memory record is written — so on a non-rewound clock every production dispatch satisfies audit.timestamp_ms >= memory.created_at; a matched pair whose audit timestamp precedes the created_at of the memory record it dispatched is an ordering no production write emits",
+                                "audit event {} has kind = AuditKind::IntentDispatched with timestamp_ms = {} joined by intent_id to memory record {intent_id}, but that memory record's created_at = {} is later; the sole production IntentDispatched write at dispatch_intent_run (covenantd/src/lib.rs:3921-4237) reads let issued_at = epoch_ms() (lib.rs:3927) at the top of the dispatch and stamps it into the MemoryRecord.created_at (lib.rs:4196), then reads the wall clock again into the AuditEvent.timestamp_ms = epoch_ms() (lib.rs:4227) at the end of the same dispatch — strictly after the memory record is written — so on a non-rewound clock every production dispatch satisfies audit.timestamp_ms >= memory.created_at; a matched pair whose audit timestamp precedes the created_at of the memory record it dispatched is an ordering no recognized in-repository writer emits",
                                 event.id, event.timestamp_ms, memory.created_at
                             ),
                             repair: "review the audit JSONL row and the memory record it joins by intent_id; production dispatch (dispatch_intent_run) reads let issued_at = epoch_ms() once at the top (lib.rs:3927), stamps it into the memory record's created_at (lib.rs:4196), and only afterward reads the clock again for the IntentDispatched audit timestamp_ms (lib.rs:4227), so an audit row whose timestamp_ms predates the created_at of the memory record it dispatched is out-of-band evidence of a JSONL edit that backdated the dispatch on the /audit feed (antedating when an intent ran, for example to slip it before a capability grant or a budget window it should have post-dated), an import tool that paired the audit row with a foreign memory record, a serde regression that hydrated timestamp_ms from a different row, or a clock-tamper restore that rewound wall time between the memory write and the audit write; this is the audit-side mirror of the memory_receipt_settled_before_created arm (Check 4), which binds receipt.settled_at >= memory.created_at on the same dispatch from the same issued_at baseline, and it fires only when timestamp_ms is non-zero so the audit_event_timestamp_zero (Check 7) shape arm owns the all-zero sentinel, and only on a matched intent_id present in both stores so a windowed-out record routes to the memory_without_audit / audit_without_memory orphan arms instead".into(),
@@ -7938,7 +7512,7 @@ impl Server {
                             kind: "memory_record_created_before_parent".into(),
                             id: Some(record.id.to_string()),
                             message: format!(
-                                "memory record {} has created_at = {} which predates its resolved parent {}'s created_at = {}; production memory writes stamp created_at from epoch_ms() (dispatch_intent_run reads issued_at = epoch_ms() into the record's created_at), and a record that references a parent can only be written after the parent row exists, so every faithful derived record satisfies created_at >= parent.created_at — a child that predates its own parent is an ordering no production write emits",
+                                "memory record {} has created_at = {} which predates its resolved parent {}'s created_at = {}; production memory writes stamp created_at from epoch_ms() (dispatch_intent_run reads issued_at = epoch_ms() into the record's created_at), and a record that references a parent can only be written after the parent row exists, so every faithful derived record satisfies created_at >= parent.created_at — a child that predates its own parent is an ordering no recognized in-repository writer emits",
                                 record.id, record.created_at, parent, direct.created_at
                             ),
                             repair: "review the memory store row and the parent it references; production memory writes stamp created_at = epoch_ms() and a child can only be written after its parent exists (no writer sets parent = Some at creation — the sole production memory write records parent = None — and compaction only detaches a parent to None, never re-points it to a newer record), so a child whose created_at is earlier than its resolved parent's is out-of-band evidence of a SQLite edit that backdated the child's created_at, an import or replay tool that paired the child with a foreign newer parent, a serde regression that hydrated created_at from a different row, or a clock-tamper restore that rewound wall time between the parent and child writes; restore the child's created_at or detach the parent through an explicit repair command. This is the memory-internal parent edge of the created_at <= settled_at <= timestamp_ms dispatch triangle (the Check 1 intent_dispatched_timestamp_before_memory_created arm binds created_at <= timestamp_ms and the Check 4 memory_receipt_settled_before_created arm binds created_at <= settled_at, but neither forces a child's created_at against its parent's); it fires only when the parent resolves in the store (so a nil, self, or stale parent is owned by memory_record_parent_nil / memory_self_parent / memory_stale_parent, which continue before this branch, and a cycle by memory_parent_cycle) and only when both created_at values are non-zero so the memory_record_created_at_zero shape arm (Check 5) owns the all-zero sentinel".into(),
@@ -8086,7 +7660,7 @@ impl Server {
                                 kind: "capability_granted_action_not_matching_signed_capability".into(),
                                 id: Some(event.id.to_string()),
                                 message: format!(
-                                    "audit event {} has kind = AuditKind::CapabilityGranted with signature_b58 = {signature_b58:?} and action = {action:?}, but the persisted SignedCapability it joins by signature_b58 has capability.action = {:?}; grant_capability (covenantd/src/lib.rs:4637-4664) builds the Capability with action.clone() and records CapabilityGranted {{ action: action.clone(), .. }} from the same caller-supplied action in one call, so every production grant satisfies audit.action == cap.capability.action — a matched pair whose action strings disagree is a pairing no production write emits",
+                                    "audit event {} has kind = AuditKind::CapabilityGranted with signature_b58 = {signature_b58:?} and action = {action:?}, but the persisted SignedCapability it joins by signature_b58 has capability.action = {:?}; grant_capability (covenantd/src/lib.rs:4637-4664) builds the Capability with action.clone() and records CapabilityGranted {{ action: action.clone(), .. }} from the same caller-supplied action in one call, so every production grant satisfies audit.action == cap.capability.action — a matched pair whose action strings disagree is a pairing no recognized in-repository writer emits",
                                     event.id, cap.capability.action
                                 ),
                                 repair: "review the audit JSONL row and the granted.jsonl capability it joins by signature_b58; production grants route through grant_capability, which stamps both Capability.action and CapabilityGranted.action from the same action string in one call, so a cryptographically verified SignedCapability whose action differs from its CapabilityGranted audit row is out-of-band evidence of a JSONL edit that rewrote the audit row's action (for example to disguise on the /audit feed the true authority a grant conferred) while leaving the signed capability authentic, an import tool that paired a CapabilityGranted row with a foreign signature_b58, or a serde regression that hydrated the audit action from a different row; this arm fires only when the persisted capability cryptographically verifies (covenant_permissions::verify) so it is strictly disjoint from the capability_signature_invalid arm (Check 8), which owns the complementary case where the persisted capability's own action was altered (action is part of canonical_message at covenant-permissions/src/lib.rs:1098, so tampering it there breaks the signature), and from the capability_without_audit arm above, which owns the unmatched-signature_b58 case".into(),
@@ -8108,7 +7682,7 @@ impl Server {
                                 kind: "capability_granted_granted_by_display_not_matching_signed_capability".into(),
                                 id: Some(event.id.to_string()),
                                 message: format!(
-                                    "audit event {} has kind = AuditKind::CapabilityGranted with signature_b58 = {signature_b58:?} and granted_by_display = {granted_by_display:?}, but the persisted SignedCapability it joins by signature_b58 has capability.granted_by.display = {:?}; grant_capability (covenantd/src/lib.rs:4641-4664) sets cap.granted_by = granted_by and records CapabilityGranted.granted_by_display = granted_by.display.clone() from the same AgentId in one call, so every production grant satisfies audit.granted_by_display == cap.capability.granted_by.display — a matched pair with two distinct well-formed grantor displays is a pairing no production write emits",
+                                    "audit event {} has kind = AuditKind::CapabilityGranted with signature_b58 = {signature_b58:?} and granted_by_display = {granted_by_display:?}, but the persisted SignedCapability it joins by signature_b58 has capability.granted_by.display = {:?}; grant_capability (covenantd/src/lib.rs:4641-4664) sets cap.granted_by = granted_by and records CapabilityGranted.granted_by_display = granted_by.display.clone() from the same AgentId in one call, so every production grant satisfies audit.granted_by_display == cap.capability.granted_by.display — a matched pair with two distinct well-formed grantor displays is a pairing no recognized in-repository writer emits",
                                     event.id, cap.capability.granted_by.display
                                 ),
                                 repair: "review the audit JSONL row and the granted.jsonl capability it joins by signature_b58; production grants route through grant_capability, which stamps both cap.granted_by and CapabilityGranted.granted_by_display from the same granting AgentId in one call, so a cryptographically verified SignedCapability whose granted_by.display differs from its CapabilityGranted audit row is out-of-band evidence of a JSONL edit that rewrote the recorded granting identity on the /audit feed (the granted_by.display is not part of canonical_message — only granted_by.pubkey is, covenant-permissions/src/lib.rs:1106 — so the ed25519 signature does not cover it and capability_signature_invalid cannot catch this drift, making this binding the sole detector), an import tool that paired a CapabilityGranted row with a foreign signature_b58, or a serde regression that hydrated granted_by_display from a different row; it fires only when the persisted capability cryptographically verifies (so it is disjoint from capability_signature_invalid in Check 8) and only when the audit granted_by_display is a valid local@host form (so the Check 7 audit_capability_granted_granted_by_display_empty and _not_local_at_host_form shape arms own malformed values), and only on a matched signature_b58 (so the capability_without_audit orphan arm owns the unmatched case)".into(),
@@ -8146,7 +7720,7 @@ impl Server {
                                 kind: "capability_granted_issuer_not_matching_signed_capability_subject".into(),
                                 id: Some(event.id.to_string()),
                                 message: format!(
-                                    "audit event {} has kind = AuditKind::CapabilityGranted with signature_b58 = {signature_b58:?} and issuer.pubkey (base58 {}), but the persisted SignedCapability it joins by signature_b58 has capability.subject.pubkey (base58 {}); grant_capability (covenantd/src/lib.rs:4637-4664) builds the Capability with subject = peer.clone() (lib.rs:4638) and records CapabilityGranted with issuer = peer.clone() (lib.rs:4656) from the same authenticated peer in one call, and record_peer_event asserts event.issuer.pubkey == peer.pubkey at every audit write (lib.rs:1838), so every production grant satisfies audit.issuer.pubkey == cap.capability.subject.pubkey — a matched pair whose audit issuer and signed-capability subject pubkeys disagree is a pairing no production write emits",
+                                    "audit event {} has kind = AuditKind::CapabilityGranted with signature_b58 = {signature_b58:?} and issuer.pubkey (base58 {}), but the persisted SignedCapability it joins by signature_b58 has capability.subject.pubkey (base58 {}); grant_capability (covenantd/src/lib.rs:4637-4664) builds the Capability with subject = peer.clone() (lib.rs:4638) and records CapabilityGranted with issuer = peer.clone() (lib.rs:4656) from the same authenticated peer in one call, and record_peer_event asserts event.issuer.pubkey == peer.pubkey at every audit write (lib.rs:1838), so every production grant satisfies audit.issuer.pubkey == cap.capability.subject.pubkey — a matched pair whose audit issuer and signed-capability subject pubkeys disagree is a pairing no recognized in-repository writer emits",
                                     event.id,
                                     event.issuer.pubkey_base58(),
                                     cap.capability.subject.pubkey_base58()
@@ -8189,7 +7763,7 @@ impl Server {
                                 kind: "capability_granted_subject_display_not_matching_signed_capability".into(),
                                 id: Some(event.id.to_string()),
                                 message: format!(
-                                    "audit event {} has kind = AuditKind::CapabilityGranted with signature_b58 = {signature_b58:?} and subject_display = {subject_display:?} (equal to its own issuer.display), but the persisted SignedCapability it joins by signature_b58 has capability.subject.display = {:?}; grant_capability (covenantd/src/lib.rs:4637-4664) builds the Capability with subject = peer.clone() (lib.rs:4638) and stamps subject_display = peer.display.clone() (lib.rs:4658) from the same authenticated peer in one call, so every production grant satisfies subject_display == cap.capability.subject.display — a matched pair whose audit subject_display agrees with its own issuer.display but disagrees with the joined signed capability's subject.display is a pairing no production write emits",
+                                    "audit event {} has kind = AuditKind::CapabilityGranted with signature_b58 = {signature_b58:?} and subject_display = {subject_display:?} (equal to its own issuer.display), but the persisted SignedCapability it joins by signature_b58 has capability.subject.display = {:?}; grant_capability (covenantd/src/lib.rs:4637-4664) builds the Capability with subject = peer.clone() (lib.rs:4638) and stamps subject_display = peer.display.clone() (lib.rs:4658) from the same authenticated peer in one call, so every production grant satisfies subject_display == cap.capability.subject.display — a matched pair whose audit subject_display agrees with its own issuer.display but disagrees with the joined signed capability's subject.display is a pairing no recognized in-repository writer emits",
                                     event.id, cap.capability.subject.display
                                 ),
                                 repair: "review the audit JSONL row and the granted.jsonl capability it joins by signature_b58; production grants route through grant_capability, which stamps Capability.subject, the CapabilityGranted audit issuer, and subject_display from the same authenticated peer in one call, so a cryptographically verified SignedCapability whose subject.display differs from its CapabilityGranted audit subject_display is out-of-band evidence of a JSONL edit that relabeled the recorded grantee identity on the persisted capability (misattributing which named identity holds the capability) while leaving the audit row intact, an import tool that paired records across grantees, or a serde regression; subject.display is NOT part of canonical_message (only subject.pubkey is, covenant-permissions/src/lib.rs:1096), so the relabel does not break the ed25519 signature and capability_signature_invalid (Check 8) cannot catch it, and the audit row's subject_display still equals its own issuer.display so the Check 7 audit_capability_granted_subject_display_not_issuer_display within-row shape arm cannot catch it, making this cross-record display binding the sole detector; it fires only inside verify(cap).is_ok() (disjoint from capability_signature_invalid), only when subject_display == event.issuer.display (disjoint from the Check 7 within-row shape arm), and only when the pubkeys are equal and non-zero (disjoint from capability_granted_issuer_not_matching_signed_capability_subject and the zeroed-pubkey shape arms), and only on a matched signature_b58 so the capability_without_audit orphan arm owns the unmatched case".into(),
@@ -8380,7 +7954,7 @@ impl Server {
                     kind: "memory_record_receipt_id_backref_shared_by_multiple_records".into(),
                     id: Some(receipt_id.to_string()),
                     message: format!(
-                        "{count} memory records carry metadata.receipt_id {receipt_id}, but the pairing between a legacy Memory settlement receipt and the memory record that back-references it is 1:1 — the sole production writer of metadata.receipt_id is covenant-memory's receipt-correlation backfill (merge_receipt_id), fed by match_legacy_receipts_to_memory_records, which pairs each legacy receipt with at most one uncorrelated memory record (every paired record id is recorded in a used_memory set, covenant-memory/src/lib.rs:425-440), so every production receipt_id is back-referenced by exactly one record — two records sharing one is a second record claiming a receipt that already correlated exactly one memory write, a pairing no production backfill emits"
+                        "{count} memory records carry metadata.receipt_id {receipt_id}, but the pairing between a legacy Memory settlement receipt and the memory record that back-references it is 1:1 — the sole production writer of metadata.receipt_id is covenant-memory's receipt-correlation backfill (merge_receipt_id), fed by match_legacy_receipts_to_memory_records, which pairs each legacy receipt with at most one uncorrelated memory record (every paired record id is recorded in a used_memory set, covenant-memory/src/lib.rs:425-440), so every receipt_id is back-referenced by exactly one record — two records sharing one is a second record claiming a receipt that already correlated exactly one memory write, a pairing no production backfill emits"
                     ),
                     repair: "review the memory store rows that carry this metadata.receipt_id; covenant-memory's receipt-correlation backfill (merge_receipt_id) writes a given receipt id into exactly one record's metadata because match_legacy_receipts_to_memory_records dedups paired records through a used_memory set (covenant-memory/src/lib.rs:425-440), so two records sharing one is out-of-band evidence of a JSONL edit that copied a back-reference onto a second record (mis-attributing which memory write a receipt paid for), an import tool that correlated one receipt to two records, or a serde regression that hydrated metadata.receipt_id from a different row; this is the memory-log leg of the receipt_id cardinality family (the settlement-log leg is receipt_id_duplicate keyed on receipt.id, the audit-log leg is external_payment_settled_receipt_id_shared_by_multiple_events, the budget-log leg is budget_debit_paired_receipt_shared_by_multiple_debits), disjoint from the forward memory_receipt_duplicate arm which keys on receipt.memory_record_id over modern receipts whose record carries no metadata.receipt_id while this keys on memory.metadata.receipt_id over legacy receipts whose record carries no memory_record_id; identify the canonical record (the one whose owner.pubkey matches the receipt payer) before clearing the duplicate back-reference, since the duplicate makes the receipt_id ambiguous to any reconciliation that resolves a Memory receipt to the record it paid for".into(),
                 });
@@ -8481,7 +8055,7 @@ impl Server {
                                     kind: "memory_receipt_settled_after_dispatch_audit".into(),
                                     id: Some(receipt.id.to_string()),
                                     message: format!(
-                                        "receipt {} has settled_at = {} which is later than the IntentDispatched audit timestamp_ms = {audit_ts} of the dispatch that wrote memory record {memory_id}; the sole production writer of a Memory receipt carrying a memory_record_id (dispatch_intent_run's memory-write branch, covenantd/src/lib.rs:4204-4218) reads epoch_ms() into the receipt's settled_at (lib.rs:4210) strictly before it reads epoch_ms() again into the IntentDispatched AuditEvent.timestamp_ms (lib.rs:4227) — settlement.record runs between the two reads — so every production dispatch satisfies receipt.settled_at <= audit.timestamp_ms; a matched pair whose receipt settled after its own dispatch audit is an ordering no production write emits",
+                                        "receipt {} has settled_at = {} which is later than the IntentDispatched audit timestamp_ms = {audit_ts} of the dispatch that wrote memory record {memory_id}; the sole production writer of a Memory receipt carrying a memory_record_id (dispatch_intent_run's memory-write branch, covenantd/src/lib.rs:4204-4218) reads epoch_ms() into the receipt's settled_at (lib.rs:4210) strictly before it reads epoch_ms() again into the IntentDispatched AuditEvent.timestamp_ms (lib.rs:4227) — settlement.record runs between the two reads — so every production dispatch satisfies receipt.settled_at <= audit.timestamp_ms; a matched pair whose receipt settled after its own dispatch audit is an ordering no recognized in-repository writer emits",
                                         receipt.id, receipt.settled_at
                                     ),
                                     repair: "review the settlement JSONL row and the IntentDispatched audit row for this intent_id/memory_record_id; production dispatch (dispatch_intent_run) reads the wall clock into the Memory receipt's settled_at (lib.rs:4210) before reading it again for the IntentDispatched audit timestamp_ms (lib.rs:4227), so a receipt whose settled_at exceeds its dispatch audit's timestamp_ms is out-of-band evidence of a JSONL edit that forward-dated the settlement on the /settlement feed (overstating when a memory write settled, for example to push it past a budget or reconciliation window) or backdated the audit row, an import tool that paired the receipt with a foreign dispatch audit, a serde regression that hydrated settled_at or timestamp_ms from a different row, or a clock-tamper restore that rewound wall time between the receipt and audit writes; this is the third ordered edge of the created_at <= settled_at <= timestamp_ms dispatch triangle — the Check 1 intent_dispatched_timestamp_before_memory_created arm binds created_at <= timestamp_ms and the memory_receipt_settled_before_created arm above binds created_at <= settled_at, but neither forces settled_at <= timestamp_ms (created_at=10, settled_at=30, timestamp_ms=20 satisfies both yet inverts this edge), so this binding is the sole detector; the only production writer of a memory_record_id-bearing Memory receipt is dispatch_intent_run (the legacy owner-match receipt backfill is a read-only dry-run planner, covenant-memory memory_receipt_backfill_plan_json with mutation_supported = false), so the receipt and the audit always originate from one dispatch; it fires only when a matching IntentDispatched audit exists for the intent_id (so a receipt whose dispatch audit was windowed out is left to the receipt_without_memory_record / memory_without_audit arms) and only when both timestamps are non-zero so it is strictly disjoint from the receipt_settled_at_zero (Check 6) and audit_event_timestamp_zero (Check 7) shape arms that own the all-zero sentinel".into(),
@@ -8497,7 +8071,7 @@ impl Server {
                                 kind: "memory_receipt_credits_not_derived_from_text_bytes".into(),
                                 id: Some(receipt.id.to_string()),
                                 message: format!(
-                                    "receipt {} has credits_consumed = {} but its joined memory record {memory_id} has text byte length {}, for which covenant_settlement::memory_write_credits = {expected_credits}; the sole production path that pairs a Memory receipt with a memory_record_id (covenantd dispatch_intent's memory-write branch at lib.rs:4204) stamps credits_consumed = memory_write_credits(record.text.len()) = ((bytes as u64).div_ceil(1024)).max(1) for the same record it writes, and memory record text is immutable after first write (every memory store UPDATE preserves the text column verbatim), so a matched pair whose credits_consumed does not equal the recomputation is a value no production write emits",
+                                    "receipt {} has credits_consumed = {} but its joined memory record {memory_id} has text byte length {}, for which covenant_settlement::memory_write_credits = {expected_credits}; the sole production path that pairs a Memory receipt with a memory_record_id (covenantd dispatch_intent's memory-write branch at lib.rs:4204) stamps credits_consumed = memory_write_credits(record.text.len()) = ((bytes as u64).div_ceil(1024)).max(1) for the same record it writes, and memory record text is immutable after first write (every memory store UPDATE preserves the text column verbatim), so a matched pair whose credits_consumed does not equal the recomputation is a value no recognized in-repository writer emits",
                                     receipt.id,
                                     receipt.credits_consumed,
                                     memory.text.len()
@@ -8539,7 +8113,7 @@ impl Server {
                                 kind: "memory_receipt_payer_display_not_matching_owner".into(),
                                 id: Some(receipt.id.to_string()),
                                 message: format!(
-                                    "receipt {} has resource = ResourceKind::Memory joined by memory_record_id to memory record {memory_id} and the receipt's payer.pubkey equals that memory record's owner.pubkey, but the receipt's payer.display ({:?}) does not equal that memory record's owner.display ({:?}); the sole production Memory-receipt write at dispatch_intent's memory-write branch (covenantd/src/lib.rs:4185-4223) binds let issuer = peer.clone() and clones that one AgentId into the memory record's owner (lib.rs:4188) and the SettlementReceipt.payer (lib.rs:4206) in the same dispatch, so every production memory write satisfies receipt.payer.display == memory.owner.display — a matched pair whose pubkeys agree but whose display labels disagree is a pairing no production write emits",
+                                    "receipt {} has resource = ResourceKind::Memory joined by memory_record_id to memory record {memory_id} and the receipt's payer.pubkey equals that memory record's owner.pubkey, but the receipt's payer.display ({:?}) does not equal that memory record's owner.display ({:?}); the sole production Memory-receipt write at dispatch_intent's memory-write branch (covenantd/src/lib.rs:4185-4223) binds let issuer = peer.clone() and clones that one AgentId into the memory record's owner (lib.rs:4188) and the SettlementReceipt.payer (lib.rs:4206) in the same dispatch, so every production memory write satisfies receipt.payer.display == memory.owner.display — a matched pair whose pubkeys agree but whose display labels disagree is a pairing no recognized in-repository writer emits",
                                     receipt.id, receipt.payer.display, memory.owner.display
                                 ),
                                 repair: "review the receipt JSONL row and the memory record it joins by memory_record_id; the sole production Memory-receipt write (dispatch_intent's memory-write branch, lib.rs:4185-4223) clones one issuer = peer.clone() AgentId into both the memory record's owner and the SettlementReceipt.payer in the same call, so a matched pair whose receipt payer.pubkey equals the memory owner.pubkey while their display labels differ is out-of-band evidence of a JSONL edit that relabeled the recorded payer's display on the settlement feed (misattributing which named identity paid for a memory write) while preserving the cryptographic identity, an import tool that paired a receipt with a foreign payer display, or a serde regression that hydrated receipt.payer.display from a different row; local settlement receipts are unsigned JSONL so no signature covers payer.display, and the owner-pubkey arm memory_receipt_owner_mismatch cannot catch this (the pubkeys agree) while the display is well-formed by the AgentId Deserialize gate so no shape arm catches it, making this cross-record display binding the sole detector; it fires only when the pubkeys are equal and non-zero so it is strictly disjoint from memory_receipt_owner_mismatch and from the zeroed_payer_receipt (Check 6) and memory_record_owner_pubkey_zeroed (Check 5) shape arms, and only on a memory_record_id present in both stores so an unmatched receipt routes to receipt_without_memory_record / memory_without_receipt instead".into(),
@@ -8592,7 +8166,7 @@ impl Server {
                                     kind: "receipt_without_memory_record_payer_not_matching_audit_issuer".into(),
                                     id: Some(receipt.id.to_string()),
                                     message: format!(
-                                        "settlement receipt {} has resource = ResourceKind::Memory and memory_record_id = Some({memory_id}) referencing a memory record absent from the store, and the IntentDispatched audit row that dispatched intent_id {memory_id} has issuer.pubkey (base58 {}) which does not equal this receipt's payer.pubkey (base58 {}); the sole production writer of a Memory receipt carrying a memory_record_id is dispatch_intent_run's memory-write branch (covenantd/src/lib.rs:4185-4223), which binds let issuer = peer.clone() (lib.rs:3929) and stamps that one AgentId into both the SettlementReceipt.payer (lib.rs:4206) and the IntentDispatched AuditEvent.issuer (lib.rs:4228) in the same dispatch, so every production memory write satisfies receipt.payer.pubkey == audit.issuer.pubkey — a matched pair whose payer and issuer pubkeys disagree is a pairing no production write emits",
+                                        "settlement receipt {} has resource = ResourceKind::Memory and memory_record_id = Some({memory_id}) referencing a memory record absent from the store, and the IntentDispatched audit row that dispatched intent_id {memory_id} has issuer.pubkey (base58 {}) which does not equal this receipt's payer.pubkey (base58 {}); the sole production writer of a Memory receipt carrying a memory_record_id is dispatch_intent_run's memory-write branch (covenantd/src/lib.rs:4185-4223), which binds let issuer = peer.clone() (lib.rs:3929) and stamps that one AgentId into both the SettlementReceipt.payer (lib.rs:4206) and the IntentDispatched AuditEvent.issuer (lib.rs:4228) in the same dispatch, so every production memory write satisfies receipt.payer.pubkey == audit.issuer.pubkey — a matched pair whose payer and issuer pubkeys disagree is a pairing no recognized in-repository writer emits",
                                         receipt.id,
                                         issuer.pubkey_base58(),
                                         receipt.payer.pubkey_base58()
@@ -8639,7 +8213,7 @@ impl Server {
                                     kind: "receipt_without_memory_record_payer_display_not_matching_audit_issuer".into(),
                                     id: Some(receipt.id.to_string()),
                                     message: format!(
-                                        "settlement receipt {} has resource = ResourceKind::Memory and memory_record_id = Some({memory_id}) referencing a memory record absent from the store, and its payer.pubkey equals the issuer.pubkey of the IntentDispatched audit row that dispatched intent_id {memory_id}, but the receipt's payer.display ({:?}) does not equal that audit issuer's display ({:?}); the sole production writer of a Memory receipt carrying a memory_record_id is dispatch_intent_run's memory-write branch (covenantd/src/lib.rs:4185-4223), which binds let issuer = peer.clone() and clones that one AgentId into both the SettlementReceipt.payer (lib.rs:4206) and the IntentDispatched AuditEvent.issuer (lib.rs:4228) in the same dispatch, so every production memory write satisfies receipt.payer.display == audit.issuer.display whenever their pubkeys agree — a matched pair whose pubkeys agree but whose display labels disagree is a pairing no production write emits",
+                                        "settlement receipt {} has resource = ResourceKind::Memory and memory_record_id = Some({memory_id}) referencing a memory record absent from the store, and its payer.pubkey equals the issuer.pubkey of the IntentDispatched audit row that dispatched intent_id {memory_id}, but the receipt's payer.display ({:?}) does not equal that audit issuer's display ({:?}); the sole production writer of a Memory receipt carrying a memory_record_id is dispatch_intent_run's memory-write branch (covenantd/src/lib.rs:4185-4223), which binds let issuer = peer.clone() and clones that one AgentId into both the SettlementReceipt.payer (lib.rs:4206) and the IntentDispatched AuditEvent.issuer (lib.rs:4228) in the same dispatch, so every production memory write satisfies receipt.payer.display == audit.issuer.display whenever their pubkeys agree — a matched pair whose pubkeys agree but whose display labels disagree is a pairing no recognized in-repository writer emits",
                                         receipt.id,
                                         receipt.payer.display,
                                         issuer.display
@@ -8681,7 +8255,7 @@ impl Server {
                                     kind: "receipt_without_memory_record_settled_after_dispatch_audit".into(),
                                     id: Some(receipt.id.to_string()),
                                     message: format!(
-                                        "settlement receipt {} has resource = ResourceKind::Memory and memory_record_id = Some({memory_id}) referencing a memory record absent from the store, and its settled_at = {} is later than the IntentDispatched audit timestamp_ms = {audit_ts} of the dispatch that wrote intent_id {memory_id}; the sole production writer of a Memory receipt carrying a memory_record_id is dispatch_intent_run's memory-write branch (covenantd/src/lib.rs:4185-4223), which reads epoch_ms() into the receipt's settled_at (lib.rs:4210) strictly before reading epoch_ms() again into the IntentDispatched AuditEvent.timestamp_ms (lib.rs:4227) — settlement.record runs between the two reads — so every production memory write satisfies receipt.settled_at <= audit.timestamp_ms; an orphaned pair whose receipt settled after its own dispatch audit is an ordering no production write emits",
+                                        "settlement receipt {} has resource = ResourceKind::Memory and memory_record_id = Some({memory_id}) referencing a memory record absent from the store, and its settled_at = {} is later than the IntentDispatched audit timestamp_ms = {audit_ts} of the dispatch that wrote intent_id {memory_id}; the sole production writer of a Memory receipt carrying a memory_record_id is dispatch_intent_run's memory-write branch (covenantd/src/lib.rs:4185-4223), which reads epoch_ms() into the receipt's settled_at (lib.rs:4210) strictly before reading epoch_ms() again into the IntentDispatched AuditEvent.timestamp_ms (lib.rs:4227) — settlement.record runs between the two reads — so every production memory write satisfies receipt.settled_at <= audit.timestamp_ms; an orphaned pair whose receipt settled after its own dispatch audit is an ordering no recognized in-repository writer emits",
                                         receipt.id, receipt.settled_at
                                     ),
                                     repair: "review the settlement JSONL row and the IntentDispatched audit row that share this intent_id/memory_record_id; production dispatch (dispatch_intent_run) reads the wall clock into the Memory receipt's settled_at (lib.rs:4210) before reading it again for the IntentDispatched audit timestamp_ms (lib.rs:4227), so an orphaned pair whose settled_at exceeds its dispatch audit's timestamp_ms is out-of-band evidence of a JSONL edit that forward-dated the settlement on the /settlement feed (overstating when a memory write settled, for example to push it past a budget or reconciliation window) or backdated the audit row, an import tool that paired the receipt with a foreign dispatch audit, a serde regression that hydrated settled_at or timestamp_ms from a different row, or a clock-tamper restore that rewound wall time between the receipt and audit writes; this is the temporal edge of the orphaned audit ↔ receipt join (the payer pubkey edge is receipt_without_memory_record_payer_not_matching_audit_issuer and the display edge is receipt_without_memory_record_payer_display_not_matching_audit_issuer) and the orphaned-case mirror of the present-record memory_receipt_settled_after_dispatch_audit arm, which binds the same settled_at <= timestamp_ms edge but gates on the memory record being present (if let Some(memory) = memory_by_id.get(...)) so it goes silent once the working-tier record both rows reference is compacted or purged while the append-only audit and settlement rows survive, making this binding the sole detector then; it fires only when the memory record is absent from the store (so a present record routes to that memory-anchored arm), only when the IntentDispatched audit for this intent_id is present (so an audit-less orphaned receipt is left to the receipt_without_memory_record arm alone), and only when both timestamps are non-zero so it is strictly disjoint from the receipt_settled_at_zero (Check 6) and audit_event_timestamp_zero (Check 7) shape arms that own the all-zero sentinel".into(),
@@ -9016,7 +8590,7 @@ impl Server {
                             kind: "memory_record_metadata_receipt_id_unparseable".into(),
                             id: Some(record.id.to_string()),
                             message: format!(
-                                "memory record {} has metadata.receipt_id = {receipt_id_str:?}, which does not parse as a UUID; the sole production writer of metadata.receipt_id is covenant-memory's receipt-correlation backfill (merge_receipt_id, covenant-memory/src/lib.rs:1239-1250), which stores serde_json::Value::String(receipt_id.to_string()) from a Memory settlement receipt's Uuid::new_v4()-allocated id, so every production receipt_id back-reference is a hyphenated UUID string that round-trips through Uuid::parse — an unparseable value is one no production backfill emits",
+                                "memory record {} has metadata.receipt_id = {receipt_id_str:?}, which does not parse as a UUID; the sole production writer of metadata.receipt_id is covenant-memory's receipt-correlation backfill (merge_receipt_id, covenant-memory/src/lib.rs:1239-1250), which stores serde_json::Value::String(receipt_id.to_string()) from a Memory settlement receipt's Uuid::new_v4()-allocated id, so every receipt_id back-reference is a hyphenated UUID string that round-trips through Uuid::parse — an unparseable value is one no production backfill emits",
                                 record.id
                             ),
                             repair: "review the memory store row and the writer that produced it; the sole production writer (covenant-memory merge_receipt_id, covenant-memory/src/lib.rs:1239-1250) stores metadata.receipt_id as Value::String(receipt_id.to_string()) for a real Memory receipt id, so an unparseable receipt_id is out-of-band evidence of a JSONL/DB edit that truncated or re-encoded the back-reference, an import/serde regression that hydrated the sub-key from a non-UUID source, or a partial overwrite — detaching the legacy memory-to-receipt correlation the Check 4 back-reference arms (memory_record_receipt_id_backref_resource_not_memory, memory_record_receipt_id_backref_payer_not_matching_owner, and the receipt_id cardinality arm) join on, all of which `let Ok(..) = receipt_id_str.parse::<Uuid>() else { continue }` and so silently skip this value; this within-row arm fires only when metadata is an object carrying a string receipt_id sub-key (so memory_record_metadata_non_object owns the non-object case and a missing or non-string sub-key is left alone), and is strictly disjoint from the memory_record_metadata_receipt_id_nil arm (a nil UUID parses successfully so it routes to the match's Ok arm) and from the Check 4 cross-record back-reference arms (which all require a parseable non-nil receipt_id resolving to a receipt present in the store)".into(),
@@ -9207,7 +8781,7 @@ impl Server {
         // Remediation is a settlement-team decision and intentionally
         // outside the memory-side repair set.
         //
-        // settled_at is stamped by epoch_ms() at every production receipt
+        // settled_at is stamped by epoch_ms() at every receipt emitted by the recognized in-repository writers
         // write site (see covenantd lib.rs `record_settlement` and the
         // staking/intent settlement paths), so settled_at == 0 is the same
         // out-of-band evidence pattern as audit_event_timestamp_zero
@@ -9390,7 +8964,7 @@ impl Server {
                     kind: "receipt_slot_confirmed_at_presence_diverged".into(),
                     id: Some(receipt.id.to_string()),
                     message: format!(
-                        "receipt {} has a set chain provenance bundle but its confirmation metadata is torn: slot = {:?}, confirmed_at = {:?} (exactly one is present); annotate_receipt sources receipt.slot and receipt.confirmed_at from the same ChainConfirmation (covenant-settlement/src/lib.rs:375-376) and a Solana confirmation carries both a block slot and a block timestamp, so every faithful receipt has slot and confirmed_at either both unset (the flushed-but-unconfirmed state the production flush path writes via ChainConfirmation {{ slot: None, confirmed_at: None, .. }} at covenantd/src/lib.rs:5425-5427) or both set once on-chain confirmation lands — exactly one present is a pairing no production write emits",
+                        "receipt {} has a set chain provenance bundle but its confirmation metadata is torn: slot = {:?}, confirmed_at = {:?} (exactly one is present); annotate_receipt sources receipt.slot and receipt.confirmed_at from the same ChainConfirmation (covenant-settlement/src/lib.rs:375-376) and a Solana confirmation carries both a block slot and a block timestamp, so every faithful receipt has slot and confirmed_at either both unset (the flushed-but-unconfirmed state the production flush path writes via ChainConfirmation {{ slot: None, confirmed_at: None, .. }} at covenantd/src/lib.rs:5425-5427) or both set once on-chain confirmation lands — exactly one present is a pairing no recognized in-repository writer emits",
                         receipt.id, receipt.slot, receipt.confirmed_at
                     ),
                     repair: "review the receipt JSONL row and the writer that produced it; production receipt confirmation routes through annotate_receipt, which sets receipt.slot = confirmation.slot and receipt.confirmed_at = confirmation.confirmed_at from one ChainConfirmation (covenant-settlement/src/lib.rs:375-376), and a Solana confirmation provides a block slot and that block's timestamp together, so a confirmed receipt carries both or (before confirmation) neither — a receipt with exactly one set is out-of-band evidence of a partial on-chain confirmation writer that populated one field without the other, a serde regression that defaulted one Option<u64> to None at hydration while the other survived, or a JSONL edit that detached the confirmation slot from its block timestamp (leaving operator-facing CLI receipt summaries and the /chain/receipt-batches HTTP endpoint rendering half-confirmed provenance); this fires only when receipt.chain.is_some() so the chain = None case stays owned by receipt_confirmed_without_chain and receipt_slot_without_chain (which bind each metadata field to chain individually), and it is orthogonal to the receipt_slot_zero and receipt_confirmed_at_zero value-shape arms that own the Some(0) sentinel".into(),
@@ -9607,7 +9181,7 @@ impl Server {
                         kind: "receipt_batch_id_not_derived_from_merkle_root".into(),
                         id: Some(receipt.id.to_string()),
                         message: format!(
-                            "receipt {} has batch_id = Some({batch_id:?}) that is not the canonical derivation of its merkle_root = Some({merkle_root:?}); production receipt confirmation stamps batch_id = covenant_settlement::derive_batch_id(merkle_root) = hex32(Sha256::digest(format!(\"covenant-receipts:{{merkle_root}}\")).into()) at build_receipt_batch (covenant-settlement/src/lib.rs:106), so the two fields are cryptographically bound and every confirmed receipt satisfies batch_id == derive_batch_id(merkle_root) — a well-formed 64-char lowercase-hex batch_id that does not match the recomputation is a pairing no production write emits",
+                            "receipt {} has batch_id = Some({batch_id:?}) that is not the canonical derivation of its merkle_root = Some({merkle_root:?}); production receipt confirmation stamps batch_id = covenant_settlement::derive_batch_id(merkle_root) = hex32(Sha256::digest(format!(\"covenant-receipts:{{merkle_root}}\")).into()) at build_receipt_batch (covenant-settlement/src/lib.rs:106), so the two fields are cryptographically bound and every confirmed receipt satisfies batch_id == derive_batch_id(merkle_root) — a well-formed 64-char lowercase-hex batch_id that does not match the recomputation is a pairing no recognized in-repository writer emits",
                             receipt.id
                         ),
                         repair: "review the receipt JSONL row and the writer that produced it; production receipt confirmation routes through annotate_receipt with a ChainConfirmation whose batch_id and merkle_root both come from the same ReceiptBatch, where build_receipt_batch sets batch_id = derive_batch_id(merkle_root) — so a batch_id that does not equal covenant_settlement::derive_batch_id(merkle_root) is out-of-band evidence of a JSONL edit that rewrote merkle_root without recomputing batch_id (or rewrote batch_id alone), an import tool that paired a batch_id with a foreign merkle_root, or a serde regression that hydrated the two fields from different batches; this arm recomputes through the same shared derive_batch_id the producer uses so it cannot drift from the production formula, and it fires only when both fields are canonical 64-char lowercase hex (non-empty, non-all-zeros) so it is strictly disjoint from the receipt_batch_id_empty, receipt_batch_id_wrong_length, receipt_batch_id_all_zeros, receipt_batch_id_not_lowercase_hex, the matching merkle_root arms, and the receipt_chain_partial guard that only fires on a 1-3-of-4 Some-count".into(),
@@ -9721,10 +9295,10 @@ impl Server {
                 }
             }
         }
-        // Cardinality: every production settlement receipt is written with
-        // id = Uuid::new_v4() — record_paid_call mints receipt_id at
-        // covenantd/src/x402.rs:211 for the Tool receipt and dispatch_intent_run
-        // mints it at covenantd/src/lib.rs:3926 for the Memory receipt — and
+        // Cardinality: the recognized receipt writers use Uuid::new_v4(). The
+        // now-parked record_paid_call helper minted the legacy Tool id, while
+        // dispatch_intent_run mints the Memory receipt id. Both use the same
+        // allocation invariant, and
         // both JsonlReceiptStore::record and InMemorySettlement::record append
         // the receipt verbatim without deduplication while recent returns one
         // receipt per persisted line (covenant-settlement/src/lib.rs), so a
@@ -9754,9 +9328,9 @@ impl Server {
                     kind: "receipt_id_duplicate".into(),
                     id: Some(receipt_id.to_string()),
                     message: format!(
-                        "{count} settlement receipts share id {receipt_id}, but every production receipt is written with id = Uuid::new_v4() (record_paid_call for the Tool receipt, dispatch_intent_run for the Memory receipt) and JsonlReceiptStore::record appends each receipt as one persisted line without deduplication, so every production receipt id is carried by exactly one receipt — two receipts sharing one id is a replayed or duplicated settlement-log row that no production write emits"
+                        "{count} settlement receipts share id {receipt_id}, but the recognized in-repository writers allocate each local receipt id with Uuid::new_v4() (the now-parked record_paid_call helper for Tool rows and dispatch_intent_run for Memory rows). JsonlReceiptStore::record does not deduplicate, so two rows sharing one id indicate replay, import, edit, or serialization drift"
                     ),
-                    repair: "review the settlement JSONL rows that carry this id; record_paid_call (x402.rs:206-264) and dispatch_intent_run each allocate a fresh receipt id via Uuid::new_v4() and JsonlReceiptStore::record appends each receipt verbatim as a single line (covenant-settlement/src/lib.rs), while the settlement-receipt backfill mutator rewrites the store one-to-one and preserves each id, so two receipts sharing an id is out-of-band evidence of a replayed or duplicated settlement-log row (a crash-recovery or import tool re-appending a receipt), an import tool that reused a prior id, or a serde regression that hydrated two rows with the same id; identify the canonical receipt before truncating the duplicate, since the duplicate makes the id ambiguous to the ExternalPaymentSettled audit join and the budget-debit paired_receipt pairing that reference receipts by id".into(),
+                    repair: "review the settlement rows that carry this id; active dispatch_intent_run and the parked legacy record_paid_call helper each allocate ids with Uuid::new_v4(), while the receipt backfill preserves ids one-to-one. A duplicate indicates a replay, import, edit, or serialization error. Identify the canonical row before repair because audit and budget records join on this id".into(),
                 });
             }
         }
@@ -9774,7 +9348,7 @@ impl Server {
         // state the production flush path writes (ChainConfirmation { tx_sig:
         // None } at lib.rs:5425) and all the same Some once on-chain confirmation
         // lands. Divergent tx_sig within one batch_id is a torn or replayed
-        // confirmation no production write emits. The per-receipt tx_sig shape
+        // confirmation no recognized in-repository writer emits. The per-receipt tx_sig shape
         // arms validate one value's form and receipt_tx_sig_onchain_sig_diverged
         // binds one receipt's tx_sig to its own onchain_sig, but none compares
         // tx_sig across receipts sharing a batch, so two well-formed-but-
@@ -9823,7 +9397,7 @@ impl Server {
                     kind: "receipt_batch_tx_sig_diverged".into(),
                     id: Some((*batch_id).to_string()),
                     message: format!(
-                        "settlement receipts sharing batch_id {batch_id} carry {} distinct tx_sig values [{}]; a receipt batch is anchored on-chain by a single transaction — flush_receipts calls mark_batch_confirmed(&batch.receipt_ids, confirmation) with the full id set from build_receipt_batch and one ChainConfirmation (covenantd/src/lib.rs:5429-5431), and JsonlReceiptStore::mark_batch_confirmed applies that single confirmation to every receipt in the batch via annotate_receipt (which sets receipt.tx_sig = confirmation.tx_sig.clone() at covenant-settlement/src/lib.rs:374) before atomically rewriting the store, so every receipt sharing a batch_id carries the identical tx_sig (all None before confirmation, all the same Some once it lands) — divergent tx_sig within one batch is a torn or replayed confirmation no production write emits",
+                        "settlement receipts sharing batch_id {batch_id} carry {} distinct tx_sig values [{}]; a receipt batch is anchored on-chain by a single transaction — flush_receipts calls mark_batch_confirmed(&batch.receipt_ids, confirmation) with the full id set from build_receipt_batch and one ChainConfirmation (covenantd/src/lib.rs:5429-5431), and JsonlReceiptStore::mark_batch_confirmed applies that single confirmation to every receipt in the batch via annotate_receipt (which sets receipt.tx_sig = confirmation.tx_sig.clone() at covenant-settlement/src/lib.rs:374) before atomically rewriting the store, so every receipt sharing a batch_id carries the identical tx_sig (all None before confirmation, all the same Some once it lands) — divergent tx_sig within one batch is a torn or replayed confirmation no recognized in-repository writer emits",
                         sigs.len(),
                         shown.join(", ")
                     ),
@@ -9838,7 +9412,7 @@ impl Server {
         // transaction in one block and share one slot — all None before
         // confirmation (ChainConfirmation { slot: None } at lib.rs:5426), all the
         // same Some after. Divergent slot within one batch_id is a torn or
-        // replayed confirmation no production write emits, and it is non-redundant
+        // replayed confirmation no recognized in-repository writer emits, and it is non-redundant
         // with the tx_sig arm: a serde regression or import tool can corrupt slot
         // across a subset while tx_sig survives. Orthogonal to receipt_slot_zero
         // (Some(0) value-shape), receipt_slot_without_chain (binds slot to chain
@@ -9878,7 +9452,7 @@ impl Server {
                     kind: "receipt_batch_slot_diverged".into(),
                     id: Some((*batch_id).to_string()),
                     message: format!(
-                        "settlement receipts sharing batch_id {batch_id} carry {} distinct slot values [{}]; a receipt batch is anchored on-chain by a single transaction in a single block — mark_batch_confirmed(&batch.receipt_ids, confirmation) applies one ChainConfirmation to every receipt in the batch via annotate_receipt (which sets receipt.slot = confirmation.slot at covenant-settlement/src/lib.rs:375) before atomically rewriting the store, so every receipt sharing a batch_id carries the identical slot (all None before confirmation, all the same on-chain block slot once it lands) — divergent slot within one batch is a torn or replayed confirmation no production write emits",
+                        "settlement receipts sharing batch_id {batch_id} carry {} distinct slot values [{}]; a receipt batch is anchored on-chain by a single transaction in a single block — mark_batch_confirmed(&batch.receipt_ids, confirmation) applies one ChainConfirmation to every receipt in the batch via annotate_receipt (which sets receipt.slot = confirmation.slot at covenant-settlement/src/lib.rs:375) before atomically rewriting the store, so every receipt sharing a batch_id carries the identical slot (all None before confirmation, all the same on-chain block slot once it lands) — divergent slot within one batch is a torn or replayed confirmation no recognized in-repository writer emits",
                         slots.len(),
                         shown.join(", ")
                     ),
@@ -9894,7 +9468,7 @@ impl Server {
         // block timestamp — all None before confirmation (ChainConfirmation {
         // confirmed_at: None } at lib.rs:5427), all the same Some after.
         // Divergent confirmed_at within one batch_id is a torn or replayed
-        // confirmation no production write emits, non-redundant with the tx_sig
+        // confirmation no recognized in-repository writer emits, non-redundant with the tx_sig
         // and slot arms (a regression can corrupt confirmed_at while they
         // survive). Orthogonal to receipt_confirmed_at_zero (Some(0) value-
         // shape), receipt_confirmed_without_chain (binds confirmed_at to chain on
@@ -9933,7 +9507,7 @@ impl Server {
                     kind: "receipt_batch_confirmed_at_diverged".into(),
                     id: Some((*batch_id).to_string()),
                     message: format!(
-                        "settlement receipts sharing batch_id {batch_id} carry {} distinct confirmed_at values [{}]; a receipt batch is anchored on-chain by a single transaction in a single block — mark_batch_confirmed(&batch.receipt_ids, confirmation) applies one ChainConfirmation to every receipt in the batch via annotate_receipt (which sets receipt.confirmed_at = confirmation.confirmed_at at covenant-settlement/src/lib.rs:376) before atomically rewriting the store, so every receipt sharing a batch_id carries the identical confirmed_at (all None before confirmation, all the same on-chain block timestamp once it lands) — divergent confirmed_at within one batch is a torn or replayed confirmation no production write emits",
+                        "settlement receipts sharing batch_id {batch_id} carry {} distinct confirmed_at values [{}]; a receipt batch is anchored on-chain by a single transaction in a single block — mark_batch_confirmed(&batch.receipt_ids, confirmation) applies one ChainConfirmation to every receipt in the batch via annotate_receipt (which sets receipt.confirmed_at = confirmation.confirmed_at at covenant-settlement/src/lib.rs:376) before atomically rewriting the store, so every receipt sharing a batch_id carries the identical confirmed_at (all None before confirmation, all the same on-chain block timestamp once it lands) — divergent confirmed_at within one batch is a torn or replayed confirmation no recognized in-repository writer emits",
                         confirmed.len(),
                         shown.join(", ")
                     ),
@@ -9954,7 +9528,7 @@ impl Server {
         // cluster is free-form and env-sourced and has no per-receipt shape arm at
         // all, so two well-formed-but-different cluster values in one batch slip
         // past every existing arm. Divergent cluster within one batch_id is a torn
-        // or replayed confirmation no production write emits, non-redundant with
+        // or replayed confirmation no recognized in-repository writer emits, non-redundant with
         // the tx_sig, slot, and confirmed_at arms (a regression can corrupt
         // cluster while they survive). Groups only canonical-hex32 batch_ids (the
         // shared predicate) so malformed ids stay owned by the batch_id shape
@@ -9992,7 +9566,7 @@ impl Server {
                     kind: "receipt_batch_cluster_diverged".into(),
                     id: Some((*batch_id).to_string()),
                     message: format!(
-                        "settlement receipts sharing batch_id {batch_id} carry {} distinct cluster values [{}]; a receipt batch is anchored on-chain under a single ChainConfirmation — mark_batch_confirmed(&batch.receipt_ids, confirmation) applies it to every receipt in the batch via annotate_receipt (which sets receipt.cluster = Some(confirmation.cluster.clone()) at covenant-settlement/src/lib.rs:371) before atomically rewriting the store, and the production flush path builds that confirmation with cluster = status.cluster (covenantd/src/lib.rs:5422), one deployment-scoped value, so every receipt sharing a batch_id carries the identical cluster — divergent cluster within one batch is a torn or replayed confirmation no production write emits",
+                        "settlement receipts sharing batch_id {batch_id} carry {} distinct cluster values [{}]; a receipt batch is anchored on-chain under a single ChainConfirmation — mark_batch_confirmed(&batch.receipt_ids, confirmation) applies it to every receipt in the batch via annotate_receipt (which sets receipt.cluster = Some(confirmation.cluster.clone()) at covenant-settlement/src/lib.rs:371) before atomically rewriting the store, and the production flush path builds that confirmation with cluster = status.cluster (covenantd/src/lib.rs:5422), one deployment-scoped value, so every receipt sharing a batch_id carries the identical cluster — divergent cluster within one batch is a torn or replayed confirmation no recognized in-repository writer emits",
                         clusters.len(),
                         shown.join(", ")
                     ),
@@ -10011,7 +9585,7 @@ impl Server {
         // the production flush path writes (ChainConfirmation { tx_sig: None } at
         // covenantd/src/lib.rs:5425) and all the same Some once on-chain confirmation
         // lands. Divergent onchain_sig within one batch_id is a torn or replayed
-        // confirmation no production write emits. This is non-redundant with
+        // confirmation no recognized in-repository writer emits. This is non-redundant with
         // receipt_batch_tx_sig_diverged (a regression can corrupt onchain_sig while
         // tx_sig stays uniform) AND with the per-receipt
         // receipt_tx_sig_onchain_sig_diverged arm, which fires only when BOTH tx_sig
@@ -10058,7 +9632,7 @@ impl Server {
                     kind: "receipt_batch_onchain_sig_diverged".into(),
                     id: Some((*batch_id).to_string()),
                     message: format!(
-                        "settlement receipts sharing batch_id {batch_id} carry {} distinct onchain_sig values [{}]; onchain_sig is the legacy backwards-compat alias of tx_sig — annotate_receipt sets receipt.onchain_sig = confirmation.tx_sig.clone() (covenant-settlement/src/lib.rs:377) from the same confirmation.tx_sig the tx_sig field is set from (:374), and mark_batch_confirmed(&batch.receipt_ids, confirmation) applies that single ChainConfirmation to every receipt in the batch before atomically rewriting the store, so every receipt sharing a batch_id carries the identical onchain_sig (all None before confirmation, all the same Some once it lands) — divergent onchain_sig within one batch is a torn or replayed confirmation no production write emits",
+                        "settlement receipts sharing batch_id {batch_id} carry {} distinct onchain_sig values [{}]; onchain_sig is the legacy backwards-compat alias of tx_sig — annotate_receipt sets receipt.onchain_sig = confirmation.tx_sig.clone() (covenant-settlement/src/lib.rs:377) from the same confirmation.tx_sig the tx_sig field is set from (:374), and mark_batch_confirmed(&batch.receipt_ids, confirmation) applies that single ChainConfirmation to every receipt in the batch before atomically rewriting the store, so every receipt sharing a batch_id carries the identical onchain_sig (all None before confirmation, all the same Some once it lands) — divergent onchain_sig within one batch is a torn or replayed confirmation no recognized in-repository writer emits",
                         sigs.len(),
                         shown.join(", ")
                     ),
@@ -10426,9 +10000,9 @@ impl Server {
         let mut resource_not_tool_external_payment_settled_receipt_audit_refs = 0_u64;
         let mut settled_at_not_event_timestamp_external_payment_settled_receipt_audit_refs = 0_u64;
         // ExternalPaymentSettled audit rows carry the id of the SettlementReceipt
-        // the same record_paid_call wrote (covenantd/src/x402.rs:206-264). Index
+        // the same parked legacy record_paid_call helper wrote. Index
         // receipts by id so the cross-record resource arm below can join an
-        // ExternalPaymentSettled row's receipt_id to the receipt it settled and
+        // ExternalPaymentSettled row's receipt_id to its paired local receipt and
         // confirm that receipt is the ResourceKind::Tool receipt record_paid_call
         // always pairs with the audit row.
         let receipts_by_id: HashMap<Uuid, &SettlementReceipt> = receipts
@@ -10752,10 +10326,10 @@ impl Server {
                     kind: "audit_external_payment_settled_issuer_not_trust_root".into(),
                     id: Some(event.id.to_string()),
                     message: format!(
-                        "audit event {} has kind = AuditKind::ExternalPaymentSettled with issuer.pubkey != the daemon trust root (self.identity.agent_id().pubkey); ExternalPaymentSettled is exclusively daemon-authored — its sole production writer record_paid_call (covenantd/src/x402.rs) builds the audit row with issuer = ctx.issuer, and both production call sites stamp ctx.issuer = self.identity.agent_id(): the direct x402-dispatch path (covenantd/src/lib.rs) and the Hyre tool path, whose DaemonHyreExecutor is constructed with self.identity.agent_id() as issuer and the authenticated peer as the separate payer (the peer pays the budget debit and is the SettlementReceipt.payer; the audit issuer is the daemon) — and the daemon ed25519 identity is a stable persisted seed never rotated in v0, so every faithful ExternalPaymentSettled row carries issuer.pubkey == trust_root",
+                        "audit event {} has kind = AuditKind::ExternalPaymentSettled with issuer.pubkey != the daemon trust root. The now-parked legacy record_paid_call helper stamped the daemon identity for both historical call sites, so a non-root issuer indicates edit, import, or serialization drift. This local event does not prove chain settlement",
                         event.id
                     ),
-                    repair: "review the audit JSONL row and the writer that produced it; production ExternalPaymentSettled audit writes route exclusively through record_paid_call (covenantd/src/x402.rs), which stamps issuer = ctx.issuer where both production callers pass self.identity.agent_id() (the daemon trust root, a stable persisted ed25519 seed loaded by covenant-identity load_or_create with no v0 rotation) — the direct x402-dispatch path and the Hyre tool executor, which carries the authenticated peer as a separate payer used only for the budget debit and SettlementReceipt.payer, never the audit issuer — so an ExternalPaymentSettled row whose issuer.pubkey is neither all-zero nor the trust root is out-of-band evidence of a JSONL edit that reassigned which daemon settled an external paid call (misattributing the spend on the operator's issuer-filtered /audit feed), an import tool that preserved a foreign daemon's issuer instead of re-stamping under the local identity, a serde regression that hydrated event.issuer from a different row, or a future refactor that sourced the audit issuer from the payer peer instead of self.identity; this arm is the audit-surface mirror of the capability_grantor_pubkey_not_trust_root binding (Check 8) for the external-payment event and fires only when issuer.pubkey is non-zero so the audit_event_issuer_pubkey_zeroed shape arm owns the all-zero sentinel, keeping the two strictly disjoint; unlike the other eight daemon-issuer carriers ExternalPaymentSettled records via a bare ctx.audit.record (not record_daemon_event[_required]), so no write-time debug_assert pins issuer.pubkey == self.identity.agent_id().pubkey at the write site and this drift arm is the sole backstop for the daemon-issuer invariant on this kind".into(),
+                    repair: "review the legacy audit row and its origin; record_paid_call stamped the daemon trust root while keeping the authenticated payer separate. Preserve the all-zero issuer case for audit_event_issuer_pubkey_zeroed. Do not interpret ExternalPaymentSettled as chain-finality evidence".into(),
                 });
             }
             if matches!(event.kind, AuditKind::MemoryCompactionApplied { .. })
@@ -11040,7 +10614,7 @@ impl Server {
                         kind: "audit_budget_exhausted_requested_not_intent_dispatch".into(),
                         id: Some(event.id.to_string()),
                         message: format!(
-                            "audit event {} has kind = AuditKind::BudgetExhausted with requested = {} which is not the flat intent_dispatch_credits(); the sole production BudgetExhausted write-site is dispatch_intent_run's BudgetError::Exhausted arm (covenantd/src/lib.rs:4104-4115), which stamps requested from the let requested = intent_dispatch_credits() binding at lib.rs:4044 — a daemon-controlled value never read from the wire, manifest, or budget bucket — and covenant_settlement::intent_dispatch_credits (covenant-settlement/src/lib.rs:582-584) returns the constant INTENT_DISPATCH_CREDITS = 1 (covenant-settlement/src/lib.rs:577) pinned by intent_dispatch_credits_pins_v0_flat_cost_constant_and_accessor_equality, so every faithful BudgetExhausted row carries requested == intent_dispatch_credits() — a non-zero requested that is not the flat per-intent cost is a value no production write emits",
+                            "audit event {} has kind = AuditKind::BudgetExhausted with requested = {} which is not the flat intent_dispatch_credits(); the sole production BudgetExhausted write-site is dispatch_intent_run's BudgetError::Exhausted arm (covenantd/src/lib.rs:4104-4115), which stamps requested from the let requested = intent_dispatch_credits() binding at lib.rs:4044 — a daemon-controlled value never read from the wire, manifest, or budget bucket — and covenant_settlement::intent_dispatch_credits (covenant-settlement/src/lib.rs:582-584) returns the constant INTENT_DISPATCH_CREDITS = 1 (covenant-settlement/src/lib.rs:577) pinned by intent_dispatch_credits_pins_v0_flat_cost_constant_and_accessor_equality, so every faithful BudgetExhausted row carries requested == intent_dispatch_credits() — a non-zero requested that is not the flat per-intent cost is a value no recognized in-repository writer emits",
                             event.id, requested
                         ),
                         repair: "review the audit JSONL row and the writer that produced it; the sole production BudgetExhausted write-site (dispatch_intent_run, covenantd/src/lib.rs:4104-4115) passes requested = intent_dispatch_credits() = covenant_settlement::INTENT_DISPATCH_CREDITS = 1 from the binding at lib.rs:4044, a daemon-controlled constant never sourced from caller input, so a non-flat requested is out-of-band evidence of a serde regression that hydrated requested from a non-canonical source, an import/replay tool that preserved a foreign deployment's dispatch cost, or a JSONL edit that rewrote how many credits a rejected dispatch would have consumed (disguising the per-intent charge operators reconcile a budget-exhaustion event against); this arm checks the exact value through the same intent_dispatch_credits() accessor the producer calls (not a literal 1, so it tracks the constant if v0 ever revalues it) and is the audit-log carrier of the flat-dispatch-cost invariant whose budget-log carrier is budget_debit_paired_memory_receipt_credits_not_intent_dispatch; it fires only when requested != 0 so the audit_budget_exhausted_requested_zero arm owns the zero sentinel (strictly disjoint), and it is non-redundant with audit_budget_exhausted_tokens_remaining_ge_requested, which checks the two-field relation tokens_remaining >= requested and passes a tampered row such as requested = 7, tokens_remaining = 0 that this arm catches".into(),
@@ -11252,7 +10826,7 @@ impl Server {
                         kind: "audit_budget_unseeded_requested_not_intent_dispatch".into(),
                         id: Some(event.id.to_string()),
                         message: format!(
-                            "audit event {} has kind = AuditKind::BudgetUnseeded with requested = {} which is not the flat intent_dispatch_credits(); the sole production BudgetUnseeded write-site is dispatch_intent_run's BudgetError::NoCapacity arm (covenantd/src/lib.rs:4077-4086), which stamps requested from the let requested = intent_dispatch_credits() binding at lib.rs:4044 shared with the BudgetExhausted arm — a daemon-controlled value never read from the wire, manifest, or budget bucket — and covenant_settlement::intent_dispatch_credits (covenant-settlement/src/lib.rs:582-584) returns the constant INTENT_DISPATCH_CREDITS = 1 (covenant-settlement/src/lib.rs:577) pinned by intent_dispatch_credits_pins_v0_flat_cost_constant_and_accessor_equality, so every faithful BudgetUnseeded row carries requested == intent_dispatch_credits() — a non-zero requested that is not the flat per-intent cost is a value no production write emits",
+                            "audit event {} has kind = AuditKind::BudgetUnseeded with requested = {} which is not the flat intent_dispatch_credits(); the sole production BudgetUnseeded write-site is dispatch_intent_run's BudgetError::NoCapacity arm (covenantd/src/lib.rs:4077-4086), which stamps requested from the let requested = intent_dispatch_credits() binding at lib.rs:4044 shared with the BudgetExhausted arm — a daemon-controlled value never read from the wire, manifest, or budget bucket — and covenant_settlement::intent_dispatch_credits (covenant-settlement/src/lib.rs:582-584) returns the constant INTENT_DISPATCH_CREDITS = 1 (covenant-settlement/src/lib.rs:577) pinned by intent_dispatch_credits_pins_v0_flat_cost_constant_and_accessor_equality, so every faithful BudgetUnseeded row carries requested == intent_dispatch_credits() — a non-zero requested that is not the flat per-intent cost is a value no recognized in-repository writer emits",
                             event.id, requested
                         ),
                         repair: "review the audit JSONL row and the writer that produced it; the sole production BudgetUnseeded write-site (dispatch_intent_run, covenantd/src/lib.rs:4077-4086) passes requested = intent_dispatch_credits() = covenant_settlement::INTENT_DISPATCH_CREDITS = 1 from the binding at lib.rs:4044 shared with the BudgetExhausted arm, a daemon-controlled constant never sourced from caller input, so a non-flat requested is out-of-band evidence of a serde regression that hydrated requested from a non-canonical source, an import/replay tool that preserved a foreign deployment's dispatch cost, or a JSONL edit that rewrote how many credits the un-seeded (operator-misconfig fail-open) dispatch would have consumed; this arm checks the exact value through the same intent_dispatch_credits() accessor the producer calls (not a literal 1, so it tracks the constant if v0 ever revalues it) and is the audit-log carrier of the flat-dispatch-cost invariant whose budget-log carrier is budget_debit_paired_memory_receipt_credits_not_intent_dispatch; it fires only when requested != 0 so the audit_budget_unseeded_requested_zero arm owns the zero sentinel (strictly disjoint). BudgetUnseeded carries no tokens_remaining field, so unlike BudgetExhausted there is no tokens_remaining_ge_requested sibling here".into(),
@@ -11319,10 +10893,10 @@ impl Server {
                         kind: "audit_external_payment_settled_receipt_id_nil".into(),
                         id: Some(event.id.to_string()),
                         message: format!(
-                            "audit event {} has kind = AuditKind::ExternalPaymentSettled with receipt_id = {}; production ExternalPaymentSettled audit writes always source receipt_id from let receipt_id = Uuid::new_v4() at the top of record_paid_call in covenantd x402.rs, which does not produce the nil UUID",
+                            "audit event {} has kind = AuditKind::ExternalPaymentSettled with receipt_id = {}; legacy ExternalPaymentSettled rows from the now-parked helper always source receipt_id from let receipt_id = Uuid::new_v4() at the top of record_paid_call in covenantd x402.rs, which does not produce the nil UUID",
                             event.id, receipt_id
                         ),
-                        repair: "review the audit JSONL row and the writer that produced it; production ExternalPaymentSettled audit writes always source receipt_id from let receipt_id = Uuid::new_v4() at the top of record_paid_call in covenantd x402.rs, so a nil receipt_id detaches the x402 paid-call row from the matching SettlementReceipt, breaking every ExternalPaymentSettled ↔ SettlementReceipt correlation that joins on receipt_id and erasing the audit trail an operator uses to trace a paid call back to the settlement receipt that recorded the credit debit".into(),
+                        repair: "review the audit JSONL row and the writer that produced it; legacy ExternalPaymentSettled rows from the now-parked helper always source receipt_id from let receipt_id = Uuid::new_v4() at the top of record_paid_call in covenantd x402.rs, so a nil receipt_id detaches the x402 paid-call row from the matching SettlementReceipt, breaking every ExternalPaymentSettled ↔ SettlementReceipt correlation that joins on receipt_id and erasing the audit trail an operator uses to trace a legacy paid-retry row back to its local accounting receipt".into(),
                     });
                 }
                 if amount.parse::<u128>().is_err() {
@@ -11331,19 +10905,18 @@ impl Server {
                         kind: "audit_external_payment_settled_amount_not_decimal_u128".into(),
                         id: Some(event.id.to_string()),
                         message: format!(
-                            "audit event {} has kind = AuditKind::ExternalPaymentSettled with amount = {amount:?}, which does not parse as a decimal u128; both production ExternalPaymentSettled write-paths record amount as a u128-parseable count of atomic on-chain units — the dispatch path (pay_x402 in covenantd lib.rs) sets amount = per_call_cap only after per_call_cap.parse::<u128>() succeeds, and the Hyre path (covenantd hyre.rs) sets amount from the x402 challenge option that covenant_hyre::x402::select admitted via atomic_amount().parse::<u128>().ok() and to_requirements reuses unchanged, so no reachable production arm records a non-decimal amount",
+                            "audit event {} has kind = AuditKind::ExternalPaymentSettled with amount = {amount:?}, which does not parse as a decimal u128; the two now-parked legacy writers stored a selected cap or challenge amount in atomic units after parsing it as u128. The legacy event name and amount do not prove onchain settlement",
                             event.id
                         ),
-                        repair: "review the audit JSONL row and the writer that produced it; both production ExternalPaymentSettled write-paths source amount from a string that already parsed as a u128 of atomic on-chain units (pay_x402 reuses the per_call_cap it validated with parse::<u128>(); the Hyre path reuses the challenge option covenant_hyre's select() admitted only after atomic_amount().parse::<u128>().ok()), so a non-decimal amount means the row carries a value no production path can emit — any reconciliation that sums ExternalPaymentSettled.amount against the on-chain settlement total would skip or mis-total this row, breaking the paid-call ↔ settlement amount audit an operator relies on to confirm the daemon charged exactly the atomic amount the provider settled".into(),
+                        repair: "review the legacy audit row and its original local accounting input; both parked writers required parse::<u128>() over atomic units, but neither verified chain settlement. Do not reconcile ExternalPaymentSettled.amount as a transaction amount without separate chain evidence".into(),
                     });
                 }
-                // Cross-record join (audit → receipt): record_paid_call
-                // (covenantd/src/x402.rs:206-264) allocates one receipt_id =
-                // Uuid::new_v4() (x402.rs:211), then in the same call records the
+                // Cross-record join (audit → receipt): the parked legacy
+                // record_paid_call helper allocated one fresh receipt id, then
+                // in the same call recorded the
                 // SettlementReceipt with id = receipt_id and resource =
-                // ResourceKind::Tool (x402.rs:220-223) and this
-                // ExternalPaymentSettled audit row with that same receipt_id
-                // (x402.rs:250), so every production paid call joins by receipt_id
+                // ResourceKind::Tool and an ExternalPaymentSettled audit row
+                // with that same receipt_id, so every row emitted by that legacy helper joins by receipt_id
                 // to a Tool receipt. resource is a plain serde field on the
                 // unsigned local settlement JSONL — no signature covers it — so a
                 // row edit that relabels the receipt's resource away from Tool (for
@@ -11364,19 +10937,17 @@ impl Server {
                                 kind: "external_payment_settled_receipt_resource_not_tool".into(),
                                 id: Some(event.id.to_string()),
                                 message: format!(
-                                    "audit event {} has kind = AuditKind::ExternalPaymentSettled with receipt_id = {receipt_id}, but the SettlementReceipt it joins by id has resource = {:?} rather than ResourceKind::Tool; the sole production ExternalPaymentSettled write at record_paid_call (covenantd/src/x402.rs:206-264) allocates one receipt_id = Uuid::new_v4() (x402.rs:211) and in the same call records the SettlementReceipt with id = receipt_id and resource = ResourceKind::Tool (x402.rs:220-223) and this audit row with the same receipt_id (x402.rs:250), so every production paid call joins by receipt_id to a Tool receipt — a matched pair whose receipt resource is not Tool is a pairing no production write emits",
+                                    "audit event {} has kind = AuditKind::ExternalPaymentSettled with receipt_id = {receipt_id}, but the SettlementReceipt it joins by id has resource = {:?} rather than ResourceKind::Tool; the now-parked legacy record_paid_call helper wrote both rows from one UUID and always used ResourceKind::Tool, so this mismatch is a shape no recognized in-repository writer emits",
                                     event.id, receipt.resource
                                 ),
-                                repair: "review the settlement JSONL row and the ExternalPaymentSettled audit row it joins by receipt_id; the sole production x402 paid-call path (record_paid_call, x402.rs:206-264) writes the SettlementReceipt with resource = ResourceKind::Tool and stamps the ExternalPaymentSettled audit's receipt_id from the same Uuid::new_v4() in one call, so a matched receipt whose resource is not Tool is out-of-band evidence of a JSONL edit that recategorized an external paid call as another resource kind (for example relabeling it ResourceKind::Memory, which would also pull the row into the Check 4 memory↔receipt accounting that filters on resource == Memory and miscount a payer's memory writes), an import tool that paired the audit row with a foreign receipt, or a serde regression that hydrated receipt.resource from a different row; receipt.resource is a plain serde field on the unsigned local settlement JSONL so no signature covers it, and the within-row audit_external_payment_settled_receipt_id_nil arm cannot catch this (the receipt_id is non-nil and matches a receipt), making this cross-record binding the sole detector; it fires only on a non-nil receipt_id (so the nil arm owns the detached-id case) and only on a receipt_id present in the receipt store (so a windowed-out or purged receipt is left to the orphan-free join rather than flagged here)".into(),
+                                repair: "review the historical local accounting rows joined by receipt_id; the parked record_paid_call helper always wrote ResourceKind::Tool. A different resource indicates an import, edit, or serialization error. This check only covers non-nil receipts present in the verification window".into(),
                             });
                         }
                         // Cross-record temporal binding on the same receipt_id
-                        // join: record_paid_call binds one let now = epoch_ms()
-                        // (x402.rs:212) and stamps it into both
-                        // SettlementReceipt.settled_at (x402.rs:226) and the
-                        // ExternalPaymentSettled AuditEvent.timestamp_ms
-                        // (x402.rs:242) in the same call, so every production paid
-                        // call satisfies receipt.settled_at == event.timestamp_ms.
+                        // join: the parked record_paid_call helper stamped one
+                        // local timestamp into both SettlementReceipt.settled_at
+                        // and AuditEvent.timestamp_ms, so its historical rows
+                        // satisfy receipt.settled_at == event.timestamp_ms.
                         // Both are plain serde integers on unsigned local JSONL, so
                         // a row edit that rewrites either timestamp desyncs the
                         // pair. Gate on both being non-zero so the
@@ -11392,10 +10963,10 @@ impl Server {
                                 kind: "external_payment_settled_receipt_settled_at_not_event_timestamp".into(),
                                 id: Some(event.id.to_string()),
                                 message: format!(
-                                    "audit event {} has kind = AuditKind::ExternalPaymentSettled with timestamp_ms = {} and receipt_id = {receipt_id}, but the SettlementReceipt it joins by id has settled_at = {} rather than the same value; the sole production ExternalPaymentSettled write at record_paid_call (covenantd/src/x402.rs:206-264) binds one let now = epoch_ms() (x402.rs:212) and stamps it into both the SettlementReceipt.settled_at (x402.rs:226) and the AuditEvent.timestamp_ms (x402.rs:242) in the same call, so every production paid call satisfies receipt.settled_at == event.timestamp_ms — a matched pair whose two timestamps disagree is a pairing no production write emits",
+                                    "audit event {} has kind = AuditKind::ExternalPaymentSettled with timestamp_ms = {} and receipt_id = {receipt_id}, but the SettlementReceipt it joins by id has settled_at = {} rather than the same value; the now-parked legacy record_paid_call helper copied one local timestamp into both rows, so historical rows satisfy receipt.settled_at == event.timestamp_ms",
                                     event.id, event.timestamp_ms, receipt.settled_at
                                 ),
-                                repair: "review the settlement JSONL row and the ExternalPaymentSettled audit row it joins by receipt_id; the sole production x402 paid-call path (record_paid_call, x402.rs:206-264) reads wall time once into let now = epoch_ms() and stamps that one value into both SettlementReceipt.settled_at and the ExternalPaymentSettled AuditEvent.timestamp_ms, so a matched pair whose settled_at and timestamp_ms differ is out-of-band evidence of a JSONL edit that rewrote when an external paid call settled on one feed (shifting the settlement time an operator reconciles against on-chain block time, or the audit time an operator correlates a paid call against) while leaving the other intact, an import tool that paired the audit row with a foreign receipt, or a serde regression that hydrated one timestamp from a different row; both fields are plain serde integers on unsigned local JSONL so no signature covers them, and this arm fires only when both timestamps are non-zero so it is strictly disjoint from the receipt_settled_at_zero (Check 6) and audit_event_timestamp_zero (Check 7) shape arms that own the all-zero sentinel, and only on a matched receipt_id present in the receipt store so a windowed-out or purged receipt is left alone rather than flagged here".into(),
+                                repair: "review the settlement row and ExternalPaymentSettled audit row joined by receipt_id; the parked record_paid_call helper stamped one epoch_ms() value into both settled_at and timestamp_ms. A mismatch indicates edit, import, or serialization drift. The field name settled_at is legacy local accounting and does not prove chain settlement".into(),
                             });
                         }
                     }
@@ -11505,7 +11076,7 @@ impl Server {
                                 .into(),
                             id: Some(event.id.to_string()),
                             message: format!(
-                                "audit event {} has kind = AuditKind::PeerRevoked with peer_pubkey_b58 = {peer_pubkey_b58:?} that bs58-decodes to 32 all-zero bytes; production PeerRevoked audit writes always source peer_pubkey_b58 from bs58::encode(summary.agent_id.pubkey).into_string() on a 32-byte ed25519 verifying key (covenantd/src/lib.rs:3452), and an ed25519 verifying key is the encoding of A = a·B for a non-zero secret scalar and is never the all-zero 32 bytes — the same all-zero verifying-key sentinel the typed `.pubkey == [0u8; 32]` audit arms reject — so the 32-zero value is one no production write emits yet it passes the empty, wrong-length, not-base58, and wrong-byte-length arms (it is non-empty, bs58-encodes to 32 '1' chars at the 32-char floor of the 32..=44 bound, round-trips through bs58::decode, and decodes to exactly 32 bytes)",
+                                "audit event {} has kind = AuditKind::PeerRevoked with peer_pubkey_b58 = {peer_pubkey_b58:?} that bs58-decodes to 32 all-zero bytes; production PeerRevoked audit writes always source peer_pubkey_b58 from bs58::encode(summary.agent_id.pubkey).into_string() on a 32-byte ed25519 verifying key (covenantd/src/lib.rs:3452), and an ed25519 verifying key is the encoding of A = a·B for a non-zero secret scalar and is never the all-zero 32 bytes — the same all-zero verifying-key sentinel the typed `.pubkey == [0u8; 32]` audit arms reject — so the 32-zero value is one no recognized in-repository writer emits yet it passes the empty, wrong-length, not-base58, and wrong-byte-length arms (it is non-empty, bs58-encodes to 32 '1' chars at the 32-char floor of the 32..=44 bound, round-trips through bs58::decode, and decodes to exactly 32 bytes)",
                                 event.id
                             ),
                             repair: "review the audit JSONL row and the writer that produced it; the sole production PeerRevoked audit write sources peer_pubkey_b58 from bs58::encode(summary.agent_id.pubkey).into_string() on a 32-byte ed25519 verifying key (covenantd/src/lib.rs:3452), which is A = a·B for a non-zero secret scalar and therefore never the all-zero 32 bytes (the same invariant the typed [0u8; 32] verifying-key arms pin), so an all-zero-decoding peer_pubkey_b58 is out-of-band evidence of a serde/default regression that zeroed the pubkey before encoding, an import or replay tool that copied an uninitialized zero-pubkey sentinel into the field, or a JSONL edit that replaced the b58 string with the 32-'1'-char zero encoding — detaching the revocation row from the unforgeable 32-byte peer-identity lookup while keeping a 32-char base58 shape that bypasses the empty, wrong_length, not_base58, and wrong_byte_length arms; this fires independently of those four arms because the 32-'1' encoding is non-empty, sits at the 32-char floor of the 32..=44 bound, round-trips through bs58::decode, and decodes to exactly 32 bytes".into(),
@@ -11642,7 +11213,7 @@ impl Server {
                                 .into(),
                             id: Some(event.id.to_string()),
                             message: format!(
-                                "audit event {} has kind = AuditKind::OperatorTokenRotationRejected with peer_pubkey_b58 = {peer_pubkey_b58:?} that bs58-decodes to 32 all-zero bytes; production OperatorTokenRotationRejected audit writes always source peer_pubkey_b58 from bs58::encode(peer.pubkey).into_string() on the rejected peer's 32-byte ed25519 verifying key (covenantd/src/lib.rs:3020), and an ed25519 verifying key is the encoding of A = a·B for a non-zero secret scalar and is never the all-zero 32 bytes — the same all-zero verifying-key sentinel the typed `.pubkey == [0u8; 32]` audit arms reject — so the 32-zero value is one no production write emits yet it passes the empty, wrong-length, not-base58, and wrong-byte-length arms (it is non-empty, bs58-encodes to 32 '1' chars at the 32-char floor of the 32..=44 bound, round-trips through bs58::decode, and decodes to exactly 32 bytes)",
+                                "audit event {} has kind = AuditKind::OperatorTokenRotationRejected with peer_pubkey_b58 = {peer_pubkey_b58:?} that bs58-decodes to 32 all-zero bytes; production OperatorTokenRotationRejected audit writes always source peer_pubkey_b58 from bs58::encode(peer.pubkey).into_string() on the rejected peer's 32-byte ed25519 verifying key (covenantd/src/lib.rs:3020), and an ed25519 verifying key is the encoding of A = a·B for a non-zero secret scalar and is never the all-zero 32 bytes — the same all-zero verifying-key sentinel the typed `.pubkey == [0u8; 32]` audit arms reject — so the 32-zero value is one no recognized in-repository writer emits yet it passes the empty, wrong-length, not-base58, and wrong-byte-length arms (it is non-empty, bs58-encodes to 32 '1' chars at the 32-char floor of the 32..=44 bound, round-trips through bs58::decode, and decodes to exactly 32 bytes)",
                                 event.id
                             ),
                             repair: "review the audit JSONL row and the writer that produced it; the sole production OperatorTokenRotationRejected audit write sources peer_pubkey_b58 from bs58::encode(peer.pubkey).into_string() on the rejected peer's 32-byte ed25519 verifying key (covenantd/src/lib.rs:3020), which is A = a·B for a non-zero secret scalar and therefore never the all-zero 32 bytes (the same invariant the typed [0u8; 32] verifying-key arms pin), so an all-zero-decoding peer_pubkey_b58 is out-of-band evidence of a serde/default regression that zeroed the pubkey before encoding, an import or replay tool that copied an uninitialized zero-pubkey sentinel into the field, or a JSONL edit that replaced the b58 string with the 32-'1'-char zero encoding — detaching the rejected-probe row from the unforgeable 32-byte rejected-peer identifier while keeping a 32-char base58 shape that bypasses the empty, wrong_length, not_base58, and wrong_byte_length arms; this fires independently of those four arms because the 32-'1' encoding is non-empty, sits at the 32-char floor of the 32..=44 bound, round-trips through bs58::decode, and decodes to exactly 32 bytes".into(),
@@ -11884,7 +11455,7 @@ impl Server {
                                 .into(),
                             id: Some(event.id.to_string()),
                             message: format!(
-                                "audit event {} has kind = AuditKind::OperatorPeersListRejected with peer_pubkey_b58 = {peer_pubkey_b58:?} that bs58-decodes to 32 all-zero bytes; production OperatorPeersListRejected audit writes always source peer_pubkey_b58 from bs58::encode(peer.pubkey).into_string() on the rejected peer's 32-byte ed25519 verifying key (covenantd/src/lib.rs:3185), and an ed25519 verifying key is the encoding of A = a·B for a non-zero secret scalar and is never the all-zero 32 bytes — the same all-zero verifying-key sentinel the typed `.pubkey == [0u8; 32]` audit arms reject — so the 32-zero value is one no production write emits yet it passes the empty, wrong-length, not-base58, and wrong-byte-length arms (it is non-empty, bs58-encodes to 32 '1' chars at the 32-char floor of the 32..=44 bound, round-trips through bs58::decode, and decodes to exactly 32 bytes)",
+                                "audit event {} has kind = AuditKind::OperatorPeersListRejected with peer_pubkey_b58 = {peer_pubkey_b58:?} that bs58-decodes to 32 all-zero bytes; production OperatorPeersListRejected audit writes always source peer_pubkey_b58 from bs58::encode(peer.pubkey).into_string() on the rejected peer's 32-byte ed25519 verifying key (covenantd/src/lib.rs:3185), and an ed25519 verifying key is the encoding of A = a·B for a non-zero secret scalar and is never the all-zero 32 bytes — the same all-zero verifying-key sentinel the typed `.pubkey == [0u8; 32]` audit arms reject — so the 32-zero value is one no recognized in-repository writer emits yet it passes the empty, wrong-length, not-base58, and wrong-byte-length arms (it is non-empty, bs58-encodes to 32 '1' chars at the 32-char floor of the 32..=44 bound, round-trips through bs58::decode, and decodes to exactly 32 bytes)",
                                 event.id
                             ),
                             repair: "review the audit JSONL row and the writer that produced it; the sole production OperatorPeersListRejected audit write sources peer_pubkey_b58 from bs58::encode(peer.pubkey).into_string() on the rejected peer's 32-byte ed25519 verifying key (covenantd/src/lib.rs:3185), which is A = a·B for a non-zero secret scalar and therefore never the all-zero 32 bytes (the same invariant the typed [0u8; 32] verifying-key arms pin), so an all-zero-decoding peer_pubkey_b58 is out-of-band evidence of a serde/default regression that zeroed the pubkey before encoding, an import or replay tool that copied an uninitialized zero-pubkey sentinel into the field, or a JSONL edit that replaced the b58 string with the 32-'1'-char zero encoding — detaching the rejected-enumeration-probe row from the unforgeable 32-byte rejected-peer identifier while keeping a 32-char base58 shape that bypasses the empty, wrong_length, not_base58, and wrong_byte_length arms; this fires independently of those four arms because the 32-'1' encoding is non-empty, sits at the 32-char floor of the 32..=44 bound, round-trips through bs58::decode, and decodes to exactly 32 bytes".into(),
@@ -12000,7 +11571,7 @@ impl Server {
                                 .into(),
                             id: Some(event.id.to_string()),
                             message: format!(
-                                "audit event {} has kind = AuditKind::OperatorPeerRevokeRejected with peer_pubkey_b58 = {peer_pubkey_b58:?} that bs58-decodes to 32 all-zero bytes; production OperatorPeerRevokeRejected audit writes always source peer_pubkey_b58 from bs58::encode(peer.pubkey).into_string() on the rejected peer's 32-byte ed25519 verifying key (covenantd/src/lib.rs:3329), and an ed25519 verifying key is the encoding of A = a·B for a non-zero secret scalar and is never the all-zero 32 bytes — the same all-zero verifying-key sentinel the typed `.pubkey == [0u8; 32]` audit arms reject — so the 32-zero value is one no production write emits yet it passes the empty, wrong-length, not-base58, and wrong-byte-length arms (it is non-empty, bs58-encodes to 32 '1' chars at the 32-char floor of the 32..=44 bound, round-trips through bs58::decode, and decodes to exactly 32 bytes)",
+                                "audit event {} has kind = AuditKind::OperatorPeerRevokeRejected with peer_pubkey_b58 = {peer_pubkey_b58:?} that bs58-decodes to 32 all-zero bytes; production OperatorPeerRevokeRejected audit writes always source peer_pubkey_b58 from bs58::encode(peer.pubkey).into_string() on the rejected peer's 32-byte ed25519 verifying key (covenantd/src/lib.rs:3329), and an ed25519 verifying key is the encoding of A = a·B for a non-zero secret scalar and is never the all-zero 32 bytes — the same all-zero verifying-key sentinel the typed `.pubkey == [0u8; 32]` audit arms reject — so the 32-zero value is one no recognized in-repository writer emits yet it passes the empty, wrong-length, not-base58, and wrong-byte-length arms (it is non-empty, bs58-encodes to 32 '1' chars at the 32-char floor of the 32..=44 bound, round-trips through bs58::decode, and decodes to exactly 32 bytes)",
                                 event.id
                             ),
                             repair: "review the audit JSONL row and the writer that produced it; the sole production OperatorPeerRevokeRejected audit write sources peer_pubkey_b58 from bs58::encode(peer.pubkey).into_string() on the rejected peer's 32-byte ed25519 verifying key (covenantd/src/lib.rs:3329), which is A = a·B for a non-zero secret scalar and therefore never the all-zero 32 bytes (the same invariant the typed [0u8; 32] verifying-key arms pin), so an all-zero-decoding peer_pubkey_b58 is out-of-band evidence of a serde/default regression that zeroed the pubkey before encoding, an import or replay tool that copied an uninitialized zero-pubkey sentinel into the field, or a JSONL edit that replaced the b58 string with the 32-'1'-char zero encoding — detaching the rejected-revoke-probe row from the unforgeable 32-byte rejected-peer identifier while keeping a 32-char base58 shape that bypasses the empty, wrong_length, not_base58, and wrong_byte_length arms; this fires independently of those four arms because the 32-'1' encoding is non-empty, sits at the 32-char floor of the 32..=44 bound, round-trips through bs58::decode, and decodes to exactly 32 bytes".into(),
@@ -12114,7 +11685,7 @@ impl Server {
                                 .into(),
                             id: Some(event.id.to_string()),
                             message: format!(
-                                "audit event {} has kind = AuditKind::PeerSelfRevokeBlocked with peer_pubkey_b58 = {peer_pubkey_b58:?} that bs58-decodes to 32 all-zero bytes; production PeerSelfRevokeBlocked audit writes always source peer_pubkey_b58 from bs58::encode(summary.agent_id.pubkey).into_string() on a 32-byte ed25519 verifying key (covenantd/src/lib.rs:3415), and an ed25519 verifying key is the encoding of A = a·B for a non-zero secret scalar and is never the all-zero 32 bytes — the same all-zero verifying-key sentinel the typed `.pubkey == [0u8; 32]` audit arms reject — so the 32-zero value is one no production write emits yet it passes the empty, wrong-length, not-base58, and wrong-byte-length arms (it is non-empty, bs58-encodes to 32 '1' chars at the 32-char floor of the 32..=44 bound, round-trips through bs58::decode, and decodes to exactly 32 bytes)",
+                                "audit event {} has kind = AuditKind::PeerSelfRevokeBlocked with peer_pubkey_b58 = {peer_pubkey_b58:?} that bs58-decodes to 32 all-zero bytes; production PeerSelfRevokeBlocked audit writes always source peer_pubkey_b58 from bs58::encode(summary.agent_id.pubkey).into_string() on a 32-byte ed25519 verifying key (covenantd/src/lib.rs:3415), and an ed25519 verifying key is the encoding of A = a·B for a non-zero secret scalar and is never the all-zero 32 bytes — the same all-zero verifying-key sentinel the typed `.pubkey == [0u8; 32]` audit arms reject — so the 32-zero value is one no recognized in-repository writer emits yet it passes the empty, wrong-length, not-base58, and wrong-byte-length arms (it is non-empty, bs58-encodes to 32 '1' chars at the 32-char floor of the 32..=44 bound, round-trips through bs58::decode, and decodes to exactly 32 bytes)",
                                 event.id
                             ),
                             repair: "review the audit JSONL row and the writer that produced it; the sole production PeerSelfRevokeBlocked audit write sources peer_pubkey_b58 from bs58::encode(summary.agent_id.pubkey).into_string() on a 32-byte ed25519 verifying key (covenantd/src/lib.rs:3415), which is A = a·B for a non-zero secret scalar and therefore never the all-zero 32 bytes (the same invariant the typed [0u8; 32] verifying-key arms pin), so an all-zero-decoding peer_pubkey_b58 is out-of-band evidence of a serde/default regression that zeroed the pubkey before encoding, an import or replay tool that copied an uninitialized zero-pubkey sentinel into the field, or a JSONL edit that replaced the b58 string with the 32-'1'-char zero encoding — detaching the blocked-self-revoke row from the unforgeable 32-byte operator-identity anchor while keeping a 32-char base58 shape that bypasses the empty, wrong_length, not_base58, and wrong_byte_length arms; this fires independently of those four arms because the 32-'1' encoding is non-empty, sits at the 32-char floor of the 32..=44 bound, round-trips through bs58::decode, and decodes to exactly 32 bytes".into(),
@@ -12133,7 +11704,7 @@ impl Server {
                                 .into(),
                             id: Some(event.id.to_string()),
                             message: format!(
-                                "audit event {} has kind = AuditKind::PeerSelfRevokeBlocked with peer_pubkey_b58 = {peer_pubkey_b58:?} that bs58-decodes to a non-zero 32-byte pubkey other than the daemon trust root (self.identity.agent_id().pubkey); the sole production PeerSelfRevokeBlocked write-site is the !force self-revoke-blocked branch of revoke_peer (covenantd/src/lib.rs:3408-3417), which fires only under the guard summary.agent_id.pubkey == self.identity.agent_id().pubkey at lib.rs:3408 and then sets peer_pubkey_b58 = bs58::encode(summary.agent_id.pubkey).into_string() at lib.rs:3415, so the encoded pubkey is pinned to the daemon's own identity and every faithful row decodes to the Check 7 trust_root (lib.rs:8531); a value that decodes to any other non-zero 32-byte pubkey is one no production write emits",
+                                "audit event {} has kind = AuditKind::PeerSelfRevokeBlocked with peer_pubkey_b58 = {peer_pubkey_b58:?} that bs58-decodes to a non-zero 32-byte pubkey other than the daemon trust root (self.identity.agent_id().pubkey); the sole production PeerSelfRevokeBlocked write-site is the !force self-revoke-blocked branch of revoke_peer (covenantd/src/lib.rs:3408-3417), which fires only under the guard summary.agent_id.pubkey == self.identity.agent_id().pubkey at lib.rs:3408 and then sets peer_pubkey_b58 = bs58::encode(summary.agent_id.pubkey).into_string() at lib.rs:3415, so the encoded pubkey is pinned to the daemon's own identity and every faithful row decodes to the Check 7 trust_root (lib.rs:8531); a value that decodes to any other non-zero 32-byte pubkey is one no recognized in-repository writer emits",
                                 event.id
                             ),
                             repair: "review the audit JSONL row and the writer that produced it; the sole production PeerSelfRevokeBlocked audit write is the !force self-revoke-blocked branch of revoke_peer (covenantd/src/lib.rs:3408-3417), which records the row only when summary.agent_id.pubkey == self.identity.agent_id().pubkey (the self-revoke target is the operator's own bootstrap token) and sources peer_pubkey_b58 from bs58::encode(summary.agent_id.pubkey).into_string() (lib.rs:3415), so every production peer_pubkey_b58 decodes to the daemon trust root; a peer_pubkey_b58 that decodes to a different non-zero 32-byte pubkey is out-of-band evidence of a JSONL edit that re-pointed the blocked self-revoke at a foreign identity (forging which identity's token the self-revoke attempt targeted — for example to disguise an operator's own fat-fingered self-revoke as a guest peer's blocked revoke, or the reverse), an import or replay tool that hydrated the field from a foreign deployment's registry entry instead of re-encoding under the local self.identity, or a serde regression that hydrated peer_pubkey_b58 from a different row; this arm reuses the Check 7 trust_root and is the first carrier of the payload-pubkey-equals-trust-root invariant — the inverse direction of the audit_*_issuer_not_trust_root family, which pins event.issuer.pubkey (the acting identity) whereas this pins the kind payload's self-revoke target, PeerSelfRevokeBlocked being the only audit kind whose payload pubkey is fixed to the operator's own identity by its firing condition; it fires only on a 32-byte non-zero decode that is not the trust root so it is strictly disjoint from the five shape arms — audit_peer_self_revoke_blocked_peer_pubkey_b58_empty (zero-length), _wrong_length (char count outside 32..=44), _not_base58 (fails bs58::decode), _decodes_to_wrong_byte_length (not 32 bytes), and _decodes_to_all_zero_bytes (the 32 all-zero sentinel) — each of which owns its own malformed shape, while this arm alone catches a well-formed 32-byte non-zero pubkey that simply is not the daemon's".into(),
@@ -13907,19 +13478,17 @@ impl Server {
                     kind: "audit_event_id_duplicate".into(),
                     id: Some(event_id.to_string()),
                     message: format!(
-                        "{count} audit events share id {event_id}, but every production audit write allocates a fresh id = Uuid::new_v4() and JsonlAuditLog::record appends each event as one persisted line without deduplication, so every production event id is carried by exactly one audit row — two rows sharing one id is a replayed or duplicated audit-log row that no production write emits"
+                        "{count} audit events share id {event_id}, but every production audit write allocates a fresh id = Uuid::new_v4() and JsonlAuditLog::record appends each event as one persisted line without deduplication, so every production event id is carried by exactly one audit row — two rows sharing one id is a replayed or duplicated audit-log row that no recognized in-repository writer emits"
                     ),
                     repair: "review the audit JSONL rows that carry this id; production audit writes always allocate event id via Uuid::new_v4() and JsonlAuditLog::record appends each event verbatim as a single line (covenant-audit/src/lib.rs), so two rows sharing an id is out-of-band evidence of a replayed or duplicated audit-log row (a crash-recovery or import tool re-appending an event), a replay tool that reused a prior id instead of allocating Uuid::new_v4(), or a serde regression that hydrated two rows with the same id; the AuditIntegrityReport chain hash covers byte tampering of each line but not this cross-row uniqueness invariant, so identify the canonical row before truncating the duplicate, since the duplicate makes the id ambiguous to the drift, capability, and memory correlation tables that reference audit events by id".into(),
                 });
             }
         }
         // Cardinality on the ExternalPaymentSettled receipt_id foreign key: the
-        // sole production ExternalPaymentSettled write at record_paid_call
-        // (covenantd/src/x402.rs:206-264) mints one receipt_id = Uuid::new_v4()
-        // (x402.rs:211) and records exactly one ExternalPaymentSettled event
-        // carrying it (x402.rs:244-251); both production callers — the x402
-        // dispatch path (pay_x402, x402.rs:320) and the Hyre path (hyre.rs:134)
-        // — route through that single call, and JsonlAuditLog::record appends
+        // now-parked legacy record_paid_call helper minted one receipt_id with
+        // Uuid::new_v4() and recorded exactly one ExternalPaymentSettled event
+        // carrying it. Both former x402 and Hyre callers routed through that
+        // single helper, and JsonlAuditLog::record appends
         // the event verbatim while recent returns one per persisted line, so a
         // given non-nil receipt_id is carried by at most one ExternalPaymentSettled
         // row in faithful data. This is the audit-log leg of the receipt_id
@@ -13952,9 +13521,9 @@ impl Server {
                     kind: "external_payment_settled_receipt_id_shared_by_multiple_events".into(),
                     id: Some(receipt_id.to_string()),
                     message: format!(
-                        "{count} ExternalPaymentSettled audit events share receipt_id {receipt_id} while carrying distinct event ids, but the pairing between a paid call and its settlement receipt is 1:1 — the sole production ExternalPaymentSettled write at record_paid_call (covenantd/src/x402.rs:206-264) mints one receipt_id = Uuid::new_v4() (x402.rs:211) and records exactly one ExternalPaymentSettled event carrying it (x402.rs:244-251), and both production callers (the x402 dispatch path at x402.rs:320 and the Hyre path at hyre.rs:134) route through that single call, so every production receipt_id is carried by exactly one ExternalPaymentSettled row — two rows sharing one is a second paid-call record against a receipt that already settled exactly one external payment, a row no production write emits"
+                        "{count} ExternalPaymentSettled audit events share receipt_id {receipt_id} while carrying distinct event ids. The now-parked legacy record_paid_call helper allocated each id with Uuid::new_v4() and emitted one local accounting event per retry, so a duplicate indicates replay, import, edit, or serialization drift. The legacy event name does not prove chain settlement"
                     ),
-                    repair: "review the audit JSONL rows that record an ExternalPaymentSettled with this receipt_id; record_paid_call (x402.rs:206-264) allocates a fresh receipt_id via Uuid::new_v4() and records one ExternalPaymentSettled event under it, and JsonlAuditLog::record appends each event verbatim as a single line (covenant-audit/src/lib.rs), so two ExternalPaymentSettled rows sharing one receipt_id is out-of-band evidence of a replayed or duplicated paid-call audit row (a crash-recovery or import tool re-appending the event), a forged event reusing a live receipt_id to attach a second paid-call record to an already-settled receipt, or a serde regression that hydrated two rows with the same receipt_id; this is the audit-log leg of the receipt_id cardinality family (the settlement-log leg is receipt_id_duplicate keyed on receipt.id, the budget-log leg is budget_debit_paired_receipt_shared_by_multiple_debits keyed on debit.paired_receipt), and it is disjoint from audit_event_id_duplicate, which keys on the event.id primary key the two replayed rows carry distinctly; identify the canonical paid-call row before truncating the duplicate, since the duplicate double-counts the external spend in any reconciliation that sums ExternalPaymentSettled.amount and resolves the receipt_id to two paid-call audit rows ambiguously in the ExternalPaymentSettled ↔ SettlementReceipt and ExternalPaymentSettled ↔ budget-debit joins".into(),
+                    repair: "review historical ExternalPaymentSettled rows with this receipt id; the parked record_paid_call helper allocated a fresh UUID once and emitted one event. This is the audit leg of the receipt-id cardinality family, alongside receipt_id_duplicate and budget_debit_paired_receipt_shared_by_multiple_debits. Identify the canonical event before repair".into(),
                 });
             }
         }
@@ -14636,15 +14205,11 @@ impl Server {
             ),
         });
 
-        // Check 9: budget debit ↔ settlement receipt join. The x402/Hyre
-        // paid-call path (record_paid_call, covenantd/src/x402.rs:206-264)
-        // is the sole production writer that pairs a BudgetDebit with a
-        // ResourceKind::Tool SettlementReceipt: it allocates one
-        // receipt_id = Uuid::new_v4() (x402.rs:211), debits the payer via
-        // budget.try_debit(payer, call.credits, receipt_id) (x402.rs:215),
-        // and records the receipt with id = receipt_id, payer = payer, and
-        // credits_consumed = call.credits (x402.rs:220-235) in the same
-        // call, so for every production paid call the debit and the Tool
+        // Check 9: budget debit ↔ settlement receipt join. The parked
+        // record_paid_call helper is the only recognized historical writer of
+        // a BudgetDebit paired with a ResourceKind::Tool SettlementReceipt. It
+        // allocated one fresh id and copied the payer and positive credit value
+        // into both rows, so for every row emitted by that legacy helper the debit and the Tool
         // receipt it pairs with satisfy debit.agent.pubkey ==
         // receipt.payer.pubkey and debit.credits == receipt.credits_consumed.
         // The budget ledger and the settlement log are two separate
@@ -14738,7 +14303,7 @@ impl Server {
                         kind: "budget_debit_paired_memory_receipt_credits_not_intent_dispatch".into(),
                         id: Some(debit.paired_receipt.to_string()),
                         message: format!(
-                            "budget debit paired_receipt = {} resolves to a ResourceKind::Memory SettlementReceipt but the debit's credits = {} is not the flat intent_dispatch_credits() = {}; the sole production writer of a (BudgetDebit, Memory receipt) pair is dispatch_intent_run (covenantd/src/lib.rs), which debits exactly intent_dispatch_credits() via try_debit(&agent, intent_dispatch_credits(), receipt_id) and records the Memory receipt under that receipt_id, so every production memory dispatch satisfies debit.credits == intent_dispatch_credits() — the receipt's own credits_consumed is memory_write_credits(bytes) and is unrelated to the debit's flat per-intent charge — a debit paired to a Memory receipt whose credits is not the flat cost is a pairing no production write emits",
+                            "budget debit paired_receipt = {} resolves to a ResourceKind::Memory SettlementReceipt but the debit's credits = {} is not the flat intent_dispatch_credits() = {}; the sole production writer of a (BudgetDebit, Memory receipt) pair is dispatch_intent_run (covenantd/src/lib.rs), which debits exactly intent_dispatch_credits() via try_debit(&agent, intent_dispatch_credits(), receipt_id) and records the Memory receipt under that receipt_id, so every production memory dispatch satisfies debit.credits == intent_dispatch_credits() — the receipt's own credits_consumed is memory_write_credits(bytes) and is unrelated to the debit's flat per-intent charge — a debit paired to a Memory receipt whose credits is not the flat cost is a pairing no recognized in-repository writer emits",
                             debit.paired_receipt,
                             debit.credits,
                             intent_dispatch_credits()
@@ -14784,7 +14349,7 @@ impl Server {
                                     .into(),
                                 id: Some(debit.paired_receipt.to_string()),
                                 message: format!(
-                                    "budget debit paired_receipt = {} resolves to a ResourceKind::Memory SettlementReceipt whose memory_record_id {memory_record_id} matches an IntentDispatched audit with matched_agent = {matched_agent:?}, but the debit's agent.display = {:?} is not the expected synthesized form {expected_display:?}; the sole production writer of a (BudgetDebit, Memory receipt) pair is dispatch_intent_run, which debits agent_id_for_card(card) — whose display is the synthesized format!(\"{{card_id}}@agent\") — paired with the same receipt_id it writes the Memory receipt under (covenantd/src/lib.rs:4045 and lib.rs:4205) and stamps the IntentDispatched matched_agent = card.id (lib.rs:4232) for that same intent_id, which equals the receipt's memory_record_id, so every production memory dispatch satisfies debit.agent.display == format!(\"{{matched_agent}}@agent\") — a debit whose agent is not the dispatched agent is a charge no production write emits",
+                                    "budget debit paired_receipt = {} resolves to a ResourceKind::Memory SettlementReceipt whose memory_record_id {memory_record_id} matches an IntentDispatched audit with matched_agent = {matched_agent:?}, but the debit's agent.display = {:?} is not the expected synthesized form {expected_display:?}; the sole production writer of a (BudgetDebit, Memory receipt) pair is dispatch_intent_run, which debits agent_id_for_card(card) — whose display is the synthesized format!(\"{{card_id}}@agent\") — paired with the same receipt_id it writes the Memory receipt under (covenantd/src/lib.rs:4045 and lib.rs:4205) and stamps the IntentDispatched matched_agent = card.id (lib.rs:4232) for that same intent_id, which equals the receipt's memory_record_id, so every production memory dispatch satisfies debit.agent.display == format!(\"{{matched_agent}}@agent\") — a debit whose agent is not the dispatched agent is a charge no recognized in-repository writer emits",
                                     debit.paired_receipt, debit.agent.display
                                 ),
                                 repair: "review the budget-ledger JSONL row, the settlement JSONL Memory receipt it joins by paired_receipt == receipt.id, and the IntentDispatched audit row for that receipt's memory_record_id; dispatch_intent_run debits agent_id_for_card(card) (display \"{card.id}@agent\") against the same receipt_id it records the Memory receipt under and stamps the IntentDispatched matched_agent = card.id in one dispatch, so a Memory-paired debit whose agent.display is not format!(\"{matched_agent}@agent\") is out-of-band evidence of a JSONL edit that reassigned which agent a memory dispatch charged (misattributing the per-agent budget burn on the operator's reconciliation view), an import or replay tool that paired the debit with a foreign dispatch, or a serde regression that hydrated agent.display from a different row; unlike the Tool pairing, whose debit.agent is the receipt.payer and is bound by budget_debit_paired_receipt_payer_mismatch, the Memory pairing's debit.agent is the matched agent's synthesized id (not the receipt.payer, which is the submitting peer), so no payer arm covers it and this cross-store budget↔audit join is the sole identity detector for Memory-dispatch debits; it fires only when the joined IntentDispatched audit carries a well-formed Some matched_agent (a None or malformed audit value is owned by the audit_intent_dispatched_matched_agent_empty and audit_intent_dispatched_matched_agent_not_manifest_id_charset shape arms) and only when debit.agent.pubkey is non-zero so budget_debit_agent_pubkey_zeroed owns the all-zero identity, and it is disjoint from the budget_debit_paired_memory_receipt_credits_not_intent_dispatch arm above, which checks the debit's credits rather than its agent identity".into(),
@@ -14796,25 +14361,20 @@ impl Server {
             }
             // A debit whose paired_receipt resolves to a receipt that is
             // neither Memory (handled and continued above) nor Tool is a
-            // pairing no production write emits. The only two writers of a
-            // (BudgetDebit, SettlementReceipt) pair are record_paid_call, which
-            // records a ResourceKind::Tool receipt under the debited receipt_id
-            // (covenantd/src/x402.rs:215,220-223), and dispatch_intent_run,
-            // which records a ResourceKind::Memory receipt under the same
-            // Uuid::new_v4() receipt_id it debits (covenantd/src/lib.rs). No
-            // production path pairs a debit with a Compute/Message/Registration
-            // receipt, so a third resource kind here is out-of-band drift. This
-            // replaces the former bare `continue` that silently dropped it.
+            // pairing no recognized in-repository writer emits. Active memory
+            // dispatches create Memory pairs; the now-parked record_paid_call
+            // helper historically created Tool pairs. Neither shape uses a
+            // Compute, Message, or Registration receipt.
             if receipt.resource != ResourceKind::Tool {
                 debit_receipt_resource_not_tool_or_memory_refs += 1;
                 drift.push(VerifyDrift {
                     kind: "budget_debit_paired_receipt_resource_not_tool_or_memory".into(),
                     id: Some(debit.paired_receipt.to_string()),
                     message: format!(
-                        "budget debit paired_receipt = {} resolves to a SettlementReceipt whose resource is {:?}, neither ResourceKind::Tool nor ResourceKind::Memory; the only two production writers of a (BudgetDebit, SettlementReceipt) pair are record_paid_call (covenantd/src/x402.rs:206-264), which debits via budget.try_debit(payer, call.credits, receipt_id) (x402.rs:215) and records a ResourceKind::Tool receipt under that receipt_id (x402.rs:220-223), and dispatch_intent_run (covenantd/src/lib.rs), which debits via try_debit(&agent, intent_dispatch_credits(), receipt_id) and records a ResourceKind::Memory receipt under that same Uuid::new_v4() receipt_id, so every production debit pairs with a Tool or Memory receipt — a debit paired to a Compute, Message, or Registration receipt is a pairing no production write emits",
+                        "budget debit paired_receipt = {} resolves to a SettlementReceipt whose resource is {:?}, neither ResourceKind::Tool nor ResourceKind::Memory; active dispatch_intent_run writes Memory pairs, while the now-parked legacy record_paid_call helper wrote Tool pairs, so a debit paired to Compute, Message, or Registration is a shape no recognized in-repository writer emits",
                         debit.paired_receipt, receipt.resource
                     ),
-                    repair: "review the budget-ledger JSONL row and the settlement JSONL receipt it joins by paired_receipt == receipt.id; the only production (BudgetDebit, SettlementReceipt) pairings are record_paid_call's Tool receipt and dispatch_intent_run's Memory receipt, each written under the same Uuid::new_v4() the debit is charged with, so a debit paired to a receipt of any third resource kind is out-of-band evidence of a serde or merge regression that hydrated receipt.resource from a different row, an operator JSONL edit that recategorized a paired receipt, or an import tool that repointed paired_receipt at an unrelated non-Tool/non-Memory receipt; the budget ledger has no within-row resource field and the receipt-side memory_receipt_resource_mismatch arm (which keys on receipt.memory_record_id over the settlement log) and audit_external_payment_settled_receipt_resource_not_tool arm (which keys on the ExternalPaymentSettled audit join) cannot see this budget-join binding, making this cross-store join the sole detector; it is disjoint from budget_debit_paired_receipt_nil (a nil paired_receipt does not resolve to a receipt so the join skips it before this arm) and budget_debit_paired_receipt_shared_by_multiple_debits (cardinality on paired_receipt, not the resolved receipt's resource), and it strictly precedes the Tool-scoped payer and credits arms (which require resource == Tool) and the Memory-scoped flat-credits arm (which requires resource == Memory and continues above), so exactly one resource branch handles each debit; it fires only on a paired_receipt that resolves in the receipt window, so a windowed-out or purged receipt is left to the orphan-free join".into(),
+                    repair: "review the budget row and its receipt; active dispatch_intent_run writes Memory pairs and the parked legacy record_paid_call helper wrote Tool pairs under one shared id. A third resource kind indicates an import, edit, or serialization error. This check only covers receipts present in the verification window".into(),
                 });
                 continue;
             }
@@ -14822,7 +14382,7 @@ impl Server {
             // agent.pubkey being non-zero so the within-row shape arms own the
             // all-zero sentinel: receipt_payer_pubkey_zeroed (Check 6) for the
             // receipt side and budget_debit_agent_pubkey_zeroed (the shape pass
-            // above) for the debit side. A clean production debit always carries
+            // above) for the debit side. A well-formed recognized debit carries
             // the payer's real ed25519 key, so this never fires on a well-formed
             // pair; a zeroed debit agent is surfaced by its own shape arm
             // regardless of whether the paired receipt is in the window (which
@@ -14837,16 +14397,15 @@ impl Server {
                     kind: "budget_debit_paired_receipt_payer_mismatch".into(),
                     id: Some(debit.paired_receipt.to_string()),
                     message: format!(
-                        "budget debit paired_receipt = {} resolves to a ResourceKind::Tool SettlementReceipt whose payer.pubkey differs from the debit's agent.pubkey (debit agent {:?}, receipt payer {:?}); the sole production writer of a (BudgetDebit, Tool receipt) pair is record_paid_call (covenantd/src/x402.rs:206-264), which debits the payer via budget.try_debit(payer, call.credits, receipt_id) (x402.rs:215) and records the receipt with the same payer under that receipt_id (x402.rs:220-223), so every production paid call satisfies debit.agent.pubkey == receipt.payer.pubkey — a matched pair whose pubkeys differ is a pairing no production write emits",
+                        "budget debit paired_receipt = {} resolves to a ResourceKind::Tool SettlementReceipt whose payer.pubkey differs from the debit's agent.pubkey (debit agent {:?}, receipt payer {:?}); the now-parked legacy record_paid_call helper cloned one payer into both rows, so this mismatch is a shape no recognized in-repository writer emits",
                         debit.paired_receipt, debit.agent.display, receipt.payer.display
                     ),
-                    repair: "review the budget-ledger JSONL row and the settlement JSONL receipt it joins by paired_receipt == receipt.id; record_paid_call (x402.rs:206-264) charges the debit and records the Tool receipt from the same payer in one call, so a matched pair whose agent.pubkey differs from the receipt's payer.pubkey is out-of-band evidence of a JSONL edit that reassigned which identity a paid call's debit charged (misattributing the USDC spend to the wrong agent's budget) while leaving the receipt's payer intact, an import tool that paired the debit with a foreign receipt, or a serde regression that hydrated either pubkey from a different row; the budget ledger and settlement log are separate unsigned local JSONL files with no cross-log signature so no within-row arm in either log covers this, making the join the sole detector; it fires only on a debit whose paired_receipt resolves to a Tool receipt (memory-dispatch debits pair with ResourceKind::Memory receipts whose payer is the submitting peer rather than the debited agent, so they are excluded by design) and only when both the receipt's payer.pubkey and the debit's agent.pubkey are non-zero so the within-row shape arms own the all-zero sentinel — receipt_payer_pubkey_zeroed for the receipt side and budget_debit_agent_pubkey_zeroed for the debit side; the latter flags a zeroed debit agent regardless of whether the paired receipt is in the window, so a 'charged nobody' debit can never escape this disjointness".into(),
+                    repair: "review the legacy local accounting rows joined by paired_receipt == receipt.id; the parked record_paid_call helper used one payer for both. A mismatch indicates an import, edit, or serialization error. Memory pairs are excluded because their debited agent and submitting payer intentionally differ".into(),
                 });
             }
             // Display half of the payer binding. record_paid_call clones one
             // payer: &AgentId into both the debit's stored agent (try_debit
-            // pushes agent: agent.clone(), covenant-budget/src/lib.rs:412) and
-            // the Tool receipt's payer (payer.clone(), x402.rs:222) under one
+            // stores agent.clone()) and the Tool receipt's payer under one
             // receipt_id, so a clean Tool pair carries byte-identical
             // payer.display on both sides. A pair whose pubkeys agree but whose
             // displays differ is a display-only relabel on one unsigned JSONL
@@ -14870,10 +14429,10 @@ impl Server {
                     kind: "budget_debit_paired_receipt_payer_display_mismatch".into(),
                     id: Some(debit.paired_receipt.to_string()),
                     message: format!(
-                        "budget debit paired_receipt = {} resolves to a ResourceKind::Tool SettlementReceipt whose payer.pubkey equals the debit's agent.pubkey while their display labels differ (debit agent {:?}, receipt payer {:?}); the sole production writer of a (BudgetDebit, Tool receipt) pair is record_paid_call (covenantd/src/x402.rs:206-264), which clones one payer AgentId into both the debit's agent via budget.try_debit(payer, call.credits, receipt_id) (covenant-budget/src/lib.rs:412) and the receipt's payer (x402.rs:222) under one receipt_id, so every production paid call satisfies debit.agent.display == receipt.payer.display — a matched pair whose pubkeys agree but whose displays differ is a relabel no production write emits",
+                        "budget debit paired_receipt = {} resolves to a ResourceKind::Tool SettlementReceipt whose payer.pubkey equals the debit's agent.pubkey while their display labels differ (debit agent {:?}, receipt payer {:?}); the now-parked legacy record_paid_call helper cloned one payer into both rows, so this display mismatch is a shape no recognized in-repository writer emits",
                         debit.paired_receipt, debit.agent.display, receipt.payer.display
                     ),
-                    repair: "review the budget-ledger JSONL row and the settlement JSONL receipt it joins by paired_receipt == receipt.id; record_paid_call (x402.rs:206-264) clones one payer AgentId into both the debit's stored agent and the Tool receipt's payer in the same call, so a matched pair whose pubkeys agree but whose payer.display labels differ is out-of-band evidence of a JSONL edit that relabeled which named identity a paid call's debit charged (misattributing the USDC spend to a differently-named identity) while preserving the cryptographic key, an import tool that paired the debit with a foreign receipt display, or a serde regression that hydrated payer.display from a different row; local settlement receipts and the budget ledger are separate unsigned local JSONL files so no signature covers payer.display, the pubkey arm budget_debit_paired_receipt_payer_mismatch cannot catch this (the pubkeys agree), and the display is well-formed by the AgentId Deserialize gate so no within-row shape arm catches it, making this cross-store display binding the sole detector; it is the display half of the payer binding (the pubkey half is budget_debit_paired_receipt_payer_mismatch) and the budget-side mirror of the memory_receipt_payer_display_not_matching_owner arm (Check 4); it fires only on a debit whose paired_receipt resolves to a Tool receipt (memory-dispatch debits pair with ResourceKind::Memory receipts whose payer is the submitting peer rather than the debited agent, so they are excluded by design), only when the pubkeys are equal (so it is strictly disjoint from the pubkey-mismatch arm) and, the receipt payer.pubkey being non-zero, both pubkeys are non-zero so the receipt_payer_pubkey_zeroed shape arm (Check 6) owns the zeroed-receipt case".into(),
+                    repair: "review the legacy local accounting rows joined by paired_receipt == receipt.id; the parked record_paid_call helper cloned one payer into both. Equal keys with different labels indicate an import, edit, or serialization error. Memory pairs are excluded because their debited agent and submitting payer intentionally differ".into(),
                 });
             }
             if receipt.credits_consumed != 0 && debit.credits != receipt.credits_consumed {
@@ -14882,17 +14441,17 @@ impl Server {
                     kind: "budget_debit_paired_receipt_credits_mismatch".into(),
                     id: Some(debit.paired_receipt.to_string()),
                     message: format!(
-                        "budget debit paired_receipt = {} resolves to a ResourceKind::Tool SettlementReceipt whose credits_consumed = {} differs from the debit's credits = {}; the sole production writer of a (BudgetDebit, Tool receipt) pair is record_paid_call (covenantd/src/x402.rs:206-264), which passes call.credits to both budget.try_debit(payer, call.credits, receipt_id) (x402.rs:215) and the receipt's credits_consumed (x402.rs:225) under that receipt_id, so every production paid call satisfies debit.credits == receipt.credits_consumed — a matched pair whose amounts differ is a pairing no production write emits",
+                        "budget debit paired_receipt = {} resolves to a ResourceKind::Tool SettlementReceipt whose credits_consumed = {} differs from the debit's credits = {}; the now-parked legacy record_paid_call helper copied one positive call.credits value into both rows, so this mismatch is a shape no recognized in-repository writer emits",
                         debit.paired_receipt, receipt.credits_consumed, debit.credits
                     ),
-                    repair: "review the budget-ledger JSONL row and the settlement JSONL receipt it joins by paired_receipt == receipt.id; record_paid_call (x402.rs:206-264) sources the debit's credits and the Tool receipt's credits_consumed from the same call.credits in one call, so a matched pair whose amounts disagree is out-of-band evidence of a JSONL edit that repriced one log without the other (desyncing the per-payer burn the budget bucket enforces from the credits the settlement log and on-chain bridge batch totals account for), an import tool that paired the debit with a foreign receipt, or a serde regression that hydrated either amount from a different row; the budget ledger and settlement log are separate unsigned local JSONL files with no cross-log signature so no within-row arm in either log covers this, making the join the sole detector; it fires only on a debit whose paired_receipt resolves to a Tool receipt (memory-dispatch debits charge a flat intent_dispatch_credits() = 1 against a Memory receipt priced by memory_write_credits(bytes), so they are excluded by design) and only when the receipt's credits_consumed is non-zero so it is strictly disjoint from the receipt_credits_consumed_zero shape arm".into(),
+                    repair: "review the legacy local accounting rows joined by paired_receipt == receipt.id; the parked record_paid_call helper copied one call.credits value into both. A mismatch indicates an import, edit, or serialization error. Memory pairs use a different pricing rule and are excluded".into(),
                 });
             }
         }
         // Shape (identity): ed25519 verifying keys are never the all-zero
-        // sequence, and both production try_debit callers source a non-zero
-        // agent — record_paid_call debits the authenticated peer's real ed25519
-        // key (covenantd/src/x402.rs:215) and dispatch_intent_run debits
+        // sequence. Active dispatch_intent_run and the parked record_paid_call
+        // helper source a non-zero agent: the helper used the authenticated
+        // peer's ed25519 key, while dispatch_intent_run debits
         // agent_id_for_card(card), whose synthesized pubkey copies the card.id
         // bytes into a [0u8; 32] buffer (covenantd/src/lib.rs:13394-13399) over a
         // card.id that Manifest::validate constrains to [A-Za-z0-9_.-]+, so the
@@ -14920,14 +14479,14 @@ impl Server {
                     kind: "budget_debit_agent_pubkey_zeroed".into(),
                     id: Some(debit.paired_receipt.to_string()),
                     message: format!(
-                        "budget debit paired_receipt = {} has agent.pubkey = [0u8; 32]; ed25519 verifying keys are never the all-zero sequence, and both production try_debit callers source a non-zero agent — record_paid_call debits the authenticated peer's real ed25519 key (covenantd/src/x402.rs:215) and dispatch_intent_run debits agent_id_for_card(card), whose synthesized pubkey copies the card.id bytes into the buffer (covenantd/src/lib.rs:13394-13399) over a card.id that Manifest::validate constrains to [A-Za-z0-9_.-]+, so pubkey[0] is never zero — a zeroed agent collapses every per-payer budget bucket into one anonymous bucket while the credit still counts against the burn",
+                        "budget debit paired_receipt = {} has agent.pubkey = [0u8; 32]; the active dispatch path derives a non-zero agent key from a validated card id, and the parked legacy record_paid_call helper used the authenticated peer's ed25519 key. A zeroed key collapses distinct budget buckets into one anonymous identity",
                         debit.paired_receipt
                     ),
-                    repair: "review the budget-ledger JSONL row and the writer that produced it; both production try_debit callers carry a non-zero agent — record_paid_call passes the authenticated peer (a real ed25519 key) and dispatch_intent_run passes agent_id_for_card(card), whose synthesized pubkey copies the non-empty card.id bytes (Manifest::validate constrains card.id to [A-Za-z0-9_.-]+) — so an all-zero agent.pubkey is out-of-band evidence of a serde regression that hydrated the all-zero pubkey, an import or replay tool that constructed the debit with a placeholder identity, or a JSONL edit that anonymized which payer a debit charged (collapsing the per-payer budget bucket the token-bucket gate enforces into one 'charged nobody' bucket and detaching the burn from the identity it should bill); this is the sixth carrier of the zeroed-pubkey family (receipt_payer_pubkey_zeroed, audit_event_issuer_pubkey_zeroed, memory_record_owner_pubkey_zeroed, capability_subject_pubkey_zeroed, capability_grantor_pubkey_zeroed) and the budget ledger's first identity-shape arm; it runs independent of the join loop (which skips a debit whose paired_receipt is windowed out) so a zeroed agent is flagged regardless of receipt presence, and it owns the all-zero sentinel for the debit side of the budget_debit_paired_receipt_payer_mismatch join, which gates on debit.agent.pubkey != [0u8; 32] so the two arms are strictly disjoint".into(),
+                    repair: "review the budget-ledger JSONL row and the writer that produced it; the active dispatch_intent_run path and the now-parked legacy record_paid_call helper carry a non-zero agent — record_paid_call passes the authenticated peer (a real ed25519 key) and dispatch_intent_run passes agent_id_for_card(card), whose synthesized pubkey copies the non-empty card.id bytes (Manifest::validate constrains card.id to [A-Za-z0-9_.-]+) — so an all-zero agent.pubkey is out-of-band evidence of a serde regression that hydrated the all-zero pubkey, an import or replay tool that constructed the debit with a placeholder identity, or a JSONL edit that anonymized which payer a debit charged (collapsing the per-payer budget bucket the token-bucket gate enforces into one 'charged nobody' bucket and detaching the burn from the identity it should bill); this is the sixth carrier of the zeroed-pubkey family (receipt_payer_pubkey_zeroed, audit_event_issuer_pubkey_zeroed, memory_record_owner_pubkey_zeroed, capability_subject_pubkey_zeroed, capability_grantor_pubkey_zeroed) and the budget ledger's first identity-shape arm; it runs independent of the join loop (which skips a debit whose paired_receipt is windowed out) so a zeroed agent is flagged regardless of receipt presence, and it owns the all-zero sentinel for the debit side of the budget_debit_paired_receipt_payer_mismatch join, which gates on debit.agent.pubkey != [0u8; 32] so the two arms are strictly disjoint".into(),
                 });
             }
         }
-        // Shape: every production BudgetDebit stamps at_ms from epoch_ms() inside
+        // Shape: every BudgetDebit emitted by the recognized in-repository writers stamps at_ms from epoch_ms() inside
         // try_debit — both store backends bind now = epoch_ms() and set
         // at_ms = now in the same call (covenant-budget/src/lib.rs:397,415 and
         // :859,876) — and epoch_ms() returns 0 only when the system clock
@@ -14953,28 +14512,18 @@ impl Server {
                     kind: "budget_debit_at_ms_zero".into(),
                     id: Some(debit.paired_receipt.to_string()),
                     message: format!(
-                        "budget debit paired_receipt = {} has at_ms = 0; every production BudgetDebit stamps at_ms from epoch_ms() inside try_debit (covenant-budget/src/lib.rs, both store backends bind now = epoch_ms() and set at_ms = now in the same call), and epoch_ms() returns 0 only when the system clock predates 1970-01-01 (impossible), so a faithful debit always carries a non-zero at_ms — a zero at_ms is a serde regression (u64::default() is 0), an import tool that bypassed epoch_ms(), or a JSONL edit that anonymized when the debit was charged",
+                        "budget debit paired_receipt = {} has at_ms = 0; every BudgetDebit emitted by the recognized in-repository writers stamps at_ms from epoch_ms() inside try_debit (covenant-budget/src/lib.rs, both store backends bind now = epoch_ms() and set at_ms = now in the same call), and epoch_ms() returns 0 only when the system clock predates 1970-01-01 (impossible), so a faithful debit always carries a non-zero at_ms — a zero at_ms is a serde regression (u64::default() is 0), an import tool that bypassed epoch_ms(), or a JSONL edit that anonymized when the debit was charged",
                         debit.paired_receipt
                     ),
-                    repair: "review the budget-ledger JSONL row and the writer that produced it; both production try_debit backends bind now = epoch_ms() and stamp at_ms = now in the same call (covenant-budget/src/lib.rs), and compact_older_than only drops pre-cutoff Debit rows while emitting Snapshot rows (never a Debit with at_ms = 0), so a zero at_ms is out-of-band evidence of a serde regression (u64::default() is 0), an import or replay tool that constructed the debit without epoch_ms(), or a JSONL edit that anonymized when the per-payer budget was charged; the budget ledger is an unsigned local JSONL with no chain-hash anchor covering this invariant, so this within-row shape arm is the sole detector — it is a shape arm for the budget ledger and the budget-log leg of the zero-timestamp family (receipt_settled_at_zero on the settlement log, audit_event_timestamp_zero on the audit log, memory_record_created_at_zero on the memory store)".into(),
+                    repair: "review the budget row and its writer; both ledger backends stamp at_ms from epoch_ms(), while compaction never creates Debit rows. A zero timestamp indicates an import, edit, or serialization error. This is the budget-log leg of the zero-timestamp family, alongside receipt_settled_at_zero".into(),
                 });
             }
         }
-        // Shape (credits): both production try_debit callers charge a positive
-        // amount — dispatch_intent_run debits the flat intent_dispatch_credits()
-        // = covenant_settlement::INTENT_DISPATCH_CREDITS = 1 (a constant) and
-        // record_paid_call debits call.credits (covenantd/src/x402.rs:215), the
-        // same value it stamps into the paired Tool receipt's credits_consumed
-        // (x402.rs:225) — whose zero case the receipt_credits_consumed_zero arm
-        // already treats as drift. call.credits is caller-supplied with no
-        // enforced positive floor; a genuinely free call takes the non-402 path
-        // that records no debit or receipt at all (x402.rs:283-284), so a 0-credit
-        // debit is a paid call that charged nothing, which no faithful production
-        // write records. try_debit(.., 0, ..) does not reject or no-op
-        // the row — 0 < tokens_remaining is false so no Exhausted error, the
-        // subtraction is a no-op, and it still pushes BudgetDebit { credits: 0 }
-        // (covenant-budget/src/lib.rs:403-416) — so a defaulted (u64::default() is
-        // 0) or tampered zero survives to the ledger. This is the budget-log leg
+        // Shape (credits): active memory dispatches debit the positive constant
+        // INTENT_DISPATCH_CREDITS, and the parked record_paid_call helper rejects
+        // zero before allocating a receipt id or touching the ledger. The lower
+        // level ledger API accepts zero, so malformed imports or other callers can
+        // still produce the shape. This is the budget-log leg
         // of the zero-credits family whose settlement-log leg is the
         // receipt_credits_consumed_zero arm; the two values are formally bound for
         // Tool pairs by budget_debit_paired_receipt_credits_mismatch (which
@@ -14995,18 +14544,17 @@ impl Server {
                     kind: "budget_debit_credits_zero".into(),
                     id: Some(debit.paired_receipt.to_string()),
                     message: format!(
-                        "budget debit paired_receipt = {} has credits = 0; both production try_debit callers charge a positive amount — dispatch_intent_run debits the flat intent_dispatch_credits() = covenant_settlement::INTENT_DISPATCH_CREDITS = 1 and record_paid_call debits call.credits (covenantd/src/x402.rs:215), the same value it stamps into the paired Tool receipt's credits_consumed (x402.rs:225) whose zero case the receipt_credits_consumed_zero arm already treats as drift; call.credits is caller-supplied with no enforced positive floor, and a genuinely free call takes the non-402 path that records no debit or receipt (x402.rs:283-284), so a 0-credit debit is a paid call that charged nothing, which no faithful production write records; try_debit(.., 0, ..) does not reject the row (0 < tokens_remaining is false, the subtraction is a no-op) and still pushes BudgetDebit {{ credits: 0 }} (covenant-budget/src/lib.rs:403-416), so a zero is a serde regression (u64::default() is 0), an import or replay tool that defaulted an unrecoverable credit count, or a JSONL edit that zeroed how much a debit charged",
+                        "budget debit paired_receipt = {} has credits = 0; active memory dispatches use positive intent_dispatch_credits() (the INTENT_DISPATCH_CREDITS constant) and the now-parked legacy record_paid_call helper rejects zero before allocating or writing. The lower-level ledger accepts zero, so this row indicates another caller, an import, an edit, or a serialization error",
                         debit.paired_receipt
                     ),
-                    repair: "review the budget-ledger JSONL row and the writer that produced it; both production try_debit callers charge a positive amount — dispatch_intent_run debits the flat intent_dispatch_credits() = covenant_settlement::INTENT_DISPATCH_CREDITS (the constant 1) and record_paid_call debits call.credits (x402.rs:215), the same value the paired Tool receipt's credits_consumed carries (x402.rs:225) whose zero case receipt_credits_consumed_zero already treats as drift; call.credits is caller-supplied with no enforced positive floor, and a genuinely free call takes the non-402 path that records no debit or receipt (x402.rs:283-284) — so a 0-credit debit is a paid call that charged nothing, out-of-band evidence of a serde regression (u64::default() is 0), an import or replay tool that defaulted an unrecoverable credit count, or a JSONL edit that zeroed how much the per-payer budget was charged (collapsing the burn the token-bucket gate enforces while the debit still occupies the 1:1 receipt pairing); the budget ledger is an unsigned local JSONL with no chain-hash anchor, so this within-row shape arm is the sole detector — it is the budget-log leg of the zero-credits family (the settlement-log leg is receipt_credits_consumed_zero, to which it is formally bound for Tool pairs by budget_debit_paired_receipt_credits_mismatch's debit.credits == receipt.credits_consumed invariant) and the credits sibling of budget_debit_at_ms_zero and budget_debit_agent_pubkey_zeroed; it runs independent of the join loop (which skips a debit whose paired_receipt is windowed out) so a zero-credit debit is flagged regardless of receipt presence — the cross-store budget_debit_paired_receipt_credits_mismatch and budget_debit_paired_memory_receipt_credits_not_intent_dispatch arms both gate on the paired receipt being present and go silent once it ages out or is compacted".into(),
+                    repair: "identify the caller or import that bypassed the positive-value writers and correct the budget row together with any paired receipt. This is the budget-log leg of the zero-credits family, alongside receipt_credits_consumed_zero, and remains visible when the receipt is outside the verification window".into(),
                 });
             }
         }
-        // Shape (pairing key): every production BudgetDebit pairs with a
-        // freshly minted receipt_id = Uuid::new_v4() — record_paid_call mints it
-        // at covenantd/src/x402.rs:211 and passes it to try_debit at :215 for the
-        // Tool pairing, and dispatch_intent_run mints it at covenantd/src/lib.rs:3926
-        // and debits it at :4045 for the Memory pairing — and Uuid::new_v4()
+        // Shape (pairing key): every recognized BudgetDebit writer pairs it
+        // with a fresh receipt_id = Uuid::new_v4(). The parked record_paid_call
+        // helper did so for Tool rows, and dispatch_intent_run does so for
+        // Memory rows. Uuid::new_v4()
         // never produces the nil (all-zeros) UUID. compact_older_than only drops
         // pre-cutoff Debit rows and emits Snapshot rows (never a Debit with a nil
         // paired_receipt), so recent_debits_all cannot surface a legitimately nil
@@ -15034,18 +14582,18 @@ impl Server {
                     kind: "budget_debit_paired_receipt_nil".into(),
                     id: Some(debit.paired_receipt.to_string()),
                     message: format!(
-                        "budget debit by agent {} (credits = {}, at_ms = {}) has paired_receipt = {} (the nil UUID); every production BudgetDebit pairs with a freshly minted receipt_id = Uuid::new_v4() (record_paid_call at covenantd/src/x402.rs:211,215 for the Tool pairing, dispatch_intent_run at covenantd/src/lib.rs:3926,4045 for the Memory pairing) and Uuid::new_v4() never produces the nil UUID, so a faithful debit always carries a non-nil paired_receipt — a nil paired_receipt is a serde regression (Uuid::default() is the nil UUID), an import or replay tool that wrote a placeholder pairing, or a JSONL edit that detached the debit from the receipt it settled",
+                        "budget debit by agent {} (credits = {}, at_ms = {}) has paired_receipt = {} (the nil UUID); active dispatch_intent_run and the parked legacy record_paid_call helper allocate ids with Uuid::new_v4(), so a nil pairing indicates an import, edit, or serialization error",
                         debit.agent.display, debit.credits, debit.at_ms, debit.paired_receipt
                     ),
-                    repair: "review the budget-ledger JSONL row and the writer that produced it; both production try_debit callers mint a fresh receipt_id via Uuid::new_v4() and pass it to try_debit before recording the matching SettlementReceipt under that id (record_paid_call at x402.rs:211,215, dispatch_intent_run at lib.rs:3926,4045), and compact_older_than only drops pre-cutoff Debit rows while emitting Snapshot rows (never a Debit with a nil paired_receipt), so a nil paired_receipt is out-of-band evidence of a serde regression (Uuid::default() is the nil UUID), an import or replay tool that constructed the debit with a placeholder pairing, or a JSONL edit that detached the per-payer budget charge from the receipt it settled — leaving the burn unreconcilable against any settlement row; the budget ledger is an unsigned local JSONL with no chain-hash anchor, so this within-row shape arm is the sole detector — it is the budget-log leg of the nil-UUID family (receipt_id_nil on the settlement log, memory_record_id_nil on the memory store) and owns the nil-paired_receipt case the join arms leave unresolved (budget_join_receipts.get(nil) returns None for a clean settlement log) and the budget_debit_paired_receipt_shared_by_multiple_debits cardinality arm explicitly skips (it gates on !paired_receipt.is_nil()), so the three are strictly disjoint".into(),
+                    repair: "review the budget row and its writer; recognized writers allocate a fresh non-nil UUID before debiting, while compaction never creates Debit rows. Restore the correct receipt link from the source logs. This is the budget-log leg of the nil-UUID family, alongside receipt_id_nil and memory_record_id_nil".into(),
                 });
             }
         }
         // Cardinality: the pairing between a budget debit and its settlement
-        // receipt is 1:1. Both production try_debit callers mint a fresh
+        // receipt is 1:1. The active dispatch_intent_run path and the now-parked legacy record_paid_call helper mint a fresh
         // receipt_id = Uuid::new_v4() and pass it to exactly one try_debit
         // before recording the matching receipt under that id —
-        // record_paid_call (covenantd/src/x402.rs:211,215) for the Tool
+        // the parked legacy record_paid_call helper for the Tool
         // pairing and dispatch_intent_run (covenantd/src/lib.rs:3926,4045) for
         // the Memory pairing — so a given non-nil paired_receipt value is
         // carried by at most one BudgetDebit in faithful data.
@@ -15079,9 +14627,9 @@ impl Server {
                     kind: "budget_debit_paired_receipt_shared_by_multiple_debits".into(),
                     id: Some(receipt_id.to_string()),
                     message: format!(
-                        "{count} BudgetDebit rows share paired_receipt {receipt_id}, but the pairing between a budget debit and its settlement receipt is 1:1 — both production try_debit callers, record_paid_call (covenantd/src/x402.rs:206-264) and dispatch_intent_run (covenantd/src/lib.rs), mint a fresh receipt_id = Uuid::new_v4() and pass it to exactly one try_debit before recording the matching SettlementReceipt under that id, so every production receipt_id is carried by exactly one debit — two debits sharing one is a second charge against a receipt that already settled a single debit, a pairing no production write emits"
+                        "{count} BudgetDebit rows share paired_receipt {receipt_id}, but the recognized writers allocate a fresh id and charge it once (a 1:1 pairing): active dispatch_intent_run for Memory rows and the now-parked legacy record_paid_call helper for Tool rows. Two debits sharing one id indicate replay, import, edit, or serialization drift"
                     ),
-                    repair: "review the budget-ledger JSONL rows that carry this paired_receipt; record_paid_call (x402.rs:206-264) and dispatch_intent_run each allocate a fresh receipt_id via Uuid::new_v4() and debit it exactly once, and compact_older_than only emits Snapshot rows while dropping pre-cutoff Debit rows (never duplicating one), so two debits sharing a receipt_id is out-of-band evidence of a replayed or duplicated budget-log row (a crash-recovery or import tool re-appending a debit), a forged debit reusing a live receipt_id to attach a second charge to an already-settled receipt, or a serde regression that hydrated two rows with the same paired_receipt; the budget ledger is an unsigned local JSONL with no within-row shape arm of its own, so this cross-row cardinality check is the sole detector — identify the canonical debit (the one whose agent and credits match the paired receipt) before truncating the duplicate, since the duplicate double-counts against the per-payer budget bucket and desyncs the budget log from the 1:1 settlement pairing the flush and on-chain batch reconciliation rely on".into(),
+                    repair: "review budget rows with this receipt id; active dispatch_intent_run and the parked legacy record_paid_call helper allocate a fresh UUID and debit it once, while compaction never duplicates Debit rows. Identify the canonical row before repair because a duplicate double-counts local budget usage and breaks the one-to-one receipt join".into(),
                 });
             }
         }
@@ -16301,38 +15849,6 @@ fn extract_acedata_provenance(
     None
 }
 
-/// The `circuit` settlement block `covenant_circuit::circuit_tools` appends
-/// to every tool result. `payment_tx`/`spent_raw` are `None` for free
-/// Circuit endpoints that returned without a CIRC transfer.
-struct CircuitProvenance {
-    endpoint: Option<String>,
-    payment_tx: Option<String>,
-    spent_raw: Option<u64>,
-    token: Option<String>,
-}
-
-/// Lift the `circuit` block out of a Circuit tool result's content, where
-/// the crate placed it as a `{ "circuit": { ... } }` JSON block. Returns
-/// `None` when no block carries it — the daemon then records no settlement.
-fn extract_circuit_provenance(content: &[covenant_mcp::Content]) -> Option<CircuitProvenance> {
-    for block in content {
-        if let covenant_mcp::Content::Json { value } = block {
-            if let Some(c) = value.get("circuit") {
-                return Some(CircuitProvenance {
-                    endpoint: c.get("endpoint").and_then(|v| v.as_str()).map(String::from),
-                    payment_tx: c
-                        .get("paymentTx")
-                        .and_then(|v| v.as_str())
-                        .map(String::from),
-                    spent_raw: c.get("spentRaw").and_then(serde_json::Value::as_u64),
-                    token: c.get("token").and_then(|v| v.as_str()).map(String::from),
-                });
-            }
-        }
-    }
-    None
-}
-
 fn audit_kind_requires_persistence(kind: &AuditKind) -> bool {
     matches!(
         kind,
@@ -16613,41 +16129,9 @@ mod tests {
         assert!(extract_acedata_provenance(&content).is_none());
     }
 
-    #[test]
-    fn extract_circuit_provenance_reads_paid_block() {
-        let content = vec![
-            covenant_mcp::Content::json(serde_json::json!({ "content": "hi" })),
-            covenant_mcp::Content::json(serde_json::json!({ "circuit": {
-                "endpoint": "circuit.inference",
-                "paymentTx": "5".repeat(88),
-                "spentRaw": 12000u64,
-                "token": "8fQgfsRnRkKSeNUhevT7wp8mhNvMSJdLn1fJi4oVpump",
-            }})),
-        ];
-        let prov = extract_circuit_provenance(&content).expect("circuit block present");
-        assert_eq!(prov.endpoint.as_deref(), Some("circuit.inference"));
-        assert_eq!(prov.payment_tx.as_deref(), Some("5".repeat(88).as_str()));
-        assert_eq!(prov.spent_raw, Some(12000));
-    }
-
-    #[test]
-    fn extract_circuit_provenance_free_block_has_no_payment() {
-        let content = vec![covenant_mcp::Content::json(
-            serde_json::json!({ "circuit": {
-                "endpoint": "circuit.data.query",
-                "paymentTx": serde_json::Value::Null,
-                "spentRaw": serde_json::Value::Null,
-                "token": "8fQgfsRnRkKSeNUhevT7wp8mhNvMSJdLn1fJi4oVpump",
-            }}),
-        )];
-        let prov = extract_circuit_provenance(&content).expect("circuit block present");
-        assert!(prov.payment_tx.is_none());
-        assert!(prov.spent_raw.is_none());
-    }
-
     struct FakeCircuitTool {
         name: &'static str,
-        block: serde_json::Value,
+        calls: Arc<std::sync::atomic::AtomicUsize>,
     }
 
     #[async_trait::async_trait]
@@ -16662,9 +16146,15 @@ mod tests {
             &self,
             _args: serde_json::Value,
         ) -> Result<covenant_mcp::ToolCallResult, covenant_mcp::ToolError> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(covenant_mcp::ToolCallResult::ok(vec![
                 covenant_mcp::Content::json(serde_json::json!({ "content": "ok" })),
-                covenant_mcp::Content::json(self.block.clone()),
+                covenant_mcp::Content::json(serde_json::json!({ "circuit": {
+                    "endpoint": self.name,
+                    "paymentTx": "5".repeat(88),
+                    "spentRaw": 12000u64,
+                    "token": "8fQgfsRnRkKSeNUhevT7wp8mhNvMSJdLn1fJi4oVpump",
+                }})),
             ]))
         }
     }
@@ -16688,18 +16178,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn circuit_paid_call_records_settlement_and_audit() {
-        let sig = "5".repeat(88);
+    async fn circuit_tools_are_hidden_and_parked_before_execution_or_accounting() {
+        use std::sync::atomic::Ordering;
+
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let s = server_with_tool(Arc::new(FakeCircuitTool {
             name: "circuit.inference",
-            block: serde_json::json!({ "circuit": {
-                "endpoint": "circuit.inference",
-                "paymentTx": sig,
-                "spentRaw": 12000u64,
-                "token": "8fQgfsRnRkKSeNUhevT7wp8mhNvMSJdLn1fJi4oVpump",
-            }}),
+            calls: calls.clone(),
         }));
-        grant_action(&s, "tool.call.circuit.inference").await;
+
+        match s.op_respond(Request::ListTools).await {
+            Response::ToolList { tools } => assert!(
+                tools.iter().all(|tool| tool.name != "circuit.inference"),
+                "parked Circuit tools must not be advertised"
+            ),
+            other => panic!("expected tool list, got {other:?}"),
+        }
 
         let resp = s
             .op_respond(Request::CallTool {
@@ -16707,70 +16201,97 @@ mod tests {
                 arguments: serde_json::json!({ "prompt": "hi" }),
             })
             .await;
-        assert!(matches!(
-            resp,
-            Response::ToolResult {
-                is_error: false,
-                ..
-            }
-        ));
+        match resp {
+            Response::Error { message } => assert_eq!(message, CIRCUIT_DAEMON_OUTBOUND_PARKED),
+            other => panic!("expected parked Circuit error, got {other:?}"),
+        }
 
-        let receipts = s.settlement.recent(10).await.unwrap();
-        assert_eq!(receipts.len(), 1);
-        assert_eq!(receipts[0].tx_sig.as_deref(), Some("5".repeat(88).as_str()));
-        assert_eq!(receipts[0].chain.as_deref(), Some("solana"));
-
-        let events = s.audit.recent(50).await.unwrap();
-        let paid = events
-            .iter()
-            .find_map(|e| match &e.kind {
-                AuditKind::ExternalPaymentSettled {
-                    provider,
-                    asset,
-                    amount,
-                    receipt_id,
-                    ..
-                } => Some((provider.clone(), asset.clone(), amount.clone(), *receipt_id)),
-                _ => None,
-            })
-            .expect("ExternalPaymentSettled event present");
-        assert_eq!(paid.0, "circuit");
-        assert_eq!(paid.2, "12000");
-        assert_eq!(paid.3, receipts[0].id);
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "tool body must not run");
+        assert!(
+            s.settlement.recent(10).await.unwrap().is_empty(),
+            "parked calls must not write settlement receipts"
+        );
+        assert!(
+            s.budget.recent_debits_all(10).await.unwrap().is_empty(),
+            "parked calls must not write budget debits"
+        );
+        assert!(
+            s.audit.recent(10).await.unwrap().is_empty(),
+            "parked calls must not synthesize payment or capability audit rows"
+        );
     }
 
     #[tokio::test]
-    async fn circuit_free_call_records_no_settlement() {
-        let s = server_with_tool(Arc::new(FakeCircuitTool {
-            name: "circuit.data.query",
-            block: serde_json::json!({ "circuit": {
-                "endpoint": "circuit.data.query",
-                "paymentTx": serde_json::Value::Null,
-                "spentRaw": serde_json::Value::Null,
-                "token": "8fQgfsRnRkKSeNUhevT7wp8mhNvMSJdLn1fJi4oVpump",
-            }}),
-        }));
-        grant_action(&s, "tool.call.circuit.data.query").await;
+    async fn solana_funded_tools_are_hidden_and_parked_before_execution_or_accounting() {
+        use std::sync::atomic::Ordering;
 
-        let resp = s
-            .op_respond(Request::CallTool {
-                name: "circuit.data.query".into(),
-                arguments: serde_json::json!({ "path": "/api/quote" }),
-            })
-            .await;
-        assert!(matches!(
-            resp,
-            Response::ToolResult {
-                is_error: false,
-                ..
+        for name in [
+            "metaplex.attest.audit_root",
+            "metaplex.identity.register",
+            "sns.register_subdomain",
+            "sns.set_record",
+        ] {
+            let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let s = server_with_tool(Arc::new(FakeCircuitTool {
+                name,
+                calls: calls.clone(),
+            }));
+
+            match s.op_respond(Request::ListTools).await {
+                Response::ToolList { tools } => assert!(
+                    tools.iter().all(|tool| tool.name != name),
+                    "parked funded tool {name} must not be advertised"
+                ),
+                other => panic!("expected tool list, got {other:?}"),
             }
-        ));
+
+            let resp = s
+                .op_respond(Request::CallTool {
+                    name: name.into(),
+                    arguments: serde_json::json!({}),
+                })
+                .await;
+            match resp {
+                Response::Error { message } => assert_eq!(message, SOLANA_FUNDED_TOOL_PARKED),
+                other => panic!("expected parked funded-tool error, got {other:?}"),
+            }
+
+            assert_eq!(calls.load(Ordering::SeqCst), 0, "tool body must not run");
+            assert!(s.settlement.recent(10).await.unwrap().is_empty());
+            assert!(s.budget.recent_debits_all(10).await.unwrap().is_empty());
+            assert!(s.audit.recent(10).await.unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn automatic_funded_anchors_are_parked_at_the_library_boundary() {
+        let s = server_with(vec![], "");
+        let sap = spawn_sap_attest_driver(
+            s.clone(),
+            SapAttestConfig {
+                enabled: true,
+                interval: Duration::from_millis(1),
+            },
+        );
+        let metaplex = spawn_metaplex_attest_driver(
+            s.clone(),
+            MetaplexAttestConfig {
+                enabled: true,
+                interval: Duration::from_millis(1),
+            },
+        );
+        tokio::time::timeout(Duration::from_secs(1), sap)
+            .await
+            .expect("parked SAP compatibility task must complete")
+            .expect("parked SAP compatibility task must not panic");
+        tokio::time::timeout(Duration::from_secs(1), metaplex)
+            .await
+            .expect("parked Metaplex compatibility task must complete")
+            .expect("parked Metaplex compatibility task must not panic");
 
         assert!(s.settlement.recent(10).await.unwrap().is_empty());
-        let events = s.audit.recent(50).await.unwrap();
-        assert!(!events
-            .iter()
-            .any(|e| matches!(e.kind, AuditKind::ExternalPaymentSettled { .. })));
+        assert!(s.budget.recent_debits_all(10).await.unwrap().is_empty());
+        assert!(s.audit.recent(10).await.unwrap().is_empty());
     }
 
     fn stub_card(id: &str, capabilities: Vec<&str>) -> AgentCard {
@@ -16812,6 +16333,74 @@ required = {caps:?}
 
     fn server_with(cards: Vec<AgentCard>, runner_text: &str) -> Server {
         server_with_ignore(cards, runner_text, IgnoreSet::default())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn direct_sap_writes_park_operator_and_guest_before_bridge_invocation() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let marker = temp.path().join("bridge-invoked");
+        let worker = temp.path().join("sap-worker-spy.sh");
+        std::fs::write(&worker, "#!/bin/sh\n: > \"$1\"\nexit 1\n").expect("write worker spy");
+        let mut permissions = std::fs::metadata(&worker)
+            .expect("worker spy metadata")
+            .permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&worker, permissions).expect("make worker spy executable");
+
+        let mut config =
+            covenant_sap_bridge::Config::disabled(covenant_sap_bridge::Cluster::Devnet);
+        config.enabled = true;
+        config.worker_command = vec![
+            worker.to_string_lossy().into_owned(),
+            marker.to_string_lossy().into_owned(),
+        ];
+        let server = server_with(vec![], "")
+            .with_sap_bridge(covenant_sap_bridge::SapBridge::new(config).expect("SAP bridge"));
+        let operator = server.identity.agent_id();
+        let guest = AgentId::new("guest@remote", [7u8; 32]);
+
+        for peer in [&operator, &guest] {
+            for request in sap_direct_write_requests() {
+                match server.respond(request, peer).await {
+                    Response::Error { message } => {
+                        assert_eq!(message, SAP_DIRECT_PUBLISH_PARKED)
+                    }
+                    other => panic!(
+                        "expected parked SAP error for {}, got {other:?}",
+                        peer.display
+                    ),
+                }
+            }
+        }
+
+        assert!(
+            !marker.exists(),
+            "neither operator nor guest may spawn the SAP worker while direct writes are parked"
+        );
+    }
+
+    fn sap_direct_write_requests() -> Vec<Request> {
+        vec![
+            Request::SapPublishAgent {
+                manifest_json: r#"{"name":"demo","capabilities":[],"pricing":[],"protocols":[]}"#
+                    .into(),
+            },
+            Request::SapPublishAuditRoot {
+                root_hash_hex: "ab".repeat(32),
+                release_target: "covenant".into(),
+                release_subject: "witness-loop".into(),
+                release_scope: "audit".into(),
+            },
+            Request::SapPublishAttestation {
+                agent_pda: "agent-pda".into(),
+                root_hash_hex: "cd".repeat(32),
+                attestation_type: Some("validation".into()),
+                expires_at_unix: None,
+            },
+        ]
     }
 
     #[test]
@@ -17020,6 +16609,9 @@ required = {caps:?}
         /// `CapabilityCheck` authorization row (`passed = true`); there is no
         /// action-specific row. The authorized attempt still lands on the chain.
         AuthorizationAudited,
+        /// Compatibility request that always returns a stable refusal before
+        /// mutation, signer, worker, or network access. It has no success path.
+        Parked,
         /// Privileged action that records nothing on its success path. A tracked
         /// accountability gap — see the assertion below and the doc.
         Unaudited,
@@ -17060,7 +16652,6 @@ required = {caps:?}
             | Request::SapStatus => ReadQuery,
             Request::SubmitIntent { .. }
             | Request::ResumeIntent { .. }
-            | Request::PayX402 { .. }
             | Request::GrantCapability { .. }
             | Request::RevokeCapability { .. }
             | Request::RevokePeer { .. }
@@ -17075,9 +16666,7 @@ required = {caps:?}
             | Request::AuthorizeSpend { .. }
             | Request::SettleSpend { .. }
             | Request::ProveCompletion { .. }
-            | Request::RecordEscrowRelease { .. }
-            | Request::EnrollPeer { .. }
-            | Request::CallTool { .. } => ActionAudited,
+            | Request::EnrollPeer { .. } => ActionAudited,
             Request::PurgeMemory { .. }
             | Request::PurgeAudit { .. }
             | Request::PurgeCapabilities { .. }
@@ -17087,10 +16676,21 @@ required = {caps:?}
             | Request::SendA2ATask { .. }
             | Request::PostA2AResult { .. }
             | Request::CompactA2A => AuthorizationAudited,
-            Request::Authenticate { .. }
-            | Request::SapPublishAgent { .. }
+            Request::SapPublishAgent { .. }
             | Request::SapPublishAuditRoot { .. }
-            | Request::SapPublishAttestation { .. } => Unaudited,
+            | Request::SapPublishAttestation { .. }
+            | Request::PayX402 { .. }
+            | Request::RecordEscrowRelease { .. } => Parked,
+            Request::CallTool { name, .. }
+                if is_parked_circuit_tool(name)
+                    || is_parked_hyre_tool(name)
+                    || is_parked_solana_funded_tool(name) =>
+            {
+                Parked
+            }
+            Request::CallTool { name, .. } if is_provider_read_tool(name) => AuthorizationAudited,
+            Request::CallTool { .. } => ActionAudited,
+            Request::Authenticate { .. } => Unaudited,
         }
     }
 
@@ -17230,7 +16830,7 @@ required = {caps:?}
                     per_call_cap: String::new(),
                     credits: 0,
                 },
-                ActionAudited,
+                Parked,
             ),
             (
                 Request::GetSecret {
@@ -17346,7 +16946,7 @@ required = {caps:?}
                 Request::SapPublishAgent {
                     manifest_json: String::new(),
                 },
-                Unaudited,
+                Parked,
             ),
             (
                 Request::SapPublishAuditRoot {
@@ -17355,7 +16955,7 @@ required = {caps:?}
                     release_subject: String::new(),
                     release_scope: String::new(),
                 },
-                Unaudited,
+                Parked,
             ),
             (
                 Request::SapPublishAttestation {
@@ -17364,7 +16964,7 @@ required = {caps:?}
                     attestation_type: None,
                     expires_at_unix: None,
                 },
-                Unaudited,
+                Parked,
             ),
             (
                 Request::AuthorizeSpend {
@@ -17415,7 +17015,7 @@ required = {caps:?}
                     provider: String::new(),
                     tx_sig: None,
                 },
-                ActionAudited,
+                Parked,
             ),
             (
                 Request::EnrollPeer {
@@ -17493,8 +17093,24 @@ required = {caps:?}
             .filter(|(_, exposure)| *exposure == Unaudited)
             .map(|(req, _)| kind_of(req))
             .collect();
-        let expected_unaudited: std::collections::BTreeSet<String> = [
-            "authenticate",
+        let expected_unaudited: std::collections::BTreeSet<String> =
+            ["authenticate"].into_iter().map(String::from).collect();
+        assert_eq!(
+            unaudited, expected_unaudited,
+            "the set of privileged-but-unaudited actions changed. If you added an audit emission \
+         and closed a gap, drop it here and in docs/audit-integrity.md. If a new privileged \
+         action records nothing on success, that is an accountability hole: add an audit \
+            emission, or — if the omission is intentional — document the reason here and in the doc.",
+        );
+
+        let parked: std::collections::BTreeSet<String> = inventory
+            .iter()
+            .filter(|(_, exposure)| *exposure == Parked)
+            .map(|(req, _)| kind_of(req))
+            .collect();
+        let expected_parked: std::collections::BTreeSet<String> = [
+            "pay_x402",
+            "record_escrow_release",
             "sap_publish_agent",
             "sap_publish_audit_root",
             "sap_publish_attestation",
@@ -17503,12 +17119,50 @@ required = {caps:?}
         .map(String::from)
         .collect();
         assert_eq!(
-            unaudited, expected_unaudited,
-            "the set of privileged-but-unaudited actions changed. If you added an audit emission \
-         and closed a gap, drop it here and in docs/audit-integrity.md. If a new privileged \
-         action records nothing on success, that is an accountability hole: add an audit \
-         emission, or — if the omission is intentional — document the reason here and in the doc.",
+            parked, expected_parked,
+            "the parked privileged surface changed; any re-enabled write requires scoped authorization and action-specific audit evidence",
         );
+        assert_eq!(
+            audit_exposure(&Request::CallTool {
+                name: "circuit.inference".into(),
+                arguments: serde_json::Value::Null,
+            }),
+            Parked,
+            "Circuit tool names must remain explicitly classified as parked rather than action-audited"
+        );
+        assert_eq!(
+            audit_exposure(&Request::CallTool {
+                name: "hyre.defi.tvl".into(),
+                arguments: serde_json::Value::Null,
+            }),
+            Parked,
+            "Hyre tool names must remain explicitly classified as parked"
+        );
+        for name in [
+            "metaplex.attest.audit_root",
+            "metaplex.identity.register",
+            "sns.register_subdomain",
+            "sns.set_record",
+        ] {
+            assert_eq!(
+                audit_exposure(&Request::CallTool {
+                    name: name.into(),
+                    arguments: serde_json::Value::Null,
+                }),
+                Parked,
+                "funded Solana tool {name} must remain explicitly classified as parked"
+            );
+        }
+        for name in ["metaplex.das.get_asset", "sns.resolve"] {
+            assert_eq!(
+                audit_exposure(&Request::CallTool {
+                    name: name.into(),
+                    arguments: serde_json::Value::Null,
+                }),
+                AuthorizationAudited,
+                "provider read tool {name} is capability-audited but has no action row"
+            );
+        }
     }
 
     #[tokio::test]
@@ -21295,7 +20949,7 @@ required = {caps:?}
         // Torn confirmation metadata: a receipt with a full chain bundle that
         // carries a block slot but no block timestamp. annotate_receipt sets
         // slot and confirmed_at from one ChainConfirmation, so exactly one
-        // present is a pairing no production write emits.
+        // present is a pairing no recognized in-repository writer emits.
         let torn_id = Uuid::new_v4();
         s.settlement
             .record(SettlementReceipt {
@@ -24209,7 +23863,7 @@ required = {caps:?}
             onchain_sig: None,
         };
         // Two receipts sharing one non-nil id: a replayed or duplicated
-        // settlement-log row no production write emits.
+        // settlement-log row no recognized in-repository writer emits.
         s.settlement.record(make(shared)).await.unwrap();
         s.settlement.record(make(shared)).await.unwrap();
         // A nil-id pair must NOT surface as receipt_id_duplicate: receipt_id_nil
@@ -24597,7 +24251,7 @@ required = {caps:?}
         let me = s.identity.agent_id();
         let shared = Uuid::new_v4();
         // Two audit rows sharing one non-nil id: a replayed or duplicated
-        // audit-log row no production write emits, since every record() call
+        // audit-log row no recognized in-repository writer emits, since every record() call
         // allocates a fresh Uuid::new_v4().
         for _ in 0..2 {
             s.audit
@@ -24686,7 +24340,7 @@ required = {caps:?}
         let me = s.identity.agent_id();
         // Two ExternalPaymentSettled rows with DISTINCT event ids sharing one
         // non-nil receipt_id: the replayed or duplicated paid-call audit row no
-        // production write emits, since record_paid_call mints a fresh
+        // legacy writer emits, since record_paid_call mints a fresh
         // receipt_id = Uuid::new_v4() per call and records exactly one
         // ExternalPaymentSettled carrying it. The distinct event ids keep this
         // off the event.id-keyed audit_event_id_duplicate arm.
@@ -24703,6 +24357,9 @@ required = {caps:?}
                         network: "base-sepolia".into(),
                         asset: "USDC".into(),
                         amount: "10000".into(),
+                        pay_to: None,
+                        scheme: None,
+                        fee_payer: None,
                         receipt_id: shared,
                     },
                 })
@@ -24726,6 +24383,9 @@ required = {caps:?}
                         network: "base-sepolia".into(),
                         asset: "USDC".into(),
                         amount: "10000".into(),
+                        pay_to: None,
+                        scheme: None,
+                        fee_payer: None,
                         receipt_id: Uuid::nil(),
                     },
                 })
@@ -27805,6 +27465,9 @@ required = {caps:?}
                     network: "base-sepolia".into(),
                     asset: "USDC".into(),
                     amount: "10000".into(),
+                    pay_to: None,
+                    scheme: None,
+                    fee_payer: None,
                     receipt_id: Uuid::nil(),
                 },
             })
@@ -27880,6 +27543,9 @@ required = {caps:?}
                     // Human-readable units instead of atomic; fails parse::<u128>().
                     // receipt_id is valid so only the amount arm fires.
                     amount: "0.08".into(),
+                    pay_to: None,
+                    scheme: None,
+                    fee_payer: None,
                     receipt_id: Uuid::new_v4(),
                 },
             })
@@ -27988,6 +27654,9 @@ required = {caps:?}
                     network: "base-sepolia".into(),
                     asset: "USDC".into(),
                     amount: "10000".into(),
+                    pay_to: None,
+                    scheme: None,
+                    fee_payer: None,
                     receipt_id,
                 },
             })
@@ -28312,10 +27981,10 @@ required = {caps:?}
     #[tokio::test]
     async fn verify_reports_budget_debit_paired_receipt_resource_not_tool_or_memory_drift() {
         let s = server_with(vec![], "");
-        // The only two production (BudgetDebit, SettlementReceipt) pairings are
+        // The recognized in-repository (BudgetDebit, SettlementReceipt) pairings are
         // record_paid_call's Tool receipt and dispatch_intent_run's Memory
         // receipt. A debit paired to a receipt of any third resource kind (here
-        // ResourceKind::Message) is a pairing no production write emits: it
+        // ResourceKind::Message) is a pairing no recognized in-repository writer emits: it
         // falls through both the Memory branch and the Tool gate and must trip
         // the resource-not-tool-or-memory arm. memory_record_id is None and the
         // receipt joins no ExternalPaymentSettled audit, so the receipt-side
@@ -28708,15 +28377,21 @@ required = {caps:?}
 
     #[tokio::test]
     async fn verify_reports_budget_debit_duplicate_paired_receipt_drift() {
-        let s = server_with(vec![], "");
         // Each receipt_id is minted once and debited once. Here two BudgetDebit
-        // rows carry the same paired_receipt -- the replay or duplicate a
-        // budget-log re-append would produce -- against one clean Tool receipt
-        // whose payer and credits match the debits, so only the cardinality arm
-        // fires (the Tool field arms stay silent) and it fires exactly once for
-        // the shared receipt_id, not once per debit.
+        // rows carry the same paired_receipt -- a malformed import or raw-log
+        // duplicate. The public ledger API is now idempotent on this key, so a
+        // read fixture injects the impossible stored shape directly.
         let receipt_id = Uuid::new_v4();
         let payer = AgentId::new("payer@host", [4u8; 32]);
+        let debit = covenant_budget::BudgetDebit {
+            agent: payer.clone(),
+            credits: 5,
+            paired_receipt: receipt_id,
+            at_ms: 1_700_000_000_000,
+        };
+        let s = server_with_budget(Arc::new(ZeroAtMsBudget {
+            debits: vec![debit.clone(), debit],
+        }));
         s.settlement
             .record(budget_join_test_receipt(
                 receipt_id,
@@ -28726,9 +28401,6 @@ required = {caps:?}
             ))
             .await
             .unwrap();
-        s.budget.set_capacity(&payer, 100).await.unwrap();
-        s.budget.try_debit(&payer, 5, receipt_id).await.unwrap();
-        s.budget.try_debit(&payer, 5, receipt_id).await.unwrap();
 
         match s.op_respond(Request::Verify { window: 100 }).await {
             Response::VerifyReport {
@@ -28857,7 +28529,7 @@ required = {caps:?}
 
     #[tokio::test]
     async fn verify_reports_budget_debit_at_ms_zero_drift() {
-        // Every production BudgetDebit stamps at_ms from epoch_ms() inside
+        // Every BudgetDebit emitted by the recognized in-repository writers stamps at_ms from epoch_ms() inside
         // try_debit (both store backends), which is never 0, so the ledger cannot
         // produce a zero at_ms through its public API. Inject a raw debit with
         // at_ms == 0 — the serde-default / import-tool / JSONL-edit shape no
@@ -28943,13 +28615,11 @@ required = {caps:?}
 
     #[tokio::test]
     async fn verify_reports_budget_debit_credits_zero_drift() {
-        // Both production try_debit callers charge a positive amount —
-        // dispatch_intent_run debits the flat intent_dispatch_credits() = 1 and
-        // record_paid_call debits call.credits, the value the paired Tool receipt's
-        // credits_consumed carries; a paid call priced at 0 is a free call the
-        // non-402 path returns without any debit. credits is a caller-provided
-        // try_debit parameter, so the real ledger writes the malformed shape
-        // directly: try_debit(&payer, 0, receipt) records a BudgetDebit whose
+        // Active memory dispatches use the positive intent_dispatch_credits()
+        // constant, and the parked record_paid_call helper rejects zero before
+        // writing. The lower-level ledger accepts zero, so the real ledger can
+        // still model the malformed shape from another caller or import:
+        // try_debit(&payer, 0, receipt) records a BudgetDebit whose
         // credits is 0 — the serde-default / import-tool / JSONL-edit shape no
         // production write emits. This is the budget-log leg of the zero-credits
         // family (settlement-log leg receipt_credits_consumed_zero). No receipts are
@@ -29034,13 +28704,13 @@ required = {caps:?}
 
     #[tokio::test]
     async fn verify_reports_budget_debit_paired_receipt_nil_drift() {
-        // Every production BudgetDebit pairs with a freshly minted
+        // Every BudgetDebit emitted by the recognized in-repository writers pairs with a freshly minted
         // receipt_id = Uuid::new_v4(), which is never the nil UUID. Unlike at_ms
         // (stamped internally from epoch_ms()), paired_receipt is a caller-provided
         // try_debit parameter, so the real ledger writes the malformed shape
         // directly: try_debit(&payer, c, Uuid::nil()) records a debit whose
         // paired_receipt is the nil UUID — the serde-default / import-tool /
-        // JSONL-edit shape no production write emits. This is the budget-log leg of
+        // JSONL-edit shape no recognized in-repository writer emits. This is the budget-log leg of
         // the nil-UUID family. No receipts are seeded, so the join arms continue
         // past both debits; the healthy debit's distinct non-nil paired_receipt
         // keeps the cardinality arm silent (which skips nil anyway), so only the
@@ -29222,6 +28892,9 @@ required = {caps:?}
                     network: "base-sepolia".into(),
                     asset: "USDC".into(),
                     amount: "10000".into(),
+                    pay_to: None,
+                    scheme: None,
+                    fee_payer: None,
                     receipt_id,
                 },
             })
@@ -43946,7 +43619,7 @@ required = {caps:?}
         let s = server_with(vec![], "");
         let me = s.identity.agent_id();
         // ExternalPaymentSettled is exclusively daemon-authored: record_paid_call
-        // (covenantd x402.rs) stamps issuer = ctx.issuer, and both production call sites pass
+        // (covenantd x402.rs) stamps issuer = ctx.issuer, and both now-parked legacy call sites passed
         // self.identity.agent_id() (the direct x402-dispatch path and the Hyre executor, which
         // carries the authenticated peer only as the separate payer). Unlike the other carriers
         // it records via a bare ctx.audit.record with no write-time issuer assert, so this arm is
@@ -43959,6 +43632,9 @@ required = {caps:?}
             network: "base-sepolia".into(),
             asset: "USDC".into(),
             amount: "10000".into(),
+            pay_to: None,
+            scheme: None,
+            fee_payer: None,
             receipt_id: Uuid::new_v4(),
         };
         let tampered_id = Uuid::new_v4();
@@ -49323,52 +48999,9 @@ required = {caps:?}
         );
     }
 
-    /// Full Hyre path: capability gate → executor → 402-then-pay loop
-    /// (against the live Hyre challenge shape) → budget debit +
-    /// settlement receipt + audit event. The signer is a shell script
-    /// standing in for the funding-key sidecar, so no real USDC moves.
-    #[cfg(unix)]
+    /// A programmatically installed legacy config must not revive Hyre payment.
     #[tokio::test]
-    async fn hyre_tool_call_pays_and_records_end_to_end() {
-        use std::os::unix::fs::PermissionsExt;
-        use wiremock::matchers::{header_exists, method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        const LIVE_402: &str = r#"{
-            "error":"X-PAYMENT header is required",
-            "accepts":[{"scheme":"exact","network":"solana","maxAmountRequired":"10000",
-                "payTo":"7G73PLhKvAPBGTzG5ESAE4coE7QrVeTTKfhTxQZbyGgC",
-                "asset":"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-                "maxTimeoutSeconds":60,"extra":{"feePayer":"2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4"}}],
-            "x402Version":1
-        }"#;
-
-        let upstream = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/defi/tvl"))
-            .respond_with(ResponseTemplate::new(402).set_body_string(LIVE_402))
-            .up_to_n_times(1)
-            .mount(&upstream)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/defi/tvl"))
-            .and(header_exists("x-payment"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "data": { "tvl": 1 }, "signal": "low_yield", "confidence": 0.9,
-                "sources": ["DeFiLlama"], "latency_ms": 7, "timestamp": "2026-05-26T00:00:00Z"
-            })))
-            .mount(&upstream)
-            .await;
-
-        let dir = tempfile::tempdir().unwrap();
-        let signer = dir.path().join("signer.sh");
-        std::fs::write(
-            &signer,
-            "#!/bin/sh\ncat >/dev/null\nprintf 'x402-mock-header'\n",
-        )
-        .unwrap();
-        std::fs::set_permissions(&signer, std::fs::Permissions::from_mode(0o755)).unwrap();
-
+    async fn hyre_tool_call_is_parked_without_accounting_writes() {
         let settlement = Arc::new(InMemorySettlement::new());
         let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
         let budget = Arc::new(covenant_budget::InMemoryLedger::new());
@@ -49376,7 +49009,6 @@ required = {caps:?}
 
         let cfg = covenant_hyre::HyreConfig {
             enabled: true,
-            base_url: upstream.uri(),
             ..Default::default()
         };
         let catalog = covenant_hyre::HyreCatalog::from_vendored(&cfg).unwrap();
@@ -49398,10 +49030,18 @@ required = {caps:?}
         )
         .with_x402_dispatch(x402::X402Config {
             enabled: true,
-            signer_binary: signer,
+            signer_binary: "/nonexistent-signer".into(),
             signer_env: vec![],
         })
         .with_hyre(hyre::HyreState::new(catalog, cfg));
+
+        match s.op_respond(Request::ListTools).await {
+            Response::ToolList { tools } => assert!(
+                tools.iter().all(|tool| !tool.name.starts_with("hyre.")),
+                "parked Hyre tools must not be advertised"
+            ),
+            other => panic!("expected tool list, got {other:?}"),
+        }
 
         let peer = identity.agent_id();
         budget.set_capacity(&peer, 1000).await.unwrap();
@@ -49420,43 +49060,17 @@ required = {caps:?}
             .await;
 
         match resp {
-            Response::ToolResult { content, is_error } => {
-                assert!(!is_error, "expected success, got {content:?}");
-                let data = content
-                    .iter()
-                    .find_map(|c| match c {
-                        covenant_mcp::Content::Json { value } => Some(value.clone()),
-                        _ => None,
-                    })
-                    .expect("json content");
-                assert_eq!(data["data"]["tvl"], 1);
-            }
-            other => panic!("expected ToolResult, got {other:?}"),
+            Response::Error { message } => assert_eq!(message, x402::LEGACY_OUTBOUND_PARKED),
+            other => panic!("expected parked Error, got {other:?}"),
         }
-
-        let receipts = settlement.recent(10).await.unwrap();
-        assert_eq!(receipts.len(), 1, "one settlement receipt");
-        assert_eq!(receipts[0].resource, covenant_types::ResourceKind::Tool);
-        assert_eq!(receipts[0].credits_consumed, 1, "$0.01 → 1 credit");
-
-        let events = audit.recent(20).await.unwrap();
-        let settled = events
+        assert!(settlement.recent(10).await.unwrap().is_empty());
+        assert!(!audit
+            .recent(20)
+            .await
+            .unwrap()
             .iter()
-            .find_map(|e| match &e.kind {
-                AuditKind::ExternalPaymentSettled {
-                    provider, amount, ..
-                } => Some((provider.clone(), amount.clone())),
-                _ => None,
-            })
-            .expect("ExternalPaymentSettled audit event");
-        assert_eq!(settled.0, "hyre");
-        assert_eq!(settled.1, "10000", "records the live atomic amount");
-
-        assert_eq!(
-            budget.tokens_remaining(&peer).await.unwrap(),
-            999,
-            "1 credit debited from the caller"
-        );
+            .any(|event| { matches!(event.kind, AuditKind::ExternalPaymentSettled { .. }) }));
+        assert_eq!(budget.tokens_remaining(&peer).await.unwrap(), 1000);
     }
 
     #[tokio::test]
@@ -65815,36 +65429,28 @@ budget_credits_per_hour = {credits}
     }
 
     #[tokio::test]
-    async fn pay_x402_rejects_when_not_configured() {
-        // Capability is granted, but no dispatch config wired — the
-        // daemon must refuse rather than silently spending or
-        // returning a generic error.
+    async fn pay_x402_is_parked_without_legacy_config() {
         let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()));
         grant_action(&s, "x402.outbound.pay").await;
         let resp = s.op_respond(pay_x402_req()).await;
         match resp {
-            Response::Error { message } => assert!(
-                message.contains("not configured"),
-                "error must say 'not configured' so the operator knows to call with_x402_dispatch: {message}"
-            ),
+            Response::Error { message } => assert_eq!(message, x402::LEGACY_OUTBOUND_PARKED),
             other => panic!("expected Error, got: {other:?}"),
         }
     }
 
     #[tokio::test]
-    async fn pay_x402_rejects_when_disabled() {
-        // Capability granted + dispatch wired but `enabled: false`.
-        // The operator might have temporarily disabled outbound
-        // payments; the daemon must honour that flag.
+    async fn pay_x402_is_parked_even_with_legacy_config() {
         let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()))
-            .with_x402_dispatch(x402::X402Config::default());
+            .with_x402_dispatch(x402::X402Config {
+                enabled: true,
+                signer_binary: std::path::PathBuf::from("/nonexistent-signer"),
+                signer_env: vec![],
+            });
         grant_action(&s, "x402.outbound.pay").await;
         let resp = s.op_respond(pay_x402_req()).await;
         match resp {
-            Response::Error { message } => assert!(
-                message.contains("disabled"),
-                "error must clearly say 'disabled' so the operator knows to flip the flag: {message}"
-            ),
+            Response::Error { message } => assert_eq!(message, x402::LEGACY_OUTBOUND_PARKED),
             other => panic!("expected Error, got: {other:?}"),
         }
     }
@@ -66013,10 +65619,22 @@ budget_credits_per_hour = {credits}
         let budget = Arc::new(covenant_budget::InMemoryLedger::new());
         let s = server_with_audit_and_budget(audit.clone(), budget)
             .with_spend_authz(spend_authz::SpendAuthzConfig { enabled: true });
+        grant_action(&s, "wallet.spend.authorize").await;
         grant_action(&s, "wallet.spend.settle").await;
 
-        let expected_decision = uuid::Uuid::from_u128(0x0abc);
-        match s.op_respond(settle_spend_req()).await {
+        let expected_decision = match s.op_respond(authorize_spend_req()).await {
+            Response::SpendAuthorized {
+                approved: true,
+                decision_id,
+                ..
+            } => decision_id,
+            other => panic!("expected approved authorization, got: {other:?}"),
+        };
+        let mut settle = settle_spend_req();
+        if let Request::SettleSpend { decision_id, .. } = &mut settle {
+            *decision_id = expected_decision;
+        }
+        match s.op_respond(settle).await {
             Response::SpendSettled {
                 receipt_id,
                 decision_id,
@@ -66134,10 +65752,9 @@ budget_credits_per_hour = {credits}
     }
 
     #[tokio::test]
-    async fn escrow_loop_prove_verify_release_reputation_end_to_end() {
-        // The exact path Orbserv's escrow drives over the gateway: a worker run
-        // exists in the chain, prove derives + signs against it, the escrow
-        // verifies the opaque blob, releases, and reputation reflects the loop.
+    async fn escrow_prove_is_domain_separated_and_release_reporting_is_parked() {
+        // A worker run exists in the chain, prove derives and signs against it,
+        // and the legacy release reporter fails closed without adding state.
         use base64::Engine as _;
         let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
         let job = Uuid::from_u128(0x7a5c);
@@ -66145,7 +65762,6 @@ budget_credits_per_hour = {credits}
         let s =
             server_with_audit(audit.clone()).with_escrow(escrow::EscrowConfig { enabled: true });
         grant_action(&s, "escrow.completion.prove").await;
-        grant_action(&s, "escrow.release.record").await;
         grant_action(&s, "reputation.read").await;
 
         let worker = "0x7A4D3Ae53E9F96599143e1BF057ba11A7e09Ab3E";
@@ -66170,9 +65786,12 @@ budget_credits_per_hour = {credits}
             .decode(&proof_blob)
             .unwrap();
         let bundle: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+        let domain = bundle["domain"].as_str().unwrap();
+        assert_eq!(domain, escrow::ESCROW_COMPLETION_DOMAIN);
+        let signed_message = format!("{domain}{}", bundle["proof_json"].as_str().unwrap());
         covenant_identity::verify_b58(
             bundle["signer_pubkey_b58"].as_str().unwrap(),
-            bundle["proof_json"].as_str().unwrap().as_bytes(),
+            signed_message.as_bytes(),
             bundle["signature_b58"].as_str().unwrap(),
         )
         .expect("escrow must be able to verify the proof blob");
@@ -66183,17 +65802,27 @@ budget_credits_per_hour = {credits}
         assert!(proof.validation_passed);
         assert_eq!(proof.proof_id, decision_id);
 
-        // 3. Release against the proof; a retry is idempotent.
-        match s.op_respond(escrow_release_req(decision_id, worker)).await {
-            Response::EscrowReleased { recorded_at } => assert!(!recorded_at.is_empty()),
-            other => panic!("expected EscrowReleased, got: {other:?}"),
-        }
-        match s.op_respond(escrow_release_req(decision_id, worker)).await {
-            Response::EscrowReleased { .. } => {}
-            other => panic!("expected EscrowReleased, got: {other:?}"),
-        }
+        let audit_rows_before_release = audit.recent(32).await.unwrap().len();
 
-        // 4. Reputation reflects the loop: one proof, one pass, one release.
+        // 3. Release reporting is parked even when the escrow surface is on.
+        match s.op_respond(escrow_release_req(decision_id, worker)).await {
+            Response::Error { message } => assert!(
+                message.contains("release reporting is disabled"),
+                "error must state the parked boundary: {message}"
+            ),
+            other => panic!("expected Error, got: {other:?}"),
+        }
+        assert_eq!(
+            audit.recent(32).await.unwrap().len(),
+            audit_rows_before_release,
+            "a release report must not add an audit row"
+        );
+        assert!(
+            s.settlement.recent(32).await.unwrap().is_empty(),
+            "a release report must not add a settlement receipt"
+        );
+
+        // 4. The legacy heuristic sees the statement but no release.
         match s
             .op_respond(Request::GetReputation {
                 worker_pubkey: worker.into(),
@@ -66211,13 +65840,13 @@ budget_credits_per_hour = {credits}
                 assert_eq!(proofs_total, 1);
                 assert_eq!(validations_passed, 1);
                 assert_eq!(validations_failed, 0);
-                assert_eq!(releases, 1);
+                assert_eq!(releases, 0);
                 assert_eq!(completion_rate_bps, 10_000);
             }
             other => panic!("expected Reputation, got: {other:?}"),
         }
 
-        // One proof row and exactly one release row (idempotent retry).
+        // The completion statement is retained; no release row was admitted.
         let kinds: Vec<_> = audit
             .recent(32)
             .await
@@ -66237,8 +65866,8 @@ budget_credits_per_hour = {credits}
                 .iter()
                 .filter(|k| matches!(k, covenant_audit::AuditKind::EscrowReleased { .. }))
                 .count(),
-            1,
-            "release must be idempotent on decision_id"
+            0,
+            "parked release reporting must never emit EscrowReleased"
         );
     }
 
@@ -66294,14 +65923,11 @@ budget_credits_per_hour = {credits}
             "a scope-denied egress must emit CapabilityScopeRejected: {events:?}"
         );
 
-        // Positive control: the granted provider ("xona") clears the scope gate
-        // and the dispatch fails further down (no budget capacity), proving the
-        // gate is not a blanket deny — the error must NOT be a scope rejection.
-        if let Response::Error { message } = s.op_respond(pay_x402_req()).await {
-            assert!(
-                !message.contains("capability scope"),
-                "the granted provider must clear the scope gate: {message}"
-            );
+        // Positive control: the granted provider clears the scope gate, then
+        // reaches the unconditional parked boundary before signing.
+        match s.op_respond(pay_x402_req()).await {
+            Response::Error { message } => assert_eq!(message, x402::LEGACY_OUTBOUND_PARKED),
+            other => panic!("expected parked Error, got: {other:?}"),
         }
     }
 

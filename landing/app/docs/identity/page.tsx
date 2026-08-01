@@ -13,10 +13,10 @@ export default function IdentityPage() {
       />
       <h1>Identity and keys</h1>
       <p>
-        Every Covenant install holds a single ed25519 keypair. The same
-        key signs capability grants, signs Solana settlement transactions,
-        and appears as the issuer on audit events and memory records.
-        Covenant does not maintain a secondary key system.
+        Every Covenant install holds a local ed25519 identity keypair. It signs
+        capability grants and Covenant protocol statements and appears as the
+        issuer on audit events. Solana and EVM payment funding keys are separate
+        and are not derived from this identity.
       </p>
 
       <h2>Persistence</h2>
@@ -85,27 +85,22 @@ export default function IdentityPage() {
       </p>
 
       <h2>Roles</h2>
-      <p>
-        The same ed25519 keypair is used to:
-      </p>
+      <p>The local ed25519 keypair is used to:</p>
       <ul>
         <li>
           sign capability tokens (<code>SignedCapability</code>);
         </li>
-        <li>
-          sign Solana settlement transactions when the daemon flushes
-          receipts on-chain;
-        </li>
+        <li>sign local registration, attestation, and audit statements;</li>
         <li>
           appear as the <code>issuer</code> on audit events and as the{" "}
           <code>owner</code> on memory records.
         </li>
       </ul>
       <p>
-        A single key across all three roles reduces the operator&apos;s
-        key-management surface to one artifact. The trade-off is that
-        compromise of the key affects all three roles; the deployment
-        benefit is one artifact to back up, rotate, and protect.
+        Compromise affects every local protocol role that trusts this key. It
+        does not directly expose separately configured payment funding keys,
+        though a compromised host may still reach any signer interface the
+        daemon is allowed to call.
       </p>
 
       <h2>Rotation</h2>
@@ -142,12 +137,12 @@ export default function IdentityPage() {
 
       <h2>Subordinate keys</h2>
       <p>
-        The current implementation provisions one keypair per host. A
-        later milestone introduces subordinate keys for delegated agents,
-        each signed by the root key, so that compromise of an individual
-        subordinate does not require a full root rotation. Until that
-        capability ships, the single keypair carries the same protection
-        requirements as a host SSH key.
+        The current implementation provisions one local identity keypair per
+        host. A later milestone introduces subordinate keys for delegated
+        agents, each signed by the root key, so that compromise of an individual
+        subordinate does not require a full root rotation. Until that capability
+        ships, the single keypair carries the same protection requirements as a
+        host SSH key.
       </p>
 
       <h2>Related</h2>
@@ -157,8 +152,8 @@ export default function IdentityPage() {
           everything that depends on the signing helpers.
         </li>
         <li>
-          <Link href="/settlement">Settlement</Link>: the
-          on-chain side that signs with the same key.
+          <Link href="/settlement">Settlement</Link>: separate receipt and
+          payment-signer boundaries.
         </li>
         <li>
           <Link href="/security">Security model</Link>: the

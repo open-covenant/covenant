@@ -1,22 +1,31 @@
-// Covenant-signed attestation over an arbitrary claim. Signs with a dedicated
-// ed25519 key, separate from any chain identity, so the public product never
-// reaches into internal infra. A verifier recomputes sha256(canonical(payload)),
-// prepends the domain, and checks the signature against the published pubkey, so
-// no trust in this server is required. ed25519 is chain-agnostic: the same key
-// and recipe verify identically whether the payment settled on Solana or Base.
+// Seller-key-signed statement over caller-supplied data. A verifier recomputes
+// sha256(canonical(payload)), prepends the domain, and checks the signature
+// against an expected pubkey pinned through a trusted external channel. A
+// passing signature proves possession of that key and detects payload changes;
+// a key served beside the statement does not independently establish Covenant
+// attribution or claim truth. Ed25519 is chain-agnostic, so the recipe is
+// independent of where the payment settled.
 
-import { createPrivateKey, createPublicKey, createHash, randomBytes, sign as edSign, verify as edVerify } from 'node:crypto';
-import bs58 from 'bs58';
+import {
+  createPrivateKey,
+  createPublicKey,
+  createHash,
+  randomBytes,
+  sign as edSign,
+  timingSafeEqual,
+  verify as edVerify,
+} from "node:crypto";
+import bs58 from "bs58";
 
 const DOMAIN = 'covenant.attest.v1\n';
 
-// Published so any consumer can verify an attestation without trusting this
-// server: pin the pubkey, recompute the digest, check the signature.
+// Published for discovery. A consumer must obtain the expected key through a
+// separately trusted channel, then recompute the digest and check the signature.
 export const ATTEST_DOMAIN = DOMAIN.trimEnd();
 export const ATTEST_CANONICALIZATION = 'JSON, recursively key-sorted, no insignificant whitespace, UTF-8';
 export const ATTEST_VERIFY_RECIPE =
   `digest = sha256(canonical(payload)) as lowercase hex; message = "${DOMAIN.trimEnd()}\\n" + digest; ` +
-  'ed25519-verify base58-decoded signature_b58 over the UTF-8 message against the published pubkey.';
+  'ed25519-verify base58-decoded signature_b58 over the UTF-8 message against an externally pinned expected pubkey.';
 
 function canonical(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
@@ -47,11 +56,34 @@ export class Attestor {
   private readonly key;
   readonly pubkeyB58: string;
 
-  constructor(keypair: number[]) {
+  constructor(keypair: readonly number[]) {
+    if (
+      (keypair.length !== 32 && keypair.length !== 64) ||
+      keypair.some((byte) => !Number.isInteger(byte) || byte < 0 || byte > 255)
+    ) {
+      throw new Error(
+        "attestation keypair must be a 32-byte seed or 64-byte seed+pubkey array",
+      );
+    }
     const seed = Buffer.from(keypair.slice(0, 32));
-    this.key = createPrivateKey({ key: Buffer.concat([PKCS8_ED25519_PREFIX, seed]), format: 'der', type: 'pkcs8' });
-    const jwk = createPublicKey(this.key).export({ format: 'jwk' }) as { x: string };
-    this.pubkeyB58 = bs58.encode(Buffer.from(jwk.x, 'base64url'));
+    this.key = createPrivateKey({
+      key: Buffer.concat([PKCS8_ED25519_PREFIX, seed]),
+      format: "der",
+      type: "pkcs8",
+    });
+    const jwk = createPublicKey(this.key).export({ format: "jwk" }) as {
+      x: string;
+    };
+    const publicKey = Buffer.from(jwk.x, "base64url");
+    if (
+      keypair.length === 64 &&
+      !timingSafeEqual(Buffer.from(keypair.slice(32)), publicKey)
+    ) {
+      throw new Error(
+        "attestation keypair public half does not match its seed",
+      );
+    }
+    this.pubkeyB58 = bs58.encode(publicKey);
   }
 
   static generate(): Attestor {
@@ -74,10 +106,37 @@ export class Attestor {
   }
 }
 
-export function verifyAttestation(att: Attestation): boolean {
-  const digest = createHash('sha256').update(canonical(att.payload), 'utf8').digest('hex');
-  if (digest !== att.digest_sha256_hex) return false;
-  const pubkey = Buffer.from(bs58.decode(att.pubkey_b58));
-  const key = createPublicKey({ format: 'jwk', key: { kty: 'OKP', crv: 'Ed25519', x: b64url(pubkey) } });
-  return edVerify(null, Buffer.from(`${att.domain}\n${digest}`, 'utf8'), key, Buffer.from(bs58.decode(att.signature_b58)));
+export function verifyAttestation(
+  att: Attestation,
+  expectedPubkeyB58: string,
+): boolean {
+  try {
+    if (
+      att.alg !== "ed25519" ||
+      att.domain !== ATTEST_DOMAIN ||
+      att.canonicalization !== ATTEST_CANONICALIZATION ||
+      att.pubkey_b58 !== expectedPubkeyB58
+    ) {
+      return false;
+    }
+    const digest = createHash("sha256")
+      .update(canonical(att.payload), "utf8")
+      .digest("hex");
+    if (digest !== att.digest_sha256_hex) return false;
+    const pubkey = Buffer.from(bs58.decode(expectedPubkeyB58));
+    const signature = Buffer.from(bs58.decode(att.signature_b58));
+    if (pubkey.length !== 32 || signature.length !== 64) return false;
+    const key = createPublicKey({
+      format: "jwk",
+      key: { kty: "OKP", crv: "Ed25519", x: b64url(pubkey) },
+    });
+    return edVerify(
+      null,
+      Buffer.from(`${ATTEST_DOMAIN}\n${digest}`, "utf8"),
+      key,
+      signature,
+    );
+  } catch {
+    return false;
+  }
 }

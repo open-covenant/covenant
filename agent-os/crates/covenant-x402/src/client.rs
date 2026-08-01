@@ -12,6 +12,18 @@ use crate::{
     Result, X402Error,
 };
 
+/// Response plus the exact live requirement handed to the signer.
+///
+/// `requirement` is `None` for a free first-response success. `Some` proves
+/// only that the client received a 402, selected these fields, built a payment
+/// header, and sent the retry. It is not proof of on-chain settlement or
+/// finality; callers must reconcile those separately.
+#[derive(Debug)]
+pub struct PaidRequestOutcome {
+    pub response: Response,
+    pub requirement: Option<PaymentRequirements>,
+}
+
 /// Total per-request ceiling for the paid loop. The endpoint and its
 /// facilitator are untrusted, so a hung or never-completing response must
 /// not wedge the daemon worker forever. It is a safety ceiling, not an
@@ -20,8 +32,8 @@ use crate::{
 /// avoid aborting a legitimate payment after funds may be committed.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// The reqwest client the daemon should drive [`Client::request_paid`]
-/// with — bounded so an unresponsive endpoint cannot block a worker.
+/// A bounded, redirect-free client for explicit manual or development use of
+/// [`Client::request_paid`]. Daemon-owned outbound payments are parked.
 pub fn http_client() -> reqwest::Client {
     http_client_with_timeout(REQUEST_TIMEOUT)
 }
@@ -29,8 +41,9 @@ pub fn http_client() -> reqwest::Client {
 fn http_client_with_timeout(timeout: Duration) -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none())
         .build()
-        .unwrap_or_else(|_| reqwest::Client::new())
+        .expect("static x402 HTTP client configuration must be valid")
 }
 
 /// Outbound x402 client.
@@ -43,8 +56,9 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn new(http: reqwest::Client) -> Self {
-        Self::with_limits(http, MAX_RESPONSE_BYTES)
+    /// Build a paid client with the crate's timeout and no-redirect policy.
+    pub fn new() -> Self {
+        Self::with_limits(http_client(), MAX_RESPONSE_BYTES)
     }
 
     fn with_limits(http: reqwest::Client, max_bytes: usize) -> Self {
@@ -62,7 +76,7 @@ impl Client {
     ///    qualifies.
     /// 4. Hands the matched requirement to the signer and retries
     ///    the same request with the resulting `x-payment` header.
-    /// 5. Returns the paid response.
+    /// 5. Returns the response with the exact selected requirement.
     ///
     /// A gratis 2xx on the first hit is returned as-is — some
     /// endpoints in a paid catalog may be free.
@@ -73,11 +87,14 @@ impl Client {
         body: Option<&Value>,
         capability: &Capability,
         signer: &dyn Signer,
-    ) -> Result<Response> {
+    ) -> Result<PaidRequestOutcome> {
         let initial = self.send(method.clone(), url, body, None).await?;
         let status = initial.status();
         if status.is_success() {
-            return Ok(initial);
+            return Ok(PaidRequestOutcome {
+                response: initial,
+                requirement: None,
+            });
         }
         if status != StatusCode::PAYMENT_REQUIRED {
             return Err(X402Error::UnexpectedStatus(status.as_u16()));
@@ -88,7 +105,9 @@ impl Client {
         let requirements: Vec<PaymentRequirements> = serde_json::from_str(&challenge_text)
             .map_err(|e| X402Error::DecodeChallenge(e.to_string()))?;
 
-        let chosen = pick_requirement(&requirements, capability).ok_or(X402Error::NoMatch)?;
+        let chosen = pick_requirement(&requirements, capability)
+            .cloned()
+            .ok_or(X402Error::NoMatch)?;
 
         debug!(
             network = %chosen.network,
@@ -96,9 +115,13 @@ impl Client {
             "x402 challenge matched capability; signing"
         );
 
-        let header_value = signer.build_payment(chosen).await?;
+        let header_value = signer.build_payment(&chosen).await?;
 
-        self.send(method, url, body, Some(&header_value)).await
+        let response = self.send(method, url, body, Some(&header_value)).await?;
+        Ok(PaidRequestOutcome {
+            response,
+            requirement: Some(chosen),
+        })
     }
 
     async fn send(
@@ -116,6 +139,12 @@ impl Client {
             req = req.header("x-payment", h);
         }
         Ok(req.send().await?)
+    }
+}
+
+impl Default for Client {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -255,7 +284,10 @@ mod tests {
             .respond_with(ResponseTemplate::new(402).set_delay(Duration::from_secs(30)))
             .mount(&server)
             .await;
-        let client = Client::new(http_client_with_timeout(Duration::from_millis(50)));
+        let client = Client::with_limits(
+            http_client_with_timeout(Duration::from_millis(50)),
+            MAX_RESPONSE_BYTES,
+        );
         let err = client
             .request_paid(
                 Method::POST,
@@ -270,6 +302,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn paid_client_never_follows_redirects() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/start"))
+            .respond_with(ResponseTemplate::new(302).insert_header("location", "/sink"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/sink"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let client = Client::new();
+        let err = client
+            .request_paid(
+                Method::GET,
+                &format!("{}/start", server.uri()),
+                None,
+                &cap("solana:mainnet", "usdc-sol", 100_000),
+                &MockSigner,
+            )
+            .await
+            .expect_err("redirects must not be followed");
+
+        assert!(
+            matches!(err, X402Error::UnexpectedStatus(302)),
+            "redirect response must surface to the caller, got {err:?}"
+        );
+        server.verify().await;
+    }
+
+    #[tokio::test]
     async fn oversized_challenge_body_is_rejected_instead_of_buffered() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -277,7 +344,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(402).set_body_string("a".repeat(4096)))
             .mount(&server)
             .await;
-        let client = Client::with_limits(reqwest::Client::new(), 64);
+        let client = Client::with_limits(http_client(), 64);
         let err = client
             .request_paid(
                 Method::POST,
@@ -323,11 +390,11 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = Client::new(reqwest::Client::new());
+        let client = Client::new();
         let c = cap("solana:mainnet", "usdc-sol", 100_000);
         let signer = MockSigner;
 
-        let resp = client
+        let outcome = client
             .request_paid(
                 Method::POST,
                 &format!("{}/image/creative-director", server.uri()),
@@ -338,8 +405,12 @@ mod tests {
             .await
             .expect("paid response");
 
-        assert_eq!(resp.status(), 200);
-        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(outcome.response.status(), 200);
+        assert_eq!(
+            outcome.requirement.as_ref().map(|r| r.amount.as_str()),
+            Some("80000")
+        );
+        let body: serde_json::Value = outcome.response.json().await.unwrap();
         assert_eq!(body["ok"], true);
     }
 
@@ -361,7 +432,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = Client::new(reqwest::Client::new());
+        let client = Client::new();
         let c = cap("solana:mainnet", "usdc-sol", 100_000);
         let signer = MockSigner;
 
@@ -393,9 +464,9 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
-        let client = Client::new(reqwest::Client::new());
+        let client = Client::new();
         let c = cap("solana:mainnet", "usdc-sol", 100_000);
-        let resp = client
+        let outcome = client
             .request_paid(
                 Method::GET,
                 &format!("{}/free", server.uri()),
@@ -405,8 +476,9 @@ mod tests {
             )
             .await
             .expect("gratis response");
-        assert_eq!(resp.status(), 200);
-        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(outcome.response.status(), 200);
+        assert!(outcome.requirement.is_none());
+        let body: serde_json::Value = outcome.response.json().await.unwrap();
         assert_eq!(body["ok"], true);
     }
 
@@ -421,7 +493,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(500).set_body_string("upstream error"))
             .mount(&server)
             .await;
-        let client = Client::new(reqwest::Client::new());
+        let client = Client::new();
         let c = cap("solana:mainnet", "usdc-sol", 100_000);
         let err = client
             .request_paid(
@@ -452,7 +524,7 @@ mod tests {
             )
             .mount(&server)
             .await;
-        let client = Client::new(reqwest::Client::new());
+        let client = Client::new();
         let c = cap("solana:mainnet", "usdc-sol", 100_000);
         let err = client
             .request_paid(

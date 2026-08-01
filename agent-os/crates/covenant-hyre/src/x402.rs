@@ -11,8 +11,10 @@
 //! funding-key sidecar) and the [`PaymentRequirements`] type the signer
 //! consumes. We normalise a selected Hyre option into that type —
 //! settling on the operator's CAIP-2 network and the exact
-//! `maxAmountRequired` — and hand it to the signer. Budget, settlement,
-//! and audit accounting wrap this loop in the daemon.
+//! `maxAmountRequired` — and hand it to the signer.
+//! The production daemon does not call this loop. It remains a lower-level development surface
+//! without transaction-bound authorization, durable reservation, or
+//! settlement reconciliation.
 //!
 //! The selected option's `extra.feePayer` carries PayAI's sponsor
 //! wallet (pinned in [`crate::config::PAYAI_FEE_PAYER`]). The sidecar's
@@ -40,8 +42,9 @@ use crate::{HyreError, Result};
 /// sits well above that to avoid aborting a legitimate settlement.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// The reqwest client the daemon should drive [`execute_paid`] with —
-/// bounded so an unresponsive upstream cannot block a worker indefinitely.
+/// The client lower-level callers should drive [`execute_paid`] with.
+/// It is timeout-bounded and refuses redirects so a custom payment header is
+/// never forwarded to a redirect target.
 pub fn http_client() -> reqwest::Client {
     http_client_with_timeout(REQUEST_TIMEOUT)
 }
@@ -50,8 +53,9 @@ fn http_client_with_timeout(timeout: Duration) -> reqwest::Client {
     reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(10))
         .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none())
         .build()
-        .unwrap_or_else(|_| reqwest::Client::new())
+        .expect("static Hyre HTTP client configuration must be valid")
 }
 
 /// One payment option from a Hyre 402 challenge.
@@ -90,15 +94,14 @@ impl Accept {
     }
 }
 
-/// Outcome of the loop. `paid_amount` is the atomic amount actually
-/// settled (the live, authoritative figure recorded on the receipt);
-/// `None` means the endpoint answered 2xx without a 402 — a free call
-/// that needs no settlement.
+/// Outcome of the loop. `attempted_amount` is the exact amount in a signed
+/// payment header sent on the retry. It does not say whether the facilitator
+/// settled. `None` means the first response succeeded without a 402.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PaidHttp {
     pub status: u16,
     pub body: String,
-    pub paid_amount: Option<String>,
+    pub attempted_amount: Option<String>,
 }
 
 /// Parse a Hyre 402 body into its payment options. Tolerates both the
@@ -202,7 +205,11 @@ fn to_requirements(accept: &Accept, caip2_network: &str) -> Result<PaymentRequir
 /// payment header surfaces as [`HyreError::Sign`], keeping a
 /// signing/custody failure distinct from a network or decode fault, and
 /// aborts the loop before the paid retry.
-pub async fn execute_paid(
+pub async fn execute_paid(signer: &dyn Signer, plan: &PaidRequest) -> Result<PaidHttp> {
+    execute_paid_with_client(&http_client(), signer, plan).await
+}
+
+async fn execute_paid_with_client(
     http: &reqwest::Client,
     signer: &dyn Signer,
     plan: &PaidRequest,
@@ -226,7 +233,7 @@ async fn execute_paid_with_limits(
         return Ok(PaidHttp {
             status: status.as_u16(),
             body,
-            paid_amount: None,
+            attempted_amount: None,
         });
     }
     if status.as_u16() != 402 {
@@ -263,15 +270,10 @@ async fn execute_paid_with_limits(
     let paid = send(http, &method, &plan.url, plan.body.as_ref(), Some(&header)).await?;
     let status = paid.status();
     let body = crate::http::read_capped(paid, max_bytes, HyreError::Execute).await?;
-    let paid_amount = if status.is_success() {
-        Some(requirements.amount)
-    } else {
-        None
-    };
     Ok(PaidHttp {
         status: status.as_u16(),
         body,
-        paid_amount,
+        attempted_amount: Some(requirements.amount),
     })
 }
 
@@ -628,7 +630,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(402).set_delay(Duration::from_secs(30)))
             .mount(&server)
             .await;
-        let err = execute_paid(
+        let err = execute_paid_with_client(
             &http_client_with_timeout(Duration::from_millis(50)),
             &MockSigner,
             &plan(&format!("{}/defi/tvl", server.uri()), 10_000),
@@ -636,6 +638,53 @@ mod tests {
         .await
         .expect_err("must time out");
         assert!(matches!(err, HyreError::Http(_)), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn signed_payment_header_is_not_forwarded_across_redirects() {
+        let source = MockServer::start().await;
+        let sink = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/defi/tvl"))
+            .respond_with(ResponseTemplate::new(402).set_body_string(LIVE_DEFI_TVL_402))
+            .up_to_n_times(1)
+            .mount(&source)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/defi/tvl"))
+            .and(header_exists("x-payment"))
+            .respond_with(
+                ResponseTemplate::new(307)
+                    .insert_header("location", format!("{}/capture", sink.uri())),
+            )
+            .mount(&source)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/capture"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&sink)
+            .await;
+
+        let out = execute_paid_with_client(
+            &http_client(),
+            &MockSigner,
+            &plan(&format!("{}/defi/tvl", source.uri()), 10_000),
+        )
+        .await
+        .expect("redirect response");
+
+        assert_eq!(
+            out.status, 307,
+            "the payment retry must not follow redirects"
+        );
+        assert!(
+            sink.received_requests()
+                .await
+                .expect("request log")
+                .is_empty(),
+            "the redirect target must receive no request or payment header"
+        );
     }
 
     #[tokio::test]
@@ -726,7 +775,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let out = execute_paid(
+        let out = execute_paid_with_client(
             &reqwest::Client::new(),
             &MockSigner,
             &plan(&format!("{}/defi/tvl", server.uri()), 10_000),
@@ -734,7 +783,7 @@ mod tests {
         .await
         .expect("paid");
         assert_eq!(out.status, 200);
-        assert_eq!(out.paid_amount.as_deref(), Some("10000"));
+        assert_eq!(out.attempted_amount.as_deref(), Some("10000"));
         let body: Value = serde_json::from_str(&out.body).unwrap();
         assert_eq!(body["data"]["tvl"], 1);
     }
@@ -751,7 +800,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let err = execute_paid(
+        let err = execute_paid_with_client(
             &reqwest::Client::new(),
             &MockSigner,
             &plan(&format!("{}/defi/tvl", server.uri()), 9_999),
@@ -771,7 +820,7 @@ mod tests {
             )
             .mount(&server)
             .await;
-        let out = execute_paid(
+        let out = execute_paid_with_client(
             &reqwest::Client::new(),
             &MockSigner,
             &plan(&format!("{}/defi/tvl", server.uri()), 10_000),
@@ -779,7 +828,7 @@ mod tests {
         .await
         .expect("free");
         assert_eq!(out.status, 200);
-        assert!(out.paid_amount.is_none());
+        assert!(out.attempted_amount.is_none());
     }
 
     #[tokio::test]
@@ -789,7 +838,7 @@ mod tests {
         // request leaves the host — never panic or coerce into a garbage verb.
         let mut bad = plan("https://unused.example/defi/tvl", 10_000);
         bad.method = "BAD METHOD".into();
-        let err = execute_paid(&reqwest::Client::new(), &MockSigner, &bad)
+        let err = execute_paid_with_client(&reqwest::Client::new(), &MockSigner, &bad)
             .await
             .expect_err("malformed method");
         assert!(
@@ -810,7 +859,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(503).set_body_string("upstream unavailable"))
             .mount(&server)
             .await;
-        let err = execute_paid(
+        let err = execute_paid_with_client(
             &reqwest::Client::new(),
             &MockSigner,
             &plan(&format!("{}/defi/tvl", server.uri()), 10_000),
@@ -824,11 +873,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejected_payment_records_no_paid_amount() {
+    async fn rejected_paid_retry_preserves_the_attempted_amount() {
         // The facilitator can reject the signed payment on the retry (bad
         // signature, expired blockhash, insufficient funds) by answering non-2xx.
-        // The loop must report that status with paid_amount None so no settlement
-        // is credited for a transfer that never landed.
+        // A non-success resource response cannot establish whether settlement
+        // landed. Preserve the signed amount as an attempt so callers do not
+        // misclassify this as a free call or automatically retry it.
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/defi/tvl"))
@@ -843,7 +893,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let out = execute_paid(
+        let out = execute_paid_with_client(
             &reqwest::Client::new(),
             &MockSigner,
             &plan(&format!("{}/defi/tvl", server.uri()), 10_000),
@@ -854,9 +904,10 @@ mod tests {
             out.status, 402,
             "the facilitator's rejection status is surfaced"
         );
-        assert!(
-            out.paid_amount.is_none(),
-            "a rejected payment must not record a settled amount"
+        assert_eq!(
+            out.attempted_amount.as_deref(),
+            Some("10000"),
+            "a signed retry must remain visible even when the response rejects it"
         );
     }
 
@@ -894,7 +945,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let err = execute_paid(
+        let err = execute_paid_with_client(
             &reqwest::Client::new(),
             &FailingSigner,
             &plan(&format!("{}/defi/tvl", server.uri()), 10_000),

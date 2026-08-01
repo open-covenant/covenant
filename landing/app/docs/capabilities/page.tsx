@@ -13,10 +13,12 @@ export default function CapabilitiesPage() {
       />
       <h1>Capability tokens</h1>
       <p>
-        A capability token is a typed, signed authorization. It names an
-        action, optionally carries a versioned JSON scope, and is signed
-        by the granter with their ed25519 key. Covenant enforces agent
-        and tool authorization through capability tokens.
+        A capability token is a typed, daemon-signed dispatch record. It names an
+        action, optionally carries a versioned JSON scope, and is checked on
+        implemented Covenant paths. Today any authenticated peer can request a
+        token for itself without separate operator approval. The signature proves
+        the daemon recorded that request; it is not operator authorization, W009
+        enforcement, or authority to spend funds.
       </p>
 
       <h2>Shape</h2>
@@ -41,9 +43,10 @@ export default function CapabilitiesPage() {
 
       <h2>Action namespaces</h2>
       <p>
-        Action strings live in a fixed set of reserved namespaces. The
-        manifest parser and the daemon both validate that actions sit in
-        one of these:
+        Known scope-validated namespaces are listed below. Unknown
+        namespaces and <code>capabilities.*</code> do not receive
+        grant-time schema validation; their scopes remain signed metadata
+        unless a dispatch path enforces them:
       </p>
       <ul>
         <li>
@@ -79,6 +82,16 @@ export default function CapabilitiesPage() {
         <li>
           <code>chain.</code>: actions over chain receipt reads and
           flushing.
+        </li>
+        <li>
+          <code>settlement.</code>: actions over receipt backfill.
+        </li>
+        <li>
+          <code>x402.</code>: legacy outbound payment actions, currently
+          parked in the daemon.
+        </li>
+        <li>
+          <code>secret.</code>: daemon-mediated named-secret reads.
         </li>
       </ul>
 

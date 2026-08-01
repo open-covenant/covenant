@@ -1,13 +1,13 @@
 //! MCP tool surface for the Metaplex profile.
 //!
-//! Two families, both named `metaplex.*` and gated by the daemon's
-//! `tool.call.metaplex.*` capabilities:
+//! Two retained families, both named `metaplex.*`:
 //!
 //! - read tools (`metaplex.das.*`) run DAS queries through a
 //!   [`crate::das::DasClient`]. No keys, no spend.
 //! - write tools (`metaplex.attest.*`, `metaplex.identity.*`) hand a
-//!   [`SignerRequest`] to a [`MetaplexSigner`] (the daemon drives the
-//!   signer sidecar). The minting key never enters this crate.
+//!   [`SignerRequest`] to a supplied [`MetaplexSigner`]. They remain available
+//!   to explicit development callers, but the production daemon filters and
+//!   refuses these names before constructing a signer.
 //!
 //! [`metaplex_specs`] lists the enabled tools for `tools/list`;
 //! [`metaplex_tool`] resolves one by name for dispatch. Both honour
@@ -23,7 +23,7 @@ use serde_json::{json, Value};
 use crate::config::MetaplexConfig;
 use crate::das::DasClient;
 use crate::request::{AttestationPayload, SignerRequest, SignerResponse};
-use crate::verify::{default_authority, verify_agent, verify_attestation};
+use crate::verify::{default_authority, inspect_agent_records, inspect_record};
 
 /// Prefix every Metaplex tool name carries.
 pub const TOOL_PREFIX: &str = "metaplex.";
@@ -33,14 +33,14 @@ const READ_SLUGS: &[&str] = &[
     "das.assets_by_owner",
     "das.search",
     "das.get_asset_proof",
-    "verify.attestation",
-    "verify.agent",
+    "observe.record",
+    "observe.agent_records",
 ];
 const WRITE_SLUGS: &[&str] = &["attest.audit_root", "identity.register"];
 
-/// The write side of the profile: hand a built request to whatever holds
-/// the minting key. The daemon's implementation drives the
-/// `covenant-metaplex-signer` subprocess; tests can stand in.
+/// The lower-level write interface: hand a built request to whatever holds the
+/// minting key. Production daemon dispatch does not supply an implementation;
+/// explicit development callers and tests may do so.
 #[async_trait]
 pub trait MetaplexSigner: Send + Sync {
     async fn sign(&self, request: SignerRequest) -> Result<SignerResponse, String>;
@@ -67,23 +67,23 @@ fn description(slug: &str) -> &'static str {
         "das.get_asset_proof" => "Fetch the merkle proof for a compressed asset (cNFT) via the Metaplex DAS API.",
         "attest.audit_root" => "Anchor a Covenant audit-root attestation into an MPL Core asset's AppData plugin (DAS-indexed).",
         "identity.register" => "Bind the daemon's agent identity to an MPL Agent Identity record on an MPL Core asset.",
-        "verify.attestation" => "Verify one MPL Core asset is a valid Covenant audit-root attestation (ERC-8004 shape, authored by the Covenant authority). DAS-only, no keys.",
-        "verify.agent" => "Check whether an agent identity is Covenant-accountable: does it carry a verified audit-root attestation? DAS-only, no Covenant infra in the path.",
+        "observe.record" => "Compare one DAS-reported MPL Core AppData envelope with configured Covenant fields. This is a provider-backed structural observation, not claim verification.",
+        "observe.agent_records" => "Find DAS-reported expected-envelope records that name an agent asset. This does not establish identity, accountability, or evidence truth.",
         _ => "Metaplex tool.",
     }
 }
 
 fn input_schema(slug: &str) -> Value {
     match slug {
-        "das.get_asset" | "das.get_asset_proof" | "verify.attestation" => json!({
+        "das.get_asset" | "das.get_asset_proof" | "observe.record" => json!({
             "type": "object",
             "properties": { "id": { "type": "string", "description": "Asset id (mint or compressed-asset id)" } },
             "required": ["id"],
             "additionalProperties": false,
         }),
-        "verify.agent" => json!({
+        "observe.agent_records" => json!({
             "type": "object",
-            "properties": { "agent": { "type": "string", "description": "Agent identity asset id to check for Covenant accountability" } },
+            "properties": { "agent": { "type": "string", "description": "Agent asset id named by provider-reported records" } },
             "required": ["agent"],
             "additionalProperties": false,
         }),
@@ -226,18 +226,19 @@ impl ReadTool {
                     .map_err(das_err)
             }
             "das.search" => self.das.search_assets(args).await.map_err(das_err),
-            "verify.attestation" => {
+            "observe.record" => {
                 let id = str_arg(&args, "id")?;
                 let asset = self.das.get_asset(id).await.map_err(das_err)?;
-                let verdict = verify_attestation(&asset, default_authority());
-                Ok(serde_json::to_value(verdict).unwrap_or(Value::Null))
+                let observation = inspect_record(&asset, default_authority());
+                Ok(serde_json::to_value(observation).unwrap_or(Value::Null))
             }
-            "verify.agent" => {
+            "observe.agent_records" => {
                 let agent = str_arg(&args, "agent")?;
-                let verdict = verify_agent(self.das.as_ref(), agent, default_authority())
-                    .await
-                    .map_err(das_err)?;
-                Ok(serde_json::to_value(verdict).unwrap_or(Value::Null))
+                let observation =
+                    inspect_agent_records(self.das.as_ref(), agent, default_authority())
+                        .await
+                        .map_err(das_err)?;
+                Ok(serde_json::to_value(observation).unwrap_or(Value::Null))
             }
             other => Err(ToolError::NotFound(format!("{TOOL_PREFIX}{other}"))),
         }
@@ -421,6 +422,7 @@ mod tests {
             das_url: "https://das.example".into(),
             rpc_url: "https://api.devnet.solana.com".into(),
             signer_binary: "/bin/covenant-metaplex-signer".into(),
+            per_action_cap_lamports: 20_000_000,
             ..Default::default()
         }
     }
@@ -466,8 +468,8 @@ mod tests {
         assert_eq!(names.len(), 6);
         assert!(names
             .iter()
-            .all(|n| n.starts_with("metaplex.das.") || n.starts_with("metaplex.verify.")));
-        assert!(names.contains(&"metaplex.verify.agent".to_string()));
+            .all(|n| n.starts_with("metaplex.das.") || n.starts_with("metaplex.observe.")));
+        assert!(names.contains(&"metaplex.observe.agent_records".to_string()));
     }
 
     #[test]

@@ -29,6 +29,7 @@
 import { SapBridge, resolveSynapseConfig, type SapKeypair } from './index.js';
 import { loadKeypairFromFile } from './keypair.js';
 import { readStats, recordCall } from './stats.js';
+import { signerRoleForCommand } from './worker-policy.js';
 
 // Commands that issue Solana RPC calls — recorded in the usage counters.
 // `status` and `stats` are pure-local and excluded.
@@ -71,6 +72,11 @@ async function loadVerifier(): Promise<SapKeypair | undefined> {
   const path = process.env.COVENANT_SAP_VERIFIER_KEYPAIR;
   if (!path) return undefined;
   return loadKeypairFromFile(path);
+}
+
+function statsEnvironment(): NodeJS.ProcessEnv {
+  const path = process.env.COVENANT_SAP_STATS_PATH;
+  return path?.trim() ? { COVENANT_SAP_STATS_PATH: path } : process.env;
 }
 
 function emit(data: unknown): void {
@@ -139,14 +145,15 @@ async function main(): Promise<void> {
     return;
   }
   if (command === 'stats') {
-    emit(readStats());
+    emit(readStats(statsEnvironment()));
     return;
   }
 
+  const signerRole = signerRoleForCommand(command);
   const bridge = new SapBridge({
     config,
-    signer: await loadSigner(),
-    verifier: await loadVerifier(),
+    signer: signerRole === 'payer' ? await loadSigner() : undefined,
+    verifier: signerRole === 'verifier' ? await loadVerifier() : undefined,
   });
 
   // Record usage only for genuine RPC commands. An unknown command falls
@@ -157,10 +164,10 @@ async function main(): Promise<void> {
   }
   try {
     const data = await dispatchNetwork(bridge, command);
-    recordCall(true);
+    recordCall(true, statsEnvironment());
     emit(data);
   } catch (err) {
-    recordCall(false);
+    recordCall(false, statsEnvironment());
     throw err;
   }
 }

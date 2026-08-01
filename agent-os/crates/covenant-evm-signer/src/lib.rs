@@ -11,15 +11,15 @@
 //! The bridge is the key, not a chain message. The secp256k1 issuer key
 //! that signed the VC's EVM proof signs the EAS attestation, and
 //! [`EasAttestationSigner::attest`] refuses to proceed unless the key it
-//! holds is the one the VC's proof recovers to. So a single `ecrecover`
-//! authenticates both artifacts, with no bridge and no gas: an off-chain
-//! attestation is a signature, not a transaction.
+//! holds is the one the VC's proof recovers to. A single `ecrecover` therefore
+//! checks that the same configured key signed both artifacts.
+//! It does not identify the publisher or validate the statement. An off-chain attestation
+//! is a signature, not a transaction.
 //!
-//! [`EasAttestationSigner::attest_reputation`] projects an audit-derived
-//! reputation score into an off-chain attestation the same way. Under Covenant's
-//! Option-A model the attester of record is the secp256k1 issuer, so reputation
-//! is projected off-chain, never written by a relayer EOA whose `msg.sender`
-//! would land as the attester. The library holds no key and never touches an RPC.
+//! [`EasAttestationSigner::attest_reputation`] is an experimental format utility
+//! for a caller-supplied score and Solana account reference. It does not verify
+//! their derivation, existence, ownership, or subject binding and is not wired
+//! to publication. The signer authenticates the exact supplied bytes.
 //!
 //! [EAS]: https://attest.org
 
@@ -186,18 +186,17 @@ impl EasAttestationSigner {
         })
     }
 
-    /// Sign an audit-derived reputation score as an EAS off-chain
-    /// attestation Base can verify. Unlike [`Self::attest`], there is no
-    /// input credential to match against: the score's authority *is* this
-    /// signer's key, so a verifier trusts the attestation by recovering the
-    /// issuer address it already knows.
+    /// Sign an experimental caller-supplied score projection as an EAS
+    /// off-chain statement. Unlike [`Self::attest`], there is no input
+    /// credential or audit proof to verify. Recovering the configured issuer
+    /// proves only that this key signed the exact supplied bytes; associating
+    /// that key with a publisher is external to this crate.
     ///
-    /// The attestation carries no EVM `recipient` — its identity binding is
-    /// the `solana_attestation_pda` in the payload, deliberately a
-    /// non-transferable Solana account rather than a sellable EVM token —
-    /// and its `expirationTime` mirrors the payload's `expiry`, so the same
-    /// bound is visible whether a verifier reads the EAS envelope or decodes
-    /// the schema data.
+    /// The attestation carries no EVM `recipient`. Its
+    /// `solana_attestation_pda` is an opaque caller-supplied reference: this
+    /// crate does not fetch it or establish that it exists, is
+    /// non-transferable, contains the score, or belongs to a subject.
+    /// `expirationTime` mirrors the payload's `expiry`.
     pub fn attest_reputation(
         &self,
         projection: &ReputationProjection,

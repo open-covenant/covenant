@@ -3,7 +3,8 @@
 Sign Covenant statements as [EAS](https://attest.org) attestations that Base's trust stack
 (Coinbase Verifications, the EAS explorer) already consumes. Covenant's canonical identity and
 audit chain live on Solana; this crate re-expresses a statement in the shape an EVM verifier
-reads, so one `ecrecover` authenticates it with no bridge.
+reads, so one `ecrecover` verifies the signed bytes against a configured key with no bridge.
+Attributing that key to Covenant or any real-world publisher requires an external trust anchor.
 
 ## Off-chain (zero gas, no RPC)
 
@@ -12,10 +13,12 @@ emits two kinds, both signed by the secp256k1 issuer key:
 
 - **Audit-root** — `attest(vc)` takes a dual-signed audit-root VC and re-signs the same statement.
   It refuses unless the key it holds is the one the VC's EVM proof recovers to, so a single
-  `ecrecover` authenticates both artifacts.
-- **Reputation** — `attest_reputation(projection)` signs an audit-derived score. The identity
-  binding is the non-transferable Solana PDA in the payload, never an EVM token, so a score
-  cannot be laundered onto a sellable NFT.
+  `ecrecover` checks that the same configured key signed both artifacts. It does not identify
+  the publisher or validate either statement.
+- **Experimental score projection** — `attest_reputation(projection)` signs caller-supplied score
+  fields and a caller-supplied Solana account reference. This format utility does not fetch that
+  account, verify an audit derivation, establish identity, or prevent reuse of the same bytes for
+  another subject. The crate is not wired to score publication.
 
 The `covenant-evm-signer` sidecar reads a statement on stdin and writes the attestation to
 stdout. The key lives in this process, not the daemon's address space.
@@ -24,8 +27,9 @@ stdout. The key lives in this process, not the daemon's address space.
 
 Some verifiers must enforce *in-contract* — read the score out of EAS storage inside a
 transaction. `stage_reputation_attestation(projection, chain, policy)` builds the EAS `attest`
-transaction that writes the identical reputation on-chain. It is the same score, expiry, and
-Solana anchor the off-chain attestation carries, so both surfaces agree.
+transaction that writes the same caller-supplied projection on-chain. The score, expiry, and
+Solana reference remain caller-supplied; neither this staging path nor the off-chain formatter
+verifies the reference or derives the score.
 
 Two boundaries are closed by construction:
 
@@ -66,7 +70,8 @@ The reputation schema must be registered in the EAS SchemaRegistry on the target
 ## Pins
 
 EAS is an OP-Stack predeploy at `0x4200000000000000000000000000000000000021`, shared across the
-Superchain (Base 8453 and Base Sepolia 84532 both host it), reporting `version()` `1.2.0`. The
+Superchain. This crate pins Base mainnet (8453) to `version()` `1.0.1` and Base Sepolia (84532) to
+`version()` `1.2.0`; using the wrong value changes the EIP-712 domain and recovered signer. The
 `attest` request ABI is pinned from
 [`ethereum-attestation-service/eas-contracts@v1.3.0`](https://github.com/ethereum-attestation-service/eas-contracts/tree/0c51c77cccd68e19ddbfeb832f153e75fac1af19)
 (`EAS_ABI_SOURCE_COMMIT`); the `attest` selector `0xf17325e7` is derived from the signature, not

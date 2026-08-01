@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import { SiteFooter } from "../SiteFooter";
 import { SiteHeader } from "../SiteHeader";
 
-const TITLE = "Governed agentic trading";
+const TITLE = "Agent trading policy demo";
 const DESCRIPTION =
-  "Brokerages are opening to AI agents with no real limits. Covenant is the policy gate in front of the order: caps enforced before anything is placed, every decision signed and anchored onchain, and a track record an agent can prove.";
+  "A dry-run policy evaluation with publisher-signed Solana records. It does not prove live brokerage enforcement, execution, or trading performance.";
 
 export const metadata: Metadata = {
   title: TITLE,
@@ -34,14 +34,14 @@ const link =
 
 const DECISIONS: {
   case_: string;
-  decision: "executed" | "blocked";
+  decision: "allowed" | "blocked";
   reason: string;
   tx: string;
   asset: string;
 }[] = [
   {
     case_: "Buy $60 of BTC, within policy",
-    decision: "executed",
+    decision: "allowed",
     reason: "inside every cap, allowed universe",
     tx: "5jQ1Pt33QpVnohcGtXUStVSuDZxSn3EnYe6CgbpdQRJTDSD4MHsuRY8gzKmK1CgXgd73EyizriRyE1E1JmTm93cR",
     asset: "J1hxSfgUTqy9x39f2CT7YwWKcGyHY1hsdBoCRDdixXaX",
@@ -76,36 +76,39 @@ export default function TradingPage() {
     <>
       <SiteHeader />
       <main className="mx-auto w-full max-w-7xl px-5 pb-24 pt-[88px] sm:px-8 sm:pt-[120px]">
-        <p className={eyebrow}>policy &middot; receipts &middot; track record</p>
+        <p className={eyebrow}>
+          dry run &middot; policy &middot; signed records
+        </p>
         <h1 className="mt-4 text-2xl font-extralight tracking-[0.18em] text-neutral-50 sm:text-3xl">
-          Governed agentic trading
+          Agent trading policy demo
         </h1>
         <p className={`${paragraph} mt-5 max-w-2xl`}>
-          Brokerages are opening to AI agents. Robinhood now lets any MCP agent read a portfolio and
-          place real orders, and its safety model is a funded sub-account, a notification feed, and a
-          disconnect button. There is no per-trade cap, no symbol allowlist, no daily-loss stop, and
-          no audit a third party can check. The only limit on a looping agent is the account balance.
+          This page documents a local dry-run policy demo. No brokerage account
+          is attached and no real order is submitted. It is not a claim about
+          any brokerage&apos;s current product or controls.
         </p>
         <p className={`${paragraph} mt-4 max-w-2xl`}>
-          Covenant is the layer that governs the order before it leaves. A policy the operator writes
-          is enforced ahead of the venue, every decision, placed or refused, becomes a signed receipt
-          anchored onchain, and the receipt history compounds into a track record an agent can prove
-          to anyone.
+          The demo evaluates four proposed orders against one local policy and
+          publishes records signed under the configured publisher key for those
+          results. The signatures prove that key signed the bytes, not who controls
+          it. They do not prove that a live
+          venue was mediated, that the input history is complete, or that the
+          decisions represent trading performance.
         </p>
 
         <section className="mt-12 grid gap-4 sm:grid-cols-3">
           {[
             {
               title: "The policy",
-              body: "Per-order and daily caps, an allow/deny universe, permitted sides and order types, rate limits, a daily-loss stop, and a human-approval threshold. Enforced before the order is sent, not observed after.",
+              body: "The demo evaluator checks per-order and daily caps, an allowlist, sides, order types, rate limits, a daily-loss stop, and an approval threshold. Another execution path can bypass it.",
             },
             {
               title: "The receipt",
-              body: "Every decision is signed ed25519 over a canonical hash and anchored onchain, refusals included. Change one field and verification fails. An activity feed inside a broker app can't do that.",
+              body: "Each sample result has a publisher-signed record. A valid signature detects changed bytes under an expected pinned key; it does not independently establish Covenant attribution, a real order, or policy enforcement.",
             },
             {
               title: "The record",
-              body: "Receipts roll up into mandate adherence and activity: how often the gate had to refuse the agent, and what it actually did. A track record that travels between venues and can't be self-asserted.",
+              body: "The four records are evidence from one configured producer. They are not an independently verified track record, portable reputation, or proof of profit and loss.",
             },
           ].map((c) => (
             <div key={c.title} className="rounded border border-neutral-800 bg-neutral-950/60 p-5">
@@ -132,12 +135,13 @@ export default function TradingPage() {
         </section>
 
         <section className="mt-12">
-          <p className={eyebrow}>live decisions, anchored on solana mainnet</p>
+          <p className={eyebrow}>example records on solana mainnet</p>
           <p className={`${paragraph} mt-3 max-w-2xl`}>
-            The same agent asked for four trades under the policy above. One executed, three were
-            refused, and all four decisions are anchored as verifiable records on Solana mainnet,
-            written by the Covenant attestation authority. The venue leg runs dry-run, no brokerage
-            account attached; the policy, the signatures, and the anchors are real.
+            The demo evaluated four proposals under the policy above: one
+            allowed and three blocked. The linked Solana transactions and
+            records show that Covenant published corresponding bytes. They do
+            not show a brokerage order, venue-side enforcement, or an
+            independent review of the policy result.
           </p>
           <div className="mt-4 space-y-3">
             {DECISIONS.map((d) => (
@@ -146,7 +150,9 @@ export default function TradingPage() {
                   <p className="text-[13px] text-neutral-100">{d.case_}</p>
                   <p
                     className={`font-mono text-[11px] uppercase tracking-[0.22em] ${
-                      d.decision === "executed" ? "text-emerald-400" : "text-red-400"
+                      d.decision === "allowed"
+                        ? "text-emerald-400"
+                        : "text-red-400"
                     }`}
                   >
                     {d.decision}
@@ -170,7 +176,8 @@ export default function TradingPage() {
         <section className="mt-12">
           <p className={eyebrow}>run it &middot; no keys, no account</p>
           <p className={`${paragraph} mt-3 max-w-2xl`}>
-            The whole gate runs locally in dry-run with zero credentials, from the open-source crate:
+            The historical experimental branch runs this dry-run with no
+            brokerage credentials:
           </p>
           <code className={`${cmdBlock} mt-3`}>
             {`git clone https://github.com/open-covenant/covenant -b feat/robinhood
@@ -178,18 +185,18 @@ cd covenant/agent-os
 cargo run -p covenant-robinhood --example governed_demo`}
           </code>
           <p className={`${paragraph} mt-2 text-neutral-500`}>
-            Live execution attaches your own API key on your own account, held in a signing sidecar
-            the daemon never reads. Covenant is infrastructure you run, not a broker, adviser, or
-            custodian, and it never holds funds.
+            The demo is not a production trading boundary. Live use would still
+            require an isolated credential holder, exact final-order validation,
+            one-use approval consumption, venue reconciliation, and tests
+            showing that no alternate path bypasses policy.
           </p>
         </section>
 
         <section className="mt-12">
-          <p className={eyebrow}>us beta testers wanted</p>
+          <p className={eyebrow}>integration review</p>
           <p className={`${paragraph} mt-3 max-w-2xl`}>
-            We&apos;re extending the same gate to Robinhood&apos;s hosted agentic MCP, and that beta is
-            US-only. If you&apos;re trading with an agent on it, we&apos;re looking for five testers to
-            run the proxy and help pin down the connect flow. Write{" "}
+            To review the policy contract or help build the missing signer and
+            venue boundary, write{" "}
             <a className={link} href="mailto:contact@opencovenant.org">
               contact@opencovenant.org
             </a>{" "}

@@ -218,14 +218,7 @@ async fn main() -> Result<()> {
         None => None,
     };
     #[cfg(feature = "circuit")]
-    if let Some(circuit_tools) = circuit_from_env() {
-        if circuit_tools.is_empty() {
-            tracing::warn!("circuit enabled but its allowlist registered no tools");
-        } else {
-            info!(count = circuit_tools.len(), "circuit provider enabled");
-            tools_vec.extend(circuit_tools);
-        }
-    }
+    let _ = circuit_from_env();
     if let Some((client, cfg)) = krexa_from_env() {
         let added = covenant_krexa::krexa_tools(Arc::new(client), &cfg);
         if added.is_empty() {
@@ -359,9 +352,8 @@ async fn main() -> Result<()> {
     );
     info!(path = %budget_checkpoints_path.display(), "budget checkpoint log open");
 
-    // SAP bridge — opt-in, off by default. Building the bridge is
-    // cheap (no network) and we log the resolved status either way so
-    // operators can see at a glance whether the on-chain path is live.
+    // SAP configuration is opt-in and cheap to resolve. Direct writes and
+    // automatic funded anchors remain parked regardless of this setting.
     let sap_config = covenantd::sap_bridge_config_from_env();
     let sap_bridge =
         covenant_sap_bridge::SapBridge::new(sap_config.clone()).context("build SAP bridge")?;
@@ -370,7 +362,8 @@ async fn main() -> Result<()> {
         cluster = sap_config.cluster.as_str(),
         program_id = %sap_config.program_id,
         rpc_url = %redact_url(&sap_config.rpc_url),
-        "sap bridge ready"
+        writes_parked = true,
+        "sap bridge configuration loaded"
     );
 
     let server = covenantd::Server::new(
@@ -395,16 +388,7 @@ async fn main() -> Result<()> {
     .with_subprocess_tracker(subprocess_tracker)
     .with_sap_bridge(sap_bridge);
 
-    let server = match x402_dispatch_config_from_env() {
-        Some(cfg) => {
-            info!(
-                signer = %cfg.signer_binary.display(),
-                "x402 outbound dispatch enabled"
-            );
-            server.with_x402_dispatch(cfg)
-        }
-        None => server,
-    };
+    let _ = x402_dispatch_config_from_env();
 
     let server = match spend_authz_config_from_env() {
         Some(cfg) => {
@@ -416,71 +400,29 @@ async fn main() -> Result<()> {
 
     let server = match escrow_config_from_env() {
         Some(cfg) => {
-            info!("escrow surface enabled");
+            info!("escrow completion-statement surface enabled");
             server.with_escrow(cfg)
         }
         None => server,
     };
 
-    let server = match hyre_config_from_env() {
-        Some(cfg) => {
-            // Prefer the live manifest so a restart picks up Hyre's
-            // current endpoints; fall back to the vendored copy offline.
-            let client = reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(10))
-                .build()
-                .unwrap_or_else(|_| reqwest::Client::new());
-            let catalog = match covenant_hyre::HyreCatalog::refresh(&client, &cfg).await {
-                Ok(c) => {
-                    info!(source = "manifest", base_url = %cfg.base_url, "hyre catalog loaded");
-                    Some(c)
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "hyre manifest refresh failed; using vendored catalog");
-                    covenant_hyre::HyreCatalog::from_vendored(&cfg).ok()
-                }
-            };
-            match catalog {
-                Some(catalog) => {
-                    info!(
-                        endpoints = catalog.endpoints().len(),
-                        "hyre provider enabled"
-                    );
-                    server.with_hyre(covenantd::hyre::HyreState::new(catalog, cfg))
-                }
-                None => {
-                    tracing::warn!("hyre catalog unavailable; provider disabled");
-                    server
-                }
-            }
-        }
-        None => server,
-    };
+    let _ = hyre_config_from_env();
 
     let server = {
         let cfg = covenant_metaplex::MetaplexConfig::from_env();
         if !cfg.enabled {
             server
-        } else if cfg.reads_enabled() || cfg.writes_enabled() {
+        } else if cfg.reads_enabled() {
             info!(
                 cluster = %cfg.cluster,
-                reads = cfg.reads_enabled(),
-                writes = cfg.writes_enabled(),
-                "metaplex profile enabled"
+                "metaplex read-only observation profile enabled; funded writes are parked"
             );
-            if cfg.writes_enabled() && std::env::var("COVENANT_METAPLEX_KEYPAIR").is_err() {
-                tracing::warn!(
-                    "metaplex writes are configured but COVENANT_METAPLEX_KEYPAIR is unset; \
-                     write tools will fail until the minting keypair path is provided"
-                );
-            }
             server.with_metaplex(covenantd::metaplex::MetaplexState::new(cfg))
         } else {
             tracing::warn!(
-                "COVENANT_METAPLEX_ENABLED is set but neither reads \
-                 (COVENANT_METAPLEX_DAS_URL) nor writes \
-                 (COVENANT_METAPLEX_SIGNER_BIN + COVENANT_METAPLEX_RPC_URL) are \
-                 configured; metaplex profile disabled"
+                "COVENANT_METAPLEX_ENABLED is set without \
+                 COVENANT_METAPLEX_DAS_URL; the read-only profile is disabled and \
+                 funded write configuration is ignored while writes are parked"
             );
             server
         }
@@ -491,15 +433,8 @@ async fn main() -> Result<()> {
         if cfg.reads_enabled() {
             info!(
                 resolver = %cfg.resolver_url,
-                writes = cfg.writes_enabled(),
-                "sns profile enabled (resolve/reverse/record; subdomain + record writes when a signer is set)"
+                "sns read-only profile enabled; funded writes are parked"
             );
-            if cfg.writes_enabled() && std::env::var("COVENANT_SNS_KEYPAIR").is_err() {
-                tracing::warn!(
-                    "sns writes are configured but COVENANT_SNS_KEYPAIR is unset; \
-                     write tools will fail until the parent-domain keypair path is provided"
-                );
-            }
             server.with_sns(covenantd::sns::SnsState::new(cfg))
         } else {
             server
@@ -544,42 +479,26 @@ async fn main() -> Result<()> {
     let projection_tick_handle =
         covenantd::spawn_projection_tick_driver(server.clone(), projection_tick);
 
-    // Autonomous SAP audit-root anchoring (opt-in, default off). When on,
-    // the daemon anchors its audit-integrity root to the SAP ledger on a
-    // timer, but only when the root has changed — so it never re-pays for
-    // an unchanged root. No-op when the SAP bridge is disabled.
+    // Timer-driven funded anchors remain parked even when their legacy flags
+    // are present. Config is still parsed so operators get an explicit warning
+    // instead of a silently ignored security boundary.
     let sap_attest = covenantd::sap_attest_config_from_env();
-    let sap_attest_handle = if sap_attest.enabled {
-        info!(
+    if sap_attest.enabled {
+        tracing::warn!(
             interval_secs = sap_attest.interval.as_secs(),
-            "sap auto-attest driver enabled (anchors changed audit roots to SAP)"
+            reason = covenantd::AUTOMATIC_FUNDED_ANCHOR_PARKED,
+            "COVENANT_SAP_AUTO_ATTEST was requested but no driver was started"
         );
-        Some(covenantd::spawn_sap_attest_driver(
-            server.clone(),
-            sap_attest,
-        ))
-    } else {
-        None
-    };
+    }
 
-    // Autonomous Metaplex audit-root anchoring (opt-in, default off). The
-    // second anchor: the same changed audit root is also written as an MPL
-    // Core AppData attestation, DAS-indexed and discoverable ecosystem-wide.
-    // Independent of the SAP driver — separate flag, interval, and last-root
-    // tracking. No-op when the Metaplex write surface is not configured.
     let metaplex_attest = covenantd::metaplex_attest_config_from_env();
-    let metaplex_attest_handle = if metaplex_attest.enabled {
-        info!(
+    if metaplex_attest.enabled {
+        tracing::warn!(
             interval_secs = metaplex_attest.interval.as_secs(),
-            "metaplex auto-attest driver enabled (anchors changed audit roots to MPL Core AppData)"
+            reason = covenantd::AUTOMATIC_FUNDED_ANCHOR_PARKED,
+            "COVENANT_METAPLEX_AUTO_ATTEST was requested but no driver was started"
         );
-        Some(covenantd::spawn_metaplex_attest_driver(
-            server.clone(),
-            metaplex_attest,
-        ))
-    } else {
-        None
-    };
+    }
 
     // Fold live Hermes runtime traces into the audit chain as they stream in
     // (only when COVENANT_LIVE_TRACE=1; otherwise traces fold at run end).
@@ -677,12 +596,6 @@ async fn main() -> Result<()> {
         handle.abort();
     }
     projection_tick_handle.abort();
-    if let Some(handle) = sap_attest_handle {
-        handle.abort();
-    }
-    if let Some(handle) = metaplex_attest_handle {
-        handle.abort();
-    }
     if let Some(h) = runtime_event_drainer_handle {
         h.abort();
     }
@@ -816,47 +729,20 @@ async fn bootstrap_operator_token(
     Ok(())
 }
 
-/// Build the outbound x402 dispatch config from env, or return None
-/// when the operator hasn't opted in. Returning None keeps the daemon
-/// running fully offline-from-payments — every `Request::PayX402`
-/// will surface "not configured" until the operator sets these vars
-/// and restarts.
-///
-/// Required when opted in:
-/// - `COVENANT_X402_ENABLED` truthy (`1`, `true`, `yes`)
-/// - `COVENANT_X402_SIGNER_BINARY` — path to a built
-///   `covenant-x402-signer` binary
-///
-/// Forwarded to the sidecar via its env:
-/// - `COVENANT_X402_FUNDING_KEYPAIR` — funding keypair JSON path
-/// - `COVENANT_X402_RPC_URL` — Solana RPC URL
+/// Keep the legacy daemon-owned x402 signer path parked. The old environment
+/// opt-in is recognized only so an operator gets a precise warning; it cannot
+/// construct a funding-key config.
 fn x402_dispatch_config_from_env() -> Option<covenantd::x402::X402Config> {
     let enabled = std::env::var("COVENANT_X402_ENABLED")
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false);
-    if !enabled {
-        return None;
+    if enabled {
+        tracing::warn!(
+            reason = covenantd::x402::LEGACY_OUTBOUND_PARKED,
+            "ignoring COVENANT_X402_ENABLED"
+        );
     }
-    let signer_binary = match std::env::var("COVENANT_X402_SIGNER_BINARY") {
-        Ok(path) => std::path::PathBuf::from(path),
-        Err(_) => {
-            tracing::warn!(
-                "COVENANT_X402_ENABLED is set but COVENANT_X402_SIGNER_BINARY is not; outbound x402 dispatch will remain disabled"
-            );
-            return None;
-        }
-    };
-    let mut signer_env = Vec::new();
-    for key in ["COVENANT_X402_FUNDING_KEYPAIR", "COVENANT_X402_RPC_URL"] {
-        if let Ok(v) = std::env::var(key) {
-            signer_env.push((key.to_string(), v));
-        }
-    }
-    Some(covenantd::x402::X402Config {
-        enabled: true,
-        signer_binary,
-        signer_env,
-    })
+    None
 }
 
 /// Enable the spend-authorization surface when the operator opts in.
@@ -876,10 +762,10 @@ fn spend_authz_config_from_env() -> Option<covenantd::spend_authz::SpendAuthzCon
     Some(covenantd::spend_authz::SpendAuthzConfig { enabled: true })
 }
 
-/// Resolve the escrow surface config from env. When enabled the daemon will
-/// answer `POST /escrow/prove` (issue a signed completion proof an external
-/// escrow releases against) and `POST /escrow/release` (record the payout back
-/// into the audit chain). Covenant holds no funds. Off by default.
+/// Resolve the escrow statement surface config from env. When enabled the
+/// daemon answers `POST /escrow/prove` by signing a local dispatch observation
+/// plus caller-supplied escrow context. The legacy `POST /escrow/release`
+/// compatibility route remains parked and writes no state. Off by default.
 ///
 /// - `COVENANT_ESCROW_ENABLED` truthy (`1`, `true`, `yes`)
 fn escrow_config_from_env() -> Option<covenantd::escrow::EscrowConfig> {
@@ -892,21 +778,15 @@ fn escrow_config_from_env() -> Option<covenantd::escrow::EscrowConfig> {
     Some(covenantd::escrow::EscrowConfig { enabled: true })
 }
 
-/// Build the AceData provider (client + config) from env, or None when
-/// the operator hasn't opted in. Two billing modes: an API key (credit
-/// billing) or, with no key, keyless x402 pay-per-call over the funding
-/// signer. The API key takes precedence when both are set.
+/// Build the AceData provider (client + config) from env, or None when the
+/// operator hasn't opted in. API-key billing remains available; the legacy
+/// keyless x402 fallback is parked with the daemon signer path.
 ///
 /// - `COVENANT_ACEDATA_ENABLED` truthy (`1`, `true`, `yes`)
 /// - `COVENANT_ACEDATA_API_KEY` — Bearer billing token (credit mode)
 /// - `COVENANT_ACEDATA_BASE_URL` — override the API host (optional)
 /// - `COVENANT_ACEDATA_ALLOW` — comma-separated tool-name allowlist (optional)
 /// - `COVENANT_ACEDATA_IMAGE_MODEL` / `COVENANT_ACEDATA_MUSIC_MODEL` — default models (optional)
-/// - `COVENANT_ACEDATA_X402_MAX_ATOMIC` — per-call USDC cap for x402 mode (optional; default 1 USDC)
-///
-/// Keyless x402 mode additionally needs the x402 signer sidecar:
-/// `COVENANT_X402_ENABLED` + `COVENANT_X402_SIGNER_BINARY` +
-/// `COVENANT_X402_FUNDING_KEYPAIR` (+ `COVENANT_X402_RPC_URL`).
 fn acedata_from_env() -> Option<(
     covenant_acedata::AceDataClient,
     covenant_acedata::AceDataConfig,
@@ -944,159 +824,49 @@ fn acedata_from_env() -> Option<(
             cfg.music_model = m;
         }
     }
-    // Two billing modes. An API key takes precedence (credit billing).
-    // With no key, fall back to keyless x402 pay-per-call when the x402
-    // signer sidecar is configured (COVENANT_X402_*): each call pays USDC
-    // on Solana through the funding key, no AceData credential at all.
     match std::env::var("COVENANT_ACEDATA_API_KEY") {
         Ok(k) if !k.trim().is_empty() => {
             let client = covenant_acedata::AceDataClient::new(cfg.base_url.clone(), k);
             Some((client, cfg))
         }
-        _ => match x402_dispatch_config_from_env() {
-            Some(x402) => {
-                let mut signer = covenantd::x402::SubprocessSigner::new(&x402.signer_binary);
-                for (key, value) in &x402.signer_env {
-                    signer = signer.env(key, value);
-                }
-                let max_atomic = std::env::var("COVENANT_ACEDATA_X402_MAX_ATOMIC")
-                    .ok()
-                    .and_then(|v| v.trim().parse().ok())
-                    .unwrap_or(0);
-                let payer = covenant_acedata::X402Payer::new(std::sync::Arc::new(signer))
-                    .with_max_atomic(max_atomic);
-                info!(
-                    base_url = %cfg.base_url,
-                    signer = %x402.signer_binary.display(),
-                    "acedata enabled in keyless x402 pay-per-call mode (no API key)"
-                );
-                let client =
-                    covenant_acedata::AceDataClient::with_x402(cfg.base_url.clone(), payer);
-                Some((client, cfg))
-            }
-            None => {
-                tracing::warn!(
-                    "COVENANT_ACEDATA_ENABLED set but neither COVENANT_ACEDATA_API_KEY nor the \
-                     x402 signer (COVENANT_X402_ENABLED + COVENANT_X402_SIGNER_BINARY) is \
-                     configured; acedata disabled"
-                );
-                None
-            }
-        },
+        _ => {
+            tracing::warn!(
+                reason = covenantd::x402::LEGACY_OUTBOUND_PARKED,
+                "COVENANT_ACEDATA_ENABLED is set without COVENANT_ACEDATA_API_KEY; \
+                 keyless x402 billing is unavailable"
+            );
+            None
+        }
     }
 }
 
-/// Build the Circuit tool set from the environment: an in-process funding payer that settles
-/// paid Circuit calls in $CVNT (or CIRC) on Solana, bound by a spend capability (per-call
-/// cap, treasury pin, host allowlist, cumulative budget). The daemon holds the funding key
-/// only when built with the `circuit` feature and `COVENANT_CIRCUIT_ENABLED` is set; the
-/// solana dep tree is pulled by that feature alone. Returns `None` when disabled or
-/// misconfigured. Registered `circuit.*` tools route through [`Server::circuit_tool_call`],
-/// which records the settlement receipt and audit row.
-///
-/// Env:
-///   COVENANT_CIRCUIT_ENABLED    (required) `1`/`true`/`yes` to turn it on
-///   COVENANT_CIRCUIT_KEYPAIR    (required) funder keypair path, holding the pay token + SOL
-///   COVENANT_CIRCUIT_PAY_TOKEN  (optional) mint to settle in; unset = CIRC (the 402 default)
-///   COVENANT_CIRCUIT_RPC        (optional) Solana RPC URL, default mainnet-beta
-///   COVENANT_CIRCUIT_TREASURY   (optional) pin the 402 recipient to this pubkey
-///   COVENANT_CIRCUIT_PER_CALL   (optional) per-call spend cap, raw base units
-///   COVENANT_CIRCUIT_BUDGET     (optional) cumulative budget, raw base units
-///   COVENANT_CIRCUIT_HOSTS      (optional) comma allowlist, default the two Circuit hosts
-///   COVENANT_CIRCUIT_ALLOW      (optional) comma tool allowlist; unset = all
-///                               (note: the inference gateway quotes CIRC only, so restrict
-///                               to the data tools when paying in $CVNT)
+/// Keep the legacy daemon-owned Circuit payer parked. The environment opt-in
+/// is recognized only so an operator gets a precise warning. Keypair and RPC
+/// values are passed to a pure parked-state decision and are never opened or
+/// used to construct a signer, HTTP client, tool, ledger, or accounting path.
 #[cfg(feature = "circuit")]
 fn circuit_from_env() -> Option<Vec<Arc<dyn covenant_mcp::Tool>>> {
-    use covenant_circuit::CircPayer as _;
-
     let enabled = std::env::var("COVENANT_CIRCUIT_ENABLED")
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false);
-    if !enabled {
-        return None;
-    }
+    let keypair = std::env::var("COVENANT_CIRCUIT_KEYPAIR").ok();
+    let rpc = std::env::var("COVENANT_CIRCUIT_RPC").ok();
+    circuit_from_legacy_values(enabled, keypair.as_deref(), rpc.as_deref())
+}
 
-    let keypair = match std::env::var("COVENANT_CIRCUIT_KEYPAIR") {
-        Ok(k) if !k.trim().is_empty() => k,
-        _ => {
-            tracing::warn!(
-                "COVENANT_CIRCUIT_ENABLED set but COVENANT_CIRCUIT_KEYPAIR is missing; \
-                 circuit disabled"
-            );
-            return None;
-        }
-    };
-    let rpc = std::env::var("COVENANT_CIRCUIT_RPC")
-        .ok()
-        .filter(|s| !s.trim().is_empty());
-    let payer = match covenant_circuit::SolanaCircPayer::from_keypair_file(&keypair, rpc.as_deref())
-    {
-        Ok(p) => Arc::new(p),
-        Err(e) => {
-            tracing::warn!(error = %e, "circuit funder keypair load failed; circuit disabled");
-            return None;
-        }
-    };
-    let funder = payer.address().unwrap_or("?").to_string();
-
-    let mut cap = covenant_circuit::CircuitCapability::new();
-    match std::env::var("COVENANT_CIRCUIT_HOSTS") {
-        Ok(list) if !list.trim().is_empty() => {
-            for h in list.split(',').map(str::trim).filter(|s| !s.is_empty()) {
-                cap = cap.allow_host(h);
-            }
-        }
-        _ => {
-            cap = cap
-                .allow_host("inference.circuitllm.xyz")
-                .allow_host("api.circuitllm.xyz");
-        }
+#[cfg(feature = "circuit")]
+fn circuit_from_legacy_values(
+    enabled: bool,
+    _keypair_path: Option<&str>,
+    _rpc_url: Option<&str>,
+) -> Option<Vec<Arc<dyn covenant_mcp::Tool>>> {
+    if enabled {
+        tracing::warn!(
+            reason = covenantd::CIRCUIT_DAEMON_OUTBOUND_PARKED,
+            "ignoring COVENANT_CIRCUIT_ENABLED"
+        );
     }
-    if let Ok(t) = std::env::var("COVENANT_CIRCUIT_TREASURY") {
-        if !t.trim().is_empty() {
-            cap = cap.allow_recipient(t.trim());
-        }
-    }
-    if let Ok(v) = std::env::var("COVENANT_CIRCUIT_PER_CALL") {
-        if let Ok(n) = v.trim().parse::<u64>() {
-            cap = cap.per_call(n);
-        }
-    }
-    if let Ok(v) = std::env::var("COVENANT_CIRCUIT_BUDGET") {
-        if let Ok(n) = v.trim().parse::<u64>() {
-            cap = cap.budget(n);
-        }
-    }
-
-    let ledger = Arc::new(covenant_circuit::SpendLedger::new());
-    let http = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
-        .build()
-        .expect("http client");
-    let mut engine = covenant_circuit::X402::new(http, payer, cap, ledger);
-    if let Ok(mint) = std::env::var("COVENANT_CIRCUIT_PAY_TOKEN") {
-        if !mint.trim().is_empty() {
-            engine = engine.with_pay_mint(mint.trim().to_string());
-        }
-    }
-    let inference = Arc::new(covenant_circuit::Inference::from_x402(engine.clone()));
-    let data = Arc::new(covenant_circuit::DataClient::from_x402(engine));
-
-    let allow = std::env::var("COVENANT_CIRCUIT_ALLOW").ok().map(|list| {
-        list.split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect::<Vec<_>>()
-    });
-    let cfg = covenant_circuit::CircuitConfig {
-        enabled: true,
-        allow,
-        ..Default::default()
-    };
-    let tools = covenant_circuit::circuit_tools(inference, data, &cfg);
-    info!(count = tools.len(), funder = %funder, "circuit provider ready");
-    Some(tools)
+    None
 }
 
 /// Build the Krexa read-only credit/risk oracle from env, or None when the
@@ -1151,60 +921,19 @@ fn krexa_from_env() -> Option<(covenant_krexa::KrexaClient, covenant_krexa::Krex
     Some((client, cfg))
 }
 
-/// Build the Hyre provider config from env, or None when the operator
-/// hasn't opted in. The catalog itself loads from the vendored manifest;
-/// these vars only tune the rail and the spend policy.
-///
-/// - `COVENANT_HYRE_ENABLED` truthy (`1`, `true`, `yes`)
-/// - `COVENANT_HYRE_BASE_URL` — override the API host (optional)
-/// - `COVENANT_HYRE_NETWORK` / `COVENANT_HYRE_ASSET` — override the
-///   settlement rail if Hyre's challenge ever diverges (optional)
-/// - `COVENANT_HYRE_PER_CALL_CAP` — atomic-USDC per-call ceiling (optional)
-/// - `COVENANT_HYRE_ALLOW` — comma-separated endpoint slug allowlist (optional)
-/// - `COVENANT_HYRE_MARKUP_BPS` — resale markup in basis points (optional)
+/// Keep daemon-owned Hyre payment tools unadvertised while the shared x402
+/// signer path is parked. The lower-level Hyre crate remains testable.
 fn hyre_config_from_env() -> Option<covenant_hyre::HyreConfig> {
     let enabled = std::env::var("COVENANT_HYRE_ENABLED")
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false);
-    if !enabled {
-        return None;
-    }
-    let mut cfg = covenant_hyre::HyreConfig {
-        enabled: true,
-        ..Default::default()
-    };
-    if let Ok(url) = std::env::var("COVENANT_HYRE_BASE_URL") {
-        cfg.base_url = url;
-    }
-    if let Ok(network) = std::env::var("COVENANT_HYRE_NETWORK") {
-        cfg.network = network;
-    }
-    if let Ok(asset) = std::env::var("COVENANT_HYRE_ASSET") {
-        cfg.asset = asset;
-    }
-    if let Ok(cap) = std::env::var("COVENANT_HYRE_PER_CALL_CAP") {
-        match cap.trim().parse() {
-            Ok(n) => cfg.per_call_cap = n,
-            Err(_) => {
-                tracing::warn!(value = %cap, "ignoring non-numeric COVENANT_HYRE_PER_CALL_CAP")
-            }
-        }
-    }
-    if let Ok(list) = std::env::var("COVENANT_HYRE_ALLOW") {
-        cfg.allow = Some(
-            list.split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect(),
+    if enabled {
+        tracing::warn!(
+            reason = covenantd::x402::LEGACY_OUTBOUND_PARKED,
+            "ignoring COVENANT_HYRE_ENABLED"
         );
     }
-    if let Ok(bps) = std::env::var("COVENANT_HYRE_MARKUP_BPS") {
-        match bps.trim().parse() {
-            Ok(n) => cfg.markup_bps = n,
-            Err(_) => tracing::warn!(value = %bps, "ignoring non-numeric COVENANT_HYRE_MARKUP_BPS"),
-        }
-    }
-    Some(cfg)
+    None
 }
 
 /// Mask secret query params (api keys, tokens) in a URL before logging it, so a
@@ -1263,6 +992,22 @@ fn default_ignorefile() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "circuit")]
+    #[test]
+    fn legacy_circuit_values_cannot_construct_daemon_tools() {
+        let tools = circuit_from_legacy_values(
+            true,
+            Some("/tmp/legacy-circuit-funder.json"),
+            Some("http://127.0.0.1:1"),
+        );
+        assert!(
+            tools.is_none(),
+            "legacy enable, keypair, and RPC values must not make a Circuit signer, client, or tool reachable"
+        );
+
+        assert!(circuit_from_legacy_values(false, None, None).is_none());
+    }
 
     #[test]
     fn redact_url_masks_every_secret_query_param_occurrence_and_hyphen_form() {

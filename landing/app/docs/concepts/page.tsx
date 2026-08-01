@@ -91,11 +91,13 @@ export default function ConceptsPage() {
 
       <h2>Capability</h2>
       <p>
-        A <strong>capability</strong> is a typed permission slip. It names
+        A <strong>capability</strong> is a typed dispatch record. It names
         an action (a dotted string from a reserved namespace such as{" "}
         <code>tool.web_search</code>, <code>memory.write</code>,{" "}
         <code>tool.call.&lt;name&gt;</code>) and optionally a scope
-        constraint expressed as JSON.
+        constraint expressed as JSON. The current daemon lets an authenticated
+        peer request one for itself without separate operator approval, so the
+        record is not proof of operator authorization or W009 enforcement.
       </p>
 
       <p>
@@ -162,13 +164,13 @@ export default function ConceptsPage() {
       <h2>Identity</h2>
       <p>
         Every Covenant install owns a single ed25519 keypair persisted at{" "}
-        <code>$COVENANT_HOME/identity/local.key</code> (raw 32-byte seed,
-        mode <code>0600</code>). The same key:
+        <code>$COVENANT_HOME/identity/local.key</code> (raw 32-byte seed, mode{" "}
+        <code>0600</code>). This key:
       </p>
 
       <ul>
         <li>signs capability grants,</li>
-        <li>signs Solana settlement transactions,</li>
+        <li>signs local registration and protocol statements,</li>
         <li>
           fronts the daemon&apos;s issuer field on audit events and memory
           records.
@@ -176,23 +178,21 @@ export default function ConceptsPage() {
       </ul>
 
       <p>
-        There is no secondary key system. Refer to{" "}
-        <Link href="/identity">Identity and keys</Link> and{" "}
+        Payment funding keys are separate and belong to the Solana or EVM signer
+        paths. Refer to <Link href="/identity">Identity and keys</Link> and{" "}
         <Link href="/security">Security model</Link> for key-management
         practices.
       </p>
 
       <h2>Audit</h2>
       <p>
-        Every state-changing operation emits an <code>AuditEvent</code>:
-        intent dispatch, capability check, capability grant, capability
-        revoke rejection, ignored intent. Successful revocations are
-        tombstone writes to <code>capabilities/revoked.jsonl</code>, not
-        an audit row. Events are appended to{" "}
+        Recognized audited paths emit <code>AuditEvent</code> records. Examples
+        include intent dispatch, capability checks and grants, successful or
+        rejected capability revocations, and ignored intents. Events are appended to{" "}
         <code>$COVENANT_HOME/audit/events.jsonl</code> under a deterministic
-        schema. The audit log is the system of record;{" "}
+        schema. It is the local system of record for recorded audit events;{" "}
         <code>covenant verify</code> cross-checks it against the other
-        state files for drift.
+        state files for drift. Coverage is operation-specific, not universal.
       </p>
 
       <p>
@@ -227,9 +227,10 @@ export default function ConceptsPage() {
 
       <h2>Settlement</h2>
       <p>
-        Covenant accounts for resource usage as it happens. Every
-        memory write, every tool call, and (eventually) every external
-        compute or LLM token spent produces a{" "}
+        Implemented receipt-producing paths account for selected resource
+        usage. Current examples include intent-path memory writes and the
+        AceData tool wrapper. Generic tool calls emit completion audit events
+        but do not automatically produce a{" "}
         <strong>settlement receipt</strong>: a UUID, a payer, a resource
         kind, a credits-consumed integer, a timestamp, a memory record id
         when the resource is memory, and an optional on-chain signature.
@@ -246,13 +247,13 @@ export default function ConceptsPage() {
 
       <h2>End-to-end intent flow</h2>
       <p>
-        A successful intent dispatch exercises every primitive. The daemon
-        receives the intent, validates the issuer&apos;s capabilities,
-        selects an agent through the router, executes the agent under a
-        wall-clock budget with hard-preempt on projected overshoot,
-        captures the result, persists a memory record, emits a settlement
-        receipt, and writes the corresponding audit events. Operational
-        state is fully reconstructible from the audit log.
+        A successful intent dispatch links several primitives. Depending on the
+        configured path, the daemon receives the intent, checks capabilities,
+        selects and executes an agent, captures the result, persists memory,
+        and records the implemented receipts and audit events. The audit log
+        supports correlation and drift checks; operational state also lives in
+        memory, receipt, and capability stores and is not fully reconstructible
+        from the audit log alone.
       </p>
     </>
   );

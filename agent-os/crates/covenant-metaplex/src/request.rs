@@ -134,9 +134,8 @@ pub fn validate_registration_uri(s: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// What the attestation is about: the agent's on-chain identity in the
-/// MPL Agent (014) registry. Mirrors ERC-8004's `agentId` subject so a
-/// reader resolves the attestation back to the agent it covers.
+/// Application subject fields naming an MPL Agent (014) asset and record.
+/// These caller/configuration-supplied identifiers do not prove identity.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AttestationSubject {
@@ -164,12 +163,10 @@ pub struct CovenantRelease {
     pub release_scope: String,
 }
 
-/// JSON payload written into an MPL Core AppData plugin as a Covenant
-/// attestation, shaped as an ERC-8004 validation response: a `validator`
-/// publishing a `responseHash` commitment about a `subject` agent. Stored
-/// as a JSON-schema AppData plugin, so DAS indexes it as JSON and any
-/// wallet/explorer can read it without Covenant infrastructure.
-/// Identifiers and the 32-byte root only, never audit-log contents.
+/// Covenant-specific JSON payload written into an MPL Core AppData plugin.
+/// Its application `type` URI borrows ERC-8004 terminology, but this payload
+/// is not an ERC-8004 registry record and does not create generic-wallet
+/// interoperability. A DAS provider may index the bytes as JSON.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AttestationPayload {
@@ -178,16 +175,14 @@ pub struct AttestationPayload {
     pub r#type: String,
     /// Always [`ATTESTATION_SCHEMA`].
     pub schema: String,
-    /// The agent this attests to.
+    /// The configured subject named by the statement.
     pub subject: AttestationSubject,
-    /// The attesting authority. Stamped by the signer sidecar with its own
-    /// data-authority pubkey, so it always reflects the key that signed
-    /// rather than anything the daemon claimed; empty until then.
+    /// A mirror of the AppData data-authority key selected by the signer
+    /// sidecar; empty before the sidecar stamps the payload.
     pub validator: String,
     /// Always [`ATTESTATION_HASH_ALG`].
     pub hash_alg: String,
-    /// 32-byte audit/merkle root as lowercase hex (64 chars): the ERC-8004
-    /// `responseHash` commitment.
+    /// 32-byte audit/merkle commitment as lowercase hex (64 chars).
     pub response_hash: String,
     /// ERC-8004 categorization tag; mirrors [`CovenantRelease::release_scope`].
     pub tag: String,

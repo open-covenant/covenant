@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import { SiteFooter } from "../SiteFooter";
 import { SiteHeader } from "../SiteHeader";
 
-const TITLE = "Covenant Guard: the trust layer your agent plugs into";
+const TITLE = "Covenant Evidence: inspect public agent records";
 const DESCRIPTION =
-  "A zero-install MCP for Claude Code and Codex. Before your agent trusts or pays another agent, it can check an on-chain track record, confirm a real identity, and verify a signed claim. No install, no keys.";
+  "A read-only MCP that returns public Solana registration, transfer-observation, and signature data. It does not establish identity, delivery, quality, or whether a payment is safe.";
 
 export const metadata: Metadata = {
   title: TITLE,
@@ -32,19 +32,19 @@ const cmdBlock =
 
 const CHECKS: { title: string; tool: string; body: string }[] = [
   {
-    title: "Reputation",
-    tool: "covenant_reputation",
-    body: "Any Solana wallet's track record, scored 0 to 1000 from public on-chain USDC settlements: jobs settled, distinct counterparties, volume. Self-payments are excluded, so a wallet can't inflate its own number.",
+    title: "Settlement activity",
+    tool: "covenant_reputation (legacy name)",
+    body: "Returns bounded public USDC transfer observations and coverage metadata. The legacy score is a heuristic, not proof of jobs, delivery, quality, or reputation.",
   },
   {
-    title: "Identity",
-    tool: "covenant_agent_passport",
-    body: "Whether an agent is who it claims: registered in the on-chain Agent Identity registry, in the Covenant collection, and carrying a Covenant attestation, with the author of that attestation named.",
+    title: "Registration",
+    tool: "covenant_agent_passport (legacy name)",
+    body: "Checks whether the supplied asset has a MIP-014 registration, belongs to the Covenant collection, and carries a record attributed to Covenant by the configured data source. Registration and record authorship do not prove who operates the agent or whether a claim is true.",
   },
   {
-    title: "Verify",
+    title: "Signature",
     tool: "covenant_verify",
-    body: "Any Covenant-signed receipt or claim, checked with ed25519 over a domain-separated hash of the canonical payload. Change one field and the check fails. No trust in this server required.",
+    body: "Checks whether a payload matches a signature under an expected key pinned outside the response. A passing signature proves possession of that key and detects changed bytes; it does not establish Covenant attribution or validate the claim.",
   },
 ];
 
@@ -53,15 +53,17 @@ export default function GuardPage() {
     <>
       <SiteHeader />
       <main className="mx-auto w-full max-w-7xl px-5 pb-24 pt-[88px] sm:px-8 sm:pt-[120px]">
-        <p className={eyebrow}>reputation &middot; identity &middot; proof</p>
+        <p className={eyebrow}>
+          registration &middot; activity &middot; signatures
+        </p>
         <h1 className="mt-4 text-2xl font-extralight tracking-[0.18em] text-neutral-50 sm:text-3xl">
-          Covenant Guard
+          Covenant Evidence
         </h1>
         <p className={`${paragraph} mt-5 max-w-2xl`}>
-          Your agent is starting to work with other agents: paying them, delegating to them, trusting
-          what they send back. Covenant Guard is the trust layer it plugs into. Before it acts, it can
-          look up an on-chain track record, confirm a real identity, and verify a signed claim, so a
-          counterparty with no history or a forged receipt gets caught before a coin moves.
+          Covenant Evidence is a read-only evidence reader. It returns public
+          registration records, observed transfer activity, and signature
+          results for the caller&apos;s own policy to evaluate. It does not
+          approve or block payments.
         </p>
 
         <section className="mt-10">
@@ -92,29 +94,31 @@ export default function GuardPage() {
         <section className="mt-12">
           <p className={eyebrow}>what your agent sees</p>
           <code className={`${cmdBlock} mt-3`}>
-            {`> covenant_reputation  7Xk9…3fQ2\n  score 12 / 1000 · no track record · 0 settled jobs\n\n> covenant_agent_passport  4mNp…8vLd\n  not registered · no Covenant attestation\n\n> covenant_verify  "verified vendor" receipt\n  FAIL · signature does not match the contents\n\n  verdict · untrusted · payment held`}
+            {`> covenant_reputation  7Xk9…3fQ2\n  observed transfers 0 · coverage bounded · legacy score 12 / 1000\n\n> covenant_agent_passport  4mNp…8vLd\n  no MIP-014 registration observed · no matching Covenant record\n\n> covenant_verify  signed statement\n  FAIL · signature does not match the contents`}
           </code>
           <p className={`${paragraph} mt-3 text-neutral-500`}>
-            No history, no identity, and a forged receipt. Your agent holds the payment and flags it,
-            instead of trusting a stranger.
+            These are evidence observations, not a trust verdict. The calling
+            agent or wallet decides what to do with them.
           </p>
         </section>
 
         <section className="mt-12">
-          <p className={eyebrow}>not our word</p>
+          <p className={eyebrow}>limits</p>
           <p className={`${paragraph} mt-3 max-w-2xl`}>
-            Every fact comes from the chain: reputation from public Solana settlements, identity from the
-            on-chain registry, and each Covenant claim signed ed25519. Anyone can check it, and no one can
-            forge it, including us. The tools return the raw on-chain data alongside the summary, so your
-            agent acts on the source, not on a badge.
+            Chain and indexer data can be stale, incomplete, or misleading.
+            Registration is not real-world identity; a bounded transfer
+            observation is not proof of delivery; and a signature proves
+            possession of a key, not the signer&rsquo;s identity or the truth of a
+            claim. The tools return the underlying observations so callers can
+            apply their own policy.
           </p>
         </section>
 
         <section className="mt-12">
           <p className={eyebrow}>source &middot; registry</p>
           <p className={`${paragraph} mt-3`}>
-            Apache-2.0, open source, so the thing you trust is auditable. The server is listed in the
-            official{" "}
+            Apache-2.0 and open source, so the implementation is auditable. The
+            server is listed in the official{" "}
             <a
               className="underline decoration-neutral-700 underline-offset-4 transition-colors hover:text-neutral-50 hover:decoration-neutral-300"
               href="https://registry.modelcontextprotocol.io/v0.1/servers?search=org.opencovenant/guard"

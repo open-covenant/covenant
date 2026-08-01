@@ -97,7 +97,8 @@ for the `memory_agent` and `a2a_worker` examples too.
 
 ## 5. Verify what happened
 
-Every call left a tamper-evident trail. Inspect and verify it:
+The Covenant paths exercised above should have recorded the capability grant
+and tool call. Inspect the local audit trail and verify its chain consistency:
 
 ```bash
 covenant audit recent -n 10
@@ -105,7 +106,8 @@ covenant audit verify
 ```
 
 You should see the capability grant and the tool call recorded, and the chain
-verify clean.
+verify clean. A clean result means the supplied local files are mutually
+consistent; it does not prove that every host action was mediated or recorded.
 
 ## Where to go next
 

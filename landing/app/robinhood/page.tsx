@@ -4,7 +4,7 @@ import { SiteHeader } from "../SiteHeader";
 
 const TITLE = "Bounded agent spend on Robinhood Chain: Covenant";
 const DESCRIPTION =
-  "Hand a funded agent a wallet on Robinhood Chain and walk away. Its spend cap, provider allowlist, and pay-only-for-good-output rule are enforced onchain by the contract that holds the money, proven live on mainnet in real USDG.";
+  "Funds deposited in a Robinhood Chain SpendGrantEscrow grant are bounded onchain by a total cap, per-call ceiling, provider allowlist, and expiry. Optional quality-gated payout follows a configured attestor’s signed verdict.";
 
 export const metadata: Metadata = {
   title: TITLE,
@@ -37,11 +37,11 @@ const USDG = "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168";
 const GUARANTEES: { title: string; body: string }[] = [
   {
     title: "Bounded spend",
-    body: "The agent spends against an onchain grant: a total budget, a per-call ceiling, an allowlist of who it may pay, an expiry. A charge past any bound reverts at the contract. The limit is not a policy the agent is asked to respect, it is a rule the money enforces, which is what lets you let go of the wheel.",
+    body: "Funds deposited in a grant are subject to a total budget, per-call ceiling, provider allowlist, and expiry. A charge past those bounds reverts. These controls cover funds held by this escrow contract; they do not constrain assets the agent controls elsewhere.",
   },
   {
-    title: "Pay only for good output",
-    body: "Each call's funds sit in escrow and release to the provider only when the result clears the spec. Fail the bar and the funds refund to the grant, in full. You pay for output that passed and nothing else, decided before payout, on every call.",
+    title: "Attestor-gated payout",
+    body: "When a grant enables its quality gate, held funds release on a configured attestor's signed pass verdict. A signed fail permits an immediate return to the grant; after the call deadline, anyone may trigger a return. The contract verifies the signature and bound call fields; the attestor remains trusted for the semantic judgment.",
   },
 ];
 
@@ -55,17 +55,21 @@ const PROOFS: { tag: string; result: string; attempt: string; detail: string; tx
     tx: "0x862036d191728a0497c061bcc8ad8fd3d5634c75fddc3a9008f0f8bcd3b1a31a",
   },
   {
-    tag: "Good output",
+    tag: "Attestor-signed pass",
     result: "Provider paid",
-    attempt: "A call returned a result that cleared the spec.",
-    detail: "The escrow released 0.45 USDG to the provider, 0.50 less the 10 percent protocol fee.",
+    attempt:
+      "releaseCallAttested accepted a configured-attestor signature over the call, result hash, spec ID, pass verdict, and deadline.",
+    detail:
+      "The escrow transferred 0.45 USDG to the provider and 0.05 USDG to the treasury.",
     tx: "0x2759a7759db0c789c7fa9cb659d7c1595a0173010e5003a020bf44fd03266dd1",
   },
   {
-    tag: "Junk output",
-    result: "Refunded in full",
-    attempt: "A call returned a result that failed the spec.",
-    detail: "The held funds refunded to the grant. The provider was paid nothing.",
+    tag: "Attestor-signed fail",
+    result: "Hold returned to grant",
+    attempt:
+      "refundCallAttested accepted a configured-attestor signature over the call, result hash, spec ID, fail verdict, and deadline.",
+    detail:
+      "The held amount returned to the grant balance. The transaction shows no provider token transfer.",
     tx: "0xedc35d380d6550800f2f3924892271a1e940f1e9ecc44d5e295b3cd83473e74d",
   },
 ];
@@ -82,11 +86,10 @@ export default function RobinhoodPage() {
           Bounded agent spend
         </h1>
         <p className={`${paragraph} mt-5 max-w-2xl`}>
-          Hand a funded agent a wallet on Robinhood Chain and walk away. Its spending limit is
-          enforced by the contract that holds the money: a total cap, a per-call ceiling, an
-          allowlist of who it may pay, an expiry. A rogue or buggy agent cannot exceed the cap, pay a
-          stranger, or overpay for junk output. The bound holds onchain, before a dollar moves, not
-          reconciled after.
+          Deposit USDG into a Robinhood Chain grant with a total cap, per-call
+          ceiling, provider allowlist, and expiry. The contract enforces those
+          limits before its escrowed funds move. This boundary applies to assets
+          in the grant, not to an agent&apos;s other wallets or contracts.
         </p>
 
         <section className="mt-12 grid gap-4 sm:grid-cols-2">
@@ -101,8 +104,10 @@ export default function RobinhoodPage() {
         <section className="mt-14">
           <p className={eyebrow}>proven onchain &middot; robinhood chain mainnet</p>
           <p className={`${paragraph} mt-3 max-w-2xl text-neutral-400`}>
-            Three transactions on Robinhood Chain mainnet, settled in real USDG. Each one is the
-            enforcement doing its job, not a description of it.
+            Three historical Robinhood Chain mainnet transactions demonstrate
+            specific contract state transitions: an over-limit revert, a release
+            on a valid signed pass, and a refund on a valid signed fail. They do
+            not establish the semantic quality of either output.
           </p>
           <ul className="mt-6 space-y-3">
             {PROOFS.map((p) => (
@@ -150,24 +155,30 @@ export default function RobinhoodPage() {
             </div>
           </dl>
           <p className={`${paragraph} mt-3 text-neutral-500`}>
-            Deployed, source-verified, and unpaused on mainnet.
+            The explorer publishes verified source. Pause status, attestor,
+            gateway, and admin roles are live contract state and should be
+            checked before relying on the escrow.
           </p>
         </section>
 
         <section className="mt-14">
-          <p className={eyebrow}>enforced, not observed</p>
+          <p className={eyebrow}>exact trust boundary</p>
           <p className={`${paragraph} mt-3 max-w-2xl`}>
-            The guarantee is a property of the contract that custodies the funds, not a receipt
-            written after the fact. There is no step where you trust Covenant, the agent, or the
-            provider to have behaved: the limit holds because the money cannot move any other way.
-            That is the difference between spending you can audit and spending you can walk away from.
+            The contract enforces the grant&apos;s numeric, provider, expiry,
+            and state-transition rules for the funds it holds. A quality-gated
+            release additionally requires the configured attestor&apos;s signature.
+            That signature proves the configured key signed the verdict; it does
+            not establish the verdict&apos;s truth or prove that the off-chain
+            evaluation was correct. Grants without the
+            quality gate use the separate spender-or-gateway release path.
           </p>
           <p className={`${paragraph} mt-6`}>
-            Pairs with{" "}
+            See{" "}
             <a className={link} href="/guard">
-              Covenant Guard
-            </a>
-            , the trust layer your agent checks before it pays another agent at all.
+              Covenant Evidence
+            </a>{" "}
+            for read-only public records. It does not approve trades or
+            payments.
           </p>
         </section>
       </main>

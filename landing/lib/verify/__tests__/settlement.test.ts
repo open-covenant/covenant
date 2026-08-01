@@ -6,11 +6,8 @@ import { checkAnchor3Solana } from "../settlement";
 
 // checkAnchor3Solana reads the settlement-batch manifest
 // (landing/public/witness/settlement/<sha>.json) for the public verify surface
-// and is green only when a confirmed batch carries a PDA, a tx, and a merkle_root
-// that equals the run's audit_root_hex read from attestations/<sha>.json. These
-// tests pair manifest and attestation fixtures so the on-chain-root-vs-run-root
-// cross-check and the malformed-manifest guards can never silently weaken into a
-// false green.
+// and checks only repository-file consistency. It never upgrades a mutable
+// manifest to a chain-verified green result.
 describe("checkAnchor3Solana", () => {
   let root: string;
   const ROOT = "9f8e7d6c5b4a39281706f5e4d3c2b1a0";
@@ -33,8 +30,10 @@ describe("checkAnchor3Solana", () => {
   it("stays yellow when no settlement manifest exists for the commit", () => {
     const w = checkAnchor3Solana(root, "absent");
     expect(w.state).toBe("yellow");
-    expect(w.detail).toContain("No settlement batch anchored");
-    expect(w.drillHref).toContain("cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y");
+    expect(w.detail).toContain("No settlement manifest is published");
+    expect(w.drillHref).toContain(
+      "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y",
+    );
   });
 
   it("turns red when the manifest carries no batch PDA", () => {
@@ -68,12 +67,16 @@ describe("checkAnchor3Solana", () => {
     expect(w.detail).toContain("does not match the run's audit root");
   });
 
-  it("turns green when the committed root matches the run's audit root", () => {
+  it("stays yellow when the reported root matches the run file", () => {
     writeManifest("ok", full());
     writeAtt("ok", ROOT);
     const w = checkAnchor3Solana(root, "ok");
-    expect(w).toMatchObject({ key: "solana_anchor", label: "Solana settlement anchor", state: "green" });
-    expect(w.detail).toContain("commits audit root");
+    expect(w).toMatchObject({
+      key: "solana_anchor",
+      label: "Published settlement report",
+      state: "yellow",
+    });
+    expect(w.detail).toContain("has not fetched or decoded");
     expect(w.drillHref).toBe("https://solscan.io/account/PDA1?cluster=devnet");
   });
 

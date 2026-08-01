@@ -5,7 +5,7 @@ import { SiteHeader } from "../SiteHeader";
 
 const TITLE = "Build log";
 const DESCRIPTION =
-  "Covenant is built in the open by the autonomous infrastructure it provides. Every commit runs under a signed grant and leaves a receipt. This is the live build log.";
+  "Covenant is built in the open by an autonomous loop. This page streams its public commit log; provenance coverage is scoped to the implemented build workflow.";
 
 export const metadata: Metadata = {
   title: TITLE,
@@ -28,9 +28,10 @@ export default function LivePage() {
           Covenant builds itself
         </h1>
         <p className={`${paragraph} mt-5 max-w-2xl`}>
-          Not a metaphor. The same infrastructure Covenant provides, agents running under signed grants
-          with every action leaving a receipt, is what builds Covenant. This is the live build log:
-          the work the autonomous loop is doing right now, streaming as it happens.
+          This is the public commit stream produced by Covenant&apos;s
+          autonomous build workflow. Implemented privileged steps can be
+          capability-gated and recorded, but the stream is not proof that every
+          runtime action was mediated or logged.
         </p>
 
         <div className="mt-8 h-[68vh] min-h-[420px] overflow-hidden rounded-md border border-neutral-800/70 bg-[#050505]">
@@ -38,9 +39,9 @@ export default function LivePage() {
         </div>
 
         <p className={`${paragraph} mt-4 text-neutral-500`}>
-          Every change lands the same way a user&apos;s agent would act through Covenant: scoped by a
-          capability, gated before it runs, and recorded in a hash-chained audit. The system holds
-          itself to the rules it sells.
+          The repository, validation output, and published provenance show what
+          the implemented workflow recorded. They do not establish complete
+          host-level mediation.
         </p>
       </main>
       <SiteFooter className="pb-8" />

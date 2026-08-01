@@ -1,11 +1,11 @@
 //! Daemon glue for the Metaplex profile.
 //!
-//! `covenant-metaplex` owns the DAS read tools and the attestation
-//! request shapes but holds no minting key and no `solana-sdk`
-//! dependency. Reads go straight out over HTTP (DAS). Writes are
-//! delegated to the standalone `covenant-metaplex-signer` sidecar over a
-//! subprocess — the same isolation the x402 funding-key signer uses. The
-//! minting key lives only in the sidecar's address space.
+//! `covenant-metaplex` owns the DAS read tools and retained write-request
+//! shapes but holds no minting key and no `solana-sdk` dependency. The
+//! production daemon exposes only read observations and refuses funded write
+//! names before signer, RPC, or key access. The subprocess signer below is a
+//! compatibility and development primitive; process separation alone is not a
+//! security isolation boundary.
 
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -34,8 +34,8 @@ impl MetaplexState {
         Self { config, das }
     }
 
-    /// A subprocess-backed signer, or `None` when the write surface is
-    /// not configured (no signer binary / RPC).
+    /// Construct the retained development signer when explicitly configured.
+    /// Production daemon dispatch never calls this method.
     pub fn signer(&self) -> Option<Arc<dyn MetaplexSigner>> {
         if !self.config.writes_enabled() {
             return None;
@@ -47,11 +47,10 @@ impl MetaplexState {
     }
 }
 
-/// A [`MetaplexSigner`] that delegates to the `covenant-metaplex-signer`
-/// sidecar. The daemon spawns it per write, pipes the [`SignerRequest`]
-/// as JSON to stdin, and reads a [`SignerResponse`] from stdout. The
-/// minting key never enters the daemon: the sidecar reads it from its own
-/// environment (`COVENANT_METAPLEX_KEYPAIR`).
+/// A retained development [`MetaplexSigner`] that delegates to the
+/// `covenant-metaplex-signer` sidecar. It pipes a [`SignerRequest`] as JSON to
+/// stdin and reads a [`SignerResponse`] from stdout. Production daemon tool
+/// dispatch does not construct this signer.
 pub struct SubprocessMetaplexSigner {
     program: PathBuf,
     env: Vec<(String, String)>,
@@ -75,12 +74,10 @@ impl SubprocessMetaplexSigner {
                 config.collection.clone(),
             ));
         }
-        if config.per_action_cap_lamports > 0 {
-            env.push((
-                "COVENANT_METAPLEX_PER_ACTION_CAP_LAMPORTS".to_string(),
-                config.per_action_cap_lamports.to_string(),
-            ));
-        }
+        env.push((
+            "COVENANT_METAPLEX_PER_ACTION_CAP_LAMPORTS".to_string(),
+            config.per_action_cap_lamports.to_string(),
+        ));
         // The minting keypair path is read straight from the daemon's
         // environment and forwarded to the sidecar; it is never stored in
         // config or logged.
@@ -139,16 +136,14 @@ impl MetaplexSigner for SubprocessMetaplexSigner {
         let response = serde_json::from_str::<SignerResponse>(stdout.trim())
             .map_err(|e| format!("decode signer response: {e}"))?;
 
-        // The capability check already chained an audit row for this tool
-        // call; this surfaces the on-chain result (asset + signature) for
-        // operators. A dedicated AuditKind row that links the two is a
-        // tracked follow-up (it touches the core audit enum).
+        // This is the sidecar's reported result; this adapter does not query
+        // RPC independently. Production daemon dispatch does not reach it.
         tracing::info!(
             action = action_label(&request),
             asset = %response.asset,
             signature = %response.signature,
             cluster = %response.cluster,
-            "metaplex on-chain write confirmed"
+            "development metaplex signer reported write result"
         );
         Ok(response)
     }
@@ -176,6 +171,22 @@ mod tests {
             state.signer().is_none(),
             "reads-only config exposes no signer"
         );
+    }
+
+    #[test]
+    fn subprocess_signer_forwards_zero_cap() {
+        let config = MetaplexConfig {
+            enabled: true,
+            rpc_url: "https://rpc.example".into(),
+            signer_binary: "/bin/covenant-metaplex-signer".into(),
+            per_action_cap_lamports: 0,
+            ..Default::default()
+        };
+        let signer = SubprocessMetaplexSigner::from_config(&config);
+        assert!(signer.env.iter().any(|(key, value)| {
+            key == "COVENANT_METAPLEX_PER_ACTION_CAP_LAMPORTS" && value == "0"
+        }));
+        assert!(!config.writes_enabled());
     }
 
     #[tokio::test]

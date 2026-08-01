@@ -3,16 +3,17 @@
 //! x402 is an open protocol for paid HTTP: a server responds with
 //! `402 Payment Required` and a JSON body describing accepted
 //! payment options; the client signs one option and retries with an
-//! `x-payment` header. This crate is the local-side adapter the
-//! Covenant daemon uses to make those calls on behalf of an agent.
+//! `x-payment` header. This crate is a lower-level client retained for explicit
+//! development use. The production daemon does not invoke it while outbound
+//! payment is parked.
 //!
 //! The crate stays narrow on purpose. It does not hold funding keys,
-//! does not enforce per-day or total budgets, and does not record
-//! receipts — those concerns live in the daemon (covenant-budget,
-//! covenant-settlement, covenant-audit). What this crate does:
+//! does not enforce per-day or total budgets, reserve funds, consume one-use
+//! authorization, reconcile settlement, or record receipts. Callers own those
+//! responsibilities. What this crate does:
 //!
 //! - Parse a 402 challenge into typed [`PaymentRequirements`].
-//! - Match requirements against a [`Capability`] the daemon supplies.
+//! - Match requirements against a caller-supplied [`Capability`].
 //! - Hand the chosen requirement to a [`Signer`] for the actual
 //!   payment construction.
 //! - Retry once with the resulting `x-payment` header and surface
@@ -21,8 +22,9 @@
 //! Two real signers ship in-crate: [`EvmSigner`] (Base, EIP-3009
 //! `TransferWithAuthorization` over EIP-712 — gasless, no RPC) is always
 //! built; `SolanaSigner` (SPL transfer) is gated behind the `solana`
-//! feature to keep the Solana dep tree opt-in. Both hold the funding key
-//! the daemon custodies; [`MockSigner`] covers the client loop in tests.
+//! feature to keep the Solana dep tree opt-in. These lower-level signers hold
+//! their caller-supplied funding keys; the production daemon constructs neither.
+//! [`MockSigner`] covers the client loop in tests.
 
 #![deny(unsafe_code)]
 
@@ -31,16 +33,22 @@ pub mod evm;
 pub mod flow;
 mod http;
 pub mod orbit;
+pub mod preflight;
 pub mod signer;
 pub mod types;
 
 #[cfg(feature = "solana")]
 pub mod solana;
 
-pub use client::{http_client, Client};
+pub use client::{http_client, Client, PaidRequestOutcome};
 pub use evm::{EvmSigner, USDC_BASE_MAINNET, USDC_BASE_SEPOLIA};
 pub use flow::PaidRequest;
 pub use orbit::{Catalog, OrbitClient, Pagination, RegistryEntry, RegistryResponse};
+pub use preflight::{
+    evaluate_preflight, payment_intent_hash, payment_policy_hash, verify_preflight_receipt,
+    AdvisoryEnforcementV1, PaymentIntentV1, PaymentPolicyV1, PreflightError, PreflightOutcome,
+    PreflightReasonCode, PreflightReceiptV1,
+};
 pub use signer::{MockSigner, Signer};
 pub use types::{Capability, PaymentExtra, PaymentRequirements};
 

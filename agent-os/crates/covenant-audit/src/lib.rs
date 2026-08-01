@@ -606,37 +606,52 @@ pub enum AuditKind {
         peer_pubkey_b58: String,
         token_prefix: String,
     },
-    /// An agent paid an external x402 endpoint. Recorded after the
-    /// 402-then-pay loop returns success, alongside the paired budget
-    /// debit and settlement receipt. `amount` is the atomic on-chain
-    /// amount the provider charged (authoritative, from the live 402
-    /// challenge); `network` and `asset` identify the settlement rail;
-    /// `receipt_id` joins this row to the settlement receipt and the
-    /// budget debit. `endpoint` is the called URL for operator triage.
+    /// Legacy-named local accounting row recorded when an endpoint first
+    /// returned a matching 402, the client sent a payment header, and the
+    /// retry returned success. It does not query or prove chain settlement or
+    /// finality. `amount`, `network`, and `asset` are copied from the selected
+    /// live challenge requirement rather than the caller's cap; `pay_to`,
+    /// `scheme`, and `fee_payer` retain the remaining selected requirement
+    /// fields when available. They are optional so pre-migration JSONL rows
+    /// still deserialize. `receipt_id` joins the local receipt and budget
+    /// debit. `endpoint` is the called URL for operator triage.
     ExternalPaymentSettled {
         provider: String,
         endpoint: String,
         network: String,
         asset: String,
         amount: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pay_to: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scheme: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fee_payer: Option<String>,
         receipt_id: Uuid,
     },
     /// The daemon decided a pre-spend authorization request from an
     /// external agent wallet (e.g. OrbWallet asking before it signs).
-    /// Covenant is the spending policy here: the row records the verdict
-    /// and, on a deny, why — so the audit chain holds a verifiable record
-    /// of every spend that was permitted *and* every one that was
-    /// refused, independent of whether the wallet later settles. `amount`
-    /// is the atomic on-chain amount the wallet asked to spend; `credits`
-    /// is the USD-pegged budget the spend would consume; `network` and
+    /// Covenant applies its advisory spending policy here: the row records
+    /// each authorization request that reached this endpoint and, on a deny,
+    /// why. It is not a complete record of wallet activity and does not prove
+    /// whether the wallet later signs or settles. `amount` is the caller's
+    /// proposed atomic amount; `credits` is the caller-reported budget the
+    /// spend would consume; `network` and
     /// `asset` identify the settlement rail; `destination` is the pay-to
-    /// address when the wallet supplied one. `approved` is the verdict and
-    /// `reason` is `Some` only when `approved` is `false`. `decision_id`
-    /// is the daemon-minted id returned to the wallet so a later
-    /// settlement receipt can join back to the authorization that allowed
-    /// it. No funds move on this row; it is a decision, not a settlement.
+    /// address when the wallet supplied one. `payer` binds new decisions to
+    /// the authenticated wallet; `None` is accepted only when replaying legacy
+    /// rows and cannot be settled. `approved` is the verdict and `reason` is
+    /// `Some` only when `approved` is `false`. `decision_id` is the
+    /// daemon-minted id returned to the wallet so a later settlement receipt
+    /// can join back to the authorization that allowed it. No funds move on
+    /// this row; it is a decision, not a settlement.
     SpendAuthorizationDecided {
         provider: String,
+        /// Payer evaluated by the authorization. Optional only so audit logs
+        /// written before payer binding was introduced still deserialize;
+        /// settlement refuses those legacy unbound decisions.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        payer: Option<AgentId>,
         network: String,
         asset: String,
         amount: String,
@@ -646,15 +661,12 @@ pub enum AuditKind {
         reason: Option<String>,
         decision_id: Uuid,
     },
-    /// An external agent wallet reported that a previously authorized spend
-    /// settled on-chain, and the daemon recorded the matching receipt and
-    /// budget debit. `decision_id` joins this row to the
-    /// [`AuditKind::SpendAuthorizationDecided`] approval that allowed the
-    /// spend; `receipt_id` joins it to the settlement receipt and the budget
-    /// debit. `amount` is the atomic amount actually settled; `tx_sig` is
-    /// the on-chain signature or hash when the wallet supplied one. This row
-    /// records a payment the wallet made with its own keys; Covenant moved
-    /// no funds.
+    /// An external agent wallet reported a settlement, and the daemon matched
+    /// its payer and spend facts to a stored approved authorization before
+    /// recording the report with a budget debit. `decision_id` and `receipt_id`
+    /// are local correlation identifiers. The caller supplies the optional
+    /// transaction signature; this event does not query the chain or prove that
+    /// the reported payment settled.
     SpendSettled {
         decision_id: Uuid,
         receipt_id: Uuid,
@@ -665,17 +677,12 @@ pub enum AuditKind {
         credits: u64,
         tx_sig: Option<String>,
     },
-    /// The daemon issued a signed completion proof for a job an external
-    /// escrow is funding (e.g. Orbserv's OrbMarket). This is the release
-    /// signal: the escrow verifies `signature_b58` over the proof against the
-    /// daemon pubkey and releases to `worker_address`. The row is self-
-    /// verifiable — it carries the signature and the `audit_root_hex` the
-    /// proof bound — so the chain holds an attributable record of every
-    /// release signal Covenant produced. `result_hash_hex` and
-    /// `validation_passed` are derived from the worker's run in this chain,
-    /// not from the caller; `escrow_id`/`amount`/`asset`/`network` are the
-    /// escrow context the caller supplied. Covenant custodies no funds; this
-    /// proves, it does not pay.
+    /// The daemon issued a signed completion statement for a locally recorded
+    /// job. The signature attributes the bytes to the daemon key. The result
+    /// hash and local success flag come from the job record, while the escrow,
+    /// parties, amount, asset, network, and provider are caller-supplied and are
+    /// not precommitted by that job. This event is not sufficient authorization
+    /// to release funds and does not prove delivery, quality, or chain payment.
     EscrowCompletionProven {
         proof_id: Uuid,
         escrow_id: String,
@@ -691,14 +698,10 @@ pub enum AuditKind {
         audit_root_hex: String,
         signature_b58: String,
     },
-    /// An external escrow reported it released funds against a completion
-    /// proof and executed the transfer. `decision_id` joins this row to the
-    /// [`AuditKind::EscrowCompletionProven`] proof that authorized the release
-    /// (its `proof_id`); `receipt_id` joins it to the settlement receipt.
-    /// `amount` is the atomic amount released; `tx_sig` is the on-chain
-    /// signature when the escrow supplied one. Covenant moved no funds and
-    /// debited no budget; this records the payout the escrow made with its own
-    /// custody.
+    /// Historical external-escrow release report. The caller supplied the
+    /// transfer fields and optional transaction signature; the daemon did not
+    /// verify chain execution or bind the transfer to an authorization. The
+    /// current release-reporting route is parked and does not emit this event.
     EscrowReleased {
         decision_id: Uuid,
         receipt_id: Uuid,
@@ -852,10 +855,9 @@ pub trait AuditLog: Send + Sync {
             _ => None,
         }))
     }
-    /// Receipt id of an already-recorded `EscrowReleased` row for `decision_id`,
-    /// if one exists. Same idempotency role as [`Self::settled_receipt_for`]
-    /// for the escrow path: an escrow that retries a release report joins the
-    /// original receipt instead of writing a duplicate row.
+    /// Receipt id from a historical `EscrowReleased` row for `decision_id`, if
+    /// one exists. Retained for reading legacy logs; the current parked release
+    /// route does not write these rows.
     async fn released_receipt_for(&self, decision_id: Uuid) -> Result<Option<Uuid>, AuditError> {
         let events = self.recent(usize::MAX).await?;
         Ok(events.iter().rev().find_map(|e| match &e.kind {

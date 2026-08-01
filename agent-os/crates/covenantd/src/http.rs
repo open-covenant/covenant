@@ -1415,7 +1415,8 @@ struct CallToolBody {
 /// HTTP body shape for `POST /x402/pay`. Mirrors the [`Request::PayX402`]
 /// fields except for the `kind` discriminator (the HTTP layer fills
 /// that in). `per_call_cap` is a decimal string so atomic u128
-/// amounts above JSON's 53-bit integer ceiling survive the wire.
+/// amounts above JSON's 53-bit integer ceiling survive the wire. The daemon
+/// currently accepts the shape only to return the parked-path error.
 #[derive(Deserialize)]
 struct PayX402Body {
     provider: String,
@@ -1494,7 +1495,9 @@ async fn authorize_spend_route(
 
 /// HTTP body shape for `POST /spend/settle`. Mirrors the
 /// [`Request::SettleSpend`] fields. `decision_id` is the id from the
-/// matching `/spend/authorize` response; `amount` is a decimal string.
+/// matching `/spend/authorize` response; settlement requires the stored
+/// approval to match the authenticated payer and spend fields. `amount` is a
+/// wallet-reported decimal string, not a value derived from the transaction.
 #[derive(Deserialize)]
 struct SettleSpendBody {
     decision_id: uuid::Uuid,
@@ -1570,9 +1573,8 @@ async fn prove_completion_route(
     ))
 }
 
-/// HTTP body shape for `POST /escrow/release`. Mirrors the
-/// [`Request::RecordEscrowRelease`] fields. `decision_id` is the id from the
-/// matching `/escrow/prove` response; `amount` is a decimal string.
+/// Compatibility body for the parked `POST /escrow/release` route. The daemon
+/// rejects the request without writing state.
 #[derive(Deserialize)]
 struct RecordEscrowReleaseBody {
     escrow_id: String,

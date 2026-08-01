@@ -1,14 +1,46 @@
-// Pure, side-effect-free extraction of verify-run.mjs's audit chain-root
-// fold and W011 refutation scan. Importing this module does no I/O and no
-// keygen, so it is unit-testable offline.
+// Pure, side-effect-free extraction of verify-run.mjs's audit chain-root fold
+// and event-lineage heuristic. Importing this module does no I/O or keygen, so
+// it is unit-testable offline.
 import { createHash } from "node:crypto";
 
 // All-zero genesis seed, identical to the daemon's covenant-audit
 // ZERO_CHAIN_HASH (agent-os/crates/covenant-audit/src/lib.rs:637).
 export const ZERO_CHAIN_HASH = "0".repeat(64);
-export const WITNESS_DOMAIN = "covenant.witness.v1";
+export const WITNESS_SCHEMA = "covenant.witness-verdict.v2";
+export const WITNESS_DOMAIN = "covenant.witness-verdict.v2";
 
 const sha256hex = (buf) => createHash("sha256").update(buf).digest("hex");
+
+function canonical(value) {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  return `{${Object.entries(value)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`)
+    .join(",")}}`;
+}
+
+export function buildVerifierStatement(
+  root,
+  eventCount,
+  verdict,
+  refutations,
+  verifierPubkey,
+) {
+  return {
+    schema: WITNESS_SCHEMA,
+    domain: WITNESS_DOMAIN,
+    audit_root_hex: root,
+    event_count: eventCount,
+    verdict,
+    refutations,
+    verifier_pubkey: verifierPubkey,
+  };
+}
+
+export function verifierMessage(statement) {
+  return Buffer.from(`${WITNESS_DOMAIN}\n${canonical(statement)}`, "utf8");
+}
 
 // Recompute the tamper-evident chain root from raw event lines, exactly as
 // the daemon's covenant-audit chain folds them (chain_hash lib.rs:649,
@@ -24,11 +56,11 @@ export function recomputeRoot(lines) {
   return prev;
 }
 
-// W011 refutation scan: a signed skill action that causally follows an
-// untrusted on-chain read, with no skill_context_injected reset for the
-// same issuer in between, is refutable. Returns the verdict plus the list
-// of refuting signed events pointing back to the untrusted read that set
-// them up.
+// Event-lineage heuristic over the supplied log: a signed skill action ordered
+// after an untrusted-input event, with no skill_context_injected reset for the
+// same issuer in between, is marked refuted. This does not inspect event
+// semantics, prove causality or completeness, mediate a runtime, or enforce
+// W009/W011. It returns the configured verdict and the matching event ids.
 export function scanRefutations(events) {
   const pending = new Map();
   const refutations = [];

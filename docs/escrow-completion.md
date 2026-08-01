@@ -1,50 +1,50 @@
-# Escrow completion proofs
+# Escrow completion statements
 
-Covenant as the trust layer for an external marketplace escrow (e.g. Orbserv's
-OrbMarket holding funds in OrbWallet on Base). A hirer locks funds against a
-job, the worker runs under Covenant, and the escrow asks the daemon to prove
-completion. **Covenant does not take the caller's word that the work is done**:
-it looks the job up in its own audit chain, derives the result hash and
-validation outcome from the worker's actual run, and signs a proof carrying
-those derived facts plus the escrow context. The escrow verifies the signature
-against the daemon's published pubkey and releases funds to the worker when
-`validation_passed`. Covenant holds no funds and moves none — it produces the
-release signal and records it.
+> **Experimental and not a release authorization.** This surface is opt-in and
+> off by default (`COVENANT_ESCROW_ENABLED`). It signs two different classes of
+> data: `result_hash_hex` and whether a local `intent_dispatched` row has status
+> `ok` are derived from the daemon's audit log; `escrow_id`, hirer, worker,
+> amount, asset, network, and provider are supplied by the caller. The daemon
+> does not bind those caller-supplied fields to a prior escrow lock, inspect the
+> work, validate output quality, or verify a payment onchain.
 
-Because the facts are derived from Covenant's own records, it is safe for the
-hirer wallet itself to call prove: it cannot forge a result the chain does not
-show. After releasing, the escrow reports the payout back so it joins the proof
-in the audit chain, idempotent on `decision_id`.
-
-Opt-in and off by default (`COVENANT_ESCROW_ENABLED`).
+The returned blob can attribute this mixed statement to a pinned daemon key.
+It must not be used by itself to release funds. A consuming escrow would need a
+precommitted record of the exact job, payee, amount, asset, network, and escrow
+identifier; it must compare every field with that record and apply its own
+acceptance policy. The current Covenant endpoint does not create or verify that
+binding.
 
 ## Enabling
 
-The operator opts in at boot and grants the calling identity the capabilities:
+The operator opts in at boot and grants the capabilities only to a trusted
+escrow integration. Do not grant `escrow.completion.prove` to a hirer or worker
+and do not enable this surface for automatic payouts:
 
 ```
 export COVENANT_ESCROW_ENABLED=1
 covenant capabilities grant escrow.completion.prove
-covenant capabilities grant escrow.release.record
 covenant capabilities grant reputation.read
 ```
 
 ## The loop
 
-1. The hirer locks funds in escrow against a `job_id`. The worker then runs
-   that job under Covenant, which records an `intent_dispatched` row.
-2. The escrow (or the hirer wallet) calls `POST /escrow/prove` with the
-   `job_id`.
-3. The daemon looks up the job's run, derives `result_hash`/`validation`,
-   signs the proof, records it, and returns an opaque proof blob.
-4. The escrow **verifies the blob** and releases funds to `worker_address` when
-   `validation_passed`.
-5. The escrow calls `POST /escrow/release` to record the payout, joined to the
-   proof by `decision_id`.
+1. An external escrow stores a precommitted context for a `job_id`.
+2. Covenant records an `intent_dispatched` row for that job.
+3. The trusted escrow integration calls `POST /escrow/prove` with the same
+   context.
+4. The daemon echoes the supplied context, derives the local result hash and
+   `status == "ok"` observation, signs the mixed statement, and records it.
+5. The escrow pins the expected daemon key, verifies the signature, compares
+   every context field with its own precommit, and evaluates delivery or quality
+   independently. The current statement alone is insufficient to release.
+6. If the escrow pays under its own policy, it records and reconciles that
+   payout in its own independently verified ledger. Covenant's legacy
+   `POST /escrow/release` route is parked and admits no payout fact.
 
-> The `job_id` must be the Covenant job/intent uuid the worker actually ran
-> under — that is the key the lookup matches. A `job_id` with no run in the
-> chain is denied.
+> A `job_id` with no local `intent_dispatched` row is denied. The existence of a
+> successful row does not prove which external worker, amount, or escrow it
+> belongs to and does not establish delivery quality.
 
 ## `POST /escrow/prove`
 
@@ -65,11 +65,11 @@ Request:
 }
 ```
 
-The daemon finds the `intent_dispatched` row for `job_id`, sets
-`result_hash_hex` from it and `validation_passed` from whether that run
-finished `ok`, binds the escrow context, and signs. A job with no run returns
-an error; a job whose run failed is proven with `validation_passed: false` so
-the escrow simply does not release.
+The daemon finds the newest `intent_dispatched` row for `job_id`, copies its
+`result_hash_hex`, sets `validation_passed` to whether the row's status equals
+`ok`, echoes all other request fields, and signs. Despite the legacy field name,
+`validation_passed` is a local dispatch-status observation, not independent
+validation of completion, delivery, or quality.
 
 Response:
 
@@ -85,29 +85,39 @@ Response:
 
 ### Verifying the proof (escrow side)
 
-`proof` is one opaque base64 token. Decode it, then verify the ed25519
-signature over the **exact** inner `proof_json` bytes — do not re-serialize:
+`proof` is one opaque base64 token. Decode it, require the exact
+`covenant.escrow-completion.v1\n` domain, reject the bundle unless its
+`signer_pubkey_b58` equals a key obtained through a trusted channel, then verify
+the ed25519 signature over the UTF-8 bytes of `domain || proof_json`. Do not
+re-serialize `proof_json` and do not trust the key carried inside the bundle by
+itself:
 
 ```
-bundle = json_decode(base64_decode(proof))   // {proof_json, signature_b58, signer_pubkey_b58}
+bundle = json_decode(base64_decode(proof))
+assert bundle.domain == "covenant.escrow-completion.v1\n"
+assert bundle.signer_pubkey_b58 == PINNED_COVENANT_PUBKEY
 ed25519_verify(
-  pubkey  = base58_decode(bundle.signer_pubkey_b58),   // 32 bytes
-  message = utf8_bytes(bundle.proof_json),
+  pubkey  = base58_decode(PINNED_COVENANT_PUBKEY),
+  message = utf8_bytes(bundle.domain + bundle.proof_json),
   sig     = base58_decode(bundle.signature_b58),        // 64 bytes
 )
 proof = json_decode(bundle.proof_json)
 ```
 
-On success, trust the parsed `proof` fields (`job_id`, `worker_address`,
-`amount`, `result_hash_hex`, `validation_passed`, `audit_root_hex`) and release
-to `worker_address` when `validation_passed` is true. `audit_root_hex` is
-Covenant's tamper-evident chain root at proof time, anchoring the proof to a
-verifiable work history.
+After signature verification, compare `escrow_id`, `job_id`, hirer, worker,
+amount, asset, network, and provider byte-for-byte with the escrow's own
+precommitted record. Treat `result_hash_hex`, `validation_passed`, and
+`audit_root_hex` as claims from that daemon. The local hash-chain root can show
+later modification of included rows; it does not prove the log is complete or
+that a runtime produced the claimed result. This contract still needs an
+independent delivery/quality decision before any release.
 
 ## `POST /escrow/release`
 
-Requires capability `escrow.release.record`. Records the payout the escrow made
-with its own custody.
+This legacy compatibility route is parked. It rejects every request and writes
+no settlement receipt, accounting entry, or audit event. Caller-supplied payout
+fields cannot safely become Covenant facts until the daemon independently
+verifies the transfer and atomically binds it to a prior authorization.
 
 Request:
 
@@ -125,34 +135,38 @@ Request:
 }
 ```
 
-`decision_id` is the value from the `/escrow/prove` response. Response:
-`{ "kind": "escrow_released", "recorded_at": "<epoch-ms>" }`.
-
-Idempotent on `decision_id`: retry freely. A repeat writes no second
-`escrow_released` row and moves no funds (Covenant custodies nothing). Safe for
-a fire-and-forget background record after the payout lands.
+`decision_id` is the value from the `/escrow/prove` response. An enabled daemon
+returns an error containing `escrow release reporting is disabled until payout
+facts are independently verified and bound to the completion statement`.
+The legacy `escrow_released` success response remains in the IPC schema only
+for wire compatibility and is not emitted by this path.
 
 ## `GET /reputation/:worker_address`
 
-Requires capability `reputation.read`. A worker's standing, computed from the
-escrow rows in the audit chain — not self-reported. Returns `proofs_total`,
+Requires capability `reputation.read`. This legacy endpoint summarizes local
+escrow statement and release rows. Those rows include caller-supplied context
+and unverified payout reports, so the result is an audit-log heuristic, not
+reputation or independent evidence of work. It returns `proofs_total`,
 `validations_passed`, `validations_failed`, `releases`, `completion_rate_bps`,
-and `computed_audit_root_hex` (the chain root the score was read over, so it is
-reproducible). This is Covenant's half; combine it with the escrow's earnings
-ledger for the full picture.
+and `computed_audit_root_hex`.
 
 ## Audit
 
 `escrow_completion_proven` carries `decision_id` (the `proof_id`), `escrow_id`,
 `job_id`, `hirer_address`, `worker_address`, `amount`/`asset`/`network`, the
 derived `result_hash_hex` + `validation_passed`, `audit_root_hex`, and
-`signature_b58`, so each row is independently re-verifiable. `escrow_released`
-carries the same `decision_id` plus the `receipt_id` and `tx_sig`, so the proof
-and the payout read back as a linked pair. Read with `covenant audit recent` or
+`signature_b58`, so a consumer with the pinned daemon key and required domain
+can authenticate the included statement. `escrow_released` is a historical
+audit kind retained for compatibility with old logs; the parked release route
+does not write it. Read retained rows with `covenant audit recent` or
 `GET /audit/recent`; verify chain integrity with `GET /audit/verify`.
 
 ## Not yet
 
-The lookup keys on a single daemon's audit chain: the worker must have run
-under the same daemon that issues the proof. Disputes are not yet a primitive
-(no dispute row to count), so they are out of the reputation cut.
+The format lacks a daemon-verified precommit that binds the job to the external
+escrow context. It also lacks independent work validation, chain verification
+of releases, signer-key discovery/rotation, power-loss guarantees, and dispute
+handling. Safe release reporting additionally needs a verified
+authorization-to-payout binding and an atomic or recoverable write protocol.
+Until those exist, the statement must not authorize a payout and the release
+reporter remains disabled.

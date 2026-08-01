@@ -2,9 +2,10 @@
 //!
 //! [`LocalIdentity`] is an ed25519 keypair plus a `name@host` display
 //! string. The keypair is persisted as the raw 32-byte seed at
-//! `$COVENANT_HOME/identity/local.key` with `0o600` permissions, and
-//! the same key is used to sign on-chain settlement transactions —
-//! there is no second keypair system.
+//! `$COVENANT_HOME/identity/local.key` with `0o600` permissions. It signs
+//! Covenant-local capability, audit, registration, and statement protocols.
+//! Payment funding keys are separate and must remain inside their signer
+//! boundaries.
 //!
 //! Verification helpers [`verify_with_pubkey`] and
 //! [`verifying_key_from_bytes`] cover the read side without forcing
@@ -707,7 +708,7 @@ mod tests {
         // (line 115-118). This is the security boundary that catches
         // an attacker-planted symlink at $COVENANT_HOME/identity/local.key
         // pointing at an attacker-controlled file before the daemon
-        // can sign settlement transactions with the contents of that
+        // can sign local protocol statements with the contents of that
         // file. The Symlink variant of IdentityError is defined
         // (line 29-30) and the rejection branch is structurally
         // present, but no existing test exercises it:
@@ -757,7 +758,7 @@ mod tests {
                  symlinks) or dropped the file_type().is_symlink() \
                  branch would silently widen the trust boundary to \
                  include attacker-controlled symlink targets, and the \
-                 daemon would sign settlement transactions under the \
+                 daemon would sign local protocol statements under the \
                  contents of whatever file the symlink resolved to; \
                  got Err({:?})",
                 other,
@@ -777,7 +778,7 @@ mod tests {
     fn load_or_create_pins_key_file_and_parent_dir_mode_invariants() {
         // The crate header documents that the ed25519 seed at
         // $COVENANT_HOME/identity/local.key is persisted with 0o600
-        // permissions and that the same key signs on-chain settlement
+        // permissions. The key signs local protocol statements, not payment
         // transactions. The unix path also chmods the parent directory
         // to 0o700 via set_dir_mode_0700 and auto-repairs an existing
         // key file from any non-0o600 mode back to 0o600 before reading
@@ -807,8 +808,8 @@ mod tests {
         assert_eq!(
             file_mode, 0o600,
             "load_or_create must write the identity key file at mode \
-             0o600 — the ed25519 seed signs every settlement \
-             transaction and a refactor that dropped the .mode(0o600) \
+             0o600 — the ed25519 seed signs local protocol statements \
+             and a refactor that dropped the .mode(0o600) \
              call on the OpenOptionsExt builder would let the \
              operator's umask determine the file mode (commonly 0o022 \
              yielding 0o644) and the seed would sit world-readable on \

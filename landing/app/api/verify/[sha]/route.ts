@@ -1,8 +1,7 @@
 // /api/verify/[sha] — server-side witness check for a Covenant-author commit.
-// Resolves commit metadata, then reports four independent witnesses (commit
-// memo, audit hash chain, settlement anchor, verifier signature). Each anchor
-// reads yellow until its artifact is published — a witness is never green
-// before it has actually been checked.
+// Resolves commit metadata, then reports four differently scoped repository
+// checks. The legacy Solana manifests are publisher reports, not RPC checks;
+// the verifier key is self-published beside its statement.
 
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -106,10 +105,30 @@ export async function GET(_req: Request, ctx: { params: Promise<{ sha: string }>
     return NextResponse.json({
       commit: { ...commit, predatesWitnessLoop: true },
       witnesses: [
-        { key: "rekor", label: "Solana commit memo", state: "gray", detail: "Predates witness loop." },
-        { key: "audit_chain", label: "Audit hash chain", state: "gray", detail: "Predates witness loop." },
-        { key: "solana_anchor", label: "Solana settlement anchor", state: "gray", detail: "Predates witness loop." },
-        { key: "verifier_sig", label: "Verifier-Refuter signature", state: "gray", detail: "Predates witness loop." },
+        {
+          key: "rekor",
+          label: "Published memo report",
+          state: "gray",
+          detail: "Predates witness loop.",
+        },
+        {
+          key: "audit_chain",
+          label: "Audit hash chain",
+          state: "gray",
+          detail: "Predates witness loop.",
+        },
+        {
+          key: "solana_anchor",
+          label: "Published settlement report",
+          state: "gray",
+          detail: "Predates witness loop.",
+        },
+        {
+          key: "verifier_sig",
+          label: "Self-published verifier statement",
+          state: "gray",
+          detail: "Predates witness loop.",
+        },
       ] satisfies Witness[],
       skillRun: null,
       fifth,

@@ -1,14 +1,12 @@
 //! Dual-shaped agent registration document.
 //!
-//! [`AgentRegistration`] is one JSON object that is simultaneously a valid
-//! A2A [`AgentCard`] and an ERC-8004 registration file, so an EVM /
-//! ERC-8004 / A2A-aware client can discover and trust a Covenant agent
-//! from a single document. It carries the union of both schemas' required
-//! fields: an A2A client reads the A2A fields and ignores the rest, an
-//! ERC-8004 client reads the ERC-8004 fields and ignores the rest. The
-//! A2A AgentCard schema does not forbid extra properties, and every
-//! ERC-8004 field except `supportedTrust` is mandatory, so the union
-//! validates as both.
+//! [`AgentRegistration`] is one self-authored JSON object that matches the
+//! pinned A2A [`AgentCard`] and ERC-8004 registration-file shapes. It can
+//! advertise endpoints and registration identifiers to compatible readers;
+//! its signature authenticates the authoring key, not the claims or operator.
+//! The object carries the union of both pinned schemas' required fields. The
+//! A2A AgentCard schema does not forbid extra properties, and every ERC-8004
+//! field except `supportedTrust` is mandatory at the pinned revisions.
 //!
 //! The home registry is expressed in the CAIP-2 form EVM clients already
 //! parse — `solana:<genesis-hash>:<registry>` — using the Solana
@@ -55,10 +53,9 @@ pub const A2A_PROTOCOL_VERSION: &str = "0.3.0";
 /// network name is what lets an EVM/CAIP-aware client resolve the chain.
 pub const SOLANA_MAINNET_CAIP2: &str = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
 
-/// Default ERC-8004 trust models. Covenant advertises reputation trust;
-/// `crypto-economic` and `tee-attestation` are added by later multichain
-/// phases once the backing mechanisms exist.
-pub const DEFAULT_SUPPORTED_TRUST: &[&str] = &["reputation"];
+/// No trust model is advertised by default. Callers must opt into a model only
+/// when a separately verified implementation supports its semantics.
+pub const DEFAULT_SUPPORTED_TRUST: &[&str] = &[];
 
 #[derive(Debug, thiserror::Error)]
 pub enum RegistrationError {
@@ -119,9 +116,9 @@ pub struct RegistrationParams<'a> {
 }
 
 impl<'a> RegistrationParams<'a> {
-    /// Params for a Solana-mainnet agent with sensible defaults: agentId
-    /// unset, x402 enabled, active, reputation trust, no extra skills or
-    /// services.
+    /// Params for a Solana-mainnet agent with conservative defaults: agentId
+    /// unset, x402 enabled, active, no advertised trust model, and no extra
+    /// skills or services.
     pub fn solana_mainnet(
         name: &'a str,
         description: &'a str,
@@ -236,7 +233,7 @@ pub struct AgentRegistration {
     pub registrations: Vec<Registration>,
 
     // ERC-8004 optional trust field, and the A2A detached JWS signatures.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub supported_trust: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub signatures: Vec<CardSignature>,
@@ -522,10 +519,21 @@ mod tests {
     }
 
     #[test]
-    fn trust_field_is_supported_trust_not_trust_models() {
+    fn trust_field_is_omitted_by_default() {
         let v = sample_doc().to_value().unwrap();
-        // expectedFailureMode 2: the draft churned trustModels -> supportedTrust.
-        assert!(v.get("supportedTrust").is_some(), "must use supportedTrust");
+        assert!(v.get("supportedTrust").is_none());
+        assert!(v.get("trustModels").is_none());
+    }
+
+    #[test]
+    fn explicitly_selected_trust_uses_supported_trust_field() {
+        let selected = ["reputation"];
+        let mut params = sample_params();
+        params.supported_trust = &selected;
+        let v = AgentRegistration::build(&test_pubkey_b58(), &params)
+            .to_value()
+            .unwrap();
+        // The pinned draft renamed trustModels to supportedTrust.
         assert!(
             v.get("trustModels").is_none(),
             "must not use the stale trustModels name"

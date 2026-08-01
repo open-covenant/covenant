@@ -1,17 +1,10 @@
-//! "Covenant Verified": DAS-only verification of agent accountability.
+//! Structural observations over configured DAS-provider responses.
 //!
-//! Anyone can run this against a public DAS endpoint with no Covenant
-//! infrastructure in the path: it reads an MPL Core asset's AppData and
-//! decides whether it is a valid Covenant audit-root attestation, and
-//! whether a given agent identity is *accountable* (carries at least one).
-//!
-//! Trust anchor: MPL Core only lets the AppData `data_authority` write the
-//! data, so authorship is a chain fact. A verifier checks that authority
-//! against the expected Covenant attestation authority
-//! ([`crate::config::COVENANT_ATTESTATION_AUTHORITY`]); the payload's
-//! `validator` field must mirror it. The attestation must carry the
-//! ERC-8004 validation `type`, the `covenant.audit-root.appdata.v2`
-//! `schema`, a declared `hashAlg`, and a well-formed 64-hex `responseHash`.
+//! This module compares provider-reported MPL Core AppData fields with an
+//! expected authority and Covenant-specific envelope. It does not authenticate
+//! a Core account, validate the committed evidence, establish log completeness,
+//! identify an operator, or produce an accountability verdict. A direct account
+//! decode or proof is required to remove trust in the DAS provider.
 //!
 //! DAS indexers re-case the on-chain camelCase keys to snake_case (Helius
 //! returns `response_hash`); every read here accepts both spellings.
@@ -22,44 +15,46 @@ use serde_json::Value;
 use crate::config::COVENANT_ATTESTATION_AUTHORITY;
 use crate::das::{DasClient, DasError};
 use crate::request::{
-    validate_root_hash_hex, ATTESTATION_HASH_ALG, ATTESTATION_SCHEMA, ATTESTATION_TYPE,
+    validate_attestation_field, validate_onchain_pubkey, validate_root_hash_hex,
+    ATTESTATION_HASH_ALG, ATTESTATION_SCHEMA, ATTESTATION_TYPE, SUBJECT_REGISTRY,
 };
 
-/// Verdict for a single candidate attestation asset.
+const MAX_UNIX_SECONDS: u64 = 253_402_300_799;
+
+/// Structural observation for one candidate record asset.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct AttestationVerdict {
-    /// The attestation asset id, when known.
+pub struct RecordObservation {
+    /// The record asset id reported by DAS, when present.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub asset: Option<String>,
-    /// True iff every check below passed.
-    pub verified: bool,
-    /// The agent this attests to (`subject.asset`), when present.
+    /// Whether the reported envelope matches the configured field expectations.
+    pub matches_expected_envelope: bool,
+    /// The reported `subject.asset`, when present.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subject_asset: Option<String>,
-    /// The on-chain AppData write authority.
+    /// The AppData write authority reported by the configured DAS provider.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub authority: Option<String>,
-    /// The attested 32-byte audit root.
+    /// The reported 32-byte commitment.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_hash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recorded_at: Option<u64>,
-    /// Why it failed, empty when verified.
+    /// Structural mismatches, empty when the expected envelope matched.
     pub reasons: Vec<String>,
 }
 
-/// Verdict for an agent identity: accountable iff it carries ≥1 verified
-/// attestation authored by the expected authority.
+/// DAS-provider observation of matching records that name one agent asset.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct AgentVerdict {
+pub struct AgentRecordObservation {
     pub agent: String,
-    pub accountable: bool,
-    pub attestation_count: usize,
-    /// The most recent verified attestation, when any.
+    pub has_matching_record: bool,
+    pub record_count: usize,
+    /// The latest matching provider-reported record by its claimed timestamp.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub latest: Option<AttestationVerdict>,
+    pub latest: Option<RecordObservation>,
 }
 
 /// The AppData external plugin on a DAS asset, if present.
@@ -78,13 +73,9 @@ fn field<'a>(data: &'a Value, snake: &str, camel: &str) -> Option<&'a str> {
         .and_then(Value::as_str)
 }
 
-/// The AppData write authority (`data_authority`), the key MPL Core enforces
-/// for writes, and the only thing that makes authorship a chain fact. Helius
-/// nests it under `adapter_config`; a flat fallback covers other shapes. The
-/// plugin's top-level `authority` is the adapter's *config* authority, which a
-/// minter can set to any address without that address signing, so trusting it
-/// would let anyone forge a record under our key. Read the write authority
-/// only, and fail closed when it is absent.
+/// Read the DAS-reported AppData `data_authority`. Helius nests it under
+/// `adapter_config`; a flat fallback covers other provider shapes. The plugin's
+/// top-level `authority` is the adapter configuration authority and is ignored.
 fn data_authority(plugin: &Value) -> Option<&str> {
     plugin
         .get("adapter_config")
@@ -99,18 +90,18 @@ fn data_authority(plugin: &Value) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
-/// Verify one DAS asset as a Covenant attestation against `expected_authority`.
-/// Pure: takes a DAS `getAsset` result (or one `items[]` entry). Never
-/// network. Collects every failure reason rather than short-circuiting, so a
-/// caller sees all of what's wrong.
-pub fn verify_attestation(asset: &Value, expected_authority: &str) -> AttestationVerdict {
+/// Inspect one DAS asset against the expected Covenant record envelope.
+///
+/// This pure function trusts its input as a provider report. It collects every
+/// structural mismatch rather than short-circuiting.
+pub fn inspect_record(asset: &Value, expected_authority: &str) -> RecordObservation {
     let mut reasons = Vec::new();
     let asset_id = asset.get("id").and_then(Value::as_str).map(str::to_string);
 
     let Some(plugin) = app_data(asset) else {
-        return AttestationVerdict {
+        return RecordObservation {
             asset: asset_id,
-            verified: false,
+            matches_expected_envelope: false,
             subject_asset: None,
             authority: None,
             response_hash: None,
@@ -149,19 +140,88 @@ pub fn verify_attestation(asset: &Value, expected_authority: &str) -> Attestatio
         reasons.push("validator field does not match the expected authority".into());
     }
 
-    let subject_asset = data
-        .get("subject")
-        .and_then(|s| field(s, "asset", "asset"))
+    let subject = data.get("subject").filter(|value| value.is_object());
+    if subject.is_none() {
+        reasons.push("subject object missing".into());
+    }
+    if subject.and_then(|value| field(value, "registry", "registry")) != Some(SUBJECT_REGISTRY) {
+        reasons.push(format!("subject.registry is not {SUBJECT_REGISTRY}"));
+    }
+    let subject_asset = subject
+        .and_then(|value| field(value, "asset", "asset"))
         .map(str::to_string);
+    match &subject_asset {
+        Some(asset) if validate_onchain_pubkey("subject.asset", asset).is_ok() => {}
+        Some(_) => reasons.push("subject.asset is not a base58 Solana-address shape".into()),
+        None => reasons.push("subject.asset missing".into()),
+    }
 
-    let recorded_at = data
-        .get("recorded_at")
-        .or_else(|| data.get("recordedAt"))
-        .and_then(Value::as_u64);
+    if let Some(registration) = subject.and_then(|value| value.get("registration")) {
+        match registration.as_str() {
+            Some(value) if validate_onchain_pubkey("subject.registration", value).is_ok() => {}
+            _ => reasons.push("subject.registration is not a base58 Solana-address shape".into()),
+        }
+    }
+    if let Some(agent_id) =
+        subject.and_then(|value| value.get("agent_id").or_else(|| value.get("agentId")))
+    {
+        match agent_id.as_str() {
+            Some(value)
+                if !value.is_empty()
+                    && validate_attestation_field("subject.agentId", value).is_ok() => {}
+            _ => reasons.push("subject.agentId is not a safe non-empty string".into()),
+        }
+    }
 
-    AttestationVerdict {
+    let tag = field(&data, "tag", "tag");
+    match tag {
+        Some(value) if !value.is_empty() && validate_attestation_field("tag", value).is_ok() => {}
+        _ => reasons.push("tag missing, empty, or unsafe".into()),
+    }
+
+    let covenant = data.get("covenant").filter(|value| value.is_object());
+    if covenant.is_none() {
+        reasons.push("covenant object missing".into());
+    }
+    let release_target = covenant.and_then(|value| field(value, "release_target", "releaseTarget"));
+    let release_subject =
+        covenant.and_then(|value| field(value, "release_subject", "releaseSubject"));
+    let release_scope = covenant.and_then(|value| field(value, "release_scope", "releaseScope"));
+    for (name, value) in [
+        ("covenant.releaseTarget", release_target),
+        ("covenant.releaseSubject", release_subject),
+        ("covenant.releaseScope", release_scope),
+    ] {
+        match value {
+            Some(value) if !value.is_empty() && validate_attestation_field(name, value).is_ok() => {
+            }
+            _ => reasons.push(format!("{name} missing, empty, or unsafe")),
+        }
+    }
+    if matches!((tag, release_scope), (Some(tag), Some(scope)) if tag != scope) {
+        reasons.push("tag does not match covenant.releaseScope".into());
+    }
+
+    let recorded_value = data.get("recorded_at").or_else(|| data.get("recordedAt"));
+    let recorded_at = match recorded_value.and_then(Value::as_u64) {
+        Some(value) if value <= MAX_UNIX_SECONDS => Some(value),
+        Some(_) => {
+            reasons.push("recordedAt is outside the supported Unix-seconds range".into());
+            None
+        }
+        None if recorded_value.is_none() => {
+            reasons.push("recordedAt missing".into());
+            None
+        }
+        None => {
+            reasons.push("recordedAt is not an unsigned integer".into());
+            None
+        }
+    };
+
+    RecordObservation {
         asset: asset_id,
-        verified: reasons.is_empty(),
+        matches_expected_envelope: reasons.is_empty(),
         subject_asset,
         authority,
         response_hash,
@@ -170,16 +230,15 @@ pub fn verify_attestation(asset: &Value, expected_authority: &str) -> Attestatio
     }
 }
 
-/// Is `agent_asset` accountable? Queries DAS for assets owned by the
-/// expected authority, keeps the verified attestations whose `subject.asset`
-/// is `agent_asset`, and reports the count + most recent. DAS-only; no key,
-/// no Covenant infra.
-pub async fn verify_agent(
+/// Query DAS for expected-envelope records whose reported subject is
+/// `agent_asset`, then return their count and latest claimed timestamp.
+/// Results remain provider-backed observations, not accountability evidence.
+pub async fn inspect_agent_records(
     das: &dyn DasClient,
     agent_asset: &str,
     expected_authority: &str,
-) -> Result<AgentVerdict, DasError> {
-    let mut verified: Vec<AttestationVerdict> = Vec::new();
+) -> Result<AgentRecordObservation, DasError> {
+    let mut matching: Vec<RecordObservation> = Vec::new();
     // The authority owns the attestation assets it mints; page through them.
     for page in 1..=5u32 {
         let resp = das
@@ -194,9 +253,11 @@ pub async fn verify_agent(
             break;
         }
         for item in &items {
-            let v = verify_attestation(item, expected_authority);
-            if v.verified && v.subject_asset.as_deref() == Some(agent_asset) {
-                verified.push(v);
+            let observation = inspect_record(item, expected_authority);
+            if observation.matches_expected_envelope
+                && observation.subject_asset.as_deref() == Some(agent_asset)
+            {
+                matching.push(observation);
             }
         }
         if items.len() < 1000 {
@@ -204,19 +265,19 @@ pub async fn verify_agent(
         }
     }
 
-    let latest = verified
+    let latest = matching
         .iter()
         .max_by_key(|v| v.recorded_at.unwrap_or(0))
         .cloned();
-    Ok(AgentVerdict {
+    Ok(AgentRecordObservation {
         agent: agent_asset.to_string(),
-        accountable: !verified.is_empty(),
-        attestation_count: verified.len(),
+        has_matching_record: !matching.is_empty(),
+        record_count: matching.len(),
         latest,
     })
 }
 
-/// The production Covenant attestation authority.
+/// The configured historical Covenant AppData authority.
 pub fn default_authority() -> &'static str {
     COVENANT_ATTESTATION_AUTHORITY
 }
@@ -247,6 +308,11 @@ mod tests {
                     "hash_alg": "sha256-merkle",
                     "response_hash": "7c375d0e0a749966541c7543b87b76f61fd4b64d41ff12473d68f3ff45caef26",
                     "tag": "audit",
+                    "covenant": {
+                        "release_target": "covenant",
+                        "release_subject": "witness-loop",
+                        "release_scope": "audit"
+                    },
                     "recorded_at": 1781738307u64
                 }
             }]
@@ -254,10 +320,10 @@ mod tests {
     }
 
     #[test]
-    fn valid_attestation_verifies() {
+    fn expected_record_envelope_matches() {
         let a = das_attestation(AUTH, AUTH, AGENT, ATTESTATION_SCHEMA);
-        let v = verify_attestation(&a, AUTH);
-        assert!(v.verified, "reasons: {:?}", v.reasons);
+        let v = inspect_record(&a, AUTH);
+        assert!(v.matches_expected_envelope, "reasons: {:?}", v.reasons);
         assert_eq!(v.subject_asset.as_deref(), Some(AGENT));
         assert_eq!(v.authority.as_deref(), Some(AUTH));
         assert_eq!(v.response_hash.as_deref().map(|h| h.len()), Some(64));
@@ -267,8 +333,8 @@ mod tests {
     fn wrong_authority_fails() {
         let other = "So11111111111111111111111111111111111111112";
         let a = das_attestation(other, other, AGENT, ATTESTATION_SCHEMA);
-        let v = verify_attestation(&a, AUTH);
-        assert!(!v.verified);
+        let v = inspect_record(&a, AUTH);
+        assert!(!v.matches_expected_envelope);
         assert!(v
             .reasons
             .iter()
@@ -285,8 +351,8 @@ mod tests {
             AGENT,
             ATTESTATION_SCHEMA,
         );
-        let v = verify_attestation(&a, AUTH);
-        assert!(!v.verified);
+        let v = inspect_record(&a, AUTH);
+        assert!(!v.matches_expected_envelope);
         assert!(v
             .reasons
             .iter()
@@ -296,8 +362,8 @@ mod tests {
     #[test]
     fn wrong_schema_fails() {
         let a = das_attestation(AUTH, AUTH, AGENT, "covenant.audit-root.appdata.v1");
-        let v = verify_attestation(&a, AUTH);
-        assert!(!v.verified);
+        let v = inspect_record(&a, AUTH);
+        assert!(!v.matches_expected_envelope);
         assert!(v.reasons.iter().any(|r| r.contains("schema is not")));
     }
 
@@ -313,14 +379,21 @@ mod tests {
                 "adapterConfig": { "schema": "Json", "dataAuthority": { "address": AUTH } },
                 "data": {
                     "type": ATTESTATION_TYPE, "schema": ATTESTATION_SCHEMA,
-                    "subject": { "asset": AGENT }, "validator": AUTH,
+                    "subject": { "registry": SUBJECT_REGISTRY, "asset": AGENT },
+                    "validator": AUTH,
                     "hashAlg": "sha256-merkle",
                     "responseHash": "7c375d0e0a749966541c7543b87b76f61fd4b64d41ff12473d68f3ff45caef26",
+                    "tag": "audit",
+                    "covenant": {
+                        "releaseTarget": "covenant",
+                        "releaseSubject": "witness-loop",
+                        "releaseScope": "audit"
+                    },
                     "recordedAt": 1781738307u64
                 }
             }]
         });
-        assert!(verify_attestation(&a, AUTH).verified);
+        assert!(inspect_record(&a, AUTH).matches_expected_envelope);
     }
 
     #[test]
@@ -334,10 +407,10 @@ mod tests {
         a["external_plugins"][0]["authority"]["address"] = json!(AUTH);
         a["external_plugins"][0]["adapter_config"]["data_authority"]["address"] = json!(attacker);
         a["external_plugins"][0]["data"]["validator"] = json!(AUTH);
-        let v = verify_attestation(&a, AUTH);
+        let v = inspect_record(&a, AUTH);
         assert!(
-            !v.verified,
-            "a record whose data_authority is not Covenant must not verify"
+            !v.matches_expected_envelope,
+            "a record whose reported data_authority differs must not match"
         );
         assert!(v
             .reasons
@@ -346,9 +419,9 @@ mod tests {
     }
 
     #[test]
-    fn no_appdata_is_not_verified() {
-        let v = verify_attestation(&json!({ "id": "X", "external_plugins": [] }), AUTH);
-        assert!(!v.verified);
+    fn no_appdata_does_not_match() {
+        let v = inspect_record(&json!({ "id": "X", "external_plugins": [] }), AUTH);
+        assert!(!v.matches_expected_envelope);
         assert!(v.reasons.iter().any(|r| r.contains("no AppData")));
     }
 
@@ -356,12 +429,77 @@ mod tests {
     fn malformed_root_fails() {
         let mut a = das_attestation(AUTH, AUTH, AGENT, ATTESTATION_SCHEMA);
         a["external_plugins"][0]["data"]["response_hash"] = json!("deadbeef");
-        let v = verify_attestation(&a, AUTH);
-        assert!(!v.verified);
+        let v = inspect_record(&a, AUTH);
+        assert!(!v.matches_expected_envelope);
         assert!(v
             .reasons
             .iter()
             .any(|r| r.contains("responseHash is not 64")));
+    }
+
+    #[test]
+    fn complete_subject_and_covenant_envelope_are_required() {
+        let mut a = das_attestation(AUTH, AUTH, AGENT, ATTESTATION_SCHEMA);
+        let data = &mut a["external_plugins"][0]["data"];
+        data["subject"] = json!({ "asset": AGENT });
+        data.as_object_mut().unwrap().remove("tag");
+        data.as_object_mut().unwrap().remove("covenant");
+
+        let observation = inspect_record(&a, AUTH);
+
+        assert!(!observation.matches_expected_envelope);
+        for expected in [
+            "subject.registry is not mpl-agent-014",
+            "tag missing, empty, or unsafe",
+            "covenant object missing",
+            "covenant.releaseTarget missing, empty, or unsafe",
+            "covenant.releaseSubject missing, empty, or unsafe",
+            "covenant.releaseScope missing, empty, or unsafe",
+        ] {
+            assert!(
+                observation.reasons.iter().any(|reason| reason == expected),
+                "missing reason {expected:?}: {:?}",
+                observation.reasons
+            );
+        }
+    }
+
+    #[test]
+    fn subject_asset_timestamp_and_tag_scope_binding_are_required() {
+        let mut a = das_attestation(AUTH, AUTH, AGENT, ATTESTATION_SCHEMA);
+        let data = &mut a["external_plugins"][0]["data"];
+        data["subject"] = json!({ "registry": SUBJECT_REGISTRY });
+        data["tag"] = json!("different-scope");
+        data.as_object_mut().unwrap().remove("recorded_at");
+
+        let observation = inspect_record(&a, AUTH);
+
+        assert!(!observation.matches_expected_envelope);
+        for expected in [
+            "subject.asset missing",
+            "tag does not match covenant.releaseScope",
+            "recordedAt missing",
+        ] {
+            assert!(
+                observation.reasons.iter().any(|reason| reason == expected),
+                "missing reason {expected:?}: {:?}",
+                observation.reasons
+            );
+        }
+    }
+
+    #[test]
+    fn recorded_at_must_fit_the_supported_unix_seconds_range() {
+        let mut a = das_attestation(AUTH, AUTH, AGENT, ATTESTATION_SCHEMA);
+        a["external_plugins"][0]["data"]["recorded_at"] = json!(MAX_UNIX_SECONDS + 1);
+
+        let observation = inspect_record(&a, AUTH);
+
+        assert!(!observation.matches_expected_envelope);
+        assert!(observation
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("outside the supported Unix-seconds range")));
     }
 
     // --- agent-level (DAS-backed) ---
@@ -391,30 +529,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agent_with_valid_attestation_is_accountable() {
+    async fn agent_with_matching_record_is_reported() {
         let das = StubDas {
             items: vec![
                 das_attestation(AUTH, AUTH, AGENT, ATTESTATION_SCHEMA),
                 das_attestation(AUTH, AUTH, "someOtherAgent", ATTESTATION_SCHEMA), // different subject
             ],
         };
-        let v = verify_agent(&das, AGENT, AUTH).await.unwrap();
-        assert!(v.accountable);
-        assert_eq!(
-            v.attestation_count, 1,
-            "only the subject-matched one counts"
-        );
+        let v = inspect_agent_records(&das, AGENT, AUTH).await.unwrap();
+        assert!(v.has_matching_record);
+        assert_eq!(v.record_count, 1, "only the subject-matched one counts");
         assert!(v.latest.is_some());
     }
 
     #[tokio::test]
-    async fn agent_with_no_attestation_is_not_accountable() {
+    async fn agent_with_no_matching_record_is_reported() {
         let das = StubDas {
             items: vec![das_attestation(AUTH, AUTH, "elsewhere", ATTESTATION_SCHEMA)],
         };
-        let v = verify_agent(&das, AGENT, AUTH).await.unwrap();
-        assert!(!v.accountable);
-        assert_eq!(v.attestation_count, 0);
+        let v = inspect_agent_records(&das, AGENT, AUTH).await.unwrap();
+        assert!(!v.has_matching_record);
+        assert_eq!(v.record_count, 0);
         assert!(v.latest.is_none());
     }
 }

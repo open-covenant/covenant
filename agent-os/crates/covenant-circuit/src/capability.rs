@@ -3,13 +3,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::{CircuitError, Result};
 
-/// Capability scope for Circuit spend, enforced before any CIRC leaves the wallet.
+/// Process-local capability scope for explicit Circuit spend, checked before the payer.
 ///
 /// Mirrors the guards in the Circuit SDK's `X402Client` — a per-call ceiling, a treasury
 /// pin, and a cumulative budget — and adds an endpoint-host allowlist so a grant can only
 /// pay the hosts it names. The amount and recipient in a 402 come from the (untrusted)
-/// endpoint, so all four checks run before settlement: a hostile endpoint can neither
-/// redirect CIRC to itself, take the per-call cap on every request, nor drain past a total.
+/// endpoint, so all four checks run before settlement. These checks do not provide durable
+/// reservation or crash-recovery semantics and are not a daemon authorization boundary.
 #[derive(Debug, Clone, Default)]
 pub struct CircuitCapability {
     /// Per-call ceiling in raw CIRC base units. `None` disables the per-call check.
@@ -69,8 +69,9 @@ impl CircuitCapability {
     }
 }
 
-/// Cumulative CIRC spend, shared across every call made under a capability. Atomic so one
-/// ledger can back concurrent inference and data clients without over-spending the budget.
+/// Process-local cumulative CIRC spend shared across calls under a capability. Atomic so
+/// one ledger can back concurrent clients, but neither durable nor safe across processes or
+/// restarts.
 #[derive(Debug, Default)]
 pub struct SpendLedger {
     spent: AtomicU64,

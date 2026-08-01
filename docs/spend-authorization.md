@@ -64,7 +64,7 @@ token is minted at `$COVENANT_HOME/peers/operator.token` on first start.
 | Field | Type | Meaning |
 |---|---|---|
 | `provider` | string | Free-form provider tag, recorded on the audit row. |
-| `network` | string | CAIP-2 network the wallet intends to settle on (e.g. `eip155:8453` for Base, `solana:<genesis>` for Solana). |
+| `network` | string | CAIP-2 network the wallet intends to settle on (e.g. `eip155:8453` for Base, `eip155:4663` for Robinhood Chain, `solana:<genesis>` for Solana). |
 | `asset` | string | Token contract (EVM) or mint (Solana) the spend is denominated in. |
 | `amount` | string | Atomic amount as a decimal string. A string, not a number, so u128 values above JSON's 53-bit integer ceiling survive the wire. |
 | `per_call_cap` | string | Maximum atomic amount one spend may request, as a decimal string. The bound the caller is enforcing for this call. |

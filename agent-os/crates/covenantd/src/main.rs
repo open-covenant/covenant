@@ -511,6 +511,30 @@ async fn main() -> Result<()> {
         None => server,
     };
 
+    let server = match covenantd::robinhood::RobinhoodConfig::from_env() {
+        Some(cfg) => {
+            info!(
+                venue = %cfg.policy.venue,
+                mode = ?cfg.policy.mode,
+                telegram = cfg.telegram.is_some(),
+                "robinhood governed-trading profile enabled"
+            );
+            let metaplex_signer = {
+                let m = covenant_metaplex::MetaplexConfig::from_env();
+                if m.writes_enabled() {
+                    covenantd::metaplex::MetaplexState::new(m).signer()
+                } else {
+                    None
+                }
+            };
+            server.with_robinhood(covenantd::robinhood::RobinhoodState::new(
+                cfg,
+                metaplex_signer,
+            ))
+        }
+        None => server,
+    };
+
     server
         .register_agent_budgets()
         .await

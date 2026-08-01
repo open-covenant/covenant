@@ -28,8 +28,7 @@ pragma solidity ^0.8.20;
 contract BondReceiptVerifier {
     /// @dev keccak256("EIP712Domain(string name,string version,uint256 chainId)")
     ///      == 0xc2f8787176b8ac6bf7215b4adcc1e069bf4ab82d9ab1df05a57a91d425935b6e
-    bytes32 private constant DOMAIN_TYPEHASH =
-        keccak256("EIP712Domain(string name,string version,uint256 chainId)");
+    bytes32 private constant DOMAIN_TYPEHASH = keccak256("EIP712Domain(string name,string version,uint256 chainId)");
 
     /// @dev keccak256 of the BondReceipt type; field order matches bond.rs.
     ///      == 0x2a1ad6a6ecf1ab273f9cd50e3f3a22f0eb1d9eb1dd75063a6a489aaa63415135
@@ -103,11 +102,7 @@ contract BondReceiptVerifier {
     /// @notice Reverts unless the receipt is a live, well-formed bond signed
     ///         by the trusted attestor. Same fail-closed checks as
     ///         `SignedBondReceipt::verify`, in the same order.
-    function verify(BondReceipt calldata r, uint8 v, bytes32 sigR, bytes32 sigS)
-        external
-        view
-        returns (bool)
-    {
+    function verify(BondReceipt calldata r, uint8 v, bytes32 sigR, bytes32 sigS) external view returns (bool) {
         if (r.bondToken != USDC) revert TokenMismatch();
         if (r.bondAmount == 0) revert ZeroBond();
         if (r.subject == bytes32(0)) revert ZeroField();

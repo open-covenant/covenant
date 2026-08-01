@@ -35,13 +35,7 @@ contract OffchainResolver is IExtendedResolver {
     event NewSigners(address[] signers);
     event NewOwner(address owner);
 
-    error OffchainLookup(
-        address sender,
-        string[] urls,
-        bytes callData,
-        bytes4 callbackFunction,
-        bytes extraData
-    );
+    error OffchainLookup(address sender, string[] urls, bytes callData, bytes4 callbackFunction, bytes extraData);
     error SignatureExpired();
     error MalleableSignature();
     error UntrustedSigner();
@@ -83,33 +77,17 @@ contract OffchainResolver is IExtendedResolver {
         return keccak256(abi.encodePacked(hex"1900", target, expires, keccak256(request), keccak256(result)));
     }
 
-    function resolve(bytes calldata name, bytes calldata data)
-        external
-        view
-        override
-        returns (bytes memory)
-    {
+    function resolve(bytes calldata name, bytes calldata data) external view override returns (bytes memory) {
         bytes memory callData = abi.encodeWithSelector(IResolverService.resolve.selector, name, data);
         string[] memory urls = new string[](1);
         urls[0] = url;
-        revert OffchainLookup(
-            address(this),
-            urls,
-            callData,
-            OffchainResolver.resolveWithProof.selector,
-            callData
-        );
+        revert OffchainLookup(address(this), urls, callData, OffchainResolver.resolveWithProof.selector, callData);
     }
 
     /// EIP-3668 callback. `extraData` is the original request the gateway signed;
     /// `response` is `abi.encode(bytes result, uint64 expires, bytes sig)`.
-    function resolveWithProof(bytes calldata response, bytes calldata extraData)
-        external
-        view
-        returns (bytes memory)
-    {
-        (bytes memory result, uint64 expires, bytes memory sig) =
-            abi.decode(response, (bytes, uint64, bytes));
+    function resolveWithProof(bytes calldata response, bytes calldata extraData) external view returns (bytes memory) {
+        (bytes memory result, uint64 expires, bytes memory sig) = abi.decode(response, (bytes, uint64, bytes));
         if (expires < block.timestamp) revert SignatureExpired();
         address signer = recover(makeSignatureHash(address(this), expires, extraData, result), sig);
         if (!signers[signer]) revert UntrustedSigner();

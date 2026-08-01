@@ -88,6 +88,8 @@ const EXPECTED_RESPONSE_KINDS: &[&str] = &[
     "spend_authorized",
     "spend_settled",
     "completion_proven",
+    "spend_grant_charged",
+    "spend_grant_settled",
     "escrow_released",
     "reputation",
     "error",
@@ -350,6 +352,16 @@ fn golden_response_vectors() -> Vec<Response> {
             worker_address: "Worker11111111111111111111111111111111111".into(),
             issued_at: "2026-07-12T00:00:00Z".into(),
         },
+        Response::SpendGrantCharged {
+            call_id: (0x5E11_1ED0_0000_0000_0000_0000_0000_0005u128).to_string(),
+            tx_hash: format!("0x{}", "c0".repeat(32)),
+            block_number: 93_114_900,
+        },
+        Response::SpendGrantSettled {
+            release: true,
+            tx_hash: format!("0x{}", "5e".repeat(32)),
+            block_number: 93_114_908,
+        },
         Response::EscrowReleased {
             recorded_at: "2026-07-12T00:00:00Z".into(),
         },
@@ -440,6 +452,8 @@ fn assert_response_variant_coverage(res: &Response) {
         | Response::SpendAuthorized { .. }
         | Response::SpendSettled { .. }
         | Response::CompletionProven { .. }
+        | Response::SpendGrantCharged { .. }
+        | Response::SpendGrantSettled { .. }
         | Response::EscrowReleased { .. }
         | Response::Reputation { .. }
         | Response::Error { .. } => {}

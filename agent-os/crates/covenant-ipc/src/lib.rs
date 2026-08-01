@@ -507,6 +507,48 @@ pub enum Request {
         network: String,
         provider: String,
     },
+    /// Fund a bounded-spend hold on the daemon's deployed `SpendGrantEscrow`
+    /// — the *bounded autonomous spend* leg: hand a funded agent a wallet on a
+    /// hot chain and it physically cannot overspend. Requires capability
+    /// `wallet.spend.authorize`. The daemon signs and broadcasts
+    /// `chargeCall(grantId, provider, amount, callId, deadline)` in-process as
+    /// the grant's spender; the contract reverts unless the provider is
+    /// allowlisted and the amount is within the per-call ceiling, remaining
+    /// balance, and expiry — so the bound holds where the money sits, not in a
+    /// check the caller could route around. `call_id` is the job uuid's 128
+    /// bits, and the daemon records the `spec_id`/`deadline` it will gate the
+    /// later release on. Returns [`Response::SpendGrantCharged`]. `grant_id` and
+    /// `amount` are decimal strings (u128); `provider` is a `0x…` address;
+    /// `spec_id` is 32-byte `0x…` hex; `deadline` is a unix-seconds bound.
+    SpendGrantCharge {
+        grant_id: String,
+        provider: String,
+        amount: String,
+        job_id: String,
+        spec_id: String,
+        deadline: u64,
+    },
+    /// Settle a previously charged spend-grant hold — the *spec-gated release*
+    /// leg, "never pay for junk." Requires capability `escrow.completion.prove`.
+    /// The daemon derives the job's pass/fail verdict from its own audit chain
+    /// (never the request), signs the EIP-712 quality attestation, and
+    /// broadcasts `releaseCallAttested` (pass → provider paid) or
+    /// `refundCallAttested` (junk → hold returned to the grant) in-process. The
+    /// `spec_id`/`deadline` are pinned from the charge binding, not the request,
+    /// so a verdict cannot settle a call the daemon never charged. `job_id`
+    /// identifies both the audit-chain run and (as its 128 bits) the on-chain
+    /// call; the escrow-context fields mirror [`Request::ProveCompletion`].
+    /// Returns [`Response::SpendGrantSettled`].
+    SpendGrantSettle {
+        escrow_id: String,
+        job_id: String,
+        hirer_address: String,
+        worker_address: String,
+        amount: String,
+        asset: String,
+        network: String,
+        provider: String,
+    },
     /// Report from an external escrow that it released funds against a proof.
     /// Requires capability `escrow.release.record`; the daemon records a
     /// settlement receipt and a [`Response::EscrowReleased`], joined to the
@@ -1186,6 +1228,22 @@ pub enum Response {
         proof: String,
         worker_address: String,
         issued_at: String,
+    },
+    /// Result of [`Request::SpendGrantCharge`]. `call_id` is the on-chain call
+    /// identifier (decimal u128) the later settle acts on; `tx_hash` (`0x…`) and
+    /// `block_number` pin the `chargeCall` that locked the hold.
+    SpendGrantCharged {
+        call_id: String,
+        tx_hash: String,
+        block_number: u64,
+    },
+    /// Result of [`Request::SpendGrantSettle`]. `release` is `true` when the
+    /// verdict passed (provider paid) and `false` when it failed (hold refunded
+    /// to the grant); `tx_hash` (`0x…`) and `block_number` pin the settling tx.
+    SpendGrantSettled {
+        release: bool,
+        tx_hash: String,
+        block_number: u64,
     },
     /// Result of [`Request::RecordEscrowRelease`]. `recorded_at` is the
     /// epoch-ms the payout row landed, as a string. The `kind` tag plus this

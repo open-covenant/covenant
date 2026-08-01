@@ -47,7 +47,8 @@ impl RobinhoodConfig {
         let api_key = std::env::var("COVENANT_ROBINHOOD_API_KEY").ok()?;
         let keypair_path = std::env::var("COVENANT_ROBINHOOD_KEYPAIR").ok()?;
         let attestor = load_attestor(&std::env::var("COVENANT_ROBINHOOD_ATTESTOR_KEYPAIR").ok()?)?;
-        let policy_json = std::fs::read_to_string(std::env::var("COVENANT_ROBINHOOD_POLICY").ok()?).ok()?;
+        let policy_json =
+            std::fs::read_to_string(std::env::var("COVENANT_ROBINHOOD_POLICY").ok()?).ok()?;
         let policy: TradingPolicy = serde_json::from_str(&policy_json).ok()?;
         let telegram = match (
             std::env::var("COVENANT_ROBINHOOD_TELEGRAM_TOKEN"),
@@ -89,18 +90,26 @@ impl RobinhoodState {
             program: config.signer_binary,
             env: vec![
                 ("COVENANT_ROBINHOOD_API_KEY".to_string(), config.api_key),
-                ("COVENANT_ROBINHOOD_KEYPAIR".to_string(), config.keypair_path),
+                (
+                    "COVENANT_ROBINHOOD_KEYPAIR".to_string(),
+                    config.keypair_path,
+                ),
             ],
         };
         let mut client = RobinhoodClient::new(signer, HttpTransport::new());
         if let Some(base) = config.base_url {
             client = client.with_base_url(base);
         }
-        let mut trader = GovernedTrader::new(client, config.policy, config.attestor, "robinhood-agent");
+        let mut trader =
+            GovernedTrader::new(client, config.policy, config.attestor, "robinhood-agent");
         if let Some(tg) = config.telegram {
             trader = trader.with_gate(Box::new(TelegramApprovalGate::new(tg)));
         }
-        Self { trader, metaplex, receipts: Mutex::new(Vec::new()) }
+        Self {
+            trader,
+            metaplex,
+            receipts: Mutex::new(Vec::new()),
+        }
     }
 
     pub fn trader(&self) -> &GovernedTrader<HttpTransport> {
@@ -151,19 +160,34 @@ impl RobinhoodState {
 pub fn string_list(args: &serde_json::Value, key: &str) -> Vec<String> {
     args.get(key)
         .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(str::to_string))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
 pub fn parse_order(args: &serde_json::Value) -> Result<OrderRequest, String> {
-    let symbol = args.get("symbol").and_then(|v| v.as_str()).ok_or("missing symbol")?.to_string();
+    let symbol = args
+        .get("symbol")
+        .and_then(|v| v.as_str())
+        .ok_or("missing symbol")?
+        .to_string();
     let side = match args.get("side").and_then(|v| v.as_str()) {
         Some("buy") => Side::Buy,
         Some("sell") => Side::Sell,
         _ => return Err("side must be buy or sell".into()),
     };
-    let quantity = args.get("quantity").and_then(|v| v.as_f64()).ok_or("missing quantity")?;
-    match args.get("type").and_then(|v| v.as_str()).unwrap_or("market") {
+    let quantity = args
+        .get("quantity")
+        .and_then(|v| v.as_f64())
+        .ok_or("missing quantity")?;
+    match args
+        .get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("market")
+    {
         "market" => Ok(OrderRequest::market(symbol, side, quantity)),
         "limit" => {
             let limit_price = args
@@ -186,14 +210,21 @@ struct SidecarSigner {
 
 #[async_trait::async_trait]
 impl RequestSigner for SidecarSigner {
-    async fn signed_headers(&self, method: &str, path: &str, body: &str, timestamp: u64) -> RhResult<SignedHeaders> {
+    async fn signed_headers(
+        &self,
+        method: &str,
+        path: &str,
+        body: &str,
+        timestamp: u64,
+    ) -> RhResult<SignedHeaders> {
         let req = SignRequest {
             method: method.to_string(),
             path: path.to_string(),
             body: body.to_string(),
             timestamp: Some(timestamp),
         };
-        let payload = serde_json::to_vec(&req).map_err(|e| RhError::Transport(format!("encode SignRequest: {e}")))?;
+        let payload = serde_json::to_vec(&req)
+            .map_err(|e| RhError::Transport(format!("encode SignRequest: {e}")))?;
 
         let mut child = Command::new(&self.program)
             .env_clear()
@@ -244,14 +275,21 @@ struct TelegramApprovalGate {
 
 impl TelegramApprovalGate {
     fn new(cfg: TelegramConfig) -> Self {
-        Self { token: cfg.token, chat_id: cfg.chat_id, http: reqwest::Client::new() }
+        Self {
+            token: cfg.token,
+            chat_id: cfg.chat_id,
+            http: reqwest::Client::new(),
+        }
     }
 }
 
 #[async_trait::async_trait]
 impl ApprovalGate for TelegramApprovalGate {
     async fn request(&self, receipt: &TradeReceipt) -> ApprovalOutcome {
-        let notional = receipt.reference_price.map(|p| receipt.order.notional(p)).unwrap_or(0.0);
+        let notional = receipt
+            .reference_price
+            .map(|p| receipt.order.notional(p))
+            .unwrap_or(0.0);
         let text = format!(
             "Covenant · order awaiting approval\n{} {:?} {:.6}  (~${:.2})\n{}",
             receipt.order.symbol,

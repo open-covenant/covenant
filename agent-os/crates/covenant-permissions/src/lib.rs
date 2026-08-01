@@ -774,7 +774,7 @@ fn wallet_spend_admits(bounds: &WalletSpendBounds, view: &WalletSpendView<'_>) -
         }
     }
     if let Some(cap) = bounds.per_call_cap {
-        if !view.amount.is_some_and(|a| a <= cap) {
+        if view.amount.is_none_or(|a| a > cap) {
             return false;
         }
     }

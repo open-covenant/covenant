@@ -66,3 +66,9 @@ base64 = "0.22"
 name = "xona-demo"
 path = "src/bin/xona-demo.rs"
 required-features = ["solana"]
+
+# Live EVM submitter loop — hits a real RPC, so it needs the in-process
+# submitter. Cargo skips it unless evm-rpc is on (the daemon build enables it).
+[[test]]
+name = "live_evm_tx"
+required-features = ["evm-rpc"]

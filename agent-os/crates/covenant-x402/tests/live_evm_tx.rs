@@ -58,13 +58,23 @@ async fn live_evm_tx_self_transfer_confirms() {
         gas_limit: None,
     };
 
-    eprintln!("submitting 0-value self-transfer from {}", signer.address_hex());
+    eprintln!(
+        "submitting 0-value self-transfer from {}",
+        signer.address_hex()
+    );
     let receipt = rpc.submit(&signer, &tx).await.expect("submit + confirm");
     eprintln!(
         "confirmed in block {} — gas {} — tx 0x{}",
         receipt.block_number,
         receipt.gas_used,
-        receipt.tx_hash.iter().map(|b| format!("{b:02x}")).collect::<String>(),
+        receipt
+            .tx_hash
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>(),
     );
-    assert!(receipt.block_number > 0, "receipt must carry a block number");
+    assert!(
+        receipt.block_number > 0,
+        "receipt must carry a block number"
+    );
 }

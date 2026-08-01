@@ -295,11 +295,10 @@ mod rpc {
                 method: method.to_string(),
                 source,
             })?;
-            let value: Value =
-                serde_json::from_str(&text).map_err(|e| EvmTxError::Decode {
-                    method: method.to_string(),
-                    detail: format!("{e}: {text}"),
-                })?;
+            let value: Value = serde_json::from_str(&text).map_err(|e| EvmTxError::Decode {
+                method: method.to_string(),
+                detail: format!("{e}: {text}"),
+            })?;
             if let Some(err) = value.get("error") {
                 return Err(EvmTxError::Rpc {
                     method: method.to_string(),
@@ -309,10 +308,7 @@ mod rpc {
                         .and_then(Value::as_str)
                         .unwrap_or("unknown")
                         .to_string(),
-                    data: err
-                        .get("data")
-                        .and_then(Value::as_str)
-                        .map(str::to_string),
+                    data: err.get("data").and_then(Value::as_str).map(str::to_string),
                 });
             }
             Ok(value.get("result").cloned().unwrap_or(Value::Null))
@@ -602,7 +598,8 @@ mod rpc_tests {
     use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
     fn ok(result: Value) -> ResponseTemplate {
-        ResponseTemplate::new(200).set_body_json(json!({"jsonrpc": "2.0", "id": 1, "result": result}))
+        ResponseTemplate::new(200)
+            .set_body_json(json!({"jsonrpc": "2.0", "id": 1, "result": result}))
     }
 
     fn method_of(req: &Request) -> String {

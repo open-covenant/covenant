@@ -52,6 +52,10 @@ jobs:
         with:
           version: stable
 
+      # evm/lib is gitignored, so the checkout carries no dependencies. Pin the
+      # same forge-std the local toolchain resolves rather than floating on HEAD.
+      - run: git clone --depth 1 --branch v1.16.2 https://github.com/foundry-rs/forge-std lib/forge-std
+
       - run: forge build --deny-warnings
       - run: forge test -vv
 

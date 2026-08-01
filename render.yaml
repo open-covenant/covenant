@@ -105,6 +105,28 @@ services:
   # a SINGLE instance (the SSE bus is in-process).
 
   - type: web
+    name: covenant-trust
+    runtime: docker
+    plan: free
+    region: frankfurt
+    autoDeployTrigger: commit
+    dockerfilePath: ./services/covenant-trust-mcp/Dockerfile
+    dockerContext: ./services/covenant-trust-mcp
+    healthCheckPath: /health
+    buildFilter:
+      paths:
+        - services/covenant-trust-mcp/**
+    envVars:
+      - key: COVENANT_SOLANA_MAINNET_RPC_URL
+        sync: false
+      - key: RPC_TIMEOUT_MS
+        value: "9000"
+      - key: PAYMENT_HISTORY_LIMIT
+        value: "100"
+      - key: RATE_LIMIT_PER_MINUTE
+        value: "30"
+
+  - type: web
     name: covenant-fairscale-bridge
     runtime: node
     plan: starter

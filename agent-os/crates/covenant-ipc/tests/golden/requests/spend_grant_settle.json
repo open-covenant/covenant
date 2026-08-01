@@ -1,0 +1,11 @@
+{
+  "kind": "spend_grant_settle",
+  "escrow_id": "0x57316dfc56f1f07fe7ff828f941e9d07f81e2534",
+  "job_id": "5e111ed0-0000-0000-0000-000000000005",
+  "hirer_address": "0x1111111111111111111111111111111111111111",
+  "worker_address": "0xc0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0",
+  "amount": "1000",
+  "asset": "USDG",
+  "network": "robinhood",
+  "provider": "0xc0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0"
+}

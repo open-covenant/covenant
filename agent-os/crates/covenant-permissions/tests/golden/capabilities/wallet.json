@@ -1,0 +1,25 @@
+{
+  "subject": {
+    "display": "research@agent",
+    "pubkey": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi"
+  },
+  "action": "wallet.spend.authorize",
+  "scope": {
+    "asset": "0x5fc5360D",
+    "expiry": 1790000000,
+    "network": "eip155:42161",
+    "per_call_cap": "1000000",
+    "providers": [
+      "orbserv"
+    ],
+    "require_quality_gate": false,
+    "spec_id": null,
+    "total_cap": "50000000",
+    "version": 1
+  },
+  "granted_by": {
+    "display": "operator@local",
+    "pubkey": "8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR"
+  },
+  "expires_at": 1700000000000
+}

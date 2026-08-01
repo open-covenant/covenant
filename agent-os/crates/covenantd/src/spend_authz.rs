@@ -36,14 +36,16 @@ pub struct SpendAuthzConfig {
     pub enabled: bool,
 }
 
-/// The resolved spending policy for one `(agent, provider)` pair, derived
-/// by the caller from a granted capability. `network` is CAIP-2, `asset`
-/// is the mint (Solana) or contract (EVM) the spend must be denominated
-/// in, and `per_call_cap` is the maximum atomic amount a single spend may
-/// request. Per-day and total budgets are enforced separately through the
-/// [`BudgetLedger`].
+/// The resolved spending policy for one agent, derived by the caller from a
+/// granted capability — never from the request. `allowed_providers` is the
+/// grant's provider allowlist (empty = any provider), `network` is CAIP-2,
+/// `asset` is the mint (Solana) or contract (EVM) the spend must be
+/// denominated in, and `per_call_cap` is the maximum atomic amount a single
+/// spend may request. Per-day and total budgets are enforced separately
+/// through the [`BudgetLedger`]. These bounds mirror the onchain grant: the
+/// off-chain gate is the fail-fast twin, the contract is the guarantee.
 pub struct SpendScope {
-    pub provider: String,
+    pub allowed_providers: Vec<String>,
     pub network: String,
     pub asset: String,
     pub per_call_cap: u128,
@@ -52,6 +54,9 @@ pub struct SpendScope {
 /// A spend an external wallet wants the daemon to authorize before it
 /// signs.
 pub struct SpendRequest {
+    /// Provider the wallet intends to pay this call. Checked against the
+    /// grant's `allowed_providers`.
+    pub provider: String,
     /// CAIP-2 network the wallet intends to settle on.
     pub network: String,
     /// Asset (mint or contract) the spend is denominated in.
@@ -127,6 +132,12 @@ async fn evaluate(
     budget: &dyn BudgetLedger,
     payer: &AgentId,
 ) -> Result<(), String> {
+    if !scope.allowed_providers.is_empty() && !scope.allowed_providers.contains(&req.provider) {
+        return Err(format!(
+            "provider {:?} is not in this capability's allowlist ({:?})",
+            req.provider, scope.allowed_providers
+        ));
+    }
     if req.network != scope.network {
         return Err(format!(
             "network {:?} is not allowed by this capability (allows {:?})",
@@ -197,7 +208,7 @@ pub async fn authorize_spend(
             timestamp_ms: epoch_ms(),
             issuer: ctx.issuer.clone(),
             kind: AuditKind::SpendAuthorizationDecided {
-                provider: scope.provider.clone(),
+                provider: req.provider.clone(),
                 network: req.network.clone(),
                 asset: req.asset.clone(),
                 amount: req.amount.clone(),
@@ -212,7 +223,7 @@ pub async fn authorize_spend(
         .map_err(|e| SpendAuthzError::Audit(e.to_string()))?;
 
     debug!(
-        provider = scope.provider,
+        provider = req.provider,
         network = req.network,
         approved,
         %decision_id,
@@ -378,7 +389,7 @@ mod tests {
 
     fn scope() -> SpendScope {
         SpendScope {
-            provider: "orbserv".into(),
+            allowed_providers: vec!["orbserv".into()],
             network: "eip155:8453".into(),
             asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".into(),
             per_call_cap: 100_000,
@@ -387,6 +398,7 @@ mod tests {
 
     fn request() -> SpendRequest {
         SpendRequest {
+            provider: "orbserv".into(),
             network: "eip155:8453".into(),
             asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".into(),
             amount: "80000".into(),
@@ -503,6 +515,36 @@ mod tests {
             .await
             .unwrap();
         assert!(!d.approved());
+    }
+
+    #[tokio::test]
+    async fn denies_when_provider_not_in_allowlist() {
+        let audit = InMemoryAuditLog::new();
+        let budget = InMemoryLedger::new();
+        let issuer = agent(9);
+        let payer = agent(7);
+        budget.set_capacity(&payer, 1000).await.unwrap();
+        let ctx = ctx_with(&audit, &budget, &issuer).await;
+
+        let mut stranger = request();
+        stranger.provider = "not-allowlisted".into(); // scope allows only "orbserv"
+        let decision = authorize_spend(&ctx, &enabled(), &payer, &scope(), &stranger)
+            .await
+            .expect("decide");
+        match decision {
+            SpendDecision::Deny { reason, .. } => assert!(reason.contains("allowlist")),
+            other => panic!("expected deny, got {other:?}"),
+        }
+        // The deny is audited against the requested provider, not the scope.
+        match &audit.recent(10).await.unwrap()[0].kind {
+            AuditKind::SpendAuthorizationDecided {
+                approved, provider, ..
+            } => {
+                assert!(!approved);
+                assert_eq!(provider, "not-allowlisted");
+            }
+            other => panic!("unexpected audit kind: {other:?}"),
+        }
     }
 
     #[tokio::test]

@@ -231,10 +231,10 @@ struct Authorization {
 /// Resolves the EVM chain id the EIP-712 domain binds to.
 ///
 /// Accepts the CAIP-2 `eip155:<id>` form, this codebase's `base:<id>`
-/// convention, and the Coinbase network aliases (`base`, `base-sepolia`).
-/// A `solana:` network — or anything unrecognised — is rejected, so an
-/// `EvmSigner` placed beside a [`crate::SolanaSigner`] can never sign the
-/// wrong chain's requirement.
+/// convention, and bare aliases (`base`, `base-sepolia`, `robinhood`,
+/// `robinhood-testnet`). A `solana:` network — or anything unrecognised —
+/// is rejected, so an `EvmSigner` placed beside a [`crate::SolanaSigner`]
+/// can never sign the wrong chain's requirement.
 fn chain_id_for_network(network: &str) -> Result<u64> {
     if let Some(rest) = network
         .strip_prefix("eip155:")
@@ -249,6 +249,11 @@ fn chain_id_for_network(network: &str) -> Result<u64> {
     match network {
         "base" | "base-mainnet" => Ok(8453),
         "base-sepolia" => Ok(84532),
+        // Robinhood Chain (Arbitrum Orbit L2, live mainnet 2026-07): chainId
+        // 4663, testnet 46630 — not Arbitrum One's 42161. USDG rides its own
+        // EIP-712 domain in the challenge `extra`, so no fallback is pinned.
+        "robinhood" | "robinhood-chain" => Ok(4663),
+        "robinhood-testnet" => Ok(46630),
         _ => Err(X402Error::Sign(format!(
             "EvmSigner cannot handle network {network:?}"
         ))),
@@ -279,7 +284,7 @@ fn domain_name_version(
     )))
 }
 
-fn keccak256(bytes: &[u8]) -> [u8; 32] {
+pub(crate) fn keccak256(bytes: &[u8]) -> [u8; 32] {
     let mut out = [0u8; 32];
     out.copy_from_slice(&Keccak256::digest(bytes));
     out
@@ -336,7 +341,7 @@ fn eip712_digest(domain_separator: &[u8; 32], struct_hash: &[u8; 32]) -> [u8; 32
     keccak256(&buf)
 }
 
-fn address_from_key(signing_key: &SigningKey) -> [u8; 20] {
+pub(crate) fn address_from_key(signing_key: &SigningKey) -> [u8; 20] {
     let encoded = signing_key.verifying_key().to_encoded_point(false);
     let hash = keccak256(&encoded.as_bytes()[1..]);
     let mut address = [0u8; 20];
@@ -355,7 +360,7 @@ fn hex_encode(bytes: &[u8]) -> String {
     out
 }
 
-fn hex_0x(bytes: &[u8]) -> String {
+pub(crate) fn hex_0x(bytes: &[u8]) -> String {
     format!("0x{}", hex_encode(bytes))
 }
 
@@ -723,6 +728,10 @@ mod tests {
         assert_eq!(chain_id_for_network("eip155:8453").unwrap(), 8453);
         assert_eq!(chain_id_for_network("base-sepolia").unwrap(), 84532);
         assert_eq!(chain_id_for_network("base").unwrap(), 8453);
+        assert_eq!(chain_id_for_network("eip155:4663").unwrap(), 4663);
+        assert_eq!(chain_id_for_network("robinhood").unwrap(), 4663);
+        assert_eq!(chain_id_for_network("robinhood-chain").unwrap(), 4663);
+        assert_eq!(chain_id_for_network("robinhood-testnet").unwrap(), 46630);
         assert!(chain_id_for_network("solana:5eykt4Us").is_err());
         assert!(chain_id_for_network("base:notanumber").is_err());
         assert!(chain_id_for_network("ethereum").is_err());

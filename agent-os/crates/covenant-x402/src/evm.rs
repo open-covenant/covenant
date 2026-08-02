@@ -39,14 +39,27 @@
 //! facilitator authenticates the payment with the same `ecrecover` the
 //! USDC contract performs.
 //!
+//! ## Asset pin
+//!
+//! The `asset` of a 402 challenge is attacker-controlled input. The
+//! signer signs only for the chain-local USDC it pins per chain
+//! ([`USDC_BASE_MAINNET`] on 8453, [`USDC_BASE_SEPOLIA`] on 84532); any
+//! other `(chain, asset)` pair fails closed unless the operator opted it
+//! in explicitly via [`EXTRA_ASSETS_ENV`]. Without the pin, "chain-local
+//! USDC" is operator convention rather than signer enforcement, and a
+//! malicious facilitator can obtain a valid EIP-3009
+//! `TransferWithAuthorization` for an arbitrary ERC-20 just by naming it
+//! as `asset` and supplying its domain in `extra`.
+//!
 //! ## Domain
 //!
 //! The EIP-712 domain is `(name, version, chainId, verifyingContract)`.
 //! `chainId` comes from the requirement's `network`; `verifyingContract`
 //! is the token `asset`. `name`/`version` are the token's EIP-712 domain
 //! values — x402 challenges carry them in `extra`, and the signer reads
-//! them there. When a challenge omits them the signer falls back only for
-//! a token whose domain it can pin with certainty (Base Sepolia USDC) and
+//! them there. When a challenge omits them the signer falls back only
+//! for the tokens whose domains it pins with certainty (Base mainnet
+//! USDC: `"USD Coin"`/`"2"`; Base Sepolia USDC: `"USDC"`/`"2"`) and
 //! otherwise fails closed, because a wrong domain name silently yields a
 //! signature the facilitator rejects.
 
@@ -60,11 +73,23 @@ use sha3::{Digest, Keccak256};
 
 use crate::{PaymentRequirements, Result, Signer, X402Error};
 
-/// USDC (native) on Base mainnet — 6 decimals, EIP-3009 capable.
+/// USDC (native) on Base mainnet — 6 decimals, EIP-3009 capable. Its
+/// EIP-712 domain name is `"USD Coin"`, version `"2"` — carried by a
+/// live zauth 402 challenge for this exact contract (covenant-zauth
+/// `challenge.rs` `LIVE_DECODED`, captured 2026-06-03) and re-verified
+/// against the chain by `tests/live_evm_usdc_domain.rs`.
 pub const USDC_BASE_MAINNET: &str = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 /// USDC on Base Sepolia (Circle's testnet deployment) — 6 decimals,
-/// EIP-3009 capable. Its EIP-712 domain name is `"USDC"`, version `"2"`.
+/// EIP-3009 capable. Its EIP-712 domain name is `"USDC"`, version `"2"`
+/// (re-verified against the chain by `tests/live_evm_usdc_domain.rs`).
 pub const USDC_BASE_SEPOLIA: &str = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
+
+/// Env var naming operator-authorized `(chain, asset)` pairs beyond the
+/// chain-local USDC pins: comma-separated `<chainId>:<0xaddress>`
+/// entries, e.g. `8453:0x…,84532:0x…`. Matching is chain-scoped and
+/// address-case-insensitive; a malformed entry is a hard error, never a
+/// silently dropped or widened allowlist.
+pub const EXTRA_ASSETS_ENV: &str = "COVENANT_X402_EVM_EXTRA_ASSETS";
 
 /// x402 envelope version this client emits, matching [`crate::SolanaSigner`].
 const X402_VERSION: u8 = 1;
@@ -98,6 +123,7 @@ pub struct EvmSigner {
     address: [u8; 20],
     valid_for_secs: u64,
     clock_skew_secs: u64,
+    extra_assets: Vec<(u64, [u8; 20])>,
 }
 
 impl EvmSigner {
@@ -112,12 +138,22 @@ impl EvmSigner {
             address,
             valid_for_secs: DEFAULT_VALID_FOR_SECS,
             clock_skew_secs: DEFAULT_CLOCK_SKEW_SECS,
+            extra_assets: Vec::new(),
         })
     }
 
     /// Override the settlement window: `validBefore = now + secs`.
     pub fn with_valid_for_secs(mut self, secs: u64) -> Self {
         self.valid_for_secs = secs;
+        self
+    }
+
+    /// Authorize extra `(chain id, asset)` pairs beyond the chain-local
+    /// USDC pins — the parsed form of [`EXTRA_ASSETS_ENV`] (see
+    /// [`parse_extra_assets`] / [`extra_assets_from_env`]). Explicit
+    /// opt-in only: the default is the pins alone.
+    pub fn with_extra_assets(mut self, extra_assets: Vec<(u64, [u8; 20])>) -> Self {
+        self.extra_assets = extra_assets;
         self
     }
 
@@ -145,6 +181,18 @@ impl EvmSigner {
             .map_err(|e| X402Error::Sign(format!("parse pay_to {:?}: {e}", requirements.pay_to)))?;
         let verifying_contract = parse_address(&requirements.asset)
             .map_err(|e| X402Error::Sign(format!("parse asset {:?}: {e}", requirements.asset)))?;
+        if !asset_permitted(chain_id, &verifying_contract, &self.extra_assets) {
+            // Deliberately no paste-ready opt-in value here: the pair is
+            // attacker-influenced, and an error that pre-fills it invites
+            // authorizing an unvetted token to make the error go away.
+            return Err(X402Error::Sign(format!(
+                "EvmSigner: asset 0x{} is not the chain-local USDC for chain {chain_id}; \
+                 refusing to sign a transfer authorization for an unpinned token — operators \
+                 opt a vetted pair in via {EXTRA_ASSETS_ENV} (<chainId>:<0xaddress>, \
+                 comma-separated)",
+                hex_encode(&verifying_contract),
+            )));
+        }
         let value: u128 = requirements
             .amount
             .parse()
@@ -155,7 +203,7 @@ impl EvmSigner {
                     .into(),
             ));
         }
-        let (name, version) = domain_name_version(requirements, &verifying_contract)?;
+        let (name, version) = domain_name_version(requirements, chain_id, &verifying_contract)?;
 
         let auth = Authorization {
             from: self.address,
@@ -228,6 +276,94 @@ struct Authorization {
     nonce: [u8; 32],
 }
 
+/// The chain-local USDC deployment the signer pins per chain id.
+///
+/// [`EvmSigner::build_envelope`] refuses every other asset unless the
+/// operator opted the exact `(chain, asset)` pair in via
+/// [`EXTRA_ASSETS_ENV`]: the `asset` of a 402 challenge is
+/// attacker-controlled, and an unpinned signer hands out a valid
+/// EIP-3009 authorization on an arbitrary ERC-20.
+fn pinned_usdc_for_chain(chain_id: u64) -> Option<&'static str> {
+    match chain_id {
+        8453 => Some(USDC_BASE_MAINNET),
+        84532 => Some(USDC_BASE_SEPOLIA),
+        _ => None,
+    }
+}
+
+/// True when `contract` is the pinned chain-local USDC for `chain_id` or
+/// an operator-authorized pair. Both dimensions must match: an allowlist
+/// entry never authorizes the same address on a different chain.
+fn asset_permitted(chain_id: u64, contract: &[u8; 20], extra_assets: &[(u64, [u8; 20])]) -> bool {
+    if pinned_usdc_for_chain(chain_id).is_some_and(|pinned| eq_address_hex(contract, pinned)) {
+        return true;
+    }
+    extra_assets
+        .iter()
+        .any(|(chain, asset)| *chain == chain_id && asset == contract)
+}
+
+/// Selection-side mirror of the signer's asset pin: an EVM-network
+/// requirement whose asset is neither the chain-local USDC nor
+/// operator-authorized must not be picked — the signer would refuse it
+/// anyway, and skipping it early keeps `NoMatch` semantics. Networks
+/// this module cannot resolve (e.g. `solana:`) are out of its scope and
+/// pass through to their own signer's checks.
+pub(crate) fn requirement_asset_permitted(
+    network: &str,
+    asset: &str,
+    extra_assets: &[(u64, [u8; 20])],
+) -> bool {
+    let Ok(chain_id) = chain_id_for_network(network) else {
+        return true;
+    };
+    let Ok(contract) = parse_address(asset) else {
+        return false;
+    };
+    asset_permitted(chain_id, &contract, extra_assets)
+}
+
+/// Parse an [`EXTRA_ASSETS_ENV`]-shaped allowlist. Empty input is an
+/// empty allowlist; any malformed entry is an error, so an operator typo
+/// cannot silently change what the signer will pay.
+pub fn parse_extra_assets(raw: &str) -> Result<Vec<(u64, [u8; 20])>> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    for entry in raw.split(',') {
+        let entry = entry.trim();
+        let Some((chain, address)) = entry.split_once(':') else {
+            return Err(X402Error::Sign(format!(
+                "{EXTRA_ASSETS_ENV}: entry {entry:?} must be <chainId>:<0xaddress>"
+            )));
+        };
+        let chain_id: u64 = chain.trim().parse().map_err(|_| {
+            X402Error::Sign(format!(
+                "{EXTRA_ASSETS_ENV}: unparseable chain id in entry {entry:?}"
+            ))
+        })?;
+        let contract = parse_address(address.trim())
+            .map_err(|e| X402Error::Sign(format!("{EXTRA_ASSETS_ENV}: entry {entry:?}: {e}")))?;
+        out.push((chain_id, contract));
+    }
+    Ok(out)
+}
+
+/// Read the operator allowlist from [`EXTRA_ASSETS_ENV`]. Absent means
+/// empty — the chain-local USDC pins alone decide.
+pub fn extra_assets_from_env() -> Result<Vec<(u64, [u8; 20])>> {
+    match std::env::var(EXTRA_ASSETS_ENV) {
+        Ok(raw) => parse_extra_assets(&raw),
+        Err(std::env::VarError::NotPresent) => Ok(Vec::new()),
+        Err(std::env::VarError::NotUnicode(_)) => Err(X402Error::Sign(format!(
+            "{EXTRA_ASSETS_ENV} is set but is not valid UTF-8; an unreadable allowlist \
+             must not silently become an empty one"
+        ))),
+    }
+}
+
 /// Resolves the EVM chain id the EIP-712 domain binds to.
 ///
 /// Accepts the CAIP-2 `eip155:<id>` form, this codebase's `base:<id>`
@@ -258,11 +394,15 @@ fn chain_id_for_network(network: &str) -> Result<u64> {
 /// The EIP-712 domain `name`/`version` for the paying token.
 ///
 /// Prefers the values the challenge carries in `extra`; that is the
-/// authoritative source for any token. Falls back only to a domain the
-/// signer can assert with certainty (Base Sepolia USDC). Any other token
-/// with no `extra` domain fails closed rather than guess.
+/// authoritative source for any token. Falls back only to the domains
+/// the signer can assert with certainty — the pinned Base USDC
+/// deployments, each keyed to its own chain id, so an operator
+/// allowlisting a pinned address on a foreign chain gets no guessed
+/// domain there. Any other token with no `extra` domain fails closed
+/// rather than guess.
 fn domain_name_version(
     requirements: &PaymentRequirements,
+    chain_id: u64,
     verifying_contract: &[u8; 20],
 ) -> Result<(String, String)> {
     if let Some(extra) = &requirements.extra {
@@ -270,7 +410,15 @@ fn domain_name_version(
             return Ok((name.to_string(), version.to_string()));
         }
     }
-    if eq_address_hex(verifying_contract, USDC_BASE_SEPOLIA) {
+    if chain_id == 8453 && eq_address_hex(verifying_contract, USDC_BASE_MAINNET) {
+        // Evidenced by a live zauth 402 challenge for this contract
+        // (covenant-zauth challenge.rs LIVE_DECODED, captured
+        // 2026-06-03: eip155:8453 with extra {"name":"USD Coin",
+        // "version":"2"}) and re-verified on-chain by
+        // tests/live_evm_usdc_domain.rs.
+        return Ok(("USD Coin".to_string(), "2".to_string()));
+    }
+    if chain_id == 84532 && eq_address_hex(verifying_contract, USDC_BASE_SEPOLIA) {
         return Ok(("USDC".to_string(), "2".to_string()));
     }
     Err(X402Error::Sign(format!(
@@ -690,30 +838,281 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unknown_asset_without_extra_fails_closed() {
+    async fn domain_falls_back_for_base_mainnet_usdc_without_extra() {
+        // The zauth-evidenced mainnet USDC domain ("USD Coin", "2"): no
+        // extra, mainnet chain id, pinned asset — must build, and the
+        // signature must recover to the payer under exactly that domain.
+        // Before the fallback, a mainnet challenge without extra failed.
+        let signer = EvmSigner::from_secret_bytes(&cow_secret()).unwrap();
+        let mut req = base_sepolia_usdc_req("10000");
+        req.network = "eip155:8453".into();
+        req.asset = USDC_BASE_MAINNET.into();
+        req.extra = None;
+        let env = decode_envelope(
+            &signer
+                .build_envelope(&req, 1_740_672_089, [0x44; 32])
+                .unwrap(),
+        );
+        let auth = &env["payload"]["authorization"];
+        let digest = eip712_digest(
+            &domain_separator(
+                "USD Coin",
+                "2",
+                8453,
+                &parse_address(USDC_BASE_MAINNET).unwrap(),
+            ),
+            &transfer_struct_hash(&Authorization {
+                from: signer.address(),
+                to: parse_address(auth["to"].as_str().unwrap()).unwrap(),
+                value: 10000,
+                valid_after: auth["validAfter"].as_str().unwrap().parse().unwrap(),
+                valid_before: auth["validBefore"].as_str().unwrap().parse().unwrap(),
+                nonce: parse_bytes32(auth["nonce"].as_str().unwrap()),
+            }),
+        );
+        let sig = parse_hex(env["payload"]["signature"].as_str().unwrap());
+        assert_eq!(recover(&digest, &sig), signer.address());
+    }
+
+    // --- Asset pin ---
+
+    /// A valid 20-byte address that is not a pinned USDC deployment.
+    const ATTACKER_ASSET: &str = "0x4141414141414141414141414141414141414141";
+
+    fn full_extra(name: &str, version: &str) -> Option<PaymentExtra> {
+        Some(PaymentExtra {
+            fee_payer: None,
+            name: Some(name.into()),
+            version: Some(version.into()),
+        })
+    }
+
+    #[tokio::test]
+    async fn arbitrary_asset_with_full_wire_domain_fails_closed() {
+        // The pin's reason to exist: before it, a full extra
+        // (name+version) sufficed to sign ANY ERC-20 a facilitator named
+        // — a valid TransferWithAuthorization on an attacker token. The
+        // refusal names the env var that opts a pair in.
+        let signer = EvmSigner::from_secret_bytes(&cow_secret()).unwrap();
+        let mut req = base_sepolia_usdc_req("10000");
+        req.asset = ATTACKER_ASSET.into();
+        req.extra = full_extra("Evil Token", "1");
+        let err = signer
+            .build_payment(&req)
+            .await
+            .expect_err("unpinned asset");
+        assert!(matches!(
+            err,
+            X402Error::Sign(m) if m.contains("not the chain-local USDC") && m.contains(EXTRA_ASSETS_ENV)
+        ));
+    }
+
+    #[tokio::test]
+    async fn mainnet_usdc_on_the_sepolia_chain_fails_closed() {
+        // Chain and asset must agree: mainnet USDC on the Sepolia chain
+        // id is a mispinned (or hostile) challenge. The pin refuses
+        // before any domain resolution runs.
         let signer = EvmSigner::from_secret_bytes(&cow_secret()).unwrap();
         let mut req = base_sepolia_usdc_req("10000");
         req.asset = USDC_BASE_MAINNET.into();
         req.extra = None;
-        let err = signer.build_payment(&req).await.expect_err("no domain");
-        assert!(matches!(err, X402Error::Sign(m) if m.contains("no EIP-712 domain")));
+        let err = signer
+            .build_payment(&req)
+            .await
+            .expect_err("cross-chain asset");
+        assert!(matches!(err, X402Error::Sign(m) if m.contains("not the chain-local USDC")));
     }
 
     #[tokio::test]
-    async fn unknown_asset_with_partial_extra_fails_closed() {
-        // Half a domain must not sign: both name and version are required
-        // before a wire-supplied domain is trusted, and challenge decoders
-        // now deliver partial extras verbatim instead of collapsing them
-        // to None.
+    async fn sepolia_usdc_on_the_mainnet_chain_fails_closed() {
         let signer = EvmSigner::from_secret_bytes(&cow_secret()).unwrap();
         let mut req = base_sepolia_usdc_req("10000");
+        req.network = "eip155:8453".into();
+        let err = signer
+            .build_payment(&req)
+            .await
+            .expect_err("cross-chain asset");
+        assert!(matches!(err, X402Error::Sign(m) if m.contains("not the chain-local USDC")));
+    }
+
+    #[tokio::test]
+    async fn unpinned_chain_without_allowlist_fails_closed() {
+        // chain_id_for_network resolves any eip155:<n>, but a chain with
+        // no pinned USDC and no operator pair must never sign — even for
+        // an address that is a real USDC deployment elsewhere.
+        let signer = EvmSigner::from_secret_bytes(&cow_secret()).unwrap();
+        let mut req = base_sepolia_usdc_req("10000");
+        req.network = "eip155:1".into();
         req.asset = USDC_BASE_MAINNET.into();
+        req.extra = full_extra("USD Coin", "2");
+        let err = signer
+            .build_payment(&req)
+            .await
+            .expect_err("unpinned chain");
+        assert!(matches!(err, X402Error::Sign(m) if m.contains("not the chain-local USDC")));
+    }
+
+    #[tokio::test]
+    async fn operator_allowlisted_asset_signs_with_the_wire_domain() {
+        // The explicit opt-in path: the exact (chain, asset) pair is
+        // authorized, and the signature must verify under the
+        // wire-supplied domain for that asset.
+        let signer = EvmSigner::from_secret_bytes(&cow_secret())
+            .unwrap()
+            .with_extra_assets(parse_extra_assets(&format!("84532:{ATTACKER_ASSET}")).unwrap());
+        let mut req = base_sepolia_usdc_req("10000");
+        req.asset = ATTACKER_ASSET.into();
+        req.extra = full_extra("Wrapped Test", "1");
+        let env = decode_envelope(
+            &signer
+                .build_envelope(&req, 1_740_672_089, [0x55; 32])
+                .unwrap(),
+        );
+        let auth = &env["payload"]["authorization"];
+        let digest = eip712_digest(
+            &domain_separator(
+                "Wrapped Test",
+                "1",
+                84532,
+                &parse_address(ATTACKER_ASSET).unwrap(),
+            ),
+            &transfer_struct_hash(&Authorization {
+                from: signer.address(),
+                to: parse_address(auth["to"].as_str().unwrap()).unwrap(),
+                value: 10000,
+                valid_after: auth["validAfter"].as_str().unwrap().parse().unwrap(),
+                valid_before: auth["validBefore"].as_str().unwrap().parse().unwrap(),
+                nonce: parse_bytes32(auth["nonce"].as_str().unwrap()),
+            }),
+        );
+        let sig = parse_hex(env["payload"]["signature"].as_str().unwrap());
+        assert_eq!(recover(&digest, &sig), signer.address());
+    }
+
+    #[tokio::test]
+    async fn allowlist_is_chain_scoped_on_both_dimensions() {
+        // The allowlist match is (chain AND asset). Feed two near-miss
+        // entries — the right asset on the wrong chain, and the right
+        // chain with a different asset — so an &&->|| mutation cannot
+        // pass: under ||, either near-miss alone would authorize.
+        let other = "0x4242424242424242424242424242424242424242";
+        let signer = EvmSigner::from_secret_bytes(&cow_secret())
+            .unwrap()
+            .with_extra_assets(
+                parse_extra_assets(&format!("8453:{ATTACKER_ASSET},84532:{other}")).unwrap(),
+            );
+        let mut req = base_sepolia_usdc_req("10000");
+        req.asset = ATTACKER_ASSET.into();
+        req.extra = full_extra("Evil Token", "1");
+        let err = signer
+            .build_payment(&req)
+            .await
+            .expect_err("near-miss entries");
+        assert!(matches!(err, X402Error::Sign(m) if m.contains("not the chain-local USDC")));
+    }
+
+    #[tokio::test]
+    async fn allowlisted_asset_without_full_domain_fails_closed() {
+        // Opt-in authorizes paying the asset; it does not conjure a
+        // domain. Half a wire domain (or none) must still not sign: both
+        // name and version are required before a wire-supplied domain is
+        // trusted, and only the pinned USDCs have fallback domains.
+        let signer = EvmSigner::from_secret_bytes(&cow_secret())
+            .unwrap()
+            .with_extra_assets(parse_extra_assets(&format!("84532:{ATTACKER_ASSET}")).unwrap());
+
+        let mut req = base_sepolia_usdc_req("10000");
+        req.asset = ATTACKER_ASSET.into();
         req.extra = Some(PaymentExtra {
-            name: Some("USD Coin".into()),
+            name: Some("Evil Token".into()),
             ..Default::default()
         });
         let err = signer.build_payment(&req).await.expect_err("half a domain");
         assert!(matches!(err, X402Error::Sign(m) if m.contains("no EIP-712 domain")));
+
+        let mut req = base_sepolia_usdc_req("10000");
+        req.asset = ATTACKER_ASSET.into();
+        req.extra = None;
+        let err = signer
+            .build_payment(&req)
+            .await
+            .expect_err("no domain at all");
+        assert!(matches!(err, X402Error::Sign(m) if m.contains("no EIP-712 domain")));
+    }
+
+    #[tokio::test]
+    async fn pinned_usdc_fallback_is_chain_keyed() {
+        // Allowlisting a pinned USDC address on a foreign chain
+        // authorizes paying it there; it must NOT drag the Base domain
+        // fallback along — that domain was never verified for that
+        // chain, so absent a wire extra the signer refuses.
+        let signer = EvmSigner::from_secret_bytes(&cow_secret())
+            .unwrap()
+            .with_extra_assets(parse_extra_assets(&format!("1:{USDC_BASE_MAINNET}")).unwrap());
+        let mut req = base_sepolia_usdc_req("10000");
+        req.network = "eip155:1".into();
+        req.asset = USDC_BASE_MAINNET.into();
+        req.extra = None;
+        let err = signer
+            .build_payment(&req)
+            .await
+            .expect_err("foreign-chain pinned address");
+        assert!(matches!(err, X402Error::Sign(m) if m.contains("no EIP-712 domain")));
+    }
+
+    #[test]
+    fn usdc_pin_table_is_chain_exact() {
+        assert_eq!(pinned_usdc_for_chain(8453), Some(USDC_BASE_MAINNET));
+        assert_eq!(pinned_usdc_for_chain(84532), Some(USDC_BASE_SEPOLIA));
+        assert_eq!(pinned_usdc_for_chain(1), None);
+    }
+
+    #[test]
+    fn parse_extra_assets_accepts_the_documented_shape() {
+        assert_eq!(parse_extra_assets("").unwrap(), vec![]);
+        assert_eq!(parse_extra_assets("   ").unwrap(), vec![]);
+        assert_eq!(
+            parse_extra_assets(&format!("8453:{USDC_BASE_MAINNET}")).unwrap(),
+            vec![(8453, parse_address(USDC_BASE_MAINNET).unwrap())]
+        );
+        let two = parse_extra_assets(&format!(
+            " 8453:{ATTACKER_ASSET} , 84532:0x4242424242424242424242424242424242424242 "
+        ))
+        .unwrap();
+        assert_eq!(two[0], (8453, parse_address(ATTACKER_ASSET).unwrap()));
+        assert_eq!(two[1].0, 84532);
+    }
+
+    #[test]
+    fn parse_extra_assets_rejects_malformed_entries_loudly() {
+        // A typo'd allowlist is a hard error naming the env var, never a
+        // silently narrowed (or widened) authorization set.
+        for raw in [
+            "8453",
+            &format!("notachain:{ATTACKER_ASSET}") as &str,
+            "8453:0x1234",
+            &format!("8453:{ATTACKER_ASSET},,") as &str,
+        ] {
+            let err = parse_extra_assets(raw).expect_err("malformed allowlist");
+            assert!(
+                matches!(err, X402Error::Sign(m) if m.contains(EXTRA_ASSETS_ENV)),
+                "raw {raw:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn allowlisted_address_match_is_case_insensitive() {
+        // Wire challenges may checksum-case the asset; the allowlist
+        // entry may not. Address equality is byte equality, not string
+        // equality.
+        let upper = ATTACKER_ASSET.to_uppercase().replace("0X", "0x");
+        let extra = parse_extra_assets(&format!("84532:{upper}")).unwrap();
+        assert!(requirement_asset_permitted(
+            "base:84532",
+            ATTACKER_ASSET,
+            &extra
+        ));
     }
 
     #[test]

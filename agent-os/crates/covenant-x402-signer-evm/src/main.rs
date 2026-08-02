@@ -11,17 +11,23 @@
 //! - exit 0 on success; non-zero with a message on stderr otherwise.
 //!
 //! The signer rejects any non-EVM network (a `solana:` requirement fails
-//! closed), so pointing `COVENANT_X402_SIGNER_BINARY` at this binary makes the
-//! daemon pay only over Base.
+//! closed) and any asset that is not the chain-local USDC unless the operator
+//! authorized the exact `(chain, asset)` pair, so pointing
+//! `COVENANT_X402_SIGNER_BINARY` at this binary makes the daemon pay only over
+//! Base, and only in USDC by default.
 //!
 //! Configuration (env):
 //! - `COVENANT_X402_EVM_KEY_HEX` — the 32-byte secp256k1 secret as hex, or
 //! - `COVENANT_X402_EVM_KEY` — path to a file holding that hex. One is required.
 //! - `COVENANT_X402_EVM_VALID_SECS` — optional authorization lifetime override.
+//! - `COVENANT_X402_EVM_EXTRA_ASSETS` — optional comma-separated
+//!   `<chainId>:<0xaddress>` pairs authorizing assets beyond the pinned
+//!   chain-local USDC; anything else fails closed. A malformed entry aborts
+//!   rather than narrowing the allowlist silently.
 
 use std::process::ExitCode;
 
-use covenant_x402::{EvmSigner, PaymentRequirements, Signer};
+use covenant_x402::{extra_assets_from_env, EvmSigner, PaymentRequirements, Signer};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::main]
@@ -54,7 +60,8 @@ async fn main() -> ExitCode {
 
 async fn run() -> Result<String, Box<dyn std::error::Error>> {
     let secret = load_secret()?;
-    let mut signer = EvmSigner::from_secret_bytes(&secret)?;
+    let mut signer =
+        EvmSigner::from_secret_bytes(&secret)?.with_extra_assets(extra_assets_from_env()?);
     if let Ok(raw) = std::env::var("COVENANT_X402_EVM_VALID_SECS") {
         let secs: u64 = raw
             .parse()
@@ -84,8 +91,10 @@ fn load_secret() -> Result<[u8; 32], Box<dyn std::error::Error>> {
 
 fn decode_secret(value: &str) -> Result<[u8; 32], Box<dyn std::error::Error>> {
     let trimmed = value.trim();
+    // The hex error is not echoed: InvalidHexCharacter names a byte of
+    // the operator's key input, and key material never belongs on stderr.
     let bytes = hex::decode(trimmed.strip_prefix("0x").unwrap_or(trimmed))
-        .map_err(|e| format!("EVM key must be hex: {e}"))?;
+        .map_err(|_| "EVM key must be an even-length hex string")?;
     let secret: [u8; 32] = bytes
         .as_slice()
         .try_into()

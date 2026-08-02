@@ -14,6 +14,10 @@
 //! shape? A funded key additionally clears the balance check; an unfunded
 //! key still proves the signature and wire format are what the facilitator
 //! expects (it rejects on balance, not on signature).
+//!
+//! When the env vars are unset the test skips LOUDLY, naming what is
+//! missing — a silent early return would let a run that verified nothing
+//! read as facilitator coverage.
 
 use serde_json::{json, Value};
 
@@ -41,16 +45,27 @@ fn secret_bytes(hex: &str) -> [u8; 32] {
 #[tokio::test]
 #[ignore = "live: needs a Base Sepolia x402 facilitator URL and a funding key"]
 async fn live_evm_facilitator_accepts_exact_payment() {
-    let (Some(facilitator), Some(secret_hex)) = (
-        env("COVENANT_X402_EVM_FACILITATOR_URL"),
-        env("COVENANT_X402_EVM_SECRET_HEX"),
-    ) else {
+    let facilitator = env("COVENANT_X402_EVM_FACILITATOR_URL");
+    let secret_hex = env("COVENANT_X402_EVM_SECRET_HEX");
+    let mut missing = Vec::new();
+    if facilitator.is_none() {
+        missing.push("COVENANT_X402_EVM_FACILITATOR_URL");
+    }
+    if secret_hex.is_none() {
+        missing.push("COVENANT_X402_EVM_SECRET_HEX");
+    }
+    if !missing.is_empty() {
+        // Loud, named skip: a bare early return reads as a pass in test
+        // output, and a run that verified nothing must not be mistaken
+        // for facilitator coverage.
         eprintln!(
-            "skipping: set COVENANT_X402_EVM_FACILITATOR_URL and \
-             COVENANT_X402_EVM_SECRET_HEX to enable"
+            "SKIPPED (verified nothing): live_evm_facilitator_accepts_exact_payment \
+             ran without {} — set the unset var(s) to exercise the facilitator boundary",
+            missing.join(" and ")
         );
         return;
-    };
+    }
+    let (facilitator, secret_hex) = (facilitator.unwrap(), secret_hex.unwrap());
 
     let signer = EvmSigner::from_secret_bytes(&secret_bytes(&secret_hex)).expect("signer");
 
@@ -112,14 +127,16 @@ async fn live_evm_facilitator_accepts_exact_payment() {
         verdict.get("isValid").is_some() || verdict.get("invalidReason").is_some(),
         "facilitator response must carry an x402 verify verdict, got: {verdict}"
     );
-    // A signature/format defect surfaces as an explicit invalid-signature
-    // reason; a funding shortfall does not. Fail only on the former, so an
-    // unfunded key still gives a clean signal on wire correctness.
+    // An unfunded key legitimately fails only the balance check. Accept
+    // exactly funding-class reasons and fail on everything else —
+    // signature, scheme, network, payload shape, or any reason string
+    // this test has never seen — so a wire regression cannot pass as
+    // "probably a funding shortfall".
     if let Some(reason) = verdict.get("invalidReason").and_then(Value::as_str) {
         let r = reason.to_ascii_lowercase();
         assert!(
-            !(r.contains("signature") || r.contains("malformed") || r.contains("decode")),
-            "facilitator rejected the payload shape/signature: {reason}"
+            r.contains("fund") || r.contains("balance"),
+            "facilitator rejected for a non-funding reason: {reason}"
         );
     }
 }

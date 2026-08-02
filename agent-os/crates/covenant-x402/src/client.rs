@@ -57,9 +57,11 @@ impl Client {
     /// 2. On a 402 response, parses the body as an array of
     ///    [`PaymentRequirements`].
     /// 3. Picks the first requirement whose `network` + `asset`
-    ///    match the capability and whose `amount` is within
-    ///    `per_call_cap`. Returns [`X402Error::NoMatch`] when none
-    ///    qualifies.
+    ///    match the capability, whose asset — on an EVM network — is
+    ///    the chain-local USDC (or operator-authorized via
+    ///    [`crate::evm::EXTRA_ASSETS_ENV`]), and whose `amount` is
+    ///    within `per_call_cap`. Returns [`X402Error::NoMatch`] when
+    ///    none qualifies.
     /// 4. Hands the matched requirement to the signer and retries
     ///    the same request with the resulting `x-payment` header.
     /// 5. Returns the paid response.
@@ -88,7 +90,9 @@ impl Client {
         let requirements: Vec<PaymentRequirements> = serde_json::from_str(&challenge_text)
             .map_err(|e| X402Error::DecodeChallenge(e.to_string()))?;
 
-        let chosen = pick_requirement(&requirements, capability).ok_or(X402Error::NoMatch)?;
+        let extra_evm_assets = crate::evm::extra_assets_from_env()?;
+        let chosen = pick_requirement(&requirements, capability, &extra_evm_assets)
+            .ok_or(X402Error::NoMatch)?;
 
         debug!(
             network = %chosen.network,
@@ -124,13 +128,25 @@ impl Client {
 /// Returns None when no requirement is on the right chain + asset,
 /// or every matching requirement is priced at zero or above the
 /// per-call cap — a zero price is a malformed challenge, not a free
-/// call, and must never be signed.
+/// call, and must never be signed. On EVM networks the asset must
+/// additionally be the chain-local USDC or an operator-authorized
+/// `(chain, asset)` pair: a capability naming anything else (a poisoned
+/// catalog entry) must never reach a signer.
 fn pick_requirement<'a>(
     requirements: &'a [PaymentRequirements],
     capability: &Capability,
+    extra_evm_assets: &[(u64, [u8; 20])],
 ) -> Option<&'a PaymentRequirements> {
     requirements.iter().find(|r| {
         if r.network != capability.network || r.asset != capability.asset {
+            return false;
+        }
+        if !crate::evm::requirement_asset_permitted(&r.network, &r.asset, extra_evm_assets) {
+            warn!(
+                network = %r.network,
+                asset = %r.asset,
+                "x402 requirement asset is not the chain-local USDC and not operator-authorized; skipping"
+            );
             return false;
         }
         match r.amount.parse::<u128>() {
@@ -180,7 +196,7 @@ mod tests {
             req("solana:mainnet", "usdc-sol", "80000"),
         ];
         let c = cap("solana:mainnet", "usdc-sol", 100_000);
-        let picked = pick_requirement(&reqs, &c).expect("match");
+        let picked = pick_requirement(&reqs, &c, &[]).expect("match");
         assert_eq!(picked.network, "solana:mainnet");
     }
 
@@ -188,7 +204,7 @@ mod tests {
     fn pick_rejects_amount_over_cap() {
         let reqs = vec![req("solana:mainnet", "usdc-sol", "200000")];
         let c = cap("solana:mainnet", "usdc-sol", 100_000);
-        assert!(pick_requirement(&reqs, &c).is_none());
+        assert!(pick_requirement(&reqs, &c, &[]).is_none());
     }
 
     #[test]
@@ -199,7 +215,7 @@ mod tests {
         // pick_skips_unparseable_amount comment names but does not itself cover.
         let reqs = vec![req("solana:mainnet", "usdc-sol", "0")];
         let c = cap("solana:mainnet", "usdc-sol", 100_000);
-        assert!(pick_requirement(&reqs, &c).is_none());
+        assert!(pick_requirement(&reqs, &c, &[]).is_none());
     }
 
     #[test]
@@ -210,7 +226,7 @@ mod tests {
         // would silently make the cap exclusive and drop an at-budget call.
         let reqs = vec![req("solana:mainnet", "usdc-sol", "100000")];
         let c = cap("solana:mainnet", "usdc-sol", 100_000);
-        let picked = pick_requirement(&reqs, &c).expect("at-cap amount must be accepted");
+        let picked = pick_requirement(&reqs, &c, &[]).expect("at-cap amount must be accepted");
         assert_eq!(picked.amount, "100000");
     }
 
@@ -218,7 +234,7 @@ mod tests {
     fn pick_rejects_wrong_chain() {
         let reqs = vec![req("base:8453", "usdc-base", "80000")];
         let c = cap("solana:mainnet", "usdc-sol", 100_000);
-        assert!(pick_requirement(&reqs, &c).is_none());
+        assert!(pick_requirement(&reqs, &c, &[]).is_none());
     }
 
     #[test]
@@ -234,7 +250,7 @@ mod tests {
         // different Solana mint just because the network matches.
         let wrong_asset = vec![req("solana:mainnet", "usdt-sol", "80000")];
         assert!(
-            pick_requirement(&wrong_asset, &c).is_none(),
+            pick_requirement(&wrong_asset, &c, &[]).is_none(),
             "matching network with a wrong asset must not be picked"
         );
 
@@ -242,7 +258,7 @@ mod tests {
         // base-chain requirement that happens to share the asset label.
         let wrong_network = vec![req("base:8453", "usdc-sol", "80000")];
         assert!(
-            pick_requirement(&wrong_network, &c).is_none(),
+            pick_requirement(&wrong_network, &c, &[]).is_none(),
             "matching asset with a wrong network must not be picked"
         );
     }
@@ -468,11 +484,44 @@ mod tests {
     }
 
     #[test]
+    fn pick_rejects_evm_asset_that_is_not_chain_local_usdc() {
+        // Even a full capability match must not select an unpinned EVM
+        // asset: with a poisoned catalog entry, capability and challenge
+        // agree on an attacker ERC-20 — the selection pin (mirroring the
+        // signer's) still refuses it.
+        let attacker = "0x4141414141414141414141414141414141414141";
+        let reqs = vec![req("base:84532", attacker, "80000")];
+        let c = cap("base:84532", attacker, 100_000);
+        assert!(pick_requirement(&reqs, &c, &[]).is_none());
+    }
+
+    #[test]
+    fn pick_accepts_the_pinned_chain_local_usdc_on_evm() {
+        let reqs = vec![req("base:84532", crate::USDC_BASE_SEPOLIA, "80000")];
+        let c = cap("base:84532", crate::USDC_BASE_SEPOLIA, 100_000);
+        let picked = pick_requirement(&reqs, &c, &[]).expect("pinned USDC must be picked");
+        assert_eq!(picked.asset, crate::USDC_BASE_SEPOLIA);
+    }
+
+    #[test]
+    fn pick_honors_the_operator_allowlist_chain_scoped() {
+        // The exact (chain, asset) pair authorizes; the same address on
+        // a different chain does not — near-miss entries must not match.
+        let attacker = "0x4141414141414141414141414141414141414141";
+        let reqs = vec![req("base:84532", attacker, "80000")];
+        let c = cap("base:84532", attacker, 100_000);
+        let authorized = crate::evm::parse_extra_assets(&format!("84532:{attacker}")).unwrap();
+        assert!(pick_requirement(&reqs, &c, &authorized).is_some());
+        let wrong_chain = crate::evm::parse_extra_assets(&format!("8453:{attacker}")).unwrap();
+        assert!(pick_requirement(&reqs, &c, &wrong_chain).is_none());
+    }
+
+    #[test]
     fn pick_skips_unparseable_amount() {
         // A requirement whose amount does not parse as u128 must be skipped, not
         // matched — signing against it would send an unbounded or zero transfer.
         let reqs = vec![req("solana:mainnet", "usdc-sol", "not-a-number")];
         let c = cap("solana:mainnet", "usdc-sol", 100_000);
-        assert!(pick_requirement(&reqs, &c).is_none());
+        assert!(pick_requirement(&reqs, &c, &[]).is_none());
     }
 }

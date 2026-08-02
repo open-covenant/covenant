@@ -38,7 +38,10 @@ pub mod types;
 pub mod solana;
 
 pub use client::{http_client, Client};
-pub use evm::{EvmSigner, USDC_BASE_MAINNET, USDC_BASE_SEPOLIA};
+pub use evm::{
+    extra_assets_from_env, parse_extra_assets, EvmSigner, EXTRA_ASSETS_ENV, USDC_BASE_MAINNET,
+    USDC_BASE_SEPOLIA,
+};
 pub use flow::PaidRequest;
 pub use orbit::{Catalog, OrbitClient, Pagination, RegistryEntry, RegistryResponse};
 pub use signer::{MockSigner, Signer};

@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-08-02T18:31:49.759Z",
+  "updatedAt": "2026-08-02T18:51:53.372Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 13021,
+    "events": 13022,
     "tasks": 1527,
     "integrated": 1527
   },
@@ -187,7 +187,7 @@
     "integrated": 1519,
     "proposed": 1,
     "blocked": 6,
-    "self_review": 1
+    "cross_review": 1
   },
   "areas": [
     {
@@ -217,8 +217,8 @@
   ],
   "inFlight": {
     "task": "multichain-wire-format-golden-vectors",
-    "state": "self_review",
-    "since": "2026-08-02T18:05:45.109Z"
+    "state": "cross_review",
+    "since": "2026-08-02T18:48:43.126Z"
   },
   "recent": [
     {

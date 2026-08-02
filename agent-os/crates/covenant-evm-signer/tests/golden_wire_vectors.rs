@@ -1,6 +1,6 @@
 //! Golden conformance vectors for the EVM-signer wire artifacts.
 //!
-//! Two fixtures freeze every byte an external consumer sees:
+//! Three fixtures freeze every byte an external consumer sees:
 //!
 //! - `tests/fixtures/reputation-attest.v1.json` — the EAS `attest` calldata
 //!   (and its ABI-encoded schema data) for one fixed reputation projection
@@ -13,6 +13,12 @@
 //!   (`agent-os/evm/test/OffchainResolver.t.sol`) embeds this vector's
 //!   request, result, response, and signer, making it a cross-language
 //!   contract with the deployed resolver's `resolveWithProof` callback.
+//! - `tests/fixtures/offchain-attestation.v1.json` — the signed EAS
+//!   off-chain `Attest` digests (one reputation and one audit-root
+//!   provenance record per Base network) that
+//!   `agent-os/evm/contracts/OffchainAttestationVerifier.sol` re-derives
+//!   on chain; `OffchainAttestationVerifier.t.sol` pins the base-sepolia
+//!   records.
 //!
 //! Blessing cannot freeze a broken encoder unnoticed: the attest calldata is
 //! re-derived from retyped constants and independent word packing, and the
@@ -29,16 +35,17 @@
 use std::path::PathBuf;
 
 use covenant_evm_signer::{
-    attest_calldata, attest_selector, encode_solana_addr_request, reputation_schema_uid,
-    solana_account_bytes, ReputationProjection, ReputationScore, ResolverGateway, ATTEST_SIGNATURE,
-    REPUTATION_SCHEMA, SOLANA_MAINNET_CAIP2,
+    attest_calldata, attest_selector, covenant_schema_uid, encode_solana_addr_request,
+    offchain_uid, recover_address, reputation_schema_uid, solana_account_bytes, AttestMessage,
+    EasAttestationSigner, EasDomain, ReputationProjection, ReputationScore, ResolverGateway,
+    ATTEST_SIGNATURE, COVENANT_SCHEMA, REPUTATION_SCHEMA, SOLANA_MAINNET_CAIP2,
 };
 use covenant_identity::Secp256k1IssuerKey;
 use k256::ecdsa::{RecoveryId, Signature as EcdsaSignature, VerifyingKey};
 use serde_json::{json, Value};
 use sha3::{Digest, Keccak256};
 
-/// Set to (re)generate both committed fixtures instead of asserting.
+/// Set to (re)generate the committed fixtures instead of asserting.
 const BLESS_ENV: &str = "COVENANT_BLESS_EVM_SIGNER_GOLDEN";
 
 const REPUTATION_DRIFT: &str = "reputation attest wire drift: \
@@ -56,6 +63,14 @@ const RESOLVER_DRIFT: &str = "resolver CCIP wire drift: \
     envelope changed, and live resolvers would reject every gateway response. Update \
     the fixture only as a deliberate, reviewed wire change (bump the .v<n> suffix for \
     an incompatible shape) — never blindly regenerate to silence this test.";
+
+const OFFCHAIN_DRIFT: &str = "offchain attestation wire drift: \
+    tests/fixtures/offchain-attestation.v1.json freezes the signed EAS off-chain Attest \
+    digests agent-os/evm/contracts/OffchainAttestationVerifier.sol re-derives on chain. \
+    A mismatch means the EIP-712 domain, Attest struct layout, or schema data encoding \
+    changed, and the deployed verifier would reject every legitimate record. Update the \
+    fixture only as a deliberate, reviewed wire change (bump the .v<n> suffix for an \
+    incompatible shape) — never blindly regenerate to silence this test.";
 
 /// The committed reputation fixture's `description`, code-pinned so a
 /// hand-edit to the fixture's prose fails the suite and a reword here
@@ -78,12 +93,29 @@ const RESOLVER_DESCRIPTION: &str = "Frozen golden vector for the CCIP-Read gatew
     update only as a deliberate, reviewed wire change — never blindly regenerate to \
     make a failing test pass.";
 
+/// The committed offchain-attestation fixture's `description`, code-pinned
+/// like the others.
+const OFFCHAIN_DESCRIPTION: &str = "Frozen golden vectors for the EAS off-chain \
+    attestations: one reputation and one audit-root provenance record per Base network \
+    under the fixed [9; 32] issuer key, carrying the EIP-712 domain separator, signing \
+    digest, (r, s, v) signature, offchain UID, and 128-byte ecrecover precompile input. \
+    agent-os/evm/test/OffchainAttestationVerifier.t.sol pins the base-sepolia records, \
+    making this a cross-language contract: update only as a deliberate, reviewed wire \
+    change — never blindly regenerate to make a failing test pass.";
+
 /// The live Solana audit-root attestation account the projection anchors to
 /// (`docs/metaplex-integration.md`, live-accounts table).
 const ANCHOR_BASE58: &str = "7PEd79CG1hFUU9qeBnAKmyA77YWzckd572qsYdq3W3GH";
 
 /// The fixed DNS-encoded name in the resolver query: `agent.opencovenant.eth`.
 const DNS_NAME: &[u8] = b"\x05agent\x0copencovenant\x03eth\x00";
+
+/// A synthetic audit root / credential hash for the provenance records: the
+/// digest math is what's pinned here — the VC→attest path that produces
+/// these two words from a real credential is proven by the crate's lib
+/// tests.
+const PROVENANCE_ROOT: &str = "0xabcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+const PROVENANCE_HASH: &str = "0x00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
 
 fn fixture_path(file: &str) -> PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -343,6 +375,316 @@ fn frozen_ccip_response_verifies_from_committed_bytes_alone() {
         fixture["response"].as_str().unwrap(),
         "{RESOLVER_DRIFT} (response envelope must reassemble from its parts)",
     );
+}
+
+/// The EAS off-chain domain separator from retyped strings and independent
+/// word packing — deliberately shares nothing with eip712.rs.
+fn scratch_separator(version: &str, chain_id: u64) -> [u8; 32] {
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&keccak(
+        b"EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)",
+    ));
+    buf.extend_from_slice(&keccak(b"EAS Attestation"));
+    buf.extend_from_slice(&keccak(version.as_bytes()));
+    buf.extend_from_slice(&word(u128::from(chain_id)));
+    let mut eas = [0u8; 32];
+    eas[12..].copy_from_slice(&unhex("0x4200000000000000000000000000000000000021"));
+    buf.extend_from_slice(&eas);
+    keccak(&buf)
+}
+
+/// The EAS off-chain `Attest` v1 signing digest from scratch: retyped type
+/// string, version 1, zero recipient/refUID, revocable true, `bytes data`
+/// hashed as a dynamic member.
+fn scratch_digest(
+    separator: &[u8; 32],
+    schema_uid: &[u8; 32],
+    time: u64,
+    expiration_time: u64,
+    data: &[u8],
+) -> [u8; 32] {
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&keccak(
+        b"Attest(uint16 version,bytes32 schema,address recipient,uint64 time,uint64 expirationTime,bool revocable,bytes32 refUID,bytes data)",
+    ));
+    buf.extend_from_slice(&word(1));
+    buf.extend_from_slice(schema_uid);
+    buf.extend_from_slice(&[0u8; 32]);
+    buf.extend_from_slice(&word(u128::from(time)));
+    buf.extend_from_slice(&word(u128::from(expiration_time)));
+    buf.extend_from_slice(&word(1));
+    buf.extend_from_slice(&[0u8; 32]);
+    buf.extend_from_slice(&keccak(data));
+    let struct_hash = keccak(&buf);
+
+    let mut preimage = vec![0x19, 0x01];
+    preimage.extend_from_slice(separator);
+    preimage.extend_from_slice(&struct_hash);
+    keccak(&preimage)
+}
+
+/// One fixture record: the attestation's message fields plus everything a
+/// verifier re-derives — separator, digest, signature parts, offchain UID,
+/// and the 128-byte ecrecover precompile input `digest ‖ v ‖ r ‖ s`.
+#[allow(clippy::too_many_arguments)]
+fn record_json(
+    kind: &str,
+    name: &str,
+    chain_id: u64,
+    eas_version: &str,
+    schema: &str,
+    message: &AttestMessage,
+    separator: &[u8; 32],
+    digest: &[u8; 32],
+    signature: &[u8; 65],
+    uid: &[u8; 32],
+) -> Value {
+    let mut ecrecover = Vec::with_capacity(128);
+    ecrecover.extend_from_slice(digest);
+    ecrecover.extend_from_slice(&word(u128::from(signature[64])));
+    ecrecover.extend_from_slice(&signature[..32]);
+    ecrecover.extend_from_slice(&signature[32..64]);
+    json!({
+        "kind": kind,
+        "name": name,
+        "chain_id": chain_id,
+        "eas_version": eas_version,
+        "schema": schema,
+        "schema_uid": hex_0x(&message.schema),
+        "time": message.time,
+        "expiration_time": message.expiration_time,
+        "data": hex_0x(&message.data),
+        "domain_separator": hex_0x(separator),
+        "digest": hex_0x(digest),
+        "r": hex_0x(&signature[..32]),
+        "s": hex_0x(&signature[32..64]),
+        "v": signature[64],
+        "uid": hex_0x(uid),
+        "ecrecover_calldata": hex_0x(&ecrecover),
+    })
+}
+
+fn offchain_doc() -> Value {
+    let issuer = Secp256k1IssuerKey::from_secret_bytes(&[9u8; 32]).unwrap();
+    let mut records = Vec::new();
+    for (name, chain_id, eas_version, domain) in [
+        (
+            "base-sepolia",
+            84_532u64,
+            "1.2.0",
+            EasDomain::base_sepolia(),
+        ),
+        ("base-mainnet", 8_453u64, "1.0.1", EasDomain::base_mainnet()),
+    ] {
+        let separator = scratch_separator(eas_version, chain_id);
+
+        // The reputation record is signed by eip712.rs while its digest is
+        // recomputed from scratch here: recover_address(scratch digest,
+        // crate signature) returns the issuer only if the two EIP-712
+        // implementations agree, so a bless run bakes crate parity in.
+        let attestation = EasAttestationSigner::new(issuer.clone(), domain)
+            .attest_reputation(&projection())
+            .unwrap();
+        let digest = scratch_digest(
+            &separator,
+            &attestation.message.schema,
+            attestation.message.time,
+            attestation.message.expiration_time,
+            &attestation.message.data,
+        );
+        assert_eq!(
+            recover_address(&digest, &attestation.signature).unwrap(),
+            issuer.address(),
+            "scratch EIP-712 math and eip712.rs disagree"
+        );
+        records.push(record_json(
+            "reputation",
+            name,
+            chain_id,
+            eas_version,
+            REPUTATION_SCHEMA,
+            &attestation.message,
+            &separator,
+            &digest,
+            &attestation.signature,
+            &attestation.uid,
+        ));
+
+        // The provenance record: the audit-root Attest message assembled
+        // directly (no fixed-vector VC exists to feed attest()), signed
+        // over the same scratch digest and identified by the crate's
+        // offchain UID.
+        let mut data = unhex(PROVENANCE_ROOT);
+        data.extend_from_slice(&unhex(PROVENANCE_HASH));
+        let message = AttestMessage {
+            schema: covenant_schema_uid(),
+            recipient: [0u8; 20],
+            time: 1_700_000_000,
+            expiration_time: 1_800_000_000,
+            revocable: true,
+            ref_uid: [0u8; 32],
+            data,
+        };
+        let digest = scratch_digest(
+            &separator,
+            &message.schema,
+            message.time,
+            message.expiration_time,
+            &message.data,
+        );
+        let signature = issuer.sign_eip712_digest(&digest);
+        assert_eq!(
+            recover_address(&digest, &signature).unwrap(),
+            issuer.address(),
+            "scratch EIP-712 math and sign_eip712_digest disagree"
+        );
+        let uid = offchain_uid(&message);
+        records.push(record_json(
+            "provenance",
+            name,
+            chain_id,
+            eas_version,
+            COVENANT_SCHEMA,
+            &message,
+            &separator,
+            &digest,
+            &signature,
+            &uid,
+        ));
+    }
+
+    json!({
+        "description": OFFCHAIN_DESCRIPTION,
+        "signer": hex_0x(&issuer.address()),
+        "eas": "0x4200000000000000000000000000000000000021",
+        "domain_name": "EAS Attestation",
+        "records": records,
+    })
+}
+
+#[test]
+fn offchain_attestation_golden_vectors_are_frozen() {
+    let built = offchain_doc();
+
+    if std::env::var_os(BLESS_ENV).is_some() {
+        write_fixture("offchain-attestation.v1.json", &built);
+        return;
+    }
+
+    assert_eq!(
+        built,
+        read_fixture("offchain-attestation.v1.json"),
+        "{OFFCHAIN_DRIFT}",
+    );
+}
+
+/// The checks an on-chain consumer performs, run over fixture bytes alone —
+/// no crate encoder: schema UIDs re-derive from the schema strings, the
+/// reputation data cross-pins reputation-attest.v1.json's encoded_data, the
+/// separator and digest re-derive from retyped constants, the committed
+/// signature recovers the committed signer, the offchain UID re-derives
+/// from its packed v1 preimage, and the ecrecover calldata reassembles as
+/// digest ‖ v ‖ r ‖ s — so a fixture blessed from a broken signer cannot
+/// pass.
+#[test]
+fn frozen_offchain_attestations_verify_from_committed_bytes_alone() {
+    if std::env::var_os(BLESS_ENV).is_some() {
+        return;
+    }
+    let fixture = read_fixture("offchain-attestation.v1.json");
+    let signer = fixture["signer"].as_str().unwrap();
+    let records = fixture["records"].as_array().expect("records array");
+    assert_eq!(
+        records.len(),
+        4,
+        "{OFFCHAIN_DRIFT} (two kinds x two networks)"
+    );
+    let reputation_data = read_fixture("reputation-attest.v1.json")["encoded_data"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    for record in records {
+        let schema = record["schema"].as_str().unwrap();
+        let schema_uid: [u8; 32] = unhex(record["schema_uid"].as_str().unwrap())
+            .try_into()
+            .unwrap();
+        // getUID(schema, no resolver, revocable): keccak(schema ‖ zero20 ‖ 0x01).
+        let mut preimage = schema.as_bytes().to_vec();
+        preimage.extend_from_slice(&[0u8; 20]);
+        preimage.push(1);
+        assert_eq!(
+            keccak(&preimage),
+            schema_uid,
+            "{OFFCHAIN_DRIFT} (schema UID must re-derive from the schema string)",
+        );
+
+        if record["kind"] == "reputation" {
+            assert_eq!(
+                record["data"].as_str().unwrap(),
+                reputation_data,
+                "{OFFCHAIN_DRIFT} (reputation data must equal reputation-attest.v1.json's encoded_data)",
+            );
+        }
+
+        let data = unhex(record["data"].as_str().unwrap());
+        let time = record["time"].as_u64().unwrap();
+        let expiry = record["expiration_time"].as_u64().unwrap();
+        let separator = scratch_separator(
+            record["eas_version"].as_str().unwrap(),
+            record["chain_id"].as_u64().unwrap(),
+        );
+        assert_eq!(
+            hex_0x(&separator),
+            record["domain_separator"].as_str().unwrap(),
+            "{OFFCHAIN_DRIFT} (domain separator must re-derive)",
+        );
+        let digest = scratch_digest(&separator, &schema_uid, time, expiry, &data);
+        assert_eq!(
+            hex_0x(&digest),
+            record["digest"].as_str().unwrap(),
+            "{OFFCHAIN_DRIFT} (digest must re-derive)",
+        );
+
+        let r: [u8; 32] = unhex(record["r"].as_str().unwrap()).try_into().unwrap();
+        let s: [u8; 32] = unhex(record["s"].as_str().unwrap()).try_into().unwrap();
+        let v = u8::try_from(record["v"].as_u64().unwrap()).unwrap();
+        assert_eq!(
+            hex_0x(&recover(&digest, &r, &s, v)),
+            signer,
+            "{OFFCHAIN_DRIFT} (committed signature does not recover the signer)",
+        );
+
+        // Offchain UID v1: keccak over u16-BE version ‖ the schema UID as
+        // its UTF-8 `0x…` string ‖ zero recipient ‖ zero attester ‖
+        // time BE8 ‖ expiry BE8 ‖ revocable ‖ zero refUID ‖ data ‖
+        // u32-BE bump 0.
+        let mut preimage = 1u16.to_be_bytes().to_vec();
+        preimage.extend_from_slice(hex_0x(&schema_uid).as_bytes());
+        preimage.extend_from_slice(&[0u8; 20]);
+        preimage.extend_from_slice(&[0u8; 20]);
+        preimage.extend_from_slice(&time.to_be_bytes());
+        preimage.extend_from_slice(&expiry.to_be_bytes());
+        preimage.push(1);
+        preimage.extend_from_slice(&[0u8; 32]);
+        preimage.extend_from_slice(&data);
+        preimage.extend_from_slice(&0u32.to_be_bytes());
+        assert_eq!(
+            hex_0x(&keccak(&preimage)),
+            record["uid"].as_str().unwrap(),
+            "{OFFCHAIN_DRIFT} (offchain UID must re-derive from its packed preimage)",
+        );
+
+        let mut calldata = digest.to_vec();
+        calldata.extend_from_slice(&word(u128::from(v)));
+        calldata.extend_from_slice(&r);
+        calldata.extend_from_slice(&s);
+        assert_eq!(
+            hex_0x(&calldata),
+            record["ecrecover_calldata"].as_str().unwrap(),
+            "{OFFCHAIN_DRIFT} (ecrecover calldata must be digest ‖ v ‖ r ‖ s)",
+        );
+    }
 }
 
 fn keccak(bytes: &[u8]) -> [u8; 32] {

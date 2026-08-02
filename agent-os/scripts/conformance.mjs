@@ -85,10 +85,11 @@ const SUITES = [
     crate: "covenant-evm-signer",
     target: "golden_wire_vectors",
     description:
-      "The EAS reputation attest calldata and the signed CCIP-Read resolver response.",
+      "The EAS reputation attest calldata, the signed CCIP-Read resolver response, and the signed off-chain reputation/provenance attestation records.",
     fixtures: [
       "tests/fixtures/reputation-attest.v1.json",
       "tests/fixtures/resolver-ccip.v1.json",
+      "tests/fixtures/offchain-attestation.v1.json",
     ],
   },
   {

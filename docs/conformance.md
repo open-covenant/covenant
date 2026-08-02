@@ -21,7 +21,7 @@ doc with the per-contract detail.
 | Audit record kinds | `covenant-audit` | Every `AuditKind` variant's record wire form and SHA-256 event hash | `tests/fixtures/audit-kinds.v1.json` |
 | Audit provenance chain | `covenant-audit` | The capability-family provenance records and the genesis-seeded chain root fold | `tests/fixtures/provenance-records.v1.json` |
 | Bond receipt | `covenant-attestation` | The signed bond receipt per Base network: EIP-712 domain, digest, signature, `ecrecover` precompile calldata | `tests/fixtures/bond-receipt.v1.json` |
-| EVM signer wire | `covenant-evm-signer` | The EAS reputation `attest` calldata and the signed CCIP-Read resolver response | `tests/fixtures/reputation-attest.v1.json`, `tests/fixtures/resolver-ccip.v1.json` |
+| EVM signer wire | `covenant-evm-signer` | The EAS reputation `attest` calldata, the signed CCIP-Read resolver response, and the signed off-chain reputation/provenance attestation records | `tests/fixtures/reputation-attest.v1.json`, `tests/fixtures/resolver-ccip.v1.json`, `tests/fixtures/offchain-attestation.v1.json` |
 | x402 EVM envelope | `covenant-x402` | The x402 EVM payment envelope: base64 header, canonical JSON, EIP-3009 transfer digest | `tests/fixtures/evm-envelope.v1.json` |
 
 The wire form is what the bytes mean, not how they are pretty-printed: the

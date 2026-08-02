@@ -1161,4 +1161,320 @@ mod tests {
     fn parse_bytes32(value: &str) -> [u8; 32] {
         parse_hex(value).as_slice().try_into().expect("32 bytes")
     }
+
+    // --- Golden envelope vectors ---
+    //
+    // `tests/fixtures/evm-envelope.v1.json` freezes two full signed envelopes
+    // (Base Sepolia with a wire-supplied domain, Base mainnet on the pinned
+    // fallback domain) so the exact base64 header, canonical JSON, and
+    // EIP-712 digest a facilitator sees are a committed contract, not an
+    // implementation detail. Regenerate deliberately, only after reviewing
+    // the resulting diff:
+    //
+    // ```text
+    // COVENANT_BLESS_X402_EVM_ENVELOPE_GOLDEN=1 cargo test -p covenant-x402 \
+    //   --lib evm::tests::evm_envelope
+    // ```
+
+    /// Set to (re)generate the committed envelope fixture instead of
+    /// asserting against it.
+    const ENVELOPE_BLESS_ENV: &str = "COVENANT_BLESS_X402_EVM_ENVELOPE_GOLDEN";
+
+    const ENVELOPE_DRIFT: &str = "x402 EVM envelope wire drift: \
+        tests/fixtures/evm-envelope.v1.json freezes the exact envelope a facilitator \
+        decodes and the digest it recovers the payer from. A mismatch means the \
+        canonical JSON shape, base64 form, EIP-712 domain, or authorization packing \
+        changed, and deployed facilitators would reject or misattribute payments. \
+        Update the fixture only as a deliberate, reviewed wire change (bump the .v<n> \
+        suffix for an incompatible shape) — never blindly regenerate to silence this \
+        test.";
+
+    /// The committed fixture's `description`, code-pinned so a hand-edit to
+    /// the fixture's prose fails the suite and a reword here forces a
+    /// re-bless.
+    const ENVELOPE_GOLDEN_DESCRIPTION: &str = "Frozen golden vectors for the x402 EVM \
+        payment envelope under the fixed keccak256(\"cow\") payer key: for each record, \
+        the full base64 X-PAYMENT header, its exact canonical JSON, and the EIP-3009 \
+        TransferWithAuthorization digest the facilitator recovers the payer from. \
+        base-sepolia-usdc signs the wire-supplied USDC domain; \
+        base-mainnet-usdc-pinned-domain has no extra and freezes the pinned \
+        (USD Coin, 2, 8453) fallback domain into a visible artifact. Update only as a \
+        deliberate, reviewed wire change — never blindly regenerate to make a failing \
+        test pass.";
+
+    fn base_mainnet_usdc_req(amount: &str) -> PaymentRequirements {
+        PaymentRequirements {
+            network: "base".into(),
+            asset: USDC_BASE_MAINNET.into(),
+            amount: amount.into(),
+            amount_usdc: 0.25,
+            pay_to: "0x209693Bc6afc0C5328bA36FaF03C514EF312287C".into(),
+            scheme: "exact".into(),
+            extra: None,
+        }
+    }
+
+    fn envelope_fixture_path() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("evm-envelope.v1.json")
+    }
+
+    fn read_envelope_fixture() -> Value {
+        serde_json::from_str(
+            &std::fs::read_to_string(envelope_fixture_path()).unwrap_or_else(|error| {
+                panic!(
+                    "missing golden fixture {} ({error}); regenerate with {ENVELOPE_BLESS_ENV}=1",
+                    envelope_fixture_path().display()
+                )
+            }),
+        )
+        .expect("golden fixture is valid JSON")
+    }
+
+    fn envelope_record(
+        name: &str,
+        req: &PaymentRequirements,
+        now_secs: u64,
+        nonce: [u8; 32],
+        domain_name: &str,
+        domain_version: &str,
+        chain_id: u64,
+    ) -> Value {
+        let signer = EvmSigner::from_secret_bytes(&cow_secret()).unwrap();
+        let header = signer.build_envelope(req, now_secs, nonce).unwrap();
+        let env = decode_envelope(&header);
+        let auth = &env["payload"]["authorization"];
+        let digest = eip712_digest(
+            &domain_separator(
+                domain_name,
+                domain_version,
+                chain_id,
+                &parse_address(&req.asset).unwrap(),
+            ),
+            &transfer_struct_hash(&Authorization {
+                from: parse_address(auth["from"].as_str().unwrap()).unwrap(),
+                to: parse_address(auth["to"].as_str().unwrap()).unwrap(),
+                value: auth["value"].as_str().unwrap().parse().unwrap(),
+                valid_after: auth["validAfter"].as_str().unwrap().parse().unwrap(),
+                valid_before: auth["validBefore"].as_str().unwrap().parse().unwrap(),
+                nonce: parse_bytes32(auth["nonce"].as_str().unwrap()),
+            }),
+        );
+        let canonical =
+            String::from_utf8(BASE64.decode(&header).expect("header is base64")).unwrap();
+        serde_json::json!({
+            "name": name,
+            "network": req.network,
+            "asset": req.asset,
+            "chain_id": chain_id,
+            "domain_name": domain_name,
+            "domain_version": domain_version,
+            "pay_to": req.pay_to,
+            "amount": req.amount,
+            "now_secs": now_secs,
+            "nonce": hex_0x(&nonce),
+            "payer": signer.address_hex(),
+            "envelope_base64": header,
+            "canonical_json": canonical,
+            "digest": hex_0x(&digest),
+        })
+    }
+
+    fn envelope_records() -> Vec<Value> {
+        vec![
+            envelope_record(
+                "base-sepolia-usdc",
+                &base_sepolia_usdc_req("10000"),
+                1_740_672_089,
+                [0x11; 32],
+                "USDC",
+                "2",
+                84532,
+            ),
+            envelope_record(
+                "base-mainnet-usdc-pinned-domain",
+                &base_mainnet_usdc_req("250000"),
+                1_740_672_089,
+                [0x22; 32],
+                "USD Coin",
+                "2",
+                8453,
+            ),
+        ]
+    }
+
+    #[test]
+    fn evm_envelope_golden_vectors_are_frozen() {
+        let records = envelope_records();
+
+        if std::env::var_os(ENVELOPE_BLESS_ENV).is_some() {
+            let doc = serde_json::json!({
+                "description": ENVELOPE_GOLDEN_DESCRIPTION,
+                "records": records,
+            });
+            let mut text = serde_json::to_string_pretty(&doc).expect("fixture serializes");
+            text.push('\n');
+            std::fs::create_dir_all(envelope_fixture_path().parent().unwrap())
+                .expect("fixtures dir");
+            std::fs::write(envelope_fixture_path(), text).unwrap_or_else(|error| {
+                panic!("write {}: {error}", envelope_fixture_path().display())
+            });
+            return;
+        }
+
+        let fixture = read_envelope_fixture();
+        assert_eq!(
+            fixture["description"].as_str(),
+            Some(ENVELOPE_GOLDEN_DESCRIPTION),
+            "{ENVELOPE_DRIFT} (fixture description must match the code-pinned contract note)",
+        );
+        let golden = fixture["records"]
+            .as_array()
+            .expect("fixture.records is an array");
+        assert_eq!(
+            records.len(),
+            golden.len(),
+            "{ENVELOPE_DRIFT} (record count)"
+        );
+        for (built, committed) in records.iter().zip(golden) {
+            assert_eq!(
+                built, committed,
+                "{ENVELOPE_DRIFT} (record {})",
+                built["name"]
+            );
+            let decoded = BASE64
+                .decode(committed["envelope_base64"].as_str().unwrap())
+                .expect("committed envelope is base64");
+            assert_eq!(
+                decoded,
+                committed["canonical_json"].as_str().unwrap().as_bytes(),
+                "{ENVELOPE_DRIFT} (record {}: base64 and canonical JSON must carry the \
+                 same bytes)",
+                built["name"],
+            );
+        }
+    }
+
+    /// The verification a facilitator performs, run over fixture bytes alone:
+    /// parse the committed canonical JSON, rebuild the digest from retyped
+    /// type strings and independent word packing (no crate encoder), and
+    /// recover the committed payer from the committed signature — so a
+    /// fixture blessed from a broken signer cannot pass. The domain inputs
+    /// come from the fixture, making the domain choice part of the contract.
+    #[test]
+    fn frozen_envelopes_verify_from_committed_bytes_alone() {
+        if std::env::var_os(ENVELOPE_BLESS_ENV).is_some() {
+            return;
+        }
+        let fixture = read_envelope_fixture();
+        for record in fixture["records"].as_array().expect("records") {
+            let name = record["name"].as_str().unwrap();
+            let env: Value = serde_json::from_str(record["canonical_json"].as_str().unwrap())
+                .expect("canonical_json parses");
+            assert_eq!(
+                env["x402Version"], 1,
+                "{ENVELOPE_DRIFT} (record {name}: version)"
+            );
+            assert_eq!(
+                env["scheme"], "exact",
+                "{ENVELOPE_DRIFT} (record {name}: scheme)",
+            );
+            assert_eq!(
+                env["network"], record["network"],
+                "{ENVELOPE_DRIFT} (record {name}: network echo)",
+            );
+
+            let auth = &env["payload"]["authorization"];
+            let mut domain = Vec::new();
+            domain.extend_from_slice(&scratch_keccak(
+                b"EIP712Domain(string name,string version,uint256 chainId,\
+                  address verifyingContract)",
+            ));
+            domain.extend_from_slice(&scratch_keccak(
+                record["domain_name"].as_str().unwrap().as_bytes(),
+            ));
+            domain.extend_from_slice(&scratch_keccak(
+                record["domain_version"].as_str().unwrap().as_bytes(),
+            ));
+            domain.extend_from_slice(&scratch_word(u128::from(
+                record["chain_id"].as_u64().unwrap(),
+            )));
+            domain.extend_from_slice(&scratch_address_word(
+                &parse_hex(record["asset"].as_str().unwrap())
+                    .try_into()
+                    .unwrap(),
+            ));
+
+            let mut message = Vec::new();
+            message.extend_from_slice(&scratch_keccak(
+                b"TransferWithAuthorization(address from,address to,uint256 value,\
+                  uint256 validAfter,uint256 validBefore,bytes32 nonce)",
+            ));
+            message.extend_from_slice(&scratch_address_word(
+                &parse_hex(auth["from"].as_str().unwrap())
+                    .try_into()
+                    .unwrap(),
+            ));
+            message.extend_from_slice(&scratch_address_word(
+                &parse_hex(auth["to"].as_str().unwrap()).try_into().unwrap(),
+            ));
+            message.extend_from_slice(&scratch_word(
+                auth["value"].as_str().unwrap().parse().unwrap(),
+            ));
+            message.extend_from_slice(&scratch_word(
+                auth["validAfter"].as_str().unwrap().parse().unwrap(),
+            ));
+            message.extend_from_slice(&scratch_word(
+                auth["validBefore"].as_str().unwrap().parse().unwrap(),
+            ));
+            message.extend_from_slice(&parse_bytes32(auth["nonce"].as_str().unwrap()));
+
+            let mut preimage = vec![0x19, 0x01];
+            preimage.extend_from_slice(&scratch_keccak(&domain));
+            preimage.extend_from_slice(&scratch_keccak(&message));
+            let digest = scratch_keccak(&preimage);
+            assert_eq!(
+                hex_0x(&digest),
+                record["digest"].as_str().unwrap(),
+                "{ENVELOPE_DRIFT} (record {name}: digest must re-derive from the retyped \
+                 EIP-712 encoding)",
+            );
+
+            let signature = parse_hex(env["payload"]["signature"].as_str().unwrap());
+            let payer = recover(&digest, &signature);
+            assert_eq!(
+                hex_0x(&payer),
+                record["payer"].as_str().unwrap(),
+                "{ENVELOPE_DRIFT} (record {name}: committed signature does not recover \
+                 the payer)",
+            );
+            assert_eq!(
+                auth["from"], record["payer"],
+                "{ENVELOPE_DRIFT} (record {name}: authorization.from is the payer)",
+            );
+        }
+    }
+
+    /// Independent keccak for the golden re-derivation leg — deliberately
+    /// bypasses the module's `keccak256` so the scratch assembly shares
+    /// nothing with the encoder under test.
+    fn scratch_keccak(bytes: &[u8]) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&Keccak256::digest(bytes));
+        out
+    }
+
+    fn scratch_word(value: u128) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        out[16..].copy_from_slice(&value.to_be_bytes());
+        out
+    }
+
+    fn scratch_address_word(address: &[u8; 20]) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        out[12..].copy_from_slice(address);
+        out
+    }
 }

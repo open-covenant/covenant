@@ -72,6 +72,34 @@ const SUITES = [
       "The capability-family provenance records and the genesis-seeded chain root fold.",
     fixtures: ["tests/fixtures/provenance-records.v1.json"],
   },
+  {
+    id: "bond-receipt",
+    crate: "covenant-attestation",
+    target: "golden_bond_receipt",
+    description:
+      "The signed bond receipt per Base network: EIP-712 domain, digest, signature, and ecrecover precompile calldata.",
+    fixtures: ["tests/fixtures/bond-receipt.v1.json"],
+  },
+  {
+    id: "evm-signer-wire",
+    crate: "covenant-evm-signer",
+    target: "golden_wire_vectors",
+    description:
+      "The EAS reputation attest calldata and the signed CCIP-Read resolver response.",
+    fixtures: [
+      "tests/fixtures/reputation-attest.v1.json",
+      "tests/fixtures/resolver-ccip.v1.json",
+    ],
+  },
+  {
+    id: "x402-evm-envelope",
+    crate: "covenant-x402",
+    inlineTest: "evm_envelope_golden_vectors_are_frozen",
+    source: "src/evm.rs",
+    description:
+      "The x402 EVM payment envelope: base64 header, canonical JSON, and EIP-3009 transfer digest.",
+    fixtures: ["tests/fixtures/evm-envelope.v1.json"],
+  },
 ];
 
 function cargoBin() {

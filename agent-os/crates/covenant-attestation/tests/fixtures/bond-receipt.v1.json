@@ -1,0 +1,45 @@
+{
+  "description": "Frozen golden vectors for the signed bond receipt: one fixed receipt per Base network under the fixed [7; 32] attestor key, carrying the EIP-712 domain separator, signing digest, (r, s, v) signature, and 128-byte ecrecover precompile input a verifier consumes. agent-os/evm/test/BondReceiptVerifier.t.sol pins the Base Sepolia vector's constants, making these bytes a cross-language contract: update only as a deliberate, reviewed wire change — never blindly regenerate to make a failing test pass.",
+  "records": [
+    {
+      "agent_return": "0x1111111111111111111111111111111111111111",
+      "attestor": "0x4a62316623ad457f02cdc5d997ded67a383ec569",
+      "bond_amount": "1000000",
+      "bond_token": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+      "chain_id": 84532,
+      "digest": "0x0a7473fbc69d50af1b19bc289d2b2d1f8b9c6fde83c3a39b5fc53fb87dc78abf",
+      "domain_separator": "0x873e39d95a9cfd092829b608629510aeb79deecb1b0e7de1744d0930f357d614",
+      "ecrecover_calldata": "0x0a7473fbc69d50af1b19bc289d2b2d1f8b9c6fde83c3a39b5fc53fb87dc78abf000000000000000000000000000000000000000000000000000000000000001ca3c3d1955ec609d39bdf060405a6e68f353b34cf87e5e6a23e60c9d6c6e74ebf444a3345123de2a40bbfb5703192791777bec6780236da259458f2af19ff98a3",
+      "expiry": 1800000000,
+      "issued_at": 1700000000,
+      "name": "base-sepolia",
+      "nonce": "0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "r": "0xa3c3d1955ec609d39bdf060405a6e68f353b34cf87e5e6a23e60c9d6c6e74ebf",
+      "s": "0x444a3345123de2a40bbfb5703192791777bec6780236da259458f2af19ff98a3",
+      "slash_beneficiary": "0x2222222222222222222222222222222222222222",
+      "slash_beneficiary_bps": 8000,
+      "subject": "0xabababababababababababababababababababababababababababababababab",
+      "v": 28
+    },
+    {
+      "agent_return": "0x1111111111111111111111111111111111111111",
+      "attestor": "0x4a62316623ad457f02cdc5d997ded67a383ec569",
+      "bond_amount": "1000000",
+      "bond_token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "chain_id": 8453,
+      "digest": "0x170d48293404460b707729e14aedd9f59ac55737fd35a40007844cf93828e3b7",
+      "domain_separator": "0xb588670ef3176145613b71248d5fba22072f4867a680b5b4b204b95b46c9d819",
+      "ecrecover_calldata": "0x170d48293404460b707729e14aedd9f59ac55737fd35a40007844cf93828e3b7000000000000000000000000000000000000000000000000000000000000001b4b7274ea530230ef2de67b2c63b9bd592515bd6c10a0c6aea9f20608b50fa0906c1cc3d75e19c8dedf8db547df1e22fa4718b3859af41794fd7d8312ba94b832",
+      "expiry": 1800000000,
+      "issued_at": 1700000000,
+      "name": "base-mainnet",
+      "nonce": "0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "r": "0x4b7274ea530230ef2de67b2c63b9bd592515bd6c10a0c6aea9f20608b50fa090",
+      "s": "0x6c1cc3d75e19c8dedf8db547df1e22fa4718b3859af41794fd7d8312ba94b832",
+      "slash_beneficiary": "0x2222222222222222222222222222222222222222",
+      "slash_beneficiary_bps": 8000,
+      "subject": "0xabababababababababababababababababababababababababababababababab",
+      "v": 27
+    }
+  ]
+}

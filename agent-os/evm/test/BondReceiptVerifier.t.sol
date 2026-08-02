@@ -6,8 +6,9 @@ import {BondReceiptVerifier} from "../contracts/BondReceiptVerifier.sol";
 
 /// Cross-language parity: a bond receipt signed by covenant-attestation's
 /// `bond.rs` verifies here, and its malleable twins revert. Constants are the
-/// golden vector from `cargo run -p covenant-attestation --example bond_vector`
-/// (fixed key [7;32], Base Sepolia). Regenerate them if bond.rs changes.
+/// frozen golden vector in covenant-attestation/tests/fixtures/bond-receipt.v1.json
+/// (fixed key [7;32], Base Sepolia), asserted by tests/golden_bond_receipt.rs;
+/// re-bless that fixture and mirror the diff here if bond.rs deliberately changes.
 contract BondReceiptVerifierTest is Test {
     // secp256k1 group order, for building the high-S twin.
     uint256 constant N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141;

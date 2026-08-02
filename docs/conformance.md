@@ -20,6 +20,9 @@ doc with the per-contract detail.
 | Capability grammar | `covenant-permissions` | One `Capability` grant per scope namespace — the dotted action grammar | `tests/golden/capabilities/<namespace>.json` |
 | Audit record kinds | `covenant-audit` | Every `AuditKind` variant's record wire form and SHA-256 event hash | `tests/fixtures/audit-kinds.v1.json` |
 | Audit provenance chain | `covenant-audit` | The capability-family provenance records and the genesis-seeded chain root fold | `tests/fixtures/provenance-records.v1.json` |
+| Bond receipt | `covenant-attestation` | The signed bond receipt per Base network: EIP-712 domain, digest, signature, `ecrecover` precompile calldata | `tests/fixtures/bond-receipt.v1.json` |
+| EVM signer wire | `covenant-evm-signer` | The EAS reputation `attest` calldata and the signed CCIP-Read resolver response | `tests/fixtures/reputation-attest.v1.json`, `tests/fixtures/resolver-ccip.v1.json` |
+| x402 EVM envelope | `covenant-x402` | The x402 EVM payment envelope: base64 header, canonical JSON, EIP-3009 transfer digest | `tests/fixtures/evm-envelope.v1.json` |
 
 The wire form is what the bytes mean, not how they are pretty-printed: the
 audit suites pin the **compact** `serde_json` string because that is the exact
@@ -95,6 +98,9 @@ cd agent-os
 COVENANT_BLESS_IPC_GOLDEN=1        cargo test -p covenant-ipc --test golden_requests --test golden_responses
 COVENANT_BLESS_CAPABILITY_GOLDEN=1 cargo test -p covenant-permissions --test golden_capabilities
 COVENANT_BLESS_AUDIT_KINDS_GOLDEN=1 cargo test -p covenant-audit --test golden_audit_kinds
+COVENANT_BLESS_BOND_RECEIPT_GOLDEN=1 cargo test -p covenant-attestation --test golden_bond_receipt
+COVENANT_BLESS_EVM_SIGNER_GOLDEN=1 cargo test -p covenant-evm-signer --test golden_wire_vectors
+COVENANT_BLESS_X402_EVM_ENVELOPE_GOLDEN=1 cargo test -p covenant-x402 --lib evm::tests::evm_envelope
 ```
 
 Bump the `.v<n>` suffix on a fixture file for an incompatible record shape so

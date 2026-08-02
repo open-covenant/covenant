@@ -1,0 +1,37 @@
+{
+  "description": "Frozen golden vectors for the x402 EVM payment envelope under the fixed keccak256(\"cow\") payer key: for each record, the full base64 X-PAYMENT header, its exact canonical JSON, and the EIP-3009 TransferWithAuthorization digest the facilitator recovers the payer from. base-sepolia-usdc signs the wire-supplied USDC domain; base-mainnet-usdc-pinned-domain has no extra and freezes the pinned (USD Coin, 2, 8453) fallback domain into a visible artifact. Update only as a deliberate, reviewed wire change — never blindly regenerate to make a failing test pass.",
+  "records": [
+    {
+      "amount": "10000",
+      "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+      "canonical_json": "{\"network\":\"base:84532\",\"payload\":{\"authorization\":{\"from\":\"0xcd2a3d9f938e13cd947ec05abc7fe734df8dd826\",\"nonce\":\"0x1111111111111111111111111111111111111111111111111111111111111111\",\"to\":\"0x209693bc6afc0c5328ba36faf03c514ef312287c\",\"validAfter\":\"1740671489\",\"validBefore\":\"1740672209\",\"value\":\"10000\"},\"signature\":\"0x7f5f34bc4999215136cb417ecac828049dfc4ff1b0b09864ea87e417efbe36a43cce37a5389f4dbef7e1c9b2b62b628796d62efa21ef0a3c130aa842df66da0a1b\"},\"scheme\":\"exact\",\"x402Version\":1}",
+      "chain_id": 84532,
+      "digest": "0xa480d3ae7aa3a3908b1328cf8598da63ec8f292cc901e215029629e6a7b01864",
+      "domain_name": "USDC",
+      "domain_version": "2",
+      "envelope_base64": "eyJuZXR3b3JrIjoiYmFzZTo4NDUzMiIsInBheWxvYWQiOnsiYXV0aG9yaXphdGlvbiI6eyJmcm9tIjoiMHhjZDJhM2Q5ZjkzOGUxM2NkOTQ3ZWMwNWFiYzdmZTczNGRmOGRkODI2Iiwibm9uY2UiOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJ0byI6IjB4MjA5NjkzYmM2YWZjMGM1MzI4YmEzNmZhZjAzYzUxNGVmMzEyMjg3YyIsInZhbGlkQWZ0ZXIiOiIxNzQwNjcxNDg5IiwidmFsaWRCZWZvcmUiOiIxNzQwNjcyMjA5IiwidmFsdWUiOiIxMDAwMCJ9LCJzaWduYXR1cmUiOiIweDdmNWYzNGJjNDk5OTIxNTEzNmNiNDE3ZWNhYzgyODA0OWRmYzRmZjFiMGIwOTg2NGVhODdlNDE3ZWZiZTM2YTQzY2NlMzdhNTM4OWY0ZGJlZjdlMWM5YjJiNjJiNjI4Nzk2ZDYyZWZhMjFlZjBhM2MxMzBhYTg0MmRmNjZkYTBhMWIifSwic2NoZW1lIjoiZXhhY3QiLCJ4NDAyVmVyc2lvbiI6MX0=",
+      "name": "base-sepolia-usdc",
+      "network": "base:84532",
+      "nonce": "0x1111111111111111111111111111111111111111111111111111111111111111",
+      "now_secs": 1740672089,
+      "pay_to": "0x209693Bc6afc0C5328bA36FaF03C514EF312287C",
+      "payer": "0xcd2a3d9f938e13cd947ec05abc7fe734df8dd826"
+    },
+    {
+      "amount": "250000",
+      "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "canonical_json": "{\"network\":\"base\",\"payload\":{\"authorization\":{\"from\":\"0xcd2a3d9f938e13cd947ec05abc7fe734df8dd826\",\"nonce\":\"0x2222222222222222222222222222222222222222222222222222222222222222\",\"to\":\"0x209693bc6afc0c5328ba36faf03c514ef312287c\",\"validAfter\":\"1740671489\",\"validBefore\":\"1740672209\",\"value\":\"250000\"},\"signature\":\"0x7edcebfc0fee2a0df24050d704a42eb6e5a01378d3e3f0f0bce5c4077a472dfd6efdd40bec7ceb8605bbd75566a62df7b062d0571146ba9499c6e655d92b43fc1b\"},\"scheme\":\"exact\",\"x402Version\":1}",
+      "chain_id": 8453,
+      "digest": "0x80f852f5a1f7e97e4641de5bb8b75594c3ad73618017f2842b4a4f057d3fc229",
+      "domain_name": "USD Coin",
+      "domain_version": "2",
+      "envelope_base64": "eyJuZXR3b3JrIjoiYmFzZSIsInBheWxvYWQiOnsiYXV0aG9yaXphdGlvbiI6eyJmcm9tIjoiMHhjZDJhM2Q5ZjkzOGUxM2NkOTQ3ZWMwNWFiYzdmZTczNGRmOGRkODI2Iiwibm9uY2UiOiIweDIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIiLCJ0byI6IjB4MjA5NjkzYmM2YWZjMGM1MzI4YmEzNmZhZjAzYzUxNGVmMzEyMjg3YyIsInZhbGlkQWZ0ZXIiOiIxNzQwNjcxNDg5IiwidmFsaWRCZWZvcmUiOiIxNzQwNjcyMjA5IiwidmFsdWUiOiIyNTAwMDAifSwic2lnbmF0dXJlIjoiMHg3ZWRjZWJmYzBmZWUyYTBkZjI0MDUwZDcwNGE0MmViNmU1YTAxMzc4ZDNlM2YwZjBiY2U1YzQwNzdhNDcyZGZkNmVmZGQ0MGJlYzdjZWI4NjA1YmJkNzU1NjZhNjJkZjdiMDYyZDA1NzExNDZiYTk0OTljNmU2NTVkOTJiNDNmYzFiIn0sInNjaGVtZSI6ImV4YWN0IiwieDQwMlZlcnNpb24iOjF9",
+      "name": "base-mainnet-usdc-pinned-domain",
+      "network": "base",
+      "nonce": "0x2222222222222222222222222222222222222222222222222222222222222222",
+      "now_secs": 1740672089,
+      "pay_to": "0x209693Bc6afc0C5328bA36FaF03C514EF312287C",
+      "payer": "0xcd2a3d9f938e13cd947ec05abc7fe734df8dd826"
+    }
+  ]
+}

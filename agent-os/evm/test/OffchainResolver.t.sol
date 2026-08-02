@@ -5,10 +5,12 @@ import {Test} from "forge-std/Test.sol";
 import {OffchainResolver} from "../contracts/OffchainResolver.sol";
 
 /// Cross-language parity: a CCIP response signed by covenant-evm-signer's
-/// `resolver.rs` verifies in the deployed contract. The constants are the golden
-/// vector from `cargo run -p covenant-evm-signer --example resolver_vector`
+/// `resolver.rs` verifies in the deployed contract. The constants are the frozen
+/// golden vector in covenant-evm-signer/tests/fixtures/resolver-ccip.v1.json
 /// (fixed key [7;32], resolver 0x11..11, node 0x22..22, solana 0x33..33,
-/// expires 1_800_000_000). Regenerate them if resolver.rs changes.
+/// expires 1_800_000_000), asserted by tests/golden_wire_vectors.rs; re-bless
+/// that fixture (COVENANT_BLESS_EVM_SIGNER_GOLDEN=1) and mirror the diff here
+/// if resolver.rs deliberately changes.
 contract OffchainResolverTest is Test {
     address constant RESOLVER = 0x1111111111111111111111111111111111111111;
     address constant SIGNER = 0x4a62316623ad457F02cDC5D997deD67a383EC569;

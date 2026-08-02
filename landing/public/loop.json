@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-08-02T20:12:10.069Z",
+  "updatedAt": "2026-08-02T20:32:13.716Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 13026,
-    "tasks": 1528,
-    "integrated": 1528
+    "events": 13034,
+    "tasks": 1529,
+    "integrated": 1529
   },
   "throughput": {
-    "last24h": 3,
-    "last7d": 7,
-    "velocity": 1
+    "last24h": 4,
+    "last7d": 8,
+    "velocity": 1.1
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "08-02",
-      "count": 3
+      "count": 4
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "08-02",
-      "total": 1528
+      "total": 1529
     }
   ],
   "states": {
-    "integrated": 1520,
+    "integrated": 1521,
     "proposed": 2,
     "blocked": 6
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-08-02T20:32:03.994Z",
+      "task": "multichain-reputation-provenance-verifier-contract",
+      "note": "committed as 696570a7: OffchainAttestationVerifier.sol + .t.sol (25 tests) + evm-crate calldata parity (4 tests) + offchain-attestation.v1.j"
+    },
     {
       "at": "2026-08-02T19:04:08.442Z",
       "task": "multichain-wire-format-golden-vectors",
@@ -310,11 +315,6 @@
       "at": "2026-07-17T22:40:53.832Z",
       "task": "daemon-ipc-core-resume-success-live-fixture",
       "note": "Fixture committed as 58175eb1 (+ metrics 11035b4b, tests 3564 live 471). Proves the full pause->resume promise live: exhaustion mints pause_"
-    },
-    {
-      "at": "2026-07-16T20:55:01.437Z",
-      "task": "covenantd-budget-ledger-read-failure-arms",
-      "note": "landed as 506d5aeb; overseer 2026-07-16T20:00Z reviewed range 09612f49..0fe3a97e CLEAN; syncing stale record"
     }
   ]
 }

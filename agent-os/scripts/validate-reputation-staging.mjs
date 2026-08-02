@@ -18,10 +18,10 @@ Asserts, word by word: the derived attest selector, the nested-tuple offsets,
 the pinned reputation schema UID, expirationTime mirrored between envelope and
 schema data, source_chain equal to the crate's SOLANA_MAINNET_CAIP2 (read out
 of reputation.rs, so the two cannot drift), the relay payload bound, and a
-non-placeholder solana_attestation_pda policy: an all-zero PDA always fails;
-the 0xab..ab placeholder passes only while a notes entry declares it and
---submission is not set. --submission is the operator pre-sign gate: any
-placeholder PDA or superseded dry-run fails.
+solana_attestation_pda policy mirroring the crate's projection validation:
+an all-zero PDA and any 32-repeats-of-one-byte pattern (including the
+retired 0xab..ab staging placeholder) always fail, in every mode.
+--submission is the operator pre-sign gate: a superseded dry-run fails.
 
 The staged artifacts are local staging state (not in a clean clone); when the
 staging directory is absent the artifact checks are skipped. The embedded
@@ -80,7 +80,10 @@ const SCHEMA_UID =
 const EAS_PREDEPLOY = "0x4200000000000000000000000000000000000021";
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const BASE_SEPOLIA_CHAIN_ID = 84532;
-const PLACEHOLDER_PDA = "ab".repeat(32);
+// The live anchor's bytes: base58 7PEd79CG1hFUU9qeBnAKmyA77YWzckd572qsYdq3W3GH
+// (docs/metaplex-integration.md), cross-generated via @solana/web3.js and
+// pinned by the crate's solana_account_bytes test.
+const REAL_PDA_HEX = "5ed84d69180c43cbb5a3fbc022dddb666b30155ecc0acad29a2e8941d522c8e6";
 
 const ceil32 = (n) => Math.ceil(n / 32) * 32;
 
@@ -246,24 +249,17 @@ function validateArtifact(artifact, { submission }) {
     problems.push(`value ${artifact.value} != "0x0"`);
   }
 
-  const notes = Array.isArray(artifact.notes) ? artifact.notes.map(String) : [];
   if (decoded.pdaHex === "00".repeat(32)) {
     problems.push("data: solana_attestation_pda is all-zero; the score must reference its Solana anchor");
-  } else if (decoded.pdaHex === PLACEHOLDER_PDA) {
-    const declared = notes.some((n) => /placeholder/i.test(n));
-    if (submission) {
-      problems.push(
-        "data: solana_attestation_pda is still the 0xab..ab placeholder; NOT submission-ready (stage the real PDA first)",
-      );
-    } else if (declared) {
-      warnings.push(
-        "solana_attestation_pda is the declared 0xab..ab placeholder; artifact is NOT submission-ready until the real Solana anchor is staged",
-      );
-    } else {
-      problems.push(
-        "data: solana_attestation_pda is the 0xab..ab placeholder but no notes entry declares it (need a note matching /placeholder/i)",
-      );
-    }
+  } else if (/^([0-9a-f]{2})\1{31}$/.test(decoded.pdaHex)) {
+    // Mirrors the crate's projection validation: no real Solana account
+    // is 32 repeats of one byte. The 0xab..ab staging placeholder's
+    // declared-note allowance was retired when the real anchor was
+    // staged (multichain-attestation-pda-producer); the whole class now
+    // fails in every mode.
+    problems.push(
+      `data: solana_attestation_pda is 32 repeats of 0x${decoded.pdaHex.slice(0, 2)} — a placeholder pattern, not a real Solana account`,
+    );
   }
 
   return { problems, warnings, decoded };
@@ -303,10 +299,17 @@ function validateDryrun(dryrun, mainDataHex, { submission }) {
 // --- self-test -------------------------------------------------------------
 // The good fixture is attest_calldata()'s own output for the reviewed staging
 // projection (score 9500 at 4 decimals, window 1700000000..1800000000,
-// placeholder PDA, SOLANA_MAINNET_CAIP2), pasted from
+// SOLANA_MAINNET_CAIP2) anchored to the live audit-root attestation asset
+// (docs/metaplex-integration.md), pasted from
 // `cargo run -p covenant-evm-signer --example stage_reputation_attest` — never
 // hand-assembled here.
 const GOLDEN_DATA_HEX =
+  "0xf17325e7000000000000000000000000000000000000000000000000000000000000002084738ec346cd136dddd5b09e8df18a3c5cfb2603aaf5a68758c0149aa406cc3900000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006b49d2000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000251c0000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000006b49d20000000000000000000000000000000000000000000000000000000000000000a05ed84d69180c43cbb5a3fbc022dddb666b30155ecc0acad29a2e8941d522c8e60000000000000000000000000000000000000000000000000000000000000027736f6c616e613a3565796b7434557346763850384e4a64545245705931767a714b715a4b76647000000000000000000000000000000000000000000000000000";
+
+// Frozen historical output: the pre-anchor artifact with the retired
+// 0xab..ab staging placeholder. Kept only as the known-bad fixture
+// proving the placeholder class now fails in every mode.
+const RETIRED_PLACEHOLDER_DATA_HEX =
   "0xf17325e7000000000000000000000000000000000000000000000000000000000000002084738ec346cd136dddd5b09e8df18a3c5cfb2603aaf5a68758c0149aa406cc3900000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006b49d2000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000251c0000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000006b49d20000000000000000000000000000000000000000000000000000000000000000a0abababababababababababababababababababababababababababababababab0000000000000000000000000000000000000000000000000000000000000027736f6c616e613a3565796b7434557346763850384e4a64545245705931767a714b715a4b76647000000000000000000000000000000000000000000000000000";
 
 // The exact corrupt calldata this validator exists to catch: staged on-disk
@@ -317,7 +320,7 @@ const HISTORICAL_CORRUPT_DATA_HEX =
 
 // Fixture builder for known-bad shapes only; the good path is never blessed
 // by this, only by the crate encoder's pasted output.
-function synthCalldata({ sourceChain, pdaHex = PLACEHOLDER_PDA, expiry = 0x6b49d200 }) {
+function synthCalldata({ sourceChain, pdaHex = REAL_PDA_HEX, expiry = 0x6b49d200 }) {
   const w = (n) => n.toString(16).padStart(64, "0");
   const src = Buffer.from(sourceChain, "utf8");
   const data =
@@ -354,7 +357,9 @@ function goodArtifact() {
     expirationTime: 1800000000,
     function: ATTEST_SIGNATURE,
     network: "Base Sepolia",
-    notes: ["solanaAttestationPda is the 0xab..ab placeholder; NOT submission-ready."],
+    notes: [
+      "solanaAttestationPda is the live audit-root attestation asset (docs/metaplex-integration.md).",
+    ],
     policy: { maxDataBytes: RELAY_MAX_DATA_BYTES, maxWritesPerDay: 24 },
     recipient: ZERO_ADDRESS,
     revocable: true,
@@ -374,15 +379,21 @@ function selfTest() {
   const run = (artifact, opts = { submission: false }) => validateArtifact(artifact, opts);
 
   const good = run(goodArtifact());
-  expect("good fixture passes", good.problems.length === 0);
-  expect("good fixture warns placeholder", good.warnings.some((w) => /placeholder/i.test(w)));
+  expect(
+    "good fixture passes with no problems and no warnings",
+    good.problems.length === 0 && good.warnings.length === 0,
+  );
   expect("good fixture decodes the crate source_chain", good.decoded?.sourceChain === SOURCE_CHAIN);
   expect("good fixture decodes score 9500/4", good.decoded?.score === 9500 && good.decoded?.decimals === 4);
+  expect("good fixture carries the live anchor", good.decoded?.pdaHex === REAL_PDA_HEX);
 
-  const submissionGate = run(goodArtifact(), { submission: true });
+  const goodSubmission = run(goodArtifact(), { submission: true });
+  expect("good fixture passes the submission gate", goodSubmission.problems.length === 0);
+
+  const retired = run({ ...goodArtifact(), data: RETIRED_PLACEHOLDER_DATA_HEX });
   expect(
-    "submission gate refuses the placeholder PDA",
-    submissionGate.problems.some((p) => /NOT submission-ready/.test(p)),
+    "the retired 0xab..ab placeholder fails in default mode",
+    retired.problems.some((p) => /placeholder pattern/.test(p)),
   );
 
   const corrupt = run({ ...goodArtifact(), data: HISTORICAL_CORRUPT_DATA_HEX });
@@ -393,14 +404,17 @@ function selfTest() {
 
   const zeroPda = run({
     ...goodArtifact(),
-    data: GOLDEN_DATA_HEX.replace(PLACEHOLDER_PDA, "00".repeat(32)),
+    data: GOLDEN_DATA_HEX.replace(REAL_PDA_HEX, "00".repeat(32)),
   });
   expect("all-zero PDA is refused", zeroPda.problems.some((p) => /all-zero/.test(p)));
 
-  const undeclared = run({ ...goodArtifact(), notes: ["no declaration here"] });
+  const repeatedPda = run({
+    ...goodArtifact(),
+    data: GOLDEN_DATA_HEX.replace(REAL_PDA_HEX, "cd".repeat(32)),
+  });
   expect(
-    "undeclared placeholder PDA is refused",
-    undeclared.problems.some((p) => /no notes entry declares/.test(p)),
+    "a repeated-byte PDA is refused",
+    repeatedPda.problems.some((p) => /placeholder pattern/.test(p)),
   );
 
   const wrongUid = run({

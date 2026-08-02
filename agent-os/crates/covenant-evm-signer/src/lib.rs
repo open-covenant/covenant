@@ -36,8 +36,8 @@ use serde_json::{json, Value};
 pub use eip712::{recover_address, AttestMessage, EasDomain, DOMAIN_NAME, OFFCHAIN_VERSION};
 pub use reputation::{
     attest_calldata, attest_selector, parse_reputation_projection, reputation_schema_uid,
-    ReputationProjection, ReputationScore, ATTEST_SIGNATURE, RELAY_MAX_DATA_BYTES,
-    REPUTATION_SCHEMA, SOLANA_MAINNET_CAIP2,
+    solana_account_bytes, ReputationProjection, ReputationScore, ATTEST_SIGNATURE,
+    RELAY_MAX_DATA_BYTES, REPUTATION_SCHEMA, SOLANA_MAINNET_CAIP2,
 };
 pub use resolver::{
     addr_selector, ccip_signature_digest, encode_addr_call, encode_addr_result,
@@ -498,7 +498,14 @@ mod tests {
         assert_eq!(a.uid, b.uid);
     }
 
-    const REPUTATION_PDA: [u8; 32] = [0xAB; 32];
+    // A plausible non-placeholder anchor: projection validation now
+    // refuses repeated-single-byte patterns (the 0xab..ab staging
+    // placeholder class), so the fixture must look like a real account.
+    const REPUTATION_PDA: [u8; 32] = [
+        0x5e, 0xd8, 0x4d, 0x69, 0x18, 0x0c, 0x43, 0xcb, 0xb5, 0xa3, 0xfb, 0xc0, 0x22, 0xdd, 0xdb,
+        0x66, 0x6b, 0x30, 0x15, 0x5e, 0xcc, 0x0a, 0xca, 0xd2, 0x9a, 0x2e, 0x89, 0x41, 0xd5, 0x22,
+        0xc8, 0xe6,
+    ];
 
     fn reputation_projection() -> ReputationProjection {
         ReputationProjection::new(

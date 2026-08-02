@@ -17,6 +17,18 @@
 //! to one could be laundered. A score bound to a non-transferable Solana PDA
 //! cannot.
 //!
+//! ## Anchor account
+//!
+//! `solana_attestation_pda` is the 32-byte Solana account the score's
+//! provenance traces to — the agent's audit-root attestation. Two recording
+//! paths exist: the MPL Core AppData attestation asset (the live production
+//! anchor; the deployed accounts are recorded in
+//! `docs/metaplex-integration.md`), and the SAP attestation PDA the
+//! `@covenant/sap-bridge` worker derives as `[b"sap_attest", agent,
+//! attester]` under program `SAPpUhsWLJG1FfkGRcXagEDMrMsWGjbky7AyhGpFETZ`.
+//! Both are base58 account addresses on the wire;
+//! [`solana_account_bytes`] converts either into the schema's `bytes32`.
+//!
 //! [EAS]: https://attest.org
 //! [Human Passport]: https://passport.human.tech
 
@@ -152,6 +164,26 @@ impl ReputationProjection {
         ))
     }
 
+    /// Build a projection with the Solana anchor supplied as the base58
+    /// account address Solana tooling emits — a DAS asset id or an
+    /// on-chain PDA. The staging path reads the recorded live attestation
+    /// account through this.
+    pub fn from_pda_base58(
+        score: ReputationScore,
+        source_chain: impl Into<String>,
+        pda_base58: &str,
+        issued_at_unix: u64,
+        expiry_unix: u64,
+    ) -> Result<Self, EvmSignerError> {
+        Ok(Self::new(
+            score,
+            source_chain,
+            solana_account_bytes(pda_base58)?,
+            issued_at_unix,
+            expiry_unix,
+        ))
+    }
+
     /// Build a projection with the Solana anchor supplied as hex (`0x…`
     /// optional). The convenience the sidecar reads its stdin through.
     pub fn from_pda_hex(
@@ -195,6 +227,20 @@ impl ReputationProjection {
                     .into(),
             ));
         }
+        if self
+            .solana_attestation_pda
+            .iter()
+            .all(|b| *b == self.solana_attestation_pda[0])
+        {
+            // The 0xab..ab staging placeholder and its whole class: no real
+            // Solana account is 32 repeats of one byte, and only this check
+            // stands between a placeholder and a mainnet attestation
+            // permanently pointing the back-reference at garbage.
+            return Err(EvmSignerError::Reputation(format!(
+                "solana_attestation_pda is 32 repeats of 0x{:02x} — a placeholder pattern, not a real Solana account",
+                self.solana_attestation_pda[0]
+            )));
+        }
         if self.source_chain.is_empty() {
             return Err(EvmSignerError::Reputation("source_chain is empty".into()));
         }
@@ -210,6 +256,23 @@ impl ReputationProjection {
         }
         Ok(())
     }
+}
+
+/// Decode a base58 Solana account address into the `bytes32` the schema
+/// carries. Exactly 32 bytes or refusal: a truncated or overlong decode
+/// silently pointing the back-reference at a wrong account is this
+/// field's worst failure mode, so length is never padded or trimmed.
+pub fn solana_account_bytes(base58: &str) -> Result<[u8; 32], EvmSignerError> {
+    let trimmed = base58.trim();
+    let decoded = bs58::decode(trimmed).into_vec().map_err(|e| {
+        EvmSignerError::Reputation(format!("solana account {trimmed:?} is not base58: {e}"))
+    })?;
+    <[u8; 32]>::try_from(decoded.as_slice()).map_err(|_| {
+        EvmSignerError::Reputation(format!(
+            "solana account {trimmed:?} decodes to {} bytes, expected 32",
+            decoded.len()
+        ))
+    })
 }
 
 /// ABI-encode the reputation tuple exactly as EAS's `SchemaEncoder` would:
@@ -295,7 +358,10 @@ pub fn attest_calldata(projection: &ReputationProjection) -> Result<Vec<u8>, Evm
 /// Parse a reputation projection from the wire JSON the sidecar and the relay
 /// staging binary both read. Accepts camelCase (the default) with snake_case
 /// fallbacks; the score and its decimal scale are read together so the two can
-/// never drift apart.
+/// never drift apart. The anchor accepts both wire spellings: exactly 64 hex
+/// chars (`0x` optional) reads as hex; anything else reads as the base58
+/// account address Solana tooling emits. The forms cannot collide — a 32-byte
+/// account is 32–44 base58 chars, never 64.
 pub fn parse_reputation_projection(v: &Value) -> Result<ReputationProjection, EvmSignerError> {
     let u64_field = |names: &[&str]| -> Result<u64, EvmSignerError> {
         names
@@ -319,19 +385,74 @@ pub fn parse_reputation_projection(v: &Value) -> Result<ReputationProjection, Ev
     let decimals = u8::try_from(u64_field(&["scoreDecimals", "score_decimals"])?)
         .map_err(|_| EvmSignerError::Reputation("'scoreDecimals' exceeds uint8".into()))?;
 
-    ReputationProjection::from_pda_hex(
-        ReputationScore::new(score, decimals),
-        str_field(&["sourceChain", "source_chain"])?.to_string(),
-        str_field(&["solanaAttestationPda", "solana_attestation_pda"])?,
-        u64_field(&["issuedAt", "issued_at"])?,
-        u64_field(&["expiry"])?,
-    )
+    let pda = str_field(&["solanaAttestationPda", "solana_attestation_pda"])?;
+    let body = pda.strip_prefix("0x").unwrap_or(pda);
+    let is_hex32 = body.len() == 64 && body.bytes().all(|b| b.is_ascii_hexdigit());
+
+    let score = ReputationScore::new(score, decimals);
+    let source_chain = str_field(&["sourceChain", "source_chain"])?.to_string();
+    let issued_at = u64_field(&["issuedAt", "issued_at"])?;
+    let expiry = u64_field(&["expiry"])?;
+    if is_hex32 {
+        ReputationProjection::from_pda_hex(score, source_chain, pda, issued_at, expiry)
+    } else {
+        ReputationProjection::from_pda_base58(score, source_chain, pda, issued_at, expiry)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use covenant_audit::reputation::AuditReputation;
+
+    /// The live Base-mainnet-facing anchor: the production audit-root
+    /// attestation asset (MPL Core AppData), recorded in
+    /// `docs/metaplex-integration.md`.
+    const LIVE_ATTESTATION_ASSET: &str = "7PEd79CG1hFUU9qeBnAKmyA77YWzckd572qsYdq3W3GH";
+    /// Its 32 bytes, cross-generated with an independent implementation
+    /// (`@solana/web3.js` `new PublicKey(LIVE_ATTESTATION_ASSET).toBuffer()`)
+    /// so the crate's base58 decode is pinned against a second decoder,
+    /// not itself.
+    const LIVE_ATTESTATION_ASSET_HEX: &str =
+        "5ed84d69180c43cbb5a3fbc022dddb666b30155ecc0acad29a2e8941d522c8e6";
+
+    fn live_anchor() -> [u8; 32] {
+        solana_account_bytes(LIVE_ATTESTATION_ASSET).expect("live anchor decodes")
+    }
+
+    #[test]
+    fn solana_account_bytes_decodes_the_live_attestation_asset() {
+        // The conversion this task exists for, pinned against the
+        // cross-implementation vector: alphabet, endianness, and length
+        // all have to agree with what Solana tooling derives.
+        let bytes = live_anchor();
+        assert_eq!(crate::eth::hex_encode(&bytes), LIVE_ATTESTATION_ASSET_HEX);
+        assert_eq!(bs58::encode(&bytes).into_string(), LIVE_ATTESTATION_ASSET);
+    }
+
+    #[test]
+    fn solana_account_bytes_is_conversion_not_validation() {
+        // The system program is a real, well-known 32-zero-byte account:
+        // the converter must decode it faithfully. Refusing placeholder
+        // patterns is validate()'s job, at projection time.
+        let zeros = solana_account_bytes("11111111111111111111111111111111").unwrap();
+        assert_eq!(zeros, [0u8; 32]);
+    }
+
+    #[test]
+    fn solana_account_bytes_rejects_wrong_length_and_alphabet() {
+        // Too short (decodes to 2 bytes), and the base58 alphabet's
+        // excluded lookalikes (0, O, I, l). The error names the length so
+        // a truncated paste is diagnosable.
+        assert!(matches!(
+            solana_account_bytes("abc"),
+            Err(EvmSignerError::Reputation(m)) if m.contains("expected 32")
+        ));
+        assert!(matches!(
+            solana_account_bytes("0OIl"),
+            Err(EvmSignerError::Reputation(m)) if m.contains("not base58")
+        ));
+    }
 
     #[test]
     fn from_audit_maps_a_real_score_and_refuses_a_blank_history() {
@@ -344,7 +465,7 @@ mod tests {
         let p = ReputationProjection::from_audit(
             &scored,
             crate::reputation::SOLANA_MAINNET_CAIP2,
-            [0xAB; 32],
+            live_anchor(),
             1_700_000_000,
             1_800_000_000,
         )
@@ -362,7 +483,7 @@ mod tests {
             ReputationProjection::from_audit(
                 &blank,
                 crate::reputation::SOLANA_MAINNET_CAIP2,
-                [0xAB; 32],
+                live_anchor(),
                 1_700_000_000,
                 1_800_000_000,
             ),
@@ -392,7 +513,7 @@ mod tests {
         ReputationProjection::new(
             ReputationScore::from_ratio(95, 100, 4).unwrap(),
             SOLANA_MAINNET_CAIP2,
-            [0xAB; 32],
+            live_anchor(),
             1_700_000_000,
             1_800_000_000,
         )
@@ -438,7 +559,7 @@ mod tests {
         assert!((score as f64 / 10f64.powi(decimals as i32) - 0.95).abs() < 1e-12);
         assert_eq!(expiry, 1_800_000_000);
         assert_eq!(source, SOLANA_MAINNET_CAIP2);
-        assert_eq!(pda, [0xAB; 32]);
+        assert_eq!(pda, live_anchor());
     }
 
     #[test]
@@ -473,6 +594,29 @@ mod tests {
         assert!(with(&|p| p.solana_attestation_pda = [0u8; 32]).is_err());
         assert!(with(&|p| p.source_chain = String::new()).is_err());
         assert!(encode_data(&base).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_repeated_byte_placeholder_anchors() {
+        // The 0xab..ab staging placeholder sat behind a validate() that
+        // only refused all-zero, so it could have been attested on
+        // mainnet as a real anchor. Any 32-repeats-of-one-byte pattern is
+        // now refused; the real recorded anchor still passes.
+        let with_pda = |pda: [u8; 32]| {
+            let mut p = projection();
+            p.solana_attestation_pda = pda;
+            encode_data(&p)
+        };
+        for byte in [0xABu8, 0x11, 0xFF] {
+            assert!(
+                matches!(
+                    with_pda([byte; 32]),
+                    Err(EvmSignerError::Reputation(m)) if m.contains("placeholder pattern")
+                ),
+                "[{byte:#04x}; 32] must be refused"
+            );
+        }
+        assert!(with_pda(live_anchor()).is_ok());
     }
 
     #[test]
@@ -526,20 +670,21 @@ mod tests {
     fn attest_calldata_matches_the_staged_golden() {
         // The exact bytes staged for operator submission
         // (autonomy/multichain/staging/reputation-attest-base-sepolia.json),
-        // pasted from the first stage_reputation_attest example run — never
-        // hand-assembled. validate-reputation-staging.mjs pins the same hex,
-        // binding the crate encoder and the staging gate to identical bytes.
+        // pasted from the stage_reputation_attest example run that staged
+        // the live anchor — never hand-assembled. Differs from the prior
+        // golden only in schema word 4: the 0xab..ab placeholder became
+        // the live attestation asset's bytes.
         let call = attest_calldata(&ReputationProjection::new(
             ReputationScore::from_ratio(95, 100, 4).unwrap(),
             SOLANA_MAINNET_CAIP2,
-            [0xAB; 32],
+            live_anchor(),
             1_700_000_000,
             1_800_000_000,
         ))
         .unwrap();
         assert_eq!(
             eth::hex_0x(&call),
-            "0xf17325e7000000000000000000000000000000000000000000000000000000000000002084738ec346cd136dddd5b09e8df18a3c5cfb2603aaf5a68758c0149aa406cc3900000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006b49d2000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000251c0000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000006b49d20000000000000000000000000000000000000000000000000000000000000000a0abababababababababababababababababababababababababababababababab0000000000000000000000000000000000000000000000000000000000000027736f6c616e613a3565796b7434557346763850384e4a64545245705931767a714b715a4b76647000000000000000000000000000000000000000000000000000"
+            "0xf17325e7000000000000000000000000000000000000000000000000000000000000002084738ec346cd136dddd5b09e8df18a3c5cfb2603aaf5a68758c0149aa406cc3900000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006b49d2000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000251c0000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000006b49d20000000000000000000000000000000000000000000000000000000000000000a05ed84d69180c43cbb5a3fbc022dddb666b30155ecc0acad29a2e8941d522c8e60000000000000000000000000000000000000000000000000000000000000027736f6c616e613a3565796b7434557346763850384e4a64545245705931767a714b715a4b76647000000000000000000000000000000000000000000000000000"
         );
     }
 
@@ -600,6 +745,40 @@ mod tests {
     }
 
     #[test]
+    fn parse_reputation_projection_reads_a_base58_anchor() {
+        use serde_json::json;
+        // The base58 spelling Solana tooling emits must parse to the same
+        // bytes as the hex spelling — and a string that is neither form is
+        // reported through the base58 arm, never silently zero-filled.
+        let p = parse_reputation_projection(&json!({
+            "score": 9_500, "scoreDecimals": 4,
+            "sourceChain": SOLANA_MAINNET_CAIP2,
+            "solanaAttestationPda": LIVE_ATTESTATION_ASSET,
+            "issuedAt": 1_700_000_000, "expiry": 1_800_000_000
+        }))
+        .unwrap();
+        assert_eq!(p.solana_attestation_pda, live_anchor());
+
+        let hex_spelling = parse_reputation_projection(&json!({
+            "score": 9_500, "scoreDecimals": 4,
+            "sourceChain": SOLANA_MAINNET_CAIP2,
+            "solanaAttestationPda": format!("0x{LIVE_ATTESTATION_ASSET_HEX}"),
+            "issuedAt": 1_700_000_000, "expiry": 1_800_000_000
+        }))
+        .unwrap();
+        assert_eq!(hex_spelling.solana_attestation_pda, live_anchor());
+
+        assert!(matches!(
+            parse_reputation_projection(&json!({
+                "score": 1, "scoreDecimals": 0, "sourceChain": "solana:x",
+                "solanaAttestationPda": "not-any-spelling",
+                "issuedAt": 1, "expiry": 2
+            })),
+            Err(EvmSignerError::Reputation(m)) if m.contains("not base58")
+        ));
+    }
+
+    #[test]
     fn from_pda_hex_parses_the_anchor() {
         let p = ReputationProjection::from_pda_hex(
             ReputationScore::new(9_500, 4),
@@ -614,6 +793,27 @@ mod tests {
             ReputationScore::new(1, 0),
             SOLANA_MAINNET_CAIP2,
             "0xnothex",
+            1,
+            2
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn from_pda_base58_parses_the_anchor() {
+        let p = ReputationProjection::from_pda_base58(
+            ReputationScore::new(9_500, 4),
+            SOLANA_MAINNET_CAIP2,
+            LIVE_ATTESTATION_ASSET,
+            1_700_000_000,
+            1_800_000_000,
+        )
+        .unwrap();
+        assert_eq!(p.solana_attestation_pda, live_anchor());
+        assert!(ReputationProjection::from_pda_base58(
+            ReputationScore::new(1, 0),
+            SOLANA_MAINNET_CAIP2,
+            "0OIl",
             1,
             2
         )

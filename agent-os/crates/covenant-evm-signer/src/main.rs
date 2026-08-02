@@ -186,18 +186,28 @@ mod tests {
 
     #[test]
     fn reputation_json_parses_and_signs() {
+        // The anchor arrives as the base58 account address Solana tooling
+        // emits — here the live audit-root attestation asset
+        // (docs/metaplex-integration.md); a repeated-byte placeholder
+        // would be refused at signing time by projection validation.
         let input = json!({
             "score": 9_500,
             "scoreDecimals": 4,
             "sourceChain": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
-            "solanaAttestationPda": "0xabababababababababababababababababababababababababababababababab",
+            "solanaAttestationPda": "7PEd79CG1hFUU9qeBnAKmyA77YWzckd572qsYdq3W3GH",
             "issuedAt": 1_700_000_000,
             "expiry": 1_800_000_000
         });
         let projection = parse_reputation_projection(&input).unwrap();
         assert_eq!(projection.score.score, 9_500);
         assert_eq!(projection.score.decimals, 4);
-        assert_eq!(projection.solana_attestation_pda, [0xAB; 32]);
+        assert_eq!(
+            projection.solana_attestation_pda,
+            covenant_evm_signer::solana_account_bytes(
+                "7PEd79CG1hFUU9qeBnAKmyA77YWzckd572qsYdq3W3GH"
+            )
+            .unwrap()
+        );
 
         let signer = EasAttestationSigner::base_sepolia(
             Secp256k1IssuerKey::from_secret_bytes(&[9u8; 32]).unwrap(),

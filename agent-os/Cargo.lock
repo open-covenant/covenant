@@ -1264,6 +1264,7 @@ dependencies = [
 name = "covenant-evm-signer"
 version = "0.1.0"
 dependencies = [
+ "bs58",
  "covenant-attestation",
  "covenant-audit",
  "covenant-identity",

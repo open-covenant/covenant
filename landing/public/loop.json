@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-08-02T18:51:53.372Z",
+  "updatedAt": "2026-08-02T19:11:57.750Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 13022,
+    "events": 13025,
     "tasks": 1527,
-    "integrated": 1527
+    "integrated": 1528
   },
   "throughput": {
-    "last24h": 2,
-    "last7d": 6,
-    "velocity": 0.9
+    "last24h": 3,
+    "last7d": 7,
+    "velocity": 1
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "08-02",
-      "count": 2
+      "count": 3
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "08-02",
-      "total": 1527
+      "total": 1528
     }
   ],
   "states": {
-    "integrated": 1519,
+    "integrated": 1520,
     "proposed": 1,
-    "blocked": 6,
-    "cross_review": 1
+    "blocked": 6
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "multichain-wire-format-golden-vectors",
-    "state": "cross_review",
-    "since": "2026-08-02T18:48:43.126Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-08-02T19:04:08.442Z",
+      "task": "multichain-wire-format-golden-vectors",
+      "note": "Slice complete: 4 frozen fixtures (.v1) + 9 asserting tests with bless-env regeneration + always-on/next-run scratch re-derivations; print-o"
+    },
     {
       "at": "2026-08-02T17:32:14.283Z",
       "task": "multichain-attestation-pda-producer",
@@ -315,11 +315,6 @@
       "at": "2026-07-16T20:55:01.437Z",
       "task": "covenantd-budget-ledger-read-failure-arms",
       "note": "landed as 506d5aeb; overseer 2026-07-16T20:00Z reviewed range 09612f49..0fe3a97e CLEAN; syncing stale record"
-    },
-    {
-      "at": "2026-07-16T05:25:18.482Z",
-      "task": "release-scope-review-signature-wiring",
-      "note": "Public slice: sign-release-artifacts.yml + keys README + docs/provenance/review-artifacts/README.md. Readiness-gate needle strengthening and"
     }
   ]
 }

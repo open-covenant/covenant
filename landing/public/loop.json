@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-08-02T16:11:16.372Z",
+  "updatedAt": "2026-08-02T16:31:22.413Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12998,
-    "tasks": 1524,
+    "events": 13002,
+    "tasks": 1525,
     "integrated": 1525
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1517,
     "proposed": 1,
-    "blocked": 6
+    "blocked": 6,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "multichain-x402-chain-asset-pinning",
+    "state": "in_progress",
+    "since": "2026-08-02T16:19:32.773Z"
+  },
   "recent": [
     {
       "at": "2026-07-28T13:46:20.356Z",

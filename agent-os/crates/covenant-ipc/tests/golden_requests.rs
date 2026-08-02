@@ -86,6 +86,8 @@ const EXPECTED_REQUEST_KINDS: &[&str] = &[
     "authorize_spend",
     "settle_spend",
     "prove_completion",
+    "spend_grant_charge",
+    "spend_grant_settle",
     "record_escrow_release",
     "enroll_peer",
     "get_reputation",
@@ -312,6 +314,24 @@ fn golden_request_vectors() -> Vec<Request> {
             network: "solana".into(),
             provider: "orbserv".into(),
         },
+        Request::SpendGrantCharge {
+            grant_id: "1".into(),
+            provider: format!("0x{}", "c0".repeat(20)),
+            amount: "1000".into(),
+            job_id: "5e111ed0-0000-0000-0000-000000000005".into(),
+            spec_id: format!("0x{}", "22".repeat(32)),
+            deadline: 1_700_003_600,
+        },
+        Request::SpendGrantSettle {
+            escrow_id: "0x57316dfc56f1f07fe7ff828f941e9d07f81e2534".into(),
+            job_id: "5e111ed0-0000-0000-0000-000000000005".into(),
+            hirer_address: format!("0x{}", "11".repeat(20)),
+            worker_address: format!("0x{}", "c0".repeat(20)),
+            amount: "1000".into(),
+            asset: "USDG".into(),
+            network: "robinhood".into(),
+            provider: format!("0x{}", "c0".repeat(20)),
+        },
         Request::RecordEscrowRelease {
             escrow_id: "escrow-001".into(),
             decision_id: Uuid::from_u128(0x5E11_1ED0_0000_0000_0000_0000_0000_0002),
@@ -450,6 +470,8 @@ fn assert_request_variant_coverage(req: &Request) {
         | Request::AuthorizeSpend { .. }
         | Request::SettleSpend { .. }
         | Request::ProveCompletion { .. }
+        | Request::SpendGrantCharge { .. }
+        | Request::SpendGrantSettle { .. }
         | Request::RecordEscrowRelease { .. }
         | Request::EnrollPeer { .. }
         | Request::GetReputation { .. }

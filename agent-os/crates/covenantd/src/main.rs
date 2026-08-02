@@ -422,6 +422,23 @@ async fn main() -> Result<()> {
         None => server,
     };
 
+    let server = match covenantd::spend_grant::SpendGrantConfig::from_env() {
+        Some(cfg) => {
+            let addr: String = cfg
+                .attestor_address()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            info!(
+                chain_id = cfg.chain_id(),
+                attestor = %format!("0x{addr}"),
+                "spend-grant facilitator enabled"
+            );
+            server.with_spend_grant(cfg)
+        }
+        None => server,
+    };
+
     let server = match hyre_config_from_env() {
         Some(cfg) => {
             // Prefer the live manifest so a restart picks up Hyre's

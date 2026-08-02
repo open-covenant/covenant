@@ -36,6 +36,32 @@ jobs:
 
       - run: ./scripts/validate.sh
 
+  evm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: agent-os/evm
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
+        with:
+          version: stable
+
+      # evm/lib is gitignored, so the checkout carries no dependencies. Pin the
+      # same forge-std the local toolchain resolves rather than floating on HEAD.
+      - run: git clone --depth 1 --branch v1.16.2 https://github.com/foundry-rs/forge-std lib/forge-std
+
+      # Not --deny-warnings: the escrow's deadline checks read block.timestamp by
+      # design, which trips block-timestamp on every comparison. Validator skew is
+      # seconds against deadlines measured in hours, so the lint does not apply.
+      - run: forge build
+      - run: forge test -vv
+
   timeline-release:
     runs-on: ubuntu-latest
     timeout-minutes: 10

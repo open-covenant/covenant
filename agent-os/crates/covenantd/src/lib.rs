@@ -18,6 +18,7 @@ pub mod robinhood;
 pub mod secret;
 pub mod sns;
 pub mod spend_authz;
+pub mod spend_grant;
 pub mod sse;
 pub mod stream_dispatch;
 pub mod stream_tracker;
@@ -1188,6 +1189,47 @@ struct OutcomeStore {
     order: std::collections::VecDeque<Uuid>,
 }
 
+/// The bound a charged spend-grant call commits to, held between its
+/// `SpendGrantCharge` and the `SpendGrantSettle` that acts on it. Pinning
+/// `spec_id`/`deadline` here — rather than reading them off the settle request
+/// — is what stops a settle caller from redirecting a verdict onto a call the
+/// daemon charged under different terms.
+#[derive(Clone, Copy)]
+struct SpendGrantBinding {
+    spec_id: [u8; 32],
+    deadline: u64,
+}
+
+fn decode_hex_n<const N: usize>(s: &str) -> Result<[u8; N], String> {
+    let body = s.trim().strip_prefix("0x").unwrap_or(s.trim());
+    if body.len() != N * 2 {
+        return Err(format!(
+            "expected {N} bytes ({} hex chars), got {}",
+            N * 2,
+            body.len()
+        ));
+    }
+    let mut out = [0u8; N];
+    for (i, pair) in body.as_bytes().chunks_exact(2).enumerate() {
+        let s = std::str::from_utf8(pair).map_err(|_| "non-utf8 hex".to_string())?;
+        out[i] = u8::from_str_radix(s, 16).map_err(|_| format!("invalid hex byte at {i}"))?;
+    }
+    Ok(out)
+}
+
+fn decode_evm_addr(s: &str) -> Result<[u8; 20], String> {
+    decode_hex_n::<20>(s)
+}
+
+fn decode_bytes32(s: &str) -> Result<[u8; 32], String> {
+    decode_hex_n::<32>(s)
+}
+
+fn hex0x(bytes: &[u8]) -> String {
+    let body: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    format!("0x{body}")
+}
+
 impl OutcomeStore {
     const CAP: usize = 512;
 
@@ -1340,6 +1382,18 @@ pub struct Server {
     /// to resolve a call's model for the per-call capability gate and
     /// the provenance audit row.
     acedata: Option<covenant_acedata::AceDataConfig>,
+    /// Opt-in spend-grant facilitator: Covenant's secp256k1 attestor for one
+    /// deployed `SpendGrantEscrow` on an EVM chain. `None` (default) leaves the
+    /// surface off; `Some` lets the daemon sign the release/refund verdict a
+    /// call's escrowed hold is gated on. Enabled via `Server::with_spend_grant`.
+    spend_grant: Option<Arc<spend_grant::SpendGrantConfig>>,
+    /// Facilitator ledger for in-flight `SpendGrantEscrow` calls: maps the
+    /// on-chain `call_id` (a job uuid's 128 bits) to the `spec_id`/`deadline`
+    /// the daemon charged it with, so a later settle gates the release on the
+    /// bound the charge committed to — not on values the settle caller supplies.
+    /// `std::sync::Mutex` (like `intent_outcomes`): the critical section is a
+    /// trivial map insert/read never held across `.await`.
+    spend_grant_calls: Arc<std::sync::Mutex<std::collections::HashMap<u128, SpendGrantBinding>>>,
     robinhood: Option<Arc<robinhood::RobinhoodState>>,
     /// Opt-in Synapse Agent Protocol bridge. `None` when no operator
     /// has wired it in (the default); a built [`SapBridge`] when
@@ -1400,9 +1454,11 @@ impl Server {
             metaplex: None,
             sns: None,
             acedata: None,
+            spend_grant: None,
             robinhood: None,
             sap_bridge: None,
             intent_outcomes: Arc::new(std::sync::Mutex::new(OutcomeStore::default())),
+            spend_grant_calls: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
 
@@ -1570,6 +1626,22 @@ impl Server {
     pub fn with_acedata(mut self, config: covenant_acedata::AceDataConfig) -> Self {
         self.acedata = Some(config);
         self
+    }
+
+    /// Enable the spend-grant facilitator leg. The daemon holds the secp256k1
+    /// attestor for one deployed `SpendGrantEscrow` and can sign the
+    /// release/refund verdict a call's hold is gated on; `None` (default)
+    /// leaves the surface off.
+    pub fn with_spend_grant(mut self, config: spend_grant::SpendGrantConfig) -> Self {
+        self.spend_grant = Some(Arc::new(config));
+        self
+    }
+
+    /// The spend-grant facilitator config, when enabled. Handlers that turn a
+    /// completion proof into an on-chain release/refund verdict read this;
+    /// `None` means no operator wired the surface in.
+    pub fn spend_grant(&self) -> Option<&spend_grant::SpendGrantConfig> {
+        self.spend_grant.as_deref()
     }
 
     /// Enable the Robinhood governed-trading profile. The trading key stays in
@@ -2678,6 +2750,42 @@ impl Server {
                 provider,
             } => {
                 self.prove_completion(
+                    escrow::ProveRequest {
+                        escrow_id,
+                        job_id,
+                        hirer_address,
+                        worker_address,
+                        amount,
+                        asset,
+                        network,
+                        provider,
+                    },
+                    peer,
+                )
+                .await
+            }
+            Request::SpendGrantCharge {
+                grant_id,
+                provider,
+                amount,
+                job_id,
+                spec_id,
+                deadline,
+            } => {
+                self.spend_grant_charge(grant_id, provider, amount, job_id, spec_id, deadline, peer)
+                    .await
+            }
+            Request::SpendGrantSettle {
+                escrow_id,
+                job_id,
+                hirer_address,
+                worker_address,
+                amount,
+                asset,
+                network,
+                provider,
+            } => {
+                self.spend_grant_settle(
                     escrow::ProveRequest {
                         escrow_id,
                         job_id,
@@ -5188,17 +5296,19 @@ impl Server {
         Ok(false)
     }
 
-    /// True if the peer holds a live `x402.outbound.pay` capability whose scope
-    /// admits `provider`. Mirrors [`Self::tool_call_scope_allows`]: an unscoped
-    /// grant admits any destination, a `provider`-bound grant admits only its
-    /// class, and grants are additive (any matching capability suffices). A
-    /// malformed scope surfaces as `Err` so the caller fails closed.
-    async fn x402_pay_scope_allows(
+    /// The authoritative spend bounds for `view`, resolved from the peer's held
+    /// `wallet.spend.authorize` grants — the signed grant is the source of truth
+    /// for the per-call ceiling and provider allowlist, never the caller's
+    /// request. Mirrors [`Self::x402_pay_scope_allows`]: grants are additive, the
+    /// first that admits the spend wins, an unscoped grant is a blanket
+    /// authority, and a malformed scope surfaces as `Err` so the caller fails
+    /// closed. `Ok(None)` means no held grant admits this spend.
+    async fn wallet_spend_bounds_resolve(
         &self,
-        action: &str,
-        provider: &str,
+        view: covenant_permissions::WalletSpendView<'_>,
         peer: &AgentId,
-    ) -> Result<bool, String> {
+    ) -> Result<Option<covenant_permissions::WalletSpendBounds>, String> {
+        let action = "wallet.spend.authorize";
         let now = epoch_ms();
         let trust_root = self.identity.agent_id().pubkey;
         let user_caps = self
@@ -5211,13 +5321,13 @@ impl Server {
             cap.capability.action == action
                 && verify_with_clock_and_trust_root(cap, now, trust_root).is_ok()
         }) {
-            match covenant_permissions::x402_pay_scope_allows(
+            match covenant_permissions::wallet_spend_bounds_if_admits(
                 &cap.capability.action,
                 &cap.capability.scope,
-                provider,
+                view,
             ) {
-                Ok(true) => return Ok(true),
-                Ok(false) => {}
+                Ok(Some(bounds)) => return Ok(Some(bounds)),
+                Ok(None) => {}
                 Err(e) => {
                     invalid_scope.get_or_insert_with(|| e.to_string());
                 }
@@ -5226,7 +5336,51 @@ impl Server {
         if let Some(reason) = invalid_scope {
             return Err(reason);
         }
-        Ok(false)
+        Ok(None)
+    }
+
+    /// The authoritative per-call spend ceiling for a dispatched
+    /// `x402.outbound.pay` call to `provider`, resolved from the peer's held
+    /// grants — the signed grant is the source of truth for the ceiling, never
+    /// the caller's request. Mirrors [`Self::wallet_spend_bounds_resolve`]:
+    /// grants are additive, the first that admits `provider` wins, an unbounded
+    /// grant carries no ceiling, and a malformed scope surfaces as `Err` so the
+    /// caller fails closed. `Ok(None)` means no held grant admits a call to
+    /// `provider` (the destination is outside every grant's class).
+    async fn x402_pay_bounds_resolve(
+        &self,
+        provider: &str,
+        peer: &AgentId,
+    ) -> Result<Option<covenant_permissions::X402PayBounds>, String> {
+        let action = "x402.outbound.pay";
+        let now = epoch_ms();
+        let trust_root = self.identity.agent_id().pubkey;
+        let user_caps = self
+            .capabilities
+            .list_for_subject(peer.pubkey)
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut invalid_scope = None;
+        for cap in user_caps.iter().filter(|cap| {
+            cap.capability.action == action
+                && verify_with_clock_and_trust_root(cap, now, trust_root).is_ok()
+        }) {
+            match covenant_permissions::x402_pay_bounds_if_admits(
+                &cap.capability.action,
+                &cap.capability.scope,
+                provider,
+            ) {
+                Ok(Some(bounds)) => return Ok(Some(bounds)),
+                Ok(None) => {}
+                Err(e) => {
+                    invalid_scope.get_or_insert_with(|| e.to_string());
+                }
+            }
+        }
+        if let Some(reason) = invalid_scope {
+            return Err(reason);
+        }
+        Ok(None)
     }
 
     fn check_ignore(&self, text: String) -> Response {
@@ -6905,10 +7059,15 @@ impl Server {
     /// budget debit + settlement receipt + audit event on success.
     /// The receipt id surfaces back to the caller for join-keys.
     ///
-    /// v1: the receipt amount is recorded as the operator-authorized
-    /// `per_call_cap`, not the live signed amount. A follow-up that
-    /// surfaces the chosen [`covenant_x402::PaymentRequirements`]
-    /// from `request_paid` will tighten that to the exact amount.
+    /// The per-call ceiling is resolved from the holder's signed
+    /// `x402.outbound.pay` grant, not trusted from the request: the enforced
+    /// cap is `min(grant per_call_cap, request cap)`, so a bounded grant is a
+    /// ceiling the caller can only tighten, never exceed.
+    ///
+    /// v1: the receipt amount is recorded as that enforced ceiling, not the
+    /// live signed amount. A follow-up that surfaces the chosen
+    /// [`covenant_x402::PaymentRequirements`] from `request_paid` will tighten
+    /// it to the exact amount.
     #[allow(clippy::too_many_arguments)]
     async fn pay_x402(
         &self,
@@ -6934,16 +7093,15 @@ impl Server {
         }
 
         // The capability check above admits the holder of any x402.outbound.pay
-        // grant; this scope gate binds the grant to its destination class so a
-        // provider-scoped grant cannot egress to an unlisted destination. It
-        // runs before the dispatch-config check so a denial is auditable even
-        // on a daemon with no funding-key sidecar wired.
-        match self
-            .x402_pay_scope_allows("x402.outbound.pay", &provider, peer)
-            .await
-        {
-            Ok(true) => {}
-            Ok(false) => {
+        // grant; this gate binds the grant to its destination class (a
+        // provider-scoped grant cannot egress to an unlisted destination) and
+        // lifts the grant's authoritative per-call ceiling, so the spend cap
+        // comes from the signed grant, not the request. It runs before the
+        // dispatch-config check so a denial is auditable even on a daemon with
+        // no funding-key sidecar wired.
+        let bounds = match self.x402_pay_bounds_resolve(&provider, peer).await {
+            Ok(Some(bounds)) => bounds,
+            Ok(None) => {
                 let reason =
                     format!("provider {provider:?} is outside this grant's destination scope");
                 self.record_capability_scope_rejected(
@@ -6971,7 +7129,7 @@ impl Server {
                     ),
                 };
             }
-        }
+        };
 
         let Some(config) = self.x402_dispatch.clone() else {
             return Response::Error {
@@ -7006,6 +7164,13 @@ impl Server {
             }
         };
 
+        // The signed grant, not the request, is the source of truth for the
+        // per-call ceiling. A grant that sets no ceiling leaves the request's
+        // cap; a bounded grant is a hard ceiling the caller can only tighten.
+        // Mirrors authorize_spend's min(grant_bound, caller_cap).
+        let enforced_cap = bounds.per_call_cap.unwrap_or(u128::MAX).min(per_call_cap_u);
+        let enforced_cap_str = enforced_cap.to_string();
+
         let mut signer = x402::SubprocessSigner::new(&config.signer_binary);
         for (k, v) in &config.signer_env {
             signer = signer.env(k.clone(), v.clone());
@@ -7015,7 +7180,7 @@ impl Server {
             provider: provider.clone(),
             network: network.clone(),
             asset: asset.clone(),
-            per_call_cap: per_call_cap_u,
+            per_call_cap: enforced_cap,
         };
         let call = x402::PaidCall {
             provider: &provider,
@@ -7023,7 +7188,7 @@ impl Server {
             method: http_method,
             capability,
             body: body.as_ref(),
-            amount: per_call_cap.clone(),
+            amount: enforced_cap_str,
             network: network.clone(),
             asset: asset.clone(),
             credits,
@@ -7105,7 +7270,7 @@ impl Server {
             };
         }
 
-        let per_call_cap_u: u128 = match per_call_cap.parse() {
+        let caller_cap: u128 = match per_call_cap.parse() {
             Ok(n) => n,
             Err(_) => {
                 return Response::Error {
@@ -7115,14 +7280,57 @@ impl Server {
                 }
             }
         };
+        let amount_u: u128 = match amount.parse() {
+            Ok(n) => n,
+            Err(_) => {
+                return Response::Error {
+                    message: format!("invalid amount (must be decimal u128): {amount:?}"),
+                }
+            }
+        };
 
+        // The signed grant, not the request, is the source of truth for the
+        // per-call ceiling and provider allowlist. Resolve the authoritative
+        // bounds from the grant the peer holds; deny fail-closed if none admits.
+        let view = covenant_permissions::WalletSpendView {
+            provider: Some(&provider),
+            network: Some(&network),
+            asset: Some(&asset),
+            amount: Some(amount_u),
+        };
+        let bounds = match self.wallet_spend_bounds_resolve(view, peer).await {
+            Ok(Some(bounds)) => bounds,
+            Ok(None) => {
+                return Response::Error {
+                    message: "no held \"wallet.spend.authorize\" grant admits this spend \
+                              (provider, network, asset, or amount is outside every grant's \
+                              bounds)."
+                        .into(),
+                }
+            }
+            Err(e) => {
+                return Response::Error {
+                    message: format!("spend authorization scope: {e}"),
+                }
+            }
+        };
+
+        // A blanket grant carries no per-call ceiling (u128::MAX), so the
+        // caller-supplied cap still applies — today's behavior. A bounded grant
+        // is a hard ceiling the caller can only tighten, never exceed.
+        let enforced_cap = bounds.per_call_cap.unwrap_or(u128::MAX).min(caller_cap);
+
+        // Pins come from the grant; an axis the grant leaves open falls back to
+        // the request value the resolver already validated, so evaluate() checks
+        // the grant's bound on every axis rather than comparing request to itself.
         let scope = spend_authz::SpendScope {
-            provider,
-            network: network.clone(),
-            asset: asset.clone(),
-            per_call_cap: per_call_cap_u,
+            allowed_providers: bounds.providers,
+            network: bounds.network.unwrap_or_else(|| network.clone()),
+            asset: bounds.asset.unwrap_or_else(|| asset.clone()),
+            per_call_cap: enforced_cap,
         };
         let req = spend_authz::SpendRequest {
+            provider,
             network,
             asset,
             amount,
@@ -7276,6 +7484,229 @@ impl Server {
             },
             Err(e) => Response::Error {
                 message: format!("escrow completion proof failed: {e}"),
+            },
+        }
+    }
+
+    /// Fund a bounded-spend hold on the deployed `SpendGrantEscrow`: sign and
+    /// broadcast `chargeCall` in-process as the grant's spender, then record the
+    /// `call_id → {spec_id, deadline}` binding the later settle gates on. The
+    /// contract enforces the allowlist / per-call ceiling / balance / expiry, so
+    /// a request that would breach the grant reverts on chain rather than being
+    /// waved through here. Gated by `wallet.spend.authorize`.
+    async fn spend_grant_charge(
+        &self,
+        grant_id: String,
+        provider: String,
+        amount: String,
+        job_id: String,
+        spec_id: String,
+        deadline: u64,
+        peer: &AgentId,
+    ) -> Response {
+        let check = self
+            .check_capabilities(
+                "spendgrant:charge".into(),
+                vec!["wallet.spend.authorize".into()],
+                peer,
+            )
+            .await;
+        if !check.passed {
+            return Response::Error {
+                message: "spend-grant charge requires capability \
+                          \"wallet.spend.authorize\". Grant it with \
+                          `covenant capabilities grant wallet.spend.authorize`."
+                    .into(),
+            };
+        }
+
+        let Some(config) = self.spend_grant.clone() else {
+            return Response::Error {
+                message: "the spend-grant facilitator is not configured on this daemon. \
+                          Wire it via Server::with_spend_grant and restart."
+                    .into(),
+            };
+        };
+        if !config.has_submitter() {
+            return Response::Error {
+                message: "the spend-grant facilitator has no in-process submitter; set \
+                          COVENANT_SPENDGRANT_RPC + COVENANT_SPENDGRANT_SUBMITTER_KEY and restart."
+                    .into(),
+            };
+        }
+
+        let grant_id = match grant_id.parse::<u128>() {
+            Ok(v) => v,
+            Err(_) => {
+                return Response::Error {
+                    message: format!("invalid grant_id (want a decimal u128): {grant_id:?}"),
+                }
+            }
+        };
+        let amount = match amount.parse::<u128>() {
+            Ok(v) => v,
+            Err(_) => {
+                return Response::Error {
+                    message: format!("invalid amount (want a decimal u128): {amount:?}"),
+                }
+            }
+        };
+        let provider = match decode_evm_addr(&provider) {
+            Ok(v) => v,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("invalid provider address: {e}"),
+                }
+            }
+        };
+        let spec = match decode_bytes32(&spec_id) {
+            Ok(v) => v,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("invalid spec_id: {e}"),
+                }
+            }
+        };
+        let job = match Uuid::parse_str(&job_id) {
+            Ok(v) => v,
+            Err(_) => {
+                return Response::Error {
+                    message: format!("invalid job_id (want a uuid): {job_id:?}"),
+                }
+            }
+        };
+        let call_id = u128::from_be_bytes(*job.as_bytes());
+
+        match config
+            .broadcast_charge(grant_id, provider, amount, call_id, deadline)
+            .await
+        {
+            Ok(receipt) => {
+                if let Ok(mut calls) = self.spend_grant_calls.lock() {
+                    calls.insert(
+                        call_id,
+                        SpendGrantBinding {
+                            spec_id: spec,
+                            deadline,
+                        },
+                    );
+                }
+                Response::SpendGrantCharged {
+                    call_id: call_id.to_string(),
+                    tx_hash: hex0x(&receipt.tx_hash),
+                    block_number: receipt.block_number,
+                }
+            }
+            Err(e) => Response::Error {
+                message: format!("spend-grant chargeCall failed: {e}"),
+            },
+        }
+    }
+
+    /// Settle a charged spend-grant hold: derive the job's verdict from the
+    /// audit chain via [`escrow::prove_completion`] (never the request), sign the
+    /// quality attestation, and broadcast release (pass → provider paid) or
+    /// refund (junk → hold returned to the grant) in-process. `spec_id`/`deadline`
+    /// come from the charge binding, so a caller cannot settle a call the daemon
+    /// never charged or shift its bound. Needs both the spend-grant facilitator
+    /// (with a submitter) and the escrow surface; gated by `escrow.completion.prove`.
+    async fn spend_grant_settle(&self, req: escrow::ProveRequest, peer: &AgentId) -> Response {
+        let check = self
+            .check_capabilities(
+                "spendgrant:settle".into(),
+                vec!["escrow.completion.prove".into()],
+                peer,
+            )
+            .await;
+        if !check.passed {
+            return Response::Error {
+                message: "spend-grant settle requires capability \
+                          \"escrow.completion.prove\". Grant it with \
+                          `covenant capabilities grant escrow.completion.prove`."
+                    .into(),
+            };
+        }
+
+        let Some(config) = self.spend_grant.clone() else {
+            return Response::Error {
+                message: "the spend-grant facilitator is not configured on this daemon. \
+                          Wire it via Server::with_spend_grant and restart."
+                    .into(),
+            };
+        };
+        if !config.has_submitter() {
+            return Response::Error {
+                message: "the spend-grant facilitator has no in-process submitter; set \
+                          COVENANT_SPENDGRANT_RPC + COVENANT_SPENDGRANT_SUBMITTER_KEY and restart."
+                    .into(),
+            };
+        }
+        let Some(escrow_config) = self.escrow.clone() else {
+            return Response::Error {
+                message: "spend-grant settle needs the escrow surface to derive the completion \
+                          verdict. Wire it via Server::with_escrow and restart."
+                    .into(),
+            };
+        };
+        if !escrow_config.enabled {
+            return Response::Error {
+                message: "the escrow surface is disabled in this daemon's config.".into(),
+            };
+        }
+
+        let job = match Uuid::parse_str(&req.job_id) {
+            Ok(v) => v,
+            Err(_) => {
+                return Response::Error {
+                    message: format!("invalid job_id (want a uuid): {:?}", req.job_id),
+                }
+            }
+        };
+        let call_id = u128::from_be_bytes(*job.as_bytes());
+        let Some(binding) = self
+            .spend_grant_calls
+            .lock()
+            .ok()
+            .and_then(|calls| calls.get(&call_id).copied())
+        else {
+            return Response::Error {
+                message: format!(
+                    "no charged spend-grant call for job {job}; send SpendGrantCharge first"
+                ),
+            };
+        };
+
+        let issuer = self.identity.agent_id();
+        let context = escrow::ProveContext {
+            identity: self.identity.as_ref(),
+            audit: self.audit.as_ref(),
+            issuer: &issuer,
+        };
+        let signed = match escrow::prove_completion(&context, escrow_config.as_ref(), &req).await {
+            Ok(v) => v,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("spend-grant settle: completion proof failed: {e}"),
+                }
+            }
+        };
+
+        match config
+            .settle_and_broadcast(&signed.proof, call_id, binding.spec_id, binding.deadline)
+            .await
+        {
+            Ok((submission, receipt)) => {
+                if let Ok(mut calls) = self.spend_grant_calls.lock() {
+                    calls.remove(&call_id);
+                }
+                Response::SpendGrantSettled {
+                    release: submission.release,
+                    tx_hash: hex0x(&receipt.tx_hash),
+                    block_number: receipt.block_number,
+                }
+            }
+            Err(e) => Response::Error {
+                message: format!("spend-grant settle broadcast failed: {e}"),
             },
         }
     }
@@ -16926,6 +17357,366 @@ required = {caps:?}
         server_with_ignore(cards, runner_text, IgnoreSet::default())
     }
 
+    // ---- spend-grant dispatch hook -------------------------------------------
+    // A running daemon, handed a SpendGrantCharge/SpendGrantSettle over its own
+    // IPC dispatch, drives the bounded-spend → spec-gated-settle loop. The gates
+    // below are the guarantee: a caller cannot charge or settle without the
+    // capability, without the facilitator wired, or — the load-bearing one —
+    // settle a call the daemon never charged. The on-chain leg itself is proven
+    // live in tests/live_spend_grant_loop.rs; here we pin the dispatch wiring.
+
+    const SG_CHAIN: u64 = 46630;
+
+    fn sg_config_no_submitter() -> crate::spend_grant::SpendGrantConfig {
+        let attestor = crate::spend_grant::SpendGrantAttestor::from_secret_bytes(&[0x11u8; 32])
+            .expect("attestor key");
+        crate::spend_grant::SpendGrantConfig::new(attestor, SG_CHAIN, [0x57u8; 20])
+    }
+
+    fn sg_config_full() -> crate::spend_grant::SpendGrantConfig {
+        let submitter = crate::spend_grant::SpendGrantSubmitter::new(
+            "http://127.0.0.1:1",
+            SG_CHAIN,
+            &[0x22u8; 32],
+        )
+        .expect("submitter key");
+        sg_config_no_submitter()
+            .with_submitter(submitter)
+            .expect("chain ids match")
+    }
+
+    fn sg_charge(job: Uuid) -> Request {
+        Request::SpendGrantCharge {
+            grant_id: "1".into(),
+            provider: format!("0x{}", "33".repeat(20)),
+            amount: "1000".into(),
+            job_id: job.to_string(),
+            spec_id: format!("0x{}", "00".repeat(32)),
+            deadline: 4_000_000_000,
+        }
+    }
+
+    fn sg_settle(job: Uuid) -> Request {
+        Request::SpendGrantSettle {
+            escrow_id: "esc-1".into(),
+            job_id: job.to_string(),
+            hirer_address: "0x0fA12125753428C58aE439E57fab3A94Bd93C78b".into(),
+            worker_address: format!("0x{}", "33".repeat(20)),
+            amount: "1000".into(),
+            asset: "USDG".into(),
+            network: "eip155:46630".into(),
+            provider: format!("0x{}", "33".repeat(20)),
+        }
+    }
+
+    async fn sg_seed_run(s: &Server, job: Uuid, status: &str) {
+        s.audit
+            .record(AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: 1,
+                issuer: AgentId::new("operator@local", [9u8; 32]),
+                kind: AuditKind::IntentDispatched {
+                    intent_id: job,
+                    intent_text: "do the work".into(),
+                    matched_agent: Some(format!("0x{}", "33".repeat(20))),
+                    result_hash_hex: "11".repeat(32),
+                    status: status.into(),
+                },
+            })
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn spend_grant_charge_denied_without_capability() {
+        let s = server_with(vec![], "").with_spend_grant(sg_config_full());
+        match s.op_respond(sg_charge(Uuid::new_v4())).await {
+            Response::Error { message } => assert!(
+                message.contains("requires capability")
+                    && message.contains("wallet.spend.authorize"),
+                "charge must fail closed without the spend cap: {message}"
+            ),
+            other => panic!("expected capability denial, got {other:?}"),
+        }
+        // The denial is audited — the AuthorizationAudited classification is real.
+        let events = s.audit.recent(10).await.unwrap();
+        assert!(events.iter().any(|e| matches!(
+            &e.kind,
+            AuditKind::CapabilityCheck { missing_actions, passed: false, .. }
+                if missing_actions.iter().any(|a| a == "wallet.spend.authorize")
+        )));
+    }
+
+    #[tokio::test]
+    async fn spend_grant_settle_denied_without_capability() {
+        let s = server_with(vec![], "")
+            .with_spend_grant(sg_config_full())
+            .with_escrow(crate::escrow::EscrowConfig { enabled: true });
+        match s.op_respond(sg_settle(Uuid::new_v4())).await {
+            Response::Error { message } => assert!(
+                message.contains("requires capability")
+                    && message.contains("escrow.completion.prove"),
+                "settle must fail closed without the prove cap: {message}"
+            ),
+            other => panic!("expected capability denial, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn spend_grant_charge_requires_configured_facilitator() {
+        let s = server_with(vec![], "");
+        s.op_respond(Request::GrantCapability {
+            action: "wallet.spend.authorize".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        match s.op_respond(sg_charge(Uuid::new_v4())).await {
+            Response::Error { message } => {
+                assert!(message.contains("not configured"), "{message}")
+            }
+            other => panic!("expected not-configured error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn spend_grant_charge_requires_submitter() {
+        let s = server_with(vec![], "").with_spend_grant(sg_config_no_submitter());
+        s.op_respond(Request::GrantCapability {
+            action: "wallet.spend.authorize".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        match s.op_respond(sg_charge(Uuid::new_v4())).await {
+            Response::Error { message } => {
+                assert!(message.contains("no in-process submitter"), "{message}")
+            }
+            other => panic!("expected no-submitter error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn spend_grant_charge_validates_args_before_broadcast() {
+        // Full config incl. a (dummy) submitter, so the guards pass and the only
+        // thing standing between the request and a network broadcast is arg
+        // validation — a bad address must be rejected without ever hitting RPC.
+        let s = server_with(vec![], "").with_spend_grant(sg_config_full());
+        s.op_respond(Request::GrantCapability {
+            action: "wallet.spend.authorize".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        let bad_provider = Request::SpendGrantCharge {
+            grant_id: "1".into(),
+            provider: "not-an-address".into(),
+            amount: "1000".into(),
+            job_id: Uuid::new_v4().to_string(),
+            spec_id: format!("0x{}", "00".repeat(32)),
+            deadline: 4_000_000_000,
+        };
+        match s.op_respond(bad_provider).await {
+            Response::Error { message } => {
+                assert!(message.contains("invalid provider address"), "{message}")
+            }
+            other => panic!("expected provider parse error, got {other:?}"),
+        }
+
+        let bad_job = Request::SpendGrantCharge {
+            grant_id: "1".into(),
+            provider: format!("0x{}", "33".repeat(20)),
+            amount: "1000".into(),
+            job_id: "not-a-uuid".into(),
+            spec_id: format!("0x{}", "00".repeat(32)),
+            deadline: 4_000_000_000,
+        };
+        match s.op_respond(bad_job).await {
+            Response::Error { message } => {
+                assert!(message.contains("invalid job_id"), "{message}")
+            }
+            other => panic!("expected job_id parse error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn spend_grant_settle_fails_closed_without_prior_charge() {
+        // Everything a settle needs is present — cap, facilitator, submitter,
+        // escrow enabled, and a passing run in the audit chain — EXCEPT a prior
+        // charge. The daemon must still refuse: a settle caller cannot drive a
+        // release for a call the daemon never bounded. This is the binding
+        // ledger's whole purpose.
+        let s = server_with(vec![], "")
+            .with_spend_grant(sg_config_full())
+            .with_escrow(crate::escrow::EscrowConfig { enabled: true });
+        s.op_respond(Request::GrantCapability {
+            action: "escrow.completion.prove".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        let job = Uuid::new_v4();
+        sg_seed_run(&s, job, "ok").await;
+
+        match s.op_respond(sg_settle(job)).await {
+            Response::Error { message } => assert!(
+                message.contains("no charged spend-grant call")
+                    && message.contains(&job.to_string()),
+                "settle without a prior charge must fail closed naming the job: {message}"
+            ),
+            other => panic!("expected fail-closed binding error, got {other:?}"),
+        }
+    }
+
+    fn sg_env(key: &str) -> Option<String> {
+        std::env::var(key).ok().filter(|v| !v.trim().is_empty())
+    }
+
+    fn sg_secret(hex: &str) -> [u8; 32] {
+        let body = hex.trim().strip_prefix("0x").unwrap_or(hex.trim());
+        assert_eq!(body.len(), 64, "secret hex must be 32 bytes");
+        let mut out = [0u8; 32];
+        for (i, pair) in body.as_bytes().chunks_exact(2).enumerate() {
+            out[i] = u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap();
+        }
+        out
+    }
+
+    #[tokio::test]
+    #[ignore = "live: needs a funded RH-Chain spender + the deployed escrow's attestor key"]
+    async fn live_daemon_dispatch_drives_charge_settle_release_and_refund() {
+        let (
+            Some(rpc),
+            Some(chain),
+            Some(escrow_hex),
+            Some(spender_key),
+            Some(grant),
+            Some(provider),
+        ) = (
+            sg_env("COVENANT_SG_RPC"),
+            sg_env("COVENANT_SG_CHAIN"),
+            sg_env("COVENANT_SG_ESCROW"),
+            sg_env("COVENANT_SG_SPENDER_KEY"),
+            sg_env("COVENANT_SG_GRANT"),
+            sg_env("COVENANT_SG_PROVIDER"),
+        )
+        else {
+            eprintln!(
+                "skipping: set COVENANT_SG_RPC, COVENANT_SG_CHAIN, COVENANT_SG_ESCROW, \
+                 COVENANT_SG_SPENDER_KEY, COVENANT_SG_GRANT, COVENANT_SG_PROVIDER, and one of \
+                 COVENANT_SG_ATTESTOR_KEYFILE / COVENANT_SG_ATTESTOR_KEY"
+            );
+            return;
+        };
+        let chain_id: u64 = chain.parse().expect("chain id");
+        let escrow = decode_evm_addr(&escrow_hex).expect("escrow addr");
+
+        let attestor = if let Some(keyfile) = sg_env("COVENANT_SG_ATTESTOR_KEYFILE") {
+            crate::spend_grant::SpendGrantAttestor::load_or_create(std::path::Path::new(&keyfile))
+                .expect("attestor keyfile")
+        } else if let Some(hex) = sg_env("COVENANT_SG_ATTESTOR_KEY") {
+            crate::spend_grant::SpendGrantAttestor::from_secret_bytes(&sg_secret(&hex))
+                .expect("attestor hex")
+        } else {
+            eprintln!("skipping: set COVENANT_SG_ATTESTOR_KEYFILE or COVENANT_SG_ATTESTOR_KEY");
+            return;
+        };
+        let submitter =
+            crate::spend_grant::SpendGrantSubmitter::new(rpc, chain_id, &sg_secret(&spender_key))
+                .unwrap();
+        let config = crate::spend_grant::SpendGrantConfig::new(attestor, chain_id, escrow)
+            .with_submitter(submitter)
+            .unwrap();
+
+        let s = server_with(vec![], "")
+            .with_spend_grant(config)
+            .with_escrow(crate::escrow::EscrowConfig { enabled: true });
+        for action in ["wallet.spend.authorize", "escrow.completion.prove"] {
+            s.op_respond(Request::GrantCapability {
+                action: action.into(),
+                scope: None,
+                expires_at: None,
+            })
+            .await;
+        }
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let deadline = now + 3600;
+
+        let drive = |job: Uuid, status: &'static str| {
+            let s = &s;
+            let provider = provider.clone();
+            let grant = grant.clone();
+            async move {
+                sg_seed_run(s, job, status).await;
+                let charge = Request::SpendGrantCharge {
+                    grant_id: grant,
+                    provider: provider.clone(),
+                    amount: "1000".into(),
+                    job_id: job.to_string(),
+                    spec_id: format!("0x{}", "22".repeat(32)),
+                    deadline,
+                };
+                let call_id = match s.op_respond(charge).await {
+                    Response::SpendGrantCharged {
+                        call_id,
+                        tx_hash,
+                        block_number,
+                    } => {
+                        assert!(tx_hash.starts_with("0x") && tx_hash.len() == 66);
+                        assert!(block_number > 0);
+                        eprintln!(
+                            "charged job {job}: call {call_id} tx {tx_hash} block {block_number}"
+                        );
+                        call_id
+                    }
+                    other => panic!("charge did not confirm: {other:?}"),
+                };
+                assert_eq!(call_id, u128::from_be_bytes(*job.as_bytes()).to_string());
+
+                let settle = Request::SpendGrantSettle {
+                    escrow_id: "esc-live".into(),
+                    job_id: job.to_string(),
+                    hirer_address: "0x0fA12125753428C58aE439E57fab3A94Bd93C78b".into(),
+                    worker_address: provider.clone(),
+                    amount: "1000".into(),
+                    asset: "USDG".into(),
+                    network: "eip155:46630".into(),
+                    provider: provider.clone(),
+                };
+                match s.op_respond(settle).await {
+                    Response::SpendGrantSettled {
+                        release,
+                        tx_hash,
+                        block_number,
+                    } => {
+                        assert!(tx_hash.starts_with("0x") && tx_hash.len() == 66);
+                        assert!(block_number > 0);
+                        eprintln!("settled job {job}: release={release} tx {tx_hash} block {block_number}");
+                        release
+                    }
+                    other => panic!("settle did not confirm: {other:?}"),
+                }
+            }
+        };
+
+        let released = drive(Uuid::new_v4(), "ok").await;
+        assert!(
+            released,
+            "a passing run must route to release (provider paid)"
+        );
+        let released2 = drive(Uuid::new_v4(), "error").await;
+        assert!(
+            !released2,
+            "a failing run must route to refund (provider unpaid)"
+        );
+    }
+
     #[test]
     fn runtime_trace_to_audit_kind_pins_each_variant_mapping_preview_redaction_and_responded_to_resolved_rename(
     ) {
@@ -17187,6 +17978,7 @@ required = {caps:?}
             | Request::AuthorizeSpend { .. }
             | Request::SettleSpend { .. }
             | Request::ProveCompletion { .. }
+            | Request::SpendGrantSettle { .. }
             | Request::RecordEscrowRelease { .. }
             | Request::EnrollPeer { .. }
             | Request::CallTool { .. } => ActionAudited,
@@ -17196,6 +17988,7 @@ required = {caps:?}
             | Request::PurgePeers { .. }
             | Request::FlushReceipts { .. }
             | Request::SignAttestation { .. }
+            | Request::SpendGrantCharge { .. }
             | Request::SendA2ATask { .. }
             | Request::PostA2AResult { .. }
             | Request::CompactA2A => AuthorizationAudited,
@@ -17440,6 +18233,17 @@ required = {caps:?}
                 AuthorizationAudited,
             ),
             (
+                Request::SpendGrantCharge {
+                    grant_id: String::new(),
+                    provider: String::new(),
+                    amount: String::new(),
+                    job_id: String::new(),
+                    spec_id: String::new(),
+                    deadline: 0,
+                },
+                AuthorizationAudited,
+            ),
+            (
                 Request::SendA2ATask { task: a2a_task },
                 AuthorizationAudited,
             ),
@@ -17504,6 +18308,19 @@ required = {caps:?}
             ),
             (
                 Request::ProveCompletion {
+                    escrow_id: String::new(),
+                    job_id: String::new(),
+                    hirer_address: String::new(),
+                    worker_address: String::new(),
+                    amount: String::new(),
+                    asset: String::new(),
+                    network: String::new(),
+                    provider: String::new(),
+                },
+                ActionAudited,
+            ),
+            (
+                Request::SpendGrantSettle {
                     escrow_id: String::new(),
                     job_id: String::new(),
                     hirer_address: String::new(),
@@ -17591,7 +18408,7 @@ required = {caps:?}
         );
         assert_eq!(
             inventory.len(),
-            58,
+            60,
             "every IPC Request variant must appear in the audit inventory exactly once; a new \
          variant must be added here and classified in audit_exposure",
         );
@@ -66081,6 +66898,136 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    #[tokio::test]
+    async fn authorize_spend_grant_cap_overrides_inflated_request_cap() {
+        // The load-bearing fix: the signed grant's per-call ceiling, not the
+        // caller's request, is the source of truth. A caller asking for a 500k
+        // ceiling to slip a 150k spend past a 100k grant is denied.
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()))
+            .with_spend_authz(spend_authz::SpendAuthzConfig { enabled: true });
+        grant_scoped_action(
+            &s,
+            "wallet.spend.authorize",
+            serde_json::json!({ "version": 1, "providers": ["orbserv"], "per_call_cap": "100000" }),
+        )
+        .await;
+
+        let mut req = authorize_spend_req();
+        if let Request::AuthorizeSpend {
+            amount,
+            per_call_cap,
+            ..
+        } = &mut req
+        {
+            *amount = "150000".into();
+            *per_call_cap = "500000".into();
+        }
+        match s.op_respond(req).await {
+            Response::Error { message } => assert!(
+                message.contains("grant admits this spend"),
+                "over-grant-cap must fail closed regardless of the request's cap: {message}"
+            ),
+            other => panic!("expected Error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn authorize_spend_denies_provider_outside_grant_allowlist() {
+        // The grant pins providers to ["orbserv"]; a spend to a stranger is
+        // denied even though the peer holds a valid spend grant.
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()))
+            .with_spend_authz(spend_authz::SpendAuthzConfig { enabled: true });
+        grant_scoped_action(
+            &s,
+            "wallet.spend.authorize",
+            serde_json::json!({ "version": 1, "providers": ["orbserv"], "per_call_cap": "100000" }),
+        )
+        .await;
+
+        let mut req = authorize_spend_req();
+        if let Request::AuthorizeSpend { provider, .. } = &mut req {
+            *provider = "stranger".into();
+        }
+        match s.op_respond(req).await {
+            Response::Error { message } => assert!(
+                message.contains("grant admits this spend"),
+                "a provider outside the grant's allowlist must fail closed: {message}"
+            ),
+            other => panic!("expected Error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn authorize_spend_bounded_grant_approves_in_bounds() {
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let s = server_with_audit_and_budget(audit, budget.clone())
+            .with_spend_authz(spend_authz::SpendAuthzConfig { enabled: true });
+        grant_scoped_action(
+            &s,
+            "wallet.spend.authorize",
+            serde_json::json!({
+                "version": 1,
+                "providers": ["orbserv"],
+                "network": "eip155:8453",
+                "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+                "per_call_cap": "100000"
+            }),
+        )
+        .await;
+        budget
+            .set_capacity(&s.identity.agent_id(), 1000)
+            .await
+            .unwrap();
+
+        match s.op_respond(authorize_spend_req()).await {
+            Response::SpendAuthorized {
+                approved, reason, ..
+            } => {
+                assert!(
+                    approved,
+                    "an in-bounds spend under a bounded grant approves"
+                );
+                assert!(reason.is_none());
+            }
+            other => panic!("expected SpendAuthorized, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn authorize_spend_additive_grants_earlier_still_admits() {
+        // Capabilities are additive: the peer holds two bounded grants and the
+        // spend matches only the first. Adding a second, non-matching grant
+        // must not shadow it — the resolver loops every held grant.
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let s = server_with_audit_and_budget(audit, budget.clone())
+            .with_spend_authz(spend_authz::SpendAuthzConfig { enabled: true });
+        grant_scoped_action(
+            &s,
+            "wallet.spend.authorize",
+            serde_json::json!({ "version": 1, "providers": ["orbserv"], "per_call_cap": "100000" }),
+        )
+        .await;
+        grant_scoped_action(
+            &s,
+            "wallet.spend.authorize",
+            serde_json::json!({ "version": 1, "providers": ["alpha"], "per_call_cap": "100000" }),
+        )
+        .await;
+        budget
+            .set_capacity(&s.identity.agent_id(), 1000)
+            .await
+            .unwrap();
+
+        match s.op_respond(authorize_spend_req()).await {
+            Response::SpendAuthorized { approved, .. } => {
+                assert!(approved, "a spend admitted by any held grant must approve");
+            }
+            other => panic!("expected SpendAuthorized, got: {other:?}"),
+        }
+    }
+
     fn settle_spend_req() -> Request {
         Request::SettleSpend {
             decision_id: uuid::Uuid::from_u128(0x0abc),
@@ -66415,6 +67362,65 @@ budget_credits_per_hour = {credits}
                 "the granted provider must clear the scope gate: {message}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn x402_pay_bounds_resolve_binds_cap_to_signed_grant() {
+        // The per-call ceiling must come from the signed grant, not the request:
+        // a provider-scoped grant that pins a cap resolves to that cap, which
+        // pay_x402 then enforces via min(grant_cap, request_cap). This is the
+        // closed grant-cap-binding gap — before the fix the request's cap was
+        // trusted verbatim and a bounded grant did not tighten it.
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()));
+        let peer = s.identity.agent_id();
+
+        grant_scoped_action(
+            &s,
+            "x402.outbound.pay",
+            serde_json::json!({ "version": 1, "provider": "xona", "per_call_cap": "500000" }),
+        )
+        .await;
+
+        let bounds = s
+            .x402_pay_bounds_resolve("xona", &peer)
+            .await
+            .expect("resolve must not error")
+            .expect("the granted provider must be admitted");
+        assert_eq!(
+            bounds.per_call_cap,
+            Some(500_000),
+            "the per-call ceiling must be lifted from the signed grant, not the request"
+        );
+
+        // A destination outside the grant's class resolves to no admitting grant,
+        // so no ceiling leaks from a grant that never authorized that provider.
+        assert_eq!(
+            s.x402_pay_bounds_resolve("evil-corp", &peer)
+                .await
+                .expect("resolve must not error"),
+            None,
+            "an out-of-class provider must resolve to no admitting grant"
+        );
+    }
+
+    #[tokio::test]
+    async fn x402_pay_bounds_resolve_blanket_grant_leaves_request_cap() {
+        // A blanket grant (issued before caps existed) carries no ceiling, so the
+        // request's cap stands — pay_x402's min(u128::MAX, request) is the request.
+        // Guards against a regression that clamps or rejects legacy blanket grants.
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()));
+        let peer = s.identity.agent_id();
+        grant_action(&s, "x402.outbound.pay").await;
+
+        let bounds = s
+            .x402_pay_bounds_resolve("any-provider", &peer)
+            .await
+            .expect("resolve must not error")
+            .expect("a blanket grant admits any provider");
+        assert_eq!(
+            bounds.per_call_cap, None,
+            "a blanket grant must carry no ceiling so the request cap stands"
+        );
     }
 
     #[tokio::test]

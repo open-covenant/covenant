@@ -97,6 +97,7 @@ enum ScopeNamespace {
     Settlement,
     X402,
     Secret,
+    Wallet,
 }
 
 impl ScopeNamespace {
@@ -125,6 +126,8 @@ impl ScopeNamespace {
             Some(Self::X402)
         } else if action.starts_with("secret.") {
             Some(Self::Secret)
+        } else if action.starts_with("wallet.") {
+            Some(Self::Wallet)
         } else {
             None
         }
@@ -169,6 +172,7 @@ pub fn validate_scope(action: &str, scope: &Value) -> Result<(), PermissionError
         ScopeNamespace::Settlement => validate_settlement_scope(action, obj),
         ScopeNamespace::X402 => validate_x402_scope(action, obj),
         ScopeNamespace::Secret => validate_secret_scope(action, obj),
+        ScopeNamespace::Wallet => validate_wallet_scope(action, obj),
     }
 }
 
@@ -603,6 +607,51 @@ pub fn x402_pay_scope_allows(
     }
 }
 
+/// The bounds an `x402.outbound.pay` grant carries beyond its destination
+/// class. Today just the per-call ceiling: the most a single dispatched call
+/// may spend, in atomic units of the settlement asset (decimal string on the
+/// wire, parsed to `u128`) so the off-chain gate is unit-identical to the
+/// onchain grant. `None` means the grant sets no ceiling and the caller's
+/// request stands. The provider allowlist stays in [`x402_pay_scope_allows`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct X402PayBounds {
+    pub per_call_cap: Option<u128>,
+}
+
+/// The bounds of the `x402.outbound.pay` grant that admits a call to
+/// `provider`, if this scope admits it. `Ok(Some(bounds))` carries the
+/// authoritative per-call ceiling the daemon enforces; `Ok(None)` when the
+/// scope does not admit `provider`; `Err` on a malformed scope (fail closed).
+/// The daemon loops its held grants through this and lifts the first admitting
+/// grant's ceiling as the source of truth, so the per-call cap comes from the
+/// signed grant — the caller can only tighten it, never exceed it.
+pub fn x402_pay_bounds_if_admits(
+    action: &str,
+    scope: &Value,
+    provider: &str,
+) -> Result<Option<X402PayBounds>, PermissionError> {
+    if !x402_pay_scope_allows(action, scope, provider)? {
+        return Ok(None);
+    }
+    Ok(Some(x402_pay_bounds(scope)?))
+}
+
+/// Parse an `x402.outbound.pay` scope's spend ceiling. Fails closed on a
+/// malformed cap rather than silently dropping the bound. An empty or
+/// non-object scope carries no ceiling.
+pub fn x402_pay_bounds(scope: &Value) -> Result<X402PayBounds, PermissionError> {
+    let action = "x402.outbound.pay";
+    let Some(obj) = scope.as_object() else {
+        return Ok(X402PayBounds::default());
+    };
+    if obj.is_empty() {
+        return Ok(X402PayBounds::default());
+    }
+    Ok(X402PayBounds {
+        per_call_cap: decimal_u128_field(action, obj, "per_call_cap")?,
+    })
+}
+
 /// Dispatch-time gate for a daemon-mediated secret read. `secret.access` lets
 /// a holder pull a named secret from the daemon's broker instead of the secret
 /// sitting in the agent's environment; the secret `name` is free-form caller
@@ -629,6 +678,183 @@ pub fn secret_access_scope_allows(
     match obj.get("name").and_then(Value::as_str) {
         Some(allowed) => Ok(allowed == name),
         None => Ok(true),
+    }
+}
+
+/// A concrete spend the daemon is about to authorize, checked against a
+/// `wallet.spend.authorize` grant's stored scope. Every field is what the
+/// *request* asks for; the grant decides whether that is inside its bounds.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WalletSpendView<'a> {
+    pub provider: Option<&'a str>,
+    pub network: Option<&'a str>,
+    pub asset: Option<&'a str>,
+    pub amount: Option<u128>,
+}
+
+/// The bounds a `wallet.spend.authorize` grant carries in its scope. Caps are
+/// atomic units of the settlement asset (decimal strings on the wire, parsed to
+/// `u128`) so the off-chain gate is unit-identical to the onchain grant and
+/// needs no price oracle. A blank field means unbounded on that axis; an empty
+/// scope is a blanket grant (every field `None`/empty). `total_cap` is enforced
+/// authoritatively onchain — off-chain it is advisory context.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WalletSpendBounds {
+    pub providers: Vec<String>,
+    pub network: Option<String>,
+    pub asset: Option<String>,
+    pub per_call_cap: Option<u128>,
+    pub total_cap: Option<u128>,
+    pub expiry: Option<u64>,
+    pub require_quality_gate: bool,
+    pub spec_id: Option<String>,
+}
+
+/// Dispatch-time gate for a delegated onchain spend. Unlike the other
+/// predicates this is the *authoritative* source of the bound: the daemon must
+/// derive the per-call ceiling and provider allowlist from the grant, never
+/// from the caller's request. An empty scope is a blanket grant (backward
+/// compatible with the unbounded grants issued before bounds existed); a
+/// non-empty scope admits the spend only if provider ∈ `providers` (or the list
+/// is absent), network/asset match any pin, and `amount ≤ per_call_cap`.
+/// Capabilities are additive — several providers or price bands are several
+/// grants, and the daemon approves if any one admits the spend.
+pub fn wallet_spend_scope_allows(
+    action: &str,
+    scope: &Value,
+    view: WalletSpendView<'_>,
+) -> Result<bool, PermissionError> {
+    validate_scope(action, scope)?;
+    if action != "wallet.spend.authorize" {
+        return Ok(false);
+    }
+    let Some(obj) = scope.as_object() else {
+        return Ok(false);
+    };
+    if obj.is_empty() {
+        return Ok(true);
+    }
+    Ok(wallet_spend_admits(&wallet_spend_bounds(scope)?, &view))
+}
+
+/// The bounds of the grant that admits `view`, if this scope admits it.
+/// `Ok(Some(bounds))` when the scope admits the spend — the authoritative caps
+/// and allowlist the daemon enforces; `Ok(None)` when it does not admit;
+/// `Err` on a malformed scope (fail closed). The daemon loops its held grants
+/// through this and lifts the first admitting grant's bounds as the source of
+/// truth, so the per-call ceiling and provider allowlist come from the signed
+/// grant, never the caller's request.
+pub fn wallet_spend_bounds_if_admits(
+    action: &str,
+    scope: &Value,
+    view: WalletSpendView<'_>,
+) -> Result<Option<WalletSpendBounds>, PermissionError> {
+    if !wallet_spend_scope_allows(action, scope, view)? {
+        return Ok(None);
+    }
+    Ok(Some(wallet_spend_bounds(scope)?))
+}
+
+fn wallet_spend_admits(bounds: &WalletSpendBounds, view: &WalletSpendView<'_>) -> bool {
+    if !bounds.providers.is_empty()
+        && !view
+            .provider
+            .is_some_and(|p| bounds.providers.iter().any(|a| a == p))
+    {
+        return false;
+    }
+    if let Some(net) = &bounds.network {
+        if view.network != Some(net.as_str()) {
+            return false;
+        }
+    }
+    if let Some(asset) = &bounds.asset {
+        if view.asset != Some(asset.as_str()) {
+            return false;
+        }
+    }
+    if let Some(cap) = bounds.per_call_cap {
+        if view.amount.is_none_or(|a| a > cap) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Parse a `wallet.spend.authorize` scope into its bounds. Fails closed on a
+/// malformed cap or provider entry rather than silently dropping the bound.
+/// An empty or non-object scope is a blanket grant.
+pub fn wallet_spend_bounds(scope: &Value) -> Result<WalletSpendBounds, PermissionError> {
+    let action = "wallet.spend.authorize";
+    let Some(obj) = scope.as_object() else {
+        return Ok(WalletSpendBounds::default());
+    };
+    if obj.is_empty() {
+        return Ok(WalletSpendBounds::default());
+    }
+    let providers = match obj.get("providers") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(items)) => {
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                match item.as_str() {
+                    Some(s) if !s.is_empty() => out.push(s.to_string()),
+                    _ => {
+                        return Err(invalid_scope(
+                            action,
+                            "providers entries must be non-empty strings",
+                        ))
+                    }
+                }
+            }
+            out
+        }
+        Some(_) => {
+            return Err(invalid_scope(
+                action,
+                "providers must be an array of non-empty strings or null",
+            ))
+        }
+    };
+    Ok(WalletSpendBounds {
+        providers,
+        network: nonempty_owned_string(obj, "network"),
+        asset: nonempty_owned_string(obj, "asset"),
+        per_call_cap: decimal_u128_field(action, obj, "per_call_cap")?,
+        total_cap: decimal_u128_field(action, obj, "total_cap")?,
+        expiry: obj.get("expiry").and_then(Value::as_u64),
+        require_quality_gate: obj
+            .get("require_quality_gate")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        spec_id: nonempty_owned_string(obj, "spec_id"),
+    })
+}
+
+fn nonempty_owned_string(obj: &Map<String, Value>, field: &str) -> Option<String> {
+    obj.get(field)
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+fn decimal_u128_field(
+    action: &str,
+    obj: &Map<String, Value>,
+    field: &str,
+) -> Result<Option<u128>, PermissionError> {
+    match obj.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) => s.parse::<u128>().map(Some).map_err(|_| {
+            invalid_scope(
+                action,
+                format!("{field} must be a decimal u128 string or null"),
+            )
+        }),
+        Some(_) => Err(invalid_scope(
+            action,
+            format!("{field} must be a decimal u128 string or null"),
+        )),
     }
 }
 
@@ -951,11 +1177,24 @@ fn validate_settlement_scope(
 
 fn validate_x402_scope(action: &str, obj: &Map<String, Value>) -> Result<(), PermissionError> {
     optional_non_empty_string_or_null(action, obj, "provider")?;
+    optional_decimal_u128_or_null(action, obj, "per_call_cap")?;
     Ok(())
 }
 
 fn validate_secret_scope(action: &str, obj: &Map<String, Value>) -> Result<(), PermissionError> {
     optional_non_empty_string_or_null(action, obj, "name")?;
+    Ok(())
+}
+
+fn validate_wallet_scope(action: &str, obj: &Map<String, Value>) -> Result<(), PermissionError> {
+    optional_non_empty_string_array_or_null(action, obj, "providers")?;
+    optional_non_empty_string_or_null(action, obj, "network")?;
+    optional_non_empty_string_or_null(action, obj, "asset")?;
+    optional_decimal_u128_or_null(action, obj, "per_call_cap")?;
+    optional_decimal_u128_or_null(action, obj, "total_cap")?;
+    optional_positive_integer(action, obj, "expiry")?;
+    optional_bool(action, obj, "require_quality_gate")?;
+    optional_non_empty_string_or_null(action, obj, "spec_id")?;
     Ok(())
 }
 
@@ -1121,6 +1360,57 @@ fn optional_positive_integer(
         }
     }
     Ok(())
+}
+
+fn optional_non_empty_string_array_or_null(
+    action: &str,
+    obj: &Map<String, Value>,
+    field: &str,
+) -> Result<(), PermissionError> {
+    let Some(value) = obj.get(field) else {
+        return Ok(());
+    };
+    if value.is_null() {
+        return Ok(());
+    }
+    let Some(values) = value.as_array() else {
+        return Err(invalid_scope(
+            action,
+            format!("{field} must be an array of non-empty strings or null"),
+        ));
+    };
+    for value in values {
+        match value.as_str() {
+            Some(value) if !value.is_empty() => {}
+            _ => {
+                return Err(invalid_scope(
+                    action,
+                    format!("{field} entries must be non-empty strings"),
+                ))
+            }
+        }
+    }
+    Ok(())
+}
+
+fn optional_decimal_u128_or_null(
+    action: &str,
+    obj: &Map<String, Value>,
+    field: &str,
+) -> Result<(), PermissionError> {
+    let Some(value) = obj.get(field) else {
+        return Ok(());
+    };
+    if value.is_null() {
+        return Ok(());
+    }
+    match value.as_str() {
+        Some(value) if value.parse::<u128>().is_ok() => Ok(()),
+        _ => Err(invalid_scope(
+            action,
+            format!("{field} must be a decimal u128 string or null"),
+        )),
+    }
 }
 
 fn optional_string_array(
@@ -1971,6 +2261,7 @@ mod tests {
                 ScopeNamespace::Settlement => "settlement",
                 ScopeNamespace::X402 => "x402",
                 ScopeNamespace::Secret => "secret",
+                ScopeNamespace::Wallet => "wallet",
             }
         }
         let inventory: Vec<&str> = [
@@ -1986,6 +2277,7 @@ mod tests {
             ScopeNamespace::Settlement,
             ScopeNamespace::X402,
             ScopeNamespace::Secret,
+            ScopeNamespace::Wallet,
         ]
         .into_iter()
         .map(prefix)
@@ -2005,6 +2297,7 @@ mod tests {
                 "settlement",
                 "x402",
                 "secret",
+                "wallet",
             ],
             "capability namespace inventory changed — freeze the new namespace as a golden vector in tests/golden/capabilities/ and update EXPECTED_NAMESPACES in tests/golden_capabilities.rs",
         );
@@ -2114,6 +2407,13 @@ mod tests {
                 Some(ScopeNamespace::Settlement)
             ),
             "settlement.* prefix must route to ScopeNamespace::Settlement — a dropped arm sends settlement.backfill.* through the unknown-action fallthrough, where validate_scope no-ops and a junk scope is accepted at grant time on a destructive mutation gate",
+        );
+        assert!(
+            matches!(
+                ScopeNamespace::from_action("wallet.spend.authorize"),
+                Some(ScopeNamespace::Wallet)
+            ),
+            "wallet.* prefix must route to ScopeNamespace::Wallet — a dropped arm sends wallet.spend.authorize through the unknown-action fallthrough, where a bounded spend grant's per_call_cap/providers scope is never validated and a junk bound is accepted at grant time on the money-moving gate",
         );
 
         // Unknown-action fallthrough: an action without any documented
@@ -3832,6 +4132,74 @@ mod tests {
     }
 
     #[test]
+    fn x402_pay_bounds_if_admits_lifts_grant_ceiling() {
+        // The load-bearing binding: a provider-scoped grant that sets a per-call
+        // ceiling admits its class and surfaces the ceiling, so the daemon enforces
+        // the grant's cap rather than trusting the caller's requested cap.
+        let scope = serde_json::json!({
+            "version": 1,
+            "provider": "xona",
+            "per_call_cap": "500000",
+        });
+        let admitted = x402_pay_bounds_if_admits("x402.outbound.pay", &scope, "xona")
+            .unwrap()
+            .expect("granted provider must be admitted");
+        assert_eq!(admitted.per_call_cap, Some(500_000));
+        // A destination outside the class is not admitted, so no ceiling leaks
+        // from a grant that never authorized it.
+        assert_eq!(
+            x402_pay_bounds_if_admits("x402.outbound.pay", &scope, "evil-corp").unwrap(),
+            None,
+            "an out-of-class provider must not be admitted"
+        );
+    }
+
+    #[test]
+    fn x402_pay_bounds_if_admits_unbounded_grant_carries_no_ceiling() {
+        // A blanket grant and a provider-scoped grant that omits per_call_cap both
+        // admit but carry no ceiling (None): the caller's requested cap stands,
+        // preserving the behavior of every grant issued before caps existed.
+        for scope in [
+            serde_json::json!({}),
+            serde_json::json!({ "version": 1 }),
+            serde_json::json!({ "version": 1, "provider": "xona" }),
+        ] {
+            let admitted = x402_pay_bounds_if_admits("x402.outbound.pay", &scope, "xona")
+                .unwrap()
+                .expect("grant must admit xona");
+            assert_eq!(
+                admitted.per_call_cap, None,
+                "a grant with no per_call_cap must carry no ceiling: {scope}"
+            );
+        }
+    }
+
+    #[test]
+    fn x402_pay_bounds_if_admits_fails_closed_on_malformed_cap() {
+        // per_call_cap is validated as a decimal u128 string or null. A non-string
+        // or non-decimal cap is a malformed grant the resolver must surface as Err
+        // (caller fails closed), never silently drop to an unbounded ceiling.
+        for bad in [
+            serde_json::json!({ "version": 1, "provider": "xona", "per_call_cap": 500000 }),
+            serde_json::json!({ "version": 1, "provider": "xona", "per_call_cap": "1.5" }),
+        ] {
+            assert!(
+                x402_pay_bounds_if_admits("x402.outbound.pay", &bad, "xona").is_err(),
+                "a malformed per_call_cap must fail closed: {bad}"
+            );
+            assert!(
+                validate_scope("x402.outbound.pay", &bad).is_err(),
+                "a malformed per_call_cap must be rejected at grant time: {bad}"
+            );
+        }
+        assert!(validate_scope(
+            "x402.outbound.pay",
+            &serde_json::json!({ "version": 1, "provider": "xona", "per_call_cap": "500000" })
+        )
+        .is_ok());
+    }
+
+    #[test]
     fn secret_access_scope_allows_unscoped_grant_permits_any_secret() {
         // An empty scope and a version-only scope are both unbounded: a blanket
         // secret.access grant authorizes reading any named secret. A regression
@@ -3909,6 +4277,284 @@ mod tests {
             &serde_json::json!({ "version": 1, "name": "openai-api-key" })
         )
         .is_ok());
+    }
+
+    fn spend_view<'a>(
+        provider: &'a str,
+        network: &'a str,
+        asset: &'a str,
+        amount: u128,
+    ) -> WalletSpendView<'a> {
+        WalletSpendView {
+            provider: Some(provider),
+            network: Some(network),
+            asset: Some(asset),
+            amount: Some(amount),
+        }
+    }
+
+    #[test]
+    fn wallet_spend_scope_allows_blanket_grant_permits_any_spend() {
+        // Empty and version-only scopes are blanket grants: they authorize any
+        // provider/network/asset/amount. This is the backward-compat path — the
+        // grants issued before bounds existed carry no scope, and the daemon's
+        // existing behavior (cap taken from the request) must survive.
+        for scope in [serde_json::json!({}), serde_json::json!({ "version": 1 })] {
+            assert!(wallet_spend_scope_allows(
+                "wallet.spend.authorize",
+                &scope,
+                spend_view("orbserv", "eip155:42161", "0x5fc5", 9_999_999)
+            )
+            .unwrap());
+        }
+    }
+
+    #[test]
+    fn wallet_spend_scope_allows_binds_provider_allowlist() {
+        // The allowlist is the security property: a grant funding an agent to
+        // pay orbserv/circuit must refuse a spend to anyone else, and must
+        // refuse a spend that names no provider at all.
+        let scope = serde_json::json!({
+            "version": 1,
+            "providers": ["orbserv", "circuit"],
+        });
+        assert!(wallet_spend_scope_allows(
+            "wallet.spend.authorize",
+            &scope,
+            spend_view("orbserv", "eip155:42161", "0x5fc5", 10)
+        )
+        .unwrap());
+        assert!(!wallet_spend_scope_allows(
+            "wallet.spend.authorize",
+            &scope,
+            spend_view("evil-corp", "eip155:42161", "0x5fc5", 10)
+        )
+        .unwrap());
+        let no_provider = WalletSpendView {
+            provider: None,
+            ..spend_view("", "eip155:42161", "0x5fc5", 10)
+        };
+        assert!(
+            !wallet_spend_scope_allows("wallet.spend.authorize", &scope, no_provider).unwrap(),
+            "an allowlisted grant must refuse a spend that names no provider"
+        );
+    }
+
+    #[test]
+    fn wallet_spend_scope_allows_enforces_per_call_cap() {
+        // The ceiling is atomic units of the settlement asset. Amount at the
+        // ceiling is allowed; one unit over is refused; a spend that states no
+        // amount cannot clear a capped grant.
+        let scope = serde_json::json!({ "version": 1, "per_call_cap": "1000000" });
+        assert!(wallet_spend_scope_allows(
+            "wallet.spend.authorize",
+            &scope,
+            spend_view("orbserv", "eip155:42161", "0x5fc5", 1_000_000)
+        )
+        .unwrap());
+        assert!(!wallet_spend_scope_allows(
+            "wallet.spend.authorize",
+            &scope,
+            spend_view("orbserv", "eip155:42161", "0x5fc5", 1_000_001)
+        )
+        .unwrap());
+        let no_amount = WalletSpendView {
+            amount: None,
+            ..spend_view("orbserv", "eip155:42161", "0x5fc5", 0)
+        };
+        assert!(!wallet_spend_scope_allows("wallet.spend.authorize", &scope, no_amount).unwrap());
+    }
+
+    #[test]
+    fn wallet_spend_scope_allows_pins_network_and_asset() {
+        // A network/asset-pinned grant refuses a spend on any other rail or
+        // token; absent pins leave those axes unbounded.
+        let scope = serde_json::json!({
+            "version": 1,
+            "network": "eip155:42161",
+            "asset": "0x5fc5",
+        });
+        assert!(wallet_spend_scope_allows(
+            "wallet.spend.authorize",
+            &scope,
+            spend_view("orbserv", "eip155:42161", "0x5fc5", 10)
+        )
+        .unwrap());
+        assert!(!wallet_spend_scope_allows(
+            "wallet.spend.authorize",
+            &scope,
+            spend_view("orbserv", "eip155:8453", "0x5fc5", 10)
+        )
+        .unwrap());
+        assert!(!wallet_spend_scope_allows(
+            "wallet.spend.authorize",
+            &scope,
+            spend_view("orbserv", "eip155:42161", "0xdead", 10)
+        )
+        .unwrap());
+    }
+
+    #[test]
+    fn wallet_spend_scope_allows_rejects_action_mismatch() {
+        // The predicate binds only wallet.spend.authorize. A settle grant, or
+        // any unrelated action, must not authorize a spend.
+        let scope = serde_json::json!({ "version": 1, "per_call_cap": "1000000" });
+        for action in ["wallet.spend.settle", "x402.outbound.pay", "tool.call.echo"] {
+            assert!(!wallet_spend_scope_allows(
+                action,
+                &scope,
+                spend_view("orbserv", "eip155:42161", "0x5fc5", 10)
+            )
+            .unwrap());
+        }
+    }
+
+    #[test]
+    fn wallet_spend_scope_allows_propagates_malformed_rejection() {
+        // Malformed bounds fail closed as Err, never as a silent unbounded grant.
+        let view = spend_view("orbserv", "eip155:42161", "0x5fc5", 10);
+        let bad_cap_type = serde_json::json!({ "version": 1, "per_call_cap": 1000000 });
+        assert!(wallet_spend_scope_allows("wallet.spend.authorize", &bad_cap_type, view).is_err());
+        let bad_cap_str = serde_json::json!({ "version": 1, "per_call_cap": "1.5" });
+        assert!(wallet_spend_scope_allows("wallet.spend.authorize", &bad_cap_str, view).is_err());
+        let empty_provider = serde_json::json!({ "version": 1, "providers": ["orbserv", ""] });
+        assert!(
+            wallet_spend_scope_allows("wallet.spend.authorize", &empty_provider, view).is_err()
+        );
+        let non_array = serde_json::json!({ "version": 1, "providers": "orbserv" });
+        assert!(wallet_spend_scope_allows("wallet.spend.authorize", &non_array, view).is_err());
+    }
+
+    #[test]
+    fn validate_payments_scope_routes_and_requires_version() {
+        // wallet.spend.* routes to validate_payments_scope. A well-formed bounded
+        // scope is accepted; a non-empty scope without version 1 is rejected;
+        // malformed caps/providers are rejected at grant time.
+        assert!(validate_scope(
+            "wallet.spend.authorize",
+            &serde_json::json!({
+                "version": 1,
+                "providers": ["orbserv"],
+                "network": "eip155:42161",
+                "asset": "0x5fc5",
+                "per_call_cap": "1000000",
+                "total_cap": "50000000",
+                "expiry": 1790000000u64,
+                "require_quality_gate": true,
+                "spec_id": "sha256:abc",
+            })
+        )
+        .is_ok());
+        assert!(validate_scope(
+            "wallet.spend.authorize",
+            &serde_json::json!({ "providers": ["orbserv"] })
+        )
+        .is_err());
+        assert!(validate_scope(
+            "wallet.spend.authorize",
+            &serde_json::json!({ "version": 1, "total_cap": "not-a-number" })
+        )
+        .is_err());
+        assert!(
+            validate_scope("wallet.spend.settle", &serde_json::json!({ "version": 1 })).is_ok()
+        );
+    }
+
+    #[test]
+    fn wallet_spend_bounds_parses_full_scope() {
+        let scope = serde_json::json!({
+            "version": 1,
+            "providers": ["orbserv", "circuit"],
+            "network": "eip155:42161",
+            "asset": "0x5fc5",
+            "per_call_cap": "1000000",
+            "total_cap": "50000000",
+            "expiry": 1790000000u64,
+            "require_quality_gate": true,
+            "spec_id": "sha256:abc",
+        });
+        let bounds = wallet_spend_bounds(&scope).unwrap();
+        assert_eq!(
+            bounds,
+            WalletSpendBounds {
+                providers: vec!["orbserv".into(), "circuit".into()],
+                network: Some("eip155:42161".into()),
+                asset: Some("0x5fc5".into()),
+                per_call_cap: Some(1_000_000),
+                total_cap: Some(50_000_000),
+                expiry: Some(1_790_000_000),
+                require_quality_gate: true,
+                spec_id: Some("sha256:abc".into()),
+            }
+        );
+    }
+
+    #[test]
+    fn wallet_spend_bounds_blanket_is_default() {
+        assert_eq!(
+            wallet_spend_bounds(&serde_json::json!({})).unwrap(),
+            WalletSpendBounds::default()
+        );
+        assert_eq!(
+            wallet_spend_bounds(&serde_json::json!("not-an-object")).unwrap(),
+            WalletSpendBounds::default()
+        );
+    }
+
+    #[test]
+    fn wallet_spend_bounds_if_admits_lifts_bounds_or_denies() {
+        let scope = serde_json::json!({
+            "version": 1,
+            "providers": ["orbserv"],
+            "network": "eip155:42161",
+            "asset": "0x5fc5",
+            "per_call_cap": "1000000",
+        });
+        let admitted = wallet_spend_bounds_if_admits(
+            "wallet.spend.authorize",
+            &scope,
+            spend_view("orbserv", "eip155:42161", "0x5fc5", 900_000),
+        )
+        .unwrap()
+        .expect("in-bounds spend lifts the grant's bounds");
+        assert_eq!(admitted.providers, vec!["orbserv".to_string()]);
+        assert_eq!(admitted.per_call_cap, Some(1_000_000));
+
+        // A stranger provider is outside the allowlist -> no bounds, deny.
+        assert!(wallet_spend_bounds_if_admits(
+            "wallet.spend.authorize",
+            &scope,
+            spend_view("stranger", "eip155:42161", "0x5fc5", 900_000),
+        )
+        .unwrap()
+        .is_none());
+
+        // Over the per-call ceiling -> deny.
+        assert!(wallet_spend_bounds_if_admits(
+            "wallet.spend.authorize",
+            &scope,
+            spend_view("orbserv", "eip155:42161", "0x5fc5", 1_000_001),
+        )
+        .unwrap()
+        .is_none());
+
+        // A blanket grant admits and lifts default (unbounded) bounds.
+        let blanket = wallet_spend_bounds_if_admits(
+            "wallet.spend.authorize",
+            &serde_json::json!({}),
+            spend_view("anyone", "solana:mainnet", "USDC", u128::MAX),
+        )
+        .unwrap()
+        .expect("blanket grant admits");
+        assert_eq!(blanket, WalletSpendBounds::default());
+
+        // Malformed scope fails closed.
+        assert!(wallet_spend_bounds_if_admits(
+            "wallet.spend.authorize",
+            &serde_json::json!({ "version": 1, "per_call_cap": 5 }),
+            spend_view("orbserv", "eip155:42161", "0x5fc5", 1),
+        )
+        .is_err());
     }
 
     #[test]

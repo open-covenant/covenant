@@ -28,6 +28,7 @@
 
 pub mod client;
 pub mod evm;
+pub mod evm_tx;
 pub mod flow;
 mod http;
 pub mod orbit;
@@ -39,6 +40,9 @@ pub mod solana;
 
 pub use client::{http_client, Client};
 pub use evm::{EvmSigner, USDC_BASE_MAINNET, USDC_BASE_SEPOLIA};
+#[cfg(feature = "evm-rpc")]
+pub use evm_tx::{EvmRpc, TxReceipt};
+pub use evm_tx::{EvmTxError, EvmTxSigner, Fees, TxRequest};
 pub use flow::PaidRequest;
 pub use orbit::{Catalog, OrbitClient, Pagination, RegistryEntry, RegistryResponse};
 pub use signer::{MockSigner, Signer};

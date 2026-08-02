@@ -64,6 +64,19 @@ services:
         value: http://covenant-coding-gateway:10000/v1  # gateway binds Render's $PORT=10000; delegates + seeds the coder agent
       - key: COVENANT_LIVE_TRACE
         value: "1"  # publish runtime traces to the broadcast fan-out the web SSE endpoint (`/intents/:id/events`) subscribes to; without this the watch-it-work view sees zero frames and flips to "disconnected" when an upstream proxy timeout closes the silent stream
+      # Spend-grant escrow attestor (Robinhood Chain, USDG settlement). Off
+      # until the operator enables it in the dashboard, so a blueprint push can
+      # never arm settlement by accident. The dashboard secrets below are
+      # declared here so Render stores them; to go live also set:
+      #   COVENANT_SPENDGRANT_ENABLED=1
+      #   COVENANT_SPENDGRANT_CHAIN=4663                                  (46630 = testnet)
+      #   COVENANT_SPENDGRANT_ATTESTOR_KEY=/data/keys/spendgrant-attestor.json  (address = escrow `attestor` role)
+      - key: COVENANT_SPENDGRANT_ESCROW
+        sync: false  # deployed SpendGrantEscrow address (0x…); set in dashboard
+      - key: COVENANT_SPENDGRANT_RPC
+        sync: false  # Robinhood Chain JSON-RPC (may carry api key); enables the in-process submitter
+      - key: COVENANT_SPENDGRANT_SUBMITTER_KEY
+        sync: false  # funded gas-payer secret (0x… hex); set in dashboard
       - fromGroup: covenant-sandbox-shared
 
   - type: web

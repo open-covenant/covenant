@@ -50,6 +50,7 @@ const EXPECTED_NAMESPACES: &[&str] = &[
     "settlement",
     "x402",
     "secret",
+    "wallet",
 ];
 
 struct GrammarVector {
@@ -148,6 +149,21 @@ fn golden_vectors() -> Vec<GrammarVector> {
             "secret",
             "secret.access",
             json!({ "version": 1, "name": "openai-api-key" }),
+        ),
+        grant(
+            "wallet",
+            "wallet.spend.authorize",
+            json!({
+                "version": 1,
+                "providers": ["orbserv"],
+                "network": "eip155:42161",
+                "asset": "0x5fc5360D",
+                "per_call_cap": "1000000",
+                "total_cap": "50000000",
+                "expiry": 1_790_000_000u64,
+                "require_quality_gate": false,
+                "spec_id": null
+            }),
         ),
     ]
 }

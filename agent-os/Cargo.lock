@@ -2039,6 +2039,7 @@ dependencies = [
  "bs58",
  "covenant-a2a",
  "covenant-acedata",
+ "covenant-attestation",
  "covenant-audit",
  "covenant-budget",
  "covenant-circuit",

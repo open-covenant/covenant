@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-08-02T17:31:38.413Z",
+  "updatedAt": "2026-08-02T17:51:42.302Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 13015,
-    "tasks": 1526,
-    "integrated": 1526
+    "events": 13020,
+    "tasks": 1527,
+    "integrated": 1527
   },
   "throughput": {
-    "last24h": 1,
-    "last7d": 5,
-    "velocity": 0.7
+    "last24h": 2,
+    "last7d": 6,
+    "velocity": 0.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "08-02",
-      "count": 1
+      "count": 2
     }
   ],
   "cumulative": [
@@ -180,14 +180,14 @@
     },
     {
       "date": "08-02",
-      "total": 1526
+      "total": 1527
     }
   ],
   "states": {
-    "integrated": 1518,
+    "integrated": 1519,
     "proposed": 1,
     "blocked": 6,
-    "ready": 1
+    "in_progress": 1
   },
   "areas": [
     {
@@ -216,11 +216,16 @@
     }
   ],
   "inFlight": {
-    "task": "multichain-attestation-pda-producer",
-    "state": "ready",
-    "since": "2026-08-02T17:31:22.220Z"
+    "task": "multichain-wire-format-golden-vectors",
+    "state": "in_progress",
+    "since": "2026-08-02T17:50:23.777Z"
   },
   "recent": [
+    {
+      "at": "2026-08-02T17:32:14.283Z",
+      "task": "multichain-attestation-pda-producer",
+      "note": "Committed 8948ea0c and pushed to loop/main-track: solana_account_bytes exact-32 base58 conversion pinned against the @solana/web3.js cross-i"
+    },
     {
       "at": "2026-08-02T16:50:51.177Z",
       "task": "multichain-x402-chain-asset-pinning",
@@ -315,11 +320,6 @@
       "at": "2026-07-16T05:25:18.482Z",
       "task": "release-scope-review-signature-wiring",
       "note": "Public slice: sign-release-artifacts.yml + keys README + docs/provenance/review-artifacts/README.md. Readiness-gate needle strengthening and"
-    },
-    {
-      "at": "2026-07-14T16:23:31.087Z",
-      "task": "status-autonomous-workflow-project-review-signing-key-custod",
-      "note": "Committed 47aa932a (validator registration) atop readiness-gate and rotation-doc commits on loop/main-track"
     }
   ]
 }

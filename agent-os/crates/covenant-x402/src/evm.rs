@@ -1105,14 +1105,13 @@ mod tests {
     fn allowlisted_address_match_is_case_insensitive() {
         // Wire challenges may checksum-case the asset; the allowlist
         // entry may not. Address equality is byte equality, not string
-        // equality.
-        let upper = ATTACKER_ASSET.to_uppercase().replace("0X", "0x");
+        // equality. The fixture must contain a-f digits — an all-numeric
+        // address has no case variants and would exercise nothing.
+        let letters = "0x00000000000000000000000000000000deadbeef";
+        let upper = "0x00000000000000000000000000000000DEADBEEF";
+        assert_ne!(letters, upper);
         let extra = parse_extra_assets(&format!("84532:{upper}")).unwrap();
-        assert!(requirement_asset_permitted(
-            "base:84532",
-            ATTACKER_ASSET,
-            &extra
-        ));
+        assert!(requirement_asset_permitted("base:84532", letters, &extra));
     }
 
     #[test]

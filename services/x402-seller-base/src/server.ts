@@ -3,8 +3,9 @@
  *
  * Agents pay per call in USDC (EIP-3009 transferWithAuthorization) to obtain a
  * Covenant-signed ed25519 attestation over a claim:
- *   POST /x402/attest  a Covenant-signed, independently-verifiable attestation
- *                      over a { subject, claim } pair.
+ *   POST /x402/attest                    a Covenant-signed attestation over a { subject, claim } pair.
+ *   POST /x402/robinhood/governed-order  place a Robinhood order through the Covenant policy gate.
+ *   GET  /x402/proof/:agent/trading      an agent's verifiable trading reputation.
  *
  * `@x402/express` issues the 402 challenge via a locally-registered (signer-less)
  * EVM exact scheme, then verifies and settles through the Coinbase-hosted x402
@@ -24,6 +25,8 @@
  *   X402_SYNC_FACILITATOR   "false" to skip the boot supported-kinds fetch (default on)
  *   COVENANT_ATTEST_KEYPAIR 64-byte JSON array seed; an ephemeral key is generated
  *                           and its pubkey logged when this is unset
+ *   COVENANT_HTTP_URL       covenantd gateway for the robinhood routes (default 127.0.0.1:8421)
+ *   COVENANT_AUTH_TOKEN     bearer for covenantd
  */
 import express, { type Request, type Response } from "express";
 import { paymentMiddlewareFromConfig } from "@x402/express";
@@ -33,6 +36,7 @@ import { ExactEvmScheme } from "@x402/evm/exact/server";
 import { declareDiscoveryExtension } from "@x402/extensions/bazaar";
 import { Attestor, ATTEST_DOMAIN, ATTEST_CANONICALIZATION, ATTEST_VERIFY_RECIPE } from "./attest.js";
 import { makeAttestHandler } from "./attest-route.js";
+import { makeGovernedOrderHandler, makeReputationHandler } from "./robinhood-route.js";
 
 // The EIP-712 domain (name, version) is the token's own, not ours: the buyer's
 // wallet signs the transferWithAuthorization against it and the facilitator
@@ -103,6 +107,8 @@ if (!process.env.COVENANT_ATTEST_KEYPAIR) {
   console.warn(`COVENANT_ATTEST_KEYPAIR unset, generated ephemeral attestation key ${attestor.pubkeyB58}`);
 }
 
+const RESOURCES = ["/x402/attest", "/x402/robinhood/governed-order", "/x402/proof/:agent/trading"];
+
 const app = express();
 // Render terminates TLS and forwards over http; trust the proxy so req.protocol
 // reflects the real https scheme in the discovery URLs.
@@ -117,7 +123,7 @@ app.get("/health", (_req: Request, res: Response) => {
     chain: net.chain,
     asset: ASSET,
     payTo: PAY_TO,
-    resources: ["/x402/attest"],
+    resources: RESOURCES,
   });
 });
 
@@ -125,9 +131,9 @@ app.get("/.well-known/x402", (req: Request, res: Response) => {
   const base = `${req.protocol}://${req.get("host")}`;
   res.json({
     version: 1,
-    resources: [`${base}/x402/attest`],
+    resources: RESOURCES.map((r) => `${base}${r}`),
     instructions:
-      "Covenant Trust x402 seller on Base. Pay USDC via EIP-3009 to obtain a Covenant-signed ed25519 attestation over a { subject, claim } pair (POST /x402/attest). Pin the attestation key below to verify responses without trusting this server.",
+      "Covenant Trust x402 seller on Base. Pay USDC via EIP-3009 to obtain a Covenant-signed ed25519 attestation (POST /x402/attest), place a policy-gated Robinhood order (POST /x402/robinhood/governed-order), or fetch an agent's trading reputation (GET /x402/proof/:agent/trading). Pin the attestation key below to verify responses without trusting this server.",
     attestation: {
       algorithm: "ed25519",
       publicKey: attestor.pubkeyB58,
@@ -180,6 +186,33 @@ const routes: RoutesConfig = {
       output: { example: { alg: "ed25519", signature_b58: "...", pubkey_b58: "..." } },
     }),
   ),
+  "POST /x402/robinhood/governed-order": gate(
+    PRICE,
+    "Place a Robinhood crypto order through the Covenant policy gate; returns the signed, on-chain-anchored trade receipt.",
+    declareDiscoveryExtension({
+      input: { symbol: "BTC-USD", side: "buy", type: "market", quantity: 0.001 },
+      inputSchema: {
+        properties: {
+          symbol: { type: "string" },
+          side: { type: "string" },
+          type: { type: "string" },
+          quantity: { type: "number" },
+          limit_price: { type: "number" },
+        },
+        required: ["symbol", "side", "quantity"],
+      },
+      bodyType: "json",
+      output: { example: { receipt: { decision: "executed" }, root_hash_hex: "...", signature_b64: "...", anchor: "..." } },
+    }),
+  ),
+  "GET /x402/proof/:agent/trading": gate(
+    PRICE,
+    "Fetch an agent's verifiable trading reputation derived from its Covenant trade receipts.",
+    declareDiscoveryExtension({
+      inputSchema: { properties: {} },
+      output: { example: { agent: "robinhood-agent", score: 100, established: true, mandate_adherence: 1 } },
+    }),
+  ),
 };
 
 app.use(
@@ -194,12 +227,14 @@ app.use(
 );
 
 // Paid, reached only after a verified payment. Returning >= 400 cancels
-// settlement, so a bad request is never charged. Handler lives in
-// attest-route.ts so tests can hit it without the payment middleware.
+// settlement, so a bad request is never charged. Handlers live in their route
+// modules so tests can hit them without the payment middleware.
 app.post("/x402/attest", makeAttestHandler(attestor));
+app.post("/x402/robinhood/governed-order", makeGovernedOrderHandler());
+app.get("/x402/proof/:agent/trading", makeReputationHandler());
 
 app.listen(PORT, () => {
   console.log(
-    `covenant-x402-seller-base on :${PORT}, paid POST /x402/attest, ${NET} (${net.chain}) USDC ${ASSET}, payTo ${PAY_TO}, facilitator ${facilitatorConfig.url ?? FACILITATOR_URL}${CDP_ID && CDP_SECRET ? " (cdp-authed)" : ""}`,
+    `covenant-x402-seller-base on :${PORT}, paid ${RESOURCES.join(" + ")}, ${NET} (${net.chain}) USDC ${ASSET}, payTo ${PAY_TO}, facilitator ${facilitatorConfig.url ?? FACILITATOR_URL}${CDP_ID && CDP_SECRET ? " (cdp-authed)" : ""}`,
   );
 });

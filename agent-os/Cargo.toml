@@ -31,6 +31,7 @@ members = [
     "crates/covenant-metaplex",
     "crates/covenant-sns",
     "crates/covenant-acedata",
+    "crates/covenant-robinhood",
     "crates/covenant-krexa",
     "crates/covenant-timeline-adapter",
     "crates/covenant-sap-bridge",

@@ -43,6 +43,7 @@ covenant-hyre = { path = "../covenant-hyre" }
 covenant-metaplex = { path = "../covenant-metaplex" }
 covenant-sns = { path = "../covenant-sns" }
 covenant-acedata = { path = "../covenant-acedata" }
+covenant-robinhood = { path = "../covenant-robinhood" }
 covenant-circuit = { path = "../covenant-circuit", optional = true }
 covenant-krexa = { path = "../covenant-krexa" }
 anyhow = { workspace = true }
@@ -50,6 +51,7 @@ async-trait = { workspace = true }
 axum = { workspace = true }
 base64 = "0.22"
 bs58 = { workspace = true }
+ed25519-dalek = { workspace = true }
 dotenvy = "0.15"
 futures = { workspace = true }
 reqwest = { workspace = true }

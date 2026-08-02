@@ -341,7 +341,11 @@ case "$mode" in
     ;;
   full)
     run cargo build --workspace --exclude covenant-settlement-program --exclude covenant-stake-program --locked
-    run cargo clippy --workspace --all-targets --exclude covenant-settlement-program --exclude covenant-stake-program --locked -- -D warnings
+    # covenant-oracle-program joins the Anchor-program exclusions for clippy only:
+    # Anchor's macros emit cfg values (anchor-debug, custom-heap, solana, …) the
+    # unexpected_cfgs lint rejects under -D warnings. It still builds and tests
+    # in the workspace runs above.
+    run cargo clippy --workspace --all-targets --exclude covenant-settlement-program --exclude covenant-stake-program --exclude covenant-oracle-program --locked -- -D warnings
     run cargo test --workspace --exclude covenant-settlement-program --exclude covenant-stake-program --locked
     run cargo test --manifest-path evm/Cargo.toml --locked
     ;;

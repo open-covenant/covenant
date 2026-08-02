@@ -37,7 +37,7 @@ fn hex(bytes: &[u8]) -> String {
 
 fn unhex(value: &str) -> Vec<u8> {
     let body = value.strip_prefix("0x").unwrap_or(value);
-    assert!(body.len() % 2 == 0, "odd-length hex: {value:?}");
+    assert!(body.len().is_multiple_of(2), "odd-length hex: {value:?}");
     (0..body.len())
         .step_by(2)
         .map(|i| u8::from_str_radix(&body[i..i + 2], 16).expect("hex"))

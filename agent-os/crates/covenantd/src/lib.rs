@@ -40509,10 +40509,10 @@ required = {caps:?}
                     row.message
                 );
                 assert!(
-                    row.repair.contains("Uuid::new_v4")
+                    row.repair.contains("wire-supplied")
                         && row.repair.contains("repair_a2a_task")
                         && row.repair.contains("retry_a2a_stale"),
-                    "repair hint should name Uuid::new_v4 and both production write-sites: {}",
+                    "repair hint should say task ids are wire-supplied and name both production write-sites: {}",
                     row.repair
                 );
                 let integrity = checks

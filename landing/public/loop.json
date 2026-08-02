@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-08-02T17:11:34.517Z",
+  "updatedAt": "2026-08-02T17:31:38.413Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 13011,
+    "events": 13015,
     "tasks": 1526,
     "integrated": 1526
   },
@@ -187,7 +187,7 @@
     "integrated": 1518,
     "proposed": 1,
     "blocked": 6,
-    "in_progress": 1
+    "ready": 1
   },
   "areas": [
     {
@@ -217,8 +217,8 @@
   ],
   "inFlight": {
     "task": "multichain-attestation-pda-producer",
-    "state": "in_progress",
-    "since": "2026-08-02T17:06:39.031Z"
+    "state": "ready",
+    "since": "2026-08-02T17:31:22.220Z"
   },
   "recent": [
     {

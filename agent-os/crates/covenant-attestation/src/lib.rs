@@ -28,6 +28,7 @@ mod eddsa;
 mod eip712;
 mod multibase;
 mod quality;
+mod reputation;
 
 use ed25519_dalek::SigningKey;
 use serde_json::{json, Value};
@@ -36,6 +37,10 @@ use covenant_identity::Secp256k1IssuerKey;
 
 pub use bond::{BondError, BondNetwork, BondReceipt, SignedBondReceipt, BPS_DENOMINATOR};
 pub use quality::{QualityAttestation, QualityError, SignedQualityAttestation};
+pub use reputation::{
+    ReputationAttestation, ReputationError, SignedReputationAttestation, MAX_SCORE_DECIMALS,
+    SOURCE_CHAIN_SOLANA,
+};
 
 /// Named error for every way an attestation can fail to issue or verify.
 /// Verification variants say which check failed so a reviewer can tell a

@@ -7,9 +7,18 @@
   },
   "proxy": "IdentityRegistry is an upgradeable ERC-721 (CREATE2 vanity 0x8004...). The address is stable across chains; the implementation behind it can change, so re-verify the live contract against staged calldata immediately before submission.",
   "identityRegistry": {
-    "8453": { "network": "Base", "address": "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432" },
-    "84532": { "network": "Base Sepolia", "address": "0x8004A818BFB912233c491871b3d84c89A494BD9e" },
-    "11155111": { "network": "Ethereum Sepolia", "address": "0x8004A818BFB912233c491871b3d84c89A494BD9e" }
+    "8453": {
+      "network": "Base",
+      "address": "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432"
+    },
+    "84532": {
+      "network": "Base Sepolia",
+      "address": "0x8004A818BFB912233c491871b3d84c89A494BD9e"
+    },
+    "11155111": {
+      "network": "Ethereum Sepolia",
+      "address": "0x8004A818BFB912233c491871b3d84c89A494BD9e"
+    }
   },
   "register": {
     "signature": "register(string)",
@@ -66,6 +75,15 @@
       "deployed": "2026-08-03",
       "tx": "0x0fe789baca3cb8175a41bbc0401d1518daca61b81274c62e65561d78185d4fe4",
       "note": "same stateless verifier and same canonical attestor as Base — a covenantd-signed bond verifies on 4663 with no chain-local trust root. The Solidity immutable is named USDC but holds USDG (Global Dollar, Paxos, 6-dec). Digests bind chainId 4663, so a Base receipt cannot verify here and vice versa. Proven end-to-end by covenant-attestation/tests/live_rh_bond_verifier.rs: getters pin the canonical attestor + USDG, domainSeparator()/digest() equal the crate for a RobinhoodMainnet receipt (pinned 0x399e5590…67bcfa), the ecrecover precompile recovers the signer, and verify() reverts UntrustedSigner for a non-canonical signer. Replay protection remains the consuming escrow's job."
+    },
+    "reputationRegistry": {
+      "address": "0xa691dd0F06999233D56F2B397C41Cd7542c74aED",
+      "trustedAttestor": "0x186953d5b4A290f8f53b8377cb38EDA75D664211",
+      "domainSalt": "keccak256(\"covenant/reputation/v1\")",
+      "chainAgnostic": true,
+      "deployed": "2026-08-03",
+      "tx": "0x476e53464724b3a64b3ab360a94065c8b205921ff06dec81a5dd642a263e48a2",
+      "note": "chain-agnostic reputation verifier + thin freshest-score store. Unlike the bond verifier, the EIP-712 domain binds a constant salt (keccak256(\"covenant/reputation/v1\")) rather than chainId/verifyingContract, so one canonical-attestor signature verifies here, on Base, and off-chain — a reputation score is a Solana-canonical fact true on every chain at once. Same canonical attestor as the bond verifiers (no chain-local trust root). Fields align with covenantMainnet.reputationSchema (score/scoreDecimals/validUntil/sourceChain/solanaAttestation) plus a bytes32 subject binding the agent's Solana identity. Proven by covenant-attestation/tests/live_rh_reputation_registry.rs: TRUSTED_ATTESTOR() pins the canonical attestor, domainSeparator()/digest() equal the crate (pinned 0xa1810486…562fb / 0xe9a0fe2c…dcccef5), the ecrecover precompile recovers the signer, verify() reverts UntrustedSigner for a non-canonical live signer and Expired for a past-dated score. postReputation keeps only the freshest score per subject by validUntil."
     }
   },
   "ethereumMainnet": {

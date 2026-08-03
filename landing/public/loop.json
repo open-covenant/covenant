@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-08-03T21:17:01.628Z",
+  "updatedAt": "2026-08-03T21:37:05.654Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 13069,
-    "tasks": 1532,
+    "events": 13074,
+    "tasks": 1533,
     "integrated": 1533
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1525,
     "proposed": 1,
-    "blocked": 6
+    "blocked": 6,
+    "self_review": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "http-capabilities-purge-live-parity",
+    "state": "self_review",
+    "since": "2026-08-03T21:36:45.173Z"
+  },
   "recent": [
     {
       "at": "2026-08-03T21:07:47.624Z",

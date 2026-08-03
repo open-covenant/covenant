@@ -84,6 +84,22 @@
       "deployed": "2026-08-03",
       "tx": "0x476e53464724b3a64b3ab360a94065c8b205921ff06dec81a5dd642a263e48a2",
       "note": "chain-agnostic reputation verifier + thin freshest-score store. Unlike the bond verifier, the EIP-712 domain binds a constant salt (keccak256(\"covenant/reputation/v1\")) rather than chainId/verifyingContract, so one canonical-attestor signature verifies here, on Base, and off-chain — a reputation score is a Solana-canonical fact true on every chain at once. Same canonical attestor as the bond verifiers (no chain-local trust root). Fields align with covenantMainnet.reputationSchema (score/scoreDecimals/validUntil/sourceChain/solanaAttestation) plus a bytes32 subject binding the agent's Solana identity. Proven by covenant-attestation/tests/live_rh_reputation_registry.rs: TRUSTED_ATTESTOR() pins the canonical attestor, domainSeparator()/digest() equal the crate (pinned 0xa1810486…562fb / 0xe9a0fe2c…dcccef5), the ecrecover precompile recovers the signer, verify() reverts UntrustedSigner for a non-canonical live signer and Expired for a past-dated score. postReputation keeps only the freshest score per subject by validUntil."
+    },
+    "usdgSettlement": {
+      "asset": "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
+      "assetSymbol": "USDG",
+      "assetDecimals": 6,
+      "scheme": "exact",
+      "standard": "EIP-3009 transferWithAuthorization",
+      "domain": {
+        "name": "Global Dollar",
+        "version": "1"
+      },
+      "domainSeparator": "0x7a3d7400b27830f4f91c2c16a082486d67c1befecaec2f53b33f1f35d5b62036",
+      "proofTx": "0x40f6eec21724d7cc155dcf8820d41892c383903d338f13fc1febcba1d3d7fd85",
+      "proofBlock": 26869136,
+      "proved": "2026-08-03",
+      "note": "Generic (non-escrow) x402 USDG settlement proven live on 4663. The covenant-x402 EvmSigner signs an EIP-3009 exact-scheme authorization (domain \"Global Dollar\" v1, separator pinned 0x7a3d7400…62036) and EvmRpc broadcasts transferWithAuthorization to the USDG token — no SpendGrantEscrow, spend grant, or provider allowlist on the path, so any USDG-priced x402 resource is payable on 4663 with the same signer covenant-x402 uses for USDC on Base. Proof tx moved 0.01 USDG payer→payee and emitted AuthorizationUsed + Transfer with status 1. Proven by covenant-x402/tests/live_rh_usdg_settlement.rs: signs via EvmSigner, preflights the call (a tampered signature reverts — the settle enforces the covenant-x402 authorization signature, not a bare transfer), submits via EvmRpc, and asserts payer/payee USDG balances move by exactly the settled value."
     }
   },
   "ethereumMainnet": {

@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-08-03T13:55:34.962Z",
+  "updatedAt": "2026-08-03T14:15:39.063Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 13043,
+    "events": 13046,
     "tasks": 1530,
     "integrated": 1530
   },
@@ -185,8 +185,9 @@
   ],
   "states": {
     "integrated": 1522,
-    "proposed": 2,
-    "blocked": 6
+    "proposed": 1,
+    "blocked": 6,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "multichain-reputation-definitions-reconciliation",
+    "state": "in_progress",
+    "since": "2026-08-03T14:11:54.234Z"
+  },
   "recent": [
     {
       "at": "2026-08-03T13:45:37.307Z",

@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-08-03T23:17:25.294Z",
+  "updatedAt": "2026-08-03T23:37:29.142Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 13084,
-    "tasks": 1534,
-    "integrated": 1534
+    "events": 13097,
+    "tasks": 1536,
+    "integrated": 1536
   },
   "throughput": {
-    "last24h": 5,
-    "last7d": 13,
-    "velocity": 1.9
+    "last24h": 7,
+    "last7d": 15,
+    "velocity": 2.1
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "08-03",
-      "count": 5
+      "count": 7
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "08-03",
-      "total": 1534
+      "total": 1536
     }
   ],
   "states": {
-    "integrated": 1526,
-    "proposed": 1,
-    "blocked": 6,
-    "cross_review": 1
+    "integrated": 1528,
+    "proposed": 2,
+    "blocked": 6
   },
   "areas": [
     {
@@ -215,12 +214,18 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "http-peers-enroll-delegated-denial-live",
-    "state": "cross_review",
-    "since": "2026-08-03T23:11:40.635Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-08-03T23:34:18.505Z",
+      "task": "http-peers-list-fallback-gate-live",
+      "note": "Integrated as 4e77d3ef (test + README metrics 3683/479 in one commit). Pushed cf134df2..4e77d3ef to origin/loop/main-track. Closes epic http"
+    },
+    {
+      "at": "2026-08-03T23:20:54.217Z",
+      "task": "http-peers-enroll-delegated-denial-live",
+      "note": "Integrated as cf134df2 (test + README metrics 3682/478 in one commit so the metrics gate passes on the commit itself). Pushed 5eb51f2b..cf13"
+    },
     {
       "at": "2026-08-03T21:44:14.479Z",
       "task": "http-capabilities-purge-live-parity",
@@ -310,16 +315,6 @@
       "at": "2026-07-19T22:21:45.978Z",
       "task": "packaging-ci-coverage",
       "note": "integrated: packaging CI workflow committed. Exercises debian/ (dpkg-buildpackage + policy-rc.d guard) and covenant.spec (rpmbuild in fedora"
-    },
-    {
-      "at": "2026-07-19T21:32:07.719Z",
-      "task": "debian-rpm-head-packaging-templates",
-      "note": "43b7eeed pushed to origin/loop/main-track; debian/ + covenant.spec + source-install.md section; cross-review findings applied pre-integratio"
-    },
-    {
-      "at": "2026-07-19T01:47:23.715Z",
-      "task": "store-append-fsync-durability",
-      "note": "Committed 4b534671 (feat: fsync jsonl data appends across the store crates) and pushed 1cf4f944..4b534671 to origin/loop/main-track. 8 files"
     }
   ]
 }

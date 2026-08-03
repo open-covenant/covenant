@@ -1,0 +1,13 @@
+{
+  "name": "covenant-loofta-verified-enclave-badge",
+  "private": true,
+  "type": "module",
+  "description": "Drop-in 'Covenant-verified enclave' badge for Loofta Pay. Resolves the live Covenant attestation for the MagicBlock ER a payment settled on. Read-only, no keys.",
+  "scripts": {
+    "demo": "node demo.mjs"
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.98.0",
+    "@covenant-org/verified-er": "^0.1.1"
+  }
+}

@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-08-03T14:55:46.713Z",
+  "updatedAt": "2026-08-03T15:15:50.617Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 13055,
+    "events": 13057,
     "tasks": 1531,
     "integrated": 1531
   },
@@ -187,7 +187,7 @@
     "integrated": 1523,
     "proposed": 1,
     "blocked": 6,
-    "in_progress": 1
+    "cross_review": 1
   },
   "areas": [
     {
@@ -217,8 +217,8 @@
   ],
   "inFlight": {
     "task": "multichain-trust-layer-adrs",
-    "state": "in_progress",
-    "since": "2026-08-03T14:54:51.421Z"
+    "state": "cross_review",
+    "since": "2026-08-03T15:15:09.955Z"
   },
   "recent": [
     {

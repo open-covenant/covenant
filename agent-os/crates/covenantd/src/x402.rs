@@ -70,6 +70,10 @@ pub struct SignerRoute {
     pub env: Vec<(String, String)>,
 }
 
+/// The sidecar [`X402Config::route_for`] resolves a network to: its
+/// binary and the env it is spawned with.
+pub type ResolvedRoute<'a> = (&'a PathBuf, &'a [(String, String)]);
+
 impl X402Config {
     /// Resolve which sidecar signs a requirement on `network`.
     ///
@@ -84,7 +88,7 @@ impl X402Config {
     /// at all it goes to `signer_binary` exactly as before routing
     /// existed, preserving operators running a custom sidecar for a
     /// network this code does not know.
-    pub fn route_for(&self, network: &str) -> Result<(&PathBuf, &[(String, String)]), X402Error> {
+    pub fn route_for(&self, network: &str) -> Result<ResolvedRoute<'_>, X402Error> {
         let family = network_family(network);
         let routed = self.solana_signer.is_some() || self.evm_signer.is_some();
         let route = match family {

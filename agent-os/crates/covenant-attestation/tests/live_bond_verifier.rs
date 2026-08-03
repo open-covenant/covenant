@@ -12,7 +12,7 @@
 
 use std::process::Command;
 
-use covenant_attestation::{BaseNetwork, BondReceipt};
+use covenant_attestation::{BondNetwork, BondReceipt};
 use covenant_identity::Secp256k1IssuerKey;
 
 const ECRECOVER: &str = "0x0000000000000000000000000000000000000001";
@@ -51,9 +51,9 @@ fn attestor() -> Secp256k1IssuerKey {
 
 fn receipt(expiry: u64) -> BondReceipt {
     BondReceipt {
-        network: BaseNetwork::Sepolia,
+        network: BondNetwork::BaseSepolia,
         subject: [0xAB; 32],
-        bond_token: BaseNetwork::Sepolia.usdc(),
+        bond_token: BondNetwork::BaseSepolia.bond_token(),
         bond_amount: 1_000_000,
         agent_return: [0x11; 20],
         slash_beneficiary: [0x22; 20],

@@ -39,7 +39,7 @@ pub mod types;
 pub mod solana;
 
 pub use client::{http_client, Client};
-pub use evm::{EvmSigner, USDC_BASE_MAINNET, USDC_BASE_SEPOLIA};
+pub use evm::{EvmSigner, USDC_BASE_MAINNET, USDC_BASE_SEPOLIA, USDG_ROBINHOOD_MAINNET};
 #[cfg(feature = "evm-rpc")]
 pub use evm_tx::{EvmRpc, TxReceipt};
 pub use evm_tx::{EvmTxError, EvmTxSigner, Fees, TxRequest};

@@ -4,7 +4,7 @@
 //!
 //!   cargo run -p covenant-attestation --example bond_vector
 
-use covenant_attestation::{BaseNetwork, BondReceipt};
+use covenant_attestation::{BondNetwork, BondReceipt};
 use covenant_identity::Secp256k1IssuerKey;
 
 fn hex0x(b: &[u8]) -> String {
@@ -17,11 +17,11 @@ fn hex0x(b: &[u8]) -> String {
 
 fn main() {
     let key = Secp256k1IssuerKey::from_secret_bytes(&[7u8; 32]).unwrap();
-    let network = BaseNetwork::Sepolia;
+    let network = BondNetwork::BaseSepolia;
     let receipt = BondReceipt {
         network,
         subject: [0xAB; 32],
-        bond_token: network.usdc(),
+        bond_token: network.bond_token(),
         bond_amount: 1_000_000,
         agent_return: [0x11; 20],
         slash_beneficiary: [0x22; 20],
@@ -35,7 +35,7 @@ fn main() {
 
     println!("attestor            = {}", hex0x(&key.address()));
     println!("chainId             = {}", network.chain_id());
-    println!("usdc                = {}", hex0x(&network.usdc()));
+    println!("bondTokenPinned     = {}", hex0x(&network.bond_token()));
     println!("subject             = {}", hex0x(&receipt.subject));
     println!("bondToken           = {}", hex0x(&receipt.bond_token));
     println!("bondAmount          = {}", receipt.bond_amount);

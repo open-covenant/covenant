@@ -72,3 +72,10 @@ required-features = ["solana"]
 [[test]]
 name = "live_evm_tx"
 required-features = ["evm-rpc"]
+
+# Live generic x402 USDG settlement on Robinhood Chain 4663 — signs an EIP-3009
+# authorization with EvmSigner and settles it with the in-process submitter, so
+# it also needs evm-rpc.
+[[test]]
+name = "live_rh_usdg_settlement"
+required-features = ["evm-rpc"]

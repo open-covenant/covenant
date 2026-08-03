@@ -113,10 +113,7 @@ async fn audit_events(client: &reqwest::Client, base: &str) -> Vec<Value> {
         recent["kind"], "audit_events",
         "/audit/recent must answer with the audit_events envelope; got {recent:?}",
     );
-    recent["events"]
-        .as_array()
-        .expect("events array")
-        .clone()
+    recent["events"].as_array().expect("events array").clone()
 }
 
 #[tokio::test]

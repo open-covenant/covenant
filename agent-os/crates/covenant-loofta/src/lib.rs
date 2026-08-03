@@ -29,10 +29,13 @@
 //! Two things stay honest here. Loofta's privacy layer (MagicBlock) unlinks
 //! sender and recipient on-chain, so most destinations are fresh and carry no
 //! Covenant history; the policy treats an unknown recipient as normal rather
-//! than a red flag, and gates strangers on amount. And the enclave binding some
-//! partners will ask about is a roadmap hole, not a claim: see
-//! [`provenance::SignedCommitment::enclave_quote`], `None` until a `covenant-tee`
-//! crate lands.
+//! than a red flag, and gates strangers on amount. And the enclave binding is
+//! live substrate, not a claim to hedge: Loofta runs on MagicBlock Private
+//! Ephemeral Rollups (Intel TDX), and Covenant already DCAP-verifies those
+//! enclaves on mainnet, so [`provenance::SignedCommitment::enclave`] is filled
+//! from a real verification. The lone gap is a `covenant-tee` crate that
+//! packages the agent-bound challenge as a first-class attestation; the
+//! mechanism itself is exercisable today.
 
 #![deny(unsafe_code)]
 
@@ -48,7 +51,7 @@ pub use error::{Error, Result};
 
 pub use config::LooftaConfig;
 pub use policy::{PayoutPolicy, Verdict};
-pub use provenance::{PaymentRecord, SignedCommitment};
+pub use provenance::{EnclaveAttestation, PaymentRecord, SignedCommitment};
 pub use receipt::{Decision, PayoutReceipt, SignedReceipt};
 pub use recipient::{RecipientOracle, RecipientStanding, StaticOracle};
 pub use tools::{loofta_tools, PAYOUT_CHECK_TOOL, PROVIDER, TRUST_LABEL};

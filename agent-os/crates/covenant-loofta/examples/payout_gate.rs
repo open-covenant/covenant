@@ -5,8 +5,8 @@
 //!   cargo run -p covenant-loofta --example payout_gate
 
 use covenant_loofta::{
-    Decision, PaymentRecord, PayoutPolicy, PayoutReceipt, RecipientOracle, RecipientStanding,
-    StaticOracle,
+    Decision, EnclaveAttestation, PaymentRecord, PayoutPolicy, PayoutReceipt, RecipientOracle,
+    RecipientStanding, StaticOracle,
 };
 use ed25519_dalek::SigningKey;
 
@@ -80,14 +80,32 @@ async fn main() {
         &[42u8; 32],
     );
     let signed = record.attest(&attestor).unwrap();
+    let commitment = signed.commitment_hex.clone();
+
+    // The daemon attaches a live DCAP verification of the MagicBlock Private ER
+    // (Intel TDX enclave) the payment ran in. Shown here with the real mainnet
+    // verified-ER validator and a report_data that binds this commitment; the
+    // mr_td is illustrative (the real value comes from the live verify).
+    let signed = signed.with_enclave(EnclaveAttestation {
+        validator: "MTEWGuqxUpYZGFJQcp8tLN7x5v9BSeoFHYWQQ3n3xzo".into(),
+        tcb_status: "UpToDate".into(),
+        mr_td_hex: "ab".repeat(48),
+        advisory_ids: vec![],
+        report_data_hex: format!("{commitment}{}", "00".repeat(16)),
+        verified_at: 1_722_600_050,
+    });
+
+    println!("commitment {}… (nothing else anchored)", &commitment[..16]);
     println!(
-        "commitment {}… (nothing else anchored)",
-        &signed.commitment_hex[..16]
-    );
-    println!(
-        "signature verifies={}, record opens it={}, enclave_quote={:?}",
+        "signature verifies={}, record opens it={}",
         signed.verify(),
-        signed.opens(&record),
-        signed.enclave_quote
+        signed.opens(&record)
+    );
+    let e = signed.enclave.as_ref().unwrap();
+    println!(
+        "enclave: validator={} tcb={} -> enclave_proven={}",
+        e.validator,
+        e.tcb_status,
+        signed.enclave_proven()
     );
 }

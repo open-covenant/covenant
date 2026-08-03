@@ -13,11 +13,16 @@
 //! provenance root through the sap-bridge, the same anchoring path
 //! `covenant-attestation` already runs; this crate produces and signs the leaf.
 //!
-//! Roadmap, stated as a hole and not a claim: [`SignedCommitment::enclave_quote`]
-//! is `None` today. When MagicBlock's private/TEE ERs and a `covenant-tee` crate
-//! land, the same attestation can also bind the enclave that ran the payment, so
-//! the proof covers not just that the payment happened but where it ran. Until
-//! then the field stays empty.
+//! The enclave binding is live substrate, not a promise. Loofta's rail is a
+//! MagicBlock Private Ephemeral Rollup, an Intel TDX enclave; Covenant already
+//! DCAP-verifies those enclaves on mainnet (the verified-ER attestation in the
+//! Solana Attestation Service, the `covenant_verify_enclave` MCP tool, and a paid
+//! x402 check), with the running verifier in `services/er-registry/tee.mjs`.
+//! [`EnclaveAttestation`] carries that DCAP result and [`EnclaveAttestation::binds`]
+//! checks the quote committed to this exact payment. The one packaging gap is a
+//! `covenant-tee` crate that folds the agent and provenance root into the quote
+//! challenge as a first-class signed attestation; the binding itself is
+//! exercisable today through the live endpoint.
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use ed25519_dalek::{Signer as _, SigningKey};
@@ -87,9 +92,51 @@ impl PaymentRecord {
             settled_at: self.settled_at,
             attestor_pubkey_b64: STANDARD.encode(attestor.verifying_key().to_bytes()),
             signature_b64: STANDARD.encode(sig.to_bytes()),
-            enclave_quote: None,
+            enclave: None,
             anchor: None,
         })
+    }
+}
+
+/// A DCAP verification result for the TDX enclave a payment ran in. Mirrors what
+/// `services/er-registry/tee.mjs` returns and what the verified-ER attestation
+/// carries. The daemon fills this from a live `covenant_verify_enclave` /
+/// verified-ER read; it is DCAP-verifiable on its own, so it rides outside the
+/// attestor signature like [`SignedCommitment::anchor`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EnclaveAttestation {
+    /// ER validator identity (the enclave's stable pubkey), base58.
+    pub validator: String,
+    /// DCAP TCB status, e.g. "UpToDate".
+    pub tcb_status: String,
+    /// TDX measurement (`mr_td`), hex: identifies the enclave image.
+    pub mr_td_hex: String,
+    /// Intel advisory ids; empty when the TCB is clean.
+    #[serde(default)]
+    pub advisory_ids: Vec<String>,
+    /// The quote's `report_data`, hex. The enclave binds whatever challenge it
+    /// was handed here; a payment-bound quote carries the commitment.
+    pub report_data_hex: String,
+    pub verified_at: u64,
+}
+
+impl EnclaveAttestation {
+    /// The enclave quote committed to this payment: its `report_data` carries the
+    /// commitment. This is the tie between "a genuine verified enclave" and "this
+    /// specific payment". The exact 64-byte challenge layout (commitment plus
+    /// agent) is the `covenant-tee` crate's to pin; here we check the commitment
+    /// is the value the quote bound.
+    pub fn binds(&self, commitment_hex: &str) -> bool {
+        !commitment_hex.is_empty()
+            && self
+                .report_data_hex
+                .to_lowercase()
+                .contains(&commitment_hex.to_lowercase())
+    }
+
+    /// The TCB is current with no outstanding advisories.
+    pub fn is_up_to_date(&self) -> bool {
+        self.tcb_status.eq_ignore_ascii_case("UpToDate") && self.advisory_ids.is_empty()
     }
 }
 
@@ -103,9 +150,11 @@ pub struct SignedCommitment {
     pub settled_at: u64,
     pub attestor_pubkey_b64: String,
     pub signature_b64: String,
-    /// Enclave attestation of the run. Roadmap (see module docs); `None` today.
+    /// DCAP attestation of the enclave the payment ran in. Independently
+    /// verifiable, so it sits outside the signature. `None` until the daemon
+    /// attaches a live verify with [`SignedCommitment::with_enclave`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub enclave_quote: Option<String>,
+    pub enclave: Option<EnclaveAttestation>,
     /// On-chain anchor reference, set once the daemon folds the commitment into
     /// the provenance root. Outside the signed bytes, so it never affects
     /// [`Self::verify`].
@@ -114,6 +163,14 @@ pub struct SignedCommitment {
 }
 
 impl SignedCommitment {
+    /// Attach the DCAP attestation of the enclave the payment ran in. The daemon
+    /// calls this after a live verify; the attestation is independently
+    /// DCAP-checkable, so it does not change the commitment signature.
+    pub fn with_enclave(mut self, enclave: EnclaveAttestation) -> Self {
+        self.enclave = Some(enclave);
+        self
+    }
+
     /// The signature is valid for this commitment under the published key.
     pub fn verify(&self) -> bool {
         use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
@@ -145,6 +202,18 @@ impl SignedCommitment {
             .map(|c| c == self.commitment_hex)
             .unwrap_or(false)
     }
+
+    /// Fully proven: the signature holds, the enclave attestation is present and
+    /// current, and its quote committed to this payment. A payer showing this,
+    /// plus the record, proves a specific private payment ran in a genuine
+    /// verified enclave.
+    pub fn enclave_proven(&self) -> bool {
+        self.verify()
+            && self
+                .enclave
+                .as_ref()
+                .is_some_and(|e| e.is_up_to_date() && e.binds(&self.commitment_hex))
+    }
 }
 
 #[cfg(test)]
@@ -160,6 +229,17 @@ mod tests {
             1_722_600_000,
             nonce,
         )
+    }
+
+    fn enclave_for(commitment_hex: &str) -> EnclaveAttestation {
+        EnclaveAttestation {
+            validator: "MTEWGuqxUpYZGFJQcp8tLN7x5v9BSeoFHYWQQ3n3xzo".into(),
+            tcb_status: "UpToDate".into(),
+            mr_td_hex: "ab".repeat(48),
+            advisory_ids: vec![],
+            report_data_hex: format!("{commitment_hex}{}", "00".repeat(16)),
+            verified_at: 1_722_600_050,
+        }
     }
 
     #[test]
@@ -188,13 +268,59 @@ mod tests {
         assert!(signed.verify(), "signature must be valid");
         assert!(signed.opens(&r), "the real record must open the commitment");
         assert!(
-            signed.enclave_quote.is_none(),
-            "enclave binding is roadmap, not shipped"
+            signed.enclave.is_none(),
+            "enclave is attached by the daemon, not at attest time"
         );
 
         // A different record does not open it.
         let wrong = record(999.0, &[2u8; 32]);
         assert!(!signed.opens(&wrong));
+    }
+
+    #[test]
+    fn enclave_binds_the_commitment() {
+        let commitment = "a".repeat(64);
+        let e = enclave_for(&commitment);
+        assert!(e.is_up_to_date());
+        assert!(e.binds(&commitment), "report_data carries the commitment");
+        assert!(
+            !e.binds(&"b".repeat(64)),
+            "a different commitment does not bind"
+        );
+        assert!(!e.binds(""), "empty commitment never binds");
+    }
+
+    #[test]
+    fn outdated_tcb_is_not_up_to_date() {
+        let mut e = enclave_for(&"a".repeat(64));
+        e.advisory_ids = vec!["INTEL-SA-00001".into()];
+        assert!(!e.is_up_to_date(), "an outstanding advisory is not clean");
+        e.advisory_ids = vec![];
+        e.tcb_status = "OutOfDate".into();
+        assert!(!e.is_up_to_date());
+    }
+
+    #[test]
+    fn enclave_proven_requires_signature_current_tcb_and_binding() {
+        let attestor = SigningKey::from_bytes(&[11u8; 32]);
+        let r = record(120.0, &[12u8; 32]);
+        let signed = r.attest(&attestor).unwrap();
+        assert!(!signed.enclave_proven(), "no enclave attached yet");
+
+        let bound = signed
+            .clone()
+            .with_enclave(enclave_for(&signed.commitment_hex));
+        assert!(bound.verify() && bound.opens(&r));
+        assert!(
+            bound.enclave_proven(),
+            "signed, current TCB, and quote binds the payment"
+        );
+
+        // An enclave that verified a different payment does not prove this one.
+        let mut e = enclave_for("deadbeef");
+        e.report_data_hex = "ff".repeat(32);
+        let mismatched = signed.with_enclave(e);
+        assert!(!mismatched.enclave_proven());
     }
 
     #[test]
@@ -206,10 +332,15 @@ mod tests {
     }
 
     #[test]
-    fn anchor_is_outside_the_signed_bytes() {
+    fn anchor_and_enclave_are_outside_the_signed_bytes() {
         let attestor = SigningKey::from_bytes(&[6u8; 32]);
-        let mut signed = record(10.0, &[8u8; 32]).attest(&attestor).unwrap();
+        let signed = record(10.0, &[8u8; 32]).attest(&attestor).unwrap();
+        let enclave = enclave_for(&signed.commitment_hex);
+        let mut signed = signed.with_enclave(enclave);
         signed.anchor = Some("5xtx...".into());
-        assert!(signed.verify(), "anchoring must not break the signature");
+        assert!(
+            signed.verify(),
+            "attaching enclave + anchor must not break the signature"
+        );
     }
 }

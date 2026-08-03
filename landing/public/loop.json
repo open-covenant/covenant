@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-08-03T20:56:57.763Z",
+  "updatedAt": "2026-08-03T21:17:01.628Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 13061,
+    "events": 13069,
     "tasks": 1532,
-    "integrated": 1532
+    "integrated": 1533
   },
   "throughput": {
-    "last24h": 3,
-    "last7d": 11,
-    "velocity": 1.6
+    "last24h": 4,
+    "last7d": 12,
+    "velocity": 1.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "08-03",
-      "count": 3
+      "count": 4
     }
   ],
   "cumulative": [
@@ -180,12 +180,12 @@
     },
     {
       "date": "08-03",
-      "total": 1532
+      "total": 1533
     }
   ],
   "states": {
-    "integrated": 1524,
-    "proposed": 2,
+    "integrated": 1525,
+    "proposed": 1,
     "blocked": 6
   },
   "areas": [
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-08-03T21:07:47.624Z",
+      "task": "http-audit-purge-delegated-denial-live",
+      "note": "test + matrix registration committed to loop/main-track"
+    },
     {
       "at": "2026-08-03T15:22:10.068Z",
       "task": "multichain-trust-layer-adrs",
@@ -310,11 +315,6 @@
       "at": "2026-07-18T22:04:16.617Z",
       "task": "projection-preempt-persist-before-kill",
       "note": "Pushed commit c6cd98de to origin/loop/main-track (731d08eb..c6cd98de). All gates green: build, fmt, focused tests incl. new discriminating p"
-    },
-    {
-      "at": "2026-07-18T20:58:12.526Z",
-      "task": "shutdown-quiescence-checkpoint-ordering",
-      "note": "integrated as 6d4aa259 (covenant-budget pause_voided + strict replay), 7cb20300 (covenantd completion void + dual-sweep both select arms + g"
     }
   ]
 }

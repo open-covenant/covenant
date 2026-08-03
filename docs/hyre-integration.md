@@ -145,7 +145,7 @@ The profile is opt-in and requires the x402 funding-key sidecar
 | `COVENANT_HYRE_PER_CALL_CAP` | Atomic-USDC per-call ceiling. **Warning:** `0` defers to the endpoint-published price, which means a poisoned manifest refresh would inflate the cap. Set explicitly (e.g. `12000` = $0.012 for the $0.01 `/defi/tvl` endpoint). |
 | `COVENANT_HYRE_ALLOW` | Comma-separated endpoint-slug allowlist (`defi/tvl,defi/yields`). |
 | `COVENANT_HYRE_MARKUP_BPS` | Resale markup in basis points for SAP-bridge publishing. |
-| `COVENANT_X402_SIGNER_BINARY` | Absolute path to the built `covenant-x402-signer` binary. Required when the Hyre profile is enabled. |
+| `COVENANT_X402_SIGNER_BINARY` | Absolute path to the built `covenant-x402-signer` binary (or set it as `COVENANT_X402_SOLANA_SIGNER_BINARY`). Required when the Hyre profile is enabled. |
 
 ### Sidecar env (read inside the spawned signer process)
 

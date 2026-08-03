@@ -12,9 +12,11 @@
 //!
 //! The signer rejects any non-EVM network (a `solana:` requirement fails
 //! closed) and any asset that is not the chain-local USDC unless the operator
-//! authorized the exact `(chain, asset)` pair, so pointing
-//! `COVENANT_X402_SIGNER_BINARY` at this binary makes the daemon pay only over
-//! Base, and only in USDC by default.
+//! authorized the exact `(chain, asset)` pair. Point
+//! `COVENANT_X402_SIGNER_BINARY` at this binary to pay only over Base, or set
+//! `COVENANT_X402_EVM_SIGNER_BINARY` beside a Solana sidecar and the daemon
+//! routes each chain's challenges to the signer that owns them — only in USDC
+//! by default either way.
 //!
 //! Configuration (env):
 //! - `COVENANT_X402_EVM_KEY_HEX` — the 32-byte secp256k1 secret as hex, or

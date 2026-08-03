@@ -374,7 +374,9 @@ async fn main() -> Result<()> {
     let server = match x402_dispatch_config_from_env() {
         Some(cfg) => {
             info!(
-                signer = %cfg.signer_binary.display(),
+                default_signer = %cfg.signer_binary.display(),
+                solana_signer = ?cfg.solana_signer.as_ref().map(|r| r.binary.display().to_string()),
+                evm_signer = ?cfg.evm_signer.as_ref().map(|r| r.binary.display().to_string()),
                 "x402 outbound dispatch enabled"
             );
             server.with_x402_dispatch(cfg)
@@ -822,20 +824,27 @@ async fn bootstrap_operator_token(
     Ok(())
 }
 
-/// Build the outbound x402 dispatch config from env, or return None
-/// when the operator hasn't opted in. Returning None keeps the daemon
-/// running fully offline-from-payments — every `Request::PayX402`
-/// will surface "not configured" until the operator sets these vars
-/// and restarts.
+/// Build the outbound x402 dispatch config from env, or None when the
+/// operator hasn't opted in.
 ///
 /// Required when opted in:
 /// - `COVENANT_X402_ENABLED` truthy (`1`, `true`, `yes`)
-/// - `COVENANT_X402_SIGNER_BINARY` — path to a built
-///   `covenant-x402-signer` binary
+/// - at least one signer binary:
+///   - `COVENANT_X402_SIGNER_BINARY` — default sidecar for every
+///     network without a dedicated route (the pre-routing setup)
+///   - `COVENANT_X402_SOLANA_SIGNER_BINARY` — sidecar for `solana:*`
+///   - `COVENANT_X402_EVM_SIGNER_BINARY` — sidecar for EVM networks
+///     (`eip155:*`, `base`, `base-sepolia`, …)
 ///
-/// Forwarded to the sidecar via its env:
-/// - `COVENANT_X402_FUNDING_KEYPAIR` — funding keypair JSON path
-/// - `COVENANT_X402_RPC_URL` — Solana RPC URL
+/// Env forwarded to the sidecars (each spawns from a cleared
+/// environment):
+/// - default + Solana routes: `COVENANT_X402_FUNDING_KEYPAIR`,
+///   `COVENANT_X402_RPC_URL`
+/// - EVM route: `COVENANT_X402_EVM_KEY`, `COVENANT_X402_EVM_VALID_SECS`,
+///   `COVENANT_X402_EVM_EXTRA_ASSETS`. The raw-hex
+///   `COVENANT_X402_EVM_KEY_HEX` is deliberately not forwarded — the
+///   routed sidecar reads its key from the file `COVENANT_X402_EVM_KEY`
+///   points at, keeping key material out of the daemon's environment.
 fn x402_dispatch_config_from_env() -> Option<covenantd::x402::X402Config> {
     let enabled = std::env::var("COVENANT_X402_ENABLED")
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
@@ -843,25 +852,45 @@ fn x402_dispatch_config_from_env() -> Option<covenantd::x402::X402Config> {
     if !enabled {
         return None;
     }
-    let signer_binary = match std::env::var("COVENANT_X402_SIGNER_BINARY") {
-        Ok(path) => std::path::PathBuf::from(path),
-        Err(_) => {
-            tracing::warn!(
-                "COVENANT_X402_ENABLED is set but COVENANT_X402_SIGNER_BINARY is not; outbound x402 dispatch will remain disabled"
-            );
-            return None;
-        }
+    let binary = |key: &str| {
+        std::env::var(key)
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .map(std::path::PathBuf::from)
     };
-    let mut signer_env = Vec::new();
-    for key in ["COVENANT_X402_FUNDING_KEYPAIR", "COVENANT_X402_RPC_URL"] {
-        if let Ok(v) = std::env::var(key) {
-            signer_env.push((key.to_string(), v));
-        }
+    let forward = |keys: &[&str]| -> Vec<(String, String)> {
+        keys.iter()
+            .filter_map(|k| std::env::var(k).ok().map(|v| (k.to_string(), v)))
+            .collect()
+    };
+    let legacy = binary("COVENANT_X402_SIGNER_BINARY");
+    let solana = binary("COVENANT_X402_SOLANA_SIGNER_BINARY");
+    let evm = binary("COVENANT_X402_EVM_SIGNER_BINARY");
+    if legacy.is_none() && solana.is_none() && evm.is_none() {
+        tracing::warn!(
+            "COVENANT_X402_ENABLED is set but no signer binary is configured \
+             (COVENANT_X402_SIGNER_BINARY, COVENANT_X402_SOLANA_SIGNER_BINARY, or \
+             COVENANT_X402_EVM_SIGNER_BINARY); outbound x402 dispatch will remain disabled"
+        );
+        return None;
     }
+    let solana_env = ["COVENANT_X402_FUNDING_KEYPAIR", "COVENANT_X402_RPC_URL"];
     Some(covenantd::x402::X402Config {
         enabled: true,
-        signer_binary,
-        signer_env,
+        signer_binary: legacy.unwrap_or_default(),
+        signer_env: forward(&solana_env),
+        solana_signer: solana.map(|binary| covenantd::x402::SignerRoute {
+            binary,
+            env: forward(&solana_env),
+        }),
+        evm_signer: evm.map(|binary| covenantd::x402::SignerRoute {
+            binary,
+            env: forward(&[
+                "COVENANT_X402_EVM_KEY",
+                "COVENANT_X402_EVM_VALID_SECS",
+                "COVENANT_X402_EVM_EXTRA_ASSETS",
+            ]),
+        }),
     })
 }
 
@@ -911,8 +940,12 @@ fn escrow_config_from_env() -> Option<covenantd::escrow::EscrowConfig> {
 /// - `COVENANT_ACEDATA_X402_MAX_ATOMIC` — per-call USDC cap for x402 mode (optional; default 1 USDC)
 ///
 /// Keyless x402 mode additionally needs the x402 signer sidecar:
-/// `COVENANT_X402_ENABLED` + `COVENANT_X402_SIGNER_BINARY` +
-/// `COVENANT_X402_FUNDING_KEYPAIR` (+ `COVENANT_X402_RPC_URL`).
+/// `COVENANT_X402_ENABLED` + a signer binary
+/// (`COVENANT_X402_SIGNER_BINARY`, or per-network
+/// `COVENANT_X402_SOLANA_SIGNER_BINARY` /
+/// `COVENANT_X402_EVM_SIGNER_BINARY`) + the sidecar's own env
+/// (`COVENANT_X402_FUNDING_KEYPAIR` + `COVENANT_X402_RPC_URL`, or
+/// `COVENANT_X402_EVM_KEY`).
 fn acedata_from_env() -> Option<(
     covenant_acedata::AceDataClient,
     covenant_acedata::AceDataConfig,
@@ -961,19 +994,17 @@ fn acedata_from_env() -> Option<(
         }
         _ => match x402_dispatch_config_from_env() {
             Some(x402) => {
-                let mut signer = covenantd::x402::SubprocessSigner::new(&x402.signer_binary);
-                for (key, value) in &x402.signer_env {
-                    signer = signer.env(key, value);
-                }
                 let max_atomic = std::env::var("COVENANT_ACEDATA_X402_MAX_ATOMIC")
                     .ok()
                     .and_then(|v| v.trim().parse().ok())
                     .unwrap_or(0);
+                let x402 = std::sync::Arc::new(x402);
+                let signer = covenantd::x402::RoutingSigner::new(x402.clone());
                 let payer = covenant_acedata::X402Payer::new(std::sync::Arc::new(signer))
                     .with_max_atomic(max_atomic);
                 info!(
                     base_url = %cfg.base_url,
-                    signer = %x402.signer_binary.display(),
+                    default_signer = %x402.signer_binary.display(),
                     "acedata enabled in keyless x402 pay-per-call mode (no API key)"
                 );
                 let client =
@@ -983,8 +1014,8 @@ fn acedata_from_env() -> Option<(
             None => {
                 tracing::warn!(
                     "COVENANT_ACEDATA_ENABLED set but neither COVENANT_ACEDATA_API_KEY nor the \
-                     x402 signer (COVENANT_X402_ENABLED + COVENANT_X402_SIGNER_BINARY) is \
-                     configured; acedata disabled"
+                     x402 signer (COVENANT_X402_ENABLED + COVENANT_X402_SIGNER_BINARY or a \
+                     per-network COVENANT_X402_*_SIGNER_BINARY) is configured; acedata disabled"
                 );
                 None
             }

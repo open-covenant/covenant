@@ -6910,10 +6910,10 @@ impl Server {
 
     /// Dispatch an outbound x402 paid call on the peer's behalf.
     ///
-    /// Gated by the `x402.outbound.pay` capability. Builds a
-    /// [`x402::SubprocessSigner`] from the daemon's
-    /// [`x402::X402Config`] (the funding key never enters the daemon
-    /// process), runs the 402-then-pay loop, and records the linked
+    /// Gated by the `x402.outbound.pay` capability. Routes signing to
+    /// the per-network sidecar via [`x402::RoutingSigner`] (the
+    /// funding keys never enter the daemon process), runs the
+    /// 402-then-pay loop, and records the linked
     /// budget debit + settlement receipt + audit event on success.
     /// The receipt id surfaces back to the caller for join-keys.
     ///
@@ -7018,10 +7018,15 @@ impl Server {
             }
         };
 
-        let mut signer = x402::SubprocessSigner::new(&config.signer_binary);
-        for (k, v) in &config.signer_env {
-            signer = signer.env(k.clone(), v.clone());
+        // The signer routes per requirement at signing time; this
+        // pre-flight check surfaces an unroutable network before any
+        // HTTP leaves the daemon.
+        if let Err(e) = config.route_for(&network) {
+            return Response::Error {
+                message: format!("x402 dispatch failed: {e}"),
+            };
         }
+        let signer = x402::RoutingSigner::new(config.clone());
 
         let capability = covenant_x402::Capability {
             provider: provider.clone(),
@@ -50793,7 +50798,7 @@ required = {caps:?}
         .with_x402_dispatch(x402::X402Config {
             enabled: true,
             signer_binary: signer,
-            signer_env: vec![],
+            ..Default::default()
         })
         .with_hyre(hyre::HyreState::new(catalog, cfg));
 
@@ -72626,7 +72631,7 @@ budget_credits_per_hour = {credits}
             .with_x402_dispatch(x402::X402Config {
                 enabled: true,
                 signer_binary: std::path::PathBuf::from("/bin/true"),
-                signer_env: vec![],
+                ..Default::default()
             });
         let resp = s.op_respond(pay_x402_req()).await;
         match resp {
@@ -72770,7 +72775,7 @@ budget_credits_per_hour = {credits}
             .with_x402_dispatch(x402::X402Config {
                 enabled: true,
                 signer_binary: std::path::PathBuf::from("/bin/true"),
-                signer_env: vec![],
+                ..Default::default()
             });
         grant_action(&s, "x402.outbound.pay").await;
         let resp = s
@@ -72803,7 +72808,7 @@ budget_credits_per_hour = {credits}
             .with_x402_dispatch(x402::X402Config {
                 enabled: true,
                 signer_binary: std::path::PathBuf::from("/bin/true"),
-                signer_env: vec![],
+                ..Default::default()
             });
         grant_action(&s, "x402.outbound.pay").await;
         let resp = s
@@ -73451,7 +73456,7 @@ budget_credits_per_hour = {credits}
         let s = server_with_audit(audit.clone()).with_x402_dispatch(x402::X402Config {
             enabled: true,
             signer_binary: std::path::PathBuf::from("/bin/true"),
-            signer_env: vec![],
+            ..Default::default()
         });
         grant_scoped_action(
             &s,

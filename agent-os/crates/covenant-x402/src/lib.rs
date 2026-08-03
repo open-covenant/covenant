@@ -88,3 +88,71 @@ pub enum X402Error {
 }
 
 pub type Result<T> = std::result::Result<T, X402Error>;
+
+/// The chain family a payment `network` string belongs to.
+///
+/// The daemon uses this to route a 402 challenge to the right signer
+/// sidecar, so normalization deliberately mirrors what the signers
+/// themselves accept: any `solana:<cluster>` string is Solana (the
+/// `SolanaSigner` prefix check), and the EVM spellings this codebase
+/// meets in the wild — `eip155:<id>`, `base:<id>`, `base`,
+/// `base-mainnet`, `base-sepolia` — resolve to their chain id, so
+/// `base`, `base-mainnet`, and `eip155:8453` land in one bucket
+/// instead of splitting per spelling. Anything else is unrecognized
+/// and the caller must fail closed rather than guess a chain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetworkFamily {
+    Solana,
+    Evm(u64),
+}
+
+/// Classify a payment requirement's `network`, or `None` when no
+/// signer this crate knows about could handle it.
+pub fn network_family(network: &str) -> Option<NetworkFamily> {
+    if network.starts_with("solana:") {
+        return Some(NetworkFamily::Solana);
+    }
+    evm::chain_id_for_network(network)
+        .ok()
+        .map(NetworkFamily::Evm)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn network_family_buckets_every_alias_by_chain_not_spelling() {
+        assert_eq!(
+            network_family("solana:mainnet"),
+            Some(NetworkFamily::Solana)
+        );
+        assert_eq!(
+            network_family("solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"),
+            Some(NetworkFamily::Solana)
+        );
+        for n in ["base", "base-mainnet", "eip155:8453", "base:8453"] {
+            assert_eq!(network_family(n), Some(NetworkFamily::Evm(8453)), "{n}");
+        }
+        for n in ["base-sepolia", "eip155:84532", "base:84532"] {
+            assert_eq!(network_family(n), Some(NetworkFamily::Evm(84532)), "{n}");
+        }
+    }
+
+    #[test]
+    fn network_family_leaves_unrecognized_networks_unclassified() {
+        // "solana" without the colon is not the prefix the SolanaSigner
+        // accepts, and case is significant on both sides — a router must
+        // fail closed on these, not guess.
+        for n in [
+            "ethereum",
+            "eip155:notanumber",
+            "",
+            "solana",
+            "SOLANA:mainnet",
+            "Base",
+        ] {
+            assert_eq!(network_family(n), None, "{n:?}");
+        }
+    }
+}

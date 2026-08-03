@@ -62,6 +62,7 @@ async fn main() {
             ("COVENANT_X402_FUNDING_KEYPAIR".into(), kp),
             ("COVENANT_X402_RPC_URL".into(), rpc),
         ],
+        ..Default::default()
     });
 
     let executor = DaemonHyreExecutor::new(

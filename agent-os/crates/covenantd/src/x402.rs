@@ -23,6 +23,7 @@
 
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use reqwest::{Method, Response};
@@ -36,19 +37,76 @@ use covenant_audit::{AuditEvent, AuditKind, AuditLog};
 use covenant_budget::{BudgetError, BudgetLedger};
 use covenant_settlement::Settlement;
 use covenant_types::{AgentId, ResourceKind, SettlementReceipt};
-use covenant_x402::{Capability, Client, PaymentRequirements, Signer, X402Error};
+use covenant_x402::{
+    network_family, Capability, Client, NetworkFamily, PaymentRequirements, Signer, X402Error,
+};
 
 /// Opt-in switch for the daemon's outbound x402 surface. `enabled`
 /// defaults to `false` so a daemon with no operator opt-in never
-/// makes paid calls. When `enabled` is true, `signer_binary` must
-/// point at a runnable `covenant-x402-signer` and `signer_env`
-/// should carry the funding-key path + RPC URL the sidecar reads
-/// from its environment.
+/// makes paid calls. When `enabled` is true, `signer_binary` points
+/// at the sidecar that signs every network without a dedicated
+/// route — the pre-routing single-binary setup — and `signer_env`
+/// carries the env it is spawned with (funding-key path, RPC URL).
+/// `solana_signer` / `evm_signer` route each chain family to its own
+/// sidecar; a family with no route falls back to `signer_binary`, and
+/// a network no configured signer covers fails closed in
+/// [`X402Config::route_for`].
 #[derive(Debug, Clone, Default)]
 pub struct X402Config {
     pub enabled: bool,
     pub signer_binary: PathBuf,
     pub signer_env: Vec<(String, String)>,
+    /// Sidecar for `solana:*` requirements (`covenant-x402-signer`).
+    pub solana_signer: Option<SignerRoute>,
+    /// Sidecar for EVM requirements — `eip155:*`, `base`,
+    /// `base-sepolia` and kin (`covenant-x402-signer-evm`).
+    pub evm_signer: Option<SignerRoute>,
+}
+
+/// One signer sidecar: the binary plus the env it is spawned with.
+#[derive(Debug, Clone)]
+pub struct SignerRoute {
+    pub binary: PathBuf,
+    pub env: Vec<(String, String)>,
+}
+
+impl X402Config {
+    /// Resolve which sidecar signs a requirement on `network`.
+    ///
+    /// Routing keys off [`covenant_x402::network_family`], not the raw
+    /// string, so every spelling of one chain (`base`, `base-mainnet`,
+    /// `eip155:8453`) resolves to the same sidecar. A family route
+    /// wins; a family without one falls back to `signer_binary`, which
+    /// keeps a pre-routing single-binary config working unchanged (that
+    /// sidecar still enforces its own chain check, so a fallback can
+    /// refuse but never sign the wrong chain). An unrecognized network
+    /// fails closed the moment any route is configured; with no routes
+    /// at all it goes to `signer_binary` exactly as before routing
+    /// existed, preserving operators running a custom sidecar for a
+    /// network this code does not know.
+    pub fn route_for(&self, network: &str) -> Result<(&PathBuf, &[(String, String)]), X402Error> {
+        let family = network_family(network);
+        let routed = self.solana_signer.is_some() || self.evm_signer.is_some();
+        let route = match family {
+            Some(NetworkFamily::Solana) => self.solana_signer.as_ref(),
+            Some(NetworkFamily::Evm(_)) => self.evm_signer.as_ref(),
+            None if routed => {
+                return Err(X402Error::Sign(format!(
+                    "no x402 signer handles network {network:?}; refusing to guess a chain"
+                )))
+            }
+            None => None,
+        };
+        if let Some(r) = route {
+            return Ok((&r.binary, &r.env));
+        }
+        if self.signer_binary.as_os_str().is_empty() {
+            return Err(X402Error::Sign(format!(
+                "no x402 signer is configured for network {network:?}"
+            )));
+        }
+        Ok((&self.signer_binary, &self.signer_env))
+    }
 }
 
 /// A [`Signer`] that delegates to the standalone `covenant-x402-signer`
@@ -156,6 +214,36 @@ impl Signer for SubprocessSigner {
             SIGNER_OUTPUT_DEADLINE,
         )
         .await
+    }
+}
+
+/// A [`Signer`] that picks the sidecar per requirement at signing time.
+///
+/// The route comes from the network of the exact requirement being
+/// signed — not from surrounding call metadata — so a challenge can
+/// never reach the other chain's sidecar even if a caller mislabels
+/// the call, and a payer that talks to both chains (one budget, two
+/// funding identities) needs only this one signer value. Unroutable
+/// networks fail closed before any process is spawned.
+pub struct RoutingSigner {
+    config: Arc<X402Config>,
+}
+
+impl RoutingSigner {
+    pub fn new(config: Arc<X402Config>) -> Self {
+        Self { config }
+    }
+}
+
+#[async_trait::async_trait]
+impl Signer for RoutingSigner {
+    async fn build_payment(&self, requirements: &PaymentRequirements) -> Result<String, X402Error> {
+        let (binary, env) = self.config.route_for(&requirements.network)?;
+        let mut signer = SubprocessSigner::new(binary);
+        for (k, v) in env {
+            signer = signer.env(k.clone(), v.clone());
+        }
+        signer.build_payment(requirements).await
     }
 }
 
@@ -931,5 +1019,216 @@ mod tests {
             max,
             "an over-cap read must clamp the returned buffer to max"
         );
+    }
+
+    fn routed_config(default: &str, solana: Option<&str>, evm: Option<&str>) -> X402Config {
+        let route = |bin: &str| SignerRoute {
+            binary: bin.into(),
+            env: vec![],
+        };
+        X402Config {
+            enabled: true,
+            signer_binary: default.into(),
+            signer_env: vec![("SIGNER_KEY".into(), "legacy".into())],
+            solana_signer: solana.map(route),
+            evm_signer: evm.map(route),
+        }
+    }
+
+    #[test]
+    fn route_for_buckets_every_evm_spelling_into_the_evm_route() {
+        let config = routed_config("/legacy", Some("/solana"), Some("/evm"));
+        for network in [
+            "base",
+            "base-mainnet",
+            "base-sepolia",
+            "eip155:8453",
+            "base:84532",
+        ] {
+            let (binary, _) = config.route_for(network).expect(network);
+            assert_eq!(
+                binary,
+                &PathBuf::from("/evm"),
+                "{network} must resolve to the EVM sidecar, not split by spelling"
+            );
+        }
+        let (binary, _) = config
+            .route_for("solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp")
+            .expect("caip-2 solana");
+        assert_eq!(binary, &PathBuf::from("/solana"));
+    }
+
+    #[test]
+    fn route_for_without_routes_keeps_single_binary_semantics() {
+        // A pre-routing config sends every network — even one this code
+        // does not recognize — to the lone sidecar, which enforces its
+        // own chain check. Existing single-signer deployments keep
+        // working unchanged.
+        let config = routed_config("/legacy", None, None);
+        for network in ["solana:mainnet", "base", "custom:chain"] {
+            let (binary, env) = config.route_for(network).expect(network);
+            assert_eq!(binary, &PathBuf::from("/legacy"), "{network}");
+            assert_eq!(env, &config.signer_env[..], "{network}");
+        }
+    }
+
+    #[test]
+    fn route_for_fails_closed_on_an_unrecognized_network_once_routed() {
+        // The moment the operator opts into routing, an unclassifiable
+        // network is refused outright — even with the default sidecar
+        // still configured — instead of being handed to a signer chosen
+        // by accident.
+        let config = routed_config("/legacy", None, Some("/evm"));
+        let err = config.route_for("custom:chain").expect_err("must refuse");
+        assert!(
+            matches!(&err, X402Error::Sign(m) if m.contains("custom:chain")),
+            "the refusal must name the network: {err:?}"
+        );
+    }
+
+    #[test]
+    fn route_for_falls_back_to_the_default_for_an_unrouted_family() {
+        let config = routed_config("/legacy", None, Some("/evm"));
+        let (binary, _) = config.route_for("solana:mainnet").expect("fallback");
+        assert_eq!(binary, &PathBuf::from("/legacy"));
+    }
+
+    #[test]
+    fn route_for_fails_closed_when_no_signer_covers_the_family() {
+        let config = routed_config("", None, Some("/evm"));
+        let err = config.route_for("solana:mainnet").expect_err("no signer");
+        assert!(
+            matches!(&err, X402Error::Sign(m) if m.contains("no x402 signer is configured")),
+            "got {err:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    fn fake_sidecar(dir: &std::path::Path, name: &str, output: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join(name);
+        std::fs::write(
+            &path,
+            format!("#!/bin/sh\ncat >/dev/null\nprintf '%s' \"{output}\"\n"),
+        )
+        .expect("write fake sidecar");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod fake sidecar");
+        path
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn routing_signer_dispatches_on_the_requirement_network() {
+        // One RoutingSigner, two sidecars: the requirement's own network —
+        // not any caller-supplied label — picks the binary, and each
+        // route's env reaches its sidecar (SubprocessSigner spawns with a
+        // cleared environment, so $ROUTE_TAG can only come from the route).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let solana_bin = fake_sidecar(dir.path(), "solana-signer", "solana-header");
+        let evm_bin = fake_sidecar(dir.path(), "evm-signer", "$ROUTE_TAG");
+        let config = Arc::new(X402Config {
+            enabled: true,
+            solana_signer: Some(SignerRoute {
+                binary: solana_bin,
+                env: vec![],
+            }),
+            evm_signer: Some(SignerRoute {
+                binary: evm_bin,
+                env: vec![("ROUTE_TAG".into(), "evm-route-env".into())],
+            }),
+            ..Default::default()
+        });
+        let signer = RoutingSigner::new(config);
+
+        let mut solana_req = requirement();
+        solana_req.network = "solana:mainnet".into();
+        assert_eq!(
+            signer.build_payment(&solana_req).await.expect("solana"),
+            "solana-header"
+        );
+
+        let mut evm_req = requirement();
+        evm_req.network = "base:84532".into();
+        evm_req.asset = "0x036CbD53842c5426634e7929541eC2318f3dCF7e".into();
+        assert_eq!(
+            signer.build_payment(&evm_req).await.expect("evm"),
+            "evm-route-env"
+        );
+
+        let mut unknown = requirement();
+        unknown.network = "custom:chain".into();
+        let err = signer
+            .build_payment(&unknown)
+            .await
+            .expect_err("unroutable");
+        assert!(
+            matches!(&err, X402Error::Sign(m) if m.contains("custom:chain")),
+            "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn two_routed_chains_settle_into_one_payer_ledger() {
+        // Two sidecar identities (the Solana funding key, the EVM secp
+        // key) must not split the accounting: both calls debit the same
+        // payer's budget and each lands its own receipt + audit row keyed
+        // by its own receipt id, joined across logs the usual way.
+        let settlement = InMemorySettlement::new();
+        let audit = InMemoryAuditLog::new();
+        let budget = InMemoryLedger::new();
+        let issuer = agent(9);
+        let payer = agent(6);
+        budget.set_capacity(&payer, 100).await.unwrap();
+        let ctx = SettlementContext {
+            settlement: &settlement,
+            audit: &audit,
+            budget: &budget,
+            issuer: &issuer,
+        };
+
+        let solana_receipt = record_paid_call(&ctx, &payer, &sample_call())
+            .await
+            .expect("solana leg");
+
+        let evm_call = PaidCall {
+            provider: "zauth",
+            endpoint: "https://api.zauth.example/verify",
+            method: Method::POST,
+            capability: Capability {
+                provider: "zauth".into(),
+                network: "base:8453".into(),
+                asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".into(),
+                per_call_cap: 100_000,
+            },
+            body: None,
+            amount: "50000".into(),
+            network: "base:8453".into(),
+            asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".into(),
+            credits: 5,
+        };
+        let evm_receipt = record_paid_call(&ctx, &payer, &evm_call)
+            .await
+            .expect("evm leg");
+
+        assert_ne!(solana_receipt, evm_receipt);
+        assert_eq!(budget.tokens_remaining(&payer).await.unwrap(), 100 - 8 - 5);
+        assert_eq!(settlement.recent(10).await.unwrap().len(), 2);
+
+        let events = audit.recent(10).await.unwrap();
+        assert_eq!(events.len(), 2);
+        let settled: Vec<(String, Uuid)> = events
+            .iter()
+            .map(|e| match &e.kind {
+                AuditKind::ExternalPaymentSettled {
+                    network,
+                    receipt_id,
+                    ..
+                } => (network.clone(), *receipt_id),
+                other => panic!("unexpected audit kind: {other:?}"),
+            })
+            .collect();
+        assert!(settled.contains(&("solana:mainnet".to_string(), solana_receipt)));
+        assert!(settled.contains(&("base:8453".to_string(), evm_receipt)));
     }
 }

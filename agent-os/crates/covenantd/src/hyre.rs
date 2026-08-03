@@ -11,7 +11,7 @@
 //! batch and optional Synapse mirror with no Hyre-specific surface.
 //!
 //! The funding key never enters the daemon: signing is delegated to the
-//! `covenant-x402-signer` sidecar via [`crate::x402::SubprocessSigner`].
+//! per-network signer sidecars via [`crate::x402::RoutingSigner`].
 
 use std::sync::Arc;
 
@@ -94,10 +94,12 @@ impl PaidExecutor for DaemonHyreExecutor {
             Err(e) => return Err(format!("budget: {e}")),
         }
 
-        let mut signer = crate::x402::SubprocessSigner::new(&self.x402.signer_binary);
-        for (k, v) in &self.x402.signer_env {
-            signer = signer.env(k.clone(), v.clone());
-        }
+        // Refuse an unroutable network here, before the paid HTTP call;
+        // the signer re-resolves the route from the requirement it signs.
+        self.x402
+            .route_for(&req.network)
+            .map_err(|e| e.to_string())?;
+        let signer = crate::x402::RoutingSigner::new(self.x402.clone());
 
         let http = covenant_hyre::http_client();
         let out = covenant_hyre::execute_paid(&http, &signer, &req)
@@ -184,7 +186,7 @@ mod tests {
         X402Config {
             enabled: true,
             signer_binary: "/nonexistent-signer".into(),
-            signer_env: vec![],
+            ..Default::default()
         }
     }
 

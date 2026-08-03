@@ -371,7 +371,7 @@ pub fn extra_assets_from_env() -> Result<Vec<(u64, [u8; 20])>> {
 /// A `solana:` network — or anything unrecognised — is rejected, so an
 /// `EvmSigner` placed beside a [`crate::SolanaSigner`] can never sign the
 /// wrong chain's requirement.
-fn chain_id_for_network(network: &str) -> Result<u64> {
+pub(crate) fn chain_id_for_network(network: &str) -> Result<u64> {
     if let Some(rest) = network
         .strip_prefix("eip155:")
         .or_else(|| network.strip_prefix("base:"))

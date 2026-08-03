@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { SiteFooter } from "../SiteFooter";
 import { SiteHeader } from "../SiteHeader";
-import { GITHUB_URL } from "../_brand";
+import { GITHUB_REPO_URL } from "../_brand";
 
 const TITLE = "SDK";
 const DESCRIPTION =
@@ -69,7 +69,7 @@ export default function SdkPage() {
           <p className={eyebrow}>source &middot; reference</p>
           <p className={`${paragraph} mt-3 max-w-2xl`}>
             The SDK lives in the monorepo at{" "}
-            <a className={link} href={`${GITHUB_URL}/tree/main/packages/sdk`}>
+            <a className={link} href={`${GITHUB_REPO_URL}/tree/main/packages/sdk`}>
               packages/sdk
             </a>
             , Apache-2.0. The wire format it speaks is documented in the{" "}

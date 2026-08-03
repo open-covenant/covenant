@@ -3,7 +3,9 @@
 // repo, release status, and tagline without copy-paste drift.
 
 export const X_URL = "https://x.com/OpenCovenant";
-export const GITHUB_URL = "https://github.com/open-covenant/covenant";
+export const GITHUB_URL = "https://github.com/open-covenant";
+// Deep links (files, commits, releases) resolve against the repo, not the org.
+export const GITHUB_REPO_URL = "https://github.com/open-covenant/covenant";
 export const TELEGRAM_URL = "https://t.me/+4zEexbN94E1hOWY0";
 export const TAGLINE = "Open infrastructure for agent-native computing";
 export const RELEASE_STATUS = "ALPHA LIVE";
@@ -110,7 +112,7 @@ export const FOOTER_COLUMNS: { title: string; links: FooterColumnLink[] }[] = [
 export const SOCIAL_LINKS = [
   { label: "X", href: "https://x.com/OpenCovenant", external: true as const },
   { label: "Telegram", href: TELEGRAM_URL, external: true as const },
-  { label: "GitHub", href: "https://github.com/open-covenant/covenant", external: true as const },
+  { label: "GitHub", href: GITHUB_URL, external: true as const },
 ];
 
 export function XIcon({ className }: { className?: string }) {

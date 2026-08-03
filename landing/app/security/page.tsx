@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { SiteFooter } from "../SiteFooter";
 import { SiteHeader } from "../SiteHeader";
-import { GITHUB_URL } from "../_brand";
+import { GITHUB_REPO_URL } from "../_brand";
 
 const TITLE = "Security";
 const DESCRIPTION =
@@ -43,7 +43,7 @@ export default function SecurityPage() {
             </a>{" "}
             with a description and reproduction steps. For sensitive reports, encrypt to the PGP public key
             published in the repository at{" "}
-            <a className={link} href={`${GITHUB_URL}/blob/main/SECURITY-PGP-PUBLIC.asc`}>
+            <a className={link} href={`${GITHUB_REPO_URL}/blob/main/SECURITY-PGP-PUBLIC.asc`}>
               SECURITY-PGP-PUBLIC.asc
             </a>
             . Please give us a reasonable window to ship a fix before public disclosure. We do not pursue

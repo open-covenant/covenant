@@ -78,7 +78,7 @@ export default function ContactPage() {
                 />
                 <ChannelRow
                   label="GitHub"
-                  href="https://github.com/open-covenant/covenant"
+                  href="https://github.com/open-covenant"
                   value="open-covenant/covenant"
                   detail="Issues, pull requests, and the public roadmap."
                 />

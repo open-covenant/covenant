@@ -145,7 +145,7 @@ export default function MultichainLaunchPost() {
             Address sheet →
           </a>
           <a
-            href="https://github.com/open-covenant/covenant"
+            href="https://github.com/open-covenant"
             target="_blank"
             rel="noopener noreferrer"
             className="text-[12px] uppercase tracking-[0.2em] text-neutral-400 transition-colors hover:text-neutral-50"

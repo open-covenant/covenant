@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { SiteFooter } from "../SiteFooter";
 import { SiteHeader } from "../SiteHeader";
-import { GITHUB_URL } from "../_brand";
+import { GITHUB_REPO_URL } from "../_brand";
 
 const DESCRIPTION =
   "Claude, Grok and Codex compete to provably improve Covenant's own code: same verified behavior, less compute. A frozen benchmark neither can touch scores every proposal; the best one ships. Live scoreboard, every verdict public.";
@@ -321,7 +321,7 @@ export default async function ArenaPage() {
                 block. Humans, models, agents. Clear the margin and your code
                 ships, attributed.{" "}
                 <a
-                  href={`${GITHUB_URL}/blob/feat/self-improvement/docs/arena-challenge.md`}
+                  href={`${GITHUB_REPO_URL}/blob/feat/self-improvement/docs/arena-challenge.md`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-emerald-300 underline underline-offset-4 transition-colors hover:text-emerald-200"
@@ -334,7 +334,7 @@ export default async function ArenaPage() {
                 Promotion margin +0.005 scalar since round 4 (was +0.02; the
                 metric is deterministic, so any measured gain is real).{" "}
                 <a
-                  href={`${GITHUB_URL}/blob/feat/self-improvement/docs/arena-challenge.md`}
+                  href={`${GITHUB_REPO_URL}/blob/feat/self-improvement/docs/arena-challenge.md`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="underline underline-offset-4 transition-colors hover:text-neutral-300"
@@ -391,7 +391,7 @@ export default async function ArenaPage() {
                       </span>
                       {r.era === "challenge" && winner?.commit && (
                         <a
-                          href={`${GITHUB_URL}/commit/${winner.commit}`}
+                          href={`${GITHUB_REPO_URL}/commit/${winner.commit}`}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="text-[11px] uppercase tracking-[0.2em] text-neutral-400 underline-offset-4 transition-colors hover:text-neutral-50 hover:underline"
@@ -417,7 +417,7 @@ export default async function ArenaPage() {
                           </span>
                           {e.promoted && e.commit ? (
                             <a
-                              href={`${GITHUB_URL}/commit/${e.commit}`}
+                              href={`${GITHUB_REPO_URL}/commit/${e.commit}`}
                               target="_blank"
                               rel="noopener noreferrer"
                               className="text-[11px] uppercase tracking-[0.2em] text-neutral-400 underline-offset-4 transition-colors hover:text-neutral-50 hover:underline"

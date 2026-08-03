@@ -156,7 +156,7 @@ export default function DocsIndexPage() {
         For the design rationale, read the{" "}
         <a href="https://doi.org/10.5281/zenodo.20134416">technical paper</a>;
         the implementation lives on{" "}
-        <a href="https://github.com/open-covenant/covenant">GitHub</a>.
+        <a href="https://github.com/open-covenant">GitHub</a>.
       </p>
 
       <h2>Position in the stack</h2>

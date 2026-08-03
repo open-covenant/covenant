@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-08-03T14:15:39.063Z",
+  "updatedAt": "2026-08-03T14:35:42.926Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 13046,
+    "events": 13051,
     "tasks": 1530,
-    "integrated": 1530
+    "integrated": 1531
   },
   "throughput": {
-    "last24h": 5,
-    "last7d": 9,
-    "velocity": 1.3
+    "last24h": 6,
+    "last7d": 10,
+    "velocity": 1.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "08-03",
-      "count": 1
+      "count": 2
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "08-03",
-      "total": 1530
+      "total": 1531
     }
   ],
   "states": {
-    "integrated": 1522,
+    "integrated": 1523,
     "proposed": 1,
-    "blocked": 6,
-    "in_progress": 1
+    "blocked": 6
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "multichain-reputation-definitions-reconciliation",
-    "state": "in_progress",
-    "since": "2026-08-03T14:11:54.234Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-08-03T14:33:12.740Z",
+      "task": "multichain-reputation-definitions-reconciliation",
+      "note": "committed as 0fb18237: EscrowReputation + sap_reputation_score renames (wire frozen), audit-crate projection note, value-capture reconciliat"
+    },
     {
       "at": "2026-08-03T13:45:37.307Z",
       "task": "multichain-x402-per-chain-signer-routing",
@@ -315,11 +315,6 @@
       "at": "2026-07-18T14:46:16.718Z",
       "task": "budget-projection-preempt-pause-checkpoint",
       "note": "Pushed 0c4c692e..07156cde (feat 699e8175 + metrics 0c4c692e + fix 07156cde). Projection-attributed preempts now persist resumable checkpoint"
-    },
-    {
-      "at": "2026-07-17T23:25:45.696Z",
-      "task": "budget-projection-linear-preempt-live-coverage",
-      "note": "Slice lands as a single test-file commit. Proves live: under COVENANT_BUDGET_PROJECTION_POLICY=linear (tick 100ms, min-window 200ms, min-sam"
     }
   ]
 }

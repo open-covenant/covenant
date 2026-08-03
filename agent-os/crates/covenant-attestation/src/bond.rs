@@ -1,18 +1,20 @@
 //! The bond-receipt attestation (multichain-30).
 //!
-//! A default agent bond is chain-local USDC on Base — never `$CVNT` (you
-//! do not secure a token with itself; UMA and Polymarket post USDC).
-//! Covenant confirms a posted bond with a secp256k1 signature over an
-//! EIP-712 [`BondReceipt`] digest, so a Base verifier authenticates it
-//! with one `ecrecover` (~3k gas): no bridge, light client, or Solana
+//! A default agent bond is the chain-local settlement stablecoin — USDC on
+//! Base, USDG (Global Dollar) on Robinhood Chain — never `$CVNT` (you do
+//! not secure a token with itself; UMA and Polymarket post USDC). Covenant
+//! confirms a posted bond with a secp256k1 signature over an EIP-712
+//! [`BondReceipt`] digest, so the settlement chain's verifier authenticates
+//! it with one `ecrecover` (~3k gas): no bridge, light client, or Solana
 //! read on the verification path.
 //!
 //! Unlike the credential attestation ([`crate::eip712`]), whose domain is
 //! chain-agnostic (`salt`), a bond exists on exactly one chain with one
-//! USDC contract, so this domain binds `chainId`: a Base-Sepolia receipt
-//! must not verify against a Base-mainnet verifier. `verifyingContract`
-//! is deliberately omitted so a receipt stays valid across verifier
-//! redeploys on the same chain (the verifier is live on Base mainnet, see
+//! token contract, so this domain binds `chainId`: a Base-Sepolia receipt
+//! must not verify against a Base-mainnet verifier, nor a Base receipt
+//! against the Robinhood-Chain one. `verifyingContract` is deliberately
+//! omitted so a receipt stays valid across verifier redeploys on the same
+//! chain (verifiers are live on Base and Robinhood Chain mainnet, see
 //! `agent-os/evm/deployments.json`); an operator may bind it at deploy time.
 //!
 //! The security hinge is the ed25519 ↔ secp256k1 binding (bidirectionally
@@ -20,7 +22,9 @@
 //! the agent's Solana identity as `bytes32`, committed inside the signed
 //! struct hash. A receipt captured for one agent cannot be re-presented
 //! as another — swapping `subject` changes the digest, so `ecrecover` no
-//! longer returns Covenant's attestor.
+//! longer returns Covenant's attestor. That same `subject`=Solana-identity
+//! commitment is what lets a Robinhood-Chain bond carry the canonical
+//! Solana identity onto the settlement chain without a second registry.
 
 use covenant_identity::Secp256k1IssuerKey;
 use k256::ecdsa::{RecoveryId, Signature as EcdsaSignature, VerifyingKey};
@@ -37,36 +41,46 @@ const DOMAIN_VERSION: &str = "1";
 const EIP712_DOMAIN_TYPE: &[u8] = b"EIP712Domain(string name,string version,uint256 chainId)";
 const BOND_RECEIPT_TYPE: &[u8] = b"BondReceipt(bytes32 subject,address bondToken,uint256 bondAmount,address agentReturn,address slashBeneficiary,uint256 slashBeneficiaryBps,bytes32 nonce,uint256 issuedAt,uint256 expiry)";
 
-/// The Base chains a bond can live on, each pinned to its Circle USDC
-/// contract. Construction refuses any other bond token, closing the
-/// wrong-USDC-per-network failure mode.
+/// A chain a bond can settle on, each pinned to the stablecoin it is
+/// denominated in — Circle USDC on Base, Global Dollar (USDG) on Robinhood
+/// Chain. Both are 6-decimal EIP-3009 stablecoins; never `$CVNT` (you do
+/// not secure a token with itself). Construction refuses any other bond
+/// token, closing the wrong-token-per-network failure mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BaseNetwork {
-    Mainnet,
-    Sepolia,
+pub enum BondNetwork {
+    BaseMainnet,
+    BaseSepolia,
+    RobinhoodMainnet,
 }
 
-impl BaseNetwork {
+impl BondNetwork {
     pub fn chain_id(self) -> u64 {
         match self {
-            BaseNetwork::Mainnet => 8453,
-            BaseNetwork::Sepolia => 84_532,
+            BondNetwork::BaseMainnet => 8453,
+            BondNetwork::BaseSepolia => 84_532,
+            BondNetwork::RobinhoodMainnet => 4663,
         }
     }
 
-    /// The canonical Circle USDC contract on this chain. Pinned to its hex
-    /// form by `usdc_addresses_match_pinned_hex`.
-    pub fn usdc(self) -> [u8; 20] {
+    /// The canonical settlement stablecoin on this chain, pinned to its hex
+    /// form by `bond_tokens_match_pinned_hex`. USDC on Base, USDG on
+    /// Robinhood Chain — both 6 decimals.
+    pub fn bond_token(self) -> [u8; 20] {
         match self {
             // 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
-            BaseNetwork::Mainnet => [
+            BondNetwork::BaseMainnet => [
                 0x83, 0x35, 0x89, 0xfc, 0xd6, 0xed, 0xb6, 0xe0, 0x8f, 0x4c, 0x7c, 0x32, 0xd4, 0xf7,
                 0x1b, 0x54, 0xbd, 0xa0, 0x29, 0x13,
             ],
             // 0x036CbD53842c5426634e7929541eC2318f3dCF7e
-            BaseNetwork::Sepolia => [
+            BondNetwork::BaseSepolia => [
                 0x03, 0x6c, 0xbd, 0x53, 0x84, 0x2c, 0x54, 0x26, 0x63, 0x4e, 0x79, 0x29, 0x54, 0x1e,
                 0xc2, 0x31, 0x8f, 0x3d, 0xcf, 0x7e,
+            ],
+            // 0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168 — USDG (Global Dollar, Paxos)
+            BondNetwork::RobinhoodMainnet => [
+                0x5f, 0xc5, 0x36, 0x0d, 0x04, 0x00, 0xa0, 0xfd, 0x4f, 0x2a, 0xf5, 0x52, 0xad, 0xd0,
+                0x42, 0xd7, 0x16, 0xf1, 0xd1, 0x68,
             ],
         }
     }
@@ -99,22 +113,24 @@ pub enum BondError {
     Signature(String),
 }
 
-/// A Covenant-signed statement that an agent posted a chain-local USDC
-/// bond on Base. Every field is committed into the EIP-712 digest, so the
-/// on-chain verifier authenticates all of them with one `ecrecover`.
+/// A Covenant-signed statement that an agent posted a chain-local
+/// stablecoin bond — USDC on Base, USDG on Robinhood Chain. Every field is
+/// committed into the EIP-712 digest, so the on-chain verifier
+/// authenticates all of them with one `ecrecover`.
 ///
 /// Constructed as a literal (like [`crate::AttestationInput`]); the fields
 /// are re-checked by [`BondReceipt::validate`], which [`BondReceipt::sign`]
 /// runs before signing so an invalid literal is never signed.
 #[derive(Debug, Clone)]
 pub struct BondReceipt {
-    pub network: BaseNetwork,
+    pub network: BondNetwork,
     /// The bonded agent's Solana identity (ed25519 key / PDA) as bytes32 —
     /// the ed25519 ↔ secp256k1 binding leg.
     pub subject: [u8; 32],
-    /// The bond token; must equal `network.usdc()`.
+    /// The bond token; must equal `network.bond_token()`.
     pub bond_token: [u8; 20],
-    /// Bond size in USDC's smallest unit (6 decimals).
+    /// Bond size in the settlement token's smallest unit (USDC and USDG are
+    /// both 6 decimals).
     pub bond_amount: u128,
     /// Where the bond returns on honest exit.
     pub agent_return: [u8; 20],
@@ -133,7 +149,7 @@ impl BondReceipt {
     /// time and again inside [`SignedBondReceipt::verify`], so a receipt
     /// deserialized from the wire is re-checked before it is trusted.
     pub fn validate(&self) -> Result<(), BondError> {
-        if self.bond_token != self.network.usdc() {
+        if self.bond_token != self.network.bond_token() {
             return Err(BondError::TokenMismatch);
         }
         if self.bond_amount == 0 {
@@ -339,11 +355,11 @@ mod tests {
         Secp256k1IssuerKey::from_secret_bytes(&[9u8; 32]).unwrap()
     }
 
-    fn sample(network: BaseNetwork) -> BondReceipt {
+    fn sample(network: BondNetwork) -> BondReceipt {
         BondReceipt {
             network,
             subject: [0xAB; 32],
-            bond_token: network.usdc(),
+            bond_token: network.bond_token(),
             bond_amount: 1_000_000,
             agent_return: [0x11; 20],
             slash_beneficiary: [0x22; 20],
@@ -366,23 +382,29 @@ mod tests {
     }
 
     #[test]
-    fn usdc_addresses_match_pinned_hex() {
+    fn bond_tokens_match_pinned_hex() {
         assert_eq!(
-            hex_encode(&BaseNetwork::Mainnet.usdc()),
+            hex_encode(&BondNetwork::BaseMainnet.bond_token()),
             "833589fcd6edb6e08f4c7c32d4f71b54bda02913"
         );
         assert_eq!(
-            hex_encode(&BaseNetwork::Sepolia.usdc()),
+            hex_encode(&BondNetwork::BaseSepolia.bond_token()),
             "036cbd53842c5426634e7929541ec2318f3dcf7e"
         );
-        assert_eq!(BaseNetwork::Mainnet.chain_id(), 8453);
-        assert_eq!(BaseNetwork::Sepolia.chain_id(), 84_532);
+        // USDG (Global Dollar) on Robinhood Chain mainnet.
+        assert_eq!(
+            hex_encode(&BondNetwork::RobinhoodMainnet.bond_token()),
+            "5fc5360d0400a0fd4f2af552add042d716f1d168"
+        );
+        assert_eq!(BondNetwork::BaseMainnet.chain_id(), 8453);
+        assert_eq!(BondNetwork::BaseSepolia.chain_id(), 84_532);
+        assert_eq!(BondNetwork::RobinhoodMainnet.chain_id(), 4663);
     }
 
     #[test]
     fn sign_then_verify_round_trip() {
         let key = attestor();
-        let signed = sample(BaseNetwork::Sepolia).sign(&key).unwrap();
+        let signed = sample(BondNetwork::BaseSepolia).sign(&key).unwrap();
         assert!(signed.verify(&key.address(), 1_750_000_000).is_ok());
         assert_eq!(signed.recover_signer().unwrap(), key.address());
         assert!(matches!(signed.signature()[64], 27 | 28)); // ecrecover v
@@ -391,7 +413,7 @@ mod tests {
     #[test]
     fn expiry_is_enforced_inclusive() {
         let key = attestor();
-        let signed = sample(BaseNetwork::Sepolia).sign(&key).unwrap();
+        let signed = sample(BondNetwork::BaseSepolia).sign(&key).unwrap();
         let addr = key.address();
         // Accepted up to and including expiry; rejected one second past it.
         assert!(signed.verify(&addr, 1_800_000_000).is_ok());
@@ -407,7 +429,7 @@ mod tests {
     #[test]
     fn binding_is_bound_into_the_signature() {
         let key = attestor();
-        let signed = sample(BaseNetwork::Sepolia).sign(&key).unwrap();
+        let signed = sample(BondNetwork::BaseSepolia).sign(&key).unwrap();
         // Re-present a valid receipt as a *different* agent by swapping the
         // subject, keeping the original signature. The digest changes, so
         // ecrecover no longer returns the attestor.
@@ -421,7 +443,7 @@ mod tests {
 
     #[test]
     fn wrong_attestor_is_rejected() {
-        let signed = sample(BaseNetwork::Sepolia).sign(&attestor()).unwrap();
+        let signed = sample(BondNetwork::BaseSepolia).sign(&attestor()).unwrap();
         let other = Secp256k1IssuerKey::from_secret_bytes(&[5u8; 32]).unwrap();
         assert_eq!(
             signed.verify(&other.address(), 1_750_000_000),
@@ -432,17 +454,17 @@ mod tests {
     #[test]
     fn corrupt_signature_is_rejected() {
         let key = attestor();
-        let mut signed = sample(BaseNetwork::Sepolia).sign(&key).unwrap();
+        let mut signed = sample(BondNetwork::BaseSepolia).sign(&key).unwrap();
         signed.signature[10] ^= 0xff;
         assert!(signed.verify(&key.address(), 1_750_000_000).is_err());
     }
 
     #[test]
-    fn wrong_usdc_per_network_is_refused() {
+    fn wrong_token_per_network_is_refused() {
         let key = attestor();
-        // Mainnet USDC on a Sepolia receipt: right token, wrong chain.
-        let mut receipt = sample(BaseNetwork::Sepolia);
-        receipt.bond_token = BaseNetwork::Mainnet.usdc();
+        // Base-mainnet USDC on a Base-Sepolia receipt: right token, wrong chain.
+        let mut receipt = sample(BondNetwork::BaseSepolia);
+        receipt.bond_token = BondNetwork::BaseMainnet.bond_token();
         assert_eq!(receipt.validate(), Err(BondError::TokenMismatch));
         assert_eq!(receipt.sign(&key).unwrap_err(), BondError::TokenMismatch);
     }
@@ -450,26 +472,26 @@ mod tests {
     #[test]
     fn self_slash_routing_is_refused() {
         // Slash proceeds may not route to the bonded agent's own address.
-        let mut receipt = sample(BaseNetwork::Sepolia);
+        let mut receipt = sample(BondNetwork::BaseSepolia);
         receipt.slash_beneficiary = receipt.agent_return;
         assert_eq!(receipt.validate(), Err(BondError::SelfSlash));
 
         // Nor 100% to one party, nor 0%.
-        let mut full = sample(BaseNetwork::Sepolia);
+        let mut full = sample(BondNetwork::BaseSepolia);
         full.slash_beneficiary_bps = BPS_DENOMINATOR;
         assert_eq!(full.validate(), Err(BondError::SlashSplit));
-        let mut none = sample(BaseNetwork::Sepolia);
+        let mut none = sample(BondNetwork::BaseSepolia);
         none.slash_beneficiary_bps = 0;
         assert_eq!(none.validate(), Err(BondError::SlashSplit));
     }
 
     #[test]
     fn zero_fields_and_inverted_window_are_refused() {
-        let mut zero_subject = sample(BaseNetwork::Sepolia);
+        let mut zero_subject = sample(BondNetwork::BaseSepolia);
         zero_subject.subject = [0u8; 32];
         assert_eq!(zero_subject.validate(), Err(BondError::ZeroSubject));
 
-        let mut zero_return = sample(BaseNetwork::Sepolia);
+        let mut zero_return = sample(BondNetwork::BaseSepolia);
         zero_return.agent_return = [0u8; 20];
         // agent_return == slash_beneficiary check comes after the zero check
         // for agent_return, so this is ZeroAddress, not SelfSlash.
@@ -478,11 +500,11 @@ mod tests {
             Err(BondError::ZeroAddress("agentReturn"))
         );
 
-        let mut zero_amount = sample(BaseNetwork::Sepolia);
+        let mut zero_amount = sample(BondNetwork::BaseSepolia);
         zero_amount.bond_amount = 0;
         assert_eq!(zero_amount.validate(), Err(BondError::ZeroBondAmount));
 
-        let mut inverted = sample(BaseNetwork::Sepolia);
+        let mut inverted = sample(BondNetwork::BaseSepolia);
         inverted.expiry = inverted.issued_at;
         assert_eq!(
             inverted.validate(),
@@ -495,20 +517,26 @@ mod tests {
 
     #[test]
     fn domain_binds_chain_id() {
-        // The same logical bond on two chains produces different domain
-        // separators and digests, so a Sepolia receipt cannot verify under
-        // a mainnet verifier.
-        let sepolia = sample(BaseNetwork::Sepolia);
-        let mut mainnet = sample(BaseNetwork::Mainnet);
-        mainnet.bond_token = BaseNetwork::Mainnet.usdc();
+        // The same logical bond on different chains produces different domain
+        // separators and digests, so a receipt for one chain cannot verify
+        // under another chain's verifier.
+        let sepolia = sample(BondNetwork::BaseSepolia);
+        let mut mainnet = sample(BondNetwork::BaseMainnet);
+        mainnet.bond_token = BondNetwork::BaseMainnet.bond_token();
+        let mut robinhood = sample(BondNetwork::RobinhoodMainnet);
+        robinhood.bond_token = BondNetwork::RobinhoodMainnet.bond_token();
         assert_ne!(sepolia.domain_separator(), mainnet.domain_separator());
+        assert_ne!(sepolia.domain_separator(), robinhood.domain_separator());
+        assert_ne!(mainnet.domain_separator(), robinhood.domain_separator());
         assert_ne!(sepolia.digest(), mainnet.digest());
+        assert_ne!(sepolia.digest(), robinhood.digest());
+        assert_ne!(mainnet.digest(), robinhood.digest());
     }
 
     #[test]
     fn ecrecover_precompile_calldata_matches_local_recovery() {
         let key = attestor();
-        let signed = sample(BaseNetwork::Sepolia).sign(&key).unwrap();
+        let signed = sample(BondNetwork::BaseSepolia).sign(&key).unwrap();
         let calldata = signed.ecrecover_precompile_calldata();
 
         // Layout: digest ‖ v ‖ r ‖ s.
@@ -530,8 +558,8 @@ mod tests {
     #[test]
     fn signing_is_deterministic() {
         let key = attestor();
-        let a = sample(BaseNetwork::Sepolia).sign(&key).unwrap();
-        let b = sample(BaseNetwork::Sepolia).sign(&key).unwrap();
+        let a = sample(BondNetwork::BaseSepolia).sign(&key).unwrap();
+        let b = sample(BondNetwork::BaseSepolia).sign(&key).unwrap();
         assert_eq!(a.signature(), b.signature());
         assert_eq!(a.digest(), b.digest());
     }
@@ -565,7 +593,7 @@ mod tests {
         // a raw ecrecover, but we only ever emit low-S, so the canonical
         // verifier must refuse the non-canonical form.
         let key = attestor();
-        let mut signed = sample(BaseNetwork::Sepolia).sign(&key).unwrap();
+        let mut signed = sample(BondNetwork::BaseSepolia).sign(&key).unwrap();
         let mut s = [0u8; 32];
         s.copy_from_slice(&signed.signature[32..64]);
         signed.signature[32..64].copy_from_slice(&be_sub(&SECP256K1_N, &s));
@@ -596,15 +624,21 @@ mod tests {
 
         // A fixed receipt's digest on each chain: distinct (chain-bound) and
         // locked against an accidental change to field order or word packing.
-        let mut mainnet = sample(BaseNetwork::Mainnet);
-        mainnet.bond_token = BaseNetwork::Mainnet.usdc();
+        let mut mainnet = sample(BondNetwork::BaseMainnet);
+        mainnet.bond_token = BondNetwork::BaseMainnet.bond_token();
         assert_eq!(
-            hex_encode(&sample(BaseNetwork::Sepolia).digest()),
+            hex_encode(&sample(BondNetwork::BaseSepolia).digest()),
             "0a7473fbc69d50af1b19bc289d2b2d1f8b9c6fde83c3a39b5fc53fb87dc78abf"
         );
         assert_eq!(
             hex_encode(&mainnet.digest()),
             "170d48293404460b707729e14aedd9f59ac55737fd35a40007844cf93828e3b7"
+        );
+        let mut robinhood = sample(BondNetwork::RobinhoodMainnet);
+        robinhood.bond_token = BondNetwork::RobinhoodMainnet.bond_token();
+        assert_eq!(
+            hex_encode(&robinhood.digest()),
+            "399e55908e91ebece6739af5364ef571099e4859c11331e5795ceb1b1b67bcfa"
         );
     }
 }

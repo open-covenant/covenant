@@ -5,18 +5,22 @@ pragma solidity ^0.8.20;
 /// @notice Reference verifier for a Covenant-signed agent bond receipt. It
 ///         authenticates the receipt with a single `ecrecover` over an
 ///         EIP-712 digest — no bridge, light client, or Solana read on the
-///         path. A default agent bond is chain-local USDC (never $CVNT);
-///         Covenant confirms it off-chain and this contract checks it.
+///         path. A default agent bond is a chain-local stablecoin — USDC on
+///         Base, USDG on Robinhood Chain (never $CVNT); Covenant confirms it
+///         off-chain and this contract checks it.
 ///
-/// @dev    Deployed on Base mainnet; the live address is recorded in
-///         `agent-os/evm/deployments.json`. Wiring a USDC bond escrow on top
-///         is a separate operator decision. The Rust crate
-///         `covenant-attestation` (`bond.rs`) builds byte-identical digests;
-///         its `eip712_encoding_is_pinned` test pins the two typehashes and a
-///         domain separator below, and its `live_bond_verifier` test proves
-///         the same `(digest, v, r, s)` recovers `TRUSTED_ATTESTOR` through
-///         the `ecrecover` precompile on live Base Sepolia. Keep the type
-///         strings and field order in exact sync with `bond.rs`.
+/// @dev    Deployed on Base mainnet and Robinhood Chain (4663) with the same
+///         canonical attestor; the live addresses are recorded in
+///         `agent-os/evm/deployments.json`. Wiring a bond escrow on top is a
+///         separate operator decision. The Rust crate `covenant-attestation`
+///         (`bond.rs`) builds byte-identical digests; its
+///         `eip712_encoding_is_pinned` test pins the two typehashes and the
+///         per-chain domain separators below, its `live_bond_verifier` test
+///         proves the same `(digest, v, r, s)` recovers `TRUSTED_ATTESTOR`
+///         through the `ecrecover` precompile on live Base Sepolia, and its
+///         `live_rh_bond_verifier` test drives this deployed contract's own
+///         `view` methods on 4663. Keep the type strings and field order in
+///         exact sync with `bond.rs`.
 ///
 ///         `verify` rejects malleable signatures (high-S and v outside
 ///         {27,28}) so the accepted signature set matches `bond.rs`, and a

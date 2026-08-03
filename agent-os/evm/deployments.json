@@ -53,6 +53,21 @@
       }
     }
   },
+  "robinhoodMainnet": {
+    "network": "Robinhood Chain",
+    "chainId": 4663,
+    "deployed": "2026-08-03",
+    "issuerAddress": "0x186953d5b4A290f8f53b8377cb38EDA75D664211",
+    "bondReceiptVerifier": {
+      "address": "0x116E14bcF539C1095aa60140e74d904eb2FD4dd5",
+      "trustedAttestor": "0x186953d5b4A290f8f53b8377cb38EDA75D664211",
+      "bondToken": "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
+      "bondTokenSymbol": "USDG",
+      "deployed": "2026-08-03",
+      "tx": "0x0fe789baca3cb8175a41bbc0401d1518daca61b81274c62e65561d78185d4fe4",
+      "note": "same stateless verifier and same canonical attestor as Base — a covenantd-signed bond verifies on 4663 with no chain-local trust root. The Solidity immutable is named USDC but holds USDG (Global Dollar, Paxos, 6-dec). Digests bind chainId 4663, so a Base receipt cannot verify here and vice versa. Proven end-to-end by covenant-attestation/tests/live_rh_bond_verifier.rs: getters pin the canonical attestor + USDG, domainSeparator()/digest() equal the crate for a RobinhoodMainnet receipt (pinned 0x399e5590…67bcfa), the ecrecover precompile recovers the signer, and verify() reverts UntrustedSigner for a non-canonical signer. Replay protection remains the consuming escrow's job."
+    }
+  },
   "ethereumMainnet": {
     "network": "Ethereum",
     "chainId": 1,

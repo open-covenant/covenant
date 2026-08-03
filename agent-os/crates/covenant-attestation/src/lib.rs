@@ -34,7 +34,7 @@ use serde_json::{json, Value};
 
 use covenant_identity::Secp256k1IssuerKey;
 
-pub use bond::{BaseNetwork, BondError, BondReceipt, SignedBondReceipt, BPS_DENOMINATOR};
+pub use bond::{BondError, BondNetwork, BondReceipt, SignedBondReceipt, BPS_DENOMINATOR};
 pub use quality::{QualityAttestation, QualityError, SignedQualityAttestation};
 
 /// Named error for every way an attestation can fail to issue or verify.

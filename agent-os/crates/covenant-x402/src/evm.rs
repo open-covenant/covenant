@@ -46,9 +46,9 @@
 //! is the token `asset`. `name`/`version` are the token's EIP-712 domain
 //! values — x402 challenges carry them in `extra`, and the signer reads
 //! them there. When a challenge omits them the signer falls back only for
-//! a token whose domain it can pin with certainty (Base Sepolia USDC) and
-//! otherwise fails closed, because a wrong domain name silently yields a
-//! signature the facilitator rejects.
+//! a token whose domain it can pin with certainty (Base Sepolia USDC,
+//! Robinhood-Chain USDG) and otherwise fails closed, because a wrong domain
+//! name silently yields a signature the facilitator rejects.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -65,6 +65,10 @@ pub const USDC_BASE_MAINNET: &str = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 /// USDC on Base Sepolia (Circle's testnet deployment) — 6 decimals,
 /// EIP-3009 capable. Its EIP-712 domain name is `"USDC"`, version `"2"`.
 pub const USDC_BASE_SEPOLIA: &str = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
+/// USDG (Global Dollar, Paxos) on Robinhood Chain mainnet — 6 decimals,
+/// EIP-3009 capable. Its EIP-712 domain name is `"Global Dollar"`, version
+/// `"1"` (verified against the live token's `DOMAIN_SEPARATOR()`).
+pub const USDG_ROBINHOOD_MAINNET: &str = "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168";
 
 /// x402 envelope version this client emits, matching [`crate::SolanaSigner`].
 const X402_VERSION: u8 = 1;
@@ -250,8 +254,8 @@ fn chain_id_for_network(network: &str) -> Result<u64> {
         "base" | "base-mainnet" => Ok(8453),
         "base-sepolia" => Ok(84532),
         // Robinhood Chain (Arbitrum Orbit L2, live mainnet 2026-07): chainId
-        // 4663, testnet 46630 — not Arbitrum One's 42161. USDG rides its own
-        // EIP-712 domain in the challenge `extra`, so no fallback is pinned.
+        // 4663, testnet 46630 — not Arbitrum One's 42161. Mainnet USDG's
+        // domain is pinned in `domain_name_version`; testnet rides `extra`.
         "robinhood" | "robinhood-chain" => Ok(4663),
         "robinhood-testnet" => Ok(46630),
         _ => Err(X402Error::Sign(format!(
@@ -264,8 +268,9 @@ fn chain_id_for_network(network: &str) -> Result<u64> {
 ///
 /// Prefers the values the challenge carries in `extra`; that is the
 /// authoritative source for any token. Falls back only to a domain the
-/// signer can assert with certainty (Base Sepolia USDC). Any other token
-/// with no `extra` domain fails closed rather than guess.
+/// signer can assert with certainty (Base Sepolia USDC, Robinhood-Chain
+/// USDG). Any other token with no `extra` domain fails closed rather than
+/// guess.
 fn domain_name_version(
     requirements: &PaymentRequirements,
     verifying_contract: &[u8; 20],
@@ -277,6 +282,9 @@ fn domain_name_version(
     }
     if eq_address_hex(verifying_contract, USDC_BASE_SEPOLIA) {
         return Ok(("USDC".to_string(), "2".to_string()));
+    }
+    if eq_address_hex(verifying_contract, USDG_ROBINHOOD_MAINNET) {
+        return Ok(("Global Dollar".to_string(), "1".to_string()));
     }
     Err(X402Error::Sign(format!(
         "EvmSigner: no EIP-712 domain for asset 0x{} — set requirement.extra.name and .version",
@@ -426,6 +434,20 @@ mod tests {
                 name: Some("USDC".into()),
                 version: Some("2".into()),
             }),
+        }
+    }
+
+    // USDG on Robinhood Chain 4663, `extra` omitted so the signer must fall
+    // back to the pinned Global Dollar domain.
+    fn robinhood_usdg_req(amount: &str) -> PaymentRequirements {
+        PaymentRequirements {
+            network: "robinhood".into(),
+            asset: USDG_ROBINHOOD_MAINNET.into(),
+            amount: amount.into(),
+            amount_usdc: 0.01,
+            pay_to: "0x209693Bc6afc0C5328bA36FaF03C514EF312287C".into(),
+            scheme: "exact".into(),
+            extra: None,
         }
     }
 
@@ -718,6 +740,67 @@ mod tests {
             ..Default::default()
         });
         let err = signer.build_payment(&req).await.expect_err("half a domain");
+        assert!(matches!(err, X402Error::Sign(m) if m.contains("no EIP-712 domain")));
+    }
+
+    #[test]
+    fn usdg_domain_separator_matches_onchain_anchor() {
+        // The live USDG token's DOMAIN_SEPARATOR() on Robinhood Chain 4663,
+        // read back onchain. Pins that the fallback (name, version) the signer
+        // uses for USDG reconstructs the exact domain the token verifies
+        // against — a wrong name or version cannot match this.
+        let sep = domain_separator(
+            "Global Dollar",
+            "1",
+            4663,
+            &parse_address(USDG_ROBINHOOD_MAINNET).unwrap(),
+        );
+        let expected =
+            parse_bytes32("0x7a3d7400b27830f4f91c2c16a082486d67c1befecaec2f53b33f1f35d5b62036");
+        assert_eq!(sep, expected);
+    }
+
+    #[tokio::test]
+    async fn domain_falls_back_for_robinhood_usdg_without_extra() {
+        // No `extra`: the signer must still build for USDG on 4663 using the
+        // pinned Global Dollar domain, and the signature must recover to the
+        // payer.
+        let signer = EvmSigner::from_secret_bytes(&cow_secret()).unwrap();
+        let req = robinhood_usdg_req("10000");
+        let env = decode_envelope(
+            &signer
+                .build_envelope(&req, 1_740_672_089, [0x44; 32])
+                .unwrap(),
+        );
+        let auth = &env["payload"]["authorization"];
+        let digest = eip712_digest(
+            &domain_separator(
+                "Global Dollar",
+                "1",
+                4663,
+                &parse_address(USDG_ROBINHOOD_MAINNET).unwrap(),
+            ),
+            &transfer_struct_hash(&Authorization {
+                from: signer.address(),
+                to: parse_address(auth["to"].as_str().unwrap()).unwrap(),
+                value: 10000,
+                valid_after: auth["validAfter"].as_str().unwrap().parse().unwrap(),
+                valid_before: auth["validBefore"].as_str().unwrap().parse().unwrap(),
+                nonce: parse_bytes32(auth["nonce"].as_str().unwrap()),
+            }),
+        );
+        let sig = parse_hex(env["payload"]["signature"].as_str().unwrap());
+        assert_eq!(recover(&digest, &sig), signer.address());
+    }
+
+    #[tokio::test]
+    async fn non_usdg_asset_on_4663_fails_closed() {
+        // The pin is keyed to the exact USDG address, not to chain 4663. A
+        // different token on 4663 with no `extra` domain must not sign.
+        let signer = EvmSigner::from_secret_bytes(&cow_secret()).unwrap();
+        let mut req = robinhood_usdg_req("10000");
+        req.asset = "0x00000000000000000000000000000000DeaDBeef".into();
+        let err = signer.build_payment(&req).await.expect_err("no domain");
         assert!(matches!(err, X402Error::Sign(m) if m.contains("no EIP-712 domain")));
     }
 

@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-08-03T21:37:05.654Z",
+  "updatedAt": "2026-08-03T21:57:09.900Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 13074,
+    "events": 13078,
     "tasks": 1533,
-    "integrated": 1533
+    "integrated": 1534
   },
   "throughput": {
-    "last24h": 4,
-    "last7d": 12,
-    "velocity": 1.7
+    "last24h": 5,
+    "last7d": 13,
+    "velocity": 1.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "08-03",
-      "count": 4
+      "count": 5
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "08-03",
-      "total": 1533
+      "total": 1534
     }
   ],
   "states": {
-    "integrated": 1525,
+    "integrated": 1526,
     "proposed": 1,
-    "blocked": 6,
-    "self_review": 1
+    "blocked": 6
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "http-capabilities-purge-live-parity",
-    "state": "self_review",
-    "since": "2026-08-03T21:36:45.173Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-08-03T21:44:14.479Z",
+      "task": "http-capabilities-purge-live-parity",
+      "note": "Pushed as e72e26ff (with 0a6ce13c sibling fmt fix and 257d992f overseer-required metrics refresh) to origin/loop/main-track; epic http-capab"
+    },
     {
       "at": "2026-08-03T21:07:47.624Z",
       "task": "http-audit-purge-delegated-denial-live",
@@ -315,11 +315,6 @@
       "at": "2026-07-19T01:47:23.715Z",
       "task": "store-append-fsync-durability",
       "note": "Committed 4b534671 (feat: fsync jsonl data appends across the store crates) and pushed 1cf4f944..4b534671 to origin/loop/main-track. 8 files"
-    },
-    {
-      "at": "2026-07-18T22:04:16.617Z",
-      "task": "projection-preempt-persist-before-kill",
-      "note": "Pushed commit c6cd98de to origin/loop/main-track (731d08eb..c6cd98de). All gates green: build, fmt, focused tests incl. new discriminating p"
     }
   ]
 }

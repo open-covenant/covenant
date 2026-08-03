@@ -19,6 +19,12 @@
 //! ratio: 1.0 over four actions is not 1.0 over ten thousand. Whether a history
 //! is deep enough to attest is a policy the caller applies (a minimum-activity
 //! threshold), not a fudge baked into the number.
+//!
+//! Of Covenant's three reputation surfaces, this compliance score is the one
+//! projected to EVM (the EAS `reputation-attest.v1` attestation, built by
+//! `covenant-evm-signer`). The daemon's escrow standing (basis points) and the
+//! SAP-native peer score the sap-bridge proxies are separate numbers on
+//! separate scales; `docs/multichain-value-capture.md` reconciles the three.
 
 use crate::{AuditEvent, AuditKind};
 

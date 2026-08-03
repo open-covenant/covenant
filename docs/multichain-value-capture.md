@@ -44,6 +44,28 @@ requires. New cross-chain crates must be added to the guard's root list to be
 covered. The strongest guarantee remains that you cannot denominate or bridge
 `$CVNT` without naming the mint the guard watches for.
 
+## Three reputation surfaces
+
+Three different numbers answer "reputation" in this codebase, from three
+different sources, measuring three different things. They are deliberately
+named apart so no consumer can mistake one for another, and
+[`validate-reputation-score-distinction.mjs`](../agent-os/scripts/validate-reputation-score-distinction.mjs)
+fails the build if the names or this table drift:
+
+| Surface | Where | Scale | Provenance | Audience |
+| --- | --- | --- | --- | --- |
+| Compliance score | `AuditReputation` (`covenant-audit/src/reputation.rs`) | 4-decimal fixed point (`SCORE_DECIMALS = 4`; `9500` = 0.95), `None` on a blank history | Recomputed from the agent's own tamper-evident audit chain: compliant actions over scored actions | Attestation consumers. **The only score projected to EVM** — it becomes the EAS `reputation-attest.v1` attestation on Base, built by `covenant-evm-signer` |
+| Escrow standing | `EscrowReputation` (`covenantd/src/reputation.rs`) | Basis points (`completion_rate_bps`, 0..=10000), zero when the worker has no proofs | Escrow completion-proof and release rows in the audit chain, pinned to the chain root they were computed over | Marketplaces combining a worker's standing with earnings, over IPC (`GetReputation`). Solana/IPC-local; never projected to another chain |
+| SAP peer score | `sap_reputation_score`, wire name `reputationScore` (`covenant-sap-bridge`) | Upstream-defined `u32`; SAP does not document the scale and Covenant does not assume one | Decoded from SAP's on-chain agent accounts by the bridge worker; nothing on the Covenant side audits how it was produced | Peer discovery display only. Must never feed a trust decision |
+
+The first two are numerically treacherous precisely because their encodings
+coincide: both express a 0..1 ratio in units of 1/10&#8308; (`6667` decodes to
+`0.6667` under either reading), so swapping a compliance fraction for a
+completion rate corrupts a trust decision with no numeric tell at all. The
+distinct type names, not the scales, carry the distinction. The third has no
+defined relationship to either; the bridge therefore carries the SAP score
+under its own name and treats it as opaque metadata.
+
 ## How `$CVNT` captures value
 
 Value accrues on Solana from cross-chain usage, without the token leaving it.

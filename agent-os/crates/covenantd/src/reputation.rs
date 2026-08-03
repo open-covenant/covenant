@@ -11,15 +11,26 @@
 //!
 //! Read-only: this never writes. Disputes are not yet a primitive (no dispute
 //! row exists to count), so they are out of this first cut.
+//!
+//! This escrow standing is one of three distinct reputation surfaces and is
+//! deliberately named apart from the other two: `covenant-audit`'s
+//! `AuditReputation` (the 4-decimal compliance score, the only one projected
+//! to EVM) and the SAP-native `reputationScore` the sap-bridge proxies
+//! (upstream-defined scale). The three never mix; see
+//! `docs/multichain-value-capture.md` for the reconciliation table.
 
 use std::collections::HashSet;
 
 use covenant_audit::{AuditError, AuditKind, AuditLog};
 use serde::{Deserialize, Serialize};
 
-/// A worker's audit-derived standing at a point in the chain.
+/// A worker's escrow-derived standing at a point in the chain: completion
+/// proofs, validation outcomes, and releases, with the rate in basis points.
+/// Not the audit-chain compliance score (`covenant_audit::reputation`) and
+/// not the SAP peer score — this one is Solana/IPC-local and is never
+/// projected to another chain.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Reputation {
+pub struct EscrowReputation {
     pub worker_pubkey: String,
     /// `escrow_completion_proven` rows naming this worker.
     pub proofs_total: u64,
@@ -41,7 +52,7 @@ pub struct Reputation {
 pub async fn compute_reputation(
     audit: &dyn AuditLog,
     worker_pubkey: &str,
-) -> Result<Reputation, AuditError> {
+) -> Result<EscrowReputation, AuditError> {
     let events = audit.recent(usize::MAX).await?;
 
     let mut proof_ids: HashSet<uuid::Uuid> = HashSet::new();
@@ -85,7 +96,7 @@ pub async fn compute_reputation(
 
     let report = audit.verify_integrity().await?;
 
-    Ok(Reputation {
+    Ok(EscrowReputation {
         worker_pubkey: worker_pubkey.to_string(),
         proofs_total,
         validations_passed,
@@ -179,6 +190,37 @@ mod tests {
         assert_eq!(rep.releases, 2, "only releases against alice's proofs");
         assert_eq!(rep.completion_rate_bps, 6666, "2/3 in bps");
         assert!(!rep.computed_audit_root_hex.is_empty());
+    }
+
+    #[test]
+    fn escrow_reputation_wire_shape_is_frozen() {
+        // The Rust type was renamed to disambiguate it from the other
+        // reputation surfaces; the serialized shape predates the rename
+        // and must not move with it.
+        let rep = EscrowReputation {
+            worker_pubkey: "w".into(),
+            proofs_total: 3,
+            validations_passed: 2,
+            validations_failed: 1,
+            releases: 2,
+            completion_rate_bps: 6666,
+            computed_audit_root_hex: "root".into(),
+        };
+        let value = serde_json::to_value(&rep).unwrap();
+        let mut keys: Vec<_> = value.as_object().unwrap().keys().cloned().collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            [
+                "completion_rate_bps",
+                "computed_audit_root_hex",
+                "proofs_total",
+                "releases",
+                "validations_failed",
+                "validations_passed",
+                "worker_pubkey",
+            ]
+        );
     }
 
     #[tokio::test]

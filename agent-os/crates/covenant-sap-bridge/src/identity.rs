@@ -74,7 +74,11 @@ pub struct AgentDetail {
     pub agent_uri: Option<String>,
     pub x402_endpoint: Option<String>,
     pub is_active: bool,
-    pub reputation_score: Option<u32>,
+    /// SAP's own on-chain score for this agent; upstream-defined scale,
+    /// unaudited by Covenant. Discovery metadata only — see
+    /// [`crate::discovery::PeerRecord::sap_reputation_score`].
+    #[serde(rename = "reputationScore")]
+    pub sap_reputation_score: Option<u32>,
 }
 
 impl SapBridge {
@@ -227,7 +231,7 @@ mod tests {
             agent_uri: None,
             x402_endpoint: None,
             is_active: true,
-            reputation_score: None,
+            sap_reputation_score: None,
         }
     }
 

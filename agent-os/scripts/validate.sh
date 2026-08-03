@@ -88,6 +88,7 @@ run_local ./scripts/validate-sdk-compatibility.mjs
 run node ./scripts/validate-crate-groups-coverage.mjs
 run node ./scripts/validate-cvnt-solana-quarantine.mjs
 run node ./scripts/validate-reputation-staging.mjs
+run node ./scripts/validate-reputation-score-distinction.mjs
 run node ./scripts/validate-agentcard-conformance.mjs
 run node ./scripts/validate-gvisor-required-check-deferral.mjs
 run node ./scripts/validate-gvisor-live-test-target.mjs

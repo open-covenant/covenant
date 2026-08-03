@@ -15,7 +15,13 @@ pub struct PeerRecord {
     pub agent_pda: String,
     pub display: String,
     pub protocols: Vec<String>,
-    pub reputation_score: Option<u32>,
+    /// SAP's own on-chain peer score, decoded by the worker. The scale is
+    /// defined upstream by SAP, not by Covenant, and nothing here audits how
+    /// it was produced — treat it as discovery metadata, never as an input to
+    /// a trust decision. Distinct from `covenant-audit`'s compliance score
+    /// and covenantd's escrow standing.
+    #[serde(rename = "reputationScore")]
+    pub sap_reputation_score: Option<u32>,
 }
 
 #[derive(Serialize)]

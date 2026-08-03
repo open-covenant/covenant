@@ -129,7 +129,7 @@ async fn find_by_protocol_maps_peer_list() {
     let peers = bridge.find_agents_by_protocol("a2a").await.expect("peers");
     assert_eq!(peers.len(), 1);
     assert_eq!(peers[0].agent_pda, "A1");
-    assert_eq!(peers[0].reputation_score, Some(42));
+    assert_eq!(peers[0].sap_reputation_score, Some(42));
 }
 
 #[tokio::test]

@@ -9,6 +9,9 @@
 //! - `clawville.bounty.scope`   — issue a worker a scoped [`BountyGrant`]
 //! - `clawville.bounty.verify`  — grant + criteria + submission → [`Verdict`]
 //! - `clawville.bounty.release` — verdict → [`ReleaseDecision`] (PayAI)
+//! - `clawville.land.grant`     — scope an agent to one parcel's actions
+//! - `clawville.land.authorize` — allow / refuse / needs_owner, before the
+//!   action runs
 //!
 //! [`clawville_specs`] lists enabled tools for `tools/list`;
 //! [`clawville_tool`] resolves one by name for dispatch. Both honour
@@ -25,6 +28,7 @@ use crate::bounty::{
     verify, AcceptanceCriteria, BountyGrant, BountyOpened, ReleaseDecision, Submission, Verdict,
 };
 use crate::config::ClawvilleConfig;
+use crate::land::{authorize, LandAction, LandGrant, LandPolicy};
 
 pub const TOOL_PREFIX: &str = "clawville.";
 
@@ -33,6 +37,8 @@ const SLUGS: &[&str] = &[
     "bounty.scope",
     "bounty.verify",
     "bounty.release",
+    "land.grant",
+    "land.authorize",
 ];
 
 fn static_slug(slug: &str) -> Option<&'static str> {
@@ -45,12 +51,44 @@ fn description(slug: &str) -> &'static str {
         "bounty.scope" => "Issue a worker agent a capability grant scoped to one bounty (the actions it may exercise).",
         "bounty.verify" => "Verify a worker's submission against the criteria and its hash-chained action-log evidence; returns a pass/fail verdict.",
         "bounty.release" => "Turn a verdict into a PayAI release decision (release_payment on pass, refund_buyer on fail). Names the instruction and signer role; never moves funds.",
+        "land.grant" => "Issue an agent a capability grant over one land parcel: the actions it may run there, and when the grant lapses.",
+        "land.authorize" => "Decide whether a land action may run before it runs: allow, refuse, or needs_owner, with the reason and each gate reported. Owner-reserved actions cannot be granted, so a wildcard grant still cannot reach them.",
         _ => "ClawVille bounty tool.",
     }
 }
 
 fn input_schema(slug: &str) -> Value {
     match slug {
+        "land.grant" => json!({
+            "type": "object",
+            "properties": {
+                "parcel": { "type": "string", "description": "Land / building id" },
+                "actor": { "type": "string", "description": "Agent pubkey the grant is for (base58)" },
+                "allowedActions": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Action labels (shop.restock), namespace wildcards (shop.*), or * for the parcel. Owner-reserved actions are never included."
+                },
+                "expiresAtMs": { "type": "integer", "description": "Unix ms after which the grant lapses. Omit for no expiry." }
+            },
+            "required": ["parcel", "actor", "allowedActions"],
+            "additionalProperties": false
+        }),
+        "land.authorize" => json!({
+            "type": "object",
+            "properties": {
+                "action": { "type": "object", "description": "LandAction: { parcel, actor, action, paramsHash }" },
+                "grant": { "type": "object", "description": "The LandGrant to judge it against" },
+                "ownerReserved": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Extra actions reserved to the owner, on top of the defaults. Reserved actions can only be added, never removed."
+                },
+                "nowMs": { "type": "integer", "description": "Decision time in unix ms, for the grant's expiry." }
+            },
+            "required": ["action", "grant", "nowMs"],
+            "additionalProperties": false
+        }),
         "bounty.open" => json!({
             "type": "object",
             "properties": {
@@ -122,18 +160,18 @@ pub fn clawville_tool(config: &ClawvilleConfig, name: &str) -> Option<Arc<dyn To
         return None;
     }
     let slug = static_slug(slug)?;
-    Some(Arc::new(BountyTool {
+    Some(Arc::new(ClawvilleTool {
         slug,
         name: format!("{TOOL_PREFIX}{slug}"),
     }) as Arc<dyn Tool>)
 }
 
-struct BountyTool {
+struct ClawvilleTool {
     slug: &'static str,
     name: String,
 }
 
-impl BountyTool {
+impl ClawvilleTool {
     fn run(&self, args: Value) -> Result<Value, ToolError> {
         let bad = |e: String| ToolError::InvalidArguments(e);
         match self.slug {
@@ -172,13 +210,42 @@ impl BountyTool {
                 let verdict: Verdict = field(&args, "verdict")?;
                 Ok(to_value(&ReleaseDecision::from_verdict(&verdict)))
             }
+            "land.grant" => {
+                let actions: Vec<String> = field(&args, "allowedActions")?;
+                let expires = args.get("expiresAtMs").and_then(Value::as_u64);
+                let grant = LandGrant::new(
+                    str_arg(&args, "parcel")?,
+                    str_arg(&args, "actor")?,
+                    actions,
+                    expires,
+                )
+                .map_err(bad)?;
+                Ok(to_value(&grant))
+            }
+            "land.authorize" => {
+                let action: LandAction = field(&args, "action")?;
+                let grant: LandGrant = field(&args, "grant")?;
+                // Extra reservations only widen what the owner keeps; the
+                // caller cannot shorten the default list.
+                let extra: Vec<String> = args
+                    .get("ownerReserved")
+                    .map(|v| serde_json::from_value(v.clone()))
+                    .transpose()
+                    .map_err(|e| ToolError::InvalidArguments(format!("ownerReserved: {e}")))?
+                    .unwrap_or_default();
+                let policy = LandPolicy::conservative().reserving(extra);
+                let now_ms = args.get("nowMs").and_then(Value::as_u64).ok_or_else(|| {
+                    ToolError::InvalidArguments("missing integer \"nowMs\"".into())
+                })?;
+                Ok(to_value(&authorize(&action, &grant, &policy, now_ms)))
+            }
             other => Err(ToolError::NotFound(format!("{TOOL_PREFIX}{other}"))),
         }
     }
 }
 
 #[async_trait]
-impl Tool for BountyTool {
+impl Tool for ClawvilleTool {
     fn name(&self) -> &str {
         &self.name
     }
@@ -233,10 +300,78 @@ mod tests {
     const WORKER: &str = "9sFJ95mZsBTGqTEBkcbmsx2V8RQiZ5iQACCLPLE61aWH";
     const POSTER: &str = "96GsGo69kVfPZffudCexfnsSi5EuhAyd278MuJPwzGdu";
 
+    #[tokio::test]
+    async fn land_grant_then_authorize_allows_what_was_granted() {
+        let cfg = enabled();
+        let grant_tool = clawville_tool(&cfg, "clawville.land.grant").unwrap();
+        let out = grant_tool
+            .call(json!({
+                "parcel": "parcel-42",
+                "actor": "Ep7dD7biX7rZ6NSVzy8uEpgEEYipVfQ8ofwHzZmRM8dF",
+                "allowedActions": ["shop.*"],
+                "expiresAtMs": 2000
+            }))
+            .await
+            .unwrap();
+        let grant = match &out.content[0] {
+            Content::Json { value } => value.clone(),
+            _ => panic!("expected json content"),
+        };
+
+        let auth = clawville_tool(&cfg, "clawville.land.authorize").unwrap();
+        let out = auth
+            .call(json!({
+                "action": {
+                    "parcel": "parcel-42",
+                    "actor": "Ep7dD7biX7rZ6NSVzy8uEpgEEYipVfQ8ofwHzZmRM8dF",
+                    "action": "shop.restock",
+                    "paramsHash": "a".repeat(64)
+                },
+                "grant": grant,
+                "nowMs": 1000
+            }))
+            .await
+            .unwrap();
+        match &out.content[0] {
+            Content::Json { value } => assert_eq!(value["decision"], json!("allow")),
+            _ => panic!("expected json content"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_caller_cannot_shorten_the_owner_reserved_list() {
+        let cfg = enabled();
+        let auth = clawville_tool(&cfg, "clawville.land.authorize").unwrap();
+        let out = auth
+            .call(json!({
+                "action": {
+                    "parcel": "parcel-42",
+                    "actor": "Ep7dD7biX7rZ6NSVzy8uEpgEEYipVfQ8ofwHzZmRM8dF",
+                    "action": "land.transfer",
+                    "paramsHash": "a".repeat(64)
+                },
+                "grant": {
+                    "parcel": "parcel-42",
+                    "actor": "Ep7dD7biX7rZ6NSVzy8uEpgEEYipVfQ8ofwHzZmRM8dF",
+                    "allowedActions": ["*"],
+                    "expiresAtMs": null
+                },
+                // Supplying an empty list must not clear the defaults.
+                "ownerReserved": [],
+                "nowMs": 1000
+            }))
+            .await
+            .unwrap();
+        match &out.content[0] {
+            Content::Json { value } => assert_eq!(value["decision"], json!("needs_owner")),
+            _ => panic!("expected json content"),
+        }
+    }
+
     #[test]
-    fn disabled_lists_nothing_enabled_lists_four() {
+    fn disabled_lists_nothing_enabled_lists_every_tool() {
         assert!(clawville_specs(&ClawvilleConfig::default()).is_empty());
-        assert_eq!(clawville_specs(&enabled()).len(), 4);
+        assert_eq!(clawville_specs(&enabled()).len(), SLUGS.len());
     }
 
     #[test]

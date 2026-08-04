@@ -120,6 +120,8 @@ async fn live_covenantd_clawville_bounty_flow_round_trips() {
                     "clawville.bounty.scope",
                     "clawville.bounty.verify",
                     "clawville.bounty.release",
+                    "clawville.land.grant",
+                    "clawville.land.authorize",
                 ] {
                     assert!(names.contains(&want), "{want} must be advertised, got {names:?}");
                 }
@@ -152,6 +154,8 @@ async fn live_covenantd_clawville_bounty_flow_round_trips() {
         "tool.call.clawville.bounty.scope",
         "tool.call.clawville.bounty.verify",
         "tool.call.clawville.bounty.release",
+        "tool.call.clawville.land.grant",
+        "tool.call.clawville.land.authorize",
     ] {
         grant(&mut s, action).await;
     }
@@ -204,6 +208,57 @@ async fn live_covenantd_clawville_bounty_flow_round_trips() {
     assert_eq!(decision["decision"], "release");
     assert_eq!(decision["instruction"], "release_payment");
     assert_eq!(decision["signerRole"], "buyer");
+
+    // The land guard, over the same connection: grant one namespace, then
+    // check that the grant opens what it names and nothing else.
+    let land_grant = call(
+        &mut s,
+        "clawville.land.grant",
+        json!({
+            "parcel": "parcel-42",
+            "actor": WORKER,
+            "allowedActions": ["shop.*"],
+            "expiresAtMs": 2_000
+        }),
+    )
+    .await;
+
+    let params_hash = "a".repeat(64);
+    let land_action = |action: &str| {
+        json!({
+            "parcel": "parcel-42",
+            "actor": WORKER,
+            "action": action,
+            "paramsHash": params_hash
+        })
+    };
+    let authorize = |action: &str| {
+        json!({ "action": land_action(action), "grant": land_grant, "nowMs": 1_000 })
+    };
+
+    let allowed = call(&mut s, "clawville.land.authorize", authorize("shop.restock")).await;
+    assert_eq!(allowed["decision"], "allow");
+
+    let refused = call(&mut s, "clawville.land.authorize", authorize("door.open")).await;
+    assert_eq!(refused["decision"], "refuse");
+    assert!(refused["reason"].as_str().unwrap().contains("not in the grant"));
+
+    // Reserved beats granted: the same call with a parcel-wide grant still
+    // cannot transfer the land.
+    let wide = call(
+        &mut s,
+        "clawville.land.grant",
+        json!({ "parcel": "parcel-42", "actor": WORKER, "allowedActions": ["*"] }),
+    )
+    .await;
+    let reserved = call(
+        &mut s,
+        "clawville.land.authorize",
+        json!({ "action": land_action("land.transfer"), "grant": wide, "nowMs": 1_000 }),
+    )
+    .await;
+    assert_eq!(reserved["decision"], "needs_owner");
+    assert_eq!(reserved["inGrant"], true, "the grant covers it; the policy is what stops it");
 
     let _ = child.kill().await;
 }

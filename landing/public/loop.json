@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-08-04T20:41:39.582Z",
+  "updatedAt": "2026-08-04T21:01:43.606Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 13112,
+    "events": 13114,
     "tasks": 1537,
-    "integrated": 1537
+    "integrated": 1538
   },
   "throughput": {
-    "last24h": 5,
-    "last7d": 12,
-    "velocity": 1.7
+    "last24h": 6,
+    "last7d": 13,
+    "velocity": 1.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "08-04",
-      "count": 0
+      "count": 1
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "08-04",
-      "total": 1537
+      "total": 1538
     }
   ],
   "states": {
-    "integrated": 1529,
+    "integrated": 1530,
     "proposed": 1,
-    "blocked": 6,
-    "validation": 1
+    "blocked": 6
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "capability-usage-budget-final-unit-race-live",
-    "state": "validation",
-    "since": "2026-08-04T20:35:07.810Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-08-04T20:44:58.056Z",
+      "task": "capability-usage-budget-final-unit-race-live",
+      "note": "Shipped as e5f0a7c8, pushed 212df07b..e5f0a7c8 to origin/loop/main-track. Live test green on independent re-run, clippy/fmt/scripts gates cl"
+    },
     {
       "at": "2026-08-03T23:47:20.744Z",
       "task": "http-audit-inclusion-delegated-denial-live",
@@ -315,11 +315,6 @@
       "at": "2026-07-19T23:23:53.930Z",
       "task": "homebrew-formula-style-ci-coverage",
       "note": "Committing formula fix + packaging.yml homebrew job to loop/main-track."
-    },
-    {
-      "at": "2026-07-19T22:35:19.070Z",
-      "task": "distribution-readiness-debian-rpm-evidence",
-      "note": "INTEGRATED LOCALLY ONLY: target files (docs/internal/distribution-readiness.md, agent-os/scripts/distribution-readiness.mjs + validate-distr"
     }
   ]
 }

@@ -265,6 +265,22 @@ pub enum SignerRequest {
         #[serde(default)]
         registration_uri: Option<String>,
     },
+    /// Repoint an existing identity asset's AgentIdentity URI at a fetchable
+    /// registration document.
+    ///
+    /// An identity minted without a `registration_uri` carries the
+    /// `covenant://agent/<pubkey>` fallback, which names the agent but
+    /// resolves to nothing. This moves it to a document a reader can actually
+    /// fetch. The asset is not re-minted and its identity binding is
+    /// untouched; only the URI changes, and only the update authority can do
+    /// it.
+    SetIdentityUri {
+        /// The Core asset holding the AgentIdentity plugin.
+        asset: String,
+        /// The document to point at. Must be fetchable, so the
+        /// `covenant://` fallback is rejected here by design.
+        registration_uri: String,
+    },
 }
 
 /// The signer's reply. JSON on stdout.
@@ -415,6 +431,29 @@ mod tests {
         assert_eq!(wire["action"], "register-identity");
         let back: SignerRequest = serde_json::from_value(wire).unwrap();
         assert_eq!(back, req);
+    }
+
+    #[test]
+    fn set_identity_uri_round_trips_tagged() {
+        let req = SignerRequest::SetIdentityUri {
+            asset: "FSGE2rZ1cBsUSiGz8Y8d5miifC4rNKRbmuSGrocWpx1H".into(),
+            registration_uri: "https://opencovenant.org/api/agents/x/verify".into(),
+        };
+        let wire = serde_json::to_value(&req).unwrap();
+        assert_eq!(wire["action"], "set-identity-uri");
+        assert_eq!(
+            wire["registration_uri"],
+            "https://opencovenant.org/api/agents/x/verify"
+        );
+
+        let back: SignerRequest = serde_json::from_value(wire).unwrap();
+        assert_eq!(back, req);
+    }
+
+    #[test]
+    fn the_non_fetchable_fallback_is_not_a_valid_target() {
+        // The whole point of the action is to move off this form.
+        assert!(validate_registration_uri("covenant://agent/Ep7dD7bi").is_err());
     }
 
     #[test]

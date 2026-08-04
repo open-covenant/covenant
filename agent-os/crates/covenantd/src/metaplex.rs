@@ -158,6 +158,7 @@ fn action_label(request: &SignerRequest) -> &'static str {
     match request {
         SignerRequest::AttestAuditRoot { .. } => "attest.audit_root",
         SignerRequest::RegisterIdentity { .. } => "identity.register",
+        SignerRequest::SetIdentityUri { .. } => "identity.set_uri",
     }
 }
 

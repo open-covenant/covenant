@@ -16,6 +16,10 @@
 //!   (register_identity_v1), which CPIs into MPL Core to anchor the
 //!   tamper-evident PDA<->asset binding. This puts the agent in
 //!   Metaplex's on-chain agent registry.
+//! - set-identity-uri: repoint an existing identity's AgentIdentity URI at
+//!   a fetchable registration document. An identity minted without one
+//!   carries the `covenant://agent/<pubkey>` fallback, which names the
+//!   agent but resolves to nothing.
 //!
 //! Protocol:
 //! - stdin:  one JSON `SignerRequest`.
@@ -40,10 +44,13 @@ use covenant_metaplex::config::{
 };
 use covenant_metaplex::{SignerRequest, SignerResponse};
 use mpl_agent_identity::instructions::RegisterIdentityV1Builder;
-use mpl_core::instructions::{CreateV2Builder, WriteExternalPluginAdapterDataV1Builder};
+use mpl_core::instructions::{
+    CreateV2Builder, UpdateExternalPluginAdapterV1Builder, WriteExternalPluginAdapterDataV1Builder,
+};
 use mpl_core::types::{
-    AppDataInitInfo, DataState, ExternalPluginAdapterInitInfo, ExternalPluginAdapterKey,
-    ExternalPluginAdapterSchema, PluginAuthority,
+    AgentIdentityUpdateInfo, AppDataInitInfo, DataState, ExternalPluginAdapterInitInfo,
+    ExternalPluginAdapterKey, ExternalPluginAdapterSchema, ExternalPluginAdapterUpdateInfo,
+    PluginAuthority,
 };
 use solana_program::instruction::Instruction;
 use solana_program::pubkey::Pubkey;
@@ -167,7 +174,7 @@ async fn run() -> Result<SignerResponse> {
     let tx = Transaction::new_signed_with_payer(
         &built.instructions,
         Some(&payer.pubkey()),
-        &[&payer, &built.asset],
+        &built.asset.signers(&payer),
         recent,
     );
 
@@ -184,12 +191,37 @@ async fn run() -> Result<SignerResponse> {
     })
 }
 
-/// A ready-to-sign transaction: the instructions, the fresh asset keypair
-/// that must co-sign the create, and the estimated lamport cost.
+/// A ready-to-sign transaction: the instructions, the asset it lands on, and
+/// the estimated lamport cost.
 struct BuiltTx {
     instructions: Vec<Instruction>,
-    asset: Keypair,
+    asset: AssetRef,
     est_lamports: u64,
+}
+
+/// Creating an asset mints a fresh keypair that must co-sign; updating one
+/// targets an asset that already exists and signs nothing, because the
+/// authority to change it is the payer's.
+enum AssetRef {
+    Fresh(Box<Keypair>),
+    Existing(Pubkey),
+}
+
+impl AssetRef {
+    fn pubkey(&self) -> Pubkey {
+        match self {
+            Self::Fresh(kp) => kp.pubkey(),
+            Self::Existing(pk) => *pk,
+        }
+    }
+
+    /// Signers for the transaction, payer first.
+    fn signers<'a>(&'a self, payer: &'a Keypair) -> Vec<&'a Keypair> {
+        match self {
+            Self::Fresh(kp) => vec![payer, kp],
+            Self::Existing(_) => vec![payer],
+        }
+    }
 }
 
 fn build(request: &SignerRequest, payer: &Keypair) -> Result<BuiltTx> {
@@ -279,7 +311,7 @@ fn build(request: &SignerRequest, payer: &Keypair) -> Result<BuiltTx> {
                 + LAMPORTS_PER_DATA_BYTE * data.len() as u64;
             Ok(BuiltTx {
                 instructions: vec![create_ix, write_ix],
-                asset,
+                asset: AssetRef::Fresh(Box::new(asset)),
                 est_lamports: est,
             })
         }
@@ -337,7 +369,43 @@ fn build(request: &SignerRequest, payer: &Keypair) -> Result<BuiltTx> {
                 + LAMPORTS_PER_DATA_BYTE * uri.len() as u64;
             Ok(BuiltTx {
                 instructions: vec![create_ix, register_ix],
-                asset,
+                asset: AssetRef::Fresh(Box::new(asset)),
+                est_lamports: est,
+            })
+        }
+        SignerRequest::SetIdentityUri {
+            asset,
+            registration_uri,
+        } => {
+            let asset = parse_pubkey(asset).context("asset")?;
+            // Rejects the covenant:// fallback along with everything else that
+            // isn't fetchable, which is the point of the action.
+            covenant_metaplex::validate_registration_uri(registration_uri)
+                .map_err(|e| anyhow!("{e}"))?;
+            let collection = collection_from_env()?;
+            // Core requires the collection account on every instruction
+            // touching an asset that lives in one, or it fails with
+            // MissingCollection.
+            let update_ix = UpdateExternalPluginAdapterV1Builder::new()
+                .asset(asset)
+                .collection(collection)
+                .payer(payer.pubkey())
+                .authority(Some(payer.pubkey()))
+                .key(ExternalPluginAdapterKey::AgentIdentity)
+                .update_info(ExternalPluginAdapterUpdateInfo::AgentIdentity(
+                    AgentIdentityUpdateInfo {
+                        uri: Some(registration_uri.clone()),
+                        lifecycle_checks: None,
+                    },
+                ))
+                .instruction();
+            // No asset rent: the account exists. Only the URI's own bytes and
+            // the protocol fee move.
+            let est =
+                CORE_PROTOCOL_FEE_LAMPORTS + LAMPORTS_PER_DATA_BYTE * registration_uri.len() as u64;
+            Ok(BuiltTx {
+                instructions: vec![update_ix],
+                asset: AssetRef::Existing(asset),
                 est_lamports: est,
             })
         }
@@ -468,4 +536,62 @@ async fn confirm_signature(http: &reqwest::Client, url: &str, signature: &str) -
         }
     }
     bail!("transaction {signature} not confirmed within timeout; check it on-chain")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ASSET: &str = "FSGE2rZ1cBsUSiGz8Y8d5miifC4rNKRbmuSGrocWpx1H";
+
+    fn set_uri(uri: &str) -> SignerRequest {
+        SignerRequest::SetIdentityUri {
+            asset: ASSET.into(),
+            registration_uri: uri.into(),
+        }
+    }
+
+    #[test]
+    fn set_identity_uri_targets_the_existing_asset_and_adds_no_signer() {
+        let payer = Keypair::new();
+        let built = build(&set_uri("https://opencovenant.org/a/verify"), &payer).unwrap();
+
+        assert_eq!(built.asset.pubkey(), Pubkey::from_str(ASSET).unwrap());
+        assert_eq!(built.instructions.len(), 1);
+        // The asset already exists, so the payer is the only signature.
+        let signers = built.asset.signers(&payer);
+        assert_eq!(signers.len(), 1);
+        assert_eq!(signers[0].pubkey(), payer.pubkey());
+    }
+
+    #[test]
+    fn set_identity_uri_refuses_the_non_fetchable_fallback() {
+        let payer = Keypair::new();
+        let err = match build(&set_uri("covenant://agent/Ep7dD7bi"), &payer) {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("the non-fetchable fallback must be refused"),
+        };
+        assert!(err.contains("https:// or ar://"), "{err}");
+    }
+
+    #[test]
+    fn set_identity_uri_refuses_a_malformed_asset() {
+        let payer = Keypair::new();
+        let req = SignerRequest::SetIdentityUri {
+            asset: "not-a-pubkey".into(),
+            registration_uri: "https://opencovenant.org/a/verify".into(),
+        };
+        assert!(build(&req, &payer).is_err());
+    }
+
+    #[test]
+    fn an_update_costs_no_asset_rent() {
+        let payer = Keypair::new();
+        let update = build(&set_uri("https://opencovenant.org/a/verify"), &payer).unwrap();
+        assert!(
+            update.est_lamports < ASSET_BASE_LAMPORTS,
+            "an update should not be priced like a mint: {}",
+            update.est_lamports
+        );
+    }
 }

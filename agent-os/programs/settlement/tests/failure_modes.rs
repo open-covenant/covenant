@@ -3,7 +3,6 @@ mod common;
 use common::*;
 use covenant_settlement_program::ID;
 use solana_sdk::instruction::{AccountMeta, Instruction};
-use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signer::{keypair::Keypair, Signer};
 
 const AGENT: [u8; 32] = [13u8; 32];
@@ -45,12 +44,7 @@ fn slash_more_than_staked_rejected() {
     let mut env = boot();
     register_agent(&mut env, &AGENT);
     let (position, stake_vault, _) = stake_locked(&mut env, &AGENT, 500, 0);
-    let slash_vault = create_token_account(
-        &mut env.svm,
-        &env.payer.insecure_clone(),
-        &env.mint,
-        &env.payer.pubkey(),
-    );
+    let slash_vault = env.treasury;
     let err = slash_stake(&mut env, &AGENT, &position, &stake_vault, &slash_vault, 600)
         .expect_err("cannot slash beyond the position");
     assert_eq!(custom_error(&err), Some(E_INSUFFICIENT_STAKE));
@@ -66,162 +60,74 @@ fn close_active_position_rejected() {
     assert_eq!(custom_error(&err), Some(E_STAKE_STILL_ACTIVE));
 }
 
-// The provider cannot submit after the deadline, protecting the client's
-// refund right.
+// Default build: the escrow is compiled but hard-disabled, so create_task
+// reverts before any token movement.
+#[cfg(not(feature = "task-escrow"))]
 #[test]
-fn submit_after_deadline_rejected() {
+fn create_task_rejected_when_escrow_disabled() {
     let mut env = boot();
-    warp_unix(&mut env, 1_000);
+    register_agent(&mut env, &AGENT);
+    let task_id = [44u8; 32];
+    let provider = Keypair::new().pubkey();
+    let tc = task_setup(&mut env, &task_id, 1_000);
+    let err = create_task(&mut env, &AGENT, &task_id, &provider, 600, 10_000, &tc)
+        .expect_err("create_task must be disabled without the task-escrow feature");
+    assert_eq!(custom_error(&err), Some(E_TASKS_DISABLED));
+    assert_eq!(token_balance(&env, &tc.client_covnt), 1_000); // no funds moved
+}
+
+#[cfg(feature = "task-escrow")]
+#[test]
+fn release_after_deadline_rejected() {
+    let mut env = boot();
     register_agent(&mut env, &AGENT);
     let task_id = [41u8; 32];
-    let provider = Keypair::new();
+    let provider = Keypair::new().pubkey();
+    let provider_covnt = create_token_account(
+        &mut env.svm,
+        &env.payer.insecure_clone(),
+        &env.mint,
+        &provider,
+    );
     let tc = task_setup(&mut env, &task_id, 1_000);
-    create_task(
-        &mut env,
-        &AGENT,
-        &task_id,
-        &provider.pubkey(),
-        &Pubkey::default(),
-        600,
-        5_000,
-        300,
-        &tc,
-    )
-    .expect("create");
+    create_task(&mut env, &AGENT, &task_id, &provider, 600, 5_000, &tc).expect("create");
     warp_unix(&mut env, 6_000);
-    let err = submit_task(&mut env, &tc, &provider, [6u8; 32], [7u8; 32])
-        .expect_err("submit past deadline");
+    let err = release_task(&mut env, &tc, &provider_covnt).expect_err("release past deadline");
     assert_eq!(custom_error(&err), Some(E_TASK_EXPIRED));
     assert_eq!(token_balance(&env, &tc.escrow_vault), 600);
 }
 
-// Release requires delivered work: no payout before the provider submits.
-#[test]
-fn release_before_submit_rejected() {
-    let mut env = boot();
-    warp_unix(&mut env, 1_000);
-    register_agent(&mut env, &AGENT);
-    let task_id = [46u8; 32];
-    let provider = Keypair::new();
-    let client = env.payer.insecure_clone();
-    let provider_covnt = create_token_account(
-        &mut env.svm,
-        &env.payer.insecure_clone(),
-        &env.mint,
-        &provider.pubkey(),
-    );
-    let tc = task_setup(&mut env, &task_id, 1_000);
-    create_task(
-        &mut env,
-        &AGENT,
-        &task_id,
-        &provider.pubkey(),
-        &Pubkey::default(),
-        600,
-        10_000,
-        300,
-        &tc,
-    )
-    .expect("create");
-    let err =
-        release_task(&mut env, &tc, &provider_covnt, &client).expect_err("release before submit");
-    assert_eq!(custom_error(&err), Some(E_WRONG_TASK_STATUS));
-    assert_eq!(token_balance(&env, &tc.escrow_vault), 600);
-}
-
-// The provider cannot claim before the review window elapses.
-#[test]
-fn claim_before_window_rejected() {
-    let mut env = boot();
-    warp_unix(&mut env, 1_000);
-    register_agent(&mut env, &AGENT);
-    let task_id = [47u8; 32];
-    let provider = Keypair::new();
-    let provider_covnt = create_token_account(
-        &mut env.svm,
-        &env.payer.insecure_clone(),
-        &env.mint,
-        &provider.pubkey(),
-    );
-    let tc = task_setup(&mut env, &task_id, 1_000);
-    create_task(
-        &mut env,
-        &AGENT,
-        &task_id,
-        &provider.pubkey(),
-        &Pubkey::default(),
-        600,
-        10_000,
-        300,
-        &tc,
-    )
-    .expect("create");
-    submit_task(&mut env, &tc, &provider, [6u8; 32], [7u8; 32]).expect("submit"); // submitted_at 1_000
-    warp_unix(&mut env, 1_200); // still inside the 300s window
-    let err =
-        claim_task(&mut env, &tc, &provider_covnt, &provider).expect_err("claim before window");
-    assert_eq!(custom_error(&err), Some(E_REVIEW_WINDOW_NOT_ELAPSED));
-    assert_eq!(token_balance(&env, &tc.escrow_vault), 600);
-}
-
-// The client cannot reclaim before the deadline.
+#[cfg(feature = "task-escrow")]
 #[test]
 fn refund_before_deadline_rejected() {
     let mut env = boot();
-    warp_unix(&mut env, 1_000);
     register_agent(&mut env, &AGENT);
     let task_id = [42u8; 32];
-    let provider = Keypair::new();
-    let client = env.payer.insecure_clone();
+    let provider = Keypair::new().pubkey();
     let tc = task_setup(&mut env, &task_id, 1_000);
-    create_task(
-        &mut env,
-        &AGENT,
-        &task_id,
-        &provider.pubkey(),
-        &Pubkey::default(),
-        600,
-        10_000,
-        300,
-        &tc,
-    )
-    .expect("create");
-    let err = refund_task(&mut env, &tc, &client).expect_err("refund before deadline");
+    create_task(&mut env, &AGENT, &task_id, &provider, 600, 10_000, &tc).expect("create");
+    let err = refund_task(&mut env, &tc).expect_err("refund before deadline");
     assert_eq!(custom_error(&err), Some(E_TASK_NOT_EXPIRED));
 }
 
-// A settled task cannot be released again.
+#[cfg(feature = "task-escrow")]
 #[test]
 fn double_release_rejected() {
     let mut env = boot();
-    warp_unix(&mut env, 1_000);
     register_agent(&mut env, &AGENT);
     let task_id = [43u8; 32];
-    let provider = Keypair::new();
-    let client = env.payer.insecure_clone();
+    let provider = Keypair::new().pubkey();
     let provider_covnt = create_token_account(
         &mut env.svm,
         &env.payer.insecure_clone(),
         &env.mint,
-        &provider.pubkey(),
+        &provider,
     );
     let tc = task_setup(&mut env, &task_id, 1_000);
-    create_task(
-        &mut env,
-        &AGENT,
-        &task_id,
-        &provider.pubkey(),
-        &Pubkey::default(),
-        600,
-        10_000,
-        300,
-        &tc,
-    )
-    .expect("create");
-    submit_task(&mut env, &tc, &provider, [6u8; 32], [7u8; 32]).expect("submit");
-    release_task(&mut env, &tc, &provider_covnt, &client).expect("first release");
+    create_task(&mut env, &AGENT, &task_id, &provider, 600, 10_000, &tc).expect("create");
+    release_task(&mut env, &tc, &provider_covnt).expect("first release");
     bump_blockhash(&mut env); // distinct signature for the retry
-    let err = release_task(&mut env, &tc, &provider_covnt, &client).expect_err("second release");
+    let err = release_task(&mut env, &tc, &provider_covnt).expect_err("second release");
     assert_eq!(custom_error(&err), Some(E_WRONG_TASK_STATUS));
 }
 

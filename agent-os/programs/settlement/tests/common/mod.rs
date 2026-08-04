@@ -185,6 +185,7 @@ pub fn plant_phantom_credit_account(env: &mut Env, owner: &Pubkey) -> Pubkey {
         owner: *owner,
         balance: 0,
         bump: 255,
+        provenance_root: [0u8; 32],
     }
     .try_serialize(&mut data)
     .unwrap();
@@ -210,6 +211,14 @@ pub fn credit_balance(env: &Env, credits: &Pubkey) -> u64 {
     CreditAccount::try_deserialize(&mut data)
         .expect("credit account")
         .balance
+}
+
+pub fn credit_provenance_root(env: &Env, credits: &Pubkey) -> [u8; 32] {
+    let acc = env.svm.get_account(credits).expect("credit account exists");
+    let mut data = acc.data();
+    CreditAccount::try_deserialize(&mut data)
+        .expect("credit account")
+        .provenance_root
 }
 
 pub fn register_agent(env: &mut Env, agent_key: &[u8; 32]) -> Pubkey {
@@ -324,10 +333,30 @@ pub fn slash_stake(
     slash_vault: &Pubkey,
     amount: u64,
 ) -> Result<(), TransactionError> {
+    slash_stake_with(
+        env,
+        agent_key,
+        position,
+        stake_vault,
+        slash_vault,
+        amount,
+        [0u8; 32],
+    )
+}
+
+pub fn slash_stake_with(
+    env: &mut Env,
+    agent_key: &[u8; 32],
+    position: &Pubkey,
+    stake_vault: &Pubkey,
+    slash_vault: &Pubkey,
+    amount: u64,
+    reason_hash: [u8; 32],
+) -> Result<(), TransactionError> {
     let agent = agent_pda(agent_key);
     let data = ix::SlashStake {
         amount,
-        reason_hash: [0u8; 32],
+        reason_hash,
     }
     .data();
     let metas = vec![
@@ -335,6 +364,45 @@ pub fn slash_stake(
         AccountMeta::new_readonly(env.slash_authority.pubkey(), true),
         AccountMeta::new(agent, false),
         AccountMeta::new(*position, false),
+        AccountMeta::new(*stake_vault, false),
+        AccountMeta::new(*slash_vault, false),
+        AccountMeta::new_readonly(env.mint, false),
+        AccountMeta::new_readonly(spl_token::ID, false),
+    ];
+    let payer = env.payer.insecure_clone();
+    let slasher = env.slash_authority.insecure_clone();
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[&slasher],
+    )
+}
+
+// Slash citing the agent's on-chain provenance: the program reads the reason
+// from the bound credit account's provenance_root, so there is no caller-supplied
+// reason_hash to pass.
+pub fn slash_for_actions(
+    env: &mut Env,
+    agent_key: &[u8; 32],
+    position: &Pubkey,
+    credits: &Pubkey,
+    stake_vault: &Pubkey,
+    slash_vault: &Pubkey,
+    amount: u64,
+) -> Result<(), TransactionError> {
+    let agent = agent_pda(agent_key);
+    let data = ix::SlashForActions { amount }.data();
+    let metas = vec![
+        AccountMeta::new_readonly(env.config, false),
+        AccountMeta::new_readonly(env.slash_authority.pubkey(), true),
+        AccountMeta::new(agent, false),
+        AccountMeta::new(*position, false),
+        AccountMeta::new_readonly(*credits, false),
         AccountMeta::new(*stake_vault, false),
         AccountMeta::new(*slash_vault, false),
         AccountMeta::new_readonly(env.mint, false),
@@ -461,11 +529,7 @@ pub const E_TASK_NOT_EXPIRED: u32 = 6012;
 pub const E_STAKE_LOCKED: u32 = 6013;
 pub const E_STAKE_STILL_ACTIVE: u32 = 6014;
 pub const E_LOCK_TOO_SHORT: u32 = 6015;
-pub const E_NOT_ARBITER: u32 = 6016;
-pub const E_REVIEW_WINDOW_NOT_ELAPSED: u32 = 6017;
-pub const E_REVIEW_WINDOW_ELAPSED: u32 = 6018;
-pub const E_INVALID_REVIEW_WINDOW: u32 = 6019;
-pub const E_INVALID_DEADLINE: u32 = 6020;
+pub const E_TASKS_DISABLED: u32 = 6016;
 
 pub fn task_pda(task_id: &[u8; 32]) -> Pubkey {
     Pubkey::find_program_address(&[b"task", task_id], &ID).0
@@ -652,10 +716,19 @@ pub fn consume_credits(
     credits: &Pubkey,
     amount: u64,
 ) -> Result<(), TransactionError> {
+    consume_credits_with(env, credits, amount, [9u8; 32])
+}
+
+pub fn consume_credits_with(
+    env: &mut Env,
+    credits: &Pubkey,
+    amount: u64,
+    receipt_hash: [u8; 32],
+) -> Result<(), TransactionError> {
     let owner = env.payer.pubkey();
     let data = ix::ConsumeCredits {
         amount,
-        receipt_hash: [9u8; 32],
+        receipt_hash,
     }
     .data();
     let metas = vec![
@@ -806,10 +879,8 @@ pub fn create_task(
     agent_key: &[u8; 32],
     task_id: &[u8; 32],
     provider: &Pubkey,
-    arbiter: &Pubkey,
     amount_covnt: u64,
     deadline: i64,
-    review_window: i64,
     tc: &TaskCtx,
 ) -> Result<(), TransactionError> {
     let agent = agent_pda(agent_key);
@@ -818,12 +889,10 @@ pub fn create_task(
         args: CreateTaskArgs {
             task_id: *task_id,
             provider: *provider,
-            arbiter: *arbiter,
             amount_covnt,
             task_hash: [4u8; 32],
             criteria_hash: [5u8; 32],
             deadline,
-            review_window,
         },
     }
     .data();
@@ -851,83 +920,21 @@ pub fn create_task(
     )
 }
 
-pub fn submit_task(
+pub fn release_task(
     env: &mut Env,
     tc: &TaskCtx,
-    provider: &Keypair,
-    result_hash: [u8; 32],
-    receipt_hash: [u8; 32],
+    provider_covnt: &Pubkey,
 ) -> Result<(), TransactionError> {
-    let data = ix::SubmitTask {
-        result_hash,
-        receipt_hash,
+    let client = env.payer.pubkey();
+    let data = ix::ReleaseTask {
+        result_hash: [6u8; 32],
+        receipt_hash: [7u8; 32],
     }
     .data();
     let metas = vec![
         AccountMeta::new_readonly(env.config, false),
         AccountMeta::new(tc.task, false),
-        AccountMeta::new_readonly(provider.pubkey(), true),
-    ];
-    let payer = env.payer.insecure_clone();
-    send(
-        &mut env.svm,
-        &payer,
-        &[Instruction {
-            program_id: ID,
-            accounts: metas,
-            data,
-        }],
-        &[provider],
-    )
-}
-
-/// `authority` signs the release: the client (approving) or the arbiter
-/// (dispute ruling). Fee is always paid by the env payer.
-pub fn release_task(
-    env: &mut Env,
-    tc: &TaskCtx,
-    provider_covnt: &Pubkey,
-    authority: &Keypair,
-) -> Result<(), TransactionError> {
-    let data = ix::ReleaseTask {}.data();
-    let metas = vec![
-        AccountMeta::new_readonly(env.config, false),
-        AccountMeta::new(tc.task, false),
-        AccountMeta::new_readonly(authority.pubkey(), true),
-        AccountMeta::new(tc.escrow_vault, false),
-        AccountMeta::new(*provider_covnt, false),
-        AccountMeta::new_readonly(env.mint, false),
-        AccountMeta::new_readonly(spl_token::ID, false),
-    ];
-    let payer = env.payer.insecure_clone();
-    let extra: Vec<&Keypair> = if authority.pubkey() == payer.pubkey() {
-        vec![]
-    } else {
-        vec![authority]
-    };
-    send(
-        &mut env.svm,
-        &payer,
-        &[Instruction {
-            program_id: ID,
-            accounts: metas,
-            data,
-        }],
-        &extra,
-    )
-}
-
-pub fn claim_task(
-    env: &mut Env,
-    tc: &TaskCtx,
-    provider_covnt: &Pubkey,
-    provider: &Keypair,
-) -> Result<(), TransactionError> {
-    let data = ix::ClaimTask {}.data();
-    let metas = vec![
-        AccountMeta::new_readonly(env.config, false),
-        AccountMeta::new(tc.task, false),
-        AccountMeta::new_readonly(provider.pubkey(), true),
+        AccountMeta::new_readonly(client, true),
         AccountMeta::new(tc.escrow_vault, false),
         AccountMeta::new(*provider_covnt, false),
         AccountMeta::new_readonly(env.mint, false),
@@ -942,33 +949,23 @@ pub fn claim_task(
             accounts: metas,
             data,
         }],
-        &[provider],
+        &[],
     )
 }
 
-/// `authority` signs the refund: the client (post-deadline reclaim) or the
-/// arbiter (dispute ruling within the review window).
-pub fn refund_task(
-    env: &mut Env,
-    tc: &TaskCtx,
-    authority: &Keypair,
-) -> Result<(), TransactionError> {
+pub fn refund_task(env: &mut Env, tc: &TaskCtx) -> Result<(), TransactionError> {
+    let client = env.payer.pubkey();
     let data = ix::RefundTask {}.data();
     let metas = vec![
         AccountMeta::new_readonly(env.config, false),
         AccountMeta::new(tc.task, false),
-        AccountMeta::new_readonly(authority.pubkey(), true),
+        AccountMeta::new_readonly(client, true),
         AccountMeta::new(tc.escrow_vault, false),
         AccountMeta::new(tc.client_covnt, false),
         AccountMeta::new_readonly(env.mint, false),
         AccountMeta::new_readonly(spl_token::ID, false),
     ];
     let payer = env.payer.insecure_clone();
-    let extra: Vec<&Keypair> = if authority.pubkey() == payer.pubkey() {
-        vec![]
-    } else {
-        vec![authority]
-    };
     send(
         &mut env.svm,
         &payer,
@@ -977,7 +974,7 @@ pub fn refund_task(
             accounts: metas,
             data,
         }],
-        &extra,
+        &[],
     )
 }
 
@@ -1132,6 +1129,57 @@ pub fn plant_legacy_config(env: &mut Env) {
             },
         )
         .unwrap();
+}
+
+pub fn migrate_credit_account(env: &mut Env, credits: &Pubkey) -> Result<(), TransactionError> {
+    let owner = env.payer.pubkey();
+    let data = ix::MigrateCreditAccount {}.data();
+    let metas = vec![
+        AccountMeta::new(*credits, false),
+        AccountMeta::new(owner, true),
+        AccountMeta::new_readonly(system_program::ID, false),
+    ];
+    let payer = env.payer.insecure_clone();
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[],
+    )
+}
+
+/// Plant a legacy 49-byte CreditAccount (no provenance_root) at the canonical
+/// `[b"credits", owner]` PDA to model a pre-migration account.
+pub fn plant_legacy_credit_account(env: &mut Env, balance: u64) -> Pubkey {
+    let owner = env.payer.pubkey();
+    let (credits, bump) = Pubkey::find_program_address(&[b"credits", owner.as_ref()], &ID);
+    let acc = CreditAccount {
+        owner,
+        balance,
+        bump,
+        provenance_root: [0u8; 32],
+    };
+    let mut full = Vec::new();
+    acc.try_serialize(&mut full).unwrap();
+    let legacy = full[..full.len() - 32].to_vec(); // drop the trailing provenance_root
+    let lamports = env.svm.minimum_balance_for_rent_exemption(legacy.len());
+    env.svm
+        .set_account(
+            credits,
+            Account {
+                lamports,
+                data: legacy,
+                owner: ID,
+                executable: false,
+                rent_epoch: 0,
+            },
+        )
+        .unwrap();
+    credits
 }
 
 pub fn set_credits_per_covnt(env: &mut Env, value: u64) -> Result<(), TransactionError> {

@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-08-04T04:58:30.231Z",
+  "updatedAt": "2026-08-04T05:18:33.967Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 13105,
-    "tasks": 1536,
+    "events": 13109,
+    "tasks": 1537,
     "integrated": 1537
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1529,
     "proposed": 1,
-    "blocked": 6
+    "blocked": 6,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "capability-usage-budget-final-unit-race-live",
+    "state": "in_progress",
+    "since": "2026-08-04T05:06:16.379Z"
+  },
   "recent": [
     {
       "at": "2026-08-03T23:47:20.744Z",

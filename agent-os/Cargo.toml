@@ -33,6 +33,7 @@ members = [
     "crates/covenant-acedata",
     "crates/covenant-robinhood",
     "crates/covenant-krexa",
+    "crates/covenant-myrad",
     "crates/covenant-timeline-adapter",
     "crates/covenant-sap-bridge",
     "crates/covenant-stake-keeper",

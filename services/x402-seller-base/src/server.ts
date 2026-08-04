@@ -37,6 +37,7 @@ import { declareDiscoveryExtension } from "@x402/extensions/bazaar";
 import { Attestor, ATTEST_DOMAIN, ATTEST_CANONICALIZATION, ATTEST_VERIFY_RECIPE } from "./attest.js";
 import { makeAttestHandler } from "./attest-route.js";
 import { makeGovernedOrderHandler, makeReputationHandler } from "./robinhood-route.js";
+import { loadBundles, makeSignalHandler } from "./myrad-route.js";
 
 // The EIP-712 domain (name, version) is the token's own, not ours: the buyer's
 // wallet signs the transferWithAuthorization against it and the facilitator
@@ -107,7 +108,23 @@ if (!process.env.COVENANT_ATTEST_KEYPAIR) {
   console.warn(`COVENANT_ATTEST_KEYPAIR unset, generated ephemeral attestation key ${attestor.pubkeyB58}`);
 }
 
-const RESOURCES = ["/x402/attest", "/x402/robinhood/governed-order", "/x402/proof/:agent/trading"];
+const RESOURCES = [
+  "/x402/attest",
+  "/x402/robinhood/governed-order",
+  "/x402/proof/:agent/trading",
+  "/x402/myrad/signal/:cohort",
+];
+
+// Bundles are issued elsewhere and served here; a read failure at boot is fatal
+// rather than a route that silently sells nothing.
+const MYRAD_BUNDLE_PATH = process.env.COVENANT_MYRAD_BUNDLE;
+let myradBundles: ReturnType<typeof loadBundles>;
+try {
+  myradBundles = loadBundles(MYRAD_BUNDLE_PATH);
+} catch (e) {
+  console.error(`COVENANT_MYRAD_BUNDLE unreadable: ${e instanceof Error ? e.message : String(e)}`);
+  process.exit(1);
+}
 
 const app = express();
 // Render terminates TLS and forwards over http; trust the proxy so req.protocol
@@ -213,6 +230,31 @@ const routes: RoutesConfig = {
       output: { example: { agent: "robinhood-agent", score: 100, established: true, mandate_adherence: 1 } },
     }),
   ),
+  "GET /x402/myrad/signal/:cohort": gate(
+    PRICE,
+    "Buy a Myrad cohort signal with the Covenant receipt issued over it: the evidence root for the contributing set, the contributor count, the emission window, and every integrity finding. Verifiable offline against a pinned attestor key.",
+    declareDiscoveryExtension({
+      pathParams: { cohort: [...myradBundles.keys()][0] },
+      pathParamsSchema: {
+        properties: { cohort: { type: "string", description: "Myrad cohort id" } },
+        required: ["cohort"],
+      },
+      output: {
+        example: {
+          signal: { cohort_id: "netflix_high_engagement_drama", contributors: 6 },
+          receipt: {
+            receipt: {
+              schema: "covenant.myrad.signal.v1",
+              evidence: { contributors: 6, merkle_root: "..." },
+              integrity: { status: "pass" },
+            },
+            root_hash_hex: "...",
+            signature_b64: "...",
+          },
+        },
+      },
+    }),
+  ),
 };
 
 app.use(
@@ -232,6 +274,7 @@ app.use(
 app.post("/x402/attest", makeAttestHandler(attestor));
 app.post("/x402/robinhood/governed-order", makeGovernedOrderHandler());
 app.get("/x402/proof/:agent/trading", makeReputationHandler());
+app.get("/x402/myrad/signal/:cohort", makeSignalHandler(myradBundles, !MYRAD_BUNDLE_PATH));
 
 app.listen(PORT, () => {
   console.log(

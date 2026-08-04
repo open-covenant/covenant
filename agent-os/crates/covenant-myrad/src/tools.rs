@@ -9,7 +9,11 @@
 //! Pinning the attestor key is the caller's job and cannot be delegated to this
 //! tool: a receipt that carries its own key is self-consistent by construction.
 //! Pass `expectedAttestorPubkeyB64` from a channel the buyer already trusts and
-//! the tool enforces it.
+//! the tool enforces it. Omit it and the result says so rather than implying a
+//! check that did not happen.
+//!
+//! The daemon does not register these tools yet; the connector is at proposal
+//! stage and nothing depends on it.
 
 use std::sync::Arc;
 
@@ -24,9 +28,8 @@ use crate::receipt::SignedReceipt;
 pub const PROVIDER: &str = "myrad";
 pub const VERIFY_SIGNAL_TOOL: &str = "myrad.verify_signal";
 
-/// Stamped on every result. The receipt covers provenance of the aggregation
-/// step; it is not a claim about the truthfulness of the underlying accounts,
-/// which is what Myrad's Reclaim proofs speak to.
+/// Stamped on every result, so a caller cannot read it as a claim about the
+/// source account. That is what Myrad's Reclaim proofs speak to.
 pub const TRUST_LABEL: &str =
     "covenant signal receipt (provenance of the aggregation step, not of the source account)";
 
@@ -86,10 +89,21 @@ impl Tool for VerifySignalTool {
 
         let signature_ok = signed.verify();
         let covers = signed.receipt.covers(delivered);
-        let expected = arguments
-            .get("expectedAttestorPubkeyB64")
-            .and_then(Value::as_str);
-        let attestor_ok = expected.is_none_or(|k| k == signed.attestor_pubkey_b64);
+
+        // A pin that isn't a string is a caller mistake, not an absent pin.
+        // Reading it as absent would turn a typo into a silently unenforced
+        // check, which is the whole defense.
+        let pin = arguments.get("expectedAttestorPubkeyB64");
+        let pin_supplied = !matches!(pin, None | Some(Value::Null));
+        let attestor_ok = match pin {
+            None | Some(Value::Null) => true,
+            Some(Value::String(pinned)) => *pinned == signed.attestor_pubkey_b64,
+            Some(other) => {
+                return Err(ToolError::InvalidArguments(format!(
+                    "expectedAttestorPubkeyB64 must be a string, got {other}"
+                )))
+            }
+        };
 
         let integrity = &signed.receipt.integrity;
         let blocking: Vec<&crate::integrity::Finding> = integrity
@@ -110,6 +124,8 @@ impl Tool for VerifySignalTool {
             "receipt signature does not verify"
         } else if !covers {
             "receipt does not cover the delivered artifact"
+        } else if !pin_supplied {
+            "receipt is internally consistent; no attestor key was pinned, so the issuer is unchecked"
         } else if !blocking.is_empty() {
             "receipt verifies; the cohort failed one or more integrity checks"
         } else if !warnings.is_empty() {
@@ -125,8 +141,11 @@ impl Tool for VerifySignalTool {
             "signature_ok": signature_ok,
             "covers_delivered_artifact": covers,
             "attestor_pubkey_b64": signed.attestor_pubkey_b64,
+            "attestor_pin_supplied": pin_supplied,
             "attestor_matches_pin": attestor_ok,
-            "anchor": signed.anchor,
+            // Outside the signed bytes by design, so it carries no
+            // authentication of its own.
+            "anchor_unauthenticated": signed.anchor,
             "signal": {
                 "provider": signed.receipt.signal.provider,
                 "cohort_id": signed.receipt.signal.cohort_id,
@@ -202,14 +221,7 @@ mod tests {
     #[test]
     fn disabled_registers_nothing() {
         assert!(myrad_tools(&MyradConfig::default()).is_empty());
-        assert_eq!(
-            myrad_tools(&MyradConfig {
-                enabled: true,
-                ..MyradConfig::default()
-            })
-            .len(),
-            1
-        );
+        assert_eq!(myrad_tools(&MyradConfig { enabled: true }).len(), 1);
     }
 
     #[tokio::test]
@@ -264,6 +276,44 @@ mod tests {
         assert_eq!(body["verified"], json!(true));
         assert_eq!(body["integrity"]["status"], json!("fail"));
         assert!(!body["integrity"]["failed"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_pin_that_is_not_a_string_is_an_error_rather_than_no_pin() {
+        let (receipt, delivered) = signed_pair(5);
+        for bad in [json!(0), json!(["k"]), json!({ "k": 1 }), json!(true)] {
+            let err = VerifySignalTool
+                .call(json!({
+                    "receipt": receipt,
+                    "delivered": delivered,
+                    "expectedAttestorPubkeyB64": bad
+                }))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(err, ToolError::InvalidArguments(_)),
+                "{bad} was accepted"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn an_omitted_pin_is_reported_rather_than_implied() {
+        let (receipt, delivered) = signed_pair(5);
+        let result = VerifySignalTool
+            .call(json!({ "receipt": receipt, "delivered": delivered }))
+            .await
+            .unwrap();
+        let body = body(&result);
+        assert_eq!(body["attestor_pin_supplied"], json!(false));
+        assert!(
+            body["summary"]
+                .as_str()
+                .unwrap()
+                .contains("no attestor key was pinned"),
+            "{}",
+            body["summary"]
+        );
     }
 
     #[tokio::test]

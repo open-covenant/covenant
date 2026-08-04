@@ -14,9 +14,8 @@
 //!   set. A buyer auditing a dispute checks one leaf, not the population.
 //! - **Distinctness.** The leaf commits to a salted subject pseudonym, so one
 //!   subject appearing twice in a cohort produces two identical
-//!   `subject_commitment` values and is caught by
-//!   [`crate::integrity`] before the root is signed. k-anonymity hides who a
-//!   contributor is; this is what stops one contributor being counted as five.
+//!   `subject_commitment` values and is caught by [`crate::integrity`] before
+//!   the root is signed.
 //!
 //! Leaves are sorted before folding, so the root depends on the set and not on
 //! the order Myrad's query happened to return.
@@ -53,13 +52,20 @@ pub struct Contribution {
 
 impl Contribution {
     pub fn from_record(record: &SignalRecord) -> Result<Self> {
+        // An empty emission time would commit "no time" as if it were one, and
+        // the receipt's freshness range is built from these.
+        let generated_at = record
+            .generated_at()
+            .filter(|t| !t.is_empty())
+            .ok_or_else(|| Error::Signal("contribution carries no generated_at".into()))?;
+
         Ok(Self {
             schema: CONTRIBUTION_SCHEMA.to_string(),
             provider: record.provider.clone(),
             proof: record.proof.clone(),
             subject_commitment: record.subject_commitment.clone(),
             payload_sha256: record.payload_sha256()?,
-            generated_at: record.generated_at().unwrap_or_default().to_string(),
+            generated_at: generated_at.to_string(),
             opt_out: record.opt_out,
         })
     }
@@ -76,6 +82,14 @@ impl Contribution {
 pub struct MerkleTree {
     leaves: Vec<String>,
     levels: Vec<Vec<[u8; 32]>>,
+}
+
+/// Leaves are hashed as their hex text, so the encoding has to be pinned: the
+/// same digest in upper case would otherwise be a different leaf.
+fn is_commitment(s: &str) -> bool {
+    s.len() == 64
+        && s.chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
 }
 
 fn leaf_hash(commitment_hex: &str) -> [u8; 32] {
@@ -98,12 +112,27 @@ impl MerkleTree {
     /// function of the set. An odd node at any level is promoted rather than
     /// duplicated, which keeps a two-leaf set from colliding with the one-leaf
     /// set that duplication would produce.
+    ///
+    /// Two identical commitments are the same contribution, so a repeat is
+    /// rejected. Folding it in twice would put k leaves under the root for one
+    /// record copied k times.
     pub fn build(commitments: &[String]) -> Result<Self> {
         if commitments.is_empty() {
             return Err(Error::Evidence("no contributions".into()));
         }
+        if let Some(bad) = commitments.iter().find(|c| !is_commitment(c)) {
+            return Err(Error::Evidence(format!(
+                "not a sha256 commitment (64 lowercase hex): {bad}"
+            )));
+        }
         let mut leaves = commitments.to_vec();
         leaves.sort();
+        if let Some(dup) = leaves.windows(2).find(|w| w[0] == w[1]) {
+            return Err(Error::Evidence(format!(
+                "duplicate contribution commitment: {}",
+                dup[0]
+            )));
+        }
 
         let mut levels = vec![leaves.iter().map(|c| leaf_hash(c)).collect::<Vec<_>>()];
         while levels.last().map(Vec::len).unwrap_or(0) > 1 {
@@ -248,6 +277,37 @@ mod tests {
     #[test]
     fn empty_set_is_rejected() {
         assert!(MerkleTree::build(&[]).is_err());
+    }
+
+    #[test]
+    fn one_contribution_copied_cannot_inflate_the_count() {
+        let one = commitments(1);
+        let five = vec![one[0].clone(); 5];
+        let err = MerkleTree::build(&five).unwrap_err().to_string();
+        assert!(err.contains("duplicate contribution commitment"), "{err}");
+    }
+
+    #[test]
+    fn a_leaf_that_is_not_a_sha256_commitment_is_rejected() {
+        for bad in ["", "abc", &"AA".repeat(32), &"zz".repeat(32)] {
+            let err = MerkleTree::build(&[bad.to_string()])
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("not a sha256 commitment"), "{bad}: {err}");
+        }
+    }
+
+    #[test]
+    fn a_contribution_without_an_emission_time_is_rejected() {
+        let value = serde_json::json!({
+            "provider": "netflix",
+            "reclaim_proof_id": "5a9f3035aa9cf93f653f4b15",
+            "verification_status": "verified",
+            "signal": { "dataset_id": "myrad_netflix_v1" }
+        });
+        let record = SignalRecord::from_sample(&value, None, false).unwrap();
+        let err = Contribution::from_record(&record).unwrap_err().to_string();
+        assert!(err.contains("generated_at"), "{err}");
     }
 
     #[test]

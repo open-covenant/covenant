@@ -40,22 +40,46 @@ pub fn load(signals_path: &str, profiles_path: Option<&str>) -> Vec<SignalRecord
 
     let subjects = profiles_path.map(subjects_by_proof_id).unwrap_or_default();
 
-    values
-        .iter()
-        .filter_map(|value| {
-            let proof_id = value.get("reclaim_proof_id")?.as_str()?;
-            let (subject, opt_out) = match subjects.get(proof_id) {
-                Some((user, out)) => (Some(SignalRecord::commit_subject(DEMO_SALT, user)), *out),
-                None => (None, false),
-            };
-            SignalRecord::from_sample(value, subject, opt_out).ok()
-        })
-        .collect()
+    let mut records = Vec::with_capacity(values.len());
+    let mut skipped = Vec::new();
+    for (i, value) in values.iter().enumerate() {
+        let proof_id = value
+            .get("reclaim_proof_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let (subject, opt_out) = match subjects.get(proof_id) {
+            Some((user, out)) => (Some(SignalRecord::commit_subject(DEMO_SALT, user)), *out),
+            None => (None, false),
+        };
+        match SignalRecord::from_sample(value, subject, opt_out) {
+            Ok(record) => records.push(record),
+            Err(e) => skipped.push(format!("record {i}: {e}")),
+        }
+    }
+
+    // A silent skip would let the documented command print "0 cohort(s)" and
+    // exit 0 against an export whose payload field is named something else.
+    if !skipped.is_empty() {
+        eprintln!(
+            "{} of {} record(s) in {signals_path} could not be read:",
+            skipped.len(),
+            values.len()
+        );
+        for reason in skipped.iter().take(5) {
+            eprintln!("  {reason}");
+        }
+    }
+    assert!(
+        !records.is_empty(),
+        "no readable records in {signals_path}: every record is expected to carry \
+         \"provider\", \"reclaim_proof_id\", and a \"signal\" payload"
+    );
+    records
 }
 
 /// proof id -> (user id, opted out), from the profiles table. The payload
-/// carries neither, which is the point: consent and subject identity live
-/// outside the artifact being sold.
+/// carries neither: consent and subject identity live outside the artifact
+/// being sold.
 fn subjects_by_proof_id(path: &str) -> BTreeMap<String, (String, bool)> {
     let text = fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path}: {e}"));
     let mut rows = csv_rows(&text);

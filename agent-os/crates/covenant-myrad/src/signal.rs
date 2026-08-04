@@ -3,7 +3,7 @@
 //!
 //! Myrad's enterprise pipeline produces a per-subject record whose `sellable_data`
 //! is the artifact a buyer receives. This module reads that record without
-//! re-modelling it. The payload stays an opaque [`serde_json::Value`] and the
+//! re-modeling it. The payload stays an opaque [`serde_json::Value`] and the
 //! receipt binds its RFC 8785 digest, so Myrad can add, reorder, or rename
 //! fields inside `sellable_data` without invalidating a receipt schema or
 //! forcing a Covenant release.
@@ -67,7 +67,7 @@ pub struct SignalRecord {
     /// Myrad's own verification verdict for the underlying Reclaim proof.
     pub verification_status: String,
     /// A stable pseudonym for the contributor, supplied by Myrad as
-    /// `sha256(secret_salt || user_id)`. Covenant never sees `user_id`; the
+    /// `sha256(secret_salt || "|" || user_id)`. Covenant never sees `user_id`; the
     /// commitment exists so the same human can't be counted twice in one
     /// cohort, and so a replayed record is detectable, without identifying
     /// anyone. `None` when the source didn't supply one, which downgrades the
@@ -209,8 +209,8 @@ impl SignalRecord {
     }
 
     /// Quasi-identifiers left in the payload while it claims to be PII-stripped.
-    /// A single initial is not a name, but it is a selector: combined with a
-    /// cohort label and a multi-year activity curve it narrows a population.
+    /// An initial is a selector, not a name: it narrows a population once a
+    /// cohort label and a multi-year activity curve sit beside it.
     pub fn quasi_identifiers(&self) -> Vec<&'static str> {
         let mut found = Vec::new();
         if self
@@ -222,12 +222,12 @@ impl SignalRecord {
         found
     }
 
-    /// Whether the payload carries any measured activity at all.
-    pub fn is_empty_activity(&self) -> bool {
-        let titles = self
-            .meta(&["viewing_summary", "total_titles_watched"])
-            .and_then(Value::as_u64);
-        matches!(titles, Some(0))
+    /// The activity count the payload reports, where it reports one. `None`
+    /// means the field is absent, which is different from a reported zero and is
+    /// kept distinct so a check can say it did not run rather than pass.
+    pub fn activity_count(&self) -> Option<u64> {
+        self.meta(&["viewing_summary", "total_titles_watched"])
+            .and_then(Value::as_u64)
     }
 }
 

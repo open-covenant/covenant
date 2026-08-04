@@ -7,8 +7,8 @@
 //! cargo run -p covenant-myrad --example verifiable_signal -- signals.json profiles.csv
 //! ```
 //!
-//! With no arguments it runs a synthetic cohort so the example is self
-//! contained. Given Myrad's signal export (and optionally the profiles CSV,
+//! With no arguments it runs a synthetic cohort, so the example is
+//! self-contained. Given Myrad's signal export (and optionally the profiles CSV,
 //! which carries the subject ids and consent flags the payload does not), it
 //! runs over the real thing. Those files are contributor data and stay out of
 //! the repository.

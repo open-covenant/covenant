@@ -6,6 +6,7 @@
  *   POST /x402/attest                    a Covenant-signed attestation over a { subject, claim } pair.
  *   POST /x402/robinhood/governed-order  place a Robinhood order through the Covenant policy gate.
  *   GET  /x402/proof/:agent/trading      an agent's verifiable trading reputation.
+ *   GET  /x402/myrad/signal/:cohort      a Myrad cohort signal with its Covenant provenance receipt.
  *
  * `@x402/express` issues the 402 challenge via a locally-registered (signer-less)
  * EVM exact scheme, then verifies and settles through the Coinbase-hosted x402
@@ -27,6 +28,7 @@
  *                           and its pubkey logged when this is unset
  *   COVENANT_HTTP_URL       covenantd gateway for the robinhood routes (default 127.0.0.1:8421)
  *   COVENANT_AUTH_TOKEN     bearer for covenantd
+ *   COVENANT_MYRAD_BUNDLE   path to issued Myrad bundles; unset serves 503 on the signal route
  */
 import express, { type Request, type Response } from "express";
 import { paymentMiddlewareFromConfig } from "@x402/express";
@@ -37,7 +39,7 @@ import { declareDiscoveryExtension } from "@x402/extensions/bazaar";
 import { Attestor, ATTEST_DOMAIN, ATTEST_CANONICALIZATION, ATTEST_VERIFY_RECIPE } from "./attest.js";
 import { makeAttestHandler } from "./attest-route.js";
 import { makeGovernedOrderHandler, makeReputationHandler } from "./robinhood-route.js";
-import { loadBundles, makeSignalHandler } from "./myrad-route.js";
+import { loadBundles, makeSignalHandler, SIGNAL_SCHEMA } from "./myrad-route.js";
 
 // The EIP-712 domain (name, version) is the token's own, not ours: the buyer's
 // wallet signs the transferWithAuthorization against it and the facilitator
@@ -150,7 +152,7 @@ app.get("/.well-known/x402", (req: Request, res: Response) => {
     version: 1,
     resources: RESOURCES.map((r) => `${base}${r}`),
     instructions:
-      "Covenant Trust x402 seller on Base. Pay USDC via EIP-3009 to obtain a Covenant-signed ed25519 attestation (POST /x402/attest), place a policy-gated Robinhood order (POST /x402/robinhood/governed-order), or fetch an agent's trading reputation (GET /x402/proof/:agent/trading). Pin the attestation key below to verify responses without trusting this server.",
+      "Covenant Trust x402 seller on Base. Pay USDC via EIP-3009 to obtain a Covenant-signed ed25519 attestation (POST /x402/attest), place a policy-gated Robinhood order (POST /x402/robinhood/governed-order), fetch an agent's trading reputation (GET /x402/proof/:agent/trading), or buy a Myrad cohort signal with its Covenant provenance receipt (GET /x402/myrad/signal/:cohort). Pin the attestation key below to verify responses without trusting this server.",
     attestation: {
       algorithm: "ed25519",
       publicKey: attestor.pubkeyB58,
@@ -244,7 +246,7 @@ const routes: RoutesConfig = {
           signal: { cohort_id: "netflix_high_engagement_drama", contributors: 6 },
           receipt: {
             receipt: {
-              schema: "covenant.myrad.signal.v1",
+              schema: SIGNAL_SCHEMA,
               evidence: { contributors: 6, merkle_root: "..." },
               integrity: { status: "pass" },
             },

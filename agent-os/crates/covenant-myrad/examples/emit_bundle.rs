@@ -7,9 +7,7 @@
 //! ```
 //!
 //! The issuer holds the attestor key, so issuance happens here (or in the
-//! daemon) and never in the endpoint process. The endpoint serves what it is
-//! handed, which is why a buyer can verify a receipt without trusting the server
-//! that delivered it.
+//! daemon) and never in the endpoint process.
 //!
 //! With no export given it emits a synthetic cohort. A real export is
 //! contributor data and stays out of the repository.

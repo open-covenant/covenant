@@ -14,8 +14,10 @@
 //! root over the contributing set, records the contributor count and the time
 //! range actually covered, and carries the result of every check in
 //! [`integrity`] including the ones that came back soft. A buyer verifies it
-//! offline against a pinned attestor key ([`tools`]), and the digest anchors on
-//! Solana through the path the daemon already runs.
+//! offline against a pinned attestor key ([`tools`]). The digest is shaped for
+//! the Solana anchoring path the daemon already runs for other receipt kinds;
+//! this crate does not anchor, and [`SignedReceipt::anchor`] stays empty until
+//! an issuer fills it.
 //!
 //! The design constraint that shapes everything here: Covenant never sees raw
 //! data, an account identifier, or anything describing a person. Contributions
@@ -23,7 +25,7 @@
 //! side, and every check runs on those. Adding this layer cannot weaken the
 //! privacy claim Myrad already makes, because the layer has nothing to leak.
 //!
-//! What it deliberately does not do, and needs from Myrad to do:
+//! What it does not do, and what that needs from Myrad:
 //! - **Verify the Reclaim proof itself.** [`signal::ProofRef`] records which
 //!   proof a contribution names and whether that name is a Reclaim proof id or
 //!   an internal delivery marker, but the crate does not fetch or check the
@@ -34,7 +36,7 @@
 //!   binds it. A receipt asserts the artifact came from the contributing set,
 //!   never that the arithmetic over that set is right.
 //! - **Mint the subject pseudonym.** `subject_commitment` is
-//!   `sha256(secret_salt || user_id)` computed by Myrad. The salt stays on their
+//!   `sha256(secret_salt || "|" || user_id)` computed by Myrad. The salt stays on their
 //!   side; a Covenant-side salt would mean Covenant holding user ids, which is
 //!   the one thing this design refuses.
 

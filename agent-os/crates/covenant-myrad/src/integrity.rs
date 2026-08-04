@@ -11,12 +11,20 @@
 //! about it. Nothing here inspects behavior data, and no check needs an
 //! identifier: everything runs on the provenance envelope and the salted subject
 //! pseudonyms.
+//!
+//! Several checks read fields that only the streaming providers carry. A check
+//! that finds nothing to read reports [`Status::Warn`] and says how many
+//! contributions it skipped, never a pass. A pass has to mean the check ran.
 
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
 use crate::signal::{ProofRefKind, SignalRecord};
+
+/// Verdicts Myrad's pipeline emits for a contribution it accepted. `zk_verified`
+/// is the stronger of the two and must not read as the weaker one failing.
+const ACCEPTED_VERIFICATION: [&str; 2] = ["verified", "zk_verified"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -46,27 +54,43 @@ impl Finding {
             affected,
         }
     }
+
+    /// The check had nothing to read. Not a pass: the buyer is told it did not
+    /// run and on how many contributions.
+    fn not_evaluated(check: &str, field: &str, skipped: usize) -> Self {
+        Self::new(
+            check,
+            Status::Warn,
+            format!("not evaluated: {skipped} contribution(s) carry no {field}"),
+            skipped,
+        )
+    }
 }
 
 /// Thresholds the checks are run against. Defaults are the ones Covenant is
-/// willing to sign behind; a deployment can tighten them, and the receipt
-/// records what was used so a buyer isn't comparing receipts run under
-/// different bars.
+/// willing to sign behind; a caller can tighten them, and the receipt records
+/// what was used so a buyer isn't comparing receipts run under different bars.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IntegrityPolicy {
     /// Smallest cohort that may be sold. Aggregation is Myrad's privacy story;
     /// below this the aggregate is close enough to a person to be treated as
     /// one.
+    #[serde(default = "default_min_k")]
     pub min_k: usize,
     /// Treat a contribution resting on a pipeline delivery marker rather than a
     /// Reclaim proof id as a failure instead of a warning.
+    #[serde(default)]
     pub require_reclaim_proof_ref: bool,
+}
+
+fn default_min_k() -> usize {
+    5
 }
 
 impl Default for IntegrityPolicy {
     fn default() -> Self {
         Self {
-            min_k: 5,
+            min_k: default_min_k(),
             require_reclaim_proof_ref: false,
         }
     }
@@ -90,55 +114,28 @@ impl IntegrityReport {
     }
 }
 
-/// Months since year zero, from a `YYYY-MM` prefix.
-fn month_index(s: &str) -> Option<i32> {
+/// Months since year zero, from a `YYYY-MM` prefix. An out-of-range month is
+/// unparseable, not aliased onto the neighboring year.
+pub(crate) fn month_index(s: &str) -> Option<i32> {
     let (y, m) = s.get(..7)?.split_once('-')?;
-    Some(y.parse::<i32>().ok()? * 12 + m.parse::<i32>().ok()? - 1)
+    let (y, m) = (y.parse::<i32>().ok()?, m.parse::<i32>().ok()?);
+    (1..=12).contains(&m).then(|| y * 12 + m - 1)
 }
 
 pub fn evaluate(records: &[SignalRecord], policy: IntegrityPolicy) -> IntegrityReport {
-    let mut findings = Vec::new();
-
-    let opted_out = records.iter().filter(|r| r.opt_out).count();
-    findings.push(if opted_out > 0 {
-        Finding::new(
-            "consent",
-            Status::Fail,
-            format!("{opted_out} contribution(s) marked opt_out are in the set"),
-            opted_out,
-        )
-    } else {
-        Finding::new("consent", Status::Pass, "no opted-out contributions", 0)
-    });
-
-    let unverified = records
-        .iter()
-        .filter(|r| r.verification_status != "verified")
-        .count();
-    findings.push(if unverified > 0 {
-        Finding::new(
-            "verification_status",
-            Status::Fail,
-            format!("{unverified} contribution(s) are not marked verified"),
-            unverified,
-        )
-    } else {
-        Finding::new(
-            "verification_status",
-            Status::Pass,
-            "every contribution is marked verified by the pipeline",
-            0,
-        )
-    });
-
-    findings.push(subject_uniqueness(records));
-    findings.push(payload_distinctness(records));
-    findings.push(proof_reference(records, policy));
-    findings.push(cohort_size(records, policy));
-    findings.push(temporal_bounds(records));
-    findings.push(window_consistency(records));
-    findings.push(pii_surface(records));
-    findings.push(activity_present(records));
+    let findings = vec![
+        consent(records),
+        verification_status(records),
+        subject_uniqueness(records),
+        proof_uniqueness(records),
+        payload_distinctness(records),
+        proof_reference(records, policy),
+        cohort_size(records, policy),
+        temporal_bounds(records),
+        window_consistency(records),
+        pii_surface(records),
+        activity_present(records),
+    ];
 
     let status = findings
         .iter()
@@ -151,6 +148,55 @@ pub fn evaluate(records: &[SignalRecord], policy: IntegrityPolicy) -> IntegrityR
         policy,
         findings,
     }
+}
+
+fn consent(records: &[SignalRecord]) -> Finding {
+    let opted_out = records.iter().filter(|r| r.opt_out).count();
+    if opted_out > 0 {
+        Finding::new(
+            "consent",
+            Status::Fail,
+            format!("{opted_out} contribution(s) marked opt_out are in the set"),
+            opted_out,
+        )
+    } else {
+        Finding::new("consent", Status::Pass, "no opted-out contributions", 0)
+    }
+}
+
+/// Myrad's own verdict, passed through. Covenant does not verify the Reclaim
+/// proof itself, so this check reports what the pipeline said rather than
+/// standing behind it.
+fn verification_status(records: &[SignalRecord]) -> Finding {
+    let rejected: Vec<&str> = records
+        .iter()
+        .map(|r| r.verification_status.as_str())
+        .filter(|s| !ACCEPTED_VERIFICATION.contains(s))
+        .collect();
+
+    if rejected.is_empty() {
+        return Finding::new(
+            "verification_status",
+            Status::Pass,
+            format!(
+                "all {} contribution(s) accepted by the pipeline",
+                records.len()
+            ),
+            0,
+        );
+    }
+    let mut observed: Vec<&str> = rejected.clone();
+    observed.sort_unstable();
+    observed.dedup();
+    Finding::new(
+        "verification_status",
+        Status::Fail,
+        format!(
+            "{} contribution(s) carry a verification status outside {ACCEPTED_VERIFICATION:?}: {observed:?}",
+            rejected.len()
+        ),
+        rejected.len(),
+    )
 }
 
 /// One human, counted once. Duplicate pseudonyms in a cohort mean the same
@@ -167,12 +213,20 @@ fn subject_uniqueness(records: &[SignalRecord]) -> Finding {
     }
     let repeated: usize = seen.values().filter(|n| **n > 1).map(|n| n - 1).sum();
 
+    let unproven = if missing > 0 {
+        format!(", and {missing} carry no subject commitment, so distinctness is unproven for them")
+    } else {
+        String::new()
+    };
+
     if repeated > 0 {
         Finding::new(
             "subject_uniqueness",
             Status::Fail,
-            format!("{repeated} duplicate subject commitment(s): a contributor is counted more than once"),
-            repeated,
+            format!(
+                "{repeated} duplicate subject commitment(s): a contributor is counted more than once{unproven}"
+            ),
+            repeated + missing,
         )
     } else if missing > 0 {
         Finding::new(
@@ -193,25 +247,47 @@ fn subject_uniqueness(records: &[SignalRecord]) -> Finding {
     }
 }
 
+/// One proof backs one contribution. The same proof id under two contributions
+/// is the same evidence counted twice, whatever the subject pseudonyms say.
+fn proof_uniqueness(records: &[SignalRecord]) -> Finding {
+    let mut seen: BTreeMap<&str, usize> = BTreeMap::new();
+    for r in records {
+        *seen.entry(r.proof.id.as_str()).or_default() += 1;
+    }
+    let repeated: usize = seen.values().filter(|n| **n > 1).map(|n| n - 1).sum();
+
+    if repeated > 0 {
+        Finding::new(
+            "proof_uniqueness",
+            Status::Fail,
+            format!(
+                "{repeated} contribution(s) reuse a proof reference already counted in this cohort"
+            ),
+            repeated,
+        )
+    } else {
+        Finding::new(
+            "proof_uniqueness",
+            Status::Pass,
+            format!("{} distinct proof reference(s)", seen.len()),
+            0,
+        )
+    }
+}
+
 /// Distinct subjects carrying byte-identical payloads. Not proof of anything on
 /// its own, and a legitimate cause exists (two genuinely identical low-activity
 /// accounts), but it is the shape a replayed source record makes, so the buyer
 /// is told.
 fn payload_distinctness(records: &[SignalRecord]) -> Finding {
-    let mut by_digest: BTreeMap<String, Vec<&str>> = BTreeMap::new();
+    let mut by_digest: BTreeMap<String, usize> = BTreeMap::new();
     for r in records {
         let Ok(digest) = r.payload_sha256() else {
             continue;
         };
-        by_digest
-            .entry(digest)
-            .or_default()
-            .push(r.subject_commitment.as_deref().unwrap_or(&r.proof.id));
+        *by_digest.entry(digest).or_default() += 1;
     }
-    let collisions: Vec<_> = by_digest
-        .iter()
-        .filter(|(_, holders)| holders.len() > 1)
-        .collect();
+    let collisions: Vec<usize> = by_digest.values().copied().filter(|n| *n > 1).collect();
 
     if collisions.is_empty() {
         return Finding::new(
@@ -221,7 +297,7 @@ fn payload_distinctness(records: &[SignalRecord]) -> Finding {
             0,
         );
     }
-    let affected: usize = collisions.iter().map(|(_, h)| h.len()).sum();
+    let affected: usize = collisions.iter().sum();
     Finding::new(
         "payload_distinctness",
         Status::Warn,
@@ -304,30 +380,40 @@ fn cohort_size(records: &[SignalRecord], policy: IntegrityPolicy) -> Finding {
 /// future, so this is a parsing or padding fault, and it lands in an aggregate
 /// as inflated volume.
 fn temporal_bounds(records: &[SignalRecord]) -> Finding {
+    let mut evaluated = 0usize;
     let mut affected = 0usize;
     let mut worst = 0i32;
     for r in records {
         let Some(generated) = r.generated_at().and_then(month_index) else {
             continue;
         };
-        let furthest = r
+        let Some(furthest) = r
             .activity_months()
             .iter()
             .filter_map(|m| month_index(m))
             .map(|i| i - generated)
             .max()
-            .unwrap_or(0);
+        else {
+            continue;
+        };
+        evaluated += 1;
         if furthest > 0 {
             affected += 1;
             worst = worst.max(furthest);
         }
     }
 
+    if evaluated == 0 {
+        return Finding::not_evaluated("temporal_bounds", "dated activity", records.len());
+    }
     if affected == 0 {
         Finding::new(
             "temporal_bounds",
             Status::Pass,
-            "no activity is dated after the record was generated",
+            format!(
+                "{evaluated} of {} contribution(s) carried dated activity, none after its own generation time",
+                records.len()
+            ),
             0,
         )
     } else {
@@ -346,32 +432,43 @@ fn temporal_bounds(records: &[SignalRecord]) -> Finding {
 /// constant window field next to a multi-year history means the window is a
 /// label, and a buyer pricing recency off it is pricing the wrong thing.
 fn window_consistency(records: &[SignalRecord]) -> Finding {
+    let mut evaluated = 0usize;
     let mut affected = 0usize;
     let mut widest = 0i32;
     for r in records {
         let Some(days) = r.window_days_claimed() else {
             continue;
         };
-        let months = r.activity_months();
+        let mut months: Vec<i32> = r
+            .activity_months()
+            .iter()
+            .filter_map(|m| month_index(m))
+            .collect();
+        months.sort_unstable();
         let (Some(first), Some(last)) = (months.first(), months.last()) else {
             continue;
         };
-        let (Some(a), Some(b)) = (month_index(first), month_index(last)) else {
-            continue;
-        };
-        let span = b - a + 1;
-        let claimed = days.div_ceil(30).max(1) as i32;
+        evaluated += 1;
+        let span = last - first + 1;
+        let claimed = days.div_ceil(30).clamp(1, i32::MAX as u64) as i32;
         if span > claimed {
             affected += 1;
             widest = widest.max(span);
         }
     }
 
+    if evaluated == 0 {
+        return Finding::not_evaluated(
+            "window_consistency",
+            "declared window with dated activity",
+            records.len(),
+        );
+    }
     if affected == 0 {
         Finding::new(
             "window_consistency",
             Status::Pass,
-            "declared windows cover the activity present",
+            format!("{evaluated} declared window(s) cover the activity present"),
             0,
         )
     } else {
@@ -388,9 +485,19 @@ fn window_consistency(records: &[SignalRecord]) -> Finding {
 
 /// Quasi-identifiers surviving in a payload that declares itself PII-stripped.
 fn pii_surface(records: &[SignalRecord]) -> Finding {
+    let claiming: Vec<&SignalRecord> = records.iter().filter(|r| r.claims_pii_stripped()).collect();
+    if claiming.is_empty() {
+        return Finding::not_evaluated("pii_surface", "pii_stripped declaration", records.len());
+    }
+
     let mut fields: BTreeMap<&str, usize> = BTreeMap::new();
-    for r in records.iter().filter(|r| r.claims_pii_stripped()) {
-        for f in r.quasi_identifiers() {
+    let mut affected = 0usize;
+    for r in &claiming {
+        let found = r.quasi_identifiers();
+        if !found.is_empty() {
+            affected += 1;
+        }
+        for f in found {
             *fields.entry(f).or_default() += 1;
         }
     }
@@ -399,11 +506,13 @@ fn pii_surface(records: &[SignalRecord]) -> Finding {
         return Finding::new(
             "pii_surface",
             Status::Pass,
-            "no quasi-identifiers found in payloads declaring pii_stripped",
+            format!(
+                "{} payload(s) declaring pii_stripped carry no known quasi-identifier",
+                claiming.len()
+            ),
             0,
         );
     }
-    let affected = *fields.values().max().unwrap_or(&0);
     let named: Vec<String> = fields.iter().map(|(f, n)| format!("{f} ({n})")).collect();
     Finding::new(
         "pii_surface",
@@ -416,23 +525,34 @@ fn pii_surface(records: &[SignalRecord]) -> Finding {
     )
 }
 
-/// Contributions verified as real but carrying nothing measured. They are
+/// Contributions verified as real but reporting nothing measured. They are
 /// legitimate records; they just don't contribute signal, and counting them
 /// toward a cohort overstates it.
 fn activity_present(records: &[SignalRecord]) -> Finding {
-    let empty = records.iter().filter(|r| r.is_empty_activity()).count();
+    let counted: Vec<&SignalRecord> = records
+        .iter()
+        .filter(|r| r.activity_count().is_some())
+        .collect();
+    if counted.is_empty() {
+        return Finding::not_evaluated("activity_present", "activity count", records.len());
+    }
+
+    let empty = counted
+        .iter()
+        .filter(|r| r.activity_count() == Some(0))
+        .count();
     if empty == 0 {
         Finding::new(
             "activity_present",
             Status::Pass,
-            "every contribution carries measured activity",
+            format!("{} contribution(s) report measured activity", counted.len()),
             0,
         )
     } else {
         Finding::new(
             "activity_present",
             Status::Warn,
-            format!("{empty} verified contribution(s) carry no measured activity"),
+            format!("{empty} contribution(s) report an activity count of zero"),
             empty,
         )
     }
@@ -447,11 +567,12 @@ mod tests {
     struct Spec<'a> {
         proof_id: String,
         subject: Option<String>,
+        verification: &'a str,
         generated: &'a str,
         months: &'a [&'a str],
-        titles: u64,
+        titles: Option<u64>,
         initial: Option<&'a str>,
-        window_days: u64,
+        window_days: Option<u64>,
     }
 
     impl Spec<'_> {
@@ -459,11 +580,12 @@ mod tests {
             Self {
                 proof_id: format!("{:024x}", i + 1),
                 subject: Some(format!("subject-{i}")),
+                verification: "verified",
                 generated: "2026-05-19T00:00:00Z",
                 months: &["2026-04", "2026-05"],
-                titles: 100 + i as u64,
+                titles: Some(100 + i as u64),
                 initial: None,
-                window_days: 90,
+                window_days: Some(90),
             }
         }
 
@@ -473,21 +595,44 @@ mod tests {
                 .iter()
                 .map(|m| ((*m).to_string(), json!(1)))
                 .collect();
+            let mut summary = serde_json::Map::new();
+            if let Some(days) = self.window_days {
+                summary.insert("data_window_days".into(), json!(days));
+            }
+            if let Some(titles) = self.titles {
+                summary.insert("total_titles_watched".into(), json!(titles));
+            }
             let value = json!({
                 "provider": "netflix",
                 "reclaim_proof_id": self.proof_id,
-                "verification_status": "verified",
+                "verification_status": self.verification,
                 "signal": {
                     "dataset_id": "myrad_netflix_v1",
                     "generated_at": self.generated,
                     "metadata": { "privacy_compliance": { "cohort_id": "c", "pii_stripped": true } },
                     "user_profile": { "profile_name_initial": self.initial },
-                    "viewing_summary": { "data_window_days": self.window_days, "total_titles_watched": self.titles },
+                    "viewing_summary": Value::Object(summary),
                     "viewing_behavior": { "monthly_pattern": Value::Object(monthly) }
                 }
             });
             SignalRecord::from_sample(&value, self.subject, false).unwrap()
         }
+    }
+
+    /// A record from a provider whose payload has none of the streaming fields.
+    fn foreign(i: usize) -> SignalRecord {
+        let value = json!({
+            "provider": "spotify",
+            "reclaim_proof_id": format!("{:024x}", 900 + i),
+            "verification_status": "verified",
+            "signal": {
+                "dataset_id": "myrad_spotify_v1",
+                "generated_at": "2026-05-19T00:00:00Z",
+                "metadata": { "privacy_compliance": { "cohort_id": "c" } },
+                "listening_behavior": { "monthly_pattern": { "2031-12": 4 } }
+            }
+        });
+        SignalRecord::from_sample(&value, Some(format!("subject-{i}")), false).unwrap()
     }
 
     fn clean(n: usize) -> Vec<SignalRecord> {
@@ -511,6 +656,31 @@ mod tests {
     }
 
     #[test]
+    fn zk_verified_is_accepted_and_an_unknown_verdict_names_itself() {
+        let mut records = clean(5);
+        records[0] = Spec {
+            verification: "zk_verified",
+            ..Spec::new(0)
+        }
+        .build();
+        let report = evaluate(&records, IntegrityPolicy::default());
+        assert_eq!(
+            report.finding("verification_status").unwrap().status,
+            Status::Pass
+        );
+
+        records[1] = Spec {
+            verification: "pending_review",
+            ..Spec::new(1)
+        }
+        .build();
+        let f = evaluate(&records, IntegrityPolicy::default());
+        let f = f.finding("verification_status").unwrap();
+        assert_eq!(f.status, Status::Fail);
+        assert!(f.detail.contains("pending_review"), "{}", f.detail);
+    }
+
+    #[test]
     fn the_same_subject_twice_is_a_failure() {
         let mut records = clean(5);
         records[4].subject_commitment = records[0].subject_commitment.clone();
@@ -529,6 +699,29 @@ mod tests {
             report.finding("subject_uniqueness").unwrap().status,
             Status::Warn
         );
+    }
+
+    #[test]
+    fn a_duplicate_and_a_missing_commitment_are_both_reported() {
+        let mut records = clean(5);
+        records[4].subject_commitment = records[0].subject_commitment.clone();
+        records[1].subject_commitment = None;
+        let report = evaluate(&records, IntegrityPolicy::default());
+        let f = report.finding("subject_uniqueness").unwrap();
+        assert_eq!(f.status, Status::Fail);
+        assert!(f.detail.contains("no subject commitment"), "{}", f.detail);
+        assert_eq!(f.affected, 2);
+    }
+
+    #[test]
+    fn one_proof_backing_two_contributions_fails() {
+        let mut records = clean(5);
+        records[3].proof.id = records[0].proof.id.clone();
+        let report = evaluate(&records, IntegrityPolicy::default());
+        let f = report.finding("proof_uniqueness").unwrap();
+        assert_eq!(f.status, Status::Fail);
+        assert_eq!(f.affected, 1);
+        assert!(!report.sellable());
     }
 
     #[test]
@@ -616,14 +809,14 @@ mod tests {
         let f = report.finding("pii_surface").unwrap();
         assert_eq!(f.status, Status::Warn);
         assert!(f.detail.contains("profile_name_initial"));
+        assert_eq!(f.affected, 1);
     }
 
     #[test]
-    fn verified_but_empty_contributions_warn() {
+    fn contributions_reporting_zero_activity_warn() {
         let mut records = clean(5);
         records[0] = Spec {
-            months: &[],
-            titles: 0,
+            titles: Some(0),
             ..Spec::new(0)
         }
         .build();
@@ -635,9 +828,76 @@ mod tests {
     }
 
     #[test]
-    fn month_index_handles_iso_timestamps_and_month_keys() {
+    fn a_payload_shape_the_checks_cannot_read_never_reports_a_pass() {
+        let records: Vec<SignalRecord> = (0..5).map(foreign).collect();
+        let report = evaluate(&records, IntegrityPolicy::default());
+
+        for check in [
+            "temporal_bounds",
+            "window_consistency",
+            "pii_surface",
+            "activity_present",
+        ] {
+            let f = report.finding(check).unwrap();
+            assert_eq!(f.status, Status::Warn, "{check} passed vacuously: {f:?}");
+            assert!(f.detail.starts_with("not evaluated"), "{}", f.detail);
+            assert_eq!(f.affected, 5);
+        }
+        assert_eq!(report.status, Status::Warn);
+        assert!(
+            report.sellable(),
+            "unreadable fields are soft, not blocking"
+        );
+    }
+
+    #[test]
+    fn month_index_rejects_an_out_of_range_month() {
         assert_eq!(month_index("2026-05"), month_index("2026-05-19T17:40:20Z"));
         assert!(month_index("2027-06").unwrap() > month_index("2026-05").unwrap());
         assert_eq!(month_index("nope"), None);
+        // 2025-17 must not alias onto 2026-05.
+        assert_eq!(month_index("2025-17"), None);
+        assert_eq!(month_index("2026-00"), None);
+    }
+
+    #[test]
+    fn an_out_of_range_month_does_not_hide_future_dated_activity() {
+        let mut records = clean(5);
+        records[0] = Spec {
+            months: &["2025-17"],
+            ..Spec::new(0)
+        }
+        .build();
+        let report = evaluate(&records, IntegrityPolicy::default());
+        let f = report.finding("temporal_bounds").unwrap();
+        assert_eq!(f.status, Status::Pass);
+        assert!(f.detail.contains("4 of 5"), "{}", f.detail);
+    }
+
+    #[test]
+    fn an_absurd_declared_window_does_not_wrap_into_a_pass() {
+        let mut records = clean(5);
+        records[0] = Spec {
+            window_days: Some(u64::MAX),
+            months: &["2017-04", "2026-05"],
+            ..Spec::new(0)
+        }
+        .build();
+        let report = evaluate(&records, IntegrityPolicy::default());
+        assert_eq!(
+            report.finding("window_consistency").unwrap().status,
+            Status::Pass
+        );
+    }
+
+    #[test]
+    fn a_partial_policy_fills_in_the_defaults() {
+        let p: IntegrityPolicy = serde_json::from_value(json!({ "min_k": 25 })).unwrap();
+        assert_eq!(p.min_k, 25);
+        assert!(!p.require_reclaim_proof_ref);
+        assert_eq!(
+            serde_json::from_value::<IntegrityPolicy>(json!({})).unwrap(),
+            IntegrityPolicy::default()
+        );
     }
 }

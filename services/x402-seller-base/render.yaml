@@ -40,3 +40,8 @@ services:
       # for production, where responses must verify against a pinned pubkey).
       - key: COVENANT_ATTEST_KEYPAIR
         sync: false
+      # Path to the issued Myrad bundles the signal route serves. Unset, that
+      # route answers 503 and never settles a payment, since the placeholder it
+      # would otherwise return carries no receipt.
+      - key: COVENANT_MYRAD_BUNDLE
+        sync: false

@@ -1,25 +1,21 @@
-//! `covenant.myrad.signal.v1` — the provenance receipt that travels with a
+//! `covenant.myrad.signal.v1`: the provenance receipt that travels with a
 //! Myrad signal.
 //!
 //! Myrad's pipeline proves the source data is real: a Reclaim proof, generated
 //! on the contributor's device, over the contributor's own account. What no
 //! party can currently check is the step after that, where verified
 //! contributions become the aggregate a buyer pays for. The receipt covers that
-//! step. It binds, in one signed object:
+//! step. One signed object holds the digest of the delivered bytes, a Merkle
+//! root over the contributing set, the contributor count, the emission range
+//! those contributions cover, and every integrity finding.
 //!
-//! - **what was delivered** — a digest of the exact bytes the buyer received,
-//! - **what it came from** — a Merkle root over the contributing set,
-//! - **how many, and how distinct** — the contributor count and the checks that
-//!   back it,
-//! - **when** — the emission range the contributions actually cover,
-//! - **what is soft about it** — every integrity finding, warnings included.
-//!
-//! A receipt that hid its warnings would be worth less than no receipt, so
-//! [`IntegrityReport`] travels whole. The signature is over the RFC 8785
+//! Warnings travel with the rest: a buyer told only the good news is back to
+//! trusting the seller. The signature is over the RFC 8785
 //! canonical form, so a buyer recomputes the digest from the bytes they hold and
 //! checks it against the published attestor key. Anchoring the digest on Solana
-//! is the daemon's step, the same path the other Covenant receipt kinds take,
-//! and it lands in [`SignedReceipt::anchor`] outside the signed bytes.
+//! is the daemon's step, on the path the other Covenant receipt kinds already
+//! take; [`SignedReceipt::anchor`] is where it would land, outside the signed
+//! bytes, and stays empty until an issuer fills it.
 //!
 //! No field here carries behavior data, an account identifier, or anything that
 //! describes a person. The receipt is derivable entirely from provenance
@@ -33,7 +29,7 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{Error, Result};
 use crate::evidence::{Contribution, MerkleTree, CONTRIBUTION_SCHEMA};
-use crate::integrity::{evaluate, IntegrityPolicy, IntegrityReport, Status};
+use crate::integrity::{evaluate, month_index, IntegrityPolicy, IntegrityReport};
 use crate::signal::SignalRecord;
 
 pub const SCHEMA: &str = "covenant.myrad.signal.v1";
@@ -82,7 +78,12 @@ pub struct Freshness {
     pub observed_span_months: u32,
 }
 
+/// Unknown fields are refused rather than dropped. A verifier that ignored them
+/// would recompute the digest over less than it was handed, and whatever it
+/// discarded would still be sitting next to a valid signature wherever the raw
+/// receipt is rendered.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SignalReceipt {
     pub schema: String,
     pub signal: SignalDescriptor,
@@ -93,11 +94,8 @@ pub struct SignalReceipt {
 }
 
 impl SignalReceipt {
-    /// Build a receipt for `delivered`, backed by `records`.
-    ///
-    /// The contributing set must be one cohort from one provider: a receipt that
-    /// averaged two cohorts under one label would be the exact ambiguity it
-    /// exists to remove.
+    /// One cohort, one provider. A set spanning two would be labeled with the
+    /// ambiguity this receipt exists to remove.
     pub fn build(
         delivered: &Value,
         records: &[SignalRecord],
@@ -127,23 +125,29 @@ impl SignalReceipt {
             .map(|r| Contribution::from_record(r)?.commitment_hex())
             .collect::<Result<Vec<_>>>()?;
         let tree = MerkleTree::build(&commitments)?;
+        let delivered_sha256 = digest_artifact(delivered)?;
 
-        let delivered_sha256 = {
-            let canon =
-                serde_jcs::to_string(delivered).map_err(|e| Error::Decode(e.to_string()))?;
-            hex::encode(Sha256::digest(canon.as_bytes()))
+        // A descriptor field only describes the cohort if every contribution
+        // agrees on it. Where they don't, the receipt omits it instead of
+        // labeling the set from whichever record sorted first.
+        let agreed = |read: fn(&SignalRecord) -> Option<&str>| -> Option<String> {
+            let value = read(first)?;
+            records
+                .iter()
+                .all(|r| read(r) == Some(value))
+                .then(|| value.to_string())
         };
 
         Ok(Self {
             schema: SCHEMA.to_string(),
             signal: SignalDescriptor {
                 provider: first.provider.clone(),
-                dataset_id: first.dataset_id().map(str::to_string),
-                record_type: first.record_type().map(str::to_string),
-                schema_standard: first.schema_standard().map(str::to_string),
-                schema_version: first.schema_version().map(str::to_string),
+                dataset_id: agreed(SignalRecord::dataset_id),
+                record_type: agreed(SignalRecord::record_type),
+                schema_standard: agreed(SignalRecord::schema_standard),
+                schema_version: agreed(SignalRecord::schema_version),
                 cohort_id,
-                segment_id: first.segment_id().map(str::to_string),
+                segment_id: agreed(SignalRecord::segment_id),
                 delivered_sha256,
             },
             evidence: Evidence {
@@ -159,12 +163,10 @@ impl SignalReceipt {
     }
 
     /// Whether the delivered bytes are the ones this receipt was issued over.
+    /// Fails closed: an artifact this crate would refuse to issue over is not
+    /// one it will confirm either.
     pub fn covers(&self, delivered: &Value) -> bool {
-        serde_jcs::to_string(delivered)
-            .map(|canon| {
-                hex::encode(Sha256::digest(canon.as_bytes())) == self.signal.delivered_sha256
-            })
-            .unwrap_or(false)
+        digest_artifact(delivered).is_ok_and(|d| d == self.signal.delivered_sha256)
     }
 
     pub fn canonical_json(&self) -> Result<String> {
@@ -179,10 +181,9 @@ impl SignalReceipt {
 
     /// Sign with a Covenant attestor key.
     ///
-    /// A failing cohort still gets a receipt. Refusing to sign one would leave
-    /// the buyer with nothing to check and the failure invisible; the receipt
-    /// carries [`Status::Fail`] and the reasons, and the sale decision is the
-    /// seller's to make on top of it.
+    /// A failing cohort still gets a receipt, carrying `fail` and the reasons.
+    /// Withholding it would hide the failure and leave the buyer nothing to
+    /// check; the sale decision is the seller's on top of it.
     pub fn attest(&self, attestor: &SigningKey) -> Result<SignedReceipt> {
         let root_hash_hex = self.root_hash_hex()?;
         let sig = attestor.sign(root_hash_hex.as_bytes());
@@ -196,7 +197,47 @@ impl SignalReceipt {
     }
 
     pub fn sellable(&self) -> bool {
-        self.integrity.status != Status::Fail
+        self.integrity.sellable()
+    }
+}
+
+/// Largest integer an IEEE-754 double represents exactly. RFC 8785 serializes
+/// numbers through the ECMAScript rule, so anything past this is rounded before
+/// it is hashed.
+const MAX_EXACT_INTEGER: u64 = 1 << 53;
+
+/// Digest the delivered artifact, refusing one whose numbers canonicalize
+/// ambiguously.
+///
+/// Two artifacts differing only above 2^53 canonicalize to the same bytes and
+/// would share a digest, so a receipt over one would "cover" the other. That is
+/// the single property the receipt exists to provide, so the ambiguity is
+/// rejected at the door rather than inherited. Anything at that magnitude (a
+/// 64-bit id, a nanosecond timestamp, a token amount in base units) belongs in
+/// the artifact as a string.
+fn digest_artifact(delivered: &Value) -> Result<String> {
+    if let Some(found) = unrepresentable_integer(delivered) {
+        return Err(Error::Signal(format!(
+            "delivered artifact carries {found}, which exceeds the 2^53 exact-integer range RFC 8785 canonicalizes within; encode it as a string"
+        )));
+    }
+    let canon = serde_jcs::to_string(delivered).map_err(|e| Error::Decode(e.to_string()))?;
+    Ok(hex::encode(Sha256::digest(canon.as_bytes())))
+}
+
+fn unrepresentable_integer(value: &Value) -> Option<String> {
+    match value {
+        Value::Number(n) => {
+            let past_range = n
+                .as_u64()
+                .map(|u| u > MAX_EXACT_INTEGER)
+                .or_else(|| n.as_i64().map(|i| i.unsigned_abs() > MAX_EXACT_INTEGER))
+                .unwrap_or(false);
+            past_range.then(|| n.to_string())
+        }
+        Value::Array(items) => items.iter().find_map(unrepresentable_integer),
+        Value::Object(fields) => fields.values().find_map(unrepresentable_integer),
+        _ => None,
     }
 }
 
@@ -204,11 +245,15 @@ fn freshness(records: &[SignalRecord]) -> Freshness {
     let mut times: Vec<&str> = records.iter().filter_map(|r| r.generated_at()).collect();
     times.sort_unstable();
 
-    let mut months: Vec<String> = records.iter().flat_map(|r| r.activity_months()).collect();
-    months.sort();
-    months.dedup();
-    let span = match (months.first(), months.last()) {
-        (Some(a), Some(b)) => month_span(a, b),
+    // Ordered by calendar position, not by text: "10000-01" sorts before
+    // "9999-01" as a string and would invert the span.
+    let months: Vec<i32> = records
+        .iter()
+        .flat_map(|r| r.activity_months())
+        .filter_map(|m| month_index(&m))
+        .collect();
+    let span = match (months.iter().min(), months.iter().max()) {
+        (Some(a), Some(b)) => (b - a + 1) as u32,
         _ => 0,
     };
 
@@ -230,18 +275,8 @@ fn freshness(records: &[SignalRecord]) -> Freshness {
     }
 }
 
-fn month_span(first: &str, last: &str) -> u32 {
-    let parse = |s: &str| -> Option<i32> {
-        let (y, m) = s.get(..7)?.split_once('-')?;
-        Some(y.parse::<i32>().ok()? * 12 + m.parse::<i32>().ok()?)
-    };
-    match (parse(first), parse(last)) {
-        (Some(a), Some(b)) if b >= a => (b - a + 1) as u32,
-        _ => 0,
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SignedReceipt {
     pub receipt: SignalReceipt,
     pub root_hash_hex: String,
@@ -257,6 +292,11 @@ impl SignedReceipt {
     pub fn verify(&self) -> bool {
         use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
 
+        // A signature over some other schema's object is a valid signature over
+        // the wrong thing.
+        if self.receipt.schema != SCHEMA {
+            return false;
+        }
         let Ok(recomputed) = self.receipt.root_hash_hex() else {
             return false;
         };
@@ -289,6 +329,7 @@ impl SignedReceipt {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::integrity::Status;
     use serde_json::json;
 
     fn record(cohort: &str, subject: &str, proof: &str) -> SignalRecord {
@@ -417,6 +458,97 @@ mod tests {
         assert!(!receipt.sellable());
         assert_eq!(receipt.integrity.status, Status::Fail);
         assert!(receipt.attest(&key).unwrap().verify());
+    }
+
+    #[test]
+    fn an_artifact_whose_integers_canonicalize_ambiguously_is_refused() {
+        // These two differ, but RFC 8785 rounds both to the same double, so one
+        // receipt would cover both artifacts.
+        let a = json!({ "cohort_id": "netflix_drama", "impressions": 9007199254740993u64 });
+        let b = json!({ "cohort_id": "netflix_drama", "impressions": 9007199254740992u64 });
+        assert_ne!(a, b);
+        assert_eq!(
+            serde_jcs::to_string(&a).unwrap(),
+            serde_jcs::to_string(&b).unwrap()
+        );
+
+        let err = SignalReceipt::build(&a, &cohort(5), IntegrityPolicy::default())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("2^53"), "{err}");
+
+        // Nested and negative land the same way, and a verifier fails closed.
+        assert!(SignalReceipt::build(
+            &json!({ "rows": [{ "id": -9007199254740993i64 }] }),
+            &cohort(5),
+            IntegrityPolicy::default()
+        )
+        .is_err());
+        let receipt =
+            SignalReceipt::build(&delivered(), &cohort(5), IntegrityPolicy::default()).unwrap();
+        assert!(!receipt.covers(&a));
+    }
+
+    #[test]
+    fn a_receipt_relabeled_to_another_schema_does_not_verify() {
+        let key = SigningKey::from_bytes(&[11u8; 32]);
+        let mut signed = SignalReceipt::build(&delivered(), &cohort(5), IntegrityPolicy::default())
+            .unwrap()
+            .attest(&key)
+            .unwrap();
+        signed.receipt.schema = "covenant.myrad.signal.v9".into();
+        signed.root_hash_hex = signed.receipt.root_hash_hex().unwrap();
+        signed.signature_b64 =
+            STANDARD.encode(key.sign(signed.root_hash_hex.as_bytes()).to_bytes());
+        assert!(
+            !signed.verify(),
+            "a valid signature over the wrong schema is not a signal receipt"
+        );
+    }
+
+    #[test]
+    fn descriptor_fields_the_set_disagrees_on_are_omitted() {
+        let mut records = cohort(5);
+        records[2].payload["dataset_id"] = json!("myrad_hulu_v1");
+        let receipt =
+            SignalReceipt::build(&delivered(), &records, IntegrityPolicy::default()).unwrap();
+        assert_eq!(receipt.signal.dataset_id, None);
+        assert_eq!(
+            receipt.signal.record_type.as_deref(),
+            Some("streaming_behavior_intelligence")
+        );
+    }
+
+    #[test]
+    fn an_unknown_field_in_a_receipt_is_refused_rather_than_dropped() {
+        let key = SigningKey::from_bytes(&[13u8; 32]);
+        let signed = SignalReceipt::build(&delivered(), &cohort(5), IntegrityPolicy::default())
+            .unwrap()
+            .attest(&key)
+            .unwrap();
+        let mut raw: Value = serde_json::to_value(&signed).unwrap();
+        raw["receipt"]["contributors_marketing_claim"] = json!(50_000);
+        assert!(serde_json::from_value::<SignedReceipt>(raw).is_err());
+    }
+
+    #[test]
+    fn a_cohort_with_no_emission_time_cannot_be_receipted() {
+        let mut records = cohort(5);
+        records[0].payload["generated_at"] = Value::Null;
+        let err = SignalReceipt::build(&delivered(), &records, IntegrityPolicy::default())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("generated_at"), "{err}");
+    }
+
+    #[test]
+    fn one_contribution_copied_cannot_pass_as_a_cohort() {
+        let one = cohort(1);
+        let five: Vec<SignalRecord> = (0..5).map(|_| one[0].clone()).collect();
+        let err = SignalReceipt::build(&delivered(), &five, IntegrityPolicy::default())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("duplicate contribution commitment"), "{err}");
     }
 
     #[test]

@@ -4,15 +4,15 @@
 // The endpoint sells a cohort signal together with the Covenant receipt issued
 // over it. It does not issue: the attestor key lives with the issuer (the
 // covenant-myrad crate or covenantd), and this process only serves what it was
-// handed. That separation is the point. A buyer verifies the receipt against a
-// pinned attestor key, so a compromised or lying endpoint cannot forge one, and
-// nothing about the delivery path has to be trusted.
+// handed. A buyer verifies against a pinned key, so a compromised endpoint
+// cannot forge a receipt.
 //
 // Bundles come from COVENANT_MYRAD_BUNDLE (a file emitted by
-// `cargo run -p covenant-myrad --example emit_bundle`). Unset, the route serves
-// a synthetic reference cohort so the endpoint is exercisable before a real
-// source is wired; the payload says so, and no contributor data ships in this
-// repository either way.
+// `cargo run -p covenant-myrad --example emit_bundle -- bundle.json`). Unset,
+// the route answers 503 with the placeholder cohort named: the path stays
+// exercisable end to end, and >= 400 cancels settlement so nobody is charged for
+// a body with no receipt in it. No contributor data ships in this repository
+// either way.
 import { readFileSync } from "node:fs";
 import type { Request, Response } from "express";
 
@@ -52,6 +52,8 @@ export function loadBundles(path: string | undefined): Map<string, Bundle> {
   for (const bundle of list) {
     const cohort = cohortOf(bundle);
     if (!cohort) throw new Error(`bundle in ${path} carries no cohort_id`);
+    // Last-wins would quietly sell one of two bundles claiming the same cohort.
+    if (bundles.has(cohort)) throw new Error(`${path} has two bundles for cohort ${cohort}`);
     bundles.set(cohort, bundle);
   }
   if (bundles.size === 0) throw new Error(`${path} contains no bundles`);
@@ -60,15 +62,19 @@ export function loadBundles(path: string | undefined): Map<string, Bundle> {
 
 export function makeSignalHandler(bundles: Map<string, Bundle>, synthetic: boolean) {
   return (req: Request, res: Response): void => {
-    const bundle = bundles.get(req.params.cohort);
-    // 404 cancels settlement, so asking for a cohort that isn't offered is free.
-    if (!bundle) {
-      res.status(404).json({
-        error: "unknown cohort",
-        available: [...bundles.keys()],
-      });
+    // The placeholder carries no receipt, so it is not the product the route
+    // advertises and must never settle a payment.
+    if (synthetic) {
+      res.status(503).json({ error: "no issued bundle configured", note: SYNTHETIC_NOTE });
       return;
     }
-    res.json(synthetic ? { ...bundle, note: SYNTHETIC_NOTE } : bundle);
+    const bundle = bundles.get(req.params.cohort);
+    // 404 cancels settlement, so asking for a cohort that isn't offered is free.
+    // The catalog is not echoed back: enumerating it would be free too.
+    if (!bundle) {
+      res.status(404).json({ error: "unknown cohort" });
+      return;
+    }
+    res.json(bundle);
   };
 }

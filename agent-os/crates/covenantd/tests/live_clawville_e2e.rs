@@ -57,7 +57,14 @@ async fn req(stream: &mut UnixStream, request: Request) -> Response {
 
 async fn operator(sock: &std::path::Path, token_b58: &str) -> UnixStream {
     let mut stream = UnixStream::connect(sock).await.expect("connect");
-    match req(&mut stream, Request::Authenticate { token_b58: token_b58.to_string() }).await {
+    match req(
+        &mut stream,
+        Request::Authenticate {
+            token_b58: token_b58.to_string(),
+        },
+    )
+    .await
+    {
         Response::Authenticated { .. } => stream,
         other => panic!("operator authentication failed: {other:?}"),
     }
@@ -66,7 +73,11 @@ async fn operator(sock: &std::path::Path, token_b58: &str) -> UnixStream {
 async fn grant(stream: &mut UnixStream, action: &str) {
     match req(
         stream,
-        Request::GrantCapability { action: action.into(), scope: None, expires_at: None },
+        Request::GrantCapability {
+            action: action.into(),
+            scope: None,
+            expires_at: None,
+        },
     )
     .await
     {
@@ -76,7 +87,15 @@ async fn grant(stream: &mut UnixStream, action: &str) {
 }
 
 async fn call(stream: &mut UnixStream, name: &str, arguments: Value) -> Value {
-    match req(stream, Request::CallTool { name: name.into(), arguments }).await {
+    match req(
+        stream,
+        Request::CallTool {
+            name: name.into(),
+            arguments,
+        },
+    )
+    .await
+    {
         Response::ToolResult { content, is_error } => {
             assert!(!is_error, "{name} returned tool error: {content:?}");
             let blob = serde_json::to_value(&content).unwrap();
@@ -123,7 +142,10 @@ async fn live_covenantd_clawville_bounty_flow_round_trips() {
                     "clawville.land.grant",
                     "clawville.land.authorize",
                 ] {
-                    assert!(names.contains(&want), "{want} must be advertised, got {names:?}");
+                    assert!(
+                        names.contains(&want),
+                        "{want} must be advertised, got {names:?}"
+                    );
                 }
             }
             other => panic!("ListTools failed: {other:?}"),
@@ -135,7 +157,10 @@ async fn live_covenantd_clawville_bounty_flow_round_trips() {
         let mut s = operator(&sock, &token).await;
         match req(
             &mut s,
-            Request::CallTool { name: "clawville.bounty.verify".into(), arguments: json!({}) },
+            Request::CallTool {
+                name: "clawville.bounty.verify".into(),
+                arguments: json!({}),
+            },
         )
         .await
         {
@@ -199,12 +224,20 @@ async fn live_covenantd_clawville_bounty_flow_round_trips() {
         json!({ "grant": grant_obj, "criteria": criteria, "expectedCriteriaHash": criteria_hash, "submission": submission }),
     )
     .await;
-    assert_eq!(verdict["pass"], true, "clean submission must pass: {verdict}");
+    assert_eq!(
+        verdict["pass"], true,
+        "clean submission must pass: {verdict}"
+    );
     assert_eq!(verdict["evidenceOk"], true);
     assert_eq!(verdict["scopeOk"], true);
 
     // release → release_payment, buyer-signed
-    let decision = call(&mut s, "clawville.bounty.release", json!({ "verdict": verdict })).await;
+    let decision = call(
+        &mut s,
+        "clawville.bounty.release",
+        json!({ "verdict": verdict }),
+    )
+    .await;
     assert_eq!(decision["decision"], "release");
     assert_eq!(decision["instruction"], "release_payment");
     assert_eq!(decision["signerRole"], "buyer");
@@ -232,16 +265,22 @@ async fn live_covenantd_clawville_bounty_flow_round_trips() {
             "paramsHash": params_hash
         })
     };
-    let authorize = |action: &str| {
-        json!({ "action": land_action(action), "grant": land_grant, "nowMs": 1_000 })
-    };
+    let authorize = |action: &str| json!({ "action": land_action(action), "grant": land_grant, "nowMs": 1_000 });
 
-    let allowed = call(&mut s, "clawville.land.authorize", authorize("shop.restock")).await;
+    let allowed = call(
+        &mut s,
+        "clawville.land.authorize",
+        authorize("shop.restock"),
+    )
+    .await;
     assert_eq!(allowed["decision"], "allow");
 
     let refused = call(&mut s, "clawville.land.authorize", authorize("door.open")).await;
     assert_eq!(refused["decision"], "refuse");
-    assert!(refused["reason"].as_str().unwrap().contains("not in the grant"));
+    assert!(refused["reason"]
+        .as_str()
+        .unwrap()
+        .contains("not in the grant"));
 
     // Reserved beats granted: the same call with a parcel-wide grant still
     // cannot transfer the land.
@@ -258,7 +297,10 @@ async fn live_covenantd_clawville_bounty_flow_round_trips() {
     )
     .await;
     assert_eq!(reserved["decision"], "needs_owner");
-    assert_eq!(reserved["inGrant"], true, "the grant covers it; the policy is what stops it");
+    assert_eq!(
+        reserved["inGrant"], true,
+        "the grant covers it; the policy is what stops it"
+    );
 
     let _ = child.kill().await;
 }

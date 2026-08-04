@@ -1,16 +1,24 @@
-//! Covenant Solana protocol program.
-//!
-//! `$COVNT` is an external SPL mint. The program never mints it; protocol
-//! utility comes from staking, escrowing, burning, and metering it into
-//! non-transferable credits.
-
-#![allow(deprecated)]
-#![allow(unexpected_cfgs)]
+// Covenant Solana protocol program.
+//
+// `$COVNT` is an external SPL mint. The program never mints it; protocol
+// utility comes from staking, escrowing, burning, and metering it into
+// non-transferable credits.
+//
+// `allow(deprecated)` / `allow(unexpected_cfgs)` live in `[lints]` (Cargo.toml)
+// rather than as crate inner attributes, so this file can be `include!`d verbatim
+// by the isolated ER crate (settlement-ephemeral). Inner attributes break include!.
 
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{
     self, Burn, Mint, TokenAccount, TokenInterface, TransferChecked,
 };
+
+#[cfg(feature = "ephemeral")]
+use ephemeral_rollups_sdk::anchor::{commit, delegate, ephemeral};
+#[cfg(feature = "ephemeral")]
+use ephemeral_rollups_sdk::cpi::DelegateConfig;
+#[cfg(feature = "ephemeral")]
+use ephemeral_rollups_sdk::ephem::MagicIntentBundleBuilder;
 
 declare_id!("cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y");
 
@@ -26,6 +34,7 @@ solana_security_txt::security_txt! {
     auditors: "None"
 }
 
+#[cfg_attr(feature = "ephemeral", ephemeral)]
 #[program]
 pub mod settlement {
     use super::*;
@@ -95,6 +104,7 @@ pub mod settlement {
         credits.owner = ctx.accounts.owner.key();
         credits.balance = 0;
         credits.bump = ctx.bumps.credits;
+        credits.provenance_root = [0u8; 32];
 
         emit!(CreditAccountOpened {
             owner: credits.owner,
@@ -145,10 +155,21 @@ pub mod settlement {
 
         ctx.accounts.credits.balance -= amount;
 
+        // Fold the receipt into the account's provenance hash-chain. This runs in
+        // the ER per consume and commits to L1 with the balance, making the root a
+        // real-time, on-chain record of every metered action.
+        let provenance_root = anchor_lang::solana_program::hash::hashv(&[
+            &ctx.accounts.credits.provenance_root,
+            &receipt_hash,
+        ])
+        .to_bytes();
+        ctx.accounts.credits.provenance_root = provenance_root;
+
         emit!(CreditsConsumed {
             owner: ctx.accounts.owner.key(),
             amount,
             receipt_hash,
+            provenance_root,
         });
         Ok(())
     }
@@ -175,6 +196,7 @@ pub mod settlement {
         position.agent_key = ctx.accounts.agent.agent_key;
         position.owner = ctx.accounts.owner.key();
         position.amount = amount;
+        position.vault = ctx.accounts.stake_vault.key();
         position.lock_until = lock_until;
         position.active = true;
         position.bump = ctx.bumps.position;
@@ -229,7 +251,12 @@ pub mod settlement {
             ctx.accounts.covnt_mint.decimals,
         )?;
 
-        ctx.accounts.agent.stake = ctx.accounts.agent.stake.saturating_sub(amount);
+        ctx.accounts.agent.stake = ctx
+            .accounts
+            .agent
+            .stake
+            .checked_sub(amount)
+            .ok_or(CovenantError::InsufficientStake)?;
 
         emit!(StakeWithdrawn {
             agent_key,
@@ -266,7 +293,73 @@ pub mod settlement {
         )?;
 
         ctx.accounts.position.amount -= amount;
-        ctx.accounts.agent.stake = ctx.accounts.agent.stake.saturating_sub(amount);
+        ctx.accounts.agent.stake = ctx
+            .accounts
+            .agent
+            .stake
+            .checked_sub(amount)
+            .ok_or(CovenantError::InsufficientStake)?;
+        if ctx.accounts.position.amount == 0 {
+            ctx.accounts.position.active = false;
+        }
+
+        emit!(StakeSlashed {
+            agent_key,
+            owner,
+            amount,
+            reason_hash,
+        });
+        Ok(())
+    }
+
+    /// Slash an agent's bond citing its on-chain actions. The reason is not
+    /// supplied by the caller: it is read from the `provenance_root` of the
+    /// operator's canonical credit account (`[b"credits", agent.operator]`), the
+    /// hash-chain `consume_credits` folds gaslessly in the ER and commits to L1.
+    /// So the reason is the operator's own committed record, not an arbitrary claim.
+    ///
+    /// Two limits the caller must know. The credit account must be undelegated:
+    /// `Account<CreditAccount>` cannot load while owned by the delegation program,
+    /// so an operator can defer this slash for up to the delegation timeout. And
+    /// the binding is to the operator's canonical credit account, not a per-agent
+    /// log, so it assumes the operator meters through that account. For a slash
+    /// that depends on neither, use `slash_stake`.
+    pub fn slash_for_actions(ctx: Context<SlashForActions>, amount: u64) -> Result<()> {
+        require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
+        require!(amount > 0, CovenantError::ZeroAmount);
+        require!(ctx.accounts.position.active, CovenantError::StakeInactive);
+        require!(
+            ctx.accounts.position.amount >= amount,
+            CovenantError::InsufficientStake
+        );
+
+        // A slash "for actions" requires recorded actions: refuse to cite a
+        // genesis (never-folded) provenance root.
+        let reason_hash = ctx.accounts.credits.provenance_root;
+        require!(reason_hash != [0u8; 32], CovenantError::NoRecordedActions);
+        let agent_key = ctx.accounts.position.agent_key;
+        let owner = ctx.accounts.position.owner;
+        let signer_seeds: &[&[u8]] = &[
+            b"stake",
+            agent_key.as_ref(),
+            owner.as_ref(),
+            &[ctx.accounts.position.bump],
+        ];
+        token_interface::transfer_checked(
+            ctx.accounts
+                .slash_transfer_ctx()
+                .with_signer(&[signer_seeds]),
+            amount,
+            ctx.accounts.covnt_mint.decimals,
+        )?;
+
+        ctx.accounts.position.amount -= amount;
+        ctx.accounts.agent.stake = ctx
+            .accounts
+            .agent
+            .stake
+            .checked_sub(amount)
+            .ok_or(CovenantError::InsufficientStake)?;
         if ctx.accounts.position.amount == 0 {
             ctx.accounts.position.active = false;
         }
@@ -281,12 +374,10 @@ pub mod settlement {
     }
 
     pub fn create_task(ctx: Context<CreateTask>, args: CreateTaskArgs) -> Result<()> {
+        require!(cfg!(feature = "task-escrow"), CovenantError::TasksDisabled);
         require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
         require!(args.amount_covnt > 0, CovenantError::ZeroAmount);
         require!(ctx.accounts.agent.active, CovenantError::AgentInactive);
-        require!(args.review_window >= 0, CovenantError::InvalidReviewWindow);
-        let now = Clock::get()?.unix_timestamp;
-        require!(args.deadline > now, CovenantError::InvalidDeadline);
 
         token_interface::transfer_checked(
             ctx.accounts.task_fund_ctx(),
@@ -299,12 +390,10 @@ pub mod settlement {
         task.client = ctx.accounts.client.key();
         task.agent_key = ctx.accounts.agent.agent_key;
         task.provider = args.provider;
-        task.arbiter = args.arbiter;
         task.amount_covnt = args.amount_covnt;
         task.task_hash = args.task_hash;
         task.criteria_hash = args.criteria_hash;
         task.deadline = args.deadline;
-        task.review_window = args.review_window;
         task.status = TASK_FUNDED;
         task.bump = ctx.bumps.task;
 
@@ -313,25 +402,20 @@ pub mod settlement {
             client: task.client,
             agent_key: task.agent_key,
             provider: task.provider,
-            arbiter: task.arbiter,
             amount_covnt: task.amount_covnt,
             task_hash: task.task_hash,
             criteria_hash: task.criteria_hash,
             deadline: task.deadline,
-            review_window: task.review_window,
         });
         Ok(())
     }
 
-    /// The provider posts proof of delivery on-chain, moving the task from
-    /// FUNDED to SUBMITTED and starting the review window. Only the named
-    /// provider may submit, and only before the deadline, so a late delivery
-    /// cannot settle out from under the client's refund right.
-    pub fn submit_task(
-        ctx: Context<SubmitTask>,
+    pub fn release_task(
+        ctx: Context<ReleaseTask>,
         result_hash: [u8; 32],
         receipt_hash: [u8; 32],
     ) -> Result<()> {
+        require!(cfg!(feature = "task-escrow"), CovenantError::TasksDisabled);
         require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
         require!(
             ctx.accounts.task.status == TASK_FUNDED,
@@ -343,128 +427,45 @@ pub mod settlement {
             CovenantError::TaskExpired
         );
 
-        let task = &mut ctx.accounts.task;
-        task.result_hash = result_hash;
-        task.receipt_hash = receipt_hash;
-        task.submitted_at = now;
-        task.status = TASK_SUBMITTED;
+        let task_id = ctx.accounts.task.task_id;
+        let signer_seeds: &[&[u8]] = &[b"task", task_id.as_ref(), &[ctx.accounts.task.bump]];
+        token_interface::transfer_checked(
+            ctx.accounts.task_release_ctx().with_signer(&[signer_seeds]),
+            ctx.accounts.task.amount_covnt,
+            ctx.accounts.covnt_mint.decimals,
+        )?;
 
-        emit!(TaskSubmitted {
-            task_id: task.task_id,
-            provider: task.provider,
-            submitted_at: now,
+        ctx.accounts.task.status = TASK_RELEASED;
+        ctx.accounts.task.result_hash = result_hash;
+
+        emit!(TaskReleased {
+            task_id,
+            provider: ctx.accounts.task.provider,
+            amount_covnt: ctx.accounts.task.amount_covnt,
             result_hash,
             receipt_hash,
         });
         Ok(())
     }
 
-    /// Release the escrow to the provider for delivered work. Signed by the
-    /// client (approving the submission) or, when one is set, the arbiter
-    /// (resolving a dispute in the provider's favour). Requires a prior
-    /// submission, so funds only move against on-chain proof of delivery.
-    pub fn release_task(ctx: Context<ReleaseTask>) -> Result<()> {
-        require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
-        require!(
-            ctx.accounts.task.status == TASK_SUBMITTED,
-            CovenantError::WrongTaskStatus
-        );
-        let signer = ctx.accounts.authority.key();
-        let is_client = signer == ctx.accounts.task.client;
-        let is_arbiter =
-            ctx.accounts.task.arbiter != Pubkey::default() && signer == ctx.accounts.task.arbiter;
-        require!(is_client || is_arbiter, CovenantError::Unauthorized);
-
-        let task_id = ctx.accounts.task.task_id;
-        let signer_seeds: &[&[u8]] = &[b"task", task_id.as_ref(), &[ctx.accounts.task.bump]];
-        token_interface::transfer_checked(
-            ctx.accounts.task_release_ctx().with_signer(&[signer_seeds]),
-            ctx.accounts.task.amount_covnt,
-            ctx.accounts.covnt_mint.decimals,
-        )?;
-
-        ctx.accounts.task.status = TASK_RELEASED;
-
-        emit!(TaskReleased {
-            task_id,
-            provider: ctx.accounts.task.provider,
-            amount_covnt: ctx.accounts.task.amount_covnt,
-            result_hash: ctx.accounts.task.result_hash,
-            receipt_hash: ctx.accounts.task.receipt_hash,
-        });
-        Ok(())
-    }
-
-    /// Provider recourse: once the review window after submission has elapsed
-    /// with no release and no arbiter refund, the provider claims the escrow
-    /// itself. This is what stops a silent client from stranding delivered
-    /// work, the exact gap that kept task escrow disabled before.
-    pub fn claim_task(ctx: Context<ClaimTask>) -> Result<()> {
-        require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
-        require!(
-            ctx.accounts.task.status == TASK_SUBMITTED,
-            CovenantError::WrongTaskStatus
-        );
-        let now = Clock::get()?.unix_timestamp;
-        let claimable_at = ctx
-            .accounts
-            .task
-            .submitted_at
-            .checked_add(ctx.accounts.task.review_window)
-            .ok_or(CovenantError::Overflow)?;
-        require!(now >= claimable_at, CovenantError::ReviewWindowNotElapsed);
-
-        let task_id = ctx.accounts.task.task_id;
-        let signer_seeds: &[&[u8]] = &[b"task", task_id.as_ref(), &[ctx.accounts.task.bump]];
-        token_interface::transfer_checked(
-            ctx.accounts.task_release_ctx().with_signer(&[signer_seeds]),
-            ctx.accounts.task.amount_covnt,
-            ctx.accounts.covnt_mint.decimals,
-        )?;
-
-        ctx.accounts.task.status = TASK_RELEASED;
-
-        emit!(TaskClaimed {
-            task_id,
-            provider: ctx.accounts.task.provider,
-            amount_covnt: ctx.accounts.task.amount_covnt,
-            claimed_at: now,
-        });
-        Ok(())
-    }
-
-    /// Return the escrow to the client. Two paths: the client reclaims after
-    /// the deadline passes with no submission (provider never delivered), or
-    /// a set arbiter refunds during the review window (dispute resolved in
-    /// the client's favour). Pause check matches the release path.
+    /// Refund the escrowed COVNT back to the client after the task
+    /// deadline has passed. Only the client signs; the provider has no
+    /// recourse here. Mirrors the escrow-agent norm where the funder
+    /// recovers their funds when the counterparty failed to deliver in
+    /// time. Pause check matches `release_task` so a paused protocol
+    /// halts all escrow movement uniformly.
     pub fn refund_task(ctx: Context<RefundTask>) -> Result<()> {
+        require!(cfg!(feature = "task-escrow"), CovenantError::TasksDisabled);
         require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
+        require!(
+            ctx.accounts.task.status == TASK_FUNDED,
+            CovenantError::WrongTaskStatus
+        );
         let now = Clock::get()?.unix_timestamp;
-        let signer = ctx.accounts.authority.key();
-        let is_client = signer == ctx.accounts.task.client;
-        let is_arbiter =
-            ctx.accounts.task.arbiter != Pubkey::default() && signer == ctx.accounts.task.arbiter;
-        require!(is_client || is_arbiter, CovenantError::Unauthorized);
-
-        match ctx.accounts.task.status {
-            TASK_FUNDED => {
-                require!(
-                    now > ctx.accounts.task.deadline,
-                    CovenantError::TaskNotExpired
-                );
-            }
-            TASK_SUBMITTED => {
-                require!(is_arbiter, CovenantError::NotArbiter);
-                let window_end = ctx
-                    .accounts
-                    .task
-                    .submitted_at
-                    .checked_add(ctx.accounts.task.review_window)
-                    .ok_or(CovenantError::Overflow)?;
-                require!(now < window_end, CovenantError::ReviewWindowElapsed);
-            }
-            _ => return err!(CovenantError::WrongTaskStatus),
-        }
+        require!(
+            now > ctx.accounts.task.deadline,
+            CovenantError::TaskNotExpired
+        );
 
         let task_id = ctx.accounts.task.task_id;
         let signer_seeds: &[&[u8]] = &[b"task", task_id.as_ref(), &[ctx.accounts.task.bump]];
@@ -645,6 +646,97 @@ pub mod settlement {
         data[off..new_len].copy_from_slice(&min_stake_lock.to_le_bytes());
 
         emit!(ConfigMigrated { min_stake_lock });
+        Ok(())
+    }
+
+    /// One-time migration of a legacy `CreditAccount` (predates `provenance_root`)
+    /// to the current layout: grows the account by 32 bytes. `realloc` zero-fills
+    /// the new bytes, so the provenance root starts at genesis. Owner-gated by the
+    /// `[b"credits", owner]` seed binding; idempotent (a no-op realloc on an
+    /// already-current account).
+    pub fn migrate_credit_account(ctx: Context<MigrateCreditAccount>) -> Result<()> {
+        let info = ctx.accounts.credits.to_account_info();
+        let new_len = 8 + CreditAccount::INIT_SPACE;
+        if info.data_len() < new_len {
+            let deficit = Rent::get()?
+                .minimum_balance(new_len)
+                .saturating_sub(info.lamports());
+            if deficit > 0 {
+                anchor_lang::system_program::transfer(
+                    CpiContext::new(
+                        ctx.accounts.system_program.to_account_info(),
+                        anchor_lang::system_program::Transfer {
+                            from: ctx.accounts.owner.to_account_info(),
+                            to: info.clone(),
+                        },
+                    ),
+                    deficit,
+                )?;
+            }
+            info.realloc(new_len, true)?;
+        }
+        Ok(())
+    }
+
+    /// Delegate the caller's credit account `[b"credits", owner]` to the
+    /// MagicBlock delegation program so metering (`consume_credits`) can run in
+    /// an ephemeral rollup. Only the program-owned accounting PDA moves; no token
+    /// custody is involved. Pass an ER validator pubkey as the first remaining
+    /// account to pin it (see `DelegateConfig.validator`).
+    #[cfg(feature = "ephemeral")]
+    pub fn delegate_credits(ctx: Context<DelegateCredits>) -> Result<()> {
+        let owner = ctx.accounts.payer.key();
+        let (expected, _) = Pubkey::find_program_address(&[b"credits", owner.as_ref()], &crate::ID);
+        require_keys_eq!(
+            ctx.accounts.pda.key(),
+            expected,
+            CovenantError::Unauthorized
+        );
+        let validator = ctx
+            .remaining_accounts
+            .first()
+            .ok_or(CovenantError::ValidatorRequired)?
+            .key();
+        ctx.accounts.delegate_pda(
+            &ctx.accounts.payer,
+            &[b"credits".as_ref(), owner.as_ref()],
+            DelegateConfig {
+                validator: Some(validator),
+                ..Default::default()
+            },
+        )?;
+        Ok(())
+    }
+
+    /// Checkpoint the delegated credit account's state (including the
+    /// provenance root) back to L1 without releasing it. Permissionless: any
+    /// payer can force the record on-chain, since a commit moves no tokens and
+    /// releases nothing. This is what lets a verifier or the slash authority
+    /// surface an agent's provenance root without the owner's cooperation.
+    #[cfg(feature = "ephemeral")]
+    pub fn commit_credits(ctx: Context<CommitCreditsPermissionless>) -> Result<()> {
+        MagicIntentBundleBuilder::new(
+            ctx.accounts.payer.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+        )
+        .commit(&[ctx.accounts.credits.to_account_info()])
+        .build_and_invoke()?;
+        Ok(())
+    }
+
+    /// Commit the final credit balance and undelegate, returning the account to
+    /// L1 writability. Triggered before any L1 op that must move tokens against
+    /// this owner (e.g. a top-up via `buy_credits`) or on idle timeout.
+    #[cfg(feature = "ephemeral")]
+    pub fn undelegate_credits(ctx: Context<CommitCredits>) -> Result<()> {
+        MagicIntentBundleBuilder::new(
+            ctx.accounts.owner.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+        )
+        .commit_and_undelegate(&[ctx.accounts.credits.to_account_info()])
+        .build_and_invoke()?;
         Ok(())
     }
 }
@@ -876,6 +968,7 @@ pub struct Unstake<'info> {
     pub owner: Signer<'info>,
     #[account(
         mut,
+        constraint = stake_vault.key() == position.vault @ CovenantError::Unauthorized,
         constraint = stake_vault.owner == position.key() @ CovenantError::Unauthorized,
         constraint = stake_vault.mint == config.covnt_mint @ CovenantError::WrongMint,
     )]
@@ -929,11 +1022,16 @@ pub struct SlashStake<'info> {
     pub position: Account<'info, StakePosition>,
     #[account(
         mut,
+        constraint = stake_vault.key() == position.vault @ CovenantError::Unauthorized,
         constraint = stake_vault.owner == position.key() @ CovenantError::Unauthorized,
         constraint = stake_vault.mint == config.covnt_mint @ CovenantError::WrongMint,
     )]
     pub stake_vault: InterfaceAccount<'info, TokenAccount>,
-    #[account(mut, constraint = slash_vault.mint == config.covnt_mint @ CovenantError::WrongMint)]
+    #[account(
+        mut,
+        constraint = slash_vault.key() == config.treasury @ CovenantError::Unauthorized,
+        constraint = slash_vault.mint == config.covnt_mint @ CovenantError::WrongMint,
+    )]
     pub slash_vault: InterfaceAccount<'info, TokenAccount>,
     #[account(constraint = covnt_mint.key() == config.covnt_mint @ CovenantError::WrongMint)]
     pub covnt_mint: InterfaceAccount<'info, Mint>,
@@ -941,6 +1039,68 @@ pub struct SlashStake<'info> {
 }
 
 impl<'info> SlashStake<'info> {
+    fn slash_transfer_ctx(&self) -> CpiContext<'_, '_, '_, 'info, TransferChecked<'info>> {
+        CpiContext::new(
+            self.token_program.to_account_info(),
+            TransferChecked {
+                mint: self.covnt_mint.to_account_info(),
+                from: self.stake_vault.to_account_info(),
+                to: self.slash_vault.to_account_info(),
+                authority: self.position.to_account_info(),
+            },
+        )
+    }
+}
+
+#[derive(Accounts)]
+pub struct SlashForActions<'info> {
+    #[account(
+        seeds = [b"config"],
+        bump = config.bump,
+        has_one = slash_authority @ CovenantError::Unauthorized,
+    )]
+    pub config: Box<Account<'info, Config>>,
+    pub slash_authority: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"agent", agent.agent_key.as_ref()],
+        bump = agent.bump,
+        constraint = agent.agent_key == position.agent_key @ CovenantError::AgentMismatch,
+    )]
+    pub agent: Box<Account<'info, Agent>>,
+    #[account(
+        mut,
+        seeds = [b"stake", position.agent_key.as_ref(), position.owner.as_ref()],
+        bump = position.bump,
+    )]
+    pub position: Box<Account<'info, StakePosition>>,
+    /// The agent's credit account, bound to the agent by its operator. Its
+    /// `provenance_root` is read as the slash reason, so the slash can only cite
+    /// the agent's own verifiable on-chain record.
+    #[account(
+        seeds = [b"credits", agent.operator.as_ref()],
+        bump = credits.bump,
+    )]
+    pub credits: Box<Account<'info, CreditAccount>>,
+    #[account(
+        mut,
+        constraint = stake_vault.key() == position.vault @ CovenantError::Unauthorized,
+        constraint = stake_vault.owner == position.key() @ CovenantError::Unauthorized,
+        constraint = stake_vault.mint == config.covnt_mint @ CovenantError::WrongMint,
+    )]
+    pub stake_vault: InterfaceAccount<'info, TokenAccount>,
+    #[account(
+        mut,
+        constraint = slash_vault.key() == config.treasury @ CovenantError::Unauthorized,
+        constraint = slash_vault.mint == config.covnt_mint @ CovenantError::WrongMint,
+    )]
+    pub slash_vault: InterfaceAccount<'info, TokenAccount>,
+    #[account(constraint = covnt_mint.key() == config.covnt_mint @ CovenantError::WrongMint)]
+    pub covnt_mint: InterfaceAccount<'info, Mint>,
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+impl<'info> SlashForActions<'info> {
     fn slash_transfer_ctx(&self) -> CpiContext<'_, '_, '_, 'info, TransferChecked<'info>> {
         CpiContext::new(
             self.token_program.to_account_info(),
@@ -1010,23 +1170,6 @@ impl<'info> CreateTask<'info> {
 }
 
 #[derive(Accounts)]
-pub struct SubmitTask<'info> {
-    #[account(
-        seeds = [b"config"],
-        bump = config.bump,
-    )]
-    pub config: Account<'info, Config>,
-    #[account(
-        mut,
-        seeds = [b"task", task.task_id.as_ref()],
-        bump = task.bump,
-        constraint = task.provider == provider.key() @ CovenantError::Unauthorized,
-    )]
-    pub task: Box<Account<'info, Task>>,
-    pub provider: Signer<'info>,
-}
-
-#[derive(Accounts)]
 pub struct ReleaseTask<'info> {
     #[account(
         seeds = [b"config"],
@@ -1037,10 +1180,10 @@ pub struct ReleaseTask<'info> {
         mut,
         seeds = [b"task", task.task_id.as_ref()],
         bump = task.bump,
+        has_one = client @ CovenantError::Unauthorized,
     )]
     pub task: Box<Account<'info, Task>>,
-    /// Client (approving) or arbiter (dispute ruling); verified in the handler.
-    pub authority: Signer<'info>,
+    pub client: Signer<'info>,
     #[account(
         mut,
         constraint = escrow_vault.owner == task.key() @ CovenantError::Unauthorized,
@@ -1073,52 +1216,6 @@ impl<'info> ReleaseTask<'info> {
 }
 
 #[derive(Accounts)]
-pub struct ClaimTask<'info> {
-    #[account(
-        seeds = [b"config"],
-        bump = config.bump,
-    )]
-    pub config: Account<'info, Config>,
-    #[account(
-        mut,
-        seeds = [b"task", task.task_id.as_ref()],
-        bump = task.bump,
-        constraint = task.provider == provider.key() @ CovenantError::Unauthorized,
-    )]
-    pub task: Box<Account<'info, Task>>,
-    pub provider: Signer<'info>,
-    #[account(
-        mut,
-        constraint = escrow_vault.owner == task.key() @ CovenantError::Unauthorized,
-        constraint = escrow_vault.mint == config.covnt_mint @ CovenantError::WrongMint,
-    )]
-    pub escrow_vault: InterfaceAccount<'info, TokenAccount>,
-    #[account(
-        mut,
-        constraint = provider_covnt.owner == task.provider @ CovenantError::Unauthorized,
-        constraint = provider_covnt.mint == config.covnt_mint @ CovenantError::WrongMint,
-    )]
-    pub provider_covnt: InterfaceAccount<'info, TokenAccount>,
-    #[account(constraint = covnt_mint.key() == config.covnt_mint @ CovenantError::WrongMint)]
-    pub covnt_mint: InterfaceAccount<'info, Mint>,
-    pub token_program: Interface<'info, TokenInterface>,
-}
-
-impl<'info> ClaimTask<'info> {
-    fn task_release_ctx(&self) -> CpiContext<'_, '_, '_, 'info, TransferChecked<'info>> {
-        CpiContext::new(
-            self.token_program.to_account_info(),
-            TransferChecked {
-                mint: self.covnt_mint.to_account_info(),
-                from: self.escrow_vault.to_account_info(),
-                to: self.provider_covnt.to_account_info(),
-                authority: self.task.to_account_info(),
-            },
-        )
-    }
-}
-
-#[derive(Accounts)]
 pub struct RefundTask<'info> {
     #[account(
         seeds = [b"config"],
@@ -1129,10 +1226,10 @@ pub struct RefundTask<'info> {
         mut,
         seeds = [b"task", task.task_id.as_ref()],
         bump = task.bump,
+        has_one = client @ CovenantError::Unauthorized,
     )]
     pub task: Box<Account<'info, Task>>,
-    /// Client (post-deadline reclaim) or arbiter (dispute ruling); verified in the handler.
-    pub authority: Signer<'info>,
+    pub client: Signer<'info>,
     #[account(
         mut,
         constraint = escrow_vault.owner == task.key() @ CovenantError::Unauthorized,
@@ -1141,7 +1238,7 @@ pub struct RefundTask<'info> {
     pub escrow_vault: InterfaceAccount<'info, TokenAccount>,
     #[account(
         mut,
-        constraint = client_covnt.owner == task.client @ CovenantError::Unauthorized,
+        constraint = client_covnt.owner == client.key() @ CovenantError::Unauthorized,
         constraint = client_covnt.mint == config.covnt_mint @ CovenantError::WrongMint,
     )]
     pub client_covnt: InterfaceAccount<'info, TokenAccount>,
@@ -1270,6 +1367,73 @@ pub struct MigrateConfig<'info> {
     pub system_program: Program<'info, System>,
 }
 
+/// Migrate a legacy `CreditAccount` to the current layout. Raw account because
+/// the legacy bytes do not fit the new struct until realloc; the owner is
+/// validated against the on-chain `owner` field in the handler.
+#[derive(Accounts)]
+pub struct MigrateCreditAccount<'info> {
+    /// CHECK: raw bytes (the legacy layout cannot deserialize until realloc); the
+    /// `[b"credits", owner]` seeds bind it to the signing owner.
+    #[account(mut, seeds = [b"credits", owner.key().as_ref()], bump)]
+    pub credits: UncheckedAccount<'info>,
+    #[account(mut)]
+    pub owner: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+/// Delegate the credit-account PDA to the ER. `#[delegate]` adds the
+/// `delegate_pda` helper plus the buffer/record/metadata accounts and the
+/// delegation + owner programs. The PDA is passed unchecked because delegation
+/// transfers its ownership to the delegation program.
+#[cfg(feature = "ephemeral")]
+#[delegate]
+#[derive(Accounts)]
+pub struct DelegateCredits<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    /// CHECK: the `[b"credits", payer]` PDA, validated by the seeds passed to
+    /// `delegate_pda`.
+    #[account(mut, del)]
+    pub pda: UncheckedAccount<'info>,
+}
+
+/// Undelegate the delegated credit account back to L1 writability. `#[commit]`
+/// injects `magic_context` and `magic_program`. Owner-gated: returning the
+/// account to L1 is the owner's (or the recovery keeper's) call.
+#[cfg(feature = "ephemeral")]
+#[commit]
+#[derive(Accounts)]
+pub struct CommitCredits<'info> {
+    #[account(mut)]
+    pub owner: Signer<'info>,
+    #[account(
+        mut,
+        has_one = owner @ CovenantError::Unauthorized,
+        seeds = [b"credits", owner.key().as_ref()],
+        bump = credits.bump,
+    )]
+    pub credits: Account<'info, CreditAccount>,
+}
+
+/// Permissionless commit of the delegated credit account. Any `payer` funds
+/// the checkpoint; the credit PDA is validated against its own stored `owner`,
+/// so no owner signature is needed. A commit only writes the current ER state
+/// to L1 (no token movement, no release), so opening it lets a verifier or
+/// keeper force an agent's provenance root on-chain.
+#[cfg(feature = "ephemeral")]
+#[commit]
+#[derive(Accounts)]
+pub struct CommitCreditsPermissionless<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"credits", credits.owner.as_ref()],
+        bump = credits.bump,
+    )]
+    pub credits: Account<'info, CreditAccount>,
+}
+
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct InitializeArgs {
     pub slash_authority: Pubkey,
@@ -1288,12 +1452,10 @@ pub struct RegisterAgentArgs {
 pub struct CreateTaskArgs {
     pub task_id: [u8; 32],
     pub provider: Pubkey,
-    pub arbiter: Pubkey,
     pub amount_covnt: u64,
     pub task_hash: [u8; 32],
     pub criteria_hash: [u8; 32],
     pub deadline: i64,
-    pub review_window: i64,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
@@ -1304,9 +1466,8 @@ pub struct AnchorReceiptBatchArgs {
 }
 
 pub const TASK_FUNDED: u8 = 1;
-pub const TASK_SUBMITTED: u8 = 2;
-pub const TASK_RELEASED: u8 = 3;
-pub const TASK_REFUNDED: u8 = 4;
+pub const TASK_RELEASED: u8 = 2;
+pub const TASK_REFUNDED: u8 = 3;
 
 #[account]
 #[derive(InitSpace)]
@@ -1343,6 +1504,13 @@ pub struct CreditAccount {
     pub owner: Pubkey,
     pub balance: u64,
     pub bump: u8,
+    /// Rolling hash-chain root over every consumed `receipt_hash`:
+    /// `root = sha256(root || receipt_hash)`, genesis = 32 zero bytes. Updated
+    /// on each `consume_credits` (gaslessly in the ER) and committed to L1 with
+    /// the balance, so it is a real-time, on-chain provenance record of the
+    /// metered actions. Appended last so legacy accounts migrate by realloc
+    /// (see `migrate_credit_account`).
+    pub provenance_root: [u8; 32],
 }
 
 #[account]
@@ -1352,6 +1520,7 @@ pub struct StakePosition {
     pub owner: Pubkey,
     pub amount: u64,
     pub lock_until: u64,
+    pub vault: Pubkey,
     pub active: bool,
     pub bump: u8,
 }
@@ -1363,22 +1532,11 @@ pub struct Task {
     pub client: Pubkey,
     pub agent_key: [u8; 32],
     pub provider: Pubkey,
-    /// Neutral dispute resolver. `Pubkey::default()` means no arbiter, in
-    /// which case delivered work settles to the provider after the review
-    /// window and the client's only recourse is a pre-submission refund.
-    pub arbiter: Pubkey,
     pub amount_covnt: u64,
     pub task_hash: [u8; 32],
     pub criteria_hash: [u8; 32],
     pub result_hash: [u8; 32],
-    pub receipt_hash: [u8; 32],
-    /// Submission deadline. The provider must submit by this time or the
-    /// client can reclaim the escrow.
     pub deadline: i64,
-    /// Set when the provider submits; 0 while FUNDED.
-    pub submitted_at: i64,
-    /// Seconds after submission before the provider may self-claim.
-    pub review_window: i64,
     pub status: u8,
     pub bump: u8,
 }
@@ -1440,6 +1598,7 @@ pub struct CreditsConsumed {
     pub owner: Pubkey,
     pub amount: u64,
     pub receipt_hash: [u8; 32],
+    pub provenance_root: [u8; 32],
 }
 
 #[event]
@@ -1473,29 +1632,10 @@ pub struct TaskCreated {
     pub client: Pubkey,
     pub agent_key: [u8; 32],
     pub provider: Pubkey,
-    pub arbiter: Pubkey,
     pub amount_covnt: u64,
     pub task_hash: [u8; 32],
     pub criteria_hash: [u8; 32],
     pub deadline: i64,
-    pub review_window: i64,
-}
-
-#[event]
-pub struct TaskSubmitted {
-    pub task_id: [u8; 32],
-    pub provider: Pubkey,
-    pub submitted_at: i64,
-    pub result_hash: [u8; 32],
-    pub receipt_hash: [u8; 32],
-}
-
-#[event]
-pub struct TaskClaimed {
-    pub task_id: [u8; 32],
-    pub provider: Pubkey,
-    pub amount_covnt: u64,
-    pub claimed_at: i64,
 }
 
 #[event]
@@ -1607,14 +1747,10 @@ pub enum CovenantError {
     StakeStillActive,
     #[msg("lock_until is shorter than the protocol minimum stake lock")]
     LockTooShort,
-    #[msg("only the task arbiter may take this action")]
-    NotArbiter,
-    #[msg("the review window has not elapsed yet; provider cannot claim")]
-    ReviewWindowNotElapsed,
-    #[msg("the review window has elapsed; arbiter refund no longer allowed")]
-    ReviewWindowElapsed,
-    #[msg("review window must be zero or positive")]
-    InvalidReviewWindow,
-    #[msg("deadline must be in the future")]
-    InvalidDeadline,
+    #[msg("task escrow is disabled in this build")]
+    TasksDisabled,
+    #[msg("an explicit ER validator account is required to delegate")]
+    ValidatorRequired,
+    #[msg("the agent has no recorded actions to slash for (provenance root is genesis)")]
+    NoRecordedActions,
 }

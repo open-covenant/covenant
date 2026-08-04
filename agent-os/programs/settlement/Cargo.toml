@@ -16,6 +16,9 @@ no-log-ix-name = []
 cpi = ["no-entrypoint"]
 default = []
 idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+# Client-funded task escrow. Off by default: release_task is client-only with no
+# provider recourse, so it is not safe to ship until the trust model is redesigned.
+task-escrow = []
 
 [dependencies]
 anchor-lang = "0.31.1"
@@ -27,3 +30,9 @@ litesvm = "0.6"
 solana-sdk = "2.2"
 spl-token = "7.0"
 spl-token-2022 = "6.0"
+
+[lints.rust]
+deprecated = "allow"
+# The `ephemeral` feature is defined only in the sibling settlement-ephemeral
+# crate, which include!s this source; here the cfg is intentionally unknown.
+unexpected_cfgs = "allow"

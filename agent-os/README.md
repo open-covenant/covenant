@@ -136,6 +136,7 @@ The Linux host, `runsc`, rootfs, and CI adoption contract is maintained internal
 | Multichain (Base/EVM, Robinhood Chain) | `covenant-x402-signer-evm`, `covenant-evm-firewall`, `covenant-spend-permission`, `covenant-ens-gateway` |
 | Trading venues | `covenant-robinhood` |
 | Data provenance | `covenant-myrad` |
+| Enclaves | `covenant-tee` |
 
 ## Operating Model
 

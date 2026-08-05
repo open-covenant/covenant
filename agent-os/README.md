@@ -137,6 +137,7 @@ The Linux host, `runsc`, rootfs, and CI adoption contract is maintained internal
 | Trading venues | `covenant-robinhood` |
 | Data provenance | `covenant-myrad` |
 | Enclaves | `covenant-tee` |
+| Bonded operators | `covenant-bond` |
 
 ## Operating Model
 

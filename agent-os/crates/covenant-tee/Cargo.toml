@@ -1,0 +1,18 @@
+[package]
+name = "covenant-tee"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Bind a TDX enclave quote to what actually ran inside it. Constructs the report_data challenge from an agent and a subject commitment plus a fresh nonce, and verifies a quote against it."
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+base64 = "0.22"
+sha2 = "0.10"
+hex = "0.4"
+
+[dev-dependencies]
+serde_json = { workspace = true }

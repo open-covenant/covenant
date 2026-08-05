@@ -552,6 +552,16 @@ async fn main() -> Result<()> {
         None => server,
     };
 
+    let server = {
+        let cfg = covenant_clawville::ClawvilleConfig::from_env();
+        if cfg.enabled() {
+            info!("clawville profile enabled (bounty verification)");
+            server.with_clawville(cfg)
+        } else {
+            server
+        }
+    };
+
     server
         .register_agent_budgets()
         .await

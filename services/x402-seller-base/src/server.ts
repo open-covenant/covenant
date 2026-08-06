@@ -6,6 +6,7 @@
  *   POST /x402/attest                    a Covenant-signed attestation over a { subject, claim } pair.
  *   POST /x402/robinhood/governed-order  place a Robinhood order through the Covenant policy gate.
  *   GET  /x402/proof/:agent/trading      an agent's verifiable trading reputation.
+ *   GET  /x402/myrad/signal/:cohort      a Myrad cohort signal with its Covenant provenance receipt.
  *
  * `@x402/express` issues the 402 challenge via a locally-registered (signer-less)
  * EVM exact scheme, then verifies and settles through the Coinbase-hosted x402
@@ -27,6 +28,7 @@
  *                           and its pubkey logged when this is unset
  *   COVENANT_HTTP_URL       covenantd gateway for the robinhood routes (default 127.0.0.1:8421)
  *   COVENANT_AUTH_TOKEN     bearer for covenantd
+ *   COVENANT_MYRAD_BUNDLE   path to issued Myrad bundles; unset serves 503 on the signal route
  */
 import express, { type Request, type Response } from "express";
 import { paymentMiddlewareFromConfig } from "@x402/express";
@@ -37,6 +39,7 @@ import { declareDiscoveryExtension } from "@x402/extensions/bazaar";
 import { Attestor, ATTEST_DOMAIN, ATTEST_CANONICALIZATION, ATTEST_VERIFY_RECIPE } from "./attest.js";
 import { makeAttestHandler } from "./attest-route.js";
 import { makeGovernedOrderHandler, makeReputationHandler } from "./robinhood-route.js";
+import { loadBundles, makeSignalHandler, SIGNAL_SCHEMA } from "./myrad-route.js";
 
 // The EIP-712 domain (name, version) is the token's own, not ours: the buyer's
 // wallet signs the transferWithAuthorization against it and the facilitator
@@ -107,7 +110,23 @@ if (!process.env.COVENANT_ATTEST_KEYPAIR) {
   console.warn(`COVENANT_ATTEST_KEYPAIR unset, generated ephemeral attestation key ${attestor.pubkeyB58}`);
 }
 
-const RESOURCES = ["/x402/attest", "/x402/robinhood/governed-order", "/x402/proof/:agent/trading"];
+const RESOURCES = [
+  "/x402/attest",
+  "/x402/robinhood/governed-order",
+  "/x402/proof/:agent/trading",
+  "/x402/myrad/signal/:cohort",
+];
+
+// Bundles are issued elsewhere and served here; a read failure at boot is fatal
+// rather than a route that silently sells nothing.
+const MYRAD_BUNDLE_PATH = process.env.COVENANT_MYRAD_BUNDLE;
+let myradBundles: ReturnType<typeof loadBundles>;
+try {
+  myradBundles = loadBundles(MYRAD_BUNDLE_PATH);
+} catch (e) {
+  console.error(`COVENANT_MYRAD_BUNDLE unreadable: ${e instanceof Error ? e.message : String(e)}`);
+  process.exit(1);
+}
 
 const app = express();
 // Render terminates TLS and forwards over http; trust the proxy so req.protocol
@@ -133,7 +152,7 @@ app.get("/.well-known/x402", (req: Request, res: Response) => {
     version: 1,
     resources: RESOURCES.map((r) => `${base}${r}`),
     instructions:
-      "Covenant Trust x402 seller on Base. Pay USDC via EIP-3009 to obtain a Covenant-signed ed25519 attestation (POST /x402/attest), place a policy-gated Robinhood order (POST /x402/robinhood/governed-order), or fetch an agent's trading reputation (GET /x402/proof/:agent/trading). Pin the attestation key below to verify responses without trusting this server.",
+      "Covenant Trust x402 seller on Base. Pay USDC via EIP-3009 to obtain a Covenant-signed ed25519 attestation (POST /x402/attest), place a policy-gated Robinhood order (POST /x402/robinhood/governed-order), fetch an agent's trading reputation (GET /x402/proof/:agent/trading), or buy a Myrad cohort signal with its Covenant provenance receipt (GET /x402/myrad/signal/:cohort). Pin the attestation key below to verify responses without trusting this server.",
     attestation: {
       algorithm: "ed25519",
       publicKey: attestor.pubkeyB58,
@@ -213,6 +232,31 @@ const routes: RoutesConfig = {
       output: { example: { agent: "robinhood-agent", score: 100, established: true, mandate_adherence: 1 } },
     }),
   ),
+  "GET /x402/myrad/signal/:cohort": gate(
+    PRICE,
+    "Buy a Myrad cohort signal with the Covenant receipt issued over it: the evidence root for the contributing set, the contributor count, the emission window, and every integrity finding. Verifiable offline against a pinned attestor key.",
+    declareDiscoveryExtension({
+      pathParams: { cohort: [...myradBundles.keys()][0] },
+      pathParamsSchema: {
+        properties: { cohort: { type: "string", description: "Myrad cohort id" } },
+        required: ["cohort"],
+      },
+      output: {
+        example: {
+          signal: { cohort_id: "netflix_high_engagement_drama", contributors: 6 },
+          receipt: {
+            receipt: {
+              schema: SIGNAL_SCHEMA,
+              evidence: { contributors: 6, merkle_root: "..." },
+              integrity: { status: "pass" },
+            },
+            root_hash_hex: "...",
+            signature_b64: "...",
+          },
+        },
+      },
+    }),
+  ),
 };
 
 app.use(
@@ -232,6 +276,7 @@ app.use(
 app.post("/x402/attest", makeAttestHandler(attestor));
 app.post("/x402/robinhood/governed-order", makeGovernedOrderHandler());
 app.get("/x402/proof/:agent/trading", makeReputationHandler());
+app.get("/x402/myrad/signal/:cohort", makeSignalHandler(myradBundles, !MYRAD_BUNDLE_PATH));
 
 app.listen(PORT, () => {
   console.log(

@@ -1703,6 +1703,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "covenant-myrad"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "covenant-mcp",
+ "ed25519-dalek 2.2.0",
+ "hex",
+ "serde",
+ "serde_jcs",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 1.0.69",
+ "tokio",
+]
+
+[[package]]
 name = "covenant-oracle-program"
 version = "0.1.0"
 dependencies = [

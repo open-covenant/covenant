@@ -1,0 +1,45 @@
+[package]
+name = "covenant-inference-verifier"
+version = "0.1.0"
+edition = "2021"
+description = "ER-verifier quote-fetch seam: fetch a MagicBlock ER TDX quote for a supplied challenge, DCAP-verify it against the Intel PCCS, and return the DcapResult covenantd consumes"
+
+# Detached from the agent-os workspace on purpose, like the sibling inference
+# crates: dcap-qvl drags in its own DCAP/crypto tree, and there are two crates
+# named `covenant-tee` in this repo. Keeping our own [workspace] + lockfile out
+# of the parent avoids both the lock churn and the name collision.
+[workspace]
+
+[lib]
+name = "covenant_inference_verifier"
+path = "src/lib.rs"
+
+[[bin]]
+name = "covenant-inference-verifier"
+path = "src/main.rs"
+
+[dependencies]
+# Same DCAP verifier the magicblock-er covenant-tee proved against mainnet.
+dcap-qvl = "0.5.2"
+# Our own HTTP to the enclave. Pin rustls to the ring provider: reqwest 0.12's
+# rustls-tls lets rustls' default provider through, so disabling defaults and
+# asking only for ring keeps our quote fetch off aws-lc-rs. (dcap-qvl's own
+# transitive reqwest still forces aws-lc-rs for the PCCS fetch; we install ring
+# as the process default so provider selection stays unambiguous at runtime.)
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+hex = "0.4"
+thiserror = "2"
+anyhow = "1"
+urlencoding = "2"
+
+[dev-dependencies]
+# The offline binding crate (the other covenant-tee). Dev-dep only: it is small,
+# pure, and never a normal dependency, so it drives the live loop's bound
+# challenge without the crate-name collision biting the main build.
+covenant-tee = { path = "../covenant-tee" }
+sha2 = "0.10"

@@ -56,6 +56,7 @@ const MILESTONES: Milestone[] = [
       "On-chain agent identity and audit-root attestation on Solana mainnet, verifiable via the Covenant Verified check (Metaplex MPL Core)",
       "Settlement program live on Solana mainnet: $CVNT-to-credits, staking, slashing, and on-chain receipt anchoring transact on-chain; the daemon-driven per-intent settlement lifecycle is not yet production",
       "Multi-chain trust on Base mainnet: the agent is registered under ERC-8004, with a deployed bond-receipt verifier, an EAS reputation schema, and ENS name resolution, all pointing back to the canonical Solana identity and verifiable with one ecrecover; on-chain reputation writes and funded bonds are not yet exercised, and $CVNT never leaves Solana",
+      "Robinhood Chain mainnet (chain 4663): a USDG x402 payment settled on mainnet, and an on-chain bounded-spend escrow enforcing a per-call ceiling, a provider allowlist, and pay-only-for-passing-output, with its overspend-revert, payout, and refund lifecycle proven in real USDG; the bond and reputation verifiers are deployed but not yet exercised, and identity stays Solana-canonical",
       "TypeScript SDK on npm (@covenant-org/sdk): signed settlement, staking, and receipt-anchor instructions built from the on-chain program IDLs",
       "Apache 2.0 core",
     ],

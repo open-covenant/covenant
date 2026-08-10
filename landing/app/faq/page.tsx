@@ -53,7 +53,7 @@ const FAQ: { id: string; q: string; a: string }[] = [
   {
     id: "multi-chain",
     q: "Does Covenant work across chains?",
-    a: "Yes. $CVNT is a single Solana mint that never bridges, but Covenant's trust layer projects onto Base mainnet: the foundation agent is registered under ERC-8004, a bond-receipt verifier and an EAS reputation schema are deployed, and agents resolve through an ENS CCIP-Read gateway, each as a signed statement any EVM contract verifies with one ecrecover. Per-call fees and bonds are always chain-local USDC. On-chain reputation writes and funded bonds are registered but not yet exercised.",
+    a: "Yes. $CVNT is a single Solana mint that never bridges, but Covenant's trust layer projects onto Base mainnet: the foundation agent is registered under ERC-8004, a bond-receipt verifier and an EAS reputation schema are deployed, and agents resolve through an ENS CCIP-Read gateway, each as a signed statement any EVM contract verifies with one ecrecover. Per-call fees and bonds are always chain-local USDC. On-chain reputation writes and funded bonds are registered but not yet exercised. Covenant's payment and bond primitives also reach Robinhood Chain mainnet (chain 4663), where a USDG x402 payment and an on-chain bounded-spend escrow are proven with real USDG, while identity stays Solana-canonical and its trust verifiers are deployed but not yet exercised.",
   },
   {
     id: "eight-primitives",

@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-08-10T22:32:00.900Z",
+  "updatedAt": "2026-08-10T22:52:04.881Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 13118,
+    "events": 13120,
     "tasks": 1537,
     "integrated": 1538
   },
@@ -187,7 +187,7 @@
     "integrated": 1530,
     "proposed": 1,
     "blocked": 5,
-    "planned": 1
+    "self_review": 1
   },
   "areas": [
     {
@@ -215,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "daemon-driven-settlement-devnet-batch-flush",
+    "state": "self_review",
+    "since": "2026-08-10T22:48:57.596Z"
+  },
   "recent": [
     {
       "at": "2026-08-04T20:44:58.056Z",

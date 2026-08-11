@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-08-11T04:13:08.801Z",
+  "updatedAt": "2026-08-11T04:33:12.708Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 13128,
-    "tasks": 1538,
-    "integrated": 1539
+    "events": 13141,
+    "tasks": 1539,
+    "integrated": 1540
   },
   "throughput": {
-    "last24h": 1,
-    "last7d": 2,
-    "velocity": 0.4
+    "last24h": 2,
+    "last7d": 3,
+    "velocity": 0.6
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "08-11",
-      "count": 1
+      "count": 2
     }
   ],
   "cumulative": [
@@ -180,14 +180,14 @@
     },
     {
       "date": "08-11",
-      "total": 1539
+      "total": 1540
     }
   ],
   "states": {
-    "integrated": 1531,
+    "integrated": 1532,
     "proposed": 1,
     "blocked": 5,
-    "in_progress": 1
+    "ready": 1
   },
   "areas": [
     {
@@ -216,11 +216,16 @@
     }
   ],
   "inFlight": {
-    "task": "x402-settlement-signer-spawn-etxtbsy-retry",
-    "state": "in_progress",
-    "since": "2026-08-11T04:05:11.749Z"
+    "task": "metaplex-sns-signer-bounded-read-hardening",
+    "state": "ready",
+    "since": "2026-08-11T04:33:01.493Z"
   },
   "recent": [
+    {
+      "at": "2026-08-11T04:19:56.703Z",
+      "task": "x402-settlement-signer-spawn-etxtbsy-retry",
+      "note": "Shipped as 994f0d3af, pushed to origin/loop/main-track (4cc15cf4b..994f0d3af, fast-forward, all push identity guards green: current-identity"
+    },
     {
       "at": "2026-08-11T00:37:07.148Z",
       "task": "daemon-driven-settlement-devnet-batch-flush",
@@ -315,11 +320,6 @@
       "at": "2026-07-19T23:57:48.480Z",
       "task": "dist-homebrew-doc-formula-command-accuracy",
       "note": "Integrated and pushed as c42ed171 (docs(dist): correct stale Homebrew build command in source-install.md). Removes the inaccurate cargo buil"
-    },
-    {
-      "at": "2026-07-19T23:49:19.613Z",
-      "task": "dist-flake-binary-contract-and-nix-ci",
-      "note": "Integrated and pushed to origin/loop/main-track as 318b5bf8 (fix(dist): drop leaked preempt_fixture from the nix flake package) + 557c6cde ("
     }
   ]
 }

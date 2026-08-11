@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-08-11T03:53:04.702Z",
+  "updatedAt": "2026-08-11T04:13:08.801Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 13124,
-    "tasks": 1537,
+    "events": 13128,
+    "tasks": 1538,
     "integrated": 1539
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1531,
     "proposed": 1,
-    "blocked": 5
+    "blocked": 5,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "x402-settlement-signer-spawn-etxtbsy-retry",
+    "state": "in_progress",
+    "since": "2026-08-11T04:05:11.749Z"
+  },
   "recent": [
     {
       "at": "2026-08-11T00:37:07.148Z",

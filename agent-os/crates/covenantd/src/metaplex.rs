@@ -17,7 +17,9 @@ use covenant_metaplex::{
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
-use crate::x402::spawn_signer;
+use crate::x402::{
+    read_signer_output, spawn_signer, MAX_SIGNER_OUTPUT_BYTES, SIGNER_OUTPUT_DEADLINE,
+};
 
 /// Materialised Metaplex profile: config plus a DAS read client, built
 /// once at daemon startup and shared behind an `Arc`.
@@ -106,7 +108,11 @@ impl MetaplexSigner for SubprocessMetaplexSigner {
             .envs(self.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::piped())
+            // An over-cap flood or an elapsed deadline returns early, dropping
+            // the Child; kill_on_drop reaps the sidecar instead of leaving it
+            // running detached.
+            .kill_on_drop(true);
         let mut child = spawn_signer(&mut cmd)
             .await
             .map_err(|e| format!("spawn signer {:?}: {e}", self.program))?;
@@ -123,22 +129,18 @@ impl MetaplexSigner for SubprocessMetaplexSigner {
             // Drop closes stdin so the one-shot sidecar sees EOF.
         }
 
-        let output = child
-            .wait_with_output()
-            .await
-            .map_err(|e| format!("await signer: {e}"))?;
+        let (stdout_bytes, stderr_bytes, status) =
+            read_signer_output(&mut child, MAX_SIGNER_OUTPUT_BYTES, SIGNER_OUTPUT_DEADLINE)
+                .await
+                .map_err(|e| e.message())?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!(
-                "signer exited {}: {}",
-                output.status,
-                stderr.trim()
-            ));
+        if !status.success() {
+            let stderr = String::from_utf8_lossy(&stderr_bytes);
+            return Err(format!("signer exited {}: {}", status, stderr.trim()));
         }
 
-        let stdout = String::from_utf8(output.stdout)
-            .map_err(|e| format!("signer stdout not utf-8: {e}"))?;
+        let stdout =
+            String::from_utf8(stdout_bytes).map_err(|e| format!("signer stdout not utf-8: {e}"))?;
         let response = serde_json::from_str::<SignerResponse>(stdout.trim())
             .map_err(|e| format!("decode signer response: {e}"))?;
 

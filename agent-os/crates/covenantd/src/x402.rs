@@ -159,8 +159,8 @@ impl SubprocessSigner {
         let payload = serde_json::to_vec(requirements)
             .map_err(|e| X402Error::Sign(format!("encode requirement: {e}")))?;
 
-        let mut child = Command::new(&self.program)
-            .args(&self.args)
+        let mut cmd = Command::new(&self.program);
+        cmd.args(&self.args)
             .env_clear()
             .envs(self.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             .stdin(Stdio::piped())
@@ -169,8 +169,9 @@ impl SubprocessSigner {
             // An over-cap flood or an elapsed deadline returns early, dropping
             // the Child; kill_on_drop reaps the sidecar instead of leaving it
             // running detached.
-            .kill_on_drop(true)
-            .spawn()
+            .kill_on_drop(true);
+        let mut child = spawn_signer(&mut cmd)
+            .await
             .map_err(|e| X402Error::Sign(format!("spawn signer {:?}: {e}", self.program)))?;
 
         {
@@ -268,6 +269,59 @@ pub(crate) const MAX_SIGNER_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
 /// dispatch forever; this also lets the concurrent capped read make progress
 /// when one stream stalls after the other has already returned.
 pub(crate) const SIGNER_OUTPUT_DEADLINE: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// libc `ETXTBSY` ("text file busy"): the kernel refuses to `exec` a file that
+/// is still open for writing anywhere on the system. `std::io::ErrorKind` has no
+/// dedicated variant, so the raw errno is the only signal; the value is 26 on
+/// Linux and the BSDs/macOS alike.
+const ETXTBSY: i32 = 26;
+
+/// A one-shot signer sidecar that was just written to disk — or replaced in
+/// place during an upgrade — can momentarily fail to spawn with `ETXTBSY` while
+/// another thread in this process still holds a write handle to it. That is the
+/// classic multithreaded write-then-`exec` race: the window closes the instant
+/// the writer's descriptor is dropped, so a few short retries turn a spurious
+/// failure into a clean start. Eight retries at 2ms cap the added latency near
+/// 16ms even in the pathological case; `ETXTBSY` is the *only* error retried.
+const SPAWN_SIGNER_RETRIES: usize = 8;
+const SPAWN_SIGNER_RETRY_BACKOFF: std::time::Duration = std::time::Duration::from_millis(2);
+
+/// Whether a spawn error is the transient `ETXTBSY` race worth retrying.
+fn is_text_file_busy(err: &std::io::Error) -> bool {
+    err.raw_os_error() == Some(ETXTBSY)
+}
+
+/// Retries `attempt` only while it fails with `ETXTBSY`, up to
+/// [`SPAWN_SIGNER_RETRIES`] times with a short fixed backoff. A success or any
+/// other error returns at once, and the final `ETXTBSY` is surfaced unchanged
+/// once the retries are exhausted, so the dispatch still fails closed. Kept
+/// generic over the spawn result so the retry policy is unit-testable without a
+/// live `ETXTBSY`.
+async fn spawn_with_etxtbsy_retry<T, F>(mut attempt: F) -> std::io::Result<T>
+where
+    F: FnMut() -> std::io::Result<T>,
+{
+    let mut retries = 0;
+    loop {
+        match attempt() {
+            Err(e) if is_text_file_busy(&e) && retries < SPAWN_SIGNER_RETRIES => {
+                retries += 1;
+                tokio::time::sleep(SPAWN_SIGNER_RETRY_BACKOFF).await;
+            }
+            result => return result,
+        }
+    }
+}
+
+/// Spawns a configured signer sidecar, tolerating the transient `ETXTBSY` race a
+/// freshly written or in-place-replaced binary can hit under concurrent
+/// write-then-`exec`. Both the x402 [`SubprocessSigner`] and the settlement
+/// signer route their spawn through here so neither fails a payment or a
+/// settlement on a race a short retry clears; every other spawn error (a missing
+/// binary, a permission error) is surfaced unchanged on the first attempt.
+pub(crate) async fn spawn_signer(cmd: &mut Command) -> std::io::Result<tokio::process::Child> {
+    spawn_with_etxtbsy_retry(|| cmd.spawn()).await
+}
 
 /// Why a signer sidecar's bounded output could not be read. Callers map each
 /// arm onto their own signer error type (the metaplex signer's `String`, the
@@ -1170,6 +1224,79 @@ mod tests {
             matches!(&err, X402Error::Sign(m) if m.contains("custom:chain")),
             "got {err:?}"
         );
+    }
+
+    #[test]
+    fn text_file_busy_is_classified_only_for_etxtbsy() {
+        let busy = std::io::Error::from_raw_os_error(ETXTBSY);
+        assert!(is_text_file_busy(&busy));
+        // ENOENT (a missing binary) and an errno-less error are not the race.
+        assert!(!is_text_file_busy(&std::io::Error::from_raw_os_error(2)));
+        assert!(!is_text_file_busy(&std::io::Error::other("no errno")));
+    }
+
+    #[tokio::test]
+    async fn spawn_retry_recovers_after_transient_text_file_busy() {
+        let calls = std::cell::Cell::new(0usize);
+        let out = spawn_with_etxtbsy_retry(|| {
+            let n = calls.get();
+            calls.set(n + 1);
+            if n < 2 {
+                Err(std::io::Error::from_raw_os_error(ETXTBSY))
+            } else {
+                Ok(7u32)
+            }
+        })
+        .await;
+        assert_eq!(out.expect("recovers"), 7);
+        assert_eq!(calls.get(), 3, "two ETXTBSY failures then a clean start");
+    }
+
+    #[tokio::test]
+    async fn spawn_retry_surfaces_a_non_text_file_busy_error_immediately() {
+        let calls = std::cell::Cell::new(0usize);
+        let out: std::io::Result<u32> = spawn_with_etxtbsy_retry(|| {
+            calls.set(calls.get() + 1);
+            Err(std::io::Error::from_raw_os_error(2)) // ENOENT
+        })
+        .await;
+        assert_eq!(out.expect_err("missing binary").raw_os_error(), Some(2));
+        assert_eq!(calls.get(), 1, "a missing binary is not retried");
+    }
+
+    #[tokio::test]
+    async fn spawn_retry_gives_up_after_a_bounded_number_of_attempts() {
+        let calls = std::cell::Cell::new(0usize);
+        let out: std::io::Result<u32> = spawn_with_etxtbsy_retry(|| {
+            calls.set(calls.get() + 1);
+            Err(std::io::Error::from_raw_os_error(ETXTBSY))
+        })
+        .await;
+        assert_eq!(out.expect_err("gives up").raw_os_error(), Some(ETXTBSY));
+        assert_eq!(
+            calls.get(),
+            SPAWN_SIGNER_RETRIES + 1,
+            "one initial attempt plus the bounded retries, then fail closed",
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn spawn_signer_starts_a_real_sidecar_and_surfaces_a_missing_one() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bin = fake_sidecar(dir.path(), "ok-signer", "ok");
+        let mut cmd = Command::new(&bin);
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut child = spawn_signer(&mut cmd).await.expect("spawn real sidecar");
+        child.wait().await.expect("reap sidecar");
+
+        let mut missing = Command::new(dir.path().join("does-not-exist"));
+        let err = spawn_signer(&mut missing)
+            .await
+            .expect_err("missing binary");
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
     }
 
     #[tokio::test]

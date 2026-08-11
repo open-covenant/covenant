@@ -17,6 +17,8 @@ use covenant_metaplex::{
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
+use crate::x402::spawn_signer;
+
 /// Materialised Metaplex profile: config plus a DAS read client, built
 /// once at daemon startup and shared behind an `Arc`.
 pub struct MetaplexState {
@@ -99,13 +101,14 @@ impl MetaplexSigner for SubprocessMetaplexSigner {
     async fn sign(&self, request: SignerRequest) -> Result<SignerResponse, String> {
         let payload = serde_json::to_vec(&request).map_err(|e| format!("encode request: {e}"))?;
 
-        let mut child = Command::new(&self.program)
-            .env_clear()
+        let mut cmd = Command::new(&self.program);
+        cmd.env_clear()
             .envs(self.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
+            .stderr(Stdio::piped());
+        let mut child = spawn_signer(&mut cmd)
+            .await
             .map_err(|e| format!("spawn signer {:?}: {e}", self.program))?;
 
         {

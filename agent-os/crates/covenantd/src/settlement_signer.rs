@@ -24,7 +24,9 @@ use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
-use crate::x402::{read_signer_output, MAX_SIGNER_OUTPUT_BYTES, SIGNER_OUTPUT_DEADLINE};
+use crate::x402::{
+    read_signer_output, spawn_signer, MAX_SIGNER_OUTPUT_BYTES, SIGNER_OUTPUT_DEADLINE,
+};
 
 /// One flush request to the settlement signer sidecar. JSON on the sidecar's
 /// stdin.
@@ -244,8 +246,8 @@ impl SettlementSigner for SubprocessSettlementSigner {
     ) -> Result<SettlementAnchorResponse, String> {
         let payload = serde_json::to_vec(&request).map_err(|e| format!("encode request: {e}"))?;
 
-        let mut child = Command::new(&self.program)
-            .env_clear()
+        let mut cmd = Command::new(&self.program);
+        cmd.env_clear()
             .envs(self.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -253,8 +255,9 @@ impl SettlementSigner for SubprocessSettlementSigner {
             // An elapsed deadline or over-cap flood returns early, dropping the
             // Child; kill_on_drop reaps the sidecar instead of leaving it
             // running detached.
-            .kill_on_drop(true)
-            .spawn()
+            .kill_on_drop(true);
+        let mut child = spawn_signer(&mut cmd)
+            .await
             .map_err(|e| format!("spawn signer {:?}: {e}", self.program))?;
 
         {

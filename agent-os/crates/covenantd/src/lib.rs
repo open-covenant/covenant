@@ -15,6 +15,7 @@ pub mod hyre;
 pub mod metaplex;
 pub mod reputation;
 pub mod secret;
+pub mod settlement_signer;
 pub mod sns;
 pub mod spend_authz;
 pub mod sse;

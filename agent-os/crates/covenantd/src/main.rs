@@ -349,6 +349,10 @@ async fn main() -> Result<()> {
         "sap bridge ready"
     );
 
+    // Cloned before the store is moved into the server; the settlement flush
+    // driver (below) needs its own handle to the receipt log.
+    let settlement_for_flush: Arc<dyn covenant_settlement::Settlement> = settlement.clone();
+
     let server = covenantd::Server::new(
         router,
         runner,
@@ -559,6 +563,27 @@ async fn main() -> Result<()> {
         None
     };
 
+    // Autonomous on-chain settlement flush (opt-in, default off, devnet-only).
+    // On an interval the daemon batches unsettled receipts and anchors the
+    // batch on the configured devnet settlement program through the
+    // covenant-settlement-signer sidecar, then marks the batch confirmed. The
+    // driver refuses to start against anything but devnet; mainnet promotion
+    // is a separate, human-approved step.
+    let settlement_flush = covenantd::settlement_signer::settlement_flush_config_from_env();
+    let settlement_flush_handle = if settlement_flush.enabled {
+        info!(
+            interval_secs = settlement_flush.interval.as_secs(),
+            cluster = settlement_flush.cluster.as_str(),
+            "settlement flush driver enabled (devnet batch anchoring)"
+        );
+        Some(covenantd::settlement_signer::spawn_settlement_flush_driver(
+            settlement_for_flush,
+            settlement_flush,
+        ))
+    } else {
+        None
+    };
+
     // Fold live Hermes runtime traces into the audit chain as they stream in
     // (only when COVENANT_LIVE_TRACE=1; otherwise traces fold at run end).
     // Even when the drainer is off, the broadcast channel is created so the
@@ -688,6 +713,9 @@ async fn main() -> Result<()> {
         handle.abort();
     }
     if let Some(handle) = metaplex_attest_handle {
+        handle.abort();
+    }
+    if let Some(handle) = settlement_flush_handle {
         handle.abort();
     }
     if let Some(h) = runtime_event_drainer_handle {

@@ -42,6 +42,27 @@ pub trait Settlement: Send + Sync {
         confirmation: ChainConfirmation,
     ) -> Result<u64, SettlementError>;
 
+    /// The oldest unsettled receipts, up to `limit`, in recorded order.
+    ///
+    /// This is the flush driver's read primitive, and it drains oldest first:
+    /// a backlog larger than one batch is worked FIFO across successive
+    /// flushes and nothing is left behind. [`Settlement::recent`] returns the
+    /// *newest* `limit` receipts for display — reading through it would batch
+    /// only the tail and permanently strand any unsettled receipt that fell
+    /// out of the newest-`limit` window as the log grew.
+    ///
+    /// The default reads the full log and filters; it is correct for every
+    /// backend here. A store over an unbounded log may override with an
+    /// early-exit scan that stops after `limit` unsettled rows.
+    async fn unsettled(&self, limit: usize) -> Result<Vec<SettlementReceipt>, SettlementError> {
+        let all = self.recent(usize::MAX).await?;
+        Ok(all
+            .into_iter()
+            .filter(|receipt| receipt.batch_id.is_none())
+            .take(limit)
+            .collect())
+    }
+
     /// Apply the legacy-receipt correlation backfill to this store's durable
     /// receipts. The file-backed store overrides this to hold its write lock
     /// across the read-modify-write so a receipt recorded concurrently is not
@@ -726,6 +747,51 @@ mod tests {
         assert_eq!(last_two.len(), 2);
         assert_eq!(last_two[0].credits_consumed, 2);
         assert_eq!(last_two[1].credits_consumed, 3);
+    }
+
+    #[tokio::test]
+    async fn unsettled_drains_oldest_first_and_skips_settled() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("receipts.jsonl");
+        let s = JsonlReceiptStore::open(path).await.unwrap();
+        for amount in 1..=5 {
+            s.record(receipt(amount)).await.unwrap();
+        }
+
+        // Oldest-first, capped at the limit — the newest receipts wait for the
+        // next flush rather than crowding out the oldest, which is exactly how
+        // `recent(limit)` would strand a backlog larger than one batch.
+        let first = s.unsettled(3).await.unwrap();
+        assert_eq!(
+            first.iter().map(|r| r.credits_consumed).collect::<Vec<_>>(),
+            vec![1, 2, 3],
+            "unsettled must drain the oldest receipts, not the newest"
+        );
+
+        let ids: Vec<_> = first.iter().take(2).map(|r| r.id).collect();
+        s.mark_batch_confirmed(
+            &ids,
+            ChainConfirmation {
+                chain: "solana".to_string(),
+                cluster: "devnet".to_string(),
+                batch_id: "b".repeat(64),
+                merkle_root: "m".repeat(64),
+                tx_sig: Some("sig".to_string()),
+                slot: Some(1),
+                confirmed_at: Some(1),
+            },
+        )
+        .await
+        .unwrap();
+
+        // The two now-settled receipts never reappear; the rest still drain
+        // oldest first, so every receipt is eventually worked.
+        let next = s.unsettled(10).await.unwrap();
+        assert_eq!(
+            next.iter().map(|r| r.credits_consumed).collect::<Vec<_>>(),
+            vec![3, 4, 5],
+            "settled receipts must not reappear in the unsettled drain"
+        );
     }
 
     #[tokio::test]

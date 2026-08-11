@@ -10,5 +10,6 @@
 pub mod backoff;
 pub mod daemon;
 pub mod frame;
+pub mod serve;
 pub mod target;
 pub mod tunnel;

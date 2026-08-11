@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use covenant_inference_node::daemon::{self, EnrollArgs, HeartbeatArgs};
+use covenant_inference_node::serve::{self, ServeConfig, SpawnConfig};
 use covenant_inference_node::target::{InferenceTarget, LocalHttpTarget};
 use covenant_inference_node::tunnel::{self, TunnelConfig};
 use covenant_inference_protocol::{ModelIdentity, SamplingParams};
@@ -97,10 +98,46 @@ enum Command {
         #[arg(long, default_value = "127.0.0.1:8000")]
         target: SocketAddr,
     },
-    /// Serve the local model engine (seam; not yet wired).
+    /// Front a local llama.cpp engine with the node's OpenAI-compatible surface and
+    /// the served model's identity. Put it behind the gateway by pointing the tunnel
+    /// at it: `covenant-inferd tunnel --target <listen>`.
     Serve {
-        #[arg(long, default_value = "127.0.0.1:8000")]
+        #[arg(long, default_value = "127.0.0.1:8090")]
         listen: SocketAddr,
+        /// Base URL of an already-running engine to proxy. Ignored with `--spawn`.
+        #[arg(long, default_value = "http://127.0.0.1:8080")]
+        engine_url: String,
+        /// Model id this node advertises, e.g. `qwen3:8b`.
+        #[arg(long)]
+        model: String,
+        /// GGUF weights file; hashed into the model identity, and loaded by `--spawn`.
+        #[arg(long)]
+        weights: PathBuf,
+        #[arg(long, default_value = "q4_k_m")]
+        quantization: String,
+        #[arg(long, default_value = "llama.cpp")]
+        runtime: String,
+        /// Pin the engine build in the identity; detected from the binary otherwise.
+        #[arg(long)]
+        runtime_version: Option<String>,
+        /// The verifiable path is greedy: temperature 0 by default.
+        #[arg(long, default_value_t = 0.0)]
+        temperature: f64,
+        #[arg(long, default_value_t = 1.0)]
+        top_p: f64,
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+        #[arg(long, default_value_t = 512)]
+        sampling_max_tokens: u32,
+        /// Spawn and supervise `llama-server` instead of proxying an external one.
+        #[arg(long, default_value_t = false)]
+        spawn: bool,
+        #[arg(long, default_value = "llama-server")]
+        engine_bin: PathBuf,
+        #[arg(long, default_value_t = 8080)]
+        engine_port: u16,
+        #[arg(long, default_value_t = 4096)]
+        context_size: u32,
     },
 }
 
@@ -210,16 +247,44 @@ async fn dispatch(command: Command) -> anyhow::Result<()> {
             println!("ok");
             Ok(())
         }
-        Command::Serve { listen } => {
-            // Seam: `serve` will bind an OpenAI-compatible HTTP server backed by
-            // llama.cpp or vLLM on `listen`, then the node relays it with
-            // `tunnel --target <listen>`. That engine integration is out of scope
-            // for the daemon — implement the server here and point the tunnel at
-            // it. See src/target.rs for the transport-side contract.
-            anyhow::bail!(
-                "covenant-inferd serve is not wired yet: bind an OpenAI-compatible engine on \
-                 {listen}, then relay it with `covenant-inferd tunnel --target {listen}`"
-            )
+        Command::Serve {
+            listen,
+            engine_url,
+            model,
+            weights,
+            quantization,
+            runtime,
+            runtime_version,
+            temperature,
+            top_p,
+            seed,
+            sampling_max_tokens,
+            spawn,
+            engine_bin,
+            engine_port,
+            context_size,
+        } => {
+            serve::run(ServeConfig {
+                listen,
+                engine_url,
+                model,
+                weights,
+                quantization,
+                runtime,
+                runtime_version,
+                sampling: SamplingParams {
+                    temperature,
+                    top_p,
+                    seed,
+                    max_tokens: sampling_max_tokens,
+                },
+                spawn: spawn.then_some(SpawnConfig {
+                    engine_bin,
+                    engine_port,
+                    context_size,
+                }),
+            })
+            .await
         }
     }
 }

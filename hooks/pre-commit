@@ -131,8 +131,13 @@ done
 # to never commit it.
 
 b64='[A-Za-z0-9+/=]{64,}'
+# `signature` is the one field name that collides with ordinary payloads, so it
+# needs a floor no real signature reaches: ed25519 base58 is 88 characters, an
+# EVM signature 132, while the envelope this catches runs past 36,000. Written as
+# two intervals because BSD ERE rejects a repetition count above 255.
+b64_long='[A-Za-z0-9+/=]{128}[A-Za-z0-9+/=]{128,}'
 envelope_re="\"(encrypted_content|thoughtSignature|thought_signature|reasoning_signature)\"[[:space:]]*:[[:space:]]*\"${b64}"
-signature_re="\"signature\"[[:space:]]*:[[:space:]]*\"${b64}"
+signature_re="\"signature\"[[:space:]]*:[[:space:]]*\"${b64_long}"
 
 envelope_files=$(git diff --cached --name-only | while read -r f; do
   [ -z "$f" ] && continue
@@ -148,7 +153,7 @@ envelope_files=$(git diff --cached --name-only | while read -r f; do
     continue
   fi
   # A bare signature is ambiguous — the repo is full of EVM and Solana
-  # signatures — so it only counts next to a thinking block.
+  # signatures — so it counts only next to a thinking block, at envelope length.
   if echo "$added" | grep -Eq "$signature_re" && echo "$added" | grep -Fq '"thinking"'; then
     echo "  $f"
   fi

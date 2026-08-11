@@ -923,10 +923,16 @@ const REASONING_ENVELOPE_FIELDS: [&str; 4] = [
     "reasoning_signature",
 ];
 
-/// Shortest envelope payload worth refusing. Real envelopes run to tens of
-/// thousands of base64 characters; the floor keeps documentation prose and
-/// elided test fixtures (`"signature": "..."`) from tripping the guard.
+/// Shortest payload worth refusing under a field name only a provider uses. Real
+/// envelopes run to tens of thousands of base64 characters; the floor keeps
+/// documentation prose and elided test fixtures (`"signature": "..."`) from
+/// tripping the guard.
 const MIN_ENVELOPE_LEN: usize = 64;
+
+/// `signature` is the one field name that collides with ordinary payloads, so it
+/// needs a floor no real signature can reach: ed25519 base58 is 88 characters, an
+/// EVM signature 132, while the Anthropic envelope this catches runs past 36,000.
+const MIN_BARE_SIGNATURE_LEN: usize = 256;
 
 /// Reasoning envelopes are portable across sessions, users, and sibling models
 /// within a provider family, so one minted elsewhere can carry instructions the
@@ -940,13 +946,16 @@ const MIN_ENVELOPE_LEN: usize = 64;
 fn foreign_reasoning_envelope(messages: &[ChatMessage]) -> Option<&'static str> {
     for m in messages {
         for field in REASONING_ENVELOPE_FIELDS {
-            if has_opaque_field(&m.content, field) {
+            if has_opaque_field(&m.content, field, MIN_ENVELOPE_LEN) {
                 return Some(field);
             }
         }
         // A bare `signature` is ambiguous — Covenant routinely reasons over EVM
-        // and Solana signatures — so it only counts alongside a thinking block.
-        if m.content.contains("\"thinking\"") && has_opaque_field(&m.content, "signature") {
+        // and Solana signatures — so it counts only alongside a thinking block,
+        // and only at a length no real signature reaches.
+        if m.content.contains("\"thinking\"")
+            && has_opaque_field(&m.content, "signature", MIN_BARE_SIGNATURE_LEN)
+        {
             return Some("signature");
         }
         if m.content.contains("redacted_thinking") {
@@ -957,9 +966,9 @@ fn foreign_reasoning_envelope(messages: &[ChatMessage]) -> Option<&'static str> 
 }
 
 /// True when `content` binds `field` as a JSON key to a string value of at least
-/// [`MIN_ENVELOPE_LEN`] base64 characters. Hex is excluded so a 65-byte EVM
-/// signature quoted in a tool result does not read as an envelope.
-fn has_opaque_field(content: &str, field: &str) -> bool {
+/// `min_len` base64 characters. Hex is excluded, with or without an `0x` prefix,
+/// so an EVM signature quoted in a tool result does not read as an envelope.
+fn has_opaque_field(content: &str, field: &str, min_len: usize) -> bool {
     let needle = format!("\"{field}\"");
     for (idx, _) in content.match_indices(&needle) {
         let rest = content[idx + needle.len()..].trim_start();
@@ -971,11 +980,12 @@ fn has_opaque_field(content: &str, field: &str) -> bool {
         };
         let Some(end) = value.find('"') else { continue };
         let value = &value[..end];
-        if value.len() >= MIN_ENVELOPE_LEN
+        let body = value.strip_prefix("0x").unwrap_or(value);
+        if value.len() >= min_len
             && value
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'=')
-            && !value.bytes().all(|b| b.is_ascii_hexdigit())
+            && !body.bytes().all(|b| b.is_ascii_hexdigit())
         {
             return true;
         }
@@ -3403,6 +3413,15 @@ model = "nomic-embed-text"
                 .to_string(),
             r#"the paper decodes an `encrypted_content` field to recover reasoning"#.to_string(),
             r#"{"type": "thinking", "thinking": "scratch", "signature": "..."}"#.to_string(),
+            // An on-chain signature next to a thinking block: both an ed25519
+            // base58 signature (88 chars) and an EVM one (132) sit far under the
+            // bare-field floor, so neither reads as an envelope.
+            format!(
+                r#"{{"thinking":"settling the trade","signature":"0x{}"}}"#,
+                "ab".repeat(65)
+            ),
+            r#"{"thinking":"settling","signature":"3Qw8Uh2mKpLxYvZnR7tBdF1aWcE4sJgHiN6oPqTrXyMz9bCkDvSfAuGeHjKlMnBpQrStUvWxYz12"}"#
+                .to_string(),
         ];
 
         for content in benign {

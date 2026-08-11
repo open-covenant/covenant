@@ -119,6 +119,51 @@ for tok in "${unique[@]:-}"; do
   fi
 done
 
+# --- Staged reasoning-envelope scan ---
+#
+# Providers hand back chain-of-thought as an opaque AEAD envelope: Anthropic
+# signs a thinking block with `signature`, OpenAI returns `encrypted_content`,
+# Gemini `thoughtSignature`. The envelopes replay across sessions, users, and
+# sibling models, so a committed transcript carries everything the model
+# reasoned over — including secrets that never appeared in the visible turn and
+# that redacting the plaintext therefore cannot remove. Nobody outside the
+# provider can decrypt one to check what is in it, so the only safe handling is
+# to never commit it.
+
+b64='[A-Za-z0-9+/=]{64,}'
+envelope_re="\"(encrypted_content|thoughtSignature|thought_signature|reasoning_signature)\"[[:space:]]*:[[:space:]]*\"${b64}"
+signature_re="\"signature\"[[:space:]]*:[[:space:]]*\"${b64}"
+
+envelope_files=$(git diff --cached --name-only | while read -r f; do
+  [ -z "$f" ] && continue
+  added=$(git diff --cached --no-color -U0 -- "$f" 2>/dev/null | grep -E '^\+[^+]' || true)
+  [ -z "$added" ] && continue
+
+  if echo "$added" | grep -Eq "$envelope_re"; then
+    echo "  $f"
+    continue
+  fi
+  if echo "$added" | grep -q "redacted_thinking"; then
+    echo "  $f"
+    continue
+  fi
+  # A bare signature is ambiguous — the repo is full of EVM and Solana
+  # signatures — so it only counts next to a thinking block.
+  if echo "$added" | grep -Eq "$signature_re" && echo "$added" | grep -Fq '"thinking"'; then
+    echo "  $f"
+  fi
+done)
+
+if [ -n "$envelope_files" ]; then
+  {
+    echo "covenant pre-commit: encrypted reasoning envelope in staged additions."
+    echo "$envelope_files"
+    echo "  These replay across sessions, users and sibling models, and the plaintext"
+    echo "  they carry cannot be redacted. Strip the reasoning blocks, don't scrub them."
+  } >&2
+  violations=$((violations + 1))
+fi
+
 if [ "$violations" -gt 0 ]; then
   echo "covenant pre-commit: aborting. Redact the listed tokens and re-stage." >&2
   exit 2

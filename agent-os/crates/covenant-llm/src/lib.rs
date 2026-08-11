@@ -85,6 +85,10 @@ pub enum ProviderError {
     Status { status: u16, body: String },
     #[error("missing api key for provider {0}")]
     MissingKey(&'static str),
+    /// An outbound message carried an opaque reasoning envelope minted outside
+    /// this process. See [`foreign_reasoning_envelope`].
+    #[error("outbound message carries a foreign reasoning envelope ({field})")]
+    ForeignReasoningEnvelope { field: &'static str },
     /// The provider's stop reason was the configured token ceiling, so the
     /// response was cut mid-output. `partial` carries the concatenated text
     /// blocks that landed before the truncation so the operator can still
@@ -807,7 +811,9 @@ pub struct Pricing {
 /// injectable response cache and cost sink. Implements [`Provider`], so it drops
 /// in anywhere a single backend is expected (and nests inside another router).
 ///
-/// `complete` serves an identical request from cache when possible; otherwise it
+/// `complete` refuses any batch carrying a foreign reasoning envelope
+/// ([`foreign_reasoning_envelope`]), then serves an identical request from cache
+/// when possible; otherwise it
 /// tries providers in order, advancing to the next only on a retryable transport
 /// fault ([`is_retryable`]) and surfacing any deterministic error immediately. On
 /// success it caches the reply and emits exactly one [`CostRecord`]; when every
@@ -879,6 +885,9 @@ impl Provider for Router {
     }
 
     async fn complete(&self, messages: &[ChatMessage]) -> Result<String, ProviderError> {
+        if let Some(field) = foreign_reasoning_envelope(messages) {
+            return Err(ProviderError::ForeignReasoningEnvelope { field });
+        }
         let key = cache_key(&self.model, messages);
         if let Some(k) = &key {
             if let Some(hit) = self.cache.get(k) {
@@ -902,6 +911,76 @@ impl Provider for Router {
         }
         Err(last_err.unwrap_or(ProviderError::Empty))
     }
+}
+
+/// Field names that carry a provider's opaque chain-of-thought envelope:
+/// Anthropic signs a `thinking` block with `signature`, OpenAI returns
+/// `encrypted_content` on a reasoning item, Gemini uses `thoughtSignature`.
+const REASONING_ENVELOPE_FIELDS: [&str; 4] = [
+    "encrypted_content",
+    "thoughtSignature",
+    "thought_signature",
+    "reasoning_signature",
+];
+
+/// Shortest envelope payload worth refusing. Real envelopes run to tens of
+/// thousands of base64 characters; the floor keeps documentation prose and
+/// elided test fixtures (`"signature": "..."`) from tripping the guard.
+const MIN_ENVELOPE_LEN: usize = 64;
+
+/// Reasoning envelopes are portable across sessions, users, and sibling models
+/// within a provider family, so one minted elsewhere can carry instructions the
+/// model treats as its own prior reasoning while remaining invisible to any
+/// monitor that reads only the plaintext turn. Covenant never mints one — every
+/// provider path here sends plain text and drops non-text blocks on the way back
+/// — so an envelope reaching the router came from outside: a tool result, a peer
+/// message, a resumed third-party trace. Refuse it rather than relay it upstream.
+///
+/// Returns the offending field name, or `None` when the batch is clean.
+fn foreign_reasoning_envelope(messages: &[ChatMessage]) -> Option<&'static str> {
+    for m in messages {
+        for field in REASONING_ENVELOPE_FIELDS {
+            if has_opaque_field(&m.content, field) {
+                return Some(field);
+            }
+        }
+        // A bare `signature` is ambiguous — Covenant routinely reasons over EVM
+        // and Solana signatures — so it only counts alongside a thinking block.
+        if m.content.contains("\"thinking\"") && has_opaque_field(&m.content, "signature") {
+            return Some("signature");
+        }
+        if m.content.contains("redacted_thinking") {
+            return Some("redacted_thinking");
+        }
+    }
+    None
+}
+
+/// True when `content` binds `field` as a JSON key to a string value of at least
+/// [`MIN_ENVELOPE_LEN`] base64 characters. Hex is excluded so a 65-byte EVM
+/// signature quoted in a tool result does not read as an envelope.
+fn has_opaque_field(content: &str, field: &str) -> bool {
+    let needle = format!("\"{field}\"");
+    for (idx, _) in content.match_indices(&needle) {
+        let rest = content[idx + needle.len()..].trim_start();
+        let Some(rest) = rest.strip_prefix(':') else {
+            continue;
+        };
+        let Some(value) = rest.trim_start().strip_prefix('"') else {
+            continue;
+        };
+        let Some(end) = value.find('"') else { continue };
+        let value = &value[..end];
+        if value.len() >= MIN_ENVELOPE_LEN
+            && value
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'=')
+            && !value.bytes().all(|b| b.is_ascii_hexdigit())
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// A provider error is retryable only when it is a transport-level fault
@@ -3255,6 +3334,90 @@ model = "nomic-embed-text"
             0,
             "a non-retryable error must NOT advance to the next provider",
         );
+    }
+
+    /// A 36k-char Anthropic envelope, elided to the shape the guard matches.
+    fn envelope(len: usize) -> String {
+        "EvjTAQqJAQgPGAIqQCa9fK2mRxH".repeat(len / 27 + 1)[..len].to_string()
+    }
+
+    #[tokio::test]
+    async fn router_refuses_foreign_reasoning_envelopes_before_dispatch() {
+        let cases = [
+            (
+                "anthropic",
+                format!(
+                    r#"{{"type":"thinking","thinking":"","signature":"{}"}}"#,
+                    envelope(512)
+                ),
+            ),
+            (
+                "openai",
+                format!(
+                    r#"{{"type":"reasoning","encrypted_content":"{}"}}"#,
+                    envelope(512)
+                ),
+            ),
+            (
+                "gemini",
+                format!(r#"{{"thoughtSignature":"{}"}}"#, envelope(512)),
+            ),
+            (
+                "anthropic-redacted",
+                r#"{"type":"redacted_thinking","data":"xyz"}"#.to_string(),
+            ),
+        ];
+
+        for (provider, blob) in cases {
+            let (never, calls) = counting("never", Probe::Reply("unreached"));
+            let router = Router::new("m", vec![never]);
+
+            let err = router
+                .complete(&[
+                    ChatMessage::user("summarize this tool result"),
+                    ChatMessage::assistant(blob),
+                ])
+                .await
+                .unwrap_err();
+
+            assert!(
+                matches!(err, ProviderError::ForeignReasoningEnvelope { .. }),
+                "a {provider} reasoning envelope must be refused, got {err:?}",
+            );
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                0,
+                "a {provider} envelope must never reach the provider — relaying it \
+                 hands the model instructions no plaintext monitor can see",
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn router_passes_signature_shaped_payloads_that_are_not_envelopes() {
+        // Covenant reasons over EVM/Solana signatures and over its own source and
+        // docs constantly. None of these may trip the envelope guard.
+        let benign = [
+            format!(r#"{{"signature":"0x{}"}}"#, "ab".repeat(65)),
+            r#"{"signature":"3Qw8Uh2mKpLxYvZnR7tBdF1aWcE4sJgHiN6oPqTrXyMz9bCkDvSfAuGeHjKlMnBpQrStUvWxYz12"}"#
+                .to_string(),
+            r#"the paper decodes an `encrypted_content` field to recover reasoning"#.to_string(),
+            r#"{"type": "thinking", "thinking": "scratch", "signature": "..."}"#.to_string(),
+        ];
+
+        for content in benign {
+            let (up, calls) = counting("up", Probe::Reply("ok"));
+            let router = Router::new("m", vec![up]);
+
+            let out = router.complete(&[ChatMessage::user(&content)]).await;
+
+            assert!(
+                out.is_ok(),
+                "benign payload must pass the envelope guard: {content} -> {:?}",
+                out.unwrap_err(),
+            );
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+        }
     }
 
     #[tokio::test]

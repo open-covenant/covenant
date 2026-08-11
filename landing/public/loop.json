@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-08-11T00:32:25.655Z",
+  "updatedAt": "2026-08-11T00:52:29.509Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 13120,
+    "events": 13124,
     "tasks": 1537,
-    "integrated": 1538
+    "integrated": 1539
   },
   "throughput": {
-    "last24h": 0,
-    "last7d": 1,
-    "velocity": 0.3
+    "last24h": 1,
+    "last7d": 2,
+    "velocity": 0.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "08-11",
-      "count": 0
+      "count": 1
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "08-11",
-      "total": 1538
+      "total": 1539
     }
   ],
   "states": {
-    "integrated": 1530,
+    "integrated": 1531,
     "proposed": 1,
-    "blocked": 5,
-    "self_review": 1
+    "blocked": 5
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "daemon-driven-settlement-devnet-batch-flush",
-    "state": "self_review",
-    "since": "2026-08-10T22:48:57.596Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-08-11T00:37:07.148Z",
+      "task": "daemon-driven-settlement-devnet-batch-flush",
+      "note": "Shipped as 4cc15cf4b, pushed to origin/loop/main-track (e5f0a7c8d..4cc15cf4b, fast-forward, all push identity guards green). Devnet e2e sign"
+    },
     {
       "at": "2026-08-04T20:44:58.056Z",
       "task": "capability-usage-budget-final-unit-race-live",
@@ -315,11 +315,6 @@
       "at": "2026-07-19T23:49:19.613Z",
       "task": "dist-flake-binary-contract-and-nix-ci",
       "note": "Integrated and pushed to origin/loop/main-track as 318b5bf8 (fix(dist): drop leaked preempt_fixture from the nix flake package) + 557c6cde ("
-    },
-    {
-      "at": "2026-07-19T23:23:53.930Z",
-      "task": "homebrew-formula-style-ci-coverage",
-      "note": "Committing formula fix + packaging.yml homebrew job to loop/main-track."
     }
   ]
 }

@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Context};
 use axum::body::{Body, Bytes};
 use axum::http::header::{ACCEPT, CONTENT_TYPE, HOST};
-use axum::http::{HeaderMap, Method, Request, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode};
 use axum::response::{IntoResponse, Response};
 use covenant_inference_node::frame::{read_frame, write_frame};
 use covenant_inference_node::tunnel::{RelayOpen, RelayReady, RelayService};
@@ -16,13 +16,48 @@ use crate::registry::CatalogEntry;
 /// placeholder keeps requests well-formed without leaking anything routable.
 const HOST_HEADER: &str = "covenant-inference-node";
 
-/// Proxies a buffered client request down a node connection and streams the reply
-/// back unchanged — which is what makes one path serve both plain JSON and SSE: the
-/// node's chunks are relayed as they arrive, so `stream: true` just works.
+/// A node's reply, fully buffered. The metering layer needs the whole body in hand
+/// to hash it into a receipt before the response leaves the gateway, so the paid
+/// routes collect rather than stream. `stream: true` still returns the full SSE
+/// body, just not incrementally.
+pub struct CollectedResponse {
+    pub status: StatusCode,
+    pub content_type: Option<HeaderValue>,
+    pub body: Bytes,
+}
+
+impl CollectedResponse {
+    pub fn into_response(self) -> Response {
+        let mut builder = Response::builder().status(self.status);
+        if let Some(content_type) = self.content_type {
+            builder = builder.header(CONTENT_TYPE, content_type);
+        }
+        builder
+            .body(Body::from(self.body))
+            .expect("status and headers are valid")
+    }
+}
+
+/// Proxies a buffered client request down a node connection and returns the reply
+/// fully collected.
 ///
 /// `relay` distinguishes the two transports the gateway supports over the same
 /// [`PooledStream`]: a tunnel connection that must first be opened with a relay
 /// handshake, versus a direct dev connection straight to a node's OpenAI surface.
+pub async fn relay_collect(
+    stream: PooledStream,
+    relay: bool,
+    method: Method,
+    path: &str,
+    headers: &HeaderMap,
+    body: Bytes,
+) -> anyhow::Result<CollectedResponse> {
+    let sender = open(stream, relay).await.context("open node connection")?;
+    forward(sender, method, path, headers, body).await
+}
+
+/// Buffered proxy that maps any failure to a `502`. Kept for callers that only need
+/// the response passed through, notably the relay loopback coverage.
 pub async fn relay_request(
     stream: PooledStream,
     relay: bool,
@@ -31,15 +66,8 @@ pub async fn relay_request(
     headers: &HeaderMap,
     body: Bytes,
 ) -> Response {
-    let sender = match open(stream, relay).await {
-        Ok(sender) => sender,
-        Err(error) => {
-            tracing::warn!(%error, "open node connection");
-            return (StatusCode::BAD_GATEWAY, "node connection unavailable").into_response();
-        }
-    };
-    match forward(sender, method, path, headers, body).await {
-        Ok(response) => response,
+    match relay_collect(stream, relay, method, path, headers, body).await {
+        Ok(collected) => collected.into_response(),
         Err(error) => {
             tracing::warn!(%error, "proxy request to node");
             (StatusCode::BAD_GATEWAY, "node request failed").into_response()
@@ -136,7 +164,7 @@ async fn forward(
     path: &str,
     headers: &HeaderMap,
     body: Bytes,
-) -> anyhow::Result<Response> {
+) -> anyhow::Result<CollectedResponse> {
     let mut builder = Request::builder()
         .method(method)
         .uri(path)
@@ -158,14 +186,18 @@ async fn forward(
     let status =
         StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
     let content_type = upstream.headers().get(CONTENT_TYPE).cloned();
+    let body = upstream
+        .into_body()
+        .collect()
+        .await
+        .context("read node response")?
+        .to_bytes();
 
-    let mut response = Response::builder().status(status);
-    if let Some(content_type) = content_type {
-        response = response.header(CONTENT_TYPE, content_type);
-    }
-    response
-        .body(Body::from_stream(upstream.into_body().into_data_stream()))
-        .context("build proxied response")
+    Ok(CollectedResponse {
+        status,
+        content_type,
+        body,
+    })
 }
 
 #[derive(serde::Deserialize)]

@@ -40,3 +40,6 @@ tokio = { version = "1.46.1", features = ["io-util", "macros", "net", "rt-multi-
 tokio-rustls = { version = "0.26.2", default-features = false, features = ["ring", "tls12"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

@@ -170,6 +170,29 @@ impl NodeRegistry {
             .collect()
     }
 
+    /// The served-model digest a receipt should commit to for `model` on `node_id`.
+    /// A model addressed by digest resolves to itself; a friendly id resolves through
+    /// the probed catalog, falling back to the sole enrolled model when a node serves
+    /// exactly one.
+    pub fn model_digest(&self, node_id: &str, model: &str) -> Option<String> {
+        let nodes = self.lock();
+        let record = nodes.get(node_id)?;
+        if record.enrolled_digests.iter().any(|digest| digest == model) {
+            return Some(model.to_owned());
+        }
+        if let Some(entry) = record
+            .catalog
+            .as_deref()
+            .and_then(|catalog| catalog.iter().find(|e| e.id == model || e.digest == model))
+        {
+            return Some(entry.digest.clone());
+        }
+        if let [only] = record.enrolled_digests.as_slice() {
+            return Some(only.clone());
+        }
+        None
+    }
+
     pub fn online_nodes(&self, now: Instant) -> Vec<String> {
         self.lock()
             .iter()
@@ -343,6 +366,28 @@ mod tests {
         assert!(registry
             .candidates(&model().digest(), TrustClass::Attested, now)
             .is_empty());
+    }
+
+    #[test]
+    fn model_digest_resolves_by_digest_then_catalog_id() {
+        let registry = NodeRegistry::default();
+        let key = key();
+        let id = enroll(&registry, &key);
+        let digest = model().digest();
+
+        assert_eq!(registry.model_digest(&id, &digest), Some(digest.clone()));
+        // Sole enrolled model: a friendly id resolves to it before any catalog probe.
+        assert_eq!(registry.model_digest(&id, "qwen3:8b"), Some(digest.clone()));
+
+        registry.set_catalog(
+            &id,
+            vec![CatalogEntry {
+                id: "qwen3:8b".into(),
+                digest: digest.clone(),
+            }],
+        );
+        assert_eq!(registry.model_digest(&id, "qwen3:8b"), Some(digest));
+        assert_eq!(registry.model_digest("0xmissing", "qwen3:8b"), None);
     }
 
     #[test]

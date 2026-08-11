@@ -17,6 +17,7 @@ import {getReputation, type Reputation} from './reputation.js';
 import {getPassport} from './passport.js';
 import {verifyAttestation, type Attestation} from './verify.js';
 import {listVerifiedErs, verifyEnclaveLive, verifyProvenance} from './er.js';
+import {scanReasoning, scanText} from './reasoning.js';
 
 const RPC_URL = process.env.COVENANT_SOLANA_MAINNET_RPC_URL ?? 'https://api.mainnet-beta.solana.com';
 const RPC_TIMEOUT = Number(process.env.RPC_TIMEOUT_MS ?? 9000);
@@ -61,7 +62,8 @@ function buildServer(): McpServer {
         'registered identity and attestation, and covenant_verify to check a Covenant-signed receipt or ' +
         'attestation. For MagicBlock ephemeral rollups: covenant_verified_ers to pick a verified ER to ' +
         'run on, covenant_verify_enclave for a live TDX check of one, and covenant_er_provenance to check ' +
-        'an agent\'s on-chain action record. All tools are read-only and take no credentials.',
+        'an agent\'s on-chain action record. Run covenant_scan_reasoning over any transcript before ' +
+        'publishing it or replaying it into a model. All tools are read-only and take no credentials.',
     },
   );
 
@@ -228,6 +230,36 @@ function buildServer(): McpServer {
         const msg = e instanceof Error && SAFE_PROVENANCE_ERRORS.has(e.message) ? e.message : 'chain RPC unavailable';
         return {content: [{type: 'text', text: msg}], isError: true};
       }
+    },
+  );
+
+  server.registerTool(
+    'covenant_scan_reasoning',
+    {
+      title: 'Scan for reasoning envelopes',
+      description:
+        'Scan a transcript, rollout, or shared session for opaque model reasoning blocks (Anthropic ' +
+        'signed thinking, OpenAI encrypted_content, Gemini thoughtSignature) before publishing it or ' +
+        'replaying it into a model. These blocks replay across sessions, users and sibling models: they ' +
+        'carry whatever the model reasoned over, including secrets that never appeared in the visible ' +
+        'text, and they can carry instructions a resuming model treats as its own prior reasoning. ' +
+        'Nobody outside the provider can decrypt one, so they cannot be sanitized — only stripped. ' +
+        'Pure local scan: nothing is sent anywhere and nothing is retained.',
+      inputSchema: {
+        content: z
+          .string()
+          .max(1_000_000)
+          .describe('The transcript or artifact to scan (JSON, JSONL, or plain text)'),
+      },
+      annotations: {readOnlyHint: true, openWorldHint: false, idempotentHint: true},
+    },
+    async ({content}) => {
+      const result = scanReasoning(content);
+      return {
+        content: [{type: 'text', text: scanText(result)}],
+        isError: !result.clean,
+        structuredContent: result as unknown as Record<string, unknown>,
+      };
     },
   );
 

@@ -57,4 +57,24 @@ console.log(await call('covenant_verify', {attestation: forged}));
 console.log('\n--- covenant_reputation (bad input -> must error) ---');
 console.log(await call('covenant_reputation', {wallet: 'not-an-address'}));
 
+const envelope = 'EvjTAQqJAQgPGAIqQCa9fK2mRxH'.repeat(20);
+console.log('\n--- covenant_scan_reasoning (three providers -> must FIND 3) ---');
+console.log(await call('covenant_scan_reasoning', {
+  content: [
+    `{"type":"thinking","thinking":"","signature":"${envelope}"}`,
+    `{"type":"reasoning","encrypted_content":"${envelope}"}`,
+    `{"thoughtSignature":"${envelope}"}`,
+  ].join('\n'),
+}));
+
+console.log('\n--- covenant_scan_reasoning (on-chain sigs + prose -> must be CLEAN) ---');
+console.log(await call('covenant_scan_reasoning', {
+  content: [
+    `{"thinking":"about the trade","signature":"0x${'ab'.repeat(65)}"}`,
+    '{"signature":"3Qw8Uh2mKpLxYvZnR7tBdF1aWcE4sJgHiN6oPqTrXyMz9bCkDvSfAuGeHjKlMnBpQrStUvWxYz12"}',
+    'the paper decodes an encrypted_content field to recover hidden reasoning',
+    '{"type": "thinking", "thinking": "scratch", "signature": "..."}',
+  ].join('\n'),
+}));
+
 await client.close();

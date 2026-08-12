@@ -24,11 +24,12 @@ export const metadata: Metadata = {
   },
 };
 
-type Post = { slug: string; date: string; title: string; dek: string };
+type Post = { slug: string; date: string; title: string; dek: string; href?: string };
 
 const POSTS: Post[] = [
   {
-    slug: "inference-receipts",
+    slug: "covenant-compute",
+    href: "/covenant-compute",
     date: "12 August 2026",
     title: "The model you paid for is not always the model that ran",
     dek: "Every request on the inference network returns a signed receipt naming the model that served it, with hashes of the input and output. The prompt itself is never stored.",
@@ -71,7 +72,7 @@ export default function BlogIndex() {
               key={p.slug}
               className="border-t border-neutral-800/80 py-8 first:border-t-0 first:pt-0"
             >
-              <a href={`/blog/${p.slug}`} className="group block">
+              <a href={p.href ?? `/blog/${p.slug}`} className="group block">
                 <span className="font-mono text-[11px] uppercase tracking-[0.3em] text-neutral-500">
                   {p.date}
                 </span>

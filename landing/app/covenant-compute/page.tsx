@@ -1,19 +1,27 @@
 import type { Metadata } from "next";
-import { SiteFooter } from "../../SiteFooter";
-import { SiteHeader } from "../../SiteHeader";
+import Image from "next/image";
+import { SiteFooter } from "../SiteFooter";
+import { SiteHeader } from "../SiteHeader";
 
 export const metadata: Metadata = {
   title: "The model you paid for is not always the model that ran",
   description:
     "Every request on the Covenant inference network returns a signed receipt naming the model that served it, with hashes of the input and output. The prompt itself is never stored.",
-  alternates: { canonical: "/blog/inference-receipts" },
+  alternates: { canonical: "/covenant-compute" },
   openGraph: {
     type: "article",
-    url: "https://opencovenant.org/blog/inference-receipts",
+    url: "https://opencovenant.org/covenant-compute",
     title: "The model you paid for is not always the model that ran",
     description:
       "A signed receipt for every request: which model served it, and hashes of the input and output. The prompt is never stored.",
-    images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
+    images: [
+      {
+        url: "/og/covenant-compute.jpg",
+        width: 1280,
+        height: 720,
+        alt: "Covenant Compute, verifiable inference network",
+      },
+    ],
   },
   twitter: {
     card: "summary_large_image",
@@ -21,7 +29,7 @@ export const metadata: Metadata = {
     creator: "@OpenCovenant",
     title: "The model you paid for is not always the model that ran",
     description: "A signed receipt for every request. The prompt is never stored.",
-    images: "/twitter-image.jpg",
+    images: "/og/covenant-compute.jpg",
   },
 };
 
@@ -50,6 +58,15 @@ export default function InferenceReceiptsPost() {
           Every request returns a signed receipt naming the model that served it. The prompt itself
           is never stored.
         </p>
+
+        <Image
+          src="/og/covenant-compute.jpg"
+          alt="Covenant Compute, verifiable inference network"
+          width={1280}
+          height={720}
+          priority
+          className="mt-12 w-full max-w-3xl rounded-sm border border-neutral-800/80"
+        />
 
         <article className="prose-docs mt-12 max-w-2xl">
           <p>

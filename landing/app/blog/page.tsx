@@ -28,6 +28,12 @@ type Post = { slug: string; date: string; title: string; dek: string };
 
 const POSTS: Post[] = [
   {
+    slug: "inference-receipts",
+    date: "12 August 2026",
+    title: "The model you paid for is not always the model that ran",
+    dek: "Every request on the inference network returns a signed receipt naming the model that served it, with hashes of the input and output. The prompt itself is never stored.",
+  },
+  {
     slug: "covenant-is-now-multichain",
     date: "7 July 2026",
     title: "Covenant is now multi-chain. The token isn't.",

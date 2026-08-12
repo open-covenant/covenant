@@ -22,9 +22,11 @@ use crate::backoff::Backoff;
 use crate::frame::{read_frame, write_frame};
 use crate::target::InferenceTarget;
 
-/// A connection that stays up at least this long is treated as healthy: its
-/// eventual close clears the reconnect backoff instead of escalating it. Shorter
-/// sessions look like a gateway that keeps refusing us and are backed off.
+/// A *failed* session that nonetheless stayed up at least this long is treated as
+/// healthy: its close clears the reconnect backoff instead of escalating it. Only
+/// a rapid failure looks like a gateway refusing us. A successful relay is always
+/// healthy regardless of duration (a sub-second inference is the normal case), so
+/// this threshold gates the failure path only.
 const HEALTHY_SESSION: Duration = Duration::from_secs(15);
 
 #[derive(Clone)]
@@ -117,16 +119,33 @@ async fn worker<T>(
     let mut attempt = 0_u32;
     loop {
         let started = Instant::now();
-        if let Err(error) = connect_and_serve(&config, &tls, &signing_key, target.as_ref()).await {
+        let outcome = connect_and_serve(&config, &tls, &signing_key, target.as_ref()).await;
+        if let Err(error) = &outcome {
             tracing::warn!(%error, slot = %config.connection_id, "outbound tunnel slot disconnected");
         }
-        // A session that lasted clears the backoff; a rapid failure escalates it.
-        attempt = if started.elapsed() >= HEALTHY_SESSION {
-            0
-        } else {
-            attempt.saturating_add(1)
-        };
-        sleep(backoff.sample(attempt, os_entropy())).await;
+        // A completed relay is healthy regardless of duration — a sub-second
+        // inference is the normal case, not a flap — so it resets the backoff and
+        // refills the slot immediately. Only a rapid failure escalates.
+        let (next, back_off) = next_backoff(outcome.is_ok(), started.elapsed(), attempt);
+        attempt = next;
+        if back_off {
+            sleep(backoff.sample(attempt, os_entropy())).await;
+        }
+    }
+}
+
+/// Decide the next reconnect attempt count and whether to sleep, from a session's
+/// outcome. A successful relay is always healthy (reset, no sleep) — treating a
+/// sub-second relay as a flap is what drained the pool under a burst of requests.
+/// A failure that lasted at least [`HEALTHY_SESSION`] also resets; only a rapid
+/// failure escalates.
+fn next_backoff(relayed_ok: bool, elapsed: Duration, attempt: u32) -> (u32, bool) {
+    if relayed_ok {
+        (0, false)
+    } else if elapsed >= HEALTHY_SESSION {
+        (0, true)
+    } else {
+        (attempt.saturating_add(1), true)
     }
 }
 
@@ -267,4 +286,31 @@ fn validate_identifier(value: &str) -> anyhow::Result<()> {
         anyhow::bail!("connection identifier is invalid");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod backoff_decision {
+    use super::{next_backoff, HEALTHY_SESSION};
+    use std::time::Duration;
+
+    #[test]
+    fn a_successful_relay_resets_and_refills_immediately() {
+        assert_eq!(
+            next_backoff(true, Duration::from_millis(200), 5),
+            (0, false)
+        );
+    }
+
+    #[test]
+    fn a_rapid_failure_escalates_and_backs_off() {
+        assert_eq!(
+            next_backoff(false, Duration::from_millis(200), 5),
+            (6, true)
+        );
+    }
+
+    #[test]
+    fn a_failure_after_a_healthy_stretch_resets() {
+        assert_eq!(next_backoff(false, HEALTHY_SESSION, 5), (0, true));
+    }
 }

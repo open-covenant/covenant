@@ -178,6 +178,26 @@ $CVNT mint (Solana only)     2mNVZ6aEjrGwiUVCfz7XGWpiXuWzgBDoznwE579upump`}</cod
         </li>
       </ul>
 
+      <h2>Also live on Robinhood Chain mainnet</h2>
+      <p>
+        The same stateless verifier design reaches a second EVM chain,{" "}
+        <a href="/robinhood">Robinhood Chain</a> mainnet (chain 4663). A generic
+        x402 payment has settled there in USDG (Global Dollar), using the same{" "}
+        <code>covenant-x402</code> signer that settles USDC on Base. A
+        bounded-spend escrow is deployed and unpaused, its enforcement proven in
+        real USDG: it holds an agent&apos;s funds against an onchain grant with a
+        per-call ceiling, a provider allowlist, and an expiry, releases to the
+        provider only on a passing result, and refunds in full otherwise. A
+        charge over the ceiling reverts at the contract.
+      </p>
+      <p>
+        The bond and reputation verifiers are deployed there against the same
+        canonical issuer, denominated in USDG, and not yet exercised. Identity
+        stays Solana-canonical: the ERC-8004 registry is not deployed on 4663, so
+        no agent is projected there, and <code>$CVNT</code> is not on Robinhood
+        Chain, held off it by the same invariant that keeps it off Base.
+      </p>
+
       <h2>What comes next</h2>
       <ul>
         <li>
@@ -186,8 +206,10 @@ $CVNT mint (Solana only)     2mNVZ6aEjrGwiUVCfz7XGWpiXuWzgBDoznwE579upump`}</cod
           challenge window.
         </li>
         <li>
-          <strong>More L2s.</strong> OP-Stack EAS predeploys make each new L2
-          nearly free. Base is first.
+          <strong>More chains.</strong> Reaching a new chain means deploying a
+          stateless verifier rather than standing up a bridge. Base came first
+          and Robinhood Chain mainnet followed. On OP-Stack L2s the EAS
+          predeploys make each new one nearly free.
         </li>
       </ul>
 

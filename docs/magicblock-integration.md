@@ -96,10 +96,17 @@ Intel PCCS, enforce `report_data == challenge` so a stale or replayed quote
 fails, and require TCB `UpToDate`. The result is what lands in the on-chain
 attestation of section 1.
 
-Still ahead: a `covenant-tee` crate that binds an agent plus its provenance root
-into the quote challenge — a signed Covenant attestation tying the agent's
-record to the enclave it ran in. The reference deployment below exercises the ER
-metering and slashing loop; agent-bound enclave attestation is not part of it yet.
+The `covenant-tee` crate now builds this binding. It fills the quote's 64-byte
+`report_data` with a commitment to an agent, what ran (its provenance root), and
+a fresh nonce, so a verifier who holds that triple recomputes the challenge and
+confirms the quote names it rather than being a bare freshness check. The
+construction is a sha512 that drops into the existing `GET /quote?challenge=`
+call unchanged, and the paid enclave endpoint above takes a subject to bind. A
+match proves the quote is genuine, fresh, and names the triple; it does not prove
+the agent authorized the binding, which an agent signature over the binding would
+add and is left as a later addition. The reference deployment below predates the
+crate, so it exercises the ER metering and slashing loop without agent-bound
+attestation.
 
 ## Reference deployment
 

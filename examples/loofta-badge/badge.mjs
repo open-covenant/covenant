@@ -3,8 +3,9 @@
 // Loofta settles inside MagicBlock Private Ephemeral Rollups (Intel TDX
 // enclaves). Covenant DCAP-verifies those enclaves on mainnet and keeps a
 // verified-ER attestation live in the Solana Attestation Service. Given the ER a
-// payment settled on, this resolves that attestation (read-only, one account
-// read, no keys) and renders a drop-in badge for a checkout or receipt.
+// payment settled on, this resolves that attestation (read-only, one RPC read of
+// the attestation and its credential, no keys) and renders a drop-in badge for a
+// checkout or receipt.
 //
 // The resolve runs server-side (verified-er reads Solana + SAS through node);
 // the renderers are pure string builders, so the status can be shipped to the
@@ -18,9 +19,14 @@ import {
   deriveAttestationPda,
 } from "@covenant-org/verified-er";
 
-const asConnection = ({ connection, rpcUrl }) => {
+const asConnection = ({ connection, rpcUrl, timeoutMs = 10_000 }) => {
   if (connection) return connection;
-  if (rpcUrl) return new Connection(rpcUrl, "confirmed");
+  if (rpcUrl) {
+    return new Connection(rpcUrl, {
+      commitment: "confirmed",
+      fetch: (url, opts = {}) => fetch(url, { ...opts, signal: AbortSignal.timeout(timeoutMs) }),
+    });
+  }
   throw new Error("pass a `connection` or `rpcUrl`");
 };
 
@@ -32,23 +38,36 @@ const iso = (unixSecs) => (unixSecs ? new Date(unixSecs * 1000).toISOString() : 
  *  normalize it into badge data. */
 export async function verifyEnclave({ connection, rpcUrl, validator }) {
   if (!validator) throw new Error("verifyEnclave needs the settlement `validator` (ER identity)");
-  const res = await resolveVerifiedEr(asConnection({ connection, rpcUrl }), validator);
-  return toBadgeData(validator, res);
+  try {
+    const res = await resolveVerifiedEr(asConnection({ connection, rpcUrl }), validator);
+    return toBadgeData(validator, res);
+  } catch (e) {
+    return toBadgeData(validator, { verified: false, reason: `could not verify (${e.message ?? "rpc error"})` });
+  }
 }
 
 /** Route to a Covenant-verified ER and return both the endpoint to send to and
  *  the badge data, in one call. Use this when you let Covenant pick the enclave
  *  rather than pinning a validator. */
 export async function routeAndVerify({ connection, rpcUrl }) {
-  const { picked, routes } = await pickVerifiedEr(asConnection({ connection, rpcUrl }));
-  return {
-    endpoint: picked?.fqdn ?? null,
-    validator: picked?.identity ?? null,
-    badge: picked
-      ? toBadgeData(picked.identity, picked.covenant)
-      : toBadgeData(null, { verified: false, reason: "no verified ER available" }),
-    routes,
-  };
+  try {
+    const { picked, routes } = await pickVerifiedEr(asConnection({ connection, rpcUrl }));
+    return {
+      endpoint: picked?.fqdn ?? null,
+      validator: picked?.identity ?? null,
+      badge: picked
+        ? toBadgeData(picked.identity, picked.covenant)
+        : toBadgeData(null, { verified: false, reason: "no verified ER available" }),
+      routes,
+    };
+  } catch (e) {
+    return {
+      endpoint: null,
+      validator: null,
+      badge: toBadgeData(null, { verified: false, reason: `could not verify (${e.message ?? "rpc error"})` }),
+      routes: [],
+    };
+  }
 }
 
 function toBadgeData(validator, res) {

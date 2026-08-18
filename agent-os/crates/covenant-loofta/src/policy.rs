@@ -65,6 +65,11 @@ impl PayoutPolicy {
     /// cap, reputation floor) wins over an escalation, and an escalation wins
     /// over allow.
     pub fn authorize(&self, recipient: &RecipientStanding, amount_usd: f64) -> Verdict {
+        if !amount_usd.is_finite() || amount_usd < 0.0 {
+            return Verdict::Refuse(format!(
+                "amount {amount_usd} is not a valid non-negative number"
+            ));
+        }
         if recipient.flagged {
             return Verdict::Refuse(format!(
                 "recipient {} carries a Covenant abuse flag",
@@ -173,8 +178,8 @@ mod tests {
             per_payout_usd: Some(250.0),
             ..PayoutPolicy::conservative()
         };
-        // 400 is over both the $250 cap and the $1,000 approval floor is not
-        // reached; the cap refusal wins.
+        // 400 clears the $250 cap but not the $1,000 approval floor, so the cap
+        // refusal wins.
         assert!(matches!(
             p.authorize(&established(80), 400.0),
             Verdict::Refuse(_)
@@ -187,6 +192,17 @@ mod tests {
             PayoutPolicy::conservative().authorize(&established(90), 1_000.0),
             Verdict::NeedsApproval(_)
         ));
+    }
+
+    #[test]
+    fn refuses_non_finite_or_negative_amount() {
+        let p = PayoutPolicy::conservative();
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0] {
+            assert!(
+                matches!(p.authorize(&established(90), bad), Verdict::Refuse(_)),
+                "amount {bad} must refuse, not fall through to allow"
+            );
+        }
     }
 
     #[test]

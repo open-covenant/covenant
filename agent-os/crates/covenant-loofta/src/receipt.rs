@@ -72,6 +72,9 @@ impl PayoutReceipt {
     /// RFC 8785 (JCS) canonical JSON. The on-chain anchor carries the hash of
     /// this exact byte string.
     pub fn canonical_json(&self) -> Result<String> {
+        if !self.amount_usd.is_finite() {
+            return Err(Error::Decode("amount_usd must be finite".into()));
+        }
         serde_jcs::to_string(self).map_err(|e| Error::Decode(e.to_string()))
     }
 
@@ -158,6 +161,16 @@ mod tests {
         let mut tampered = signed.clone();
         tampered.receipt.amount_usd = 4_200.0;
         assert!(!tampered.verify());
+    }
+
+    #[test]
+    fn non_finite_amount_has_no_hash_or_signature() {
+        let attestor = SigningKey::from_bytes(&[9u8; 32]);
+        let mut r = PayoutReceipt::new("Rcpt", 10.0, &Verdict::Allow, "test");
+        r.amount_usd = f64::NAN;
+        assert!(r.canonical_json().is_err());
+        assert!(r.root_hash_hex().is_err());
+        assert!(r.attest(&attestor).is_err());
     }
 
     #[test]

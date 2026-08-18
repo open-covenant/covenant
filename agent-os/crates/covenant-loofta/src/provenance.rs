@@ -18,11 +18,11 @@
 //! DCAP-verifies those enclaves on mainnet (the verified-ER attestation in the
 //! Solana Attestation Service, the `covenant_verify_enclave` MCP tool, and a paid
 //! x402 check), with the running verifier in `services/er-registry/tee.mjs`.
-//! [`EnclaveAttestation`] carries that DCAP result and [`EnclaveAttestation::binds`]
-//! checks the quote committed to this exact payment. The one packaging gap is a
-//! `covenant-tee` crate that folds the agent and provenance root into the quote
-//! challenge as a first-class signed attestation; the binding itself is
-//! exercisable today through the live endpoint.
+//! [`EnclaveAttestation`] carries that DCAP result, and [`EnclaveAttestation::binds`]
+//! checks the quote committed to this exact payment through the `covenant-tee`
+//! crate's [`covenant_tee::Binding`], which folds the agent, the payment
+//! commitment, and a nonce into the `sha512` challenge the enclave signs into
+//! `report_data`.
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use ed25519_dalek::{Signer as _, SigningKey};
@@ -77,6 +77,9 @@ impl PaymentRecord {
     /// The commitment: sha256 over the JCS-canonical record. This is the only
     /// value anchored, and it reveals nothing without the record.
     pub fn commitment_hex(&self) -> Result<String> {
+        if !self.amount_usd.is_finite() {
+            return Err(Error::Decode("amount_usd must be finite".into()));
+        }
         let canon = serde_jcs::to_string(self).map_err(|e| Error::Decode(e.to_string()))?;
         Ok(hex::encode(Sha256::digest(canon.as_bytes())))
     }
@@ -263,6 +266,18 @@ mod tests {
         let mut other = r.clone();
         other.amount_usd = 121.0;
         assert_ne!(r.commitment_hex().unwrap(), other.commitment_hex().unwrap());
+    }
+
+    #[test]
+    fn non_finite_amount_has_no_commitment() {
+        // serde_jcs maps NaN and both infinities to JSON null, which would
+        // collapse distinct records to one commitment. The guard rejects them
+        // so a commitment is never produced for an amount it can't bind.
+        let mut r = record(120.0, &[1u8; 32]);
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            r.amount_usd = bad;
+            assert!(r.commitment_hex().is_err(), "{bad} must not commit");
+        }
     }
 
     #[test]

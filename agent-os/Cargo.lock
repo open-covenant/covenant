@@ -1651,7 +1651,6 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
- "bs58",
  "covenant-mcp",
  "covenant-tee",
  "ed25519-dalek 2.2.0",

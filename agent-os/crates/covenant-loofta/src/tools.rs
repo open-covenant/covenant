@@ -94,7 +94,7 @@ impl Tool for PayoutCheckTool {
         let standing = match self.oracle.standing(recipient).await {
             Ok(s) => s,
             Err(e) => {
-                tracing::debug!(recipient, error = %e, "recipient standing read failed");
+                tracing::warn!(recipient, error = %e, "recipient standing read failed");
                 return Ok(ToolCallResult::error(e.to_string()));
             }
         };

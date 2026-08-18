@@ -6,9 +6,9 @@ verified-ER attestation live in the Solana Attestation Service. This turns that
 into a drop-in badge: "settled in a Covenant-verified enclave", with the live
 TCB status, the enclave measurement, and a link to the on-chain attestation.
 
-Read-only. One Solana account read per check, no keys, no funds. It fails
-closed: a lapsed, missing, or wrong-signer attestation renders as not verified,
-never a false green.
+Read-only. One RPC round-trip per check (the attestation and its issuer
+credential), no keys, no funds. It fails closed: a lapsed, missing, or
+wrong-signer attestation renders as not verified, never a false green.
 
 ## Try it
 
@@ -17,8 +17,8 @@ npm install
 node demo.mjs
 ```
 
-Resolves the ER Loofta settles on today (`mainnet-tee`), prints the badge, and
-writes `badge-preview.html`.
+Resolves the ER Loofta settles on today, prints the badge as text and JSON, runs
+the route-and-verify path, and writes `badge-preview.html`.
 
 ## Integrate
 

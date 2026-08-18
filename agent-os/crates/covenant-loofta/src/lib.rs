@@ -33,9 +33,10 @@
 //! live substrate, not a claim to hedge: Loofta runs on MagicBlock Private
 //! Ephemeral Rollups (Intel TDX), and Covenant already DCAP-verifies those
 //! enclaves on mainnet, so [`provenance::SignedCommitment::enclave`] is filled
-//! from a real verification. The lone gap is a `covenant-tee` crate that
-//! packages the agent-bound challenge as a first-class attestation; the
-//! mechanism itself is exercisable today.
+//! from a real verification. The agent-bound challenge that ties one payment to
+//! one enclave is packaged by the `covenant-tee` crate: its `Binding` builds the
+//! value the enclave signs into the quote, and
+//! [`provenance::EnclaveAttestation::binds`] rechecks it.
 
 #![deny(unsafe_code)]
 

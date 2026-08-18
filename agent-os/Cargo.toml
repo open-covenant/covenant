@@ -34,6 +34,7 @@ members = [
     "crates/covenant-robinhood",
     "crates/covenant-krexa",
     "crates/covenant-myrad",
+    "crates/covenant-loofta",
     "crates/covenant-timeline-adapter",
     "crates/covenant-tee",
     "crates/covenant-bond",

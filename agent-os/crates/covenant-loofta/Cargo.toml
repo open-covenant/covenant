@@ -1,0 +1,25 @@
+[package]
+name = "covenant-loofta"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Covenant payout trust gate for Loofta Pay. Pre-send recipient reputation check, an allow/refuse/escalate policy, and a signed payout authorization receipt. Read-only, never touches the payment rail."
+
+[dependencies]
+covenant-mcp = { path = "../covenant-mcp" }
+covenant-tee = { path = "../covenant-tee" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_jcs = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+ed25519-dalek = { workspace = true }
+base64 = "0.22"
+sha2 = "0.10"
+hex = "0.4"
+
+[dev-dependencies]
+tokio = { workspace = true }

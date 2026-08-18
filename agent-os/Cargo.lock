@@ -1657,6 +1657,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "covenant-loofta"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "covenant-mcp",
+ "covenant-tee",
+ "ed25519-dalek 2.2.0",
+ "hex",
+ "serde",
+ "serde_jcs",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "covenant-manifest"
 version = "0.1.0"
 dependencies = [

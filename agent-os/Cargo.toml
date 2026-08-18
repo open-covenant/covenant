@@ -36,6 +36,7 @@ members = [
     "crates/covenant-myrad",
     "crates/covenant-timeline-adapter",
     "crates/covenant-tee",
+    "crates/covenant-bond",
     "crates/covenant-sap-bridge",
     "crates/covenant-stake-keeper",
     "crates/covenantd",

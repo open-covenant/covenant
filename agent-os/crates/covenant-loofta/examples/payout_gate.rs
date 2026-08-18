@@ -86,13 +86,20 @@ async fn main() {
     // (Intel TDX enclave) the payment ran in. Shown here with the real mainnet
     // verified-ER validator and a report_data that binds this commitment; the
     // mr_td is illustrative (the real value comes from the live verify).
+    let binding = covenant_tee::Binding::new(
+        "MTEWGuqxUpYZGFJQcp8tLN7x5v9BSeoFHYWQQ3n3xzo",
+        &commitment,
+        "11".repeat(32),
+    )
+    .expect("valid binding");
     let signed = signed.with_enclave(EnclaveAttestation {
         validator: "MTEWGuqxUpYZGFJQcp8tLN7x5v9BSeoFHYWQQ3n3xzo".into(),
         tcb_status: "UpToDate".into(),
         mr_td_hex: "ab".repeat(48),
         advisory_ids: vec![],
-        report_data_hex: format!("{commitment}{}", "00".repeat(16)),
+        report_data_hex: binding.challenge_hex(),
         verified_at: 1_722_600_050,
+        binding,
     });
 
     println!("commitment {}… (nothing else anchored)", &commitment[..16]);

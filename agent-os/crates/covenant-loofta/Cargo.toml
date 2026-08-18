@@ -9,6 +9,7 @@ description = "Covenant payout trust gate for Loofta Pay. Pre-send recipient rep
 
 [dependencies]
 covenant-mcp = { path = "../covenant-mcp" }
+covenant-tee = { path = "../covenant-tee" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_jcs = { workspace = true }

@@ -115,23 +115,30 @@ pub struct EnclaveAttestation {
     #[serde(default)]
     pub advisory_ids: Vec<String>,
     /// The quote's `report_data`, hex. The enclave binds whatever challenge it
-    /// was handed here; a payment-bound quote carries the commitment.
+    /// was handed here; a payment-bound quote carries this binding's challenge.
     pub report_data_hex: String,
     pub verified_at: u64,
+    /// The binding the quote was requested with: its `subject_commitment` is
+    /// this payment's commitment, and its challenge is what the enclave signed
+    /// into `report_data`. Recomputing the challenge and matching it is the tie
+    /// between a genuine enclave and this specific payment.
+    pub binding: covenant_tee::Binding,
 }
 
 impl EnclaveAttestation {
-    /// The enclave quote committed to this payment: its `report_data` carries the
-    /// commitment. This is the tie between "a genuine verified enclave" and "this
-    /// specific payment". The exact 64-byte challenge layout (commitment plus
-    /// agent) is the `covenant-tee` crate's to pin; here we check the commitment
-    /// is the value the quote bound.
+    /// The enclave quote committed to this payment. Two things must hold: the
+    /// binding is for this payment's commitment, and its challenge is the value
+    /// the enclave actually signed into `report_data`. The challenge is
+    /// `sha512(domain | agent | commitment | nonce)`, recomputed and matched by
+    /// [`covenant_tee::Binding`], so this is a full binding check, not a
+    /// substring of `report_data`.
     pub fn binds(&self, commitment_hex: &str) -> bool {
         !commitment_hex.is_empty()
             && self
-                .report_data_hex
-                .to_lowercase()
-                .contains(&commitment_hex.to_lowercase())
+                .binding
+                .subject_commitment
+                .eq_ignore_ascii_case(commitment_hex)
+            && self.binding.matches_report_data(&self.report_data_hex)
     }
 
     /// The TCB is current with no outstanding advisories.
@@ -232,13 +239,20 @@ mod tests {
     }
 
     fn enclave_for(commitment_hex: &str) -> EnclaveAttestation {
+        let binding = covenant_tee::Binding::new(
+            "MTEWGuqxUpYZGFJQcp8tLN7x5v9BSeoFHYWQQ3n3xzo",
+            commitment_hex,
+            "11".repeat(32),
+        )
+        .expect("valid binding");
         EnclaveAttestation {
             validator: "MTEWGuqxUpYZGFJQcp8tLN7x5v9BSeoFHYWQQ3n3xzo".into(),
             tcb_status: "UpToDate".into(),
             mr_td_hex: "ab".repeat(48),
             advisory_ids: vec![],
-            report_data_hex: format!("{commitment_hex}{}", "00".repeat(16)),
+            report_data_hex: binding.challenge_hex(),
             verified_at: 1_722_600_050,
+            binding,
         }
     }
 
@@ -291,6 +305,21 @@ mod tests {
     }
 
     #[test]
+    fn binding_requires_report_data_to_carry_the_challenge() {
+        // The commitment matches, but report_data is not the binding's
+        // challenge. binds() must fail on the covenant-tee match, not pass on
+        // the commitment equality alone.
+        let commitment = "a".repeat(64);
+        let mut e = enclave_for(&commitment);
+        assert!(e.binds(&commitment));
+        e.report_data_hex = "ff".repeat(64);
+        assert!(
+            !e.binds(&commitment),
+            "right commitment but wrong challenge in report_data must not bind"
+        );
+    }
+
+    #[test]
     fn outdated_tcb_is_not_up_to_date() {
         let mut e = enclave_for(&"a".repeat(64));
         e.advisory_ids = vec!["INTEL-SA-00001".into()];
@@ -316,10 +345,10 @@ mod tests {
             "signed, current TCB, and quote binds the payment"
         );
 
-        // An enclave that verified a different payment does not prove this one.
-        let mut e = enclave_for("deadbeef");
-        e.report_data_hex = "ff".repeat(32);
-        let mismatched = signed.with_enclave(e);
+        // An enclave that verified a different payment does not prove this one:
+        // its binding commits to a different commitment, so the challenge in
+        // report_data is a different value.
+        let mismatched = signed.with_enclave(enclave_for(&"c".repeat(64)));
         assert!(!mismatched.enclave_proven());
     }
 

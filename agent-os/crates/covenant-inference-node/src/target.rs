@@ -16,7 +16,7 @@ const HEALTH_TIMEOUT: Duration = Duration::from_secs(2);
 /// `covenant-inferd serve` will front an OpenAI-compatible server (llama.cpp,
 /// vLLM, ...) and expose it here as a [`LocalHttpTarget`] pointing at that
 /// server's listen address. Wiring in that engine is out of scope for the node
-/// daemon — implementing this trait is the entire contract it has to satisfy.
+/// daemon - implementing this trait is the entire contract it has to satisfy.
 pub trait InferenceTarget: Send + Sync + 'static {
     type Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static;
 
@@ -24,7 +24,7 @@ pub trait InferenceTarget: Send + Sync + 'static {
     fn health(&self) -> impl Future<Output = anyhow::Result<()>> + Send;
 }
 
-/// Forwards relayed connections to a local TCP listener — the address an
+/// Forwards relayed connections to a local TCP listener - the address an
 /// OpenAI-compatible inference server is bound to on the node.
 #[derive(Debug, Clone, Copy)]
 pub struct LocalHttpTarget {
@@ -34,10 +34,6 @@ pub struct LocalHttpTarget {
 impl LocalHttpTarget {
     pub fn new(addr: SocketAddr) -> Self {
         Self { addr }
-    }
-
-    pub fn addr(&self) -> SocketAddr {
-        self.addr
     }
 }
 

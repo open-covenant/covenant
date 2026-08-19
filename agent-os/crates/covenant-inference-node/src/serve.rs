@@ -124,19 +124,26 @@ pub async fn run(config: ServeConfig) -> anyhow::Result<()> {
     tracing::info!(listen = %config.listen, %engine_url, "serving covenant inference surface");
 
     let server = axum::serve(listener, app).with_graceful_shutdown(shutdown_signal());
-    match engine.as_mut() {
-        // Fall over if the engine dies under us; a node with a dead engine should
-        // stop advertising, not keep answering with 502s.
+    // Fall over if the engine dies under us; a node with a dead engine should stop
+    // advertising, not keep answering with 502s. Exit non-zero so a supervisor set
+    // to Restart=on-failure brings it back instead of treating it as a clean stop.
+    let engine_died = match engine.as_mut() {
         Some(child) => tokio::select! {
-            result = server => result.context("serve loop")?,
-            status = child.wait() => tracing::error!(?status, "inference engine exited"),
+            result = server => { result.context("serve loop")?; false }
+            status = child.wait() => { tracing::error!(?status, "inference engine exited"); true }
         },
-        None => server.await.context("serve loop")?,
-    }
+        None => {
+            server.await.context("serve loop")?;
+            false
+        }
+    };
 
     if let Some(mut child) = engine {
         let _ = child.start_kill();
         let _ = child.wait().await;
+    }
+    if engine_died {
+        anyhow::bail!("inference engine exited");
     }
     Ok(())
 }
@@ -147,10 +154,13 @@ pub async fn run(config: ServeConfig) -> anyhow::Result<()> {
 pub fn router(engine_url: String, model: String, identity: ModelIdentity) -> Router {
     let digest = identity.digest();
     let state = AppState {
-        // No response timeout: SSE completions are long-lived. Per-request timeouts
-        // guard the short health probes instead.
+        // No total timeout: SSE completions are long-lived. A read timeout instead
+        // bounds the idle gap between bytes, so an engine that accepted the
+        // connection then wedged can't pin this request (and its tunnel slot)
+        // forever, while a slow-but-progressing generation is left alone.
         client: reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(5))
+            .read_timeout(Duration::from_secs(120))
             .build()
             .expect("build engine client"),
         engine_url: Arc::from(engine_url.trim_end_matches('/')),
@@ -270,7 +280,7 @@ struct HealthResponse {
     model_identity_digest: String,
 }
 
-/// Streams the weights file through SHA-256 without loading it into memory — the
+/// Streams the weights file through SHA-256 without loading it into memory - the
 /// GGUF is multiple gigabytes, so this runs on a blocking thread and reads in 1 MiB
 /// chunks.
 pub async fn hash_weights(path: &Path) -> anyhow::Result<String> {

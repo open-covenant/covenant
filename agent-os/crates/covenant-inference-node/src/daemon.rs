@@ -95,7 +95,7 @@ pub struct HeartbeatArgs {
 }
 
 /// Signs and POSTs telemetry on a fixed cadence, forever. Delivery failures are
-/// logged and retried on the next tick rather than aborting the loop — a node
+/// logged and retried on the next tick rather than aborting the loop - a node
 /// that can't reach the control plane for a beat should keep trying, not die.
 pub async fn heartbeat(args: HeartbeatArgs) -> anyhow::Result<()> {
     if args.interval < Duration::from_secs(1) || args.interval > Duration::from_secs(300) {
@@ -173,11 +173,29 @@ fn save_identity(path: &Path, identity: &DeviceIdentity) -> anyhow::Result<()> {
         .map_err(|error| anyhow::anyhow!("draw temp-file suffix: {error}"))?;
     let temporary = path.with_extension(format!("tmp-{}", hex::encode(suffix)));
     let outcome = write_private_new(&temporary, &serde_json::to_vec(identity)?)
-        .and_then(|()| fs::rename(&temporary, path).context("persist device identity"));
+        .and_then(|()| fs::rename(&temporary, path).context("persist device identity"))
+        .and_then(|()| sync_parent_dir(path));
     if outcome.is_err() {
         let _ = fs::remove_file(&temporary);
     }
     outcome
+}
+
+/// fsync the directory holding `path` so the preceding rename survives power loss.
+/// Without it a crash can lose the rename and rewind `telemetry_sequence`.
+#[cfg(unix)]
+fn sync_parent_dir(path: &Path) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        fs::File::open(parent)
+            .and_then(|dir| dir.sync_all())
+            .with_context(|| format!("fsync {}", parent.display()))?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn sync_parent_dir(_path: &Path) -> anyhow::Result<()> {
+    Ok(())
 }
 
 fn write_private_new(path: &Path, contents: &[u8]) -> anyhow::Result<()> {

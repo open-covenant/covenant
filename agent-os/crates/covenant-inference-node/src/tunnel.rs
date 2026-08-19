@@ -123,8 +123,8 @@ async fn worker<T>(
         if let Err(error) = &outcome {
             tracing::warn!(%error, slot = %config.connection_id, "outbound tunnel slot disconnected");
         }
-        // A completed relay is healthy regardless of duration — a sub-second
-        // inference is the normal case, not a flap — so it resets the backoff and
+        // A completed relay is healthy regardless of duration - a sub-second
+        // inference is the normal case, not a flap - so it resets the backoff and
         // refills the slot immediately. Only a rapid failure escalates.
         let (next, back_off) = next_backoff(outcome.is_ok(), started.elapsed(), attempt);
         attempt = next;
@@ -135,7 +135,7 @@ async fn worker<T>(
 }
 
 /// Decide the next reconnect attempt count and whether to sleep, from a session's
-/// outcome. A successful relay is always healthy (reset, no sleep) — treating a
+/// outcome. A successful relay is always healthy (reset, no sleep) - treating a
 /// sub-second relay as a flap is what drained the pool under a burst of requests.
 /// A failure that lasted at least [`HEALTHY_SESSION`] also resets; only a rapid
 /// failure escalates.
@@ -149,6 +149,13 @@ fn next_backoff(relayed_ok: bool, elapsed: Duration, attempt: u32) -> (u32, bool
     }
 }
 
+/// Bounds on the pre-relay steps: the TCP dial, the mTLS handshake, and the wait
+/// for the gateway's RelayOpen. The relay copy itself stays unbounded; long-lived
+/// completions are the normal case. Without these a half-open gateway wedges a
+/// worker before the backoff loop can ever run.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+const RELAY_OPEN_TIMEOUT: Duration = Duration::from_secs(30);
+
 async fn connect_and_serve<T>(
     config: &TunnelConfig,
     tls: &TlsConnector,
@@ -158,15 +165,16 @@ async fn connect_and_serve<T>(
 where
     T: InferenceTarget,
 {
-    let tcp = TcpStream::connect(&config.gateway)
+    let tcp = tokio::time::timeout(HANDSHAKE_TIMEOUT, TcpStream::connect(&config.gateway))
         .await
+        .with_context(|| format!("connect tunnel gateway {} timed out", config.gateway))?
         .with_context(|| format!("connect tunnel gateway {}", config.gateway))?;
     tcp.set_nodelay(true)?;
     let server_name = ServerName::try_from(config.server_name.clone())
         .context("tunnel server name is invalid")?;
-    let mut stream = tls
-        .connect(server_name, tcp)
+    let mut stream = tokio::time::timeout(HANDSHAKE_TIMEOUT, tls.connect(server_name, tcp))
         .await
+        .context("tunnel mTLS handshake timed out")?
         .context("establish tunnel mTLS")?;
     let registration = signed_registration(&config.connection_id, signing_key)?;
     serve_connection(&mut stream, &registration, target).await
@@ -208,8 +216,13 @@ where
     write_frame(stream, registration).await?;
     // The gateway announces which service it wants. A node serves exactly one, so
     // decoding is the validation: an unknown service fails to deserialize and the
-    // connection is dropped.
-    let _open: RelayOpen = read_frame(stream).await?;
+    // connection is dropped. Bounded so a gateway that handshakes then goes quiet
+    // can't hold the slot open forever.
+    let _open: RelayOpen = match tokio::time::timeout(RELAY_OPEN_TIMEOUT, read_frame(stream)).await
+    {
+        Ok(frame) => frame?,
+        Err(_) => anyhow::bail!("gateway did not send RelayOpen within {RELAY_OPEN_TIMEOUT:?}"),
+    };
     let mut local = match target.connect().await {
         Ok(local) => local,
         Err(error) => {
@@ -272,8 +285,14 @@ fn private_key(path: &Path) -> anyhow::Result<PrivateKeyDer<'static>> {
 
 fn os_entropy() -> u64 {
     let mut bytes = [0_u8; 8];
-    getrandom::getrandom(&mut bytes).expect("os rng");
-    u64::from_le_bytes(bytes)
+    if getrandom::getrandom(&mut bytes).is_ok() {
+        return u64::from_le_bytes(bytes);
+    }
+    // Jitter for a backoff sleep must never take down the worker; fall back to the clock.
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as u64)
+        .unwrap_or(0)
 }
 
 fn validate_identifier(value: &str) -> anyhow::Result<()> {

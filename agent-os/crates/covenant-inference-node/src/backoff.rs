@@ -20,7 +20,7 @@ impl Backoff {
 
     /// The deterministic upper bound for a zero-based retry attempt: `base`
     /// doubled `attempt` times, clamped to `cap`. Non-decreasing in `attempt` and
-    /// never above `cap` — the two properties the reconnect loop relies on.
+    /// never above `cap` - the two properties the reconnect loop relies on.
     pub fn ceiling(&self, attempt: u32) -> Duration {
         let base = self.base.as_millis();
         let cap = self.cap.as_millis();

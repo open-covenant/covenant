@@ -31,6 +31,13 @@ GW_HTTP=28091
 GW_TUNNEL=27443
 BASE_URL="http://127.0.0.1:$GW_HTTP"
 
+# Optional on-chain provenance fold. Set SETTLEMENT_URL to the settlement bridge base
+# URL (e.g. http://127.0.0.1:8799) to fold each receipt into the on-chain
+# provenance_root via a gasless consume_credits on a MagicBlock ER. Off by default —
+# the stack, its e2e, and the soak are unchanged when it is unset.
+SETTLEMENT_URL="${SETTLEMENT_URL:-}"
+SETTLEMENT_AMOUNT="${SETTLEMENT_AMOUNT:-1}"
+
 PRICE_MICRO=250000
 RAIL_NETWORK="solana:devnet"
 RAIL_ASSET="4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"   # devnet USDC mint
@@ -189,6 +196,11 @@ DIGEST="$(curl -fsS "http://127.0.0.1:$NODE_PORT/v1/models" | jq -r '.data[0].mo
 info "served model identity digest: $DIGEST"
 
 DEV_TOKEN="alpha-dev-$(openssl rand -hex 12)"
+SETTLE_ARGS=()
+if [ -n "$SETTLEMENT_URL" ]; then
+  SETTLE_ARGS=(--settlement-url "$SETTLEMENT_URL" --settlement-amount "$SETTLEMENT_AMOUNT")
+  info "settlement fold on: receipts fold into the on-chain provenance_root via $SETTLEMENT_URL"
+fi
 say "starting gateway with payment gate armed (price $PRICE_MICRO on $RAIL_NETWORK)"
 start gateway "$GW_BIN" \
   --http-listen "127.0.0.1:$GW_HTTP" \
@@ -200,7 +212,8 @@ start gateway "$GW_BIN" \
   --rail-network "$RAIL_NETWORK" \
   --rail-asset "$RAIL_ASSET" \
   --dev-payment-token "$DEV_TOKEN" \
-  --receipts-log "$RECEIPTS_LOG"
+  --receipts-log "$RECEIPTS_LOG" \
+  ${SETTLE_ARGS[@]+"${SETTLE_ARGS[@]}"}
 wait_for "$BASE_URL/health" || die "gateway never became ready ($LOGS/gateway.log)"
 
 say "creating node identity + enrolling with the gateway"

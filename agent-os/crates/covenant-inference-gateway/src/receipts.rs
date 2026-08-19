@@ -38,6 +38,36 @@ pub struct ReceiptRecord {
     pub amount_micro: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payment_reference: Option<String>,
+    /// Filled in asynchronously once the receipt's `receipt_hash` has been folded
+    /// into the on-chain `provenance_root` by a gasless `consume_credits` on the
+    /// MagicBlock ER. Absent until the fold lands (or if settlement is off).
+    #[serde(default, skip_serializing_if = "Settlement::is_empty")]
+    pub settlement: Settlement,
+}
+
+/// Where a receipt sits in the on-chain provenance hash-chain, recorded after the
+/// fold returns. `position` is the fold's 1-based index in the chain, so a verifier
+/// can order receipts and recompute `root = sha256(root || receipt_hash)` off-chain
+/// and match the committed root. `error` holds the last fold failure, if any.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Settlement {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub er_sig: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance_root: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl Settlement {
+    fn is_empty(&self) -> bool {
+        self.er_sig.is_none()
+            && self.provenance_root.is_none()
+            && self.position.is_none()
+            && self.error.is_none()
+    }
 }
 
 /// A bounded in-memory ring of recent receipts, optionally mirrored to an
@@ -102,6 +132,20 @@ impl ReceiptStore {
         ring.iter().rev().find(|r| r.receipt_hash == hash).cloned()
     }
 
+    /// Records the outcome of folding a receipt into the on-chain provenance root.
+    /// Returns false if the receipt has already aged out of the ring (nothing to
+    /// annotate), which is expected under sustained load past the ring capacity.
+    pub fn record_settlement(&self, hash: &str, settlement: Settlement) -> bool {
+        let mut ring = self.ring.lock().expect("receipts ring mutex poisoned");
+        match ring.iter_mut().rev().find(|r| r.receipt_hash == hash) {
+            Some(record) => {
+                record.settlement = settlement;
+                true
+            }
+            None => false,
+        }
+    }
+
     pub fn len(&self) -> usize {
         self.ring
             .lock()
@@ -152,6 +196,7 @@ mod tests {
             timestamp: payload.timestamp,
             amount_micro: 1_000,
             payment_reference: Some("pay-1".into()),
+            settlement: Settlement::default(),
         }
     }
 
@@ -191,6 +236,32 @@ mod tests {
         assert!(on_disk.contains(&hash_bytes(PROMPT.as_bytes())));
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn settlement_is_recorded_by_hash_and_omitted_from_json_until_set() {
+        let store = ReceiptStore::in_memory();
+        let record = record_for(PROMPT, OUTPUT);
+        let hash = record.receipt_hash.clone();
+        store.append(record);
+
+        // Until a fold lands, the receipt JSON carries no settlement object.
+        let before = serde_json::to_string(&store.get(&hash).unwrap()).unwrap();
+        assert!(!before.contains("settlement"));
+
+        assert!(store.record_settlement(
+            &hash,
+            Settlement {
+                er_sig: Some("sig".into()),
+                provenance_root: Some("aa".repeat(32)),
+                position: Some(7),
+                error: None,
+            },
+        ));
+        let stored = store.get(&hash).unwrap();
+        assert_eq!(stored.settlement.position, Some(7));
+        assert_eq!(stored.settlement.er_sig.as_deref(), Some("sig"));
+        assert!(!store.record_settlement("unknown-hash", Settlement::default()));
     }
 
     #[test]

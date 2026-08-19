@@ -19,6 +19,7 @@ use crate::pool::{PooledStream, TunnelPool};
 use crate::proxy;
 use crate::receipts::{self, ReceiptRecord, ReceiptStore};
 use crate::registry::{NodeRegistry, RegistryError};
+use crate::settlement::SettlementFolder;
 use crate::x402::{
     decode_payment, PaymentContext, PaymentReceipt, PaymentVerifier, SolanaUsdcVerifier,
 };
@@ -76,6 +77,7 @@ pub struct Gateway {
     metering: Arc<Metering>,
     verifier: Arc<dyn PaymentVerifier>,
     receipts: Arc<ReceiptStore>,
+    settlement: Option<Arc<SettlementFolder>>,
 }
 
 impl Gateway {
@@ -90,6 +92,7 @@ impl Gateway {
             metering: Arc::new(Metering::default()),
             verifier: Arc::new(SolanaUsdcVerifier::gated()),
             receipts: Arc::new(ReceiptStore::in_memory()),
+            settlement: None,
         }
     }
 
@@ -105,6 +108,13 @@ impl Gateway {
 
     pub fn with_receipts(mut self, receipts: Arc<ReceiptStore>) -> Self {
         self.receipts = receipts;
+        self
+    }
+
+    /// Wires the on-chain provenance fold. With it set, every emitted receipt's hash
+    /// is queued to the settlement bridge; without it the gateway is unchanged.
+    pub fn with_settlement(mut self, folder: Arc<SettlementFolder>) -> Self {
+        self.settlement = Some(folder);
         self
     }
 
@@ -176,7 +186,13 @@ impl Gateway {
             timestamp,
             amount_micro: payment.map(|p| p.amount_micro).unwrap_or(0),
             payment_reference: payment.map(|p| p.reference.clone()),
+            settlement: Default::default(),
         });
+        // Fold the receipt into the on-chain provenance root out of band. The enqueue
+        // is non-blocking, so settlement never delays or fails the served response.
+        if let Some(folder) = &self.settlement {
+            folder.enqueue(hash.clone());
+        }
         hash
     }
 }

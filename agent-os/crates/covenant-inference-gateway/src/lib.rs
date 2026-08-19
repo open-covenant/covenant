@@ -18,5 +18,6 @@ pub mod proxy;
 pub mod receipts;
 pub mod registry;
 pub mod server;
+pub mod settlement;
 pub mod tunnel;
 pub mod x402;

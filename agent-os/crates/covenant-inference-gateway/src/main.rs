@@ -8,6 +8,7 @@ use covenant_inference_gateway::pool::TunnelPool;
 use covenant_inference_gateway::receipts::ReceiptStore;
 use covenant_inference_gateway::registry::NodeRegistry;
 use covenant_inference_gateway::server::{router, Gateway, Metering, Transport};
+use covenant_inference_gateway::settlement::SettlementFolder;
 use covenant_inference_gateway::tunnel;
 use covenant_inference_gateway::x402::{DevPrefundedVerifier, PaymentVerifier, SolanaUsdcVerifier};
 use tracing_subscriber::EnvFilter;
@@ -62,6 +63,19 @@ struct Cli {
     /// Append every receipt (hashes and accounting only) to this file as JSON lines.
     #[arg(long)]
     receipts_log: Option<PathBuf>,
+    /// Settlement bridge base URL (e.g. `http://127.0.0.1:8799`). When set, each
+    /// receipt's hash is folded into the on-chain `provenance_root` via a gasless
+    /// `consume_credits` on the MagicBlock ER. Off by default; routing and receipts
+    /// are unchanged without it.
+    #[arg(long)]
+    settlement_url: Option<String>,
+    /// Credits debited per fold on the ER (`consume_credits` amount). Must be >= 1.
+    #[arg(long, default_value_t = 1)]
+    settlement_amount: u64,
+    /// Bound on receipts awaiting a fold. A full queue sheds folds (logged) rather
+    /// than back-pressuring the inference path.
+    #[arg(long, default_value_t = 512)]
+    settlement_queue: usize,
 }
 
 #[tokio::main]
@@ -114,10 +128,22 @@ async fn main() -> anyhow::Result<()> {
         rail_asset: cli.rail_asset.clone(),
     };
 
-    let gateway = Gateway::new(registry, transport.clone())
+    let mut gateway = Gateway::new(registry, transport.clone())
         .with_metering(metering)
         .with_verifier(verifier)
-        .with_receipts(receipts);
+        .with_receipts(receipts.clone());
+
+    if let Some(url) = cli.settlement_url.clone() {
+        anyhow::ensure!(
+            cli.settlement_amount >= 1,
+            "--settlement-amount must be >= 1"
+        );
+        tracing::info!(bridge = %url, amount = cli.settlement_amount, "settlement fold enabled");
+        let folder =
+            SettlementFolder::spawn(url, cli.settlement_amount, receipts, cli.settlement_queue);
+        gateway = gateway.with_settlement(Arc::new(folder));
+    }
+
     let app = router(gateway);
     let http = tokio::net::TcpListener::bind(cli.http_listen)
         .await

@@ -3,9 +3,15 @@ use sha2::{Digest, Sha256};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let tee = std::env::args().nth(1).unwrap_or_else(|| "https://mainnet-tee.magicblock.app".into());
-    let key = std::env::var("COVENANT_ATTESTER_KEY")
-        .unwrap_or_else(|_| format!("{}/.config/solana/covenant-agent.json", std::env::var("HOME").unwrap()));
+    let tee = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "https://mainnet-tee.magicblock.app".into());
+    let key = std::env::var("COVENANT_ATTESTER_KEY").unwrap_or_else(|_| {
+        format!(
+            "{}/.config/solana/covenant-agent.json",
+            std::env::var("HOME").unwrap()
+        )
+    });
     let (sk, pubkey) = signer_from_keypair_file(&key)?;
     println!("attester : {pubkey}");
     println!("tee      : {tee}");
@@ -14,9 +20,13 @@ async fn main() -> anyhow::Result<()> {
     let att = attest(&tee, &sk, &pubkey, Some(&pubkey), Some(&provenance), None).await?;
     let v = &att.body.er.validator.clone().unwrap_or_default();
     println!("validator: {v}");
-    println!("enclave  : TCB {} | mr_td {}...", att.body.enclave.status, &att.body.enclave.mr_td[..18]);
+    println!(
+        "enclave  : TCB {} | mr_td {}...",
+        att.body.enclave.status,
+        &att.body.enclave.mr_td[..18]
+    );
 
-    verify_attestation(&att, &[pubkey.clone()])?;
+    verify_attestation(&att, std::slice::from_ref(&pubkey))?;
     println!("verify (trusted)  : ok");
     match verify_attestation(&att, &["11111111111111111111111111111111".into()]) {
         Err(e) => println!("verify (untrusted): rejected ({e})"),

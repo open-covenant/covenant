@@ -84,7 +84,9 @@ fn now_secs() -> u64 {
 
 /// 64-byte quote challenge. With an agent and provenance root, the first 32 bytes
 /// commit to sha256(domain || agent || provenance_root) and the last 32 are a
-/// fresh nonce. Unbound: 64 random bytes.
+/// fresh nonce. `agent` (base58) and `provenance_root` (hex) must each decode to
+/// exactly 32 bytes, so the two fields concatenate unambiguously. Unbound: 64
+/// random bytes.
 fn build_challenge(agent: Option<&str>, prov: Option<&str>) -> Result<([u8; 64], [u8; 32])> {
     let mut nonce = [0u8; 32];
     getrandom::getrandom(&mut nonce)?;
@@ -92,25 +94,53 @@ fn build_challenge(agent: Option<&str>, prov: Option<&str>) -> Result<([u8; 64],
     challenge[32..].copy_from_slice(&nonce);
     match (agent, prov) {
         (Some(a), Some(p)) => {
-            let mut h = Sha256::new();
-            h.update(BIND_DOMAIN);
-            h.update(bs58::decode(a).into_vec()?);
-            h.update(hex::decode(p)?);
-            challenge[..32].copy_from_slice(&h.finalize());
+            challenge[..32].copy_from_slice(&commit_subject(a, p)?);
         }
         _ => getrandom::getrandom(&mut challenge[..32])?,
     }
     Ok((challenge, nonce))
 }
 
-async fn fetch_quote(client: &reqwest::Client, tee_url: &str, challenge: &[u8; 64]) -> Result<Vec<u8>> {
+/// 32-byte commitment to `(agent, provenance_root)`. Both must decode to exactly
+/// 32 bytes; without that the two fields concatenate ambiguously and distinct
+/// subjects could share a commitment.
+fn commit_subject(agent: &str, prov: &str) -> Result<[u8; 32]> {
+    let agent = bs58::decode(agent).into_vec()?;
+    let prov = hex::decode(prov)?;
+    if agent.len() != 32 || prov.len() != 32 {
+        bail!(
+            "agent and provenance_root must decode to 32 bytes each (got {} and {})",
+            agent.len(),
+            prov.len()
+        );
+    }
+    let mut h = Sha256::new();
+    h.update(BIND_DOMAIN);
+    h.update(&agent);
+    h.update(&prov);
+    Ok(h.finalize().into())
+}
+
+async fn fetch_quote(
+    client: &reqwest::Client,
+    tee_url: &str,
+    challenge: &[u8; 64],
+) -> Result<Vec<u8>> {
     let url = format!(
         "{}/quote?challenge={}",
         tee_url.trim_end_matches('/'),
         urlencoding::encode(&B64.encode(challenge))
     );
-    let v: serde_json::Value = client.get(&url).send().await?.error_for_status()?.json().await?;
-    let q = v["quote"].as_str().ok_or_else(|| anyhow!("TEE /quote returned no quote field"))?;
+    let v: serde_json::Value = client
+        .get(&url)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let q = v["quote"]
+        .as_str()
+        .ok_or_else(|| anyhow!("TEE /quote returned no quote field"))?;
     Ok(B64.decode(q)?)
 }
 
@@ -171,7 +201,11 @@ pub async fn attest(
 
     let body = AttestationBody {
         kind: "covenant.tee.attestation.v1".into(),
-        er: Er { rpc_url: tee_url.to_string(), validator: identity, tee: "intel-tdx".into() },
+        er: Er {
+            rpc_url: tee_url.to_string(),
+            validator: identity,
+            tee: "intel-tdx".into(),
+        },
         enclave: Enclave {
             status: verified.status.clone(),
             advisory_ids: verified.advisory_ids.clone(),
@@ -181,7 +215,10 @@ pub async fn attest(
             rt_mr2: hex::encode(rt_mr2),
         },
         subject: match (agent, provenance_root) {
-            (Some(a), Some(p)) => Some(Subject { agent: a.into(), provenance_root: p.into() }),
+            (Some(a), Some(p)) => Some(Subject {
+                agent: a.into(),
+                provenance_root: p.into(),
+            }),
             _ => None,
         },
         challenge: B64.encode(challenge),
@@ -201,6 +238,10 @@ pub async fn attest(
 /// Checks the attester is trusted, its ed25519 signature over the canonical body,
 /// the TCB status, the agent/provenance binding committed in the quote challenge,
 /// and the nonce. Fails closed if `trusted` is empty.
+///
+/// This checks the binding and signature, not freshness: a valid attestation
+/// verifies indefinitely. Callers that need recency must enforce `body.verified_at`
+/// and dedupe `nonce` themselves.
 pub fn verify_attestation(att: &Attestation, trusted: &[String]) -> Result<()> {
     if trusted.is_empty() {
         bail!("no trusted attesters configured");
@@ -229,11 +270,7 @@ pub fn verify_attestation(att: &Attestation, trusted: &[String]) -> Result<()> {
         bail!("challenge is not 64 bytes");
     }
     if let Some(sub) = &att.body.subject {
-        let mut h = Sha256::new();
-        h.update(BIND_DOMAIN);
-        h.update(bs58::decode(&sub.agent).into_vec()?);
-        h.update(hex::decode(&sub.provenance_root)?);
-        if h.finalize()[..] != challenge[..32] {
+        if commit_subject(&sub.agent, &sub.provenance_root)?[..] != challenge[..32] {
             bail!("agent/provenance not committed in the quote");
         }
     }
@@ -241,4 +278,152 @@ pub fn verify_attestation(att: &Attestation, trusted: &[String]) -> Result<()> {
         bail!("nonce mismatch");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn attester() -> (SigningKey, String) {
+        let sk = SigningKey::from_bytes(&[7u8; 32]);
+        let pk = bs58::encode(sk.verifying_key().to_bytes()).into_string();
+        (sk, pk)
+    }
+
+    // A 32-byte agent (base58) and a 32-byte provenance root (hex), as real callers use.
+    fn subject() -> (String, String) {
+        (
+            bs58::encode([1u8; 32]).into_string(),
+            hex::encode([2u8; 32]),
+        )
+    }
+
+    fn challenge_for(agent: &str, prov: &str, nonce: [u8; 32]) -> [u8; 64] {
+        let mut c = [0u8; 64];
+        c[..32].copy_from_slice(&commit_subject(agent, prov).unwrap());
+        c[32..].copy_from_slice(&nonce);
+        c
+    }
+
+    fn body(agent: &str, prov: &str, challenge: [u8; 64], nonce: [u8; 32]) -> AttestationBody {
+        AttestationBody {
+            kind: "covenant.tee.attestation.v1".into(),
+            er: Er {
+                rpc_url: "http://tee".into(),
+                validator: None,
+                tee: "intel-tdx".into(),
+            },
+            enclave: Enclave {
+                status: "UpToDate".into(),
+                advisory_ids: vec![],
+                mr_td: "00".into(),
+                rt_mr0: "00".into(),
+                rt_mr1: "00".into(),
+                rt_mr2: "00".into(),
+            },
+            subject: Some(Subject {
+                agent: agent.into(),
+                provenance_root: prov.into(),
+            }),
+            challenge: B64.encode(challenge),
+            nonce: B64.encode(nonce),
+            verified_at: 0,
+        }
+    }
+
+    fn sign(sk: &SigningKey, pk: &str, body: AttestationBody) -> Attestation {
+        let signature = sk.sign(&serde_json::to_vec(&body).unwrap());
+        Attestation {
+            body,
+            attester: pk.into(),
+            sig_alg: "ed25519".into(),
+            signature: B64.encode(signature.to_bytes()),
+        }
+    }
+
+    #[test]
+    fn commitment_is_stable_but_nonce_is_fresh() {
+        let (a, p) = subject();
+        let (c1, n1) = build_challenge(Some(&a), Some(&p)).unwrap();
+        let (c2, n2) = build_challenge(Some(&a), Some(&p)).unwrap();
+        assert_eq!(c1[..32], c2[..32]);
+        assert_ne!(n1, n2);
+    }
+
+    #[test]
+    fn round_trip_verifies() {
+        let (sk, pk) = attester();
+        let (a, p) = subject();
+        let nonce = [9u8; 32];
+        let att = sign(&sk, &pk, body(&a, &p, challenge_for(&a, &p, nonce), nonce));
+        verify_attestation(&att, &[pk]).unwrap();
+    }
+
+    #[test]
+    fn empty_trusted_fails_closed() {
+        let (sk, pk) = attester();
+        let (a, p) = subject();
+        let nonce = [9u8; 32];
+        let att = sign(&sk, &pk, body(&a, &p, challenge_for(&a, &p, nonce), nonce));
+        assert!(verify_attestation(&att, &[]).is_err());
+    }
+
+    #[test]
+    fn untrusted_attester_rejected() {
+        let (sk, pk) = attester();
+        let (a, p) = subject();
+        let nonce = [9u8; 32];
+        let att = sign(&sk, &pk, body(&a, &p, challenge_for(&a, &p, nonce), nonce));
+        assert!(verify_attestation(&att, &["not-the-attester".into()]).is_err());
+    }
+
+    #[test]
+    fn tampered_subject_breaks_binding() {
+        let (sk, pk) = attester();
+        let (a, p) = subject();
+        let nonce = [9u8; 32];
+        let challenge = challenge_for(&a, &p, nonce);
+        let other = bs58::encode([5u8; 32]).into_string();
+        let att = sign(&sk, &pk, body(&other, &p, challenge, nonce));
+        assert!(verify_attestation(&att, &[pk]).is_err());
+    }
+
+    #[test]
+    fn tampered_nonce_rejected() {
+        let (sk, pk) = attester();
+        let (a, p) = subject();
+        let nonce = [9u8; 32];
+        let mut b = body(&a, &p, challenge_for(&a, &p, nonce), nonce);
+        b.nonce = B64.encode([0u8; 32]);
+        let att = sign(&sk, &pk, b);
+        assert!(verify_attestation(&att, &[pk]).is_err());
+    }
+
+    #[test]
+    fn wrong_sig_alg_rejected() {
+        let (sk, pk) = attester();
+        let (a, p) = subject();
+        let nonce = [9u8; 32];
+        let mut att = sign(&sk, &pk, body(&a, &p, challenge_for(&a, &p, nonce), nonce));
+        att.sig_alg = "secp256k1".into();
+        assert!(verify_attestation(&att, &[pk]).is_err());
+    }
+
+    #[test]
+    fn short_challenge_rejected() {
+        let (sk, pk) = attester();
+        let (a, p) = subject();
+        let nonce = [9u8; 32];
+        let mut b = body(&a, &p, challenge_for(&a, &p, nonce), nonce);
+        b.challenge = B64.encode([0u8; 33]);
+        let att = sign(&sk, &pk, b);
+        assert!(verify_attestation(&att, &[pk]).is_err());
+    }
+
+    #[test]
+    fn non_32_byte_subject_rejected() {
+        let short_agent = bs58::encode([1u8; 31]).into_string();
+        assert!(build_challenge(Some(&short_agent), Some(&hex::encode([2u8; 32]))).is_err());
+        assert!(commit_subject(&short_agent, &hex::encode([2u8; 32])).is_err());
+    }
 }

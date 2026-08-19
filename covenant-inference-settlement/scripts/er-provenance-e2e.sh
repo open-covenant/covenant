@@ -23,7 +23,7 @@ GW_SCRIPTS="$(cd "$BRIDGE_DIR/../agent-os/crates/covenant-inference-gateway/scri
 : "${SOLANA_RPC:?set SOLANA_RPC to a devnet RPC}"
 export SOLANA_RPC
 export PROGRAM_ID="${PROGRAM_ID:-$(node -e 'console.log(require("./.keys/deploy.json").program)' 2>/dev/null || true)}"
-[ -n "${PROGRAM_ID:-}" ] || { echo "no PROGRAM_ID and no .keys/deploy.json — run scripts/devnet-deploy.mjs first" >&2; exit 1; }
+[ -n "${PROGRAM_ID:-}" ] || { echo "no PROGRAM_ID and no .keys/deploy.json - run scripts/devnet-deploy.mjs first" >&2; exit 1; }
 export SETTLEMENT_PORT="${SETTLEMENT_PORT:-8799}"
 BRIDGE_URL="http://127.0.0.1:$SETTLEMENT_PORT"
 N="${N:-30}"
@@ -50,7 +50,7 @@ say "root before soak: $ROOT_BEFORE"
 say "bringing up the real inference stack with the settlement fold on"
 SETTLEMENT_URL="$BRIDGE_URL" bash "$GW_SCRIPTS/alpha-up.sh"
 
-say "running the soak (N=$N) — each served receipt folds into the on-chain provenance_root"
+say "running the soak (N=$N) - each served receipt folds into the on-chain provenance_root"
 bash "$GW_SCRIPTS/alpha-soak.sh" "$N"
 
 # shellcheck source=/dev/null

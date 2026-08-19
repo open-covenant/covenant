@@ -2,7 +2,11 @@
 //!
 //! Fetches and DCAP-verifies a MagicBlock ER quote for the given challenge and
 //! prints the [`DcapResult`](covenant_inference_verifier::DcapResult) as JSON on
-//! stdout — the exact camelCase shape `covenantd` reads back off the wire.
+//! stdout, the exact camelCase shape `covenantd` reads back off the wire.
+//!
+//! Exit 0 means the quote is genuine and answered this challenge. It does not mean
+//! the enclave is trusted: whether `tcbStatus` is acceptable and `mrTd` is allowed
+//! is the caller's decision (covenantd's `tee` gate), not this binary's.
 
 use std::process::ExitCode;
 

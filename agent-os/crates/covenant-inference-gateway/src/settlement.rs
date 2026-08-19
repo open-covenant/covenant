@@ -77,9 +77,13 @@ impl SettlementFolder {
                         }
                     }
                     Err(error) => {
-                        tracing::warn!(receipt = %short(&receipt_hash), %error, "fold receipt");
+                        tracing::warn!(
+                            receipt = %short(&receipt_hash),
+                            error = %format_args!("{error:#}"),
+                            "fold receipt"
+                        );
                         Settlement {
-                            error: Some(error.to_string()),
+                            error: Some(format!("{error:#}")),
                             ..Settlement::default()
                         }
                     }
@@ -147,17 +151,25 @@ async fn post_json(base_url: &str, path: &str, body: Vec<u8>) -> anyhow::Result<
         .body(Full::new(Bytes::from(body)))
         .context("build fold request")?;
 
-    let response = tokio::time::timeout(Duration::from_secs(30), sender.send_request(request))
-        .await
-        .context("settlement bridge fold timed out")?
-        .context("send fold request")?;
-    let status = response.status();
-    let bytes = response
-        .into_body()
-        .collect()
-        .await
-        .context("read fold response")?
-        .to_bytes();
+    // One deadline covers both sending the request and reading the body: a bridge
+    // that returns headers then stalls the body would otherwise wedge the single
+    // fold worker forever and silently stop all further folds.
+    let (status, bytes) = tokio::time::timeout(Duration::from_secs(30), async {
+        let response = sender
+            .send_request(request)
+            .await
+            .context("send fold request")?;
+        let status = response.status();
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .context("read fold response")?
+            .to_bytes();
+        anyhow::Ok((status, bytes))
+    })
+    .await
+    .context("settlement bridge fold timed out")??;
     if !status.is_success() {
         return Err(anyhow!(
             "settlement bridge {status}: {}",
@@ -171,5 +183,10 @@ async fn post_json(base_url: &str, path: &str, body: Vec<u8>) -> anyhow::Result<
 }
 
 fn short(s: &str) -> &str {
-    &s[..s.len().min(12)]
+    // Truncate on a char boundary: `er_sig` is bridge-supplied, and a byte-index
+    // slice would panic (killing the worker) if a multibyte char fell in range.
+    match s.char_indices().nth(12) {
+        Some((i, _)) => &s[..i],
+        None => s,
+    }
 }

@@ -49,7 +49,7 @@ async function retryingFetch(url, opts) {
   let last;
   for (let i = 0; i < 5; i++) {
     try {
-      const res = await fetch(url, opts);
+      const res = await fetch(url, { ...opts, signal: AbortSignal.timeout(15000) });
       if (res.status === 429 || res.status >= 500) throw new Error(`http ${res.status}`);
       return res;
     } catch (e) {
@@ -60,7 +60,7 @@ async function retryingFetch(url, opts) {
   throw last;
 }
 
-const connOpts = { commitment: "confirmed", fetch: retryingFetch };
+export const connOpts = { commitment: "confirmed", fetch: retryingFetch };
 
 export function l1() {
   return new Connection(L1_RPC, connOpts);

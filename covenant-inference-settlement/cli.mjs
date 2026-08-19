@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // Covenant inference settlement bridge.
 //
-//   node cli.mjs init    — open + fund (buy_credits) + delegate the credit account
-//   node cli.mjs serve   — HTTP: POST /fold, POST /commit, GET /root
-//   node cli.mjs commit  — commit_credits (permissionless) + undelegate, reconcile L1
+//   node cli.mjs init    - open + fund (buy_credits) + delegate the credit account
+//   node cli.mjs serve   - HTTP: POST /fold, POST /commit, GET /root
+//   node cli.mjs commit  - commit_credits (permissionless) + undelegate, reconcile L1
 //
 // Owner = a fresh devnet throwaway keypair (KEYPAIR env, default ./.keys/owner.json).
 // Never the treasury. All settlement instructions here are signed by that key alone.
@@ -22,8 +22,21 @@ const KEYPAIR = env("KEYPAIR", new URL("./.keys/owner.json", import.meta.url).pa
 const owner = loadKeypair(KEYPAIR);
 const TARGET_CREDITS = BigInt(env("TARGET_CREDITS", "50000"));
 
+const MAINNET_GENESIS = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d";
+const redact = (s) => String(s).replace(/(api-key|token)=[^&\s"]+/gi, "$1=REDACTED");
+
+// This bridge signs with a throwaway devnet owner; it is never the sanctioned mainnet
+// path (that is scripts/fold-mainnet.mjs). Refuse mainnet unless explicitly overridden.
+async function guardCluster(conn) {
+  const genesis = await conn.getGenesisHash();
+  if (genesis === MAINNET_GENESIS && env("ALLOW_MAINNET") !== "1") {
+    throw new Error("refusing to run the settlement bridge against mainnet; use scripts/fold-mainnet.mjs, or set ALLOW_MAINNET=1 to override");
+  }
+}
+
 async function init() {
   const conn = l1();
+  await guardCluster(conn);
   const cfg = await readConfig(conn);
   const credits = creditsPda(owner.publicKey);
   console.log(`program   ${PROGRAM.toBase58()}`);
@@ -70,8 +83,9 @@ async function init() {
 }
 
 async function commit() {
-  const er = await erConnection(owner);
   const conn = l1();
+  await guardCluster(conn);
+  const er = await erConnection(owner);
   const commitSig = await send(er, ixCommitCreditsPermissionless(owner.publicKey, owner.publicKey), [owner], { skipPreflight: true });
   const undelSig = await send(er, ixUndelegateCredits(owner.publicKey), [owner], { skipPreflight: true });
   let l1State = null;
@@ -80,6 +94,7 @@ async function commit() {
     l1State = await readCredits(conn, owner.publicKey);
     if (l1State && !l1State.delegated) break;
   }
+  if (!l1State || l1State.delegated) throw new Error("commit/undelegate did not reconcile on L1 within 30s");
   const root = l1State?.provenanceRoot ? l1State.provenanceRoot.toString("hex") : null;
   return { commit_sig: commitSig, l1_sig: undelSig, provenance_root_hex: root, l1_balance: l1State?.balance?.toString() ?? null };
 }
@@ -101,10 +116,21 @@ async function currentRoots() {
   };
 }
 
-function readBody(req) {
+function readBody(req, limit = 64 * 1024) {
   return new Promise((resolve, reject) => {
     const chunks = [];
-    req.on("data", (c) => chunks.push(c));
+    let size = 0;
+    req.on("data", (c) => {
+      size += c.length;
+      if (size > limit) {
+        req.pause();
+        const e = new Error("request body too large");
+        e.httpStatus = 413;
+        reject(e);
+        return;
+      }
+      chunks.push(c);
+    });
     req.on("end", () => resolve(Buffer.concat(chunks)));
     req.on("error", reject);
   });
@@ -112,6 +138,7 @@ function readBody(req) {
 
 async function serve() {
   const port = Number(env("SETTLEMENT_PORT", "8799"));
+  await guardCluster(l1());
   const er = await erConnection(owner);
   const credits = creditsPda(owner.publicKey);
   let position = 0;
@@ -125,15 +152,28 @@ async function serve() {
 
   const server = http.createServer(async (req, res) => {
     const json = (code, obj) => {
-      res.writeHead(code, { "content-type": "application/json" });
+      const headers = { "content-type": "application/json" };
+      if (code >= 400) headers.connection = "close"; // unread/oversized body: respond then close, don't wedge keep-alive
+      res.writeHead(code, headers);
       res.end(JSON.stringify(obj));
     };
     try {
       if (req.method === "POST" && req.url === "/fold") {
-        const { receipt_hash_hex, amount } = JSON.parse((await readBody(req)).toString() || "{}");
+        const raw_body = (await readBody(req)).toString() || "{}";
+        let parsed;
+        try {
+          parsed = JSON.parse(raw_body);
+        } catch {
+          return json(400, { error: "body must be valid JSON" });
+        }
+        const { receipt_hash_hex, amount } = parsed;
         const receipt = Buffer.from(String(receipt_hash_hex), "hex");
         if (receipt.length !== 32) return json(400, { error: "receipt_hash_hex must be 32 bytes" });
-        const amt = BigInt(amount ?? 1);
+        const raw = amount ?? 1;
+        if (typeof raw !== "number" || !Number.isInteger(raw) || raw <= 0 || raw > 1_000_000) {
+          return json(400, { error: "amount must be a positive integer <= 1000000" });
+        }
+        const amt = BigInt(raw);
         const out = await runExclusive(async () => {
           const sig = await send(er, ixConsumeCredits(owner.publicKey, amt, receipt), [owner], { skipPreflight: true });
           const state = await readCredits(er, owner.publicKey);
@@ -150,11 +190,11 @@ async function serve() {
         return json(200, await currentRoots());
       }
       if (req.method === "GET" && req.url === "/health") {
-        return json(200, { status: "ok", owner: owner.publicKey.toBase58(), credits: credits.toBase58(), er: ER_URL, position });
+        return json(200, { status: "ok", owner: owner.publicKey.toBase58(), credits: credits.toBase58(), er: redact(ER_URL), position });
       }
       json(404, { error: "not found" });
     } catch (error) {
-      json(500, { error: String(error?.message ?? error) });
+      json(error?.httpStatus ?? 500, { error: redact(error?.message ?? error) });
     }
   });
 

@@ -1,5 +1,5 @@
 // Devnet test deploy of the settlement program (the ephemeral build, byte-identical
-// logic to mainnet cov9UDyp — only declare_id differs) under a throwaway program id,
+// logic to mainnet cov9UDyp - only declare_id differs) under a throwaway program id,
 // with a throwaway-controlled COVNT mint + config. This exists because the devnet
 // cov9UDyp deployment predates the ER instructions (delegate/commit/undelegate), so
 // there is no on-devnet instance to reuse. No treasury key, no mainnet, self-funded.
@@ -11,7 +11,7 @@
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
 import {
-  Keypair, PublicKey, SystemProgram, Transaction, sendAndConfirmTransaction, LAMPORTS_PER_SOL,
+  Keypair, SystemProgram, Transaction, sendAndConfirmTransaction, LAMPORTS_PER_SOL,
 } from "@solana/web3.js";
 import {
   createMint, getOrCreateAssociatedTokenAccount, createAccount, mintTo,
@@ -60,7 +60,7 @@ if (!deployed) {
   console.log("program already deployed");
 }
 
-// Test COVNT mint (throwaway is the mint authority — never the treasury).
+// Test COVNT mint (throwaway is the mint authority - never the treasury).
 let mint;
 if (!(await conn.getAccountInfo(mintKp.publicKey))) {
   mint = await createMint(conn, owner, owner.publicKey, null, 6, mintKp);
@@ -80,7 +80,7 @@ if (ownerAta.amount < 1_000_000n) {
 const treasuryPath = here("../.keys/treasury.json");
 let treasuryKp;
 if (fs.existsSync(treasuryPath)) treasuryKp = loadKeypair(treasuryPath);
-else { treasuryKp = Keypair.generate(); fs.writeFileSync(treasuryPath, JSON.stringify([...treasuryKp.secretKey])); }
+else { treasuryKp = Keypair.generate(); fs.writeFileSync(treasuryPath, JSON.stringify([...treasuryKp.secretKey]), { mode: 0o600 }); }
 let treasury = treasuryKp.publicKey;
 if (!(await conn.getAccountInfo(treasury))) {
   treasury = await createAccount(conn, owner, mint, owner.publicKey, treasuryKp);

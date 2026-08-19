@@ -15,7 +15,7 @@ import {
   Connection, Keypair, PublicKey, Transaction, sendAndConfirmTransaction,
 } from "@solana/web3.js";
 import {
-  PROGRAM, VALIDATOR, ER_URL, l1, creditsPda, configPda, readCredits, foldReceipts,
+  PROGRAM, VALIDATOR, ER_URL, l1, creditsPda, readCredits, foldReceipts, connOpts,
   ixDelegateCredits, ixConsumeCredits, ixCommitCreditsPermissionless, ixUndelegateCredits,
 } from "../settlement.mjs";
 
@@ -60,7 +60,7 @@ function sendTx(conn, ix, signers, feePayer, opts = {}) {
 async function tryUndelegate(er, reason) {
   console.error(`RECOVER (${reason}): undelegating so DrawYGmd is not left delegated`);
   try {
-    const sig = await sendTx(er, ixUndelegateCredits(owner.publicKey), [task, owner], task.publicKey, { skipPreflight: true });
+    const sig = await sendTx(er, ixUndelegateCredits(owner.publicKey), [owner], owner.publicKey, { skipPreflight: true });
     console.error(`  undelegate sent ${sig}`);
     return sig;
   } catch (e) {
@@ -78,11 +78,11 @@ const N = hashes.length;
 if (N < 1) die("no receipt hashes");
 
 const conn = l1();
-const er = new Connection(ER_URL, "confirmed");
+const er = new Connection(ER_URL, connOpts);
 
 console.log(`program    ${PROGRAM.toBase58()}`);
 console.log(`owner      ${owner.publicKey.toBase58()} (treasury id.json)`);
-console.log(`fee-payer  ${task.publicKey.toBase58()} (task key)`);
+console.log(`fee-payer  ${task.publicKey.toBase58()} (task key, L1 delegate only; ER ops owner-paid)`);
 console.log(`credits    ${credits.toBase58()}`);
 console.log(`validator  ${VALIDATOR.toBase58()} (open mainnet ER)`);
 console.log(`ER         ${ER_URL}`);
@@ -90,7 +90,7 @@ console.log(`folding    N=${N} receipt hashes, amount ${AMOUNT} each\n`);
 
 const pre = await assertL1(conn, "pre-delegate");
 const preState = await readCredits(conn, owner.publicKey);
-if (preState.delegated) die("DrawYGmd already delegated — expected HOME");
+if (preState.delegated) die("DrawYGmd already delegated - expected HOME");
 if (preState.balance !== START_BAL) die(`start balance ${preState.balance} != ${START_BAL}`);
 if (preState.provenanceRoot.toString("hex") !== START_ROOT) die(`start root ${preState.provenanceRoot.toString("hex")} != ${START_ROOT}`);
 console.log(`pre-check  HOME, balance ${preState.balance}, root ${preState.provenanceRoot.toString("hex")} OK\n`);
@@ -100,7 +100,18 @@ const result = { ts: new Date().toISOString(), program: PROGRAM.toBase58(), cred
   er: ER_URL, startRoot: START_ROOT, startBalance: START_BAL.toString(), n: N,
   consumeSigs: [], receiptHashes: hashes };
 
-const delSig = await sendTx(conn, ixDelegateCredits(owner.publicKey), [task, owner], task.publicKey);
+let delSig;
+try {
+  delSig = await sendTx(conn, ixDelegateCredits(owner.publicKey), [task, owner], task.publicKey);
+} catch (e) {
+  console.error(`delegate send/confirm failed: ${e.message}`);
+  const st = await readCredits(conn, owner.publicKey).catch(() => null);
+  if (st?.delegated) {
+    await tryUndelegate(er, "delegate confirm-timeout but L1 shows delegated");
+    die("delegate timed out and DrawYGmd came up delegated; undelegate attempted - verify HOME with scripts/recover-undelegate.mjs");
+  }
+  die(`delegate failed and L1 is not delegated (${e.message}) - safe to retry; if in doubt run scripts/recover-undelegate.mjs`);
+}
 result.delegateSig = delSig;
 console.log(`delegated  ${delSig}`);
 
@@ -129,7 +140,7 @@ try {
   await tryUndelegate(er, "consume failure");
   result.error = `consume failed at ${consumed}: ${e.message}`;
   fs.writeFileSync(RESULT_FILE, JSON.stringify(result, null, 2));
-  die("consume failure — recovered by undelegate");
+  die("consume failure - recovered by undelegate");
 }
 result.consumed = consumed;
 const erBal = await er.getAccountInfo(credits).then((a) => a.data.readBigUInt64LE(40)).catch(() => null);
@@ -139,17 +150,17 @@ console.log(`\nER after ${consumed} consumes: balance ${erBal}, root ${erRoot}\n
 await assertL1(conn, "pre-commit");
 let commitSig = null;
 try {
-  commitSig = await sendTx(er, ixCommitCreditsPermissionless(task.publicKey, owner.publicKey), [task], task.publicKey, { skipPreflight: true });
-  console.log(`commit     ${commitSig} (permissionless, task-key payer)`);
+  commitSig = await sendTx(er, ixCommitCreditsPermissionless(owner.publicKey, owner.publicKey), [owner], owner.publicKey, { skipPreflight: true });
+  console.log(`commit     ${commitSig} (permissionless, owner payer)`);
 } catch (e) {
   console.error(`commit_credits failed (non-fatal, undelegate also commits): ${e.message}`);
 }
 result.commitSig = commitSig;
 
 await assertL1(conn, "pre-undelegate");
-const undelSig = await sendTx(er, ixUndelegateCredits(owner.publicKey), [task, owner], task.publicKey, { skipPreflight: true });
+const undelSig = await sendTx(er, ixUndelegateCredits(owner.publicKey), [owner], owner.publicKey, { skipPreflight: true });
 result.undelegateSig = undelSig;
-console.log(`undelegate ${undelSig} (owner id.json, task-key fee-payer)\n`);
+console.log(`undelegate ${undelSig} (owner id.json, owner fee-payer)\n`);
 
 let finalState = null;
 for (let i = 0; i < 40; i++) {
@@ -157,7 +168,7 @@ for (let i = 0; i < 40; i++) {
   finalState = await readCredits(conn, owner.publicKey);
   if (finalState && !finalState.delegated) { console.log(`L1 home    ~${i + 1}s`); break; }
 }
-if (!finalState || finalState.delegated) die("DrawYGmd still delegated after undelegate — NOT left HOME");
+if (!finalState || finalState.delegated) die("DrawYGmd still delegated after undelegate - NOT left HOME");
 
 const finalRoot = finalState.provenanceRoot.toString("hex");
 const finalBal = finalState.balance;

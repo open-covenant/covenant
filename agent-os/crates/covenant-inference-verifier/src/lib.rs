@@ -12,7 +12,7 @@
 //! 1. asks the enclave for a TDX quote over that challenge
 //!    (`GET /quote?challenge=<base64>`, the call MagicBlock already serves),
 //! 2. DCAP-verifies the quote with the Phala QVL against the Intel PCCS, and
-//! 3. reads back the fields `covenantd::tee::DcapResult` consumes — the
+//! 3. reads back the fields `covenantd::tee::DcapResult` consumes, the
 //!    validator identity, the TCB status, the `mr_td` measurement, and the
 //!    `report_data` the enclave echoed.
 //!
@@ -101,7 +101,12 @@ pub async fn verify_quote(
         )));
     }
 
-    let client = reqwest::Client::new();
+    // `tee_url` is the untrusted party being attested, so bound both dialing it
+    // and waiting on it: a hung or slow-loris enclave must not hang the caller.
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?;
     let raw_quote = fetch_quote(&client, tee_url, challenge_base64).await?;
     let validator = fetch_identity(&client, tee_url).await.unwrap_or_default();
 
@@ -153,13 +158,15 @@ async fn fetch_quote(
         tee_url.trim_end_matches('/'),
         urlencoding::encode(challenge_base64)
     );
-    let body: serde_json::Value = client
-        .get(&url)
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
+    let resp = client.get(&url).send().await?.error_for_status()?;
+    // Cap the declared body: a real TDX quote plus JSON is a few KB, and this is
+    // the untrusted enclave. With the client timeout this bounds the read.
+    if resp.content_length().is_some_and(|len| len > 256 * 1024) {
+        return Err(VerifierError::QuoteResponse(
+            "quote response too large".into(),
+        ));
+    }
+    let body: serde_json::Value = resp.json().await?;
     let quote_b64 = body["quote"]
         .as_str()
         .ok_or_else(|| VerifierError::QuoteResponse("no `quote` field".into()))?;

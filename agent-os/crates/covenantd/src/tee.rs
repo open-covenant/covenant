@@ -3,7 +3,7 @@
 //! `covenant-tee` is the pure, offline half: it builds the 64-byte `report_data`
 //! challenge that names an agent and a subject, and it checks a returned quote
 //! against that binding. It deliberately does not fetch quotes, run DCAP, or
-//! decide which `mr_td` measurement is one you trust — those are the ER
+//! decide which `mr_td` measurement is one you trust, those are the ER
 //! verifier's job. This wrapper adds the one piece the daemon owns: a policy
 //! gate over the trusted enclave images, so a genuine, correctly-bound quote
 //! from an image the operator never approved still fails verification.
@@ -86,12 +86,16 @@ pub enum TeeError {
 
 impl CovenantTee {
     pub fn new(trusted_mr_td: impl IntoIterator<Item = String>) -> Self {
-        // Normalise case on the way in so a correct image can't miss the gate
-        // over hex casing alone; `mr_td` arrives from several decoders.
+        // Normalise case and an optional `0x` prefix on the way in so a correct
+        // image can't miss the gate over formatting alone; `mr_td` arrives from
+        // several decoders and the verifier emits it prefix-less lowercase.
         Self {
             trusted_mr_td: trusted_mr_td
                 .into_iter()
-                .map(|m| m.to_ascii_lowercase())
+                .map(|m| {
+                    let lower = m.to_ascii_lowercase();
+                    lower.strip_prefix("0x").unwrap_or(&lower).to_owned()
+                })
                 .collect(),
         }
     }
@@ -247,7 +251,7 @@ mod tests {
             .unwrap();
         let report_data = bound.binding.challenge_hex();
 
-        // Genuine, bound, current — but the image is not on the allow-list.
+        // Genuine, bound, current, but the image is not on the allow-list.
         let untrusted = DcapResult {
             validator: VALIDATOR.into(),
             tcb_status: TCB_UP_TO_DATE.into(),
@@ -262,7 +266,7 @@ mod tests {
         assert!(!v.trusted_mr_td, "the daemon never approved this image");
         assert!(!v.ok());
 
-        // Trusted image, correctly bound — but the platform is behind.
+        // Trusted image, correctly bound, but the platform is behind.
         let stale = DcapResult {
             validator: VALIDATOR.into(),
             tcb_status: "OutOfDate".into(),

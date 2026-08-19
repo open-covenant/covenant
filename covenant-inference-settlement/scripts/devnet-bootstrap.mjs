@@ -1,6 +1,6 @@
 // Devnet-only faucet: give the throwaway owner enough SOL for L1 fees/rent and a
 // tiny amount of the (valueless) devnet COVNT so it can buy_credits. The throwaway
-// still signs the whole settlement lifecycle itself — this only mirrors what a
+// still signs the whole settlement lifecycle itself - this only mirrors what a
 // public faucet + a token drip would do, since the devnet COVNT mint authority is
 // the treasury (which we never touch). Sources are non-treasury devnet keys.
 //

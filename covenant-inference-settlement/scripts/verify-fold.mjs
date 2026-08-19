@@ -42,5 +42,5 @@ console.log(`positions        ${folded[0].settlement.position}..${folded.at(-1).
 console.log(`off-chain fold   ${expected}`);
 console.log(`on-chain root    ${onchain}`);
 const match = expected === onchain;
-console.log(`provenance check ${match ? "MATCH — on-chain root IS the hash-chain of the served receipts" : "MISMATCH"}`);
+console.log(`provenance check ${match ? "MATCH - on-chain root IS the hash-chain of the served receipts" : "MISMATCH"}`);
 process.exit(match ? 0 : 1);

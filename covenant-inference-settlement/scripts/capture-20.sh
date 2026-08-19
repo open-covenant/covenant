@@ -6,7 +6,7 @@ set -euo pipefail
 
 STATE="${COVENANT_ALPHA_STATE:?set COVENANT_ALPHA_STATE}"
 ENV_FILE="$STATE/alpha.env"
-[ -f "$ENV_FILE" ] || { echo "no $ENV_FILE — run alpha-up first" >&2; exit 1; }
+[ -f "$ENV_FILE" ] || { echo "no $ENV_FILE - run alpha-up first" >&2; exit 1; }
 . "$ENV_FILE"
 
 N="${1:-20}"

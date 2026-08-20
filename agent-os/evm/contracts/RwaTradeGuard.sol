@@ -4,7 +4,7 @@ pragma solidity ^0.8.20;
 import {IAggregatorV3} from "./interfaces/IAggregatorV3.sol";
 import {IStockToken} from "./interfaces/IStockToken.sol";
 
-/// @title RwaTradeGuard — on-chain risk bounds for tokenized-equity trading.
+/// @title RwaTradeGuard: on-chain risk bounds for tokenized-equity trading.
 /// @notice The on-chain half of `covenant-rwa-firewall`. A session key or a
 ///         4337 validator calls `checkTrade` before it executes a Stock Token
 ///         trade; a trade that breaks the asset's bounds reverts and never

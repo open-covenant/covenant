@@ -20,6 +20,10 @@ const DEFAULT_MAX_HOURLY_MICROS: u64 = 640_000;
 const DEFAULT_DISK_GB: u32 = 16;
 const DEFAULT_GPU_MODELS: &str = "L40S";
 const DEFAULT_MIN_GPU_MEMORY_MIB: u64 = 45_000;
+// Max acceptable per-GB bandwidth cost (USD micros). 0 keeps the original
+// free-bandwidth-only behavior; set the env to accept cheap-bandwidth hosts.
+const DEFAULT_MAX_INET_COST_MICROS: u64 = 0;
+const MAX_INET_COST_MICROS: u64 = 1_000_000;
 const MAX_HOURLY_MICROS: u64 = 10_000_000;
 const MAX_RESPONSE_BYTES: usize = 1_048_576;
 const MIN_RELIABILITY: f64 = 0.99;
@@ -37,6 +41,7 @@ const MAX_HOURLY_ENV: &str = "COVENANT_VAST_MAX_HOURLY_MICROS";
 const GPU_MODELS_ENV: &str = "COVENANT_VAST_GPU_MODELS";
 const MIN_GPU_MEMORY_ENV: &str = "COVENANT_VAST_MIN_GPU_MEMORY_MIB";
 const DISK_GB_ENV: &str = "COVENANT_VAST_DISK_GB";
+const MAX_INET_COST_ENV: &str = "COVENANT_VAST_MAX_INET_COST_MICROS";
 
 pub type Result<T> = std::result::Result<T, VastError>;
 
@@ -141,6 +146,7 @@ pub struct VastConfig {
     pub gpu_models: Vec<String>,
     pub min_gpu_memory_mib: u64,
     pub disk_gb: u32,
+    pub max_inet_cost_micros: u64,
 }
 
 impl Default for VastConfig {
@@ -151,6 +157,7 @@ impl Default for VastConfig {
             gpu_models: DEFAULT_GPU_MODELS.split(',').map(str::to_owned).collect(),
             min_gpu_memory_mib: DEFAULT_MIN_GPU_MEMORY_MIB,
             disk_gb: DEFAULT_DISK_GB,
+            max_inet_cost_micros: DEFAULT_MAX_INET_COST_MICROS,
         }
     }
 }
@@ -174,12 +181,14 @@ impl VastConfig {
         let min_gpu_memory_mib = env_u64(MIN_GPU_MEMORY_ENV, default.min_gpu_memory_mib)?;
         let disk_gb = u32::try_from(env_u64(DISK_GB_ENV, u64::from(default.disk_gb))?)
             .map_err(|_| VastError::Configuration("COVENANT_VAST_DISK_GB is out of range"))?;
+        let max_inet_cost_micros = env_u64(MAX_INET_COST_ENV, default.max_inet_cost_micros)?;
         let config = Self {
             api_url,
             max_hourly_micros,
             gpu_models,
             min_gpu_memory_mib,
             disk_gb,
+            max_inet_cost_micros,
         };
         config.validate()?;
         Ok(config)
@@ -223,6 +232,11 @@ impl VastConfig {
         if !(16..=2_048).contains(&self.disk_gb) {
             return Err(VastError::Configuration(
                 "COVENANT_VAST_DISK_GB must be between 16 and 2048",
+            ));
+        }
+        if self.max_inet_cost_micros > MAX_INET_COST_MICROS {
+            return Err(VastError::Configuration(
+                "COVENANT_VAST_MAX_INET_COST_MICROS is outside the supported range",
             ));
         }
         Ok(())
@@ -480,8 +494,8 @@ impl VastClient {
                 "direct_port_count": {"gte": 1},
                 "disk_space": {"gte": self.config.disk_gb},
                 "allocated_storage": self.config.disk_gb,
-                "inet_down_cost": {"eq": 0},
-                "inet_up_cost": {"eq": 0},
+                "inet_down_cost": {"lte": self.config.max_inet_cost_micros as f64 / 1_000_000.0},
+                "inet_up_cost": {"lte": self.config.max_inet_cost_micros as f64 / 1_000_000.0},
                 "cuda_max_good": {"gte": 12.4},
                 "gpu_arch": {"eq": "nvidia"},
                 "cpu_arch": {"eq": "amd64"},

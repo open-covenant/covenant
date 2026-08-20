@@ -34,3 +34,7 @@ services:
         value: L40S
       - key: COVENANT_VAST_MIN_GPU_MEMORY_MIB
         value: "45000"
+      # Max per-GB bandwidth cost (USD micros) a host may charge. 0 = free-only
+      # (strictest, few hosts qualify); 50000 = accept hosts up to $0.05/GB.
+      - key: COVENANT_VAST_MAX_INET_COST_MICROS
+        value: "50000"

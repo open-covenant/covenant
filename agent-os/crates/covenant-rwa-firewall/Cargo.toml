@@ -1,0 +1,16 @@
+[package]
+name = "covenant-rwa-firewall"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "RWA-aware pre-trade firewall for tokenized equities on an EVM venue: bounds a Stock Token trade by live notional, an oracle fair-value band, corporate-action multiplier, feed staleness, and market hours, before the trade is signed. The pure decision half; reading the chain stays with the caller."
+
+[dependencies]
+covenant-evm-firewall = { path = "../covenant-evm-firewall" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+reqwest = { workspace = true }

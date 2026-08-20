@@ -503,10 +503,14 @@ impl VastClient {
                 "limit": 64
             }));
         let response: OfferResponse = self.request_json(request, "offer search").await?;
+        let ceiling = self.config.max_inet_cost_micros;
         let offers: Vec<Offer> = response
             .offers
             .into_iter()
-            .map(Offer::try_from)
+            .map(|raw| {
+                check_inet_cost(&raw, ceiling)?;
+                Offer::try_from(raw)
+            })
             .collect::<Result<_>>()?;
         let mut ids = HashSet::with_capacity(offers.len());
         if offers.iter().any(|offer| !ids.insert(offer.id)) {
@@ -915,6 +919,22 @@ struct RawOffer {
     cpu_arch: Option<String>,
 }
 
+/// Reject an offer whose per-GB bandwidth cost is missing, invalid, or above the
+/// configured ceiling. `ceiling_micros` == 0 keeps the free-bandwidth-only rule.
+fn check_inet_cost(raw: &RawOffer, ceiling_micros: u64) -> Result<()> {
+    let cap = ceiling_micros as f64 / 1_000_000.0;
+    let within =
+        |cost: Option<f64>| cost.is_some_and(|c| c.is_finite() && (0.0..=cap).contains(&c));
+    if within(raw.inet_down_cost) && within(raw.inet_up_cost) {
+        Ok(())
+    } else {
+        Err(invalid_response(
+            "offer search",
+            "offer bandwidth cost is missing or above the configured ceiling",
+        ))
+    }
+}
+
 impl TryFrom<RawOffer> for Offer {
     type Error = VastError;
 
@@ -933,12 +953,6 @@ impl TryFrom<RawOffer> for Offer {
         }
         let hourly_micros = hourly_micros(raw.dph_total)
             .map_err(|reason| invalid_response("offer search", reason))?;
-        if raw.inet_down_cost != Some(0.0) || raw.inet_up_cost != Some(0.0) {
-            return Err(invalid_response(
-                "offer search",
-                "offer has variable bandwidth charges",
-            ));
-        }
         let verification = raw
             .verification
             .filter(|value| value == "verified")

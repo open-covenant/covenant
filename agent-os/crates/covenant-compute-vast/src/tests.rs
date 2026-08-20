@@ -160,8 +160,8 @@ async fn ranks_only_admitted_offers_under_both_caps() {
             "direct_port_count": {"gte": 1},
             "disk_space": {"gte": 16},
             "allocated_storage": 16,
-            "inet_down_cost": {"eq": 0},
-            "inet_up_cost": {"eq": 0},
+            "inet_down_cost": {"lte": 0.0},
+            "inet_up_cost": {"lte": 0.0},
             "cuda_max_good": {"gte": 12.4},
             "gpu_arch": {"eq": "nvidia"},
             "cpu_arch": {"eq": "amd64"}
@@ -206,6 +206,64 @@ async fn ranks_only_admitted_offers_under_both_caps() {
             minor: 4
         }
     );
+}
+
+#[tokio::test]
+async fn honours_the_configurable_bandwidth_ceiling() {
+    let bw_offer = |id: u64, inet: f64| {
+        json!({
+            "id": id, "machine_id": id * 10, "gpu_name": "L40S", "gpu_ram": 46068,
+            "dph_total": 0.50, "inet_down_cost": inet, "inet_up_cost": inet,
+            "verification": "verified", "reliability": 0.999, "rentable": true,
+            "rented": false, "direct_port_count": 2, "cuda_max_good": 12.4,
+            "num_gpus": 1, "gpu_arch": "nvidia", "cpu_arch": "amd64"
+        })
+    };
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v0/bundles/"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            // both within the $0.05 ceiling; the old free-bandwidth-only rule
+            // would have rejected the second, non-zero one.
+            "offers": [bw_offer(1, 0.0), bw_offer(2, 0.04)]
+        })))
+        .mount(&server)
+        .await;
+
+    let vast = VastClient::new(
+        VastConfig {
+            api_url: Url::parse(&format!("{}/api/v0/", server.uri())).unwrap(),
+            max_inet_cost_micros: 50_000,
+            ..VastConfig::default()
+        },
+        ApiToken::new(TOKEN).unwrap(),
+    )
+    .unwrap();
+    let offers = vast.offers().await.unwrap();
+    assert_eq!(offers.iter().map(|o| o.id).collect::<Vec<_>>(), vec![1, 2]);
+
+    // A host over the ceiling is a nonconforming response and must be rejected.
+    let over = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v0/bundles/"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "offers": [bw_offer(1, 0.0), bw_offer(2, 0.10)]
+        })))
+        .mount(&over)
+        .await;
+    let vast = VastClient::new(
+        VastConfig {
+            api_url: Url::parse(&format!("{}/api/v0/", over.uri())).unwrap(),
+            max_inet_cost_micros: 50_000,
+            ..VastConfig::default()
+        },
+        ApiToken::new(TOKEN).unwrap(),
+    )
+    .unwrap();
+    assert!(matches!(
+        vast.offers().await.unwrap_err(),
+        VastError::InvalidResponse { .. }
+    ));
 }
 
 #[tokio::test]

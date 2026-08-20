@@ -22,6 +22,7 @@ pub mod spend_grant;
 pub mod sse;
 pub mod stream_dispatch;
 pub mod stream_tracker;
+pub mod tee;
 pub mod x402;
 
 use anyhow::{Context, Result};

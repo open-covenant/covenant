@@ -1,0 +1,19 @@
+{
+  "name": "covenant-inference-settlement",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Settlement bridge: fold inference receipts into the on-chain provenance_root via gasless consume_credits on a MagicBlock ER (devnet).",
+  "bin": {
+    "covenant-inference-settlement": "./cli.mjs"
+  },
+  "scripts": {
+    "init": "node cli.mjs init",
+    "serve": "node cli.mjs serve"
+  },
+  "dependencies": {
+    "@magicblock-labs/ephemeral-rollups-sdk": "^0.2.6",
+    "@solana/spl-token": "^0.4.15",
+    "@solana/web3.js": "^1.98.0"
+  }
+}

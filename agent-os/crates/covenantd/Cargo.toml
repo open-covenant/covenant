@@ -46,6 +46,7 @@ covenant-acedata = { path = "../covenant-acedata" }
 covenant-robinhood = { path = "../covenant-robinhood" }
 covenant-circuit = { path = "../covenant-circuit", optional = true }
 covenant-krexa = { path = "../covenant-krexa" }
+covenant-tee = { path = "../covenant-tee" }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
@@ -54,9 +55,12 @@ bs58 = { workspace = true }
 ed25519-dalek = { workspace = true }
 dotenvy = "0.15"
 futures = { workspace = true }
+getrandom = "0.2"
+hex = "0.4"
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = "0.10"
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tower-http = { workspace = true }

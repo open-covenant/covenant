@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Optional always-on launchd template for the closed-alpha inference stack.
+
+  DISABLED by default and intentionally not loaded. This pins a ~5 GB model resident
+  in RAM for the life of the job, so only enable it on a machine with headroom.
+
+  It runs alpha-up.sh through a login shell (`bash -lc`) so $HOME and the user's PATH
+  (homebrew, cargo, ollama) resolve at runtime — there is no literal home path in this
+  file. alpha-up.sh daemonizes the components itself and is idempotent, so re-running it
+  (kickstart) is safe. Adjust the repo path below if yours differs.
+
+  To enable on this machine:
+    cp org.local.covenant-inference-alpha.plist ~/Library/LaunchAgents/
+    /usr/bin/plutil -replace Disabled -bool false ~/Library/LaunchAgents/org.local.covenant-inference-alpha.plist
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/org.local.covenant-inference-alpha.plist
+  To stop and remove:
+    launchctl bootout gui/$(id -u)/org.local.covenant-inference-alpha
+    rm ~/Library/LaunchAgents/org.local.covenant-inference-alpha.plist
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>org.local.covenant-inference-alpha</string>
+
+    <key>Disabled</key>
+    <true/>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-lc</string>
+        <string>exec "$HOME/Projects/covenant/covenant-inference/agent-os/crates/covenant-inference-gateway/scripts/alpha/alpha-up.sh"</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

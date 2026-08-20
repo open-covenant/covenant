@@ -1,0 +1,11 @@
+# Hashing the multi-gigabyte GGUF at startup dominates node boot, so build the
+# SHA-256 path with the CPU's crypto extensions. These targets always carry them;
+# without the flag `sha2` falls back to a scalar core that is ~4x slower.
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "target-feature=+sha2"]
+
+[target.aarch64-unknown-linux-gnu]
+rustflags = ["-C", "target-feature=+sha2"]
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "target-feature=+sha,+sse4.1"]

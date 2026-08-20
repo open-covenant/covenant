@@ -60,9 +60,15 @@ pub struct AssetContext {
     /// `uiMultiplier()` (ERC-8056), scaled 1e18. Zero means the token is not
     /// initialized and nothing should trade against it.
     pub ui_multiplier_e18: u128,
+    /// The token's own `oraclePaused()` flag. Set during the scheduled pause
+    /// around a corporate action, when the price is untrustworthy even if the
+    /// feed still reads fresh and positive. A distinct signal from staleness.
+    pub oracle_paused: bool,
     /// Now (unix seconds), for the staleness check.
     pub now: u64,
-    /// Whether the underlying's exchange is open.
+    /// Whether the underlying's exchange is open. The off-chain half can carry a
+    /// real calendar signal; the on-chain guard has none and falls back to feed
+    /// staleness, which bounds but does not equal market-closed.
     pub market_open: bool,
 }
 
@@ -85,14 +91,22 @@ impl RwaPolicy {
     /// a stale feed, a closed market, a quote off the oracle, or a notional over
     /// the cap is refused, and the reason names the offending value.
     pub fn evaluate(&self, trade: &RwaTrade, ctx: &AssetContext) -> Result<Verdict, RwaDenial> {
+        if ctx.oracle_paused {
+            return Err(RwaDenial::OraclePaused);
+        }
         if ctx.oracle_price_usd_e8 == 0 {
             return Err(RwaDenial::PriceUnavailable);
         }
         if ctx.ui_multiplier_e18 == 0 {
             return Err(RwaDenial::MultiplierUnset);
         }
+        // A feed timestamped in the future is not a usable price. Saturating the
+        // age to zero would wave it through; refuse it like the on-chain guard.
+        if ctx.now < ctx.oracle_updated_at {
+            return Err(RwaDenial::PriceUnavailable);
+        }
 
-        let age = ctx.now.saturating_sub(ctx.oracle_updated_at);
+        let age = ctx.now - ctx.oracle_updated_at;
         if age > self.max_feed_staleness_secs {
             return Err(RwaDenial::StalePriceFeed {
                 age_secs: age,
@@ -106,8 +120,18 @@ impl RwaPolicy {
 
         let oracle = ctx.oracle_price_usd_e8;
         let diff = trade.quoted_price_usd_e8.abs_diff(oracle);
+        // Compare exactly (diff*BPS vs oracle*band) rather than the floored bps,
+        // so a quote a fraction of a basis point beyond the band cannot round
+        // back in. Overflow refuses, staying fail-closed.
+        let outside = match (
+            diff.checked_mul(BPS),
+            oracle.checked_mul(u128::from(self.fair_value_band_bps)),
+        ) {
+            (Some(l), Some(r)) => l > r,
+            _ => true,
+        };
         let diff_bps = mul_div(diff, BPS, oracle).unwrap_or(u128::MAX);
-        if diff_bps > u128::from(self.fair_value_band_bps) {
+        if outside {
             return Err(RwaDenial::PriceOutsideBand {
                 quoted_usd_e8: trade.quoted_price_usd_e8,
                 oracle_usd_e8: oracle,
@@ -156,6 +180,8 @@ pub enum RwaDenial {
     PriceUnavailable,
     #[error("uiMultiplier is zero: the token is not initialized")]
     MultiplierUnset,
+    #[error("the token's oracle is paused")]
+    OraclePaused,
     #[error("oracle price is {age_secs}s old, past the {max_secs}s limit")]
     StalePriceFeed { age_secs: u64, max_secs: u64 },
     #[error("the underlying's market is closed")]
@@ -207,7 +233,8 @@ mod tests {
             oracle_price_usd_e8: 200 * 100_000_000, // $200.00
             oracle_updated_at: 1_000_000,
             ui_multiplier_e18: WAD, // 1.0
-            now: 1_000_060,         // 60s later
+            oracle_paused: false,
+            now: 1_000_060, // 60s later
             market_open: true,
         }
     }
@@ -297,6 +324,38 @@ mod tests {
             policy().evaluate(&trade(WAD, 0), &c),
             Err(RwaDenial::PriceUnavailable)
         );
+    }
+
+    #[test]
+    fn refuses_a_paused_oracle_even_with_a_fresh_price() {
+        let mut c = ctx();
+        c.oracle_paused = true;
+        assert_eq!(
+            policy().evaluate(&trade(WAD, 200 * 100_000_000), &c),
+            Err(RwaDenial::OraclePaused)
+        );
+    }
+
+    #[test]
+    fn refuses_a_future_dated_feed() {
+        let mut c = ctx();
+        c.oracle_updated_at = c.now + 1;
+        assert_eq!(
+            policy().evaluate(&trade(WAD, 200 * 100_000_000), &c),
+            Err(RwaDenial::PriceUnavailable)
+        );
+    }
+
+    #[test]
+    fn the_band_is_exact_at_the_boundary() {
+        // 50bps of $200 is exactly $1.00. A quote $1.00 off is inside; one unit
+        // more is refused, with no floor rounding it back in.
+        let at_band = 200 * 100_000_000 + 100_000_000;
+        assert!(policy().evaluate(&trade(WAD, at_band), &ctx()).is_ok());
+        assert!(matches!(
+            policy().evaluate(&trade(WAD, at_band + 1), &ctx()),
+            Err(RwaDenial::PriceOutsideBand { .. })
+        ));
     }
 
     #[test]

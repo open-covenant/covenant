@@ -57,6 +57,7 @@ async fn main() {
         oracle_price_usd_e8: answer_e8,
         oracle_updated_at: updated_at,
         ui_multiplier_e18: multiplier,
+        oracle_paused: paused,
         now,
         market_open,
     };

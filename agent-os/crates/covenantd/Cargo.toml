@@ -11,11 +11,18 @@ repository.workspace = true
 name = "covenantd"
 path = "src/main.rs"
 
+[features]
+# Registers the Circuit tools with an in-process funding payer that settles in
+# $CVNT (or CIRC). Pulls the solana dep tree via covenant-circuit/solana, so it
+# stays off the default daemon build and behind this feature.
+circuit = ["dep:covenant-circuit", "covenant-circuit/solana"]
+
 [dependencies]
 covenant-types = { path = "../covenant-types" }
 covenant-ipc = { path = "../covenant-ipc" }
 covenant-memory = { path = "../covenant-memory" }
 covenant-audit = { path = "../covenant-audit" }
+covenant-attestation = { path = "../covenant-attestation" }
 covenant-budget = { path = "../covenant-budget" }
 covenant-identity = { path = "../covenant-identity" }
 covenant-llm = { path = "../covenant-llm" }
@@ -29,20 +36,31 @@ covenant-runtime = { path = "../covenant-runtime" }
 covenant-sap-bridge = { path = "../covenant-sap-bridge" }
 covenant-settlement = { path = "../covenant-settlement" }
 # Default features only — the solana signer + its dep tree stay out of
-# the daemon build until the funding-key path lands behind its own
-# feature in a separate change.
-covenant-x402 = { path = "../covenant-x402" }
+# the daemon's default build; the on-chain funding payer is pulled only by
+# the `circuit` feature (covenant-circuit/solana), never by default.
+covenant-x402 = { path = "../covenant-x402", features = ["evm-rpc"] }
 covenant-hyre = { path = "../covenant-hyre" }
 covenant-metaplex = { path = "../covenant-metaplex" }
+covenant-sns = { path = "../covenant-sns" }
+covenant-acedata = { path = "../covenant-acedata" }
+covenant-robinhood = { path = "../covenant-robinhood" }
+covenant-circuit = { path = "../covenant-circuit", optional = true }
+covenant-krexa = { path = "../covenant-krexa" }
+covenant-tee = { path = "../covenant-tee" }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
+base64 = "0.22"
 bs58 = { workspace = true }
+ed25519-dalek = { workspace = true }
 dotenvy = "0.15"
 futures = { workspace = true }
+getrandom = "0.2"
+hex = "0.4"
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = "0.10"
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tower-http = { workspace = true }
@@ -52,11 +70,13 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 covenant-audit = { path = "../covenant-audit" }
+covenant-hyre = { path = "../covenant-hyre" }
 covenant-identity = { path = "../covenant-identity" }
 covenant-llm = { path = "../covenant-llm" }
 covenant-manifest = { path = "../covenant-manifest" }
 covenant-peer-auth = { path = "../covenant-peer-auth" }
 covenant-permissions = { path = "../covenant-permissions" }
+covenant-sdk = { path = "../covenant-sdk" }
 reqwest = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }

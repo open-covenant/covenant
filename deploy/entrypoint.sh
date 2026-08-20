@@ -25,9 +25,17 @@ if [[ -n "${COVENANT_OPERATOR_TOKEN:-}" ]]; then
   echo "entrypoint: wrote operator token from env (mode 0600)"
 fi
 
-if [[ ! -d "$COVENANT_HOME/agents/demo" ]]; then
-  cp -R /opt/covenant/demo-agent "$COVENANT_HOME/agents/demo"
-  echo "entrypoint: seeded demo-agent"
+# Seed the demo-agent by default. Set COVENANT_SEED_DEMO_AGENT=0 for a clean
+# no-agent daemon (intents fall through to the phase-0 echo path instead of
+# matching an agent) — used by execution-layer connectors that only need a
+# trusted-local echo/audit backend, not the Haiku demo agent.
+if [[ "${COVENANT_SEED_DEMO_AGENT:-1}" == "1" ]]; then
+  if [[ ! -d "$COVENANT_HOME/agents/demo" ]]; then
+    cp -R /opt/covenant/demo-agent "$COVENANT_HOME/agents/demo"
+    echo "entrypoint: seeded demo-agent"
+  fi
+else
+  echo "entrypoint: demo-agent seeding disabled (COVENANT_SEED_DEMO_AGENT=${COVENANT_SEED_DEMO_AGENT})"
 fi
 
 # The coder agent uses runtime=hermes and is only useful once a coding gateway

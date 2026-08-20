@@ -1,0 +1,10 @@
+[
+  {"id": "fact_capital", "kind": "short_factual", "prompt": "The capital of France is"},
+  {"id": "fact_science", "kind": "short_factual", "prompt": "Water is made of two elements: hydrogen and"},
+  {"id": "instr_list", "kind": "instruction", "prompt": "List three primary colors, one per line:\n1."},
+  {"id": "instr_translate", "kind": "instruction", "prompt": "Translate the English word 'house' into French. Answer with only the single word:"},
+  {"id": "code_fib", "kind": "code_gen", "prompt": "Write a Python function that returns the nth Fibonacci number.\n\ndef fib(n):"},
+  {"id": "code_reverse", "kind": "code_gen", "prompt": "Complete this JavaScript function that reverses a string.\n\nfunction reverse(s) {\n  return"},
+  {"id": "reason_math", "kind": "reasoning", "prompt": "A farmer has 17 sheep. All but 9 run away. Let's reason step by step about how many sheep are left, then give the final number."},
+  {"id": "reason_long", "kind": "reasoning_long", "prompt": "Explain, in a detailed step-by-step manner, why the sky appears blue during the day but red at sunset. Cover Rayleigh scattering, wavelength dependence, and the path length of light through the atmosphere."}
+]

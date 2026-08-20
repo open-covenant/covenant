@@ -1,6 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 const DOCS_HOST = /^docs\./i;
+const STAKE_HOST = /^stake\./i;
+const LEGACY_STAKE_HOST = /^legacy-stake\./i;
 
 export function middleware(req: NextRequest) {
   const host = req.headers.get("host") ?? "";
@@ -21,6 +23,36 @@ export function middleware(req: NextRequest) {
     const rewritten = url.clone();
     rewritten.pathname = path === "/" ? "/docs" : `/docs${path}`;
     return NextResponse.rewrite(rewritten);
+  }
+
+  if (LEGACY_STAKE_HOST.test(host) && path === "/") {
+    const rewritten = url.clone();
+    rewritten.pathname = "/positions";
+    return NextResponse.rewrite(rewritten);
+  }
+
+  if (STAKE_HOST.test(host)) {
+    if (path === "/stake" || path.startsWith("/stake/")) {
+      const cleaned = path.replace(/^\/stake/, "") || "/";
+      return NextResponse.redirect(
+        new URL(`${proto}://${host}${cleaned}${url.search}`),
+        308,
+      );
+    }
+    if (path === "/") {
+      const rewritten = url.clone();
+      rewritten.pathname = "/stake";
+      return NextResponse.rewrite(rewritten);
+    }
+  }
+
+  // Staking now lives in a standalone app at stake.<apex>; send legacy /stake links there.
+  if (path === "/stake" || path.startsWith("/stake/")) {
+    const apex = host.replace(/^www\./, "");
+    return NextResponse.redirect(
+      new URL(`${proto}://stake.${apex}${url.search}`),
+      308,
+    );
   }
 
   if (path === "/docs" || path.startsWith("/docs/")) {

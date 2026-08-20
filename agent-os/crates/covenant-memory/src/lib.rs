@@ -1582,6 +1582,17 @@ mod tests {
     }
 
     #[test]
+    fn memory_tier_slug_pins_canonical_forward_mapping_for_the_backfill_plan() {
+        // The forward map feeding the `tier` field of every candidate in
+        // memory_receipt_backfill_plan_json. The plan tests pin that schema's
+        // keys but never the value, so the per-variant slug is only pinned here;
+        // it must stay in lock-step with parse_tier's reverse map above.
+        assert_eq!(memory_tier_slug(MemoryTier::Working), "working");
+        assert_eq!(memory_tier_slug(MemoryTier::Episodic), "episodic");
+        assert_eq!(memory_tier_slug(MemoryTier::LongTerm), "longterm");
+    }
+
+    #[test]
     fn validate_repair_request_pins_reason_and_backfill_provenance_arms() {
         let id = Uuid::new_v4();
         let detach = || MemoryRepairCommand::DetachParent {

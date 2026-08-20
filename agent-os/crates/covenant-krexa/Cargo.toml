@@ -1,0 +1,24 @@
+[package]
+name = "covenant-krexa"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Krexa credit/risk provider for Covenant. Read-only Krexit score and credit-line reads as a labeled soft reputation signal, plus a flag-gated (off by default) credit-backed x402 draw."
+
+[dependencies]
+covenant-mcp = { path = "../covenant-mcp" }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+reqwest = { workspace = true }
+base64 = "0.22"
+bs58 = { workspace = true }
+tokio = { version = "1", features = ["time"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+wiremock = "0.6"

@@ -34,6 +34,23 @@ Every non-empty scope for a known action namespace must be a JSON object with a 
 
 `{}` remains valid and means unscoped within the named action. Grant requests for known namespaces reject non-object scopes, missing versions, unsupported versions, and malformed known fields. Unknown future fields are preserved as signed metadata until dispatch-time enforcement defines them.
 
+### `max_uses` (usage budget)
+
+`max_uses` is a cross-namespace field accepted on any recognized scope alongside `version`. It bounds how many times a grant may authorize its action — a usage budget that complements the time budget of `expires_at`:
+
+```json
+{
+  "version": 1,
+  "max_uses": 5
+}
+```
+
+It must be a positive integer; grant requests reject `0`, negative, fractional, and non-numeric values. Because the signature covers `scope`, a budget is tamper-evident — a holder cannot raise it without a fresh daemon-signed grant. An absent `max_uses` means unlimited, which is the behavior of every grant issued before budgets existed.
+
+The budget is enforced at capability-check time. Each authorized use consumes one unit, the count is durable across daemon restart, and the check-and-consume is atomic per signature so two concurrent checks cannot both spend the final unit. Once the count reaches `max_uses` the action is refused and the daemon records a [`CapabilityBudgetExhausted`](./audit-integrity.md) audit event naming the spent grant's signature — distinct from a never-granted action, which records a failed capability check instead. `max_uses` is a lifetime budget: a spent grant stays spent, so the use count is never purged. Revoking and re-granting issues a fresh signature with a fresh budget.
+
+Opt-in live coverage pins this boundary through the real daemon: a `max_uses = 1` grant runs once, the second call is refused with a `CapabilityBudgetExhausted` row, and after the daemon is restarted against the same state the refusal still holds — the spent budget is not refilled.
+
 ## Namespaces
 
 ### `intent.*` and `agent.*`
@@ -64,6 +81,8 @@ Rules:
 
 Live HTTP coverage pins this boundary for `tool.call.echo`: a scoped grant rejects a mismatched argument object before dispatch and permits only the exact allowed object.
 
+External MCP tools are gated identically. The daemon loads tools from the `[[mcp.server]]` blocks of `secrets.toml`, spawns each server as a subprocess, and exposes its tools under `mcp_<prefix>_<tool>` names; those names flow through the same `tool.call.<name>` gate and land the same `ToolCallCompleted` audit record as native tools. Live coverage drives a tool from the in-repo fake MCP server through the daemon's dispatch and confirms the call lands a `ToolCallCompleted` record with hashed (never raw) arguments on the audit chain — a tool-reported error recorded as `ErrorResult`, distinct from a transport `Failed`.
+
 ### `memory.*`
 
 Use for memory reads, writes, repair, compaction, purge, and receipt backfill.
@@ -91,6 +110,8 @@ Rules:
 - `memory.backfill.apply` and `memory.backfill.dry_run` are distinct grants for the memory-record receipt-correlation backfill; the backfill mode is part of the action and a scope may pin `apply` to bind a grant to a single mode. `before_ms` bounds the backfill to records at or before a millisecond cutoff (inclusive); `null` or an absent value is unbounded. Grants for `memory.backfill.*` reject `tiers` and `record_id` at validation time because the dispatch predicate does not bind by tier or record.
 - The `memory backfill-receipt-correlation` command (IPC `BackfillMemoryRecords`, HTTP `POST /memory/records/backfill`) enforces this scope at dispatch: an apply requires `memory.backfill.apply`, a dry run requires `memory.backfill.dry_run`, and the operator identity is required. The backfill correlates every legacy row with no recency filter, so the dispatch probes the scope with an unbounded cutoff — a recency-bounded grant (`before_ms` set) does not authorize a full repair. Correlations are recomputed server-side from the operator's own memory and receipt rows; clients cannot supply correlations directly.
 
+Live HTTP coverage pins the recent-memory read filter on non-empty data. With working-tier records seeded over the gateway, the buffered `GET /memory/recent` (`Accept: application/json`) returns every row at the requested `tier` and owned by the calling peer, carries the seeded record content, excludes the records under a different `tier`, and bounds the listing to the `limit` query value — so a daemon that ignored the tier or limit parameter, or dropped the owner scope, fails the read rather than passing on the empty-page wire shape.
+
 ### `a2a.*`
 
 Use for agent-to-agent send, receive, respond, repair, and compaction actions.
@@ -112,6 +133,10 @@ Rules:
 - `lease_id` narrows manual repair to one in-flight lease.
 - `duplicate_risk` narrows `a2a.repair.requeue` posture and should be either `idempotent` or `operator-accepted`; the daemon also accepts the wire spelling `operator_accepted`.
 - Each verb is a distinct action and is matched exactly, so a grant for one verb authorizes no other: `a2a.repair.requeue` and `a2a.repair.force_error` are separate deny-by-default grants, and holding `requeue` never authorizes the destructive `force_error` arm.
+
+Live HTTP coverage pins the task-handoff boundary in both directions. On enqueue, `POST /a2a/tasks` without `a2a.send.<recipient>` is rejected with an `error` envelope naming `a2a.send` and nothing is queued; once granted, the post returns an `a2_a_task_queued` envelope whose `task_id` is the client-supplied id the daemon preserves — it allocates no fresh id — and that id names the task a consumer then leases. On dequeue, `GET /a2a/tasks/next` is authenticated-only and leases the next queued task to the caller: a self-addressed task posted with a distinctive `intent_text`, `task_kind`, and `deadline_ms` leases back through the `a2_a_task_opt` envelope and deserializes field-for-field equal to the posted task — the optional `task_kind` and `deadline_ms` survive the HTTP JSON boundary at their exact posted values, not just the id — and the next read drains to a null task, so a single send is leased exactly once.
+
+Live IPC and HTTP coverage pins the receiver-side idempotency replay boundary. When a task carries an idempotency key with `duplicate_safety = Idempotent`, the daemon dedups by the result cache rather than at enqueue: once such a task has been leased and its result posted, re-sending a task with a fresh id but the same sender, recipient, `task_kind`-or-`intent_text`, and key returns the cached result re-stamped with the replay id and enqueues no second task — the next task read drains to null. The dedup is key-specific: a re-send under a distinct idempotency key misses the cache and enqueues normally. Replay is therefore result-cache-based, not enqueue-time, so a re-send before the first task completes still enqueues a second task.
 
 ### `audit.*`
 
@@ -148,6 +173,8 @@ Rules:
 - `before_ms` narrows purge authority: when present on `capabilities.purge`, the requested cutoff must be less than or equal to the scoped value; `null` or an absent field is unbounded. The dispatch predicate is the same `before_ms` cutoff enforced for `audit.purge` and the `peers.purge` retention sweep.
 - The operator identity remains the root authority for capability-registry control. A scoped `capabilities.purge` grant is delegated retention authority for a non-operator peer.
 - Grant-time validation does not yet bind the `capabilities.*` namespace, so a non-empty scope is preserved as signed metadata at grant time and only `before_ms` is interpreted at dispatch. Treat the cutoff as an enforced dispatch bound, not a grant-time-validated envelope.
+
+Live coverage pins revocation as real ledger state, not just an acknowledgement, over both daemon boundaries. A capability revoked through `RevokeCapability` (IPC) or `POST /capabilities/revoke` (HTTP) is absent from a subsequent recent-capability read, while an unrelated grant issued alongside it remains listed — so a daemon that acknowledged the revoke but left the grant active, or wiped the whole ledger, fails the read-back rather than passing on the `removed: true` envelope alone.
 
 ### `peers.*` and `identity.*`
 
@@ -293,3 +320,48 @@ Retention maintenance has the same machine-readable convention:
 ```
 
 `before_ms` is the effective cutoff, including values derived from `--older-than-ms`.
+
+### Operator capability-usage query
+
+`covenant capabilities recent` reports the signed grant ledger but not how much of a `max_uses` budget a grant has spent — a holder learns its remaining budget only by being refused. The daemon exposes an operator-only read query over capability state for that visibility. It is an IPC `Request` of kind `capability_usage` (no CLI verb yet) and returns:
+
+```json
+{
+  "kind": "capability_usage",
+  "grants": [
+    {
+      "signature_b58": "3xS9Yk1f8wL2bN7pQz4mRtUvJh6cKaDe5gXyWnVoBqAr",
+      "action": "tool.call.echo",
+      "scope": { "version": 1, "tool": "echo", "max_uses": 5 },
+      "subject_display": "agent@host",
+      "subject_pubkey_b58": "5Gw3z9KpXqL8mNvR2tY7hJ4cF6bA1sDeZxWnVoBqUtM",
+      "expires_at": 1700000000000,
+      "revoked": false,
+      "effective": "live",
+      "budget": { "max_uses": 5, "used": 2, "remaining": 3 }
+    }
+  ]
+}
+```
+
+One entry per grant in the ledger, including revoked-but-not-yet-purged grants (flagged `revoked: true`). `subject_display` and `subject_pubkey_b58` name the agent the authority is delegated to — the holder — sourced from the signed capability's subject, with the base58 pubkey as the stable identity and the display as the human label; this is the grantee, never the grantor that issued the grant. So the query answers which agent holds each grant, not only what it permits. `budget` is present only for grants that declared a `max_uses` budget; an unbudgeted grant omits the field. `used` is the durable count the enforcement path has recorded — it is read from the same `uses.jsonl` ledger `consume_uses` maintains, without recording a use, so it survives daemon restart and never advertises a refilled budget. `remaining` is `max_uses - used`.
+
+`scope` is the grant's signed scope verbatim — the constraints that bound what the authority permits within its `action`: the tool a `tool.call` grant is pinned to, the recipient an `a2a.send` grant may message, a path or host constraint, the `max_uses` budget. It is sourced from `signed.capability.scope`, the same object the signature covers and the daemon enforces, so the reported scope cannot diverge from the one in force. Without it, two grants for the same action with different scopes are indistinguishable — an operator sees the action verb but not the boundary that narrows it. Unlike `budget`, `scope` is always present and emitted exactly as signed, including for an unscoped grant (whatever the capability carries, for example `null` or `{}`), so the wire shape stays stable.
+
+`effective` is the daemon's own verdict on whether the grant would authorize an action right now — one of `live`, `expired`, `revoked`, or `exhausted` — computed with the daemon clock and the same predicates the enforcement path applies. It is reported so an operator reads the daemon's decision directly rather than re-deriving it from `expires_at`, `revoked`, and `budget`, where a different clock or precedence could disagree with enforcement. Its precedence matches enforcement order: a revoked grant is dropped from the live set before expiry is checked, and a grant's budget is consumed only after the expiry-aware signature check passes, so `revoked` dominates `expired`, which dominates `exhausted`. A grant past its `expires_at` reports `expired` (using `now > expires_at`, so the grant is still `live` at the exact expiry millisecond, matching the check path).
+
+The query joins grants to their use counts and revocations by `signature_b58`, the base58 ed25519 grant signature, not by `action`. Several grants for the same action therefore stay distinct, each reporting its own subject, scope, and budget — the scope stays bound to its grant rather than transposing onto the shared action verb.
+
+The query requires the operator identity. A peer that merely holds a grant is refused, so delegated-authority state — which capabilities exist, which agent holds each, what scope bounds each, and how much budget remains — never leaks to a non-operator. The boundary is observability only: it reports on-disk capability state and changes nothing.
+
+An opt-in live test (`live_capability_usage_introspection.rs`) exercises the query through the real daemon: it grants a `max_uses` budget, spends part of it through real tool calls, asserts the reported `used`/`remaining`, and restarts the daemon against the same state to confirm the count is read from the durable ledger rather than a counter that resets on restart.
+
+A second opt-in live test (`live_capability_usage_effective_status.rs`) pins `effective` to enforcement through the real daemon: it drives three grants into `exhausted` (its single unit spent through a real tool call, after which the next call is refused), `live` (unbudgeted), and `revoked` (revoked through `RevokeCapability`, still flagged in the snapshot), asserts the query reports each status joined by signature, then restarts the daemon against the same state and re-asserts all three — so the status is shown to be derived from the durable granted/uses/revoked ledgers plus the daemon clock, not an in-memory value a restart would reset.
+
+A third opt-in live test (`live_capability_usage_subject_attribution.rs`) pins the subject through the real grant path: it grants `tool.call.echo` as the authenticated operator and asserts the entry attributes the grant to that identity by `subject_display` and `subject_pubkey_b58` (joined on the signature, the pubkey checked against the daemon's persisted identity key), then restarts the daemon against the same state and re-asserts the same subject — so the attribution is shown to be read from the durable grant ledger and the reloaded identity, not an in-memory value a restart would reset. Because `GrantCapability` assigns the subject from the authenticated peer, the live path attributes the grant to a single identity; subject-vs-grantor transposition between distinct holders stays covered by the in-process unit tests.
+
+A fourth opt-in live test (`live_capability_usage_scope_visibility.rs`) pins the `scope` through the real grant path: it grants two `tool.call.echo` capabilities with distinct scopes as the operator — differing on an `arguments.allow` constraint, since the `tool` field is bound to the action suffix — and asserts each entry reports its own signed scope verbatim, joined on the signature, then restarts the daemon against the same state and re-asserts both scopes — so the scope is shown to be read from the durable grant ledger, not an in-memory value a restart would reset. Because the operator chooses each grant's scope, the live path drives distinct scopes for one action and confirms they cannot transpose onto the shared action verb, the half the in-process unit tests prove against constructed state.
+
+A fifth opt-in live test (`live_capability_usage_operator_denial.rs`) pins the operator-only access boundary through the real daemon: the operator grants a capability and reads the usage snapshot, while a pre-seeded non-operator delegate authenticating over the same daemon is refused `Request::CapabilityUsage` outright — a `Response::Error` naming the operator requirement, carrying no grant rows — so delegated-authority state never leaks to a peer that merely holds a grant, and the refusal is not an empty-but-allowed snapshot. A bare `Ping` still round-trips on the delegate's connection, so the denial is scoped to the privileged query, not the session. The in-process unit test `capability_usage_requires_operator_identity` proves the same refusal against constructed state.
+
+A sixth opt-in live test (`live_capability_usage_expired_status.rs`) pins the `expired` verdict against the real daemon clock: it grants `tool.call.echo` with an expiry a few seconds out, confirms the entry first reports `effective: live`, then polls until the daemon clock carries the grant past its `expires_at` and the verdict flips to `expired` — a real `live → expired` transition, not a constructed status — and re-asserts `expired` across a daemon restart, so the verdict is shown to be re-derived from the durable grant ledger plus the reloaded daemon clock. The other three verdicts (`exhausted`, `live`, `revoked`) are covered by `live_capability_usage_effective_status.rs`, completing the live coverage of the `effective` field.

@@ -160,5 +160,181 @@ async fn live_stdio_mcp_surfaces_transport_closed_when_server_exits() {
         BootstrapError::Transport(e) => e,
         other => panic!("unexpected bootstrap error: {other:?}"),
     };
-    assert!(matches!(transport, McpClientError::Closed));
+    // The server exits right after the initialize response, so bootstrap's
+    // follow-up writes (notifications/initialized, tools/list) race the child's
+    // exit: either the reader observes EOF first and drains the pending request
+    // as Closed, or a follow-up write lands on an already-closed stdin and fails
+    // with a broken pipe. Both are valid "server is gone" transport failures.
+    assert!(
+        matches!(transport, McpClientError::Closed)
+            || matches!(&transport, McpClientError::Io(e) if e.kind() == std::io::ErrorKind::BrokenPipe),
+        "server exit must surface as a transport failure (Closed or broken pipe); got {transport:?}",
+    );
+}
+
+#[tokio::test]
+#[ignore = "live: spawns a real subprocess; opt-in via --ignored live_"]
+async fn live_stdio_mcp_surfaces_rpc_error_for_unknown_tool_then_stays_usable() {
+    let exe = env!("CARGO_BIN_EXE_covenant-mcp-fake-server").to_string();
+    let args = vec!["--string-ids".to_string()];
+    let client = StdioMcpClient::spawn(&exe, &args)
+        .await
+        .expect("spawn fake mcp server");
+    let client_dyn: Arc<dyn McpClient> = client;
+
+    // Keep a handle to issue a raw tools/call for a name the server never
+    // advertised; bootstrap takes ownership of one clone to run the handshake.
+    let raw = client_dyn.clone();
+    let tools = bootstrap_remote_tools(client_dyn)
+        .await
+        .expect("bootstrap remote tools over real stdio");
+
+    // A tools/call for an unknown tool comes back as a JSON-RPC error response
+    // (fake_server.rs emits code -32602), which the real stdio reader must map
+    // to McpClientError::Rpc — not Ok, and not a transport-level fault.
+    let err = raw
+        .request(
+            "tools/call",
+            serde_json::json!({ "name": "does-not-exist", "arguments": {} }),
+        )
+        .await
+        .expect_err("an unknown tool must surface as a JSON-RPC error, not Ok");
+    match err {
+        McpClientError::Rpc { code, message } => {
+            assert_eq!(
+                code, -32602,
+                "the Rpc error must preserve the server's JSON-RPC code verbatim \
+                 (fake_server.rs emits -32602 for an unknown tool); got {code}",
+            );
+            assert!(
+                message.contains("unknown tool"),
+                "the Rpc error must carry the server's diagnostic message; got {message:?}",
+            );
+        }
+        other => panic!("expected McpClientError::Rpc for an unknown tool, got {other:?}"),
+    }
+
+    // The error was scoped to the one request: the reader stayed in sync, so a
+    // subsequent call to a real tool on the same client still succeeds. A
+    // regression that desynchronized framing after an error would fail here.
+    let after = tools[0]
+        .call(serde_json::json!({ "text": "after-error" }))
+        .await
+        .expect("transport must stay usable after an rpc error on a prior request");
+    assert!(!after.is_error);
+    match &after.content[0] {
+        Content::Text { text } => assert_eq!(text, "pong: after-error"),
+        other => panic!("unexpected content after recovery: {other:?}"),
+    }
+}
+
+#[tokio::test]
+#[ignore = "live: spawns a real subprocess; opt-in via --ignored live_"]
+async fn live_stdio_mcp_closes_transport_on_oversized_response_line() {
+    let exe = env!("CARGO_BIN_EXE_covenant-mcp-fake-server").to_string();
+    let args = vec!["--oversized-response".to_string()];
+    let client = StdioMcpClient::spawn(&exe, &args)
+        .await
+        .expect("spawn fake mcp server");
+    let client_dyn: Arc<dyn McpClient> = client;
+    let raw = client_dyn.clone();
+
+    // Sanity: the transport is healthy before the flood — a normal tools/call
+    // round-trips (the fake server answers `ping` without a prior handshake).
+    // This proves the Closed below is caused by the oversized line, not a
+    // transport that was already dead.
+    let ok = raw
+        .request(
+            "tools/call",
+            serde_json::json!({ "name": "ping", "arguments": { "text": "pre-flood" } }),
+        )
+        .await
+        .expect("a normal tool call must succeed before the flood");
+    assert_eq!(ok["content"][0]["text"], "pong: pre-flood");
+
+    // The server answers a `flood` tools/call with a single stdout line larger
+    // than the transport's 16 MiB MAX_LINE_BYTES cap and no newline.
+    // read_capped_line returns InvalidData, the reader loop breaks, and —
+    // because the child is still alive (not exited) — pending requests drain
+    // with the clean-close message, mapping to McpClientError::Closed. A
+    // regression dropping the take(max + 1) bound would instead buffer the
+    // unbounded line: read_until would block on the missing newline and this
+    // call would time out. Asserting Closed (and NOT Timeout / ServerCrashed /
+    // Rpc) is what makes the per-line cap's bite real.
+    let err = raw
+        .request(
+            "tools/call",
+            serde_json::json!({ "name": "flood", "arguments": {} }),
+        )
+        .await
+        .expect_err("an over-cap response line must close the transport, not return Ok");
+    assert!(
+        matches!(err, McpClientError::Closed),
+        "an over-cap response line must surface as McpClientError::Closed (the \
+         per-line cap fires and closes the transport while the child is still \
+         alive); a Timeout here means the cap did not fire and the reader \
+         buffered an unbounded line; got {err:?}",
+    );
+}
+
+#[tokio::test]
+#[ignore = "live: spawns a real subprocess; opt-in via --ignored live_"]
+async fn live_stdio_mcp_surfaces_rpc_error_for_missing_result_and_error_then_stays_usable() {
+    let exe = env!("CARGO_BIN_EXE_covenant-mcp-fake-server").to_string();
+    let args = vec!["--missing-result-error".to_string()];
+    let client = StdioMcpClient::spawn(&exe, &args)
+        .await
+        .expect("spawn fake mcp server");
+    let client_dyn: Arc<dyn McpClient> = client;
+
+    // Keep a raw handle: bootstrap consumes one clone for the handshake, and we
+    // issue a raw tools/call for a tool the server answers with a malformed
+    // response.
+    let raw = client_dyn.clone();
+    let tools = bootstrap_remote_tools(client_dyn)
+        .await
+        .expect("bootstrap remote tools over real stdio");
+
+    // The `void` tool returns a response carrying the matching id but neither
+    // `result` nor `error`. deliver_response's (None, None) arm must synthesize
+    // a -32603 error client-side — not hang the request (no tx.send) and not
+    // treat the empty response as a success. -32603 and the message are
+    // client-side constants (transport.rs), so they are the contract here, not
+    // a value echoed by the server.
+    let err = raw
+        .request(
+            "tools/call",
+            serde_json::json!({ "name": "void", "arguments": {} }),
+        )
+        .await
+        .expect_err("a response missing both result and error must surface as an Rpc error");
+    match err {
+        McpClientError::Rpc { code, message } => {
+            assert_eq!(
+                code, -32603,
+                "the (None, None) arm must synthesize JSON-RPC internal-error code -32603; got {code}",
+            );
+            assert!(
+                message.contains("missing both"),
+                "the synthesized error must explain the malformed response; got {message:?}",
+            );
+        }
+        other => panic!(
+            "expected McpClientError::Rpc{{-32603}} for a missing-both response, got {other:?}"
+        ),
+    }
+
+    // The malformed response was scoped to the one request: the reader stayed in
+    // sync, so a subsequent call to a real tool on the same client still
+    // succeeds. A regression that desynchronized framing after the synthesized
+    // error would fail here.
+    let after = tools[0]
+        .call(serde_json::json!({ "text": "after-void" }))
+        .await
+        .expect("transport must stay usable after a missing-both response on a prior request");
+    assert!(!after.is_error);
+    match &after.content[0] {
+        Content::Text { text } => assert_eq!(text, "pong: after-void"),
+        other => panic!("unexpected content after recovery: {other:?}"),
+    }
 }

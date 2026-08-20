@@ -1,6 +1,6 @@
 # Covenant Agent OS
 
-`agent-os/` contains the local operating-layer runtime: the daemon, CLI, shared protocol crates, agent runtime, memory, identity, permissions, audit, peer auth, MCP/A2A adapters, local operator console, and settlement scaffold.
+`agent-os/` contains the local operating-layer runtime: the daemon, CLI, shared protocol crates, agent runtime, memory, identity, permissions, audit, peer auth, MCP/A2A adapters, local operator console, and the settlement program (deployed on Solana mainnet; daemon-driven lifecycle not yet production).
 
 ## Build
 
@@ -127,11 +127,17 @@ The Linux host, `runsc`, rootfs, and CI adoption contract is maintained internal
 |---|---|
 | Core protocol | `covenant-types`, `covenant-ipc`, `covenant-manifest` |
 | Control plane | `covenantd`, `covenant`, `covenant-sdk`, `covenant-router`, `covenant-runtime` |
-| Trust and policy | `covenant-identity`, `covenant-permissions`, `covenant-peer-auth`, `covenant-audit`, `covenant-budget` |
-| State and tools | `covenant-memory`, `covenant-tools`, `covenant-llm`, `covenant-mcp`, `covenant-a2a` |
+| Trust and policy | `covenant-identity`, `covenant-attestation`, `covenant-evm-signer`, `covenant-permissions`, `covenant-peer-auth`, `covenant-audit`, `covenant-budget`, `covenant-krexa` |
+| State and tools | `covenant-memory`, `covenant-tools`, `covenant-llm`, `covenant-mcp`, `covenant-a2a`, `covenant-sns`, `covenant-acedata` |
 | Compositor | `covenant-tui` |
-| Payments | `covenant-x402`, `covenant-hyre`, `covenant-zauth` |
-| Settlement | `covenant-settlement`, `covenant-stake-keeper`, `covenant-sap-bridge`, `covenant-metaplex`, `programs/settlement`, `programs/stake` |
+| Payments | `covenant-x402`, `covenant-x402-signer`, `covenant-hyre`, `covenant-zauth`, `covenant-circuit` |
+| Settlement | `covenant-settlement`, `covenant-stake-keeper`, `covenant-sap-bridge`, `covenant-metaplex`, `covenant-metaplex-signer`, `programs/settlement`, `programs/stake` |
+| Adapters | `covenant-timeline-adapter` |
+| Multichain (Base/EVM, Robinhood Chain) | `covenant-x402-signer-evm`, `covenant-evm-firewall`, `covenant-spend-permission`, `covenant-ens-gateway` |
+| Trading venues | `covenant-robinhood` |
+| Data provenance | `covenant-myrad` |
+| Enclaves | `covenant-tee` |
+| Bonded operators | `covenant-bond` |
 
 ## Operating Model
 

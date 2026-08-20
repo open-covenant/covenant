@@ -9,11 +9,11 @@
 //! result without a payment challenge. The caller pays only when the
 //! first hit is a 402.
 
-use std::time::Duration;
-
+use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use covenant_x402::Signer;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
+use std::time::Duration;
 use tracing::debug;
 
 use crate::challenge;
@@ -104,6 +104,7 @@ impl RepoScanClient {
                 status: status.as_u16(),
                 body: body_text,
                 paid_amount: None,
+                error_detail: None,
             });
         }
         if status.as_u16() != 402 {
@@ -114,6 +115,7 @@ impl RepoScanClient {
         let _drained =
             crate::http::read_capped(first, self.max_bytes, ZauthError::ResponseTooLarge).await?;
         let parsed = challenge::decode_from_headers(&headers)?;
+        let raw = challenge::decode_value_from_headers(&headers)?;
 
         let accept = challenge::select(
             &parsed.accepts,
@@ -131,10 +133,17 @@ impl RepoScanClient {
         );
 
         let requirements = challenge::to_payment_requirements(accept);
-        let header_value = signer
+        let inner = signer
             .build_payment(&requirements)
             .await
             .map_err(|e| ZauthError::Sign(e.to_string()))?;
+
+        // zauth verifies with the mainline x402 v2 matcher, which
+        // deep-equals the requirement against the payload's `accepted`.
+        // The sidecar signer returns a v1 envelope; lift its signed
+        // transaction into the v2 shape and echo the chosen accept
+        // verbatim so the match succeeds.
+        let header_value = build_v2_payment(&inner, accept_value(&raw, accept))?;
 
         let paid = self
             .http
@@ -145,6 +154,7 @@ impl RepoScanClient {
             .send()
             .await?;
         let paid_status = paid.status();
+        let paid_headers = paid.headers().clone();
         let paid_body =
             crate::http::read_capped(paid, self.max_bytes, ZauthError::ResponseTooLarge)
                 .await
@@ -152,12 +162,72 @@ impl RepoScanClient {
         let paid_amount = paid_status
             .is_success()
             .then(|| requirements.amount.clone());
+        // A rejected retry carries the reason in the same header-encoded
+        // challenge; surface it so a failure is diagnosable, not opaque.
+        let error_detail = (!paid_status.is_success())
+            .then(|| {
+                challenge::decode_value_from_headers(&paid_headers)
+                    .ok()
+                    .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from))
+            })
+            .flatten();
         Ok(RepoScanResult {
             status: paid_status.as_u16(),
             body: paid_body,
             paid_amount,
+            error_detail,
         })
     }
+}
+
+/// Pull the raw JSON of the accept option that matches the selected
+/// (typed) accept, to echo verbatim in the v2 payload. Falls back to a
+/// reconstructed object if the raw array can't be indexed.
+fn accept_value(raw_challenge: &Value, accept: &challenge::Accept) -> Value {
+    raw_challenge
+        .get("accepts")
+        .and_then(|a| a.as_array())
+        .and_then(|arr| {
+            arr.iter()
+                .find(|v| {
+                    v.get("network").and_then(|x| x.as_str()) == Some(accept.network.as_str())
+                        && v.get("payTo").and_then(|x| x.as_str()) == Some(accept.pay_to.as_str())
+                        && v.get("asset").and_then(|x| x.as_str()) == Some(accept.asset.as_str())
+                })
+                .cloned()
+        })
+        .unwrap_or_else(|| {
+            json!({
+                "scheme": accept.scheme,
+                "network": accept.network,
+                "asset": accept.asset,
+                "amount": accept.amount,
+                "payTo": accept.pay_to,
+                "maxTimeoutSeconds": accept.max_timeout_seconds,
+            })
+        })
+}
+
+/// Lift the signed transaction out of the sidecar's v1 envelope and
+/// re-wrap it in the x402 v2 payment payload zauth's matcher expects:
+/// `{x402Version:2, accepted:<chosen requirement>, payload:{transaction}}`.
+fn build_v2_payment(inner_envelope_b64: &str, accepted: Value) -> Result<String> {
+    let bytes = B64
+        .decode(inner_envelope_b64.trim())
+        .map_err(|e| ZauthError::Sign(format!("decode signer envelope: {e}")))?;
+    let v: Value = serde_json::from_slice(&bytes)
+        .map_err(|e| ZauthError::Sign(format!("parse signer envelope: {e}")))?;
+    let transaction = v
+        .get("payload")
+        .and_then(|p| p.get("transaction"))
+        .and_then(|t| t.as_str())
+        .ok_or_else(|| ZauthError::Sign("signer envelope missing payload.transaction".into()))?;
+    let envelope = json!({
+        "x402Version": 2,
+        "accepted": accepted,
+        "payload": { "transaction": transaction },
+    });
+    Ok(B64.encode(envelope.to_string().as_bytes()))
 }
 
 #[derive(Debug, Clone)]
@@ -182,15 +252,34 @@ pub struct RepoScanResult {
     /// Atomic amount actually settled. `None` when the first hit was
     /// a gratis 2xx (cached) or when the paid retry was rejected.
     pub paid_amount: Option<String>,
+    /// Reason a rejected retry carried in its challenge header (e.g.
+    /// "unsupported x402 version", "no matching payment requirements").
+    /// `None` on success or when no detail was decodable.
+    #[serde(default)]
+    pub error_detail: Option<String>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
-    use covenant_x402::MockSigner;
+    use async_trait::async_trait;
+    use covenant_x402::{PaymentRequirements, Signer};
     use wiremock::matchers::{header_exists, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// Returns the v1 envelope shape the real sidecar signer emits,
+    /// carrying a known transaction, so the v2 re-wrap path is exercised.
+    struct FakeEnvelopeSigner;
+    #[async_trait]
+    impl Signer for FakeEnvelopeSigner {
+        async fn build_payment(&self, _r: &PaymentRequirements) -> covenant_x402::Result<String> {
+            let env = json!({
+                "x402Version": 1, "scheme": "exact", "network": "solana",
+                "payload": { "transaction": "FAKETX==" }
+            });
+            Ok(B64.encode(env.to_string().as_bytes()))
+        }
+    }
 
     const LIVE_DECODED: &str = r#"{
         "x402Version": 2,
@@ -201,9 +290,9 @@ mod tests {
                 "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
                 "amount": "50000",
                 "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-                "payTo": "ZAU64eKWAgiGNux8BzvgRn8RvWqFhdMVrpJytF7V1qm",
+                "payTo": "ZAU64eKWAgiGNux8bzvgRn8RvWqFhdMVrpJytF7V1qm",
                 "maxTimeoutSeconds": 300,
-                "extra": { "feePayer": "ZAU64eKWAgiGNux8BzvgRn8RvWqFhdMVrpJytF7V1qm" }
+                "extra": { "feePayer": "ZAU64eKWAgiGNux8bzvgRn8RvWqFhdMVrpJytF7V1qm" }
             }
         ]
     }"#;
@@ -249,7 +338,10 @@ mod tests {
             .await;
 
         let client = RepoScanClient::with_base_url(reqwest::Client::new(), server.uri());
-        let result = client.scan(&req(), &MockSigner).await.expect("paid");
+        let result = client
+            .scan(&req(), &FakeEnvelopeSigner)
+            .await
+            .expect("paid");
         assert_eq!(result.status, 200);
         assert_eq!(result.paid_amount.as_deref(), Some("50000"));
         let body: serde_json::Value = serde_json::from_str(&result.body).unwrap();
@@ -269,7 +361,10 @@ mod tests {
             .await;
 
         let client = RepoScanClient::with_base_url(reqwest::Client::new(), server.uri());
-        let result = client.scan(&req(), &MockSigner).await.expect("gratis");
+        let result = client
+            .scan(&req(), &FakeEnvelopeSigner)
+            .await
+            .expect("gratis");
         assert_eq!(result.status, 200);
         assert!(result.paid_amount.is_none());
     }
@@ -284,7 +379,7 @@ mod tests {
             .await;
         let client = RepoScanClient::with_base_url(reqwest::Client::new(), server.uri());
         let err = client
-            .scan(&req(), &MockSigner)
+            .scan(&req(), &FakeEnvelopeSigner)
             .await
             .expect_err("missing header");
         assert!(matches!(err, ZauthError::MissingChallengeHeader));
@@ -299,7 +394,10 @@ mod tests {
             .mount(&server)
             .await;
         let client = RepoScanClient::with_base_url(reqwest::Client::new(), server.uri());
-        let err = client.scan(&req(), &MockSigner).await.expect_err("503");
+        let err = client
+            .scan(&req(), &FakeEnvelopeSigner)
+            .await
+            .expect_err("503");
         assert!(matches!(err, ZauthError::UnexpectedStatus(503)));
     }
 
@@ -329,7 +427,7 @@ mod tests {
 
         let client = RepoScanClient::with_base_url(reqwest::Client::new(), server.uri());
         let result = client
-            .scan(&req(), &MockSigner)
+            .scan(&req(), &FakeEnvelopeSigner)
             .await
             .expect("loop surfaces rejection, not an error");
         assert_eq!(result.status, 402);
@@ -389,7 +487,7 @@ mod tests {
             .await;
         let client = RepoScanClient::with_limits(reqwest::Client::new(), server.uri(), 64);
         let err = client
-            .scan(&req(), &MockSigner)
+            .scan(&req(), &FakeEnvelopeSigner)
             .await
             .expect_err("must reject an oversized reposcan body");
         assert!(
@@ -413,7 +511,7 @@ mod tests {
             server.uri(),
         );
         let err = client
-            .scan(&req(), &MockSigner)
+            .scan(&req(), &FakeEnvelopeSigner)
             .await
             .expect_err("must time out");
         assert!(matches!(err, ZauthError::Http(_)), "got {err:?}");

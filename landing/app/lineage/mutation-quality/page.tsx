@@ -10,44 +10,13 @@
 // the witness chain does not prove semantic correctness; this trend is
 // what visitors look at to gauge it.
 
-import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 import Link from "next/link";
 import { SiteFooter } from "@/app/SiteFooter";
 import { SiteHeader } from "@/app/SiteHeader";
+import { readNightlyRecords } from "./_records";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-type NightlyRecord = {
-  date: string;
-  scope: "in_diff" | "weekly_full";
-  total_mutations: number;
-  caught: number;
-  missed: number;
-  score: number;
-};
-
-function readNightlyRecords(): NightlyRecord[] {
-  const dir = join(process.cwd(), "public", "mutants");
-  let names: string[] = [];
-  try {
-    names = readdirSync(dir);
-  } catch {
-    return [];
-  }
-  const out: NightlyRecord[] = [];
-  for (const name of names) {
-    if (!/^\d{4}-\d{2}-\d{2}\.json$/.test(name)) continue;
-    try {
-      const r = JSON.parse(readFileSync(join(dir, name), "utf8")) as NightlyRecord;
-      out.push(r);
-    } catch {
-      // skip malformed entries
-    }
-  }
-  return out.sort((a, b) => (a.date < b.date ? 1 : -1));
-}
 
 export default function MutationQualityPage() {
   const records = readNightlyRecords();

@@ -128,8 +128,8 @@ LOCKED_AUTH=$(... find_program_address [b"vault_auth"] ...)
 BUYLOCK_AUTH=$(... find_program_address [b"buylock_auth"] ...)
 COVNT_MINT=2mNVZ6aEjrGwiUVCfz7XGWpiXuWzgBDoznwE579upump  # mainnet; on devnet use a fresh Token-2022 mint
 
-spl-token create-account $COVNT_MINT --owner $LOCKED_AUTH --fee-payer ~/.config/solana/id.json
-spl-token create-account $COVNT_MINT --owner $BUYLOCK_AUTH --fee-payer ~/.config/solana/id.json
+spl-token create-account $CVNT_MINT --owner $LOCKED_AUTH --fee-payer ~/.config/solana/id.json
+spl-token create-account $CVNT_MINT --owner $BUYLOCK_AUTH --fee-payer ~/.config/solana/id.json
 ```
 
 Record the resulting ATA addresses; both must be passed to `initialize`.

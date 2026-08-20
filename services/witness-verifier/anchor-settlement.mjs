@@ -16,8 +16,8 @@ import {
   TransactionInstruction,
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
-import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { buildBatchId, buildInstructionData } from "./anchor-lib.mjs";
 
 const arg = (n) => {
   const i = process.argv.indexOf(`--${n}`);
@@ -33,17 +33,14 @@ if (!root || !sha || !keypairPath) {
 
 const PROGRAM = new PublicKey("cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y");
 const CONFIG = new PublicKey("BGGx99dV5LU2GpKCmhXqT1mi1yNr8EuMuMd5BAG7Lcvi");
-const DISCRIMINATOR = Buffer.from([90, 207, 91, 121, 57, 61, 176, 129]); // global:anchor_receipt_batch
 
 const merkleRoot = Buffer.from(root, "hex");
 if (merkleRoot.length !== 32) {
   console.error("root must be 32 bytes of hex");
   process.exit(2);
 }
-const batchId = createHash("sha256").update(`${sha}:${root}`).digest();
-const count = Buffer.alloc(4);
-count.writeUInt32LE(1, 0);
-const data = Buffer.concat([DISCRIMINATOR, batchId, merkleRoot, count]);
+const batchId = buildBatchId(sha, root);
+const data = buildInstructionData(sha, root, 1);
 
 const [batchPda] = PublicKey.findProgramAddressSync([Buffer.from("receipt_batch"), batchId], PROGRAM);
 const authority = Keypair.fromSecretKey(Uint8Array.from(JSON.parse(readFileSync(keypairPath, "utf8"))));

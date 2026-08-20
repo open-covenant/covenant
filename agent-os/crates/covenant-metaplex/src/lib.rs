@@ -3,7 +3,7 @@
 //! Exposes the Solana digital-asset layer to Covenant agents as a set of
 //! capability-gated `metaplex.*` MCP tools, split into two surfaces:
 //!
-//! - **reads** ([`das`]) run Digital Asset Standard (DAS) queries — no
+//! - **reads** ([`das`]) run Digital Asset Standard (DAS) queries. No
 //!   keys, no spend, nothing leaves the host but a JSON-RPC call.
 //! - **writes** ([`request`], [`tools::MetaplexSigner`]) anchor Covenant
 //!   audit roots / agent identity into MPL Core assets. The daemon never
@@ -20,11 +20,14 @@ pub mod config;
 pub mod das;
 pub mod request;
 pub mod tools;
+pub mod verify;
 
-pub use config::MetaplexConfig;
+pub use config::{MetaplexConfig, COVENANT_ATTESTATION_AUTHORITY};
 pub use das::{DasClient, DasError, HttpDasClient};
 pub use request::{
-    validate_attestation_field, validate_registration_uri, validate_root_hash_hex,
-    AttestationPayload, SignerRequest, SignerResponse, ATTESTATION_SCHEMA,
+    validate_attestation_field, validate_onchain_pubkey, validate_registration_uri,
+    validate_root_hash_hex, AttestationPayload, AttestationSubject, CovenantRelease, SignerRequest,
+    SignerResponse, ATTESTATION_HASH_ALG, ATTESTATION_SCHEMA, ATTESTATION_TYPE, SUBJECT_REGISTRY,
 };
 pub use tools::{metaplex_specs, metaplex_tool, MetaplexSigner};
+pub use verify::{verify_agent, verify_attestation, AgentVerdict, AttestationVerdict};

@@ -97,6 +97,7 @@ enum ScopeNamespace {
     Settlement,
     X402,
     Secret,
+    Wallet,
 }
 
 impl ScopeNamespace {
@@ -125,6 +126,8 @@ impl ScopeNamespace {
             Some(Self::X402)
         } else if action.starts_with("secret.") {
             Some(Self::Secret)
+        } else if action.starts_with("wallet.") {
+            Some(Self::Wallet)
         } else {
             None
         }
@@ -152,6 +155,12 @@ pub fn validate_scope(action: &str, scope: &Value) -> Result<(), PermissionError
         None => return Err(invalid_scope(action, "non-empty scopes must set version 1")),
     }
 
+    // `max_uses` is a cross-namespace usage budget: it bounds how many times a
+    // grant may authorize an action and is enforced at dispatch, not here, so it
+    // is validated centrally rather than threaded through every namespace arm.
+    // Absent means unlimited, preserving every grant issued before budgets existed.
+    optional_positive_integer(action, obj, "max_uses")?;
+
     match namespace {
         ScopeNamespace::Intent | ScopeNamespace::Agent => Ok(()),
         ScopeNamespace::Tool => validate_tool_scope(action, obj),
@@ -163,6 +172,7 @@ pub fn validate_scope(action: &str, scope: &Value) -> Result<(), PermissionError
         ScopeNamespace::Settlement => validate_settlement_scope(action, obj),
         ScopeNamespace::X402 => validate_x402_scope(action, obj),
         ScopeNamespace::Secret => validate_secret_scope(action, obj),
+        ScopeNamespace::Wallet => validate_wallet_scope(action, obj),
     }
 }
 
@@ -194,6 +204,48 @@ pub fn tool_call_scope_allows(
     {
         Some(allow) => Ok(arguments == allow),
         None => Ok(true),
+    }
+}
+
+/// Scope check for an AceData generative tool call, layered on top of the
+/// generic [`tool_call_scope_allows`] gate. An operator can pin the
+/// permitted models on a `tool.call.<name>` grant with a
+/// `{"models": ["flux-pro", ...]}` scope; the daemon resolves the call's
+/// model (explicit arg or configured default) and passes it here.
+///
+/// An empty scope allows any model. A `models` list rejects any model not
+/// in it. `model` is empty for tools that select no model (search), which
+/// always pass the model gate. A `tool` field, when present, must match
+/// `tool_name`, matching [`tool_call_scope_allows`]'s shape.
+pub fn acedata_generate_scope_allows(
+    action: &str,
+    scope: &Value,
+    tool_name: &str,
+    model: &str,
+) -> Result<bool, PermissionError> {
+    validate_scope(action, scope)?;
+    if action != format!("tool.call.{tool_name}") {
+        return Ok(false);
+    }
+    let Some(obj) = scope.as_object() else {
+        return Ok(false);
+    };
+    if obj.is_empty() {
+        return Ok(true);
+    }
+    if let Some(tool) = obj.get("tool").and_then(Value::as_str) {
+        if tool != tool_name {
+            return Ok(false);
+        }
+    }
+    match obj.get("models").and_then(Value::as_array) {
+        None => Ok(true),
+        Some(models) => {
+            if model.is_empty() {
+                return Ok(true);
+            }
+            Ok(models.iter().any(|m| m.as_str() == Some(model)))
+        }
     }
 }
 
@@ -555,6 +607,51 @@ pub fn x402_pay_scope_allows(
     }
 }
 
+/// The bounds an `x402.outbound.pay` grant carries beyond its destination
+/// class. Today just the per-call ceiling: the most a single dispatched call
+/// may spend, in atomic units of the settlement asset (decimal string on the
+/// wire, parsed to `u128`) so the off-chain gate is unit-identical to the
+/// onchain grant. `None` means the grant sets no ceiling and the caller's
+/// request stands. The provider allowlist stays in [`x402_pay_scope_allows`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct X402PayBounds {
+    pub per_call_cap: Option<u128>,
+}
+
+/// The bounds of the `x402.outbound.pay` grant that admits a call to
+/// `provider`, if this scope admits it. `Ok(Some(bounds))` carries the
+/// authoritative per-call ceiling the daemon enforces; `Ok(None)` when the
+/// scope does not admit `provider`; `Err` on a malformed scope (fail closed).
+/// The daemon loops its held grants through this and lifts the first admitting
+/// grant's ceiling as the source of truth, so the per-call cap comes from the
+/// signed grant — the caller can only tighten it, never exceed it.
+pub fn x402_pay_bounds_if_admits(
+    action: &str,
+    scope: &Value,
+    provider: &str,
+) -> Result<Option<X402PayBounds>, PermissionError> {
+    if !x402_pay_scope_allows(action, scope, provider)? {
+        return Ok(None);
+    }
+    Ok(Some(x402_pay_bounds(scope)?))
+}
+
+/// Parse an `x402.outbound.pay` scope's spend ceiling. Fails closed on a
+/// malformed cap rather than silently dropping the bound. An empty or
+/// non-object scope carries no ceiling.
+pub fn x402_pay_bounds(scope: &Value) -> Result<X402PayBounds, PermissionError> {
+    let action = "x402.outbound.pay";
+    let Some(obj) = scope.as_object() else {
+        return Ok(X402PayBounds::default());
+    };
+    if obj.is_empty() {
+        return Ok(X402PayBounds::default());
+    }
+    Ok(X402PayBounds {
+        per_call_cap: decimal_u128_field(action, obj, "per_call_cap")?,
+    })
+}
+
 /// Dispatch-time gate for a daemon-mediated secret read. `secret.access` lets
 /// a holder pull a named secret from the daemon's broker instead of the secret
 /// sitting in the agent's environment; the secret `name` is free-form caller
@@ -581,6 +678,183 @@ pub fn secret_access_scope_allows(
     match obj.get("name").and_then(Value::as_str) {
         Some(allowed) => Ok(allowed == name),
         None => Ok(true),
+    }
+}
+
+/// A concrete spend the daemon is about to authorize, checked against a
+/// `wallet.spend.authorize` grant's stored scope. Every field is what the
+/// *request* asks for; the grant decides whether that is inside its bounds.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WalletSpendView<'a> {
+    pub provider: Option<&'a str>,
+    pub network: Option<&'a str>,
+    pub asset: Option<&'a str>,
+    pub amount: Option<u128>,
+}
+
+/// The bounds a `wallet.spend.authorize` grant carries in its scope. Caps are
+/// atomic units of the settlement asset (decimal strings on the wire, parsed to
+/// `u128`) so the off-chain gate is unit-identical to the onchain grant and
+/// needs no price oracle. A blank field means unbounded on that axis; an empty
+/// scope is a blanket grant (every field `None`/empty). `total_cap` is enforced
+/// authoritatively onchain — off-chain it is advisory context.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WalletSpendBounds {
+    pub providers: Vec<String>,
+    pub network: Option<String>,
+    pub asset: Option<String>,
+    pub per_call_cap: Option<u128>,
+    pub total_cap: Option<u128>,
+    pub expiry: Option<u64>,
+    pub require_quality_gate: bool,
+    pub spec_id: Option<String>,
+}
+
+/// Dispatch-time gate for a delegated onchain spend. Unlike the other
+/// predicates this is the *authoritative* source of the bound: the daemon must
+/// derive the per-call ceiling and provider allowlist from the grant, never
+/// from the caller's request. An empty scope is a blanket grant (backward
+/// compatible with the unbounded grants issued before bounds existed); a
+/// non-empty scope admits the spend only if provider ∈ `providers` (or the list
+/// is absent), network/asset match any pin, and `amount ≤ per_call_cap`.
+/// Capabilities are additive — several providers or price bands are several
+/// grants, and the daemon approves if any one admits the spend.
+pub fn wallet_spend_scope_allows(
+    action: &str,
+    scope: &Value,
+    view: WalletSpendView<'_>,
+) -> Result<bool, PermissionError> {
+    validate_scope(action, scope)?;
+    if action != "wallet.spend.authorize" {
+        return Ok(false);
+    }
+    let Some(obj) = scope.as_object() else {
+        return Ok(false);
+    };
+    if obj.is_empty() {
+        return Ok(true);
+    }
+    Ok(wallet_spend_admits(&wallet_spend_bounds(scope)?, &view))
+}
+
+/// The bounds of the grant that admits `view`, if this scope admits it.
+/// `Ok(Some(bounds))` when the scope admits the spend — the authoritative caps
+/// and allowlist the daemon enforces; `Ok(None)` when it does not admit;
+/// `Err` on a malformed scope (fail closed). The daemon loops its held grants
+/// through this and lifts the first admitting grant's bounds as the source of
+/// truth, so the per-call ceiling and provider allowlist come from the signed
+/// grant, never the caller's request.
+pub fn wallet_spend_bounds_if_admits(
+    action: &str,
+    scope: &Value,
+    view: WalletSpendView<'_>,
+) -> Result<Option<WalletSpendBounds>, PermissionError> {
+    if !wallet_spend_scope_allows(action, scope, view)? {
+        return Ok(None);
+    }
+    Ok(Some(wallet_spend_bounds(scope)?))
+}
+
+fn wallet_spend_admits(bounds: &WalletSpendBounds, view: &WalletSpendView<'_>) -> bool {
+    if !bounds.providers.is_empty()
+        && !view
+            .provider
+            .is_some_and(|p| bounds.providers.iter().any(|a| a == p))
+    {
+        return false;
+    }
+    if let Some(net) = &bounds.network {
+        if view.network != Some(net.as_str()) {
+            return false;
+        }
+    }
+    if let Some(asset) = &bounds.asset {
+        if view.asset != Some(asset.as_str()) {
+            return false;
+        }
+    }
+    if let Some(cap) = bounds.per_call_cap {
+        if view.amount.is_none_or(|a| a > cap) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Parse a `wallet.spend.authorize` scope into its bounds. Fails closed on a
+/// malformed cap or provider entry rather than silently dropping the bound.
+/// An empty or non-object scope is a blanket grant.
+pub fn wallet_spend_bounds(scope: &Value) -> Result<WalletSpendBounds, PermissionError> {
+    let action = "wallet.spend.authorize";
+    let Some(obj) = scope.as_object() else {
+        return Ok(WalletSpendBounds::default());
+    };
+    if obj.is_empty() {
+        return Ok(WalletSpendBounds::default());
+    }
+    let providers = match obj.get("providers") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(items)) => {
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                match item.as_str() {
+                    Some(s) if !s.is_empty() => out.push(s.to_string()),
+                    _ => {
+                        return Err(invalid_scope(
+                            action,
+                            "providers entries must be non-empty strings",
+                        ))
+                    }
+                }
+            }
+            out
+        }
+        Some(_) => {
+            return Err(invalid_scope(
+                action,
+                "providers must be an array of non-empty strings or null",
+            ))
+        }
+    };
+    Ok(WalletSpendBounds {
+        providers,
+        network: nonempty_owned_string(obj, "network"),
+        asset: nonempty_owned_string(obj, "asset"),
+        per_call_cap: decimal_u128_field(action, obj, "per_call_cap")?,
+        total_cap: decimal_u128_field(action, obj, "total_cap")?,
+        expiry: obj.get("expiry").and_then(Value::as_u64),
+        require_quality_gate: obj
+            .get("require_quality_gate")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        spec_id: nonempty_owned_string(obj, "spec_id"),
+    })
+}
+
+fn nonempty_owned_string(obj: &Map<String, Value>, field: &str) -> Option<String> {
+    obj.get(field)
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+fn decimal_u128_field(
+    action: &str,
+    obj: &Map<String, Value>,
+    field: &str,
+) -> Result<Option<u128>, PermissionError> {
+    match obj.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) => s.parse::<u128>().map(Some).map_err(|_| {
+            invalid_scope(
+                action,
+                format!("{field} must be a decimal u128 string or null"),
+            )
+        }),
+        Some(_) => Err(invalid_scope(
+            action,
+            format!("{field} must be a decimal u128 string or null"),
+        )),
     }
 }
 
@@ -903,11 +1177,24 @@ fn validate_settlement_scope(
 
 fn validate_x402_scope(action: &str, obj: &Map<String, Value>) -> Result<(), PermissionError> {
     optional_non_empty_string_or_null(action, obj, "provider")?;
+    optional_decimal_u128_or_null(action, obj, "per_call_cap")?;
     Ok(())
 }
 
 fn validate_secret_scope(action: &str, obj: &Map<String, Value>) -> Result<(), PermissionError> {
     optional_non_empty_string_or_null(action, obj, "name")?;
+    Ok(())
+}
+
+fn validate_wallet_scope(action: &str, obj: &Map<String, Value>) -> Result<(), PermissionError> {
+    optional_non_empty_string_array_or_null(action, obj, "providers")?;
+    optional_non_empty_string_or_null(action, obj, "network")?;
+    optional_non_empty_string_or_null(action, obj, "asset")?;
+    optional_decimal_u128_or_null(action, obj, "per_call_cap")?;
+    optional_decimal_u128_or_null(action, obj, "total_cap")?;
+    optional_positive_integer(action, obj, "expiry")?;
+    optional_bool(action, obj, "require_quality_gate")?;
+    optional_non_empty_string_or_null(action, obj, "spec_id")?;
     Ok(())
 }
 
@@ -1075,6 +1362,57 @@ fn optional_positive_integer(
     Ok(())
 }
 
+fn optional_non_empty_string_array_or_null(
+    action: &str,
+    obj: &Map<String, Value>,
+    field: &str,
+) -> Result<(), PermissionError> {
+    let Some(value) = obj.get(field) else {
+        return Ok(());
+    };
+    if value.is_null() {
+        return Ok(());
+    }
+    let Some(values) = value.as_array() else {
+        return Err(invalid_scope(
+            action,
+            format!("{field} must be an array of non-empty strings or null"),
+        ));
+    };
+    for value in values {
+        match value.as_str() {
+            Some(value) if !value.is_empty() => {}
+            _ => {
+                return Err(invalid_scope(
+                    action,
+                    format!("{field} entries must be non-empty strings"),
+                ))
+            }
+        }
+    }
+    Ok(())
+}
+
+fn optional_decimal_u128_or_null(
+    action: &str,
+    obj: &Map<String, Value>,
+    field: &str,
+) -> Result<(), PermissionError> {
+    let Some(value) = obj.get(field) else {
+        return Ok(());
+    };
+    if value.is_null() {
+        return Ok(());
+    }
+    match value.as_str() {
+        Some(value) if value.parse::<u128>().is_ok() => Ok(()),
+        _ => Err(invalid_scope(
+            action,
+            format!("{field} must be a decimal u128 string or null"),
+        )),
+    }
+}
+
 fn optional_string_array(
     action: &str,
     obj: &Map<String, Value>,
@@ -1236,6 +1574,45 @@ pub fn verify_with_clock_and_trust_root(
     verify_with_clock(signed, now_ms)
 }
 
+/// One capability's usage budget to check and consume. `signature` keys the
+/// capability; `max_uses` is the positive budget read from its signed scope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BudgetConsumeRequest {
+    pub signature: [u8; 64],
+    pub max_uses: u64,
+}
+
+/// A capability whose usage budget is already fully spent. `used` equals
+/// `max_uses` at the point of refusal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExhaustedBudget {
+    pub signature: [u8; 64],
+    pub max_uses: u64,
+    pub used: u64,
+}
+
+/// Outcome of an atomic, all-or-nothing usage-budget consume.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BudgetConsumeOutcome {
+    /// Every requested signature had budget remaining; one use was recorded for each.
+    Consumed,
+    /// At least one signature was already at `max_uses`; no budget was recorded.
+    Exhausted(Vec<ExhaustedBudget>),
+}
+
+/// One grant's introspection state: the signed grant, whether it is revoked,
+/// and how many durable uses it has recorded. `used` is the same per-signature
+/// count [`CapabilityStore::consume_uses`] maintains, read without recording a
+/// use, so an operator observes the exact budget the enforcement path would
+/// honor. Keyed implicitly by the ed25519 signature `capability` carries, so
+/// several grants for one action stay distinct.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CapabilityUsage {
+    pub capability: SignedCapability,
+    pub revoked: bool,
+    pub used: u64,
+}
+
 #[async_trait]
 pub trait CapabilityStore: Send + Sync {
     async fn record(&self, signed: SignedCapability) -> Result<(), PermissionError>;
@@ -1256,6 +1633,26 @@ pub trait CapabilityStore: Send + Sync {
     /// `granted ⊝ revoked` so a grant whose revocation has been purged is
     /// **not** resurrected. Live (non-revoked) grants are never touched.
     async fn purge_revoked_older_than(&self, before_ms: u64) -> Result<u64, PermissionError>;
+    /// Atomically check and consume one unit of usage budget for each distinct
+    /// requested signature. All-or-nothing: if any signature is already at its
+    /// `max_uses`, no budget is consumed and every exhausted signature is
+    /// returned. The count is durable and the whole check-and-consume is
+    /// serialized per store, so two concurrent callers can never both consume
+    /// the final unit. Pass only capabilities that declare a budget; an empty
+    /// request consumes nothing and returns `Consumed`.
+    async fn consume_uses(
+        &self,
+        requests: &[BudgetConsumeRequest],
+    ) -> Result<BudgetConsumeOutcome, PermissionError>;
+    /// Read-only snapshot of every grant in the ledger paired with its
+    /// revocation status and durable use count. Reads the same per-signature
+    /// counts `consume_uses` maintains without recording a use, and joins
+    /// grants to counts and revocations by the ed25519 signature so several
+    /// grants for the same action stay distinct. The snapshot is taken under
+    /// the same lock as `record`/`revoke`/`consume_uses`, so a grant, its
+    /// revocation, and its use count are read consistently with respect to a
+    /// concurrent grant/revoke/consume.
+    async fn usage_snapshot(&self) -> Result<Vec<CapabilityUsage>, PermissionError>;
 }
 
 /// Revocation record. The daemon writes one of these per `revoke()` call;
@@ -1270,9 +1667,21 @@ pub struct Revocation {
     pub revoked_at: u64,
 }
 
+/// One authorized use of a budgeted capability. The daemon appends one per
+/// authorized use and a capability's used count is the number of these whose
+/// signature matches. Never purged: a `max_uses` budget is a lifetime cap, so
+/// dropping use records would silently refill it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct UseRecord {
+    #[serde(with = "sig_b58")]
+    signature: [u8; 64],
+    at_ms: u64,
+}
+
 pub struct JsonlCapabilityStore {
     granted_path: PathBuf,
     revoked_path: PathBuf,
+    uses_path: PathBuf,
     lock: Arc<Mutex<()>>,
 }
 
@@ -1297,9 +1706,19 @@ impl JsonlCapabilityStore {
             .append(true)
             .open(&revoked_path)
             .await?;
+        let uses_path = granted_path
+            .parent()
+            .map(|p| p.join("uses.jsonl"))
+            .unwrap_or_else(|| PathBuf::from("uses.jsonl"));
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&uses_path)
+            .await?;
         Ok(Self {
             granted_path,
             revoked_path,
+            uses_path,
             lock: Arc::new(Mutex::new(())),
         })
     }
@@ -1333,6 +1752,10 @@ impl JsonlCapabilityStore {
             if trimmed.is_empty() {
                 continue;
             }
+            // Fail-closed on a malformed row rather than skipping it: a skipped
+            // revocation would let a revoked capability read back as live. The
+            // write side is responsible for never persisting an unreadable row
+            // (see `Server::enroll_peer`, which validates the subject display).
             all.push(serde_json::from_str(trimmed)?);
         }
         Ok(all)
@@ -1475,6 +1898,82 @@ impl CapabilityStore for JsonlCapabilityStore {
         Self::rewrite_atomically(&self.revoked_path, &kept_revocations).await?;
         Ok(purged)
     }
+
+    async fn consume_uses(
+        &self,
+        requests: &[BudgetConsumeRequest],
+    ) -> Result<BudgetConsumeOutcome, PermissionError> {
+        if requests.is_empty() {
+            return Ok(BudgetConsumeOutcome::Consumed);
+        }
+        // The read-count-check-append runs under the same lock as record /
+        // revoke / purge, so the budget cannot be raced: two concurrent checks
+        // for the last unit serialize, and the loser sees the count the winner
+        // appended.
+        let _g = self.lock.lock().await;
+        let mut counts: std::collections::HashMap<[u8; 64], u64> = std::collections::HashMap::new();
+        for use_record in Self::read_jsonl::<UseRecord>(&self.uses_path).await? {
+            *counts.entry(use_record.signature).or_insert(0) += 1;
+        }
+        let mut seen = std::collections::HashSet::new();
+        let mut to_consume: Vec<[u8; 64]> = Vec::new();
+        let mut exhausted: Vec<ExhaustedBudget> = Vec::new();
+        for req in requests {
+            if !seen.insert(req.signature) {
+                continue;
+            }
+            let used = counts.get(&req.signature).copied().unwrap_or(0);
+            if used >= req.max_uses {
+                exhausted.push(ExhaustedBudget {
+                    signature: req.signature,
+                    max_uses: req.max_uses,
+                    used,
+                });
+            } else {
+                to_consume.push(req.signature);
+            }
+        }
+        if !exhausted.is_empty() {
+            return Ok(BudgetConsumeOutcome::Exhausted(exhausted));
+        }
+        let at_ms = Self::epoch_ms();
+        let mut f = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.uses_path)
+            .await?;
+        for signature in to_consume {
+            let line = serde_json::to_string(&UseRecord { signature, at_ms })?;
+            f.write_all(line.as_bytes()).await?;
+            f.write_all(b"\n").await?;
+        }
+        f.flush().await?;
+        Ok(BudgetConsumeOutcome::Consumed)
+    }
+
+    async fn usage_snapshot(&self) -> Result<Vec<CapabilityUsage>, PermissionError> {
+        let _g = self.lock.lock().await;
+        let revoked: std::collections::HashSet<[u8; 64]> = self
+            .read_all_revocations()
+            .await?
+            .into_iter()
+            .map(|r| r.signature)
+            .collect();
+        let mut counts: std::collections::HashMap<[u8; 64], u64> = std::collections::HashMap::new();
+        for use_record in Self::read_jsonl::<UseRecord>(&self.uses_path).await? {
+            *counts.entry(use_record.signature).or_insert(0) += 1;
+        }
+        Ok(self
+            .read_all_grants()
+            .await?
+            .into_iter()
+            .map(|capability| CapabilityUsage {
+                used: counts.get(&capability.signature).copied().unwrap_or(0),
+                revoked: revoked.contains(&capability.signature),
+                capability,
+            })
+            .collect())
+    }
 }
 
 impl JsonlCapabilityStore {
@@ -1505,6 +2004,7 @@ impl JsonlCapabilityStore {
 pub struct InMemoryCapabilityStore {
     granted: Mutex<Vec<SignedCapability>>,
     revoked: Mutex<std::collections::HashMap<[u8; 64], u64>>,
+    uses: Mutex<std::collections::HashMap<[u8; 64], u64>>,
 }
 
 impl InMemoryCapabilityStore {
@@ -1582,6 +2082,55 @@ impl CapabilityStore for InMemoryCapabilityStore {
         granted.retain(|c| !drop_set.contains(&c.signature));
         Ok(purged)
     }
+
+    async fn consume_uses(
+        &self,
+        requests: &[BudgetConsumeRequest],
+    ) -> Result<BudgetConsumeOutcome, PermissionError> {
+        if requests.is_empty() {
+            return Ok(BudgetConsumeOutcome::Consumed);
+        }
+        let mut uses = self.uses.lock().await;
+        let mut seen = std::collections::HashSet::new();
+        let mut to_consume: Vec<[u8; 64]> = Vec::new();
+        let mut exhausted: Vec<ExhaustedBudget> = Vec::new();
+        for req in requests {
+            if !seen.insert(req.signature) {
+                continue;
+            }
+            let used = uses.get(&req.signature).copied().unwrap_or(0);
+            if used >= req.max_uses {
+                exhausted.push(ExhaustedBudget {
+                    signature: req.signature,
+                    max_uses: req.max_uses,
+                    used,
+                });
+            } else {
+                to_consume.push(req.signature);
+            }
+        }
+        if !exhausted.is_empty() {
+            return Ok(BudgetConsumeOutcome::Exhausted(exhausted));
+        }
+        for signature in to_consume {
+            *uses.entry(signature).or_insert(0) += 1;
+        }
+        Ok(BudgetConsumeOutcome::Consumed)
+    }
+
+    async fn usage_snapshot(&self) -> Result<Vec<CapabilityUsage>, PermissionError> {
+        let revoked = self.revoked.lock().await;
+        let granted = self.granted.lock().await;
+        let uses = self.uses.lock().await;
+        Ok(granted
+            .iter()
+            .map(|capability| CapabilityUsage {
+                used: uses.get(&capability.signature).copied().unwrap_or(0),
+                revoked: revoked.contains_key(&capability.signature),
+                capability: capability.clone(),
+            })
+            .collect())
+    }
 }
 
 /// Plain-English title for a signed capability action. Mirrors the catalog
@@ -1652,6 +2201,45 @@ mod tests {
     }
 
     #[test]
+    fn validate_scope_accepts_max_uses_budget_across_namespaces() {
+        // max_uses is cross-cutting: any recognized namespace may carry it.
+        assert!(validate_scope(
+            "tool.call.echo",
+            &serde_json::json!({ "version": 1, "tool": "echo", "max_uses": 3 })
+        )
+        .is_ok());
+        assert!(validate_scope(
+            "intent.publish",
+            &serde_json::json!({ "version": 1, "max_uses": 1 })
+        )
+        .is_ok());
+        assert!(validate_scope(
+            "memory.read",
+            &serde_json::json!({ "version": 1, "max_uses": 100 })
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn validate_scope_rejects_non_positive_or_non_integer_max_uses() {
+        for bad in [
+            serde_json::json!(0),
+            serde_json::json!(-1),
+            serde_json::json!(1.5),
+            serde_json::json!("5"),
+        ] {
+            let scope = serde_json::json!({ "version": 1, "max_uses": bad });
+            assert!(
+                matches!(
+                    validate_scope("tool.call.echo", &scope),
+                    Err(PermissionError::InvalidScope(_))
+                ),
+                "max_uses = {bad} must be rejected"
+            );
+        }
+    }
+
+    #[test]
     fn scope_namespace_inventory_is_frozen() {
         // Compile-time tripwire for the capability namespace grammar. A new
         // ScopeNamespace variant makes the `prefix` match non-exhaustive and
@@ -1673,6 +2261,7 @@ mod tests {
                 ScopeNamespace::Settlement => "settlement",
                 ScopeNamespace::X402 => "x402",
                 ScopeNamespace::Secret => "secret",
+                ScopeNamespace::Wallet => "wallet",
             }
         }
         let inventory: Vec<&str> = [
@@ -1688,6 +2277,7 @@ mod tests {
             ScopeNamespace::Settlement,
             ScopeNamespace::X402,
             ScopeNamespace::Secret,
+            ScopeNamespace::Wallet,
         ]
         .into_iter()
         .map(prefix)
@@ -1707,6 +2297,7 @@ mod tests {
                 "settlement",
                 "x402",
                 "secret",
+                "wallet",
             ],
             "capability namespace inventory changed — freeze the new namespace as a golden vector in tests/golden/capabilities/ and update EXPECTED_NAMESPACES in tests/golden_capabilities.rs",
         );
@@ -1816,6 +2407,13 @@ mod tests {
                 Some(ScopeNamespace::Settlement)
             ),
             "settlement.* prefix must route to ScopeNamespace::Settlement — a dropped arm sends settlement.backfill.* through the unknown-action fallthrough, where validate_scope no-ops and a junk scope is accepted at grant time on a destructive mutation gate",
+        );
+        assert!(
+            matches!(
+                ScopeNamespace::from_action("wallet.spend.authorize"),
+                Some(ScopeNamespace::Wallet)
+            ),
+            "wallet.* prefix must route to ScopeNamespace::Wallet — a dropped arm sends wallet.spend.authorize through the unknown-action fallthrough, where a bounded spend grant's per_call_cap/providers scope is never validated and a junk bound is accepted at grant time on the money-moving gate",
         );
 
         // Unknown-action fallthrough: an action without any documented
@@ -2355,6 +2953,61 @@ mod tests {
             ),
             Err(PermissionError::InvalidScope(_))
         ));
+    }
+
+    #[test]
+    fn acedata_scope_empty_allows_any_model() {
+        assert!(acedata_generate_scope_allows(
+            "tool.call.acedata.image.generate",
+            &serde_json::json!({}),
+            "acedata.image.generate",
+            "flux-pro"
+        )
+        .unwrap());
+    }
+
+    #[test]
+    fn acedata_scope_models_allowlist_filters() {
+        let scope = serde_json::json!({ "version": 1, "models": ["flux-pro", "flux-dev"] });
+        assert!(acedata_generate_scope_allows(
+            "tool.call.acedata.image.generate",
+            &scope,
+            "acedata.image.generate",
+            "flux-pro"
+        )
+        .unwrap());
+        assert!(!acedata_generate_scope_allows(
+            "tool.call.acedata.image.generate",
+            &scope,
+            "acedata.image.generate",
+            "flux-2-max"
+        )
+        .unwrap());
+    }
+
+    #[test]
+    fn acedata_scope_empty_model_bypasses_model_gate() {
+        // Search resolves to no model and must pass even under a models
+        // list — the gate only constrains tools that select a model.
+        let scope = serde_json::json!({ "version": 1, "models": ["flux-pro"] });
+        assert!(acedata_generate_scope_allows(
+            "tool.call.acedata.search",
+            &scope,
+            "acedata.search",
+            ""
+        )
+        .unwrap());
+    }
+
+    #[test]
+    fn acedata_scope_rejects_action_tool_mismatch() {
+        assert!(!acedata_generate_scope_allows(
+            "tool.call.acedata.search",
+            &serde_json::json!({}),
+            "acedata.image.generate",
+            "flux-pro"
+        )
+        .unwrap());
     }
 
     #[test]
@@ -3479,6 +4132,74 @@ mod tests {
     }
 
     #[test]
+    fn x402_pay_bounds_if_admits_lifts_grant_ceiling() {
+        // The load-bearing binding: a provider-scoped grant that sets a per-call
+        // ceiling admits its class and surfaces the ceiling, so the daemon enforces
+        // the grant's cap rather than trusting the caller's requested cap.
+        let scope = serde_json::json!({
+            "version": 1,
+            "provider": "xona",
+            "per_call_cap": "500000",
+        });
+        let admitted = x402_pay_bounds_if_admits("x402.outbound.pay", &scope, "xona")
+            .unwrap()
+            .expect("granted provider must be admitted");
+        assert_eq!(admitted.per_call_cap, Some(500_000));
+        // A destination outside the class is not admitted, so no ceiling leaks
+        // from a grant that never authorized it.
+        assert_eq!(
+            x402_pay_bounds_if_admits("x402.outbound.pay", &scope, "evil-corp").unwrap(),
+            None,
+            "an out-of-class provider must not be admitted"
+        );
+    }
+
+    #[test]
+    fn x402_pay_bounds_if_admits_unbounded_grant_carries_no_ceiling() {
+        // A blanket grant and a provider-scoped grant that omits per_call_cap both
+        // admit but carry no ceiling (None): the caller's requested cap stands,
+        // preserving the behavior of every grant issued before caps existed.
+        for scope in [
+            serde_json::json!({}),
+            serde_json::json!({ "version": 1 }),
+            serde_json::json!({ "version": 1, "provider": "xona" }),
+        ] {
+            let admitted = x402_pay_bounds_if_admits("x402.outbound.pay", &scope, "xona")
+                .unwrap()
+                .expect("grant must admit xona");
+            assert_eq!(
+                admitted.per_call_cap, None,
+                "a grant with no per_call_cap must carry no ceiling: {scope}"
+            );
+        }
+    }
+
+    #[test]
+    fn x402_pay_bounds_if_admits_fails_closed_on_malformed_cap() {
+        // per_call_cap is validated as a decimal u128 string or null. A non-string
+        // or non-decimal cap is a malformed grant the resolver must surface as Err
+        // (caller fails closed), never silently drop to an unbounded ceiling.
+        for bad in [
+            serde_json::json!({ "version": 1, "provider": "xona", "per_call_cap": 500000 }),
+            serde_json::json!({ "version": 1, "provider": "xona", "per_call_cap": "1.5" }),
+        ] {
+            assert!(
+                x402_pay_bounds_if_admits("x402.outbound.pay", &bad, "xona").is_err(),
+                "a malformed per_call_cap must fail closed: {bad}"
+            );
+            assert!(
+                validate_scope("x402.outbound.pay", &bad).is_err(),
+                "a malformed per_call_cap must be rejected at grant time: {bad}"
+            );
+        }
+        assert!(validate_scope(
+            "x402.outbound.pay",
+            &serde_json::json!({ "version": 1, "provider": "xona", "per_call_cap": "500000" })
+        )
+        .is_ok());
+    }
+
+    #[test]
     fn secret_access_scope_allows_unscoped_grant_permits_any_secret() {
         // An empty scope and a version-only scope are both unbounded: a blanket
         // secret.access grant authorizes reading any named secret. A regression
@@ -3556,6 +4277,284 @@ mod tests {
             &serde_json::json!({ "version": 1, "name": "openai-api-key" })
         )
         .is_ok());
+    }
+
+    fn spend_view<'a>(
+        provider: &'a str,
+        network: &'a str,
+        asset: &'a str,
+        amount: u128,
+    ) -> WalletSpendView<'a> {
+        WalletSpendView {
+            provider: Some(provider),
+            network: Some(network),
+            asset: Some(asset),
+            amount: Some(amount),
+        }
+    }
+
+    #[test]
+    fn wallet_spend_scope_allows_blanket_grant_permits_any_spend() {
+        // Empty and version-only scopes are blanket grants: they authorize any
+        // provider/network/asset/amount. This is the backward-compat path — the
+        // grants issued before bounds existed carry no scope, and the daemon's
+        // existing behavior (cap taken from the request) must survive.
+        for scope in [serde_json::json!({}), serde_json::json!({ "version": 1 })] {
+            assert!(wallet_spend_scope_allows(
+                "wallet.spend.authorize",
+                &scope,
+                spend_view("orbserv", "eip155:42161", "0x5fc5", 9_999_999)
+            )
+            .unwrap());
+        }
+    }
+
+    #[test]
+    fn wallet_spend_scope_allows_binds_provider_allowlist() {
+        // The allowlist is the security property: a grant funding an agent to
+        // pay orbserv/circuit must refuse a spend to anyone else, and must
+        // refuse a spend that names no provider at all.
+        let scope = serde_json::json!({
+            "version": 1,
+            "providers": ["orbserv", "circuit"],
+        });
+        assert!(wallet_spend_scope_allows(
+            "wallet.spend.authorize",
+            &scope,
+            spend_view("orbserv", "eip155:42161", "0x5fc5", 10)
+        )
+        .unwrap());
+        assert!(!wallet_spend_scope_allows(
+            "wallet.spend.authorize",
+            &scope,
+            spend_view("evil-corp", "eip155:42161", "0x5fc5", 10)
+        )
+        .unwrap());
+        let no_provider = WalletSpendView {
+            provider: None,
+            ..spend_view("", "eip155:42161", "0x5fc5", 10)
+        };
+        assert!(
+            !wallet_spend_scope_allows("wallet.spend.authorize", &scope, no_provider).unwrap(),
+            "an allowlisted grant must refuse a spend that names no provider"
+        );
+    }
+
+    #[test]
+    fn wallet_spend_scope_allows_enforces_per_call_cap() {
+        // The ceiling is atomic units of the settlement asset. Amount at the
+        // ceiling is allowed; one unit over is refused; a spend that states no
+        // amount cannot clear a capped grant.
+        let scope = serde_json::json!({ "version": 1, "per_call_cap": "1000000" });
+        assert!(wallet_spend_scope_allows(
+            "wallet.spend.authorize",
+            &scope,
+            spend_view("orbserv", "eip155:42161", "0x5fc5", 1_000_000)
+        )
+        .unwrap());
+        assert!(!wallet_spend_scope_allows(
+            "wallet.spend.authorize",
+            &scope,
+            spend_view("orbserv", "eip155:42161", "0x5fc5", 1_000_001)
+        )
+        .unwrap());
+        let no_amount = WalletSpendView {
+            amount: None,
+            ..spend_view("orbserv", "eip155:42161", "0x5fc5", 0)
+        };
+        assert!(!wallet_spend_scope_allows("wallet.spend.authorize", &scope, no_amount).unwrap());
+    }
+
+    #[test]
+    fn wallet_spend_scope_allows_pins_network_and_asset() {
+        // A network/asset-pinned grant refuses a spend on any other rail or
+        // token; absent pins leave those axes unbounded.
+        let scope = serde_json::json!({
+            "version": 1,
+            "network": "eip155:42161",
+            "asset": "0x5fc5",
+        });
+        assert!(wallet_spend_scope_allows(
+            "wallet.spend.authorize",
+            &scope,
+            spend_view("orbserv", "eip155:42161", "0x5fc5", 10)
+        )
+        .unwrap());
+        assert!(!wallet_spend_scope_allows(
+            "wallet.spend.authorize",
+            &scope,
+            spend_view("orbserv", "eip155:8453", "0x5fc5", 10)
+        )
+        .unwrap());
+        assert!(!wallet_spend_scope_allows(
+            "wallet.spend.authorize",
+            &scope,
+            spend_view("orbserv", "eip155:42161", "0xdead", 10)
+        )
+        .unwrap());
+    }
+
+    #[test]
+    fn wallet_spend_scope_allows_rejects_action_mismatch() {
+        // The predicate binds only wallet.spend.authorize. A settle grant, or
+        // any unrelated action, must not authorize a spend.
+        let scope = serde_json::json!({ "version": 1, "per_call_cap": "1000000" });
+        for action in ["wallet.spend.settle", "x402.outbound.pay", "tool.call.echo"] {
+            assert!(!wallet_spend_scope_allows(
+                action,
+                &scope,
+                spend_view("orbserv", "eip155:42161", "0x5fc5", 10)
+            )
+            .unwrap());
+        }
+    }
+
+    #[test]
+    fn wallet_spend_scope_allows_propagates_malformed_rejection() {
+        // Malformed bounds fail closed as Err, never as a silent unbounded grant.
+        let view = spend_view("orbserv", "eip155:42161", "0x5fc5", 10);
+        let bad_cap_type = serde_json::json!({ "version": 1, "per_call_cap": 1000000 });
+        assert!(wallet_spend_scope_allows("wallet.spend.authorize", &bad_cap_type, view).is_err());
+        let bad_cap_str = serde_json::json!({ "version": 1, "per_call_cap": "1.5" });
+        assert!(wallet_spend_scope_allows("wallet.spend.authorize", &bad_cap_str, view).is_err());
+        let empty_provider = serde_json::json!({ "version": 1, "providers": ["orbserv", ""] });
+        assert!(
+            wallet_spend_scope_allows("wallet.spend.authorize", &empty_provider, view).is_err()
+        );
+        let non_array = serde_json::json!({ "version": 1, "providers": "orbserv" });
+        assert!(wallet_spend_scope_allows("wallet.spend.authorize", &non_array, view).is_err());
+    }
+
+    #[test]
+    fn validate_payments_scope_routes_and_requires_version() {
+        // wallet.spend.* routes to validate_payments_scope. A well-formed bounded
+        // scope is accepted; a non-empty scope without version 1 is rejected;
+        // malformed caps/providers are rejected at grant time.
+        assert!(validate_scope(
+            "wallet.spend.authorize",
+            &serde_json::json!({
+                "version": 1,
+                "providers": ["orbserv"],
+                "network": "eip155:42161",
+                "asset": "0x5fc5",
+                "per_call_cap": "1000000",
+                "total_cap": "50000000",
+                "expiry": 1790000000u64,
+                "require_quality_gate": true,
+                "spec_id": "sha256:abc",
+            })
+        )
+        .is_ok());
+        assert!(validate_scope(
+            "wallet.spend.authorize",
+            &serde_json::json!({ "providers": ["orbserv"] })
+        )
+        .is_err());
+        assert!(validate_scope(
+            "wallet.spend.authorize",
+            &serde_json::json!({ "version": 1, "total_cap": "not-a-number" })
+        )
+        .is_err());
+        assert!(
+            validate_scope("wallet.spend.settle", &serde_json::json!({ "version": 1 })).is_ok()
+        );
+    }
+
+    #[test]
+    fn wallet_spend_bounds_parses_full_scope() {
+        let scope = serde_json::json!({
+            "version": 1,
+            "providers": ["orbserv", "circuit"],
+            "network": "eip155:42161",
+            "asset": "0x5fc5",
+            "per_call_cap": "1000000",
+            "total_cap": "50000000",
+            "expiry": 1790000000u64,
+            "require_quality_gate": true,
+            "spec_id": "sha256:abc",
+        });
+        let bounds = wallet_spend_bounds(&scope).unwrap();
+        assert_eq!(
+            bounds,
+            WalletSpendBounds {
+                providers: vec!["orbserv".into(), "circuit".into()],
+                network: Some("eip155:42161".into()),
+                asset: Some("0x5fc5".into()),
+                per_call_cap: Some(1_000_000),
+                total_cap: Some(50_000_000),
+                expiry: Some(1_790_000_000),
+                require_quality_gate: true,
+                spec_id: Some("sha256:abc".into()),
+            }
+        );
+    }
+
+    #[test]
+    fn wallet_spend_bounds_blanket_is_default() {
+        assert_eq!(
+            wallet_spend_bounds(&serde_json::json!({})).unwrap(),
+            WalletSpendBounds::default()
+        );
+        assert_eq!(
+            wallet_spend_bounds(&serde_json::json!("not-an-object")).unwrap(),
+            WalletSpendBounds::default()
+        );
+    }
+
+    #[test]
+    fn wallet_spend_bounds_if_admits_lifts_bounds_or_denies() {
+        let scope = serde_json::json!({
+            "version": 1,
+            "providers": ["orbserv"],
+            "network": "eip155:42161",
+            "asset": "0x5fc5",
+            "per_call_cap": "1000000",
+        });
+        let admitted = wallet_spend_bounds_if_admits(
+            "wallet.spend.authorize",
+            &scope,
+            spend_view("orbserv", "eip155:42161", "0x5fc5", 900_000),
+        )
+        .unwrap()
+        .expect("in-bounds spend lifts the grant's bounds");
+        assert_eq!(admitted.providers, vec!["orbserv".to_string()]);
+        assert_eq!(admitted.per_call_cap, Some(1_000_000));
+
+        // A stranger provider is outside the allowlist -> no bounds, deny.
+        assert!(wallet_spend_bounds_if_admits(
+            "wallet.spend.authorize",
+            &scope,
+            spend_view("stranger", "eip155:42161", "0x5fc5", 900_000),
+        )
+        .unwrap()
+        .is_none());
+
+        // Over the per-call ceiling -> deny.
+        assert!(wallet_spend_bounds_if_admits(
+            "wallet.spend.authorize",
+            &scope,
+            spend_view("orbserv", "eip155:42161", "0x5fc5", 1_000_001),
+        )
+        .unwrap()
+        .is_none());
+
+        // A blanket grant admits and lifts default (unbounded) bounds.
+        let blanket = wallet_spend_bounds_if_admits(
+            "wallet.spend.authorize",
+            &serde_json::json!({}),
+            spend_view("anyone", "solana:mainnet", "USDC", u128::MAX),
+        )
+        .unwrap()
+        .expect("blanket grant admits");
+        assert_eq!(blanket, WalletSpendBounds::default());
+
+        // Malformed scope fails closed.
+        assert!(wallet_spend_bounds_if_admits(
+            "wallet.spend.authorize",
+            &serde_json::json!({ "version": 1, "per_call_cap": 5 }),
+            spend_view("orbserv", "eip155:42161", "0x5fc5", 1),
+        )
+        .is_err());
     }
 
     #[test]
@@ -4309,6 +5308,428 @@ mod tests {
         let recent = s2.recent(10).await.unwrap();
         assert_eq!(recent.len(), 1);
         assert!(verify(&recent[0]).is_ok());
+    }
+
+    #[tokio::test]
+    async fn in_memory_consume_uses_allows_up_to_max_then_exhausts() {
+        let store = InMemoryCapabilityStore::new();
+        let reqs = [BudgetConsumeRequest {
+            signature: [3u8; 64],
+            max_uses: 2,
+        }];
+        assert_eq!(
+            store.consume_uses(&reqs).await.unwrap(),
+            BudgetConsumeOutcome::Consumed
+        );
+        assert_eq!(
+            store.consume_uses(&reqs).await.unwrap(),
+            BudgetConsumeOutcome::Consumed
+        );
+        assert_eq!(
+            store.consume_uses(&reqs).await.unwrap(),
+            BudgetConsumeOutcome::Exhausted(vec![ExhaustedBudget {
+                signature: [3u8; 64],
+                max_uses: 2,
+                used: 2,
+            }]),
+            "the use after the budget is spent must refuse and report used == max_uses",
+        );
+    }
+
+    #[tokio::test]
+    async fn in_memory_consume_uses_is_all_or_nothing_across_signatures() {
+        let store = InMemoryCapabilityStore::new();
+        let spent = [4u8; 64];
+        let fresh = [5u8; 64];
+        store
+            .consume_uses(&[BudgetConsumeRequest {
+                signature: spent,
+                max_uses: 1,
+            }])
+            .await
+            .unwrap();
+
+        // Batch mixes the already-spent signature with a fresh one. The whole
+        // batch must refuse, and the fresh signature must NOT be consumed.
+        let outcome = store
+            .consume_uses(&[
+                BudgetConsumeRequest {
+                    signature: spent,
+                    max_uses: 1,
+                },
+                BudgetConsumeRequest {
+                    signature: fresh,
+                    max_uses: 1,
+                },
+            ])
+            .await
+            .unwrap();
+        assert_eq!(
+            outcome,
+            BudgetConsumeOutcome::Exhausted(vec![ExhaustedBudget {
+                signature: spent,
+                max_uses: 1,
+                used: 1,
+            }])
+        );
+        assert_eq!(
+            store
+                .consume_uses(&[BudgetConsumeRequest {
+                    signature: fresh,
+                    max_uses: 1,
+                }])
+                .await
+                .unwrap(),
+            BudgetConsumeOutcome::Consumed,
+            "the fresh signature must still have its full budget — the failed batch consumed nothing",
+        );
+    }
+
+    #[tokio::test]
+    async fn in_memory_consume_uses_charges_a_duplicated_signature_once_per_batch() {
+        let store = InMemoryCapabilityStore::new();
+        let sig = [7u8; 64];
+
+        // A batch that repeats one signature must charge it once, not once per
+        // copy: the dedup arm (`if !seen.insert(..) { continue }`) is what stops
+        // a duplicated request from debiting a max_uses:2 grant twice in a single
+        // call and spending its whole budget at once.
+        assert_eq!(
+            store
+                .consume_uses(&[
+                    BudgetConsumeRequest {
+                        signature: sig,
+                        max_uses: 2,
+                    },
+                    BudgetConsumeRequest {
+                        signature: sig,
+                        max_uses: 2,
+                    },
+                ])
+                .await
+                .unwrap(),
+            BudgetConsumeOutcome::Consumed
+        );
+
+        // Exactly one unit was consumed, so a second real use still fits. Without
+        // the dedup this call would already be Exhausted.
+        assert_eq!(
+            store
+                .consume_uses(&[BudgetConsumeRequest {
+                    signature: sig,
+                    max_uses: 2,
+                }])
+                .await
+                .unwrap(),
+            BudgetConsumeOutcome::Consumed,
+            "the duplicate batch must consume one unit, leaving budget for one more",
+        );
+
+        // And the budget is exactly spent at used == max_uses, not over-spent.
+        assert_eq!(
+            store
+                .consume_uses(&[BudgetConsumeRequest {
+                    signature: sig,
+                    max_uses: 2,
+                }])
+                .await
+                .unwrap(),
+            BudgetConsumeOutcome::Exhausted(vec![ExhaustedBudget {
+                signature: sig,
+                max_uses: 2,
+                used: 2,
+            }]),
+        );
+    }
+
+    #[tokio::test]
+    async fn consume_uses_empty_request_consumes_nothing() {
+        let store = InMemoryCapabilityStore::new();
+        assert_eq!(
+            store.consume_uses(&[]).await.unwrap(),
+            BudgetConsumeOutcome::Consumed
+        );
+    }
+
+    #[tokio::test]
+    async fn jsonl_consume_uses_persists_across_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("capabilities").join("granted.jsonl");
+        let reqs = [BudgetConsumeRequest {
+            signature: [9u8; 64],
+            max_uses: 1,
+        }];
+
+        let s = JsonlCapabilityStore::open(path.clone()).await.unwrap();
+        assert_eq!(
+            s.consume_uses(&reqs).await.unwrap(),
+            BudgetConsumeOutcome::Consumed
+        );
+        drop(s);
+
+        // A fresh store over the same directory must see the spent budget: the
+        // count lives in uses.jsonl, not in memory, so a daemon restart cannot
+        // refill it.
+        let s2 = JsonlCapabilityStore::open(path).await.unwrap();
+        assert_eq!(
+            s2.consume_uses(&reqs).await.unwrap(),
+            BudgetConsumeOutcome::Exhausted(vec![ExhaustedBudget {
+                signature: [9u8; 64],
+                max_uses: 1,
+                used: 1,
+            }])
+        );
+    }
+
+    #[tokio::test]
+    async fn jsonl_consume_uses_charges_a_duplicated_signature_once_across_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("capabilities").join("granted.jsonl");
+        let sig = [13u8; 64];
+
+        let s = JsonlCapabilityStore::open(path.clone()).await.unwrap();
+        assert_eq!(
+            s.consume_uses(&[
+                BudgetConsumeRequest {
+                    signature: sig,
+                    max_uses: 2,
+                },
+                BudgetConsumeRequest {
+                    signature: sig,
+                    max_uses: 2,
+                },
+            ])
+            .await
+            .unwrap(),
+            BudgetConsumeOutcome::Consumed
+        );
+        drop(s);
+
+        // The durable ledger must hold exactly one UseRecord for the duplicated
+        // batch. A fresh store replays the count from uses.jsonl, so a second
+        // real use still fits and only the third exhausts the max_uses:2 budget.
+        // Two appended lines would leave the reopened budget already spent.
+        let s2 = JsonlCapabilityStore::open(path).await.unwrap();
+        assert_eq!(
+            s2.consume_uses(&[BudgetConsumeRequest {
+                signature: sig,
+                max_uses: 2,
+            }])
+            .await
+            .unwrap(),
+            BudgetConsumeOutcome::Consumed,
+            "a duplicated request must append one UseRecord, not two",
+        );
+        assert_eq!(
+            s2.consume_uses(&[BudgetConsumeRequest {
+                signature: sig,
+                max_uses: 2,
+            }])
+            .await
+            .unwrap(),
+            BudgetConsumeOutcome::Exhausted(vec![ExhaustedBudget {
+                signature: sig,
+                max_uses: 2,
+                used: 2,
+            }]),
+        );
+    }
+
+    #[tokio::test]
+    async fn jsonl_consume_uses_serializes_concurrent_last_unit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("capabilities").join("granted.jsonl");
+        let store = JsonlCapabilityStore::open(path).await.unwrap();
+        let reqs = [BudgetConsumeRequest {
+            signature: [11u8; 64],
+            max_uses: 1,
+        }];
+
+        // Two checks race for the single remaining unit. Exactly one may win.
+        let (r1, r2) = tokio::join!(store.consume_uses(&reqs), store.consume_uses(&reqs));
+        let outcomes = [r1.unwrap(), r2.unwrap()];
+        let consumed = outcomes
+            .iter()
+            .filter(|o| matches!(o, BudgetConsumeOutcome::Consumed))
+            .count();
+        let exhausted = outcomes
+            .iter()
+            .filter(|o| matches!(o, BudgetConsumeOutcome::Exhausted(_)))
+            .count();
+        assert_eq!(
+            consumed, 1,
+            "exactly one concurrent check may consume the last unit"
+        );
+        assert_eq!(exhausted, 1, "the loser must be refused, not also pass");
+    }
+
+    #[tokio::test]
+    async fn in_memory_usage_snapshot_reports_durable_count_without_recording() {
+        let issuer = LocalIdentity::generate("authority@local");
+        let subject = LocalIdentity::generate("research@local").agent_id();
+        let store = InMemoryCapabilityStore::new();
+        let signed = sign(
+            cap(subject, "tool.web_search", issuer.agent_id(), None),
+            issuer.signing_key(),
+        );
+        let sig = signed.signature;
+        store.record(signed).await.unwrap();
+
+        let snap = store.usage_snapshot().await.unwrap();
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0].capability.signature, sig);
+        assert_eq!(
+            snap[0].used, 0,
+            "a grant with no recorded use reports used == 0"
+        );
+        assert!(!snap[0].revoked);
+
+        store
+            .consume_uses(&[BudgetConsumeRequest {
+                signature: sig,
+                max_uses: 2,
+            }])
+            .await
+            .unwrap();
+
+        // Reading the snapshot is observation, not consumption: repeated reads
+        // never bump the count.
+        assert_eq!(store.usage_snapshot().await.unwrap()[0].used, 1);
+        assert_eq!(store.usage_snapshot().await.unwrap()[0].used, 1);
+
+        // The used count the snapshot reports is the exact budget the
+        // enforcement path honors: one unit remains, so one more consume passes
+        // and the next is refused. Had the snapshot recorded a use, this consume
+        // would already be exhausted.
+        assert_eq!(
+            store
+                .consume_uses(&[BudgetConsumeRequest {
+                    signature: sig,
+                    max_uses: 2,
+                }])
+                .await
+                .unwrap(),
+            BudgetConsumeOutcome::Consumed,
+        );
+        assert!(matches!(
+            store
+                .consume_uses(&[BudgetConsumeRequest {
+                    signature: sig,
+                    max_uses: 2,
+                }])
+                .await
+                .unwrap(),
+            BudgetConsumeOutcome::Exhausted(_),
+        ));
+        assert_eq!(store.usage_snapshot().await.unwrap()[0].used, 2);
+    }
+
+    #[tokio::test]
+    async fn jsonl_usage_snapshot_reads_durable_ledger_after_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("capabilities").join("granted.jsonl");
+        let issuer = LocalIdentity::generate("authority@local");
+        let subject = LocalIdentity::generate("research@local").agent_id();
+
+        let s = JsonlCapabilityStore::open(path.clone()).await.unwrap();
+        let signed = sign(
+            cap(subject, "tool.web_search", issuer.agent_id(), None),
+            issuer.signing_key(),
+        );
+        let sig = signed.signature;
+        s.record(signed).await.unwrap();
+        s.consume_uses(&[BudgetConsumeRequest {
+            signature: sig,
+            max_uses: 3,
+        }])
+        .await
+        .unwrap();
+        drop(s);
+
+        // A fresh store over the same directory recomputes the count from
+        // uses.jsonl — the same on-disk ledger consume_uses folds — so the
+        // snapshot cannot advertise a budget a restart would have refilled.
+        let s2 = JsonlCapabilityStore::open(path).await.unwrap();
+        let snap = s2.usage_snapshot().await.unwrap();
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0].capability.signature, sig);
+        assert_eq!(snap[0].used, 1);
+        assert!(!snap[0].revoked);
+    }
+
+    #[tokio::test]
+    async fn jsonl_usage_snapshot_keys_use_count_by_signature_not_action() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("capabilities").join("granted.jsonl");
+        let issuer = LocalIdentity::generate("authority@local");
+        let alice = LocalIdentity::generate("alice@local").agent_id();
+        let bob = LocalIdentity::generate("bob@local").agent_id();
+        let store = JsonlCapabilityStore::open(path).await.unwrap();
+
+        // Two grants for the SAME action but distinct subjects, so distinct
+        // signatures. A join keyed on the action would smear their budgets
+        // together; keyed on the signature they stay separate.
+        let a = sign(
+            cap(alice, "tool.web_search", issuer.agent_id(), None),
+            issuer.signing_key(),
+        );
+        let b = sign(
+            cap(bob, "tool.web_search", issuer.agent_id(), None),
+            issuer.signing_key(),
+        );
+        let (sig_a, sig_b) = (a.signature, b.signature);
+        assert_ne!(sig_a, sig_b);
+        store.record(a).await.unwrap();
+        store.record(b).await.unwrap();
+
+        for _ in 0..2 {
+            store
+                .consume_uses(&[BudgetConsumeRequest {
+                    signature: sig_a,
+                    max_uses: 9,
+                }])
+                .await
+                .unwrap();
+        }
+        store
+            .consume_uses(&[BudgetConsumeRequest {
+                signature: sig_b,
+                max_uses: 9,
+            }])
+            .await
+            .unwrap();
+
+        let snap = store.usage_snapshot().await.unwrap();
+        let used_of = |sig: [u8; 64]| {
+            snap.iter()
+                .find(|u| u.capability.signature == sig)
+                .unwrap()
+                .used
+        };
+        assert_eq!(used_of(sig_a), 2);
+        assert_eq!(used_of(sig_b), 1);
+    }
+
+    #[tokio::test]
+    async fn usage_snapshot_includes_revoked_grants_flagged() {
+        let issuer = LocalIdentity::generate("authority@local");
+        let subject = LocalIdentity::generate("research@local").agent_id();
+        let store = InMemoryCapabilityStore::new();
+        let signed = sign(
+            cap(subject, "tool.web_search", issuer.agent_id(), None),
+            issuer.signing_key(),
+        );
+        let sig = signed.signature;
+        store.record(signed).await.unwrap();
+        assert!(store.revoke(sig).await.unwrap());
+
+        // A revoked grant still appears, flagged, so the operator sees the full
+        // delegated-authority history — the live set (recent/list_for_subject)
+        // drops it.
+        let snap = store.usage_snapshot().await.unwrap();
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0].capability.signature, sig);
+        assert!(snap[0].revoked);
     }
 
     #[tokio::test]

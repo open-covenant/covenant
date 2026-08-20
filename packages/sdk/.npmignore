@@ -1,0 +1,3 @@
+# The build output (dist/) is gitignored, but it is exactly what ships.
+# With this file present npm stops falling back to .gitignore, so the
+# "files" allowlist in package.json is the single source of truth.

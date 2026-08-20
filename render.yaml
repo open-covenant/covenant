@@ -64,6 +64,19 @@ services:
         value: http://covenant-coding-gateway:10000/v1  # gateway binds Render's $PORT=10000; delegates + seeds the coder agent
       - key: COVENANT_LIVE_TRACE
         value: "1"  # publish runtime traces to the broadcast fan-out the web SSE endpoint (`/intents/:id/events`) subscribes to; without this the watch-it-work view sees zero frames and flips to "disconnected" when an upstream proxy timeout closes the silent stream
+      # Spend-grant escrow attestor (Robinhood Chain, USDG settlement). Off
+      # until the operator enables it in the dashboard, so a blueprint push can
+      # never arm settlement by accident. The dashboard secrets below are
+      # declared here so Render stores them; to go live also set:
+      #   COVENANT_SPENDGRANT_ENABLED=1
+      #   COVENANT_SPENDGRANT_CHAIN=4663                                  (46630 = testnet)
+      #   COVENANT_SPENDGRANT_ATTESTOR_KEY=/data/keys/spendgrant-attestor.json  (address = escrow `attestor` role)
+      - key: COVENANT_SPENDGRANT_ESCROW
+        sync: false  # deployed SpendGrantEscrow address (0x…); set in dashboard
+      - key: COVENANT_SPENDGRANT_RPC
+        sync: false  # Robinhood Chain JSON-RPC (may carry api key); enables the in-process submitter
+      - key: COVENANT_SPENDGRANT_SUBMITTER_KEY
+        sync: false  # funded gas-payer secret (0x… hex); set in dashboard
       - fromGroup: covenant-sandbox-shared
 
   - type: web
@@ -103,6 +116,28 @@ services:
   # `covenant-web` service (rootDir: landing), configured outside this blueprint.
   # It carries AGENT_INGEST_TOKEN for the live build-terminal feed and must stay
   # a SINGLE instance (the SSE bus is in-process).
+
+  - type: web
+    name: covenant-trust
+    runtime: docker
+    plan: free
+    region: frankfurt
+    autoDeployTrigger: commit
+    dockerfilePath: ./services/covenant-trust-mcp/Dockerfile
+    dockerContext: ./services/covenant-trust-mcp
+    healthCheckPath: /health
+    buildFilter:
+      paths:
+        - services/covenant-trust-mcp/**
+    envVars:
+      - key: COVENANT_SOLANA_MAINNET_RPC_URL
+        sync: false
+      - key: RPC_TIMEOUT_MS
+        value: "9000"
+      - key: PAYMENT_HISTORY_LIMIT
+        value: "100"
+      - key: RATE_LIMIT_PER_MINUTE
+        value: "30"
 
   - type: web
     name: covenant-fairscale-bridge
@@ -254,4 +289,4 @@ envVarGroups:
   - name: covenant-sandbox-shared
     envVars:
       - key: COVENANT_OPERATOR_TOKEN
-        value: BZgM5nHPW11ATBMMNunZj5Q2tWqwgqbwkMNLgmb8FJ3X
+        sync: false  # secret — set in the Render dashboard, never commit the value

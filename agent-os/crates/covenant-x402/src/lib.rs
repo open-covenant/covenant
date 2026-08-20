@@ -18,12 +18,17 @@
 //! - Retry once with the resulting `x-payment` header and surface
 //!   the paid response back to the caller.
 //!
-//! Skeleton crate: the real Solana signer lands once the daemon
-//! owns funding-key access. Tests use a mock signer.
+//! Two real signers ship in-crate: [`EvmSigner`] (Base, EIP-3009
+//! `TransferWithAuthorization` over EIP-712 — gasless, no RPC) is always
+//! built; `SolanaSigner` (SPL transfer) is gated behind the `solana`
+//! feature to keep the Solana dep tree opt-in. Both hold the funding key
+//! the daemon custodies; [`MockSigner`] covers the client loop in tests.
 
 #![deny(unsafe_code)]
 
 pub mod client;
+pub mod evm;
+pub mod evm_tx;
 pub mod flow;
 mod http;
 pub mod orbit;
@@ -34,6 +39,10 @@ pub mod types;
 pub mod solana;
 
 pub use client::{http_client, Client};
+pub use evm::{EvmSigner, USDC_BASE_MAINNET, USDC_BASE_SEPOLIA, USDG_ROBINHOOD_MAINNET};
+#[cfg(feature = "evm-rpc")]
+pub use evm_tx::{EvmRpc, TxReceipt};
+pub use evm_tx::{EvmTxError, EvmTxSigner, Fees, TxRequest};
 pub use flow::PaidRequest;
 pub use orbit::{Catalog, OrbitClient, Pagination, RegistryEntry, RegistryResponse};
 pub use signer::{MockSigner, Signer};

@@ -53,6 +53,10 @@ export async function verify(
 export function hexToKey(hex: string): Uint8Array {
   const clean = hex.startsWith('0x') ? hex.slice(2) : hex;
   if (clean.length !== 64) throw new Error('broker key hex must be 64 chars');
+  // parseInt yields NaN for a non-hex pair, which Uint8Array silently coerces
+  // to 0 — a typo'd key would boot a broker with a wrong-but-valid identity.
+  // Reject non-hex input loudly instead.
+  if (/[^0-9a-fA-F]/.test(clean)) throw new Error('broker key hex must be valid hex');
   const out = new Uint8Array(32);
   for (let i = 0; i < 32; i++) out[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
   return out;

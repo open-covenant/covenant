@@ -26,6 +26,16 @@ updates:
           - "@tailwindcss/*"
           - "postcss"
 
+  - package-ecosystem: "npm"
+    directory: "/agent-os/crates/covenant-timeline-adapter/verifier"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+
   - package-ecosystem: "cargo"
     directory: "/agent-os"
     schedule:

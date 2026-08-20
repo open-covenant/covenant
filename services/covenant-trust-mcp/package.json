@@ -1,0 +1,33 @@
+{
+  "name": "@covenant/trust-service",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "covenant-trust": "dist/server.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "tsx src/server.ts",
+    "test": "tsx --test src/*.test.ts",
+    "test:smoke": "npm run build && node test-client.mjs",
+    "test:live": "npm run build && node test-client.mjs --live"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "@solana/kit": "7.0.0",
+    "bs58": "6.0.0",
+    "express": "5.1.0",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/express": "5.0.0",
+    "@types/node": "22.10.2",
+    "tsx": "4.23.1",
+    "typescript": "5.7.2"
+  }
+}

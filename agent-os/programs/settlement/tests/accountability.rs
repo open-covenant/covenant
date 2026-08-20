@@ -35,7 +35,10 @@ fn agent_accountability_bond_provenance_slash() {
     consume_credits_with(&mut env, &credits, 1, [0xA1u8; 32]).expect("action 1");
     consume_credits_with(&mut env, &credits, 1, [0xA2u8; 32]).expect("action 2");
     let provenance = credit_provenance_root(&env, &credits);
-    assert_ne!(provenance, [0u8; 32], "the agent's actions are recorded on chain");
+    assert_ne!(
+        provenance, [0u8; 32],
+        "the agent's actions are recorded on chain"
+    );
 
     // 3. Slash, referencing the provenance root as the reason.
     let slash_vault = env.treasury;

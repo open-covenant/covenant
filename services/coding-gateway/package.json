@@ -11,7 +11,8 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.99.0",
-    "e2b": "^2.25.0"
+    "e2b": "^2.25.0",
+    "openai": "^6.44.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

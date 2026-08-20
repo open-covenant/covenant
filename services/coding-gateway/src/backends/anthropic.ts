@@ -185,7 +185,7 @@ export class AnthropicBackend implements CodingBackend {
  * frozen system block carries the other breakpoint (which also caches tools,
  * since tools render before system).
  */
-function withTurnCache(messages: Anthropic.MessageParam[]): Anthropic.MessageParam[] {
+export function withTurnCache(messages: Anthropic.MessageParam[]): Anthropic.MessageParam[] {
   if (messages.length === 0) return messages;
   const out = messages.slice();
   const last = out[out.length - 1]!;
@@ -206,14 +206,14 @@ function withTurnCache(messages: Anthropic.MessageParam[]): Anthropic.MessagePar
   return out;
 }
 
-function previewOf(tu: Anthropic.ToolUseBlock): string {
+export function previewOf(tu: Anthropic.ToolUseBlock): string {
   const input = tu.input as Record<string, unknown>;
   if (tu.name === "bash") return String(input.command ?? "").slice(0, 120);
   if (typeof input.path === "string") return input.path;
   return "";
 }
 
-async function execTool(
+export async function execTool(
   tu: Anthropic.ToolUseBlock,
   sandbox: Sandbox,
   emit: (e: GatewayEvent) => void,

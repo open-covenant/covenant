@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { buildDocsMetadata, buildDocsJsonLd } from "../_meta";
 
-const META_ARGS = ["settlement", "Settlement", 'Local receipts, credit accounting, and the planned on-chain settlement path.'] as const;
+const META_ARGS = ["settlement", "Settlement", 'Local receipts, credit accounting, and the on-chain settlement program, live on mainnet.'] as const;
 export const metadata = buildDocsMetadata(...META_ARGS);
 
 export default function SettlementPage() {
@@ -14,9 +14,10 @@ export default function SettlementPage() {
       <h1>Settlement</h1>
       <p>
         Settlement is how Covenant accounts for resource consumption.
-        Today the daemon writes local receipts. The future on-chain path
-        batches those receipts into the Solana settlement program once
-        the authority, mint, oracle, and reconciliation flows are ready.
+        Today the daemon writes local receipts. The Solana settlement
+        program is deployed and live on mainnet; the daemon-driven path
+        that batches those receipts and anchors them to the program is
+        not yet production.
       </p>
 
       <h2>Receipt</h2>
@@ -66,8 +67,9 @@ export default function SettlementPage() {
 
       <h2>Future on-chain flush</h2>
       <p>
-        The planned on-chain side is an Anchor program for Solana. Three
-        of its instruction shapes describe the credit flow:
+        The on-chain side is an Anchor program deployed on Solana
+        mainnet. Three of its instruction shapes describe the credit
+        flow:
       </p>
 
       <ul>
@@ -79,7 +81,7 @@ export default function SettlementPage() {
         </li>
         <li>
           <code>buy_credits(amount_covnt)</code>: transfer{" "}
-          <code>$COVNT</code> into the treasury in exchange for
+          <code>$CVNT</code> into the treasury in exchange for
           credits at the configured rate.
         </li>
         <li>
@@ -95,8 +97,8 @@ export default function SettlementPage() {
         The intended production flow is for the daemon to batch local
         receipts and submit consumption to the program. Once an on-chain
         transaction confirms, the receipt&apos;s <code>onchain_sig</code>{" "}
-        can be populated with the signature. This is a planned
-        reconciliation path, not deployed behavior.
+        can be populated with the signature. This daemon-driven
+        reconciliation path is not yet production.
       </p>
 
       <h2>Planned economic model</h2>
@@ -179,18 +181,34 @@ curl -s '127.0.0.1:8421/receipts/recent?limit=20&since_ms=1714938000000' | jq`}<
 {"schema":"covenant.settlement.backfill.v1","row_count":12,"rollback_path":null,"dry_run":true}`}</code>
       </pre>
 
+      <h2>x402 payment rail</h2>
+      <p>
+        Distinct from the internal receipt flush above, the agent-to-service
+        payment rail over HTTP 402 (x402) is live. The daemon can pay for
+        metered x402 resources outbound, and Covenant operates a deployed
+        x402 seller that settles in USDC on Solana mainnet &mdash; selling
+        Covenant-Verified attestations, on-chain identity passports, and
+        reputation reads, with the seller&rsquo;s signing key published at
+        <code>/.well-known/x402</code> &mdash; alongside an escrow service and
+        an Ephemeral-Rollup credit facilitator. This is a
+        separate concern from anchoring internal resource receipts: the
+        payment rail being live does not make the receipt flush production.
+      </p>
+
       <h2>Release</h2>
       <p>
-        Local receipts and recent-receipt reads are implemented. On-chain
-        settlement is planned and scaffolded; it is not production and
-        should not be described as deployed.
+        Local receipts and recent-receipt reads are implemented. The Solana
+        settlement program is deployed and live on mainnet — $CVNT-to-credits,
+        staking, slashing, and on-chain receipt anchoring transact on-chain.
+        The daemon-driven per-intent settlement lifecycle that anchors internal
+        resource receipts is not yet production.
       </p>
 
       <h2>Related</h2>
       <ul>
         <li>
           <Link href="/architecture">Architecture</Link>: the
-          settlement scaffold in the broader system map.
+          settlement program in the broader system map.
         </li>
         <li>
           <Link href="/identity">Identity and keys</Link>: the

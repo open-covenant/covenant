@@ -356,6 +356,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fetch_page_rejects_malformed_response_body() {
+        // A 2xx registry body that is not valid JSON — a CDN error page, a
+        // truncated response — must surface X402Error::Registry at the
+        // serde_json::from_str boundary rather than panic or be mis-parsed
+        // into an empty catalog that makes every discover-and-pay call miss.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/services-list"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("not a services-list"))
+            .mount(&server)
+            .await;
+        let client = OrbitClient::with(reqwest::Client::new(), server.uri(), 100);
+        let err = client.fetch_page(100, 0).await.expect_err("malformed body");
+        assert!(matches!(err, X402Error::Registry(_)), "got {err:?}");
+    }
+
+    #[tokio::test]
     async fn fetch_all_paginates_until_total_reached() {
         // total=5, page_size=2 → expect 3 pages (2, 2, 1).
         let server = MockServer::start().await;

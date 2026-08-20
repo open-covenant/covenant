@@ -33,7 +33,7 @@ const TILES = [
   {
     href: "/architecture",
     title: "Architecture",
-    body: "Architecture of the daemon, runtime, local control plane, and settlement scaffold.",
+    body: "Architecture of the daemon, runtime, local control plane, and on-chain settlement program.",
   },
   {
     href: "/cli",
@@ -64,6 +64,11 @@ const TILES = [
     href: "/security",
     title: "Security model",
     body: "Trust boundaries, threat model, defaults, and operator responsibilities.",
+  },
+  {
+    href: "/multichain",
+    title: "Multi-chain trust",
+    body: "How identity, reputation, and bond receipts project onto Base as signed data any EVM verifies with one ecrecover, while $CVNT stays Solana-only.",
   },
   {
     href: "/provenance",
@@ -136,8 +141,14 @@ export default function DocsIndexPage() {
         manifest-level requirements, trusted-local fail-closed behavior,
         daemon-selectable Linux gVisor configuration, runtime-level gVisor
         runner work, live Linux sandbox coverage, and a documented Linux runner
-        setup. Distributed settlement, installers, SDK publication,
-        release-scope and audit-root signing, and transparency publication are
+        setup. Covenant&apos;s trust layer is live on Base mainnet (ERC-8004
+        identity, a bond-receipt verifier, an EAS reputation schema, and ENS
+        CCIP-Read resolution), projecting Solana-canonical records as signed data
+        any EVM contract verifies with one <code>ecrecover</code> while $CVNT
+        stays a single Solana mint. Distributed settlement, cross-chain
+        enforcement, installers, additional-language SDK
+        publication (Python and Rust-crate), release-scope and audit-root
+        signing, and transparency publication are
         tracked on <a href="https://opencovenant.org/roadmap">the roadmap</a>.
       </p>
 
@@ -145,7 +156,7 @@ export default function DocsIndexPage() {
         For the design rationale, read the{" "}
         <a href="https://doi.org/10.5281/zenodo.20134416">technical paper</a>;
         the implementation lives on{" "}
-        <a href="https://github.com/open-covenant/covenant">GitHub</a>.
+        <a href="https://github.com/open-covenant">GitHub</a>.
       </p>
 
       <h2>Position in the stack</h2>

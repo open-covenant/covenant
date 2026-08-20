@@ -1,10 +1,10 @@
-import { SOLANA_ADDRESS_REGEX } from '@covenant/config/networks';
+import { SOLANA_ADDRESS_REGEX } from '../config.js';
 
 export type SolanaAddress = string;
 export type Hash32 = string;
 
 export function isSolanaAddress(value: string): value is SolanaAddress {
-  return SOLANA_ADDRESS_REGEX.test(value);
+  return typeof value === 'string' && SOLANA_ADDRESS_REGEX.test(value);
 }
 
 export function assertSolanaAddress(value: string, label = 'address'): SolanaAddress {

@@ -1,6 +1,7 @@
 # Covenant
 
 [![CI](https://github.com/open-covenant/covenant/actions/workflows/ci.yml/badge.svg)](https://github.com/open-covenant/covenant/actions/workflows/ci.yml)
+[![kani](https://github.com/open-covenant/covenant/actions/workflows/kani.yml/badge.svg)](https://github.com/open-covenant/covenant/actions/workflows/kani.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 [![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.20134416-blue)](https://doi.org/10.5281/zenodo.20134416)
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](./rust-toolchain.toml)
@@ -14,8 +15,10 @@
 Covenant sits below agent applications and above the host operating system. It owns the state, authority, and accountability concerns that recur across agent frameworks — scoped capabilities, durable memory, runtime isolation, append-only audit, and commit-scoped provenance — so individual frameworks can stop reinventing them.
 
 <!-- METRICS:START -->
-**Status.** Local control plane is real and live-tested (28 Rust crates, ~211k lines, 2907 source-discovered Rust tests including 390 live boundary tests). Production-grade sandboxing for hostile agent code, networked multi-peer operation, and daemon-driven on-chain settlement are roadmap. See [BUILT.md](./BUILT.md) for the explicit honesty boundary.
+**Status.** Local control plane is real and live-tested (42 Rust crates, ~272k lines, 3709 source-discovered Rust tests including 483 live boundary tests). Production-grade sandboxing for hostile agent code and networked multi-peer operation are roadmap; the Solana settlement program is deployed on mainnet (credits, staking, slashing, on-chain receipt anchoring), but its daemon-driven economic lifecycle is not yet production. See [BUILT.md](./BUILT.md) for the explicit honesty boundary.
 <!-- METRICS:END -->
+
+**Multi-chain reach.** The trust layer also projects onto Base mainnet as signed statements any EVM contract verifies with one `ecrecover` — ERC-8004 agent registration, a deployed bond-receipt verifier, a registered EAS reputation schema, and an ENS CCIP-Read gateway (`*.agents.opencovenant.eth`) — while `$CVNT` stays a single Solana mint that is never bridged or wrapped and every per-call fee and bond is chain-local USDC. On-chain reputation writes and funded USDC bonds are registered but not yet exercised, while live x402 sellers settle chain-local USDC on both Solana and Base mainnet, and on Robinhood Chain mainnet (chain 4663) a USDG x402 payment and an on-chain bounded-spend escrow are proven with real USDG. See [docs/multichain-value-capture.md](./docs/multichain-value-capture.md).
 
 - **Web:** [opencovenant.org](https://opencovenant.org)
 - **Docs:** [docs.opencovenant.org](https://docs.opencovenant.org)
@@ -59,6 +62,16 @@ pnpm dev   # http://localhost:3000
 ```
 
 The console proxies the daemon's HTTP gateway, injects the operator bearer token server-side, and renders every dispatch as a verifiable trace through the hash-chained audit log. See [examples/hello-agent](./examples/hello-agent/) for the agent walkthrough, [docs/demo.md](./docs/demo.md) for a CLI transcript, and [deploy/README.md](./deploy/README.md) for shipping the console as a public sandbox on Render.
+
+## TypeScript SDK
+
+Agent authors building on the deployed Solana settlement program can install [`@covenant-org/sdk`](https://www.npmjs.com/package/@covenant-org/sdk) from npm:
+
+```bash
+npm install @covenant-org/sdk @solana/web3.js
+```
+
+It turns every Covenant instruction (agent registration, $CVNT staking, task escrow, credit purchase, receipt anchoring) into a signed `@solana/web3.js` transaction, with the wire bytes encoded from the on-chain program IDLs so they cannot drift from what the program accepts. Apache-2.0, one runtime dependency. Source lives in [`packages/sdk`](./packages/sdk/).
 
 ## Why Covenant
 
@@ -105,6 +118,8 @@ Covenant includes:
 - MCP adapter, native tool integration, and A2A mailbox primitives.
 - Budget ledger primitives with daemon-backed pause checkpoint storage for budget exhaustion, shutdown drains, and single-use resume handoff.
 - Local settlement receipts for resource accounting.
+- Agent-to-service payments over HTTP 402 (x402): the daemon can pay for metered resources outbound, and Covenant operates a live x402 seller that settles in USDC on Solana mainnet (paid Covenant-Verified attestations, on-chain identity passports, and reputation reads), alongside an escrow service and an Ephemeral-Rollup credit facilitator.
+- Multi-chain trust projection onto Base mainnet: ERC-8004 agent registration, a deployed bond-receipt verifier and EAS reputation schema, EAS off-chain attestations for audit roots and reputation, and an ENS CCIP-Read gateway (`*.agents.opencovenant.eth`) that resolves to the canonical Solana identity — each verifiable with one `ecrecover`, no bridge and no cross-chain token. On-chain reputation scores and funded USDC bonds are not yet exercised. The same stateless verifier design and x402 rail also reach Robinhood Chain mainnet (chain 4663): a USDG x402 payment settled on mainnet and an on-chain `SpendGrantEscrow` enforces bounded agent spend, both proven with real USDG, while the bond and reputation verifiers are deployed but not yet exercised and no ERC-8004 identity is projected there. See [docs/multichain-value-capture.md](./docs/multichain-value-capture.md).
 - Commit-scoped provenance envelopes that bind task records, changed Git blobs, transition events, and validation evidence.
 - Unsigned or locally signed audit-root attestations for local integrity reports, with release-target binding to release-subject and release-scope manifests so a single attestation covers the audit log, the release artifact set, and the in-scope task set.
 - Opt-in live tests for daemon, CLI, runtime, and selected backend boundaries.
@@ -166,8 +181,27 @@ Covenant advances open infrastructure for:
 - capability-scoped delegation across local and remote agents;
 - durable project memory for long-running work;
 - resumable task ownership across interruptions;
+- reproducible temporal state, correction, and proof-carrying replay;
 - policy-aware tool use and sandboxed execution;
 - audit-root attestations, public provenance, and agent coordination economics.
+
+The [Covenant Timeline integration](./docs/covenant-timeline.md) applies the
+standalone Timeline kernel to release chronology. Its checked
+`v0.1.0-alpha.1` run persists across a process restart, records an authoritative
+timestamp correction without rewriting the earlier state, and verifies
+proof-carrying conclusions at three historical record cuts with the exact
+published package `@covenant-org/timeline@0.0.0-alpha.2`. The original
+`v0alpha1` checkpoint adapter remains available as a compatibility surface.
+
+This is a shadow audit, not a release gate or a grant of authority. Timeline's
+preregistered frontier-model benchmark did not pass its standalone
+model-memory accuracy gate: it beat bounded narrative memory but did not beat
+stateless full-context structured extraction, producing a recorded decision of
+`kill`. Covenant uses the integration for deterministic temporal state,
+correction, replay, and proof verification—not as evidence that Timeline
+improves model accuracy. The
+[complete benchmark result](https://github.com/open-covenant/covenant-timeline/releases/tag/model-eval-v1-gpt-5.6-sol-2026-07-31)
+is public.
 
 ## Citing
 

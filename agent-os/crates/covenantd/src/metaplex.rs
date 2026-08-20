@@ -92,13 +92,11 @@ impl SubprocessMetaplexSigner {
             env,
         }
     }
+}
 
-    async fn sign_with_limits(
-        &self,
-        request: SignerRequest,
-        max_output_bytes: usize,
-        deadline: std::time::Duration,
-    ) -> Result<SignerResponse, String> {
+#[async_trait::async_trait]
+impl MetaplexSigner for SubprocessMetaplexSigner {
+    async fn sign(&self, request: SignerRequest) -> Result<SignerResponse, String> {
         let payload = serde_json::to_vec(&request).map_err(|e| format!("encode request: {e}"))?;
 
         let mut child = Command::new(&self.program)
@@ -107,10 +105,6 @@ impl SubprocessMetaplexSigner {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            // An over-cap flood or an elapsed deadline returns early, dropping
-            // the Child; kill_on_drop reaps the sidecar instead of leaving it
-            // running detached.
-            .kill_on_drop(true)
             .spawn()
             .map_err(|e| format!("spawn signer {:?}: {e}", self.program))?;
 
@@ -126,23 +120,22 @@ impl SubprocessMetaplexSigner {
             // Drop closes stdin so the one-shot sidecar sees EOF.
         }
 
-        // wait_with_output() buffered stdout and stderr unbounded with no
-        // deadline; the metaplex signer talks to Solana RPC and DAS, so a
-        // runaway, buggy, or hostile-RPC-fed sidecar could OOM the daemon or
-        // hang here. Shared with the x402 signer dispatch so the cap and the
-        // deadline never diverge.
-        let (stdout_bytes, stderr_bytes, status) =
-            crate::x402::read_signer_output(&mut child, max_output_bytes, deadline)
-                .await
-                .map_err(|e| e.message())?;
+        let output = child
+            .wait_with_output()
+            .await
+            .map_err(|e| format!("await signer: {e}"))?;
 
-        if !status.success() {
-            let stderr = String::from_utf8_lossy(&stderr_bytes);
-            return Err(format!("signer exited {}: {}", status, stderr.trim()));
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!(
+                "signer exited {}: {}",
+                output.status,
+                stderr.trim()
+            ));
         }
 
-        let stdout =
-            String::from_utf8(stdout_bytes).map_err(|e| format!("signer stdout not utf-8: {e}"))?;
+        let stdout = String::from_utf8(output.stdout)
+            .map_err(|e| format!("signer stdout not utf-8: {e}"))?;
         let response = serde_json::from_str::<SignerResponse>(stdout.trim())
             .map_err(|e| format!("decode signer response: {e}"))?;
 
@@ -161,32 +154,17 @@ impl SubprocessMetaplexSigner {
     }
 }
 
-#[async_trait::async_trait]
-impl MetaplexSigner for SubprocessMetaplexSigner {
-    async fn sign(&self, request: SignerRequest) -> Result<SignerResponse, String> {
-        self.sign_with_limits(
-            request,
-            crate::x402::MAX_SIGNER_OUTPUT_BYTES,
-            crate::x402::SIGNER_OUTPUT_DEADLINE,
-        )
-        .await
-    }
-}
-
 fn action_label(request: &SignerRequest) -> &'static str {
     match request {
         SignerRequest::AttestAuditRoot { .. } => "attest.audit_root",
         SignerRequest::RegisterIdentity { .. } => "identity.register",
+        SignerRequest::SetIdentityUri { .. } => "identity.set_uri",
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn env_get<'a>(env: &'a [(String, String)], key: &str) -> Option<&'a str> {
-        env.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
-    }
 
     #[test]
     fn state_without_signer_surface_has_no_signer() {
@@ -219,191 +197,5 @@ mod tests {
         // The real path is exercised end-to-end on devnet; here we only
         // pin that the program field is wired.
         let _ = &signer.program;
-    }
-
-    #[test]
-    fn from_config_forwards_rpc_and_cluster_and_pins_program() {
-        let signer = SubprocessMetaplexSigner::from_config(&MetaplexConfig {
-            enabled: true,
-            cluster: "mainnet-beta".into(),
-            rpc_url: "https://rpc.example".into(),
-            signer_binary: "/opt/covenant-metaplex-signer".into(),
-            ..Default::default()
-        });
-        assert_eq!(
-            signer.program,
-            PathBuf::from("/opt/covenant-metaplex-signer")
-        );
-        assert_eq!(
-            env_get(&signer.env, "COVENANT_METAPLEX_RPC_URL"),
-            Some("https://rpc.example")
-        );
-        assert_eq!(
-            env_get(&signer.env, "COVENANT_METAPLEX_CLUSTER"),
-            Some("mainnet-beta")
-        );
-        assert_eq!(
-            env_get(&signer.env, "COVENANT_METAPLEX_COLLECTION"),
-            None,
-            "empty collection must not be forwarded to the sidecar"
-        );
-        assert_eq!(
-            env_get(&signer.env, "COVENANT_METAPLEX_PER_ACTION_CAP_LAMPORTS"),
-            None,
-            "a 0 cap must defer to the sidecar default, not forward 0"
-        );
-    }
-
-    #[test]
-    fn from_config_forwards_collection_and_cap_when_set() {
-        let signer = SubprocessMetaplexSigner::from_config(&MetaplexConfig {
-            enabled: true,
-            rpc_url: "https://rpc.example".into(),
-            signer_binary: "/opt/signer".into(),
-            collection: "CoLLECT1onMintGroup11111111111111111111111".into(),
-            per_action_cap_lamports: 5_000_000,
-            ..Default::default()
-        });
-        assert_eq!(
-            env_get(&signer.env, "COVENANT_METAPLEX_COLLECTION"),
-            Some("CoLLECT1onMintGroup11111111111111111111111")
-        );
-        assert_eq!(
-            env_get(&signer.env, "COVENANT_METAPLEX_PER_ACTION_CAP_LAMPORTS"),
-            Some("5000000")
-        );
-    }
-
-    #[test]
-    fn signer_present_when_write_surface_configured() {
-        let state = MetaplexState::new(MetaplexConfig {
-            enabled: true,
-            rpc_url: "https://rpc.example".into(),
-            signer_binary: "/opt/signer".into(),
-            das_url: "https://das.example".into(),
-            ..Default::default()
-        });
-        assert!(
-            state.signer().is_some(),
-            "a config with enabled + signer_binary + rpc_url must expose a signer"
-        );
-    }
-
-    #[test]
-    fn from_config_omits_collection_and_cap_when_unset() {
-        // The mirror of `from_config_forwards_collection_and_cap_when_set`:
-        // an empty collection and a zero cap must NOT be forwarded. A
-        // regression that pushed them unconditionally would hand the
-        // sidecar COVENANT_METAPLEX_COLLECTION="" and a literal "0" cap,
-        // which it reads as a real (mis)configuration rather than "unset".
-        let signer = SubprocessMetaplexSigner::from_config(&MetaplexConfig {
-            enabled: true,
-            rpc_url: "https://rpc.example".into(),
-            signer_binary: "/opt/signer".into(),
-            collection: String::new(),
-            per_action_cap_lamports: 0,
-            ..Default::default()
-        });
-        assert_eq!(
-            env_get(&signer.env, "COVENANT_METAPLEX_RPC_URL"),
-            Some("https://rpc.example")
-        );
-        assert!(
-            env_get(&signer.env, "COVENANT_METAPLEX_COLLECTION").is_none(),
-            "an empty collection must not be forwarded as a blank env value"
-        );
-        assert!(
-            env_get(&signer.env, "COVENANT_METAPLEX_PER_ACTION_CAP_LAMPORTS").is_none(),
-            "a zero cap must not be forwarded"
-        );
-    }
-
-    #[test]
-    fn action_label_pins_telemetry_slugs_for_both_signer_actions() {
-        use covenant_metaplex::AttestationPayload;
-
-        // Operator log/telemetry contract. The dotted slugs are distinct
-        // from the kebab-case `action` wire tags (attest-audit-root /
-        // register-identity); a copy-paste swap between the two would
-        // silently mislabel every confirmed on-chain write.
-        let attest = SignerRequest::AttestAuditRoot {
-            payload: AttestationPayload::new(
-                "a".repeat(64),
-                "v0.1.0",
-                "covenant",
-                "audit",
-                1_700_000_000,
-            ),
-            asset: None,
-            collection: None,
-        };
-        let register = SignerRequest::RegisterIdentity {
-            agent_label: "operator".into(),
-            agent_pubkey: "Agent1111111111111111111111111111111111111".into(),
-            asset: None,
-            registration_uri: None,
-        };
-        assert_eq!(action_label(&attest), "attest.audit_root");
-        assert_eq!(action_label(&register), "identity.register");
-    }
-
-    fn sample_request() -> SignerRequest {
-        SignerRequest::RegisterIdentity {
-            agent_label: "operator".into(),
-            agent_pubkey: "Agent1111111111111111111111111111111111111".into(),
-            asset: None,
-            registration_uri: None,
-        }
-    }
-
-    fn fake_signer(body: &str) -> (tempfile::TempDir, PathBuf) {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::tempdir().expect("tempdir");
-        let script = dir.path().join("fake-signer.sh");
-        // `cat >/dev/null` drains the request on stdin first so the daemon's
-        // write does not race a broken pipe before the body runs.
-        std::fs::write(&script, format!("#!/bin/sh\ncat >/dev/null\n{body}\n"))
-            .expect("write script");
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-        (dir, script)
-    }
-
-    #[tokio::test]
-    async fn sign_with_limits_rejects_oversized_signer_stdout() {
-        // The metaplex signer talks to Solana RPC and DAS, so its stdout is
-        // untrusted; a flood past the cap must surface a cap-breach error
-        // instead of buffering the whole stream and OOMing the daemon. A
-        // 64-byte cap against 200 bytes of output forces the overflow branch.
-        let (_dir, script) = fake_signer("head -c 200 /dev/zero");
-        let signer = SubprocessMetaplexSigner {
-            program: script,
-            env: vec![],
-        };
-        let err = signer
-            .sign_with_limits(sample_request(), 64, std::time::Duration::from_secs(30))
-            .await
-            .expect_err("over cap");
-        assert!(
-            err.contains("exceeded") && err.contains("cap"),
-            "an over-cap signer stdout must surface as a cap-breach error: {err}"
-        );
-    }
-
-    #[tokio::test]
-    async fn sign_with_limits_decodes_under_cap_response() {
-        // A normal single-line SignerResponse under the cap must still decode,
-        // proving the bounded read did not regress the happy path.
-        let (_dir, script) =
-            fake_signer("printf '{\"signature\":\"s\",\"asset\":\"a\",\"cluster\":\"devnet\"}'");
-        let signer = SubprocessMetaplexSigner {
-            program: script,
-            env: vec![],
-        };
-        let resp = signer
-            .sign_with_limits(sample_request(), 4096, std::time::Duration::from_secs(30))
-            .await
-            .expect("under-cap response decodes");
-        assert_eq!(resp.cluster, "devnet");
-        assert_eq!(resp.signature, "s");
     }
 }

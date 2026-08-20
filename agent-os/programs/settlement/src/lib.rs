@@ -687,7 +687,11 @@ pub mod settlement {
     pub fn delegate_credits(ctx: Context<DelegateCredits>) -> Result<()> {
         let owner = ctx.accounts.payer.key();
         let (expected, _) = Pubkey::find_program_address(&[b"credits", owner.as_ref()], &crate::ID);
-        require_keys_eq!(ctx.accounts.pda.key(), expected, CovenantError::Unauthorized);
+        require_keys_eq!(
+            ctx.accounts.pda.key(),
+            expected,
+            CovenantError::Unauthorized
+        );
         let validator = ctx
             .remaining_accounts
             .first()

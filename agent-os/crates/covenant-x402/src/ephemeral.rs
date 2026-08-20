@@ -310,8 +310,8 @@ mod tests {
             pay_to: "credits".into(),
             scheme: "exact-er".into(),
             extra: nonce.map(|n| PaymentExtra {
-                fee_payer: None,
                 nonce: Some(n.into()),
+                ..Default::default()
             }),
         }
     }

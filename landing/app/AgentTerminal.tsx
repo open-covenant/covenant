@@ -3,10 +3,7 @@
 import { type UIEvent, useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 
-type Line = { k: string; t: string };
-type AgentEvent =
-  | { type: "transition"; taskId: string; from: string; to: string; actor: string; note: string }
-  | { type: "commit"; hash: string; subject: string; stat: string };
+import { type AgentEvent, type Line, formatEvent } from "./_agentTerminal";
 
 const COLOR: Record<string, string> = {
   cmd: "#cacaca",
@@ -28,30 +25,6 @@ const FALLBACK_MS = 4000;
 const BEAT_TICKS: Record<string, number> = { cmd: 14, commit: 18, write: 3 };
 
 const BOOT: Line[] = [{ k: "cmd", t: "$ tail -f agent-os/autonomy/events.jsonl" }];
-
-function stateKind(to: string): string {
-  if (to === "integrated") return "add";
-  if (to === "ready") return "write";
-  if (to === "blocked" || to === "repair") return "del";
-  if (to === "validation" || to === "cross_review" || to === "self_review") return "hunk";
-  return "meta";
-}
-
-function formatEvent(e: AgentEvent): Line[] {
-  if (e.type === "commit") {
-    const out: Line[] = [{ k: "commit", t: `commited ${e.hash}  # ${e.subject}` }];
-    if (e.stat) out.push({ k: "meta", t: `  ${e.stat}` });
-    out.push({ k: "blank", t: "" });
-    return out;
-  }
-  if (e.type === "transition") {
-    const out: Line[] = [{ k: stateKind(e.to), t: `[${e.to}] ${e.taskId}` }];
-    if (e.note) out.push({ k: "ctx", t: `    ${e.note}` });
-    out.push({ k: "blank", t: "" });
-    return out;
-  }
-  return [];
-}
 
 function Row({ line }: { line: Line }) {
   return (

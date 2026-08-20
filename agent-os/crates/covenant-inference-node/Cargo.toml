@@ -1,0 +1,40 @@
+[package]
+name = "covenant-inference-node"
+version = "0.1.0"
+edition = "2021"
+description = "Outbound tunnel and enrol/heartbeat daemon for a Solana verifiable open-model inference node"
+
+# Detached from the agent-os workspace on purpose, matching the protocol crate:
+# the inference-network transport stays out of the parent lockfile until
+# covenantd wires it in.
+[workspace]
+
+[lib]
+name = "covenant_inference_node"
+path = "src/lib.rs"
+
+[[bin]]
+name = "covenant-inferd"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.98"
+axum = "0.8.9"
+base64 = "0.22.1"
+chrono = { version = "0.4.41", features = ["serde"] }
+clap = { version = "4.5.41", features = ["derive"] }
+covenant-inference-protocol = { path = "../covenant-inference-protocol" }
+ed25519-dalek = "2.1.1"
+getrandom = "0.2"
+hex = "0.4.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+rustls = { version = "0.23.31", default-features = false, features = ["ring", "std", "tls12"] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+sha2 = "0.10.9"
+thiserror = "2.0.12"
+tokio = { version = "1.46.1", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "time"] }
+tokio-rustls = { version = "0.26.2", default-features = false, features = ["ring", "tls12"] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
+url = "2.5.4"

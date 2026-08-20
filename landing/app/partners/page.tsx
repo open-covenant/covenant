@@ -3,6 +3,7 @@ import Image from "next/image";
 import { SiteFooter } from "../SiteFooter";
 import { SiteHeader } from "../SiteHeader";
 import {
+  logoFor,
   PARTNERS,
   PROTOCOLS,
   type Integration,
@@ -55,22 +56,23 @@ function StatusBadge({ status }: { status: Integration["status"] }) {
   );
 }
 
-/** Renders the partner logo when one has been dropped in, else a clean wordmark. */
+/** Avatar (X profile image) beside the wordmark, or just the wordmark if none. */
 function Mark({ item }: { item: Integration }) {
-  if (item.logo) {
-    return (
-      <Image
-        src={item.logo}
-        alt={item.name}
-        width={150}
-        height={28}
-        className="h-7 w-auto max-w-[160px] object-contain opacity-90"
-      />
-    );
-  }
+  const logo = item.logo ?? logoFor(item.slug);
   return (
-    <span className="text-[15px] font-light tracking-tight text-neutral-100">
-      {item.name}
+    <span className="flex items-center gap-2.5">
+      {logo ? (
+        <Image
+          src={logo}
+          alt=""
+          width={28}
+          height={28}
+          className="h-7 w-7 shrink-0 rounded-md object-cover ring-1 ring-neutral-700/50"
+        />
+      ) : null}
+      <span className="text-[15px] font-light tracking-tight text-neutral-100">
+        {item.name}
+      </span>
     </span>
   );
 }

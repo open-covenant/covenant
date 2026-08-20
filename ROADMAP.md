@@ -6,6 +6,12 @@ Covenant is moving toward an open operating layer for governed autonomous softwa
 
 The foundation is a local control plane for autonomous engineering systems: daemon, CLI, TUI, IPC/HTTP gateway, identity, capabilities, audit, memory, A2A, MCP, budget, local receipts, provenance envelopes, autonomous workflow records, and live validation paths.
 
+## Multi-Chain Trust Reach
+
+Covenant's identity, reputation, provenance, and bond receipts project onto other chains as signed statements, without moving `$CVNT` off Solana. Live today on Base mainnet: ERC-8004 agent registration, a deployed bond-receipt verifier and a registered EAS reputation schema, EAS off-chain attestations for audit roots and reputation, and an ENS CCIP-Read gateway (`opencovenant.eth`, `*.agents.opencovenant.eth`) that resolves to the canonical Solana identity — each verifiable with a plain `ecrecover`, no bridge. A live x402 seller also settles USDC on Base mainnet over EIP-3009. The same rail and stateless verifier design also reach Robinhood Chain mainnet (chain 4663): a generic USDG x402 payment has settled on mainnet, and an on-chain bounded-spend escrow enforces per-call spend limits and pay-for-passing-output, proven with real USDG; its bond and reputation verifiers are deployed but not yet exercised, and no ERC-8004 identity is projected there. `$CVNT` stays a single Solana mint, and every per-call fee and bond is chain-local USDC; multi-chain reach only widens the fee base that funds Solana buy-and-lock staking, enforced by a build-time quarantine guard.
+
+Not yet production: on-chain reputation scores (the schema is registered but writes stay gated), funded USDC bonds and live slashing (the verifier is deployed but unfunded), the Base outbound-pay path (built, not wired into the default daemon), and trust-minimized cross-chain enforcement (slashing a Solana bond from an EVM-proven event). See [docs/multichain-value-capture.md](./docs/multichain-value-capture.md).
+
 ## Now: Harden the Local Control Plane
 
 The current priority is making the local daemon and CLI reliable under real engineering use.
@@ -42,8 +48,9 @@ The runtime needs stronger isolation and clearer policy boundaries before it can
 
 - Multi-peer operation across authenticated hosts.
 - Public provenance through signed artifacts and transparency-log attestation.
-- Daemon-driven on-chain settlement and provider-payout escrow, built on the deployed Solana settlement program (credit mint, burn, treasury, staking, slashing, credit metering, and receipt-batch anchoring are live on mainnet today).
-- SDKs for agent authors.
+- Daemon-driven on-chain settlement and provider-payout escrow, built on the deployed Solana settlement program (the program is deployed on mainnet; credit mint, burn, treasury, staking, slashing, credit metering, and receipt-batch anchoring are implemented on-chain, but the economic lifecycle is not yet production). See [BUILT.md](./BUILT.md) for the honesty boundary.
+- The agent-to-service payment rail over HTTP 402 (x402) is already operating: Covenant runs a live x402 seller that settles in USDC on Solana mainnet, alongside an escrow service and an Ephemeral-Rollup credit facilitator, and the daemon can pay for metered x402 resources outbound. The remaining settlement work is the daemon-driven anchoring of internal resource receipts described above, not the payment rail itself.
+- SDKs for agent authors: the TypeScript `@covenant-org/sdk` for the settlement program is published on npm; Python, Rust-crate, and framework-adapter SDKs remain planned.
 - Installer and upgrade path for local machines.
 - Marketplace and registry infrastructure for authenticated agent networks.
 

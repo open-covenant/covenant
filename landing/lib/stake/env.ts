@@ -53,10 +53,51 @@ export function getClusterConfig(): ClusterConfig {
   return env === "mainnet" || env === "mainnet-beta" ? MAINNET : DEVNET;
 }
 
+const TRANSIENT_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
+const REQUEST_TIMEOUT_MS = 20_000;
+const MAX_RETRIES = 4;
+
+// Public Solana RPC routinely answers heavy reads with a 504 / -32504
+// "Request timed out". web3.js surfaces that as a hard throw, so wrap fetch
+// with bounded exponential backoff + a per-attempt timeout. Resubmitting a
+// signed transaction is idempotent (the network dedups by signature), so
+// retrying send/confirm here is safe too.
+const retryingFetch: typeof fetch = async (input, init) => {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      const res = await fetch(input, { ...init, signal: controller.signal });
+      if (TRANSIENT_STATUS.has(res.status) && attempt < MAX_RETRIES) {
+        await backoff(attempt);
+        continue;
+      }
+      return res;
+    } catch (e) {
+      lastErr = e;
+      if (attempt >= MAX_RETRIES) break;
+      await backoff(attempt);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw lastErr ?? new Error("rpc fetch failed after retries");
+};
+
+function backoff(attempt: number): Promise<void> {
+  const base = Math.min(250 * 2 ** attempt, 4_000);
+  return new Promise((r) => setTimeout(r, base + Math.random() * 250));
+}
+
 let _readConnection: Connection | null = null;
 export function getReadConnection(): Connection {
   if (_readConnection) return _readConnection;
-  _readConnection = new Connection(getClusterConfig().rpcUrl, "confirmed");
+  _readConnection = new Connection(getClusterConfig().rpcUrl, {
+    commitment: "confirmed",
+    fetch: retryingFetch,
+    confirmTransactionInitialTimeout: 60_000,
+  });
   return _readConnection;
 }
 

@@ -1,0 +1,13 @@
+{
+  "service": "Covenant",
+  "description": "Open infrastructure for agent-native computing.",
+  "site": "https://opencovenant.org",
+  "repository": "https://github.com/open-covenant/covenant",
+  "attestationKey": {
+    "alg": "ed25519",
+    "chain": "solana:mainnet",
+    "publicKey": "2RGbcfmFxXicvqe3Vb4TEFkFEJJ3agbSrw7UTdRYQD8p",
+    "use": "Signs Covenant attestations and on-chain provenance anchors. A signature from this key is Covenant's.",
+    "verify": "Recompute the signed payload hash and check the ed25519 signature against this public key."
+  }
+}

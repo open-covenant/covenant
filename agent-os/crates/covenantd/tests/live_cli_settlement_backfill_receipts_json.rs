@@ -1,4 +1,5 @@
-//! Live CLI coverage for `covenant settlement backfill-receipts --json`.
+//! Live CLI coverage for `covenant settlement backfill-receipts`
+//! (`--json` envelope and plain-text render).
 //!
 //! Closes the last `deferred` row in
 //! `agent-os/autonomy/privileged-cli-live-matrix.json`. The dispatch
@@ -8,7 +9,7 @@
 //! argument parsing, JSON envelope shape, or capability-grant wiring
 //! surfaces as a CLI test failure rather than only a daemon-level one.
 //!
-//! Two scenarios:
+//! Three scenarios:
 //! - happy_path: operator grants `settlement.backfill.apply`, two
 //!   legacy rows are seeded into `<home>/receipts/working.jsonl`, the
 //!   verb runs without `--dry-run`, and the JSON envelope reports
@@ -19,6 +20,13 @@
 //!   legacy rows exist, the verb runs with `--dry-run`, and the JSON
 //!   envelope reports `row_count=0`, `dry_run=true`, `rollback_path`
 //!   null.
+//! - plaintext_dry_run: the same dry-run request without `--json`,
+//!   asserting the human-readable render emits exactly `row_count: 0`,
+//!   `dry_run: true`, and `rollback_path: (none)`. That `(none)`
+//!   sentinel is the only stand-in for a null rollback path and is
+//!   emitted at exactly one source site (`main.rs`); the `--json`
+//!   scenarios above assert `(none)` never leaks into JSON, so without
+//!   this case nothing pins the plain-text branch.
 //!
 //! Hermetic — no external services. `#[ignore]`'d so they only run
 //! under `--ignored live_`.
@@ -299,6 +307,57 @@ async fn live_cli_settlement_backfill_receipts_json_dry_run() {
             .map(Value::is_null)
             .unwrap_or(false),
         "dry-run must not produce a rollback_path: {value:?}",
+    );
+
+    let _ = child.kill().await;
+}
+
+#[tokio::test]
+#[ignore = "live: spawns covenantd + runs `covenant settlement backfill-receipts --dry-run` (no --json) subprocesses"]
+async fn live_cli_settlement_backfill_receipts_plaintext_dry_run() {
+    let home = tempfile::tempdir().expect("tempdir");
+
+    let port = pick_free_port();
+    let daemon_exe = env!("CARGO_BIN_EXE_covenantd");
+    let mut child = Command::new(daemon_exe)
+        .env("COVENANT_HOME", home.path())
+        .env("COVENANT_HTTP_PORT", port.to_string())
+        .env("HOME", home.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn covenantd");
+
+    let sock = home.path().join("sock");
+    if !wait_for_sock(&sock).await {
+        let _ = child.kill().await;
+        panic!("daemon never created its socket at {}", sock.display());
+    }
+    wait_for_operator_token(home.path()).await;
+
+    let cli_exe = covenant_cli_bin();
+    run_cli(
+        &cli_exe,
+        home.path(),
+        &["capabilities", "grant", "settlement.backfill.dry_run"],
+    )
+    .await;
+
+    let stdout = run_cli(
+        &cli_exe,
+        home.path(),
+        &["settlement", "backfill-receipts", "--dry-run"],
+    )
+    .await;
+
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        ["row_count: 0", "dry_run: true", "rollback_path: (none)"],
+        "the plain-text (no --json) render must emit exactly the three labeled lines, with the \
+         `(none)` sentinel standing in for a null rollback_path on a dry run: {stdout:?}",
     );
 
     let _ = child.kill().await;

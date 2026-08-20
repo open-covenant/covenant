@@ -1,19 +1,20 @@
 import Fastify from 'fastify';
 import { Bot, type Context, type NextFunction } from 'grammy';
-import { MOCK_LEADERBOARD, MOCK_TASKS, resolveSolanaNetwork } from '@covenant/sdk';
+import { resolveSolanaNetwork } from '@covenant-org/sdk';
+import { MOCK_LEADERBOARD, MOCK_TASKS } from './fixtures.js';
 
 const app = Fastify({ logger: true, bodyLimit: 32 * 1024 });
 const PORT = Number(process.env.TELEGRAM_PORT ?? 8788);
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const network = resolveSolanaNetwork();
-const RATE_LIMIT_PER_MIN = Number(process.env.TELEGRAM_RATE_LIMIT_PER_MIN ?? 5);
+export const RATE_LIMIT_PER_MIN = Number(process.env.TELEGRAM_RATE_LIMIT_PER_MIN ?? 5);
 
 let botRunning = false;
 
 // Telegram numeric user-ids permitted to invoke any bot command. Empty set
 // means deny-all — commands silently log + drop, no reply to the caller so
 // an attacker probing the bot can't enumerate allowed accounts.
-function parseAllowlist(raw: string | undefined): Set<number> {
+export function parseAllowlist(raw: string | undefined): Set<number> {
   if (!raw) return new Set();
   return new Set(
     raw
@@ -31,7 +32,7 @@ const ALLOWED_USERS = parseAllowlist(process.env.TELEGRAM_ALLOWED_USER_IDS);
 // the polling/webhook layer is not horizontally scaled. Pruned on miss.
 type Bucket = { count: number; resetAt: number };
 const userBuckets = new Map<number, Bucket>();
-function rateLimit(userId: number): boolean {
+export function rateLimit(userId: number): boolean {
   const now = Date.now();
   const bucket = userBuckets.get(userId);
   if (!bucket || now >= bucket.resetAt) {

@@ -1,0 +1,129 @@
+//! `covenant-evm-signer` sidecar — one-shot, stdin → stdout.
+//!
+//! Reads a Covenant statement as JSON on stdin, signs the equivalent EAS
+//! off-chain attestation with the secp256k1 issuer key, and writes the
+//! attestation JSON to stdout. Like the x402 signer, the key lives in this
+//! process, not the daemon's address space, so its blast radius is bounded.
+//!
+//! Configuration (env):
+//! - `COVENANT_EVM_ISSUER_KEY` — path to the 32-byte secp256k1 issuer
+//!   secret. Loaded through the hardened identity store (`0600`/`0700`),
+//!   created on first use. Required.
+//! - `COVENANT_EVM_CHAIN` — target chain. Only `base-sepolia` (the
+//!   default) is available; mainnet broadcast is gated separately.
+//! - `COVENANT_EVM_MODE` — what stdin holds. `audit-root` (the default)
+//!   reads a dual-signed audit-root VC and must be signed by the key that
+//!   signed the VC's EVM proof. `reputation` reads a reputation projection
+//!   (`{ score, scoreDecimals, sourceChain, solanaAttestationPda, issuedAt,
+//!   expiry }`) and signs it directly.
+
+use std::io::{Read, Write};
+use std::path::Path;
+use std::process::ExitCode;
+
+use covenant_attestation::VerifiableCredential;
+use covenant_evm_signer::{parse_reputation_projection, EasAttestationSigner, EasDomain};
+use covenant_identity::Secp256k1IssuerKey;
+
+type BoxError = Box<dyn std::error::Error>;
+
+fn main() -> ExitCode {
+    match run() {
+        Ok(json) => {
+            if writeln!(std::io::stdout(), "{json}").is_err() {
+                return ExitCode::FAILURE;
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("covenant-evm-signer: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run() -> Result<String, BoxError> {
+    let key_path = std::env::var("COVENANT_EVM_ISSUER_KEY")
+        .map_err(|_| "COVENANT_EVM_ISSUER_KEY is not set")?;
+    let domain = domain_for(
+        std::env::var("COVENANT_EVM_CHAIN")
+            .as_deref()
+            .unwrap_or("base-sepolia"),
+    )?;
+    let mode = std::env::var("COVENANT_EVM_MODE").unwrap_or_else(|_| "audit-root".into());
+
+    let mut input = String::new();
+    std::io::stdin().read_to_string(&mut input)?;
+
+    let issuer = Secp256k1IssuerKey::load_or_create(Path::new(&key_path))?;
+    let signer = EasAttestationSigner::new(issuer, domain);
+
+    let attestation = match mode.as_str() {
+        "audit-root" => signer.attest(&VerifiableCredential::from_json(input.trim())?)?,
+        "reputation" => signer.attest_reputation(&parse_reputation_projection(
+            &serde_json::from_str(input.trim())?,
+        )?)?,
+        other => {
+            return Err(format!(
+                "unsupported COVENANT_EVM_MODE '{other}': 'audit-root' or 'reputation'"
+            )
+            .into())
+        }
+    };
+    Ok(attestation.to_json_string())
+}
+
+/// Resolve the target chain to its EAS domain. Each chain carries its own
+/// EAS domain version, so an unknown chain is refused rather than silently
+/// retargeted (which would sign under the wrong domain and recover the wrong
+/// signer). Off-chain signing only: the issuer signs the attestation here, it
+/// is never broadcast, so mainnet is not a fund-moving path.
+fn domain_for(chain: &str) -> Result<EasDomain, BoxError> {
+    match chain {
+        "base-sepolia" => Ok(EasDomain::base_sepolia()),
+        "base" | "base-mainnet" => Ok(EasDomain::base_mainnet()),
+        other => Err(format!(
+            "unsupported COVENANT_EVM_CHAIN '{other}': expected 'base-sepolia' or 'base'"
+        )
+        .into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn domain_for_resolves_base_chains_and_rejects_others() {
+        assert_eq!(domain_for("base-sepolia").unwrap().chain_id, 84_532);
+        assert_eq!(domain_for("base").unwrap().chain_id, 8_453);
+        assert_eq!(domain_for("base-mainnet").unwrap().chain_id, 8_453);
+        // An unknown chain is refused, not silently retargeted to a default,
+        // so a caller never signs under the wrong EAS domain.
+        assert!(domain_for("mainnet").is_err());
+        assert!(domain_for("ethereum").is_err());
+    }
+
+    #[test]
+    fn reputation_json_parses_and_signs() {
+        let input = json!({
+            "score": 9_500,
+            "scoreDecimals": 4,
+            "sourceChain": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+            "solanaAttestationPda": "0xabababababababababababababababababababababababababababababababab",
+            "issuedAt": 1_700_000_000,
+            "expiry": 1_800_000_000
+        });
+        let projection = parse_reputation_projection(&input).unwrap();
+        assert_eq!(projection.score.score, 9_500);
+        assert_eq!(projection.score.decimals, 4);
+        assert_eq!(projection.solana_attestation_pda, [0xAB; 32]);
+
+        let signer = EasAttestationSigner::base_sepolia(
+            Secp256k1IssuerKey::from_secret_bytes(&[9u8; 32]).unwrap(),
+        );
+        let att = signer.attest_reputation(&projection).unwrap();
+        assert_eq!(att.recover_signer().unwrap(), att.signer);
+    }
+}

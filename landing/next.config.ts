@@ -39,6 +39,13 @@ const securityHeaders = [
 
 const config: NextConfig = {
   reactStrictMode: true,
+  async redirects() {
+    // This post was published at /blog/inference-receipts before it was given
+    // its own path, so keep the old link alive.
+    return [
+      { source: "/blog/inference-receipts", destination: "/covenant-compute", permanent: true },
+    ];
+  },
   productionBrowserSourceMaps: false,
   images: {
     formats: ["image/avif", "image/webp"],

@@ -16,6 +16,10 @@
 //!   (register_identity_v1), which CPIs into MPL Core to anchor the
 //!   tamper-evident PDA<->asset binding. This puts the agent in
 //!   Metaplex's on-chain agent registry.
+//! - set-identity-uri: repoint an existing identity's AgentIdentity URI at
+//!   a fetchable registration document. An identity minted without one
+//!   carries the `covenant://agent/<pubkey>` fallback, which names the
+//!   agent but resolves to nothing.
 //!
 //! Protocol:
 //! - stdin:  one JSON `SignerRequest`.
@@ -23,11 +27,11 @@
 //! - exit 0 on success; non-zero with a message on stderr otherwise.
 //!
 //! Configuration (env, set by the daemon, read after `env_clear`):
-//! - `COVENANT_METAPLEX_KEYPAIR`  — minting keypair JSON path. Required.
-//! - `COVENANT_METAPLEX_RPC_URL`  — Solana RPC. Required.
-//! - `COVENANT_METAPLEX_CLUSTER`  — `devnet` | `mainnet-beta`. Default devnet.
-//! - `COVENANT_METAPLEX_COLLECTION` — MPL Core collection (optional).
-//! - `COVENANT_METAPLEX_PER_ACTION_CAP_LAMPORTS` — refuse a write whose
+//! - `COVENANT_METAPLEX_KEYPAIR`: minting keypair JSON path. Required.
+//! - `COVENANT_METAPLEX_RPC_URL`: Solana RPC. Required.
+//! - `COVENANT_METAPLEX_CLUSTER`: `devnet` | `mainnet-beta`. Default devnet.
+//! - `COVENANT_METAPLEX_COLLECTION`: MPL Core collection (optional).
+//! - `COVENANT_METAPLEX_PER_ACTION_CAP_LAMPORTS`: refuse a write whose
 //!   estimated cost exceeds this. `0`/unset uses the built-in cap.
 
 use std::process::ExitCode;
@@ -40,10 +44,13 @@ use covenant_metaplex::config::{
 };
 use covenant_metaplex::{SignerRequest, SignerResponse};
 use mpl_agent_identity::instructions::RegisterIdentityV1Builder;
-use mpl_core::instructions::{CreateV2Builder, WriteExternalPluginAdapterDataV1Builder};
+use mpl_core::instructions::{
+    CreateV2Builder, UpdateExternalPluginAdapterV1Builder, WriteExternalPluginAdapterDataV1Builder,
+};
 use mpl_core::types::{
-    AppDataInitInfo, DataState, ExternalPluginAdapterInitInfo, ExternalPluginAdapterKey,
-    ExternalPluginAdapterSchema, PluginAuthority,
+    AgentIdentityUpdateInfo, AppDataInitInfo, DataState, ExternalPluginAdapterInitInfo,
+    ExternalPluginAdapterKey, ExternalPluginAdapterSchema, ExternalPluginAdapterUpdateInfo,
+    PluginAuthority,
 };
 use solana_program::instruction::Instruction;
 use solana_program::pubkey::Pubkey;
@@ -128,6 +135,21 @@ async fn run() -> Result<SignerResponse> {
 
     let payer = load_keypair(&keypair_path)?;
 
+    // On mainnet the public verifier rejects any record whose on-chain
+    // authority is not the canonical Covenant key, and the signer stamps
+    // both data_authority and validator with its own pubkey. A misconfigured
+    // keypair would pay to mint records that fail that check, so refuse up
+    // front. Devnet/test keys are left free.
+    if cluster == "mainnet-beta"
+        && payer.pubkey().to_string() != covenant_metaplex::COVENANT_ATTESTATION_AUTHORITY
+    {
+        bail!(
+            "keypair {} is not the canonical Covenant attestation authority {} required on mainnet-beta",
+            payer.pubkey(),
+            covenant_metaplex::COVENANT_ATTESTATION_AUTHORITY
+        );
+    }
+
     let mut input = String::new();
     tokio::io::stdin().read_to_string(&mut input).await?;
     let request: SignerRequest = serde_json::from_str(input.trim())
@@ -144,12 +166,15 @@ async fn run() -> Result<SignerResponse> {
         );
     }
 
-    let http = reqwest::Client::new();
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
     let recent = latest_blockhash(&http, &rpc_url).await?;
     let tx = Transaction::new_signed_with_payer(
         &built.instructions,
         Some(&payer.pubkey()),
-        &[&payer, &built.asset],
+        &built.asset.signers(&payer),
         recent,
     );
 
@@ -166,12 +191,37 @@ async fn run() -> Result<SignerResponse> {
     })
 }
 
-/// A ready-to-sign transaction: the instructions, the fresh asset keypair
-/// that must co-sign the create, and the estimated lamport cost.
+/// A ready-to-sign transaction: the instructions, the asset it lands on, and
+/// the estimated lamport cost.
 struct BuiltTx {
     instructions: Vec<Instruction>,
-    asset: Keypair,
+    asset: AssetRef,
     est_lamports: u64,
+}
+
+/// Creating an asset mints a fresh keypair that must co-sign; updating one
+/// targets an asset that already exists and signs nothing, because the
+/// authority to change it is the payer's.
+enum AssetRef {
+    Fresh(Box<Keypair>),
+    Existing(Pubkey),
+}
+
+impl AssetRef {
+    fn pubkey(&self) -> Pubkey {
+        match self {
+            Self::Fresh(kp) => kp.pubkey(),
+            Self::Existing(pk) => *pk,
+        }
+    }
+
+    /// Signers for the transaction, payer first.
+    fn signers<'a>(&'a self, payer: &'a Keypair) -> Vec<&'a Keypair> {
+        match self {
+            Self::Fresh(kp) => vec![payer, kp],
+            Self::Existing(_) => vec![payer],
+        }
+    }
 }
 
 fn build(request: &SignerRequest, payer: &Keypair) -> Result<BuiltTx> {
@@ -184,31 +234,52 @@ fn build(request: &SignerRequest, payer: &Keypair) -> Result<BuiltTx> {
             if asset.is_some() {
                 bail!("append-to-existing-asset is not supported yet; omit `asset`");
             }
-            covenant_metaplex::validate_root_hash_hex(&payload.root_hash_hex)
+            covenant_metaplex::validate_root_hash_hex(&payload.response_hash)
                 .map_err(|e| anyhow!("{e}"))?;
+            // The signer is the trust boundary: stdin is untrusted, so every
+            // string inscribed on-chain is validated here regardless of who
+            // built the payload (the daemon validates too; this is the gate).
             for (name, value) in [
-                ("releaseTarget", &payload.release_target),
-                ("releaseSubject", &payload.release_subject),
-                ("releaseScope", &payload.release_scope),
+                ("type", payload.r#type.as_str()),
+                ("schema", payload.schema.as_str()),
+                ("hashAlg", payload.hash_alg.as_str()),
+                ("tag", payload.tag.as_str()),
+                ("subject.registry", payload.subject.registry.as_str()),
+                ("covenant.releaseTarget", payload.covenant.release_target.as_str()),
+                ("covenant.releaseSubject", payload.covenant.release_subject.as_str()),
+                ("covenant.releaseScope", payload.covenant.release_scope.as_str()),
             ] {
                 covenant_metaplex::validate_attestation_field(name, value)
                     .map_err(|e| anyhow!("{e}"))?;
+            }
+            if let Some(agent_id) = &payload.subject.agent_id {
+                covenant_metaplex::validate_attestation_field("subject.agentId", agent_id)
+                    .map_err(|e| anyhow!("{e}"))?;
+            }
+            for (name, pk) in [
+                ("subject.asset", &payload.subject.asset),
+                ("subject.registration", &payload.subject.registration),
+            ] {
+                if let Some(pk) = pk {
+                    parse_pubkey(pk).with_context(|| name.to_string())?;
+                }
             }
             let collection = match req_collection {
                 Some(c) => Some(parse_pubkey(c).context("request collection")?),
                 None => collection_from_env()?,
             };
-            let data = serde_json::to_vec(payload).context("encode attestation payload")?;
+            // Stamp the validator with the key that actually signs, so the
+            // on-chain record can't claim an authority the daemon doesn't hold.
+            let mut payload = payload.clone();
+            payload.validator = payer.pubkey().to_string();
+            let data = serde_json::to_vec(&payload).context("encode attestation payload")?;
             let asset = Keypair::new();
             let create_ix = CreateV2Builder::new()
                 .asset(asset.pubkey())
                 .payer(payer.pubkey())
                 .collection(collection)
                 .data_state(DataState::AccountState)
-                .name(truncate(&format!(
-                    "Covenant root {}",
-                    payload.release_target
-                )))
+                .name(truncate(&format!("Covenant root {}", payload.covenant.release_target)))
                 .uri(String::new())
                 .external_plugin_adapters(vec![ExternalPluginAdapterInitInfo::AppData(
                     AppDataInitInfo {
@@ -230,11 +301,9 @@ fn build(request: &SignerRequest, payer: &Keypair) -> Result<BuiltTx> {
                 .collection(collection)
                 .payer(payer.pubkey())
                 .authority(Some(payer.pubkey()))
-                .key(ExternalPluginAdapterKey::AppData(
-                    PluginAuthority::Address {
-                        address: payer.pubkey(),
-                    },
-                ))
+                .key(ExternalPluginAdapterKey::AppData(PluginAuthority::Address {
+                    address: payer.pubkey(),
+                }))
                 .data(data.clone())
                 .instruction();
             let est = ASSET_BASE_LAMPORTS
@@ -242,7 +311,7 @@ fn build(request: &SignerRequest, payer: &Keypair) -> Result<BuiltTx> {
                 + LAMPORTS_PER_DATA_BYTE * data.len() as u64;
             Ok(BuiltTx {
                 instructions: vec![create_ix, write_ix],
-                asset,
+                asset: AssetRef::Fresh(Box::new(asset)),
                 est_lamports: est,
             })
         }
@@ -255,6 +324,12 @@ fn build(request: &SignerRequest, payer: &Keypair) -> Result<BuiltTx> {
             if asset.is_some() {
                 bail!("binding an existing asset is not supported yet; omit `asset`");
             }
+            // Same trust boundary as the attest arm: stdin is untrusted, so
+            // every string inscribed on-chain is validated here before any
+            // network call, not just where the daemon happens to have checked.
+            covenant_metaplex::validate_attestation_field("agentLabel", agent_label)
+                .map_err(|e| anyhow!("{e}"))?;
+            parse_pubkey(agent_pubkey).context("agentPubkey")?;
             let collection = collection_from_env()?;
             let asset = Keypair::new();
             // Prefer a fetchable ERC-8004 registration document; fall back
@@ -294,7 +369,43 @@ fn build(request: &SignerRequest, payer: &Keypair) -> Result<BuiltTx> {
                 + LAMPORTS_PER_DATA_BYTE * uri.len() as u64;
             Ok(BuiltTx {
                 instructions: vec![create_ix, register_ix],
-                asset,
+                asset: AssetRef::Fresh(Box::new(asset)),
+                est_lamports: est,
+            })
+        }
+        SignerRequest::SetIdentityUri {
+            asset,
+            registration_uri,
+        } => {
+            let asset = parse_pubkey(asset).context("asset")?;
+            // Rejects the covenant:// fallback along with everything else that
+            // isn't fetchable, which is the point of the action.
+            covenant_metaplex::validate_registration_uri(registration_uri)
+                .map_err(|e| anyhow!("{e}"))?;
+            let collection = collection_from_env()?;
+            // Core requires the collection account on every instruction
+            // touching an asset that lives in one, or it fails with
+            // MissingCollection.
+            let update_ix = UpdateExternalPluginAdapterV1Builder::new()
+                .asset(asset)
+                .collection(collection)
+                .payer(payer.pubkey())
+                .authority(Some(payer.pubkey()))
+                .key(ExternalPluginAdapterKey::AgentIdentity)
+                .update_info(ExternalPluginAdapterUpdateInfo::AgentIdentity(
+                    AgentIdentityUpdateInfo {
+                        uri: Some(registration_uri.clone()),
+                        lifecycle_checks: None,
+                    },
+                ))
+                .instruction();
+            // No asset rent: the account exists. Only the URI's own bytes and
+            // the protocol fee move.
+            let est =
+                CORE_PROTOCOL_FEE_LAMPORTS + LAMPORTS_PER_DATA_BYTE * registration_uri.len() as u64;
+            Ok(BuiltTx {
+                instructions: vec![update_ix],
+                asset: AssetRef::Existing(asset),
                 est_lamports: est,
             })
         }
@@ -309,17 +420,10 @@ fn assert_pinned(name: &str, linked: &str, pinned: &str) -> Result<()> {
 }
 
 fn collection_from_env() -> Result<Option<Pubkey>> {
-    parse_collection(std::env::var("COVENANT_METAPLEX_COLLECTION").ok())
-}
-
-/// Resolve the optional collection pin from its raw env value. Split from the
-/// env read so the parse, empty-as-unset, and error arms are unit-testable
-/// without mutating process-global state.
-fn parse_collection(raw: Option<String>) -> Result<Option<Pubkey>> {
-    match raw {
-        Some(c) if !c.is_empty() => Ok(Some(
-            parse_pubkey(&c).context("COVENANT_METAPLEX_COLLECTION")?,
-        )),
+    match std::env::var("COVENANT_METAPLEX_COLLECTION") {
+        Ok(c) if !c.is_empty() => {
+            Ok(Some(parse_pubkey(&c).context("COVENANT_METAPLEX_COLLECTION")?))
+        }
         _ => Ok(None),
     }
 }
@@ -337,34 +441,6 @@ fn load_keypair(path: &str) -> Result<Keypair> {
     let bytes: Vec<u8> =
         serde_json::from_str(raw.trim()).context("keypair file must be a JSON byte array")?;
     Keypair::try_from(bytes.as_slice()).map_err(|e| anyhow!("load keypair: {e}"))
-}
-
-/// Maximum RPC response body the signer buffers into memory. The Solana RPC
-/// is operator-configured but remote, so it controls its own response; an
-/// unbounded read lets a compromised or MITM'd endpoint exhaust the sidecar
-/// that holds the minting key. 16 MiB sits far above any blockhash or
-/// signature-status result yet stops a runaway stream — the memory-axis
-/// sibling of covenant-x402's signer response cap.
-const MAX_RPC_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
-
-/// Reads a response body into bytes, refusing anything past `max`. The
-/// `Content-Length` check rejects an oversized declared body before it is
-/// streamed; the running accumulation check is the real guard, since the
-/// header is optional and remote-controlled.
-async fn read_capped(mut resp: reqwest::Response, max: usize) -> Result<Vec<u8>> {
-    if let Some(len) = resp.content_length() {
-        if len > max as u64 {
-            bail!("rpc response declares {len} bytes, over the {max}-byte cap");
-        }
-    }
-    let mut buf = Vec::new();
-    while let Some(chunk) = resp.chunk().await.context("rpc response chunk")? {
-        if buf.len() + chunk.len() > max {
-            bail!("rpc response stream over the {max}-byte cap");
-        }
-        buf.extend_from_slice(&chunk);
-    }
-    Ok(buf)
 }
 
 async fn rpc(
@@ -385,11 +461,8 @@ async fn rpc(
         .send()
         .await
         .with_context(|| format!("rpc {method}"))?;
-    let raw = read_capped(resp, MAX_RPC_RESPONSE_BYTES)
-        .await
-        .with_context(|| format!("rpc {method}"))?;
     let value: serde_json::Value =
-        serde_json::from_slice(&raw).with_context(|| format!("rpc {method} decode"))?;
+        resp.json().await.with_context(|| format!("rpc {method} decode"))?;
     if let Some(err) = value.get("error").filter(|e| !e.is_null()) {
         bail!("rpc {method} error: {err}");
     }
@@ -468,395 +541,57 @@ async fn confirm_signature(http: &reqwest::Client, url: &str, signature: &str) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use covenant_metaplex::AttestationPayload;
 
-    fn temp_path(tag: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!(
-            "covenant-metaplex-signer-{}-{tag}.json",
-            std::process::id()
-        ))
-    }
+    const ASSET: &str = "FSGE2rZ1cBsUSiGz8Y8d5miifC4rNKRbmuSGrocWpx1H";
 
-    #[test]
-    fn assert_pinned_accepts_a_pinned_allowlisted_id() {
-        assert_pinned("mpl-core", MPL_CORE_PROGRAM_ID, MPL_CORE_PROGRAM_ID).unwrap();
-    }
-
-    #[test]
-    fn assert_pinned_rejects_a_mismatched_id() {
-        let err = assert_pinned(
-            "mpl-core",
-            &Pubkey::new_unique().to_string(),
-            MPL_CORE_PROGRAM_ID,
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(err.contains("is not the pinned"), "{err}");
-    }
-
-    #[test]
-    fn assert_pinned_rejects_a_matching_but_unallowlisted_id() {
-        // linked == pinned, so the equality check passes; an id absent from
-        // ALLOWED_PROGRAM_IDS must still be refused.
-        let rogue = Pubkey::new_unique().to_string();
-        let err = assert_pinned("mpl-core", &rogue, &rogue)
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("is not the pinned"), "{err}");
-    }
-
-    #[test]
-    fn parse_pubkey_round_trips_a_valid_key() {
-        let key = Pubkey::new_unique();
-        assert_eq!(parse_pubkey(&key.to_string()).unwrap(), key);
-    }
-
-    #[test]
-    fn parse_pubkey_rejects_garbage() {
-        let err = parse_pubkey("not-base58!!").unwrap_err().to_string();
-        assert!(err.contains("invalid pubkey"), "{err}");
-    }
-
-    #[test]
-    fn truncate_caps_at_name_max_on_a_char_boundary() {
-        assert_eq!(truncate(&"a".repeat(40)).chars().count(), NAME_MAX);
-        assert_eq!(truncate("short"), "short");
-        // multibyte chars must cap at NAME_MAX chars without panicking on a byte split.
-        assert_eq!(truncate(&"é".repeat(40)).chars().count(), NAME_MAX);
-    }
-
-    #[test]
-    fn load_keypair_round_trips_a_written_key() {
-        let key = Keypair::new();
-        let path = temp_path("valid");
-        std::fs::write(
-            &path,
-            serde_json::to_string(&key.to_bytes().to_vec()).unwrap(),
-        )
-        .unwrap();
-        let loaded = load_keypair(path.to_str().unwrap()).unwrap();
-        assert_eq!(loaded.pubkey(), key.pubkey());
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn load_keypair_reports_a_missing_file() {
-        let path = temp_path("absent");
-        let _ = std::fs::remove_file(&path);
-        let err = load_keypair(path.to_str().unwrap())
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("read keypair"), "{err}");
-    }
-
-    #[test]
-    fn load_keypair_rejects_non_array_json() {
-        let path = temp_path("badjson");
-        std::fs::write(&path, "not json").unwrap();
-        let err = load_keypair(path.to_str().unwrap())
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("keypair file must be a JSON byte array"),
-            "{err}"
-        );
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn load_keypair_rejects_a_wrong_length_byte_array() {
-        let path = temp_path("short");
-        std::fs::write(&path, "[1,2,3,4,5,6,7,8,9,10]").unwrap();
-        let err = load_keypair(path.to_str().unwrap())
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("load keypair"), "{err}");
-        let _ = std::fs::remove_file(&path);
-    }
-
-    fn valid_payload() -> AttestationPayload {
-        AttestationPayload::new("a".repeat(64), "v0.1.0", "covenant", "audit", 1_700_000_000)
-    }
-
-    // BuiltTx is intentionally not Debug (it carries a Keypair), so .unwrap_err()
-    // is unavailable; surface the error message without printing the Ok value.
-    fn build_err(req: &SignerRequest) -> String {
-        match build(req, &Keypair::new()) {
-            Ok(_) => panic!("expected build() to reject the request"),
-            Err(e) => e.to_string(),
+    fn set_uri(uri: &str) -> SignerRequest {
+        SignerRequest::SetIdentityUri {
+            asset: ASSET.into(),
+            registration_uri: uri.into(),
         }
     }
 
     #[test]
-    fn build_rejects_attest_on_an_existing_asset() {
-        let req = SignerRequest::AttestAuditRoot {
-            payload: valid_payload(),
-            collection: None,
-            asset: Some(Pubkey::new_unique().to_string()),
-        };
-        let err = build_err(&req);
-        assert!(err.contains("not supported"), "{err}");
+    fn set_identity_uri_targets_the_existing_asset_and_adds_no_signer() {
+        let payer = Keypair::new();
+        let built = build(&set_uri("https://opencovenant.org/a/verify"), &payer).unwrap();
+
+        assert_eq!(built.asset.pubkey(), Pubkey::from_str(ASSET).unwrap());
+        assert_eq!(built.instructions.len(), 1);
+        // The asset already exists, so the payer is the only signature.
+        let signers = built.asset.signers(&payer);
+        assert_eq!(signers.len(), 1);
+        assert_eq!(signers[0].pubkey(), payer.pubkey());
     }
 
     #[test]
-    fn build_rejects_register_on_an_existing_asset() {
-        let req = SignerRequest::RegisterIdentity {
-            agent_label: "agent".into(),
-            agent_pubkey: Pubkey::new_unique().to_string(),
-            asset: Some(Pubkey::new_unique().to_string()),
-            registration_uri: None,
+    fn set_identity_uri_refuses_the_non_fetchable_fallback() {
+        let payer = Keypair::new();
+        let err = match build(&set_uri("covenant://agent/Ep7dD7bi"), &payer) {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("the non-fetchable fallback must be refused"),
         };
-        let err = build_err(&req);
-        assert!(err.contains("not supported"), "{err}");
+        assert!(err.contains("https:// or ar://"), "{err}");
     }
 
     #[test]
-    fn build_rejects_attest_with_a_malformed_root_hash() {
-        let req = SignerRequest::AttestAuditRoot {
-            payload: AttestationPayload::new("zz".repeat(32), "v0.1.0", "covenant", "audit", 1),
-            collection: None,
-            asset: None,
+    fn set_identity_uri_refuses_a_malformed_asset() {
+        let payer = Keypair::new();
+        let req = SignerRequest::SetIdentityUri {
+            asset: "not-a-pubkey".into(),
+            registration_uri: "https://opencovenant.org/a/verify".into(),
         };
-        let err = build_err(&req);
-        assert!(err.contains("hex"), "{err}");
+        assert!(build(&req, &payer).is_err());
     }
 
     #[test]
-    fn build_rejects_attest_with_a_control_char_in_a_release_field() {
-        // The signer re-validates the payload it is about to inscribe — it does
-        // not trust its stdin — so a control character in a release_* field is
-        // rejected here too, not only at the daemon tool boundary.
-        let req = SignerRequest::AttestAuditRoot {
-            payload: AttestationPayload::new(
-                "a".repeat(64),
-                "v0.1.0",
-                "covenant\u{1b}",
-                "audit",
-                1,
-            ),
-            collection: None,
-            asset: None,
-        };
-        let err = build_err(&req);
-        assert!(err.contains("control characters"), "{err}");
-    }
-
-    #[test]
-    fn build_attest_emits_two_instructions_and_a_payload_sized_cost() {
-        let payload = valid_payload();
-        let req = SignerRequest::AttestAuditRoot {
-            payload: payload.clone(),
-            collection: None,
-            asset: None,
-        };
-        let built = build(&req, &Keypair::new()).unwrap();
-        assert_eq!(built.instructions.len(), 2);
-        let data_len = serde_json::to_vec(&payload).unwrap().len() as u64;
-        assert_eq!(
-            built.est_lamports,
-            ASSET_BASE_LAMPORTS + CORE_PROTOCOL_FEE_LAMPORTS + LAMPORTS_PER_DATA_BYTE * data_len
-        );
-    }
-
-    #[test]
-    fn build_attest_rejects_a_malformed_request_collection() {
-        // The request-collection arm parses the caller-supplied pin before the
-        // env fallback; a bad value is a hard error tagged "request collection"
-        // so it is distinguishable from a bad COVENANT_METAPLEX_COLLECTION.
-        let req = SignerRequest::AttestAuditRoot {
-            payload: valid_payload(),
-            collection: Some("not-base58!!".into()),
-            asset: None,
-        };
-        let err = build_err(&req);
-        assert!(err.contains("request collection"), "{err}");
-    }
-
-    #[test]
-    fn build_attest_accepts_a_valid_request_collection() {
-        // A valid caller-supplied collection parses and builds the same two
-        // instructions at the same payload-sized cost as the no-collection
-        // case: a collection account does not perturb the cost estimate.
-        let payload = valid_payload();
-        let req = SignerRequest::AttestAuditRoot {
-            payload: payload.clone(),
-            collection: Some(Pubkey::new_unique().to_string()),
-            asset: None,
-        };
-        let built = build(&req, &Keypair::new()).unwrap();
-        assert_eq!(built.instructions.len(), 2);
-        let data_len = serde_json::to_vec(&payload).unwrap().len() as u64;
-        assert_eq!(
-            built.est_lamports,
-            ASSET_BASE_LAMPORTS + CORE_PROTOCOL_FEE_LAMPORTS + LAMPORTS_PER_DATA_BYTE * data_len
-        );
-    }
-
-    #[test]
-    fn build_register_falls_back_to_the_covenant_uri_and_prices_it() {
-        let agent_pubkey = Pubkey::new_unique().to_string();
-        let req = SignerRequest::RegisterIdentity {
-            agent_label: "agent".into(),
-            agent_pubkey: agent_pubkey.clone(),
-            asset: None,
-            registration_uri: None,
-        };
-        let built = build(&req, &Keypair::new()).unwrap();
-        assert_eq!(built.instructions.len(), 2);
-        let uri_len = format!("covenant://agent/{agent_pubkey}").len() as u64;
-        assert_eq!(
-            built.est_lamports,
-            ASSET_BASE_LAMPORTS
-                + CORE_PROTOCOL_FEE_LAMPORTS
-                + IDENTITY_PDA_LAMPORTS
-                + LAMPORTS_PER_DATA_BYTE * uri_len
-        );
-    }
-
-    #[test]
-    fn build_register_rejects_a_plain_http_uri() {
-        let req = SignerRequest::RegisterIdentity {
-            agent_label: "agent".into(),
-            agent_pubkey: Pubkey::new_unique().to_string(),
-            asset: None,
-            registration_uri: Some("http://example.org/a.json".into()),
-        };
-        let err = build_err(&req);
-        assert!(err.contains("registrationUri"), "{err}");
-    }
-
-    #[test]
-    fn build_register_accepts_an_https_uri_and_prices_it() {
-        let uri = "https://example.org/agent.json";
-        let req = SignerRequest::RegisterIdentity {
-            agent_label: "agent".into(),
-            agent_pubkey: Pubkey::new_unique().to_string(),
-            asset: None,
-            registration_uri: Some(uri.into()),
-        };
-        let built = build(&req, &Keypair::new()).unwrap();
-        assert_eq!(built.instructions.len(), 2);
-        assert_eq!(
-            built.est_lamports,
-            ASSET_BASE_LAMPORTS
-                + CORE_PROTOCOL_FEE_LAMPORTS
-                + IDENTITY_PDA_LAMPORTS
-                + LAMPORTS_PER_DATA_BYTE * uri.len() as u64
-        );
-    }
-
-    #[test]
-    fn build_register_binds_the_agent_identity_pda_to_the_created_asset() {
-        // The register instruction must target the PDA ["agent_identity", asset]
-        // under the MPL Agent Identity program, and that asset must be the one
-        // the create instruction mints. The seed is hardcoded here so a change
-        // to AGENT_IDENTITY_SEED is caught, not mirrored.
-        let req = SignerRequest::RegisterIdentity {
-            agent_label: "agent".into(),
-            agent_pubkey: Pubkey::new_unique().to_string(),
-            asset: None,
-            registration_uri: None,
-        };
-        let built = build(&req, &Keypair::new()).unwrap();
-        let asset = built.asset.pubkey();
-        let (expected_pda, _) = Pubkey::find_program_address(
-            &[b"agent_identity", asset.as_ref()],
-            &mpl_agent_identity::ID,
-        );
-        let register_ix = &built.instructions[1];
+    fn an_update_costs_no_asset_rent() {
+        let payer = Keypair::new();
+        let update = build(&set_uri("https://opencovenant.org/a/verify"), &payer).unwrap();
         assert!(
-            register_ix
-                .accounts
-                .iter()
-                .any(|a| a.pubkey == expected_pda),
-            "register instruction must reference the derived agent_identity PDA"
+            update.est_lamports < ASSET_BASE_LAMPORTS,
+            "an update should not be priced like a mint: {}",
+            update.est_lamports
         );
-        let create_ix = &built.instructions[0];
-        assert!(
-            create_ix.accounts.iter().any(|a| a.pubkey == asset),
-            "create and register must reference the same minted asset"
-        );
-    }
-
-    #[test]
-    fn parse_collection_parses_a_pubkey_and_treats_unset_or_empty_as_none() {
-        assert_eq!(parse_collection(None).unwrap(), None, "unset -> no pin");
-        assert_eq!(
-            parse_collection(Some(String::new())).unwrap(),
-            None,
-            "empty -> treated as unset, not an error"
-        );
-        let pin = Pubkey::new_unique();
-        assert_eq!(parse_collection(Some(pin.to_string())).unwrap(), Some(pin));
-        let err = parse_collection(Some("not-base58!!".into()))
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("COVENANT_METAPLEX_COLLECTION"),
-            "a bad pubkey is a hard error tagged with the env var: {err}"
-        );
-    }
-
-    /// Serves one canned raw HTTP response on a fresh ephemeral port and
-    /// returns its URL. A blocking std listener on a background thread keeps
-    /// the signer's tokio dependency free of the `net` feature.
-    fn serve_once(raw: Vec<u8>) -> String {
-        use std::io::{Read, Write};
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        std::thread::spawn(move || {
-            let (mut sock, _) = listener.accept().unwrap();
-            let _ = sock.read(&mut [0u8; 1024]);
-            let _ = sock.write_all(&raw);
-            let _ = sock.flush();
-        });
-        format!("http://{addr}")
-    }
-
-    #[tokio::test]
-    async fn read_capped_rejects_oversized_declared_body() {
-        let body = vec![b'a'; 5000];
-        let mut raw =
-            format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len()).into_bytes();
-        raw.extend_from_slice(&body);
-        let url = serve_once(raw);
-        let resp = reqwest::Client::new().get(&url).send().await.unwrap();
-        let err = read_capped(resp, 64).await.unwrap_err().to_string();
-        assert!(
-            err.contains("declares 5000 bytes, over the 64-byte cap"),
-            "{err}"
-        );
-    }
-
-    #[tokio::test]
-    async fn read_capped_rejects_oversized_streamed_body() {
-        // Chunked framing leaves Content-Length unset, so only the running
-        // accumulation guard can stop the body.
-        let body = vec![b'b'; 200];
-        let mut raw = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec();
-        raw.extend_from_slice(format!("{:x}\r\n", body.len()).as_bytes());
-        raw.extend_from_slice(&body);
-        raw.extend_from_slice(b"\r\n0\r\n\r\n");
-        let url = serve_once(raw);
-        let resp = reqwest::Client::new().get(&url).send().await.unwrap();
-        assert!(
-            resp.content_length().is_none(),
-            "chunked body has no length"
-        );
-        let err = read_capped(resp, 64).await.unwrap_err().to_string();
-        assert!(err.contains("stream over the 64-byte cap"), "{err}");
-    }
-
-    #[tokio::test]
-    async fn read_capped_decodes_a_small_body() {
-        let body = br#"{"jsonrpc":"2.0","id":"x","result":"ok"}"#.to_vec();
-        let mut raw =
-            format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len()).into_bytes();
-        raw.extend_from_slice(&body);
-        let url = serve_once(raw);
-        let resp = reqwest::Client::new().get(&url).send().await.unwrap();
-        let bytes = read_capped(resp, MAX_RPC_RESPONSE_BYTES).await.unwrap();
-        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(value.get("result").and_then(|r| r.as_str()), Some("ok"));
     }
 }

@@ -1,7 +1,7 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { SolanaAddress } from '@covenant/sdk';
+import type { SolanaAddress } from '@covenant-org/sdk';
 import { getJson } from '../http/json.js';
 
 export interface Session {

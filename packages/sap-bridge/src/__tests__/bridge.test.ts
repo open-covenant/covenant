@@ -1,9 +1,13 @@
 import { describe, it, expect } from 'vitest';
+import { Keypair } from '@solana/web3.js';
 import {
   BridgeDisabledError,
+  BridgeSignerRequiredError,
   BridgeVerifierRequiredError,
   SapBridge,
   resolveSynapseConfig,
+  type AgentManifest,
+  type AuditRootAttestation,
   type SapKeypair,
 } from '../index.js';
 
@@ -13,6 +17,14 @@ const fakeKeypair: SapKeypair = {
   publicKey: { toBase58: () => 'Fake1111111111111111111111111111111111111111', toBuffer: () => Buffer.alloc(32) },
   secretKey: new Uint8Array(64),
 };
+
+// A real keypair whose pubkey round-trips through web3.PublicKey. The
+// attestAgent input guards run after loadSdk() but before any RPC, so a
+// real verifier + valid agent PDA reaches them without touching the
+// network (createSapClient builds a lazy Connection).
+const realVerifier = (): SapKeypair => Keypair.generate() as unknown as SapKeypair;
+const validAgentPda = () => Keypair.generate().publicKey.toBase58();
+const validRoot = '00'.repeat(32);
 
 const enabledConfig = () =>
   resolveSynapseConfig({ COVENANT_SAP_ENABLED: 'true', COVENANT_SOLANA_CLUSTER: 'devnet' });
@@ -67,5 +79,52 @@ describe('SapBridge', () => {
     await expect(
       bridge.attestAgent({ agentPda: 'Agent111', rootHashHex: '00'.repeat(32) }),
     ).rejects.toBeInstanceOf(BridgeVerifierRequiredError);
+  });
+
+  it('attestAgent rejects an audit root that is not 32 bytes of hex', async () => {
+    const bridge = new SapBridge({ config: enabledConfig(), verifier: realVerifier() });
+    await expect(
+      bridge.attestAgent({ agentPda: validAgentPda(), rootHashHex: '00'.repeat(16) }),
+    ).rejects.toThrow('audit root must be a 32-byte hex string');
+    await expect(
+      bridge.attestAgent({ agentPda: validAgentPda(), rootHashHex: 'zz' + '00'.repeat(31) }),
+    ).rejects.toThrow('audit root must be a 32-byte hex string');
+  });
+
+  it('attestAgent rejects an attestationType outside 1..=32 characters', async () => {
+    const bridge = new SapBridge({ config: enabledConfig(), verifier: realVerifier() });
+    await expect(
+      bridge.attestAgent({ agentPda: validAgentPda(), rootHashHex: validRoot, attestationType: '' }),
+    ).rejects.toThrow('attestationType must be 1..=32 characters');
+    await expect(
+      bridge.attestAgent({ agentPda: validAgentPda(), rootHashHex: validRoot, attestationType: 'x'.repeat(33) }),
+    ).rejects.toThrow('attestationType must be 1..=32 characters');
+  });
+});
+
+describe('SapBridge on-chain write signer guard', () => {
+  // publishAgent / updateAgent / publishAuditRoot each call requireSigner()
+  // before loadSdk(), so an enabled bridge with no signer fails closed with
+  // BridgeSignerRequiredError before any RPC. The empty manifest/attestation
+  // never matters: the guard precedes any argument use. Distinct from the
+  // verifier guard (different op, error type, and COVENANT_SAP_KEYPAIR env).
+  const enabledNoSigner = () => new SapBridge({ config: enabledConfig() });
+
+  it('publishAuditRoot fails closed without a signer when enabled', async () => {
+    await expect(
+      enabledNoSigner().publishAuditRoot({} as AuditRootAttestation),
+    ).rejects.toBeInstanceOf(BridgeSignerRequiredError);
+  });
+
+  it('publishAgent reports the operation that requires a signer', async () => {
+    await expect(enabledNoSigner().publishAgent({} as AgentManifest)).rejects.toThrow(
+      'publishAgent requires a signer',
+    );
+  });
+
+  it('updateAgent reports the operation that requires a signer', async () => {
+    await expect(enabledNoSigner().updateAgent({} as AgentManifest)).rejects.toThrow(
+      'updateAgent requires a signer',
+    );
   });
 });

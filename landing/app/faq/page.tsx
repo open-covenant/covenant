@@ -48,7 +48,12 @@ const FAQ: { id: string; q: string; a: string }[] = [
   {
     id: "blockchain",
     q: "Does Covenant require a blockchain?",
-    a: "No. Covenant runs fully locally and records settlement receipts to a local ledger by default. On-chain settlement to Solana is an optional, planned boundary; chain fields stay empty unless a settlement integration is configured.",
+    a: "No. Covenant runs fully locally and records settlement receipts to a local ledger by default. The Solana settlement program is live on mainnet, but the daemon anchors receipts locally by default; chain fields stay empty unless the on-chain flush is configured.",
+  },
+  {
+    id: "multi-chain",
+    q: "Does Covenant work across chains?",
+    a: "Yes. $CVNT is a single Solana mint that never bridges, but Covenant's trust layer projects onto Base mainnet: the foundation agent is registered under ERC-8004, a bond-receipt verifier and an EAS reputation schema are deployed, and agents resolve through an ENS CCIP-Read gateway, each as a signed statement any EVM contract verifies with one ecrecover. Per-call fees and bonds are always chain-local USDC. On-chain reputation writes and funded bonds are registered but not yet exercised. Covenant's payment and bond primitives also reach Robinhood Chain mainnet (chain 4663), where a USDG x402 payment and an on-chain bounded-spend escrow are proven with real USDG, while identity stays Solana-canonical and its trust verifiers are deployed but not yet exercised.",
   },
   {
     id: "eight-primitives",
@@ -58,7 +63,7 @@ const FAQ: { id: string; q: string; a: string }[] = [
   {
     id: "production-ready",
     q: "Is Covenant production-ready?",
-    a: "Not yet. Covenant is pre-1.0. The local control plane, including the daemon, CLI, identity, permissions, memory, and audit log, is implemented and live-tested. Production-grade isolation, networked multi-host operation, and on-chain settlement are on the roadmap, not the changelog.",
+    a: "Not yet. Covenant is pre-1.0. The local control plane, including the daemon, CLI, identity, permissions, memory, and audit log, is implemented and live-tested. The Solana settlement program is live on mainnet (credits, staking, slashing, on-chain receipt anchoring), though its daemon-driven per-intent lifecycle is not yet production. Production-grade isolation and networked multi-host operation remain on the roadmap, not the changelog.",
   },
   {
     id: "staking",

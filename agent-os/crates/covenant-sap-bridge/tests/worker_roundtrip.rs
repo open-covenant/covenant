@@ -73,7 +73,10 @@ async fn attest_agent_maps_success_envelope() {
         attestation_type: None,
         expires_at_unix: None,
     };
-    let published = bridge.publish_attestation(&att).await.expect("attest-agent");
+    let published = bridge
+        .publish_attestation(&att)
+        .await
+        .expect("attest-agent");
     assert_eq!(published.attestation_pda, "Att777");
     assert_eq!(published.attester, "Ver555");
     assert_eq!(published.agent_pda, "Agent111");
@@ -101,7 +104,10 @@ async fn attest_agent_rejects_short_hash_before_spawning_worker() {
         attestation_type: None,
         expires_at_unix: None,
     };
-    let err = bridge.publish_attestation(&att).await.expect_err("must reject");
+    let err = bridge
+        .publish_attestation(&att)
+        .await
+        .expect_err("must reject");
     assert!(
         matches!(err, BridgeError::Invalid(_)),
         "short hash must surface as Invalid before any spawn: {err:?}"

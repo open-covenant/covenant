@@ -23,6 +23,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+
+pub mod reputation;
 use std::sync::Arc;
 use tokio::fs::{self, OpenOptions};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -64,6 +66,52 @@ pub struct AuditIntegrityReport {
     pub valid: bool,
     pub root_hash_hex: String,
     pub failures: Vec<String>,
+}
+
+/// A self-contained proof that one audit event is folded into the audit
+/// root — the chain tip the SAP bridge anchors on-chain. The log is a
+/// linear SHA-256 hash chain (`c_0 = 0…0`, `c_{i+1} = H(c_i ‖ H(line_i))`),
+/// so a proof carries the target's exact serialized line, the chain hash
+/// immediately before it, and the per-event hash of every event after it.
+/// Folding those forward reproduces `root_hash_hex`. Verify offline with
+/// [`verify_inclusion_proof`] — no access to the rest of the log needed.
+///
+/// Because the chain is linear (not a binary Merkle tree), the proof is
+/// O(events-after-target) in size, not O(log n). That is inherent to the
+/// chain structure; the proof is still self-verifying against the anchored
+/// root.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AuditInclusionProof {
+    /// 0-based position of the proven event in the chain.
+    pub leaf_index: u64,
+    /// Audit event id of the proven event (also inside `leaf_line`).
+    pub event_id: Uuid,
+    /// The exact serialized event line whose SHA-256 is the leaf hash. The
+    /// verifier rehashes this and confirms it equals `leaf_event_hash_hex`,
+    /// binding the proof to this precise event content.
+    pub leaf_line: String,
+    /// SHA-256 of `leaf_line` — the per-event hash folded into the chain.
+    pub leaf_event_hash_hex: String,
+    /// Chain hash immediately before the leaf (`c_leaf_index`). The
+    /// all-zero hash when `leaf_index == 0`.
+    pub prev_chain_hash_hex: String,
+    /// SHA-256 of each event after the leaf, in order — folded forward to
+    /// the root. Empty when the leaf is the chain tip.
+    pub suffix_event_hashes_hex: Vec<String>,
+    /// The chain tip this proof reconstructs — the value the SAP bridge
+    /// anchors on-chain and `verify_integrity` reports.
+    pub root_hash_hex: String,
+}
+
+/// Outcome of [`verify_inclusion_proof`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AuditInclusionCheck {
+    pub valid: bool,
+    /// The root recomputed by folding the proof, for comparison with the
+    /// on-chain anchor.
+    pub computed_root_hash_hex: String,
+    /// `None` when valid; otherwise why the proof failed.
+    pub reason: Option<String>,
 }
 
 /// Attribution for one capability that authorized an action during a
@@ -285,6 +333,46 @@ pub enum AuditKind {
         scan_limit: u64,
         error: Option<String>,
     },
+    /// Logged by the receiving daemon for every cross-host A2A admission
+    /// decision (multi-host slice 4b-2): a `SignedA2ATask` arriving from a
+    /// remote host is opened, authorized against the known-hosts registry,
+    /// checked for recipient-self and freshness, deduplicated, and run
+    /// through the recipient recv-gate before it reaches the local mailbox.
+    /// This row is daemon-authored (`issuer = self.identity`) because the
+    /// remote sender holds no local peer token — its identity is the proven
+    /// `sender_pubkey_b58`, not the audit issuer. `outcome` is `"admitted"`,
+    /// `"duplicate"`, or `"rejected"`; `reason` carries the internal decision
+    /// stage (`"signature_invalid"`, `"unknown_principal"`,
+    /// `"recipient_mismatch"`, `"stale"`, `"future_skew"`,
+    /// `"recv_not_granted"`, …) for the operator's `/audit` feed only — the
+    /// stage is never echoed to the remote caller, so the audit row is the
+    /// sole place the failure stage is observable.
+    CrossHostA2AAdmission {
+        sender_pubkey_b58: String,
+        recipient_display: String,
+        outcome: String,
+        reason: String,
+    },
+    /// Logged by the *sending* daemon for every cross-host A2A delivery attempt
+    /// (multi-host slice 4b-3): this daemon seals a local task under its own
+    /// identity and POSTs it to a known-host peer's inbound route. The mirror of
+    /// [`CrossHostA2AAdmission`] from the sender's side — daemon-authored
+    /// (`issuer = self.identity`, the cross-host sender), with the remote it
+    /// addressed in `recipient_pubkey_b58`/`recipient_display`. `outcome` is
+    /// `"delivered"` (the remote acknowledged admission), `"refused"` (rejected
+    /// before the wire by the identity binding, or refused by the remote), or
+    /// `"unreachable"` (the remote timed out or the connection failed); `reason`
+    /// carries the specific stage (`"identity_mismatch"`, `"sender_not_self"`,
+    /// `"remote_refused"`, `"remote_error"`, `"timeout"`, `"transport"`). This
+    /// row is best-effort: a delivered task is already durable on the receiver,
+    /// so a lost sender-side row must not invert a real delivery into a failure —
+    /// the receiver's fail-closed admission row is the accountability anchor.
+    CrossHostA2ADelivery {
+        recipient_pubkey_b58: String,
+        recipient_display: String,
+        outcome: String,
+        reason: String,
+    },
     /// Logged when an operator completes a memory repair request. The
     /// full before/after record shape is returned to the caller through
     /// the repair response; the audit row keeps the durable who/what/why
@@ -443,6 +531,23 @@ pub enum AuditKind {
         peer_display: String,
         peer_pubkey_b58: String,
     },
+    /// The operator enrolled a new external peer: a fresh subject identity was
+    /// registered with its own bearer token and granted `granted` capabilities.
+    /// This is a security-relevant grant of external access, so it is recorded
+    /// in the chain. `pubkey_b58` is the new peer's subject key; the bearer
+    /// token itself is never audited.
+    PeerEnrolled {
+        display: String,
+        pubkey_b58: String,
+        granted: Vec<String>,
+    },
+    /// Logged when `EnrollPeer` is rejected because the authenticated peer is
+    /// not the operator. Mirrors [`AuditKind::OperatorTokenRotationRejected`]'s
+    /// daemon-as-issuer audience model.
+    PeerEnrollmentRejected {
+        peer_display: String,
+        peer_pubkey_b58: String,
+    },
     /// Logged when `ListPeers` is rejected because the authenticated
     /// peer is not the operator (`peer.pubkey != self.identity.pubkey`).
     /// Mirrors [`AuditKind::OperatorTokenRotationRejected`]'s daemon-as-issuer
@@ -515,6 +620,115 @@ pub enum AuditKind {
         asset: String,
         amount: String,
         receipt_id: Uuid,
+    },
+    /// The daemon decided a pre-spend authorization request from an
+    /// external agent wallet (e.g. OrbWallet asking before it signs).
+    /// Covenant is the spending policy here: the row records the verdict
+    /// and, on a deny, why — so the audit chain holds a verifiable record
+    /// of every spend that was permitted *and* every one that was
+    /// refused, independent of whether the wallet later settles. `amount`
+    /// is the atomic on-chain amount the wallet asked to spend; `credits`
+    /// is the USD-pegged budget the spend would consume; `network` and
+    /// `asset` identify the settlement rail; `destination` is the pay-to
+    /// address when the wallet supplied one. `approved` is the verdict and
+    /// `reason` is `Some` only when `approved` is `false`. `decision_id`
+    /// is the daemon-minted id returned to the wallet so a later
+    /// settlement receipt can join back to the authorization that allowed
+    /// it. No funds move on this row; it is a decision, not a settlement.
+    SpendAuthorizationDecided {
+        provider: String,
+        network: String,
+        asset: String,
+        amount: String,
+        credits: u64,
+        destination: Option<String>,
+        approved: bool,
+        reason: Option<String>,
+        decision_id: Uuid,
+    },
+    /// An external agent wallet reported that a previously authorized spend
+    /// settled on-chain, and the daemon recorded the matching receipt and
+    /// budget debit. `decision_id` joins this row to the
+    /// [`AuditKind::SpendAuthorizationDecided`] approval that allowed the
+    /// spend; `receipt_id` joins it to the settlement receipt and the budget
+    /// debit. `amount` is the atomic amount actually settled; `tx_sig` is
+    /// the on-chain signature or hash when the wallet supplied one. This row
+    /// records a payment the wallet made with its own keys; Covenant moved
+    /// no funds.
+    SpendSettled {
+        decision_id: Uuid,
+        receipt_id: Uuid,
+        provider: String,
+        network: String,
+        asset: String,
+        amount: String,
+        credits: u64,
+        tx_sig: Option<String>,
+    },
+    /// The daemon issued a signed completion proof for a job an external
+    /// escrow is funding (e.g. Orbserv's OrbMarket). This is the release
+    /// signal: the escrow verifies `signature_b58` over the proof against the
+    /// daemon pubkey and releases to `worker_address`. The row is self-
+    /// verifiable — it carries the signature and the `audit_root_hex` the
+    /// proof bound — so the chain holds an attributable record of every
+    /// release signal Covenant produced. `result_hash_hex` and
+    /// `validation_passed` are derived from the worker's run in this chain,
+    /// not from the caller; `escrow_id`/`amount`/`asset`/`network` are the
+    /// escrow context the caller supplied. Covenant custodies no funds; this
+    /// proves, it does not pay.
+    EscrowCompletionProven {
+        proof_id: Uuid,
+        escrow_id: String,
+        job_id: Uuid,
+        hirer_address: String,
+        worker_address: String,
+        amount: String,
+        asset: String,
+        network: String,
+        provider: String,
+        result_hash_hex: String,
+        validation_passed: bool,
+        audit_root_hex: String,
+        signature_b58: String,
+    },
+    /// An external escrow reported it released funds against a completion
+    /// proof and executed the transfer. `decision_id` joins this row to the
+    /// [`AuditKind::EscrowCompletionProven`] proof that authorized the release
+    /// (its `proof_id`); `receipt_id` joins it to the settlement receipt.
+    /// `amount` is the atomic amount released; `tx_sig` is the on-chain
+    /// signature when the escrow supplied one. Covenant moved no funds and
+    /// debited no budget; this records the payout the escrow made with its own
+    /// custody.
+    EscrowReleased {
+        decision_id: Uuid,
+        receipt_id: Uuid,
+        escrow_id: String,
+        hirer_address: String,
+        worker_address: String,
+        amount: String,
+        asset: String,
+        network: String,
+        provider: String,
+        tx_sig: Option<String>,
+    },
+    /// A generative call through the AceData provider completed. Records
+    /// the provenance of one image / music / search result against the
+    /// calling agent: the model, a SHA-256 of the prompt, a SHA-256 over
+    /// the canonical response, the asset references, and AceData's task
+    /// id. This is the row a verifiable-generation certificate is built
+    /// from — it rolls into the same hash-chained log (and optional
+    /// on-chain anchor) as every other event. `agent_id` is `tool:<name>`,
+    /// matching the [`AuditKind::CapabilityScopeRejected`] convention so
+    /// the operator's per-tool audit view groups generations with their
+    /// capability checks.
+    AceDataGeneration {
+        agent_id: String,
+        tool: String,
+        model: String,
+        prompt_sha256: String,
+        output_sha256: String,
+        assets: Vec<String>,
+        task_id: Option<String>,
     },
     /// Logged when the operator runs the settlement receipt backfill. A
     /// dry run records `row_count` from the plan with `dry_run = true`
@@ -601,12 +815,58 @@ pub enum AuditKind {
         arguments_hash_hex: String,
         reason: String,
     },
+    /// A capability matched the required action and verified, but its signed
+    /// `max_uses` usage budget was already fully spent, so the action was
+    /// refused. Distinct from a [`AuditKind::CapabilityCheck`] with the action
+    /// in `missing_actions`: there the peer held no grant, here the peer held a
+    /// valid grant whose budget is exhausted. `signature_b58` is the same join
+    /// key [`AuditKind::CapabilityGranted`] carries, so the spent grant is
+    /// identifiable; `used` equals `max_uses` at the point of refusal.
+    CapabilityBudgetExhausted {
+        signature_b58: String,
+        action: String,
+        max_uses: u64,
+        used: u64,
+    },
 }
 
 #[async_trait]
 pub trait AuditLog: Send + Sync {
     async fn record(&self, event: AuditEvent) -> Result<(), AuditError>;
     async fn recent(&self, limit: usize) -> Result<Vec<AuditEvent>, AuditError>;
+    /// Receipt id of an already-recorded `SpendSettled` row for
+    /// `decision_id`, if one exists. Lets settlement be idempotent: a wallet
+    /// that retries a settlement (its success response was lost, or it
+    /// retries one that failed after the debit landed) joins back to the
+    /// original receipt instead of double-debiting and writing a duplicate
+    /// row. Scans the log — the same whole-file cost `record` already pays —
+    /// and is only on the infrequent settle path.
+    async fn settled_receipt_for(&self, decision_id: Uuid) -> Result<Option<Uuid>, AuditError> {
+        let events = self.recent(usize::MAX).await?;
+        Ok(events.iter().rev().find_map(|e| match &e.kind {
+            AuditKind::SpendSettled {
+                decision_id: d,
+                receipt_id,
+                ..
+            } if *d == decision_id => Some(*receipt_id),
+            _ => None,
+        }))
+    }
+    /// Receipt id of an already-recorded `EscrowReleased` row for `decision_id`,
+    /// if one exists. Same idempotency role as [`Self::settled_receipt_for`]
+    /// for the escrow path: an escrow that retries a release report joins the
+    /// original receipt instead of writing a duplicate row.
+    async fn released_receipt_for(&self, decision_id: Uuid) -> Result<Option<Uuid>, AuditError> {
+        let events = self.recent(usize::MAX).await?;
+        Ok(events.iter().rev().find_map(|e| match &e.kind {
+            AuditKind::EscrowReleased {
+                decision_id: d,
+                receipt_id,
+                ..
+            } if *d == decision_id => Some(*receipt_id),
+            _ => None,
+        }))
+    }
     /// Drop every event with `timestamp_ms < before_ms`. Returns the
     /// count deleted. Operator-driven retention: with no purge call the
     /// log grows unbounded for the lifetime of the daemon. Mirrors the
@@ -614,6 +874,28 @@ pub trait AuditLog: Send + Sync {
     async fn purge_older_than(&self, before_ms: u64) -> Result<u64, AuditError>;
     /// Verify the audit log's local tamper-evidence chain.
     async fn verify_integrity(&self) -> Result<AuditIntegrityReport, AuditError>;
+
+    /// Build a chain-inclusion proof for the event with `event_id`, or
+    /// `None` when no event matches. The proof reconstructs the audit root
+    /// the SAP bridge anchors on-chain; verify it offline with
+    /// [`verify_inclusion_proof`]. The default implementation re-serializes
+    /// the events from [`AuditLog::recent`] (correct for the in-memory log);
+    /// [`JsonlAuditLog`] overrides it to hash the exact on-disk lines so the
+    /// reconstructed root matches [`AuditLog::verify_integrity`] byte-for-byte.
+    async fn prove_inclusion(
+        &self,
+        event_id: Uuid,
+    ) -> Result<Option<AuditInclusionProof>, AuditError> {
+        let events = self.recent(usize::MAX).await?;
+        let Some(index) = events.iter().position(|e| e.id == event_id) else {
+            return Ok(None);
+        };
+        let mut lines = Vec::with_capacity(events.len());
+        for event in &events {
+            lines.push(serde_json::to_string(event)?);
+        }
+        Ok(Some(inclusion_proof_from_lines(&lines, index, event_id)))
+    }
 }
 
 pub struct JsonlAuditLog {
@@ -652,6 +934,80 @@ fn chain_entry_for_line(
         previous_hash_hex: previous_hash_hex.into(),
         chain_hash_hex: chain_hash(previous_hash_hex, &event_hash_hex),
         event_hash_hex,
+    }
+}
+
+/// Build an [`AuditInclusionProof`] for the event at `index` from the
+/// ordered event lines (exactly as the chain hashes them). The caller
+/// supplies `event_id` since it located `index`. Panics-free: `index`
+/// must be in bounds (callers locate it from the same `lines`).
+fn inclusion_proof_from_lines(
+    lines: &[String],
+    index: usize,
+    event_id: Uuid,
+) -> AuditInclusionProof {
+    // Fold the prefix [0, index) to get c_index — the chain hash just
+    // before the leaf.
+    let mut prev = ZERO_CHAIN_HASH.to_string();
+    for line in &lines[..index] {
+        let event_hash = sha256_hex(line.as_bytes());
+        prev = chain_hash(&prev, &event_hash);
+    }
+    let prev_chain_hash_hex = prev;
+
+    let leaf_line = lines[index].clone();
+    let leaf_event_hash_hex = sha256_hex(leaf_line.as_bytes());
+
+    // Fold the leaf, then every event after it, accumulating the suffix
+    // hashes and the running chain hash that lands on the root.
+    let mut running = chain_hash(&prev_chain_hash_hex, &leaf_event_hash_hex);
+    let mut suffix_event_hashes_hex = Vec::with_capacity(lines.len().saturating_sub(index + 1));
+    for line in &lines[index + 1..] {
+        let event_hash = sha256_hex(line.as_bytes());
+        running = chain_hash(&running, &event_hash);
+        suffix_event_hashes_hex.push(event_hash);
+    }
+
+    AuditInclusionProof {
+        leaf_index: index as u64,
+        event_id,
+        leaf_line,
+        leaf_event_hash_hex,
+        prev_chain_hash_hex,
+        suffix_event_hashes_hex,
+        root_hash_hex: running,
+    }
+}
+
+/// Verify an [`AuditInclusionProof`] offline: confirm the leaf line hashes
+/// to the claimed leaf hash (binding the proof to this exact event), then
+/// fold the leaf and suffix forward from `prev_chain_hash_hex` and confirm
+/// the result equals `root_hash_hex`. Compare `computed_root_hash_hex`
+/// against the SAP on-chain anchor to complete the chain of custody.
+pub fn verify_inclusion_proof(proof: &AuditInclusionProof) -> AuditInclusionCheck {
+    let recomputed_leaf = sha256_hex(proof.leaf_line.as_bytes());
+    if recomputed_leaf != proof.leaf_event_hash_hex {
+        return AuditInclusionCheck {
+            valid: false,
+            computed_root_hash_hex: String::new(),
+            reason: Some("leaf_line does not hash to leaf_event_hash_hex".into()),
+        };
+    }
+    let mut running = chain_hash(&proof.prev_chain_hash_hex, &proof.leaf_event_hash_hex);
+    for event_hash in &proof.suffix_event_hashes_hex {
+        running = chain_hash(&running, event_hash);
+    }
+    if running != proof.root_hash_hex {
+        return AuditInclusionCheck {
+            valid: false,
+            computed_root_hash_hex: running,
+            reason: Some("folded chain does not reach root_hash_hex".into()),
+        };
+    }
+    AuditInclusionCheck {
+        valid: true,
+        computed_root_hash_hex: running,
+        reason: None,
     }
 }
 
@@ -953,6 +1309,34 @@ impl AuditLog for JsonlAuditLog {
             failures,
         })
     }
+
+    async fn prove_inclusion(
+        &self,
+        event_id: Uuid,
+    ) -> Result<Option<AuditInclusionProof>, AuditError> {
+        let _g = self.lock.lock().await;
+        // Use the raw on-disk lines (not re-serialized events) so the
+        // reconstructed root matches `verify_integrity` byte-for-byte, and
+        // locate the leaf by event id via the chain sidecar.
+        let lines = read_event_lines(&self.path).await?;
+        let anchors = read_chain_entries(&self.chain_path()).await?;
+        let Some(index) = anchors
+            .iter()
+            .find(|entry| entry.event_id == event_id)
+            .map(|entry| entry.index as usize)
+        else {
+            return Ok(None);
+        };
+        if index >= lines.len() {
+            // Chain/events length skew — surface it rather than index past
+            // the events; the same corruption `record` refuses to extend.
+            return Err(AuditError::ChainCorruption {
+                events: lines.len(),
+                chain: anchors.len(),
+            });
+        }
+        Ok(Some(inclusion_proof_from_lines(&lines, index, event_id)))
+    }
 }
 
 #[derive(Default)]
@@ -1248,6 +1632,97 @@ mod tests {
             result_hash_hex: hash_hex(b"some result"),
             status: status.into(),
         }
+    }
+
+    #[tokio::test]
+    async fn jsonl_inclusion_proof_reconstructs_root_and_verifies() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        let log = JsonlAuditLog::open(path).await.unwrap();
+        let mut ids = Vec::new();
+        for i in 0..5 {
+            let e = dummy(intent_kind(if i == 2 { "error" } else { "ok" }));
+            ids.push(e.id);
+            log.record(e).await.unwrap();
+        }
+        let root = log.verify_integrity().await.unwrap().root_hash_hex;
+
+        // A proof for any position reconstructs the same root verify_integrity
+        // reports (the value the SAP bridge anchors) and verifies offline.
+        for &idx in &[0usize, 2, 4] {
+            let proof = log.prove_inclusion(ids[idx]).await.unwrap().expect("proof");
+            assert_eq!(proof.leaf_index, idx as u64);
+            assert_eq!(proof.event_id, ids[idx]);
+            assert_eq!(
+                proof.root_hash_hex, root,
+                "proof root must equal verify_integrity root"
+            );
+            let check = verify_inclusion_proof(&proof);
+            assert!(check.valid, "proof must verify: {:?}", check.reason);
+            assert_eq!(check.computed_root_hash_hex, root);
+        }
+
+        // The tip's suffix is empty; the head's predecessor is the zero hash.
+        let last = log.prove_inclusion(ids[4]).await.unwrap().unwrap();
+        assert!(last.suffix_event_hashes_hex.is_empty());
+        let first = log.prove_inclusion(ids[0]).await.unwrap().unwrap();
+        assert_eq!(first.prev_chain_hash_hex, ZERO_CHAIN_HASH);
+        assert_eq!(first.suffix_event_hashes_hex.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn inclusion_proof_rejects_tampered_leaf_and_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        let log = JsonlAuditLog::open(path).await.unwrap();
+        let mut ids = Vec::new();
+        for _ in 0..3 {
+            let e = dummy(intent_kind("ok"));
+            ids.push(e.id);
+            log.record(e).await.unwrap();
+        }
+        let proof = log.prove_inclusion(ids[1]).await.unwrap().unwrap();
+        assert!(verify_inclusion_proof(&proof).valid);
+
+        // Swap the leaf content: it no longer hashes to leaf_event_hash_hex.
+        let mut tampered = proof.clone();
+        tampered.leaf_line = tampered.leaf_line.replace("find x", "find y");
+        let check = verify_inclusion_proof(&tampered);
+        assert!(!check.valid);
+        assert!(check.reason.unwrap().contains("leaf_line"));
+
+        // Claim a different root: folding no longer lands on it.
+        let mut wrong_root = proof;
+        wrong_root.root_hash_hex = "f".repeat(64);
+        let check = verify_inclusion_proof(&wrong_root);
+        assert!(!check.valid);
+        assert!(check.reason.unwrap().contains("root"));
+    }
+
+    #[tokio::test]
+    async fn inclusion_proof_unknown_event_is_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        let log = JsonlAuditLog::open(path).await.unwrap();
+        log.record(dummy(intent_kind("ok"))).await.unwrap();
+        assert!(log.prove_inclusion(Uuid::new_v4()).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn in_memory_inclusion_proof_matches_root() {
+        let log = InMemoryAuditLog::new();
+        let mut ids = Vec::new();
+        for _ in 0..4 {
+            let e = dummy(intent_kind("ok"));
+            ids.push(e.id);
+            log.record(e).await.unwrap();
+        }
+        let root = log.verify_integrity().await.unwrap().root_hash_hex;
+        let proof = log.prove_inclusion(ids[1]).await.unwrap().unwrap();
+        assert_eq!(proof.root_hash_hex, root);
+        let check = verify_inclusion_proof(&proof);
+        assert!(check.valid);
+        assert_eq!(check.computed_root_hash_hex, root);
     }
 
     #[tokio::test]
@@ -1554,6 +2029,60 @@ mod tests {
         assert!(
             report.failures.iter().any(|f| f.contains("dangling")),
             "the surplus anchor must surface as a dangling-anchor failure: {report:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn jsonl_integrity_report_detects_missing_anchor_for_unanchored_event() {
+        // verify_integrity flags a well-formed event line that has no backing
+        // chain anchor: the `Ok(event)` branch's `None => "chain entry {index}
+        // missing"` arm (lib.rs:977), reached only when the event log outruns
+        // the append-only hash-chain sidecar (event_lines.len() >
+        // anchors.len()). That skew is the signature of a forged event appended
+        // without extending the chain, and the diagnostic must name the
+        // specific unanchored index. The sibling dangling-anchor test drives
+        // the OPPOSITE skew (anchors > events), landing in the line-995 block
+        // and the `Some` arms; the tampered/malformed tests run equal counts
+        // (the `Some(_)` mismatch / parse-error arms). None reaches this `None`.
+        //
+        // Mutation: narrowing line 977 to `None => {}` drops only this
+        // per-index diagnostic. The `anchors.len() != event_lines.len()` parity
+        // check at lib.rs:953 already flips `valid`, so asserting only
+        // `!report.valid` would NOT catch the regression — the load-bearing
+        // assertion is the specific "chain entry 1 missing" string.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        let log = JsonlAuditLog::open(path.clone()).await.unwrap();
+        log.record(dummy(intent_kind("ok"))).await.unwrap();
+
+        // Append a second copy of the valid event line so the event log holds
+        // two well-formed events while the chain sidecar keeps its one anchor:
+        // index 1 is a forged event with no anchor.
+        let line = std::fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap()
+            .to_string();
+        std::fs::write(&path, format!("{line}\n{line}\n")).unwrap();
+
+        let report = log.verify_integrity().await.unwrap();
+        assert!(
+            !report.valid,
+            "an event with no backing chain anchor must mark the report invalid: {report:?}",
+        );
+        assert_eq!(report.events, 2, "the event log now holds two event lines");
+        assert_eq!(
+            report.anchors, 1,
+            "the chain sidecar still holds one anchor"
+        );
+        assert!(
+            report
+                .failures
+                .iter()
+                .any(|f| f.contains("chain entry 1 missing")),
+            "the unanchored event must surface its specific index as a \
+             missing-anchor failure, not just an invalid verdict: {report:?}",
         );
     }
 
@@ -4780,7 +5309,11 @@ mod tests {
     fn capability_check_fans_out_granted_and_missing_actions() {
         let event = dummy(AuditKind::CapabilityCheck {
             agent_id: "research".into(),
-            required_actions: vec!["memory.write".into(), "memory.read".into(), "a2a.send".into()],
+            required_actions: vec![
+                "memory.write".into(),
+                "memory.read".into(),
+                "a2a.send".into(),
+            ],
             missing_actions: vec!["a2a.send".into()],
             passed: false,
             authorized_by: vec![
@@ -4838,7 +5371,10 @@ mod tests {
         }));
         assert_eq!(revoked[0].outcome, "revoked");
         assert_eq!(revoked[0].rule.as_deref(), Some("GrantSig"));
-        assert!(revoked[0].approver.is_none(), "self-revoke names no approver");
+        assert!(
+            revoked[0].approver.is_none(),
+            "self-revoke names no approver"
+        );
 
         let noop = project_privileged_actions(&dummy(AuditKind::CapabilityRevoked {
             subject_display: "research@agent".into(),
@@ -4851,26 +5387,29 @@ mod tests {
             "an idempotent re-revoke is distinguished from a real authority change",
         );
 
-        let grant_rejected = project_privileged_actions(&dummy(AuditKind::CapabilityGrantRejected {
-            subject_display: "research@agent".into(),
-            action: "memory.write".into(),
-            reason: "expired".into(),
-        }));
+        let grant_rejected =
+            project_privileged_actions(&dummy(AuditKind::CapabilityGrantRejected {
+                subject_display: "research@agent".into(),
+                action: "memory.write".into(),
+                reason: "expired".into(),
+            }));
         assert_eq!(grant_rejected[0].outcome, "grant_rejected");
         assert!(grant_rejected[0].rule.is_none());
 
-        let scope_rejected = project_privileged_actions(&dummy(AuditKind::CapabilityScopeRejected {
-            agent_id: "audit:purge".into(),
-            action: "audit.purge".into(),
-            reason: "before_ms exceeds scope".into(),
-        }));
+        let scope_rejected =
+            project_privileged_actions(&dummy(AuditKind::CapabilityScopeRejected {
+                agent_id: "audit:purge".into(),
+                action: "audit.purge".into(),
+                reason: "before_ms exceeds scope".into(),
+            }));
         assert_eq!(scope_rejected[0].actor, "audit:purge");
         assert_eq!(scope_rejected[0].outcome, "scope_rejected");
 
-        let revoke_rejected = project_privileged_actions(&dummy(AuditKind::CapabilityRevokeRejected {
-            signature_b58: "OtherSig".into(),
-            reason: "not subject".into(),
-        }));
+        let revoke_rejected =
+            project_privileged_actions(&dummy(AuditKind::CapabilityRevokeRejected {
+                signature_b58: "OtherSig".into(),
+                reason: "not subject".into(),
+            }));
         assert_eq!(revoke_rejected[0].outcome, "revoke_rejected");
         assert_eq!(revoke_rejected[0].rule.as_deref(), Some("OtherSig"));
         assert!(
@@ -4901,7 +5440,10 @@ mod tests {
             outcome: "granted".into(),
         };
 
-        assert!(ProvenanceFilter::default().matches(&action), "empty filter matches everything");
+        assert!(
+            ProvenanceFilter::default().matches(&action),
+            "empty filter matches everything"
+        );
 
         let by_actor = ProvenanceFilter {
             actor: Some("research@agent".into()),
@@ -4930,7 +5472,10 @@ mod tests {
             rule: Some("GrantSig".into()),
             ..Default::default()
         };
-        assert!(by_rule_prefix.matches(&action), "rule matches on a signature prefix");
+        assert!(
+            by_rule_prefix.matches(&action),
+            "rule matches on a signature prefix"
+        );
         let wrong_rule = ProvenanceFilter {
             rule: Some("DifferentSig".into()),
             ..Default::default()
@@ -4942,12 +5487,47 @@ mod tests {
             until_ms: Some(1_000),
             ..Default::default()
         };
-        assert!(in_window.matches(&action), "window bounds are inclusive on both ends");
+        assert!(
+            in_window.matches(&action),
+            "window bounds are inclusive on both ends"
+        );
         let after_window = ProvenanceFilter {
             since_ms: Some(1_001),
             ..Default::default()
         };
         assert!(!after_window.matches(&action));
+    }
+
+    #[test]
+    fn filter_until_window_upper_bound_excludes_rows_after_the_window() {
+        let action = PrivilegedAction {
+            event_id: Uuid::new_v4(),
+            timestamp_ms: 1_000,
+            kind: "capability_granted".into(),
+            actor: "research@agent".into(),
+            action: "memory.write".into(),
+            approver: Some("operator@local".into()),
+            rule: Some("GrantSignatureABC".into()),
+            outcome: "granted".into(),
+        };
+
+        let before_until = ProvenanceFilter {
+            until_ms: Some(999),
+            ..Default::default()
+        };
+        assert!(
+            !before_until.matches(&action),
+            "a row past the until bound is excluded"
+        );
+
+        let at_until = ProvenanceFilter {
+            until_ms: Some(1_000),
+            ..Default::default()
+        };
+        assert!(
+            at_until.matches(&action),
+            "the upper window bound is inclusive"
+        );
     }
 
     #[test]
@@ -4969,6 +5549,33 @@ mod tests {
         assert!(
             !by_approver.matches(&denied),
             "filtering by approver must exclude rows that record no approver",
+        );
+    }
+
+    #[test]
+    fn filter_rule_prefix_excludes_rows_without_a_rule() {
+        // The catch-all rule arm rejects two inputs: a non-matching
+        // Some signature (covered by wrong_rule) and a None rule — a row
+        // recording no authorizing signature, like a denial. A
+        // rule-prefix filter must exclude the ruleless row, not fold it
+        // into a signature-scoped provenance query.
+        let denied = PrivilegedAction {
+            event_id: Uuid::new_v4(),
+            timestamp_ms: 0,
+            kind: "capability_check".into(),
+            actor: "research".into(),
+            action: "a2a.send".into(),
+            approver: None,
+            rule: None,
+            outcome: "denied".into(),
+        };
+        let by_rule = ProvenanceFilter {
+            rule: Some("GrantSig".into()),
+            ..Default::default()
+        };
+        assert!(
+            !by_rule.matches(&denied),
+            "filtering by a rule prefix must exclude rows that record no rule",
         );
     }
 

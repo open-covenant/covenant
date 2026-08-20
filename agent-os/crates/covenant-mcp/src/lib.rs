@@ -201,7 +201,7 @@ fn validate_against_schema(schema: &Value, arguments: &Value) -> Result<(), Stri
     // Empty schema (no required fields, no typed properties): nothing to
     // enforce. This is the permissive "any object" the default tool spec emits,
     // so such tools keep accepting whatever they accepted before.
-    if required.is_empty() && properties.map_or(true, serde_json::Map::is_empty) {
+    if required.is_empty() && properties.is_none_or(serde_json::Map::is_empty) {
         return Ok(());
     }
 
@@ -680,6 +680,31 @@ mod tests {
     }
 
     #[test]
+    fn validate_arguments_accepts_unknown_type_keyword() {
+        // json_value_matches_type's `_ => true` catch-all: a property whose
+        // declared type is a keyword we don't model is accepted, never
+        // rejected ("never reject what we don't understand") — so a forward
+        // JSON Schema type name keeps spec-compliant MCP clients working.
+        // This is a DIFFERENT path from the union case above: a union
+        // `type: [..]` exits at the `as_str()` None guard before
+        // json_value_matches_type runs, so only a single unknown *string*
+        // type keyword exercises the catch-all. Narrowing it to `_ => false`
+        // would silently reject a legitimate tool call here.
+        let spec = ToolSpec {
+            name: "t".into(),
+            description: "d".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": { "x": { "type": "futureUnknownType" } },
+                "required": ["x"],
+            }),
+        };
+        assert!(spec
+            .validate_arguments(&serde_json::json!({ "x": "anything" }))
+            .is_ok());
+    }
+
+    #[test]
     fn validate_arguments_integer_accepts_whole_float_rejects_string() {
         let spec = ToolSpec {
             name: "t".into(),
@@ -689,7 +714,9 @@ mod tests {
                 "properties": { "n": { "type": "integer" } },
             }),
         };
-        assert!(spec.validate_arguments(&serde_json::json!({ "n": 5 })).is_ok());
+        assert!(spec
+            .validate_arguments(&serde_json::json!({ "n": 5 }))
+            .is_ok());
         assert!(
             spec.validate_arguments(&serde_json::json!({ "n": 5.0 })).is_ok(),
             "a float with no fractional part satisfies `integer`, so clients that serialize ints as floats are not rejected",
@@ -697,6 +724,70 @@ mod tests {
         assert!(spec
             .validate_arguments(&serde_json::json!({ "n": "5" }))
             .is_err());
+    }
+
+    #[test]
+    fn validate_arguments_integer_rejects_fractional_float() {
+        // The integer arm admits a whole float (5.0) via the `.fract() == 0.0`
+        // guard but must reject a fractional one. Dropping that guard so the
+        // predicate collapses to `value.as_f64().is_some()` widens `integer` to
+        // admit any float, and both sibling cases survive it: 5.0 is accepted
+        // either way and the string "5" has no f64 so is rejected either way.
+        // A fractional value is the only witness to the rounding boundary, and
+        // it gates the tool-call argument types feeding the tamper-evident chain.
+        let spec = ToolSpec {
+            name: "t".into(),
+            description: "d".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": { "n": { "type": "integer" } },
+            }),
+        };
+        let err = spec
+            .validate_arguments(&serde_json::json!({ "n": 5.5 }))
+            .expect_err("a float with a fractional part must not satisfy `integer`");
+        assert!(err.contains("field `n`"), "names the field: {err}");
+        assert!(err.contains("integer"), "names the expected type: {err}");
+    }
+
+    #[test]
+    fn validate_arguments_rejects_each_simple_type_mismatch() {
+        // json_value_matches_type's boolean/number/object/array/null arms gate
+        // per-property types but, unlike string and integer, have no rejection
+        // coverage. A `=> true` regression on any of them would silently admit a
+        // mistyped argument — e.g. a flag-typed `boolean` parameter set from the
+        // string "yes" — at the validation boundary whose reason feeds the
+        // tamper-evident chain. Each case reaches its arm through the public
+        // validate_arguments path with a value of a deliberately wrong JSON type.
+        let cases: &[(&str, Value)] = &[
+            ("boolean", serde_json::json!("yes")),
+            ("number", serde_json::json!("5")),
+            ("object", serde_json::json!([1])),
+            ("array", serde_json::json!({})),
+            ("null", serde_json::json!(1)),
+        ];
+        for &(declared, ref mistyped) in cases {
+            let spec = ToolSpec {
+                name: "t".into(),
+                description: "d".into(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": { "x": { "type": declared } },
+                    "required": ["x"],
+                }),
+            };
+            let err = spec
+                .validate_arguments(&serde_json::json!({ "x": mistyped }))
+                .expect_err("a mistyped argument must be rejected");
+            assert!(
+                err.contains("field `x`"),
+                "{declared}: names the field: {err}"
+            );
+            assert!(
+                err.contains(declared),
+                "{declared}: names the expected type: {err}"
+            );
+        }
     }
 
     #[test]

@@ -67,7 +67,17 @@ async fn main() -> Result<()> {
     let router = Arc::new(covenant_router::Router::from_cards(cards));
     let runtime_config = covenantd::runtime_runner_config_from_env(&home)?;
     let hermes_config = covenantd::hermes_gateway_config_from_env();
-    let subprocess_tracker = Arc::new(covenant_runtime::SubprocessTracker::new());
+    let subprocess_tracker = Arc::new(covenant_runtime::SubprocessTracker::with_persistence(
+        home.join("runtime").join("subprocess-tracker.jsonl"),
+    ));
+    // Re-adopt in-flight subprocess pids persisted by a prior daemon
+    // instance BEFORE the tracker is handed to the runner/server or the
+    // projection-tick driver spawns, so nothing races a half-populated
+    // tracker. recover() validates each pid's ownership and re-tracks only
+    // genuine survivors; reused or unverifiable pids are refused, never
+    // signalled. Survivors that are over budget are reaped by the
+    // projection tick on its next iteration.
+    subprocess_tracker.recover();
     // Live audit step-trail (opt-in via COVENANT_LIVE_TRACE=1): the Hermes
     // runner streams each tool trace through this channel and the drainer
     // writes them into the chain as they arrive. Off by default — the proven
@@ -193,6 +203,44 @@ async fn main() -> Result<()> {
         Arc::new(covenant_mcp::native::EchoTool),
         Arc::new(covenant_mcp::native::ClockTool),
     ];
+    let acedata_cfg = match acedata_from_env() {
+        Some((client, cfg)) => {
+            let added = covenant_acedata::acedata_tools(Arc::new(client), &cfg);
+            if added.is_empty() {
+                tracing::warn!("acedata enabled but allowlist registered no tools");
+                None
+            } else {
+                info!(count = added.len(), base_url = %cfg.base_url, "acedata provider enabled");
+                tools_vec.extend(added);
+                Some(cfg)
+            }
+        }
+        None => None,
+    };
+    #[cfg(feature = "circuit")]
+    if let Some(circuit_tools) = circuit_from_env() {
+        if circuit_tools.is_empty() {
+            tracing::warn!("circuit enabled but its allowlist registered no tools");
+        } else {
+            info!(count = circuit_tools.len(), "circuit provider enabled");
+            tools_vec.extend(circuit_tools);
+        }
+    }
+    if let Some((client, cfg)) = krexa_from_env() {
+        let added = covenant_krexa::krexa_tools(Arc::new(client), &cfg);
+        if added.is_empty() {
+            tracing::warn!("krexa enabled but registered no tools");
+        } else {
+            info!(
+                count = added.len(),
+                base_url = %cfg.base_url,
+                credit_enabled = cfg.credit_enabled,
+                onchain_verify = cfg.rpc_url.is_some(),
+                "krexa credit/risk oracle enabled (read-only; credit-backed draws stay off)"
+            );
+            tools_vec.extend(added);
+        }
+    }
     let mcp_cfg = covenant_mcp::config::McpConfigFile::from_path(&secrets_path)
         .with_context(|| format!("parse mcp config in {}", secrets_path.display()))?;
     for srv in mcp_cfg.servers() {
@@ -244,6 +292,23 @@ async fn main() -> Result<()> {
     );
     info!(path = %mailbox_path.display(), "a2a mailbox open");
 
+    // Cross-host A2A replay cache (slice 4b-2): restart-durable anti-replay
+    // store for inbound envelopes admitted by `Server::admit_remote_a2a_task`.
+    // A missing file is an empty cache; a corrupt one fails closed so the daemon
+    // never boots having forgotten which envelopes it already admitted.
+    let cross_host_dedup_path = home.join("a2a").join("cross-host-dedup.jsonl");
+    let cross_host_dedup = Arc::new(
+        covenantd::cross_host::JsonlCrossHostDedup::open(cross_host_dedup_path.clone())
+            .await
+            .with_context(|| {
+                format!(
+                    "open cross-host A2A dedup log at {}",
+                    cross_host_dedup_path.display()
+                )
+            })?,
+    );
+    info!(path = %cross_host_dedup_path.display(), "cross-host a2a dedup log open");
+
     let peers_path = home.join("peers").join("registry.jsonl");
     let peers: Arc<dyn covenant_peer_auth::PeerRegistry> = Arc::new(
         covenant_peer_auth::JsonlPeerRegistry::open(peers_path.clone())
@@ -251,6 +316,25 @@ async fn main() -> Result<()> {
             .with_context(|| format!("open peer registry at {}", peers_path.display()))?,
     );
     info!(path = %peers_path.display(), "peer registry open");
+
+    // Cross-host registry (slice 3): load-and-hold only — no dispatch, no
+    // socket. A missing file is local-only (empty); a malformed or unreadable
+    // one fails closed here so the daemon never boots believing peering is
+    // configured when it is not.
+    let known_hosts_path = covenantd::known_hosts_path(&home);
+    let known_hosts = covenant_peer_auth::KnownHosts::load_from_path(known_hosts_path.clone())
+        .await
+        .with_context(|| {
+            format!(
+                "load known-hosts registry at {}",
+                known_hosts_path.display()
+            )
+        })?;
+    info!(
+        path = %known_hosts_path.display(),
+        hosts = known_hosts.len(),
+        "known-hosts registry loaded"
+    );
 
     bootstrap_operator_token(&home, &peers, &identity).await?;
 
@@ -305,6 +389,8 @@ async fn main() -> Result<()> {
         budget,
     )
     .with_home(home.clone())
+    .with_known_hosts(known_hosts)
+    .with_cross_host_dedup(cross_host_dedup)
     .with_budget_checkpoints(budget_checkpoints)
     .with_subprocess_tracker(subprocess_tracker)
     .with_sap_bridge(sap_bridge);
@@ -316,6 +402,39 @@ async fn main() -> Result<()> {
                 "x402 outbound dispatch enabled"
             );
             server.with_x402_dispatch(cfg)
+        }
+        None => server,
+    };
+
+    let server = match spend_authz_config_from_env() {
+        Some(cfg) => {
+            info!("spend authorization surface enabled");
+            server.with_spend_authz(cfg)
+        }
+        None => server,
+    };
+
+    let server = match escrow_config_from_env() {
+        Some(cfg) => {
+            info!("escrow surface enabled");
+            server.with_escrow(cfg)
+        }
+        None => server,
+    };
+
+    let server = match covenantd::spend_grant::SpendGrantConfig::from_env() {
+        Some(cfg) => {
+            let addr: String = cfg
+                .attestor_address()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            info!(
+                chain_id = cfg.chain_id(),
+                attestor = %format!("0x{addr}"),
+                "spend-grant facilitator enabled"
+            );
+            server.with_spend_grant(cfg)
         }
         None => server,
     };
@@ -392,6 +511,55 @@ async fn main() -> Result<()> {
             );
             server
         }
+    };
+
+    let server = {
+        let cfg = covenant_sns::SnsConfig::from_env();
+        if cfg.reads_enabled() {
+            info!(
+                resolver = %cfg.resolver_url,
+                writes = cfg.writes_enabled(),
+                "sns profile enabled (resolve/reverse/record; subdomain + record writes when a signer is set)"
+            );
+            if cfg.writes_enabled() && std::env::var("COVENANT_SNS_KEYPAIR").is_err() {
+                tracing::warn!(
+                    "sns writes are configured but COVENANT_SNS_KEYPAIR is unset; \
+                     write tools will fail until the parent-domain keypair path is provided"
+                );
+            }
+            server.with_sns(covenantd::sns::SnsState::new(cfg))
+        } else {
+            server
+        }
+    };
+
+    let server = match acedata_cfg {
+        Some(cfg) => server.with_acedata(cfg),
+        None => server,
+    };
+
+    let server = match covenantd::robinhood::RobinhoodConfig::from_env() {
+        Some(cfg) => {
+            info!(
+                venue = %cfg.policy.venue,
+                mode = ?cfg.policy.mode,
+                telegram = cfg.telegram.is_some(),
+                "robinhood governed-trading profile enabled"
+            );
+            let metaplex_signer = {
+                let m = covenant_metaplex::MetaplexConfig::from_env();
+                if m.writes_enabled() {
+                    covenantd::metaplex::MetaplexState::new(m).signer()
+                } else {
+                    None
+                }
+            };
+            server.with_robinhood(covenantd::robinhood::RobinhoodState::new(
+                cfg,
+                metaplex_signer,
+            ))
+        }
+        None => server,
     };
 
     server
@@ -781,6 +949,298 @@ fn er_providers_from_env() -> Vec<covenantd::er_provider::ErProvider> {
     }
 }
 
+/// Enable the spend-authorization surface when the operator opts in.
+/// This path holds no keys and moves no funds — it only lets the daemon
+/// answer `POST /spend/authorize` (approve or deny a wallet spend against
+/// the caller's capability, per-call cap, and budget, recording every
+/// verdict in the audit chain). Off by default.
+///
+/// - `COVENANT_SPEND_AUTHZ_ENABLED` truthy (`1`, `true`, `yes`)
+fn spend_authz_config_from_env() -> Option<covenantd::spend_authz::SpendAuthzConfig> {
+    let enabled = std::env::var("COVENANT_SPEND_AUTHZ_ENABLED")
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+    if !enabled {
+        return None;
+    }
+    Some(covenantd::spend_authz::SpendAuthzConfig { enabled: true })
+}
+
+/// Resolve the escrow surface config from env. When enabled the daemon will
+/// answer `POST /escrow/prove` (issue a signed completion proof an external
+/// escrow releases against) and `POST /escrow/release` (record the payout back
+/// into the audit chain). Covenant holds no funds. Off by default.
+///
+/// - `COVENANT_ESCROW_ENABLED` truthy (`1`, `true`, `yes`)
+fn escrow_config_from_env() -> Option<covenantd::escrow::EscrowConfig> {
+    let enabled = std::env::var("COVENANT_ESCROW_ENABLED")
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+    if !enabled {
+        return None;
+    }
+    Some(covenantd::escrow::EscrowConfig { enabled: true })
+}
+
+/// Build the AceData provider (client + config) from env, or None when
+/// the operator hasn't opted in. Two billing modes: an API key (credit
+/// billing) or, with no key, keyless x402 pay-per-call over the funding
+/// signer. The API key takes precedence when both are set.
+///
+/// - `COVENANT_ACEDATA_ENABLED` truthy (`1`, `true`, `yes`)
+/// - `COVENANT_ACEDATA_API_KEY` — Bearer billing token (credit mode)
+/// - `COVENANT_ACEDATA_BASE_URL` — override the API host (optional)
+/// - `COVENANT_ACEDATA_ALLOW` — comma-separated tool-name allowlist (optional)
+/// - `COVENANT_ACEDATA_IMAGE_MODEL` / `COVENANT_ACEDATA_MUSIC_MODEL` — default models (optional)
+/// - `COVENANT_ACEDATA_X402_MAX_ATOMIC` — per-call USDC cap for x402 mode (optional; default 1 USDC)
+///
+/// Keyless x402 mode additionally needs the x402 signer sidecar:
+/// `COVENANT_X402_ENABLED` + `COVENANT_X402_SIGNER_BINARY` +
+/// `COVENANT_X402_FUNDING_KEYPAIR` (+ `COVENANT_X402_RPC_URL`).
+fn acedata_from_env() -> Option<(
+    covenant_acedata::AceDataClient,
+    covenant_acedata::AceDataConfig,
+)> {
+    let enabled = std::env::var("COVENANT_ACEDATA_ENABLED")
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+    if !enabled {
+        return None;
+    }
+    let mut cfg = covenant_acedata::AceDataConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    if let Ok(url) = std::env::var("COVENANT_ACEDATA_BASE_URL") {
+        if !url.trim().is_empty() {
+            cfg.base_url = url;
+        }
+    }
+    if let Ok(list) = std::env::var("COVENANT_ACEDATA_ALLOW") {
+        cfg.allow = Some(
+            list.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect(),
+        );
+    }
+    if let Ok(m) = std::env::var("COVENANT_ACEDATA_IMAGE_MODEL") {
+        if !m.trim().is_empty() {
+            cfg.image_model = m;
+        }
+    }
+    if let Ok(m) = std::env::var("COVENANT_ACEDATA_MUSIC_MODEL") {
+        if !m.trim().is_empty() {
+            cfg.music_model = m;
+        }
+    }
+    // Two billing modes. An API key takes precedence (credit billing).
+    // With no key, fall back to keyless x402 pay-per-call when the x402
+    // signer sidecar is configured (COVENANT_X402_*): each call pays USDC
+    // on Solana through the funding key, no AceData credential at all.
+    match std::env::var("COVENANT_ACEDATA_API_KEY") {
+        Ok(k) if !k.trim().is_empty() => {
+            let client = covenant_acedata::AceDataClient::new(cfg.base_url.clone(), k);
+            Some((client, cfg))
+        }
+        _ => match x402_dispatch_config_from_env() {
+            Some(x402) => {
+                let mut signer = covenantd::x402::SubprocessSigner::new(&x402.signer_binary);
+                for (key, value) in &x402.signer_env {
+                    signer = signer.env(key, value);
+                }
+                let max_atomic = std::env::var("COVENANT_ACEDATA_X402_MAX_ATOMIC")
+                    .ok()
+                    .and_then(|v| v.trim().parse().ok())
+                    .unwrap_or(0);
+                let payer = covenant_acedata::X402Payer::new(std::sync::Arc::new(signer))
+                    .with_max_atomic(max_atomic);
+                info!(
+                    base_url = %cfg.base_url,
+                    signer = %x402.signer_binary.display(),
+                    "acedata enabled in keyless x402 pay-per-call mode (no API key)"
+                );
+                let client =
+                    covenant_acedata::AceDataClient::with_x402(cfg.base_url.clone(), payer);
+                Some((client, cfg))
+            }
+            None => {
+                tracing::warn!(
+                    "COVENANT_ACEDATA_ENABLED set but neither COVENANT_ACEDATA_API_KEY nor the \
+                     x402 signer (COVENANT_X402_ENABLED + COVENANT_X402_SIGNER_BINARY) is \
+                     configured; acedata disabled"
+                );
+                None
+            }
+        },
+    }
+}
+
+/// Build the Circuit tool set from the environment: an in-process funding payer that settles
+/// paid Circuit calls in $CVNT (or CIRC) on Solana, bound by a spend capability (per-call
+/// cap, treasury pin, host allowlist, cumulative budget). The daemon holds the funding key
+/// only when built with the `circuit` feature and `COVENANT_CIRCUIT_ENABLED` is set; the
+/// solana dep tree is pulled by that feature alone. Returns `None` when disabled or
+/// misconfigured. Registered `circuit.*` tools route through [`Server::circuit_tool_call`],
+/// which records the settlement receipt and audit row.
+///
+/// Env:
+///   COVENANT_CIRCUIT_ENABLED    (required) `1`/`true`/`yes` to turn it on
+///   COVENANT_CIRCUIT_KEYPAIR    (required) funder keypair path, holding the pay token + SOL
+///   COVENANT_CIRCUIT_PAY_TOKEN  (optional) mint to settle in; unset = CIRC (the 402 default)
+///   COVENANT_CIRCUIT_RPC        (optional) Solana RPC URL, default mainnet-beta
+///   COVENANT_CIRCUIT_TREASURY   (optional) pin the 402 recipient to this pubkey
+///   COVENANT_CIRCUIT_PER_CALL   (optional) per-call spend cap, raw base units
+///   COVENANT_CIRCUIT_BUDGET     (optional) cumulative budget, raw base units
+///   COVENANT_CIRCUIT_HOSTS      (optional) comma allowlist, default the two Circuit hosts
+///   COVENANT_CIRCUIT_ALLOW      (optional) comma tool allowlist; unset = all
+///                               (note: the inference gateway quotes CIRC only, so restrict
+///                               to the data tools when paying in $CVNT)
+#[cfg(feature = "circuit")]
+fn circuit_from_env() -> Option<Vec<Arc<dyn covenant_mcp::Tool>>> {
+    use covenant_circuit::CircPayer as _;
+
+    let enabled = std::env::var("COVENANT_CIRCUIT_ENABLED")
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+    if !enabled {
+        return None;
+    }
+
+    let keypair = match std::env::var("COVENANT_CIRCUIT_KEYPAIR") {
+        Ok(k) if !k.trim().is_empty() => k,
+        _ => {
+            tracing::warn!(
+                "COVENANT_CIRCUIT_ENABLED set but COVENANT_CIRCUIT_KEYPAIR is missing; \
+                 circuit disabled"
+            );
+            return None;
+        }
+    };
+    let rpc = std::env::var("COVENANT_CIRCUIT_RPC")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+    let payer = match covenant_circuit::SolanaCircPayer::from_keypair_file(&keypair, rpc.as_deref())
+    {
+        Ok(p) => Arc::new(p),
+        Err(e) => {
+            tracing::warn!(error = %e, "circuit funder keypair load failed; circuit disabled");
+            return None;
+        }
+    };
+    let funder = payer.address().unwrap_or("?").to_string();
+
+    let mut cap = covenant_circuit::CircuitCapability::new();
+    match std::env::var("COVENANT_CIRCUIT_HOSTS") {
+        Ok(list) if !list.trim().is_empty() => {
+            for h in list.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                cap = cap.allow_host(h);
+            }
+        }
+        _ => {
+            cap = cap
+                .allow_host("inference.circuitllm.xyz")
+                .allow_host("api.circuitllm.xyz");
+        }
+    }
+    if let Ok(t) = std::env::var("COVENANT_CIRCUIT_TREASURY") {
+        if !t.trim().is_empty() {
+            cap = cap.allow_recipient(t.trim());
+        }
+    }
+    if let Ok(v) = std::env::var("COVENANT_CIRCUIT_PER_CALL") {
+        if let Ok(n) = v.trim().parse::<u64>() {
+            cap = cap.per_call(n);
+        }
+    }
+    if let Ok(v) = std::env::var("COVENANT_CIRCUIT_BUDGET") {
+        if let Ok(n) = v.trim().parse::<u64>() {
+            cap = cap.budget(n);
+        }
+    }
+
+    let ledger = Arc::new(covenant_circuit::SpendLedger::new());
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .expect("http client");
+    let mut engine = covenant_circuit::X402::new(http, payer, cap, ledger);
+    if let Ok(mint) = std::env::var("COVENANT_CIRCUIT_PAY_TOKEN") {
+        if !mint.trim().is_empty() {
+            engine = engine.with_pay_mint(mint.trim().to_string());
+        }
+    }
+    let inference = Arc::new(covenant_circuit::Inference::from_x402(engine.clone()));
+    let data = Arc::new(covenant_circuit::DataClient::from_x402(engine));
+
+    let allow = std::env::var("COVENANT_CIRCUIT_ALLOW").ok().map(|list| {
+        list.split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+    });
+    let cfg = covenant_circuit::CircuitConfig {
+        enabled: true,
+        allow,
+        ..Default::default()
+    };
+    let tools = covenant_circuit::circuit_tools(inference, data, &cfg);
+    info!(count = tools.len(), funder = %funder, "circuit provider ready");
+    Some(tools)
+}
+
+/// Build the Krexa read-only credit/risk oracle from env, or None when the
+/// operator hasn't opted in. These are free public REST reads (no key, no
+/// funds), so there's no billing branch like acedata. The credit-backed
+/// draw path stays gated by COVENANT_KREXA_CREDIT_ENABLED (default false)
+/// and is not wired into live settlement regardless of this flag.
+///
+/// - `COVENANT_KREXA_ENABLED` truthy turns on the `krexa.score` tool
+/// - `COVENANT_KREXA_BASE_URL` overrides the backend host (optional)
+/// - `COVENANT_KREXA_CREDIT_ENABLED` un-gates the built-but-off credit module
+/// - `COVENANT_KREXA_RPC_URL` mainnet RPC for the trustless on-chain read
+///   (defaults to mainnet-beta; set empty to force REST-only)
+fn krexa_from_env() -> Option<(covenant_krexa::KrexaClient, covenant_krexa::KrexaConfig)> {
+    let truthy = |k: &str| {
+        std::env::var(k)
+            .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+            .unwrap_or(false)
+    };
+    if !truthy("COVENANT_KREXA_ENABLED") {
+        return None;
+    }
+    let mut cfg = covenant_krexa::KrexaConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    if let Ok(url) = std::env::var("COVENANT_KREXA_BASE_URL") {
+        if !url.trim().is_empty() {
+            cfg.base_url = url;
+        }
+    }
+    cfg.credit_enabled = truthy("COVENANT_KREXA_CREDIT_ENABLED");
+    if cfg.credit_enabled {
+        tracing::warn!(
+            "COVENANT_KREXA_CREDIT_ENABLED is set, but credit-backed draws are not wired into \
+             the live x402 settlement path; this only un-gates the built-but-off credit module"
+        );
+    }
+    // Trustless on-chain read of the KrexitScore account. Defaults to a
+    // mainnet endpoint (production posture); Krexa's score program is
+    // currently devnet-only, so point COVENANT_KREXA_RPC_URL at devnet to
+    // exercise the read today, or "" to force REST-only.
+    cfg.rpc_url = match std::env::var("COVENANT_KREXA_RPC_URL") {
+        Ok(u) if u.trim().is_empty() => None,
+        Ok(u) => Some(u),
+        Err(_) => Some(covenant_krexa::DEFAULT_RPC_URL.to_string()),
+    };
+    let mut client = covenant_krexa::KrexaClient::new(cfg.base_url.clone());
+    if let Some(url) = cfg.rpc_url.clone() {
+        client = client.with_rpc_url(url);
+    }
+    Some((client, cfg))
+}
+
 /// Build the Hyre provider config from env, or None when the operator
 /// hasn't opted in. The catalog itself loads from the vendored manifest;
 /// these vars only tune the rail and the spend policy.
@@ -837,19 +1297,25 @@ fn hyre_config_from_env() -> Option<covenant_hyre::HyreConfig> {
     Some(cfg)
 }
 
-/// Mask secret query params (api keys, tokens) in a URL before logging it,
-/// so a keyed RPC endpoint in `sap.env` never lands in stdout/journald.
+/// Mask secret query params (api keys, tokens) in a URL before logging it, so a
+/// keyed RPC endpoint in `sap.env` never lands in stdout/journald. Masks every
+/// occurrence of each key, not just the first, and covers the hyphenated
+/// `api-key` form (used by common Solana RPC providers) alongside the underscore
+/// form. Best-effort: a secret carried as a path segment rather than a
+/// `key=value` query param is out of scope.
 fn redact_url(url: &str) -> String {
     let mut out = url.to_string();
-    for key in ["api_key", "apikey", "token", "secret"] {
+    for key in ["api_key", "api-key", "apikey", "token", "secret"] {
         let needle = format!("{key}=");
-        if let Some(start) = out.find(&needle) {
-            let val_start = start + needle.len();
+        let mut from = 0;
+        while let Some(rel) = out[from..].find(&needle) {
+            let val_start = from + rel + needle.len();
             let val_end = out[val_start..]
                 .find('&')
                 .map(|i| val_start + i)
                 .unwrap_or(out.len());
             out.replace_range(val_start..val_end, "***");
+            from = val_start + 3; // resume past the inserted mask
         }
     }
     out
@@ -887,6 +1353,71 @@ fn default_ignorefile() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn redact_url_masks_every_secret_query_param_occurrence_and_hyphen_form() {
+        // redact_url is the only guard between a keyed sap.env RPC endpoint and
+        // the daemon's startup info log (the `rpc_url = %redact_url(...)` field).
+        // It has no direct test today, so three real leaks have no signal:
+        //
+        //  (a) the hyphenated `api-key=` form (used by common Solana RPC
+        //      providers) — masking only `api_key`/`apikey` leaves it in the log;
+        //  (b) a second occurrence of a key — masking only the first match leaks
+        //      the rest;
+        //  (c) a refactor that narrowed the value span past the next `&` and
+        //      swallowed a following non-secret param, or stopped short of the
+        //      string end and left a trailing secret.
+
+        // (a) Hyphen form: a Helius-style endpoint must not leak its key.
+        let helius = redact_url("https://mainnet.helius-rpc.com/?api-key=HELIUSSECRET");
+        assert!(
+            !helius.contains("HELIUSSECRET"),
+            "the hyphenated api-key= form must be masked — common Solana RPC \
+             providers key on `api-key`, and leaving it unmasked writes the \
+             secret straight to journald: {helius}"
+        );
+        assert!(
+            helius.contains("api-key=***"),
+            "the api-key value must be replaced with the *** mask sentinel: {helius}"
+        );
+
+        // (b) Every occurrence, not just the first.
+        let repeated =
+            redact_url("https://rpc.example.com/?api_key=FIRSTKEY&hint=1&api_key=SECONDKEY");
+        assert!(
+            !repeated.contains("FIRSTKEY") && !repeated.contains("SECONDKEY"),
+            "a key repeated in the query must be masked at EVERY occurrence — \
+             masking only the first leaks the rest into the log: {repeated}"
+        );
+        assert!(
+            repeated.contains("hint=1"),
+            "a non-secret param between two masked keys must survive untouched: {repeated}"
+        );
+
+        // (c) Value span ends at the next `&`, and runs to the end of the string
+        //     when the secret is the trailing param.
+        let mid = redact_url("https://rpc.example.com/?token=MIDSECRET&cluster=mainnet");
+        assert!(
+            !mid.contains("MIDSECRET") && mid.contains("cluster=mainnet"),
+            "a secret followed by `&param` must be masked up to (not past) the \
+             `&`, preserving the trailing param: {mid}"
+        );
+        let trailing = redact_url("https://rpc.example.com/?cluster=mainnet&secret=ENDSECRET");
+        assert!(
+            !trailing.contains("ENDSECRET") && trailing.contains("secret=***"),
+            "a secret as the final param (no trailing `&`) must be masked through \
+             the end of the string: {trailing}"
+        );
+
+        // A URL with no secret query param is returned unchanged — the redactor
+        // must not corrupt or over-mask an already-safe endpoint.
+        let plain = "https://rpc.example.com/v1/mainnet";
+        assert_eq!(
+            redact_url(plain),
+            plain,
+            "an endpoint with no secret query param must pass through verbatim"
+        );
+    }
 
     #[test]
     fn default_ignorefile_pins_each_credential_path_pattern_and_operator_comment_header() {

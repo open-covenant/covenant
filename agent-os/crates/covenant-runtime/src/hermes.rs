@@ -1176,6 +1176,34 @@ mod tests {
     }
 
     #[test]
+    fn drain_sse_frames_retains_a_residual_buffer_sized_exactly_at_the_cap() {
+        // The OOM guard is `if buffer.len() > max` (hermes.rs:499): residuals
+        // OVER the cap are rejected, so an un-delimited residual sized exactly
+        // at the cap must be RETAINED — it sits on the limit but not over it,
+        // and the next chunk may still complete the frame boundary; only max+1
+        // trips the guard. The over-cap test probes 65 bytes against a 64-byte
+        // cap and the retention test probes ~40 bytes against a 16 MiB cap, so
+        // a `>` -> `>=` slip still rejects 65 and still accepts 40 while
+        // silently rejecting a residual sitting precisely on the cap. Pin the
+        // inclusive endpoint: a buffer of exactly `max` un-delimited bytes (no
+        // `\n\n`/`\r\n\r\n`, so find_boundary returns None and the drain loop
+        // never runs) is retained, not rejected.
+        let mut buffer = vec![b'x'; 64];
+        let traces = drain_sse_frames(&mut buffer, 64).expect(
+            "a residual buffer sized exactly at the cap must be retained, not rejected as over-cap",
+        );
+        assert!(
+            traces.is_empty(),
+            "an un-delimited residual yields no trace yet"
+        );
+        assert_eq!(
+            buffer.len(),
+            64,
+            "the at-cap residual must be retained intact so the next chunk can complete its frame",
+        );
+    }
+
+    #[test]
     fn hermes_runner_new_pins_greedy_trim_of_trailing_slashes_on_base_url() {
         // covenant_runtime::hermes::HermesRunner::new
         // normalizes base_url with:

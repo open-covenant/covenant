@@ -155,9 +155,9 @@ export default function PrimitivesPage() {
       <p>
         How resource consumption is accounted for. Today Covenant records
         local <code>SettlementReceipt</code> rows for resources such as
-        memory writes. Chain fields remain empty unless a future settlement
-        integration records them. The Solana program provides the protocol
-        scaffold for networked settlement.
+        memory writes. The Solana settlement program is deployed and live
+        on mainnet, but the daemon-driven flush that anchors these receipts
+        on-chain is not yet production, so the chain fields remain empty for now.
       </p>
       <p>
         See <Link href="/settlement">Settlement</Link>.

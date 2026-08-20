@@ -82,6 +82,16 @@ const EXPECTED_RESPONSE_KINDS: &[&str] = &[
     "sap_published_audit_root",
     "sap_published_attestation",
     "provenance_actions",
+    "capability_usage",
+    "audit_inclusion",
+    "peer_enrolled",
+    "spend_authorized",
+    "spend_settled",
+    "completion_proven",
+    "spend_grant_charged",
+    "spend_grant_settled",
+    "escrow_released",
+    "reputation",
     "error",
 ];
 
@@ -303,6 +313,67 @@ fn golden_response_vectors() -> Vec<Response> {
             }],
             scanned: 7,
         },
+        Response::CapabilityUsage {
+            grants: vec![covenant_ipc::CapabilityUsageEntry {
+                signature_b58: "3xS9Yk1f8wL2bN7pQz4mRtUvJh6cKaDe5gXyWnVoBqAr".into(),
+                action: "tool.call.echo".into(),
+                scope: serde_json::json!({ "version": 1, "tool": "echo", "max_uses": 5 }),
+                subject_display: "agent@host".into(),
+                subject_pubkey_b58: "5Gw3z9KpXqL8mNvR2tY7hJ4cF6bA1sDeZxWnVoBqUtM".into(),
+                expires_at: Some(1_700_000_000_000),
+                revoked: false,
+                effective: covenant_ipc::CapabilityEffectiveStatus::Live,
+                budget: Some(covenant_ipc::CapabilityUsageBudget {
+                    max_uses: 5,
+                    used: 2,
+                    remaining: 3,
+                }),
+            }],
+        },
+        Response::AuditInclusion { proof: None },
+        Response::PeerEnrolled {
+            token_b58: "11111111111111111111111111111111".into(),
+            pubkey_b58: "So11111111111111111111111111111111111111112".into(),
+            display: "peer@example".into(),
+            granted: vec!["a2a.task.send".into(), "a2a.result.read".into()],
+        },
+        Response::SpendAuthorized {
+            approved: true,
+            decision_id: Uuid::from_u128(0x5E11_1ED0_0000_0000_0000_0000_0000_0001),
+            reason: Some("within per-call cap".into()),
+        },
+        Response::SpendSettled {
+            receipt_id: Uuid::from_u128(0x5E11_1ED0_0000_0000_0000_0000_0000_0004),
+            decision_id: Uuid::from_u128(0x5E11_1ED0_0000_0000_0000_0000_0000_0001),
+        },
+        Response::CompletionProven {
+            decision_id: Uuid::from_u128(0x5E11_1ED0_0000_0000_0000_0000_0000_0002),
+            proof: "2Zq7Xs9wV3kLp8mNc1bR4tYd6uHf".into(),
+            worker_address: "Worker11111111111111111111111111111111111".into(),
+            issued_at: "2026-07-12T00:00:00Z".into(),
+        },
+        Response::SpendGrantCharged {
+            call_id: (0x5E11_1ED0_0000_0000_0000_0000_0000_0005u128).to_string(),
+            tx_hash: format!("0x{}", "c0".repeat(32)),
+            block_number: 93_114_900,
+        },
+        Response::SpendGrantSettled {
+            release: true,
+            tx_hash: format!("0x{}", "5e".repeat(32)),
+            block_number: 93_114_908,
+        },
+        Response::EscrowReleased {
+            recorded_at: "2026-07-12T00:00:00Z".into(),
+        },
+        Response::Reputation {
+            worker_pubkey: "Worker11111111111111111111111111111111111".into(),
+            proofs_total: 12,
+            validations_passed: 10,
+            validations_failed: 2,
+            releases: 9,
+            completion_rate_bps: 8333,
+            computed_audit_root_hex: "00".repeat(32),
+        },
         Response::Error {
             message: "capability check failed".into(),
         },
@@ -375,6 +446,16 @@ fn assert_response_variant_coverage(res: &Response) {
         | Response::SapPublishedAuditRoot { .. }
         | Response::SapPublishedAttestation { .. }
         | Response::ProvenanceActions { .. }
+        | Response::CapabilityUsage { .. }
+        | Response::AuditInclusion { .. }
+        | Response::PeerEnrolled { .. }
+        | Response::SpendAuthorized { .. }
+        | Response::SpendSettled { .. }
+        | Response::CompletionProven { .. }
+        | Response::SpendGrantCharged { .. }
+        | Response::SpendGrantSettled { .. }
+        | Response::EscrowReleased { .. }
+        | Response::Reputation { .. }
         | Response::Error { .. } => {}
     }
 }

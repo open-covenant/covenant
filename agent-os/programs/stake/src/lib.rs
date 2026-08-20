@@ -36,7 +36,6 @@ solana_security_txt::security_txt! {
     auditors: "None"
 }
 
-
 /// Accumulator scaling factor for `acc_sol_per_weight`. 1e12 keeps u128 math
 /// well clear of overflow: with `max_active_locks = 500`, per-position weight
 /// bounded by `1e9 * 6dec * 3 = 3e15`, total_weight bounded by `1.5e18`, and
@@ -129,7 +128,6 @@ fn weight_for(amount: u64, multiplier_bps: u16) -> Result<u128> {
         .ok_or_else(|| error!(CovenantStakeError::MathOverflow))
 }
 
-
 #[program]
 pub mod stake {
     use super::*;
@@ -209,10 +207,7 @@ pub mod stake {
         Ok(())
     }
 
-    pub fn update_min_lock_amount(
-        ctx: Context<UpdateConfigParam>,
-        new_min: u64,
-    ) -> Result<()> {
+    pub fn update_min_lock_amount(ctx: Context<UpdateConfigParam>, new_min: u64) -> Result<()> {
         require!(new_min > 0, CovenantStakeError::InvalidParameter);
         let old = ctx.accounts.config.min_lock_amount;
         ctx.accounts.config.min_lock_amount = new_min;
@@ -220,10 +215,7 @@ pub mod stake {
         Ok(())
     }
 
-    pub fn update_max_active_locks(
-        ctx: Context<UpdateConfigParam>,
-        new_max: u32,
-    ) -> Result<()> {
+    pub fn update_max_active_locks(ctx: Context<UpdateConfigParam>, new_max: u32) -> Result<()> {
         require!(new_max > 0, CovenantStakeError::InvalidParameter);
         require!(
             new_max >= ctx.accounts.config.active_lock_count,
@@ -235,10 +227,7 @@ pub mod stake {
         Ok(())
     }
 
-    pub fn update_authority(
-        ctx: Context<UpdateAuthority>,
-        new_authority: Pubkey,
-    ) -> Result<()> {
+    pub fn update_authority(ctx: Context<UpdateAuthority>, new_authority: Pubkey) -> Result<()> {
         let config = &mut ctx.accounts.config;
         let old = config.authority;
         config.authority = new_authority;
@@ -275,11 +264,11 @@ pub mod stake {
         Ok(())
     }
 
-    pub fn create_position(
-        ctx: Context<CreatePosition>,
-        args: CreatePositionArgs,
-    ) -> Result<()> {
-        require!(!ctx.accounts.config.paused, CovenantStakeError::ProtocolPaused);
+    pub fn create_position(ctx: Context<CreatePosition>, args: CreatePositionArgs) -> Result<()> {
+        require!(
+            !ctx.accounts.config.paused,
+            CovenantStakeError::ProtocolPaused
+        );
         let lock_secs = tier_lock_secs(args.lock_tier_bps)?;
         require!(
             args.amount >= ctx.accounts.config.min_lock_amount,
@@ -348,7 +337,10 @@ pub mod stake {
     }
 
     pub fn increase_amount(ctx: Context<IncreaseAmount>, extra: u64) -> Result<()> {
-        require!(!ctx.accounts.config.paused, CovenantStakeError::ProtocolPaused);
+        require!(
+            !ctx.accounts.config.paused,
+            CovenantStakeError::ProtocolPaused
+        );
         require!(extra > 0, CovenantStakeError::ZeroAmount);
         let now = Clock::get()?.unix_timestamp;
         require!(
@@ -414,7 +406,10 @@ pub mod stake {
     }
 
     pub fn claim(ctx: Context<Claim>) -> Result<()> {
-        require!(!ctx.accounts.config.paused, CovenantStakeError::ProtocolPaused);
+        require!(
+            !ctx.accounts.config.paused,
+            CovenantStakeError::ProtocolPaused
+        );
         let now = Clock::get()?.unix_timestamp;
         internal_accrue(&mut ctx.accounts.config, now)?;
 
@@ -456,12 +451,10 @@ pub mod stake {
     }
 
     pub fn close_position(ctx: Context<ClosePosition>) -> Result<()> {
-        // No pause gate: principal is the user's right after lock_end.
+        // Sunset: principal and accrued rewards are withdrawable at any time,
+        // regardless of the original lock tier. The program is being wound down
+        // in favor of a Streamflow-controlled vault, so locks are no longer enforced.
         let now = Clock::get()?.unix_timestamp;
-        require!(
-            ctx.accounts.position.lock_end <= now,
-            CovenantStakeError::LockNotExpired
-        );
         internal_accrue(&mut ctx.accounts.config, now)?;
 
         let position = &mut ctx.accounts.position;
@@ -530,7 +523,10 @@ pub mod stake {
     }
 
     pub fn deposit_sol_fees(ctx: Context<DepositSolFees>, amount: u64) -> Result<()> {
-        require!(!ctx.accounts.config.paused, CovenantStakeError::ProtocolPaused);
+        require!(
+            !ctx.accounts.config.paused,
+            CovenantStakeError::ProtocolPaused
+        );
         require!(amount > 0, CovenantStakeError::ZeroAmount);
         require!(
             ctx.accounts.config.total_weight > 0,
@@ -592,7 +588,10 @@ pub mod stake {
     }
 
     pub fn deposit_buylock_cvnt(ctx: Context<DepositBuyLockCvnt>, amount: u64) -> Result<()> {
-        require!(!ctx.accounts.config.paused, CovenantStakeError::ProtocolPaused);
+        require!(
+            !ctx.accounts.config.paused,
+            CovenantStakeError::ProtocolPaused
+        );
         require!(amount > 0, CovenantStakeError::ZeroAmount);
 
         let cpi = CpiContext::new(
@@ -619,8 +618,34 @@ pub mod stake {
         });
         Ok(())
     }
-}
 
+    /// Sunset: the config authority sweeps CVNT out of the buylock vault, which
+    /// had no withdraw path in v1. Lets the buy-and-lock supply migrate as the
+    /// program is wound down for the Streamflow-controlled vault.
+    pub fn withdraw_buylock(ctx: Context<WithdrawBuylock>, amount: u64) -> Result<()> {
+        require!(amount > 0, CovenantStakeError::ZeroAmount);
+        let bump = ctx.accounts.config.buylock_vault_authority_bump;
+        let seeds: &[&[u8]] = &[b"buylock_auth", &[bump]];
+        let signer: &[&[&[u8]]] = &[seeds];
+        let cpi = CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            TransferChecked {
+                from: ctx.accounts.buylock_cvnt_vault.to_account_info(),
+                mint: ctx.accounts.covnt_mint.to_account_info(),
+                to: ctx.accounts.destination_cvnt_ata.to_account_info(),
+                authority: ctx.accounts.buylock_vault_authority.to_account_info(),
+            },
+            signer,
+        );
+        token_interface::transfer_checked(cpi, amount, ctx.accounts.covnt_mint.decimals)?;
+        emit!(BuyLockWithdrawn {
+            authority: ctx.accounts.authority.key(),
+            amount,
+            destination: ctx.accounts.destination_cvnt_ata.key(),
+        });
+        Ok(())
+    }
+}
 
 fn internal_accrue(config: &mut Config, now: i64) -> Result<()> {
     if config.total_weight == 0 || config.pending_sol_lamports == 0 {
@@ -663,14 +688,16 @@ fn transfer_from_reward_vault<'info>(
     let after_vault = vault_lamports
         .checked_sub(amount)
         .ok_or(CovenantStakeError::InsufficientRewardVault)?;
-    require!(after_vault >= rent_min, CovenantStakeError::InsufficientRewardVault);
+    require!(
+        after_vault >= rent_min,
+        CovenantStakeError::InsufficientRewardVault
+    );
     **vault_lamports = after_vault;
     **recipient_lamports = recipient_lamports
         .checked_add(amount)
         .ok_or(CovenantStakeError::MathOverflow)?;
     Ok(())
 }
-
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
 pub struct InitializeArgs {
@@ -694,7 +721,6 @@ pub struct CreatePositionArgs {
     pub amount: u64,
     pub lock_tier_bps: u16,
 }
-
 
 #[account]
 #[derive(InitSpace)]
@@ -748,7 +774,6 @@ pub struct FeeRouter {
     pub last_deposit_ts: i64,
     pub bump: u8,
 }
-
 
 #[derive(Accounts)]
 pub struct Initialize<'info> {
@@ -1095,6 +1120,30 @@ pub struct DepositBuyLockCvnt<'info> {
     pub token_program: Interface<'info, TokenInterface>,
 }
 
+#[derive(Accounts)]
+pub struct WithdrawBuylock<'info> {
+    #[account(
+        seeds = [b"stake_config"],
+        bump = config.bump,
+        has_one = authority @ CovenantStakeError::UnauthorizedAuthority,
+        constraint = config.covnt_mint == covnt_mint.key() @ CovenantStakeError::InvalidMint,
+    )]
+    pub config: Account<'info, Config>,
+    pub covnt_mint: InterfaceAccount<'info, Mint>,
+    /// CHECK: seeds-validated PDA, authority for the buylock vault ATA.
+    #[account(seeds = [b"buylock_auth"], bump = config.buylock_vault_authority_bump)]
+    pub buylock_vault_authority: UncheckedAccount<'info>,
+    #[account(
+        mut,
+        token::mint = covnt_mint,
+        token::authority = buylock_vault_authority,
+    )]
+    pub buylock_cvnt_vault: InterfaceAccount<'info, TokenAccount>,
+    #[account(mut, token::mint = covnt_mint)]
+    pub destination_cvnt_ata: InterfaceAccount<'info, TokenAccount>,
+    pub authority: Signer<'info>,
+    pub token_program: Interface<'info, TokenInterface>,
+}
 
 #[event]
 pub struct ProgramInitialized {
@@ -1182,6 +1231,13 @@ pub struct BuyLockDeposited {
     pub depositor: Pubkey,
     pub amount: u64,
     pub cumulative_buylock_cvnt: u64,
+}
+
+#[event]
+pub struct BuyLockWithdrawn {
+    pub authority: Pubkey,
+    pub amount: u64,
+    pub destination: Pubkey,
 }
 
 #[event]

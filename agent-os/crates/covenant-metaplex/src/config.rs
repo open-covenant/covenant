@@ -7,7 +7,7 @@
 //!
 //! Defaults are read-only and devnet. A daemon that only flips
 //! `enabled = true` and points `das_url` at a DAS provider gets the
-//! read tools and nothing that can sign or spend — every write tool
+//! read tools and nothing that can sign or spend. Every write tool
 //! stays dark until a signer binary and RPC are configured.
 
 use serde::{Deserialize, Serialize};
@@ -18,13 +18,19 @@ pub const MPL_CORE_PROGRAM_ID: &str = "CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNh
 /// MPL Agent Identity registry (binds a PDA to a Core asset).
 pub const MPL_AGENT_IDENTITY_PROGRAM_ID: &str = "1DREGFgysWYxLnRnKQnwrxnJQeSMk2HmGaC6whw2B2p";
 /// MPL Agent Validation registry (attestation surface). Upstream is
-/// early/unfinalised — we align our schema with it but do not depend on
-/// it; raw MPL Core AppData is the v1 write path.
+/// early/unfinalised. We align our schema with it but do not depend on
+/// it; raw MPL Core AppData is the current write path.
 pub const MPL_AGENT_VALIDATION_PROGRAM_ID: &str = "VALREGY66A9ieJfFUNs5GrxFTy498KUoSU7TbmSePQi";
 /// MPL Agent Reputation registry (early/unfinalised upstream).
 pub const MPL_AGENT_REPUTATION_PROGRAM_ID: &str = "REPREG5c1gPHuHukEyANpksLdHFaJCiTrm6zJgNhRZR";
 /// Bubblegum (compressed NFTs). The v2 instruction set shares this id.
 pub const MPL_BUBBLEGUM_PROGRAM_ID: &str = "BGUMAp9Gq7iTEuizy4pqaxsTyUCBK68MDfK752saRPUY";
+
+/// Canonical Covenant attestation authority on mainnet: the only key whose
+/// AppData writes count as Covenant-authored. A verifier checks an
+/// attestation's on-chain `data_authority` against this. Tunable per-call,
+/// but this is the production default.
+pub const COVENANT_ATTESTATION_AUTHORITY: &str = "DKxXrxxCzAwLSXRUWzUouiW46GNf4PR2mjjhAbtCAkcK";
 
 /// Metaplex program ids the signer sidecar is permitted to target.
 /// Pinned so a poisoned config cannot redirect a signed instruction at
@@ -38,7 +44,7 @@ pub const ALLOWED_PROGRAM_IDS: &[&str] = &[
     MPL_BUBBLEGUM_PROGRAM_ID,
 ];
 
-/// Default cluster. Devnet on purpose — a misconfigured daemon must not
+/// Default cluster. Devnet on purpose. A misconfigured daemon must not
 /// write to mainnet by accident.
 pub const DEFAULT_CLUSTER: &str = "devnet";
 
@@ -67,6 +73,15 @@ pub struct MetaplexConfig {
     /// grouped under. Empty means no collection pin.
     #[serde(default)]
     pub collection: String,
+    /// This agent's MPL Core identity asset. Recorded as the subject of
+    /// every attestation so a reader resolves it back to the agent. Empty
+    /// means attestations carry the registry slug only.
+    #[serde(default)]
+    pub agent_asset: String,
+    /// The agent identity's 014 registry record (PDA), paired with
+    /// `agent_asset` as the attestation subject.
+    #[serde(default)]
+    pub agent_registration: String,
     /// Per-action ceiling in lamports. A signer request whose estimated
     /// cost (rent + protocol fee) exceeds this is refused before signing.
     /// `0` defers to the sidecar's built-in cap.
@@ -91,6 +106,8 @@ impl Default for MetaplexConfig {
             das_url: String::new(),
             signer_binary: String::new(),
             collection: String::new(),
+            agent_asset: String::new(),
+            agent_registration: String::new(),
             per_action_cap_lamports: 0,
             allow: None,
         }
@@ -118,6 +135,8 @@ impl MetaplexConfig {
             das_url: env("COVENANT_METAPLEX_DAS_URL").unwrap_or_default(),
             signer_binary: env("COVENANT_METAPLEX_SIGNER_BIN").unwrap_or_default(),
             collection: env("COVENANT_METAPLEX_COLLECTION").unwrap_or_default(),
+            agent_asset: env("COVENANT_METAPLEX_AGENT_ASSET").unwrap_or_default(),
+            agent_registration: env("COVENANT_METAPLEX_AGENT_REGISTRATION").unwrap_or_default(),
             per_action_cap_lamports: env("COVENANT_METAPLEX_PER_ACTION_CAP_LAMPORTS")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(0),

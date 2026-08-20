@@ -1,0 +1,25 @@
+{
+  "name": "Covenant",
+  "description": "Open, local-first OS for autonomous agents on Solana. Scoped capabilities, audit-rooted actions, x402 settlement, on-chain identity.",
+  "image": "https://opencovenant.org/wordmark.png",
+  "wallet": "AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb",
+  "website": "https://opencovenant.org",
+  "twitter": "@OpenCovenant",
+  "capabilities": [
+    "agent_identity",
+    "audit_anchor",
+    "x402_payments",
+    "capability_scopes",
+    "settlement"
+  ],
+  "skills": [
+    "covenant.skill.tx.v2",
+    "x402.seller",
+    "x402.buyer",
+    "audit.anchor",
+    "permission.scope"
+  ],
+  "serviceTypes": ["AGENT", "WEB"],
+  "verified": false,
+  "registrationSource": "covenant-said-bridge"
+}

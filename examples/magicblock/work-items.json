@@ -1,0 +1,28 @@
+{
+  "model": "claude-haiku-4-5",
+  "credits": "DrawYGmdbQ7sULxzzczUqyZT2nmP8SZeYPuJzy6TNksj",
+  "provenanceRootOnChain": "2769ee46c8c7dc49e38737c8a3c6d0f57a48553d9b2af08d0bc82cf80ce88933",
+  "note": "The Covenant demo agent answered these prompts. Each receipt = sha256 of the canonical {model,intent,reply}; folding them from genesis reproduces the on-chain provenance_root.",
+  "items": [
+    {
+      "intent": "What is Covenant and what does this sandbox show?",
+      "reply": "Covenant is a framework for building AI agent systems with cryptographic signing and audit trails—every action gets logged and verified so you can trust what your agents actually did. This sandbox demonstrates how Covenant routes your requests through a signed capability system: your question hits the daemon, gets checked for permissions, gets dispatched to me (a Haiku-backed demo agent), and the whole exchange gets logged and signed. You can open the activity log to see exactly that happen. The real power emerges when you run Covenant locally and plug in your own specialized agents with custom capabilities—then you get auditability and control at scale."
+    },
+    {
+      "intent": "Can you read my files or reach the internet from here?",
+      "reply": "No to both—I'm running in a sandboxed environment with no file access and no internet connectivity. I'm mainly here to demo how Covenant routes requests, checks capabilities, and logs everything with cryptographic signatures. If you want to see that in action, check the activity log for this exchange; all the steps are signed and auditable."
+    },
+    {
+      "intent": "How would I verify this exchange actually happened?",
+      "reply": "Great question! You can open the **activity log** in your Covenant interface—it will show this entire exchange cryptographically signed by the daemon, proving I actually ran and replied. Each step (your request, the capability check, my response) gets logged and signed, so you have an immutable record that this happened in the sandbox.\n\nThat's one of Covenant's core features: every agent interaction is auditable. When you run Covenant locally with your own agents, you get the same signed logs for verification and compliance."
+    },
+    {
+      "intent": "What changes if I run Covenant locally with my own agent?",
+      "reply": "Running Covenant locally with your own agent unlocks the real power: you can connect it to your actual tools, data, and systems—databases, APIs, internal services—while keeping the same cryptographic signing and audit trail for every action. Instead of a demo with no capabilities, you get a fully auditable AI agent that can actually do meaningful work in your environment. You can also customize the agent's instructions, integrate it with your workflows, and control exactly what it has access to. The sandboxed demo here just shows the *routing and logging mechanism*—locally, you get that mechanism protecting real capabilities."
+    },
+    {
+      "intent": "In one sentence, what did you just prove?",
+      "reply": "I just proved that I can receive a system prompt, understand my constraints (sandboxed, no memory, signed logging), and respond appropriately—demonstrating how Covenant routes tasks through signed agents with audit trails."
+    }
+  ]
+}

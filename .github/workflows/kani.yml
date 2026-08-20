@@ -1,0 +1,34 @@
+name: kani
+
+on:
+  push:
+    paths:
+      - 'agent-os/crates/covenant-budget/**'
+      - '.github/workflows/kani.yml'
+  pull_request:
+    paths:
+      - 'agent-os/crates/covenant-budget/**'
+      - '.github/workflows/kani.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: model-checking/kani-github-action@f838096619a707b0f6b2118cf435eaccfa33e51f # v1.1
+        with:
+          kani-version: '0.67.0'
+          working-directory: agent-os
+          args: --package covenant-budget

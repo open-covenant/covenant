@@ -129,7 +129,11 @@ pub enum BudgetProjectionPolicy {
 /// track to exceed its `remaining` budget under the chosen
 /// [`BudgetProjectionPolicy`]. The daemon-side projection tick
 /// (deferred to sub-slice B2) walks the `SubprocessTracker` entries
-/// and pushes overshooting `intent_id`s into the preempt-queue.
+/// and pushes overshooting `intent_id`s into the preempt-queue. The
+/// first three inputs — `current_debit`, `observation_window_ms`,
+/// `observed_debit_samples` — are produced per-agent by
+/// [`BudgetLedger::debit_rate_since`]; `remaining` comes from
+/// [`BudgetLedger::tokens_remaining`].
 ///
 /// The function is intentionally pure and `u64`-typed so the projection
 /// contract is testable in isolation and never silently shifts when the
@@ -187,6 +191,29 @@ pub struct BudgetDebit {
     /// the pair, so the budget log and the receipt log can be joined.
     pub paired_receipt: Uuid,
     pub at_ms: u64,
+}
+
+/// Per-agent debit-rate observation over the `[since_ms, now_ms]` window,
+/// returned by [`BudgetLedger::debit_rate_since`]. Packages the three
+/// observation inputs of [`project_overshoot`] — `current_debit`,
+/// `observation_window_ms`, and `observed_debit_samples` — so the
+/// daemon-side projection tick can extrapolate an in-flight subprocess's
+/// spend instead of waiting for the bucket to bottom out. The fourth
+/// `project_overshoot` input, `remaining`, comes from
+/// [`BudgetLedger::tokens_remaining`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DebitRateSignal {
+    /// Sum of [`BudgetDebit::credits`] for the agent's debits in the
+    /// window, saturating at `u64::MAX`.
+    pub current_debit: u64,
+    /// `now_ms.saturating_sub(since_ms)` — how long this window has been
+    /// observed. [`project_overshoot`] consults it only as the
+    /// `>= min_observation_window_ms` gate, so a freshly started intent
+    /// (small window) stays on conservative post-completion accounting.
+    pub observation_window_ms: u64,
+    /// Count of the agent's debits in the window, saturating at
+    /// `u32::MAX`, gating [`project_overshoot`]'s `min_debit_samples`.
+    pub observed_debit_samples: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -276,6 +303,23 @@ pub trait BudgetLedger: Send + Sync {
     /// Verifier-facing.
     async fn recent_debits_all(&self, limit: usize) -> Result<Vec<BudgetDebit>, BudgetError>;
 
+    /// Per-agent debit-rate signal over `[since_ms, now_ms]`: the
+    /// cumulative debit, observation window, and sample count the agent
+    /// has produced in that window, packaged for [`project_overshoot`].
+    /// Like [`recent_debits`] this is a pure read of the debit log and
+    /// does NOT require a provisioned bucket, so it never returns
+    /// [`BudgetError::NoCapacity`]. The projection tick passes the owning
+    /// intent's start as `since_ms`, scoping the window to the in-flight
+    /// work; debits match on the agent's pubkey and `at_ms >= since_ms`.
+    ///
+    /// [`recent_debits`]: BudgetLedger::recent_debits
+    async fn debit_rate_since(
+        &self,
+        agent: &AgentId,
+        since_ms: u64,
+        now_ms: u64,
+    ) -> Result<DebitRateSignal, BudgetError>;
+
     /// Drop debit events with `at_ms < before_ms`. See module docs for
     /// the snapshot-based non-destructive compaction model.
     async fn compact_older_than(&self, before_ms: u64) -> Result<u64, BudgetError>;
@@ -295,7 +339,8 @@ fn refill(bucket: &mut Bucket, now: u64) {
         return;
     }
     let elapsed = (now - bucket.last_refill_ms) as u128;
-    let add_u128 = elapsed * (bucket.capacity as u128) / MS_PER_HOUR;
+    let scaled = elapsed * (bucket.capacity as u128);
+    let add_u128 = scaled / MS_PER_HOUR;
     if add_u128 == 0 {
         // Sub-token elapsed: leave `last_refill_ms` so the fractional
         // milliseconds roll into the next call.
@@ -306,7 +351,13 @@ fn refill(bucket: &mut Bucket, now: u64) {
         .tokens_remaining
         .saturating_add(add)
         .min(bucket.capacity);
-    let consumed_ms = (add as u128) * MS_PER_HOUR / (bucket.capacity as u128);
+    // Advance the clock by the elapsed time minus the unspent sub-token
+    // remainder, so only that fraction rolls into the next call. Deriving the
+    // consumed time from `add * MS_PER_HOUR / capacity` instead truncates away
+    // up to one millisecond per call when capacity > MS_PER_HOUR, leaving that
+    // time re-creditable and refilling the bucket faster than its rate.
+    let leftover_ms = (scaled % MS_PER_HOUR) / (bucket.capacity as u128);
+    let consumed_ms = elapsed - leftover_ms;
     bucket.last_refill_ms = bucket.last_refill_ms.saturating_add(consumed_ms as u64);
     if bucket.tokens_remaining == bucket.capacity {
         // Bucket is full; drop unconsumed accumulator so an idle agent
@@ -328,6 +379,31 @@ fn refill_eta_ms(bucket: &Bucket, credits: u64, now: u64) -> u64 {
     let needed = (credits - bucket.tokens_remaining) as u128;
     let ms = (needed * MS_PER_HOUR).div_ceil(bucket.capacity as u128);
     now.saturating_add(ms.min(u64::MAX as u128) as u64)
+}
+
+/// Fold a debit log into a [`DebitRateSignal`] for one agent over the
+/// `[since_ms, now_ms]` window. Shared verbatim by both ledger backends
+/// so the rate contract can't drift between in-memory and JSONL.
+fn debit_rate_signal(
+    debits: &[BudgetDebit],
+    agent: &AgentId,
+    since_ms: u64,
+    now_ms: u64,
+) -> DebitRateSignal {
+    let mut current_debit: u64 = 0;
+    let mut observed_debit_samples: u32 = 0;
+    for debit in debits
+        .iter()
+        .filter(|d| d.agent.pubkey == agent.pubkey && d.at_ms >= since_ms)
+    {
+        current_debit = current_debit.saturating_add(debit.credits);
+        observed_debit_samples = observed_debit_samples.saturating_add(1);
+    }
+    DebitRateSignal {
+        current_debit,
+        observation_window_ms: now_ms.saturating_sub(since_ms),
+        observed_debit_samples,
+    }
 }
 
 /// In-process ledger suitable for tests.
@@ -455,6 +531,16 @@ impl BudgetLedger for InMemoryLedger {
         let debits = self.debits.lock().await;
         let start = debits.len().saturating_sub(limit);
         Ok(debits[start..].to_vec())
+    }
+
+    async fn debit_rate_since(
+        &self,
+        agent: &AgentId,
+        since_ms: u64,
+        now_ms: u64,
+    ) -> Result<DebitRateSignal, BudgetError> {
+        let debits = self.debits.lock().await;
+        Ok(debit_rate_signal(&debits, agent, since_ms, now_ms))
     }
 
     async fn compact_older_than(&self, before_ms: u64) -> Result<u64, BudgetError> {
@@ -933,6 +1019,16 @@ impl BudgetLedger for JsonlLedger {
         let debits = self.debits.lock().await;
         let start = debits.len().saturating_sub(limit);
         Ok(debits[start..].to_vec())
+    }
+
+    async fn debit_rate_since(
+        &self,
+        agent: &AgentId,
+        since_ms: u64,
+        now_ms: u64,
+    ) -> Result<DebitRateSignal, BudgetError> {
+        let debits = self.debits.lock().await;
+        Ok(debit_rate_signal(&debits, agent, since_ms, now_ms))
     }
 
     async fn compact_older_than(&self, before_ms: u64) -> Result<u64, BudgetError> {
@@ -2159,6 +2255,92 @@ mod tests {
     }
 
     #[test]
+    fn refill_high_rate_advances_clock_and_does_not_re_credit() {
+        // capacity just above MS_PER_HOUR (3_600_001/hr). One ms earns one
+        // token. The old `consumed_ms = add * MS_PER_HOUR / capacity`
+        // truncated to floor(3_600_000 / 3_600_001) = 0, leaving the clock at
+        // 0 so the very same millisecond re-credited on the next call. The
+        // remainder accounting must move the clock to 1 and stop the double
+        // credit.
+        let mut b = Bucket {
+            display: "x@y".into(),
+            capacity: 3_600_001,
+            tokens_remaining: 0,
+            last_refill_ms: 0,
+        };
+        refill(&mut b, 1);
+        assert_eq!(b.tokens_remaining, 1);
+        assert_eq!(
+            b.last_refill_ms, 1,
+            "clock must advance the full elapsed ms; the sub-token remainder \
+             here is below 1ms and rounds to zero leftover"
+        );
+        // Same instant again: the now <= last_refill_ms guard fires, so no
+        // second token is minted for the window already paid for.
+        refill(&mut b, 1);
+        assert_eq!(b.tokens_remaining, 1);
+    }
+
+    #[test]
+    fn refill_high_rate_does_not_drift_over_many_ticks() {
+        // The over-crediting bug compounded: tick the clock forward 1ms at a
+        // time at a rate just above MS_PER_HOUR and the old accounting minted
+        // an extra token nearly every tick. With the remainder fix the bucket
+        // tracks the rate (~1 token/ms here) instead of racing ahead.
+        let mut b = Bucket {
+            display: "x@y".into(),
+            capacity: 3_600_001,
+            tokens_remaining: 0,
+            last_refill_ms: 0,
+        };
+        for now in 1..=50 {
+            refill(&mut b, now);
+        }
+        assert_eq!(
+            b.tokens_remaining, 50,
+            "50ms at ~1 token/ms must credit ~50 tokens, not the inflated count \
+             the lost-time bug produced"
+        );
+        assert_eq!(b.last_refill_ms, 50);
+    }
+
+    #[test]
+    fn refill_clamps_overflowing_grant_to_capacity_before_cast() {
+        // The per-step grant is computed in u128 (add_u128 = elapsed *
+        // capacity / MS_PER_HOUR) then narrowed to u64 at lib.rs:348 via
+        // `add_u128.min(bucket.capacity as u128) as u64`. The .min() must
+        // run BEFORE the cast: a capacity near u64::MAX idle past an hour
+        // drives add_u128 over u64::MAX, where an unclamped `as u64` wraps
+        // and silently zeroes the grant. The downstream tokens.min(capacity)
+        // at lib.rs:352 cannot recover a grant already lost to the wrap.
+        //
+        // capacity 2^63, elapsed two hours -> add_u128 = 7_200_000 * 2^63 /
+        // 3_600_000 = 2^64 exactly, which casts to 0. With the clamp add is
+        // min(2^64, 2^63) = 2^63, filling the bucket and resetting the clock.
+        let mut b = Bucket {
+            display: "x@y".into(),
+            capacity: 1u64 << 63,
+            tokens_remaining: 0,
+            last_refill_ms: 0,
+        };
+        refill(&mut b, 7_200_000);
+        assert_eq!(
+            b.tokens_remaining,
+            1u64 << 63,
+            "add_u128 == 2^64 must clamp to capacity before the u128->u64 \
+             cast; dropping the lib.rs:348 .min (or flipping it to .max) \
+             lets `as u64` wrap to 0, leaving a high-capacity bucket empty \
+             after an hour-plus idle so every spend is denied"
+        );
+        assert_eq!(
+            b.last_refill_ms, 7_200_000,
+            "a full bucket resets last_refill_ms to now; if the grant \
+             wrapped to 0 the bucket never reaches capacity and the clock \
+             stalls at last_refill_ms, compounding the under-refill"
+        );
+    }
+
+    #[test]
     fn refill_eta_zero_when_already_have_enough() {
         let b = Bucket {
             display: "x@y".into(),
@@ -2272,6 +2454,59 @@ mod tests {
              rate so a refactor that special-cased a single capacity \
              value (without honoring the general div_ceil semantic) \
              cannot land silently"
+        );
+    }
+
+    #[test]
+    fn refill_eta_ms_clamps_overflowing_shortfall_to_u64_max() {
+        // refill_eta_ms (line 365) computes the ETA in u128 via
+        //   ms = (needed * MS_PER_HOUR).div_ceil(capacity)
+        // then folds it into the u64 return with
+        //   now.saturating_add(ms.min(u64::MAX as u128) as u64)   (line 374)
+        // The `.min(u64::MAX as u128)` clamp is the only thing between a
+        // u128 ms that exceeds u64::MAX and a silently wrapping `as u64`
+        // cast. At capacity=1 the boundary sits at
+        //   needed = u64::MAX / MS_PER_HOUR = 5_124_095_576_030 (floor).
+        // The four sibling refill_eta_ms tests (already-enough, zero
+        // capacity, exact-rate linear, div_ceil rounding) all use tiny
+        // shortfalls that never approach it, and ms_per_hour's size_of
+        // pin only asserts the constant stays u128-wide — none exercise
+        // the clamp, so dropping it survives them all.
+        let b = Bucket {
+            display: "x@y".into(),
+            capacity: 1,
+            tokens_remaining: 0,
+            last_refill_ms: 0,
+        };
+
+        // needed=5_124_095_576_030 -> ms=18_446_744_073_708_000_000,
+        // one tick below the boundary and still <= u64::MAX, so the
+        // clamp is a no-op and the exact (huge but representable) ETA
+        // must survive. Pins the clamp as inactive below the boundary,
+        // separating it from a ceiling lowered to any smaller constant.
+        assert_eq!(
+            refill_eta_ms(&b, 5_124_095_576_030, 0),
+            18_446_744_073_708_000_000,
+            "needed=5_124_095_576_030 at capacity=1 yields \
+             ms=18_446_744_073_708_000_000 (<= u64::MAX); the u64::MAX \
+             clamp must leave it untouched and return the exact ETA \
+             rather than prematurely saturating"
+        );
+
+        // needed=5_124_095_576_031 -> ms=18_446_744_073_711_600_000,
+        // one tick past the boundary and just over u64::MAX. The clamp
+        // must saturate the ETA to u64::MAX; without `.min(u64::MAX as
+        // u128)` the `as u64` cast wraps to 2_048_384, reporting a
+        // near-empty huge-capacity bucket as ~2ms from refilled.
+        assert_eq!(
+            refill_eta_ms(&b, 5_124_095_576_031, 0),
+            u64::MAX,
+            "needed=5_124_095_576_031 at capacity=1 yields \
+             ms=18_446_744_073_711_600_000 (> u64::MAX); the clamp must \
+             saturate the ETA to u64::MAX — dropping `.min(u64::MAX as \
+             u128)` wraps the u128->u64 cast to 2_048_384 and reports a \
+             dry bucket as nearly refilled, and a `.min`->`.max` swap \
+             selects the same wrapped value"
         );
     }
 
@@ -3114,6 +3349,123 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn jsonl_compact_clamps_persisted_balance_when_dropped_debits_exceed_capacity() {
+        // compact_older_than folds dropped pre-cutoff debits into a synthetic
+        // bucket via saturating_sub (lib.rs:1073) and persists the result as a
+        // Snapshot that becomes the authoritative balance across every reopen.
+        // When the dropped debits sum beyond the bucket (reachable via a
+        // capacity lowered after debits, or a legacy log) a plain `-` underflows:
+        // a debug panic mid-compaction, or a release wrap that writes a
+        // near-u64::MAX balance to disk and permanently defeats the cap. The
+        // post==pre compaction tests keep debits within capacity, so this
+        // boundary is otherwise never reached.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.jsonl");
+        let a = agent("over@local");
+
+        // Stamp at a recent time so the reopen's lazy refill is a no-op (5
+        // credits/hour needs ~12 min to refill a single token); the assertion
+        // then reads the persisted clamp rather than a refilled balance.
+        let now = epoch_ms();
+        let cutoff = now + 1;
+
+        // try_debit would refuse the second debit (3 + 3 > 5), so the
+        // over-capacity pre-cutoff log is authored directly.
+        let mk_debit = |credits: u64| {
+            BudgetEvent::Debit(BudgetDebit {
+                agent: a.clone(),
+                credits,
+                paired_receipt: Uuid::new_v4(),
+                at_ms: now,
+            })
+        };
+        let log = [
+            BudgetEvent::CapacitySet {
+                agent: a.clone(),
+                credits_per_hour: 5,
+                at_ms: now,
+            },
+            mk_debit(3),
+            mk_debit(3),
+        ];
+        let body = log
+            .iter()
+            .map(|e| serde_json::to_string(e).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&path, body + "\n").unwrap();
+
+        let l = JsonlLedger::open(path.clone()).await.unwrap();
+        assert_eq!(
+            l.compact_older_than(cutoff).await.unwrap(),
+            2,
+            "both pre-cutoff debits are folded into the snapshot and dropped",
+        );
+
+        // Reopen so the assertion reads the persisted post-compaction Snapshot.
+        let l2 = JsonlLedger::open(path).await.unwrap();
+        assert_eq!(
+            l2.tokens_remaining(&a).await.unwrap(),
+            0,
+            "6 credits of debits against a 5-credit bucket must clamp the \
+             persisted balance to 0, not wrap toward u64::MAX",
+        );
+    }
+
+    #[tokio::test]
+    async fn jsonl_open_replay_clamps_balance_when_persisted_debits_exceed_capacity() {
+        // JsonlLedger::open replays each persisted Debit into the in-memory
+        // bucket with saturating_sub (lib.rs:837). A crafted or legacy ledger
+        // can carry pre-recorded debits summing beyond capacity (try_debit
+        // refuses them live, but a hand-written or capacity-lowered log can
+        // hold them). A plain `-` underflows here: a debug panic during open,
+        // or a release wrap that loads a near-u64::MAX balance and silently
+        // defeats the cap for that agent on every startup. The sibling
+        // compaction test only asserts the post-compaction balance, so the
+        // open-replay clamp's observable result is otherwise never asserted.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.jsonl");
+        let a = agent("legacy@local");
+
+        // Stamp at a recent time so the per-debit replay refill and the
+        // read-time refill are sub-token no-ops (5 credits/hour is ~1 token
+        // per 12 min); the assertion then reads the replayed clamp rather than
+        // a balance refilled from a 1970 last_refill.
+        let now = epoch_ms();
+        let mk_debit = |credits: u64| {
+            BudgetEvent::Debit(BudgetDebit {
+                agent: a.clone(),
+                credits,
+                paired_receipt: Uuid::new_v4(),
+                at_ms: now,
+            })
+        };
+        let log = [
+            BudgetEvent::CapacitySet {
+                agent: a.clone(),
+                credits_per_hour: 5,
+                at_ms: now,
+            },
+            mk_debit(3),
+            mk_debit(3),
+        ];
+        let body = log
+            .iter()
+            .map(|e| serde_json::to_string(e).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&path, body + "\n").unwrap();
+
+        let l = JsonlLedger::open(path).await.unwrap();
+        assert_eq!(
+            l.tokens_remaining(&a).await.unwrap(),
+            0,
+            "6 credits of persisted debits against a 5-credit bucket must clamp \
+             the replayed balance to 0, not wrap toward u64::MAX",
+        );
+    }
+
+    #[tokio::test]
     async fn in_memory_set_capacity_clamps_tokens_when_shrinking() {
         let l = InMemoryLedger::new();
         let a = agent("a@local");
@@ -3779,5 +4131,336 @@ mod tests {
         // Saturating add prevents a panic on u64::MAX inputs; the
         // saturated value > any finite remaining → flag.
         assert!(project_overshoot(u64::MAX, 1000, 5, 100, policy));
+    }
+
+    #[tokio::test]
+    async fn in_memory_debit_rate_since_sums_filters_and_windows() {
+        // debit_rate_since produces project_overshoot's three
+        // observation inputs: current_debit (sum), observed_debit_samples
+        // (count), observation_window_ms (now - since). The signal must
+        // (a) include only debits with at_ms >= since_ms — inclusive of
+        // the window start — (b) scope to the queried agent's pubkey, and
+        // (c) report the window as now_ms.saturating_sub(since_ms). Seed a
+        // log straddling the cutoff and owned by two agents so a `>=`->`>`
+        // flip on the cutoff or a dropped pubkey filter is caught.
+        const SINCE: u64 = 100;
+        const NOW: u64 = 200;
+        let l = InMemoryLedger::new();
+        let a = agent("alice@local");
+        let b = agent("bob@local");
+        {
+            let mut debits = l.debits.lock().await;
+            // counted: stamped exactly at the window start (>= is inclusive)
+            debits.push(BudgetDebit {
+                agent: a.clone(),
+                credits: 5,
+                paired_receipt: Uuid::new_v4(),
+                at_ms: SINCE,
+            });
+            // counted: inside the window
+            debits.push(BudgetDebit {
+                agent: a.clone(),
+                credits: 7,
+                paired_receipt: Uuid::new_v4(),
+                at_ms: 150,
+            });
+            // excluded: one tick below the window start
+            debits.push(BudgetDebit {
+                agent: a.clone(),
+                credits: 9,
+                paired_receipt: Uuid::new_v4(),
+                at_ms: SINCE - 1,
+            });
+            // excluded: in-window time but a different agent
+            debits.push(BudgetDebit {
+                agent: b.clone(),
+                credits: 1000,
+                paired_receipt: Uuid::new_v4(),
+                at_ms: 150,
+            });
+        }
+
+        let sig = l.debit_rate_since(&a, SINCE, NOW).await.unwrap();
+        assert_eq!(
+            sig.current_debit, 12,
+            "sum only a's in-window debits (5 at the cutoff + 7 after); the 9 below the \
+             cutoff and bob's 1000 are excluded — a `>=`->`>` flip drops the 5, a lost \
+             pubkey filter adds the 1000",
+        );
+        assert_eq!(
+            sig.observed_debit_samples, 2,
+            "exactly two of a's debits fall in [SINCE, NOW]",
+        );
+        assert_eq!(
+            sig.observation_window_ms,
+            NOW - SINCE,
+            "window is now - since",
+        );
+
+        // The other agent's signal sees only its own debit — proves the
+        // pubkey filter both ways.
+        let sig_b = l.debit_rate_since(&b, SINCE, NOW).await.unwrap();
+        assert_eq!(sig_b.current_debit, 1000);
+        assert_eq!(sig_b.observed_debit_samples, 1);
+    }
+
+    #[tokio::test]
+    async fn in_memory_debit_rate_since_saturates_current_debit() {
+        // A pathological debit log must saturate, not wrap or panic: the
+        // sum uses saturating_add. Two debits whose credits exceed u64
+        // together pin the cap.
+        let l = InMemoryLedger::new();
+        let a = agent("a@local");
+        {
+            let mut debits = l.debits.lock().await;
+            debits.push(BudgetDebit {
+                agent: a.clone(),
+                credits: u64::MAX,
+                paired_receipt: Uuid::new_v4(),
+                at_ms: 10,
+            });
+            debits.push(BudgetDebit {
+                agent: a.clone(),
+                credits: 5,
+                paired_receipt: Uuid::new_v4(),
+                at_ms: 20,
+            });
+        }
+        let sig = l.debit_rate_since(&a, 0, 100).await.unwrap();
+        assert_eq!(
+            sig.current_debit,
+            u64::MAX,
+            "saturating_add caps at u64::MAX instead of wrapping or panicking",
+        );
+        assert_eq!(sig.observed_debit_samples, 2);
+    }
+
+    #[tokio::test]
+    async fn in_memory_debit_rate_since_window_zero_on_clock_skew() {
+        // now_ms < since_ms (NTP skew or a stale `now` from the caller)
+        // must not underflow; the window saturates to 0 while in-window
+        // debits are still summed.
+        let l = InMemoryLedger::new();
+        let a = agent("a@local");
+        {
+            let mut debits = l.debits.lock().await;
+            debits.push(BudgetDebit {
+                agent: a.clone(),
+                credits: 4,
+                paired_receipt: Uuid::new_v4(),
+                at_ms: 600,
+            });
+        }
+        let sig = l.debit_rate_since(&a, 500, 400).await.unwrap();
+        assert_eq!(
+            sig.observation_window_ms, 0,
+            "now (400) < since (500) saturates the window to 0",
+        );
+        assert_eq!(
+            sig.current_debit, 4,
+            "the at_ms=600 debit is still >= since=500 and is summed",
+        );
+        assert_eq!(sig.observed_debit_samples, 1);
+    }
+
+    #[tokio::test]
+    async fn in_memory_debit_rate_since_empty_log_needs_no_bucket() {
+        // Like recent_debits, debit_rate_since is a pure debit-log read:
+        // an agent with no provisioned bucket and no debits yields a
+        // zero-debit signal rather than BudgetError::NoCapacity.
+        let l = InMemoryLedger::new();
+        let a = agent("never-provisioned@local");
+        let sig = l.debit_rate_since(&a, 0, 100).await.unwrap();
+        assert_eq!(sig.current_debit, 0);
+        assert_eq!(sig.observed_debit_samples, 0);
+        assert_eq!(sig.observation_window_ms, 100);
+    }
+
+    #[tokio::test]
+    async fn jsonl_debit_rate_since_matches_contract_on_production_backend() {
+        // The production ledger must carry the same signal contract; a
+        // single-backend impl would leave the daemon's real ledger
+        // untested. debit_rate_since reads the in-memory debit log
+        // (populated by try_debit and by replay on open), so seed it and
+        // assert the same sum / pubkey-filter / boundary / window
+        // behavior as the in-memory backend.
+        const SINCE: u64 = 100;
+        const NOW: u64 = 200;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.jsonl");
+        let l = JsonlLedger::open(path).await.unwrap();
+        let a = agent("alice@local");
+        let b = agent("bob@local");
+        {
+            let mut debits = l.debits.lock().await;
+            debits.push(BudgetDebit {
+                agent: a.clone(),
+                credits: 5,
+                paired_receipt: Uuid::new_v4(),
+                at_ms: SINCE,
+            });
+            debits.push(BudgetDebit {
+                agent: a.clone(),
+                credits: 7,
+                paired_receipt: Uuid::new_v4(),
+                at_ms: 150,
+            });
+            debits.push(BudgetDebit {
+                agent: a.clone(),
+                credits: 9,
+                paired_receipt: Uuid::new_v4(),
+                at_ms: SINCE - 1,
+            });
+            debits.push(BudgetDebit {
+                agent: b.clone(),
+                credits: 1000,
+                paired_receipt: Uuid::new_v4(),
+                at_ms: 150,
+            });
+        }
+        let sig = l.debit_rate_since(&a, SINCE, NOW).await.unwrap();
+        assert_eq!(sig.current_debit, 12);
+        assert_eq!(sig.observed_debit_samples, 2);
+        assert_eq!(sig.observation_window_ms, NOW - SINCE);
+        let sig_b = l.debit_rate_since(&b, SINCE, NOW).await.unwrap();
+        assert_eq!(sig_b.current_debit, 1000);
+        assert_eq!(sig_b.observed_debit_samples, 1);
+    }
+}
+
+// Bit-precise proofs over the full input domain. The unit tests above pin
+// named cases; these prove the same invariants hold for *every* admissible
+// (capacity, tokens, clock, now) the type system allows, the guarantee a
+// finite example set cannot give. Run with `cargo kani -p covenant-budget`.
+#[cfg(kani)]
+mod proofs {
+    use super::{project_overshoot, refill, refill_eta_ms, Bucket, BudgetProjectionPolicy};
+
+    // A fully unconstrained bucket. The safety proofs below hold over this
+    // whole domain; only the inductive tokens<=capacity postcondition needs the
+    // class invariant, and it assumes that locally, so the safety proofs stay
+    // defense-in-depth: refill is panic-free and the clock is monotonic even on
+    // a bucket some other path might have corrupted.
+    fn arb_bucket() -> Bucket {
+        Bucket {
+            display: String::new(),
+            capacity: kani::any(),
+            tokens_remaining: kani::any(),
+            last_refill_ms: kani::any(),
+        }
+    }
+
+    // refill is panic-free for every bucket and clock: the `now -
+    // last_refill_ms` subtraction never underflows, the u128 multiply never
+    // overflows, and the saturating clock advance never wraps. This is the
+    // unsigned-underflow hazard the time-rewind guard exists to prevent.
+    #[kani::proof]
+    fn refill_never_panics() {
+        let mut b = arb_bucket();
+        refill(&mut b, kani::any());
+    }
+
+    // Inductive postcondition: tokens<=capacity is maintained by set_capacity's
+    // clamp, try_debit's subtract, and bucket creation, so it holds on entry;
+    // this proves refill preserves it, so an idle agent can never bank refills
+    // past its ceiling.
+    #[kani::proof]
+    fn refill_keeps_tokens_within_capacity() {
+        let mut b = arb_bucket();
+        kani::assume(b.tokens_remaining <= b.capacity);
+        refill(&mut b, kani::any());
+        assert!(b.tokens_remaining <= b.capacity);
+    }
+
+    // The clock never moves backward: a refill carries last_refill_ms
+    // forward or leaves it unchanged, over the full u64 domain. The tighter
+    // bound (it lands at exactly `now` minus the unspent sub-token
+    // remainder, so a paid window is never re-credited) holds by refill's
+    // remainder accounting and is covered by the unit tests; stating it in a
+    // harness would need nested 128-bit division the solver can't close.
+    #[kani::proof]
+    fn refill_clock_never_rewinds() {
+        let mut b = arb_bucket();
+        let before = b.last_refill_ms;
+        refill(&mut b, kani::any());
+        assert!(b.last_refill_ms >= before);
+    }
+
+    // The dual to never_rewinds (that the clock never runs *past* `now`, so
+    // consumed-time accounting can't grant tokens for time that hasn't elapsed)
+    // is left to the unit tests `refill_full_bucket_resets_clock_to_now` and
+    // `refill_partial_elapsed_accumulates_in_clock`. It is not a Kani harness on
+    // purpose: proving it means reasoning through the nested division
+    // `add = elapsed*cap/H` then `consumed = add*H/cap`, and symbolic 128-bit
+    // division bit-blasts to a SAT instance no solver closes in bounded time.
+    // Value-range assumptions don't shrink the divider circuit; only the model's
+    // bit width would, which the function's u128 math fixes.
+
+    // refill_eta_ms never returns an instant before `now` and never
+    // overflows, for any shortfall or rate. This is the no-past-schedule
+    // floor (and absence of wrap in the div_ceil / saturating_add), not a
+    // check that the computed wait is the correct length.
+    #[kani::proof]
+    fn refill_eta_never_schedules_in_the_past() {
+        let b = arb_bucket();
+        let now: u64 = kani::any();
+        let eta = refill_eta_ms(&b, kani::any(), now);
+        assert!(eta >= now);
+    }
+
+    // project_overshoot's decision spec, proven for every input (the body has
+    // no panic-capable op, so "doesn't panic" alone would prove nothing).
+    // NoExtrapolation flags exactly when already over budget. Below either
+    // Linear threshold it never flags. Above the thresholds the policy projects
+    // the accrued debit forward by the documented "spends as much again"
+    // doubling and flags if the projection exceeds remaining. The harness pins
+    // both halves: the band an under-budget debit still gets flagged in once
+    // its doubled projection is over (the case NoExtrapolation misses, which is
+    // the policy's entire reason to exist) and the exact decision (so a
+    // degenerate 1x, where Linear collapses to NoExtrapolation, or any other
+    // multiplier, fails). The saturating form is the faithful spec: a
+    // subtraction rewrite diverges from the impl at the cd > u64::MAX/2 edge.
+    #[kani::proof]
+    fn project_overshoot_matches_spec() {
+        let current_debit: u64 = kani::any();
+        let window: u64 = kani::any();
+        let samples: u32 = kani::any();
+        let remaining: u64 = kani::any();
+
+        // NoExtrapolation is exactly the already-over-budget check.
+        assert_eq!(
+            project_overshoot(
+                current_debit,
+                window,
+                samples,
+                remaining,
+                BudgetProjectionPolicy::NoExtrapolation,
+            ),
+            current_debit > remaining
+        );
+
+        let min_window: u64 = kani::any();
+        let min_samples: u32 = kani::any();
+        let linear = BudgetProjectionPolicy::LinearExtrapolation {
+            min_observation_window_ms: min_window,
+            min_debit_samples: min_samples,
+        };
+        let got = project_overshoot(current_debit, window, samples, remaining, linear);
+
+        if window < min_window || samples < min_samples {
+            // Below either gate: never flags, whatever the debit.
+            assert!(!got);
+        } else {
+            let projected = current_debit.saturating_add(current_debit);
+            // The extrapolation band: under budget now, but the doubled
+            // projection blows it. NoExtrapolation would not flag here; Linear
+            // must. This is what makes the policy more than a rename.
+            if current_debit <= remaining && projected > remaining {
+                assert!(got);
+            }
+            // The full decision is that projection check, which pins the 2x
+            // model exactly (a 1x or any other multiplier fails this).
+            assert_eq!(got, projected > remaining);
+        }
     }
 }

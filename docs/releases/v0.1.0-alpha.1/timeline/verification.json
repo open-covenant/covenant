@@ -1,0 +1,166 @@
+{
+  "commit": "94e7af53c2224aa40762c2061ac96cab34950b71",
+  "cuts": [
+    {
+      "conclusion": {
+        "queryId": "query.tagged-commit-readiness-minus-publication",
+        "receipt": {
+          "proof": {
+            "kind": "bounds",
+            "lowerEdges": [
+              {
+                "fromNodeId": "tagged-commit-readiness-recorded",
+                "maximum": -1779957705698,
+                "sourceId": "release.tagged-commit-readiness.v1",
+                "toNodeId": "@origin:unix-ms"
+              },
+              {
+                "fromNodeId": "@origin:unix-ms",
+                "maximum": 1779957192000,
+                "sourceId": "release.publication.provisional.v1",
+                "toNodeId": "artifacts-published"
+              }
+            ],
+            "upperEdges": [
+              {
+                "fromNodeId": "artifacts-published",
+                "maximum": -1779957192000,
+                "sourceId": "release.publication.provisional.v1",
+                "toNodeId": "@origin:unix-ms"
+              },
+              {
+                "fromNodeId": "@origin:unix-ms",
+                "maximum": 1779957705698,
+                "sourceId": "release.tagged-commit-readiness.v1",
+                "toNodeId": "tagged-commit-readiness-recorded"
+              }
+            ]
+          },
+          "queryDigest": "sha256:d321df0e2180af8ed326401179e71cc0dc8e090ad8cb96a9731f2c7a604e594c",
+          "reasoner": "covenant.timeline.stn.v0alpha1",
+          "semanticResultDigest": "sha256:e01db543660d7f05303b7691c8591f8b3abb73dd00a4cd32a8ba2c49ac6bffa0",
+          "stateDigest": "sha256:c725dab63a60b52bb11634ca9df52cc7a2485860a7451de379a2af178463cd79"
+        },
+        "result": {
+          "maximum": 513698,
+          "minimum": 513698,
+          "status": "bounded",
+          "type": "difference.bounds"
+        },
+        "schema": "covenant.timeline.conclusion.v0alpha3"
+      },
+      "name": "before",
+      "recordedThrough": 3,
+      "verified": true
+    },
+    {
+      "conclusion": {
+        "queryId": "query.tagged-commit-readiness-minus-publication",
+        "receipt": {
+          "proof": {
+            "edges": [
+              {
+                "fromNodeId": "@origin:unix-ms",
+                "maximum": 1779957192000,
+                "sourceId": "release.publication.provisional.v1",
+                "toNodeId": "artifacts-published"
+              },
+              {
+                "fromNodeId": "artifacts-published",
+                "maximum": -1779957345000,
+                "sourceId": "release.publication.github.v1",
+                "toNodeId": "@origin:unix-ms"
+              }
+            ],
+            "kind": "negative-cycle"
+          },
+          "queryDigest": "sha256:2d1e958d92dcaad2b93381ad4771ae88b2a7b8357124b1ffd9f851093b5ceb6f",
+          "reasoner": "covenant.timeline.stn.v0alpha1",
+          "semanticResultDigest": "sha256:e58e972e44f620e86ff9b8204d16ba58aae0fb00d3b7ace3a747033d3499d4c5",
+          "stateDigest": "sha256:37f59180005d59f4c8464000fecec1188629ceecc6ce86718e213e91762b60b5"
+        },
+        "result": {
+          "maximum": null,
+          "minimum": null,
+          "status": "inconsistent",
+          "type": "difference.bounds"
+        },
+        "schema": "covenant.timeline.conclusion.v0alpha3"
+      },
+      "name": "transition",
+      "recordedThrough": 4,
+      "verified": true
+    },
+    {
+      "conclusion": {
+        "queryId": "query.tagged-commit-readiness-minus-publication",
+        "receipt": {
+          "proof": {
+            "kind": "bounds",
+            "lowerEdges": [
+              {
+                "fromNodeId": "tagged-commit-readiness-recorded",
+                "maximum": -1779957705698,
+                "sourceId": "release.tagged-commit-readiness.v1",
+                "toNodeId": "@origin:unix-ms"
+              },
+              {
+                "fromNodeId": "@origin:unix-ms",
+                "maximum": 1779957345000,
+                "sourceId": "release.publication.github.v1",
+                "toNodeId": "artifacts-published"
+              }
+            ],
+            "upperEdges": [
+              {
+                "fromNodeId": "artifacts-published",
+                "maximum": -1779957345000,
+                "sourceId": "release.publication.github.v1",
+                "toNodeId": "@origin:unix-ms"
+              },
+              {
+                "fromNodeId": "@origin:unix-ms",
+                "maximum": 1779957705698,
+                "sourceId": "release.tagged-commit-readiness.v1",
+                "toNodeId": "tagged-commit-readiness-recorded"
+              }
+            ]
+          },
+          "queryDigest": "sha256:f609b83ad88c038dbbd454b018fc575b007c9c5666fbf5fdfea1eb60a513eeba",
+          "reasoner": "covenant.timeline.stn.v0alpha1",
+          "semanticResultDigest": "sha256:1bb1d4e3e92f7d45597d3e5009c3ec722880e9e4fe2789f22cc37dcbbc3c935c",
+          "stateDigest": "sha256:382982e48542f7d28e5448ac89e93f75e96a983d77d9083d2ad01b7ec7af542b"
+        },
+        "result": {
+          "maximum": 360698,
+          "minimum": 360698,
+          "status": "bounded",
+          "type": "difference.bounds"
+        },
+        "schema": "covenant.timeline.conclusion.v0alpha3"
+      },
+      "name": "after",
+      "recordedThrough": 5,
+      "verified": true
+    }
+  ],
+  "evidenceDigests": {
+    "readiness-recorded": "sha256:f9ecfc04d23045ffdfc16f09e6c4a8114b29911f4be4c94c4696b7769810e30a",
+    "release-created": "sha256:496bd6b7c248a87198d380484ee45c23a435b2cc87dd34b97b98457e9605d815",
+    "release-published": "sha256:e56a615638a030c2506949f77eca1af9f0a4b356dc7d2e42cbe4ea413b97e8f4"
+  },
+  "reconciliation": {
+    "authoritativeLagMs": 360698,
+    "correctedByMs": 153000,
+    "provisionalLagMs": 513698
+  },
+  "release": "v0.1.0-alpha.1",
+  "repository": "open-covenant/covenant",
+  "runDigest": "sha256:b6ad649cf31e25b1cac83cf9af1b0bf1c4319611d69c967db8e3e51f2a54b600",
+  "schema": "covenant.timeline.release-verification.v1",
+  "timeline": {
+    "contract": "v0alpha3",
+    "package": "@covenant-org/timeline",
+    "version": "0.0.0-alpha.2"
+  }
+}

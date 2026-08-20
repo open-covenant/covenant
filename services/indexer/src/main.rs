@@ -5,6 +5,7 @@ use anyhow::Context;
 use covenant_indexer::api::{router, AppState};
 use covenant_indexer::config::AppConfig;
 use covenant_indexer::model::seed_events;
+use covenant_indexer::verified::VerifiedState;
 use covenant_indexer::x402_gate::{X402Config, X402Gate};
 use tokio::net::TcpListener;
 use tracing::info;
@@ -22,12 +23,20 @@ async fn main() -> anyhow::Result<()> {
     let x402 = X402Config::from_env().map(X402Gate::new);
     let x402_enabled = x402.is_some();
 
+    let verified = VerifiedState::from_env();
+    if let Some(v) = &verified {
+        info!(issuer = %v.issuer(), "covenant-verified enabled; attesting zauth directory");
+        v.spawn_refresher();
+    }
+    let verified_enabled = verified.is_some();
+
     let state = AppState {
         cluster: config.cluster.clone(),
         rpc_url: config.solana_rpc_url.clone(),
         confirmations: config.confirmations,
         events: Arc::new(events),
         x402,
+        verified,
     };
 
     let app = router(state);
@@ -41,6 +50,7 @@ async fn main() -> anyhow::Result<()> {
         cluster = %config.cluster,
         mode = "fixture",
         x402 = x402_enabled,
+        verified = verified_enabled,
         "covenant indexer up; serving seeded events (no Solana RPC subscriber wired yet)"
     );
     axum::serve(listener, app).await?;

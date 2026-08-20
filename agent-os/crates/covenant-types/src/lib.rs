@@ -762,15 +762,21 @@ mod tests {
         //   6. host segment_ok with bad char → InvalidDisplay
         //   7. all-pass → Ok
         //
-        // agent_id_deserialize_rejects_invalid_display covers arm 5 (the
-        // local-segment invalid-character path via a ';' punctuation
-        // test); arms 1, 2, 3, 4, and 6 are not individually pinned.
+        // Every arm is pinned individually below. agent_id_deserialize_
+        // rejects_invalid_display uses ';' in a string with no '@', so it
+        // exits at arm 1 (split_once('@') → None) and never reaches the
+        // local-segment charset check — it does NOT cover arm 5. Arm 5 is
+        // pinned here directly with '@'-containing inputs whose bad char is
+        // in the LOCAL segment (`a;b@host`, `bad local@host`); without it,
+        // collapsing line 159 to `if !segment_ok(host)` drops local-segment
+        // validation entirely and the whole suite still passes.
         // A relaxation of any of these arms — e.g., dropped multi-@
         // guard for forward-compat with email-style displays, accepted
-        // empty-host strings, or removed the explicit @ requirement —
-        // would silently let a malformed AgentId.display decode through
-        // every wire boundary and route through the capability system
-        // as if it were a well-formed identity.
+        // empty-host strings, dropped local-segment charset check, or
+        // removed the explicit @ requirement — would silently let a
+        // malformed AgentId.display decode through every wire boundary and
+        // route through the capability system as if it were a well-formed
+        // identity.
         assert_eq!(
             validate_agent_id_display("no-at-separator"),
             Err(AgentIdError::InvalidDisplay("no-at-separator".into())),
@@ -802,6 +808,24 @@ mod tests {
              AgentId.display — operator eyeball-grep treats it as \
              'evil@a.com' but the capability-action whitelist treats it \
              as one opaque identifier (an authority-confusion vector)",
+        );
+        assert_eq!(
+            validate_agent_id_display("a;b@host"),
+            Err(AgentIdError::InvalidDisplay("a;b@host".into())),
+            "arm 5: local segment with an invalid character (';') must be \
+             rejected; segment_ok rejects anything outside [A-Za-z0-9_.-], \
+             so collapsing the guard to `if !segment_ok(host)` would let a \
+             ';' (or '/', whitespace, control byte) into the local slot — \
+             the part interpolated into cap-action strings like \
+             a2a.respond.<sender> — an authority-confusion / injection vector",
+        );
+        assert_eq!(
+            validate_agent_id_display("bad local@host"),
+            Err(AgentIdError::InvalidDisplay("bad local@host".into())),
+            "arm 5 (whitespace variant): a space in the local segment must \
+             be rejected; the ';' deserialize test exits at arm 1 (no '@'), \
+             so this '@'-containing input is what actually exercises the \
+             local-segment charset branch at line 159",
         );
         assert_eq!(
             validate_agent_id_display("local@bad host"),

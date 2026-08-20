@@ -211,8 +211,9 @@ impl KeeperConfig {
         if self.sweep_interval_secs == 0 || self.accrual_interval_secs == 0 {
             bail!("interval secs must be > 0");
         }
-        Pubkey::from_str(TREASURY_RECIPIENT)
-            .with_context(|| format!("invalid hardcoded TREASURY_RECIPIENT: {TREASURY_RECIPIENT}"))?;
+        Pubkey::from_str(TREASURY_RECIPIENT).with_context(|| {
+            format!("invalid hardcoded TREASURY_RECIPIENT: {TREASURY_RECIPIENT}")
+        })?;
         Pubkey::from_str(SUBSIDY_RECIPIENT)
             .with_context(|| format!("invalid hardcoded SUBSIDY_RECIPIENT: {SUBSIDY_RECIPIENT}"))?;
         Ok(())
@@ -319,11 +320,12 @@ impl Keeper {
         let ata_program = Pubkey::from_str(ASSOCIATED_TOKEN_PROGRAM_ID_STR)?;
         let coin_creator = self.creator.pubkey();
 
-        let (vault_authority, _) =
-            Pubkey::find_program_address(&[b"creator_vault".as_ref(), coin_creator.as_ref()], &pumpswap);
+        let (vault_authority, _) = Pubkey::find_program_address(
+            &[b"creator_vault".as_ref(), coin_creator.as_ref()],
+            &pumpswap,
+        );
         let vault_ata = derive_ata(&vault_authority, &wsol, &spl_token);
-        let (event_authority, _) =
-            Pubkey::find_program_address(&[b"__event_authority"], &pumpswap);
+        let (event_authority, _) = Pubkey::find_program_address(&[b"__event_authority"], &pumpswap);
         let creator_wsol_ata = derive_ata(&coin_creator, &wsol, &spl_token);
 
         // Skip dust so we don't pay a tx fee to collect ~nothing. A missing
@@ -432,7 +434,9 @@ impl Keeper {
         if split.stakers > 0 {
             match self.send_deposit_sol_fees(split.stakers).await {
                 Ok(sig) => info!(sig = %sig, lamports = split.stakers, "deposited stakers SOL"),
-                Err(e) => warn!(error = ?e, lamports = split.stakers, "stakers leg failed; continuing"),
+                Err(e) => {
+                    warn!(error = ?e, lamports = split.stakers, "stakers leg failed; continuing")
+                }
             }
         }
         if split.treasury > 0 || split.subsidy > 0 {
@@ -458,7 +462,11 @@ impl Keeper {
                 );
             } else {
                 match self.run_buylock_leg(split.buylock).await {
-                    Ok(BuylockResult { swap_sig, deposit_sig, cvnt_received }) => info!(
+                    Ok(BuylockResult {
+                        swap_sig,
+                        deposit_sig,
+                        cvnt_received,
+                    }) => info!(
                         swap_sig = %swap_sig,
                         deposit_sig = %deposit_sig,
                         sol_in = split.buylock,
@@ -544,9 +552,13 @@ impl Keeper {
     }
 
     async fn send_deposit_buylock_cvnt(&self, amount: u64) -> Result<String> {
-        let depositor_ata = derive_ata(&self.creator.pubkey(), &self.cvnt_mint, &self.token_program);
-        let buylock_vault =
-            derive_ata(&self.buylock_vault_authority_pda, &self.cvnt_mint, &self.token_program);
+        let depositor_ata =
+            derive_ata(&self.creator.pubkey(), &self.cvnt_mint, &self.token_program);
+        let buylock_vault = derive_ata(
+            &self.buylock_vault_authority_pda,
+            &self.cvnt_mint,
+            &self.token_program,
+        );
         let mut data = anchor_discriminator("deposit_buylock_cvnt").to_vec();
         amount.serialize(&mut data)?;
         let ix = Instruction {
@@ -741,27 +753,28 @@ fn required_env(key: &str) -> Result<String> {
 
 fn optional_env_u64(key: &str) -> Result<Option<u64>> {
     match std::env::var(key) {
-        Ok(v) => Ok(Some(
-            v.parse()
-                .with_context(|| format!("env {} not a u64: {}", key, v))?,
-        )),
+        Ok(v) => {
+            Ok(Some(v.parse().with_context(|| {
+                format!("env {} not a u64: {}", key, v)
+            })?))
+        }
         Err(_) => Ok(None),
     }
 }
 
 fn optional_env_u16(key: &str) -> Result<Option<u16>> {
     match std::env::var(key) {
-        Ok(v) => Ok(Some(
-            v.parse()
-                .with_context(|| format!("env {} not a u16: {}", key, v))?,
-        )),
+        Ok(v) => {
+            Ok(Some(v.parse().with_context(|| {
+                format!("env {} not a u16: {}", key, v)
+            })?))
+        }
         Err(_) => Ok(None),
     }
 }
 
 fn load_keypair(path: &str) -> Result<Keypair> {
-    read_keypair_file(Path::new(path))
-        .map_err(|e| anyhow!("read keypair {}: {}", path, e))
+    read_keypair_file(Path::new(path)).map_err(|e| anyhow!("read keypair {}: {}", path, e))
 }
 
 #[cfg(test)]
@@ -807,8 +820,10 @@ mod tests {
         let spl_token = Pubkey::from_str(SPL_TOKEN_PROGRAM_ID).unwrap();
         let coin_creator =
             Pubkey::from_str("2JXuvXb6Q5YREk9KmhtgNmseq2aKtYnu5zLRi2i5Vaeb").unwrap();
-        let (vault_authority, _) =
-            Pubkey::find_program_address(&[b"creator_vault".as_ref(), coin_creator.as_ref()], &pumpswap);
+        let (vault_authority, _) = Pubkey::find_program_address(
+            &[b"creator_vault".as_ref(), coin_creator.as_ref()],
+            &pumpswap,
+        );
         let vault_ata = derive_ata(&vault_authority, &wsol, &spl_token);
         assert_eq!(
             vault_ata.to_string(),
@@ -820,7 +835,10 @@ mod tests {
     fn split_sums_to_surplus() {
         let cfg = base_cfg();
         let s = SweepSplit::compute(1_000_000_000, &cfg);
-        assert_eq!(s.stakers + s.buylock + s.treasury + s.subsidy, 1_000_000_000);
+        assert_eq!(
+            s.stakers + s.buylock + s.treasury + s.subsidy,
+            1_000_000_000
+        );
         assert_eq!(s.stakers, 250_000_000);
         assert_eq!(s.buylock, 250_000_000);
         assert_eq!(s.treasury, 300_000_000);
@@ -830,8 +848,17 @@ mod tests {
     #[test]
     fn split_absorbs_rounding_residue_into_subsidy() {
         let cfg = base_cfg();
-        // 7 lamports: 25/25/30/20 doesn't round cleanly. Subsidy takes residue.
+        // 7 lamports, 25/25/30/20 bps: the proportional legs floor-truncate
+        // (1.75->1, 1.75->1, 2.1->2) and subsidy absorbs the residue
+        // (7-1-1-2=3), far above its own 1.4 share. The sum is tautological —
+        // subsidy is *defined* as surplus minus the other three — so pin the
+        // exact legs; that catches a `/ 10_000` -> `.div_ceil(10_000)` slip,
+        // which would round the legs up (2/2/3) and starve subsidy to 0.
         let s = SweepSplit::compute(7, &cfg);
+        assert_eq!(s.stakers, 1);
+        assert_eq!(s.buylock, 1);
+        assert_eq!(s.treasury, 2);
+        assert_eq!(s.subsidy, 3);
         assert_eq!(s.stakers + s.buylock + s.treasury + s.subsidy, 7);
     }
 
@@ -840,6 +867,32 @@ mod tests {
         let mut cfg = base_cfg();
         cfg.stakers_bps = 9999;
         assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn config_rejects_bps_split_that_wraps_to_10000_as_u16() {
+        // The four split fields are u16, summed as u32 in validate()
+        // (lib.rs:204). The widening is the only thing stopping a sum past
+        // u16::MAX from wrapping back onto the 10_000 acceptance value:
+        // 65_535 + 10_001 == 75_536, and 75_536 - 65_536 == 10_000. Summed as
+        // u16 this aliases a valid split, so a keeper would accept a config and
+        // route swept surplus against ~655%/100%/0%/0% legs; widened to u32 it
+        // is 75_536 and rejected. base_cfg's heaviest other test sums to 17_499
+        // (fits u16), so this is the only case that exercises the widen.
+        let mut cfg = base_cfg();
+        cfg.stakers_bps = 65_535;
+        cfg.buylock_bps = 10_001;
+        cfg.treasury_bps = 0;
+        cfg.subsidy_bps = 0;
+        let msg = cfg
+            .validate()
+            .expect_err("u32 sum 75_536 != 10_000 must be rejected")
+            .to_string();
+        assert!(
+            msg.contains("must sum to 10000") && msg.contains("75536"),
+            "rejection must report the u32-widened sum 75536, proving the bps \
+             were not summed as u16 (which wraps to 10000 and accepts): {msg}"
+        );
     }
 
     #[test]
@@ -877,7 +930,8 @@ mod tests {
     #[test]
     fn hardcoded_recipients_parse_to_valid_pubkeys() {
         let cfg = base_cfg();
-        cfg.validate().expect("hardcoded recipient consts must parse");
+        cfg.validate()
+            .expect("hardcoded recipient consts must parse");
         Pubkey::from_str(TREASURY_RECIPIENT).expect("TREASURY_RECIPIENT valid");
         Pubkey::from_str(SUBSIDY_RECIPIENT).expect("SUBSIDY_RECIPIENT valid");
     }

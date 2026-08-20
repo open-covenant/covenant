@@ -43,8 +43,8 @@ async fn main() {
         pay_to: "credits".into(),
         scheme: "exact-er".into(),
         extra: Some(PaymentExtra {
-            fee_payer: None,
             nonce: Some(nonce.clone()),
+            ..Default::default()
         }),
     };
 

@@ -1,13 +1,13 @@
 'use client';
 
 import { useMutation, useQuery } from '@tanstack/react-query';
+import { type SolanaAddress } from '@covenant-org/sdk';
 import {
   MOCK_CREDITS,
   MOCK_LEADERBOARD,
   type CreditSummary,
   type LeaderboardRow,
-  type SolanaAddress,
-} from '@covenant/sdk';
+} from '../fixtures.js';
 
 function resolveCredits(owner?: SolanaAddress) {
   if (!owner) return MOCK_CREDITS;

@@ -1,0 +1,14 @@
+[package]
+name = "covenant-spend-permission"
+version = "0.1.0"
+description = "Map a Covenant spend-scoped capability onto a Coinbase Spend Permission: the SpendPermissionManager EIP-712 struct, its pinned domain and typehash, a digest that reproduces the contract's getHash, and calldata builders for approveWithSignature/spend/revoke/getCurrentPeriod."
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+covenant-types = { path = "../covenant-types" }
+serde_json = { workspace = true }
+sha3 = { workspace = true }
+thiserror = { workspace = true }

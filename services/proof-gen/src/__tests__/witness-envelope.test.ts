@@ -61,4 +61,9 @@ describe('witness envelope', () => {
       /unexpected length/,
     );
   });
+
+  it('rejects a witness key whose length is not 32 bytes', () => {
+    expect(() => wrapWitnessKey(randomBytes(16))).toThrowError(/witness key must be 32 bytes/);
+    expect(() => wrapWitnessKey(randomBytes(33))).toThrowError(/witness key must be 32 bytes/);
+  });
 });

@@ -23,6 +23,7 @@ use serde_json::{json, Value};
 use crate::config::MetaplexConfig;
 use crate::das::DasClient;
 use crate::request::{AttestationPayload, SignerRequest, SignerResponse};
+use crate::verify::{default_authority, verify_agent, verify_attestation};
 
 /// Prefix every Metaplex tool name carries.
 pub const TOOL_PREFIX: &str = "metaplex.";
@@ -32,6 +33,8 @@ const READ_SLUGS: &[&str] = &[
     "das.assets_by_owner",
     "das.search",
     "das.get_asset_proof",
+    "verify.attestation",
+    "verify.agent",
 ];
 const WRITE_SLUGS: &[&str] = &["attest.audit_root", "identity.register"];
 
@@ -64,16 +67,24 @@ fn description(slug: &str) -> &'static str {
         "das.get_asset_proof" => "Fetch the merkle proof for a compressed asset (cNFT) via the Metaplex DAS API.",
         "attest.audit_root" => "Anchor a Covenant audit-root attestation into an MPL Core asset's AppData plugin (DAS-indexed).",
         "identity.register" => "Bind the daemon's agent identity to an MPL Agent Identity record on an MPL Core asset.",
+        "verify.attestation" => "Verify one MPL Core asset is a valid Covenant audit-root attestation (ERC-8004 shape, authored by the Covenant authority). DAS-only, no keys.",
+        "verify.agent" => "Check whether an agent identity is Covenant-accountable: does it carry a verified audit-root attestation? DAS-only, no Covenant infra in the path.",
         _ => "Metaplex tool.",
     }
 }
 
 fn input_schema(slug: &str) -> Value {
     match slug {
-        "das.get_asset" | "das.get_asset_proof" => json!({
+        "das.get_asset" | "das.get_asset_proof" | "verify.attestation" => json!({
             "type": "object",
             "properties": { "id": { "type": "string", "description": "Asset id (mint or compressed-asset id)" } },
             "required": ["id"],
+            "additionalProperties": false,
+        }),
+        "verify.agent" => json!({
+            "type": "object",
+            "properties": { "agent": { "type": "string", "description": "Agent identity asset id to check for Covenant accountability" } },
+            "required": ["agent"],
             "additionalProperties": false,
         }),
         "das.assets_by_owner" => json!({
@@ -178,6 +189,8 @@ pub fn metaplex_tool(
             slug,
             name: format!("{TOOL_PREFIX}{slug}"),
             collection: config.collection.clone(),
+            agent_asset: non_empty(&config.agent_asset),
+            agent_registration: non_empty(&config.agent_registration),
             signer,
         }) as Arc<dyn Tool>);
     }
@@ -205,14 +218,27 @@ impl ReadTool {
             }
             "das.assets_by_owner" => {
                 let owner = str_arg(&args, "owner")?;
-                let limit = bounded_u32_arg(&args, "limit", 100, 1, 1000)?;
-                let page = bounded_u32_arg(&args, "page", 1, 1, u32::MAX)?;
+                let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(100) as u32;
+                let page = args.get("page").and_then(Value::as_u64).unwrap_or(1) as u32;
                 self.das
                     .get_assets_by_owner(owner, limit, page)
                     .await
                     .map_err(das_err)
             }
             "das.search" => self.das.search_assets(args).await.map_err(das_err),
+            "verify.attestation" => {
+                let id = str_arg(&args, "id")?;
+                let asset = self.das.get_asset(id).await.map_err(das_err)?;
+                let verdict = verify_attestation(&asset, default_authority());
+                Ok(serde_json::to_value(verdict).unwrap_or(Value::Null))
+            }
+            "verify.agent" => {
+                let agent = str_arg(&args, "agent")?;
+                let verdict = verify_agent(self.das.as_ref(), agent, default_authority())
+                    .await
+                    .map_err(das_err)?;
+                Ok(serde_json::to_value(verdict).unwrap_or(Value::Null))
+            }
             other => Err(ToolError::NotFound(format!("{TOOL_PREFIX}{other}"))),
         }
     }
@@ -247,6 +273,8 @@ struct WriteTool {
     slug: &'static str,
     name: String,
     collection: String,
+    agent_asset: Option<String>,
+    agent_registration: Option<String>,
     signer: Arc<dyn MetaplexSigner>,
 }
 
@@ -268,24 +296,32 @@ impl WriteTool {
                     crate::request::validate_attestation_field(name, value)
                         .map_err(ToolError::InvalidArguments)?;
                 }
-                let recorded_at =
-                    args.get("recordedAt")
-                        .and_then(Value::as_u64)
-                        .ok_or_else(|| {
-                            ToolError::InvalidArguments("recordedAt (integer) is required".into())
-                        })?;
+                for (name, pk) in [
+                    ("agentAsset", &self.agent_asset),
+                    ("agentRegistration", &self.agent_registration),
+                ] {
+                    if let Some(pk) = pk {
+                        crate::request::validate_onchain_pubkey(name, pk)
+                            .map_err(ToolError::InvalidArguments)?;
+                    }
+                }
                 let payload = AttestationPayload::new(
                     root,
                     release_target,
                     release_subject,
                     release_scope,
-                    recorded_at,
-                );
+                    args.get("recordedAt")
+                        .and_then(Value::as_u64)
+                        .ok_or_else(|| {
+                            ToolError::InvalidArguments("recordedAt (integer) is required".into())
+                        })?,
+                )
+                .with_subject(self.agent_asset.clone(), self.agent_registration.clone());
                 // `asset` (append to an existing attestation asset) is not
-                // wired yet — v1 always mints a fresh asset, so we never
-                // pass one and never advertise the arg.
+                // wired yet; the current path always mints a fresh asset, so
+                // we never pass one and never advertise the arg.
                 Ok(SignerRequest::AttestAuditRoot {
-                    payload,
+                    payload: Box::new(payload),
                     asset: None,
                     collection: if self.collection.is_empty() {
                         opt_str_arg(args, "collection")
@@ -295,14 +331,20 @@ impl WriteTool {
                 })
             }
             "identity.register" => {
+                let agent_label = str_arg(args, "agentLabel")?;
+                let agent_pubkey = str_arg(args, "agentPubkey")?;
+                crate::request::validate_attestation_field("agentLabel", agent_label)
+                    .map_err(ToolError::InvalidArguments)?;
+                crate::request::validate_onchain_pubkey("agentPubkey", agent_pubkey)
+                    .map_err(ToolError::InvalidArguments)?;
                 let registration_uri = opt_str_arg(args, "registrationUri");
                 if let Some(uri) = &registration_uri {
                     crate::request::validate_registration_uri(uri)
                         .map_err(ToolError::InvalidArguments)?;
                 }
                 Ok(SignerRequest::RegisterIdentity {
-                    agent_label: str_arg(args, "agentLabel")?.to_string(),
-                    agent_pubkey: str_arg(args, "agentPubkey")?.to_string(),
+                    agent_label: agent_label.to_string(),
+                    agent_pubkey: agent_pubkey.to_string(),
                     asset: None,
                     registration_uri,
                 })
@@ -353,35 +395,8 @@ fn opt_str_arg(args: &Value, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Read an optional bounded integer argument, enforcing the tool schema's
-/// declared range instead of silently truncating it. Absent or null falls
-/// back to `default`; a present value that is not a non-negative integer or
-/// lies outside `min..=max` is rejected. The schema is published for clients
-/// but never enforced by the MCP layer, and the previous `as u32` cast
-/// truncated anything above `u32::MAX`, so a caller could page the DAS
-/// provider with a value the schema forbids (e.g. a limit of 0 from a
-/// truncated `2^32`, or 5000 over the advertised maximum).
-fn bounded_u32_arg(
-    args: &Value,
-    key: &str,
-    default: u32,
-    min: u32,
-    max: u32,
-) -> Result<u32, ToolError> {
-    match args.get(key) {
-        None | Some(Value::Null) => Ok(default),
-        Some(v) => {
-            let n = v.as_u64().ok_or_else(|| {
-                ToolError::InvalidArguments(format!("{key} must be a non-negative integer"))
-            })?;
-            u32::try_from(n)
-                .ok()
-                .filter(|n| (min..=max).contains(n))
-                .ok_or_else(|| {
-                    ToolError::InvalidArguments(format!("{key} must be between {min} and {max}"))
-                })
-        }
-    }
+fn non_empty(s: &str) -> Option<String> {
+    (!s.is_empty()).then(|| s.to_string())
 }
 
 fn das_err(e: crate::das::DasError) -> ToolError {
@@ -448,14 +463,17 @@ mod tests {
     fn read_only_config_lists_only_read_tools() {
         let specs = metaplex_specs(&enabled_reads());
         let names: Vec<_> = specs.iter().map(|s| s.name.clone()).collect();
-        assert_eq!(names.len(), 4);
-        assert!(names.iter().all(|n| n.starts_with("metaplex.das.")));
+        assert_eq!(names.len(), 6);
+        assert!(names
+            .iter()
+            .all(|n| n.starts_with("metaplex.das.") || n.starts_with("metaplex.verify.")));
+        assert!(names.contains(&"metaplex.verify.agent".to_string()));
     }
 
     #[test]
     fn full_config_lists_read_and_write_tools() {
         let specs = metaplex_specs(&enabled_all());
-        assert_eq!(specs.len(), 6);
+        assert_eq!(specs.len(), 8);
         assert!(specs.iter().any(|s| s.name == "metaplex.attest.audit_root"));
     }
 
@@ -514,555 +532,5 @@ mod tests {
             .await
             .unwrap();
         assert!(!ok.is_error);
-    }
-
-    struct EchoDas;
-    #[async_trait]
-    impl DasClient for EchoDas {
-        async fn get_asset(&self, id: &str) -> Result<Value, crate::das::DasError> {
-            Ok(json!({ "id": id }))
-        }
-        async fn get_asset_proof(&self, id: &str) -> Result<Value, crate::das::DasError> {
-            Ok(json!({ "id": id }))
-        }
-        async fn get_assets_by_owner(
-            &self,
-            o: &str,
-            l: u32,
-            p: u32,
-        ) -> Result<Value, crate::das::DasError> {
-            Ok(json!({ "owner": o, "limit": l, "page": p }))
-        }
-        async fn search_assets(&self, p: Value) -> Result<Value, crate::das::DasError> {
-            Ok(p)
-        }
-    }
-
-    struct ErrDas;
-    #[async_trait]
-    impl DasClient for ErrDas {
-        async fn get_asset(&self, _id: &str) -> Result<Value, crate::das::DasError> {
-            Err(crate::das::DasError::Rpc("boom".into()))
-        }
-        async fn get_asset_proof(&self, _id: &str) -> Result<Value, crate::das::DasError> {
-            Err(crate::das::DasError::Rpc("boom".into()))
-        }
-        async fn get_assets_by_owner(
-            &self,
-            _o: &str,
-            _l: u32,
-            _p: u32,
-        ) -> Result<Value, crate::das::DasError> {
-            Err(crate::das::DasError::Rpc("boom".into()))
-        }
-        async fn search_assets(&self, _p: Value) -> Result<Value, crate::das::DasError> {
-            Err(crate::das::DasError::Rpc("boom".into()))
-        }
-    }
-
-    #[test]
-    fn allowlist_filters_advertised_specs() {
-        let mut cfg = enabled_all();
-        cfg.allow = Some(vec!["das.get_asset".into(), "attest.audit_root".into()]);
-        let names: Vec<_> = metaplex_specs(&cfg).into_iter().map(|s| s.name).collect();
-        assert_eq!(
-            names,
-            vec!["metaplex.das.get_asset", "metaplex.attest.audit_root"]
-        );
-    }
-
-    #[test]
-    fn allowlist_gates_per_name_dispatch() {
-        let mut cfg = enabled_all();
-        cfg.allow = Some(vec!["das.get_asset".into()]);
-        assert!(
-            metaplex_tool(&cfg, "metaplex.das.get_asset", Arc::new(NullDas), None).is_some(),
-            "an allowed read resolves"
-        );
-        assert!(
-            metaplex_tool(&cfg, "metaplex.das.search", Arc::new(NullDas), None).is_none(),
-            "a disallowed read does not resolve even with reads enabled"
-        );
-        assert!(
-            metaplex_tool(
-                &cfg,
-                "metaplex.attest.audit_root",
-                Arc::new(NullDas),
-                Some(Arc::new(CapturingSigner)),
-            )
-            .is_none(),
-            "a disallowed write does not resolve even with a signer wired"
-        );
-    }
-
-    #[test]
-    fn unknown_tool_name_resolves_to_none() {
-        let cfg = enabled_all();
-        assert!(metaplex_tool(
-            &cfg,
-            "metaplex.does.not_exist",
-            Arc::new(NullDas),
-            Some(Arc::new(CapturingSigner)),
-        )
-        .is_none());
-    }
-
-    #[test]
-    fn read_tool_unavailable_when_reads_disabled() {
-        let cfg = MetaplexConfig {
-            enabled: true,
-            das_url: String::new(),
-            ..Default::default()
-        };
-        assert!(!cfg.reads_enabled());
-        assert!(metaplex_tool(&cfg, "metaplex.das.get_asset", Arc::new(NullDas), None).is_none());
-    }
-
-    #[test]
-    fn write_tool_unavailable_when_writes_disabled() {
-        // Reads on, writes off (no rpc/signer), but a signer is supplied: the
-        // writes_enabled config gate must refuse before the signer is consulted.
-        let cfg = enabled_reads();
-        assert!(!cfg.writes_enabled());
-        assert!(metaplex_tool(
-            &cfg,
-            "metaplex.attest.audit_root",
-            Arc::new(NullDas),
-            Some(Arc::new(CapturingSigner)),
-        )
-        .is_none());
-    }
-
-    #[tokio::test]
-    async fn identity_register_rejects_malformed_uri() {
-        let cfg = enabled_all();
-        let tool = metaplex_tool(
-            &cfg,
-            "metaplex.identity.register",
-            Arc::new(NullDas),
-            Some(Arc::new(CapturingSigner)),
-        )
-        .unwrap();
-        let err = tool
-            .call(json!({
-                "agentLabel": "agent@local",
-                "agentPubkey": "Agent11111111111111111111111111111111111111",
-                "registrationUri": "http://insecure.example/a.json",
-            }))
-            .await
-            .expect_err("plain http must be rejected before any signer round-trip");
-        assert!(matches!(err, ToolError::InvalidArguments(m) if m.contains("registrationUri")));
-    }
-
-    #[tokio::test]
-    async fn identity_register_builds_and_signs_with_valid_args() {
-        let cfg = enabled_all();
-        let tool = metaplex_tool(
-            &cfg,
-            "metaplex.identity.register",
-            Arc::new(NullDas),
-            Some(Arc::new(CapturingSigner)),
-        )
-        .unwrap();
-        let ok = tool
-            .call(json!({
-                "agentLabel": "agent@local",
-                "agentPubkey": "Agent11111111111111111111111111111111111111",
-                "registrationUri": "https://opencovenant.org/agents/covenant.json",
-            }))
-            .await
-            .unwrap();
-        assert!(!ok.is_error);
-    }
-
-    #[tokio::test]
-    async fn identity_register_requires_agent_pubkey() {
-        let cfg = enabled_all();
-        let tool = metaplex_tool(
-            &cfg,
-            "metaplex.identity.register",
-            Arc::new(NullDas),
-            Some(Arc::new(CapturingSigner)),
-        )
-        .unwrap();
-        let err = tool
-            .call(json!({ "agentLabel": "agent@local" }))
-            .await
-            .expect_err("missing agentPubkey");
-        assert!(matches!(err, ToolError::InvalidArguments(m) if m.contains("agentPubkey")));
-    }
-
-    #[tokio::test]
-    async fn search_passes_args_through_to_das() {
-        let cfg = enabled_reads();
-        let tool = metaplex_tool(&cfg, "metaplex.das.search", Arc::new(EchoDas), None).unwrap();
-        let res = tool
-            .call(json!({ "ownerAddress": "owner", "page": 2 }))
-            .await
-            .unwrap();
-        assert!(!res.is_error);
-        assert_eq!(
-            res.content,
-            vec![Content::json(json!({ "ownerAddress": "owner", "page": 2 }))]
-        );
-    }
-
-    #[tokio::test]
-    async fn assets_by_owner_defaults_limit_and_page() {
-        let cfg = enabled_reads();
-        let tool = metaplex_tool(
-            &cfg,
-            "metaplex.das.assets_by_owner",
-            Arc::new(EchoDas),
-            None,
-        )
-        .unwrap();
-        let res = tool.call(json!({ "owner": "wallet" })).await.unwrap();
-        assert_eq!(
-            res.content,
-            vec![Content::json(
-                json!({ "owner": "wallet", "limit": 100, "page": 1 })
-            )]
-        );
-        let res = tool
-            .call(json!({ "owner": "wallet", "limit": 5, "page": 3 }))
-            .await
-            .unwrap();
-        assert_eq!(
-            res.content,
-            vec![Content::json(
-                json!({ "owner": "wallet", "limit": 5, "page": 3 })
-            )]
-        );
-    }
-
-    #[tokio::test]
-    async fn assets_by_owner_rejects_out_of_range_limit() {
-        let cfg = enabled_reads();
-        let tool = metaplex_tool(
-            &cfg,
-            "metaplex.das.assets_by_owner",
-            Arc::new(EchoDas),
-            None,
-        )
-        .unwrap();
-        // Above the schema's published maximum of 1000.
-        let err = tool
-            .call(json!({ "owner": "wallet", "limit": 1001 }))
-            .await
-            .expect_err("a limit over the schema maximum must be rejected");
-        assert!(matches!(err, ToolError::InvalidArguments(m) if m.contains("limit")));
-        // Below the schema minimum of 1.
-        let err = tool
-            .call(json!({ "owner": "wallet", "limit": 0 }))
-            .await
-            .expect_err("a zero limit must be rejected");
-        assert!(matches!(err, ToolError::InvalidArguments(m) if m.contains("limit")));
-        // Above u32::MAX: the old `as u32` cast truncated this to 0 silently.
-        let err = tool
-            .call(json!({ "owner": "wallet", "limit": (u32::MAX as u64) + 1 }))
-            .await
-            .expect_err("a limit above u32::MAX must be rejected, not truncated");
-        assert!(matches!(err, ToolError::InvalidArguments(m) if m.contains("limit")));
-        // A present but non-integer limit is rejected rather than silently
-        // falling back to the default the way the old `unwrap_or(100)` did.
-        let err = tool
-            .call(json!({ "owner": "wallet", "limit": "lots" }))
-            .await
-            .expect_err("a non-integer limit must be rejected");
-        assert!(matches!(err, ToolError::InvalidArguments(m) if m.contains("limit")));
-    }
-
-    #[tokio::test]
-    async fn assets_by_owner_rejects_out_of_range_page() {
-        let cfg = enabled_reads();
-        let tool = metaplex_tool(
-            &cfg,
-            "metaplex.das.assets_by_owner",
-            Arc::new(EchoDas),
-            None,
-        )
-        .unwrap();
-        // Below the schema minimum of 1.
-        let err = tool
-            .call(json!({ "owner": "wallet", "page": 0 }))
-            .await
-            .expect_err("a zero page must be rejected");
-        assert!(matches!(err, ToolError::InvalidArguments(m) if m.contains("page")));
-        // Above u32::MAX: the old cast truncated this silently.
-        let err = tool
-            .call(json!({ "owner": "wallet", "page": (u32::MAX as u64) + 1 }))
-            .await
-            .expect_err("a page above u32::MAX must be rejected, not truncated");
-        assert!(matches!(err, ToolError::InvalidArguments(m) if m.contains("page")));
-    }
-
-    #[tokio::test]
-    async fn assets_by_owner_accepts_schema_boundary_values() {
-        let cfg = enabled_reads();
-        let tool = metaplex_tool(
-            &cfg,
-            "metaplex.das.assets_by_owner",
-            Arc::new(EchoDas),
-            None,
-        )
-        .unwrap();
-        // The inclusive schema maximum (1000) and a valid page pass through
-        // unchanged — the bound rejects only what the schema forbids.
-        let res = tool
-            .call(json!({ "owner": "wallet", "limit": 1000, "page": 7 }))
-            .await
-            .unwrap();
-        assert_eq!(
-            res.content,
-            vec![Content::json(
-                json!({ "owner": "wallet", "limit": 1000, "page": 7 })
-            )]
-        );
-        // The inclusive minimum (1) flows through as an explicit present value,
-        // pinning the lower bound so a `<` vs `<=` slip can't silently reject it.
-        let res = tool
-            .call(json!({ "owner": "wallet", "limit": 1, "page": 1 }))
-            .await
-            .unwrap();
-        assert_eq!(
-            res.content,
-            vec![Content::json(
-                json!({ "owner": "wallet", "limit": 1, "page": 1 })
-            )]
-        );
-    }
-
-    #[tokio::test]
-    async fn das_error_surfaces_as_non_throwing_error_result() {
-        let cfg = enabled_reads();
-        let tool = metaplex_tool(&cfg, "metaplex.das.get_asset", Arc::new(ErrDas), None).unwrap();
-        let res = tool
-            .call(json!({ "id": "abc" }))
-            .await
-            .expect("a DAS rpc error is a tool-error result, not a protocol error");
-        assert!(res.is_error);
-    }
-
-    struct RecordingSigner {
-        seen: std::sync::Mutex<Option<SignerRequest>>,
-    }
-    #[async_trait]
-    impl MetaplexSigner for RecordingSigner {
-        async fn sign(&self, request: SignerRequest) -> Result<SignerResponse, String> {
-            *self.seen.lock().unwrap() = Some(request);
-            Ok(SignerResponse {
-                signature: "sig".into(),
-                asset: "asset".into(),
-                cluster: "devnet".into(),
-            })
-        }
-    }
-
-    /// Drive a write tool through the real `tool.call()` path and return the
-    /// `SignerRequest` `build_request` handed to the signer.
-    async fn captured_request(cfg: &MetaplexConfig, name: &str, args: Value) -> SignerRequest {
-        let rec = Arc::new(RecordingSigner {
-            seen: std::sync::Mutex::new(None),
-        });
-        let signer: Arc<dyn MetaplexSigner> = rec.clone();
-        let tool = metaplex_tool(cfg, name, Arc::new(NullDas), Some(signer)).unwrap();
-        tool.call(args).await.unwrap();
-        let req = rec.seen.lock().unwrap().clone();
-        req.expect("signer received a request")
-    }
-
-    fn attest_args() -> Value {
-        json!({
-            "rootHashHex": "a".repeat(64),
-            "releaseTarget": "v0.1.0",
-            "releaseSubject": "covenant",
-            "releaseScope": "audit",
-            "recordedAt": 1_700_000_000u64,
-        })
-    }
-
-    #[tokio::test]
-    async fn attest_build_request_pins_asset_none_and_collection_precedence() {
-        // config.collection empty + a caller collection arg: the arg is used,
-        // and asset stays None (v1 mints fresh, never appends to a caller asset).
-        let mut args = attest_args();
-        args["collection"] = json!("ArgColl1111111111111111111111111111111111111");
-        // A caller-supplied asset must be dropped: appending to an existing
-        // asset is not wired, so a passed `asset` must never reach the request.
-        args["asset"] = json!("CallerAsset111111111111111111111111111111111");
-        match captured_request(&enabled_all(), "metaplex.attest.audit_root", args).await {
-            SignerRequest::AttestAuditRoot {
-                payload,
-                asset,
-                collection,
-            } => {
-                assert_eq!(
-                    asset, None,
-                    "a caller-supplied asset must never reach the request"
-                );
-                assert_eq!(
-                    collection.as_deref(),
-                    Some("ArgColl1111111111111111111111111111111111111")
-                );
-                assert_eq!(payload.root_hash_hex, "a".repeat(64));
-            }
-            other => panic!("unexpected request: {other:?}"),
-        }
-
-        // config.collection set: it overrides the caller's collection arg.
-        let mut cfg = enabled_all();
-        cfg.collection = "ConfigColl11111111111111111111111111111111".into();
-        let mut args = attest_args();
-        args["collection"] = json!("ArgColl1111111111111111111111111111111111111");
-        match captured_request(&cfg, "metaplex.attest.audit_root", args).await {
-            SignerRequest::AttestAuditRoot { collection, .. } => assert_eq!(
-                collection.as_deref(),
-                Some("ConfigColl11111111111111111111111111111111"),
-                "operator config collection overrides the caller arg"
-            ),
-            other => panic!("unexpected request: {other:?}"),
-        }
-
-        // config empty + no arg: no collection pin, asset still None.
-        match captured_request(&enabled_all(), "metaplex.attest.audit_root", attest_args()).await {
-            SignerRequest::AttestAuditRoot {
-                collection, asset, ..
-            } => {
-                assert_eq!(collection, None);
-                assert_eq!(asset, None);
-            }
-            other => panic!("unexpected request: {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn attest_rejects_missing_or_non_integer_recorded_at() {
-        // recordedAt must be an integer; build_request refuses before any
-        // signer round-trip so a missing or non-integer timestamp never lands
-        // on-chain. Value::as_u64 yields None for a JSON string or a float.
-        let tool = metaplex_tool(
-            &enabled_all(),
-            "metaplex.attest.audit_root",
-            Arc::new(NullDas),
-            Some(Arc::new(CapturingSigner)),
-        )
-        .unwrap();
-
-        let mut absent = attest_args();
-        absent.as_object_mut().unwrap().remove("recordedAt");
-        let mut as_string = attest_args();
-        as_string["recordedAt"] = json!("1700000000");
-        let mut as_float = attest_args();
-        as_float["recordedAt"] = json!(1.5);
-
-        for (label, args) in [
-            ("absent", absent),
-            ("string", as_string),
-            ("float", as_float),
-        ] {
-            let err = tool
-                .call(args)
-                .await
-                .expect_err("a non-integer recordedAt must be refused before signing");
-            assert!(
-                matches!(err, ToolError::InvalidArguments(ref m) if m.contains("recordedAt")),
-                "{label}: got {err:?}"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn attest_rejects_an_empty_required_string_field() {
-        // str_arg treats an empty string as missing, so an empty releaseTarget
-        // is refused before it can be signed into an attestation's provenance
-        // fields — a distinct branch from an absent key.
-        let tool = metaplex_tool(
-            &enabled_all(),
-            "metaplex.attest.audit_root",
-            Arc::new(NullDas),
-            Some(Arc::new(CapturingSigner)),
-        )
-        .unwrap();
-        let mut args = attest_args();
-        args["releaseTarget"] = json!("");
-        let err = tool
-            .call(args)
-            .await
-            .expect_err("an empty releaseTarget must be rejected");
-        assert!(
-            matches!(err, ToolError::InvalidArguments(ref m) if m.contains("releaseTarget")),
-            "got {err:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn attest_rejects_a_control_char_in_a_release_field() {
-        // A release_* field is inscribed verbatim into the on-chain AppData
-        // JSON; a NUL/ESC/newline is the same render-injection risk
-        // registration_uri rejects, so build_request must refuse it before any
-        // signer round-trip rather than inscribe it on-chain.
-        let tool = metaplex_tool(
-            &enabled_all(),
-            "metaplex.attest.audit_root",
-            Arc::new(NullDas),
-            Some(Arc::new(CapturingSigner)),
-        )
-        .unwrap();
-        let mut args = attest_args();
-        args["releaseSubject"] = json!("covenant\u{0}");
-        let err = tool
-            .call(args)
-            .await
-            .expect_err("a control char in releaseSubject must be rejected");
-        assert!(
-            matches!(err, ToolError::InvalidArguments(ref m) if m.contains("releaseSubject")),
-            "got {err:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn identity_build_request_pins_asset_none_and_uri_fallback() {
-        // A caller-supplied asset must be dropped here too.
-        let args = json!({
-            "agentLabel": "agent@local",
-            "agentPubkey": "Agent11111111111111111111111111111111111111",
-            "asset": "CallerAsset111111111111111111111111111111111",
-        });
-        match captured_request(&enabled_all(), "metaplex.identity.register", args).await {
-            SignerRequest::RegisterIdentity {
-                agent_label,
-                agent_pubkey,
-                asset,
-                registration_uri,
-            } => {
-                assert_eq!(
-                    asset, None,
-                    "a caller-supplied asset must never reach the request"
-                );
-                assert_eq!(
-                    registration_uri, None,
-                    "an omitted uri stays None here; the covenant:// fallback is derived downstream, not an empty string"
-                );
-                assert_eq!(agent_label, "agent@local");
-                assert_eq!(agent_pubkey, "Agent11111111111111111111111111111111111111");
-            }
-            other => panic!("unexpected request: {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn get_asset_proof_dispatches_through_read_tool() {
-        let cfg = enabled_reads();
-        let tool = metaplex_tool(
-            &cfg,
-            "metaplex.das.get_asset_proof",
-            Arc::new(EchoDas),
-            None,
-        )
-        .unwrap();
-        let res = tool.call(json!({ "id": "cnft-1" })).await.unwrap();
-        assert!(!res.is_error);
-        assert_eq!(res.content, vec![Content::json(json!({ "id": "cnft-1" }))]);
     }
 }

@@ -55,6 +55,9 @@ export class WsTransport implements HatcherTransport {
   private readonly outbox: OutboundFrame[] = [];
   private closed = false;
   private attempt = 0;
+  // Dedupes reconnect scheduling when a socket fires both `error` and `close`;
+  // reset at the start of each dial so a failed redial can reschedule.
+  private reconnecting = false;
   private firstOpen?: { resolve: () => void; reject: (e: unknown) => void };
 
   private readonly reconnect: boolean;
@@ -101,6 +104,7 @@ export class WsTransport implements HatcherTransport {
 
   private dial(): void {
     if (this.closed) return;
+    this.reconnecting = false;
     let ws: WebSocketLike;
     try {
       ws = this.socketFactory(this.opts.url);
@@ -117,7 +121,13 @@ export class WsTransport implements HatcherTransport {
       this.log('mesh connected', { url: this.opts.url });
     });
     ws.addEventListener('message', (ev) => this.onMessage(ev.data));
-    ws.addEventListener('error', (ev) => this.log('mesh socket error', { err: errText(ev) }));
+    // Some WebSocket impls fire `error` without a following `close`; reconnect on
+    // either so the socket can never wedge half-open (scheduleReconnect dedupes).
+    ws.addEventListener('error', (ev) => {
+      this.log('mesh socket error', { err: errText(ev) });
+      this.ws = null;
+      this.scheduleReconnect(new Error('socket error'));
+    });
     ws.addEventListener('close', () => {
       this.ws = null;
       this.scheduleReconnect(new Error('socket closed'));
@@ -169,6 +179,8 @@ export class WsTransport implements HatcherTransport {
       this.firstOpen = undefined;
     }
     if (this.closed || !this.reconnect) return;
+    if (this.reconnecting) return; // error + close both fire: schedule once per socket
+    this.reconnecting = true;
     const exp = Math.min(this.backoffMaxMs, this.backoffBaseMs * 2 ** this.attempt++);
     const delay = exp / 2 + this.random() * (exp / 2); // half-fixed + half-jitter
     this.log('mesh reconnect scheduled', { in_ms: Math.round(delay), attempt: this.attempt });

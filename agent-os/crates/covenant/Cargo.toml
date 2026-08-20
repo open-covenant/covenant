@@ -23,6 +23,7 @@ covenant-peer-auth = { path = "../covenant-peer-auth" }
 covenant-permissions = { path = "../covenant-permissions" }
 covenant-x402 = { path = "../covenant-x402" }
 covenant-zauth = { path = "../covenant-zauth" }
+covenant-sns = { path = "../covenant-sns" }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 borsh = { workspace = true }
@@ -38,3 +39,10 @@ uuid = { workspace = true }
 [dev-dependencies]
 bs58 = { workspace = true }
 tempfile = { workspace = true }
+
+[lints.clippy]
+# main.rs keeps its SAP `--json` emitters after `mod tests` so adding them does
+# not renumber the name-anchored `main.rs:NNN` citations that the
+# validate-*-line-refs.mjs guards pin. clippy 1.96's items_after_test_module
+# penalises that deliberate placement; see the comment above those emitters.
+items_after_test_module = "allow"

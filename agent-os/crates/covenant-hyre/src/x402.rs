@@ -48,6 +48,7 @@ pub fn http_client() -> reqwest::Client {
 
 fn http_client_with_timeout(timeout: Duration) -> reqwest::Client {
     reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
         .timeout(timeout)
         .build()
         .unwrap_or_else(|_| reqwest::Client::new())
@@ -185,7 +186,7 @@ fn to_requirements(accept: &Accept, caip2_network: &str) -> Result<PaymentRequir
         scheme: accept.scheme.clone(),
         extra: Some(covenant_x402::PaymentExtra {
             fee_payer: Some(fee_payer.to_string()),
-            nonce: None,
+            ..Default::default()
         }),
     })
 }
@@ -394,6 +395,53 @@ mod tests {
     }
 
     #[test]
+    fn network_matches_is_lenient_across_short_and_caip2_spellings() {
+        // Hyre's 402 body and its discovery header disagree on the network
+        // spelling — the body says the short "solana" while the operator
+        // capability carries the CAIP-2 id — so network_matches accepts BOTH
+        // directions plus the exact case (x402.rs:145-147).
+        // select_matches_short_network_against_caip2_capability only exercises
+        // the body-short / want-CAIP-2 arm (x402.rs:146); the exact-equality
+        // arm (x402.rs:145) and the reverse body-CAIP-2 / want-short arm
+        // (x402.rs:147) are otherwise unpinned, so a regression dropping either
+        // would silently stop matching a legitimate option and the call would
+        // settle nothing. The negative cases pin the ':' delimiter: matching
+        // must be chain-id equality or a colon-delimited prefix, never a bare
+        // substring that would let a truncated or unrelated id pass.
+        let short = "solana";
+        let caip2 = crate::config::SOLANA_NETWORK;
+
+        assert!(network_matches(caip2, caip2), "identical CAIP-2 ids match");
+        assert!(network_matches(short, short), "identical short ids match");
+        assert!(
+            network_matches(short, caip2),
+            "a short body id matches a CAIP-2 operator capability"
+        );
+        assert!(
+            network_matches(caip2, short),
+            "a CAIP-2 body id matches a short operator capability"
+        );
+
+        let other = "ethereum:1";
+        assert!(
+            !network_matches(caip2, other),
+            "a solana option must not match an ethereum capability"
+        );
+        assert!(
+            !network_matches(other, caip2),
+            "an ethereum option must not match a solana capability"
+        );
+        assert!(
+            !network_matches("sol", caip2),
+            "a bare prefix without the ':' delimiter must not match a CAIP-2 id"
+        );
+        assert!(
+            !network_matches(caip2, "sol"),
+            "a CAIP-2 id must not match a bare prefix capability without the ':' delimiter"
+        );
+    }
+
+    #[test]
     fn select_rejects_over_cap_and_wrong_asset() {
         let accepts = parse_challenge(LIVE_DEFI_TVL_402).unwrap();
         assert!(
@@ -518,6 +566,57 @@ mod tests {
         assert!(
             matches!(to_requirements(&no_amount, NETWORK), Err(HyreError::Challenge(m)) if m.contains("accept missing amount")),
             "an option carrying neither amount nor maxAmountRequired must be rejected, not signed for a zero price",
+        );
+    }
+
+    #[test]
+    fn to_requirements_forces_operator_caip2_network_and_normalises_output() {
+        // to_requirements is the last step before the signer: it turns a
+        // selected 402 option into the PaymentRequirements the funding key
+        // signs. Its headline contract is that the network is FORCED to the
+        // operator's CAIP-2 rail (the caip2_network arg), never the short
+        // "solana" the untrusted challenge body carries — so a tampered or
+        // quirky upstream cannot steer the signed payment onto a different
+        // chain id. The rejection test above only asserts the happy path is
+        // Ok and never inspects the returned fields, so the forcing and the
+        // field normalisation are unpinned: a regression emitting
+        // accept.network instead of caip2_network would hand the signer the
+        // upstream's "solana" and every existing test would stay green.
+        let base = parse_challenge(LIVE_DEFI_TVL_402).expect("parse")[0].clone();
+        assert_eq!(
+            base.network, "solana",
+            "the live option carries the short network spelling, distinct from the CAIP-2 rail",
+        );
+
+        let req = to_requirements(&base, NETWORK).expect("the pinned live option normalises");
+
+        assert_eq!(
+            req.network, NETWORK,
+            "network must be forced to the operator CAIP-2 rail passed in, not the challenge's short \"solana\"",
+        );
+        assert_eq!(
+            req.asset, ASSET,
+            "the asset mint is carried through verbatim"
+        );
+        assert_eq!(
+            req.pay_to,
+            crate::config::PAY_TO,
+            "payTo is the pinned Hyre payee"
+        );
+        assert_eq!(req.scheme, "exact", "the exact scheme is carried through");
+        assert_eq!(
+            req.amount, "10000",
+            "the exact atomic figure is carried through verbatim",
+        );
+        assert!(
+            (req.amount_usdc - 0.01).abs() < 1e-9,
+            "amount_usdc is the atomic amount over 1e6 (10000 -> 0.01 USDC), got {}",
+            req.amount_usdc,
+        );
+        assert_eq!(
+            req.extra.and_then(|e| e.fee_payer).as_deref(),
+            Some(crate::config::PAYAI_FEE_PAYER),
+            "the PayAI sponsor feePayer is carried into the signer input",
         );
     }
 

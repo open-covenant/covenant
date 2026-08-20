@@ -1,4 +1,5 @@
-//! Live CLI coverage for `covenant memory backfill-receipt-correlation --json`.
+//! Live CLI coverage for `covenant memory backfill-receipt-correlation`
+//! (`--json` envelope and plain-text render).
 //!
 //! The daemon + IPC path is exercised by `live_memory_backfill.rs`; this file
 //! drives the same `Request::BackfillMemoryRecords` through the real `covenant`
@@ -7,7 +8,7 @@
 //! capability-grant wiring surfaces as a CLI failure rather than only a
 //! daemon-level one.
 //!
-//! Three scenarios:
+//! Four scenarios:
 //! - dry_run_then_apply: one legacy memory receipt (resource=Memory,
 //!   `memory_record_id=None`) and one uncorrelated working-tier memory record
 //!   sharing the receipt's payer are pre-seeded with deterministic ids. The
@@ -28,6 +29,11 @@
 //!   rejected by the daemon as not-yet-supported; both fail with a non-zero
 //!   exit. (The CLI connects and authenticates before parsing the subcommand,
 //!   so a daemon must be present even for the parse-level rejection.)
+//! - plaintext_dry_run: a no-op `--dry-run` run without `--json` (nothing
+//!   seeded, only `memory.backfill.dry_run` granted) asserts the human-readable
+//!   render emits exactly `row_count: 0`, `dry_run: true`, and the canonical
+//!   `savepoint_name`. Every other scenario passes `--json`, so without this
+//!   case the plain-text branch of the CLI render is unexercised.
 //!
 //! Hermetic — no external services. `#[ignore]`'d so they only run under
 //! `--ignored live_`. Each test uses its own tempdir to stay parallel-safe.
@@ -453,6 +459,40 @@ async fn live_cli_memory_backfill_receipt_correlation_json_rejects_unsupported_f
     assert!(
         reserved_stderr.contains("not yet supported"),
         "the --scope-pubkey rejection must report it is not yet supported: {reserved_stderr:?}",
+    );
+
+    let _ = child.kill().await;
+    let _ = child.wait().await;
+}
+
+#[tokio::test]
+#[ignore = "live: spawns covenantd + runs `covenant memory backfill-receipt-correlation --dry-run` (no --json) subprocesses"]
+async fn live_cli_memory_backfill_receipt_correlation_plaintext_dry_run() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let mut child = spawn_daemon(home.path()).await;
+    let cli = covenant_cli_bin();
+
+    run_cli(
+        &cli,
+        home.path(),
+        &["capabilities", "grant", "memory.backfill.dry_run"],
+    )
+    .await;
+
+    let stdout = run_cli(
+        &cli,
+        home.path(),
+        &["memory", "backfill-receipt-correlation", "--dry-run"],
+    )
+    .await;
+
+    let lines: Vec<&str> = stdout.lines().collect();
+    let savepoint_line = format!("savepoint_name: {MEMORY_BACKFILL_SAVEPOINT_NAME}");
+    assert_eq!(
+        lines,
+        ["row_count: 0", "dry_run: true", savepoint_line.as_str()],
+        "the plain-text (no --json) render must emit exactly the three labeled lines on a \
+         no-op dry run, ending with the canonical SQLite savepoint name: {stdout:?}",
     );
 
     let _ = child.kill().await;

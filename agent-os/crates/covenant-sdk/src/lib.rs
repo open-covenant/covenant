@@ -1096,9 +1096,54 @@ mod tests {
     }
 
     #[test]
+    fn response_kind_returns_the_tag_and_strips_secret_payload() {
+        // `unexpected` puts this label in SdkError::Unexpected, which a caller
+        // may log; the contract is that only the serde `kind` tag escapes, never
+        // a payload field that could carry a secret.
+        assert_eq!(response_kind(&Response::Pong), "pong");
+
+        let secret = "s3cr3t-broker-material";
+        let labeled = response_kind(&Response::Secret {
+            name: "openai_api_key".to_string(),
+            value: secret.to_string(),
+        });
+        assert_eq!(labeled, "secret");
+        assert!(
+            !labeled.contains(secret) && !labeled.contains("openai_api_key"),
+            "no payload field may spill into the error label"
+        );
+
+        assert_eq!(
+            response_kind(&Response::AuthenticationFailed {
+                reason: "bad token".to_string(),
+            }),
+            "authentication_failed",
+            "a multi-word tag proves the value comes from `kind`, not a fixed field"
+        );
+    }
+
+    #[test]
     fn parse_required_capability_ignores_messages_without_the_marker() {
         assert!(parse_required_capability("plain error").is_none());
         assert!(parse_required_capability("requires capability \"\"").is_none());
+    }
+
+    #[test]
+    fn parse_required_capability_skips_empty_grant_hint() {
+        // Grant marker present but the action is empty (a delimiter follows
+        // `grant ` immediately). The empty-action guard must refuse to emit
+        // Some("") and instead recover the quoted capability...
+        assert_eq!(
+            parse_required_capability(
+                "tool x requires capability \"tool.call.x\". \
+                 Grant it with `covenant capabilities grant `."
+            )
+            .as_deref(),
+            Some("tool.call.x"),
+        );
+        // ...and stay None when no quoted form exists, never feeding a
+        // degenerate grant_capability("") down the auto-retry path.
+        assert!(parse_required_capability("do this: covenant capabilities grant ").is_none());
     }
 
     #[test]

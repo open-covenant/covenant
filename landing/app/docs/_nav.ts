@@ -19,6 +19,7 @@ export const DOCS_NAV: DocsSection[] = [
     items: [
       { href: "/architecture", label: "System architecture" },
       { href: "/primitives", label: "The eight primitives" },
+      { href: "/multichain", label: "Multi-chain trust" },
       { href: "/glossary", label: "Glossary" },
     ],
   },
@@ -42,6 +43,13 @@ export const DOCS_NAV: DocsSection[] = [
       { href: "/audit-integrity", label: "Audit integrity" },
       { href: "/conformance", label: "Conformance" },
       { href: "/settlement", label: "Settlement" },
+    ],
+  },
+  {
+    title: "Integrations",
+    items: [
+      { href: "/x402", label: "x402 payments" },
+      { href: "/zauth", label: "zauth provider hub" },
     ],
   },
   {

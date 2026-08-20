@@ -1,4 +1,4 @@
-// /agents — proof of agent. The index explains the trust model in three
+// /agents: proof of agent. The index explains the trust model in three
 // moves (registered, authored, reproducible) and hands the reader the
 // same verifier we use ourselves. The only color on these pages is earned
 // by a check passing.
@@ -15,7 +15,7 @@ import {
 } from "@/app/agents/_registry";
 
 export const metadata: Metadata = {
-  title: "Proof of agent — Covenant",
+  title: "Proof of agent: Covenant",
   description:
     "Covenant agents register on Metaplex's 014 Registry and anchor their audit roots as MPL Core attestations. Verify any of it in your browser.",
 };
@@ -29,12 +29,12 @@ const MOVES = [
   {
     term: "Authored",
     gloss:
-      "Attestations live in MPL Core AppData that only Covenant's signer may write. MPL Core enforces the authority at write time — authorship is a chain fact.",
+      "Attestations live in MPL Core AppData that only Covenant's signer may write. MPL Core enforces the authority at write time. Authorship is a chain fact.",
   },
   {
     term: "Reproducible",
     gloss:
-      "Each attested root recomputes, SHA-256 by SHA-256, from the published witness chain — in your browser, with no server verdict involved.",
+      "Each attested root recomputes, SHA-256 by SHA-256, from the published witness chain, in your browser, with no server verdict involved.",
   },
 ] as const;
 
@@ -43,7 +43,7 @@ export default function AgentsPage() {
     <main id="main-content" className="min-h-[100dvh] bg-[#030303] text-neutral-200">
       <SiteHeader />
 
-      <div className="mx-auto max-w-5xl px-6 pb-24 pt-28">
+      <div className="mx-auto w-full max-w-7xl px-5 pb-24 pt-[88px] sm:px-8 sm:pt-[120px]">
         <div className="mb-12 flex flex-col gap-3">
           <p className="text-[11px] uppercase tracking-[3px] text-neutral-500">Agent registry</p>
           <h1 className="text-3xl font-light tracking-tight text-white sm:text-4xl">

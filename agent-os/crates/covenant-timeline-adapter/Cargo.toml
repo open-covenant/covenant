@@ -1,0 +1,28 @@
+[package]
+name = "covenant-timeline-adapter"
+version = "0.1.0"
+description = "Adapters from Covenant records to Covenant Timeline v0alpha1 and v0alpha3."
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[package.metadata.covenant-timeline]
+repository = "https://github.com/open-covenant/covenant-timeline"
+revision = "88da86d3dce4be33320f93db0ba4f4fc7c0643cf"
+schema = "v0alpha1"
+temporal-package = "@covenant-org/timeline"
+temporal-version = "0.0.0-alpha.2"
+temporal-schema = "v0alpha3"
+
+[dependencies]
+covenant-audit = { path = "../covenant-audit" }
+covenant-ipc = { path = "../covenant-ipc" }
+serde = { workspace = true }
+serde_jcs = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+covenant-types = { path = "../covenant-types" }
+uuid = { workspace = true }

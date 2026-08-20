@@ -82,6 +82,16 @@ const EXPECTED_REQUEST_KINDS: &[&str] = &[
     "sap_publish_audit_root",
     "sap_publish_attestation",
     "query_provenance",
+    "capability_usage",
+    "authorize_spend",
+    "settle_spend",
+    "prove_completion",
+    "spend_grant_charge",
+    "spend_grant_settle",
+    "record_escrow_release",
+    "enroll_peer",
+    "get_reputation",
+    "prove_audit_inclusion",
 ];
 
 /// One fully-populated representative per `Request` variant. Optional and
@@ -275,6 +285,74 @@ fn golden_request_vectors() -> Vec<Request> {
             outcome: Some("granted".into()),
             limit: 5,
         },
+        Request::CapabilityUsage,
+        Request::AuthorizeSpend {
+            provider: "xona".into(),
+            network: "solana".into(),
+            asset: "USDC".into(),
+            amount: "0.25".into(),
+            per_call_cap: "1.00".into(),
+            credits: 250,
+            destination: Some("So11111111111111111111111111111111111111112".into()),
+        },
+        Request::SettleSpend {
+            decision_id: Uuid::from_u128(0x5E11_1ED0_0000_0000_0000_0000_0000_0001),
+            provider: "xona".into(),
+            network: "solana".into(),
+            asset: "USDC".into(),
+            amount: "0.25".into(),
+            credits: 250,
+            tx_sig: Some("2Zq7Xs9wV3kLp8mNc1bR4tYd6uHf".into()),
+        },
+        Request::ProveCompletion {
+            escrow_id: "escrow-001".into(),
+            job_id: "job-001".into(),
+            hirer_address: "Hirer111111111111111111111111111111111111".into(),
+            worker_address: "Worker11111111111111111111111111111111111".into(),
+            amount: "10.00".into(),
+            asset: "USDC".into(),
+            network: "solana".into(),
+            provider: "orbserv".into(),
+        },
+        Request::SpendGrantCharge {
+            grant_id: "1".into(),
+            provider: format!("0x{}", "c0".repeat(20)),
+            amount: "1000".into(),
+            job_id: "5e111ed0-0000-0000-0000-000000000005".into(),
+            spec_id: format!("0x{}", "22".repeat(32)),
+            deadline: 1_700_003_600,
+        },
+        Request::SpendGrantSettle {
+            escrow_id: "0x57316dfc56f1f07fe7ff828f941e9d07f81e2534".into(),
+            job_id: "5e111ed0-0000-0000-0000-000000000005".into(),
+            hirer_address: format!("0x{}", "11".repeat(20)),
+            worker_address: format!("0x{}", "c0".repeat(20)),
+            amount: "1000".into(),
+            asset: "USDG".into(),
+            network: "robinhood".into(),
+            provider: format!("0x{}", "c0".repeat(20)),
+        },
+        Request::RecordEscrowRelease {
+            escrow_id: "escrow-001".into(),
+            decision_id: Uuid::from_u128(0x5E11_1ED0_0000_0000_0000_0000_0000_0002),
+            hirer_address: "Hirer111111111111111111111111111111111111".into(),
+            worker_address: "Worker11111111111111111111111111111111111".into(),
+            amount: "10.00".into(),
+            asset: "USDC".into(),
+            network: "solana".into(),
+            provider: "orbserv".into(),
+            tx_sig: Some("2Zq7Xs9wV3kLp8mNc1bR4tYd6uHf".into()),
+        },
+        Request::EnrollPeer {
+            display: "peer@example".into(),
+            actions: vec!["a2a.task.send".into(), "a2a.result.read".into()],
+        },
+        Request::GetReputation {
+            worker_pubkey: "Worker11111111111111111111111111111111111".into(),
+        },
+        Request::ProveAuditInclusion {
+            event_id: Uuid::from_u128(0x5E11_1ED0_0000_0000_0000_0000_0000_0003),
+        },
     ]
 }
 
@@ -388,6 +466,16 @@ fn assert_request_variant_coverage(req: &Request) {
         | Request::SapPublishAgent { .. }
         | Request::SapPublishAuditRoot { .. }
         | Request::SapPublishAttestation { .. }
-        | Request::QueryProvenance { .. } => {}
+        | Request::QueryProvenance { .. }
+        | Request::AuthorizeSpend { .. }
+        | Request::SettleSpend { .. }
+        | Request::ProveCompletion { .. }
+        | Request::SpendGrantCharge { .. }
+        | Request::SpendGrantSettle { .. }
+        | Request::RecordEscrowRelease { .. }
+        | Request::EnrollPeer { .. }
+        | Request::GetReputation { .. }
+        | Request::ProveAuditInclusion { .. }
+        | Request::CapabilityUsage => {}
     }
 }

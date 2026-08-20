@@ -1,0 +1,43 @@
+[package]
+name = "covenant-circuit"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Circuit LLM integration for Covenant — paid inference + data endpoints over x402, settled in CIRC (Token-2022) on Solana, with per-call, recipient, endpoint, and budget capability scoping."
+
+[features]
+default = []
+# The real on-chain CIRC (Token-2022) settling payer. Off by default so the daemon and
+# the pay-loop core carry no Solana dep tree; enable to build `SolanaCircPayer` and the
+# live demo.
+solana = [
+    "dep:solana-sdk",
+    "dep:solana-client",
+    "dep:spl-token-2022-interface",
+    "dep:spl-associated-token-account",
+]
+
+[dependencies]
+covenant-mcp = { path = "../covenant-mcp" }
+covenant-x402 = { path = "../covenant-x402" }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+reqwest = { workspace = true }
+
+solana-sdk = { version = "4", optional = true }
+solana-client = { version = "4", optional = true }
+spl-token-2022-interface = { version = "2", optional = true }
+spl-associated-token-account = { version = "8", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+wiremock = "0.6"
+
+[[example]]
+name = "live_demo"
+required-features = ["solana"]

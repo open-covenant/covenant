@@ -18,3 +18,8 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+
+[lints.rust]
+# `cfg(kani)` is set only under `cargo kani`; register it so a normal
+# build/clippy run doesn't flag the proof module as an unexpected cfg.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }

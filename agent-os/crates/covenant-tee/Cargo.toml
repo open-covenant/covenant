@@ -1,28 +1,18 @@
 [package]
 name = "covenant-tee"
-version = "0.1.0"
-edition = "2021"
-description = "Verify a MagicBlock Private ER's Intel TDX enclave (DCAP) and relay it into a signed Covenant attestation"
-
-# Detached from the agent-os workspace on purpose: dcap-qvl pulls its own crypto
-# tree, kept out of the parent lockfile until covenantd integration.
-[workspace]
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Bind a TDX enclave quote to what actually ran inside it. Constructs the report_data challenge from an agent and a subject commitment plus a fresh nonce, and verifies a quote against it."
 
 [dependencies]
-dcap-qvl = "0.5.2"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-sha2 = "0.10"
-ed25519-dalek = "2"
-bs58 = "0.5"
+serde = { workspace = true }
+thiserror = { workspace = true }
 base64 = "0.22"
+sha2 = "0.10"
 hex = "0.4"
-anyhow = "1"
-getrandom = "0.2"
-urlencoding = "2"
 
-[[bin]]
-name = "selftest"
-path = "src/bin/selftest.rs"
+[dev-dependencies]
+serde_json = { workspace = true }

@@ -7,8 +7,12 @@ packages:
   - landing
   - services/proof-gen
   - services/mcp-bridge
+  - services/robinhood-mcp-bridge
+  - services/robinhood-guard-proxy
   - services/hermes-mcp-bridge
   - services/compute-broker
   - services/coding-gateway
   - services/telegram-bot
   - services/fairscale-bridge
+  - services/witness-verifier
+  - services/settlement-publisher

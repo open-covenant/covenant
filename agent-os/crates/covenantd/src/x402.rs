@@ -735,6 +735,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn build_payment_surfaces_non_utf8_signer_stdout() {
+        // The sidecar is external (it talks to Solana RPC); its stdout is
+        // untrusted, so bytes that are not valid UTF-8 must surface the
+        // from_utf8 Sign error rather than fall through to the trim /
+        // empty-header check and return a garbage header. A single 0xFF byte
+        // (printf '\377') is never valid UTF-8.
+        let signer = SubprocessSigner::new("sh")
+            .arg("-c")
+            .arg("cat >/dev/null; printf '\\377'");
+        let err = signer
+            .build_payment(&requirement())
+            .await
+            .expect_err("non-utf8 stdout must surface, not fall through");
+        assert!(
+            matches!(&err, X402Error::Sign(m) if m.contains("signer stdout not utf-8")),
+            "a non-UTF-8 signer stdout must surface the from_utf8 Sign error: {err:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn build_payment_with_limits_rejects_oversized_signer_stdout() {
         // The signer sidecar is external (it talks to Solana RPC); a stdout
         // flood past the cap must surface a Sign error naming the cap instead
@@ -882,6 +902,91 @@ mod tests {
         assert!(
             matches!(err, X402DaemonError::ResponseTooLarge(_)),
             "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_capped_reads_a_body_at_the_exact_cap_and_rejects_one_byte_over() {
+        use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
+        // read_capped guards memory with `> max` on both the Content-Length
+        // pre-check (x402.rs:496) and the running accumulation check (x402.rs:502),
+        // so a body sized exactly at the cap fits and must read back whole.
+        // paid_response_body_read_is_bounded only brackets the boundary from far
+        // away ("hello"/cap 64 under, 4096/cap 64 over) and its comment concedes
+        // the accumulation guard is inspection-verified, so a `> max -> >= max`
+        // slip on either guard survives it. Serve a body of known length N: at
+        // cap N the original accepts (N is not > N) while the mutant rejects, and
+        // at cap N-1 the body sits one byte over and is refused.
+        const BODY: &str = "covenant daemon x402 paid-call at-cap inclusive boundary fixture";
+        let n = BODY.len();
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(BODY))
+            .mount(&server)
+            .await;
+        let http = reqwest::Client::new();
+
+        let resp = http.get(server.uri()).send().await.expect("request");
+        let body = read_capped(resp, n)
+            .await
+            .expect("a body sized exactly at the cap fits and must read back whole");
+        assert_eq!(body, BODY);
+
+        let resp = http.get(server.uri()).send().await.expect("request");
+        let err = read_capped(resp, n - 1)
+            .await
+            .expect_err("a body one byte over the cap must be rejected");
+        assert!(
+            matches!(err, X402DaemonError::ResponseTooLarge(_)),
+            "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_stream_capped_treats_an_exact_max_fill_as_an_exact_fit_not_overflow() {
+        // read_stream_capped reads through take(max + 1) and sets
+        // overflowed = buf.len() > max (x402.rs:218), so a signer stream of
+        // exactly max bytes is an exact fit (overflowed false, buffer returned
+        // whole) and only max + 1 is a truncated flood (overflowed true, buffer
+        // clamped to max) — the discriminator the extra read byte exists to
+        // enable. The signer cap tests bracket this from far away:
+        // build_payment_with_limits_rejects_oversized_signer_stdout floods far
+        // past the cap and subprocess_signer_returns_stdout_header sits far
+        // under, so neither lands on buf.len() == max, where a `> max` ->
+        // `>= max` slip flips an exact-max signer stdout to a spurious overflow
+        // that read_signer_output fails closed on with StdoutTooLarge, rejecting
+        // a legal worst-case envelope sized exactly at the cap. Pin the
+        // inclusive endpoint directly.
+        let max = 64;
+
+        let exact = vec![b'x'; max];
+        let mut reader = exact.as_slice();
+        let (buf, overflowed) = read_stream_capped(&mut reader, max)
+            .await
+            .expect("reading an in-memory slice cannot fail");
+        assert!(
+            !overflowed,
+            "a stream of exactly max bytes is an exact fit, not a flood"
+        );
+        assert_eq!(
+            buf, exact,
+            "an exact-fit body must be returned whole, not truncated"
+        );
+
+        let flood = vec![b'x'; max + 1];
+        let mut reader = flood.as_slice();
+        let (buf, overflowed) = read_stream_capped(&mut reader, max)
+            .await
+            .expect("reading an in-memory slice cannot fail");
+        assert!(
+            overflowed,
+            "a stream of max + 1 bytes is a truncated flood and must report overflow"
+        );
+        assert_eq!(
+            buf.len(),
+            max,
+            "an over-cap read must clamp the returned buffer to max"
         );
     }
 }

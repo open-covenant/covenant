@@ -190,6 +190,56 @@
       "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000026\",\"timestamp_ms\":1700000000038,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"tool_call_schema_rejected\",\"tool\":\"echo\",\"arguments_hash_hex\":\"88b7796a494dfe5b0079146d90ab58147af45054cca78fc399631d404426532c\",\"reason\":\"field `text` expects type `string`, got number\"}}",
       "event_hash_hex": "2b31b6601b15ce7a5fa1195bd2edad0e51c54d7ec753e8270441112db3ffb5a6",
       "name": "tool_call_schema_rejected"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000027\",\"timestamp_ms\":1700000000039,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"capability_budget_exhausted\",\"signature_b58\":\"3yZe7d8mUS517G5965aydkZ46HS38QLi7UQiSojurfbQ\",\"action\":\"tool.call.echo\",\"max_uses\":5,\"used\":5}}",
+      "event_hash_hex": "f112246e6ea118bf9e8b8bfe7ce8c69cd1b9f8b0de1f462334994dabac44be38",
+      "name": "capability_budget_exhausted"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000028\",\"timestamp_ms\":1700000000040,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"cross_host_a2_a_admission\",\"sender_pubkey_b58\":\"3yZe7d8mUS517G5965aydkZ46HS38QLi7UQiSojurfbQ\",\"recipient_display\":\"bob@host2\",\"outcome\":\"rejected\",\"reason\":\"unknown_principal\"}}",
+      "event_hash_hex": "78d8d08a02ecae8bb4b242e8884fd739ecf8771051b6e62cf70ecb8582b7e503",
+      "name": "cross_host_a2_a_admission"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000029\",\"timestamp_ms\":1700000000041,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"cross_host_a2_a_delivery\",\"recipient_pubkey_b58\":\"3yZe7d8mUS517G5965aydkZ46HS38QLi7UQiSojurfbQ\",\"recipient_display\":\"bob@host2\",\"outcome\":\"delivered\",\"reason\":\"\"}}",
+      "event_hash_hex": "506ebba16f2ea8ce96ab08579ca5f87e23476e4d74b3427bfcf2812defedddf5",
+      "name": "cross_host_a2_a_delivery"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-00000000002a\",\"timestamp_ms\":1700000000042,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"ace_data_generation\",\"agent_id\":\"research@agent\",\"tool\":\"acedata.image\",\"model\":\"ace-diffusion-xl\",\"prompt_sha256\":\"5b565b4a79eea20a948923ef864ef87205dc2557bb788a843221f41d63287ddc\",\"output_sha256\":\"3aef4abb04c768a575fc1936b173ce96412841b648e9faa9dfc9cecbe3d4b51a\",\"assets\":[\"ar://asset-1\"],\"task_id\":\"task-ace-1\"}}",
+      "event_hash_hex": "b98eb310a5a4fac912e0cd8b2b07e1040594eece0d195c391eb1ab239efa8512",
+      "name": "ace_data_generation"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-00000000002b\",\"timestamp_ms\":1700000000043,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"peer_enrolled\",\"display\":\"bob@host2\",\"pubkey_b58\":\"3yZe7d8mUS517G5965aydkZ46HS38QLi7UQiSojurfbQ\",\"granted\":[\"a2a.task.send\",\"a2a.result.read\"]}}",
+      "event_hash_hex": "a2034cec2932686e02377568ab3f531e9c059f374416e0877d22214d1a1f7d46",
+      "name": "peer_enrolled"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-00000000002c\",\"timestamp_ms\":1700000000044,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"peer_enrollment_rejected\",\"peer_display\":\"mallory@host3\",\"peer_pubkey_b58\":\"9xQe7d8mUS517G5965aydkZ46HS38QLi7UQiSojurZZZ\"}}",
+      "event_hash_hex": "99dcc97f2d881c192eb3d6b491cb4793d410ff2bf0c5cd08396c189c37fb4954",
+      "name": "peer_enrollment_rejected"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-00000000002d\",\"timestamp_ms\":1700000000045,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"spend_authorization_decided\",\"provider\":\"xona\",\"network\":\"solana\",\"asset\":\"USDC\",\"amount\":\"0.25\",\"credits\":250,\"destination\":\"So11111111111111111111111111111111111111112\",\"approved\":true,\"reason\":\"within per-call cap\",\"decision_id\":\"5e111ed0-0000-0000-0000-000000000001\"}}",
+      "event_hash_hex": "69a1ff374ab455711bf12501bce4aeb9ae1ba07a30a194091375cfe8441bca79",
+      "name": "spend_authorization_decided"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-00000000002e\",\"timestamp_ms\":1700000000046,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"spend_settled\",\"decision_id\":\"5e111ed0-0000-0000-0000-000000000001\",\"receipt_id\":\"5e111ed0-0000-0000-0000-000000000004\",\"provider\":\"xona\",\"network\":\"solana\",\"asset\":\"USDC\",\"amount\":\"0.25\",\"credits\":250,\"tx_sig\":\"2Zq7Xs9wV3kLp8mNc1bR4tYd6uHf\"}}",
+      "event_hash_hex": "0afee29b4a7aca4a386e89ab7001a85643df51cdbe94e36ff9b8989ae735f788",
+      "name": "spend_settled"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-00000000002f\",\"timestamp_ms\":1700000000047,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"escrow_completion_proven\",\"proof_id\":\"5e111ed0-0000-0000-0000-000000000005\",\"escrow_id\":\"escrow-001\",\"job_id\":\"5e111ed0-0000-0000-0000-000000000006\",\"hirer_address\":\"Hirer111111111111111111111111111111111111\",\"worker_address\":\"Worker11111111111111111111111111111111111\",\"amount\":\"10.00\",\"asset\":\"USDC\",\"network\":\"solana\",\"provider\":\"orbserv\",\"result_hash_hex\":\"67a49d096d79346e7ccaa075b54fc8b9db37a9da34430ac07b47601cf935d4f9\",\"validation_passed\":true,\"audit_root_hex\":\"b474ea02bc00b3ae7449e33c6c993b3472fe6f0d56d72d1703c8e5229e4912d3\",\"signature_b58\":\"2Zq7Xs9wV3kLp8mNc1bR4tYd6uHf\"}}",
+      "event_hash_hex": "670313fea8fadcef4ca85e2e458b6aab29c91428147edbf35588e868f30ecd06",
+      "name": "escrow_completion_proven"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000030\",\"timestamp_ms\":1700000000048,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"escrow_released\",\"decision_id\":\"5e111ed0-0000-0000-0000-000000000002\",\"receipt_id\":\"5e111ed0-0000-0000-0000-000000000007\",\"escrow_id\":\"escrow-001\",\"hirer_address\":\"Hirer111111111111111111111111111111111111\",\"worker_address\":\"Worker11111111111111111111111111111111111\",\"amount\":\"10.00\",\"asset\":\"USDC\",\"network\":\"solana\",\"provider\":\"orbserv\",\"tx_sig\":\"2Zq7Xs9wV3kLp8mNc1bR4tYd6uHf\"}}",
+      "event_hash_hex": "2a2ad42b689bcf77d99713d8bca642ac58e7b4269afb203df117ee33adbe2614",
+      "name": "escrow_released"
     }
   ]
 }

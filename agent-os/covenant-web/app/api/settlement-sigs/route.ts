@@ -32,6 +32,14 @@ export async function GET() {
       );
     }
     const body = await res.json();
+    // The publisher's `sigs` map carries the full user intent text. That's
+    // other visitors' prompts/project descriptions — drop it and expose only
+    // the on-chain settlement facts (tx signature, slot, time, cluster).
+    if (body && typeof body.sigs === "object" && body.sigs) {
+      for (const entry of Object.values(body.sigs as Record<string, Record<string, unknown>>)) {
+        if (entry && typeof entry === "object") delete entry.intent_text;
+      }
+    }
     return NextResponse.json(body, {
       status: 200,
       headers: { "Cache-Control": "no-store, max-age=0" },

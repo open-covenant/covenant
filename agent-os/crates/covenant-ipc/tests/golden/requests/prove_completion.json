@@ -1,0 +1,11 @@
+{
+  "kind": "prove_completion",
+  "escrow_id": "escrow-001",
+  "job_id": "job-001",
+  "hirer_address": "Hirer111111111111111111111111111111111111",
+  "worker_address": "Worker11111111111111111111111111111111111",
+  "amount": "10.00",
+  "asset": "USDC",
+  "network": "solana",
+  "provider": "orbserv"
+}

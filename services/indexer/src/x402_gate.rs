@@ -314,7 +314,9 @@ pub async fn paid_summary(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::extract::State;
     use axum::http::HeaderName;
+    use http_body_util::BodyExt;
 
     fn cfg() -> X402Config {
         X402Config {
@@ -389,19 +391,23 @@ mod tests {
         let server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("POST"))
             .and(wiremock::matchers::path("/verify"))
-            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "isValid": true,
-                "payer": "PAYER1111111111111111111111111111111111111"
-            })))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "isValid": true,
+                    "payer": "PAYER1111111111111111111111111111111111111"
+                })),
+            )
             .mount(&server)
             .await;
         wiremock::Mock::given(wiremock::matchers::method("POST"))
             .and(wiremock::matchers::path("/settle"))
-            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "success": true,
-                "transaction": "5sigSettleSignature1111111111111111111111111111111",
-                "network": "solana"
-            })))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "success": true,
+                    "transaction": "5sigSettleSignature1111111111111111111111111111111",
+                    "network": "solana"
+                })),
+            )
             .mount(&server)
             .await;
 
@@ -439,10 +445,12 @@ mod tests {
         let server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("POST"))
             .and(wiremock::matchers::path("/verify"))
-            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "isValid": false,
-                "invalidReason": "invalid_exact_svm_payload_transaction_could_not_be_decoded"
-            })))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "isValid": false,
+                    "invalidReason": "invalid_exact_svm_payload_transaction_could_not_be_decoded"
+                })),
+            )
             .mount(&server)
             .await;
 
@@ -479,12 +487,14 @@ mod tests {
             .await;
         wiremock::Mock::given(wiremock::matchers::method("POST"))
             .and(wiremock::matchers::path("/settle"))
-            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "success": false,
-                "errorReason": "blockhash_not_found",
-                "transaction": "",
-                "network": "solana"
-            })))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "success": false,
+                    "errorReason": "blockhash_not_found",
+                    "transaction": "",
+                    "network": "solana"
+                })),
+            )
             .mount(&server)
             .await;
 
@@ -503,5 +513,122 @@ mod tests {
             gate.gate(&headers, "/x402/stats/summary").await,
             Gated::Challenge(_)
         ));
+    }
+
+    // The COVENANT_X402_* namespace is disjoint from AppConfig's vars and is read
+    // nowhere else in the crate's tests, so a single sequential test owns it safely.
+    const X402_KEYS: [&str; 8] = [
+        "COVENANT_X402_PAY_TO",
+        "COVENANT_X402_FEE_PAYER",
+        "COVENANT_X402_FACILITATOR",
+        "COVENANT_X402_NETWORK",
+        "COVENANT_X402_ASSET",
+        "COVENANT_X402_PRICE_ATOMIC",
+        "COVENANT_X402_RESOURCE_BASE_URL",
+        "COVENANT_X402_DESCRIPTION",
+    ];
+
+    #[test]
+    fn from_env_none_without_pay_to_then_defaults_and_overrides() {
+        for key in X402_KEYS {
+            std::env::remove_var(key);
+        }
+
+        // No payTo -> the paid route must not register (None).
+        assert!(X402Config::from_env().is_none());
+
+        std::env::set_var("COVENANT_X402_PAY_TO", "9covntsTreasuryAddressForTestingPurposesOnly");
+        let cfg = X402Config::from_env().expect("pay_to set -> Some config");
+        assert_eq!(cfg.pay_to, "9covntsTreasuryAddressForTestingPurposesOnly");
+        assert_eq!(cfg.fee_payer, PAYAI_FEE_PAYER);
+        assert_eq!(cfg.facilitator, PAYAI_FACILITATOR);
+        assert_eq!(cfg.network, SOLANA_NETWORK);
+        assert_eq!(cfg.asset, USDC_MINT);
+        assert_eq!(cfg.price_atomic, "50000");
+        assert_eq!(cfg.resource_base_url, "http://localhost:8080");
+        assert_eq!(cfg.description, "Covenant indexer stats summary.");
+
+        std::env::set_var("COVENANT_X402_NETWORK", "solana:devnet");
+        std::env::set_var("COVENANT_X402_PRICE_ATOMIC", "250000");
+        let cfg = X402Config::from_env().unwrap();
+        assert_eq!(cfg.network, "solana:devnet");
+        assert_eq!(cfg.price_atomic, "250000");
+
+        for key in X402_KEYS {
+            std::env::remove_var(key);
+        }
+    }
+
+    fn app_state(gate: Option<X402Gate>) -> crate::api::AppState {
+        crate::api::AppState {
+            cluster: "devnet".into(),
+            rpc_url: "https://rpc.example".into(),
+            confirmations: 32,
+            events: Arc::new(crate::model::seed_events("devnet", &"1".repeat(44))),
+            x402: gate,
+        }
+    }
+
+    async fn body_value(resp: Response) -> serde_json::Value {
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    #[tokio::test]
+    async fn paid_summary_refuses_with_503_when_no_gate_configured() {
+        let resp = paid_summary(State(app_state(None)), HeaderMap::new()).await;
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn paid_summary_returns_402_challenge_without_payment_header() {
+        let gate = X402Gate::new(cfg());
+        let resp = paid_summary(State(app_state(Some(gate))), HeaderMap::new()).await;
+        assert_eq!(resp.status(), StatusCode::PAYMENT_REQUIRED);
+        let v = body_value(resp).await;
+        assert_eq!(v["x402Version"], 1);
+        assert_eq!(v["accepts"][0]["scheme"], "exact");
+    }
+
+    #[tokio::test]
+    async fn paid_summary_returns_200_snapshot_with_settle_header_when_settled() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/verify"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({"isValid": true})),
+            )
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/settle"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"success": true, "transaction": "5sigSettleSignature1111111111111111111111111111111"}),
+            ))
+            .mount(&server)
+            .await;
+
+        let mut c = cfg();
+        c.facilitator = server.uri();
+        let gate = X402Gate::new(c);
+
+        let payload =
+            serde_json::json!({"x402Version":1,"scheme":"exact","network":SOLANA_NETWORK,"payload":{"transaction":"X"}});
+        let b64 = B64.encode(serde_json::to_vec(&payload).unwrap());
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_static("x-payment"),
+            HeaderValue::from_str(&b64).unwrap(),
+        );
+
+        let resp = paid_summary(State(app_state(Some(gate))), headers).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers().get("x-payment-response").unwrap(),
+            "5sigSettleSignature1111111111111111111111111111111"
+        );
+        let v = body_value(resp).await;
+        assert_eq!(v["mode"], "fixture");
+        assert_eq!(v["chain"], "solana");
     }
 }

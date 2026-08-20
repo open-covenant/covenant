@@ -15,6 +15,9 @@ export interface ConnectorOptions {
   // Capabilities the paired manifest authorizes; minted per-dispatch.
   manifestCapabilities: ManifestCapability[];
   now?: () => number;
+  // How often the terminal-status watchdog polls /intents/:id/result as an
+  // SSE-hang fallback. Default 5s.
+  terminalPollMs?: number;
   log?: (msg: string, extra?: Record<string, unknown>) => void;
 }
 
@@ -31,11 +34,14 @@ interface ActiveDispatch {
   // The IntentResult from the submit response — used as the proof result for the
   // synchronous fast path, where GET /intents/:id/result 404s after the fact.
   submitResult?: unknown;
+  // Guards against the SSE-end path and the poll watchdog both finalizing.
+  finalizing?: boolean;
 }
 
 export class Connector {
   private readonly active = new Map<string, ActiveDispatch>();
   private readonly now: () => number;
+  private readonly terminalPollMs: number;
   private readonly log: (msg: string, extra?: Record<string, unknown>) => void;
 
   constructor(
@@ -44,6 +50,7 @@ export class Connector {
     private readonly opts: ConnectorOptions,
   ) {
     this.now = opts.now ?? (() => Date.now());
+    this.terminalPollMs = opts.terminalPollMs ?? 5_000;
     this.log = opts.log ?? (() => {});
   }
 
@@ -134,6 +141,13 @@ export class Connector {
   }
 
   private async runTrace(dispatchId: string, entry: ActiveDispatch): Promise<void> {
+    // The daemon's /intents/:id/events SSE is best-effort: it can hang half-open
+    // over a proxied network and never deliver the terminal close, leaving the
+    // dispatch wedged. Poll the result endpoint in parallel so we finalize on a
+    // terminal status regardless of whether the stream ever ends.
+    void this.watchTerminal(dispatchId, entry).catch((err) =>
+      this.log('terminal watchdog error', { dispatchId, err: String(err) }),
+    );
     try {
       await this.daemon.streamEvents(
         entry.intentId,
@@ -144,14 +158,36 @@ export class Connector {
         entry.abort.signal,
       );
     } catch (err) {
-      if (entry.abort.signal.aborted) return; // cancelled — finalized elsewhere
+      if (entry.abort.signal.aborted) return; // cancelled or finalized by the watchdog
       this.log('stream ended with error', { dispatchId, err: String(err) });
     }
     await this.finalize(dispatchId, entry);
   }
 
+  // Poll /intents/:id/result until the run reaches a terminal status, then
+  // finalize — the fallback for a hung SSE stream. finalize() is guarded, so a
+  // race with the stream-end path resolves to a single finalize.
+  private async watchTerminal(dispatchId: string, entry: ActiveDispatch): Promise<void> {
+    while (this.active.has(dispatchId) && !entry.finalizing) {
+      await sleep(this.terminalPollMs, entry.abort.signal);
+      if (!this.active.has(dispatchId) || entry.finalizing) return;
+      let status: string | undefined;
+      try {
+        status = (await this.daemon.intentResult(entry.intentId) as { status?: string })?.status;
+      } catch {
+        continue; // result not ready (404) or transient — keep polling
+      }
+      if (status && status !== 'running') {
+        entry.abort.abort(); // unblock the hung SSE read; its catch returns without re-finalizing
+        await this.finalize(dispatchId, entry);
+        return;
+      }
+    }
+  }
+
   private async finalize(dispatchId: string, entry: ActiveDispatch): Promise<void> {
-    if (!this.active.has(dispatchId)) return;
+    if (entry.finalizing || !this.active.has(dispatchId)) return;
+    entry.finalizing = true;
     let result: unknown = entry.submitResult ?? null;
     let auditRoot: string | null = null;
     let auditVerified = false;
@@ -220,4 +256,14 @@ function meshStatus(s: string): 'success' | 'failed' | 'cancelled' {
   if (s === 'ok' || s === 'success') return 'success';
   if (s === 'cancelled') return 'cancelled';
   return 'failed';
+}
+
+// Resolves after `ms`, or early if the signal aborts — so finalize doesn't wait
+// out a full poll interval after a cancel.
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) return resolve();
+    const t = setTimeout(resolve, ms);
+    signal.addEventListener('abort', () => { clearTimeout(t); resolve(); }, { once: true });
+  });
 }

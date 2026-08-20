@@ -27,7 +27,7 @@ export const metadata: Metadata = {
   },
 };
 
-const LAST_UPDATED = "2026-05-29";
+const LAST_UPDATED = "2026-07-03";
 
 type Section = {
   id: string;
@@ -59,7 +59,7 @@ const SECTIONS: Section[] = [
         <strong className="text-neutral-100">sandbox.opencovenant.org</strong> (the public
         sandbox). The marketing and docs sites are static informational pages. The sandbox runs
         anonymous coding tasks inside ephemeral, single-use microVMs that are torn down when the
-        run finishes. None of these sites ask you to sign up.
+        run finishes. None of these sites ask you to sign up. This policy also covers <strong className="text-neutral-100">Covenant Guard</strong> (the <code>covguard</code> binary, its Claude Code plugin, and its MCP server), which runs entirely on your machine; see the Covenant Guard section below.
       </p>
     ),
   },
@@ -151,8 +151,56 @@ const SECTIONS: Section[] = [
     ),
   },
   {
-    id: "use",
+    id: "guard",
     label: "03",
+    title: "Covenant Guard (covguard)",
+    body: (
+      <div className="space-y-5">
+        <p className={paragraph}>
+          <span className={subtle}>Local software, no backend.</span> The <code>covguard</code>{" "}
+          binary, the Covenant Guard plugin for Claude Code, and the bundled MCP server run
+          entirely on your machine. We operate no service behind them and receive nothing from
+          them: no telemetry, no analytics, no crash reports, and no accounts.
+        </p>
+        <p className={paragraph}>
+          <span className={subtle}>Model traffic.</span> During a guarded run, your coding
+          agent&apos;s model calls pass through a metering proxy that listens only on your
+          machine&apos;s loopback interface and forwards them directly to the model provider the
+          agent uses (for example api.anthropic.com or api.openai.com), under that provider&apos;s
+          own privacy policy. covguard reads usage figures from those responses in memory to count
+          spend; it does not send your prompts, code, or the model&apos;s responses anywhere else,
+          and it does not store their content.
+        </p>
+        <p className={paragraph}>
+          <span className={subtle}>What it stores, and where.</span> Receipts, event logs (run
+          timings, token counts, computed cost, files changed in the workspace, and commands the
+          agent reported), share cards, and the local signing key are files on your own disk under{" "}
+          <code>~/.covenant-guard</code> (or <code>COVGUARD_HOME</code>). They stay there unless
+          you choose to share them. Deleting that directory deletes them.
+        </p>
+        <p className={paragraph}>
+          <span className={subtle}>The plugin and MCP server.</span> The <code>/guard</code>{" "}
+          command and the MCP tools (guard_status, guard_receipts, guard_verify) only read that
+          local state. The session hook reports run events to the loopback proxy of an active
+          guarded run on your machine. None of these components talk to us.
+        </p>
+        <p className={paragraph}>
+          <span className={subtle}>Downloads.</span> Installing covguard fetches release binaries
+          from GitHub, which sees the download request under{" "}
+          <a
+            className={linkClass}
+            href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement"
+          >
+            GitHub&apos;s privacy statement
+          </a>
+          . The install script itself is served by this site and is covered by the sections above.
+        </p>
+      </div>
+    ),
+  },
+  {
+    id: "use",
+    label: "04",
     title: "How we use it",
     body: (
       <ul className="space-y-2">
@@ -186,7 +234,7 @@ const SECTIONS: Section[] = [
   },
   {
     id: "third-parties",
-    label: "04",
+    label: "05",
     title: "Third parties",
     body: (
       <ul className="space-y-3">
@@ -248,7 +296,7 @@ const SECTIONS: Section[] = [
   },
   {
     id: "retention",
-    label: "05",
+    label: "06",
     title: "Retention",
     body: (
       <ul className="space-y-2">
@@ -285,7 +333,7 @@ const SECTIONS: Section[] = [
   },
   {
     id: "choices",
-    label: "06",
+    label: "07",
     title: "Your choices",
     body: (
       <ul className="space-y-2">
@@ -324,7 +372,7 @@ const SECTIONS: Section[] = [
   },
   {
     id: "security",
-    label: "07",
+    label: "08",
     title: "Security disclosures",
     body: (
       <p className={paragraph}>
@@ -338,7 +386,7 @@ const SECTIONS: Section[] = [
   },
   {
     id: "changes",
-    label: "08",
+    label: "09",
     title: "Changes",
     body: (
       <p className={paragraph}>
@@ -358,7 +406,7 @@ const SECTIONS: Section[] = [
   },
   {
     id: "contact",
-    label: "09",
+    label: "10",
     title: "Contact",
     body: (
       <p className={paragraph}>

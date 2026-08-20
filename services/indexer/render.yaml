@@ -18,3 +18,10 @@ services:
         value: 0.0.0.0:8080
       - key: RUST_LOG
         value: info
+      # Covenant Verified: hex 32-byte Ed25519 issuer seed. When set, the
+      # service attests zauth's directory at GET /verified. Value lives in
+      # the dashboard, not the blueprint.
+      - key: COVENANT_VERIFIED_ISSUER_SEED
+        sync: false
+      - key: COVENANT_VERIFIED_LIMIT
+        value: "50"

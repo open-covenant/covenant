@@ -12,7 +12,7 @@ use covenant_a2a::{
     A2AAutoRetryPolicy, A2AAutoRetryReport, A2ARepairOutcome, A2ARepairRequest, A2ATask,
     A2ATaskQueueEntry, A2ATaskQueueState, A2ATaskResult,
 };
-use covenant_audit::{AuditEvent, AuditIntegrityReport, PrivilegedAction};
+use covenant_audit::{AuditEvent, AuditInclusionProof, AuditIntegrityReport, PrivilegedAction};
 use covenant_budget::BudgetDebit;
 use covenant_mcp::{Content, ToolSpec};
 use covenant_peer_auth::{PeerStatusFilter, PeerSummary, RevokeOutcome};
@@ -447,6 +447,134 @@ pub enum Request {
         per_call_cap: String,
         credits: u64,
     },
+    /// Pre-spend authorization request from an external agent wallet
+    /// (e.g. OrbWallet asking before it signs). Requires capability
+    /// `wallet.spend.authorize`; the daemon checks `amount` against
+    /// `per_call_cap`, the chain/asset against the request, and the
+    /// payer's budget, records the verdict in the audit chain, and returns
+    /// [`Response::SpendAuthorized`]. Unlike `PayX402` this moves no funds
+    /// and writes no settlement receipt — it is a decision, not a payment.
+    ///
+    /// `amount` and `per_call_cap` are atomic decimal strings (u128) to
+    /// avoid JSON's 53-bit integer limit. `credits` is the USD-pegged
+    /// budget the spend would consume. `destination` is the optional
+    /// pay-to address, recorded for audit.
+    AuthorizeSpend {
+        provider: String,
+        network: String,
+        asset: String,
+        amount: String,
+        per_call_cap: String,
+        credits: u64,
+        #[serde(default)]
+        destination: Option<String>,
+    },
+    /// Settlement report from an external agent wallet after it paid for a
+    /// previously authorized spend. Requires capability
+    /// `wallet.spend.settle`; the daemon records a budget debit (when the
+    /// payer has a bucket), a settlement receipt, and a
+    /// [`Response::SpendSettled`] returning the receipt id. `decision_id` is
+    /// the id from the [`Request::AuthorizeSpend`] this payment acted on, so
+    /// the settlement joins back to its authorization. `amount` and
+    /// `credits` are the atomic amount and USD-pegged budget actually
+    /// settled; `tx_sig` is the on-chain signature when the wallet has it.
+    SettleSpend {
+        decision_id: Uuid,
+        provider: String,
+        network: String,
+        asset: String,
+        amount: String,
+        credits: u64,
+        #[serde(default)]
+        tx_sig: Option<String>,
+    },
+    /// Ask the daemon to prove a job's completion for an external escrow
+    /// (e.g. Orbserv). Requires capability `escrow.completion.prove`. The
+    /// daemon does NOT trust the request for the outcome: it looks `job_id`
+    /// up in its own audit chain, derives the result hash and validation from
+    /// the worker's run, binds them with this escrow context, signs, and
+    /// returns [`Response::CompletionProven`]. `job_id` is the Covenant
+    /// intent/job uuid the worker ran under; `worker_address`/`hirer_address`
+    /// are the EVM payee/payer; `amount`/`asset`/`network` are the escrow
+    /// rail. No funds move on this path.
+    ProveCompletion {
+        escrow_id: String,
+        job_id: String,
+        hirer_address: String,
+        worker_address: String,
+        amount: String,
+        asset: String,
+        network: String,
+        provider: String,
+    },
+    /// Fund a bounded-spend hold on the daemon's deployed `SpendGrantEscrow`
+    /// — the *bounded autonomous spend* leg: hand a funded agent a wallet on a
+    /// hot chain and it physically cannot overspend. Requires capability
+    /// `wallet.spend.authorize`. The daemon signs and broadcasts
+    /// `chargeCall(grantId, provider, amount, callId, deadline)` in-process as
+    /// the grant's spender; the contract reverts unless the provider is
+    /// allowlisted and the amount is within the per-call ceiling, remaining
+    /// balance, and expiry — so the bound holds where the money sits, not in a
+    /// check the caller could route around. `call_id` is the job uuid's 128
+    /// bits, and the daemon records the `spec_id`/`deadline` it will gate the
+    /// later release on. Returns [`Response::SpendGrantCharged`]. `grant_id` and
+    /// `amount` are decimal strings (u128); `provider` is a `0x…` address;
+    /// `spec_id` is 32-byte `0x…` hex; `deadline` is a unix-seconds bound.
+    SpendGrantCharge {
+        grant_id: String,
+        provider: String,
+        amount: String,
+        job_id: String,
+        spec_id: String,
+        deadline: u64,
+    },
+    /// Settle a previously charged spend-grant hold — the *spec-gated release*
+    /// leg, "never pay for junk." Requires capability `escrow.completion.prove`.
+    /// The daemon derives the job's pass/fail verdict from its own audit chain
+    /// (never the request), signs the EIP-712 quality attestation, and
+    /// broadcasts `releaseCallAttested` (pass → provider paid) or
+    /// `refundCallAttested` (junk → hold returned to the grant) in-process. The
+    /// `spec_id`/`deadline` are pinned from the charge binding, not the request,
+    /// so a verdict cannot settle a call the daemon never charged. `job_id`
+    /// identifies both the audit-chain run and (as its 128 bits) the on-chain
+    /// call; the escrow-context fields mirror [`Request::ProveCompletion`].
+    /// Returns [`Response::SpendGrantSettled`].
+    SpendGrantSettle {
+        escrow_id: String,
+        job_id: String,
+        hirer_address: String,
+        worker_address: String,
+        amount: String,
+        asset: String,
+        network: String,
+        provider: String,
+    },
+    /// Report from an external escrow that it released funds against a proof.
+    /// Requires capability `escrow.release.record`; the daemon records a
+    /// settlement receipt and a [`Response::EscrowReleased`], joined to the
+    /// proof by `decision_id` (the proof's id) and idempotent on it. `tx_sig`
+    /// is the on-chain payout hash. Covenant custodied nothing; this records
+    /// the payout in the audit chain.
+    RecordEscrowRelease {
+        escrow_id: String,
+        decision_id: Uuid,
+        hirer_address: String,
+        worker_address: String,
+        amount: String,
+        asset: String,
+        network: String,
+        provider: String,
+        #[serde(default)]
+        tx_sig: Option<String>,
+    },
+    /// Read a worker's audit-derived reputation. Requires capability
+    /// `reputation.read`; the daemon computes the standing from the escrow
+    /// rows in its audit chain and returns [`Response::Reputation`].
+    /// `worker_pubkey` is the worker address/key the completion proofs name.
+    /// Read-only.
+    GetReputation {
+        worker_pubkey: String,
+    },
     /// Operator-driven repair of legacy settlement-receipt rows in the
     /// JSONL store. `dry_run` reports the would-change row count without
     /// writing; an apply rewrites the store atomically after a rollback
@@ -571,6 +699,13 @@ pub enum Request {
         prefer_stream: Option<bool>,
     },
     VerifyAuditIntegrity,
+    /// Build a chain-inclusion proof for one audit event (operator only).
+    /// Proves the event is folded into the audit root the SAP bridge anchors
+    /// on-chain. The response carries the proof, or `None` when the id is
+    /// unknown.
+    ProveAuditInclusion {
+        event_id: Uuid,
+    },
     /// Drop audit events strictly older than `before_ms`. Operator-driven
     /// retention; no scheduled compaction in v0.
     PurgeAudit {
@@ -682,6 +817,16 @@ pub enum Request {
     /// connections authenticated under the old token survive until they
     /// drop; HTTP rejects the old token immediately.
     RotateOperatorToken,
+    /// Enroll a new external peer: mint a fresh subject identity + bearer
+    /// token, register it, and grant it `actions`. Gated to the operator
+    /// (`peer.pubkey == self.identity.pubkey`). Returns the scoped token in
+    /// [`Response::PeerEnrolled`] so a partner gets exactly the granted caps
+    /// instead of the operator token. `display` is a label for the peer.
+    EnrollPeer {
+        display: String,
+        #[serde(default)]
+        actions: Vec<String>,
+    },
     /// Operator-triage view of the peer registry. Returns redacted
     /// [`PeerSummary`] rows newest-first. By default surfaces both live
     /// and revoked entries (with `revoked_at: Some(_)`); `status_filter`
@@ -802,6 +947,12 @@ pub enum Request {
         #[serde(default = "default_recent_limit")]
         limit: usize,
     },
+    /// Operator-only read of capability state: every grant in the ledger with
+    /// its action, expiry, revocation status, and — for grants that declared a
+    /// `max_uses` budget — how many uses are spent and how many remain.
+    /// Read-only; records no use. IPC-only, gated on the operator identity like
+    /// [`Request::QueryProvenance`].
+    CapabilityUsage,
 }
 
 fn default_recent_limit() -> usize {
@@ -935,6 +1086,9 @@ pub enum Response {
     AuditIntegrity {
         report: AuditIntegrityReport,
     },
+    AuditInclusion {
+        proof: Option<AuditInclusionProof>,
+    },
     AuditPurged {
         purged: u64,
     },
@@ -987,6 +1141,16 @@ pub enum Response {
     OperatorTokenRotated {
         token_b58: String,
     },
+    /// Successful response to [`Request::EnrollPeer`]. `token_b58` is the new
+    /// peer's scoped bearer token — hand it to the partner; it is NOT the
+    /// operator token. `pubkey_b58` is the peer's subject key, `granted` the
+    /// capabilities it now holds.
+    PeerEnrolled {
+        token_b58: String,
+        pubkey_b58: String,
+        display: String,
+        granted: Vec<String>,
+    },
     /// Successful response to [`Request::ListPeers`]. Token bytes are
     /// **never** carried — only the 6-char `token_prefix`.
     ///
@@ -1035,6 +1199,72 @@ pub enum Response {
         status: u16,
         body: String,
     },
+    /// Verdict for [`Request::AuthorizeSpend`]. `approved` is the
+    /// decision; `decision_id` is the daemon-minted id (returned on both
+    /// approve and deny) the wallet can join a later settlement receipt
+    /// to; `reason` is `Some` only when `approved` is `false`.
+    SpendAuthorized {
+        approved: bool,
+        decision_id: Uuid,
+        #[serde(default)]
+        reason: Option<String>,
+    },
+    /// Result of [`Request::SettleSpend`]. `receipt_id` joins the budget
+    /// debit, settlement receipt, and `spend_settled` audit row the daemon
+    /// recorded; `decision_id` echoes the authorization this settled.
+    SpendSettled {
+        receipt_id: Uuid,
+        decision_id: Uuid,
+    },
+    /// Result of [`Request::ProveCompletion`]. `proof` is one opaque base64
+    /// token the escrow stores and passes to its release: base64 of
+    /// `{proof_json, signature_b58, signer_pubkey_b58}`. To verify, base64-
+    /// decode, then `ed25519_verify(signer_pubkey_b58, proof_json, signature_b58)`
+    /// and trust the parsed fields, releasing to `worker_address` when
+    /// `validation_passed`. `decision_id` is echoed back on
+    /// [`Request::RecordEscrowRelease`]; `issued_at` is epoch-ms as a string.
+    CompletionProven {
+        decision_id: Uuid,
+        proof: String,
+        worker_address: String,
+        issued_at: String,
+    },
+    /// Result of [`Request::SpendGrantCharge`]. `call_id` is the on-chain call
+    /// identifier (decimal u128) the later settle acts on; `tx_hash` (`0x…`) and
+    /// `block_number` pin the `chargeCall` that locked the hold.
+    SpendGrantCharged {
+        call_id: String,
+        tx_hash: String,
+        block_number: u64,
+    },
+    /// Result of [`Request::SpendGrantSettle`]. `release` is `true` when the
+    /// verdict passed (provider paid) and `false` when it failed (hold refunded
+    /// to the grant); `tx_hash` (`0x…`) and `block_number` pin the settling tx.
+    SpendGrantSettled {
+        release: bool,
+        tx_hash: String,
+        block_number: u64,
+    },
+    /// Result of [`Request::RecordEscrowRelease`]. `recorded_at` is the
+    /// epoch-ms the payout row landed, as a string. The `kind` tag plus this
+    /// field is all the escrow's recordRelease reads.
+    EscrowReleased {
+        recorded_at: String,
+    },
+    /// A worker's audit-derived reputation, the result of
+    /// [`Request::GetReputation`]. All counts come from the escrow rows in the
+    /// audit chain; `completion_rate_bps` is `validations_passed /
+    /// proofs_total` in basis points; `computed_audit_root_hex` pins the score
+    /// to the chain state it was read over, so it is reproducible.
+    Reputation {
+        worker_pubkey: String,
+        proofs_total: u64,
+        validations_passed: u64,
+        validations_failed: u64,
+        releases: u64,
+        completion_rate_bps: u32,
+        computed_audit_root_hex: String,
+    },
     /// Snapshot of the SAP bridge config as the daemon resolved it at
     /// boot. `enabled = false` means the bridge is off (default) and
     /// any SAP-backed request will return [`Response::Error`].
@@ -1076,9 +1306,80 @@ pub enum Response {
         actions: Vec<PrivilegedAction>,
         scanned: u64,
     },
+    /// Result of a [`Request::CapabilityUsage`] query. One
+    /// [`CapabilityUsageEntry`] per grant in the ledger — live and
+    /// revoked-but-not-yet-purged — joined to its durable use count by
+    /// signature.
+    CapabilityUsage {
+        grants: Vec<CapabilityUsageEntry>,
+    },
     Error {
         message: String,
     },
+}
+
+/// One grant's row in a [`Response::CapabilityUsage`] reply. `signature_b58`
+/// is the base58 ed25519 signature that uniquely identifies the grant — the
+/// join key, so several grants for one `action` stay distinct. `scope` is the
+/// signed scope verbatim — the constraints that bound what the authority
+/// permits within its `action` (the tool a `tool.call` grant is pinned to, an
+/// `a2a.send` recipient, a `max_uses` budget) — so two grants for one action
+/// with different scopes stay distinguishable rather than collapsing onto the
+/// action verb. `subject_display` and `subject_pubkey_b58` name the agent the
+/// authority is delegated to (the holder), the pubkey being the stable identity
+/// and the display the human label. `expires_at` is epoch-ms (`None` is
+/// perpetual). `effective` is the daemon's own verdict on whether the grant
+/// would authorize an action right now. `budget` is present only for grants
+/// that declared a `max_uses` usage budget.
+///
+/// Carries a `serde_json::Value` scope, so — like [`Request`] and [`Response`]
+/// — it derives `PartialEq` but not `Eq`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CapabilityUsageEntry {
+    pub signature_b58: String,
+    pub action: String,
+    pub scope: serde_json::Value,
+    pub subject_display: String,
+    pub subject_pubkey_b58: String,
+    pub expires_at: Option<u64>,
+    pub revoked: bool,
+    pub effective: CapabilityEffectiveStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<CapabilityUsageBudget>,
+}
+
+/// The daemon's verdict on whether a grant would authorize an action right now,
+/// derived with the daemon clock and the same predicates the enforcement path
+/// applies. Reported so an operator reads the daemon's own decision rather than
+/// re-deriving it from the raw `expires_at`/`revoked`/`budget` fields, where a
+/// different clock or precedence could disagree with enforcement. Precedence
+/// matches enforcement order: a revoked grant is dropped from the live set
+/// before expiry is checked, and a grant's budget is consumed only after the
+/// expiry-aware signature check passes, so `Revoked` dominates `Expired`, which
+/// dominates `Exhausted`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CapabilityEffectiveStatus {
+    /// Authorizes now: not revoked, not past `expires_at`, and any usage budget
+    /// has uses remaining.
+    Live,
+    /// Past its `expires_at` (and not revoked). The enforcement clock rejects it.
+    Expired,
+    /// Revoked. Authority is withdrawn regardless of expiry or remaining budget.
+    Revoked,
+    /// A `max_uses` budget that is fully spent (and the grant is neither revoked
+    /// nor expired). The next invocation is refused.
+    Exhausted,
+}
+
+/// Usage-budget state for a budgeted grant. `used` is the durable count the
+/// enforcement path has recorded against `max_uses`; `remaining` is
+/// `max_uses - used` saturated at zero.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CapabilityUsageBudget {
+    pub max_uses: u64,
+    pub used: u64,
+    pub remaining: u64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -3303,6 +3604,92 @@ mod tests {
              capabilities-listing behaviour diverges from the \
              documented contract without a single error surface",
         );
+    }
+
+    #[test]
+    fn request_capability_usage_is_a_bare_kind_tagged_unit_variant() {
+        let wire = serde_json::to_value(Request::CapabilityUsage).unwrap();
+        assert_eq!(
+            wire,
+            serde_json::json!({ "kind": "capability_usage" }),
+            "Request::CapabilityUsage is parameterless — its wire form must be \
+             exactly the kind tag, so a stale operator client can issue the \
+             query with no body",
+        );
+        let decoded: Request = serde_json::from_value(wire).unwrap();
+        assert_eq!(decoded, Request::CapabilityUsage);
+    }
+
+    #[test]
+    fn capability_usage_entry_omits_budget_when_absent_and_round_trips_both_shapes() {
+        // A budgeted grant carries the budget sub-object; an unbudgeted grant
+        // omits the field entirely (skip_serializing_if) rather than emitting
+        // null, so the wire row stays clean for the common unbudgeted case.
+        let budgeted = CapabilityUsageEntry {
+            signature_b58: "sig-budgeted".into(),
+            action: "tool.call.echo".into(),
+            scope: serde_json::json!({ "version": 1, "tool": "echo", "max_uses": 5 }),
+            subject_display: "agent@host".into(),
+            subject_pubkey_b58: "5Gw3z9KpXqL8mNvR2tY7hJ4cF6bA1sDeZxWnVoBqUtM".into(),
+            expires_at: Some(1_700_000_000_000),
+            revoked: false,
+            effective: CapabilityEffectiveStatus::Live,
+            budget: Some(CapabilityUsageBudget {
+                max_uses: 5,
+                used: 2,
+                remaining: 3,
+            }),
+        };
+        let unbudgeted = CapabilityUsageEntry {
+            signature_b58: "sig-perpetual".into(),
+            action: "memory.read".into(),
+            scope: serde_json::Value::Null,
+            subject_display: "reader@host".into(),
+            subject_pubkey_b58: "7mFqWd3rNpK8sVtY2hLxAe6BcZ4uJg9oQiXnRbDvCfMa".into(),
+            expires_at: None,
+            revoked: true,
+            effective: CapabilityEffectiveStatus::Revoked,
+            budget: None,
+        };
+
+        let budgeted_wire = serde_json::to_value(&budgeted).unwrap();
+        assert_eq!(budgeted_wire["budget"]["remaining"], 3);
+        assert_eq!(
+            budgeted_wire["scope"]["tool"], "echo",
+            "the signed scope surfaces verbatim on the row: {budgeted_wire}",
+        );
+        assert_eq!(
+            budgeted_wire["effective"], "live",
+            "effective serializes as a snake_case string: {budgeted_wire}",
+        );
+        assert_eq!(
+            budgeted_wire["subject_display"], "agent@host",
+            "the grant subject's display surfaces on the row: {budgeted_wire}",
+        );
+        assert_eq!(
+            budgeted_wire["subject_pubkey_b58"], "5Gw3z9KpXqL8mNvR2tY7hJ4cF6bA1sDeZxWnVoBqUtM",
+            "the grant subject's base58 pubkey surfaces on the row: {budgeted_wire}",
+        );
+        let unbudgeted_wire = serde_json::to_value(&unbudgeted).unwrap();
+        assert!(
+            unbudgeted_wire.get("budget").is_none(),
+            "an unbudgeted grant must omit the budget field, not emit null: {unbudgeted_wire}",
+        );
+        assert_eq!(unbudgeted_wire["effective"], "revoked");
+        assert_eq!(unbudgeted_wire["expires_at"], serde_json::Value::Null);
+        // scope is always present and verbatim — an unscoped grant emits its
+        // signed null rather than omitting the field, so the wire shape is stable.
+        assert!(
+            unbudgeted_wire.get("scope").is_some(),
+            "scope is always present, even for an unscoped grant: {unbudgeted_wire}",
+        );
+        assert_eq!(unbudgeted_wire["scope"], serde_json::Value::Null);
+
+        for entry in [budgeted, unbudgeted] {
+            let decoded: CapabilityUsageEntry =
+                serde_json::from_value(serde_json::to_value(&entry).unwrap()).unwrap();
+            assert_eq!(decoded, entry, "CapabilityUsageEntry must round-trip");
+        }
     }
 
     #[test]
@@ -10500,6 +10887,49 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn frame_round_trips_a_payload_of_exactly_max_frame_bytes() {
+        // MAX_FRAME is the INCLUSIVE cap: the module contract is that frames
+        // *over* MAX_FRAME bytes are rejected, so a frame whose payload is
+        // exactly MAX_FRAME bytes must traverse the wire. The over-cap tests
+        // (rejects_oversized_frame_header, write_frame_rejects_oversized_payload)
+        // both probe MAX_FRAME + 1, which a `len > MAX_FRAME` -> `len >= MAX_FRAME`
+        // slip on either side still rejects — so they cannot see the cap shrink
+        // by one byte and silently turn legitimate 8 MiB frames into FrameTooLarge.
+        // Pin the inclusive endpoint end-to-end: a value serializing to exactly
+        // MAX_FRAME bytes is written by write_frame and read back by read_frame.
+        let payload = "a".repeat(MAX_FRAME as usize - 2);
+        assert_eq!(
+            serde_json::to_vec(&payload).unwrap().len(),
+            MAX_FRAME as usize,
+            "fixture must serialize to exactly the cap so the inclusive boundary is the value under test",
+        );
+
+        let mut buf: Vec<u8> = Vec::new();
+        write_frame(&mut buf, &payload).await.expect(
+            "a value serializing to exactly MAX_FRAME bytes must be written, not rejected as FrameTooLarge",
+        );
+        assert_eq!(
+            buf.len(),
+            4 + MAX_FRAME as usize,
+            "the framed bytes must be the 4-byte length prefix plus exactly MAX_FRAME payload bytes",
+        );
+        assert_eq!(
+            u32::from_be_bytes(buf[..4].try_into().unwrap()),
+            MAX_FRAME,
+            "the length prefix must carry exactly MAX_FRAME",
+        );
+
+        let mut reader = std::io::Cursor::new(buf);
+        let decoded: String = read_frame(&mut reader).await.expect(
+            "a length prefix of exactly MAX_FRAME must be read, not rejected as FrameTooLarge",
+        );
+        assert_eq!(
+            decoded, payload,
+            "the exactly-cap-sized payload must survive the write_frame -> read_frame round-trip intact",
+        );
+    }
+
     #[test]
     fn ipc_error_frame_too_large_display_message_pins_prefix_got_payload_and_max_frame_value() {
         let err = IpcError::FrameTooLarge { got: 9_999_999 };
@@ -11441,6 +11871,293 @@ mod tests {
             Some(200)
         );
         assert_eq!(obj.get("receipt_id"), Some(&serde_json::json!(id)));
+        let back: Response = serde_json::from_value(wire).unwrap();
+        assert_eq!(back, resp);
+    }
+
+    #[test]
+    fn request_authorize_spend_serde_pins_wire_shape() {
+        let event = Request::AuthorizeSpend {
+            provider: "orbserv".into(),
+            network: "eip155:8453".into(),
+            asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".into(),
+            amount: "80000".into(),
+            per_call_cap: "100000".into(),
+            credits: 8,
+            destination: Some("0xPayee".into()),
+        };
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire.as_object().expect("serializes as object");
+        assert_eq!(obj.get("kind"), Some(&serde_json::json!("authorize_spend")));
+        assert_eq!(
+            obj.get("per_call_cap"),
+            Some(&serde_json::json!("100000")),
+            "per_call_cap must round-trip as a decimal string so u128 \
+             amounts above JSON's 53-bit integer ceiling survive the wire",
+        );
+        assert_eq!(obj.get("amount"), Some(&serde_json::json!("80000")));
+        let back: Request = serde_json::from_value(wire).unwrap();
+        assert_eq!(back, event, "AuthorizeSpend must round-trip verbatim");
+
+        // destination is optional via #[serde(default)].
+        let no_dest = serde_json::json!({
+            "kind": "authorize_spend",
+            "provider": "orbserv",
+            "network": "eip155:8453",
+            "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            "amount": "80000",
+            "per_call_cap": "100000",
+            "credits": 8,
+        });
+        let decoded: Request = serde_json::from_value(no_dest).expect("destination is optional");
+        assert!(matches!(
+            decoded,
+            Request::AuthorizeSpend {
+                destination: None,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn response_spend_authorized_serde_pins_wire_shape() {
+        let id = Uuid::from_u128(0xdead_beef_0000_0001u128);
+        let resp = Response::SpendAuthorized {
+            approved: false,
+            decision_id: id,
+            reason: Some("amount 100001 exceeds the per-call cap 100000".into()),
+        };
+        let wire = serde_json::to_value(&resp).unwrap();
+        let obj = wire.as_object().expect("object");
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("spend_authorized"))
+        );
+        assert_eq!(obj.get("approved"), Some(&serde_json::json!(false)));
+        assert_eq!(obj.get("decision_id"), Some(&serde_json::json!(id)));
+        let back: Response = serde_json::from_value(wire).unwrap();
+        assert_eq!(back, resp);
+
+        // reason is omitted on approve and decodes back to None.
+        let approve = serde_json::json!({
+            "kind": "spend_authorized",
+            "approved": true,
+            "decision_id": id,
+        });
+        let decoded: Response = serde_json::from_value(approve).expect("reason is optional");
+        assert!(matches!(
+            decoded,
+            Response::SpendAuthorized {
+                reason: None,
+                approved: true,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn request_settle_spend_serde_pins_wire_shape() {
+        let decision_id = Uuid::from_u128(0xdead_beef_0000_0002u128);
+        let event = Request::SettleSpend {
+            decision_id,
+            provider: "orbserv".into(),
+            network: "eip155:8453".into(),
+            asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".into(),
+            amount: "80000".into(),
+            credits: 8,
+            tx_sig: Some("0xabc123".into()),
+        };
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire.as_object().expect("serializes as object");
+        assert_eq!(obj.get("kind"), Some(&serde_json::json!("settle_spend")));
+        assert_eq!(
+            obj.get("decision_id"),
+            Some(&serde_json::json!(decision_id))
+        );
+        assert_eq!(obj.get("amount"), Some(&serde_json::json!("80000")));
+        let back: Request = serde_json::from_value(wire).unwrap();
+        assert_eq!(back, event, "SettleSpend must round-trip verbatim");
+
+        // tx_sig is optional via #[serde(default)].
+        let no_sig = serde_json::json!({
+            "kind": "settle_spend",
+            "decision_id": decision_id,
+            "provider": "orbserv",
+            "network": "eip155:8453",
+            "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            "amount": "80000",
+            "credits": 8,
+        });
+        let decoded: Request = serde_json::from_value(no_sig).expect("tx_sig is optional");
+        assert!(matches!(decoded, Request::SettleSpend { tx_sig: None, .. }));
+    }
+
+    #[test]
+    fn response_spend_settled_serde_pins_wire_shape() {
+        let receipt_id = Uuid::from_u128(0xdead_beef_0000_0003u128);
+        let decision_id = Uuid::from_u128(0xdead_beef_0000_0002u128);
+        let resp = Response::SpendSettled {
+            receipt_id,
+            decision_id,
+        };
+        let wire = serde_json::to_value(&resp).unwrap();
+        let obj = wire.as_object().expect("object");
+        assert_eq!(obj.get("kind"), Some(&serde_json::json!("spend_settled")));
+        assert_eq!(obj.get("receipt_id"), Some(&serde_json::json!(receipt_id)));
+        assert_eq!(
+            obj.get("decision_id"),
+            Some(&serde_json::json!(decision_id))
+        );
+        let back: Response = serde_json::from_value(wire).unwrap();
+        assert_eq!(back, resp);
+    }
+
+    #[test]
+    fn request_prove_completion_serde_pins_wire_shape() {
+        let event = Request::ProveCompletion {
+            escrow_id: "escrow_xyz".into(),
+            job_id: Uuid::from_u128(0xdead_beef_0000_0010u128).to_string(),
+            hirer_address: "0xHirer".into(),
+            worker_address: "0xWorker".into(),
+            amount: "10000000".into(),
+            asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e".into(),
+            network: "eip155:84532".into(),
+            provider: "orbserv".into(),
+        };
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire.as_object().expect("serializes as object");
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("prove_completion"))
+        );
+        assert_eq!(obj.get("escrow_id"), Some(&serde_json::json!("escrow_xyz")));
+        assert_eq!(
+            obj.get("worker_address"),
+            Some(&serde_json::json!("0xWorker"))
+        );
+        let back: Request = serde_json::from_value(wire).unwrap();
+        assert_eq!(back, event, "ProveCompletion must round-trip verbatim");
+    }
+
+    #[test]
+    fn request_record_escrow_release_serde_pins_wire_shape() {
+        let decision_id = Uuid::from_u128(0xdead_beef_0000_0011u128);
+        let event = Request::RecordEscrowRelease {
+            escrow_id: "escrow_xyz".into(),
+            decision_id,
+            hirer_address: "0xHirer".into(),
+            worker_address: "0xWorker".into(),
+            amount: "10000000".into(),
+            asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e".into(),
+            network: "eip155:84532".into(),
+            provider: "orbserv".into(),
+            tx_sig: Some("0xpayout".into()),
+        };
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire.as_object().expect("serializes as object");
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("record_escrow_release"))
+        );
+        assert_eq!(
+            obj.get("decision_id"),
+            Some(&serde_json::json!(decision_id))
+        );
+        let back: Request = serde_json::from_value(wire).unwrap();
+        assert_eq!(back, event, "RecordEscrowRelease must round-trip verbatim");
+
+        // tx_sig is optional via #[serde(default)].
+        let no_sig = serde_json::json!({
+            "kind": "record_escrow_release",
+            "escrow_id": "escrow_xyz",
+            "decision_id": decision_id,
+            "hirer_address": "0xHirer",
+            "worker_address": "0xWorker",
+            "amount": "10000000",
+            "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+            "network": "eip155:84532",
+            "provider": "orbserv",
+        });
+        let decoded: Request = serde_json::from_value(no_sig).expect("tx_sig is optional");
+        assert!(matches!(
+            decoded,
+            Request::RecordEscrowRelease { tx_sig: None, .. }
+        ));
+    }
+
+    #[test]
+    fn response_completion_proven_serde_pins_wire_shape() {
+        let decision_id = Uuid::from_u128(0xdead_beef_0000_0013u128);
+        let resp = Response::CompletionProven {
+            decision_id,
+            proof: "eyJwcm9vZl9qc29uIjoiLi4uIn0=".into(),
+            worker_address: "0xWorker".into(),
+            issued_at: "1718553600000".into(),
+        };
+        let wire = serde_json::to_value(&resp).unwrap();
+        let obj = wire.as_object().expect("object");
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("completion_proven"))
+        );
+        assert_eq!(
+            obj.get("decision_id"),
+            Some(&serde_json::json!(decision_id))
+        );
+        assert_eq!(
+            obj.get("worker_address"),
+            Some(&serde_json::json!("0xWorker"))
+        );
+        let back: Response = serde_json::from_value(wire).unwrap();
+        assert_eq!(back, resp);
+    }
+
+    #[test]
+    fn response_escrow_released_serde_pins_wire_shape() {
+        let resp = Response::EscrowReleased {
+            recorded_at: "1718553600000".into(),
+        };
+        let wire = serde_json::to_value(&resp).unwrap();
+        let obj = wire.as_object().expect("object");
+        assert_eq!(obj.get("kind"), Some(&serde_json::json!("escrow_released")));
+        assert_eq!(
+            obj.get("recorded_at"),
+            Some(&serde_json::json!("1718553600000"))
+        );
+        let back: Response = serde_json::from_value(wire).unwrap();
+        assert_eq!(back, resp);
+    }
+
+    #[test]
+    fn request_get_reputation_serde_pins_wire_shape() {
+        let event = Request::GetReputation {
+            worker_pubkey: "7Np41oeYqPefeNQEHSv1UDhYrehxin3NStpvxbiyN".into(),
+        };
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire.as_object().expect("serializes as object");
+        assert_eq!(obj.get("kind"), Some(&serde_json::json!("get_reputation")));
+        let back: Request = serde_json::from_value(wire).unwrap();
+        assert_eq!(back, event, "GetReputation must round-trip verbatim");
+    }
+
+    #[test]
+    fn response_reputation_serde_pins_wire_shape() {
+        let resp = Response::Reputation {
+            worker_pubkey: "7Np41oeYqPefeNQEHSv1UDhYrehxin3NStpvxbiyN".into(),
+            proofs_total: 3,
+            validations_passed: 2,
+            validations_failed: 1,
+            releases: 2,
+            completion_rate_bps: 6666,
+            computed_audit_root_hex: "deadbeef".into(),
+        };
+        let wire = serde_json::to_value(&resp).unwrap();
+        let obj = wire.as_object().expect("object");
+        assert_eq!(obj.get("kind"), Some(&serde_json::json!("reputation")));
+        assert_eq!(
+            obj.get("completion_rate_bps"),
+            Some(&serde_json::json!(6666))
+        );
         let back: Response = serde_json::from_value(wire).unwrap();
         assert_eq!(back, resp);
     }

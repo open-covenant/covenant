@@ -393,8 +393,8 @@ export function StakeClient() {
               />
               <Step
                 index="03"
-                title="Claim anytime, withdraw at lock end"
-                body="Accrued SOL is claimable at any moment. Principal becomes withdrawable when the lock period elapses."
+                title="Claim anytime, withdraw anytime"
+                body="Accrued SOL is claimable at any moment. As the program winds down, principal is withdrawable at any time, regardless of the lock period."
               />
             </ol>
           </Panel>
@@ -402,9 +402,9 @@ export function StakeClient() {
           <Panel>
             <PanelEyebrow>Considerations</PanelEyebrow>
             <ul className="mt-6 space-y-3 text-[12px] leading-relaxed text-neutral-400">
-              <li>Locked principal is non-transferable and cannot be withdrawn before the lock period ends.</li>
+              <li>The staking program is being sunset: principal can be withdrawn at any time, regardless of the original lock period.</li>
               <li>Distribution amounts depend on protocol revenue. Past distributions do not predict future amounts.</li>
-              <li>The protocol may be paused by the operator in response to incidents. New positions and reward claims are paused with it; principal withdrawal after lock expiry is not.</li>
+              <li>The protocol may be paused by the operator in response to incidents. New positions and reward claims are paused with it; principal withdrawal is not.</li>
             </ul>
           </Panel>
         </div>

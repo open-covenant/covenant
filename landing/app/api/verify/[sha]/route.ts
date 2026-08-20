@@ -4,338 +4,28 @@
 // reads yellow until its artifact is published — a witness is never green
 // before it has actually been checked.
 
-import { execFileSync } from "node:child_process";
-import { createHash, createPublicKey, verify as edVerify } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { NextResponse } from "next/server";
-import { clean, findRepoRoot } from "@/lib/agentStream.mjs";
+import { findRepoRoot } from "@/lib/agentStream.mjs";
+import { redactAuthor } from "@/lib/verify/author";
+import { checkAnchor2AuditChain } from "@/lib/verify/auditChain";
+import { checkAnchor1CommitMemo } from "@/lib/verify/commitMemo";
+import { predatesCutover } from "@/lib/verify/cutover";
+import { runGit } from "@/lib/verify/git";
+import { checkAnchor3Solana } from "@/lib/verify/settlement";
+import { checkSkillRun } from "@/lib/verify/skillRun";
+import type { Witness } from "@/lib/verify/types";
+import { checkAnchor4VerifierSig } from "@/lib/verify/verifierSig";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-type WitnessState = "green" | "yellow" | "red" | "gray";
-
-type Witness = {
-  key: "rekor" | "audit_chain" | "solana_anchor" | "verifier_sig";
-  label: string;
-  state: WitnessState;
-  detail: string;
-  drillHref?: string;
-  badge?: { text: string; tone: "yellow" | "red" } | null;
-};
-
-type SkillRunTx = { sig: string; cluster: "devnet" | "mainnet"; slot: number | null };
-type SkillRun = {
-  skill: { name: string; digest: string };
-  capabilities: string[];
-  tx: SkillRunTx | null;
-};
-
-// A skill-driven run anchored to this commit, sourced from
-// landing/public/witness/skill/<sha>.json. Null for an ordinary code commit.
-function checkSkillRun(repoRoot: string, sha: string): SkillRun | null {
-  const manifest = join(repoRoot, "landing", "public", "witness", "skill", `${sha}.json`);
-  if (!existsSync(manifest)) return null;
-  try {
-    const raw = JSON.parse(readFileSync(manifest, "utf8")) as Record<string, unknown>;
-    const skill = (raw.skill ?? {}) as Record<string, unknown>;
-    const name = typeof skill.name === "string" ? skill.name : "";
-    const digest = typeof skill.digest === "string" ? skill.digest : "";
-    if (!name || !digest) return null;
-    const capabilities = Array.isArray(raw.capabilities)
-      ? raw.capabilities.filter((c): c is string => typeof c === "string")
-      : [];
-    const txRaw = (raw.tx ?? null) as Record<string, unknown> | null;
-    const tx: SkillRunTx | null =
-      txRaw && typeof txRaw.sig === "string" && txRaw.sig
-        ? {
-            sig: txRaw.sig,
-            cluster: txRaw.cluster === "mainnet" ? "mainnet" : "devnet",
-            slot: typeof txRaw.slot === "number" ? txRaw.slot : null,
-          }
-        : null;
-    return { skill: { name, digest }, capabilities, tx };
-  } catch {
-    return null;
-  }
-}
 
 const COVENANT_AUTHOR_EMAIL = "covenant@users.noreply.github.com";
 
 // First commit produced under the witness pipeline. Commits before it render as
 // historical (all anchors gray). Empty until the pipeline ships.
 const WITNESS_CUTOVER_SHA = process.env.WITNESS_CUTOVER_SHA || "";
-
-// Substitute a public label when an author name/email trips the banned-token
-// scan, so historical commits still render without leaking an operator identity.
-function redactAuthor(name: string, email: string): { display: string; email: string } {
-  if (clean(name) === null || clean(email) === null) {
-    return { display: "Covenant Legacy", email: "legacy@opencovenant.org" };
-  }
-  return { display: name, email };
-}
-
-function git(repoRoot: string, args: string[]): string | null {
-  try {
-    return execFileSync("git", ["-C", repoRoot, ...args], {
-      encoding: "utf8",
-      maxBuffer: 4 * 1024 * 1024,
-    }).trim();
-  } catch {
-    return null;
-  }
-}
-
-function predatesCutover(repoRoot: string, sha: string): boolean {
-  if (!WITNESS_CUTOVER_SHA) return false;
-  // merge-base --is-ancestor signals via exit code; git() returns null on
-  // non-zero (not an ancestor) and "" on success (sha is an ancestor = predates).
-  return git(repoRoot, ["merge-base", "--is-ancestor", sha, WITNESS_CUTOVER_SHA]) !== null;
-}
-
-// Anchor 1 — per-commit Solana Memo tx, signed by the operator authority, with
-// payload covenant-commit-v1:<sha>:<audit_root_hex>:<unix_ms>. Reads the
-// recorded tx from landing/public/witness/memo/<sha>.json and confirms it.
-function checkAnchor1CommitMemo(repoRoot: string, sha: string): Witness {
-  const memoManifest = join(repoRoot, "landing", "public", "witness", "memo", `${sha}.json`);
-  if (!existsSync(memoManifest)) {
-    return {
-      key: "rekor",
-      label: "Solana commit memo",
-      state: "yellow",
-      detail:
-        "No memo anchor published for this commit yet. When the anchor daemon posts a memo tx (payload covenant-commit-v1:<sha>:<audit_root_hex>:<ts>, signed by the operator authority), this light verifies it.",
-      badge: { text: "Anchor not yet live", tone: "yellow" },
-    };
-  }
-  try {
-    const parsed = JSON.parse(readFileSync(memoManifest, "utf8")) as {
-      tx?: string;
-      verified?: boolean;
-      slot?: number;
-      authority?: string;
-      cluster?: "devnet" | "mainnet";
-    };
-    const cluster = parsed.cluster ?? "devnet";
-    const solscan = parsed.tx
-      ? `https://solscan.io/tx/${parsed.tx}${cluster === "devnet" ? "?cluster=devnet" : ""}`
-      : undefined;
-    if (!parsed.verified || !parsed.tx) {
-      return {
-        key: "rekor",
-        label: "Solana commit memo",
-        state: "red",
-        detail: `Memo tx ${parsed.tx || "missing"} did not verify against the operator authority pubkey.`,
-        drillHref: solscan,
-      };
-    }
-    return {
-      key: "rekor",
-      label: "Solana commit memo",
-      state: "green",
-      detail: `Memo tx ${parsed.tx.slice(0, 16)}… signed by ${parsed.authority || "operator authority"} at slot ${parsed.slot ?? "?"} (${cluster}).`,
-      drillHref: solscan,
-    };
-  } catch {
-    return {
-      key: "rekor",
-      label: "Solana commit memo",
-      state: "red",
-      detail: "Memo manifest unreadable — investigate landing/public/witness/memo/<sha>.json.",
-    };
-  }
-}
-
-// Anchor 2 — local hash chain. attestations/<sha>.json holds per-LLM-call Step
-// records Merkle-rooted into audit_root_hex; green when present with a root.
-// Recompute the audit chain root from the raw event lines, exactly as the
-// daemon and the standalone verifier do: event_hash = sha256(line), then
-// chain = sha256(prev + "\n" + event_hash). The published steps ARE those
-// canonical lines, so this is a real independent check, not a trust.
-function recomputeAuditRoot(steps: string[]): string {
-  const sha256 = (b: Buffer) => createHash("sha256").update(b).digest("hex");
-  let prev = "0".repeat(64);
-  for (const line of steps) {
-    const eventHash = sha256(Buffer.from(line, "utf8"));
-    prev = sha256(Buffer.from(`${prev}\n${eventHash}`, "utf8"));
-  }
-  return prev;
-}
-
-function checkAnchor2AuditChain(repoRoot: string, sha: string): Witness {
-  const attestationPath = join(repoRoot, "attestations", `${sha}.json`);
-  if (!existsSync(attestationPath)) {
-    return {
-      key: "audit_chain",
-      label: "Audit hash chain",
-      state: "yellow",
-      detail:
-        "No audit chain published for this commit yet. A run's hash-chained events recompute into attestations/<sha>.json; once present this light recomputes the root and checks it.",
-    };
-  }
-  try {
-    const att = JSON.parse(readFileSync(attestationPath, "utf8")) as {
-      audit_root_hex?: string;
-      steps?: unknown;
-    };
-    const steps = Array.isArray(att.steps) ? att.steps : [];
-    if (!att.audit_root_hex || !steps.length || !steps.every((s) => typeof s === "string")) {
-      return {
-        key: "audit_chain",
-        label: "Audit hash chain",
-        state: "red",
-        detail: "Attestation present but missing a root or its canonical steps.",
-      };
-    }
-    const recomputed = recomputeAuditRoot(steps as string[]);
-    if (recomputed !== att.audit_root_hex) {
-      return {
-        key: "audit_chain",
-        label: "Audit hash chain",
-        state: "red",
-        detail: `Chain tampered: recomputed root ${recomputed.slice(0, 12)}… does not match the published ${att.audit_root_hex.slice(0, 12)}….`,
-      };
-    }
-    return {
-      key: "audit_chain",
-      label: "Audit hash chain",
-      state: "green",
-      detail: `Root ${att.audit_root_hex.slice(0, 16)}… recomputed from ${steps.length} hash-chained events and matches.`,
-      drillHref: `https://github.com/open-covenant/covenant/blob/main/attestations/${sha}.json`,
-    };
-  } catch {
-    return {
-      key: "audit_chain",
-      label: "Audit hash chain",
-      state: "red",
-      detail: "Attestation unreadable.",
-    };
-  }
-}
-
-// Anchor 3 — settlement-program anchor. Looks for a ReceiptBatch PDA on the
-// settlement program holding this commit's Merkle leaf in a confirmed batch.
-function checkAnchor3Solana(repoRoot: string, sha: string): Witness {
-  const manifestPath = join(repoRoot, "landing", "public", "witness", "settlement", `${sha}.json`);
-  if (!existsSync(manifestPath)) {
-    return {
-      key: "solana_anchor",
-      label: "Solana settlement anchor",
-      state: "yellow",
-      detail:
-        "No settlement batch anchored for this commit yet. A receipt batch on cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y commits the audit root on-chain; until it lands this light reads yellow.",
-      drillHref: `https://solscan.io/account/cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y?cluster=devnet`,
-    };
-  }
-  try {
-    const m = JSON.parse(readFileSync(manifestPath, "utf8")) as {
-      tx?: string;
-      batch_pda?: string;
-      merkle_root?: string;
-      slot?: number;
-      cluster?: string;
-    };
-    const attPath = join(repoRoot, "attestations", `${sha}.json`);
-    const auditRoot = existsSync(attPath)
-      ? (JSON.parse(readFileSync(attPath, "utf8")) as { audit_root_hex?: string }).audit_root_hex
-      : undefined;
-    const cluster = m.cluster ?? "devnet";
-    const drillHref = m.batch_pda
-      ? `https://solscan.io/account/${m.batch_pda}?cluster=${cluster}`
-      : undefined;
-    if (!m.batch_pda || !m.tx || !m.merkle_root || m.merkle_root !== auditRoot) {
-      return {
-        key: "solana_anchor",
-        label: "Solana settlement anchor",
-        state: "red",
-        detail: "Settlement batch present but its committed root does not match the run's audit root.",
-        drillHref,
-      };
-    }
-    return {
-      key: "solana_anchor",
-      label: "Solana settlement anchor",
-      state: "green",
-      detail: `Receipt batch ${m.batch_pda.slice(0, 12)}… on devnet commits audit root ${m.merkle_root.slice(0, 12)}… at slot ${m.slot ?? "?"}. Decode the PDA on-chain to check.`,
-      drillHref,
-    };
-  } catch {
-    return {
-      key: "solana_anchor",
-      label: "Solana settlement anchor",
-      state: "red",
-      detail: "Settlement manifest unreadable.",
-    };
-  }
-}
-
-// Anchor 4 — verifier-refuter signature. A separately-keyed ed25519 verifier
-// signs the audit root into attestations/<sha>.verifier.sig. Presence alone is
-// not sufficient: the light stays yellow until the signature is checked against
-// the published verifier pubkey.
-function checkAnchor4VerifierSig(repoRoot: string, sha: string): Witness {
-  const sigPath = join(repoRoot, "attestations", `${sha}.verifier.sig`);
-  if (!existsSync(sigPath)) {
-    return {
-      key: "verifier_sig",
-      label: "Verifier-Refuter signature",
-      state: "yellow",
-      detail:
-        "No verifier signature published for this commit yet. A separately-keyed ed25519 verifier signs the audit root; until then this light reads yellow.",
-    };
-  }
-  try {
-    const att = JSON.parse(readFileSync(join(repoRoot, "attestations", `${sha}.json`), "utf8")) as {
-      audit_root_hex?: string;
-      verdict?: string;
-      domain?: string;
-    };
-    const pubkeyPath = join(repoRoot, "landing", "public", "witness", "verifier-pubkey.txt");
-    if (!att.audit_root_hex || !existsSync(pubkeyPath)) {
-      return {
-        key: "verifier_sig",
-        label: "Verifier-Refuter signature",
-        state: "yellow",
-        detail: "Verifier signature present but the published pubkey or audit root is missing.",
-      };
-    }
-    const pubkey = readFileSync(pubkeyPath, "utf8").trim();
-    const sig = readFileSync(sigPath, "utf8").trim();
-    const domain = att.domain || "covenant.witness.v1";
-    const message = Buffer.from(`${domain}\n${att.audit_root_hex}`, "utf8");
-    const key = createPublicKey({ format: "jwk", key: { kty: "OKP", crv: "Ed25519", x: pubkey } });
-    if (!edVerify(null, message, key, Buffer.from(sig, "base64url"))) {
-      return {
-        key: "verifier_sig",
-        label: "Verifier-Refuter signature",
-        state: "red",
-        detail: "Verifier signature did not verify against the published verifier pubkey.",
-      };
-    }
-    if (att.verdict === "refute") {
-      return {
-        key: "verifier_sig",
-        label: "Verifier-Refuter signature",
-        state: "red",
-        detail: `Verifier refuted this run (signed by ${pubkey.slice(0, 12)}…): a signed action causally followed untrusted on-chain input.`,
-      };
-    }
-    return {
-      key: "verifier_sig",
-      label: "Verifier-Refuter signature",
-      state: "green",
-      detail: `Audit root signed by an independent verifier (${pubkey.slice(0, 12)}…), no refutation. Check it yourself against landing/public/witness/verifier-pubkey.txt.`,
-    };
-  } catch {
-    return {
-      key: "verifier_sig",
-      label: "Verifier-Refuter signature",
-      state: "red",
-      detail: "Verifier signature or pubkey unreadable.",
-    };
-  }
-}
 
 export async function GET(_req: Request, ctx: { params: Promise<{ sha: string }> }) {
   const { sha } = await ctx.params;
@@ -345,7 +35,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ sha: string }>
 
   const repoRoot = findRepoRoot(process.cwd()) || resolve(process.cwd(), "..");
 
-  const meta = git(repoRoot, [
+  const meta = runGit(repoRoot, [
     "show",
     "-s",
     "--format=%H%x09%h%x09%an%x09%ae%x09%aI%x09%s%x09%b",
@@ -371,7 +61,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ sha: string }>
     const author = redactAuthor(rawAuthorDisplay, rawAuthorEmail);
     predatesWitnessLoop =
       rawAuthorEmail !== COVENANT_AUTHOR_EMAIL && WITNESS_CUTOVER_SHA
-        ? predatesCutover(repoRoot, fullSha)
+        ? predatesCutover(repoRoot, fullSha, WITNESS_CUTOVER_SHA)
         : rawAuthorEmail !== COVENANT_AUTHOR_EMAIL;
     commit = {
       sha: fullSha,

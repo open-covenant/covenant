@@ -10,8 +10,7 @@ fn deposit_rejected_when_no_active_stakers() {
     assert_eq!(custom_error(&err), Some(E_NO_ACTIVE_STAKERS));
 
     let (owner, ata) = funded_owner(&mut env, MIN_LOCK_AMOUNT);
-    create_position(&mut env, &owner, &ata, 1, MIN_LOCK_AMOUNT, TIER_30D_BPS)
-        .expect("create");
+    create_position(&mut env, &owner, &ata, 1, MIN_LOCK_AMOUNT, TIER_30D_BPS).expect("create");
 
     deposit_sol_fees(&mut env, 500_000_000).expect("deposit after first locker");
     let cfg = config_state(&env);
@@ -24,8 +23,7 @@ fn deposit_rejected_when_no_active_stakers() {
 fn multi_deposit_accrues_correctly() {
     let mut env = boot();
     let (owner, ata) = funded_owner(&mut env, MIN_LOCK_AMOUNT);
-    create_position(&mut env, &owner, &ata, 1, MIN_LOCK_AMOUNT, TIER_30D_BPS)
-        .expect("create");
+    create_position(&mut env, &owner, &ata, 1, MIN_LOCK_AMOUNT, TIER_30D_BPS).expect("create");
 
     deposit_sol_fees(&mut env, 100_000_000).expect("deposit 1");
     advance_clock(&mut env, RATE_LIMIT_SECS);
@@ -47,8 +45,7 @@ fn multi_deposit_accrues_correctly() {
 fn increase_amount_settles_pending_before_reseating_debt() {
     let mut env = boot();
     let (owner, ata) = funded_owner(&mut env, 5 * MIN_LOCK_AMOUNT);
-    create_position(&mut env, &owner, &ata, 1, MIN_LOCK_AMOUNT, TIER_30D_BPS)
-        .expect("create");
+    create_position(&mut env, &owner, &ata, 1, MIN_LOCK_AMOUNT, TIER_30D_BPS).expect("create");
 
     deposit_sol_fees(&mut env, 1_000_000_000).expect("deposit");
 
@@ -56,8 +53,7 @@ fn increase_amount_settles_pending_before_reseating_debt() {
     // claim the prior fee — the prior fee should be settled into
     // unclaimed_lamports against the OLD weight.
     advance_clock(&mut env, RATE_LIMIT_SECS);
-    increase_amount(&mut env, &owner, &ata, 1, MIN_LOCK_AMOUNT)
-        .expect("increase");
+    increase_amount(&mut env, &owner, &ata, 1, MIN_LOCK_AMOUNT).expect("increase");
 
     let pos = position_state(&env, &position_pda(&owner.pubkey(), 1));
     assert_eq!(pos.amount, 2 * MIN_LOCK_AMOUNT);
@@ -75,15 +71,17 @@ fn increase_amount_settles_pending_before_reseating_debt() {
 fn accrue_is_idempotent_when_pending_is_zero() {
     let mut env = boot();
     let (owner, ata) = funded_owner(&mut env, MIN_LOCK_AMOUNT);
-    create_position(&mut env, &owner, &ata, 1, MIN_LOCK_AMOUNT, TIER_30D_BPS)
-        .expect("create");
+    create_position(&mut env, &owner, &ata, 1, MIN_LOCK_AMOUNT, TIER_30D_BPS).expect("create");
     deposit_sol_fees(&mut env, 100_000_000).expect("deposit");
 
     let before = config_state(&env);
     accrue(&mut env).expect("accrue noop");
     let after = config_state(&env);
     assert_eq!(before.acc_sol_per_weight, after.acc_sol_per_weight);
-    assert_eq!(before.cumulative_sol_distributed, after.cumulative_sol_distributed);
+    assert_eq!(
+        before.cumulative_sol_distributed,
+        after.cumulative_sol_distributed
+    );
 }
 
 #[test]
@@ -140,14 +138,12 @@ fn b2_regression_no_active_stakers_blocks_deposit() {
     // total_weight returns to 0, deposits must reject again.
     let mut env = boot();
     let (owner, ata) = funded_owner(&mut env, MIN_LOCK_AMOUNT);
-    create_position(&mut env, &owner, &ata, 1, MIN_LOCK_AMOUNT, TIER_30D_BPS)
-        .expect("create");
+    create_position(&mut env, &owner, &ata, 1, MIN_LOCK_AMOUNT, TIER_30D_BPS).expect("create");
     deposit_sol_fees(&mut env, 100_000_000).expect("deposit while active");
     claim(&mut env, &owner, 1).expect("claim");
     advance_clock(&mut env, TIER_30D_SECS + 1);
     close_position(&mut env, &owner, &ata, 1).expect("close");
 
-    let err = deposit_sol_fees(&mut env, 50_000_000)
-        .expect_err("post-close deposit must reject");
+    let err = deposit_sol_fees(&mut env, 50_000_000).expect_err("post-close deposit must reject");
     assert_eq!(custom_error(&err), Some(E_NO_ACTIVE_STAKERS));
 }

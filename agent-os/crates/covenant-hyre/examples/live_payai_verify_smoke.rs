@@ -47,7 +47,7 @@ async fn main() {
         scheme: "exact".into(),
         extra: Some(PaymentExtra {
             fee_payer: Some(PAYAI_FEE_PAYER.into()),
-            nonce: None,
+            ..Default::default()
         }),
     };
     println!("=== input PaymentRequirements ===");

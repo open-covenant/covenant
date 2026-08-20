@@ -153,6 +153,31 @@ mod tests {
     }
 
     #[test]
+    fn marked_up_add_overflow_drops_the_tool_when_the_mul_fits() {
+        // marked_up has two overflow guards: the checked_mul of price*bps, then
+        // the checked_add of price+markup. marked_up_rejects_overflowing_markup
+        // feeds bps=5000 so price*bps overflows the FIRST guard and `?`
+        // short-circuits — the checked_add never runs, so a wrapping_add at that
+        // line stays invisible to it. bps=1 makes price*bps == price (the mul
+        // fits for any price), so the markup is price/10000 and only the
+        // checked_add can reject: u128::MAX + u128::MAX/10000 overflows. The
+        // tool must drop (None), not wrap to an absurd ~u128::MAX/10000 resale
+        // price.
+        let c = HyreConfig {
+            markup_bps: 1, // +0.01%: price*bps == price, so the mul always fits
+            ..HyreConfig::default()
+        };
+        assert_eq!(
+            c.marked_up(u128::MAX),
+            None,
+            "a price+markup add overflow must drop the tool, not wrapping_add to a garbage resale price",
+        );
+        // Sanity: at this bps a price with headroom still publishes, proving the
+        // None above is the add-overflow reject and not a blanket failure.
+        assert_eq!(c.marked_up(10_000), Some(10_001));
+    }
+
+    #[test]
     fn config_round_trips_through_serde_with_defaults() {
         let json = serde_json::json!({ "enabled": true });
         let c: HyreConfig = serde_json::from_value(json).unwrap();

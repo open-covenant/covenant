@@ -12,6 +12,11 @@ members = [
     "crates/covenant-llm",
     "crates/covenant-tools",
     "crates/covenant-identity",
+    "crates/covenant-attestation",
+    "crates/covenant-evm-signer",
+    "crates/covenant-evm-firewall",
+    "crates/covenant-spend-permission",
+    "crates/covenant-ens-gateway",
     "crates/covenant-audit",
     "crates/covenant-permissions",
     "crates/covenant-mcp",
@@ -19,10 +24,21 @@ members = [
     "crates/covenant-peer-auth",
     "crates/covenant-budget",
     "crates/covenant-x402",
+    "crates/covenant-x402-signer-evm",
     "crates/covenant-x402-facilitator",
     "crates/covenant-hyre",
     "crates/covenant-zauth",
+    "crates/covenant-circuit",
     "crates/covenant-metaplex",
+    "crates/covenant-sns",
+    "crates/covenant-acedata",
+    "crates/covenant-robinhood",
+    "crates/covenant-krexa",
+    "crates/covenant-myrad",
+    "crates/covenant-loofta",
+    "crates/covenant-timeline-adapter",
+    "crates/covenant-tee",
+    "crates/covenant-bond",
     "crates/covenant-sap-bridge",
     "crates/covenant-stake-keeper",
     "crates/covenantd",
@@ -32,12 +48,8 @@ members = [
     "agents/research",
     "programs/settlement",
     "programs/stake",
+    "programs/covenant-oracle",
 ]
-# settlement-ephemeral is the MagicBlock ER build of the settlement program. It is
-# excluded from the workspace so its ephemeral-rollups-sdk graph (which forces the
-# solana runtime crates to 2.2.20) resolves in its own lock and never perturbs the
-# litesvm 0.6 test dependencies that the rest of the workspace pins to 2.2.1.
-exclude = ["programs/settlement-ephemeral"]
 
 [workspace.package]
 edition = "2021"
@@ -69,6 +81,8 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 subtle = "2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 ed25519-dalek = "2"
+k256 = "0.13"
+sha3 = "0.10"
 rand = "0.9"
 axum = "0.7"
 tower-http = { version = "0.6", features = ["cors", "trace"] }

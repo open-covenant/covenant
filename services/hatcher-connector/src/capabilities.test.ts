@@ -86,4 +86,59 @@ describe('mapMeshGrants — Hatcher per-dispatch grants ({scope, constraints})',
     expect(grants.map((g) => g.action)).toEqual(['tool.call.summarize', 'a2a.send.PKa']);
     expect(policy.notes.some((n) => n.includes('quantum.teleport'))).toBe(true);
   });
+
+  it('fails safe: no grant for a peerless a2a or an mcp wildcard; browser routes to consent policy', () => {
+    const { grants, policy } = mapMeshGrants(
+      [
+        { scope: 'a2a.send' },
+        { scope: 'mcp.*' },
+        { scope: 'browser.open', constraints: { domains: ['docs.rs'] } },
+      ],
+      EXP,
+    );
+    expect(grants).toEqual([]);
+    expect(policy.mcpWildcard).toBe(true);
+    expect(policy.net).toEqual({ domains: ['docs.rs'] });
+  });
+
+  it('ignores malformed terminal constraint types so a bad dispatch frame cannot corrupt the exec policy', () => {
+    // constraints arrive untyped (Record<string, unknown>). A non-string
+    // approval or non-number timeout_ms must be dropped by the typeof guards,
+    // not written into the sandbox consent policy as a truthy-but-meaningless
+    // value that would weaken the approval gate or the wall-clock ceiling.
+    const { grants, policy } = mapMeshGrants(
+      [{ scope: 'terminal.exec', constraints: { approval: 123, timeout_ms: 'soon' } }],
+      EXP,
+    );
+    expect(grants).toEqual([]);
+    expect(policy.exec).toEqual({});
+  });
+
+  it('fails safe on a verbless a2a scope even when a peer is supplied', () => {
+    // 'a2a' with no verb segment (split('.')[1] is undefined) must not emit an
+    // `a2a.undefined.<peer>` grant — the verb half of the `verb && peer` guard
+    // fails closed just like the peerless half above.
+    const { grants } = mapMeshGrants([{ scope: 'a2a', constraints: { peer: 'PKa' } }], EXP);
+    expect(grants).toEqual([]);
+  });
+
+  it('drops a non-array filesystem paths constraint instead of spreading it into the sandbox allowlist', () => {
+    // A dispatch frame sending paths as a bare string (not the expected array)
+    // must fail closed to an empty fs scope; without the Array.isArray guard the
+    // string would spread character-by-character into the sandbox allowlist.
+    const { grants, policy } = mapMeshGrants([{ scope: 'filesystem.read', constraints: { paths: '/etc' } }], EXP);
+    expect(grants).toEqual([]);
+    expect(policy.fs).toEqual({ read: [], write: [] });
+  });
+
+  it('drops a non-array browser/network domains constraint instead of spreading it into the egress allowlist', () => {
+    const { policy } = mapMeshGrants([{ scope: 'browser.open', constraints: { domains: 'evil.com' } }], EXP);
+    expect(policy.net).toEqual({ domains: [] });
+  });
+
+  it('omits a non-string github repo constraint rather than binding it to the github capability scope', () => {
+    const { grants, policy } = mapMeshGrants([{ scope: 'github.read', constraints: { repo: 123 } }], EXP);
+    expect(grants).toEqual([{ action: 'tool.call.github', scope: { version: 1, tool: 'github' }, expires_at: EXP }]);
+    expect(policy.github).toEqual({ scopes: ['github.read'] });
+  });
 });

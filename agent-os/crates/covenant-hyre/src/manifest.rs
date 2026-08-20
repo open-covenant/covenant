@@ -351,6 +351,26 @@ mod tests {
     }
 
     #[test]
+    fn usd_to_micro_rejects_fractional_price_that_overflows_the_micro_add() {
+        // usd_to_micro scales whole*10^6 then ADDS the six-decimal fraction
+        // (manifest.rs:248-251), with checked_mul AND checked_add both guarding
+        // overflow. The sibling overflow tests feed u128::MAX, which fails the
+        // checked_mul and short-circuits the .and_then, so the second guard
+        // (scaled.checked_add(frac)) never runs. Pick whole = u128::MAX/10^6:
+        // the multiply fits with 211_455 of headroom, but a ".999999" fraction
+        // (999_999 > 211_455) overflows the add. The real checked_add rejects;
+        // a wrapping_add would wrap to 788_543 and sign that garbage price.
+        let whole = u128::MAX / 1_000_000;
+        let usd = format!("{whole}.999999");
+        let err = usd_to_micro(&usd).unwrap_err();
+        assert!(
+            matches!(&err, HyreError::Manifest(m) if m.contains("overflow")),
+            "a fraction that overflows the micro-USDC add must be rejected, \
+             not wrapped to a tiny garbage price: {err:?}"
+        );
+    }
+
+    #[test]
     fn parse_rejects_overflowing_priced_endpoint() {
         // A remote provider can advertise any integer price string; one large
         // enough to overflow the atomic-USDC scaling must fail the refresh
@@ -445,6 +465,55 @@ mod tests {
         assert!(p[0].required);
         assert_eq!(p[1].name, "curve_key");
         assert_eq!(p[1].location, ParamIn::Query);
+    }
+
+    #[test]
+    fn parse_merges_path_item_level_shared_parameters_into_each_operation() {
+        // OpenAPI lets a path item declare `parameters` once for every
+        // operation under it — the natural home for a path template's
+        // `{mint}`. parse() models this by seeding each operation's parameter
+        // list with the path-item-level shared params (manifest.rs:110,124)
+        // before extending with the operation's own, then re-running the
+        // Authorization strip over the merged list (manifest.rs:126). The
+        // vendored manifest declares every parameter at the operation level, so
+        // a regression that ignored the shared list, or that stripped
+        // Authorization before the merge, would pass every other test while
+        // dropping a required path argument or leaking a daemon-supplied
+        // credential slot into a generated tool's schema.
+        let mut op = priced_op("0.010000");
+        op["parameters"] = serde_json::json!([
+            { "name": "curve_key", "in": "query", "required": false, "description": "Curve" },
+        ]);
+        let item = serde_json::json!({
+            "parameters": [
+                { "name": "mint", "in": "path", "required": true, "description": "Token mint" },
+                { "name": "Authorization", "in": "query", "required": false, "description": "MPP credential" },
+            ],
+            "get": op,
+        });
+        let json = doc(serde_json::json!({ "/trenches/curve/{mint}": item }));
+
+        let eps = parse(&json).unwrap();
+        let p = &eps[0].params;
+        assert_eq!(
+            p.len(),
+            2,
+            "the shared path param and the operation's query param survive; the \
+             path-item-level Authorization credential is stripped after the merge"
+        );
+        assert_eq!(
+            p[0].name, "mint",
+            "shared params are merged ahead of the operation's own"
+        );
+        assert_eq!(p[0].location, ParamIn::Path);
+        assert!(p[0].required, "a required shared path param stays required");
+        assert_eq!(p[1].name, "curve_key");
+        assert_eq!(p[1].location, ParamIn::Query);
+        assert!(
+            !p.iter().any(|x| x.name == "Authorization"),
+            "an Authorization credential declared at the path-item level must be \
+             stripped after the merge, never surfaced as a tool argument"
+        );
     }
 
     #[test]

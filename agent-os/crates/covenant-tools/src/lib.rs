@@ -761,6 +761,20 @@ provider = "made-up"
     }
 
     #[test]
+    fn search_from_config_returns_none_when_no_search_block_configured() {
+        // Distinct from the unknown-provider None above: that arm means
+        // a provider was named but isn't recognized; this one means no
+        // [search] block exists at all, the default for a daemon that
+        // never configured web search. pick_search depends on this None
+        // to fall back to the no-op search path — an unwrap here would
+        // crash that default daemon, a default provider would silently
+        // enable search no operator asked for.
+        let cfg = SearchConfig::default();
+        assert!(cfg.search.is_none(), "default config has no [search] block");
+        assert!(search_from_config(&cfg).is_none());
+    }
+
+    #[test]
     fn search_from_config_pins_mock_and_serpapi_discriminator_mapping() {
         // search_from_config matches SearchSection.provider against
         // three exact slugs (mock, brave, serpapi) and falls through
@@ -1390,6 +1404,92 @@ api_key = "BSA-test"
             "Brave over-cap read must surface SearchError::ResponseTooLarge {{ limit: 8 }} so a \
              malicious provider cannot OOM the daemon worker; got {err:?}",
         );
+    }
+
+    #[tokio::test]
+    async fn brave_search_surfaces_non_success_status() {
+        // BraveSearch::search turns a non-200 provider response into
+        // SearchError::Status carrying the status code and response body
+        // (lib.rs:192-201). Only the variant's Display string was pinned
+        // before; this drives the production status.is_success() path so a
+        // regression that dropped the check and parsed a 4xx/5xx body as
+        // results is caught.
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(429).set_body_string("rate limited"))
+            .mount(&server)
+            .await;
+
+        let err = BraveSearch::with_limits("k", server.uri(), REQUEST_TIMEOUT, 16 * 1024)
+            .search("q", 5)
+            .await
+            .expect_err("a 429 Brave response must surface, not be parsed as hits");
+        match err {
+            SearchError::Status { status, body } => {
+                assert_eq!(status, 429, "got {status}");
+                assert!(
+                    body.contains("rate limited"),
+                    "body must carry provider text: {body}"
+                );
+            }
+            other => panic!("expected SearchError::Status, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn brave_search_surfaces_empty_results() {
+        // A 200 response with no results surfaces SearchError::Empty
+        // (lib.rs:216-218), distinct from a successful hit list, so the
+        // caller can tell a genuine empty-search apart from hits.
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"web":{"results":[]}}"#))
+            .mount(&server)
+            .await;
+
+        let err = BraveSearch::with_limits("k", server.uri(), REQUEST_TIMEOUT, 16 * 1024)
+            .search("q", 5)
+            .await
+            .expect_err("a no-results Brave response must surface Empty, not Ok([])");
+        assert!(
+            matches!(err, SearchError::Empty),
+            "expected SearchError::Empty, got {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn serpapi_search_surfaces_non_success_status() {
+        // Parity for SerpApiSearch::search (lib.rs:296-305): a non-200 must
+        // surface SearchError::Status with the code + body, mirroring Brave.
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("unauthorized"))
+            .mount(&server)
+            .await;
+
+        let err = SerpApiSearch::with_limits("k", server.uri(), REQUEST_TIMEOUT, 16 * 1024)
+            .search("q", 5)
+            .await
+            .expect_err("a 401 SerpApi response must surface, not be parsed as hits");
+        match err {
+            SearchError::Status { status, body } => {
+                assert_eq!(status, 401, "got {status}");
+                assert!(
+                    body.contains("unauthorized"),
+                    "body must carry provider text: {body}"
+                );
+            }
+            other => panic!("expected SearchError::Status, got {other:?}"),
+        }
     }
 
     #[tokio::test]

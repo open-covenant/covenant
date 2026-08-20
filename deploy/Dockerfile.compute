@@ -1,0 +1,35 @@
+FROM rust:1.96.1-slim-bookworm AS builder
+
+ENV CARGO_TERM_COLOR=always
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends build-essential ca-certificates git pkg-config \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY agent-os/ ./agent-os/
+RUN cargo build \
+    --locked \
+    --manifest-path agent-os/Cargo.toml \
+    --release \
+    --bin covenant-compute-control
+
+FROM debian:bookworm-slim AS runtime
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd --create-home --shell /usr/sbin/nologin covenant \
+ && install -d -o covenant -g covenant /data \
+ && install -d /usr/share/licenses/covenant-compute
+
+COPY --from=builder \
+  /src/agent-os/target/release/covenant-compute-control \
+  /usr/local/bin/covenant-compute-control
+COPY LICENSE /usr/share/licenses/covenant-compute/LICENSE
+COPY NOTICE.md /usr/share/licenses/covenant-compute/NOTICE
+COPY agent-os/crates/covenant-compute-vast/NOTICE \
+  /usr/share/licenses/covenant-compute/THIRD_PARTY_NOTICES
+
+USER covenant
+EXPOSE 10000
+ENTRYPOINT ["/usr/local/bin/covenant-compute-control"]

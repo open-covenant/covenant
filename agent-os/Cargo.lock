@@ -1238,6 +1238,70 @@ dependencies = [
 ]
 
 [[package]]
+name = "covenant-compute"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "covenant-compute-authority"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "thiserror 1.0.69",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "covenant-compute-control"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "covenant-compute",
+ "covenant-compute-vast",
+ "futures",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "subtle",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "covenant-compute-vast"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "url",
+ "wiremock",
+]
+
+[[package]]
 name = "covenant-ens-gateway"
 version = "0.1.0"
 dependencies = [

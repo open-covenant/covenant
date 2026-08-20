@@ -1,0 +1,9 @@
+Covenant Compute Vast adapter
+
+Portions of this software are adapted from the Prism Network lifecycle worker.
+Copyright 2026 Prism Network
+
+The upstream work is licensed under the Apache License, Version 2.0.
+This adapter contains substantial modifications, including a public integration
+API, bounded response handling, fail-closed validation, allowance enforcement,
+secret-safe errors, and lifecycle cleanup.

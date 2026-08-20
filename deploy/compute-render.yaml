@@ -1,0 +1,36 @@
+# Standalone blueprint for the private Covenant Compute control plane.
+# It is deliberately separate from the repository's connected sandbox
+# blueprint and does not auto-deploy.
+
+services:
+  - type: web
+    name: covenant-compute
+    runtime: docker
+    plan: starter
+    region: frankfurt
+    autoDeployTrigger: off
+    rootDir: .
+    dockerfilePath: ./deploy/Dockerfile.compute
+    dockerContext: .
+    healthCheckPath: /healthz
+    disk:
+      name: covenant-compute-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: COVENANT_COMPUTE_BIND
+        value: 0.0.0.0:10000
+      - key: COVENANT_COMPUTE_DATABASE_PATH
+        value: /data/compute.sqlite3
+      - key: COVENANT_COMPUTE_PROVIDER
+        value: vast
+      - key: COVENANT_COMPUTE_BETA_TOKENS_JSON
+        sync: false
+      - key: COVENANT_VAST_API_KEY
+        sync: false
+      - key: COVENANT_VAST_MAX_HOURLY_MICROS
+        value: "640000"
+      - key: COVENANT_VAST_GPU_MODELS
+        value: L40S
+      - key: COVENANT_VAST_MIN_GPU_MEMORY_MIB
+        value: "45000"

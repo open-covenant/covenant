@@ -1840,6 +1840,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "covenant-rwa-firewall"
+version = "0.1.0"
+dependencies = [
+ "covenant-evm-firewall",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+]
+
+[[package]]
 name = "covenant-sap-bridge"
 version = "0.0.0"
 dependencies = [

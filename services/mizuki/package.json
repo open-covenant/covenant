@@ -1,0 +1,31 @@
+{
+  "name": "@covenant/mizuki",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Paid autonomous maintenance agent: issue to validated PR or full USDC refund.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "mcp": "node dist/mcp.js",
+    "benchmark": "node dist/benchmark.js",
+    "job-authority-public": "node dist/job-authority-public.js",
+    "test": "vitest run src",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.26.0",
+    "@solana/kit": "5.1.0",
+    "@solana/web3.js": "1.98.4",
+    "@x402/core": "2.23.0",
+    "@x402/svm": "2.23.0",
+    "pg": "8.16.3",
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "25.6.0",
+    "@types/pg": "8.15.6",
+    "typescript": "6.0.3",
+    "vitest": "^4.1.5"
+  }
+}

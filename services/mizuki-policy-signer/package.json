@@ -1,0 +1,24 @@
+{
+  "name": "@covenant/mizuki-policy-signer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Independent transaction policy and refund signer for Mizuki.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@solana/web3.js": "1.98.4",
+    "pg": "8.16.3",
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "25.6.0",
+    "@types/pg": "8.15.5",
+    "typescript": "6.0.3",
+    "vitest": "4.1.5"
+  }
+}

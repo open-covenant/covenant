@@ -1,0 +1,34 @@
+[package]
+name = "mizuki-escrow-program"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+autotests = false
+description = "Minimal authority-resolved SOL escrow for Mizuki contributor bounties"
+
+[lib]
+crate-type = ["cdylib"]
+name = "mizuki_escrow_program"
+
+[features]
+default = []
+no-entrypoint = []
+sbf-test = []
+
+[dependencies]
+solana-program = "=3.0.0"
+solana-sha256-hasher = { version = "=3.1.0", features = ["sha2"] }
+solana-system-interface = { version = "=2.0.0", features = ["bincode"] }
+
+[dev-dependencies]
+litesvm = "=0.15.2"
+serde_json = "1"
+solana-program-runtime = "=4.1.2"
+solana-sdk = "=3.0.0"
+solana-transaction = "=4.1.6"
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
+overflow-checks = true

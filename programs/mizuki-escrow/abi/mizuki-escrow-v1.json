@@ -1,0 +1,164 @@
+{
+  "schemaVersion": 1,
+  "name": "mizukiEscrow",
+  "programId": null,
+  "programIdStrategy": "deployed-keypair-pubkey; external signer allowlists the immutable deployed program id and executable hash",
+  "byteOrder": "little-endian",
+  "bountyIdDerivation": "sha256(utf8(`mizuki:bounty:v1:${bountyId}`))",
+  "pdaSeeds": {
+    "state": ["utf8:mizuki-escrow", "authority:32", "bountyId:32"],
+    "vault": ["utf8:mizuki-vault", "statePda:32"],
+    "guard": ["utf8:mizuki-guard", "authority:32", "bountyId:32"]
+  },
+  "instructions": [
+    {
+      "name": "fund",
+      "discriminator": 0,
+      "dataLength": 84,
+      "fields": [
+        ["discriminator", "u8"],
+        ["bountyId", "bytes32"],
+        ["amountLamports", "u64"],
+        ["offerExpiresAt", "i64"],
+        ["acceptanceCommitment", "bytes32"],
+        ["stateBump", "u8"],
+        ["vaultBump", "u8"],
+        ["guardBump", "u8"]
+      ],
+      "accounts": [
+        { "name": "authority", "signer": true, "writable": true },
+        { "name": "state", "signer": false, "writable": true },
+        { "name": "vault", "signer": false, "writable": true },
+        { "name": "guard", "signer": false, "writable": true },
+        { "name": "systemProgram", "signer": false, "writable": false, "address": "11111111111111111111111111111111" },
+        { "name": "clock", "signer": false, "writable": false, "address": "SysvarC1ock11111111111111111111111111111111" },
+        { "name": "rent", "signer": false, "writable": false, "address": "SysvarRent111111111111111111111111111111111" }
+      ]
+    },
+    {
+      "name": "bind",
+      "discriminator": 1,
+      "dataLength": 105,
+      "fields": [
+        ["discriminator", "u8"],
+        ["bountyId", "bytes32"],
+        ["claimant", "pubkey32"],
+        ["claimExpiresAt", "i64"],
+        ["claimCommitment", "bytes32"]
+      ],
+      "accounts": [
+        { "name": "authority", "signer": true, "writable": false },
+        { "name": "state", "signer": false, "writable": true },
+        { "name": "guard", "signer": false, "writable": true },
+        { "name": "clock", "signer": false, "writable": false, "address": "SysvarC1ock11111111111111111111111111111111" }
+      ]
+    },
+    {
+      "name": "release",
+      "discriminator": 2,
+      "dataLength": 65,
+      "fields": [
+        ["discriminator", "u8"],
+        ["bountyId", "bytes32"],
+        ["resolutionEvidence", "bytes32"]
+      ],
+      "accounts": [
+        { "name": "authority", "signer": true, "writable": true },
+        { "name": "state", "signer": false, "writable": true },
+        { "name": "vault", "signer": false, "writable": true },
+        { "name": "guard", "signer": false, "writable": true },
+        { "name": "claimant", "signer": false, "writable": true },
+        { "name": "clock", "signer": false, "writable": false, "address": "SysvarC1ock11111111111111111111111111111111" }
+      ]
+    },
+    {
+      "name": "refund",
+      "discriminator": 3,
+      "dataLength": 65,
+      "fields": [
+        ["discriminator", "u8"],
+        ["bountyId", "bytes32"],
+        ["resolutionEvidence", "bytes32"]
+      ],
+      "accounts": [
+        { "name": "authority", "signer": true, "writable": true },
+        { "name": "state", "signer": false, "writable": true },
+        { "name": "vault", "signer": false, "writable": true },
+        { "name": "guard", "signer": false, "writable": true },
+        { "name": "clock", "signer": false, "writable": false, "address": "SysvarC1ock11111111111111111111111111111111" }
+      ]
+    }
+  ],
+  "state": {
+    "length": 236,
+    "magicHex": "4d5a4b4553433100",
+    "fields": [
+      ["magic", 0, 8], ["version", 8, 1], ["status", 9, 1],
+      ["stateBump", 10, 1], ["vaultBump", 11, 1],
+      ["authority", 12, 32], ["claimant", 44, 32], ["bountyId", 76, 32],
+      ["amountLamports", 108, 8], ["createdAt", 116, 8],
+      ["offerExpiresAt", 124, 8], ["claimExpiresAt", 132, 8],
+      ["acceptanceCommitment", 140, 32], ["claimCommitment", 172, 32],
+      ["resolutionEvidence", 204, 32]
+    ]
+  },
+  "vault": {
+    "length": 40,
+    "magicHex": "4d5a4b564c543100",
+    "fields": [["magic", 0, 8], ["statePda", 8, 32]]
+  },
+  "guard": {
+    "length": 108,
+    "magicHex": "4d5a4b4752443100",
+    "stateCommitment": "sha256(utf8(`mizuki:escrow:state:v1`) || stateBytes236)",
+    "fields": [
+      ["magic", 0, 8], ["version", 8, 1], ["status", 9, 1],
+      ["guardBump", 10, 1], ["reservedZero", 11, 1],
+      ["authority", 12, 32], ["bountyId", 44, 32], ["stateCommitment", 76, 32]
+    ]
+  },
+  "statuses": { "funded": 1, "bound": 2, "released": 3, "refunded": 4 },
+  "errors": {
+    "invalidInstruction": 0,
+    "invalidAccountCount": 1,
+    "accountNotWritable": 2,
+    "invalidSystemProgram": 3,
+    "invalidClock": 4,
+    "invalidRent": 5,
+    "invalidPda": 6,
+    "alreadyInitialized": 7,
+    "invalidState": 8,
+    "invalidAuthority": 9,
+    "invalidClaimant": 10,
+    "zeroAmount": 11,
+    "invalidExpiry": 12,
+    "invalidCommitment": 13,
+    "invalidVault": 14,
+    "insufficientVaultBalance": 15,
+    "arithmeticOverflow": 16
+  },
+  "timeBoundary": {
+    "release": "clock.unixTimestamp < claimExpiresAt",
+    "refundBound": "clock.unixTimestamp >= claimExpiresAt",
+    "refundUnbound": "clock.unixTimestamp >= offerExpiresAt"
+  },
+  "terminalBehavior": "guard becomes terminal; exact principal is paid; state and vault are closed and their rent plus vault surplus is returned to authority; guard remains permanently",
+  "goldenVectors": {
+    "fund": {
+      "inputs": { "bountyIdHex": "11x32", "amountLamportsHex": "0102030405060708", "offerExpiresAt": 1700000000, "acceptanceCommitmentHex": "aax32", "stateBump": 255, "vaultBump": 254, "guardBump": 253 },
+      "dataHex": "001111111111111111111111111111111111111111111111111111111111111111080706050403020100f1536500000000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaafffefd"
+    },
+    "bind": {
+      "inputs": { "bountyIdHex": "11x32", "claimantHex": "22x32", "claimExpiresAt": 1700003600, "claimCommitmentHex": "bbx32" },
+      "dataHex": "011111111111111111111111111111111111111111111111111111111111111111222222222222222222222222222222222222222222222222222222222222222210ff536500000000bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "release": {
+      "inputs": { "bountyIdHex": "11x32", "resolutionEvidenceHex": "ccx32" },
+      "dataHex": "021111111111111111111111111111111111111111111111111111111111111111cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    "refund": {
+      "inputs": { "bountyIdHex": "11x32", "resolutionEvidenceHex": "ddx32" },
+      "dataHex": "031111111111111111111111111111111111111111111111111111111111111111dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    }
+  }
+}

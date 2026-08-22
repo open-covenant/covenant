@@ -1,0 +1,125 @@
+import { generateKeyPairSync, sign } from 'node:crypto';
+import { getBase58Decoder } from '@solana/kit';
+import { describe, expect, it } from 'vitest';
+import { ContributorAuth } from './auth.js';
+import { MemoryStore } from './store.js';
+
+describe('ContributorAuth wallet proof', () => {
+  it('routes the OAuth callback through the web origin so the session cookie is first-party', () => {
+    const auth = new ContributorAuth(
+      {
+        publicBaseUrl: 'https://api.mizuki.example',
+        webOrigin: 'https://mizuki.example',
+        githubClientId: 'client',
+        githubClientSecret: 'secret',
+        sessionSecret: 's'.repeat(32),
+      },
+      new MemoryStore(),
+    );
+    const authorize = new URL(auth.authorizeUrl('/bounties/bounty-1'));
+    expect(authorize.searchParams.get('redirect_uri')).toBe(
+      'https://mizuki.example/api/mizuki/v1/auth/github/callback',
+    );
+  });
+
+  it('links a wallet after a valid domain-bound signature and rejects replay', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    const auth = new ContributorAuth(
+      {
+        publicBaseUrl: 'https://api.mizuki.example',
+        webOrigin: 'https://mizuki.example',
+        githubClientId: 'client',
+        githubClientSecret: 'secret',
+        sessionSecret: 's'.repeat(32),
+      },
+      store,
+    );
+    const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+    const der = publicKey.export({ format: 'der', type: 'spki' });
+    const wallet = getBase58Decoder().decode(der.subarray(der.length - 32));
+    const session = { githubId: '42', githubLogin: 'maintainer', exp: Date.now() + 60_000 };
+    const challenge = await auth.createWalletChallenge(session, wallet);
+    const signature = sign(null, Buffer.from(challenge.message), privateKey).toString('base64');
+
+    await expect(
+      auth.verifyWalletChallenge(session, challenge.id, signature),
+    ).resolves.toMatchObject({ wallet });
+    await expect(auth.verifyWalletChallenge(session, challenge.id, signature)).rejects.toThrow(
+      'already consumed',
+    );
+  });
+
+  it('does not link a wallet when the signature is invalid', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('7', 'contributor');
+    const auth = new ContributorAuth(
+      {
+        publicBaseUrl: 'https://api.mizuki.example',
+        webOrigin: 'https://mizuki.example',
+        githubClientId: 'client',
+        githubClientSecret: 'secret',
+        sessionSecret: 's'.repeat(32),
+      },
+      store,
+    );
+    const { publicKey } = generateKeyPairSync('ed25519');
+    const der = publicKey.export({ format: 'der', type: 'spki' });
+    const wallet = getBase58Decoder().decode(der.subarray(der.length - 32));
+    const session = { githubId: '7', githubLogin: 'contributor', exp: Date.now() + 60_000 };
+    const challenge = await auth.createWalletChallenge(session, wallet);
+
+    await expect(
+      auth.verifyWalletChallenge(session, challenge.id, Buffer.alloc(64).toString('base64')),
+    ).rejects.toThrow('invalid');
+    expect((await store.contributor('7'))?.wallet).toBeUndefined();
+  });
+
+  it('exchanges the OAuth token for a signer-issued identity grant without persisting it', async () => {
+    const store = new MemoryStore();
+    const accessToken = 'temporary-oauth-token';
+    const requests = async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/login/oauth/access_token')) {
+        return Response.json({ access_token: accessToken });
+      }
+      if (url === 'https://api.github.com/user') {
+        return Response.json({ id: 42, login: 'maintainer' });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    };
+    let registeredToken: string | undefined;
+    const registrar = {
+      registerGithubIdentity: async (token: string) => {
+        registeredToken = token;
+        return {
+          id: '10000000-0000-4000-8000-000000000001',
+          githubId: '42',
+          login: 'maintainer',
+          expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+        };
+      },
+    };
+    const auth = new ContributorAuth(
+      {
+        publicBaseUrl: 'https://api.mizuki.example',
+        webOrigin: 'https://mizuki.example',
+        githubClientId: 'client',
+        githubClientSecret: 'secret',
+        sessionSecret: 's'.repeat(32),
+      },
+      store,
+      requests as typeof fetch,
+      registrar,
+    );
+    const state = new URL(auth.authorizeUrl()).searchParams.get('state')!;
+    const result = await auth.callback('code', state);
+    expect(registeredToken).toBe(accessToken);
+    expect(auth.session(result.session)).toMatchObject({
+      githubId: '42',
+      githubGrantId: '10000000-0000-4000-8000-000000000001',
+    });
+    expect(JSON.stringify(await store.contributor('42'))).not.toContain(accessToken);
+    expect(result.session).not.toContain(accessToken);
+  });
+});

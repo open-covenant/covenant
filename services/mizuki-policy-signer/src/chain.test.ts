@@ -1,0 +1,606 @@
+import {
+  Keypair,
+  PublicKey,
+  SYSVAR_CLOCK_PUBKEY,
+  SYSVAR_RENT_PUBKEY,
+  SystemProgram,
+  Transaction,
+  type ParsedTransactionWithMeta,
+  type SignatureStatus,
+} from '@solana/web3.js';
+import { describe, expect, it } from 'vitest';
+import {
+  assertInstructionProgramSequence,
+  assertRpcSettlementIdentity,
+  ConsensusUsdPriceOracle,
+  consensusTransactionState,
+  HttpUsdPriceOracle,
+  immutableLoaderV3ProgramBytes,
+  loaderV3ProgramDataAddress,
+  sameSettlement,
+  SolanaChainGateway,
+  verifySettlementTransfer,
+  type SettlementTransferPolicy,
+} from './chain.js';
+import { TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from './token.js';
+
+const payer = Keypair.generate().publicKey;
+const treasury = Keypair.generate().publicKey;
+const source = Keypair.generate().publicKey;
+const destination = Keypair.generate().publicKey;
+const mint = Keypair.generate().publicKey;
+
+const policy: SettlementTransferPolicy = {
+  treasuryWallet: treasury.toBase58(),
+  treasuryTokenAccount: destination.toBase58(),
+  mint: mint.toBase58(),
+  decimals: 6,
+  tokenProgramId: TOKEN_PROGRAM_ID.toBase58(),
+};
+
+describe('parsed settlement verification', () => {
+  it('accepts one checked transfer whose amount equals the treasury net increase', () => {
+    expect(verifySettlementTransfer(transaction(), policy)).toEqual({
+      payer: payer.toBase58(),
+      rawAmount: '2000000',
+      decimals: 6,
+    });
+  });
+
+  it('rejects a parsed transfer emitted by a different token program', () => {
+    const value = transaction();
+    value.transaction.message.instructions[0] = {
+      ...(value.transaction.message.instructions[0] as object),
+      programId: TOKEN_2022_PROGRAM_ID,
+    } as never;
+    expect(() => verifySettlementTransfer(value, policy)).toThrowError(
+      expect.objectContaining({ code: 'invalid_settlement_form' }),
+    );
+  });
+
+  it('rejects multiple incoming transfer instructions even when one is valid', () => {
+    const value = transaction();
+    value.transaction.message.instructions.push(
+      structuredClone(value.transaction.message.instructions[0]) as never,
+    );
+    expect(() => verifySettlementTransfer(value, policy)).toThrowError(
+      expect.objectContaining({ code: 'invalid_settlement_form' }),
+    );
+  });
+
+  it('rejects a transfer followed by value moving back out of the treasury', () => {
+    const value = transaction();
+    value.meta!.postTokenBalances![1].uiTokenAmount.amount = '100000';
+    expect(() => verifySettlementTransfer(value, policy)).toThrowError(
+      expect.objectContaining({ code: 'settlement_value_mismatch' }),
+    );
+  });
+
+  it.each([
+    ['wrong destination owner', { owner: payer.toBase58() }],
+    ['wrong destination mint', { mint: Keypair.generate().publicKey.toBase58() }],
+    ['wrong destination decimals', { uiTokenAmount: tokenAmount('2100000', 9) }],
+  ])('rejects %s metadata', (_name, patch) => {
+    const value = transaction();
+    Object.assign(value.meta!.postTokenBalances![1], patch);
+    expect(() => verifySettlementTransfer(value, policy)).toThrowError(
+      expect.objectContaining({ code: 'token_account_not_verified' }),
+    );
+  });
+
+  it('rejects a transfer authority that is not the verified source owner', () => {
+    const value = transaction();
+    const instruction = value.transaction.message.instructions[0] as {
+      parsed: { info: { authority: string } };
+    };
+    instruction.parsed.info.authority = treasury.toBase58();
+    expect(() => verifySettlementTransfer(value, policy)).toThrowError(
+      expect.objectContaining({ code: 'payer_not_verified' }),
+    );
+  });
+
+  it('requires RPC transaction signature and finalized-status slot identity to agree', () => {
+    const value = transaction();
+    const status = {
+      slot: value.slot,
+      confirmations: null,
+      err: null,
+      confirmationStatus: 'finalized',
+    } as SignatureStatus;
+    expect(() => assertRpcSettlementIdentity(value, status, '6'.repeat(64))).not.toThrow();
+    expect(() =>
+      assertRpcSettlementIdentity(value, { ...status, slot: value.slot + 1 }, '6'.repeat(64)),
+    ).toThrowError(expect.objectContaining({ code: 'rpc_inconsistent' }));
+    expect(() => assertRpcSettlementIdentity(value, status, '7'.repeat(64))).toThrowError(
+      expect.objectContaining({ code: 'rpc_inconsistent' }),
+    );
+  });
+
+  it('requires independent providers to agree on every settlement fact', () => {
+    const facts = {
+      signature: '6'.repeat(64),
+      payer: payer.toBase58(),
+      recipient: treasury.toBase58(),
+      mint: mint.toBase58(),
+      rawAmount: '2000000',
+      decimals: 6,
+      finalized: true,
+      succeeded: true,
+      slot: 42,
+      blockTimeUnixSeconds: 1,
+    };
+    expect(sameSettlement(facts, { ...facts })).toBe(true);
+    expect(sameSettlement(facts, { ...facts, rawAmount: '2000001' })).toBe(false);
+    expect(sameSettlement(facts, { ...facts, slot: 43 })).toBe(false);
+  });
+});
+
+describe('transaction form policy', () => {
+  it('requires immutable loader-v3 program data and hashes only executable bytes', () => {
+    const programDataAddress = Keypair.generate().publicKey;
+    const program = Buffer.alloc(36);
+    program.writeUInt32LE(2, 0);
+    programDataAddress.toBuffer().copy(program, 4);
+    expect(loaderV3ProgramDataAddress(program).equals(programDataAddress)).toBe(true);
+
+    const executable = Buffer.from('approved-sbf-executable');
+    const immutable = Buffer.alloc(45 + executable.length);
+    immutable.writeUInt32LE(3, 0);
+    immutable.writeBigUInt64LE(42n, 4);
+    immutable.writeUInt8(0, 12);
+    executable.copy(immutable, 45);
+    expect(immutableLoaderV3ProgramBytes(immutable)).toEqual(executable);
+
+    const mutable = Buffer.from(immutable);
+    mutable.writeUInt8(1, 12);
+    expect(() => immutableLoaderV3ProgramBytes(mutable)).toThrowError(
+      expect.objectContaining({ code: 'escrow_program_mutable' }),
+    );
+  });
+
+  it('accepts only the exact ordered instruction sequence', () => {
+    const expected = [TOKEN_PROGRAM_ID.toBase58(), SystemProgram.programId.toBase58()];
+    expect(() => assertInstructionProgramSequence([...expected], expected)).not.toThrow();
+    expect(() =>
+      assertInstructionProgramSequence([...expected, TOKEN_PROGRAM_ID.toBase58()], expected),
+    ).toThrowError(expect.objectContaining({ code: 'transaction_form_not_allowed' }));
+    expect(() => assertInstructionProgramSequence([...expected].reverse(), expected)).toThrowError(
+      expect.objectContaining({ code: 'transaction_form_not_allowed' }),
+    );
+  });
+
+  it('refuses a built-in program as the configured escrow program', () => {
+    const refundSigner = Keypair.generate();
+    const escrowSigner = Keypair.generate();
+    expect(
+      () =>
+        new SolanaChainGateway({
+          rpcUrl: 'http://127.0.0.1:8899',
+          secondaryRpcUrl: 'http://127.0.0.1:8900',
+          refundPrivateKeyJson: JSON.stringify([...refundSigner.secretKey]),
+          escrowPrivateKeyJson: JSON.stringify([...escrowSigner.secretKey]),
+          refundTreasury: refundSigner.publicKey.toBase58(),
+          escrowAuthority: escrowSigner.publicKey.toBase58(),
+          refundMint: mint.toBase58(),
+          refundDecimals: 6,
+          refundTokenProgram: 'spl-token',
+          escrowProgramId: SystemProgram.programId.toBase58(),
+          escrowProgramDataSha256: 'a'.repeat(64),
+          solFeeReserveLamports: 1_000_000,
+        }),
+    ).toThrow('Escrow program must not be a built-in transaction program');
+  });
+
+  it('requires distinct refund and escrow authorities', () => {
+    const signer = Keypair.generate();
+    expect(
+      () =>
+        new SolanaChainGateway({
+          rpcUrl: 'http://127.0.0.1:8899',
+          secondaryRpcUrl: 'http://127.0.0.1:8900',
+          refundPrivateKeyJson: JSON.stringify([...signer.secretKey]),
+          escrowPrivateKeyJson: JSON.stringify([...signer.secretKey]),
+          refundTreasury: signer.publicKey.toBase58(),
+          escrowAuthority: signer.publicKey.toBase58(),
+          refundMint: mint.toBase58(),
+          refundDecimals: 6,
+          refundTokenProgram: 'spl-token',
+          escrowProgramId: Keypair.generate().publicKey.toBase58(),
+          escrowProgramDataSha256: 'a'.repeat(64),
+          solFeeReserveLamports: 1_000_000,
+        }),
+    ).toThrow('Refund and escrow authorities must use distinct keys');
+  });
+
+  it('encodes the fixed FUND ABI and canonical PDAs exactly', async () => {
+    const { gateway, signer, program } = escrowGateway();
+    const bountyDigest = 'b'.repeat(64);
+    const prepared = await gateway.prepare({
+      kind: 'escrow_reserve',
+      intentId: 'reserve-op',
+      bountyDigest,
+      amountLamports: '123456789',
+      expiresAtUnixSeconds: '1787428800',
+      acceptanceHash: 'c'.repeat(64),
+    });
+    const transaction = Transaction.from(Buffer.from(prepared.wireTransaction, 'base64'));
+    const instruction = transaction.instructions[0];
+    const [state, stateBump] = PublicKey.findProgramAddressSync(
+      [Buffer.from('mizuki-escrow'), signer.publicKey.toBuffer(), Buffer.from(bountyDigest, 'hex')],
+      program,
+    );
+    const [vault, vaultBump] = PublicKey.findProgramAddressSync(
+      [Buffer.from('mizuki-vault'), state.toBuffer()],
+      program,
+    );
+    const [guard, guardBump] = PublicKey.findProgramAddressSync(
+      [Buffer.from('mizuki-guard'), signer.publicKey.toBuffer(), Buffer.from(bountyDigest, 'hex')],
+      program,
+    );
+
+    expect(instruction.data).toHaveLength(84);
+    expect(instruction.data.readUInt8(0)).toBe(0);
+    expect(instruction.data.subarray(1, 33).toString('hex')).toBe(bountyDigest);
+    expect(instruction.data.readBigUInt64LE(33)).toBe(123456789n);
+    expect(instruction.data.readBigInt64LE(41)).toBe(1787428800n);
+    expect(instruction.data.subarray(49, 81).toString('hex')).toBe('c'.repeat(64));
+    expect(instruction.data.readUInt8(81)).toBe(stateBump);
+    expect(instruction.data.readUInt8(82)).toBe(vaultBump);
+    expect(instruction.data.readUInt8(83)).toBe(guardBump);
+    expect(instruction.keys.map((key) => key.pubkey.toBase58())).toEqual([
+      signer.publicKey.toBase58(),
+      state.toBase58(),
+      vault.toBase58(),
+      guard.toBase58(),
+      SystemProgram.programId.toBase58(),
+      SYSVAR_CLOCK_PUBKEY.toBase58(),
+      SYSVAR_RENT_PUBKEY.toBase58(),
+    ]);
+    expect(prepared.derived).toEqual({
+      escrowAddress: state.toBase58(),
+      vaultAddress: vault.toBase58(),
+      guardAddress: guard.toBase58(),
+      bountyDigest,
+    });
+  });
+
+  it('signs token refunds only with the distinct refund authority', async () => {
+    const { gateway, refundSigner, signer: escrowSigner } = escrowGateway();
+    const prepared = await gateway.prepare({
+      kind: 'refund',
+      intentId: 'refund-op',
+      payer: payer.toBase58(),
+      mint: mint.toBase58(),
+      rawAmount: '2000000',
+      decimals: 6,
+    });
+    const transaction = Transaction.from(Buffer.from(prepared.wireTransaction, 'base64'));
+
+    expect(transaction.feePayer?.equals(refundSigner.publicKey)).toBe(true);
+    expect(
+      transaction.signatures.some(
+        (entry) => entry.publicKey.equals(refundSigner.publicKey) && entry.signature,
+      ),
+    ).toBeTruthy();
+    expect(
+      transaction.signatures.some((entry) => entry.publicKey.equals(escrowSigner.publicKey)),
+    ).toBe(false);
+  });
+
+  it('encodes BIND with only authority, state, and clock', async () => {
+    const { gateway, signer, program } = escrowGateway();
+    const bountyDigest = 'b'.repeat(64);
+    const claimant = Keypair.generate().publicKey;
+    const prepared = await gateway.prepare({
+      kind: 'escrow_bind',
+      intentId: 'bind-op',
+      bountyDigest,
+      claimantWallet: claimant.toBase58(),
+      claimExpiresAtUnixSeconds: '1787601600',
+      bindingEvidence: 'd'.repeat(64),
+    });
+    const instruction = Transaction.from(Buffer.from(prepared.wireTransaction, 'base64'))
+      .instructions[0];
+    const [state] = PublicKey.findProgramAddressSync(
+      [Buffer.from('mizuki-escrow'), signer.publicKey.toBuffer(), Buffer.from(bountyDigest, 'hex')],
+      program,
+    );
+    const [guard] = PublicKey.findProgramAddressSync(
+      [Buffer.from('mizuki-guard'), signer.publicKey.toBuffer(), Buffer.from(bountyDigest, 'hex')],
+      program,
+    );
+
+    expect(instruction.data).toHaveLength(105);
+    expect(instruction.data.readUInt8(0)).toBe(1);
+    expect(instruction.data.subarray(1, 33).toString('hex')).toBe(bountyDigest);
+    expect(instruction.data.subarray(33, 65)).toEqual(claimant.toBuffer());
+    expect(instruction.data.readBigInt64LE(65)).toBe(1787601600n);
+    expect(instruction.data.subarray(73).toString('hex')).toBe('d'.repeat(64));
+    expect(instruction.keys.map((key) => key.pubkey.toBase58())).toEqual([
+      signer.publicKey.toBase58(),
+      state.toBase58(),
+      guard.toBase58(),
+      SYSVAR_CLOCK_PUBKEY.toBase58(),
+    ]);
+  });
+
+  it('encodes RELEASE and REFUND with no alternate program accounts', async () => {
+    const { gateway, signer, program } = escrowGateway();
+    const bountyDigest = 'b'.repeat(64);
+    const claimant = Keypair.generate().publicKey;
+    const [state] = PublicKey.findProgramAddressSync(
+      [Buffer.from('mizuki-escrow'), signer.publicKey.toBuffer(), Buffer.from(bountyDigest, 'hex')],
+      program,
+    );
+    const [vault] = PublicKey.findProgramAddressSync(
+      [Buffer.from('mizuki-vault'), state.toBuffer()],
+      program,
+    );
+    const [guard] = PublicKey.findProgramAddressSync(
+      [Buffer.from('mizuki-guard'), signer.publicKey.toBuffer(), Buffer.from(bountyDigest, 'hex')],
+      program,
+    );
+    const release = await gateway.prepare({
+      kind: 'escrow_release',
+      intentId: 'release-op',
+      bountyDigest,
+      claimantWallet: claimant.toBase58(),
+      resolutionEvidence: 'e'.repeat(64),
+    });
+    const refund = await gateway.prepare({
+      kind: 'escrow_refund',
+      intentId: 'refund-op',
+      bountyDigest,
+      resolutionEvidence: 'f'.repeat(64),
+    });
+    const releaseInstruction = Transaction.from(Buffer.from(release.wireTransaction, 'base64'))
+      .instructions[0];
+    const refundInstruction = Transaction.from(Buffer.from(refund.wireTransaction, 'base64'))
+      .instructions[0];
+
+    expect(releaseInstruction.data).toHaveLength(65);
+    expect(releaseInstruction.data.readUInt8(0)).toBe(2);
+    expect(releaseInstruction.data.subarray(33).toString('hex')).toBe('e'.repeat(64));
+    expect(releaseInstruction.keys.map((key) => key.pubkey.toBase58())).toEqual([
+      signer.publicKey.toBase58(),
+      state.toBase58(),
+      vault.toBase58(),
+      guard.toBase58(),
+      claimant.toBase58(),
+      SYSVAR_CLOCK_PUBKEY.toBase58(),
+    ]);
+    expect(refundInstruction.data).toHaveLength(65);
+    expect(refundInstruction.data.readUInt8(0)).toBe(3);
+    expect(refundInstruction.data.subarray(33).toString('hex')).toBe('f'.repeat(64));
+    expect(refundInstruction.keys.map((key) => key.pubkey.toBase58())).toEqual([
+      signer.publicKey.toBase58(),
+      state.toBase58(),
+      vault.toBase58(),
+      guard.toBase58(),
+      SYSVAR_CLOCK_PUBKEY.toBase58(),
+    ]);
+  });
+});
+
+describe('independent RPC finality', () => {
+  it('reports terminal state only when providers agree', () => {
+    expect(consensusTransactionState('finalized', 'finalized')).toBe('finalized');
+    expect(consensusTransactionState('failed', 'failed')).toBe('failed');
+    expect(consensusTransactionState('missing', 'missing')).toBe('missing');
+    expect(consensusTransactionState('finalized', 'missing')).toBe('submitted');
+    expect(consensusTransactionState('failed', 'missing')).toBe('submitted');
+  });
+
+  it('fails closed on contradictory terminal outcomes', () => {
+    expect(() => consensusTransactionState('finalized', 'failed')).toThrowError(
+      expect.objectContaining({ code: 'rpc_inconsistent' }),
+    );
+  });
+});
+
+describe('price feed policy', () => {
+  const now = new Date('2026-08-22T12:00:00.000Z').getTime();
+
+  it('accepts a fresh bounded JSON observation', async () => {
+    const oracle = priceOracle({
+      priceUsdMicros: 150_000_000,
+      observedAt: new Date(now - 1_000).toISOString(),
+    });
+    await expect(oracle.solUsd()).resolves.toMatchObject({ priceUsdMicros: 150_000_000 });
+  });
+
+  it.each([
+    ['stale', new Date(now - 60_001).toISOString(), 'price_stale'],
+    ['future', new Date(now + 5_001).toISOString(), 'price_stale'],
+  ])('rejects a %s observation', async (_name, observedAt, code) => {
+    const oracle = priceOracle({ priceUsdMicros: 150_000_000, observedAt });
+    await expect(oracle.solUsd()).rejects.toMatchObject({ code });
+  });
+
+  it('rejects an out-of-bounds observation', async () => {
+    const oracle = priceOracle({
+      priceUsdMicros: 999_999,
+      observedAt: new Date(now).toISOString(),
+    });
+    await expect(oracle.solUsd()).rejects.toMatchObject({ code: 'price_out_of_bounds' });
+  });
+
+  it('rejects oversized and non-JSON responses', async () => {
+    const oversized = priceOracle('x'.repeat(2_049));
+    const invalid = priceOracle('not-json');
+    await expect(oversized.solUsd()).rejects.toMatchObject({ code: 'price_invalid' });
+    await expect(invalid.solUsd()).rejects.toMatchObject({ code: 'price_invalid' });
+  });
+
+  function priceOracle(body: object | string): HttpUsdPriceOracle {
+    const fetcher = (async () =>
+      new Response(typeof body === 'string' ? body : JSON.stringify(body), {
+        headers: { 'content-type': 'application/json' },
+      })) as typeof fetch;
+    return new HttpUsdPriceOracle(
+      'https://price.internal',
+      'test-price-token',
+      1_000_000,
+      1_000_000_000,
+      fetcher,
+      () => now,
+    );
+  }
+
+  it('requires bounded agreement and uses the lower independent observation', async () => {
+    const primaryObservedAt = new Date(now - 1_000);
+    const secondaryObservedAt = new Date(now - 2_000);
+    const oracle = new ConsensusUsdPriceOracle(
+      {
+        solUsd: async () => ({ priceUsdMicros: 150_000_000, observedAt: primaryObservedAt }),
+      },
+      {
+        solUsd: async () => ({ priceUsdMicros: 147_000_000, observedAt: secondaryObservedAt }),
+      },
+      500,
+    );
+
+    await expect(oracle.solUsd()).resolves.toEqual({
+      priceUsdMicros: 147_000_000,
+      observedAt: secondaryObservedAt,
+      observations: [
+        {
+          feed: 'primary',
+          priceUsdMicros: 150_000_000,
+          observedAt: primaryObservedAt,
+        },
+        {
+          feed: 'secondary',
+          priceUsdMicros: 147_000_000,
+          observedAt: secondaryObservedAt,
+        },
+      ],
+    });
+  });
+
+  it('fails closed when independent observations diverge', async () => {
+    const observedAt = new Date(now);
+    const oracle = new ConsensusUsdPriceOracle(
+      { solUsd: async () => ({ priceUsdMicros: 150_000_000, observedAt }) },
+      { solUsd: async () => ({ priceUsdMicros: 140_000_000, observedAt }) },
+      500,
+    );
+
+    await expect(oracle.solUsd()).rejects.toMatchObject({ code: 'price_inconsistent' });
+  });
+});
+
+function transaction(): ParsedTransactionWithMeta {
+  const signature = '6'.repeat(64);
+  return {
+    slot: 42,
+    blockTime: 1,
+    version: 'legacy',
+    transaction: {
+      signatures: [signature],
+      message: {
+        accountKeys: [
+          account(payer, true, true),
+          account(source, false, true),
+          account(destination, false, true),
+          account(mint, false, false),
+        ],
+        instructions: [
+          {
+            program: 'spl-token',
+            programId: TOKEN_PROGRAM_ID,
+            parsed: {
+              type: 'transferChecked',
+              info: {
+                source: source.toBase58(),
+                destination: destination.toBase58(),
+                mint: mint.toBase58(),
+                authority: payer.toBase58(),
+                tokenAmount: tokenAmount('2000000', 6),
+              },
+            },
+          },
+        ],
+        recentBlockhash: '7'.repeat(32),
+      },
+    },
+    meta: {
+      err: null,
+      fee: 5_000,
+      preBalances: [1, 1, 1, 1],
+      postBalances: [1, 1, 1, 1],
+      innerInstructions: [],
+      logMessages: [],
+      preTokenBalances: [balance(1, mint, payer, '5000000'), balance(2, mint, treasury, '100000')],
+      postTokenBalances: [
+        balance(1, mint, payer, '3000000'),
+        balance(2, mint, treasury, '2100000'),
+      ],
+      rewards: [],
+      status: { Ok: null },
+    },
+  } as unknown as ParsedTransactionWithMeta;
+}
+
+function escrowGateway(): {
+  gateway: SolanaChainGateway;
+  signer: Keypair;
+  refundSigner: Keypair;
+  program: PublicKey;
+} {
+  const signer = Keypair.generate();
+  const refundSigner = Keypair.generate();
+  const program = Keypair.generate().publicKey;
+  const gateway = new SolanaChainGateway({
+    rpcUrl: 'http://127.0.0.1:8899',
+    secondaryRpcUrl: 'http://127.0.0.1:8900',
+    refundPrivateKeyJson: JSON.stringify([...refundSigner.secretKey]),
+    escrowPrivateKeyJson: JSON.stringify([...signer.secretKey]),
+    refundTreasury: refundSigner.publicKey.toBase58(),
+    escrowAuthority: signer.publicKey.toBase58(),
+    refundMint: mint.toBase58(),
+    refundDecimals: 6,
+    refundTokenProgram: 'spl-token',
+    escrowProgramId: program.toBase58(),
+    escrowProgramDataSha256: 'a'.repeat(64),
+    solFeeReserveLamports: 1_000_000,
+  });
+  const internals = gateway as unknown as {
+    verifyEscrowProgram: () => Promise<void>;
+    connection: {
+      getLatestBlockhash: () => Promise<{ blockhash: string; lastValidBlockHeight: number }>;
+    };
+  };
+  internals.verifyEscrowProgram = async () => undefined;
+  gateway.capacity = async () => ({
+    refundRawAmount: '1000000000',
+    escrowLamports: '100000000000',
+    stateRentLamports: '2000000',
+    vaultRentLamports: '1000000',
+    guardRentLamports: '1500000',
+  });
+  gateway.refundCapacity = async () => '1000000000';
+  internals.connection.getLatestBlockhash = async () => ({
+    blockhash: Keypair.generate().publicKey.toBase58(),
+    lastValidBlockHeight: 100,
+  });
+  return { gateway, signer, refundSigner, program };
+}
+
+function account(pubkey: PublicKey, signer: boolean, writable: boolean) {
+  return { pubkey, signer, writable, source: 'transaction' as const };
+}
+
+function balance(accountIndex: number, tokenMint: PublicKey, owner: PublicKey, amount: string) {
+  return {
+    accountIndex,
+    mint: tokenMint.toBase58(),
+    owner: owner.toBase58(),
+    uiTokenAmount: tokenAmount(amount, 6),
+    programId: TOKEN_PROGRAM_ID.toBase58(),
+  };
+}
+
+function tokenAmount(amount: string, decimals: number) {
+  return { amount, decimals, uiAmount: Number(amount) / 10 ** decimals, uiAmountString: amount };
+}

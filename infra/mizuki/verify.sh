@@ -1,0 +1,220 @@
+#!/bin/sh
+set -eu
+
+root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+cd "$root"
+
+ruby <<'RUBY'
+require 'yaml'
+require 'uri'
+
+blueprint = YAML.safe_load(File.read('infra/mizuki/render.yaml'), [], [], false)
+YAML.safe_load(File.read('.github/workflows/mizuki.yml'), [], [], false)
+services = blueprint.fetch('services')
+databases = blueprint.fetch('databases')
+expected = {
+  'mizuki-api' => ['web', '/readyz'],
+  'mizuki-policy-signer' => ['pserv', nil],
+  'mizuki-coding-gateway' => ['pserv', nil],
+  'mizuki' => ['web', '/'],
+  'mizuki-updater' => ['pserv', nil]
+}
+database_names = %w[mizuki-postgres mizuki-signer-postgres mizuki-updater-postgres]
+
+abort 'service set mismatch' unless services.map { |service| service.fetch('name') }.sort == expected.keys.sort
+abort 'database set mismatch' unless databases.map { |database| database.fetch('name') }.sort == database_names.sort
+
+services.each do |service|
+  type, health = expected.fetch(service.fetch('name'))
+  abort "wrong service type: #{service['name']}" unless service['type'] == type
+  abort "wrong runtime: #{service['name']}" unless service['runtime'] == 'node'
+  abort "non-durable service plan: #{service['name']}" if service['plan'] == 'free'
+  abort "service must be single-instance: #{service['name']}" unless service['numInstances'] == 1
+  abort "automatic deploy enabled: #{service['name']}" unless service['autoDeploy'] == false
+  abort "health check mismatch: #{service['name']}" if health && service['healthCheckPath'] != health
+  abort "private service has a public health check: #{service['name']}" if !health && service.key?('healthCheckPath')
+
+  keys = service.fetch('envVars').map { |item| item.fetch('key') }
+  abort "duplicate environment key: #{service['name']}" unless keys.uniq.size == keys.size
+  service.fetch('envVars').each do |item|
+    sources = %w[value sync generateValue fromDatabase fromService].count { |key| item.key?(key) }
+    abort "invalid environment source: #{service['name']}/#{item['key']}" unless sources == 1
+    next unless item['fromDatabase']
+
+    name = item['fromDatabase']['name']
+    abort "unknown database reference: #{service['name']}/#{item['key']}" unless database_names.include?(name)
+  end
+end
+
+databases.each do |database|
+  abort "non-durable database plan: #{database['name']}" if database['plan'] == 'free'
+  abort "database disk too small: #{database['name']}" unless database['diskSizeGB'].to_i >= 5
+  abort "database autoscaling disabled: #{database['name']}" unless database['storageAutoscalingEnabled'] == true
+  abort "database exposes an IP allowlist: #{database['name']}" unless database['ipAllowList'] == []
+  abort "database must use direct connections: #{database['name']}" unless database['connectionPool'] == 'none'
+end
+
+env = services.to_h do |service|
+  [service.fetch('name'), service.fetch('envVars').to_h { |item| [item.fetch('key'), item] }]
+end
+
+api = env.fetch('mizuki-api')
+signer = env.fetch('mizuki-policy-signer')
+gateway = env.fetch('mizuki-coding-gateway')
+web = env.fetch('mizuki')
+updater = env.fetch('mizuki-updater')
+
+def service_ref(item, name, key = nil)
+  ref = item.fetch('fromService')
+  ref['name'] == name && (key.nil? || ref['envVarKey'] == key)
+end
+
+abort 'API signer URL is not private service discovery' unless service_ref(api.fetch('MIZUKI_POLICY_SIGNER_URL'), 'mizuki-policy-signer')
+abort 'API signer token is not linked to signer' unless service_ref(api.fetch('MIZUKI_POLICY_SIGNER_TOKEN'), 'mizuki-policy-signer', 'MIZUKI_SIGNER_AUTH_TOKEN')
+abort 'API gateway URL is not private service discovery' unless service_ref(api.fetch('MIZUKI_CODING_GATEWAY_URL'), 'mizuki-coding-gateway')
+abort 'API gateway token is not linked to gateway' unless service_ref(api.fetch('MIZUKI_CODING_GATEWAY_TOKEN'), 'mizuki-coding-gateway', 'CODER_AUTH_TOKEN')
+abort 'API updater URL is not private service discovery' unless service_ref(api.fetch('MIZUKI_UPDATER_URL'), 'mizuki-updater')
+abort 'API updater token is not read-only' unless service_ref(api.fetch('MIZUKI_UPDATER_TOKEN'), 'mizuki-updater', 'MIZUKI_UPDATER_READ_TOKEN')
+abort 'API payment recipient is not the signer refund treasury' unless service_ref(api.fetch('MIZUKI_PAY_TO'), 'mizuki-policy-signer', 'MIZUKI_REFUND_TREASURY')
+abort 'ClawPump payout is not linked to the isolated escrow authority' unless service_ref(api.fetch('CLAWPUMP_PAYOUT_WALLET'), 'mizuki-policy-signer', 'MIZUKI_ESCROW_AUTHORITY')
+abort 'API refund authority seed is not secret' unless api.fetch('MIZUKI_JOB_AUTHORITY_SEED')['sync'] == false
+abort 'API x402 facilitator is not pinned to HTTPS' unless URI(api.fetch('MIZUKI_X402_FACILITATOR')['value']).scheme == 'https'
+abort 'API trusted proxy hop count drift' unless api.fetch('MIZUKI_TRUSTED_PROXY_HOPS')['value'] == '1'
+abort 'API rate-limit source capacity drift' unless api.fetch('MIZUKI_RATE_LIMIT_MAX_SOURCES')['value'] == '10000'
+abort 'API SSE global cap drift' unless api.fetch('MIZUKI_SSE_MAX_CONNECTIONS')['value'] == '100'
+abort 'API SSE source cap drift' unless api.fetch('MIZUKI_SSE_MAX_CONNECTIONS_PER_SOURCE')['value'] == '3'
+abort 'API SSE idle timeout drift' unless api.fetch('MIZUKI_SSE_IDLE_TIMEOUT_MS')['value'] == '120000'
+abort 'API readiness refresh drift' unless api.fetch('MIZUKI_READINESS_REFRESH_MS')['value'] == '30000'
+abort 'API readiness max age drift' unless api.fetch('MIZUKI_READINESS_MAX_AGE_MS')['value'] == '90000'
+abort 'API readiness timeout drift' unless api.fetch('MIZUKI_READINESS_TIMEOUT_MS')['value'] == '20000'
+abort 'API escrow readiness floor drift' unless api.fetch('MIZUKI_ESCROW_READINESS_MIN_LAMPORTS')['value'] == '1000000000'
+abort 'stale API x402 fee payer setting present' if api.key?('MIZUKI_X402_FEE_PAYER')
+abort 'web Solana RPC is not operator-pinned' unless web.fetch('NEXT_PUBLIC_SOLANA_RPC_URL')['sync'] == false
+
+abort 'signer auth token is not generated' unless signer.fetch('MIZUKI_SIGNER_AUTH_TOKEN')['generateValue'] == true
+abort 'refund key is not secret' unless signer.fetch('MIZUKI_REFUND_PRIVATE_KEY_JSON')['sync'] == false
+abort 'escrow key is not secret' unless signer.fetch('MIZUKI_ESCROW_PRIVATE_KEY_JSON')['sync'] == false
+abort 'escrow authority is not operator-pinned' unless signer.fetch('MIZUKI_ESCROW_AUTHORITY')['sync'] == false
+abort 'job authority public key is not operator-pinned' unless signer.fetch('MIZUKI_JOB_AUTHORITY_PUBLIC_KEY')['sync'] == false
+abort 'primary RPC is not operator-pinned' unless signer.fetch('MIZUKI_SIGNER_RPC_URL')['sync'] == false
+abort 'secondary RPC is not operator-pinned' unless signer.fetch('MIZUKI_SIGNER_SECONDARY_RPC_URL')['sync'] == false
+abort 'primary price URL is not operator-pinned' unless signer.fetch('MIZUKI_SOL_USD_PRICE_URL')['sync'] == false
+abort 'primary price token is not secret' unless signer.fetch('MIZUKI_SOL_USD_PRICE_TOKEN')['sync'] == false
+abort 'secondary price URL is not operator-pinned' unless signer.fetch('MIZUKI_SOL_USD_SECONDARY_PRICE_URL')['sync'] == false
+abort 'secondary price token is not secret' unless signer.fetch('MIZUKI_SOL_USD_SECONDARY_PRICE_TOKEN')['sync'] == false
+abort 'price divergence limit drift' unless signer.fetch('MIZUKI_SOL_USD_MAX_DIVERGENCE_BPS')['value'] == '500'
+abort 'signer mock mode enabled' unless signer.fetch('MIZUKI_SIGNER_MOCK_MODE')['value'] == 'false'
+abort 'wrong operation limit' unless signer.fetch('MIZUKI_OPERATION_LIMIT_USD_CENTS')['value'] == '2500'
+abort 'wrong refund limit' unless signer.fetch('MIZUKI_REFUND_DAILY_LIMIT_USD_CENTS')['value'] == '10000'
+abort 'wrong escrow limit' unless signer.fetch('MIZUKI_ESCROW_DAILY_LIMIT_USD_CENTS')['value'] == '10000'
+abort 'refund authorization TTL drift' unless signer.fetch('MIZUKI_REFUND_AUTH_MAX_TTL_SECONDS')['value'] == '900'
+abort 'liability registration window drift' unless signer.fetch('MIZUKI_REFUND_LIABILITY_MAX_AGE_SECONDS')['value'] == '86400'
+abort 'signer database not isolated' unless signer.fetch('MIZUKI_SIGNER_DATABASE_URL').dig('fromDatabase', 'name') == 'mizuki-signer-postgres'
+abort 'updater database not isolated' unless updater.fetch('MIZUKI_UPDATER_DATABASE_URL').dig('fromDatabase', 'name') == 'mizuki-updater-postgres'
+abort 'updater read and write tokens are not distinct settings' unless updater.key?('MIZUKI_UPDATER_READ_TOKEN') && updater.key?('MIZUKI_UPDATER_AUTH_TOKEN')
+abort 'updater production health endpoint missing' unless updater.fetch('MIZUKI_UPDATER_PROMOTION_HEALTH_URL_TEMPLATE')['sync'] == false
+abort 'updater promotion soak drift' unless updater.fetch('MIZUKI_UPDATER_PROMOTION_SOAK_MS')['value'] == '120000'
+abort 'updater promotion timeout drift' unless updater.fetch('MIZUKI_UPDATER_PROMOTION_TIMEOUT_MS')['value'] == '600000'
+
+disk = services.find { |service| service['name'] == 'mizuki-coding-gateway' }.fetch('disk')
+abort 'gateway disk is not mounted at /var/data' unless disk['mountPath'] == '/var/data' && disk['sizeGB'].to_i >= 1
+abort 'gateway is not pinned to UsePod' unless gateway.fetch('CODER_BACKEND')['value'] == 'usepod'
+abort 'gateway has an ambiguous legacy route setting' if gateway.key?('USEPOD_MODEL')
+abort 'gateway auth token is not generated' unless gateway.fetch('CODER_AUTH_TOKEN')['generateValue'] == true
+abort 'gateway spend ledger is not persistent' unless gateway.fetch('LEDGER_PATH')['value'].start_with?('/var/data/')
+abort 'gateway run store is not persistent' unless gateway.fetch('RUN_STORE_PATH')['value'].start_with?('/var/data/')
+abort 'gateway readiness refresh drift' unless gateway.fetch('CODER_READINESS_REFRESH_MS')['value'] == '120000'
+abort 'gateway readiness max age drift' unless gateway.fetch('CODER_READINESS_MAX_AGE_MS')['value'] == '300000'
+abort 'gateway readiness timeout drift' unless gateway.fetch('CODER_READINESS_TIMEOUT_MS')['value'] == '20000'
+
+puts 'Blueprint invariants OK'
+RUBY
+
+jq -e '
+  .mcpServers["clawpump-agents"].command == "npx" and
+  .mcpServers["clawpump-agents"].args == ["@clawpump/agents"] and
+  (.mcpServers["clawpump-agents"].env.CLAWPUMP_API_KEY | startswith("cpk_replace"))
+' services/mizuki/clawpump/mcp.json.example >/dev/null
+
+scope='.github/workflows/mizuki.yml apps/mizuki-web services/mizuki services/mizuki-policy-signer services/mizuki-updater services/coding-gateway infra/mizuki programs/mizuki-escrow docs/production-audit-mizuki.md'
+blocked=$(printf '\153\141\155\151\171\157')
+if rg --hidden -i -l --glob '!verify.sh' --glob '!node_modules/**' --glob '!dist/**' --glob '!.next/**' --glob '!target/**' "$blocked" $scope >/dev/null; then
+  echo 'Blocked legacy term found' >&2
+  exit 1
+fi
+
+if rg --hidden -i -n --glob '!verify.sh' --glob '!node_modules/**' --glob '!dist/**' --glob '!.next/**' --glob '!target/**' '\b(she|her|hers)\b' $scope; then
+  echo 'Incorrect gendered language found' >&2
+  exit 1
+fi
+
+identity_matches=$(rg --hidden -n --glob '!verify.sh' --glob '!node_modules/**' --glob '!dist/**' --glob '!.next/**' --glob '!target/**' '/Users/|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' $scope || true)
+identity_matches=$(printf '%s\n' "$identity_matches" | rg -v 'example\.com|users\.noreply\.github\.com|pnpm-lock\.yaml' || true)
+if [ -n "$identity_matches" ]; then
+  printf '%s\n' "$identity_matches" >&2
+  echo 'Identity-sensitive content found' >&2
+  exit 1
+fi
+
+pnpm exec prettier --ignore-path .gitignore --check \
+  '.github/workflows/mizuki.yml' \
+  'apps/mizuki-web/**/*.{ts,tsx,js,mjs,json,css,md}' \
+  '!apps/mizuki-web/next-env.d.ts' \
+  'infra/mizuki/**/*.{yaml,md}' \
+  'services/mizuki/**/*.{ts,json,md}' \
+  'services/mizuki-policy-signer/**/*.{ts,json,md}' \
+  'services/mizuki-updater/**/*.{ts,json,md}' \
+  'services/coding-gateway/src/backends/{index,usepod}.ts' \
+  'services/coding-gateway/src/{config,readiness,repository-artifacts,run-store,server,types}.ts' \
+  'services/coding-gateway/test/{config,readiness,repository-artifacts,run-store,server-readiness,usepod-backend}.test.ts' \
+  services/coding-gateway/package.json package.json pnpm-workspace.yaml
+
+audit_json=$(mktemp)
+trap 'rm -f "$audit_json"' EXIT
+pnpm audit --prod --json >"$audit_json" || true
+ruby -rjson - "$audit_json" <<'RUBY'
+data = JSON.parse(File.read(ARGV.fetch(0)))
+prefixes = %w[
+  apps__mizuki-web
+  services__mizuki
+  services__mizuki-policy-signer
+  services__mizuki-updater
+  services__coding-gateway
+]
+blocked = data.fetch('advisories', {}).values.each_with_object([]) do |advisory, matches|
+  next unless %w[moderate high critical].include?(advisory['severity'])
+
+  paths = advisory.fetch('findings', []).flat_map { |finding| finding.fetch('paths', []) }
+  scoped = paths.select do |path|
+    prefixes.any? { |prefix| path == prefix || path.start_with?("#{prefix}>") }
+  end
+  next if scoped.empty?
+
+  matches << "#{advisory['severity']}: #{advisory['module_name']} (#{scoped.join(', ')})"
+end
+unless blocked.empty?
+  warn blocked.join("\n")
+  abort 'Mizuki production dependency audit failed'
+end
+puts 'Mizuki production dependency audit OK'
+RUBY
+
+pnpm --filter @covenant/mizuki typecheck
+pnpm --filter @covenant/mizuki test
+pnpm --filter @covenant/mizuki build
+pnpm --filter @covenant/mizuki-policy-signer typecheck
+pnpm --filter @covenant/mizuki-policy-signer test
+pnpm --filter @covenant/mizuki-policy-signer build
+pnpm --filter @covenant/mizuki-updater typecheck
+pnpm --filter @covenant/mizuki-updater test
+pnpm --filter @covenant/mizuki-updater build
+pnpm --filter @covenant/coding-gateway build
+pnpm --filter @covenant/coding-gateway test
+pnpm --filter @mizuki/web typecheck
+pnpm --filter @mizuki/web test
+pnpm --filter @mizuki/web build
+if [ "${MIZUKI_SKIP_ESCROW:-0}" != '1' ]; then
+  programs/mizuki-escrow/scripts/test.sh
+fi
+
+echo 'Mizuki launch artifacts OK'

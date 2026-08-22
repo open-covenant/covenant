@@ -1,10 +1,5 @@
-import { Sandbox, ALL_TRAFFIC, type SandboxOpts } from "e2b";
-import type {
-  Sandbox as ISandbox,
-  SandboxProvider,
-  SandboxSpec,
-  ExecResult,
-} from "../types.js";
+import { Sandbox, ALL_TRAFFIC, type SandboxOpts } from 'e2b';
+import type { Sandbox as ISandbox, SandboxProvider, SandboxSpec, ExecResult } from '../types.js';
 
 // E2B's commands.run defaults to a 60s command timeout — far too short for a
 // cold `npm install` / `next build`, which get killed mid-flight and make the
@@ -17,12 +12,9 @@ const DEFAULT_CMD_TIMEOUT_MS = 300_000;
  * and from other runs. This is the real boundary that lets untrusted code run
  * without endangering covenant's infra.
  *
- * Residual hardening (follow-on within WS2, before fully-public launch):
- * - Egress allowlist: the base SDK gives the microVM open internet. Restricting
- *   outbound to `spec.egressAllowlist` requires a custom E2B template with
- *   firewall rules; until then a run can reach arbitrary hosts.
- * - Resource caps (cpu/memory/disk): template-level, not per-create in the base
- *   SDK. `spec` carries them for when a hardened template is wired.
+ * Outbound traffic is denied by default when E2B_EGRESS_ALLOW is configured;
+ * only the operator-pinned package and source hosts are reachable. CPU, memory,
+ * and disk limits remain template-level controls in the E2B SDK.
  * `timeoutMs` is honored now as a teardown backstop — the microVM self-kills at
  * the wall-clock budget even if destroy() is never reached.
  */
@@ -46,8 +38,8 @@ class E2bSandbox implements ISandbox {
     } catch (e) {
       // e2b throws on non-zero exit; surface the result fields rather than throw.
       const err = e as { stdout?: string; stderr?: string; exitCode?: number };
-      if (typeof err.exitCode === "number") {
-        return { stdout: err.stdout ?? "", stderr: err.stderr ?? "", exitCode: err.exitCode };
+      if (typeof err.exitCode === 'number') {
+        return { stdout: err.stdout ?? '', stderr: err.stderr ?? '', exitCode: err.exitCode };
       }
       throw e;
     }
@@ -63,7 +55,7 @@ class E2bSandbox implements ISandbox {
 }
 
 export class E2bSandboxProvider implements SandboxProvider {
-  readonly id = "e2b";
+  readonly id = 'e2b';
 
   constructor(private readonly apiKey: string) {}
 
@@ -78,15 +70,13 @@ export class E2bSandboxProvider implements SandboxProvider {
     // run can't be used to attack or spam arbitrary hosts. Unset = open (dev).
     // Domain matching is HTTP:80 / TLS:443 only — package registries are HTTPS,
     // so it covers npm/pip/git without breaking installs (verify before trusting).
-    const allow = process.env.E2B_EGRESS_ALLOW?.split(",")
+    const allow = process.env.E2B_EGRESS_ALLOW?.split(',')
       .map((s) => s.trim())
       .filter(Boolean);
     if (allow && allow.length > 0) {
       opts.network = { denyOut: [ALL_TRAFFIC], allowOut: allow };
     }
-    const sbx = template
-      ? await Sandbox.create(template, opts)
-      : await Sandbox.create(opts);
+    const sbx = template ? await Sandbox.create(template, opts) : await Sandbox.create(opts);
     return new E2bSandbox(sbx);
   }
 }

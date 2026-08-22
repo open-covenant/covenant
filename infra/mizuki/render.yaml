@@ -1,0 +1,438 @@
+services:
+  - type: web
+    name: mizuki-api
+    runtime: node
+    plan: starter
+    region: frankfurt
+    numInstances: 1
+    autoDeploy: false
+    maxShutdownDelaySeconds: 120
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @covenant/mizuki build
+    startCommand: pnpm --filter @covenant/mizuki start
+    healthCheckPath: /readyz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MIZUKI_HOST
+        value: 0.0.0.0
+      - key: MIZUKI_PORT
+        value: 10000
+      - key: MIZUKI_PUBLIC_BASE_URL
+        value: https://mizuki-api.onrender.com
+      - key: MIZUKI_WEB_ORIGIN
+        value: https://mizuki.onrender.com
+      - key: MIZUKI_TRUSTED_PROXY_HOPS
+        value: '1'
+      - key: MIZUKI_RATE_LIMIT_MAX_SOURCES
+        value: '10000'
+      - key: MIZUKI_SSE_MAX_CONNECTIONS
+        value: '100'
+      - key: MIZUKI_SSE_MAX_CONNECTIONS_PER_SOURCE
+        value: '3'
+      - key: MIZUKI_SSE_IDLE_TIMEOUT_MS
+        value: '120000'
+      - key: MIZUKI_READINESS_REFRESH_MS
+        value: '30000'
+      - key: MIZUKI_READINESS_MAX_AGE_MS
+        value: '90000'
+      - key: MIZUKI_READINESS_TIMEOUT_MS
+        value: '20000'
+      - key: MIZUKI_ESCROW_READINESS_MIN_LAMPORTS
+        value: '1000000000'
+      - key: MIZUKI_DATABASE_URL
+        fromDatabase:
+          name: mizuki-postgres
+          property: connectionString
+      - key: MIZUKI_ADMIN_TOKEN
+        generateValue: true
+      - key: MIZUKI_INTERNAL_REPOS
+        value: open-covenant/covenant
+      - key: MIZUKI_CODING_GATEWAY_URL
+        fromService:
+          type: pserv
+          name: mizuki-coding-gateway
+          property: hostport
+      - key: MIZUKI_CODING_GATEWAY_TOKEN
+        fromService:
+          type: pserv
+          name: mizuki-coding-gateway
+          envVarKey: CODER_AUTH_TOKEN
+      - key: USEPOD_API_KEY
+        sync: false
+      - key: USEPOD_BASE_URL
+        value: https://api.usepod.ai/v1
+      - key: USEPOD_MODEL
+        sync: false
+      - key: USEPOD_REVIEW_MODEL
+        sync: false
+      - key: USEPOD_INPUT_USD_PER_MILLION
+        value: '0.2'
+      - key: USEPOD_OUTPUT_USD_PER_MILLION
+        value: '0.4'
+      - key: MIZUKI_PAYMENT_MODE
+        value: live
+      - key: MIZUKI_PAY_TO
+        fromService:
+          type: pserv
+          name: mizuki-policy-signer
+          envVarKey: MIZUKI_REFUND_TREASURY
+      - key: MIZUKI_X402_FACILITATOR
+        value: https://facilitator.payai.network
+      - key: MIZUKI_POLICY_SIGNER_URL
+        fromService:
+          type: pserv
+          name: mizuki-policy-signer
+          property: hostport
+      - key: MIZUKI_POLICY_SIGNER_TOKEN
+        fromService:
+          type: pserv
+          name: mizuki-policy-signer
+          envVarKey: MIZUKI_SIGNER_AUTH_TOKEN
+      - key: MIZUKI_JOB_AUTHORITY_SEED
+        sync: false
+      - key: MIZUKI_UPDATER_URL
+        fromService:
+          type: pserv
+          name: mizuki-updater
+          property: hostport
+      - key: MIZUKI_UPDATER_TOKEN
+        fromService:
+          type: pserv
+          name: mizuki-updater
+          envVarKey: MIZUKI_UPDATER_READ_TOKEN
+      - key: MIZUKI_UPDATER_TIMEOUT_MS
+        value: '8000'
+      - key: MIZUKI_UPDATER_POLL_INTERVAL_MS
+        value: '60000'
+      - key: MIZUKI_GITHUB_APP_ID
+        sync: false
+      - key: MIZUKI_GITHUB_PRIVATE_KEY
+        sync: false
+      - key: MIZUKI_GITHUB_CLIENT_ID
+        sync: false
+      - key: MIZUKI_GITHUB_CLIENT_SECRET
+        sync: false
+      - key: MIZUKI_GITHUB_WEBHOOK_SECRET
+        sync: false
+      - key: MIZUKI_GITHUB_AUTHORIZATION_LABEL
+        value: mizuki:authorized
+      - key: MIZUKI_SESSION_SECRET
+        generateValue: true
+      - key: MIZUKI_REQUIRE_GITHUB_APP
+        value: '1'
+      - key: MIZUKI_TOKEN_MINT
+        sync: false
+      - key: CLAWPUMP_BASE_URL
+        value: https://clawpump.tech
+      - key: CLAWPUMP_API_KEY
+        sync: false
+      - key: CLAWPUMP_AGENT_ID
+        sync: false
+      - key: CLAWPUMP_PAYOUT_WALLET
+        fromService:
+          type: pserv
+          name: mizuki-policy-signer
+          envVarKey: MIZUKI_ESCROW_AUTHORITY
+
+  - type: pserv
+    name: mizuki-policy-signer
+    runtime: node
+    plan: starter
+    region: frankfurt
+    numInstances: 1
+    autoDeploy: false
+    maxShutdownDelaySeconds: 120
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @covenant/mizuki-policy-signer build
+    startCommand: pnpm --filter @covenant/mizuki-policy-signer start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MIZUKI_SIGNER_HOST
+        value: 0.0.0.0
+      - key: MIZUKI_SIGNER_PORT
+        value: 8792
+      - key: MIZUKI_SIGNER_AUTH_TOKEN
+        generateValue: true
+      - key: MIZUKI_SIGNER_DATABASE_URL
+        fromDatabase:
+          name: mizuki-signer-postgres
+          property: connectionString
+      - key: MIZUKI_SIGNER_RPC_URL
+        sync: false
+      - key: MIZUKI_SIGNER_SECONDARY_RPC_URL
+        sync: false
+      - key: MIZUKI_REFUND_PRIVATE_KEY_JSON
+        sync: false
+      - key: MIZUKI_ESCROW_PRIVATE_KEY_JSON
+        sync: false
+      - key: MIZUKI_SIGNER_GITHUB_TOKEN
+        sync: false
+      - key: MIZUKI_JOB_AUTHORITY_PUBLIC_KEY
+        sync: false
+      - key: MIZUKI_REFUND_TREASURY
+        sync: false
+      - key: MIZUKI_ESCROW_AUTHORITY
+        sync: false
+      - key: MIZUKI_REFUND_MINT
+        value: EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
+      - key: MIZUKI_REFUND_DECIMALS
+        value: '6'
+      - key: MIZUKI_REFUND_TOKEN_PROGRAM
+        value: spl-token
+      - key: MIZUKI_ESCROW_PROGRAM_ID
+        sync: false
+      - key: MIZUKI_ESCROW_PROGRAM_DATA_SHA256
+        sync: false
+      - key: MIZUKI_SOL_USD_PRICE_URL
+        sync: false
+      - key: MIZUKI_SOL_USD_PRICE_TOKEN
+        sync: false
+      - key: MIZUKI_SOL_USD_SECONDARY_PRICE_URL
+        sync: false
+      - key: MIZUKI_SOL_USD_SECONDARY_PRICE_TOKEN
+        sync: false
+      - key: MIZUKI_SOL_USD_MAX_DIVERGENCE_BPS
+        value: '500'
+      - key: MIZUKI_SOL_USD_MIN_MICROS
+        value: '1000000'
+      - key: MIZUKI_SOL_USD_MAX_MICROS
+        value: '1000000000'
+      - key: MIZUKI_OPERATION_LIMIT_USD_CENTS
+        value: '2500'
+      - key: MIZUKI_REFUND_DAILY_LIMIT_USD_CENTS
+        value: '10000'
+      - key: MIZUKI_REFUND_AUTH_MAX_TTL_SECONDS
+        value: '900'
+      - key: MIZUKI_REFUND_LIABILITY_MAX_AGE_SECONDS
+        value: '86400'
+      - key: MIZUKI_ESCROW_DAILY_LIMIT_USD_CENTS
+        value: '10000'
+      - key: MIZUKI_MAX_ESCROW_LAMPORTS
+        value: '1000000000'
+      - key: MIZUKI_SOL_FEE_RESERVE_LAMPORTS
+        value: '1000000'
+      - key: MIZUKI_BIND_CHALLENGE_TTL_SECONDS
+        value: '600'
+      - key: MIZUKI_GITHUB_GRANT_TTL_SECONDS
+        value: '600'
+      - key: MIZUKI_CLAIM_TTL_SECONDS
+        value: '172800'
+      - key: MIZUKI_SIGNER_MOCK_MODE
+        value: 'false'
+
+  - type: pserv
+    name: mizuki-coding-gateway
+    runtime: node
+    plan: starter
+    region: frankfurt
+    numInstances: 1
+    autoDeploy: false
+    maxShutdownDelaySeconds: 120
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @covenant/coding-gateway build
+    startCommand: pnpm --filter @covenant/coding-gateway start
+    disk:
+      name: mizuki-coding-gateway-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 8642
+      - key: CODER_AUTH_TOKEN
+        generateValue: true
+      - key: CODER_BACKEND
+        value: usepod
+      - key: CODER_MODEL
+        sync: false
+      - key: CODER_EFFORT
+        value: low
+      - key: USEPOD_API_KEY
+        sync: false
+      - key: USEPOD_BASE_URL
+        value: https://api.usepod.ai/v1
+      - key: USEPOD_INPUT_USD_PER_MILLION
+        value: '0.2'
+      - key: USEPOD_OUTPUT_USD_PER_MILLION
+        value: '0.4'
+      - key: E2B_API_KEY
+        sync: false
+      - key: E2B_EGRESS_ALLOW
+        value: github.com,codeload.github.com,objects.githubusercontent.com,registry.npmjs.org,registry.yarnpkg.com,pypi.org,files.pythonhosted.org,crates.io,static.crates.io
+      - key: CODER_DAILY_USD
+        value: '25'
+      - key: CODER_MONTHLY_USD
+        value: '500'
+      - key: CODER_PER_RUN_USD_MAX
+        value: '4'
+      - key: CODER_MAX_CONCURRENT
+        value: '2'
+      - key: CODER_WALL_MS
+        value: '600000'
+      - key: CODER_READINESS_REFRESH_MS
+        value: '120000'
+      - key: CODER_READINESS_MAX_AGE_MS
+        value: '300000'
+      - key: CODER_READINESS_TIMEOUT_MS
+        value: '20000'
+      - key: CODER_IP_MAX_PER_IP
+        value: '0'
+      - key: TRUSTED_PROXY_HOPS
+        value: '0'
+      - key: LEDGER_PATH
+        value: /var/data/spend-ledger.json
+      - key: RUN_STORE_PATH
+        value: /var/data/runs.json
+
+  - type: web
+    name: mizuki
+    runtime: node
+    plan: starter
+    region: frankfurt
+    numInstances: 1
+    autoDeploy: false
+    maxShutdownDelaySeconds: 60
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @mizuki/web build
+    startCommand: pnpm --filter @mizuki/web start
+    healthCheckPath: /
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MIZUKI_API_URL
+        value: https://mizuki-api.onrender.com
+      - key: MIZUKI_DEMO_MODE
+        value: '0'
+      - key: MIZUKI_WEB_HOST
+        value: 0.0.0.0
+      - key: NEXT_PUBLIC_MIZUKI_APP_URL
+        value: https://mizuki.onrender.com
+      - key: NEXT_PUBLIC_MIZUKI_GITHUB_OAUTH_URL
+        value: /api/mizuki/v1/auth/github
+      - key: NEXT_PUBLIC_MIZUKI_TOKEN_URL
+        sync: false
+      - key: NEXT_PUBLIC_SOLANA_NETWORK
+        value: solana
+      - key: NEXT_PUBLIC_SOLANA_RPC_URL
+        sync: false
+      - key: NEXT_PUBLIC_SOLANA_EXPLORER_URL
+        value: https://solscan.io
+
+  - type: pserv
+    name: mizuki-updater
+    runtime: node
+    plan: starter
+    region: frankfurt
+    numInstances: 1
+    autoDeploy: false
+    maxShutdownDelaySeconds: 120
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @covenant/mizuki-updater build
+    startCommand: pnpm --filter @covenant/mizuki-updater start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MIZUKI_UPDATER_HOST
+        value: 0.0.0.0
+      - key: MIZUKI_UPDATER_PORT
+        value: 8793
+      - key: MIZUKI_UPDATER_AUTH_TOKEN
+        generateValue: true
+      - key: MIZUKI_UPDATER_READ_TOKEN
+        generateValue: true
+      - key: MIZUKI_UPDATER_DATABASE_URL
+        fromDatabase:
+          name: mizuki-updater-postgres
+          property: connectionString
+      - key: MIZUKI_UPDATER_MEMORY_STORE
+        value: 'false'
+      - key: MIZUKI_UPDATER_PROPOSAL_KEYS_JSON
+        sync: false
+      - key: MIZUKI_UPDATER_BENCHMARK_KEYS_JSON
+        sync: false
+      - key: MIZUKI_UPDATER_REVIEW_KEYS_JSON
+        sync: false
+      - key: MIZUKI_UPDATER_ALLOWED_REPOSITORIES
+        value: open-covenant/covenant
+      - key: MIZUKI_UPDATER_ALLOWED_BASE_BRANCHES
+        value: main
+      - key: MIZUKI_UPDATER_HEAD_BRANCH_PREFIX
+        value: mizuki/capability/
+      - key: MIZUKI_UPDATER_MANDATORY_CHECKS
+        value: test,typecheck
+      - key: MIZUKI_UPDATER_PROPOSAL_MAX_AGE_MS
+        value: '604800000'
+      - key: MIZUKI_UPDATER_ARTIFACT_ORIGINS
+        value: https://github.com,https://objects.githubusercontent.com
+      - key: MIZUKI_UPDATER_ARTIFACT_TIMEOUT_MS
+        value: '30000'
+      - key: MIZUKI_UPDATER_ARTIFACT_MAX_BYTES
+        value: '26214400'
+      - key: MIZUKI_UPDATER_GITHUB_API_URL
+        value: https://api.github.com
+      - key: MIZUKI_UPDATER_GITHUB_APP_ID
+        sync: false
+      - key: MIZUKI_UPDATER_GITHUB_PRIVATE_KEY
+        sync: false
+      - key: MIZUKI_UPDATER_GITHUB_TIMEOUT_MS
+        value: '20000'
+      - key: MIZUKI_UPDATER_GITHUB_MERGE_METHOD
+        value: squash
+      - key: MIZUKI_UPDATER_SHADOW_HOOK_URL
+        sync: false
+      - key: MIZUKI_UPDATER_SHADOW_HEALTH_URL_TEMPLATE
+        sync: false
+      - key: MIZUKI_UPDATER_PROMOTE_HOOK_URL
+        sync: false
+      - key: MIZUKI_UPDATER_PROMOTION_HEALTH_URL_TEMPLATE
+        sync: false
+      - key: MIZUKI_UPDATER_ROLLBACK_HOOK_URL
+        sync: false
+      - key: MIZUKI_UPDATER_DEPLOY_HOOK_TOKEN
+        sync: false
+      - key: MIZUKI_UPDATER_HOOK_TIMEOUT_MS
+        value: '20000'
+      - key: MIZUKI_UPDATER_CHECK_TIMEOUT_MS
+        value: '1800000'
+      - key: MIZUKI_UPDATER_HEALTH_TIMEOUT_MS
+        value: '600000'
+      - key: MIZUKI_UPDATER_PROMOTION_SOAK_MS
+        value: '120000'
+      - key: MIZUKI_UPDATER_PROMOTION_TIMEOUT_MS
+        value: '600000'
+      - key: MIZUKI_UPDATER_POLL_INTERVAL_MS
+        value: '5000'
+      - key: MIZUKI_UPDATER_LEASE_MS
+        value: '60000'
+      - key: MIZUKI_UPDATER_MAX_ATTEMPTS
+        value: '5'
+
+databases:
+  - name: mizuki-postgres
+    databaseName: mizuki
+    user: mizuki
+    plan: basic-256mb
+    diskSizeGB: 5
+    storageAutoscalingEnabled: true
+    connectionPool: none
+    region: frankfurt
+    postgresMajorVersion: '16'
+    ipAllowList: []
+  - name: mizuki-signer-postgres
+    databaseName: mizuki_signer
+    user: mizuki_signer
+    plan: basic-256mb
+    diskSizeGB: 5
+    storageAutoscalingEnabled: true
+    connectionPool: none
+    region: frankfurt
+    postgresMajorVersion: '16'
+    ipAllowList: []
+  - name: mizuki-updater-postgres
+    databaseName: mizuki_updater
+    user: mizuki_updater
+    plan: basic-256mb
+    diskSizeGB: 5
+    storageAutoscalingEnabled: true
+    connectionPool: none
+    region: frankfurt
+    postgresMajorVersion: '16'
+    ipAllowList: []

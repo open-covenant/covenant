@@ -7,15 +7,17 @@
  * file + bash tools bound to that sandbox, and maps backend events onto the
  * Hermes SSE frames the daemon folds into its audit chain.
  *
- * Slices: coder-04 (gateway core + Anthropic backend), coder-05 (OpenAI
- * backend), coder-06/07 (SandboxProvider). No live model calls live here.
  */
 
-// ── Hermes /v1 wire contract (consumed by covenantd HermesRunner) ──────────
+// Hermes /v1 wire contract consumed by covenantd.
 
 export interface RunRequest {
   input: string;
   session_id?: string;
+  repository_url?: string;
+  base_sha?: string;
+  validation_commands?: string[];
+  initial_patch?: string;
 }
 
 export interface RunCreated {
@@ -23,18 +25,20 @@ export interface RunCreated {
 }
 
 export type RunStatus =
-  | "queued"
-  | "running"
-  | "waiting_for_approval"
-  | "stopping"
-  | "completed"
-  | "failed"
-  | "cancelled";
+  | 'queued'
+  | 'running'
+  | 'waiting_for_approval'
+  | 'stopping'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
 
 export interface RunState {
   status: RunStatus;
   output?: string;
   error?: string;
+  usage?: TokenUsage;
+  costUsd?: number;
 }
 
 /** GET /v1/capabilities — the three features the daemon gates on plus the
@@ -48,24 +52,38 @@ export interface GatewayCapabilities {
   };
 }
 
-// ── SSE events on GET /v1/runs/{id}/events ─────────────────────────────────
+// SSE events exposed by GET /v1/runs/{id}/events.
 // covenantd maps tool.* and approval.* into RuntimeTrace audit rows;
 // message/reasoning/file are for the live UI (WS3) and ignored by the tracer.
 
 export type GatewayEvent =
-  | { type: "tool.started"; tool: string; preview?: string }
-  | { type: "tool.completed"; tool: string; duration_s?: number; error?: boolean }
-  | { type: "file.written"; path: string; bytes: number }
-  | { type: "message.delta"; text: string }
-  | { type: "reasoning.available"; text: string }
-  | { type: "approval.request"; choices: string[] }
-  | { type: "run.completed"; output: string }
-  | { type: "run.failed"; error: string };
+  | { type: 'tool.started'; tool: string; preview?: string }
+  | { type: 'tool.completed'; tool: string; duration_s?: number; error?: boolean }
+  | { type: 'file.written'; path: string; bytes: number }
+  | { type: 'message.delta'; text: string }
+  | { type: 'reasoning.available'; text: string }
+  | { type: 'approval.request'; choices: string[] }
+  | { type: 'run.completed'; output: string }
+  | { type: 'run.failed'; error: string };
 
-// ── Pluggable coding backend (the "brain") ─────────────────────────────────
+// Pluggable coding backend.
 // Anthropic and OpenAI adapters implement this; selected per run.
 
-export type BackendId = "anthropic" | "openai";
+export type BackendId = 'anthropic' | 'openai' | 'usepod';
+
+export interface ValidationResult {
+  command: string;
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
+
+export interface RunArtifacts {
+  patch: string;
+  changedFiles: string[];
+  files: Array<{ path: string; content: string }>;
+  validations: ValidationResult[];
+}
 
 export interface TokenUsage {
   inputTokens: number;
@@ -84,7 +102,7 @@ export interface CodingBackend {
   }): Promise<{ output: string; usage: TokenUsage }>;
 }
 
-// ── Pluggable execution substrate (the security boundary) ──────────────────
+// Pluggable execution substrate. This is the untrusted-code security boundary.
 // E2B / Daytona / Modal adapter implements this.
 
 export interface SandboxProvider {

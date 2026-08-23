@@ -6,6 +6,7 @@
     "dev": "next dev --turbopack -p 3012",
     "build": "next build && node scripts/prepare-standalone.mjs",
     "start": "PORT=${PORT:-3012} HOSTNAME=${MIZUKI_WEB_HOST:-0.0.0.0} node .next/standalone/apps/mizuki-web/server.js",
+    "smoke": "node scripts/smoke-start.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

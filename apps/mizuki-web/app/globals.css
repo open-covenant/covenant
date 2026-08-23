@@ -1461,43 +1461,9 @@ textarea:focus-visible {
   line-height: 1.5;
 }
 
-.page-loading,
 .fatal-state {
   min-height: 70vh;
   padding-block: 120px;
-}
-
-.loading-line {
-  width: min(720px, 100%);
-  height: 24px;
-  margin: 16px 0;
-  border-radius: 5px;
-  background: linear-gradient(90deg, #15191f, #20262d, #15191f);
-  background-size: 200% 100%;
-  animation: shimmer 1.6s infinite linear;
-}
-
-.loading-short {
-  width: 130px;
-  height: 12px;
-}
-
-.loading-title {
-  width: min(900px, 90%);
-  height: 80px;
-}
-
-.loading-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 15px;
-  margin-top: 70px;
-}
-
-.loading-grid div {
-  height: 230px;
-  border-radius: 10px;
-  background: #11151a;
 }
 
 .fatal-state h1 {
@@ -3088,12 +3054,6 @@ textarea:focus-visible {
   color: var(--aqua);
 }
 
-@keyframes shimmer {
-  to {
-    background-position: -200% 0;
-  }
-}
-
 @media (max-width: 1020px) {
   .site-nav {
     display: none;
@@ -3407,8 +3367,7 @@ textarea:focus-visible {
     max-width: none;
   }
 
-  .footer-grid,
-  .loading-grid {
+  .footer-grid {
     grid-template-columns: 1fr;
   }
 

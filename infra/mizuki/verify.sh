@@ -231,6 +231,7 @@ pnpm --filter @covenant/coding-gateway test
 pnpm --filter @mizuki/web typecheck
 pnpm --filter @mizuki/web test
 pnpm --filter @mizuki/web build
+pnpm --filter @mizuki/web smoke
 if [ "${MIZUKI_SKIP_ESCROW:-0}" != '1' ]; then
   programs/mizuki-escrow/scripts/test.sh
 fi

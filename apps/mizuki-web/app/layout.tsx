@@ -17,12 +17,26 @@ export const metadata: Metadata = {
     title: 'Mizuki — maintenance that improves itself',
     description:
       'Validated pull request or every cent back. Failed work becomes a public paid rescue bounty.',
+    images: [
+      {
+        url: '/mizuki-avatar.jpg',
+        width: 400,
+        height: 400,
+        alt: 'Mizuki',
+      },
+    ],
   },
   twitter: {
     card: 'summary',
     title: 'Mizuki — maintenance that improves itself',
     description:
       'Validated pull request or every cent back. Failed work becomes a public paid rescue bounty.',
+    images: ['/mizuki-avatar.jpg'],
+  },
+  icons: {
+    icon: [{ url: '/mizuki-icon-64.png', type: 'image/png', sizes: '64x64' }],
+    shortcut: '/mizuki-icon-64.png',
+    apple: [{ url: '/mizuki-icon-180.png', type: 'image/png', sizes: '180x180' }],
   },
 };
 

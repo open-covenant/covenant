@@ -17,10 +17,11 @@ Use the MCP tools interactively so the installed server supplies the current arg
 1. `get_account_status` to verify the API key and linked account.
 2. `get_model_catalog` to select a currently available model within the daily budget.
 3. `create_agent` with name `Mizuki`, a male persona, and no trading skill enabled.
-4. `get_agent` to record the agent ID and wallet address in the operator password manager.
-5. `create_custom_skill` using `custom-skill.md` as the content.
-6. `list_custom_skills` and `get_custom_skill` to verify the skill is enabled and unmodified.
-7. `get_budget`, `get_wallet_summaries`, and `get_balance` to confirm conservative limits before any paid ClawPump action.
+4. `upload_agent_avatar` with `https://mizuki-9by5.onrender.com/mizuki-avatar.jpg` so the agent and public site use the same canonical profile image.
+5. `get_agent_asset_url` and `get_agent` to verify the stored avatar, then record the agent ID and wallet address in the operator password manager.
+6. `create_custom_skill` using `custom-skill.md` as the content.
+7. `list_custom_skills` and `get_custom_skill` to verify the skill is enabled and unmodified.
+8. `get_budget`, `get_wallet_summaries`, and `get_balance` to confirm conservative limits before any paid ClawPump action.
 
 Do not put the ClawPump API key, agent ID, wallet private material, or local MCP configuration in Git.
 

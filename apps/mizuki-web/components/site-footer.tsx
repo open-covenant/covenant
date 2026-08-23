@@ -1,3 +1,4 @@
+import Image from 'next/image';
 import Link from 'next/link';
 
 export function SiteFooter() {
@@ -7,7 +8,7 @@ export function SiteFooter() {
         <div>
           <div className="brand footer-brand">
             <span className="brand-mark" aria-hidden="true">
-              M
+              <Image src="/mizuki-avatar.jpg" alt="" width={32} height={32} />
             </span>
             <span>Mizuki</span>
           </div>

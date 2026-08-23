@@ -23,7 +23,7 @@ use solana_program::{
     account_info::AccountInfo,
     clock::Clock,
     entrypoint::ProgramResult,
-    program::invoke_signed,
+    program::{invoke, invoke_signed},
     program_error::ProgramError,
     pubkey::Pubkey,
     rent::Rent,
@@ -109,9 +109,9 @@ fn process_fund(program_id: &Pubkey, accounts: &[AccountInfo], args: FundArgs) -
     if guard.key != &expected_guard || args.guard_bump != guard_bump {
         return Err(EscrowError::InvalidPda.into());
     }
-    require_vacant(state)?;
-    require_vacant(vault)?;
-    require_vacant(guard)?;
+    require_available_pda(state)?;
+    require_available_pda(vault)?;
+    require_available_pda(guard)?;
 
     let rent = Rent::from_account_info(rent_account)?;
     let state_rent = rent.minimum_balance(STATE_LEN);
@@ -127,30 +127,26 @@ fn process_fund(program_id: &Pubkey, accounts: &[AccountInfo], args: FundArgs) -
         &args.bounty_id,
         &state_bump_seed,
     ];
-    invoke_signed(
-        &system_instruction::create_account(
-            authority.key,
-            state.key,
-            state_rent,
-            STATE_LEN as u64,
-            program_id,
-        ),
-        &[authority.clone(), state.clone(), system.clone()],
-        &[state_seeds],
+    create_pda_account(
+        authority,
+        state,
+        system,
+        state_rent,
+        STATE_LEN,
+        program_id,
+        state_seeds,
     )?;
 
     let vault_bump_seed = [vault_bump];
     let vault_seeds: &[&[u8]] = &[VAULT_SEED, state.key.as_ref(), &vault_bump_seed];
-    invoke_signed(
-        &system_instruction::create_account(
-            authority.key,
-            vault.key,
-            vault_lamports,
-            VAULT_LEN as u64,
-            program_id,
-        ),
-        &[authority.clone(), vault.clone(), system.clone()],
-        &[vault_seeds],
+    create_pda_account(
+        authority,
+        vault,
+        system,
+        vault_lamports,
+        VAULT_LEN,
+        program_id,
+        vault_seeds,
     )?;
 
     let guard_bump_seed = [guard_bump];
@@ -160,16 +156,14 @@ fn process_fund(program_id: &Pubkey, accounts: &[AccountInfo], args: FundArgs) -
         &args.bounty_id,
         &guard_bump_seed,
     ];
-    invoke_signed(
-        &system_instruction::create_account(
-            authority.key,
-            guard.key,
-            guard_rent,
-            GUARD_LEN as u64,
-            program_id,
-        ),
-        &[authority.clone(), guard.clone(), system.clone()],
-        &[guard_seeds],
+    create_pda_account(
+        authority,
+        guard,
+        system,
+        guard_rent,
+        GUARD_LEN,
+        program_id,
+        guard_seeds,
     )?;
 
     let escrow = EscrowState {
@@ -471,8 +465,50 @@ fn require_wallet(account: &AccountInfo) -> ProgramResult {
     Ok(())
 }
 
-fn require_vacant(account: &AccountInfo) -> ProgramResult {
-    if account.owner != &system_program::ID || account.lamports() != 0 || !account.data_is_empty() {
+fn create_pda_account<'a>(
+    authority: &AccountInfo<'a>,
+    account: &AccountInfo<'a>,
+    system: &AccountInfo<'a>,
+    required_lamports: u64,
+    space: usize,
+    owner: &Pubkey,
+    signer_seeds: &[&[u8]],
+) -> ProgramResult {
+    if account.lamports() == 0 {
+        return invoke_signed(
+            &system_instruction::create_account(
+                authority.key,
+                account.key,
+                required_lamports,
+                space as u64,
+                owner,
+            ),
+            &[authority.clone(), account.clone(), system.clone()],
+            &[signer_seeds],
+        );
+    }
+
+    let top_up = required_lamports.saturating_sub(account.lamports());
+    if top_up > 0 {
+        invoke(
+            &system_instruction::transfer(authority.key, account.key, top_up),
+            &[authority.clone(), account.clone(), system.clone()],
+        )?;
+    }
+    invoke_signed(
+        &system_instruction::allocate(account.key, space as u64),
+        &[account.clone(), system.clone()],
+        &[signer_seeds],
+    )?;
+    invoke_signed(
+        &system_instruction::assign(account.key, owner),
+        &[account.clone(), system.clone()],
+        &[signer_seeds],
+    )
+}
+
+fn require_available_pda(account: &AccountInfo) -> ProgramResult {
+    if account.owner != &system_program::ID || !account.data_is_empty() {
         return Err(EscrowError::AlreadyInitialized.into());
     }
     Ok(())

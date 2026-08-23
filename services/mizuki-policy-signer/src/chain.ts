@@ -1056,16 +1056,42 @@ const priceResponseSchema = z
     observedAt: z.string().datetime({ offset: true }),
   })
   .strict();
+const coinbaseTickerSchema = z
+  .object({
+    price: z.string().regex(/^(?:0|[1-9]\d*)(?:\.\d+)?$/),
+    time: z.string().datetime({ offset: true }),
+  })
+  .passthrough();
+const coinGeckoSimplePriceSchema = z
+  .object({
+    solana: z
+      .object({
+        usd: z.number().positive().finite(),
+        last_updated_at: z.number().int().positive(),
+      })
+      .passthrough(),
+  })
+  .passthrough();
+
+type PriceResponseFormat = 'canonical' | 'coinbase_ticker' | 'coingecko_simple';
 
 export class HttpUsdPriceOracle implements UsdPriceOracle {
+  private readonly responseFormat: PriceResponseFormat;
+
   constructor(
     private readonly url: string,
     private readonly token: string | undefined,
     private readonly minPrice: number,
     private readonly maxPrice: number,
+    private readonly maxAgeMs = 300_000,
     private readonly fetcher: typeof fetch = fetch,
     private readonly now: () => number = Date.now,
-  ) {}
+  ) {
+    if (!Number.isInteger(maxAgeMs) || maxAgeMs < 60_000 || maxAgeMs > 300_000) {
+      throw new RangeError('Price maximum age must be between 60000 and 300000 milliseconds');
+    }
+    this.responseFormat = priceResponseFormat(url);
+  }
 
   async solUsd(): Promise<UsdPrice> {
     let response: Response;
@@ -1073,6 +1099,7 @@ export class HttpUsdPriceOracle implements UsdPriceOracle {
       response = await this.fetcher(this.url, {
         headers: {
           accept: 'application/json',
+          ...(this.responseFormat === 'coinbase_ticker' ? { 'cache-control': 'no-cache' } : {}),
           ...(this.token ? { authorization: `Bearer ${this.token}` } : {}),
         },
         redirect: 'error',
@@ -1091,12 +1118,12 @@ export class HttpUsdPriceOracle implements UsdPriceOracle {
         true,
       );
     }
-    const parsed = priceResponseSchema.safeParse(await readLimitedJson(response, 2_048));
-    if (!parsed.success)
+    const parsed = parsePriceResponse(await readLimitedJson(response, 2_048), this.responseFormat);
+    if (!parsed)
       throw new PolicyError('price_invalid', 'Price service returned invalid data', 503, true);
-    const observedAt = new Date(parsed.data.observedAt);
+    const observedAt = parsed.observedAt;
     const age = this.now() - observedAt.getTime();
-    if (age < -5_000 || age > 60_000) {
+    if (age < -5_000 || age > this.maxAgeMs) {
       throw new PolicyError(
         'price_stale',
         'Price observation is outside the allowed window',
@@ -1104,7 +1131,7 @@ export class HttpUsdPriceOracle implements UsdPriceOracle {
         true,
       );
     }
-    if (parsed.data.priceUsdMicros < this.minPrice || parsed.data.priceUsdMicros > this.maxPrice) {
+    if (parsed.priceUsdMicros < this.minPrice || parsed.priceUsdMicros > this.maxPrice) {
       throw new PolicyError(
         'price_out_of_bounds',
         'Price observation is outside safety bounds',
@@ -1112,8 +1139,71 @@ export class HttpUsdPriceOracle implements UsdPriceOracle {
         true,
       );
     }
-    return { priceUsdMicros: parsed.data.priceUsdMicros, observedAt };
+    return { priceUsdMicros: parsed.priceUsdMicros, observedAt };
   }
+}
+
+function priceResponseFormat(value: string): PriceResponseFormat {
+  const url = new URL(value);
+  if (
+    url.hostname.toLowerCase() === 'api.exchange.coinbase.com' &&
+    url.pathname === '/products/SOL-USD/ticker'
+  ) {
+    return 'coinbase_ticker';
+  }
+  if (
+    url.hostname.toLowerCase() === 'api.coingecko.com' &&
+    url.pathname === '/api/v3/simple/price'
+  ) {
+    return 'coingecko_simple';
+  }
+  return 'canonical';
+}
+
+function parsePriceResponse(
+  body: unknown,
+  format: PriceResponseFormat,
+): { priceUsdMicros: number; observedAt: Date } | null {
+  if (format === 'canonical') {
+    const parsed = priceResponseSchema.safeParse(body);
+    return parsed.success
+      ? {
+          priceUsdMicros: parsed.data.priceUsdMicros,
+          observedAt: new Date(parsed.data.observedAt),
+        }
+      : null;
+  }
+  if (format === 'coinbase_ticker') {
+    const parsed = coinbaseTickerSchema.safeParse(body);
+    if (!parsed.success) return null;
+    const priceUsdMicros = decimalUsdMicros(parsed.data.price);
+    return priceUsdMicros === null
+      ? null
+      : { priceUsdMicros, observedAt: new Date(parsed.data.time) };
+  }
+
+  const parsed = coinGeckoSimplePriceSchema.safeParse(body);
+  if (!parsed.success) return null;
+  const priceUsdMicros = Math.floor(parsed.data.solana.usd * 1_000_000);
+  const observedAt = new Date(parsed.data.solana.last_updated_at * 1_000);
+  if (!Number.isSafeInteger(priceUsdMicros) || priceUsdMicros <= 0 || !validDate(observedAt)) {
+    return null;
+  }
+  return { priceUsdMicros, observedAt };
+}
+
+function decimalUsdMicros(value: string): number | null {
+  const match = value.match(/^(0|[1-9]\d*)(?:\.(\d+))?$/);
+  if (!match) return null;
+  const whole = BigInt(match[1]);
+  const fraction = (match[2] ?? '').padEnd(6, '0').slice(0, 6);
+  const micros = whole * 1_000_000n + BigInt(fraction || '0');
+  if (micros <= 0n || micros > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+  return Number(micros);
+}
+
+function validDate(value: Date): boolean {
+  return Number.isFinite(value.getTime());
 }
 
 export class ConsensusUsdPriceOracle implements UsdPriceOracle {

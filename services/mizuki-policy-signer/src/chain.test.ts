@@ -478,8 +478,72 @@ describe('price feed policy', () => {
     await expect(oracle.solUsd()).resolves.toMatchObject({ priceUsdMicros: 150_000_000 });
   });
 
+  it('accepts the official Coinbase Exchange ticker response', async () => {
+    const oracle = priceOracle(
+      {
+        trade_id: 42,
+        price: '150.12345678',
+        size: '1.0',
+        time: new Date(now - 1_000).toISOString(),
+        bid: '150.12',
+        ask: '150.13',
+        volume: '1000',
+      },
+      'https://api.exchange.coinbase.com/products/SOL-USD/ticker',
+    );
+    await expect(oracle.solUsd()).resolves.toEqual({
+      priceUsdMicros: 150_123_456,
+      observedAt: new Date(now - 1_000),
+    });
+  });
+
+  it('accepts the official CoinGecko simple-price response', async () => {
+    const oracle = priceOracle(
+      {
+        solana: {
+          usd: 149.9876549,
+          last_updated_at: Math.floor((now - 2_000) / 1_000),
+        },
+      },
+      'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd&include_last_updated_at=true&precision=6',
+    );
+    await expect(oracle.solUsd()).resolves.toEqual({
+      priceUsdMicros: 149_987_654,
+      observedAt: new Date(now - 2_000),
+    });
+  });
+
   it.each([
-    ['stale', new Date(now - 60_001).toISOString(), 'price_stale'],
+    [
+      'Coinbase malformed price',
+      'https://api.exchange.coinbase.com/products/SOL-USD/ticker',
+      { price: 150, time: new Date(now).toISOString() },
+      'price_invalid',
+    ],
+    [
+      'Coinbase stale time',
+      'https://api.exchange.coinbase.com/products/SOL-USD/ticker',
+      { price: '150.00', time: new Date(now - 300_001).toISOString() },
+      'price_stale',
+    ],
+    [
+      'CoinGecko missing timestamp',
+      'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd&include_last_updated_at=true',
+      { solana: { usd: 150 } },
+      'price_invalid',
+    ],
+    [
+      'CoinGecko stale timestamp',
+      'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd&include_last_updated_at=true',
+      { solana: { usd: 150, last_updated_at: Math.floor((now - 301_000) / 1_000) } },
+      'price_stale',
+    ],
+  ])('rejects a %s response', async (_name, url, body, code) => {
+    await expect(priceOracle(body, url).solUsd()).rejects.toMatchObject({ code });
+  });
+
+  it.each([
+    ['stale', new Date(now - 300_001).toISOString(), 'price_stale'],
     ['future', new Date(now + 5_001).toISOString(), 'price_stale'],
   ])('rejects a %s observation', async (_name, observedAt, code) => {
     const oracle = priceOracle({ priceUsdMicros: 150_000_000, observedAt });
@@ -501,16 +565,17 @@ describe('price feed policy', () => {
     await expect(invalid.solUsd()).rejects.toMatchObject({ code: 'price_invalid' });
   });
 
-  function priceOracle(body: object | string): HttpUsdPriceOracle {
+  function priceOracle(body: object | string, url = 'https://price.internal'): HttpUsdPriceOracle {
     const fetcher = (async () =>
       new Response(typeof body === 'string' ? body : JSON.stringify(body), {
         headers: { 'content-type': 'application/json' },
       })) as typeof fetch;
     return new HttpUsdPriceOracle(
-      'https://price.internal',
+      url,
       'test-price-token',
       1_000_000,
       1_000_000_000,
+      300_000,
       fetcher,
       () => now,
     );

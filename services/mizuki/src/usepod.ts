@@ -1,3 +1,6 @@
+import { z } from 'zod';
+import type { ProviderRouteReceipt } from './types.js';
+
 export interface UsePodRequestConfig {
   baseUrl: string;
   token: string;
@@ -23,6 +26,17 @@ export interface UsePodUsage {
 
 const MICROUNITS_PER_USD = 1_000_000n;
 const MAX_RECEIPT_MICROUNITS = BigInt(Number.MAX_SAFE_INTEGER);
+const MAX_CATALOG_BYTES = 1_048_576;
+const MAX_CATALOG_MODELS = 10_000;
+const modelCatalogSchema = z
+  .object({
+    object: z.literal('list'),
+    data: z
+      .array(z.object({ id: z.string().min(1).max(256) }).passthrough())
+      .min(1)
+      .max(MAX_CATALOG_MODELS),
+  })
+  .strict();
 
 export function usePodUrl(config: UsePodRequestConfig, path: string): string {
   const base = new URL(config.baseUrl);
@@ -134,44 +148,65 @@ export function publicUsePodReceipt(receipt: UsePodRouteReceipt): ProviderRouteR
   };
 }
 
-export async function probeUsePod(
+export async function probeUsePodCatalog(
   config: UsePodRequestConfig,
   request: typeof fetch = fetch,
 ): Promise<void> {
-  const response = await request(usePodUrl(config, 'chat/completions'), {
-    method: 'POST',
-    headers: usePodHeaders(config),
-    body: JSON.stringify({
-      model: config.model,
-      temperature: 0,
-      max_tokens: 32,
-      response_format: { type: 'json_object' },
-      messages: [
-        {
-          role: 'user',
-          content: 'Return only this JSON object: {"nonce":"mizuki-ready"}',
-        },
-      ],
-    }),
+  const response = await request(usePodUrl(config, 'models'), {
+    method: 'GET',
+    headers: { accept: 'application/json' },
     signal: AbortSignal.timeout(15_000),
   });
-  if (!response.ok) throw new Error(`UsePod readiness failed with HTTP ${response.status}`);
-  usePodReceipt(response, config.model, config.minimumBalance);
-  const body = (await response.json()) as {
-    model?: unknown;
-    choices?: Array<{ message?: { content?: unknown } }>;
-  };
-  if (body.model !== config.model) throw new Error('UsePod readiness returned a different model');
-  const content = body.choices?.[0]?.message?.content;
-  if (typeof content !== 'string') throw new Error('UsePod readiness returned no response');
-  let value: unknown;
-  try {
-    value = JSON.parse(content);
-  } catch {
-    throw new Error('UsePod readiness returned invalid JSON');
+  if (!response.ok) {
+    throw new Error(`UsePod model catalog failed with HTTP ${response.status}`);
   }
-  if (!isRecord(value) || value.nonce !== 'mizuki-ready') {
-    throw new Error('UsePod readiness returned the wrong nonce');
+  const contentType = response.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase();
+  if (contentType !== 'application/json') {
+    throw new Error('UsePod model catalog returned a non-JSON response');
+  }
+
+  const catalog = modelCatalogSchema.safeParse(await boundedJson(response));
+  if (!catalog.success) {
+    throw new Error('UsePod model catalog returned malformed JSON');
+  }
+  if (!catalog.data.data.some(({ id }) => id === config.model)) {
+    throw new Error('UsePod model catalog does not include the configured model');
+  }
+}
+
+async function boundedJson(response: Response): Promise<unknown> {
+  const contentLength = response.headers.get('content-length')?.trim();
+  if (contentLength) {
+    if (!/^\d+$/.test(contentLength) || BigInt(contentLength) > BigInt(MAX_CATALOG_BYTES)) {
+      throw new Error('UsePod model catalog exceeded the response size limit');
+    }
+  }
+  if (!response.body) throw new Error('UsePod model catalog returned malformed JSON');
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  const chunks: string[] = [];
+  let received = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      received += value.byteLength;
+      if (received > MAX_CATALOG_BYTES) {
+        await reader.cancel();
+        throw new Error('UsePod model catalog exceeded the response size limit');
+      }
+      chunks.push(decoder.decode(value, { stream: true }));
+    }
+    chunks.push(decoder.decode());
+  } finally {
+    reader.releaseLock();
+  }
+
+  try {
+    return JSON.parse(chunks.join('')) as unknown;
+  } catch {
+    throw new Error('UsePod model catalog returned malformed JSON');
   }
 }
 
@@ -213,4 +248,3 @@ function safeTokenCount(value: unknown): value is number {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
-import type { ProviderRouteReceipt } from './types.js';

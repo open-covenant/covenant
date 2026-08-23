@@ -251,6 +251,75 @@ describe('claimant OAuth verification', () => {
 });
 
 describe('GitHub App credentials', () => {
+  it('proves fresh exact-repository readiness with the read-only verifier App', async () => {
+    const { verifier, fetcher } = fixture();
+
+    await expect(verifier.repositoryReadiness('Owner/Repository')).resolves.toEqual({
+      ready: true,
+      repository: 'owner/repository',
+      verifierAppId: APP_ID,
+      installationId: 777,
+      repositorySelection: 'selected',
+      permissions: readPermissions(),
+      tokenRepositories: 1,
+      tokenExpiresAt: new Date(NOW + 60 * 60_000).toISOString(),
+    });
+    expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual([
+      'https://api.github.com/app',
+      'https://api.github.com/repos/owner/repository/installation',
+      'https://api.github.com/app/installations/777/access_tokens',
+    ]);
+  });
+
+  it('fails repository readiness for invalid, absent, suspended, or wrong-App installations', async () => {
+    const { suspended_at: _suspendedAt, ...missingSuspensionEvidence } = installationBody();
+    await expect(fixture().verifier.repositoryReadiness('invalid')).rejects.toMatchObject({
+      code: 'github_repository_invalid',
+    });
+    await expect(
+      fixture({ installationStatus: 404 }).verifier.repositoryReadiness('owner/repository'),
+    ).rejects.toMatchObject({ code: 'github_app_not_installed' });
+    await expect(
+      fixture({
+        installation: {
+          ...installationBody(),
+          suspended_at: '2026-08-23T11:00:00.000Z',
+        },
+      }).verifier.repositoryReadiness('owner/repository'),
+    ).rejects.toMatchObject({ code: 'github_app_not_installed' });
+    await expect(
+      fixture({ installation: missingSuspensionEvidence }).verifier.repositoryReadiness(
+        'owner/repository',
+      ),
+    ).rejects.toMatchObject({ code: 'github_credential_invalid' });
+    await expect(
+      fixture({ app: appBody(99999) }).verifier.repositoryReadiness('owner/repository'),
+    ).rejects.toMatchObject({ code: 'github_credential_invalid' });
+    await expect(
+      fixture({
+        installation: { ...installationBody(), app_id: 99999 },
+      }).verifier.repositoryReadiness('owner/repository'),
+    ).rejects.toMatchObject({ code: 'github_credential_invalid' });
+  });
+
+  it('fails repository readiness for permission or one-repository scope drift', async () => {
+    await expect(
+      fixture({
+        installation: installationBody({ checks: 'read' }),
+      }).verifier.repositoryReadiness('owner/repository'),
+    ).rejects.toMatchObject({ code: 'github_credential_invalid' });
+    await expect(
+      fixture({ tokenPermissions: { issues: 'write' } }).verifier.repositoryReadiness(
+        'owner/repository',
+      ),
+    ).rejects.toMatchObject({ code: 'github_credential_invalid' });
+    await expect(
+      fixture({ tokenRepository: 'attacker/repository' }).verifier.repositoryReadiness(
+        'owner/repository',
+      ),
+    ).rejects.toMatchObject({ code: 'github_credential_invalid' });
+  });
+
   it('signs a bounded RS256 JWT and verifies the configured App at /app', async () => {
     const { verifier, fetcher } = fixture();
     await expect(verifier.health()).resolves.toBeUndefined();
@@ -311,6 +380,14 @@ describe('GitHub App credentials', () => {
         installation: { ...installationBody(), app_id: 99999 },
       }).verifier.verifyRepositoryMerge(repositoryMergeRequest()),
     ).rejects.toMatchObject({ code: 'github_credential_invalid' });
+  });
+
+  it('rejects an all-repository installation', async () => {
+    await expect(
+      fixture({
+        installation: { ...installationBody(), repository_selection: 'all' },
+      }).verifier.verifyRepositoryMerge(repositoryMergeRequest()),
+    ).rejects.toMatchObject({ code: 'github_credential_invalid', retryable: false });
   });
 
   it('fails closed when the App is not installed on an external maintainer repository', async () => {
@@ -568,6 +645,7 @@ function installationBody(permissionOverride: Partial<Record<string, 'read' | 'w
   return {
     id: 777,
     app_id: Number(APP_ID),
+    repository_selection: 'selected',
     suspended_at: null,
     permissions: { ...readPermissions(), ...permissionOverride },
   };

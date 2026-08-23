@@ -84,6 +84,18 @@ export type BountyDispute = {
   };
 };
 
+export type BountyValidationAttempt = {
+  id: string;
+  requestKey: string;
+  pullRequestUrl: string;
+  status: 'reserved' | 'submitted' | 'completed' | 'failed';
+  maxCostMicrounits: string;
+  startedAt: string;
+  updatedAt: string;
+  failureKind?: 'provider_error' | 'indeterminate_after_recovery';
+  error?: string;
+};
+
 export type RescueBounty = {
   id: string;
   sourceJobId: string;
@@ -114,6 +126,7 @@ export type RescueBounty = {
       costMicrounits?: string;
     };
   };
+  validationAttempt?: BountyValidationAttempt;
   dispute?: BountyDispute;
   claimHistory: readonly BountyClaim[];
   createdAt: string;
@@ -554,7 +567,7 @@ export function expireRescueBountyClaim(
 ): RescueBounty {
   assertExpectedRevision(bounty.revision, command.expectedRevision);
   assertNotBefore(command.at, bounty.updatedAt, 'claim expiry time');
-  if (bounty.state !== 'claimed' && bounty.state !== 'pr_submitted') {
+  if (!['claimed', 'pr_submitted', 'validating'].includes(bounty.state)) {
     throw new DomainRuleError('CLAIM_NOT_EXPIRABLE', 'Bounty does not have an expirable claim');
   }
   const claim = requireActiveClaim(bounty);

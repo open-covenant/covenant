@@ -19,17 +19,18 @@ import {
 } from './public-api.js';
 import { createQuote } from './quote.js';
 import { recordPaymentReceipts } from './receipts.js';
+import { assertLiabilityMatchesPayment, recoverSettlement } from './settlement-recovery.js';
 import type { MizukiStore } from './store.js';
 import { GithubWebhookHandler, verifyGithubWebhook } from './webhooks.js';
-import type { Job } from './types.js';
+import type { Job, RepositoryAdmissionReceipt } from './types.js';
 import { Payments, USDC_DECIMALS, USDC_MAINNET, paymentRequiredHeader } from './x402.js';
 import {
   assertRefundCapacity,
   refundLiabilityCommitment,
+  repositoryAdmissionBinding,
   RefundCapacityError,
   type PaymentPolicy,
   type PolicyReadiness,
-  type RefundLiability,
 } from './policy-client.js';
 import type { ServiceReadiness } from './readiness.js';
 
@@ -400,11 +401,30 @@ export function createApp(deps: AppDependencies) {
         const paymentSignature = header(req, 'payment-signature');
         let pendingJobId: string | undefined;
         let refundLiabilityId: string | undefined;
+        let repositoryAdmission: RepositoryAdmissionReceipt | undefined;
         let payment;
         try {
           const settle = () =>
             deps.payments.settle(quote, paymentSignature, async (authorized) => {
-              const reservation = await deps.store.createJob(quote, authorized, key);
+              if (deps.config.paymentMode === 'live') {
+                if (!authorized.signature) {
+                  throw new Error('verified payment authorization is unavailable');
+                }
+                repositoryAdmission = await deps.policy.createRepositoryAdmission(
+                  repositoryAdmissionBinding(quote, key, authorized.signature),
+                  authorized.signature,
+                );
+              }
+              const reservation = await deps.store.createJob(
+                quote,
+                authorized,
+                key,
+                repositoryAdmission,
+              );
+              repositoryAdmission = reservation.job.repositoryAdmission;
+              if (deps.config.paymentMode === 'live' && !repositoryAdmission) {
+                throw new Error('durable repository admission was not persisted');
+              }
               if (!reservation.created) {
                 if (reservation.job.quote.id !== quote.id) {
                   throw new Error('payment proof is already reserved for another quote');
@@ -421,12 +441,23 @@ export function createApp(deps: AppDependencies) {
             const result = await settle();
             if (!result.ok || deps.config.paymentMode !== 'live') return result;
             if (!pendingJobId) throw new Error('payment authorization was not persisted');
+            if (!repositoryAdmission) {
+              throw new Error('durable repository admission is unavailable');
+            }
+            await deps.store.patchJob(pendingJobId, { payment: result.payment });
             const liability = await deps.policy.registerRefundLiability(
               pendingJobId,
               result.payment.transaction,
               refundLiabilityCommitment(quote),
+              repositoryAdmission,
             );
-            assertLiabilityMatchesPayment(liability, pendingJobId, result.payment, quote);
+            assertLiabilityMatchesPayment(
+              liability,
+              pendingJobId,
+              result.payment,
+              quote,
+              repositoryAdmission,
+            );
             refundLiabilityId = liability.id;
             await deps.store.patchJob(pendingJobId, { refundLiabilityId });
             return result;
@@ -611,21 +642,12 @@ export function createApp(deps: AppDependencies) {
         const paid = await deps.paymentAdmission.run(async () => {
           // Intake controls new payment attempts. This reservation already exists and may
           // already be settled on-chain, so recovery must remain available during an incident.
-          const payment = await deps.payments.retrySettlement(job.quote, job.payment);
-          let refundLiabilityId: string | undefined;
-          if (deps.config.paymentMode === 'live') {
-            const liability = await deps.policy.registerRefundLiability(
-              job.id,
-              payment.transaction,
-              refundLiabilityCommitment(job.quote),
-            );
-            assertLiabilityMatchesPayment(liability, job.id, payment, job.quote);
-            refundLiabilityId = liability.id;
-            await deps.store.patchJob(job.id, { refundLiabilityId });
-          }
-          return deps.store.transitionJob(job.id, 'settlement_pending', 'paid', {
-            payment,
-            refundLiabilityId,
+          return recoverSettlement(job, {
+            paymentMode: deps.config.paymentMode,
+            payTo: deps.config.payTo,
+            store: deps.store,
+            payments: deps.payments,
+            policy: deps.policy,
           });
         });
         void deps.processor.process(job.id);
@@ -702,32 +724,6 @@ export async function ensureRefundCapacity(
     throw new RefundCapacityError('escrow capacity cannot fund the configured rescue reserve');
   }
   return readiness;
-}
-
-function assertLiabilityMatchesPayment(
-  liability: RefundLiability,
-  jobId: string,
-  payment: Job['payment'],
-  quote: Job['quote'],
-): void {
-  const commitment = refundLiabilityCommitment(quote);
-  if (
-    liability.jobId !== jobId ||
-    liability.settlementSignature !== payment.transaction ||
-    liability.payer !== payment.payer ||
-    liability.mint !== USDC_MAINNET ||
-    liability.decimals !== USDC_DECIMALS ||
-    liability.rawAmount !== payment.amountAtomic ||
-    liability.amountUsdCents !== Number(payment.amountAtomic) / 10_000 ||
-    liability.repository !== commitment.repository ||
-    liability.issueNumber !== commitment.issueNumber ||
-    liability.baseRef !== commitment.baseRef ||
-    liability.baseSha !== commitment.baseSha ||
-    liability.repositoryAuthorizedAt !== commitment.repositoryAuthorizedAt ||
-    liability.authorizationEvidenceHash !== commitment.authorizationEvidenceHash
-  ) {
-    throw new Error('refund liability evidence does not match the settled payment');
-  }
 }
 
 async function streamActivity(

@@ -53,6 +53,7 @@ export interface MergeEvidence {
 
 export interface MergeVerifier {
   health(): Promise<void>;
+  repositoryReadiness(repository: string): Promise<RepositoryReadinessEvidence>;
   verify(request: MergeVerificationRequest): Promise<MergeEvidence>;
   assertCommitUnpublished(repository: string, commitSha: string): Promise<void>;
   verifyRepositoryMerge(request: RepositoryMergeRequest): Promise<RepositoryMergeEvidence>;
@@ -90,9 +91,21 @@ export interface ClaimantEvidence {
   githubId: string;
 }
 
+export interface RepositoryReadinessEvidence {
+  ready: true;
+  repository: string;
+  verifierAppId: string;
+  installationId: number;
+  repositorySelection: 'selected';
+  permissions: typeof INSTALLATION_PERMISSIONS;
+  tokenRepositories: 1;
+  tokenExpiresAt: string;
+}
+
 interface CachedInstallationToken {
   token: string;
   expiresAt: number;
+  installationId: number;
 }
 
 const responseSchema = z
@@ -174,8 +187,9 @@ const installationSchema = z
   .object({
     id: z.number().int().positive().safe(),
     app_id: z.number().int().positive().safe(),
+    repository_selection: z.literal('selected'),
     permissions: permissionSchema,
-    suspended_at: z.string().datetime({ offset: true }).nullable().optional(),
+    suspended_at: z.string().datetime({ offset: true }).nullable(),
   })
   .passthrough();
 const installationTokenSchema = z
@@ -250,6 +264,25 @@ export class GitHubMergeVerifier implements MergeVerifier {
       );
     }
     assertReadOnlyPermissions(decoded.data.permissions, 'GitHub App');
+  }
+
+  async repositoryReadiness(repository: string): Promise<RepositoryReadinessEvidence> {
+    const normalized = repository.toLowerCase();
+    repositoryParts(normalized);
+    await this.health();
+
+    this.tokenCache.delete(normalized);
+    const token = await this.installationToken(normalized);
+    return {
+      ready: true,
+      repository: normalized,
+      verifierAppId: this.appId,
+      installationId: token.installationId,
+      repositorySelection: 'selected',
+      permissions: INSTALLATION_PERMISSIONS,
+      tokenRepositories: 1,
+      tokenExpiresAt: new Date(token.expiresAt).toISOString(),
+    };
   }
 
   async verifyOauthIdentity(accessToken: string): Promise<ClaimantEvidence> {
@@ -827,7 +860,11 @@ export class GitHubMergeVerifier implements MergeVerifier {
         503,
       );
     }
-    const cached = { token: decoded.data.token, expiresAt };
+    const cached = {
+      token: decoded.data.token,
+      expiresAt,
+      installationId: installation.data.id,
+    };
     this.cacheToken(repository, cached);
     return cached;
   }
@@ -887,12 +924,28 @@ export class GitHubMergeVerifier implements MergeVerifier {
 export class MockMergeVerifier implements MergeVerifier {
   readonly requests: MergeVerificationRequest[] = [];
   readonly repositoryRequests: RepositoryMergeRequest[] = [];
+  readonly readinessRequests: string[] = [];
   readonly unpublishedRequests: Array<{ repository: string; commitSha: string }> = [];
   error: Error | null = null;
   oauthIdentity: ClaimantEvidence = { githubId: '42', login: 'contributor' };
 
   async health(): Promise<void> {
     if (this.error) throw this.error;
+  }
+
+  async repositoryReadiness(repository: string): Promise<RepositoryReadinessEvidence> {
+    this.readinessRequests.push(repository);
+    if (this.error) throw this.error;
+    return {
+      ready: true,
+      repository: repository.toLowerCase(),
+      verifierAppId: '12345',
+      installationId: 777,
+      repositorySelection: 'selected',
+      permissions: INSTALLATION_PERMISSIONS,
+      tokenRepositories: 1,
+      tokenExpiresAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+    };
   }
 
   async verifyOauthIdentity(_accessToken: string): Promise<ClaimantEvidence> {

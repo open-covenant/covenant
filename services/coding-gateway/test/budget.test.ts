@@ -85,10 +85,6 @@ describe('SpendLedger', () => {
       const after = new SpendLedger(caps, path);
       expect(after.snapshot()).toMatchObject({ dailyUsd: 0.75, monthlyUsd: 0.75, killed: true });
       expect(after.reserve(0.1)).toMatchObject({ ok: false, reason: 'kill-switch engaged' });
-      expect(after.reserve(0.1, true)).toMatchObject({
-        ok: false,
-        reason: 'kill-switch engaged',
-      });
     } finally {
       rmSync(path, { force: true });
     }
@@ -102,7 +98,7 @@ describe('SpendLedger', () => {
 
       const after = new SpendLedger(caps, path);
       expect(after.snapshot().killed).toBe(true);
-      expect(after.reserve(0.1, true)).toMatchObject({
+      expect(after.reserve(0.1)).toMatchObject({
         ok: false,
         reason: 'kill-switch engaged',
       });
@@ -581,11 +577,10 @@ describe('sandboxCostUsd', () => {
     expect(sandboxCostUsd(3600)).toBeGreaterThan(0);
   });
 
-  it('meters at the configured default rate of $0.0001/s', () => {
-    // A zeroed/garbled CODER_SANDBOX_USD_PER_SEC would silently stop metering
-    // sandbox wall-clock entirely. Pin the default against an independent
-    // constant (10000s -> $1), not a config-derived self-check.
-    expect(config.sandboxUsdPerSec).toBe(0.0001);
-    expect(sandboxCostUsd(10_000)).toBeCloseTo(1);
+  it('meters at the development fallback worst-case rate of $0.0002/s', () => {
+    // Production refuses the fallback and requires an explicit operator pin.
+    // This only keeps local tests and trusted development deterministic.
+    expect(config.sandboxWorstCaseUsdPerSec).toBe(0.0002);
+    expect(sandboxCostUsd(10_000)).toBeCloseTo(2);
   });
 });

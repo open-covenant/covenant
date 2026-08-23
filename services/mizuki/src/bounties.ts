@@ -23,6 +23,7 @@ import {
   transitionRescueBounty,
   type BountyDisputeDecision,
   type BountyDisputeEvidence,
+  type BountyValidationAttempt,
   type ContributorEscrow,
   type RescueBounty,
 } from './domain/index.js';
@@ -36,19 +37,45 @@ import {
 import type { MizukiStore } from './store.js';
 import type { Contributor, Job, ProviderRouteReceipt } from './types.js';
 
+export type ContributorPatchReviewAttempt = { id: string; maxCostMicrounits: number };
+
+export type ContributorPatchReviewEvidence = {
+  headSha: string;
+  baseSha: string;
+  baseRef: string;
+  diffHash: string;
+};
+
+export type ContributorPatchReviewResult = ContributorPatchReviewEvidence & {
+  approved: boolean;
+  reason: string;
+  providerReceipt?: ProviderRouteReceipt;
+};
+
+export type ContributorPatchPaidPreflight = {
+  kind: 'paid';
+  attempt: ContributorPatchReviewAttempt;
+  evidence: ContributorPatchReviewEvidence;
+  providerInput: {
+    model: string;
+    issue: { title: string; body: string };
+    diff: string;
+    repositoryChecks: { count: number; passed: boolean };
+    maxOutputTokens: number;
+  };
+};
+
+export type ContributorPatchReviewPreflight =
+  | { kind: 'rejected'; result: ContributorPatchReviewResult & { approved: false } }
+  | ContributorPatchPaidPreflight;
+
 export interface ContributorPatchReviewer {
-  review(
+  preflight(
     bounty: RescueBounty,
     pullRequestUrl: string,
-  ): Promise<{
-    approved: boolean;
-    reason: string;
-    headSha: string;
-    baseSha: string;
-    baseRef: string;
-    diffHash: string;
-    providerReceipt?: ProviderRouteReceipt;
-  }>;
+    attempt: ContributorPatchReviewAttempt,
+  ): Promise<ContributorPatchReviewPreflight>;
+  review(preflight: ContributorPatchPaidPreflight): Promise<ContributorPatchReviewResult>;
   mergedEvidence(
     bounty: RescueBounty,
     pullRequestUrl: string,
@@ -68,17 +95,23 @@ export type DisputeResolutionInput = {
   idempotencyKey: string;
 };
 
+const MAX_BOUNTY_REVIEW_COST_MICROUNITS = 1_000_000;
+const SUBMITTED_REVIEW_STALE_MS = 2 * 60_000;
+
 export class BountyService {
   private readonly refundRecipient: string;
+  private readonly reviewMaxCostMicrounits: number;
 
   constructor(
     private readonly store: MizukiStore,
     private readonly policy: FinancialPolicy,
     private readonly reviewer: ContributorPatchReviewer,
     private readonly now: () => Date = () => new Date(),
-    config: Pick<Config, 'escrowRefundTo'> = { escrowRefundTo: '' },
+    config: Pick<Config, 'escrowRefundTo'> &
+      Partial<Pick<Config, 'bountyReviewMaxCostMicrounits'>> = { escrowRefundTo: '' },
   ) {
     this.refundRecipient = config.escrowRefundTo;
+    this.reviewMaxCostMicrounits = config.bountyReviewMaxCostMicrounits ?? 50_000;
   }
 
   async createAfterRefund(job: Job): Promise<RescueBounty> {
@@ -253,6 +286,7 @@ export class BountyService {
       bounty.activeClaim?.draftPullRequestUrl === pullRequestUrl &&
       (bounty.state === 'pr_submitted' || bounty.state === 'validating')
     ) {
+      if (bounty.validationReceipt || bounty.validationAttempt?.status === 'failed') return bounty;
       return this.validate(bounty);
     }
     const submitted = submitDraftPullRequest(bounty, {
@@ -360,7 +394,8 @@ export class BountyService {
         expired += 1;
         continue;
       }
-      if (!bounty.activeClaim || !['claimed', 'pr_submitted'].includes(bounty.state)) continue;
+      if (!bounty.activeClaim || !['claimed', 'pr_submitted', 'validating'].includes(bounty.state))
+        continue;
       if (Date.parse(bounty.activeClaim.leaseExpiresAt) > this.now().getTime()) continue;
       const pending = expireRescueBountyClaim(bounty, {
         at: this.now().toISOString(),
@@ -434,7 +469,13 @@ export class BountyService {
         }
 
         if (bounty.state === 'validating' && bounty.activeClaim?.draftPullRequestUrl) {
-          await this.validate(bounty);
+          if (
+            bounty.validationAttempt?.status === 'submitted' &&
+            !submittedReviewIsStale(bounty.validationAttempt, this.now())
+          ) {
+            continue;
+          }
+          await this.validate(bounty, true);
           recovered += 1;
           continue;
         }
@@ -1153,24 +1194,102 @@ export class BountyService {
     return recovered;
   }
 
-  private async validate(bounty: RescueBounty): Promise<RescueBounty> {
+  private async validate(bounty: RescueBounty, recovering = false): Promise<RescueBounty> {
     const pullRequestUrl = bounty.activeClaim?.draftPullRequestUrl;
     if (!pullRequestUrl) throw new Error('bounty has no submitted pull request');
-    const validating =
-      bounty.state === 'validating'
-        ? bounty
-        : transitionRescueBounty(bounty, 'validating', {
-            at: this.now().toISOString(),
-            expectedRevision: bounty.revision,
-          });
-    if (validating !== bounty) await this.store.updateBounty(validating, bounty.revision);
-    const review = await this.reviewer.review(validating, pullRequestUrl);
+    if (bounty.validationReceipt || bounty.validationAttempt?.status === 'completed') return bounty;
+    if (bounty.validationAttempt?.status === 'failed') return bounty;
+
+    let validating = bounty;
+    if (validating.state !== 'validating') {
+      const startedAt = this.now().toISOString();
+      const transitioned = transitionRescueBounty(validating, 'validating', {
+        at: startedAt,
+        expectedRevision: validating.revision,
+      });
+      const id = randomUUID();
+      validating = {
+        ...transitioned,
+        validationAttempt: {
+          id,
+          requestKey: id,
+          pullRequestUrl,
+          status: 'reserved',
+          maxCostMicrounits: String(this.reviewMaxCostMicrounits),
+          startedAt,
+          updatedAt: startedAt,
+        },
+      };
+      validating = await this.store.updateBounty(validating, bounty.revision);
+    }
+
+    const attempt = validating.validationAttempt;
+    if (!attempt || attempt.pullRequestUrl !== pullRequestUrl) return validating;
+    if (attempt.status === 'submitted') {
+      if (!recovering || !submittedReviewIsStale(attempt, this.now())) return validating;
+      return this.failValidation(
+        validating,
+        attempt.id,
+        new Error(
+          'paid review outcome is indeterminate after recovery; the provider request will not be retried',
+        ),
+        'indeterminate_after_recovery',
+      );
+    }
+    if (attempt.status !== 'reserved') return validating;
+    const maxCostMicrounits = durableReviewMaxCost(attempt.maxCostMicrounits);
+    const preflight = await this.reviewer.preflight(validating, pullRequestUrl, {
+      id: attempt.requestKey,
+      maxCostMicrounits,
+    });
+
+    if (preflight.kind === 'rejected') {
+      return this.completeValidation(validating, attempt, preflight.result);
+    }
+
+    await this.store.appendLedger({
+      kind: 'operating_cost',
+      referenceId: `bounty-review:${attempt.id}`,
+      asset: 'USD',
+      amountAtomic: '0',
+      amountUsd: maxCostMicrounits / 1_000_000,
+    });
+    validating = await this.markValidationSubmitted(validating, attempt);
+
+    let review: ContributorPatchReviewResult;
+    try {
+      review = await this.reviewer.review(preflight);
+    } catch (providerError) {
+      try {
+        await this.failValidation(validating, attempt.id, providerError, 'provider_error');
+      } catch (checkpointError) {
+        throw new AggregateError(
+          [providerError, checkpointError],
+          'bounty review provider and terminal checkpoint both failed',
+        );
+      }
+      throw providerError;
+    }
+
+    return this.completeValidation(validating, attempt, review);
+  }
+
+  private async completeValidation(
+    validating: RescueBounty,
+    attempt: BountyValidationAttempt,
+    review: ContributorPatchReviewResult,
+  ): Promise<RescueBounty> {
     const reviewed = transitionRescueBounty(validating, 'pr_submitted', {
       at: this.now().toISOString(),
       expectedRevision: validating.revision,
     });
-    const receipt = {
+    const completedBounty: RescueBounty = {
       ...reviewed,
+      validationAttempt: {
+        ...attempt,
+        status: 'completed',
+        updatedAt: reviewed.updatedAt,
+      },
       validationReceipt: {
         id: randomUUID(),
         approved: review.approved,
@@ -1183,8 +1302,53 @@ export class BountyService {
         ...(review.providerReceipt ? { provider: review.providerReceipt } : {}),
       },
     };
-    await this.store.updateBounty(receipt, validating.revision);
-    return receipt;
+    await this.store.updateBounty(completedBounty, validating.revision);
+    return completedBounty;
+  }
+
+  private async markValidationSubmitted(
+    bounty: RescueBounty,
+    attempt: BountyValidationAttempt,
+  ): Promise<RescueBounty> {
+    const updatedAt = this.now().toISOString();
+    const submitted: RescueBounty = {
+      ...bounty,
+      validationAttempt: { ...attempt, status: 'submitted', updatedAt },
+      updatedAt,
+      revision: bounty.revision + 1,
+    };
+    return this.store.updateBounty(submitted, bounty.revision);
+  }
+
+  private async failValidation(
+    bounty: RescueBounty,
+    attemptId: string,
+    error: unknown,
+    failureKind: NonNullable<BountyValidationAttempt['failureKind']>,
+  ): Promise<RescueBounty> {
+    const current = await this.required(bounty.id);
+    if (
+      current.state !== 'validating' ||
+      current.validationAttempt?.id !== attemptId ||
+      current.validationAttempt.status !== 'submitted'
+    ) {
+      return current;
+    }
+    const failed = transitionRescueBounty(current, 'pr_submitted', {
+      at: this.now().toISOString(),
+      expectedRevision: current.revision,
+    });
+    const value: RescueBounty = {
+      ...failed,
+      validationAttempt: {
+        ...current.validationAttempt,
+        status: 'failed',
+        updatedAt: failed.updatedAt,
+        failureKind,
+        error: (error instanceof Error ? error.message : String(error)).slice(0, 2_000),
+      },
+    };
+    return this.store.updateBounty(value, current.revision);
   }
 
   private async required(id: string): Promise<RescueBounty> {
@@ -1192,6 +1356,27 @@ export class BountyService {
     if (!bounty) throw new Error(`unknown bounty: ${id}`);
     return bounty;
   }
+}
+
+function durableReviewMaxCost(value: unknown): number {
+  if (typeof value !== 'string' || value.length > 7 || !/^[1-9]\d*$/.test(value)) {
+    throw new Error('bounty review attempt has an invalid durable cost reservation');
+  }
+  const parsed = Number(value);
+  if (
+    !Number.isSafeInteger(parsed) ||
+    parsed <= 0 ||
+    parsed > MAX_BOUNTY_REVIEW_COST_MICROUNITS ||
+    String(parsed) !== value
+  ) {
+    throw new Error('bounty review attempt has an invalid durable cost reservation');
+  }
+  return parsed;
+}
+
+function submittedReviewIsStale(attempt: BountyValidationAttempt, now: Date): boolean {
+  const submittedAt = Date.parse(attempt.updatedAt);
+  return !Number.isFinite(submittedAt) || now.getTime() - submittedAt >= SUBMITTED_REVIEW_STALE_MS;
 }
 
 function sha256(value: unknown): string {

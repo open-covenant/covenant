@@ -13,8 +13,13 @@ import {
   refundLiabilityView,
   refundEscrowRequestSchema,
   refundRequestSchema,
+  reconcileRepositorySettlementRequestSchema,
   registerRefundLiabilityRequestSchema,
+  repositoryAdmissionRequestSchema,
+  repositoryAdmissionView,
+  repositoryReadinessRequestSchema,
   releaseEscrowRequestSchema,
+  validateRepositoryAdmissionRequestSchema,
 } from './domain.js';
 import type { SignerMetrics } from './metrics.js';
 import type { PolicyService } from './policy.js';
@@ -83,6 +88,47 @@ async function route(
   if (method === 'GET' && url.pathname === '/v1/readiness') {
     const readiness = await deps.service.readiness();
     writeJson(response, readiness.healthy ? 200 : 503, readiness);
+    return;
+  }
+
+  if (method === 'POST' && url.pathname === '/v1/readiness/repository') {
+    deps.metrics.increment('requests');
+    const { repository } = await parseBody(request, repositoryReadinessRequestSchema);
+    writeJson(response, 200, await deps.service.repositoryReadiness(repository));
+    return;
+  }
+
+  if (method === 'POST' && url.pathname === '/v1/repository-admissions') {
+    deps.metrics.increment('requests');
+    const admission = await deps.service.createRepositoryAdmission(
+      await parseBody(request, repositoryAdmissionRequestSchema),
+      idempotencyKey(request),
+    );
+    writeJson(response, 201, repositoryAdmissionView(admission));
+    return;
+  }
+  const validateAdmission = url.pathname.match(
+    /^\/v1\/repository-admissions\/([0-9a-f-]+)\/validate$/i,
+  );
+  if (method === 'POST' && validateAdmission) {
+    deps.metrics.increment('requests');
+    const admission = await deps.service.validateRepositoryAdmission(
+      operationIdSchema.parse(validateAdmission[1]),
+      await parseBody(request, validateRepositoryAdmissionRequestSchema),
+    );
+    writeJson(response, 200, repositoryAdmissionView(admission));
+    return;
+  }
+  const reconcileAdmissionSettlement = url.pathname.match(
+    /^\/v1\/repository-admissions\/([0-9a-f-]+)\/settlements\/reconcile$/i,
+  );
+  if (method === 'POST' && reconcileAdmissionSettlement) {
+    deps.metrics.increment('requests');
+    const settlement = await deps.service.reconcileRepositorySettlement(
+      operationIdSchema.parse(reconcileAdmissionSettlement[1]),
+      await parseBody(request, reconcileRepositorySettlementRequestSchema),
+    );
+    writeJson(response, 200, settlement);
     return;
   }
 

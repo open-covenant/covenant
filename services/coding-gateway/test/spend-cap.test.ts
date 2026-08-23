@@ -1,8 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { IdempotencyConflictError, RunStore } from '../src/run-store.js';
-import { failedRunCost, parseRunRequest, runRequestFingerprint } from '../src/server.js';
+import {
+  failedRunCost,
+  maximumSandboxCostUsd,
+  parseRunRequest,
+  providerBudgetUsd,
+  runRequestFingerprint,
+  sandboxAccountingChargeUsd,
+} from '../src/server.js';
 import type { RunRequest } from '../src/types.js';
 import { SpendLedger } from '../src/budget.js';
+import { config } from '../src/config.js';
 
 const request: RunRequest = {
   input: 'fix docs',
@@ -40,15 +48,45 @@ describe('run spend cap contract', () => {
     expect(() => store.replay(request.session_id, changed)).toThrow(IdempotencyConflictError);
   });
 
+  it('reserves the full pinned sandbox ceiling before any model spend', () => {
+    const sandboxMax = maximumSandboxCostUsd();
+    const providerMax = providerBudgetUsd(request.max_cost_usd);
+
+    expect(sandboxMax).toBeGreaterThan(0);
+    expect(providerMax).toBeGreaterThan(0);
+    expect(providerMax + sandboxMax).toBeCloseTo(request.max_cost_usd);
+  });
+
+  it('charges the sandbox maximum after any attempted create', () => {
+    const sandboxMax = maximumSandboxCostUsd();
+
+    expect(sandboxAccountingChargeUsd(false)).toBe(0);
+    expect(sandboxAccountingChargeUsd(true)).toBe(sandboxMax);
+  });
+
   it('uses durable receipt totals on failure and kills on a visible overrun', () => {
-    const receipt = (costMicrounits?: string) => ({
-      model: 'deepseek-v3.2',
+    const receipt = (accountedCostMicrounits?: string) => ({
+      model: config.model,
       route: 'marketplace' as const,
       balanceRemaining: '1000000',
-      ...(costMicrounits === undefined ? {} : { costMicrounits }),
+      ...(accountedCostMicrounits === undefined
+        ? {}
+        : {
+            providerReportedCostMicrounits: accountedCostMicrounits,
+            accounting: {
+              accountedCostMicrounits,
+              basis: 'max-of-configured-price-ceilings-and-provider-report' as const,
+              inputTokens: 0,
+              outputTokens: 0,
+              inputPriceMicrounitsPerMillion: config.usePodMaxInputPriceMicrounits,
+              outputPriceMicrounitsPerMillion: config.usePodMaxOutputPriceMicrounits,
+            },
+          }),
     });
     expect(failedRunCost(2, [receipt('100'), receipt('200')], 0.01, 0.5)).toBe(0.0103);
     expect(failedRunCost(2, [receipt('100'), receipt()], 0.01, 0.5)).toBe(0.5);
+    expect(failedRunCost(1, [receipt('100'), receipt('200')], 0.01, 0.5)).toBe(0.5);
+    expect(failedRunCost(0, [receipt('100')], 0.01, 0.5)).toBe(0.5);
 
     const actual = failedRunCost(1, [receipt('600000')], 0.01, 0.5);
     const ledger = new SpendLedger({

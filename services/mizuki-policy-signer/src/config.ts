@@ -44,12 +44,6 @@ const envSchema = z
     MIZUKI_OPERATION_LIMIT_USD_CENTS: z.coerce.number().int().positive().default(2_500),
     MIZUKI_REFUND_DAILY_LIMIT_USD_CENTS: z.coerce.number().int().positive().default(10_000),
     MIZUKI_REFUND_AUTH_MAX_TTL_SECONDS: z.coerce.number().int().min(60).max(3_600).default(900),
-    MIZUKI_REFUND_LIABILITY_MAX_AGE_SECONDS: z.coerce
-      .number()
-      .int()
-      .min(60)
-      .max(86_400)
-      .default(86_400),
     MIZUKI_ESCROW_DAILY_LIMIT_USD_CENTS: z.coerce.number().int().positive().default(10_000),
     MIZUKI_MAX_ESCROW_LAMPORTS: z.coerce.number().int().positive().default(1_000_000_000),
     MIZUKI_SOL_FEE_RESERVE_LAMPORTS: z.coerce.number().int().positive().default(1_000_000),
@@ -95,7 +89,6 @@ export interface SignerConfig {
   operationLimitUsdCents: number;
   refundDailyLimitUsdCents: number;
   refundAuthMaxTtlSeconds: number;
-  refundLiabilityMaxAgeSeconds: number;
   escrowDailyLimitUsdCents: number;
   maxEscrowLamports: number;
   solFeeReserveLamports: number;
@@ -206,7 +199,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SignerConfig {
     operationLimitUsdCents: parsed.MIZUKI_OPERATION_LIMIT_USD_CENTS,
     refundDailyLimitUsdCents: parsed.MIZUKI_REFUND_DAILY_LIMIT_USD_CENTS,
     refundAuthMaxTtlSeconds: parsed.MIZUKI_REFUND_AUTH_MAX_TTL_SECONDS,
-    refundLiabilityMaxAgeSeconds: parsed.MIZUKI_REFUND_LIABILITY_MAX_AGE_SECONDS,
     escrowDailyLimitUsdCents: parsed.MIZUKI_ESCROW_DAILY_LIMIT_USD_CENTS,
     maxEscrowLamports: parsed.MIZUKI_MAX_ESCROW_LAMPORTS,
     solFeeReserveLamports: parsed.MIZUKI_SOL_FEE_RESERVE_LAMPORTS,

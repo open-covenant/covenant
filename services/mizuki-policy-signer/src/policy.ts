@@ -1,5 +1,6 @@
 import { createHash, createPublicKey, randomUUID, verify } from 'node:crypto';
 import { PublicKey } from '@solana/web3.js';
+import { authorizedSettlementTransaction } from './chain.js';
 import type { ChainCapacity, ChainGateway, UsdPriceOracle } from './chain.js';
 import type {
   ChainOperation,
@@ -16,13 +17,19 @@ import type {
   RefundEscrowRequest,
   RefundRequest,
   RefundReadinessView,
+  RepositoryAdmission,
+  RepositoryAdmissionRequest,
   SignerReadinessEvidence,
   GitHubIdentityGrant,
   GitHubIdentityGrantRequest,
   GitHubIdentityGrantView,
   ReleaseEscrowRequest,
   RegisterRefundLiabilityRequest,
+  ReconcileRepositorySettlementRequest,
   SettlementFacts,
+  SettlementAuthorizationBinding,
+  ValidateRepositoryAdmissionRequest,
+  X402PaymentAuthorization,
 } from './domain.js';
 import {
   PolicyError,
@@ -30,8 +37,9 @@ import {
   refundDeliveryBindingAuthorizationMessage,
   refundDischargeAuthorizationMessage,
   requestHash,
+  x402PaymentAuthorizationSchema,
 } from './domain.js';
-import type { MergeVerifier } from './github.js';
+import type { MergeVerifier, RepositoryReadinessEvidence } from './github.js';
 import type { SignerMetrics } from './metrics.js';
 import type { OperationStore } from './store.js';
 
@@ -42,7 +50,6 @@ export interface PolicyServiceConfig {
   refundDecimals: number;
   jobAuthorityPublicKey: string;
   refundAuthMaxTtlSeconds: number;
-  refundLiabilityMaxAgeSeconds: number;
   operationLimitUsdCents: number;
   refundDailyLimitUsdCents: number;
   escrowDailyLimitUsdCents: number;
@@ -89,20 +96,27 @@ export class PolicyService {
       existing.requestHash === requestHashValue &&
       existing.jobId === request.jobId
     ) {
+      const admission = await this.refundLiabilityAdmission(request);
+      if (existing.repositoryAdmissionId !== admission.id) {
+        throw new PolicyError(
+          'refund_liability_corrupt',
+          'Stored refund liability does not match its repository admission',
+          503,
+          true,
+        );
+      }
       return existing;
     }
     this.assertRefundAuthorization('register', request);
-    const facts = await this.chain.readSettlement(request.settlementSignature);
+    const admission = await this.refundLiabilityAdmission(request);
+
+    const authorization = this.settlementAuthorization(admission);
+    const facts = await this.chain.readAuthorizedSettlement(
+      request.settlementSignature,
+      authorization,
+    );
     this.validateSettlement(facts);
-    const chainNow = await this.chain.unixTime();
-    const age = chainNow - facts.blockTimeUnixSeconds;
-    if (age < -30 || age > this.config.refundLiabilityMaxAgeSeconds) {
-      throw new PolicyError(
-        'settlement_outside_registration_window',
-        'Settlement is outside the liability registration window',
-        422,
-      );
-    }
+    this.validatePaymentWindow(facts, authorization);
     const amountUsdCents = tokenAmountUsdCents(facts.rawAmount, facts.decimals);
     this.assertOperationLimit(amountUsdCents);
     return this.store.registerRefundLiability(
@@ -111,6 +125,7 @@ export class PolicyService {
         idempotencyKey,
         requestHash: requestHashValue,
         jobId: request.jobId,
+        repositoryAdmissionId: admission.id,
         settlementSignature: facts.signature,
         repository: request.repository,
         issueNumber: request.issueNumber,
@@ -145,6 +160,176 @@ export class PolicyService {
       this.config.refundDailyLimitUsdCents,
       this.now(),
     );
+  }
+
+  private async refundLiabilityAdmission(
+    request: RegisterRefundLiabilityRequest,
+  ): Promise<RepositoryAdmission> {
+    const admission = await this.store.getRepositoryAdmission(request.repositoryAdmissionId);
+    if (!admission) {
+      throw new PolicyError(
+        'repository_admission_not_found',
+        'Repository admission was not found',
+        404,
+      );
+    }
+    assertRepositoryAdmissionIntegrity(admission);
+    if (
+      admission.evidenceHash !== request.repositoryAdmissionEvidenceHash ||
+      admission.repository !== request.repository ||
+      admission.issueNumber !== request.issueNumber ||
+      admission.baseRef !== request.baseRef ||
+      admission.baseSha !== request.baseSha
+    ) {
+      throw new PolicyError(
+        'repository_admission_mismatch',
+        'Repository admission does not match the refund liability registration',
+        422,
+      );
+    }
+    return admission;
+  }
+
+  repositoryReadiness(repository: string): Promise<RepositoryReadinessEvidence> {
+    return this.merges.repositoryReadiness(repository);
+  }
+
+  async createRepositoryAdmission(
+    request: RepositoryAdmissionRequest,
+    idempotencyKey: string,
+  ): Promise<RepositoryAdmission> {
+    const parsedAuthorization = parsePaymentAuthorization(
+      request.paymentAuthorization,
+      request.quoteId,
+    );
+    this.assertPaymentRoute(parsedAuthorization);
+    const settlementIdentity = authorizedSettlementTransaction({
+      wireTransaction: parsedAuthorization.payload.transaction,
+      feePayer: parsedAuthorization.accepted.extra.feePayer,
+      rawAmount: parsedAuthorization.accepted.amount,
+      notBeforeUnixSeconds: 0,
+    });
+    const identity = repositoryAdmissionRequestIdentity(request);
+    const requestHashValue = requestHash(identity);
+    const existing = await this.store.getRepositoryAdmissionByIdempotencyKey(idempotencyKey);
+    if (existing) {
+      assertRepositoryAdmissionIntegrity(existing);
+      if (existing.requestHash !== requestHashValue) {
+        throw new PolicyError(
+          'idempotency_conflict',
+          'Idempotency key was already used for a different request',
+          409,
+        );
+      }
+      return existing;
+    }
+
+    const readiness = await this.merges.repositoryReadiness(identity.repository);
+    if (readiness.repository !== identity.repository) {
+      throw new PolicyError(
+        'github_repository_mismatch',
+        'Verifier returned readiness for a different repository',
+        503,
+        true,
+      );
+    }
+    const admittedAt = this.now();
+    const tokenExpiresAt = new Date(readiness.tokenExpiresAt);
+    if (!Number.isFinite(tokenExpiresAt.getTime()) || tokenExpiresAt <= admittedAt) {
+      throw new PolicyError(
+        'github_token_expired',
+        'Verifier returned expired repository evidence',
+        503,
+        true,
+      );
+    }
+    const admission = {
+      id: randomUUID(),
+      idempotencyKey,
+      requestHash: requestHashValue,
+      ...identity,
+      settlementMessageHash: settlementIdentity.messageHash,
+      settlementClientSignature: settlementIdentity.clientSignature,
+      settlementFeePayer: settlementIdentity.feePayer,
+      settlementRawAmount: parsedAuthorization.accepted.amount,
+      paymentWindowStartUnixSeconds: Math.floor(admittedAt.getTime() / 1_000) - 30,
+      paymentWindowEndUnixSeconds:
+        Math.floor(admittedAt.getTime() / 1_000) +
+        parsedAuthorization.accepted.maxTimeoutSeconds +
+        30,
+      verifierAppId: readiness.verifierAppId,
+      installationId: readiness.installationId,
+      repositorySelection: readiness.repositorySelection,
+      permissions: { ...readiness.permissions },
+      tokenRepositories: readiness.tokenRepositories,
+      tokenExpiresAt,
+      admittedAt,
+    } satisfies Omit<RepositoryAdmission, 'evidenceHash'>;
+    return this.store.registerRepositoryAdmission({
+      ...admission,
+      evidenceHash: repositoryAdmissionEvidenceHash(admission),
+    });
+  }
+
+  async validateRepositoryAdmission(
+    id: string,
+    request: ValidateRepositoryAdmissionRequest,
+  ): Promise<RepositoryAdmission> {
+    const admission = await this.store.getRepositoryAdmission(id);
+    if (!admission) {
+      throw new PolicyError(
+        'repository_admission_not_found',
+        'Repository admission was not found',
+        404,
+      );
+    }
+    assertRepositoryAdmissionIntegrity(admission);
+    const { evidenceHash, ...binding } = request;
+    if (
+      admission.requestHash !== requestHash(repositoryAdmissionIdentity(binding)) ||
+      admission.evidenceHash !== evidenceHash
+    ) {
+      throw new PolicyError(
+        'repository_admission_mismatch',
+        'Repository admission does not match the settlement reservation',
+        422,
+      );
+    }
+    return admission;
+  }
+
+  async reconcileRepositorySettlement(
+    id: string,
+    request: ReconcileRepositorySettlementRequest,
+  ): Promise<SettlementFacts> {
+    const admission = await this.store.getRepositoryAdmission(id);
+    if (!admission) {
+      throw new PolicyError(
+        'repository_admission_not_found',
+        'Repository admission was not found',
+        404,
+      );
+    }
+    assertRepositoryAdmissionIntegrity(admission);
+    if (admission.evidenceHash !== request.evidenceHash) {
+      throw new PolicyError(
+        'repository_admission_mismatch',
+        'Repository admission evidence does not match the settlement reservation',
+        422,
+      );
+    }
+    const authorization = this.settlementAuthorization(admission);
+    const facts = await this.chain.reconcileSettlement(authorization);
+    this.validateSettlement(facts);
+    this.validatePaymentWindow(facts, authorization);
+    if (facts.rawAmount !== admission.settlementRawAmount) {
+      throw new PolicyError(
+        'settlement_value_mismatch',
+        'Finalized settlement amount does not match the payment authorization',
+        422,
+      );
+    }
+    return facts;
   }
 
   async bindRefundLiabilityDelivery(
@@ -1044,6 +1229,46 @@ export class PolicyService {
     }
   }
 
+  private validatePaymentWindow(
+    facts: SettlementFacts,
+    authorization: SettlementAuthorizationBinding,
+  ): void {
+    if (
+      facts.blockTimeUnixSeconds < authorization.notBeforeUnixSeconds ||
+      facts.blockTimeUnixSeconds > authorization.notAfterUnixSeconds
+    ) {
+      throw new PolicyError(
+        'settlement_outside_payment_window',
+        'Settlement is outside the admitted payment window',
+        422,
+      );
+    }
+  }
+
+  private settlementAuthorization(admission: RepositoryAdmission): SettlementAuthorizationBinding {
+    return {
+      messageHash: admission.settlementMessageHash,
+      clientSignature: admission.settlementClientSignature,
+      feePayer: admission.settlementFeePayer,
+      rawAmount: admission.settlementRawAmount,
+      notBeforeUnixSeconds: admission.paymentWindowStartUnixSeconds,
+      notAfterUnixSeconds: admission.paymentWindowEndUnixSeconds,
+    };
+  }
+
+  private assertPaymentRoute(authorization: X402PaymentAuthorization): void {
+    if (
+      authorization.accepted.asset !== this.config.refundMint ||
+      authorization.accepted.payTo !== this.config.refundTreasury
+    ) {
+      throw new PolicyError(
+        'payment_route_mismatch',
+        'Payment authorization does not use the protected settlement route',
+        422,
+      );
+    }
+  }
+
   private assertRefundAuthorization(
     action: 'register' | 'execute',
     request: RefundRequest | RegisterRefundLiabilityRequest,
@@ -1132,12 +1357,130 @@ function refundRequestIdentity(
   return { jobId: request.jobId, settlementSignature: request.settlementSignature };
 }
 
+type RepositoryAdmissionIdentity = Pick<
+  RepositoryAdmission,
+  | 'quoteId'
+  | 'repository'
+  | 'issueNumber'
+  | 'baseRef'
+  | 'baseSha'
+  | 'reservationKeyHash'
+  | 'paymentAuthorizationHash'
+>;
+
+function repositoryAdmissionRequestIdentity(
+  request: RepositoryAdmissionRequest,
+): RepositoryAdmissionIdentity {
+  return repositoryAdmissionIdentity({
+    ...request,
+    paymentAuthorizationHash: sha256(request.paymentAuthorization),
+  });
+}
+
+function repositoryAdmissionIdentity(
+  request: RepositoryAdmissionIdentity,
+): RepositoryAdmissionIdentity {
+  return {
+    quoteId: request.quoteId,
+    repository: request.repository.toLowerCase(),
+    issueNumber: request.issueNumber,
+    baseRef: request.baseRef,
+    baseSha: request.baseSha,
+    reservationKeyHash: request.reservationKeyHash,
+    paymentAuthorizationHash: request.paymentAuthorizationHash,
+  };
+}
+
+function repositoryAdmissionEvidenceHash(
+  admission: Omit<RepositoryAdmission, 'evidenceHash'>,
+): string {
+  return requestHash({
+    version: 1,
+    ...repositoryAdmissionIdentity(admission),
+    settlementMessageHash: admission.settlementMessageHash,
+    settlementClientSignature: admission.settlementClientSignature,
+    settlementFeePayer: admission.settlementFeePayer,
+    settlementRawAmount: admission.settlementRawAmount,
+    paymentWindowStartUnixSeconds: admission.paymentWindowStartUnixSeconds,
+    paymentWindowEndUnixSeconds: admission.paymentWindowEndUnixSeconds,
+    verifierAppId: admission.verifierAppId,
+    installationId: admission.installationId,
+    repositorySelection: admission.repositorySelection,
+    permissions: admission.permissions,
+    tokenRepositories: admission.tokenRepositories,
+    tokenExpiresAt: admission.tokenExpiresAt.toISOString(),
+    admittedAt: admission.admittedAt.toISOString(),
+  });
+}
+
+function assertRepositoryAdmissionIntegrity(admission: RepositoryAdmission): void {
+  if (repositoryAdmissionEvidenceHash(admission) !== admission.evidenceHash) {
+    throw new PolicyError(
+      'repository_admission_corrupt',
+      'Stored repository admission failed its integrity check',
+      503,
+      true,
+    );
+  }
+}
+
+function parsePaymentAuthorization(value: string, quoteId: string): X402PaymentAuthorization {
+  let parsed: unknown;
+  try {
+    const encoded = Buffer.from(value, 'base64');
+    if (encoded.toString('base64') !== value) throw new Error('non-canonical base64');
+    const json = new TextDecoder('utf-8', { fatal: true }).decode(encoded);
+    parsed = JSON.parse(json);
+  } catch {
+    throw new PolicyError(
+      'payment_authorization_invalid',
+      'Payment authorization is not canonical base64 JSON',
+      422,
+    );
+  }
+
+  const authorization = x402PaymentAuthorizationSchema.safeParse(parsed);
+  if (!authorization.success) {
+    throw new PolicyError(
+      'payment_authorization_invalid',
+      'Payment authorization does not use the supported exact SVM format',
+      422,
+    );
+  }
+
+  const resource = new URL(authorization.data.resource.url);
+  const parameters = [...resource.searchParams.keys()];
+  if (
+    resource.protocol !== 'https:' ||
+    resource.username ||
+    resource.password ||
+    resource.hash ||
+    resource.pathname !== '/v1/jobs' ||
+    parameters.length !== 1 ||
+    parameters[0] !== 'quote_id' ||
+    resource.searchParams.get('quote_id') !== quoteId
+  ) {
+    throw new PolicyError(
+      'payment_resource_mismatch',
+      'Payment authorization resource does not match the admitted quote',
+      422,
+    );
+  }
+  return authorization.data;
+}
+
+function sha256(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
 function registrationRequestIdentity(
   request: RegisterRefundLiabilityRequest,
 ): Omit<RegisterRefundLiabilityRequest, 'authorizationExpiresAt' | 'authorizationSignature'> {
   return {
     jobId: request.jobId,
     settlementSignature: request.settlementSignature,
+    repositoryAdmissionId: request.repositoryAdmissionId,
+    repositoryAdmissionEvidenceHash: request.repositoryAdmissionEvidenceHash,
     repository: request.repository,
     issueNumber: request.issueNumber,
     baseRef: request.baseRef,

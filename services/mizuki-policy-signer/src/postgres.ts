@@ -5,6 +5,7 @@ import type {
   GitHubIdentityGrant,
   OperationRecord,
   RefundLiability,
+  RepositoryAdmission,
   ReserveOperation,
 } from './domain.js';
 import { PolicyError } from './domain.js';
@@ -209,6 +210,90 @@ const SIGNER_SCHEMA = `
         ON mizuki_signer_operations (created_at)
         WHERE status NOT IN ('finalized', 'rejected');`;
 
+const REPOSITORY_ADMISSION_SCHEMA = `
+      CREATE TABLE IF NOT EXISTS mizuki_signer_repository_admissions (
+        id uuid PRIMARY KEY,
+        idempotency_key text NOT NULL UNIQUE,
+        request_hash text NOT NULL CHECK (request_hash ~ '^[a-f0-9]{64}$'),
+        quote_id uuid NOT NULL UNIQUE,
+        repository text NOT NULL,
+        issue_number integer NOT NULL CHECK (issue_number > 0),
+        base_ref text NOT NULL,
+        base_sha text NOT NULL CHECK (base_sha ~ '^[a-f0-9]{40,64}$'),
+        reservation_key_hash text NOT NULL UNIQUE CHECK (reservation_key_hash ~ '^[a-f0-9]{64}$'),
+        payment_authorization_hash text NOT NULL UNIQUE CHECK (payment_authorization_hash ~ '^[a-f0-9]{64}$'),
+        verifier_app_id text NOT NULL CHECK (verifier_app_id ~ '^[1-9][0-9]{0,15}$'),
+        installation_id bigint NOT NULL CHECK (installation_id > 0),
+        repository_selection text NOT NULL CHECK (repository_selection = 'selected'),
+        permissions jsonb NOT NULL,
+        token_repositories integer NOT NULL CHECK (token_repositories = 1),
+        token_expires_at timestamptz NOT NULL,
+        admitted_at timestamptz NOT NULL,
+        evidence_hash text NOT NULL UNIQUE CHECK (evidence_hash ~ '^[a-f0-9]{64}$'),
+        CHECK (token_expires_at > admitted_at)
+      );`;
+
+const DELAYED_LIABILITY_SAFETY_SCHEMA = `
+      ALTER TABLE mizuki_signer_repository_admissions
+        ADD COLUMN IF NOT EXISTS settlement_message_hash char(64),
+        ADD COLUMN IF NOT EXISTS settlement_client_signature varchar(88),
+        ADD COLUMN IF NOT EXISTS settlement_fee_payer varchar(44),
+        ADD COLUMN IF NOT EXISTS settlement_raw_amount numeric(20, 0),
+        ADD COLUMN IF NOT EXISTS payment_window_start bigint,
+        ADD COLUMN IF NOT EXISTS payment_window_end bigint;
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1
+            FROM mizuki_signer_repository_admissions
+           WHERE settlement_message_hash IS NULL
+              OR settlement_client_signature IS NULL
+              OR settlement_fee_payer IS NULL
+              OR settlement_raw_amount IS NULL
+              OR payment_window_start IS NULL
+              OR payment_window_end IS NULL
+        ) THEN
+          RAISE EXCEPTION 'existing repository admissions lack non-replayable settlement bindings';
+        END IF;
+      END $$;
+      ALTER TABLE mizuki_signer_repository_admissions
+        ALTER COLUMN settlement_message_hash SET NOT NULL,
+        ALTER COLUMN settlement_client_signature SET NOT NULL,
+        ALTER COLUMN settlement_fee_payer SET NOT NULL,
+        ALTER COLUMN settlement_raw_amount SET NOT NULL,
+        ALTER COLUMN payment_window_start SET NOT NULL,
+        ALTER COLUMN payment_window_end SET NOT NULL;
+      ALTER TABLE mizuki_signer_repository_admissions
+        DROP CONSTRAINT IF EXISTS mizuki_signer_admission_settlement_binding_check;
+      ALTER TABLE mizuki_signer_repository_admissions
+        ADD CONSTRAINT mizuki_signer_admission_settlement_binding_check CHECK (
+          settlement_message_hash ~ '^[a-f0-9]{64}$'
+          AND settlement_client_signature ~ '^[1-9A-HJ-NP-Za-km-z]{64,88}$'
+          AND settlement_fee_payer ~ '^[1-9A-HJ-NP-Za-km-z]{32,44}$'
+          AND settlement_raw_amount > 0
+          AND payment_window_end > payment_window_start
+        );
+      ALTER TABLE mizuki_signer_refund_liabilities
+        ADD COLUMN IF NOT EXISTS repository_admission_id uuid;
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1
+            FROM mizuki_signer_refund_liabilities
+           WHERE repository_admission_id IS NULL
+        ) THEN
+          RAISE EXCEPTION 'existing refund liabilities lack repository admission IDs';
+        END IF;
+      END $$;
+      ALTER TABLE mizuki_signer_refund_liabilities
+        ALTER COLUMN repository_admission_id SET NOT NULL;
+      ALTER TABLE mizuki_signer_refund_liabilities
+        DROP CONSTRAINT IF EXISTS mizuki_signer_refund_repository_admission_fk;
+      ALTER TABLE mizuki_signer_refund_liabilities
+        ADD CONSTRAINT mizuki_signer_refund_repository_admission_fk
+        FOREIGN KEY (repository_admission_id)
+        REFERENCES mizuki_signer_repository_admissions(id);`;
+
 export class PostgresOperationStore implements OperationStore {
   private readonly pool: Pool;
 
@@ -240,23 +325,35 @@ export class PostgresOperationStore implements OperationStore {
         'SELECT version, name, checksum FROM mizuki_schema_migrations WHERE component = $1',
         ['policy-signer'],
       );
-      const checksum = createHash('sha256').update(SIGNER_SCHEMA).digest('hex');
-      if (applied.rows.some((row) => Number(row.version) !== 1)) {
+      const migrations = [
+        { version: 1, name: 'policy-and-custody-core', sql: SIGNER_SCHEMA },
+        { version: 2, name: 'repository-admission-receipts', sql: REPOSITORY_ADMISSION_SCHEMA },
+        { version: 3, name: 'delayed-liability-safety', sql: DELAYED_LIABILITY_SAFETY_SCHEMA },
+      ].map((migration) => ({
+        ...migration,
+        checksum: createHash('sha256').update(migration.sql).digest('hex'),
+      }));
+      if (
+        applied.rows.some(
+          (row) => !migrations.some((migration) => migration.version === Number(row.version)),
+        )
+      ) {
         throw new Error('policy-signer database contains an unknown schema migration');
       }
-      const current = applied.rows.find((row) => Number(row.version) === 1);
-      if (
-        current &&
-        (current.name !== 'policy-and-custody-core' || current.checksum !== checksum)
-      ) {
-        throw new Error('policy-signer database migration does not match this build');
-      }
-      if (!current) {
-        await client.query(SIGNER_SCHEMA);
+      for (const migration of migrations) {
+        const current = applied.rows.find((row) => Number(row.version) === migration.version);
+        if (
+          current &&
+          (current.name !== migration.name || current.checksum !== migration.checksum)
+        ) {
+          throw new Error('policy-signer database migration does not match this build');
+        }
+        if (current) continue;
+        await client.query(migration.sql);
         await client.query(
           `INSERT INTO mizuki_schema_migrations (component, version, name, checksum)
            VALUES ($1, $2, $3, $4)`,
-          ['policy-signer', 1, 'policy-and-custody-core', checksum],
+          ['policy-signer', migration.version, migration.name, migration.checksum],
         );
       }
       await client.query('COMMIT');
@@ -266,6 +363,106 @@ export class PostgresOperationStore implements OperationStore {
     } finally {
       client.release();
     }
+  }
+
+  async registerRepositoryAdmission(admission: RepositoryAdmission): Promise<RepositoryAdmission> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
+      await client.query(
+        "SELECT pg_advisory_xact_lock(hashtext('mizuki-signer-repository-admissions'))",
+      );
+      const idempotent = await client.query(
+        'SELECT * FROM mizuki_signer_repository_admissions WHERE idempotency_key = $1',
+        [admission.idempotencyKey],
+      );
+      if (idempotent.rows[0]) {
+        const existing = mapRepositoryAdmission(idempotent.rows[0]);
+        if (existing.requestHash !== admission.requestHash) {
+          throw new PolicyError(
+            'idempotency_conflict',
+            'Idempotency key was already used for a different request',
+            409,
+          );
+        }
+        await client.query('COMMIT');
+        return existing;
+      }
+      const conflict = await client.query(
+        `SELECT id FROM mizuki_signer_repository_admissions
+          WHERE quote_id = $1 OR reservation_key_hash = $2 OR payment_authorization_hash = $3`,
+        [admission.quoteId, admission.reservationKeyHash, admission.paymentAuthorizationHash],
+      );
+      if (conflict.rows[0]) {
+        throw new PolicyError(
+          'repository_admission_conflict',
+          'Quote, reservation, or payment proof already has a different admission',
+          409,
+        );
+      }
+      const result = await client.query(
+        `INSERT INTO mizuki_signer_repository_admissions (
+           id, idempotency_key, request_hash, quote_id, repository, issue_number,
+           base_ref, base_sha, reservation_key_hash, payment_authorization_hash,
+           settlement_message_hash, settlement_client_signature, settlement_fee_payer,
+           settlement_raw_amount, payment_window_start, payment_window_end, verifier_app_id,
+           installation_id, repository_selection, permissions, token_repositories,
+           token_expires_at, admitted_at, evidence_hash
+         ) VALUES (
+           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+           $14, $15, $16, $17, $18, $19, $20::jsonb, $21, $22, $23, $24
+         ) RETURNING *`,
+        [
+          admission.id,
+          admission.idempotencyKey,
+          admission.requestHash,
+          admission.quoteId,
+          admission.repository,
+          admission.issueNumber,
+          admission.baseRef,
+          admission.baseSha,
+          admission.reservationKeyHash,
+          admission.paymentAuthorizationHash,
+          admission.settlementMessageHash,
+          admission.settlementClientSignature,
+          admission.settlementFeePayer,
+          admission.settlementRawAmount,
+          admission.paymentWindowStartUnixSeconds,
+          admission.paymentWindowEndUnixSeconds,
+          admission.verifierAppId,
+          admission.installationId,
+          admission.repositorySelection,
+          JSON.stringify(admission.permissions),
+          admission.tokenRepositories,
+          admission.tokenExpiresAt,
+          admission.admittedAt,
+          admission.evidenceHash,
+        ],
+      );
+      await client.query('COMMIT');
+      return mapRepositoryAdmission(result.rows[0]);
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async getRepositoryAdmission(id: string): Promise<RepositoryAdmission | null> {
+    const result = await this.pool.query(
+      'SELECT * FROM mizuki_signer_repository_admissions WHERE id = $1',
+      [id],
+    );
+    return result.rows[0] ? mapRepositoryAdmission(result.rows[0]) : null;
+  }
+
+  async getRepositoryAdmissionByIdempotencyKey(key: string): Promise<RepositoryAdmission | null> {
+    const result = await this.pool.query(
+      'SELECT * FROM mizuki_signer_repository_admissions WHERE idempotency_key = $1',
+      [key],
+    );
+    return result.rows[0] ? mapRepositoryAdmission(result.rows[0]) : null;
   }
 
   async registerRefundLiability(
@@ -353,17 +550,19 @@ export class PostgresOperationStore implements OperationStore {
       }
       const result = await client.query(
         `INSERT INTO mizuki_signer_refund_liabilities (
-           id, idempotency_key, request_hash, job_id, settlement_signature, payer,
-           repository, issue_number, base_ref, base_sha, repository_authorized_at,
-           authorization_evidence_hash, treasury, mint, raw_amount, decimals,
-           settlement_slot, amount_usd_cents, settlement_block_time, created_at
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, clock_timestamp())
+           id, idempotency_key, request_hash, job_id, repository_admission_id,
+           settlement_signature, payer, repository, issue_number, base_ref, base_sha,
+           repository_authorized_at, authorization_evidence_hash, treasury, mint,
+           raw_amount, decimals, settlement_slot, amount_usd_cents,
+           settlement_block_time, created_at
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, clock_timestamp())
          RETURNING *`,
         [
           liability.id,
           liability.idempotencyKey,
           liability.requestHash,
           liability.jobId,
+          liability.repositoryAdmissionId,
           liability.settlementSignature,
           liability.payer,
           liability.repository,
@@ -1161,6 +1360,7 @@ function mapLiability(row: QueryResultRow): RefundLiability {
     idempotencyKey: row.idempotency_key,
     requestHash: row.request_hash,
     jobId: row.job_id,
+    repositoryAdmissionId: row.repository_admission_id,
     settlementSignature: row.settlement_signature,
     repository: row.repository,
     issueNumber: row.issue_number,
@@ -1190,5 +1390,34 @@ function mapLiability(row: QueryResultRow): RefundLiability {
     dischargeEvidence: row.discharge_evidence,
     dischargeIdempotencyKey: row.discharge_idempotency_key,
     dischargeRequestHash: row.discharge_request_hash,
+  };
+}
+
+function mapRepositoryAdmission(row: QueryResultRow): RepositoryAdmission {
+  return {
+    id: row.id,
+    idempotencyKey: row.idempotency_key,
+    requestHash: row.request_hash,
+    quoteId: row.quote_id,
+    repository: row.repository,
+    issueNumber: row.issue_number,
+    baseRef: row.base_ref,
+    baseSha: row.base_sha,
+    reservationKeyHash: row.reservation_key_hash,
+    paymentAuthorizationHash: row.payment_authorization_hash,
+    settlementMessageHash: row.settlement_message_hash,
+    settlementClientSignature: row.settlement_client_signature,
+    settlementFeePayer: row.settlement_fee_payer,
+    settlementRawAmount: String(row.settlement_raw_amount),
+    paymentWindowStartUnixSeconds: Number(row.payment_window_start),
+    paymentWindowEndUnixSeconds: Number(row.payment_window_end),
+    verifierAppId: row.verifier_app_id,
+    installationId: Number(row.installation_id),
+    repositorySelection: row.repository_selection,
+    permissions: row.permissions,
+    tokenRepositories: row.token_repositories,
+    tokenExpiresAt: new Date(row.token_expires_at),
+    admittedAt: new Date(row.admitted_at),
+    evidenceHash: row.evidence_hash,
   };
 }

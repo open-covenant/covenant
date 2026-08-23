@@ -1,5 +1,5 @@
 import { constants as fsConstants } from 'node:fs';
-import { lstat, open, writeFile } from 'node:fs/promises';
+import { lstat, open, type FileHandle } from 'node:fs/promises';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import {
   Connection,
@@ -12,8 +12,9 @@ import {
 } from '@solana/web3.js';
 import { buildEscrowInstruction } from './chain.js';
 
-const DEVNET_GENESIS_HASH = 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1';
+const DEVNET_GENESIS_HASH = 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG';
 const UPGRADEABLE_LOADER_ID = new PublicKey('BPFLoaderUpgradeab1e11111111111111111111111');
+const EM_SBF = 263;
 const STATE_MAGIC = Buffer.from('4d5a4b4553433100', 'hex');
 const VAULT_MAGIC = Buffer.from('4d5a4b564c543100', 'hex');
 const GUARD_MAGIC = Buffer.from('4d5a4b4752443100', 'hex');
@@ -26,6 +27,8 @@ const PROGRAM_DATA_OFFSET = 45;
 const MAX_ARTIFACT_BYTES = 16 * 1024 * 1024;
 const FEE_RESERVE_LAMPORTS = 1_000_000n;
 const MAX_WAIT_GRACE_SECONDS = 120;
+const CONFIRMATION_RECONCILE_SECONDS = 120;
+const CONFIRMATION_POLL_MS = 2_000;
 
 export interface DevnetCanaryOptions {
   rpcUrlFile: string;
@@ -146,6 +149,8 @@ interface CanaryReceiptPayload {
     adversaryCapacityVerified: true;
     distinctRoleKeysVerified: true;
     secretsRedacted: true;
+    recoveryJournalPersistedBeforeExecution?: true;
+    recoveryJournalSha256?: string;
     flowPlan: ['prefunded_release', 'bound_expiry_refund', 'unbound_expiry_refund'];
     flows?: {
       prefundedRelease: FlowReceipt;
@@ -156,6 +161,31 @@ interface CanaryReceiptPayload {
 }
 
 export interface CanaryReceipt extends CanaryReceiptPayload {
+  payloadSha256: string;
+}
+
+interface RecoveryJournalPayload {
+  schemaVersion: 1;
+  kind: 'mizuki_devnet_escrow_recovery';
+  status: 'recovery_ready';
+  createdAt: string;
+  network: {
+    cluster: 'devnet';
+    genesisHash: string;
+  };
+  programId: string;
+  authority: string;
+  scenarios: Record<
+    'prefundedRelease' | 'boundExpiryRefund' | 'unboundExpiryRefund',
+    Scenario & {
+      state: string;
+      vault: string;
+      guard: string;
+    }
+  >;
+}
+
+interface RecoveryJournal extends RecoveryJournalPayload {
   payloadSha256: string;
 }
 
@@ -267,7 +297,7 @@ export function inspectSbpfArtifact(data: Buffer, expectedSha256: string): Artif
     !data.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46])) ||
     data[4] !== 2 ||
     data[5] !== 1 ||
-    data.readUInt16LE(18) !== 247 ||
+    data.readUInt16LE(18) !== EM_SBF ||
     data.readUInt32LE(48) !== 2
   ) {
     throw new DevnetCanaryError('artifact_not_sbpf_v2');
@@ -372,6 +402,10 @@ export async function runDevnetCanary(options: DevnetCanaryOptions): Promise<Can
   };
   await assertFreshPdas(connection, Object.values(addresses));
 
+  const receiptFile = await reserveOutput(options.output, 'receipt_write_failed');
+  let recoveryFile: FileHandle | undefined;
+  let recoveryJournal: RecoveryJournal | undefined;
+
   const base: CanaryReceiptPayload = {
     schemaVersion: 1,
     kind: 'mizuki_devnet_escrow_canary',
@@ -406,24 +440,54 @@ export async function runDevnetCanary(options: DevnetCanaryOptions): Promise<Can
     },
   };
 
-  if (options.execute) {
-    base.canary.flows = await executeCanaries({
-      connection,
-      programId,
-      authority,
-      claimant,
-      adversary,
-      principal,
-      expirySeconds: options.expirySeconds,
-      rents,
-      scenarios,
-      addresses,
-    });
-  }
+  try {
+    if (options.execute) {
+      recoveryJournal = sealRecoveryJournal({
+        schemaVersion: 1,
+        kind: 'mizuki_devnet_escrow_recovery',
+        status: 'recovery_ready',
+        createdAt: base.createdAt,
+        network: base.network,
+        programId: programId.toBase58(),
+        authority: authority.publicKey.toBase58(),
+        scenarios: recoveryScenarios(scenarios, addresses),
+      });
+      recoveryFile = await reserveOutput(
+        `${options.output}.recovery.json`,
+        'recovery_journal_write_failed',
+      );
+      await writeReservedJson(recoveryFile, recoveryJournal, 'recovery_journal_write_failed');
+      base.canary.recoveryJournalPersistedBeforeExecution = true;
+      base.canary.recoveryJournalSha256 = recoveryJournal.payloadSha256;
+      base.canary.flows = await executeCanaries({
+        connection,
+        programId,
+        authority,
+        claimant,
+        adversary,
+        principal,
+        expirySeconds: options.expirySeconds,
+        rents,
+        scenarios,
+        addresses,
+      });
+    }
 
-  const receipt = sealReceipt(base);
-  await writeReceipt(options.output, receipt);
-  return receipt;
+    const receipt = sealReceipt(base);
+    await writeReservedJson(receiptFile, receipt, 'receipt_write_failed');
+    return receipt;
+  } catch (error) {
+    if (recoveryJournal) {
+      try {
+        await writeFailureReceipt(receiptFile, recoveryJournal.payloadSha256, error);
+      } catch {
+        // The separately synced recovery journal remains authoritative.
+      }
+    }
+    throw error;
+  } finally {
+    await Promise.allSettled([receiptFile.close(), recoveryFile?.close()]);
+  }
 }
 
 interface ExecutionContext {
@@ -878,27 +942,48 @@ async function signTransaction(
   return { wire: transaction.serialize(), blockhash };
 }
 
-async function confirmFinalized(
+export async function confirmFinalized(
   connection: Connection,
   signature: string,
   blockhash: { blockhash: string; lastValidBlockHeight: number },
 ): Promise<unknown | null> {
-  let confirmation;
+  let confirmation: Awaited<ReturnType<Connection['confirmTransaction']>> | undefined;
   try {
     confirmation = await connection.confirmTransaction({ signature, ...blockhash }, 'finalized');
   } catch {
-    throw new DevnetCanaryError('transaction_confirmation_failed');
+    confirmation = undefined;
   }
-  const status = await connection.getSignatureStatus(signature, {
-    searchTransactionHistory: true,
-  });
-  if (!status.value || status.value.confirmationStatus !== 'finalized') {
-    throw new DevnetCanaryError('transaction_not_finalized');
+
+  const deadline = Date.now() + CONFIRMATION_RECONCILE_SECONDS * 1_000;
+  while (Date.now() <= deadline) {
+    try {
+      const status = await connection.getSignatureStatus(signature, {
+        searchTransactionHistory: true,
+      });
+      if (status.value?.confirmationStatus === 'finalized') {
+        if (
+          confirmation &&
+          JSON.stringify(status.value.err) !== JSON.stringify(confirmation.value.err)
+        ) {
+          throw new DevnetCanaryError('transaction_status_inconsistent');
+        }
+        return status.value.err;
+      }
+
+      if (!status.value) {
+        const height = await connection.getBlockHeight('finalized');
+        if (height > blockhash.lastValidBlockHeight) {
+          throw new DevnetCanaryError('transaction_not_finalized');
+        }
+      }
+    } catch (error) {
+      if (error instanceof DevnetCanaryError) throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, CONFIRMATION_POLL_MS));
   }
-  if (JSON.stringify(status.value.err) !== JSON.stringify(confirmation.value.err)) {
-    throw new DevnetCanaryError('transaction_status_inconsistent');
-  }
-  return status.value.err;
+  throw new DevnetCanaryError(
+    confirmation ? 'transaction_not_finalized' : 'transaction_confirmation_failed',
+  );
 }
 
 async function assertTransactionDeltas(
@@ -1323,16 +1408,79 @@ function sealReceipt(payload: CanaryReceiptPayload): CanaryReceipt {
   return { ...payload, payloadSha256 };
 }
 
-async function writeReceipt(path: string, receipt: CanaryReceipt): Promise<void> {
+function sealRecoveryJournal(payload: RecoveryJournalPayload): RecoveryJournal {
+  const payloadSha256 = createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+  return { ...payload, payloadSha256 };
+}
+
+function recoveryScenarios(
+  scenarios: Record<'prefundedRelease' | 'boundExpiryRefund' | 'unboundExpiryRefund', Scenario>,
+  addresses: Record<
+    'prefundedRelease' | 'boundExpiryRefund' | 'unboundExpiryRefund',
+    EscrowAddresses
+  >,
+): RecoveryJournalPayload['scenarios'] {
+  return Object.fromEntries(
+    Object.entries(scenarios).map(([name, scenario]) => {
+      const address = addresses[name as keyof typeof addresses];
+      return [
+        name,
+        {
+          ...scenario,
+          state: address.state.toBase58(),
+          vault: address.vault.toBase58(),
+          guard: address.guard.toBase58(),
+        },
+      ];
+    }),
+  ) as RecoveryJournalPayload['scenarios'];
+}
+
+async function reserveOutput(path: string, code: string): Promise<FileHandle> {
   try {
-    await writeFile(path, `${JSON.stringify(receipt, null, 2)}\n`, {
-      encoding: 'utf8',
-      flag: 'wx',
-      mode: 0o600,
-    });
+    return await open(
+      path,
+      fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW,
+      0o600,
+    );
   } catch {
-    throw new DevnetCanaryError('receipt_write_failed');
+    throw new DevnetCanaryError(code);
   }
+}
+
+async function writeReservedJson(handle: FileHandle, value: unknown, code: string): Promise<void> {
+  const data = Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
+  try {
+    await handle.truncate(0);
+    let offset = 0;
+    while (offset < data.length) {
+      const { bytesWritten } = await handle.write(data, offset, data.length - offset, offset);
+      if (bytesWritten <= 0) throw new Error('short_write');
+      offset += bytesWritten;
+    }
+    await handle.sync();
+  } catch {
+    throw new DevnetCanaryError(code);
+  }
+}
+
+async function writeFailureReceipt(
+  handle: FileHandle,
+  recoveryJournalSha256: string,
+  error: unknown,
+): Promise<void> {
+  await writeReservedJson(
+    handle,
+    {
+      schemaVersion: 1,
+      kind: 'mizuki_devnet_escrow_attempt',
+      status: 'failed',
+      failedAt: new Date().toISOString(),
+      code: error instanceof DevnetCanaryError ? error.code : 'unexpected_failure',
+      recoveryJournalSha256,
+    },
+    'receipt_write_failed',
+  );
 }
 
 function optionalInteger(

@@ -2,202 +2,209 @@
 
 - Audit date: 23 August 2026
 - Launch deadline: 19 September 2026
-- Scope: the Mizuki workflow, API, web app, policy signer, updater, coding-gateway integration, deployment artifacts, and escrow program.
+- Scope: the Mizuki paid-maintenance engine, refund-to-bounty loop, external policy signer, coding gateway, updater, deployment boundary, and Solana escrow program.
 
 ## Verdict
 
-**NO-GO for public paid intake. Production readiness: 69/100.**
+**NO-GO for public paid intake. Production readiness: 66/100.**
 
-The code-local commercial core is substantially implemented. No open code-local P0 was found after the final correctness fixes and three-database verification pass. The paid engine now fails closed before accepting new work, preserves already-settled recovery during incidents, publishes the exact reviewed file bytes, and routes every failed settled job into the signer-backed refund path. The refund-to-bounty loop does not advertise an open bounty until a finalized on-chain escrow exists. The external policy signer independently verifies chain, GitHub, capacity, price, and immutable program facts before signing.
+The last hosted release baseline passed at revision `dfeffb0a8c8280bb7b3844bead750fccf7233ae7`, produced a 104,376-byte SBPFv2 artifact, and exercised 31 host and artifact-backed escrow tests. That exact historical artifact was then deployed to devnet and completed fund, bind, exact release, bound-expiry refund, unbound-expiry refund, wrong-claimant rejection, expired-release rejection, and replay rejection with finalized public transactions. A separately funded provider account also completed synthetic coding and review route canaries.
 
-That is not sufficient to open paid intake. Hosted CI is green for revision `ada1d5e7d`, its escrow artifact remains reproducible, and the website plus fail-closed public API are live on Render from that exact revision. The API reports liveness and deployment safety but deliberately reports not ready because the policy signer, coding gateway, updater, GitHub App, reviewer route, and x402 facilitator are not configured live. Provider credentials and funding are absent; the custom domain is not DNS-verified; no platform restore has been proven; the escrow program has not been independently reviewed or deployed immutably; the live model/sandbox route is unbenchmarked; and neither required public mainnet canary has happened. The stated traction and verified-margin targets are also at zero in the supplied evidence.
+That is meaningful integration proof, but it is not production proof. The devnet program is upgradeable. The policy signer, coding gateway, updater, GitHub Apps, model route, sandbox, and project settlement accounts are not operating together in production. There is no approved immutable mainnet program, no funded end-to-end settlement path, no independent escrow review, no public paid job, and no public customer-refund-to-funded-bounty canary.
 
-Keep paid intake, new bounty claims, and updater promotion closed. The next work is production proof, not feature expansion.
+Keep paid intake, new bounty claims, and updater promotion closed. A newer release candidate contains additional fail-closed controls for payment admission and recovery, provider-balance admission, updater check identity, and permanent escrow evidence. Those changes are not part of the hosted baseline and do not inherit its evidence. They require a frozen commit, a new clean hosted run, and a new artifact hash before deployment or release claims.
 
-| Area                                   | Score | Reason                                                                                                                          |
-| -------------------------------------- | ----: | ------------------------------------------------------------------------------------------------------------------------------- |
-| Paid maintenance engine                | 20/25 | Strong bounded and recoverable local flow; real route quality and scope classification unproven.                                |
-| Refund-to-bounty engine                | 19/25 | Strong state and custody controls; no live end-to-end chain canary.                                                             |
-| External policy signer                 | 20/25 | Strong independent policy boundary; no live keys, RPC disagreement drill, or deployed-program proof.                            |
-| Deployment and operations              |  9/15 | Website, API, CI, process startup, and closed controls are proven; private services, DNS, recovery, and paid execution are not. |
-| Live evidence, economics, and traction |  1/10 | Research queue exists; no qualifying paid jobs, merges, maintainers, or verified margin.                                        |
+| Area                                   | Score | Reason                                                                                                                                |
+| -------------------------------------- | ----: | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Paid maintenance engine                | 19/25 | Bounded source path and funded synthetic model canary; no real-repository sandbox run or paid GitHub publication.                     |
+| Refund-to-bounty engine                | 19/25 | Exact release and both refund paths passed on devnet; the commercial refund-to-public-bounty loop remains unproven.                   |
+| External policy signer                 | 18/25 | Strong independent policy boundary and live canary runner; the service, funded production custody, and mainnet deployment are absent. |
+| Deployment and operations              |  8/15 | Hosted CI, public website/API liveness, and closed controls exist; private services, DNS, restore, and promotion proof do not.        |
+| Live evidence, economics, and traction |  2/10 | Funded model-route canaries passed, but no paid jobs, external maintainers, complete cost receipts, or verified positive margin.      |
 
-## Evidence verified
+## Historical verified release baseline
 
-The application verifier ran against three fresh Postgres databases and exited successfully. The [Mizuki workflow](https://github.com/open-covenant/covenant/actions/runs/32645440904) and [repository CI workflow](https://github.com/open-covenant/covenant/actions/runs/32645440926) are green at revision `ada1d5e7d`.
+The [Mizuki workflow](https://github.com/open-covenant/covenant/actions/runs/32662760151) and [repository CI workflow](https://github.com/open-covenant/covenant/actions/runs/32662760145) completed successfully for revision `dfeffb0a8c8280bb7b3844bead750fccf7233ae7`. Every result in this section is historical evidence for that revision only.
 
-| Component                        | Final result                                                              |
-| -------------------------------- | ------------------------------------------------------------------------- |
-| `@covenant/mizuki`               | 218 tests passed; typecheck, build, and process startup smoke passed      |
-| `@covenant/mizuki-policy-signer` | 131 tests passed; typecheck and build passed                              |
-| `@covenant/mizuki-updater`       | 61 tests passed; typecheck and build passed                               |
-| `@covenant/coding-gateway`       | 130 tests passed; build passed                                            |
-| `@mizuki/web`                    | 36 tests passed; typecheck, production build, and HTTP smoke passed       |
-| Release checks                   | Blueprint invariants, Prettier, scoped production dependency audit passed |
+| Component                                | Hosted result                                                       |
+| ---------------------------------------- | ------------------------------------------------------------------- |
+| `@covenant/mizuki`                       | 248 tests passed; typecheck, build, and process smoke passed        |
+| `@covenant/mizuki-policy-signer`         | 164 tests passed; typecheck and build passed                        |
+| `@covenant/mizuki-updater`               | 64 tests passed; typecheck and build passed                         |
+| `@covenant/mizuki-deployment-controller` | 37 tests passed; typecheck and build passed                         |
+| `@covenant/coding-gateway`               | 159 tests passed; typecheck and build passed                        |
+| `@mizuki/web`                            | 39 tests passed; typecheck, production build, and HTTP smoke passed |
 
-Application total: **576 tests passed across 76 files**.
+Application total: **711 tests passed across 90 files**. The workflow also exercised full data-and-sequence dump/restore equality across the four isolated test databases. This is CI restore evidence, not a managed production backup or point-in-time recovery drill.
 
-Escrow verification passed six host tests and 24 artifact-backed SBPF tests. The release artifact SHA-256 is `075302c38b9f895ea4aa94b9c61d9d83f98b85fd8f5e2cd0e915d08430b92b3f`, reproduced byte-for-byte across two hosted runs.
+Escrow verification passed six host tests and 25 artifact-backed SBPF tests. The hosted artifact archive records:
 
-This establishes hosted build provenance for the tested revision and artifact. It does not establish deployed-program identity, immutability, custody safety, or a live transaction path. The API smoke boots the compiled server, checks liveness, and requires clean shutdown. The web smoke boots the standalone production server against a fake API and proves real HTTP 404 responses for missing receipts, non-404 outage pages, valid receipt rendering, and clean shutdown. The generated Next.js `next-env.d.ts` file is intentionally excluded from the source-format gate; the application source and deployment artifacts remain covered.
+- Git revision: `dfeffb0a8c8280bb7b3844bead750fccf7233ae7`
+- Artifact SHA-256: `2d24fd43b65a7bb31b39007b93717b1f65615df39aeec33b9eebe83bb89a2237`
+- Solana executable hash: `42bd1e28a27ad9fe1c08f38c83008fe67db12081480b77cf4adeeeb06fcf038a`
+- Artifact length: 104,376 bytes
+- ELF machine: registered `EM_SBF` value `263`
+- SBPF version and flags: v2 and `0x2`
+- Toolchain: `cargo-build-sbf 4.0.0`, platform-tools `v1.53`, Rust `1.89.0`, and `solana-verify 0.5.0`
 
-A separate packaging check assembled the intended scope in a fresh isolated checkout. `pnpm 10.31.0 install --frozen-lockfile` succeeded across all 20 workspaces, all five application builds passed, and the standalone web output succeeded with no `public/` directory present. The GitHub Action pins resolve to their stated releases, the updater Docker base is digest-pinned, and the exact staging allowlist excludes unrelated repository work. The database restore job compares normalized full data and sequence dumps across all three restored databases and was proven locally on Postgres 16.14. Hosted CI now passes, but the policy signer, coding gateway, and updater have not been deployed and platform backup/PITR recovery remains unproven.
+The archive is retained by the historical workflow for 90 days. It has not been copied into a permanent release, so it remains time-limited evidence rather than a durable public transparency record.
 
-Render service `srv-da5egcrl550s73cmhqh0` serves the website at [mizuki-9by5.onrender.com](https://mizuki-9by5.onrender.com) from deploy `dep-da5g9obtqb8s73acrh9g` at revision `ada1d5e7d`; [`/healthz`](https://mizuki-9by5.onrender.com/healthz) returns HTTP 200. API service `srv-da5fg02jobas73ei3n30` serves [mizuki-api.onrender.com](https://mizuki-api.onrender.com) from deploy `dep-da5g9o6417fc73fcmfgg` at the same revision. Its liveness and deploy-safety endpoints return HTTP 200, readiness returns HTTP 503 with incomplete dependencies named, admission reports intake and claims closed at revision zero, and a valid quote request returns HTTP 503 before GitHub or payment work. Both services have automatic deploy disabled. Paid Postgres resource `dpg-da5ekm8u01pc73evr3d0-a` is available on the Basic plan in Frankfurt.
+## Unverified release-candidate hardening
 
-The website proxies the public API with matching service-held credentials and demo mode disabled. It shows authoritative zero metrics and closed intake, omits quote and payment controls while closed, and returns real HTTP 404 responses for nonexistent job and bounty receipts. Browser inspection found the expected live state, male language, and no console errors. The custom domain `mizuki.covenant.org` is attached but DNS is not verified; the authoritative provider still serves the wildcard A record instead of CNAME host `mizuki` targeting `mizuki-9by5.onrender.com`.
+The current release candidate adds four controls that directly address the commercial trust boundary:
 
-The policy signer, coding gateway, and updater are not deployed. Paid intake, new bounty claims, and updater promotion remain closed. No evidence in scope proves a deployed GitHub App, live x402 settlement, live facilitator recovery, E2B egress denial, marketplace tool-call reliability, finalized refund, funded bounty, contributor payout, private-service connectivity, backup/PITR recovery, or updater promotion/rollback.
+- Before a facilitator payment broadcast, the policy signer must independently revalidate and persist a repository admission bound to the quote, repository, issue, base ref and SHA, reservation-key hash, and complete payment-authorization hash. It validates the full authorization transiently but retains only a non-replayable fingerprint: message hash, client signature, fee payer, amount, and admitted payment window. Recovery first asks the signer to reconcile that fingerprint through two independent RPC providers. Only dual-provider proof that the transaction is absent permits one facilitator replay; disagreement, scan exhaustion, altered evidence, or an incomplete history fails closed. A known finalized transaction is verified directly against the same fingerprint, so its liability can be registered after a prolonged outage without a second charge or an arbitrary wall-clock expiry.
+- The updater no longer treats a check name or commit status as sufficient evidence. Each required check is pinned to an exact GitHub App, workflow ID, workflow path, event, repository, pull request, head and base refs, and head and base SHAs. It joins the check run to its workflow run through the check-suite identity and requires the workflow file at the candidate commit to match the Git blob at the signed base commit.
+- Coding-gateway readiness now queries the provider's nonbillable authenticated balance endpoint and requires exactly one `X-Balance-Remaining` header to agree with a safe-integer `usdc_balance`. Readiness and run admission fail closed on a malformed, duplicated, conflicting, or insufficient result, with a floor of 4,000,000 USDC microunits.
+- The protected-main workflow now defines a permanent escrow-release path with the exact SBPF artifact, ABI, manifests, complete checksums, build metadata, toolchain receipts, and provenance. It creates the release as a draft, uploads and verifies every asset, publishes it, and requires the resulting commit-tagged release to report immutable.
+
+The local integrated release gate passes for this candidate: core 298 tests, signer 183 tests, updater 88 tests, deployment controller 36 tests, coding gateway 179 tests, and web 42 tests, with all typechecks, builds, process smokes, formatting, dependency checks, and Blueprint invariants passing. A separate PostgreSQL run passed all 185 signer tests, including all three migrations. These remain local results. The release candidate has not yet produced a hosted receipt or permanent escrow release, and none of these controls is proven live. The historical artifact and test counts above remain the latest hosted baseline.
+
+## Public deployment boundary
+
+Live probes on 23 August 2026 returned HTTP 200 from the Render website, API liveness, and closed deployment endpoints. API readiness returned HTTP 503 with protected dependencies incomplete, while public admission returned HTTP 200 with paid intake and new claims both false at revision zero. The API and web are deployed from different historical revisions, and both Render services still follow the unprotected release-candidate branch rather than protected `main`. This is a safe closed state, not proof that the current candidate or any private commercial service is deployed.
+
+The canonical `mizuki.covenant.org` hostname still resolves through the provider's wildcard A record rather than the required service CNAME, and its TLS certificate does not match the hostname. The Render origin remains the only working public website endpoint until DNS and certificate issuance complete.
+
+## Live devnet escrow canary
+
+The 23 August 2026 canary passed against [devnet program `3yA83Hkj1e78J54n6DBGEJonB9Fug3XRwjGwEzxShfHn`](https://explorer.solana.com/address/3yA83Hkj1e78J54n6DBGEJonB9Fug3XRwjGwEzxShfHn?cluster=devnet). Finalized program metadata reported loader-v3, 104,376 deployed bytes, and an upgrade authority. The runner compared the deployed bytes to the hosted artifact before submitting transactions and recorded `deployedArtifactMatch: true`.
+
+The redacted receipt reports canonical payload digest `34d2dfd348e480477a06c2b3f082b33667aeef1f88909b92e3d6b1b2451a5e67`. Its pre-execution recovery journal reports canonical payload digest `849cb9504be370dbc3ec5439692988250cbe920058d3a45dbd7fd95b3d117cc1`. Both files were written with owner-only permissions. They are not yet committed as public release artifacts, so the public signatures below are the independently inspectable evidence.
+
+| Scenario              | Result                                                                                                                                                     |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Prefunded release     | Adopted rent-safe prefunded PDAs, bound a claimant, rejected the wrong claimant, released the exact 1,000,000-lamport principal, and rejected two replays. |
+| Bound expiry refund   | Funded and bound, rejected release at expiry, refunded the exact principal, closed state and vault, and retained the terminal guard.                       |
+| Unbound expiry refund | Funded without a claimant, refunded the exact principal at expiry, closed state and vault, and retained the terminal guard.                                |
+
+All 13 recorded signatures were independently queried at finalized commitment: nine intended transactions finalized with no error and four intended rejection transactions finalized with an error.
+
+| Flow              | Action          | Expected status | Public transaction                                                                                                                                       |
+| ----------------- | --------------- | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Prefunded release | Prefund         | Success         | [`4CrPqd…rBkY`](https://explorer.solana.com/tx/4CrPqdXxerQSrSHJp2WSK9NK8Xfd5dgkZrEhhPoLeLR5zX4eQj7am8ke5UNNagWtH28L4i5anKZaHBeMrXPwrBkY?cluster=devnet)  |
+| Prefunded release | Fund            | Success         | [`4852vY…RDNF`](https://explorer.solana.com/tx/4852vYWM3E59EDRiWj4dZqisPw3zNYEdHQ5eEigRWdG6QDJ8qtXrxiAdZN1kMuA77NREGbhHJ8wf2hxCZzKdRDNF?cluster=devnet)  |
+| Prefunded release | Bind            | Success         | [`65krex…eZyN`](https://explorer.solana.com/tx/65krexfEzs4bKe5kqqoY8hRyp6yxx9fAcn3272mqeQ5WK45yxQuvrJccZyvYU7x1pPVskrbRTPYwCRNh2jEoeZyN?cluster=devnet)  |
+| Prefunded release | Wrong claimant  | Rejected        | [`2rm9YE…cNgpE`](https://explorer.solana.com/tx/2rm9YEBK5awFCt3vxWXRdCuBXHkwGS9YJBmC1P2gJr1hZYQU5TuiYZxfYd1xZf5Ey6pbX6vEqPddD9mejsUcNgpE?cluster=devnet) |
+| Prefunded release | Release         | Success         | [`3f5LS9…7deBq`](https://explorer.solana.com/tx/3f5LS9UVCqJ3x4xkP9LGdrGBnouwKDAaCtSdB3SeLuW2Vm6KYLjdZtgHVXthsxaKhHfiegJ543U8p5MkLop7deBq?cluster=devnet) |
+| Prefunded release | Replay release  | Rejected        | [`29y4iS…mVos`](https://explorer.solana.com/tx/29y4iSVXr2bbET3X6pRqrBsxwcDwFQ9XgDZ4xcohL8YmtgBZ7ZjD29NGY8QLp4LP9pfEXtwgVu5nYRjazBx5mVos?cluster=devnet)  |
+| Prefunded release | Replay fund     | Rejected        | [`4eYr7y…RXC5C`](https://explorer.solana.com/tx/4eYr7yuqQ4dRiBM5Frv6unBzcL2cJu39Dqeg78hoDn383v6zYNziUuNdNTC1n19Xx6Ys8c3a9RmG6TDVhwURXC5C?cluster=devnet) |
+| Bound refund      | Fund            | Success         | [`5r3Dnw…sQHQ`](https://explorer.solana.com/tx/5r3DnwThWyAuvi3svwmT9GKjmu8euGXpAJtRn2e8XbE8jgWRbHp7tpCYoMYY1CXz5tCVS4m5soJWkZ6qBk2XsQHQ?cluster=devnet)  |
+| Bound refund      | Bind            | Success         | [`4ydqAN…q9FT`](https://explorer.solana.com/tx/4ydqAN4i7igxS1VfwKFEPA3FzcLoYmooLTh8C6MtGxdg4qo1tGwrhJqXRqQwdrKZ3HuW2D4D2kaka4DCqFqu9qFT?cluster=devnet)  |
+| Bound refund      | Expired release | Rejected        | [`4f2Prf…KZ3h`](https://explorer.solana.com/tx/4f2PrfAvHp6uu6xUpAP8VURfdYxEFEEbx4mfmh2qaGBcjEVxU3pnjH24B46bGW2QVZSn527Aph9aHaCGmYzVKZ3h?cluster=devnet)  |
+| Bound refund      | Refund          | Success         | [`4nNjno…Fhch`](https://explorer.solana.com/tx/4nNjno3WivWUE4rsnDevugPigKmWR8t9nYQ8wJHQCQfmX7BwVmDELXqM3AJ15CNnT8oJ4dix9oJh3YEjHkGqFhch?cluster=devnet)  |
+| Unbound refund    | Fund            | Success         | [`3k2YfE…qEjt`](https://explorer.solana.com/tx/3k2YfEAfgzGwnCeXRwR2ffKTFniKWS7Q2fbnmFSwjNexLDyvPcqJjrq63VCQLAoNbhdmE3aQmPXQozceFy6FqEjt?cluster=devnet)  |
+| Unbound refund    | Refund          | Success         | [`3gwwMR…wQcQ`](https://explorer.solana.com/tx/3gwwMRGsnXZ8SZEsBXeBmnCJ7vcb6GckxVDMXfR3qnbm3HfnTdbrvPns58AhAVYiKEqntfLHEwfxVpVpjL4kwQcQ?cluster=devnet)  |
+
+Transaction links are evidence of program behavior only; they do not prove the external service boundary, production key custody, paid settlement, or public bounty operations.
 
 ## Protected-core assessment
 
 ### Paid maintenance engine
 
-The engine has the right commercial shape and is useful without relying on a verification-only story:
+The source has the right commercial shape:
 
-- Public repositories only; pull-request URLs are rejected.
-- A repository-scoped GitHub App and issue label are required. The authorization receipt records a human label event by an actor with current repository permission. Feature, enhancement, security, vulnerability, and explicit new-capability requests fail before a payment challenge. Authenticated current labels and frozen issue content are rechecked before settlement and publication; title/body drift requires a new quote.
-- Quotes pin the default-branch SHA, fixed 2/10 USDC prices, 3/10-file caps, variable-cost ceilings, and a deterministic repository validation command.
-- x402 v2 settlement fixes the SVM network, canonical USDC mint, amount, recipient, and resource. Payment authorization is durable before settlement and recovery is idempotent.
-- New intake is closed by default. Closing intake does not block background or authenticated recovery of an existing `settlement_pending` reservation.
-- A single optimistic state transition admits paid work once. Production readiness requires authenticated persistent gateway runs, the configured marketplace route, and an E2B sandbox.
-- Repository artifacts are exact-or-fail: changed text files are captured without truncation; missing, binary, over-128,000-byte, over-total-limit, or excess-count changes fail the run.
-- The reviewer sees the patch, exact files, and validation results, uses a distinct required model, and permits one repair. The persisted review hash binds the pinned base and complete artifact object; publication uses those same file bytes.
-- Publication rechecks repository head and maintainer authorization. Failure after settlement enters the refund path.
+- Public repositories only; pull-request URLs and explicit feature or security-sensitive work are rejected.
+- A repository-scoped GitHub App and human maintainer authorization are required.
+- Quotes pin the repository base SHA, issue content, class, file cap, fixed USDC price, and variable-cost ceiling.
+- The current release candidate requires a signer-persisted, repository-bound admission before any facilitator broadcast. Automatic and operator recovery share the same fail-closed transition, and transaction checkpoints prevent a second broadcast.
+- Intake is closed by default without blocking recovery of already-settled work.
+- Execution requires an authenticated persistent coding gateway, the configured marketplace route, exact sandbox resource binding, cost admission, and at least 4,000,000 provider-balance microunits reported consistently by the provider's nonbillable balance endpoint.
+- Review uses a distinct model, sees exact changed bytes and validation output, and permits one bounded repair.
+- Publication rechecks authorization and base SHA; a post-settlement failure enters the refund path.
 
-Residual risk is predominantly real-repository quality. The maintenance gate fails closed on explicit new-capability signals, but price class and validation selection still use title/body regex plus root-manifest detection rather than repository-aware issue decomposition. Work whose actual change surface does not fit the quote will fail safely, but can still hurt delivery and margin.
+The funded route canaries now establish that the selected coding route can force and return a tool call and that the selected reviewer can return strict decision JSON. They do not establish coding quality, sandbox compatibility, delivery reliability, complete cost accounting, or margin on a real repository.
 
 ### Full refund to funded rescue bounty
 
-The financial state machine is materially stronger than an application-ledger promise:
+The source preserves the required ordering:
 
-- Refund liability registration happens immediately after finalized settlement and before paid processing.
-- Refund and successful-delivery discharge serialize on the same liability, so only one outcome can consume it.
-- A refund is accepted only when signer evidence matches job, settlement, payer, mint, decimals, and exact principal. Signed bytes and transaction state are durable and idempotent across restart and retry.
-- A rescue bounty is created only after the customer refund is finalized.
-- A bounty becomes public and claimable only after the signer has funded its claimant-free SOL escrow and finalized the funding transaction. A dedicated Prometheus gauge detects any open bounty missing that evidence and the runbook closes claims on a nonzero value.
-- Claim binding requires GitHub OAuth plus a single-use wallet-signature challenge. The signer binds the immutable GitHub identity, wallet, repository, issue, amount, and expiry on-chain.
-- Contributor work is file-capped, forbidden-path checked, requires at least one passing repository check, and receives independent review.
-- Release requires signer-verified public merge evidence authored by the bound claimant and closing the immutable issue before expiry. Release, expiry refund, and dispute resolution are serialized and recoverable.
+1. Register the exact customer liability after finalized settlement and before paid execution.
+2. Serialize successful-delivery discharge against exact-principal refund.
+3. Require finalized refund evidence before creating a rescue bounty.
+4. Keep the bounty closed until a claimant-free on-chain escrow is finalized.
+5. Bind one contributor identity and wallet proof.
+6. Require qualifying merged work and independent review before release.
+7. Refund expired unbound or bound escrow principal to the authority.
 
-The remaining blocker is proof: none of these paths has been exercised against the deployed program with real value.
+The devnet canary proves the on-chain release and refund primitives, including terminal closure and replay resistance. It does not prove the full customer-refund-to-public-contributor flow.
 
 ### External policy signer
 
-This is the strongest trust boundary in the delivery:
+The signer remains the critical trust boundary:
 
-- It is a private authenticated service with its own Postgres database and separate refund and escrow authorities.
-- Customer refunds and discretionary escrow funding use separate rolling caps, so bounty activity cannot consume protected refund capacity.
-- Job-authority requests are action-bound and Ed25519-signed. The signer does not trust payer, amount, mint, recipient, GitHub merge, or program state supplied by the application.
-- Settlement and transaction finality must agree across two distinct RPC providers.
-- Refund capacity is reserved transactionally against both finalized treasury balance and the rolling liability cap.
-- Prepared signed bytes, leases, resource keys, attempts, and terminal evidence are durable. Blockhash replacement is allowed only after the old transaction can no longer land.
-- Escrow signing requires loader-v3 deployment with no upgrade authority and identical pinned executable bytes on both RPCs.
-- Two independent, freshness-bounded SOL/USD sources must agree within the configured divergence limit.
+- It has its own authenticated service and database boundary.
+- Refund and bounty authorities have separate caps, so discretionary bounty activity cannot consume protected refund capacity.
+- It builds escrow instructions itself and does not trust caller-supplied serialized transactions or accounts.
+- It independently verifies GitHub evidence, wallet proof, exact balances, finality, price freshness, deployed program bytes, loader state, and null mainnet upgrade authority.
+- The current release candidate persists exact repository admission before payment broadcast, binds the receipt to the payment facts, and requires that durable evidence again during recovery.
+- It persists signed bytes and reconciliation state before broadcast.
+- It requires agreement from independent RPC and SOL/USD sources.
 
-The service still needs live operational proof with production-scoped keys, independent RPCs and price sources, restart drills, and a real immutable program deployment.
+The devnet runner exercised local authority signing and finalized reconciliation, not a deployed external signer service. Production custody, authenticated private connectivity, two-provider disagreement drills, restart recovery, and immutable-program allowlisting remain unproven.
 
 ### Failure-to-capability updater
 
-The updater strengthens the public failure-to-capability story without controlling the commercial path. Proposal, benchmark, and review authorities are distinct; manifests, handoff artifacts, GitHub repository/branch/check policy, shadow health, production soak, rollback, and audit-chain state are durable. Promotion is closed by default in Postgres and is serialized across the control check, hook call, and verifying transition.
-
-This path is not ready for autonomous promotion. Deployment hooks are external to this repository, and a successful rollback hook is not followed by independent verification that the prior revision is active and healthy. Keep promotion closed through launch; public proposals and benchmarks can be shown without granting deploy authority.
+The updater is useful only if it stays outside the commercial trust path. The current release candidate requires signed proposal, benchmark, independent review, exact repository and pull-request identity, and required checks from pinned GitHub App and workflow producers. It rejects a candidate when the workflow ID, path, event, check-suite relationship, head or base refs and SHAs, or repository identity differs, and it rejects a candidate that changes the trusted workflow definition relative to the signed base commit. Promotion remains closed by default and still requires durable admission, shadow health, production soak, and verified rollback. Public proposals and benchmark artifacts can be shown before autonomous promotion is enabled.
 
 ## P0 launch blockers
 
-### 1. The protected commercial path is incomplete
+### 1. The protected commercial services are not live together
 
-Revision `ada1d5e7d` has green hosted CI receipts, a reproducible escrow artifact, and healthy Render website and API processes. The API is useful for public evidence and proves fail-closed admission, but it correctly reports not ready. The external policy signer, coding gateway, and updater are absent, so the live platform cannot safely settle, execute, review, publish, refund, fund, or promote work.
+The public API correctly remains not ready. There is no production receipt proving authenticated core-to-signer, core-to-gateway, core-to-updater, or GitHub App connectivity; signer-backed repository admission and recovery; provider-balance readiness; exact workflow-producer enforcement; restart recovery; RPC disagreement; or fail-closed startup. Deploy the private services from one verified revision with every public control closed, then prove those properties before a payment challenge can be issued.
 
-Required: deploy the three private services from the verified revision, bind their private credentials without recording secrets in evidence, keep intake, claims, and promotion closed, and prove authenticated service-to-service connectivity plus fail-closed startup before any canary payment.
+### 2. Settlement and custody are not funded end to end
 
-### 2. Live authority, funding, DNS, and recovery proof are missing
+Two unrelated finalized RPC reads at slots `441258031` and `441258032` agreed that the dedicated release, refund, escrow, and job-authority addresses had zero lamports, every derived USDC account was absent, and the proposed mainnet program account did not exist. One facilitator reports exactly one eligible x402 v2 exact Solana-mainnet route with two eligible signers, but the project recipient path is not funded. The marketplace account received a finalized 50,000-microunit canonical-USDC deposit and completed two authenticated canaries, but this 0.05 USDC canary funding is 3,950,000 microunits below the production floor. The credential was intentionally not retained by the public service, so the live balance cannot currently be rechecked. Unrelated wallet balances are not project reserves and must not be moved without explicit provenance and approval.
 
-The website, API, and one paid Postgres resource are available. The custom domain is attached but not DNS-verified; the required record is CNAME host `mizuki` to `mizuki-9by5.onrender.com`. Live model and sandbox providers, production-scoped authorities and RPC keys, facilitator configuration, treasury/refund reserves, bounty SOL funding, and the immutable program identity are not proven. There is also no receipt for complete readiness, stateful restart recovery, or restoration of financial state from a platform backup/PITR point.
+Fund only capped canary accounts through documented provider paths. Prove a model tool call, a settlement, exact customer refund capacity, escrow funding, and provider cost receipts before opening intake.
 
-Required: verify DNS, configure the live providers and authorities, fund only capped canary reserves, run a 30-minute readiness soak, exercise RPC disagreement and duplicate requests, restart every stateful process, and restore every production database into an isolated environment. Hosted CI compares complete normalized data and sequence dumps, but it is not a substitute for a platform backup/PITR drill followed by application reconciliation.
+### 3. Mainnet escrow custody is not release-ready
 
-### 3. Escrow custody is not release-ready
+The devnet program is upgradeable and cannot be used as production immutability evidence. The two-RPC preflight confirms the proposed mainnet program account is absent and the dedicated deployer has zero lamports; it is proof of a blocked boundary, not deployment evidence. The release candidate defines a protected-main workflow for permanent, commit-tagged immutable escrow evidence, but that workflow has not run on the hosting platform and no permanent release exists. There is no approved mainnet program ID, independent third-party review, independent reproducible-build receipt, immutable deployment, or two-unrelated-RPC program-data match. The current mainnet program-data rent estimate for the historical artifact is 0.72766104 SOL, which exceeds the documented project-controlled deployment balance.
 
-The ABI still has a null program ID, `SECURITY.md` explicitly states there is no independent third-party audit, and there is no finalized devnet canary, immutable mainnet deployment, independent `solana-verify` receipt, or two-RPC on-chain program-data match.
-
-Required: independent review of create/bind/release/refund/dispute semantics, adversarial devnet canaries, reproducible build comparison, finalized immutable deployment, signer configuration pinned to the verified program and executable hash, and low-value public create/release/refund mainnet canaries.
+Complete independent review, reproduce the approved artifact, fund the ceremony wallet with explicit provenance, deploy with `--final`, and verify loader state, null upgrade authority, byte equality, raw SHA-256, and Solana executable hash through two independent finalized RPC providers before enabling escrow signing.
 
 ### 4. The two public commercial canaries have not happened
 
-There is no public 2 USDC issue-to-quote-to-payment-to-validated-PR-to-merge receipt. There is no forced post-payment failure proving exact principal refund, funded rescue bounty, external claim, accepted PR, merge, and payout.
+There is no public 2 USDC issue-to-quote-to-payment-to-validated-PR-to-merge receipt. There is no forced post-payment failure proving exact customer refund, funded rescue bounty, external claim, accepted PR, merge, and contributor payout. Both must run through the actual production services and project-controlled accounts. The devnet escrow canary does not count as either commercial canary or external traction.
 
-Both must be public, loud, and performed with the actual production services. Internal canaries prove integration and refund integrity; they do not count as external traction.
+### 5. Live route quality and complete unit economics remain unproven
 
-### 5. Live route quality and complete unit economics are unknown
+The selected coding canary pinned `openai/gpt-oss-120b`, forced a tool call, matched its nonce, and reported 147 input plus 61 output tokens. The selected reviewer canary pinned `deepseek-v4-flash`, parsed strict decision JSON under a 512-token ceiling, and reported 1,177 input plus 493 output tokens. Both used the marketplace route and returned valid positive balance and provider-ID headers, but neither returned provider cost or request-ID fields. The two tested v3.2 routes failed their tool calls; the canonical route also returned conflicting duplicate balance values.
 
-The exact marketplace route and sandbox have mock-backed unit coverage but no live benchmark matrix or provider billing receipts. The dashboard correctly labels application-ledger allocation as non-custodial, suppresses revenue until liability discharge, marks demo traction as an illustrative fixture, and leaves gross margin unverified because provider adjustments, facilitator/chain fees, and infrastructure are not fully captured. That honesty must remain.
-
-Required: at least 12 representative runs across docs/config, tests, and small bugs; record delivery, validation, repair, review, latency, tool behavior, tokens, sandbox seconds, route identity, billed provider cost, facilitator/chain cost, and failure/refund outcome. Freeze eligible issue classes based on measured results.
+No real-repository coding plus sandbox benchmark has run. The required matrix still needs validation, repair, review, latency, sandbox seconds, billed provider cost, facilitator and chain cost, and terminal job outcome. Do not show positive gross margin until all provider adjustments, refunds, bounty liabilities, and infrastructure costs are durable and reconciled.
 
 ### 6. Traction gate is unmet
 
-Evidence currently shows no qualifying paid external jobs, PRs, merges, external maintainers, refund-rate history, or verified positive margin. The research queue now contains 30 unique compatible repositories and issues: 20 Micro and 10 Standard. All 30 pass the exact current production quote gate plus a stricter maintenance-only review. A final live pass found them public, nonarchived, open, unassigned, without a linked open PR or human claim comment, and backed by the exact validation marker, command, and class the current quote code selects. No outreach has been sent, so this is a prepared acquisition queue, not traction.
-
-Launch minimum remains: 10 paid jobs, at least 7 PRs, at least 5 merges, at least 3 external maintainers, 100% successful principal refunds, and positive fully loaded gross margin. Operator-owned repositories do not count as external demand.
-
-## P1 risks and pressure points
-
-1. **Refund registration has a 24-hour recovery boundary.** Recovery now continues while intake is closed, which fixes the immediate incident wedge. A signer or database outage lasting beyond 86,400 seconds after settlement can still make automated liability registration reject an otherwise valid payment. Alert on `settlement_pending` age immediately and either reserve capacity before settlement or add a tightly authorized recovery proof that cannot manufacture liabilities.
-2. **Complexity classification is intentionally crude.** The new maintenance-only gate closes the known feature/enhancement bypass at quote, payment, and publication, including issue drift. Regex price classification and root-manifest validation can still underestimate implementation complexity or choose a repository-wide command that is slow or broken. Keep early intake Micro-only with explicit operator inspection and benchmarked issue classes.
-3. **Sandbox resource isolation needs a deployment receipt.** E2B creation passes requested resource and egress intent, but effective CPU, memory, disk, and network policy depend on the deployed template/provider behavior. Pin a hardened template and prove denied hosts, secret absence, timeout destruction, and restart cleanup live.
-4. **Browser financial flows lack end-to-end coverage.** The mocked quote flow passed production-browser QA at 390×844 with no console errors, and the issue-URL pattern has a regression for modern Unicode-set semantics. There is still no automated live wallet payment, lost-response recovery, OAuth callback, wallet binding, bounty claim, PR submission, dispute, or accessibility suite.
-5. **Observability is not operationalized.** Readiness, Prometheus state-age and unfunded-open-bounty gauges, alert thresholds, and stop-action runbooks are present, but they are not wired to a production monitor or pager and there are no SLOs, distributed traces, or production dead-letter views. Correlate API, gateway, signer, GitHub, and updater operations and prove alerts on state age, reserve coverage, settlement recovery, refund finality, bounty funding, and provider cost drift.
-6. **Backup evidence stops at hosted CI.** Full data and sequence equality is stronger than a migration-only smoke test and the hosted workflow is green, but platform backup/PITR restoration remains unexecuted. Restore production data into an isolated environment, then prove application reconciliation against the restored financial state.
-7. **Updater rollback proof is incomplete.** A successful rollback-hook response marks the record rolled back without independently confirming the former revision is active and healthy. Keep promotion disabled until the real hook system and regression rollback are rehearsed.
-8. **The gateway is single-instance file persistence.** Run and spend receipts are durable on one mounted disk, but whole-file JSON persistence is not a horizontally safe queue. This is acceptable for tightly capped canaries, not scale-out.
-
-## P2 hardening after launch gates
-
-- Add a bounded timeout to the web proxy and a wallet-compatible Content Security Policy.
-- Replace full-table reconciliation and per-client SSE database polling with indexed work queues and shared fan-out before volume grows.
-- Add server-side session revocation, signing-key versions, logout, and session inventory.
-- Anchor updater and public receipt roots outside the databases before describing them as independently tamper-proof.
-- Move transaction keys from process environment to managed signing when balances exceed canary limits.
-- Add structured retention and redaction policy for activity, model, GitHub, and financial evidence.
+Evidence shows no qualifying paid external jobs, PRs, merges, external maintainers, refund-rate history, or verified positive margin. Launch minimum remains 10 paid jobs, at least seven PRs, at least five merges, at least three external maintainers, 100% successful principal refunds, and positive fully loaded gross margin. Operator-owned repositories and internal canaries do not count as external demand.
 
 ## Required execution sequence
 
-### 22–24 August: freeze and release
-
-1. Preserve the green CI receipts, process-smoke results, exact Render deploys, and reproducible artifact for revision `ada1d5e7d`; rerun the same gates for any later release revision.
-2. Verify the custom-domain CNAME, deploy the policy signer, coding gateway, and updater, then complete connectivity, restart, restore, RPC disagreement, duplicate request, and signer recovery drills with every public control still closed.
-3. Configure and fund the capped live providers and authorities without placing secrets in repository evidence.
-4. Complete the live route benchmark and publish cost coverage without claiming verified margin.
-5. Complete independent escrow review, adversarial devnet canaries, reproducible verification, and immutable deployment.
-6. Reverify the 30 screened candidates and confirm the first canary participants. Do not contact maintainers before the internal canaries pass.
-
-### 25–26 August: public canaries
-
-1. Publish the successful 2 USDC issue-to-merge canary with settlement, route, validation, review, PR, merge, cost, and liability-discharge evidence.
-2. Publish the forced-failure canary with exact refund, funded bounty, claimant binding, external PR/check/review, merge, and escrow release evidence.
-3. Keep updater promotion closed. Show signed proposal and benchmark evidence separately from deployment authority.
-
-### 27 August–12 September: external proof
-
-Run targeted, permission-first maintainer onboarding in cohorts. Count only real payments and independently controlled repositories. Publish route quality and complete cost coverage continuously. Do not expand beyond Micro work until delivery, refund, and margin gates support it.
-
-### 13–19 September: reliability and evidence freeze
-
-Stop feature work. Reconcile every payment, liability, refund, escrow, PR, merge, and provider receipt. Rehearse the 15-minute stream around real issue-to-PR and refund-to-capability evidence. Freeze claims to evidence that an external reviewer can follow independently.
+1. Freeze one release candidate and rerun application CI, escrow build/tests, dependency audit, process smokes, database restore, and clean-scope packaging from that exact revision. The hosted run must exercise the new signer migration, repository-admission recovery, provider-balance readiness, and updater workflow-identity gate; statically validate the protected-main release definition before merge.
+2. After protected-main merge, verify the release job publishes the approved artifact, metadata, checksums, and provenance in a commit-tagged immutable release. Obtain an independent escrow review and independent reproducible-build/hash match.
+3. Create or verify the repository-scoped GitHub Apps, fund provider runway above the pinned floor and custody accounts, and benchmark the exact live model and sandbox route on a real repository.
+4. Deploy the immutable mainnet program from the approved artifact and verify it through two unrelated finalized RPC providers.
+5. Deploy the signer, gateway, and updater privately with intake, claims, and promotion closed. Prove readiness, disagreement, restart, restore, duplicate-request, and rollback drills.
+6. Run low-value internal mainnet release and refund canaries, reconcile every balance and fee, and keep their evidence public.
+7. Run the public paid success canary and forced-refund-to-funded-bounty canary. Open only a tightly capped Micro cohort if both pass.
+8. Begin permission-first maintainer outreach and publish route quality, complete unit economics, refunds, PRs, and merges continuously.
 
 ## Hard stop conditions
 
 Paid intake must remain or immediately become closed if any of the following occurs:
 
 - refund capacity is unavailable, stale, or mismatched;
+- the signer has not durably admitted the exact repository and payment facts before broadcast, or recovery cannot reproduce that admission;
 - a settled payment lacks a registered liability or exceeds the recovery-age alarm;
-- any refund is short, late beyond the published operating window, sent to the wrong payer, duplicated, or not finalized;
-- a bounty is visible as open without a matching finalized escrow;
+- any refund is short, late, duplicated, sent to the wrong payer, or not finalized;
+- a bounty is visible as open without matching finalized escrow evidence;
 - GitHub authorization, pinned base, validation, review hash, or published bytes disagree;
-- signer RPCs, price sources, program bytes, or program authority disagree;
-- the live route exceeds a quote cost cap or falls below the accepted-class reliability threshold;
+- signer RPCs, price sources, program bytes, loader state, or program authority disagree;
+- provider balance is below 4,000,000 microunits or its authenticated body and canonical header disagree;
+- the model route or sandbox differs from the quote or exceeds its cost cap;
+- a required updater check cannot be tied to the pinned App, workflow, workflow definition, pull request, base, and candidate commit;
 - gross margin is shown as positive without complete durable cost receipts;
-- any promotion or deployment control opens without a recorded operator reason and successful rehearsal.
+- promotion or deployment opens without recorded authorization and successful rehearsal.
 
-The implementation is now credible enough to earn production evidence. It is not credible to substitute local tests, token activity, or internal dogfooding for that evidence.
+The implementation now has credible devnet escrow evidence and limited funded provider-route evidence. It does not yet have the live commercial evidence required to take customer funds.

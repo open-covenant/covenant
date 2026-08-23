@@ -70,10 +70,10 @@ Grant only:
 - Repository contents: read and write.
 - Issues: read.
 - Pull requests: read and write.
+- Checks: read.
 - Metadata: read.
-- Members: read.
 
-Subscribe only to Pull request events. Maintenance-only scope, exact issue text, installation, authorization-label provenance, and the human label actor's current repository permission are checked at quote, payment, and immediately before publication. Short-lived installation tokens are minted only for repository operations.
+Subscribe only to Pull request events. Maintenance-only scope, exact issue text, installation, authorization-label provenance, and the human label actor's current repository permission are checked at quote, payment, and immediately before publication. Short-lived installation tokens request exactly one repository and the permission map above. Mizuki rejects all-repository selection, permission drift, a different repository, an invalid lifetime, a suspended installation, or App identity drift before using a token.
 
 ## External policy-signer contract
 
@@ -94,6 +94,8 @@ Recorded USD net flow and the 70/30 waterfall are published separately as an `ap
 Mizuki uses independent package names, APIs, schemas, signer operations, escrow instructions, public copy, and telemetry. Earlier internal prototypes informed general design principles such as strict payment boundaries and independent review, but no legacy payment proof, simulated wallet tool, public identifier, or on-chain instruction name is accepted by this system.
 
 The production path is deliberately narrow: official x402 v2 exact SVM settlement, deterministic full-principal refund, and separately funded contributor escrow. Every transfer is bound to independently verified chain or GitHub evidence and a durable idempotency key.
+
+For every new live payment proof, the serialized admission gate checks refund capacity and calls the policy signer for fresh readiness of the quote's exact repository before invoking settlement. The signer must prove a distinct read-only verifier App installation and a freshly minted one-repository token. A failed probe cannot reserve or settle a payment. Settlement recovery deliberately skips this new-payment probe because its durable reservation may already have paid on-chain; recovery must remain able to register the liability and finish the existing transaction while intake is closed.
 
 ## Capability upgrade observer
 

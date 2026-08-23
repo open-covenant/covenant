@@ -39,6 +39,7 @@ type Review = {
 
 type ReviewPhase = 'implementation' | 'repair';
 export type SpendPhase = 'implementation' | 'implementation-review' | 'repair' | 'repair-review';
+const MAX_REVIEW_OUTPUT_TOKENS = 512;
 
 const PHASE_WEIGHTS: Record<SpendPhase, number> = {
   implementation: 55,
@@ -65,9 +66,10 @@ const gatewayReadinessSchema = z
       .object({
         model: gatewayEvidenceSchema,
         sandbox: gatewayEvidenceSchema,
+        tariff: gatewayEvidenceSchema,
       })
       .strict(),
-    failed: z.array(z.enum(['model', 'sandbox', 'stale', 'ledger', 'runStore'])),
+    failed: z.array(z.enum(['model', 'sandbox', 'tariff', 'stale', 'ledger', 'runStore'])),
     model: z.string().min(1),
     backend: z.enum(['anthropic', 'openai', 'usepod']),
     provider: z.string().min(1),
@@ -106,6 +108,7 @@ export class JobProcessor {
       status.failed.length > 0 ||
       !status.dependencies.model.ok ||
       !status.dependencies.sandbox.ok ||
+      !status.dependencies.tariff.ok ||
       !status.storage.ledger ||
       !status.storage.runStore
     ) {
@@ -519,7 +522,7 @@ export class JobProcessor {
     const draft = {
       model: this.config.usePodModel,
       temperature: 0,
-      max_tokens: 1_000,
+      max_tokens: MAX_REVIEW_OUTPUT_TOKENS,
       response_format: { type: 'json_object' },
       messages: [
         {
@@ -543,7 +546,7 @@ export class JobProcessor {
       requestConfig.maxCostMicrounits,
       requestConfig.maxInputPriceMicrounits,
       requestConfig.maxOutputPriceMicrounits,
-      1_000,
+      MAX_REVIEW_OUTPUT_TOKENS,
     );
     const attempt: ReviewAttempt = {
       id: randomUUID(),
@@ -593,9 +596,6 @@ export class JobProcessor {
       );
     }
     try {
-      if (provider.costMicrounits === undefined) {
-        throw new Error('UsePod reviewer omitted authoritative provider cost');
-      }
       if (costUsd > budgetUsd) {
         throw new Error('UsePod reviewer exceeded its phase spend cap');
       }

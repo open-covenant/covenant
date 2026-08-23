@@ -28,8 +28,8 @@ The updater fails closed unless all of the following are true:
 - The reviewer route differs from the implementation route.
 - The streamed artifact has the exact declared byte length and SHA-256.
 - The repository, base branch, candidate-branch prefix, and mandatory check set satisfy immutable deployment configuration.
-- The candidate branch still points to the reviewed commit.
-- Every required GitHub check or commit status is successful.
+- The signed base and candidate revisions still match both branch refs.
+- Every required GitHub Actions check is successful and belongs to its configured workflow run.
 - Shadow health reports the reviewed commit as healthy.
 - The required checks are still successful immediately before merge.
 - The durable promotion control is explicitly enabled at its current revision before merge and again before promotion.
@@ -52,6 +52,7 @@ External actions are resumable. Pull-request synchronization and merge inspect e
       "owner": "open-covenant",
       "name": "covenant",
       "baseBranch": "main",
+      "baseSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       "headBranch": "mizuki/capability/upgrade-2026-08-22-1"
     },
     "candidateSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -211,16 +212,22 @@ The rollback hook receives the persisted promotion operation ID when promotion b
 
 Install the configured GitHub App only on approved repositories. It needs:
 
+- Actions: read
 - Metadata: read
 - Contents: write
 - Pull requests: write
 - Checks: read
-- Commit statuses: read
 
-The updater derives the installation from the signed repository, mints a short-lived installation token, verifies the candidate branch SHA, and supplies the expected SHA to the merge call.
+Readiness authenticates the configured App, validates every allowlisted installation, and resolves every pinned workflow ID to its exact active path through GitHub's Actions API. Each operation requests a short-lived token for exactly one repository with this exact permission map, then rejects all-repository selection, a missing or additional permission, a different repository, an invalid lifetime, a suspended installation, or App identity drift.
+
+`MIZUKI_UPDATER_CHECK_PRODUCERS_JSON` pins each accepted context to one check-run App ID, numeric workflow ID, workflow path, `pull_request` event, manifest head branch, candidate head SHA, manifest base branch, signed base SHA, and the workflow definition at that signed base. Check admission joins GitHub's check-run and Actions workflow-run responses through the check-suite ID, then verifies the exact repository, head repository, pull request, refs, and commits. A same-name result from another App, workflow, event, repository, pull request, ref, or commit fails the entire context.
+
+Before trusting a run, the updater compares the pinned workflow file's Git blob identity at the signed base commit and candidate commit. A candidate cannot weaken or replace the checks that evaluate it. The production policy binds `application` and `escrow` to workflow `340541049` at `.github/workflows/mizuki.yml`, and `rust` and `landing` to workflow `265742803` at `.github/workflows/ci.yml`. Both use GitHub Actions App ID `15368`; all semantic selectors are fixed to the signed manifest contract.
+
+The signed manifest binds both the base branch and its exact SHA. The updater verifies the current base and candidate refs before check admission and again immediately before an unmerged PR can merge. A protected base advance fails closed and requires a newly reviewed, re-signed proposal. The merge request also supplies the expected candidate SHA.
 The App must not have branch-protection bypass rights; GitHub branch rules are the final protection against a check changing between the updater's last poll and the merge transaction.
 
-`MIZUKI_UPDATER_MANDATORY_CHECKS` is an operator-controlled floor. A signed manifest may add checks but cannot omit these checks. Base branches and the candidate branch prefix are similarly constrained outside Mizuki's mutable application.
+`MIZUKI_UPDATER_MANDATORY_CHECKS` is an operator-controlled floor. A signed manifest may add checks but cannot omit these checks, and an added check fails until the operator pins its producer separately. Base branches and the candidate branch prefix are similarly constrained outside Mizuki's mutable application.
 
 ## Run
 

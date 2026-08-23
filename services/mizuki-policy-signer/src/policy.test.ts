@@ -1,20 +1,30 @@
-import { createPrivateKey, sign } from 'node:crypto';
-import { Keypair } from '@solana/web3.js';
+import { createHash, createPrivateKey, sign } from 'node:crypto';
+import { Keypair, SystemProgram, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
-import { FixedUsdPriceOracle, MockChainGateway, type UsdPriceOracle } from './chain.js';
+import {
+  authorizedSettlementTransaction,
+  FixedUsdPriceOracle,
+  MockChainGateway,
+  type UsdPriceOracle,
+} from './chain.js';
 import type {
   BindRefundLiabilityDeliveryRequest,
   DischargeRefundLiabilityRequest,
   RefundRequest,
   RegisterRefundLiabilityRequest,
+  RepositoryAdmissionRequest,
   SettlementFacts,
 } from './domain.js';
 import {
   operationView,
+  PAYMENT_AUTHORIZATION_MAX_BYTES,
   PolicyError,
+  repositoryAdmissionRequestSchema,
+  reconcileRepositorySettlementRequestSchema,
   refundAuthorizationMessage,
   refundDeliveryBindingAuthorizationMessage,
   refundDischargeAuthorizationMessage,
+  requestHash,
 } from './domain.js';
 import { MockMergeVerifier } from './github.js';
 import { SignerMetrics } from './metrics.js';
@@ -27,6 +37,8 @@ const PAYER = '4'.repeat(32);
 const CLAIMANT_KEYPAIR = Keypair.generate();
 const CLAIMANT = CLAIMANT_KEYPAIR.publicKey.toBase58();
 const JOB_AUTHORITY = Keypair.generate();
+const DEFAULT_ADMISSION_ID = '99999999-9999-4999-8999-999999999999';
+let defaultAdmissionEvidenceHash = '';
 
 function releaseRequest(pullRequestNumber = 23) {
   return {
@@ -43,7 +55,6 @@ function fixture(
     escrowDailyLimit?: number;
     operationLimit?: number;
     maxEscrowLamports?: number;
-    refundLiabilityMaxAgeSeconds?: number;
     now?: () => Date;
     prices?: UsdPriceOracle;
     jobAuthorityPublicKey?: string;
@@ -64,7 +75,6 @@ function fixture(
       refundDecimals: 6,
       jobAuthorityPublicKey: options.jobAuthorityPublicKey ?? JOB_AUTHORITY.publicKey.toBase58(),
       refundAuthMaxTtlSeconds: 900,
-      refundLiabilityMaxAgeSeconds: options.refundLiabilityMaxAgeSeconds ?? 86_400,
       operationLimitUsdCents: options.operationLimit ?? 2_500,
       refundDailyLimitUsdCents: options.refundDailyLimit ?? options.dailyLimit ?? 10_000,
       escrowDailyLimitUsdCents: options.escrowDailyLimit ?? options.dailyLimit ?? 10_000,
@@ -82,6 +92,70 @@ function fixture(
     metrics,
     options.now,
   );
+  const admittedAt = options.now?.() ?? new Date();
+  const payment = paymentAuthorization(DEFAULT_ADMISSION_ID);
+  const paymentAuthorizationHash = createHash('sha256').update(payment.header).digest('hex');
+  const settlementIdentity = authorizedSettlementTransaction({
+    wireTransaction: payment.wireTransaction,
+    feePayer: payment.feePayer,
+    rawAmount: '2000000',
+    notBeforeUnixSeconds: 0,
+  });
+  const tokenExpiresAt = new Date(admittedAt.getTime() + 60 * 60_000);
+  const identity = {
+    quoteId: DEFAULT_ADMISSION_ID,
+    repository: 'owner/repository',
+    issueNumber: 17,
+    baseRef: 'main',
+    baseSha: 'd'.repeat(40),
+    reservationKeyHash: '9'.repeat(64),
+    paymentAuthorizationHash,
+  };
+  const binding = {
+    settlementMessageHash: settlementIdentity.messageHash,
+    settlementClientSignature: settlementIdentity.clientSignature,
+    settlementFeePayer: settlementIdentity.feePayer,
+    settlementRawAmount: '2000000',
+    paymentWindowStartUnixSeconds: Math.floor(admittedAt.getTime() / 1_000) - 30,
+    paymentWindowEndUnixSeconds: Math.floor(admittedAt.getTime() / 1_000) + 330,
+  };
+  defaultAdmissionEvidenceHash = requestHash({
+    version: 1,
+    ...identity,
+    ...binding,
+    verifierAppId: '12345',
+    installationId: 777,
+    repositorySelection: 'selected',
+    permissions: {
+      contents: 'read',
+      issues: 'read',
+      metadata: 'read',
+      pull_requests: 'read',
+    },
+    tokenRepositories: 1,
+    tokenExpiresAt: tokenExpiresAt.toISOString(),
+    admittedAt: admittedAt.toISOString(),
+  });
+  void store.registerRepositoryAdmission({
+    id: DEFAULT_ADMISSION_ID,
+    idempotencyKey: 'default-admission',
+    requestHash: requestHash(identity),
+    ...identity,
+    ...binding,
+    verifierAppId: '12345',
+    installationId: 777,
+    repositorySelection: 'selected',
+    permissions: {
+      contents: 'read',
+      issues: 'read',
+      metadata: 'read',
+      pull_requests: 'read',
+    },
+    tokenRepositories: 1,
+    tokenExpiresAt,
+    admittedAt,
+    evidenceHash: defaultAdmissionEvidenceHash,
+  });
   return { store, chain, metrics, merges, policy };
 }
 
@@ -100,7 +174,225 @@ function settlement(signature = '6'.repeat(64), rawAmount = '2000000'): Settleme
   };
 }
 
+function paymentAuthorization(quoteId: string): {
+  header: string;
+  wireTransaction: string;
+  feePayer: string;
+} {
+  const feePayer = Keypair.generate();
+  const payer = Keypair.generate();
+  const recipient = Keypair.generate();
+  const message = new TransactionMessage({
+    payerKey: feePayer.publicKey,
+    recentBlockhash: Keypair.generate().publicKey.toBase58(),
+    instructions: [
+      SystemProgram.transfer({
+        fromPubkey: payer.publicKey,
+        toPubkey: recipient.publicKey,
+        lamports: 1,
+      }),
+    ],
+  }).compileToV0Message();
+  const transaction = new VersionedTransaction(message);
+  transaction.sign([payer]);
+  const wireTransaction = Buffer.from(transaction.serialize()).toString('base64');
+  const header = Buffer.from(
+    JSON.stringify({
+      x402Version: 2,
+      resource: { url: `https://mizuki.example/v1/jobs?quote_id=${quoteId}` },
+      accepted: {
+        scheme: 'exact',
+        network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+        asset: MINT,
+        amount: '2000000',
+        payTo: TREASURY,
+        maxTimeoutSeconds: 300,
+        extra: { feePayer: feePayer.publicKey.toBase58() },
+      },
+      payload: { transaction: wireTransaction },
+    }),
+  ).toString('base64');
+  return { header, wireTransaction, feePayer: feePayer.publicKey.toBase58() };
+}
+
 describe('production readiness', () => {
+  it('accepts exactly the payment authorization size supported by core recovery', () => {
+    const request = (paymentAuthorization: string) => ({
+      quoteId: '11111111-1111-4111-8111-111111111111',
+      repository: 'owner/repository',
+      issueNumber: 17,
+      baseRef: 'main',
+      baseSha: 'a'.repeat(40),
+      reservationKeyHash: 'b'.repeat(64),
+      paymentAuthorization,
+    });
+    expect(
+      repositoryAdmissionRequestSchema.safeParse(
+        request('A'.repeat(PAYMENT_AUTHORIZATION_MAX_BYTES)),
+      ).success,
+    ).toBe(true);
+    expect(
+      repositoryAdmissionRequestSchema.safeParse(
+        request('A'.repeat(PAYMENT_AUTHORIZATION_MAX_BYTES + 1)),
+      ).success,
+    ).toBe(false);
+  });
+
+  it('preserves exact-repository admission across App removal and rejects rebinding', async () => {
+    const observedAt = new Date();
+    const { policy, merges } = fixture({ now: () => observedAt });
+    const authorization = paymentAuthorization('11111111-1111-4111-8111-111111111111');
+    const request: RepositoryAdmissionRequest = {
+      quoteId: '11111111-1111-4111-8111-111111111111',
+      repository: 'owner/repository',
+      issueNumber: 17,
+      baseRef: 'main',
+      baseSha: 'a'.repeat(40),
+      reservationKeyHash: 'b'.repeat(64),
+      paymentAuthorization: authorization.header,
+    };
+
+    const first = await policy.createRepositoryAdmission(request, 'repository-admission-key');
+    expect(first).toMatchObject({
+      quoteId: request.quoteId,
+      paymentAuthorizationHash: createHash('sha256').update(authorization.header).digest('hex'),
+      verifierAppId: '12345',
+      installationId: 777,
+      tokenRepositories: 1,
+      evidenceHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+    expect(merges.readinessRequests).toEqual(['owner/repository']);
+
+    merges.error = new PolicyError(
+      'github_installation_missing',
+      'Verifier App was removed',
+      503,
+      true,
+    );
+    const replay = await policy.createRepositoryAdmission(request, 'repository-admission-key');
+    expect(replay.id).toBe(first.id);
+    expect(merges.readinessRequests).toEqual(['owner/repository']);
+    await expect(
+      policy.validateRepositoryAdmission(first.id, {
+        quoteId: request.quoteId,
+        repository: request.repository,
+        issueNumber: request.issueNumber,
+        baseRef: request.baseRef,
+        baseSha: request.baseSha,
+        reservationKeyHash: request.reservationKeyHash,
+        paymentAuthorizationHash: first.paymentAuthorizationHash,
+        evidenceHash: first.evidenceHash,
+      }),
+    ).resolves.toEqual(first);
+    await expect(
+      policy.validateRepositoryAdmission(first.id, {
+        quoteId: request.quoteId,
+        repository: request.repository,
+        issueNumber: request.issueNumber,
+        baseRef: request.baseRef,
+        baseSha: request.baseSha,
+        reservationKeyHash: request.reservationKeyHash,
+        paymentAuthorizationHash: 'd'.repeat(64),
+        evidenceHash: first.evidenceHash,
+      }),
+    ).rejects.toMatchObject({ code: 'repository_admission_mismatch' });
+    await expect(
+      policy.createRepositoryAdmission(
+        {
+          ...request,
+          quoteId: '22222222-2222-4222-8222-222222222222',
+          paymentAuthorization: paymentAuthorization('22222222-2222-4222-8222-222222222222').header,
+        },
+        'second-repository-admission-key',
+      ),
+    ).rejects.toMatchObject({ code: 'github_installation_missing' });
+  });
+
+  it('reconciles only the exact payer-signed transaction bound to durable admission', async () => {
+    const { policy, chain } = fixture();
+    const quoteId = '11111111-1111-4111-8111-111111111111';
+    const authorization = paymentAuthorization(quoteId);
+    const request: RepositoryAdmissionRequest = {
+      quoteId,
+      repository: 'owner/repository',
+      issueNumber: 17,
+      baseRef: 'main',
+      baseSha: 'a'.repeat(40),
+      reservationKeyHash: 'b'.repeat(64),
+      paymentAuthorization: authorization.header,
+    };
+    const admission = await policy.createRepositoryAdmission(request, 'reconcile-admission-key');
+    const facts = settlement();
+    chain.reconciledSettlements.set(admission.settlementMessageHash, facts);
+
+    await expect(
+      policy.reconcileRepositorySettlement(admission.id, {
+        evidenceHash: admission.evidenceHash,
+      }),
+    ).resolves.toEqual(facts);
+    expect(chain.settlementReconciliations).toEqual([
+      {
+        messageHash: admission.settlementMessageHash,
+        clientSignature: admission.settlementClientSignature,
+        feePayer: authorization.feePayer,
+        rawAmount: '2000000',
+        notBeforeUnixSeconds: Math.floor(admission.admittedAt.getTime() / 1_000) - 30,
+        notAfterUnixSeconds: Math.floor(admission.admittedAt.getTime() / 1_000) + 330,
+      },
+    ]);
+    await expect(
+      policy.reconcileRepositorySettlement(admission.id, {
+        evidenceHash: 'f'.repeat(64),
+      }),
+    ).rejects.toMatchObject({ code: 'repository_admission_mismatch' });
+    expect(chain.settlementReconciliations).toHaveLength(1);
+  });
+
+  it('fails closed on settlement absence, provider disagreement, and amount mismatch', async () => {
+    const { policy, chain } = fixture();
+    const quoteId = '22222222-2222-4222-8222-222222222222';
+    const authorization = paymentAuthorization(quoteId);
+    const admission = await policy.createRepositoryAdmission(
+      {
+        quoteId,
+        repository: 'owner/repository',
+        issueNumber: 18,
+        baseRef: 'main',
+        baseSha: 'a'.repeat(40),
+        reservationKeyHash: 'b'.repeat(64),
+        paymentAuthorization: authorization.header,
+      },
+      'reconcile-failure-key',
+    );
+    const reconcile = () =>
+      policy.reconcileRepositorySettlement(admission.id, {
+        evidenceHash: admission.evidenceHash,
+      });
+
+    await expect(reconcile()).rejects.toMatchObject({ code: 'settlement_not_found' });
+
+    chain.reconciliationError = new PolicyError(
+      'rpc_inconsistent',
+      'Independent RPC providers disagree',
+      503,
+      true,
+    );
+    await expect(reconcile()).rejects.toMatchObject({ code: 'rpc_inconsistent' });
+
+    chain.reconciliationError = null;
+    chain.reconciledSettlements.set(
+      admission.settlementMessageHash,
+      settlement('6'.repeat(64), '2000001'),
+    );
+    await expect(reconcile()).rejects.toMatchObject({ code: 'settlement_value_mismatch' });
+
+    chain.reconciledSettlements.set(admission.settlementMessageHash, {
+      ...settlement(),
+      blockTimeUnixSeconds: admission.paymentWindowEndUnixSeconds + 1,
+    });
+    await expect(reconcile()).rejects.toMatchObject({ code: 'settlement_outside_payment_window' });
+  });
+
   it('keeps the request authority separate from both custody authorities', () => {
     const authority = Keypair.generate().publicKey.toBase58();
     expect(() => fixture({ jobAuthorityPublicKey: authority, refundTreasury: authority })).toThrow(
@@ -215,7 +507,7 @@ describe('refund policy', () => {
     });
   });
 
-  it('rejects expired authorization and settlement registration after the recovery window', async () => {
+  it('rejects expired authorization and settlement outside the admitted payment window', async () => {
     const { chain, policy } = fixture();
     const facts = settlement();
     chain.settlements.set(facts.signature, facts);
@@ -231,26 +523,31 @@ describe('refund policy', () => {
       ),
     ).rejects.toMatchObject({ code: 'refund_authorization_expired' });
 
-    facts.blockTimeUnixSeconds -= 86_401;
+    facts.blockTimeUnixSeconds -= 31;
     await expect(
       policy.registerRefundLiability(
         signedRefundRequest('register', 'job-historical', facts.signature),
         'register-historical',
       ),
-    ).rejects.toMatchObject({ code: 'settlement_outside_registration_window' });
+    ).rejects.toMatchObject({ code: 'settlement_outside_payment_window' });
   });
 
-  it('registers a finalized settlement during the 24-hour outage recovery window', async () => {
-    const now = new Date();
-    const { chain, policy } = fixture({ now: () => now });
+  it('registers an admission-bound settlement after a 48-hour outage', async () => {
+    let now = Date.now();
+    const { chain, policy } = fixture({ now: () => new Date(now) });
     const facts = settlement();
-    facts.blockTimeUnixSeconds = Math.floor(now.getTime() / 1_000);
-    facts.blockTimeUnixSeconds -= 86_399;
+    facts.blockTimeUnixSeconds = Math.floor(now / 1_000);
     chain.settlements.set(facts.signature, facts);
+    now += 48 * 60 * 60 * 1_000;
 
     await expect(
       policy.registerRefundLiability(
-        signedRefundRequest('register', 'job-recovered', facts.signature),
+        signedRefundRequest(
+          'register',
+          'job-recovered',
+          facts.signature,
+          new Date(now + 10 * 60_000).toISOString(),
+        ),
         'register-recovered',
       ),
     ).resolves.toMatchObject({
@@ -1163,6 +1460,8 @@ function signedRefundRequest(
     settlementSignature,
     ...(action === 'register'
       ? {
+          repositoryAdmissionId: DEFAULT_ADMISSION_ID,
+          repositoryAdmissionEvidenceHash: defaultAdmissionEvidenceHash,
           repository: 'owner/repository',
           issueNumber: 17,
           baseRef: 'main',

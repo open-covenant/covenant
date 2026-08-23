@@ -7,6 +7,7 @@ import type {
   TokenUsage,
 } from '../types.js';
 import {
+  accountUsePodTurn,
   boundedMaxTokens,
   parseUsePodUsage,
   providerReceipt,
@@ -167,16 +168,7 @@ export class UsePodBackend implements CodingBackend {
         headers: usePodHeaders(requestConfig),
         body: JSON.stringify({ ...draft, max_tokens: maxTokens }),
       });
-      const receipt = providerReceipt(response, this.model, requestConfig.minimumBalance);
-      providerReceipts.push(receipt);
-      await opts.recordProviderReceipt?.(receipt);
-      if (receipt.costMicrounits === undefined) {
-        throw new Error('UsePod omitted authoritative provider cost');
-      }
-      spentMicrounits += BigInt(receipt.costMicrounits);
-      if (spentMicrounits > BigInt(budgetMicrounits)) {
-        throw new Error('UsePod provider spend exceeded the run budget');
-      }
+      const routeReceipt = providerReceipt(response, this.model, requestConfig.minimumBalance);
       if (!response.ok) {
         const body = await response.text();
         throw new Error(`UsePod HTTP ${response.status}: ${body.slice(0, 1_000)}`);
@@ -190,9 +182,21 @@ export class UsePodBackend implements CodingBackend {
         usage?: unknown;
       };
       if (body.model !== this.model) throw new Error('UsePod returned a different model');
+      const turnUsage = parseUsePodUsage(body.usage);
+      const receipt = accountUsePodTurn(
+        routeReceipt,
+        turnUsage,
+        this.maxInputPriceMicrounits,
+        this.maxOutputPriceMicrounits,
+      );
+      providerReceipts.push(receipt);
+      await opts.recordProviderReceipt?.(receipt);
+      spentMicrounits += BigInt(receipt.accounting.accountedCostMicrounits);
+      if (spentMicrounits > BigInt(budgetMicrounits)) {
+        throw new Error('UsePod provider spend exceeded the run budget');
+      }
       const message = body.choices?.[0]?.message;
       if (!message) throw new Error('UsePod returned no completion choice');
-      const turnUsage = parseUsePodUsage(body.usage);
       usage.inputTokens = addTokens(usage.inputTokens, turnUsage.promptTokens);
       usage.outputTokens = addTokens(usage.outputTokens, turnUsage.completionTokens);
       output = message.content ?? output;

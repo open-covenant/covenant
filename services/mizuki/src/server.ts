@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { createApp, SerialGate } from './app.js';
 import { ContributorAuth } from './auth.js';
+import { runBountyRecovery } from './bounty-recovery.js';
 import { BountyService } from './bounties.js';
 import { CapabilityService } from './capabilities.js';
 import { ClawPumpClient, EarningsReconciler } from './clawpump.js';
@@ -10,9 +11,10 @@ import { GithubClient } from './github.js';
 import { finalizeJobMerge } from './merges.js';
 import { UsePodContributorReviewer } from './contributor-reviewer.js';
 import { MemoryStore, PostgresStore } from './store.js';
-import { Payments, USDC_DECIMALS, USDC_MAINNET } from './x402.js';
-import { PolicySignerClient, refundLiabilityCommitment } from './policy-client.js';
+import { Payments } from './x402.js';
+import { PolicySignerClient } from './policy-client.js';
 import { recordPaymentReceipts } from './receipts.js';
+import { recoverSettlement } from './settlement-recovery.js';
 import { GithubWebhookHandler } from './webhooks.js';
 import { UpdaterStatusClient } from './updater-client.js';
 import { createServiceReadiness } from './service-readiness.js';
@@ -144,24 +146,25 @@ async function refreshMerges(): Promise<void> {
 }
 
 async function refreshBounties(): Promise<void> {
-  try {
-    for (const job of await store.jobsList()) {
-      if (job.state !== 'refunded') continue;
+  await runBountyRecovery({
+    jobs: () => store.jobsList(),
+    recoverRefunded: async (job) => {
       await Promise.all([bounties.createAfterRefund(job), capabilities.recordFailure(job)]);
-    }
-    await refreshMergedBounties();
-    await bounties.expireOffers();
-    await bounties.expireClaims();
-    await bounties.fundAwaiting();
-    const recovery = await bounties.reconcileFinancialOperations();
-    if (recovery.failed > 0) {
-      console.error(`bounty financial recovery has ${recovery.failed} pending operation(s)`);
-    }
-  } catch (cause) {
-    console.error(
-      `bounty refresh failed: ${cause instanceof Error ? cause.message : String(cause)}`,
-    );
-  }
+    },
+    refreshMerged: refreshMergedBounties,
+    expireOffers: () => bounties.expireOffers(),
+    expireClaims: () => bounties.expireClaims(),
+    fundAwaiting: () => bounties.fundAwaiting(),
+    reconcileFinancial: () => bounties.reconcileFinancialOperations(),
+    reportFailure: (context, cause) => {
+      console.error(
+        `bounty ${context} failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+      );
+    },
+    reportPendingFinancial: (count) => {
+      console.error(`bounty financial recovery has ${count} pending operation(s)`);
+    },
+  });
 }
 
 async function refreshMergedBounties(): Promise<void> {
@@ -192,39 +195,12 @@ async function refreshFinancialOperations(): Promise<void> {
       if (job.state === 'settlement_pending') {
         try {
           const paid = await paymentAdmission.run(async () => {
-            const payment = await payments.retrySettlement(job.quote, job.payment);
-            const liability =
-              config.paymentMode === 'live'
-                ? await policy.registerRefundLiability(
-                    job.id,
-                    payment.transaction,
-                    refundLiabilityCommitment(job.quote),
-                  )
-                : undefined;
-            if (liability) {
-              const commitment = refundLiabilityCommitment(job.quote);
-              if (
-                liability.jobId !== job.id ||
-                liability.settlementSignature !== payment.transaction ||
-                liability.payer !== payment.payer ||
-                liability.mint !== USDC_MAINNET ||
-                liability.decimals !== USDC_DECIMALS ||
-                liability.rawAmount !== payment.amountAtomic ||
-                liability.amountUsdCents !== Number(payment.amountAtomic) / 10_000 ||
-                liability.repository !== commitment.repository ||
-                liability.issueNumber !== commitment.issueNumber ||
-                liability.baseRef !== commitment.baseRef ||
-                liability.baseSha !== commitment.baseSha ||
-                liability.repositoryAuthorizedAt !== commitment.repositoryAuthorizedAt ||
-                liability.authorizationEvidenceHash !== commitment.authorizationEvidenceHash
-              ) {
-                throw new Error('refund liability evidence does not match the recovered payment');
-              }
-            }
-            if (liability) await store.patchJob(job.id, { refundLiabilityId: liability.id });
-            return store.transitionJob(job.id, 'settlement_pending', 'paid', {
-              payment,
-              refundLiabilityId: liability?.id,
+            return recoverSettlement(job, {
+              paymentMode: config.paymentMode,
+              payTo: config.payTo,
+              store,
+              payments,
+              policy,
             });
           });
           await recordPaymentReceipts(store, paid);

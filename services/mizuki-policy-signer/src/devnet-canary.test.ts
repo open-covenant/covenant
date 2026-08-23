@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
-import { Keypair, PublicKey } from '@solana/web3.js';
-import { describe, expect, it } from 'vitest';
+import { Keypair, PublicKey, type Connection } from '@solana/web3.js';
+import { describe, expect, it, vi } from 'vitest';
 import {
+  confirmFinalized,
   DevnetCanaryError,
   decodeEscrowState,
   inspectLoaderV3Deployment,
@@ -12,12 +13,12 @@ import {
 
 const LOADER = new PublicKey('BPFLoaderUpgradeab1e11111111111111111111111');
 
-function artifact(sbpfVersion = 2): Buffer {
+function artifact(sbpfVersion = 2, machine = 263): Buffer {
   const data = Buffer.alloc(96);
   Buffer.from([0x7f, 0x45, 0x4c, 0x46]).copy(data);
   data[4] = 2;
   data[5] = 1;
-  data.writeUInt16LE(247, 18);
+  data.writeUInt16LE(machine, 18);
   data.writeUInt32LE(sbpfVersion, 48);
   return data;
 }
@@ -109,6 +110,11 @@ describe('devnet canary boundary', () => {
         'artifact_not_sbpf_v2',
       );
     }
+    const legacyMachine = artifact(2, 247);
+    const legacyMachineHash = createHash('sha256').update(legacyMachine).digest('hex');
+    expect(() => inspectSbpfArtifact(legacyMachine, legacyMachineHash)).toThrowError(
+      'artifact_not_sbpf_v2',
+    );
   });
 
   it('requires loader-v3 deployment bytes to equal the local artifact', () => {
@@ -163,6 +169,47 @@ describe('devnet canary boundary', () => {
     });
     data[0] = 0;
     expect(() => decodeEscrowState(data)).toThrowError('invalid_escrow_state');
+  });
+
+  it('reconciles a finalized status after the confirmation request times out', async () => {
+    const connection = {
+      confirmTransaction: vi.fn().mockRejectedValue(new Error('timeout')),
+      getSignatureStatus: vi.fn().mockResolvedValue({
+        value: {
+          confirmationStatus: 'finalized',
+          err: { InstructionError: [0, { Custom: 12 }] },
+        },
+      }),
+    } as unknown as Connection;
+
+    await expect(
+      confirmFinalized(connection, 'signature', {
+        blockhash: 'blockhash',
+        lastValidBlockHeight: 100,
+      }),
+    ).resolves.toEqual({ InstructionError: [0, { Custom: 12 }] });
+    expect(connection.getSignatureStatus).toHaveBeenCalledWith('signature', {
+      searchTransactionHistory: true,
+    });
+  });
+
+  it('rejects inconsistent finalized confirmation evidence', async () => {
+    const connection = {
+      confirmTransaction: vi.fn().mockResolvedValue({ value: { err: null } }),
+      getSignatureStatus: vi.fn().mockResolvedValue({
+        value: {
+          confirmationStatus: 'finalized',
+          err: { InstructionError: [0, { Custom: 12 }] },
+        },
+      }),
+    } as unknown as Connection;
+
+    await expect(
+      confirmFinalized(connection, 'signature', {
+        blockhash: 'blockhash',
+        lastValidBlockHeight: 100,
+      }),
+    ).rejects.toThrowError('transaction_status_inconsistent');
   });
 });
 

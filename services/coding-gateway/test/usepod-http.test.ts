@@ -1,10 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  accountUsePodTurn,
   boundedMaxTokens,
-  probeUsePod,
+  probeUsePodBalance,
+  probeUsePodCatalog,
   parseUsePodUsage,
   providerReceipt,
   usePodHeaders,
+  usePodBalanceUrl,
   usePodUrl,
   type UsePodRequestConfig,
 } from '../src/usepod-http.js';
@@ -30,6 +33,7 @@ describe('UsePod HTTP contract', () => {
       'x-pod-max-price-input': '200000',
       'x-pod-max-price-output': '400000',
     });
+    expect(usePodBalanceUrl(config)).toBe('https://api.usepod.test/proxy/funded%2Ftoken/balance');
   });
 
   it('rejects unsafe base URLs and pre-tokenized paths', () => {
@@ -57,7 +61,7 @@ describe('UsePod HTTP contract', () => {
       balanceRemaining: '8000000',
       providerId: 'provider-7',
       requestId: 'request-3',
-      costMicrounits: '1700',
+      providerReportedCostMicrounits: '1700',
     });
 
     expect(() =>
@@ -92,7 +96,7 @@ describe('UsePod HTTP contract', () => {
       /funded-balance floor/,
     );
     expect(providerReceipt(response('2000000', '2000001'), config.model, '1')).toMatchObject({
-      costMicrounits: '2000001',
+      providerReportedCostMicrounits: '2000001',
     });
     expect(() => providerReceipt(response('2000000', '1.5'), config.model, '1')).toThrow(
       /invalid cost receipt/,
@@ -132,110 +136,171 @@ describe('UsePod HTTP contract', () => {
     }
   });
 
-  it('proves the exact configured model can execute a funded tool call', async () => {
+  it('accounts validated usage at the configured ceilings or a higher provider report', () => {
+    const response = (reported?: string) =>
+      new Response(null, {
+        headers: {
+          'x-pod-route': 'marketplace',
+          'x-balance-remaining': '8000000',
+          ...(reported ? { 'x-balance-cost-microunits': reported } : {}),
+        },
+      });
+    const usage = { promptTokens: 10, completionTokens: 2 };
+
+    expect(
+      accountUsePodTurn(providerReceipt(response(), config.model), usage, 200_000, 400_000),
+    ).toMatchObject({
+      accounting: {
+        accountedCostMicrounits: '3',
+        basis: 'configured-price-ceilings',
+        inputTokens: 10,
+        outputTokens: 2,
+        inputPriceMicrounitsPerMillion: 200_000,
+        outputPriceMicrounitsPerMillion: 400_000,
+      },
+    });
+    expect(
+      accountUsePodTurn(providerReceipt(response(), config.model), usage, 200_000, 400_000)
+        .providerReportedCostMicrounits,
+    ).toBeUndefined();
+    expect(
+      accountUsePodTurn(providerReceipt(response('9'), config.model), usage, 200_000, 400_000),
+    ).toMatchObject({
+      providerReportedCostMicrounits: '9',
+      accounting: {
+        accountedCostMicrounits: '9',
+        basis: 'max-of-configured-price-ceilings-and-provider-report',
+      },
+    });
+    expect(
+      accountUsePodTurn(providerReceipt(response('1'), config.model), usage, 200_000, 400_000),
+    ).toMatchObject({
+      providerReportedCostMicrounits: '1',
+      accounting: {
+        accountedCostMicrounits: '3',
+        basis: 'max-of-configured-price-ceilings-and-provider-report',
+      },
+    });
+  });
+
+  it('checks the exact model with a bounded non-billable catalog request', async () => {
     const request = vi.fn<typeof fetch>(async (_input, init) => {
-      expect(new Headers(init?.headers).get('authorization')).toBeNull();
-      const body = JSON.parse(String(init?.body)) as {
-        model: string;
-        tool_choice: { function: { name: string } };
-      };
-      expect(body.model).toBe(config.model);
-      expect(body.tool_choice.function.name).toBe('readiness_probe');
+      expect(init?.method).toBe('GET');
+      expect(new Headers(init?.headers)).toEqual(new Headers({ accept: 'application/json' }));
+      return Response.json({
+        object: 'list',
+        data: [{ id: 'other-model' }, { id: config.model }],
+      });
+    });
+
+    await expect(probeUsePodCatalog(config, request)).resolves.toBeUndefined();
+    expect(request).toHaveBeenCalledWith(
+      'https://api.usepod.test/proxy/funded%2Ftoken/v1/models',
+      expect.objectContaining({ method: 'GET' }),
+    );
+  });
+
+  it('requires matching above-floor balance evidence from the non-billable endpoint', async () => {
+    const request = vi.fn<typeof fetch>(async (_input, init) => {
+      expect(init?.method).toBe('GET');
+      expect(new Headers(init?.headers)).toEqual(
+        new Headers({ accept: 'application/json', 'cache-control': 'no-cache' }),
+      );
+      expect(init?.cache).toBe('no-store');
+      expect(init?.redirect).toBe('error');
       return Response.json(
-        {
-          model: config.model,
-          choices: [
-            {
-              message: {
-                tool_calls: [
-                  {
-                    function: {
-                      name: 'readiness_probe',
-                      arguments: JSON.stringify({ nonce: 'mizuki-ready' }),
-                    },
-                  },
-                ],
-              },
-            },
-          ],
-        },
-        {
-          headers: {
-            'x-pod-route': 'marketplace',
-            'x-balance-remaining': '7000000',
-          },
-        },
+        { usdc_balance: 2_000_000 },
+        { headers: { 'x-balance-remaining': '2000000' } },
       );
     });
 
-    await expect(probeUsePod(config, request)).resolves.toBeUndefined();
+    await expect(probeUsePodBalance(config, request)).resolves.toBeUndefined();
     expect(request).toHaveBeenCalledWith(
-      'https://api.usepod.test/proxy/funded%2Ftoken/v1/chat/completions',
-      expect.objectContaining({ method: 'POST' }),
+      'https://api.usepod.test/proxy/funded%2Ftoken/balance',
+      expect.objectContaining({ method: 'GET' }),
     );
   });
 
-  it('fails readiness when the provider reports another model', async () => {
-    const request = vi.fn<typeof fetch>(async () =>
-      Response.json(
-        {
-          model: 'other-model',
-          choices: [
+  it('rejects below-floor, conflicting, duplicate, and malformed balance evidence', async () => {
+    const response = (body: string, header: string, contentType = 'application/json') =>
+      vi.fn<typeof fetch>(
+        async () =>
+          new Response(body, {
+            headers: {
+              'content-type': contentType,
+              'x-balance-remaining': header,
+            },
+          }),
+      );
+
+    await expect(
+      probeUsePodBalance(config, response('{"usdc_balance":1999999}', '1999999')),
+    ).rejects.toThrow(/below the configured/);
+    await expect(
+      probeUsePodBalance(config, response('{"usdc_balance":2000000}', '2000001')),
+    ).rejects.toThrow(/conflicts/);
+    await expect(
+      probeUsePodBalance(config, response('{"usdc_balance":2000000}', '2000000, 2000000')),
+    ).rejects.toThrow(/duplicate/);
+    await expect(
+      probeUsePodBalance(
+        config,
+        response('{"usdc_balance":1,"\\u0075sdc_balance":2000000}', '2000000'),
+      ),
+    ).rejects.toThrow(/duplicate JSON fields/);
+
+    for (const body of [
+      '{}',
+      '{"usdc_balance":"2000000"}',
+      '{"usdc_balance":1.5}',
+      '{"usdc_balance":-1}',
+      '{"usdc_balance":9007199254740992}',
+    ]) {
+      await expect(probeUsePodBalance(config, response(body, '2000000'))).rejects.toThrow(
+        /invalid USDC microunits/,
+      );
+    }
+    await expect(
+      probeUsePodBalance(config, response('{"usdc_balance":2000000}', '2000000', 'text/plain')),
+    ).rejects.toThrow(/non-JSON/);
+
+    await expect(
+      probeUsePodBalance(
+        config,
+        vi.fn<typeof fetch>(async () => Response.json({ usdc_balance: 2_000_000 })),
+      ),
+    ).rejects.toThrow(/invalid or duplicate/);
+
+    await expect(
+      probeUsePodBalance(
+        config,
+        vi.fn<typeof fetch>(async () =>
+          Response.json(
+            { usdc_balance: 2_000_000 },
             {
-              message: {
-                tool_calls: [
-                  {
-                    function: {
-                      name: 'readiness_probe',
-                      arguments: JSON.stringify({ nonce: 'mizuki-ready' }),
-                    },
-                  },
-                ],
+              headers: {
+                'content-length': '16385',
+                'x-balance-remaining': '2000000',
               },
             },
-          ],
-        },
-        {
-          headers: {
-            'x-pod-route': 'marketplace',
-            'x-balance-remaining': '7000000',
-          },
-        },
+          ),
+        ),
       ),
-    );
-
-    await expect(probeUsePod(config, request)).rejects.toThrow(/different model/);
+    ).rejects.toThrow(/size limit/);
   });
 
-  it('fails readiness when the funded balance is below the configured floor', async () => {
-    const request = vi.fn<typeof fetch>(async () =>
+  it('rejects oversized or malformed model catalogs', async () => {
+    const oversized = vi.fn<typeof fetch>(async () =>
       Response.json(
-        {
-          model: config.model,
-          choices: [
-            {
-              message: {
-                tool_calls: [
-                  {
-                    function: {
-                      name: 'readiness_probe',
-                      arguments: JSON.stringify({ nonce: 'mizuki-ready' }),
-                    },
-                  },
-                ],
-              },
-            },
-          ],
-        },
-        {
-          headers: {
-            'x-pod-route': 'marketplace',
-            'x-balance-remaining': '1999999',
-          },
-        },
+        { object: 'list', data: [{ id: config.model }] },
+        { headers: { 'content-length': '1048577' } },
       ),
     );
+    await expect(probeUsePodCatalog(config, oversized)).rejects.toThrow(/size limit/);
 
-    await expect(probeUsePod(config, request)).rejects.toThrow(/funded-balance floor/);
+    const malformed = vi.fn<typeof fetch>(async () =>
+      Response.json({ object: 'list', data: [{ id: 7 }] }),
+    );
+    await expect(probeUsePodCatalog(config, malformed)).rejects.toThrow(/malformed JSON/);
   });
 });

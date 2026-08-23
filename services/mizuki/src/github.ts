@@ -6,10 +6,57 @@ import type { GithubAuthorizationReceipt, GithubIssue, Job, RunArtifacts } from 
 
 type Fetch = typeof fetch;
 const GITHUB_TIMEOUT_MS = 20_000;
+const TOKEN_REFRESH_WINDOW_MS = 5 * 60_000;
+const TOKEN_MAX_TTL_MS = 65 * 60_000;
+const TOKEN_CACHE_LIMIT = 256;
+const CORE_PERMISSIONS = {
+  checks: 'read',
+  contents: 'write',
+  issues: 'read',
+  metadata: 'read',
+  pull_requests: 'write',
+} as const;
+const permissionSchema = z.record(z.string(), z.enum(['read', 'write']));
 const githubAppSchema = z.object({
   id: z.number().int().positive(),
   slug: z.string().min(1).max(100),
+  permissions: permissionSchema,
 });
+const installationSchema = z
+  .object({
+    id: z.number().int().positive(),
+    app_id: z.number().int().positive(),
+    repository_selection: z.literal('selected'),
+    permissions: permissionSchema,
+    suspended_at: z.string().datetime({ offset: true }).nullable().optional(),
+  })
+  .passthrough();
+const installationTokenSchema = z
+  .object({
+    token: z.string().min(20).max(4_096).regex(/^\S+$/),
+    expires_at: z.string().datetime({ offset: true }),
+    permissions: z
+      .object({
+        checks: z.literal('read'),
+        contents: z.literal('write'),
+        issues: z.literal('read'),
+        metadata: z.literal('read'),
+        pull_requests: z.literal('write'),
+      })
+      .strict(),
+    repository_selection: z.literal('selected'),
+    repositories: z
+      .array(
+        z
+          .object({
+            name: z.string().min(1).max(100),
+            full_name: z.string().min(3).max(201),
+          })
+          .passthrough(),
+      )
+      .length(1),
+  })
+  .passthrough();
 const pullRequestReviewSchema = z.object({
   changed_files: z.number().int().nonnegative(),
   merged_at: z.string().datetime({ offset: true }).nullable(),
@@ -41,7 +88,15 @@ const pullRequestFilesSchema = z.array(
   }),
 );
 
+interface CachedInstallationToken {
+  token: string;
+  expiresAt: number;
+}
+
 export class GithubClient {
+  private readonly tokenCache = new Map<string, CachedInstallationToken>();
+  private readonly tokenRequests = new Map<string, Promise<CachedInstallationToken>>();
+
   constructor(
     private readonly config: Config,
     private readonly request: Fetch = fetch,
@@ -57,6 +112,7 @@ export class GithubClient {
     }
     const app = githubAppSchema.parse(await this.api('/app', { token: this.appJwt() }));
     if (app.id !== configuredId) throw new Error('GitHub authenticated a different App');
+    assertExactPermissions(app.permissions, CORE_PERMISSIONS, 'GitHub App');
   }
 
   async issue(issueUrl: string): Promise<GithubIssue> {
@@ -164,56 +220,72 @@ export class GithubClient {
       job.quote.authorizationReceipt?.evidenceHash,
       { title: job.quote.issueTitle, body: job.quote.issueBody },
     );
-    const token = await this.installationToken(installationId);
     const root = `/repos/${job.quote.owner}/${job.quote.repo}`;
     const branch = `mizuki/${job.id.slice(0, 8)}`;
 
-    const commit = await this.api<{ tree: { sha: string } }>(
+    const commit = await this.repositoryApi<{ tree: { sha: string } }>(
+      job.quote.owner,
+      job.quote.repo,
+      installationId,
       `${root}/git/commits/${job.quote.baseSha}`,
-      { token },
     );
     let deliveryCommitSha = job.deliveryCommitSha;
     if (!deliveryCommitSha) {
-      const existing = await this.api<{
+      const existing = await this.repositoryApi<{
         tree: Array<{ path: string; mode: string; type: string }>;
-      }>(`${root}/git/trees/${commit.tree.sha}?recursive=1`, { token });
+      }>(
+        job.quote.owner,
+        job.quote.repo,
+        installationId,
+        `${root}/git/trees/${commit.tree.sha}?recursive=1`,
+      );
       const modes = new Map(existing.tree.map((entry) => [entry.path, entry.mode]));
       const content = new Map(artifacts.files.map((file) => [file.path, file.content]));
       const entries = [];
       for (const path of artifacts.changedFiles) {
         const value = content.get(path);
         if (value === undefined) throw new Error(`cannot publish deleted or binary file: ${path}`);
-        const blob = await this.api<{ sha: string }>(`${root}/git/blobs`, {
-          method: 'POST',
-          token,
-          body: { content: value, encoding: 'utf-8' },
-        });
+        const blob = await this.repositoryApi<{ sha: string }>(
+          job.quote.owner,
+          job.quote.repo,
+          installationId,
+          `${root}/git/blobs`,
+          {
+            method: 'POST',
+            body: { content: value, encoding: 'utf-8' },
+          },
+        );
         entries.push({ path, mode: modes.get(path) ?? '100644', type: 'blob', sha: blob.sha });
       }
-      const tree = await this.api<{ sha: string }>(`${root}/git/trees`, {
-        method: 'POST',
-        token,
-        body: { base_tree: commit.tree.sha, tree: entries },
-      });
-      const created = await this.api<{ sha: string }>(`${root}/git/commits`, {
-        method: 'POST',
-        token,
-        body: {
-          message: `fix: ${job.quote.issueTitle}`.slice(0, 120),
-          tree: tree.sha,
-          parents: [job.quote.baseSha],
+      const tree = await this.repositoryApi<{ sha: string }>(
+        job.quote.owner,
+        job.quote.repo,
+        installationId,
+        `${root}/git/trees`,
+        {
+          method: 'POST',
+          body: { base_tree: commit.tree.sha, tree: entries },
         },
-      });
+      );
+      const created = await this.repositoryApi<{ sha: string }>(
+        job.quote.owner,
+        job.quote.repo,
+        installationId,
+        `${root}/git/commits`,
+        {
+          method: 'POST',
+          body: {
+            message: `fix: ${job.quote.issueTitle}`.slice(0, 120),
+            tree: tree.sha,
+            parents: [job.quote.baseSha],
+          },
+        },
+      );
       deliveryCommitSha = created.sha;
     }
     await checkpoint(deliveryCommitSha);
-    await this.ensureBranch(root, branch, deliveryCommitSha, token);
-    const existingPullRequest = await this.existingPullRequest(
-      job,
-      branch,
-      deliveryCommitSha,
-      token,
-    );
+    await this.ensureBranch(job, root, branch, deliveryCommitSha);
+    const existingPullRequest = await this.existingPullRequest(job, branch, deliveryCommitSha);
     if (existingPullRequest) {
       return this.captureDeliveryEvidence(
         job,
@@ -224,16 +296,21 @@ export class GithubClient {
       );
     }
     try {
-      const pr = await this.api<{ html_url: string }>(`${root}/pulls`, {
-        method: 'POST',
-        token,
-        body: {
-          title: job.quote.issueTitle,
-          head: branch,
-          base: job.quote.defaultBranch,
-          body: `Closes #${job.quote.issueNumber}\n\nImplemented by Mizuki. Payment is retained only for delivered work.`,
+      const pr = await this.repositoryApi<{ html_url: string }>(
+        job.quote.owner,
+        job.quote.repo,
+        installationId,
+        `${root}/pulls`,
+        {
+          method: 'POST',
+          body: {
+            title: job.quote.issueTitle,
+            head: branch,
+            base: job.quote.defaultBranch,
+            body: `Closes #${job.quote.issueNumber}\n\nImplemented by Mizuki. Payment is retained only for delivered work.`,
+          },
         },
-      });
+      );
       return this.captureDeliveryEvidence(
         job,
         artifacts,
@@ -243,7 +320,7 @@ export class GithubClient {
       );
     } catch (cause) {
       if (!(cause instanceof GithubApiError) || cause.status !== 422) throw cause;
-      const existing = await this.existingPullRequest(job, branch, deliveryCommitSha, token);
+      const existing = await this.existingPullRequest(job, branch, deliveryCommitSha);
       if (!existing) throw cause;
       return this.captureDeliveryEvidence(
         job,
@@ -289,10 +366,11 @@ export class GithubClient {
     if (!job.prUrl || !job.quote.installationId) return undefined;
     const match = job.prUrl.match(/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/(\d+)$/);
     if (!match) return undefined;
-    const token = await this.installationToken(job.quote.installationId);
-    const pull = await this.api<{ merged_at: string | null }>(
+    const pull = await this.repositoryApi<{ merged_at: string | null }>(
+      job.quote.owner,
+      job.quote.repo,
+      job.quote.installationId,
       `/repos/${job.quote.owner}/${job.quote.repo}/pulls/${match[1]}`,
-      { token },
     );
     return pull.merged_at ?? undefined;
   }
@@ -302,10 +380,11 @@ export class GithubClient {
     installationId: number,
   ): Promise<string | undefined> {
     const parsed = parsePullRequestUrl(pullRequestUrl);
-    const token = await this.installationToken(installationId);
-    const pull = await this.api<{ merged_at: string | null }>(
+    const pull = await this.repositoryApi<{ merged_at: string | null }>(
+      parsed.owner,
+      parsed.repo,
+      installationId,
       `/repos/${parsed.owner}/${parsed.repo}/pulls/${parsed.number}`,
-      { token },
     );
     return pull.merged_at ?? undefined;
   }
@@ -332,23 +411,45 @@ export class GithubClient {
     checkCount: number;
   }> {
     const parsed = parsePullRequestUrl(pullRequestUrl);
-    const token = await this.installationToken(installationId);
     const root = `/repos/${parsed.owner}/${parsed.repo}`;
     const pull = pullRequestReviewSchema.parse(
-      await this.api(`${root}/pulls/${parsed.number}`, { token }),
+      await this.repositoryApi(
+        parsed.owner,
+        parsed.repo,
+        installationId,
+        `${root}/pulls/${parsed.number}`,
+      ),
     );
     const [diff, rawChecks, rawFiles] = await Promise.all([
-      this.apiText(`${root}/pulls/${parsed.number}`, token, 'application/vnd.github.v3.diff'),
-      this.api(
-        `${root}/commits/${pull.merge_commit_sha ?? pull.head.sha}/check-runs?per_page=100`,
-        { token },
+      this.repositoryApiText(
+        parsed.owner,
+        parsed.repo,
+        installationId,
+        `${root}/pulls/${parsed.number}`,
+        'application/vnd.github.v3.diff',
       ),
-      this.api(`${root}/pulls/${parsed.number}/files?per_page=100`, { token }),
+      this.repositoryApi(
+        parsed.owner,
+        parsed.repo,
+        installationId,
+        `${root}/commits/${pull.merge_commit_sha ?? pull.head.sha}/check-runs?per_page=100`,
+      ),
+      this.repositoryApi(
+        parsed.owner,
+        parsed.repo,
+        installationId,
+        `${root}/pulls/${parsed.number}/files?per_page=100`,
+      ),
     ]);
     const checks = checkRunsSchema.parse(rawChecks);
     const files = pullRequestFilesSchema.parse(rawFiles);
     const confirmed = pullRequestReviewSchema.parse(
-      await this.api(`${root}/pulls/${parsed.number}`, { token }),
+      await this.repositoryApi(
+        parsed.owner,
+        parsed.repo,
+        installationId,
+        `${root}/pulls/${parsed.number}`,
+      ),
     );
     if (
       confirmed.head.sha !== pull.head.sha ||
@@ -400,7 +501,13 @@ export class GithubClient {
     );
     if (response.status === 404) return undefined;
     if (!response.ok) throw new Error(`GitHub installation lookup failed: ${response.status}`);
-    return ((await response.json()) as { id: number }).id;
+    const installation = installationSchema.parse(await response.json());
+    if (String(installation.app_id) !== this.config.githubAppId) {
+      throw new Error('GitHub returned an installation for a different App');
+    }
+    if (installation.suspended_at) throw new Error('GitHub App installation is suspended');
+    assertExactPermissions(installation.permissions, CORE_PERMISSIONS, 'GitHub App installation');
+    return installation.id;
   }
 
   private async authorizationReceipt(
@@ -410,22 +517,26 @@ export class GithubClient {
     installationId: number,
     expectedIssue?: { title: string; body: string },
   ): Promise<GithubAuthorizationReceipt> {
-    const token = await this.installationToken(installationId);
     const [issue, events] = await Promise.all([
-      this.api<{
+      this.repositoryApi<{
         title: string;
         body: string | null;
         labels: Array<{ name?: string }>;
         pull_request?: unknown;
-      }>(`/repos/${owner}/${repo}/issues/${number}`, { token }),
-      this.api<
+      }>(owner, repo, installationId, `/repos/${owner}/${repo}/issues/${number}`),
+      this.repositoryApi<
         Array<{
           event?: string;
           created_at?: string;
           label?: { name?: string };
           actor?: { id?: number; login?: string; type?: string } | null;
         }>
-      >(`/repos/${owner}/${repo}/issues/${number}/events?per_page=100`, { token }),
+      >(
+        owner,
+        repo,
+        installationId,
+        `/repos/${owner}/${repo}/issues/${number}/events?per_page=100`,
+      ),
     ]);
     assertNotPullRequest(issue);
     const currentIssue = {
@@ -458,9 +569,11 @@ export class GithubClient {
     ) {
       throw new Error('authorization label has no attributable human maintainer event');
     }
-    const permissionResult = await this.api<{ permission?: string }>(
+    const permissionResult = await this.repositoryApi<{ permission?: string }>(
+      owner,
+      repo,
+      installationId,
       `/repos/${owner}/${repo}/collaborators/${encodeURIComponent(event.actor.login)}/permission`,
-      { token },
     );
     const permission = permissionResult.permission;
     if (!isMaintainerPermission(permission)) {
@@ -492,7 +605,6 @@ export class GithubClient {
     job: Job,
     branch: string,
     deliveryCommitSha: string,
-    token: string,
   ): Promise<string | undefined> {
     const owner = job.quote.owner;
     const root = `/repos/${owner}/${job.quote.repo}`;
@@ -502,13 +614,13 @@ export class GithubClient {
       base: job.quote.defaultBranch,
       per_page: '2',
     });
-    const pulls = await this.api<
+    const pulls = await this.repositoryApi<
       Array<{
         html_url: string;
         head: { ref: string; sha: string };
         base: { ref: string };
       }>
-    >(`${root}/pulls?${query}`, { token });
+    >(owner, job.quote.repo, job.quote.installationId!, `${root}/pulls?${query}`);
     return pulls.find(
       (pull) =>
         pull.head.ref === branch &&
@@ -518,36 +630,142 @@ export class GithubClient {
   }
 
   private async ensureBranch(
+    job: Job,
     root: string,
     branch: string,
     commitSha: string,
-    token: string,
   ): Promise<void> {
     try {
-      await this.api(`${root}/git/refs`, {
-        method: 'POST',
-        token,
-        body: { ref: `refs/heads/${branch}`, sha: commitSha },
-      });
+      await this.repositoryApi(
+        job.quote.owner,
+        job.quote.repo,
+        job.quote.installationId!,
+        `${root}/git/refs`,
+        {
+          method: 'POST',
+          body: { ref: `refs/heads/${branch}`, sha: commitSha },
+        },
+      );
       return;
     } catch (cause) {
       if (!(cause instanceof GithubApiError) || cause.status !== 422) throw cause;
     }
-    const ref = await this.api<{ object: { sha: string } }>(
+    const ref = await this.repositoryApi<{ object: { sha: string } }>(
+      job.quote.owner,
+      job.quote.repo,
+      job.quote.installationId!,
       `${root}/git/ref/heads/${encodeURIComponent(branch)}`,
-      { token },
     );
     if (ref.object.sha !== commitSha) {
       throw new Error('existing delivery branch does not match the checkpointed commit');
     }
   }
 
-  private async installationToken(id: number): Promise<string> {
-    const result = await this.api<{ token: string }>(`/app/installations/${id}/access_tokens`, {
-      method: 'POST',
-      token: this.appJwt(),
+  private async installationToken(
+    owner: string,
+    repo: string,
+    id: number,
+  ): Promise<CachedInstallationToken> {
+    const key = tokenCacheKey(owner, repo, id);
+    const cached = this.tokenCache.get(key);
+    if (cached && cached.expiresAt - Date.now() > TOKEN_REFRESH_WINDOW_MS) {
+      this.tokenCache.delete(key);
+      this.tokenCache.set(key, cached);
+      return cached;
+    }
+    if (cached) this.tokenCache.delete(key);
+
+    const pending = this.tokenRequests.get(key);
+    if (pending) return pending;
+    const request = this.mintInstallationToken(owner, repo, id).finally(() => {
+      if (this.tokenRequests.get(key) === request) this.tokenRequests.delete(key);
     });
-    return result.token;
+    this.tokenRequests.set(key, request);
+    return request;
+  }
+
+  private async mintInstallationToken(
+    owner: string,
+    repo: string,
+    id: number,
+  ): Promise<CachedInstallationToken> {
+    const installation = installationSchema.parse(
+      await this.api(`/repos/${owner}/${repo}/installation`, { token: this.appJwt() }),
+    );
+    if (installation.id !== id || String(installation.app_id) !== this.config.githubAppId) {
+      throw new Error('GitHub returned an installation for a different App or repository');
+    }
+    if (installation.suspended_at) throw new Error('GitHub App installation is suspended');
+    assertExactPermissions(installation.permissions, CORE_PERMISSIONS, 'GitHub App installation');
+    const result = installationTokenSchema.parse(
+      await this.api(`/app/installations/${id}/access_tokens`, {
+        method: 'POST',
+        token: this.appJwt(),
+        body: { repositories: [repo], permissions: CORE_PERMISSIONS },
+      }),
+    );
+    if (
+      result.repositories[0]?.name.toLowerCase() !== repo.toLowerCase() ||
+      result.repositories[0]?.full_name.toLowerCase() !== `${owner}/${repo}`.toLowerCase()
+    ) {
+      throw new Error('GitHub returned an incorrectly scoped repository token');
+    }
+    const expiresAt = new Date(result.expires_at).getTime();
+    const ttl = expiresAt - Date.now();
+    if (ttl <= TOKEN_REFRESH_WINDOW_MS || ttl > TOKEN_MAX_TTL_MS) {
+      throw new Error('GitHub returned an invalid repository token lifetime');
+    }
+    const token = { token: result.token, expiresAt };
+    if (
+      !this.tokenCache.has(tokenCacheKey(owner, repo, id)) &&
+      this.tokenCache.size >= TOKEN_CACHE_LIMIT
+    ) {
+      const oldest = this.tokenCache.keys().next().value;
+      if (oldest) this.tokenCache.delete(oldest);
+    }
+    this.tokenCache.set(tokenCacheKey(owner, repo, id), token);
+    return token;
+  }
+
+  private invalidateToken(owner: string, repo: string, id: number, token: string): void {
+    const key = tokenCacheKey(owner, repo, id);
+    if (this.tokenCache.get(key)?.token === token) this.tokenCache.delete(key);
+  }
+
+  private async repositoryApi<T = unknown>(
+    owner: string,
+    repo: string,
+    installationId: number,
+    path: string,
+    options: { method?: string; body?: unknown } = {},
+  ): Promise<T> {
+    const first = await this.installationToken(owner, repo, installationId);
+    try {
+      return await this.api<T>(path, { ...options, token: first.token });
+    } catch (cause) {
+      if (!(cause instanceof GithubApiError) || cause.status !== 401) throw cause;
+    }
+    this.invalidateToken(owner, repo, installationId, first.token);
+    const replacement = await this.installationToken(owner, repo, installationId);
+    return this.api<T>(path, { ...options, token: replacement.token });
+  }
+
+  private async repositoryApiText(
+    owner: string,
+    repo: string,
+    installationId: number,
+    path: string,
+    accept: string,
+  ): Promise<string> {
+    const first = await this.installationToken(owner, repo, installationId);
+    try {
+      return await this.apiText(path, first.token, accept);
+    } catch (cause) {
+      if (!(cause instanceof GithubApiError) || cause.status !== 401) throw cause;
+    }
+    this.invalidateToken(owner, repo, installationId, first.token);
+    const replacement = await this.installationToken(owner, repo, installationId);
+    return this.apiText(path, replacement.token, accept);
   }
 
   private appJwt(): string {
@@ -588,7 +806,7 @@ export class GithubClient {
       signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
     });
     if (!response.ok) {
-      throw new Error(`GitHub GET ${path} failed: ${response.status}`);
+      throw new GithubApiError(response.status, `GitHub GET ${path} failed: ${response.status}`);
     }
     const text = await response.text();
     if (text.length > 2_000_000) throw new Error('pull request diff exceeds review limit');
@@ -623,6 +841,31 @@ function isMaintainerPermission(
   value: string | undefined,
 ): value is GithubAuthorizationReceipt['permission'] {
   return value === 'triage' || value === 'write' || value === 'maintain' || value === 'admin';
+}
+
+function assertExactPermissions<T extends Record<string, 'read' | 'write'>>(
+  actual: Record<string, 'read' | 'write'>,
+  expected: T,
+  subject: string,
+): void {
+  const actualEntries = Object.entries(actual).sort(([left], [right]) => left.localeCompare(right));
+  const expectedEntries = Object.entries(expected).sort(([left], [right]) =>
+    left.localeCompare(right),
+  );
+  if (
+    actualEntries.length === expectedEntries.length &&
+    actualEntries.every(
+      ([name, permission], index) =>
+        name === expectedEntries[index]?.[0] && permission === expectedEntries[index]?.[1],
+    )
+  ) {
+    return;
+  }
+  throw new Error(`${subject} permissions do not match the required delivery contract`);
+}
+
+function tokenCacheKey(owner: string, repo: string, installationId: number): string {
+  return `${installationId}:${owner.toLowerCase()}/${repo.toLowerCase()}`;
 }
 
 class GithubApiError extends Error {

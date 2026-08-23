@@ -10,6 +10,4 @@ command -v solana-verify >/dev/null
 solana-verify build "$program_root" \
   --library-name mizuki_escrow_program \
   --arch v2 \
-  --base-image "$base_image" \
-  -- \
-  --locked
+  --base-image "$base_image"

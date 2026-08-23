@@ -50,12 +50,7 @@ read_executable_hash() {
   printf '%s' "$hash"
 }
 
-test -f "$artifact"
-elf_flags="$(od -An -tx1 -j 48 -N 4 "$artifact" | tr -d '[:space:]')"
-if [[ "$elf_flags" != "02000000" ]]; then
-  echo "expected SBPFv2 ELF flags (0x2), found 0x$elf_flags" >&2
-  exit 1
-fi
+"$program_root/scripts/validate-artifact.sh" "$artifact"
 solana program show --url "$rpc_a" --commitment finalized --output json "$program_id" >"$metadata_a"
 solana program show --url "$rpc_b" --commitment finalized --output json "$program_id" >"$metadata_b"
 validate_metadata "$metadata_a"

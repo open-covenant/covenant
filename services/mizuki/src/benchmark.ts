@@ -92,6 +92,16 @@ async function wait(runId: string) {
         route: string;
         providerId?: string;
         requestId?: string;
+        providerReportedCostMicrounits?: string;
+        accounting?: {
+          accountedCostMicrounits: string;
+          basis: string;
+          inputTokens: number;
+          outputTokens: number;
+          inputPriceMicrounitsPerMillion: number;
+          outputPriceMicrounitsPerMillion: number;
+        };
+        /** Legacy gateway receipt field. */
         costMicrounits?: string;
       }>;
     };

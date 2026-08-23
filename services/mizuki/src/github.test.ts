@@ -61,8 +61,12 @@ describe('GitHub issue admission', () => {
       if (path === '/repos/example/project/branches/main') {
         return Response.json({ commit: { sha: 'a'.repeat(40) } });
       }
-      if (path === '/repos/example/project/installation') return Response.json({ id: 7 });
-      if (path === '/app/installations/7/access_tokens') return Response.json({ token: 'token' });
+      if (path === '/repos/example/project/installation') {
+        return Response.json(coreInstallation(7));
+      }
+      if (path === '/app/installations/7/access_tokens') {
+        return Response.json(coreToken());
+      }
       if (path === '/repos/example/project/issues/8/events') {
         return Response.json([
           {
@@ -188,7 +192,10 @@ describe('pull request review evidence', () => {
     const github = reviewClient(async (input, init) => {
       const url = new URL(String(input));
       if (url.pathname === '/app/installations/1/access_tokens') {
-        return Response.json({ token: 'installation-token' });
+        return Response.json(coreToken());
+      }
+      if (url.pathname === '/repos/example/project/installation') {
+        return Response.json(coreInstallation());
       }
       if (url.pathname === '/repos/example/project/pulls/23') {
         if (new Headers(init?.headers).get('accept') === 'application/vnd.github.v3.diff') {
@@ -230,7 +237,10 @@ describe('pull request review evidence', () => {
     const github = reviewClient(async (input, init) => {
       const url = new URL(String(input));
       if (url.pathname === '/app/installations/1/access_tokens') {
-        return Response.json({ token: 'installation-token' });
+        return Response.json(coreToken());
+      }
+      if (url.pathname === '/repos/example/project/installation') {
+        return Response.json(coreInstallation());
       }
       if (url.pathname === '/repos/example/project/pulls/23') {
         if (new Headers(init?.headers).get('accept') === 'application/vnd.github.v3.diff') {
@@ -266,7 +276,7 @@ describe('GitHub App readiness', () => {
       expect(init?.headers).toMatchObject({
         authorization: expect.stringMatching(/^Bearer [^.]+\.[^.]+\.[^.]+$/),
       });
-      return Response.json({ id: 123, slug: 'mizuki' });
+      return Response.json({ id: 123, slug: 'mizuki', permissions: corePermissions() });
     });
     const github = new GithubClient(
       loadConfig({
@@ -292,9 +302,125 @@ describe('GitHub App readiness', () => {
         MIZUKI_GITHUB_APP_ID: '123',
         MIZUKI_GITHUB_PRIVATE_KEY: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
       }),
-      async () => Response.json({ id: 456, slug: 'other' }),
+      async () => Response.json({ id: 456, slug: 'other', permissions: corePermissions() }),
     );
     await expect(github.readiness()).rejects.toThrow('different App');
+  });
+
+  it('fails closed when the App permission contract drifts', async () => {
+    const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const github = new GithubClient(
+      loadConfig({
+        MIZUKI_PAYMENT_MODE: 'mock',
+        MIZUKI_GITHUB_APP_ID: '123',
+        MIZUKI_GITHUB_PRIVATE_KEY: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
+      }),
+      async () =>
+        Response.json({
+          id: 123,
+          slug: 'mizuki',
+          permissions: { ...corePermissions(), workflows: 'write' },
+        }),
+    );
+    await expect(github.readiness()).rejects.toThrow('permissions do not match');
+  });
+});
+
+describe('repository-scoped GitHub App credentials', () => {
+  it('requests and accepts only the exact repository and delivery permissions', async () => {
+    let tokenBody: Record<string, unknown> | undefined;
+    const github = reviewClient(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/repos/example/project/installation') {
+        return Response.json(coreInstallation());
+      }
+      if (url.pathname === '/app/installations/1/access_tokens') {
+        tokenBody = JSON.parse(String(init?.body));
+        return Response.json(coreToken());
+      }
+      if (url.pathname === '/repos/example/project/pulls/23') {
+        return Response.json({ merged_at: null });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+
+    await expect(
+      github.pullRequestMergedAt('https://github.com/example/project/pull/23', 1),
+    ).resolves.toBeUndefined();
+    expect(tokenBody).toEqual({ repositories: ['project'], permissions: corePermissions() });
+  });
+
+  it.each([
+    ['all-repository selection', { repository_selection: 'all' }],
+    ['an extra permission', { permissions: { ...corePermissions(), workflows: 'read' } }],
+    ['a missing permission', { permissions: { ...corePermissions(), checks: undefined } }],
+    ['another repository', { repositories: [{ name: 'other', full_name: 'example/other' }] }],
+  ])('rejects a token response with %s', async (_case, overrides) => {
+    const github = reviewClient(async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/repos/example/project/installation') {
+        return Response.json(coreInstallation());
+      }
+      if (url.pathname === '/app/installations/1/access_tokens') {
+        const body = coreToken(overrides);
+        if (body.permissions && typeof body.permissions === 'object') {
+          body.permissions = Object.fromEntries(
+            Object.entries(body.permissions).filter(([, value]) => value !== undefined),
+          );
+        }
+        return Response.json(body);
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+
+    await expect(
+      github.pullRequestMergedAt('https://github.com/example/project/pull/23', 1),
+    ).rejects.toThrow();
+  });
+
+  it.each([
+    ['another App', { app_id: 456 }],
+    ['all repositories', { repository_selection: 'all' }],
+    [
+      'an extra installation permission',
+      { permissions: { ...corePermissions(), workflows: 'read' } },
+    ],
+  ])('rejects an installation bound to %s', async (_case, overrides) => {
+    const github = reviewClient(async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/repos/example/project/installation') {
+        return Response.json(coreInstallation(1, overrides));
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+    await expect(
+      github.pullRequestMergedAt('https://github.com/example/project/pull/23', 1),
+    ).rejects.toThrow();
+  });
+
+  it('invalidates a rejected cached token and retries once', async () => {
+    let mints = 0;
+    const github = reviewClient(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/repos/example/project/installation') {
+        return Response.json(coreInstallation());
+      }
+      if (url.pathname === '/app/installations/1/access_tokens') {
+        mints += 1;
+        return Response.json(coreToken({ token: `installation-token-for-repository-${mints}` }));
+      }
+      if (url.pathname === '/repos/example/project/pulls/23') {
+        const authorization = new Headers(init?.headers).get('authorization');
+        if (authorization?.endsWith('-1')) return Response.json({}, { status: 401 });
+        return Response.json({ merged_at: null });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+
+    await expect(
+      github.pullRequestMergedAt('https://github.com/example/project/pull/23', 1),
+    ).resolves.toBeUndefined();
+    expect(mints).toBe(2);
   });
 });
 
@@ -320,6 +446,38 @@ function reviewPull(headSha = 'b'.repeat(40), baseSha = 'd'.repeat(40)) {
   };
 }
 
+function corePermissions() {
+  return {
+    checks: 'read',
+    contents: 'write',
+    issues: 'read',
+    metadata: 'read',
+    pull_requests: 'write',
+  } as const;
+}
+
+function coreInstallation(id = 1, overrides: Record<string, unknown> = {}) {
+  return {
+    id,
+    app_id: 123,
+    repository_selection: 'selected',
+    permissions: corePermissions(),
+    suspended_at: null,
+    ...overrides,
+  };
+}
+
+function coreToken(overrides: Record<string, unknown> = {}) {
+  return {
+    token: 'installation-token-for-one-repository',
+    expires_at: new Date(Date.now() + 60 * 60_000).toISOString(),
+    permissions: corePermissions(),
+    repository_selection: 'selected',
+    repositories: [{ name: 'project', full_name: 'example/project' }],
+    ...overrides,
+  };
+}
+
 const emptyArtifacts: RunArtifacts = {
   patch: '',
   changedFiles: [],
@@ -340,8 +498,11 @@ function publicationClient(existingHead: string, events: string[] = []): GithubC
     async (input, init) => {
       const url = new URL(String(input));
       const method = init?.method ?? 'GET';
+      if (url.pathname === '/repos/example/project/installation') {
+        return Response.json(coreInstallation(7));
+      }
       if (url.pathname === '/app/installations/7/access_tokens') {
-        return Response.json({ token: 'installation-token' });
+        return Response.json(coreToken());
       }
       if (url.pathname === `/repos/example/project/git/commits/${'b'.repeat(40)}`) {
         return Response.json({ tree: { sha: 'c'.repeat(40) } });

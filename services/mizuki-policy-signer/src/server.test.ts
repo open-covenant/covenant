@@ -1,11 +1,12 @@
-import { createPrivateKey, sign } from 'node:crypto';
+import { createHash, createPrivateKey, sign } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
-import { Keypair } from '@solana/web3.js';
+import { Keypair, SystemProgram, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { FixedUsdPriceOracle, MockChainGateway } from './chain.js';
+import { authorizedSettlementTransaction, FixedUsdPriceOracle, MockChainGateway } from './chain.js';
 import {
   bindEscrowRequestSchema,
   createEscrowRequestSchema,
+  PolicyError,
   refundAuthorizationMessage,
   refundDeliveryBindingAuthorizationMessage,
   refundDischargeAuthorizationMessage,
@@ -24,15 +25,19 @@ const MINT = '3'.repeat(32);
 const SIGNATURE = '6'.repeat(64);
 const CLAIMANT = Keypair.generate();
 const JOB_AUTHORITY = Keypair.generate();
+const DEFAULT_ADMISSION_QUOTE = '99999999-9999-4999-8999-999999999999';
+let repositoryAdmissionId = '';
+let repositoryAdmissionEvidenceHash = '';
 
 describe('signer HTTP service', () => {
   let server: ReturnType<typeof createSignerServer>;
   let origin: string;
   let merges: MockMergeVerifier;
+  let chain: MockChainGateway;
 
   beforeEach(async () => {
     const store = new InMemoryOperationStore();
-    const chain = new MockChainGateway();
+    chain = new MockChainGateway();
     const metrics = new SignerMetrics();
     chain.settlements.set(SIGNATURE, {
       signature: SIGNATURE,
@@ -55,7 +60,6 @@ describe('signer HTTP service', () => {
         refundDecimals: 6,
         jobAuthorityPublicKey: JOB_AUTHORITY.publicKey.toBase58(),
         refundAuthMaxTtlSeconds: 900,
-        refundLiabilityMaxAgeSeconds: 86_400,
         operationLimitUsdCents: 2_500,
         refundDailyLimitUsdCents: 10_000,
         escrowDailyLimitUsdCents: 10_000,
@@ -70,6 +74,22 @@ describe('signer HTTP service', () => {
       merges,
       metrics,
     );
+    const authorization = settlementAuthorization(DEFAULT_ADMISSION_QUOTE);
+    const admission = await service.createRepositoryAdmission(
+      {
+        quoteId: DEFAULT_ADMISSION_QUOTE,
+        repository: 'owner/repository',
+        issueNumber: 17,
+        baseRef: 'main',
+        baseSha: 'd'.repeat(40),
+        reservationKeyHash: '9'.repeat(64),
+        paymentAuthorization: authorization.header,
+      },
+      'default-server-admission',
+    );
+    repositoryAdmissionId = admission.id;
+    repositoryAdmissionEvidenceHash = admission.evidenceHash;
+    merges.readinessRequests.length = 0;
     server = createSignerServer({ service, store, metrics, authToken: TOKEN });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address() as AddressInfo;
@@ -84,6 +104,201 @@ describe('signer HTTP service', () => {
     const response = await fetch(`${origin}/v1/operations/00000000-0000-4000-8000-000000000000`);
     expect(response.status).toBe(401);
     expect(await response.json()).toMatchObject({ error: { code: 'unauthorized' } });
+  });
+
+  it('serves authenticated readiness for one exact verifier repository', async () => {
+    const unauthorized = await fetch(`${origin}/v1/readiness/repository`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ repository: 'Owner/Repository' }),
+    });
+    expect(unauthorized.status).toBe(401);
+
+    const response = await fetch(`${origin}/v1/readiness/repository`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ repository: 'Owner/Repository' }),
+    });
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      ready: true,
+      repository: 'owner/repository',
+      verifierAppId: '12345',
+      installationId: 777,
+      repositorySelection: 'selected',
+      tokenRepositories: 1,
+    });
+    expect(merges.readinessRequests).toEqual(['owner/repository']);
+  });
+
+  it('rejects malformed repository readiness requests before verifier access', async () => {
+    const response = await fetch(`${origin}/v1/readiness/repository`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ repository: 'owner/repository', extra: true }),
+    });
+    expect(response.status).toBe(400);
+    expect(merges.readinessRequests).toEqual([]);
+  });
+
+  it('creates and validates an immutable admission after verifier App removal', async () => {
+    const authorization = settlementAuthorization('11111111-1111-4111-8111-111111111111');
+    const binding = {
+      quoteId: '11111111-1111-4111-8111-111111111111',
+      repository: 'owner/repository',
+      issueNumber: 17,
+      baseRef: 'main',
+      baseSha: 'a'.repeat(40),
+      reservationKeyHash: 'b'.repeat(64),
+      paymentAuthorization: authorization.header,
+    };
+    const create = () =>
+      fetch(`${origin}/v1/repository-admissions`, {
+        method: 'POST',
+        headers: mutationHeaders('repository-admission-http'),
+        body: JSON.stringify(binding),
+      });
+
+    const firstResponse = await create();
+    const first = (await firstResponse.json()) as {
+      id: string;
+      evidenceHash: string;
+      repository: string;
+    };
+    expect(firstResponse.status).toBe(201);
+    expect(first).toMatchObject({
+      id: expect.any(String),
+      evidenceHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      repository: binding.repository,
+      paymentAuthorizationHash: createHash('sha256').update(authorization.header).digest('hex'),
+    });
+    expect(merges.readinessRequests).toEqual([binding.repository]);
+
+    merges.error = new PolicyError(
+      'github_installation_missing',
+      'Verifier App was removed',
+      503,
+      true,
+    );
+    const replayResponse = await create();
+    const replay = (await replayResponse.json()) as { id: string };
+    expect(replayResponse.status).toBe(201);
+    expect(replay.id).toBe(first.id);
+    expect(merges.readinessRequests).toEqual([binding.repository]);
+
+    const validate = await fetch(`${origin}/v1/repository-admissions/${first.id}/validate`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${TOKEN}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        quoteId: binding.quoteId,
+        repository: binding.repository,
+        issueNumber: binding.issueNumber,
+        baseRef: binding.baseRef,
+        baseSha: binding.baseSha,
+        reservationKeyHash: binding.reservationKeyHash,
+        paymentAuthorizationHash: createHash('sha256').update(authorization.header).digest('hex'),
+        evidenceHash: first.evidenceHash,
+      }),
+    });
+    expect(validate.status).toBe(200);
+    await expect(validate.json()).resolves.toMatchObject({
+      id: first.id,
+      paymentAuthorizationHash: createHash('sha256').update(authorization.header).digest('hex'),
+    });
+
+    const tampered = await fetch(`${origin}/v1/repository-admissions/${first.id}/validate`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${TOKEN}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        quoteId: binding.quoteId,
+        repository: binding.repository,
+        issueNumber: binding.issueNumber,
+        baseRef: binding.baseRef,
+        baseSha: binding.baseSha,
+        reservationKeyHash: binding.reservationKeyHash,
+        paymentAuthorizationHash: 'd'.repeat(64),
+        evidenceHash: first.evidenceHash,
+      }),
+    });
+    expect(tampered.status).toBe(422);
+    await expect(tampered.json()).resolves.toMatchObject({
+      error: { code: 'repository_admission_mismatch' },
+    });
+  });
+
+  it('reconciles finalized settlement evidence through the durable admission route', async () => {
+    const quoteId = '22222222-2222-4222-8222-222222222222';
+    const authorization = settlementAuthorization(quoteId);
+    const binding = {
+      quoteId,
+      repository: 'owner/repository',
+      issueNumber: 18,
+      baseRef: 'main',
+      baseSha: 'a'.repeat(40),
+      reservationKeyHash: 'b'.repeat(64),
+      paymentAuthorization: authorization.header,
+    };
+    const createdResponse = await fetch(`${origin}/v1/repository-admissions`, {
+      method: 'POST',
+      headers: mutationHeaders('repository-settlement-http'),
+      body: JSON.stringify(binding),
+    });
+    const admission = (await createdResponse.json()) as { id: string; evidenceHash: string };
+    const facts = {
+      signature: SIGNATURE,
+      payer: '4'.repeat(32),
+      recipient: TREASURY,
+      mint: MINT,
+      rawAmount: '2000000',
+      decimals: 6,
+      finalized: true,
+      succeeded: true,
+      slot: 1,
+      blockTimeUnixSeconds: Math.floor(Date.now() / 1_000),
+    };
+    chain.reconciledSettlements.set(
+      authorizedSettlementTransaction({
+        wireTransaction: authorization.wireTransaction,
+        feePayer: authorization.feePayer,
+        rawAmount: '2000000',
+        notBeforeUnixSeconds: 0,
+      }).messageHash,
+      facts,
+    );
+
+    const reconciled = await fetch(
+      `${origin}/v1/repository-admissions/${admission.id}/settlements/reconcile`,
+      {
+        method: 'POST',
+        headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          evidenceHash: admission.evidenceHash,
+        }),
+      },
+    );
+    expect(reconciled.status).toBe(200);
+    await expect(reconciled.json()).resolves.toEqual(facts);
+
+    const tampered = await fetch(
+      `${origin}/v1/repository-admissions/${admission.id}/settlements/reconcile`,
+      {
+        method: 'POST',
+        headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          evidenceHash: 'f'.repeat(64),
+        }),
+      },
+    );
+    expect(tampered.status).toBe(422);
+    await expect(tampered.json()).resolves.toMatchObject({
+      error: { code: 'repository_admission_mismatch' },
+    });
   });
 
   it('rejects caller-supplied refund recipient and amount fields', async () => {
@@ -389,6 +604,47 @@ function mutationHeaders(idempotencyKey: string): Record<string, string> {
   };
 }
 
+function settlementAuthorization(quoteId: string): {
+  header: string;
+  wireTransaction: string;
+  feePayer: string;
+} {
+  const feePayer = Keypair.generate();
+  const payer = Keypair.generate();
+  const recipient = Keypair.generate();
+  const message = new TransactionMessage({
+    payerKey: feePayer.publicKey,
+    recentBlockhash: Keypair.generate().publicKey.toBase58(),
+    instructions: [
+      SystemProgram.transfer({
+        fromPubkey: payer.publicKey,
+        toPubkey: recipient.publicKey,
+        lamports: 1,
+      }),
+    ],
+  }).compileToV0Message();
+  const transaction = new VersionedTransaction(message);
+  transaction.sign([payer]);
+  const wireTransaction = Buffer.from(transaction.serialize()).toString('base64');
+  const header = Buffer.from(
+    JSON.stringify({
+      x402Version: 2,
+      resource: { url: `https://mizuki.example/v1/jobs?quote_id=${quoteId}` },
+      accepted: {
+        scheme: 'exact',
+        network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+        asset: MINT,
+        amount: '2000000',
+        payTo: TREASURY,
+        maxTimeoutSeconds: 300,
+        extra: { feePayer: feePayer.publicKey.toBase58() },
+      },
+      payload: { transaction: wireTransaction },
+    }),
+  ).toString('base64');
+  return { header, wireTransaction, feePayer: feePayer.publicKey.toBase58() };
+}
+
 function signMessage(message: string): string {
   return signWithKey(CLAIMANT, message);
 }
@@ -404,6 +660,8 @@ function signedRefundRequest(
     settlementSignature,
     ...(action === 'register'
       ? {
+          repositoryAdmissionId,
+          repositoryAdmissionEvidenceHash,
           repository: 'owner/repository',
           issueNumber: 17,
           baseRef: 'main',

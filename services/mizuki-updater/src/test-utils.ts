@@ -55,6 +55,7 @@ export function proposalFixture(now = new Date('2026-08-22T12:00:00.000Z')): {
       owner: 'mizuki-labs',
       name: 'mizuki',
       baseBranch: 'main',
+      baseSha: 'b'.repeat(40),
       headBranch: 'mizuki/upgrade-1',
     },
     candidateSha,

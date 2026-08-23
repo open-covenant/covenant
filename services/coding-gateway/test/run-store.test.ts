@@ -27,7 +27,15 @@ describe('RunStore', () => {
             model: 'deepseek-v3.2',
             route: 'marketplace',
             balanceRemaining: '5000000',
-            costMicrounits: '31000',
+            providerReportedCostMicrounits: '31000',
+            accounting: {
+              accountedCostMicrounits: '31000',
+              basis: 'max-of-configured-price-ceilings-and-provider-report',
+              inputTokens: 100,
+              outputTokens: 20,
+              inputPriceMicrounitsPerMillion: 200000,
+              outputPriceMicrounitsPerMillion: 400000,
+            },
           },
         ],
       }),
@@ -129,6 +137,80 @@ describe('RunStore', () => {
       ]),
     );
     expect(() => new RunStore(path)).toThrow('invalid records');
+  });
+
+  it('loads legacy provider receipts but requires complete accounting on new receipts', () => {
+    const legacyPath = storePath();
+    writeFileSync(
+      legacyPath,
+      JSON.stringify([
+        run({
+          status: 'completed',
+          providerReceipts: [
+            {
+              model: 'deepseek-v3.2',
+              route: 'marketplace',
+              balanceRemaining: '5000000',
+              costMicrounits: '31000',
+            },
+          ],
+        }),
+      ]),
+    );
+    expect(new RunStore(legacyPath).list()[0]?.providerReceipts).toHaveLength(1);
+
+    const invalidPath = storePath();
+    writeFileSync(
+      invalidPath,
+      JSON.stringify([
+        run({
+          status: 'completed',
+          providerReceipts: [
+            {
+              model: 'deepseek-v3.2',
+              route: 'marketplace',
+              balanceRemaining: '5000000',
+              providerReportedCostMicrounits: '10',
+              accounting: {
+                accountedCostMicrounits: '1',
+                basis: 'max-of-configured-price-ceilings-and-provider-report',
+                inputTokens: 10,
+                outputTokens: 2,
+                inputPriceMicrounitsPerMillion: 200000,
+                outputPriceMicrounitsPerMillion: 400000,
+              },
+            },
+          ],
+        }),
+      ]),
+    );
+    expect(() => new RunStore(invalidPath)).toThrow('invalid records');
+
+    const wrongTypePath = storePath();
+    writeFileSync(
+      wrongTypePath,
+      JSON.stringify([
+        run({
+          status: 'completed',
+          providerReceipts: [
+            {
+              model: 'deepseek-v3.2',
+              route: 'marketplace',
+              balanceRemaining: '5000000',
+              accounting: {
+                accountedCostMicrounits: 3 as unknown as string,
+                basis: 'configured-price-ceilings',
+                inputTokens: 10,
+                outputTokens: 2,
+                inputPriceMicrounitsPerMillion: 200000,
+                outputPriceMicrounitsPerMillion: 400000,
+              },
+            },
+          ],
+        }),
+      ]),
+    );
+    expect(() => new RunStore(wrongTypePath)).toThrow('invalid records');
   });
 
   it('rejects a single receipt that could exhaust the persistent disk', () => {

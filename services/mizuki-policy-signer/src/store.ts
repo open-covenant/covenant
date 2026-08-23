@@ -5,6 +5,7 @@ import type {
   OperationStatus,
   PreparedTransaction,
   RefundLiability,
+  RepositoryAdmission,
   ReserveOperation,
 } from './domain.js';
 import { PolicyError } from './domain.js';
@@ -32,6 +33,9 @@ export interface RefundLiabilityDeliveryBinding {
 
 export interface OperationStore {
   migrate(): Promise<void>;
+  registerRepositoryAdmission(admission: RepositoryAdmission): Promise<RepositoryAdmission>;
+  getRepositoryAdmission(id: string): Promise<RepositoryAdmission | null>;
+  getRepositoryAdmissionByIdempotencyKey(key: string): Promise<RepositoryAdmission | null>;
   registerRefundLiability(
     liability: RefundLiability,
     maxOutstandingRaw: string,
@@ -97,6 +101,11 @@ export class InMemoryOperationStore implements OperationStore {
   private readonly byResource = new Map<string, string>();
   private readonly bindChallenges = new Map<string, BindChallenge>();
   private readonly githubIdentityGrants = new Map<string, GitHubIdentityGrant>();
+  private readonly repositoryAdmissions = new Map<string, RepositoryAdmission>();
+  private readonly admissionByIdempotency = new Map<string, string>();
+  private readonly admissionByQuote = new Map<string, string>();
+  private readonly admissionByReservation = new Map<string, string>();
+  private readonly admissionByPayment = new Map<string, string>();
   private readonly refundLiabilities = new Map<string, RefundLiability>();
   private readonly liabilityByIdempotency = new Map<string, string>();
   private readonly liabilityByJob = new Map<string, string>();
@@ -105,6 +114,56 @@ export class InMemoryOperationStore implements OperationStore {
   private tail: Promise<void> = Promise.resolve();
 
   async migrate(): Promise<void> {}
+
+  async registerRepositoryAdmission(admission: RepositoryAdmission): Promise<RepositoryAdmission> {
+    return this.exclusive(() => {
+      const idempotentId = this.admissionByIdempotency.get(admission.idempotencyKey);
+      if (idempotentId) {
+        const existing = this.repositoryAdmissions.get(idempotentId)!;
+        if (existing.requestHash !== admission.requestHash) {
+          throw new PolicyError(
+            'idempotency_conflict',
+            'Idempotency key was already used for a different request',
+            409,
+          );
+        }
+        return cloneAdmission(existing);
+      }
+      if (
+        this.admissionByQuote.has(admission.quoteId) ||
+        this.admissionByReservation.has(admission.reservationKeyHash) ||
+        this.admissionByPayment.has(admission.paymentAuthorizationHash)
+      ) {
+        throw new PolicyError(
+          'repository_admission_conflict',
+          'Quote, reservation, or payment proof already has a different admission',
+          409,
+        );
+      }
+      const stored = cloneAdmission(admission);
+      this.repositoryAdmissions.set(stored.id, stored);
+      this.admissionByIdempotency.set(stored.idempotencyKey, stored.id);
+      this.admissionByQuote.set(stored.quoteId, stored.id);
+      this.admissionByReservation.set(stored.reservationKeyHash, stored.id);
+      this.admissionByPayment.set(stored.paymentAuthorizationHash, stored.id);
+      return cloneAdmission(stored);
+    });
+  }
+
+  async getRepositoryAdmission(id: string): Promise<RepositoryAdmission | null> {
+    return this.exclusive(() => {
+      const admission = this.repositoryAdmissions.get(id);
+      return admission ? cloneAdmission(admission) : null;
+    });
+  }
+
+  async getRepositoryAdmissionByIdempotencyKey(key: string): Promise<RepositoryAdmission | null> {
+    return this.exclusive(() => {
+      const id = this.admissionByIdempotency.get(key);
+      const admission = id ? this.repositoryAdmissions.get(id) : undefined;
+      return admission ? cloneAdmission(admission) : null;
+    });
+  }
 
   async registerRefundLiability(
     liability: RefundLiability,
@@ -756,5 +815,14 @@ function cloneLiability(liability: RefundLiability): RefundLiability {
     dischargeEvidence: liability.dischargeEvidence
       ? structuredClone(liability.dischargeEvidence)
       : null,
+  };
+}
+
+function cloneAdmission(admission: RepositoryAdmission): RepositoryAdmission {
+  return {
+    ...admission,
+    permissions: { ...admission.permissions },
+    tokenExpiresAt: new Date(admission.tokenExpiresAt),
+    admittedAt: new Date(admission.admittedAt),
   };
 }

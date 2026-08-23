@@ -86,6 +86,7 @@ export const upgradeManifestSchema = z
         owner: githubName,
         name: githubName,
         baseBranch: branch,
+        baseSha: gitSha,
         headBranch: branch,
       })
       .strict(),

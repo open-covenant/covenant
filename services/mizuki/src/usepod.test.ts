@@ -1,9 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   boundedMaxTokens,
   publicUsePodReceipt,
   parseUsePodUsage,
-  probeUsePod,
+  probeUsePodCatalog,
   usePodHeaders,
   usePodReceipt,
   usePodUrl,
@@ -118,23 +118,46 @@ describe('UsePod request contract', () => {
     expect(inputCost + outputCost).toBeLessThanOrEqual(5_000);
   });
 
-  it('fails reviewer readiness below the configured balance floor', async () => {
-    const request = async () =>
-      Response.json(
-        {
-          model: config.model,
-          choices: [{ message: { content: JSON.stringify({ nonce: 'mizuki-ready' }) } }],
-        },
-        {
-          headers: {
-            'x-pod-route': 'marketplace',
-            'x-balance-remaining': '1999999',
-          },
-        },
-      );
+  it.each([401, 403])('fails catalog readiness on HTTP %i', async (status) => {
+    const request = async () => new Response(null, { status });
 
-    await expect(probeUsePod(config, request as typeof fetch)).rejects.toThrow(
-      /funded-balance floor/,
+    await expect(probeUsePodCatalog(config, request as typeof fetch)).rejects.toThrow(
+      `HTTP ${status}`,
     );
+  });
+
+  it('rejects malformed and oversized model catalogs', async () => {
+    await expect(
+      probeUsePodCatalog(config, (async () =>
+        Response.json({ object: 'list', data: 'invalid' })) as typeof fetch),
+    ).rejects.toThrow(/malformed JSON/);
+
+    await expect(
+      probeUsePodCatalog(
+        config,
+        (async () =>
+          new Response(' '.repeat(1_048_577), {
+            headers: { 'content-type': 'application/json' },
+          })) as typeof fetch,
+      ),
+    ).rejects.toThrow(/response size limit/);
+  });
+
+  it('uses a bounded timeout for the catalog request', async () => {
+    const timeout = AbortSignal.abort(new DOMException('timed out', 'TimeoutError'));
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeout);
+    const request = vi.fn<typeof fetch>(async (_input, init) => {
+      expect(init?.signal).toBe(timeout);
+      throw timeout.reason;
+    });
+
+    try {
+      await expect(probeUsePodCatalog(config, request)).rejects.toMatchObject({
+        name: 'TimeoutError',
+      });
+      expect(timeoutSpy).toHaveBeenCalledWith(15_000);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
   });
 });

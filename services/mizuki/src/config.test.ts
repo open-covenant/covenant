@@ -2,6 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { assertBootConfig, assertLiveConfig, liveConfigIssues, loadConfig } from './config.js';
 
 describe('updater configuration', () => {
+  it('uses the canary-qualified development routes', () => {
+    expect(loadConfig({ MIZUKI_PAYMENT_MODE: 'mock' })).toMatchObject({
+      usePodImplementationModel: 'openai/gpt-oss-120b',
+      usePodModel: 'deepseek-v4-flash',
+    });
+  });
+
   it('requires the updater URL and token together', () => {
     expect(() => loadConfig({ MIZUKI_UPDATER_URL: 'http://updater:8793' })).toThrow(
       'must be configured together',
@@ -110,9 +117,12 @@ describe('live configuration', () => {
     USEPOD_BASE_URL: 'https://api.usepod.ai',
     USEPOD_MODEL: 'coder-route',
     USEPOD_REVIEW_MODEL: 'reviewer-route',
+    USEPOD_INPUT_USD_PER_MILLION: '0.2',
+    USEPOD_OUTPUT_USD_PER_MILLION: '0.4',
     USEPOD_MAX_INPUT_PRICE_MICROUNITS: '200000',
     USEPOD_MAX_OUTPUT_PRICE_MICROUNITS: '400000',
     USEPOD_MIN_BALANCE: '2000000',
+    MIZUKI_BOUNTY_REVIEW_MAX_COST_MICROUNITS: '50000',
     MIZUKI_GITHUB_APP_ID: '1234',
     MIZUKI_GITHUB_PRIVATE_KEY: '-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----',
     MIZUKI_GITHUB_CLIENT_ID: 'client-id',
@@ -183,6 +193,11 @@ describe('live configuration', () => {
         }),
       ),
     ).toThrow(/understates the output price ceiling/);
+    for (const invalid of ['NaN', 'Infinity', '1e-1', '-0.2', '0', '0.1234567']) {
+      expect(() => loadConfig({ ...complete, USEPOD_INPUT_USD_PER_MILLION: invalid })).toThrow(
+        /USEPOD_INPUT_USD_PER_MILLION/,
+      );
+    }
   });
 
   it('pins the live provider origin and requires an explicit funded floor', () => {

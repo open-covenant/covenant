@@ -142,7 +142,8 @@ export class UpdaterService {
       }
 
       case 'waiting_checks': {
-        const checks = await this.github.requiredChecks(manifest);
+        if (record.prNumber === null) throw new Error('Pull request number is missing');
+        const checks = await this.github.requiredChecks(manifest, record.prNumber);
         this.metrics.increment('check_polls');
         if (checks.status === 'failed') {
           return this.fail(record, owner, 'required_check_failed', 'A required check failed', {
@@ -237,7 +238,7 @@ export class UpdaterService {
             { health: health.status, detail: health.detail },
           );
         }
-        const checks = await this.github.requiredChecks(manifest);
+        const checks = await this.github.requiredChecks(manifest, record.prNumber);
         this.metrics.increment('check_polls');
         if (checks.status !== 'passed') {
           return this.rollback(

@@ -1,6 +1,11 @@
-import { createPrivateKey, createPublicKey, verify } from 'node:crypto';
+import { createHash, createPrivateKey, createPublicKey, verify } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
-import { assertRefundCapacity, PolicyRequestError, PolicySignerClient } from './policy-client.js';
+import {
+  assertRefundCapacity,
+  PolicyRequestError,
+  PolicySignerClient,
+  type RepositoryAdmissionBinding,
+} from './policy-client.js';
 
 const authoritySeed = Buffer.alloc(32, 7);
 const authoritySeedBase64 = authoritySeed.toString('base64');
@@ -31,12 +36,277 @@ const commitment = {
   repositoryAuthorizedAt: '2026-08-21T23:00:00.000Z',
   authorizationEvidenceHash: 'e'.repeat(64),
 };
+const liabilityAdmission = {
+  id: '44444444-4444-4444-8444-444444444444',
+  quoteId: '33333333-3333-4333-8333-333333333333',
+  repository: commitment.repository,
+  issueNumber: commitment.issueNumber,
+  baseRef: commitment.baseRef,
+  baseSha: commitment.baseSha,
+  reservationKeyHash: 'b'.repeat(64),
+  paymentAuthorizationHash: 'c'.repeat(64),
+  verifierAppId: '222',
+  installationId: 777,
+  repositorySelection: 'selected' as const,
+  permissions: {
+    contents: 'read' as const,
+    issues: 'read' as const,
+    metadata: 'read' as const,
+    pull_requests: 'read' as const,
+  },
+  tokenRepositories: 1 as const,
+  tokenExpiresAt: '2026-08-22T01:00:00.000Z',
+  admittedAt: '2026-08-22T00:00:00.000Z',
+  evidenceHash: 'f'.repeat(64),
+};
 
 describe('PolicySignerClient', () => {
+  it('requires exact-repository evidence from a distinct verifier App', async () => {
+    const evidence = {
+      ready: true,
+      repository: 'example/project',
+      verifierAppId: '222',
+      installationId: 777,
+      repositorySelection: 'selected',
+      permissions: {
+        contents: 'read',
+        issues: 'read',
+        metadata: 'read',
+        pull_requests: 'read',
+      },
+      tokenRepositories: 1,
+      tokenExpiresAt: '2026-08-22T01:00:00.000Z',
+    };
+    const request = vi.fn(async () => Response.json(evidence));
+    const client = new PolicySignerClient(
+      {
+        policySignerUrl: 'http://signer',
+        policySignerToken: 'token',
+        jobAuthoritySeed: authoritySeedBase64,
+        githubAppId: '111',
+      },
+      request as typeof fetch,
+      60_000,
+      () => new Date('2026-08-22T00:00:00.000Z'),
+    );
+
+    await expect(client.assertRepositoryReady('Example/Project')).resolves.toEqual(evidence);
+    expect(request).toHaveBeenCalledWith(
+      'http://signer/v1/readiness/repository',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ repository: 'example/project' }),
+        headers: expect.objectContaining({ authorization: 'Bearer token' }),
+      }),
+    );
+
+    const sharedApp = new PolicySignerClient(
+      {
+        policySignerUrl: 'http://signer',
+        policySignerToken: 'token',
+        jobAuthoritySeed: authoritySeedBase64,
+        githubAppId: '222',
+      },
+      (async () => Response.json(evidence)) as typeof fetch,
+      60_000,
+      () => new Date('2026-08-22T00:00:00.000Z'),
+    );
+    await expect(sharedApp.assertRepositoryReady('example/project')).rejects.toThrow(
+      'must be distinct',
+    );
+  });
+
+  it('rejects verifier evidence for a different repository or expanded scope', async () => {
+    const client = (body: object) =>
+      new PolicySignerClient(
+        {
+          policySignerUrl: 'http://signer',
+          policySignerToken: 'token',
+          jobAuthoritySeed: authoritySeedBase64,
+          githubAppId: '111',
+        },
+        (async () => Response.json(body)) as typeof fetch,
+        60_000,
+        () => new Date('2026-08-22T00:00:00.000Z'),
+      );
+    const evidence = {
+      ready: true,
+      repository: 'attacker/project',
+      verifierAppId: '222',
+      installationId: 777,
+      repositorySelection: 'selected',
+      permissions: {
+        contents: 'read',
+        issues: 'read',
+        metadata: 'read',
+        pull_requests: 'read',
+      },
+      tokenRepositories: 1,
+      tokenExpiresAt: '2026-08-22T01:00:00.000Z',
+    };
+    await expect(client(evidence).assertRepositoryReady('example/project')).rejects.toThrow(
+      'different repository',
+    );
+    await expect(
+      client({
+        ...evidence,
+        repository: 'example/project',
+        permissions: { ...evidence.permissions, checks: 'read' },
+      }).assertRepositoryReady('example/project'),
+    ).rejects.toThrow();
+  });
+
+  it('binds durable admission to the reservation and validates historical evidence', async () => {
+    const paymentAuthorization = Buffer.from('signed payment authorization').toString('base64');
+    const binding: RepositoryAdmissionBinding = {
+      quoteId: '33333333-3333-4333-8333-333333333333',
+      repository: 'example/project',
+      issueNumber: 17,
+      baseRef: 'main',
+      baseSha: 'a'.repeat(40),
+      reservationKeyHash: 'b'.repeat(64),
+      paymentAuthorizationHash: createHash('sha256').update(paymentAuthorization).digest('hex'),
+    };
+    const receipt = {
+      id: '44444444-4444-4444-8444-444444444444',
+      ...binding,
+      verifierAppId: '222',
+      installationId: 777,
+      repositorySelection: 'selected',
+      permissions: {
+        contents: 'read',
+        issues: 'read',
+        metadata: 'read',
+        pull_requests: 'read',
+      },
+      tokenRepositories: 1,
+      tokenExpiresAt: '2026-08-22T01:00:00.000Z',
+      admittedAt: '2026-08-22T00:00:00.000Z',
+      evidenceHash: 'd'.repeat(64),
+    };
+    const createRequest = vi.fn(async () => Response.json(receipt));
+    const client = new PolicySignerClient(
+      {
+        policySignerUrl: 'http://signer',
+        policySignerToken: 'token',
+        jobAuthoritySeed: authoritySeedBase64,
+        githubAppId: '111',
+      },
+      createRequest as typeof fetch,
+      60_000,
+      () => new Date('2026-08-22T00:30:00.000Z'),
+    );
+
+    await expect(client.createRepositoryAdmission(binding, paymentAuthorization)).resolves.toEqual(
+      receipt,
+    );
+    const { paymentAuthorizationHash: _, ...requestBinding } = binding;
+    expect(createRequest).toHaveBeenCalledWith(
+      'http://signer/v1/repository-admissions',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          'idempotency-key': `mizuki-repository-admission-${binding.quoteId}`,
+        }),
+        body: JSON.stringify({ ...requestBinding, paymentAuthorization }),
+      }),
+    );
+
+    const validateRequest = vi.fn(async () => Response.json(receipt));
+    const restarted = new PolicySignerClient(
+      {
+        policySignerUrl: 'http://signer',
+        policySignerToken: 'token',
+        jobAuthoritySeed: authoritySeedBase64,
+        githubAppId: '111',
+      },
+      validateRequest as typeof fetch,
+      60_000,
+      () => new Date('2026-08-23T00:00:00.000Z'),
+    );
+    await expect(restarted.validateRepositoryAdmission(receipt, binding)).resolves.toEqual(receipt);
+    expect(validateRequest).toHaveBeenCalledWith(
+      `http://signer/v1/repository-admissions/${receipt.id}/validate`,
+      expect.objectContaining({
+        body: JSON.stringify({ ...binding, evidenceHash: receipt.evidenceHash }),
+      }),
+    );
+    await expect(
+      restarted.validateRepositoryAdmission(
+        { ...receipt, paymentAuthorizationHash: 'e'.repeat(64) },
+        binding,
+      ),
+    ).rejects.toThrow('does not match');
+
+    await expect(
+      client.createRepositoryAdmission(binding, `${paymentAuthorization}A`),
+    ).rejects.toThrow('does not match');
+    expect(createRequest).toHaveBeenCalledOnce();
+  });
+
+  it('requests signer-side reconciliation only for the authorization bound to the admission', async () => {
+    const paymentAuthorization = Buffer.from('signed payment authorization').toString('base64');
+    const receipt = {
+      id: '44444444-4444-4444-8444-444444444444',
+      quoteId: '33333333-3333-4333-8333-333333333333',
+      repository: 'example/project',
+      issueNumber: 17,
+      baseRef: 'main',
+      baseSha: 'a'.repeat(40),
+      reservationKeyHash: 'b'.repeat(64),
+      paymentAuthorizationHash: createHash('sha256').update(paymentAuthorization).digest('hex'),
+      verifierAppId: '222',
+      installationId: 777,
+      repositorySelection: 'selected' as const,
+      permissions: {
+        contents: 'read' as const,
+        issues: 'read' as const,
+        metadata: 'read' as const,
+        pull_requests: 'read' as const,
+      },
+      tokenRepositories: 1 as const,
+      tokenExpiresAt: '2026-08-22T01:00:00.000Z',
+      admittedAt: '2026-08-22T00:00:00.000Z',
+      evidenceHash: 'd'.repeat(64),
+    };
+    const evidence = {
+      signature: '6'.repeat(64),
+      payer: '4'.repeat(32),
+      recipient: '2'.repeat(32),
+      mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+      rawAmount: '2000000',
+      decimals: 6,
+      finalized: true,
+      succeeded: true,
+      slot: 42,
+      blockTimeUnixSeconds: 1_787_356_800,
+    };
+    const request = vi.fn(async () => Response.json(evidence));
+    const signer = new PolicySignerClient(
+      {
+        policySignerUrl: 'http://signer',
+        policySignerToken: 'token',
+        jobAuthoritySeed: authoritySeedBase64,
+        githubAppId: '111',
+      },
+      request as typeof fetch,
+    );
+
+    await expect(signer.reconcileRepositorySettlement(receipt)).resolves.toEqual(evidence);
+    expect(request).toHaveBeenCalledWith(
+      `http://signer/v1/repository-admissions/${receipt.id}/settlements/reconcile`,
+      expect.objectContaining({
+        body: JSON.stringify({ evidenceHash: receipt.evidenceHash }),
+      }),
+    );
+    expect(request).toHaveBeenCalledOnce();
+  });
+
   it('registers liability and sends distinct signed refund authorizations', async () => {
     const liability = {
       id: '22222222-2222-4222-8222-222222222222',
       jobId: 'job-1',
+      repositoryAdmissionId: liabilityAdmission.id,
       settlementSignature: 'settlement-signature',
       ...commitment,
       reviewedHeadSha: null,
@@ -70,7 +340,12 @@ describe('PolicySignerClient', () => {
       () => new Date('2026-08-22T00:00:00.000Z'),
     );
     await expect(
-      client.registerRefundLiability('job-1', 'settlement-signature', commitment),
+      client.registerRefundLiability(
+        'job-1',
+        'settlement-signature',
+        commitment,
+        liabilityAdmission,
+      ),
     ).resolves.toMatchObject({ jobId: 'job-1' });
     await expect(client.refund('job-1', 'settlement-signature')).resolves.toMatchObject({
       status: 'finalized',
@@ -106,6 +381,7 @@ describe('PolicySignerClient', () => {
     const request = vi.fn(async () =>
       Response.json({
         id: '22222222-2222-4222-8222-222222222222',
+        repositoryAdmissionId: liabilityAdmission.id,
         ...binding,
         ...commitment,
         deliveryBoundAt: '2026-08-22T00:00:00.000Z',
@@ -223,6 +499,7 @@ describe('PolicySignerClient', () => {
     const discharged = {
       id: '22222222-2222-4222-8222-222222222222',
       jobId: 'job-1',
+      repositoryAdmissionId: liabilityAdmission.id,
       settlementSignature: 'settlement-signature',
       ...commitment,
       reviewedHeadSha: 'a'.repeat(40),
@@ -359,17 +636,25 @@ function expectSignedAuthorization(
   expect(body).toMatchObject({
     jobId: 'job-1',
     settlementSignature: 'settlement-signature',
+    ...(action === 'register'
+      ? {
+          repositoryAdmissionId: liabilityAdmission.id,
+          repositoryAdmissionEvidenceHash: liabilityAdmission.evidenceHash,
+        }
+      : {}),
     authorizationExpiresAt: '2026-08-22T00:05:00.000Z',
   });
   const message = [
     action === 'register'
       ? 'Mizuki refund liability registration'
       : 'Mizuki refund execution authorization',
-    `Version: ${action === 'register' ? 2 : 1}`,
+    `Version: ${action === 'register' ? 3 : 1}`,
     'Job: job-1',
     'Settlement: settlement-signature',
     ...(action === 'register'
       ? [
+          `Repository Admission: ${liabilityAdmission.id}`,
+          `Repository Admission Evidence: ${liabilityAdmission.evidenceHash}`,
           'Repository: example/project',
           'Issue: 17',
           'Base Ref: main',

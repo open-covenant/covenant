@@ -62,8 +62,14 @@ try {
   const home = await page(port, '/', {});
   assert(home.status === 200, `home returned ${home.status}`);
   assert(home.body.includes('/mizuki-avatar.jpg'), 'home omitted the profile image');
-  assert(home.body.includes('property="og:image"'), 'home omitted Open Graph image metadata');
-  assert(home.body.includes('name="twitter:image"'), 'home omitted Twitter image metadata');
+  assert(
+    /property="og:image" content="[^"]*\/mizuki-avatar\.jpg"/.test(home.body),
+    'home omitted the profile image from Open Graph metadata',
+  );
+  assert(
+    /name="twitter:image" content="[^"]*\/mizuki-avatar\.jpg"/.test(home.body),
+    'home omitted the profile image from Twitter metadata',
+  );
   assert(home.body.includes('/mizuki-icon-64.png'), 'home omitted the browser icon');
 
   const avatar = await page(port, '/mizuki-avatar.jpg', {});
@@ -78,6 +84,17 @@ try {
       manifestBody.icons?.some((entry) => entry.src === icon),
       `manifest omitted ${icon}`,
     );
+  }
+
+  for (const icon of [
+    '/mizuki-icon-64.png',
+    '/mizuki-icon-180.png',
+    '/mizuki-icon-192.png',
+    '/mizuki-icon-512.png',
+  ]) {
+    const response = await page(port, icon, {});
+    assert(response.status === 200, `${icon} returned ${response.status}`);
+    assert(response.headers['content-type']?.startsWith('image/png'), `${icon} is not PNG`);
   }
 
   for (const resource of ['jobs', 'bounties']) {

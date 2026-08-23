@@ -45,6 +45,7 @@ const upgradeSchema = z
         owner: z.string().min(1).max(100),
         name: z.string().min(1).max(100),
         baseBranch: z.string().min(1).max(240),
+        baseSha: gitSha,
         headBranch: z.string().min(1).max(240),
       })
       .strict(),

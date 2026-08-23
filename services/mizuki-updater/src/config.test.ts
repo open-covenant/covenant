@@ -13,6 +13,10 @@ const BASE_ENV: NodeJS.ProcessEnv = {
   MIZUKI_UPDATER_ALLOWED_BASE_BRANCHES: 'main',
   MIZUKI_UPDATER_HEAD_BRANCH_PREFIX: 'mizuki/',
   MIZUKI_UPDATER_MANDATORY_CHECKS: 'test,security',
+  MIZUKI_UPDATER_CHECK_PRODUCERS_JSON: JSON.stringify({
+    test: workflowPolicy(101, '.github/workflows/test.yml'),
+    security: workflowPolicy(102, '.github/workflows/security.yaml'),
+  }),
   MIZUKI_UPDATER_ARTIFACT_ORIGINS: 'https://artifacts.example.test',
   MIZUKI_UPDATER_GITHUB_APP_ID: '123',
   MIZUKI_UPDATER_GITHUB_PRIVATE_KEY: 'r'.repeat(64),
@@ -37,6 +41,29 @@ describe('updater configuration', () => {
       rollbackHookUrl: 'http://127.0.0.1:9000/v1/deployments/rollback',
       deployReadinessUrl: 'http://127.0.0.1:9000/readyz',
     });
+    expect(config.operational?.checkProducers.get('test')).toEqual(
+      workflowPolicy(101, '.github/workflows/test.yml'),
+    );
+  });
+
+  it('requires a pinned producer for every mandatory check', () => {
+    expect(() =>
+      loadConfig({
+        ...BASE_ENV,
+        MIZUKI_UPDATER_CHECK_PRODUCERS_JSON: JSON.stringify({
+          test: workflowPolicy(101, '.github/workflows/test.yml'),
+        }),
+      }),
+    ).toThrow('Mandatory check lacks a pinned producer: security');
+    expect(() =>
+      loadConfig({
+        ...BASE_ENV,
+        MIZUKI_UPDATER_CHECK_PRODUCERS_JSON: JSON.stringify({
+          test: { ...workflowPolicy(101, '.github/workflows/test.yml'), event: 'push' },
+          security: workflowPolicy(102, '.github/workflows/security.yaml'),
+        }),
+      }),
+    ).toThrow();
   });
 
   it('boots closed and reports every missing operational input', () => {
@@ -157,3 +184,17 @@ describe('updater configuration', () => {
     ).toMatchObject({ promotionSoakMs: 60_000, promotionTimeoutMs: 65_000 });
   });
 });
+
+function workflowPolicy(workflowId: number, workflowPath: string) {
+  return {
+    checkRunAppId: 15_368,
+    workflowId,
+    workflowPath,
+    event: 'pull_request',
+    headBranch: 'manifest',
+    headSha: 'candidate',
+    baseBranch: 'manifest',
+    baseSha: 'signed',
+    definitionRef: 'base',
+  };
+}

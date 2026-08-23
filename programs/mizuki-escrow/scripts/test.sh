@@ -41,12 +41,7 @@ if rg -i 'undefined symbols?|not known.*run-time error' "$build_log"; then
   exit 1
 fi
 
-test -f "$artifact"
-elf_flags="$(od -An -tx1 -j 48 -N 4 "$artifact" | tr -d '[:space:]')"
-if [[ "$elf_flags" != "02000000" ]]; then
-  echo "expected SBPFv2 ELF flags (0x2), found 0x$elf_flags" >&2
-  exit 1
-fi
+"$program_root/scripts/validate-artifact.sh" "$artifact"
 
 cargo test --locked --manifest-path "$program_root/Cargo.toml" --lib --features sbf-test
 cargo clippy --locked --manifest-path "$program_root/Cargo.toml" --all-targets --all-features -- -D warnings

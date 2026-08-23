@@ -99,9 +99,23 @@ describe('JobProcessor', () => {
         }),
       ),
     );
+    const invalidTariff = new JobProcessor(config, new MemoryStore(), github, async () =>
+      Response.json(
+        gatewayReadiness({
+          ready: false,
+          dependencies: {
+            model: { ok: true, checkedAt: '2026-08-22T12:00:00.000Z', latencyMs: 12 },
+            sandbox: { ok: true, checkedAt: '2026-08-22T12:00:00.000Z', latencyMs: 24 },
+            tariff: { ok: false, checkedAt: '2026-08-22T12:00:00.000Z', latencyMs: 18 },
+          },
+          failed: ['tariff'],
+        }),
+      ),
+    );
 
     await expect(malformed.readiness()).rejects.toThrow();
     await expect(stale.readiness()).rejects.toThrow('readiness evidence is invalid');
+    await expect(invalidTariff.readiness()).rejects.toThrow('readiness evidence is invalid');
   });
 
   it('delivers an independently approved gateway change', async () => {
@@ -109,7 +123,7 @@ describe('JobProcessor', () => {
     const jobQuote = { ...quote, validationCommands: [] };
     const created = (await store.createJob(jobQuote, payment, 'delivery-key')).job;
     await store.transitionJob(created.id, 'settlement_pending', 'paid');
-    const request = async (input: string | URL | Request) => {
+    const request = async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith('/v1/runs')) return Response.json({ run_id: 'run-1' });
       if (url.endsWith('/v1/runs/run-1')) {
@@ -121,6 +135,7 @@ describe('JobProcessor', () => {
       }
       if (url.endsWith('/artifacts')) return Response.json({ ...artifacts, validations: [] });
       if (url.endsWith('/chat/completions')) {
+        expect(JSON.parse(String(init?.body))).toMatchObject({ max_tokens: 512 });
         return reviewResponse({ approved: true, reason: 'scoped' });
       }
       throw new Error(`unexpected request: ${url}`);
@@ -139,7 +154,7 @@ describe('JobProcessor', () => {
       estimatedCostUsd: 0.0505,
       reviewReceipt: {
         provider: {
-          model: 'deepseek-v3.2',
+          model: 'deepseek-v4-flash',
           route: 'marketplace',
           providerId: 'provider-1',
           costMicrounits: '500',
@@ -214,7 +229,7 @@ describe('JobProcessor', () => {
       MIZUKI_PAYMENT_MODE: 'live',
       USEPOD_API_KEY: 'test',
       USEPOD_MODEL: 'implementation-model',
-      USEPOD_REVIEW_MODEL: 'deepseek-v3.2',
+      USEPOD_REVIEW_MODEL: 'deepseek-v4-flash',
     });
 
     await new JobProcessor(
@@ -593,7 +608,7 @@ describe('JobProcessor', () => {
     });
   });
 
-  it('charges the review allocation and refuses repair when provider cost is missing', async () => {
+  it('books the full review allocations when provider cost reports are missing', async () => {
     const store = new MemoryStore();
     const jobQuote = { ...quote, validationCommands: [] };
     const created = (await store.createJob(jobQuote, payment, 'missing-review-cost-key')).job;
@@ -616,7 +631,7 @@ describe('JobProcessor', () => {
       if (url.endsWith('/chat/completions')) {
         return Response.json(
           {
-            model: 'deepseek-v3.2',
+            model: 'deepseek-v4-flash',
             choices: [
               { message: { content: JSON.stringify({ approved: false, reason: 'repair' }) } },
             ],
@@ -641,18 +656,30 @@ describe('JobProcessor', () => {
       request as typeof fetch,
     ).process(created.id);
 
-    expect(submissions).toBe(1);
+    expect(submissions).toBe(2);
     expect(await store.job(created.id)).toMatchObject({
       state: 'refunded',
-      estimatedCostUsd: 0.17,
+      estimatedCostUsd: 0.3,
       reviewAttempts: [
         {
           phase: 'implementation',
           costUsd: 0.12,
-          error: expect.stringMatching(/omitted authoritative provider cost/),
+          status: 'completed',
+          provider: { route: 'marketplace' },
+        },
+        {
+          phase: 'repair',
+          costUsd: 0.08,
+          status: 'completed',
+          provider: { route: 'marketplace' },
         },
       ],
     });
+    expect(
+      (await store.job(created.id))?.reviewAttempts?.every(
+        (attempt) => attempt.provider?.costMicrounits === undefined,
+      ),
+    ).toBe(true);
   });
 
   it('retains a pending review reservation through restart reconciliation and refund', async () => {
@@ -730,9 +757,10 @@ function gatewayReadiness(
     dependencies: {
       model: { ok: true, checkedAt, latencyMs: 12 },
       sandbox: { ok: true, checkedAt, latencyMs: 24 },
+      tariff: { ok: true, checkedAt, latencyMs: 18 },
     },
     failed: [],
-    model: 'deepseek-v3.2',
+    model: 'openai/gpt-oss-120b',
     backend: 'usepod',
     provider: 'e2b',
     persistentRuns: true,
@@ -744,7 +772,7 @@ function gatewayReadiness(
 function reviewResponse(decision: { approved: boolean; reason: string }): Response {
   return Response.json(
     {
-      model: 'deepseek-v3.2',
+      model: 'deepseek-v4-flash',
       choices: [{ message: { content: JSON.stringify(decision) } }],
       usage: { prompt_tokens: 50, completion_tokens: 10 },
     },

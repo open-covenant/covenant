@@ -70,10 +70,18 @@ describe('BountyService', () => {
       transaction: 'deposit-tx',
     });
     const policy = new MockPolicy();
+    const patchReviewer = reviewer({ approved: true, reason: 'scoped and correct' });
+    let reviewCalls = 0;
     const service = new BountyService(
       store,
       policy,
-      reviewer({ approved: true, reason: 'scoped and correct' }),
+      {
+        ...patchReviewer,
+        review: async (...args) => {
+          reviewCalls += 1;
+          return patchReviewer.review(...args);
+        },
+      },
       tickingClock(),
       bountyConfig,
     );
@@ -103,6 +111,19 @@ describe('BountyService', () => {
       baseRef: 'main',
       diffHash: reviewedDiffHash,
     });
+    const replay = await service.submitPullRequest(
+      created.id,
+      contributor,
+      'https://github.com/example/project/pull/2',
+    );
+    expect(replay.validationReceipt?.id).toBe(reviewed.validationReceipt?.id);
+    expect(reviewCalls).toBe(1);
+    expect(
+      (await store.ledgerEntries()).filter(
+        (entry) =>
+          entry.kind === 'operating_cost' && entry.referenceId.startsWith('bounty-review:'),
+      ),
+    ).toHaveLength(1);
     const released = await service.releaseMerged(
       created.id,
       'https://github.com/example/project/pull/2',
@@ -157,6 +178,437 @@ describe('BountyService', () => {
     expect(policy.releaseInputs).toEqual([]);
     expect(await store.bounty(bounty.id)).toMatchObject({ state: 'pr_submitted' });
     expect(await store.escrowByBounty(bounty.id)).toMatchObject({ state: 'bound' });
+  });
+
+  it('persists one paid review attempt before concurrent submissions reach the provider', async () => {
+    const store = new MemoryStore();
+    const job = await refundedJob(store);
+    const baseReviewer = reviewer({ approved: true, reason: 'scoped and correct' });
+    let reviewCalls = 0;
+    let startReview!: () => void;
+    let finishReview!: () => void;
+    const reviewStarted = new Promise<void>((resolve) => {
+      startReview = resolve;
+    });
+    const reviewGate = new Promise<void>((resolve) => {
+      finishReview = resolve;
+    });
+    const service = new BountyService(
+      store,
+      new MockPolicy(),
+      {
+        ...baseReviewer,
+        review: async (...args) => {
+          reviewCalls += 1;
+          startReview();
+          await reviewGate;
+          return baseReviewer.review(...args);
+        },
+      },
+      tickingClock(),
+      bountyConfig,
+    );
+    const bounty = await service.createAfterRefund(job);
+    const contributor = await store.upsertContributor('review-race', 'maintainer');
+    const challenge = await service.createClaimChallenge(
+      bounty.id,
+      contributor,
+      '1'.repeat(32),
+      randomGrantId(),
+    );
+    await service.claim(bounty.id, contributor, challenge.id, 'signature');
+    const pullRequestUrl = 'https://github.com/example/project/pull/77';
+
+    const first = service.submitPullRequest(bounty.id, contributor, pullRequestUrl);
+    await reviewStarted;
+    const concurrent = await service.submitPullRequest(bounty.id, contributor, pullRequestUrl);
+
+    expect(concurrent).toMatchObject({
+      state: 'validating',
+      validationAttempt: { status: 'submitted', maxCostMicrounits: '50000' },
+    });
+    expect(reviewCalls).toBe(1);
+    await expect(service.reconcileFinancialOperations()).resolves.toEqual({
+      recovered: 0,
+      failed: 0,
+    });
+    finishReview();
+    await expect(first).resolves.toMatchObject({
+      state: 'pr_submitted',
+      validationAttempt: { status: 'completed' },
+    });
+    expect(
+      (await store.ledgerEntries()).filter(
+        (entry) =>
+          entry.kind === 'operating_cost' && entry.referenceId.startsWith('bounty-review:'),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('completes a static rejection without booking provider cost', async () => {
+    const store = new MemoryStore();
+    const job = await refundedJob(store);
+    const baseReviewer = reviewer();
+    let reviewCalls = 0;
+    const service = new BountyService(
+      store,
+      new MockPolicy(),
+      {
+        ...baseReviewer,
+        preflight: async () => ({
+          kind: 'rejected',
+          result: {
+            approved: false,
+            reason: 'repository checks have not passed',
+            headSha: reviewedHeadSha,
+            baseSha: reviewedBaseSha,
+            baseRef: 'main',
+            diffHash: reviewedDiffHash,
+          },
+        }),
+        review: async (...args) => {
+          reviewCalls += 1;
+          return baseReviewer.review(...args);
+        },
+      },
+      tickingClock(),
+      bountyConfig,
+    );
+    const bounty = await service.createAfterRefund(job);
+    const contributor = await store.upsertContributor('static-rejection', 'maintainer');
+    const challenge = await service.createClaimChallenge(
+      bounty.id,
+      contributor,
+      '1'.repeat(32),
+      randomGrantId(),
+    );
+    await service.claim(bounty.id, contributor, challenge.id, 'signature');
+
+    const rejected = await service.submitPullRequest(
+      bounty.id,
+      contributor,
+      'https://github.com/example/project/pull/82',
+    );
+    expect(rejected).toMatchObject({
+      state: 'pr_submitted',
+      validationAttempt: { status: 'completed' },
+      validationReceipt: {
+        approved: false,
+        reason: 'repository checks have not passed',
+      },
+    });
+    expect(rejected.validationReceipt?.provider).toBeUndefined();
+    expect(reviewCalls).toBe(0);
+    expect(
+      (await store.ledgerEntries()).filter((entry) => entry.kind === 'operating_cost'),
+    ).toEqual([]);
+  });
+
+  it('uses the durable review cap after a restart with changed configuration', async () => {
+    const store = new FailOnceReviewSubmitStore();
+    const job = await refundedJob(store);
+    const now = tickingClock();
+    const initial = new BountyService(store, new MockPolicy(), reviewer(), now, {
+      ...bountyConfig,
+      bountyReviewMaxCostMicrounits: 50_000,
+    });
+    const bounty = await initial.createAfterRefund(job);
+    const contributor = await store.upsertContributor('review-restart', 'maintainer');
+    const challenge = await initial.createClaimChallenge(
+      bounty.id,
+      contributor,
+      '1'.repeat(32),
+      randomGrantId(),
+    );
+    await initial.claim(bounty.id, contributor, challenge.id, 'signature');
+    const pullRequestUrl = 'https://github.com/example/project/pull/79';
+
+    await expect(initial.submitPullRequest(bounty.id, contributor, pullRequestUrl)).rejects.toThrow(
+      'injected review submission failure',
+    );
+    expect(await store.bounty(bounty.id)).toMatchObject({
+      state: 'validating',
+      validationAttempt: { status: 'reserved', maxCostMicrounits: '50000' },
+    });
+    expect(
+      (await store.ledgerEntries()).filter((entry) => entry.kind === 'operating_cost'),
+    ).toEqual([expect.objectContaining({ amountUsd: 0.05 })]);
+
+    const baseReviewer = reviewer();
+    let receivedAttempt: { id: string; maxCostMicrounits: number } | undefined;
+    const restarted = new BountyService(
+      store,
+      new MockPolicy(),
+      {
+        ...baseReviewer,
+        review: async (...args) => {
+          receivedAttempt = args[0].attempt;
+          return baseReviewer.review(...args);
+        },
+      },
+      now,
+      { ...bountyConfig, bountyReviewMaxCostMicrounits: 100_000 },
+    );
+
+    await expect(
+      restarted.submitPullRequest(bounty.id, contributor, pullRequestUrl),
+    ).resolves.toMatchObject({
+      validationAttempt: { status: 'completed', maxCostMicrounits: '50000' },
+    });
+    expect(receivedAttempt).toMatchObject({ maxCostMicrounits: 50_000 });
+    expect(
+      (await store.ledgerEntries()).filter((entry) => entry.kind === 'operating_cost'),
+    ).toEqual([expect.objectContaining({ amountUsd: 0.05 })]);
+  });
+
+  it('fails closed before booking or review when a durable cap is invalid', async () => {
+    const store = new FailOnceReviewLedgerStore();
+    const job = await refundedJob(store);
+    const service = new BountyService(store, new MockPolicy(), reviewer(), tickingClock(), {
+      ...bountyConfig,
+      bountyReviewMaxCostMicrounits: 50_000,
+    });
+    const bounty = await service.createAfterRefund(job);
+    const contributor = await store.upsertContributor('invalid-review-cap', 'maintainer');
+    const challenge = await service.createClaimChallenge(
+      bounty.id,
+      contributor,
+      '1'.repeat(32),
+      randomGrantId(),
+    );
+    await service.claim(bounty.id, contributor, challenge.id, 'signature');
+    const pullRequestUrl = 'https://github.com/example/project/pull/80';
+    await expect(service.submitPullRequest(bounty.id, contributor, pullRequestUrl)).rejects.toThrow(
+      'injected review ledger failure',
+    );
+
+    const reserved = (await store.bounty(bounty.id))!;
+    await store.updateBounty(
+      {
+        ...reserved,
+        validationAttempt: { ...reserved.validationAttempt!, maxCostMicrounits: '1000001' },
+        updatedAt: new Date().toISOString(),
+        revision: reserved.revision + 1,
+      },
+      reserved.revision,
+    );
+    const paidReview = reviewer();
+    let reviewCalls = 0;
+    const restarted = new BountyService(
+      store,
+      new MockPolicy(),
+      {
+        ...paidReview,
+        review: async (...args) => {
+          reviewCalls += 1;
+          return paidReview.review(...args);
+        },
+      },
+      tickingClock(),
+      { ...bountyConfig, bountyReviewMaxCostMicrounits: 100_000 },
+    );
+
+    await expect(
+      restarted.submitPullRequest(bounty.id, contributor, pullRequestUrl),
+    ).rejects.toThrow('invalid durable cost reservation');
+    expect(reviewCalls).toBe(0);
+    expect(
+      (await store.ledgerEntries()).filter((entry) => entry.kind === 'operating_cost'),
+    ).toEqual([]);
+  });
+
+  it('reports provider and terminal checkpoint failures without retrying the paid review', async () => {
+    const store = new FailValidationCheckpointStore();
+    const job = await refundedJob(store);
+    const baseReviewer = reviewer();
+    let reviewCalls = 0;
+    const service = new BountyService(
+      store,
+      new MockPolicy(),
+      {
+        ...baseReviewer,
+        review: async () => {
+          reviewCalls += 1;
+          throw new Error('provider validation failed');
+        },
+      },
+      tickingClock(),
+      bountyConfig,
+    );
+    const bounty = await service.createAfterRefund(job);
+    const contributor = await store.upsertContributor('dual-review-failure', 'maintainer');
+    const challenge = await service.createClaimChallenge(
+      bounty.id,
+      contributor,
+      '1'.repeat(32),
+      randomGrantId(),
+    );
+    await service.claim(bounty.id, contributor, challenge.id, 'signature');
+    const pullRequestUrl = 'https://github.com/example/project/pull/81';
+
+    let failure: unknown;
+    try {
+      await service.submitPullRequest(bounty.id, contributor, pullRequestUrl);
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect(failure).toMatchObject({
+      message: 'bounty review provider and terminal checkpoint both failed',
+      errors: [
+        expect.objectContaining({ message: 'provider validation failed' }),
+        expect.objectContaining({ message: 'injected terminal checkpoint failure' }),
+      ],
+    });
+    expect(await store.bounty(bounty.id)).toMatchObject({
+      state: 'validating',
+      validationAttempt: { status: 'submitted' },
+    });
+
+    await expect(
+      service.submitPullRequest(bounty.id, contributor, pullRequestUrl),
+    ).resolves.toMatchObject({
+      state: 'validating',
+      validationAttempt: { status: 'submitted' },
+    });
+    expect(reviewCalls).toBe(1);
+  });
+
+  it('terminalizes a stale submitted review after restart without another provider call', async () => {
+    const store = new FailOnceReviewCompletionStore();
+    const job = await refundedJob(store);
+    let nowMs = Date.parse('2026-08-22T10:00:00Z');
+    const now = () => new Date((nowMs += 1_000));
+    const initialReviewer = reviewer();
+    let initialReviewCalls = 0;
+    const initial = new BountyService(
+      store,
+      new MockPolicy(),
+      {
+        ...initialReviewer,
+        review: async (...args) => {
+          initialReviewCalls += 1;
+          return initialReviewer.review(...args);
+        },
+      },
+      now,
+      bountyConfig,
+    );
+    const bounty = await initial.createAfterRefund(job);
+    const contributor = await store.upsertContributor('review-crash', 'maintainer');
+    const challenge = await initial.createClaimChallenge(
+      bounty.id,
+      contributor,
+      '1'.repeat(32),
+      randomGrantId(),
+    );
+    await initial.claim(bounty.id, contributor, challenge.id, 'signature');
+    const pullRequestUrl = 'https://github.com/example/project/pull/83';
+
+    await expect(initial.submitPullRequest(bounty.id, contributor, pullRequestUrl)).rejects.toThrow(
+      'injected review completion failure',
+    );
+    expect(initialReviewCalls).toBe(1);
+    expect(await store.bounty(bounty.id)).toMatchObject({
+      state: 'validating',
+      validationAttempt: { status: 'submitted' },
+    });
+    expect(
+      (await store.ledgerEntries()).filter((entry) => entry.kind === 'operating_cost'),
+    ).toEqual([expect.objectContaining({ amountUsd: 0.05 })]);
+
+    nowMs += 2 * 60_000;
+    const restartedReviewer = reviewer();
+    let restartedReviewCalls = 0;
+    const restarted = new BountyService(
+      store,
+      new MockPolicy(),
+      {
+        ...restartedReviewer,
+        review: async (...args) => {
+          restartedReviewCalls += 1;
+          return restartedReviewer.review(...args);
+        },
+      },
+      now,
+      bountyConfig,
+    );
+
+    await expect(restarted.reconcileFinancialOperations()).resolves.toEqual({
+      recovered: 1,
+      failed: 0,
+    });
+    expect(await store.bounty(bounty.id)).toMatchObject({
+      state: 'pr_submitted',
+      validationAttempt: {
+        status: 'failed',
+        failureKind: 'indeterminate_after_recovery',
+        error: expect.stringContaining('will not be retried'),
+      },
+    });
+    await expect(
+      restarted.submitPullRequest(bounty.id, contributor, pullRequestUrl),
+    ).resolves.toMatchObject({ validationAttempt: { status: 'failed' } });
+    expect(restartedReviewCalls).toBe(0);
+  });
+
+  it('refunds a submitted review attempt that remains ambiguous at claim expiry', async () => {
+    const store = new MemoryStore();
+    const job = await refundedJob(store);
+    let nowMs = Date.now() + 1_000;
+    const now = () => new Date((nowMs += 1_000));
+    const policy = new MockPolicy(now);
+    const baseReviewer = reviewer({ approved: true, reason: 'late response' });
+    let startReview!: () => void;
+    let finishReview!: () => void;
+    const reviewStarted = new Promise<void>((resolve) => {
+      startReview = resolve;
+    });
+    const reviewGate = new Promise<void>((resolve) => {
+      finishReview = resolve;
+    });
+    const service = new BountyService(
+      store,
+      policy,
+      {
+        ...baseReviewer,
+        review: async (...args) => {
+          startReview();
+          await reviewGate;
+          return baseReviewer.review(...args);
+        },
+      },
+      now,
+      bountyConfig,
+    );
+    const bounty = await service.createAfterRefund(job);
+    const contributor = await store.upsertContributor('ambiguous-review', 'maintainer');
+    const challenge = await service.createClaimChallenge(
+      bounty.id,
+      contributor,
+      '1'.repeat(32),
+      randomGrantId(),
+    );
+    await service.claim(bounty.id, contributor, challenge.id, 'signature');
+    const pendingReview = service.submitPullRequest(
+      bounty.id,
+      contributor,
+      'https://github.com/example/project/pull/78',
+    );
+    await reviewStarted;
+    expect(await store.bounty(bounty.id)).toMatchObject({
+      state: 'validating',
+      validationAttempt: { status: 'submitted' },
+    });
+
+    nowMs = Date.parse(challenge.claimExpiresAt);
+    expect(await service.expireClaims()).toBe(1);
+    expect(await store.bounty(bounty.id)).toMatchObject({ state: 'refunded' });
+    expect(await store.escrowByBounty(bounty.id)).toMatchObject({ state: 'refunded' });
+
+    finishReview();
+    await expect(pendingReview).rejects.toThrow('concurrent update');
   });
 
   it('allows only one concurrent claimant', async () => {
@@ -576,6 +1028,60 @@ class FailOnceBoundStore extends MemoryStore {
   }
 }
 
+class FailOnceReviewLedgerStore extends MemoryStore {
+  private failNextReviewLedger = true;
+
+  override async appendLedger(entry: Parameters<MemoryStore['appendLedger']>[0]) {
+    if (this.failNextReviewLedger && entry.kind === 'operating_cost') {
+      this.failNextReviewLedger = false;
+      throw new Error('injected review ledger failure');
+    }
+    return super.appendLedger(entry);
+  }
+}
+
+class FailOnceReviewSubmitStore extends MemoryStore {
+  private failNextReviewSubmission = true;
+
+  override async updateBounty(
+    bounty: Parameters<MemoryStore['updateBounty']>[0],
+    expectedRevision: number,
+  ) {
+    if (this.failNextReviewSubmission && bounty.validationAttempt?.status === 'submitted') {
+      this.failNextReviewSubmission = false;
+      throw new Error('injected review submission failure');
+    }
+    return super.updateBounty(bounty, expectedRevision);
+  }
+}
+
+class FailValidationCheckpointStore extends MemoryStore {
+  override async updateBounty(
+    bounty: Parameters<MemoryStore['updateBounty']>[0],
+    expectedRevision: number,
+  ) {
+    if (bounty.validationAttempt?.status === 'failed') {
+      throw new Error('injected terminal checkpoint failure');
+    }
+    return super.updateBounty(bounty, expectedRevision);
+  }
+}
+
+class FailOnceReviewCompletionStore extends MemoryStore {
+  private failNextReviewCompletion = true;
+
+  override async updateBounty(
+    bounty: Parameters<MemoryStore['updateBounty']>[0],
+    expectedRevision: number,
+  ) {
+    if (this.failNextReviewCompletion && bounty.validationAttempt?.status === 'completed') {
+      this.failNextReviewCompletion = false;
+      throw new Error('injected review completion failure');
+    }
+    return super.updateBounty(bounty, expectedRevision);
+  }
+}
+
 class FailOnceResolutionStore extends MemoryStore {
   failNextResolution = false;
 
@@ -615,13 +1121,28 @@ function reviewer(
     diffHash: reviewedDiffHash,
   },
 ): ContributorPatchReviewer {
+  const evidence = {
+    headSha: reviewedHeadSha,
+    baseSha: reviewedBaseSha,
+    baseRef: 'main',
+    diffHash: reviewedDiffHash,
+  };
   return {
+    preflight: async (_bounty, _pullRequestUrl, attempt) => ({
+      kind: 'paid',
+      attempt,
+      evidence,
+      providerInput: {
+        model: 'independent-reviewer',
+        issue: { title: quote.issueTitle, body: quote.issueBody },
+        diff: 'diff --git a/src/parser.ts b/src/parser.ts',
+        repositoryChecks: { count: 1, passed: true },
+        maxOutputTokens: 512,
+      },
+    }),
     review: async () => ({
       ...decision,
-      headSha: reviewedHeadSha,
-      baseSha: reviewedBaseSha,
-      baseRef: 'main',
-      diffHash: reviewedDiffHash,
+      ...evidence,
     }),
     mergedEvidence: async () => ({
       ...merged,
@@ -669,6 +1190,24 @@ class MockPolicy implements FinancialPolicy {
       escrowAuthority: 'escrow-authority',
       finalizedEscrowBalanceLamports: '1000000000',
       availableEscrowReserveLamports: '900000000',
+    };
+  }
+
+  async assertRepositoryReady(repository: string) {
+    return {
+      ready: true as const,
+      repository: repository.toLowerCase(),
+      verifierAppId: '2',
+      installationId: 1,
+      repositorySelection: 'selected' as const,
+      permissions: {
+        contents: 'read' as const,
+        issues: 'read' as const,
+        metadata: 'read' as const,
+        pull_requests: 'read' as const,
+      },
+      tokenRepositories: 1 as const,
+      tokenExpiresAt: '2099-01-01T00:00:00.000Z',
     };
   }
 

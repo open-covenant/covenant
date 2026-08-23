@@ -1,0 +1,12 @@
+**
+
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!services/
+services/**
+!services/mizuki/
+!services/mizuki/package.json
+!services/mizuki/tsconfig.json
+!services/mizuki/src/
+!services/mizuki/src/**

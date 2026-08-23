@@ -22,9 +22,9 @@ import { sourceIp } from './source-ip.js';
 import { admitRun } from './admit.js';
 import { IdempotencyConflictError, RunStore, type StoredRun } from './run-store.js';
 import { assertProductionConfig } from './config.js';
-import { GatewayReadiness } from './readiness.js';
+import { GatewayReadiness, verifyE2bTariff } from './readiness.js';
 import { captureRepositoryFiles } from './repository-artifacts.js';
-import { probeUsePod, type UsePodRequestConfig } from './usepod-http.js';
+import { probeUsePodBalance, probeUsePodCatalog, type UsePodRequestConfig } from './usepod-http.js';
 
 interface CapturedFile {
   path: string;
@@ -96,8 +96,15 @@ const ipBucket = new IpBucket({
 // E2B (ephemeral Firecracker microVM) when E2B_API_KEY is set, else the
 // trusted-local provider for development. Production boot requires the E2B
 // provider, pinned outbound hosts, and persistent run receipts.
+const e2bIdentity = config.e2bTemplateId
+  ? {
+      templateId: config.e2bTemplateId,
+      cpuCount: config.e2bExpectedCpuCount,
+      memoryMb: config.e2bExpectedMemoryMb,
+    }
+  : undefined;
 const provider: SandboxProvider = process.env.E2B_API_KEY
-  ? new E2bSandboxProvider(process.env.E2B_API_KEY)
+  ? new E2bSandboxProvider(process.env.E2B_API_KEY, e2bIdentity, config.e2bEgressAllowlist)
   : new LocalSandboxProvider();
 
 const PORT = Number(process.env.PORT ?? process.env.GATEWAY_PORT ?? 8642);
@@ -105,6 +112,17 @@ const modelProbe = modelProbeConfig();
 const readiness = new GatewayReadiness({
   provider,
   model: modelProbe,
+  balance: balanceProbeConfig(),
+  tariff: e2bIdentity
+    ? {
+        check: () =>
+          verifyE2bTariff({
+            reference: config.sandboxTariffRef,
+            ...e2bIdentity,
+            worstCaseUsdPerSec: config.sandboxWorstCaseUsdPerSec,
+          }),
+      }
+    : undefined,
   refreshMs: config.readinessRefreshMs,
   maxAgeMs: config.readinessMaxAgeMs,
   timeoutMs: config.readinessTimeoutMs,
@@ -202,6 +220,7 @@ function startRun(
 
   void (async () => {
     let sandbox: Awaited<ReturnType<SandboxProvider['create']>> | undefined;
+    let sandboxCreateAttempted = false;
     try {
       // provider.create() is INSIDE the try: an E2B / network failure here must
       // still release the reservation, free the concurrency slot, and
@@ -212,9 +231,10 @@ function startRun(
       // microVM provisions skips it entirely (no spend), and a kill mid-create
       // tears the microVM down in `finally` without running a backend turn.
       if (run.abort.signal.aborted) throw new Error('aborted before sandbox create');
+      sandboxCreateAttempted = true;
       sandbox = await provider.create({
         runId: id,
-        egressAllowlist: ['registry.npmjs.org', 'api.anthropic.com', 'api.openai.com'],
+        egressAllowlist: [...config.e2bEgressAllowlist],
         cpuMs: config.wallMs,
         memoryMb: 2048,
         diskMb: 5120,
@@ -232,7 +252,7 @@ function startRun(
         sandbox,
         signal: run.abort.signal,
         emit: (e) => publish(run, e),
-        maxProviderCostUsd: reservedMax - maximumSandboxCostUsd(),
+        maxProviderCostUsd: providerBudgetUsd(reservedMax),
         recordProviderRequest: () => {
           const previous = run.providerRequestCount ?? 0;
           run.providerRequestCount = previous + 1;
@@ -284,7 +304,7 @@ function startRun(
         run.providerRequestCount ?? 0,
         providerReceipts ?? run.providerReceipts,
         usage,
-        sandboxChargeUsd(startedAt),
+        sandboxAccountingChargeUsd(sandboxCreateAttempted),
         reservedMax,
       );
       console.log(
@@ -301,7 +321,7 @@ function startRun(
       run.costUsd = failedRunCost(
         run.providerRequestCount ?? 0,
         run.providerReceipts,
-        sandbox ? sandboxChargeUsd(startedAt) : 0,
+        sandboxAccountingChargeUsd(sandboxCreateAttempted),
         reservedMax,
       );
       if (run.costUsd > reservedMax + 1e-9) ledger.kill();
@@ -359,17 +379,10 @@ function persistRun(run: Run): void {
 
 function modelProbeConfig(): { expectedModel: string; check: () => Promise<void> } {
   if (config.backend === 'usepod') {
-    const probe: UsePodRequestConfig = {
-      baseUrl: config.usePodBaseUrl,
-      token: process.env.USEPOD_API_KEY ?? '',
-      model: config.model,
-      maxInputPriceMicrounits: config.usePodMaxInputPriceMicrounits,
-      maxOutputPriceMicrounits: config.usePodMaxOutputPriceMicrounits,
-      minimumBalance: config.usePodMinimumBalance,
-    };
+    const probe = usePodProbeConfig();
     return {
       expectedModel: config.model,
-      check: () => probeUsePod(probe),
+      check: () => probeUsePodCatalog(probe),
     };
   }
   if (config.backend === 'openai') {
@@ -396,6 +409,23 @@ function modelProbeConfig(): { expectedModel: string; check: () => Promise<void>
   };
 }
 
+function balanceProbeConfig(): { check: () => Promise<void> } | undefined {
+  if (config.backend !== 'usepod') return undefined;
+  const probe = usePodProbeConfig();
+  return { check: () => probeUsePodBalance(probe) };
+}
+
+function usePodProbeConfig(): UsePodRequestConfig {
+  return {
+    baseUrl: config.usePodBaseUrl,
+    token: process.env.USEPOD_API_KEY ?? '',
+    model: config.model,
+    maxInputPriceMicrounits: config.usePodMaxInputPriceMicrounits,
+    maxOutputPriceMicrounits: config.usePodMaxOutputPriceMicrounits,
+    minimumBalance: config.usePodMinimumBalance,
+  };
+}
+
 async function probeModelCatalog(
   url: string,
   headers: Record<string, string>,
@@ -409,19 +439,35 @@ async function probeModelCatalog(
   }
 }
 
-function providerCostUsd(
+function providerAccountedCostUsd(
   requestCount: number,
   receipts: ProviderReceipt[] | undefined,
 ): number | undefined {
-  if (requestCount === 0) return 0;
+  if (requestCount === 0) return receipts?.length ? undefined : 0;
   if (
     !receipts ||
     receipts.length !== requestCount ||
-    receipts.some((receipt) => receipt.costMicrounits === undefined)
+    receipts.some(
+      (receipt) =>
+        !receipt.accounting ||
+        receipt.model !== config.model ||
+        receipt.accounting.inputPriceMicrounitsPerMillion !==
+          config.usePodMaxInputPriceMicrounits ||
+        receipt.accounting.outputPriceMicrounitsPerMillion !==
+          config.usePodMaxOutputPriceMicrounits,
+    )
   ) {
     return undefined;
   }
-  const total = receipts.reduce((sum, receipt) => sum + BigInt(receipt.costMicrounits!), 0n);
+  let total: bigint;
+  try {
+    total = receipts.reduce(
+      (sum, receipt) => sum + BigInt(receipt.accounting!.accountedCostMicrounits),
+      0n,
+    );
+  } catch {
+    return undefined;
+  }
   if (total > BigInt(Number.MAX_SAFE_INTEGER)) {
     console.error('provider receipt total exceeds the exact accounting range');
     return undefined;
@@ -438,7 +484,7 @@ function completedRunCost(
 ): number {
   const modelUsd =
     config.backend === 'usepod'
-      ? providerCostUsd(providerRequestCount, receipts)
+      ? providerAccountedCostUsd(providerRequestCount, receipts)
       : modelCostUsd(config.model, usage);
   if (modelUsd === undefined) return reservedMax;
   const total = modelUsd + sandboxUsd;
@@ -452,18 +498,26 @@ export function failedRunCost(
   sandboxUsd: number,
   reservedMax: number,
 ): number {
-  const providerUsd = providerCostUsd(providerRequestCount, receipts);
+  const providerUsd = providerAccountedCostUsd(providerRequestCount, receipts);
   if (providerUsd === undefined) return reservedMax;
   const total = providerUsd + sandboxUsd;
   return Number.isFinite(total) && total >= 0 ? total : reservedMax;
 }
 
-function maximumSandboxCostUsd(): number {
+export function maximumSandboxCostUsd(): number {
   return sandboxCostUsd(config.wallMs / 1_000);
 }
 
-function sandboxChargeUsd(startedAt: number): number {
-  return Math.min(maximumSandboxCostUsd(), sandboxCostUsd((Date.now() - startedAt) / 1_000));
+export function providerBudgetUsd(reservedMax: number): number {
+  const budget = reservedMax - maximumSandboxCostUsd();
+  if (!Number.isFinite(budget) || budget <= 0) {
+    throw new Error('reservation cannot fund the maximum sandbox charge');
+  }
+  return budget;
+}
+
+export function sandboxAccountingChargeUsd(createAttempted: boolean): number {
+  return createAttempted ? maximumSandboxCostUsd() : 0;
 }
 
 function streamEvents(run: Run, req: IncomingMessage, res: ServerResponse): void {
@@ -726,10 +780,30 @@ export const server = createServer(async (req, res) => {
     }
 
     if (req.method === 'GET' && url.pathname === '/v1/budget') {
-      return json(res, 200, { ...ledger.snapshot(), ipBucket: ipBucket.snapshot() });
+      return json(res, 200, {
+        ...ledger.snapshot(),
+        accounting: {
+          sandbox: {
+            method: 'pinned-worst-case-tariff',
+            usdPerSec: config.sandboxWorstCaseUsdPerSec,
+            tariffRef: config.sandboxTariffRef,
+            maximumPerRunUsd: maximumSandboxCostUsd(),
+            authoritativeBillingReceipt: false,
+            identity: e2bIdentity ?? null,
+          },
+        },
+        ipBucket: ipBucket.snapshot(),
+      });
     }
 
     if (req.method === 'POST' && url.pathname === '/v1/runs') {
+      const readinessReport = await readiness.check();
+      if (!readinessReport.ready) {
+        return json(res, 503, {
+          error: 'gateway dependencies are not ready',
+          failed: readinessReport.failed,
+        });
+      }
       const ledgerState = ledger.snapshot();
       if (!runStore.persistenceReady || !ledgerState.persistenceReady) {
         return json(res, 503, { error: 'gateway persistence is unavailable' });

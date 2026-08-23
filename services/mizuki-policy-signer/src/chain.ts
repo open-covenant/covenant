@@ -9,15 +9,19 @@ import {
   SystemProgram,
   Transaction,
   TransactionInstruction,
+  VersionedTransaction,
   type FetchFn,
   type ParsedInstruction,
   type ParsedTransactionWithMeta,
   type SignatureStatus,
+  type VersionedTransactionResponse,
 } from '@solana/web3.js';
 import { z } from 'zod';
 import type {
   ChainOperation,
   PreparedTransaction,
+  SettlementAuthorization,
+  SettlementAuthorizationBinding,
   SettlementFacts,
   TransactionState,
 } from './domain.js';
@@ -36,9 +40,18 @@ const UPGRADEABLE_LOADER_ID = new PublicKey('BPFLoaderUpgradeab1e111111111111111
 const ESCROW_STATE_BYTES = 236;
 const ESCROW_VAULT_BYTES = 40;
 const ESCROW_GUARD_BYTES = 108;
+const SETTLEMENT_SCAN_PAGE_SIZE = 256;
+const SETTLEMENT_SCAN_MAX_SIGNATURES = 4_096;
+const SETTLEMENT_FETCH_BATCH = 32;
+const MAX_WIRE_TRANSACTION_BYTES = 1_232;
 
 export interface ChainGateway {
   readSettlement(signature: string): Promise<SettlementFacts>;
+  readAuthorizedSettlement(
+    signature: string,
+    authorization: SettlementAuthorizationBinding,
+  ): Promise<SettlementFacts>;
+  reconcileSettlement(authorization: SettlementAuthorizationBinding): Promise<SettlementFacts>;
   prepare(operation: ChainOperation): Promise<PreparedTransaction>;
   broadcast(prepared: PreparedTransaction): Promise<void>;
   transactionState(signature: string): Promise<TransactionState>;
@@ -220,6 +233,161 @@ export class SolanaChainGateway implements ChainGateway {
       );
     }
     return primary;
+  }
+
+  async reconcileSettlement(
+    authorization: SettlementAuthorizationBinding,
+  ): Promise<SettlementFacts> {
+    const results = await Promise.allSettled([
+      this.reconcileSettlementFrom(this.connection, authorization),
+      this.reconcileSettlementFrom(this.secondaryConnection, authorization),
+    ]);
+    if (results.every((result) => result.status === 'rejected')) {
+      const errors = results.map((result) => (result as PromiseRejectedResult).reason);
+      if (
+        errors.every(
+          (error) => error instanceof PolicyError && error.code === 'settlement_not_found',
+        )
+      ) {
+        throw errors[0];
+      }
+      throw new PolicyError(
+        'rpc_unavailable',
+        'Independent RPC providers could not reconcile the payment authorization',
+        503,
+        true,
+      );
+    }
+    if (results.some((result) => result.status === 'rejected')) {
+      throw new PolicyError(
+        'rpc_inconsistent',
+        'Independent RPC providers disagree on payment authorization settlement',
+        503,
+        true,
+      );
+    }
+    const [primary, secondary] = results.map(
+      (result) => (result as PromiseFulfilledResult<SettlementFacts>).value,
+    );
+    if (!sameSettlement(primary, secondary)) {
+      throw new PolicyError(
+        'rpc_inconsistent',
+        'Independent RPC providers reconciled different settlement facts',
+        503,
+        true,
+      );
+    }
+    return primary;
+  }
+
+  async readAuthorizedSettlement(
+    signature: string,
+    authorization: SettlementAuthorizationBinding,
+  ): Promise<SettlementFacts> {
+    const results = await Promise.allSettled([
+      this.readAuthorizedSettlementFrom(this.connection, signature, authorization),
+      this.readAuthorizedSettlementFrom(this.secondaryConnection, signature, authorization),
+    ]);
+    if (results.some((result) => result.status === 'rejected')) {
+      const errors = results
+        .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+        .map((result) => result.reason);
+      if (results.every((result) => result.status === 'rejected')) {
+        const agreed = agreedAuthorizedSettlementError(errors);
+        if (agreed) throw agreed;
+      }
+      throw new PolicyError(
+        results.every((result) => result.status === 'rejected')
+          ? 'rpc_unavailable'
+          : 'rpc_inconsistent',
+        'Independent RPC providers could not verify the authorized settlement',
+        503,
+        true,
+      );
+    }
+    const [primary, secondary] = results.map(
+      (result) => (result as PromiseFulfilledResult<SettlementFacts>).value,
+    );
+    if (!sameSettlement(primary, secondary)) {
+      throw new PolicyError(
+        'rpc_inconsistent',
+        'Independent RPC providers disagree on authorized settlement facts',
+        503,
+        true,
+      );
+    }
+    return primary;
+  }
+
+  private async readAuthorizedSettlementFrom(
+    connection: Connection,
+    signature: string,
+    authorization: SettlementAuthorizationBinding,
+  ): Promise<SettlementFacts> {
+    let transaction;
+    try {
+      transaction = await connection.getTransaction(signature, {
+        commitment: 'finalized',
+        maxSupportedTransactionVersion: 0,
+      });
+    } catch (error) {
+      if (error instanceof PolicyError) throw error;
+      throw new PolicyError(
+        'rpc_unavailable',
+        'Authorized settlement transaction is unavailable',
+        503,
+        true,
+      );
+    }
+    if (!transaction) {
+      throw new PolicyError(
+        'settlement_not_found',
+        'Settlement transaction was not found',
+        422,
+        true,
+      );
+    }
+    if (!matchesAuthorizedSettlement(transaction, signature, authorization)) {
+      throw new PolicyError(
+        'payment_authorization_mismatch',
+        'Settlement transaction does not match the admitted payment authorization',
+        422,
+      );
+    }
+    const facts = await this.readSettlementFrom(connection, signature);
+    if (facts.rawAmount !== authorization.rawAmount) {
+      throw new PolicyError(
+        'settlement_value_mismatch',
+        'Finalized settlement amount does not match the payment authorization',
+        422,
+      );
+    }
+    return facts;
+  }
+
+  private async reconcileSettlementFrom(
+    connection: Connection,
+    authorization: SettlementAuthorizationBinding,
+  ): Promise<SettlementFacts> {
+    const treasuryTokenAccount = associatedTokenAddress(
+      this.refundMint,
+      this.refundTreasury,
+      this.refundTokenProgram,
+    );
+    const signature = await findAuthorizedSettlementSignature(
+      connection,
+      treasuryTokenAccount,
+      authorization,
+    );
+    const facts = await this.readSettlementFrom(connection, signature);
+    if (facts.rawAmount !== authorization.rawAmount) {
+      throw new PolicyError(
+        'settlement_value_mismatch',
+        'Finalized settlement amount does not match the payment authorization',
+        422,
+      );
+    }
+    return facts;
   }
 
   private async readSettlementFrom(
@@ -841,6 +1009,194 @@ export function sameSettlement(left: SettlementFacts, right: SettlementFacts): b
   );
 }
 
+function agreedAuthorizedSettlementError(errors: unknown[]): PolicyError | null {
+  const first = errors[0];
+  if (
+    !(first instanceof PolicyError) ||
+    !['settlement_not_found', 'payment_authorization_mismatch'].includes(first.code)
+  ) {
+    return null;
+  }
+  return errors.every((error) => error instanceof PolicyError && error.code === first.code)
+    ? first
+    : null;
+}
+
+export interface AuthorizedSettlementTransaction {
+  messageHash: string;
+  feePayer: string;
+  clientSignature: string;
+}
+
+export function authorizedSettlementTransaction(
+  authorization: SettlementAuthorization,
+): AuthorizedSettlementTransaction {
+  let wire: Buffer;
+  let transaction: VersionedTransaction;
+  try {
+    wire = Buffer.from(authorization.wireTransaction, 'base64');
+    if (
+      wire.length === 0 ||
+      wire.length > MAX_WIRE_TRANSACTION_BYTES ||
+      wire.toString('base64') !== authorization.wireTransaction
+    ) {
+      throw new Error('invalid wire transaction');
+    }
+    transaction = VersionedTransaction.deserialize(wire);
+  } catch {
+    throw new PolicyError(
+      'payment_authorization_invalid',
+      'Payment authorization contains an invalid SVM transaction',
+      422,
+    );
+  }
+  const signatures = transaction.signatures;
+  const firstKey = transaction.message.staticAccountKeys[0];
+  if (
+    transaction.message.version !== 0 ||
+    transaction.message.header.numRequiredSignatures !== 2 ||
+    signatures.length !== 2 ||
+    !firstKey ||
+    firstKey.toBase58() !== authorization.feePayer ||
+    !allZero(signatures[0]!) ||
+    allZero(signatures[1]!)
+  ) {
+    throw new PolicyError(
+      'payment_authorization_invalid',
+      'Payment authorization does not have the required payer and fee-payer signatures',
+      422,
+    );
+  }
+  return {
+    messageHash: createHash('sha256')
+      .update(Buffer.from(transaction.message.serialize()))
+      .digest('hex'),
+    feePayer: authorization.feePayer,
+    clientSignature: base58Encode(signatures[1]!),
+  };
+}
+
+export function matchesAuthorizedSettlement(
+  transaction: VersionedTransactionResponse,
+  signature: string,
+  expected: Pick<SettlementAuthorizationBinding, 'messageHash' | 'clientSignature' | 'feePayer'>,
+): boolean {
+  const signatures = transaction.transaction.signatures;
+  const firstKey = transaction.transaction.message.staticAccountKeys[0];
+  return Boolean(
+    transaction.version === 0 &&
+    transaction.meta?.err === null &&
+    signatures.length === 2 &&
+    signatures[0] === signature &&
+    signatures[1] === expected.clientSignature &&
+    firstKey?.toBase58() === expected.feePayer &&
+    createHash('sha256')
+      .update(Buffer.from(transaction.transaction.message.serialize()))
+      .digest('hex') === expected.messageHash,
+  );
+}
+
+export async function findAuthorizedSettlementSignature(
+  connection: Pick<Connection, 'getSignaturesForAddress' | 'getTransactions'>,
+  treasuryTokenAccount: PublicKey,
+  authorization: SettlementAuthorizationBinding,
+): Promise<string> {
+  let before: string | undefined;
+  let scanned = 0;
+  let historyBoundaryReached = false;
+
+  while (scanned < SETTLEMENT_SCAN_MAX_SIGNATURES) {
+    const limit = Math.min(SETTLEMENT_SCAN_PAGE_SIZE, SETTLEMENT_SCAN_MAX_SIGNATURES - scanned);
+    let page;
+    try {
+      page = await connection.getSignaturesForAddress(
+        treasuryTokenAccount,
+        { limit, ...(before ? { before } : {}) },
+        'finalized',
+      );
+    } catch (error) {
+      if (error instanceof PolicyError) throw error;
+      throw new PolicyError(
+        'rpc_unavailable',
+        'Settlement transaction history is unavailable',
+        503,
+        true,
+      );
+    }
+    if (page.length === 0) {
+      historyBoundaryReached = true;
+      break;
+    }
+    scanned += page.length;
+
+    const candidates = page.filter(
+      (candidate) =>
+        candidate.err === null &&
+        candidate.confirmationStatus === 'finalized' &&
+        typeof candidate.blockTime === 'number' &&
+        candidate.blockTime >= authorization.notBeforeUnixSeconds,
+    );
+    for (let offset = 0; offset < candidates.length; offset += SETTLEMENT_FETCH_BATCH) {
+      const batch = candidates.slice(offset, offset + SETTLEMENT_FETCH_BATCH);
+      let transactions;
+      try {
+        transactions = await connection.getTransactions(
+          batch.map((candidate) => candidate.signature),
+          { commitment: 'finalized', maxSupportedTransactionVersion: 0 },
+        );
+      } catch (error) {
+        if (error instanceof PolicyError) throw error;
+        throw new PolicyError(
+          'rpc_unavailable',
+          'Settlement transaction history is unavailable',
+          503,
+          true,
+        );
+      }
+      for (let index = 0; index < batch.length; index += 1) {
+        const transaction = transactions[index];
+        const candidate = batch[index]!;
+        if (
+          transaction &&
+          matchesAuthorizedSettlement(transaction, candidate.signature, authorization)
+        ) {
+          return candidate.signature;
+        }
+      }
+    }
+
+    const oldest = page.at(-1)!;
+    if (
+      page.length < limit ||
+      (typeof oldest.blockTime === 'number' &&
+        oldest.blockTime < authorization.notBeforeUnixSeconds)
+    ) {
+      historyBoundaryReached = true;
+      break;
+    }
+    before = oldest.signature;
+  }
+
+  if (scanned >= SETTLEMENT_SCAN_MAX_SIGNATURES && !historyBoundaryReached) {
+    throw new PolicyError(
+      'settlement_scan_exhausted',
+      'Settlement history exceeded the bounded reconciliation window',
+      503,
+      true,
+    );
+  }
+  throw new PolicyError(
+    'settlement_not_found',
+    'A finalized settlement for this payment authorization was not found',
+    422,
+    true,
+  );
+}
+
+function allZero(value: Uint8Array): boolean {
+  return value.every((byte) => byte === 0);
+}
+
 export function loaderV3ProgramDataAddress(data: Buffer): PublicKey {
   if (data.length !== 36 || data.readUInt32LE(0) !== 2) {
     throw new PolicyError(
@@ -1299,6 +1655,8 @@ export class FixedUsdPriceOracle implements UsdPriceOracle {
 
 export class MockChainGateway implements ChainGateway {
   readonly settlements = new Map<string, SettlementFacts>();
+  readonly reconciledSettlements = new Map<string, SettlementFacts>();
+  readonly settlementReconciliations: SettlementAuthorizationBinding[] = [];
   readonly states = new Map<string, TransactionState>();
   readonly applications = new Map<string, number>();
   readonly preparedOperations: ChainOperation[] = [];
@@ -1311,11 +1669,48 @@ export class MockChainGateway implements ChainGateway {
   vaultRentLamports = 1_000_000n;
   guardRentLamports = 1_500_000n;
   now: () => number = Date.now;
+  reconciliationError: Error | null = null;
 
   async readSettlement(signature: string): Promise<SettlementFacts> {
     const facts = this.settlements.get(signature);
     if (!facts)
       throw new PolicyError('settlement_not_found', 'Settlement transaction was not found', 422);
+    return structuredClone(facts);
+  }
+
+  async readAuthorizedSettlement(
+    signature: string,
+    authorization: SettlementAuthorizationBinding,
+  ): Promise<SettlementFacts> {
+    this.settlementReconciliations.push(structuredClone(authorization));
+    if (this.reconciliationError) throw this.reconciliationError;
+    const facts =
+      this.reconciledSettlements.get(authorization.messageHash) ?? this.settlements.get(signature);
+    if (!facts || facts.signature !== signature) {
+      throw new PolicyError(
+        'settlement_not_found',
+        'Settlement transaction was not found',
+        422,
+        true,
+      );
+    }
+    return structuredClone(facts);
+  }
+
+  async reconcileSettlement(
+    authorization: SettlementAuthorizationBinding,
+  ): Promise<SettlementFacts> {
+    this.settlementReconciliations.push(structuredClone(authorization));
+    if (this.reconciliationError) throw this.reconciliationError;
+    const facts = this.reconciledSettlements.get(authorization.messageHash);
+    if (!facts) {
+      throw new PolicyError(
+        'settlement_not_found',
+        'A finalized settlement for this payment authorization was not found',
+        422,
+        true,
+      );
+    }
     return structuredClone(facts);
   }
 

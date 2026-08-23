@@ -53,25 +53,20 @@ describe('contributor repository checks', () => {
 });
 
 describe('independent reviewer readiness', () => {
-  it('proves the configured model through a funded marketplace completion', async () => {
+  it('proves the configured model through the non-billable model catalog', async () => {
     const request = vi.fn<typeof fetch>(async (input, init) => {
-      expect(String(input)).toBe('https://api.usepod.ai/proxy/secret/v1/chat/completions');
+      expect(String(input)).toBe('https://api.usepod.ai/proxy/secret/v1/models');
+      expect(init?.method).toBe('GET');
+      expect(init?.body).toBeUndefined();
       const headers = new Headers(init?.headers);
       expect(headers.get('authorization')).toBeNull();
-      expect(headers.get('x-pod-routing-mode')).toBe('marketplace-only');
-      expect(headers.get('x-pod-max-price-input')).toBe('200000');
-      return Response.json(
-        {
-          model: 'independent-reviewer',
-          choices: [{ message: { content: JSON.stringify({ nonce: 'mizuki-ready' }) } }],
-        },
-        {
-          headers: {
-            'x-pod-route': 'marketplace',
-            'x-balance-remaining': '9000000',
-          },
-        },
-      );
+      expect(headers.get('content-type')).toBeNull();
+      expect(headers.get('x-pod-routing-mode')).toBeNull();
+      expect(headers.get('x-pod-max-price-input')).toBeNull();
+      return Response.json({
+        object: 'list',
+        data: [{ id: 'independent-reviewer', object: 'model' }],
+      });
     });
     const reviewer = new UsePodContributorReviewer(
       loadConfig({
@@ -87,7 +82,7 @@ describe('independent reviewer readiness', () => {
     await expect(reviewer.readiness()).resolves.toBeUndefined();
   });
 
-  it('rejects a completion that does not prove the configured model', async () => {
+  it('rejects a catalog that does not contain the configured model', async () => {
     const reviewer = new UsePodContributorReviewer(
       loadConfig({
         MIZUKI_PAYMENT_MODE: 'mock',
@@ -96,21 +91,132 @@ describe('independent reviewer readiness', () => {
       }),
       {} as MizukiStore,
       {} as GithubClient,
-      async () =>
-        Response.json(
-          {
-            model: 'different-route',
-            choices: [{ message: { content: JSON.stringify({ nonce: 'mizuki-ready' }) } }],
-          },
-          {
-            headers: {
-              'x-pod-route': 'marketplace',
-              'x-balance-remaining': '9000000',
-            },
-          },
-        ),
+      async () => Response.json({ object: 'list', data: [{ id: 'different-route' }] }),
     );
-    await expect(reviewer.readiness()).rejects.toThrow('different model');
+    await expect(reviewer.readiness()).rejects.toThrow('does not include the configured model');
+  });
+});
+
+describe('independent paid review', () => {
+  it('returns a static rejection before any paid provider request', async () => {
+    const request = vi.fn<typeof fetch>();
+    const reviewer = paidReviewer(request, false);
+
+    await expect(
+      reviewer.preflight(reviewBounty, 'https://github.com/example/project/pull/23', {
+        id: 'review-attempt-1',
+        maxCostMicrounits: 1_000,
+      }),
+    ).resolves.toMatchObject({
+      kind: 'rejected',
+      result: { approved: false, reason: 'repository checks have not passed' },
+    });
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it('binds a bounded request and authoritative cost receipt to the reserved attempt', async () => {
+    const request = vi.fn<typeof fetch>(async (input, init) => {
+      expect(String(input)).toBe('https://api.usepod.ai/proxy/secret/v1/chat/completions');
+      expect(init?.method).toBe('POST');
+      const headers = new Headers(init?.headers);
+      expect(headers.get('x-request-id')).toBe('review-attempt-1');
+      expect(headers.get('x-pod-routing-mode')).toBe('marketplace-only');
+      const body = JSON.parse(String(init?.body)) as { max_tokens: number };
+      expect(body.max_tokens).toBeGreaterThan(0);
+      expect(body.max_tokens).toBeLessThanOrEqual(512);
+      return Response.json(
+        {
+          model: 'independent-reviewer',
+          choices: [{ message: { content: '{"approved":true,"reason":"scoped fix"}' } }],
+        },
+        {
+          headers: {
+            'x-pod-route': 'marketplace',
+            'x-balance-remaining': '9000000',
+            'x-request-id': 'provider-request-9',
+            'x-balance-cost-microunits': '450',
+          },
+        },
+      );
+    });
+    const reviewer = paidReviewer(request);
+
+    await expect(
+      runPaidReview(reviewer, {
+        id: 'review-attempt-1',
+        maxCostMicrounits: 500,
+      }),
+    ).resolves.toMatchObject({
+      approved: true,
+      providerReceipt: {
+        requestId: 'provider-request-9',
+        costMicrounits: '450',
+      },
+    });
+  });
+
+  it('accepts a funded route without undocumented receipt headers', async () => {
+    const reviewer = paidReviewer(async () =>
+      Response.json(
+        {
+          model: 'independent-reviewer',
+          choices: [{ message: { content: '{"approved":true,"reason":"scoped fix"}' } }],
+        },
+        {
+          headers: {
+            'x-pod-route': 'marketplace',
+            'x-balance-remaining': '9000000',
+          },
+        },
+      ),
+    );
+
+    await expect(
+      runPaidReview(reviewer, {
+        id: 'review-attempt-1',
+        maxCostMicrounits: 1_000,
+      }),
+    ).resolves.toMatchObject({
+      approved: true,
+      providerReceipt: { model: 'independent-reviewer', route: 'marketplace' },
+    });
+  });
+
+  it('rejects a reported provider cost above the reservation', async () => {
+    const reviewer = paidReviewer(async () =>
+      Response.json(
+        {
+          model: 'independent-reviewer',
+          choices: [{ message: { content: '{"approved":true,"reason":"scoped fix"}' } }],
+        },
+        {
+          headers: {
+            'x-pod-route': 'marketplace',
+            'x-balance-remaining': '9000000',
+            'x-balance-cost-microunits': '1001',
+          },
+        },
+      ),
+    );
+
+    await expect(
+      runPaidReview(reviewer, {
+        id: 'review-attempt-1',
+        maxCostMicrounits: 1_000,
+      }),
+    ).rejects.toThrow('exceeded its reserved provider cost');
+  });
+
+  it.each([
+    [{ id: '', maxCostMicrounits: 1_000 }, 'attempt ID'],
+    [{ id: 'review-attempt-1', maxCostMicrounits: 0 }, 'cost reservation'],
+    [{ id: 'review-attempt-1', maxCostMicrounits: 1.5 }, 'cost reservation'],
+  ])('rejects an invalid attempt before any provider request %#', async (attempt, message) => {
+    const request = vi.fn<typeof fetch>();
+    const reviewer = paidReviewer(request);
+
+    await expect(runPaidReview(reviewer, attempt)).rejects.toThrow(message);
+    expect(request).not.toHaveBeenCalled();
   });
 });
 
@@ -156,3 +262,64 @@ describe('merged review evidence', () => {
     });
   });
 });
+
+const reviewBounty = {
+  sourceJobId: 'job-1',
+  repository: 'example/project',
+} as RescueBounty;
+
+async function runPaidReview(
+  reviewer: UsePodContributorReviewer,
+  attempt: { id: string; maxCostMicrounits: number },
+) {
+  const preflight = await reviewer.preflight(
+    reviewBounty,
+    'https://github.com/example/project/pull/23',
+    attempt,
+  );
+  return preflight.kind === 'paid' ? reviewer.review(preflight) : preflight.result;
+}
+
+function paidReviewer(request: typeof fetch, checksPassed = true): UsePodContributorReviewer {
+  const store = {
+    job: async () => ({
+      quote: {
+        installationId: 7,
+        maxFiles: 2,
+        issueTitle: 'Fix the parser',
+        issueBody: 'Reject invalid input.',
+      },
+    }),
+  } as unknown as MizukiStore;
+  const github = {
+    pullRequestReviewData: async () => ({
+      headSha: 'a'.repeat(40),
+      baseSha: 'b'.repeat(40),
+      baseRef: 'main',
+      diffHash: 'c'.repeat(64),
+      diff: 'diff --git a/src/parser.ts b/src/parser.ts',
+      changedFiles: 1,
+      files: [
+        {
+          filename: 'src/parser.ts',
+          status: 'modified',
+          patchAvailable: true,
+        },
+      ],
+      mergedAt: null,
+      mergeCommitSha: null,
+      checksPassed,
+      checkCount: 1,
+    }),
+  } as unknown as GithubClient;
+  return new UsePodContributorReviewer(
+    loadConfig({
+      MIZUKI_PAYMENT_MODE: 'mock',
+      USEPOD_API_KEY: 'secret',
+      USEPOD_REVIEW_MODEL: 'independent-reviewer',
+    }),
+    store,
+    github,
+    request,
+  );
+}

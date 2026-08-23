@@ -11,7 +11,7 @@ services:
     maxShutdownDelaySeconds: 120
     buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @covenant/mizuki build
     startCommand: pnpm --filter @covenant/mizuki start
-    healthCheckPath: /readyz
+    healthCheckPath: /healthz
     envVars:
       - key: NODE_ENV
         value: production
@@ -301,7 +301,7 @@ services:
     maxShutdownDelaySeconds: 60
     buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @mizuki/web build
     startCommand: pnpm --filter @mizuki/web start
-    healthCheckPath: /
+    healthCheckPath: /healthz
     domains:
       - mizuki.covenant.org
     envVars:

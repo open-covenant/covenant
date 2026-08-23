@@ -23,10 +23,10 @@ load_yaml('.github/workflows/mizuki.yml')
 services = blueprint.fetch('services')
 databases = blueprint.fetch('databases')
 expected = {
-  'mizuki-api' => ['web', '/readyz'],
+  'mizuki-api' => ['web', '/healthz'],
   'mizuki-policy-signer' => ['pserv', nil],
   'mizuki-coding-gateway' => ['pserv', nil],
-  'mizuki' => ['web', '/'],
+  'mizuki' => ['web', '/healthz'],
   'mizuki-updater' => ['pserv', nil]
 }
 database_names = %w[mizuki-postgres mizuki-signer-postgres mizuki-updater-postgres]

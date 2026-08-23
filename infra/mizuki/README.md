@@ -15,9 +15,11 @@ This directory contains the production blueprint and runbooks for Mizuki's comme
 9. Run the read-only checks below before any payment.
 
 ```sh
+curl -fsS https://mizuki-api.onrender.com/healthz
 curl -fsS https://mizuki-api.onrender.com/readyz
 curl -fsS https://mizuki-api.onrender.com/v1/admission
-curl -fsS https://mizuki.onrender.com/
+curl -fsS https://mizuki.covenant.org/healthz
+curl -fsS https://mizuki.covenant.org/
 ```
 
 Check signer and updater health from a one-off shell on the API's private network:

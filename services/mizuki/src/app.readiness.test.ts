@@ -50,6 +50,10 @@ describe('service readiness endpoint', () => {
     });
     const base = await serve(readiness);
 
+    const health = await fetch(`${base}/healthz`);
+    expect(health.status).toBe(200);
+    await expect(health.json()).resolves.toEqual({ ok: true });
+
     const response = await fetch(`${base}/readyz`);
     expect(response.status).toBe(503);
     expect(response.headers.get('cache-control')).toBe('no-store');

@@ -32,7 +32,7 @@ The updater fails closed unless all of the following are true:
 - Every required GitHub check or commit status is successful.
 - Shadow health reports the reviewed commit as healthy.
 - The required checks are still successful immediately before merge.
-- The durable promotion control is explicitly enabled at its current revision.
+- The durable promotion control is explicitly enabled at its current revision before merge and again before promotion.
 - The promoted deployment reports the exact reviewed commit as continuously healthy for the configured soak window.
 
 External actions are resumable. Pull-request synchronization and merge inspect existing GitHub state before acting. Deployment hooks receive stable idempotency keys and must return the same receipt when those keys are replayed. Promotion hook success is durably recorded as `verifying_promotion`; it is never treated as completion by itself. The promotion control starts closed after migration and remains closed across restarts until the write authority explicitly enables it.
@@ -141,14 +141,13 @@ Example pause body:
 }
 ```
 
-Control mutation and promotion admission use the same database advisory gate. The updater reads the control inside that gate immediately before calling the promotion hook and persists the promotion receipt before releasing it. A successful pause response therefore means no promotion hook is running or can begin. If a hook was already in flight, the pause request waits for the bounded hook call and receipt transition. A paused control does not stop production-health checks or rollback for a candidate already in `verifying_promotion` or `rollback_pending`.
+Control mutation, merge admission, and promotion admission use the same database advisory gate. The updater reads the control inside that gate before merging and again immediately before calling the promotion hook. It persists each receipt before releasing the corresponding gate. A successful pause response therefore means no merge or promotion hook is running or can begin. If either action was already in flight, the pause request waits for the bounded call and receipt transition. A paused control does not stop production-health checks or rollback for a candidate already in `verifying_promotion` or `rollback_pending`.
 
 For a core-generated capability proposal, the signed manifest must use that core upgrade UUID as `proposalId` and copy the handoff's `handoffSha256` into `sourceHandoffSha256` before hashing and signing the manifest. The updater exposes that signed source hash on both upgrade read routes. The core recomputes the current deterministic handoff from the capability, upgrade trigger, and ordered failure evidence and refuses to advance unless the hashes match exactly. New failure evidence invalidates an older handoff. Only the external proposal authority submits the envelope; the core has no submission or signing path.
 
 ## Deployment hook contract
 
-The updater authenticates every hook with its configured bearer token. POST hooks also receive `Idempotency-Key`.
-All deployment endpoints must share one HTTPS origin in production, and the deployment ID placeholder may appear only in the health URL path. This prevents a deployment receipt from redirecting the hook credential.
+The updater authenticates every hook with its configured bearer token. POST hooks also receive `Idempotency-Key`. `MIZUKI_UPDATER_DEPLOY_CONTROLLER_HOSTPORT` is the only configurable network value: the updater constructs every fixed controller path itself. Production accepts only Render's private `http://mizuki-deployment-controller:8794` origin, so a receipt or environment value cannot redirect the credential.
 
 Shadow creation receives the repository, candidate, artifact, pull request, and manifest receipt. It must return:
 
@@ -191,7 +190,7 @@ Promotion must finish activation and return a stable receipt:
 { "status": "completed", "operationId": "promotion-1" }
 ```
 
-The updater persists that operation ID before polling the distinct `MIZUKI_UPDATER_PROMOTION_HEALTH_URL_TEMPLATE`. Production health must bind the active route to the candidate, merge, and promotion operation:
+The updater persists that operation ID before polling the controller's fixed production-health path. Production health must bind the active route to the candidate, merge, and promotion operation:
 
 ```json
 {

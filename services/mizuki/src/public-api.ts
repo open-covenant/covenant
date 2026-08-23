@@ -3,7 +3,7 @@ import type { RescueBounty } from './domain/index.js';
 import { publicCostCoverage } from './metrics.js';
 import type { MizukiStore } from './store.js';
 import { treasurySnapshot } from './treasury.js';
-import type { ActivityEvent, Job, LedgerEntry } from './types.js';
+import type { ActivityEvent, Job, LedgerEntry, ProviderRouteReceipt } from './types.js';
 import type { ServiceReadinessReport } from './readiness.js';
 
 export function publicJob(job: Job) {
@@ -19,6 +19,30 @@ export function publicJob(job: Job) {
     refundTransaction: job.refundTransaction,
     refundOperationId: job.refundOperationId,
     error: publicFailure(job.error),
+    review: job.reviewReceipt
+      ? {
+          approved: job.reviewReceipt.approved,
+          reason: job.reviewReceipt.reason,
+          reviewedAt: job.reviewReceipt.reviewedAt,
+          artifactHash: job.reviewReceipt.artifactHash,
+          ...(job.reviewReceipt.provider
+            ? { provider: publicProviderReceipt(job.reviewReceipt.provider) }
+            : {}),
+        }
+      : undefined,
+    reviewAttempts: job.reviewAttempts?.map((attempt) => {
+      const status = publicReviewStatus(attempt);
+      return {
+        phase: attempt.phase,
+        status,
+        artifactHash: attempt.artifactHash,
+        reviewedAt: attempt.reviewedAt,
+        costUsd: attempt.costUsd,
+        ...(attempt.provider ? { provider: publicProviderReceipt(attempt.provider) } : {}),
+        ...(attempt.approved === undefined ? {} : { approved: attempt.approved }),
+        reason: publicReviewReason(status, attempt.approved, attempt.reason),
+      };
+    }),
     changedFiles: job.artifacts?.changedFiles ?? [],
     validations:
       job.artifacts?.validations.map(({ command, exitCode }) => ({ command, exitCode })) ?? [],
@@ -66,6 +90,13 @@ export async function publicBounty(store: MizukiStore, bounty: RescueBounty) {
           approved: bounty.validationReceipt.approved,
           reason: bounty.validationReceipt.reason,
           reviewedAt: bounty.validationReceipt.reviewedAt,
+          headSha: bounty.validationReceipt.headSha,
+          baseSha: bounty.validationReceipt.baseSha,
+          baseRef: bounty.validationReceipt.baseRef,
+          diffHash: bounty.validationReceipt.diffHash,
+          ...(bounty.validationReceipt.provider
+            ? { provider: publicProviderReceipt(bounty.validationReceipt.provider) }
+            : {}),
         }
       : undefined,
     dispute: bounty.dispute
@@ -438,6 +469,40 @@ function publicFailure(value: string | undefined): string | undefined {
     case 'maintenance_failure':
       return 'The maintenance run stopped before delivery.';
   }
+}
+
+function publicProviderReceipt(receipt: ProviderRouteReceipt): ProviderRouteReceipt {
+  return {
+    model: receipt.model,
+    route: receipt.route,
+    ...(receipt.providerId ? { providerId: receipt.providerId } : {}),
+    ...(receipt.requestId ? { requestId: receipt.requestId } : {}),
+    ...(receipt.costMicrounits ? { costMicrounits: receipt.costMicrounits } : {}),
+  };
+}
+
+function publicReviewStatus(attempt: NonNullable<Job['reviewAttempts']>[number]) {
+  if (attempt.status) return attempt.status;
+  if (attempt.error) return 'failed' as const;
+  if (attempt.approved !== undefined) return 'completed' as const;
+  if (attempt.provider) return 'received' as const;
+  return 'pending' as const;
+}
+
+function publicReviewReason(
+  status: ReturnType<typeof publicReviewStatus>,
+  approved: boolean | undefined,
+  reason: string | undefined,
+): string {
+  if (status === 'failed') return 'The independent review did not complete reliably.';
+  if (status === 'pending') return 'The independent review is awaiting a durable provider receipt.';
+  if (status === 'received') {
+    return 'The provider receipt was recorded before a final review decision.';
+  }
+  if (reason) return reason;
+  return approved
+    ? 'The independent review approved the patch.'
+    : 'The independent review rejected the patch.';
 }
 
 function stringValue(value: unknown): string | undefined {

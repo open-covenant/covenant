@@ -1,8 +1,8 @@
-import { mkdtemp, mkdir, readFile, writeFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join, resolve, dirname, sep } from "node:path";
-import { exec } from "node:child_process";
-import type { Sandbox, SandboxProvider, SandboxSpec, ExecResult } from "../types.js";
+import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve, dirname, sep } from 'node:path';
+import { exec } from 'node:child_process';
+import type { Sandbox, SandboxProvider, SandboxSpec, ExecResult } from '../types.js';
 
 /**
  * Trusted-local sandbox: a scratch directory plus child-process exec on the
@@ -23,13 +23,13 @@ class LocalSandbox implements Sandbox {
   }
 
   async readFile(p: string): Promise<string> {
-    return readFile(this.safe(p), "utf8");
+    return readFile(this.safe(p), 'utf8');
   }
 
   async writeFile(p: string, content: string): Promise<void> {
     const abs = this.safe(p);
     await mkdir(dirname(abs), { recursive: true });
-    await writeFile(abs, content, "utf8");
+    await writeFile(abs, content, 'utf8');
   }
 
   exec(cmd: string, opts: { timeoutMs?: number } = {}): Promise<ExecResult> {
@@ -40,16 +40,16 @@ class LocalSandbox implements Sandbox {
           cwd: this.root,
           timeout: opts.timeoutMs ?? 120_000,
           maxBuffer: 16 * 1024 * 1024,
-          shell: "/bin/bash",
+          shell: '/bin/bash',
         },
         (err, stdout, stderr) => {
           const code =
-            err && typeof (err as { code?: number }).code === "number"
+            err && typeof (err as { code?: number }).code === 'number'
               ? (err as { code: number }).code
               : err
                 ? 1
                 : 0;
-          resolveExec({ stdout: stdout ?? "", stderr: stderr ?? "", exitCode: code });
+          resolveExec({ stdout: stdout ?? '', stderr: stderr ?? '', exitCode: code });
         },
       );
     });
@@ -67,10 +67,10 @@ class LocalSandbox implements Sandbox {
 }
 
 export class LocalSandboxProvider implements SandboxProvider {
-  readonly id = "local";
+  readonly id = 'local';
 
   async create(spec: SandboxSpec): Promise<Sandbox> {
-    const base = join(tmpdir(), "covenant-coder");
+    const base = join(tmpdir(), 'covenant-coder');
     await mkdir(base, { recursive: true });
     const root = await mkdtemp(join(base, `${spec.runId}-`));
     return new LocalSandbox(root);

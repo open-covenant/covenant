@@ -5,6 +5,7 @@ import {
   validateContributorFiles,
   validateRepositoryChecks,
 } from './contributor-reviewer.js';
+import type { RescueBounty } from './domain/index.js';
 import type { GithubClient } from './github.js';
 import type { MizukiStore } from './store.js';
 
@@ -32,6 +33,7 @@ describe('contributor file policy', () => {
   });
 
   it('rejects incomplete, binary, and truncated file evidence', () => {
+    expect(validateContributorFiles([], 0)).toMatchObject({ approved: false });
     expect(validateContributorFiles([], 1)).toMatchObject({ approved: false });
     expect(
       validateContributorFiles(
@@ -51,13 +53,25 @@ describe('contributor repository checks', () => {
 });
 
 describe('independent reviewer readiness', () => {
-  it('authenticates and requires the configured marketplace model', async () => {
-    const request = vi.fn<typeof fetch>(async (_input, init) => {
-      expect(init?.headers).toMatchObject({
-        authorization: 'Bearer secret',
-        'x-pod-routing-mode': 'marketplace-only',
-      });
-      return Response.json({ data: [{ id: 'independent-reviewer' }] });
+  it('proves the configured model through a funded marketplace completion', async () => {
+    const request = vi.fn<typeof fetch>(async (input, init) => {
+      expect(String(input)).toBe('https://api.usepod.ai/proxy/secret/v1/chat/completions');
+      const headers = new Headers(init?.headers);
+      expect(headers.get('authorization')).toBeNull();
+      expect(headers.get('x-pod-routing-mode')).toBe('marketplace-only');
+      expect(headers.get('x-pod-max-price-input')).toBe('200000');
+      return Response.json(
+        {
+          model: 'independent-reviewer',
+          choices: [{ message: { content: JSON.stringify({ nonce: 'mizuki-ready' }) } }],
+        },
+        {
+          headers: {
+            'x-pod-route': 'marketplace',
+            'x-balance-remaining': '9000000',
+          },
+        },
+      );
     });
     const reviewer = new UsePodContributorReviewer(
       loadConfig({
@@ -73,7 +87,7 @@ describe('independent reviewer readiness', () => {
     await expect(reviewer.readiness()).resolves.toBeUndefined();
   });
 
-  it('rejects a successful but incomplete model catalog', async () => {
+  it('rejects a completion that does not prove the configured model', async () => {
     const reviewer = new UsePodContributorReviewer(
       loadConfig({
         MIZUKI_PAYMENT_MODE: 'mock',
@@ -82,8 +96,63 @@ describe('independent reviewer readiness', () => {
       }),
       {} as MizukiStore,
       {} as GithubClient,
-      async () => Response.json({ data: [{ id: 'different-route' }] }),
+      async () =>
+        Response.json(
+          {
+            model: 'different-route',
+            choices: [{ message: { content: JSON.stringify({ nonce: 'mizuki-ready' }) } }],
+          },
+          {
+            headers: {
+              'x-pod-route': 'marketplace',
+              'x-balance-remaining': '9000000',
+            },
+          },
+        ),
     );
-    await expect(reviewer.readiness()).rejects.toThrow('unavailable');
+    await expect(reviewer.readiness()).rejects.toThrow('different model');
+  });
+});
+
+describe('merged review evidence', () => {
+  it('returns the exact merged head and diff commitment from GitHub', async () => {
+    const store = {
+      job: async () => ({ quote: { installationId: 7 } }),
+    } as unknown as MizukiStore;
+    const github = {
+      pullRequestReviewData: async () => ({
+        headSha: 'a'.repeat(40),
+        baseSha: 'd'.repeat(40),
+        baseRef: 'main',
+        diffHash: 'b'.repeat(64),
+        diff: 'diff',
+        changedFiles: 1,
+        files: [],
+        mergedAt: '2026-08-22T12:05:00.000Z',
+        mergeCommitSha: 'c'.repeat(40),
+        checksPassed: true,
+        checkCount: 1,
+      }),
+    } as unknown as GithubClient;
+    const reviewer = new UsePodContributorReviewer(
+      loadConfig({ MIZUKI_PAYMENT_MODE: 'mock' }),
+      store,
+      github,
+    );
+    const bounty = {
+      sourceJobId: 'job-1',
+      repository: 'example/project',
+    } as RescueBounty;
+
+    await expect(
+      reviewer.mergedEvidence(bounty, 'https://github.com/example/project/pull/23'),
+    ).resolves.toEqual({
+      headSha: 'a'.repeat(40),
+      baseSha: 'd'.repeat(40),
+      baseRef: 'main',
+      diffHash: 'b'.repeat(64),
+      mergedAt: '2026-08-22T12:05:00.000Z',
+      mergeCommitSha: 'c'.repeat(40),
+    });
   });
 });

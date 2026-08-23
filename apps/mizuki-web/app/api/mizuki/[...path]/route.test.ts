@@ -150,18 +150,67 @@ describe('Mizuki API proxy', () => {
     expect(rejected.status).toBe(413);
     expect(upstream).not.toHaveBeenCalled();
   });
+
+  it('forwards signed GitHub webhooks with a dedicated one-megabyte cap', async () => {
+    vi.stubEnv('MIZUKI_WEB_PROXY_SECRET', 'p'.repeat(32));
+    const upstream = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      Response.json({ accepted: true }, { status: 202 }),
+    );
+    vi.stubGlobal('fetch', upstream);
+    const path = ['v1', 'github', 'webhook'];
+    const headers = {
+      'content-type': 'application/json',
+      'x-github-delivery': 'delivery-1',
+      'x-github-event': 'pull_request',
+      'x-hub-signature-256': `sha256=${'a'.repeat(64)}`,
+    };
+
+    const accepted = await POST(
+      streamedRequest(
+        [1_000_000],
+        'https://mizuki.covenant.org/api/mizuki/v1/github/webhook',
+        headers,
+      ),
+      { params: Promise.resolve({ path }) },
+    );
+    expect(accepted.status).toBe(202);
+    const forwarded = new Headers(upstream.mock.calls[0][1]?.headers);
+    expect(forwarded.get('x-github-delivery')).toBe('delivery-1');
+    expect(forwarded.get('x-github-event')).toBe('pull_request');
+    expect(forwarded.get('x-hub-signature-256')).toBe(`sha256=${'a'.repeat(64)}`);
+    expect((upstream.mock.calls[0][1]?.body as ArrayBuffer).byteLength).toBe(1_000_000);
+
+    upstream.mockClear();
+    const rejected = await POST(
+      streamedRequest(
+        [1_000_000, 1],
+        'https://mizuki.covenant.org/api/mizuki/v1/github/webhook',
+        headers,
+      ),
+      { params: Promise.resolve({ path }) },
+    );
+    expect(rejected.status).toBe(413);
+    await expect(rejected.json()).resolves.toEqual({
+      error: 'Request body exceeds 1000000 bytes',
+    });
+    expect(upstream).not.toHaveBeenCalled();
+  });
 });
 
-function streamedRequest(chunkSizes: number[]): Request {
+function streamedRequest(
+  chunkSizes: number[],
+  url = 'https://mizuki.covenant.org/api/mizuki/v1/quotes',
+  headers: HeadersInit = { 'content-type': 'application/octet-stream' },
+): Request {
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
       for (const size of chunkSizes) controller.enqueue(new Uint8Array(size));
       controller.close();
     },
   });
-  return new Request('https://mizuki.covenant.org/api/mizuki/v1/quotes', {
+  return new Request(url, {
     method: 'POST',
-    headers: { 'content-type': 'application/octet-stream' },
+    headers,
     body,
     duplex: 'half',
   } as RequestInit & { duplex: 'half' });

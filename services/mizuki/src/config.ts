@@ -61,6 +61,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     webOrigin: env.MIZUKI_WEB_ORIGIN,
     databaseUrl: env.MIZUKI_DATABASE_URL,
     adminToken: env.MIZUKI_ADMIN_TOKEN,
+    releaseProbeToken: env.MIZUKI_RELEASE_PROBE_TOKEN,
     codingGatewayUrl: httpUrl(env.MIZUKI_CODING_GATEWAY_URL ?? 'http://127.0.0.1:8642'),
     codingGatewayToken: env.MIZUKI_CODING_GATEWAY_TOKEN,
     updaterUrl,
@@ -69,6 +70,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     updaterPollIntervalMs: duration(env.MIZUKI_UPDATER_POLL_INTERVAL_MS, 60_000),
     paymentMode: env.MIZUKI_PAYMENT_MODE === 'mock' ? ('mock' as const) : ('live' as const),
     payTo: env.MIZUKI_PAY_TO ?? '',
+    escrowRefundTo: env.MIZUKI_ESCROW_REFUND_TO ?? '',
     facilitator: env.MIZUKI_X402_FACILITATOR ?? 'https://facilitator.payai.network',
     policySignerUrl: optionalHttpUrl(env.MIZUKI_POLICY_SIGNER_URL),
     policySignerToken: env.MIZUKI_POLICY_SIGNER_TOKEN,
@@ -85,7 +87,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     githubAuthorizationLabel: env.MIZUKI_GITHUB_AUTHORIZATION_LABEL ?? 'mizuki:authorized',
     sessionSecret: env.MIZUKI_SESSION_SECRET,
     requireGithubApp: env.MIZUKI_REQUIRE_GITHUB_APP !== '0',
-    usePodBaseUrl: env.USEPOD_BASE_URL ?? 'https://api.usepod.ai/v1',
+    usePodBaseUrl: env.USEPOD_BASE_URL ?? 'https://api.usepod.ai',
     usePodApiKey: env.USEPOD_API_KEY ?? '',
     usePodImplementationModel: env.USEPOD_MODEL ?? 'deepseek-v3.2',
     usePodModel:
@@ -93,6 +95,22 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
       (env.MIZUKI_PAYMENT_MODE === 'mock' ? (env.USEPOD_MODEL ?? 'deepseek-v3.2') : ''),
     usePodInputUsdPerMillion: number(env.USEPOD_INPUT_USD_PER_MILLION, 0.2),
     usePodOutputUsdPerMillion: number(env.USEPOD_OUTPUT_USD_PER_MILLION, 0.4),
+    usePodMaxInputPriceMicrounits: boundedInteger(
+      env.USEPOD_MAX_INPUT_PRICE_MICROUNITS,
+      200_000,
+      1,
+      100_000_000,
+    ),
+    usePodMaxInputPriceConfigured: env.USEPOD_MAX_INPUT_PRICE_MICROUNITS !== undefined,
+    usePodMaxOutputPriceMicrounits: boundedInteger(
+      env.USEPOD_MAX_OUTPUT_PRICE_MICROUNITS,
+      400_000,
+      1,
+      100_000_000,
+    ),
+    usePodMaxOutputPriceConfigured: env.USEPOD_MAX_OUTPUT_PRICE_MICROUNITS !== undefined,
+    usePodMinimumBalance: decimal(env.USEPOD_MIN_BALANCE, '1', 'USEPOD_MIN_BALANCE'),
+    usePodMinimumBalanceConfigured: env.USEPOD_MIN_BALANCE !== undefined,
     internalRepos: new Set(
       (env.MIZUKI_INTERNAL_REPOS ?? '')
         .split(',')
@@ -121,10 +139,14 @@ export function liveConfigIssues(config: Config): string[] {
   requireSecret(missing, 'MIZUKI_POLICY_SIGNER_TOKEN', config.policySignerToken);
   requireValue(missing, 'MIZUKI_JOB_AUTHORITY_SEED', config.jobAuthoritySeed);
   requireSecret(missing, 'MIZUKI_ADMIN_TOKEN', config.adminToken);
+  requireSecret(missing, 'MIZUKI_RELEASE_PROBE_TOKEN', config.releaseProbeToken);
   requireSecret(missing, 'MIZUKI_CODING_GATEWAY_TOKEN', config.codingGatewayToken);
   requireValue(missing, 'USEPOD_API_KEY', config.usePodApiKey);
   requireValue(missing, 'USEPOD_MODEL', config.usePodImplementationModel);
   requireValue(missing, 'USEPOD_REVIEW_MODEL', config.usePodModel);
+  if (!config.usePodMaxInputPriceConfigured) missing.push('USEPOD_MAX_INPUT_PRICE_MICROUNITS');
+  if (!config.usePodMaxOutputPriceConfigured) missing.push('USEPOD_MAX_OUTPUT_PRICE_MICROUNITS');
+  if (!config.usePodMinimumBalanceConfigured) missing.push('USEPOD_MIN_BALANCE');
   requireValue(missing, 'MIZUKI_GITHUB_APP_ID', config.githubAppId);
   requireValue(missing, 'MIZUKI_GITHUB_PRIVATE_KEY', config.githubPrivateKey);
   requireValue(missing, 'MIZUKI_GITHUB_CLIENT_ID', config.githubClientId);
@@ -151,9 +173,41 @@ export function liveConfigIssues(config: Config): string[] {
     missing.push('USEPOD_REVIEW_MODEL must differ from USEPOD_MODEL');
   }
   try {
+    const base = new URL(config.usePodBaseUrl);
+    if (
+      base.origin !== 'https://api.usepod.ai' ||
+      base.pathname !== '/' ||
+      base.username ||
+      base.password ||
+      base.search ||
+      base.hash
+    ) {
+      missing.push('USEPOD_BASE_URL must be exactly https://api.usepod.ai');
+    }
+  } catch {
+    missing.push('USEPOD_BASE_URL must be exactly https://api.usepod.ai');
+  }
+  if (config.usePodInputUsdPerMillion * 1_000_000 < config.usePodMaxInputPriceMicrounits) {
+    missing.push('USEPOD_INPUT_USD_PER_MILLION understates the input price ceiling');
+  }
+  if (config.usePodOutputUsdPerMillion * 1_000_000 < config.usePodMaxOutputPriceMicrounits) {
+    missing.push('USEPOD_OUTPUT_USD_PER_MILLION understates the output price ceiling');
+  }
+  try {
     address(config.payTo);
   } catch {
     missing.push('MIZUKI_PAY_TO');
+  }
+  try {
+    address(config.escrowRefundTo);
+  } catch {
+    missing.push('MIZUKI_ESCROW_REFUND_TO');
+  }
+  if (config.escrowRefundTo === config.payTo) {
+    missing.push('MIZUKI_ESCROW_REFUND_TO must differ from MIZUKI_PAY_TO');
+  }
+  if (config.clawPumpAgentId && config.clawPumpPayoutWallet !== config.escrowRefundTo) {
+    missing.push('CLAWPUMP_PAYOUT_WALLET must equal MIZUKI_ESCROW_REFUND_TO');
   }
   if (!config.githubPrivateKey?.includes('BEGIN') || !config.githubPrivateKey.includes('KEY')) {
     missing.push('MIZUKI_GITHUB_PRIVATE_KEY must be PEM');
@@ -228,6 +282,14 @@ function number(value: string | undefined, fallback: number): number {
 function atomic(value: string | undefined, fallback: string, name: string): string {
   const parsed = value ?? fallback;
   if (!/^[1-9][0-9]*$/.test(parsed)) throw new Error(`${name} must be a positive atomic amount`);
+  return parsed;
+}
+
+function decimal(value: string | undefined, fallback: string, name: string): string {
+  const parsed = value ?? fallback;
+  if (!/^\d{1,48}(?:\.\d{1,18})?$/.test(parsed) || !/[1-9]/.test(parsed)) {
+    throw new Error(`${name} must be a positive decimal`);
+  }
   return parsed;
 }
 

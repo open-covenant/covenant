@@ -11,7 +11,7 @@ import { finalizeJobMerge } from './merges.js';
 import { UsePodContributorReviewer } from './contributor-reviewer.js';
 import { MemoryStore, PostgresStore } from './store.js';
 import { Payments, USDC_DECIMALS, USDC_MAINNET } from './x402.js';
-import { PolicySignerClient } from './policy-client.js';
+import { PolicySignerClient, refundLiabilityCommitment } from './policy-client.js';
 import { recordPaymentReceipts } from './receipts.js';
 import { GithubWebhookHandler } from './webhooks.js';
 import { UpdaterStatusClient } from './updater-client.js';
@@ -27,7 +27,7 @@ const payments = new Payments(config);
 const policy = new PolicySignerClient(config);
 const paymentAdmission = new SerialGate();
 const reviewer = new UsePodContributorReviewer(config, store, github);
-const bounties = new BountyService(store, policy, reviewer, undefined, config.payTo);
+const bounties = new BountyService(store, policy, reviewer, undefined, config);
 const updater =
   config.updaterUrl && config.updaterToken
     ? new UpdaterStatusClient(config.updaterUrl, config.updaterToken, config.updaterTimeoutMs)
@@ -195,19 +195,31 @@ async function refreshFinancialOperations(): Promise<void> {
             const payment = await payments.retrySettlement(job.quote, job.payment);
             const liability =
               config.paymentMode === 'live'
-                ? await policy.registerRefundLiability(job.id, payment.transaction)
+                ? await policy.registerRefundLiability(
+                    job.id,
+                    payment.transaction,
+                    refundLiabilityCommitment(job.quote),
+                  )
                 : undefined;
-            if (
-              liability &&
-              (liability.jobId !== job.id ||
+            if (liability) {
+              const commitment = refundLiabilityCommitment(job.quote);
+              if (
+                liability.jobId !== job.id ||
                 liability.settlementSignature !== payment.transaction ||
                 liability.payer !== payment.payer ||
                 liability.mint !== USDC_MAINNET ||
                 liability.decimals !== USDC_DECIMALS ||
                 liability.rawAmount !== payment.amountAtomic ||
-                liability.amountUsdCents !== Number(payment.amountAtomic) / 10_000)
-            ) {
-              throw new Error('refund liability evidence does not match the recovered payment');
+                liability.amountUsdCents !== Number(payment.amountAtomic) / 10_000 ||
+                liability.repository !== commitment.repository ||
+                liability.issueNumber !== commitment.issueNumber ||
+                liability.baseRef !== commitment.baseRef ||
+                liability.baseSha !== commitment.baseSha ||
+                liability.repositoryAuthorizedAt !== commitment.repositoryAuthorizedAt ||
+                liability.authorizationEvidenceHash !== commitment.authorizationEvidenceHash
+              ) {
+                throw new Error('refund liability evidence does not match the recovered payment');
+              }
             }
             if (liability) await store.patchJob(job.id, { refundLiabilityId: liability.id });
             return store.transitionJob(job.id, 'settlement_pending', 'paid', {

@@ -1,7 +1,10 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { loadConfig } from './config.js';
-import { enforcePolicy, JobProcessor } from './executor.js';
+import { enforcePolicy, JobProcessor, phaseBudgetPlan, phaseBudgetUsd } from './executor.js';
 import { MemoryStore } from './store.js';
+import { treasurySnapshot } from './treasury.js';
+import type { FinancialPolicy, RefundLiability } from './policy-client.js';
 import type { Job, Payment, Quote, RunArtifacts } from './types.js';
 
 const quote: Quote = {
@@ -118,10 +121,7 @@ describe('JobProcessor', () => {
       }
       if (url.endsWith('/artifacts')) return Response.json({ ...artifacts, validations: [] });
       if (url.endsWith('/chat/completions')) {
-        return Response.json({
-          choices: [{ message: { content: JSON.stringify({ approved: true, reason: 'scoped' }) } }],
-          usage: { prompt_tokens: 50, completion_tokens: 10 },
-        });
+        return reviewResponse({ approved: true, reason: 'scoped' });
       }
       throw new Error(`unexpected request: ${url}`);
     };
@@ -136,8 +136,110 @@ describe('JobProcessor', () => {
       prUrl: 'https://github.com/example/project/pull/2',
       inputTokens: 150,
       outputTokens: 50,
-      estimatedCostUsd: 0.050014,
+      estimatedCostUsd: 0.0505,
+      reviewReceipt: {
+        provider: {
+          model: 'deepseek-v3.2',
+          route: 'marketplace',
+          providerId: 'provider-1',
+          costMicrounits: '500',
+        },
+      },
     });
+  });
+
+  it('records the signer delivery binding before publication in live mode', async () => {
+    const store = new MemoryStore();
+    const jobQuote = { ...quote, validationCommands: [] };
+    const created = (await store.createJob(jobQuote, payment, 'live-delivery-key')).job;
+    await store.transitionJob(created.id, 'settlement_pending', 'paid', {
+      refundLiabilityId: '22222222-2222-4222-8222-222222222222',
+    });
+    const request = async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith('/v1/runs')) return Response.json({ run_id: 'run-live-delivery' });
+      if (url.endsWith('/v1/runs/run-live-delivery')) {
+        return Response.json({
+          status: 'completed',
+          usage: { inputTokens: 100, outputTokens: 40 },
+          costUsd: 0.05,
+        });
+      }
+      if (url.endsWith('/artifacts')) return Response.json({ ...artifacts, validations: [] });
+      if (url.endsWith('/chat/completions')) {
+        return reviewResponse({ approved: true, reason: 'scoped' });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    };
+    const events: string[] = [];
+    const diffHash = createHash('sha256').update(artifacts.patch).digest('hex');
+    const headSha = 'b'.repeat(40);
+    const bindRefundLiabilityDelivery = vi.fn(async (_id, input) => {
+      events.push('binding');
+      return {
+        id: '22222222-2222-4222-8222-222222222222',
+        jobId: created.id,
+        settlementSignature: payment.transaction,
+        reviewedHeadSha: input.reviewedHeadSha,
+        reviewedBaseSha: input.reviewedBaseSha,
+        reviewedBaseRef: input.reviewedBaseRef,
+        reviewedDiffHash: input.reviewedDiffHash,
+        deliveryBoundAt: '2026-08-23T12:00:00.000Z',
+        deliveryBindingHash: 'c'.repeat(64),
+      } as RefundLiability;
+    });
+    const policy = { bindRefundLiabilityDelivery } as unknown as FinancialPolicy;
+    const github = {
+      currentHead: async () => jobQuote.baseSha,
+      publish: async (
+        _job: Job,
+        _artifacts: RunArtifacts,
+        checkpoint: (sha: string) => Promise<void>,
+        evidenceCheckpoint: (evidence: NonNullable<Job['deliveryEvidence']>) => Promise<void>,
+      ) => {
+        await checkpoint(headSha);
+        events.push('published');
+        await evidenceCheckpoint({
+          pullRequestNumber: 2,
+          headSha,
+          baseSha: jobQuote.baseSha,
+          baseRef: jobQuote.defaultBranch,
+          diffHash,
+          observedAt: '2026-08-23T12:00:01.000Z',
+        });
+        return 'https://github.com/example/project/pull/2';
+      },
+    };
+    const config = loadConfig({
+      MIZUKI_PAYMENT_MODE: 'live',
+      USEPOD_API_KEY: 'test',
+      USEPOD_MODEL: 'implementation-model',
+      USEPOD_REVIEW_MODEL: 'deepseek-v3.2',
+    });
+
+    await new JobProcessor(
+      config,
+      store,
+      github,
+      request as typeof fetch,
+      undefined,
+      policy,
+    ).process(created.id);
+
+    const completed = await store.job(created.id);
+    expect(completed).toMatchObject({ state: 'delivered' });
+    expect(events).toEqual(['binding', 'published']);
+    expect(bindRefundLiabilityDelivery).toHaveBeenCalledWith(
+      '22222222-2222-4222-8222-222222222222',
+      {
+        jobId: created.id,
+        settlementSignature: payment.transaction,
+        reviewedHeadSha: headSha,
+        reviewedBaseSha: jobQuote.baseSha,
+        reviewedBaseRef: jobQuote.defaultBranch,
+        reviewedDiffHash: diffHash,
+      },
+    );
   });
 
   it('lets only one worker claim a paid job without refunding the winner', async () => {
@@ -161,14 +263,12 @@ describe('JobProcessor', () => {
         return Response.json({
           status: 'completed',
           usage: { inputTokens: 100, outputTokens: 40 },
+          costUsd: 0.05,
         });
       }
       if (url.endsWith('/artifacts')) return Response.json({ ...artifacts, validations: [] });
       if (url.endsWith('/chat/completions')) {
-        return Response.json({
-          choices: [{ message: { content: JSON.stringify({ approved: true, reason: 'scoped' }) } }],
-          usage: { prompt_tokens: 50, completion_tokens: 10 },
-        });
+        return reviewResponse({ approved: true, reason: 'scoped' });
       }
       throw new Error(`unexpected request: ${url}`);
     };
@@ -232,7 +332,11 @@ describe('JobProcessor', () => {
       const url = String(input);
       if (url.endsWith('/v1/runs')) return Response.json({ run_id: 'run-artifact-failure' });
       if (url.endsWith('/v1/runs/run-artifact-failure')) {
-        return Response.json({ status: 'completed', costUsd: 0.31 });
+        return Response.json({
+          status: 'completed',
+          usage: { inputTokens: 100, outputTokens: 40 },
+          costUsd: 0.31,
+        });
       }
       if (url.endsWith('/artifacts')) return Response.json({}, { status: 503 });
       throw new Error(`unexpected request: ${url}`);
@@ -247,6 +351,369 @@ describe('JobProcessor', () => {
       error: 'coding gateway artifacts unavailable',
       estimatedCostUsd: 0.31,
     });
+  });
+
+  it('retries a lost creation response with the same durable implementation key', async () => {
+    const store = new MemoryStore();
+    const jobQuote = { ...quote, validationCommands: [] };
+    const created = (await store.createJob(jobQuote, payment, 'lost-response-key')).job;
+    await store.transitionJob(created.id, 'settlement_pending', 'paid');
+    const sessions: string[] = [];
+    let submissions = 0;
+    const request = async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/v1/runs')) {
+        submissions += 1;
+        sessions.push((JSON.parse(String(init?.body)) as { session_id: string }).session_id);
+        if (submissions === 1) throw new TypeError('response connection lost');
+        return Response.json({ run_id: 'run-replayed' });
+      }
+      if (url.endsWith('/v1/runs/run-replayed')) {
+        return Response.json({
+          status: 'completed',
+          usage: { inputTokens: 100, outputTokens: 40 },
+          costUsd: 0.05,
+        });
+      }
+      if (url.endsWith('/artifacts')) return Response.json({ ...artifacts, validations: [] });
+      if (url.endsWith('/chat/completions')) {
+        return reviewResponse({ approved: true, reason: 'scoped' });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    };
+    const github = {
+      currentHead: async () => jobQuote.baseSha,
+      publish: async () => 'https://github.com/example/project/pull/4',
+    };
+
+    await new JobProcessor(
+      loadConfig({ MIZUKI_PAYMENT_MODE: 'mock', USEPOD_API_KEY: 'test' }),
+      store,
+      github,
+      request as typeof fetch,
+    ).process(created.id);
+
+    expect(await store.job(created.id)).toMatchObject({
+      state: 'delivered',
+      runId: 'run-replayed',
+    });
+    expect(submissions).toBe(2);
+    expect(sessions).toEqual([`${created.id}:implementation`, `${created.id}:implementation`]);
+  });
+
+  it('charges the implementation phase ceiling when a completed run omits cost', async () => {
+    const store = new MemoryStore();
+    const jobQuote = { ...quote, validationCommands: [] };
+    const created = (await store.createJob(jobQuote, payment, 'missing-cost-key')).job;
+    await store.transitionJob(created.id, 'settlement_pending', 'paid');
+    const request = async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith('/v1/runs')) return Response.json({ run_id: 'run-missing-cost' });
+      if (url.endsWith('/v1/runs/run-missing-cost')) {
+        return Response.json({
+          status: 'completed',
+          usage: { inputTokens: 100, outputTokens: 40 },
+        });
+      }
+      if (url.endsWith('/artifacts')) return Response.json({ ...artifacts, validations: [] });
+      if (url.endsWith('/chat/completions')) {
+        return reviewResponse({ approved: true, reason: 'scoped' });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    };
+    const github = { currentHead: async () => jobQuote.baseSha, publish: async () => '' };
+
+    await new JobProcessor(
+      loadConfig({ MIZUKI_PAYMENT_MODE: 'mock', USEPOD_API_KEY: 'test' }),
+      store,
+      github,
+      request as typeof fetch,
+    ).process(created.id);
+
+    expect(await store.job(created.id)).toMatchObject({
+      state: 'refunded',
+      estimatedCostUsd: 0.44,
+    });
+  });
+
+  it('never allocates more than the quote and refuses a paid follow-up with no remaining cap', async () => {
+    const plan = phaseBudgetPlan(quote.maxCostUsd);
+    expect(Object.values(plan).reduce((sum, value) => sum + value, 0)).toBeLessThanOrEqual(
+      quote.maxCostUsd,
+    );
+    expect(() =>
+      phaseBudgetUsd(quote.maxCostUsd, quote.maxCostUsd, 'implementation-review'),
+    ).toThrow(/cap exhausted/);
+
+    const store = new MemoryStore();
+    const jobQuote = { ...quote, validationCommands: [] };
+    const created = (await store.createJob(jobQuote, payment, 'overrun-key')).job;
+    await store.transitionJob(created.id, 'settlement_pending', 'paid');
+    let reviewCalls = 0;
+    let requestedCap = 0;
+    const request = async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/v1/runs')) {
+        requestedCap = (JSON.parse(String(init?.body)) as { max_cost_usd: number }).max_cost_usd;
+        return Response.json({ run_id: 'run-overrun' });
+      }
+      if (url.endsWith('/v1/runs/run-overrun')) {
+        return Response.json({
+          status: 'completed',
+          usage: { inputTokens: 100, outputTokens: 40 },
+          costUsd: quote.maxCostUsd,
+        });
+      }
+      if (url.endsWith('/chat/completions')) {
+        reviewCalls += 1;
+        return reviewResponse({ approved: true, reason: 'scoped' });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    };
+    const github = { currentHead: async () => jobQuote.baseSha, publish: async () => '' };
+
+    await new JobProcessor(
+      loadConfig({ MIZUKI_PAYMENT_MODE: 'mock', USEPOD_API_KEY: 'test' }),
+      store,
+      github,
+      request as typeof fetch,
+    ).process(created.id);
+
+    expect(requestedCap).toBe(plan.implementation);
+    expect(reviewCalls).toBe(0);
+    expect(await store.job(created.id)).toMatchObject({
+      state: 'refunded',
+      estimatedCostUsd: quote.maxCostUsd,
+    });
+  });
+
+  it('persists billed rejected reviewer attempts through repair and refund', async () => {
+    const store = new MemoryStore();
+    const jobQuote = { ...quote, validationCommands: [] };
+    const created = (await store.createJob(jobQuote, payment, 'rejected-review-key')).job;
+    await store.transitionJob(created.id, 'settlement_pending', 'paid');
+    let review = 0;
+    const request = async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/v1/runs')) {
+        const body = JSON.parse(String(init?.body)) as { session_id: string };
+        return Response.json({
+          run_id: body.session_id.endsWith(':repair') ? 'run-repair' : 'run-implementation',
+        });
+      }
+      if (url.endsWith('/run-implementation') || url.endsWith('/run-repair')) {
+        return Response.json({
+          status: 'completed',
+          usage: { inputTokens: 100, outputTokens: 40 },
+          costUsd: 0.05,
+        });
+      }
+      if (url.endsWith('/artifacts')) return Response.json({ ...artifacts, validations: [] });
+      if (url.endsWith('/chat/completions')) {
+        review += 1;
+        return reviewResponse({ approved: false, reason: `rejected-${review}` });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    };
+    const github = { currentHead: async () => jobQuote.baseSha, publish: async () => '' };
+
+    await new JobProcessor(
+      loadConfig({ MIZUKI_PAYMENT_MODE: 'mock', USEPOD_API_KEY: 'test' }),
+      store,
+      github,
+      request as typeof fetch,
+    ).process(created.id);
+
+    expect(await store.job(created.id)).toMatchObject({
+      state: 'refunded',
+      estimatedCostUsd: 0.101,
+      reviewAttempts: [
+        {
+          phase: 'implementation',
+          approved: false,
+          reason: 'rejected-1',
+          costUsd: 0.0005,
+          provider: { route: 'marketplace' },
+        },
+        {
+          phase: 'repair',
+          approved: false,
+          reason: 'rejected-2',
+          costUsd: 0.0005,
+          provider: { route: 'marketplace' },
+        },
+      ],
+    });
+  });
+
+  it('retains a billed reviewer receipt when the response usage is invalid', async () => {
+    const store = new MemoryStore();
+    const jobQuote = { ...quote, validationCommands: [] };
+    const created = (await store.createJob(jobQuote, payment, 'invalid-review-key')).job;
+    await store.transitionJob(created.id, 'settlement_pending', 'paid');
+    const request = async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith('/v1/runs')) return Response.json({ run_id: 'run-invalid-review' });
+      if (url.endsWith('/v1/runs/run-invalid-review')) {
+        return Response.json({
+          status: 'completed',
+          usage: { inputTokens: 100, outputTokens: 40 },
+          costUsd: 0.05,
+        });
+      }
+      if (url.endsWith('/artifacts')) return Response.json({ ...artifacts, validations: [] });
+      if (url.endsWith('/chat/completions')) {
+        const response = reviewResponse({ approved: true, reason: 'scoped' });
+        const body = (await response.json()) as Record<string, unknown>;
+        body.usage = { prompt_tokens: -1, completion_tokens: 10 };
+        return Response.json(body, { headers: response.headers });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    };
+    const github = { currentHead: async () => jobQuote.baseSha, publish: async () => '' };
+
+    await new JobProcessor(
+      loadConfig({ MIZUKI_PAYMENT_MODE: 'mock', USEPOD_API_KEY: 'test' }),
+      store,
+      github,
+      request as typeof fetch,
+    ).process(created.id);
+
+    expect(await store.job(created.id)).toMatchObject({
+      state: 'refunded',
+      estimatedCostUsd: 0.0505,
+      reviewAttempts: [
+        {
+          phase: 'implementation',
+          costUsd: 0.0005,
+          provider: { route: 'marketplace', costMicrounits: '500' },
+          error: expect.stringMatching(/invalid token usage/),
+        },
+      ],
+    });
+  });
+
+  it('charges the review allocation and refuses repair when provider cost is missing', async () => {
+    const store = new MemoryStore();
+    const jobQuote = { ...quote, validationCommands: [] };
+    const created = (await store.createJob(jobQuote, payment, 'missing-review-cost-key')).job;
+    await store.transitionJob(created.id, 'settlement_pending', 'paid');
+    let submissions = 0;
+    const request = async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith('/v1/runs')) {
+        submissions += 1;
+        return Response.json({ run_id: 'run-missing-review-cost' });
+      }
+      if (url.endsWith('/v1/runs/run-missing-review-cost')) {
+        return Response.json({
+          status: 'completed',
+          usage: { inputTokens: 100, outputTokens: 40 },
+          costUsd: 0.05,
+        });
+      }
+      if (url.endsWith('/artifacts')) return Response.json({ ...artifacts, validations: [] });
+      if (url.endsWith('/chat/completions')) {
+        return Response.json(
+          {
+            model: 'deepseek-v3.2',
+            choices: [
+              { message: { content: JSON.stringify({ approved: false, reason: 'repair' }) } },
+            ],
+            usage: { prompt_tokens: 50, completion_tokens: 10 },
+          },
+          {
+            headers: {
+              'x-pod-route': 'marketplace',
+              'x-balance-remaining': '9000000',
+            },
+          },
+        );
+      }
+      throw new Error(`unexpected request: ${url}`);
+    };
+    const github = { currentHead: async () => jobQuote.baseSha, publish: async () => '' };
+
+    await new JobProcessor(
+      loadConfig({ MIZUKI_PAYMENT_MODE: 'mock', USEPOD_API_KEY: 'test' }),
+      store,
+      github,
+      request as typeof fetch,
+    ).process(created.id);
+
+    expect(submissions).toBe(1);
+    expect(await store.job(created.id)).toMatchObject({
+      state: 'refunded',
+      estimatedCostUsd: 0.17,
+      reviewAttempts: [
+        {
+          phase: 'implementation',
+          costUsd: 0.12,
+          error: expect.stringMatching(/omitted authoritative provider cost/),
+        },
+      ],
+    });
+  });
+
+  it('retains a pending review reservation through restart reconciliation and refund', async () => {
+    const store = new MemoryStore();
+    const jobQuote = { ...quote, validationCommands: [] };
+    const created = (await store.createJob(jobQuote, payment, 'review-crash-key')).job;
+    await store.transitionJob(created.id, 'settlement_pending', 'paid');
+    let rejectReview!: (cause: Error) => void;
+    let reviewStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      reviewStarted = resolve;
+    });
+    const request = async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith('/v1/runs')) return Response.json({ run_id: 'run-review-crash' });
+      if (url.endsWith('/v1/runs/run-review-crash')) {
+        return Response.json({
+          status: 'completed',
+          usage: { inputTokens: 100, outputTokens: 40 },
+          costUsd: 0.05,
+        });
+      }
+      if (url.endsWith('/artifacts')) return Response.json({ ...artifacts, validations: [] });
+      if (url.endsWith('/chat/completions')) {
+        reviewStarted();
+        return new Promise<Response>((_resolve, reject) => {
+          rejectReview = reject;
+        });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    };
+    const github = { currentHead: async () => jobQuote.baseSha, publish: async () => '' };
+    const processor = new JobProcessor(
+      loadConfig({ MIZUKI_PAYMENT_MODE: 'mock', USEPOD_API_KEY: 'test' }),
+      store,
+      github,
+      request as typeof fetch,
+    );
+
+    const processing = processor.process(created.id);
+    await started;
+    expect(await store.job(created.id)).toMatchObject({
+      state: 'validating',
+      estimatedCostUsd: 0.17,
+      reviewAttempts: [{ status: 'pending', costUsd: 0.12 }],
+    });
+    expect((await store.job(created.id))?.reviewAttempts?.[0]?.provider).toBeUndefined();
+
+    await processor.reconcileInFlight(-1);
+    rejectReview(new Error('connection lost after provider accepted request'));
+    await processing;
+
+    expect(await store.job(created.id)).toMatchObject({
+      state: 'refunded',
+      estimatedCostUsd: 0.17,
+      reviewAttempts: [{ status: 'failed', costUsd: 0.12 }],
+    });
+    expect((await store.job(created.id))?.reviewAttempts?.[0]?.provider).toBeUndefined();
+    const routeCost = (await store.ledgerEntries()).find((entry) => entry.kind === 'route_cost');
+    expect(routeCost?.amountUsd).toBe(0.17);
+    expect((await treasurySnapshot(store)).trailingVariableAndOperatingEstimateUsd).toBe(0.17);
   });
 });
 
@@ -265,9 +732,29 @@ function gatewayReadiness(
       sandbox: { ok: true, checkedAt, latencyMs: 24 },
     },
     failed: [],
+    model: 'deepseek-v3.2',
     backend: 'usepod',
     provider: 'e2b',
     persistentRuns: true,
+    storage: { ledger: true, runStore: true },
     ...overrides,
   };
+}
+
+function reviewResponse(decision: { approved: boolean; reason: string }): Response {
+  return Response.json(
+    {
+      model: 'deepseek-v3.2',
+      choices: [{ message: { content: JSON.stringify(decision) } }],
+      usage: { prompt_tokens: 50, completion_tokens: 10 },
+    },
+    {
+      headers: {
+        'x-pod-route': 'marketplace',
+        'x-balance-remaining': '9000000',
+        'x-pod-provider-id': 'provider-1',
+        'x-balance-cost-microunits': '500',
+      },
+    },
+  );
 }

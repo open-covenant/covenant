@@ -44,7 +44,10 @@ const prices = new ConsensusUsdPriceOracle(
   ),
   config.maxPriceDivergenceBps,
 );
-const merges = new GitHubMergeVerifier(config.githubToken!);
+const merges = new GitHubMergeVerifier({
+  appId: config.githubAppId!,
+  privateKey: config.githubPrivateKey!,
+});
 
 await store.migrate();
 const policy = new PolicyService(

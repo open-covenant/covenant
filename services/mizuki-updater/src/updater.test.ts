@@ -137,17 +137,17 @@ describe('autonomous upgrade state machine', () => {
     expect(context.deployments.rollbackCalls).toBe(1);
   });
 
-  it('holds a merged candidate at the promotion boundary while control is closed', async () => {
+  it('never merges while promotion control is closed', async () => {
     const context = await fixture({ promotionsEnabled: false });
     context.github.checks.push(passedChecks(), passedChecks());
     context.deployments.healthResults.push({ status: 'healthy' }, { status: 'healthy' });
     const record = await context.service.submit(context.proposal, 'idempotency-1');
 
     expect(await context.service.process(record.id)).toMatchObject({
-      state: 'promoting',
+      state: 'merging',
       lastErrorCode: 'promotion_paused',
     });
-    expect(context.github.mergeCalls).toBe(1);
+    expect(context.github.mergeCalls).toBe(0);
     expect(context.deployments.promoteCalls).toBe(0);
     expect(context.deployments.rollbackCalls).toBe(0);
 
@@ -160,8 +160,10 @@ describe('autonomous upgrade state machine', () => {
       },
       START,
     );
+    context.github.checks.push(passedChecks());
     context.deployments.healthResults.push({ status: 'healthy' });
     expect((await context.service.process(record.id))?.state).toBe('verifying_promotion');
+    expect(context.github.mergeCalls).toBe(1);
     expect(context.deployments.promoteCalls).toBe(1);
   });
 

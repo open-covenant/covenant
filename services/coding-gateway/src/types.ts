@@ -13,7 +13,8 @@
 
 export interface RunRequest {
   input: string;
-  session_id?: string;
+  session_id: string;
+  max_cost_usd: number;
   repository_url?: string;
   base_sha?: string;
   validation_commands?: string[];
@@ -39,6 +40,7 @@ export interface RunState {
   error?: string;
   usage?: TokenUsage;
   costUsd?: number;
+  providerReceipts?: ProviderReceipt[];
 }
 
 /** GET /v1/capabilities — the three features the daemon gates on plus the
@@ -92,6 +94,15 @@ export interface TokenUsage {
   cacheCreationTokens: number;
 }
 
+export interface ProviderReceipt {
+  model: string;
+  route: 'marketplace';
+  balanceRemaining: string;
+  providerId?: string;
+  requestId?: string;
+  costMicrounits?: string;
+}
+
 export interface CodingBackend {
   readonly id: BackendId;
   run(opts: {
@@ -99,7 +110,10 @@ export interface CodingBackend {
     sandbox: Sandbox;
     signal: AbortSignal; // aborts on wall-clock budget or POST /stop
     emit: (e: GatewayEvent) => void;
-  }): Promise<{ output: string; usage: TokenUsage }>;
+    maxProviderCostUsd: number;
+    recordProviderRequest?: () => void | Promise<void>;
+    recordProviderReceipt?: (receipt: ProviderReceipt) => void | Promise<void>;
+  }): Promise<{ output: string; usage: TokenUsage; providerReceipts?: ProviderReceipt[] }>;
 }
 
 // Pluggable execution substrate. This is the untrusted-code security boundary.

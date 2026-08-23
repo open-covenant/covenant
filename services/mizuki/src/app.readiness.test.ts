@@ -196,6 +196,46 @@ describe('service readiness endpoint', () => {
 });
 
 describe('deployment readiness endpoint', () => {
+  it('serves a strict authenticated functional readiness receipt', async () => {
+    const token = 'd'.repeat(32);
+    const base = await serve(
+      { check: vi.fn(async () => ({ ready: true })) } as unknown as ServiceReadiness,
+      new MemoryStore(),
+      token,
+    );
+
+    expect((await fetch(`${base}/internal/mizuki/functional-readiness`)).status).toBe(401);
+    const response = await fetch(`${base}/internal/mizuki/functional-readiness`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    await expect(response.json()).resolves.toEqual({
+      status: 'ok',
+      service: 'mizuki-api',
+      checks: {
+        database: 'ok',
+        policySigner: 'ok',
+        codingGateway: 'ok',
+        settlement: 'ok',
+      },
+    });
+  });
+
+  it('fails the functional receipt when any dependency is unready', async () => {
+    const token = 'd'.repeat(32);
+    const base = await serve(
+      { check: vi.fn(async () => ({ ready: false })) } as unknown as ServiceReadiness,
+      new MemoryStore(),
+      token,
+    );
+    const response = await fetch(`${base}/internal/mizuki/functional-readiness`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({ status: 'unavailable' });
+  });
+
   it('passes with closed durable controls while dependencies are unready', async () => {
     const check = vi.fn(async () => ({ ready: false }));
     const base = await serve({ check } as unknown as ServiceReadiness);
@@ -254,10 +294,14 @@ describe('deployment readiness endpoint', () => {
 async function serve(
   readiness: ServiceReadiness,
   store: AppDependencies['store'] = new MemoryStore(),
+  releaseProbeToken?: string,
 ): Promise<string> {
   const server = createServer(
     createApp({
-      config: loadConfig({ MIZUKI_PAYMENT_MODE: 'mock' }),
+      config: loadConfig({
+        MIZUKI_PAYMENT_MODE: 'mock',
+        MIZUKI_RELEASE_PROBE_TOKEN: releaseProbeToken,
+      }),
       store,
       paymentAdmission: new SerialGate(),
       readiness,

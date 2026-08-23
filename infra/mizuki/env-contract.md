@@ -4,21 +4,23 @@ Live values belong in Render's encrypted settings and the operator password mana
 
 ## Cross-service invariants
 
-| Producer                            | Consumer                                 | Required relationship                                                                                                        |
-| ----------------------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| Signer `MIZUKI_SIGNER_AUTH_TOKEN`   | API `MIZUKI_POLICY_SIGNER_TOKEN`         | Blueprint `fromService` link; at least 32 random characters.                                                                 |
-| Signer private host and port        | API `MIZUKI_POLICY_SIGNER_URL`           | Blueprint private service discovery only. No public signer route.                                                            |
-| Gateway `CODER_AUTH_TOKEN`          | API `MIZUKI_CODING_GATEWAY_TOKEN`        | Blueprint `fromService` link. The browser never receives it.                                                                 |
-| Updater `MIZUKI_UPDATER_READ_TOKEN` | API `MIZUKI_UPDATER_TOKEN`               | Read-only credential only. The API never receives updater submission authority.                                              |
-| API `MIZUKI_WEB_PROXY_SECRET`       | Web `MIZUKI_WEB_PROXY_SECRET`            | Generated Blueprint `fromService` link; at least 32 UTF-8 bytes. Rotate both services together.                              |
-| API `MIZUKI_PAY_TO`                 | Signer `MIZUKI_REFUND_TREASURY`          | Exact same wallet. Paid admission fails closed if signer readiness reports another treasury.                                 |
-| ClawPump payout wallet              | Signer `MIZUKI_ESCROW_AUTHORITY`         | Register this exact public key through ClawPump's signed wallet flow. API readiness rejects a different signer authority.    |
-| API x402 asset                      | Signer `MIZUKI_REFUND_MINT`              | Canonical mainnet USDC mint, six decimals, legacy Token Program. Verify the address on-chain.                                |
-| API `MIZUKI_JOB_AUTHORITY_SEED`     | Signer `MIZUKI_JOB_AUTHORITY_PUBLIC_KEY` | Dedicated Ed25519 pair used only for refund-liability register, execute, and discharge requests.                             |
-| Web x402 challenge                  | API x402 challenge                       | v2 exact SVM route, fixed quote amount, same asset and recipient. The browser rejects drift before signing.                  |
-| API GitHub App                      | Maintainer authorization receipt         | Installed on the target public repository; label event actor retains triage-or-higher permission at payment and publication. |
+| Producer                               | Consumer                                 | Required relationship                                                                                                        |
+| -------------------------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Signer `MIZUKI_SIGNER_AUTH_TOKEN`      | API `MIZUKI_POLICY_SIGNER_TOKEN`         | Blueprint `fromService` link; at least 32 random characters.                                                                 |
+| Signer private host and port           | API `MIZUKI_POLICY_SIGNER_URL`           | Blueprint private service discovery only. No public signer route.                                                            |
+| Gateway `CODER_AUTH_TOKEN`             | API `MIZUKI_CODING_GATEWAY_TOKEN`        | Blueprint `fromService` link. The browser never receives it.                                                                 |
+| Updater `MIZUKI_UPDATER_READ_TOKEN`    | API `MIZUKI_UPDATER_TOKEN`               | Read-only credential only. The API never receives updater submission authority.                                              |
+| API `MIZUKI_WEB_PROXY_SECRET`          | Web `MIZUKI_WEB_PROXY_SECRET`            | Generated Blueprint `fromService` link; at least 32 UTF-8 bytes. Rotate both services together.                              |
+| API `MIZUKI_PAY_TO`                    | Signer `MIZUKI_REFUND_TREASURY`          | Exact same wallet. Paid admission fails closed if signer readiness reports another treasury.                                 |
+| API `MIZUKI_ESCROW_REFUND_TO`          | Signer `MIZUKI_ESCROW_AUTHORITY`         | Exact same isolated escrow wallet. Failed bounty reservations return only to this address, never the USDC payment treasury.  |
+| ClawPump payout wallet                 | Signer `MIZUKI_ESCROW_AUTHORITY`         | Register this exact public key through ClawPump's signed wallet flow. API readiness rejects a different signer authority.    |
+| API x402 asset                         | Signer `MIZUKI_REFUND_MINT`              | Canonical mainnet USDC mint, six decimals, legacy Token Program. Verify the address on-chain.                                |
+| API `MIZUKI_JOB_AUTHORITY_SEED`        | Signer `MIZUKI_JOB_AUTHORITY_PUBLIC_KEY` | Dedicated Ed25519 pair used only for refund-liability register, execute, and discharge requests.                             |
+| Web x402 challenge                     | API x402 challenge                       | v2 exact SVM route, fixed quote amount, same asset and recipient. The browser rejects drift before signing.                  |
+| API GitHub App                         | Maintainer authorization receipt         | Installed on the target public repository; label event actor retains triage-or-higher permission at payment and publication. |
+| Controller `MIZUKI_DEPLOY_PROBE_TOKEN` | Runtime `MIZUKI_RELEASE_PROBE_TOKEN`     | One generated probe credential linked into both image-backed targets; distinct from controller route authentication.         |
 
-The API, signer, and updater have separate PostgreSQL databases and credentials. No component receives another component's database URL. The refund custody key, escrow custody key, and job-authority key must all be distinct.
+The image-backed production runtime is the only commercial core and the only service attached to `mizuki-postgres`. Shadow, signer, updater, and deployment controller each have separate PostgreSQL databases and credentials. No component receives another component's database URL. The refund custody key, escrow custody key, and job-authority key must all be distinct.
 
 Generate the job-authority seed once, store it immediately, and derive only its public key for the signer:
 
@@ -32,36 +34,43 @@ Store `authority_seed` as the API secret and the command output as the signer pu
 
 ## API
 
-| Variable                                                               | Source                 | Pre-deploy proof                                                                                                                |
-| ---------------------------------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `MIZUKI_PUBLIC_BASE_URL`                                               | Fixed HTTPS URL        | Exact public API origin used in x402 resource binding.                                                                          |
-| `MIZUKI_WEB_ORIGIN`                                                    | Fixed HTTPS URL        | Exact web origin; no wildcard CORS.                                                                                             |
-| `MIZUKI_TRUSTED_PROXY_HOPS`                                            | Fixed integer          | Exactly `1` on Render. Enables validated `CF-Connecting-IP`; XFF is ignored and invalid edge identity falls back to the socket. |
-| `MIZUKI_RATE_LIMIT_MAX_SOURCES`                                        | Fixed capacity         | `10000`; excess sources share a bounded overflow bucket instead of allocating memory.                                           |
-| `MIZUKI_SSE_MAX_CONNECTIONS` / `MIZUKI_SSE_MAX_CONNECTIONS_PER_SOURCE` | Fixed capacities       | `100` globally and `3` per source; excess streams return `429`.                                                                 |
-| `MIZUKI_SSE_IDLE_TIMEOUT_MS`                                           | Fixed duration         | `120000`; streams close after two minutes without a new activity event.                                                         |
-| `MIZUKI_READINESS_REFRESH_MS` / `MIZUKI_READINESS_MAX_AGE_MS`          | Fixed durations        | `30000` / `90000`; stale complete dependency evidence returns `503`.                                                            |
-| `MIZUKI_READINESS_TIMEOUT_MS`                                          | Fixed duration         | `20000`; a hanging dependency fails the current readiness attempt.                                                              |
-| `MIZUKI_ESCROW_READINESS_MIN_LAMPORTS`                                 | Fixed reserve floor    | `1000000000`; paid admission requires signer-reported escrow capacity above this floor.                                         |
-| `MIZUKI_DATABASE_URL`                                                  | API database           | TLS connection, schema migration, restart recovery, and unique-payment tests pass.                                              |
-| `MIZUKI_ADMIN_TOKEN`                                                   | Generated secret       | At least 32 characters; absent from web and logs.                                                                               |
-| `MIZUKI_CODING_GATEWAY_URL` / `MIZUKI_CODING_GATEWAY_TOKEN`            | Private service links  | Authenticated health, submit, status, and artifact benchmark pass.                                                              |
-| `USEPOD_API_KEY`                                                       | Secret                 | Independent review request succeeds through the documented OpenAI-compatible interface.                                         |
-| `USEPOD_MODEL`                                                         | Pinned route           | Coding route cleared the published Micro/Standard benchmark.                                                                    |
-| `USEPOD_REVIEW_MODEL`                                                  | Different pinned route | Must not equal the coding route; clean-context review benchmark passes.                                                         |
-| `MIZUKI_PAY_TO`                                                        | Signer service link    | Equals signer refund treasury and has a canonical USDC associated token account.                                                |
-| `MIZUKI_X402_FACILITATOR`                                              | Fixed HTTPS URL        | `/supported` advertises x402 v2, exact SVM mainnet, and a valid fee payer.                                                      |
-| `MIZUKI_POLICY_SIGNER_URL` / `MIZUKI_POLICY_SIGNER_TOKEN`              | Private service links  | Readiness succeeds and reports matching treasury, mint, decimals, and available reserve.                                        |
-| `MIZUKI_JOB_AUTHORITY_SEED`                                            | Secret                 | Canonical base64 for exactly 32 bytes; derived public key matches signer setting.                                               |
-| `MIZUKI_GITHUB_APP_ID` / `MIZUKI_GITHUB_PRIVATE_KEY`                   | Secrets                | Repository installation token can read issue events and publish a branch and PR.                                                |
-| `MIZUKI_GITHUB_CLIENT_ID` / `MIZUKI_GITHUB_CLIENT_SECRET`              | Secrets                | OAuth callback is exactly `/v1/auth/github/callback`.                                                                           |
-| `MIZUKI_GITHUB_WEBHOOK_SECRET`                                         | Secret                 | Signed pull-request webhook replay passes; invalid signatures fail.                                                             |
-| `MIZUKI_SESSION_SECRET`                                                | Generated secret       | At least 32 characters; absent from signer, gateway, and updater.                                                               |
-| `MIZUKI_WEB_PROXY_SECRET`                                              | Generated service link | At least 32 UTF-8 bytes; only an exact match authenticates web-provided client context.                                         |
-| `MIZUKI_UPDATER_URL` / `MIZUKI_UPDATER_TOKEN`                          | Private service links  | Authenticated read works; proposal submission with this token returns unauthorized.                                             |
-| `MIZUKI_INTERNAL_REPOS`                                                | Fixed list             | Contains every operator-controlled repository so they cannot count as external traction.                                        |
+| Variable                                                                   | Source                 | Pre-deploy proof                                                                                                                |
+| -------------------------------------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `MIZUKI_PUBLIC_BASE_URL`                                                   | Fixed HTTPS URL        | Exact public API origin used in x402 resource binding.                                                                          |
+| `MIZUKI_WEB_ORIGIN`                                                        | Fixed HTTPS URL        | Exact web origin; no wildcard CORS.                                                                                             |
+| `MIZUKI_TRUSTED_PROXY_HOPS`                                                | Fixed integer          | Exactly `1` on Render. Enables validated `CF-Connecting-IP`; XFF is ignored and invalid edge identity falls back to the socket. |
+| `MIZUKI_RATE_LIMIT_MAX_SOURCES`                                            | Fixed capacity         | `10000`; excess sources share a bounded overflow bucket instead of allocating memory.                                           |
+| `MIZUKI_SSE_MAX_CONNECTIONS` / `MIZUKI_SSE_MAX_CONNECTIONS_PER_SOURCE`     | Fixed capacities       | `100` globally and `3` per source; excess streams return `429`.                                                                 |
+| `MIZUKI_SSE_IDLE_TIMEOUT_MS`                                               | Fixed duration         | `120000`; streams close after two minutes without a new activity event.                                                         |
+| `MIZUKI_READINESS_REFRESH_MS` / `MIZUKI_READINESS_MAX_AGE_MS`              | Fixed durations        | `30000` / `90000`; stale complete dependency evidence returns `503`.                                                            |
+| `MIZUKI_READINESS_TIMEOUT_MS`                                              | Fixed duration         | `20000`; a hanging dependency fails the current readiness attempt.                                                              |
+| `MIZUKI_ESCROW_READINESS_MIN_LAMPORTS`                                     | Fixed reserve floor    | `1000000000`; paid admission requires signer-reported escrow capacity above this floor.                                         |
+| `MIZUKI_DATABASE_URL`                                                      | API database           | TLS connection, schema migration, restart recovery, and unique-payment tests pass.                                              |
+| `MIZUKI_ADMIN_TOKEN`                                                       | Generated secret       | At least 32 characters; absent from web and logs.                                                                               |
+| `MIZUKI_CODING_GATEWAY_URL` / `MIZUKI_CODING_GATEWAY_TOKEN`                | Private service links  | Authenticated health, submit, status, and artifact benchmark pass.                                                              |
+| `USEPOD_API_KEY`                                                           | Secret                 | Independent review request succeeds through the documented OpenAI-compatible interface.                                         |
+| `USEPOD_MODEL`                                                             | Pinned route           | Coding route cleared the published Micro/Standard benchmark.                                                                    |
+| `USEPOD_REVIEW_MODEL`                                                      | Different pinned route | Must not equal the coding route; clean-context review benchmark passes.                                                         |
+| `USEPOD_BASE_URL`                                                          | Fixed HTTPS origin     | Exactly `https://api.usepod.ai`; the client constructs the documented token-in-path proxy URL.                                  |
+| `USEPOD_MAX_INPUT_PRICE_MICROUNITS` / `USEPOD_MAX_OUTPUT_PRICE_MICROUNITS` | Fixed price ceilings   | `200000` / `400000`; every request carries both marketplace spend-control headers.                                              |
+| `USEPOD_MIN_BALANCE`                                                       | Operator-set floor     | Exact positive decimal in the provider header's native units, chosen from a funded live response; never guessed or labeled USD. |
+| `MIZUKI_PAY_TO`                                                            | Signer service link    | Equals signer refund treasury and has a canonical USDC associated token account.                                                |
+| `MIZUKI_ESCROW_REFUND_TO`                                                  | Signer service link    | Equals the signer escrow authority; never equals or falls back to the USDC payment treasury.                                    |
+| `MIZUKI_X402_FACILITATOR`                                                  | Fixed HTTPS URL        | `/supported` advertises x402 v2, exact SVM mainnet, and a valid fee payer.                                                      |
+| `MIZUKI_POLICY_SIGNER_URL` / `MIZUKI_POLICY_SIGNER_TOKEN`                  | Private service links  | Readiness succeeds and reports matching treasury, mint, decimals, and available reserve.                                        |
+| `MIZUKI_JOB_AUTHORITY_SEED`                                                | Secret                 | Canonical base64 for exactly 32 bytes; derived public key matches signer setting.                                               |
+| `MIZUKI_RELEASE_PROBE_TOKEN`                                               | Generated secret       | At least 32 bytes; shared only with the deployment controller's authenticated functional probes.                                |
+| `MIZUKI_GITHUB_APP_ID` / `MIZUKI_GITHUB_PRIVATE_KEY`                       | Secrets                | Repository installation token can read issue events and publish a branch and PR.                                                |
+| `MIZUKI_GITHUB_CLIENT_ID` / `MIZUKI_GITHUB_CLIENT_SECRET`                  | Secrets                | OAuth callback is exactly `/v1/auth/github/callback`.                                                                           |
+| `MIZUKI_GITHUB_WEBHOOK_SECRET`                                             | Secret                 | Signed pull-request webhook replay passes; invalid signatures fail.                                                             |
+| `MIZUKI_SESSION_SECRET`                                                    | Generated secret       | At least 32 characters; absent from signer, gateway, and updater.                                                               |
+| `MIZUKI_WEB_PROXY_SECRET`                                                  | Generated service link | At least 32 UTF-8 bytes; only an exact match authenticates web-provided client context.                                         |
+| `MIZUKI_UPDATER_URL` / `MIZUKI_UPDATER_TOKEN`                              | Private service links  | Authenticated read works; proposal submission with this token returns unauthorized.                                             |
+| `MIZUKI_INTERNAL_REPOS`                                                    | Fixed list             | Contains every operator-controlled repository so they cannot count as external traction.                                        |
 
 The GitHub App needs repository Contents read/write, Issues read, Pull requests read/write, Metadata read, and Members read. Subscribe only to Pull request events. Public v1 intake remains installation- and label-authorized; Mizuki never opens unsolicited PRs.
+
+The independent-review readiness probe performs a minimal JSON completion on the exact reviewer model and requires funded-balance plus marketplace-route response headers. Every paid-job and contributor-patch review uses the same token-in-path, route, retention, and price-ceiling contract. Public review receipts retain the model, marketplace route, provider/request identifiers, and provider-reported cost when available, but never expose the remaining account balance.
 
 The database initializes paid intake and new bounty claims as closed. `GET /v1/admission` exposes the non-sensitive state. Only an authenticated operator may change it through `POST /v1/admin/admission`; every change requires a reason and is serialized with payment admission and claim binding. Enabling either control also requires a fresh, complete `/readyz` report. Public quote, payment, and new-claim paths recheck readiness after reading the durable control, so an incomplete live configuration can serve liveness and public evidence but cannot issue a payable quote or admit work. A missing or unreadable control row blocks both paths. Existing jobs, refunds, active-claim PR submission, and disputes remain recoverable while new intake is paused.
 
@@ -69,22 +78,23 @@ The database initializes paid intake and new bounty claims as closed. `GET /v1/a
 
 ## Policy signer
 
-| Variable                                                              | Pre-deploy proof                                                                             |
-| --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `MIZUKI_SIGNER_DATABASE_URL`                                          | Dedicated TLS database; operation leases and restart reconciliation pass.                    |
-| `MIZUKI_SIGNER_RPC_URL` / `MIZUKI_SIGNER_SECONDARY_RPC_URL`           | Different provider hostnames return equal finalized program, custody, and settlement facts.  |
-| `MIZUKI_SIGNER_RPC_TIMEOUT_MS`                                        | Exactly `5000`; every HTTP request to either RPC provider aborts within this bound.          |
-| `MIZUKI_REFUND_PRIVATE_KEY_JSON`                                      | Dedicated low-balance key; public key equals `MIZUKI_REFUND_TREASURY`.                       |
-| `MIZUKI_ESCROW_PRIVATE_KEY_JSON`                                      | Different dedicated key; public key equals `MIZUKI_ESCROW_AUTHORITY`.                        |
-| `MIZUKI_SIGNER_GITHUB_TOKEN`                                          | Read-only public-repository metadata access; no content, workflow, or administration writes. |
-| `MIZUKI_JOB_AUTHORITY_PUBLIC_KEY`                                     | Exact public key derived from the API seed; not a custody key.                               |
-| `MIZUKI_REFUND_TREASURY`                                              | Holds enough canonical USDC for every registered liability plus operating headroom.          |
-| `MIZUKI_REFUND_MINT`                                                  | Canonical mainnet USDC mint; six decimals; `spl-token`.                                      |
-| `MIZUKI_ESCROW_PROGRAM_ID`                                            | Independently reviewed immutable loader-v3 program deployed from the verified artifact.      |
-| `MIZUKI_ESCROW_PROGRAM_DATA_SHA256`                                   | SHA-256 of executable bytes after the 45-byte loader metadata prefix.                        |
-| `MIZUKI_SOL_USD_PRICE_URL` / `MIZUKI_SOL_USD_SECONDARY_PRICE_URL`     | Different HTTPS provider hostnames; bounded, recent response fixtures pass.                  |
-| `MIZUKI_SOL_USD_PRICE_TOKEN` / `MIZUKI_SOL_USD_SECONDARY_PRICE_TOKEN` | Separate secrets when feeds require authentication.                                          |
-| `MIZUKI_SOL_USD_MAX_DIVERGENCE_BPS`                                   | Exactly `500`; greater disagreement fails closed.                                            |
+| Variable                                                              | Pre-deploy proof                                                                                                                                                                               |
+| --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MIZUKI_SIGNER_DATABASE_URL`                                          | Dedicated TLS database; operation leases and restart reconciliation pass.                                                                                                                      |
+| `MIZUKI_SIGNER_RPC_URL` / `MIZUKI_SIGNER_SECONDARY_RPC_URL`           | Different provider hostnames return equal finalized program, custody, and settlement facts.                                                                                                    |
+| `MIZUKI_SIGNER_RPC_TIMEOUT_MS`                                        | Exactly `5000`; every HTTP request to either RPC provider aborts within this bound.                                                                                                            |
+| `MIZUKI_REFUND_PRIVATE_KEY_JSON`                                      | Dedicated low-balance key; public key equals `MIZUKI_REFUND_TREASURY`.                                                                                                                         |
+| `MIZUKI_ESCROW_PRIVATE_KEY_JSON`                                      | Different dedicated key; public key equals `MIZUKI_ESCROW_AUTHORITY`.                                                                                                                          |
+| `MIZUKI_SIGNER_GITHUB_APP_ID` / `MIZUKI_SIGNER_GITHUB_PRIVATE_KEY`    | Dedicated public verifier App. It directly mints short-lived tokens for each target repository's installation with exactly read-only contents, issues, metadata, and pull-request permissions. |
+| `MIZUKI_JOB_AUTHORITY_PUBLIC_KEY`                                     | Exact public key derived from the API seed; not a custody key.                                                                                                                                 |
+| `MIZUKI_REFUND_TREASURY`                                              | Holds enough canonical USDC for every registered liability plus operating headroom.                                                                                                            |
+| `MIZUKI_REFUND_MINT`                                                  | Canonical mainnet USDC mint; six decimals; `spl-token`.                                                                                                                                        |
+| `MIZUKI_ESCROW_PROGRAM_ID`                                            | Independently reviewed immutable loader-v3 program deployed from the verified artifact.                                                                                                        |
+| `MIZUKI_ESCROW_PROGRAM_DATA_SHA256`                                   | SHA-256 of executable bytes after the 45-byte loader metadata prefix.                                                                                                                          |
+| `MIZUKI_SOL_USD_PRICE_URL` / `MIZUKI_SOL_USD_SECONDARY_PRICE_URL`     | Official Coinbase `SOL-USD` ticker and CoinGecko `solana`/`usd` simple-price URLs on different hostnames; each response must carry its provider timestamp.                                     |
+| `MIZUKI_SOL_USD_PRICE_TOKEN` / `MIZUKI_SOL_USD_SECONDARY_PRICE_TOKEN` | Unset for the public endpoints in the Blueprint. Separate bearer secrets only when controlled canonical-shape feeds replace them.                                                              |
+| `MIZUKI_SOL_USD_MAX_DIVERGENCE_BPS`                                   | Exactly `500`; greater disagreement fails closed.                                                                                                                                              |
+| `MIZUKI_SOL_USD_MAX_AGE_MS`                                           | Exactly `300000`; observations older than five minutes or over five seconds in the future fail closed.                                                                                         |
 
 Keep `MIZUKI_SIGNER_MOCK_MODE=false`, the per-operation ceiling at $25, and both rolling 24-hour ceilings at $100 through the event. Raising a ceiling is a reviewed policy change, never an incident workaround.
 
@@ -92,18 +102,21 @@ Before enabling intake, retain an authenticated `/v1/readiness/evidence` respons
 
 ## Coding gateway
 
-| Variable                         | Pre-deploy proof                                                               |
-| -------------------------------- | ------------------------------------------------------------------------------ |
-| `CODER_AUTH_TOKEN`               | Generated secret linked only to the API.                                       |
-| `CODER_BACKEND`                  | Exactly `usepod`.                                                              |
-| `CODER_MODEL` / `USEPOD_API_KEY` | Pinned marketplace route passes the benchmark and cost cap.                    |
-| `E2B_API_KEY`                    | Restricted sandbox account with spend alerts and no production credentials.    |
-| `E2B_EGRESS_ALLOW`               | Only package registries and public source hosts required by accepted work.     |
-| `LEDGER_PATH` / `RUN_STORE_PATH` | Separate files under `/var/data`; restart and corruption tests pass.           |
-| Gateway readiness durations      | Refresh `120000`, maximum age `300000`, timeout `20000`; stale evidence fails. |
-| Spend and concurrency limits     | $4 per run, $25 per day, $500 per month, two concurrent runs.                  |
+| Variable                         | Pre-deploy proof                                                                                                                                          |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CODER_AUTH_TOKEN`               | Generated secret linked only to the API.                                                                                                                  |
+| `CODER_BACKEND`                  | Exactly `usepod`.                                                                                                                                         |
+| `CODER_MODEL` / `USEPOD_API_KEY` | Pinned, funded marketplace route passes the tool-call benchmark and cost cap.                                                                             |
+| `USEPOD_BASE_URL`                | Exactly `https://api.usepod.ai`; no credential or tokenized path is configured.                                                                           |
+| UsePod price ceilings            | Input `200000`, output `400000` USDC microunits on every provider request.                                                                                |
+| `USEPOD_MIN_BALANCE`             | Exact operator-set provider-header floor; required and positive in production.                                                                            |
+| `E2B_API_KEY` / `E2B_TEMPLATE`   | Restricted account and pinned `covenant-coder` template with no production credentials.                                                                   |
+| `E2B_EGRESS_ALLOW`               | Only package registries and public source hosts required by accepted work.                                                                                |
+| `LEDGER_PATH` / `RUN_STORE_PATH` | Separate files under `/var/data`; restart and corruption tests pass.                                                                                      |
+| Gateway readiness durations      | Refresh `120000`, maximum age `300000`, timeout `20000`; stale evidence fails.                                                                            |
+| Spend and concurrency limits     | $4 per run, $25 per day, $500 per month, two concurrent runs; sandbox estimate `0.0001` USD/second is reconciled against the live E2B plan before intake. |
 
-The gateway receives no GitHub App key, treasury key, signer token, updater token, or database URL. Its authenticated readiness path refreshes both the exact UsePod model catalog and E2B create/exec/destroy evidence; it never returns upstream response bodies. A completed response is not visible until its durable artifact receipt is written.
+The gateway receives no GitHub App key, treasury key, signer token, updater token, or database URL. Its authenticated readiness path executes a minimal forced tool call on the exact coding model and accepts it only with a funded-balance header and a marketplace-route header, then refreshes E2B create/exec/destroy evidence. Every coding turn enforces the same route and price ceilings, and durable run receipts retain the non-secret provider route, balance, request, provider, and reported cost headers. It never returns upstream response bodies. A completed response is not visible until its durable artifact receipt is written.
 
 ## Web
 
@@ -118,37 +131,70 @@ The gateway receives no GitHub App key, treasury key, signer token, updater toke
 
 The web service receives no custody key or signer, updater, gateway, or API admin authority. It holds only the narrowly scoped `MIZUKI_WEB_PROXY_SECRET`, which authenticates server-side client-IP and scheme context and cannot authorize an API operation. The web proxy derives client identity only from Render's validated `CF-Connecting-IP` value, ignores `X-Forwarded-For`, and replaces browser-supplied Mizuki context headers. Never expose the credential through `NEXT_PUBLIC_*`; rotate the API and web values together. The wallet signs the official x402 SVM transaction, and the server-side proxy forwards only allowlisted request headers and bodies no larger than the API's 64,000-byte limit.
 
+## Image-backed release targets
+
+`mizuki-runtime-shadow` and `mizuki-runtime-production` are new services because changing an existing service to `runtime: image` is not a safe in-place migration. Shadow is private; production is a web service. Both are single-instance, have automatic deployment disabled, use the same `ghcr.io/open-covenant/covenant/mizuki@sha256:<digest>` baseline, and run `node dist/predeploy-cli.js`. Production alone uses the canonical `mizuki-postgres`; shadow uses `mizuki-runtime-shadow-postgres`. Never restore production data into shadow or open shadow admission.
+
+The first image cutover happens with paid intake and claims closed. Reconcile the canonical database, deploy and probe the image runtime, point the website's `MIZUKI_API_URL` and proxy secret at that runtime through Blueprint service links, then suspend the old source-built API before reopening either gate. Verify the old public origin cannot accept a quote, payment, refund, claim, or webhook. Because both versions must never process commercial work concurrently, a failed cutover rolls the website back only while intake remains closed; it never reopens the old runtime against live traffic. No state copy is required: the canonical database stays in place throughout.
+
+The committed all-zero digest is an intentionally non-deployable bootstrap sentinel, not an image version. Before the first Blueprint sync that creates either target, publish and verify one `linux/amd64` image through `mizuki-image.yml`, then replace both sentinel URLs with the same exact digest from its attested promotion input. Render's Blueprint schema cannot obtain `image.url` from `sync: false`, and it cannot create registry credentials. Pre-create the workspace credential named `mizuki-ghcr`; its GitHub Container Registry token needs package-read access only. Never replace the digest with a tag.
+
+Production-owned provider, GitHub App, and job-authority settings are operator-supplied secrets. Shadow receives only the values required for the full functional release probe through Blueprint service links. It has a separate database, admin token, session secret, and web-proxy secret, no public route, and closed admission. This is still privileged production-equivalent code: do not use shadow for exploratory branches or unreviewed images.
+
+`MIZUKI_DEPLOY_PROBE_TOKEN` is generated on the controller and linked to each target as `MIZUKI_RELEASE_PROBE_TOKEN`. The controller's route token is separate. Production `MIZUKI_PUBLIC_BASE_URL` follows its Render-provided `RENDER_EXTERNAL_URL`; set controller `MIZUKI_DEPLOY_PRODUCTION_PROBE_URL` to that exact HTTPS origin plus `/internal/mizuki/functional-readiness`. The fixed shadow probe is `http://mizuki-runtime-shadow:10000/internal/mizuki/functional-readiness` on the private network.
+
 ## Updater
 
-| Variable                                                               | Pre-deploy proof                                                                                               |
-| ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `MIZUKI_UPDATER_AUTH_TOKEN`                                            | Write/admin token held only by the external release operator.                                                  |
-| `MIZUKI_UPDATER_READ_TOKEN`                                            | Distinct read-only token linked to the API.                                                                    |
-| `MIZUKI_UPDATER_PROPOSAL_KEYS_JSON`                                    | Trusted Ed25519 proposal authorities only.                                                                     |
-| `MIZUKI_UPDATER_BENCHMARK_KEYS_JSON`                                   | Separate benchmark authorities.                                                                                |
-| `MIZUKI_UPDATER_REVIEW_KEYS_JSON`                                      | Separate independent review authorities.                                                                       |
-| `MIZUKI_UPDATER_GITHUB_APP_ID` / `MIZUKI_UPDATER_GITHUB_PRIVATE_KEY`   | App can write only allowlisted repositories and `mizuki/capability/` branches.                                 |
-| `MIZUKI_UPDATER_SHADOW_HOOK_URL`                                       | Creates an isolated candidate deployment for the exact proposal SHA.                                           |
-| `MIZUKI_UPDATER_SHADOW_HEALTH_URL_TEMPLATE`                            | Contains literal `{deploymentId}` and reports candidate health.                                                |
-| `MIZUKI_UPDATER_PROMOTE_HOOK_URL` / `MIZUKI_UPDATER_ROLLBACK_HOOK_URL` | Promote the reviewed SHA or restore the recorded healthy SHA.                                                  |
-| `MIZUKI_UPDATER_DEPLOY_READINESS_URL`                                  | Authenticated, side-effect-free `GET` returns `{ "status": "ok", "service": "mizuki-deployment-controller" }`. |
-| `MIZUKI_UPDATER_PROMOTION_HEALTH_URL_TEMPLATE`                         | Distinct endpoint proving the merge and promotion are active in production.                                    |
-| `MIZUKI_UPDATER_DEPLOY_HOOK_TOKEN`                                     | Dedicated token accepted only by the configured deployment origin.                                             |
-| `MIZUKI_UPDATER_PROMOTION_SOAK_MS`                                     | `120000`; exact candidate stays continuously healthy before completion.                                        |
-| `MIZUKI_UPDATER_PROMOTION_TIMEOUT_MS`                                  | `600000`; bounded verification ends in rollback, never implicit completion.                                    |
+| Variable                                                             | Pre-deploy proof                                                                                                     |
+| -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `MIZUKI_UPDATER_AUTH_TOKEN`                                          | Write/admin token held only by the external release operator.                                                        |
+| `MIZUKI_UPDATER_READ_TOKEN`                                          | Distinct read-only token linked to the API.                                                                          |
+| `MIZUKI_UPDATER_PROPOSAL_KEYS_JSON`                                  | Trusted Ed25519 proposal authorities only.                                                                           |
+| `MIZUKI_UPDATER_BENCHMARK_KEYS_JSON`                                 | Separate benchmark authorities.                                                                                      |
+| `MIZUKI_UPDATER_REVIEW_KEYS_JSON`                                    | Separate independent review authorities.                                                                             |
+| `MIZUKI_UPDATER_GITHUB_APP_ID` / `MIZUKI_UPDATER_GITHUB_PRIVATE_KEY` | App can write only allowlisted repositories and `mizuki/capability/` branches.                                       |
+| `MIZUKI_UPDATER_DEPLOY_CONTROLLER_HOSTPORT`                          | Render private-service `hostport`; code constructs every fixed hook, health, rollback, and readiness path.           |
+| `MIZUKI_UPDATER_DEPLOY_HOOK_TOKEN`                                   | Dedicated token accepted only by the configured deployment origin.                                                   |
+| `MIZUKI_UPDATER_ARTIFACT_ORIGINS`                                    | Exact GitHub release and signed release-asset origins; only the validated one-hop repository asset flow is accepted. |
+| `MIZUKI_UPDATER_PROMOTION_SOAK_MS`                                   | `120000`; exact candidate stays continuously healthy before completion.                                              |
+| `MIZUKI_UPDATER_PROMOTION_TIMEOUT_MS`                                | `600000`; bounded verification ends in rollback, never implicit completion.                                          |
 
-The updater never receives signer custody, signer auth, treasury, x402, gateway, or API admin secrets. The API observes signed updater evidence with a read-only token; it cannot propose, approve, mutate promotion control, merge, deploy, or roll back an upgrade. Promotion control is database-backed and closed by default. Missing proposal, review, GitHub App, or deployment-controller inputs do not prevent the private service from binding, migrating its database, and serving liveness; `/readyz` lists only missing variable names and remains `503`, proposal submission is rejected, recovery does not start, and promotion cannot be enabled. Once configured, readiness also authenticates both the GitHub App and the side-effect-free deployment-controller endpoint. The external release operator must enable an exact revision with a reason through authenticated `PUT /v1/admin/promotion-control`; close it again after the observed release window. Promotion admission and control mutation serialize through one database advisory gate. A closed control blocks only a new promotion hook. Health monitoring and rollback continue for an already promoted candidate.
+The updater never receives signer custody, signer auth, treasury, x402, gateway, or API admin secrets. The API observes signed updater evidence with a read-only token; it cannot propose, approve, mutate promotion control, merge, deploy, or roll back an upgrade. Promotion control is database-backed and closed by default. Missing proposal, review, GitHub App, or deployment-controller inputs do not prevent the private service from binding, migrating its database, and serving liveness; `/readyz` lists only missing variable names and remains `503`, proposal submission is rejected, recovery does not start, and promotion cannot be enabled. Once configured, readiness also authenticates both the GitHub App and the side-effect-free deployment-controller endpoint. The external release operator must enable an exact revision with a reason through authenticated `PUT /v1/admin/promotion-control`; close it again after the observed release window. Promotion admission and control mutation serialize through one database advisory gate. A closed control blocks both merge and a new promotion hook. Health monitoring and rollback continue for an already promoted candidate.
 
-Render prompts for `sync: false` values only during initial Blueprint creation. When adding `MIZUKI_UPDATER_DEPLOY_READINESS_URL` to an existing Blueprint, set it manually before syncing or deploying, then confirm updater `/readyz` authenticates the deployment controller.
+The Blueprint links the controller host and bearer credential directly from the private service. Confirm updater `/readyz` authenticates the controller before enabling a promotion revision.
 
 Promotion hook success enters durable health verification. The production endpoint must report `environment: production`, the exact candidate and merge SHAs, the persisted promotion operation ID, and `active: true` for every healthy observation. Shadow evidence cannot satisfy this gate. Regression, timeout, or exhausted retries invokes rollback before the record can become `completed`.
+
+## Deployment controller
+
+| Variable                                                                       | Pre-deploy proof                                                                                                                                                                                            |
+| ------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MIZUKI_DEPLOY_AUTH_TOKEN`                                                     | Generated only on the controller and linked only to the updater; every controller route rejects an invalid value.                                                                                           |
+| `MIZUKI_DEPLOY_DATABASE_URL`                                                   | Dedicated Postgres; migration checksums, operation replay, restart reconciliation, backup, and restore pass.                                                                                                |
+| Deployment database transport, timeout, and pool settings                      | Private Render connection with TLS disabled, `10000`, and `8`; public database hosts fail configuration.                                                                                                    |
+| `MIZUKI_DEPLOY_REPOSITORY`                                                     | Exactly `open-covenant/covenant`; request and both Render service records match.                                                                                                                            |
+| `MIZUKI_DEPLOY_IMAGE_REPOSITORY`                                               | Exactly `ghcr.io/open-covenant/covenant/mizuki`, without a tag or digest; every deployment appends the reviewed digest.                                                                                     |
+| `MIZUKI_DEPLOY_RENDER_API_KEY`                                                 | Dedicated least-access account credential; absent from responses, logs, updater, signer, gateway, runtime, and web.                                                                                         |
+| `MIZUKI_DEPLOY_RENDER_SHADOW_SERVICE_ID`                                       | Exact private image-backed shadow service ID; differs from production and has automatic deploys disabled.                                                                                                   |
+| `MIZUKI_DEPLOY_RENDER_PRODUCTION_SERVICE_ID`                                   | Exact public image-backed production service ID with automatic deploys disabled.                                                                                                                            |
+| `MIZUKI_DEPLOY_RENDER_ALLOWED_SERVICE_IDS`                                     | Contains exactly the shadow and production IDs, with no third service.                                                                                                                                      |
+| `MIZUKI_DEPLOY_ARTIFACT_ORIGINS`                                               | Exactly GitHub's release page origin and observed signed release-asset origin; the controller validates the one-hop repository/asset path, then streams and verifies exact OCI-manifest length and SHA-256. |
+| `MIZUKI_DEPLOY_SHADOW_PROBE_URL` / `MIZUKI_DEPLOY_PRODUCTION_PROBE_URL`        | Fixed private HTTP shadow URL and exact HTTPS production URL, both ending at the functional-readiness route.                                                                                                |
+| `MIZUKI_DEPLOY_PROBE_TOKEN` / `MIZUKI_DEPLOY_PROBE_TIMEOUT_MS`                 | Generated probe-only token linked into both targets; `10000` ms request bound.                                                                                                                              |
+| `MIZUKI_DEPLOY_RECONCILIATION_GRACE_MS` / `MIZUKI_DEPLOY_MIN_PROMOTION_AGE_MS` | Both `120000`; uncertain calls reconcile before replay and consecutive promotions cannot overlap the soak.                                                                                                  |
+
+The controller is a private service and accepts no service ID, Render URL, command, or executable input. It maps each strict updater request to one of two configured service IDs. Shadow always deploys the reviewed OCI digest to the dedicated shadow service. Promotion records the currently live production deploy before it deploys that same digest to production. Rollback uses Render's rollback endpoint with that recorded deploy ID and does not report completion until the rollback is live, active, and passes the authenticated application probe. The Postgres ledger reserves idempotency keys and action timestamps before every external mutation; after a restart, only one matching Render deploy can satisfy reconciliation.
+
+The Render API key is account-wide rather than scoped to these two services. Use a dedicated account identity with the least workspace access available, then enforce the two exact IDs in all three controller settings. Record the IDs after the image targets exist; Blueprint updates ignore newly added `sync: false` values, so set or rotate these values explicitly in the Dashboard or authenticated API. Confirm the shadow ID resolves to a private image-backed service, production resolves to a web image-backed service, both report the configured repository and automatic deploys off, and controller `/readyz` succeeds. The updater uses the controller's one private origin and fixed `/v1/deployments/*` paths. Do not expose the controller as a public web service.
 
 ## Rotation order
 
 1. Stop new paid intake and reconcile every accepted liability, job, escrow, and signer operation.
 2. Rotate the signer bearer token through the Blueprint link and confirm unauthorized calls fail.
 3. Rotate gateway and updater read tokens independently and repeat their negative authorization tests.
-4. Rotate GitHub App keys and webhook secret, then replay a signed delivery.
-5. Rotate model, sandbox, ClawPump, RPC, and price-source credentials independently.
-6. Rotate refund custody, escrow custody, and job authority separately. Update the matching public setting atomically and run both canaries again before reopening intake.
-7. Record role, timestamp, old fingerprint, and new fingerprint. Never record secret material.
+4. Rotate controller route authentication and the application probe token separately; redeploy both image targets after changing the linked probe value.
+5. Rotate the GHCR read credential, verify both pinned baseline digests remain pullable, then revoke the old credential.
+6. Rotate GitHub App keys and webhook secret, then replay a signed delivery.
+7. Rotate model, sandbox, ClawPump, RPC, and price-source credentials independently.
+8. Rotate refund custody, escrow custody, and job authority separately. Update the matching public setting atomically and run both canaries again before reopening intake.
+9. Record role, timestamp, old fingerprint, and new fingerprint. Never record secret material.

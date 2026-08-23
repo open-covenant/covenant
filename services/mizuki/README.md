@@ -46,7 +46,7 @@ Copy `.env.example` into the deployment secret manager. Do not commit a populate
 
 The coding gateway needs `CODER_BACKEND=usepod`, a pinned `CODER_MODEL`, `USEPOD_API_KEY`, `E2B_API_KEY`, authenticated access, and persistent ledger/run-store paths. Mizuki needs a dedicated Postgres database, GitHub App credentials, the x402 treasury, a distinct reviewer route, the private policy-signer link, and a dedicated refund-liability authority key.
 
-Before mainnet, run `pnpm --filter @covenant/mizuki benchmark -- cases.json` against a file of `{name, repositoryUrl, baseSha, prompt, validationCommands}` cases. Keep the JSON report as the route/cost receipt. The benchmark exits nonzero if any route fails.
+Before mainnet, run `pnpm --filter @covenant/mizuki benchmark -- cases.json` against a file of `{name, repositoryUrl, baseSha, prompt, validationCommands, maxCostUsd}` cases. `maxCostUsd` defaults to the Micro ceiling of `0.8` and cannot exceed the Standard ceiling of `4`. Each case uses a unique idempotency key and passes that explicit all-in cap to the gateway. Keep the JSON report, including provider and cost receipts, as the route evidence. The benchmark exits nonzero if any route fails.
 
 ## HTTP and MCP
 

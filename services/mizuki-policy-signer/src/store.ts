@@ -23,6 +23,13 @@ export interface StoreStats {
   byStatus: Partial<Record<OperationStatus, number>>;
 }
 
+export interface RefundLiabilityDeliveryBinding {
+  reviewedHeadSha: string;
+  reviewedBaseSha: string;
+  reviewedBaseRef: string;
+  reviewedDiffHash: string;
+}
+
 export interface OperationStore {
   migrate(): Promise<void>;
   registerRefundLiability(
@@ -32,6 +39,14 @@ export interface OperationStore {
     now: Date,
   ): Promise<RefundLiability>;
   getRefundLiability(settlementSignature: string): Promise<RefundLiability | null>;
+  bindRefundLiabilityDelivery(
+    liabilityId: string,
+    idempotencyKey: string,
+    requestHash: string,
+    bindingHash: string,
+    binding: RefundLiabilityDeliveryBinding,
+    now: Date,
+  ): Promise<RefundLiability>;
   dischargeRefundLiability(
     liabilityId: string,
     idempotencyKey: string,
@@ -85,6 +100,7 @@ export class InMemoryOperationStore implements OperationStore {
   private readonly refundLiabilities = new Map<string, RefundLiability>();
   private readonly liabilityByIdempotency = new Map<string, string>();
   private readonly liabilityByJob = new Map<string, string>();
+  private readonly liabilityDeliveryByIdempotency = new Map<string, string>();
   private readonly liabilityDischargeByIdempotency = new Map<string, string>();
   private tail: Promise<void> = Promise.resolve();
 
@@ -158,6 +174,70 @@ export class InMemoryOperationStore implements OperationStore {
     return this.exclusive(() => {
       const liability = this.refundLiabilities.get(settlementSignature);
       return liability ? cloneLiability(liability) : null;
+    });
+  }
+
+  async bindRefundLiabilityDelivery(
+    liabilityId: string,
+    idempotencyKey: string,
+    requestHash: string,
+    bindingHash: string,
+    binding: RefundLiabilityDeliveryBinding,
+    now: Date,
+  ): Promise<RefundLiability> {
+    return this.exclusive(() => {
+      const liability = [...this.refundLiabilities.values()].find(
+        (entry) => entry.id === liabilityId,
+      );
+      if (!liability) {
+        throw new PolicyError('refund_liability_not_found', 'Refund liability was not found', 404);
+      }
+      const idempotentLiabilityId = this.liabilityDeliveryByIdempotency.get(idempotencyKey);
+      if (idempotentLiabilityId && idempotentLiabilityId !== liabilityId) {
+        throw new PolicyError(
+          'idempotency_conflict',
+          'Idempotency key was already used for a different request',
+          409,
+        );
+      }
+      if (liability.deliveryBoundAt) {
+        if (
+          liability.deliveryBindingIdempotencyKey === idempotencyKey &&
+          liability.deliveryBindingRequestHash === requestHash
+        ) {
+          return cloneLiability(liability);
+        }
+        throw new PolicyError(
+          'refund_liability_delivery_bound',
+          'Refund liability already has an immutable delivery binding',
+          409,
+        );
+      }
+      if (liability.dischargedAt) {
+        throw new PolicyError(
+          'refund_liability_discharged',
+          'Discharged refund liability cannot be rebound',
+          409,
+        );
+      }
+      const refund = this.lookup(this.byResource.get(`refund:${liability.settlementSignature}`));
+      if (refund && refund.status !== 'rejected') {
+        throw new PolicyError(
+          'refund_already_started',
+          'Refund liability cannot be bound after refund execution starts',
+          409,
+        );
+      }
+      liability.reviewedHeadSha = binding.reviewedHeadSha;
+      liability.reviewedBaseSha = binding.reviewedBaseSha;
+      liability.reviewedBaseRef = binding.reviewedBaseRef;
+      liability.reviewedDiffHash = binding.reviewedDiffHash;
+      liability.deliveryBoundAt = new Date(Math.floor(now.getTime() / 1_000) * 1_000);
+      liability.deliveryBindingIdempotencyKey = idempotencyKey;
+      liability.deliveryBindingRequestHash = requestHash;
+      liability.deliveryBindingHash = bindingHash;
+      this.liabilityDeliveryByIdempotency.set(idempotencyKey, liability.id);
+      return cloneLiability(liability);
     });
   }
 
@@ -669,6 +749,8 @@ function cloneGrant(grant: GitHubIdentityGrant): GitHubIdentityGrant {
 function cloneLiability(liability: RefundLiability): RefundLiability {
   return {
     ...liability,
+    repositoryAuthorizedAt: new Date(liability.repositoryAuthorizedAt),
+    deliveryBoundAt: liability.deliveryBoundAt ? new Date(liability.deliveryBoundAt) : null,
     createdAt: new Date(liability.createdAt),
     dischargedAt: liability.dischargedAt ? new Date(liability.dischargedAt) : null,
     dischargeEvidence: liability.dischargeEvidence

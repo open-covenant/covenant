@@ -7,6 +7,7 @@ import {
   bindEscrowRequestSchema,
   createEscrowRequestSchema,
   refundAuthorizationMessage,
+  refundDeliveryBindingAuthorizationMessage,
   refundDischargeAuthorizationMessage,
   refundRequestSchema,
   releaseEscrowRequestSchema,
@@ -303,6 +304,16 @@ describe('signer HTTP service', () => {
     const liability = (await registration.json()) as { id: string };
     expect(registration.status).toBe(201);
 
+    const binding = await fetch(
+      `${origin}/v1/refund-liabilities/${liability.id}/delivery-bindings`,
+      {
+        method: 'POST',
+        headers: mutationHeaders('liability-discharge-bind'),
+        body: JSON.stringify(signedDeliveryBindingRequest('job-discharge', SIGNATURE)),
+      },
+    );
+    expect(binding.status).toBe(200);
+
     const discharge = await fetch(`${origin}/v1/refund-liabilities/${liability.id}/discharge`, {
       method: 'POST',
       headers: mutationHeaders('liability-discharge-complete'),
@@ -332,11 +343,17 @@ describe('strict public schemas', () => {
     ).toBe(false);
   });
 
-  it('does not accept caller-derived merge receipts', () => {
-    expect(releaseEscrowRequestSchema.safeParse({ pullRequestNumber: 23 }).success).toBe(true);
+  it('requires the reviewed revision while rejecting caller-derived merge receipts', () => {
+    const reviewed = {
+      pullRequestNumber: 23,
+      reviewedHeadSha: 'b'.repeat(40),
+      reviewedDiffHash: 'c'.repeat(64),
+    };
+    expect(releaseEscrowRequestSchema.safeParse(reviewed).success).toBe(true);
+    expect(releaseEscrowRequestSchema.safeParse({ pullRequestNumber: 23 }).success).toBe(false);
     expect(
       releaseEscrowRequestSchema.safeParse({
-        pullRequestNumber: 23,
+        ...reviewed,
         mergeReceiptHash: 'a'.repeat(64),
       }).success,
     ).toBe(false);
@@ -382,7 +399,21 @@ function signedRefundRequest(
   settlementSignature: string,
 ) {
   const authorizationExpiresAt = new Date(Date.now() + 10 * 60 * 1_000).toISOString();
-  const unsigned = { jobId, settlementSignature, authorizationExpiresAt };
+  const unsigned = {
+    jobId,
+    settlementSignature,
+    ...(action === 'register'
+      ? {
+          repository: 'owner/repository',
+          issueNumber: 17,
+          baseRef: 'main',
+          baseSha: 'd'.repeat(40),
+          repositoryAuthorizedAt: '2026-08-22T11:00:00.000Z',
+          authorizationEvidenceHash: 'e'.repeat(64),
+        }
+      : {}),
+    authorizationExpiresAt,
+  };
   return {
     ...unsigned,
     authorizationSignature: signWithKey(
@@ -398,7 +429,13 @@ function signedDischargeRequest(jobId: string, settlementSignature: string) {
     jobId,
     settlementSignature,
     repository: 'owner/repository',
+    issueNumber: 17,
     pullRequestNumber: 23,
+    deliveredCommitSha: 'a'.repeat(40),
+    reviewedHeadSha: 'a'.repeat(40),
+    reviewedBaseSha: 'd'.repeat(40),
+    reviewedBaseRef: 'main',
+    reviewedDiffHash: 'f'.repeat(64),
     authorizationExpiresAt,
   };
   return {
@@ -406,6 +443,26 @@ function signedDischargeRequest(jobId: string, settlementSignature: string) {
     authorizationSignature: signWithKey(
       JOB_AUTHORITY,
       refundDischargeAuthorizationMessage(unsigned),
+    ),
+  };
+}
+
+function signedDeliveryBindingRequest(jobId: string, settlementSignature: string) {
+  const authorizationExpiresAt = new Date(Date.now() + 10 * 60 * 1_000).toISOString();
+  const unsigned = {
+    jobId,
+    settlementSignature,
+    reviewedHeadSha: 'a'.repeat(40),
+    reviewedBaseSha: 'd'.repeat(40),
+    reviewedBaseRef: 'main',
+    reviewedDiffHash: 'f'.repeat(64),
+    authorizationExpiresAt,
+  };
+  return {
+    ...unsigned,
+    authorizationSignature: signWithKey(
+      JOB_AUTHORITY,
+      refundDeliveryBindingAuthorizationMessage(unsigned),
     ),
   };
 }

@@ -4,6 +4,7 @@ import { z, ZodError, type ZodType } from 'zod';
 import {
   bindChallengeRequestSchema,
   bindEscrowRequestSchema,
+  bindRefundLiabilityDeliveryRequestSchema,
   createEscrowRequestSchema,
   dischargeRefundLiabilityRequestSchema,
   githubIdentityGrantRequestSchema,
@@ -120,6 +121,19 @@ async function route(
     const liability = await deps.service.dischargeRefundLiability(
       operationIdSchema.parse(dischargeLiability[1]),
       await parseBody(request, dischargeRefundLiabilityRequestSchema),
+      idempotencyKey(request),
+    );
+    writeJson(response, 200, refundLiabilityView(liability));
+    return;
+  }
+  const bindLiabilityDelivery = url.pathname.match(
+    /^\/v1\/refund-liabilities\/([0-9a-f-]+)\/delivery-bindings$/i,
+  );
+  if (method === 'POST' && bindLiabilityDelivery) {
+    deps.metrics.increment('requests');
+    const liability = await deps.service.bindRefundLiabilityDelivery(
+      operationIdSchema.parse(bindLiabilityDelivery[1]),
+      await parseBody(request, bindRefundLiabilityDeliveryRequestSchema),
       idempotencyKey(request),
     );
     writeJson(response, 200, refundLiabilityView(liability));

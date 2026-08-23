@@ -8,7 +8,12 @@ import type {
   ReserveOperation,
 } from './domain.js';
 import { PolicyError } from './domain.js';
-import type { OperationPatch, OperationStore, StoreStats } from './store.js';
+import type {
+  OperationPatch,
+  OperationStore,
+  RefundLiabilityDeliveryBinding,
+  StoreStats,
+} from './store.js';
 
 const SIGNER_SCHEMA = `
       CREATE TABLE IF NOT EXISTS mizuki_signer_operations (
@@ -70,6 +75,20 @@ const SIGNER_SCHEMA = `
         request_hash text NOT NULL,
         job_id text NOT NULL UNIQUE,
         settlement_signature text NOT NULL UNIQUE,
+        repository text NOT NULL,
+        issue_number integer NOT NULL CHECK (issue_number > 0),
+        base_ref text NOT NULL,
+        base_sha text NOT NULL CHECK (base_sha ~ '^[a-f0-9]{40,64}$'),
+        repository_authorized_at timestamptz NOT NULL,
+        authorization_evidence_hash text NOT NULL CHECK (authorization_evidence_hash ~ '^[a-f0-9]{64}$'),
+        reviewed_head_sha text CHECK (reviewed_head_sha ~ '^[a-f0-9]{40,64}$'),
+        reviewed_base_sha text CHECK (reviewed_base_sha ~ '^[a-f0-9]{40,64}$'),
+        reviewed_base_ref text,
+        reviewed_diff_hash text CHECK (reviewed_diff_hash ~ '^[a-f0-9]{64}$'),
+        delivery_bound_at timestamptz,
+        delivery_binding_idempotency_key text,
+        delivery_binding_request_hash text,
+        delivery_binding_hash text,
         payer text NOT NULL,
         treasury text NOT NULL,
         mint text NOT NULL,
@@ -86,14 +105,75 @@ const SIGNER_SCHEMA = `
         discharge_request_hash text
       );
       ALTER TABLE mizuki_signer_refund_liabilities
+        ADD COLUMN IF NOT EXISTS repository text,
+        ADD COLUMN IF NOT EXISTS issue_number integer,
+        ADD COLUMN IF NOT EXISTS base_ref text,
+        ADD COLUMN IF NOT EXISTS base_sha text,
+        ADD COLUMN IF NOT EXISTS repository_authorized_at timestamptz,
+        ADD COLUMN IF NOT EXISTS authorization_evidence_hash text,
+        ADD COLUMN IF NOT EXISTS reviewed_head_sha text,
+        ADD COLUMN IF NOT EXISTS reviewed_base_sha text,
+        ADD COLUMN IF NOT EXISTS reviewed_base_ref text,
+        ADD COLUMN IF NOT EXISTS reviewed_diff_hash text,
+        ADD COLUMN IF NOT EXISTS delivery_bound_at timestamptz,
+        ADD COLUMN IF NOT EXISTS delivery_binding_idempotency_key text,
+        ADD COLUMN IF NOT EXISTS delivery_binding_request_hash text,
+        ADD COLUMN IF NOT EXISTS delivery_binding_hash text,
         ADD COLUMN IF NOT EXISTS discharged_at timestamptz,
         ADD COLUMN IF NOT EXISTS discharge_evidence_hash text,
         ADD COLUMN IF NOT EXISTS discharge_evidence jsonb,
         ADD COLUMN IF NOT EXISTS discharge_idempotency_key text,
         ADD COLUMN IF NOT EXISTS discharge_request_hash text;
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1
+            FROM mizuki_signer_refund_liabilities
+           WHERE repository IS NULL
+              OR issue_number IS NULL
+              OR base_ref IS NULL
+              OR base_sha IS NULL
+              OR repository_authorized_at IS NULL
+              OR authorization_evidence_hash IS NULL
+        ) THEN
+          RAISE EXCEPTION 'existing refund liabilities lack immutable delivery policy';
+        END IF;
+      END $$;
+      ALTER TABLE mizuki_signer_refund_liabilities
+        ALTER COLUMN repository SET NOT NULL,
+        ALTER COLUMN issue_number SET NOT NULL,
+        ALTER COLUMN base_ref SET NOT NULL,
+        ALTER COLUMN base_sha SET NOT NULL,
+        ALTER COLUMN repository_authorized_at SET NOT NULL,
+        ALTER COLUMN authorization_evidence_hash SET NOT NULL;
       CREATE UNIQUE INDEX IF NOT EXISTS mizuki_signer_refund_discharge_idempotency
         ON mizuki_signer_refund_liabilities (discharge_idempotency_key)
         WHERE discharge_idempotency_key IS NOT NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS mizuki_signer_refund_delivery_idempotency
+        ON mizuki_signer_refund_liabilities (delivery_binding_idempotency_key)
+        WHERE delivery_binding_idempotency_key IS NOT NULL;
+      ALTER TABLE mizuki_signer_refund_liabilities
+        DROP CONSTRAINT IF EXISTS mizuki_signer_refund_delivery_binding_complete;
+      ALTER TABLE mizuki_signer_refund_liabilities
+        ADD CONSTRAINT mizuki_signer_refund_delivery_binding_complete CHECK (
+          (delivery_bound_at IS NULL
+            AND reviewed_head_sha IS NULL
+            AND reviewed_base_sha IS NULL
+            AND reviewed_base_ref IS NULL
+            AND reviewed_diff_hash IS NULL
+            AND delivery_binding_idempotency_key IS NULL
+            AND delivery_binding_request_hash IS NULL
+            AND delivery_binding_hash IS NULL)
+          OR
+          (delivery_bound_at IS NOT NULL
+            AND reviewed_head_sha ~ '^[a-f0-9]{40,64}$'
+            AND reviewed_base_sha ~ '^[a-f0-9]{40,64}$'
+            AND reviewed_base_ref IS NOT NULL
+            AND reviewed_diff_hash ~ '^[a-f0-9]{64}$'
+            AND delivery_binding_idempotency_key IS NOT NULL
+            AND delivery_binding_request_hash ~ '^[a-f0-9]{64}$'
+            AND delivery_binding_hash ~ '^[a-f0-9]{64}$')
+        );
       CREATE TABLE IF NOT EXISTS mizuki_signer_bind_challenges (
         id uuid PRIMARY KEY,
         escrow_operation_id uuid NOT NULL REFERENCES mizuki_signer_operations(id),
@@ -274,9 +354,10 @@ export class PostgresOperationStore implements OperationStore {
       const result = await client.query(
         `INSERT INTO mizuki_signer_refund_liabilities (
            id, idempotency_key, request_hash, job_id, settlement_signature, payer,
-           treasury, mint, raw_amount, decimals, settlement_slot,
-           amount_usd_cents, settlement_block_time, created_at
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, clock_timestamp())
+           repository, issue_number, base_ref, base_sha, repository_authorized_at,
+           authorization_evidence_hash, treasury, mint, raw_amount, decimals,
+           settlement_slot, amount_usd_cents, settlement_block_time, created_at
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, clock_timestamp())
          RETURNING *`,
         [
           liability.id,
@@ -285,6 +366,12 @@ export class PostgresOperationStore implements OperationStore {
           liability.jobId,
           liability.settlementSignature,
           liability.payer,
+          liability.repository,
+          liability.issueNumber,
+          liability.baseRef,
+          liability.baseSha,
+          liability.repositoryAuthorizedAt,
+          liability.authorizationEvidenceHash,
           liability.treasury,
           liability.mint,
           liability.rawAmount,
@@ -310,6 +397,103 @@ export class PostgresOperationStore implements OperationStore {
       [settlementSignature],
     );
     return result.rows[0] ? mapLiability(result.rows[0]) : null;
+  }
+
+  async bindRefundLiabilityDelivery(
+    liabilityId: string,
+    idempotencyKey: string,
+    requestHash: string,
+    bindingHash: string,
+    binding: RefundLiabilityDeliveryBinding,
+    _now: Date,
+  ): Promise<RefundLiability> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
+      const result = await client.query(
+        'SELECT * FROM mizuki_signer_refund_liabilities WHERE id = $1 FOR UPDATE',
+        [liabilityId],
+      );
+      if (!result.rows[0]) {
+        throw new PolicyError('refund_liability_not_found', 'Refund liability was not found', 404);
+      }
+      const liability = mapLiability(result.rows[0]);
+      const idempotent = await client.query<{ id: string }>(
+        `SELECT id FROM mizuki_signer_refund_liabilities
+          WHERE delivery_binding_idempotency_key = $1 AND id <> $2`,
+        [idempotencyKey, liabilityId],
+      );
+      if (idempotent.rows[0]) {
+        throw new PolicyError(
+          'idempotency_conflict',
+          'Idempotency key was already used for a different request',
+          409,
+        );
+      }
+      if (liability.deliveryBoundAt) {
+        if (
+          liability.deliveryBindingIdempotencyKey === idempotencyKey &&
+          liability.deliveryBindingRequestHash === requestHash
+        ) {
+          await client.query('COMMIT');
+          return liability;
+        }
+        throw new PolicyError(
+          'refund_liability_delivery_bound',
+          'Refund liability already has an immutable delivery binding',
+          409,
+        );
+      }
+      if (liability.dischargedAt) {
+        throw new PolicyError(
+          'refund_liability_discharged',
+          'Discharged refund liability cannot be rebound',
+          409,
+        );
+      }
+      const refund = await client.query<{ id: string }>(
+        `SELECT id FROM mizuki_signer_operations
+          WHERE resource_key = $1 AND status <> 'rejected'`,
+        [`refund:${liability.settlementSignature}`],
+      );
+      if (refund.rows[0]) {
+        throw new PolicyError(
+          'refund_already_started',
+          'Refund liability cannot be bound after refund execution starts',
+          409,
+        );
+      }
+      const updated = await client.query(
+        `UPDATE mizuki_signer_refund_liabilities
+            SET reviewed_head_sha = $2,
+                reviewed_base_sha = $3,
+                reviewed_base_ref = $4,
+                reviewed_diff_hash = $5,
+                delivery_bound_at = date_trunc('second', clock_timestamp()),
+                delivery_binding_idempotency_key = $6,
+                delivery_binding_request_hash = $7,
+                delivery_binding_hash = $8
+          WHERE id = $1
+        RETURNING *`,
+        [
+          liabilityId,
+          binding.reviewedHeadSha,
+          binding.reviewedBaseSha,
+          binding.reviewedBaseRef,
+          binding.reviewedDiffHash,
+          idempotencyKey,
+          requestHash,
+          bindingHash,
+        ],
+      );
+      await client.query('COMMIT');
+      return mapLiability(updated.rows[0]);
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async dischargeRefundLiability(
@@ -978,6 +1162,20 @@ function mapLiability(row: QueryResultRow): RefundLiability {
     requestHash: row.request_hash,
     jobId: row.job_id,
     settlementSignature: row.settlement_signature,
+    repository: row.repository,
+    issueNumber: row.issue_number,
+    baseRef: row.base_ref,
+    baseSha: row.base_sha,
+    repositoryAuthorizedAt: new Date(row.repository_authorized_at),
+    authorizationEvidenceHash: row.authorization_evidence_hash,
+    reviewedHeadSha: row.reviewed_head_sha,
+    reviewedBaseSha: row.reviewed_base_sha,
+    reviewedBaseRef: row.reviewed_base_ref,
+    reviewedDiffHash: row.reviewed_diff_hash,
+    deliveryBoundAt: row.delivery_bound_at ? new Date(row.delivery_bound_at) : null,
+    deliveryBindingIdempotencyKey: row.delivery_binding_idempotency_key,
+    deliveryBindingRequestHash: row.delivery_binding_request_hash,
+    deliveryBindingHash: row.delivery_binding_hash,
     payer: row.payer,
     treasury: row.treasury,
     mint: row.mint,

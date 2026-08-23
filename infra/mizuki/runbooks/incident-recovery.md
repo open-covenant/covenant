@@ -20,8 +20,8 @@ P1 covers signer unavailable, RPC unavailable, price oracle unavailable, refund 
 
 1. Read `GET /v1/admin/promotion-control` with an updater credential and record the current revision.
 2. Send `PUT /v1/admin/promotion-control` with the write/admin token, `promotionsEnabled: false`, that `expectedRevision`, and an incident-specific reason. A `409` means another operator changed the control; read it again rather than overwriting it.
-3. Wait for `200` and confirm the returned control is closed. Mutation and promotion admission share one database gate, so a successful response proves no promotion hook is still in flight and no new hook can begin.
-4. If the request reaches its timeout, assume a promotion hook may be in flight. Keep the control closed, inspect the upgrade in `promoting` or `verifying_promotion`, and reconcile its stable hook idempotency key with the deployment system. Do not submit a manual promotion or reopen control until the operation ID and active production revision are known.
+3. Wait for `200` and confirm the returned control is closed. Mutation, merge admission, and promotion admission share one database gate, so a successful response proves no merge or promotion hook is still in flight and neither can begin.
+4. If the request reaches its timeout, assume a merge or promotion may be in flight. Keep the control closed, inspect the upgrade in `merging`, `promoting`, or `verifying_promotion`, and reconcile GitHub state plus the stable hook idempotency key with the deployment system. Do not submit a manual promotion or reopen control until the merge receipt, operation ID, and active production revision are known.
 5. Do not stop updater recovery. A closed control blocks a new promotion call but deliberately preserves production-health monitoring and rollback for any candidate already promoted.
 
 ## Signer unavailable

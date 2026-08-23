@@ -5,7 +5,7 @@
 Do not deploy to mainnet until all of the following are true:
 
 - `./scripts/test.sh` passes from a clean checkout.
-- The tested artifact reports SBPFv3 ELF flags (`0x3`) and the build log contains no unresolved-symbol diagnostics.
+- The tested artifact reports SBPFv2 ELF flags (`0x2`) and the build log contains no unresolved-symbol diagnostics.
 - The policy signer passes its conformance test against `abi/mizuki-escrow-v1.json`.
 - A containerized `solana-verify build` produces the approved executable hash.
 - Devnet canaries cover fund-before-advertise, bind, exact release, unbound refund, bound refund, wrong claimant, expired release, replay, and state/vault rent recovery.
@@ -35,7 +35,7 @@ The paths above are illustrative. Use the project's actual offline signing proce
 
 Record the Git commit, `Cargo.lock`, Solana CLI version, `solana-verify` version, SHA-256, and Solana executable hash in the release receipt.
 
-The local production gate requires `cargo-build-sbf >= 4.0.0` and `platform-tools >= 1.53` and always supplies `--arch v3`. The verifiable build is pinned to `solanafoundation/solana-verifiable-build:4.0.0` at digest `sha256:0b4e3716fad9ca4b4aac3e3f977f43aad93a18c22296c0c0f44fc22e644bdd68`. Review and update that digest explicitly; never accept a mutable image tag as release evidence.
+The local production gate requires `cargo-build-sbf >= 4.0.0` and `platform-tools >= 1.53` and always supplies `--arch v2`. The verifiable build is pinned to `solanafoundation/solana-verifiable-build:4.0.0` at digest `sha256:0b4e3716fad9ca4b4aac3e3f977f43aad93a18c22296c0c0f44fc22e644bdd68`. Review and update that digest explicitly; never accept a mutable image tag as release evidence.
 
 ## Devnet
 
@@ -50,7 +50,7 @@ solana program deploy \
 
 After all canaries, either finalize the devnet program or abandon it. Never reuse any devnet program-ID, deploy, fee-payer, or upgrade-authority key material in production.
 
-Download the CI artifact and its checksum instead of rebuilding the canary input locally. Run the policy signer's devnet artifact canary in dry-run mode, review the redacted receipt, then rerun with `--execute` and a fresh receipt path. The runner independently checks the devnet genesis hash and requires finalized loader-v3 bytes to equal that exact downloaded SBPFv3 artifact before it can submit a transaction. It does not deploy, create keys, request funds, or accept a mainnet RPC. Usage and evidence fields are documented in `services/mizuki-policy-signer/README.md`.
+Download the CI artifact and its checksum instead of rebuilding the canary input locally. Run the policy signer's devnet artifact canary in dry-run mode, review the redacted receipt, then rerun with `--execute` and a fresh receipt path. The runner independently checks the devnet genesis hash and requires finalized upgradeable-loader-v3 program data to equal that exact downloaded SBPFv2 artifact before it can submit a transaction. It does not deploy, create keys, request funds, or accept a mainnet RPC. Usage and evidence fields are documented in `services/mizuki-policy-signer/README.md`.
 
 ## Mainnet immutable deployment
 

@@ -9,6 +9,12 @@ export const externalIdSchema = z
   .max(128)
   .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 export const hashSchema = z.string().regex(/^[a-f0-9]{64}$/);
+export const gitCommitShaSchema = z.string().regex(/^[a-f0-9]{40,64}$/);
+export const gitRefSchema = z
+  .string()
+  .min(1)
+  .max(255)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._/-]*$/);
 export const repositorySchema = z
   .string()
   .min(3)
@@ -34,14 +40,45 @@ export const refundRequestSchema = z
   })
   .strict();
 
-export const registerRefundLiabilityRequestSchema = refundRequestSchema;
+export const registerRefundLiabilityRequestSchema = refundRequestSchema
+  .extend({
+    repository: repositorySchema,
+    issueNumber: z.number().int().positive().max(2_147_483_647),
+    baseRef: gitRefSchema,
+    baseSha: gitCommitShaSchema,
+    repositoryAuthorizedAt: z.string().datetime({ offset: true }),
+    authorizationEvidenceHash: hashSchema,
+  })
+  .strict();
 
 export const dischargeRefundLiabilityRequestSchema = z
   .object({
     jobId: externalIdSchema,
     settlementSignature: signatureSchema,
     repository: repositorySchema,
+    issueNumber: z.number().int().positive().max(2_147_483_647),
     pullRequestNumber: z.number().int().positive().max(2_147_483_647),
+    deliveredCommitSha: gitCommitShaSchema,
+    reviewedHeadSha: gitCommitShaSchema,
+    reviewedBaseSha: gitCommitShaSchema,
+    reviewedBaseRef: gitRefSchema,
+    reviewedDiffHash: hashSchema,
+    authorizationExpiresAt: z.string().datetime({ offset: true }),
+    authorizationSignature: z
+      .string()
+      .regex(/^[A-Za-z0-9+/]{86}==$/)
+      .refine((value) => Buffer.from(value, 'base64').length === 64),
+  })
+  .strict();
+
+export const bindRefundLiabilityDeliveryRequestSchema = z
+  .object({
+    jobId: externalIdSchema,
+    settlementSignature: signatureSchema,
+    reviewedHeadSha: gitCommitShaSchema,
+    reviewedBaseSha: gitCommitShaSchema,
+    reviewedBaseRef: gitRefSchema,
+    reviewedDiffHash: hashSchema,
     authorizationExpiresAt: z.string().datetime({ offset: true }),
     authorizationSignature: z
       .string()
@@ -87,6 +124,8 @@ export const bindEscrowRequestSchema = z
 export const releaseEscrowRequestSchema = z
   .object({
     pullRequestNumber: z.number().int().positive().max(2_147_483_647),
+    reviewedHeadSha: z.string().regex(/^[a-f0-9]{40,64}$/),
+    reviewedDiffHash: hashSchema,
   })
   .strict();
 
@@ -99,6 +138,9 @@ export const refundEscrowRequestSchema = z
 export type RefundRequest = z.infer<typeof refundRequestSchema>;
 export type RegisterRefundLiabilityRequest = z.infer<typeof registerRefundLiabilityRequestSchema>;
 export type DischargeRefundLiabilityRequest = z.infer<typeof dischargeRefundLiabilityRequestSchema>;
+export type BindRefundLiabilityDeliveryRequest = z.infer<
+  typeof bindRefundLiabilityDeliveryRequestSchema
+>;
 export type CreateEscrowRequest = z.infer<typeof createEscrowRequestSchema>;
 export type BindChallengeRequest = z.infer<typeof bindChallengeRequestSchema>;
 export type GitHubIdentityGrantRequest = z.infer<typeof githubIdentityGrantRequestSchema>;
@@ -186,6 +228,20 @@ export interface RefundLiability {
   requestHash: string;
   jobId: string;
   settlementSignature: string;
+  repository: string;
+  issueNumber: number;
+  baseRef: string;
+  baseSha: string;
+  repositoryAuthorizedAt: Date;
+  authorizationEvidenceHash: string;
+  reviewedHeadSha: string | null;
+  reviewedBaseSha: string | null;
+  reviewedBaseRef: string | null;
+  reviewedDiffHash: string | null;
+  deliveryBoundAt: Date | null;
+  deliveryBindingIdempotencyKey: string | null;
+  deliveryBindingRequestHash: string | null;
+  deliveryBindingHash: string | null;
   payer: string;
   treasury: string;
   mint: string;
@@ -206,6 +262,18 @@ export interface RefundLiabilityView {
   id: string;
   jobId: string;
   settlementSignature: string;
+  repository: string;
+  issueNumber: number;
+  baseRef: string;
+  baseSha: string;
+  repositoryAuthorizedAt: string;
+  authorizationEvidenceHash: string;
+  reviewedHeadSha: string | null;
+  reviewedBaseSha: string | null;
+  reviewedBaseRef: string | null;
+  reviewedDiffHash: string | null;
+  deliveryBoundAt: string | null;
+  deliveryBindingHash: string | null;
   payer: string;
   mint: string;
   rawAmount: string;
@@ -398,6 +466,18 @@ export function refundLiabilityView(liability: RefundLiability): RefundLiability
     id: liability.id,
     jobId: liability.jobId,
     settlementSignature: liability.settlementSignature,
+    repository: liability.repository,
+    issueNumber: liability.issueNumber,
+    baseRef: liability.baseRef,
+    baseSha: liability.baseSha,
+    repositoryAuthorizedAt: liability.repositoryAuthorizedAt.toISOString(),
+    authorizationEvidenceHash: liability.authorizationEvidenceHash,
+    reviewedHeadSha: liability.reviewedHeadSha,
+    reviewedBaseSha: liability.reviewedBaseSha,
+    reviewedBaseRef: liability.reviewedBaseRef,
+    reviewedDiffHash: liability.reviewedDiffHash,
+    deliveryBoundAt: liability.deliveryBoundAt?.toISOString() ?? null,
+    deliveryBindingHash: liability.deliveryBindingHash,
     payer: liability.payer,
     mint: liability.mint,
     rawAmount: liability.rawAmount,
@@ -413,34 +493,89 @@ export function refundLiabilityView(liability: RefundLiability): RefundLiability
 
 export function refundAuthorizationMessage(
   action: 'register' | 'execute',
-  request: Pick<RefundRequest, 'jobId' | 'settlementSignature' | 'authorizationExpiresAt'>,
+  request:
+    | Pick<RefundRequest, 'jobId' | 'settlementSignature' | 'authorizationExpiresAt'>
+    | RegisterRefundLiabilityRequest,
 ): string {
   const title =
     action === 'register'
       ? 'Mizuki refund liability registration'
       : 'Mizuki refund execution authorization';
-  return [
+  const fields = [
     title,
-    'Version: 1',
+    `Version: ${action === 'register' ? 2 : 1}`,
     `Job: ${request.jobId}`,
     `Settlement: ${request.settlementSignature}`,
-    `Expires At: ${new Date(request.authorizationExpiresAt).toISOString()}`,
-  ].join('\n');
+  ];
+  if (action === 'register') {
+    const registration = request as RegisterRefundLiabilityRequest;
+    fields.push(
+      `Repository: ${registration.repository.toLowerCase()}`,
+      `Issue: ${registration.issueNumber}`,
+      `Base Ref: ${registration.baseRef}`,
+      `Base SHA: ${registration.baseSha}`,
+      `Repository Authorized At: ${new Date(registration.repositoryAuthorizedAt).toISOString()}`,
+      `Authorization Evidence: ${registration.authorizationEvidenceHash}`,
+    );
+  }
+  fields.push(`Expires At: ${new Date(request.authorizationExpiresAt).toISOString()}`);
+  return fields.join('\n');
 }
 
 export function refundDischargeAuthorizationMessage(
   request: Pick<
     DischargeRefundLiabilityRequest,
-    'jobId' | 'settlementSignature' | 'repository' | 'pullRequestNumber' | 'authorizationExpiresAt'
+    | 'jobId'
+    | 'settlementSignature'
+    | 'repository'
+    | 'issueNumber'
+    | 'pullRequestNumber'
+    | 'deliveredCommitSha'
+    | 'reviewedHeadSha'
+    | 'reviewedBaseSha'
+    | 'reviewedBaseRef'
+    | 'reviewedDiffHash'
+    | 'authorizationExpiresAt'
   >,
 ): string {
   return [
     'Mizuki refund liability discharge authorization',
-    'Version: 1',
+    'Version: 2',
     `Job: ${request.jobId}`,
     `Settlement: ${request.settlementSignature}`,
     `Repository: ${request.repository.toLowerCase()}`,
+    `Issue: ${request.issueNumber}`,
     `Pull Request: ${request.pullRequestNumber}`,
+    `Delivered Commit: ${request.deliveredCommitSha}`,
+    `Reviewed Head: ${request.reviewedHeadSha}`,
+    `Reviewed Base SHA: ${request.reviewedBaseSha}`,
+    `Reviewed Base Ref: ${request.reviewedBaseRef}`,
+    `Reviewed Diff: ${request.reviewedDiffHash}`,
+    `Expires At: ${new Date(request.authorizationExpiresAt).toISOString()}`,
+  ].join('\n');
+}
+
+export function refundDeliveryBindingAuthorizationMessage(
+  request: Pick<
+    BindRefundLiabilityDeliveryRequest,
+    | 'jobId'
+    | 'settlementSignature'
+    | 'reviewedHeadSha'
+    | 'reviewedBaseSha'
+    | 'reviewedBaseRef'
+    | 'reviewedDiffHash'
+    | 'authorizationExpiresAt'
+  >,
+): string {
+  return [
+    'Mizuki refund liability delivery binding',
+    'Version: 1',
+    `Job: ${request.jobId}`,
+    `Settlement: ${request.settlementSignature}`,
+    `Reviewed Head: ${request.reviewedHeadSha}`,
+    `Reviewed Base SHA: ${request.reviewedBaseSha}`,
+    `Reviewed Base Ref: ${request.reviewedBaseRef}`,
+    `Reviewed Diff: ${request.reviewedDiffHash}`,
     `Expires At: ${new Date(request.authorizationExpiresAt).toISOString()}`,
   ].join('\n');
 }

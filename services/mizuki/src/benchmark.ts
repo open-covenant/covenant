@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 
 type Case = {
   name: string;
@@ -6,6 +7,7 @@ type Case = {
   baseSha: string;
   prompt: string;
   validationCommands?: string[];
+  maxCostUsd?: number;
 };
 
 const path = process.argv[2];
@@ -20,11 +22,17 @@ const report = [];
 for (const item of cases) {
   const started = Date.now();
   try {
+    const maxCostUsd = item.maxCostUsd ?? 0.8;
+    if (!Number.isFinite(maxCostUsd) || maxCostUsd <= 0 || maxCostUsd > 4) {
+      throw new Error('maxCostUsd must be greater than zero and no more than 4');
+    }
     const submitted = await fetch(`${gateway}/v1/runs`, {
       method: 'POST',
       headers: gatewayHeaders({ 'content-type': 'application/json' }),
       body: JSON.stringify({
+        session_id: `benchmark:${randomUUID()}`,
         input: item.prompt,
+        max_cost_usd: maxCostUsd,
         repository_url: item.repositoryUrl,
         base_sha: item.baseSha,
         validation_commands: item.validationCommands ?? [],
@@ -49,6 +57,8 @@ for (const item of cases) {
       error: state.error,
       durationSeconds: (Date.now() - started) / 1_000,
       usage: state.usage,
+      costUsd: state.costUsd,
+      providerReceipts: state.providerReceipts,
       changedFiles: (artifacts as { changedFiles?: string[] } | undefined)?.changedFiles ?? [],
       validations: (artifacts as { validations?: unknown[] } | undefined)?.validations ?? [],
     });
@@ -76,6 +86,14 @@ async function wait(runId: string) {
       status: string;
       error?: string;
       usage?: { inputTokens: number; outputTokens: number };
+      costUsd?: number;
+      providerReceipts?: Array<{
+        model: string;
+        route: string;
+        providerId?: string;
+        requestId?: string;
+        costMicrounits?: string;
+      }>;
     };
     if (!['queued', 'running'].includes(state.status)) return state;
     await new Promise((resolve) => setTimeout(resolve, 1_000));

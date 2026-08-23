@@ -39,7 +39,7 @@ sha256(utf8("mizuki:escrow:state:v1") || state_bytes)
 
 The program tests load the built SBF artifact into LiteSVM and exercise real System Program CPIs, state transitions, lamport movement, strict expiry boundaries, terminal closure, pre-fund PDA dusting, donation griefing, alternate destinations, wrong authority/accounts/bumps, rebind attempts, malformed data, underfunded vaults, and replay.
 
-The test gate requires `cargo-build-sbf` 4.0.0 or newer with platform-tools 1.53 or newer. It builds with `--arch v3`, rejects unresolved-symbol diagnostics, checks the artifact's ELF flags, and then runs all 25 host and SBF-backed tests against that exact artifact. Set `CARGO_BUILD_SBF_BIN` only when the compatible builder is installed outside `PATH`.
+The test gate requires `cargo-build-sbf` 4.0.0 or newer with platform-tools 1.53 or newer. It builds with `--arch v2`, rejects unresolved-symbol diagnostics, requires ELF flags `0x2`, and then runs all 25 host and SBF-backed tests against that exact artifact. Set `CARGO_BUILD_SBF_BIN` only when the compatible builder is installed outside `PATH`.
 
 For a containerized reproducible build:
 
@@ -61,4 +61,4 @@ Those values must be queried again at quote time. The bounty quote must include 
 
 ## Toolchain
 
-The program pins `solana-program` 3.0.0. The runtime suite pins LiteSVM 0.15.2 and its compatible Agave runtime family at 4.1.2 so the production SBPFv3 executable is tested, not a legacy test-only build. The verifiable build pins the Solana 4.0.0 container by immutable image digest. A finalized devnet canary and an independent `solana-verify` build/hash match remain mandatory before mainnet deployment.
+The program pins `solana-program` 3.0.0. The runtime suite pins LiteSVM 0.15.2 and its compatible Agave runtime family at 4.1.2 so the production SBPFv2 executable is tested. SBPFv2 is selected because it is active on the target cluster; the release gate must be revisited before changing architectures. The verifiable build pins the Solana 4.0.0 container by immutable image digest. A finalized devnet canary and an independent `solana-verify` build/hash match remain mandatory before mainnet deployment.

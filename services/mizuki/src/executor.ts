@@ -1,20 +1,51 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { Config } from './config.js';
 import type { GithubClient } from './github.js';
 import type { FinancialPolicy } from './policy-client.js';
 import { PendingPolicyOperationError } from './policy-client.js';
 import { StateConflictError, type MizukiStore } from './store.js';
-import type { Job, Quote, RunArtifacts } from './types.js';
+import type { Job, ProviderRouteReceipt, Quote, ReviewAttempt, RunArtifacts } from './types.js';
+import {
+  boundedMaxTokens,
+  parseUsePodUsage,
+  publicUsePodReceipt,
+  usePodHeaders,
+  usePodReceipt,
+  usePodUrl,
+} from './usepod.js';
 
-type GatewayRun = {
-  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
-  error?: string;
-  usage?: { inputTokens: number; outputTokens: number };
-  costUsd?: number;
+const safeTokenCount = z
+  .number()
+  .int()
+  .nonnegative()
+  .refine(Number.isSafeInteger, 'token count must be a safe integer');
+const gatewayRunSchema = z.object({
+  status: z.enum(['queued', 'running', 'completed', 'failed', 'cancelled']),
+  error: z.string().optional(),
+  usage: z.object({ inputTokens: safeTokenCount, outputTokens: safeTokenCount }).optional(),
+  costUsd: z.number().nonnegative().finite().optional(),
+});
+type GatewayRun = z.infer<typeof gatewayRunSchema>;
+
+type Review = {
+  approved: boolean;
+  reason: string;
+  inputTokens: number;
+  outputTokens: number;
+  providerReceipt: ProviderRouteReceipt;
+  costUsd: number;
 };
 
-type Review = { approved: boolean; reason: string; inputTokens: number; outputTokens: number };
+type ReviewPhase = 'implementation' | 'repair';
+export type SpendPhase = 'implementation' | 'implementation-review' | 'repair' | 'repair-review';
+
+const PHASE_WEIGHTS: Record<SpendPhase, number> = {
+  implementation: 55,
+  'implementation-review': 15,
+  repair: 20,
+  'repair-review': 10,
+};
 
 const gatewayEvidenceSchema = z
   .object({
@@ -36,10 +67,17 @@ const gatewayReadinessSchema = z
         sandbox: gatewayEvidenceSchema,
       })
       .strict(),
-    failed: z.array(z.enum(['model', 'sandbox', 'stale'])),
+    failed: z.array(z.enum(['model', 'sandbox', 'stale', 'ledger', 'runStore'])),
+    model: z.string().min(1),
     backend: z.enum(['anthropic', 'openai', 'usepod']),
     provider: z.string().min(1),
     persistentRuns: z.boolean(),
+    storage: z
+      .object({
+        ledger: z.literal(true),
+        runStore: z.literal(true),
+      })
+      .strict(),
   })
   .strict();
 
@@ -64,9 +102,12 @@ export class JobProcessor {
     const status = gatewayReadinessSchema.parse(await response.json());
     if (
       !status.ready ||
+      status.model !== this.config.usePodImplementationModel ||
       status.failed.length > 0 ||
       !status.dependencies.model.ok ||
-      !status.dependencies.sandbox.ok
+      !status.dependencies.sandbox.ok ||
+      !status.storage.ledger ||
+      !status.storage.runStore
     ) {
       throw new Error('coding gateway readiness evidence is invalid');
     }
@@ -100,10 +141,16 @@ export class JobProcessor {
         throw new Error('repository head changed after quote; request a new quote');
 
       job = await this.store.transitionJob(id, 'admitted', 'running');
-      let result = await this.run(job.quote, issuePrompt(job.quote));
+      let result = await this.run(
+        id,
+        'implementation',
+        job.quote,
+        issuePrompt(job.quote),
+        phaseBudgetUsd(job.quote.maxCostUsd, variableCostUsd, 'implementation'),
+      );
       inputTokens = result.inputTokens;
       outputTokens = result.outputTokens;
-      variableCostUsd += result.costUsd;
+      variableCostUsd = addUsd(variableCostUsd, result.costUsd);
       await this.store.transitionJob(id, 'running', 'validating', {
         runId: result.runId,
         artifacts: result.artifacts,
@@ -112,27 +159,42 @@ export class JobProcessor {
         estimatedCostUsd: variableCostUsd,
       });
       enforcePolicy(job.quote, result.artifacts);
-      let review = await this.review(job.quote, result.artifacts);
+      let review = await this.review(
+        id,
+        'implementation',
+        job.quote,
+        result.artifacts,
+        phaseBudgetUsd(job.quote.maxCostUsd, variableCostUsd, 'implementation-review'),
+      );
       inputTokens += review.inputTokens;
       outputTokens += review.outputTokens;
-      variableCostUsd += estimateCost(this.config, review.inputTokens, review.outputTokens);
+      variableCostUsd = addUsd(variableCostUsd, review.costUsd);
       await this.recordUsage(id, inputTokens, outputTokens, variableCostUsd);
 
       if (!review.approved) {
         result = await this.run(
+          id,
+          'repair',
           job.quote,
           repairPrompt(job.quote, review.reason),
+          phaseBudgetUsd(job.quote.maxCostUsd, variableCostUsd, 'repair'),
           result.artifacts.patch,
         );
         enforcePolicy(job.quote, result.artifacts);
         inputTokens += result.inputTokens;
         outputTokens += result.outputTokens;
-        variableCostUsd += result.costUsd;
+        variableCostUsd = addUsd(variableCostUsd, result.costUsd);
         await this.recordUsage(id, inputTokens, outputTokens, variableCostUsd);
-        review = await this.review(job.quote, result.artifacts);
+        review = await this.review(
+          id,
+          'repair',
+          job.quote,
+          result.artifacts,
+          phaseBudgetUsd(job.quote.maxCostUsd, variableCostUsd, 'repair-review'),
+        );
         inputTokens += review.inputTokens;
         outputTokens += review.outputTokens;
-        variableCostUsd += estimateCost(this.config, review.inputTokens, review.outputTokens);
+        variableCostUsd = addUsd(variableCostUsd, review.costUsd);
         await this.recordUsage(id, inputTokens, outputTokens, variableCostUsd);
         if (!review.approved) {
           await this.store.transitionJob(id, 'validating', 'rejected', {
@@ -151,6 +213,7 @@ export class JobProcessor {
           reason: review.reason,
           reviewedAt: new Date().toISOString(),
           artifactHash: reviewedArtifactHash,
+          provider: review.providerReceipt,
         },
       });
 
@@ -179,7 +242,10 @@ export class JobProcessor {
         deliveryJob,
         deliveryJob.artifacts,
         async (deliveryCommitSha) => {
-          await this.store.patchJob(id, { deliveryCommitSha });
+          await this.bindDelivery(deliveryJob, deliveryJob.artifacts!, deliveryCommitSha);
+        },
+        async (deliveryEvidence) => {
+          await this.store.patchJob(id, { deliveryEvidence });
         },
       );
       const delivered = await this.store.transitionJob(id, 'validating', 'delivered', {
@@ -192,7 +258,9 @@ export class JobProcessor {
       });
       await this.recordDeliveryReceipts(delivered);
     } catch (cause) {
-      if (cause instanceof GatewayRunError) variableCostUsd += cause.costUsd;
+      if (cause instanceof GatewayRunError || cause instanceof ProviderReviewError) {
+        variableCostUsd = addUsd(variableCostUsd, cause.costUsd);
+      }
       const error = cause instanceof Error ? cause.message : String(cause);
       const current = await this.required(id);
       if (['delivered', 'refund_pending', 'refunded'].includes(current.state)) return;
@@ -278,9 +346,16 @@ export class JobProcessor {
           );
           if (head !== job.quote.baseSha)
             throw new Error('repository changed before delivery recovery');
-          const prUrl = await this.github.publish(job, job.artifacts, async (deliveryCommitSha) => {
-            await this.store.patchJob(job.id, { deliveryCommitSha });
-          });
+          const prUrl = await this.github.publish(
+            job,
+            job.artifacts,
+            async (deliveryCommitSha) => {
+              await this.bindDelivery(job, job.artifacts!, deliveryCommitSha);
+            },
+            async (deliveryEvidence) => {
+              await this.store.patchJob(job.id, { deliveryEvidence });
+            },
+          );
           job = await this.store.transitionJob(job.id, 'validating', 'delivered', { prUrl });
           await this.recordDeliveryReceipts(job);
           delivered += 1;
@@ -312,32 +387,40 @@ export class JobProcessor {
     return { delivered, refunded };
   }
 
-  private async run(quote: Quote, input: string, initialPatch?: string) {
-    const response = await this.request(`${this.config.codingGatewayUrl}/v1/runs`, {
-      method: 'POST',
-      headers: this.gatewayHeaders({ 'content-type': 'application/json' }),
-      body: JSON.stringify({
-        input,
-        repository_url: `https://github.com/${quote.owner}/${quote.repo}`,
-        base_sha: quote.baseSha,
-        validation_commands: quote.validationCommands,
-        initial_patch: initialPatch,
-      }),
-      signal: AbortSignal.timeout(30_000),
+  private async run(
+    jobId: string,
+    phase: 'implementation' | 'repair',
+    quote: Quote,
+    input: string,
+    budgetUsd: number,
+    initialPatch?: string,
+  ) {
+    const runId = await this.submitRun({
+      session_id: `${jobId}:${phase}`,
+      max_cost_usd: budgetUsd,
+      input,
+      repository_url: `https://github.com/${quote.owner}/${quote.repo}`,
+      base_sha: quote.baseSha,
+      validation_commands: quote.validationCommands,
+      initial_patch: initialPatch,
     });
-    if (!response.ok)
-      throw new Error(`coding gateway rejected job: ${response.status} ${await response.text()}`);
-    const { run_id: runId } = (await response.json()) as { run_id: string };
-    const state = await this.wait(runId);
+    const state = await this.wait(runId, budgetUsd);
     if (state.status !== 'completed') {
       throw new GatewayRunError(
         state.error ?? `coding run ${state.status}`,
-        validCost(state.costUsd) ? state.costUsd : 0,
+        state.costUsd ?? budgetUsd,
       );
     }
-    const costUsd = validCost(state.costUsd)
-      ? state.costUsd
-      : estimateCost(this.config, state.usage?.inputTokens ?? 0, state.usage?.outputTokens ?? 0);
+    if (!state.usage) {
+      throw new GatewayRunError('coding gateway omitted completed token usage', budgetUsd);
+    }
+    if (state.costUsd === undefined) {
+      throw new GatewayRunError('coding gateway omitted completed cost', budgetUsd);
+    }
+    const costUsd = state.costUsd;
+    if (costUsd > budgetUsd) {
+      throw new GatewayRunError('coding gateway exceeded its phase spend cap', costUsd);
+    }
     const artifactsResponse = await this.request(
       `${this.config.codingGatewayUrl}/v1/runs/${runId}/artifacts`,
       { headers: this.gatewayHeaders(), signal: AbortSignal.timeout(30_000) },
@@ -348,21 +431,62 @@ export class JobProcessor {
     return {
       runId,
       artifacts: (await artifactsResponse.json()) as RunArtifacts,
-      inputTokens: state.usage?.inputTokens ?? 0,
-      outputTokens: state.usage?.outputTokens ?? 0,
+      inputTokens: state.usage.inputTokens,
+      outputTokens: state.usage.outputTokens,
       costUsd,
     };
   }
 
-  private async wait(runId: string): Promise<GatewayRun> {
+  private async submitRun(body: Record<string, unknown>): Promise<string> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const response = await this.request(`${this.config.codingGatewayUrl}/v1/runs`, {
+          method: 'POST',
+          headers: this.gatewayHeaders({ 'content-type': 'application/json' }),
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(30_000),
+        });
+        if (!response.ok) {
+          const message = `coding gateway rejected job: ${response.status} ${await response.text()}`;
+          if (attempt === 0 && response.status >= 500) {
+            lastError = new Error(message);
+            continue;
+          }
+          throw new GatewaySubmissionRejectedError(message);
+        }
+        return z.object({ run_id: z.string().min(1).max(128) }).parse(await response.json()).run_id;
+      } catch (cause) {
+        if (cause instanceof GatewaySubmissionRejectedError) throw cause;
+        lastError = cause;
+        if (attempt === 1) break;
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  }
+
+  private async wait(runId: string, fallbackCostUsd: number): Promise<GatewayRun> {
     const deadline = Date.now() + 12 * 60_000;
     while (Date.now() < deadline) {
       const response = await this.request(`${this.config.codingGatewayUrl}/v1/runs/${runId}`, {
         headers: this.gatewayHeaders(),
         signal: AbortSignal.timeout(30_000),
       });
-      if (!response.ok) throw new Error(`coding gateway status failed: ${response.status}`);
-      const run = (await response.json()) as GatewayRun;
+      if (!response.ok) {
+        throw new GatewayRunError(
+          `coding gateway status failed: ${response.status}`,
+          fallbackCostUsd,
+        );
+      }
+      let run: GatewayRun;
+      try {
+        run = gatewayRunSchema.parse(await response.json());
+      } catch (cause) {
+        throw new GatewayRunError(
+          `coding gateway returned invalid run evidence: ${cause instanceof Error ? cause.message : String(cause)}`,
+          fallbackCostUsd,
+        );
+      }
       if (!['queued', 'running'].includes(run.status)) return run;
       await delay(1_000);
     }
@@ -371,65 +495,148 @@ export class JobProcessor {
       headers: this.gatewayHeaders(),
       signal: AbortSignal.timeout(30_000),
     });
-    throw new Error('coding run timed out');
+    throw new GatewayRunError('coding run timed out', fallbackCostUsd);
   }
 
-  private async review(quote: Quote, artifacts: RunArtifacts): Promise<Review> {
+  private async review(
+    jobId: string,
+    phase: ReviewPhase,
+    quote: Quote,
+    artifacts: RunArtifacts,
+    budgetUsd: number,
+  ): Promise<Review> {
     if (!this.config.usePodApiKey)
       throw new Error('USEPOD_API_KEY is required for independent review');
-    const response = await this.request(
-      `${this.config.usePodBaseUrl.replace(/\/$/, '')}/chat/completions`,
-      {
-        method: 'POST',
-        headers: {
-          authorization: `Bearer ${this.config.usePodApiKey}`,
-          'content-type': 'application/json',
-          'x-pod-routing-mode': 'marketplace-only',
-          'x-pod-no-retention': 'true',
+    const requestConfig = {
+      baseUrl: this.config.usePodBaseUrl,
+      token: this.config.usePodApiKey,
+      model: this.config.usePodModel,
+      maxInputPriceMicrounits: this.config.usePodMaxInputPriceMicrounits,
+      maxOutputPriceMicrounits: this.config.usePodMaxOutputPriceMicrounits,
+      minimumBalance: this.config.usePodMinimumBalance,
+      maxCostMicrounits: Math.floor(budgetUsd * 1_000_000),
+    };
+    const draft = {
+      model: this.config.usePodModel,
+      temperature: 0,
+      max_tokens: 1_000,
+      response_format: { type: 'json_object' },
+      messages: [
+        {
+          role: 'system',
+          content:
+            'Independently review a small maintenance patch. Approve only if it resolves the issue, is scoped, safe, and validated. Return JSON: {approved:boolean, reason:string}.',
         },
-        body: JSON.stringify({
-          model: this.config.usePodModel,
-          temperature: 0,
-          max_tokens: 1_000,
-          response_format: { type: 'json_object' },
-          messages: [
-            {
-              role: 'system',
-              content:
-                'Independently review a small maintenance patch. Approve only if it resolves the issue, is scoped, safe, and validated. Return JSON: {approved:boolean, reason:string}.',
-            },
-            {
-              role: 'user',
-              content: JSON.stringify({
-                issue: { title: quote.issueTitle, body: quote.issueBody },
-                patch: artifacts.patch,
-                files: artifacts.files,
-                validations: artifacts.validations,
-              }),
-            },
-          ],
-        }),
-        signal: AbortSignal.timeout(60_000),
-      },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            issue: { title: quote.issueTitle, body: quote.issueBody },
+            patch: artifacts.patch,
+            files: artifacts.files,
+            validations: artifacts.validations,
+          }),
+        },
+      ],
+    };
+    const maxTokens = boundedMaxTokens(
+      draft,
+      requestConfig.maxCostMicrounits,
+      requestConfig.maxInputPriceMicrounits,
+      requestConfig.maxOutputPriceMicrounits,
+      1_000,
     );
-    if (!response.ok)
-      throw new Error(`UsePod reviewer failed: ${response.status} ${await response.text()}`);
-    const body = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
-      usage?: { prompt_tokens?: number; completion_tokens?: number };
+    const attempt: ReviewAttempt = {
+      id: randomUUID(),
+      phase,
+      artifactHash: artifactHash(quote, artifacts),
+      status: 'pending',
+      costUsd: budgetUsd,
+      reviewedAt: new Date().toISOString(),
     };
-    const content = body.choices?.[0]?.message?.content;
-    if (!content) throw new Error('UsePod reviewer returned no decision');
-    const decision = JSON.parse(content) as { approved?: unknown; reason?: unknown };
-    if (typeof decision.approved !== 'boolean' || typeof decision.reason !== 'string') {
-      throw new Error('UsePod reviewer returned an invalid decision');
+    await this.reserveReviewAttempt(jobId, attempt);
+    let response: Response;
+    try {
+      response = await this.request(usePodUrl(requestConfig, 'chat/completions'), {
+        method: 'POST',
+        headers: usePodHeaders(requestConfig),
+        body: JSON.stringify({ ...draft, max_tokens: maxTokens }),
+        signal: AbortSignal.timeout(60_000),
+      });
+    } catch (cause) {
+      const message = `UsePod reviewer request failed: ${cause instanceof Error ? cause.message : String(cause)}`;
+      await this.markReviewAttemptFailed(jobId, attempt.id, message);
+      throw new ProviderReviewError(message, budgetUsd);
     }
-    return {
-      approved: decision.approved,
-      reason: decision.reason,
-      inputTokens: body.usage?.prompt_tokens ?? 0,
-      outputTokens: body.usage?.completion_tokens ?? 0,
-    };
+
+    let receipt;
+    try {
+      receipt = usePodReceipt(response, this.config.usePodModel, requestConfig.minimumBalance);
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      await this.markReviewAttemptFailed(jobId, attempt.id, message);
+      throw new ProviderReviewError(message, budgetUsd);
+    }
+    const provider = publicUsePodReceipt(receipt);
+    const costUsd = provider.costMicrounits
+      ? Number(BigInt(provider.costMicrounits)) / 1_000_000
+      : budgetUsd;
+    try {
+      await this.updateReviewAttempt(jobId, attempt.id, {
+        status: 'received',
+        provider,
+        costUsd,
+      });
+    } catch (cause) {
+      throw new ProviderReviewError(
+        `review receipt persistence failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+        budgetUsd,
+      );
+    }
+    try {
+      if (provider.costMicrounits === undefined) {
+        throw new Error('UsePod reviewer omitted authoritative provider cost');
+      }
+      if (costUsd > budgetUsd) {
+        throw new Error('UsePod reviewer exceeded its phase spend cap');
+      }
+      if (!response.ok) {
+        throw new Error(`UsePod reviewer failed: ${response.status} ${await response.text()}`);
+      }
+      const body = z
+        .object({
+          model: z.string(),
+          choices: z.array(z.object({ message: z.object({ content: z.string().min(1) }) })).min(1),
+          usage: z.unknown(),
+        })
+        .parse(await response.json());
+      if (body.model !== this.config.usePodModel) {
+        throw new Error('UsePod reviewer returned a different model');
+      }
+      const usage = parseUsePodUsage(body.usage);
+      const decision = z
+        .object({ approved: z.boolean(), reason: z.string().min(1).max(2_000) })
+        .strict()
+        .parse(JSON.parse(body.choices[0]!.message.content));
+      await this.updateReviewAttempt(jobId, attempt.id, {
+        status: 'completed',
+        inputTokens: usage.promptTokens,
+        outputTokens: usage.completionTokens,
+        approved: decision.approved,
+        reason: decision.reason,
+      });
+      return {
+        approved: decision.approved,
+        reason: decision.reason,
+        inputTokens: usage.promptTokens,
+        outputTokens: usage.completionTokens,
+        providerReceipt: provider,
+        costUsd,
+      };
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      await this.markReviewAttemptFailed(jobId, attempt.id, message);
+      throw new ProviderReviewError(message, costUsd);
+    }
   }
 
   private async refund(id: string): Promise<void> {
@@ -483,6 +690,40 @@ export class JobProcessor {
           ? { refundOperationId: cause.operationId }
           : {}),
       });
+    }
+  }
+
+  private async bindDelivery(
+    job: Job,
+    artifacts: RunArtifacts,
+    deliveryCommitSha: string,
+  ): Promise<void> {
+    await this.store.patchJob(job.id, { deliveryCommitSha });
+    if (this.config.paymentMode !== 'live') return;
+    if (!this.policy || !job.refundLiabilityId) {
+      throw new Error('registered refund liability is required before delivery publication');
+    }
+    const input = {
+      jobId: job.id,
+      settlementSignature: job.payment.transaction,
+      reviewedHeadSha: deliveryCommitSha,
+      reviewedBaseSha: job.quote.baseSha,
+      reviewedBaseRef: job.quote.defaultBranch,
+      reviewedDiffHash: createHash('sha256').update(artifacts.patch).digest('hex'),
+    };
+    const liability = await this.policy.bindRefundLiabilityDelivery(job.refundLiabilityId, input);
+    if (
+      liability.id !== job.refundLiabilityId ||
+      liability.jobId !== job.id ||
+      liability.settlementSignature !== job.payment.transaction ||
+      liability.reviewedHeadSha !== input.reviewedHeadSha ||
+      liability.reviewedBaseSha !== input.reviewedBaseSha ||
+      liability.reviewedBaseRef !== input.reviewedBaseRef ||
+      liability.reviewedDiffHash !== input.reviewedDiffHash ||
+      !liability.deliveryBoundAt ||
+      !liability.deliveryBindingHash
+    ) {
+      throw new Error('policy signer returned a mismatched delivery binding');
     }
   }
 
@@ -587,6 +828,54 @@ export class JobProcessor {
       estimatedCostUsd: variableCostUsd,
     });
   }
+
+  private async reserveReviewAttempt(id: string, attempt: ReviewAttempt): Promise<void> {
+    const job = await this.required(id);
+    const estimatedCostUsd = addUsd(job.estimatedCostUsd, attempt.costUsd);
+    if (!Number.isFinite(estimatedCostUsd) || estimatedCostUsd > job.quote.maxCostUsd + 1e-9) {
+      throw new Error('review reservation exceeds the job spend cap');
+    }
+    await this.store.patchJob(id, {
+      reviewAttempts: [...(job.reviewAttempts ?? []), attempt],
+      estimatedCostUsd,
+    });
+  }
+
+  private async updateReviewAttempt(
+    id: string,
+    attemptId: string,
+    patch: Partial<Omit<ReviewAttempt, 'id'>>,
+  ): Promise<void> {
+    const job = await this.required(id);
+    const attempts = job.reviewAttempts ?? [];
+    if (!attempts.some((attempt) => attempt.id === attemptId)) {
+      throw new Error('review receipt checkpoint is missing');
+    }
+    const previous = attempts.find((attempt) => attempt.id === attemptId)!;
+    const nextCostUsd = patch.costUsd ?? previous.costUsd;
+    const estimatedCostUsd = roundUsd(job.estimatedCostUsd - previous.costUsd + nextCostUsd);
+    if (!Number.isFinite(estimatedCostUsd) || estimatedCostUsd < 0) {
+      throw new Error('review cost reconciliation is invalid');
+    }
+    await this.store.patchJob(id, {
+      reviewAttempts: attempts.map((attempt) =>
+        attempt.id === attemptId ? { ...attempt, ...patch } : attempt,
+      ),
+      estimatedCostUsd,
+    });
+  }
+
+  private async markReviewAttemptFailed(
+    id: string,
+    attemptId: string,
+    error: string,
+  ): Promise<void> {
+    try {
+      await this.updateReviewAttempt(id, attemptId, { status: 'failed', error });
+    } catch {
+      // The pending full-cost checkpoint remains the conservative source of truth.
+    }
+  }
 }
 
 class GatewayRunError extends Error {
@@ -598,8 +887,15 @@ class GatewayRunError extends Error {
   }
 }
 
-function validCost(value: number | undefined): value is number {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+class GatewaySubmissionRejectedError extends Error {}
+
+class ProviderReviewError extends Error {
+  constructor(
+    message: string,
+    readonly costUsd: number,
+  ) {
+    super(message);
+  }
 }
 
 const USDC_MAINNET = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
@@ -666,11 +962,42 @@ function canonicalJson(value: unknown): string {
     .join(',')}}`;
 }
 
-function estimateCost(config: Config, input: number, output: number): number {
-  return (
-    (input * config.usePodInputUsdPerMillion) / 1_000_000 +
-    (output * config.usePodOutputUsdPerMillion) / 1_000_000
-  );
+export function phaseBudgetPlan(maxCostUsd: number): Record<SpendPhase, number> {
+  const total = usdMicrounits(maxCostUsd, 'job spend cap');
+  return Object.fromEntries(
+    (Object.entries(PHASE_WEIGHTS) as Array<[SpendPhase, number]>).map(([phase, weight]) => [
+      phase,
+      Number((BigInt(total) * BigInt(weight)) / 100n) / 1_000_000,
+    ]),
+  ) as Record<SpendPhase, number>;
+}
+
+export function phaseBudgetUsd(maxCostUsd: number, spentUsd: number, phase: SpendPhase): number {
+  const planned = usdMicrounits(phaseBudgetPlan(maxCostUsd)[phase], `${phase} budget`);
+  if (!Number.isFinite(spentUsd) || spentUsd < 0) throw new Error('job spend is invalid');
+  const remaining = Math.max(0, Math.floor((maxCostUsd - spentUsd + 1e-12) * 1_000_000));
+  const granted = Math.min(planned, remaining);
+  if (granted <= 0) throw new Error(`job spend cap exhausted before ${phase}`);
+  return granted / 1_000_000;
+}
+
+function addUsd(left: number, right: number): number {
+  return roundUsd(roundUsd(left) + roundUsd(right));
+}
+
+function roundUsd(value: number): number {
+  if (!Number.isFinite(value) || value < 0) throw new Error('job spend is invalid');
+  const microunits = Math.ceil(value * 1_000_000 - 1e-9);
+  if (!Number.isSafeInteger(microunits)) throw new Error('job spend exceeds the accounting range');
+  return microunits / 1_000_000;
+}
+
+function usdMicrounits(value: number, name: string): number {
+  const microunits = Math.floor(value * 1_000_000 + 1e-9);
+  if (!Number.isSafeInteger(microunits) || microunits <= 0) {
+    throw new Error(`${name} must be a positive finite amount`);
+  }
+  return microunits;
 }
 
 function issuePrompt(quote: Quote): string {

@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 import { BountyActions } from '@/components/bounty-actions';
 import { DataError, DemoNotice } from '@/components/data-state';
 import { GithubClaimButton } from '@/components/github-claim-button';
+import { ProviderReceiptDetails } from '@/components/provider-receipt';
 import { StatusBadge } from '@/components/status-badge';
 import { TransactionLink } from '@/components/transaction-link';
 import { WalletProof } from '@/components/wallet-proof';
@@ -100,6 +101,53 @@ export default async function BountyDetailPage({ params }: { params: Promise<{ i
               </div>
             </div>
           </section>
+
+          {bounty.review && (
+            <section className="detail-panel">
+              <p className="eyebrow">Independent review receipt</p>
+              <div className="receipt-grid review-evidence">
+                <div>
+                  <dl className="receipt-list">
+                    <div>
+                      <dt>Decision</dt>
+                      <dd>{bounty.review.approved ? 'passed' : 'rejected'}</dd>
+                    </div>
+                    <div>
+                      <dt>Reviewed</dt>
+                      <dd>{formatTime(bounty.review.reviewedAt)}</dd>
+                    </div>
+                    <div>
+                      <dt>Head commitment</dt>
+                      <dd className="review-commitment">{bounty.review.headSha}</dd>
+                    </div>
+                    <div>
+                      <dt>Base commitment</dt>
+                      <dd className="review-commitment">{bounty.review.baseSha}</dd>
+                    </div>
+                    <div>
+                      <dt>Base ref</dt>
+                      <dd>{bounty.review.baseRef}</dd>
+                    </div>
+                    <div>
+                      <dt>Diff commitment</dt>
+                      <dd className="review-commitment">{bounty.review.diffHash}</dd>
+                    </div>
+                  </dl>
+                  <p className="receipt-review-reason">{bounty.review.reason}</p>
+                </div>
+                <div>
+                  <p className="eyebrow">Provider route</p>
+                  {bounty.review.provider ? (
+                    <ProviderReceiptDetails receipt={bounty.review.provider} />
+                  ) : (
+                    <p className="receipt-empty">
+                      No marketplace provider receipt is attached to this decision.
+                    </p>
+                  )}
+                </div>
+              </div>
+            </section>
+          )}
 
           {(bounty.pullRequestUrl || bounty.releaseTransaction) && (
             <section className="detail-panel">

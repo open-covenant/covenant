@@ -1,0 +1,679 @@
+name: mizuki-image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .dockerignore
+      - .github/workflows/mizuki-image.yml
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - services/mizuki/**
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Full commit SHA already reachable from protected main
+        required: true
+        type: string
+
+concurrency:
+  group: mizuki-image-publish
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  IMAGE_NAME: ghcr.io/open-covenant/covenant/mizuki
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    if: github.repository == 'open-covenant/covenant'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      commit: ${{ steps.commit.outputs.sha }}
+      immutable_exists: ${{ steps.release.outputs.immutable_exists }}
+      release_tag: ${{ steps.commit.outputs.release_tag }}
+      source_date_epoch: ${{ steps.commit.outputs.source_date_epoch }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: resolve protected source commit
+        id: commit
+        env:
+          DISPATCH_COMMIT: ${{ inputs.commit }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SHA: ${{ github.sha }}
+          EVENT_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+
+          if [ "$EVENT_NAME" = workflow_dispatch ] && [ "$EVENT_REF" = refs/heads/main ]; then
+            candidate=$DISPATCH_COMMIT
+          elif [ "$EVENT_NAME" = push ] && [ "$EVENT_REF" = refs/heads/main ]; then
+            candidate=$EVENT_SHA
+          else
+            echo '::error::image publication is limited to protected main or an explicit main commit'
+            exit 1
+          fi
+
+          if ! printf '%s' "$candidate" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo '::error::commit must be a full lowercase SHA-1'
+            exit 1
+          fi
+
+          git fetch --no-tags --force origin main:refs/remotes/origin/main
+          git cat-file -e "$candidate^{commit}"
+          git merge-base --is-ancestor "$candidate" refs/remotes/origin/main
+
+          source_date_epoch=$(git show -s --format=%ct "$candidate")
+          if ! printf '%s' "$source_date_epoch" | grep -Eq '^[0-9]{10,}$'; then
+            echo '::error::commit has an invalid timestamp'
+            exit 1
+          fi
+
+          echo "sha=$candidate" >> "$GITHUB_OUTPUT"
+          echo "release_tag=mizuki-image-$candidate" >> "$GITHUB_OUTPUT"
+          echo "source_date_epoch=$source_date_epoch" >> "$GITHUB_OUTPUT"
+
+      - name: detect an existing immutable release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.commit.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+
+          if gh api \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+            > release.json 2> release.error; then
+            jq -e --arg tag "$RELEASE_TAG" '.tag_name == $tag' release.json >/dev/null
+            if jq -e '.draft == false and .immutable == true' release.json >/dev/null; then
+              echo 'immutable_exists=true' >> "$GITHUB_OUTPUT"
+            elif jq -e '.draft == true and .immutable == false' release.json >/dev/null; then
+              echo 'immutable_exists=false' >> "$GITHUB_OUTPUT"
+            else
+              echo '::error::existing release is neither a mutable draft nor immutable publication'
+              exit 1
+            fi
+          elif grep -q 'HTTP 404' release.error; then
+            echo 'immutable_exists=false' >> "$GITHUB_OUTPUT"
+          else
+            cat release.error >&2
+            exit 1
+          fi
+
+  build:
+    needs: resolve
+    if: needs.resolve.outputs.immutable_exists != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+      packages: write
+    services:
+      postgres:
+        image: postgres:16.14-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+        env:
+          POSTGRES_PASSWORD: mizuki
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DOCKER_BUILD_RECORD_UPLOAD: false
+      DOCKER_BUILD_SUMMARY: false
+      MIZUKI_TEST_DATABASE_URL: postgres://postgres:mizuki@127.0.0.1:5432/mizuki_image
+      PGPASSWORD: mizuki
+      RESOLVED_COMMIT: ${{ needs.resolve.outputs.commit }}
+      SOURCE_DATE_EPOCH: ${{ needs.resolve.outputs.source_date_epoch }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ needs.resolve.outputs.commit }}
+
+      - name: verify checkout identity
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RESOLVED_COMMIT"
+          test -z "$(git status --short)"
+
+      - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+        with:
+          version: 10.31.0
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22.22.0
+          package-manager-cache: false
+
+      - name: install locked dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts --filter @covenant/mizuki...
+
+      - name: create isolated test database
+        run: createdb -h 127.0.0.1 -U postgres mizuki_image
+
+      - name: test and build core service
+        run: |
+          pnpm --filter @covenant/mizuki test
+          pnpm --filter @covenant/mizuki typecheck
+          pnpm --filter @covenant/mizuki build
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        with:
+          cache-binary: false
+          version: v0.36.1
+          driver-opts: image=moby/buildkit:v0.32.2@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: build and push digest-only image
+        id: image
+        uses: docker/build-push-action@601a80b39c9405e50806ae38af30926f9d957c47 # v6.19.2
+        with:
+          build-args: SOURCE_DATE_EPOCH=${{ needs.resolve.outputs.source_date_epoch }}
+          context: .
+          file: services/mizuki/Dockerfile
+          labels: |
+            org.opencontainers.image.revision=${{ needs.resolve.outputs.commit }}
+            org.opencontainers.image.source=https://github.com/open-covenant/covenant
+          outputs: type=image,name=${{ env.IMAGE_NAME }},name-canonical=true,oci-mediatypes=true,push-by-digest=true,push=true,rewrite-timestamp=true
+          platforms: linux/amd64
+          provenance: false
+          pull: true
+          sbom: false
+
+      - name: download and validate OCI manifest
+        id: evidence
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+
+          if ! printf '%s' "$IMAGE_DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+            echo '::error::builder did not return a SHA-256 image digest'
+            exit 1
+          fi
+
+          image_path=${IMAGE_NAME#ghcr.io/}
+          registry_token=$(curl --fail --silent --show-error --retry 3 \
+            --user "$GITHUB_ACTOR:$GITHUB_TOKEN" \
+            "https://ghcr.io/token?service=ghcr.io&scope=repository:$image_path:pull" | jq -er .token)
+          echo "::add-mask::$registry_token"
+
+          mkdir -p evidence
+          curl --fail --silent --show-error --retry 3 \
+            --header "Authorization: Bearer $registry_token" \
+            --header 'Accept: application/vnd.oci.image.manifest.v1+json' \
+            --dump-header evidence/manifest.headers \
+            --output evidence/manifest.oci.json \
+            "https://ghcr.io/v2/$image_path/manifests/$IMAGE_DIGEST"
+
+          manifest_sha=$(sha256sum evidence/manifest.oci.json | cut -d' ' -f1)
+          manifest_bytes=$(stat --format=%s evidence/manifest.oci.json)
+          test "sha256:$manifest_sha" = "$IMAGE_DIGEST"
+          test "$manifest_bytes" -ge 256
+          test "$manifest_bytes" -le 1048576
+
+          header_digest=$(awk 'BEGIN { IGNORECASE=1 } /^docker-content-digest:/ { gsub("\\r", ""); print $2 }' evidence/manifest.headers | tail -n 1)
+          test "$header_digest" = "$IMAGE_DIGEST"
+
+          jq -e '
+            .schemaVersion == 2 and
+            .mediaType == "application/vnd.oci.image.manifest.v1+json" and
+            (has("manifests") | not) and
+            (.config.mediaType == "application/vnd.oci.image.config.v1+json") and
+            (.config.digest | test("^sha256:[0-9a-f]{64}$")) and
+            (.config.size > 0) and
+            (.layers | length > 0) and
+            (all(.layers[];
+              (.digest | test("^sha256:[0-9a-f]{64}$")) and
+              (.size > 0) and
+              (.mediaType == "application/vnd.oci.image.layer.v1.tar+gzip" or
+               .mediaType == "application/vnd.oci.image.layer.v1.tar+zstd")))
+          ' evidence/manifest.oci.json >/dev/null
+
+          config_digest=$(jq -er .config.digest evidence/manifest.oci.json)
+          config_bytes_expected=$(jq -er .config.size evidence/manifest.oci.json)
+          curl --fail --silent --show-error --retry 3 \
+            --header "Authorization: Bearer $registry_token" \
+            --output evidence/image-config.oci.json \
+            "https://ghcr.io/v2/$image_path/blobs/$config_digest"
+          config_sha=$(sha256sum evidence/image-config.oci.json | cut -d' ' -f1)
+          config_bytes=$(stat --format=%s evidence/image-config.oci.json)
+          test "sha256:$config_sha" = "$config_digest"
+          test "$config_bytes" = "$config_bytes_expected"
+          jq -e '.os == "linux" and .architecture == "amd64"' evidence/image-config.oci.json >/dev/null
+
+          rm evidence/manifest.headers
+          image_reference="$IMAGE_NAME@$IMAGE_DIGEST"
+          echo "digest=$IMAGE_DIGEST" >> "$GITHUB_OUTPUT"
+          echo "manifest_bytes=$manifest_bytes" >> "$GITHUB_OUTPUT"
+          echo "manifest_sha=$manifest_sha" >> "$GITHUB_OUTPUT"
+          echo "reference=$image_reference" >> "$GITHUB_OUTPUT"
+
+      - name: generate image SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          artifact-name: mizuki-image-sbom-${{ needs.resolve.outputs.commit }}.spdx.json
+          dependency-snapshot: false
+          format: spdx-json
+          image: ${{ steps.evidence.outputs.reference }}
+          output-file: evidence/sbom.spdx.json
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
+          registry-username: ${{ github.actor }}
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: write immutable promotion input
+        env:
+          BUILD_METADATA: ${{ steps.image.outputs.metadata }}
+          IMAGE_DIGEST: ${{ steps.evidence.outputs.digest }}
+          IMAGE_REFERENCE: ${{ steps.evidence.outputs.reference }}
+          MANIFEST_BYTES: ${{ steps.evidence.outputs.manifest_bytes }}
+          MANIFEST_SHA: ${{ steps.evidence.outputs.manifest_sha }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          RUN_ID: ${{ github.run_id }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+
+          printf '%s\n' "$BUILD_METADATA" | jq -e . > evidence/build-metadata.json
+          dockerfile_sha=$(sha256sum services/mizuki/Dockerfile | cut -d' ' -f1)
+          lockfile_sha=$(sha256sum pnpm-lock.yaml | cut -d' ' -f1)
+          manifest_url="https://github.com/open-covenant/covenant/releases/download/$RELEASE_TAG/manifest.oci.json"
+
+          jq -n \
+            --arg commit "$RESOLVED_COMMIT" \
+            --arg dockerfile_sha "$dockerfile_sha" \
+            --arg image_digest "$IMAGE_DIGEST" \
+            --arg image_name "$IMAGE_NAME" \
+            --arg image_reference "$IMAGE_REFERENCE" \
+            --arg lockfile_sha "$lockfile_sha" \
+            --arg manifest_sha "$MANIFEST_SHA" \
+            --arg manifest_url "$manifest_url" \
+            --argjson manifest_bytes "$MANIFEST_BYTES" \
+            --arg run_attempt "$RUN_ATTEMPT" \
+            --arg run_id "$RUN_ID" \
+            --arg source_date_epoch "$SOURCE_DATE_EPOCH" \
+            --arg workflow_ref "$WORKFLOW_REF" \
+            --arg workflow_sha "$WORKFLOW_SHA" \
+            '{
+              schema: "mizuki.image-promotion-input.v1",
+              source: {
+                repository: "open-covenant/covenant",
+                commit: $commit,
+                sourceDateEpoch: ($source_date_epoch | tonumber)
+              },
+              image: {
+                name: $image_name,
+                digest: $image_digest,
+                reference: $image_reference,
+                platform: "linux/amd64",
+                manifest: {
+                  mediaType: "application/vnd.oci.image.manifest.v1+json",
+                  sha256: $manifest_sha,
+                  sizeBytes: $manifest_bytes,
+                  browserDownloadUrl: $manifest_url
+                }
+              },
+              materials: {
+                dockerfileSha256: $dockerfile_sha,
+                lockfileSha256: $lockfile_sha
+              },
+              workflow: {
+                repository: "open-covenant/covenant",
+                signerCommit: $workflow_sha,
+                signerRef: $workflow_ref,
+                runId: ($run_id | tonumber),
+                runAttempt: ($run_attempt | tonumber)
+              }
+            }' > evidence/promotion-input.json
+
+          jq -e '
+            .source.commit | test("^[0-9a-f]{40}$")
+          ' evidence/promotion-input.json >/dev/null
+
+      - name: attest image build provenance
+        id: provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        with:
+          push-to-registry: true
+          subject-digest: ${{ steps.evidence.outputs.digest }}
+          subject-name: ${{ env.IMAGE_NAME }}
+
+      - name: attest image SBOM
+        id: sbom-attestation
+        uses: actions/attest-sbom@4651f806c01d8637787e274ac3bdf724ef169f34 # v3.0.0
+        with:
+          push-to-registry: true
+          sbom-path: evidence/sbom.spdx.json
+          subject-digest: ${{ steps.evidence.outputs.digest }}
+          subject-name: ${{ env.IMAGE_NAME }}
+
+      - name: attest promotion input
+        id: promotion-attestation
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        with:
+          subject-path: evidence/promotion-input.json
+
+      - name: finalize evidence bundle
+        env:
+          PROMOTION_BUNDLE: ${{ steps.promotion-attestation.outputs.bundle-path }}
+          PROVENANCE_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+          SBOM_BUNDLE: ${{ steps.sbom-attestation.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          cp "$PROVENANCE_BUNDLE" evidence/image-provenance.attestation.json
+          cp "$SBOM_BUNDLE" evidence/image-sbom.attestation.json
+          cp "$PROMOTION_BUNDLE" evidence/promotion-input.attestation.json
+          (
+            cd evidence
+            sha256sum \
+              build-metadata.json \
+              image-config.oci.json \
+              image-provenance.attestation.json \
+              image-sbom.attestation.json \
+              manifest.oci.json \
+              promotion-input.attestation.json \
+              promotion-input.json \
+              sbom.spdx.json > SHA256SUMS
+            sha256sum --check --strict SHA256SUMS
+          )
+
+      - name: stage image evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          compression-level: 0
+          if-no-files-found: error
+          name: mizuki-image-${{ needs.resolve.outputs.commit }}
+          path: evidence/
+          retention-days: 90
+
+      - name: publish digest summary
+        env:
+          IMAGE_REFERENCE: ${{ steps.evidence.outputs.reference }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
+        run: |
+          {
+            echo '### Mizuki image awaiting immutable release publication'
+            echo
+            echo "\`$IMAGE_REFERENCE\`"
+            echo
+            echo "Manifest: https://github.com/open-covenant/covenant/releases/download/$RELEASE_TAG/manifest.oci.json"
+            echo
+            echo 'Promotion must use this digest-qualified reference, never a tag.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    needs: [resolve, build]
+    if: >-
+      always() &&
+      needs.resolve.result == 'success' &&
+      (needs.resolve.outputs.immutable_exists == 'true' || needs.build.result == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
+      RESOLVED_COMMIT: ${{ needs.resolve.outputs.commit }}
+    steps:
+      - name: download staged evidence
+        if: needs.build.result == 'success'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: mizuki-image-${{ needs.resolve.outputs.commit }}
+          path: evidence
+
+      - name: publish or verify immutable release
+        env:
+          BUILD_RESULT: ${{ needs.build.result }}
+          IMMUTABLE_EXISTS: ${{ needs.resolve.outputs.immutable_exists }}
+        run: |
+          set -euo pipefail
+
+          api() {
+            gh api -H 'X-GitHub-Api-Version: 2022-11-28' "$@"
+          }
+
+          get_release() {
+            api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG"
+          }
+
+          verify_tag_target() {
+            local object_type object_sha tag_object
+            tag_object=$(api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG")
+            object_type=$(jq -er '.object.type' <<< "$tag_object")
+            object_sha=$(jq -er '.object.sha' <<< "$tag_object")
+
+            for _ in 1 2 3 4; do
+              if [ "$object_type" = commit ]; then
+                test "$object_sha" = "$RESOLVED_COMMIT"
+                return
+              fi
+              test "$object_type" = tag
+              tag_object=$(api "repos/$GITHUB_REPOSITORY/git/tags/$object_sha")
+              object_type=$(jq -er '.object.type' <<< "$tag_object")
+              object_sha=$(jq -er '.object.sha' <<< "$tag_object")
+            done
+
+            echo '::error::release tag does not resolve to a commit within four tag objects'
+            exit 1
+          }
+
+          required_assets=(
+            SHA256SUMS
+            build-metadata.json
+            image-config.oci.json
+            image-provenance.attestation.json
+            image-sbom.attestation.json
+            manifest.oci.json
+            promotion-input.attestation.json
+            promotion-input.json
+            sbom.spdx.json
+          )
+
+          verify_release() {
+            local directory=$1
+            local release_json=$2
+            local asset asset_api actual_digest actual_size metadata
+
+            jq -e \
+              --arg tag "$RELEASE_TAG" \
+              '.tag_name == $tag and .draft == false and .immutable == true' \
+              <<< "$release_json" >/dev/null
+            test "$(jq '.assets | length' <<< "$release_json")" = "${#required_assets[@]}"
+            verify_tag_target
+
+            mkdir -p "$directory"
+            for asset in "${required_assets[@]}"; do
+              metadata=$(jq -ce --arg name "$asset" \
+                '[.assets[] | select(.name == $name)] | if length == 1 then .[0] else error("missing or duplicate release asset") end' \
+                <<< "$release_json")
+              asset_api=$(jq -er '.url' <<< "$metadata")
+              api -H 'Accept: application/octet-stream' "$asset_api" > "$directory/$asset"
+
+              actual_size=$(stat --format=%s "$directory/$asset")
+              actual_digest="sha256:$(sha256sum "$directory/$asset" | cut -d' ' -f1)"
+              jq -e \
+                --arg digest "$actual_digest" \
+                --argjson size "$actual_size" \
+                '.digest == $digest and .size == $size' \
+                <<< "$metadata" >/dev/null
+            done
+
+            expected_sum_assets=$(printf '%s\n' "${required_assets[@]}" | grep -v '^SHA256SUMS$' | sort)
+            actual_sum_assets=$(awk \
+              'length($1) == 64 && $1 ~ /^[0-9a-f]+$/ && $2 ~ /^\*?[A-Za-z0-9._-]+$/ { sub(/^\*/, "", $2); print $2 }' \
+              "$directory/SHA256SUMS" | sort)
+            test "$actual_sum_assets" = "$expected_sum_assets"
+            test "$(wc -l < "$directory/SHA256SUMS")" = "$(printf '%s\n' "$expected_sum_assets" | wc -l)"
+            (cd "$directory" && sha256sum --check --strict SHA256SUMS)
+
+            manifest_sha=$(sha256sum "$directory/manifest.oci.json" | cut -d' ' -f1)
+            manifest_size=$(stat --format=%s "$directory/manifest.oci.json")
+            manifest_url="https://github.com/open-covenant/covenant/releases/download/$RELEASE_TAG/manifest.oci.json"
+            test "$manifest_size" -ge 256
+            test "$manifest_size" -le 1048576
+            jq -e '
+              .schemaVersion == 2 and
+              .mediaType == "application/vnd.oci.image.manifest.v1+json" and
+              (has("manifests") | not) and
+              (.config.mediaType == "application/vnd.oci.image.config.v1+json") and
+              (.config.digest | test("^sha256:[0-9a-f]{64}$")) and
+              (.config.size > 0) and
+              (.layers | length > 0) and
+              (all(.layers[];
+                (.digest | test("^sha256:[0-9a-f]{64}$")) and
+                (.size > 0) and
+                (.mediaType == "application/vnd.oci.image.layer.v1.tar+gzip" or
+                 .mediaType == "application/vnd.oci.image.layer.v1.tar+zstd")))
+            ' "$directory/manifest.oci.json" >/dev/null
+            jq -e '.os == "linux" and .architecture == "amd64"' \
+              "$directory/image-config.oci.json" >/dev/null
+            jq -e '.spdxVersion | startswith("SPDX-")' "$directory/sbom.spdx.json" >/dev/null
+            jq -e \
+              --arg commit "$RESOLVED_COMMIT" \
+              --arg digest "sha256:$manifest_sha" \
+              --arg manifest_sha "$manifest_sha" \
+              --arg manifest_url "$manifest_url" \
+              --argjson manifest_size "$manifest_size" \
+              '.source.repository == "open-covenant/covenant" and
+               .source.commit == $commit and
+               .image.name == "ghcr.io/open-covenant/covenant/mizuki" and
+               .image.digest == $digest and
+               .image.reference == ("ghcr.io/open-covenant/covenant/mizuki@" + $digest) and
+               .image.platform == "linux/amd64" and
+               .image.manifest.sha256 == $manifest_sha and
+               .image.manifest.sizeBytes == $manifest_size and
+               .image.manifest.browserDownloadUrl == $manifest_url' \
+              "$directory/promotion-input.json" >/dev/null
+
+            signer_commit=$(jq -er '.workflow.signerCommit | select(test("^[0-9a-f]{40}$"))' \
+              "$directory/promotion-input.json")
+            test "$(jq -er '.workflow.signerRef' "$directory/promotion-input.json")" = \
+              'open-covenant/covenant/.github/workflows/mizuki-image.yml@refs/heads/main'
+            attestation_policy=(
+              --repo "$GITHUB_REPOSITORY"
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/mizuki-image.yml"
+              --source-digest "$signer_commit"
+              --source-ref refs/heads/main
+              --deny-self-hosted-runners
+            )
+            gh attestation verify "$directory/manifest.oci.json" \
+              --bundle "$directory/image-provenance.attestation.json" \
+              "${attestation_policy[@]}" >/dev/null
+            gh attestation verify "$directory/manifest.oci.json" \
+              --bundle "$directory/image-sbom.attestation.json" \
+              --predicate-type https://spdx.dev/Document/v2.3 \
+              "${attestation_policy[@]}" >/dev/null
+            gh attestation verify "$directory/promotion-input.json" \
+              --bundle "$directory/promotion-input.attestation.json" \
+              "${attestation_policy[@]}" >/dev/null
+          }
+
+          if [ "$IMMUTABLE_EXISTS" = true ]; then
+            test "$BUILD_RESULT" = skipped
+            release_json=$(get_release)
+            verify_release verified-evidence "$release_json"
+          else
+            test "$BUILD_RESULT" = success
+            test -d evidence
+
+            if release_json=$(get_release 2> release.error); then
+              if jq -e '.immutable == true and .draft == false' <<< "$release_json" >/dev/null; then
+                echo '::error::an immutable release appeared after the build; rerun to verify it without rebuilding'
+                exit 1
+              fi
+              jq -e '.draft == true and .immutable == false' <<< "$release_json" >/dev/null
+              verify_tag_target
+            elif grep -q 'HTTP 404' release.error; then
+              release_json=$(api --method POST "repos/$GITHUB_REPOSITORY/releases" \
+                -f tag_name="$RELEASE_TAG" \
+                -f target_commitish="$RESOLVED_COMMIT" \
+                -f name="$RELEASE_TAG" \
+                -f body="Immutable Mizuki image evidence for commit $RESOLVED_COMMIT." \
+                -F draft=true \
+                -F prerelease=false \
+                -f make_latest=false)
+              jq -e '.draft == true and .immutable == false' <<< "$release_json" >/dev/null
+              verify_tag_target
+            else
+              cat release.error >&2
+              exit 1
+            fi
+
+            release_id=$(jq -er '.id' <<< "$release_json")
+            while read -r asset_id; do
+              api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id"
+            done < <(jq -r '.assets[].id' <<< "$release_json")
+
+            for asset in "${required_assets[@]}"; do
+              test -f "evidence/$asset"
+              encoded_name=$(jq -rn --arg name "$asset" '$name | @uri')
+              curl --fail --silent --show-error --retry 3 \
+                --request POST \
+                --header 'Accept: application/vnd.github+json' \
+                --header "Authorization: Bearer $GH_TOKEN" \
+                --header 'Content-Type: application/octet-stream' \
+                --header 'X-GitHub-Api-Version: 2022-11-28' \
+                --data-binary "@evidence/$asset" \
+                "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$release_id/assets?name=$encoded_name" \
+                >/dev/null
+            done
+
+            api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+              -F draft=false \
+              -f make_latest=false \
+              > published.json
+
+            release_json=''
+            for _ in 1 2 3 4 5 6 7 8 9 10; do
+              release_json=$(get_release)
+              if jq -e '.draft == false and .immutable == true' <<< "$release_json" >/dev/null; then
+                break
+              fi
+              sleep 2
+            done
+            jq -e '.draft == false and .immutable == true' <<< "$release_json" >/dev/null
+            verify_release verified-evidence "$release_json"
+            for asset in "${required_assets[@]}"; do
+              cmp --silent "evidence/$asset" "verified-evidence/$asset"
+            done
+          fi
+
+          image_reference=$(jq -er '.image.reference' verified-evidence/promotion-input.json)
+          manifest_url=$(jq -er '.image.manifest.browserDownloadUrl' verified-evidence/promotion-input.json)
+          {
+            echo '### Immutable Mizuki image release'
+            echo
+            echo "\`$image_reference\`"
+            echo
+            echo "Manifest: $manifest_url"
+            echo
+            echo "Release: https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG"
+          } >> "$GITHUB_STEP_SUMMARY"

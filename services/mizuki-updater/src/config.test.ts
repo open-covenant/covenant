@@ -16,14 +16,7 @@ const BASE_ENV: NodeJS.ProcessEnv = {
   MIZUKI_UPDATER_ARTIFACT_ORIGINS: 'https://artifacts.example.test',
   MIZUKI_UPDATER_GITHUB_APP_ID: '123',
   MIZUKI_UPDATER_GITHUB_PRIVATE_KEY: 'r'.repeat(64),
-  MIZUKI_UPDATER_SHADOW_HOOK_URL: 'http://127.0.0.1:9000/shadow',
-  MIZUKI_UPDATER_SHADOW_HEALTH_URL_TEMPLATE:
-    'http://127.0.0.1:9000/deployments/{deploymentId}/health',
-  MIZUKI_UPDATER_PROMOTE_HOOK_URL: 'http://127.0.0.1:9000/promote',
-  MIZUKI_UPDATER_PROMOTION_HEALTH_URL_TEMPLATE:
-    'http://127.0.0.1:9000/production/{deploymentId}/health',
-  MIZUKI_UPDATER_ROLLBACK_HOOK_URL: 'http://127.0.0.1:9000/rollback',
-  MIZUKI_UPDATER_DEPLOY_READINESS_URL: 'http://127.0.0.1:9000/readyz',
+  MIZUKI_UPDATER_DEPLOY_CONTROLLER_HOSTPORT: '127.0.0.1:9000',
   MIZUKI_UPDATER_DEPLOY_HOOK_TOKEN: 'd'.repeat(32),
 };
 
@@ -35,6 +28,15 @@ describe('updater configuration', () => {
     expect(config.artifactOrigins).toEqual(new Set(['https://artifacts.example.test']));
     expect(config.operational).toBeDefined();
     expect(config.operationalFailures).toEqual([]);
+    expect(config.operational).toMatchObject({
+      shadowHookUrl: 'http://127.0.0.1:9000/v1/deployments/shadow',
+      shadowHealthUrlTemplate: 'http://127.0.0.1:9000/v1/deployments/shadow/{deploymentId}/health',
+      promoteHookUrl: 'http://127.0.0.1:9000/v1/deployments/promote',
+      promotionHealthUrlTemplate:
+        'http://127.0.0.1:9000/v1/deployments/production/{deploymentId}/health',
+      rollbackHookUrl: 'http://127.0.0.1:9000/v1/deployments/rollback',
+      deployReadinessUrl: 'http://127.0.0.1:9000/readyz',
+    });
   });
 
   it('boots closed and reports every missing operational input', () => {
@@ -42,7 +44,7 @@ describe('updater configuration', () => {
       ...BASE_ENV,
       MIZUKI_UPDATER_PROPOSAL_KEYS_JSON: '',
       MIZUKI_UPDATER_GITHUB_PRIVATE_KEY: undefined,
-      MIZUKI_UPDATER_DEPLOY_READINESS_URL: '   ',
+      MIZUKI_UPDATER_DEPLOY_CONTROLLER_HOSTPORT: '   ',
       MIZUKI_UPDATER_DEPLOY_HOOK_TOKEN: undefined,
     });
 
@@ -50,7 +52,7 @@ describe('updater configuration', () => {
     expect(config.operationalFailures).toEqual([
       'MIZUKI_UPDATER_PROPOSAL_KEYS_JSON',
       'MIZUKI_UPDATER_GITHUB_PRIVATE_KEY',
-      'MIZUKI_UPDATER_DEPLOY_READINESS_URL',
+      'MIZUKI_UPDATER_DEPLOY_CONTROLLER_HOSTPORT',
       'MIZUKI_UPDATER_DEPLOY_HOOK_TOKEN',
     ]);
   });
@@ -70,13 +72,7 @@ describe('updater configuration', () => {
     );
   });
 
-  it('requires an exact health template and origin-only artifact allowlist', () => {
-    expect(() =>
-      loadConfig({
-        ...BASE_ENV,
-        MIZUKI_UPDATER_SHADOW_HEALTH_URL_TEMPLATE: 'http://127.0.0.1:9000/health',
-      }),
-    ).toThrow('Shadow health URL template must contain {deploymentId}');
+  it('requires an origin-only artifact allowlist', () => {
     expect(() =>
       loadConfig({
         ...BASE_ENV,
@@ -100,42 +96,45 @@ describe('updater configuration', () => {
     ).toThrow('Submission, read, and deployment tokens must be distinct');
   });
 
-  it('does not let deployment receipts choose the health credential origin', () => {
+  it('does not let configuration choose controller paths or credentials', () => {
     expect(() =>
       loadConfig({
         ...BASE_ENV,
-        MIZUKI_UPDATER_SHADOW_HEALTH_URL_TEMPLATE: 'http://{deploymentId}.example.test/health',
+        MIZUKI_UPDATER_DEPLOY_CONTROLLER_HOSTPORT: 'http://user:secret@127.0.0.1:9000',
       }),
-    ).toThrow('deployment ID must appear only in the URL path');
+    ).toThrow('credential-free host and port');
     expect(() =>
       loadConfig({
         ...BASE_ENV,
-        MIZUKI_UPDATER_PROMOTE_HOOK_URL: 'http://127.0.0.2:9000/promote',
+        MIZUKI_UPDATER_DEPLOY_CONTROLLER_HOSTPORT: 'http://127.0.0.1:9000/custom/path',
       }),
-    ).toThrow('Deployment endpoints must use one origin');
+    ).toThrow('credential-free host and port');
   });
 
-  it('requires distinct fixed-origin shadow and production health evidence', () => {
+  it('pins production to the Render private service origin', () => {
+    const production = {
+      ...BASE_ENV,
+      NODE_ENV: 'production',
+      MIZUKI_UPDATER_MEMORY_STORE: 'false',
+      MIZUKI_UPDATER_DATABASE_URL: 'postgres://mizuki:secret@postgres:5432/updater',
+      MIZUKI_UPDATER_HOST: '0.0.0.0',
+      MIZUKI_UPDATER_DEPLOY_CONTROLLER_HOSTPORT: 'mizuki-deployment-controller:8794',
+    };
+    expect(loadConfig(production).operational?.deployReadinessUrl).toBe(
+      'http://mizuki-deployment-controller:8794/readyz',
+    );
     expect(() =>
       loadConfig({
-        ...BASE_ENV,
-        MIZUKI_UPDATER_PROMOTION_HEALTH_URL_TEMPLATE:
-          BASE_ENV.MIZUKI_UPDATER_SHADOW_HEALTH_URL_TEMPLATE,
+        ...production,
+        MIZUKI_UPDATER_DEPLOY_CONTROLLER_HOSTPORT: 'https://deploy.example.test',
       }),
-    ).toThrow('Shadow and promotion health URL paths must differ');
+    ).toThrow('fixed Render private origin');
     expect(() =>
       loadConfig({
-        ...BASE_ENV,
-        MIZUKI_UPDATER_PROMOTION_HEALTH_URL_TEMPLATE:
-          'http://127.0.0.1:9000/deployments/{deploymentId}/health?environment=production',
+        ...production,
+        MIZUKI_UPDATER_DEPLOY_CONTROLLER_HOSTPORT: 'mizuki-deployment-controller:8795',
       }),
-    ).toThrow('Shadow and promotion health URL paths must differ');
-    expect(() =>
-      loadConfig({
-        ...BASE_ENV,
-        MIZUKI_UPDATER_PROMOTION_HEALTH_URL_TEMPLATE: 'http://{deploymentId}.example.test/health',
-      }),
-    ).toThrow('Promotion health deployment ID must appear only in the URL path');
+    ).toThrow('fixed Render private origin');
   });
 
   it('requires the promotion deadline to permit a final soak poll', () => {

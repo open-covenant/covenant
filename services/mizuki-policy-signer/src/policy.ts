@@ -7,6 +7,7 @@ import type {
   BindChallengeRequest,
   BindChallengeView,
   BindEscrowRequest,
+  BindRefundLiabilityDeliveryRequest,
   CreateEscrowRequest,
   DischargeRefundLiabilityRequest,
   OperationRecord,
@@ -26,6 +27,7 @@ import type {
 import {
   PolicyError,
   refundAuthorizationMessage,
+  refundDeliveryBindingAuthorizationMessage,
   refundDischargeAuthorizationMessage,
   requestHash,
 } from './domain.js';
@@ -79,7 +81,7 @@ export class PolicyService {
     request: RegisterRefundLiabilityRequest,
     idempotencyKey: string,
   ): Promise<RefundLiability> {
-    const immutableRequest = refundRequestIdentity(request);
+    const immutableRequest = registrationRequestIdentity(request);
     const requestHashValue = requestHash(immutableRequest);
     const existing = await this.store.getRefundLiability(request.settlementSignature);
     if (
@@ -110,6 +112,20 @@ export class PolicyService {
         requestHash: requestHashValue,
         jobId: request.jobId,
         settlementSignature: facts.signature,
+        repository: request.repository,
+        issueNumber: request.issueNumber,
+        baseRef: request.baseRef,
+        baseSha: request.baseSha,
+        repositoryAuthorizedAt: new Date(request.repositoryAuthorizedAt),
+        authorizationEvidenceHash: request.authorizationEvidenceHash,
+        reviewedHeadSha: null,
+        reviewedBaseSha: null,
+        reviewedBaseRef: null,
+        reviewedDiffHash: null,
+        deliveryBoundAt: null,
+        deliveryBindingIdempotencyKey: null,
+        deliveryBindingRequestHash: null,
+        deliveryBindingHash: null,
         payer: facts.payer,
         treasury: facts.recipient,
         mint: facts.mint,
@@ -127,6 +143,74 @@ export class PolicyService {
       },
       await this.chain.refundCapacity(),
       this.config.refundDailyLimitUsdCents,
+      this.now(),
+    );
+  }
+
+  async bindRefundLiabilityDelivery(
+    liabilityId: string,
+    request: BindRefundLiabilityDeliveryRequest,
+    idempotencyKey: string,
+  ): Promise<RefundLiability> {
+    const immutableRequest = deliveryBindingRequestIdentity(request);
+    const requestHashValue = requestHash(immutableRequest);
+    const liability = await this.store.getRefundLiability(request.settlementSignature);
+    if (!liability || liability.id !== liabilityId || liability.jobId !== request.jobId) {
+      throw new PolicyError(
+        'refund_liability_not_found',
+        'A matching registered refund liability was not found',
+        404,
+      );
+    }
+    if (
+      liability.deliveryBoundAt &&
+      liability.deliveryBindingIdempotencyKey === idempotencyKey &&
+      liability.deliveryBindingRequestHash === requestHashValue
+    ) {
+      return liability;
+    }
+    if (liability.deliveryBoundAt) {
+      throw new PolicyError(
+        'refund_liability_delivery_bound',
+        'Refund liability already has an immutable delivery binding',
+        409,
+      );
+    }
+    this.assertAuthorization(
+      refundDeliveryBindingAuthorizationMessage(request),
+      request.authorizationExpiresAt,
+      request.authorizationSignature,
+    );
+    if (
+      request.reviewedBaseSha !== liability.baseSha ||
+      request.reviewedBaseRef !== liability.baseRef
+    ) {
+      throw new PolicyError(
+        'refund_liability_delivery_mismatch',
+        'Reviewed delivery does not match the registered base revision',
+        422,
+      );
+    }
+    await this.merges.assertCommitUnpublished(liability.repository, request.reviewedHeadSha);
+    const binding = {
+      reviewedHeadSha: request.reviewedHeadSha,
+      reviewedBaseSha: request.reviewedBaseSha,
+      reviewedBaseRef: request.reviewedBaseRef,
+      reviewedDiffHash: request.reviewedDiffHash,
+    };
+    return this.store.bindRefundLiabilityDelivery(
+      liability.id,
+      idempotencyKey,
+      requestHashValue,
+      requestHash({
+        liabilityId: liability.id,
+        jobId: liability.jobId,
+        settlementSignature: liability.settlementSignature,
+        repository: liability.repository,
+        issueNumber: liability.issueNumber,
+        ...binding,
+      }),
+      binding,
       this.now(),
     );
   }
@@ -215,14 +299,64 @@ export class PolicyService {
       request.authorizationExpiresAt,
       request.authorizationSignature,
     );
+    if (
+      request.repository !== liability.repository ||
+      request.issueNumber !== liability.issueNumber ||
+      !liability.deliveryBoundAt ||
+      !liability.deliveryBindingHash ||
+      request.deliveredCommitSha !== liability.reviewedHeadSha ||
+      request.reviewedHeadSha !== liability.reviewedHeadSha ||
+      request.reviewedBaseSha !== liability.reviewedBaseSha ||
+      request.reviewedBaseRef !== liability.reviewedBaseRef ||
+      request.reviewedDiffHash !== liability.reviewedDiffHash
+    ) {
+      throw new PolicyError(
+        'refund_liability_delivery_mismatch',
+        'Delivery evidence does not match the registered refund liability',
+        422,
+      );
+    }
+    const notBefore = new Date(
+      Math.max(
+        liability.settlementBlockTimeUnixSeconds * 1_000,
+        liability.repositoryAuthorizedAt.getTime(),
+        liability.deliveryBoundAt.getTime(),
+      ),
+    );
     const evidence = await this.merges.verifyRepositoryMerge({
-      repository: request.repository,
+      repository: liability.repository,
+      issueNumber: liability.issueNumber,
       pullRequestNumber: request.pullRequestNumber,
+      deliveredCommitSha: request.deliveredCommitSha,
+      reviewedHeadSha: request.reviewedHeadSha,
+      reviewedBaseSha: request.reviewedBaseSha,
+      reviewedBaseRef: request.reviewedBaseRef,
+      reviewedDiffHash: request.reviewedDiffHash,
+      notBefore,
     });
-    if (new Date(evidence.createdAt).getTime() < liability.settlementBlockTimeUnixSeconds * 1_000) {
+    if (
+      evidence.repository !== liability.repository ||
+      evidence.issueNumber !== liability.issueNumber ||
+      evidence.pullRequestNumber !== request.pullRequestNumber ||
+      evidence.headCommitOid !== liability.reviewedHeadSha ||
+      evidence.baseCommitOid !== liability.reviewedBaseSha ||
+      evidence.baseRefName !== liability.reviewedBaseRef ||
+      evidence.diffHash !== liability.reviewedDiffHash
+    ) {
+      throw new PolicyError(
+        'github_evidence_mismatch',
+        'GitHub returned delivery evidence outside the immutable liability binding',
+        503,
+        true,
+      );
+    }
+    if (
+      new Date(evidence.createdAt).getTime() < notBefore.getTime() ||
+      new Date(evidence.mergedAt).getTime() < notBefore.getTime()
+    ) {
       throw new PolicyError(
         'github_pr_too_old',
-        'Pull request predates the registered payment liability',
+        'Pull request creation or merge predates the registered payment liability',
         422,
       );
     }
@@ -607,6 +741,8 @@ export class PolicyService {
       issueNumber: requiredNumberDetail(escrow, 'issueNumber'),
       claimantGitHubLogin: requiredDetail(binding, 'claimantGitHubLogin'),
       pullRequestNumber: request.pullRequestNumber,
+      reviewedHeadSha: request.reviewedHeadSha,
+      reviewedDiffHash: request.reviewedDiffHash,
       authorizedAt: binding.createdAt,
     });
     if (new Date(evidence.mergedAt).getTime() > claimExpiresAt.getTime()) {
@@ -908,7 +1044,10 @@ export class PolicyService {
     }
   }
 
-  private assertRefundAuthorization(action: 'register' | 'execute', request: RefundRequest): void {
+  private assertRefundAuthorization(
+    action: 'register' | 'execute',
+    request: RefundRequest | RegisterRefundLiabilityRequest,
+  ): void {
     this.assertAuthorization(
       refundAuthorizationMessage(action, request),
       request.authorizationExpiresAt,
@@ -993,17 +1132,60 @@ function refundRequestIdentity(
   return { jobId: request.jobId, settlementSignature: request.settlementSignature };
 }
 
+function registrationRequestIdentity(
+  request: RegisterRefundLiabilityRequest,
+): Omit<RegisterRefundLiabilityRequest, 'authorizationExpiresAt' | 'authorizationSignature'> {
+  return {
+    jobId: request.jobId,
+    settlementSignature: request.settlementSignature,
+    repository: request.repository,
+    issueNumber: request.issueNumber,
+    baseRef: request.baseRef,
+    baseSha: request.baseSha,
+    repositoryAuthorizedAt: request.repositoryAuthorizedAt,
+    authorizationEvidenceHash: request.authorizationEvidenceHash,
+  };
+}
+
+function deliveryBindingRequestIdentity(
+  request: BindRefundLiabilityDeliveryRequest,
+): Omit<BindRefundLiabilityDeliveryRequest, 'authorizationExpiresAt' | 'authorizationSignature'> {
+  return {
+    jobId: request.jobId,
+    settlementSignature: request.settlementSignature,
+    reviewedHeadSha: request.reviewedHeadSha,
+    reviewedBaseSha: request.reviewedBaseSha,
+    reviewedBaseRef: request.reviewedBaseRef,
+    reviewedDiffHash: request.reviewedDiffHash,
+  };
+}
+
 function dischargeRequestIdentity(
   request: DischargeRefundLiabilityRequest,
 ): Pick<
   DischargeRefundLiabilityRequest,
-  'jobId' | 'settlementSignature' | 'repository' | 'pullRequestNumber'
+  | 'jobId'
+  | 'settlementSignature'
+  | 'repository'
+  | 'issueNumber'
+  | 'pullRequestNumber'
+  | 'deliveredCommitSha'
+  | 'reviewedHeadSha'
+  | 'reviewedBaseSha'
+  | 'reviewedBaseRef'
+  | 'reviewedDiffHash'
 > {
   return {
     jobId: request.jobId,
     settlementSignature: request.settlementSignature,
     repository: request.repository,
+    issueNumber: request.issueNumber,
     pullRequestNumber: request.pullRequestNumber,
+    deliveredCommitSha: request.deliveredCommitSha,
+    reviewedHeadSha: request.reviewedHeadSha,
+    reviewedBaseSha: request.reviewedBaseSha,
+    reviewedBaseRef: request.reviewedBaseRef,
+    reviewedDiffHash: request.reviewedDiffHash,
   };
 }
 

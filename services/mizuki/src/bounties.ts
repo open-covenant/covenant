@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import type { Config } from './config.js';
 import {
   beginRescueBountyDisputeResolution,
   claimRescueBounty,
@@ -33,7 +34,7 @@ import {
   type PolicyOperation,
 } from './policy-client.js';
 import type { MizukiStore } from './store.js';
-import type { Contributor, Job } from './types.js';
+import type { Contributor, Job, ProviderRouteReceipt } from './types.js';
 
 export interface ContributorPatchReviewer {
   review(
@@ -42,6 +43,22 @@ export interface ContributorPatchReviewer {
   ): Promise<{
     approved: boolean;
     reason: string;
+    headSha: string;
+    baseSha: string;
+    baseRef: string;
+    diffHash: string;
+    providerReceipt?: ProviderRouteReceipt;
+  }>;
+  mergedEvidence(
+    bounty: RescueBounty,
+    pullRequestUrl: string,
+  ): Promise<{
+    headSha: string;
+    baseSha: string;
+    baseRef: string;
+    diffHash: string;
+    mergedAt: string;
+    mergeCommitSha: string;
   }>;
 }
 
@@ -52,13 +69,17 @@ export type DisputeResolutionInput = {
 };
 
 export class BountyService {
+  private readonly refundRecipient: string;
+
   constructor(
     private readonly store: MizukiStore,
     private readonly policy: FinancialPolicy,
     private readonly reviewer: ContributorPatchReviewer,
     private readonly now: () => Date = () => new Date(),
-    private readonly refundRecipient = '',
-  ) {}
+    config: Pick<Config, 'escrowRefundTo'> = { escrowRefundTo: '' },
+  ) {
+    this.refundRecipient = config.escrowRefundTo;
+  }
 
   async createAfterRefund(job: Job): Promise<RescueBounty> {
     if (job.state !== 'refunded') throw new Error('rescue bounty requires a completed refund');
@@ -248,17 +269,20 @@ export class BountyService {
     let bounty = await this.required(bountyId);
     if (bounty.state === 'released') return bounty;
     if (bounty.state === 'refunded') return bounty;
-    if (bounty.state === 'release_refund_pending') {
-      return this.settleExpiredRelease(bounty, pullRequestUrl);
-    }
     if (bounty.activeClaim?.draftPullRequestUrl !== pullRequestUrl) {
       throw new Error('merged pull request does not match the active claim');
+    }
+    if (bounty.state === 'release_refund_pending') {
+      return this.settleExpiredRelease(bounty, pullRequestUrl);
     }
     if (!bounty.validationReceipt?.approved) bounty = await this.validate(bounty);
     if (!bounty.validationReceipt?.approved) {
       throw new Error('merged pull request has not passed independent review');
     }
     if (bounty.state !== 'accepted') {
+      const review = bounty.validationReceipt;
+      const merge = await this.reviewer.mergedEvidence(bounty, pullRequestUrl);
+      assertReviewedMerge(bounty, merge);
       const validating = transitionRescueBounty(bounty, 'validating', {
         at: this.now().toISOString(),
         expectedRevision: bounty.revision,
@@ -269,7 +293,17 @@ export class BountyService {
         expectedRevision: bounty.revision,
       });
       bounty = await this.store.updateBounty(accepted, bounty.revision);
-      await this.store.appendActivity('bounty.accepted', bounty.id, { pullRequestUrl });
+      await this.store.appendActivity('bounty.accepted', bounty.id, {
+        pullRequestUrl,
+        headSha: merge.headSha,
+        diffHash: merge.diffHash,
+        reviewedBaseSha: review.baseSha,
+        reviewedBaseRef: review.baseRef,
+        mergedBaseSha: merge.baseSha,
+        mergedBaseRef: merge.baseRef,
+        mergeCommitSha: merge.mergeCommitSha,
+        mergedAt: merge.mergedAt,
+      });
     }
 
     let escrow = await this.store.escrowByBounty(bounty.id);
@@ -289,7 +323,7 @@ export class BountyService {
       try {
         operation = await this.policy.releaseEscrow(
           escrow.reservationId,
-          pullRequestNumber(pullRequestUrl, bounty.repository),
+          releaseEvidence(bounty, pullRequestUrl),
         );
       } catch (cause) {
         if (!this.claimDeadlineReached(escrow)) throw cause;
@@ -576,6 +610,7 @@ export class BountyService {
     if (!evidence.references.includes(pullRequestUrl)) {
       throw new Error('release evidence must reference the active claim pull request');
     }
+    releaseEvidence(bounty, pullRequestUrl);
     if (
       !bounty.activeClaim?.leaseExpiresAt ||
       Date.parse(bounty.activeClaim.leaseExpiresAt) <= this.now().getTime()
@@ -619,7 +654,7 @@ export class BountyService {
       try {
         const operation = await this.policy.releaseEscrow(
           escrow.reservationId,
-          pullRequestNumber(pullRequestUrl, bounty.repository),
+          releaseEvidence(bounty, pullRequestUrl),
         );
         assertOperation(operation, 'escrow_release');
         if (operation.recipient !== escrow.recipientWallet) {
@@ -1012,7 +1047,7 @@ export class BountyService {
       try {
         const release = await this.policy.releaseEscrow(
           escrow.reservationId,
-          pullRequestNumber(pullRequestUrl, bounty.repository),
+          releaseEvidence(bounty, pullRequestUrl),
         );
         assertOperation(release, 'escrow_release');
         if (release.recipient !== escrow.recipientWallet || !release.transactionSignature) {
@@ -1141,6 +1176,11 @@ export class BountyService {
         approved: review.approved,
         reason: review.reason,
         reviewedAt: this.now().toISOString(),
+        headSha: review.headSha,
+        baseSha: review.baseSha,
+        baseRef: review.baseRef,
+        diffHash: review.diffHash,
+        ...(review.providerReceipt ? { provider: review.providerReceipt } : {}),
       },
     };
     await this.store.updateBounty(receipt, validating.revision);
@@ -1171,6 +1211,37 @@ function pullRequestNumber(value: string, repository: string): number {
   );
   if (!match?.[1]) throw new Error('pull request URL does not match the bounty repository');
   return Number(match[1]);
+}
+
+function releaseEvidence(bounty: RescueBounty, pullRequestUrl: string) {
+  const receipt = bounty.validationReceipt;
+  if (!receipt?.headSha || !receipt.baseSha || !receipt.baseRef || !receipt.diffHash) {
+    throw new Error('bounty review evidence is incomplete');
+  }
+  return {
+    pullRequestNumber: pullRequestNumber(pullRequestUrl, bounty.repository),
+    reviewedHeadSha: receipt.headSha,
+    reviewedDiffHash: receipt.diffHash,
+  };
+}
+
+function assertReviewedMerge(
+  bounty: RescueBounty,
+  evidence: { headSha: string; diffHash: string },
+): void {
+  const receipt = bounty.validationReceipt;
+  if (
+    !receipt?.approved ||
+    !receipt.headSha ||
+    !receipt.baseSha ||
+    !receipt.baseRef ||
+    !receipt.diffHash
+  ) {
+    throw new Error('bounty review evidence is incomplete');
+  }
+  if (evidence.headSha !== receipt.headSha || evidence.diffHash !== receipt.diffHash) {
+    throw new Error('merged pull request does not match the independently reviewed revision');
+  }
 }
 
 function escapeRegExp(value: string): string {

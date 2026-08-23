@@ -25,6 +25,7 @@ import type { Job } from './types.js';
 import { Payments, USDC_DECIMALS, USDC_MAINNET, paymentRequiredHeader } from './x402.js';
 import {
   assertRefundCapacity,
+  refundLiabilityCommitment,
   RefundCapacityError,
   type PaymentPolicy,
   type PolicyReadiness,
@@ -67,6 +68,24 @@ export function createApp(deps: AppDependencies) {
       }
       if (req.method === 'GET' && url.pathname === '/healthz') {
         return json(res, 200, { ok: true });
+      }
+      if (req.method === 'GET' && url.pathname === '/internal/mizuki/functional-readiness') {
+        res.setHeader('cache-control', 'no-store');
+        if (!admin(req, deps.config.releaseProbeToken)) {
+          return json(res, 401, { error: 'unauthorized' });
+        }
+        const report = await deps.readiness.check();
+        if (!report.ready) return json(res, 503, { status: 'unavailable' });
+        return json(res, 200, {
+          status: 'ok',
+          service: 'mizuki-api',
+          checks: {
+            database: 'ok',
+            policySigner: 'ok',
+            codingGateway: 'ok',
+            settlement: 'ok',
+          },
+        });
       }
       if (req.method === 'GET' && url.pathname === '/deployz') {
         res.setHeader('cache-control', 'no-store');
@@ -405,8 +424,9 @@ export function createApp(deps: AppDependencies) {
             const liability = await deps.policy.registerRefundLiability(
               pendingJobId,
               result.payment.transaction,
+              refundLiabilityCommitment(quote),
             );
-            assertLiabilityMatchesPayment(liability, pendingJobId, result.payment);
+            assertLiabilityMatchesPayment(liability, pendingJobId, result.payment, quote);
             refundLiabilityId = liability.id;
             await deps.store.patchJob(pendingJobId, { refundLiabilityId });
             return result;
@@ -597,8 +617,9 @@ export function createApp(deps: AppDependencies) {
             const liability = await deps.policy.registerRefundLiability(
               job.id,
               payment.transaction,
+              refundLiabilityCommitment(job.quote),
             );
-            assertLiabilityMatchesPayment(liability, job.id, payment);
+            assertLiabilityMatchesPayment(liability, job.id, payment, job.quote);
             refundLiabilityId = liability.id;
             await deps.store.patchJob(job.id, { refundLiabilityId });
           }
@@ -669,7 +690,7 @@ export async function ensureRefundCapacity(
     treasury: deps.config.payTo,
     mint: USDC_MAINNET,
     decimals: USDC_DECIMALS,
-    escrowAuthority: deps.config.clawPumpPayoutWallet,
+    escrowAuthority: deps.config.escrowRefundTo,
     unfinishedLiabilityRaw,
     proposedPaymentRaw,
   });
@@ -687,7 +708,9 @@ function assertLiabilityMatchesPayment(
   liability: RefundLiability,
   jobId: string,
   payment: Job['payment'],
+  quote: Job['quote'],
 ): void {
+  const commitment = refundLiabilityCommitment(quote);
   if (
     liability.jobId !== jobId ||
     liability.settlementSignature !== payment.transaction ||
@@ -695,7 +718,13 @@ function assertLiabilityMatchesPayment(
     liability.mint !== USDC_MAINNET ||
     liability.decimals !== USDC_DECIMALS ||
     liability.rawAmount !== payment.amountAtomic ||
-    liability.amountUsdCents !== Number(payment.amountAtomic) / 10_000
+    liability.amountUsdCents !== Number(payment.amountAtomic) / 10_000 ||
+    liability.repository !== commitment.repository ||
+    liability.issueNumber !== commitment.issueNumber ||
+    liability.baseRef !== commitment.baseRef ||
+    liability.baseSha !== commitment.baseSha ||
+    liability.repositoryAuthorizedAt !== commitment.repositoryAuthorizedAt ||
+    liability.authorizationEvidenceHash !== commitment.authorizationEvidenceHash
   ) {
     throw new Error('refund liability evidence does not match the settled payment');
   }

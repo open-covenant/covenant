@@ -1,0 +1,21 @@
+{
+  "name": "Mizuki Core",
+  "url": "https://mizuki.covenant.org",
+  "description": "Maintainer-authorized paid maintenance jobs and pull-request delivery.",
+  "hook_attributes": {
+    "url": "https://mizuki.covenant.org/api/mizuki/v1/github/webhook",
+    "active": true
+  },
+  "callback_urls": ["https://mizuki.covenant.org/api/mizuki/v1/auth/github/callback"],
+  "public": true,
+  "request_oauth_on_install": false,
+  "default_permissions": {
+    "checks": "read",
+    "contents": "write",
+    "issues": "read",
+    "members": "read",
+    "metadata": "read",
+    "pull_requests": "write"
+  },
+  "default_events": ["pull_request"]
+}

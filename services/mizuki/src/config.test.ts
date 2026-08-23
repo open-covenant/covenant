@@ -98,15 +98,21 @@ describe('live configuration', () => {
     MIZUKI_TRUSTED_PROXY_HOPS: '1',
     MIZUKI_X402_FACILITATOR: 'https://facilitator.example.com',
     MIZUKI_PAY_TO: '11111111111111111111111111111111',
+    MIZUKI_ESCROW_REFUND_TO: 'So11111111111111111111111111111111111111112',
     MIZUKI_POLICY_SIGNER_URL: 'http://signer:8792',
     MIZUKI_POLICY_SIGNER_TOKEN: 'p'.repeat(32),
     MIZUKI_JOB_AUTHORITY_SEED: Buffer.alloc(32, 7).toString('base64'),
     MIZUKI_ADMIN_TOKEN: 'a'.repeat(32),
+    MIZUKI_RELEASE_PROBE_TOKEN: 'd'.repeat(32),
     MIZUKI_CODING_GATEWAY_URL: 'http://gateway:8642',
     MIZUKI_CODING_GATEWAY_TOKEN: 'c'.repeat(32),
     USEPOD_API_KEY: 'usepod-key',
+    USEPOD_BASE_URL: 'https://api.usepod.ai',
     USEPOD_MODEL: 'coder-route',
     USEPOD_REVIEW_MODEL: 'reviewer-route',
+    USEPOD_MAX_INPUT_PRICE_MICROUNITS: '200000',
+    USEPOD_MAX_OUTPUT_PRICE_MICROUNITS: '400000',
+    USEPOD_MIN_BALANCE: '2000000',
     MIZUKI_GITHUB_APP_ID: '1234',
     MIZUKI_GITHUB_PRIVATE_KEY: '-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----',
     MIZUKI_GITHUB_CLIENT_ID: 'client-id',
@@ -151,6 +157,43 @@ describe('live configuration', () => {
     ).toThrow('must differ');
   });
 
+  it('keeps USDC refunds and SOL escrow returns on distinct signer custody addresses', () => {
+    expect(() =>
+      assertLiveConfig(
+        loadConfig({ ...complete, MIZUKI_ESCROW_REFUND_TO: complete.MIZUKI_PAY_TO }),
+      ),
+    ).toThrow(/must differ/);
+    expect(() =>
+      assertLiveConfig(loadConfig({ ...complete, MIZUKI_ESCROW_REFUND_TO: 'not-an-address' })),
+    ).toThrow(/MIZUKI_ESCROW_REFUND_TO/);
+  });
+
+  it('rejects tokenized base URLs and cost estimates below the request ceilings', () => {
+    expect(() =>
+      assertLiveConfig(
+        loadConfig({ ...complete, USEPOD_BASE_URL: 'https://api.usepod.ai/proxy/exposed/v1' }),
+      ),
+    ).toThrow(/exactly https:\/\/api\.usepod\.ai/);
+    expect(() =>
+      assertLiveConfig(
+        loadConfig({
+          ...complete,
+          USEPOD_MAX_OUTPUT_PRICE_MICROUNITS: '500000',
+          USEPOD_OUTPUT_USD_PER_MILLION: '0.4',
+        }),
+      ),
+    ).toThrow(/understates the output price ceiling/);
+  });
+
+  it('pins the live provider origin and requires an explicit funded floor', () => {
+    expect(() =>
+      assertLiveConfig(loadConfig({ ...complete, USEPOD_BASE_URL: 'https://relay.example' })),
+    ).toThrow(/exactly https:\/\/api\.usepod\.ai/);
+    expect(() => assertLiveConfig(loadConfig({ ...complete, USEPOD_MIN_BALANCE: '0' }))).toThrow(
+      /positive decimal/,
+    );
+  });
+
   it('keeps credentialed dependencies on single-label private service addresses', () => {
     for (const [name, value] of [
       ['MIZUKI_CODING_GATEWAY_URL', 'https://gateway.example.com'],
@@ -185,7 +228,7 @@ describe('live configuration', () => {
         loadConfig({
           ...complete,
           CLAWPUMP_AGENT_ID: 'mizuki-agent',
-          CLAWPUMP_PAYOUT_WALLET: '11111111111111111111111111111111',
+          CLAWPUMP_PAYOUT_WALLET: complete.MIZUKI_ESCROW_REFUND_TO,
         }),
       ),
     ).not.toThrow();

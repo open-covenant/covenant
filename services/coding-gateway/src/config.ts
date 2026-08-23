@@ -1,6 +1,23 @@
 /** Gateway configuration and model pricing, all overridable by env. */
 
 const model = process.env.CODER_MODEL ?? 'claude-sonnet-4-6';
+const usePodBaseUrl = process.env.USEPOD_BASE_URL ?? 'https://api.usepod.ai';
+const usePodMaxInputPriceMicrounits = boundedInteger(
+  process.env.USEPOD_MAX_INPUT_PRICE_MICROUNITS,
+  200_000,
+  'USEPOD_MAX_INPUT_PRICE_MICROUNITS',
+  1,
+  100_000_000,
+);
+const usePodMaxOutputPriceMicrounits = boundedInteger(
+  process.env.USEPOD_MAX_OUTPUT_PRICE_MICROUNITS,
+  400_000,
+  'USEPOD_MAX_OUTPUT_PRICE_MICROUNITS',
+  1,
+  100_000_000,
+);
+const usePodMinimumBalance = decimal(process.env.USEPOD_MIN_BALANCE, '1', 'USEPOD_MIN_BALANCE');
+const perRunUsdMax = positiveNumber(process.env.CODER_PER_RUN_USD_MAX, 2, 'CODER_PER_RUN_USD_MAX');
 const readinessRefreshMs = boundedDuration(
   process.env.CODER_READINESS_REFRESH_MS,
   120_000,
@@ -36,6 +53,10 @@ export const config = {
   // so the $200/mo budget survives public traffic. Set CODER_MODEL to
   // claude-opus-4-7 for a gated top-quality tier.
   model,
+  usePodBaseUrl,
+  usePodMaxInputPriceMicrounits,
+  usePodMaxOutputPriceMicrounits,
+  usePodMinimumBalance,
   // Public (Sonnet) default is "low": on open-ended build prompts ("make a
   // Next.js app with X") high effort burns minutes on a single upfront
   // thinking block before the first tool call — measured ~3min — which reads
@@ -52,14 +73,14 @@ export const config = {
   // Spend caps (USD). Daily is a rate limit on the monthly bucket; both hard.
   dailyUsd: positiveNumber(process.env.CODER_DAILY_USD, 6, 'CODER_DAILY_USD'),
   monthlyUsd: positiveNumber(process.env.CODER_MONTHLY_USD, 200, 'CODER_MONTHLY_USD'),
-  perRunUsdMax: positiveNumber(process.env.CODER_PER_RUN_USD_MAX, 2, 'CODER_PER_RUN_USD_MAX'),
+  perRunUsdMax,
 
   maxConcurrent: positiveInt(process.env.CODER_MAX_CONCURRENT, 2, 'CODER_MAX_CONCURRENT'),
 
   // Per-run wall-clock ceiling. The gateway aborts a run after this many ms;
   // the E2B microVM uses the same value as its self-destruct backstop, so a
-  // gateway crash mid-run still has a hard end. Also the reservation horizon
-  // the spend ledger persists for warm recovery on restart.
+  // gateway crash mid-run still has a hard end. The ledger records the same
+  // deadline for audit but charges unresolved reservations in full on restart.
   wallMs: positiveInt(process.env.CODER_WALL_MS, 600_000, 'CODER_WALL_MS'),
 
   // Operator-supplied E2B estimate; reconcile it against live sandbox receipts.
@@ -106,6 +127,10 @@ export function assertProductionConfig(env: NodeJS.ProcessEnv = process.env): vo
     ['USEPOD_API_KEY', Boolean(env.USEPOD_API_KEY)],
     ['E2B_API_KEY', Boolean(env.E2B_API_KEY)],
     ['CODER_MODEL', Boolean(env.CODER_MODEL)],
+    ['USEPOD_MAX_INPUT_PRICE_MICROUNITS', Boolean(env.USEPOD_MAX_INPUT_PRICE_MICROUNITS)],
+    ['USEPOD_MAX_OUTPUT_PRICE_MICROUNITS', Boolean(env.USEPOD_MAX_OUTPUT_PRICE_MICROUNITS)],
+    ['USEPOD_MIN_BALANCE', Boolean(env.USEPOD_MIN_BALANCE)],
+    ['E2B_TEMPLATE', Boolean(env.E2B_TEMPLATE)],
     ['LEDGER_PATH', Boolean(env.LEDGER_PATH?.startsWith('/'))],
     ['RUN_STORE_PATH', Boolean(env.RUN_STORE_PATH?.startsWith('/'))],
   ] as const;
@@ -114,6 +139,51 @@ export function assertProductionConfig(env: NodeJS.ProcessEnv = process.env): vo
     missing.push('CODER_BACKEND=usepod');
   }
   if (env.USEPOD_MODEL) missing.push('USEPOD_MODEL must be unset; use CODER_MODEL');
+  try {
+    const url = new URL(env.USEPOD_BASE_URL ?? '');
+    if (
+      url.origin !== 'https://api.usepod.ai' ||
+      url.protocol !== 'https:' ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash ||
+      url.pathname !== '/'
+    ) {
+      missing.push('USEPOD_BASE_URL must be exactly https://api.usepod.ai');
+    }
+  } catch {
+    missing.push('USEPOD_BASE_URL must be exactly https://api.usepod.ai');
+  }
+  if (env.USEPOD_MIN_BALANCE !== undefined) {
+    try {
+      decimal(env.USEPOD_MIN_BALANCE, '', 'USEPOD_MIN_BALANCE');
+    } catch {
+      missing.push('USEPOD_MIN_BALANCE must be a positive decimal in provider header units');
+    }
+  }
+  const inputEstimate = Number(env.USEPOD_INPUT_USD_PER_MILLION ?? 0.2) * 1_000_000;
+  const outputEstimate = Number(env.USEPOD_OUTPUT_USD_PER_MILLION ?? 0.4) * 1_000_000;
+  const maxInputPrice = boundedInteger(
+    env.USEPOD_MAX_INPUT_PRICE_MICROUNITS,
+    200_000,
+    'USEPOD_MAX_INPUT_PRICE_MICROUNITS',
+    1,
+    100_000_000,
+  );
+  const maxOutputPrice = boundedInteger(
+    env.USEPOD_MAX_OUTPUT_PRICE_MICROUNITS,
+    400_000,
+    'USEPOD_MAX_OUTPUT_PRICE_MICROUNITS',
+    1,
+    100_000_000,
+  );
+  if (inputEstimate < maxInputPrice) {
+    missing.push('USEPOD_INPUT_USD_PER_MILLION understates the input price ceiling');
+  }
+  if (outputEstimate < maxOutputPrice) {
+    missing.push('USEPOD_OUTPUT_USD_PER_MILLION understates the output price ceiling');
+  }
   const egress = new Set(
     (env.E2B_EGRESS_ALLOW ?? '')
       .split(',')
@@ -171,11 +241,31 @@ function boundedDuration(
   return value;
 }
 
+function boundedInteger(
+  raw: string | undefined,
+  fallback: number,
+  name: string,
+  min: number,
+  max: number,
+): number {
+  const value = positiveInt(raw, fallback, name);
+  if (value < min || value > max) throw new Error(`${name} must be between ${min} and ${max}`);
+  return value;
+}
+
 function nonNegativeNumber(raw: string | undefined, fallback: number, name: string): number {
   if (raw === undefined || raw === '') return fallback;
   const value = Number(raw);
   if (!Number.isFinite(value) || value < 0) {
     throw new Error(`${name} must be a non-negative finite number`);
+  }
+  return value;
+}
+
+function decimal(raw: string | undefined, fallback: string, name: string): string {
+  const value = raw === undefined || raw === '' ? fallback : raw;
+  if (!/^\d{1,48}(?:\.\d{1,18})?$/.test(value) || !/[1-9]/.test(value)) {
+    throw new Error(`${name} must be a positive decimal`);
   }
   return value;
 }

@@ -12,6 +12,7 @@ packages:
   - services/coding-gateway
   - services/mizuki
   - services/mizuki-policy-signer
+  - services/mizuki-deployment-controller
   - services/mizuki-updater
   - apps/mizuki-web
   - services/telegram-bot

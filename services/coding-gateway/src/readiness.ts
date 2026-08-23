@@ -10,6 +10,7 @@ export interface ReadinessEvidence {
 
 export interface GatewayReadinessReport {
   ready: boolean;
+  model: string;
   checkedAt: string;
   ageMs: number;
   lastSuccessfulAt: string | null;
@@ -19,9 +20,8 @@ export interface GatewayReadinessReport {
 }
 
 interface ModelProbe {
-  url: string;
-  headers: Record<string, string>;
   expectedModel: string;
+  check: () => Promise<void>;
 }
 
 interface Options {
@@ -31,7 +31,6 @@ interface Options {
   maxAgeMs: number;
   timeoutMs: number;
   failureRetryMs?: number;
-  request?: typeof fetch;
   now?: () => number;
 }
 
@@ -42,7 +41,6 @@ interface Snapshot {
 }
 
 export class GatewayReadiness {
-  private readonly request: typeof fetch;
   private readonly now: () => number;
   private readonly failureRetryMs: number;
   private snapshot?: Snapshot;
@@ -55,7 +53,6 @@ export class GatewayReadiness {
     if (options.timeoutMs <= 0 || options.timeoutMs > options.maxAgeMs) {
       throw new Error('readiness timeout must be positive and no greater than max age');
     }
-    this.request = options.request ?? fetch;
     this.now = options.now ?? Date.now;
     this.failureRetryMs = options.failureRetryMs ?? Math.min(5_000, options.refreshMs);
   }
@@ -114,15 +111,7 @@ export class GatewayReadiness {
   }
 
   private async probeModel(): Promise<void> {
-    const response = await this.request(this.options.model.url, {
-      headers: this.options.model.headers,
-      signal: AbortSignal.timeout(this.options.timeoutMs),
-    });
-    if (!response.ok) throw new Error('model catalog is unavailable');
-    const models = parseModelCatalog(await response.json());
-    if (!models.has(this.options.model.expectedModel)) {
-      throw new Error('configured model is unavailable');
-    }
+    await this.options.model.check();
   }
 
   private async probeSandbox(): Promise<void> {
@@ -174,6 +163,7 @@ export class GatewayReadiness {
     }
     return {
       ready: failed.length === 0,
+      model: this.options.model.expectedModel,
       checkedAt: new Date(snapshot.checkedAtMs).toISOString(),
       ageMs,
       lastSuccessfulAt:
@@ -189,24 +179,6 @@ export class GatewayReadiness {
   private age(snapshot: Snapshot): number {
     return Math.max(0, this.now() - snapshot.checkedAtMs);
   }
-}
-
-function parseModelCatalog(value: unknown): Set<string> {
-  if (!isRecord(value) || !Array.isArray(value.data)) {
-    throw new Error('model catalog schema is invalid');
-  }
-  const ids = new Set<string>();
-  for (const item of value.data) {
-    if (!isRecord(item) || typeof item.id !== 'string' || item.id.length === 0) {
-      throw new Error('model catalog schema is invalid');
-    }
-    ids.add(item.id);
-  }
-  return ids;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function dependenciesReady(dependencies: Record<ReadinessDependency, ReadinessEvidence>): boolean {

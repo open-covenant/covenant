@@ -44,7 +44,7 @@ The matching artifact digest proves reproducibility for the hosted build inputs.
 | Coding gateway      | —                                                                                         | Not deployed                                                           |
 | Updater             | —                                                                                         | Not deployed                                                           |
 
-Both Render services have automatic deployment disabled. The website has demo mode disabled, targets the live API, and shares a valid service-held proxy secret with it. Public verification confirmed:
+Both currently hosted Render services have automatic deployment disabled. The source-built API is a closed bootstrap deployment, not the production target: it must remain closed and be suspended during the image-runtime cutover. The production Blueprint now permits only `mizuki-runtime-production` to serve the website and use the canonical commercial database. The website currently has demo mode disabled, targets the closed bootstrap API, and shares a valid service-held proxy secret with it. Public verification confirmed:
 
 - the homepage renders live zero-state metrics without demo or stale-API warnings;
 - the canonical profile image appears in the header, footer, browser icons, install manifest, and social metadata;
@@ -84,7 +84,7 @@ They must remain closed while the signer, gateway, updater, live providers, prog
 
 ## Remaining launch blockers
 
-1. Deploy the policy signer, coding gateway, and updater from a hosted-verified revision and prove their private authenticated connectivity to the fail-closed API.
+1. Deploy the policy signer, coding gateway, updater, controller, shadow, and sole image-backed production runtime from a hosted-verified revision; cut the website over and suspend the source-built bootstrap API before any paid traffic.
 2. Configure live model, sandbox, facilitator, independent RPC, and price providers with production-scoped keys; retain evidence without exposing credentials.
 3. Fund tightly capped customer-refund, bounty-SOL, settlement, and transaction-fee reserves and prove signer capacity checks against them.
 4. Complete independent escrow review, adversarial devnet canaries, reproducible verification, and an immutable mainnet program deployment pinned by the signer.

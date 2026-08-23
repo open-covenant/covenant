@@ -3,19 +3,17 @@ import { GatewayReadiness } from '../src/readiness.js';
 import type { Sandbox, SandboxProvider } from '../src/types.js';
 
 describe('GatewayReadiness', () => {
-  it('authenticates the model catalog and caches fresh create/exec/destroy evidence', async () => {
+  it('runs the configured model probe and caches fresh create/exec/destroy evidence', async () => {
     let now = 1_000;
-    const request = vi.fn<typeof fetch>(async (_url, init) => {
-      expect(init?.headers).toMatchObject({ authorization: 'Bearer secret' });
-      return Response.json({ data: [{ id: 'deepseek-v3.2' }] });
-    });
+    const modelCheck = vi.fn(async () => undefined);
     const sandbox = fakeSandbox();
     const provider = fakeProvider(sandbox);
-    const readiness = createReadiness(provider, request, () => now);
+    const readiness = createReadiness(provider, modelCheck, () => now);
 
     const first = await readiness.check();
     expect(first).toMatchObject({
       ready: true,
+      model: 'deepseek-v3.2',
       checkedAt: new Date(now).toISOString(),
       ageMs: 0,
       lastSuccessfulAgeMs: 0,
@@ -23,12 +21,12 @@ describe('GatewayReadiness', () => {
       dependencies: { model: { ok: true }, sandbox: { ok: true } },
     });
     await readiness.check();
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(modelCheck).toHaveBeenCalledTimes(1);
     expect(provider.create).toHaveBeenCalledTimes(1);
 
     now += 101;
     await readiness.check();
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(modelCheck).toHaveBeenCalledTimes(2);
     expect(provider.create).toHaveBeenCalledTimes(2);
     expect(sandbox.destroy).toHaveBeenCalledTimes(2);
   });
@@ -38,30 +36,27 @@ describe('GatewayReadiness', () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const request = vi.fn<typeof fetch>(async () => {
+    const modelCheck = vi.fn(async () => {
       await gate;
-      return Response.json({ data: [{ id: 'deepseek-v3.2' }] });
     });
     const provider = fakeProvider(fakeSandbox());
-    const readiness = createReadiness(provider, request, () => 1_000);
+    const readiness = createReadiness(provider, modelCheck, () => 1_000);
 
     const checks = [readiness.check(), readiness.check(), readiness.check()];
     release();
     await expect(Promise.all(checks)).resolves.toHaveLength(3);
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(modelCheck).toHaveBeenCalledTimes(1);
     expect(provider.create).toHaveBeenCalledTimes(1);
   });
 
   it('fails closed when evidence is stale or a dependency fails, then recovers', async () => {
     let now = 1_000;
     let modelHealthy = true;
-    const request = vi.fn<typeof fetch>(async () =>
-      modelHealthy
-        ? Response.json({ data: [{ id: 'deepseek-v3.2' }] })
-        : new Response(null, { status: 503 }),
-    );
+    const modelCheck = vi.fn(async () => {
+      if (!modelHealthy) throw new Error('model unavailable');
+    });
     const provider = fakeProvider(fakeSandbox());
-    const readiness = createReadiness(provider, request, () => now);
+    const readiness = createReadiness(provider, modelCheck, () => now);
 
     await expect(readiness.check()).resolves.toMatchObject({ ready: true });
     modelHealthy = false;
@@ -81,11 +76,13 @@ describe('GatewayReadiness', () => {
     });
   });
 
-  it('requires exact model-catalog and sandbox teardown evidence', async () => {
-    const malformed = vi.fn<typeof fetch>(async () => Response.json({ models: [] }));
+  it('requires successful model and sandbox teardown evidence', async () => {
+    const failedModel = vi.fn(async () => {
+      throw new Error('model evidence is invalid');
+    });
     const badSandbox = fakeSandbox();
     badSandbox.destroy.mockRejectedValueOnce(new Error('destroy failed'));
-    const readiness = createReadiness(fakeProvider(badSandbox), malformed, () => 1_000);
+    const readiness = createReadiness(fakeProvider(badSandbox), failedModel, () => 1_000);
 
     await expect(readiness.check()).resolves.toMatchObject({
       ready: false,
@@ -96,17 +93,15 @@ describe('GatewayReadiness', () => {
 
 function createReadiness(
   provider: SandboxProvider,
-  request: typeof fetch,
+  modelCheck: () => Promise<void>,
   now: () => number,
 ): GatewayReadiness {
   return new GatewayReadiness({
     provider,
-    request,
     now,
     model: {
-      url: 'https://usepod.test/v1/models',
-      headers: { authorization: 'Bearer secret' },
       expectedModel: 'deepseek-v3.2',
+      check: modelCheck,
     },
     refreshMs: 100,
     maxAgeMs: 300,

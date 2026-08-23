@@ -165,11 +165,12 @@ fn prefunded_pdas_cannot_block_funding_or_change_principal() {
     let state_address = state_pda(&authority, &BOUNTY).0;
     let vault_address = vault_pda(&state_address).0;
     let guard_address = guard_pda(&authority, &BOUNTY).0;
+    let empty_account_rent = env.svm.minimum_balance_for_rent_exemption(0);
     let vault_prefund = env.svm.minimum_balance_for_rent_exemption(VAULT_LEN) + AMOUNT + 2;
     let donations = [
-        (state_address, 1),
+        (state_address, empty_account_rent),
         (vault_address, vault_prefund),
-        (guard_address, 3),
+        (guard_address, empty_account_rent),
     ];
     let instructions = donations
         .iter()

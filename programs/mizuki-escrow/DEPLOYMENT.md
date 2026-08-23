@@ -14,14 +14,16 @@ Do not deploy to mainnet until all of the following are true:
 
 ## Program ID strategy
 
-Generate the program keypair outside the repository. Never commit or copy it into application containers. Its public key becomes the production program ID; the program has no embedded ID or configurable admin account. The policy signer starts with escrow disabled and receives the program ID only after immutable deployment and hash verification.
+Generate separate devnet and mainnet program keypairs outside the repository. Never commit or copy either into application containers. The mainnet keypair's public key becomes the production program ID; the program has no embedded ID or configurable admin account. The policy signer starts with escrow disabled and receives the mainnet program ID only after immutable deployment and hash verification.
 
 ```bash
-solana-keygen new --outfile /secure/offline/mizuki-escrow-program-keypair.json
-solana-keygen pubkey /secure/offline/mizuki-escrow-program-keypair.json
+solana-keygen new --outfile /secure/devnet/mizuki-escrow-program-keypair.json
+solana-keygen new --outfile /secure/offline/mizuki-escrow-mainnet-program-keypair.json
+solana-keygen pubkey /secure/devnet/mizuki-escrow-program-keypair.json
+solana-keygen pubkey /secure/offline/mizuki-escrow-mainnet-program-keypair.json
 ```
 
-The path above is illustrative. Use the project’s actual offline signing procedure.
+The paths above are illustrative. Use the project's actual offline signing procedure and record that the two public keys differ. Never use the mainnet program-ID signer, deploy authority, upgrade authority, or fee payer on devnet. The mainnet program-ID signer is needed for initial deployment only; keep it offline before and after that ceremony.
 
 ## Build
 
@@ -42,11 +44,11 @@ Deploy upgradeable on devnet only while canaries are running. Confirm the progra
 ```bash
 solana program deploy \
   --url devnet \
-  --program-id /secure/offline/mizuki-escrow-program-keypair.json \
+  --program-id /secure/devnet/mizuki-escrow-program-keypair.json \
   target/deploy/mizuki_escrow_program.so
 ```
 
-After all canaries, either finalize the devnet program or abandon it. Never reuse a devnet authority key as the production authority.
+After all canaries, either finalize the devnet program or abandon it. Never reuse any devnet program-ID, deploy, fee-payer, or upgrade-authority key material in production.
 
 ## Mainnet immutable deployment
 
@@ -56,7 +58,7 @@ The production deployment must be immutable from its first successful deploy:
 solana program deploy \
   --url mainnet-beta \
   --final \
-  --program-id /secure/offline/mizuki-escrow-program-keypair.json \
+  --program-id /secure/offline/mizuki-escrow-mainnet-program-keypair.json \
   target/deploy/mizuki_escrow_program.so
 ```
 
@@ -72,10 +74,10 @@ Run the repository verifier with two unrelated finalized RPC endpoints:
 
 The procedure performs these independent checks:
 
-1. `solana program show --commitment finalized --output json` is captured from both RPCs. The program must use the expected loader and its upgrade authority must be absent.
+1. `solana program show --commitment finalized --output json` is captured from both RPCs. The verifier requires the expected loader, a null upgrade authority, and identical program-data metadata or exits nonzero.
 2. `solana program dump --commitment finalized` extracts executable bytes from each program-data account. The two dumps must be byte-identical and match the approved local artifact.
 3. SHA-256 is recorded for the local file and both finalized dumps.
-4. `solana-verify get-program-hash` is recorded independently for local and on-chain executables. This hash is distinct from raw file SHA-256; compare like with like.
+4. `solana-verify get-program-hash` is calculated independently for the local and both on-chain executables. The verifier requires all three values to match or exits nonzero. This hash is distinct from raw file SHA-256; compare like with like.
 
 The signer must independently repeat loader-state parsing at startup: resolve the executable program to its program-data address, require the expected loader owner, require no upgrade authority, hash the executable bytes, compare them to its allowlist, and require the same result from two finalized RPCs. Any mismatch keeps escrow mutations disabled.
 

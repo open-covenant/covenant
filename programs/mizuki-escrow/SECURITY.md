@@ -9,6 +9,7 @@ The program assumes an attacker controls every submitted instruction byte, accou
 ## Enforced invariants
 
 - State, vault, and guard are canonical PDAs with canonical bumps.
+- System-owned, data-empty PDAs remain initializable after third-party prefunding; occupied accounts are rejected.
 - The authority is an immutable system wallet stored at funding and must sign every mutation.
 - `fund` creates an unbound, fully funded vault before publication.
 - `bind` moves `Funded -> Bound` once and stores an immutable non-zero claimant and proof commitment.

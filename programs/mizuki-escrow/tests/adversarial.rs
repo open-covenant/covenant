@@ -1,12 +1,13 @@
 use crate::{
     instruction::{EscrowInstruction, ResolveArgs},
-    state::EscrowStatus,
+    state::{EscrowStatus, VAULT_LEN},
     test_common::*,
 };
 use solana_sdk::{
     instruction::{AccountMeta, Instruction},
     signature::Signer,
 };
+use solana_system_interface::instruction as system_instruction;
 
 #[test]
 fn claimant_cannot_release_refund_or_replace_authority() {
@@ -155,6 +156,47 @@ fn fund_rejects_expired_offer_wrong_bump_and_reinitialization() {
     let replay = fund_ix(env.authority.pubkey(), BOUNTY, OFFER_EXPIRY);
     assert!(send(&mut env.svm, &env.payer, &[replay], &[&env.authority]).is_err());
     assert_eq!(guard(&env).status, EscrowStatus::Funded);
+}
+
+#[test]
+fn prefunded_pdas_cannot_block_funding_or_change_principal() {
+    let mut env = boot();
+    let authority = env.authority.pubkey();
+    let state_address = state_pda(&authority, &BOUNTY).0;
+    let vault_address = vault_pda(&state_address).0;
+    let guard_address = guard_pda(&authority, &BOUNTY).0;
+    let vault_prefund = env.svm.minimum_balance_for_rent_exemption(VAULT_LEN) + AMOUNT + 2;
+    let donations = [
+        (state_address, 1),
+        (vault_address, vault_prefund),
+        (guard_address, 3),
+    ];
+    let instructions = donations
+        .iter()
+        .map(|(address, lamports)| {
+            system_instruction::transfer(&env.stranger.pubkey(), address, *lamports)
+        })
+        .collect::<Vec<_>>();
+    send(&mut env.svm, &env.payer, &instructions, &[&env.stranger]).unwrap();
+
+    fund(&mut env).unwrap();
+    for (address, _) in donations {
+        let account = env.svm.get_account(&address).unwrap();
+        assert_eq!(account.owner, PROGRAM_ID);
+    }
+    assert_eq!(balance(&env, &vault_address), vault_prefund);
+
+    bind(&mut env).unwrap();
+    let claimant_before = balance(&env, &env.claimant.pubkey());
+    let release = release_ix(authority, BOUNTY, env.claimant.pubkey());
+    send(&mut env.svm, &env.payer, &[release], &[&env.authority]).unwrap();
+    assert_eq!(
+        balance(&env, &env.claimant.pubkey()) - claimant_before,
+        AMOUNT
+    );
+    assert_eq!(balance(&env, &state_address), 0);
+    assert_eq!(balance(&env, &vault_address), 0);
+    assert_eq!(guard(&env).status, EscrowStatus::Released);
 }
 
 #[test]

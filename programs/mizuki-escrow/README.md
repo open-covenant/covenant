@@ -13,6 +13,8 @@ At claim expiry the paths do not overlap: release requires `now < claim_expires_
 
 The program deliberately has no configuration account, authority rotation, destination change, partial payout, claimant timeout, dispute instruction, close instruction, arbitrary CPI, token support, or upgrade shortcut. Fund is the only path that performs CPI, and it invokes only the fixed System Program to create canonical PDAs.
 
+Funding safely adopts canonical PDAs that were prefunded with lamports while still owned by the System Program and holding no data. It tops them up when necessary, allocates them, and assigns them to the escrow program in the same atomic transaction. Occupied or non-System accounts remain invalid. This prevents third-party dust transfers from blocking a known bounty ID.
+
 ## Source of truth
 
 [`abi/mizuki-escrow-v1.json`](abi/mizuki-escrow-v1.json) is the machine-readable wire contract. It contains exact instruction lengths, discriminators, account ordering, PDA seeds, state layouts, time boundaries, and golden byte vectors. The Rust codec and the external signer must both pass conformance tests against this file.
@@ -35,9 +37,9 @@ sha256(utf8("mizuki:escrow:state:v1") || state_bytes)
 ./scripts/test.sh
 ```
 
-The program tests load the built SBF artifact into LiteSVM and exercise real System Program CPIs, state transitions, lamport movement, strict expiry boundaries, terminal closure, donation griefing, alternate destinations, wrong authority/accounts/bumps, rebind attempts, malformed data, underfunded vaults, and replay.
+The program tests load the built SBF artifact into LiteSVM and exercise real System Program CPIs, state transitions, lamport movement, strict expiry boundaries, terminal closure, pre-fund PDA dusting, donation griefing, alternate destinations, wrong authority/accounts/bumps, rebind attempts, malformed data, underfunded vaults, and replay.
 
-The test gate requires `cargo-build-sbf` 4.0.0 or newer with platform-tools 1.53 or newer. It builds with `--arch v3`, rejects unresolved-symbol diagnostics, checks the artifact's ELF flags, and then runs all 24 host and SBF-backed tests against that exact artifact. Set `CARGO_BUILD_SBF_BIN` only when the compatible builder is installed outside `PATH`.
+The test gate requires `cargo-build-sbf` 4.0.0 or newer with platform-tools 1.53 or newer. It builds with `--arch v3`, rejects unresolved-symbol diagnostics, checks the artifact's ELF flags, and then runs all 25 host and SBF-backed tests against that exact artifact. Set `CARGO_BUILD_SBF_BIN` only when the compatible builder is installed outside `PATH`.
 
 For a containerized reproducible build:
 

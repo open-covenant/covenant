@@ -178,7 +178,7 @@ pnpm exec prettier --ignore-path .gitignore --check \
   'apps/mizuki-web/**/*.{ts,tsx,js,mjs,json,css,md}' \
   '!apps/mizuki-web/next-env.d.ts' \
   'infra/mizuki/**/*.{yaml,md}' \
-  'services/mizuki/**/*.{ts,json,md}' \
+  'services/mizuki/**/*.{ts,mjs,json,md}' \
   'services/mizuki-policy-signer/**/*.{ts,json,md}' \
   'services/mizuki-updater/**/*.{ts,json,md}' \
   'services/coding-gateway/src/backends/{index,usepod}.ts' \
@@ -219,6 +219,7 @@ RUBY
 pnpm --filter @covenant/mizuki typecheck
 pnpm --filter @covenant/mizuki test
 pnpm --filter @covenant/mizuki build
+pnpm --filter @covenant/mizuki smoke
 pnpm --filter @covenant/mizuki-policy-signer typecheck
 pnpm --filter @covenant/mizuki-policy-signer test
 pnpm --filter @covenant/mizuki-policy-signer build

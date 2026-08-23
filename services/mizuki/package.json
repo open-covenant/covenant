@@ -8,6 +8,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "predeploy": "node dist/predeploy-cli.js",
+    "smoke": "node scripts/smoke-start.mjs",
     "mcp": "node dist/mcp.js",
     "benchmark": "node dist/benchmark.js",
     "job-authority-public": "node dist/job-authority-public.js",

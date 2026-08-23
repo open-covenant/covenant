@@ -98,6 +98,9 @@ server.listen(config.port, config.host, () => {
   );
 });
 
+let financialRefreshRunning = false;
+let capabilityRefreshRunning = false;
+
 const mergePoll = setInterval(() => void refreshMerges(), 5 * 60_000);
 mergePoll.unref();
 void refreshMerges();
@@ -115,7 +118,17 @@ capabilityPoll.unref();
 void refreshCapabilities();
 
 async function refreshMerges(): Promise<void> {
-  for (const job of await store.jobsList()) {
+  let jobs;
+  try {
+    jobs = await store.jobsList();
+  } catch (cause) {
+    console.error(
+      `merge refresh failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+    );
+    return;
+  }
+
+  for (const job of jobs) {
     if (job.state !== 'delivered' || !job.prUrl || job.refundLiabilityDischargedAt) continue;
     try {
       const mergedAt = job.mergedAt ?? (await github.mergedAt(job));
@@ -170,8 +183,6 @@ async function refreshMergedBounties(): Promise<void> {
     }
   }
 }
-
-let financialRefreshRunning = false;
 
 async function refreshFinancialOperations(): Promise<void> {
   if (financialRefreshRunning) return;
@@ -228,6 +239,10 @@ async function refreshFinancialOperations(): Promise<void> {
     }
     await processor.reconcileInFlight();
     await processor.reconcileReceipts();
+  } catch (cause) {
+    console.error(
+      `financial recovery failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+    );
   } finally {
     financialRefreshRunning = false;
   }
@@ -242,8 +257,6 @@ async function refreshEarnings(): Promise<void> {
     );
   }
 }
-
-let capabilityRefreshRunning = false;
 
 async function refreshCapabilities(): Promise<void> {
   if (capabilityRefreshRunning) return;

@@ -113,8 +113,16 @@ jobs:
       - name: install test utilities
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends ripgrep
+          apt-get install -y --no-install-recommends ca-certificates curl ripgrep
           rustup component add rustfmt clippy
+      - name: install pinned Solana verification CLI
+        run: |
+          curl --fail --silent --show-error --location --retry 3 \
+            --output /usr/local/bin/solana-verify \
+            https://github.com/solana-foundation/solana-verifiable-build/releases/download/v0.5.0/solana-verify-0.5.0-linux
+          echo '411c7bc4cd6001f215ca21ab7de5dd22140175fef69e0e483c4768018f651eb6  /usr/local/bin/solana-verify' | sha256sum --check --strict
+          chmod 0755 /usr/local/bin/solana-verify
+          solana-verify --version
       - name: build and exercise the SBPFv3 artifact
         run: programs/mizuki-escrow/scripts/test.sh
       - name: prepare escrow release evidence

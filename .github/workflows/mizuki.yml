@@ -61,6 +61,18 @@ jobs:
         env:
           MIZUKI_SKIP_ESCROW: '1'
         run: infra/mizuki/verify.sh
+      - name: initialize updater recovery fixture
+        run: |
+          node --input-type=module <<'NODE'
+          import { PostgresUpgradeRepository } from './services/mizuki-updater/dist/postgres.js';
+
+          const repository = new PostgresUpgradeRepository(process.env.MIZUKI_UPDATER_TEST_DATABASE_URL);
+          try {
+            await repository.migrate();
+          } finally {
+            await repository.close();
+          }
+          NODE
       - name: exercise database backup restore
         run: |
           pg_dump -h 127.0.0.1 -U postgres -d mizuki_core --data-only --no-owner --no-privileges --file=/tmp/mizuki-core.data.sql

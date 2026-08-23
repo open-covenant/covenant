@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { notFound } from 'next/navigation';
 import { BountyActions } from '@/components/bounty-actions';
 import { DataError, DemoNotice } from '@/components/data-state';
 import { GithubClaimButton } from '@/components/github-claim-button';
@@ -19,6 +20,7 @@ export const metadata: Metadata = {
 export default async function BountyDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const result = await getBounty(id);
+  if (result.status === 'not_found') notFound();
   if (result.status === 'error') {
     return (
       <div className="page-shell shell fatal-state">

@@ -1,13 +1,19 @@
 import type { Metadata } from 'next';
+import { IntakeGate } from '@/components/intake-gate';
 import { JobLookup } from '@/components/job-lookup';
 import { QuoteWorkflow } from '@/components/quote-workflow';
+import { getAdmission } from '@/lib/api';
+
+export const dynamic = 'force-dynamic';
 
 export const metadata: Metadata = {
   title: 'Hire Mizuki',
   description: 'Submit one bounded public GitHub issue for a fixed $2 or $10 quote.',
 };
 
-export default function WorkPage() {
+export default async function WorkPage() {
+  const admission = await getAdmission();
+
   return (
     <div className="page-shell">
       <section className="page-hero shell work-hero">
@@ -28,7 +34,9 @@ export default function WorkPage() {
         </div>
       </section>
       <section className="shell work-grid">
-        <QuoteWorkflow />
+        <IntakeGate admission={admission}>
+          <QuoteWorkflow />
+        </IntakeGate>
         <aside className="scope-policy">
           <p className="eyebrow">Scope discipline</p>
           <h2>What Mizuki will accept</h2>

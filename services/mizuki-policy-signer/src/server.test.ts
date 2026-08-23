@@ -27,6 +27,7 @@ const JOB_AUTHORITY = Keypair.generate();
 describe('signer HTTP service', () => {
   let server: ReturnType<typeof createSignerServer>;
   let origin: string;
+  let merges: MockMergeVerifier;
 
   beforeEach(async () => {
     const store = new InMemoryOperationStore();
@@ -44,6 +45,7 @@ describe('signer HTTP service', () => {
       slot: 1,
       blockTimeUnixSeconds: Math.floor(Date.now() / 1_000),
     });
+    merges = new MockMergeVerifier();
     const service = new PolicyService(
       {
         refundTreasury: TREASURY,
@@ -64,10 +66,10 @@ describe('signer HTTP service', () => {
       store,
       chain,
       new FixedUsdPriceOracle(),
-      new MockMergeVerifier(),
+      merges,
       metrics,
     );
-    server = createSignerServer({ service, store, chain, metrics, authToken: TOKEN });
+    server = createSignerServer({ service, store, metrics, authToken: TOKEN });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address() as AddressInfo;
     origin = `http://127.0.0.1:${address.port}`;
@@ -238,6 +240,57 @@ describe('signer HTTP service', () => {
       escrowAuthority: '5'.repeat(32),
       finalizedEscrowBalanceLamports: '100000000000',
       availableEscrowReserveLamports: '99994500000',
+    });
+  });
+
+  it('returns authenticated production dependency evidence without secret values', async () => {
+    const response = await fetch(`${origin}/v1/readiness/evidence`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    const body = (await response.json()) as Record<string, unknown>;
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      healthy: true,
+      checks: {
+        database: true,
+        rpcConsensus: true,
+        priceConsensus: true,
+        githubCredential: true,
+        escrowProgram: true,
+        refundCustody: true,
+        bountyCustody: true,
+      },
+      chain: {
+        rpcProviders: 2,
+        escrowProgramId: '4'.repeat(32),
+        escrowProgramDataSha256: 'a'.repeat(64),
+        escrowProgramImmutable: true,
+        refundTreasury: TREASURY,
+        refundMint: MINT,
+        escrowAuthority: '5'.repeat(32),
+      },
+      prices: { feedCount: 2 },
+    });
+    expect(JSON.stringify(body)).not.toContain(TOKEN);
+  });
+
+  it('returns 503 from health and evidence when a required dependency is unready', async () => {
+    merges.error = new Error('credential rejected');
+
+    const [health, evidence] = await Promise.all([
+      fetch(`${origin}/health`),
+      fetch(`${origin}/v1/readiness/evidence`, {
+        headers: { authorization: `Bearer ${TOKEN}` },
+      }),
+    ]);
+
+    expect(health.status).toBe(503);
+    expect(await health.json()).toEqual({ ok: false });
+    expect(evidence.status).toBe(503);
+    expect(await evidence.json()).toMatchObject({
+      healthy: false,
+      checks: { githubCredential: false },
     });
   });
 

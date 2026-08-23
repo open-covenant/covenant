@@ -78,12 +78,19 @@ const responseSchema = z
     auditHeadHash: sha256,
   })
   .strict();
-const healthSchema = z
+const readinessSchema = z
   .object({
-    status: z.literal('ok'),
+    ready: z.literal(true),
     service: z.literal('mizuki-updater'),
+    failed: z.array(z.never()).length(0),
+    dependencies: z
+      .object({
+        postgres: z.object({ ok: z.literal(true) }).passthrough(),
+        operational: z.object({ ok: z.literal(true) }).passthrough(),
+      })
+      .passthrough(),
   })
-  .strict();
+  .passthrough();
 
 export type ObservedUpgrade = z.infer<typeof upgradeSchema> & { auditHeadHash: string };
 
@@ -127,13 +134,13 @@ export class UpdaterStatusClient implements UpgradeStatusReader {
 
   async readiness(): Promise<void> {
     const [response] = await Promise.all([
-      this.request(`${this.baseUrl}/health`, {
+      this.request(`${this.baseUrl}/readyz`, {
         headers: { accept: 'application/json' },
         signal: AbortSignal.timeout(this.timeoutMs),
       }),
       this.getByProposalId('mizuki-readiness-probe'),
     ]);
-    if (!response.ok) throw new Error('updater service is unavailable');
-    healthSchema.parse(await response.json());
+    if (!response.ok) throw new Error('updater service is not ready');
+    readinessSchema.parse(await response.json());
   }
 }

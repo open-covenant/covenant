@@ -28,7 +28,7 @@ export class Payments {
 
   constructor(private readonly config: Config) {
     if (config.paymentMode !== 'live') return;
-    if (!config.payTo) throw new Error('MIZUKI_PAY_TO is required in live payment mode');
+    if (!config.payTo) return;
 
     const facilitator = new HTTPFacilitatorClient({ url: config.facilitator, timeoutMs: 15_000 });
     const server = new x402ResourceServer(facilitator);
@@ -45,7 +45,10 @@ export class Payments {
 
   async readiness(): Promise<void> {
     if (this.config.paymentMode === 'mock') return;
-    const supported = await this.facilitator!.getSupported();
+    if (!this.server || !this.facilitator) {
+      throw new Error('live payments are not configured');
+    }
+    const supported = await this.facilitator.getSupported();
     if (!isSupportedResponse(supported)) throw new Error('facilitator evidence is invalid');
     const route = supported.kinds.some(
       (kind) =>

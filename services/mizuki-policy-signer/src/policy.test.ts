@@ -1,7 +1,7 @@
 import { createPrivateKey, sign } from 'node:crypto';
 import { Keypair } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
-import { FixedUsdPriceOracle, MockChainGateway } from './chain.js';
+import { FixedUsdPriceOracle, MockChainGateway, type UsdPriceOracle } from './chain.js';
 import type { DischargeRefundLiabilityRequest, RefundRequest, SettlementFacts } from './domain.js';
 import {
   operationView,
@@ -30,6 +30,10 @@ function fixture(
     maxEscrowLamports?: number;
     refundLiabilityMaxAgeSeconds?: number;
     now?: () => Date;
+    prices?: UsdPriceOracle;
+    jobAuthorityPublicKey?: string;
+    refundTreasury?: string;
+    escrowAuthority?: string;
   } = {},
 ) {
   const store = new InMemoryOperationStore();
@@ -39,11 +43,11 @@ function fixture(
   const merges = new MockMergeVerifier();
   const policy = new PolicyService(
     {
-      refundTreasury: TREASURY,
-      escrowAuthority: '5'.repeat(32),
+      refundTreasury: options.refundTreasury ?? TREASURY,
+      escrowAuthority: options.escrowAuthority ?? '5'.repeat(32),
       refundMint: MINT,
       refundDecimals: 6,
-      jobAuthorityPublicKey: JOB_AUTHORITY.publicKey.toBase58(),
+      jobAuthorityPublicKey: options.jobAuthorityPublicKey ?? JOB_AUTHORITY.publicKey.toBase58(),
       refundAuthMaxTtlSeconds: 900,
       refundLiabilityMaxAgeSeconds: options.refundLiabilityMaxAgeSeconds ?? 86_400,
       operationLimitUsdCents: options.operationLimit ?? 2_500,
@@ -58,7 +62,7 @@ function fixture(
     },
     store,
     chain,
-    new FixedUsdPriceOracle(100_000_000),
+    options.prices ?? new FixedUsdPriceOracle(100_000_000),
     merges,
     metrics,
     options.now,
@@ -80,6 +84,84 @@ function settlement(signature = '6'.repeat(64), rawAmount = '2000000'): Settleme
     blockTimeUnixSeconds: Math.floor(Date.now() / 1_000),
   };
 }
+
+describe('production readiness', () => {
+  it('keeps the request authority separate from both custody authorities', () => {
+    const authority = Keypair.generate().publicKey.toBase58();
+    expect(() => fixture({ jobAuthorityPublicKey: authority, refundTreasury: authority })).toThrow(
+      'Job authority must be distinct from both custody authorities',
+    );
+    expect(() => fixture({ jobAuthorityPublicKey: authority, escrowAuthority: authority })).toThrow(
+      'Job authority must be distinct from both custody authorities',
+    );
+  });
+
+  it('returns authenticated evidence for dual providers, pinned program, and custody', async () => {
+    const observedAt = new Date('2026-08-23T12:00:00.000Z');
+    const { policy } = fixture({ now: () => observedAt });
+
+    await expect(policy.probeReadiness()).resolves.toMatchObject({
+      healthy: true,
+      observedAt: observedAt.toISOString(),
+      checks: {
+        database: true,
+        rpcConsensus: true,
+        priceConsensus: true,
+        githubCredential: true,
+        escrowProgram: true,
+        refundCustody: true,
+        bountyCustody: true,
+      },
+      chain: {
+        rpcProviders: 2,
+        escrowProgramId: '4'.repeat(32),
+        escrowProgramDataSha256: 'a'.repeat(64),
+        escrowProgramImmutable: true,
+        refundTreasury: TREASURY,
+        refundMint: MINT,
+        refundDecimals: 6,
+        refundRawAmount: '1000000000',
+        escrowAuthority: '5'.repeat(32),
+        escrowLamports: '100000000000',
+        availableEscrowReserveLamports: '99994500000',
+      },
+      prices: { feedCount: 2, priceUsdMicros: 100_000_000 },
+    });
+  });
+
+  it('fails readiness when the signer credential cannot be verified', async () => {
+    const { merges, policy } = fixture();
+    merges.error = new PolicyError(
+      'github_credential_invalid',
+      'GitHub signer credential is not valid',
+      503,
+    );
+
+    await expect(policy.probeReadiness()).resolves.toMatchObject({
+      healthy: false,
+      checks: { githubCredential: false },
+    });
+    await expect(policy.readiness()).resolves.toMatchObject({
+      healthy: false,
+      availableRefundRaw: null,
+      availableEscrowReserveLamports: null,
+    });
+  });
+
+  it('rejects a price source that lacks two named observations', async () => {
+    const observedAt = new Date();
+    const prices: UsdPriceOracle = {
+      solUsd: async () => ({ priceUsdMicros: 100_000_000, observedAt }),
+    };
+    const { policy } = fixture({ prices });
+
+    await expect(policy.probeReadiness()).resolves.toMatchObject({
+      healthy: false,
+      checks: { priceConsensus: false },
+      prices: null,
+    });
+  });
+});
 
 describe('refund policy', () => {
   it('requires action-bound authorization and a pre-registered job liability', async () => {

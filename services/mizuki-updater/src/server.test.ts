@@ -71,11 +71,67 @@ describe('updater HTTP service', () => {
     expect(health.status).toBe(200);
     expect(await health.json()).toEqual({ status: 'ok', service: 'mizuki-updater' });
 
+    const ready = await fetch(`${origin}/readyz`);
+    expect(ready.status).toBe(200);
+    expect(await ready.json()).toMatchObject({
+      ready: true,
+      failed: [],
+      dependencies: { postgres: { ok: true }, operational: { ok: true } },
+    });
+
     const protectedResponse = await fetch(
       `${origin}/v1/upgrades/00000000-0000-4000-8000-000000000000`,
     );
     expect(protectedResponse.status).toBe(401);
     expect(await protectedResponse.json()).toMatchObject({ error: { code: 'unauthorized' } });
+  });
+
+  it('boots closed without operational secrets and rejects every authority-opening path', async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    const repository = new InMemoryUpgradeRepository();
+    server = createUpdaterServer({
+      repository,
+      metrics: new UpdaterMetrics(),
+      authToken: TOKEN,
+      readToken: READ_TOKEN,
+      operationalFailures: [
+        'MIZUKI_UPDATER_GITHUB_PRIVATE_KEY',
+        'MIZUKI_UPDATER_DEPLOY_HOOK_TOKEN',
+      ],
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+    const health = await fetch(`${origin}/health`);
+    expect(health.status).toBe(200);
+    const ready = await fetch(`${origin}/readyz`);
+    expect(ready.status).toBe(503);
+    const report = await ready.json();
+    expect(report).toMatchObject({
+      ready: false,
+      failed: ['operational'],
+      dependencies: {
+        operational: {
+          ok: false,
+          configurationIssues: [
+            'MIZUKI_UPDATER_GITHUB_PRIVATE_KEY',
+            'MIZUKI_UPDATER_DEPLOY_HOOK_TOKEN',
+          ],
+        },
+      },
+    });
+
+    const submitted = await submit(origin, proposal, 'closed-updater-key');
+    expect(submitted.response.status).toBe(503);
+    expect(submitted.body).toMatchObject({ error: { code: 'updater_not_ready' } });
+
+    const enabled = await updatePromotionControl(origin, TOKEN, 0, true);
+    expect(enabled.status).toBe(503);
+    await expect(repository.promotionControl()).resolves.toMatchObject({
+      promotionsEnabled: false,
+      revision: 0,
+    });
+    expect(JSON.stringify(report)).not.toContain('d'.repeat(32));
   });
 
   it('exposes a closed promotion control and reserves mutation for write authority', async () => {

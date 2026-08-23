@@ -65,6 +65,61 @@ describe('operator admission controls', () => {
     });
   });
 
+  it('keeps controls closed while service dependencies are unavailable', async () => {
+    const store = new MemoryStore();
+    const base = await serve(
+      dependencies(store, {
+        readiness: { check: vi.fn(async () => ({ ready: false })) },
+      }),
+    );
+
+    const response = await fetch(`${base}/v1/admin/admission`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer admin-secret', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        intakeEnabled: true,
+        claimsEnabled: true,
+        reason: 'attempted canary while dependencies are unavailable',
+      }),
+    });
+
+    expect(response.status).toBe(503);
+    await expect(store.operatorControls()).resolves.toMatchObject({
+      intakeEnabled: false,
+      claimsEnabled: false,
+      revision: 0,
+    });
+  });
+
+  it('does not issue a quote when stale controls are open but readiness is incomplete', async () => {
+    const store = new MemoryStore();
+    await store.updateOperatorControls({
+      intakeEnabled: true,
+      claimsEnabled: true,
+      reason: 'simulate stale controls from an earlier deployment',
+      updatedBy: 'test',
+    });
+    const issue = vi.fn();
+    const challenge = vi.fn();
+    const base = await serve(
+      dependencies(store, {
+        github: { issue },
+        payments: { challenge },
+        readiness: { check: vi.fn(async () => ({ ready: false })) },
+      }),
+    );
+
+    const response = await fetch(`${base}/v1/quotes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ github_issue_url: 'https://github.com/example/project/issues/2' }),
+    });
+
+    expect(response.status).toBe(503);
+    expect(issue).not.toHaveBeenCalled();
+    expect(challenge).not.toHaveBeenCalled();
+  });
+
   it('fails closed before settlement while preserving authoritative idempotent reads', async () => {
     const store = new MemoryStore();
     await store.saveQuote(quote);
@@ -101,6 +156,38 @@ describe('operator admission controls', () => {
     expect(replay.status).toBe(200);
     await expect(replay.json()).resolves.toMatchObject({ id: reservation.job.id });
     expect(settle).not.toHaveBeenCalled();
+  });
+
+  it('does not accept payment when stale intake is open but readiness is incomplete', async () => {
+    const store = new MemoryStore();
+    await store.saveQuote(quote);
+    await store.updateOperatorControls({
+      intakeEnabled: true,
+      claimsEnabled: false,
+      reason: 'simulate stale intake from an earlier deployment',
+      updatedBy: 'test',
+    });
+    const settle = vi.fn();
+    const base = await serve(
+      dependencies(store, {
+        github: {
+          assertIssueAuthorization: vi.fn(async () => undefined),
+          currentHead: vi.fn(async () => quote.baseSha),
+        },
+        payments: { settle },
+        readiness: { check: vi.fn(async () => ({ ready: false })) },
+      }),
+    );
+
+    const response = await fetch(`${base}/v1/jobs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'idempotency-key': 'unready-job' },
+      body: JSON.stringify({ quote_id: quote.id }),
+    });
+
+    expect(response.status).toBe(503);
+    expect(settle).not.toHaveBeenCalled();
+    await expect(store.jobByIdempotencyKey('unready-job')).resolves.toBeUndefined();
   });
 
   it('treats an unavailable durable control row as closed', async () => {
@@ -154,6 +241,12 @@ describe('operator admission controls', () => {
 describe('public route responses', () => {
   it('rejects feature work before issuing a payment challenge', async () => {
     const store = new MemoryStore();
+    await store.updateOperatorControls({
+      intakeEnabled: true,
+      claimsEnabled: false,
+      reason: 'scope validation test intake',
+      updatedBy: 'test',
+    });
     const challenge = vi.fn();
     const base = await serve(
       dependencies(store, {
@@ -237,6 +330,37 @@ describe('public route responses', () => {
     expect(authorizeUrl).toHaveBeenCalledTimes(10);
   });
 
+  it('sets a Secure OAuth session cookie from an authenticated HTTPS web request', async () => {
+    const store = new MemoryStore();
+    const proxySecret = 'p'.repeat(32);
+    const base = await serve(
+      dependencies(store, {
+        config: {
+          publicBaseUrl: 'https://mizuki-api.onrender.com',
+          webOrigin: 'https://mizuki.covenant.org',
+          trustedProxyHops: 1,
+          webProxySecret: proxySecret,
+        },
+        auth: {
+          callback: vi.fn(async () => ({ session: 'signed-session', redirect: '/bounties' })),
+        },
+      }),
+    );
+
+    const response = await fetch(`${base}/v1/auth/github/callback?code=code&state=state`, {
+      headers: {
+        'x-forwarded-proto': 'http',
+        'x-mizuki-forwarded-proto': 'https',
+        'x-mizuki-proxy-secret': proxySecret,
+      },
+      redirect: 'manual',
+    });
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get('location')).toBe('https://mizuki.covenant.org/bounties');
+    expect(response.headers.get('set-cookie')).toContain('; Secure');
+  });
+
   it('closes an activity stream after its configured idle lifetime', async () => {
     const store = new MemoryStore();
     const base = await serve(
@@ -286,6 +410,7 @@ function dependencies(
     bounties: {},
     policy: {},
     paymentAdmission: new SerialGate(),
+    readiness: { check: vi.fn(async () => ({ ready: true })) },
     ...dependencyOverrides,
   } as unknown as AppDependencies;
 }

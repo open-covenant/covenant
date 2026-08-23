@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { assertServerMode, loadConfig } from './config.js';
 
 const TOKEN = 'test-token-with-at-least-thirty-two-characters';
+const USDC = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 
 describe('signer configuration', () => {
   it('allows mock mode only on a non-production loopback listener', () => {
@@ -71,7 +72,7 @@ describe('signer configuration', () => {
       MIZUKI_JOB_AUTHORITY_PUBLIC_KEY: '5'.repeat(32),
       MIZUKI_REFUND_TREASURY: '2'.repeat(32),
       MIZUKI_ESCROW_AUTHORITY: '6'.repeat(32),
-      MIZUKI_REFUND_MINT: '3'.repeat(32),
+      MIZUKI_REFUND_MINT: USDC,
       MIZUKI_ESCROW_PROGRAM_ID: '4'.repeat(32),
       MIZUKI_ESCROW_PROGRAM_DATA_SHA256: 'a'.repeat(64),
       MIZUKI_SOL_USD_PRICE_URL: 'https://price.internal',
@@ -134,7 +135,7 @@ describe('signer configuration', () => {
       MIZUKI_JOB_AUTHORITY_PUBLIC_KEY: '5'.repeat(32),
       MIZUKI_REFUND_TREASURY: '2'.repeat(32),
       MIZUKI_ESCROW_AUTHORITY: '6'.repeat(32),
-      MIZUKI_REFUND_MINT: '3'.repeat(32),
+      MIZUKI_REFUND_MINT: USDC,
       MIZUKI_ESCROW_PROGRAM_ID: '4'.repeat(32),
       MIZUKI_ESCROW_PROGRAM_DATA_SHA256: 'a'.repeat(64),
       MIZUKI_SOL_USD_PRICE_URL: 'https://price.internal',
@@ -169,6 +170,36 @@ describe('signer configuration', () => {
     ).toThrow('MIZUKI_SIGNER_DATABASE_URL must require TLS');
   });
 
+  it('pins production refunds to canonical mainnet USDC', () => {
+    const base = {
+      NODE_ENV: 'production',
+      MIZUKI_SIGNER_AUTH_TOKEN: TOKEN,
+      MIZUKI_SIGNER_MOCK_MODE: 'false',
+      MIZUKI_SIGNER_DATABASE_URL: 'postgresql://127.0.0.1/signer',
+      MIZUKI_SIGNER_RPC_URL: 'https://rpc-primary.internal',
+      MIZUKI_SIGNER_SECONDARY_RPC_URL: 'https://rpc-secondary.internal',
+      MIZUKI_REFUND_PRIVATE_KEY_JSON: `[${Array(64).fill(0).join(',')}]`,
+      MIZUKI_ESCROW_PRIVATE_KEY_JSON: `[${Array(64).fill(1).join(',')}]`,
+      MIZUKI_SIGNER_GITHUB_TOKEN: 'github-read-only-test-token',
+      MIZUKI_JOB_AUTHORITY_PUBLIC_KEY: '5'.repeat(32),
+      MIZUKI_REFUND_TREASURY: '2'.repeat(32),
+      MIZUKI_ESCROW_AUTHORITY: '6'.repeat(32),
+      MIZUKI_REFUND_MINT: USDC,
+      MIZUKI_ESCROW_PROGRAM_ID: '4'.repeat(32),
+      MIZUKI_ESCROW_PROGRAM_DATA_SHA256: 'a'.repeat(64),
+      MIZUKI_SOL_USD_PRICE_URL: 'https://price-primary.internal',
+      MIZUKI_SOL_USD_SECONDARY_PRICE_URL: 'https://price-secondary.internal',
+    };
+
+    expect(loadConfig(base).refundMint).toBe(USDC);
+    expect(() => loadConfig({ ...base, MIZUKI_REFUND_MINT: '3'.repeat(32) })).toThrow(
+      'Production refunds must use canonical mainnet USDC with six decimals',
+    );
+    expect(() => loadConfig({ ...base, MIZUKI_REFUND_DECIMALS: '9' })).toThrow(
+      'Production refunds must use canonical mainnet USDC with six decimals',
+    );
+  });
+
   it('requires distinct RPC and price providers', () => {
     const base = {
       NODE_ENV: 'development',
@@ -198,5 +229,22 @@ describe('signer configuration', () => {
         MIZUKI_SOL_USD_SECONDARY_PRICE_URL: base.MIZUKI_SOL_USD_PRICE_URL,
       }),
     ).toThrow('Primary and secondary price URLs must be different');
+
+    expect(() =>
+      loadConfig({
+        ...base,
+        NODE_ENV: 'production',
+        MIZUKI_SIGNER_RPC_URL: 'https://rpc.provider.example/v1/primary',
+        MIZUKI_SIGNER_SECONDARY_RPC_URL: 'https://rpc.provider.example/v1/secondary',
+      }),
+    ).toThrow('Primary and secondary RPC providers must use different hostnames');
+    expect(() =>
+      loadConfig({
+        ...base,
+        NODE_ENV: 'production',
+        MIZUKI_SOL_USD_PRICE_URL: 'https://price.provider.example/primary',
+        MIZUKI_SOL_USD_SECONDARY_PRICE_URL: 'https://price.provider.example/secondary',
+      }),
+    ).toThrow('Primary and secondary price providers must use different hostnames');
   });
 });

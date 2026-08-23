@@ -13,6 +13,7 @@ import {
   assertInstructionProgramSequence,
   assertRpcSettlementIdentity,
   ConsensusUsdPriceOracle,
+  consensusCapacity,
   consensusTransactionState,
   HttpUsdPriceOracle,
   immutableLoaderV3ProgramBytes,
@@ -383,6 +384,24 @@ describe('transaction form policy', () => {
 });
 
 describe('independent RPC finality', () => {
+  it('requires exact agreement on custody balances and rent facts', () => {
+    const capacity = {
+      refundRawAmount: '100000000',
+      escrowLamports: '2000000000',
+      stateRentLamports: '2000000',
+      vaultRentLamports: '1000000',
+      guardRentLamports: '1500000',
+    };
+
+    expect(consensusCapacity(capacity, { ...capacity })).toEqual(capacity);
+    expect(() =>
+      consensusCapacity(capacity, { ...capacity, refundRawAmount: '99999999' }),
+    ).toThrowError(expect.objectContaining({ code: 'rpc_inconsistent', retryable: true }));
+    expect(() =>
+      consensusCapacity(capacity, { ...capacity, escrowLamports: '1999999999' }),
+    ).toThrowError(expect.objectContaining({ code: 'rpc_inconsistent', retryable: true }));
+  });
+
   it('reports terminal state only when providers agree', () => {
     expect(consensusTransactionState('finalized', 'finalized')).toBe('finalized');
     expect(consensusTransactionState('failed', 'failed')).toBe('failed');

@@ -24,7 +24,7 @@ pnpm install --ignore-workspace
 pnpm dev
 ```
 
-Set `MIZUKI_API_URL` to the server-side API origin. Browser requests use the same-origin `/api/mizuki/*` proxy so x402 headers, cookies, and SSE remain available without broad cross-origin permissions.
+Set `MIZUKI_API_URL` to the server-side API origin and give the web and API services the same 32-character-or-longer `MIZUKI_WEB_PROXY_SECRET`. Browser requests use the same-origin `/api/mizuki/*` proxy so x402 headers, cookies, client identity, and SSE remain available without broad cross-origin permissions.
 
 Set `MIZUKI_DEMO_MODE=1` only for visual development. Demo data is clearly labeled and does not simulate POST requests, payment, wallet proof, or claims.
 

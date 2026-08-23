@@ -4,7 +4,9 @@ import { SignerMetrics } from './metrics.js';
 import { GitHubMergeVerifier } from './github.js';
 import { PolicyService } from './policy.js';
 import { PostgresOperationStore } from './postgres.js';
+import { RecoveryRunner } from './recovery.js';
 import { createSignerServer } from './server.js';
+import { startupReadinessPasses } from './startup.js';
 
 const config = loadConfig();
 assertServerMode(config);
@@ -67,24 +69,37 @@ const policy = new PolicyService(
   metrics,
 );
 
-await policy.recover(100);
-const recovery = setInterval(() => void policy.recover(), 5_000);
-recovery.unref();
+const startupReady = await startupReadinessPasses(() => policy.probeReadiness());
+if (!startupReady) {
+  process.stderr.write('mizuki policy signer startup readiness is degraded\n');
+}
+const recovery = new RecoveryRunner(
+  (limit) => policy.recover(limit),
+  () => {
+    metrics.increment('errors');
+    process.stderr.write('mizuki policy signer recovery failed\n');
+  },
+);
+let recoveryInterval: ReturnType<typeof setInterval> | undefined;
 
 const server = createSignerServer({
   service: policy,
   store,
-  chain,
   metrics,
   authToken: config.authToken,
 });
 server.listen(config.port, config.host, () => {
   process.stdout.write(`mizuki policy signer listening on ${config.host}:${config.port}\n`);
+  void recovery.run(100);
+  recoveryInterval = setInterval(() => void recovery.run(), 5_000);
+  recoveryInterval.unref();
 });
 
 async function shutdown(): Promise<void> {
-  clearInterval(recovery);
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+  if (recoveryInterval) clearInterval(recoveryInterval);
+  const closed = new Promise<void>((resolve) => server.close(() => resolve()));
+  await recovery.active();
+  await closed;
   await store.close();
 }
 

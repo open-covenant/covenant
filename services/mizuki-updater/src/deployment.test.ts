@@ -126,10 +126,26 @@ describe('deployment hooks', () => {
       createGateway().startShadow('upgrade-1', manifest, 'f'.repeat(64), 42),
     ).rejects.toMatchObject({ code: 'deployment_request_failed', retryable: true });
   });
+
+  it('requires an authenticated deployment-controller readiness contract', async () => {
+    const request = vi.fn(async () =>
+      Response.json({ status: 'ok', service: 'mizuki-deployment-controller' }),
+    );
+    vi.stubGlobal('fetch', request);
+
+    await expect(createGateway().readiness()).resolves.toBeUndefined();
+    expect(request).toHaveBeenCalledWith(
+      'https://deploy.example.test/readyz',
+      expect.objectContaining({
+        headers: expect.objectContaining({ authorization: `Bearer ${'d'.repeat(32)}` }),
+      }),
+    );
+  });
 });
 
 function createGateway(): HttpDeploymentGateway {
   return new HttpDeploymentGateway({
+    readinessUrl: 'https://deploy.example.test/readyz',
     shadowUrl: 'https://deploy.example.test/shadow',
     shadowHealthUrlTemplate: 'https://deploy.example.test/shadow-health/{deploymentId}/health',
     promotionHealthUrlTemplate: 'https://deploy.example.test/production/{deploymentId}/health',

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 const base58 = z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/);
+const MAINNET_USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 
 const envSchema = z
   .object({
@@ -135,16 +136,28 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SignerConfig {
       'MIZUKI_SIGNER_SECONDARY_RPC_URL',
       parsed.MIZUKI_SIGNER_SECONDARY_RPC_URL!,
     );
-    if (parsed.MIZUKI_SIGNER_RPC_URL === parsed.MIZUKI_SIGNER_SECONDARY_RPC_URL) {
-      throw new Error('Primary and secondary RPC URLs must be different');
-    }
+    assertIndependentProviders(
+      'RPC',
+      parsed.MIZUKI_SIGNER_RPC_URL!,
+      parsed.MIZUKI_SIGNER_SECONDARY_RPC_URL!,
+      parsed.NODE_ENV,
+    );
     assertHttpsOrLoopback('MIZUKI_SOL_USD_PRICE_URL', parsed.MIZUKI_SOL_USD_PRICE_URL!);
     assertHttpsOrLoopback(
       'MIZUKI_SOL_USD_SECONDARY_PRICE_URL',
       parsed.MIZUKI_SOL_USD_SECONDARY_PRICE_URL!,
     );
-    if (parsed.MIZUKI_SOL_USD_PRICE_URL === parsed.MIZUKI_SOL_USD_SECONDARY_PRICE_URL) {
-      throw new Error('Primary and secondary price URLs must be different');
+    assertIndependentProviders(
+      'price',
+      parsed.MIZUKI_SOL_USD_PRICE_URL!,
+      parsed.MIZUKI_SOL_USD_SECONDARY_PRICE_URL!,
+      parsed.NODE_ENV,
+    );
+    if (
+      parsed.NODE_ENV === 'production' &&
+      (parsed.MIZUKI_REFUND_MINT !== MAINNET_USDC_MINT || parsed.MIZUKI_REFUND_DECIMALS !== 6)
+    ) {
+      throw new Error('Production refunds must use canonical mainnet USDC with six decimals');
     }
   }
 
@@ -213,6 +226,24 @@ function assertEncryptedDatabase(value: string): void {
     throw new Error(
       'MIZUKI_SIGNER_DATABASE_URL must require TLS unless it targets loopback or a Render private database',
     );
+  }
+}
+
+function assertIndependentProviders(
+  kind: 'RPC' | 'price',
+  primary: string,
+  secondary: string,
+  environment: SignerConfig['environment'],
+): void {
+  if (primary === secondary) {
+    throw new Error(`Primary and secondary ${kind} URLs must be different`);
+  }
+  if (environment !== 'production') return;
+
+  const primaryHost = new URL(primary).hostname.toLowerCase();
+  const secondaryHost = new URL(secondary).hostname.toLowerCase();
+  if (primaryHost === secondaryHost) {
+    throw new Error(`Primary and secondary ${kind} providers must use different hostnames`);
   }
 }
 

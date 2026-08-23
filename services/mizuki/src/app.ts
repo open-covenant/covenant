@@ -1,6 +1,6 @@
 import { timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { ActivityStreams, PublicAdmission, RateLimitError } from './admission.js';
+import { ActivityStreams, PublicAdmission, RateLimitError, requestScheme } from './admission.js';
 import type { ContributorAuth } from './auth.js';
 import type { BountyService } from './bounties.js';
 import type { Config } from './config.js';
@@ -68,6 +68,19 @@ export function createApp(deps: AppDependencies) {
       if (req.method === 'GET' && url.pathname === '/healthz') {
         return json(res, 200, { ok: true });
       }
+      if (req.method === 'GET' && url.pathname === '/deployz') {
+        res.setHeader('cache-control', 'no-store');
+        try {
+          const controls = await deps.store.operatorControls();
+          const closed = !controls.intakeEnabled && !controls.claimsEnabled;
+          if (closed) return json(res, 200, { ok: true });
+
+          const report = await deps.readiness.check();
+          return json(res, report.ready ? 200 : 503, { ok: report.ready });
+        } catch {
+          return json(res, 503, { ok: false });
+        }
+      }
       if (req.method === 'GET' && url.pathname === '/readyz') {
         const report = await deps.readiness.check();
         res.setHeader('cache-control', 'no-store');
@@ -126,7 +139,12 @@ export function createApp(deps: AppDependencies) {
         const origin = deps.config.webOrigin ?? deps.config.publicBaseUrl;
         res.writeHead(302, {
           location: `${origin.replace(/\/$/, '')}${result.redirect}`,
-          'set-cookie': sessionCookie(result.session, req, deps.config.trustedProxyHops ?? 0),
+          'set-cookie': sessionCookie(
+            result.session,
+            req,
+            deps.config.trustedProxyHops ?? 0,
+            deps.config.webProxySecret,
+          ),
           'cache-control': 'no-store',
         });
         res.end();
@@ -220,7 +238,7 @@ export function createApp(deps: AppDependencies) {
         }
         const githubGrantId = session.githubGrantId;
         const challenge = await deps.paymentAdmission.run(async () => {
-          await assertOperatorControlOpen(deps.store, 'claims');
+          await assertOperatorControlOpen(deps.store, 'claims', deps.readiness);
           return deps.bounties.createClaimChallenge(
             bounty.id,
             contributor,
@@ -257,7 +275,7 @@ export function createApp(deps: AppDependencies) {
         const challengeId = body.challenge_id;
         const signature = body.signature;
         const claimed = await deps.paymentAdmission.run(async () => {
-          await assertOperatorControlOpen(deps.store, 'claims');
+          await assertOperatorControlOpen(deps.store, 'claims', deps.readiness);
           return deps.bounties.claim(parts[2], contributor, challengeId, signature);
         });
         return json(res, 200, await publicBounty(deps.store, claimed));
@@ -320,9 +338,14 @@ export function createApp(deps: AppDependencies) {
         if (typeof body.github_issue_url !== 'string') {
           return json(res, 400, { error: 'github_issue_url is required' });
         }
+        await assertOperatorControlOpen(deps.store, 'intake', deps.readiness);
         const issue = await deps.github.issue(body.github_issue_url);
-        const quote = await deps.store.saveQuote(createQuote(issue));
-        return json(res, 201, { ...quote, payment: await deps.payments.challenge(quote) });
+        const result = await deps.paymentAdmission.run(async () => {
+          await assertOperatorControlOpen(deps.store, 'intake', deps.readiness);
+          const quote = await deps.store.saveQuote(createQuote(issue));
+          return { ...quote, payment: await deps.payments.challenge(quote) };
+        });
+        return json(res, 201, result);
       }
       if (req.method === 'POST' && url.pathname === '/v1/jobs') {
         const key = header(req, 'idempotency-key');
@@ -375,7 +398,7 @@ export function createApp(deps: AppDependencies) {
             if (deps.config.paymentMode === 'live' && paymentSignature) {
               await ensureRefundCapacity(deps, BigInt(quote.priceAtomic));
             }
-            await assertOperatorControlOpen(deps.store, 'intake');
+            await assertOperatorControlOpen(deps.store, 'intake', deps.readiness);
             const result = await settle();
             if (!result.ok || deps.config.paymentMode !== 'live') return result;
             if (!pendingJobId) throw new Error('payment authorization was not persisted');
@@ -473,8 +496,11 @@ export function createApp(deps: AppDependencies) {
           return json(res, 400, { error: 'reason must contain 10-500 characters' });
         }
         const reason = body.reason.trim();
-        const controls = await deps.paymentAdmission.run(() =>
-          deps.store.updateOperatorControls({
+        const controls = await deps.paymentAdmission.run(async () => {
+          if (body.intakeEnabled === true || body.claimsEnabled === true) {
+            await assertServiceReady(deps.readiness);
+          }
+          return deps.store.updateOperatorControls({
             ...(typeof body.intakeEnabled === 'boolean'
               ? { intakeEnabled: body.intakeEnabled }
               : {}),
@@ -483,8 +509,8 @@ export function createApp(deps: AppDependencies) {
               : {}),
             reason,
             updatedBy: 'operator',
-          }),
-        );
+          });
+        });
         return json(res, 200, controls);
       }
       if (url.pathname === '/v1/admin/bounties/fund' && req.method === 'POST') {
@@ -722,10 +748,17 @@ async function streamActivity(
 export async function assertOperatorControlOpen(
   store: MizukiStore,
   control: 'intake' | 'claims',
+  readiness?: ServiceReadiness,
 ): Promise<void> {
   const controls = await readOperatorControls(store);
   const enabled = control === 'intake' ? controls.intakeEnabled : controls.claimsEnabled;
   if (!enabled) throw new OperatorAdmissionError(`${control} is paused by the operator`);
+  if (readiness) await assertServiceReady(readiness);
+}
+
+async function assertServiceReady(readiness: ServiceReadiness): Promise<void> {
+  const report = await readiness.check();
+  if (!report.ready) throw new OperatorAdmissionError('service dependencies are not ready');
 }
 
 async function readOperatorControls(store: MizukiStore) {
@@ -813,9 +846,13 @@ function cookies(req: IncomingMessage): Record<string, string> {
   return values;
 }
 
-function sessionCookie(value: string, req: IncomingMessage, trustedProxyHops: number): string {
-  const forwardedProto = trustedProxyHops > 0 ? header(req, 'x-forwarded-proto') : undefined;
-  const secure = forwardedProto?.split(',').at(-1)?.trim() === 'https';
+function sessionCookie(
+  value: string,
+  req: IncomingMessage,
+  trustedProxyHops: number,
+  webProxySecret: string | undefined,
+): string {
+  const secure = requestScheme(req, trustedProxyHops, webProxySecret) === 'https';
   return [
     `mizuki_session=${encodeURIComponent(value)}`,
     'Path=/',

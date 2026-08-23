@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assertLiveConfig, loadConfig } from './config.js';
+import { assertBootConfig, assertLiveConfig, liveConfigIssues, loadConfig } from './config.js';
 
 describe('updater configuration', () => {
   it('requires the updater URL and token together', () => {
@@ -113,6 +113,7 @@ describe('live configuration', () => {
     MIZUKI_GITHUB_CLIENT_SECRET: 'g'.repeat(32),
     MIZUKI_GITHUB_WEBHOOK_SECRET: 'w'.repeat(32),
     MIZUKI_SESSION_SECRET: 's'.repeat(32),
+    MIZUKI_WEB_PROXY_SECRET: 'p'.repeat(32),
     MIZUKI_UPDATER_URL: 'http://updater:8793',
     MIZUKI_UPDATER_TOKEN: 'u'.repeat(32),
   };
@@ -124,6 +125,23 @@ describe('live configuration', () => {
   it('rejects missing custody, GitHub, route, and durable-store settings', () => {
     expect(() => assertLiveConfig(loadConfig({ MIZUKI_PAYMENT_MODE: 'live' }))).toThrow(
       'live Mizuki configuration is incomplete',
+    );
+  });
+
+  it('boots only with durable storage and admin authority while readiness stays incomplete', () => {
+    const config = loadConfig({
+      MIZUKI_PAYMENT_MODE: 'live',
+      MIZUKI_DATABASE_URL: 'postgres://mizuki:secret@database/mizuki',
+      MIZUKI_ADMIN_TOKEN: 'a'.repeat(32),
+    });
+
+    expect(() => assertBootConfig(config)).not.toThrow();
+    expect(liveConfigIssues(config)).toEqual(
+      expect.arrayContaining(['MIZUKI_PUBLIC_BASE_URL', 'MIZUKI_POLICY_SIGNER_TOKEN']),
+    );
+    expect(() => assertLiveConfig(config)).toThrow('live Mizuki configuration is incomplete');
+    expect(() => assertBootConfig(loadConfig({ MIZUKI_PAYMENT_MODE: 'live' }))).toThrow(
+      'MIZUKI_DATABASE_URL, MIZUKI_ADMIN_TOKEN',
     );
   });
 
@@ -146,6 +164,13 @@ describe('live configuration', () => {
   it('requires an explicit trusted proxy hop count in live mode', () => {
     const { MIZUKI_TRUSTED_PROXY_HOPS: _, ...withoutProxy } = complete;
     expect(() => assertLiveConfig(loadConfig(withoutProxy))).toThrow('MIZUKI_TRUSTED_PROXY_HOPS');
+  });
+
+  it('requires authenticated web proxy forwarding in live mode', () => {
+    const { MIZUKI_WEB_PROXY_SECRET: _, ...withoutProxySecret } = complete;
+    expect(() => assertLiveConfig(loadConfig(withoutProxySecret))).toThrow(
+      'MIZUKI_WEB_PROXY_SECRET',
+    );
   });
 
   it('requires a valid capability payout wallet when ClawPump earnings are enabled', () => {

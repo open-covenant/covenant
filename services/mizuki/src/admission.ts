@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto';
 import { isIP } from 'node:net';
 import type { IncomingMessage } from 'node:http';
 import type { Config } from './config.js';
@@ -47,9 +48,11 @@ export class PublicAdmission {
   readonly streams: ActivityStreams;
   private readonly buckets: BoundedTokenBuckets;
   private readonly trustedProxyHops: number;
+  private readonly webProxySecret: string | undefined;
 
   constructor(config: Config) {
     this.trustedProxyHops = config.trustedProxyHops ?? 0;
+    this.webProxySecret = config.webProxySecret;
     this.buckets = new BoundedTokenBuckets(config.rateLimitMaxSources ?? 10_000);
     this.streams = new ActivityStreams(
       config.sseMaxConnections ?? 100,
@@ -58,7 +61,7 @@ export class PublicAdmission {
   }
 
   source(req: IncomingMessage): string {
-    return requestSource(req, this.trustedProxyHops);
+    return requestSource(req, this.trustedProxyHops, this.webProxySecret);
   }
 
   consume(route: PublicRoute, req: IncomingMessage): void {
@@ -157,9 +160,20 @@ export class RateLimitError extends Error {
   }
 }
 
-export function requestSource(req: IncomingMessage, trustedProxyHops: number): string {
+export function requestSource(
+  req: IncomingMessage,
+  trustedProxyHops: number,
+  webProxySecret?: string,
+): string {
   const direct = normalizedIp(req.socket.remoteAddress) ?? 'unknown';
+  if (trustedWebProxy(req, webProxySecret)) {
+    const forwarded = normalizedIp(firstHeader(req, 'x-mizuki-client-ip'));
+    if (forwarded) return forwarded;
+  }
   if (trustedProxyHops === 0) return direct;
+
+  const cloudflare = normalizedIp(firstHeader(req, 'cf-connecting-ip'));
+  if (cloudflare) return cloudflare;
 
   const value = firstHeader(req, 'x-forwarded-for');
   if (!value) return direct;
@@ -169,6 +183,21 @@ export function requestSource(req: IncomingMessage, trustedProxyHops: number): s
   const chain = [...(forwarded as string[]), direct];
   const index = chain.length - trustedProxyHops - 1;
   return index >= 0 ? chain[index] : direct;
+}
+
+export function requestScheme(
+  req: IncomingMessage,
+  trustedProxyHops: number,
+  webProxySecret?: string,
+): 'http' | 'https' | undefined {
+  if (trustedWebProxy(req, webProxySecret)) {
+    const forwarded = firstHeader(req, 'x-mizuki-forwarded-proto')?.trim().toLowerCase();
+    if (forwarded === 'http' || forwarded === 'https') return forwarded;
+  }
+  if (trustedProxyHops === 0) return undefined;
+
+  const forwarded = firstHeader(req, 'x-forwarded-proto')?.split(',').at(-1)?.trim().toLowerCase();
+  return forwarded === 'http' || forwarded === 'https' ? forwarded : undefined;
 }
 
 function freshBucket(policy: Policy, now: number): Bucket {
@@ -201,4 +230,13 @@ function normalizedIp(value: string | undefined): string | undefined {
 function firstHeader(req: IncomingMessage, name: string): string | undefined {
   const value = req.headers[name];
   return Array.isArray(value) ? value[0] : value;
+}
+
+function trustedWebProxy(req: IncomingMessage, expected: string | undefined): boolean {
+  const supplied = firstHeader(req, 'x-mizuki-proxy-secret');
+  if (!expected || Buffer.byteLength(expected, 'utf8') < 32 || !supplied) return false;
+  const suppliedBytes = Buffer.from(supplied);
+  const expectedBytes = Buffer.from(expected);
+  if (suppliedBytes.length !== expectedBytes.length) return false;
+  return timingSafeEqual(suppliedBytes, expectedBytes);
 }

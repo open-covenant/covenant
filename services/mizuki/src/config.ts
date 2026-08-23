@@ -48,6 +48,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     port: int(env.MIZUKI_PORT, 8787),
     trustedProxyHops: boundedInteger(env.MIZUKI_TRUSTED_PROXY_HOPS, 0, 0, 8),
     trustedProxyConfigured: env.MIZUKI_TRUSTED_PROXY_HOPS !== undefined,
+    webProxySecret: env.MIZUKI_WEB_PROXY_SECRET,
     rateLimitMaxSources: boundedInteger(env.MIZUKI_RATE_LIMIT_MAX_SOURCES, 10_000, 100, 100_000),
     sseMaxConnections,
     sseMaxConnectionsPerSource,
@@ -106,8 +107,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
   };
 }
 
-export function assertLiveConfig(config: Config): void {
-  if (config.paymentMode !== 'live') return;
+export function liveConfigIssues(config: Config): string[] {
+  if (config.paymentMode !== 'live') return [];
 
   const missing: string[] = [];
   requireValue(missing, 'MIZUKI_DATABASE_URL', config.databaseUrl);
@@ -130,6 +131,7 @@ export function assertLiveConfig(config: Config): void {
   requireSecret(missing, 'MIZUKI_GITHUB_CLIENT_SECRET', config.githubClientSecret);
   requireSecret(missing, 'MIZUKI_GITHUB_WEBHOOK_SECRET', config.githubWebhookSecret);
   requireSecret(missing, 'MIZUKI_SESSION_SECRET', config.sessionSecret);
+  requireSecret(missing, 'MIZUKI_WEB_PROXY_SECRET', config.webProxySecret);
   requirePrivateService(missing, 'MIZUKI_UPDATER_URL', config.updaterUrl);
   requireSecret(missing, 'MIZUKI_UPDATER_TOKEN', config.updaterToken);
 
@@ -154,8 +156,22 @@ export function assertLiveConfig(config: Config): void {
   if (!config.githubPrivateKey?.includes('BEGIN') || !config.githubPrivateKey.includes('KEY')) {
     missing.push('MIZUKI_GITHUB_PRIVATE_KEY must be PEM');
   }
+  return [...new Set(missing)];
+}
+
+export function assertLiveConfig(config: Config): void {
+  const issues = liveConfigIssues(config);
+  if (issues.length === 0) return;
+  throw new Error(`live Mizuki configuration is incomplete: ${issues.join(', ')}`);
+}
+
+export function assertBootConfig(config: Config): void {
+  if (config.paymentMode !== 'live') return;
+  const missing: string[] = [];
+  requireValue(missing, 'MIZUKI_DATABASE_URL', config.databaseUrl);
+  requireSecret(missing, 'MIZUKI_ADMIN_TOKEN', config.adminToken);
   if (missing.length > 0) {
-    throw new Error(`live Mizuki configuration is incomplete: ${[...new Set(missing)].join(', ')}`);
+    throw new Error(`live Mizuki boot configuration is incomplete: ${missing.join(', ')}`);
   }
 }
 

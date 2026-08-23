@@ -78,6 +78,25 @@ describe('ServiceReadiness', () => {
     });
   });
 
+  it('reports incomplete configuration without exposing secret values', async () => {
+    const probes = healthyProbes();
+    probes.configuration = vi.fn(async () => ({
+      issues: ['MIZUKI_POLICY_SIGNER_TOKEN', 'USEPOD_API_KEY'],
+    }));
+    const readiness = createReadiness(probes, () => 1_000);
+
+    await expect(readiness.check()).resolves.toMatchObject({
+      ready: false,
+      failed: ['configuration', 'stale'],
+      dependencies: {
+        configuration: {
+          ok: false,
+          configurationIssues: ['MIZUKI_POLICY_SIGNER_TOKEN', 'USEPOD_API_KEY'],
+        },
+      },
+    });
+  });
+
   it('fails closed when the last complete evidence becomes stale', async () => {
     let now = 1_000;
     let updaterHealthy = true;
@@ -102,7 +121,10 @@ function healthyProbes(): Record<ServiceDependency, ReturnType<typeof vi.fn<Read
   return Object.fromEntries(
     serviceDependencies.map((name) => [
       name,
-      vi.fn(async () => (name === 'policy_signer' ? refundProtection : undefined)),
+      vi.fn(async () => {
+        if (name === 'configuration') return { issues: [] };
+        return name === 'policy_signer' ? refundProtection : undefined;
+      }),
     ]),
   ) as Record<ServiceDependency, ReturnType<typeof vi.fn<ReadinessProbe>>>;
 }

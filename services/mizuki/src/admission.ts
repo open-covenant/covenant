@@ -172,17 +172,7 @@ export function requestSource(
   }
   if (trustedProxyHops === 0) return direct;
 
-  const cloudflare = normalizedIp(firstHeader(req, 'cf-connecting-ip'));
-  if (cloudflare) return cloudflare;
-
-  const value = firstHeader(req, 'x-forwarded-for');
-  if (!value) return direct;
-  const forwarded = value.split(',').map((item) => normalizedIp(item.trim()));
-  if (forwarded.some((item) => item === undefined)) return direct;
-
-  const chain = [...(forwarded as string[]), direct];
-  const index = chain.length - trustedProxyHops - 1;
-  return index >= 0 ? chain[index] : direct;
+  return normalizedIp(firstHeader(req, 'cf-connecting-ip')) ?? direct;
 }
 
 export function requestScheme(

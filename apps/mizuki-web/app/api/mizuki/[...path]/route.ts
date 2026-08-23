@@ -54,7 +54,7 @@ async function proxy(
   }
   headers.set('x-mizuki-proxy-secret', proxySecret);
   headers.set('x-mizuki-forwarded-proto', publicScheme(source));
-  const clientIp = edgeClientIp(request.headers.get('cf-connecting-ip'));
+  const clientIp = renderClientIp(request.headers.get('cf-connecting-ip'));
   if (clientIp) headers.set('x-mizuki-client-ip', clientIp);
 
   try {
@@ -137,7 +137,7 @@ function bodyTooLarge(): Response {
   return Response.json({ error: `Request body exceeds ${MAX_BODY_BYTES} bytes` }, { status: 413 });
 }
 
-function edgeClientIp(value: string | null): string | undefined {
+function renderClientIp(value: string | null): string | undefined {
   if (!value) return undefined;
   const candidate = value.trim();
   return isIP(candidate) ? candidate.toLowerCase() : undefined;

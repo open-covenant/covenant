@@ -46,7 +46,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
   return {
     host: env.MIZUKI_HOST ?? '127.0.0.1',
     port: int(env.MIZUKI_PORT, 8787),
-    trustedProxyHops: boundedInteger(env.MIZUKI_TRUSTED_PROXY_HOPS, 0, 0, 8),
+    trustedProxyHops: boundedInteger(env.MIZUKI_TRUSTED_PROXY_HOPS, 0, 0, 1),
     trustedProxyConfigured: env.MIZUKI_TRUSTED_PROXY_HOPS !== undefined,
     webProxySecret: env.MIZUKI_WEB_PROXY_SECRET,
     rateLimitMaxSources: boundedInteger(env.MIZUKI_RATE_LIMIT_MAX_SOURCES, 10_000, 100, 100_000),
@@ -135,7 +135,9 @@ export function liveConfigIssues(config: Config): string[] {
   requirePrivateService(missing, 'MIZUKI_UPDATER_URL', config.updaterUrl);
   requireSecret(missing, 'MIZUKI_UPDATER_TOKEN', config.updaterToken);
 
-  if (!config.trustedProxyConfigured) missing.push('MIZUKI_TRUSTED_PROXY_HOPS');
+  if (!config.trustedProxyConfigured || config.trustedProxyHops !== 1) {
+    missing.push('MIZUKI_TRUSTED_PROXY_HOPS=1');
+  }
   if (config.clawPumpAgentId) {
     try {
       address(config.clawPumpPayoutWallet ?? '');

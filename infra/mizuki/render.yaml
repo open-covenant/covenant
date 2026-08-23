@@ -168,6 +168,8 @@ services:
         sync: false
       - key: MIZUKI_SIGNER_SECONDARY_RPC_URL
         sync: false
+      - key: MIZUKI_SIGNER_RPC_TIMEOUT_MS
+        value: '5000'
       - key: MIZUKI_REFUND_PRIVATE_KEY_JSON
         sync: false
       - key: MIZUKI_ESCROW_PRIVATE_KEY_JSON

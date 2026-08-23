@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { assertServerMode, loadConfig } from './config.js';
 
@@ -46,6 +47,22 @@ describe('signer configuration', () => {
         MIZUKI_ESCROW_DAILY_LIMIT_USD_CENTS: '2500',
       }),
     ).toThrow('Per-operation limit cannot exceed either rolling daily limit');
+  });
+
+  it('keeps every RPC transport request within the production bound', () => {
+    const base = {
+      NODE_ENV: 'test',
+      MIZUKI_SIGNER_AUTH_TOKEN: TOKEN,
+      MIZUKI_SIGNER_MOCK_MODE: 'true',
+      MIZUKI_SIGNER_HOST: '127.0.0.1',
+    };
+
+    expect(loadConfig(base).rpcTimeoutMs).toBe(5_000);
+    expect(() => loadConfig({ ...base, MIZUKI_SIGNER_RPC_TIMEOUT_MS: '999' })).toThrow();
+    expect(() => loadConfig({ ...base, MIZUKI_SIGNER_RPC_TIMEOUT_MS: '10001' })).toThrow();
+    expect(readFileSync(new URL('../.env.example', import.meta.url), 'utf8')).toContain(
+      'MIZUKI_SIGNER_RPC_TIMEOUT_MS=5000',
+    );
   });
 
   it('fails closed when production dependencies are absent', () => {

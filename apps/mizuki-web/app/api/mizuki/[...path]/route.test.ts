@@ -7,7 +7,7 @@ afterEach(() => {
 });
 
 describe('Mizuki API proxy', () => {
-  it('replaces untrusted forwarding context with the Render edge identity', async () => {
+  it('replaces untrusted context with the validated Cloudflare address on Render', async () => {
     vi.stubEnv('MIZUKI_API_URL', 'https://mizuki-api.onrender.com');
     vi.stubEnv('MIZUKI_WEB_PROXY_SECRET', 'p'.repeat(32));
     vi.stubEnv('NEXT_PUBLIC_MIZUKI_APP_URL', 'https://mizuki.covenant.org');
@@ -23,7 +23,7 @@ describe('Mizuki API proxy', () => {
           authorization: 'Bearer public-token',
           'cf-connecting-ip': '198.51.100.8',
           'content-type': 'application/json',
-          'x-forwarded-for': '203.0.113.9',
+          'x-forwarded-for': '203.0.113.9, 198.51.100.8',
           'x-mizuki-client-ip': '203.0.113.10',
           'x-mizuki-forwarded-proto': 'http',
           'x-mizuki-proxy-secret': 'attacker-controlled',
@@ -40,13 +40,14 @@ describe('Mizuki API proxy', () => {
     const headers = new Headers(init?.headers);
     expect(target).toBe('https://mizuki-api.onrender.com/v1/quotes?source=web');
     expect(headers.get('authorization')).toBe('Bearer public-token');
+    expect(headers.get('cf-connecting-ip')).toBeNull();
     expect(headers.get('x-forwarded-for')).toBeNull();
     expect(headers.get('x-mizuki-client-ip')).toBe('198.51.100.8');
     expect(headers.get('x-mizuki-forwarded-proto')).toBe('https');
     expect(headers.get('x-mizuki-proxy-secret')).toBe('p'.repeat(32));
   });
 
-  it('fails closed without proxy authentication and drops malformed edge addresses', async () => {
+  it('fails closed without proxy authentication and ignores spoofed XFF', async () => {
     vi.stubEnv('MIZUKI_WEB_PROXY_SECRET', '');
     const upstream = vi.fn();
     vi.stubGlobal('fetch', upstream);
@@ -64,12 +65,24 @@ describe('Mizuki API proxy', () => {
     );
     await GET(
       new Request('https://mizuki.covenant.org/api/mizuki/v1/activity', {
-        headers: { 'cf-connecting-ip': '198.51.100.1, 203.0.113.1' },
+        headers: {
+          'cf-connecting-ip': 'not-an-ip',
+          'x-forwarded-for': '198.51.100.1',
+        },
       }),
       { params: Promise.resolve({ path: ['v1', 'activity'] }) },
     );
     const replacement = vi.mocked(fetch).mock.calls[0][1];
     expect(new Headers(replacement?.headers).get('x-mizuki-client-ip')).toBeNull();
+
+    await GET(
+      new Request('https://mizuki.covenant.org/api/mizuki/v1/activity', {
+        headers: { 'x-forwarded-for': '198.51.100.2' },
+      }),
+      { params: Promise.resolve({ path: ['v1', 'activity'] }) },
+    );
+    const missing = vi.mocked(fetch).mock.calls[1][1];
+    expect(new Headers(missing?.headers).get('x-mizuki-client-ip')).toBeNull();
   });
 
   it('requires a proxy secret of at least 32 UTF-8 bytes', async () => {

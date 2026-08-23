@@ -34,26 +34,29 @@ describe('public admission limits', () => {
     expect(() => buckets.consume('quote', '203.0.113.1')).toThrow(RateLimitError);
   });
 
-  it('ignores forwarding headers unless proxy hops are explicit and fails safe on bad data', () => {
+  it('trusts only the overwritten Cloudflare address on Render when enabled', () => {
     const request = {
-      headers: { 'x-forwarded-for': '198.51.100.4, 10.0.0.2' },
+      headers: {
+        'cf-connecting-ip': '198.51.100.4',
+        'x-forwarded-for': '203.0.113.9, 198.51.100.4',
+      },
       socket: { remoteAddress: '::ffff:10.0.0.3' },
     } as IncomingMessage;
     expect(requestSource(request, 0)).toBe('10.0.0.3');
-    expect(requestSource(request, 2)).toBe('198.51.100.4');
+    expect(requestSource(request, 1)).toBe('198.51.100.4');
 
-    request.headers['x-forwarded-for'] = 'spoofed, 10.0.0.2';
-    expect(requestSource(request, 2)).toBe('10.0.0.3');
-    request.headers['x-forwarded-for'] = '198.51.100.4';
-    expect(requestSource(request, 3)).toBe('10.0.0.3');
+    request.headers['cf-connecting-ip'] = 'spoofed';
+    expect(requestSource(request, 1)).toBe('10.0.0.3');
+    delete request.headers['cf-connecting-ip'];
+    expect(requestSource(request, 1)).toBe('10.0.0.3');
   });
 
-  it('uses authenticated web identity and the overwritten Render edge address', () => {
+  it('uses authenticated web identity and the validated Render source', () => {
     const secret = 'p'.repeat(32);
     const request = {
       headers: {
         'cf-connecting-ip': '192.0.2.4',
-        'x-forwarded-for': '203.0.113.99',
+        'x-forwarded-for': '203.0.113.99, 192.0.2.4',
         'x-mizuki-client-ip': '198.51.100.7',
         'x-mizuki-forwarded-proto': 'https',
         'x-mizuki-proxy-secret': secret,
@@ -73,11 +76,27 @@ describe('public admission limits', () => {
     expect(requestSource(request, 1, secret)).toBe('192.0.2.4');
   });
 
+  it('does not let caller-controlled XFF rotate Render admission buckets', () => {
+    const admission = new PublicAdmission(loadConfig({ MIZUKI_TRUSTED_PROXY_HOPS: '1' }));
+    const request = (index: number) =>
+      ({
+        headers: {
+          'cf-connecting-ip': '192.0.2.4',
+          'x-forwarded-for': `203.0.113.${index}, 192.0.2.4`,
+        },
+        socket: { remoteAddress: '10.0.0.3' },
+      }) as unknown as IncomingMessage;
+
+    for (let index = 0; index < 6; index += 1) admission.consume('quote', request(index));
+    expect(() => admission.consume('quote', request(6))).toThrow(RateLimitError);
+  });
+
   it('does not trust a proxy secret shorter than 32 UTF-8 bytes', () => {
     const shortSecret = 'é'.repeat(15);
     const request = {
       headers: {
         'cf-connecting-ip': '192.0.2.4',
+        'x-forwarded-for': '203.0.113.99, 192.0.2.4',
         'x-forwarded-proto': 'http',
         'x-mizuki-client-ip': '198.51.100.7',
         'x-mizuki-forwarded-proto': 'https',
@@ -106,7 +125,6 @@ describe('public admission limits', () => {
     const request = (clientIp: string) =>
       ({
         headers: {
-          'cf-connecting-ip': '192.0.2.4',
           'x-mizuki-client-ip': clientIp,
           'x-mizuki-proxy-secret': secret,
         },

@@ -9,6 +9,7 @@ import {
   SystemProgram,
   Transaction,
   TransactionInstruction,
+  type FetchFn,
   type ParsedInstruction,
   type ParsedTransactionWithMeta,
   type SignatureStatus,
@@ -80,6 +81,7 @@ export interface UsdPriceOracle {
 export interface SolanaGatewayConfig {
   rpcUrl: string;
   secondaryRpcUrl: string;
+  rpcTimeoutMs: number;
   refundPrivateKeyJson: string;
   escrowPrivateKeyJson: string;
   refundTreasury: string;
@@ -90,6 +92,34 @@ export interface SolanaGatewayConfig {
   escrowProgramId: string;
   escrowProgramDataSha256: string;
   solFeeReserveLamports: number;
+}
+
+export function boundedRpcFetch(
+  timeoutMs: number,
+  fetcher: FetchFn = fetch as unknown as FetchFn,
+): FetchFn {
+  if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) {
+    throw new RangeError('RPC timeout must be a positive integer');
+  }
+
+  return async (input, init) => {
+    const timeout = AbortSignal.timeout(timeoutMs);
+    const requestSignal = init?.signal as AbortSignal | null | undefined;
+    const signal = requestSignal ? AbortSignal.any([requestSignal, timeout]) : timeout;
+    try {
+      const response = await fetcher(input, { ...init, signal });
+      if (response.status === 429 || response.status >= 500) {
+        throw new PolicyError('rpc_unavailable', 'Solana RPC service is unavailable', 503, true);
+      }
+      return response;
+    } catch (error) {
+      if (error instanceof PolicyError) throw error;
+      if (timeout.aborted && !requestSignal?.aborted) {
+        throw new PolicyError('rpc_timeout', 'Solana RPC request timed out', 503, true);
+      }
+      throw new PolicyError('rpc_unavailable', 'Solana RPC service is unavailable', 503, true);
+    }
+  };
 }
 
 export class SolanaChainGateway implements ChainGateway {
@@ -106,8 +136,15 @@ export class SolanaChainGateway implements ChainGateway {
   private readonly solFeeReserveLamports: bigint;
 
   constructor(config: SolanaGatewayConfig) {
-    this.connection = new Connection(config.rpcUrl, 'finalized');
-    this.secondaryConnection = new Connection(config.secondaryRpcUrl, 'finalized');
+    const rpcFetch = boundedRpcFetch(config.rpcTimeoutMs);
+    const connectionConfig = {
+      commitment: 'finalized' as const,
+      confirmTransactionInitialTimeout: config.rpcTimeoutMs,
+      disableRetryOnRateLimit: true,
+      fetch: rpcFetch,
+    };
+    this.connection = new Connection(config.rpcUrl, connectionConfig);
+    this.secondaryConnection = new Connection(config.secondaryRpcUrl, connectionConfig);
     this.refundSigner = parseKeypair(config.refundPrivateKeyJson);
     this.escrowSigner = parseKeypair(config.escrowPrivateKeyJson);
     this.refundTreasury = new PublicKey(config.refundTreasury);

@@ -61,7 +61,7 @@ Before mainnet, run `pnpm --filter @covenant/mizuki benchmark -- cases.json` aga
 
 Run `pnpm --filter @covenant/mizuki mcp` to expose `mizuki_quote`, `mizuki_submit`, and `mizuki_status` over stdio. A wallet-capable host creates the x402 signature; Mizuki never asks an MCP client for a private key.
 
-Expensive public mutations use bounded per-source token buckets and return `429` with `Retry-After`. Production must set `MIZUKI_TRUSTED_PROXY_HOPS` explicitly and share `MIZUKI_WEB_PROXY_SECRET` only with the same-origin web proxy. Render's overwritten edge address identifies direct callers; the authenticated proxy context preserves web callers without trusting user-supplied forwarding headers. Activity streams have global, per-source, and idle-lifetime caps.
+Expensive public mutations use bounded per-source token buckets and return `429` with `Retry-After`. Production on Render must set `MIZUKI_TRUSTED_PROXY_HOPS=1` and share `MIZUKI_WEB_PROXY_SECRET` only with the same-origin web proxy. The setting enables Render-specific edge trust; it is not a generic proxy-chain depth. Direct ingress validates Cloudflare's overwritten `CF-Connecting-IP` value and ignores `X-Forwarded-For`, which Cloudflare appends to caller-controlled values. Missing or malformed edge identity falls back to the direct socket. The authenticated web proxy context carries the same validated address without trusting browser-supplied Mizuki headers. Activity streams have global, per-source, and idle-lifetime caps.
 
 ## GitHub App
 

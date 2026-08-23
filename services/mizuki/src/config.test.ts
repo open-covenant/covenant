@@ -35,7 +35,7 @@ describe('updater configuration', () => {
   });
 
   it('bounds proxy, rate-limit, and activity stream settings', () => {
-    expect(() => loadConfig({ MIZUKI_TRUSTED_PROXY_HOPS: '9' })).toThrow('between 0 and 8');
+    expect(() => loadConfig({ MIZUKI_TRUSTED_PROXY_HOPS: '2' })).toThrow('between 0 and 1');
     expect(() => loadConfig({ MIZUKI_RATE_LIMIT_MAX_SOURCES: '99' })).toThrow(
       'between 100 and 100000',
     );
@@ -161,9 +161,12 @@ describe('live configuration', () => {
     }
   });
 
-  it('requires an explicit trusted proxy hop count in live mode', () => {
+  it('requires explicit Render proxy trust in live mode', () => {
     const { MIZUKI_TRUSTED_PROXY_HOPS: _, ...withoutProxy } = complete;
     expect(() => assertLiveConfig(loadConfig(withoutProxy))).toThrow('MIZUKI_TRUSTED_PROXY_HOPS');
+    expect(() =>
+      assertLiveConfig(loadConfig({ ...complete, MIZUKI_TRUSTED_PROXY_HOPS: '0' })),
+    ).toThrow('MIZUKI_TRUSTED_PROXY_HOPS=1');
   });
 
   it('requires authenticated web proxy forwarding in live mode', () => {

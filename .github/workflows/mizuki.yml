@@ -117,5 +117,33 @@ jobs:
           rustup component add rustfmt clippy
       - name: build and exercise the SBPFv3 artifact
         run: programs/mizuki-escrow/scripts/test.sh
-      - name: publish escrow artifact digests
-        run: sha256sum programs/mizuki-escrow/target/deploy/mizuki_escrow_program.so
+      - name: prepare escrow release evidence
+        run: |
+          program_root=programs/mizuki-escrow
+          release_dir="$program_root/target/release-evidence"
+          artifact="$program_root/target/deploy/mizuki_escrow_program.so"
+
+          mkdir -p "$release_dir"
+          cp "$artifact" "$release_dir/"
+          cp "$program_root/Cargo.lock" "$program_root/Cargo.toml" "$release_dir/"
+          cp "$program_root/abi/mizuki-escrow-v1.json" "$release_dir/"
+
+          (
+            cd "$release_dir"
+            sha256sum mizuki_escrow_program.so > SHA256SUMS
+          )
+          solana-verify get-executable-hash "$artifact" > "$release_dir/SOLANA_EXECUTABLE_HASH"
+          cargo-build-sbf --version > "$release_dir/BUILD_TOOLCHAIN"
+          solana-verify --version > "$release_dir/SOLANA_VERIFY_VERSION"
+          git rev-parse HEAD > "$release_dir/GIT_COMMIT"
+
+          cat "$release_dir/SHA256SUMS"
+          cat "$release_dir/SOLANA_EXECUTABLE_HASH"
+      - name: upload immutable escrow release evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: mizuki-escrow-${{ github.sha }}
+          path: programs/mizuki-escrow/target/release-evidence/
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0

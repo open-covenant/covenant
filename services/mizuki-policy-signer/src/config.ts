@@ -12,6 +12,7 @@ const envSchema = z
     MIZUKI_SIGNER_DATABASE_URL: z.string().url().optional(),
     MIZUKI_SIGNER_RPC_URL: z.string().url().optional(),
     MIZUKI_SIGNER_SECONDARY_RPC_URL: z.string().url().optional(),
+    MIZUKI_SIGNER_RPC_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(10_000).default(5_000),
     MIZUKI_REFUND_PRIVATE_KEY_JSON: z.string().optional(),
     MIZUKI_ESCROW_PRIVATE_KEY_JSON: z.string().optional(),
     MIZUKI_SIGNER_GITHUB_TOKEN: z.string().min(20).optional(),
@@ -63,6 +64,7 @@ export interface SignerConfig {
   databaseUrl?: string;
   rpcUrl?: string;
   secondaryRpcUrl?: string;
+  rpcTimeoutMs: number;
   refundPrivateKeyJson?: string;
   escrowPrivateKeyJson?: string;
   githubToken?: string;
@@ -169,6 +171,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SignerConfig {
     databaseUrl: parsed.MIZUKI_SIGNER_DATABASE_URL,
     rpcUrl: parsed.MIZUKI_SIGNER_RPC_URL,
     secondaryRpcUrl: parsed.MIZUKI_SIGNER_SECONDARY_RPC_URL,
+    rpcTimeoutMs: parsed.MIZUKI_SIGNER_RPC_TIMEOUT_MS,
     refundPrivateKeyJson: parsed.MIZUKI_REFUND_PRIVATE_KEY_JSON,
     escrowPrivateKeyJson: parsed.MIZUKI_ESCROW_PRIVATE_KEY_JSON,
     githubToken: parsed.MIZUKI_SIGNER_GITHUB_TOKEN,

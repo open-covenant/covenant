@@ -24,7 +24,7 @@ pnpm install --ignore-workspace
 pnpm dev
 ```
 
-Set `MIZUKI_API_URL` to the server-side API origin and give the web and API services the same 32-character-or-longer `MIZUKI_WEB_PROXY_SECRET`. Browser requests use the same-origin `/api/mizuki/*` proxy so x402 headers, cookies, client identity, and SSE remain available without broad cross-origin permissions.
+Set `MIZUKI_API_URL` to the server-side API origin and give the web and API services the same `MIZUKI_WEB_PROXY_SECRET` of at least 32 UTF-8 bytes. Browser requests use the same-origin `/api/mizuki/*` proxy so x402 headers, cookies, client identity, and SSE remain available without broad cross-origin permissions. On Render, the proxy validates Cloudflare's overwritten `CF-Connecting-IP` value and replaces all inbound Mizuki context headers before authenticating that address to the API. It never derives identity from `X-Forwarded-For`, which Cloudflare appends to caller-controlled values.
 
 Set `MIZUKI_DEMO_MODE=1` only for visual development. Demo data is clearly labeled and does not simulate POST requests, payment, wallet proof, or claims.
 

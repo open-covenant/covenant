@@ -5,13 +5,15 @@ import {
   SYSVAR_RENT_PUBKEY,
   SystemProgram,
   Transaction,
+  type FetchFn,
   type ParsedTransactionWithMeta,
   type SignatureStatus,
 } from '@solana/web3.js';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   assertInstructionProgramSequence,
   assertRpcSettlementIdentity,
+  boundedRpcFetch,
   ConsensusUsdPriceOracle,
   consensusCapacity,
   consensusTransactionState,
@@ -178,6 +180,7 @@ describe('transaction form policy', () => {
         new SolanaChainGateway({
           rpcUrl: 'http://127.0.0.1:8899',
           secondaryRpcUrl: 'http://127.0.0.1:8900',
+          rpcTimeoutMs: 5_000,
           refundPrivateKeyJson: JSON.stringify([...refundSigner.secretKey]),
           escrowPrivateKeyJson: JSON.stringify([...escrowSigner.secretKey]),
           refundTreasury: refundSigner.publicKey.toBase58(),
@@ -199,6 +202,7 @@ describe('transaction form policy', () => {
         new SolanaChainGateway({
           rpcUrl: 'http://127.0.0.1:8899',
           secondaryRpcUrl: 'http://127.0.0.1:8900',
+          rpcTimeoutMs: 5_000,
           refundPrivateKeyJson: JSON.stringify([...signer.secretKey]),
           escrowPrivateKeyJson: JSON.stringify([...signer.secretKey]),
           refundTreasury: signer.publicKey.toBase58(),
@@ -417,6 +421,52 @@ describe('independent RPC finality', () => {
   });
 });
 
+describe('RPC transport bound', () => {
+  it('aborts a stalled HTTP request and returns a retryable policy error', async () => {
+    const fetcher = vi.fn(
+      (_input: Parameters<FetchFn>[0], init: Parameters<FetchFn>[1]) =>
+        new Promise<never>((_resolve, reject) => {
+          const signal = init?.signal as AbortSignal;
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+        }),
+    ) as unknown as FetchFn;
+
+    await expect(boundedRpcFetch(20, fetcher)('https://rpc.example')).rejects.toMatchObject({
+      code: 'rpc_timeout',
+      retryable: true,
+    });
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it('combines a caller cancellation with the transport deadline', async () => {
+    const fetcher = vi.fn(
+      (_input: Parameters<FetchFn>[0], init: Parameters<FetchFn>[1]) =>
+        new Promise<never>((_resolve, reject) => {
+          const signal = init?.signal as AbortSignal;
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+        }),
+    ) as unknown as FetchFn;
+    const controller = new AbortController();
+    const request = boundedRpcFetch(1_000, fetcher)('https://rpc.example', {
+      signal: controller.signal,
+    });
+
+    controller.abort();
+
+    await expect(request).rejects.toMatchObject({ code: 'rpc_unavailable', retryable: true });
+  });
+
+  it('maps retryable HTTP service failures without web3 backoff', async () => {
+    const fetcher = vi.fn(async () => new Response(null, { status: 429 })) as unknown as FetchFn;
+
+    await expect(boundedRpcFetch(5_000, fetcher)('https://rpc.example')).rejects.toMatchObject({
+      code: 'rpc_unavailable',
+      retryable: true,
+    });
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+});
+
 describe('price feed policy', () => {
   const now = new Date('2026-08-22T12:00:00.000Z').getTime();
 
@@ -573,6 +623,7 @@ function escrowGateway(): {
   const gateway = new SolanaChainGateway({
     rpcUrl: 'http://127.0.0.1:8899',
     secondaryRpcUrl: 'http://127.0.0.1:8900',
+    rpcTimeoutMs: 5_000,
     refundPrivateKeyJson: JSON.stringify([...refundSigner.secretKey]),
     escrowPrivateKeyJson: JSON.stringify([...signer.secretKey]),
     refundTreasury: refundSigner.publicKey.toBase58(),

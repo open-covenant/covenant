@@ -32,34 +32,34 @@ Store `authority_seed` as the API secret and the command output as the signer pu
 
 ## API
 
-| Variable                                                               | Source                 | Pre-deploy proof                                                                         |
-| ---------------------------------------------------------------------- | ---------------------- | ---------------------------------------------------------------------------------------- |
-| `MIZUKI_PUBLIC_BASE_URL`                                               | Fixed HTTPS URL        | Exact public API origin used in x402 resource binding.                                   |
-| `MIZUKI_WEB_ORIGIN`                                                    | Fixed HTTPS URL        | Exact web origin; no wildcard CORS.                                                      |
-| `MIZUKI_TRUSTED_PROXY_HOPS`                                            | Fixed integer          | Explicitly `1` on Render. Missing proxy metadata falls back to the direct socket source. |
-| `MIZUKI_RATE_LIMIT_MAX_SOURCES`                                        | Fixed capacity         | `10000`; excess sources share a bounded overflow bucket instead of allocating memory.    |
-| `MIZUKI_SSE_MAX_CONNECTIONS` / `MIZUKI_SSE_MAX_CONNECTIONS_PER_SOURCE` | Fixed capacities       | `100` globally and `3` per source; excess streams return `429`.                          |
-| `MIZUKI_SSE_IDLE_TIMEOUT_MS`                                           | Fixed duration         | `120000`; streams close after two minutes without a new activity event.                  |
-| `MIZUKI_READINESS_REFRESH_MS` / `MIZUKI_READINESS_MAX_AGE_MS`          | Fixed durations        | `30000` / `90000`; stale complete dependency evidence returns `503`.                     |
-| `MIZUKI_READINESS_TIMEOUT_MS`                                          | Fixed duration         | `20000`; a hanging dependency fails the current readiness attempt.                       |
-| `MIZUKI_ESCROW_READINESS_MIN_LAMPORTS`                                 | Fixed reserve floor    | `1000000000`; paid admission requires signer-reported escrow capacity above this floor.  |
-| `MIZUKI_DATABASE_URL`                                                  | API database           | TLS connection, schema migration, restart recovery, and unique-payment tests pass.       |
-| `MIZUKI_ADMIN_TOKEN`                                                   | Generated secret       | At least 32 characters; absent from web and logs.                                        |
-| `MIZUKI_CODING_GATEWAY_URL` / `MIZUKI_CODING_GATEWAY_TOKEN`            | Private service links  | Authenticated health, submit, status, and artifact benchmark pass.                       |
-| `USEPOD_API_KEY`                                                       | Secret                 | Independent review request succeeds through the documented OpenAI-compatible interface.  |
-| `USEPOD_MODEL`                                                         | Pinned route           | Coding route cleared the published Micro/Standard benchmark.                             |
-| `USEPOD_REVIEW_MODEL`                                                  | Different pinned route | Must not equal the coding route; clean-context review benchmark passes.                  |
-| `MIZUKI_PAY_TO`                                                        | Signer service link    | Equals signer refund treasury and has a canonical USDC associated token account.         |
-| `MIZUKI_X402_FACILITATOR`                                              | Fixed HTTPS URL        | `/supported` advertises x402 v2, exact SVM mainnet, and a valid fee payer.               |
-| `MIZUKI_POLICY_SIGNER_URL` / `MIZUKI_POLICY_SIGNER_TOKEN`              | Private service links  | Readiness succeeds and reports matching treasury, mint, decimals, and available reserve. |
-| `MIZUKI_JOB_AUTHORITY_SEED`                                            | Secret                 | Canonical base64 for exactly 32 bytes; derived public key matches signer setting.        |
-| `MIZUKI_GITHUB_APP_ID` / `MIZUKI_GITHUB_PRIVATE_KEY`                   | Secrets                | Repository installation token can read issue events and publish a branch and PR.         |
-| `MIZUKI_GITHUB_CLIENT_ID` / `MIZUKI_GITHUB_CLIENT_SECRET`              | Secrets                | OAuth callback is exactly `/v1/auth/github/callback`.                                    |
-| `MIZUKI_GITHUB_WEBHOOK_SECRET`                                         | Secret                 | Signed pull-request webhook replay passes; invalid signatures fail.                      |
-| `MIZUKI_SESSION_SECRET`                                                | Generated secret       | At least 32 characters; absent from signer, gateway, and updater.                        |
-| `MIZUKI_WEB_PROXY_SECRET`                                              | Generated service link | At least 32 UTF-8 bytes; only an exact match authenticates web-provided client context.  |
-| `MIZUKI_UPDATER_URL` / `MIZUKI_UPDATER_TOKEN`                          | Private service links  | Authenticated read works; proposal submission with this token returns unauthorized.      |
-| `MIZUKI_INTERNAL_REPOS`                                                | Fixed list             | Contains every operator-controlled repository so they cannot count as external traction. |
+| Variable                                                               | Source                 | Pre-deploy proof                                                                                                                |
+| ---------------------------------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `MIZUKI_PUBLIC_BASE_URL`                                               | Fixed HTTPS URL        | Exact public API origin used in x402 resource binding.                                                                          |
+| `MIZUKI_WEB_ORIGIN`                                                    | Fixed HTTPS URL        | Exact web origin; no wildcard CORS.                                                                                             |
+| `MIZUKI_TRUSTED_PROXY_HOPS`                                            | Fixed integer          | Exactly `1` on Render. Enables validated `CF-Connecting-IP`; XFF is ignored and invalid edge identity falls back to the socket. |
+| `MIZUKI_RATE_LIMIT_MAX_SOURCES`                                        | Fixed capacity         | `10000`; excess sources share a bounded overflow bucket instead of allocating memory.                                           |
+| `MIZUKI_SSE_MAX_CONNECTIONS` / `MIZUKI_SSE_MAX_CONNECTIONS_PER_SOURCE` | Fixed capacities       | `100` globally and `3` per source; excess streams return `429`.                                                                 |
+| `MIZUKI_SSE_IDLE_TIMEOUT_MS`                                           | Fixed duration         | `120000`; streams close after two minutes without a new activity event.                                                         |
+| `MIZUKI_READINESS_REFRESH_MS` / `MIZUKI_READINESS_MAX_AGE_MS`          | Fixed durations        | `30000` / `90000`; stale complete dependency evidence returns `503`.                                                            |
+| `MIZUKI_READINESS_TIMEOUT_MS`                                          | Fixed duration         | `20000`; a hanging dependency fails the current readiness attempt.                                                              |
+| `MIZUKI_ESCROW_READINESS_MIN_LAMPORTS`                                 | Fixed reserve floor    | `1000000000`; paid admission requires signer-reported escrow capacity above this floor.                                         |
+| `MIZUKI_DATABASE_URL`                                                  | API database           | TLS connection, schema migration, restart recovery, and unique-payment tests pass.                                              |
+| `MIZUKI_ADMIN_TOKEN`                                                   | Generated secret       | At least 32 characters; absent from web and logs.                                                                               |
+| `MIZUKI_CODING_GATEWAY_URL` / `MIZUKI_CODING_GATEWAY_TOKEN`            | Private service links  | Authenticated health, submit, status, and artifact benchmark pass.                                                              |
+| `USEPOD_API_KEY`                                                       | Secret                 | Independent review request succeeds through the documented OpenAI-compatible interface.                                         |
+| `USEPOD_MODEL`                                                         | Pinned route           | Coding route cleared the published Micro/Standard benchmark.                                                                    |
+| `USEPOD_REVIEW_MODEL`                                                  | Different pinned route | Must not equal the coding route; clean-context review benchmark passes.                                                         |
+| `MIZUKI_PAY_TO`                                                        | Signer service link    | Equals signer refund treasury and has a canonical USDC associated token account.                                                |
+| `MIZUKI_X402_FACILITATOR`                                              | Fixed HTTPS URL        | `/supported` advertises x402 v2, exact SVM mainnet, and a valid fee payer.                                                      |
+| `MIZUKI_POLICY_SIGNER_URL` / `MIZUKI_POLICY_SIGNER_TOKEN`              | Private service links  | Readiness succeeds and reports matching treasury, mint, decimals, and available reserve.                                        |
+| `MIZUKI_JOB_AUTHORITY_SEED`                                            | Secret                 | Canonical base64 for exactly 32 bytes; derived public key matches signer setting.                                               |
+| `MIZUKI_GITHUB_APP_ID` / `MIZUKI_GITHUB_PRIVATE_KEY`                   | Secrets                | Repository installation token can read issue events and publish a branch and PR.                                                |
+| `MIZUKI_GITHUB_CLIENT_ID` / `MIZUKI_GITHUB_CLIENT_SECRET`              | Secrets                | OAuth callback is exactly `/v1/auth/github/callback`.                                                                           |
+| `MIZUKI_GITHUB_WEBHOOK_SECRET`                                         | Secret                 | Signed pull-request webhook replay passes; invalid signatures fail.                                                             |
+| `MIZUKI_SESSION_SECRET`                                                | Generated secret       | At least 32 characters; absent from signer, gateway, and updater.                                                               |
+| `MIZUKI_WEB_PROXY_SECRET`                                              | Generated service link | At least 32 UTF-8 bytes; only an exact match authenticates web-provided client context.                                         |
+| `MIZUKI_UPDATER_URL` / `MIZUKI_UPDATER_TOKEN`                          | Private service links  | Authenticated read works; proposal submission with this token returns unauthorized.                                             |
+| `MIZUKI_INTERNAL_REPOS`                                                | Fixed list             | Contains every operator-controlled repository so they cannot count as external traction.                                        |
 
 The GitHub App needs repository Contents read/write, Issues read, Pull requests read/write, Metadata read, and Members read. Subscribe only to Pull request events. Public v1 intake remains installation- and label-authorized; Mizuki never opens unsolicited PRs.
 
@@ -73,6 +73,7 @@ The database initializes paid intake and new bounty claims as closed. `GET /v1/a
 | --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
 | `MIZUKI_SIGNER_DATABASE_URL`                                          | Dedicated TLS database; operation leases and restart reconciliation pass.                    |
 | `MIZUKI_SIGNER_RPC_URL` / `MIZUKI_SIGNER_SECONDARY_RPC_URL`           | Different provider hostnames return equal finalized program, custody, and settlement facts.  |
+| `MIZUKI_SIGNER_RPC_TIMEOUT_MS`                                        | Exactly `5000`; every HTTP request to either RPC provider aborts within this bound.          |
 | `MIZUKI_REFUND_PRIVATE_KEY_JSON`                                      | Dedicated low-balance key; public key equals `MIZUKI_REFUND_TREASURY`.                       |
 | `MIZUKI_ESCROW_PRIVATE_KEY_JSON`                                      | Different dedicated key; public key equals `MIZUKI_ESCROW_AUTHORITY`.                        |
 | `MIZUKI_SIGNER_GITHUB_TOKEN`                                          | Read-only public-repository metadata access; no content, workflow, or administration writes. |
@@ -115,7 +116,7 @@ The gateway receives no GitHub App key, treasury key, signer token, updater toke
 | `NEXT_PUBLIC_SOLANA_NETWORK`          | Exactly `solana` for production.                                                                                    |
 | `NEXT_PUBLIC_SOLANA_RPC_URL`          | Production mainnet RPC suitable for browser mint and blockhash reads; public by design, never embed a secret token. |
 
-The web service receives no custody key or signer, updater, gateway, or API admin authority. It holds only the narrowly scoped `MIZUKI_WEB_PROXY_SECRET`, which authenticates server-side client-IP and scheme context and cannot authorize an API operation. Never expose it through `NEXT_PUBLIC_*`; rotate the API and web values together. The wallet signs the official x402 SVM transaction, and the server-side proxy forwards only allowlisted request headers and bodies no larger than the API's 64,000-byte limit.
+The web service receives no custody key or signer, updater, gateway, or API admin authority. It holds only the narrowly scoped `MIZUKI_WEB_PROXY_SECRET`, which authenticates server-side client-IP and scheme context and cannot authorize an API operation. The web proxy derives client identity only from Render's validated `CF-Connecting-IP` value, ignores `X-Forwarded-For`, and replaces browser-supplied Mizuki context headers. Never expose the credential through `NEXT_PUBLIC_*`; rotate the API and web values together. The wallet signs the official x402 SVM transaction, and the server-side proxy forwards only allowlisted request headers and bodies no larger than the API's 64,000-byte limit.
 
 ## Updater
 

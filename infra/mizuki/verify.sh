@@ -94,7 +94,7 @@ abort 'API payment recipient is not the signer refund treasury' unless service_r
 abort 'ClawPump payout is not linked to the isolated escrow authority' unless service_ref(api.fetch('CLAWPUMP_PAYOUT_WALLET'), 'mizuki-policy-signer', 'MIZUKI_ESCROW_AUTHORITY')
 abort 'API refund authority seed is not secret' unless api.fetch('MIZUKI_JOB_AUTHORITY_SEED')['sync'] == false
 abort 'API x402 facilitator is not pinned to HTTPS' unless URI(api.fetch('MIZUKI_X402_FACILITATOR')['value']).scheme == 'https'
-abort 'API trusted proxy hop count drift' unless api.fetch('MIZUKI_TRUSTED_PROXY_HOPS')['value'] == '1'
+abort 'API Render proxy trust drift' unless api.fetch('MIZUKI_TRUSTED_PROXY_HOPS')['value'] == '1'
 abort 'API rate-limit source capacity drift' unless api.fetch('MIZUKI_RATE_LIMIT_MAX_SOURCES')['value'] == '10000'
 abort 'API SSE global cap drift' unless api.fetch('MIZUKI_SSE_MAX_CONNECTIONS')['value'] == '100'
 abort 'API SSE source cap drift' unless api.fetch('MIZUKI_SSE_MAX_CONNECTIONS_PER_SOURCE')['value'] == '3'
@@ -113,6 +113,7 @@ abort 'escrow authority is not operator-pinned' unless signer.fetch('MIZUKI_ESCR
 abort 'job authority public key is not operator-pinned' unless signer.fetch('MIZUKI_JOB_AUTHORITY_PUBLIC_KEY')['sync'] == false
 abort 'primary RPC is not operator-pinned' unless signer.fetch('MIZUKI_SIGNER_RPC_URL')['sync'] == false
 abort 'secondary RPC is not operator-pinned' unless signer.fetch('MIZUKI_SIGNER_SECONDARY_RPC_URL')['sync'] == false
+abort 'signer RPC timeout drift' unless signer.fetch('MIZUKI_SIGNER_RPC_TIMEOUT_MS')['value'] == '5000'
 abort 'primary price URL is not operator-pinned' unless signer.fetch('MIZUKI_SOL_USD_PRICE_URL')['sync'] == false
 abort 'primary price token is not secret' unless signer.fetch('MIZUKI_SOL_USD_PRICE_TOKEN')['sync'] == false
 abort 'secondary price URL is not operator-pinned' unless signer.fetch('MIZUKI_SOL_USD_SECONDARY_PRICE_URL')['sync'] == false

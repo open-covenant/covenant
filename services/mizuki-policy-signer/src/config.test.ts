@@ -65,6 +65,22 @@ describe('signer configuration', () => {
     );
   });
 
+  it('bounds price observation age', () => {
+    const base = {
+      NODE_ENV: 'test',
+      MIZUKI_SIGNER_AUTH_TOKEN: TOKEN,
+      MIZUKI_SIGNER_MOCK_MODE: 'true',
+      MIZUKI_SIGNER_HOST: '127.0.0.1',
+    };
+
+    expect(loadConfig(base).maxPriceAgeMs).toBe(300_000);
+    expect(() => loadConfig({ ...base, MIZUKI_SOL_USD_MAX_AGE_MS: '59999' })).toThrow();
+    expect(() => loadConfig({ ...base, MIZUKI_SOL_USD_MAX_AGE_MS: '300001' })).toThrow();
+    expect(readFileSync(new URL('../.env.example', import.meta.url), 'utf8')).toContain(
+      'MIZUKI_SOL_USD_MAX_AGE_MS=300000',
+    );
+  });
+
   it('fails closed when production dependencies are absent', () => {
     expect(() =>
       loadConfig({

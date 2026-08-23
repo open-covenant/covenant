@@ -33,12 +33,14 @@ const prices = new ConsensusUsdPriceOracle(
     config.priceToken,
     config.minSolUsdMicros,
     config.maxSolUsdMicros,
+    config.maxPriceAgeMs,
   ),
   new HttpUsdPriceOracle(
     config.secondaryPriceUrl!,
     config.secondaryPriceToken,
     config.minSolUsdMicros,
     config.maxSolUsdMicros,
+    config.maxPriceAgeMs,
   ),
   config.maxPriceDivergenceBps,
 );

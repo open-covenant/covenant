@@ -32,6 +32,7 @@ const envSchema = z
     MIZUKI_SOL_USD_SECONDARY_PRICE_URL: z.string().url().optional(),
     MIZUKI_SOL_USD_SECONDARY_PRICE_TOKEN: z.string().min(16).optional(),
     MIZUKI_SOL_USD_MAX_DIVERGENCE_BPS: z.coerce.number().int().min(1).max(1_000).default(500),
+    MIZUKI_SOL_USD_MAX_AGE_MS: z.coerce.number().int().min(60_000).max(300_000).default(300_000),
     MIZUKI_SOL_USD_MIN_MICROS: z.coerce.number().int().positive().default(1_000_000),
     MIZUKI_SOL_USD_MAX_MICROS: z.coerce.number().int().positive().default(1_000_000_000),
     MIZUKI_OPERATION_LIMIT_USD_CENTS: z.coerce.number().int().positive().default(2_500),
@@ -81,6 +82,7 @@ export interface SignerConfig {
   secondaryPriceUrl?: string;
   secondaryPriceToken?: string;
   maxPriceDivergenceBps: number;
+  maxPriceAgeMs: number;
   minSolUsdMicros: number;
   maxSolUsdMicros: number;
   operationLimitUsdCents: number;
@@ -188,6 +190,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SignerConfig {
     secondaryPriceUrl: parsed.MIZUKI_SOL_USD_SECONDARY_PRICE_URL,
     secondaryPriceToken: parsed.MIZUKI_SOL_USD_SECONDARY_PRICE_TOKEN,
     maxPriceDivergenceBps: parsed.MIZUKI_SOL_USD_MAX_DIVERGENCE_BPS,
+    maxPriceAgeMs: parsed.MIZUKI_SOL_USD_MAX_AGE_MS,
     minSolUsdMicros: parsed.MIZUKI_SOL_USD_MIN_MICROS,
     maxSolUsdMicros: parsed.MIZUKI_SOL_USD_MAX_MICROS,
     operationLimitUsdCents: parsed.MIZUKI_OPERATION_LIMIT_USD_CENTS,

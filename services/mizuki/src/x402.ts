@@ -6,6 +6,7 @@ import {
 } from '@x402/core/http';
 import { x402ResourceServer } from '@x402/core/server';
 import type { PaymentPayload, PaymentRequired, PaymentRequirements } from '@x402/core/types';
+import { address } from '@solana/kit';
 import { registerExactSvmScheme } from '@x402/svm/exact/server';
 import type { Config } from './config.js';
 import type { Payment, Quote } from './types.js';
@@ -50,12 +51,20 @@ export class Payments {
     }
     const supported = await this.facilitator.getSupported();
     if (!isSupportedResponse(supported)) throw new Error('facilitator evidence is invalid');
-    const route = supported.kinds.some(
+    const route = supported.kinds.find(
       (kind) =>
         kind.x402Version === 2 && kind.scheme === 'exact' && kind.network === SOLANA_MAINNET,
     );
-    const signers = supported.signers[SOLANA_MAINNET];
-    if (!route || !Array.isArray(signers) || signers.length === 0) {
+    const signers = supported.signers[SOLANA_MAINNET] ?? supported.signers['solana:*'];
+    const feePayer = route?.extra?.feePayer;
+    if (
+      !route ||
+      !Array.isArray(signers) ||
+      signers.length === 0 ||
+      typeof feePayer !== 'string' ||
+      !signers.includes(feePayer) ||
+      !isSvmAddress(feePayer)
+    ) {
       throw new Error('facilitator does not support the required mainnet route');
     }
   }
@@ -252,7 +261,12 @@ export class Payments {
 }
 
 function isSupportedResponse(value: unknown): value is {
-  kinds: Array<{ x402Version: number; scheme: string; network: string }>;
+  kinds: Array<{
+    x402Version: number;
+    scheme: string;
+    network: string;
+    extra?: Record<string, unknown>;
+  }>;
   extensions: string[];
   signers: Record<string, string[]>;
 } {
@@ -283,9 +297,20 @@ function isSupportedResponse(value: unknown): value is {
       typeof fields.scheme === 'string' &&
       fields.scheme.length > 0 &&
       typeof fields.network === 'string' &&
-      fields.network.length > 0
+      fields.network.length > 0 &&
+      (fields.extra === undefined ||
+        (typeof fields.extra === 'object' && fields.extra !== null && !Array.isArray(fields.extra)))
     );
   });
+}
+
+function isSvmAddress(value: string): boolean {
+  try {
+    address(value);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function paymentRequiredHeader(challenge: PaymentRequired): string {

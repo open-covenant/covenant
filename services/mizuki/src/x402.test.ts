@@ -54,8 +54,9 @@ describe('Payments mock mode', () => {
 describe('Payments live x402 boundary', () => {
   it('uses one v2 requirement for verification, durable authorization, and settlement', async () => {
     const treasury = '2'.repeat(32);
-    const feePayer = '3'.repeat(32);
+    const feePayer = '2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4';
     const payer = '4'.repeat(32);
+    let signers = { 'solana:*': [feePayer] };
     const requests: Array<{ path: string; body?: Record<string, unknown> }> = [];
     const facilitator = createServer(async (request, response) => {
       let body: Record<string, unknown> | undefined;
@@ -78,7 +79,7 @@ describe('Payments live x402 boundary', () => {
               },
             ],
             extensions: [],
-            signers: { [SOLANA_MAINNET]: [feePayer] },
+            signers,
           }),
         );
         return;
@@ -168,6 +169,16 @@ describe('Payments live x402 boundary', () => {
         '/settle',
         '/supported',
       ]);
+
+      signers = { 'solana:devnet': [feePayer] };
+      await expect(payments.readiness()).rejects.toThrow(
+        'facilitator does not support the required mainnet route',
+      );
+
+      signers = { 'solana:*': ['5'.repeat(32)] };
+      await expect(payments.readiness()).rejects.toThrow(
+        'facilitator does not support the required mainnet route',
+      );
     } finally {
       await new Promise<void>((resolve, reject) =>
         facilitator.close((error) => (error ? reject(error) : resolve())),

@@ -6,6 +6,7 @@
   "description": "Independent transaction policy and refund signer for Mizuki.",
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "canary:devnet": "node dist/devnet-canary-cli.js",
     "start": "node dist/index.js",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"

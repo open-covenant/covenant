@@ -50,6 +50,8 @@ solana program deploy \
 
 After all canaries, either finalize the devnet program or abandon it. Never reuse any devnet program-ID, deploy, fee-payer, or upgrade-authority key material in production.
 
+Download the CI artifact and its checksum instead of rebuilding the canary input locally. Run the policy signer's devnet artifact canary in dry-run mode, review the redacted receipt, then rerun with `--execute` and a fresh receipt path. The runner independently checks the devnet genesis hash and requires finalized loader-v3 bytes to equal that exact downloaded SBPFv3 artifact before it can submit a transaction. It does not deploy, create keys, request funds, or accept a mainnet RPC. Usage and evidence fields are documented in `services/mizuki-policy-signer/README.md`.
+
 ## Mainnet immutable deployment
 
 The production deployment must be immutable from its first successful deploy:

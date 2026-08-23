@@ -56,6 +56,9 @@ Wallet proof uses a two-call challenge flow. The first call submits the address 
 pnpm typecheck
 pnpm test
 pnpm build
+pnpm smoke
 ```
 
-The production build emits a standalone Next.js server. Configure OAuth callback and cookie domains so the GitHub session is valid for the same public origin used by the proxy.
+The production build emits a standalone Next.js server. The smoke test starts that output against a fake API and verifies receipt 404s, outage handling, valid receipts, and clean shutdown. Do not add a shared `loading.tsx` or Suspense boundary above the job and bounty detail routes: Next.js sends streamed not-found pages with HTTP 200.
+
+Configure OAuth callback and cookie domains so the GitHub session is valid for the same public origin used by the proxy.

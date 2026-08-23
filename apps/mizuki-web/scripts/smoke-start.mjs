@@ -59,6 +59,27 @@ for (const stream of [child.stdout, child.stderr]) {
 try {
   await waitForHealth(port, child);
 
+  const home = await page(port, '/', {});
+  assert(home.status === 200, `home returned ${home.status}`);
+  assert(home.body.includes('/mizuki-avatar.jpg'), 'home omitted the profile image');
+  assert(home.body.includes('property="og:image"'), 'home omitted Open Graph image metadata');
+  assert(home.body.includes('name="twitter:image"'), 'home omitted Twitter image metadata');
+  assert(home.body.includes('/mizuki-icon-64.png'), 'home omitted the browser icon');
+
+  const avatar = await page(port, '/mizuki-avatar.jpg', {});
+  assert(avatar.status === 200, `profile image returned ${avatar.status}`);
+  assert(avatar.headers['content-type']?.startsWith('image/jpeg'), 'profile image is not JPEG');
+
+  const manifest = await page(port, '/manifest.webmanifest', {});
+  assert(manifest.status === 200, `manifest returned ${manifest.status}`);
+  const manifestBody = JSON.parse(manifest.body);
+  for (const icon of ['/mizuki-icon-192.png', '/mizuki-icon-512.png']) {
+    assert(
+      manifestBody.icons?.some((entry) => entry.src === icon),
+      `manifest omitted ${icon}`,
+    );
+  }
+
   for (const resource of ['jobs', 'bounties']) {
     for (const headers of [{ 'user-agent': 'mizuki-web-smoke' }, {}]) {
       const response = await page(port, `/${resource}/${missingId}`, headers);
@@ -170,7 +191,7 @@ function page(port, path, headers) {
       res.on('data', (chunk) => {
         body += chunk;
       });
-      res.on('end', () => resolve({ status: res.statusCode, body }));
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body }));
     });
     req.setTimeout(5_000, () => req.destroy(new Error(`request timed out: ${path}`)));
     req.on('error', reject);

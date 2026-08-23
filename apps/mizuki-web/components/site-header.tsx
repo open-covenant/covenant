@@ -1,3 +1,4 @@
+import Image from 'next/image';
 import Link from 'next/link';
 
 const navigation = [
@@ -14,7 +15,7 @@ export function SiteHeader() {
       <div className="shell header-inner">
         <Link href="/" className="brand" aria-label="Mizuki home">
           <span className="brand-mark" aria-hidden="true">
-            M
+            <Image src="/mizuki-avatar.jpg" alt="" width={32} height={32} priority />
           </span>
           <span>Mizuki</span>
         </Link>

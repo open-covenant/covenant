@@ -228,6 +228,31 @@ Shutdown stops recovery scheduling and new HTTP intake, waits at most 30 seconds
 
 Required production settings without defaults are `MIZUKI_SIGNER_AUTH_TOKEN`, `MIZUKI_SIGNER_DATABASE_URL`, `MIZUKI_SIGNER_RPC_URL`, `MIZUKI_SIGNER_SECONDARY_RPC_URL`, `MIZUKI_REFUND_PRIVATE_KEY_JSON`, `MIZUKI_ESCROW_PRIVATE_KEY_JSON`, `MIZUKI_SIGNER_GITHUB_TOKEN`, `MIZUKI_JOB_AUTHORITY_PUBLIC_KEY`, `MIZUKI_REFUND_TREASURY`, `MIZUKI_ESCROW_AUTHORITY`, `MIZUKI_REFUND_MINT`, `MIZUKI_ESCROW_PROGRAM_ID`, `MIZUKI_ESCROW_PROGRAM_DATA_SHA256`, `MIZUKI_SOL_USD_PRICE_URL`, and `MIZUKI_SOL_USD_SECONDARY_PRICE_URL`. Set `NODE_ENV=production` and `MIZUKI_SIGNER_MOCK_MODE=false`. Either price token is optional when its endpoint does not authenticate requests. Every bounded policy setting and its default is recorded in `.env.example`; production operators should set them explicitly rather than relying on defaults.
 
+## Devnet artifact canary
+
+The devnet runner is read-only unless `--execute` is present. It never deploys a program, requests an airdrop, creates a key, or accepts a mainnet cluster. The RPC URL and all three role keypairs must be explicit, owner-only regular files. The authority, claimant, adversary, and program keys must be distinct.
+
+Build the signer, put the one devnet RPC URL in an owner-only file, and run the read-only gate first:
+
+```bash
+chmod 600 /secure/devnet/rpc-url /secure/devnet/*.json
+pnpm --filter @covenant/mizuki-policy-signer build
+pnpm --filter @covenant/mizuki-policy-signer canary:devnet -- \
+  --rpc-url-file /secure/devnet/rpc-url \
+  --program-id DEVNET_PROGRAM_ID \
+  --artifact /artifacts/mizuki_escrow_program.so \
+  --artifact-sha256 APPROVED_SHA256 \
+  --artifact-commit APPROVED_GIT_COMMIT \
+  --authority-keypair /secure/devnet/authority.json \
+  --claimant-keypair /secure/devnet/claimant.json \
+  --adversary-keypair /secure/devnet/adversary.json \
+  --output /evidence/mizuki-devnet-dry-run.json
+```
+
+The gate checks the authoritative devnet genesis hash, the loader-v3 deployment, byte-for-byte equality between finalized program data and the supplied SBPFv3 artifact, role separation, rent, funding capacity, and fresh PDA addresses. Add `--execute` and choose a new output path only after reviewing the dry-run receipt.
+
+The live sequence publishes finalized transactions for prefunded-PDA adoption, fund, bind, exact release, wrong-claimant rejection, release replay rejection, fund replay rejection, expired-release rejection, bound expiry refund, and unbound expiry refund. It proves state and vault closure, the permanent guard commitment, transaction-level principal deltas, and exact refund accounting. The resulting mode-`0600` JSON omits RPC URLs, key paths, wallet addresses, balances, error logs, and all private material. It includes public signatures, bounty digests, the program ID, artifact provenance, assertion results, and a SHA-256 of the receipt payload. The runner refuses to overwrite an existing receipt.
+
 ## Deployment separation
 
 - Deploy from a repository or protected path that Mizuki cannot modify.

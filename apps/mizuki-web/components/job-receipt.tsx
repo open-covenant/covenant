@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { formatTime, formatUsdcAtomic, formatUsd, stateLabel } from '@/lib/format';
-import type { Job } from '@/lib/types';
+import type { Job, ReviewAttempt } from '@/lib/types';
+import { ProviderReceiptDetails } from './provider-receipt';
 
 const terminal = new Set(['delivered', 'rejected', 'failed', 'refunded']);
 const stages = ['paid', 'running', 'validating', 'delivered'] as const;
@@ -151,6 +152,84 @@ export function JobReceipt({ initial, live = true }: { initial: Job; live?: bool
         </section>
       </div>
 
+      {job.review && (
+        <div className="receipt-grid review-evidence">
+          <section>
+            <p className="eyebrow">Independent review receipt</p>
+            <dl className="receipt-list">
+              <div>
+                <dt>Decision</dt>
+                <dd>{job.review.approved ? 'passed' : 'rejected'}</dd>
+              </div>
+              <div>
+                <dt>Reviewed</dt>
+                <dd>{formatTime(job.review.reviewedAt)}</dd>
+              </div>
+              <div>
+                <dt>Artifact commitment</dt>
+                <dd className="review-commitment">{job.review.artifactHash}</dd>
+              </div>
+            </dl>
+            <p className="receipt-review-reason">{job.review.reason}</p>
+            {failed && (
+              <p className="receipt-empty">
+                This review finished before the later delivery failure. It records provider work,
+                not a successful delivery.
+              </p>
+            )}
+          </section>
+          <section>
+            <p className="eyebrow">Provider route</p>
+            {job.review.provider ? (
+              <ProviderReceiptDetails receipt={job.review.provider} />
+            ) : (
+              <p className="receipt-empty">
+                No marketplace provider receipt is attached to this review.
+              </p>
+            )}
+          </section>
+        </div>
+      )}
+
+      {job.reviewAttempts && job.reviewAttempts.length > 0 && (
+        <section className="review-attempts">
+          <p className="eyebrow">Review attempt ledger</p>
+          <div className="review-attempt-grid">
+            {job.reviewAttempts.map((attempt, index) => (
+              <article
+                className="review-attempt"
+                key={`${attempt.phase}-${attempt.reviewedAt}-${index}`}
+              >
+                <dl className="receipt-list">
+                  <div>
+                    <dt>Phase</dt>
+                    <dd>{attempt.phase}</dd>
+                  </div>
+                  <div>
+                    <dt>Status</dt>
+                    <dd>{reviewAttemptLabel(attempt)}</dd>
+                  </div>
+                  <div>
+                    <dt>Recorded</dt>
+                    <dd>{formatTime(attempt.reviewedAt)}</dd>
+                  </div>
+                  <div>
+                    <dt>Route cost</dt>
+                    <dd>{formatUsd(attempt.costUsd)}</dd>
+                  </div>
+                  <div>
+                    <dt>Artifact commitment</dt>
+                    <dd className="review-commitment">{attempt.artifactHash}</dd>
+                  </div>
+                </dl>
+                <p className="receipt-review-reason">{attempt.reason}</p>
+                {attempt.provider && <ProviderReceiptDetails receipt={attempt.provider} />}
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+
       <div className="receipt-actions">
         {job.paymentTransaction && (
           <TransactionLinkClient signature={job.paymentTransaction} label="Payment" />
@@ -179,6 +258,15 @@ export function JobReceipt({ initial, live = true }: { initial: Job; live?: bool
       )}
     </div>
   );
+}
+
+function reviewAttemptLabel(attempt: ReviewAttempt): string {
+  if (attempt.status !== 'completed') {
+    return attempt.status === 'received' ? 'receipt recorded' : attempt.status;
+  }
+  if (attempt.approved === true) return 'approved';
+  if (attempt.approved === false) return 'rejected';
+  return 'completed';
 }
 
 function TransactionLinkClient({ signature, label }: { signature: string; label: string }) {

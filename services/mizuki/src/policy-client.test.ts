@@ -23,6 +23,14 @@ const finalized = {
   createdAt: '2026-08-22T00:00:00Z',
   updatedAt: '2026-08-22T00:00:01Z',
 };
+const commitment = {
+  repository: 'example/project',
+  issueNumber: 17,
+  baseRef: 'main',
+  baseSha: 'd'.repeat(40),
+  repositoryAuthorizedAt: '2026-08-21T23:00:00.000Z',
+  authorizationEvidenceHash: 'e'.repeat(64),
+};
 
 describe('PolicySignerClient', () => {
   it('registers liability and sends distinct signed refund authorizations', async () => {
@@ -30,6 +38,13 @@ describe('PolicySignerClient', () => {
       id: '22222222-2222-4222-8222-222222222222',
       jobId: 'job-1',
       settlementSignature: 'settlement-signature',
+      ...commitment,
+      reviewedHeadSha: null,
+      reviewedBaseSha: null,
+      reviewedBaseRef: null,
+      reviewedDiffHash: null,
+      deliveryBoundAt: null,
+      deliveryBindingHash: null,
       payer: 'payer',
       mint: 'mint',
       rawAmount: '2000000',
@@ -54,14 +69,17 @@ describe('PolicySignerClient', () => {
       60_000,
       () => new Date('2026-08-22T00:00:00.000Z'),
     );
+    await expect(
+      client.registerRefundLiability('job-1', 'settlement-signature', commitment),
+    ).resolves.toMatchObject({ jobId: 'job-1' });
     await expect(client.refund('job-1', 'settlement-signature')).resolves.toMatchObject({
       status: 'finalized',
     });
     expect(request).toHaveBeenCalledTimes(2);
     const registration = JSON.parse(String(request.mock.calls[0]![1]?.body));
     const execution = JSON.parse(String(request.mock.calls[1]![1]?.body));
-    expectSignedAuthorization(registration, 'Mizuki refund liability registration');
-    expectSignedAuthorization(execution, 'Mizuki refund execution authorization');
+    expectSignedAuthorization(registration, 'register');
+    expectSignedAuthorization(execution, 'execute');
   });
 
   it('rejects malformed signer responses', async () => {
@@ -74,6 +92,75 @@ describe('PolicySignerClient', () => {
       (async () => Response.json({ status: 'finalized' })) as typeof fetch,
     );
     await expect(client.refund('job-1', 'settlement-signature')).rejects.toThrow();
+  });
+
+  it('signs and submits the immutable delivery binding', async () => {
+    const binding = {
+      jobId: 'job-1',
+      settlementSignature: 'settlement-signature',
+      reviewedHeadSha: 'a'.repeat(40),
+      reviewedBaseSha: 'd'.repeat(40),
+      reviewedBaseRef: 'main',
+      reviewedDiffHash: 'f'.repeat(64),
+    };
+    const request = vi.fn(async () =>
+      Response.json({
+        id: '22222222-2222-4222-8222-222222222222',
+        ...binding,
+        ...commitment,
+        deliveryBoundAt: '2026-08-22T00:00:00.000Z',
+        deliveryBindingHash: 'b'.repeat(64),
+        payer: 'payer',
+        mint: 'mint',
+        rawAmount: '2000000',
+        decimals: 6,
+        amountUsdCents: 200,
+        settlementSlot: 12,
+        settlementBlockTimeUnixSeconds: 1_787_356_800,
+        createdAt: '2026-08-22T00:00:00.000Z',
+        dischargedAt: null,
+        dischargeEvidenceHash: null,
+      }),
+    );
+    const client = new PolicySignerClient(
+      {
+        policySignerUrl: 'http://signer',
+        policySignerToken: 'token',
+        jobAuthoritySeed: authoritySeedBase64,
+      },
+      request as typeof fetch,
+      60_000,
+      () => new Date('2026-08-22T00:00:00.000Z'),
+    );
+
+    await client.bindRefundLiabilityDelivery('22222222-2222-4222-8222-222222222222', binding);
+    const [url, init] = request.mock.calls[0]!;
+    expect(url).toBe(
+      'http://signer/v1/refund-liabilities/22222222-2222-4222-8222-222222222222/delivery-bindings',
+    );
+    expect(init?.headers).toMatchObject({
+      'idempotency-key': 'mizuki-refund-liability-delivery-job-1',
+    });
+    const body = JSON.parse(String(init?.body));
+    const message = [
+      'Mizuki refund liability delivery binding',
+      'Version: 1',
+      'Job: job-1',
+      'Settlement: settlement-signature',
+      `Reviewed Head: ${'a'.repeat(40)}`,
+      `Reviewed Base SHA: ${'d'.repeat(40)}`,
+      'Reviewed Base Ref: main',
+      `Reviewed Diff: ${'f'.repeat(64)}`,
+      'Expires At: 2026-08-22T00:05:00.000Z',
+    ].join('\n');
+    expect(
+      verify(
+        null,
+        Buffer.from(message),
+        createPublicKey(authorityPrivateKey),
+        Buffer.from(body.authorizationSignature, 'base64'),
+      ),
+    ).toBe(true);
   });
 
   it('classifies retryable signer failures', async () => {
@@ -95,11 +182,55 @@ describe('PolicySignerClient', () => {
     });
   });
 
+  it('binds escrow release authorization to the reviewed head and diff', async () => {
+    const request = vi.fn(async () =>
+      Response.json({
+        ...finalized,
+        kind: 'escrow_release',
+        asset: 'SOL',
+        recipient: 'claimant',
+      }),
+    );
+    const client = new PolicySignerClient(
+      {
+        policySignerUrl: 'http://signer',
+        policySignerToken: 'token',
+        jobAuthoritySeed: authoritySeedBase64,
+      },
+      request as typeof fetch,
+    );
+    const evidence = {
+      pullRequestNumber: 23,
+      reviewedHeadSha: 'a'.repeat(40),
+      reviewedDiffHash: 'b'.repeat(64),
+    };
+
+    await expect(
+      client.releaseEscrow('11111111-1111-4111-8111-111111111111', evidence),
+    ).resolves.toMatchObject({ kind: 'escrow_release', status: 'finalized' });
+    expect(request).toHaveBeenCalledWith(
+      'http://signer/v1/escrows/11111111-1111-4111-8111-111111111111/release',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'idempotency-key': 'mizuki-escrow-release-11111111-1111-4111-8111-111111111111',
+        }),
+        body: JSON.stringify(evidence),
+      }),
+    );
+  });
+
   it('signs a normalized merged-PR liability discharge', async () => {
     const discharged = {
       id: '22222222-2222-4222-8222-222222222222',
       jobId: 'job-1',
       settlementSignature: 'settlement-signature',
+      ...commitment,
+      reviewedHeadSha: 'a'.repeat(40),
+      reviewedBaseSha: 'd'.repeat(40),
+      reviewedBaseRef: 'main',
+      reviewedDiffHash: 'f'.repeat(64),
+      deliveryBoundAt: '2026-08-22T00:00:30.000Z',
+      deliveryBindingHash: 'b'.repeat(64),
       payer: 'payer',
       mint: 'mint',
       rawAmount: '2000000',
@@ -126,17 +257,29 @@ describe('PolicySignerClient', () => {
       jobId: 'job-1',
       settlementSignature: 'settlement-signature',
       repository: 'Example/Project',
+      issueNumber: 17,
       pullRequestNumber: 17,
+      deliveredCommitSha: 'a'.repeat(40),
+      reviewedHeadSha: 'a'.repeat(40),
+      reviewedBaseSha: 'd'.repeat(40),
+      reviewedBaseRef: 'main',
+      reviewedDiffHash: 'f'.repeat(64),
     });
     const body = JSON.parse(String(request.mock.calls[0]![1]?.body));
     expect(body.repository).toBe('example/project');
     const message = [
       'Mizuki refund liability discharge authorization',
-      'Version: 1',
+      'Version: 2',
       'Job: job-1',
       'Settlement: settlement-signature',
       'Repository: example/project',
+      'Issue: 17',
       'Pull Request: 17',
+      `Delivered Commit: ${'a'.repeat(40)}`,
+      `Reviewed Head: ${'a'.repeat(40)}`,
+      `Reviewed Base SHA: ${'d'.repeat(40)}`,
+      'Reviewed Base Ref: main',
+      `Reviewed Diff: ${'f'.repeat(64)}`,
       'Expires At: 2026-08-22T00:05:00.000Z',
     ].join('\n');
     expect(
@@ -205,21 +348,36 @@ describe('PolicySignerClient', () => {
         unfinishedLiabilityRaw: 0n,
         proposedPaymentRaw: 1n,
       }),
-    ).toThrow('capability payout wallet');
+    ).toThrow('configured escrow return recipient');
   });
 });
 
-function expectSignedAuthorization(body: Record<string, string>, title: string): void {
+function expectSignedAuthorization(
+  body: Record<string, string>,
+  action: 'register' | 'execute',
+): void {
   expect(body).toMatchObject({
     jobId: 'job-1',
     settlementSignature: 'settlement-signature',
     authorizationExpiresAt: '2026-08-22T00:05:00.000Z',
   });
   const message = [
-    title,
-    'Version: 1',
+    action === 'register'
+      ? 'Mizuki refund liability registration'
+      : 'Mizuki refund execution authorization',
+    `Version: ${action === 'register' ? 2 : 1}`,
     'Job: job-1',
     'Settlement: settlement-signature',
+    ...(action === 'register'
+      ? [
+          'Repository: example/project',
+          'Issue: 17',
+          'Base Ref: main',
+          `Base SHA: ${'d'.repeat(40)}`,
+          'Repository Authorized At: 2026-08-21T23:00:00.000Z',
+          `Authorization Evidence: ${'e'.repeat(64)}`,
+        ]
+      : []),
     'Expires At: 2026-08-22T00:05:00.000Z',
   ].join('\n');
   expect(

@@ -33,6 +33,8 @@ jobs:
       MIZUKI_TEST_DATABASE_URL: postgres://postgres:mizuki@127.0.0.1:5432/mizuki_core
       MIZUKI_SIGNER_TEST_DATABASE_URL: postgres://postgres:mizuki@127.0.0.1:5432/mizuki_signer
       MIZUKI_UPDATER_TEST_DATABASE_URL: postgres://postgres:mizuki@127.0.0.1:5432/mizuki_updater
+      MIZUKI_DEPLOY_TEST_DATABASE_URL: postgres://postgres:mizuki@127.0.0.1:5432/mizuki_deployment
+      MIZUKI_DEPLOY_TEST_DATABASE_SSL_MODE: disable
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -56,6 +58,7 @@ jobs:
           CREATE DATABASE mizuki_core;
           CREATE DATABASE mizuki_signer;
           CREATE DATABASE mizuki_updater;
+          CREATE DATABASE mizuki_deployment;
           SQL
       - name: verify application and deployment artifacts
         env:
@@ -73,32 +76,57 @@ jobs:
             await repository.close();
           }
           NODE
+      - name: initialize deployment recovery fixture
+        run: |
+          node --input-type=module <<'NODE'
+          import { PostgresOperationStore } from './services/mizuki-deployment-controller/dist/store.js';
+
+          const store = new PostgresOperationStore({
+            connectionString: process.env.MIZUKI_DEPLOY_TEST_DATABASE_URL,
+            sslMode: 'disable',
+            connectionTimeoutMs: 10000,
+            maxConnections: 2,
+          });
+          try {
+            await store.migrate();
+          } finally {
+            await store.close();
+          }
+          NODE
       - name: exercise database backup restore
         run: |
           pg_dump -h 127.0.0.1 -U postgres -d mizuki_core --data-only --no-owner --no-privileges --file=/tmp/mizuki-core.data.sql
           pg_dump -h 127.0.0.1 -U postgres -d mizuki_signer --data-only --no-owner --no-privileges --file=/tmp/mizuki-signer.data.sql
           pg_dump -h 127.0.0.1 -U postgres -d mizuki_updater --data-only --no-owner --no-privileges --file=/tmp/mizuki-updater.data.sql
+          pg_dump -h 127.0.0.1 -U postgres -d mizuki_deployment --data-only --no-owner --no-privileges --file=/tmp/mizuki-deployment.data.sql
           pg_dump -h 127.0.0.1 -U postgres -d mizuki_core --format=custom --file=/tmp/mizuki-core.dump
           pg_dump -h 127.0.0.1 -U postgres -d mizuki_signer --format=custom --file=/tmp/mizuki-signer.dump
           pg_dump -h 127.0.0.1 -U postgres -d mizuki_updater --format=custom --file=/tmp/mizuki-updater.dump
+          pg_dump -h 127.0.0.1 -U postgres -d mizuki_deployment --format=custom --file=/tmp/mizuki-deployment.dump
           psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 <<'SQL'
           CREATE DATABASE mizuki_core_restore;
           CREATE DATABASE mizuki_signer_restore;
           CREATE DATABASE mizuki_updater_restore;
+          CREATE DATABASE mizuki_deployment_restore;
           SQL
           pg_restore -h 127.0.0.1 -U postgres -d mizuki_core_restore --exit-on-error /tmp/mizuki-core.dump
           pg_restore -h 127.0.0.1 -U postgres -d mizuki_signer_restore --exit-on-error /tmp/mizuki-signer.dump
           pg_restore -h 127.0.0.1 -U postgres -d mizuki_updater_restore --exit-on-error /tmp/mizuki-updater.dump
+          pg_restore -h 127.0.0.1 -U postgres -d mizuki_deployment_restore --exit-on-error /tmp/mizuki-deployment.dump
           test "$(psql -h 127.0.0.1 -U postgres -d mizuki_core_restore -Atc "SELECT count(*) FROM mizuki_schema_migrations WHERE component = 'core'")" = '1'
           test "$(psql -h 127.0.0.1 -U postgres -d mizuki_signer_restore -Atc "SELECT count(*) FROM mizuki_schema_migrations WHERE component = 'policy-signer'")" = '1'
           test "$(psql -h 127.0.0.1 -U postgres -d mizuki_updater_restore -Atc "SELECT count(*) FROM mizuki_updater_migrations")" = '3'
+          test "$(psql -h 127.0.0.1 -U postgres -d mizuki_deployment_restore -Atc "SELECT count(*) FROM mizuki_deployment_migrations")" = '2'
+          test "$(psql -h 127.0.0.1 -U postgres -d mizuki_deployment_restore -Atc "SELECT count(*) FROM pg_trigger WHERE tgname = 'mizuki_deployment_events_append_only' AND NOT tgisinternal")" = '1'
           pg_dump -h 127.0.0.1 -U postgres -d mizuki_core_restore --data-only --no-owner --no-privileges --file=/tmp/mizuki-core-restored.data.sql
           pg_dump -h 127.0.0.1 -U postgres -d mizuki_signer_restore --data-only --no-owner --no-privileges --file=/tmp/mizuki-signer-restored.data.sql
           pg_dump -h 127.0.0.1 -U postgres -d mizuki_updater_restore --data-only --no-owner --no-privileges --file=/tmp/mizuki-updater-restored.data.sql
+          pg_dump -h 127.0.0.1 -U postgres -d mizuki_deployment_restore --data-only --no-owner --no-privileges --file=/tmp/mizuki-deployment-restored.data.sql
           sed -i '/^\\restrict /d; /^\\unrestrict /d' /tmp/mizuki-*.data.sql
           cmp /tmp/mizuki-core.data.sql /tmp/mizuki-core-restored.data.sql
           cmp /tmp/mizuki-signer.data.sql /tmp/mizuki-signer-restored.data.sql
           cmp /tmp/mizuki-updater.data.sql /tmp/mizuki-updater-restored.data.sql
+          cmp /tmp/mizuki-deployment.data.sql /tmp/mizuki-deployment-restored.data.sql
 
   escrow:
     runs-on: ubuntu-latest
@@ -123,7 +151,7 @@ jobs:
           echo '411c7bc4cd6001f215ca21ab7de5dd22140175fef69e0e483c4768018f651eb6  /usr/local/bin/solana-verify' | sha256sum --check --strict
           chmod 0755 /usr/local/bin/solana-verify
           solana-verify --version
-      - name: build and exercise the SBPFv3 artifact
+      - name: build and exercise the SBPFv2 artifact
         run: programs/mizuki-escrow/scripts/test.sh
       - name: prepare escrow release evidence
         run: |
@@ -143,6 +171,8 @@ jobs:
           solana-verify get-executable-hash "$artifact" > "$release_dir/SOLANA_EXECUTABLE_HASH"
           cargo-build-sbf --version > "$release_dir/BUILD_TOOLCHAIN"
           solana-verify --version > "$release_dir/SOLANA_VERIFY_VERSION"
+          printf '2\n' > "$release_dir/SBPF_VERSION"
+          printf '0x2\n' > "$release_dir/ELF_FLAGS"
           printf '%s\n' "$GITHUB_SHA" > "$release_dir/GIT_COMMIT"
 
           cat "$release_dir/SHA256SUMS"

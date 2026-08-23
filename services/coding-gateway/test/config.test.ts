@@ -8,6 +8,7 @@ const ENV_KEYS = [
   'CODER_READINESS_REFRESH_MS',
   'CODER_READINESS_MAX_AGE_MS',
   'CODER_READINESS_TIMEOUT_MS',
+  'USEPOD_MIN_BALANCE',
 ] as const;
 
 const savedEnv: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>> = {};
@@ -124,7 +125,12 @@ describe('config env validation', () => {
         CODER_AUTH_TOKEN: 'a'.repeat(32),
         CODER_MODEL: 'deepseek-v3.2',
         USEPOD_API_KEY: 'key',
+        USEPOD_BASE_URL: 'https://api.usepod.ai',
+        USEPOD_MAX_INPUT_PRICE_MICROUNITS: '200000',
+        USEPOD_MAX_OUTPUT_PRICE_MICROUNITS: '400000',
+        USEPOD_MIN_BALANCE: '2000000',
         E2B_API_KEY: 'key',
+        E2B_TEMPLATE: 'mizuki-coder',
         E2B_EGRESS_ALLOW: 'github.com,codeload.github.com,registry.npmjs.org',
         LEDGER_PATH: '/var/data/ledger.json',
         RUN_STORE_PATH: '/var/data/runs.json',
@@ -139,7 +145,12 @@ describe('config env validation', () => {
       CODER_BACKEND: 'usepod',
       CODER_AUTH_TOKEN: 'a'.repeat(32),
       USEPOD_API_KEY: 'key',
+      USEPOD_BASE_URL: 'https://api.usepod.ai',
+      USEPOD_MAX_INPUT_PRICE_MICROUNITS: '200000',
+      USEPOD_MAX_OUTPUT_PRICE_MICROUNITS: '400000',
+      USEPOD_MIN_BALANCE: '2000000',
       E2B_API_KEY: 'key',
+      E2B_TEMPLATE: 'mizuki-coder',
       E2B_EGRESS_ALLOW: 'github.com,codeload.github.com',
       LEDGER_PATH: '/var/data/ledger.json',
       RUN_STORE_PATH: '/var/data/runs.json',
@@ -155,5 +166,66 @@ describe('config env validation', () => {
         USEPOD_MODEL: 'route-b',
       }),
     ).toThrow(/USEPOD_MODEL must be unset/);
+  });
+
+  it('rejects unsafe proxy configuration and understated price estimates', async () => {
+    const { assertProductionConfig } = await import('../src/config.js');
+    const complete = {
+      NODE_ENV: 'production',
+      CODER_BACKEND: 'usepod',
+      CODER_AUTH_TOKEN: 'a'.repeat(32),
+      CODER_MODEL: 'deepseek-v3.2',
+      USEPOD_API_KEY: 'key',
+      USEPOD_BASE_URL: 'https://api.usepod.ai',
+      USEPOD_MAX_INPUT_PRICE_MICROUNITS: '200000',
+      USEPOD_MAX_OUTPUT_PRICE_MICROUNITS: '400000',
+      USEPOD_MIN_BALANCE: '2000000',
+      E2B_API_KEY: 'key',
+      E2B_TEMPLATE: 'mizuki-coder',
+      E2B_EGRESS_ALLOW: 'github.com,codeload.github.com',
+      LEDGER_PATH: '/var/data/ledger.json',
+      RUN_STORE_PATH: '/var/data/runs.json',
+    };
+
+    expect(() =>
+      assertProductionConfig({
+        ...complete,
+        USEPOD_BASE_URL: 'https://api.usepod.ai/proxy/exposed/v1',
+      }),
+    ).toThrow(/exactly https:\/\/api\.usepod\.ai/);
+    expect(() =>
+      assertProductionConfig({
+        ...complete,
+        USEPOD_MAX_INPUT_PRICE_MICROUNITS: '300000',
+        USEPOD_INPUT_USD_PER_MILLION: '0.2',
+      }),
+    ).toThrow(/understates the input price ceiling/);
+  });
+
+  it('pins the production provider origin and requires an explicit funded floor', async () => {
+    const { assertProductionConfig } = await import('../src/config.js');
+    const complete = {
+      NODE_ENV: 'production',
+      CODER_BACKEND: 'usepod',
+      CODER_AUTH_TOKEN: 'a'.repeat(32),
+      CODER_MODEL: 'deepseek-v3.2',
+      USEPOD_API_KEY: 'key',
+      USEPOD_BASE_URL: 'https://api.usepod.ai',
+      USEPOD_MAX_INPUT_PRICE_MICROUNITS: '200000',
+      USEPOD_MAX_OUTPUT_PRICE_MICROUNITS: '400000',
+      USEPOD_MIN_BALANCE: '2000000',
+      E2B_API_KEY: 'key',
+      E2B_TEMPLATE: 'mizuki-coder',
+      E2B_EGRESS_ALLOW: 'github.com,codeload.github.com',
+      LEDGER_PATH: '/var/data/ledger.json',
+      RUN_STORE_PATH: '/var/data/runs.json',
+    };
+
+    expect(() =>
+      assertProductionConfig({ ...complete, USEPOD_BASE_URL: 'https://relay.example' }),
+    ).toThrow(/exactly https:\/\/api\.usepod\.ai/);
+    expect(() => assertProductionConfig({ ...complete, USEPOD_MIN_BALANCE: '0' })).toThrow(
+      /positive decimal/,
+    );
   });
 });

@@ -1,3 +1,4 @@
+import { createPrivateKey } from 'node:crypto';
 import { z } from 'zod';
 
 const base58 = z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/);
@@ -15,7 +16,12 @@ const envSchema = z
     MIZUKI_SIGNER_RPC_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(10_000).default(5_000),
     MIZUKI_REFUND_PRIVATE_KEY_JSON: z.string().optional(),
     MIZUKI_ESCROW_PRIVATE_KEY_JSON: z.string().optional(),
-    MIZUKI_SIGNER_GITHUB_TOKEN: z.string().min(20).optional(),
+    MIZUKI_SIGNER_GITHUB_APP_ID: z
+      .string()
+      .regex(/^[1-9]\d{0,15}$/)
+      .refine((value) => Number.isSafeInteger(Number(value)))
+      .optional(),
+    MIZUKI_SIGNER_GITHUB_PRIVATE_KEY: z.string().min(100).optional(),
     MIZUKI_JOB_AUTHORITY_PUBLIC_KEY: base58.optional(),
     MIZUKI_REFUND_TREASURY: base58.optional(),
     MIZUKI_ESCROW_AUTHORITY: base58.optional(),
@@ -68,7 +74,8 @@ export interface SignerConfig {
   rpcTimeoutMs: number;
   refundPrivateKeyJson?: string;
   escrowPrivateKeyJson?: string;
-  githubToken?: string;
+  githubAppId?: string;
+  githubPrivateKey?: string;
   jobAuthorityPublicKey?: string;
   refundTreasury?: string;
   escrowAuthority?: string;
@@ -121,7 +128,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SignerConfig {
       ['MIZUKI_SIGNER_SECONDARY_RPC_URL', parsed.MIZUKI_SIGNER_SECONDARY_RPC_URL],
       ['MIZUKI_REFUND_PRIVATE_KEY_JSON', parsed.MIZUKI_REFUND_PRIVATE_KEY_JSON],
       ['MIZUKI_ESCROW_PRIVATE_KEY_JSON', parsed.MIZUKI_ESCROW_PRIVATE_KEY_JSON],
-      ['MIZUKI_SIGNER_GITHUB_TOKEN', parsed.MIZUKI_SIGNER_GITHUB_TOKEN],
+      ['MIZUKI_SIGNER_GITHUB_APP_ID', parsed.MIZUKI_SIGNER_GITHUB_APP_ID],
+      ['MIZUKI_SIGNER_GITHUB_PRIVATE_KEY', parsed.MIZUKI_SIGNER_GITHUB_PRIVATE_KEY],
       ['MIZUKI_JOB_AUTHORITY_PUBLIC_KEY', parsed.MIZUKI_JOB_AUTHORITY_PUBLIC_KEY],
       ['MIZUKI_REFUND_TREASURY', parsed.MIZUKI_REFUND_TREASURY],
       ['MIZUKI_ESCROW_AUTHORITY', parsed.MIZUKI_ESCROW_AUTHORITY],
@@ -134,6 +142,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SignerConfig {
     const missing = required.filter(([, value]) => !value).map(([name]) => name);
     if (missing.length > 0)
       throw new Error(`Missing production signer settings: ${missing.join(', ')}`);
+    assertRsaPrivateKey(parsed.MIZUKI_SIGNER_GITHUB_PRIVATE_KEY!);
     assertEncryptedDatabase(parsed.MIZUKI_SIGNER_DATABASE_URL!);
     assertHttpsOrLoopback('MIZUKI_SIGNER_RPC_URL', parsed.MIZUKI_SIGNER_RPC_URL!);
     assertHttpsOrLoopback(
@@ -176,7 +185,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SignerConfig {
     rpcTimeoutMs: parsed.MIZUKI_SIGNER_RPC_TIMEOUT_MS,
     refundPrivateKeyJson: parsed.MIZUKI_REFUND_PRIVATE_KEY_JSON,
     escrowPrivateKeyJson: parsed.MIZUKI_ESCROW_PRIVATE_KEY_JSON,
-    githubToken: parsed.MIZUKI_SIGNER_GITHUB_TOKEN,
+    githubAppId: parsed.MIZUKI_SIGNER_GITHUB_APP_ID,
+    githubPrivateKey: parsed.MIZUKI_SIGNER_GITHUB_PRIVATE_KEY,
     jobAuthorityPublicKey: parsed.MIZUKI_JOB_AUTHORITY_PUBLIC_KEY,
     refundTreasury: parsed.MIZUKI_REFUND_TREASURY,
     escrowAuthority: parsed.MIZUKI_ESCROW_AUTHORITY,
@@ -255,4 +265,13 @@ function assertIndependentProviders(
 
 function isRenderPrivateDatabase(host: string): boolean {
   return /^dpg-[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(host);
+}
+
+function assertRsaPrivateKey(value: string): void {
+  try {
+    const key = createPrivateKey(value);
+    if (key.type !== 'private' || key.asymmetricKeyType !== 'rsa') throw new Error();
+  } catch {
+    throw new Error('MIZUKI_SIGNER_GITHUB_PRIVATE_KEY must be an RSA private key in PEM form');
+  }
 }

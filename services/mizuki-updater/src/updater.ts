@@ -248,14 +248,18 @@ export class UpdaterService {
             { checks: checks.checks },
           );
         }
-        const merge = await this.github.merge(manifest, record.prNumber);
-        return this.next(
-          record,
-          owner,
-          { state: 'promoting', mergeSha: merge.mergeSha },
-          'pull_request_merged',
-          { ...merge },
-        );
+        const admission = await this.repository.withPromotionAdmission(async () => {
+          const merge = await this.github.merge(manifest, record.prNumber!);
+          return this.next(
+            record,
+            owner,
+            { state: 'promoting', mergeSha: merge.mergeSha },
+            'pull_request_merged',
+            { ...merge },
+          );
+        });
+        if (admission.admitted) return admission.value;
+        return this.pausePromotion(record, owner, admission.control);
       }
 
       case 'promoting': {
@@ -288,26 +292,7 @@ export class UpdaterService {
           );
         });
         if (admission.admitted) return admission.value;
-        if (record.lastErrorCode === 'promotion_paused') return { record, continue: false };
-        const paused = await this.repository.transition(
-          record.id,
-          record.version,
-          owner,
-          {
-            nextAttemptAt: null,
-            lastErrorCode: 'promotion_paused',
-            lastErrorMessage: 'Promotion is closed by operator control',
-          },
-          {
-            event: 'promotion_paused',
-            details: {
-              controlRevision: admission.control.revision,
-              reason: admission.control.reason,
-            },
-          },
-          this.now(),
-        );
-        return { record: paused, continue: false };
+        return this.pausePromotion(record, owner, admission.control);
       }
 
       case 'verifying_promotion': {
@@ -579,6 +564,30 @@ export class UpdaterService {
       return this.rollback(record, owner, error.code, error.message);
     }
     return this.fail(record, owner, error.code, error.message);
+  }
+
+  private async pausePromotion(
+    record: UpgradeRecord,
+    owner: string,
+    control: { revision: number; reason: string },
+  ): Promise<{ record: UpgradeRecord; continue: false }> {
+    if (record.lastErrorCode === 'promotion_paused') return { record, continue: false };
+    const paused = await this.repository.transition(
+      record.id,
+      record.version,
+      owner,
+      {
+        nextAttemptAt: null,
+        lastErrorCode: 'promotion_paused',
+        lastErrorMessage: 'Promotion is closed by operator control',
+      },
+      {
+        event: 'promotion_paused',
+        details: { controlRevision: control.revision, reason: control.reason },
+      },
+      this.now(),
+    );
+    return { record: paused, continue: false };
   }
 
   private elapsed(startedAt: Date | null): number {

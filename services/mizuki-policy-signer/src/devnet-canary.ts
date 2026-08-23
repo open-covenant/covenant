@@ -45,7 +45,7 @@ export interface DevnetCanaryOptions {
 export interface ArtifactInspection {
   sha256: string;
   bytes: number;
-  sbpfVersion: 3;
+  sbpfVersion: 2;
 }
 
 interface Scenario {
@@ -136,7 +136,7 @@ interface CanaryReceiptPayload {
     sha256: string;
     commit: string;
     bytes: number;
-    sbpfVersion: 3;
+    sbpfVersion: 2;
   };
   canary: {
     amountLamports: string;
@@ -268,11 +268,11 @@ export function inspectSbpfArtifact(data: Buffer, expectedSha256: string): Artif
     data[4] !== 2 ||
     data[5] !== 1 ||
     data.readUInt16LE(18) !== 247 ||
-    data.readUInt32LE(48) !== 3
+    data.readUInt32LE(48) !== 2
   ) {
-    throw new DevnetCanaryError('artifact_not_sbpf_v3');
+    throw new DevnetCanaryError('artifact_not_sbpf_v2');
   }
-  return { sha256, bytes: data.length, sbpfVersion: 3 };
+  return { sha256, bytes: data.length, sbpfVersion: 2 };
 }
 
 export function inspectLoaderV3Deployment(

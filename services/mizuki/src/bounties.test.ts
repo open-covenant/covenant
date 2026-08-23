@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BountyService } from './bounties.js';
+import { BountyService, type ContributorPatchReviewer } from './bounties.js';
 import { fingerprintBountyDisputeEvidence, type ContributorEscrow } from './domain/index.js';
 import { PolicyRequestError, type FinancialPolicy, type PolicyOperation } from './policy-client.js';
 import { MemoryStore } from './store.js';
@@ -23,6 +23,10 @@ const quote: Quote = {
   validationCommands: [],
   expiresAt: '2099-01-01T00:00:00Z',
 };
+const reviewedHeadSha = 'b'.repeat(40);
+const reviewedBaseSha = 'a'.repeat(40);
+const reviewedDiffHash = 'c'.repeat(64);
+const bountyConfig = { escrowRefundTo: 'treasury' };
 
 describe('BountyService', () => {
   it('uses finalized SOL escrow as the sole funding gate without a manual USD ledger seed', async () => {
@@ -31,9 +35,9 @@ describe('BountyService', () => {
     const service = new BountyService(
       store,
       new MockPolicy(),
-      { review: async () => ({ approved: true, reason: 'scoped and correct' }) },
+      reviewer({ approved: true, reason: 'scoped and correct' }),
       tickingClock(),
-      'treasury',
+      bountyConfig,
     );
 
     const bounty = await service.createAfterRefund(job);
@@ -54,7 +58,7 @@ describe('BountyService', () => {
     ]);
   });
 
-  it('turns a refund into a funded, claimable bounty and releases payment after review', async () => {
+  it('releases payment when the merged head and diff exactly match the independent review', async () => {
     const store = new MemoryStore();
     const job = await refundedJob(store);
     await store.appendLedger({
@@ -69,9 +73,9 @@ describe('BountyService', () => {
     const service = new BountyService(
       store,
       policy,
-      { review: async () => ({ approved: true, reason: 'scoped and correct' }) },
+      reviewer({ approved: true, reason: 'scoped and correct' }),
       tickingClock(),
-      'treasury',
+      bountyConfig,
     );
     const created = await service.createAfterRefund(job);
     expect(created).toMatchObject({ state: 'open', priceCents: 2000 });
@@ -93,12 +97,66 @@ describe('BountyService', () => {
       'https://github.com/example/project/pull/2',
     );
     expect(reviewed.validationReceipt?.approved).toBe(true);
+    expect(reviewed.validationReceipt).toMatchObject({
+      headSha: reviewedHeadSha,
+      baseSha: reviewedBaseSha,
+      baseRef: 'main',
+      diffHash: reviewedDiffHash,
+    });
     const released = await service.releaseMerged(
       created.id,
       'https://github.com/example/project/pull/2',
     );
     expect(released.state).toBe('released');
     expect((await store.escrowByBounty(created.id))?.state).toBe('released');
+    expect(policy.releaseInputs).toEqual([
+      {
+        pullRequestNumber: 2,
+        reviewedHeadSha,
+        reviewedDiffHash,
+      },
+    ]);
+  });
+
+  it('does not release when commits are pushed after independent approval', async () => {
+    const store = new MemoryStore();
+    const job = await refundedJob(store);
+    const policy = new MockPolicy();
+    const service = new BountyService(
+      store,
+      policy,
+      reviewer(
+        { approved: true, reason: 'revision A is correct' },
+        { headSha: 'd'.repeat(40), diffHash: 'e'.repeat(64) },
+      ),
+      tickingClock(),
+      bountyConfig,
+    );
+    const bounty = await service.createAfterRefund(job);
+    const contributor = await store.upsertContributor('stale-review', 'maintainer');
+    const challenge = await service.createClaimChallenge(
+      bounty.id,
+      contributor,
+      '1'.repeat(32),
+      randomGrantId(),
+    );
+    await service.claim(bounty.id, contributor, challenge.id, 'signature');
+    const pullRequestUrl = 'https://github.com/example/project/pull/12';
+    const reviewed = await service.submitPullRequest(bounty.id, contributor, pullRequestUrl);
+
+    expect(reviewed.validationReceipt).toMatchObject({
+      approved: true,
+      headSha: reviewedHeadSha,
+      baseSha: reviewedBaseSha,
+      baseRef: 'main',
+      diffHash: reviewedDiffHash,
+    });
+    await expect(service.releaseMerged(bounty.id, pullRequestUrl)).rejects.toThrow(
+      'does not match the independently reviewed revision',
+    );
+    expect(policy.releaseInputs).toEqual([]);
+    expect(await store.bounty(bounty.id)).toMatchObject({ state: 'pr_submitted' });
+    expect(await store.escrowByBounty(bounty.id)).toMatchObject({ state: 'bound' });
   });
 
   it('allows only one concurrent claimant', async () => {
@@ -114,9 +172,9 @@ describe('BountyService', () => {
     const service = new BountyService(
       store,
       new MockPolicy(),
-      { review: async () => ({ approved: true, reason: 'ok' }) },
+      reviewer(),
       tickingClock(),
-      'treasury',
+      bountyConfig,
     );
     const bounty = await service.createAfterRefund(job);
     for (const [id, login, wallet] of [
@@ -161,13 +219,7 @@ describe('BountyService', () => {
     let nowMs = Date.now() + 1_000;
     const now = () => new Date(nowMs);
     const policy = new MockPolicy(now);
-    const service = new BountyService(
-      store,
-      policy,
-      { review: async () => ({ approved: true, reason: 'ok' }) },
-      now,
-      'treasury',
-    );
+    const service = new BountyService(store, policy, reviewer(), now, bountyConfig);
     const first = await service.createAfterRefund(job);
     const claimant = await store.upsertContributor('claimant', 'claimant');
     const challenge = await service.createClaimChallenge(
@@ -213,13 +265,10 @@ describe('BountyService', () => {
     let nowMs = Date.parse('2026-08-22T10:00:00.000Z');
     const now = () => new Date(nowMs);
     const policy = new MockPolicy(now);
-    const service = new BountyService(
-      store,
-      policy,
-      { review: async () => ({ approved: true, reason: 'ok' }) },
-      now,
-      'treasury',
-    );
+    policy.escrowRefundRecipient = 'escrow-authority';
+    const service = new BountyService(store, policy, reviewer(), now, {
+      escrowRefundTo: 'escrow-authority',
+    });
     const bounty = await service.createAfterRefund(job);
 
     nowMs = Date.parse(bounty.offerExpiresAt);
@@ -247,13 +296,7 @@ describe('BountyService', () => {
     let nowMs = Date.now() + 1_000;
     const now = () => new Date(nowMs);
     const policy = new MockPolicy(now);
-    const service = new BountyService(
-      store,
-      policy,
-      { review: async () => ({ approved: true, reason: 'ok' }) },
-      now,
-      'treasury',
-    );
+    const service = new BountyService(store, policy, reviewer(), now, bountyConfig);
     const bounty = await service.createAfterRefund(job);
     const contributor = await store.upsertContributor('late', 'late');
     const challenge = await service.createClaimChallenge(
@@ -287,13 +330,7 @@ describe('BountyService', () => {
     let nowMs = Date.now() + 1_000;
     const now = () => new Date(nowMs);
     const policy = new MockPolicy(now);
-    const service = new BountyService(
-      store,
-      policy,
-      { review: async () => ({ approved: true, reason: 'ok' }) },
-      now,
-      'treasury',
-    );
+    const service = new BountyService(store, policy, reviewer(), now, bountyConfig);
     const bounty = await service.createAfterRefund(job);
     const contributor = await store.upsertContributor('race', 'race');
     const challenge = await service.createClaimChallenge(
@@ -326,9 +363,9 @@ describe('BountyService', () => {
     const service = new BountyService(
       store,
       new MockPolicy(),
-      { review: async () => ({ approved: true, reason: 'ok' }) },
+      reviewer(),
       tickingClock(),
-      'treasury',
+      bountyConfig,
     );
     const bounty = await service.createAfterRefund(job);
     const contributor = await store.upsertContributor('recover', 'recover');
@@ -361,13 +398,7 @@ describe('BountyService', () => {
       amountUsd: 200,
     });
     const policy = new MockPolicy();
-    const service = new BountyService(
-      store,
-      policy,
-      { review: async () => ({ approved: true, reason: 'ok' }) },
-      tickingClock(),
-      'treasury',
-    );
+    const service = new BountyService(store, policy, reviewer(), tickingClock(), bountyConfig);
     const bounty = await service.createAfterRefund(job);
     const contributor = await store.upsertContributor('dispute-release', 'maintainer');
     const challenge = await service.createClaimChallenge(
@@ -445,9 +476,9 @@ describe('BountyService', () => {
     const service = new BountyService(
       store,
       policy,
-      { review: async () => ({ approved: false, reason: 'not relevant' }) },
+      reviewer({ approved: false, reason: 'not relevant' }),
       now,
-      'treasury',
+      bountyConfig,
     );
     const bounty = await service.createAfterRefund(job);
     const contributor = await store.upsertContributor('dispute-refund', 'maintainer');
@@ -505,13 +536,7 @@ describe('BountyService', () => {
     });
     const policy = new MockPolicy();
     const release = policy.pauseRelease();
-    const service = new BountyService(
-      store,
-      policy,
-      { review: async () => ({ approved: true, reason: 'ok' }) },
-      tickingClock(),
-      'treasury',
-    );
+    const service = new BountyService(store, policy, reviewer(), tickingClock(), bountyConfig);
     const bounty = await service.createAfterRefund(job);
     const contributor = await store.upsertContributor('release-race', 'maintainer');
     const challenge = await service.createClaimChallenge(
@@ -583,6 +608,31 @@ function tickingClock(): () => Date {
   return () => new Date((time += 1_000));
 }
 
+function reviewer(
+  decision: { approved: boolean; reason: string } = { approved: true, reason: 'ok' },
+  merged: { headSha: string; diffHash: string } = {
+    headSha: reviewedHeadSha,
+    diffHash: reviewedDiffHash,
+  },
+): ContributorPatchReviewer {
+  return {
+    review: async () => ({
+      ...decision,
+      headSha: reviewedHeadSha,
+      baseSha: reviewedBaseSha,
+      baseRef: 'main',
+      diffHash: reviewedDiffHash,
+    }),
+    mergedEvidence: async () => ({
+      ...merged,
+      baseSha: reviewedBaseSha,
+      baseRef: 'main',
+      mergedAt: '2026-08-22T10:05:00.000Z',
+      mergeCommitSha: 'f'.repeat(40),
+    }),
+  };
+}
+
 class MockPolicy implements FinancialPolicy {
   private operation = 0;
   private readonly challengeWallets = new Map<string, string>();
@@ -593,6 +643,11 @@ class MockPolicy implements FinancialPolicy {
   releaseFailuresRemaining = 0;
   escrowRefundRecipient = 'treasury';
   lastRefundReason?: 'expired' | 'rejected' | 'dispute_resolved';
+  readonly releaseInputs: Array<{
+    pullRequestNumber: number;
+    reviewedHeadSha: string;
+    reviewedDiffHash: string;
+  }> = [];
 
   constructor(private readonly now?: () => Date) {}
 
@@ -654,7 +709,15 @@ class MockPolicy implements FinancialPolicy {
     return this.result('escrow_bind', wallet);
   }
 
-  async releaseEscrow(operationId: string): Promise<PolicyOperation> {
+  async releaseEscrow(
+    operationId: string,
+    input: {
+      pullRequestNumber: number;
+      reviewedHeadSha: string;
+      reviewedDiffHash: string;
+    },
+  ): Promise<PolicyOperation> {
+    this.releaseInputs.push(input);
     const key = `${operationId}:release`;
     const existing = this.resolutionOperations.get(key);
     if (existing) return existing;

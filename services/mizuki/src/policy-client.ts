@@ -1,6 +1,7 @@
 import { createPrivateKey, sign, type KeyObject } from 'node:crypto';
 import { z } from 'zod';
 import type { Config } from './config.js';
+import type { Quote } from './types.js';
 
 const operationSchema = z.object({
   id: z.string().uuid(),
@@ -88,6 +89,30 @@ const refundLiabilitySchema = z.object({
   id: z.string().uuid(),
   jobId: z.string().min(1),
   settlementSignature: z.string().min(1),
+  repository: z.string().min(3),
+  issueNumber: z.number().int().positive(),
+  baseRef: z.string().min(1),
+  baseSha: z.string().regex(/^[a-f0-9]{40,64}$/),
+  repositoryAuthorizedAt: z.string().datetime({ offset: true }),
+  authorizationEvidenceHash: z.string().regex(/^[a-f0-9]{64}$/),
+  reviewedHeadSha: z
+    .string()
+    .regex(/^[a-f0-9]{40,64}$/)
+    .nullable(),
+  reviewedBaseSha: z
+    .string()
+    .regex(/^[a-f0-9]{40,64}$/)
+    .nullable(),
+  reviewedBaseRef: z.string().min(1).nullable(),
+  reviewedDiffHash: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .nullable(),
+  deliveryBoundAt: z.string().datetime({ offset: true }).nullable(),
+  deliveryBindingHash: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .nullable(),
   payer: z.string().min(1),
   mint: z.string().min(1),
   rawAmount: z.string().regex(/^[0-9]+$/),
@@ -105,20 +130,70 @@ const refundLiabilitySchema = z.object({
 
 export type RefundLiability = z.infer<typeof refundLiabilitySchema>;
 
+export interface RefundLiabilityCommitment {
+  repository: string;
+  issueNumber: number;
+  baseRef: string;
+  baseSha: string;
+  repositoryAuthorizedAt: string;
+  authorizationEvidenceHash: string;
+}
+
+export interface RefundLiabilityDischarge {
+  jobId: string;
+  settlementSignature: string;
+  repository: string;
+  issueNumber: number;
+  pullRequestNumber: number;
+  deliveredCommitSha: string;
+  reviewedHeadSha: string;
+  reviewedBaseSha: string;
+  reviewedBaseRef: string;
+  reviewedDiffHash: string;
+}
+
+export interface RefundLiabilityDeliveryBinding {
+  jobId: string;
+  settlementSignature: string;
+  reviewedHeadSha: string;
+  reviewedBaseSha: string;
+  reviewedBaseRef: string;
+  reviewedDiffHash: string;
+}
+
+export function refundLiabilityCommitment(quote: Quote): RefundLiabilityCommitment {
+  const authorization = quote.authorizationReceipt;
+  if (!authorization) throw new Error('repository authorization evidence is required');
+  if (!Number.isFinite(Date.parse(authorization.authorizedAt))) {
+    throw new Error('repository authorization timestamp is invalid');
+  }
+  return {
+    repository: `${quote.owner}/${quote.repo}`.toLowerCase(),
+    issueNumber: quote.issueNumber,
+    baseRef: quote.defaultBranch,
+    baseSha: quote.baseSha,
+    repositoryAuthorizedAt: new Date(authorization.authorizedAt).toISOString(),
+    authorizationEvidenceHash: authorization.evidenceHash,
+  };
+}
+
 export interface RefundCapacityPolicy {
   readiness(): Promise<PolicyReadiness>;
 }
 
 export interface PaymentPolicy extends RefundCapacityPolicy {
-  registerRefundLiability(jobId: string, settlementSignature: string): Promise<RefundLiability>;
+  registerRefundLiability(
+    jobId: string,
+    settlementSignature: string,
+    commitment: RefundLiabilityCommitment,
+  ): Promise<RefundLiability>;
+  bindRefundLiabilityDelivery(
+    liabilityId: string,
+    input: RefundLiabilityDeliveryBinding,
+  ): Promise<RefundLiability>;
   dischargeRefundLiability(
     liabilityId: string,
-    input: {
-      jobId: string;
-      settlementSignature: string;
-      repository: string;
-      pullRequestNumber: number;
-    },
+    input: RefundLiabilityDischarge,
   ): Promise<RefundLiability>;
   refund(jobId: string, settlementSignature: string): Promise<PolicyOperation>;
 }
@@ -145,7 +220,14 @@ export interface FinancialPolicy extends PaymentPolicy {
     challengeId: string,
     signature: string,
   ): Promise<PolicyOperation>;
-  releaseEscrow(operationId: string, pullRequestNumber: number): Promise<PolicyOperation>;
+  releaseEscrow(
+    operationId: string,
+    input: {
+      pullRequestNumber: number;
+      reviewedHeadSha: string;
+      reviewedDiffHash: string;
+    },
+  ): Promise<PolicyOperation>;
   refundEscrow(
     operationId: string,
     reasonCode: 'expired' | 'rejected' | 'dispute_resolved',
@@ -177,8 +259,9 @@ export class PolicySignerClient implements FinancialPolicy {
   async registerRefundLiability(
     jobId: string,
     settlementSignature: string,
+    commitment: RefundLiabilityCommitment,
   ): Promise<RefundLiability> {
-    const body = this.refundAuthorization('register', jobId, settlementSignature);
+    const body = this.refundAuthorization('register', jobId, settlementSignature, commitment);
     return refundLiabilitySchema.parse(
       await this.callJson('/v1/refund-liabilities', {
         method: 'POST',
@@ -192,7 +275,6 @@ export class PolicySignerClient implements FinancialPolicy {
   }
 
   async refund(jobId: string, settlementSignature: string): Promise<PolicyOperation> {
-    await this.registerRefundLiability(jobId, settlementSignature);
     return this.mutate(
       '/v1/refunds',
       `mizuki-refund-${jobId}`,
@@ -200,14 +282,26 @@ export class PolicySignerClient implements FinancialPolicy {
     );
   }
 
+  async bindRefundLiabilityDelivery(
+    liabilityId: string,
+    input: RefundLiabilityDeliveryBinding,
+  ): Promise<RefundLiability> {
+    const body = this.deliveryBindingAuthorization(input);
+    return refundLiabilitySchema.parse(
+      await this.callJson(`/v1/refund-liabilities/${liabilityId}/delivery-bindings`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'idempotency-key': `mizuki-refund-liability-delivery-${input.jobId}`,
+        },
+        body: JSON.stringify(body),
+      }),
+    );
+  }
+
   async dischargeRefundLiability(
     liabilityId: string,
-    input: {
-      jobId: string;
-      settlementSignature: string;
-      repository: string;
-      pullRequestNumber: number;
-    },
+    input: RefundLiabilityDischarge,
   ): Promise<RefundLiability> {
     const body = this.dischargeAuthorization(input);
     return refundLiabilitySchema.parse(
@@ -270,11 +364,18 @@ export class PolicySignerClient implements FinancialPolicy {
     );
   }
 
-  async releaseEscrow(operationId: string, pullRequestNumber: number): Promise<PolicyOperation> {
+  async releaseEscrow(
+    operationId: string,
+    input: {
+      pullRequestNumber: number;
+      reviewedHeadSha: string;
+      reviewedDiffHash: string;
+    },
+  ): Promise<PolicyOperation> {
     return this.mutate(
       `/v1/escrows/${operationId}/release`,
       `mizuki-escrow-release-${operationId}`,
-      { pullRequestNumber },
+      input,
     );
   }
 
@@ -306,8 +407,12 @@ export class PolicySignerClient implements FinancialPolicy {
     action: 'register' | 'execute',
     jobId: string,
     settlementSignature: string,
-  ): Record<string, string> {
+    commitment?: RefundLiabilityCommitment,
+  ): Record<string, string | number> {
     if (!this.jobAuthorityKey) throw new Error('job authority is not configured');
+    if (action === 'register' && !commitment) {
+      throw new Error('refund liability commitment is required');
+    }
     const authorizationExpiresAt = new Date(this.now().getTime() + 5 * 60_000).toISOString();
     const title =
       action === 'register'
@@ -315,14 +420,55 @@ export class PolicySignerClient implements FinancialPolicy {
         : 'Mizuki refund execution authorization';
     const message = [
       title,
-      'Version: 1',
+      `Version: ${action === 'register' ? 2 : 1}`,
       `Job: ${jobId}`,
       `Settlement: ${settlementSignature}`,
-      `Expires At: ${authorizationExpiresAt}`,
-    ].join('\n');
+    ];
+    if (action === 'register') {
+      message.push(
+        `Repository: ${commitment!.repository.toLowerCase()}`,
+        `Issue: ${commitment!.issueNumber}`,
+        `Base Ref: ${commitment!.baseRef}`,
+        `Base SHA: ${commitment!.baseSha}`,
+        `Repository Authorized At: ${new Date(commitment!.repositoryAuthorizedAt).toISOString()}`,
+        `Authorization Evidence: ${commitment!.authorizationEvidenceHash}`,
+      );
+    }
+    message.push(`Expires At: ${authorizationExpiresAt}`);
+    const normalizedCommitment = commitment
+      ? { ...commitment, repository: commitment.repository.toLowerCase() }
+      : {};
     return {
       jobId,
       settlementSignature,
+      ...normalizedCommitment,
+      authorizationExpiresAt,
+      authorizationSignature: sign(
+        null,
+        Buffer.from(message.join('\n'), 'utf8'),
+        this.jobAuthorityKey,
+      ).toString('base64'),
+    };
+  }
+
+  private deliveryBindingAuthorization(
+    input: RefundLiabilityDeliveryBinding,
+  ): Record<string, string> {
+    if (!this.jobAuthorityKey) throw new Error('job authority is not configured');
+    const authorizationExpiresAt = new Date(this.now().getTime() + 5 * 60_000).toISOString();
+    const message = [
+      'Mizuki refund liability delivery binding',
+      'Version: 1',
+      `Job: ${input.jobId}`,
+      `Settlement: ${input.settlementSignature}`,
+      `Reviewed Head: ${input.reviewedHeadSha}`,
+      `Reviewed Base SHA: ${input.reviewedBaseSha}`,
+      `Reviewed Base Ref: ${input.reviewedBaseRef}`,
+      `Reviewed Diff: ${input.reviewedDiffHash}`,
+      `Expires At: ${authorizationExpiresAt}`,
+    ].join('\n');
+    return {
+      ...input,
       authorizationExpiresAt,
       authorizationSignature: sign(
         null,
@@ -332,22 +478,23 @@ export class PolicySignerClient implements FinancialPolicy {
     };
   }
 
-  private dischargeAuthorization(input: {
-    jobId: string;
-    settlementSignature: string;
-    repository: string;
-    pullRequestNumber: number;
-  }): Record<string, string | number> {
+  private dischargeAuthorization(input: RefundLiabilityDischarge): Record<string, string | number> {
     if (!this.jobAuthorityKey) throw new Error('job authority is not configured');
     const authorizationExpiresAt = new Date(this.now().getTime() + 5 * 60_000).toISOString();
     const repository = input.repository.toLowerCase();
     const message = [
       'Mizuki refund liability discharge authorization',
-      'Version: 1',
+      'Version: 2',
       `Job: ${input.jobId}`,
       `Settlement: ${input.settlementSignature}`,
       `Repository: ${repository}`,
+      `Issue: ${input.issueNumber}`,
       `Pull Request: ${input.pullRequestNumber}`,
+      `Delivered Commit: ${input.deliveredCommitSha}`,
+      `Reviewed Head: ${input.reviewedHeadSha}`,
+      `Reviewed Base SHA: ${input.reviewedBaseSha}`,
+      `Reviewed Base Ref: ${input.reviewedBaseRef}`,
+      `Reviewed Diff: ${input.reviewedDiffHash}`,
       `Expires At: ${authorizationExpiresAt}`,
     ].join('\n');
     return {
@@ -447,7 +594,7 @@ export function assertRefundCapacity(input: {
   }
   if (input.escrowAuthority && readiness.escrowAuthority !== input.escrowAuthority) {
     throw new RefundCapacityError(
-      'refund signer escrow authority does not match the capability payout wallet',
+      'refund signer escrow authority does not match the configured escrow return recipient',
     );
   }
   if (input.unfinishedLiabilityRaw < 0n || input.proposedPaymentRaw < 0n) {

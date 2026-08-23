@@ -1,11 +1,12 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import type {
   GatewayEvent,
   RunArtifacts,
   RunRequest,
   RunState,
   RunStatus,
+  ProviderReceipt,
   Sandbox,
   SandboxProvider,
   TokenUsage,
@@ -19,10 +20,11 @@ import { SpendLedger, modelCostUsd, sandboxCostUsd } from './budget.js';
 import { IpBucket } from './ip-bucket.js';
 import { sourceIp } from './source-ip.js';
 import { admitRun } from './admit.js';
-import { RunStore, type StoredRun } from './run-store.js';
+import { IdempotencyConflictError, RunStore, type StoredRun } from './run-store.js';
 import { assertProductionConfig } from './config.js';
 import { GatewayReadiness } from './readiness.js';
 import { captureRepositoryFiles } from './repository-artifacts.js';
+import { probeUsePod, type UsePodRequestConfig } from './usepod-http.js';
 
 interface CapturedFile {
   path: string;
@@ -42,6 +44,7 @@ interface Run extends StoredRun {
 const MAX_FILES = 40;
 const MAX_FILE_BYTES = 64 * 1024;
 const MAX_TOTAL_BYTES = 512 * 1024;
+const MAX_REQUEST_BODY_BYTES = 1_200_000;
 
 async function captureFiles(sandbox: {
   exec: (cmd: string, opts?: { timeoutMs?: number }) => Promise<{ stdout: string }>;
@@ -101,11 +104,7 @@ const PORT = Number(process.env.PORT ?? process.env.GATEWAY_PORT ?? 8642);
 const modelProbe = modelProbeConfig();
 const readiness = new GatewayReadiness({
   provider,
-  model: {
-    url: modelProbe.url,
-    headers: modelProbe.headers,
-    expectedModel: config.model,
-  },
+  model: modelProbe,
   refreshMs: config.readinessRefreshMs,
   maxAgeMs: config.readinessMaxAgeMs,
   timeoutMs: config.readinessTimeoutMs,
@@ -164,15 +163,20 @@ function publish(run: Run, e: GatewayEvent): void {
 }
 
 function startRun(
+  id: string,
   request: RunRequest,
+  requestFingerprint: string,
   reservedMax: number,
   reservationId: string,
   sourceIpStr: string,
   exempt: boolean,
 ): Run {
-  const id = randomUUID();
   const run: Run = {
     id,
+    sessionId: request.session_id,
+    requestFingerprint,
+    reservationId,
+    reservedMax,
     status: 'running',
     events: [],
     subscribers: new Set(),
@@ -223,14 +227,38 @@ function startRun(
       }
       console.log(`run ${id} sandbox ready (${Date.now() - startedAt}ms) -> backend start`);
       const backend = selectBackend(config.backend);
-      const { output, usage } = await backend.run({
+      const { output, usage, providerReceipts } = await backend.run({
         input: request.input,
         sandbox,
         signal: run.abort.signal,
         emit: (e) => publish(run, e),
+        maxProviderCostUsd: reservedMax - maximumSandboxCostUsd(),
+        recordProviderRequest: () => {
+          const previous = run.providerRequestCount ?? 0;
+          run.providerRequestCount = previous + 1;
+          run.updatedAt = new Date().toISOString();
+          try {
+            persistRun(run);
+          } catch (cause) {
+            run.providerRequestCount = previous;
+            throw cause;
+          }
+        },
+        recordProviderReceipt: (receipt) => {
+          const previous = run.providerReceipts;
+          run.providerReceipts = [...(previous ?? []), receipt];
+          run.updatedAt = new Date().toISOString();
+          try {
+            persistRun(run);
+          } catch (cause) {
+            run.providerReceipts = previous;
+            throw cause;
+          }
+        },
       });
       run.output = output;
       run.usage = usage;
+      run.providerReceipts = providerReceipts ?? run.providerReceipts;
       if (request.repository_url) {
         const artifacts = await collectRepositoryArtifacts(
           sandbox,
@@ -252,7 +280,13 @@ function startRun(
       run.status = 'completed';
       run.updatedAt = new Date().toISOString();
       const seconds = (Date.now() - startedAt) / 1000;
-      run.costUsd = modelCostUsd(config.model, usage) + sandboxCostUsd(seconds);
+      run.costUsd = completedRunCost(
+        run.providerRequestCount ?? 0,
+        providerReceipts ?? run.providerReceipts,
+        usage,
+        sandboxChargeUsd(startedAt),
+        reservedMax,
+      );
       console.log(
         `run ${id} completed (${Math.round(seconds * 1000)}ms, ${run.files?.length ?? 0} files, ${run.events.length} events)`,
       );
@@ -263,17 +297,20 @@ function startRun(
       console.error(
         `run ${id} ${run.abort.signal.aborted ? 'cancelled' : 'FAILED'} (${Date.now() - startedAt}ms): ${run.error}`,
       );
+      run.status = run.abort.signal.aborted ? 'cancelled' : 'failed';
+      run.costUsd = failedRunCost(
+        run.providerRequestCount ?? 0,
+        run.providerReceipts,
+        sandbox ? sandboxChargeUsd(startedAt) : 0,
+        reservedMax,
+      );
+      if (run.costUsd > reservedMax + 1e-9) ledger.kill();
       // After abort (kill or stop) skip the file snapshot: it would exec
       // inside the still-alive sandbox for up to 15s, accruing spend the
       // operator just signalled they want to stop.
       run.files =
         sandbox && !run.abort.signal.aborted ? await captureFiles(sandbox).catch(() => []) : [];
-      run.status = run.abort.signal.aborted ? 'cancelled' : 'failed';
-      run.costUsd = sandbox ? reservedMax : 0;
       publish(run, { type: 'run.failed', error: run.error });
-      // No usage available on failure; charge the reserved max (pessimistic,
-      // wallet-safe) since a partial run still spent tokens. Provider failures
-      // before the sandbox exists charge $0.
       ledger.commit(
         reservationId,
         reservedMax,
@@ -307,7 +344,11 @@ function startRun(
 }
 
 function json(res: ServerResponse, code: number, body: unknown): void {
-  res.writeHead(code, { 'content-type': 'application/json' });
+  res.writeHead(code, {
+    'content-type': 'application/json',
+    'cache-control': 'private, no-store',
+    'x-content-type-options': 'nosniff',
+  });
   res.end(JSON.stringify(body));
 }
 
@@ -316,30 +357,113 @@ function persistRun(run: Run): void {
   runStore.save(stored);
 }
 
-function modelProbeConfig(): { url: string; headers: Record<string, string> } {
+function modelProbeConfig(): { expectedModel: string; check: () => Promise<void> } {
   if (config.backend === 'usepod') {
-    const key = process.env.USEPOD_API_KEY ?? '';
+    const probe: UsePodRequestConfig = {
+      baseUrl: config.usePodBaseUrl,
+      token: process.env.USEPOD_API_KEY ?? '',
+      model: config.model,
+      maxInputPriceMicrounits: config.usePodMaxInputPriceMicrounits,
+      maxOutputPriceMicrounits: config.usePodMaxOutputPriceMicrounits,
+      minimumBalance: config.usePodMinimumBalance,
+    };
     return {
-      url: `${(process.env.USEPOD_BASE_URL ?? 'https://api.usepod.ai/v1').replace(/\/$/, '')}/models`,
-      headers: {
-        authorization: `Bearer ${key}`,
-        'x-pod-routing-mode': 'marketplace-only',
-        'x-pod-no-retention': 'true',
-      },
+      expectedModel: config.model,
+      check: () => probeUsePod(probe),
     };
   }
   if (config.backend === 'openai') {
     const key = process.env.OPENAI_API_KEY ?? '';
     return {
-      url: 'https://api.openai.com/v1/models',
-      headers: { authorization: `Bearer ${key}` },
+      expectedModel: config.model,
+      check: () =>
+        probeModelCatalog(
+          'https://api.openai.com/v1/models',
+          { authorization: `Bearer ${key}` },
+          config.model,
+        ),
     };
   }
   const key = process.env.ANTHROPIC_API_KEY ?? '';
   return {
-    url: 'https://api.anthropic.com/v1/models',
-    headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01' },
+    expectedModel: config.model,
+    check: () =>
+      probeModelCatalog(
+        'https://api.anthropic.com/v1/models',
+        { 'x-api-key': key, 'anthropic-version': '2023-06-01' },
+        config.model,
+      ),
   };
+}
+
+async function probeModelCatalog(
+  url: string,
+  headers: Record<string, string>,
+  expectedModel: string,
+): Promise<void> {
+  const response = await fetch(url, { headers, signal: AbortSignal.timeout(15_000) });
+  if (!response.ok) throw new Error(`model readiness failed with HTTP ${response.status}`);
+  const body = (await response.json()) as { data?: Array<{ id?: unknown }> };
+  if (!body.data?.some((entry) => entry.id === expectedModel)) {
+    throw new Error('configured model is absent from the provider catalog');
+  }
+}
+
+function providerCostUsd(
+  requestCount: number,
+  receipts: ProviderReceipt[] | undefined,
+): number | undefined {
+  if (requestCount === 0) return 0;
+  if (
+    !receipts ||
+    receipts.length !== requestCount ||
+    receipts.some((receipt) => receipt.costMicrounits === undefined)
+  ) {
+    return undefined;
+  }
+  const total = receipts.reduce((sum, receipt) => sum + BigInt(receipt.costMicrounits!), 0n);
+  if (total > BigInt(Number.MAX_SAFE_INTEGER)) {
+    console.error('provider receipt total exceeds the exact accounting range');
+    return undefined;
+  }
+  return Number(total) / 1_000_000;
+}
+
+function completedRunCost(
+  providerRequestCount: number,
+  receipts: ProviderReceipt[] | undefined,
+  usage: TokenUsage,
+  sandboxUsd: number,
+  reservedMax: number,
+): number {
+  const modelUsd =
+    config.backend === 'usepod'
+      ? providerCostUsd(providerRequestCount, receipts)
+      : modelCostUsd(config.model, usage);
+  if (modelUsd === undefined) return reservedMax;
+  const total = modelUsd + sandboxUsd;
+  if (!Number.isFinite(total) || total < 0) return reservedMax;
+  return total;
+}
+
+export function failedRunCost(
+  providerRequestCount: number,
+  receipts: ProviderReceipt[] | undefined,
+  sandboxUsd: number,
+  reservedMax: number,
+): number {
+  const providerUsd = providerCostUsd(providerRequestCount, receipts);
+  if (providerUsd === undefined) return reservedMax;
+  const total = providerUsd + sandboxUsd;
+  return Number.isFinite(total) && total >= 0 ? total : reservedMax;
+}
+
+function maximumSandboxCostUsd(): number {
+  return sandboxCostUsd(config.wallMs / 1_000);
+}
+
+function sandboxChargeUsd(startedAt: number): number {
+  return Math.min(maximumSandboxCostUsd(), sandboxCostUsd((Date.now() - startedAt) / 1_000));
 }
 
 function streamEvents(run: Run, req: IncomingMessage, res: ServerResponse): void {
@@ -358,22 +482,69 @@ function streamEvents(run: Run, req: IncomingMessage, res: ServerResponse): void
   req.on('close', () => run.subscribers.delete(res));
 }
 
-function readBody(req: IncomingMessage): Promise<string> {
+export function readBody(req: IncomingMessage, maxBytes = MAX_REQUEST_BODY_BYTES): Promise<string> {
   return new Promise((resolve, reject) => {
-    let data = '';
-    req.on('data', (c) => (data += c));
-    req.on('end', () => resolve(data));
-    req.on('error', reject);
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let settled = false;
+    const fail = (cause: Error) => {
+      if (settled) return;
+      settled = true;
+      req.removeListener('data', onData);
+      req.removeListener('end', onEnd);
+      req.resume();
+      reject(cause);
+    };
+    const onData = (chunk: Buffer | string) => {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      size += buffer.byteLength;
+      if (size > maxBytes) {
+        fail(new RequestBodyTooLargeError());
+        return;
+      }
+      chunks.push(buffer);
+    };
+    const onEnd = () => {
+      if (settled) return;
+      settled = true;
+      resolve(Buffer.concat(chunks).toString('utf8'));
+    };
+    const length = Number(req.headers['content-length']);
+    if (Number.isFinite(length) && length > maxBytes) {
+      fail(new RequestBodyTooLargeError());
+      return;
+    }
+    req.on('data', onData);
+    req.on('end', onEnd);
+    req.on('error', fail);
   });
 }
 
 type ParsedRun = { ok: true; value: RunRequest } | { ok: false; error: string };
 
-function parseRunRequest(body: Partial<RunRequest>): ParsedRun {
+export function parseRunRequest(body: Partial<RunRequest>): ParsedRun {
+  if (
+    typeof body.session_id !== 'string' ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(body.session_id)
+  ) {
+    return { ok: false, error: 'session_id must be a valid 1-128 character idempotency key' };
+  }
   if (typeof body.input !== 'string' || !body.input.trim()) {
     return { ok: false, error: 'input is required' };
   }
   if (body.input.length > 64_000) return { ok: false, error: 'input exceeds 64KB' };
+  if (typeof body.max_cost_usd !== 'number' || !Number.isFinite(body.max_cost_usd)) {
+    return { ok: false, error: 'max_cost_usd must be a finite number' };
+  }
+  if (body.max_cost_usd <= 0 || body.max_cost_usd > config.perRunUsdMax) {
+    return {
+      ok: false,
+      error: `max_cost_usd must be greater than zero and no more than ${config.perRunUsdMax}`,
+    };
+  }
+  if (body.max_cost_usd <= maximumSandboxCostUsd()) {
+    return { ok: false, error: 'max_cost_usd cannot fund the maximum sandbox charge' };
+  }
 
   let repositoryUrl: string | undefined;
   if (body.repository_url !== undefined) {
@@ -417,12 +588,28 @@ function parseRunRequest(body: Partial<RunRequest>): ParsedRun {
     value: {
       input: body.input,
       session_id: body.session_id,
+      max_cost_usd: body.max_cost_usd,
       repository_url: repositoryUrl,
       base_sha: body.base_sha,
       validation_commands: validations,
       initial_patch: body.initial_patch,
     },
   };
+}
+
+export function runRequestFingerprint(request: RunRequest): string {
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        input: request.input,
+        max_cost_usd: request.max_cost_usd,
+        repository_url: request.repository_url,
+        base_sha: request.base_sha,
+        validation_commands: request.validation_commands ?? [],
+        initial_patch: request.initial_patch,
+      }),
+    )
+    .digest('hex');
 }
 
 async function applyInitialPatch(sandbox: Sandbox, patch: string): Promise<void> {
@@ -497,22 +684,33 @@ export const server = createServer(async (req, res) => {
         backend: config.backend,
         provider: provider.id,
         persistentRuns: runStore.persistent,
+        storageReady: runStore.persistenceReady && ledger.snapshot().persistenceReady,
       });
     }
 
     if (req.method === 'GET' && url.pathname === '/readyz') {
       if (!authorized(req, config.authToken)) return json(res, 401, { error: 'unauthorized' });
       const report = await readiness.check();
-      res.setHeader('cache-control', 'private, no-store');
-      return json(res, report.ready ? 200 : 503, {
+      const storage = {
+        ledger: ledger.snapshot().persistenceReady,
+        runStore: runStore.persistenceReady,
+      };
+      const storageFailed = Object.entries(storage)
+        .filter(([, ready]) => !ready)
+        .map(([name]) => name);
+      const ready = report.ready && storageFailed.length === 0;
+      return json(res, ready ? 200 : 503, {
         ...report,
+        ready,
+        failed: [...report.failed, ...storageFailed],
         backend: config.backend,
         provider: provider.id,
         persistentRuns: runStore.persistent,
+        storage,
       });
     }
 
-    if (url.pathname.startsWith('/v1/runs') && !authorized(req, config.authToken)) {
+    if (url.pathname.startsWith('/v1/') && !authorized(req, config.authToken)) {
       return json(res, 401, { error: 'unauthorized' });
     }
 
@@ -532,6 +730,10 @@ export const server = createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && url.pathname === '/v1/runs') {
+      const ledgerState = ledger.snapshot();
+      if (!runStore.persistenceReady || !ledgerState.persistenceReady) {
+        return json(res, 503, { error: 'gateway persistence is unavailable' });
+      }
       const body = JSON.parse((await readBody(req)) || '{}') as Partial<RunRequest>;
       const parsed = parseRunRequest(body);
       if (!parsed.ok) {
@@ -547,11 +749,17 @@ export const server = createServer(async (req, res) => {
             'repository runs require an isolated sandbox; set ALLOW_LOCAL_REPOSITORY_RUNS=1 only for trusted local development',
         });
       }
+      const fingerprint = runRequestFingerprint(parsed.value);
+      const replay = runStore.replay(parsed.value.session_id, fingerprint);
+      if (replay) return json(res, 200, { run_id: replay.id });
       if (!parsed.value.input.trim()) {
         return json(res, 400, { error: 'input is required' });
       }
       const ip = sourceIp(req, config.trustedProxyHops);
+      const runId = randomUUID();
       const outcome = admitRun({
+        runId,
+        maxUsd: parsed.value.max_cost_usd,
         ip,
         ipBucket,
         ledger,
@@ -565,7 +773,9 @@ export const server = createServer(async (req, res) => {
         return json(res, 429, { error: outcome.reason });
       }
       const run = startRun(
+        runId,
         parsed.value,
+        fingerprint,
         outcome.reservedMax,
         outcome.reservationId,
         ip,
@@ -584,6 +794,7 @@ export const server = createServer(async (req, res) => {
           error: run.error,
           usage: run.usage,
           costUsd: run.costUsd,
+          providerReceipts: run.providerReceipts,
         } satisfies RunState);
       }
       if (req.method === 'GET' && parts[3] === 'artifacts') {
@@ -609,9 +820,23 @@ export const server = createServer(async (req, res) => {
 
     json(res, 404, { error: 'not found' });
   } catch (e) {
-    json(res, e instanceof SyntaxError ? 400 : 500, { error: (e as Error).message });
+    const status =
+      e instanceof RequestBodyTooLargeError
+        ? 413
+        : e instanceof IdempotencyConflictError
+          ? 409
+          : e instanceof SyntaxError
+            ? 400
+            : 500;
+    json(res, status, { error: (e as Error).message });
   }
 });
+
+class RequestBodyTooLargeError extends Error {
+  constructor() {
+    super('request body exceeds the 1.2MB limit');
+  }
+}
 
 function authorized(req: IncomingMessage, expected: string | undefined): boolean {
   if (!expected) return true;

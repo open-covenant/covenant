@@ -2,11 +2,18 @@ import { createPrivateKey, sign } from 'node:crypto';
 import { Keypair } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 import { FixedUsdPriceOracle, MockChainGateway, type UsdPriceOracle } from './chain.js';
-import type { DischargeRefundLiabilityRequest, RefundRequest, SettlementFacts } from './domain.js';
+import type {
+  BindRefundLiabilityDeliveryRequest,
+  DischargeRefundLiabilityRequest,
+  RefundRequest,
+  RegisterRefundLiabilityRequest,
+  SettlementFacts,
+} from './domain.js';
 import {
   operationView,
   PolicyError,
   refundAuthorizationMessage,
+  refundDeliveryBindingAuthorizationMessage,
   refundDischargeAuthorizationMessage,
 } from './domain.js';
 import { MockMergeVerifier } from './github.js';
@@ -20,6 +27,14 @@ const PAYER = '4'.repeat(32);
 const CLAIMANT_KEYPAIR = Keypair.generate();
 const CLAIMANT = CLAIMANT_KEYPAIR.publicKey.toBase58();
 const JOB_AUTHORITY = Keypair.generate();
+
+function releaseRequest(pullRequestNumber = 23) {
+  return {
+    pullRequestNumber,
+    reviewedHeadSha: 'b'.repeat(40),
+    reviewedDiffHash: 'c'.repeat(64),
+  };
+}
 
 function fixture(
   options: {
@@ -178,7 +193,11 @@ describe('refund policy', () => {
 
     await expect(
       policy.registerRefundLiability(
-        signedRefundRequest('execute', 'job-1', facts.signature),
+        {
+          ...signedRefundRequest('register', 'job-1', facts.signature),
+          authorizationSignature: signedRefundRequest('execute', 'job-1', facts.signature)
+            .authorizationSignature,
+        },
         'register-wrong-action',
       ),
     ).rejects.toMatchObject({ code: 'refund_authorization_invalid' });
@@ -298,6 +317,7 @@ describe('refund policy', () => {
       signedRefundRequest('register', 'job-success', facts.signature),
       'register-success',
     );
+    await bindDelivery(policy, liability.id, 'job-success', facts.signature);
     const discharged = await policy.dischargeRefundLiability(
       liability.id,
       signedDischargeRequest('job-success', facts.signature, 'owner/repository', 23),
@@ -305,7 +325,17 @@ describe('refund policy', () => {
     );
 
     expect(merges.repositoryRequests).toEqual([
-      { repository: 'owner/repository', pullRequestNumber: 23 },
+      {
+        repository: 'owner/repository',
+        issueNumber: 17,
+        pullRequestNumber: 23,
+        deliveredCommitSha: 'a'.repeat(40),
+        reviewedHeadSha: 'a'.repeat(40),
+        reviewedBaseSha: 'd'.repeat(40),
+        reviewedBaseRef: 'main',
+        reviewedDiffHash: 'f'.repeat(64),
+        notBefore: expect.any(Date),
+      },
     ]);
     expect(discharged).toMatchObject({
       dischargedAt: expect.any(Date),
@@ -324,6 +354,111 @@ describe('refund policy', () => {
     ).rejects.toMatchObject({ code: 'refund_liability_discharged' });
   });
 
+  it('binds the reviewed commit before publication and makes the binding immutable', async () => {
+    const { chain, merges, policy } = fixture();
+    const facts = settlement();
+    chain.settlements.set(facts.signature, facts);
+    const liability = await policy.registerRefundLiability(
+      signedRefundRequest('register', 'job-binding', facts.signature),
+      'register-binding',
+    );
+    const request = signedDeliveryBindingRequest('job-binding', facts.signature);
+    const bound = await policy.bindRefundLiabilityDelivery(
+      liability.id,
+      request,
+      'stable-delivery-binding',
+    );
+
+    expect(merges.unpublishedRequests).toEqual([
+      { repository: 'owner/repository', commitSha: 'a'.repeat(40) },
+    ]);
+    expect(bound).toMatchObject({
+      reviewedHeadSha: 'a'.repeat(40),
+      reviewedBaseSha: 'd'.repeat(40),
+      reviewedBaseRef: 'main',
+      reviewedDiffHash: 'f'.repeat(64),
+      deliveryBoundAt: expect.any(Date),
+      deliveryBindingHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+
+    merges.error = new PolicyError('github_unavailable', 'unavailable', 503, true);
+    await expect(
+      policy.bindRefundLiabilityDelivery(liability.id, request, 'stable-delivery-binding'),
+    ).resolves.toMatchObject({ id: liability.id });
+    expect(merges.unpublishedRequests).toHaveLength(1);
+    await expect(
+      policy.bindRefundLiabilityDelivery(
+        liability.id,
+        signedDeliveryBindingRequest('job-binding', facts.signature, undefined, {
+          reviewedHeadSha: 'b'.repeat(40),
+        }),
+        'different-delivery-binding',
+      ),
+    ).rejects.toMatchObject({ code: 'refund_liability_delivery_bound' });
+  });
+
+  it('rejects discharge without a binding and approve-A/merge-B substitution', async () => {
+    const { chain, merges, policy } = fixture();
+    const facts = settlement();
+    chain.settlements.set(facts.signature, facts);
+    const liability = await policy.registerRefundLiability(
+      signedRefundRequest('register', 'job-substitution', facts.signature),
+      'register-substitution',
+    );
+    await expect(
+      policy.dischargeRefundLiability(
+        liability.id,
+        signedDischargeRequest('job-substitution', facts.signature, 'owner/repository', 23),
+        'discharge-unbound',
+      ),
+    ).rejects.toMatchObject({ code: 'refund_liability_delivery_mismatch' });
+    expect(merges.repositoryRequests).toHaveLength(0);
+
+    await bindDelivery(policy, liability.id, 'job-substitution', facts.signature);
+    const substituted = signedDischargeRequest(
+      'job-substitution',
+      facts.signature,
+      'owner/repository',
+      24,
+    );
+    merges.verifyRepositoryMerge = async (request) => ({
+      repository: request.repository,
+      issueNumber: request.issueNumber,
+      pullRequestNumber: request.pullRequestNumber,
+      pullRequestUrl: `https://github.com/${request.repository}/pull/${request.pullRequestNumber}`,
+      mergeCommitOid: 'c'.repeat(40),
+      headCommitOid: 'b'.repeat(40),
+      baseCommitOid: request.reviewedBaseSha,
+      baseRefName: request.reviewedBaseRef,
+      diffHash: request.reviewedDiffHash,
+      createdAt: new Date().toISOString(),
+      mergedAt: new Date(Date.now() + 1_000).toISOString(),
+    });
+    await expect(
+      policy.dischargeRefundLiability(liability.id, substituted, 'discharge-substituted-head'),
+    ).rejects.toMatchObject({ code: 'github_evidence_mismatch', retryable: true });
+  });
+
+  it('rejects binding after the reviewed commit is already public', async () => {
+    const { chain, merges, policy, store } = fixture();
+    const facts = settlement();
+    chain.settlements.set(facts.signature, facts);
+    const liability = await policy.registerRefundLiability(
+      signedRefundRequest('register', 'job-already-public', facts.signature),
+      'register-already-public',
+    );
+    merges.error = new PolicyError('github_delivery_already_published', 'already public', 422);
+
+    await expect(
+      bindDelivery(policy, liability.id, 'job-already-public', facts.signature),
+    ).rejects.toMatchObject({ code: 'github_delivery_already_published' });
+    await expect(store.getRefundLiability(facts.signature)).resolves.toMatchObject({
+      id: liability.id,
+      deliveryBoundAt: null,
+      reviewedHeadSha: null,
+    });
+  });
+
   it('rejects recycled PR evidence that predates the registered payment', async () => {
     const { chain, merges, policy } = fixture();
     const facts = settlement();
@@ -332,11 +467,17 @@ describe('refund policy', () => {
       signedRefundRequest('register', 'job-old-pr', facts.signature),
       'register-old-pr',
     );
+    await bindDelivery(policy, liability.id, 'job-old-pr', facts.signature);
     merges.verifyRepositoryMerge = async (request) => ({
       repository: request.repository,
+      issueNumber: request.issueNumber,
       pullRequestNumber: request.pullRequestNumber,
       pullRequestUrl: `https://github.com/${request.repository}/pull/${request.pullRequestNumber}`,
       mergeCommitOid: 'a'.repeat(40),
+      headCommitOid: request.deliveredCommitSha,
+      baseCommitOid: request.reviewedBaseSha,
+      baseRefName: request.reviewedBaseRef,
+      diffHash: request.reviewedDiffHash,
       createdAt: new Date((facts.blockTimeUnixSeconds - 1) * 1_000).toISOString(),
       mergedAt: new Date((facts.blockTimeUnixSeconds + 1) * 1_000).toISOString(),
     });
@@ -358,6 +499,7 @@ describe('refund policy', () => {
       signedRefundRequest('register', 'job-race', facts.signature),
       'register-race',
     );
+    await bindDelivery(policy, liability.id, 'job-race', facts.signature);
     const outcomes = await Promise.allSettled([
       policy.refund(signedRefundRequest('execute', 'job-race', facts.signature), 'refund-race'),
       policy.dischargeRefundLiability(
@@ -390,6 +532,13 @@ describe('refund policy', () => {
         new Date(now.getTime() + 60_000).toISOString(),
       ),
       'register-discharge-retry',
+    );
+    await bindDelivery(
+      policy,
+      liability.id,
+      'job-discharge-retry',
+      facts.signature,
+      new Date(now.getTime() + 60_000).toISOString(),
     );
     const first = await policy.dischargeRefundLiability(
       liability.id,
@@ -765,11 +914,7 @@ describe('contributor escrow policy', () => {
   it('persists independent merge evidence before release broadcast', async () => {
     const { policy, store, merges } = fixture();
     const { reserve } = await reserveAndBind(policy, 'bounty-evidence');
-    const release = await policy.releaseEscrow(
-      reserve.id,
-      { pullRequestNumber: 23 },
-      'release-evidence',
-    );
+    const release = await policy.releaseEscrow(reserve.id, releaseRequest(), 'release-evidence');
     const stored = await store.get(release.id);
     const resolution = stored?.details.resolution as Record<string, unknown>;
 
@@ -780,15 +925,38 @@ describe('contributor escrow policy', () => {
       issueNumber: 17,
       claimantGitHubLogin: 'contributor',
       pullRequestNumber: 23,
+      headCommitOid: 'b'.repeat(40),
+      baseCommitOid: 'd'.repeat(40),
+      baseRefName: 'main',
+      diffHash: 'c'.repeat(64),
     });
     expect(stored?.prepared?.wireTransaction).toBeTruthy();
+  });
+
+  it('replays only the exact reviewed revision for a release key', async () => {
+    const { policy, merges } = fixture();
+    const { reserve } = await reserveAndBind(policy, 'bounty-release-replay');
+    const input = releaseRequest();
+    const released = await policy.releaseEscrow(reserve.id, input, 'release-review-bound');
+
+    await expect(
+      policy.releaseEscrow(reserve.id, input, 'release-review-bound'),
+    ).resolves.toMatchObject({ id: released.id, status: 'finalized' });
+    expect(merges.requests).toHaveLength(1);
+    await expect(
+      policy.releaseEscrow(
+        reserve.id,
+        { ...input, reviewedHeadSha: 'd'.repeat(40) },
+        'release-review-bound',
+      ),
+    ).rejects.toMatchObject({ code: 'idempotency_conflict' });
   });
 
   it('does not release without a finalized claimant binding', async () => {
     const { policy } = fixture();
     const reserve = await policy.createEscrow(escrowRequest('bounty-unbound'), 'reserve-unbound');
     await expect(
-      policy.releaseEscrow(reserve.id, { pullRequestNumber: 23 }, 'release-unbound'),
+      policy.releaseEscrow(reserve.id, releaseRequest(), 'release-unbound'),
     ).rejects.toMatchObject({ code: 'escrow_not_bound' });
   });
 
@@ -834,7 +1002,7 @@ describe('contributor escrow policy', () => {
     const { reserve, challenge } = await reserveAndBind(policy, 'bounty-resolution-race');
     now = new Date(challenge.claimExpiresAt);
     const outcomes = await Promise.allSettled([
-      policy.releaseEscrow(reserve.id, { pullRequestNumber: 23 }, 'release-race'),
+      policy.releaseEscrow(reserve.id, releaseRequest(), 'release-race'),
       policy.refundEscrow(reserve.id, { reasonCode: 'expired' }, 'refund-race'),
     ]);
 
@@ -858,7 +1026,7 @@ describe('contributor escrow policy', () => {
     });
 
     await expect(
-      policy.releaseEscrow(reserve.id, { pullRequestNumber: 23 }, 'release-late-merge'),
+      policy.releaseEscrow(reserve.id, releaseRequest(), 'release-late-merge'),
     ).rejects.toMatchObject({ code: 'github_merge_after_expiry' });
   });
 
@@ -867,11 +1035,7 @@ describe('contributor escrow policy', () => {
     const { chain, policy } = fixture({ now: () => new Date(now) });
     const { reserve, challenge } = await reserveAndBind(policy, 'bounty-release-handoff');
     chain.autoFinalize = false;
-    const release = await policy.releaseEscrow(
-      reserve.id,
-      { pullRequestNumber: 23 },
-      'release-handoff',
-    );
+    const release = await policy.releaseEscrow(reserve.id, releaseRequest(), 'release-handoff');
     expect(release.status).toBe('submitted');
     chain.states.delete(release.transactionSignature!);
     chain.currentBlockHeight = release.prepared!.lastValidBlockHeight + 1;
@@ -901,7 +1065,7 @@ describe('contributor escrow policy', () => {
     };
     const release = await policy.releaseEscrow(
       reserve.id,
-      { pullRequestNumber: 23 },
+      releaseRequest(),
       'release-invalid-form',
     );
     expect(release).toMatchObject({
@@ -977,12 +1141,38 @@ function signChallenge(message: string): string {
 }
 
 function signedRefundRequest(
+  action: 'register',
+  jobId: string,
+  settlementSignature: string,
+  authorizationExpiresAt?: string,
+): RegisterRefundLiabilityRequest;
+function signedRefundRequest(
+  action: 'execute',
+  jobId: string,
+  settlementSignature: string,
+  authorizationExpiresAt?: string,
+): RefundRequest;
+function signedRefundRequest(
   action: 'register' | 'execute',
   jobId: string,
   settlementSignature: string,
   authorizationExpiresAt = new Date(Date.now() + 10 * 60 * 1_000).toISOString(),
-): RefundRequest {
-  const unsigned = { jobId, settlementSignature, authorizationExpiresAt };
+): RefundRequest | RegisterRefundLiabilityRequest {
+  const unsigned = {
+    jobId,
+    settlementSignature,
+    ...(action === 'register'
+      ? {
+          repository: 'owner/repository',
+          issueNumber: 17,
+          baseRef: 'main',
+          baseSha: 'd'.repeat(40),
+          repositoryAuthorizedAt: '2026-08-22T11:00:00.000Z',
+          authorizationEvidenceHash: 'e'.repeat(64),
+        }
+      : {}),
+    authorizationExpiresAt,
+  };
   return {
     ...unsigned,
     authorizationSignature: signWithKey(
@@ -998,12 +1188,30 @@ function signedDischargeRequest(
   repository: string,
   pullRequestNumber: number,
   authorizationExpiresAt = new Date(Date.now() + 10 * 60 * 1_000).toISOString(),
+  overrides: Partial<
+    Pick<
+      DischargeRefundLiabilityRequest,
+      | 'issueNumber'
+      | 'deliveredCommitSha'
+      | 'reviewedHeadSha'
+      | 'reviewedBaseSha'
+      | 'reviewedBaseRef'
+      | 'reviewedDiffHash'
+    >
+  > = {},
 ): DischargeRefundLiabilityRequest {
   const unsigned = {
     jobId,
     settlementSignature,
     repository,
+    issueNumber: 17,
     pullRequestNumber,
+    deliveredCommitSha: 'a'.repeat(40),
+    reviewedHeadSha: 'a'.repeat(40),
+    reviewedBaseSha: 'd'.repeat(40),
+    reviewedBaseRef: 'main',
+    reviewedDiffHash: 'f'.repeat(64),
+    ...overrides,
     authorizationExpiresAt,
   };
   return {
@@ -1013,6 +1221,50 @@ function signedDischargeRequest(
       refundDischargeAuthorizationMessage(unsigned),
     ),
   };
+}
+
+function signedDeliveryBindingRequest(
+  jobId: string,
+  settlementSignature: string,
+  authorizationExpiresAt = new Date(Date.now() + 10 * 60 * 1_000).toISOString(),
+  overrides: Partial<
+    Pick<
+      BindRefundLiabilityDeliveryRequest,
+      'reviewedHeadSha' | 'reviewedBaseSha' | 'reviewedBaseRef' | 'reviewedDiffHash'
+    >
+  > = {},
+): BindRefundLiabilityDeliveryRequest {
+  const unsigned = {
+    jobId,
+    settlementSignature,
+    reviewedHeadSha: 'a'.repeat(40),
+    reviewedBaseSha: 'd'.repeat(40),
+    reviewedBaseRef: 'main',
+    reviewedDiffHash: 'f'.repeat(64),
+    ...overrides,
+    authorizationExpiresAt,
+  };
+  return {
+    ...unsigned,
+    authorizationSignature: signWithKey(
+      JOB_AUTHORITY,
+      refundDeliveryBindingAuthorizationMessage(unsigned),
+    ),
+  };
+}
+
+async function bindDelivery(
+  policy: PolicyService,
+  liabilityId: string,
+  jobId: string,
+  settlementSignature: string,
+  authorizationExpiresAt?: string,
+) {
+  return policy.bindRefundLiabilityDelivery(
+    liabilityId,
+    signedDeliveryBindingRequest(jobId, settlementSignature, authorizationExpiresAt),
+    `delivery-${jobId}`,
+  );
 }
 
 async function registerAndRefund(

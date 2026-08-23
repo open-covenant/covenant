@@ -63,6 +63,38 @@ export type RunArtifacts = {
   validations: ValidationResult[];
 };
 
+export type ProviderRouteReceipt = {
+  model: string;
+  route: 'marketplace';
+  providerId?: string;
+  requestId?: string;
+  costMicrounits?: string;
+};
+
+export type ReviewAttempt = {
+  id: string;
+  phase: 'implementation' | 'repair';
+  artifactHash: string;
+  status?: 'pending' | 'received' | 'completed' | 'failed';
+  provider?: ProviderRouteReceipt;
+  costUsd: number;
+  reviewedAt: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  approved?: boolean;
+  reason?: string;
+  error?: string;
+};
+
+export type DeliveryEvidence = {
+  pullRequestNumber: number;
+  headSha: string;
+  baseSha: string;
+  baseRef: string;
+  diffHash: string;
+  observedAt: string;
+};
+
 export type Job = {
   id: string;
   idempotencyKey: string;
@@ -81,12 +113,15 @@ export type Job = {
   refundLiabilityDischargedAt?: string;
   refundLiabilityDischargeEvidenceHash?: string;
   deliveryCommitSha?: string;
+  deliveryEvidence?: DeliveryEvidence;
   reviewReceipt?: {
     approved: true;
     reason: string;
     reviewedAt: string;
     artifactHash: string;
+    provider: ProviderRouteReceipt;
   };
+  reviewAttempts?: ReviewAttempt[];
   artifacts?: RunArtifacts;
   inputTokens: number;
   outputTokens: number;

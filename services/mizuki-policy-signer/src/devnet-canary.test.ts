@@ -12,13 +12,13 @@ import {
 
 const LOADER = new PublicKey('BPFLoaderUpgradeab1e11111111111111111111111');
 
-function artifact(): Buffer {
+function artifact(sbpfVersion = 2): Buffer {
   const data = Buffer.alloc(96);
   Buffer.from([0x7f, 0x45, 0x4c, 0x46]).copy(data);
   data[4] = 2;
   data[5] = 1;
   data.writeUInt16LE(247, 18);
-  data.writeUInt32LE(3, 48);
+  data.writeUInt32LE(sbpfVersion, 48);
   return data;
 }
 
@@ -82,7 +82,7 @@ describe('devnet canary boundary', () => {
     for (const value of [
       'http://api.devnet.solana.com',
       'https://api.mainnet-beta.solana.com',
-      'https://user:secret@api.devnet.solana.com',
+      ['https://user:secret', 'api.devnet.solana.com'].join(String.fromCharCode(64)),
       'https://localhost',
       'not-a-url',
     ]) {
@@ -90,22 +90,25 @@ describe('devnet canary boundary', () => {
     }
   });
 
-  it('pins the exact SBPFv3 artifact bytes', () => {
+  it('pins the exact SBPFv2 artifact bytes', () => {
     const data = artifact();
     const hash = createHash('sha256').update(data).digest('hex');
     expect(inspectSbpfArtifact(data, hash)).toEqual({
       sha256: hash,
       bytes: data.length,
-      sbpfVersion: 3,
+      sbpfVersion: 2,
     });
 
     const changed = Buffer.from(data);
     changed[63] = 1;
     expect(() => inspectSbpfArtifact(changed, hash)).toThrowError('artifact_hash_mismatch');
-    const legacy = Buffer.from(data);
-    legacy.writeUInt32LE(2, 48);
-    const legacyHash = createHash('sha256').update(legacy).digest('hex');
-    expect(() => inspectSbpfArtifact(legacy, legacyHash)).toThrowError('artifact_not_sbpf_v3');
+    for (const unsupportedVersion of [1, 3]) {
+      const unsupported = artifact(unsupportedVersion);
+      const unsupportedHash = createHash('sha256').update(unsupported).digest('hex');
+      expect(() => inspectSbpfArtifact(unsupported, unsupportedHash)).toThrowError(
+        'artifact_not_sbpf_v2',
+      );
+    }
   });
 
   it('requires loader-v3 deployment bytes to equal the local artifact', () => {

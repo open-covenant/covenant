@@ -1,9 +1,9 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { SpendLedger, modelCostUsd, sandboxCostUsd, type BudgetCaps } from "../src/budget.js";
-import { config } from "../src/config.js";
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { SpendLedger, modelCostUsd, sandboxCostUsd, type BudgetCaps } from '../src/budget.js';
+import { config } from '../src/config.js';
 
 const caps: BudgetCaps = {
   dailyUsd: 6,
@@ -17,8 +17,8 @@ afterEach(() => {
   delete process.env.CODER_LEDGER_RESET_PENDING;
 });
 
-describe("SpendLedger", () => {
-  it("reserves the per-run max and admits up to the daily cap", () => {
+describe('SpendLedger', () => {
+  it('reserves the per-run max and admits up to the daily cap', () => {
     const l = new SpendLedger(caps);
     // Reservations alone (nothing committed yet) must not exceed the daily cap:
     // $2 + $2 + $2 = $6 fits; a 4th would be $8 > $6.
@@ -30,7 +30,7 @@ describe("SpendLedger", () => {
     if (!denied.ok) expect(denied.reason).toMatch(/daily/);
   });
 
-  it("commits actual cost and frees the reservation, so cheap runs free headroom", () => {
+  it('commits actual cost and frees the reservation, so cheap runs free headroom', () => {
     const l = new SpendLedger(caps);
     const r = l.reserve();
     expect(r.ok).toBe(true);
@@ -41,7 +41,7 @@ describe("SpendLedger", () => {
     expect(snap.active).toBe(0);
   });
 
-  it("clamps active and reserved at zero on a duplicate commit (no underflow)", () => {
+  it('clamps active and reserved at zero on a duplicate commit (no underflow)', () => {
     // A double-dispatched completion (retry, missed splice) calls commit twice
     // on the same id. The Math.max(0, ...) floors keep active/reserved from
     // going negative — an underflowed active would silently inflate the
@@ -51,15 +51,67 @@ describe("SpendLedger", () => {
     const r = l.reserve();
     expect(r.ok).toBe(true);
     if (r.ok) {
-      l.commit(r.id, r.max, 0.1, "completed");
-      l.commit(r.id, r.max, 0.1, "completed"); // duplicate
+      l.commit(r.id, r.max, 0.1, 'completed');
+      l.commit(r.id, r.max, 0.1, 'completed'); // duplicate
     }
     const snap = l.snapshot();
     expect(snap.active).toBe(0);
     expect(snap.reserved).toBe(0);
+    expect(snap.dailyUsd).toBeCloseTo(0.1);
   });
 
-  it("enforces the concurrency cap independent of spend", () => {
+  it('rejects invalid or mismatched committed costs', () => {
+    const l = new SpendLedger(caps);
+    const reservation = l.reserve();
+    expect(reservation.ok).toBe(true);
+    if (!reservation.ok) return;
+    expect(() => l.commit(reservation.id, reservation.max + 1, 0.1)).toThrow(/reservation amount/);
+    expect(() => l.commit(reservation.id, reservation.max, -1)).toThrow(/actual cost/);
+    expect(() => l.commit(reservation.id, reservation.max, Number.NaN)).toThrow(/actual cost/);
+    expect(l.snapshot().active).toBe(1);
+  });
+
+  it('records an overrun without clamping it and persists the kill switch', () => {
+    const path = join(tmpdir(), `covenant-ledger-overrun-${Date.now()}.json`);
+    try {
+      const before = new SpendLedger(caps, path);
+      const reservation = before.reserve(0.5);
+      expect(reservation.ok).toBe(true);
+      if (!reservation.ok) return;
+      before.commit(reservation.id, reservation.max, 0.75, 'failed');
+      expect(before.snapshot()).toMatchObject({ dailyUsd: 0.75, monthlyUsd: 0.75, killed: true });
+      expect(before.reserve(0.1)).toMatchObject({ ok: false, reason: 'kill-switch engaged' });
+
+      const after = new SpendLedger(caps, path);
+      expect(after.snapshot()).toMatchObject({ dailyUsd: 0.75, monthlyUsd: 0.75, killed: true });
+      expect(after.reserve(0.1)).toMatchObject({ ok: false, reason: 'kill-switch engaged' });
+      expect(after.reserve(0.1, true)).toMatchObject({
+        ok: false,
+        reason: 'kill-switch engaged',
+      });
+    } finally {
+      rmSync(path, { force: true });
+    }
+  });
+
+  it('persists an operator kill across restart and blocks exempt admission', () => {
+    const path = join(tmpdir(), `covenant-ledger-killed-${Date.now()}.json`);
+    try {
+      const before = new SpendLedger(caps, path);
+      before.kill();
+
+      const after = new SpendLedger(caps, path);
+      expect(after.snapshot().killed).toBe(true);
+      expect(after.reserve(0.1, true)).toMatchObject({
+        ok: false,
+        reason: 'kill-switch engaged',
+      });
+    } finally {
+      rmSync(path, { force: true });
+    }
+  });
+
+  it('enforces the concurrency cap independent of spend', () => {
     const l = new SpendLedger({ ...caps, maxConcurrent: 2, dailyUsd: 1000 });
     expect(l.reserve().ok).toBe(true);
     expect(l.reserve().ok).toBe(true);
@@ -68,7 +120,7 @@ describe("SpendLedger", () => {
     if (!third.ok) expect(third.reason).toMatch(/capacity/);
   });
 
-  it("blocks the monthly cap even when the day has headroom", () => {
+  it('blocks the monthly cap even when the day has headroom', () => {
     const l = new SpendLedger({
       dailyUsd: 100,
       monthlyUsd: 1,
@@ -79,7 +131,7 @@ describe("SpendLedger", () => {
     expect(l.reserve().ok).toBe(false);
   });
 
-  it("kill-switch refuses all reservations", () => {
+  it('kill-switch refuses all reservations', () => {
     const l = new SpendLedger(caps);
     l.kill();
     const r = l.reserve();
@@ -103,18 +155,18 @@ describe("SpendLedger", () => {
     expect(() => l.kill()).not.toThrow();
   });
 
-  it("kill-switch keeps tearing down even when a handler throws", () => {
+  it('kill-switch keeps tearing down even when a handler throws', () => {
     const l = new SpendLedger(caps);
     const survivor = new AbortController();
     l.onKill(() => {
-      throw new Error("flaky handler");
+      throw new Error('flaky handler');
     });
     l.onKill(() => survivor.abort());
     expect(() => l.kill()).not.toThrow();
     expect(survivor.signal.aborted).toBe(true);
   });
 
-  it("onKill after kill fires the handler immediately (no missed teardown race)", () => {
+  it('onKill after kill fires the handler immediately (no missed teardown race)', () => {
     const l = new SpendLedger(caps);
     l.kill();
     let fired = false;
@@ -135,22 +187,22 @@ describe("SpendLedger", () => {
     expect(fired).toBe(false);
   });
 
-  it("records run outcomes in the snapshot for observability", () => {
+  it('records run outcomes in the snapshot for observability', () => {
     const l = new SpendLedger(caps);
     const r1 = l.reserve();
     const r2 = l.reserve();
     const r3 = l.reserve();
     expect(r1.ok && r2.ok && r3.ok).toBe(true);
-    if (r1.ok) l.commit(r1.id, r1.max, 0.5, "completed");
-    if (r2.ok) l.commit(r2.id, r2.max, 0.5, "failed");
-    if (r3.ok) l.commit(r3.id, r3.max, 0.5, "cancelled");
+    if (r1.ok) l.commit(r1.id, r1.max, 0.5, 'completed');
+    if (r2.ok) l.commit(r2.id, r2.max, 0.5, 'failed');
+    if (r3.ok) l.commit(r3.id, r3.max, 0.5, 'cancelled');
     const snap = l.snapshot();
     expect(snap.outcomes).toEqual({ completed: 1, failed: 1, cancelled: 1 });
   });
 
-  it("prices a run from token usage", () => {
+  it('prices a run from token usage', () => {
     // Sonnet 4.6: $3/M in, $15/M out → 1M in + 100k out = $3 + $1.5 = $4.50
-    const cost = modelCostUsd("claude-sonnet-4-6", {
+    const cost = modelCostUsd('claude-sonnet-4-6', {
       inputTokens: 1_000_000,
       outputTokens: 100_000,
       cacheReadTokens: 0,
@@ -159,23 +211,28 @@ describe("SpendLedger", () => {
     expect(cost).toBeCloseTo(4.5);
   });
 
-  it("falls back to Sonnet pricing for a model absent from the PRICING table", () => {
+  it('falls back to Sonnet pricing for a model absent from the PRICING table', () => {
     // model flows in from config.model = CODER_MODEL, an operator-settable
     // string. A model not yet priced (new release, typo, comparison tier)
     // must bill as Sonnet rather than throw on undefined.input or silently
     // bill zero.
-    const usage = { inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 };
-    const cost = modelCostUsd("claude-future-9", usage);
-    expect(cost).toBeCloseTo(modelCostUsd("claude-sonnet-4-6", usage));
+    const usage = {
+      inputTokens: 1_000_000,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+    };
+    const cost = modelCostUsd('claude-future-9', usage);
+    expect(cost).toBeCloseTo(modelCostUsd('claude-sonnet-4-6', usage));
     expect(cost).toBeGreaterThan(0);
   });
 
-  it("prices cache reads and creations at their distinct multipliers", () => {
+  it('prices cache reads and creations at their distinct multipliers', () => {
     // Sonnet: cacheRead $0.3/M, cacheWrite $3.75/M (a 12.5x spread). Cached
     // turns dominate a long agent loop, so the two multipliers must stay
     // distinct — transposing them, or dropping either term, mis-accounts the
     // spend the ledger caps. 2M read + 1M write = $0.6 + $3.75 = $4.35.
-    const cost = modelCostUsd("claude-sonnet-4-6", {
+    const cost = modelCostUsd('claude-sonnet-4-6', {
       inputTokens: 0,
       outputTokens: 0,
       cacheReadTokens: 2_000_000,
@@ -184,9 +241,9 @@ describe("SpendLedger", () => {
     expect(cost).toBeCloseTo(4.35);
   });
 
-  it("first-boot ENOENT loads silently — missing path is normal", () => {
+  it('first-boot ENOENT loads silently — missing path is normal', () => {
     const path = join(tmpdir(), `covenant-ledger-missing-${Date.now()}.json`);
-    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       const l = new SpendLedger(caps, path);
       expect(l.snapshot().dailyUsd).toBe(0);
@@ -196,35 +253,49 @@ describe("SpendLedger", () => {
     }
   });
 
-  it("surfaces a non-ENOENT ledger read error instead of silently resetting the cap", () => {
-    // EACCES/EIO/a-vanished-tmpfs is operator misconfiguration; the read catch
-    // must log it rather than swallow it as if the file were simply missing,
-    // otherwise a bad LEDGER_PATH silently zeroes the daily tally. A directory
-    // path makes readFileSync throw EISDIR — a code other than ENOENT.
-    const dir = mkdtempSync(join(tmpdir(), "covenant-ledger-dir-"));
-    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+  it('trips the kill switch and refuses admission after a persistence failure', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'covenant-ledger-fail-'));
+    const path = join(directory, 'ledger.json');
+    const ledger = new SpendLedger(caps, path);
+    let killed = false;
+    ledger.onKill(() => {
+      killed = true;
+    });
+    rmSync(path, { force: true });
+    rmSync(directory, { recursive: true, force: true });
+    writeFileSync(directory, 'not a directory');
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
-      const l = new SpendLedger(caps, dir);
-      expect(l.snapshot().dailyUsd).toBe(0);
-      expect(err).toHaveBeenCalledTimes(1);
-      expect(err.mock.calls[0]![0]).toMatch(/ledger load failed/);
+      const reservation = ledger.reserve();
+      expect(reservation).toMatchObject({ ok: false, reason: 'ledger persistence unavailable' });
+      expect(killed).toBe(true);
+      expect(ledger.snapshot()).toMatchObject({
+        killed: true,
+        persistenceReady: false,
+        active: 0,
+        reserved: 0,
+      });
     } finally {
-      err.mockRestore();
+      error.mockRestore();
+      rmSync(directory, { force: true });
+    }
+  });
+
+  it('fails closed on a non-ENOENT ledger read error', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'covenant-ledger-dir-'));
+    try {
+      expect(() => new SpendLedger(caps, dir)).toThrow(/ledger load failed/);
+    } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it("malformed ledger file logs a parse error and starts fresh", () => {
+  it('fails closed on a malformed ledger file', () => {
     const path = join(tmpdir(), `covenant-ledger-bad-${Date.now()}.json`);
-    writeFileSync(path, "{ not valid json");
-    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    writeFileSync(path, '{ not valid json');
     try {
-      const l = new SpendLedger(caps, path);
-      expect(l.snapshot().dailyUsd).toBe(0);
-      expect(err).toHaveBeenCalledTimes(1);
-      expect(err.mock.calls[0]![0]).toMatch(/ledger parse failed/);
+      expect(() => new SpendLedger(caps, path)).toThrow(/ledger parse failed/);
     } finally {
-      err.mockRestore();
       rmSync(path, { force: true });
     }
   });
@@ -236,8 +307,8 @@ describe("SpendLedger", () => {
       const r1 = before.reserve();
       const r2 = before.reserve();
       expect(r1.ok && r2.ok).toBe(true);
-      if (r1.ok) before.commit(r1.id, r1.max, 1.25, "completed");
-      if (r2.ok) before.commit(r2.id, r2.max, 0.5, "failed");
+      if (r1.ok) before.commit(r1.id, r1.max, 1.25, 'completed');
+      if (r2.ok) before.commit(r2.id, r2.max, 0.5, 'failed');
       // a fresh ledger sharing the path = a restart: it reloads spend + outcomes
       const after = new SpendLedger(caps, path);
       expect(after.snapshot().dailyUsd).toBeCloseTo(1.75);
@@ -249,11 +320,7 @@ describe("SpendLedger", () => {
     }
   });
 
-  it("reinstates unexpired pending reservations on restart (failure mode #1)", () => {
-    // Mid-run crash: reserve was persisted, commit never ran. A fresh ledger
-    // must treat the leftover microVM as a live reservation against the cap,
-    // otherwise the restart admits a fresh max-spend wave on top of the wallet
-    // still burning at the provider.
+  it('charges crashed reservations at their full maximum on restart', () => {
     const path = join(tmpdir(), `covenant-ledger-warm-${Date.now()}.json`);
     let mockNow = 1_000_000_000_000;
     const tinyCaps: BudgetCaps = { ...caps, dailyUsd: 4, maxConcurrent: 2, wallMs: 60_000 };
@@ -264,21 +331,21 @@ describe("SpendLedger", () => {
       expect(r1.ok && r2.ok).toBe(true);
       // crash: skip commit on both
 
-      // 30s later — both pending entries are unexpired (deadline at +60s)
       mockNow += 30_000;
       const after = new SpendLedger(tinyCaps, path, () => mockNow);
       const snap = after.snapshot();
-      expect(snap.reserved).toBe(4);
-      expect(snap.active).toBe(2);
-      // The concurrency cap and the daily cap are both saturated — no fresh
-      // admission until the leftover deadlines pass or an operator clears them.
+      expect(snap.reserved).toBe(0);
+      expect(snap.active).toBe(0);
+      expect(snap.dailyUsd).toBe(4);
+      expect(snap.monthlyUsd).toBe(4);
+      expect(snap.outcomes.failed).toBe(2);
       expect(after.reserve().ok).toBe(false);
     } finally {
       rmSync(path, { force: true });
     }
   });
 
-  it("prunes expired pending entries on boot so a clean shutdown doesn't wedge restart (failure mode #2)", () => {
+  it('charges crashed reservations even after their wall deadline', () => {
     const path = join(tmpdir(), `covenant-ledger-expire-${Date.now()}.json`);
     let mockNow = 1_000_000_000_000;
     const tinyCaps: BudgetCaps = { ...caps, wallMs: 60_000 };
@@ -287,19 +354,14 @@ describe("SpendLedger", () => {
       const r = before.reserve();
       expect(r.ok).toBe(true);
 
-      // 2x wallMs later — every microVM that admission could have spawned has
-      // self-destructed; restart MUST drop the marker, not pin admission at 0.
       mockNow += 120_000;
       const after = new SpendLedger(tinyCaps, path, () => mockNow);
       const snap = after.snapshot();
       expect(snap.reserved).toBe(0);
       expect(snap.active).toBe(0);
+      expect(snap.dailyUsd).toBe(2);
       expect(after.reserve().ok).toBe(true);
-      // The pruned state is persisted to disk so a third boot doesn't replay
-      // the expired markers.
-      const onDisk = JSON.parse(readFileSync(path, "utf8")) as { pending: unknown[] };
-      // After the post-prune reserve() the file contains exactly the new run,
-      // never the expired stub from the crashed run.
+      const onDisk = JSON.parse(readFileSync(path, 'utf8')) as { pending: unknown[] };
       expect(Array.isArray(onDisk.pending)).toBe(true);
       expect(onDisk.pending.length).toBe(1);
     } finally {
@@ -307,13 +369,7 @@ describe("SpendLedger", () => {
     }
   });
 
-  it("treats a pending deadline equal to the boot clock as expired (exclusive deadline boundary)", () => {
-    // The +30s/+120s warm-recovery tests above straddle the deadline but never
-    // land on it. restorePending keeps an entry only while deadlineEpochMs > now,
-    // so at exactly the deadline millisecond the reservation must prune (its
-    // wall-clock ceiling has been reached and the microVM has self-destructed),
-    // while one millisecond earlier it is still live. A `> -> >=` slip would
-    // wrongly reinstate a finished run as live admission capacity at the boundary.
+  it('does not let pending deadlines alter conservative crash accounting', () => {
     const tinyCaps: BudgetCaps = { ...caps, wallMs: 60_000 };
     const T = 1_000_000_000_000;
     const seed = (path: string) => {
@@ -329,73 +385,65 @@ describe("SpendLedger", () => {
       const atDeadline = new SpendLedger(tinyCaps, atPath, () => T + 60_000).snapshot();
       expect(atDeadline.reserved).toBe(0);
       expect(atDeadline.active).toBe(0);
+      expect(atDeadline.dailyUsd).toBe(tinyCaps.perRunUsdMax);
 
       const oneMsEarlier = new SpendLedger(tinyCaps, ltPath, () => T + 60_000 - 1).snapshot();
-      expect(oneMsEarlier.reserved).toBe(tinyCaps.perRunUsdMax);
-      expect(oneMsEarlier.active).toBe(1);
+      expect(oneMsEarlier.reserved).toBe(0);
+      expect(oneMsEarlier.active).toBe(0);
+      expect(oneMsEarlier.dailyUsd).toBe(tinyCaps.perRunUsdMax);
     } finally {
       rmSync(atPath, { force: true });
       rmSync(ltPath, { force: true });
     }
   });
 
-  it("removes the pending entry on commit so the file does not grow per-run (failure mode #3)", () => {
+  it('removes the pending entry on commit so the file does not grow per-run (failure mode #3)', () => {
     const path = join(tmpdir(), `covenant-ledger-purge-${Date.now()}.json`);
     try {
       const l = new SpendLedger(caps, path);
       for (let i = 0; i < 3; i++) {
         const r = l.reserve();
         expect(r.ok).toBe(true);
-        if (r.ok) l.commit(r.id, r.max, 0.1, "completed");
+        if (r.ok) l.commit(r.id, r.max, 0.1, 'completed');
       }
-      const onDisk = JSON.parse(readFileSync(path, "utf8")) as { pending: unknown[] };
+      const onDisk = JSON.parse(readFileSync(path, 'utf8')) as { pending: unknown[] };
       expect(onDisk.pending).toEqual([]);
     } finally {
       rmSync(path, { force: true });
     }
   });
 
-  it("CODER_LEDGER_RESET_PENDING=1 drops every pending reservation at boot (operator override)", () => {
+  it('does not let an environment override discard crashed spend', () => {
     const path = join(tmpdir(), `covenant-ledger-reset-${Date.now()}.json`);
     let mockNow = 1_000_000_000_000;
     try {
       const before = new SpendLedger(caps, path, () => mockNow);
       const r = before.reserve();
       expect(r.ok).toBe(true);
-      // Operator detects a crash-loop wedge and forces a clean slate.
-      process.env.CODER_LEDGER_RESET_PENDING = "1";
-      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-      try {
-        const after = new SpendLedger(caps, path, () => mockNow);
-        expect(after.snapshot().reserved).toBe(0);
-        expect(after.snapshot().active).toBe(0);
-        expect(after.reserve().ok).toBe(true);
-        expect(warn).toHaveBeenCalledWith(
-          expect.stringContaining("CODER_LEDGER_RESET_PENDING"),
-        );
-      } finally {
-        warn.mockRestore();
-      }
+      process.env.CODER_LEDGER_RESET_PENDING = '1';
+      const after = new SpendLedger(caps, path, () => mockNow);
+      expect(after.snapshot().dailyUsd).toBe(caps.perRunUsdMax);
+      expect(after.snapshot().outcomes.failed).toBe(1);
     } finally {
       rmSync(path, { force: true });
     }
   });
 
-  it("refuses to boot when caps.wallMs is non-positive — silently disabling warm recovery would be worse than crash-loud", () => {
+  it('refuses to boot when caps.wallMs is non-positive — silently disabling warm recovery would be worse than crash-loud', () => {
     expect(() => new SpendLedger({ ...caps, wallMs: 0 })).toThrow(/wallMs/i);
     expect(() => new SpendLedger({ ...caps, wallMs: -1 })).toThrow(/wallMs/i);
     expect(() => new SpendLedger({ ...caps, wallMs: Number.NaN })).toThrow(/wallMs/i);
   });
 
-  it("a clean-state boot does not rewrite LEDGER_PATH (no crash-loop disk amplification)", () => {
+  it('a clean-state boot does not rewrite LEDGER_PATH (no crash-loop disk amplification)', () => {
     const path = join(tmpdir(), `covenant-ledger-clean-boot-${Date.now()}.json`);
     try {
       // Seed a clean file: spend committed, pending empty (the steady state).
       const seed = new SpendLedger(caps, path);
       const r = seed.reserve();
       expect(r.ok).toBe(true);
-      if (r.ok) seed.commit(r.id, r.max, 0.5, "completed");
-      const before = readFileSync(path, "utf8");
+      if (r.ok) seed.commit(r.id, r.max, 0.5, 'completed');
+      const before = readFileSync(path, 'utf8');
 
       // Booting on an already-clean ledger must NOT rewrite the file —
       // a crash-loop would otherwise pound the persistent disk every restart.
@@ -408,14 +456,14 @@ describe("SpendLedger", () => {
       const fresh = new SpendLedger(caps, path);
       const snap = fresh.snapshot();
       expect(snap.dailyUsd).toBeCloseTo(0.5); // load happened
-      const after = readFileSync(path, "utf8");
+      const after = readFileSync(path, 'utf8');
       expect(after).toBe(tag); // file untouched — no clean-boot save()
     } finally {
       rmSync(path, { force: true });
     }
   });
 
-  it("ignores garbage entries in the persisted pending array", () => {
+  it('fails closed on garbage entries in the persisted pending array', () => {
     const path = join(tmpdir(), `covenant-ledger-garbage-${Date.now()}.json`);
     try {
       writeFileSync(
@@ -429,20 +477,18 @@ describe("SpendLedger", () => {
           pending: [
             null,
             { id: 42, reservedMax: 1, deadlineEpochMs: Date.now() + 60_000 },
-            { id: "ok", reservedMax: 1, deadlineEpochMs: Date.now() + 60_000 },
-            "string",
+            { id: 'ok', reservedMax: 1, deadlineEpochMs: Date.now() + 60_000 },
+            'string',
           ],
         }),
       );
-      const l = new SpendLedger(caps, path);
-      expect(l.snapshot().active).toBe(1);
-      expect(l.snapshot().reserved).toBe(1);
+      expect(() => new SpendLedger(caps, path)).toThrow(/invalid pending reservation/);
     } finally {
       rmSync(path, { force: true });
     }
   });
 
-  it("discards a persisted daily counter from a previous day so a new-day boot gets a fresh daily cap", () => {
+  it('discards a persisted daily counter from a previous day so a new-day boot gets a fresh daily cap', () => {
     // The daily tally is a same-day counter: a restart on a new day must start at
     // $0, not inherit yesterday's spend (which would silently eat today's headroom).
     // month is held at the current month so this isolates the day-equality guard
@@ -453,7 +499,7 @@ describe("SpendLedger", () => {
       writeFileSync(
         path,
         JSON.stringify({
-          day: "2000-01-01", // a day that is never today
+          day: '2000-01-01', // a day that is never today
           month,
           dailyUsd: 5,
           monthlyUsd: 5,
@@ -469,7 +515,7 @@ describe("SpendLedger", () => {
     }
   });
 
-  it("discards a persisted monthly counter from a previous month so a new-month boot gets a fresh monthly cap", () => {
+  it('discards a persisted monthly counter from a previous month so a new-month boot gets a fresh monthly cap', () => {
     // Symmetric to the daily case at the month granularity: a boot in a new month
     // must not inherit last month's spend against the monthly cap, while the daily
     // tally still restores when the persisted day matches today.
@@ -480,7 +526,7 @@ describe("SpendLedger", () => {
         path,
         JSON.stringify({
           day,
-          month: "2000-01", // a month that is never now
+          month: '2000-01', // a month that is never now
           dailyUsd: 3,
           monthlyUsd: 99,
           outcomes: { completed: 0, failed: 0, cancelled: 0 },
@@ -495,11 +541,7 @@ describe("SpendLedger", () => {
     }
   });
 
-  it("rejects a non-numeric persisted daily counter instead of poisoning the cap arithmetic", () => {
-    // A truncated/corrupt ledger could carry a string (or null) where a USD number
-    // is expected. Assigning it would make every subsequent cap comparison operate
-    // on a non-number (NaN/string concat), so the typeof guard must drop it and
-    // keep the in-memory counter a real number starting from $0.
+  it('fails closed on a non-numeric persisted counter', () => {
     const path = join(tmpdir(), `covenant-ledger-corrupt-${Date.now()}.json`);
     const day = new Date().toISOString().slice(0, 10);
     const month = new Date().toISOString().slice(0, 7);
@@ -509,39 +551,37 @@ describe("SpendLedger", () => {
         JSON.stringify({
           day,
           month,
-          dailyUsd: "5", // corrupt: a string where a number is required
+          dailyUsd: '5', // corrupt: a string where a number is required
           monthlyUsd: 0,
           outcomes: { completed: 0, failed: 0, cancelled: 0 },
           pending: [],
         }),
       );
-      const snap = new SpendLedger(caps, path).snapshot();
-      expect(snap.dailyUsd).toBe(0); // the string was rejected, not assigned through
-      expect(typeof snap.dailyUsd).toBe("number");
+      expect(() => new SpendLedger(caps, path)).toThrow(/schema is invalid/);
     } finally {
       rmSync(path, { force: true });
     }
   });
 });
 
-describe("sandboxCostUsd", () => {
+describe('sandboxCostUsd', () => {
   // The completion commit charges modelCostUsd(model, usage) + sandboxCostUsd(seconds)
   // (server.ts), and that sum is what the daily/monthly caps meter — so the
   // sandbox term bounds how long a run can burn wall clock before admission refuses.
-  it("charges nothing for a zero-second run", () => {
+  it('charges nothing for a zero-second run', () => {
     // The cheapest `*`->`+` tripwire: 0 * rate is 0, but 0 + rate would bill a
     // flat per-second charge on a run that used no sandbox time at all.
     expect(sandboxCostUsd(0)).toBe(0);
   });
 
-  it("scales linearly with wall-clock seconds", () => {
+  it('scales linearly with wall-clock seconds', () => {
     // (2s)*rate == 2*(s*rate) but (2s)+rate != 2*(s+rate): linearity catches a
     // `+` or otherwise non-linear mutation without depending on the exact rate.
     expect(sandboxCostUsd(7200)).toBeCloseTo(2 * sandboxCostUsd(3600));
     expect(sandboxCostUsd(3600)).toBeGreaterThan(0);
   });
 
-  it("meters at the configured default rate of $0.0001/s", () => {
+  it('meters at the configured default rate of $0.0001/s', () => {
     // A zeroed/garbled CODER_SANDBOX_USD_PER_SEC would silently stop metering
     // sandbox wall-clock entirely. Pin the default against an independent
     // constant (10000s -> $1), not a config-derived self-check.

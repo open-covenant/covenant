@@ -170,11 +170,13 @@ The signer verifies the stored challenge, wallet signature, challenge freshness,
 
 ```json
 {
-  "pullRequestNumber": 23
+  "pullRequestNumber": 23,
+  "reviewedHeadSha": "<reviewed-pr-head-sha>",
+  "reviewedDiffHash": "<sha256-of-reviewed-diff>"
 }
 ```
 
-The signer queries the fixed official GitHub GraphQL endpoint using its own read-only credential. It verifies repository, bound author, authorization time, merge state, merge commit, authoritative closing-issue references, and merge time. Release is rejected when finalized chain time is at or after `claimExpiresAt`. The caller cannot supply a merge receipt; the signer derives and persists it before signing.
+The signer queries the fixed official GitHub GraphQL and REST endpoints using a dedicated GitHub App. It discovers the installation for the exact repository and mints a short-lived token restricted to that repository with read-only contents, issues, metadata, and pull-request permissions. It verifies repository, bound author, authorization time, merge state, merge commit, authoritative closing-issue references, merge time, exact reviewed head, and the SHA-256 commitment of the reviewed diff. It brackets the diff read with matching merge-evidence snapshots. Release is rejected when finalized chain time is at or after `claimExpiresAt`. The caller cannot supply a merge receipt; the signer derives and persists it before signing.
 
 ### `POST /v1/escrows/:operationId/refund`
 
@@ -197,7 +199,7 @@ Returns the durable operation state without exposing signed wire bytes or intern
 
 Returns independently observed finalized refund capacity after subtracting every outstanding registered liability and the consumed rolling liability limit. A liability remains pending while its refund is prepared, submitted, or reconciling and is removed only after finalized refund state, preventing double subtraction. The authenticated response includes `refundTreasury`, `refundMint`, `refundDecimals`, `finalizedBalanceRaw`, `pendingRefundRaw`, `treasuryAvailableRefundRaw`, `remainingRefundLimitUsdCents`, and `availableRefundRaw`; raw amounts are decimal strings. `availableRefundRaw` is the lower of protected treasury capacity and rolling-limit capacity. Dependency or RPC disagreement returns HTTP 503 with `healthy: false`.
 
-Readiness is healthy only when the database, both RPC providers, both named price observations, the signer-owned GitHub credential, the immutable pinned escrow program, refund-token custody, and bounty custody all pass a fresh probe.
+Readiness is healthy only when the database, both RPC providers, both named price observations, the configured GitHub App identity and read-only permission contract, the immutable pinned escrow program, refund-token custody, and bounty custody all pass a fresh probe. Repository installation access is checked separately whenever repository evidence is requested.
 
 ### `GET /v1/readiness/evidence`
 
@@ -220,13 +222,13 @@ pnpm build
 
 Mock adapters are available to the test suite through dependency injection. The HTTP entry point intentionally cannot start with them. Local server testing therefore requires local Postgres, RPC, signer, asset, program, and price-service configuration.
 
-Production requires Postgres, distinct refund and escrow Solana keys, the controlled refund-token treasury, a separately budgeted SOL escrow pool, the escrow program configuration, two independent Solana RPC providers, two independent price endpoints, and a read-only GitHub credential. Production primary and secondary providers must use different hostnames; different paths or credentials on one hostname do not establish independence. Remote database connections must require TLS except for Render's single-label `dpg-*` private-network host; RPC and price endpoints must use HTTPS unless they target loopback. Database migrations and one full dependency probe run at startup. A degraded startup is reported through stderr and HTTP 503 readiness while the process remains available for durable recovery and already-authorized refund work. Use a database role scoped only to the signer schema.
+Production requires Postgres, distinct refund and escrow Solana keys, the controlled refund-token treasury, a separately budgeted SOL escrow pool, the escrow program configuration, two independent Solana RPC providers, two independent price endpoints, and a dedicated public GitHub App that external maintainers can install. The App must grant only read access to contents, issues, metadata, and pull requests. Production primary and secondary providers must use different hostnames; different paths or credentials on one hostname do not establish independence. Remote database connections must require TLS except for Render's single-label `dpg-*` private-network host; RPC and price endpoints must use HTTPS unless they target loopback. Database migrations and one full dependency probe run at startup. A degraded startup is reported through stderr and HTTP 503 readiness while the process remains available for durable recovery and already-authorized refund work. Use a database role scoped only to the signer schema.
 
 Every Solana JSON-RPC HTTP request from both independent connections is capped by `MIZUKI_SIGNER_RPC_TIMEOUT_MS`. The default and production Blueprint value are `5000`; configuration rejects values below `1000` or above `10000`. Caller cancellation is preserved, RPC timeouts and HTTP 429/5xx responses become retryable policy failures, and web3's internal rate-limit retry is disabled so only the single scheduled recovery runner retries durable work.
 
 Shutdown stops recovery scheduling and new HTTP intake, waits at most 30 seconds for the one active recovery, then lets active HTTP requests drain. The database pool closes only after recovery and HTTP work have settled, so teardown cannot race a live leased mutation. If recovery misses the grace, HTTP connections are forced closed, pool closure is skipped, and the process exits non-zero; the operating system closes its sockets and the durable lease is recovered after restart. A 90-second process deadline keeps the complete SIGTERM path below Render's 120-second termination window.
 
-Required production settings without defaults are `MIZUKI_SIGNER_AUTH_TOKEN`, `MIZUKI_SIGNER_DATABASE_URL`, `MIZUKI_SIGNER_RPC_URL`, `MIZUKI_SIGNER_SECONDARY_RPC_URL`, `MIZUKI_REFUND_PRIVATE_KEY_JSON`, `MIZUKI_ESCROW_PRIVATE_KEY_JSON`, `MIZUKI_SIGNER_GITHUB_TOKEN`, `MIZUKI_JOB_AUTHORITY_PUBLIC_KEY`, `MIZUKI_REFUND_TREASURY`, `MIZUKI_ESCROW_AUTHORITY`, `MIZUKI_REFUND_MINT`, `MIZUKI_ESCROW_PROGRAM_ID`, `MIZUKI_ESCROW_PROGRAM_DATA_SHA256`, `MIZUKI_SOL_USD_PRICE_URL`, and `MIZUKI_SOL_USD_SECONDARY_PRICE_URL`. Set `NODE_ENV=production` and `MIZUKI_SIGNER_MOCK_MODE=false`. Either price token is optional when its endpoint does not authenticate requests. Every bounded policy setting and its default is recorded in `.env.example`; production operators should set them explicitly rather than relying on defaults.
+Required production settings without defaults are `MIZUKI_SIGNER_AUTH_TOKEN`, `MIZUKI_SIGNER_DATABASE_URL`, `MIZUKI_SIGNER_RPC_URL`, `MIZUKI_SIGNER_SECONDARY_RPC_URL`, `MIZUKI_REFUND_PRIVATE_KEY_JSON`, `MIZUKI_ESCROW_PRIVATE_KEY_JSON`, `MIZUKI_SIGNER_GITHUB_APP_ID`, `MIZUKI_SIGNER_GITHUB_PRIVATE_KEY`, `MIZUKI_JOB_AUTHORITY_PUBLIC_KEY`, `MIZUKI_REFUND_TREASURY`, `MIZUKI_ESCROW_AUTHORITY`, `MIZUKI_REFUND_MINT`, `MIZUKI_ESCROW_PROGRAM_ID`, `MIZUKI_ESCROW_PROGRAM_DATA_SHA256`, `MIZUKI_SOL_USD_PRICE_URL`, and `MIZUKI_SOL_USD_SECONDARY_PRICE_URL`. The GitHub private-key value must be the literal RSA PEM generated for the dedicated App. Set `NODE_ENV=production` and `MIZUKI_SIGNER_MOCK_MODE=false`. Either price token is optional when its endpoint does not authenticate requests. Every bounded policy setting and its default is recorded in `.env.example`; production operators should set them explicitly rather than relying on defaults.
 
 ## Devnet artifact canary
 
@@ -249,7 +251,7 @@ pnpm --filter @covenant/mizuki-policy-signer canary:devnet -- \
   --output /evidence/mizuki-devnet-dry-run.json
 ```
 
-The gate checks the authoritative devnet genesis hash, the loader-v3 deployment, byte-for-byte equality between finalized program data and the supplied SBPFv3 artifact, role separation, rent, funding capacity, and fresh PDA addresses. Add `--execute` and choose a new output path only after reviewing the dry-run receipt.
+The gate checks the authoritative devnet genesis hash, the upgradeable-loader-v3 deployment, byte-for-byte equality between finalized program data and the supplied SBPFv2 artifact, role separation, rent, funding capacity, and fresh PDA addresses. Add `--execute` and choose a new output path only after reviewing the dry-run receipt.
 
 The live sequence publishes finalized transactions for prefunded-PDA adoption, fund, bind, exact release, wrong-claimant rejection, release replay rejection, fund replay rejection, expired-release rejection, bound expiry refund, and unbound expiry refund. It proves state and vault closure, the permanent guard commitment, transaction-level principal deltas, and exact refund accounting. The resulting mode-`0600` JSON omits RPC URLs, key paths, wallet addresses, balances, error logs, and all private material. It includes public signatures, bounty digests, the program ID, artifact provenance, assertion results, and a SHA-256 of the receipt payload. The runner refuses to overwrite an existing receipt.
 
@@ -263,7 +265,7 @@ The live sequence publishes finalized transactions for prefunded-PDA adoption, f
 - Alert on `reconciling`, `daily_limit_exceeded`, RPC disagreement, and stale price observations.
 - Back up Postgres continuously; the operation rows are part of the payment proof.
 - Rotate the bearer token independently of the transaction key.
-- Give the GitHub token public-repository metadata read access only; it does not need content writes, administration, or workflow access.
+- Keep the GitHub App private key in the signer only, rotate it independently, and install the public App only on repositories that explicitly request work. The signer rejects App or installation write permissions and downscopes every installation token to one repository.
 - Finalize the escrow program before enabling the signer. Pin the SHA-256 of the dumped executable bytes only after reviewing the deployment and repeating escrow canaries.
 
 ## Mainnet gate
@@ -277,4 +279,6 @@ Do not enable public jobs until the transaction canaries have finalized and ever
 5. Concurrent duplicate requests producing one durable operation and one economic effect.
 6. A deliberate price-feed disagreement failing closed without reserving or signing an escrow.
 7. A staged RPC custody disagreement returning unhealthy readiness without reserving or signing.
-8. A rejected GitHub signer credential returning unhealthy readiness while refund recovery remains available.
+8. A rejected or mismatched GitHub App identity returning unhealthy readiness while refund recovery remains available.
+9. A missing external-repository App installation failing closed before merge evidence is read.
+10. A forced installation-token 401 showing cache invalidation, one bounded refresh, and no write-scoped credential.

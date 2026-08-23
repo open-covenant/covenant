@@ -4,6 +4,7 @@ export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
 const MAX_BODY_BYTES = 64_000;
+const MAX_WEBHOOK_BODY_BYTES = 1_000_000;
 
 const forwardedRequestHeaders = [
   'accept',
@@ -14,6 +15,8 @@ const forwardedRequestHeaders = [
   'last-event-id',
   'payment-signature',
 ];
+
+const githubWebhookHeaders = ['x-github-delivery', 'x-github-event', 'x-hub-signature-256'];
 
 const forwardedResponseHeaders = [
   'cache-control',
@@ -35,6 +38,8 @@ async function proxy(
 
   const source = new URL(request.url);
   const pathname = path.map((part) => encodeURIComponent(part)).join('/');
+  const webhook = path.length === 3 && path.join('/') === 'v1/github/webhook';
+  const maxBodyBytes = webhook ? MAX_WEBHOOK_BODY_BYTES : MAX_BODY_BYTES;
   const apiBaseUrl = (process.env.MIZUKI_API_URL || 'http://127.0.0.1:8787').replace(/\/$/, '');
   const target = `${apiBaseUrl}/${pathname}${source.search}`;
   const proxySecret = process.env.MIZUKI_WEB_PROXY_SECRET;
@@ -43,8 +48,8 @@ async function proxy(
   }
 
   const forwardsBody = request.method !== 'GET' && request.method !== 'HEAD';
-  if (forwardsBody && declaredBodyBytes(request.headers.get('content-length')) > MAX_BODY_BYTES) {
-    return bodyTooLarge();
+  if (forwardsBody && declaredBodyBytes(request.headers.get('content-length')) > maxBodyBytes) {
+    return bodyTooLarge(maxBodyBytes);
   }
 
   const headers = new Headers();
@@ -52,14 +57,20 @@ async function proxy(
     const value = request.headers.get(name);
     if (value) headers.set(name, value);
   }
+  if (webhook) {
+    for (const name of githubWebhookHeaders) {
+      const value = request.headers.get(name);
+      if (value) headers.set(name, value);
+    }
+  }
   headers.set('x-mizuki-proxy-secret', proxySecret);
   headers.set('x-mizuki-forwarded-proto', publicScheme(source));
   const clientIp = renderClientIp(request.headers.get('cf-connecting-ip'));
   if (clientIp) headers.set('x-mizuki-client-ip', clientIp);
 
   try {
-    const buffered = forwardsBody ? await boundedBody(request) : { body: undefined };
-    if ('tooLarge' in buffered) return bodyTooLarge();
+    const buffered = forwardsBody ? await boundedBody(request, maxBodyBytes) : { body: undefined };
+    if ('tooLarge' in buffered) return bodyTooLarge(maxBodyBytes);
     const upstream = await fetch(target, {
       method: request.method,
       headers,
@@ -107,6 +118,7 @@ function declaredBodyBytes(value: string | null): number {
 
 async function boundedBody(
   request: Request,
+  maxBytes: number,
 ): Promise<{ body: ArrayBuffer | undefined } | { tooLarge: true }> {
   if (!request.body) return { body: undefined };
 
@@ -117,7 +129,7 @@ async function boundedBody(
     const { done, value } = await reader.read();
     if (done) break;
     length += value.byteLength;
-    if (length > MAX_BODY_BYTES) {
+    if (length > maxBytes) {
       await reader.cancel().catch(() => undefined);
       return { tooLarge: true };
     }
@@ -133,8 +145,8 @@ async function boundedBody(
   return { body: body.buffer };
 }
 
-function bodyTooLarge(): Response {
-  return Response.json({ error: `Request body exceeds ${MAX_BODY_BYTES} bytes` }, { status: 413 });
+function bodyTooLarge(maxBytes: number): Response {
+  return Response.json({ error: `Request body exceeds ${maxBytes} bytes` }, { status: 413 });
 }
 
 function renderClientIp(value: string | null): string | undefined {

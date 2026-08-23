@@ -102,6 +102,17 @@ export type RescueBounty = {
     approved: boolean;
     reason: string;
     reviewedAt: string;
+    headSha: string;
+    baseSha: string;
+    baseRef: string;
+    diffHash: string;
+    provider?: {
+      model: string;
+      route: 'marketplace';
+      providerId?: string;
+      requestId?: string;
+      costMicrounits?: string;
+    };
   };
   dispute?: BountyDispute;
   claimHistory: readonly BountyClaim[];

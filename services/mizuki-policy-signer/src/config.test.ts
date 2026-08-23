@@ -1,9 +1,17 @@
+import { generateKeyPairSync } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { assertServerMode, loadConfig } from './config.js';
 
 const TOKEN = 'test-token-with-at-least-thirty-two-characters';
 const USDC = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+const GITHUB_PRIVATE_KEY = generateKeyPairSync('rsa', { modulusLength: 2_048 })
+  .privateKey.export({ format: 'pem', type: 'pkcs8' })
+  .toString();
+const GITHUB_APP = {
+  MIZUKI_SIGNER_GITHUB_APP_ID: '12345',
+  MIZUKI_SIGNER_GITHUB_PRIVATE_KEY: GITHUB_PRIVATE_KEY,
+};
 
 describe('signer configuration', () => {
   it('allows mock mode only on a non-production loopback listener', () => {
@@ -82,13 +90,15 @@ describe('signer configuration', () => {
   });
 
   it('fails closed when production dependencies are absent', () => {
-    expect(() =>
+    const load = () =>
       loadConfig({
         NODE_ENV: 'production',
         MIZUKI_SIGNER_AUTH_TOKEN: TOKEN,
         MIZUKI_SIGNER_MOCK_MODE: 'false',
-      }),
-    ).toThrow('Missing production signer settings');
+      });
+    expect(load).toThrow('Missing production signer settings');
+    expect(load).toThrow('MIZUKI_SIGNER_GITHUB_APP_ID');
+    expect(load).toThrow('MIZUKI_SIGNER_GITHUB_PRIVATE_KEY');
   });
 
   it('requires HTTPS RPC and price feeds in production', () => {
@@ -101,7 +111,7 @@ describe('signer configuration', () => {
       MIZUKI_SIGNER_SECONDARY_RPC_URL: 'https://rpc-secondary.internal',
       MIZUKI_REFUND_PRIVATE_KEY_JSON: `[${Array(64).fill(0).join(',')}]`,
       MIZUKI_ESCROW_PRIVATE_KEY_JSON: `[${Array(64).fill(1).join(',')}]`,
-      MIZUKI_SIGNER_GITHUB_TOKEN: 'github-read-only-test-token',
+      ...GITHUB_APP,
       MIZUKI_JOB_AUTHORITY_PUBLIC_KEY: '5'.repeat(32),
       MIZUKI_REFUND_TREASURY: '2'.repeat(32),
       MIZUKI_ESCROW_AUTHORITY: '6'.repeat(32),
@@ -141,7 +151,7 @@ describe('signer configuration', () => {
         MIZUKI_SIGNER_SECONDARY_RPC_URL: 'https://rpc-secondary.internal',
         MIZUKI_REFUND_PRIVATE_KEY_JSON: `[${Array(64).fill(0).join(',')}]`,
         MIZUKI_ESCROW_PRIVATE_KEY_JSON: `[${Array(64).fill(1).join(',')}]`,
-        MIZUKI_SIGNER_GITHUB_TOKEN: 'github-read-only-test-token',
+        ...GITHUB_APP,
         MIZUKI_JOB_AUTHORITY_PUBLIC_KEY: '5'.repeat(32),
         MIZUKI_REFUND_TREASURY: '2'.repeat(32),
         MIZUKI_ESCROW_AUTHORITY: '6'.repeat(32),
@@ -164,7 +174,7 @@ describe('signer configuration', () => {
       MIZUKI_SIGNER_SECONDARY_RPC_URL: 'https://rpc-secondary.internal',
       MIZUKI_REFUND_PRIVATE_KEY_JSON: `[${Array(64).fill(0).join(',')}]`,
       MIZUKI_ESCROW_PRIVATE_KEY_JSON: `[${Array(64).fill(1).join(',')}]`,
-      MIZUKI_SIGNER_GITHUB_TOKEN: 'github-read-only-test-token',
+      ...GITHUB_APP,
       MIZUKI_JOB_AUTHORITY_PUBLIC_KEY: '5'.repeat(32),
       MIZUKI_REFUND_TREASURY: '2'.repeat(32),
       MIZUKI_ESCROW_AUTHORITY: '6'.repeat(32),
@@ -189,7 +199,7 @@ describe('signer configuration', () => {
           MIZUKI_SIGNER_SECONDARY_RPC_URL: 'https://rpc-secondary.internal',
           MIZUKI_REFUND_PRIVATE_KEY_JSON: `[${Array(64).fill(0).join(',')}]`,
           MIZUKI_ESCROW_PRIVATE_KEY_JSON: `[${Array(64).fill(1).join(',')}]`,
-          MIZUKI_SIGNER_GITHUB_TOKEN: 'github-read-only-test-token',
+          ...GITHUB_APP,
           MIZUKI_JOB_AUTHORITY_PUBLIC_KEY: '5'.repeat(32),
           MIZUKI_REFUND_TREASURY: '2'.repeat(32),
           MIZUKI_ESCROW_AUTHORITY: '6'.repeat(32),
@@ -213,7 +223,7 @@ describe('signer configuration', () => {
       MIZUKI_SIGNER_SECONDARY_RPC_URL: 'https://rpc-secondary.internal',
       MIZUKI_REFUND_PRIVATE_KEY_JSON: `[${Array(64).fill(0).join(',')}]`,
       MIZUKI_ESCROW_PRIVATE_KEY_JSON: `[${Array(64).fill(1).join(',')}]`,
-      MIZUKI_SIGNER_GITHUB_TOKEN: 'github-read-only-test-token',
+      ...GITHUB_APP,
       MIZUKI_JOB_AUTHORITY_PUBLIC_KEY: '5'.repeat(32),
       MIZUKI_REFUND_TREASURY: '2'.repeat(32),
       MIZUKI_ESCROW_AUTHORITY: '6'.repeat(32),
@@ -225,6 +235,12 @@ describe('signer configuration', () => {
     };
 
     expect(loadConfig(base).refundMint).toBe(USDC);
+    expect(() =>
+      loadConfig({ ...base, MIZUKI_SIGNER_GITHUB_PRIVATE_KEY: 'x'.repeat(100) }),
+    ).toThrow('MIZUKI_SIGNER_GITHUB_PRIVATE_KEY must be an RSA private key in PEM form');
+    expect(() =>
+      loadConfig({ ...base, MIZUKI_SIGNER_GITHUB_APP_ID: '9007199254740992' }),
+    ).toThrow();
     expect(() => loadConfig({ ...base, MIZUKI_REFUND_MINT: '3'.repeat(32) })).toThrow(
       'Production refunds must use canonical mainnet USDC with six decimals',
     );
@@ -243,7 +259,7 @@ describe('signer configuration', () => {
       MIZUKI_SIGNER_SECONDARY_RPC_URL: 'https://rpc-secondary.internal',
       MIZUKI_REFUND_PRIVATE_KEY_JSON: `[${Array(64).fill(0).join(',')}]`,
       MIZUKI_ESCROW_PRIVATE_KEY_JSON: `[${Array(64).fill(1).join(',')}]`,
-      MIZUKI_SIGNER_GITHUB_TOKEN: 'github-read-only-test-token',
+      ...GITHUB_APP,
       MIZUKI_JOB_AUTHORITY_PUBLIC_KEY: '5'.repeat(32),
       MIZUKI_REFUND_TREASURY: '2'.repeat(32),
       MIZUKI_ESCROW_AUTHORITY: '6'.repeat(32),

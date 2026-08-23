@@ -234,13 +234,24 @@ export interface ArtifactVerifier {
   verify(url: string, expectedHash: string, expectedSize: number): Promise<ArtifactVerification>;
 }
 
+const releaseOrigin = 'https://github.com';
+const releaseAssetOrigin = 'https://release-assets.githubusercontent.com';
+const releaseAssetRepositoryId = '1219904470';
+const releasePath = new RegExp(
+  '^/open-covenant/covenant/releases/download/mizuki-image-[0-9a-f]{40}/manifest\\.oci\\.json$',
+);
+const releaseAssetPath = new RegExp(
+  `^/github-production-release-asset/${releaseAssetRepositoryId}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`,
+);
+const redirectStatuses = new Set([301, 302, 303, 307, 308]);
+
 export class HttpArtifactVerifier implements ArtifactVerifier {
   constructor(
     private readonly allowedOrigins: Set<string>,
     private readonly timeoutMs: number,
     private readonly maxBytes: number,
   ) {
-    if (allowedOrigins.size === 0) throw new Error('At least one artifact origin is required');
+    assertReleaseOrigins(allowedOrigins);
   }
 
   async verify(
@@ -248,38 +259,28 @@ export class HttpArtifactVerifier implements ArtifactVerifier {
     expectedHash: string,
     expectedSize: number,
   ): Promise<ArtifactVerification> {
-    const url = new URL(urlValue);
-    if (url.protocol !== 'https:' || !this.allowedOrigins.has(url.origin)) {
-      throw new UpdaterError('artifact_origin_not_allowed', 'Artifact origin is not approved', 403);
-    }
     if (expectedSize > this.maxBytes) {
       throw new UpdaterError('artifact_too_large', 'Artifact exceeds the configured size limit');
     }
-
-    let response: Response;
-    try {
-      response = await fetch(url, {
-        headers: { accept: 'application/octet-stream' },
-        redirect: 'manual',
-        signal: AbortSignal.timeout(this.timeoutMs),
-      });
-    } catch (error) {
-      throw new UpdaterError(
-        'artifact_unavailable',
-        error instanceof Error ? error.message : 'Artifact request failed',
-        503,
-        true,
-      );
+    const releaseUrl = this.releaseUrl(urlValue);
+    const redirect = await this.request(releaseUrl);
+    if (!redirectStatuses.has(redirect.status)) {
+      await redirect.body?.cancel();
+      this.throwRequestFailure(redirect, 'Artifact endpoint did not return the required redirect');
     }
-
-    if (response.status >= 500) {
-      throw new UpdaterError('artifact_unavailable', 'Artifact server failed', 503, true);
+    const location = redirect.headers.get('location');
+    await redirect.body?.cancel();
+    if (!location) {
+      throw new UpdaterError('artifact_redirect_invalid', 'Artifact redirect is invalid');
+    }
+    const assetUrl = this.releaseAssetUrl(location);
+    const response = await this.request(assetUrl);
+    if (redirectStatuses.has(response.status)) {
+      await response.body?.cancel();
+      throw new UpdaterError('artifact_redirect_limit', 'Artifact may redirect exactly once');
     }
     if (!response.ok || !response.body) {
-      throw new UpdaterError(
-        'artifact_unavailable',
-        `Artifact request returned ${response.status}`,
-      );
+      this.throwRequestFailure(response, `Artifact request returned ${response.status}`);
     }
 
     const length = response.headers.get('content-length');
@@ -320,5 +321,96 @@ export class HttpArtifactVerifier implements ArtifactVerifier {
       throw new UpdaterError('artifact_hash_mismatch', 'Artifact hash does not match manifest');
     }
     return { sha256: actualHash, sizeBytes };
+  }
+
+  private async request(url: URL): Promise<Response> {
+    try {
+      return await fetch(url, {
+        headers: { accept: 'application/octet-stream' },
+        redirect: 'manual',
+        signal: AbortSignal.timeout(this.timeoutMs),
+      });
+    } catch (error) {
+      throw new UpdaterError(
+        'artifact_unavailable',
+        error instanceof Error ? error.message : 'Artifact request failed',
+        503,
+        true,
+      );
+    }
+  }
+
+  private releaseUrl(value: string): URL {
+    const url = parseArtifactUrl(value, 'artifact_origin_not_allowed');
+    if (
+      url.origin !== releaseOrigin ||
+      !this.allowedOrigins.has(releaseOrigin) ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash ||
+      !releasePath.test(url.pathname)
+    ) {
+      throw new UpdaterError('artifact_origin_not_allowed', 'Artifact URL is not approved', 403);
+    }
+    return url;
+  }
+
+  private releaseAssetUrl(value: string): URL {
+    const url = parseArtifactUrl(value, 'artifact_redirect_invalid');
+    if (
+      url.origin !== releaseAssetOrigin ||
+      !this.allowedOrigins.has(releaseAssetOrigin) ||
+      url.username ||
+      url.password ||
+      url.hash ||
+      !releaseAssetPath.test(url.pathname) ||
+      !validReleaseAssetQuery(url.searchParams)
+    ) {
+      throw new UpdaterError('artifact_redirect_invalid', 'Artifact redirect is invalid');
+    }
+    return url;
+  }
+
+  private throwRequestFailure(response: Response, message: string): never {
+    const retryable = response.status === 408 || response.status === 429 || response.status >= 500;
+    throw new UpdaterError('artifact_unavailable', message, retryable ? 503 : 422, retryable);
+  }
+}
+
+function parseArtifactUrl(value: string, code: string): URL {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:') throw new Error('HTTPS required');
+    return url;
+  } catch {
+    throw new UpdaterError(code, 'Artifact URL is invalid', 403);
+  }
+}
+
+function validReleaseAssetQuery(query: URLSearchParams): boolean {
+  return (
+    one(query, 'sp') === 'r' &&
+    one(query, 'sr') === 'b' &&
+    one(query, 'spr') === 'https' &&
+    one(query, 'sv') !== undefined &&
+    one(query, 'se') !== undefined &&
+    one(query, 'sig') !== undefined &&
+    one(query, 'rscd') === 'attachment; filename=manifest.oci.json' &&
+    one(query, 'rsct') === 'application/octet-stream' &&
+    one(query, 'response-content-disposition') === 'attachment; filename=manifest.oci.json' &&
+    one(query, 'response-content-type') === 'application/octet-stream'
+  );
+}
+
+function one(query: URLSearchParams, key: string): string | undefined {
+  const values = query.getAll(key);
+  if (values.length !== 1 || values[0] === '') return undefined;
+  return values[0];
+}
+
+function assertReleaseOrigins(origins: Set<string>): void {
+  if (origins.size !== 2 || !origins.has(releaseOrigin) || !origins.has(releaseAssetOrigin)) {
+    throw new Error('Artifact origins must be the GitHub release and release asset origins');
   }
 }

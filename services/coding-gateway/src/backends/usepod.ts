@@ -1,4 +1,19 @@
-import type { CodingBackend, GatewayEvent, Sandbox, TokenUsage } from '../types.js';
+import { config } from '../config.js';
+import type {
+  CodingBackend,
+  GatewayEvent,
+  ProviderReceipt,
+  Sandbox,
+  TokenUsage,
+} from '../types.js';
+import {
+  boundedMaxTokens,
+  parseUsePodUsage,
+  providerReceipt,
+  usePodHeaders,
+  usePodUrl,
+  type UsePodRequestConfig,
+} from '../usepod-http.js';
 
 const MAX_TURNS = 30;
 const MAX_OUTPUT_TOKENS = 16_000;
@@ -81,9 +96,12 @@ export class UsePodBackend implements CodingBackend {
   readonly id = 'usepod' as const;
 
   constructor(
-    private readonly baseUrl = process.env.USEPOD_BASE_URL ?? 'https://api.usepod.ai/v1',
+    private readonly baseUrl = config.usePodBaseUrl,
     private readonly apiKey = process.env.USEPOD_API_KEY ?? '',
-    private readonly model = process.env.CODER_MODEL ?? 'claude-sonnet-4-6',
+    private readonly model = config.model,
+    private readonly maxInputPriceMicrounits = config.usePodMaxInputPriceMicrounits,
+    private readonly maxOutputPriceMicrounits = config.usePodMaxOutputPriceMicrounits,
+    private readonly minimumBalance = config.usePodMinimumBalance,
   ) {}
 
   async run(opts: {
@@ -91,8 +109,24 @@ export class UsePodBackend implements CodingBackend {
     sandbox: Sandbox;
     signal: AbortSignal;
     emit: (event: GatewayEvent) => void;
-  }): Promise<{ output: string; usage: TokenUsage }> {
+    maxProviderCostUsd: number;
+    recordProviderRequest?: () => void | Promise<void>;
+    recordProviderReceipt?: (receipt: ProviderReceipt) => void | Promise<void>;
+  }): Promise<{ output: string; usage: TokenUsage; providerReceipts: ProviderReceipt[] }> {
     if (!this.apiKey) throw new Error('USEPOD_API_KEY is required for the UsePod backend');
+
+    const requestConfig: UsePodRequestConfig = {
+      baseUrl: this.baseUrl,
+      token: this.apiKey,
+      model: this.model,
+      maxInputPriceMicrounits: this.maxInputPriceMicrounits,
+      maxOutputPriceMicrounits: this.maxOutputPriceMicrounits,
+      minimumBalance: this.minimumBalance,
+    };
+    const budgetMicrounits = Math.floor(opts.maxProviderCostUsd * 1_000_000);
+    if (!Number.isSafeInteger(budgetMicrounits) || budgetMicrounits <= 0) {
+      throw new Error('UsePod provider spend budget must be positive');
+    }
 
     const messages: Message[] = [
       { role: 'system', content: SYSTEM },
@@ -105,47 +139,62 @@ export class UsePodBackend implements CodingBackend {
       cacheCreationTokens: 0,
     };
     let output = '';
+    const providerReceipts: ProviderReceipt[] = [];
+    let spentMicrounits = 0n;
 
     for (let turn = 0; turn < MAX_TURNS; turn++) {
       if (opts.signal.aborted) throw new Error('run aborted');
-      const response = await fetch(`${this.baseUrl.replace(/\/$/, '')}/chat/completions`, {
+      const remainingMicrounits = BigInt(budgetMicrounits) - spentMicrounits;
+      if (remainingMicrounits <= 0n) throw new Error('UsePod provider spend budget exhausted');
+      const draft = {
+        model: this.model,
+        messages,
+        tools: TOOLS,
+        max_tokens: MAX_OUTPUT_TOKENS,
+        temperature: 0.1,
+      };
+      const maxTokens = boundedMaxTokens(
+        draft,
+        Number(remainingMicrounits),
+        this.maxInputPriceMicrounits,
+        this.maxOutputPriceMicrounits,
+        MAX_OUTPUT_TOKENS,
+      );
+      await opts.recordProviderRequest?.();
+      const response = await fetch(usePodUrl(requestConfig, 'chat/completions'), {
         method: 'POST',
         signal: opts.signal,
-        headers: {
-          authorization: `Bearer ${this.apiKey}`,
-          'content-type': 'application/json',
-          'x-pod-routing-mode': 'marketplace-only',
-          'x-pod-no-retention': 'true',
-          ...(process.env.USEPOD_MAX_INPUT_PRICE
-            ? { 'x-pod-max-price-input': process.env.USEPOD_MAX_INPUT_PRICE }
-            : {}),
-          ...(process.env.USEPOD_MAX_OUTPUT_PRICE
-            ? { 'x-pod-max-price-output': process.env.USEPOD_MAX_OUTPUT_PRICE }
-            : {}),
-        },
-        body: JSON.stringify({
-          model: this.model,
-          messages,
-          tools: TOOLS,
-          max_tokens: MAX_OUTPUT_TOKENS,
-          temperature: 0.1,
-        }),
+        headers: usePodHeaders(requestConfig),
+        body: JSON.stringify({ ...draft, max_tokens: maxTokens }),
       });
+      const receipt = providerReceipt(response, this.model, requestConfig.minimumBalance);
+      providerReceipts.push(receipt);
+      await opts.recordProviderReceipt?.(receipt);
+      if (receipt.costMicrounits === undefined) {
+        throw new Error('UsePod omitted authoritative provider cost');
+      }
+      spentMicrounits += BigInt(receipt.costMicrounits);
+      if (spentMicrounits > BigInt(budgetMicrounits)) {
+        throw new Error('UsePod provider spend exceeded the run budget');
+      }
       if (!response.ok) {
         const body = await response.text();
         throw new Error(`UsePod HTTP ${response.status}: ${body.slice(0, 1_000)}`);
       }
 
       const body = (await response.json()) as {
+        model?: unknown;
         choices?: Array<{
           message?: { content?: string | null; tool_calls?: ToolCall[] };
         }>;
-        usage?: { prompt_tokens?: number; completion_tokens?: number };
+        usage?: unknown;
       };
+      if (body.model !== this.model) throw new Error('UsePod returned a different model');
       const message = body.choices?.[0]?.message;
       if (!message) throw new Error('UsePod returned no completion choice');
-      usage.inputTokens += body.usage?.prompt_tokens ?? 0;
-      usage.outputTokens += body.usage?.completion_tokens ?? 0;
+      const turnUsage = parseUsePodUsage(body.usage);
+      usage.inputTokens = addTokens(usage.inputTokens, turnUsage.promptTokens);
+      usage.outputTokens = addTokens(usage.outputTokens, turnUsage.completionTokens);
       output = message.content ?? output;
       if (message.content) opts.emit({ type: 'message.delta', text: message.content });
 
@@ -157,7 +206,10 @@ export class UsePodBackend implements CodingBackend {
       });
       if (calls.length === 0) {
         opts.emit({ type: 'run.completed', output });
-        return { output, usage };
+        return { output, usage, providerReceipts };
+      }
+      if (spentMicrounits >= BigInt(budgetMicrounits)) {
+        throw new Error('UsePod provider spend budget exhausted before the next turn');
       }
 
       for (const call of calls) {
@@ -183,6 +235,12 @@ export class UsePodBackend implements CodingBackend {
 
     throw new Error(`UsePod backend exceeded ${MAX_TURNS} turns`);
   }
+}
+
+function addTokens(total: number, increment: number): number {
+  const next = total + increment;
+  if (!Number.isSafeInteger(next)) throw new Error('UsePod cumulative token usage overflowed');
+  return next;
 }
 
 function args(call: ToolCall): Record<string, unknown> {

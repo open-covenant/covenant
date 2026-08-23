@@ -1,11 +1,13 @@
-import type { IpBucket } from "./ip-bucket.js";
-import type { SpendLedger } from "./budget.js";
+import type { IpBucket } from './ip-bucket.js';
+import type { SpendLedger } from './budget.js';
 
 export type AdmitOutcome =
   | { ok: true; reservedMax: number; reservationId: string; exempt: boolean }
   | { ok: false; reason: string; retryAfterMs?: number };
 
 export interface AdmitInputs {
+  runId: string;
+  maxUsd: number;
   ip: string;
   ipBucket: IpBucket;
   ledger: SpendLedger;
@@ -39,6 +41,8 @@ export interface AdmitInputs {
  * the security review of coder-12 flagged as missing.
  */
 export function admitRun({
+  runId,
+  maxUsd,
   ip,
   ipBucket,
   ledger,
@@ -52,7 +56,7 @@ export function admitRun({
       return { ok: false, reason: admission.reason, retryAfterMs: admission.retryAfterMs };
     }
   }
-  const reservation = ledger.reserve(undefined, exempt);
+  const reservation = ledger.reserve(maxUsd, exempt, runId);
   if (!reservation.ok) {
     if (!exempt && ipMaxPerIp > 0) ipBucket.release(ip);
     return { ok: false, reason: reservation.reason };

@@ -42,6 +42,25 @@ export type Validation = {
   exitCode: number;
 };
 
+export type ProviderRouteReceipt = {
+  model: string;
+  route: 'marketplace';
+  providerId?: string;
+  requestId?: string;
+  costMicrounits?: string;
+};
+
+export type ReviewAttempt = {
+  phase: 'implementation' | 'repair';
+  status: 'pending' | 'received' | 'completed' | 'failed';
+  artifactHash: string;
+  reviewedAt: string;
+  costUsd: number;
+  provider?: ProviderRouteReceipt;
+  approved?: boolean;
+  reason: string;
+};
+
 export type Job = {
   id: string;
   state: JobState;
@@ -53,6 +72,14 @@ export type Job = {
   mergedAt?: string;
   refundTransaction?: string;
   error?: string;
+  review?: {
+    approved: boolean;
+    reason: string;
+    reviewedAt: string;
+    artifactHash: string;
+    provider?: ProviderRouteReceipt;
+  };
+  reviewAttempts?: ReviewAttempt[];
   changedFiles: string[];
   validations: Validation[];
   variableRouteCostEstimateUsd: number;
@@ -145,6 +172,16 @@ export type Bounty = {
   releaseTransaction?: string;
   refundTransaction?: string;
   pullRequestUrl?: string;
+  review?: {
+    approved: boolean;
+    reason: string;
+    reviewedAt: string;
+    headSha: string;
+    baseSha: string;
+    baseRef: string;
+    diffHash: string;
+    provider?: ProviderRouteReceipt;
+  };
   dispute?: {
     id: string;
     state: 'open' | 'release_pending' | 'refund_pending' | 'released' | 'refunded';

@@ -4,7 +4,6 @@ const emptyAsUndefined = (value: unknown): unknown =>
   typeof value === 'string' && value.trim() === '' ? undefined : value;
 const optionalString = (minimum: number) =>
   z.preprocess(emptyAsUndefined, z.string().min(minimum).optional());
-const optionalUrl = z.preprocess(emptyAsUndefined, z.string().url().optional());
 const optionalPositiveInteger = z.preprocess(
   emptyAsUndefined,
   z.coerce.number().int().positive().optional(),
@@ -58,12 +57,7 @@ const envSchema = z
       .max(120_000)
       .default(20_000),
     MIZUKI_UPDATER_GITHUB_MERGE_METHOD: z.enum(['merge', 'squash', 'rebase']).default('squash'),
-    MIZUKI_UPDATER_SHADOW_HOOK_URL: optionalUrl,
-    MIZUKI_UPDATER_SHADOW_HEALTH_URL_TEMPLATE: optionalUrl,
-    MIZUKI_UPDATER_PROMOTE_HOOK_URL: optionalUrl,
-    MIZUKI_UPDATER_PROMOTION_HEALTH_URL_TEMPLATE: optionalUrl,
-    MIZUKI_UPDATER_ROLLBACK_HOOK_URL: optionalUrl,
-    MIZUKI_UPDATER_DEPLOY_READINESS_URL: optionalUrl,
+    MIZUKI_UPDATER_DEPLOY_CONTROLLER_HOSTPORT: optionalString(3),
     MIZUKI_UPDATER_DEPLOY_HOOK_TOKEN: optionalString(32),
     MIZUKI_UPDATER_HOOK_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(120_000).default(20_000),
     MIZUKI_UPDATER_CHECK_TIMEOUT_MS: z.coerce
@@ -104,12 +98,7 @@ const operationalValues = [
   'MIZUKI_UPDATER_REVIEW_KEYS_JSON',
   'MIZUKI_UPDATER_GITHUB_APP_ID',
   'MIZUKI_UPDATER_GITHUB_PRIVATE_KEY',
-  'MIZUKI_UPDATER_SHADOW_HOOK_URL',
-  'MIZUKI_UPDATER_SHADOW_HEALTH_URL_TEMPLATE',
-  'MIZUKI_UPDATER_PROMOTE_HOOK_URL',
-  'MIZUKI_UPDATER_PROMOTION_HEALTH_URL_TEMPLATE',
-  'MIZUKI_UPDATER_ROLLBACK_HOOK_URL',
-  'MIZUKI_UPDATER_DEPLOY_READINESS_URL',
+  'MIZUKI_UPDATER_DEPLOY_CONTROLLER_HOSTPORT',
   'MIZUKI_UPDATER_DEPLOY_HOOK_TOKEN',
 ] as const;
 
@@ -266,35 +255,10 @@ function missingOperationalValues(parsed: ParsedEnv): string[] {
 }
 
 function operationalConfig(parsed: ParsedEnv, production: boolean): UpdaterOperationalConfig {
-  const shadowUrl = parsed.MIZUKI_UPDATER_SHADOW_HOOK_URL!;
-  const shadowHealthUrlTemplate = parsed.MIZUKI_UPDATER_SHADOW_HEALTH_URL_TEMPLATE!;
-  const promoteUrl = parsed.MIZUKI_UPDATER_PROMOTE_HOOK_URL!;
-  const promotionHealthUrlTemplate = parsed.MIZUKI_UPDATER_PROMOTION_HEALTH_URL_TEMPLATE!;
-  const rollbackUrl = parsed.MIZUKI_UPDATER_ROLLBACK_HOOK_URL!;
-  const deployReadinessUrl = parsed.MIZUKI_UPDATER_DEPLOY_READINESS_URL!;
-  const hookUrls = [
-    shadowUrl,
-    promoteUrl,
-    rollbackUrl,
-    deployReadinessUrl,
-    shadowHealthUrlTemplate.replace('{deploymentId}', 'probe'),
-    promotionHealthUrlTemplate.replace('{deploymentId}', 'probe'),
-  ];
-  if (!shadowHealthUrlTemplate.includes('{deploymentId}')) {
-    throw new Error('Shadow health URL template must contain {deploymentId}');
-  }
-  if (!promotionHealthUrlTemplate.includes('{deploymentId}')) {
-    throw new Error('Promotion health URL template must contain {deploymentId}');
-  }
-  if (production && hookUrls.some((value) => new URL(value).protocol !== 'https:')) {
-    throw new Error('Deployment endpoints must use HTTPS in production');
-  }
-  assertFixedHealthOrigin(shadowHealthUrlTemplate, shadowUrl, 'Shadow');
-  assertFixedHealthOrigin(promotionHealthUrlTemplate, shadowUrl, 'Promotion');
-  if (healthPath(promotionHealthUrlTemplate) === healthPath(shadowHealthUrlTemplate)) {
-    throw new Error('Shadow and promotion health URL paths must differ');
-  }
-  assertDeploymentOrigins(hookUrls);
+  const origin = deploymentControllerOrigin(
+    parsed.MIZUKI_UPDATER_DEPLOY_CONTROLLER_HOSTPORT!,
+    production,
+  );
 
   return {
     trustedProposalKeys: parseTrustedKeys(parsed.MIZUKI_UPDATER_PROPOSAL_KEYS_JSON!),
@@ -302,12 +266,12 @@ function operationalConfig(parsed: ParsedEnv, production: boolean): UpdaterOpera
     trustedReviewKeys: parseTrustedKeys(parsed.MIZUKI_UPDATER_REVIEW_KEYS_JSON!),
     githubAppId: parsed.MIZUKI_UPDATER_GITHUB_APP_ID!,
     githubPrivateKey: parsed.MIZUKI_UPDATER_GITHUB_PRIVATE_KEY!.replace(/\\n/g, '\n'),
-    shadowHookUrl: shadowUrl,
-    shadowHealthUrlTemplate,
-    promoteHookUrl: promoteUrl,
-    promotionHealthUrlTemplate,
-    rollbackHookUrl: rollbackUrl,
-    deployReadinessUrl,
+    shadowHookUrl: `${origin}/v1/deployments/shadow`,
+    shadowHealthUrlTemplate: `${origin}/v1/deployments/shadow/{deploymentId}/health`,
+    promoteHookUrl: `${origin}/v1/deployments/promote`,
+    promotionHealthUrlTemplate: `${origin}/v1/deployments/production/{deploymentId}/health`,
+    rollbackHookUrl: `${origin}/v1/deployments/rollback`,
+    deployReadinessUrl: `${origin}/readyz`,
     deployHookToken: parsed.MIZUKI_UPDATER_DEPLOY_HOOK_TOKEN!,
   };
 }
@@ -348,30 +312,25 @@ function isBranchLike(value: string): boolean {
   );
 }
 
-function assertFixedHealthOrigin(template: string, shadowUrl: string, label: string): void {
-  if (template.split('{deploymentId}').length !== 2) {
-    throw new Error(`${label} health URL template must contain one {deploymentId} placeholder`);
+function deploymentControllerOrigin(value: string, production: boolean): string {
+  const raw = value.trim();
+  const url = new URL(raw.includes('://') ? raw : `http://${raw}`);
+  if (url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
+    throw new Error('Deployment controller must be a credential-free host and port');
   }
-  const marker = 'mizuki-deployment-id';
-  const url = new URL(template.replace('{deploymentId}', marker));
-  if (!url.pathname.includes(marker) || url.search.includes(marker) || url.hash.includes(marker)) {
-    throw new Error(`${label} health deployment ID must appear only in the URL path`);
+  if (!['http:', 'https:'].includes(url.protocol)) {
+    throw new Error('Deployment controller protocol is invalid');
   }
-  if (url.origin !== new URL(shadowUrl).origin) {
-    throw new Error(`${label} health and deployment hooks must use the same origin`);
+  if (production) {
+    if (
+      url.protocol !== 'http:' ||
+      url.hostname !== 'mizuki-deployment-controller' ||
+      url.port !== '8794'
+    ) {
+      throw new Error(
+        'Production deployment controller must use the fixed Render private origin mizuki-deployment-controller:8794',
+      );
+    }
   }
-}
-
-function healthPath(template: string): string {
-  return new URL(template.replace('{deploymentId}', 'mizuki-deployment-id')).pathname;
-}
-
-function assertDeploymentOrigins(values: string[]): void {
-  const urls = values.map((value) => new URL(value));
-  if (urls.some((url) => url.username || url.password)) {
-    throw new Error('Deployment endpoints must not include credentials');
-  }
-  if (urls.some((url) => url.origin !== urls[0].origin)) {
-    throw new Error('Deployment endpoints must use one origin');
-  }
+  return url.origin;
 }

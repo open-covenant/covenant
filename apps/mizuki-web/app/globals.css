@@ -1992,6 +1992,42 @@ textarea:focus-visible {
   text-align: right;
 }
 
+.receipt-list .review-commitment,
+.provider-route-receipt code {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.receipt-review-reason {
+  margin: 18px 0 0;
+  color: #aab0b2;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.detail-panel .review-evidence {
+  gap: 32px;
+  margin-top: 20px;
+}
+
+.review-attempts {
+  margin-top: 70px;
+}
+
+.review-attempt-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  gap: 32px;
+}
+
+.review-attempt {
+  min-width: 0;
+}
+
+.review-attempt .provider-route-receipt {
+  margin-top: 18px;
+}
+
 .receipt-list a {
   color: var(--aqua);
 }

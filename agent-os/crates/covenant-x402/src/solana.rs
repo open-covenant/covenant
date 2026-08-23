@@ -21,7 +21,7 @@
 //! ```
 //!
 //! This matches the Coinbase x402 reference. Facilitators that
-//! expect a different envelope (Kamiyo's Kizuna, for example) need
+//! expect a vendor-specific envelope need
 //! a parallel signer impl — the trait surface stays the same.
 //!
 //! ## Decimals

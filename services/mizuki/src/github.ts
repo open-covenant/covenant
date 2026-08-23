@@ -10,6 +10,36 @@ const githubAppSchema = z.object({
   id: z.number().int().positive(),
   slug: z.string().min(1).max(100),
 });
+const pullRequestReviewSchema = z.object({
+  changed_files: z.number().int().nonnegative(),
+  merged_at: z.string().datetime({ offset: true }).nullable(),
+  merge_commit_sha: z
+    .string()
+    .regex(/^[a-f0-9]{40,64}$/)
+    .nullable(),
+  head: z.object({ sha: z.string().regex(/^[a-f0-9]{40,64}$/) }),
+  base: z.object({
+    sha: z.string().regex(/^[a-f0-9]{40,64}$/),
+    ref: z.string().min(1).max(255),
+  }),
+});
+const checkRunsSchema = z.object({
+  total_count: z.number().int().nonnegative(),
+  check_runs: z.array(
+    z.object({
+      status: z.string(),
+      conclusion: z.string().nullable(),
+    }),
+  ),
+});
+const pullRequestFilesSchema = z.array(
+  z.object({
+    filename: z.string().min(1),
+    previous_filename: z.string().min(1).optional(),
+    status: z.string().min(1),
+    patch: z.string().optional(),
+  }),
+);
 
 export class GithubClient {
   constructor(
@@ -120,6 +150,9 @@ export class GithubClient {
     job: Job,
     artifacts: RunArtifacts,
     checkpoint: (commitSha: string) => Promise<void> = async () => {},
+    evidenceCheckpoint: (
+      evidence: NonNullable<Job['deliveryEvidence']>,
+    ) => Promise<void> = async () => {},
   ): Promise<string> {
     const installationId = job.quote.installationId;
     if (!installationId) throw new Error('GitHub App installation is required to publish a PR');
@@ -134,8 +167,6 @@ export class GithubClient {
     const token = await this.installationToken(installationId);
     const root = `/repos/${job.quote.owner}/${job.quote.repo}`;
     const branch = `mizuki/${job.id.slice(0, 8)}`;
-    const existingPullRequest = await this.existingPullRequest(job, branch, token);
-    if (existingPullRequest) return existingPullRequest;
 
     const commit = await this.api<{ tree: { sha: string } }>(
       `${root}/git/commits/${job.quote.baseSha}`,
@@ -174,9 +205,24 @@ export class GithubClient {
         },
       });
       deliveryCommitSha = created.sha;
-      await checkpoint(deliveryCommitSha);
     }
+    await checkpoint(deliveryCommitSha);
     await this.ensureBranch(root, branch, deliveryCommitSha, token);
+    const existingPullRequest = await this.existingPullRequest(
+      job,
+      branch,
+      deliveryCommitSha,
+      token,
+    );
+    if (existingPullRequest) {
+      return this.captureDeliveryEvidence(
+        job,
+        artifacts,
+        existingPullRequest,
+        deliveryCommitSha,
+        evidenceCheckpoint,
+      );
+    }
     try {
       const pr = await this.api<{ html_url: string }>(`${root}/pulls`, {
         method: 'POST',
@@ -188,13 +234,55 @@ export class GithubClient {
           body: `Closes #${job.quote.issueNumber}\n\nImplemented by Mizuki. Payment is retained only for delivered work.`,
         },
       });
-      return pr.html_url;
+      return this.captureDeliveryEvidence(
+        job,
+        artifacts,
+        pr.html_url,
+        deliveryCommitSha,
+        evidenceCheckpoint,
+      );
     } catch (cause) {
       if (!(cause instanceof GithubApiError) || cause.status !== 422) throw cause;
-      const existing = await this.existingPullRequest(job, branch, token);
+      const existing = await this.existingPullRequest(job, branch, deliveryCommitSha, token);
       if (!existing) throw cause;
-      return existing;
+      return this.captureDeliveryEvidence(
+        job,
+        artifacts,
+        existing,
+        deliveryCommitSha,
+        evidenceCheckpoint,
+      );
     }
+  }
+
+  private async captureDeliveryEvidence(
+    job: Job,
+    artifacts: RunArtifacts,
+    pullRequestUrl: string,
+    deliveryCommitSha: string,
+    checkpoint: (evidence: NonNullable<Job['deliveryEvidence']>) => Promise<void>,
+  ): Promise<string> {
+    const installationId = job.quote.installationId!;
+    const pull = parsePullRequestUrl(pullRequestUrl);
+    const evidence = await this.pullRequestReviewData(pullRequestUrl, installationId);
+    const reviewedDiffHash = createHash('sha256').update(artifacts.patch).digest('hex');
+    if (
+      evidence.headSha !== deliveryCommitSha ||
+      evidence.baseSha !== job.quote.baseSha ||
+      evidence.baseRef !== job.quote.defaultBranch ||
+      evidence.diffHash !== reviewedDiffHash
+    ) {
+      throw new Error('published pull request does not match the reviewed delivery artifact');
+    }
+    await checkpoint({
+      pullRequestNumber: pull.number,
+      headSha: evidence.headSha,
+      baseSha: evidence.baseSha,
+      baseRef: evidence.baseRef,
+      diffHash: evidence.diffHash,
+      observedAt: new Date().toISOString(),
+    });
+    return pullRequestUrl;
   }
 
   async mergedAt(job: Job): Promise<string | undefined> {
@@ -226,6 +314,10 @@ export class GithubClient {
     pullRequestUrl: string,
     installationId: number,
   ): Promise<{
+    headSha: string;
+    baseSha: string;
+    baseRef: string;
+    diffHash: string;
     diff: string;
     changedFiles: number;
     files: Array<{
@@ -235,48 +327,61 @@ export class GithubClient {
       patchAvailable: boolean;
     }>;
     mergedAt?: string;
+    mergeCommitSha?: string;
     checksPassed: boolean;
     checkCount: number;
   }> {
     const parsed = parsePullRequestUrl(pullRequestUrl);
     const token = await this.installationToken(installationId);
     const root = `/repos/${parsed.owner}/${parsed.repo}`;
-    const pull = await this.api<{
-      changed_files: number;
-      merged_at: string | null;
-      head: { sha: string };
-    }>(`${root}/pulls/${parsed.number}`, { token });
-    const [diff, checks, files] = await Promise.all([
+    const pull = pullRequestReviewSchema.parse(
+      await this.api(`${root}/pulls/${parsed.number}`, { token }),
+    );
+    const [diff, rawChecks, rawFiles] = await Promise.all([
       this.apiText(`${root}/pulls/${parsed.number}`, token, 'application/vnd.github.v3.diff'),
-      this.api<{ check_runs: Array<{ status: string; conclusion: string | null }> }>(
-        `${root}/commits/${pull.head.sha}/check-runs`,
+      this.api(
+        `${root}/commits/${pull.merge_commit_sha ?? pull.head.sha}/check-runs?per_page=100`,
         { token },
       ),
-      this.api<
-        Array<{
-          filename: string;
-          previous_filename?: string;
-          status: string;
-          patch?: string;
-        }>
-      >(`${root}/pulls/${parsed.number}/files?per_page=100`, { token }),
+      this.api(`${root}/pulls/${parsed.number}/files?per_page=100`, { token }),
     ]);
-    const accepted = new Set(['success', 'neutral', 'skipped']);
-    const checksPassed = checks.check_runs.every(
-      (check) => check.status === 'completed' && check.conclusion && accepted.has(check.conclusion),
+    const checks = checkRunsSchema.parse(rawChecks);
+    const files = pullRequestFilesSchema.parse(rawFiles);
+    const confirmed = pullRequestReviewSchema.parse(
+      await this.api(`${root}/pulls/${parsed.number}`, { token }),
     );
+    if (
+      confirmed.head.sha !== pull.head.sha ||
+      confirmed.base.sha !== pull.base.sha ||
+      confirmed.base.ref !== pull.base.ref ||
+      confirmed.changed_files !== pull.changed_files ||
+      confirmed.merged_at !== pull.merged_at ||
+      confirmed.merge_commit_sha !== pull.merge_commit_sha
+    ) {
+      throw new Error('pull request changed while review evidence was collected');
+    }
+    const checksPassed =
+      checks.total_count === checks.check_runs.length &&
+      checks.check_runs.every(
+        (check) => check.status === 'completed' && check.conclusion === 'success',
+      );
     return {
+      headSha: confirmed.head.sha,
+      baseSha: confirmed.base.sha,
+      baseRef: confirmed.base.ref,
+      diffHash: createHash('sha256').update(diff).digest('hex'),
       diff,
-      changedFiles: pull.changed_files,
+      changedFiles: confirmed.changed_files,
       files: files.map((file) => ({
         filename: file.filename,
         ...(file.previous_filename ? { previousFilename: file.previous_filename } : {}),
         status: file.status,
         patchAvailable: typeof file.patch === 'string',
       })),
-      mergedAt: pull.merged_at ?? undefined,
+      mergedAt: confirmed.merged_at ?? undefined,
+      ...(confirmed.merge_commit_sha ? { mergeCommitSha: confirmed.merge_commit_sha } : {}),
       checksPassed,
-      checkCount: checks.check_runs.length,
+      checkCount: checks.total_count,
     };
   }
 
@@ -386,6 +491,7 @@ export class GithubClient {
   private async existingPullRequest(
     job: Job,
     branch: string,
+    deliveryCommitSha: string,
     token: string,
   ): Promise<string | undefined> {
     const owner = job.quote.owner;
@@ -399,12 +505,15 @@ export class GithubClient {
     const pulls = await this.api<
       Array<{
         html_url: string;
-        head: { ref: string };
+        head: { ref: string; sha: string };
         base: { ref: string };
       }>
     >(`${root}/pulls?${query}`, { token });
     return pulls.find(
-      (pull) => pull.head.ref === branch && pull.base.ref === job.quote.defaultBranch,
+      (pull) =>
+        pull.head.ref === branch &&
+        pull.head.sha === deliveryCommitSha &&
+        pull.base.ref === job.quote.defaultBranch,
     )?.html_url;
   }
 

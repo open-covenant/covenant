@@ -23,6 +23,7 @@ const BASE_ENV: NodeJS.ProcessEnv = {
   MIZUKI_UPDATER_PROMOTION_HEALTH_URL_TEMPLATE:
     'http://127.0.0.1:9000/production/{deploymentId}/health',
   MIZUKI_UPDATER_ROLLBACK_HOOK_URL: 'http://127.0.0.1:9000/rollback',
+  MIZUKI_UPDATER_DEPLOY_READINESS_URL: 'http://127.0.0.1:9000/readyz',
   MIZUKI_UPDATER_DEPLOY_HOOK_TOKEN: 'd'.repeat(32),
 };
 
@@ -32,6 +33,26 @@ describe('updater configuration', () => {
     expect(config.memoryStore).toBe(true);
     expect(config.allowedRepositories).toEqual(new Set(['mizuki-labs/mizuki']));
     expect(config.artifactOrigins).toEqual(new Set(['https://artifacts.example.test']));
+    expect(config.operational).toBeDefined();
+    expect(config.operationalFailures).toEqual([]);
+  });
+
+  it('boots closed and reports every missing operational input', () => {
+    const config = loadConfig({
+      ...BASE_ENV,
+      MIZUKI_UPDATER_PROPOSAL_KEYS_JSON: '',
+      MIZUKI_UPDATER_GITHUB_PRIVATE_KEY: undefined,
+      MIZUKI_UPDATER_DEPLOY_READINESS_URL: '   ',
+      MIZUKI_UPDATER_DEPLOY_HOOK_TOKEN: undefined,
+    });
+
+    expect(config.operational).toBeUndefined();
+    expect(config.operationalFailures).toEqual([
+      'MIZUKI_UPDATER_PROPOSAL_KEYS_JSON',
+      'MIZUKI_UPDATER_GITHUB_PRIVATE_KEY',
+      'MIZUKI_UPDATER_DEPLOY_READINESS_URL',
+      'MIZUKI_UPDATER_DEPLOY_HOOK_TOKEN',
+    ]);
   });
 
   it('requires Postgres unless the local memory store is explicitly enabled', () => {

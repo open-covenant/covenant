@@ -26,11 +26,13 @@ const promotionControlSchema = z
   .strict();
 
 export interface UpdaterServerDependencies {
-  service: UpdaterService;
+  service?: UpdaterService;
   repository: UpgradeRepository;
   metrics: UpdaterMetrics;
   authToken: string;
   readToken: string;
+  operationalReadiness?: () => Promise<void>;
+  operationalFailures?: readonly string[];
 }
 
 export function createUpdaterServer(deps: UpdaterServerDependencies): Server {
@@ -61,13 +63,20 @@ async function route(
     return;
   }
 
+  if (method === 'GET' && url.pathname === '/readyz') {
+    const report = await readiness(deps);
+    writeJson(response, report.ready ? 200 : 503, report);
+    return;
+  }
+
   if (method === 'POST' && url.pathname === '/v1/upgrades') {
     requireBearer(request, [deps.authToken]);
     requireJson(request);
+    await requireReady(deps);
     const idempotencyKey = idempotencyKeySchema.parse(request.headers['idempotency-key']);
     const proposal = signedProposalSchema.parse(await readJson(request));
-    const upgrade = await deps.service.submit(proposal, idempotencyKey);
-    deps.service.kick(upgrade.id);
+    const upgrade = await deps.service!.submit(proposal, idempotencyKey);
+    deps.service!.kick(upgrade.id);
     writeJson(response, 202, { upgrade: publicUpgrade(upgrade) });
     return;
   }
@@ -76,6 +85,7 @@ async function route(
     requireBearer(request, [deps.authToken]);
     requireJson(request);
     const input = promotionControlSchema.parse(await readJson(request));
+    if (input.promotionsEnabled) await requireReady(deps);
     const control = await deps.repository.updatePromotionControl(
       { ...input, updatedBy: 'write_authority' },
       new Date(),
@@ -104,21 +114,23 @@ async function route(
 
   const auditMatch = /^\/v1\/upgrades\/([^/]+)\/audit$/.exec(url.pathname);
   if (method === 'GET' && auditMatch) {
+    const service = requireService(deps);
     const id = upgradeIdSchema.parse(auditMatch[1]);
-    if (!(await deps.service.get(id))) {
+    if (!(await service.get(id))) {
       throw new UpdaterError('upgrade_not_found', 'Upgrade was not found', 404);
     }
-    const receipts = (await deps.service.audit(id)).map(publicAudit);
+    const receipts = (await service.audit(id)).map(publicAudit);
     writeJson(response, 200, { receipts });
     return;
   }
 
   const proposalMatch = /^\/v1\/proposals\/([^/]+)$/.exec(url.pathname);
   if (method === 'GET' && proposalMatch) {
+    const service = requireService(deps);
     const proposalId = proposalIdSchema.parse(decodePathSegment(proposalMatch[1]));
-    const upgrade = await deps.service.getByProposalId(proposalId);
+    const upgrade = await service.getByProposalId(proposalId);
     if (!upgrade) throw new UpdaterError('upgrade_not_found', 'Upgrade was not found', 404);
-    const audit = await deps.service.audit(upgrade.id);
+    const audit = await service.audit(upgrade.id);
     writeJson(response, 200, {
       upgrade: publicUpgrade(upgrade),
       auditHeadHash: audit.at(-1)?.hash ?? null,
@@ -128,14 +140,64 @@ async function route(
 
   const upgradeMatch = /^\/v1\/upgrades\/([^/]+)$/.exec(url.pathname);
   if (method === 'GET' && upgradeMatch) {
+    const service = requireService(deps);
     const id = upgradeIdSchema.parse(upgradeMatch[1]);
-    const upgrade = await deps.service.get(id);
+    const upgrade = await service.get(id);
     if (!upgrade) throw new UpdaterError('upgrade_not_found', 'Upgrade was not found', 404);
     writeJson(response, 200, { upgrade: publicUpgrade(upgrade) });
     return;
   }
 
   throw new UpdaterError('not_found', 'Route was not found', 404);
+}
+
+async function readiness(deps: UpdaterServerDependencies) {
+  const checkedAt = new Date().toISOString();
+  const postgres = await probe(() => deps.repository.health());
+  const failures = [...(deps.operationalFailures ?? [])];
+  const operational =
+    deps.service && failures.length === 0
+      ? await probe(deps.operationalReadiness ?? (async () => {}))
+      : { ok: false };
+  const failed = [
+    ...(!postgres.ok ? ['postgres' as const] : []),
+    ...(!operational.ok ? ['operational' as const] : []),
+  ];
+  return {
+    ready: failed.length === 0,
+    service: 'mizuki-updater' as const,
+    checkedAt,
+    dependencies: {
+      postgres,
+      operational: {
+        ...operational,
+        ...(failures.length > 0 ? { configurationIssues: failures } : {}),
+      },
+    },
+    failed,
+  };
+}
+
+async function probe(action: () => Promise<void>): Promise<{ ok: boolean }> {
+  try {
+    await action();
+    return { ok: true };
+  } catch {
+    return { ok: false };
+  }
+}
+
+async function requireReady(deps: UpdaterServerDependencies): Promise<void> {
+  if (!(await readiness(deps)).ready) {
+    throw new UpdaterError('updater_not_ready', 'Updater dependencies are not ready', 503, true);
+  }
+}
+
+function requireService(deps: UpdaterServerDependencies): UpdaterService {
+  if (!deps.service) {
+    throw new UpdaterError('updater_not_ready', 'Updater dependencies are not ready', 503, true);
+  }
+  return deps.service;
 }
 
 function decodePathSegment(value: string): string {

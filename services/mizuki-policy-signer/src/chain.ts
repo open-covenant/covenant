@@ -45,7 +45,7 @@ export interface ChainGateway {
   unixTime(): Promise<number>;
   refundCapacity(): Promise<string>;
   capacity(): Promise<ChainCapacity>;
-  health(): Promise<void>;
+  health(): Promise<ChainHealthEvidence>;
 }
 
 export interface ChainCapacity {
@@ -54,6 +54,13 @@ export interface ChainCapacity {
   stateRentLamports: string;
   vaultRentLamports: string;
   guardRentLamports: string;
+}
+
+export interface ChainHealthEvidence extends ChainCapacity {
+  rpcProviders: 2;
+  escrowProgramId: string;
+  escrowProgramDataSha256: string;
+  escrowProgramImmutable: true;
 }
 
 export interface UsdPrice {
@@ -410,22 +417,7 @@ export class SolanaChainGateway implements ChainGateway {
       this.readCapacityFrom(this.connection),
       this.readCapacityFrom(this.secondaryConnection),
     ]);
-    return {
-      refundRawAmount: minBigInt(primary.refundRawAmount, secondary.refundRawAmount).toString(),
-      escrowLamports: minBigInt(primary.escrowLamports, secondary.escrowLamports).toString(),
-      stateRentLamports: maxBigInt(
-        primary.stateRentLamports,
-        secondary.stateRentLamports,
-      ).toString(),
-      vaultRentLamports: maxBigInt(
-        primary.vaultRentLamports,
-        secondary.vaultRentLamports,
-      ).toString(),
-      guardRentLamports: maxBigInt(
-        primary.guardRentLamports,
-        secondary.guardRentLamports,
-      ).toString(),
-    };
+    return consensusCapacity(primary, secondary);
   }
 
   async refundCapacity(): Promise<string> {
@@ -433,16 +425,31 @@ export class SolanaChainGateway implements ChainGateway {
       this.readRefundCapacityFrom(this.connection),
       this.readRefundCapacityFrom(this.secondaryConnection),
     ]);
-    return minBigInt(primary, secondary).toString();
+    if (primary !== secondary) {
+      throw new PolicyError(
+        'rpc_inconsistent',
+        'Independent RPC providers disagree on refund custody',
+        503,
+        true,
+      );
+    }
+    return primary;
   }
 
-  async health(): Promise<void> {
-    await Promise.all([
+  async health(): Promise<ChainHealthEvidence> {
+    const [, , , capacity] = await Promise.all([
       this.connection.getLatestBlockhash('finalized'),
       this.secondaryConnection.getLatestBlockhash('finalized'),
       this.verifyEscrowProgram(),
       this.capacity(),
     ]);
+    return {
+      ...capacity,
+      rpcProviders: 2,
+      escrowProgramId: this.escrowProgramId.toBase58(),
+      escrowProgramDataSha256: this.escrowProgramDataSha256,
+      escrowProgramImmutable: true,
+    };
   }
 
   private async readCapacityFrom(connection: Connection): Promise<ChainCapacity> {
@@ -849,6 +856,24 @@ export function consensusTransactionState(
   return 'submitted';
 }
 
+export function consensusCapacity(primary: ChainCapacity, secondary: ChainCapacity): ChainCapacity {
+  if (
+    primary.refundRawAmount !== secondary.refundRawAmount ||
+    primary.escrowLamports !== secondary.escrowLamports ||
+    primary.stateRentLamports !== secondary.stateRentLamports ||
+    primary.vaultRentLamports !== secondary.vaultRentLamports ||
+    primary.guardRentLamports !== secondary.guardRentLamports
+  ) {
+    throw new PolicyError(
+      'rpc_inconsistent',
+      'Independent RPC providers disagree on signer custody or rent facts',
+      503,
+      true,
+    );
+  }
+  return { ...primary };
+}
+
 export function verifySettlementTransfer(
   transaction: ParsedTransactionWithMeta,
   policy: SettlementTransferPolicy,
@@ -1133,7 +1158,15 @@ export class FixedUsdPriceOracle implements UsdPriceOracle {
   constructor(readonly priceUsdMicros = 100_000_000) {}
 
   async solUsd(): Promise<UsdPrice> {
-    return { priceUsdMicros: this.priceUsdMicros, observedAt: new Date() };
+    const observedAt = new Date();
+    return {
+      priceUsdMicros: this.priceUsdMicros,
+      observedAt,
+      observations: [
+        { feed: 'primary', priceUsdMicros: this.priceUsdMicros, observedAt },
+        { feed: 'secondary', priceUsdMicros: this.priceUsdMicros, observedAt },
+      ],
+    };
   }
 }
 
@@ -1226,7 +1259,15 @@ export class MockChainGateway implements ChainGateway {
     return this.refundRawAmount.toString();
   }
 
-  async health(): Promise<void> {}
+  async health(): Promise<ChainHealthEvidence> {
+    return {
+      ...(await this.capacity()),
+      rpcProviders: 2,
+      escrowProgramId: '4'.repeat(32),
+      escrowProgramDataSha256: 'a'.repeat(64),
+      escrowProgramImmutable: true,
+    };
+  }
 }
 
 function tokenProgram(program: 'spl-token' | 'token-2022'): PublicKey {
@@ -1264,18 +1305,6 @@ function byte(value: number, name: string): number {
 function requiredValue(value: string | undefined, name: string): string {
   if (!value) throw new Error(`${name} is required`);
   return value;
-}
-
-function minBigInt(left: string, right: string): bigint {
-  const leftValue = BigInt(left);
-  const rightValue = BigInt(right);
-  return leftValue < rightValue ? leftValue : rightValue;
-}
-
-function maxBigInt(left: string, right: string): bigint {
-  const leftValue = BigInt(left);
-  const rightValue = BigInt(right);
-  return leftValue > rightValue ? leftValue : rightValue;
 }
 
 function parseKeypair(value: string): Keypair {

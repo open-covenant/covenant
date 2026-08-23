@@ -10,6 +10,7 @@ services:
     autoDeploy: false
     maxShutdownDelaySeconds: 120
     buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @covenant/mizuki build
+    preDeployCommand: pnpm --filter @covenant/mizuki predeploy
     startCommand: pnpm --filter @covenant/mizuki start
     healthCheckPath: /healthz
     envVars:
@@ -46,6 +47,8 @@ services:
           name: mizuki-postgres
           property: connectionString
       - key: MIZUKI_ADMIN_TOKEN
+        generateValue: true
+      - key: MIZUKI_WEB_PROXY_SECRET
         generateValue: true
       - key: MIZUKI_INTERNAL_REPOS
         value: open-covenant/covenant
@@ -313,6 +316,11 @@ services:
         value: '0'
       - key: MIZUKI_WEB_HOST
         value: 0.0.0.0
+      - key: MIZUKI_WEB_PROXY_SECRET
+        fromService:
+          type: web
+          name: mizuki-api
+          envVarKey: MIZUKI_WEB_PROXY_SECRET
       - key: NEXT_PUBLIC_MIZUKI_APP_URL
         value: https://mizuki.covenant.org
       - key: NEXT_PUBLIC_MIZUKI_GITHUB_OAUTH_URL
@@ -398,6 +406,8 @@ services:
       - key: MIZUKI_UPDATER_ROLLBACK_HOOK_URL
         sync: false
       - key: MIZUKI_UPDATER_DEPLOY_HOOK_TOKEN
+        sync: false
+      - key: MIZUKI_UPDATER_DEPLOY_READINESS_URL
         sync: false
       - key: MIZUKI_UPDATER_HOOK_TIMEOUT_MS
         value: '20000'

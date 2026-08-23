@@ -6,7 +6,7 @@ It is deliberately deployed separately from the Mizuki application. The applicat
 
 ## Enforced policy
 
-- Refund liability registration and execution each require a short-lived, action-bound Ed25519 authorization from a dedicated job authority key.
+- Refund liability registration and execution each require a short-lived, action-bound Ed25519 authorization from a dedicated job authority key. Startup rejects that authority if it equals either custody authority.
 - A finalized settlement can be registered for 24 hours so a signer or API outage cannot silently erase the refund guarantee. Per-operation and rolling daily limits still bound registration exposure.
 - A finalized payment must be registered within one hour by default. One settlement binds to one job permanently, preventing a compromised request key from sweeping historical treasury payments.
 - The signer reads finalized Solana data to derive the original token owner, treasury, mint, decimals, and exact amount.
@@ -17,6 +17,7 @@ It is deliberately deployed separately from the Mizuki application. The applicat
 - Each funded operation is capped at `$25` by default.
 - Customer refunds and discretionary bounty funding have independent `$100` rolling 24-hour caps. Bounty reservations cannot consume protected refund capacity.
 - Refund authorization checks the independently observed treasury token balance before reservation and again before signing.
+- Refund-token balance, bounty-authority balance, and rent facts must agree exactly across both finalized RPC views. A conservative minimum is not used to hide provider disagreement.
 - Contributor escrow transactions are built by the signer against one configured program. Serialized transactions and arbitrary instruction data are never accepted from callers.
 - Refunds and contributor escrow use distinct authority keys. Startup fails if either key does not match its configured public authority or if the two keys are the same.
 - The finalized escrow program must use loader v3 with no upgrade authority. Its executable bytes must match one pinned SHA-256 hash on both RPC providers before every escrow signature.
@@ -196,9 +197,15 @@ Returns the durable operation state without exposing signed wire bytes or intern
 
 Returns independently observed finalized refund capacity after subtracting every outstanding registered liability and the consumed rolling liability limit. A liability remains pending while its refund is prepared, submitted, or reconciling and is removed only after finalized refund state, preventing double subtraction. The authenticated response includes `refundTreasury`, `refundMint`, `refundDecimals`, `finalizedBalanceRaw`, `pendingRefundRaw`, `treasuryAvailableRefundRaw`, `remainingRefundLimitUsdCents`, and `availableRefundRaw`; raw amounts are decimal strings. `availableRefundRaw` is the lower of protected treasury capacity and rolling-limit capacity. Dependency or RPC disagreement returns HTTP 503 with `healthy: false`.
 
+Readiness is healthy only when the database, both RPC providers, both named price observations, the signer-owned GitHub credential, the immutable pinned escrow program, refund-token custody, and bounty custody all pass a fresh probe.
+
+### `GET /v1/readiness/evidence`
+
+Returns the authenticated evidence behind the readiness decision. It reports boolean dependency checks, provider counts, the public program ID and executable hash, immutable-program status, public custody addresses and finalized balances, and the two bounded price observations. It does not return provider URLs, credentials, private keys, database details, or GitHub identity. Any failed required check returns HTTP 503 and leaves unavailable evidence `null`.
+
 ### Operational endpoints
 
-- `GET /health` checks database and Solana RPC availability.
+- `GET /health` returns 200 only when the full production readiness probe passes and otherwise returns 503 without dependency details.
 - `GET /metrics` emits Prometheus metrics without credentials or transaction payloads.
 
 ## Run locally
@@ -213,7 +220,7 @@ pnpm build
 
 Mock adapters are available to the test suite through dependency injection. The HTTP entry point intentionally cannot start with them. Local server testing therefore requires local Postgres, RPC, signer, asset, program, and price-service configuration.
 
-Production requires Postgres, distinct refund and escrow Solana keys, the controlled refund-token treasury, a separately budgeted SOL escrow pool, the escrow program configuration, two independent Solana RPC providers, two independent price endpoints, and a read-only GitHub credential. Remote database connections must require TLS except for Render's single-label `dpg-*` private-network host; RPC and price endpoints must use HTTPS unless they target loopback. Database migrations run at startup. Use a database role scoped only to the signer schema.
+Production requires Postgres, distinct refund and escrow Solana keys, the controlled refund-token treasury, a separately budgeted SOL escrow pool, the escrow program configuration, two independent Solana RPC providers, two independent price endpoints, and a read-only GitHub credential. Production primary and secondary providers must use different hostnames; different paths or credentials on one hostname do not establish independence. Remote database connections must require TLS except for Render's single-label `dpg-*` private-network host; RPC and price endpoints must use HTTPS unless they target loopback. Database migrations and one full dependency probe run at startup. A degraded startup is reported through stderr and HTTP 503 readiness while the process remains available for durable recovery and already-authorized refund work. Use a database role scoped only to the signer schema.
 
 Required production settings without defaults are `MIZUKI_SIGNER_AUTH_TOKEN`, `MIZUKI_SIGNER_DATABASE_URL`, `MIZUKI_SIGNER_RPC_URL`, `MIZUKI_SIGNER_SECONDARY_RPC_URL`, `MIZUKI_REFUND_PRIVATE_KEY_JSON`, `MIZUKI_ESCROW_PRIVATE_KEY_JSON`, `MIZUKI_SIGNER_GITHUB_TOKEN`, `MIZUKI_JOB_AUTHORITY_PUBLIC_KEY`, `MIZUKI_REFUND_TREASURY`, `MIZUKI_ESCROW_AUTHORITY`, `MIZUKI_REFUND_MINT`, `MIZUKI_ESCROW_PROGRAM_ID`, `MIZUKI_ESCROW_PROGRAM_DATA_SHA256`, `MIZUKI_SOL_USD_PRICE_URL`, and `MIZUKI_SOL_USD_SECONDARY_PRICE_URL`. Set `NODE_ENV=production` and `MIZUKI_SIGNER_MOCK_MODE=false`. Either price token is optional when its endpoint does not authenticate requests. Every bounded policy setting and its default is recorded in `.env.example`; production operators should set them explicitly rather than relying on defaults.
 
@@ -232,7 +239,7 @@ Required production settings without defaults are `MIZUKI_SIGNER_AUTH_TOKEN`, `M
 
 ## Mainnet gate
 
-Do not enable public jobs until all of these have completed with finalized signatures:
+Do not enable public jobs until the transaction canaries have finalized and every failure drill below has passed:
 
 1. One exact `$2` refund canary.
 2. One `$10` contributor reserve, signed bind, and release canary.
@@ -240,3 +247,5 @@ Do not enable public jobs until all of these have completed with finalized signa
 4. A forced process exit after broadcast followed by successful reconciliation with one transfer.
 5. Concurrent duplicate requests producing one durable operation and one economic effect.
 6. A deliberate price-feed disagreement failing closed without reserving or signing an escrow.
+7. A staged RPC custody disagreement returning unhealthy readiness without reserving or signing.
+8. A rejected GitHub signer credential returning unhealthy readiness while refund recovery remains available.

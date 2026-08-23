@@ -3,9 +3,12 @@ import { describe, expect, it } from 'vitest';
 import {
   ActivityStreams,
   BoundedTokenBuckets,
+  PublicAdmission,
   RateLimitError,
+  requestScheme,
   requestSource,
 } from './admission.js';
+import { loadConfig } from './config.js';
 
 describe('public admission limits', () => {
   it('refills bounded per-source token buckets and returns a retry delay', () => {
@@ -43,6 +46,77 @@ describe('public admission limits', () => {
     expect(requestSource(request, 2)).toBe('10.0.0.3');
     request.headers['x-forwarded-for'] = '198.51.100.4';
     expect(requestSource(request, 3)).toBe('10.0.0.3');
+  });
+
+  it('uses authenticated web identity and the overwritten Render edge address', () => {
+    const secret = 'p'.repeat(32);
+    const request = {
+      headers: {
+        'cf-connecting-ip': '192.0.2.4',
+        'x-forwarded-for': '203.0.113.99',
+        'x-mizuki-client-ip': '198.51.100.7',
+        'x-mizuki-forwarded-proto': 'https',
+        'x-mizuki-proxy-secret': secret,
+      },
+      socket: { remoteAddress: '10.0.0.3' },
+    } as unknown as IncomingMessage;
+
+    expect(requestSource(request, 1, secret)).toBe('198.51.100.7');
+    expect(requestScheme(request, 1, secret)).toBe('https');
+
+    request.headers['x-mizuki-proxy-secret'] = 'x'.repeat(32);
+    request.headers['x-forwarded-proto'] = 'http';
+    expect(requestSource(request, 1, secret)).toBe('192.0.2.4');
+    expect(requestScheme(request, 1, secret)).toBe('http');
+
+    request.headers['x-mizuki-proxy-secret'] = 'é'.repeat(32);
+    expect(requestSource(request, 1, secret)).toBe('192.0.2.4');
+  });
+
+  it('does not trust a proxy secret shorter than 32 UTF-8 bytes', () => {
+    const shortSecret = 'é'.repeat(15);
+    const request = {
+      headers: {
+        'cf-connecting-ip': '192.0.2.4',
+        'x-forwarded-proto': 'http',
+        'x-mizuki-client-ip': '198.51.100.7',
+        'x-mizuki-forwarded-proto': 'https',
+        'x-mizuki-proxy-secret': shortSecret,
+      },
+      socket: { remoteAddress: '10.0.0.3' },
+    } as unknown as IncomingMessage;
+
+    expect(requestSource(request, 1, shortSecret)).toBe('192.0.2.4');
+    expect(requestScheme(request, 1, shortSecret)).toBe('http');
+
+    const validSecret = 'é'.repeat(16);
+    request.headers['x-mizuki-proxy-secret'] = validSecret;
+    expect(requestSource(request, 1, validSecret)).toBe('198.51.100.7');
+    expect(requestScheme(request, 1, validSecret)).toBe('https');
+  });
+
+  it('keeps authenticated web callers in separate rate-limit buckets', () => {
+    const secret = 'p'.repeat(32);
+    const admission = new PublicAdmission(
+      loadConfig({
+        MIZUKI_TRUSTED_PROXY_HOPS: '1',
+        MIZUKI_WEB_PROXY_SECRET: secret,
+      }),
+    );
+    const request = (clientIp: string) =>
+      ({
+        headers: {
+          'cf-connecting-ip': '192.0.2.4',
+          'x-mizuki-client-ip': clientIp,
+          'x-mizuki-proxy-secret': secret,
+        },
+        socket: { remoteAddress: '10.0.0.3' },
+      }) as unknown as IncomingMessage;
+
+    for (let index = 0; index < 6; index += 1) {
+      admission.consume('quote', request('198.51.100.7'));
+    }
+    expect(() => admission.consume('quote', request('198.51.100.8'))).not.toThrow();
   });
 
   it('caps total and per-source activity streams and releases exactly once', () => {

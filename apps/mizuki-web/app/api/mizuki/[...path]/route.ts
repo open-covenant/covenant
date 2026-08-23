@@ -1,7 +1,9 @@
-import { getApiBaseUrl } from '@/lib/api';
+import { isIP } from 'node:net';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
+
+const MAX_BODY_BYTES = 64_000;
 
 const forwardedRequestHeaders = [
   'accept',
@@ -33,23 +35,35 @@ async function proxy(
 
   const source = new URL(request.url);
   const pathname = path.map((part) => encodeURIComponent(part)).join('/');
-  const target = `${getApiBaseUrl()}/${pathname}${source.search}`;
+  const apiBaseUrl = (process.env.MIZUKI_API_URL || 'http://127.0.0.1:8787').replace(/\/$/, '');
+  const target = `${apiBaseUrl}/${pathname}${source.search}`;
+  const proxySecret = process.env.MIZUKI_WEB_PROXY_SECRET;
+  if (!proxySecret || Buffer.byteLength(proxySecret, 'utf8') < 32) {
+    return Response.json({ error: 'Mizuki API proxy is unavailable' }, { status: 503 });
+  }
+
+  const forwardsBody = request.method !== 'GET' && request.method !== 'HEAD';
+  if (forwardsBody && declaredBodyBytes(request.headers.get('content-length')) > MAX_BODY_BYTES) {
+    return bodyTooLarge();
+  }
+
   const headers = new Headers();
   for (const name of forwardedRequestHeaders) {
     const value = request.headers.get(name);
     if (value) headers.set(name, value);
   }
-  headers.set('x-mizuki-web-proxy', '1');
+  headers.set('x-mizuki-proxy-secret', proxySecret);
+  headers.set('x-mizuki-forwarded-proto', publicScheme(source));
+  const clientIp = edgeClientIp(request.headers.get('cf-connecting-ip'));
+  if (clientIp) headers.set('x-mizuki-client-ip', clientIp);
 
   try {
-    const body =
-      request.method === 'GET' || request.method === 'HEAD'
-        ? undefined
-        : await request.arrayBuffer();
+    const buffered = forwardsBody ? await boundedBody(request) : { body: undefined };
+    if ('tooLarge' in buffered) return bodyTooLarge();
     const upstream = await fetch(target, {
       method: request.method,
       headers,
-      body,
+      body: buffered.body,
       redirect: 'manual',
       cache: 'no-store',
       signal: request.signal,
@@ -83,3 +97,60 @@ export const POST = proxy;
 export const PUT = proxy;
 export const PATCH = proxy;
 export const DELETE = proxy;
+
+function declaredBodyBytes(value: string | null): number {
+  const candidate = value?.trim();
+  if (!candidate || !/^[0-9]+$/.test(candidate)) return 0;
+  const length = BigInt(candidate);
+  return length > BigInt(Number.MAX_SAFE_INTEGER) ? Number.POSITIVE_INFINITY : Number(length);
+}
+
+async function boundedBody(
+  request: Request,
+): Promise<{ body: ArrayBuffer | undefined } | { tooLarge: true }> {
+  if (!request.body) return { body: undefined };
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    length += value.byteLength;
+    if (length > MAX_BODY_BYTES) {
+      await reader.cancel().catch(() => undefined);
+      return { tooLarge: true };
+    }
+    chunks.push(value);
+  }
+
+  const body = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { body: body.buffer };
+}
+
+function bodyTooLarge(): Response {
+  return Response.json({ error: `Request body exceeds ${MAX_BODY_BYTES} bytes` }, { status: 413 });
+}
+
+function edgeClientIp(value: string | null): string | undefined {
+  if (!value) return undefined;
+  const candidate = value.trim();
+  return isIP(candidate) ? candidate.toLowerCase() : undefined;
+}
+
+function publicScheme(source: URL): 'http' | 'https' {
+  const configured = process.env.NEXT_PUBLIC_MIZUKI_APP_URL;
+  if (configured) {
+    try {
+      if (new URL(configured).protocol === 'https:') return 'https';
+    } catch {
+      // An invalid configured origin must not upgrade cookies.
+    }
+  }
+  return source.protocol === 'https:' ? 'https' : 'http';
+}

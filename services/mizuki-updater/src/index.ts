@@ -13,54 +13,61 @@ const repository = config.memoryStore
   ? new InMemoryUpgradeRepository()
   : new PostgresUpgradeRepository(config.databaseUrl!);
 const metrics = new UpdaterMetrics();
-const proposals = new ProposalVerifier({
-  trustedProposalKeys: config.trustedProposalKeys,
-  trustedBenchmarkKeys: config.trustedBenchmarkKeys,
-  trustedReviewKeys: config.trustedReviewKeys,
-  allowedRepositories: config.allowedRepositories,
-  allowedBaseBranches: config.allowedBaseBranches,
-  headBranchPrefix: config.headBranchPrefix,
-  mandatoryChecks: config.mandatoryChecks,
-  maxProposalAgeMs: config.proposalMaxAgeMs,
-});
-const artifacts = new HttpArtifactVerifier(
-  config.artifactOrigins,
-  config.artifactTimeoutMs,
-  config.artifactMaxBytes,
-);
-const github = new GitHubAppGateway({
-  apiUrl: config.githubApiUrl,
-  appId: config.githubAppId,
-  privateKey: config.githubPrivateKey,
-  timeoutMs: config.githubTimeoutMs,
-  mergeMethod: config.githubMergeMethod,
-});
-const deployments = new HttpDeploymentGateway({
-  shadowUrl: config.shadowHookUrl,
-  shadowHealthUrlTemplate: config.shadowHealthUrlTemplate,
-  promotionHealthUrlTemplate: config.promotionHealthUrlTemplate,
-  promoteUrl: config.promoteHookUrl,
-  rollbackUrl: config.rollbackHookUrl,
-  token: config.deployHookToken,
-  timeoutMs: config.hookTimeoutMs,
-});
-const service = new UpdaterService(
-  {
-    checkTimeoutMs: config.checkTimeoutMs,
-    healthTimeoutMs: config.healthTimeoutMs,
-    promotionSoakMs: config.promotionSoakMs,
-    promotionTimeoutMs: config.promotionTimeoutMs,
-    pollIntervalMs: config.pollIntervalMs,
-    leaseMs: config.leaseMs,
-    maxAttempts: config.maxAttempts,
-  },
-  repository,
-  proposals,
-  artifacts,
-  github,
-  deployments,
-  metrics,
-);
+const operational = config.operational;
+const github = operational
+  ? new GitHubAppGateway({
+      apiUrl: config.githubApiUrl,
+      appId: operational.githubAppId,
+      privateKey: operational.githubPrivateKey,
+      timeoutMs: config.githubTimeoutMs,
+      mergeMethod: config.githubMergeMethod,
+    })
+  : undefined;
+const deployments = operational
+  ? new HttpDeploymentGateway({
+      readinessUrl: operational.deployReadinessUrl,
+      shadowUrl: operational.shadowHookUrl,
+      shadowHealthUrlTemplate: operational.shadowHealthUrlTemplate,
+      promotionHealthUrlTemplate: operational.promotionHealthUrlTemplate,
+      promoteUrl: operational.promoteHookUrl,
+      rollbackUrl: operational.rollbackHookUrl,
+      token: operational.deployHookToken,
+      timeoutMs: config.hookTimeoutMs,
+    })
+  : undefined;
+const service =
+  operational && github && deployments
+    ? new UpdaterService(
+        {
+          checkTimeoutMs: config.checkTimeoutMs,
+          healthTimeoutMs: config.healthTimeoutMs,
+          promotionSoakMs: config.promotionSoakMs,
+          promotionTimeoutMs: config.promotionTimeoutMs,
+          pollIntervalMs: config.pollIntervalMs,
+          leaseMs: config.leaseMs,
+          maxAttempts: config.maxAttempts,
+        },
+        repository,
+        new ProposalVerifier({
+          trustedProposalKeys: operational.trustedProposalKeys,
+          trustedBenchmarkKeys: operational.trustedBenchmarkKeys,
+          trustedReviewKeys: operational.trustedReviewKeys,
+          allowedRepositories: config.allowedRepositories,
+          allowedBaseBranches: config.allowedBaseBranches,
+          headBranchPrefix: config.headBranchPrefix,
+          mandatoryChecks: config.mandatoryChecks,
+          maxProposalAgeMs: config.proposalMaxAgeMs,
+        }),
+        new HttpArtifactVerifier(
+          config.artifactOrigins,
+          config.artifactTimeoutMs,
+          config.artifactMaxBytes,
+        ),
+        github,
+        deployments,
+        metrics,
+      )
+    : undefined;
 
 await repository.migrate();
 const server = createUpdaterServer({
@@ -69,6 +76,13 @@ const server = createUpdaterServer({
   metrics,
   authToken: config.authToken,
   readToken: config.readToken,
+  operationalFailures: config.operationalFailures,
+  operationalReadiness:
+    github && deployments
+      ? async () => {
+          await Promise.all([github.readiness(), deployments.readiness()]);
+        }
+      : undefined,
 });
 server.headersTimeout = 10_000;
 server.requestTimeout = 15_000;
@@ -79,7 +93,7 @@ server.listen(config.port, config.host, () => {
 
 let recovering = false;
 async function recover(): Promise<void> {
-  if (recovering) return;
+  if (recovering || !service) return;
   recovering = true;
   try {
     await service.recover();

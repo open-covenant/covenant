@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { PolicyReadiness } from './policy-client.js';
 
 export const serviceDependencies = [
+  'configuration',
   'postgres',
   'operator_controls',
   'coding_gateway',
@@ -34,6 +35,7 @@ const refundProtectionSchema = z
     availableEscrowReserveLamports: atomicSchema,
   })
   .strict();
+const configurationSchema = z.object({ issues: z.array(z.string().min(1)) }).strict();
 
 export type RefundProtectionEvidence = z.infer<typeof refundProtectionSchema>;
 
@@ -41,6 +43,7 @@ export interface DependencyEvidence {
   ok: boolean;
   checkedAt: string;
   latencyMs: number;
+  configurationIssues?: string[];
   refundProtection?: RefundProtectionEvidence;
 }
 
@@ -130,9 +133,14 @@ export class ServiceReadiness {
   private async probe(name: ServiceDependency): Promise<DependencyEvidence> {
     const startedAt = this.now();
     let ok = false;
+    let configurationIssues: string[] | undefined;
     let refundProtection: RefundProtectionEvidence | undefined;
     try {
       const result = await withTimeout(this.probes[name](), this.options.timeoutMs);
+      if (name === 'configuration') {
+        configurationIssues = configurationSchema.parse(result).issues;
+        if (configurationIssues.length > 0) throw new Error('configuration is incomplete');
+      }
       if (name === 'policy_signer') refundProtection = refundProtectionSchema.parse(result);
       ok = true;
     } catch {
@@ -143,6 +151,7 @@ export class ServiceReadiness {
       ok,
       checkedAt: new Date(finishedAt).toISOString(),
       latencyMs: Math.max(0, finishedAt - startedAt),
+      ...(configurationIssues ? { configurationIssues } : {}),
       ...(refundProtection ? { refundProtection } : {}),
     };
   }

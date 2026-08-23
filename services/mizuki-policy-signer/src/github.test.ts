@@ -155,6 +155,34 @@ describe('claimant OAuth verification', () => {
   });
 });
 
+describe('signer GitHub credential readiness', () => {
+  it('verifies the configured credential against the fixed merge-evidence endpoint', async () => {
+    const { verifier, fetcher } = fixture({ data: { viewer: { login: 'Mizuki' } } });
+
+    await expect(verifier.health()).resolves.toBeUndefined();
+
+    const [url, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('https://api.github.com/graphql');
+    expect(init).toMatchObject({
+      method: 'POST',
+      redirect: 'error',
+      headers: {
+        authorization: 'Bearer github-read-only-test-token',
+        'x-github-api-version': '2022-11-28',
+      },
+    });
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      query: expect.stringContaining('MizukiSignerCredentialReadiness'),
+    });
+  });
+
+  it('fails closed when the configured credential is rejected', async () => {
+    await expect(
+      fixture({ data: null, errors: [{ message: 'forbidden' }] }).verifier.health(),
+    ).rejects.toMatchObject({ code: 'github_credential_invalid', retryable: false });
+  });
+});
+
 function fixture(body: object) {
   const fetcher = vi.fn(
     async () =>

@@ -32,6 +32,7 @@ export interface GitHubAppConfig {
 }
 
 const installationSchema = z.object({ id: z.number().int().positive() }).passthrough();
+const appSchema = z.object({ id: z.number().int().positive() }).passthrough();
 const tokenSchema = z
   .object({ token: z.string().min(1), expires_at: z.string().datetime({ offset: true }) })
   .passthrough();
@@ -64,6 +65,11 @@ export class GitHubAppGateway implements GitHubGateway {
     if (this.key.asymmetricKeyType !== 'rsa') {
       throw new Error('GitHub App private key must be RSA');
     }
+  }
+
+  async readiness(): Promise<void> {
+    const app = appSchema.parse(await this.request('/app', this.appJwt()));
+    if (app.id !== this.config.appId) throw new Error('GitHub authenticated a different App');
   }
 
   async syncPullRequest(

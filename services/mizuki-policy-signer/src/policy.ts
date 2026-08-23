@@ -1,6 +1,6 @@
 import { createHash, createPublicKey, randomUUID, verify } from 'node:crypto';
 import { PublicKey } from '@solana/web3.js';
-import type { ChainGateway, UsdPriceOracle } from './chain.js';
+import type { ChainCapacity, ChainGateway, UsdPriceOracle } from './chain.js';
 import type {
   ChainOperation,
   BindChallenge,
@@ -15,6 +15,7 @@ import type {
   RefundEscrowRequest,
   RefundRequest,
   RefundReadinessView,
+  SignerReadinessEvidence,
   GitHubIdentityGrant,
   GitHubIdentityGrantRequest,
   GitHubIdentityGrantView,
@@ -66,6 +67,12 @@ export class PolicyService {
   ) {
     this.leaseMs = config.leaseMs ?? 30_000;
     this.jobAuthorityPublicKey = new PublicKey(config.jobAuthorityPublicKey);
+    if (
+      config.jobAuthorityPublicKey === config.refundTreasury ||
+      config.jobAuthorityPublicKey === config.escrowAuthority
+    ) {
+      throw new Error('Job authority must be distinct from both custody authorities');
+    }
   }
 
   async registerRefundLiability(
@@ -232,13 +239,14 @@ export class PolicyService {
 
   async readiness(): Promise<RefundReadinessView> {
     try {
-      const [capacity, pendingRefundRaw, rollingSpendUsdCents] = await Promise.all([
-        this.chain.capacity(),
+      const evidence = await this.probeReadiness();
+      if (!evidence.healthy || !evidence.chain) return this.unavailableReadiness();
+
+      const [pendingRefundRaw, rollingSpendUsdCents] = await Promise.all([
         this.store.pendingRefundRawAmount(),
         this.store.rollingSpendUsdCents('refund', this.now()),
-        this.store.ping(),
       ]);
-      const finalizedBalanceRaw = capacity.refundRawAmount;
+      const finalizedBalanceRaw = evidence.chain.refundRawAmount;
       const treasuryAvailable = BigInt(finalizedBalanceRaw) - BigInt(pendingRefundRaw);
       const remainingRefundLimitUsdCents = Math.max(
         0,
@@ -249,12 +257,6 @@ export class PolicyService {
         this.config.refundDecimals,
       );
       const available = treasuryAvailable < limitAvailable ? treasuryAvailable : limitAvailable;
-      const escrowOverhead =
-        BigInt(capacity.stateRentLamports) +
-        BigInt(capacity.vaultRentLamports) +
-        BigInt(capacity.guardRentLamports) +
-        BigInt(this.config.solFeeReserveLamports);
-      const escrowAvailable = BigInt(capacity.escrowLamports) - escrowOverhead;
       return {
         healthy: true,
         refundTreasury: this.config.refundTreasury,
@@ -266,25 +268,92 @@ export class PolicyService {
         remainingRefundLimitUsdCents,
         availableRefundRaw: (available > 0n ? available : 0n).toString(),
         escrowAuthority: this.config.escrowAuthority,
-        finalizedEscrowBalanceLamports: capacity.escrowLamports,
-        availableEscrowReserveLamports: (escrowAvailable > 0n ? escrowAvailable : 0n).toString(),
+        finalizedEscrowBalanceLamports: evidence.chain.escrowLamports,
+        availableEscrowReserveLamports: evidence.chain.availableEscrowReserveLamports,
       };
     } catch {
-      return {
-        healthy: false,
-        refundTreasury: this.config.refundTreasury,
-        refundMint: this.config.refundMint,
-        refundDecimals: this.config.refundDecimals,
-        finalizedBalanceRaw: null,
-        pendingRefundRaw: null,
-        treasuryAvailableRefundRaw: null,
-        remainingRefundLimitUsdCents: null,
-        availableRefundRaw: null,
-        escrowAuthority: this.config.escrowAuthority,
-        finalizedEscrowBalanceLamports: null,
-        availableEscrowReserveLamports: null,
-      };
+      return this.unavailableReadiness();
     }
+  }
+
+  async probeReadiness(): Promise<SignerReadinessEvidence> {
+    const [database, chain, prices, github] = await Promise.allSettled([
+      this.store.ping(),
+      this.chain.health(),
+      this.prices.solUsd(),
+      this.merges.health(),
+    ]);
+    const priceObservations = prices.status === 'fulfilled' ? prices.value.observations : undefined;
+    const priceConsensus =
+      priceObservations?.length === 2 &&
+      priceObservations[0]?.feed === 'primary' &&
+      priceObservations[1]?.feed === 'secondary';
+    const chainReady = chain.status === 'fulfilled';
+    const checks = {
+      database: database.status === 'fulfilled',
+      rpcConsensus: chainReady,
+      priceConsensus,
+      githubCredential: github.status === 'fulfilled',
+      escrowProgram: chainReady,
+      refundCustody: chainReady,
+      bountyCustody: chainReady,
+    };
+    const healthy = Object.values(checks).every(Boolean);
+
+    return {
+      healthy,
+      observedAt: this.now().toISOString(),
+      checks,
+      chain:
+        chain.status === 'fulfilled'
+          ? {
+              rpcProviders: chain.value.rpcProviders,
+              escrowProgramId: chain.value.escrowProgramId,
+              escrowProgramDataSha256: chain.value.escrowProgramDataSha256,
+              escrowProgramImmutable: chain.value.escrowProgramImmutable,
+              refundTreasury: this.config.refundTreasury,
+              refundMint: this.config.refundMint,
+              refundDecimals: this.config.refundDecimals,
+              refundRawAmount: chain.value.refundRawAmount,
+              escrowAuthority: this.config.escrowAuthority,
+              escrowLamports: chain.value.escrowLamports,
+              availableEscrowReserveLamports: availableEscrowReserve(
+                chain.value,
+                this.config.solFeeReserveLamports,
+              ),
+            }
+          : null,
+      prices:
+        prices.status === 'fulfilled' && priceConsensus
+          ? {
+              feedCount: 2,
+              priceUsdMicros: prices.value.priceUsdMicros,
+              observedAt: prices.value.observedAt.toISOString(),
+              observations: priceObservations.map((observation) => ({
+                feed: observation.feed,
+                priceUsdMicros: observation.priceUsdMicros,
+                observedAt: observation.observedAt.toISOString(),
+              })),
+            }
+          : null,
+    };
+  }
+
+  private unavailableReadiness(): RefundReadinessView {
+    return {
+      healthy: false,
+      refundTreasury: this.config.refundTreasury,
+      refundMint: this.config.refundMint,
+      refundDecimals: this.config.refundDecimals,
+      finalizedBalanceRaw: null,
+      pendingRefundRaw: null,
+      treasuryAvailableRefundRaw: null,
+      remainingRefundLimitUsdCents: null,
+      availableRefundRaw: null,
+      escrowAuthority: this.config.escrowAuthority,
+      finalizedEscrowBalanceLamports: null,
+      availableEscrowReserveLamports: null,
+    };
   }
 
   async createEscrow(
@@ -954,6 +1023,16 @@ function usdCentsToLamports(amountUsdCents: number, priceUsdMicros: number): big
     );
   }
   return lamports;
+}
+
+function availableEscrowReserve(capacity: ChainCapacity, feeReserveLamports: number): string {
+  const overhead =
+    BigInt(capacity.stateRentLamports) +
+    BigInt(capacity.vaultRentLamports) +
+    BigInt(capacity.guardRentLamports) +
+    BigInt(feeReserveLamports);
+  const available = BigInt(capacity.escrowLamports) - overhead;
+  return (available > 0n ? available : 0n).toString();
 }
 
 function chainOperation(record: OperationRecord): ChainOperation {

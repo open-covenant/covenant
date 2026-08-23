@@ -25,6 +25,7 @@ export interface MergeEvidence {
 }
 
 export interface MergeVerifier {
+  health(): Promise<void>;
   verify(request: MergeVerificationRequest): Promise<MergeEvidence>;
   verifyRepositoryMerge(request: RepositoryMergeRequest): Promise<RepositoryMergeEvidence>;
   verifyOauthIdentity(accessToken: string): Promise<ClaimantEvidence>;
@@ -110,12 +111,35 @@ query MizukiMergeEvidence($owner: String!, $name: String!, $number: Int!) {
 const oauthIdentitySchema = z
   .object({ id: z.number().int().positive(), login: z.string().min(1).max(39) })
   .passthrough();
+const credentialResponseSchema = z
+  .object({
+    data: z.object({ viewer: z.object({ login: z.string().min(1).max(39) }) }).nullable(),
+    errors: z.array(z.object({ message: z.string() }).passthrough()).optional(),
+  })
+  .passthrough();
+const credentialQuery = `
+query MizukiSignerCredentialReadiness {
+  viewer { login }
+}`;
 
 export class GitHubMergeVerifier implements MergeVerifier {
   constructor(
     private readonly token: string,
     private readonly fetcher: typeof fetch = fetch,
   ) {}
+
+  async health(): Promise<void> {
+    const decoded = credentialResponseSchema.safeParse(
+      await this.graphql({ query: credentialQuery }),
+    );
+    if (!decoded.success || decoded.data.errors?.length || !decoded.data.data?.viewer) {
+      throw new PolicyError(
+        'github_credential_invalid',
+        'GitHub signer credential could not access merge evidence',
+        503,
+      );
+    }
+  }
 
   async verifyOauthIdentity(accessToken: string): Promise<ClaimantEvidence> {
     let response: Response;
@@ -356,6 +380,10 @@ export class MockMergeVerifier implements MergeVerifier {
   readonly repositoryRequests: RepositoryMergeRequest[] = [];
   error: Error | null = null;
   oauthIdentity: ClaimantEvidence = { githubId: '42', login: 'contributor' };
+
+  async health(): Promise<void> {
+    if (this.error) throw this.error;
+  }
 
   async verifyOauthIdentity(_accessToken: string): Promise<ClaimantEvidence> {
     if (this.error) throw this.error;

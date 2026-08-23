@@ -1,10 +1,10 @@
 import { createServer } from 'node:http';
-import { createApp, ensureRefundCapacity, SerialGate } from './app.js';
+import { createApp, SerialGate } from './app.js';
 import { ContributorAuth } from './auth.js';
 import { BountyService } from './bounties.js';
 import { CapabilityService } from './capabilities.js';
 import { ClawPumpClient, EarningsReconciler } from './clawpump.js';
-import { assertLiveConfig, loadConfig } from './config.js';
+import { assertBootConfig, loadConfig } from './config.js';
 import { JobProcessor } from './executor.js';
 import { GithubClient } from './github.js';
 import { finalizeJobMerge } from './merges.js';
@@ -15,16 +15,15 @@ import { PolicySignerClient } from './policy-client.js';
 import { recordPaymentReceipts } from './receipts.js';
 import { GithubWebhookHandler } from './webhooks.js';
 import { UpdaterStatusClient } from './updater-client.js';
-import { refundProtectionEvidence, ServiceReadiness } from './readiness.js';
+import { createServiceReadiness } from './service-readiness.js';
 
 const config = loadConfig();
-assertLiveConfig(config);
+assertBootConfig(config);
 const store = config.databaseUrl
   ? await PostgresStore.connect(config.databaseUrl)
   : new MemoryStore();
 const github = new GithubClient(config);
 const payments = new Payments(config);
-await payments.initialize();
 const policy = new PolicySignerClient(config);
 const paymentAdmission = new SerialGate();
 const reviewer = new UsePodContributorReviewer(config, store, github);
@@ -45,29 +44,16 @@ const processor = new JobProcessor(
   },
   policy,
 );
-const readiness = new ServiceReadiness(
-  {
-    postgres: () => store.readiness(),
-    operator_controls: async () => {
-      await store.operatorControls();
-    },
-    coding_gateway: () => processor.readiness(),
-    policy_signer: async () =>
-      refundProtectionEvidence(await ensureRefundCapacity({ config, store, policy }, 0n)),
-    github_app: () => github.readiness(),
-    reviewer_route: () => reviewer.readiness(),
-    updater: async () => {
-      if (!updater) throw new Error('updater service is not configured');
-      await updater.readiness();
-    },
-    x402_facilitator: () => payments.readiness(),
-  },
-  {
-    refreshMs: config.readinessRefreshMs,
-    maxAgeMs: config.readinessMaxAgeMs,
-    timeoutMs: config.readinessTimeoutMs,
-  },
-);
+const readiness = createServiceReadiness({
+  config,
+  store,
+  processor,
+  policy,
+  github,
+  reviewer,
+  updater,
+  payments,
+});
 const auth = new ContributorAuth(config, store, fetch, policy);
 const webhooks = new GithubWebhookHandler(store, async (payload) => {
   if (

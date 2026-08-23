@@ -12,6 +12,9 @@ const promotionResponseSchema = z.object({ status: z.literal('completed'), opera
 const rollbackResponseSchema = z
   .object({ status: z.literal('completed'), operationId: operationId.optional() })
   .strict();
+const deploymentReadinessSchema = z
+  .object({ status: z.literal('ok'), service: z.literal('mizuki-deployment-controller') })
+  .strict();
 const healthStatusSchema = z.enum(['starting', 'healthy', 'unhealthy']);
 const gitSha = z.string().regex(/^[a-f0-9]{40}$/);
 const shadowHealthResponseSchema = z
@@ -83,6 +86,7 @@ export interface DeploymentGateway {
 }
 
 export interface DeploymentHookConfig {
+  readinessUrl: string;
   shadowUrl: string;
   shadowHealthUrlTemplate: string;
   promotionHealthUrlTemplate: string;
@@ -94,6 +98,12 @@ export interface DeploymentHookConfig {
 
 export class HttpDeploymentGateway implements DeploymentGateway {
   constructor(private readonly config: DeploymentHookConfig) {}
+
+  async readiness(): Promise<void> {
+    deploymentReadinessSchema.parse(
+      await this.request(this.config.readinessUrl, { method: 'GET' }),
+    );
+  }
 
   async startShadow(
     upgradeId: string,

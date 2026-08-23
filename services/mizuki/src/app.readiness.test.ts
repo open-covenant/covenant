@@ -24,6 +24,7 @@ describe('service readiness endpoint', () => {
       serviceDependencies.map((name) => [
         name,
         vi.fn(async () => {
+          if (name === 'configuration') return { issues: [] };
           if (name === 'github_app') throw new Error('secret upstream diagnostic');
           if (name === 'policy_signer') {
             return {
@@ -95,6 +96,7 @@ describe('service readiness endpoint', () => {
       serviceDependencies.map((name) => [
         name,
         vi.fn(async () => {
+          if (name === 'configuration') return { issues: [] };
           if (name !== 'policy_signer') return;
           return {
             refundTreasury: 'refund-treasury',
@@ -193,11 +195,70 @@ describe('service readiness endpoint', () => {
   });
 });
 
-async function serve(readiness: ServiceReadiness): Promise<string> {
+describe('deployment readiness endpoint', () => {
+  it('passes with closed durable controls while dependencies are unready', async () => {
+    const check = vi.fn(async () => ({ ready: false }));
+    const base = await serve({ check } as unknown as ServiceReadiness);
+
+    const response = await fetch(`${base}/deployz`);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    await expect(response.json()).resolves.toEqual({ ok: true });
+    expect(check).not.toHaveBeenCalled();
+  });
+
+  it('fails when durable controls are open and dependencies are unready', async () => {
+    const store = await openControls();
+    const base = await serve(
+      { check: vi.fn(async () => ({ ready: false })) } as unknown as ServiceReadiness,
+      store,
+    );
+
+    const response = await fetch(`${base}/deployz`);
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({ ok: false });
+  });
+
+  it('passes when durable controls are open and dependencies are ready', async () => {
+    const store = await openControls();
+    const base = await serve(
+      { check: vi.fn(async () => ({ ready: true })) } as unknown as ServiceReadiness,
+      store,
+    );
+
+    const response = await fetch(`${base}/deployz`);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ ok: true });
+  });
+
+  it('fails when durable controls cannot be read', async () => {
+    const store = {
+      operatorControls: vi.fn(async () => {
+        throw new Error('database unavailable');
+      }),
+    } as unknown as AppDependencies['store'];
+    const check = vi.fn(async () => ({ ready: true }));
+    const base = await serve({ check } as unknown as ServiceReadiness, store);
+
+    const response = await fetch(`${base}/deployz`);
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({ ok: false });
+    expect(check).not.toHaveBeenCalled();
+  });
+});
+
+async function serve(
+  readiness: ServiceReadiness,
+  store: AppDependencies['store'] = new MemoryStore(),
+): Promise<string> {
   const server = createServer(
     createApp({
       config: loadConfig({ MIZUKI_PAYMENT_MODE: 'mock' }),
-      store: new MemoryStore(),
+      store,
       paymentAdmission: new SerialGate(),
       readiness,
     } as unknown as AppDependencies),
@@ -207,4 +268,15 @@ async function serve(readiness: ServiceReadiness): Promise<string> {
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('test server did not bind');
   return `http://127.0.0.1:${address.port}`;
+}
+
+async function openControls(): Promise<MemoryStore> {
+  const store = new MemoryStore();
+  await store.updateOperatorControls({
+    intakeEnabled: true,
+    claimsEnabled: true,
+    reason: 'deployment readiness test controls',
+    updatedBy: 'test',
+  });
+  return store;
 }

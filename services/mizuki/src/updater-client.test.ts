@@ -76,16 +76,21 @@ describe('UpdaterStatusClient', () => {
     await expect(client.getByProposalId('proposal-1')).rejects.toThrow();
   });
 
-  it('authenticates and strictly validates live updater health', async () => {
+  it('authenticates and strictly validates live updater readiness', async () => {
     const request = vi.fn<typeof fetch>(async (input) =>
-      String(input).endsWith('/health')
-        ? Response.json({ status: 'ok', service: 'mizuki-updater' })
+      String(input).endsWith('/readyz')
+        ? Response.json({
+            ready: true,
+            service: 'mizuki-updater',
+            failed: [],
+            dependencies: { postgres: { ok: true }, operational: { ok: true } },
+          })
         : new Response(null, { status: 404 }),
     );
     const client = new UpdaterStatusClient('https://updater.example', 'secret', 1_000, request);
     await expect(client.readiness()).resolves.toBeUndefined();
     expect(request).toHaveBeenCalledWith(
-      'https://updater.example/health',
+      'https://updater.example/readyz',
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
     expect(request).toHaveBeenCalledWith(
@@ -95,8 +100,25 @@ describe('UpdaterStatusClient', () => {
       }),
     );
 
-    request.mockImplementationOnce(async () => Response.json({ status: 'ok', service: 'other' }));
-    await expect(client.readiness()).rejects.toThrow();
+    const unavailable = new UpdaterStatusClient(
+      'https://updater.example',
+      'secret',
+      1_000,
+      vi.fn<typeof fetch>(async (input) =>
+        String(input).endsWith('/readyz')
+          ? Response.json(
+              {
+                ready: false,
+                service: 'mizuki-updater',
+                failed: ['operational'],
+                dependencies: { postgres: { ok: true }, operational: { ok: false } },
+              },
+              { status: 503 },
+            )
+          : new Response(null, { status: 404 }),
+      ),
+    );
+    await expect(unavailable.readiness()).rejects.toThrow('not ready');
   });
 
   it('fails closed when the updater omits the signed source handoff hash', async () => {

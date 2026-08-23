@@ -326,6 +326,43 @@ export interface RefundReadinessView {
   availableEscrowReserveLamports: string | null;
 }
 
+export interface SignerReadinessEvidence {
+  healthy: boolean;
+  observedAt: string;
+  checks: {
+    database: boolean;
+    rpcConsensus: boolean;
+    priceConsensus: boolean;
+    githubCredential: boolean;
+    escrowProgram: boolean;
+    refundCustody: boolean;
+    bountyCustody: boolean;
+  };
+  chain: {
+    rpcProviders: 2;
+    escrowProgramId: string;
+    escrowProgramDataSha256: string;
+    escrowProgramImmutable: true;
+    refundTreasury: string;
+    refundMint: string;
+    refundDecimals: number;
+    refundRawAmount: string;
+    escrowAuthority: string;
+    escrowLamports: string;
+    availableEscrowReserveLamports: string;
+  } | null;
+  prices: {
+    feedCount: 2;
+    priceUsdMicros: number;
+    observedAt: string;
+    observations: Array<{
+      feed: 'primary' | 'secondary';
+      priceUsdMicros: number;
+      observedAt: string;
+    }>;
+  } | null;
+}
+
 export function operationView(record: OperationRecord): OperationView {
   return {
     id: record.id,

@@ -1,5 +1,15 @@
 import { z } from 'zod';
 
+const emptyAsUndefined = (value: unknown): unknown =>
+  typeof value === 'string' && value.trim() === '' ? undefined : value;
+const optionalString = (minimum: number) =>
+  z.preprocess(emptyAsUndefined, z.string().min(minimum).optional());
+const optionalUrl = z.preprocess(emptyAsUndefined, z.string().url().optional());
+const optionalPositiveInteger = z.preprocess(
+  emptyAsUndefined,
+  z.coerce.number().int().positive().optional(),
+);
+
 const envSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -12,9 +22,9 @@ const envSchema = z
       .enum(['true', 'false'])
       .default('false')
       .transform((value) => value === 'true'),
-    MIZUKI_UPDATER_PROPOSAL_KEYS_JSON: z.string().min(2),
-    MIZUKI_UPDATER_BENCHMARK_KEYS_JSON: z.string().min(2),
-    MIZUKI_UPDATER_REVIEW_KEYS_JSON: z.string().min(2),
+    MIZUKI_UPDATER_PROPOSAL_KEYS_JSON: optionalString(2),
+    MIZUKI_UPDATER_BENCHMARK_KEYS_JSON: optionalString(2),
+    MIZUKI_UPDATER_REVIEW_KEYS_JSON: optionalString(2),
     MIZUKI_UPDATER_ALLOWED_REPOSITORIES: z.string().min(3),
     MIZUKI_UPDATER_ALLOWED_BASE_BRANCHES: z.string().min(1),
     MIZUKI_UPDATER_HEAD_BRANCH_PREFIX: z.string().min(1).max(100),
@@ -39,8 +49,8 @@ const envSchema = z
       .max(100 * 1024 * 1024)
       .default(25 * 1024 * 1024),
     MIZUKI_UPDATER_GITHUB_API_URL: z.string().url().default('https://api.github.com'),
-    MIZUKI_UPDATER_GITHUB_APP_ID: z.coerce.number().int().positive(),
-    MIZUKI_UPDATER_GITHUB_PRIVATE_KEY: z.string().min(64),
+    MIZUKI_UPDATER_GITHUB_APP_ID: optionalPositiveInteger,
+    MIZUKI_UPDATER_GITHUB_PRIVATE_KEY: optionalString(64),
     MIZUKI_UPDATER_GITHUB_TIMEOUT_MS: z.coerce
       .number()
       .int()
@@ -48,12 +58,13 @@ const envSchema = z
       .max(120_000)
       .default(20_000),
     MIZUKI_UPDATER_GITHUB_MERGE_METHOD: z.enum(['merge', 'squash', 'rebase']).default('squash'),
-    MIZUKI_UPDATER_SHADOW_HOOK_URL: z.string().url(),
-    MIZUKI_UPDATER_SHADOW_HEALTH_URL_TEMPLATE: z.string().url(),
-    MIZUKI_UPDATER_PROMOTE_HOOK_URL: z.string().url(),
-    MIZUKI_UPDATER_PROMOTION_HEALTH_URL_TEMPLATE: z.string().url(),
-    MIZUKI_UPDATER_ROLLBACK_HOOK_URL: z.string().url(),
-    MIZUKI_UPDATER_DEPLOY_HOOK_TOKEN: z.string().min(32),
+    MIZUKI_UPDATER_SHADOW_HOOK_URL: optionalUrl,
+    MIZUKI_UPDATER_SHADOW_HEALTH_URL_TEMPLATE: optionalUrl,
+    MIZUKI_UPDATER_PROMOTE_HOOK_URL: optionalUrl,
+    MIZUKI_UPDATER_PROMOTION_HEALTH_URL_TEMPLATE: optionalUrl,
+    MIZUKI_UPDATER_ROLLBACK_HOOK_URL: optionalUrl,
+    MIZUKI_UPDATER_DEPLOY_READINESS_URL: optionalUrl,
+    MIZUKI_UPDATER_DEPLOY_HOOK_TOKEN: optionalString(32),
     MIZUKI_UPDATER_HOOK_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(120_000).default(20_000),
     MIZUKI_UPDATER_CHECK_TIMEOUT_MS: z.coerce
       .number()
@@ -85,6 +96,38 @@ const envSchema = z
   })
   .passthrough();
 
+type ParsedEnv = z.infer<typeof envSchema>;
+
+const operationalValues = [
+  'MIZUKI_UPDATER_PROPOSAL_KEYS_JSON',
+  'MIZUKI_UPDATER_BENCHMARK_KEYS_JSON',
+  'MIZUKI_UPDATER_REVIEW_KEYS_JSON',
+  'MIZUKI_UPDATER_GITHUB_APP_ID',
+  'MIZUKI_UPDATER_GITHUB_PRIVATE_KEY',
+  'MIZUKI_UPDATER_SHADOW_HOOK_URL',
+  'MIZUKI_UPDATER_SHADOW_HEALTH_URL_TEMPLATE',
+  'MIZUKI_UPDATER_PROMOTE_HOOK_URL',
+  'MIZUKI_UPDATER_PROMOTION_HEALTH_URL_TEMPLATE',
+  'MIZUKI_UPDATER_ROLLBACK_HOOK_URL',
+  'MIZUKI_UPDATER_DEPLOY_READINESS_URL',
+  'MIZUKI_UPDATER_DEPLOY_HOOK_TOKEN',
+] as const;
+
+export interface UpdaterOperationalConfig {
+  trustedProposalKeys: Record<string, string>;
+  trustedBenchmarkKeys: Record<string, string>;
+  trustedReviewKeys: Record<string, string>;
+  githubAppId: number;
+  githubPrivateKey: string;
+  shadowHookUrl: string;
+  shadowHealthUrlTemplate: string;
+  promoteHookUrl: string;
+  promotionHealthUrlTemplate: string;
+  rollbackHookUrl: string;
+  deployReadinessUrl: string;
+  deployHookToken: string;
+}
+
 export interface UpdaterConfig {
   environment: 'development' | 'test' | 'production';
   host: string;
@@ -93,9 +136,8 @@ export interface UpdaterConfig {
   readToken: string;
   databaseUrl?: string;
   memoryStore: boolean;
-  trustedProposalKeys: Record<string, string>;
-  trustedBenchmarkKeys: Record<string, string>;
-  trustedReviewKeys: Record<string, string>;
+  operational?: UpdaterOperationalConfig;
+  operationalFailures: string[];
   allowedRepositories: Set<string>;
   allowedBaseBranches: Set<string>;
   headBranchPrefix: string;
@@ -105,16 +147,8 @@ export interface UpdaterConfig {
   artifactTimeoutMs: number;
   artifactMaxBytes: number;
   githubApiUrl: string;
-  githubAppId: number;
-  githubPrivateKey: string;
   githubTimeoutMs: number;
   githubMergeMethod: 'merge' | 'squash' | 'rebase';
-  shadowHookUrl: string;
-  shadowHealthUrlTemplate: string;
-  promoteHookUrl: string;
-  promotionHealthUrlTemplate: string;
-  rollbackHookUrl: string;
-  deployHookToken: string;
   hookTimeoutMs: number;
   checkTimeoutMs: number;
   healthTimeoutMs: number;
@@ -136,9 +170,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): UpdaterConfig 
     throw new Error('MIZUKI_UPDATER_DATABASE_URL is required');
   }
 
-  const trustedProposalKeys = parseTrustedKeys(parsed.MIZUKI_UPDATER_PROPOSAL_KEYS_JSON);
-  const trustedBenchmarkKeys = parseTrustedKeys(parsed.MIZUKI_UPDATER_BENCHMARK_KEYS_JSON);
-  const trustedReviewKeys = parseTrustedKeys(parsed.MIZUKI_UPDATER_REVIEW_KEYS_JSON);
   const allowedRepositories = csvSet(parsed.MIZUKI_UPDATER_ALLOWED_REPOSITORIES, (value) =>
     value.toLowerCase(),
   );
@@ -170,32 +201,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): UpdaterConfig 
     return url.origin;
   });
 
-  const hookUrls = [
-    parsed.MIZUKI_UPDATER_SHADOW_HOOK_URL,
-    parsed.MIZUKI_UPDATER_PROMOTE_HOOK_URL,
-    parsed.MIZUKI_UPDATER_ROLLBACK_HOOK_URL,
-    parsed.MIZUKI_UPDATER_SHADOW_HEALTH_URL_TEMPLATE.replace('{deploymentId}', 'probe'),
-    parsed.MIZUKI_UPDATER_PROMOTION_HEALTH_URL_TEMPLATE.replace('{deploymentId}', 'probe'),
+  const credentials = [
+    parsed.MIZUKI_UPDATER_AUTH_TOKEN,
+    parsed.MIZUKI_UPDATER_READ_TOKEN,
+    ...(parsed.MIZUKI_UPDATER_DEPLOY_HOOK_TOKEN ? [parsed.MIZUKI_UPDATER_DEPLOY_HOOK_TOKEN] : []),
   ];
-  if (!parsed.MIZUKI_UPDATER_SHADOW_HEALTH_URL_TEMPLATE.includes('{deploymentId}')) {
-    throw new Error('Shadow health URL template must contain {deploymentId}');
-  }
-  if (!parsed.MIZUKI_UPDATER_PROMOTION_HEALTH_URL_TEMPLATE.includes('{deploymentId}')) {
-    throw new Error('Promotion health URL template must contain {deploymentId}');
-  }
-  if (
-    parsed.NODE_ENV === 'production' &&
-    hookUrls.some((value) => new URL(value).protocol !== 'https:')
-  ) {
-    throw new Error('Deployment endpoints must use HTTPS in production');
-  }
-  if (
-    new Set([
-      parsed.MIZUKI_UPDATER_AUTH_TOKEN,
-      parsed.MIZUKI_UPDATER_READ_TOKEN,
-      parsed.MIZUKI_UPDATER_DEPLOY_HOOK_TOKEN,
-    ]).size !== 3
-  ) {
+  if (new Set(credentials).size !== credentials.length) {
     throw new Error('Submission, read, and deployment tokens must be distinct');
   }
   if (
@@ -204,23 +215,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): UpdaterConfig 
   ) {
     throw new Error('Promotion timeout must exceed the soak by at least one poll interval');
   }
-  assertFixedHealthOrigin(
-    parsed.MIZUKI_UPDATER_SHADOW_HEALTH_URL_TEMPLATE,
-    parsed.MIZUKI_UPDATER_SHADOW_HOOK_URL,
-    'Shadow',
-  );
-  assertFixedHealthOrigin(
-    parsed.MIZUKI_UPDATER_PROMOTION_HEALTH_URL_TEMPLATE,
-    parsed.MIZUKI_UPDATER_SHADOW_HOOK_URL,
-    'Promotion',
-  );
-  if (
-    healthPath(parsed.MIZUKI_UPDATER_PROMOTION_HEALTH_URL_TEMPLATE) ===
-    healthPath(parsed.MIZUKI_UPDATER_SHADOW_HEALTH_URL_TEMPLATE)
-  ) {
-    throw new Error('Shadow and promotion health URL paths must differ');
-  }
-  assertDeploymentOrigins(hookUrls);
   const githubApi = new URL(parsed.MIZUKI_UPDATER_GITHUB_API_URL);
   if (githubApi.username || githubApi.password) {
     throw new Error('GitHub API URL must not include credentials');
@@ -228,6 +222,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): UpdaterConfig 
   if (parsed.NODE_ENV === 'production' && githubApi.protocol !== 'https:') {
     throw new Error('GitHub API URL must use HTTPS in production');
   }
+
+  const operationalFailures = missingOperationalValues(parsed);
+  const operational =
+    operationalFailures.length === 0
+      ? operationalConfig(parsed, parsed.NODE_ENV === 'production')
+      : undefined;
 
   return {
     environment: parsed.NODE_ENV,
@@ -237,9 +237,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): UpdaterConfig 
     readToken: parsed.MIZUKI_UPDATER_READ_TOKEN,
     databaseUrl: parsed.MIZUKI_UPDATER_DATABASE_URL,
     memoryStore: parsed.MIZUKI_UPDATER_MEMORY_STORE,
-    trustedProposalKeys,
-    trustedBenchmarkKeys,
-    trustedReviewKeys,
+    operational,
+    operationalFailures,
     allowedRepositories,
     allowedBaseBranches,
     headBranchPrefix,
@@ -249,16 +248,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): UpdaterConfig 
     artifactTimeoutMs: parsed.MIZUKI_UPDATER_ARTIFACT_TIMEOUT_MS,
     artifactMaxBytes: parsed.MIZUKI_UPDATER_ARTIFACT_MAX_BYTES,
     githubApiUrl: parsed.MIZUKI_UPDATER_GITHUB_API_URL.replace(/\/$/, ''),
-    githubAppId: parsed.MIZUKI_UPDATER_GITHUB_APP_ID,
-    githubPrivateKey: parsed.MIZUKI_UPDATER_GITHUB_PRIVATE_KEY.replace(/\\n/g, '\n'),
     githubTimeoutMs: parsed.MIZUKI_UPDATER_GITHUB_TIMEOUT_MS,
     githubMergeMethod: parsed.MIZUKI_UPDATER_GITHUB_MERGE_METHOD,
-    shadowHookUrl: parsed.MIZUKI_UPDATER_SHADOW_HOOK_URL,
-    shadowHealthUrlTemplate: parsed.MIZUKI_UPDATER_SHADOW_HEALTH_URL_TEMPLATE,
-    promoteHookUrl: parsed.MIZUKI_UPDATER_PROMOTE_HOOK_URL,
-    promotionHealthUrlTemplate: parsed.MIZUKI_UPDATER_PROMOTION_HEALTH_URL_TEMPLATE,
-    rollbackHookUrl: parsed.MIZUKI_UPDATER_ROLLBACK_HOOK_URL,
-    deployHookToken: parsed.MIZUKI_UPDATER_DEPLOY_HOOK_TOKEN,
     hookTimeoutMs: parsed.MIZUKI_UPDATER_HOOK_TIMEOUT_MS,
     checkTimeoutMs: parsed.MIZUKI_UPDATER_CHECK_TIMEOUT_MS,
     healthTimeoutMs: parsed.MIZUKI_UPDATER_HEALTH_TIMEOUT_MS,
@@ -267,6 +258,57 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): UpdaterConfig 
     pollIntervalMs: parsed.MIZUKI_UPDATER_POLL_INTERVAL_MS,
     leaseMs: parsed.MIZUKI_UPDATER_LEASE_MS,
     maxAttempts: parsed.MIZUKI_UPDATER_MAX_ATTEMPTS,
+  };
+}
+
+function missingOperationalValues(parsed: ParsedEnv): string[] {
+  return operationalValues.filter((name) => parsed[name] === undefined);
+}
+
+function operationalConfig(parsed: ParsedEnv, production: boolean): UpdaterOperationalConfig {
+  const shadowUrl = parsed.MIZUKI_UPDATER_SHADOW_HOOK_URL!;
+  const shadowHealthUrlTemplate = parsed.MIZUKI_UPDATER_SHADOW_HEALTH_URL_TEMPLATE!;
+  const promoteUrl = parsed.MIZUKI_UPDATER_PROMOTE_HOOK_URL!;
+  const promotionHealthUrlTemplate = parsed.MIZUKI_UPDATER_PROMOTION_HEALTH_URL_TEMPLATE!;
+  const rollbackUrl = parsed.MIZUKI_UPDATER_ROLLBACK_HOOK_URL!;
+  const deployReadinessUrl = parsed.MIZUKI_UPDATER_DEPLOY_READINESS_URL!;
+  const hookUrls = [
+    shadowUrl,
+    promoteUrl,
+    rollbackUrl,
+    deployReadinessUrl,
+    shadowHealthUrlTemplate.replace('{deploymentId}', 'probe'),
+    promotionHealthUrlTemplate.replace('{deploymentId}', 'probe'),
+  ];
+  if (!shadowHealthUrlTemplate.includes('{deploymentId}')) {
+    throw new Error('Shadow health URL template must contain {deploymentId}');
+  }
+  if (!promotionHealthUrlTemplate.includes('{deploymentId}')) {
+    throw new Error('Promotion health URL template must contain {deploymentId}');
+  }
+  if (production && hookUrls.some((value) => new URL(value).protocol !== 'https:')) {
+    throw new Error('Deployment endpoints must use HTTPS in production');
+  }
+  assertFixedHealthOrigin(shadowHealthUrlTemplate, shadowUrl, 'Shadow');
+  assertFixedHealthOrigin(promotionHealthUrlTemplate, shadowUrl, 'Promotion');
+  if (healthPath(promotionHealthUrlTemplate) === healthPath(shadowHealthUrlTemplate)) {
+    throw new Error('Shadow and promotion health URL paths must differ');
+  }
+  assertDeploymentOrigins(hookUrls);
+
+  return {
+    trustedProposalKeys: parseTrustedKeys(parsed.MIZUKI_UPDATER_PROPOSAL_KEYS_JSON!),
+    trustedBenchmarkKeys: parseTrustedKeys(parsed.MIZUKI_UPDATER_BENCHMARK_KEYS_JSON!),
+    trustedReviewKeys: parseTrustedKeys(parsed.MIZUKI_UPDATER_REVIEW_KEYS_JSON!),
+    githubAppId: parsed.MIZUKI_UPDATER_GITHUB_APP_ID!,
+    githubPrivateKey: parsed.MIZUKI_UPDATER_GITHUB_PRIVATE_KEY!.replace(/\\n/g, '\n'),
+    shadowHookUrl: shadowUrl,
+    shadowHealthUrlTemplate,
+    promoteHookUrl: promoteUrl,
+    promotionHealthUrlTemplate,
+    rollbackHookUrl: rollbackUrl,
+    deployReadinessUrl,
+    deployHookToken: parsed.MIZUKI_UPDATER_DEPLOY_HOOK_TOKEN!,
   };
 }
 

@@ -1,7 +1,6 @@
 import { timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { z, ZodError, type ZodType } from 'zod';
-import type { ChainGateway } from './chain.js';
 import {
   bindChallengeRequestSchema,
   bindEscrowRequestSchema,
@@ -30,7 +29,6 @@ const operationIdSchema = z.string().uuid();
 export interface HttpServerDependencies {
   service: PolicyService;
   store: OperationStore;
-  chain: ChainGateway;
   metrics: SignerMetrics;
   authToken: string;
 }
@@ -59,8 +57,8 @@ async function route(
   const url = new URL(request.url ?? '/', 'http://signer.local');
 
   if (method === 'GET' && url.pathname === '/health') {
-    await Promise.all([deps.store.ping(), deps.chain.health()]);
-    writeJson(response, 200, { ok: true });
+    const readiness = await deps.service.probeReadiness();
+    writeJson(response, readiness.healthy ? 200 : 503, { ok: readiness.healthy });
     return;
   }
   if (method === 'GET' && url.pathname === '/metrics') {
@@ -74,6 +72,12 @@ async function route(
   }
 
   authenticate(request, deps.authToken);
+
+  if (method === 'GET' && url.pathname === '/v1/readiness/evidence') {
+    const evidence = await deps.service.probeReadiness();
+    writeJson(response, evidence.healthy ? 200 : 503, evidence);
+    return;
+  }
 
   if (method === 'GET' && url.pathname === '/v1/readiness') {
     const readiness = await deps.service.readiness();

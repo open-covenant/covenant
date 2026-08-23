@@ -3,6 +3,10 @@ export type Loadable<T> =
   | { status: 'empty'; data: T; demo?: boolean }
   | { status: 'error'; error: string };
 
+export type Admission = {
+  intakeEnabled: boolean;
+};
+
 export type JobClass = 'micro' | 'standard';
 
 export type JobState =

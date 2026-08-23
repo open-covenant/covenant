@@ -1590,6 +1590,14 @@ textarea:focus-visible {
   padding-top: 70px;
 }
 
+.work-intake {
+  min-width: 0;
+}
+
+.intake-demo {
+  margin-bottom: 14px;
+}
+
 .quote-workflow {
   min-width: 0;
 }

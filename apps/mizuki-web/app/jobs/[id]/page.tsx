@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { notFound } from 'next/navigation';
 import { DataError, DemoNotice } from '@/components/data-state';
 import { JobReceipt } from '@/components/job-receipt';
 import { getJob } from '@/lib/api';
@@ -14,6 +15,7 @@ export const metadata: Metadata = {
 export default async function JobPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const result = await getJob(id);
+  if (result.status === 'not_found') notFound();
   return (
     <div className="page-shell">
       <section className="page-hero compact-page-hero shell">

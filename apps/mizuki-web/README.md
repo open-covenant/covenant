@@ -35,6 +35,7 @@ The site consumes these public endpoints:
 - `POST /v1/quotes`
 - `POST /v1/jobs`
 - `GET /v1/jobs/:id`
+- `GET /v1/admission`
 - `GET /v1/metrics`
 - `GET /v1/bounties`
 - `GET /v1/bounties/:id`

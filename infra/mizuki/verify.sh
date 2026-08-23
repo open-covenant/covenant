@@ -8,8 +8,18 @@ ruby <<'RUBY'
 require 'yaml'
 require 'uri'
 
-blueprint = YAML.safe_load(File.read('infra/mizuki/render.yaml'), [], [], false)
-YAML.safe_load(File.read('.github/workflows/mizuki.yml'), [], [], false)
+def load_yaml(path)
+  source = File.read(path)
+  keyword_api = YAML.method(:safe_load).parameters.any? do |kind, _name|
+    %i[key keyreq keyrest].include?(kind)
+  end
+  return YAML.safe_load(source, permitted_classes: [], permitted_symbols: [], aliases: false) if keyword_api
+
+  YAML.safe_load(source, [], [], false)
+end
+
+blueprint = load_yaml('infra/mizuki/render.yaml')
+load_yaml('.github/workflows/mizuki.yml')
 services = blueprint.fetch('services')
 databases = blueprint.fetch('databases')
 expected = {

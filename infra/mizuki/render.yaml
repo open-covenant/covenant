@@ -2,6 +2,8 @@ services:
   - type: web
     name: mizuki-api
     runtime: node
+    repo: https://github.com/open-covenant/covenant
+    branch: loop/main-track
     plan: starter
     region: frankfurt
     numInstances: 1
@@ -20,7 +22,7 @@ services:
       - key: MIZUKI_PUBLIC_BASE_URL
         value: https://mizuki-api.onrender.com
       - key: MIZUKI_WEB_ORIGIN
-        value: https://mizuki.onrender.com
+        value: https://mizuki.covenant.org
       - key: MIZUKI_TRUSTED_PROXY_HOPS
         value: '1'
       - key: MIZUKI_RATE_LIMIT_MAX_SOURCES
@@ -137,6 +139,8 @@ services:
   - type: pserv
     name: mizuki-policy-signer
     runtime: node
+    repo: https://github.com/open-covenant/covenant
+    branch: loop/main-track
     plan: starter
     region: frankfurt
     numInstances: 1
@@ -223,11 +227,12 @@ services:
   - type: pserv
     name: mizuki-coding-gateway
     runtime: node
+    repo: https://github.com/open-covenant/covenant
+    branch: loop/main-track
     plan: starter
     region: frankfurt
     numInstances: 1
     autoDeploy: false
-    maxShutdownDelaySeconds: 120
     buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @covenant/coding-gateway build
     startCommand: pnpm --filter @covenant/coding-gateway start
     disk:
@@ -287,6 +292,8 @@ services:
   - type: web
     name: mizuki
     runtime: node
+    repo: https://github.com/open-covenant/covenant
+    branch: loop/main-track
     plan: starter
     region: frankfurt
     numInstances: 1
@@ -295,6 +302,8 @@ services:
     buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @mizuki/web build
     startCommand: pnpm --filter @mizuki/web start
     healthCheckPath: /
+    domains:
+      - mizuki.covenant.org
     envVars:
       - key: NODE_ENV
         value: production
@@ -305,7 +314,7 @@ services:
       - key: MIZUKI_WEB_HOST
         value: 0.0.0.0
       - key: NEXT_PUBLIC_MIZUKI_APP_URL
-        value: https://mizuki.onrender.com
+        value: https://mizuki.covenant.org
       - key: NEXT_PUBLIC_MIZUKI_GITHUB_OAUTH_URL
         value: /api/mizuki/v1/auth/github
       - key: NEXT_PUBLIC_MIZUKI_TOKEN_URL
@@ -320,6 +329,8 @@ services:
   - type: pserv
     name: mizuki-updater
     runtime: node
+    repo: https://github.com/open-covenant/covenant
+    branch: loop/main-track
     plan: starter
     region: frankfurt
     numInstances: 1

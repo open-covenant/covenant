@@ -1,0 +1,61 @@
+{
+  "schema": "mizuki.mainnet-preflight.v1",
+  "capturedAt": "2026-08-23T21:26:18Z",
+  "network": "solana-mainnet",
+  "commitment": "finalized",
+  "program": {
+    "address": "DNofG7TqkzKau3DAoxykhT5CzZsq5xg6jHdwhExgSXRk",
+    "accountExists": false
+  },
+  "accounts": [
+    {
+      "role": "release-deployer",
+      "address": "8d2v1z32d2X4SSGtv1F6tewtEEgEzQNbKsSzoHB9TsD",
+      "lamports": 0,
+      "usdcTokenAccount": "2ixd4KHfLqFJftkuQRVNLU3rK9yihyQ6Ag69kB56phaZ",
+      "usdcTokenAccountExists": false
+    },
+    {
+      "role": "refund-treasury",
+      "address": "9gPssTdsyLfoPdTS19Gb5pzJ4s8biVDk7kKVDV3SnPa2",
+      "lamports": 0,
+      "usdcTokenAccount": "1juzjwvsJtwJaYUsyYoxJnsYrmjgSkGGxr6URvW4Snh",
+      "usdcTokenAccountExists": false
+    },
+    {
+      "role": "escrow-authority",
+      "address": "7SFJTDWwf4ij97cGDsPfCHCqMakV4Z4yaZFpqxdkZCti",
+      "lamports": 0,
+      "usdcTokenAccount": "6DotobYZywcQW3cTthqwSx8GkU8QmaETMRytKSwDvg62",
+      "usdcTokenAccountExists": false
+    },
+    {
+      "role": "job-authority",
+      "address": "4C8ugAFKy9hK3M4UKrAanQYsSByf2ui45bRw4U5ht46F",
+      "lamports": 0,
+      "usdcTokenAccount": "5MqzFFZD2GhnJGomZ5XCLCddiBQkbDw5JV8oFZD3n9SV",
+      "usdcTokenAccountExists": false
+    }
+  ],
+  "observations": [
+    {
+      "rpc": "https://api.mainnet-beta.solana.com",
+      "slot": 441245625,
+      "method": "getMultipleAccounts",
+      "result": "all-addresses-absent"
+    },
+    {
+      "rpc": "https://solana-rpc.publicnode.com",
+      "slot": 441245514,
+      "method": "batch-account-and-balance-read",
+      "result": "zero-lamports-and-all-addresses-absent"
+    }
+  ],
+  "requiredBeforeDeploy": {
+    "minimumDeployerLamports": 750000000,
+    "independentReview": false,
+    "hostedReproducibleBuildForCurrentRevision": false,
+    "twoRpcAgreementAfterFinalDeployment": false
+  },
+  "launchVerdict": "no-go-mainnet-deploy"
+}

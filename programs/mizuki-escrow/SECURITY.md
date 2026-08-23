@@ -44,4 +44,5 @@ The signer must:
 - The authority can choose not to release before expiry. This is a policy-signer and operational availability risk, not a claimant escape hatch.
 - The permanent guard locks its rent forever by design. Removing it would reopen replay and rebind paths.
 - Native SOL is the only supported asset. Token support would add mint, account, and token-program substitution risks and is out of scope.
-- The program has not received an independent third-party audit. Devnet adversarial canaries and immutable deployment verification remain release gates.
+- The 23 August 2026 devnet canary exercised exact release, bound and unbound refunds, wrong-claimant rejection, expired-release rejection, replay resistance, and terminal account state against the exact hosted artifact. The devnet deployment remains upgradeable, so this is behavior evidence rather than immutability or custody evidence.
+- The program has not received an independent third-party review. Independent reproducible-build verification, immutable mainnet deployment, and two-RPC program-data verification remain release gates.

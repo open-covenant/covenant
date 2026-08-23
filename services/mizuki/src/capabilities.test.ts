@@ -235,6 +235,7 @@ function observedUpgrade(
       owner: 'mizuki-labs',
       name: 'mizuki',
       baseBranch: 'main',
+      baseSha: 'd'.repeat(40),
       headBranch: `mizuki/${proposalId}`,
     },
     candidateSha: 'c'.repeat(40),

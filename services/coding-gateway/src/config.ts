@@ -1,3 +1,5 @@
+import { parseE2bEgressPolicy } from './egress-policy.js';
+
 /** Gateway configuration and model pricing, all overridable by env. */
 
 const model = process.env.CODER_MODEL ?? 'claude-sonnet-4-6';
@@ -16,8 +18,29 @@ const usePodMaxOutputPriceMicrounits = boundedInteger(
   1,
   100_000_000,
 );
-const usePodMinimumBalance = decimal(process.env.USEPOD_MIN_BALANCE, '1', 'USEPOD_MIN_BALANCE');
+const usePodInputPrice = usdPerMillionPrice(
+  process.env.USEPOD_INPUT_USD_PER_MILLION,
+  '0.2',
+  'USEPOD_INPUT_USD_PER_MILLION',
+);
+const usePodOutputPrice = usdPerMillionPrice(
+  process.env.USEPOD_OUTPUT_USD_PER_MILLION,
+  '0.4',
+  'USEPOD_OUTPUT_USD_PER_MILLION',
+);
+const usePodMinimumBalance = atomicUnits(process.env.USEPOD_MIN_BALANCE, '1', 'USEPOD_MIN_BALANCE');
 const perRunUsdMax = positiveNumber(process.env.CODER_PER_RUN_USD_MAX, 2, 'CODER_PER_RUN_USD_MAX');
+const sandboxWorstCaseUsdPerSec = boundedPositiveNumber(
+  process.env.CODER_E2B_WORST_CASE_USD_PER_SEC,
+  0.0002,
+  'CODER_E2B_WORST_CASE_USD_PER_SEC',
+  0.01,
+);
+const sandboxTariffRef = tariffReference(
+  process.env.CODER_E2B_TARIFF_REF,
+  'development-unverified',
+  'CODER_E2B_TARIFF_REF',
+);
 const readinessRefreshMs = boundedDuration(
   process.env.CODER_READINESS_REFRESH_MS,
   120_000,
@@ -39,6 +62,7 @@ const readinessTimeoutMs = boundedDuration(
   1_000,
   60_000,
 );
+const e2bEgressAllowlist = parseE2bEgressPolicy(process.env.E2B_EGRESS_ALLOW);
 if (readinessMaxAgeMs < readinessRefreshMs) {
   throw new Error('CODER_READINESS_MAX_AGE_MS must not be shorter than the refresh interval');
 }
@@ -56,6 +80,8 @@ export const config = {
   usePodBaseUrl,
   usePodMaxInputPriceMicrounits,
   usePodMaxOutputPriceMicrounits,
+  usePodInputUsdPerMillion: usePodInputPrice.usd,
+  usePodOutputUsdPerMillion: usePodOutputPrice.usd,
   usePodMinimumBalance,
   // Public (Sonnet) default is "low": on open-ended build prompts ("make a
   // Next.js app with X") high effort burns minutes on a single upfront
@@ -83,12 +109,28 @@ export const config = {
   // deadline for audit but charges unresolved reservations in full on restart.
   wallMs: positiveInt(process.env.CODER_WALL_MS, 600_000, 'CODER_WALL_MS'),
 
-  // Operator-supplied E2B estimate; reconcile it against live sandbox receipts.
-  sandboxUsdPerSec: nonNegativeNumber(
-    process.env.CODER_SANDBOX_USD_PER_SEC,
-    0.0001,
-    'CODER_SANDBOX_USD_PER_SEC',
+  // Pinned operator ceiling, not a provider billing receipt. The installed E2B
+  // SDK exposes resource metrics but no authoritative cost receipt, so every
+  // attempted E2B run is charged for the full wall-clock reservation at this
+  // rate. Production must explicitly pin both the rate and its evidence ref.
+  sandboxWorstCaseUsdPerSec,
+  sandboxTariffRef,
+  e2bTemplateId: optionalTemplateId(process.env.E2B_TEMPLATE_ID),
+  e2bExpectedCpuCount: boundedInteger(
+    process.env.E2B_EXPECTED_CPU_COUNT,
+    4,
+    'E2B_EXPECTED_CPU_COUNT',
+    1,
+    64,
   ),
+  e2bExpectedMemoryMb: boundedInteger(
+    process.env.E2B_EXPECTED_MEMORY_MB,
+    4096,
+    'E2B_EXPECTED_MEMORY_MB',
+    128,
+    262_144,
+  ),
+  e2bEgressAllowlist,
 
   // Per-IP admission gate. With CODER_MAX_CONCURRENT=2 a single anonymous
   // client can otherwise occupy both slots and burn the entire daily cap
@@ -106,13 +148,7 @@ export const config = {
   // address. Picking too large lets a client rotate IPs via the header.
   trustedProxyHops: nonNegativeInt(process.env.TRUSTED_PROXY_HOPS, 0, 'TRUSTED_PROXY_HOPS'),
 
-  // Operator-allowlisted IPs that bypass the per-IP bucket AND the
-  // daily/monthly USD spend caps. The kill-switch, the concurrency cap,
-  // and observability still apply, so an exempt run still shows on
-  // `/v1/budget`. Comma-separated list, IPv4 / IPv6 / bracketless. Set
-  // to the operator's own IP so the public daily-cap exhaustion (which
-  // is intentionally low) doesn't block diagnostic / development
-  // traffic from the people maintaining the deployment.
+  // Operator IPs bypass only the per-IP throttle. USD caps remain hard.
   exemptIps: parseIpSet(process.env.CODER_EXEMPT_IPS),
 
   readinessRefreshMs,
@@ -126,11 +162,17 @@ export function assertProductionConfig(env: NodeJS.ProcessEnv = process.env): vo
     ['CODER_AUTH_TOKEN', env.CODER_AUTH_TOKEN && env.CODER_AUTH_TOKEN.length >= 32],
     ['USEPOD_API_KEY', Boolean(env.USEPOD_API_KEY)],
     ['E2B_API_KEY', Boolean(env.E2B_API_KEY)],
+    ['CODER_E2B_WORST_CASE_USD_PER_SEC', Boolean(env.CODER_E2B_WORST_CASE_USD_PER_SEC)],
+    ['CODER_E2B_TARIFF_REF', Boolean(env.CODER_E2B_TARIFF_REF)],
+    ['E2B_TEMPLATE_ID', Boolean(env.E2B_TEMPLATE_ID?.trim())],
+    ['E2B_EXPECTED_CPU_COUNT', Boolean(env.E2B_EXPECTED_CPU_COUNT)],
+    ['E2B_EXPECTED_MEMORY_MB', Boolean(env.E2B_EXPECTED_MEMORY_MB)],
     ['CODER_MODEL', Boolean(env.CODER_MODEL)],
+    ['USEPOD_INPUT_USD_PER_MILLION', Boolean(env.USEPOD_INPUT_USD_PER_MILLION)],
+    ['USEPOD_OUTPUT_USD_PER_MILLION', Boolean(env.USEPOD_OUTPUT_USD_PER_MILLION)],
     ['USEPOD_MAX_INPUT_PRICE_MICROUNITS', Boolean(env.USEPOD_MAX_INPUT_PRICE_MICROUNITS)],
     ['USEPOD_MAX_OUTPUT_PRICE_MICROUNITS', Boolean(env.USEPOD_MAX_OUTPUT_PRICE_MICROUNITS)],
     ['USEPOD_MIN_BALANCE', Boolean(env.USEPOD_MIN_BALANCE)],
-    ['E2B_TEMPLATE', Boolean(env.E2B_TEMPLATE)],
     ['LEDGER_PATH', Boolean(env.LEDGER_PATH?.startsWith('/'))],
     ['RUN_STORE_PATH', Boolean(env.RUN_STORE_PATH?.startsWith('/'))],
   ] as const;
@@ -139,6 +181,14 @@ export function assertProductionConfig(env: NodeJS.ProcessEnv = process.env): vo
     missing.push('CODER_BACKEND=usepod');
   }
   if (env.USEPOD_MODEL) missing.push('USEPOD_MODEL must be unset; use CODER_MODEL');
+  if (env.E2B_TEMPLATE) missing.push('E2B_TEMPLATE must be unset; use immutable E2B_TEMPLATE_ID');
+  if (env.E2B_TEMPLATE_ID !== undefined) {
+    try {
+      optionalTemplateId(env.E2B_TEMPLATE_ID);
+    } catch (cause) {
+      missing.push((cause as Error).message);
+    }
+  }
   try {
     const url = new URL(env.USEPOD_BASE_URL ?? '');
     if (
@@ -157,13 +207,60 @@ export function assertProductionConfig(env: NodeJS.ProcessEnv = process.env): vo
   }
   if (env.USEPOD_MIN_BALANCE !== undefined) {
     try {
-      decimal(env.USEPOD_MIN_BALANCE, '', 'USEPOD_MIN_BALANCE');
+      atomicUnits(env.USEPOD_MIN_BALANCE, '', 'USEPOD_MIN_BALANCE');
     } catch {
-      missing.push('USEPOD_MIN_BALANCE must be a positive decimal in provider header units');
+      missing.push('USEPOD_MIN_BALANCE must be positive whole USDC microunits');
     }
   }
-  const inputEstimate = Number(env.USEPOD_INPUT_USD_PER_MILLION ?? 0.2) * 1_000_000;
-  const outputEstimate = Number(env.USEPOD_OUTPUT_USD_PER_MILLION ?? 0.4) * 1_000_000;
+  if (env.CODER_E2B_WORST_CASE_USD_PER_SEC !== undefined) {
+    try {
+      boundedPositiveNumber(
+        env.CODER_E2B_WORST_CASE_USD_PER_SEC,
+        0.0002,
+        'CODER_E2B_WORST_CASE_USD_PER_SEC',
+        0.01,
+      );
+    } catch (cause) {
+      missing.push((cause as Error).message);
+    }
+  }
+  if (env.CODER_E2B_TARIFF_REF !== undefined) {
+    try {
+      tariffReference(env.CODER_E2B_TARIFF_REF, '', 'CODER_E2B_TARIFF_REF');
+    } catch (cause) {
+      missing.push((cause as Error).message);
+    }
+  }
+  for (const [name, raw, fallback, min, max] of [
+    ['E2B_EXPECTED_CPU_COUNT', env.E2B_EXPECTED_CPU_COUNT, 4, 1, 64],
+    ['E2B_EXPECTED_MEMORY_MB', env.E2B_EXPECTED_MEMORY_MB, 4096, 128, 262_144],
+  ] as const) {
+    try {
+      boundedInteger(raw, fallback, name, min, max);
+    } catch (cause) {
+      missing.push((cause as Error).message);
+    }
+  }
+  let inputEstimate: number | undefined;
+  let outputEstimate: number | undefined;
+  try {
+    inputEstimate = usdPerMillionPrice(
+      env.USEPOD_INPUT_USD_PER_MILLION,
+      '0.2',
+      'USEPOD_INPUT_USD_PER_MILLION',
+    ).microunits;
+  } catch (cause) {
+    missing.push((cause as Error).message);
+  }
+  try {
+    outputEstimate = usdPerMillionPrice(
+      env.USEPOD_OUTPUT_USD_PER_MILLION,
+      '0.4',
+      'USEPOD_OUTPUT_USD_PER_MILLION',
+    ).microunits;
+  } catch (cause) {
+    missing.push((cause as Error).message);
+  }
   const maxInputPrice = boundedInteger(
     env.USEPOD_MAX_INPUT_PRICE_MICROUNITS,
     200_000,
@@ -178,18 +275,18 @@ export function assertProductionConfig(env: NodeJS.ProcessEnv = process.env): vo
     1,
     100_000_000,
   );
-  if (inputEstimate < maxInputPrice) {
+  if (inputEstimate !== undefined && inputEstimate < maxInputPrice) {
     missing.push('USEPOD_INPUT_USD_PER_MILLION understates the input price ceiling');
   }
-  if (outputEstimate < maxOutputPrice) {
+  if (outputEstimate !== undefined && outputEstimate < maxOutputPrice) {
     missing.push('USEPOD_OUTPUT_USD_PER_MILLION understates the output price ceiling');
   }
-  const egress = new Set(
-    (env.E2B_EGRESS_ALLOW ?? '')
-      .split(',')
-      .map((value) => value.trim().toLowerCase())
-      .filter(Boolean),
-  );
+  let egress = new Set<string>();
+  try {
+    egress = new Set(parseE2bEgressPolicy(env.E2B_EGRESS_ALLOW));
+  } catch (cause) {
+    missing.push((cause as Error).message);
+  }
   for (const host of ['github.com', 'codeload.github.com']) {
     if (!egress.has(host)) missing.push(`E2B_EGRESS_ALLOW:${host}`);
   }
@@ -229,6 +326,48 @@ function positiveNumber(raw: string | undefined, fallback: number, name: string)
   return value;
 }
 
+function boundedPositiveNumber(
+  raw: string | undefined,
+  fallback: number,
+  name: string,
+  max: number,
+): number {
+  const value = positiveNumber(raw, fallback, name);
+  if (value > max) throw new Error(`${name} must be no more than ${max}`);
+  return value;
+}
+
+function tariffReference(raw: string | undefined, fallback: string, name: string): string {
+  if (raw === undefined || raw === '') {
+    if (fallback) return fallback;
+    throw new Error(`${name} must be a content-addressed evidence reference`);
+  }
+  const value = raw.trim();
+  try {
+    const url = new URL(value);
+    if (
+      url.protocol === 'https:' &&
+      !url.username &&
+      !url.password &&
+      /^#sha256=[a-f0-9]{64}$/i.test(url.hash)
+    ) {
+      return value;
+    }
+  } catch {
+    // Report the same operator-facing contract below.
+  }
+  throw new Error(`${name} must be a fetchable HTTPS reference ending in #sha256=<digest>`);
+}
+
+function optionalTemplateId(raw: string | undefined): string | undefined {
+  const value = raw?.trim();
+  if (!value) return undefined;
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{5,127}$/.test(value)) {
+    throw new Error('E2B_TEMPLATE_ID must be an immutable provider template identifier');
+  }
+  return value;
+}
+
 function boundedDuration(
   raw: string | undefined,
   fallback: number,
@@ -262,10 +401,27 @@ function nonNegativeNumber(raw: string | undefined, fallback: number, name: stri
   return value;
 }
 
-function decimal(raw: string | undefined, fallback: string, name: string): string {
+function usdPerMillionPrice(
+  raw: string | undefined,
+  fallback: string,
+  name: string,
+): { usd: number; microunits: number } {
+  const value = (raw ?? fallback).trim();
+  if (!/^\d{1,3}(?:\.\d{1,6})?$/.test(value)) {
+    throw new Error(`${name} must be a decimal with no more than six fractional digits`);
+  }
+  const [whole, fraction = ''] = value.split('.');
+  const microunits = BigInt(whole!) * 1_000_000n + BigInt(fraction.padEnd(6, '0'));
+  if (microunits <= 0n || microunits > 100_000_000n) {
+    throw new Error(`${name} must be greater than zero and no more than 100`);
+  }
+  return { usd: Number(microunits) / 1_000_000, microunits: Number(microunits) };
+}
+
+function atomicUnits(raw: string | undefined, fallback: string, name: string): string {
   const value = raw === undefined || raw === '' ? fallback : raw;
-  if (!/^\d{1,48}(?:\.\d{1,18})?$/.test(value) || !/[1-9]/.test(value)) {
-    throw new Error(`${name} must be a positive decimal`);
+  if (!/^[1-9]\d{0,47}$/.test(value)) {
+    throw new Error(`${name} must be a positive whole number of USDC microunits`);
   }
   return value;
 }
@@ -293,10 +449,14 @@ export const PRICING: Record<
   'claude-opus-4-7': { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
   'claude-sonnet-4-6': { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
   'claude-haiku-4-5': { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
-  'deepseek-v3.2': {
-    input: Number(process.env.USEPOD_INPUT_USD_PER_MILLION ?? 0.2),
-    output: Number(process.env.USEPOD_OUTPUT_USD_PER_MILLION ?? 0.4),
-    cacheRead: 0,
-    cacheWrite: 0,
-  },
+  ...((process.env.CODER_BACKEND ?? 'anthropic') === 'usepod'
+    ? {
+        [model]: {
+          input: usePodInputPrice.usd,
+          output: usePodOutputPrice.usd,
+          cacheRead: 0,
+          cacheWrite: 0,
+        },
+      }
+    : {}),
 };

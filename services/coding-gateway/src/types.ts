@@ -94,14 +94,28 @@ export interface TokenUsage {
   cacheCreationTokens: number;
 }
 
+export interface ProviderAccounting {
+  accountedCostMicrounits: string;
+  basis: 'configured-price-ceilings' | 'max-of-configured-price-ceilings-and-provider-report';
+  inputTokens: number;
+  outputTokens: number;
+  inputPriceMicrounitsPerMillion: number;
+  outputPriceMicrounitsPerMillion: number;
+}
+
 export interface ProviderReceipt {
   model: string;
   route: 'marketplace';
   balanceRemaining: string;
   providerId?: string;
   requestId?: string;
+  providerReportedCostMicrounits?: string;
+  accounting?: ProviderAccounting;
+  /** Accepted only when loading receipts written before accounted turn costs were introduced. */
   costMicrounits?: string;
 }
+
+export type AccountedProviderReceipt = ProviderReceipt & { accounting: ProviderAccounting };
 
 export interface CodingBackend {
   readonly id: BackendId;
@@ -121,13 +135,14 @@ export interface CodingBackend {
 
 export interface SandboxProvider {
   readonly id: string;
+  /** Non-billable credential/control-plane probe used by readiness. */
+  check?(): Promise<void>;
   create(spec: SandboxSpec): Promise<Sandbox>;
 }
 
 export interface SandboxSpec {
   runId: string;
-  /** Hostnames the run may reach; everything else is blocked at the network
-   *  layer. e.g. ["registry.npmjs.org", "api.anthropic.com"]. */
+  /** Explicit subset of the operator policy that this run may reach. */
   egressAllowlist: string[];
   cpuMs: number;
   memoryMb: number;

@@ -238,6 +238,22 @@ describe('rescue bounty lifecycle', () => {
     expect(pending.activeClaim).toMatchObject({ id: 'claim-1', state: 'expired' });
     expect(pending.claimHistory).toEqual([]);
 
+    const submitted = submitDraftPullRequest(claimed(), {
+      pullRequestUrl: 'https://github.com/example/project/pull/45',
+      at: '2026-08-22T12:00:00.000Z',
+      expectedRevision: 3,
+    });
+    const validating = transitionRescueBounty(submitted, 'validating', {
+      at: '2026-08-22T13:00:00.000Z',
+      expectedRevision: 4,
+    });
+    expect(
+      expireRescueBountyClaim(validating, {
+        at: '2026-08-24T11:00:00.000Z',
+        expectedRevision: 5,
+      }),
+    ).toMatchObject({ state: 'claim_refund_pending', activeClaim: { state: 'expired' } });
+
     const refunded = finalizeRescueBountyClaimRefund(pending, {
       at: '2026-08-24T11:01:00.000Z',
       expectedRevision: 4,

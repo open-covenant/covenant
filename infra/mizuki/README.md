@@ -5,14 +5,15 @@ This directory contains the production blueprint and runbooks for Mizuki's comme
 ## Deployment order
 
 1. Review `env-contract.md` and prepare every required secret in a password manager.
-2. Validate `render.yaml` from this directory with `render blueprints validate render.yaml` when the Render CLI supports an explicit file, or copy it to the repository root on the deployment branch and run `render blueprints validate`.
-3. Apply the Blueprint from protected `main` only after the digest-pinned runtime image and its immutable release evidence exist.
-4. Confirm the Blueprint-linked signer, gateway, updater, and controller tokens resolve into the production runtime. Do not copy those tokens into another service.
-5. Confirm the signer, gateway, and updater resolve only on Render's private network. Never expose them as web services.
-6. Deploy signer, gateway, updater, and controller first. Deploy shadow, prove the full functional probe, then deploy the sole production runtime and web app. Automatic deploys are disabled intentionally.
-7. With intake closed, verify the website proxies only to `mizuki-runtime-production`, the production runtime alone uses `mizuki-postgres`, and the previous source-built API is suspended. Confirm startup reached the x402 facilitator and found the exact mainnet SVM route before enabling intake.
-8. Register the signer's escrow authority as the ClawPump payout wallet through the operator-controlled signed wallet flow. Confirm the platform displays the exact address and retain the registration receipt.
-9. Run the read-only checks below before any payment.
+2. Run the repository-bound `$HOME/bin/renderctl status` and `$HOME/bin/renderctl guard`, then validate the selected Blueprint against that exact workspace without mutating it. Never use an unguarded global CLI workspace.
+3. Use `render-bootstrap.yaml` only for the closed private-service bootstrap documented in `render-bootstrap.md`. Apply either Blueprint from protected `main` only.
+4. Promote the existing bootstrap Blueprint by changing that same Blueprint's path to `render.yaml`; never create a second Blueprint that owns the same signer, gateway, updater, or databases.
+5. Confirm the Blueprint-linked signer, gateway, updater, and controller tokens resolve into the production runtime. Do not copy those tokens into another service.
+6. Confirm the signer, gateway, and updater resolve only on Render's private network. Never expose them as web services.
+7. Deploy signer, gateway, updater, and controller first. Deploy shadow, prove the full functional probe, then deploy the sole production runtime and web app. Automatic deploys are disabled intentionally.
+8. With intake closed, verify the website proxies only to `mizuki-runtime-production`, the production runtime alone uses `mizuki-postgres`, and the previous source-built API is suspended. Confirm startup reached the x402 facilitator and found the exact mainnet SVM route before enabling intake.
+9. Register the signer's escrow authority as the ClawPump payout wallet through the operator-controlled signed wallet flow. Confirm the platform displays the exact address and retain the registration receipt.
+10. Run the read-only checks below before any payment.
 
 ```sh
 test -n "$MIZUKI_PRODUCTION_URL"
@@ -53,7 +54,9 @@ Fresh databases start with paid intake and new bounty claims closed. After the p
 
 ## Files
 
-- `render.yaml`: Render Blueprint.
+- `render-bootstrap.yaml`: closed signer, gateway, and updater bootstrap.
+- `render-bootstrap.md`: guarded bootstrap and same-Blueprint promotion procedure.
+- `render.yaml`: full production Blueprint.
 - `env-contract.md`: secrets, ownership, rotation, and equality constraints.
 - `runbooks/escrow-capacity.md`: controlled SOL capacity funding and reconciliation.
 - `runbooks/canary-success.md`: public $2 issue-to-merge proof.

@@ -12,6 +12,7 @@ const RESPONSE = {
       owner: 'mizuki-labs',
       name: 'mizuki',
       baseBranch: 'main',
+      baseSha: 'd'.repeat(40),
       headBranch: 'mizuki/proposal-1',
     },
     candidateSha: 'c'.repeat(40),

@@ -5,11 +5,11 @@
   "public": false,
   "request_oauth_on_install": false,
   "default_permissions": {
+    "actions": "read",
     "checks": "read",
     "contents": "write",
     "metadata": "read",
-    "pull_requests": "write",
-    "statuses": "read"
+    "pull_requests": "write"
   },
   "default_events": []
 }

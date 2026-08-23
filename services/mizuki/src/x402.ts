@@ -15,7 +15,7 @@ export const USDC_MAINNET = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 export const USDC_DECIMALS = 6;
 export const SOLANA_MAINNET = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp';
 
-const PAYMENT_HEADER_MAX_BYTES = 64_000;
+export const PAYMENT_AUTHORIZATION_MAX_BYTES = 12_000;
 const MOCK_FEE_PAYER = '2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4';
 
 export type PaymentAttempt =
@@ -226,7 +226,7 @@ export class Payments {
   }
 
   private decode(signature: string): PaymentPayload {
-    if (Buffer.byteLength(signature, 'utf8') > PAYMENT_HEADER_MAX_BYTES) {
+    if (!paymentAuthorizationSizeAllowed(signature)) {
       throw new Error('payment signature header is too large');
     }
     const payload = decodePaymentSignatureHeader(signature);
@@ -258,6 +258,10 @@ export class Payments {
   private resource(quote: Quote): string {
     return `${this.config.publicBaseUrl.replace(/\/$/, '')}/v1/jobs?quote_id=${quote.id}`;
   }
+}
+
+export function paymentAuthorizationSizeAllowed(value: string): boolean {
+  return Buffer.byteLength(value, 'utf8') <= PAYMENT_AUTHORIZATION_MAX_BYTES;
 }
 
 function isSupportedResponse(value: unknown): value is {

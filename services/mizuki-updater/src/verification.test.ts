@@ -26,6 +26,15 @@ describe('proposal verification', () => {
     );
   });
 
+  it('binds the protected base revision into the signed manifest', () => {
+    const fixture = proposalFixture(NOW);
+    const verifier = createVerifier(fixture);
+    fixture.proposal.manifest.repository.baseSha = 'e'.repeat(40);
+    expect(() => verifier.verify(fixture.proposal, NOW)).toThrowError(
+      expect.objectContaining({ code: 'manifest_hash_mismatch' }),
+    );
+  });
+
   it('rejects receipt hashes not bound to their content', () => {
     const fixture = proposalFixture(NOW);
     const manifest = structuredClone(fixture.proposal.manifest);

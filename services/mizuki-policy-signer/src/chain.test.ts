@@ -5,26 +5,33 @@ import {
   SYSVAR_RENT_PUBKEY,
   SystemProgram,
   Transaction,
+  TransactionMessage,
+  VersionedTransaction,
   type FetchFn,
   type ParsedTransactionWithMeta,
   type SignatureStatus,
+  type VersionedTransactionResponse,
 } from '@solana/web3.js';
 import { describe, expect, it, vi } from 'vitest';
 import {
   assertInstructionProgramSequence,
   assertRpcSettlementIdentity,
+  authorizedSettlementTransaction,
   boundedRpcFetch,
   ConsensusUsdPriceOracle,
   consensusCapacity,
   consensusTransactionState,
+  findAuthorizedSettlementSignature,
   HttpUsdPriceOracle,
   immutableLoaderV3ProgramBytes,
   loaderV3ProgramDataAddress,
+  matchesAuthorizedSettlement,
   sameSettlement,
   SolanaChainGateway,
   verifySettlementTransfer,
   type SettlementTransferPolicy,
 } from './chain.js';
+import { PolicyError } from './domain.js';
 import { TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from './token.js';
 
 const payer = Keypair.generate().publicKey;
@@ -135,6 +142,176 @@ describe('parsed settlement verification', () => {
     expect(sameSettlement(facts, { ...facts })).toBe(true);
     expect(sameSettlement(facts, { ...facts, rawAmount: '2000001' })).toBe(false);
     expect(sameSettlement(facts, { ...facts, slot: 43 })).toBe(false);
+  });
+});
+
+describe('payment authorization reconciliation', () => {
+  it('matches only the exact payer-signed v0 message and client signature', () => {
+    const fixture = settlementAuthorizationFixture();
+    const expected = authorizedSettlementTransaction(fixture.authorization);
+
+    expect(
+      matchesAuthorizedSettlement(fixture.response, fixture.transactionSignature, expected),
+    ).toBe(true);
+    expect(
+      matchesAuthorizedSettlement(
+        {
+          ...fixture.response,
+          transaction: {
+            ...fixture.response.transaction,
+            signatures: [fixture.transactionSignature, '7'.repeat(64)],
+          },
+        },
+        fixture.transactionSignature,
+        expected,
+      ),
+    ).toBe(false);
+
+    const altered = settlementAuthorizationFixture();
+    expect(
+      matchesAuthorizedSettlement(altered.response, altered.transactionSignature, expected),
+    ).toBe(false);
+    expect(() =>
+      authorizedSettlementTransaction({
+        ...fixture.authorization,
+        feePayer: Keypair.generate().publicKey.toBase58(),
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'payment_authorization_invalid' }));
+  });
+
+  it('rejects non-canonical, oversized, and fully signed authorization transactions', () => {
+    const fixture = settlementAuthorizationFixture();
+    expect(() =>
+      authorizedSettlementTransaction({
+        ...fixture.authorization,
+        wireTransaction: `${fixture.authorization.wireTransaction}=`,
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'payment_authorization_invalid' }));
+
+    const oversized = Buffer.alloc(1_233).toString('base64');
+    expect(() =>
+      authorizedSettlementTransaction({ ...fixture.authorization, wireTransaction: oversized }),
+    ).toThrowError(expect.objectContaining({ code: 'payment_authorization_invalid' }));
+
+    expect(() =>
+      authorizedSettlementTransaction({
+        ...fixture.authorization,
+        wireTransaction: fixture.fullySignedWireTransaction,
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'payment_authorization_invalid' }));
+  });
+
+  it('paginates until it finds the exact authorized transaction', async () => {
+    const fixture = settlementAuthorizationFixture();
+    let page = 0;
+    const connection = {
+      getSignaturesForAddress: vi.fn(async () => {
+        page += 1;
+        if (page === 1) return settlementSignaturePage(256, 200, true);
+        return [
+          signatureInfo(fixture.transactionSignature, 150),
+          ...settlementSignaturePage(7, 149, true),
+        ];
+      }),
+      getTransactions: vi.fn(async (signatures: string[]) =>
+        signatures.map((signature) =>
+          signature === fixture.transactionSignature ? fixture.response : null,
+        ),
+      ),
+    };
+    const identity = authorizedSettlementTransaction(fixture.authorization);
+
+    await expect(
+      findAuthorizedSettlementSignature(connection as never, destination, {
+        ...identity,
+        rawAmount: fixture.authorization.rawAmount,
+        notBeforeUnixSeconds: 100,
+        notAfterUnixSeconds: 400,
+      }),
+    ).resolves.toBe(fixture.transactionSignature);
+    expect(connection.getSignaturesForAddress).toHaveBeenCalledTimes(2);
+    expect(connection.getSignaturesForAddress.mock.calls[1]?.[1]).toMatchObject({
+      before: expect.any(String),
+    });
+  });
+
+  it('returns retryable scan exhaustion instead of absence under a 4096-signature flood', async () => {
+    let cursor = 0;
+    const connection = {
+      getSignaturesForAddress: vi.fn(async (_address, options: { limit: number }) => {
+        const page = settlementSignaturePage(options.limit, 200, true, cursor);
+        cursor += options.limit;
+        return page;
+      }),
+      getTransactions: vi.fn(),
+    };
+    const fixture = settlementAuthorizationFixture();
+    const identity = authorizedSettlementTransaction(fixture.authorization);
+
+    await expect(
+      findAuthorizedSettlementSignature(connection as never, destination, {
+        ...identity,
+        rawAmount: fixture.authorization.rawAmount,
+        notBeforeUnixSeconds: 100,
+        notAfterUnixSeconds: 400,
+      }),
+    ).rejects.toMatchObject({ code: 'settlement_scan_exhausted', retryable: true });
+    expect(connection.getSignaturesForAddress).toHaveBeenCalledTimes(16);
+    expect(connection.getTransactions).not.toHaveBeenCalled();
+  });
+
+  it('stops pagination at the admission time boundary and reports true absence', async () => {
+    let page = 0;
+    const connection = {
+      getSignaturesForAddress: vi.fn(async () => {
+        page += 1;
+        return page === 1
+          ? settlementSignaturePage(256, 200, true)
+          : settlementSignaturePage(8, 99, true);
+      }),
+      getTransactions: vi.fn(),
+    };
+    const fixture = settlementAuthorizationFixture();
+    const identity = authorizedSettlementTransaction(fixture.authorization);
+
+    await expect(
+      findAuthorizedSettlementSignature(connection as never, destination, {
+        ...identity,
+        rawAmount: fixture.authorization.rawAmount,
+        notBeforeUnixSeconds: 100,
+        notAfterUnixSeconds: 400,
+      }),
+    ).rejects.toMatchObject({ code: 'settlement_not_found' });
+    expect(connection.getSignaturesForAddress).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserves an authorization mismatch when both RPCs independently agree', async () => {
+    const { gateway } = escrowGateway();
+    const mismatch = new PolicyError(
+      'payment_authorization_mismatch',
+      'Settlement transaction does not match the admitted payment authorization',
+      422,
+    );
+    const readAuthorizedSettlementFrom = vi.fn(async () => {
+      throw mismatch;
+    });
+    (
+      gateway as unknown as {
+        readAuthorizedSettlementFrom: typeof readAuthorizedSettlementFrom;
+      }
+    ).readAuthorizedSettlementFrom = readAuthorizedSettlementFrom;
+    const fixture = settlementAuthorizationFixture();
+    const identity = authorizedSettlementTransaction(fixture.authorization);
+
+    await expect(
+      gateway.readAuthorizedSettlement(fixture.transactionSignature, {
+        ...identity,
+        rawAmount: fixture.authorization.rawAmount,
+        notBeforeUnixSeconds: 100,
+        notAfterUnixSeconds: 400,
+      }),
+    ).rejects.toBe(mismatch);
+    expect(readAuthorizedSettlementFrom).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -623,6 +800,92 @@ describe('price feed policy', () => {
     await expect(oracle.solUsd()).rejects.toMatchObject({ code: 'price_inconsistent' });
   });
 });
+
+function settlementAuthorizationFixture(): {
+  authorization: {
+    wireTransaction: string;
+    feePayer: string;
+    rawAmount: string;
+    notBeforeUnixSeconds: number;
+  };
+  fullySignedWireTransaction: string;
+  response: VersionedTransactionResponse;
+  transactionSignature: string;
+} {
+  const feePayer = Keypair.generate();
+  const client = Keypair.generate();
+  const message = new TransactionMessage({
+    payerKey: feePayer.publicKey,
+    recentBlockhash: Keypair.generate().publicKey.toBase58(),
+    instructions: [
+      SystemProgram.transfer({
+        fromPubkey: client.publicKey,
+        toPubkey: destination,
+        lamports: 1,
+      }),
+    ],
+  }).compileToV0Message();
+  const partial = new VersionedTransaction(message);
+  partial.sign([client]);
+  const wireTransaction = Buffer.from(partial.serialize()).toString('base64');
+  const finalized = VersionedTransaction.deserialize(partial.serialize());
+  finalized.sign([feePayer]);
+  const signatures = finalized.signatures.map(testBase58Encode);
+  const transactionSignature = signatures[0]!;
+  return {
+    authorization: {
+      wireTransaction,
+      feePayer: feePayer.publicKey.toBase58(),
+      rawAmount: '2000000',
+      notBeforeUnixSeconds: 100,
+    },
+    fullySignedWireTransaction: Buffer.from(finalized.serialize()).toString('base64'),
+    response: {
+      slot: 42,
+      blockTime: 150,
+      meta: { err: null },
+      transaction: {
+        message: finalized.message,
+        signatures,
+      },
+      version: 0,
+    } as unknown as VersionedTransactionResponse,
+    transactionSignature,
+  };
+}
+
+function settlementSignaturePage(length: number, blockTime: number, failed: boolean, offset = 0) {
+  return Array.from({ length }, (_, index) =>
+    signatureInfo(`signature-${offset + index}`, blockTime, failed),
+  );
+}
+
+function signatureInfo(signature: string, blockTime: number, failed = false) {
+  return {
+    signature,
+    slot: 42,
+    err: failed ? ({ InstructionError: [0, 'Custom'] } as never) : null,
+    memo: null,
+    blockTime,
+    confirmationStatus: 'finalized' as const,
+  };
+}
+
+function testBase58Encode(bytes: Uint8Array): string {
+  const alphabet = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+  let value = 0n;
+  for (const byte of bytes) value = value * 256n + BigInt(byte);
+  let encoded = '';
+  while (value > 0n) {
+    encoded = alphabet[Number(value % 58n)] + encoded;
+    value /= 58n;
+  }
+  for (const byte of bytes) {
+    if (byte !== 0) break;
+    encoded = `1${encoded}`;
+  }
+  return encoded || '1';
+}
 
 function transaction(): ParsedTransactionWithMeta {
   const signature = '6'.repeat(64);

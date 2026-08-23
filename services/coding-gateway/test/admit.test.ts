@@ -112,12 +112,7 @@ describe('admitRun', () => {
     expect(ipBucket.snapshot().rejected).toBe(0);
   });
 
-  it('admits an exempt IP past the daily spend cap and reports exempt=true', () => {
-    // Operator-allowlisted IPs (CODER_EXEMPT_IPS) bypass the per-IP
-    // bucket and the daily/monthly caps so diagnostic traffic from the
-    // people maintaining the deployment isn't blocked by the
-    // intentionally-tight public cap. Concurrency and kill-switch still
-    // apply (covered by other tests).
+  it('keeps USD caps hard for an IP exempt from the per-IP throttle', () => {
     const exhausted = new SpendLedger({ ...caps, dailyUsd: 0 });
     const ipBucket = new IpBucket({ maxPerIp: 1, refillMs: 60_000 });
 
@@ -141,19 +136,12 @@ describe('admitRun', () => {
       ipMaxPerIp: 1,
       exemptIps: new Set(['9.9.9.9']),
     });
-    expect(exempt.ok).toBe(true);
-    if (exempt.ok) expect(exempt.exempt).toBe(true);
-    // The exempt path must not touch the per-IP bucket: a busy operator
-    // could otherwise queue behind their own bucket slot from a stale
-    // diagnostic run.
+    expect(exempt.ok).toBe(false);
+    if (!exempt.ok) expect(exempt.reason).toMatch(/daily/i);
     expect(ipBucket.snapshot().inflight).toBe(0);
   });
 
   it('still honors the kill-switch and the concurrency cap for an exempt IP', () => {
-    // The exemption only opens the daily/monthly caps and the per-IP
-    // bucket — it explicitly does NOT bypass the kill-switch or the
-    // concurrency cap. Operators expect SIGUSR1 to stop *every* run,
-    // not every run except theirs.
     const killed = new SpendLedger(caps);
     killed.kill();
     const ipBucket = new IpBucket({ maxPerIp: 1, refillMs: 60_000 });

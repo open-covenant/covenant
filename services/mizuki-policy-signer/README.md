@@ -7,11 +7,12 @@ It is deliberately deployed separately from the Mizuki application. The applicat
 ## Enforced policy
 
 - Refund liability registration and execution each require a short-lived, action-bound Ed25519 authorization from a dedicated job authority key. Startup rejects that authority if it equals either custody authority.
-- A finalized settlement can be registered for 24 hours so a signer or API outage cannot silently erase the refund guarantee. Per-operation and rolling daily limits still bound registration exposure.
-- A finalized payment must be registered within one hour by default. One settlement binds to one job permanently, preventing a compromised request key from sweeping historical treasury payments.
+- Liability registration has no wall-clock expiry. The named finalized transaction must match a durable repository admission and must have landed inside that admission's original payment window. This preserves recovery after a prolonged outage without exposing unrelated historical treasury payments.
 - The signer reads finalized Solana data to derive the original token owner, treasury, mint, decimals, and exact amount.
 - The configured token program, source owner, destination owner, mint, decimals, transaction signature, and finalized slot must agree.
 - Exactly one checked transfer may target the treasury, and its amount must equal the treasury account's net token increase.
+- Admission parses the x402 authorization once, then persists only a non-broadcastable binding: authorization hash, v0 message hash, existing client signature, fee payer, amount, and payment-window bounds. Replayable transaction bytes are never retained by the signer.
+- Recovery requires both RPC providers to find the same finalized message hash, client signature, fee payer, amount, and settlement facts. It never relies on a facilitator replay response to identify a prior settlement.
 - A settlement can produce one registered liability and one finalized refund forever.
 - A refund returns the exact raw token amount to the verified original owner.
 - Each funded operation is capped at `$25` by default.
@@ -48,6 +49,12 @@ If the process exits after step 3, the same signed bytes are broadcast after res
 
 All `/v1` endpoints require `Authorization: Bearer <token>`. Mutation endpoints also require an `Idempotency-Key` header containing 8–128 letters, digits, dots, colons, underscores, or hyphens.
 
+### `POST /v1/repository-admissions/:admissionId/settlements/reconcile`
+
+This recovery-only route accepts only the admission evidence hash. Admission creation previously validated the base64 x402 authorization, exact mainnet USDC route, admitted quote resource, and embedded payer-signed v0 transaction, then discarded the replayable authorization after deriving its non-broadcastable binding.
+
+Each RPC independently paginates finalized treasury-token-account history back to the admission time boundary and compares the exact serialized message plus the existing non-fee-payer signature. Scans are capped at 4,096 signatures per provider. Reaching that cap before the time boundary returns retryable `settlement_scan_exhausted`, never `settlement_not_found`, so core cannot rebroadcast under a history flood. Both providers must identify identical settlement facts.
+
 ### Refund authorization
 
 The application holds a dedicated Ed25519 request-authority key. This is not a Solana transaction key. The signer receives only its base58-encoded 32-byte public key. Authorization signatures are standard base64 encodings of the raw 64-byte Ed25519 signature and expire within 15 minutes by default.
@@ -56,9 +63,17 @@ Registration signs these exact UTF-8 bytes, with no trailing newline:
 
 ```text
 Mizuki refund liability registration
-Version: 1
+Version: 3
 Job: <jobId>
 Settlement: <settlementSignature>
+Repository Admission: <repositoryAdmissionId>
+Repository Admission Evidence: <repositoryAdmissionEvidenceHash>
+Repository: <owner/repository>
+Issue: <issueNumber>
+Base Ref: <baseRef>
+Base SHA: <baseSha>
+Repository Authorized At: <repositoryAuthorizedAt normalized with Date.toISOString()>
+Authorization Evidence: <authorizationEvidenceHash>
 Expires At: <authorizationExpiresAt normalized with Date.toISOString()>
 ```
 
@@ -200,6 +215,10 @@ Returns the durable operation state without exposing signed wire bytes or intern
 Returns independently observed finalized refund capacity after subtracting every outstanding registered liability and the consumed rolling liability limit. A liability remains pending while its refund is prepared, submitted, or reconciling and is removed only after finalized refund state, preventing double subtraction. The authenticated response includes `refundTreasury`, `refundMint`, `refundDecimals`, `finalizedBalanceRaw`, `pendingRefundRaw`, `treasuryAvailableRefundRaw`, `remainingRefundLimitUsdCents`, and `availableRefundRaw`; raw amounts are decimal strings. `availableRefundRaw` is the lower of protected treasury capacity and rolling-limit capacity. Dependency or RPC disagreement returns HTTP 503 with `healthy: false`.
 
 Readiness is healthy only when the database, both RPC providers, both named price observations, the configured GitHub App identity and read-only permission contract, the immutable pinned escrow program, refund-token custody, and bounty custody all pass a fresh probe. Repository installation access is checked separately whenever repository evidence is requested.
+
+### `POST /v1/readiness/repository`
+
+Authenticates the caller and accepts only `{ "repository": "owner/repository" }`. The signer revalidates its dedicated verifier App identity and exact read-only permission set, discovers a non-suspended selected-repository installation for that exact repository, and freshly mints a token limited to that one repository. The response contains only public App and installation identifiers, the exact permission contract, repository count, and token expiry; it never returns the token. Missing installations, suspension, App drift, permission drift, or repository-scope drift fail closed. This repository-specific check is intentionally separate from global health because one installation cannot establish readiness for every repository.
 
 ### `GET /v1/readiness/evidence`
 

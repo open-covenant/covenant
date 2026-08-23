@@ -19,6 +19,7 @@ import type {
   OperatorControlsPatch,
   Payment,
   Quote,
+  RepositoryAdmissionReceipt,
   WalletChallenge,
 } from './types.js';
 
@@ -38,6 +39,7 @@ export interface MizukiStore {
     quote: Quote,
     payment: Payment,
     idempotencyKey: string,
+    repositoryAdmission?: RepositoryAdmissionReceipt,
   ): Promise<{ job: Job; created: boolean }>;
   job(id: string): Promise<Job | undefined>;
   jobByIdempotencyKey(key: string): Promise<Job | undefined>;
@@ -129,6 +131,7 @@ export class MemoryStore implements MizukiStore {
     quote: Quote,
     payment: Payment,
     idempotencyKey: string,
+    repositoryAdmission?: RepositoryAdmissionReceipt,
   ): Promise<{ job: Job; created: boolean }> {
     const proofHash = paymentProofHash(payment);
     const candidates = [...this.jobs.values()].filter(
@@ -145,13 +148,22 @@ export class MemoryStore implements MizukiStore {
     );
     if (conflicting) throw new StateConflictError('payment reservation belongs to another quote');
     const existing = candidates.find((job) => job.quote.id === quote.id);
-    if (existing) return { job: structuredClone(existing), created: false };
+    if (existing) {
+      if (
+        repositoryAdmission &&
+        existing.repositoryAdmission?.evidenceHash !== repositoryAdmission.evidenceHash
+      ) {
+        throw new StateConflictError('job reservation has different repository admission');
+      }
+      return { job: structuredClone(existing), created: false };
+    }
     const now = new Date().toISOString();
     const job: Job = {
       id: randomUUID(),
       idempotencyKey,
       quote: structuredClone(quote),
       payment: structuredClone(payment),
+      ...(repositoryAdmission ? { repositoryAdmission: structuredClone(repositoryAdmission) } : {}),
       state: 'settlement_pending',
       createdAt: now,
       updatedAt: now,
@@ -554,6 +566,7 @@ export class PostgresStore implements MizukiStore {
     quote: Quote,
     payment: Payment,
     idempotencyKey: string,
+    repositoryAdmission?: RepositoryAdmissionReceipt,
   ): Promise<{ job: Job; created: boolean }> {
     return this.transaction(async (client) => {
       const now = new Date().toISOString();
@@ -563,6 +576,7 @@ export class PostgresStore implements MizukiStore {
         idempotencyKey,
         quote,
         payment,
+        ...(repositoryAdmission ? { repositoryAdmission } : {}),
         state: 'settlement_pending',
         createdAt: now,
         updatedAt: now,
@@ -602,6 +616,12 @@ export class PostgresStore implements MizukiStore {
       if (conflicting) throw new StateConflictError('payment reservation belongs to another quote');
       const reserved = existing.rows.find((row) => row.quote_id === quote.id);
       if (!reserved) throw new Error('job insert conflicted without an existing row');
+      if (
+        repositoryAdmission &&
+        reserved.payload.repositoryAdmission?.evidenceHash !== repositoryAdmission.evidenceHash
+      ) {
+        throw new StateConflictError('job reservation has different repository admission');
+      }
       return { job: reserved.payload, created: false };
     });
   }

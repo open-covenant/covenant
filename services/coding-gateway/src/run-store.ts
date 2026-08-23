@@ -11,7 +11,7 @@ import {
 } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
-import { validCostMicrounits } from './usepod-http.js';
+import { usePodCeilingCostMicrounits, validCostMicrounits } from './usepod-http.js';
 import type {
   GatewayEvent,
   ProviderReceipt,
@@ -249,6 +249,7 @@ export class IdempotencyConflictError extends Error {
 function isProviderReceipt(value: unknown): value is ProviderReceipt {
   if (!value || typeof value !== 'object') return false;
   const receipt = value as Partial<ProviderReceipt>;
+  const accountingValid = isProviderAccounting(receipt);
   return (
     typeof receipt.model === 'string' &&
     receipt.model.length > 0 &&
@@ -258,7 +259,51 @@ function isProviderReceipt(value: unknown): value is ProviderReceipt {
     /[1-9]/.test(receipt.balanceRemaining) &&
     (receipt.providerId === undefined || typeof receipt.providerId === 'string') &&
     (receipt.requestId === undefined || typeof receipt.requestId === 'string') &&
-    (receipt.costMicrounits === undefined || validCostMicrounits(receipt.costMicrounits))
+    (receipt.providerReportedCostMicrounits === undefined ||
+      (typeof receipt.providerReportedCostMicrounits === 'string' &&
+        validCostMicrounits(receipt.providerReportedCostMicrounits))) &&
+    (receipt.costMicrounits === undefined ||
+      (typeof receipt.costMicrounits === 'string' &&
+        validCostMicrounits(receipt.costMicrounits))) &&
+    accountingValid
+  );
+}
+
+function isProviderAccounting(receipt: Partial<ProviderReceipt>): boolean {
+  if (receipt.accounting === undefined) {
+    return receipt.providerReportedCostMicrounits === undefined;
+  }
+  if (receipt.costMicrounits !== undefined) return false;
+  if (!receipt.accounting || typeof receipt.accounting !== 'object') return false;
+
+  const accounting = receipt.accounting;
+  if (
+    typeof accounting.accountedCostMicrounits !== 'string' ||
+    !validCostMicrounits(accounting.accountedCostMicrounits) ||
+    !Number.isSafeInteger(accounting.inputTokens) ||
+    accounting.inputTokens < 0 ||
+    !Number.isSafeInteger(accounting.outputTokens) ||
+    accounting.outputTokens < 0 ||
+    !Number.isSafeInteger(accounting.inputPriceMicrounitsPerMillion) ||
+    accounting.inputPriceMicrounitsPerMillion <= 0 ||
+    !Number.isSafeInteger(accounting.outputPriceMicrounitsPerMillion) ||
+    accounting.outputPriceMicrounitsPerMillion <= 0
+  ) {
+    return false;
+  }
+
+  const ceiling = usePodCeilingCostMicrounits(
+    { promptTokens: accounting.inputTokens, completionTokens: accounting.outputTokens },
+    accounting.inputPriceMicrounitsPerMillion,
+    accounting.outputPriceMicrounitsPerMillion,
+  );
+  const reported = receipt.providerReportedCostMicrounits;
+  const expected = reported && BigInt(reported) > ceiling ? BigInt(reported) : ceiling;
+  const expectedBasis = reported
+    ? 'max-of-configured-price-ceilings-and-provider-report'
+    : 'configured-price-ceilings';
+  return (
+    accounting.basis === expectedBasis && BigInt(accounting.accountedCostMicrounits) === expected
   );
 }
 

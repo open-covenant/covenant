@@ -49,6 +49,30 @@ export type Payment = {
   signature?: string;
 };
 
+export type RepositoryAdmissionReceipt = {
+  id: string;
+  quoteId: string;
+  repository: string;
+  issueNumber: number;
+  baseRef: string;
+  baseSha: string;
+  reservationKeyHash: string;
+  paymentAuthorizationHash: string;
+  verifierAppId: string;
+  installationId: number;
+  repositorySelection: 'selected';
+  permissions: {
+    contents: 'read';
+    issues: 'read';
+    metadata: 'read';
+    pull_requests: 'read';
+  };
+  tokenRepositories: 1;
+  tokenExpiresAt: string;
+  admittedAt: string;
+  evidenceHash: string;
+};
+
 export type ValidationResult = {
   command: string;
   exitCode: number;
@@ -100,6 +124,7 @@ export type Job = {
   idempotencyKey: string;
   quote: Quote;
   payment: Payment;
+  repositoryAdmission?: RepositoryAdmissionReceipt;
   state: JobState;
   createdAt: string;
   updatedAt: string;

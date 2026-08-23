@@ -96,7 +96,15 @@ describe('UsePodBackend', () => {
       model: 'deepseek-v3.2',
       route: 'marketplace',
       providerId: 'provider-1',
-      costMicrounits: '1250',
+      providerReportedCostMicrounits: '1250',
+      accounting: {
+        accountedCostMicrounits: '1250',
+        basis: 'max-of-configured-price-ceilings-and-provider-report',
+        inputTokens: 20,
+        outputTokens: 4,
+        inputPriceMicrounitsPerMillion: 200000,
+        outputPriceMicrounitsPerMillion: 400000,
+      },
     });
     expect(events.map((event) => event.type)).toContain('file.written');
     expect(order).toEqual(['receipt', 'tool', 'receipt']);
@@ -154,11 +162,17 @@ describe('UsePodBackend', () => {
     expect(new RunStore(path).list()[0]).toMatchObject({
       status: 'failed',
       costUsd: 2,
-      providerReceipts: [{ route: 'marketplace', costMicrounits: '1250' }],
+      providerReceipts: [
+        {
+          route: 'marketplace',
+          providerReportedCostMicrounits: '1250',
+          accounting: { accountedCostMicrounits: '1250' },
+        },
+      ],
     });
   });
 
-  it('rejects invalid token usage after checkpointing the provider receipt', async () => {
+  it('falls back to the reservation when response usage cannot be accounted', async () => {
     vi.stubGlobal('fetch', async () =>
       Response.json(
         {
@@ -187,7 +201,7 @@ describe('UsePodBackend', () => {
         recordProviderReceipt: (receipt) => receipts.push(receipt),
       }),
     ).rejects.toThrow(/invalid token usage/);
-    expect(receipts).toHaveLength(1);
+    expect(receipts).toHaveLength(0);
   });
 
   it('completes thirty turns without allowing receipt spend past the run cap', async () => {
@@ -241,34 +255,42 @@ describe('UsePodBackend', () => {
       recordProviderReceipt: (receipt) => receipts.push(receipt),
     });
 
-    const spent = receipts.reduce((sum, receipt) => sum + BigInt(receipt.costMicrounits!), 0n);
+    const spent = receipts.reduce(
+      (sum, receipt) => sum + BigInt(receipt.accounting!.accountedCostMicrounits),
+      0n,
+    );
     expect(result.output).toBe('Done.');
     expect(turn).toBe(30);
     expect(spent).toBe(300_000n);
     expect(maxTokens.every((value) => value > 0 && value <= 16_000)).toBe(true);
   });
 
-  it('fails before a second paid call when the first receipt omits cost', async () => {
-    const request = vi.fn(async () =>
-      Response.json(
+  it('accounts multi-turn usage when provider cost reports are omitted', async () => {
+    let turn = 0;
+    const request = vi.fn(async () => {
+      turn += 1;
+      return Response.json(
         {
           model: 'deepseek-v3.2',
-          choices: [
-            {
-              message: {
-                content: null,
-                tool_calls: [
+          choices:
+            turn === 1
+              ? [
                   {
-                    id: 'call-1',
-                    function: {
-                      name: 'read_file',
-                      arguments: JSON.stringify({ path: 'README.md' }),
+                    message: {
+                      content: null,
+                      tool_calls: [
+                        {
+                          id: 'call-1',
+                          function: {
+                            name: 'read_file',
+                            arguments: JSON.stringify({ path: 'README.md' }),
+                          },
+                        },
+                      ],
                     },
                   },
-                ],
-              },
-            },
-          ],
+                ]
+              : [{ message: { content: 'Done.' } }],
           usage: { prompt_tokens: 10, completion_tokens: 2 },
         },
         {
@@ -277,24 +299,38 @@ describe('UsePodBackend', () => {
             'x-balance-remaining': '5000000',
           },
         },
-      ),
-    );
+      );
+    });
     vi.stubGlobal('fetch', request);
     const receipts: ProviderReceipt[] = [];
 
-    await expect(
-      new UsePodBackend('https://usepod.test', 'test-key', 'deepseek-v3.2').run({
-        input: 'fix docs',
-        sandbox: {} as Sandbox,
-        signal: new AbortController().signal,
-        emit: () => {},
-        maxProviderCostUsd: 1,
-        recordProviderReceipt: (receipt) => receipts.push(receipt),
+    const result = await new UsePodBackend('https://usepod.test', 'test-key', 'deepseek-v3.2').run({
+      input: 'fix docs',
+      sandbox: { readFile: async () => '' } as Sandbox,
+      signal: new AbortController().signal,
+      emit: () => {},
+      maxProviderCostUsd: 1,
+      recordProviderReceipt: (receipt) => receipts.push(receipt),
+    });
+
+    expect(result.output).toBe('Done.');
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(receipts).toHaveLength(2);
+    expect(receipts).toEqual([
+      expect.objectContaining({
+        accounting: expect.objectContaining({
+          accountedCostMicrounits: '3',
+          basis: 'configured-price-ceilings',
+        }),
       }),
-    ).rejects.toThrow(/omitted authoritative provider cost/);
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(receipts).toHaveLength(1);
-    expect(receipts[0]?.costMicrounits).toBeUndefined();
+      expect.objectContaining({
+        accounting: expect.objectContaining({
+          accountedCostMicrounits: '3',
+          basis: 'configured-price-ceilings',
+        }),
+      }),
+    ]);
+    expect(receipts[0]?.providerReportedCostMicrounits).toBeUndefined();
   });
 
   it('keeps an over-budget receipt visible before aborting', async () => {
@@ -325,7 +361,12 @@ describe('UsePodBackend', () => {
         recordProviderReceipt: (receipt) => receipts.push(receipt),
       }),
     ).rejects.toThrow(/exceeded the run budget/);
-    expect(receipts).toMatchObject([{ costMicrounits: '1250' }]);
+    expect(receipts).toMatchObject([
+      {
+        providerReportedCostMicrounits: '1250',
+        accounting: { accountedCostMicrounits: '1250' },
+      },
+    ]);
   });
 
   it('refuses to run without a key', async () => {

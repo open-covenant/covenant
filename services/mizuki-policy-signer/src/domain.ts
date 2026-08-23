@@ -27,6 +27,7 @@ export const githubLoginSchema = z
   .max(39)
   .regex(/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/)
   .transform((value) => value.toLowerCase());
+export const PAYMENT_AUTHORIZATION_MAX_BYTES = 12_000;
 
 export const refundRequestSchema = z
   .object({
@@ -42,6 +43,8 @@ export const refundRequestSchema = z
 
 export const registerRefundLiabilityRequestSchema = refundRequestSchema
   .extend({
+    repositoryAdmissionId: z.string().uuid(),
+    repositoryAdmissionEvidenceHash: hashSchema,
     repository: repositorySchema,
     issueNumber: z.number().int().positive().max(2_147_483_647),
     baseRef: gitRefSchema,
@@ -111,6 +114,78 @@ export const githubIdentityGrantRequestSchema = z
   })
   .strict();
 
+export const repositoryReadinessRequestSchema = z
+  .object({
+    repository: repositorySchema,
+  })
+  .strict();
+
+const repositoryAdmissionBaseSchema = z
+  .object({
+    quoteId: z.string().uuid(),
+    repository: repositorySchema,
+    issueNumber: z.number().int().positive().max(2_147_483_647),
+    baseRef: gitRefSchema,
+    baseSha: gitCommitShaSchema,
+    reservationKeyHash: hashSchema,
+  })
+  .strict();
+
+export const repositoryAdmissionRequestSchema = repositoryAdmissionBaseSchema
+  .extend({
+    paymentAuthorization: z
+      .string()
+      .min(1)
+      .max(PAYMENT_AUTHORIZATION_MAX_BYTES)
+      .regex(/^[A-Za-z0-9+/]*={0,2}$/),
+  })
+  .strict();
+
+export const validateRepositoryAdmissionRequestSchema = repositoryAdmissionBaseSchema
+  .extend({ paymentAuthorizationHash: hashSchema, evidenceHash: hashSchema })
+  .strict();
+
+export const reconcileRepositorySettlementRequestSchema = z
+  .object({
+    evidenceHash: hashSchema,
+  })
+  .strict();
+
+export const x402PaymentAuthorizationSchema = z
+  .object({
+    x402Version: z.literal(2),
+    resource: z
+      .object({
+        url: z.string().url().max(2_048),
+      })
+      .passthrough(),
+    accepted: z
+      .object({
+        scheme: z.literal('exact'),
+        network: z.literal('solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'),
+        asset: base58Schema,
+        amount: z.string().regex(/^[1-9]\d*$/),
+        payTo: base58Schema,
+        maxTimeoutSeconds: z.literal(300),
+        extra: z
+          .object({
+            feePayer: base58Schema,
+          })
+          .passthrough(),
+      })
+      .passthrough(),
+    payload: z
+      .object({
+        transaction: z
+          .string()
+          .min(1)
+          .max(4_096)
+          .regex(/^[A-Za-z0-9+/]*={0,2}$/),
+      })
+      .strict(),
+  })
+  .passthrough();
+
 export const bindEscrowRequestSchema = z
   .object({
     challengeId: z.string().uuid(),
@@ -144,6 +219,14 @@ export type BindRefundLiabilityDeliveryRequest = z.infer<
 export type CreateEscrowRequest = z.infer<typeof createEscrowRequestSchema>;
 export type BindChallengeRequest = z.infer<typeof bindChallengeRequestSchema>;
 export type GitHubIdentityGrantRequest = z.infer<typeof githubIdentityGrantRequestSchema>;
+export type RepositoryAdmissionRequest = z.infer<typeof repositoryAdmissionRequestSchema>;
+export type ValidateRepositoryAdmissionRequest = z.infer<
+  typeof validateRepositoryAdmissionRequestSchema
+>;
+export type ReconcileRepositorySettlementRequest = z.infer<
+  typeof reconcileRepositorySettlementRequestSchema
+>;
+export type X402PaymentAuthorization = z.infer<typeof x402PaymentAuthorizationSchema>;
 export type BindEscrowRequest = z.infer<typeof bindEscrowRequestSchema>;
 export type ReleaseEscrowRequest = z.infer<typeof releaseEscrowRequestSchema>;
 export type RefundEscrowRequest = z.infer<typeof refundEscrowRequestSchema>;
@@ -222,11 +305,79 @@ export interface SettlementFacts {
   blockTimeUnixSeconds: number;
 }
 
+export interface SettlementAuthorization {
+  wireTransaction: string;
+  feePayer: string;
+  rawAmount: string;
+  notBeforeUnixSeconds: number;
+}
+
+export interface SettlementAuthorizationBinding {
+  messageHash: string;
+  clientSignature: string;
+  feePayer: string;
+  rawAmount: string;
+  notBeforeUnixSeconds: number;
+  notAfterUnixSeconds: number;
+}
+
+export interface RepositoryAdmission {
+  id: string;
+  idempotencyKey: string;
+  requestHash: string;
+  quoteId: string;
+  repository: string;
+  issueNumber: number;
+  baseRef: string;
+  baseSha: string;
+  reservationKeyHash: string;
+  paymentAuthorizationHash: string;
+  settlementMessageHash: string;
+  settlementClientSignature: string;
+  settlementFeePayer: string;
+  settlementRawAmount: string;
+  paymentWindowStartUnixSeconds: number;
+  paymentWindowEndUnixSeconds: number;
+  verifierAppId: string;
+  installationId: number;
+  repositorySelection: 'selected';
+  permissions: {
+    contents: 'read';
+    issues: 'read';
+    metadata: 'read';
+    pull_requests: 'read';
+  };
+  tokenRepositories: 1;
+  tokenExpiresAt: Date;
+  admittedAt: Date;
+  evidenceHash: string;
+}
+
+export interface RepositoryAdmissionView {
+  id: string;
+  quoteId: string;
+  repository: string;
+  issueNumber: number;
+  baseRef: string;
+  baseSha: string;
+  reservationKeyHash: string;
+  paymentAuthorizationHash: string;
+  verifierAppId: string;
+  installationId: number;
+  repositorySelection: 'selected';
+  permissions: RepositoryAdmission['permissions'];
+  tokenRepositories: 1;
+  tokenExpiresAt: string;
+  admittedAt: string;
+  evidenceHash: string;
+}
+
 export interface RefundLiability {
   id: string;
   idempotencyKey: string;
   requestHash: string;
   jobId: string;
+  repositoryAdmissionId: string;
   settlementSignature: string;
   repository: string;
   issueNumber: number;
@@ -261,6 +412,7 @@ export interface RefundLiability {
 export interface RefundLiabilityView {
   id: string;
   jobId: string;
+  repositoryAdmissionId: string;
   settlementSignature: string;
   repository: string;
   issueNumber: number;
@@ -465,6 +617,7 @@ export function refundLiabilityView(liability: RefundLiability): RefundLiability
   return {
     id: liability.id,
     jobId: liability.jobId,
+    repositoryAdmissionId: liability.repositoryAdmissionId,
     settlementSignature: liability.settlementSignature,
     repository: liability.repository,
     issueNumber: liability.issueNumber,
@@ -491,6 +644,27 @@ export function refundLiabilityView(liability: RefundLiability): RefundLiability
   };
 }
 
+export function repositoryAdmissionView(admission: RepositoryAdmission): RepositoryAdmissionView {
+  return {
+    id: admission.id,
+    quoteId: admission.quoteId,
+    repository: admission.repository,
+    issueNumber: admission.issueNumber,
+    baseRef: admission.baseRef,
+    baseSha: admission.baseSha,
+    reservationKeyHash: admission.reservationKeyHash,
+    paymentAuthorizationHash: admission.paymentAuthorizationHash,
+    verifierAppId: admission.verifierAppId,
+    installationId: admission.installationId,
+    repositorySelection: admission.repositorySelection,
+    permissions: { ...admission.permissions },
+    tokenRepositories: admission.tokenRepositories,
+    tokenExpiresAt: admission.tokenExpiresAt.toISOString(),
+    admittedAt: admission.admittedAt.toISOString(),
+    evidenceHash: admission.evidenceHash,
+  };
+}
+
 export function refundAuthorizationMessage(
   action: 'register' | 'execute',
   request:
@@ -503,13 +677,15 @@ export function refundAuthorizationMessage(
       : 'Mizuki refund execution authorization';
   const fields = [
     title,
-    `Version: ${action === 'register' ? 2 : 1}`,
+    `Version: ${action === 'register' ? 3 : 1}`,
     `Job: ${request.jobId}`,
     `Settlement: ${request.settlementSignature}`,
   ];
   if (action === 'register') {
     const registration = request as RegisterRefundLiabilityRequest;
     fields.push(
+      `Repository Admission: ${registration.repositoryAdmissionId}`,
+      `Repository Admission Evidence: ${registration.repositoryAdmissionEvidenceHash}`,
       `Repository: ${registration.repository.toLowerCase()}`,
       `Issue: ${registration.issueNumber}`,
       `Base Ref: ${registration.baseRef}`,

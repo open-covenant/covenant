@@ -58,7 +58,6 @@ const policy = new PolicyService(
     refundDecimals: config.refundDecimals,
     jobAuthorityPublicKey: config.jobAuthorityPublicKey!,
     refundAuthMaxTtlSeconds: config.refundAuthMaxTtlSeconds,
-    refundLiabilityMaxAgeSeconds: config.refundLiabilityMaxAgeSeconds,
     operationLimitUsdCents: config.operationLimitUsdCents,
     refundDailyLimitUsdCents: config.refundDailyLimitUsdCents,
     escrowDailyLimitUsdCents: config.escrowDailyLimitUsdCents,

@@ -28,6 +28,7 @@ const envSchema = z
     MIZUKI_UPDATER_ALLOWED_BASE_BRANCHES: z.string().min(1),
     MIZUKI_UPDATER_HEAD_BRANCH_PREFIX: z.string().min(1).max(100),
     MIZUKI_UPDATER_MANDATORY_CHECKS: z.string().min(1),
+    MIZUKI_UPDATER_CHECK_PRODUCERS_JSON: optionalString(2),
     MIZUKI_UPDATER_PROPOSAL_MAX_AGE_MS: z.coerce
       .number()
       .int()
@@ -96,6 +97,7 @@ const operationalValues = [
   'MIZUKI_UPDATER_PROPOSAL_KEYS_JSON',
   'MIZUKI_UPDATER_BENCHMARK_KEYS_JSON',
   'MIZUKI_UPDATER_REVIEW_KEYS_JSON',
+  'MIZUKI_UPDATER_CHECK_PRODUCERS_JSON',
   'MIZUKI_UPDATER_GITHUB_APP_ID',
   'MIZUKI_UPDATER_GITHUB_PRIVATE_KEY',
   'MIZUKI_UPDATER_DEPLOY_CONTROLLER_HOSTPORT',
@@ -106,6 +108,7 @@ export interface UpdaterOperationalConfig {
   trustedProposalKeys: Record<string, string>;
   trustedBenchmarkKeys: Record<string, string>;
   trustedReviewKeys: Record<string, string>;
+  checkProducers: Map<string, CheckProducerPolicy>;
   githubAppId: number;
   githubPrivateKey: string;
   shadowHookUrl: string;
@@ -115,6 +118,18 @@ export interface UpdaterOperationalConfig {
   rollbackHookUrl: string;
   deployReadinessUrl: string;
   deployHookToken: string;
+}
+
+export interface CheckProducerPolicy {
+  checkRunAppId: number;
+  workflowId: number;
+  workflowPath: string;
+  event: 'pull_request';
+  headBranch: 'manifest';
+  headSha: 'candidate';
+  baseBranch: 'manifest';
+  baseSha: 'signed';
+  definitionRef: 'base';
 }
 
 export interface UpdaterConfig {
@@ -217,6 +232,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): UpdaterConfig 
     operationalFailures.length === 0
       ? operationalConfig(parsed, parsed.NODE_ENV === 'production')
       : undefined;
+  if (operational) {
+    for (const check of mandatoryChecks) {
+      if (!operational.checkProducers.has(check)) {
+        throw new Error(`Mandatory check lacks a pinned producer: ${check}`);
+      }
+    }
+  }
 
   return {
     environment: parsed.NODE_ENV,
@@ -264,6 +286,7 @@ function operationalConfig(parsed: ParsedEnv, production: boolean): UpdaterOpera
     trustedProposalKeys: parseTrustedKeys(parsed.MIZUKI_UPDATER_PROPOSAL_KEYS_JSON!),
     trustedBenchmarkKeys: parseTrustedKeys(parsed.MIZUKI_UPDATER_BENCHMARK_KEYS_JSON!),
     trustedReviewKeys: parseTrustedKeys(parsed.MIZUKI_UPDATER_REVIEW_KEYS_JSON!),
+    checkProducers: parseCheckProducers(parsed.MIZUKI_UPDATER_CHECK_PRODUCERS_JSON!),
     githubAppId: parsed.MIZUKI_UPDATER_GITHUB_APP_ID!,
     githubPrivateKey: parsed.MIZUKI_UPDATER_GITHUB_PRIVATE_KEY!.replace(/\\n/g, '\n'),
     shadowHookUrl: `${origin}/v1/deployments/shadow`,
@@ -274,6 +297,40 @@ function operationalConfig(parsed: ParsedEnv, production: boolean): UpdaterOpera
     deployReadinessUrl: `${origin}/readyz`,
     deployHookToken: parsed.MIZUKI_UPDATER_DEPLOY_HOOK_TOKEN!,
   };
+}
+
+const producerPolicySchema = z
+  .object({
+    checkRunAppId: z.number().int().positive().safe(),
+    workflowId: z.number().int().positive().safe(),
+    workflowPath: z
+      .string()
+      .regex(/^\.github\/workflows\/[A-Za-z0-9_.-]+\.ya?ml$/)
+      .max(200),
+    event: z.literal('pull_request'),
+    headBranch: z.literal('manifest'),
+    headSha: z.literal('candidate'),
+    baseBranch: z.literal('manifest'),
+    baseSha: z.literal('signed'),
+    definitionRef: z.literal('base'),
+  })
+  .strict();
+
+function parseCheckProducers(value: string): Map<string, CheckProducerPolicy> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error('MIZUKI_UPDATER_CHECK_PRODUCERS_JSON must be valid JSON');
+  }
+  const record = z
+    .record(z.string().min(1).max(200), producerPolicySchema)
+    .refine(
+      (policies) => Object.keys(policies).length > 0,
+      'At least one check producer is required',
+    )
+    .parse(parsed);
+  return new Map(Object.entries(record));
 }
 
 function parseTrustedKeys(value: string): Record<string, string> {

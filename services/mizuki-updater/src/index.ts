@@ -19,8 +19,10 @@ const github = operational
       apiUrl: config.githubApiUrl,
       appId: operational.githubAppId,
       privateKey: operational.githubPrivateKey,
+      repositories: config.allowedRepositories,
       timeoutMs: config.githubTimeoutMs,
       mergeMethod: config.githubMergeMethod,
+      checkProducers: operational.checkProducers,
     })
   : undefined;
 const deployments = operational

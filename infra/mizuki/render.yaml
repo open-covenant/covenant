@@ -24,7 +24,7 @@ services:
         fromService:
           type: web
           name: mizuki-runtime-production
-          envVarKey: MIZUKI_PUBLIC_BASE_URL
+          envVarKey: RENDER_EXTERNAL_URL
       - key: MIZUKI_WEB_ORIGIN
         value: https://mizuki.covenant.org
       - key: MIZUKI_TRUSTED_PROXY_HOPS
@@ -78,15 +78,9 @@ services:
       - key: USEPOD_BASE_URL
         value: https://api.usepod.ai
       - key: USEPOD_MODEL
-        fromService:
-          type: web
-          name: mizuki-runtime-production
-          envVarKey: USEPOD_MODEL
+        value: openai/gpt-oss-120b
       - key: USEPOD_REVIEW_MODEL
-        fromService:
-          type: web
-          name: mizuki-runtime-production
-          envVarKey: USEPOD_REVIEW_MODEL
+        value: deepseek-v4-flash
       - key: USEPOD_INPUT_USD_PER_MILLION
         value: '0.2'
       - key: USEPOD_OUTPUT_USD_PER_MILLION
@@ -96,10 +90,9 @@ services:
       - key: USEPOD_MAX_OUTPUT_PRICE_MICROUNITS
         value: '400000'
       - key: USEPOD_MIN_BALANCE
-        fromService:
-          type: web
-          name: mizuki-runtime-production
-          envVarKey: USEPOD_MIN_BALANCE
+        value: '4000000'
+      - key: MIZUKI_BOUNTY_REVIEW_MAX_COST_MICROUNITS
+        value: '50000'
       - key: MIZUKI_PAYMENT_MODE
         value: live
       - key: MIZUKI_PAY_TO
@@ -252,9 +245,9 @@ services:
       - key: USEPOD_BASE_URL
         value: https://api.usepod.ai
       - key: USEPOD_MODEL
-        sync: false
+        value: openai/gpt-oss-120b
       - key: USEPOD_REVIEW_MODEL
-        sync: false
+        value: deepseek-v4-flash
       - key: USEPOD_INPUT_USD_PER_MILLION
         value: '0.2'
       - key: USEPOD_OUTPUT_USD_PER_MILLION
@@ -264,7 +257,9 @@ services:
       - key: USEPOD_MAX_OUTPUT_PRICE_MICROUNITS
         value: '400000'
       - key: USEPOD_MIN_BALANCE
-        sync: false
+        value: '4000000'
+      - key: MIZUKI_BOUNTY_REVIEW_MAX_COST_MICROUNITS
+        value: '50000'
       - key: MIZUKI_PAYMENT_MODE
         value: live
       - key: MIZUKI_PAY_TO
@@ -408,8 +403,6 @@ services:
         value: '10000'
       - key: MIZUKI_REFUND_AUTH_MAX_TTL_SECONDS
         value: '900'
-      - key: MIZUKI_REFUND_LIABILITY_MAX_AGE_SECONDS
-        value: '86400'
       - key: MIZUKI_ESCROW_DAILY_LIMIT_USD_CENTS
         value: '10000'
       - key: MIZUKI_MAX_ESCROW_LAMPORTS
@@ -450,7 +443,7 @@ services:
       - key: CODER_BACKEND
         value: usepod
       - key: CODER_MODEL
-        sync: false
+        value: openai/gpt-oss-120b
       - key: CODER_EFFORT
         value: low
       - key: USEPOD_API_KEY
@@ -466,11 +459,15 @@ services:
       - key: USEPOD_MAX_OUTPUT_PRICE_MICROUNITS
         value: '400000'
       - key: USEPOD_MIN_BALANCE
-        sync: false
+        value: '4000000'
       - key: E2B_API_KEY
         sync: false
-      - key: E2B_TEMPLATE
-        value: covenant-coder
+      - key: E2B_TEMPLATE_ID
+        value: aaj2iho3gnyf5fcvln83
+      - key: E2B_EXPECTED_CPU_COUNT
+        value: '4'
+      - key: E2B_EXPECTED_MEMORY_MB
+        value: '4096'
       - key: E2B_EGRESS_ALLOW
         value: github.com,codeload.github.com,objects.githubusercontent.com,registry.npmjs.org,registry.yarnpkg.com,pypi.org,files.pythonhosted.org,crates.io,static.crates.io
       - key: CODER_DAILY_USD
@@ -483,8 +480,10 @@ services:
         value: '2'
       - key: CODER_WALL_MS
         value: '600000'
-      - key: CODER_SANDBOX_USD_PER_SEC
-        value: '0.0001'
+      - key: CODER_E2B_WORST_CASE_USD_PER_SEC
+        value: '0.0002'
+      - key: CODER_E2B_TARIFF_REF
+        value: https://raw.githubusercontent.com/open-covenant/covenant/main/infra/mizuki/evidence/e2b-tariff-2026-08-23.json#sha256=6ef608ba7e084aa7eda89941e79ef93ef9b952c993772b0735b8dbde1910664d
       - key: CODER_READINESS_REFRESH_MS
         value: '120000'
       - key: CODER_READINESS_MAX_AGE_MS
@@ -652,6 +651,8 @@ services:
         value: mizuki/capability/
       - key: MIZUKI_UPDATER_MANDATORY_CHECKS
         value: application,escrow,rust,landing
+      - key: MIZUKI_UPDATER_CHECK_PRODUCERS_JSON
+        value: '{"application":{"checkRunAppId":15368,"workflowId":340541049,"workflowPath":".github/workflows/mizuki.yml","event":"pull_request","headBranch":"manifest","headSha":"candidate","baseBranch":"manifest","baseSha":"signed","definitionRef":"base"},"escrow":{"checkRunAppId":15368,"workflowId":340541049,"workflowPath":".github/workflows/mizuki.yml","event":"pull_request","headBranch":"manifest","headSha":"candidate","baseBranch":"manifest","baseSha":"signed","definitionRef":"base"},"rust":{"checkRunAppId":15368,"workflowId":265742803,"workflowPath":".github/workflows/ci.yml","event":"pull_request","headBranch":"manifest","headSha":"candidate","baseBranch":"manifest","baseSha":"signed","definitionRef":"base"},"landing":{"checkRunAppId":15368,"workflowId":265742803,"workflowPath":".github/workflows/ci.yml","event":"pull_request","headBranch":"manifest","headSha":"candidate","baseBranch":"manifest","baseSha":"signed","definitionRef":"base"}}'
       - key: MIZUKI_UPDATER_PROPOSAL_MAX_AGE_MS
         value: '604800000'
       - key: MIZUKI_UPDATER_ARTIFACT_ORIGINS

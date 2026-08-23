@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
@@ -114,7 +114,7 @@ jobs:
           pg_restore -h 127.0.0.1 -U postgres -d mizuki_updater_restore --exit-on-error /tmp/mizuki-updater.dump
           pg_restore -h 127.0.0.1 -U postgres -d mizuki_deployment_restore --exit-on-error /tmp/mizuki-deployment.dump
           test "$(psql -h 127.0.0.1 -U postgres -d mizuki_core_restore -Atc "SELECT count(*) FROM mizuki_schema_migrations WHERE component = 'core'")" = '1'
-          test "$(psql -h 127.0.0.1 -U postgres -d mizuki_signer_restore -Atc "SELECT count(*) FROM mizuki_schema_migrations WHERE component = 'policy-signer'")" = '1'
+          test "$(psql -h 127.0.0.1 -U postgres -d mizuki_signer_restore -Atc "SELECT count(*) FROM mizuki_schema_migrations WHERE component = 'policy-signer'")" = '3'
           test "$(psql -h 127.0.0.1 -U postgres -d mizuki_updater_restore -Atc "SELECT count(*) FROM mizuki_updater_migrations")" = '3'
           test "$(psql -h 127.0.0.1 -U postgres -d mizuki_deployment_restore -Atc "SELECT count(*) FROM mizuki_deployment_migrations")" = '2'
           test "$(psql -h 127.0.0.1 -U postgres -d mizuki_deployment_restore -Atc "SELECT count(*) FROM pg_trigger WHERE tgname = 'mizuki_deployment_events_append_only' AND NOT tgisinternal")" = '1'
@@ -131,6 +131,8 @@ jobs:
   escrow:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      evidence-digest: ${{ steps.upload.outputs.artifact-digest }}
     container:
       image: solanafoundation/solana-verifiable-build:4.0.0@sha256:0b4e3716fad9ca4b4aac3e3f977f43aad93a18c22296c0c0f44fc22e644bdd68
     steps:
@@ -141,7 +143,7 @@ jobs:
       - name: install test utilities
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends ca-certificates curl ripgrep
+          apt-get install -y --no-install-recommends ca-certificates curl jq ripgrep
           rustup component add rustfmt clippy
       - name: install pinned Solana verification CLI
         run: |
@@ -154,7 +156,14 @@ jobs:
       - name: build and exercise the SBPFv2 artifact
         run: programs/mizuki-escrow/scripts/test.sh
       - name: prepare escrow release evidence
+        shell: bash
+        env:
+          BUILD_IMAGE: solanafoundation/solana-verifiable-build:4.0.0@sha256:0b4e3716fad9ca4b4aac3e3f977f43aad93a18c22296c0c0f44fc22e644bdd68
+          SOLANA_VERIFY_BINARY_SHA256: 411c7bc4cd6001f215ca21ab7de5dd22140175fef69e0e483c4768018f651eb6
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
+          set -euo pipefail
           program_root=programs/mizuki-escrow
           release_dir="$program_root/target/release-evidence"
           artifact="$program_root/target/deploy/mizuki_escrow_program.so"
@@ -164,20 +173,88 @@ jobs:
           cp "$program_root/Cargo.lock" "$program_root/Cargo.toml" "$release_dir/"
           cp "$program_root/abi/mizuki-escrow-v1.json" "$release_dir/"
 
-          (
-            cd "$release_dir"
-            sha256sum mizuki_escrow_program.so > SHA256SUMS
-          )
           solana-verify get-executable-hash "$artifact" > "$release_dir/SOLANA_EXECUTABLE_HASH"
           cargo-build-sbf --version > "$release_dir/BUILD_TOOLCHAIN"
           solana-verify --version > "$release_dir/SOLANA_VERIFY_VERSION"
+          solana --version > "$release_dir/SOLANA_CLI_VERSION"
+          cargo --version > "$release_dir/CARGO_VERSION"
+          rustc --version --verbose > "$release_dir/RUST_TOOLCHAIN"
+          printf '%s\n' "$BUILD_IMAGE" > "$release_dir/VERIFIABLE_BUILD_IMAGE"
+          printf '%s\n' "$SOLANA_VERIFY_BINARY_SHA256" > "$release_dir/SOLANA_VERIFY_BINARY_SHA256"
+
+          elf_machine=$(od -An -tu2 -j 18 -N 2 "$artifact" | tr -d '[:space:]')
+          elf_flags=$(od -An -tx1 -j 48 -N 4 "$artifact" | tr -d '[:space:]')
+          test "$elf_machine" = '263'
+          test "$elf_flags" = '02000000'
           printf '2\n' > "$release_dir/SBPF_VERSION"
+          printf '%s\n' "$elf_machine" > "$release_dir/ELF_MACHINE"
           printf '0x2\n' > "$release_dir/ELF_FLAGS"
           printf '%s\n' "$GITHUB_SHA" > "$release_dir/GIT_COMMIT"
+
+          artifact_sha256=$(sha256sum "$artifact" | cut -d ' ' -f 1)
+          artifact_size=$(wc -c < "$artifact" | tr -d '[:space:]')
+          executable_hash=$(tr -d '\r\n' < "$release_dir/SOLANA_EXECUTABLE_HASH")
+          build_toolchain=$(tr '\n' ';' < "$release_dir/BUILD_TOOLCHAIN" | sed 's/;$//')
+          solana_cli=$(tr -d '\r\n' < "$release_dir/SOLANA_CLI_VERSION")
+          solana_verify=$(tr -d '\r\n' < "$release_dir/SOLANA_VERIFY_VERSION")
+          jq -n \
+            --arg schema 'mizuki.escrow-build-evidence.v1' \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg sourceCommit "$GITHUB_SHA" \
+            --arg sourceRef "$GITHUB_REF" \
+            --arg workflowRef "$WORKFLOW_REF" \
+            --arg workflowSha "$WORKFLOW_SHA" \
+            --arg image "$BUILD_IMAGE" \
+            --arg buildToolchain "$build_toolchain" \
+            --arg solanaCli "$solana_cli" \
+            --arg solanaVerify "$solana_verify" \
+            --arg solanaVerifyBinarySha256 "$SOLANA_VERIFY_BINARY_SHA256" \
+            --arg artifact 'mizuki_escrow_program.so' \
+            --arg artifactSha256 "$artifact_sha256" \
+            --argjson artifactSize "$artifact_size" \
+            --arg executableHash "$executable_hash" \
+            --arg abi 'mizuki-escrow-v1.json' \
+            '{
+              schema: $schema,
+              source: {
+                repository: $repository,
+                commit: $sourceCommit,
+                ref: $sourceRef,
+                workflowRef: $workflowRef,
+                workflowSha: $workflowSha
+              },
+              build: {
+                image: $image,
+                buildToolchain: $buildToolchain,
+                solanaCli: $solanaCli,
+                solanaVerify: $solanaVerify,
+                solanaVerifyBinarySha256: $solanaVerifyBinarySha256
+              },
+              artifact: {
+                name: $artifact,
+                size: $artifactSize,
+                sha256: $artifactSha256,
+                executableHash: $executableHash,
+                sbpfVersion: 2,
+                elfMachine: 263,
+                elfFlags: "0x2"
+              },
+              abi: $abi,
+              manifests: ["Cargo.lock", "Cargo.toml"]
+            }' > "$release_dir/BUILD_METADATA.json"
+
+          (
+            cd "$release_dir"
+            find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' \
+              | LC_ALL=C sort \
+              | xargs sha256sum > SHA256SUMS
+            sha256sum --check --strict SHA256SUMS
+          )
 
           cat "$release_dir/SHA256SUMS"
           cat "$release_dir/SOLANA_EXECUTABLE_HASH"
       - name: upload immutable escrow release evidence
+        id: upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: mizuki-escrow-${{ github.sha }}
@@ -185,3 +262,411 @@ jobs:
           if-no-files-found: error
           retention-days: 90
           compression-level: 0
+
+  escrow-release:
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      github.repository == 'open-covenant/covenant'
+    needs: escrow
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: mizuki-escrow-${{ github.sha }}
+      WORKFLOW_REF: ${{ github.workflow_ref }}
+      WORKFLOW_SHA: ${{ github.workflow_sha }}
+    steps:
+      - name: download exact escrow evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: mizuki-escrow-${{ github.sha }}
+          path: ${{ runner.temp }}/mizuki-escrow-release/local
+
+      - name: validate release payload
+        env:
+          RELEASE_DIR: ${{ runner.temp }}/mizuki-escrow-release/local
+        run: |
+          set -euo pipefail
+          cd "$RELEASE_DIR"
+
+          test "$(cat GIT_COMMIT)" = "$GITHUB_SHA"
+          test "$(cat ELF_MACHINE)" = '263'
+          test "$(cat ELF_FLAGS)" = '0x2'
+          test "$(cat SBPF_VERSION)" = '2'
+          test "$(cat SOLANA_VERIFY_BINARY_SHA256)" = '411c7bc4cd6001f215ca21ab7de5dd22140175fef69e0e483c4768018f651eb6'
+          test "$(cat VERIFIABLE_BUILD_IMAGE)" = 'solanafoundation/solana-verifiable-build:4.0.0@sha256:0b4e3716fad9ca4b4aac3e3f977f43aad93a18c22296c0c0f44fc22e644bdd68'
+
+          expected_files="$RUNNER_TEMP/mizuki-escrow-release/build-expected-files"
+          listed_files="$RUNNER_TEMP/mizuki-escrow-release/build-listed-files"
+          find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' | LC_ALL=C sort > "$expected_files"
+          awk '{ print $2 }' SHA256SUMS | LC_ALL=C sort > "$listed_files"
+          diff -u "$expected_files" "$listed_files"
+          sha256sum --check --strict SHA256SUMS
+
+          artifact_sha256=$(sha256sum mizuki_escrow_program.so | cut -d ' ' -f 1)
+          artifact_size=$(wc -c < mizuki_escrow_program.so | tr -d '[:space:]')
+          executable_hash=$(tr -d '\r\n' < SOLANA_EXECUTABLE_HASH)
+          build_toolchain=$(tr '\n' ';' < BUILD_TOOLCHAIN | sed 's/;$//')
+          solana_cli=$(tr -d '\r\n' < SOLANA_CLI_VERSION)
+          solana_verify=$(tr -d '\r\n' < SOLANA_VERIFY_VERSION)
+          jq -e \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg commit "$GITHUB_SHA" \
+            --arg ref "$GITHUB_REF" \
+            --arg workflowRef "$WORKFLOW_REF" \
+            --arg workflowSha "$WORKFLOW_SHA" \
+            --arg buildToolchain "$build_toolchain" \
+            --arg solanaCli "$solana_cli" \
+            --arg solanaVerify "$solana_verify" \
+            --arg artifactSha256 "$artifact_sha256" \
+            --argjson artifactSize "$artifact_size" \
+            --arg executableHash "$executable_hash" \
+            '.schema == "mizuki.escrow-build-evidence.v1" and
+             .source.repository == $repository and
+             .source.commit == $commit and
+             .source.ref == $ref and
+             .source.workflowRef == $workflowRef and
+             .source.workflowSha == $workflowSha and
+             .build.image == "solanafoundation/solana-verifiable-build:4.0.0@sha256:0b4e3716fad9ca4b4aac3e3f977f43aad93a18c22296c0c0f44fc22e644bdd68" and
+             .build.buildToolchain == $buildToolchain and
+             .build.solanaCli == $solanaCli and
+             .build.solanaVerify == $solanaVerify and
+             .build.solanaVerifyBinarySha256 == "411c7bc4cd6001f215ca21ab7de5dd22140175fef69e0e483c4768018f651eb6" and
+             .artifact.name == "mizuki_escrow_program.so" and
+             .artifact.sha256 == $artifactSha256 and
+             .artifact.size == $artifactSize and
+             .artifact.executableHash == $executableHash and
+             .artifact.sbpfVersion == 2 and
+             .artifact.elfMachine == 263 and
+             .artifact.elfFlags == "0x2" and
+             .abi == "mizuki-escrow-v1.json" and
+             .manifests == ["Cargo.lock", "Cargo.toml"]' \
+            BUILD_METADATA.json >/dev/null
+
+      - name: inspect immutable release
+        id: release
+        run: |
+          set -euo pipefail
+          api() {
+            gh api -H 'X-GitHub-Api-Version: 2026-03-10' "$@"
+          }
+
+          release_response="$RUNNER_TEMP/mizuki-escrow-release/release-response"
+          set +e
+          api --include "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$release_response" 2>&1
+          release_status=$?
+          set -e
+          release_http=$(awk 'NR == 1 { print $2 }' "$release_response")
+
+          if [ "$release_status" -eq 0 ] && [ "$release_http" = '200' ]; then
+            release_json="$RUNNER_TEMP/mizuki-escrow-release/existing-release.json"
+            api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$release_json"
+            if jq -e '.draft == false and .prerelease == false and .immutable == true' "$release_json" >/dev/null; then
+              echo 'state=immutable' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo 'existing release is neither a recoverable draft nor an immutable publication' >&2
+            exit 1
+          fi
+          if [ "$release_http" != '404' ]; then
+            cat "$release_response" >&2
+            exit 1
+          fi
+
+          releases_json="$RUNNER_TEMP/mizuki-escrow-release/releases.json"
+          matching_json="$RUNNER_TEMP/mizuki-escrow-release/matching-releases.json"
+          api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --slurp \
+            | jq 'add' > "$releases_json"
+          jq --arg tag "$RELEASE_TAG" '[.[] | select(.tag_name == $tag)]' \
+            "$releases_json" > "$matching_json"
+          matching_count=$(jq 'length' "$matching_json")
+          if [ "$matching_count" -gt 1 ]; then
+            echo "multiple releases use tag $RELEASE_TAG" >&2
+            exit 1
+          fi
+          if [ "$matching_count" -eq 1 ]; then
+            jq -e \
+              --arg commit "$GITHUB_SHA" \
+              '.[0].target_commitish == $commit and
+               .[0].draft == true and
+               .[0].prerelease == false and
+               .[0].immutable == false' \
+              "$matching_json" >/dev/null
+            echo 'state=draft' >> "$GITHUB_OUTPUT"
+            echo "release-id=$(jq -r '.[0].id' "$matching_json")" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          tag_response="$RUNNER_TEMP/mizuki-escrow-release/tag-response"
+          set +e
+          api --include "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" > "$tag_response" 2>&1
+          tag_status=$?
+          set -e
+          tag_http=$(awk 'NR == 1 { print $2 }' "$tag_response")
+          if [ "$tag_status" -eq 0 ] || [ "$tag_http" != '404' ]; then
+            echo "release tag already exists without its immutable release: $RELEASE_TAG" >&2
+            cat "$tag_response" >&2
+            exit 1
+          fi
+          echo 'state=absent' >> "$GITHUB_OUTPUT"
+
+      - name: attest exact release payload
+        if: steps.release.outputs.state != 'immutable'
+        id: attest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/mizuki-escrow-release/local/*
+
+      - name: publish immutable release
+        if: steps.release.outputs.state != 'immutable'
+        env:
+          PROVENANCE_BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+          RELEASE_DIR: ${{ runner.temp }}/mizuki-escrow-release/local
+          RELEASE_ID: ${{ steps.release.outputs.release-id }}
+          RELEASE_STATE: ${{ steps.release.outputs.state }}
+        run: |
+          set -euo pipefail
+
+          api() {
+            gh api -H 'X-GitHub-Api-Version: 2026-03-10' "$@"
+          }
+
+          cp "$PROVENANCE_BUNDLE" "$RELEASE_DIR/GITHUB_PROVENANCE.json"
+          (
+            cd "$RELEASE_DIR"
+            find . -maxdepth 1 -type f ! -name RELEASE_SHA256SUMS -printf '%f\n' \
+              | LC_ALL=C sort \
+              | xargs sha256sum > RELEASE_SHA256SUMS
+            sha256sum --check --strict RELEASE_SHA256SUMS
+          )
+
+          if [ "$RELEASE_STATE" = 'draft' ]; then
+            test -n "$RELEASE_ID"
+            release_json=$(api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID")
+            jq -e \
+              --arg tag "$RELEASE_TAG" \
+              --arg commit "$GITHUB_SHA" \
+              --argjson releaseId "$RELEASE_ID" \
+              '.id == $releaseId and
+               .tag_name == $tag and
+               .target_commitish == $commit and
+               .draft == true and
+               .prerelease == false and
+               .immutable == false' \
+              <<< "$release_json" >/dev/null
+          elif [ "$RELEASE_STATE" = 'absent' ]; then
+            release_json=$(api --method POST "repos/$GITHUB_REPOSITORY/releases" \
+              -f tag_name="$RELEASE_TAG" \
+              -f target_commitish="$GITHUB_SHA" \
+              -f name="Mizuki escrow $GITHUB_SHA" \
+              -f body="Hosted SBPFv2 escrow build evidence for protected-main commit $GITHUB_SHA." \
+              -F draft=true \
+              -F prerelease=false \
+              -f make_latest=false)
+            jq -e \
+              --arg tag "$RELEASE_TAG" \
+              --arg commit "$GITHUB_SHA" \
+              '.tag_name == $tag and
+               .target_commitish == $commit and
+               .draft == true and
+               .prerelease == false and
+               .immutable == false' \
+              <<< "$release_json" >/dev/null
+          else
+            echo "unexpected release state: $RELEASE_STATE" >&2
+            exit 1
+          fi
+
+          release_id=$(jq -r '.id' <<< "$release_json")
+          while read -r asset_id; do
+            test -n "$asset_id"
+            api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id"
+          done < <(api --paginate "repos/$GITHUB_REPOSITORY/releases/$release_id/assets?per_page=100" --jq '.[].id')
+
+          remaining_assets=-1
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            remaining_assets=$(api --paginate "repos/$GITHUB_REPOSITORY/releases/$release_id/assets?per_page=100" --slurp | jq '[.[][]] | length')
+            if [ "$remaining_assets" = '0' ]; then
+              break
+            fi
+            sleep 1
+          done
+          test "$remaining_assets" = '0'
+
+          for asset_path in "$RELEASE_DIR"/*; do
+            asset_name=$(basename "$asset_path")
+            encoded_name=$(jq -rn --arg value "$asset_name" '$value | @uri')
+            api --method POST \
+              -H 'Content-Type: application/octet-stream' \
+              --input "$asset_path" \
+              "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$release_id/assets?name=$encoded_name" \
+              >/dev/null
+          done
+
+          assets_json="$RUNNER_TEMP/mizuki-escrow-release/draft-assets.json"
+          expected_asset_count=$(find "$RELEASE_DIR" -maxdepth 1 -type f | wc -l | tr -d '[:space:]')
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            api --paginate "repos/$GITHUB_REPOSITORY/releases/$release_id/assets?per_page=100" --slurp \
+              | jq 'add' > "$assets_json"
+            if test "$(jq 'length' "$assets_json")" = "$expected_asset_count" &&
+              jq -e 'all(.[]; .state == "uploaded" and (.digest | type == "string" and startswith("sha256:")))' "$assets_json" >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          test "$(jq 'length' "$assets_json")" = "$expected_asset_count"
+          for asset_path in "$RELEASE_DIR"/*; do
+            asset_name=$(basename "$asset_path")
+            asset_sha256=$(sha256sum "$asset_path" | cut -d ' ' -f 1)
+            asset_size=$(wc -c < "$asset_path" | tr -d '[:space:]')
+            jq -e \
+              --arg name "$asset_name" \
+              --arg digest "sha256:$asset_sha256" \
+              --argjson size "$asset_size" \
+              '[.[] | select(.name == $name)] |
+               length == 1 and
+               .[0].state == "uploaded" and
+               .[0].digest == $digest and
+               .[0].size == $size' \
+              "$assets_json" >/dev/null
+          done
+
+          api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+            -f name="Mizuki escrow $GITHUB_SHA" \
+            -f body="Hosted SBPFv2 escrow build evidence for protected-main commit $GITHUB_SHA." \
+            -F draft=false \
+            -F prerelease=false \
+            -f make_latest=false \
+            > "$RUNNER_TEMP/mizuki-escrow-release/published.json"
+
+      - name: verify immutable release and provenance
+        env:
+          RELEASE_DIR: ${{ runner.temp }}/mizuki-escrow-release/local
+          REMOTE_DIR: ${{ runner.temp }}/mizuki-escrow-release/remote
+        run: |
+          set -euo pipefail
+          api() {
+            gh api -H 'X-GitHub-Api-Version: 2026-03-10' "$@"
+          }
+
+          mkdir -p "$REMOTE_DIR"
+
+          release_json="$RUNNER_TEMP/mizuki-escrow-release/release.json"
+          release_response="$RUNNER_TEMP/mizuki-escrow-release/immutable-response"
+          immutable_ready=false
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            set +e
+            api --include "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$release_response" 2>&1
+            release_status=$?
+            set -e
+            release_http=$(awk 'NR == 1 { print $2 }' "$release_response")
+            if [ "$release_status" -eq 0 ] && [ "$release_http" = '200' ]; then
+              api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$release_json"
+              if jq -e '.draft == false and .immutable == true' "$release_json" >/dev/null; then
+                immutable_ready=true
+                break
+              fi
+            elif [ "$release_http" != '404' ] && [ "$release_http" != '500' ] &&
+              [ "$release_http" != '502' ] && [ "$release_http" != '503' ] &&
+              [ "$release_http" != '504' ]; then
+              cat "$release_response" >&2
+              exit 1
+            fi
+            sleep 2
+          done
+          if [ "$immutable_ready" != 'true' ]; then
+            cat "$release_response" >&2
+            exit 1
+          fi
+          jq -e \
+            --arg tag "$RELEASE_TAG" \
+            --arg commit "$GITHUB_SHA" \
+            '.tag_name == $tag and
+             .target_commitish == $commit and
+             .draft == false and
+             .prerelease == false and
+             .immutable == true' \
+            "$release_json" >/dev/null
+
+          tag_json="$RUNNER_TEMP/mizuki-escrow-release/tag.json"
+          api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" > "$tag_json"
+          tag_type=$(jq -r '.object.type' "$tag_json")
+          tag_sha=$(jq -r '.object.sha' "$tag_json")
+          if [ "$tag_type" = 'tag' ]; then
+            api "repos/$GITHUB_REPOSITORY/git/tags/$tag_sha" > "$tag_json"
+            tag_type=$(jq -r '.object.type' "$tag_json")
+            tag_sha=$(jq -r '.object.sha' "$tag_json")
+          fi
+          test "$tag_type" = 'commit'
+          test "$tag_sha" = "$GITHUB_SHA"
+
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir "$REMOTE_DIR"
+          {
+            find "$RELEASE_DIR" -maxdepth 1 -type f -printf '%f\n'
+            printf '%s\n' GITHUB_PROVENANCE.json RELEASE_SHA256SUMS
+          } | LC_ALL=C sort -u > "$RUNNER_TEMP/mizuki-escrow-release/expected-assets"
+          find "$REMOTE_DIR" -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort > "$RUNNER_TEMP/mizuki-escrow-release/actual-assets"
+          diff -u "$RUNNER_TEMP/mizuki-escrow-release/expected-assets" "$RUNNER_TEMP/mizuki-escrow-release/actual-assets"
+
+          (
+            cd "$REMOTE_DIR"
+            find . -maxdepth 1 -type f ! -name RELEASE_SHA256SUMS -printf '%f\n' \
+              | LC_ALL=C sort \
+              > "$RUNNER_TEMP/mizuki-escrow-release/release-expected-files"
+            awk '{ print $2 }' RELEASE_SHA256SUMS \
+              | LC_ALL=C sort \
+              > "$RUNNER_TEMP/mizuki-escrow-release/release-listed-files"
+            diff -u \
+              "$RUNNER_TEMP/mizuki-escrow-release/release-expected-files" \
+              "$RUNNER_TEMP/mizuki-escrow-release/release-listed-files"
+            sha256sum --check --strict RELEASE_SHA256SUMS
+          )
+
+          for local_file in "$RELEASE_DIR"/*; do
+            cmp "$local_file" "$REMOTE_DIR/$(basename "$local_file")"
+          done
+
+          release_id=$(jq -r '.id' "$release_json")
+          assets_json="$RUNNER_TEMP/mizuki-escrow-release/assets.json"
+          api --paginate "repos/$GITHUB_REPOSITORY/releases/$release_id/assets?per_page=100" --slurp \
+            | jq 'add' > "$assets_json"
+          test "$(jq 'length' "$assets_json")" = "$(find "$REMOTE_DIR" -maxdepth 1 -type f | wc -l | tr -d '[:space:]')"
+          for remote_file in "$REMOTE_DIR"/*; do
+            asset_name=$(basename "$remote_file")
+            asset_sha256=$(sha256sum "$remote_file" | cut -d ' ' -f 1)
+            asset_size=$(wc -c < "$remote_file" | tr -d '[:space:]')
+            jq -e \
+              --arg name "$asset_name" \
+              --arg digest "sha256:$asset_sha256" \
+              --argjson size "$asset_size" \
+              '[.[] | select(.name == $name)] |
+               length == 1 and
+               .[0].state == "uploaded" and
+               .[0].digest == $digest and
+               .[0].size == $size' \
+              "$assets_json" >/dev/null
+          done
+
+          find "$REMOTE_DIR" -maxdepth 1 -type f \
+            ! -name GITHUB_PROVENANCE.json \
+            ! -name RELEASE_SHA256SUMS \
+            -print0 \
+            | while IFS= read -r -d '' subject; do
+                gh attestation verify "$subject" \
+                  --bundle "$REMOTE_DIR/GITHUB_PROVENANCE.json" \
+                  --repo "$GITHUB_REPOSITORY" \
+                  --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/mizuki.yml" \
+                  --signer-digest "$WORKFLOW_SHA" \
+                  --source-digest "$GITHUB_SHA" \
+                  --source-ref refs/heads/main \
+                  --deny-self-hosted-runners
+              done
+
+          echo "Verified immutable escrow release $RELEASE_TAG" >> "$GITHUB_STEP_SUMMARY"
+          echo "Actions artifact digest: ${{ needs.escrow.outputs.evidence-digest }}" >> "$GITHUB_STEP_SUMMARY"

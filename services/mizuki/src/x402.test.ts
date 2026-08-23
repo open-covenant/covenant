@@ -3,7 +3,12 @@ import { encodePaymentSignatureHeader } from '@x402/core/http';
 import { describe, expect, it } from 'vitest';
 import { loadConfig } from './config.js';
 import type { Quote } from './types.js';
-import { Payments, SOLANA_MAINNET } from './x402.js';
+import {
+  PAYMENT_AUTHORIZATION_MAX_BYTES,
+  Payments,
+  paymentAuthorizationSizeAllowed,
+  SOLANA_MAINNET,
+} from './x402.js';
 
 const quote: Quote = {
   id: '4f8f70af-e8f4-4e0a-9fc7-7d88f6e281ab',
@@ -24,6 +29,13 @@ const quote: Quote = {
 };
 
 describe('Payments mock mode', () => {
+  it('uses the signer recovery request bound as the payment authorization limit', () => {
+    expect(paymentAuthorizationSizeAllowed('A'.repeat(PAYMENT_AUTHORIZATION_MAX_BYTES))).toBe(true);
+    expect(paymentAuthorizationSizeAllowed('A'.repeat(PAYMENT_AUTHORIZATION_MAX_BYTES + 1))).toBe(
+      false,
+    );
+  });
+
   it('returns a v2 mainnet USDC challenge and deterministic settlement', async () => {
     const payments = new Payments(loadConfig({ MIZUKI_PAYMENT_MODE: 'mock' }));
     const challenge = await payments.challenge(quote);

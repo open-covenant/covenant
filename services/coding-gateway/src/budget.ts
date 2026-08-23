@@ -27,7 +27,7 @@ export function modelCostUsd(model: string, u: TokenUsage): number {
 }
 
 export function sandboxCostUsd(seconds: number): number {
-  return seconds * config.sandboxUsdPerSec;
+  return seconds * config.sandboxWorstCaseUsdPerSec;
 }
 
 const utcDay = () => new Date().toISOString().slice(0, 10); // YYYY-MM-DD
@@ -68,10 +68,11 @@ interface PersistedLedger {
 /**
  * Daily + monthly USD ledger with a concurrency cap and kill-switch.
  *
- * Admission reserves the per-run *maximum* up front and commits the *actual*
- * cost on completion, so a burst of concurrent runs can't collectively
- * overshoot the cap before any finishes. Counters reset on UTC day/month
- * rollover.
+ * Admission reserves the per-run *maximum* up front and commits the terminal
+ * accounting charge on completion. Callers may conservatively retain a
+ * provider reservation when authoritative billing evidence is unavailable.
+ * A burst of concurrent runs therefore can't collectively overshoot the cap
+ * before any finishes. Counters reset on UTC day/month rollover.
  *
  * Committed spend persists to LEDGER_PATH (a mounted disk) when set, so the
  * caps survive a restart instead of resetting the day's tally to zero; with
@@ -258,20 +259,7 @@ export class SpendLedger {
     }
   }
 
-  /**
-   * Reserve a per-run admission slot. `bypassSpendCaps` skips the daily
-   * and monthly USD checks — used for operator-allowlisted IPs (see
-   * `CODER_EXEMPT_IPS`) — but the kill-switch, the concurrency cap, and
-   * the bookkeeping (`active`, `reserved`, `dailyUsd`/`monthlyUsd`, the
-   * persisted pending entry) still apply, so an exempt run is still
-   * observable on `/v1/budget` and still tears down when the kill
-   * switch fires.
-   */
-  reserve(
-    maxUsd: number = this.caps.perRunUsdMax,
-    bypassSpendCaps: boolean = false,
-    runId: string = randomUUID(),
-  ): Reservation {
+  reserve(maxUsd: number = this.caps.perRunUsdMax, runId: string = randomUUID()): Reservation {
     this.roll();
     if (!Number.isFinite(maxUsd) || maxUsd <= 0 || maxUsd > this.caps.perRunUsdMax) {
       return { ok: false, reason: 'invalid per-run spend cap' };
@@ -281,13 +269,11 @@ export class SpendLedger {
     if (this.active >= this.caps.maxConcurrent) {
       return { ok: false, reason: 'at capacity — try again shortly' };
     }
-    if (!bypassSpendCaps) {
-      if (this.dailyUsd + this.reserved + maxUsd > this.caps.dailyUsd) {
-        return { ok: false, reason: 'daily free capacity reached — resets at 00:00 UTC' };
-      }
-      if (this.monthlyUsd + this.reserved + maxUsd > this.caps.monthlyUsd) {
-        return { ok: false, reason: 'monthly capacity reached' };
-      }
+    if (this.dailyUsd + this.reserved + maxUsd > this.caps.dailyUsd) {
+      return { ok: false, reason: 'daily free capacity reached — resets at 00:00 UTC' };
+    }
+    if (this.monthlyUsd + this.reserved + maxUsd > this.caps.monthlyUsd) {
+      return { ok: false, reason: 'monthly capacity reached' };
     }
     this.reserved += maxUsd;
     this.active += 1;

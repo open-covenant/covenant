@@ -2,8 +2,10 @@ import { createServer, type Server } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp, ensureRefundCapacity, SerialGate, type AppDependencies } from './app.js';
 import { loadConfig } from './config.js';
+import { UsePodContributorReviewer } from './contributor-reviewer.js';
+import type { GithubClient } from './github.js';
 import { ServiceReadiness, serviceDependencies } from './readiness.js';
-import { MemoryStore } from './store.js';
+import { MemoryStore, type MizukiStore } from './store.js';
 
 const servers: Server[] = [];
 
@@ -142,6 +144,85 @@ describe('service readiness endpoint', () => {
         custodyVerified: false,
       },
     });
+  });
+
+  it('keeps public readiness reads non-billable, cached, and fail-closed', async () => {
+    const request = vi.fn<typeof fetch>(async (input, init) => {
+      expect(String(input)).toBe('https://api.usepod.ai/proxy/secret/v1/models');
+      expect(init?.method).toBe('GET');
+      expect(init?.body).toBeUndefined();
+      const headers = new Headers(init?.headers);
+      expect(headers.get('content-type')).toBeNull();
+      expect(headers.get('x-pod-routing-mode')).toBeNull();
+      expect(headers.get('x-pod-max-price-input')).toBeNull();
+      expect(headers.get('x-pod-max-price-output')).toBeNull();
+      return Response.json({ object: 'list', data: [{ id: 'unavailable-model' }] });
+    });
+    const reviewer = new UsePodContributorReviewer(
+      loadConfig({
+        MIZUKI_PAYMENT_MODE: 'mock',
+        USEPOD_API_KEY: 'secret',
+        USEPOD_REVIEW_MODEL: 'independent-reviewer',
+      }),
+      {} as MizukiStore,
+      {} as GithubClient,
+      request,
+    );
+    const probes = Object.fromEntries(
+      serviceDependencies.map((name) => [
+        name,
+        vi.fn(async () => {
+          if (name === 'configuration') return { issues: [] };
+          if (name === 'reviewer_route') return reviewer.readiness();
+          if (name !== 'policy_signer') return;
+          return {
+            refundTreasury: 'refund-treasury',
+            refundMint: 'usdc-mint',
+            refundDecimals: 6,
+            finalizedBalanceRaw: '100000000',
+            pendingRefundRaw: '0',
+            treasuryAvailableRefundRaw: '100000000',
+            remainingRefundLimitUsdCents: 10_000,
+            availableRefundRaw: '100000000',
+            escrowAuthority: 'escrow-authority',
+            finalizedEscrowBalanceLamports: '2000000000',
+            availableEscrowReserveLamports: '1900000000',
+          };
+        }),
+      ]),
+    ) as ConstructorParameters<typeof ServiceReadiness>[0];
+    const readiness = new ServiceReadiness(probes, {
+      refreshMs: 60_000,
+      maxAgeMs: 120_000,
+      timeoutMs: 1_000,
+      failureRetryMs: 60_000,
+    });
+    const base = await serve(readiness);
+
+    const ready = await fetch(`${base}/readyz`);
+    expect(ready.status).toBe(503);
+    await expect(ready.json()).resolves.toMatchObject({
+      ready: false,
+      dependencies: { reviewer_route: { ok: false } },
+    });
+
+    const publicMetrics = await fetch(`${base}/v1/metrics`);
+    expect(publicMetrics.status).toBe(200);
+    await expect(publicMetrics.json()).resolves.toMatchObject({
+      refundProtection: { status: 'unavailable' },
+    });
+
+    const prometheusMetrics = await fetch(`${base}/metrics`);
+    expect(prometheusMetrics.status).toBe(200);
+    expect(await prometheusMetrics.text()).toContain('mizuki_refund_protection_verified 0');
+
+    const treasury = await fetch(`${base}/v1/treasury`);
+    expect(treasury.status).toBe(200);
+    await expect(treasury.json()).resolves.toMatchObject({
+      refundProtection: { status: 'unavailable' },
+    });
+
+    expect(request).toHaveBeenCalledTimes(1);
   });
 
   it('requires signer-reported refund and rescue escrow capacity', async () => {

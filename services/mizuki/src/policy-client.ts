@@ -1,7 +1,8 @@
-import { createPrivateKey, sign, type KeyObject } from 'node:crypto';
+import { createHash, createPrivateKey, sign, type KeyObject } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import type { Config } from './config.js';
-import type { Quote } from './types.js';
+import type { Quote, RepositoryAdmissionReceipt } from './types.js';
 
 const operationSchema = z.object({
   id: z.string().uuid(),
@@ -85,9 +86,123 @@ const readinessSchema = z
 
 export type PolicyReadiness = z.infer<typeof readinessSchema>;
 
+const repositoryIdentitySchema = z
+  .string()
+  .min(3)
+  .max(201)
+  .regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/)
+  .transform((value) => value.toLowerCase());
+const githubAppIdSchema = z
+  .string()
+  .regex(/^[1-9]\d{0,15}$/)
+  .refine((value) => Number.isSafeInteger(Number(value)));
+const repositoryReadinessSchema = z
+  .object({
+    ready: z.literal(true),
+    repository: repositoryIdentitySchema,
+    verifierAppId: githubAppIdSchema,
+    installationId: z.number().int().positive().safe(),
+    repositorySelection: z.literal('selected'),
+    permissions: z
+      .object({
+        contents: z.literal('read'),
+        issues: z.literal('read'),
+        metadata: z.literal('read'),
+        pull_requests: z.literal('read'),
+      })
+      .strict(),
+    tokenRepositories: z.literal(1),
+    tokenExpiresAt: z.string().datetime({ offset: true }),
+  })
+  .strict();
+
+export type RepositoryReadiness = z.infer<typeof repositoryReadinessSchema>;
+
+const repositoryAdmissionSchema = z
+  .object({
+    id: z.string().uuid(),
+    quoteId: z.string().uuid(),
+    repository: repositoryIdentitySchema,
+    issueNumber: z.number().int().positive(),
+    baseRef: z.string().min(1).max(255),
+    baseSha: z.string().regex(/^[a-f0-9]{40,64}$/),
+    reservationKeyHash: z.string().regex(/^[a-f0-9]{64}$/),
+    paymentAuthorizationHash: z.string().regex(/^[a-f0-9]{64}$/),
+    verifierAppId: githubAppIdSchema,
+    installationId: z.number().int().positive().safe(),
+    repositorySelection: z.literal('selected'),
+    permissions: z
+      .object({
+        contents: z.literal('read'),
+        issues: z.literal('read'),
+        metadata: z.literal('read'),
+        pull_requests: z.literal('read'),
+      })
+      .strict(),
+    tokenRepositories: z.literal(1),
+    tokenExpiresAt: z.string().datetime({ offset: true }),
+    admittedAt: z.string().datetime({ offset: true }),
+    evidenceHash: z.string().regex(/^[a-f0-9]{64}$/),
+  })
+  .strict();
+
+const repositoryAdmissionBindingSchema = repositoryAdmissionSchema.pick({
+  quoteId: true,
+  repository: true,
+  issueNumber: true,
+  baseRef: true,
+  baseSha: true,
+  reservationKeyHash: true,
+  paymentAuthorizationHash: true,
+});
+
+const settlementEvidenceSchema = z
+  .object({
+    signature: z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{64,88}$/),
+    payer: z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/),
+    recipient: z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/),
+    mint: z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/),
+    rawAmount: z.string().regex(/^[1-9]\d*$/),
+    decimals: z.number().int().nonnegative().max(18),
+    finalized: z.literal(true),
+    succeeded: z.literal(true),
+    slot: z.number().int().nonnegative().safe(),
+    blockTimeUnixSeconds: z.number().int().safe(),
+  })
+  .strict();
+
+export type SettlementEvidence = z.infer<typeof settlementEvidenceSchema>;
+
+export interface RepositoryAdmissionBinding {
+  quoteId: string;
+  repository: string;
+  issueNumber: number;
+  baseRef: string;
+  baseSha: string;
+  reservationKeyHash: string;
+  paymentAuthorizationHash: string;
+}
+
+export function repositoryAdmissionBinding(
+  quote: Quote,
+  reservationKey: string,
+  paymentAuthorization: string,
+): RepositoryAdmissionBinding {
+  return {
+    quoteId: quote.id,
+    repository: `${quote.owner}/${quote.repo}`.toLowerCase(),
+    issueNumber: quote.issueNumber,
+    baseRef: quote.defaultBranch,
+    baseSha: quote.baseSha,
+    reservationKeyHash: sha256(reservationKey),
+    paymentAuthorizationHash: sha256(paymentAuthorization),
+  };
+}
+
 const refundLiabilitySchema = z.object({
   id: z.string().uuid(),
   jobId: z.string().min(1),
+  repositoryAdmissionId: z.string().uuid(),
   settlementSignature: z.string().min(1),
   repository: z.string().min(3),
   issueNumber: z.number().int().positive(),
@@ -182,10 +297,21 @@ export interface RefundCapacityPolicy {
 }
 
 export interface PaymentPolicy extends RefundCapacityPolicy {
+  assertRepositoryReady(repository: string): Promise<RepositoryReadiness>;
+  createRepositoryAdmission(
+    binding: RepositoryAdmissionBinding,
+    paymentAuthorization: string,
+  ): Promise<RepositoryAdmissionReceipt>;
+  validateRepositoryAdmission(
+    receipt: RepositoryAdmissionReceipt,
+    binding: RepositoryAdmissionBinding,
+  ): Promise<RepositoryAdmissionReceipt>;
+  reconcileRepositorySettlement(receipt: RepositoryAdmissionReceipt): Promise<SettlementEvidence>;
   registerRefundLiability(
     jobId: string,
     settlementSignature: string,
     commitment: RefundLiabilityCommitment,
+    admission: RepositoryAdmissionReceipt,
   ): Promise<RefundLiability>;
   bindRefundLiabilityDelivery(
     liabilityId: string,
@@ -240,7 +366,7 @@ export class PolicySignerClient implements FinancialPolicy {
   constructor(
     private readonly config: Pick<
       Config,
-      'policySignerUrl' | 'policySignerToken' | 'jobAuthoritySeed'
+      'policySignerUrl' | 'policySignerToken' | 'jobAuthoritySeed' | 'githubAppId'
     >,
     private readonly request: typeof fetch = fetch,
     private readonly waitMs = 60_000,
@@ -260,8 +386,17 @@ export class PolicySignerClient implements FinancialPolicy {
     jobId: string,
     settlementSignature: string,
     commitment: RefundLiabilityCommitment,
+    admission: RepositoryAdmissionReceipt,
   ): Promise<RefundLiability> {
-    const body = this.refundAuthorization('register', jobId, settlementSignature, commitment);
+    const parsedAdmission = repositoryAdmissionSchema.parse(admission);
+    this.assertAdmissionCommitment(parsedAdmission, commitment);
+    const body = this.refundAuthorization(
+      'register',
+      jobId,
+      settlementSignature,
+      commitment,
+      parsedAdmission,
+    );
     return refundLiabilitySchema.parse(
       await this.callJson('/v1/refund-liabilities', {
         method: 'POST',
@@ -318,6 +453,86 @@ export class PolicySignerClient implements FinancialPolicy {
 
   async readiness(): Promise<PolicyReadiness> {
     return readinessSchema.parse(await this.callJson('/v1/readiness'));
+  }
+
+  async assertRepositoryReady(repository: string): Promise<RepositoryReadiness> {
+    const normalized = repositoryIdentitySchema.parse(repository);
+    if (!this.config.githubAppId) throw new Error('delivery GitHub App is not configured');
+    const deliveryAppId = githubAppIdSchema.parse(this.config.githubAppId);
+    const evidence = repositoryReadinessSchema.parse(
+      await this.callJson('/v1/readiness/repository', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ repository: normalized }),
+      }),
+    );
+    if (evidence.repository !== normalized) {
+      throw new Error('policy verifier returned readiness for a different repository');
+    }
+    if (evidence.verifierAppId === deliveryAppId) {
+      throw new Error('policy verifier App must be distinct from the delivery App');
+    }
+    if (Date.parse(evidence.tokenExpiresAt) <= this.now().getTime()) {
+      throw new Error('policy verifier returned expired repository readiness evidence');
+    }
+    return evidence;
+  }
+
+  async createRepositoryAdmission(
+    binding: RepositoryAdmissionBinding,
+    paymentAuthorization: string,
+  ): Promise<RepositoryAdmissionReceipt> {
+    const normalized = repositoryAdmissionBindingSchema.parse(binding);
+    if (sha256(paymentAuthorization) !== normalized.paymentAuthorizationHash) {
+      throw new Error('payment authorization does not match the repository admission binding');
+    }
+    const { paymentAuthorizationHash: _, ...requestBinding } = normalized;
+    const receipt = repositoryAdmissionSchema.parse(
+      await this.callJson('/v1/repository-admissions', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'idempotency-key': `mizuki-repository-admission-${normalized.quoteId}`,
+        },
+        body: JSON.stringify({ ...requestBinding, paymentAuthorization }),
+      }),
+    );
+    this.assertAdmission(receipt, normalized, true);
+    return receipt;
+  }
+
+  async validateRepositoryAdmission(
+    receipt: RepositoryAdmissionReceipt,
+    binding: RepositoryAdmissionBinding,
+  ): Promise<RepositoryAdmissionReceipt> {
+    const parsedReceipt = repositoryAdmissionSchema.parse(receipt);
+    const normalized = repositoryAdmissionBindingSchema.parse(binding);
+    this.assertAdmission(parsedReceipt, normalized, false);
+    const stored = repositoryAdmissionSchema.parse(
+      await this.callJson(`/v1/repository-admissions/${parsedReceipt.id}/validate`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ...normalized, evidenceHash: parsedReceipt.evidenceHash }),
+      }),
+    );
+    if (!isDeepStrictEqual(stored, parsedReceipt)) {
+      throw new Error('policy verifier returned a different repository admission');
+    }
+    this.assertAdmission(stored, normalized, false);
+    return stored;
+  }
+
+  async reconcileRepositorySettlement(
+    receipt: RepositoryAdmissionReceipt,
+  ): Promise<SettlementEvidence> {
+    const parsedReceipt = repositoryAdmissionSchema.parse(receipt);
+    return settlementEvidenceSchema.parse(
+      await this.callJson(`/v1/repository-admissions/${parsedReceipt.id}/settlements/reconcile`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ evidenceHash: parsedReceipt.evidenceHash }),
+      }),
+    );
   }
 
   async registerGithubIdentity(accessToken: string): Promise<GithubIdentityGrant> {
@@ -403,15 +618,36 @@ export class PolicySignerClient implements FinancialPolicy {
     return operation.status === 'finalized' ? operation : this.wait(operation.id);
   }
 
+  private assertAdmission(
+    receipt: RepositoryAdmissionReceipt,
+    binding: RepositoryAdmissionBinding,
+    requireFresh: boolean,
+  ): void {
+    if (!isDeepStrictEqual(admissionBindingFromReceipt(receipt), binding)) {
+      throw new Error('repository admission does not match the settlement reservation');
+    }
+    if (!this.config.githubAppId) throw new Error('delivery GitHub App is not configured');
+    if (receipt.verifierAppId === githubAppIdSchema.parse(this.config.githubAppId)) {
+      throw new Error('policy verifier App must be distinct from the delivery App');
+    }
+    if (requireFresh && Date.parse(receipt.tokenExpiresAt) <= this.now().getTime()) {
+      throw new Error('policy verifier returned expired repository admission');
+    }
+  }
+
   private refundAuthorization(
     action: 'register' | 'execute',
     jobId: string,
     settlementSignature: string,
     commitment?: RefundLiabilityCommitment,
+    admission?: RepositoryAdmissionReceipt,
   ): Record<string, string | number> {
     if (!this.jobAuthorityKey) throw new Error('job authority is not configured');
     if (action === 'register' && !commitment) {
       throw new Error('refund liability commitment is required');
+    }
+    if (action === 'register' && !admission) {
+      throw new Error('repository admission is required');
     }
     const authorizationExpiresAt = new Date(this.now().getTime() + 5 * 60_000).toISOString();
     const title =
@@ -420,12 +656,14 @@ export class PolicySignerClient implements FinancialPolicy {
         : 'Mizuki refund execution authorization';
     const message = [
       title,
-      `Version: ${action === 'register' ? 2 : 1}`,
+      `Version: ${action === 'register' ? 3 : 1}`,
       `Job: ${jobId}`,
       `Settlement: ${settlementSignature}`,
     ];
     if (action === 'register') {
       message.push(
+        `Repository Admission: ${admission!.id}`,
+        `Repository Admission Evidence: ${admission!.evidenceHash}`,
         `Repository: ${commitment!.repository.toLowerCase()}`,
         `Issue: ${commitment!.issueNumber}`,
         `Base Ref: ${commitment!.baseRef}`,
@@ -441,6 +679,12 @@ export class PolicySignerClient implements FinancialPolicy {
     return {
       jobId,
       settlementSignature,
+      ...(admission
+        ? {
+            repositoryAdmissionId: admission.id,
+            repositoryAdmissionEvidenceHash: admission.evidenceHash,
+          }
+        : {}),
       ...normalizedCommitment,
       authorizationExpiresAt,
       authorizationSignature: sign(
@@ -449,6 +693,20 @@ export class PolicySignerClient implements FinancialPolicy {
         this.jobAuthorityKey,
       ).toString('base64'),
     };
+  }
+
+  private assertAdmissionCommitment(
+    admission: RepositoryAdmissionReceipt,
+    commitment: RefundLiabilityCommitment,
+  ): void {
+    if (
+      admission.repository !== commitment.repository.toLowerCase() ||
+      admission.issueNumber !== commitment.issueNumber ||
+      admission.baseRef !== commitment.baseRef ||
+      admission.baseSha !== commitment.baseSha
+    ) {
+      throw new Error('repository admission does not match the refund liability commitment');
+    }
   }
 
   private deliveryBindingAuthorization(
@@ -629,4 +887,22 @@ export class PolicyRequestError extends Error {
     this.name = 'PolicyRequestError';
     this.retryable = status === 408 || status === 429 || status >= 500;
   }
+}
+
+function admissionBindingFromReceipt(
+  receipt: RepositoryAdmissionReceipt,
+): RepositoryAdmissionBinding {
+  return {
+    quoteId: receipt.quoteId,
+    repository: receipt.repository,
+    issueNumber: receipt.issueNumber,
+    baseRef: receipt.baseRef,
+    baseSha: receipt.baseSha,
+    reservationKeyHash: receipt.reservationKeyHash,
+    paymentAuthorizationHash: receipt.paymentAuthorizationHash,
+  };
+}
+
+function sha256(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
 }

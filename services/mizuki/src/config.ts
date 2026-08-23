@@ -42,6 +42,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
   if (readinessTimeoutMs > readinessMaxAgeMs) {
     throw new Error('MIZUKI_READINESS_TIMEOUT_MS must not exceed the maximum evidence age');
   }
+  const usePodInputPrice = usdPerMillionPrice(
+    env.USEPOD_INPUT_USD_PER_MILLION,
+    '0.2',
+    'USEPOD_INPUT_USD_PER_MILLION',
+  );
+  const usePodOutputPrice = usdPerMillionPrice(
+    env.USEPOD_OUTPUT_USD_PER_MILLION,
+    '0.4',
+    'USEPOD_OUTPUT_USD_PER_MILLION',
+  );
 
   return {
     host: env.MIZUKI_HOST ?? '127.0.0.1',
@@ -89,12 +99,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     requireGithubApp: env.MIZUKI_REQUIRE_GITHUB_APP !== '0',
     usePodBaseUrl: env.USEPOD_BASE_URL ?? 'https://api.usepod.ai',
     usePodApiKey: env.USEPOD_API_KEY ?? '',
-    usePodImplementationModel: env.USEPOD_MODEL ?? 'deepseek-v3.2',
+    usePodImplementationModel: env.USEPOD_MODEL ?? 'openai/gpt-oss-120b',
     usePodModel:
-      env.USEPOD_REVIEW_MODEL ??
-      (env.MIZUKI_PAYMENT_MODE === 'mock' ? (env.USEPOD_MODEL ?? 'deepseek-v3.2') : ''),
-    usePodInputUsdPerMillion: number(env.USEPOD_INPUT_USD_PER_MILLION, 0.2),
-    usePodOutputUsdPerMillion: number(env.USEPOD_OUTPUT_USD_PER_MILLION, 0.4),
+      env.USEPOD_REVIEW_MODEL ?? (env.MIZUKI_PAYMENT_MODE === 'mock' ? 'deepseek-v4-flash' : ''),
+    usePodInputUsdPerMillion: usePodInputPrice.usd,
+    usePodInputPriceMicrounits: usePodInputPrice.microunits,
+    usePodInputPriceConfigured: env.USEPOD_INPUT_USD_PER_MILLION !== undefined,
+    usePodOutputUsdPerMillion: usePodOutputPrice.usd,
+    usePodOutputPriceMicrounits: usePodOutputPrice.microunits,
+    usePodOutputPriceConfigured: env.USEPOD_OUTPUT_USD_PER_MILLION !== undefined,
     usePodMaxInputPriceMicrounits: boundedInteger(
       env.USEPOD_MAX_INPUT_PRICE_MICROUNITS,
       200_000,
@@ -111,6 +124,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     usePodMaxOutputPriceConfigured: env.USEPOD_MAX_OUTPUT_PRICE_MICROUNITS !== undefined,
     usePodMinimumBalance: decimal(env.USEPOD_MIN_BALANCE, '1', 'USEPOD_MIN_BALANCE'),
     usePodMinimumBalanceConfigured: env.USEPOD_MIN_BALANCE !== undefined,
+    bountyReviewMaxCostMicrounits: boundedInteger(
+      env.MIZUKI_BOUNTY_REVIEW_MAX_COST_MICROUNITS,
+      50_000,
+      1,
+      1_000_000,
+    ),
+    bountyReviewMaxCostConfigured: env.MIZUKI_BOUNTY_REVIEW_MAX_COST_MICROUNITS !== undefined,
     internalRepos: new Set(
       (env.MIZUKI_INTERNAL_REPOS ?? '')
         .split(',')
@@ -144,9 +164,14 @@ export function liveConfigIssues(config: Config): string[] {
   requireValue(missing, 'USEPOD_API_KEY', config.usePodApiKey);
   requireValue(missing, 'USEPOD_MODEL', config.usePodImplementationModel);
   requireValue(missing, 'USEPOD_REVIEW_MODEL', config.usePodModel);
+  if (!config.usePodInputPriceConfigured) missing.push('USEPOD_INPUT_USD_PER_MILLION');
+  if (!config.usePodOutputPriceConfigured) missing.push('USEPOD_OUTPUT_USD_PER_MILLION');
   if (!config.usePodMaxInputPriceConfigured) missing.push('USEPOD_MAX_INPUT_PRICE_MICROUNITS');
   if (!config.usePodMaxOutputPriceConfigured) missing.push('USEPOD_MAX_OUTPUT_PRICE_MICROUNITS');
   if (!config.usePodMinimumBalanceConfigured) missing.push('USEPOD_MIN_BALANCE');
+  if (!config.bountyReviewMaxCostConfigured) {
+    missing.push('MIZUKI_BOUNTY_REVIEW_MAX_COST_MICROUNITS');
+  }
   requireValue(missing, 'MIZUKI_GITHUB_APP_ID', config.githubAppId);
   requireValue(missing, 'MIZUKI_GITHUB_PRIVATE_KEY', config.githubPrivateKey);
   requireValue(missing, 'MIZUKI_GITHUB_CLIENT_ID', config.githubClientId);
@@ -187,10 +212,10 @@ export function liveConfigIssues(config: Config): string[] {
   } catch {
     missing.push('USEPOD_BASE_URL must be exactly https://api.usepod.ai');
   }
-  if (config.usePodInputUsdPerMillion * 1_000_000 < config.usePodMaxInputPriceMicrounits) {
+  if (config.usePodInputPriceMicrounits < config.usePodMaxInputPriceMicrounits) {
     missing.push('USEPOD_INPUT_USD_PER_MILLION understates the input price ceiling');
   }
-  if (config.usePodOutputUsdPerMillion * 1_000_000 < config.usePodMaxOutputPriceMicrounits) {
+  if (config.usePodOutputPriceMicrounits < config.usePodMaxOutputPriceMicrounits) {
     missing.push('USEPOD_OUTPUT_USD_PER_MILLION understates the output price ceiling');
   }
   try {
@@ -271,12 +296,21 @@ function boundedInteger(
   return parsed;
 }
 
-function number(value: string | undefined, fallback: number): number {
-  if (value === undefined) return fallback;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < 0)
-    throw new Error(`invalid non-negative number: ${value}`);
-  return parsed;
+function usdPerMillionPrice(
+  raw: string | undefined,
+  fallback: string,
+  name: string,
+): { usd: number; microunits: number } {
+  const value = (raw ?? fallback).trim();
+  if (!/^\d{1,3}(?:\.\d{1,6})?$/.test(value)) {
+    throw new Error(`${name} must be a decimal with no more than six fractional digits`);
+  }
+  const [whole, fraction = ''] = value.split('.');
+  const microunits = BigInt(whole!) * 1_000_000n + BigInt(fraction.padEnd(6, '0'));
+  if (microunits <= 0n || microunits > 100_000_000n) {
+    throw new Error(`${name} must be greater than zero and no more than 100`);
+  }
+  return { usd: Number(microunits) / 1_000_000, microunits: Number(microunits) };
 }
 
 function atomic(value: string | undefined, fallback: string, name: string): string {

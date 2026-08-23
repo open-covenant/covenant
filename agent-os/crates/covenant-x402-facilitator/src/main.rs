@@ -14,13 +14,24 @@ use serde_json::json;
 async fn main() {
     tracing_subscriber::fmt::init();
 
-    let program = env::var("PROGRAM").unwrap_or("cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y".into());
+    let program =
+        env::var("PROGRAM").unwrap_or("cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y".into());
     let er = env::var("ER").unwrap_or("https://devnet-eu.magicblock.app".into());
-    let price: u64 = env::var("PRICE").ok().and_then(|s| s.parse().ok()).unwrap_or(1);
-    let port: u16 = env::var("PORT").ok().and_then(|s| s.parse().ok()).unwrap_or(8402);
+    let price: u64 = env::var("PRICE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    let port: u16 = env::var("PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(8402);
 
     let content = json!({ "quote": "BTC looks coiled. Position for a breakout." });
-    let state = PaidEndpoint::new(ErPaymentVerifier::new(program.clone(), er.clone()), price, content);
+    let state = PaidEndpoint::new(
+        ErPaymentVerifier::new(program.clone(), er.clone()),
+        price,
+        content,
+    );
 
     let addr = format!("0.0.0.0:{port}");
     tracing::info!(%program, %er, price, %addr, "x402 ER facilitator listening on /paid");

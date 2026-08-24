@@ -80,9 +80,11 @@ function createClient(): RenderClient {
 function deploy(id: string, ref: string) {
   return {
     id,
+    commit: null,
     image: { ref, sha: ref.slice(ref.indexOf('@') + 1) },
     status: 'created',
     trigger: 'api',
     createdAt: '2026-08-23T12:00:00.000Z',
+    finishedAt: null,
   };
 }

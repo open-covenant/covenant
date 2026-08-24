@@ -31,6 +31,7 @@ const deploySchema = z
         createdAt: z.string().datetime({ offset: true }).optional(),
       })
       .passthrough()
+      .nullable()
       .optional(),
     image: imageSchema.optional(),
     status: deployStatus,
@@ -48,7 +49,7 @@ const deploySchema = z
     ]),
     createdAt: z.string().datetime({ offset: true }),
     updatedAt: z.string().datetime({ offset: true }).optional(),
-    finishedAt: z.string().datetime({ offset: true }).optional(),
+    finishedAt: z.string().datetime({ offset: true }).nullable().optional(),
   })
   .passthrough();
 const deployListSchema = z.array(

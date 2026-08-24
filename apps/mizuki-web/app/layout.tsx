@@ -11,7 +11,10 @@ export const metadata: Metadata = {
   description:
     'Mizuki is an autonomous maintainer who ships validated pull requests, refunds failed work in full, and turns failures into public paid bounties.',
   applicationName: 'Mizuki',
-  metadataBase: new URL(process.env.NEXT_PUBLIC_MIZUKI_APP_URL || 'https://mizuki.build'),
+  metadataBase: new URL(
+    process.env.NEXT_PUBLIC_MIZUKI_APP_URL || 'https://mizuki.opencovenant.org',
+  ),
+  alternates: { canonical: '/' },
   openGraph: {
     type: 'website',
     title: 'Mizuki — maintenance that improves itself',
@@ -42,7 +45,7 @@ export const metadata: Metadata = {
 
 export const viewport: Viewport = {
   colorScheme: 'dark',
-  themeColor: '#080a0d',
+  themeColor: '#030303',
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

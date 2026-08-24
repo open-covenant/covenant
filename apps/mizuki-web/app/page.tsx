@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import Image from 'next/image';
 import { ActivityFeed } from '@/components/activity-feed';
 import { BountyCard } from '@/components/bounty-card';
 import { CapabilityFlywheel } from '@/components/capability-flywheel';
@@ -46,21 +47,41 @@ export default async function HomePage() {
               Public repositories · $2 or $10 fixed price · x402 USDC · no unsolicited pull requests
             </p>
           </div>
-          <aside className="hero-proof" aria-label="Mizuki's guarantee">
-            <div className="proof-label">The maintenance contract</div>
-            <div className="proof-outcome">
-              <span>01</span>
-              <div>
-                <strong>Validated pull request</strong>
-                <p>Scoped patch, repository checks, independent model review.</p>
+          <div className="hero-visual" aria-label="Mizuki">
+            <Image
+              src="/mizuki-avatar.jpg"
+              alt="Mizuki"
+              width={700}
+              height={700}
+              className="hero-portrait"
+              priority
+            />
+          </div>
+        </div>
+      </section>
+
+      <section className="maintenance-contract" aria-labelledby="maintenance-contract-title">
+        <div className="shell maintenance-contract-grid">
+          <header className="maintenance-contract-heading">
+            <p className="eyebrow">Fixed-price guarantee</p>
+            <h2 id="maintenance-contract-title">The maintenance contract</h2>
+          </header>
+          <div className="maintenance-contract-body">
+            <div className="contract-outcomes">
+              <div className="proof-outcome">
+                <span>01</span>
+                <div>
+                  <strong>Validated pull request</strong>
+                  <p>Scoped patch, repository checks, independent model review.</p>
+                </div>
               </div>
-            </div>
-            <div className="proof-or">or</div>
-            <div className="proof-outcome proof-refund">
-              <span>02</span>
-              <div>
-                <strong>100% refund</strong>
-                <p>Returned to the original payer by a separate policy signer.</p>
+              <div className="proof-or">or</div>
+              <div className="proof-outcome proof-refund">
+                <span>02</span>
+                <div>
+                  <strong>100% refund</strong>
+                  <p>Returned to the original payer by a separate policy signer.</p>
+                </div>
               </div>
             </div>
             <div className="proof-footer">
@@ -69,7 +90,7 @@ export default async function HomePage() {
               </span>
               <span>Financial policy cannot be changed by Mizuki</span>
             </div>
-          </aside>
+          </div>
         </div>
       </section>
 

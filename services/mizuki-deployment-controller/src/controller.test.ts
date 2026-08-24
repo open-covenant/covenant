@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ArtifactGateway } from './artifact.js';
 import { DeploymentController } from './controller.js';
-import { ControllerError, type ShadowRequest } from './domain.js';
+import { ControllerError, operationEvent, requestHash, type ShadowRequest } from './domain.js';
 import type { ApplicationGateway } from './probe.js';
 import type { RenderDeploy, RenderGateway, RenderService } from './render.js';
 import { MemoryOperationStore } from './store.js';
@@ -406,6 +406,28 @@ describe('deployment controller', () => {
     expect(drift.render.mutations).toHaveLength(0);
   });
 
+  it('accepts a legacy fingerprint only when the restored service is unchanged', async () => {
+    const context = createContext();
+    const baseline = structuredClone(context.render.services.get('srv-shadow123')!);
+
+    await context.controller.startShadow(fixture(), `${UPGRADE}:shadow`);
+    const operation = await context.store.get(UPGRADE);
+    if (!operation) throw new Error('operation fixture is missing');
+    operation.shadowServiceFingerprint = legacyServiceFingerprint(baseline);
+    await context.store.save(
+      operation,
+      operationEvent(operation, 'legacy_fingerprint_fixture', {}, operation.updatedAt),
+    );
+
+    context.render.services.set('srv-shadow123', baseline);
+    await expect(context.controller.readiness()).resolves.toBeUndefined();
+
+    context.render.services.get('srv-shadow123')!.serviceDetails.region = 'oregon';
+    await expect(context.controller.readiness()).rejects.toMatchObject({
+      code: 'render_service_drift',
+    });
+  });
+
   it('brackets functional probes with immutable active-deploy observations', async () => {
     const context = createContext();
     context.applications.afterProbe = (serviceId) => {
@@ -608,6 +630,21 @@ function service(id: string, type: RenderService['type']): RenderService {
 
 function imageRef(artifactSha256: string): string {
   return `${IMAGE_REPOSITORY}@sha256:${artifactSha256}`;
+}
+
+function legacyServiceFingerprint(value: RenderService): string {
+  return requestHash({
+    id: value.id,
+    type: value.type,
+    autoDeploy: value.autoDeploy,
+    imagePath: value.imagePath,
+    registryCredential: value.registryCredential ?? null,
+    runtime: value.serviceDetails.runtime,
+    region: value.serviceDetails.region,
+    numInstances: value.serviceDetails.numInstances ?? null,
+    url: value.serviceDetails.url ?? null,
+    suspended: value.suspended,
+  });
 }
 
 function deployment(

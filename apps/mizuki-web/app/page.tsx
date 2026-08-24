@@ -6,6 +6,7 @@ import { CapabilityFlywheel } from '@/components/capability-flywheel';
 import { CapabilitySnapshot } from '@/components/capability-snapshot';
 import { DataError, DemoNotice, EmptyState } from '@/components/data-state';
 import { MetricStrip } from '@/components/metric-strip';
+import { TokenDisclosure } from '@/components/token-disclosure';
 import { Transformation } from '@/components/transformation';
 import { TreasurySnapshot } from '@/components/treasury-snapshot';
 import { getAdmission, getOverview } from '@/lib/api';
@@ -263,31 +264,7 @@ export default async function HomePage() {
         </div>
       </section>
 
-      <section className="section token-section">
-        <div className="shell token-grid">
-          <div>
-            <p className="eyebrow">Token disclosure</p>
-            <h2>$MIZUKI</h2>
-          </div>
-          <p>
-            The token does not control customer jobs and does not provide a claim on revenue.
-            Creator fees are reported separately in SOL and are excluded from work revenue, margin,
-            and USDC refund capacity.
-          </p>
-          {process.env.NEXT_PUBLIC_MIZUKI_TOKEN_URL ? (
-            <a
-              href={process.env.NEXT_PUBLIC_MIZUKI_TOKEN_URL}
-              className="button button-secondary"
-              target="_blank"
-              rel="noreferrer"
-            >
-              Token activity <span aria-hidden="true">↗</span>
-            </a>
-          ) : (
-            <span className="token-gate">Token activity is not available yet</span>
-          )}
-        </div>
-      </section>
+      <TokenDisclosure />
     </>
   );
 }

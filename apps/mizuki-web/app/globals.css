@@ -1468,7 +1468,7 @@ textarea:focus-visible {
 
 .token-grid {
   display: grid;
-  grid-template-columns: 0.55fr 1fr auto;
+  grid-template-columns: 0.5fr minmax(280px, 0.85fr) minmax(320px, 0.8fr);
   align-items: center;
   gap: 70px;
 }
@@ -1493,18 +1493,50 @@ textarea:focus-visible {
   font-size: 13px;
 }
 
-.token-gate {
-  max-width: 200px;
-  padding: 10px 12px;
-  border: 1px solid #343b43;
-  border-radius: 6px;
-  color: #838a8d;
+.token-details {
+  display: grid;
+  gap: 12px;
+}
+
+.token-details > span {
+  color: #73787a;
   font:
-    650 10px/1.45 ui-monospace,
+    650 9px/1 ui-monospace,
     SFMono-Regular,
     Menlo,
     monospace;
-  text-align: center;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.token-contract {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid #343b43;
+  border-radius: 4px;
+  color: #b4b7b8;
+  transition: border-color 150ms ease, color 150ms ease;
+}
+
+.token-contract:hover {
+  border-color: #5a5f61;
+  color: var(--white);
+}
+
+.token-contract code {
+  overflow-wrap: anywhere;
+  font:
+    500 10px/1.45 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+}
+
+.token-details .button {
+  justify-content: center;
 }
 
 .data-state {
@@ -3852,8 +3884,8 @@ textarea:focus-visible {
     gap: 20px;
   }
 
-  .token-gate {
-    max-width: none;
+  .token-details {
+    width: 100%;
   }
 
   .footer-grid {

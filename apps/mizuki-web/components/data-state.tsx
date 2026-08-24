@@ -20,12 +20,18 @@ export function DataError({
   );
 }
 
-export function EmptyState({ title, children }: { title: string; children: ReactNode }) {
+export function EmptyState({
+  title,
+  children,
+  mark = '0',
+}: {
+  title: string;
+  children: ReactNode;
+  mark?: ReactNode;
+}) {
   return (
     <div className="data-state empty-state">
-      <span className="data-state-mark" aria-hidden="true">
-        0
-      </span>
+      <span className="data-state-mark" aria-hidden="true">{mark}</span>
       <div>
         <strong>{title}</strong>
         <p>{children}</p>

@@ -716,6 +716,30 @@ describe('price feed policy', () => {
     });
   });
 
+  it('accepts the official Pyth Hermes SOL/USD response', async () => {
+    const oracle = priceOracle(
+      {
+        binary: { encoding: 'hex', data: ['a'.repeat(8_000)] },
+        parsed: [
+          {
+            id: 'ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d',
+            price: {
+              price: '15012345678',
+              conf: '1000',
+              expo: -8,
+              publish_time: Math.floor((now - 1_000) / 1_000),
+            },
+          },
+        ],
+      },
+      'https://hermes.pyth.network/v2/updates/price/latest?ids%5B%5D=0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d&parsed=true',
+    );
+    await expect(oracle.solUsd()).resolves.toEqual({
+      priceUsdMicros: 150_123_456,
+      observedAt: new Date(Math.floor((now - 1_000) / 1_000) * 1_000),
+    });
+  });
+
   it.each([
     [
       'Coinbase malformed price',
@@ -740,6 +764,23 @@ describe('price feed policy', () => {
       'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd&include_last_updated_at=true',
       { solana: { usd: 150, last_updated_at: Math.floor((now - 301_000) / 1_000) } },
       'price_stale',
+    ],
+    [
+      'Pyth wrong feed ID',
+      'https://hermes.pyth.network/v2/updates/price/latest?ids%5B%5D=0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d&parsed=true',
+      {
+        parsed: [
+          {
+            id: 'wrong',
+            price: {
+              price: '15000000000',
+              expo: -8,
+              publish_time: Math.floor(now / 1_000),
+            },
+          },
+        ],
+      },
+      'price_invalid',
     ],
   ])('rejects a %s response', async (_name, url, body, code) => {
     await expect(priceOracle(body, url).solUsd()).rejects.toMatchObject({ code });

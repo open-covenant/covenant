@@ -44,6 +44,8 @@ The provider account was activated through a finalized 50,000-microunit canonica
 | Reviewer | `deepseek-v4-flash`   | Marketplace route parsed strict decision JSON under `max_tokens: 512` and reported usage of 1,177 input plus 493 output tokens.                             |
 | Both     | —                     | Valid positive balance and provider-ID headers were present; provider cost and request-ID fields were absent, so this is not complete unit-economics proof. |
 
+On 24 August, the coding route was re-qualified and pinned to `deepseek-v3.2`. A funded marketplace-only, no-retention request returned the canonical `deepseek.v3.2` identity, a valid `read_file` tool call, provider `7ae6c424-9863-4563-8863-19a06c65d00b`, request `01M0TD4706S5G6AHQVQZ5Y4KKY`, and token usage of 309 input plus 21 output tokens in 7.3 seconds.
+
 The unqualified `deepseek-v3.2` request canonicalized and failed the tool call. The canonical `deepseek/deepseek-v3.2` request also failed the tool call and returned conflicting duplicate balance values. Neither is approved. The redacted artifact is content-addressed at `https://raw.githubusercontent.com/open-covenant/covenant/main/infra/mizuki/evidence/usepod-route-2026-08-23.json#sha256=21bbff5860332305ec090c9bb8245de36e6e53819a97d29401724c5c3644c441`; it retains no credential, deposit code, account balance, or provider identifier.
 
 This advances route selection, not launch readiness. Canary funding is 0.05 USDC, below the configured 4,000,000-microunit production floor, and no real-repository coding plus sandbox benchmark has passed. Paid intake remains closed.

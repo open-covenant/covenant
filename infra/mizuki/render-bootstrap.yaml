@@ -126,7 +126,7 @@ services:
       - key: CODER_BACKEND
         value: usepod
       - key: CODER_MODEL
-        value: openai/gpt-oss-120b
+        value: deepseek-v3.2
       - key: CODER_EFFORT
         value: low
       - key: USEPOD_API_KEY

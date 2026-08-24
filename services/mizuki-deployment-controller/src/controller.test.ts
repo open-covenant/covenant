@@ -409,6 +409,7 @@ describe('deployment controller', () => {
   it('accepts a legacy fingerprint only when the restored service is unchanged', async () => {
     const context = createContext();
     const baseline = structuredClone(context.render.services.get('srv-shadow123')!);
+    baseline.imagePath = imageRef(BASELINE_ARTIFACT);
 
     await context.controller.startShadow(fixture(), `${UPGRADE}:shadow`);
     const operation = await context.store.get(UPGRADE);
@@ -419,7 +420,6 @@ describe('deployment controller', () => {
       operationEvent(operation, 'legacy_fingerprint_fixture', {}, operation.updatedAt),
     );
 
-    context.render.services.set('srv-shadow123', baseline);
     await expect(context.controller.readiness()).resolves.toBeUndefined();
 
     context.render.services.get('srv-shadow123')!.serviceDetails.region = 'oregon';

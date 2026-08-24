@@ -795,7 +795,20 @@ export class DeploymentController {
       target === 'shadow'
         ? operation.shadowServiceFingerprint
         : operation.productionServiceFingerprint;
-    if (!expectedFingerprint || !matchesServiceFingerprint(service, expectedFingerprint)) {
+    const baselineArtifactSha256 =
+      target === 'shadow'
+        ? operation.shadowBaselineArtifactSha256
+        : operation.productionBaselineArtifactSha256;
+    if (
+      !expectedFingerprint ||
+      !matchesServiceFingerprint(
+        service,
+        expectedFingerprint,
+        baselineArtifactSha256
+          ? exactImageRef(`${this.config.imageRepository}@sha256:${baselineArtifactSha256}`)
+          : undefined,
+      )
+    ) {
       throw new ControllerError(
         'render_service_drift',
         'Render service configuration changed',
@@ -863,7 +876,20 @@ export class DeploymentController {
       target === 'shadow'
         ? operation.shadowServiceFingerprint
         : operation.productionServiceFingerprint;
-    if (!expectedFingerprint || !matchesServiceFingerprint(service, expectedFingerprint)) {
+    const baselineArtifactSha256 =
+      target === 'shadow'
+        ? operation.shadowBaselineArtifactSha256
+        : operation.productionBaselineArtifactSha256;
+    if (
+      !expectedFingerprint ||
+      !matchesServiceFingerprint(
+        service,
+        expectedFingerprint,
+        baselineArtifactSha256
+          ? exactImageRef(`${this.config.imageRepository}@sha256:${baselineArtifactSha256}`)
+          : undefined,
+      )
+    ) {
       throw new ControllerError(
         'render_service_drift',
         'Render service configuration changed',
@@ -1359,9 +1385,15 @@ function serviceFingerprint(service: RenderService): string {
   });
 }
 
-function matchesServiceFingerprint(service: RenderService, expected: string): boolean {
+function matchesServiceFingerprint(
+  service: RenderService,
+  expected: string,
+  legacyImagePath?: string,
+): boolean {
   if (serviceFingerprint(service) === expected) return true;
-  return legacyServiceFingerprint(service) === expected;
+  if (legacyServiceFingerprint(service) === expected) return true;
+  if (!legacyImagePath) return false;
+  return legacyServiceFingerprint({ ...service, imagePath: legacyImagePath }) === expected;
 }
 
 function legacyServiceFingerprint(service: RenderService): string {

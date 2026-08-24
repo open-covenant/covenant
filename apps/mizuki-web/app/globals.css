@@ -1518,7 +1518,9 @@ textarea:focus-visible {
   border: 1px solid #343b43;
   border-radius: 4px;
   color: #b4b7b8;
-  transition: border-color 150ms ease, color 150ms ease;
+  transition:
+    border-color 150ms ease,
+    color 150ms ease;
 }
 
 .token-contract:hover {

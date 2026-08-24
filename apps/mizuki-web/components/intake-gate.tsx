@@ -18,9 +18,9 @@ export function IntakeGate({
         />
       ) : !admission.data.intakeEnabled ? (
         <EmptyState title="Paid maintenance is temporarily unavailable" mark="—">
-          No new quotes or payments are being accepted. You can still review existing jobs,
-          refunds, and funded bounties. Paid intake will reopen after refund coverage and delivery
-          readiness are confirmed.
+          No new quotes or payments are being accepted. You can still review existing jobs, refunds,
+          and funded bounties. Paid intake will reopen after refund coverage and delivery readiness
+          are confirmed.
         </EmptyState>
       ) : (
         <>

@@ -25,7 +25,7 @@
 use covenant_rwa_firewall::{AssetContext, RwaDenial, RwaPolicy, RwaTrade, Side};
 
 const DEFAULT_RPC: &str = "https://rpc.mainnet.chain.robinhood.com";
-const DEFAULT_GUARD: &str = "0xdc696336bcf04e0e5b32c45570f34c52685ceaa2";
+const DEFAULT_GUARD: &str = "0x1c6cca8de094209de79a12ed63477434ec2621c0";
 const AAPL: &str = "af3d76f1834a1d425780943c99ea8a608f8a93f9";
 const AAPL_FEED: &str = "0x6b22a786baa607d76728168703a39ea9c99f2cd0";
 // Registered on the guard for nothing: WETH has no Stock Token oracle here.
@@ -199,6 +199,9 @@ fn expected_selector(denial: &RwaDenial) -> &'static str {
         RwaDenial::NotionalOverCap { .. } => ERR_NOTIONAL_OVER_CAP,
         // The off-chain half owns the calendar; the guard has no equivalent.
         RwaDenial::MarketClosed => unreachable!("the parity run holds the market-hours gate open"),
+        // Stateful, so it belongs to commitTrade rather than the checkTrade view
+        // this parity run drives.
+        RwaDenial::WindowCapExceeded { .. } => unreachable!("checkTrade does not touch the window"),
     }
 }
 

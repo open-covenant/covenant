@@ -200,6 +200,11 @@ pub enum RwaDenial {
     },
     #[error("trade amount is too large to price without overflow")]
     AmountTooLarge,
+    #[error("{would_be_usd_e8} would stand against the {cap_usd_e8} spend window (USD*1e8)")]
+    WindowCapExceeded {
+        would_be_usd_e8: u128,
+        cap_usd_e8: u128,
+    },
 }
 
 /// `a * b / d`, `None` on a zero divisor or on a product that overflows u128. An
@@ -370,5 +375,138 @@ mod tests {
             .expect("allowed");
         assert_eq!(v.shares_e18, 20 * WAD);
         assert_eq!(v.notional_usd_e8, 2_000 * 100_000_000);
+    }
+}
+
+/// The bound the per-trade cap cannot express.
+///
+/// A policy that clears a $250 trade clears the same trade a hundred times. The
+/// window is what an agent's whole session runs inside: a trade is charged to it,
+/// and the charge fades back to zero over the window's own duration, so the
+/// budget refills smoothly instead of resetting on a boundary. This mirrors
+/// `RwaTradeGuard`'s arithmetic exactly, so the off-chain half can tell a caller
+/// it is out of budget rather than let it find out in a revert.
+///
+/// What it bounds is how much can stand against a trader at any instant. Over a
+/// full window the refill lets somewhat more than the cap through in total; a
+/// strict rolling sum would need every trade kept on chain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpendWindow {
+    /// How long a charge takes to fade to nothing. Zero disables the window.
+    pub duration_secs: u64,
+    pub cap_usd_e8: u128,
+}
+
+/// A trader's standing charge and when it was last moved.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SpendRecord {
+    pub usd_e8: u128,
+    pub at: u64,
+}
+
+impl SpendWindow {
+    /// What still stands against the trader at `now`.
+    pub fn standing(&self, record: &SpendRecord, now: u64) -> u128 {
+        if self.duration_secs == 0 || record.usd_e8 == 0 {
+            return 0;
+        }
+        // A record stamped in the future is not yet owed anything back.
+        let elapsed = now.saturating_sub(record.at);
+        if elapsed >= self.duration_secs {
+            return 0;
+        }
+        let faded = record.usd_e8 * u128::from(elapsed) / u128::from(self.duration_secs);
+        record.usd_e8 - faded
+    }
+
+    /// Charge a trade to the window, or refuse it. Returns the record to keep.
+    pub fn charge(
+        &self,
+        record: &SpendRecord,
+        notional_usd_e8: u128,
+        now: u64,
+    ) -> Result<SpendRecord, RwaDenial> {
+        if self.duration_secs == 0 {
+            return Ok(*record);
+        }
+        let would_be = self.standing(record, now) + notional_usd_e8;
+        if would_be > self.cap_usd_e8 {
+            return Err(RwaDenial::WindowCapExceeded {
+                would_be_usd_e8: would_be,
+                cap_usd_e8: self.cap_usd_e8,
+            });
+        }
+        Ok(SpendRecord {
+            usd_e8: would_be,
+            at: now,
+        })
+    }
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::*;
+
+    const DAY: u64 = 86_400;
+    const WINDOW: SpendWindow = SpendWindow {
+        duration_secs: DAY,
+        cap_usd_e8: 1_000 * 100_000_000,
+    };
+
+    #[test]
+    fn a_trade_inside_the_budget_is_charged() {
+        let charged = WINDOW
+            .charge(&SpendRecord::default(), 250 * 100_000_000, 1_000)
+            .unwrap();
+        assert_eq!(charged.usd_e8, 250 * 100_000_000);
+        assert_eq!(charged.at, 1_000);
+    }
+
+    #[test]
+    fn the_hundredth_in_cap_trade_is_refused() {
+        let mut record = SpendRecord::default();
+        let trade = 250 * 100_000_000;
+        for _ in 0..4 {
+            record = WINDOW.charge(&record, trade, 1_000).unwrap();
+        }
+        let denial = WINDOW.charge(&record, trade, 1_000).unwrap_err();
+        assert!(
+            matches!(denial, RwaDenial::WindowCapExceeded { cap_usd_e8, .. } if cap_usd_e8 == WINDOW.cap_usd_e8)
+        );
+    }
+
+    #[test]
+    fn the_budget_refills_as_the_window_passes() {
+        let record = SpendRecord {
+            usd_e8: 1_000 * 100_000_000,
+            at: 0,
+        };
+        assert_eq!(WINDOW.standing(&record, 0), 1_000 * 100_000_000);
+        assert_eq!(WINDOW.standing(&record, DAY / 2), 500 * 100_000_000);
+        assert_eq!(WINDOW.standing(&record, DAY), 0);
+        assert_eq!(WINDOW.standing(&record, DAY * 3), 0);
+    }
+
+    #[test]
+    fn a_record_stamped_ahead_of_now_does_not_refund_itself() {
+        let record = SpendRecord {
+            usd_e8: 1_000 * 100_000_000,
+            at: 5_000,
+        };
+        assert_eq!(WINDOW.standing(&record, 1_000), 1_000 * 100_000_000);
+    }
+
+    #[test]
+    fn a_zero_duration_window_is_off() {
+        let off = SpendWindow {
+            duration_secs: 0,
+            cap_usd_e8: 1,
+        };
+        let record = SpendRecord {
+            usd_e8: u128::MAX / 2,
+            at: 0,
+        };
+        assert_eq!(off.standing(&record, 10), 0);
+        assert_eq!(off.charge(&record, u128::MAX / 4, 10).unwrap(), record);
     }
 }

@@ -105,7 +105,7 @@ export class UpdaterStatusClient implements UpgradeStatusReader {
   constructor(
     baseUrl: string,
     private readonly token: string,
-    private readonly timeoutMs = 8_000,
+    private readonly timeoutMs = 15_000,
     private readonly request: typeof fetch = fetch,
   ) {
     this.baseUrl = new URL(baseUrl).toString().replace(/\/$/, '');

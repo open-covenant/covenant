@@ -41,6 +41,18 @@ describe('updater configuration', () => {
     });
   });
 
+  it('keeps updater readiness inside the outer readiness deadline', () => {
+    expect(loadConfig({ MIZUKI_PAYMENT_MODE: 'mock' }).updaterTimeoutMs).toBe(15_000);
+    expect(() =>
+      loadConfig({
+        MIZUKI_UPDATER_URL: 'http://updater:8793',
+        MIZUKI_UPDATER_TOKEN: 't'.repeat(32),
+        MIZUKI_UPDATER_TIMEOUT_MS: '20000',
+        MIZUKI_READINESS_TIMEOUT_MS: '20000',
+      }),
+    ).toThrow('must be shorter');
+  });
+
   it('bounds proxy, rate-limit, and activity stream settings', () => {
     expect(() => loadConfig({ MIZUKI_TRUSTED_PROXY_HOPS: '2' })).toThrow('between 0 and 1');
     expect(() => loadConfig({ MIZUKI_RATE_LIMIT_MAX_SOURCES: '99' })).toThrow(
@@ -185,6 +197,12 @@ describe('live configuration', () => {
 
   it('accepts the complete fail-closed production contract', () => {
     expect(() => assertLiveConfig(loadConfig(complete))).not.toThrow();
+  });
+
+  it('rejects a production updater timeout shorter than the application probe budget', () => {
+    expect(() =>
+      assertLiveConfig(loadConfig({ ...complete, MIZUKI_UPDATER_TIMEOUT_MS: '8000' })),
+    ).toThrow('MIZUKI_UPDATER_TIMEOUT_MS must be at least 15000');
   });
 
   it('rejects missing custody, GitHub, route, and durable-store settings', () => {

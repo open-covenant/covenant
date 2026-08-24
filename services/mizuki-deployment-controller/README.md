@@ -16,7 +16,7 @@ GET /deployz
 
 The only accepted body is strict JSON `{ "ok": true }`. The runtime returns it only after reading its isolated database and confirming both durable admission controls are closed. A response with any additional field fails the probe. Shadow has no production probe token, provider credential, coding-gateway access, signer access, job authority, GitHub App, updater access, or live payment configuration.
 
-Production exposes the authenticated full dependency probe:
+Production exposes an authenticated application dependency probe:
 
 ```text
 GET /internal/mizuki/functional-readiness
@@ -37,6 +37,11 @@ The response is strict JSON:
   }
 }
 ```
+
+This probe checks every runtime dependency except the updater. The operator-facing runtime
+`/readyz` still requires the updater, while updater readiness requires this controller. Keeping the
+deployment probe independent of the updater makes the steady-state readiness graph acyclic without
+weakening paid-job admission or operator readiness.
 
 The application does not self-report its image digest. The controller reads Render's sole live deploy ID and immutable image digest immediately before and after the functional probe. Any change during that interval invalidates the probe.
 

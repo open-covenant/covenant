@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  applicationDependencies,
   ServiceReadiness,
   serviceDependencies,
   type ReadinessProbe,
@@ -114,6 +115,75 @@ describe('ServiceReadiness', () => {
       lastSuccessfulAgeMs: 301,
       failed: ['updater', 'stale'],
     });
+  });
+
+  it('keeps application readiness independent while updater remains operator-critical', async () => {
+    const probes = healthyProbes();
+    probes.updater = vi.fn(async () => {
+      throw new Error('recursive controller dependency');
+    });
+    const readiness = createReadiness(probes, () => 1_000);
+
+    await expect(readiness.checkApplication()).resolves.toMatchObject({
+      ready: true,
+      failed: [],
+    });
+    expect(probes.updater).not.toHaveBeenCalled();
+
+    await expect(readiness.check()).resolves.toMatchObject({
+      ready: false,
+      failed: ['updater', 'stale'],
+    });
+    expect(probes.updater).toHaveBeenCalledTimes(1);
+    await expect(readiness.checkApplication()).resolves.toMatchObject({ ready: true, failed: [] });
+    expect(probes.updater).toHaveBeenCalledTimes(1);
+  });
+
+  it('terminates when updater readiness re-enters application readiness', async () => {
+    const probes = healthyProbes();
+    let readiness!: ServiceReadiness;
+    probes.updater = vi.fn(async () => {
+      const report = await readiness.checkApplication();
+      if (!report.ready) throw new Error('application is not ready');
+    });
+    readiness = createReadiness(probes, () => 1_000);
+
+    await expect(readiness.check()).resolves.toMatchObject({ ready: true, failed: [] });
+    expect(probes.updater).toHaveBeenCalledTimes(1);
+    for (const name of applicationDependencies) {
+      expect(probes[name]).toHaveBeenCalled();
+    }
+  });
+
+  it.each(applicationDependencies)('fails application readiness when %s fails', async (name) => {
+    const probes = healthyProbes();
+    probes[name] = vi.fn(async () => {
+      throw new Error('dependency unavailable');
+    });
+    const readiness = createReadiness(probes, () => 1_000);
+
+    await expect(readiness.checkApplication()).resolves.toMatchObject({
+      ready: false,
+      failed: [name, 'stale'],
+    });
+    expect(probes.updater).not.toHaveBeenCalled();
+  });
+
+  it('coalesces concurrent application probes independently from operator evidence', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const probes = healthyProbes();
+    probes.postgres = vi.fn(async () => gate);
+    const readiness = createReadiness(probes, () => 1_000);
+
+    const checks = [readiness.checkApplication(), readiness.checkApplication()];
+    release();
+    await expect(Promise.all(checks)).resolves.toHaveLength(2);
+    expect(probes.postgres).toHaveBeenCalledTimes(1);
+    expect(probes.updater).not.toHaveBeenCalled();
+    expect(readiness.latest()).toBeUndefined();
   });
 });
 

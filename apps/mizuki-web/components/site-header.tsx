@@ -5,14 +5,13 @@ const navigation = [
   { href: '/bounties', label: 'Bounties' },
   { href: '/treasury', label: 'Financials' },
   { href: '/capabilities', label: 'Capabilities' },
-  { href: '/activity', label: 'Activity log' },
+  { href: '/activity', label: 'Log' },
 ];
 
 export function SiteHeader({ intakeOpen }: { intakeOpen: boolean }) {
-  const links = [
-    { href: '/work', label: intakeOpen ? 'Submit an issue' : 'Service status' },
-    ...navigation,
-  ];
+  const links = intakeOpen
+    ? [{ href: '/work', label: 'Submit an issue' }, ...navigation]
+    : navigation;
 
   return (
     <header className="site-header">

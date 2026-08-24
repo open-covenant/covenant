@@ -17,10 +17,10 @@ export function IntakeGate({
           message="Quote and payment controls remain unavailable until service status can be confirmed. Refresh the page to try again."
         />
       ) : !admission.data.intakeEnabled ? (
-        <EmptyState title="New paid jobs are temporarily paused">
-          No new quotes or payments are being accepted. Paid intake reopens when Mizuki can verify
-          refund coverage and delivery readiness. Existing jobs, payments, refunds, and bounties
-          remain public.
+        <EmptyState title="Paid maintenance is temporarily unavailable" mark="—">
+          No new quotes or payments are being accepted. You can still review existing jobs, refunds,
+          and funded bounties. Paid intake will reopen after refund coverage and delivery readiness
+          are confirmed.
         </EmptyState>
       ) : (
         <>

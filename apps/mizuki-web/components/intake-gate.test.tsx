@@ -10,7 +10,9 @@ describe('IntakeGate', () => {
       </IntakeGate>,
     );
 
-    expect(html).toContain('New paid jobs are temporarily paused');
+    expect(html).toContain('Paid maintenance is temporarily unavailable');
+    expect(html).toContain('Paid intake will reopen after refund coverage');
+    expect(html).not.toContain('>0<');
     expect(html).not.toContain('Get fixed quote');
   });
 
@@ -22,7 +24,7 @@ describe('IntakeGate', () => {
     );
 
     expect(html).toContain('Get fixed quote');
-    expect(html).not.toContain('New paid jobs are temporarily paused');
+    expect(html).not.toContain('Paid maintenance is temporarily unavailable');
   });
 
   it('fails closed when authoritative admission state is unavailable', () => {

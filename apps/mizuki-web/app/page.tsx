@@ -8,13 +8,14 @@ import { DataError, DemoNotice, EmptyState } from '@/components/data-state';
 import { MetricStrip } from '@/components/metric-strip';
 import { Transformation } from '@/components/transformation';
 import { TreasurySnapshot } from '@/components/treasury-snapshot';
-import { getOverview } from '@/lib/api';
+import { getAdmission, getOverview } from '@/lib/api';
 
 export const dynamic = 'force-dynamic';
 
 export default async function HomePage() {
-  const overview = await getOverview();
+  const [overview, admission] = await Promise.all([getOverview(), getAdmission()]);
   const demo = Object.values(overview).some((state) => state.status !== 'error' && state.demo);
+  const intakeOpen = admission.status !== 'error' && admission.data.intakeEnabled;
 
   return (
     <>
@@ -36,16 +37,21 @@ export default async function HomePage() {
               a separate policy signer returns the quoted USDC payment to the original payer.
             </p>
             <div className="hero-actions">
-              <Link href="/work" className="button button-primary">
-                Submit an issue <span aria-hidden="true">↗</span>
+              <Link
+                href="/work"
+                className={`button ${intakeOpen ? 'button-primary' : 'button-secondary'}`}
+              >
+                {intakeOpen ? 'Submit an issue' : 'View service status'}{' '}
+                <span aria-hidden="true">↗</span>
               </Link>
               <Link href="/bounties" className="button button-secondary">
                 Browse funded bounties
               </Link>
             </div>
             <p className="hero-contract">
-              Public repositories only · 2 or 10 USDC via x402 · pull requests only with maintainer
-              authorization
+              {intakeOpen
+                ? 'Public repositories only · 2 or 10 USDC via x402 · pull requests only with maintainer authorization'
+                : 'Paid intake is temporarily paused · no new payments are being accepted · public records remain available'}
             </p>
           </div>
           <div className="hero-visual" aria-label="Mizuki">

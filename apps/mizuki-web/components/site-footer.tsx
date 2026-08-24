@@ -1,7 +1,7 @@
 import Image from 'next/image';
 import Link from 'next/link';
 
-export function SiteFooter() {
+export function SiteFooter({ intakeOpen }: { intakeOpen: boolean }) {
   return (
     <footer className="site-footer">
       <div className="shell footer-grid">
@@ -25,7 +25,7 @@ export function SiteFooter() {
           </p>
         </div>
         <div className="footer-links" aria-label="Footer navigation">
-          <Link href="/work">Submit an issue</Link>
+          <Link href="/work">{intakeOpen ? 'Submit an issue' : 'Service status'}</Link>
           <Link href="/bounties">Browse bounties</Link>
           <Link href="/activity">Activity log</Link>
           <a href="https://github.com/open-covenant/covenant" rel="noreferrer" target="_blank">

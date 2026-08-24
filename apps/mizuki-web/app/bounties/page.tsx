@@ -2,14 +2,16 @@ import type { Metadata } from 'next';
 import { BountyBoard } from '@/components/bounty-board';
 import { DataError, DemoNotice, EmptyState } from '@/components/data-state';
 import { getBounties } from '@/lib/api';
+import { pageMetadata } from '@/lib/page-metadata';
 
 export const dynamic = 'force-dynamic';
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
   title: 'Maintenance bounties',
   description:
     'Claim maintenance bounties published only after the original customer refund and separate SOL escrow have finalized.',
-};
+  path: '/bounties',
+});
 
 export default async function BountiesPage() {
   const result = await getBounties();

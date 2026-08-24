@@ -3,14 +3,23 @@ import { notFound } from 'next/navigation';
 import { DataError, DemoNotice } from '@/components/data-state';
 import { JobReceipt } from '@/components/job-receipt';
 import { getJob } from '@/lib/api';
+import { pageMetadata } from '@/lib/page-metadata';
 
 export const dynamic = 'force-dynamic';
 
-export const metadata: Metadata = {
-  title: 'Job status',
-  description:
-    'View payment, work, validation, delivery, and refund records for a Mizuki maintenance job.',
-};
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}): Promise<Metadata> {
+  const { id } = await params;
+  return pageMetadata({
+    title: 'Job status',
+    description:
+      'View payment, work, validation, delivery, and refund records for a Mizuki maintenance job.',
+    path: `/jobs/${encodeURIComponent(id)}`,
+  });
+}
 
 export default async function JobPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;

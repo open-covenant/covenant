@@ -1,9 +1,11 @@
 import type { Metadata } from 'next';
+import { pageMetadata } from '@/lib/page-metadata';
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
   title: 'Security',
   description: 'Mizuki security boundaries, limitations, and responsible disclosure channel.',
-};
+  path: '/security',
+});
 
 export default function SecurityPage() {
   return (

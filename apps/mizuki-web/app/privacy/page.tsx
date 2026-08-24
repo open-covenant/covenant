@@ -1,10 +1,12 @@
 import type { Metadata } from 'next';
+import { pageMetadata } from '@/lib/page-metadata';
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
   title: 'Privacy and data use',
   description:
     'What Mizuki processes, sends to service providers, retains, and intentionally publishes.',
-};
+  path: '/privacy',
+});
 
 export default function PrivacyPage() {
   return (

@@ -9,8 +9,6 @@ import manifest from './manifest';
 
 vi.mock('server-only', () => ({}));
 
-const avatarPath = '/mizuki-avatar.jpg';
-
 describe('Mizuki public identity', () => {
   it('keeps the verified profile image unchanged', () => {
     const avatar = readFileSync(new URL('../public/mizuki-avatar.jpg', import.meta.url));
@@ -20,15 +18,22 @@ describe('Mizuki public identity', () => {
     );
   });
 
-  it('uses the profile image for visible identity and social previews', () => {
+  it('uses the profile image for visible identity and a large social preview card', () => {
     expect(renderToStaticMarkup(<SiteHeader intakeOpen />)).toContain('mizuki-avatar.jpg');
     expect(renderToStaticMarkup(<SiteFooter intakeOpen />)).toContain('mizuki-avatar.jpg');
     expect(metadata.openGraph).toMatchObject({
-      images: [{ url: avatarPath, width: 400, height: 400, alt: 'Mizuki the Mech' }],
+      images: [
+        {
+          url: '/mizuki-og.png',
+          width: 1200,
+          height: 630,
+          alt: 'Mizuki the Mech — fixed-price GitHub maintenance',
+        },
+      ],
     });
     expect(metadata.twitter).toMatchObject({
-      card: 'summary',
-      images: [avatarPath],
+      card: 'summary_large_image',
+      images: ['/mizuki-og.png'],
     });
   });
 

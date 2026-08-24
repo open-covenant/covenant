@@ -4,15 +4,17 @@ import { DataError, DemoNotice, EmptyState } from '@/components/data-state';
 import { StatusBadge } from '@/components/status-badge';
 import { getCapabilities } from '@/lib/api';
 import { formatTime } from '@/lib/format';
+import { pageMetadata } from '@/lib/page-metadata';
 import type { CapabilityState } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
   title: 'Production change record',
   description:
     'Review benchmarks, pull requests, separate AI reviews, and production releases for Mizuki’s capability updates.',
-};
+  path: '/capabilities',
+});
 
 const stateOrder: CapabilityState[] = [
   'missing',

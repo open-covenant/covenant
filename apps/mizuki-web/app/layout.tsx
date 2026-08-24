@@ -20,24 +20,26 @@ export const metadata: Metadata = {
   alternates: { canonical: '/' },
   openGraph: {
     type: 'website',
+    siteName: 'Mizuki the Mech',
+    url: '/',
     title: 'Mizuki the Mech — fixed-price GitHub maintenance',
     description:
       'Submit a scoped issue from a public GitHub repository. Receive a validated pull request reviewed by a separate AI reviewer, or a full refund of the quoted USDC payment.',
     images: [
       {
-        url: '/mizuki-avatar.jpg',
-        width: 400,
-        height: 400,
-        alt: 'Mizuki the Mech',
+        url: '/mizuki-og.png',
+        width: 1200,
+        height: 630,
+        alt: 'Mizuki the Mech — fixed-price GitHub maintenance',
       },
     ],
   },
   twitter: {
-    card: 'summary',
+    card: 'summary_large_image',
     title: 'Mizuki the Mech — fixed-price GitHub maintenance',
     description:
       'Submit a scoped public GitHub issue. Receive a validated pull request reviewed by a separate AI reviewer, or a full refund of the quoted USDC payment.',
-    images: ['/mizuki-avatar.jpg'],
+    images: ['/mizuki-og.png'],
   },
   icons: {
     icon: [{ url: '/mizuki-icon-64.png', type: 'image/png', sizes: '64x64' }],

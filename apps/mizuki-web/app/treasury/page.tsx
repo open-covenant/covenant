@@ -10,15 +10,17 @@ import {
   stateLabel,
   truncateAddress,
 } from '@/lib/format';
+import { pageMetadata } from '@/lib/page-metadata';
 import type { LedgerEntry } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
   title: 'Refund reserve and financial records',
   description:
     'View refund reserve coverage, customer refund obligations, recorded transactions, and allocation plans.',
-};
+  path: '/treasury',
+});
 
 export default async function TreasuryPage() {
   const result = await getTreasury();

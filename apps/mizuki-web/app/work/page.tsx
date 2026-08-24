@@ -3,14 +3,16 @@ import { IntakeGate } from '@/components/intake-gate';
 import { JobLookup } from '@/components/job-lookup';
 import { QuoteWorkflow } from '@/components/quote-workflow';
 import { getAdmission } from '@/lib/api';
+import { pageMetadata } from '@/lib/page-metadata';
 
 export const dynamic = 'force-dynamic';
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
   title: 'Submit an issue',
   description:
     'Get a fixed USDC quote for a small, authorized issue in a public GitHub repository.',
-};
+  path: '/work',
+});
 
 export default async function WorkPage() {
   const admission = await getAdmission();

@@ -1,10 +1,12 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { pageMetadata } from '@/lib/page-metadata';
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
   title: 'Support',
   description: 'Get help with a Mizuki quote, job, refund, bounty, or public record.',
-};
+  path: '/support',
+});
 
 export default function SupportPage() {
   return (

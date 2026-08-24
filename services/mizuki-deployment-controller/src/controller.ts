@@ -795,7 +795,7 @@ export class DeploymentController {
       target === 'shadow'
         ? operation.shadowServiceFingerprint
         : operation.productionServiceFingerprint;
-    if (!expectedFingerprint || serviceFingerprint(service) !== expectedFingerprint) {
+    if (!expectedFingerprint || !matchesServiceFingerprint(service, expectedFingerprint)) {
       throw new ControllerError(
         'render_service_drift',
         'Render service configuration changed',
@@ -863,7 +863,7 @@ export class DeploymentController {
       target === 'shadow'
         ? operation.shadowServiceFingerprint
         : operation.productionServiceFingerprint;
-    if (!expectedFingerprint || serviceFingerprint(service) !== expectedFingerprint) {
+    if (!expectedFingerprint || !matchesServiceFingerprint(service, expectedFingerprint)) {
       throw new ControllerError(
         'render_service_drift',
         'Render service configuration changed',
@@ -1350,6 +1350,26 @@ function serviceFingerprint(service: RenderService): string {
     type: service.type,
     autoDeploy: service.autoDeploy,
     imageRepository: serviceImageRepository(service.imagePath),
+    registryCredential: service.registryCredential ?? null,
+    runtime: service.serviceDetails.runtime,
+    region: service.serviceDetails.region,
+    numInstances: service.serviceDetails.numInstances ?? null,
+    url: service.serviceDetails.url ?? null,
+    suspended: service.suspended,
+  });
+}
+
+function matchesServiceFingerprint(service: RenderService, expected: string): boolean {
+  if (serviceFingerprint(service) === expected) return true;
+  return legacyServiceFingerprint(service) === expected;
+}
+
+function legacyServiceFingerprint(service: RenderService): string {
+  return requestHash({
+    id: service.id,
+    type: service.type,
+    autoDeploy: service.autoDeploy,
+    imagePath: service.imagePath,
     registryCredential: service.registryCredential ?? null,
     runtime: service.serviceDetails.runtime,
     region: service.serviceDetails.region,

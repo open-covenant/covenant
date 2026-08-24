@@ -65,11 +65,14 @@ const gatewayReadinessSchema = z
     dependencies: z
       .object({
         model: gatewayEvidenceSchema,
+        balance: gatewayEvidenceSchema,
         sandbox: gatewayEvidenceSchema,
         tariff: gatewayEvidenceSchema,
       })
       .strict(),
-    failed: z.array(z.enum(['model', 'sandbox', 'tariff', 'stale', 'ledger', 'runStore'])),
+    failed: z.array(
+      z.enum(['model', 'balance', 'sandbox', 'tariff', 'stale', 'ledger', 'runStore']),
+    ),
     model: z.string().min(1),
     backend: z.enum(['anthropic', 'openai', 'usepod']),
     provider: z.string().min(1),
@@ -107,6 +110,7 @@ export class JobProcessor {
       status.model !== this.config.usePodImplementationModel ||
       status.failed.length > 0 ||
       !status.dependencies.model.ok ||
+      !status.dependencies.balance.ok ||
       !status.dependencies.sandbox.ok ||
       !status.dependencies.tariff.ok ||
       !status.storage.ledger ||

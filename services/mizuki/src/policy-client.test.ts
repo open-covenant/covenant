@@ -49,10 +49,12 @@ const liabilityAdmission = {
   installationId: 777,
   repositorySelection: 'selected' as const,
   permissions: {
+    checks: 'read' as const,
     contents: 'read' as const,
     issues: 'read' as const,
     metadata: 'read' as const,
     pull_requests: 'read' as const,
+    statuses: 'read' as const,
   },
   tokenRepositories: 1 as const,
   tokenExpiresAt: '2026-08-22T01:00:00.000Z',
@@ -69,10 +71,12 @@ describe('PolicySignerClient', () => {
       installationId: 777,
       repositorySelection: 'selected',
       permissions: {
+        checks: 'read',
         contents: 'read',
         issues: 'read',
         metadata: 'read',
         pull_requests: 'read',
+        statuses: 'read',
       },
       tokenRepositories: 1,
       tokenExpiresAt: '2026-08-22T01:00:00.000Z',
@@ -136,10 +140,12 @@ describe('PolicySignerClient', () => {
       installationId: 777,
       repositorySelection: 'selected',
       permissions: {
+        checks: 'read',
         contents: 'read',
         issues: 'read',
         metadata: 'read',
         pull_requests: 'read',
+        statuses: 'read',
       },
       tokenRepositories: 1,
       tokenExpiresAt: '2026-08-22T01:00:00.000Z',
@@ -151,7 +157,7 @@ describe('PolicySignerClient', () => {
       client({
         ...evidence,
         repository: 'example/project',
-        permissions: { ...evidence.permissions, checks: 'read' },
+        permissions: { ...evidence.permissions, actions: 'read' },
       }).assertRepositoryReady('example/project'),
     ).rejects.toThrow();
   });
@@ -174,10 +180,12 @@ describe('PolicySignerClient', () => {
       installationId: 777,
       repositorySelection: 'selected',
       permissions: {
+        checks: 'read',
         contents: 'read',
         issues: 'read',
         metadata: 'read',
         pull_requests: 'read',
+        statuses: 'read',
       },
       tokenRepositories: 1,
       tokenExpiresAt: '2026-08-22T01:00:00.000Z',
@@ -259,10 +267,12 @@ describe('PolicySignerClient', () => {
       installationId: 777,
       repositorySelection: 'selected' as const,
       permissions: {
+        checks: 'read' as const,
         contents: 'read' as const,
         issues: 'read' as const,
         metadata: 'read' as const,
         pull_requests: 'read' as const,
+        statuses: 'read' as const,
       },
       tokenRepositories: 1 as const,
       tokenExpiresAt: '2026-08-22T01:00:00.000Z',
@@ -474,11 +484,23 @@ describe('PolicySignerClient', () => {
         jobAuthoritySeed: authoritySeedBase64,
       },
       request as typeof fetch,
+      60_000,
+      () => new Date('2026-08-22T00:00:00.000Z'),
     );
     const evidence = {
+      repository: 'example/project',
+      issueNumber: 17,
       pullRequestNumber: 23,
+      mergeCommitSha: 'f'.repeat(40),
       reviewedHeadSha: 'a'.repeat(40),
+      reviewedBaseSha: 'd'.repeat(40),
+      reviewedBaseRef: 'main',
       reviewedDiffHash: 'b'.repeat(64),
+      reviewReceiptId: '77777777-7777-4777-8777-777777777777',
+      reviewReceiptHash: 'e'.repeat(64),
+      reviewModel: 'independent-reviewer',
+      reviewRoute: 'marketplace' as const,
+      reviewedAt: '2026-08-21T23:59:00.000Z',
     };
 
     await expect(
@@ -490,9 +512,42 @@ describe('PolicySignerClient', () => {
         headers: expect.objectContaining({
           'idempotency-key': 'mizuki-escrow-release-11111111-1111-4111-8111-111111111111',
         }),
-        body: JSON.stringify(evidence),
+        body: expect.any(String),
       }),
     );
+    const body = JSON.parse(String(request.mock.calls[0]![1]?.body));
+    expect(body).toMatchObject({
+      ...evidence,
+      authorizationExpiresAt: '2026-08-22T00:05:00.000Z',
+      authorizationSignature: expect.any(String),
+    });
+    const message = [
+      'Mizuki escrow release authorization',
+      'Version: 1',
+      'Escrow: 11111111-1111-4111-8111-111111111111',
+      'Repository: example/project',
+      'Issue: 17',
+      'Pull Request: 23',
+      `Merge Commit: ${'f'.repeat(40)}`,
+      `Reviewed Head: ${'a'.repeat(40)}`,
+      `Reviewed Base SHA: ${'d'.repeat(40)}`,
+      'Reviewed Base Ref: main',
+      `Reviewed Diff: ${'b'.repeat(64)}`,
+      'Review Receipt: 77777777-7777-4777-8777-777777777777',
+      `Review Receipt Hash: ${'e'.repeat(64)}`,
+      'Review Model: independent-reviewer',
+      'Review Route: marketplace',
+      'Reviewed At: 2026-08-21T23:59:00.000Z',
+      'Expires At: 2026-08-22T00:05:00.000Z',
+    ].join('\n');
+    expect(
+      verify(
+        null,
+        Buffer.from(message),
+        createPublicKey(authorityPrivateKey),
+        Buffer.from(body.authorizationSignature, 'base64'),
+      ),
+    ).toBe(true);
   });
 
   it('signs a normalized merged-PR liability discharge', async () => {

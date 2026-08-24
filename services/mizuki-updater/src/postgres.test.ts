@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { newUpgrade } from './domain.js';
 import { PostgresUpgradeRepository } from './postgres.js';
+import { proposalFixture } from './test-utils.js';
 
 const databaseUrl = process.env.MIZUKI_UPDATER_TEST_DATABASE_URL;
 
@@ -43,6 +45,7 @@ describe.skipIf(!databaseUrl)('Postgres schema migrations', () => {
           { version: 1, name: 'initial_upgrade_state_machine' },
           { version: 2, name: 'production_promotion_soak' },
           { version: 3, name: 'durable_promotion_control' },
+          { version: 4, name: 'crash_safe_promotion_reservations' },
         ]);
         expect(history.rows.every((row) => /^[a-f0-9]{64}$/.test(String(row.checksum)))).toBe(true);
 
@@ -65,9 +68,11 @@ describe.skipIf(!databaseUrl)('Postgres schema migrations', () => {
               AND conname = 'mizuki_upgrades_state_check'`,
         );
         expect(constraint.rows[0]?.definition).toContain('verifying_promotion');
+        expect(constraint.rows[0]?.definition).toContain('merge_triggering');
 
         const control = await inspection.query(
-          `SELECT promotions_enabled, revision, reason, updated_by
+          `SELECT promotions_enabled, revision, reason, updated_by,
+                  active_upgrade_id, active_since
            FROM mizuki_updater_promotion_control WHERE singleton = true`,
         );
         expect(control.rows).toEqual([
@@ -76,6 +81,8 @@ describe.skipIf(!databaseUrl)('Postgres schema migrations', () => {
             revision: 0,
             reason: 'promotions are closed until explicitly enabled',
             updated_by: 'system',
+            active_upgrade_id: null,
+            active_since: null,
           },
         ]);
 
@@ -104,11 +111,24 @@ describe.skipIf(!databaseUrl)('Postgres schema migrations', () => {
     }
   });
 
-  it('persists promotion control and serializes pause against admission', async () => {
+  it('persists and audits a non-expiring promotion reservation', async () => {
     const first = new PostgresUpgradeRepository(scopedUrl);
     const second = new PostgresUpgradeRepository(scopedUrl);
     await Promise.all([first.migrate(), second.migrate()]);
     try {
+      const firstFixture = proposalFixture();
+      const firstUpgrade = await first.reserve(
+        newUpgrade(firstFixture.proposal, 'postgres-promotion-1'),
+        new Date('2026-08-22T12:00:00.000Z'),
+      );
+      const secondFixture = proposalFixture();
+      secondFixture.proposal.manifest.proposalId = 'postgres-upgrade-2';
+      secondFixture.proposal.manifest.repository.headBranch = 'mizuki/postgres-upgrade-2';
+      const secondProposal = secondFixture.signManifest(secondFixture.proposal.manifest);
+      const secondUpgrade = await second.reserve(
+        newUpgrade(secondProposal, 'postgres-promotion-2'),
+        new Date('2026-08-22T12:00:00.000Z'),
+      );
       const initial = await first.promotionControl();
       expect(initial).toMatchObject({ promotionsEnabled: false, revision: 0 });
       await first.updatePromotionControl(
@@ -120,34 +140,76 @@ describe.skipIf(!databaseUrl)('Postgres schema migrations', () => {
         },
         new Date('2026-08-22T12:00:00.000Z'),
       );
-
-      const actionStarted = deferred<void>();
-      const finishAction = deferred<void>();
-      const admission = first.withPromotionAdmission(async () => {
-        actionStarted.resolve();
-        await finishAction.promise;
-        return 'promoted';
+      await expect(
+        first.reservePromotion(firstUpgrade.id, new Date('2026-08-22T12:00:01.000Z')),
+      ).resolves.toMatchObject({
+        reserved: true,
+        control: { revision: 2, activeUpgradeId: firstUpgrade.id },
       });
-      await actionStarted.promise;
-      const pause = second.updatePromotionControl(
-        {
-          promotionsEnabled: false,
-          expectedRevision: 1,
-          reason: 'incident response pause',
-          updatedBy: 'write_authority',
-        },
-        new Date('2026-08-22T12:01:00.000Z'),
+      await expect(
+        second.reservePromotion(secondUpgrade.id, new Date('2026-08-22T12:00:02.000Z')),
+      ).resolves.toMatchObject({
+        reserved: false,
+        reason: 'busy',
+        control: { revision: 2, activeUpgradeId: firstUpgrade.id },
+      });
+      await expect(
+        second.updatePromotionControl(
+          {
+            promotionsEnabled: false,
+            expectedRevision: 2,
+            reason: 'incident response pause',
+            updatedBy: 'write_authority',
+          },
+          new Date('2026-08-22T12:01:00.000Z'),
+        ),
+      ).resolves.toMatchObject({
+        promotionsEnabled: false,
+        revision: 3,
+        activeUpgradeId: firstUpgrade.id,
+      });
+
+      expect(
+        await first.acquireLease(
+          firstUpgrade.id,
+          'postgres-test-worker',
+          new Date('2026-08-22T12:01:01.000Z'),
+          30_000,
+        ),
+      ).toBe(true);
+      await first.transition(
+        firstUpgrade.id,
+        firstUpgrade.version,
+        'postgres-test-worker',
+        { state: 'failed' },
+        { event: 'fixture_failure' },
+        new Date('2026-08-22T12:01:01.000Z'),
       );
       await expect(
-        Promise.race([
-          pause.then(() => 'paused'),
-          new Promise<string>((resolve) => setTimeout(() => resolve('waiting'), 50)),
-        ]),
-      ).resolves.toBe('waiting');
+        second.reservePromotion(secondUpgrade.id, new Date('2026-08-22T12:01:02.000Z')),
+      ).resolves.toMatchObject({
+        reserved: false,
+        reason: 'disabled',
+        control: { revision: 4, activeUpgradeId: null },
+      });
+      await expect(first.promotionControlAudit()).resolves.toMatchObject([
+        { revision: 0, activeUpgradeId: null },
+        { revision: 1, activeUpgradeId: null },
+        { revision: 2, activeUpgradeId: firstUpgrade.id },
+        { revision: 3, activeUpgradeId: firstUpgrade.id },
+        { revision: 4, activeUpgradeId: null },
+      ]);
 
-      finishAction.resolve();
-      await expect(admission).resolves.toEqual({ admitted: true, value: 'promoted' });
-      await expect(pause).resolves.toMatchObject({ promotionsEnabled: false, revision: 2 });
+      const inspection = new Pool({ connectionString: scopedUrl });
+      try {
+        await expect(
+          inspection.query(
+            `UPDATE mizuki_updater_promotion_control_audit SET reason = 'tampered' WHERE revision = 2`,
+          ),
+        ).rejects.toThrow(/append-only/);
+      } finally {
+        await inspection.end();
+      }
     } finally {
       await Promise.all([first.close(), second.close()]);
     }
@@ -157,26 +219,15 @@ describe.skipIf(!databaseUrl)('Postgres schema migrations', () => {
       await reopened.migrate();
       await expect(reopened.promotionControl()).resolves.toMatchObject({
         promotionsEnabled: false,
-        revision: 2,
-        reason: 'incident response pause',
-      });
-      await expect(reopened.withPromotionAdmission(async () => 'blocked')).resolves.toMatchObject({
-        admitted: false,
-        control: { revision: 2 },
+        revision: 4,
+        reason: 'terminal promotion reservation reconciled: failed',
+        activeUpgradeId: null,
       });
     } finally {
       await reopened.close();
     }
   });
 });
-
-function deferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((settle) => {
-    resolve = settle;
-  });
-  return { promise, resolve };
-}
 
 const legacySchema = `
   CREATE TABLE mizuki_upgrades (

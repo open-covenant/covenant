@@ -55,6 +55,13 @@ describe('deployment hooks', () => {
       mergeSha,
       operationId: 'operation-1',
     });
+    await gateway.finalize(
+      '00000000-0000-4000-8000-000000000001',
+      'shadow-1',
+      manifest,
+      mergeSha,
+      'operation-1',
+    );
     await gateway.rollback(
       '00000000-0000-4000-8000-000000000001',
       'shadow-1',
@@ -71,9 +78,12 @@ describe('deployment hooks', () => {
       'idempotency-key': '00000000-0000-4000-8000-000000000001:promote',
     });
     expect(requests[4].init.headers).toMatchObject({
+      'idempotency-key': '00000000-0000-4000-8000-000000000001:finalize',
+    });
+    expect(requests[5].init.headers).toMatchObject({
       'idempotency-key': '00000000-0000-4000-8000-000000000001:rollback',
     });
-    expect(JSON.parse(String(requests[4].init.body))).toMatchObject({
+    expect(JSON.parse(String(requests[5].init.body))).toMatchObject({
       promotionOperationId: 'operation-1',
     });
   });
@@ -150,6 +160,7 @@ function createGateway(): HttpDeploymentGateway {
     shadowHealthUrlTemplate: 'https://deploy.example.test/shadow-health/{deploymentId}/health',
     promotionHealthUrlTemplate: 'https://deploy.example.test/production/{deploymentId}/health',
     promoteUrl: 'https://deploy.example.test/promote',
+    finalizeUrl: 'https://deploy.example.test/finalize',
     rollbackUrl: 'https://deploy.example.test/rollback',
     token: 'd'.repeat(32),
     timeoutMs: 1_000,

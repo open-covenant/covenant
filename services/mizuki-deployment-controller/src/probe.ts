@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { ControllerError } from './domain.js';
 
-const probeSchema = z
+const productionProbeSchema = z
   .object({
     status: z.literal('ok'),
     service: z.literal('mizuki-api'),
@@ -16,22 +16,27 @@ const probeSchema = z
   })
   .strict();
 
+const shadowProbeSchema = z.object({ ok: z.literal(true) }).strict();
+
 export interface ApplicationGateway {
   probe(serviceId: string): Promise<void>;
 }
 
 export interface HttpApplicationGatewayConfig {
-  targets: Map<string, string>;
-  token: string;
+  targets: Map<string, ApplicationProbeTarget>;
   timeoutMs: number;
 }
+
+export type ApplicationProbeTarget =
+  | { role: 'shadow'; url: string }
+  | { role: 'production'; url: string; token: string };
 
 export class HttpApplicationGateway implements ApplicationGateway {
   constructor(private readonly config: HttpApplicationGatewayConfig) {}
 
   async probe(serviceId: string): Promise<void> {
-    const url = this.config.targets.get(serviceId);
-    if (!url) {
+    const target = this.config.targets.get(serviceId);
+    if (!target) {
       throw new ControllerError(
         'probe_service_denied',
         'Application probe target is not allowed',
@@ -40,13 +45,9 @@ export class HttpApplicationGateway implements ApplicationGateway {
     }
     let response: Response;
     try {
-      response = await fetch(url, {
+      response = await fetch(target.url, {
         method: 'GET',
-        headers: {
-          accept: 'application/json',
-          authorization: `Bearer ${this.config.token}`,
-          'cache-control': 'no-store',
-        },
+        headers: probeHeaders(target),
         redirect: 'error',
         signal: AbortSignal.timeout(this.config.timeoutMs),
       });
@@ -84,7 +85,8 @@ export class HttpApplicationGateway implements ApplicationGateway {
         502,
       );
     }
-    const parsed = probeSchema.safeParse(payload);
+    const schema = target.role === 'shadow' ? shadowProbeSchema : productionProbeSchema;
+    const parsed = schema.safeParse(payload);
     if (!parsed.success) {
       throw new ControllerError(
         'application_probe_unhealthy',
@@ -93,6 +95,12 @@ export class HttpApplicationGateway implements ApplicationGateway {
       );
     }
   }
+}
+
+function probeHeaders(target: ApplicationProbeTarget): Record<string, string> {
+  const headers = { accept: 'application/json', 'cache-control': 'no-store' };
+  if (target.role === 'shadow') return headers;
+  return { ...headers, authorization: `Bearer ${target.token}` };
 }
 
 async function readLimited(response: Response, limit: number): Promise<string> {

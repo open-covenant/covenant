@@ -21,6 +21,7 @@ It is deliberately deployed separately from the Mizuki application. The applicat
 - Refund-token balance, bounty-authority balance, and rent facts must agree exactly across both finalized RPC views. A conservative minimum is not used to hide provider disagreement.
 - Contributor escrow transactions are built by the signer against one configured program. Serialized transactions and arbitrary instruction data are never accepted from callers.
 - Refunds and contributor escrow use distinct authority keys. Startup fails if either key does not match its configured public authority or if the two keys are the same.
+- Both RPC endpoints must use different provider-controlled domains in production. Startup readiness and every financial read, preparation, and broadcast require both providers to report the canonical mainnet-beta genesis hash.
 - The finalized escrow program must use loader v3 with no upgrade authority. Its executable bytes must match one pinned SHA-256 hash on both RPC providers before every escrow signature.
 - Only configured token programs, the configured escrow program, the associated-token program, the memo program, and required system instructions can appear in a signed transaction.
 - Escrow lamports are calculated from a fixed USD request only when two independently configured, freshness-bounded SOL/USD feeds agree within five percent by default.
@@ -43,7 +44,7 @@ The bearer token protects availability. Transaction safety does not rely on the 
 4. Broadcast those persisted bytes.
 5. Reconcile the signature to finalized chain state.
 
-If the process exits after step 3, the same signed bytes are broadcast after restart. If it exits during step 4, the stored signature is reconciled first. An unobserved transaction is rebuilt only after its blockhash is definitively expired. Re-broadcasting identical bytes cannot create a second transfer.
+If the process exits after step 3, the same signed bytes are broadcast after restart. If it exits during step 4, the stored signature is reconciled first and only the identical signed bytes may be rebroadcast while its blockhash remains valid. Once an attempted broadcast expires without authoritative history, the operation remains locked in reconciliation. RPC absence is not proof that a transfer did not land and never authorizes a replacement signature.
 
 ## API
 
@@ -53,7 +54,7 @@ All `/v1` endpoints require `Authorization: Bearer <token>`. Mutation endpoints 
 
 This recovery-only route accepts only the admission evidence hash. Admission creation previously validated the base64 x402 authorization, exact mainnet USDC route, admitted quote resource, and embedded payer-signed v0 transaction, then discarded the replayable authorization after deriving its non-broadcastable binding.
 
-Each RPC independently paginates finalized treasury-token-account history back to the admission time boundary and compares the exact serialized message plus the existing non-fee-payer signature. Scans are capped at 4,096 signatures per provider. Reaching that cap before the time boundary returns retryable `settlement_scan_exhausted`, never `settlement_not_found`, so core cannot rebroadcast under a history flood. Both providers must identify identical settlement facts.
+Each RPC independently paginates finalized treasury-token-account history back to the admission time boundary and compares the exact serialized message plus the existing non-fee-payer signature. Scans are capped at 4,096 signatures per provider. Reaching that cap before the time boundary returns retryable `settlement_scan_exhausted`, never false absence. Core may then ask the facilitator to replay only the exact durably admitted wire transaction; the signer still verifies the returned signature and finalized settlement against the original authorization before registering liability. No replacement transaction or facilitator-only receipt can authorize paid work. Both providers must identify identical settlement facts.
 
 ### Refund authorization
 
@@ -185,13 +186,27 @@ The signer verifies the stored challenge, wallet signature, challenge freshness,
 
 ```json
 {
+  "repository": "owner/repository",
+  "issueNumber": 17,
   "pullRequestNumber": 23,
+  "mergeCommitSha": "<merged-commit-sha>",
   "reviewedHeadSha": "<reviewed-pr-head-sha>",
-  "reviewedDiffHash": "<sha256-of-reviewed-diff>"
+  "reviewedBaseSha": "<accepted-base-sha>",
+  "reviewedBaseRef": "main",
+  "reviewedDiffHash": "<sha256-of-reviewed-diff>",
+  "reviewReceiptId": "00000000-0000-4000-8000-000000000000",
+  "reviewReceiptHash": "<sha256-of-application-review-receipt>",
+  "reviewModel": "<configured-marketplace-model>",
+  "reviewRoute": "marketplace",
+  "reviewedAt": "2026-08-22T12:03:00.000Z",
+  "authorizationExpiresAt": "2026-08-22T12:08:00.000Z",
+  "authorizationSignature": "<base64-encoded-job-authority-signature>"
 }
 ```
 
-The signer queries the fixed official GitHub GraphQL and REST endpoints using a dedicated GitHub App. It discovers the installation for the exact repository and mints a short-lived token restricted to that repository with read-only contents, issues, metadata, and pull-request permissions. It verifies repository, bound author, authorization time, merge state, merge commit, authoritative closing-issue references, merge time, exact reviewed head, and the SHA-256 commitment of the reviewed diff. It brackets the diff read with matching merge-evidence snapshots. Release is rejected when finalized chain time is at or after `claimExpiresAt`. The caller cannot supply a merge receipt; the signer derives and persists it before signing.
+The job-authority signature is only a request credential. The signer independently queries the fixed official GitHub GraphQL and REST endpoints using its dedicated GitHub App, then submits the exact GitHub-fetched diff to its separately funded marketplace reviewer. It verifies the immutable issue terms, bound author, merge state, merge commit ancestry, closing-issue references, successful checks, latest-head approval by a non-claimant maintainer, exact safe file list, and reviewed diff hash. Merge ancestry binds the accepted base even after the branch advances. Binary, truncated, forbidden-path, oversized, or policy-expanding patches fail before the paid call.
+
+The durable release record is reserved before the paid review and marked submitted before provider handoff. A submitted attempt without a durable receipt is indeterminate and is never billed again. Any rejected or indeterminate release tombstones further release attempts for that escrow; an eligible refund may still supersede it. Release is rejected when finalized chain time is at or after `claimExpiresAt`.
 
 ### `POST /v1/escrows/:operationId/refund`
 
@@ -214,7 +229,7 @@ Returns the durable operation state without exposing signed wire bytes or intern
 
 Returns independently observed finalized refund capacity after subtracting every outstanding registered liability and the consumed rolling liability limit. A liability remains pending while its refund is prepared, submitted, or reconciling and is removed only after finalized refund state, preventing double subtraction. The authenticated response includes `refundTreasury`, `refundMint`, `refundDecimals`, `finalizedBalanceRaw`, `pendingRefundRaw`, `treasuryAvailableRefundRaw`, `remainingRefundLimitUsdCents`, and `availableRefundRaw`; raw amounts are decimal strings. `availableRefundRaw` is the lower of protected treasury capacity and rolling-limit capacity. Dependency or RPC disagreement returns HTTP 503 with `healthy: false`.
 
-Readiness is healthy only when the database, both RPC providers, both named price observations, the configured GitHub App identity and read-only permission contract, the immutable pinned escrow program, refund-token custody, and bounty custody all pass a fresh probe. Repository installation access is checked separately whenever repository evidence is requested.
+Readiness is healthy only when the database, both provider-independent RPCs report the canonical mainnet-beta genesis hash, both named price observations agree, the configured GitHub App identity and read-only permission contract are exact, the funded independent-review route passes its model and balance floor, and the immutable pinned escrow program, refund-token custody, and bounty custody all pass a fresh probe. Repository installation access is checked separately whenever repository evidence is requested.
 
 ### `POST /v1/readiness/repository`
 
@@ -241,13 +256,13 @@ pnpm build
 
 Mock adapters are available to the test suite through dependency injection. The HTTP entry point intentionally cannot start with them. Local server testing therefore requires local Postgres, RPC, signer, asset, program, and price-service configuration.
 
-Production requires Postgres, distinct refund and escrow Solana keys, the controlled refund-token treasury, a separately budgeted SOL escrow pool, the escrow program configuration, two independent Solana RPC providers, two independent price endpoints, and a dedicated public GitHub App that external maintainers can install. The App must grant only read access to contents, issues, metadata, and pull requests. Production primary and secondary providers must use different hostnames; different paths or credentials on one hostname do not establish independence. Remote database connections must require TLS except for Render's single-label `dpg-*` private-network host; RPC and price endpoints must use HTTPS unless they target loopback. Database migrations and one full dependency probe run at startup. A degraded startup is reported through stderr and HTTP 503 readiness while the process remains available for durable recovery and already-authorized refund work. Use a database role scoped only to the signer schema.
+Production requires Postgres, distinct refund and escrow Solana keys, the controlled refund-token treasury, a separately budgeted SOL escrow pool, the escrow program configuration, two independent Solana RPC providers, two independent price endpoints, a funded marketplace reviewer, and a dedicated public GitHub App that external maintainers can install. The App must grant only read access to checks, contents, issues, metadata, pull requests, and statuses. Production primary and secondary providers must use different registrable domains; redirects, different paths, credentials, private-suffix tenants, or subdomains under one provider domain do not establish independence. Remote database connections must require TLS except for Render's single-label `dpg-*` private-network host; RPC and price endpoints must use HTTPS unless they target loopback. Database migrations and one full dependency probe run at startup. A degraded startup is reported through stderr and HTTP 503 readiness while the process remains available for durable recovery and already-authorized refund work. Use a database role scoped only to the signer schema.
 
 Every Solana JSON-RPC HTTP request from both independent connections is capped by `MIZUKI_SIGNER_RPC_TIMEOUT_MS`. The default and production Blueprint value are `5000`; configuration rejects values below `1000` or above `10000`. Caller cancellation is preserved, RPC timeouts and HTTP 429/5xx responses become retryable policy failures, and web3's internal rate-limit retry is disabled so only the single scheduled recovery runner retries durable work.
 
 Shutdown stops recovery scheduling and new HTTP intake, waits at most 30 seconds for the one active recovery, then lets active HTTP requests drain. The database pool closes only after recovery and HTTP work have settled, so teardown cannot race a live leased mutation. If recovery misses the grace, HTTP connections are forced closed, pool closure is skipped, and the process exits non-zero; the operating system closes its sockets and the durable lease is recovered after restart. A 90-second process deadline keeps the complete SIGTERM path below Render's 120-second termination window.
 
-Required production settings without defaults are `MIZUKI_SIGNER_AUTH_TOKEN`, `MIZUKI_SIGNER_DATABASE_URL`, `MIZUKI_SIGNER_RPC_URL`, `MIZUKI_SIGNER_SECONDARY_RPC_URL`, `MIZUKI_REFUND_PRIVATE_KEY_JSON`, `MIZUKI_ESCROW_PRIVATE_KEY_JSON`, `MIZUKI_SIGNER_GITHUB_APP_ID`, `MIZUKI_SIGNER_GITHUB_PRIVATE_KEY`, `MIZUKI_JOB_AUTHORITY_PUBLIC_KEY`, `MIZUKI_REFUND_TREASURY`, `MIZUKI_ESCROW_AUTHORITY`, `MIZUKI_REFUND_MINT`, `MIZUKI_ESCROW_PROGRAM_ID`, `MIZUKI_ESCROW_PROGRAM_DATA_SHA256`, `MIZUKI_SOL_USD_PRICE_URL`, and `MIZUKI_SOL_USD_SECONDARY_PRICE_URL`. The GitHub private-key value must be the literal RSA PEM generated for the dedicated App. Set `NODE_ENV=production` and `MIZUKI_SIGNER_MOCK_MODE=false`. Either price token is optional when its endpoint does not authenticate requests. Every bounded policy setting and its default is recorded in `.env.example`; production operators should set them explicitly rather than relying on defaults.
+Required production settings without defaults are `MIZUKI_SIGNER_AUTH_TOKEN`, `MIZUKI_SIGNER_DATABASE_URL`, `MIZUKI_SIGNER_RPC_URL`, `MIZUKI_SIGNER_SECONDARY_RPC_URL`, `MIZUKI_REFUND_PRIVATE_KEY_JSON`, `MIZUKI_ESCROW_PRIVATE_KEY_JSON`, `MIZUKI_SIGNER_GITHUB_APP_ID`, `MIZUKI_SIGNER_GITHUB_PRIVATE_KEY`, `MIZUKI_SIGNER_REVIEW_BASE_URL`, `MIZUKI_SIGNER_REVIEW_API_KEY`, `MIZUKI_SIGNER_REVIEW_MODEL`, `MIZUKI_JOB_AUTHORITY_PUBLIC_KEY`, `MIZUKI_REFUND_TREASURY`, `MIZUKI_ESCROW_AUTHORITY`, `MIZUKI_REFUND_MINT`, `MIZUKI_ESCROW_PROGRAM_ID`, `MIZUKI_ESCROW_PROGRAM_DATA_SHA256`, `MIZUKI_SOL_USD_PRICE_URL`, and `MIZUKI_SOL_USD_SECONDARY_PRICE_URL`. The GitHub private-key value must be the literal RSA PEM generated for the dedicated App. Set `NODE_ENV=production` and `MIZUKI_SIGNER_MOCK_MODE=false`. Either price token is optional when its endpoint does not authenticate requests. Every bounded policy setting and its default is recorded in `.env.example`; production operators should set them explicitly rather than relying on defaults.
 
 ## Devnet artifact canary
 

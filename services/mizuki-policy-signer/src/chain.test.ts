@@ -14,6 +14,7 @@ import {
 } from '@solana/web3.js';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  assertMainnetGenesisHashes,
   assertInstructionProgramSequence,
   assertRpcSettlementIdentity,
   authorizedSettlementTransaction,
@@ -27,6 +28,7 @@ import {
   loaderV3ProgramDataAddress,
   matchesAuthorizedSettlement,
   sameSettlement,
+  SOLANA_MAINNET_GENESIS_HASH,
   SolanaChainGateway,
   verifySettlementTransfer,
   type SettlementTransferPolicy,
@@ -316,6 +318,18 @@ describe('payment authorization reconciliation', () => {
 });
 
 describe('transaction form policy', () => {
+  it('accepts only two canonical mainnet-beta genesis observations', () => {
+    expect(() =>
+      assertMainnetGenesisHashes(SOLANA_MAINNET_GENESIS_HASH, SOLANA_MAINNET_GENESIS_HASH),
+    ).not.toThrow();
+    expect(() =>
+      assertMainnetGenesisHashes(
+        SOLANA_MAINNET_GENESIS_HASH,
+        'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG',
+      ),
+    ).toThrowError(expect.objectContaining({ code: 'rpc_wrong_cluster' }));
+  });
+
   it('requires immutable loader-v3 program data and hashes only executable bytes', () => {
     const programDataAddress = Keypair.generate().publicKey;
     const program = Buffer.alloc(36);
@@ -599,6 +613,18 @@ describe('independent RPC finality', () => {
 });
 
 describe('RPC transport bound', () => {
+  it('forbids redirects before sending RPC requests', async () => {
+    const fetcher = vi.fn(async (_input: Parameters<FetchFn>[0], init: Parameters<FetchFn>[1]) => {
+      expect(init?.redirect).toBe('error');
+      return new Response('{}', { status: 200 });
+    }) as unknown as FetchFn;
+
+    await expect(boundedRpcFetch(5_000, fetcher)('https://rpc.example')).resolves.toBeInstanceOf(
+      Response,
+    );
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
   it('aborts a stalled HTTP request and returns a retryable policy error', async () => {
     const fetcher = vi.fn(
       (_input: Parameters<FetchFn>[0], init: Parameters<FetchFn>[1]) =>
@@ -964,20 +990,30 @@ function escrowGateway(): {
     solFeeReserveLamports: 1_000_000,
   });
   const internals = gateway as unknown as {
+    readCapacityConsensus: () => Promise<{
+      refundRawAmount: string;
+      escrowLamports: string;
+      stateRentLamports: string;
+      vaultRentLamports: string;
+      guardRentLamports: string;
+    }>;
+    readRefundCapacityConsensus: () => Promise<string>;
+    verifyMainnetCluster: () => Promise<void>;
     verifyEscrowProgram: () => Promise<void>;
     connection: {
       getLatestBlockhash: () => Promise<{ blockhash: string; lastValidBlockHeight: number }>;
     };
   };
+  internals.verifyMainnetCluster = async () => undefined;
   internals.verifyEscrowProgram = async () => undefined;
-  gateway.capacity = async () => ({
+  internals.readCapacityConsensus = async () => ({
     refundRawAmount: '1000000000',
     escrowLamports: '100000000000',
     stateRentLamports: '2000000',
     vaultRentLamports: '1000000',
     guardRentLamports: '1500000',
   });
-  gateway.refundCapacity = async () => '1000000000';
+  internals.readRefundCapacityConsensus = async () => '1000000000';
   internals.connection.getLatestBlockhash = async () => ({
     blockhash: Keypair.generate().publicKey.toBase58(),
     lastValidBlockHeight: 100,

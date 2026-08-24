@@ -31,6 +31,7 @@ const idempotencyKeySchema = z
   .max(128)
   .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 const operationIdSchema = z.string().uuid();
+const MAX_REQUEST_BODY_BYTES = 128 * 1024;
 
 export interface HttpServerDependencies {
   service: PolicyService;
@@ -282,7 +283,9 @@ async function parseBody<T>(request: IncomingMessage, schema: ZodType<T>): Promi
   for await (const chunk of request) {
     const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     length += bytes.length;
-    if (length > 16_384) throw new PolicyError('body_too_large', 'Request body is too large', 413);
+    if (length > MAX_REQUEST_BODY_BYTES) {
+      throw new PolicyError('body_too_large', 'Request body is too large', 413);
+    }
     chunks.push(bytes);
   }
   try {

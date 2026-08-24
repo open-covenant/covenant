@@ -82,8 +82,21 @@ export const rollbackRequestSchema = z
   })
   .strict();
 
+export const finalizeRequestSchema = z
+  .object({
+    version: z.literal(1),
+    upgradeId: externalId,
+    proposalId: externalId,
+    deploymentId: externalId,
+    candidateSha: gitSha,
+    mergeSha: gitSha,
+    promotionOperationId: externalId,
+  })
+  .strict();
+
 export type ShadowRequest = z.infer<typeof shadowRequestSchema>;
 export type PromotionRequest = z.infer<typeof promotionRequestSchema>;
+export type FinalizeRequest = z.infer<typeof finalizeRequestSchema>;
 export type RollbackRequest = z.infer<typeof rollbackRequestSchema>;
 export type ActionState = 'reserved' | 'triggering' | 'triggered' | 'completed' | 'failed';
 
@@ -121,6 +134,7 @@ export interface DeploymentOperation {
   promotionStartedAt: Date | null;
   promotionDeployId: string | null;
   productionActive: boolean;
+  productionFinalizedAt: Date | null;
   rollbackIdempotencyKey: string | null;
   rollbackRequestHash: string | null;
   rollbackState: ActionState | null;

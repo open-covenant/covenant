@@ -11,7 +11,8 @@ import { UpdaterService } from './updater.js';
 import type { ArtifactVerifier } from './verification.js';
 import { ProposalVerifier } from './verification.js';
 
-const TOKEN = 'test-bearer-token-with-32-characters';
+const SUBMIT_TOKEN = 'test-submit-token-with-32-characters';
+const CONTROL_TOKEN = 'test-control-token-with-32-characters';
 const READ_TOKEN = 'test-read-only-token-with-32-characters';
 
 describe('updater HTTP service', () => {
@@ -55,7 +56,8 @@ describe('updater HTTP service', () => {
       service,
       repository,
       metrics,
-      authToken: TOKEN,
+      submitToken: SUBMIT_TOKEN,
+      controlToken: CONTROL_TOKEN,
       readToken: READ_TOKEN,
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -92,7 +94,8 @@ describe('updater HTTP service', () => {
     server = createUpdaterServer({
       repository,
       metrics: new UpdaterMetrics(),
-      authToken: TOKEN,
+      submitToken: SUBMIT_TOKEN,
+      controlToken: CONTROL_TOKEN,
       readToken: READ_TOKEN,
       operationalFailures: [
         'MIZUKI_UPDATER_GITHUB_PRIVATE_KEY',
@@ -125,7 +128,7 @@ describe('updater HTTP service', () => {
     expect(submitted.response.status).toBe(503);
     expect(submitted.body).toMatchObject({ error: { code: 'updater_not_ready' } });
 
-    const enabled = await updatePromotionControl(origin, TOKEN, 0, true);
+    const enabled = await updatePromotionControl(origin, CONTROL_TOKEN, 0, true);
     expect(enabled.status).toBe(503);
     await expect(repository.promotionControl()).resolves.toMatchObject({
       promotionsEnabled: false,
@@ -151,18 +154,18 @@ describe('updater HTTP service', () => {
     const readOnly = await updatePromotionControl(origin, READ_TOKEN, 0, true);
     expect(readOnly.status).toBe(401);
 
-    const enabled = await updatePromotionControl(origin, TOKEN, 0, true);
+    const enabled = await updatePromotionControl(origin, CONTROL_TOKEN, 0, true);
     expect(enabled.status).toBe(200);
     expect(await enabled.json()).toMatchObject({
       control: {
         promotionsEnabled: true,
         revision: 1,
         reason: 'controlled canary promotion',
-        updatedBy: 'write_authority',
+        updatedBy: expect.stringMatching(/^control:[a-f0-9]{16}$/),
       },
     });
 
-    const stale = await updatePromotionControl(origin, TOKEN, 0, false);
+    const stale = await updatePromotionControl(origin, CONTROL_TOKEN, 0, false);
     expect(stale.status).toBe(409);
     expect(await stale.json()).toMatchObject({
       error: { code: 'promotion_control_conflict' },
@@ -179,7 +182,7 @@ describe('updater HTTP service', () => {
     expect(replay.body.upgrade.id).toBe(id);
 
     const status = await fetch(`${origin}/v1/upgrades/${id}`, {
-      headers: { authorization: `Bearer ${TOKEN}` },
+      headers: { authorization: `Bearer ${READ_TOKEN}` },
     });
     expect(status.status).toBe(200);
     expect(await status.json()).toMatchObject({
@@ -209,7 +212,7 @@ describe('updater HTTP service', () => {
     });
 
     const audit = await fetch(`${origin}/v1/upgrades/${id}/audit`, {
-      headers: { authorization: `Bearer ${TOKEN}` },
+      headers: { authorization: `Bearer ${READ_TOKEN}` },
     });
     expect(audit.status).toBe(200);
     expect((await audit.json()).receipts.length).toBeGreaterThan(0);
@@ -224,7 +227,7 @@ describe('updater HTTP service', () => {
     const missingKey = await fetch(`${origin}/v1/upgrades`, {
       method: 'POST',
       headers: {
-        authorization: `Bearer ${TOKEN}`,
+        authorization: `Bearer ${SUBMIT_TOKEN}`,
         'content-type': 'application/json',
       },
       body: JSON.stringify(proposal),
@@ -241,7 +244,7 @@ describe('updater HTTP service', () => {
   it('protects Prometheus metrics with bearer authentication', async () => {
     expect((await fetch(`${origin}/metrics`)).status).toBe(401);
     const response = await fetch(`${origin}/metrics`, {
-      headers: { authorization: `Bearer ${TOKEN}` },
+      headers: { authorization: `Bearer ${READ_TOKEN}` },
     });
     expect(response.status).toBe(200);
     expect(await response.text()).toContain('mizuki_updater_upgrades_total');
@@ -249,7 +252,7 @@ describe('updater HTTP service', () => {
 
   it('returns not found for a proposal that has not been submitted', async () => {
     const response = await fetch(`${origin}/v1/proposals/missing-proposal`, {
-      headers: { authorization: `Bearer ${TOKEN}` },
+      headers: { authorization: `Bearer ${READ_TOKEN}` },
     });
     expect(response.status).toBe(404);
     expect(await response.json()).toMatchObject({ error: { code: 'upgrade_not_found' } });
@@ -267,18 +270,30 @@ describe('updater HTTP service', () => {
     });
     expect(response.status).toBe(401);
   });
+
+  it('rejects every cross-role credential substitution', async () => {
+    const controlAsSubmit = await submitWithToken(
+      origin,
+      proposal,
+      'cross-role-control',
+      CONTROL_TOKEN,
+    );
+    expect(controlAsSubmit.status).toBe(401);
+
+    const submitAsControl = await updatePromotionControl(origin, SUBMIT_TOKEN, 0, true);
+    expect(submitAsControl.status).toBe(401);
+
+    for (const token of [SUBMIT_TOKEN, CONTROL_TOKEN]) {
+      const response = await fetch(`${origin}/v1/admin/promotion-control/audit`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(response.status).toBe(401);
+    }
+  });
 });
 
 async function submit(origin: string, body: unknown, idempotencyKey: string) {
-  const response = await fetch(`${origin}/v1/upgrades`, {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${TOKEN}`,
-      'content-type': 'application/json',
-      'idempotency-key': idempotencyKey,
-    },
-    body: JSON.stringify(body),
-  });
+  const response = await submitWithToken(origin, body, idempotencyKey, SUBMIT_TOKEN);
   return {
     response,
     body: (await response.json()) as {
@@ -286,6 +301,18 @@ async function submit(origin: string, body: unknown, idempotencyKey: string) {
       error?: { code: string; message: string };
     },
   };
+}
+
+function submitWithToken(origin: string, body: unknown, idempotencyKey: string, token: string) {
+  return fetch(`${origin}/v1/upgrades`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${token}`,
+      'content-type': 'application/json',
+      'idempotency-key': idempotencyKey,
+    },
+    body: JSON.stringify(body),
+  });
 }
 
 function updatePromotionControl(
@@ -323,6 +350,10 @@ class PendingGitHub implements GitHubGateway {
     return { status: 'pending' as const, checks: { test: 'pending', security: 'missing' } };
   }
 
+  async mergeState() {
+    return { status: 'open' as const };
+  }
+
   async merge() {
     throw new Error('Merge must not run');
   }
@@ -343,6 +374,10 @@ class IdleDeployment implements DeploymentGateway {
 
   async promote() {
     throw new Error('Promotion must not run');
+  }
+
+  async finalize() {
+    throw new Error('Finalize must not run');
   }
 
   async rollback() {

@@ -18,9 +18,12 @@ export interface MergeReceipt {
   mergeSha: string;
 }
 
+export type MergeState = { status: 'open' } | ({ status: 'merged' } & MergeReceipt);
+
 export interface GitHubGateway {
   syncPullRequest(manifest: UpgradeManifest, manifestHash: string): Promise<PullRequestReceipt>;
   requiredChecks(manifest: UpgradeManifest, prNumber: number): Promise<CheckReceipt>;
+  mergeState(manifest: UpgradeManifest, prNumber: number): Promise<MergeState>;
   merge(manifest: UpgradeManifest, prNumber: number): Promise<MergeReceipt>;
 }
 
@@ -377,26 +380,11 @@ export class GitHubAppGateway implements GitHubGateway {
   }
 
   async merge(manifest: UpgradeManifest, prNumber: number): Promise<MergeReceipt> {
-    const { owner, name, baseBranch } = manifest.repository;
-    const path = `/repos/${encode(owner)}/${encode(name)}/pulls/${prNumber}`;
-    const pull = pullSchema.parse(await this.repositoryRequest(manifest, path));
-    if (
-      pull.head.sha !== manifest.candidateSha ||
-      pull.base.ref !== baseBranch ||
-      pull.base.sha !== manifest.repository.baseSha
-    ) {
-      throw new UpdaterError('pull_request_changed', 'Pull request target changed before merge');
-    }
-    if (pull.merged_at) {
-      if (!pull.merge_commit_sha) {
-        throw new UpdaterError('merge_receipt_missing', 'Merged pull request lacks merge commit');
-      }
-      return { mergeSha: pull.merge_commit_sha };
-    }
-    if (pull.state !== 'open') {
-      throw new UpdaterError('pull_request_closed', 'Pull request was closed without merging');
-    }
+    const state = await this.mergeState(manifest, prNumber);
+    if (state.status === 'merged') return { mergeSha: state.mergeSha };
 
+    const { owner, name } = manifest.repository;
+    const path = `/repos/${encode(owner)}/${encode(name)}/pulls/${prNumber}`;
     await this.assertRefs(manifest);
     const result = z
       .object({
@@ -415,6 +403,30 @@ export class GitHubAppGateway implements GitHubGateway {
       throw new UpdaterError('merge_rejected', result.message || 'GitHub rejected the merge');
     }
     return { mergeSha: result.sha };
+  }
+
+  async mergeState(manifest: UpgradeManifest, prNumber: number): Promise<MergeState> {
+    const { owner, name, baseBranch } = manifest.repository;
+    const path = `/repos/${encode(owner)}/${encode(name)}/pulls/${prNumber}`;
+    const pull = pullSchema.parse(await this.repositoryRequest(manifest, path));
+    if (
+      pull.head.sha !== manifest.candidateSha ||
+      pull.base.ref !== baseBranch ||
+      pull.base.sha !== manifest.repository.baseSha
+    ) {
+      throw new UpdaterError('pull_request_changed', 'Pull request target changed before merge');
+    }
+    if (pull.merged_at) {
+      if (!pull.merge_commit_sha) {
+        throw new UpdaterError('merge_receipt_missing', 'Merged pull request lacks merge commit');
+      }
+      return { status: 'merged', mergeSha: pull.merge_commit_sha };
+    }
+    if (pull.state !== 'open') {
+      throw new UpdaterError('pull_request_closed', 'Pull request was closed without merging');
+    }
+
+    return { status: 'open' };
   }
 
   private async workflowEvidence(

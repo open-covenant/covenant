@@ -32,6 +32,7 @@ const deployments = operational
       shadowHealthUrlTemplate: operational.shadowHealthUrlTemplate,
       promotionHealthUrlTemplate: operational.promotionHealthUrlTemplate,
       promoteUrl: operational.promoteHookUrl,
+      finalizeUrl: operational.finalizeHookUrl,
       rollbackUrl: operational.rollbackHookUrl,
       token: operational.deployHookToken,
       timeoutMs: config.hookTimeoutMs,
@@ -76,7 +77,8 @@ const server = createUpdaterServer({
   service,
   repository,
   metrics,
-  authToken: config.authToken,
+  submitToken: config.submitToken,
+  controlToken: config.controlToken,
   readToken: config.readToken,
   operationalFailures: config.operationalFailures,
   operationalReadiness:

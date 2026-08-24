@@ -3,7 +3,6 @@ import {
   Connection,
   Keypair,
   PublicKey,
-  SendTransactionError,
   SYSVAR_CLOCK_PUBKEY,
   SYSVAR_RENT_PUBKEY,
   SystemProgram,
@@ -44,6 +43,7 @@ const SETTLEMENT_SCAN_PAGE_SIZE = 256;
 const SETTLEMENT_SCAN_MAX_SIGNATURES = 4_096;
 const SETTLEMENT_FETCH_BATCH = 32;
 const MAX_WIRE_TRANSACTION_BYTES = 1_232;
+export const SOLANA_MAINNET_GENESIS_HASH = '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d';
 
 export interface ChainGateway {
   readSettlement(signature: string): Promise<SettlementFacts>;
@@ -120,7 +120,7 @@ export function boundedRpcFetch(
     const requestSignal = init?.signal as AbortSignal | null | undefined;
     const signal = requestSignal ? AbortSignal.any([requestSignal, timeout]) : timeout;
     try {
-      const response = await fetcher(input, { ...init, signal });
+      const response = await fetcher(input, { ...init, signal, redirect: 'error' });
       if (response.status === 429 || response.status >= 500) {
         throw new PolicyError('rpc_unavailable', 'Solana RPC service is unavailable', 503, true);
       }
@@ -193,6 +193,7 @@ export class SolanaChainGateway implements ChainGateway {
   }
 
   async readSettlement(signature: string): Promise<SettlementFacts> {
+    await this.verifyMainnetCluster();
     const results = await Promise.allSettled([
       this.readSettlementFrom(this.connection, signature),
       this.readSettlementFrom(this.secondaryConnection, signature),
@@ -238,6 +239,7 @@ export class SolanaChainGateway implements ChainGateway {
   async reconcileSettlement(
     authorization: SettlementAuthorizationBinding,
   ): Promise<SettlementFacts> {
+    await this.verifyMainnetCluster();
     const results = await Promise.allSettled([
       this.reconcileSettlementFrom(this.connection, authorization),
       this.reconcileSettlementFrom(this.secondaryConnection, authorization),
@@ -284,6 +286,7 @@ export class SolanaChainGateway implements ChainGateway {
     signature: string,
     authorization: SettlementAuthorizationBinding,
   ): Promise<SettlementFacts> {
+    await this.verifyMainnetCluster();
     const results = await Promise.allSettled([
       this.readAuthorizedSettlementFrom(this.connection, signature, authorization),
       this.readAuthorizedSettlementFrom(this.secondaryConnection, signature, authorization),
@@ -447,6 +450,7 @@ export class SolanaChainGateway implements ChainGateway {
   }
 
   async prepare(operation: ChainOperation): Promise<PreparedTransaction> {
+    await this.verifyMainnetCluster();
     const transaction = new Transaction();
     const signer = operation.kind === 'refund' ? this.refundSigner : this.escrowSigner;
     let derived: Record<string, string> = {};
@@ -456,13 +460,13 @@ export class SolanaChainGateway implements ChainGateway {
     const capacity =
       operation.kind === 'refund'
         ? {
-            refundRawAmount: await this.refundCapacity(),
+            refundRawAmount: await this.readRefundCapacityConsensus(),
             escrowLamports: '0',
             stateRentLamports: '0',
             vaultRentLamports: '0',
             guardRentLamports: '0',
           }
-        : await this.capacity();
+        : await this.readCapacityConsensus();
 
     if (operation.kind === 'refund') {
       const mint = new PublicKey(operation.mint);
@@ -564,28 +568,18 @@ export class SolanaChainGateway implements ChainGateway {
   }
 
   async broadcast(prepared: PreparedTransaction): Promise<void> {
-    let signature: string;
-    try {
-      signature = await this.connection.sendRawTransaction(
-        Buffer.from(prepared.wireTransaction, 'base64'),
-        { skipPreflight: false, maxRetries: 3 },
-      );
-    } catch (error) {
-      if (error instanceof SendTransactionError) {
-        throw new PolicyError(
-          'transaction_preflight_failed',
-          'Transaction failed deterministic preflight validation',
-          409,
-        );
-      }
-      throw error;
-    }
+    await this.verifyMainnetCluster();
+    const signature = await this.connection.sendRawTransaction(
+      Buffer.from(prepared.wireTransaction, 'base64'),
+      { skipPreflight: false, maxRetries: 3 },
+    );
     if (signature !== prepared.signature) {
       throw new Error('RPC returned an unexpected transaction signature');
     }
   }
 
   async transactionState(signature: string): Promise<TransactionState> {
+    await this.verifyMainnetCluster();
     const [primary, secondary] = await Promise.all([
       this.readTransactionState(this.connection, signature),
       this.readTransactionState(this.secondaryConnection, signature),
@@ -594,6 +588,7 @@ export class SolanaChainGateway implements ChainGateway {
   }
 
   async blockHeight(): Promise<number> {
+    await this.verifyMainnetCluster();
     const heights = await Promise.all([
       this.connection.getBlockHeight('finalized'),
       this.secondaryConnection.getBlockHeight('finalized'),
@@ -602,6 +597,7 @@ export class SolanaChainGateway implements ChainGateway {
   }
 
   async unixTime(): Promise<number> {
+    await this.verifyMainnetCluster();
     const [primary, secondary] = await Promise.all([
       this.readUnixTime(this.connection),
       this.readUnixTime(this.secondaryConnection),
@@ -618,6 +614,11 @@ export class SolanaChainGateway implements ChainGateway {
   }
 
   async capacity(): Promise<ChainCapacity> {
+    await this.verifyMainnetCluster();
+    return this.readCapacityConsensus();
+  }
+
+  private async readCapacityConsensus(): Promise<ChainCapacity> {
     const [primary, secondary] = await Promise.all([
       this.readCapacityFrom(this.connection),
       this.readCapacityFrom(this.secondaryConnection),
@@ -626,6 +627,11 @@ export class SolanaChainGateway implements ChainGateway {
   }
 
   async refundCapacity(): Promise<string> {
+    await this.verifyMainnetCluster();
+    return this.readRefundCapacityConsensus();
+  }
+
+  private async readRefundCapacityConsensus(): Promise<string> {
     const [primary, secondary] = await Promise.all([
       this.readRefundCapacityFrom(this.connection),
       this.readRefundCapacityFrom(this.secondaryConnection),
@@ -642,11 +648,12 @@ export class SolanaChainGateway implements ChainGateway {
   }
 
   async health(): Promise<ChainHealthEvidence> {
+    await this.verifyMainnetCluster();
     const [, , , capacity] = await Promise.all([
       this.connection.getLatestBlockhash('finalized'),
       this.secondaryConnection.getLatestBlockhash('finalized'),
       this.verifyEscrowProgram(),
-      this.capacity(),
+      this.readCapacityConsensus(),
     ]);
     return {
       ...capacity,
@@ -726,6 +733,25 @@ export class SolanaChainGateway implements ChainGateway {
     }
   }
 
+  private async verifyMainnetCluster(): Promise<void> {
+    let hashes: [string, string];
+    try {
+      hashes = await Promise.all([
+        this.connection.getGenesisHash(),
+        this.secondaryConnection.getGenesisHash(),
+      ]);
+    } catch (error) {
+      if (error instanceof PolicyError) throw error;
+      throw new PolicyError(
+        'rpc_unavailable',
+        'Independent RPC providers could not verify the Solana cluster',
+        503,
+        true,
+      );
+    }
+    assertMainnetGenesisHashes(...hashes);
+  }
+
   private async readProgramDeployment(connection: Connection): Promise<string> {
     const program = await connection.getAccountInfo(this.escrowProgramId, 'finalized');
     if (!program?.executable || !program.owner.equals(UPGRADEABLE_LOADER_ID)) {
@@ -802,6 +828,16 @@ export class SolanaChainGateway implements ChainGateway {
         403,
       );
     }
+  }
+}
+
+export function assertMainnetGenesisHashes(primary: string, secondary: string): void {
+  if (primary !== SOLANA_MAINNET_GENESIS_HASH || secondary !== SOLANA_MAINNET_GENESIS_HASH) {
+    throw new PolicyError(
+      'rpc_wrong_cluster',
+      'Both RPC providers must report the canonical Solana mainnet-beta genesis hash',
+      503,
+    );
   }
 }
 

@@ -10,6 +10,7 @@ program_id="$1"
 rpc_a="$2"
 rpc_b="$3"
 program_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+repo_root="$(cd "$program_root/../.." && pwd)"
 artifact="$program_root/target/deploy/mizuki_escrow_program.so"
 work_dir="$(mktemp -d -t mizuki-escrow-verify.XXXXXX)"
 metadata_a="$work_dir/rpc-a-program.json"
@@ -18,11 +19,72 @@ normalized_a="$work_dir/rpc-a-program.normalized.json"
 normalized_b="$work_dir/rpc-b-program.normalized.json"
 dump_a="$work_dir/rpc-a-program.so"
 dump_b="$work_dir/rpc-b-program.so"
+provider_evidence="$work_dir/rpc-provider-domains.json"
+genesis_evidence="$work_dir/rpc-genesis-hashes.json"
 upgradeable_loader='BPFLoaderUpgradeab1e11111111111111111111111'
+mainnet_genesis_hash='5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d'
 
 command -v jq >/dev/null
+command -v node >/dev/null
+command -v curl >/dev/null
 command -v solana >/dev/null
 command -v solana-verify >/dev/null
+
+assert_independent_rpc_providers() {
+  (
+    cd "$repo_root/services/mizuki-policy-signer"
+    node --input-type=module - "$rpc_a" "$rpc_b" <<'NODE'
+import { isIP } from 'node:net';
+import { getDomain } from 'tldts';
+
+function fail(message) {
+  process.stderr.write(`${message}\n`);
+  process.exit(1);
+}
+
+let endpoints;
+try {
+  endpoints = process.argv.slice(2).map((value) => new URL(value));
+} catch {
+  fail('mainnet RPC endpoints must be valid absolute URLs');
+}
+
+function host(url) {
+  return url.hostname.toLowerCase().replace(/\.$/, '').replace(/^\[|\]$/g, '');
+}
+
+function endpointIdentity(url) {
+  const port = url.port || (url.protocol === 'https:' ? '443' : '');
+  const path = url.pathname.replace(/\/+$/, '') || '/';
+  return `${url.protocol}//${host(url)}:${port}${path}`;
+}
+
+function providerDomain(url) {
+  const hostname = host(url);
+  if (isIP(hostname)) fail('mainnet RPC providers must use DNS hostnames');
+  const domain = getDomain(hostname, { allowPrivateDomains: false });
+  if (!domain) fail('mainnet RPC providers must use registrable DNS domains');
+  return domain;
+}
+
+if (endpoints.some((url) => url.protocol !== 'https:')) {
+  fail('mainnet RPC providers must use HTTPS');
+}
+if (endpointIdentity(endpoints[0]) === endpointIdentity(endpoints[1])) {
+  fail('mainnet RPC endpoints must be different');
+}
+if (providerDomain(endpoints[0]) === providerDomain(endpoints[1])) {
+  fail('mainnet RPC providers must use different domains');
+}
+process.stdout.write(`${JSON.stringify({
+  schema: 'mizuki.rpc-provider-evidence.v1',
+  primary: providerDomain(endpoints[0]),
+  secondary: providerDomain(endpoints[1]),
+  redirects: 'forbidden',
+})}\n`);
+NODE
+  )
+}
 
 validate_metadata() {
   local metadata="$1"
@@ -50,7 +112,50 @@ read_executable_hash() {
   printf '%s' "$hash"
 }
 
+read_genesis_hash() {
+  local rpc="$1" response hash
+  response="$(curl \
+    --silent \
+    --show-error \
+    --fail-with-body \
+    --location \
+    --max-redirs 0 \
+    --proto '=https' \
+    --proto-redir '=https' \
+    --connect-timeout 5 \
+    --max-time 10 \
+    --header 'content-type: application/json' \
+    --data-binary '{"jsonrpc":"2.0","id":1,"method":"getGenesisHash"}' \
+    "$rpc")"
+  hash="$(jq -er '.result | select(type == "string")' <<<"$response")"
+  if [[ ! "$hash" =~ ^[1-9A-HJ-NP-Za-km-z]{32,64}$ ]]; then
+    echo "could not parse genesis hash" >&2
+    return 1
+  fi
+  printf '%s' "$hash"
+}
+
+assert_independent_rpc_providers >"$provider_evidence"
 "$program_root/scripts/validate-artifact.sh" "$artifact"
+rpc_a_genesis_hash="$(read_genesis_hash "$rpc_a")"
+rpc_b_genesis_hash="$(read_genesis_hash "$rpc_b")"
+if [[ "$rpc_a_genesis_hash" != "$mainnet_genesis_hash" ||
+  "$rpc_b_genesis_hash" != "$mainnet_genesis_hash" ]]; then
+  echo "both RPC providers must report the canonical Solana mainnet-beta genesis hash" >&2
+  exit 1
+fi
+jq -n \
+  --arg schema 'mizuki.rpc-genesis-evidence.v1' \
+  --arg cluster 'mainnet-beta' \
+  --arg expected "$mainnet_genesis_hash" \
+  --arg primary "$rpc_a_genesis_hash" \
+  --arg secondary "$rpc_b_genesis_hash" \
+  '{
+    schema: $schema,
+    cluster: $cluster,
+    expected: $expected,
+    observations: { primary: $primary, secondary: $secondary }
+  }' >"$genesis_evidence"
 solana program show --url "$rpc_a" --commitment finalized --output json "$program_id" >"$metadata_a"
 solana program show --url "$rpc_b" --commitment finalized --output json "$program_id" >"$metadata_b"
 validate_metadata "$metadata_a"
@@ -84,5 +189,6 @@ fi
 
 printf 'SHA-256: %s\n' "$local_sha256"
 printf 'Solana executable hash: %s\n' "$local_executable_hash"
+printf 'Mainnet genesis hash: %s\n' "$mainnet_genesis_hash"
 
 echo "finalized verification evidence retained at $work_dir"

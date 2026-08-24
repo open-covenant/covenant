@@ -8,11 +8,19 @@ This distinction is load-bearing: downloading an archive and separately asking R
 
 ## Functional readiness contract
 
-The shadow and production applications expose an authenticated endpoint at:
+Shadow is deliberately zero-authority. The controller probes its private, tokenless deployment endpoint:
+
+```text
+GET /deployz
+```
+
+The only accepted body is strict JSON `{ "ok": true }`. The runtime returns it only after reading its isolated database and confirming both durable admission controls are closed. A response with any additional field fails the probe. Shadow has no production probe token, provider credential, coding-gateway access, signer access, job authority, GitHub App, updater access, or live payment configuration.
+
+Production exposes the authenticated full dependency probe:
 
 ```text
 GET /internal/mizuki/functional-readiness
-Authorization: Bearer $MIZUKI_DEPLOY_PROBE_TOKEN
+Authorization: Bearer $MIZUKI_DEPLOY_PRODUCTION_PROBE_TOKEN
 ```
 
 The response is strict JSON:
@@ -38,7 +46,7 @@ The Postgres operation record and its append-only event are committed in one tra
 
 Stable idempotency keys are checked before the artifact is downloaded. Render service identity, type, image repository, region, runtime, suspension state, and automatic-deploy state are fingerprinted and checked again immediately before mutation. Expected in-flight operations are included in controller readiness instead of being mistaken for unrelated service instability.
 
-An unhealthy shadow is restored to its exact recorded baseline before its reservation is released. Promotion first restores shadow, records the exact production baseline, and deploys the reviewed image digest. Rollback can recover a lost promotion receipt from independent Render evidence even when the caller lacks the promotion ID. Rollback completes only after the exact baseline digest is live and passes the functional probe.
+An unhealthy shadow is restored to its exact recorded baseline before its reservation is released. Promotion first restores shadow, records the exact production baseline, and deploys the reviewed image digest. The single production slot remains owned until the updater explicitly finalizes the exact active, healthy promotion after the minimum soak age, or rollback restores the baseline. Elapsed time alone never releases the slot. Finalization is idempotent and rechecks immutable Render evidence plus the functional probe. Rollback can recover a lost promotion receipt from independent Render evidence even when the caller lacks the promotion ID. Rollback completes only after the exact baseline digest is live and passes the functional probe.
 
 ## Routes
 
@@ -50,6 +58,7 @@ All routes require `Authorization: Bearer $MIZUKI_DEPLOY_AUTH_TOKEN`.
 - `GET /v1/deployments/shadow/:deploymentId/health`
 - `POST /v1/deployments/promote`
 - `GET /v1/deployments/production/:deploymentId/health`
+- `POST /v1/deployments/finalize`
 - `POST /v1/deployments/rollback`
 
 The POST schemas are the strict version-1 schemas in `src/domain.ts`. Unknown fields, mismatched operation keys, non-allowlisted repositories, alternate service IDs, alternate API origins, and unapproved artifact origins are rejected. Retryable responses include `Retry-After`; unresolved or ambiguous mutation evidence returns a non-retryable conflict.
@@ -60,8 +69,8 @@ The POST schemas are the strict version-1 schemas in `src/domain.ts`. Unknown fi
 - Two image-backed Render services using the same configured registry repository.
 - Shadow must be a private service; production must be a web service.
 - Automatic deploys disabled on both targets.
-- Exact shadow and production functional-readiness URLs.
-- Separate controller and application-probe bearer credentials.
+- Exact private shadow `/deployz` and HTTPS production functional-readiness URLs.
+- Separate controller and production-only application-probe bearer credentials; shadow receives neither.
 - Artifact origins restricted to the OCI manifest publisher or an immutable mirror.
 
 Render API keys are account-wide credentials, not workspace-scoped. Exact service allowlists reduce what this controller will mutate, but they do not reduce the source credential's broader blast radius. Use a dedicated Render account identity with the least account access available and rotate the key if the controller is compromised.

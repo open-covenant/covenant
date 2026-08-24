@@ -5,7 +5,7 @@ Mizuki uses three separate GitHub Apps. Their keys and installations must never 
 | App             | Visibility | Installation scope                              | Authority                                                        |
 | --------------- | ---------- | ----------------------------------------------- | ---------------------------------------------------------------- |
 | Core            | Public     | Each public repository whose maintainer opts in | Read issues and checks; deliver pull requests on Mizuki branches |
-| Policy Verifier | Public     | The same opted-in repository                    | Exactly read-only contents, issues, metadata, and pull requests  |
+| Policy Verifier | Public     | The same opted-in repository                    | Read-only terms, diff, maintainer review, and check verification |
 | Updater         | Private    | `open-covenant/covenant` only                   | Create and merge reviewed capability-update pull requests        |
 
 ## Registration
@@ -20,6 +20,6 @@ Registration is an authenticated GitHub account action and is intentionally not 
 6. Publish the Core and Policy Verifier installation links. An external maintainer must select only the repository they are authorizing.
 7. Keep the Updater private and install it only on the protected application repository.
 
-Before paid intake, verify both public installations independently. Core must obtain a one-repository token with its exact delivery permissions. The updater must independently validate every allowlisted installation, mint a one-repository token with only its manifest permissions, and resolve every configured workflow ID to its pinned active path. Both reject all-repository selection, permission drift, repository drift, App identity drift, suspension, and invalid token lifetime. The signer must authenticate the Policy Verifier App, discover the installation for that exact repository, mint a short-lived token with the manifest's exact four read permissions, and reject missing or additional permissions. Removing any required installation must make new work fail closed.
+Before paid intake, verify both public installations independently. Core must obtain a one-repository token with its exact delivery permissions. The updater must independently validate every allowlisted installation, mint a one-repository token with only its manifest permissions, and resolve every configured workflow ID to its pinned active path. Both reject all-repository selection, permission drift, repository drift, App identity drift, suspension, and invalid token lifetime. The signer must authenticate the Policy Verifier App, discover the installation for that exact repository, mint a short-lived token with exactly read-only checks, contents, issues, metadata, pull-request, and status permissions, and reject missing or additional permissions. Removing any required installation must make new work fail closed.
 
 Record only App IDs, slugs, installation IDs, repository selections, and public installation URLs in release evidence. Private keys, OAuth secrets, webhook secrets, and installation tokens never belong in logs or evidence files.

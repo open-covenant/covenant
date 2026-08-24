@@ -13,9 +13,11 @@ import {
   UpdaterError,
 } from './domain.js';
 import type {
-  PromotionAdmission,
   PromotionControl,
+  PromotionControlAuditEntry,
+  PromotionFailureResolution,
   PromotionControlUpdate,
+  PromotionReservation,
   UpgradeRepository,
 } from './store.js';
 
@@ -116,6 +118,53 @@ const migrations: SchemaMigration[] = [
       );
     `,
   },
+  {
+    version: 4,
+    name: 'crash_safe_promotion_reservations',
+    sql: `
+      ALTER TABLE mizuki_upgrades
+        DROP CONSTRAINT IF EXISTS mizuki_upgrades_state_check;
+      ALTER TABLE mizuki_upgrades
+        ADD CONSTRAINT mizuki_upgrades_state_check CHECK (state IN (
+          'submitted', 'verifying_artifact', 'proposal_verified', 'syncing_pr',
+          'waiting_checks', 'starting_shadow', 'checking_shadow', 'merging',
+          'merge_triggering', 'promoting', 'verifying_promotion', 'completed',
+          'rollback_pending', 'rolled_back', 'failed', 'rollback_failed'
+        ));
+      ALTER TABLE mizuki_updater_promotion_control
+        ADD COLUMN active_upgrade_id uuid REFERENCES mizuki_upgrades(id),
+        ADD COLUMN active_since timestamptz,
+        ADD CONSTRAINT mizuki_updater_active_promotion_pair CHECK (
+          (active_upgrade_id IS NULL) = (active_since IS NULL)
+        );
+      CREATE TABLE mizuki_updater_promotion_control_audit (
+        sequence bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        revision integer NOT NULL UNIQUE CHECK (revision >= 0),
+        promotions_enabled boolean NOT NULL,
+        reason text NOT NULL CHECK (char_length(reason) BETWEEN 1 AND 500),
+        updated_by text NOT NULL CHECK (char_length(updated_by) BETWEEN 1 AND 128),
+        updated_at timestamptz NOT NULL,
+        active_upgrade_id uuid,
+        active_since timestamptz
+      );
+      INSERT INTO mizuki_updater_promotion_control_audit (
+        revision, promotions_enabled, reason, updated_by, updated_at,
+        active_upgrade_id, active_since
+      )
+      SELECT revision, promotions_enabled, reason, updated_by, updated_at,
+             active_upgrade_id, active_since
+      FROM mizuki_updater_promotion_control WHERE singleton = true;
+      CREATE FUNCTION mizuki_reject_promotion_control_audit_mutation() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+          RAISE EXCEPTION 'promotion control audit is append-only';
+        END;
+        $$;
+      CREATE TRIGGER mizuki_updater_promotion_control_audit_append_only
+        BEFORE UPDATE OR DELETE ON mizuki_updater_promotion_control_audit
+        FOR EACH ROW EXECUTE FUNCTION mizuki_reject_promotion_control_audit_mutation();
+    `,
+  },
 ];
 
 const promotionAdmissionLock = 'mizuki-updater-promotion-admission';
@@ -201,7 +250,8 @@ export class PostgresUpgradeRepository implements UpgradeRepository {
 
   async promotionControl(): Promise<PromotionControl> {
     const result = await this.pool.query(
-      `SELECT promotions_enabled, revision, reason, updated_by, updated_at
+      `SELECT promotions_enabled, revision, reason, updated_by, updated_at,
+              active_upgrade_id, active_since
        FROM mizuki_updater_promotion_control WHERE singleton = true`,
     );
     if (!result.rows[0]) {
@@ -214,6 +264,20 @@ export class PostgresUpgradeRepository implements UpgradeRepository {
     return toPromotionControl(result.rows[0]);
   }
 
+  async promotionControlAudit(limit = 100): Promise<PromotionControlAuditEntry[]> {
+    const safeLimit = Math.max(1, Math.min(500, Math.trunc(limit)));
+    const result = await this.pool.query(
+      `SELECT sequence, promotions_enabled, revision, reason, updated_by, updated_at,
+              active_upgrade_id, active_since
+       FROM mizuki_updater_promotion_control_audit ORDER BY sequence DESC LIMIT $1`,
+      [safeLimit],
+    );
+    return result.rows.reverse().map((row) => ({
+      ...toPromotionControl(row),
+      sequence: Number(row.sequence),
+    }));
+  }
+
   async updatePromotionControl(
     input: PromotionControlUpdate,
     now: Date,
@@ -221,33 +285,39 @@ export class PostgresUpgradeRepository implements UpgradeRepository {
     return this.withPromotionLock(async (client) => {
       await client.query('BEGIN');
       try {
-        const result = await client.query(
-          `UPDATE mizuki_updater_promotion_control
-           SET promotions_enabled = $1, revision = revision + 1, reason = $2,
-               updated_by = $3, updated_at = $4
-           WHERE singleton = true AND revision = $5
-           RETURNING promotions_enabled, revision, reason, updated_by, updated_at`,
-          [input.promotionsEnabled, input.reason, input.updatedBy, now, input.expectedRevision],
-        );
-        if (!result.rows[0]) {
-          const current = await client.query(
-            'SELECT revision FROM mizuki_updater_promotion_control WHERE singleton = true',
-          );
-          if (!current.rows[0]) {
-            throw new UpdaterError(
-              'promotion_control_unavailable',
-              'Promotion control is unavailable',
-              503,
-            );
-          }
+        const current = await lockedPromotionControl(client);
+        if (current.revision !== input.expectedRevision) {
           throw new UpdaterError(
             'promotion_control_conflict',
             'Promotion control changed concurrently',
             409,
           );
         }
+        if (input.promotionsEnabled && current.activeUpgradeId) {
+          const active = await client.query('SELECT state FROM mizuki_upgrades WHERE id = $1', [
+            current.activeUpgradeId,
+          ]);
+          if (active.rows[0]?.state === 'rollback_failed') {
+            throw new UpdaterError(
+              'promotion_failure_unresolved',
+              'The failed rollback must be explicitly resolved before promotions can be enabled',
+              409,
+            );
+          }
+        }
+        const result = await client.query(
+          `UPDATE mizuki_updater_promotion_control
+           SET promotions_enabled = $1, revision = revision + 1, reason = $2,
+               updated_by = $3, updated_at = $4
+           WHERE singleton = true
+           RETURNING promotions_enabled, revision, reason, updated_by, updated_at,
+                     active_upgrade_id, active_since`,
+          [input.promotionsEnabled, input.reason, input.updatedBy, now],
+        );
+        const control = toPromotionControl(result.rows[0]);
+        await insertControlAudit(client, control);
         await client.query('COMMIT');
-        return toPromotionControl(result.rows[0]);
+        return control;
       } catch (error) {
         await client.query('ROLLBACK');
         throw error;
@@ -255,22 +325,214 @@ export class PostgresUpgradeRepository implements UpgradeRepository {
     });
   }
 
-  async withPromotionAdmission<T>(action: () => Promise<T>): Promise<PromotionAdmission<T>> {
+  async reservePromotion(upgradeId: string, now: Date): Promise<PromotionReservation> {
     return this.withPromotionLock(async (client) => {
-      const result = await client.query(
-        `SELECT promotions_enabled, revision, reason, updated_by, updated_at
-         FROM mizuki_updater_promotion_control WHERE singleton = true`,
-      );
-      if (!result.rows[0]) {
-        throw new UpdaterError(
-          'promotion_control_unavailable',
-          'Promotion control is unavailable',
-          503,
-        );
+      await client.query('BEGIN');
+      try {
+        let control = await lockedPromotionControl(client);
+        if (control.activeUpgradeId) {
+          const active = await client.query('SELECT state FROM mizuki_upgrades WHERE id = $1', [
+            control.activeUpgradeId,
+          ]);
+          const state = active.rows[0]?.state as string | undefined;
+          if (!state) {
+            throw new UpdaterError(
+              'promotion_reservation_invalid',
+              'Promotion reservation references an unknown upgrade',
+              500,
+            );
+          }
+          if (state === 'rollback_failed') {
+            if (control.promotionsEnabled) {
+              const closed = await client.query(
+                `UPDATE mizuki_updater_promotion_control
+                 SET promotions_enabled = false, revision = revision + 1,
+                     reason = $1, updated_by = $2, updated_at = $3
+                 WHERE singleton = true
+                 RETURNING promotions_enabled, revision, reason, updated_by, updated_at,
+                           active_upgrade_id, active_since`,
+                [
+                  'promotion rollback requires operator intervention',
+                  `updater:${control.activeUpgradeId}`,
+                  now,
+                ],
+              );
+              control = toPromotionControl(closed.rows[0]);
+              await insertControlAudit(client, control);
+            }
+            await client.query('COMMIT');
+            return { reserved: false, reason: 'disabled', control };
+          }
+          if (['completed', 'rolled_back', 'failed'].includes(state)) {
+            const released = await client.query(
+              `UPDATE mizuki_updater_promotion_control
+               SET active_upgrade_id = NULL, active_since = NULL,
+                   revision = revision + 1, reason = $1, updated_by = $2, updated_at = $3
+               WHERE singleton = true
+               RETURNING promotions_enabled, revision, reason, updated_by, updated_at,
+                         active_upgrade_id, active_since`,
+              [
+                `terminal promotion reservation reconciled: ${state}`,
+                `updater:${control.activeUpgradeId}`,
+                now,
+              ],
+            );
+            control = toPromotionControl(released.rows[0]);
+            await insertControlAudit(client, control);
+          } else if (control.activeUpgradeId !== upgradeId) {
+            await client.query('COMMIT');
+            return { reserved: false, reason: 'busy', control };
+          }
+        }
+        if (!control.promotionsEnabled) {
+          await client.query('COMMIT');
+          return { reserved: false, reason: 'disabled', control };
+        }
+        if (!control.activeUpgradeId) {
+          const reserved = await client.query(
+            `UPDATE mizuki_updater_promotion_control
+             SET active_upgrade_id = $1, active_since = $2,
+                 revision = revision + 1, reason = $3, updated_by = $4, updated_at = $2
+             WHERE singleton = true
+             RETURNING promotions_enabled, revision, reason, updated_by, updated_at,
+                       active_upgrade_id, active_since`,
+            [upgradeId, now, 'promotion reservation acquired', `updater:${upgradeId}`],
+          );
+          control = toPromotionControl(reserved.rows[0]);
+          await insertControlAudit(client, control);
+        }
+        await client.query('COMMIT');
+        return { reserved: true, control };
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
       }
-      const control = toPromotionControl(result.rows[0]);
-      if (!control.promotionsEnabled) return { admitted: false, control };
-      return { admitted: true, value: await action() };
+    });
+  }
+
+  async releasePromotion(upgradeId: string, now: Date): Promise<void> {
+    await this.withPromotionLock(async (client) => {
+      await client.query('BEGIN');
+      try {
+        const current = await lockedPromotionControl(client);
+        if (current.activeUpgradeId !== upgradeId) {
+          await client.query('COMMIT');
+          return;
+        }
+        const active = await client.query('SELECT state FROM mizuki_upgrades WHERE id = $1', [
+          upgradeId,
+        ]);
+        if (!['completed', 'rolled_back', 'failed'].includes(String(active.rows[0]?.state))) {
+          throw new UpdaterError(
+            'promotion_release_not_terminal',
+            'Promotion reservation cannot be released before a terminal outcome',
+            409,
+          );
+        }
+        const result = await client.query(
+          `UPDATE mizuki_updater_promotion_control
+           SET active_upgrade_id = NULL, active_since = NULL,
+               revision = revision + 1, reason = $1, updated_by = $2, updated_at = $3
+           WHERE singleton = true
+           RETURNING promotions_enabled, revision, reason, updated_by, updated_at,
+                     active_upgrade_id, active_since`,
+          ['promotion reservation released', `updater:${upgradeId}`, now],
+        );
+        await insertControlAudit(client, toPromotionControl(result.rows[0]));
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      }
+    });
+  }
+
+  async closePromotionsForFailure(
+    upgradeId: string,
+    reason: string,
+    now: Date,
+  ): Promise<PromotionControl> {
+    return this.withPromotionLock(async (client) => {
+      await client.query('BEGIN');
+      try {
+        const current = await lockedPromotionControl(client);
+        if (current.activeUpgradeId && current.activeUpgradeId !== upgradeId) {
+          throw new UpdaterError(
+            'promotion_reservation_mismatch',
+            'Another upgrade owns the promotion reservation',
+            409,
+          );
+        }
+        const result = await client.query(
+          `UPDATE mizuki_updater_promotion_control
+           SET promotions_enabled = false, revision = revision + 1, reason = $1,
+               updated_by = $2, updated_at = $3, active_upgrade_id = $4,
+               active_since = COALESCE(active_since, $3)
+           WHERE singleton = true
+           RETURNING promotions_enabled, revision, reason, updated_by, updated_at,
+                     active_upgrade_id, active_since`,
+          [reason, `updater:${upgradeId}`, now, upgradeId],
+        );
+        const control = toPromotionControl(result.rows[0]);
+        await insertControlAudit(client, control);
+        await client.query('COMMIT');
+        return control;
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      }
+    });
+  }
+
+  async resolvePromotionFailure(
+    input: PromotionFailureResolution,
+    now: Date,
+  ): Promise<PromotionControl> {
+    return this.withPromotionLock(async (client) => {
+      await client.query('BEGIN');
+      try {
+        const current = await lockedPromotionControl(client);
+        if (current.revision !== input.expectedRevision) {
+          throw new UpdaterError(
+            'promotion_control_conflict',
+            'Promotion control changed concurrently',
+            409,
+          );
+        }
+        if (current.promotionsEnabled || current.activeUpgradeId !== input.upgradeId) {
+          throw new UpdaterError(
+            'promotion_failure_resolution_invalid',
+            'The upgrade does not own an unresolved failed rollback',
+            409,
+          );
+        }
+        const active = await client.query('SELECT state FROM mizuki_upgrades WHERE id = $1', [
+          input.upgradeId,
+        ]);
+        if (active.rows[0]?.state !== 'rollback_failed') {
+          throw new UpdaterError(
+            'promotion_failure_resolution_invalid',
+            'The upgrade does not own an unresolved failed rollback',
+            409,
+          );
+        }
+        const result = await client.query(
+          `UPDATE mizuki_updater_promotion_control
+           SET active_upgrade_id = NULL, active_since = NULL,
+               revision = revision + 1, reason = $1, updated_by = $2, updated_at = $3
+           WHERE singleton = true
+           RETURNING promotions_enabled, revision, reason, updated_by, updated_at,
+                     active_upgrade_id, active_since`,
+          [input.reason, input.updatedBy, now],
+        );
+        const control = toPromotionControl(result.rows[0]);
+        await insertControlAudit(client, control);
+        await client.query('COMMIT');
+        return control;
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      }
     });
   }
 
@@ -562,6 +824,40 @@ async function insertReceipt(client: PoolClient, receipt: AuditReceipt): Promise
   );
 }
 
+async function lockedPromotionControl(client: PoolClient): Promise<PromotionControl> {
+  const result = await client.query(
+    `SELECT promotions_enabled, revision, reason, updated_by, updated_at,
+            active_upgrade_id, active_since
+     FROM mizuki_updater_promotion_control WHERE singleton = true FOR UPDATE`,
+  );
+  if (!result.rows[0]) {
+    throw new UpdaterError(
+      'promotion_control_unavailable',
+      'Promotion control is unavailable',
+      503,
+    );
+  }
+  return toPromotionControl(result.rows[0]);
+}
+
+async function insertControlAudit(client: PoolClient, control: PromotionControl): Promise<void> {
+  await client.query(
+    `INSERT INTO mizuki_updater_promotion_control_audit (
+       revision, promotions_enabled, reason, updated_by, updated_at,
+       active_upgrade_id, active_since
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [
+      control.revision,
+      control.promotionsEnabled,
+      control.reason,
+      control.updatedBy,
+      control.updatedAt,
+      control.activeUpgradeId,
+      control.activeSince,
+    ],
+  );
+}
+
 function toRecord(row: QueryResultRow): UpgradeRecord {
   return {
     id: String(row.id),
@@ -611,5 +907,7 @@ function toPromotionControl(row: QueryResultRow): PromotionControl {
     reason: String(row.reason),
     updatedBy: String(row.updated_by),
     updatedAt: new Date(row.updated_at),
+    activeUpgradeId: row.active_upgrade_id === null ? null : String(row.active_upgrade_id),
+    activeSince: row.active_since ? new Date(row.active_since) : null,
   };
 }

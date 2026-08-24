@@ -131,11 +131,11 @@ describe('BountyService', () => {
     expect(released.state).toBe('released');
     expect((await store.escrowByBounty(created.id))?.state).toBe('released');
     expect(policy.releaseInputs).toEqual([
-      {
+      expect.objectContaining({
         pullRequestNumber: 2,
         reviewedHeadSha,
         reviewedDiffHash,
-      },
+      }),
     ]);
   });
 
@@ -1143,6 +1143,12 @@ function reviewer(
     review: async () => ({
       ...decision,
       ...evidence,
+      providerReceipt: {
+        model: 'independent-reviewer',
+        route: 'marketplace',
+        requestId: 'review-request',
+        costMicrounits: '1',
+      },
     }),
     mergedEvidence: async () => ({
       ...merged,
@@ -1165,9 +1171,19 @@ class MockPolicy implements FinancialPolicy {
   escrowRefundRecipient = 'treasury';
   lastRefundReason?: 'expired' | 'rejected' | 'dispute_resolved';
   readonly releaseInputs: Array<{
+    repository: string;
+    issueNumber: number;
     pullRequestNumber: number;
+    mergeCommitSha: string;
     reviewedHeadSha: string;
+    reviewedBaseSha: string;
+    reviewedBaseRef: string;
     reviewedDiffHash: string;
+    reviewReceiptId: string;
+    reviewReceiptHash: string;
+    reviewModel: string;
+    reviewRoute: 'marketplace';
+    reviewedAt: string;
   }> = [];
 
   constructor(private readonly now?: () => Date) {}
@@ -1201,10 +1217,12 @@ class MockPolicy implements FinancialPolicy {
       installationId: 1,
       repositorySelection: 'selected' as const,
       permissions: {
+        checks: 'read' as const,
         contents: 'read' as const,
         issues: 'read' as const,
         metadata: 'read' as const,
         pull_requests: 'read' as const,
+        statuses: 'read' as const,
       },
       tokenRepositories: 1 as const,
       tokenExpiresAt: '2099-01-01T00:00:00.000Z',
@@ -1251,9 +1269,19 @@ class MockPolicy implements FinancialPolicy {
   async releaseEscrow(
     operationId: string,
     input: {
+      repository: string;
+      issueNumber: number;
       pullRequestNumber: number;
+      mergeCommitSha: string;
       reviewedHeadSha: string;
+      reviewedBaseSha: string;
+      reviewedBaseRef: string;
       reviewedDiffHash: string;
+      reviewReceiptId: string;
+      reviewReceiptHash: string;
+      reviewModel: string;
+      reviewRoute: 'marketplace';
+      reviewedAt: string;
     },
   ): Promise<PolicyOperation> {
     this.releaseInputs.push(input);

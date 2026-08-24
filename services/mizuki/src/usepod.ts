@@ -154,6 +154,7 @@ export async function probeUsePodCatalog(
 ): Promise<void> {
   const response = await request(usePodUrl(config, 'models'), {
     method: 'GET',
+    redirect: 'error',
     headers: { accept: 'application/json' },
     signal: AbortSignal.timeout(15_000),
   });

@@ -17,6 +17,8 @@ export interface PromotionControl {
   reason: string;
   updatedBy: string;
   updatedAt: Date;
+  activeUpgradeId: string | null;
+  activeSince: Date | null;
 }
 
 export interface PromotionControlUpdate {
@@ -26,15 +28,34 @@ export interface PromotionControlUpdate {
   updatedBy: string;
 }
 
-export type PromotionAdmission<T> =
-  | { admitted: true; value: T }
-  | { admitted: false; control: PromotionControl };
+export interface PromotionFailureResolution {
+  upgradeId: string;
+  expectedRevision: number;
+  reason: string;
+  updatedBy: string;
+}
+
+export interface PromotionControlAuditEntry extends PromotionControl {
+  sequence: number;
+}
+
+export type PromotionReservation =
+  | { reserved: true; control: PromotionControl }
+  | { reserved: false; reason: 'disabled' | 'busy'; control: PromotionControl };
 
 export interface UpgradeRepository {
   migrate(): Promise<void>;
   promotionControl(): Promise<PromotionControl>;
+  promotionControlAudit(limit?: number): Promise<PromotionControlAuditEntry[]>;
   updatePromotionControl(input: PromotionControlUpdate, now: Date): Promise<PromotionControl>;
-  withPromotionAdmission<T>(action: () => Promise<T>): Promise<PromotionAdmission<T>>;
+  reservePromotion(upgradeId: string, now: Date): Promise<PromotionReservation>;
+  releasePromotion(upgradeId: string, now: Date): Promise<void>;
+  closePromotionsForFailure(
+    upgradeId: string,
+    reason: string,
+    now: Date,
+  ): Promise<PromotionControl>;
+  resolvePromotionFailure(input: PromotionFailureResolution, now: Date): Promise<PromotionControl>;
   reserve(input: NewUpgrade, now: Date): Promise<UpgradeRecord>;
   get(id: string): Promise<UpgradeRecord | null>;
   getByProposalId(proposalId: string): Promise<UpgradeRecord | null>;
@@ -73,13 +94,22 @@ export class InMemoryUpgradeRepository implements UpgradeRepository {
     reason: 'promotions are closed until explicitly enabled',
     updatedBy: 'system',
     updatedAt: new Date(0),
+    activeUpgradeId: null,
+    activeSince: null,
   };
+  private readonly controlAudit: PromotionControlAuditEntry[] = [
+    { ...structuredClone(this.control), sequence: 1 },
+  ];
   private promotionGate = Promise.resolve();
 
   async migrate(): Promise<void> {}
 
   async promotionControl(): Promise<PromotionControl> {
     return structuredClone(this.control);
+  }
+
+  async promotionControlAudit(limit = 100): Promise<PromotionControlAuditEntry[]> {
+    return structuredClone(this.controlAudit.slice(-limit));
   }
 
   async updatePromotionControl(
@@ -94,23 +124,150 @@ export class InMemoryUpgradeRepository implements UpgradeRepository {
           409,
         );
       }
+      if (
+        input.promotionsEnabled &&
+        this.control.activeUpgradeId &&
+        this.records.get(this.control.activeUpgradeId)?.state === 'rollback_failed'
+      ) {
+        throw new UpdaterError(
+          'promotion_failure_unresolved',
+          'The failed rollback must be explicitly resolved before promotions can be enabled',
+          409,
+        );
+      }
       this.control = {
+        ...this.control,
         promotionsEnabled: input.promotionsEnabled,
         revision: this.control.revision + 1,
         reason: input.reason,
         updatedBy: input.updatedBy,
         updatedAt: now,
       };
+      this.appendControlAudit();
       return structuredClone(this.control);
     });
   }
 
-  async withPromotionAdmission<T>(action: () => Promise<T>): Promise<PromotionAdmission<T>> {
+  async reservePromotion(upgradeId: string, now: Date): Promise<PromotionReservation> {
     return this.withPromotionGate(async () => {
-      if (!this.control.promotionsEnabled) {
-        return { admitted: false, control: structuredClone(this.control) };
+      if (!this.records.has(upgradeId)) {
+        throw new UpdaterError('upgrade_not_found', 'Upgrade was not found', 404);
       }
-      return { admitted: true, value: await action() };
+      await this.reconcileReservation(now);
+      if (!this.control.promotionsEnabled) {
+        return { reserved: false, reason: 'disabled', control: structuredClone(this.control) };
+      }
+      if (this.control.activeUpgradeId && this.control.activeUpgradeId !== upgradeId) {
+        return { reserved: false, reason: 'busy', control: structuredClone(this.control) };
+      }
+      if (!this.control.activeUpgradeId) {
+        this.control = {
+          ...this.control,
+          activeUpgradeId: upgradeId,
+          activeSince: now,
+          revision: this.control.revision + 1,
+          reason: 'promotion reservation acquired',
+          updatedBy: `updater:${upgradeId}`,
+          updatedAt: now,
+        };
+        this.appendControlAudit();
+      }
+      return { reserved: true, control: structuredClone(this.control) };
+    });
+  }
+
+  async releasePromotion(upgradeId: string, now: Date): Promise<void> {
+    await this.withPromotionGate(async () => {
+      if (this.control.activeUpgradeId !== upgradeId) return;
+      const state = this.records.get(upgradeId)?.state;
+      if (!state || !['completed', 'rolled_back', 'failed'].includes(state)) {
+        throw new UpdaterError(
+          'promotion_release_not_terminal',
+          'Promotion reservation cannot be released before a terminal outcome',
+          409,
+        );
+      }
+      this.control = {
+        ...this.control,
+        activeUpgradeId: null,
+        activeSince: null,
+        revision: this.control.revision + 1,
+        reason: 'promotion reservation released',
+        updatedBy: `updater:${upgradeId}`,
+        updatedAt: now,
+      };
+      this.appendControlAudit();
+    });
+  }
+
+  async closePromotionsForFailure(
+    upgradeId: string,
+    reason: string,
+    now: Date,
+  ): Promise<PromotionControl> {
+    return this.withPromotionGate(async () => {
+      if (this.control.activeUpgradeId && this.control.activeUpgradeId !== upgradeId) {
+        throw new UpdaterError(
+          'promotion_reservation_mismatch',
+          'Another upgrade owns the promotion reservation',
+          409,
+        );
+      }
+      this.control = {
+        ...this.control,
+        promotionsEnabled: false,
+        revision: this.control.revision + 1,
+        reason,
+        updatedBy: `updater:${upgradeId}`,
+        updatedAt: now,
+        activeUpgradeId: upgradeId,
+        activeSince: this.control.activeSince ?? now,
+      };
+      this.appendControlAudit();
+      return structuredClone(this.control);
+    });
+  }
+
+  async resolvePromotionFailure(
+    input: PromotionFailureResolution,
+    now: Date,
+  ): Promise<PromotionControl> {
+    return this.withPromotionGate(async () => {
+      if (this.control.revision !== input.expectedRevision) {
+        throw new UpdaterError(
+          'promotion_control_conflict',
+          'Promotion control changed concurrently',
+          409,
+        );
+      }
+      if (this.control.promotionsEnabled) {
+        throw new UpdaterError(
+          'promotion_failure_resolution_invalid',
+          'Promotions must remain disabled while resolving a failed rollback',
+          409,
+        );
+      }
+      if (
+        this.control.activeUpgradeId !== input.upgradeId ||
+        this.records.get(input.upgradeId)?.state !== 'rollback_failed'
+      ) {
+        throw new UpdaterError(
+          'promotion_failure_resolution_invalid',
+          'The upgrade does not own an unresolved failed rollback',
+          409,
+        );
+      }
+      this.control = {
+        ...this.control,
+        activeUpgradeId: null,
+        activeSince: null,
+        revision: this.control.revision + 1,
+        reason: input.reason,
+        updatedBy: input.updatedBy,
+        updatedAt: now,
+      };
+      this.appendControlAudit();
+      return structuredClone(this.control);
     });
   }
 
@@ -279,6 +436,45 @@ export class InMemoryUpgradeRepository implements UpgradeRepository {
     } finally {
       release();
     }
+  }
+
+  private async reconcileReservation(now: Date): Promise<void> {
+    const id = this.control.activeUpgradeId;
+    if (!id) return;
+    const state = this.records.get(id)?.state;
+    if (state === 'rollback_failed') {
+      if (this.control.promotionsEnabled) {
+        this.control = {
+          ...this.control,
+          promotionsEnabled: false,
+          revision: this.control.revision + 1,
+          reason: 'promotion rollback requires operator intervention',
+          updatedBy: `updater:${id}`,
+          updatedAt: now,
+        };
+        this.appendControlAudit();
+      }
+      return;
+    }
+    if (state && terminalStates.has(state)) {
+      this.control = {
+        ...this.control,
+        activeUpgradeId: null,
+        activeSince: null,
+        revision: this.control.revision + 1,
+        reason: `terminal promotion reservation reconciled: ${state}`,
+        updatedBy: `updater:${id}`,
+        updatedAt: now,
+      };
+      this.appendControlAudit();
+    }
+  }
+
+  private appendControlAudit(): void {
+    this.controlAudit.push({
+      ...structuredClone(this.control),
+      sequence: this.controlAudit.length + 1,
+    });
   }
 }
 

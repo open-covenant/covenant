@@ -98,6 +98,21 @@ export const createEscrowRequestSchema = z
     expiresAt: z.string().datetime({ offset: true }),
     repository: repositorySchema,
     issueNumber: z.number().int().positive().max(2_147_483_647),
+    issueTitle: z.string().min(1).max(512),
+    issueBody: z.string().max(100_000),
+    baseRef: gitRefSchema,
+    baseSha: gitCommitShaSchema,
+    reviewPolicy: z
+      .object({
+        version: z.literal(1),
+        model: z
+          .string()
+          .min(1)
+          .max(256)
+          .regex(/^\S(?:.*\S)?$/),
+        maxFiles: z.number().int().positive().max(20),
+      })
+      .strict(),
   })
   .strict();
 
@@ -198,9 +213,28 @@ export const bindEscrowRequestSchema = z
 
 export const releaseEscrowRequestSchema = z
   .object({
+    repository: repositorySchema,
+    issueNumber: z.number().int().positive().max(2_147_483_647),
     pullRequestNumber: z.number().int().positive().max(2_147_483_647),
-    reviewedHeadSha: z.string().regex(/^[a-f0-9]{40,64}$/),
+    mergeCommitSha: gitCommitShaSchema,
+    reviewedHeadSha: gitCommitShaSchema,
+    reviewedBaseSha: gitCommitShaSchema,
+    reviewedBaseRef: gitRefSchema,
     reviewedDiffHash: hashSchema,
+    reviewReceiptId: z.string().uuid(),
+    reviewReceiptHash: hashSchema,
+    reviewModel: z
+      .string()
+      .min(1)
+      .max(256)
+      .regex(/^\S(?:.*\S)?$/),
+    reviewRoute: z.literal('marketplace'),
+    reviewedAt: z.string().datetime({ offset: true }),
+    authorizationExpiresAt: z.string().datetime({ offset: true }),
+    authorizationSignature: z
+      .string()
+      .regex(/^[A-Za-z0-9+/]{86}==$/)
+      .refine((value) => Buffer.from(value, 'base64').length === 64),
   })
   .strict();
 
@@ -342,10 +376,12 @@ export interface RepositoryAdmission {
   installationId: number;
   repositorySelection: 'selected';
   permissions: {
+    checks: 'read';
     contents: 'read';
     issues: 'read';
     metadata: 'read';
     pull_requests: 'read';
+    statuses: 'read';
   };
   tokenRepositories: 1;
   tokenExpiresAt: Date;
@@ -554,6 +590,7 @@ export interface SignerReadinessEvidence {
     rpcConsensus: boolean;
     priceConsensus: boolean;
     githubCredential: boolean;
+    independentReviewer: boolean;
     escrowProgram: boolean;
     refundCustody: boolean;
     bountyCustody: boolean;
@@ -756,12 +793,57 @@ export function refundDeliveryBindingAuthorizationMessage(
   ].join('\n');
 }
 
+export function escrowReleaseAuthorizationMessage(
+  escrowOperationId: string,
+  request: Pick<
+    ReleaseEscrowRequest,
+    | 'repository'
+    | 'issueNumber'
+    | 'pullRequestNumber'
+    | 'mergeCommitSha'
+    | 'reviewedHeadSha'
+    | 'reviewedBaseSha'
+    | 'reviewedBaseRef'
+    | 'reviewedDiffHash'
+    | 'reviewReceiptId'
+    | 'reviewReceiptHash'
+    | 'reviewModel'
+    | 'reviewRoute'
+    | 'reviewedAt'
+    | 'authorizationExpiresAt'
+  >,
+): string {
+  return [
+    'Mizuki escrow release authorization',
+    'Version: 1',
+    `Escrow: ${escrowOperationId}`,
+    `Repository: ${request.repository.toLowerCase()}`,
+    `Issue: ${request.issueNumber}`,
+    `Pull Request: ${request.pullRequestNumber}`,
+    `Merge Commit: ${request.mergeCommitSha}`,
+    `Reviewed Head: ${request.reviewedHeadSha}`,
+    `Reviewed Base SHA: ${request.reviewedBaseSha}`,
+    `Reviewed Base Ref: ${request.reviewedBaseRef}`,
+    `Reviewed Diff: ${request.reviewedDiffHash}`,
+    `Review Receipt: ${request.reviewReceiptId}`,
+    `Review Receipt Hash: ${request.reviewReceiptHash}`,
+    `Review Model: ${request.reviewModel}`,
+    `Review Route: ${request.reviewRoute}`,
+    `Reviewed At: ${new Date(request.reviewedAt).toISOString()}`,
+    `Expires At: ${new Date(request.authorizationExpiresAt).toISOString()}`,
+  ].join('\n');
+}
+
 function stringDetail(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
 export function requestHash(value: unknown): string {
   return createHash('sha256').update(canonicalJson(value)).digest('hex');
+}
+
+export function escrowAcceptanceHash(request: Omit<CreateEscrowRequest, 'acceptanceHash'>): string {
+  return requestHash({ kind: 'mizuki_contributor_escrow_acceptance', ...request });
 }
 
 export function canonicalJson(value: unknown): string {

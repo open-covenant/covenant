@@ -94,6 +94,55 @@ describe('updater configuration', () => {
       'positive atomic amount',
     );
   });
+
+  it('enforces a zero-authority shadow boot boundary', () => {
+    const shadow = {
+      MIZUKI_RUNTIME_ROLE: 'shadow',
+      MIZUKI_PAYMENT_MODE: 'mock',
+      MIZUKI_REQUIRE_GITHUB_APP: '0',
+      MIZUKI_DATABASE_URL: 'postgres://mizuki:secret@database/mizuki_shadow',
+      MIZUKI_ADMIN_TOKEN: 'a'.repeat(32),
+    };
+
+    const config = loadConfig(shadow);
+    expect(config.runtimeRole).toBe('shadow');
+    expect(() => assertBootConfig(config)).not.toThrow();
+    expect(() => loadConfig({ ...shadow, MIZUKI_PAYMENT_MODE: 'live' })).toThrow(
+      'MIZUKI_PAYMENT_MODE=mock',
+    );
+    expect(() => loadConfig({ ...shadow, MIZUKI_REQUIRE_GITHUB_APP: '1' })).toThrow(
+      'MIZUKI_REQUIRE_GITHUB_APP=0',
+    );
+    expect(() => loadConfig({ ...shadow, USEPOD_API_KEY: '' })).toThrow('USEPOD_API_KEY');
+    expect(() => loadConfig({ ...shadow, MIZUKI_CODING_GATEWAY_TOKEN: 'c'.repeat(32) })).toThrow(
+      'MIZUKI_CODING_GATEWAY_TOKEN',
+    );
+    expect(() => loadConfig({ ...shadow, MIZUKI_POLICY_SIGNER_TOKEN: 'p'.repeat(32) })).toThrow(
+      'MIZUKI_POLICY_SIGNER_TOKEN',
+    );
+    expect(() => loadConfig({ ...shadow, MIZUKI_GITHUB_APP_ID: '123' })).toThrow(
+      'MIZUKI_GITHUB_APP_ID',
+    );
+    expect(() => loadConfig({ ...shadow, MIZUKI_UPDATER_TOKEN: 'u'.repeat(32) })).toThrow(
+      'MIZUKI_UPDATER_TOKEN',
+    );
+    expect(() => loadConfig({ ...shadow, MIZUKI_RELEASE_PROBE_TOKEN: 'r'.repeat(32) })).toThrow(
+      'MIZUKI_RELEASE_PROBE_TOKEN',
+    );
+    expect(() => loadConfig({ ...shadow, MIZUKI_FUTURE_CUSTODY_TOKEN: '' })).toThrow(
+      'MIZUKI_FUTURE_CUSTODY_TOKEN',
+    );
+  });
+
+  it('rejects incomplete shadow storage and invalid runtime roles', () => {
+    expect(() => loadConfig({ MIZUKI_RUNTIME_ROLE: 'candidate' })).toThrow('MIZUKI_RUNTIME_ROLE');
+    const config = loadConfig({
+      MIZUKI_RUNTIME_ROLE: 'shadow',
+      MIZUKI_PAYMENT_MODE: 'mock',
+      MIZUKI_REQUIRE_GITHUB_APP: '0',
+    });
+    expect(() => assertBootConfig(config)).toThrow('MIZUKI_DATABASE_URL, MIZUKI_ADMIN_TOKEN');
+  });
 });
 
 describe('live configuration', () => {

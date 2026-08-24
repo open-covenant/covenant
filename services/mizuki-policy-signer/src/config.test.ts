@@ -12,6 +12,11 @@ const GITHUB_APP = {
   MIZUKI_SIGNER_GITHUB_APP_ID: '12345',
   MIZUKI_SIGNER_GITHUB_PRIVATE_KEY: GITHUB_PRIVATE_KEY,
 };
+const REVIEW_PROVIDER = {
+  MIZUKI_SIGNER_REVIEW_BASE_URL: 'https://api.usepod.ai',
+  MIZUKI_SIGNER_REVIEW_API_KEY: 'test-review-key-with-enough-entropy',
+  MIZUKI_SIGNER_REVIEW_MODEL: 'test-review-model',
+};
 
 describe('signer configuration', () => {
   it('allows mock mode only on a non-production loopback listener', () => {
@@ -112,6 +117,7 @@ describe('signer configuration', () => {
       MIZUKI_REFUND_PRIVATE_KEY_JSON: `[${Array(64).fill(0).join(',')}]`,
       MIZUKI_ESCROW_PRIVATE_KEY_JSON: `[${Array(64).fill(1).join(',')}]`,
       ...GITHUB_APP,
+      ...REVIEW_PROVIDER,
       MIZUKI_JOB_AUTHORITY_PUBLIC_KEY: '5'.repeat(32),
       MIZUKI_REFUND_TREASURY: '2'.repeat(32),
       MIZUKI_ESCROW_AUTHORITY: '6'.repeat(32),
@@ -152,6 +158,7 @@ describe('signer configuration', () => {
         MIZUKI_REFUND_PRIVATE_KEY_JSON: `[${Array(64).fill(0).join(',')}]`,
         MIZUKI_ESCROW_PRIVATE_KEY_JSON: `[${Array(64).fill(1).join(',')}]`,
         ...GITHUB_APP,
+        ...REVIEW_PROVIDER,
         MIZUKI_JOB_AUTHORITY_PUBLIC_KEY: '5'.repeat(32),
         MIZUKI_REFUND_TREASURY: '2'.repeat(32),
         MIZUKI_ESCROW_AUTHORITY: '6'.repeat(32),
@@ -175,6 +182,7 @@ describe('signer configuration', () => {
       MIZUKI_REFUND_PRIVATE_KEY_JSON: `[${Array(64).fill(0).join(',')}]`,
       MIZUKI_ESCROW_PRIVATE_KEY_JSON: `[${Array(64).fill(1).join(',')}]`,
       ...GITHUB_APP,
+      ...REVIEW_PROVIDER,
       MIZUKI_JOB_AUTHORITY_PUBLIC_KEY: '5'.repeat(32),
       MIZUKI_REFUND_TREASURY: '2'.repeat(32),
       MIZUKI_ESCROW_AUTHORITY: '6'.repeat(32),
@@ -200,6 +208,7 @@ describe('signer configuration', () => {
           MIZUKI_REFUND_PRIVATE_KEY_JSON: `[${Array(64).fill(0).join(',')}]`,
           MIZUKI_ESCROW_PRIVATE_KEY_JSON: `[${Array(64).fill(1).join(',')}]`,
           ...GITHUB_APP,
+          ...REVIEW_PROVIDER,
           MIZUKI_JOB_AUTHORITY_PUBLIC_KEY: '5'.repeat(32),
           MIZUKI_REFUND_TREASURY: '2'.repeat(32),
           MIZUKI_ESCROW_AUTHORITY: '6'.repeat(32),
@@ -224,6 +233,7 @@ describe('signer configuration', () => {
       MIZUKI_REFUND_PRIVATE_KEY_JSON: `[${Array(64).fill(0).join(',')}]`,
       MIZUKI_ESCROW_PRIVATE_KEY_JSON: `[${Array(64).fill(1).join(',')}]`,
       ...GITHUB_APP,
+      ...REVIEW_PROVIDER,
       MIZUKI_JOB_AUTHORITY_PUBLIC_KEY: '5'.repeat(32),
       MIZUKI_REFUND_TREASURY: '2'.repeat(32),
       MIZUKI_ESCROW_AUTHORITY: '6'.repeat(32),
@@ -260,6 +270,7 @@ describe('signer configuration', () => {
       MIZUKI_REFUND_PRIVATE_KEY_JSON: `[${Array(64).fill(0).join(',')}]`,
       MIZUKI_ESCROW_PRIVATE_KEY_JSON: `[${Array(64).fill(1).join(',')}]`,
       ...GITHUB_APP,
+      ...REVIEW_PROVIDER,
       MIZUKI_JOB_AUTHORITY_PUBLIC_KEY: '5'.repeat(32),
       MIZUKI_REFUND_TREASURY: '2'.repeat(32),
       MIZUKI_ESCROW_AUTHORITY: '6'.repeat(32),
@@ -286,7 +297,15 @@ describe('signer configuration', () => {
         MIZUKI_SIGNER_RPC_URL: 'https://rpc.provider.example/v1/primary',
         MIZUKI_SIGNER_SECONDARY_RPC_URL: 'https://rpc.provider.example/v1/secondary',
       }),
-    ).toThrow('Primary and secondary RPC providers must use different hostnames');
+    ).toThrow('Primary and secondary RPC providers must use different domains');
+    expect(() =>
+      loadConfig({
+        ...base,
+        NODE_ENV: 'production',
+        MIZUKI_SIGNER_RPC_URL: 'https://primary.rpc-provider.example/v1',
+        MIZUKI_SIGNER_SECONDARY_RPC_URL: 'https://secondary.rpc-provider.example/v1',
+      }),
+    ).toThrow('Primary and secondary RPC providers must use different domains');
     expect(() =>
       loadConfig({
         ...base,
@@ -294,6 +313,45 @@ describe('signer configuration', () => {
         MIZUKI_SOL_USD_PRICE_URL: 'https://price.provider.example/primary',
         MIZUKI_SOL_USD_SECONDARY_PRICE_URL: 'https://price.provider.example/secondary',
       }),
-    ).toThrow('Primary and secondary price providers must use different hostnames');
+    ).toThrow('Primary and secondary price providers must use different domains');
+    expect(() =>
+      loadConfig({
+        ...base,
+        NODE_ENV: 'production',
+        MIZUKI_SIGNER_RPC_URL: 'https://[2001:db8::1]',
+        MIZUKI_SIGNER_SECONDARY_RPC_URL: 'https://rpc-secondary.example',
+      }),
+    ).toThrow('Production providers must use DNS hostnames');
+    expect(() =>
+      loadConfig({
+        ...base,
+        NODE_ENV: 'production',
+        MIZUKI_SIGNER_RPC_URL: 'https://rpc',
+        MIZUKI_SIGNER_SECONDARY_RPC_URL: 'https://rpc-secondary.example',
+      }),
+    ).toThrow('Production providers must use registrable DNS domains');
+    expect(() =>
+      loadConfig({
+        ...base,
+        NODE_ENV: 'production',
+        MIZUKI_SIGNER_RPC_URL: 'https://primary.provider.co.uk',
+        MIZUKI_SIGNER_SECONDARY_RPC_URL: 'https://secondary.provider.co.uk',
+      }),
+    ).toThrow('Primary and secondary RPC providers must use different domains');
+    expect(() =>
+      loadConfig({
+        ...base,
+        NODE_ENV: 'production',
+        MIZUKI_SIGNER_RPC_URL: 'https://primary.github.io',
+        MIZUKI_SIGNER_SECONDARY_RPC_URL: 'https://secondary.github.io',
+      }),
+    ).toThrow('Primary and secondary RPC providers must use different domains');
+    expect(() =>
+      loadConfig({
+        ...base,
+        MIZUKI_SIGNER_RPC_URL: 'https://RPC.internal:443/path/?token=one',
+        MIZUKI_SIGNER_SECONDARY_RPC_URL: 'https://rpc.internal/path?token=two',
+      }),
+    ).toThrow('Primary and secondary RPC URLs must be different');
   });
 });

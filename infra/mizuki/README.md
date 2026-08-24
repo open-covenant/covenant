@@ -10,7 +10,7 @@ This directory contains the production blueprint and runbooks for Mizuki's comme
 4. Promote the existing bootstrap Blueprint by changing that same Blueprint's path to `render.yaml`; never create a second Blueprint that owns the same signer, gateway, updater, or databases.
 5. Confirm the Blueprint-linked signer, gateway, updater, and controller tokens resolve into the production runtime. Do not copy those tokens into another service.
 6. Confirm the signer, gateway, and updater resolve only on Render's private network. Never expose them as web services.
-7. Deploy signer, gateway, updater, and controller first. Deploy shadow, prove the full functional probe, then deploy the sole production runtime and web app. Automatic deploys are disabled intentionally.
+7. Deploy signer, gateway, updater, and controller first. Deploy the zero-authority shadow and prove its tokenless closed-state probe, then deploy the sole production runtime and prove the authenticated full dependency probe before cutting over the web app. Automatic deploys are disabled intentionally.
 8. With intake closed, verify the website proxies only to `mizuki-runtime-production`, the production runtime alone uses `mizuki-postgres`, and the previous source-built API is suspended. Confirm startup reached the x402 facilitator and found the exact mainnet SVM route before enabling intake.
 9. Register the signer's escrow authority as the ClawPump payout wallet through the operator-controlled signed wallet flow. Confirm the platform displays the exact address and retain the registration receipt.
 10. Run the read-only checks below before any payment.

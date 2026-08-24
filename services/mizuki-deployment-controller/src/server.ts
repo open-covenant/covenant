@@ -5,6 +5,7 @@ import type { DeploymentController } from './controller.js';
 import {
   ControllerError,
   externalId,
+  finalizeRequestSchema,
   promotionRequestSchema,
   rollbackRequestSchema,
   shadowRequestSchema,
@@ -64,6 +65,13 @@ async function route(
     const key = idempotencyKey.parse(request.headers['idempotency-key']);
     const input = promotionRequestSchema.parse(await readJson(request));
     writeJson(response, 200, await deps.controller.promote(input, key));
+    return;
+  }
+  if (method === 'POST' && url.pathname === '/v1/deployments/finalize') {
+    requireJson(request);
+    const key = idempotencyKey.parse(request.headers['idempotency-key']);
+    const input = finalizeRequestSchema.parse(await readJson(request));
+    writeJson(response, 200, await deps.controller.finalize(input, key));
     return;
   }
   if (method === 'POST' && url.pathname === '/v1/deployments/rollback') {

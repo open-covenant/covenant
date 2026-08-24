@@ -127,6 +127,86 @@ describe('deployment controller', () => {
     expect(started.deploymentId).toBe('dep-1');
   });
 
+  it('holds the production slot through soak, finalizes idempotently, then admits the next upgrade', async () => {
+    let clock = new Date('2026-08-23T12:00:00.000Z');
+    const context = createContext(() => clock);
+    const firstShadow = await context.controller.startShadow(fixture(), `${UPGRADE}:shadow`);
+    context.render.setLive('srv-shadow123', firstShadow.deploymentId);
+    await context.controller.shadowHealth(firstShadow.deploymentId);
+    const firstPromotionInput = {
+      version: 1 as const,
+      upgradeId: UPGRADE,
+      proposalId: 'proposal-1',
+      deploymentId: firstShadow.deploymentId,
+      candidateSha: CANDIDATE,
+      mergeSha: MERGE,
+    };
+    await expect(
+      context.controller.promote(firstPromotionInput, `${UPGRADE}:promote`),
+    ).rejects.toMatchObject({ code: 'shadow_restore_in_progress' });
+    context.render.setLive('srv-shadow123', 'dep-2');
+    const firstPromotion = await context.controller.promote(
+      firstPromotionInput,
+      `${UPGRADE}:promote`,
+    );
+    context.render.setLive('srv-production123', firstPromotion.operationId);
+    await context.controller.promotionHealth(firstShadow.deploymentId);
+
+    const second = fixture();
+    second.upgradeId = 'upgrade-2';
+    second.proposalId = 'proposal-2';
+    const secondShadow = await context.controller.startShadow(second, 'upgrade-2:shadow');
+    context.render.setLive('srv-shadow123', secondShadow.deploymentId);
+    await context.controller.shadowHealth(secondShadow.deploymentId);
+    const secondPromotion = {
+      version: 1 as const,
+      upgradeId: 'upgrade-2',
+      proposalId: 'proposal-2',
+      deploymentId: secondShadow.deploymentId,
+      candidateSha: CANDIDATE,
+      mergeSha: MERGE,
+    };
+    await expect(
+      context.controller.promote(secondPromotion, 'upgrade-2:promote'),
+    ).rejects.toMatchObject({ code: 'shadow_restore_in_progress' });
+    context.render.setLive('srv-shadow123', 'dep-5');
+    await expect(
+      context.controller.promote(secondPromotion, 'upgrade-2:promote'),
+    ).rejects.toMatchObject({ code: 'production_busy' });
+
+    const finalize = {
+      version: 1 as const,
+      upgradeId: UPGRADE,
+      proposalId: 'proposal-1',
+      deploymentId: firstShadow.deploymentId,
+      candidateSha: CANDIDATE,
+      mergeSha: MERGE,
+      promotionOperationId: firstPromotion.operationId,
+    };
+    await expect(
+      context.controller.finalize(finalize, `${UPGRADE}:finalize`),
+    ).rejects.toMatchObject({ code: 'promotion_soak_in_progress' });
+
+    clock = new Date(clock.getTime() + 120_000);
+    await expect(context.controller.finalize(finalize, `${UPGRADE}:finalize`)).resolves.toEqual({
+      status: 'completed',
+      operationId: firstPromotion.operationId,
+    });
+    await expect(context.controller.finalize(finalize, `${UPGRADE}:finalize`)).resolves.toEqual({
+      status: 'completed',
+      operationId: firstPromotion.operationId,
+    });
+    expect(
+      (await context.store.events(UPGRADE)).filter(
+        (event) => event.type === 'production_finalized',
+      ),
+    ).toHaveLength(1);
+
+    await expect(
+      context.controller.promote(secondPromotion, 'upgrade-2:promote'),
+    ).resolves.toMatchObject({ status: 'completed' });
+  });
+
   it('reconciles a lost Render receipt without repeating the mutation', async () => {
     const context = createContext();
     context.render.loseNextDeployResponse = true;

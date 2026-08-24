@@ -43,6 +43,11 @@ export type ContributorEscrow = {
   bountyId: string;
   repository: string;
   issueNumber: number;
+  issueTitle: string;
+  issueBody: string;
+  baseRef: string;
+  baseSha: string;
+  reviewPolicy: { version: 1; model: string; maxFiles: number };
   amountCents: number;
   acceptanceHash: string;
   expiresAt: string;
@@ -109,6 +114,11 @@ export function createContributorEscrow(input: {
   bountyId: string;
   repository: string;
   issueNumber: number;
+  issueTitle: string;
+  issueBody: string;
+  baseRef: string;
+  baseSha: string;
+  reviewPolicy: { version: 1; model: string; maxFiles: number };
   amountCents: number;
   acceptanceHash: string;
   expiresAt: string;
@@ -132,11 +142,38 @@ export function createContributorEscrow(input: {
   if (!Number.isSafeInteger(input.issueNumber) || input.issueNumber <= 0) {
     throw new DomainRuleError('INVALID_ISSUE', 'Issue number must be a positive integer');
   }
+  if (input.issueTitle.length < 1 || input.issueTitle.length > 512) {
+    throw new DomainRuleError('INVALID_ISSUE_TITLE', 'Escrow issue title is invalid');
+  }
+  if (input.issueBody.length > 100_000) {
+    throw new DomainRuleError('INVALID_ISSUE_BODY', 'Escrow issue body is too large');
+  }
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$/.test(input.baseRef)) {
+    throw new DomainRuleError('INVALID_BASE_REF', 'Escrow base ref is invalid');
+  }
+  if (!/^[a-f0-9]{40,64}$/.test(input.baseSha)) {
+    throw new DomainRuleError('INVALID_BASE_SHA', 'Escrow base SHA is invalid');
+  }
+  if (
+    input.reviewPolicy.version !== 1 ||
+    !/^\S(?:.*\S)?$/.test(input.reviewPolicy.model) ||
+    input.reviewPolicy.model.length > 256 ||
+    !Number.isSafeInteger(input.reviewPolicy.maxFiles) ||
+    input.reviewPolicy.maxFiles < 1 ||
+    input.reviewPolicy.maxFiles > 20
+  ) {
+    throw new DomainRuleError('INVALID_REVIEW_POLICY', 'Escrow review policy is invalid');
+  }
   return {
     id: assertNonEmpty(input.id, 'escrow id'),
     bountyId: assertNonEmpty(input.bountyId, 'bounty id'),
     repository: input.repository.toLowerCase(),
     issueNumber: input.issueNumber,
+    issueTitle: input.issueTitle,
+    issueBody: input.issueBody,
+    baseRef: input.baseRef,
+    baseSha: input.baseSha,
+    reviewPolicy: { ...input.reviewPolicy },
     amountCents,
     acceptanceHash: input.acceptanceHash.toLowerCase(),
     expiresAt,

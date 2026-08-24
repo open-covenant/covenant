@@ -19,6 +19,8 @@ import {
   operationView,
   PAYMENT_AUTHORIZATION_MAX_BYTES,
   PolicyError,
+  escrowAcceptanceHash,
+  escrowReleaseAuthorizationMessage,
   repositoryAdmissionRequestSchema,
   reconcileRepositorySettlementRequestSchema,
   refundAuthorizationMessage,
@@ -29,6 +31,7 @@ import {
 import { MockMergeVerifier } from './github.js';
 import { SignerMetrics } from './metrics.js';
 import { PolicyService } from './policy.js';
+import { MockIndependentReviewer } from './reviewer.js';
 import { InMemoryOperationStore } from './store.js';
 
 const TREASURY = '2'.repeat(32);
@@ -40,11 +43,34 @@ const JOB_AUTHORITY = Keypair.generate();
 const DEFAULT_ADMISSION_ID = '99999999-9999-4999-8999-999999999999';
 let defaultAdmissionEvidenceHash = '';
 
-function releaseRequest(pullRequestNumber = 23) {
-  return {
+function releaseRequest(
+  escrowOperationId: string,
+  reviewedAt: string,
+  authorizationNow = new Date(),
+  pullRequestNumber = 23,
+) {
+  const unsigned = {
+    repository: 'owner/repository',
+    issueNumber: 17,
     pullRequestNumber,
+    mergeCommitSha: 'a'.repeat(40),
     reviewedHeadSha: 'b'.repeat(40),
+    reviewedBaseSha: 'd'.repeat(40),
+    reviewedBaseRef: 'main',
     reviewedDiffHash: 'c'.repeat(64),
+    reviewReceiptId: '77777777-7777-4777-8777-777777777777',
+    reviewReceiptHash: 'e'.repeat(64),
+    reviewModel: 'independent-reviewer',
+    reviewRoute: 'marketplace' as const,
+    reviewedAt,
+    authorizationExpiresAt: new Date(authorizationNow.getTime() + 10 * 60_000).toISOString(),
+  };
+  return {
+    ...unsigned,
+    authorizationSignature: signWithKey(
+      JOB_AUTHORITY,
+      escrowReleaseAuthorizationMessage(escrowOperationId, unsigned),
+    ),
   };
 }
 
@@ -67,6 +93,7 @@ function fixture(
   chain.now = () => (options.now ? options.now().getTime() : Date.now());
   const metrics = new SignerMetrics();
   const merges = new MockMergeVerifier();
+  const reviewer = new MockIndependentReviewer();
   const policy = new PolicyService(
     {
       refundTreasury: options.refundTreasury ?? TREASURY,
@@ -74,6 +101,7 @@ function fixture(
       refundMint: MINT,
       refundDecimals: 6,
       jobAuthorityPublicKey: options.jobAuthorityPublicKey ?? JOB_AUTHORITY.publicKey.toBase58(),
+      reviewModel: 'independent-reviewer',
       refundAuthMaxTtlSeconds: 900,
       operationLimitUsdCents: options.operationLimit ?? 2_500,
       refundDailyLimitUsdCents: options.refundDailyLimit ?? options.dailyLimit ?? 10_000,
@@ -89,6 +117,7 @@ function fixture(
     chain,
     options.prices ?? new FixedUsdPriceOracle(100_000_000),
     merges,
+    reviewer,
     metrics,
     options.now,
   );
@@ -127,10 +156,12 @@ function fixture(
     installationId: 777,
     repositorySelection: 'selected',
     permissions: {
+      checks: 'read',
       contents: 'read',
       issues: 'read',
       metadata: 'read',
       pull_requests: 'read',
+      statuses: 'read',
     },
     tokenRepositories: 1,
     tokenExpiresAt: tokenExpiresAt.toISOString(),
@@ -146,17 +177,19 @@ function fixture(
     installationId: 777,
     repositorySelection: 'selected',
     permissions: {
+      checks: 'read',
       contents: 'read',
       issues: 'read',
       metadata: 'read',
       pull_requests: 'read',
+      statuses: 'read',
     },
     tokenRepositories: 1,
     tokenExpiresAt,
     admittedAt,
     evidenceHash: defaultAdmissionEvidenceHash,
   });
-  return { store, chain, metrics, merges, policy };
+  return { store, chain, metrics, merges, reviewer, policy };
 }
 
 function settlement(signature = '6'.repeat(64), rawAmount = '2000000'): SettlementFacts {
@@ -999,6 +1032,133 @@ describe('refund policy', () => {
     expect(chain.applications.get(recovered.transactionSignature!)).toBe(1);
   });
 
+  it('treats a non-retryable error after broadcast handoff as indeterminate', async () => {
+    const { chain, policy } = fixture();
+    const facts = settlement();
+    chain.settlements.set(facts.signature, facts);
+    chain.broadcast = async (prepared) => {
+      if (!chain.states.has(prepared.signature)) {
+        chain.applications.set(prepared.signature, 1);
+        chain.states.set(prepared.signature, 'finalized');
+      }
+      throw new PolicyError('transaction_rejected', 'provider closed after send', 422);
+    };
+
+    const first = await registerAndRefund(
+      policy,
+      'job-post-send-error',
+      facts.signature,
+      'refund-post-send-error',
+    );
+    expect(first).toMatchObject({
+      status: 'reconciling',
+      errorCode: 'broadcast_indeterminate',
+    });
+
+    await expect(policy.drive(first.id)).resolves.toMatchObject({ status: 'finalized' });
+    expect(chain.applications.get(first.transactionSignature!)).toBe(1);
+  });
+
+  it('reconciles legacy signatures before parking records that lost signed bytes', async () => {
+    const outcomes = {
+      finalized: { status: 'finalized', errorCode: null },
+      failed: { status: 'rejected', errorCode: 'transaction_failed' },
+      submitted: { status: 'submitted', errorCode: null },
+      missing: { status: 'reconciling', errorCode: 'signed_transaction_missing' },
+    } as const;
+
+    for (const [state, expected] of Object.entries(outcomes)) {
+      const { chain, policy, store } = fixture();
+      const facts = settlement(state[0]!.toUpperCase().repeat(64));
+      chain.settlements.set(facts.signature, facts);
+      chain.autoFinalize = false;
+      const operation = await registerAndRefund(
+        policy,
+        `job-legacy-${state}`,
+        facts.signature,
+        `refund-legacy-${state}`,
+      );
+      const signature = operation.transactionSignature!;
+      const owner = `legacy-fixture-${state}`;
+      const leased = await store.acquireLease(operation.id, owner, new Date(), 5_000);
+      expect(leased).not.toBeNull();
+      await store.update(operation.id, owner, leased!.version, {
+        status: 'reconciling',
+        prepared: null,
+      });
+      await store.releaseLease(operation.id, owner);
+      if (state === 'missing') chain.states.delete(signature);
+      else chain.states.set(signature, state as 'finalized' | 'failed' | 'submitted');
+
+      await expect(policy.drive(operation.id)).resolves.toMatchObject({
+        ...expected,
+        prepared: null,
+        transactionSignature: signature,
+      });
+      expect(chain.preparedOperations).toHaveLength(1);
+    }
+  });
+
+  it('never rebuilds an expired refund whose broadcast outcome is missing', async () => {
+    const { chain, policy } = fixture();
+    const facts = settlement();
+    chain.settlements.set(facts.signature, facts);
+    chain.throwAfterBroadcastOnce = true;
+
+    const first = await registerAndRefund(policy, 'job-expired', facts.signature, 'refund-expired');
+    const prepared = structuredClone(first.prepared);
+    expect(first.status).toBe('reconciling');
+    chain.states.delete(first.transactionSignature!);
+    chain.currentBlockHeight = first.prepared!.lastValidBlockHeight + 1;
+
+    const recovered = await policy.drive(first.id);
+    expect(recovered).toMatchObject({
+      status: 'reconciling',
+      errorCode: 'transaction_outcome_indeterminate',
+      transactionSignature: first.transactionSignature,
+      prepared,
+    });
+    expect(chain.preparedOperations).toHaveLength(1);
+    expect([...chain.applications.keys()]).toEqual([first.transactionSignature]);
+
+    const retried = await policy.drive(first.id);
+    expect(retried).toMatchObject({
+      status: 'reconciling',
+      errorCode: 'transaction_outcome_indeterminate',
+      transactionSignature: first.transactionSignature,
+      prepared,
+    });
+    expect(chain.preparedOperations).toHaveLength(1);
+    expect([...chain.applications.keys()]).toEqual([first.transactionSignature]);
+  });
+
+  it('does not reject a prior broadcast when exact rebroadcast preflight is inconclusive', async () => {
+    const { chain, policy } = fixture();
+    const facts = settlement();
+    chain.settlements.set(facts.signature, facts);
+    chain.throwAfterBroadcastOnce = true;
+
+    const first = await registerAndRefund(
+      policy,
+      'job-preflight',
+      facts.signature,
+      'refund-preflight',
+    );
+    chain.states.delete(first.transactionSignature!);
+    chain.broadcast = async () => {
+      throw new PolicyError('transaction_preflight_failed', 'state changed', 409);
+    };
+
+    const recovered = await policy.drive(first.id);
+    expect(recovered).toMatchObject({
+      status: 'reconciling',
+      errorCode: 'broadcast_indeterminate',
+      transactionSignature: first.transactionSignature,
+      prepared: first.prepared,
+    });
+    expect(chain.preparedOperations).toHaveLength(1);
+  });
+
   it('persists signed bytes before broadcasting', async () => {
     const { chain, policy, store } = fixture();
     const facts = settlement();
@@ -1113,9 +1273,18 @@ describe('contributor escrow policy', () => {
 
   it('rejects reserve value above either the operation or absolute asset ceiling', async () => {
     const overOperation = fixture();
+    const { acceptanceHash: _acceptanceHash, ...overOperationTerms } =
+      escrowRequest('bounty-operation');
+    const overOperationRequest = {
+      ...overOperationTerms,
+      amountUsdCents: 2_501,
+    };
     await expect(
       overOperation.policy.createEscrow(
-        { ...escrowRequest('bounty-operation'), amountUsdCents: 2_501 },
+        {
+          ...overOperationRequest,
+          acceptanceHash: escrowAcceptanceHash(overOperationRequest),
+        },
         'escrow-operation',
       ),
     ).rejects.toMatchObject({ code: 'operation_limit_exceeded' });
@@ -1210,8 +1379,12 @@ describe('contributor escrow policy', () => {
 
   it('persists independent merge evidence before release broadcast', async () => {
     const { policy, store, merges } = fixture();
-    const { reserve } = await reserveAndBind(policy, 'bounty-evidence');
-    const release = await policy.releaseEscrow(reserve.id, releaseRequest(), 'release-evidence');
+    const { reserve, binding } = await reserveAndBind(policy, 'bounty-evidence');
+    const release = await policy.releaseEscrow(
+      reserve.id,
+      releaseRequest(reserve.id, binding.createdAt.toISOString()),
+      'release-evidence',
+    );
     const stored = await store.get(release.id);
     const resolution = stored?.details.resolution as Record<string, unknown>;
 
@@ -1232,8 +1405,8 @@ describe('contributor escrow policy', () => {
 
   it('replays only the exact reviewed revision for a release key', async () => {
     const { policy, merges } = fixture();
-    const { reserve } = await reserveAndBind(policy, 'bounty-release-replay');
-    const input = releaseRequest();
+    const { reserve, binding } = await reserveAndBind(policy, 'bounty-release-replay');
+    const input = releaseRequest(reserve.id, binding.createdAt.toISOString());
     const released = await policy.releaseEscrow(reserve.id, input, 'release-review-bound');
 
     await expect(
@@ -1249,11 +1422,44 @@ describe('contributor escrow policy', () => {
     ).rejects.toMatchObject({ code: 'idempotency_conflict' });
   });
 
+  it('permits one paid review attempt while preserving the expiry refund path', async () => {
+    let now = new Date('2026-08-22T12:00:00.000Z');
+    const { policy, reviewer } = fixture({ now: () => new Date(now) });
+    const { reserve, binding, challenge } = await reserveAndBind(policy, 'bounty-review-attempt');
+    reviewer.error = new PolicyError(
+      'independent_review_rejected',
+      'Independent review rejected the release',
+      422,
+    );
+    const input = releaseRequest(reserve.id, binding.createdAt.toISOString(), now);
+
+    await expect(
+      policy.releaseEscrow(reserve.id, input, 'release-review-attempt-one'),
+    ).resolves.toMatchObject({
+      status: 'rejected',
+      errorCode: 'independent_review_rejected',
+    });
+    await expect(
+      policy.releaseEscrow(reserve.id, input, 'release-review-attempt-two'),
+    ).rejects.toMatchObject({ code: 'resource_conflict' });
+    expect(reviewer.requests).toHaveLength(1);
+
+    now = new Date(challenge.claimExpiresAt);
+    await expect(
+      policy.refundEscrow(reserve.id, { reasonCode: 'rejected' }, 'refund-review-rejection'),
+    ).resolves.toMatchObject({ kind: 'escrow_refund', status: 'finalized' });
+    expect(reviewer.requests).toHaveLength(1);
+  });
+
   it('does not release without a finalized claimant binding', async () => {
     const { policy } = fixture();
     const reserve = await policy.createEscrow(escrowRequest('bounty-unbound'), 'reserve-unbound');
     await expect(
-      policy.releaseEscrow(reserve.id, releaseRequest(), 'release-unbound'),
+      policy.releaseEscrow(
+        reserve.id,
+        releaseRequest(reserve.id, reserve.createdAt.toISOString()),
+        'release-unbound',
+      ),
     ).rejects.toMatchObject({ code: 'escrow_not_bound' });
   });
 
@@ -1296,10 +1502,14 @@ describe('contributor escrow policy', () => {
   it('serializes concurrent release and eligible refund to one terminal resolution', async () => {
     let now = new Date('2026-08-22T12:00:00.000Z');
     const { policy } = fixture({ now: () => new Date(now) });
-    const { reserve, challenge } = await reserveAndBind(policy, 'bounty-resolution-race');
+    const { reserve, challenge, binding } = await reserveAndBind(policy, 'bounty-resolution-race');
     now = new Date(challenge.claimExpiresAt);
     const outcomes = await Promise.allSettled([
-      policy.releaseEscrow(reserve.id, releaseRequest(), 'release-race'),
+      policy.releaseEscrow(
+        reserve.id,
+        releaseRequest(reserve.id, binding.createdAt.toISOString(), now),
+        'release-race',
+      ),
       policy.refundEscrow(reserve.id, { reasonCode: 'expired' }, 'refund-race'),
     ]);
 
@@ -1315,24 +1525,38 @@ describe('contributor escrow policy', () => {
 
   it('rejects a PR that merged after the immutable claim expiry', async () => {
     const { merges, policy } = fixture();
-    const { reserve, challenge } = await reserveAndBind(policy, 'bounty-late-merge');
+    const { reserve, challenge, binding } = await reserveAndBind(policy, 'bounty-late-merge');
     const original = merges.verify.bind(merges);
-    merges.verify = async (request) => ({
-      ...(await original(request)),
-      mergedAt: new Date(Date.parse(challenge.claimExpiresAt) + 1).toISOString(),
-    });
+    merges.verify = async (request) => {
+      const verified = await original(request);
+      return {
+        ...verified,
+        evidence: {
+          ...verified.evidence,
+          mergedAt: new Date(Date.parse(challenge.claimExpiresAt) + 1).toISOString(),
+        },
+      };
+    };
 
     await expect(
-      policy.releaseEscrow(reserve.id, releaseRequest(), 'release-late-merge'),
+      policy.releaseEscrow(
+        reserve.id,
+        releaseRequest(reserve.id, binding.createdAt.toISOString()),
+        'release-late-merge',
+      ),
     ).rejects.toMatchObject({ code: 'github_merge_after_expiry' });
   });
 
-  it('rejects an expired missing release transaction and hands resolution to refund', async () => {
+  it('locks an expired missing release transaction against a competing refund', async () => {
     let now = new Date('2026-08-22T12:00:00.000Z');
     const { chain, policy } = fixture({ now: () => new Date(now) });
-    const { reserve, challenge } = await reserveAndBind(policy, 'bounty-release-handoff');
+    const { reserve, challenge, binding } = await reserveAndBind(policy, 'bounty-release-handoff');
     chain.autoFinalize = false;
-    const release = await policy.releaseEscrow(reserve.id, releaseRequest(), 'release-handoff');
+    const release = await policy.releaseEscrow(
+      reserve.id,
+      releaseRequest(reserve.id, binding.createdAt.toISOString(), now),
+      'release-handoff',
+    );
     expect(release.status).toBe('submitted');
     chain.states.delete(release.transactionSignature!);
     chain.currentBlockHeight = release.prepared!.lastValidBlockHeight + 1;
@@ -1340,19 +1564,27 @@ describe('contributor escrow policy', () => {
 
     const expired = await policy.drive(release.id);
     expect(expired).toMatchObject({
-      status: 'rejected',
-      errorCode: 'release_deadline_elapsed',
+      status: 'reconciling',
+      errorCode: 'transaction_outcome_indeterminate',
+      transactionSignature: release.transactionSignature,
+      prepared: release.prepared,
     });
+    expect(chain.preparedOperations.filter(({ kind }) => kind === 'escrow_release')).toHaveLength(
+      1,
+    );
     chain.autoFinalize = true;
     await expect(
       policy.refundEscrow(reserve.id, { reasonCode: 'expired' }, 'refund-after-handoff'),
-    ).resolves.toMatchObject({ kind: 'escrow_refund', status: 'finalized' });
+    ).rejects.toMatchObject({ code: 'resource_conflict' });
   });
 
   it('does not let a permanent prepare failure occupy the resolution resource forever', async () => {
     let now = new Date('2026-08-22T12:00:00.000Z');
     const { chain, policy } = fixture({ now: () => new Date(now) });
-    const { reserve, challenge } = await reserveAndBind(policy, 'bounty-prepare-rejection');
+    const { reserve, challenge, binding } = await reserveAndBind(
+      policy,
+      'bounty-prepare-rejection',
+    );
     const originalPrepare = chain.prepare.bind(chain);
     chain.prepare = async (operation) => {
       if (operation.kind === 'escrow_release') {
@@ -1362,7 +1594,7 @@ describe('contributor escrow policy', () => {
     };
     const release = await policy.releaseEscrow(
       reserve.id,
-      releaseRequest(),
+      releaseRequest(reserve.id, binding.createdAt.toISOString(), now),
       'release-invalid-form',
     );
     expect(release).toMatchObject({
@@ -1405,14 +1637,19 @@ function escrowRequest(
   bountyId: string,
   expiresAt = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
 ) {
-  return {
+  const request = {
     bountyId,
     amountUsdCents: 1_000,
-    acceptanceHash: 'a'.repeat(64),
     expiresAt,
     repository: 'owner/repository',
     issueNumber: 17,
+    issueTitle: 'Handle empty input',
+    issueBody: 'The parser should accept an empty input.',
+    baseRef: 'main',
+    baseSha: 'd'.repeat(40),
+    reviewPolicy: { version: 1 as const, model: 'independent-reviewer', maxFiles: 3 },
   };
+  return { ...request, acceptanceHash: escrowAcceptanceHash(request) };
 }
 
 async function reserveAndBind(policy: PolicyService, bountyId: string, offerExpiresAt?: string) {

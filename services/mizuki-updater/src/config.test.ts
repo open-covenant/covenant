@@ -3,7 +3,8 @@ import { loadConfig } from './config.js';
 
 const BASE_ENV: NodeJS.ProcessEnv = {
   NODE_ENV: 'test',
-  MIZUKI_UPDATER_AUTH_TOKEN: 'a'.repeat(32),
+  MIZUKI_UPDATER_SUBMIT_TOKEN: 's'.repeat(32),
+  MIZUKI_UPDATER_CONTROL_TOKEN: 'c'.repeat(32),
   MIZUKI_UPDATER_READ_TOKEN: 'r'.repeat(32),
   MIZUKI_UPDATER_MEMORY_STORE: 'true',
   MIZUKI_UPDATER_PROPOSAL_KEYS_JSON: JSON.stringify({ key: 'p'.repeat(64) }),
@@ -38,6 +39,7 @@ describe('updater configuration', () => {
       promoteHookUrl: 'http://127.0.0.1:9000/v1/deployments/promote',
       promotionHealthUrlTemplate:
         'http://127.0.0.1:9000/v1/deployments/production/{deploymentId}/health',
+      finalizeHookUrl: 'http://127.0.0.1:9000/v1/deployments/finalize',
       rollbackHookUrl: 'http://127.0.0.1:9000/v1/deployments/rollback',
       deployReadinessUrl: 'http://127.0.0.1:9000/readyz',
     });
@@ -112,15 +114,15 @@ describe('updater configuration', () => {
     expect(() =>
       loadConfig({
         ...BASE_ENV,
-        MIZUKI_UPDATER_DEPLOY_HOOK_TOKEN: BASE_ENV.MIZUKI_UPDATER_AUTH_TOKEN,
+        MIZUKI_UPDATER_DEPLOY_HOOK_TOKEN: BASE_ENV.MIZUKI_UPDATER_SUBMIT_TOKEN,
       }),
-    ).toThrow('Submission, read, and deployment tokens must be distinct');
+    ).toThrow('Submission, control, read, and deployment tokens must be distinct');
     expect(() =>
       loadConfig({
         ...BASE_ENV,
-        MIZUKI_UPDATER_READ_TOKEN: BASE_ENV.MIZUKI_UPDATER_AUTH_TOKEN,
+        MIZUKI_UPDATER_READ_TOKEN: BASE_ENV.MIZUKI_UPDATER_CONTROL_TOKEN,
       }),
-    ).toThrow('Submission, read, and deployment tokens must be distinct');
+    ).toThrow('Submission, control, read, and deployment tokens must be distinct');
   });
 
   it('does not let configuration choose controller paths or credentials', () => {
@@ -182,6 +184,26 @@ describe('updater configuration', () => {
         MIZUKI_UPDATER_PROMOTION_TIMEOUT_MS: '65000',
       }),
     ).toMatchObject({ promotionSoakMs: 60_000, promotionTimeoutMs: 65_000 });
+  });
+
+  it('requires the lease to outlive the longest external call with renewal margin', () => {
+    expect(() =>
+      loadConfig({
+        ...BASE_ENV,
+        MIZUKI_UPDATER_HOOK_TIMEOUT_MS: '90000',
+        MIZUKI_UPDATER_POLL_INTERVAL_MS: '5000',
+        MIZUKI_UPDATER_LEASE_MS: '99999',
+      }),
+    ).toThrow('Upgrade lease must be at least 100000ms');
+
+    expect(
+      loadConfig({
+        ...BASE_ENV,
+        MIZUKI_UPDATER_HOOK_TIMEOUT_MS: '90000',
+        MIZUKI_UPDATER_POLL_INTERVAL_MS: '5000',
+        MIZUKI_UPDATER_LEASE_MS: '180000',
+      }),
+    ).toMatchObject({ hookTimeoutMs: 90_000, leaseMs: 180_000 });
   });
 });
 

@@ -14,9 +14,9 @@ const base = {
   MIZUKI_DEPLOY_RENDER_PRODUCTION_SERVICE_ID: 'srv-production123',
   MIZUKI_DEPLOY_RENDER_ALLOWED_SERVICE_IDS: 'srv-shadow123,srv-production123',
   MIZUKI_DEPLOY_ARTIFACT_ORIGINS: 'https://github.com,https://objects.githubusercontent.com',
-  MIZUKI_DEPLOY_SHADOW_PROBE_URL: 'http://mizuki-shadow:10000/internal/mizuki/functional-readiness',
+  MIZUKI_DEPLOY_SHADOW_PROBE_URL: 'http://mizuki-shadow:10000/deployz',
   MIZUKI_DEPLOY_PRODUCTION_PROBE_URL: 'https://mizuki.example/internal/mizuki/functional-readiness',
-  MIZUKI_DEPLOY_PROBE_TOKEN: 'p'.repeat(32),
+  MIZUKI_DEPLOY_PRODUCTION_PROBE_TOKEN: 'p'.repeat(32),
 };
 
 describe('deployment controller config', () => {
@@ -58,7 +58,7 @@ describe('deployment controller config', () => {
     ).toThrow('invalid');
   });
 
-  it('requires explicit TLS policy and fixed functional probe paths', () => {
+  it('requires explicit TLS policy and role-specific probe paths', () => {
     expect(() =>
       loadConfig({
         ...base,
@@ -70,6 +70,16 @@ describe('deployment controller config', () => {
         ...base,
         MIZUKI_DEPLOY_PRODUCTION_PROBE_URL: 'https://mizuki.example/healthz',
       }),
-    ).toThrow('fixed functional-readiness path');
+    ).toThrow('/internal/mizuki/functional-readiness');
+    expect(() =>
+      loadConfig({
+        ...base,
+        MIZUKI_DEPLOY_SHADOW_PROBE_URL:
+          'http://mizuki-shadow:10000/internal/mizuki/functional-readiness',
+      }),
+    ).toThrow('/deployz');
+    expect(() => loadConfig({ ...base, MIZUKI_DEPLOY_PROBE_TOKEN: 'p'.repeat(32) })).toThrow(
+      'production-only token',
+    );
   });
 });

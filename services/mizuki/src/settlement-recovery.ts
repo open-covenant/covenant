@@ -74,7 +74,7 @@ async function recoverLivePayment(
   try {
     return await reconcileLivePayment(job, deps);
   } catch (error) {
-    if (!settlementNotFound(error)) throw error;
+    if (!settlementScanMiss(error)) throw error;
   }
 
   try {
@@ -83,7 +83,7 @@ async function recoverLivePayment(
     try {
       return await reconcileLivePayment(job, deps);
     } catch (reconciliationError) {
-      if (!settlementNotFound(reconciliationError)) throw reconciliationError;
+      if (!settlementScanMiss(reconciliationError)) throw reconciliationError;
       throw facilitatorError;
     }
   }
@@ -122,8 +122,11 @@ function paymentFromEvidence(
   };
 }
 
-function settlementNotFound(error: unknown): boolean {
-  return error instanceof PolicyRequestError && error.code === 'settlement_not_found';
+function settlementScanMiss(error: unknown): boolean {
+  return (
+    error instanceof PolicyRequestError &&
+    ['settlement_not_found', 'settlement_scan_exhausted'].includes(error.code)
+  );
 }
 
 function settlementSignatureRejected(error: unknown): boolean {

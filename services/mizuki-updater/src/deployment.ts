@@ -9,6 +9,7 @@ const operationId = z
   .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 const shadowResponseSchema = z.object({ deploymentId: operationId }).strict();
 const promotionResponseSchema = z.object({ status: z.literal('completed'), operationId }).strict();
+const finalizeResponseSchema = z.object({ status: z.literal('completed'), operationId }).strict();
 const rollbackResponseSchema = z
   .object({ status: z.literal('completed'), operationId: operationId.optional() })
   .strict();
@@ -76,6 +77,13 @@ export interface DeploymentGateway {
     manifest: UpgradeManifest,
     mergeSha: string,
   ): Promise<PromotionReceipt>;
+  finalize(
+    upgradeId: string,
+    deploymentId: string,
+    manifest: UpgradeManifest,
+    mergeSha: string,
+    promotionOperationId: string,
+  ): Promise<void>;
   rollback(
     upgradeId: string,
     deploymentId: string,
@@ -91,6 +99,7 @@ export interface DeploymentHookConfig {
   shadowHealthUrlTemplate: string;
   promotionHealthUrlTemplate: string;
   promoteUrl: string;
+  finalizeUrl: string;
   rollbackUrl: string;
   token: string;
   timeoutMs: number;
@@ -215,6 +224,26 @@ export class HttpDeploymentGateway implements DeploymentGateway {
         candidateSha: manifest.candidateSha,
         ...(promotionOperationId ? { promotionOperationId } : {}),
         reason: reason.slice(0, 500),
+      }),
+    );
+  }
+
+  async finalize(
+    upgradeId: string,
+    deploymentId: string,
+    manifest: UpgradeManifest,
+    mergeSha: string,
+    promotionOperationId: string,
+  ): Promise<void> {
+    finalizeResponseSchema.parse(
+      await this.post(this.config.finalizeUrl, `${upgradeId}:finalize`, {
+        version: 1,
+        upgradeId,
+        proposalId: manifest.proposalId,
+        deploymentId,
+        candidateSha: manifest.candidateSha,
+        mergeSha,
+        promotionOperationId,
       }),
     );
   }

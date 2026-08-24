@@ -102,12 +102,16 @@ Run the repository verifier with two unrelated finalized RPC endpoints:
 
 The procedure performs these independent checks:
 
-1. `solana program show --commitment finalized --output json` is captured from both RPCs. The verifier requires the expected loader, a null upgrade authority, and identical program-data metadata or exits nonzero.
-2. `solana program dump --commitment finalized` extracts executable bytes from each program-data account. The two dumps must be byte-identical and match the approved local artifact.
-3. SHA-256 is recorded for the local file and both finalized dumps.
-4. `solana-verify get-program-hash` is calculated independently for the local and both on-chain executables. The verifier requires all three values to match or exits nonzero. This hash is distinct from raw file SHA-256; compare like with like.
+1. Both endpoints must use HTTPS and different registrable provider domains. IP literals, single-label hosts, redirects, different paths, query tokens, private-suffix tenants, or subdomains under one provider domain do not count as independent providers.
+2. A direct JSON-RPC preflight that refuses redirects requires both endpoints to return the canonical mainnet-beta genesis hash `5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d`.
+3. `solana program show --commitment finalized --output json` is captured from both RPCs. The verifier requires the expected loader, a null upgrade authority, and identical program-data metadata or exits nonzero.
+4. `solana program dump --commitment finalized` extracts executable bytes from each program-data account. The two dumps must be byte-identical and match the approved local artifact.
+5. SHA-256 is recorded for the local file and both finalized dumps.
+6. `solana-verify get-program-hash` is calculated independently for the local and both on-chain executables. The verifier requires all three values to match or exits nonzero. This hash is distinct from raw file SHA-256; compare like with like.
 
-The signer must independently repeat loader-state parsing at startup: resolve the executable program to its program-data address, require the expected loader owner, require no upgrade authority, hash the executable bytes, compare them to its allowlist, and require the same result from two finalized RPCs. Any mismatch keeps escrow mutations disabled.
+The retained directory includes the two provider domains and both genesis observations, but never stores full RPC URLs or their credentials.
+
+The signer independently checks the same full mainnet-beta genesis hash through both provider domains during startup readiness and before every financial read or mutation. It also repeats loader-state parsing: resolve the executable program to its program-data address, require the expected loader owner, require no upgrade authority, hash the executable bytes, compare them to its allowlist, and require the same result from two finalized RPCs. Any mismatch keeps settlement mutations disabled.
 
 ## Post-deployment canaries
 

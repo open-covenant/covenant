@@ -11,7 +11,8 @@ An upgrade moves through this durable state machine:
 ```text
 submitted -> verifying_artifact -> proposal_verified -> syncing_pr
           -> waiting_checks -> starting_shadow -> checking_shadow
-          -> merging -> promoting -> verifying_promotion -> completed
+          -> merging -> merge_triggering -> promoting
+          -> verifying_promotion -> completed
 ```
 
 Before a shadow deployment, a terminal failure ends at `failed`. After a shadow deployment, a terminal failure moves through `rollback_pending` to `rolled_back`. A failed rollback ends at `rollback_failed` and requires operator intervention.
@@ -32,10 +33,11 @@ The updater fails closed unless all of the following are true:
 - Every required GitHub Actions check is successful and belongs to its configured workflow run.
 - Shadow health reports the reviewed commit as healthy.
 - The required checks are still successful immediately before merge.
-- The durable promotion control is explicitly enabled at its current revision before merge and again before promotion.
+- The durable promotion control is explicitly enabled before the updater acquires the single active promotion reservation.
+- That reservation remains owned through merge reconciliation, production promotion, the full health soak, controller finalization, and any terminal rollback.
 - The promoted deployment reports the exact reviewed commit as continuously healthy for the configured soak window.
 
-External actions are resumable. Pull-request synchronization and merge inspect existing GitHub state before acting. Deployment hooks receive stable idempotency keys and must return the same receipt when those keys are replayed. Promotion hook success is durably recorded as `verifying_promotion`; it is never treated as completion by itself. The promotion control starts closed after migration and remains closed across restarts until the write authority explicitly enables it.
+External actions are resumable. Pull-request synchronization and merge inspect existing GitHub state before acting, including reconciliation of a merge committed before a worker crash. Deployment hooks receive stable idempotency keys and must return the same receipt when those keys are replayed. Promotion hook success is durably recorded as `verifying_promotion`; it is never treated as completion by itself. Completion requires a successful controller finalization after the soak. Promotion control starts closed after migration. Every control change, reservation acquisition, release, terminal reconciliation, rollback lockout, and operator resolution advances its revision and appends an immutable audit entry. A failed rollback retains its reservation and closes promotions until an operator explicitly resolves it while control remains closed.
 
 ## Signed proposal
 
@@ -119,14 +121,16 @@ The benchmark signer signs `mizuki-benchmark-v1:<keyId>:<receiptSha256>`. The in
 
 ## API
 
-All routes except `GET /health` require bearer authentication. `MIZUKI_UPDATER_AUTH_TOKEN` is the write/admin authority and authorizes submission, control mutation, and reads. The distinct `MIZUKI_UPDATER_READ_TOKEN` authorizes reads only and is the only updater credential given to the Mizuki core.
+All routes except `GET /health` require bearer authentication. `MIZUKI_UPDATER_SUBMIT_TOKEN` authorizes proposal submission only. `MIZUKI_UPDATER_CONTROL_TOKEN` authorizes promotion-control mutation and failed-rollback resolution only. `MIZUKI_UPDATER_READ_TOKEN` authorizes reads only and is the only updater credential given to the Mizuki core. All three tokens and the deployment-hook token must be distinct.
 
 - `POST /v1/upgrades` requires `Content-Type: application/json` and an `Idempotency-Key` header. It returns `202` after durable reservation.
 - `GET /v1/upgrades/:id` returns current state and public external receipts.
 - `GET /v1/proposals/:proposalId` resolves the durable upgrade for a signed manifest proposal ID and returns its audit-head hash. Mizuki uses this read-only route to reconcile its public capability record.
 - `GET /v1/upgrades/:id/audit` returns the ordered, SHA-256-linked audit chain.
-- `GET /v1/admin/promotion-control` returns the durable promotion state, revision, reason, authority role, and update time. Either authenticated token may read it.
-- `PUT /v1/admin/promotion-control` requires the write/admin token and strict JSON with `promotionsEnabled`, `expectedRevision`, and an operator reason. A stale revision returns `409`.
+- `GET /v1/admin/promotion-control` returns the durable promotion state, reservation owner, revision, reason, authority role, and update time. It requires the read token.
+- `GET /v1/admin/promotion-control/audit` returns the append-only ordered control and reservation ledger. It requires the read token.
+- `PUT /v1/admin/promotion-control` requires the control token and strict JSON with `promotionsEnabled`, `expectedRevision`, and an operator reason. A stale revision returns `409`.
+- `POST /v1/admin/promotion-control/resolve-failure` requires the control token, a matching failed upgrade ID and revision, and an operator reason. It clears only the failed reservation; promotions remain disabled until a separate revisioned enable request.
 - `GET /metrics` returns Prometheus metrics.
 - `GET /health` checks durable storage and is safe for a platform health probe.
 
@@ -142,7 +146,7 @@ Example pause body:
 }
 ```
 
-Control mutation, merge admission, and promotion admission use the same database advisory gate. The updater reads the control inside that gate before merging and again immediately before calling the promotion hook. It persists each receipt before releasing the corresponding gate. A successful pause response therefore means no merge or promotion hook is running or can begin. If either action was already in flight, the pause request waits for the bounded call and receipt transition. A paused control does not stop production-health checks or rollback for a candidate already in `verifying_promotion` or `rollback_pending`.
+Control mutation and reservation ownership use the same database advisory gate. The updater acquires one durable reservation before entering `merge_triggering` and does not release it merely because a lease, process, or deploy call ends. A successful pause prevents a new reservation but does not cancel the current owner mid-release. Production-health checks, controller finalization, and rollback continue for the owner while control is paused.
 
 For a core-generated capability proposal, the signed manifest must use that core upgrade UUID as `proposalId` and copy the handoff's `handoffSha256` into `sourceHandoffSha256` before hashing and signing the manifest. The updater exposes that signed source hash on both upgrade read routes. The core recomputes the current deterministic handoff from the capability, upgrade trigger, and ordered failure evidence and refuses to advance unless the hashes match exactly. New failure evidence invalidates an older handoff. Only the external proposal authority submits the envelope; the core has no submission or signing path.
 

@@ -15,11 +15,15 @@ const TOKEN_CACHE_LIMIT = 256;
 const JSON_LIMIT = 65_536;
 const DIFF_LIMIT = 2_000_000;
 const INSTALLATION_PERMISSIONS = {
+  checks: 'read',
   contents: 'read',
   issues: 'read',
   metadata: 'read',
   pull_requests: 'read',
+  statuses: 'read',
 } as const;
+const forbiddenPath =
+  /(^|\/)(\.github\/workflows|\.env|secrets?|vendor|generated|dist|build|node_modules)(\/|$)|(^|\/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock)$/i;
 
 export interface GitHubAppConfig {
   appId: string;
@@ -31,8 +35,14 @@ export interface MergeVerificationRequest {
   issueNumber: number;
   claimantGitHubLogin: string;
   pullRequestNumber: number;
+  mergeCommitSha: string;
   reviewedHeadSha: string;
+  reviewedBaseSha: string;
+  reviewedBaseRef: string;
   reviewedDiffHash: string;
+  expectedIssueTitle: string;
+  expectedIssueBody: string;
+  maxFiles: number;
   authorizedAt: Date;
 }
 
@@ -47,18 +57,47 @@ export interface MergeEvidence {
   baseCommitOid: string;
   baseRefName: string;
   diffHash: string;
+  approvedReviewer: string;
+  approvedReviewSubmittedAt: string;
+  checkCount: number;
   createdAt: string;
   mergedAt: string;
+}
+
+export interface MergeReviewArtifact {
+  issueTitle: string;
+  issueBody: string;
+  changedFiles: number;
+  diff: string;
+}
+
+export interface VerifiedMerge {
+  evidence: MergeEvidence;
+  artifact: MergeReviewArtifact;
 }
 
 export interface MergeVerifier {
   health(): Promise<void>;
   repositoryReadiness(repository: string): Promise<RepositoryReadinessEvidence>;
-  verify(request: MergeVerificationRequest): Promise<MergeEvidence>;
+  verify(request: MergeVerificationRequest): Promise<VerifiedMerge>;
   assertCommitUnpublished(repository: string, commitSha: string): Promise<void>;
   verifyRepositoryMerge(request: RepositoryMergeRequest): Promise<RepositoryMergeEvidence>;
   verifyOauthIdentity(accessToken: string): Promise<ClaimantEvidence>;
+  verifyEscrowTerms(request: EscrowTermsRequest): Promise<EscrowTermsEvidence>;
 }
+
+export interface EscrowTermsRequest {
+  repository: string;
+  issueNumber: number;
+  issueTitle: string;
+  issueBody: string;
+  baseRef: string;
+  baseSha: string;
+}
+
+export type EscrowTermsEvidence = EscrowTermsRequest & {
+  visibility: 'PUBLIC';
+};
 
 export interface RepositoryMergeRequest {
   repository: string;
@@ -115,6 +154,13 @@ const responseSchema = z
         repository: z
           .object({
             visibility: z.enum(['PUBLIC', 'PRIVATE', 'INTERNAL']),
+            issue: z
+              .object({
+                number: z.number().int().positive(),
+                title: z.string().min(1).max(512),
+                body: z.string().max(100_000),
+              })
+              .nullable(),
             pullRequest: z
               .object({
                 number: z.number().int().positive(),
@@ -122,10 +168,62 @@ const responseSchema = z
                 merged: z.boolean(),
                 mergedAt: z.string().datetime({ offset: true }).nullable(),
                 createdAt: z.string().datetime({ offset: true }),
-                mergeCommit: z.object({ oid: z.string().regex(/^[a-f0-9]{40,64}$/) }).nullable(),
+                mergeCommit: z
+                  .object({
+                    oid: z.string().regex(/^[a-f0-9]{40,64}$/),
+                    parents: z.object({
+                      nodes: z
+                        .array(z.object({ oid: z.string().regex(/^[a-f0-9]{40,64}$/) }))
+                        .min(1)
+                        .max(3),
+                    }),
+                  })
+                  .nullable(),
                 headRefOid: z.string().regex(/^[a-f0-9]{40,64}$/),
                 baseRefOid: z.string().regex(/^[a-f0-9]{40,64}$/),
                 baseRefName: z.string().min(1).max(255),
+                changedFiles: z.number().int().nonnegative().max(100_000),
+                reviews: z.object({
+                  nodes: z.array(
+                    z.object({
+                      state: z.enum([
+                        'PENDING',
+                        'COMMENTED',
+                        'APPROVED',
+                        'CHANGES_REQUESTED',
+                        'DISMISSED',
+                      ]),
+                      submittedAt: z.string().datetime({ offset: true }).nullable(),
+                      authorAssociation: z.enum([
+                        'COLLABORATOR',
+                        'CONTRIBUTOR',
+                        'FIRST_TIMER',
+                        'FIRST_TIME_CONTRIBUTOR',
+                        'MANNEQUIN',
+                        'MEMBER',
+                        'NONE',
+                        'OWNER',
+                      ]),
+                      author: z.object({ login: z.string().min(1).max(100) }).nullable(),
+                      commit: z.object({ oid: z.string().regex(/^[a-f0-9]{40,64}$/) }).nullable(),
+                    }),
+                  ),
+                }),
+                commits: z.object({
+                  nodes: z.array(
+                    z.object({
+                      commit: z.object({
+                        oid: z.string().regex(/^[a-f0-9]{40,64}$/),
+                        statusCheckRollup: z
+                          .object({
+                            state: z.enum(['ERROR', 'EXPECTED', 'FAILURE', 'PENDING', 'SUCCESS']),
+                            contexts: z.object({ totalCount: z.number().int().nonnegative() }),
+                          })
+                          .nullable(),
+                      }),
+                    }),
+                  ),
+                }),
                 author: z.object({ login: z.string() }).nullable(),
                 baseRepository: z.object({ nameWithOwner: z.string() }).nullable(),
                 closingIssuesReferences: z.object({
@@ -147,19 +245,53 @@ const responseSchema = z
   .passthrough();
 
 const query = `
-query MizukiMergeEvidence($owner: String!, $name: String!, $number: Int!) {
+query MizukiMergeEvidence(
+  $owner: String!
+  $name: String!
+  $pullRequestNumber: Int!
+  $issueNumber: Int!
+) {
   repository(owner: $owner, name: $name) {
     visibility
-    pullRequest(number: $number) {
+    issue(number: $issueNumber) {
+      number
+      title
+      body
+    }
+    pullRequest(number: $pullRequestNumber) {
       number
       state
       merged
       mergedAt
       createdAt
-      mergeCommit { oid }
+      mergeCommit {
+        oid
+        parents(first: 3) { nodes { oid } }
+      }
       headRefOid
       baseRefOid
       baseRefName
+      changedFiles
+      reviews(last: 100) {
+        nodes {
+          state
+          submittedAt
+          authorAssociation
+          author { login }
+          commit { oid }
+        }
+      }
+      commits(last: 1) {
+        nodes {
+          commit {
+            oid
+            statusCheckRollup {
+              state
+              contexts(first: 100) { totalCount }
+            }
+          }
+        }
+      }
       author { login }
       baseRepository { nameWithOwner }
       closingIssuesReferences(first: 100) {
@@ -171,6 +303,52 @@ query MizukiMergeEvidence($owner: String!, $name: String!, $number: Int!) {
     }
   }
 }`;
+
+const escrowTermsQuery = `
+query MizukiEscrowTerms($owner: String!, $name: String!, $issueNumber: Int!) {
+  repository(owner: $owner, name: $name) {
+    nameWithOwner
+    visibility
+    defaultBranchRef {
+      name
+      target { oid }
+    }
+    issue(number: $issueNumber) {
+      number
+      title
+      body
+    }
+  }
+}`;
+
+const escrowTermsResponseSchema = z
+  .object({
+    data: z
+      .object({
+        repository: z
+          .object({
+            nameWithOwner: z.string().min(3).max(201),
+            visibility: z.enum(['PUBLIC', 'PRIVATE', 'INTERNAL']),
+            defaultBranchRef: z
+              .object({
+                name: z.string().min(1).max(255),
+                target: z.object({ oid: z.string().regex(/^[a-f0-9]{40,64}$/) }),
+              })
+              .nullable(),
+            issue: z
+              .object({
+                number: z.number().int().positive(),
+                title: z.string().min(1).max(512),
+                body: z.string().max(100_000),
+              })
+              .nullable(),
+          })
+          .nullable(),
+      })
+      .nullable(),
+    errors: z.array(z.object({ message: z.string() }).passthrough()).optional(),
+  })
+  .passthrough();
 
 const oauthIdentitySchema = z
   .object({ id: z.number().int().positive(), login: z.string().min(1).max(39) })
@@ -198,10 +376,12 @@ const installationTokenSchema = z
     expires_at: z.string().datetime({ offset: true }),
     permissions: z
       .object({
+        checks: z.literal('read'),
         contents: z.literal('read'),
         issues: z.literal('read'),
         metadata: z.literal('read'),
         pull_requests: z.literal('read'),
+        statuses: z.literal('read'),
       })
       .strict(),
     repository_selection: z.literal('selected'),
@@ -222,6 +402,16 @@ const commitPullRequestsSchema = z.array(
     .object({
       number: z.number().int().positive().max(2_147_483_647),
       html_url: z.string().url().max(2_048),
+    })
+    .passthrough(),
+);
+const pullRequestFilesSchema = z.array(
+  z
+    .object({
+      filename: z.string().min(1).max(4_096),
+      previous_filename: z.string().min(1).max(4_096).optional(),
+      status: z.enum(['added', 'removed', 'modified', 'renamed', 'copied', 'changed', 'unchanged']),
+      patch: z.string().max(DIFF_LIMIT).optional(),
     })
     .passthrough(),
 );
@@ -317,11 +507,57 @@ export class GitHubMergeVerifier implements MergeVerifier {
     return { githubId: String(identity.data.id), login: identity.data.login.toLowerCase() };
   }
 
-  async verify(request: MergeVerificationRequest): Promise<MergeEvidence> {
+  async verifyEscrowTerms(request: EscrowTermsRequest): Promise<EscrowTermsEvidence> {
+    const [owner, name] = repositoryParts(request.repository);
+    const decoded = escrowTermsResponseSchema.safeParse(
+      await this.graphql(request.repository, {
+        query: escrowTermsQuery,
+        variables: { owner, name, issueNumber: request.issueNumber },
+      }),
+    );
+    const repository = decoded.success ? decoded.data.data?.repository : undefined;
+    const issue = repository?.issue;
+    const base = repository?.defaultBranchRef;
+    if (!decoded.success || decoded.data.errors?.length || !repository || !issue || !base) {
+      throw new PolicyError(
+        'github_invalid_response',
+        'GitHub returned incomplete escrow acceptance evidence',
+        503,
+        true,
+      );
+    }
+    if (
+      repository.visibility !== 'PUBLIC' ||
+      repository.nameWithOwner.toLowerCase() !== request.repository.toLowerCase() ||
+      issue.number !== request.issueNumber ||
+      issue.title !== request.issueTitle ||
+      issue.body !== request.issueBody ||
+      base.name !== request.baseRef ||
+      base.target.oid !== request.baseSha
+    ) {
+      throw new PolicyError(
+        'github_escrow_terms_mismatch',
+        'Escrow terms do not match the public repository default branch and issue',
+        422,
+      );
+    }
+    return {
+      ...request,
+      repository: request.repository.toLowerCase(),
+      visibility: 'PUBLIC',
+    };
+  }
+
+  async verify(request: MergeVerificationRequest): Promise<VerifiedMerge> {
     const [owner, name] = repositoryParts(request.repository);
     const body = await this.graphql(request.repository, {
       query,
-      variables: { owner, name, number: request.pullRequestNumber },
+      variables: {
+        owner,
+        name,
+        pullRequestNumber: request.pullRequestNumber,
+        issueNumber: request.issueNumber,
+      },
     });
     const decoded = responseSchema.safeParse(body);
     if (!decoded.success || decoded.data.errors?.length) {
@@ -333,6 +569,7 @@ export class GitHubMergeVerifier implements MergeVerifier {
       );
     }
     const repositoryRecord = decoded.data.data?.repository;
+    const issue = repositoryRecord?.issue;
     const pullRequest = repositoryRecord?.pullRequest;
     if (!pullRequest) {
       throw new PolicyError('github_pr_not_found', 'Pull request was not found', 422);
@@ -347,6 +584,18 @@ export class GitHubMergeVerifier implements MergeVerifier {
     }
     if (repositoryRecord.visibility !== 'PUBLIC') {
       throw new PolicyError('github_repository_not_public', 'Escrow repository is not public', 422);
+    }
+    if (
+      !issue ||
+      issue.number !== request.issueNumber ||
+      issue.title !== request.expectedIssueTitle ||
+      issue.body !== request.expectedIssueBody
+    ) {
+      throw new PolicyError(
+        'github_issue_terms_mismatch',
+        'GitHub issue terms do not match the accepted bounty commitment',
+        422,
+      );
     }
     if (
       pullRequest.baseRepository?.nameWithOwner.toLowerCase() !== request.repository.toLowerCase()
@@ -387,37 +636,133 @@ export class GitHubMergeVerifier implements MergeVerifier {
         422,
       );
     }
-    if (pullRequest.headRefOid !== request.reviewedHeadSha) {
+    if (
+      pullRequest.mergeCommit.oid !== request.mergeCommitSha ||
+      pullRequest.headRefOid !== request.reviewedHeadSha ||
+      pullRequest.baseRefName !== request.reviewedBaseRef
+    ) {
       throw new PolicyError(
-        'github_review_head_mismatch',
-        'Merged pull request head does not match the reviewed revision',
+        'github_review_mismatch',
+        'Merged pull request does not match the authorized reviewed revision',
+        422,
+      );
+    }
+    const baseCommitOid = verifiedMergeBase(
+      pullRequest.mergeCommit,
+      request.reviewedBaseSha,
+      request.reviewedHeadSha,
+    );
+    if (pullRequest.changedFiles < 1 || pullRequest.changedFiles > request.maxFiles) {
+      throw new PolicyError(
+        'github_review_scope_mismatch',
+        'Merged pull request exceeds the accepted file scope',
+        422,
+      );
+    }
+    const approval = approvedReview(
+      pullRequest.reviews.nodes,
+      pullRequest.headRefOid,
+      request.claimantGitHubLogin,
+    );
+    if (!approval) {
+      throw new PolicyError(
+        'github_maintainer_approval_missing',
+        'Latest pull request head lacks an active approval from a non-claimant maintainer',
+        422,
+      );
+    }
+    const checkCount = passingCheckCount(pullRequest.commits.nodes, pullRequest.headRefOid);
+    if (checkCount === 0) {
+      throw new PolicyError(
+        'github_checks_missing',
+        'Latest pull request head lacks successful repository checks',
+        422,
+      );
+    }
+    const files = await this.pullRequestFiles(request.repository, owner, name, pullRequest.number);
+    if (files.length !== pullRequest.changedFiles || files.some(unsafeReviewFile)) {
+      throw new PolicyError(
+        'github_review_files_unsafe',
+        'Pull request file evidence is incomplete, binary, truncated, or security-sensitive',
         422,
       );
     }
 
-    const diffHash = await this.pullRequestDiffHash(
+    const diffBytes = await this.pullRequestDiff(
       request.repository,
       owner,
       name,
       pullRequest.number,
     );
+    const diffHash = createHash('sha256').update(diffBytes).digest('hex');
+    let diff: string;
+    try {
+      diff = new TextDecoder('utf-8', { fatal: true }).decode(diffBytes);
+    } catch {
+      throw new PolicyError(
+        'github_review_files_unsafe',
+        'Pull request diff is not valid UTF-8 text',
+        422,
+      );
+    }
     const confirmation = responseSchema.safeParse(
       await this.graphql(request.repository, {
         query,
-        variables: { owner, name, number: request.pullRequestNumber },
+        variables: {
+          owner,
+          name,
+          pullRequestNumber: request.pullRequestNumber,
+          issueNumber: request.issueNumber,
+        },
       }),
     );
-    const confirmedPull = confirmation.success
-      ? confirmation.data.data?.repository?.pullRequest
+    const confirmedRepository = confirmation.success
+      ? confirmation.data.data?.repository
       : undefined;
+    const confirmedPull = confirmedRepository?.pullRequest;
+    const confirmedIssue = confirmedRepository?.issue;
+    const confirmedClosesIssue = confirmedPull?.closingIssuesReferences.nodes.some(
+      (issue) =>
+        issue.number === request.issueNumber &&
+        issue.repository?.nameWithOwner.toLowerCase() === request.repository.toLowerCase(),
+    );
+    const confirmedApproval = confirmedPull
+      ? approvedReview(
+          confirmedPull.reviews.nodes,
+          confirmedPull.headRefOid,
+          request.claimantGitHubLogin,
+        )
+      : null;
+    const confirmedCheckCount = confirmedPull
+      ? passingCheckCount(confirmedPull.commits.nodes, confirmedPull.headRefOid)
+      : 0;
     if (
       !confirmedPull ||
+      !confirmedIssue ||
       (confirmation.success && confirmation.data.errors?.length) ||
+      confirmedRepository?.visibility !== 'PUBLIC' ||
+      confirmedIssue.number !== issue.number ||
+      confirmedIssue.title !== issue.title ||
+      confirmedIssue.body !== issue.body ||
+      confirmedPull.number !== pullRequest.number ||
+      confirmedPull.state !== 'MERGED' ||
+      !confirmedPull.merged ||
+      !confirmedClosesIssue ||
+      confirmedPull.baseRepository?.nameWithOwner.toLowerCase() !==
+        request.repository.toLowerCase() ||
+      confirmedPull.author?.login.toLowerCase() !== request.claimantGitHubLogin.toLowerCase() ||
+      confirmedPull.createdAt !== pullRequest.createdAt ||
+      confirmedPull.changedFiles !== pullRequest.changedFiles ||
+      confirmedApproval?.login !== approval.login ||
+      confirmedApproval?.submittedAt !== approval.submittedAt ||
+      confirmedApproval?.commitOid !== approval.commitOid ||
+      confirmedCheckCount !== checkCount ||
       confirmedPull.headRefOid !== pullRequest.headRefOid ||
-      confirmedPull.baseRefOid !== pullRequest.baseRefOid ||
       confirmedPull.baseRefName !== pullRequest.baseRefName ||
       confirmedPull.mergedAt !== pullRequest.mergedAt ||
-      confirmedPull.mergeCommit?.oid !== pullRequest.mergeCommit.oid
+      confirmedPull.mergeCommit?.oid !== pullRequest.mergeCommit.oid ||
+      mergeParentOids(confirmedPull.mergeCommit).join(':') !==
+        mergeParentOids(pullRequest.mergeCommit).join(':')
     ) {
       throw new PolicyError(
         'github_evidence_changed',
@@ -433,20 +778,38 @@ export class GitHubMergeVerifier implements MergeVerifier {
         422,
       );
     }
+    if (/^GIT binary patch$/m.test(diff) || /^Binary files .* differ$/m.test(diff)) {
+      throw new PolicyError(
+        'github_review_files_unsafe',
+        'Binary pull request diffs cannot authorize escrow release',
+        422,
+      );
+    }
 
     return {
-      repository: request.repository.toLowerCase(),
-      issueNumber: request.issueNumber,
-      claimantGitHubLogin: request.claimantGitHubLogin.toLowerCase(),
-      pullRequestNumber: pullRequest.number,
-      pullRequestUrl: `https://github.com/${request.repository}/pull/${pullRequest.number}`,
-      mergeCommitOid: pullRequest.mergeCommit.oid,
-      headCommitOid: pullRequest.headRefOid,
-      baseCommitOid: pullRequest.baseRefOid,
-      baseRefName: pullRequest.baseRefName,
-      diffHash,
-      createdAt: pullRequest.createdAt,
-      mergedAt: pullRequest.mergedAt,
+      evidence: {
+        repository: request.repository.toLowerCase(),
+        issueNumber: request.issueNumber,
+        claimantGitHubLogin: request.claimantGitHubLogin.toLowerCase(),
+        pullRequestNumber: pullRequest.number,
+        pullRequestUrl: `https://github.com/${request.repository}/pull/${pullRequest.number}`,
+        mergeCommitOid: pullRequest.mergeCommit.oid,
+        headCommitOid: pullRequest.headRefOid,
+        baseCommitOid,
+        baseRefName: pullRequest.baseRefName,
+        diffHash,
+        approvedReviewer: approval.login,
+        approvedReviewSubmittedAt: approval.submittedAt,
+        checkCount,
+        createdAt: pullRequest.createdAt,
+        mergedAt: pullRequest.mergedAt,
+      },
+      artifact: {
+        issueTitle: issue.title,
+        issueBody: issue.body,
+        changedFiles: pullRequest.changedFiles,
+        diff,
+      },
     };
   }
 
@@ -454,7 +817,12 @@ export class GitHubMergeVerifier implements MergeVerifier {
     const [owner, name] = repositoryParts(request.repository);
     const body = await this.graphql(request.repository, {
       query,
-      variables: { owner, name, number: request.pullRequestNumber },
+      variables: {
+        owner,
+        name,
+        pullRequestNumber: request.pullRequestNumber,
+        issueNumber: request.issueNumber,
+      },
     });
     const decoded = responseSchema.safeParse(body);
     if (!decoded.success || decoded.data.errors?.length) {
@@ -524,7 +892,6 @@ export class GitHubMergeVerifier implements MergeVerifier {
     if (
       pullRequest.headRefOid !== request.deliveredCommitSha ||
       pullRequest.headRefOid !== request.reviewedHeadSha ||
-      pullRequest.baseRefOid !== request.reviewedBaseSha ||
       pullRequest.baseRefName !== request.reviewedBaseRef
     ) {
       throw new PolicyError(
@@ -533,17 +900,24 @@ export class GitHubMergeVerifier implements MergeVerifier {
         422,
       );
     }
-
-    const diffHash = await this.pullRequestDiffHash(
-      request.repository,
-      owner,
-      name,
-      pullRequest.number,
+    const baseCommitOid = verifiedMergeBase(
+      pullRequest.mergeCommit,
+      request.reviewedBaseSha,
+      request.reviewedHeadSha,
     );
+
+    const diffHash = createHash('sha256')
+      .update(await this.pullRequestDiff(request.repository, owner, name, pullRequest.number))
+      .digest('hex');
     const confirmation = responseSchema.safeParse(
       await this.graphql(request.repository, {
         query,
-        variables: { owner, name, number: request.pullRequestNumber },
+        variables: {
+          owner,
+          name,
+          pullRequestNumber: request.pullRequestNumber,
+          issueNumber: request.issueNumber,
+        },
       }),
     );
     const confirmedRepository = confirmation.success
@@ -567,10 +941,11 @@ export class GitHubMergeVerifier implements MergeVerifier {
         request.repository.toLowerCase() ||
       confirmedPull.createdAt !== pullRequest.createdAt ||
       confirmedPull.headRefOid !== pullRequest.headRefOid ||
-      confirmedPull.baseRefOid !== pullRequest.baseRefOid ||
       confirmedPull.baseRefName !== pullRequest.baseRefName ||
       confirmedPull.mergedAt !== pullRequest.mergedAt ||
-      confirmedPull.mergeCommit?.oid !== pullRequest.mergeCommit.oid
+      confirmedPull.mergeCommit?.oid !== pullRequest.mergeCommit.oid ||
+      mergeParentOids(confirmedPull.mergeCommit).join(':') !==
+        mergeParentOids(pullRequest.mergeCommit).join(':')
     ) {
       throw new PolicyError(
         'github_evidence_changed',
@@ -593,7 +968,7 @@ export class GitHubMergeVerifier implements MergeVerifier {
       pullRequestUrl: `https://github.com/${request.repository}/pull/${pullRequest.number}`,
       mergeCommitOid: pullRequest.mergeCommit.oid,
       headCommitOid: pullRequest.headRefOid,
-      baseCommitOid: pullRequest.baseRefOid,
+      baseCommitOid,
       baseRefName: pullRequest.baseRefName,
       diffHash,
       createdAt: pullRequest.createdAt,
@@ -641,12 +1016,50 @@ export class GitHubMergeVerifier implements MergeVerifier {
     }
   }
 
-  private async pullRequestDiffHash(
+  private async pullRequestFiles(
     repository: string,
     owner: string,
     name: string,
     number: number,
-  ): Promise<string> {
+  ): Promise<z.infer<typeof pullRequestFilesSchema>> {
+    const response = await this.repositoryRequest(
+      repository,
+      `${GITHUB_API_URL}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/${number}/files?per_page=100&page=1`,
+      {
+        headers: {
+          accept: 'application/vnd.github+json',
+          'user-agent': 'mizuki-policy-signer/0.1',
+          'x-github-api-version': GITHUB_API_VERSION,
+        },
+      },
+      'GitHub pull request file evidence is unavailable',
+    );
+    if (!response.ok) {
+      throw new PolicyError(
+        'github_files_unavailable',
+        'GitHub pull request file evidence could not be retrieved',
+        503,
+        true,
+      );
+    }
+    const decoded = pullRequestFilesSchema.safeParse(await readJsonResponse(response, DIFF_LIMIT));
+    if (!decoded.success) {
+      throw new PolicyError(
+        'github_invalid_response',
+        'GitHub returned invalid pull request file evidence',
+        503,
+        true,
+      );
+    }
+    return decoded.data;
+  }
+
+  private async pullRequestDiff(
+    repository: string,
+    owner: string,
+    name: string,
+    number: number,
+  ): Promise<Buffer> {
     const response = await this.repositoryRequest(
       repository,
       `${GITHUB_API_URL}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/${number}`,
@@ -680,8 +1093,7 @@ export class GitHubMergeVerifier implements MergeVerifier {
     if (length && (!/^\d+$/.test(length) || Number(length) > DIFF_LIMIT)) {
       throw new PolicyError('github_diff_too_large', 'GitHub review artifact is too large', 422);
     }
-    const diff = await readLimitedBody(response, DIFF_LIMIT, 'GitHub review artifact');
-    return createHash('sha256').update(diff).digest('hex');
+    return readLimitedBody(response, DIFF_LIMIT, 'GitHub review artifact');
   }
 
   private async graphql(repository: string, body: Record<string, unknown>): Promise<unknown> {
@@ -921,6 +1333,108 @@ export class GitHubMergeVerifier implements MergeVerifier {
   }
 }
 
+type PullRequestReview = {
+  state: 'PENDING' | 'COMMENTED' | 'APPROVED' | 'CHANGES_REQUESTED' | 'DISMISSED';
+  submittedAt: string | null;
+  authorAssociation:
+    | 'COLLABORATOR'
+    | 'CONTRIBUTOR'
+    | 'FIRST_TIMER'
+    | 'FIRST_TIME_CONTRIBUTOR'
+    | 'MANNEQUIN'
+    | 'MEMBER'
+    | 'NONE'
+    | 'OWNER';
+  author: { login: string } | null;
+  commit: { oid: string } | null;
+};
+
+type PullRequestCommit = {
+  commit: {
+    oid: string;
+    statusCheckRollup: {
+      state: 'ERROR' | 'EXPECTED' | 'FAILURE' | 'PENDING' | 'SUCCESS';
+      contexts: { totalCount: number };
+    } | null;
+  };
+};
+
+type MergeCommit = {
+  oid: string;
+  parents: { nodes: { oid: string }[] };
+};
+
+function mergeParentOids(commit: MergeCommit | null | undefined): string[] {
+  return commit?.parents.nodes.map(({ oid }) => oid) ?? [];
+}
+
+function verifiedMergeBase(
+  commit: MergeCommit,
+  reviewedBaseSha: string,
+  reviewedHeadSha: string,
+): string {
+  const parents = mergeParentOids(commit);
+  const squashOrSingleCommitRebase = parents.length === 1 && parents[0] === reviewedBaseSha;
+  const mergeCommit =
+    parents.length === 2 && parents[0] === reviewedBaseSha && parents[1] === reviewedHeadSha;
+  if (!squashOrSingleCommitRebase && !mergeCommit) {
+    throw new PolicyError(
+      'github_merge_lineage_mismatch',
+      'Merged commit ancestry does not bind the reviewed base and head revisions',
+      422,
+    );
+  }
+  return reviewedBaseSha;
+}
+
+function approvedReview(
+  reviews: PullRequestReview[],
+  headSha: string,
+  claimantLogin: string,
+): { login: string; submittedAt: string; commitOid: string } | null {
+  const trustedAssociations = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
+  const latestByReviewer = new Map<string, PullRequestReview>();
+  for (const review of reviews
+    .filter(
+      (review) =>
+        review.submittedAt &&
+        review.author &&
+        review.author.login.toLowerCase() !== claimantLogin.toLowerCase() &&
+        trustedAssociations.has(review.authorAssociation) &&
+        review.commit?.oid === headSha,
+    )
+    .sort((left, right) => right.submittedAt!.localeCompare(left.submittedAt!))) {
+    const login = review.author!.login.toLowerCase();
+    if (!latestByReviewer.has(login)) latestByReviewer.set(login, review);
+  }
+  const review = [...latestByReviewer.values()]
+    .filter(({ state }) => state === 'APPROVED')
+    .sort((left, right) => right.submittedAt!.localeCompare(left.submittedAt!))[0];
+  return review?.author && review.submittedAt && review.commit
+    ? {
+        login: review.author.login.toLowerCase(),
+        submittedAt: review.submittedAt,
+        commitOid: review.commit.oid,
+      }
+    : null;
+}
+
+function passingCheckCount(commits: PullRequestCommit[], headSha: string): number {
+  const commit = commits.length === 1 ? commits[0]?.commit : undefined;
+  const rollup = commit?.oid === headSha ? commit.statusCheckRollup : null;
+  return rollup?.state === 'SUCCESS' && rollup.contexts.totalCount > 0
+    ? rollup.contexts.totalCount
+    : 0;
+}
+
+function unsafeReviewFile(file: z.infer<typeof pullRequestFilesSchema>[number]): boolean {
+  return (
+    forbiddenPath.test(file.filename) ||
+    (file.previous_filename ? forbiddenPath.test(file.previous_filename) : false) ||
+    file.patch === undefined
+  );
+}
+
 export class MockMergeVerifier implements MergeVerifier {
   readonly requests: MergeVerificationRequest[] = [];
   readonly repositoryRequests: RepositoryMergeRequest[] = [];
@@ -953,22 +1467,42 @@ export class MockMergeVerifier implements MergeVerifier {
     return { ...this.oauthIdentity };
   }
 
-  async verify(request: MergeVerificationRequest): Promise<MergeEvidence> {
+  async verifyEscrowTerms(request: EscrowTermsRequest): Promise<EscrowTermsEvidence> {
+    if (this.error) throw this.error;
+    return {
+      ...structuredClone(request),
+      repository: request.repository.toLowerCase(),
+      visibility: 'PUBLIC',
+    };
+  }
+
+  async verify(request: MergeVerificationRequest): Promise<VerifiedMerge> {
     this.requests.push(structuredClone(request));
     if (this.error) throw this.error;
     return {
-      repository: request.repository.toLowerCase(),
-      issueNumber: request.issueNumber,
-      claimantGitHubLogin: request.claimantGitHubLogin.toLowerCase(),
-      pullRequestNumber: request.pullRequestNumber,
-      pullRequestUrl: `https://github.com/${request.repository}/pull/${request.pullRequestNumber}`,
-      mergeCommitOid: 'a'.repeat(40),
-      headCommitOid: request.reviewedHeadSha,
-      baseCommitOid: 'd'.repeat(40),
-      baseRefName: 'main',
-      diffHash: request.reviewedDiffHash,
-      createdAt: new Date(request.authorizedAt.getTime() + 1_000).toISOString(),
-      mergedAt: new Date(request.authorizedAt.getTime() + 2_000).toISOString(),
+      evidence: {
+        repository: request.repository.toLowerCase(),
+        issueNumber: request.issueNumber,
+        claimantGitHubLogin: request.claimantGitHubLogin.toLowerCase(),
+        pullRequestNumber: request.pullRequestNumber,
+        pullRequestUrl: `https://github.com/${request.repository}/pull/${request.pullRequestNumber}`,
+        mergeCommitOid: request.mergeCommitSha,
+        headCommitOid: request.reviewedHeadSha,
+        baseCommitOid: request.reviewedBaseSha,
+        baseRefName: request.reviewedBaseRef,
+        diffHash: request.reviewedDiffHash,
+        approvedReviewer: 'maintainer',
+        approvedReviewSubmittedAt: new Date(request.authorizedAt.getTime() + 1_500).toISOString(),
+        checkCount: 1,
+        createdAt: new Date(request.authorizedAt.getTime() + 1_000).toISOString(),
+        mergedAt: new Date(request.authorizedAt.getTime() + 2_000).toISOString(),
+      },
+      artifact: {
+        issueTitle: request.expectedIssueTitle,
+        issueBody: request.expectedIssueBody,
+        changedFiles: 1,
+        diff: 'diff --git a/src/fix.ts b/src/fix.ts\n',
+      },
     };
   }
 

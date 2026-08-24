@@ -8,7 +8,13 @@ import type {
 } from './deployment.js';
 import type { UpgradeManifest } from './domain.js';
 import { UpdaterError } from './domain.js';
-import type { CheckReceipt, GitHubGateway, MergeReceipt, PullRequestReceipt } from './github.js';
+import type {
+  CheckReceipt,
+  GitHubGateway,
+  MergeReceipt,
+  MergeState,
+  PullRequestReceipt,
+} from './github.js';
 import { UpdaterMetrics } from './metrics.js';
 import { InMemoryUpgradeRepository } from './store.js';
 import { proposalFixture } from './test-utils.js';
@@ -49,6 +55,7 @@ describe('autonomous upgrade state machine', () => {
     });
     expect(context.github.mergeCalls).toBe(1);
     expect(context.deployments.promoteCalls).toBe(1);
+    expect(context.deployments.finalizeCalls).toBe(1);
     expect(context.deployments.rollbackCalls).toBe(0);
 
     await context.service.process(record.id);
@@ -181,7 +188,7 @@ describe('autonomous upgrade state machine', () => {
     await context.repository.updatePromotionControl(
       {
         promotionsEnabled: false,
-        expectedRevision: 1,
+        expectedRevision: 2,
         reason: 'pause new promotions during incident response',
         updatedBy: 'write_authority',
       },
@@ -255,6 +262,112 @@ describe('autonomous upgrade state machine', () => {
     expect((await context.restart().process(record.id))?.state).toBe('completed');
     expect(context.deployments.promoteCalls).toBe(1);
     expect(context.deployments.promotionHealthOperationIds).toEqual(['promotion-1', 'promotion-1']);
+  });
+
+  it('reconciles a merge committed before a worker crash without merging twice', async () => {
+    const context = await fixture();
+    const submitted = await context.service.submit(context.proposal, 'idempotency-crash');
+    await placeAtMergeTriggering(context.repository, submitted.id);
+    context.github.mergeStates.push({ status: 'merged', mergeSha: 'b'.repeat(40) });
+    context.deployments.healthResults.push({ status: 'healthy' });
+
+    expect((await context.service.process(submitted.id))?.state).toBe('verifying_promotion');
+    expect(context.github.mergeCalls).toBe(0);
+    expect(context.deployments.promoteCalls).toBe(1);
+    await expect(context.repository.promotionControl()).resolves.toMatchObject({
+      activeUpgradeId: submitted.id,
+    });
+    const audit = await context.repository.audit(submitted.id);
+    expect(audit.some((receipt) => receipt.event === 'pull_request_merge_reconciled')).toBe(true);
+  });
+
+  it('holds the active reservation through a slow soak and serializes two upgrades', async () => {
+    const context = await fixture();
+    const secondProposal = context.proposalFor('upgrade-2');
+    context.github.checks.push(passedChecks(), passedChecks(), passedChecks());
+    context.deployments.healthResults.push(
+      { status: 'healthy' },
+      { status: 'healthy' },
+      { status: 'healthy' },
+      { status: 'healthy' },
+    );
+    const first = await context.service.submit(context.proposal, 'idempotency-slow-1');
+    const second = await context.service.submit(secondProposal, 'idempotency-slow-2');
+
+    expect((await context.service.process(first.id))?.state).toBe('verifying_promotion');
+    expect(await context.service.process(second.id)).toMatchObject({
+      state: 'merging',
+      lastErrorCode: null,
+    });
+    expect(context.github.mergeCalls).toBe(1);
+    expect(context.deployments.promoteCalls).toBe(1);
+    await expect(context.repository.promotionControl()).resolves.toMatchObject({
+      activeUpgradeId: first.id,
+    });
+    expect((await context.repository.audit(second.id)).at(-1)?.event).toBe(
+      'promotion_reservation_busy',
+    );
+
+    context.advance(2_000);
+    context.deployments.healthResults.push({ status: 'healthy' });
+    expect((await context.service.process(first.id))?.state).toBe('completed');
+    expect(context.deployments.finalizeCalls).toBe(1);
+
+    context.github.checks.push(passedChecks());
+    context.deployments.healthResults.push({ status: 'healthy' }, { status: 'healthy' });
+    expect((await context.service.process(second.id))?.state).toBe('verifying_promotion');
+    expect(context.github.mergeCalls).toBe(2);
+    await expect(context.repository.promotionControl()).resolves.toMatchObject({
+      activeUpgradeId: second.id,
+    });
+  });
+
+  it('retains ownership and closes promotions after rollback failure until operator resolution', async () => {
+    const context = await fixture();
+    context.github.checks.push(passedChecks(), passedChecks());
+    context.deployments.healthResults.push({ status: 'healthy' }, { status: 'healthy' });
+    context.deployments.promoteError = new UpdaterError('promotion_rejected', 'Promotion rejected');
+    context.deployments.rollbackError = new UpdaterError('rollback_rejected', 'Rollback rejected');
+    const record = await context.service.submit(context.proposal, 'idempotency-rollback-failure');
+
+    expect(await context.service.process(record.id)).toMatchObject({
+      state: 'rollback_failed',
+      lastErrorCode: 'rollback_rejected',
+    });
+    const closed = await context.repository.promotionControl();
+    expect(closed).toMatchObject({
+      promotionsEnabled: false,
+      activeUpgradeId: record.id,
+      reason: 'rollback failed: rollback_rejected',
+    });
+    await expect(
+      context.repository.updatePromotionControl(
+        {
+          promotionsEnabled: true,
+          expectedRevision: closed.revision,
+          reason: 'unsafe enable without resolution',
+          updatedBy: 'test_authority',
+        },
+        START,
+      ),
+    ).rejects.toMatchObject({ code: 'promotion_failure_unresolved' });
+
+    const resolved = await context.repository.resolvePromotionFailure(
+      {
+        upgradeId: record.id,
+        expectedRevision: closed.revision,
+        reason: 'operator confirmed production recovery',
+        updatedBy: 'test_authority',
+      },
+      START,
+    );
+    expect(resolved).toMatchObject({ promotionsEnabled: false, activeUpgradeId: null });
+    const audit = await context.repository.promotionControlAudit();
+    expect(audit.at(-1)).toMatchObject({
+      revision: resolved.revision,
+      updatedBy: 'test_authority',
+      activeUpgradeId: null,
+    });
   });
 
   it('rolls back after promoted health evidence exhausts its retries', async () => {
@@ -378,6 +491,12 @@ async function fixture(
     github,
     deployments,
     proposal: signed.proposal,
+    proposalFor(proposalId: string) {
+      const manifest = structuredClone(signed.proposal.manifest);
+      manifest.proposalId = proposalId;
+      manifest.repository.headBranch = `mizuki/${proposalId}`;
+      return signed.signManifest(manifest);
+    },
     restart: createService,
     advance(milliseconds: number) {
       now = new Date(now.getTime() + milliseconds);
@@ -403,6 +522,7 @@ class FakeGitHub implements GitHubGateway {
   checks: CheckReceipt[] = [];
   syncCalls = 0;
   mergeCalls = 0;
+  mergeStates: MergeState[] = [];
 
   async syncPullRequest(): Promise<PullRequestReceipt> {
     this.syncCalls += 1;
@@ -417,14 +537,20 @@ class FakeGitHub implements GitHubGateway {
     this.mergeCalls += 1;
     return { mergeSha: 'b'.repeat(40) };
   }
+
+  async mergeState(): Promise<MergeState> {
+    return this.mergeStates.shift() ?? { status: 'open' };
+  }
 }
 
 class FakeDeployments implements DeploymentGateway {
   healthResults: Array<DeploymentHealth | Error> = [];
   promoteError: Error | null = null;
+  rollbackError: Error | null = null;
   startCalls = 0;
   promoteCalls = 0;
   rollbackCalls = 0;
+  finalizeCalls = 0;
   healthCalls = 0;
   promotionHealthOperationIds: string[] = [];
   rollbackOperationIds: Array<string | null> = [];
@@ -465,6 +591,10 @@ class FakeDeployments implements DeploymentGateway {
     return { operationId: 'promotion-1' };
   }
 
+  async finalize(): Promise<void> {
+    this.finalizeCalls += 1;
+  }
+
   async rollback(
     _upgradeId: string,
     _deploymentId: string,
@@ -474,7 +604,45 @@ class FakeDeployments implements DeploymentGateway {
   ): Promise<void> {
     this.rollbackCalls += 1;
     this.rollbackOperationIds.push(_promotionOperationId);
+    if (this.rollbackError) throw this.rollbackError;
   }
+}
+
+async function placeAtMergeTriggering(
+  repository: InMemoryUpgradeRepository,
+  upgradeId: string,
+): Promise<void> {
+  const owner = 'crashed-worker';
+  expect(await repository.acquireLease(upgradeId, owner, START, 30_000)).toBe(true);
+  let record = (await repository.get(upgradeId))!;
+  const advance = async (
+    state: Parameters<typeof repository.transition>[3]['state'],
+    patch = {},
+  ) => {
+    record = await repository.transition(
+      upgradeId,
+      record.version,
+      owner,
+      { ...patch, state },
+      { event: `fixture_${state}` },
+      START,
+    );
+  };
+  await advance('verifying_artifact');
+  await advance('proposal_verified');
+  await advance('syncing_pr');
+  await advance('waiting_checks', {
+    prNumber: 42,
+    prUrl: 'https://github.com/mizuki-labs/mizuki/pull/42',
+  });
+  await advance('starting_shadow');
+  await advance('checking_shadow', { deploymentId: 'shadow-1' });
+  await advance('merging');
+  await expect(repository.reservePromotion(upgradeId, START)).resolves.toMatchObject({
+    reserved: true,
+  });
+  await advance('merge_triggering');
+  await repository.releaseLease(upgradeId, owner);
 }
 
 function passedChecks(): CheckReceipt {

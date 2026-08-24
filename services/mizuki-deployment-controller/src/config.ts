@@ -32,7 +32,7 @@ const schema = z
     MIZUKI_DEPLOY_ARTIFACT_ORIGINS: z.string().min(8),
     MIZUKI_DEPLOY_SHADOW_PROBE_URL: z.string().url(),
     MIZUKI_DEPLOY_PRODUCTION_PROBE_URL: z.string().url(),
-    MIZUKI_DEPLOY_PROBE_TOKEN: z.string().min(32),
+    MIZUKI_DEPLOY_PRODUCTION_PROBE_TOKEN: z.string().min(32),
     MIZUKI_DEPLOY_RENDER_TIMEOUT_MS: z.coerce
       .number()
       .int()
@@ -84,7 +84,7 @@ export interface ControllerConfig {
   artifactOrigins: Set<string>;
   shadowProbeUrl: string;
   productionProbeUrl: string;
-  probeToken: string;
+  productionProbeToken: string;
   renderTimeoutMs: number;
   artifactTimeoutMs: number;
   probeTimeoutMs: number;
@@ -93,6 +93,9 @@ export interface ControllerConfig {
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ControllerConfig {
+  if (env.MIZUKI_DEPLOY_PROBE_TOKEN !== undefined) {
+    throw new Error('MIZUKI_DEPLOY_PROBE_TOKEN is not allowed; use the production-only token');
+  }
   const parsed = schema.parse(env);
   const allowedServiceIds = csvSet(parsed.MIZUKI_DEPLOY_RENDER_ALLOWED_SERVICE_IDS);
   for (const id of allowedServiceIds) renderServiceId.parse(id);
@@ -169,9 +172,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ControllerConf
     productionServiceId: parsed.MIZUKI_DEPLOY_RENDER_PRODUCTION_SERVICE_ID,
     allowedServiceIds,
     artifactOrigins,
-    shadowProbeUrl: probeUrl(parsed.MIZUKI_DEPLOY_SHADOW_PROBE_URL, parsed.NODE_ENV, true),
-    productionProbeUrl: probeUrl(parsed.MIZUKI_DEPLOY_PRODUCTION_PROBE_URL, parsed.NODE_ENV, false),
-    probeToken: parsed.MIZUKI_DEPLOY_PROBE_TOKEN,
+    shadowProbeUrl: probeUrl(parsed.MIZUKI_DEPLOY_SHADOW_PROBE_URL, parsed.NODE_ENV, 'shadow'),
+    productionProbeUrl: probeUrl(
+      parsed.MIZUKI_DEPLOY_PRODUCTION_PROBE_URL,
+      parsed.NODE_ENV,
+      'production',
+    ),
+    productionProbeToken: parsed.MIZUKI_DEPLOY_PRODUCTION_PROBE_TOKEN,
     renderTimeoutMs: parsed.MIZUKI_DEPLOY_RENDER_TIMEOUT_MS,
     artifactTimeoutMs: parsed.MIZUKI_DEPLOY_ARTIFACT_TIMEOUT_MS,
     probeTimeoutMs: parsed.MIZUKI_DEPLOY_PROBE_TIMEOUT_MS,
@@ -200,15 +207,20 @@ export function normalizeImageRepository(value: string): string {
   return `${host}/${path}`;
 }
 
-function probeUrl(value: string, environment: ControllerConfig['environment'], shadow: boolean) {
+function probeUrl(
+  value: string,
+  environment: ControllerConfig['environment'],
+  role: 'shadow' | 'production',
+) {
   const url = new URL(value);
   if (url.username || url.password || url.search || url.hash) {
     throw new Error('Application probe URLs must not include credentials, query, or fragment');
   }
-  if (url.pathname !== '/internal/mizuki/functional-readiness') {
-    throw new Error('Application probe URLs must use the fixed functional-readiness path');
+  const expectedPath = role === 'shadow' ? '/deployz' : '/internal/mizuki/functional-readiness';
+  if (url.pathname !== expectedPath) {
+    throw new Error(`${role} application probe URL must use ${expectedPath}`);
   }
-  const privateHttp = shadow && url.protocol === 'http:' && privateHost(url.hostname);
+  const privateHttp = role === 'shadow' && url.protocol === 'http:' && privateHost(url.hostname);
   if (url.protocol !== 'https:' && !(environment !== 'production' || privateHttp)) {
     throw new Error('Production application probes must use HTTPS or private shadow HTTP');
   }

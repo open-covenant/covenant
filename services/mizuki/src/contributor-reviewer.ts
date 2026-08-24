@@ -19,6 +19,7 @@ import {
 
 const decisionSchema = z.object({ approved: z.boolean(), reason: z.string().min(1).max(2_000) });
 const MAX_REVIEW_OUTPUT_TOKENS = 512;
+const MAX_REVIEW_RESPONSE_BYTES = 64 * 1024;
 const forbiddenPath =
   /(^|\/)(\.github\/workflows|\.env|secrets?|vendor|generated|dist|build|node_modules)(\/|$)|(^|\/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock)$/i;
 
@@ -113,6 +114,7 @@ export class UsePodContributorReviewer implements ContributorPatchReviewer {
     const requestConfig = this.requestConfig();
     const response = await this.request(usePodUrl(requestConfig, 'chat/completions'), {
       method: 'POST',
+      redirect: 'error',
       headers: { ...usePodHeaders(requestConfig), 'x-request-id': preflight.attempt.id },
       body: JSON.stringify(
         reviewRequest(preflight.providerInput, preflight.providerInput.maxOutputTokens),
@@ -136,7 +138,7 @@ export class UsePodContributorReviewer implements ContributorPatchReviewer {
         model: z.string(),
         choices: z.array(z.object({ message: z.object({ content: z.string() }) })).min(1),
       })
-      .parse(await response.json());
+      .parse(await readReviewJson(response));
     if (body.model !== preflight.providerInput.model) {
       throw new Error('UsePod bounty review returned a different model');
     }
@@ -179,6 +181,47 @@ export class UsePodContributorReviewer implements ContributorPatchReviewer {
       maxOutputPriceMicrounits: this.config.usePodMaxOutputPriceMicrounits,
       minimumBalance: this.config.usePodMinimumBalance,
     };
+  }
+}
+
+async function readReviewJson(response: Response): Promise<unknown> {
+  const length = response.headers.get('content-length')?.trim();
+  if (length && (!/^\d+$/.test(length) || BigInt(length) > BigInt(MAX_REVIEW_RESPONSE_BYTES))) {
+    throw new Error('UsePod bounty review response exceeded the size limit');
+  }
+  const contentType = response.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase();
+  if (contentType !== 'application/json' || !response.body) {
+    throw new Error('UsePod bounty review returned an invalid JSON response');
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      received += value.byteLength;
+      if (received > MAX_REVIEW_RESPONSE_BYTES) {
+        await reader.cancel();
+        throw new Error('UsePod bounty review response exceeded the size limit');
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(received);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) as unknown;
+  } catch {
+    throw new Error('UsePod bounty review returned an invalid JSON response');
   }
 }
 

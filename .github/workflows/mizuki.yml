@@ -115,7 +115,7 @@ jobs:
           pg_restore -h 127.0.0.1 -U postgres -d mizuki_deployment_restore --exit-on-error /tmp/mizuki-deployment.dump
           test "$(psql -h 127.0.0.1 -U postgres -d mizuki_core_restore -Atc "SELECT count(*) FROM mizuki_schema_migrations WHERE component = 'core'")" = '1'
           test "$(psql -h 127.0.0.1 -U postgres -d mizuki_signer_restore -Atc "SELECT count(*) FROM mizuki_schema_migrations WHERE component = 'policy-signer'")" = '3'
-          test "$(psql -h 127.0.0.1 -U postgres -d mizuki_updater_restore -Atc "SELECT count(*) FROM mizuki_updater_migrations")" = '3'
+          test "$(psql -h 127.0.0.1 -U postgres -d mizuki_updater_restore -Atc "SELECT count(*) FROM mizuki_updater_migrations")" = '4'
           test "$(psql -h 127.0.0.1 -U postgres -d mizuki_deployment_restore -Atc "SELECT count(*) FROM mizuki_deployment_migrations")" = '2'
           test "$(psql -h 127.0.0.1 -U postgres -d mizuki_deployment_restore -Atc "SELECT count(*) FROM pg_trigger WHERE tgname = 'mizuki_deployment_events_append_only' AND NOT tgisinternal")" = '1'
           pg_dump -h 127.0.0.1 -U postgres -d mizuki_core_restore --data-only --no-owner --no-privileges --file=/tmp/mizuki-core-restored.data.sql

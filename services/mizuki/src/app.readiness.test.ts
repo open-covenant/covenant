@@ -355,6 +355,22 @@ describe('deployment readiness endpoint', () => {
     await expect(response.json()).resolves.toEqual({ ok: true });
   });
 
+  it('requires closed durable controls for a shadow deployment', async () => {
+    const check = vi.fn(async () => ({ ready: true }));
+    const base = await serve(
+      { check } as unknown as ServiceReadiness,
+      await openControls(),
+      undefined,
+      'shadow',
+    );
+
+    const response = await fetch(`${base}/deployz`);
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({ ok: false });
+    expect(check).not.toHaveBeenCalled();
+  });
+
   it('fails when durable controls cannot be read', async () => {
     const store = {
       operatorControls: vi.fn(async () => {
@@ -376,13 +392,18 @@ async function serve(
   readiness: ServiceReadiness,
   store: AppDependencies['store'] = new MemoryStore(),
   releaseProbeToken?: string,
+  runtimeRole: 'production' | 'shadow' = 'production',
 ): Promise<string> {
+  const env = {
+    MIZUKI_PAYMENT_MODE: 'mock',
+    ...(releaseProbeToken ? { MIZUKI_RELEASE_PROBE_TOKEN: releaseProbeToken } : {}),
+    ...(runtimeRole === 'shadow'
+      ? { MIZUKI_RUNTIME_ROLE: 'shadow', MIZUKI_REQUIRE_GITHUB_APP: '0' }
+      : {}),
+  };
   const server = createServer(
     createApp({
-      config: loadConfig({
-        MIZUKI_PAYMENT_MODE: 'mock',
-        MIZUKI_RELEASE_PROBE_TOKEN: releaseProbeToken,
-      }),
+      config: loadConfig(env),
       store,
       paymentAdmission: new SerialGate(),
       readiness,

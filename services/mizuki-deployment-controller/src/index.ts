@@ -17,10 +17,16 @@ const render = new RenderClient({
 const artifacts = new HttpArtifactGateway(config.artifactOrigins, config.artifactTimeoutMs);
 const applications = new HttpApplicationGateway({
   targets: new Map([
-    [config.shadowServiceId, config.shadowProbeUrl],
-    [config.productionServiceId, config.productionProbeUrl],
+    [config.shadowServiceId, { role: 'shadow', url: config.shadowProbeUrl } as const],
+    [
+      config.productionServiceId,
+      {
+        role: 'production',
+        url: config.productionProbeUrl,
+        token: config.productionProbeToken,
+      } as const,
+    ],
   ]),
-  token: config.probeToken,
   timeoutMs: config.probeTimeoutMs,
 });
 const controller = new DeploymentController(config, store, render, artifacts, applications);

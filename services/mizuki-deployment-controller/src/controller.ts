@@ -5,6 +5,7 @@ import {
   operationEvent,
   requestHash,
   type DeploymentOperation,
+  type FinalizeRequest,
   type PromotionRequest,
   type RollbackRequest,
   type ShadowRequest,
@@ -292,6 +293,72 @@ export class DeploymentController {
         );
       }
       return promotionEvidence(operation, 'healthy', true);
+    });
+  }
+
+  async finalize(
+    input: FinalizeRequest,
+    idempotencyKey: string,
+  ): Promise<{ status: 'completed'; operationId: string }> {
+    this.assertKey(idempotencyKey, input.upgradeId, 'finalize');
+    return this.store.withMutationLock(async () => {
+      const operation = await this.requireByShadow(input.deploymentId);
+      this.assertBinding(operation, input);
+      if (
+        operation.mergeSha !== input.mergeSha ||
+        operation.promotionDeployId !== input.promotionOperationId
+      ) {
+        throw new ControllerError(
+          'operation_binding_mismatch',
+          'Finalization does not match the recorded promotion',
+          409,
+        );
+      }
+      if (operation.productionFinalizedAt) {
+        return { status: 'completed', operationId: input.promotionOperationId };
+      }
+      if (!operation.productionActive || operation.promotionState !== 'completed') {
+        throw new ControllerError(
+          'promotion_not_ready',
+          'Promotion has not reached healthy active production',
+          409,
+        );
+      }
+      if (!operation.promotionStartedAt) throw internalState('Promotion start time is missing');
+      const remaining =
+        this.config.minPromotionAgeMs -
+        (this.now().getTime() - operation.promotionStartedAt.getTime());
+      if (remaining > 0) {
+        throw new ControllerError(
+          'promotion_soak_in_progress',
+          'Promotion has not reached the minimum finalization age',
+          503,
+          true,
+          Math.max(1, Math.ceil(remaining / 1_000)),
+        );
+      }
+
+      const deploy = await this.assertPromotionEvidence(operation);
+      if (deploymentHealth(deploy) !== 'healthy') {
+        throw new ControllerError('promotion_unhealthy', 'Promotion is not healthy', 409);
+      }
+      const current = await this.currentLive(this.config.productionServiceId);
+      if (current.id !== deploy.id || !this.matchesArtifact(current, operation)) {
+        throw new ControllerError(
+          'production_drift',
+          'Promotion is not the active production deployment',
+          409,
+        );
+      }
+      await this.assertBoundApplication(this.config.productionServiceId, deploy);
+      operation.productionFinalizedAt = this.now();
+      operation.productionActive = false;
+      operation.updatedAt = this.now();
+      await this.store.save(
+        operation,
+        operationEvent(operation, 'production_finalized', { deployId: deploy.id }, this.now()),
+      );
+      return { status: 'completed', operationId: deploy.id };
     });
   }
 
@@ -863,42 +930,12 @@ export class DeploymentController {
   private async releasePriorProduction(upgradeId: string): Promise<void> {
     const active = await this.store.activeProduction();
     if (!active || active.upgradeId === upgradeId) return;
-    if (!active.promotionDeployId || !active.promotionStartedAt) {
-      throw new ControllerError(
-        'production_busy',
-        'A production operation has incomplete evidence',
-        503,
-        true,
-        5,
-      );
-    }
-    const deploy = await this.render.deployment(
-      this.config.productionServiceId,
-      active.promotionDeployId,
-    );
-    const current = await this.currentLive(this.config.productionServiceId);
-    const oldEnough =
-      this.now().getTime() - active.promotionStartedAt.getTime() >= this.config.minPromotionAgeMs;
-    if (
-      deploymentHealth(deploy) !== 'healthy' ||
-      current.id !== deploy.id ||
-      !this.matchesArtifact(deploy, active) ||
-      !oldEnough
-    ) {
-      throw new ControllerError(
-        'production_busy',
-        'The previous production promotion is still protected',
-        503,
-        true,
-        5,
-      );
-    }
-    await this.assertBoundApplication(this.config.productionServiceId, deploy);
-    active.productionActive = false;
-    active.updatedAt = this.now();
-    await this.store.save(
-      active,
-      operationEvent(active, 'production_slot_released', {}, this.now()),
+    throw new ControllerError(
+      'production_busy',
+      'The previous production promotion has not been finalized',
+      503,
+      true,
+      5,
     );
   }
 
@@ -987,7 +1024,7 @@ export class DeploymentController {
 
   private assertBinding(
     operation: DeploymentOperation,
-    input: PromotionRequest | RollbackRequest,
+    input: PromotionRequest | FinalizeRequest | RollbackRequest,
   ): void {
     if (
       operation.upgradeId !== input.upgradeId ||
@@ -1156,6 +1193,7 @@ function newOperation(
     promotionStartedAt: null,
     promotionDeployId: null,
     productionActive: false,
+    productionFinalizedAt: null,
     rollbackIdempotencyKey: null,
     rollbackRequestHash: null,
     rollbackState: null,

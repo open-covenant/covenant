@@ -19,7 +19,7 @@ P1 covers signer unavailable, RPC unavailable, price oracle unavailable, refund 
 ## Pause updater promotions
 
 1. Read `GET /v1/admin/promotion-control` with an updater credential and record the current revision.
-2. Send `PUT /v1/admin/promotion-control` with the write/admin token, `promotionsEnabled: false`, that `expectedRevision`, and an incident-specific reason. A `409` means another operator changed the control; read it again rather than overwriting it.
+2. Send `PUT /v1/admin/promotion-control` with the control token, `promotionsEnabled: false`, that `expectedRevision`, and an incident-specific reason. A `409` means another operator or reservation mutation changed the control; read it and its audit ledger again rather than overwriting it.
 3. Wait for `200` and confirm the returned control is closed. Mutation, merge admission, and promotion admission share one database gate, so a successful response proves no merge or promotion hook is still in flight and neither can begin.
 4. If the request reaches its timeout, assume a merge or promotion may be in flight. Keep the control closed, inspect the upgrade in `merging`, `promoting`, or `verifying_promotion`, and reconcile GitHub state plus the stable hook idempotency key with the deployment system. Do not submit a manual promotion or reopen control until the merge receipt, operation ID, and active production revision are known.
 5. Do not stop updater recovery. A closed control blocks a new promotion call but deliberately preserves production-health monitoring and rollback for any candidate already promoted.
@@ -40,7 +40,7 @@ P1 covers signer unavailable, RPC unavailable, price oracle unavailable, refund 
 3. Query the signer operation. If it has a signature, query that signature and the recipient token balance before retrying.
 4. Retry the same refund request with the same job and settlement evidence. The signer must return or resume the same operation.
 5. If the chain finalized but the database did not, let recovery reconcile the stored operation; do not broadcast again.
-6. If the transaction expired without landing, recovery may rebuild only according to the signer's persisted-operation contract. Capture the old and new signatures under the same operation history.
+6. If an attempted broadcast expires without authoritative history, leave the operation locked against its original signature and signed bytes. Do not construct a replacement transaction or transfer manually; keep intake closed until independent archival evidence resolves the original outcome.
 7. Mark the customer refund complete only after finalized chain evidence. Create the rescue bounty only after that transition commits.
 8. Publish incident duration and refund evidence. Exclude bearer tokens, private RPC URLs, and raw transaction signing material.
 

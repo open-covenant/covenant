@@ -13,8 +13,14 @@ const request: MergeVerificationRequest = {
   issueNumber: 17,
   claimantGitHubLogin: 'contributor',
   pullRequestNumber: 23,
+  mergeCommitSha: 'a'.repeat(40),
   reviewedHeadSha: 'b'.repeat(40),
+  reviewedBaseSha: 'd'.repeat(40),
+  reviewedBaseRef: 'main',
   reviewedDiffHash,
+  expectedIssueTitle: 'Handle empty input',
+  expectedIssueBody: 'The parser should accept an empty input.',
+  maxFiles: 3,
   authorizedAt: new Date('2026-08-22T12:00:00.000Z'),
 };
 
@@ -101,24 +107,35 @@ describe('independent GitHub merge verification', () => {
   it('accepts a merged claimant PR that closes the immutable issue', async () => {
     const { verifier, fetcher } = fixture();
     await expect(verifier.verify(request)).resolves.toEqual({
-      repository: 'owner/repository',
-      issueNumber: 17,
-      claimantGitHubLogin: 'contributor',
-      pullRequestNumber: 23,
-      pullRequestUrl: 'https://github.com/owner/repository/pull/23',
-      mergeCommitOid: 'a'.repeat(40),
-      headCommitOid: 'b'.repeat(40),
-      baseCommitOid: 'd'.repeat(40),
-      baseRefName: 'main',
-      diffHash: reviewedDiffHash,
-      createdAt: '2026-08-22T12:01:00.000Z',
-      mergedAt: '2026-08-22T12:05:00.000Z',
+      evidence: {
+        repository: 'owner/repository',
+        issueNumber: 17,
+        claimantGitHubLogin: 'contributor',
+        pullRequestNumber: 23,
+        pullRequestUrl: 'https://github.com/owner/repository/pull/23',
+        mergeCommitOid: 'a'.repeat(40),
+        headCommitOid: 'b'.repeat(40),
+        baseCommitOid: 'd'.repeat(40),
+        baseRefName: 'main',
+        diffHash: reviewedDiffHash,
+        approvedReviewer: 'maintainer',
+        approvedReviewSubmittedAt: '2026-08-22T12:04:00.000Z',
+        checkCount: 2,
+        createdAt: '2026-08-22T12:01:00.000Z',
+        mergedAt: '2026-08-22T12:05:00.000Z',
+      },
+      artifact: {
+        issueTitle: 'Handle empty input',
+        issueBody: 'The parser should accept an empty input.',
+        changedFiles: 1,
+        diff: pullDiff,
+      },
     });
 
     const evidenceCalls = fetcher.mock.calls.filter(([input]) =>
       ['/graphql', '/pulls/23'].some((path) => String(input).includes(path)),
     );
-    expect(evidenceCalls).toHaveLength(3);
+    expect(evidenceCalls).toHaveLength(4);
     for (const [, init] of evidenceCalls) {
       expect(init).toMatchObject({ redirect: 'error' });
       expect((init as RequestInit).headers).toMatchObject({
@@ -132,7 +149,7 @@ describe('independent GitHub merge verification', () => {
     const graph = responseBody();
     graph.data.repository.pullRequest.headRefOid = 'c'.repeat(40);
     await expect(fixture({ graph }).verifier.verify(request)).rejects.toMatchObject({
-      code: 'github_review_head_mismatch',
+      code: 'github_review_mismatch',
     });
   });
 
@@ -144,12 +161,36 @@ describe('independent GitHub merge verification', () => {
     ).rejects.toMatchObject({ code: 'github_review_diff_mismatch' });
   });
 
-  it('rejects a base change while the diff is hashed', async () => {
+  it('uses immutable merge parents when the base branch advances after merge', async () => {
     const confirmation = responseBody();
     confirmation.data.repository.pullRequest.baseRefOid = 'e'.repeat(40);
-    await expect(fixture({ confirmation }).verifier.verify(request)).rejects.toMatchObject({
-      code: 'github_evidence_changed',
-      retryable: true,
+    await expect(fixture({ confirmation }).verifier.verify(request)).resolves.toMatchObject({
+      evidence: { baseCommitOid: 'd'.repeat(40) },
+    });
+  });
+
+  it('rejects mutable policy evidence that changes during artifact verification', async () => {
+    const privateRepository = responseBody();
+    privateRepository.data.repository.visibility = 'PRIVATE';
+    await expect(
+      fixture({ confirmation: privateRepository }).verifier.verify(request),
+    ).rejects.toMatchObject({ code: 'github_evidence_changed' });
+
+    const unlinkedIssue = responseBody();
+    unlinkedIssue.data.repository.pullRequest.closingIssuesReferences.nodes = [];
+    await expect(
+      fixture({ confirmation: unlinkedIssue }).verifier.verify(request),
+    ).rejects.toMatchObject({ code: 'github_evidence_changed' });
+  });
+
+  it('rejects merge ancestry that cannot bind the reviewed base and head', async () => {
+    const graph = responseBody();
+    graph.data.repository.pullRequest.mergeCommit!.parents.nodes = [
+      { oid: 'e'.repeat(40) },
+      { oid: 'b'.repeat(40) },
+    ];
+    await expect(fixture({ graph }).verifier.verify(request)).rejects.toMatchObject({
+      code: 'github_merge_lineage_mismatch',
     });
   });
 
@@ -221,11 +262,11 @@ describe('independent GitHub merge verification', () => {
         request,
       ),
     ).rejects.toMatchObject({ code: 'github_invalid_response' });
-    await expect(
-      fixture({
-        graph: { data: { repository: { visibility: 'PUBLIC', pullRequest: null } } },
-      }).verifier.verify(request),
-    ).rejects.toMatchObject({ code: 'github_pr_not_found' });
+    const missingPull = responseBody();
+    missingPull.data.repository.pullRequest = null as never;
+    await expect(fixture({ graph: missingPull }).verifier.verify(request)).rejects.toMatchObject({
+      code: 'github_pr_not_found',
+    });
   });
 });
 
@@ -305,7 +346,7 @@ describe('GitHub App credentials', () => {
   it('fails repository readiness for permission or one-repository scope drift', async () => {
     await expect(
       fixture({
-        installation: installationBody({ checks: 'read' }),
+        installation: installationBody({ actions: 'read' }),
       }).verifier.repositoryReadiness('owner/repository'),
     ).rejects.toMatchObject({ code: 'github_credential_invalid' });
     await expect(
@@ -360,7 +401,7 @@ describe('GitHub App credentials', () => {
       fixture({ app: appBody(Number(APP_ID), { issues: 'write' }) }).verifier.health(),
     ).rejects.toMatchObject({ code: 'github_credential_invalid' });
     await expect(
-      fixture({ app: appBody(Number(APP_ID), { checks: 'read' }) }).verifier.health(),
+      fixture({ app: appBody(Number(APP_ID), { actions: 'read' }) }).verifier.health(),
     ).rejects.toMatchObject({ code: 'github_credential_invalid' });
     await expect(
       fixture({
@@ -415,10 +456,12 @@ describe('GitHub App credentials', () => {
     expect(JSON.parse(String((mintCall[1] as RequestInit).body))).toEqual({
       repositories: ['public-repo'],
       permissions: {
+        checks: 'read',
         contents: 'read',
         issues: 'read',
         metadata: 'read',
         pull_requests: 'read',
+        statuses: 'read',
       },
     });
   });
@@ -582,10 +625,12 @@ function fixture(options: FixtureOptions = {}) {
         });
       }
       const permissions = {
+        checks: 'read',
         contents: 'read',
         issues: options.tokenPermissions?.issues ?? 'read',
         metadata: 'read',
         pull_requests: 'read',
+        statuses: 'read',
       };
       return json(
         {
@@ -608,7 +653,19 @@ function fixture(options: FixtureOptions = {}) {
       if (/\/commits\/[a-f0-9]{40,64}\/pulls$/.test(url)) {
         return json(options.commitPulls ?? []);
       }
-      if (url.includes('/pulls/23')) {
+      if (url.endsWith('/pulls/23/files?per_page=100&page=1')) {
+        return json([
+          {
+            filename: 'src/parser.ts',
+            status: 'modified',
+            additions: 1,
+            deletions: 0,
+            changes: 1,
+            patch: '+handle empty input',
+          },
+        ]);
+      }
+      if (url.endsWith('/pulls/23')) {
         return new Response(options.diff ?? pullDiff, {
           status: 200,
           headers: { 'content-type': 'application/vnd.github.v3.diff' },
@@ -653,10 +710,12 @@ function installationBody(permissionOverride: Partial<Record<string, 'read' | 'w
 
 function readPermissions() {
   return {
+    checks: 'read' as const,
     contents: 'read' as const,
     issues: 'read' as const,
     metadata: 'read' as const,
     pull_requests: 'read' as const,
+    statuses: 'read' as const,
   };
 }
 
@@ -683,21 +742,54 @@ function responseBody(repository = 'owner/repository') {
   return {
     data: {
       repository: {
+        nameWithOwner: repository,
         visibility: 'PUBLIC' as 'PUBLIC' | 'PRIVATE' | 'INTERNAL',
+        issue: {
+          number: 17,
+          title: 'Handle empty input',
+          body: 'The parser should accept an empty input.',
+        },
         pullRequest: {
           number: 23,
           state: 'MERGED' as 'OPEN' | 'CLOSED' | 'MERGED',
           merged: true,
           mergedAt: '2026-08-22T12:05:00.000Z' as string | null,
           createdAt: '2026-08-22T12:01:00.000Z',
-          mergeCommit: { oid: 'a'.repeat(40) } as { oid: string } | null,
+          mergeCommit: {
+            oid: 'a'.repeat(40),
+            parents: {
+              nodes: [{ oid: 'd'.repeat(40) }, { oid: 'b'.repeat(40) }],
+            },
+          } as { oid: string; parents: { nodes: { oid: string }[] } } | null,
           headRefOid: 'b'.repeat(40),
           baseRefOid: 'd'.repeat(40),
           baseRefName: 'main',
+          changedFiles: 1,
           author: { login: 'contributor' },
           baseRepository: { nameWithOwner: repository },
           closingIssuesReferences: {
             nodes: [{ number: 17, repository: { nameWithOwner: repository } }],
+          },
+          reviews: {
+            nodes: [
+              {
+                state: 'APPROVED',
+                submittedAt: '2026-08-22T12:04:00.000Z',
+                authorAssociation: 'MEMBER',
+                author: { login: 'maintainer' },
+                commit: { oid: 'b'.repeat(40) },
+              },
+            ],
+          },
+          commits: {
+            nodes: [
+              {
+                commit: {
+                  oid: 'b'.repeat(40),
+                  statusCheckRollup: { state: 'SUCCESS', contexts: { totalCount: 2 } },
+                },
+              },
+            ],
           },
         },
       },

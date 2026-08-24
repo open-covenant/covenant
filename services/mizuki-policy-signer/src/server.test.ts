@@ -6,6 +6,8 @@ import { authorizedSettlementTransaction, FixedUsdPriceOracle, MockChainGateway 
 import {
   bindEscrowRequestSchema,
   createEscrowRequestSchema,
+  escrowAcceptanceHash,
+  escrowReleaseAuthorizationMessage,
   PolicyError,
   refundAuthorizationMessage,
   refundDeliveryBindingAuthorizationMessage,
@@ -16,6 +18,7 @@ import {
 import { SignerMetrics } from './metrics.js';
 import { MockMergeVerifier } from './github.js';
 import { PolicyService } from './policy.js';
+import { MockIndependentReviewer } from './reviewer.js';
 import { createSignerServer } from './server.js';
 import { InMemoryOperationStore } from './store.js';
 
@@ -59,6 +62,7 @@ describe('signer HTTP service', () => {
         refundMint: MINT,
         refundDecimals: 6,
         jobAuthorityPublicKey: JOB_AUTHORITY.publicKey.toBase58(),
+        reviewModel: 'independent-reviewer',
         refundAuthMaxTtlSeconds: 900,
         operationLimitUsdCents: 2_500,
         refundDailyLimitUsdCents: 10_000,
@@ -72,6 +76,7 @@ describe('signer HTTP service', () => {
       chain,
       new FixedUsdPriceOracle(),
       merges,
+      new MockIndependentReviewer(),
       metrics,
     );
     const authorization = settlementAuthorization(DEFAULT_ADMISSION_QUOTE);
@@ -354,14 +359,7 @@ describe('signer HTTP service', () => {
     const reserveResponse = await fetch(`${origin}/v1/escrows`, {
       method: 'POST',
       headers: mutationHeaders('reserve-http'),
-      body: JSON.stringify({
-        bountyId: 'bounty-http',
-        amountUsdCents: 1_000,
-        acceptanceHash: 'a'.repeat(64),
-        expiresAt: new Date(Date.now() + 2 * 60 * 60 * 1_000).toISOString(),
-        repository: 'owner/repository',
-        issueNumber: 17,
-      }),
+      body: JSON.stringify(escrowRequest('bounty-http')),
     });
     const reserve = (await reserveResponse.json()) as Record<string, unknown>;
     expect(reserveResponse.status).toBe(200);
@@ -429,6 +427,33 @@ describe('signer HTTP service', () => {
     });
   });
 
+  it('accepts the largest issue body admitted by the paid-job service', async () => {
+    const { acceptanceHash: _, ...terms } = escrowRequest('large-issue-http');
+    const request = { ...terms, issueBody: 'x'.repeat(48_000) };
+    const response = await fetch(`${origin}/v1/escrows`, {
+      method: 'POST',
+      headers: mutationHeaders('large-issue-http'),
+      body: JSON.stringify({ ...request, acceptanceHash: escrowAcceptanceHash(request) }),
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      kind: 'escrow_reserve',
+      status: 'finalized',
+    });
+  });
+
+  it('rejects request bodies above the signer limit', async () => {
+    const response = await fetch(`${origin}/v1/escrows`, {
+      method: 'POST',
+      headers: mutationHeaders('oversized-issue-http'),
+      body: JSON.stringify({ issueBody: 'x'.repeat(128 * 1024) }),
+    });
+
+    expect(response.status).toBe(413);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: 'body_too_large' } });
+  });
+
   it('exposes dependency health and Prometheus metrics without secret data', async () => {
     const health = await fetch(`${origin}/health`);
     const metrics = await fetch(`${origin}/metrics`);
@@ -473,6 +498,7 @@ describe('signer HTTP service', () => {
         rpcConsensus: true,
         priceConsensus: true,
         githubCredential: true,
+        independentReviewer: true,
         escrowProgram: true,
         refundCustody: true,
         bountyCustody: true,
@@ -559,10 +585,28 @@ describe('strict public schemas', () => {
   });
 
   it('requires the reviewed revision while rejecting caller-derived merge receipts', () => {
-    const reviewed = {
+    const unsigned = {
+      repository: 'owner/repository',
+      issueNumber: 17,
       pullRequestNumber: 23,
+      mergeCommitSha: 'a'.repeat(40),
       reviewedHeadSha: 'b'.repeat(40),
+      reviewedBaseSha: 'd'.repeat(40),
+      reviewedBaseRef: 'main',
       reviewedDiffHash: 'c'.repeat(64),
+      reviewReceiptId: '77777777-7777-4777-8777-777777777777',
+      reviewReceiptHash: 'e'.repeat(64),
+      reviewModel: 'independent-reviewer',
+      reviewRoute: 'marketplace' as const,
+      reviewedAt: new Date().toISOString(),
+      authorizationExpiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+    };
+    const reviewed = {
+      ...unsigned,
+      authorizationSignature: signWithKey(
+        JOB_AUTHORITY,
+        escrowReleaseAuthorizationMessage('11111111-1111-4111-8111-111111111111', unsigned),
+      ),
     };
     expect(releaseEscrowRequestSchema.safeParse(reviewed).success).toBe(true);
     expect(releaseEscrowRequestSchema.safeParse({ pullRequestNumber: 23 }).success).toBe(false);
@@ -577,12 +621,7 @@ describe('strict public schemas', () => {
   it('forbids claimant fields during reserve and arbitrary bind fields', () => {
     expect(
       createEscrowRequestSchema.safeParse({
-        bountyId: 'bounty-1',
-        amountUsdCents: 1_000,
-        acceptanceHash: 'a'.repeat(64),
-        expiresAt: '2026-09-01T12:00:00.000Z',
-        repository: 'owner/repository',
-        issueNumber: 17,
+        ...escrowRequest('bounty-1', '2026-09-01T12:00:00.000Z'),
         claimantWallet: CLAIMANT.publicKey.toBase58(),
       }).success,
     ).toBe(false);
@@ -602,6 +641,25 @@ function mutationHeaders(idempotencyKey: string): Record<string, string> {
     'content-type': 'application/json',
     'idempotency-key': idempotencyKey,
   };
+}
+
+function escrowRequest(
+  bountyId: string,
+  expiresAt = new Date(Date.now() + 2 * 60 * 60_000).toISOString(),
+) {
+  const request = {
+    bountyId,
+    amountUsdCents: 1_000,
+    expiresAt,
+    repository: 'owner/repository',
+    issueNumber: 17,
+    issueTitle: 'Handle empty input',
+    issueBody: 'The parser should accept an empty input.',
+    baseRef: 'main',
+    baseSha: 'd'.repeat(40),
+    reviewPolicy: { version: 1 as const, model: 'independent-reviewer', maxFiles: 3 },
+  };
+  return { ...request, acceptanceHash: escrowAcceptanceHash(request) };
 }
 
 function settlementAuthorization(quoteId: string): {

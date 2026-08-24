@@ -105,10 +105,12 @@ const repositoryReadinessSchema = z
     repositorySelection: z.literal('selected'),
     permissions: z
       .object({
+        checks: z.literal('read'),
         contents: z.literal('read'),
         issues: z.literal('read'),
         metadata: z.literal('read'),
         pull_requests: z.literal('read'),
+        statuses: z.literal('read'),
       })
       .strict(),
     tokenRepositories: z.literal(1),
@@ -133,10 +135,12 @@ const repositoryAdmissionSchema = z
     repositorySelection: z.literal('selected'),
     permissions: z
       .object({
+        checks: z.literal('read'),
         contents: z.literal('read'),
         issues: z.literal('read'),
         metadata: z.literal('read'),
         pull_requests: z.literal('read'),
+        statuses: z.literal('read'),
       })
       .strict(),
     tokenRepositories: z.literal(1),
@@ -333,6 +337,11 @@ export interface FinancialPolicy extends PaymentPolicy {
     bountyId: string;
     repository: string;
     issueNumber: number;
+    issueTitle: string;
+    issueBody: string;
+    baseRef: string;
+    baseSha: string;
+    reviewPolicy: { version: 1; model: string; maxFiles: number };
     amountUsdCents: number;
     acceptanceHash: string;
     expiresAt: string;
@@ -349,9 +358,19 @@ export interface FinancialPolicy extends PaymentPolicy {
   releaseEscrow(
     operationId: string,
     input: {
+      repository: string;
+      issueNumber: number;
       pullRequestNumber: number;
+      mergeCommitSha: string;
       reviewedHeadSha: string;
+      reviewedBaseSha: string;
+      reviewedBaseRef: string;
       reviewedDiffHash: string;
+      reviewReceiptId: string;
+      reviewReceiptHash: string;
+      reviewModel: string;
+      reviewRoute: 'marketplace';
+      reviewedAt: string;
     },
   ): Promise<PolicyOperation>;
   refundEscrow(
@@ -548,6 +567,11 @@ export class PolicySignerClient implements FinancialPolicy {
     bountyId: string;
     repository: string;
     issueNumber: number;
+    issueTitle: string;
+    issueBody: string;
+    baseRef: string;
+    baseSha: string;
+    reviewPolicy: { version: 1; model: string; maxFiles: number };
     amountUsdCents: number;
     acceptanceHash: string;
     expiresAt: string;
@@ -582,15 +606,25 @@ export class PolicySignerClient implements FinancialPolicy {
   async releaseEscrow(
     operationId: string,
     input: {
+      repository: string;
+      issueNumber: number;
       pullRequestNumber: number;
+      mergeCommitSha: string;
       reviewedHeadSha: string;
+      reviewedBaseSha: string;
+      reviewedBaseRef: string;
       reviewedDiffHash: string;
+      reviewReceiptId: string;
+      reviewReceiptHash: string;
+      reviewModel: string;
+      reviewRoute: 'marketplace';
+      reviewedAt: string;
     },
   ): Promise<PolicyOperation> {
     return this.mutate(
       `/v1/escrows/${operationId}/release`,
       `mizuki-escrow-release-${operationId}`,
-      input,
+      this.escrowReleaseAuthorization(operationId, input),
     );
   }
 
@@ -758,6 +792,60 @@ export class PolicySignerClient implements FinancialPolicy {
     return {
       ...input,
       repository,
+      authorizationExpiresAt,
+      authorizationSignature: sign(
+        null,
+        Buffer.from(message, 'utf8'),
+        this.jobAuthorityKey,
+      ).toString('base64'),
+    };
+  }
+
+  private escrowReleaseAuthorization(
+    operationId: string,
+    input: {
+      repository: string;
+      issueNumber: number;
+      pullRequestNumber: number;
+      mergeCommitSha: string;
+      reviewedHeadSha: string;
+      reviewedBaseSha: string;
+      reviewedBaseRef: string;
+      reviewedDiffHash: string;
+      reviewReceiptId: string;
+      reviewReceiptHash: string;
+      reviewModel: string;
+      reviewRoute: 'marketplace';
+      reviewedAt: string;
+    },
+  ): Record<string, string | number> {
+    if (!this.jobAuthorityKey) throw new Error('job authority is not configured');
+    const authorizationExpiresAt = new Date(this.now().getTime() + 5 * 60_000).toISOString();
+    const repository = input.repository.toLowerCase();
+    const reviewedAt = new Date(input.reviewedAt).toISOString();
+    const message = [
+      'Mizuki escrow release authorization',
+      'Version: 1',
+      `Escrow: ${operationId}`,
+      `Repository: ${repository}`,
+      `Issue: ${input.issueNumber}`,
+      `Pull Request: ${input.pullRequestNumber}`,
+      `Merge Commit: ${input.mergeCommitSha}`,
+      `Reviewed Head: ${input.reviewedHeadSha}`,
+      `Reviewed Base SHA: ${input.reviewedBaseSha}`,
+      `Reviewed Base Ref: ${input.reviewedBaseRef}`,
+      `Reviewed Diff: ${input.reviewedDiffHash}`,
+      `Review Receipt: ${input.reviewReceiptId}`,
+      `Review Receipt Hash: ${input.reviewReceiptHash}`,
+      `Review Model: ${input.reviewModel}`,
+      `Review Route: ${input.reviewRoute}`,
+      `Reviewed At: ${reviewedAt}`,
+      `Expires At: ${authorizationExpiresAt}`,
+    ].join('\n');
+    return {
+      ...input,
+      repository,
+      reviewedAt,
       authorizationExpiresAt,
       authorizationSignature: sign(
         null,

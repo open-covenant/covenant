@@ -92,6 +92,37 @@ describe('operator admission controls', () => {
     });
   });
 
+  it('never opens admission in the shadow runtime', async () => {
+    const store = new MemoryStore();
+    const readiness = { check: vi.fn(async () => ({ ready: true })) };
+    const base = await serve(
+      dependencies(store, {
+        config: { runtimeRole: 'shadow' },
+        readiness,
+      }),
+    );
+
+    const response = await fetch(`${base}/v1/admin/admission`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer admin-secret', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        intakeEnabled: true,
+        reason: 'attempt to open candidate admission',
+      }),
+    });
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error: 'shadow admission is permanently closed',
+    });
+    expect(readiness.check).not.toHaveBeenCalled();
+    await expect(store.operatorControls()).resolves.toMatchObject({
+      intakeEnabled: false,
+      claimsEnabled: false,
+      revision: 0,
+    });
+  });
+
   it('does not issue a quote when stale controls are open but readiness is incomplete', async () => {
     const store = new MemoryStore();
     await store.updateOperatorControls({

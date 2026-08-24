@@ -669,7 +669,10 @@ export class InMemoryOperationStore implements OperationStore {
     return this.exclusive(() =>
       [...this.records.values()]
         .filter((record) => !['finalized', 'rejected'].includes(record.status))
-        .sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime())
+        .sort(
+          (left, right) =>
+            left.updatedAt.getTime() - right.updatedAt.getTime() || left.id.localeCompare(right.id),
+        )
         .slice(0, limit)
         .map(clone),
     );

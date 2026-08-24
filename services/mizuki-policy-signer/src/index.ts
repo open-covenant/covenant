@@ -5,6 +5,7 @@ import { GitHubMergeVerifier } from './github.js';
 import { PolicyService } from './policy.js';
 import { PostgresOperationStore } from './postgres.js';
 import { RecoveryRunner, shutdownResources, waitForShutdown } from './recovery.js';
+import { UsePodIndependentReviewer } from './reviewer.js';
 import { createSignerServer } from './server.js';
 import { startupReadinessPasses } from './startup.js';
 
@@ -48,6 +49,15 @@ const merges = new GitHubMergeVerifier({
   appId: config.githubAppId!,
   privateKey: config.githubPrivateKey!,
 });
+const reviewer = new UsePodIndependentReviewer({
+  baseUrl: config.reviewBaseUrl!,
+  apiKey: config.reviewApiKey!,
+  model: config.reviewModel!,
+  minimumBalance: config.reviewMinimumBalance,
+  maxInputPriceMicrounits: config.reviewMaxInputPriceMicrounits,
+  maxOutputPriceMicrounits: config.reviewMaxOutputPriceMicrounits,
+  maxCostMicrounits: config.reviewMaxCostMicrounits,
+});
 
 await store.migrate();
 const policy = new PolicyService(
@@ -57,6 +67,7 @@ const policy = new PolicyService(
     refundMint: config.refundMint ?? '11111111111111111111111111111111',
     refundDecimals: config.refundDecimals,
     jobAuthorityPublicKey: config.jobAuthorityPublicKey!,
+    reviewModel: config.reviewModel!,
     refundAuthMaxTtlSeconds: config.refundAuthMaxTtlSeconds,
     operationLimitUsdCents: config.operationLimitUsdCents,
     refundDailyLimitUsdCents: config.refundDailyLimitUsdCents,
@@ -71,6 +82,7 @@ const policy = new PolicyService(
   chain,
   prices,
   merges,
+  reviewer,
   metrics,
 );
 

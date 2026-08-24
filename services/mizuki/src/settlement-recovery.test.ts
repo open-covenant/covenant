@@ -315,6 +315,42 @@ describe('settlement recovery', () => {
     expect(retrySettlement).not.toHaveBeenCalled();
   });
 
+  it('retries the exact authorized transaction after the signer scan is exhausted', async () => {
+    const store = new MemoryStore();
+    const key = 'exhausted-scan-reservation';
+    const receipt = admissionReceipt(key);
+    const { job } = await store.createJob(quote, pendingPayment, key, receipt);
+    const scanExhausted = new PolicyRequestError(
+      'settlement_scan_exhausted',
+      503,
+      'settlement scan did not reach the authorization window',
+    );
+    const retrySettlement = vi.fn(async () => settledPayment);
+    const reconcileRepositorySettlement = vi.fn(async () => {
+      throw scanExhausted;
+    });
+
+    const recovered = await recoverSettlement(job, {
+      paymentMode: 'live',
+      payTo: PAY_TO,
+      store,
+      payments: { retrySettlement },
+      policy: policy({
+        validateRepositoryAdmission: vi.fn(async () => receipt),
+        reconcileRepositorySettlement,
+        registerRefundLiability: vi.fn(async () => liability(job.id)),
+      }),
+    });
+
+    expect(recovered).toMatchObject({
+      state: 'paid',
+      payment: { transaction: settledPayment.transaction },
+      refundLiabilityId: LIABILITY_ID,
+    });
+    expect(reconcileRepositorySettlement).toHaveBeenCalledOnce();
+    expect(retrySettlement).toHaveBeenCalledOnce();
+  });
+
   it.each(['duplicate_settlement', 'facilitator transport closed'])(
     'reconciles after a %s retry failure without requiring a facilitator signature',
     async (message) => {

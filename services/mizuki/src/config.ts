@@ -2,7 +2,25 @@ import { address } from '@solana/kit';
 
 export type Config = ReturnType<typeof loadConfig>;
 
+const SHADOW_ALLOWED_MIZUKI_ENV = new Set([
+  'MIZUKI_RUNTIME_ROLE',
+  'MIZUKI_HOST',
+  'MIZUKI_PORT',
+  'MIZUKI_PUBLIC_BASE_URL',
+  'MIZUKI_TRUSTED_PROXY_HOPS',
+  'MIZUKI_DATABASE_URL',
+  'MIZUKI_ADMIN_TOKEN',
+  'MIZUKI_WEB_PROXY_SECRET',
+  'MIZUKI_PAYMENT_MODE',
+  'MIZUKI_SESSION_SECRET',
+  'MIZUKI_REQUIRE_GITHUB_APP',
+]);
+
+const SHADOW_FORBIDDEN_PREFIXES = ['USEPOD_', 'CLAWPUMP_', 'E2B_', 'CODER_'];
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
+  const runtimeRole = parseRuntimeRole(env.MIZUKI_RUNTIME_ROLE);
+  assertShadowEnvironment(env, runtimeRole);
   const updaterUrl = optionalHttpUrl(env.MIZUKI_UPDATER_URL);
   const updaterToken = env.MIZUKI_UPDATER_TOKEN;
   if (Boolean(updaterUrl) !== Boolean(updaterToken)) {
@@ -54,6 +72,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
   );
 
   return {
+    runtimeRole,
     host: env.MIZUKI_HOST ?? '127.0.0.1',
     port: int(env.MIZUKI_PORT, 8787),
     trustedProxyHops: boundedInteger(env.MIZUKI_TRUSTED_PROXY_HOPS, 0, 0, 1),
@@ -247,12 +266,47 @@ export function assertLiveConfig(config: Config): void {
 }
 
 export function assertBootConfig(config: Config): void {
+  if (config.runtimeRole === 'shadow') {
+    const missing: string[] = [];
+    requireValue(missing, 'MIZUKI_DATABASE_URL', config.databaseUrl);
+    requireSecret(missing, 'MIZUKI_ADMIN_TOKEN', config.adminToken);
+    if (missing.length > 0) {
+      throw new Error(`shadow Mizuki boot configuration is incomplete: ${missing.join(', ')}`);
+    }
+    return;
+  }
   if (config.paymentMode !== 'live') return;
   const missing: string[] = [];
   requireValue(missing, 'MIZUKI_DATABASE_URL', config.databaseUrl);
   requireSecret(missing, 'MIZUKI_ADMIN_TOKEN', config.adminToken);
   if (missing.length > 0) {
     throw new Error(`live Mizuki boot configuration is incomplete: ${missing.join(', ')}`);
+  }
+}
+
+function parseRuntimeRole(value: string | undefined): 'production' | 'shadow' {
+  if (value === undefined || value === 'production') return 'production';
+  if (value === 'shadow') return 'shadow';
+  throw new Error('MIZUKI_RUNTIME_ROLE must be production or shadow');
+}
+
+function assertShadowEnvironment(env: NodeJS.ProcessEnv, role: 'production' | 'shadow'): void {
+  if (role !== 'shadow') return;
+  if (env.MIZUKI_PAYMENT_MODE !== 'mock') {
+    throw new Error('shadow Mizuki requires MIZUKI_PAYMENT_MODE=mock');
+  }
+  if (env.MIZUKI_REQUIRE_GITHUB_APP !== '0') {
+    throw new Error('shadow Mizuki requires MIZUKI_REQUIRE_GITHUB_APP=0');
+  }
+  const forbidden = Object.keys(env)
+    .filter(
+      (name) =>
+        (name.startsWith('MIZUKI_') && !SHADOW_ALLOWED_MIZUKI_ENV.has(name)) ||
+        SHADOW_FORBIDDEN_PREFIXES.some((prefix) => name.startsWith(prefix)),
+    )
+    .sort();
+  if (forbidden.length > 0) {
+    throw new Error(`shadow Mizuki forbids authority configuration: ${forbidden.join(', ')}`);
   }
 }
 

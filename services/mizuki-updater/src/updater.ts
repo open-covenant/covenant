@@ -78,7 +78,7 @@ export class UpdaterService {
         if (record.nextAttemptAt && record.nextAttemptAt > this.now()) return record;
 
         try {
-          const result = await this.step(record, owner);
+          const result = await this.withLeaseHeartbeat(id, owner, () => this.step(record!, owner));
           record = result.record;
           if (!result.continue) return record;
         } catch (error) {
@@ -224,6 +224,34 @@ export class UpdaterService {
       case 'merging': {
         if (record.prNumber === null) throw new Error('Pull request number is missing');
         if (!record.deploymentId) throw new Error('Deployment ID is missing');
+        const reservation = await this.repository.reservePromotion(record.id, this.now());
+        if (!reservation.reserved) {
+          if (reservation.reason === 'disabled') {
+            return this.pausePromotion(record, owner, reservation.control);
+          }
+          return this.wait(record, owner, 'promotion_reservation_busy', {
+            activeUpgradeId: reservation.control.activeUpgradeId,
+          });
+        }
+        return this.next(record, owner, { state: 'merge_triggering' }, 'promotion_reserved', {
+          reservedAt: reservation.control.activeSince?.toISOString() ?? null,
+        });
+      }
+
+      case 'merge_triggering': {
+        if (record.prNumber === null) throw new Error('Pull request number is missing');
+        if (!record.deploymentId) throw new Error('Deployment ID is missing');
+        const existing = await this.github.mergeState(manifest, record.prNumber);
+        if (existing.status === 'merged') {
+          return this.next(
+            record,
+            owner,
+            { state: 'promoting', mergeSha: existing.mergeSha },
+            'pull_request_merge_reconciled',
+            { mergeSha: existing.mergeSha },
+          );
+        }
+
         this.metrics.increment('shadow_health_polls');
         const health = await this.deployments.shadowHealth(
           record.deploymentId,
@@ -249,51 +277,43 @@ export class UpdaterService {
             { checks: checks.checks },
           );
         }
-        const admission = await this.repository.withPromotionAdmission(async () => {
-          const merge = await this.github.merge(manifest, record.prNumber!);
-          return this.next(
-            record,
-            owner,
-            { state: 'promoting', mergeSha: merge.mergeSha },
-            'pull_request_merged',
-            { ...merge },
-          );
-        });
-        if (admission.admitted) return admission.value;
-        return this.pausePromotion(record, owner, admission.control);
+        const merge = await this.github.merge(manifest, record.prNumber);
+        return this.next(
+          record,
+          owner,
+          { state: 'promoting', mergeSha: merge.mergeSha },
+          'pull_request_merged',
+          { ...merge },
+        );
       }
 
       case 'promoting': {
         if (!record.deploymentId || !record.mergeSha)
           throw new Error('Promotion receipt is incomplete');
-        const admission = await this.repository.withPromotionAdmission(async () => {
-          const promotion = await this.deployments.promote(
-            record.id,
-            record.deploymentId!,
-            manifest,
-            record.mergeSha!,
-          );
-          this.metrics.increment('promotions');
-          return this.next(
-            record,
-            owner,
-            {
-              state: 'verifying_promotion',
-              promotionOperationId: promotion.operationId,
-              promotionHealthyAt: null,
-              waitStartedAt: this.now(),
-            },
-            'promotion_verification_started',
-            {
-              deploymentId: record.deploymentId,
-              mergeSha: record.mergeSha,
-              promotionOperationId: promotion.operationId,
-              candidateSha: manifest.candidateSha,
-            },
-          );
-        });
-        if (admission.admitted) return admission.value;
-        return this.pausePromotion(record, owner, admission.control);
+        const promotion = await this.deployments.promote(
+          record.id,
+          record.deploymentId,
+          manifest,
+          record.mergeSha,
+        );
+        this.metrics.increment('promotions');
+        return this.next(
+          record,
+          owner,
+          {
+            state: 'verifying_promotion',
+            promotionOperationId: promotion.operationId,
+            promotionHealthyAt: null,
+            waitStartedAt: this.now(),
+          },
+          'promotion_verification_started',
+          {
+            deploymentId: record.deploymentId,
+            mergeSha: record.mergeSha,
+            promotionOperationId: promotion.operationId,
+            candidateSha: manifest.candidateSha,
+          },
+        );
       }
 
       case 'verifying_promotion': {
@@ -369,14 +389,23 @@ export class UpdaterService {
           return this.wait(record, owner, 'promotion_soak_healthy', evidence);
         }
 
-        this.metrics.increment('completions');
-        return this.next(
+        await this.deployments.finalize(
+          record.id,
+          record.deploymentId,
+          manifest,
+          record.mergeSha,
+          record.promotionOperationId,
+        );
+        const completed = await this.next(
           record,
           owner,
           { state: 'completed', waitStartedAt: null },
           'promotion_soak_completed',
           evidence,
         );
+        await this.repository.releasePromotion(record.id, this.now());
+        this.metrics.increment('completions');
+        return completed;
       }
 
       case 'rollback_pending': {
@@ -390,7 +419,7 @@ export class UpdaterService {
         );
         this.metrics.increment('rollbacks');
         this.metrics.increment('failures');
-        return this.next(
+        const rolledBack = await this.next(
           record,
           owner,
           { state: 'rolled_back' },
@@ -401,6 +430,8 @@ export class UpdaterService {
           },
           false,
         );
+        await this.repository.releasePromotion(record.id, this.now());
+        return rolledBack;
       }
 
       case 'completed':
@@ -546,6 +577,11 @@ export class UpdaterService {
 
     if (record.state === 'rollback_pending') {
       this.metrics.increment('failures');
+      await this.repository.closePromotionsForFailure(
+        record.id,
+        `rollback failed: ${error.code}`.slice(0, 500),
+        this.now(),
+      );
       const updated = await this.repository.transition(
         record.id,
         record.version,
@@ -589,6 +625,37 @@ export class UpdaterService {
       this.now(),
     );
     return { record: paused, continue: false };
+  }
+
+  private async withLeaseHeartbeat<T>(
+    id: string,
+    owner: string,
+    action: () => Promise<T>,
+  ): Promise<T> {
+    const intervalMs = Math.max(1_000, Math.min(30_000, Math.floor(this.config.leaseMs / 3)));
+    let renewal = Promise.resolve();
+    let lost = false;
+    const heartbeat = setInterval(() => {
+      renewal = renewal.then(async () => {
+        try {
+          if (!(await this.repository.acquireLease(id, owner, this.now(), this.config.leaseMs))) {
+            lost = true;
+          }
+        } catch {
+          lost = true;
+        }
+      });
+    }, intervalMs);
+    heartbeat.unref();
+    try {
+      const result = await action();
+      await renewal;
+      if (lost) throw new UpdaterError('lease_lost', 'Upgrade lease was lost', 409, true);
+      return result;
+    } finally {
+      clearInterval(heartbeat);
+      await renewal;
+    }
   }
 
   private elapsed(startedAt: Date | null): number {

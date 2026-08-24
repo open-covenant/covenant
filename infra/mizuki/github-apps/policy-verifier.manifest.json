@@ -5,10 +5,12 @@
   "public": true,
   "request_oauth_on_install": false,
   "default_permissions": {
+    "checks": "read",
     "contents": "read",
     "issues": "read",
     "metadata": "read",
-    "pull_requests": "read"
+    "pull_requests": "read",
+    "statuses": "read"
   },
   "default_events": []
 }

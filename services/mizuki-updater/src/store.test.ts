@@ -8,10 +8,13 @@ const NOW = new Date('2026-08-22T12:00:00.000Z');
 describe('upgrade repository', () => {
   it('starts with promotions closed and rejects stale control revisions', async () => {
     const repository = new InMemoryUpgradeRepository();
-    await expect(
-      repository.withPromotionAdmission(async () => 'not-called'),
-    ).resolves.toMatchObject({
-      admitted: false,
+    const record = await repository.reserve(
+      newUpgrade(proposalFixture(NOW).proposal, 'promotion-control-1'),
+      NOW,
+    );
+    await expect(repository.reservePromotion(record.id, NOW)).resolves.toMatchObject({
+      reserved: false,
+      reason: 'disabled',
       control: { promotionsEnabled: false, revision: 0 },
     });
 
@@ -36,10 +39,21 @@ describe('upgrade repository', () => {
         NOW,
       ),
     ).rejects.toMatchObject({ code: 'promotion_control_conflict' });
+    await expect(repository.promotionControlAudit()).resolves.toHaveLength(2);
   });
 
-  it('serializes a pause behind an admitted promotion', async () => {
+  it('holds one promotion reservation until its owner releases it', async () => {
     const repository = new InMemoryUpgradeRepository();
+    const first = await repository.reserve(
+      newUpgrade(proposalFixture(NOW).proposal, 'promotion-owner-1'),
+      NOW,
+    );
+    const secondFixture = proposalFixture(NOW);
+    secondFixture.proposal.manifest.proposalId = 'upgrade-2';
+    secondFixture.attestBenchmark(secondFixture.proposal.manifest);
+    secondFixture.attestReview(secondFixture.proposal.manifest);
+    const secondProposal = secondFixture.signManifest(secondFixture.proposal.manifest);
+    const second = await repository.reserve(newUpgrade(secondProposal, 'promotion-owner-2'), NOW);
     await repository.updatePromotionControl(
       {
         promotionsEnabled: true,
@@ -49,40 +63,41 @@ describe('upgrade repository', () => {
       },
       NOW,
     );
-    const actionStarted = deferred<void>();
-    const finishAction = deferred<void>();
-    const promotion = repository.withPromotionAdmission(async () => {
-      actionStarted.resolve();
-      await finishAction.promise;
-      return 'promoted';
+    await expect(repository.reservePromotion(first.id, NOW)).resolves.toMatchObject({
+      reserved: true,
+      control: { activeUpgradeId: first.id },
     });
-    await actionStarted.promise;
-
-    let pauseCompleted = false;
-    const pause = repository
-      .updatePromotionControl(
-        {
-          promotionsEnabled: false,
-          expectedRevision: 1,
-          reason: 'incident response pause',
-          updatedBy: 'write_authority',
-        },
-        new Date(NOW.getTime() + 1_000),
-      )
-      .then((control) => {
-        pauseCompleted = true;
-        return control;
-      });
-    await Promise.resolve();
-    expect(pauseCompleted).toBe(false);
-
-    finishAction.resolve();
-    await expect(promotion).resolves.toEqual({ admitted: true, value: 'promoted' });
-    await expect(pause).resolves.toMatchObject({ promotionsEnabled: false, revision: 2 });
-    await expect(repository.withPromotionAdmission(async () => 'blocked')).resolves.toMatchObject({
-      admitted: false,
-      control: { revision: 2 },
+    await expect(repository.reservePromotion(second.id, NOW)).resolves.toMatchObject({
+      reserved: false,
+      reason: 'busy',
+      control: { activeUpgradeId: first.id },
     });
+    await expect(
+      repository.releasePromotion(first.id, new Date(NOW.getTime() + 1_000)),
+    ).rejects.toMatchObject({ code: 'promotion_release_not_terminal' });
+    expect(await repository.acquireLease(first.id, 'worker-a', NOW, 10_000)).toBe(true);
+    await repository.transition(
+      first.id,
+      first.version,
+      'worker-a',
+      { state: 'failed' },
+      { event: 'test_failure' },
+      new Date(NOW.getTime() + 1_000),
+    );
+    await repository.releasePromotion(first.id, new Date(NOW.getTime() + 1_000));
+    await expect(
+      repository.reservePromotion(second.id, new Date(NOW.getTime() + 1_000)),
+    ).resolves.toMatchObject({
+      reserved: true,
+      control: { activeUpgradeId: second.id },
+    });
+    await expect(repository.promotionControlAudit()).resolves.toMatchObject([
+      { revision: 0, activeUpgradeId: null },
+      { revision: 1, activeUpgradeId: null },
+      { revision: 2, activeUpgradeId: first.id },
+      { revision: 3, activeUpgradeId: null },
+      { revision: 4, activeUpgradeId: second.id },
+    ]);
   });
 
   it('reserves proposal and idempotency keys exactly once', async () => {
@@ -176,11 +191,3 @@ describe('upgrade repository', () => {
     ]);
   });
 });
-
-function deferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((settle) => {
-    resolve = settle;
-  });
-  return { promise, resolve };
-}

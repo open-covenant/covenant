@@ -94,6 +94,7 @@ export function createApp(deps: AppDependencies) {
           const controls = await deps.store.operatorControls();
           const closed = !controls.intakeEnabled && !controls.claimsEnabled;
           if (closed) return json(res, 200, { ok: true });
+          if (deps.config.runtimeRole === 'shadow') return json(res, 503, { ok: false });
 
           const report = await deps.readiness.check();
           return json(res, report.ready ? 200 : 503, { ok: report.ready });
@@ -547,6 +548,12 @@ export function createApp(deps: AppDependencies) {
           return json(res, 400, { error: 'reason must contain 10-500 characters' });
         }
         const reason = body.reason.trim();
+        if (
+          deps.config.runtimeRole === 'shadow' &&
+          (body.intakeEnabled === true || body.claimsEnabled === true)
+        ) {
+          return json(res, 409, { error: 'shadow admission is permanently closed' });
+        }
         const controls = await deps.paymentAdmission.run(async () => {
           if (body.intakeEnabled === true || body.claimsEnabled === true) {
             await assertServiceReady(deps.readiness);

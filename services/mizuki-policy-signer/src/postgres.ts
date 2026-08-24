@@ -1214,7 +1214,7 @@ export class PostgresOperationStore implements OperationStore {
     const result = await this.pool.query(
       `SELECT * FROM mizuki_signer_operations
         WHERE status NOT IN ('finalized', 'rejected')
-        ORDER BY created_at ASC
+        ORDER BY updated_at ASC, id ASC
         LIMIT $1`,
       [limit],
     );

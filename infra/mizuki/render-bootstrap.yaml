@@ -38,6 +38,20 @@ services:
         sync: false
       - key: MIZUKI_SIGNER_GITHUB_PRIVATE_KEY
         sync: false
+      - key: MIZUKI_SIGNER_REVIEW_BASE_URL
+        value: https://api.usepod.ai
+      - key: MIZUKI_SIGNER_REVIEW_API_KEY
+        sync: false
+      - key: MIZUKI_SIGNER_REVIEW_MODEL
+        value: deepseek-v4-flash
+      - key: MIZUKI_SIGNER_REVIEW_MIN_BALANCE
+        value: '4000000'
+      - key: MIZUKI_SIGNER_REVIEW_MAX_INPUT_PRICE_MICROUNITS
+        value: '200000'
+      - key: MIZUKI_SIGNER_REVIEW_MAX_OUTPUT_PRICE_MICROUNITS
+        value: '400000'
+      - key: MIZUKI_SIGNER_REVIEW_MAX_COST_MICROUNITS
+        value: '1000000'
       - key: MIZUKI_JOB_AUTHORITY_PUBLIC_KEY
         sync: false
       - key: MIZUKI_REFUND_TREASURY
@@ -187,7 +201,9 @@ services:
         value: 0.0.0.0
       - key: MIZUKI_UPDATER_PORT
         value: 8793
-      - key: MIZUKI_UPDATER_AUTH_TOKEN
+      - key: MIZUKI_UPDATER_SUBMIT_TOKEN
+        generateValue: true
+      - key: MIZUKI_UPDATER_CONTROL_TOKEN
         generateValue: true
       - key: MIZUKI_UPDATER_READ_TOKEN
         generateValue: true
@@ -244,7 +260,7 @@ services:
       - key: MIZUKI_UPDATER_POLL_INTERVAL_MS
         value: '5000'
       - key: MIZUKI_UPDATER_LEASE_MS
-        value: '60000'
+        value: '180000'
       - key: MIZUKI_UPDATER_MAX_ATTEMPTS
         value: '10'
 

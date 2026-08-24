@@ -1,4 +1,4 @@
-import { timingSafeEqual } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { z, ZodError } from 'zod';
 import { publicAudit, publicUpgrade, signedProposalSchema, UpdaterError } from './domain.js';
@@ -24,12 +24,20 @@ const promotionControlSchema = z
     reason: z.string().trim().min(8).max(500),
   })
   .strict();
+const promotionFailureResolutionSchema = z
+  .object({
+    upgradeId: z.string().uuid(),
+    expectedRevision: z.number().int().nonnegative(),
+    reason: z.string().trim().min(8).max(500),
+  })
+  .strict();
 
 export interface UpdaterServerDependencies {
   service?: UpdaterService;
   repository: UpgradeRepository;
   metrics: UpdaterMetrics;
-  authToken: string;
+  submitToken: string;
+  controlToken: string;
   readToken: string;
   operationalReadiness?: () => Promise<void>;
   operationalFailures?: readonly string[];
@@ -70,7 +78,7 @@ async function route(
   }
 
   if (method === 'POST' && url.pathname === '/v1/upgrades') {
-    requireBearer(request, [deps.authToken]);
+    requireBearer(request, [deps.submitToken]);
     requireJson(request);
     await requireReady(deps);
     const idempotencyKey = idempotencyKeySchema.parse(request.headers['idempotency-key']);
@@ -82,22 +90,39 @@ async function route(
   }
 
   if (method === 'PUT' && url.pathname === '/v1/admin/promotion-control') {
-    requireBearer(request, [deps.authToken]);
+    requireBearer(request, [deps.controlToken]);
     requireJson(request);
     const input = promotionControlSchema.parse(await readJson(request));
     if (input.promotionsEnabled) await requireReady(deps);
     const control = await deps.repository.updatePromotionControl(
-      { ...input, updatedBy: 'write_authority' },
+      { ...input, updatedBy: controlActor(deps.controlToken) },
       new Date(),
     );
     writeJson(response, 200, { control });
     return;
   }
 
-  requireBearer(request, [deps.authToken, deps.readToken]);
+  if (method === 'POST' && url.pathname === '/v1/admin/promotion-control/resolve-failure') {
+    requireBearer(request, [deps.controlToken]);
+    requireJson(request);
+    const input = promotionFailureResolutionSchema.parse(await readJson(request));
+    const control = await deps.repository.resolvePromotionFailure(
+      { ...input, updatedBy: controlActor(deps.controlToken) },
+      new Date(),
+    );
+    writeJson(response, 200, { control });
+    return;
+  }
+
+  requireBearer(request, [deps.readToken]);
 
   if (method === 'GET' && url.pathname === '/v1/admin/promotion-control') {
     writeJson(response, 200, { control: await deps.repository.promotionControl() });
+    return;
+  }
+
+  if (method === 'GET' && url.pathname === '/v1/admin/promotion-control/audit') {
+    writeJson(response, 200, { entries: await deps.repository.promotionControlAudit() });
     return;
   }
 
@@ -149,6 +174,10 @@ async function route(
   }
 
   throw new UpdaterError('not_found', 'Route was not found', 404);
+}
+
+function controlActor(token: string): string {
+  return `control:${createHash('sha256').update(token).digest('hex').slice(0, 16)}`;
 }
 
 async function readiness(deps: UpdaterServerDependencies) {

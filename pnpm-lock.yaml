@@ -459,6 +459,9 @@ importers:
       pg:
         specifier: 8.16.3
         version: 8.16.3
+      tldts:
+        specifier: 7.0.30
+        version: 7.0.30
       zod:
         specifier: 4.3.6
         version: 4.3.6
@@ -18370,13 +18373,11 @@ snapshots:
 
   tinyspy@3.0.2: {}
 
-  tldts-core@7.0.30:
-    optional: true
+  tldts-core@7.0.30: {}
 
   tldts@7.0.30:
     dependencies:
       tldts-core: 7.0.30
-    optional: true
 
   tmp@0.2.5: {}
 

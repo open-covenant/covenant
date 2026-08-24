@@ -57,6 +57,7 @@ describe('independent reviewer readiness', () => {
     const request = vi.fn<typeof fetch>(async (input, init) => {
       expect(String(input)).toBe('https://api.usepod.ai/proxy/secret/v1/models');
       expect(init?.method).toBe('GET');
+      expect(init?.redirect).toBe('error');
       expect(init?.body).toBeUndefined();
       const headers = new Headers(init?.headers);
       expect(headers.get('authorization')).toBeNull();
@@ -118,6 +119,7 @@ describe('independent paid review', () => {
     const request = vi.fn<typeof fetch>(async (input, init) => {
       expect(String(input)).toBe('https://api.usepod.ai/proxy/secret/v1/chat/completions');
       expect(init?.method).toBe('POST');
+      expect(init?.redirect).toBe('error');
       const headers = new Headers(init?.headers);
       expect(headers.get('x-request-id')).toBe('review-attempt-1');
       expect(headers.get('x-pod-routing-mode')).toBe('marketplace-only');
@@ -205,6 +207,26 @@ describe('independent paid review', () => {
         maxCostMicrounits: 1_000,
       }),
     ).rejects.toThrow('exceeded its reserved provider cost');
+  });
+
+  it('rejects an oversized paid-review response', async () => {
+    const reviewer = paidReviewer(
+      async () =>
+        new Response('x'.repeat(64 * 1024 + 1), {
+          headers: {
+            'content-type': 'application/json',
+            'x-pod-route': 'marketplace',
+            'x-balance-remaining': '9000000',
+          },
+        }),
+    );
+
+    await expect(
+      runPaidReview(reviewer, {
+        id: 'review-attempt-1',
+        maxCostMicrounits: 1_000,
+      }),
+    ).rejects.toThrow('response exceeded the size limit');
   });
 
   it.each([

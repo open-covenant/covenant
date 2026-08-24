@@ -16,157 +16,30 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      - key: MIZUKI_RUNTIME_ROLE
+        value: shadow
       - key: MIZUKI_HOST
         value: 0.0.0.0
       - key: MIZUKI_PORT
         value: 10000
       - key: MIZUKI_PUBLIC_BASE_URL
-        fromService:
-          type: web
-          name: mizuki-runtime-production
-          envVarKey: RENDER_EXTERNAL_URL
-      - key: MIZUKI_WEB_ORIGIN
-        value: https://mizuki.covenant.org
+        value: http://mizuki-runtime-shadow:10000
       - key: MIZUKI_TRUSTED_PROXY_HOPS
-        value: '1'
-      - key: MIZUKI_RATE_LIMIT_MAX_SOURCES
-        value: '10000'
-      - key: MIZUKI_SSE_MAX_CONNECTIONS
-        value: '100'
-      - key: MIZUKI_SSE_MAX_CONNECTIONS_PER_SOURCE
-        value: '3'
-      - key: MIZUKI_SSE_IDLE_TIMEOUT_MS
-        value: '120000'
-      - key: MIZUKI_READINESS_REFRESH_MS
-        value: '30000'
-      - key: MIZUKI_READINESS_MAX_AGE_MS
-        value: '90000'
-      - key: MIZUKI_READINESS_TIMEOUT_MS
-        value: '20000'
-      - key: MIZUKI_ESCROW_READINESS_MIN_LAMPORTS
-        value: '1000000000'
+        value: '0'
       - key: MIZUKI_DATABASE_URL
         fromDatabase:
           name: mizuki-runtime-shadow-postgres
           property: connectionString
       - key: MIZUKI_ADMIN_TOKEN
         generateValue: true
-      - key: MIZUKI_RELEASE_PROBE_TOKEN
-        fromService:
-          type: pserv
-          name: mizuki-deployment-controller
-          envVarKey: MIZUKI_DEPLOY_PROBE_TOKEN
       - key: MIZUKI_WEB_PROXY_SECRET
         generateValue: true
-      - key: MIZUKI_INTERNAL_REPOS
-        value: open-covenant/covenant
-      - key: MIZUKI_CODING_GATEWAY_URL
-        fromService:
-          type: pserv
-          name: mizuki-coding-gateway
-          property: hostport
-      - key: MIZUKI_CODING_GATEWAY_TOKEN
-        fromService:
-          type: pserv
-          name: mizuki-coding-gateway
-          envVarKey: CODER_AUTH_TOKEN
-      - key: USEPOD_API_KEY
-        fromService:
-          type: web
-          name: mizuki-runtime-production
-          envVarKey: USEPOD_API_KEY
-      - key: USEPOD_BASE_URL
-        value: https://api.usepod.ai
-      - key: USEPOD_MODEL
-        value: openai/gpt-oss-120b
-      - key: USEPOD_REVIEW_MODEL
-        value: deepseek-v4-flash
-      - key: USEPOD_INPUT_USD_PER_MILLION
-        value: '0.2'
-      - key: USEPOD_OUTPUT_USD_PER_MILLION
-        value: '0.4'
-      - key: USEPOD_MAX_INPUT_PRICE_MICROUNITS
-        value: '200000'
-      - key: USEPOD_MAX_OUTPUT_PRICE_MICROUNITS
-        value: '400000'
-      - key: USEPOD_MIN_BALANCE
-        value: '4000000'
-      - key: MIZUKI_BOUNTY_REVIEW_MAX_COST_MICROUNITS
-        value: '50000'
       - key: MIZUKI_PAYMENT_MODE
-        value: live
-      - key: MIZUKI_PAY_TO
-        fromService:
-          type: pserv
-          name: mizuki-policy-signer
-          envVarKey: MIZUKI_REFUND_TREASURY
-      - key: MIZUKI_ESCROW_REFUND_TO
-        fromService:
-          type: pserv
-          name: mizuki-policy-signer
-          envVarKey: MIZUKI_ESCROW_AUTHORITY
-      - key: MIZUKI_X402_FACILITATOR
-        value: https://facilitator.payai.network
-      - key: MIZUKI_POLICY_SIGNER_URL
-        fromService:
-          type: pserv
-          name: mizuki-policy-signer
-          property: hostport
-      - key: MIZUKI_POLICY_SIGNER_TOKEN
-        fromService:
-          type: pserv
-          name: mizuki-policy-signer
-          envVarKey: MIZUKI_SIGNER_AUTH_TOKEN
-      - key: MIZUKI_JOB_AUTHORITY_SEED
-        fromService:
-          type: web
-          name: mizuki-runtime-production
-          envVarKey: MIZUKI_JOB_AUTHORITY_SEED
-      - key: MIZUKI_UPDATER_URL
-        fromService:
-          type: pserv
-          name: mizuki-updater
-          property: hostport
-      - key: MIZUKI_UPDATER_TOKEN
-        fromService:
-          type: pserv
-          name: mizuki-updater
-          envVarKey: MIZUKI_UPDATER_READ_TOKEN
-      - key: MIZUKI_UPDATER_TIMEOUT_MS
-        value: '8000'
-      - key: MIZUKI_UPDATER_POLL_INTERVAL_MS
-        value: '60000'
-      - key: MIZUKI_GITHUB_APP_ID
-        fromService:
-          type: web
-          name: mizuki-runtime-production
-          envVarKey: MIZUKI_GITHUB_APP_ID
-      - key: MIZUKI_GITHUB_PRIVATE_KEY
-        fromService:
-          type: web
-          name: mizuki-runtime-production
-          envVarKey: MIZUKI_GITHUB_PRIVATE_KEY
-      - key: MIZUKI_GITHUB_CLIENT_ID
-        fromService:
-          type: web
-          name: mizuki-runtime-production
-          envVarKey: MIZUKI_GITHUB_CLIENT_ID
-      - key: MIZUKI_GITHUB_CLIENT_SECRET
-        fromService:
-          type: web
-          name: mizuki-runtime-production
-          envVarKey: MIZUKI_GITHUB_CLIENT_SECRET
-      - key: MIZUKI_GITHUB_WEBHOOK_SECRET
-        fromService:
-          type: web
-          name: mizuki-runtime-production
-          envVarKey: MIZUKI_GITHUB_WEBHOOK_SECRET
-      - key: MIZUKI_GITHUB_AUTHORIZATION_LABEL
-        value: mizuki:authorized
+        value: mock
       - key: MIZUKI_SESSION_SECRET
         generateValue: true
       - key: MIZUKI_REQUIRE_GITHUB_APP
-        value: '1'
+        value: '0'
 
   - type: web
     name: mizuki-runtime-production
@@ -185,6 +58,8 @@ services:
     healthCheckPath: /deployz
     envVars:
       - key: NODE_ENV
+        value: production
+      - key: MIZUKI_RUNTIME_ROLE
         value: production
       - key: MIZUKI_HOST
         value: 0.0.0.0
@@ -225,7 +100,7 @@ services:
         fromService:
           type: pserv
           name: mizuki-deployment-controller
-          envVarKey: MIZUKI_DEPLOY_PROBE_TOKEN
+          envVarKey: MIZUKI_DEPLOY_PRODUCTION_PROBE_TOKEN
       - key: MIZUKI_WEB_PROXY_SECRET
         generateValue: true
       - key: MIZUKI_INTERNAL_REPOS
@@ -369,6 +244,20 @@ services:
         sync: false
       - key: MIZUKI_SIGNER_GITHUB_PRIVATE_KEY
         sync: false
+      - key: MIZUKI_SIGNER_REVIEW_BASE_URL
+        value: https://api.usepod.ai
+      - key: MIZUKI_SIGNER_REVIEW_API_KEY
+        sync: false
+      - key: MIZUKI_SIGNER_REVIEW_MODEL
+        value: deepseek-v4-flash
+      - key: MIZUKI_SIGNER_REVIEW_MIN_BALANCE
+        value: '4000000'
+      - key: MIZUKI_SIGNER_REVIEW_MAX_INPUT_PRICE_MICROUNITS
+        value: '200000'
+      - key: MIZUKI_SIGNER_REVIEW_MAX_OUTPUT_PRICE_MICROUNITS
+        value: '400000'
+      - key: MIZUKI_SIGNER_REVIEW_MAX_COST_MICROUNITS
+        value: '1000000'
       - key: MIZUKI_JOB_AUTHORITY_PUBLIC_KEY
         sync: false
       - key: MIZUKI_REFUND_TREASURY
@@ -592,10 +481,10 @@ services:
       - key: MIZUKI_DEPLOY_ARTIFACT_ORIGINS
         value: https://github.com,https://release-assets.githubusercontent.com
       - key: MIZUKI_DEPLOY_SHADOW_PROBE_URL
-        value: http://mizuki-runtime-shadow:10000/internal/mizuki/functional-readiness
+        value: http://mizuki-runtime-shadow:10000/deployz
       - key: MIZUKI_DEPLOY_PRODUCTION_PROBE_URL
         sync: false
-      - key: MIZUKI_DEPLOY_PROBE_TOKEN
+      - key: MIZUKI_DEPLOY_PRODUCTION_PROBE_TOKEN
         generateValue: true
       - key: MIZUKI_DEPLOY_RENDER_TIMEOUT_MS
         value: '20000'
@@ -627,7 +516,9 @@ services:
         value: 0.0.0.0
       - key: MIZUKI_UPDATER_PORT
         value: 8793
-      - key: MIZUKI_UPDATER_AUTH_TOKEN
+      - key: MIZUKI_UPDATER_SUBMIT_TOKEN
+        generateValue: true
+      - key: MIZUKI_UPDATER_CONTROL_TOKEN
         generateValue: true
       - key: MIZUKI_UPDATER_READ_TOKEN
         generateValue: true
@@ -694,7 +585,7 @@ services:
       - key: MIZUKI_UPDATER_POLL_INTERVAL_MS
         value: '5000'
       - key: MIZUKI_UPDATER_LEASE_MS
-        value: '60000'
+        value: '180000'
       - key: MIZUKI_UPDATER_MAX_ATTEMPTS
         value: '10'
 

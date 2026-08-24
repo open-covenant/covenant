@@ -14,7 +14,8 @@ const envSchema = z
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
     MIZUKI_UPDATER_HOST: z.string().default('127.0.0.1'),
     MIZUKI_UPDATER_PORT: z.coerce.number().int().min(1).max(65_535).default(8793),
-    MIZUKI_UPDATER_AUTH_TOKEN: z.string().min(32),
+    MIZUKI_UPDATER_SUBMIT_TOKEN: z.string().min(32),
+    MIZUKI_UPDATER_CONTROL_TOKEN: z.string().min(32),
     MIZUKI_UPDATER_READ_TOKEN: z.string().min(32),
     MIZUKI_UPDATER_DATABASE_URL: z.string().url().optional(),
     MIZUKI_UPDATER_MEMORY_STORE: z
@@ -115,6 +116,7 @@ export interface UpdaterOperationalConfig {
   shadowHealthUrlTemplate: string;
   promoteHookUrl: string;
   promotionHealthUrlTemplate: string;
+  finalizeHookUrl: string;
   rollbackHookUrl: string;
   deployReadinessUrl: string;
   deployHookToken: string;
@@ -136,7 +138,8 @@ export interface UpdaterConfig {
   environment: 'development' | 'test' | 'production';
   host: string;
   port: number;
-  authToken: string;
+  submitToken: string;
+  controlToken: string;
   readToken: string;
   databaseUrl?: string;
   memoryStore: boolean;
@@ -206,18 +209,31 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): UpdaterConfig 
   });
 
   const credentials = [
-    parsed.MIZUKI_UPDATER_AUTH_TOKEN,
+    parsed.MIZUKI_UPDATER_SUBMIT_TOKEN,
+    parsed.MIZUKI_UPDATER_CONTROL_TOKEN,
     parsed.MIZUKI_UPDATER_READ_TOKEN,
     ...(parsed.MIZUKI_UPDATER_DEPLOY_HOOK_TOKEN ? [parsed.MIZUKI_UPDATER_DEPLOY_HOOK_TOKEN] : []),
   ];
   if (new Set(credentials).size !== credentials.length) {
-    throw new Error('Submission, read, and deployment tokens must be distinct');
+    throw new Error('Submission, control, read, and deployment tokens must be distinct');
   }
   if (
     parsed.MIZUKI_UPDATER_PROMOTION_TIMEOUT_MS <
     parsed.MIZUKI_UPDATER_PROMOTION_SOAK_MS + parsed.MIZUKI_UPDATER_POLL_INTERVAL_MS
   ) {
     throw new Error('Promotion timeout must exceed the soak by at least one poll interval');
+  }
+  const minimumLeaseMs =
+    Math.max(
+      parsed.MIZUKI_UPDATER_HOOK_TIMEOUT_MS,
+      parsed.MIZUKI_UPDATER_GITHUB_TIMEOUT_MS,
+      parsed.MIZUKI_UPDATER_ARTIFACT_TIMEOUT_MS,
+    ) +
+    2 * parsed.MIZUKI_UPDATER_POLL_INTERVAL_MS;
+  if (parsed.MIZUKI_UPDATER_LEASE_MS < minimumLeaseMs) {
+    throw new Error(
+      `Upgrade lease must be at least ${minimumLeaseMs}ms for the configured external timeouts`,
+    );
   }
   const githubApi = new URL(parsed.MIZUKI_UPDATER_GITHUB_API_URL);
   if (githubApi.username || githubApi.password) {
@@ -244,7 +260,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): UpdaterConfig 
     environment: parsed.NODE_ENV,
     host: parsed.MIZUKI_UPDATER_HOST,
     port: parsed.MIZUKI_UPDATER_PORT,
-    authToken: parsed.MIZUKI_UPDATER_AUTH_TOKEN,
+    submitToken: parsed.MIZUKI_UPDATER_SUBMIT_TOKEN,
+    controlToken: parsed.MIZUKI_UPDATER_CONTROL_TOKEN,
     readToken: parsed.MIZUKI_UPDATER_READ_TOKEN,
     databaseUrl: parsed.MIZUKI_UPDATER_DATABASE_URL,
     memoryStore: parsed.MIZUKI_UPDATER_MEMORY_STORE,
@@ -293,6 +310,7 @@ function operationalConfig(parsed: ParsedEnv, production: boolean): UpdaterOpera
     shadowHealthUrlTemplate: `${origin}/v1/deployments/shadow/{deploymentId}/health`,
     promoteHookUrl: `${origin}/v1/deployments/promote`,
     promotionHealthUrlTemplate: `${origin}/v1/deployments/production/{deploymentId}/health`,
+    finalizeHookUrl: `${origin}/v1/deployments/finalize`,
     rollbackHookUrl: `${origin}/v1/deployments/rollback`,
     deployReadinessUrl: `${origin}/readyz`,
     deployHookToken: parsed.MIZUKI_UPDATER_DEPLOY_HOOK_TOKEN!,

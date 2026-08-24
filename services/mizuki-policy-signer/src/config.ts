@@ -1,4 +1,6 @@
 import { createPrivateKey } from 'node:crypto';
+import { isIP } from 'node:net';
+import { getDomain } from 'tldts';
 import { z } from 'zod';
 
 const base58 = z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/);
@@ -22,6 +24,34 @@ const envSchema = z
       .refine((value) => Number.isSafeInteger(Number(value)))
       .optional(),
     MIZUKI_SIGNER_GITHUB_PRIVATE_KEY: z.string().min(100).optional(),
+    MIZUKI_SIGNER_REVIEW_BASE_URL: z.string().url().optional(),
+    MIZUKI_SIGNER_REVIEW_API_KEY: z.string().min(16).optional(),
+    MIZUKI_SIGNER_REVIEW_MODEL: z
+      .string()
+      .min(1)
+      .max(256)
+      .regex(/^\S(?:.*\S)?$/)
+      .optional(),
+    MIZUKI_SIGNER_REVIEW_MIN_BALANCE: z
+      .string()
+      .regex(/^[1-9]\d{0,15}$/)
+      .default('4000000'),
+    MIZUKI_SIGNER_REVIEW_MAX_INPUT_PRICE_MICROUNITS: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(200_000),
+    MIZUKI_SIGNER_REVIEW_MAX_OUTPUT_PRICE_MICROUNITS: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(400_000),
+    MIZUKI_SIGNER_REVIEW_MAX_COST_MICROUNITS: z.coerce
+      .number()
+      .int()
+      .positive()
+      .max(1_000_000)
+      .default(1_000_000),
     MIZUKI_JOB_AUTHORITY_PUBLIC_KEY: base58.optional(),
     MIZUKI_REFUND_TREASURY: base58.optional(),
     MIZUKI_ESCROW_AUTHORITY: base58.optional(),
@@ -70,6 +100,13 @@ export interface SignerConfig {
   escrowPrivateKeyJson?: string;
   githubAppId?: string;
   githubPrivateKey?: string;
+  reviewBaseUrl?: string;
+  reviewApiKey?: string;
+  reviewModel?: string;
+  reviewMinimumBalance: string;
+  reviewMaxInputPriceMicrounits: number;
+  reviewMaxOutputPriceMicrounits: number;
+  reviewMaxCostMicrounits: number;
   jobAuthorityPublicKey?: string;
   refundTreasury?: string;
   escrowAuthority?: string;
@@ -123,6 +160,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SignerConfig {
       ['MIZUKI_ESCROW_PRIVATE_KEY_JSON', parsed.MIZUKI_ESCROW_PRIVATE_KEY_JSON],
       ['MIZUKI_SIGNER_GITHUB_APP_ID', parsed.MIZUKI_SIGNER_GITHUB_APP_ID],
       ['MIZUKI_SIGNER_GITHUB_PRIVATE_KEY', parsed.MIZUKI_SIGNER_GITHUB_PRIVATE_KEY],
+      ['MIZUKI_SIGNER_REVIEW_BASE_URL', parsed.MIZUKI_SIGNER_REVIEW_BASE_URL],
+      ['MIZUKI_SIGNER_REVIEW_API_KEY', parsed.MIZUKI_SIGNER_REVIEW_API_KEY],
+      ['MIZUKI_SIGNER_REVIEW_MODEL', parsed.MIZUKI_SIGNER_REVIEW_MODEL],
       ['MIZUKI_JOB_AUTHORITY_PUBLIC_KEY', parsed.MIZUKI_JOB_AUTHORITY_PUBLIC_KEY],
       ['MIZUKI_REFUND_TREASURY', parsed.MIZUKI_REFUND_TREASURY],
       ['MIZUKI_ESCROW_AUTHORITY', parsed.MIZUKI_ESCROW_AUTHORITY],
@@ -136,6 +176,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SignerConfig {
     if (missing.length > 0)
       throw new Error(`Missing production signer settings: ${missing.join(', ')}`);
     assertRsaPrivateKey(parsed.MIZUKI_SIGNER_GITHUB_PRIVATE_KEY!);
+    if (
+      parsed.NODE_ENV === 'production' &&
+      parsed.MIZUKI_SIGNER_REVIEW_BASE_URL !== 'https://api.usepod.ai'
+    ) {
+      throw new Error('Production independent review must use the pinned provider origin');
+    }
+    assertHttpsOrLoopback('MIZUKI_SIGNER_REVIEW_BASE_URL', parsed.MIZUKI_SIGNER_REVIEW_BASE_URL!);
     assertEncryptedDatabase(parsed.MIZUKI_SIGNER_DATABASE_URL!);
     assertHttpsOrLoopback('MIZUKI_SIGNER_RPC_URL', parsed.MIZUKI_SIGNER_RPC_URL!);
     assertHttpsOrLoopback(
@@ -180,6 +227,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SignerConfig {
     escrowPrivateKeyJson: parsed.MIZUKI_ESCROW_PRIVATE_KEY_JSON,
     githubAppId: parsed.MIZUKI_SIGNER_GITHUB_APP_ID,
     githubPrivateKey: parsed.MIZUKI_SIGNER_GITHUB_PRIVATE_KEY,
+    reviewBaseUrl: parsed.MIZUKI_SIGNER_REVIEW_BASE_URL,
+    reviewApiKey: parsed.MIZUKI_SIGNER_REVIEW_API_KEY,
+    reviewModel: parsed.MIZUKI_SIGNER_REVIEW_MODEL,
+    reviewMinimumBalance: parsed.MIZUKI_SIGNER_REVIEW_MIN_BALANCE,
+    reviewMaxInputPriceMicrounits: parsed.MIZUKI_SIGNER_REVIEW_MAX_INPUT_PRICE_MICROUNITS,
+    reviewMaxOutputPriceMicrounits: parsed.MIZUKI_SIGNER_REVIEW_MAX_OUTPUT_PRICE_MICROUNITS,
+    reviewMaxCostMicrounits: parsed.MIZUKI_SIGNER_REVIEW_MAX_COST_MICROUNITS,
     jobAuthorityPublicKey: parsed.MIZUKI_JOB_AUTHORITY_PUBLIC_KEY,
     refundTreasury: parsed.MIZUKI_REFUND_TREASURY,
     escrowAuthority: parsed.MIZUKI_ESCROW_AUTHORITY,
@@ -243,16 +297,42 @@ function assertIndependentProviders(
   secondary: string,
   environment: SignerConfig['environment'],
 ): void {
-  if (primary === secondary) {
+  if (endpointIdentity(primary) === endpointIdentity(secondary)) {
     throw new Error(`Primary and secondary ${kind} URLs must be different`);
   }
   if (environment !== 'production') return;
 
-  const primaryHost = new URL(primary).hostname.toLowerCase();
-  const secondaryHost = new URL(secondary).hostname.toLowerCase();
-  if (primaryHost === secondaryHost) {
-    throw new Error(`Primary and secondary ${kind} providers must use different hostnames`);
+  const primaryProvider = providerDomain(primary);
+  const secondaryProvider = providerDomain(secondary);
+  if (primaryProvider === secondaryProvider) {
+    throw new Error(`Primary and secondary ${kind} providers must use different domains`);
   }
+}
+
+function endpointIdentity(value: string): string {
+  const url = new URL(value);
+  const host = normalizedHost(url.hostname);
+  const port =
+    url.port || (url.protocol === 'https:' ? '443' : url.protocol === 'http:' ? '80' : '');
+  const path = url.pathname.replace(/\/+$/, '') || '/';
+  return `${url.protocol}//${host}:${port}${path}`;
+}
+
+function providerDomain(value: string): string {
+  const host = normalizedHost(new URL(value).hostname).replace(/^\[|\]$/g, '');
+  if (isIP(host)) {
+    throw new Error('Production providers must use DNS hostnames');
+  }
+  const domain = getDomain(host, { allowPrivateDomains: false });
+  if (!domain) {
+    throw new Error('Production providers must use registrable DNS domains');
+  }
+  return domain;
+}
+
+function normalizedHost(host: string): string {
+  const normalized = host.toLowerCase().replace(/\.$/, '');
+  return isLoopback(normalized) ? 'loopback' : normalized;
 }
 
 function isRenderPrivateDatabase(host: string): boolean {

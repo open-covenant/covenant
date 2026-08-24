@@ -32,6 +32,8 @@ import type {
   X402PaymentAuthorization,
 } from './domain.js';
 import {
+  escrowAcceptanceHash,
+  escrowReleaseAuthorizationMessage,
   PolicyError,
   refundAuthorizationMessage,
   refundDeliveryBindingAuthorizationMessage,
@@ -41,6 +43,11 @@ import {
 } from './domain.js';
 import type { MergeVerifier, RepositoryReadinessEvidence } from './github.js';
 import type { SignerMetrics } from './metrics.js';
+import type {
+  IndependentReviewer,
+  IndependentReviewRequest,
+  IndependentReviewReceipt,
+} from './reviewer.js';
 import type { OperationStore } from './store.js';
 
 export interface PolicyServiceConfig {
@@ -49,6 +56,7 @@ export interface PolicyServiceConfig {
   refundMint: string;
   refundDecimals: number;
   jobAuthorityPublicKey: string;
+  reviewModel: string;
   refundAuthMaxTtlSeconds: number;
   operationLimitUsdCents: number;
   refundDailyLimitUsdCents: number;
@@ -71,10 +79,11 @@ export class PolicyService {
     private readonly chain: ChainGateway,
     private readonly prices: UsdPriceOracle,
     private readonly merges: MergeVerifier,
+    private readonly reviewer: IndependentReviewer,
     private readonly metrics: SignerMetrics,
     private readonly now: () => Date = () => new Date(),
   ) {
-    this.leaseMs = config.leaseMs ?? 30_000;
+    this.leaseMs = config.leaseMs ?? 90_000;
     this.jobAuthorityPublicKey = new PublicKey(config.jobAuthorityPublicKey);
     if (
       config.jobAuthorityPublicKey === config.refundTreasury ||
@@ -596,11 +605,12 @@ export class PolicyService {
   }
 
   async probeReadiness(): Promise<SignerReadinessEvidence> {
-    const [database, chain, prices, github] = await Promise.allSettled([
+    const [database, chain, prices, github, reviewer] = await Promise.allSettled([
       this.store.ping(),
       this.chain.health(),
       this.prices.solUsd(),
       this.merges.health(),
+      this.reviewer.health(),
     ]);
     const priceObservations = prices.status === 'fulfilled' ? prices.value.observations : undefined;
     const priceConsensus =
@@ -613,6 +623,7 @@ export class PolicyService {
       rpcConsensus: chainReady,
       priceConsensus,
       githubCredential: github.status === 'fulfilled',
+      independentReviewer: reviewer.status === 'fulfilled',
       escrowProgram: chainReady,
       refundCustody: chainReady,
       bountyCustody: chainReady,
@@ -686,6 +697,41 @@ export class PolicyService {
       clientRequestHash,
     );
     if (existing) return existing;
+    const { acceptanceHash, ...acceptance } = request;
+    if (
+      request.reviewPolicy.model !== this.config.reviewModel ||
+      escrowAcceptanceHash(acceptance) !== acceptanceHash
+    ) {
+      throw new PolicyError(
+        'escrow_acceptance_mismatch',
+        'Escrow terms do not match the committed review policy',
+        422,
+      );
+    }
+    const termsEvidence = await this.merges.verifyEscrowTerms({
+      repository: request.repository,
+      issueNumber: request.issueNumber,
+      issueTitle: request.issueTitle,
+      issueBody: request.issueBody,
+      baseRef: request.baseRef,
+      baseSha: request.baseSha,
+    });
+    if (
+      termsEvidence.repository !== request.repository ||
+      termsEvidence.issueNumber !== request.issueNumber ||
+      termsEvidence.issueTitle !== request.issueTitle ||
+      termsEvidence.issueBody !== request.issueBody ||
+      termsEvidence.baseRef !== request.baseRef ||
+      termsEvidence.baseSha !== request.baseSha ||
+      termsEvidence.visibility !== 'PUBLIC'
+    ) {
+      throw new PolicyError(
+        'github_escrow_terms_mismatch',
+        'GitHub returned escrow terms outside the committed acceptance',
+        503,
+        true,
+      );
+    }
     this.assertOperationLimit(request.amountUsdCents);
     const expiry = new Date(request.expiresAt);
     const lifetime = expiry.getTime() - (await this.chain.unixTime()) * 1_000;
@@ -756,6 +802,12 @@ export class PolicyService {
             : {}),
           repository: request.repository,
           issueNumber: request.issueNumber,
+          issueTitle: request.issueTitle,
+          issueBody: request.issueBody,
+          baseRef: request.baseRef,
+          baseSha: request.baseSha,
+          reviewPolicy: request.reviewPolicy,
+          termsEvidenceHash: requestHash(termsEvidence),
           clientRequestHash,
         },
       },
@@ -906,35 +958,107 @@ export class PolicyService {
     request: ReleaseEscrowRequest,
     idempotencyKey: string,
   ): Promise<OperationRecord> {
-    const clientRequestHash = requestHash({ escrowOperationId, request });
+    const immutableRequest = releaseEscrowRequestIdentity(request);
+    const clientRequestHash = requestHash({ escrowOperationId, request: immutableRequest });
     const existing = await this.idempotentReplay(
       idempotencyKey,
       'escrow_release',
       clientRequestHash,
     );
     if (existing) return existing;
-    await this.assertNoEscrowResolution(escrowOperationId);
+    this.assertAuthorization(
+      escrowReleaseAuthorizationMessage(escrowOperationId, request),
+      request.authorizationExpiresAt,
+      request.authorizationSignature,
+      'escrow_release',
+    );
+    await this.assertNoEscrowResolution(escrowOperationId, 'escrow_release');
 
     const escrow = await this.activeEscrow(escrowOperationId);
     const binding = await this.activeBinding(escrowOperationId);
+    const reviewPolicy = requiredReviewPolicy(escrow);
+    if (
+      request.repository !== requiredDetail(escrow, 'repository') ||
+      request.issueNumber !== requiredNumberDetail(escrow, 'issueNumber') ||
+      request.reviewedBaseRef !== requiredDetail(escrow, 'baseRef') ||
+      request.reviewedBaseSha !== requiredDetail(escrow, 'baseSha') ||
+      request.reviewModel !== reviewPolicy.model
+    ) {
+      throw new PolicyError(
+        'escrow_release_provenance_mismatch',
+        'Release authorization does not match the escrow production revision',
+        422,
+      );
+    }
     const claimExpiresAt = new Date(requiredDetail(binding, 'claimExpiresAt'));
     if ((await this.chain.unixTime()) * 1_000 >= claimExpiresAt.getTime()) {
       throw new PolicyError('escrow_claim_expired', 'Escrow claim has expired', 409);
     }
-    const evidence = await this.merges.verify({
-      repository: requiredDetail(escrow, 'repository'),
-      issueNumber: requiredNumberDetail(escrow, 'issueNumber'),
+    const reviewedAt = new Date(request.reviewedAt);
+    if (
+      reviewedAt.getTime() < binding.createdAt.getTime() ||
+      reviewedAt.getTime() >= claimExpiresAt.getTime()
+    ) {
+      throw new PolicyError(
+        'escrow_review_time_invalid',
+        'Independent review is outside the immutable claim window',
+        422,
+      );
+    }
+    const verified = await this.merges.verify({
+      repository: request.repository,
+      issueNumber: request.issueNumber,
       claimantGitHubLogin: requiredDetail(binding, 'claimantGitHubLogin'),
       pullRequestNumber: request.pullRequestNumber,
+      mergeCommitSha: request.mergeCommitSha,
       reviewedHeadSha: request.reviewedHeadSha,
+      reviewedBaseSha: request.reviewedBaseSha,
+      reviewedBaseRef: request.reviewedBaseRef,
       reviewedDiffHash: request.reviewedDiffHash,
+      expectedIssueTitle: requiredDetail(escrow, 'issueTitle'),
+      expectedIssueBody: requiredDetailAllowEmpty(escrow, 'issueBody'),
+      maxFiles: reviewPolicy.maxFiles,
       authorizedAt: binding.createdAt,
     });
-    if (new Date(evidence.mergedAt).getTime() > claimExpiresAt.getTime()) {
+    const { evidence, artifact } = verified;
+    const mergedAt = new Date(evidence.mergedAt);
+    if (mergedAt.getTime() > claimExpiresAt.getTime()) {
       throw new PolicyError(
         'github_merge_after_expiry',
         'Pull request merged after the immutable claim expiry',
         422,
+      );
+    }
+    if (reviewedAt.getTime() > mergedAt.getTime()) {
+      throw new PolicyError(
+        'escrow_review_after_merge',
+        'Independent review was recorded after the pull request merged',
+        422,
+      );
+    }
+    const approvedAt = new Date(evidence.approvedReviewSubmittedAt);
+    if (approvedAt.getTime() < reviewedAt.getTime() || approvedAt.getTime() > mergedAt.getTime()) {
+      throw new PolicyError(
+        'github_maintainer_approval_time_invalid',
+        'Maintainer approval is outside the reviewed pre-merge window',
+        422,
+      );
+    }
+    if (
+      evidence.repository !== request.repository ||
+      evidence.issueNumber !== request.issueNumber ||
+      evidence.pullRequestNumber !== request.pullRequestNumber ||
+      evidence.mergeCommitOid !== request.mergeCommitSha ||
+      evidence.headCommitOid !== request.reviewedHeadSha ||
+      evidence.baseCommitOid !== request.reviewedBaseSha ||
+      evidence.baseRefName !== request.reviewedBaseRef ||
+      evidence.diffHash !== request.reviewedDiffHash
+    ) {
+      throw new PolicyError(
+        'github_evidence_mismatch',
+        'GitHub returned merge evidence outside the signed release authorization',
+        503,
+        true,
       );
     }
     const mergeReceiptHash = requestHash(evidence);
@@ -943,7 +1067,26 @@ export class PolicyService {
       idempotencyKey,
       'escrow_release',
       clientRequestHash,
-      { pullRequestNumber: request.pullRequestNumber, mergeReceiptHash, evidence },
+      {
+        authorization: immutableRequest,
+        mergeReceiptHash,
+        evidence,
+        reviewAttempt: {
+          status: 'reserved',
+          inputHash: requestHash({
+            acceptanceHash: requiredDetail(escrow, 'acceptanceHash'),
+            reviewPolicyVersion: reviewPolicy.version,
+            evidence,
+            artifact,
+          }),
+          input: {
+            acceptanceHash: requiredDetail(escrow, 'acceptanceHash'),
+            reviewPolicyVersion: reviewPolicy.version,
+            evidence,
+            artifact,
+          },
+        },
+      },
       binding,
     );
   }
@@ -960,7 +1103,7 @@ export class PolicyService {
       clientRequestHash,
     );
     if (existing) return existing;
-    await this.assertNoEscrowResolution(escrowOperationId);
+    await this.assertNoEscrowResolution(escrowOperationId, 'escrow_refund');
     const escrow = await this.activeEscrow(escrowOperationId);
     const binding = await this.store.getByResourceKey(`escrow_binding:${escrowOperationId}`);
     if (binding && binding.status !== 'finalized') {
@@ -996,6 +1139,10 @@ export class PolicyService {
     let record = await this.store.acquireLease(id, owner, this.now(), this.leaseMs);
     if (!record) return this.get(id);
     try {
+      if (record.kind === 'escrow_release') {
+        record = await this.authorizeReleaseReview(record, owner);
+        if (record.status === 'rejected') return record;
+      }
       if (record.prepared) {
         const state = await this.chain.transactionState(record.prepared.signature);
         if (state === 'finalized') {
@@ -1024,25 +1171,54 @@ export class PolicyService {
         }
         const blockHeight = await this.chain.blockHeight();
         if (blockHeight > record.prepared.lastValidBlockHeight) {
+          if (record.status !== 'prepared') {
+            return await this.store.update(record.id, owner, record.version, {
+              status: 'reconciling',
+              transactionSignature: record.prepared.signature,
+              errorCode: 'transaction_outcome_indeterminate',
+              errorMessage:
+                'The broadcast transaction is absent from RPC history; its economic outcome requires manual reconciliation',
+            });
+          }
           if (await this.releaseDeadlineElapsed(record)) {
             return await this.store.update(record.id, owner, record.version, {
               status: 'rejected',
               transactionSignature: record.prepared.signature,
               errorCode: 'release_deadline_elapsed',
-              errorMessage: 'Release transaction expired before the immutable claim deadline',
+              errorMessage: 'Release expired before its signed transaction was broadcast',
             });
           }
           record = await this.store.update(record.id, owner, record.version, {
             status: 'reconciling',
             prepared: null,
-            transactionSignature: record.prepared.signature,
+            transactionSignature: null,
             errorCode: 'transaction_expired',
-            errorMessage: 'The signed transaction expired before landing and will be rebuilt',
+            errorMessage: 'The unbroadcast transaction expired and will be rebuilt',
           });
         }
       }
 
       if (!record.prepared) {
+        if (record.transactionSignature) {
+          const state = await this.chain.transactionState(record.transactionSignature);
+          if (state !== 'missing') {
+            return await this.store.update(record.id, owner, record.version, {
+              status:
+                state === 'finalized' ? 'finalized' : state === 'failed' ? 'rejected' : 'submitted',
+              errorCode: state === 'failed' ? 'transaction_failed' : null,
+              errorMessage:
+                state === 'failed'
+                  ? 'The transaction failed without applying its economic effect'
+                  : null,
+            });
+          }
+          return await this.store.update(record.id, owner, record.version, {
+            status: 'reconciling',
+            errorCode: 'signed_transaction_missing',
+            errorMessage:
+              'A prior transaction signature has no durable signed payload and is absent from RPC history; manual reconciliation is required',
+          });
+        }
         if (await this.releaseDeadlineElapsed(record)) {
           return await this.store.update(record.id, owner, record.version, {
             status: 'rejected',
@@ -1078,13 +1254,6 @@ export class PolicyService {
         this.metrics.increment('broadcasts');
         await this.chain.broadcast(record.prepared!);
       } catch (error) {
-        if (error instanceof PolicyError && !error.retryable) {
-          return await this.store.update(record.id, owner, record.version, {
-            status: 'rejected',
-            errorCode: error.code,
-            errorMessage: error.message,
-          });
-        }
         return await this.store.update(record.id, owner, record.version, {
           status: 'reconciling',
           errorCode: 'broadcast_indeterminate',
@@ -1117,6 +1286,58 @@ export class PolicyService {
     if (record.kind !== 'escrow_release') return false;
     const claimExpiresAt = new Date(requiredDetail(record, 'claimExpiresAt'));
     return (await this.chain.unixTime()) * 1_000 >= claimExpiresAt.getTime();
+  }
+
+  private async authorizeReleaseReview(
+    record: OperationRecord,
+    owner: string,
+  ): Promise<OperationRecord> {
+    const attempt = releaseReviewAttempt(record);
+    if (attempt.status === 'completed') return record;
+    if (attempt.status === 'submitted') {
+      return this.store.update(record.id, owner, record.version, {
+        status: 'rejected',
+        errorCode: 'independent_review_indeterminate',
+        errorMessage:
+          'Independent review was submitted without a durable receipt and will not be retried',
+      });
+    }
+
+    record = await this.store.update(record.id, owner, record.version, {
+      details: withReleaseReviewAttempt(record, { ...attempt, status: 'submitted' }),
+    });
+    let receipt: IndependentReviewReceipt;
+    try {
+      receipt = await this.reviewer.review(attempt.input);
+    } catch (error) {
+      return this.store.update(record.id, owner, record.version, {
+        status: 'rejected',
+        errorCode:
+          error instanceof PolicyError && !error.retryable
+            ? error.code
+            : 'independent_review_indeterminate',
+        errorMessage: safeMessage(error),
+      });
+    }
+    if (
+      receipt.inputHash !== attempt.inputHash ||
+      receipt.inputHash !== requestHash(attempt.input)
+    ) {
+      return this.store.update(record.id, owner, record.version, {
+        status: 'rejected',
+        errorCode: 'independent_review_receipt_mismatch',
+        errorMessage: 'Independent review receipt does not match the durable review input',
+      });
+    }
+    return this.store.update(record.id, owner, record.version, {
+      details: withReleaseReviewAttempt(record, {
+        status: 'completed',
+        inputHash: attempt.inputHash,
+        receipt,
+      }),
+      errorCode: null,
+      errorMessage: null,
+    });
   }
 
   private async resolveEscrow(
@@ -1183,15 +1404,24 @@ export class PolicyService {
     }
   }
 
-  private async assertNoEscrowResolution(escrowOperationId: string): Promise<void> {
+  private async assertNoEscrowResolution(
+    escrowOperationId: string,
+    nextKind?: 'escrow_release' | 'escrow_refund',
+  ): Promise<void> {
     const resolution = await this.store.getByResourceKey(`escrow_resolution:${escrowOperationId}`);
-    if (resolution && resolution.status !== 'rejected') {
-      throw new PolicyError(
-        'resource_conflict',
-        'Escrow already has a terminal resolution operation',
-        409,
-      );
+    if (!resolution) return;
+    if (
+      nextKind === 'escrow_refund' &&
+      resolution.kind === 'escrow_release' &&
+      resolution.status === 'rejected'
+    ) {
+      return;
     }
+    throw new PolicyError(
+      'resource_conflict',
+      'Escrow already has a terminal resolution operation',
+      409,
+    );
   }
 
   private async idempotentReplay(
@@ -1284,27 +1514,29 @@ export class PolicyService {
     message: string,
     authorizationExpiresAt: string,
     authorizationSignature: string,
+    kind: 'refund' | 'escrow_release' = 'refund',
   ): void {
+    const label = kind === 'refund' ? 'Refund' : 'Escrow release';
     const now = this.now().getTime();
     const expiresAt = new Date(authorizationExpiresAt).getTime();
     if (expiresAt <= now) {
       throw new PolicyError(
-        'refund_authorization_expired',
-        'Refund authorization has expired',
+        `${kind}_authorization_expired`,
+        `${label} authorization has expired`,
         401,
       );
     }
     if (expiresAt - now > this.config.refundAuthMaxTtlSeconds * 1_000) {
       throw new PolicyError(
-        'refund_authorization_ttl_invalid',
-        'Refund authorization lifetime exceeds policy',
+        `${kind}_authorization_ttl_invalid`,
+        `${label} authorization lifetime exceeds policy`,
         401,
       );
     }
     if (!verifyEd25519Signature(this.jobAuthorityPublicKey, message, authorizationSignature)) {
       throw new PolicyError(
-        'refund_authorization_invalid',
-        'Refund authorization signature is invalid',
+        `${kind}_authorization_invalid`,
+        `${label} authorization signature is invalid`,
         401,
       );
     }
@@ -1532,6 +1764,26 @@ function dischargeRequestIdentity(
   };
 }
 
+function releaseEscrowRequestIdentity(
+  request: ReleaseEscrowRequest,
+): Omit<ReleaseEscrowRequest, 'authorizationExpiresAt' | 'authorizationSignature'> {
+  return {
+    repository: request.repository,
+    issueNumber: request.issueNumber,
+    pullRequestNumber: request.pullRequestNumber,
+    mergeCommitSha: request.mergeCommitSha,
+    reviewedHeadSha: request.reviewedHeadSha,
+    reviewedBaseSha: request.reviewedBaseSha,
+    reviewedBaseRef: request.reviewedBaseRef,
+    reviewedDiffHash: request.reviewedDiffHash,
+    reviewReceiptId: request.reviewReceiptId,
+    reviewReceiptHash: request.reviewReceiptHash,
+    reviewModel: request.reviewModel,
+    reviewRoute: request.reviewRoute,
+    reviewedAt: request.reviewedAt,
+  };
+}
+
 function rawCapacityForUsdCents(usdCents: number, decimals: number): bigint {
   return (BigInt(usdCents) * 10n ** BigInt(decimals)) / 100n;
 }
@@ -1673,6 +1925,88 @@ function requiredDetail(record: OperationRecord, key: string): string {
     throw new Error(`Operation ${record.id} is missing ${key}`);
   }
   return value;
+}
+
+function requiredDetailAllowEmpty(record: OperationRecord, key: string): string {
+  const value = record.details[key];
+  if (typeof value !== 'string') throw new Error(`Operation ${record.id} is missing ${key}`);
+  return value;
+}
+
+function requiredReviewPolicy(record: OperationRecord): {
+  version: 1;
+  model: string;
+  maxFiles: number;
+} {
+  const value = record.details.reviewPolicy;
+  if (
+    !value ||
+    typeof value !== 'object' ||
+    Array.isArray(value) ||
+    (value as Record<string, unknown>).version !== 1 ||
+    typeof (value as Record<string, unknown>).model !== 'string' ||
+    !Number.isSafeInteger((value as Record<string, unknown>).maxFiles) ||
+    Number((value as Record<string, unknown>).maxFiles) < 1 ||
+    Number((value as Record<string, unknown>).maxFiles) > 20
+  ) {
+    throw new Error(`Operation ${record.id} has an invalid review policy`);
+  }
+  return value as { version: 1; model: string; maxFiles: number };
+}
+
+type ReleaseReviewAttempt =
+  | {
+      status: 'reserved' | 'submitted';
+      inputHash: string;
+      input: IndependentReviewRequest;
+    }
+  | {
+      status: 'completed';
+      inputHash: string;
+      receipt: IndependentReviewReceipt;
+    };
+
+function releaseReviewAttempt(record: OperationRecord): ReleaseReviewAttempt {
+  const resolution = objectValue(record.details.resolution);
+  const attempt = objectValue(resolution.reviewAttempt);
+  const status = attempt.status;
+  const inputHash = attempt.inputHash;
+  if (typeof inputHash !== 'string' || !/^[a-f0-9]{64}$/.test(inputHash)) {
+    throw new Error(`Operation ${record.id} has an invalid review input hash`);
+  }
+  if (status === 'completed') {
+    const receipt = objectValue(attempt.receipt) as unknown as IndependentReviewReceipt;
+    if (receipt.approved !== true || receipt.inputHash !== inputHash) {
+      throw new Error(`Operation ${record.id} has an invalid independent review receipt`);
+    }
+    return { status, inputHash, receipt };
+  }
+  if (status !== 'reserved' && status !== 'submitted') {
+    throw new Error(`Operation ${record.id} has an invalid independent review state`);
+  }
+  const input = objectValue(attempt.input) as unknown as IndependentReviewRequest;
+  if (requestHash(input) !== inputHash) {
+    throw new Error(`Operation ${record.id} independent review input failed integrity check`);
+  }
+  return { status, inputHash, input };
+}
+
+function withReleaseReviewAttempt(
+  record: OperationRecord,
+  attempt: ReleaseReviewAttempt,
+): Record<string, unknown> {
+  const resolution = objectValue(record.details.resolution);
+  return {
+    ...record.details,
+    resolution: { ...resolution, reviewAttempt: attempt },
+  };
+}
+
+function objectValue(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Operation contains malformed structured evidence');
+  }
+  return value as Record<string, unknown>;
 }
 
 function requiredNumberDetail(record: OperationRecord, key: string): number {

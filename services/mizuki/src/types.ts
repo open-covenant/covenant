@@ -62,10 +62,12 @@ export type RepositoryAdmissionReceipt = {
   installationId: number;
   repositorySelection: 'selected';
   permissions: {
+    checks: 'read';
     contents: 'read';
     issues: 'read';
     metadata: 'read';
     pull_requests: 'read';
+    statuses: 'read';
   };
   tokenRepositories: 1;
   tokenExpiresAt: string;

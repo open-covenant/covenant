@@ -228,48 +228,68 @@ abort 'web proxy secret is not linked to the canonical production runtime' unles
 abort 'web API origin is not linked to the canonical production runtime' unless service_ref(web.fetch('MIZUKI_API_URL'), 'mizuki-runtime-production', 'RENDER_EXTERNAL_URL')
 abort 'web Solana RPC is not operator-pinned' unless web.fetch('NEXT_PUBLIC_SOLANA_RPC_URL')['sync'] == false
 
-runtime_services = [shadow, production]
-runtime_services.each do |runtime|
-  abort 'runtime Render proxy trust drift' unless runtime.fetch('MIZUKI_TRUSTED_PROXY_HOPS')['value'] == '1'
-  abort 'runtime rate-limit source capacity drift' unless runtime.fetch('MIZUKI_RATE_LIMIT_MAX_SOURCES')['value'] == '10000'
-  abort 'runtime SSE global cap drift' unless runtime.fetch('MIZUKI_SSE_MAX_CONNECTIONS')['value'] == '100'
-  abort 'runtime SSE source cap drift' unless runtime.fetch('MIZUKI_SSE_MAX_CONNECTIONS_PER_SOURCE')['value'] == '3'
-  abort 'runtime SSE idle timeout drift' unless runtime.fetch('MIZUKI_SSE_IDLE_TIMEOUT_MS')['value'] == '120000'
-  abort 'runtime readiness refresh drift' unless runtime.fetch('MIZUKI_READINESS_REFRESH_MS')['value'] == '30000'
-  abort 'runtime readiness max age drift' unless runtime.fetch('MIZUKI_READINESS_MAX_AGE_MS')['value'] == '90000'
-  abort 'runtime readiness timeout drift' unless runtime.fetch('MIZUKI_READINESS_TIMEOUT_MS')['value'] == '20000'
-  abort 'runtime escrow readiness floor drift' unless runtime.fetch('MIZUKI_ESCROW_READINESS_MIN_LAMPORTS')['value'] == '1000000000'
-  abort 'runtime signer URL is not private service discovery' unless service_ref(runtime.fetch('MIZUKI_POLICY_SIGNER_URL'), 'mizuki-policy-signer')
-  abort 'runtime signer token is not linked to signer' unless service_ref(runtime.fetch('MIZUKI_POLICY_SIGNER_TOKEN'), 'mizuki-policy-signer', 'MIZUKI_SIGNER_AUTH_TOKEN')
-  abort 'runtime gateway URL is not private service discovery' unless service_ref(runtime.fetch('MIZUKI_CODING_GATEWAY_URL'), 'mizuki-coding-gateway')
-  abort 'runtime gateway token is not linked to gateway' unless service_ref(runtime.fetch('MIZUKI_CODING_GATEWAY_TOKEN'), 'mizuki-coding-gateway', 'CODER_AUTH_TOKEN')
-  abort 'runtime updater URL is not private service discovery' unless service_ref(runtime.fetch('MIZUKI_UPDATER_URL'), 'mizuki-updater')
-  abort 'runtime updater token is not read-only' unless service_ref(runtime.fetch('MIZUKI_UPDATER_TOKEN'), 'mizuki-updater', 'MIZUKI_UPDATER_READ_TOKEN')
-  abort 'runtime payment recipient is not the signer refund treasury' unless service_ref(runtime.fetch('MIZUKI_PAY_TO'), 'mizuki-policy-signer', 'MIZUKI_REFUND_TREASURY')
-  abort 'runtime escrow refund destination is not the isolated escrow authority' unless service_ref(runtime.fetch('MIZUKI_ESCROW_REFUND_TO'), 'mizuki-policy-signer', 'MIZUKI_ESCROW_AUTHORITY')
-  abort 'runtime x402 facilitator is not pinned to HTTPS' unless URI(runtime.fetch('MIZUKI_X402_FACILITATOR')['value']).scheme == 'https'
-  abort 'runtime UsePod origin drift' unless runtime.fetch('USEPOD_BASE_URL')['value'] == 'https://api.usepod.ai'
-  abort 'runtime coding route drift' unless runtime.fetch('USEPOD_MODEL')['value'] == 'openai/gpt-oss-120b'
-  abort 'runtime review route drift' unless runtime.fetch('USEPOD_REVIEW_MODEL')['value'] == 'deepseek-v4-flash'
-  abort 'runtime routes are not independent' if runtime.fetch('USEPOD_MODEL')['value'] == runtime.fetch('USEPOD_REVIEW_MODEL')['value']
-  abort 'runtime UsePod input ceiling drift' unless runtime.fetch('USEPOD_MAX_INPUT_PRICE_MICROUNITS')['value'] == '200000'
-  abort 'runtime UsePod output ceiling drift' unless runtime.fetch('USEPOD_MAX_OUTPUT_PRICE_MICROUNITS')['value'] == '400000'
-  abort 'runtime UsePod production floor drift' unless runtime.fetch('USEPOD_MIN_BALANCE')['value'] == '4000000'
-  abort 'runtime bounty review reservation drift' unless runtime.fetch('MIZUKI_BOUNTY_REVIEW_MAX_COST_MICROUNITS')['value'] == '50000'
-  abort 'runtime payment mode is not live' unless runtime.fetch('MIZUKI_PAYMENT_MODE')['value'] == 'live'
-  abort 'runtime GitHub App requirement disabled' unless runtime.fetch('MIZUKI_REQUIRE_GITHUB_APP')['value'] == '1'
-  abort 'runtime functional probe token is not linked to controller' unless service_ref(runtime.fetch('MIZUKI_RELEASE_PROBE_TOKEN'), 'mizuki-deployment-controller', 'MIZUKI_DEPLOY_PROBE_TOKEN')
-end
+shadow_keys = %w[
+  NODE_ENV
+  MIZUKI_RUNTIME_ROLE
+  MIZUKI_HOST
+  MIZUKI_PORT
+  MIZUKI_PUBLIC_BASE_URL
+  MIZUKI_TRUSTED_PROXY_HOPS
+  MIZUKI_DATABASE_URL
+  MIZUKI_ADMIN_TOKEN
+  MIZUKI_WEB_PROXY_SECRET
+  MIZUKI_PAYMENT_MODE
+  MIZUKI_SESSION_SECRET
+  MIZUKI_REQUIRE_GITHUB_APP
+]
+abort 'shadow runtime environment gained authority-bearing settings' unless shadow.keys.sort == shadow_keys.sort
+abort 'shadow runtime role drift' unless shadow.fetch('MIZUKI_RUNTIME_ROLE')['value'] == 'shadow'
+abort 'shadow runtime payment mode is not mock' unless shadow.fetch('MIZUKI_PAYMENT_MODE')['value'] == 'mock'
+abort 'shadow runtime GitHub App requirement enabled' unless shadow.fetch('MIZUKI_REQUIRE_GITHUB_APP')['value'] == '0'
+abort 'shadow runtime proxy trust drift' unless shadow.fetch('MIZUKI_TRUSTED_PROXY_HOPS')['value'] == '0'
+abort 'shadow runtime private origin drift' unless shadow.fetch('MIZUKI_PUBLIC_BASE_URL')['value'] == 'http://mizuki-runtime-shadow:10000'
+abort 'shadow runtime admin token is not isolated' unless shadow.fetch('MIZUKI_ADMIN_TOKEN')['generateValue'] == true
+abort 'shadow runtime web proxy secret is not isolated' unless shadow.fetch('MIZUKI_WEB_PROXY_SECRET')['generateValue'] == true
+abort 'shadow runtime session secret is not isolated' unless shadow.fetch('MIZUKI_SESSION_SECRET')['generateValue'] == true
+
+abort 'production runtime role drift' unless production.fetch('MIZUKI_RUNTIME_ROLE')['value'] == 'production'
+abort 'runtime Render proxy trust drift' unless production.fetch('MIZUKI_TRUSTED_PROXY_HOPS')['value'] == '1'
+abort 'runtime rate-limit source capacity drift' unless production.fetch('MIZUKI_RATE_LIMIT_MAX_SOURCES')['value'] == '10000'
+abort 'runtime SSE global cap drift' unless production.fetch('MIZUKI_SSE_MAX_CONNECTIONS')['value'] == '100'
+abort 'runtime SSE source cap drift' unless production.fetch('MIZUKI_SSE_MAX_CONNECTIONS_PER_SOURCE')['value'] == '3'
+abort 'runtime SSE idle timeout drift' unless production.fetch('MIZUKI_SSE_IDLE_TIMEOUT_MS')['value'] == '120000'
+abort 'runtime readiness refresh drift' unless production.fetch('MIZUKI_READINESS_REFRESH_MS')['value'] == '30000'
+abort 'runtime readiness max age drift' unless production.fetch('MIZUKI_READINESS_MAX_AGE_MS')['value'] == '90000'
+abort 'runtime readiness timeout drift' unless production.fetch('MIZUKI_READINESS_TIMEOUT_MS')['value'] == '20000'
+abort 'runtime escrow readiness floor drift' unless production.fetch('MIZUKI_ESCROW_READINESS_MIN_LAMPORTS')['value'] == '1000000000'
+abort 'runtime signer URL is not private service discovery' unless service_ref(production.fetch('MIZUKI_POLICY_SIGNER_URL'), 'mizuki-policy-signer')
+abort 'runtime signer token is not linked to signer' unless service_ref(production.fetch('MIZUKI_POLICY_SIGNER_TOKEN'), 'mizuki-policy-signer', 'MIZUKI_SIGNER_AUTH_TOKEN')
+abort 'runtime gateway URL is not private service discovery' unless service_ref(production.fetch('MIZUKI_CODING_GATEWAY_URL'), 'mizuki-coding-gateway')
+abort 'runtime gateway token is not linked to gateway' unless service_ref(production.fetch('MIZUKI_CODING_GATEWAY_TOKEN'), 'mizuki-coding-gateway', 'CODER_AUTH_TOKEN')
+abort 'runtime updater URL is not private service discovery' unless service_ref(production.fetch('MIZUKI_UPDATER_URL'), 'mizuki-updater')
+abort 'runtime updater token is not read-only' unless service_ref(production.fetch('MIZUKI_UPDATER_TOKEN'), 'mizuki-updater', 'MIZUKI_UPDATER_READ_TOKEN')
+abort 'runtime payment recipient is not the signer refund treasury' unless service_ref(production.fetch('MIZUKI_PAY_TO'), 'mizuki-policy-signer', 'MIZUKI_REFUND_TREASURY')
+abort 'runtime escrow refund destination is not the isolated escrow authority' unless service_ref(production.fetch('MIZUKI_ESCROW_REFUND_TO'), 'mizuki-policy-signer', 'MIZUKI_ESCROW_AUTHORITY')
+abort 'runtime x402 facilitator is not pinned to HTTPS' unless URI(production.fetch('MIZUKI_X402_FACILITATOR')['value']).scheme == 'https'
+abort 'runtime UsePod origin drift' unless production.fetch('USEPOD_BASE_URL')['value'] == 'https://api.usepod.ai'
+abort 'runtime coding route drift' unless production.fetch('USEPOD_MODEL')['value'] == 'openai/gpt-oss-120b'
+abort 'runtime review route drift' unless production.fetch('USEPOD_REVIEW_MODEL')['value'] == 'deepseek-v4-flash'
+abort 'runtime routes are not independent' if production.fetch('USEPOD_MODEL')['value'] == production.fetch('USEPOD_REVIEW_MODEL')['value']
+abort 'runtime UsePod input ceiling drift' unless production.fetch('USEPOD_MAX_INPUT_PRICE_MICROUNITS')['value'] == '200000'
+abort 'runtime UsePod output ceiling drift' unless production.fetch('USEPOD_MAX_OUTPUT_PRICE_MICROUNITS')['value'] == '400000'
+abort 'runtime UsePod production floor drift' unless production.fetch('USEPOD_MIN_BALANCE')['value'] == '4000000'
+abort 'runtime bounty review reservation drift' unless production.fetch('MIZUKI_BOUNTY_REVIEW_MAX_COST_MICROUNITS')['value'] == '50000'
+abort 'runtime payment mode is not live' unless production.fetch('MIZUKI_PAYMENT_MODE')['value'] == 'live'
+abort 'runtime GitHub App requirement disabled' unless production.fetch('MIZUKI_REQUIRE_GITHUB_APP')['value'] == '1'
+abort 'runtime functional probe token is not production-only' unless service_ref(production.fetch('MIZUKI_RELEASE_PROBE_TOKEN'), 'mizuki-deployment-controller', 'MIZUKI_DEPLOY_PRODUCTION_PROBE_TOKEN')
 
 abort 'production runtime is not bound to the canonical commercial database' unless production.fetch('MIZUKI_DATABASE_URL').dig('fromDatabase', 'name') == 'mizuki-postgres'
 abort 'shadow runtime database not isolated' unless shadow.fetch('MIZUKI_DATABASE_URL').dig('fromDatabase', 'name') == 'mizuki-runtime-shadow-postgres'
 abort 'runtime databases are shared' if production.fetch('MIZUKI_DATABASE_URL').dig('fromDatabase', 'name') == shadow.fetch('MIZUKI_DATABASE_URL').dig('fromDatabase', 'name')
 abort 'production public origin does not follow its Render URL' unless service_ref(production.fetch('MIZUKI_PUBLIC_BASE_URL'), 'mizuki-runtime-production', 'RENDER_EXTERNAL_URL')
-abort 'shadow public origin does not follow the production Render URL' unless service_ref(shadow.fetch('MIZUKI_PUBLIC_BASE_URL'), 'mizuki-runtime-production', 'RENDER_EXTERNAL_URL')
 abort 'production web proxy secret is not generated' unless production.fetch('MIZUKI_WEB_PROXY_SECRET')['generateValue'] == true
 abort 'production ClawPump payout is not linked to the escrow authority' unless service_ref(production.fetch('CLAWPUMP_PAYOUT_WALLET'), 'mizuki-policy-signer', 'MIZUKI_ESCROW_AUTHORITY')
 abort 'production authority seed is not operator-pinned' unless production.fetch('MIZUKI_JOB_AUTHORITY_SEED')['sync'] == false
-abort 'shadow authority seed does not follow production' unless service_ref(shadow.fetch('MIZUKI_JOB_AUTHORITY_SEED'), 'mizuki-runtime-production', 'MIZUKI_JOB_AUTHORITY_SEED')
 %w[
   USEPOD_API_KEY
   MIZUKI_GITHUB_APP_ID
@@ -279,7 +299,6 @@ abort 'shadow authority seed does not follow production' unless service_ref(shad
   MIZUKI_GITHUB_WEBHOOK_SECRET
 ].each do |key|
   abort "production runtime secret is not operator-pinned: #{key}" unless production.fetch(key)['sync'] == false
-  abort "shadow runtime secret does not follow production: #{key}" unless service_ref(shadow.fetch(key), 'mizuki-runtime-production', key)
 end
 
 abort 'signer auth token is not generated' unless signer.fetch('MIZUKI_SIGNER_AUTH_TOKEN')['generateValue'] == true
@@ -317,15 +336,18 @@ abort 'deployment Render API origin drift' unless controller.fetch('MIZUKI_DEPLO
 abort 'deployment shadow service ID is not operator-pinned' unless controller.fetch('MIZUKI_DEPLOY_RENDER_SHADOW_SERVICE_ID')['sync'] == false
 abort 'deployment production service ID is not operator-pinned' unless controller.fetch('MIZUKI_DEPLOY_RENDER_PRODUCTION_SERVICE_ID')['sync'] == false
 abort 'deployment service allowlist is not operator-pinned' unless controller.fetch('MIZUKI_DEPLOY_RENDER_ALLOWED_SERVICE_IDS')['sync'] == false
-abort 'deployment shadow probe URL drift' unless controller.fetch('MIZUKI_DEPLOY_SHADOW_PROBE_URL')['value'] == 'http://mizuki-runtime-shadow:10000/internal/mizuki/functional-readiness'
+abort 'deployment shadow probe URL drift' unless controller.fetch('MIZUKI_DEPLOY_SHADOW_PROBE_URL')['value'] == 'http://mizuki-runtime-shadow:10000/deployz'
 abort 'deployment production probe URL is not operator-pinned' unless controller.fetch('MIZUKI_DEPLOY_PRODUCTION_PROBE_URL')['sync'] == false
-abort 'deployment probe token is not generated' unless controller.fetch('MIZUKI_DEPLOY_PROBE_TOKEN')['generateValue'] == true
+abort 'deployment production probe token is not generated' unless controller.fetch('MIZUKI_DEPLOY_PRODUCTION_PROBE_TOKEN')['generateValue'] == true
+abort 'legacy shared application probe token present' if controller.key?('MIZUKI_DEPLOY_PROBE_TOKEN')
 abort 'deployment Render timeout drift' unless controller.fetch('MIZUKI_DEPLOY_RENDER_TIMEOUT_MS')['value'] == '20000'
 abort 'deployment artifact timeout drift' unless controller.fetch('MIZUKI_DEPLOY_ARTIFACT_TIMEOUT_MS')['value'] == '30000'
 abort 'deployment probe timeout drift' unless controller.fetch('MIZUKI_DEPLOY_PROBE_TIMEOUT_MS')['value'] == '10000'
 abort 'deployment reconciliation grace drift' unless controller.fetch('MIZUKI_DEPLOY_RECONCILIATION_GRACE_MS')['value'] == '120000'
 abort 'deployment minimum promotion age drift' unless controller.fetch('MIZUKI_DEPLOY_MIN_PROMOTION_AGE_MS')['value'] == '120000'
-abort 'updater read and write tokens are not distinct settings' unless updater.key?('MIZUKI_UPDATER_READ_TOKEN') && updater.key?('MIZUKI_UPDATER_AUTH_TOKEN')
+updater_authorities = %w[MIZUKI_UPDATER_SUBMIT_TOKEN MIZUKI_UPDATER_CONTROL_TOKEN MIZUKI_UPDATER_READ_TOKEN]
+abort 'updater role-specific tokens are missing' unless updater_authorities.all? { |key| updater.key?(key) }
+abort 'legacy shared updater authority present' if updater.key?('MIZUKI_UPDATER_AUTH_TOKEN')
 controller_ref = updater.fetch('MIZUKI_UPDATER_DEPLOY_CONTROLLER_HOSTPORT').fetch('fromService')
 abort 'updater controller origin is not private service discovery' unless controller_ref == {
   'type' => 'pserv',
@@ -334,6 +356,7 @@ abort 'updater controller origin is not private service discovery' unless contro
 }
 abort 'updater controller token is not linked' unless service_ref(updater.fetch('MIZUKI_UPDATER_DEPLOY_HOOK_TOKEN'), 'mizuki-deployment-controller', 'MIZUKI_DEPLOY_AUTH_TOKEN')
 abort 'updater hook timeout drift' unless updater.fetch('MIZUKI_UPDATER_HOOK_TIMEOUT_MS')['value'] == '90000'
+abort 'updater lease does not safely exceed hook duration' unless updater.fetch('MIZUKI_UPDATER_LEASE_MS')['value'] == '180000'
 abort 'updater retry horizon drift' unless updater.fetch('MIZUKI_UPDATER_MAX_ATTEMPTS')['value'] == '10'
 abort 'updater promotion soak drift' unless updater.fetch('MIZUKI_UPDATER_PROMOTION_SOAK_MS')['value'] == '120000'
 abort 'updater promotion timeout drift' unless updater.fetch('MIZUKI_UPDATER_PROMOTION_TIMEOUT_MS')['value'] == '600000'
@@ -501,10 +524,12 @@ abort 'core App permission drift' unless core_app['default_permissions'] == {
 }
 abort 'policy verifier App must be public' unless verifier_app['public'] == true
 abort 'policy verifier App permission drift' unless verifier_app['default_permissions'] == {
+  'checks' => 'read',
   'contents' => 'read',
   'issues' => 'read',
   'metadata' => 'read',
-  'pull_requests' => 'read'
+  'pull_requests' => 'read',
+  'statuses' => 'read'
 }
 abort 'policy verifier App must not subscribe to events' unless verifier_app['default_events'] == []
 abort 'updater App must remain private' unless updater_app['public'] == false

@@ -224,6 +224,38 @@ describe('GitHub App gateway', () => {
     expect(mergeRequests).toBe(0);
   });
 
+  it('fails closed when the pull request was closed without merging', async () => {
+    const manifest = proposalFixture().proposal.manifest;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url.endsWith('/installation')) return Response.json(updaterInstallation());
+        if (url.endsWith('/access_tokens')) return Response.json(updaterToken());
+        if (url.endsWith('/pulls/42')) {
+          return Response.json({
+            number: 42,
+            html_url: 'https://github.com/mizuki-labs/mizuki/pull/42',
+            state: 'closed',
+            merged_at: null,
+            merge_commit_sha: null,
+            head: { sha: manifest.candidateSha },
+            base: {
+              ref: manifest.repository.baseBranch,
+              sha: manifest.repository.baseSha,
+            },
+          });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      }),
+    );
+
+    await expect(createGateway().mergeState(manifest, 42)).rejects.toMatchObject({
+      code: 'pull_request_closed',
+      retryable: false,
+    });
+  });
+
   it('validates the App identity and exact permission contract during readiness', async () => {
     vi.stubGlobal(
       'fetch',

@@ -71,6 +71,7 @@ const operationSchema = z
     promotionStartedAt: nullableDate,
     promotionDeployId: nullableExternalId,
     productionActive: z.boolean(),
+    productionFinalizedAt: nullableDate.default(null),
     rollbackIdempotencyKey: nullableExternalId,
     rollbackRequestHash: nullableSha256,
     rollbackState: nullableActionState,

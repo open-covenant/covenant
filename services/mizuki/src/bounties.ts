@@ -101,6 +101,7 @@ const SUBMITTED_REVIEW_STALE_MS = 2 * 60_000;
 export class BountyService {
   private readonly refundRecipient: string;
   private readonly reviewMaxCostMicrounits: number;
+  private readonly reviewModel: string;
 
   constructor(
     private readonly store: MizukiStore,
@@ -108,10 +109,13 @@ export class BountyService {
     private readonly reviewer: ContributorPatchReviewer,
     private readonly now: () => Date = () => new Date(),
     config: Pick<Config, 'escrowRefundTo'> &
-      Partial<Pick<Config, 'bountyReviewMaxCostMicrounits'>> = { escrowRefundTo: '' },
+      Partial<Pick<Config, 'bountyReviewMaxCostMicrounits' | 'usePodModel'>> = {
+      escrowRefundTo: '',
+    },
   ) {
     this.refundRecipient = config.escrowRefundTo;
     this.reviewMaxCostMicrounits = config.bountyReviewMaxCostMicrounits ?? 50_000;
+    this.reviewModel = config.usePodModel ?? 'independent-reviewer';
   }
 
   async createAfterRefund(job: Job): Promise<RescueBounty> {
@@ -313,10 +317,10 @@ export class BountyService {
     if (!bounty.validationReceipt?.approved) {
       throw new Error('merged pull request has not passed independent review');
     }
+    const merge = await this.reviewer.mergedEvidence(bounty, pullRequestUrl);
+    assertReviewedMerge(bounty, merge);
     if (bounty.state !== 'accepted') {
       const review = bounty.validationReceipt;
-      const merge = await this.reviewer.mergedEvidence(bounty, pullRequestUrl);
-      assertReviewedMerge(bounty, merge);
       const validating = transitionRescueBounty(bounty, 'validating', {
         at: this.now().toISOString(),
         expectedRevision: bounty.revision,
@@ -357,7 +361,7 @@ export class BountyService {
       try {
         operation = await this.policy.releaseEscrow(
           escrow.reservationId,
-          releaseEvidence(bounty, pullRequestUrl),
+          releaseEvidence(bounty, pullRequestUrl, merge),
         );
       } catch (cause) {
         if (!this.claimDeadlineReached(escrow)) throw cause;
@@ -651,7 +655,7 @@ export class BountyService {
     if (!evidence.references.includes(pullRequestUrl)) {
       throw new Error('release evidence must reference the active claim pull request');
     }
-    releaseEvidence(bounty, pullRequestUrl);
+    assertReleaseEvidenceAvailable(bounty, pullRequestUrl);
     if (
       !bounty.activeClaim?.leaseExpiresAt ||
       Date.parse(bounty.activeClaim.leaseExpiresAt) <= this.now().getTime()
@@ -695,7 +699,11 @@ export class BountyService {
       try {
         const operation = await this.policy.releaseEscrow(
           escrow.reservationId,
-          releaseEvidence(bounty, pullRequestUrl),
+          releaseEvidence(
+            bounty,
+            pullRequestUrl,
+            await this.reviewer.mergedEvidence(bounty, pullRequestUrl),
+          ),
         );
         assertOperation(operation, 'escrow_release');
         if (operation.recipient !== escrow.recipientWallet) {
@@ -839,21 +847,36 @@ export class BountyService {
     }
     let escrow = await this.store.escrowByBounty(bounty.id);
     if (!escrow) {
+      const sourceJob = await this.store.job(bounty.sourceJobId);
+      if (!sourceJob) throw new Error('source job is missing for bounty escrow');
+      const acceptance = {
+        bountyId: bounty.id,
+        amountUsdCents: bounty.priceCents,
+        expiresAt: bounty.offerExpiresAt,
+        repository: bounty.repository,
+        issueNumber: bounty.issueNumber,
+        issueTitle: sourceJob.quote.issueTitle,
+        issueBody: sourceJob.quote.issueBody,
+        baseRef: sourceJob.quote.defaultBranch,
+        baseSha: sourceJob.quote.baseSha,
+        reviewPolicy: {
+          version: 1 as const,
+          model: this.reviewModel,
+          maxFiles: sourceJob.quote.maxFiles,
+        },
+      };
       escrow = createContributorEscrow({
         id: randomUUID(),
         bountyId: bounty.id,
         repository: bounty.repository,
         issueNumber: bounty.issueNumber,
+        issueTitle: sourceJob.quote.issueTitle,
+        issueBody: sourceJob.quote.issueBody,
+        baseRef: sourceJob.quote.defaultBranch,
+        baseSha: sourceJob.quote.baseSha,
+        reviewPolicy: acceptance.reviewPolicy,
         amountCents: bounty.priceCents,
-        acceptanceHash: sha256({
-          bountyId: bounty.id,
-          generation: bounty.generation,
-          failureReceiptId: bounty.failureReceiptId,
-          repository: bounty.repository,
-          issueNumber: bounty.issueNumber,
-          amountCents: bounty.priceCents,
-          offerExpiresAt: bounty.offerExpiresAt,
-        }),
+        acceptanceHash: sha256({ kind: 'mizuki_contributor_escrow_acceptance', ...acceptance }),
         expiresAt: bounty.offerExpiresAt,
         at: this.now().toISOString(),
       });
@@ -908,9 +931,14 @@ export class BountyService {
       bountyId: escrow.bountyId,
       repository: escrow.repository,
       issueNumber: escrow.issueNumber,
+      baseRef: escrow.baseRef,
+      baseSha: escrow.baseSha,
       amountUsdCents: escrow.amountCents,
       acceptanceHash: escrow.acceptanceHash,
       expiresAt: escrow.expiresAt,
+      issueTitle: escrow.issueTitle,
+      issueBody: escrow.issueBody,
+      reviewPolicy: escrow.reviewPolicy,
     });
     assertOperation(operation, 'escrow_reserve');
     if (operation.amountUsdCents !== escrow.amountCents) {
@@ -1088,7 +1116,11 @@ export class BountyService {
       try {
         const release = await this.policy.releaseEscrow(
           escrow.reservationId,
-          releaseEvidence(bounty, pullRequestUrl),
+          releaseEvidence(
+            bounty,
+            pullRequestUrl,
+            await this.reviewer.mergedEvidence(bounty, pullRequestUrl),
+          ),
         );
         assertOperation(release, 'escrow_release');
         if (release.recipient !== escrow.recipientWallet || !release.transactionSignature) {
@@ -1398,21 +1430,59 @@ function pullRequestNumber(value: string, repository: string): number {
   return Number(match[1]);
 }
 
-function releaseEvidence(bounty: RescueBounty, pullRequestUrl: string) {
+function releaseEvidence(
+  bounty: RescueBounty,
+  pullRequestUrl: string,
+  merge: {
+    headSha: string;
+    baseSha: string;
+    baseRef: string;
+    diffHash: string;
+    mergedAt: string;
+    mergeCommitSha: string;
+  },
+) {
   const receipt = bounty.validationReceipt;
-  if (!receipt?.headSha || !receipt.baseSha || !receipt.baseRef || !receipt.diffHash) {
+  assertReleaseEvidenceAvailable(bounty, pullRequestUrl);
+  assertReviewedMerge(bounty, merge);
+  if (!receipt?.provider) {
     throw new Error('bounty review evidence is incomplete');
   }
   return {
+    repository: bounty.repository,
+    issueNumber: bounty.issueNumber,
     pullRequestNumber: pullRequestNumber(pullRequestUrl, bounty.repository),
+    mergeCommitSha: merge.mergeCommitSha,
     reviewedHeadSha: receipt.headSha,
+    reviewedBaseSha: receipt.baseSha,
+    reviewedBaseRef: receipt.baseRef,
     reviewedDiffHash: receipt.diffHash,
+    reviewReceiptId: receipt.id,
+    reviewReceiptHash: sha256({ version: 1, ...receipt }),
+    reviewModel: receipt.provider.model,
+    reviewRoute: receipt.provider.route,
+    reviewedAt: receipt.reviewedAt,
   };
+}
+
+function assertReleaseEvidenceAvailable(bounty: RescueBounty, pullRequestUrl: string): void {
+  const receipt = bounty.validationReceipt;
+  pullRequestNumber(pullRequestUrl, bounty.repository);
+  if (
+    !receipt?.approved ||
+    !receipt.headSha ||
+    !receipt.baseSha ||
+    !receipt.baseRef ||
+    !receipt.diffHash ||
+    !receipt.provider
+  ) {
+    throw new Error('bounty review evidence is incomplete');
+  }
 }
 
 function assertReviewedMerge(
   bounty: RescueBounty,
-  evidence: { headSha: string; diffHash: string },
+  evidence: { headSha: string; baseSha: string; baseRef: string; diffHash: string },
 ): void {
   const receipt = bounty.validationReceipt;
   if (
@@ -1424,7 +1494,12 @@ function assertReviewedMerge(
   ) {
     throw new Error('bounty review evidence is incomplete');
   }
-  if (evidence.headSha !== receipt.headSha || evidence.diffHash !== receipt.diffHash) {
+  if (
+    evidence.headSha !== receipt.headSha ||
+    evidence.baseSha !== receipt.baseSha ||
+    evidence.baseRef !== receipt.baseRef ||
+    evidence.diffHash !== receipt.diffHash
+  ) {
     throw new Error('merged pull request does not match the independently reviewed revision');
   }
 }

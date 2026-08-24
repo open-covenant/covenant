@@ -173,11 +173,39 @@ function sseFrame(e: GatewayEvent, runId: string): string {
   return `data: ${JSON.stringify(w)}\n\n`;
 }
 
-function publish(run: Run, e: GatewayEvent): void {
+const MAX_RETAINED_EVENTS = 256;
+const MAX_EVENT_TEXT = 8_000;
+
+function publish(run: Run, event: GatewayEvent): void {
+  const e = boundedEvent(event);
   run.events.push(e);
+  if (run.events.length > MAX_RETAINED_EVENTS) {
+    run.events.splice(0, run.events.length - MAX_RETAINED_EVENTS);
+  }
   run.updatedAt = new Date().toISOString();
   const frame = sseFrame(e, run.id);
   for (const res of run.subscribers) res.write(frame);
+}
+
+function boundedEvent(event: GatewayEvent): GatewayEvent {
+  switch (event.type) {
+    case 'message.delta':
+    case 'reasoning.available':
+      return { ...event, text: event.text.slice(0, MAX_EVENT_TEXT) };
+    case 'run.completed':
+      return { ...event, output: event.output.slice(0, MAX_EVENT_TEXT) };
+    case 'run.failed':
+      return { ...event, error: event.error.slice(0, MAX_EVENT_TEXT) };
+    case 'tool.started':
+      return { ...event, preview: event.preview?.slice(0, 500) };
+    case 'approval.request':
+      return {
+        ...event,
+        choices: event.choices.slice(0, 20).map((choice) => choice.slice(0, 500)),
+      };
+    default:
+      return event;
+  }
 }
 
 function startRun(

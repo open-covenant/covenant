@@ -1005,11 +1005,11 @@ function usdMicrounits(value: number, name: string): number {
 }
 
 function issuePrompt(quote: Quote): string {
-  return `Resolve GitHub issue #${quote.issueNumber}: ${quote.issueTitle}\n\n${quote.issueBody}\n\nKeep the change within ${quote.maxFiles} files. Do not broaden scope.`;
+  return `Resolve GitHub issue #${quote.issueNumber}: ${quote.issueTitle}\n\n${quote.issueBody}\n\nKeep the change within ${quote.maxFiles} files. Do not broaden scope. Run these required checks before finishing:\n${quote.validationCommands.map((command) => `- ${command}`).join('\n')}`;
 }
 
 function repairPrompt(quote: Quote, reason: string): string {
-  return `Repair the existing patch for issue #${quote.issueNumber}. Independent review found: ${reason}\nDo not broaden the original issue scope.`;
+  return `Repair the existing patch for issue #${quote.issueNumber}. Independent review found: ${reason}\nDo not broaden the original issue scope. Run these required checks before finishing:\n${quote.validationCommands.map((command) => `- ${command}`).join('\n')}`;
 }
 
 function delay(ms: number): Promise<void> {

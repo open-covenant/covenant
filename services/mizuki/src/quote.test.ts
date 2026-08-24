@@ -28,6 +28,17 @@ describe('createQuote', () => {
     expect(quote.expiresAt).toBe('2026-08-22T10:15:00.000Z');
   });
 
+  it('uses a deterministic file-level check for explicitly named Markdown files', () => {
+    const quote = createQuote({
+      ...issue,
+      body: 'Correct the wording in infra/mizuki/README.md and `docs/install.mdx`.',
+    });
+
+    expect(quote.validationCommands).toEqual([
+      'npx --yes prettier@3.6.2 --check infra/mizuki/README.md docs/install.mdx',
+    ]);
+  });
+
   it('rejects security-sensitive work before payment', () => {
     expect(() => createQuote({ ...issue, title: 'Rotate OAuth credentials' })).toThrow(
       "outside Mizuki's safe MVP scope",

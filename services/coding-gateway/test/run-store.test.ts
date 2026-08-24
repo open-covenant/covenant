@@ -220,6 +220,23 @@ describe('RunStore', () => {
     );
   });
 
+  it('retains only the latest 100 receipts', () => {
+    const store = new RunStore();
+    for (let index = 0; index < 101; index += 1) {
+      store.save(
+        run({
+          id: `run-${index}`,
+          updatedAt: new Date(Date.UTC(2026, 7, 22, 0, 0, index)).toISOString(),
+        }),
+      );
+    }
+
+    const receipts = store.list();
+    expect(receipts).toHaveLength(100);
+    expect(receipts.some((receipt) => receipt.id === 'run-0')).toBe(false);
+    expect(receipts.some((receipt) => receipt.id === 'run-100')).toBe(true);
+  });
+
   it('marks persistence unhealthy after a runtime write failure', () => {
     const directory = mkdtempSync(join(tmpdir(), 'mizuki-run-store-fail-'));
     directories.push(directory);

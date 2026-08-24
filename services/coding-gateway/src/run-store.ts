@@ -42,9 +42,10 @@ export interface StoredRun {
 }
 
 const TERMINAL = new Set<RunStatus>(['completed', 'failed', 'cancelled']);
-const MAX_RUNS = 500;
+const MAX_RUNS = 100;
 const MAX_RUN_BYTES = 8 * 1024 * 1024;
-const MAX_STORE_BYTES = 256 * 1024 * 1024;
+const MAX_STORE_BYTES = 16 * 1024 * 1024;
+const MAX_LOAD_BYTES = 256 * 1024 * 1024;
 
 export class RunStore {
   private readonly runs = new Map<string, StoredRun>();
@@ -108,7 +109,7 @@ export class RunStore {
     let parsed: unknown;
     try {
       const raw = readFileSync(this.path, 'utf8');
-      if (Buffer.byteLength(raw) > MAX_STORE_BYTES) {
+      if (Buffer.byteLength(raw) > MAX_LOAD_BYTES) {
         throw new Error('run store exceeds the 256MB persistence limit');
       }
       parsed = JSON.parse(raw);
@@ -122,7 +123,7 @@ export class RunStore {
     }
     let recovered = false;
     for (const item of parsed) {
-      const run = clone(item);
+      const run = item;
       if (
         run.sessionId &&
         [...this.runs.values()].some((candidate) => candidate.sessionId === run.sessionId)
@@ -139,20 +140,29 @@ export class RunStore {
       }
       this.runs.set(run.id, run);
     }
-    this.prune();
-    if (recovered) this.flush();
+    parsed = undefined;
+    const pruned = this.prune();
+    if (recovered || pruned) this.flush();
   }
 
-  private prune(): void {
+  private prune(): boolean {
     const ordered = [...this.runs.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-    while (
-      ordered.length > MAX_RUNS ||
-      Buffer.byteLength(JSON.stringify(ordered)) > MAX_STORE_BYTES
-    ) {
+    let bytes = 2;
+    const sizes = new Map<string, number>();
+    for (const run of ordered) {
+      const size = Buffer.byteLength(JSON.stringify(run)) + 1;
+      sizes.set(run.id, size);
+      bytes += size;
+    }
+    let pruned = false;
+    while (ordered.length > MAX_RUNS || bytes > MAX_STORE_BYTES) {
       const stale = ordered.pop();
       if (!stale) throw new Error('run store cannot satisfy its persistence limit');
       this.runs.delete(stale.id);
+      bytes -= sizes.get(stale.id) ?? 0;
+      pruned = true;
     }
+    return pruned;
   }
 
   private flush(): void {

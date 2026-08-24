@@ -34,7 +34,7 @@ export function createQuote(issue: GithubIssue, now = new Date()): Quote {
   const text = `${issue.title}\n${issue.body}`;
   const blocked = REJECT.find((pattern) => pattern.test(text));
   if (blocked) throw new Error("issue is outside Mizuki's safe MVP scope");
-  const commands = validationCommands(issue.rootFiles);
+  const commands = validationCommands(issue.rootFiles, text);
   if (commands.length === 0) {
     throw new Error('repository has no supported deterministic validation command');
   }
@@ -90,8 +90,14 @@ export function parseIssueUrl(value: string): { owner: string; repo: string; num
   return { owner: match[1]!, repo: match[2]!, number: Number(match[3]) };
 }
 
-function validationCommands(files: string[]): string[] {
+function validationCommands(files: string[], issueText: string): string[] {
   const names = new Set(files);
+  if (names.has('pnpm-lock.yaml') || names.has('package-lock.json') || names.has('yarn.lock')) {
+    const docs = markdownTargets(issueText);
+    if (docs.length > 0) {
+      return [`npx --yes prettier@3.6.2 --check ${docs.join(' ')}`];
+    }
+  }
   if (names.has('pnpm-lock.yaml')) return ['pnpm test'];
   if (names.has('package-lock.json')) return ['npm test'];
   if (names.has('yarn.lock')) return ['yarn test'];
@@ -99,4 +105,18 @@ function validationCommands(files: string[]): string[] {
   if (names.has('pyproject.toml') || names.has('pytest.ini')) return ['pytest'];
   if (names.has('go.mod')) return ['go test ./...'];
   return [];
+}
+
+function markdownTargets(text: string): string[] {
+  const targets = new Set<string>();
+  const pattern =
+    /(?:^|[\s`'"])((?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.mdx?)(?=$|[\s`'",.:;!?)])/gi;
+  for (const match of text.matchAll(pattern)) {
+    const path = match[1]!;
+    const segments = path.split('/');
+    if (segments.some((segment) => segment === '.' || segment === '..')) continue;
+    targets.add(path);
+    if (targets.size === 3) break;
+  }
+  return [...targets];
 }

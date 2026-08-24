@@ -1,6 +1,6 @@
 # Mizuki
 
-Mizuki sells small, bounded software-maintenance jobs. A maintainer submits a public GitHub issue, receives a fixed USDC quote, pays over x402, and gets either a validated pull request or a full refund.
+Mizuki sells small, bounded software-maintenance jobs. A maintainer submits a public GitHub issue, receives a fixed USDC quote, pays over x402, and gets either a validated pull request or a refund of the quoted USDC payment. Network and wallet fees are separate.
 
 This is a delivery agent, not a verification wrapper and not a trading bot. The paid result is the code change.
 
@@ -46,10 +46,15 @@ Copy `.env.example` into the deployment secret manager. Do not commit a populate
 
 The coding gateway needs `CODER_BACKEND=usepod`, a pinned `CODER_MODEL`, `USEPOD_API_KEY`, `E2B_API_KEY`, authenticated access, and persistent ledger/run-store paths. Mizuki needs a dedicated Postgres database, GitHub App credentials, the x402 treasury, a distinct reviewer route, the private policy-signer link, and a dedicated refund-liability authority key.
 
-Before mainnet, run `pnpm --filter @covenant/mizuki benchmark -- cases.json` against a file of `{name, repositoryUrl, baseSha, prompt, validationCommands, maxCostUsd}` cases. `maxCostUsd` defaults to the Micro ceiling of `0.8` and cannot exceed the Standard ceiling of `4`. Each case uses a unique idempotency key and passes that explicit all-in cap to the gateway. Keep the JSON report, including provider and cost receipts, as the route evidence. The benchmark exits nonzero if any route fails.
+Before changing the production coding route or model, run `pnpm --filter @covenant/mizuki benchmark -- cases.json` against a file of `{name, repositoryUrl, baseSha, prompt, validationCommands, maxCostUsd}` cases. `maxCostUsd` defaults to the Micro ceiling of `0.8` and cannot exceed the Standard ceiling of `4`. Each case uses a unique idempotency key and passes that explicit all-in cap to the gateway. Keep the JSON report, including provider and cost receipts, as the route evidence. The benchmark exits nonzero if any route fails.
 
 ## HTTP and MCP
 
+- `GET /v1/account` returns the signed-in GitHub account. `POST /v1/auth/logout` clears the session.
+- `GET /v1/account/repositories`, `/v1/account/jobs`, `/v1/account/billing`, and `/v1/account/bounties` return only records linked to the signed-in maintainer account.
+- `POST /v1/account/repositories` with `{"owner":"owner","repo":"repo"}` verifies current maintainer access and explicitly links one public repository to the account.
+- `GET /v1/repositories/:owner/:repo/issues` is read-only and lists bounded maintenance candidates for a linked repository.
+- `POST /v1/preflights` with `{"github_issue_url":"https://github.com/owner/repo/issues/1"}` checks both App installations, maintainer authority, attributable authorization evidence, scope, current repository metadata, and validation commands without creating a quote or accepting payment.
 - `POST /v1/quotes` with `{"github_issue_url":"https://github.com/owner/repo/issues/1"}`.
 - `POST /v1/jobs` with `{"quote_id":"..."}`, `Idempotency-Key`, and the x402 v2 `PAYMENT-SIGNATURE` header.
 - `GET /v1/jobs/:id` for PR, validation, or refund status.
@@ -93,7 +98,9 @@ Recorded USD net flow and the 70/30 waterfall are published separately as an `ap
 
 Mizuki uses independent package names, APIs, schemas, signer operations, escrow instructions, public copy, and telemetry. Earlier internal prototypes informed general design principles such as strict payment boundaries and independent review, but no legacy payment proof, simulated wallet tool, public identifier, or on-chain instruction name is accepted by this system.
 
-The production path is deliberately narrow: official x402 v2 exact SVM settlement, deterministic full-principal refund, and separately funded contributor escrow. Every transfer is bound to independently verified chain or GitHub evidence and a durable idempotency key.
+The production path is deliberately narrow: official x402 v2 exact SVM settlement, deterministic refund of the quoted USDC principal, and separately funded contributor escrow. Network and wallet fees are outside the quoted principal. Every transfer is bound to independently verified chain or GitHub evidence and a durable idempotency key.
+
+Workbench account links use their own additive `workbench` migration component. The commercial `core` component remains independently versioned so an older production image can safely restart during a rollback.
 
 For every new live payment proof, the serialized admission gate checks refund capacity and calls the policy signer for fresh readiness of the quote's exact repository before invoking settlement. The signer must prove a distinct read-only verifier App installation and a freshly minted one-repository token. A failed probe cannot reserve or settle a payment. Settlement recovery deliberately skips this new-payment probe because its durable reservation may already have paid on-chain; recovery must remain able to register the liability and finish the existing transaction while intake is closed.
 

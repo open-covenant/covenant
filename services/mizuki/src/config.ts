@@ -52,7 +52,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
   const updaterTimeoutMs = duration(env.MIZUKI_UPDATER_TIMEOUT_MS, 15_000);
   const escrowReadinessMinLamports = atomic(
     env.MIZUKI_ESCROW_READINESS_MIN_LAMPORTS,
-    '1000000000',
+    '500000000',
     'MIZUKI_ESCROW_READINESS_MIN_LAMPORTS',
   );
   if (readinessMaxAgeMs < readinessRefreshMs) {

@@ -1,7 +1,7 @@
 import { createHash, createSign } from 'node:crypto';
 import { z } from 'zod';
 import type { Config } from './config.js';
-import { assertMaintenanceScope, parseIssueUrl } from './quote.js';
+import { assertMaintenanceScope, createQuote, parseIssueUrl } from './quote.js';
 import type { GithubAuthorizationReceipt, GithubIssue, Job, RunArtifacts } from './types.js';
 
 type Fetch = typeof fetch;
@@ -93,6 +93,53 @@ interface CachedInstallationToken {
   expiresAt: number;
 }
 
+export type RepositoryMetadata = {
+  owner: string;
+  repo: string;
+  repository: string;
+  defaultBranch: string;
+  installationId: number;
+  permission: GithubAuthorizationReceipt['permission'];
+};
+
+export type RepositoryAccess = RepositoryMetadata & {
+  rootFiles: string[];
+};
+
+export type WorkbenchIssue = {
+  number: number;
+  title: string;
+  url: string;
+  labels: string[];
+  authorized: boolean;
+  authorizationUnavailable?: boolean;
+  scopeEligible: boolean;
+  eligibility: boolean;
+  class?: 'micro' | 'standard';
+  priceAtomic?: string;
+  maxFiles?: number;
+  validationCommands: string[];
+  reason?: string;
+};
+
+export type IssuePreflight = {
+  owner: string;
+  repo: string;
+  repository: string;
+  defaultBranch: string;
+  core:
+    | { status: 'ready'; installationId: number }
+    | { status: 'action_required' }
+    | { status: 'unavailable' };
+  maintainer: {
+    verified: boolean;
+    unavailable?: boolean;
+    permission?: GithubAuthorizationReceipt['permission'];
+  };
+  issue: WorkbenchIssue;
+  blockers: string[];
+};
+
 export class GithubClient {
   private readonly tokenCache = new Map<string, CachedInstallationToken>();
   private readonly tokenRequests = new Map<string, Promise<CachedInstallationToken>>();
@@ -163,6 +210,268 @@ export class GithubClient {
       rootFiles: contents.map((entry) => entry.name),
       installationId,
       authorizationReceipt,
+    };
+  }
+
+  async repositoryForMaintainer(
+    ownerValue: string,
+    repoValue: string,
+    githubLogin: string,
+  ): Promise<RepositoryAccess> {
+    const metadata = await this.repositoryMetadataForMaintainer(ownerValue, repoValue, githubLogin);
+    const contents = await this.repositoryApi<Array<{ name: string }>>(
+      metadata.owner,
+      metadata.repo,
+      metadata.installationId,
+      `/repos/${metadata.owner}/${metadata.repo}/contents`,
+    );
+    return { ...metadata, rootFiles: contents.map((entry) => entry.name) };
+  }
+
+  async repositoryMetadataForMaintainer(
+    ownerValue: string,
+    repoValue: string,
+    githubLogin: string,
+  ): Promise<RepositoryMetadata> {
+    const { owner, repo } = repositoryIdentity(ownerValue, repoValue);
+    const installationId = await this.installation(owner, repo);
+    if (!installationId) {
+      throw new GithubAccessError('install the Mizuki GitHub App on this repository first');
+    }
+    const [repository, permission] = await Promise.all([
+      this.repositoryApi<{ private: boolean; default_branch: string }>(
+        owner,
+        repo,
+        installationId,
+        `/repos/${owner}/${repo}`,
+      ),
+      this.maintainerPermission(owner, repo, installationId, githubLogin),
+    ]);
+    if (repository.private) throw new GithubAccessError('private repositories are not supported');
+    return {
+      owner,
+      repo,
+      repository: `${owner}/${repo}`.toLowerCase(),
+      defaultBranch: repository.default_branch,
+      installationId,
+      permission,
+    };
+  }
+
+  async issuesForMaintainer(
+    owner: string,
+    repo: string,
+    githubLogin: string,
+  ): Promise<{ repository: RepositoryAccess; issues: WorkbenchIssue[] }> {
+    const access = await this.repositoryForMaintainer(owner, repo, githubLogin);
+    const [branch, issues] = await Promise.all([
+      this.repositoryApi<{ commit: { sha: string } }>(
+        access.owner,
+        access.repo,
+        access.installationId,
+        `/repos/${access.owner}/${access.repo}/branches/${encodeURIComponent(access.defaultBranch)}`,
+      ),
+      this.repositoryApi<
+        Array<{
+          number: number;
+          title: string;
+          body: string | null;
+          labels: Array<{ name?: string }>;
+          pull_request?: unknown;
+        }>
+      >(
+        access.owner,
+        access.repo,
+        access.installationId,
+        `/repos/${access.owner}/${access.repo}/issues?state=open&sort=updated&direction=desc&per_page=20`,
+      ),
+    ]);
+    const actorPermissions = new Map<string, Promise<void>>();
+    return {
+      repository: access,
+      issues: await mapConcurrent(
+        issues.filter((issue) => issue.pull_request === undefined),
+        5,
+        async (issue) => {
+          let authorized = false;
+          let authorizationUnavailable = false;
+          let authorizationReason: string | undefined;
+          const labelPresent = hasAuthorizationLabel(
+            issue.labels,
+            this.config.githubAuthorizationLabel,
+          );
+          const scoped = this.workbenchIssue(issue, access, branch.commit.sha, true);
+          if (!scoped.eligibility) return { ...scoped, authorized: false };
+          if (labelPresent) {
+            try {
+              await this.assertWorkbenchAuthorization(
+                access.owner,
+                access.repo,
+                issue.number,
+                access.installationId,
+                actorPermissions,
+              );
+              authorized = true;
+            } catch (cause) {
+              authorizationUnavailable = githubAuthorizationUnavailable(cause);
+              authorizationReason = authorizationUnavailable
+                ? 'Issue authorization could not be verified. Try again shortly.'
+                : `Have a maintainer remove and reapply the ${this.config.githubAuthorizationLabel} label.`;
+            }
+          }
+          const result = this.workbenchIssue(
+            issue,
+            access,
+            branch.commit.sha,
+            authorized,
+            authorizationReason,
+          );
+          return authorizationUnavailable ? { ...result, authorizationUnavailable: true } : result;
+        },
+      ),
+    };
+  }
+
+  async preflightIssue(issueUrl: string, githubLogin: string): Promise<IssuePreflight> {
+    const { owner, repo, number } = parseIssueUrl(issueUrl);
+    const blockers: string[] = [];
+    let installationId: number | undefined;
+    let coreUnavailable = false;
+    try {
+      installationId = await this.installation(owner, repo);
+    } catch (cause) {
+      if (!(cause instanceof GithubReadinessError)) throw cause;
+      coreUnavailable = true;
+      blockers.push(cause.message);
+    }
+    if (!installationId && !coreUnavailable) {
+      blockers.push('Install the delivery GitHub App on this repository.');
+    }
+    const repositoryPath = `/repos/${owner}/${repo}`;
+    const [repository, issue, contents] = await Promise.all([
+      installationId
+        ? this.repositoryApi<{ private: boolean; default_branch: string }>(
+            owner,
+            repo,
+            installationId,
+            repositoryPath,
+          )
+        : this.api<{ private: boolean; default_branch: string }>(repositoryPath),
+      installationId
+        ? this.repositoryApi<{
+            number: number;
+            title: string;
+            body: string | null;
+            labels: Array<{ name?: string }>;
+            pull_request?: unknown;
+          }>(owner, repo, installationId, `${repositoryPath}/issues/${number}`)
+        : this.api<{
+            number: number;
+            title: string;
+            body: string | null;
+            labels: Array<{ name?: string }>;
+            pull_request?: unknown;
+          }>(`${repositoryPath}/issues/${number}`),
+      installationId
+        ? this.repositoryApi<Array<{ name: string }>>(
+            owner,
+            repo,
+            installationId,
+            `${repositoryPath}/contents`,
+          )
+        : this.api<Array<{ name: string }>>(`${repositoryPath}/contents`),
+    ]);
+    if (repository.private) throw new GithubAccessError('private repositories are not supported');
+    assertNotPullRequest(issue);
+    const branchPath = `${repositoryPath}/branches/${encodeURIComponent(repository.default_branch)}`;
+    const branch = installationId
+      ? await this.repositoryApi<{ commit: { sha: string } }>(
+          owner,
+          repo,
+          installationId,
+          branchPath,
+        )
+      : await this.api<{ commit: { sha: string } }>(branchPath);
+    const rootFiles = contents.map((entry) => entry.name);
+
+    let permission: GithubAuthorizationReceipt['permission'] | undefined;
+    let maintainerUnavailable = false;
+    if (installationId) {
+      try {
+        permission = await this.maintainerPermission(owner, repo, installationId, githubLogin);
+      } catch (cause) {
+        if (cause instanceof GithubAccessError) throw cause;
+        maintainerUnavailable = true;
+        blockers.push('Repository maintainer access could not be verified. Try again shortly.');
+      }
+    }
+
+    const issueRepository = {
+      owner,
+      repo,
+      repository: `${owner}/${repo}`.toLowerCase(),
+      defaultBranch: repository.default_branch,
+      ...(installationId ? { installationId } : {}),
+      rootFiles,
+    };
+    const scoped = this.workbenchIssue(issue, issueRepository, branch.commit.sha, true);
+    const labelsPresent = hasAuthorizationLabel(issue.labels, this.config.githubAuthorizationLabel);
+    let authorized = false;
+    let authorizationUnavailable = false;
+    let authorizationReason: string | undefined;
+    if (scoped.eligibility) {
+      if (!labelsPresent) {
+        authorizationReason = `Add the ${this.config.githubAuthorizationLabel} label to the issue.`;
+      } else if (!installationId) {
+        authorizationUnavailable = coreUnavailable;
+        authorizationReason = coreUnavailable
+          ? 'Issue authorization could not be verified. Try again shortly.'
+          : 'Install the delivery GitHub App to verify issue authorization.';
+      } else {
+        try {
+          await this.authorizationReceipt(owner, repo, number, installationId, {
+            title: issue.title,
+            body: issue.body ?? '',
+          });
+          authorized = true;
+        } catch (cause) {
+          authorizationUnavailable = githubAuthorizationUnavailable(cause);
+          authorizationReason = authorizationUnavailable
+            ? 'Issue authorization could not be verified. Try again shortly.'
+            : `Have a maintainer remove and reapply the ${this.config.githubAuthorizationLabel} label.`;
+        }
+      }
+    }
+    const workbenchIssue = scoped.eligibility
+      ? this.workbenchIssue(
+          issue,
+          issueRepository,
+          branch.commit.sha,
+          authorized,
+          authorizationReason,
+        )
+      : { ...scoped, authorized: false };
+    const reportedIssue = authorizationUnavailable
+      ? { ...workbenchIssue, authorizationUnavailable: true }
+      : workbenchIssue;
+    if (reportedIssue.reason && !blockers.includes(reportedIssue.reason)) {
+      blockers.push(reportedIssue.reason);
+    }
+    return {
+      owner,
+      repo,
+      repository: issueRepository.repository,
+      defaultBranch: issueRepository.defaultBranch,
+      core: installationId
+        ? { status: 'ready', installationId }
+        : { status: coreUnavailable ? 'unavailable' : 'action_required' },
+      maintainer: {
+        verified: permission !== undefined,
+        ...(maintainerUnavailable ? { unavailable: true } : {}),
+        ...(permission ? { permission } : {}),
+      },
+      issue: reportedIssue,
+      blockers,
     };
   }
 
@@ -488,25 +797,57 @@ export class GithubClient {
 
   private async installation(owner: string, repo: string): Promise<number | undefined> {
     if (!this.config.githubAppId || !this.config.githubPrivateKey) {
-      if (this.config.requireGithubApp)
-        throw new Error('GitHub App credentials are not configured');
+      if (this.config.requireGithubApp) {
+        throw new GithubReadinessError(
+          'credentials',
+          'Delivery GitHub App authentication is unavailable.',
+        );
+      }
       return undefined;
     }
-    const response = await this.request(
-      `https://api.github.com/repos/${owner}/${repo}/installation`,
-      {
+    let response: Response;
+    try {
+      response = await this.request(`https://api.github.com/repos/${owner}/${repo}/installation`, {
         headers: this.headers(this.appJwt()),
         signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
-      },
-    );
-    if (response.status === 404) return undefined;
-    if (!response.ok) throw new Error(`GitHub installation lookup failed: ${response.status}`);
-    const installation = installationSchema.parse(await response.json());
-    if (String(installation.app_id) !== this.config.githubAppId) {
-      throw new Error('GitHub returned an installation for a different App');
+      });
+    } catch {
+      throw new GithubReadinessError(
+        'unavailable',
+        'GitHub repository verification is temporarily unavailable.',
+      );
     }
-    if (installation.suspended_at) throw new Error('GitHub App installation is suspended');
-    assertExactPermissions(installation.permissions, CORE_PERMISSIONS, 'GitHub App installation');
+    if (response.status === 404) return undefined;
+    if (!response.ok) throw githubReadinessFromStatus(response.status);
+    let installation: z.infer<typeof installationSchema>;
+    try {
+      installation = installationSchema.parse(await response.json());
+    } catch {
+      throw new GithubReadinessError(
+        'provenance',
+        'Delivery GitHub App configuration could not be verified.',
+      );
+    }
+    if (String(installation.app_id) !== this.config.githubAppId) {
+      throw new GithubReadinessError(
+        'provenance',
+        'Delivery GitHub App configuration could not be verified.',
+      );
+    }
+    if (installation.suspended_at) {
+      throw new GithubReadinessError(
+        'provenance',
+        'Delivery GitHub App configuration could not be verified.',
+      );
+    }
+    try {
+      assertExactPermissions(installation.permissions, CORE_PERMISSIONS, 'GitHub App installation');
+    } catch {
+      throw new GithubReadinessError(
+        'provenance',
+        'Delivery GitHub App configuration could not be verified.',
+      );
+    }
     return installation.id;
   }
 
@@ -567,7 +908,9 @@ export class GithubClient {
       !event.actor.login ||
       event.actor.type !== 'User'
     ) {
-      throw new Error('authorization label has no attributable human maintainer event');
+      throw new GithubAuthorizationError(
+        'authorization label has no attributable human maintainer event',
+      );
     }
     const permissionResult = await this.repositoryApi<{ permission?: string }>(
       owner,
@@ -577,7 +920,9 @@ export class GithubClient {
     );
     const permission = permissionResult.permission;
     if (!isMaintainerPermission(permission)) {
-      throw new Error('authorization label was not applied by a repository maintainer');
+      throw new GithubAuthorizationError(
+        'authorization label was not applied by a repository maintainer',
+      );
     }
     const evidence = {
       owner: owner.toLowerCase(),
@@ -599,6 +944,155 @@ export class GithubClient {
       verifiedAt: new Date().toISOString(),
       evidenceHash: createHash('sha256').update(JSON.stringify(evidence)).digest('hex'),
     };
+  }
+
+  private async maintainerPermission(
+    owner: string,
+    repo: string,
+    installationId: number,
+    githubLogin: string,
+  ): Promise<GithubAuthorizationReceipt['permission']> {
+    if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(githubLogin)) {
+      throw new GithubAccessError('GitHub account identity is invalid');
+    }
+    let result: { permission?: string };
+    try {
+      result = await this.repositoryApi<{ permission?: string }>(
+        owner,
+        repo,
+        installationId,
+        `/repos/${owner}/${repo}/collaborators/${encodeURIComponent(githubLogin)}/permission`,
+      );
+    } catch (cause) {
+      if (cause instanceof GithubApiError && cause.status === 404) {
+        throw new GithubAccessError('repository maintainer access is required');
+      }
+      throw cause;
+    }
+    if (!isMaintainerPermission(result.permission)) {
+      throw new GithubAccessError('repository maintainer access is required');
+    }
+    return result.permission;
+  }
+
+  private async assertWorkbenchAuthorization(
+    owner: string,
+    repo: string,
+    number: number,
+    installationId: number,
+    permissions: Map<string, Promise<void>>,
+  ): Promise<void> {
+    const events = await this.repositoryApi<
+      Array<{
+        event?: string;
+        created_at?: string;
+        label?: { name?: string };
+        actor?: { id?: number; login?: string; type?: string } | null;
+      }>
+    >(owner, repo, installationId, `/repos/${owner}/${repo}/issues/${number}/events?per_page=100`);
+    const requiredLabel = this.config.githubAuthorizationLabel.trim().toLowerCase();
+    const event = events
+      .filter(
+        (candidate) =>
+          candidate.event === 'labeled' &&
+          candidate.label?.name?.trim().toLowerCase() === requiredLabel,
+      )
+      .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)))[0];
+    if (
+      !event?.created_at ||
+      !Number.isFinite(Date.parse(event.created_at)) ||
+      !event.actor?.id ||
+      !event.actor.login ||
+      event.actor.type !== 'User'
+    ) {
+      throw new GithubAuthorizationError(
+        'authorization label has no attributable human maintainer event',
+      );
+    }
+    const login = event.actor.login.toLowerCase();
+    let permission = permissions.get(login);
+    if (!permission) {
+      permission = this.repositoryApi<{ permission?: string }>(
+        owner,
+        repo,
+        installationId,
+        `/repos/${owner}/${repo}/collaborators/${encodeURIComponent(event.actor.login)}/permission`,
+      ).then((result) => {
+        if (!isMaintainerPermission(result.permission)) {
+          throw new GithubAuthorizationError(
+            'authorization label was not applied by a repository maintainer',
+          );
+        }
+      });
+      permissions.set(login, permission);
+    }
+    await permission;
+  }
+
+  private workbenchIssue(
+    issue: {
+      number: number;
+      title: string;
+      body: string | null;
+      labels: Array<{ name?: string }>;
+    },
+    repository: Pick<
+      RepositoryAccess,
+      'owner' | 'repo' | 'repository' | 'defaultBranch' | 'rootFiles'
+    > & { installationId?: number },
+    baseSha: string,
+    authorized: boolean,
+    authorizationReason?: string,
+  ): WorkbenchIssue {
+    const labels = issue.labels.flatMap((label) => (label.name ? [label.name] : []));
+    const base = {
+      number: issue.number,
+      title: issue.title,
+      url: `https://github.com/${repository.owner}/${repository.repo}/issues/${issue.number}`,
+      labels,
+      authorized,
+      validationCommands: [] as string[],
+    };
+    let quote: ReturnType<typeof createQuote>;
+    try {
+      quote = createQuote({
+        owner: repository.owner,
+        repo: repository.repo,
+        number: issue.number,
+        title: issue.title,
+        body: issue.body ?? '',
+        labels,
+        defaultBranch: repository.defaultBranch,
+        baseSha,
+        rootFiles: repository.rootFiles,
+        installationId: repository.installationId,
+      });
+    } catch (cause) {
+      return {
+        ...base,
+        scopeEligible: false,
+        eligibility: false,
+        reason: publicEligibilityReason(cause),
+      };
+    }
+    const quoteDetails = {
+      class: quote.class,
+      priceAtomic: quote.priceAtomic,
+      maxFiles: quote.maxFiles,
+      validationCommands: quote.validationCommands,
+    };
+    if (!authorized) {
+      return {
+        ...base,
+        ...quoteDetails,
+        scopeEligible: true,
+        eligibility: false,
+        reason:
+          authorizationReason ??
+          `Add the ${this.config.githubAuthorizationLabel} label to authorize work.`,
+      };
+    }
+    return { ...base, ...quoteDetails, scopeEligible: true, eligibility: true };
   }
 
   private async existingPullRequest(
@@ -685,6 +1179,23 @@ export class GithubClient {
   }
 
   private async mintInstallationToken(
+    owner: string,
+    repo: string,
+    id: number,
+  ): Promise<CachedInstallationToken> {
+    try {
+      return await this.mintInstallationTokenUnchecked(owner, repo, id);
+    } catch (cause) {
+      if (cause instanceof GithubReadinessError) throw cause;
+      if (cause instanceof GithubApiError) throw githubReadinessFromStatus(cause.status);
+      throw new GithubReadinessError(
+        'provenance',
+        'Delivery GitHub App configuration could not be verified.',
+      );
+    }
+  }
+
+  private async mintInstallationTokenUnchecked(
     owner: string,
     repo: string,
     id: number,
@@ -825,10 +1336,58 @@ export class GithubClient {
 }
 
 export function assertIssueAuthorized(labels: string[], requiredLabel: string): void {
-  const normalized = requiredLabel.trim().toLowerCase();
-  if (!normalized || !labels.some((label) => label.trim().toLowerCase() === normalized)) {
+  if (
+    !hasAuthorizationLabel(
+      labels.map((name) => ({ name })),
+      requiredLabel,
+    )
+  ) {
     throw new Error(`issue must have the ${requiredLabel} label before Mizuki can act`);
   }
+}
+
+function hasAuthorizationLabel(labels: Array<{ name?: string }>, requiredLabel: string): boolean {
+  const normalized = requiredLabel.trim().toLowerCase();
+  return Boolean(
+    normalized && labels.some((label) => label.name?.trim().toLowerCase() === normalized),
+  );
+}
+
+function repositoryIdentity(owner: string, repo: string): { owner: string; repo: string } {
+  const segment = /^[A-Za-z0-9_.-]{1,100}$/;
+  if (!segment.test(owner) || !segment.test(repo)) {
+    throw new GithubAccessError('repository identity is invalid');
+  }
+  return { owner, repo };
+}
+
+function publicEligibilityReason(cause: unknown): string {
+  const message = cause instanceof Error ? cause.message : '';
+  if (/supported deterministic validation command/i.test(message)) {
+    return 'This repository does not expose a supported validation command.';
+  }
+  if (/maintenance-only scope|outside Mizuki|safe MVP scope|too large/i.test(message)) {
+    return 'This issue is outside the supported maintenance scope.';
+  }
+  return 'This issue is not eligible for automated maintenance.';
+}
+
+async function mapConcurrent<T, R>(
+  values: T[],
+  concurrency: number,
+  operation: (value: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(values.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(concurrency, values.length) }, async () => {
+    while (next < values.length) {
+      const index = next;
+      next += 1;
+      results[index] = await operation(values[index]!);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 function assertNotPullRequest(issue: { pull_request?: unknown }): void {
@@ -875,6 +1434,43 @@ class GithubApiError extends Error {
   ) {
     super(message);
   }
+}
+
+export class GithubAccessError extends Error {}
+
+export class GithubReadinessError extends Error {
+  constructor(
+    readonly code: 'credentials' | 'provenance' | 'unavailable',
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+class GithubAuthorizationError extends Error {}
+
+function githubReadinessFromStatus(status: number): GithubReadinessError {
+  if (status === 401) {
+    return new GithubReadinessError(
+      'credentials',
+      'Delivery GitHub App authentication is unavailable.',
+    );
+  }
+  if (status === 403 || status === 429 || status >= 500) {
+    return new GithubReadinessError(
+      'unavailable',
+      'GitHub repository verification is temporarily unavailable.',
+    );
+  }
+  return new GithubReadinessError(
+    'provenance',
+    'Delivery GitHub App configuration could not be verified.',
+  );
+}
+
+function githubAuthorizationUnavailable(cause: unknown): boolean {
+  if (cause instanceof GithubReadinessError || cause instanceof GithubApiError) return true;
+  return !(cause instanceof GithubAuthorizationError || cause instanceof GithubAccessError);
 }
 
 function encode(value: unknown): string {

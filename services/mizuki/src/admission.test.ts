@@ -34,6 +34,48 @@ describe('public admission limits', () => {
     expect(() => buckets.consume('quote', '203.0.113.1')).toThrow(RateLimitError);
   });
 
+  it.each([
+    ['account_repositories' as const, 12],
+    ['repository_connect' as const, 6],
+    ['repository_issues' as const, 10],
+  ])('bounds GitHub-backed %s requests per source', (route, capacity) => {
+    const buckets = new BoundedTokenBuckets(100, () => 1_000);
+    for (let index = 0; index < capacity; index += 1) {
+      buckets.consume(route, '192.0.2.1');
+    }
+    expect(() => buckets.consume(route, '192.0.2.1')).toThrow(RateLimitError);
+    expect(() => buckets.consume(route, '192.0.2.2')).not.toThrow();
+  });
+
+  it.each([
+    ['preflight' as const, 10],
+    ['account_repositories' as const, 12],
+    ['repository_connect' as const, 6],
+    ['repository_issues' as const, 10],
+  ])('bounds GitHub-backed %s requests per account across sources', (route, capacity) => {
+    const secret = 'p'.repeat(32);
+    const admission = new PublicAdmission(
+      loadConfig({
+        MIZUKI_WEB_PROXY_SECRET: secret,
+        MIZUKI_RATE_LIMIT_MAX_SOURCES: '100',
+      }),
+    );
+    const request = (index: number) =>
+      ({
+        headers: {
+          'x-mizuki-client-ip': `198.51.100.${index + 1}`,
+          'x-mizuki-proxy-secret': secret,
+        },
+        socket: { remoteAddress: '10.0.0.3' },
+      }) as unknown as IncomingMessage;
+
+    for (let index = 0; index < capacity; index += 1) {
+      admission.consumeAccount(route, request(index), '42');
+    }
+    expect(() => admission.consumeAccount(route, request(capacity), '42')).toThrow(RateLimitError);
+    expect(() => admission.consumeAccount(route, request(capacity + 1), '99')).not.toThrow();
+  });
+
   it('trusts only the overwritten Cloudflare address on Render when enabled', () => {
     const request = {
       headers: {

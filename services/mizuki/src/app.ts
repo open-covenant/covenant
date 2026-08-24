@@ -6,7 +6,7 @@ import type { BountyService } from './bounties.js';
 import type { Config } from './config.js';
 import { dashboard } from './dashboard.js';
 import { JobProcessor } from './executor.js';
-import { GithubClient } from './github.js';
+import { GithubAccessError, GithubClient, GithubReadinessError } from './github.js';
 import { metrics, prometheus } from './metrics.js';
 import {
   isPublicBounty,
@@ -21,7 +21,7 @@ import {
 import { createQuote } from './quote.js';
 import { recordPaymentReceipts } from './receipts.js';
 import { assertLiabilityMatchesPayment, recoverSettlement } from './settlement-recovery.js';
-import { StateConflictError, type MizukiStore } from './store.js';
+import { StateConflictError, type AccountJobsPage, type MizukiStore } from './store.js';
 import { GithubWebhookHandler, verifyGithubWebhook } from './webhooks.js';
 import type { Job, RepositoryAdmissionReceipt } from './types.js';
 import { Payments, USDC_DECIMALS, USDC_MAINNET, paymentRequiredHeader } from './x402.js';
@@ -29,6 +29,7 @@ import {
   assertRefundCapacity,
   refundLiabilityCommitment,
   repositoryAdmissionBinding,
+  PolicyRequestError,
   RefundCapacityError,
   type PaymentPolicy,
   type PolicyReadiness,
@@ -178,10 +179,229 @@ export function createApp(deps: AppDependencies) {
         return;
       }
       if (req.method === 'GET' && url.pathname === '/v1/auth/session') {
-        const session = deps.auth.session(cookies(req).mizuki_session);
+        const session = deps.auth.session?.(cookies(req).mizuki_session);
         if (!session) return json(res, 401, { error: 'not signed in' });
         const contributor = await deps.store.contributor(session.githubId);
         return json(res, 200, { contributor });
+      }
+      if (req.method === 'POST' && url.pathname === '/v1/auth/logout') {
+        res.setHeader(
+          'set-cookie',
+          expiredSessionCookie(req, deps.config.trustedProxyHops ?? 0, deps.config.webProxySecret),
+        );
+        res.setHeader('cache-control', 'private, no-store');
+        return json(res, 200, { ok: true });
+      }
+      if (req.method === 'GET' && url.pathname === '/v1/account') {
+        res.setHeader('cache-control', 'private, no-store');
+        const session = requireSession(req, deps.auth);
+        const account = await deps.store.contributor(session.githubId);
+        if (!account) return json(res, 401, { error: 'not signed in' });
+        return json(res, 200, {
+          account: {
+            githubId: account.githubId,
+            githubLogin: account.githubLogin,
+            ...(account.wallet ? { wallet: account.wallet } : {}),
+            ...(account.walletVerifiedAt ? { walletVerifiedAt: account.walletVerifiedAt } : {}),
+          },
+        });
+      }
+      if (req.method === 'GET' && url.pathname === '/v1/account/jobs') {
+        res.setHeader('cache-control', 'private, no-store');
+        const session = requireSession(req, deps.auth);
+        const page = await deps.store.jobsForAccount(session.githubId, 100);
+        return json(res, 200, {
+          jobs: page.jobs.map(publicJob),
+          limit: page.limit,
+          truncated: page.truncated,
+        });
+      }
+      if (req.method === 'GET' && url.pathname === '/v1/account/billing') {
+        res.setHeader('cache-control', 'private, no-store');
+        const session = requireSession(req, deps.auth);
+        const page = await deps.store.jobsForAccount(session.githubId, 1_000);
+        return json(res, 200, accountBilling(deps.config.paymentMode, page));
+      }
+      if (req.method === 'GET' && url.pathname === '/v1/account/bounties') {
+        res.setHeader('cache-control', 'private, no-store');
+        const session = requireSession(req, deps.auth);
+        const page = await deps.store.bountiesForAccount(session.githubId, 100);
+        return json(res, 200, {
+          bounties: await Promise.all(
+            page.bounties.map((bounty) => publicBounty(deps.store, bounty)),
+          ),
+          limit: page.limit,
+          truncated: page.truncated,
+        });
+      }
+      if (req.method === 'GET' && url.pathname === '/v1/account/repositories') {
+        res.setHeader('cache-control', 'private, no-store');
+        const session = requireSession(req, deps.auth);
+        admission.consumeAccount('account_repositories', req, session.githubId);
+        const page = await deps.store.repositoriesForAccount(session.githubId, 25);
+        const repositories = await mapConcurrent(page.repositories, 4, async (saved) => {
+          const checkedAt = new Date().toISOString();
+          try {
+            const [repository, policy] = await Promise.all([
+              deps.github.repositoryMetadataForMaintainer(
+                saved.owner,
+                saved.repo,
+                session.githubLogin,
+              ),
+              repositoryPolicyReadiness(deps, saved.repository),
+            ]);
+            const blockers = policy.status === 'ready' ? [] : [policy.reason];
+            return {
+              owner: repository.owner,
+              repo: repository.repo,
+              repository: repository.repository,
+              defaultBranch: repository.defaultBranch,
+              permission: repository.permission,
+              core: { status: 'ready' as const },
+              policy,
+              validationCommands: [],
+              checkedAt,
+              readyForWork: blockers.length === 0,
+              blockers,
+            };
+          } catch (cause) {
+            return {
+              owner: saved.owner,
+              repo: saved.repo,
+              repository: saved.repository,
+              defaultBranch: '',
+              permission: null,
+              core: {
+                status:
+                  cause instanceof GithubAccessError
+                    ? ('action_required' as const)
+                    : ('unavailable' as const),
+              },
+              policy: { status: 'unknown' as const },
+              validationCommands: [],
+              checkedAt,
+              readyForWork: false,
+              blockers: [accountRepositoryBlocker(cause)],
+            };
+          }
+        });
+        return json(res, 200, {
+          repositories,
+          limit: page.limit,
+          truncated: page.truncated,
+        });
+      }
+      if (req.method === 'POST' && url.pathname === '/v1/account/repositories') {
+        const session = requireSession(req, deps.auth);
+        admission.consumeAccount('repository_connect', req, session.githubId);
+        const body = await bodyJson<{
+          repository?: unknown;
+          owner?: unknown;
+          repo?: unknown;
+        }>(req);
+        const { owner, repo } = accountRepositoryInput(body);
+        const repository = await deps.github.repositoryMetadataForMaintainer(
+          owner,
+          repo,
+          session.githubLogin,
+        );
+        await deps.store.linkAccountRepository(session.githubId, repository.owner, repository.repo);
+        const policy = await repositoryPolicyReadiness(deps, repository.repository);
+        const blockers = policy.status === 'ready' ? [] : [policy.reason];
+        const checkedAt = new Date().toISOString();
+        res.setHeader('cache-control', 'private, no-store');
+        return json(res, 201, {
+          repository: {
+            owner: repository.owner,
+            repo: repository.repo,
+            repository: repository.repository,
+            defaultBranch: repository.defaultBranch,
+            permission: repository.permission,
+            core: { status: 'ready' },
+            policy,
+            validationCommands: [],
+            checkedAt,
+            readyForWork: blockers.length === 0,
+            blockers,
+          },
+        });
+      }
+      if (req.method === 'POST' && url.pathname === '/v1/preflights') {
+        const session = requireSession(req, deps.auth);
+        admission.consumeAccount('preflight', req, session.githubId);
+        const body = await bodyJson<{ github_issue_url?: unknown }>(req);
+        if (typeof body.github_issue_url !== 'string') {
+          return json(res, 400, { error: 'github_issue_url is required' });
+        }
+        const inspected = await deps.github.preflightIssue(
+          body.github_issue_url,
+          session.githubLogin,
+        );
+        const policy = await repositoryPolicyReadiness(deps, inspected.repository);
+        const blockers = [...inspected.blockers];
+        if (policy.status !== 'ready') blockers.push(policy.reason);
+        if (inspected.maintainer.verified) {
+          await deps.store.linkAccountRepository(session.githubId, inspected.owner, inspected.repo);
+        }
+        const checkedAt = new Date().toISOString();
+        return json(res, 200, {
+          repository: {
+            owner: inspected.owner,
+            repo: inspected.repo,
+            repository: inspected.repository,
+            defaultBranch: inspected.defaultBranch,
+          },
+          issue: inspected.issue,
+          checks: {
+            core: inspected.core,
+            policy,
+            maintainer: {
+              status: inspected.maintainer.verified
+                ? 'ready'
+                : inspected.maintainer.unavailable
+                  ? 'unavailable'
+                  : 'unverified',
+              ...(inspected.maintainer.permission
+                ? { permission: inspected.maintainer.permission }
+                : {}),
+            },
+            authorization: {
+              status: inspected.issue.authorized
+                ? 'ready'
+                : inspected.issue.authorizationUnavailable
+                  ? 'unavailable'
+                  : 'action_required',
+            },
+            eligibility: {
+              status: inspected.issue.scopeEligible ? 'ready' : 'action_required',
+            },
+          },
+          blockers,
+          class: inspected.issue.class,
+          priceAtomic: inspected.issue.priceAtomic,
+          maxFiles: inspected.issue.maxFiles,
+          validationCommands: inspected.issue.validationCommands,
+          checkedAt,
+          readyForWork: blockers.length === 0,
+        });
+      }
+      if (
+        req.method === 'GET' &&
+        parts[0] === 'v1' &&
+        parts[1] === 'repositories' &&
+        parts[2] &&
+        parts[3] &&
+        parts[4] === 'issues'
+      ) {
+        const session = requireSession(req, deps.auth);
+        admission.consumeAccount('repository_issues', req, session.githubId);
+        const result = await deps.github.issuesForMaintainer(
+          parts[2],
+          parts[3],
+          session.githubLogin,
+        );
+        res.setHeader('cache-control', 'private, no-store');
+        return json(res, 200, { issues: result.issues });
       }
       if (req.method === 'POST' && url.pathname === '/v1/auth/wallet/challenges') {
         admission.consume('wallet_challenge', req);
@@ -373,9 +593,33 @@ export function createApp(deps: AppDependencies) {
         }
         await assertOperatorControlOpen(deps.store, 'intake', deps.readiness);
         const issue = await deps.github.issue(body.github_issue_url);
+        const session = deps.auth.session?.(cookies(req).mizuki_session);
+        let accountRepository:
+          | Awaited<ReturnType<GithubClient['repositoryMetadataForMaintainer']>>
+          | undefined;
+        if (session) {
+          try {
+            accountRepository = await deps.github.repositoryMetadataForMaintainer(
+              issue.owner,
+              issue.repo,
+              session.githubLogin,
+            );
+          } catch (cause) {
+            if (!(cause instanceof GithubAccessError)) throw cause;
+            accountRepository = undefined;
+          }
+        }
         const result = await deps.paymentAdmission.run(async () => {
           await assertOperatorControlOpen(deps.store, 'intake', deps.readiness);
           const quote = await deps.store.saveQuote(createQuote(issue));
+          if (session && accountRepository) {
+            await deps.store.linkQuoteToAccount(quote.id, session.githubId);
+            await deps.store.linkAccountRepository(
+              session.githubId,
+              accountRepository.owner,
+              accountRepository.repo,
+            );
+          }
           return { ...quote, payment: await deps.payments.challenge(quote) };
         });
         return json(res, 201, result);
@@ -706,33 +950,42 @@ export function createApp(deps: AppDependencies) {
         return json(res, 429, { error: cause.message });
       }
       const message = cause instanceof Error ? cause.message : String(cause);
-      const status = /not signed in|unauthorized/i.test(message)
-        ? 401
-        : cause instanceof InvalidRequestBodyError
-          ? 400
-          : cause instanceof RefundCapacityError
+      const status =
+        cause instanceof GithubAccessError
+          ? 403
+          : cause instanceof GithubReadinessError
             ? 503
-            : cause instanceof OperatorAdmissionError
-              ? 503
-              : /not found/i.test(message)
-                ? 404
-                : /already|changed after the quote|concurrent|expected|not accepting|does not match the active|not funded|dispute intake|can no longer/i.test(
-                      message,
-                    )
+            : /not signed in|unauthorized/i.test(message)
+              ? 401
+              : cause instanceof InvalidRequestBodyError
+                ? 400
+                : cause instanceof StateConflictError
                   ? 409
-                  : /outside Mizuki|public GitHub|install the Mizuki|issue is too large|invalid|expired|required|incomplete/i.test(
-                        message,
-                      )
-                    ? 422
-                    : 500;
+                  : cause instanceof RefundCapacityError
+                    ? 503
+                    : cause instanceof OperatorAdmissionError
+                      ? 503
+                      : /not found/i.test(message)
+                        ? 404
+                        : /already|changed after the quote|concurrent|expected|not accepting|does not match the active|not funded|dispute intake|can no longer/i.test(
+                              message,
+                            )
+                          ? 409
+                          : /outside Mizuki|public GitHub|install the Mizuki|issue is too large|invalid|expired|required|incomplete/i.test(
+                                message,
+                              )
+                            ? 422
+                            : 500;
       const publicMessage =
-        status < 500
-          ? message
-          : cause instanceof RefundCapacityError
-            ? 'refund protection is temporarily unavailable'
-            : cause instanceof OperatorAdmissionError
-              ? message
-              : 'request failed; retry later';
+        cause instanceof GithubReadinessError
+          ? cause.message
+          : status < 500
+            ? message
+            : cause instanceof RefundCapacityError
+              ? 'refund protection is temporarily unavailable'
+              : cause instanceof OperatorAdmissionError
+                ? message
+                : 'request failed; retry later';
       return json(res, status, { error: publicMessage });
     }
   };
@@ -906,6 +1159,32 @@ function boundedInt(value: string | null, fallback: number, min: number, max: nu
   return Number.isInteger(parsed) && parsed >= min && parsed <= max ? parsed : fallback;
 }
 
+function accountRepositoryInput(body: { repository?: unknown; owner?: unknown; repo?: unknown }): {
+  owner: string;
+  repo: string;
+} {
+  if (typeof body.owner === 'string' && typeof body.repo === 'string') {
+    return validatedRepository(body.owner, body.repo);
+  }
+  if (typeof body.repository !== 'string') {
+    throw new InvalidRequestBodyError('repository or owner and repo are required');
+  }
+  const value = body.repository.trim();
+  const url = value.match(/^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/?$/i);
+  if (url) return validatedRepository(url[1]!, url[2]!);
+  const identity = value.match(/^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)$/);
+  if (!identity) throw new InvalidRequestBodyError('repository must be owner/repo');
+  return validatedRepository(identity[1]!, identity[2]!);
+}
+
+function validatedRepository(owner: string, repo: string): { owner: string; repo: string } {
+  const segment = /^[A-Za-z0-9_.-]{1,100}$/;
+  if (!segment.test(owner) || !segment.test(repo)) {
+    throw new InvalidRequestBodyError('repository identity is invalid');
+  }
+  return { owner, repo };
+}
+
 function admin(req: IncomingMessage, expected: string | undefined): boolean {
   if (!expected) return false;
   const supplied = header(req, 'authorization')?.replace(/^Bearer\s+/i, '');
@@ -944,6 +1223,140 @@ function sessionCookie(
     'Max-Age=604800',
     ...(secure ? ['Secure'] : []),
   ].join('; ');
+}
+
+function expiredSessionCookie(
+  req: IncomingMessage,
+  trustedProxyHops: number,
+  webProxySecret: string | undefined,
+): string {
+  const secure = requestScheme(req, trustedProxyHops, webProxySecret) === 'https';
+  return [
+    'mizuki_session=',
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    'Max-Age=0',
+    'Expires=Thu, 01 Jan 1970 00:00:00 GMT',
+    ...(secure ? ['Secure'] : []),
+  ].join('; ');
+}
+
+function accountBilling(mode: Config['paymentMode'], page: AccountJobsPage) {
+  const { jobs } = page;
+  const paid = jobs.filter(
+    (job) => job.state !== 'settlement_pending' && job.payment.transaction !== 'pending',
+  );
+  const refunded = paid.filter((job) => job.state === 'refunded' && job.refundTransaction);
+  const delivered = paid.filter((job) => job.state === 'delivered');
+  const protectedJobs = paid.filter((job) => !['delivered', 'refunded'].includes(job.state));
+  const transactions = paid
+    .flatMap((job) => [
+      {
+        jobId: job.id,
+        type: 'payment' as const,
+        status: 'finalized' as const,
+        amountAtomic: job.payment.amountAtomic,
+        transaction: job.payment.transaction,
+        createdAt: job.createdAt,
+      },
+      ...(job.refundTransaction
+        ? [
+            {
+              jobId: job.id,
+              type: 'refund' as const,
+              status: 'finalized' as const,
+              amountAtomic: job.payment.amountAtomic,
+              transaction: job.refundTransaction,
+              createdAt: job.updatedAt,
+            },
+          ]
+        : job.state === 'refund_pending'
+          ? [
+              {
+                jobId: job.id,
+                type: 'refund' as const,
+                status: 'pending' as const,
+                amountAtomic: job.payment.amountAtomic,
+                transaction: null,
+                createdAt: job.updatedAt,
+              },
+            ]
+          : []),
+    ])
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  return {
+    mode,
+    asset: 'USDC',
+    decimals: USDC_DECIMALS,
+    limit: page.limit,
+    truncated: page.truncated,
+    totalsScope: page.truncated ? ('latest_jobs' as const) : ('account_lifetime' as const),
+    totals: {
+      paidAtomic: sumJobAmounts(paid),
+      refundedAtomic: sumJobAmounts(refunded),
+      deliveredAtomic: sumJobAmounts(delivered),
+      protectedAtomic: sumJobAmounts(protectedJobs),
+    },
+    transactions,
+  };
+}
+
+function sumJobAmounts(jobs: Job[]): string {
+  return jobs.reduce((total, job) => total + BigInt(job.payment.amountAtomic), 0n).toString();
+}
+
+async function repositoryPolicyReadiness(
+  deps: Pick<AppDependencies, 'policy'>,
+  repository: string,
+): Promise<
+  | { status: 'ready'; verifierAppId: string; installationId: number }
+  | { status: 'action_required'; reason: string }
+  | { status: 'unavailable'; reason: string }
+> {
+  try {
+    const readiness = await deps.policy.assertRepositoryReady(repository);
+    return {
+      status: 'ready',
+      verifierAppId: readiness.verifierAppId,
+      installationId: readiness.installationId,
+    };
+  } catch (cause) {
+    if (cause instanceof PolicyRequestError && cause.code === 'github_app_not_installed') {
+      return {
+        status: 'action_required',
+        reason: 'Install the read-only policy verifier on this repository.',
+      };
+    }
+    return {
+      status: 'unavailable',
+      reason: 'The read-only policy verifier is temporarily unavailable.',
+    };
+  }
+}
+
+function accountRepositoryBlocker(cause: unknown): string {
+  if (cause instanceof GithubAccessError) return cause.message;
+  if (cause instanceof GithubReadinessError) return cause.message;
+  return 'Repository readiness could not be verified. Try again shortly.';
+}
+
+async function mapConcurrent<T, R>(
+  values: T[],
+  concurrency: number,
+  operation: (value: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(values.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(concurrency, values.length) }, async () => {
+    while (next < values.length) {
+      const index = next;
+      next += 1;
+      results[index] = await operation(values[index]!);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 class ConcurrentPaymentReservation extends Error {

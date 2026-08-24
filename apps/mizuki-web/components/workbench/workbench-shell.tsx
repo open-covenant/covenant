@@ -1,0 +1,196 @@
+'use client';
+
+import Image from 'next/image';
+import Link from 'next/link';
+import { usePathname, useRouter } from 'next/navigation';
+import { normalizeAccount } from '@/lib/workbench';
+import { useWorkbenchResource, workbenchRequest } from '@/lib/workbench-client';
+
+const primaryNavigation = [
+  { href: '/app', label: 'Overview', exact: true },
+  { href: '/app/repositories', label: 'Repositories' },
+  { href: '/app/jobs', label: 'Jobs' },
+  { href: '/app/bounties', label: 'Bounties' },
+  { href: '/app/billing', label: 'Payments & refunds' },
+];
+
+const secondaryNavigation = [
+  { href: '/app/integrations', label: 'Integrations' },
+  { href: '/app/settings', label: 'Settings' },
+];
+
+export function WorkbenchShell({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
+  const router = useRouter();
+  const account = useWorkbenchResource('/v1/account', normalizeAccount);
+
+  if (account.status === 'loading') return <WorkbenchShellLoading />;
+  if (account.status === 'unauthorized') return <WorkbenchSignIn />;
+  if (account.status === 'error') {
+    return (
+      <WorkbenchAccessState
+        mark="!"
+        title="Workbench could not confirm your GitHub account"
+        detail="No payment or repository action was attempted. Try loading your account again."
+        action={<button onClick={account.refresh}>Try again</button>}
+      />
+    );
+  }
+
+  async function logout() {
+    await workbenchRequest('/v1/auth/logout', { method: 'POST' }).catch(() => undefined);
+    router.push('/');
+    router.refresh();
+  }
+
+  return (
+    <div className="workbench-shell">
+      <aside className="workbench-rail">
+        <Link className="workbench-brand" href="/app" aria-label="Mizuki Workbench home">
+          <Image src="/mizuki-avatar.jpg" alt="" width={38} height={38} priority />
+          <span>
+            <strong>Mizuki</strong>
+            <small>Workbench</small>
+          </span>
+        </Link>
+
+        <Link className="workbench-new-job" href="/app/jobs/new">
+          <span aria-hidden="true">+</span> New maintenance job
+        </Link>
+
+        <WorkbenchNavigation pathname={pathname} items={primaryNavigation} />
+        <div className="workbench-rail-spacer" />
+        <WorkbenchNavigation pathname={pathname} items={secondaryNavigation} />
+
+        <div className="workbench-account">
+          <div className="workbench-account-mark" aria-hidden="true">
+            {account.data.githubLogin.slice(0, 1).toUpperCase()}
+          </div>
+          <div>
+            <strong>@{account.data.githubLogin}</strong>
+            <button type="button" onClick={() => void logout()}>
+              Sign out
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      <header className="workbench-mobile-header">
+        <Link href="/app" aria-label="Mizuki Workbench home">
+          <Image src="/mizuki-avatar.jpg" alt="" width={32} height={32} />
+          <strong>Mizuki Workbench</strong>
+        </Link>
+        <Link href="/app/jobs/new">New job</Link>
+      </header>
+
+      <section className="workbench-content">{children}</section>
+
+      <nav className="workbench-mobile-nav" aria-label="Workbench navigation">
+        {primaryNavigation.slice(0, 4).map((item) => (
+          <WorkbenchNavLink item={item} pathname={pathname} key={item.href} />
+        ))}
+        <WorkbenchNavLink item={{ href: '/app/settings', label: 'More' }} pathname={pathname} />
+      </nav>
+    </div>
+  );
+}
+
+function WorkbenchNavigation({
+  pathname,
+  items,
+}: {
+  pathname: string;
+  items: Array<{ href: string; label: string; exact?: boolean }>;
+}) {
+  return (
+    <nav className="workbench-navigation" aria-label="Workbench sections">
+      {items.map((item) => (
+        <WorkbenchNavLink item={item} pathname={pathname} key={item.href} />
+      ))}
+    </nav>
+  );
+}
+
+function WorkbenchNavLink({
+  item,
+  pathname,
+}: {
+  item: { href: string; label: string; exact?: boolean };
+  pathname: string;
+}) {
+  const current = item.exact ? pathname === item.href : pathname.startsWith(item.href);
+  return (
+    <Link href={item.href} aria-current={current ? 'page' : undefined}>
+      <i aria-hidden="true" />
+      <span>{item.label}</span>
+    </Link>
+  );
+}
+
+function WorkbenchSignIn() {
+  return (
+    <WorkbenchAccessState
+      mark="M"
+      title="Sign in to Mizuki Workbench"
+      detail="Use GitHub to manage public repositories, request fixed quotes, and track pull requests or refunds."
+      action={
+        <a href="/api/mizuki/v1/auth/github?return_to=%2Fapp">
+          Continue with GitHub <span aria-hidden="true">↗</span>
+        </a>
+      }
+      secondary={<Link href="/work">Request a quote without opening Workbench</Link>}
+    />
+  );
+}
+
+function WorkbenchAccessState({
+  mark,
+  title,
+  detail,
+  action,
+  secondary,
+}: {
+  mark: string;
+  title: string;
+  detail: string;
+  action: React.ReactNode;
+  secondary?: React.ReactNode;
+}) {
+  return (
+    <div className="workbench-access">
+      <div className="workbench-access-card">
+        <Link className="workbench-access-brand" href="/">
+          <Image src="/mizuki-avatar.jpg" alt="" width={48} height={48} priority />
+          <span>Mizuki the Mech</span>
+        </Link>
+        <span className="workbench-access-mark" aria-hidden="true">
+          {mark}
+        </span>
+        <h1>{title}</h1>
+        <p>{detail}</p>
+        <div className="workbench-access-actions">
+          {action}
+          {secondary}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function WorkbenchShellLoading() {
+  return (
+    <div className="workbench-shell workbench-shell-loading" aria-busy="true">
+      <aside className="workbench-rail">
+        <div className="workbench-skeleton brand-skeleton" />
+        <div className="workbench-skeleton action-skeleton" />
+        {Array.from({ length: 7 }, (_, index) => (
+          <div className="workbench-skeleton nav-skeleton" key={index} />
+        ))}
+      </aside>
+      <section className="workbench-content">
+        <div className="workbench-skeleton heading-skeleton" />
+        <div className="workbench-skeleton panel-skeleton" />
+      </section>
+    </div>
+  );
+}

@@ -1,6 +1,5 @@
 import type { Metadata, Viewport } from 'next';
-import { SiteFooter } from '@/components/site-footer';
-import { SiteHeader } from '@/components/site-header';
+import { SiteFrame } from '@/components/site-frame';
 import { getAdmission } from '@/lib/api';
 import './globals.css';
 
@@ -60,12 +59,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
   return (
     <html lang="en">
       <body>
-        <a href="#main" className="skip-link">
-          Skip to content
-        </a>
-        <SiteHeader intakeOpen={intakeOpen} />
-        <main id="main">{children}</main>
-        <SiteFooter intakeOpen={intakeOpen} />
+        <SiteFrame intakeOpen={intakeOpen}>{children}</SiteFrame>
       </body>
     </html>
   );

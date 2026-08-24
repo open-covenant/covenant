@@ -65,6 +65,7 @@ export type Job = {
   id: string;
   state: JobState;
   issueUrl: string;
+  issueTitle?: string;
   class: JobClass;
   priceAtomic: string;
   paymentTransaction?: string;

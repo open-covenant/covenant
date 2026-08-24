@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  type BountyClaim,
   createContributorEscrow,
   createRescueBounty,
   transitionContributorEscrow,
@@ -349,16 +350,91 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
         checksum: string;
       }>(
         `SELECT component, version, name, checksum FROM mizuki_schema_migrations
-         WHERE component IN ('core', 'admission-control') ORDER BY component, version`,
+         WHERE component IN ('core', 'admission-control', 'workbench')
+         ORDER BY component, version`,
       );
       expect(result.rows).toMatchObject([
         { component: 'admission-control', version: 1, name: 'admission-control-audit' },
         { component: 'core', version: 1, name: 'commercial-core' },
+        { component: 'workbench', version: 1, name: 'workbench-accounts' },
       ]);
       expect(result.rows.every((row) => /^[a-f0-9]{64}$/.test(row.checksum))).toBe(true);
     } finally {
       await Promise.all([left.close(), right.close(), pool.end()]);
     }
+  });
+
+  it('serializes the repository cap per account and keeps listing bounded', async () => {
+    const githubId = randomUUID();
+    await store.upsertContributor(githubId, 'repository-cap-maintainer');
+    await Promise.all(
+      Array.from({ length: 24 }, (_, index) =>
+        store.linkAccountRepository(githubId, 'example', `project-${index}`),
+      ),
+    );
+
+    const boundary = await Promise.allSettled([
+      store.linkAccountRepository(githubId, 'example', 'project-24'),
+      store.linkAccountRepository(githubId, 'example', 'project-25'),
+    ]);
+    expect(boundary.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(
+      boundary.some(
+        (result) =>
+          result.status === 'rejected' &&
+          result.reason instanceof StateConflictError &&
+          result.reason.message === 'account repository limit of 25 reached',
+      ),
+    ).toBe(true);
+    await expect(
+      store.linkAccountRepository(githubId, 'Example', 'project-0'),
+    ).resolves.toMatchObject({ repository: 'example/project-0', owner: 'Example' });
+
+    const bounded = await store.repositoriesForAccount(githubId, 10);
+    expect(bounded.repositories).toHaveLength(10);
+    expect(bounded).toMatchObject({ limit: 10, truncated: true });
+    const complete = await store.repositoriesForAccount(githubId, 25);
+    expect(complete.repositories).toHaveLength(25);
+    expect(complete).toMatchObject({ limit: 25, truncated: false });
+  });
+
+  it('filters and bounds account bounty history in PostgreSQL', async () => {
+    const quote = await saveQuote(store);
+    const { job } = await store.createJob(
+      quote,
+      { payer: '7'.repeat(32), transaction: randomUUID(), amountAtomic: '2000000' },
+      `account-bounties-${randomUUID()}`,
+    );
+    const githubId = randomUUID();
+    const active = {
+      ...bounty(job.id, quote, 0),
+      state: 'open' as const,
+      activeClaim: accountClaim(githubId, 'active'),
+    };
+    const historical = {
+      ...bounty(job.id, quote, 1),
+      state: 'open' as const,
+      claimHistory: [accountClaim(githubId, 'released')],
+    };
+    const unrelated = {
+      ...bounty(job.id, quote, 2),
+      state: 'open' as const,
+      activeClaim: accountClaim(randomUUID(), 'active'),
+    };
+    await Promise.all([
+      store.createBounty(active),
+      store.createBounty(historical),
+      store.createBounty(unrelated),
+    ]);
+
+    const bounded = await store.bountiesForAccount(githubId, 1);
+    expect(bounded.bounties).toHaveLength(1);
+    expect(bounded).toMatchObject({ limit: 1, truncated: true });
+    const complete = await store.bountiesForAccount(githubId, 100);
+    expect(new Set(complete.bounties.map((candidate) => candidate.id))).toEqual(
+      new Set([active.id, historical.id]),
+    );
+    expect(complete).toMatchObject({ limit: 100, truncated: false });
   });
 
   it('upgrades the exact v1 schema to an append-only admission ledger', async () => {
@@ -421,6 +497,40 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
       ).resolves.toMatchObject({ revision: 5, intakeEnabled: false, claimsEnabled: false });
       await expect(upgraded.operatorControlsAudit()).resolves.toHaveLength(2);
 
+      const githubId = randomUUID();
+      await upgraded.upsertContributor(githubId, 'migration-maintainer');
+      const quote = await saveQuote(upgraded);
+      await upgraded.linkQuoteToAccount(quote.id, githubId);
+      const repository = await upgraded.linkAccountRepository(githubId, quote.owner, quote.repo);
+      const { job } = await upgraded.createJob(
+        quote,
+        { payer: '5'.repeat(32), transaction: randomUUID(), amountAtomic: '2000000' },
+        `migration-${randomUUID()}`,
+      );
+      await expect(upgraded.jobsForAccount(githubId, 100)).resolves.toEqual({
+        jobs: [job],
+        limit: 100,
+        truncated: false,
+      });
+      const secondQuote = await saveQuote(upgraded);
+      await upgraded.linkQuoteToAccount(secondQuote.id, githubId);
+      await upgraded.createJob(
+        secondQuote,
+        { payer: '6'.repeat(32), transaction: randomUUID(), amountAtomic: '2000000' },
+        `migration-second-${randomUUID()}`,
+      );
+      const bounded = await upgraded.jobsForAccount(githubId, 1);
+      expect(bounded.jobs).toHaveLength(1);
+      expect(bounded).toMatchObject({ limit: 1, truncated: true });
+      const complete = await upgraded.jobsForAccount(githubId, 100);
+      expect(complete.jobs).toHaveLength(2);
+      expect(complete).toMatchObject({ limit: 100, truncated: false });
+      await expect(upgraded.repositoriesForAccount(githubId, 25)).resolves.toEqual({
+        repositories: [repository],
+        limit: 25,
+        truncated: false,
+      });
+
       const verificationPool = new Pool({ connectionString: upgradeUrl.toString() });
       try {
         await expect(
@@ -438,11 +548,13 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
           name: string;
         }>(
           `SELECT component, version, name FROM mizuki_schema_migrations
-           WHERE component IN ('core', 'admission-control') ORDER BY component, version`,
+           WHERE component IN ('core', 'admission-control', 'workbench')
+           ORDER BY component, version`,
         );
         expect(migrations.rows).toEqual([
           { component: 'admission-control', version: 1, name: 'admission-control-audit' },
           { component: 'core', version: 1, name: 'commercial-core' },
+          { component: 'workbench', version: 1, name: 'workbench-accounts' },
         ]);
       } finally {
         await verificationPool.end();
@@ -494,4 +606,17 @@ function bounty(
     predecessorBountyId,
     at: new Date().toISOString(),
   });
+}
+
+function accountClaim(claimantId: string, state: BountyClaim['state']): BountyClaim {
+  const at = '2026-08-25T00:00:00.000Z';
+  return {
+    id: randomUUID(),
+    claimantId,
+    walletAddress: '1'.repeat(32),
+    state,
+    claimedAt: at,
+    leaseExpiresAt: '2026-08-27T00:00:00.000Z',
+    ...(state === 'active' ? {} : { closedAt: at }),
+  };
 }

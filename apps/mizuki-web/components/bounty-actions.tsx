@@ -13,12 +13,16 @@ export function BountyActions({
   claimantLogin,
   pullRequestUrl,
   hasDispute,
+  returnTo,
+  onMutated,
 }: {
   bountyId: string;
   state: BountyState;
   claimantLogin: string;
   pullRequestUrl?: string;
   hasDispute: boolean;
+  returnTo?: string;
+  onMutated?: () => void | Promise<void>;
 }) {
   const router = useRouter();
   const [session, setSession] = useState<SessionState>('loading');
@@ -86,7 +90,8 @@ export function BountyActions({
         return;
       }
       setSuccess(message);
-      router.refresh();
+      if (onMutated) await onMutated();
+      else router.refresh();
     } catch {
       setError(actionError(0, kind));
     } finally {
@@ -99,7 +104,7 @@ export function BountyActions({
     return (
       <div className="claimant-actions">
         <p>Sign in as @{claimantLogin} to submit work or open a dispute.</p>
-        <GithubClaimButton bountyId={bountyId} />
+        <GithubClaimButton bountyId={bountyId} returnTo={returnTo} />
       </div>
     );
   }

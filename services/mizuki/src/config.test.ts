@@ -100,7 +100,7 @@ describe('updater configuration', () => {
       readinessRefreshMs: 20000,
       readinessMaxAgeMs: 60000,
       readinessTimeoutMs: 10000,
-      escrowReadinessMinLamports: '1000000000',
+      escrowReadinessMinLamports: '500000000',
     });
     expect(() => loadConfig({ MIZUKI_ESCROW_READINESS_MIN_LAMPORTS: '0' })).toThrow(
       'positive atomic amount',

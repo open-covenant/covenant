@@ -11,6 +11,7 @@ export function publicJob(job: Job) {
     id: job.id,
     state: job.state,
     issueUrl: job.quote.issueUrl,
+    issueTitle: job.quote.issueTitle,
     class: job.quote.class,
     priceAtomic: job.quote.priceAtomic,
     paymentTransaction: job.payment.transaction,

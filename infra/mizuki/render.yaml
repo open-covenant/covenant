@@ -89,7 +89,7 @@ services:
       - key: MIZUKI_READINESS_TIMEOUT_MS
         value: '20000'
       - key: MIZUKI_ESCROW_READINESS_MIN_LAMPORTS
-        value: '1000000000'
+        value: '500000000'
       - key: MIZUKI_DATABASE_URL
         fromDatabase:
           name: mizuki-postgres

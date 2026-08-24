@@ -2,6 +2,7 @@ import Image from 'next/image';
 import Link from 'next/link';
 
 const navigation = [
+  { href: '/app', label: 'Workbench' },
   { href: '/bounties', label: 'Bounties' },
   { href: '/treasury', label: 'Financials' },
   { href: '/capabilities', label: 'Capabilities' },
@@ -9,10 +10,6 @@ const navigation = [
 ];
 
 export function SiteHeader({ intakeOpen }: { intakeOpen: boolean }) {
-  const links = intakeOpen
-    ? [{ href: '/work', label: 'Submit an issue' }, ...navigation]
-    : navigation;
-
   return (
     <header className="site-header">
       <div className="shell header-inner">
@@ -50,7 +47,7 @@ export function SiteHeader({ intakeOpen }: { intakeOpen: boolean }) {
           </Link>
         </div>
         <nav className="site-nav" aria-label="Main navigation">
-          {links.map((item) => (
+          {navigation.map((item) => (
             <Link key={item.href} href={item.href}>
               {item.label}
             </Link>
@@ -59,7 +56,7 @@ export function SiteHeader({ intakeOpen }: { intakeOpen: boolean }) {
         <details className="mobile-nav">
           <summary>Menu</summary>
           <nav aria-label="Mobile navigation">
-            {links.map((item) => (
+            {navigation.map((item) => (
               <Link key={item.href} href={item.href}>
                 {item.label}
               </Link>

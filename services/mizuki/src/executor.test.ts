@@ -105,6 +105,7 @@ describe('JobProcessor', () => {
           ready: false,
           dependencies: {
             model: { ok: true, checkedAt: '2026-08-22T12:00:00.000Z', latencyMs: 12 },
+            balance: { ok: true, checkedAt: '2026-08-22T12:00:00.000Z', latencyMs: 8 },
             sandbox: { ok: true, checkedAt: '2026-08-22T12:00:00.000Z', latencyMs: 24 },
             tariff: { ok: false, checkedAt: '2026-08-22T12:00:00.000Z', latencyMs: 18 },
           },
@@ -756,6 +757,7 @@ function gatewayReadiness(
     lastSuccessfulAgeMs: 0,
     dependencies: {
       model: { ok: true, checkedAt, latencyMs: 12 },
+      balance: { ok: true, checkedAt, latencyMs: 8 },
       sandbox: { ok: true, checkedAt, latencyMs: 24 },
       tariff: { ok: true, checkedAt, latencyMs: 18 },
     },

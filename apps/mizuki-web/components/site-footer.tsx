@@ -5,7 +5,7 @@ export function SiteFooter({ intakeOpen }: { intakeOpen: boolean }) {
   return (
     <footer className="site-footer">
       <div className="shell footer-grid">
-        <div>
+        <div className="footer-intro">
           <div className="footer-brand-row">
             <a href="https://opencovenant.org" aria-label="OpenCovenant home">
               <Image src="/covenant-logomark.png" alt="OpenCovenant" width={28} height={28} />
@@ -24,29 +24,64 @@ export function SiteFooter({ intakeOpen }: { intakeOpen: boolean }) {
             Public GitHub maintenance · USDC payments on Solana · AI execution through UsePod
           </p>
         </div>
-        <div className="footer-links" aria-label="Footer navigation">
-          <Link href="/work">{intakeOpen ? 'Submit an issue' : 'Service status'}</Link>
-          <Link href="/bounties">Browse bounties</Link>
-          <Link href="/activity">Activity log</Link>
-          <a href="https://github.com/open-covenant/covenant" rel="noreferrer" target="_blank">
-            GitHub <span aria-hidden="true">↗</span>
-          </a>
-          <a href="https://x.com/MizukiMech" rel="noreferrer" target="_blank">
-            X · @MizukiMech <span aria-hidden="true">↗</span>
-          </a>
-          <a href="https://opencovenant.org" rel="noreferrer">
-            OpenCovenant <span aria-hidden="true">↗</span>
-          </a>
-          <Link href="/terms">Service terms</Link>
-          <Link href="/privacy">Privacy and data use</Link>
-          <Link href="/security">Security</Link>
-          <Link href="/support">Support</Link>
+        <div className="footer-column">
+          <h3>Service</h3>
+          <nav aria-label="Service links">
+            <Link href="/work">{intakeOpen ? 'Submit an issue' : 'Service status'}</Link>
+            <Link href="/bounties">Bounties</Link>
+            <Link href="/activity">Log</Link>
+          </nav>
         </div>
-        <div className="footer-operator">
-          Public records
-          <small>
-            Payments, refunds, pull requests, bounties, and payouts are recorded publicly.
-          </small>
+        <div className="footer-column">
+          <h3>Evidence</h3>
+          <nav aria-label="Evidence links">
+            <Link href="/treasury">Financials</Link>
+            <Link href="/capabilities">Capabilities</Link>
+            <Link href="/activity">Public activity</Link>
+          </nav>
+        </div>
+        <div className="footer-column">
+          <h3>Network</h3>
+          <nav aria-label="Network links">
+            <a
+              href="https://clawpump.tech/marketplace/agents/711fa8b1-5f37-4451-b7a7-bfcb9a021f6d"
+              rel="noreferrer"
+              target="_blank"
+            >
+              ClawPump
+            </a>
+            <a href="https://usepod.ai" rel="noreferrer" target="_blank">
+              UsePod
+            </a>
+            <a
+              href="https://pump.fun/coin/DwquZcs2JtPe2w9xfyqF9wDnySQXLBHTMawusJ8Uk1mi"
+              rel="noreferrer"
+              target="_blank"
+            >
+              $MIZUKI
+            </a>
+          </nav>
+        </div>
+        <div className="footer-column">
+          <h3>Developers</h3>
+          <nav aria-label="Developer links">
+            <a href="https://github.com/open-covenant/covenant" rel="noreferrer" target="_blank">
+              GitHub
+            </a>
+            <Link href="/security">Security</Link>
+            <Link href="/support">Support</Link>
+          </nav>
+        </div>
+        <div className="footer-column">
+          <h3>Company</h3>
+          <nav aria-label="Company links">
+            <a href="https://opencovenant.org">OpenCovenant</a>
+            <a href="https://x.com/MizukiMech" rel="noreferrer" target="_blank">
+              Follow on X
+            </a>
+            <Link href="/terms">Terms</Link>
+            <Link href="/privacy">Privacy</Link>
+          </nav>
         </div>
       </div>
       <div className="shell footer-bottom">

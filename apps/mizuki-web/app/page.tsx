@@ -115,7 +115,7 @@ export default async function HomePage() {
         className="metrics-band"
         aria-label={demo ? 'Example commercial metrics' : 'Live commercial metrics'}
       >
-        <div className="shell">
+        <div className={overview.metrics.status === 'error' ? 'shell metrics-band-state' : 'shell'}>
           {overview.metrics.status === 'error' ? (
             <DataError />
           ) : (

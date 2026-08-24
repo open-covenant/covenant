@@ -36,7 +36,16 @@ describe('Mizuki public identity', () => {
     const footer = renderToStaticMarkup(<SiteFooter intakeOpen />);
 
     expect(footer).toContain('href="https://x.com/MizukiMech"');
-    expect(footer).toContain('@MizukiMech');
+    expect(footer).toContain('Follow on X');
+  });
+
+  it('links to the official ClawPump marketplace profile', () => {
+    const footer = renderToStaticMarkup(<SiteFooter intakeOpen />);
+
+    expect(footer).toContain(
+      'href="https://clawpump.tech/marketplace/agents/711fa8b1-5f37-4451-b7a7-bfcb9a021f6d"',
+    );
+    expect(footer).toContain('>ClawPump</a>');
   });
 
   it('replaces transactional calls to action when paid intake is closed', () => {
@@ -44,6 +53,7 @@ describe('Mizuki public identity', () => {
     const footer = renderToStaticMarkup(<SiteFooter intakeOpen={false} />);
 
     expect(header).toContain('View service status');
+    expect(header).not.toContain('>Service status</a>');
     expect(header).not.toContain('Request a quote');
     expect(footer).toContain('Service status');
     expect(footer).not.toContain('Submit an issue');

@@ -1,6 +1,6 @@
 # Mizuki Updater
 
-Mizuki Updater applies signed, benchmarked, independently reviewed changes to Mizuki. It verifies the release evidence, synchronizes a GitHub pull request, waits for every named check, exercises the candidate in a shadow deployment, merges the exact reviewed commit, promotes it, and observes the promoted deployment through a continuous health soak. Once a shadow exists, any terminal failure invokes rollback.
+Mizuki Updater applies signed, benchmarked, independently reviewed changes to Mizuki. It verifies the release evidence, synchronizes a GitHub pull request, waits for every named check, exercises the candidate in a shadow deployment, merges the exact reviewed commit, promotes it, and requires a fresh post-promotion health receipt. Once a shadow exists, any terminal failure invokes rollback.
 
 This service has no wallet keys, financial credentials, transfer methods, or payment endpoints. Mizuki can change his application, but this updater can only operate on explicitly allowed repositories and fixed deployment hooks.
 
@@ -34,10 +34,10 @@ The updater fails closed unless all of the following are true:
 - Shadow health reports the reviewed commit as healthy.
 - The required checks are still successful immediately before merge.
 - The durable promotion control is explicitly enabled before the updater acquires the single active promotion reservation.
-- That reservation remains owned through merge reconciliation, production promotion, the full health soak, controller finalization, and any terminal rollback.
-- The promoted deployment reports the exact reviewed commit as continuously healthy for the configured soak window.
+- That reservation remains owned through merge reconciliation, production promotion, post-promotion verification, controller finalization, and any terminal rollback.
+- The promoted deployment reports the exact reviewed commit as healthy at the final post-promotion observation.
 
-External actions are resumable. Pull-request synchronization and merge inspect existing GitHub state before acting, including reconciliation of a merge committed before a worker crash. Deployment hooks receive stable idempotency keys and must return the same receipt when those keys are replayed. Promotion hook success is durably recorded as `verifying_promotion`; it is never treated as completion by itself. Completion requires a successful controller finalization after the soak. Promotion control starts closed after migration. Every control change, reservation acquisition, release, terminal reconciliation, rollback lockout, and operator resolution advances its revision and appends an immutable audit entry. A failed rollback retains its reservation and closes promotions until an operator explicitly resolves it while control remains closed.
+External actions are resumable. Pull-request synchronization and merge inspect existing GitHub state before acting, including reconciliation of a merge committed before a worker crash. Deployment hooks receive stable idempotency keys and must return the same receipt when those keys are replayed. Promotion hook success is durably recorded as `verifying_promotion`; it is never treated as completion by itself. Completion requires a fresh healthy receipt and successful controller finalization. Promotion control starts closed after migration. Every control change, reservation acquisition, release, terminal reconciliation, rollback lockout, and operator resolution advances its revision and appends an immutable audit entry. A failed rollback retains its reservation and closes promotions until an operator explicitly resolves it while control remains closed.
 
 ## Signed proposal
 
@@ -208,7 +208,7 @@ The updater persists that operation ID before polling the controller's fixed pro
 }
 ```
 
-`healthy` with `active: false`, a shadow-environment receipt, or a mismatched candidate, merge, or operation is rejected and rolled back. `starting` is allowed only before the first active healthy observation. `unhealthy`, a return to `starting` after health was established, exhausted health retries, or `MIZUKI_UPDATER_PROMOTION_TIMEOUT_MS` also triggers rollback. Only a latest active production receipt at the end of `MIZUKI_UPDATER_PROMOTION_SOAK_MS` moves the upgrade to `completed`.
+`healthy` with `active: false`, a shadow-environment receipt, or a mismatched candidate, merge, or operation is rejected and rolled back. `starting` is allowed only before the first active healthy observation. `unhealthy`, a return to `starting` after health was established, exhausted health retries, or `MIZUKI_UPDATER_PROMOTION_TIMEOUT_MS` also triggers rollback. Only a latest active production receipt after the hard ten-second observation interval moves the upgrade to `completed`.
 
 The rollback hook receives the persisted promotion operation ID when promotion began. It must finish rollback and return `{ "status": "completed" }`, with an optional rollback `operationId`. Asynchronous acceptance responses are rejected.
 
@@ -253,10 +253,10 @@ The event Blueprint deliberately runs one updater instance and relies on durable
 ## Operations
 
 - Alert on `rollback_failed`, any nonzero `mizuki_updater_errors_total` increase, and upgrades stuck beyond their configured check, shadow-health, or promotion-health deadline.
-- Keep the promotion timeout at least one poll interval longer than the soak. The event Blueprint uses a three-hour soak, a three-hour-ten-minute deadline, and five-second polls.
+- Keep the promotion timeout at least one poll interval longer than the observation window. The event Blueprint uses one hard ten-second post-promotion observation interval, a two-minute deadline, and five-second polls; it does not impose a release soak.
 - Preserve audit rows indefinitely. Each receipt links the preceding hash, so deletion or reordering is detectable.
 - Rotate the API token, deployment token, and GitHub App key independently.
 - Rotate proposal keys by adding the new public key, deploying, changing the offline signer, then removing the old key after all old proposals expire.
-- Keep promotions closed except during an observed release window. Read the current revision, enable with a recorded reason, watch the candidate through the production soak, then close the next revision.
+- Keep promotions closed except during an observed release window. Read the current revision, enable with a recorded reason, verify the post-promotion receipt, then close the next revision.
 - If a pause request times out while a hook may be in flight, keep the control closed, read the upgrade record, and reconcile the hook's stable idempotency key with the deployment system. Do not reopen or manually repeat promotion until the operation ID and active production revision are known.
 - Investigate a failed rollback before any further promotion. Do not edit an upgrade row to bypass a gate.

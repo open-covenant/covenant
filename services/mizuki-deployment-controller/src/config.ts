@@ -57,7 +57,7 @@ const schema = z
       .int()
       .min(10_000)
       .max(24 * 60 * 60_000)
-      .default(3 * 60 * 60_000),
+      .default(10_000),
   })
   .passthrough();
 

@@ -114,8 +114,8 @@ tariff evidence, restricted egress, and durable ledger and run-receipt paths.
 Readiness uses only non-billable control-plane checks: UsePod's model catalog
 and token-balance endpoint, E2B's sandbox-list API, and the public tariff
 evidence. The balance response must contain one safe-integer `usdc_balance` in
-USDC microunits and one matching `X-Balance-Remaining` value. Missing, malformed,
-duplicate, conflicting, or below-floor evidence closes intake. Paid model and
+USDC microunits. When `X-Balance-Remaining` is present, it must match exactly.
+Malformed, duplicate, conflicting, or below-floor evidence closes intake. Paid model and
 sandbox probes are intentionally forbidden because repeated readiness polling
 would sit outside the job ledger. Run admission fails closed while that cached
 readiness evidence is unhealthy. Each validated paid turn persists non-secret route data,

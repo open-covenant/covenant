@@ -251,9 +251,11 @@ export async function probeUsePodBalance(
     throw new Error('UsePod balance check returned invalid USDC microunits');
   }
 
-  const headerBalance = requiredAtomicHeader(response, 'x-balance-remaining');
+  const headerBalance = response.headers.has('x-balance-remaining')
+    ? requiredAtomicHeader(response, 'x-balance-remaining')
+    : undefined;
   const bodyMicrounits = BigInt(bodyBalance);
-  if (bodyMicrounits !== BigInt(headerBalance)) {
+  if (headerBalance && bodyMicrounits !== BigInt(headerBalance)) {
     throw new Error('UsePod balance evidence conflicts between body and header');
   }
   const minimum = config.minimumBalance ?? '1';

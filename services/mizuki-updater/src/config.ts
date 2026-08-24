@@ -78,14 +78,14 @@ const envSchema = z
       .number()
       .int()
       .min(10_000)
-      .max(30 * 60_000)
-      .default(2 * 60_000),
+      .max(24 * 60 * 60_000)
+      .default(3 * 60 * 60_000),
     MIZUKI_UPDATER_PROMOTION_TIMEOUT_MS: z.coerce
       .number()
       .int()
       .min(20_000)
-      .max(2 * 60 * 60_000)
-      .default(10 * 60_000),
+      .max(24 * 60 * 60_000)
+      .default(3 * 60 * 60_000 + 10 * 60_000),
     MIZUKI_UPDATER_POLL_INTERVAL_MS: z.coerce.number().int().min(250).max(60_000).default(5_000),
     MIZUKI_UPDATER_LEASE_MS: z.coerce.number().int().min(5_000).max(300_000).default(60_000),
     MIZUKI_UPDATER_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(5),

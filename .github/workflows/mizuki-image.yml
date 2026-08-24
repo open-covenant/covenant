@@ -274,7 +274,7 @@ jobs:
 
           config_digest=$(jq -er .config.digest evidence/manifest.oci.json)
           config_bytes_expected=$(jq -er .config.size evidence/manifest.oci.json)
-          curl --fail --silent --show-error --retry 3 \
+          curl --fail --location --silent --show-error --retry 3 \
             --header "Authorization: Bearer $registry_token" \
             --output evidence/image-config.oci.json \
             "https://ghcr.io/v2/$image_path/blobs/$config_digest"

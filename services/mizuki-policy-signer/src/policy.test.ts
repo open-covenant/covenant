@@ -541,8 +541,10 @@ describe('refund policy', () => {
   });
 
   it('rejects expired authorization and settlement outside the admitted payment window', async () => {
-    const { chain, policy } = fixture();
+    const now = Date.now();
+    const { chain, policy } = fixture({ now: () => new Date(now) });
     const facts = settlement();
+    facts.blockTimeUnixSeconds = Math.floor(now / 1_000);
     chain.settlements.set(facts.signature, facts);
     await expect(
       policy.registerRefundLiability(
@@ -550,7 +552,7 @@ describe('refund policy', () => {
           'register',
           'job-expired-auth',
           facts.signature,
-          new Date(Date.now() - 1).toISOString(),
+          new Date(now - 1).toISOString(),
         ),
         'register-expired-auth',
       ),

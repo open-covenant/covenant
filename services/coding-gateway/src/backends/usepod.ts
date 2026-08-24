@@ -9,6 +9,7 @@ import type {
 import {
   accountUsePodTurn,
   boundedMaxTokens,
+  parseUsePodCompletion,
   parseUsePodUsage,
   providerReceipt,
   usePodHeaders,
@@ -174,7 +175,7 @@ export class UsePodBackend implements CodingBackend {
         throw new Error(`UsePod HTTP ${response.status}: ${body.slice(0, 1_000)}`);
       }
 
-      const body = (await response.json()) as {
+      const body = (await parseUsePodCompletion(response)) as {
         model?: unknown;
         choices?: Array<{
           message?: { content?: string | null; tool_calls?: ToolCall[] };
@@ -244,6 +245,7 @@ export class UsePodBackend implements CodingBackend {
 function sameModel(requested: string, returned: unknown): boolean {
   if (returned === requested) return true;
   if (typeof returned !== 'string') return false;
+  if (requested === 'deepseek-v3.2') return returned === 'deepseek.v3.2';
   const separator = requested.indexOf('/');
   if (separator <= 0 || requested.indexOf('/', separator + 1) !== -1) return false;
   return returned === `${requested.slice(0, separator)}.${requested.slice(separator + 1)}`;
@@ -275,8 +277,10 @@ async function execute(
 ): Promise<string> {
   const input = args(call);
   switch (call.function.name) {
-    case 'read_file':
-      return sandbox.readFile(String(input.path));
+    case 'read_file': {
+      const content = await sandbox.readFile(String(input.path));
+      return content.length > 64_000 ? `${content.slice(0, 64_000)}\n[truncated]` : content;
+    }
     case 'write_file': {
       const path = String(input.path);
       const content = String(input.content ?? '');

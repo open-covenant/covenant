@@ -116,7 +116,7 @@ describe('UsePodBackend', () => {
     expect(urls[0]).toBe('https://usepod.test/proxy/test-key/v1/chat/completions');
   });
 
-  it('accepts UsePod canonicalizing the provider separator without accepting another model', async () => {
+  it('accepts documented UsePod model canonicalization without accepting another model', async () => {
     const response = (model: string) =>
       Response.json(
         {
@@ -145,6 +145,44 @@ describe('UsePodBackend', () => {
 
     vi.stubGlobal('fetch', async () => response('openai.gpt-oss-20b'));
     await expect(run()).rejects.toThrow('UsePod returned a different model');
+
+    const deepseek = () =>
+      new UsePodBackend('https://usepod.test', 'test-key', 'deepseek-v3.2').run({
+        input: 'fix docs',
+        sandbox: {} as Sandbox,
+        signal: new AbortController().signal,
+        emit: () => {},
+        maxProviderCostUsd: 1,
+      });
+    vi.stubGlobal('fetch', async () => response('deepseek.v3.2'));
+    await expect(deepseek()).resolves.toMatchObject({ output: 'Done.' });
+
+    vi.stubGlobal('fetch', async () => response('deepseek.v3.1'));
+    await expect(deepseek()).rejects.toThrow('UsePod returned a different model');
+  });
+
+  it('rejects oversized completion bodies before buffering them in memory', async () => {
+    vi.stubGlobal(
+      'fetch',
+      async () =>
+        new Response('{}', {
+          headers: {
+            'content-length': '2097153',
+            'x-pod-route': 'marketplace',
+            'x-balance-remaining': '5000000',
+          },
+        }),
+    );
+
+    await expect(
+      new UsePodBackend('https://usepod.test', 'test-key', 'deepseek-v3.2').run({
+        input: 'fix docs',
+        sandbox: {} as Sandbox,
+        signal: new AbortController().signal,
+        emit: () => {},
+        maxProviderCostUsd: 1,
+      }),
+    ).rejects.toThrow('UsePod completion exceeded the response size limit');
   });
 
   it('checkpoints a billed turn before a later response failure and preserves it on restart', async () => {

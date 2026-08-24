@@ -20,7 +20,7 @@ import {
 import { createQuote } from './quote.js';
 import { recordPaymentReceipts } from './receipts.js';
 import { assertLiabilityMatchesPayment, recoverSettlement } from './settlement-recovery.js';
-import type { MizukiStore } from './store.js';
+import { StateConflictError, type MizukiStore } from './store.js';
 import { GithubWebhookHandler, verifyGithubWebhook } from './webhooks.js';
 import type { Job, RepositoryAdmissionReceipt } from './types.js';
 import { Payments, USDC_DECIMALS, USDC_MAINNET, paymentRequiredHeader } from './x402.js';
@@ -33,6 +33,8 @@ import {
   type PolicyReadiness,
 } from './policy-client.js';
 import type { ServiceReadiness } from './readiness.js';
+
+const MAX_POSTGRES_INTEGER = 2_147_483_647;
 
 export type AppDependencies = {
   config: Config;
@@ -56,6 +58,9 @@ export function createApp(deps: AppDependencies) {
       const parts = url.pathname.split('/').filter(Boolean);
 
       applyCors(req, res, deps.config.webOrigin);
+      if (parts[0] === 'v1' && parts[1] === 'admin') {
+        res.setHeader('cache-control', 'private, no-store');
+      }
       if (req.method === 'OPTIONS') {
         res.writeHead(204);
         res.end();
@@ -512,6 +517,7 @@ export function createApp(deps: AppDependencies) {
         return json(res, 200, await deps.store.jobsList());
       }
       if (url.pathname === '/v1/admission' && req.method === 'GET') {
+        res.setHeader('cache-control', 'no-store');
         const controls = await readOperatorControls(deps.store);
         return json(res, 200, {
           intakeEnabled: controls.intakeEnabled,
@@ -524,9 +530,14 @@ export function createApp(deps: AppDependencies) {
         if (!admin(req, deps.config.adminToken)) return json(res, 401, { error: 'unauthorized' });
         return json(res, 200, await readOperatorControls(deps.store));
       }
+      if (url.pathname === '/v1/admin/admission/audit' && req.method === 'GET') {
+        if (!admin(req, deps.config.adminToken)) return json(res, 401, { error: 'unauthorized' });
+        return json(res, 200, await deps.store.operatorControlsAudit());
+      }
       if (url.pathname === '/v1/admin/admission' && req.method === 'POST') {
         if (!admin(req, deps.config.adminToken)) return json(res, 401, { error: 'unauthorized' });
         const body = await bodyJson<{
+          expectedRevision?: unknown;
           intakeEnabled?: unknown;
           claimsEnabled?: unknown;
           reason?: unknown;
@@ -540,6 +551,17 @@ export function createApp(deps: AppDependencies) {
         ) {
           return json(res, 400, { error: 'admission controls must be booleans' });
         }
+        if (
+          typeof body.expectedRevision !== 'number' ||
+          !Number.isSafeInteger(body.expectedRevision) ||
+          body.expectedRevision < 0 ||
+          body.expectedRevision > MAX_POSTGRES_INTEGER
+        ) {
+          return json(res, 400, {
+            error: `expectedRevision must be an integer between 0 and ${MAX_POSTGRES_INTEGER}`,
+          });
+        }
+        const expectedRevision = body.expectedRevision;
         if (
           typeof body.reason !== 'string' ||
           body.reason.trim().length < 10 ||
@@ -555,10 +577,19 @@ export function createApp(deps: AppDependencies) {
           return json(res, 409, { error: 'shadow admission is permanently closed' });
         }
         const controls = await deps.paymentAdmission.run(async () => {
-          if (body.intakeEnabled === true || body.claimsEnabled === true) {
-            await assertServiceReady(deps.readiness);
+          const current = await readOperatorControls(deps.store);
+          const opensAdmission = operatorControlTransitionOpens(current, body);
+          if (
+            expectedRevision > current.revision ||
+            (expectedRevision < current.revision && opensAdmission)
+          ) {
+            throw new StateConflictError(
+              `expected operator admission revision ${expectedRevision}; current revision is ${current.revision}`,
+            );
           }
+          if (opensAdmission) await assertServiceReady(deps.readiness);
           return deps.store.updateOperatorControls({
+            expectedRevision,
             ...(typeof body.intakeEnabled === 'boolean'
               ? { intakeEnabled: body.intakeEnabled }
               : {}),
@@ -698,6 +729,16 @@ export function createApp(deps: AppDependencies) {
       return json(res, status, { error: publicMessage });
     }
   };
+}
+
+function operatorControlTransitionOpens(
+  current: { intakeEnabled: boolean; claimsEnabled: boolean },
+  patch: { intakeEnabled?: unknown; claimsEnabled?: unknown },
+): boolean {
+  return (
+    (patch.intakeEnabled === true && !current.intakeEnabled) ||
+    (patch.claimsEnabled === true && !current.claimsEnabled)
+  );
 }
 
 export async function ensureRefundCapacity(
@@ -908,6 +949,8 @@ export class OperatorAdmissionError extends Error {}
 export class SerialGate {
   private tail = Promise.resolve();
 
+  constructor(private readonly exclusive?: <T>(operation: () => Promise<T>) => Promise<T>) {}
+
   async run<T>(operation: () => Promise<T>): Promise<T> {
     const previous = this.tail;
     let release!: () => void;
@@ -916,7 +959,7 @@ export class SerialGate {
     });
     await previous;
     try {
-      return await operation();
+      return this.exclusive ? await this.exclusive(operation) : await operation();
     } finally {
       release();
     }

@@ -25,6 +25,6 @@ Scrape the public API `/metrics` and the private signer `/metrics` every 30 seco
 
 ## Drill evidence
 
-For every launch rehearsal, retain the alert timestamp, admission-control audit row, affected job and signer operation IDs, both RPC observations, recovery result, and the time protection returned to verified. A drill passes only if new intake closes before a second payment can settle and the original operation reaches one terminal state without a duplicate economic effect.
+For every launch rehearsal, retain the alert timestamp, the matching row from authenticated `GET /v1/admin/admission/audit`, affected job and signer operation IDs, both RPC observations, recovery result, and the time protection returned to verified. A drill passes only if new intake closes before a second payment can settle and the original operation reaches one terminal state without a duplicate economic effect.
 
 Do not include payer addresses, credentials, signed transaction bytes, or private repository data in alert labels.

@@ -15,6 +15,7 @@ import type {
   Job,
   JobState,
   LedgerEntry,
+  OperatorControlAuditEntry,
   OperatorControls,
   OperatorControlsPatch,
   Payment,
@@ -31,7 +32,9 @@ export type WebhookDeliveryLease =
 
 export interface MizukiStore {
   readiness(): Promise<void>;
+  withAdmissionLock<T>(operation: () => Promise<T>): Promise<T>;
   operatorControls(): Promise<OperatorControls>;
+  operatorControlsAudit(): Promise<OperatorControlAuditEntry[]>;
   updateOperatorControls(patch: OperatorControlsPatch): Promise<OperatorControls>;
   saveQuote(quote: Quote): Promise<Quote>;
   quote(id: string): Promise<Quote | undefined>;
@@ -106,15 +109,43 @@ export class MemoryStore implements MizukiStore {
   private readonly upgrades = new Map<string, Upgrade>();
   private readonly failures: FailureRecord[] = [];
   private controls: OperatorControls = initialOperatorControls();
+  private readonly controlsAudit: OperatorControlAuditEntry[] = [
+    { ...structuredClone(this.controls), expectedRevision: 0 },
+  ];
 
   async readiness(): Promise<void> {}
 
+  async withAdmissionLock<T>(operation: () => Promise<T>): Promise<T> {
+    return operation();
+  }
+
   async operatorControls(): Promise<OperatorControls> {
+    const latest = this.controlsAudit.at(-1);
+    if (!latest) throw new Error('operator admission controls are unavailable or unaudited');
+    const audited: OperatorControls = {
+      intakeEnabled: latest.intakeEnabled,
+      claimsEnabled: latest.claimsEnabled,
+      revision: latest.revision,
+      reason: latest.reason,
+      updatedBy: latest.updatedBy,
+      updatedAt: latest.updatedAt,
+    };
+    if (!isDeepStrictEqual(this.controls, audited)) {
+      throw new Error('operator admission controls are unavailable or unaudited');
+    }
     return structuredClone(this.controls);
+  }
+
+  async operatorControlsAudit(): Promise<OperatorControlAuditEntry[]> {
+    return structuredClone(this.controlsAudit);
   }
 
   async updateOperatorControls(patch: OperatorControlsPatch): Promise<OperatorControls> {
     this.controls = updatedOperatorControls(this.controls, patch);
+    this.controlsAudit.push({
+      ...structuredClone(this.controls),
+      expectedRevision: patch.expectedRevision,
+    });
     return structuredClone(this.controls);
   }
 
@@ -494,14 +525,65 @@ export class PostgresStore implements MizukiStore {
     await this.pool.query('SELECT 1');
   }
 
+  async withAdmissionLock<T>(operation: () => Promise<T>): Promise<T> {
+    const client = await this.pool.connect();
+    let acquired = false;
+    try {
+      while (!acquired) {
+        const result = await client.query<{ locked: boolean }>(
+          "SELECT pg_try_advisory_lock(hashtext('mizuki-commercial-admission')) AS locked",
+        );
+        acquired = result.rows[0]?.locked === true;
+        if (!acquired) await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      return await operation();
+    } finally {
+      try {
+        if (acquired) {
+          const result = await client.query<{ unlocked: boolean }>(
+            "SELECT pg_advisory_unlock(hashtext('mizuki-commercial-admission')) AS unlocked",
+          );
+          if (!result.rows[0]?.unlocked) throw new Error('commercial admission lock was not held');
+        }
+      } catch (cause) {
+        client.release(cause instanceof Error ? cause : new Error(String(cause)));
+        throw cause;
+      }
+      client.release();
+    }
+  }
+
   async operatorControls(): Promise<OperatorControls> {
     const result = await this.pool.query<OperatorControlRow>(
-      `SELECT intake_enabled, claims_enabled, revision, reason, updated_by, updated_at
-       FROM mizuki_operator_controls WHERE singleton = true`,
+      `SELECT controls.intake_enabled, controls.claims_enabled, controls.revision,
+              controls.reason, controls.updated_by, controls.updated_at
+       FROM mizuki_operator_controls AS controls
+       JOIN LATERAL (
+         SELECT intake_enabled, claims_enabled, revision, reason, updated_by, updated_at
+         FROM mizuki_operator_control_audit ORDER BY revision DESC LIMIT 1
+       ) AS audited ON audited.intake_enabled = controls.intake_enabled
+                    AND audited.claims_enabled = controls.claims_enabled
+                    AND audited.revision = controls.revision
+                    AND audited.reason = controls.reason
+                    AND audited.updated_by = controls.updated_by
+                    AND audited.updated_at = controls.updated_at
+       WHERE controls.singleton = true`,
     );
     const row = result.rows[0];
-    if (!row) throw new Error('operator admission controls are unavailable');
+    if (!row) throw new Error('operator admission controls are unavailable or unaudited');
     return operatorControlsFromRow(row);
+  }
+
+  async operatorControlsAudit(): Promise<OperatorControlAuditEntry[]> {
+    const result = await this.pool.query<OperatorControlAuditRow>(
+      `SELECT expected_revision, intake_enabled, claims_enabled, revision, reason,
+              updated_by, updated_at
+       FROM mizuki_operator_control_audit ORDER BY revision`,
+    );
+    return result.rows.map((row) => ({
+      ...operatorControlsFromRow(row),
+      expectedRevision: Number(row.expected_revision),
+    }));
   }
 
   async updateOperatorControls(patch: OperatorControlsPatch): Promise<OperatorControls> {
@@ -512,7 +594,17 @@ export class PostgresStore implements MizukiStore {
       );
       const row = result.rows[0];
       if (!row) throw new Error('operator admission controls are unavailable');
-      const updated = updatedOperatorControls(operatorControlsFromRow(row), patch);
+      const audited = await client.query<OperatorControlAuditRow>(
+        `SELECT expected_revision, intake_enabled, claims_enabled, revision, reason,
+                updated_by, updated_at
+         FROM mizuki_operator_control_audit ORDER BY revision DESC LIMIT 1`,
+      );
+      const current = operatorControlsFromRow(row);
+      const latestAudit = audited.rows[0] ? operatorControlsFromRow(audited.rows[0]) : undefined;
+      if (!latestAudit || !sameOperatorControls(current, latestAudit)) {
+        throw new Error('operator admission controls are unavailable or unaudited');
+      }
+      const updated = updatedOperatorControls(current, patch);
       await client.query(
         `UPDATE mizuki_operator_controls
          SET intake_enabled = $1, claims_enabled = $2, revision = $3,
@@ -522,6 +614,21 @@ export class PostgresStore implements MizukiStore {
           updated.intakeEnabled,
           updated.claimsEnabled,
           updated.revision,
+          updated.reason,
+          updated.updatedBy,
+          updated.updatedAt,
+        ],
+      );
+      await client.query(
+        `INSERT INTO mizuki_operator_control_audit (
+           revision, expected_revision, intake_enabled, claims_enabled, reason, updated_by,
+           updated_at
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          updated.revision,
+          patch.expectedRevision,
+          updated.intakeEnabled,
+          updated.claimsEnabled,
           updated.reason,
           updated.updatedBy,
           updated.updatedAt,
@@ -1174,6 +1281,10 @@ type OperatorControlRow = {
   updated_at: Date | string;
 };
 
+type OperatorControlAuditRow = OperatorControlRow & {
+  expected_revision: number;
+};
+
 function initialOperatorControls(): OperatorControls {
   return {
     intakeEnabled: false,
@@ -1189,6 +1300,17 @@ function updatedOperatorControls(
   current: OperatorControls,
   patch: OperatorControlsPatch,
 ): OperatorControls {
+  const opensAdmission =
+    (patch.intakeEnabled === true && !current.intakeEnabled) ||
+    (patch.claimsEnabled === true && !current.claimsEnabled);
+  if (
+    patch.expectedRevision > current.revision ||
+    (patch.expectedRevision < current.revision && opensAdmission)
+  ) {
+    throw new StateConflictError(
+      `expected operator admission revision ${patch.expectedRevision}; current revision is ${current.revision}`,
+    );
+  }
   return {
     intakeEnabled: patch.intakeEnabled ?? current.intakeEnabled,
     claimsEnabled: patch.claimsEnabled ?? current.claimsEnabled,
@@ -1197,6 +1319,17 @@ function updatedOperatorControls(
     updatedBy: patch.updatedBy,
     updatedAt: new Date().toISOString(),
   };
+}
+
+function sameOperatorControls(left: OperatorControls, right: OperatorControls): boolean {
+  return (
+    left.intakeEnabled === right.intakeEnabled &&
+    left.claimsEnabled === right.claimsEnabled &&
+    left.revision === right.revision &&
+    left.reason === right.reason &&
+    left.updatedBy === right.updatedBy &&
+    left.updatedAt === right.updatedAt
+  );
 }
 
 function operatorControlsFromRow(row: OperatorControlRow): OperatorControls {
@@ -1239,7 +1372,7 @@ async function saveVersioned(
   );
 }
 
-const SCHEMA = `
+export const COMMERCIAL_CORE_SCHEMA_V1 = `
 CREATE TABLE IF NOT EXISTS mizuki_operator_controls (
   singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
   intake_enabled boolean NOT NULL,
@@ -1402,6 +1535,37 @@ CREATE INDEX IF NOT EXISTS mizuki_failures_capability_idx
   ON mizuki_failures(capability_key, occurred_at DESC);
 `;
 
+const ADMISSION_CONTROL_AUDIT_SCHEMA = `
+CREATE TABLE mizuki_operator_control_audit (
+  revision integer PRIMARY KEY CHECK (revision >= 0),
+  expected_revision integer NOT NULL CHECK (
+    expected_revision >= 0 AND expected_revision <= revision
+  ),
+  intake_enabled boolean NOT NULL,
+  claims_enabled boolean NOT NULL,
+  reason text NOT NULL CHECK (char_length(reason) BETWEEN 1 AND 500),
+  updated_by text NOT NULL CHECK (char_length(updated_by) BETWEEN 1 AND 128),
+  updated_at timestamptz NOT NULL
+);
+INSERT INTO mizuki_operator_control_audit (
+  revision, expected_revision, intake_enabled, claims_enabled, reason, updated_by, updated_at
+)
+SELECT revision, revision, intake_enabled, claims_enabled, reason, updated_by, updated_at
+FROM mizuki_operator_controls WHERE singleton = true;
+CREATE FUNCTION mizuki_reject_operator_control_audit_mutation() RETURNS trigger
+  LANGUAGE plpgsql AS $$
+  BEGIN
+    RAISE EXCEPTION 'operator control audit is append-only';
+  END;
+  $$;
+CREATE TRIGGER mizuki_operator_control_audit_append_only
+  BEFORE UPDATE OR DELETE ON mizuki_operator_control_audit
+  FOR EACH ROW EXECUTE FUNCTION mizuki_reject_operator_control_audit_mutation();
+CREATE TRIGGER mizuki_operator_control_audit_no_truncate
+  BEFORE TRUNCATE ON mizuki_operator_control_audit
+  FOR EACH STATEMENT EXECUTE FUNCTION mizuki_reject_operator_control_audit_mutation();
+`;
+
 async function migrate(pool: Pool): Promise<void> {
   const client = await pool.connect();
   try {
@@ -1417,25 +1581,53 @@ async function migrate(pool: Pool): Promise<void> {
         PRIMARY KEY (component, version)
       )
     `);
-    const applied = await client.query<{ version: number; name: string; checksum: string }>(
-      'SELECT version, name, checksum FROM mizuki_schema_migrations WHERE component = $1',
-      ['core'],
-    );
-    const checksum = createHash('sha256').update(SCHEMA).digest('hex');
-    if (applied.rows.some((row) => Number(row.version) !== 1)) {
-      throw new Error('core database contains an unknown schema migration');
-    }
-    const current = applied.rows.find((row) => Number(row.version) === 1);
-    if (current && (current.name !== 'commercial-core' || current.checksum !== checksum)) {
-      throw new Error('core database migration does not match this build');
-    }
-    if (!current) {
-      await client.query(SCHEMA);
-      await client.query(
-        `INSERT INTO mizuki_schema_migrations (component, version, name, checksum)
-         VALUES ($1, $2, $3, $4)`,
-        ['core', 1, 'commercial-core', checksum],
+    const components = [
+      {
+        name: 'core',
+        migrations: [{ version: 1, name: 'commercial-core', sql: COMMERCIAL_CORE_SCHEMA_V1 }],
+      },
+      {
+        name: 'admission-control',
+        migrations: [
+          { version: 1, name: 'admission-control-audit', sql: ADMISSION_CONTROL_AUDIT_SCHEMA },
+        ],
+      },
+    ];
+    for (const component of components) {
+      const applied = await client.query<{ version: number; name: string; checksum: string }>(
+        'SELECT version, name, checksum FROM mizuki_schema_migrations WHERE component = $1',
+        [component.name],
       );
+      const migrations = component.migrations.map((migration) => ({
+        ...migration,
+        checksum: createHash('sha256').update(migration.sql).digest('hex'),
+      }));
+      if (
+        applied.rows.some(
+          (row) => !migrations.some((migration) => migration.version === Number(row.version)),
+        )
+      ) {
+        throw new Error(`${component.name} database contains an unknown schema migration`);
+      }
+      for (const migration of migrations) {
+        const current = applied.rows.find((row) => Number(row.version) === migration.version);
+        if (
+          current &&
+          (current.name !== migration.name || current.checksum !== migration.checksum)
+        ) {
+          throw new Error(`${component.name} database migration does not match this build`);
+        }
+        if (current) continue;
+        if (applied.rows.some((row) => Number(row.version) > migration.version)) {
+          throw new Error(`${component.name} database contains a schema migration gap`);
+        }
+        await client.query(migration.sql);
+        await client.query(
+          `INSERT INTO mizuki_schema_migrations (component, version, name, checksum)
+           VALUES ($1, $2, $3, $4)`,
+          [component.name, migration.version, migration.name, migration.checksum],
+        );
+      }
     }
     await client.query('COMMIT');
   } catch (error) {

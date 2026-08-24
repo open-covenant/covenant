@@ -10,7 +10,7 @@ This directory contains the production blueprint and runbooks for Mizuki's comme
 4. Promote the existing bootstrap Blueprint by changing that same Blueprint's path to `render.yaml`; never create a second Blueprint that owns the same signer, gateway, updater, or databases.
 5. Confirm the Blueprint-linked signer, gateway, updater, and controller tokens resolve into the production runtime. Do not copy those tokens into another service.
 6. Confirm the signer, gateway, and updater resolve only on Render's private network. Never expose them as web services.
-7. Deploy signer, gateway, updater, and controller first. Deploy the zero-authority shadow and prove its tokenless closed-state probe, then deploy the sole production runtime and prove the authenticated full dependency probe before cutting over the web app. Automatic deploys are disabled intentionally.
+7. Deploy signer, gateway, updater, and controller first. Close both durable admission controls before every runtime deploy; the runtime predeploy command rejects any open state. Deploy the zero-authority shadow and prove its tokenless closed-state probe, then deploy the sole production runtime and prove the authenticated full dependency probe before cutting over the web app. Automatic deploys are disabled intentionally.
 8. With intake closed, verify the website proxies only to `mizuki-runtime-production`, the production runtime alone uses `mizuki-postgres`, and the previous source-built API is suspended. Confirm startup reached the x402 facilitator and found the exact mainnet SVM route before enabling intake.
 9. Register the signer's escrow authority as the ClawPump payout wallet through the operator-controlled signed wallet flow. Confirm the platform displays the exact address and retain the registration receipt.
 10. Run the read-only checks below before any payment.
@@ -24,13 +24,22 @@ curl -fsS https://mizuki.covenant.org/healthz
 curl -fsS https://mizuki.covenant.org/
 ```
 
-Check private-service health from a one-off shell on the production runtime's private network:
+The audit migration is boot-compatible with the previously deployed core: it leaves `commercial-core` at v1 and records the ledger under a separate migration component. A rollback to the old runtime must remain read-only and closed-state only. Do not call its admission mutation endpoint; it cannot append the new ledger. Restore the current runtime before any admission mutation. Any current-row/audit mismatch fails the current runtime closed and requires database reconciliation before service restoration.
+
+Check signer, gateway, and updater health from a one-off shell on the production runtime's private network:
 
 ```sh
 curl -fsS http://mizuki-policy-signer:8792/health
 curl -fsS http://mizuki-coding-gateway:8642/healthz
 curl -fsS http://mizuki-updater:8793/health
-curl -fsS http://mizuki-deployment-controller:8794/healthz
+```
+
+The controller authenticates every route. Check it from an updater shell, which receives only the
+linked controller credential:
+
+```sh
+curl -fsS -H "Authorization: Bearer $MIZUKI_UPDATER_DEPLOY_HOOK_TOKEN" \
+  http://mizuki-deployment-controller:8794/healthz
 ```
 
 Do not run a public canary until all health checks are stable, the mainnet wallets have only the documented reserve, and the operator can complete the signer recovery drill in `runbooks/incident-recovery.md`.
@@ -39,7 +48,7 @@ Fund only the isolated SOL capability authority through `runbooks/escrow-capacit
 
 Token launch does not gate useful maintenance work and creator-fee reporting does not authorize spending. Before attributing any creator-fee distribution to capability funding, reconcile the ClawPump-reported `totalSent` delta with a finalized transfer to the configured escrow authority. Never count the reported total itself as on-chain custody evidence; every public rescue bounty must still show its own signer-created escrow transaction.
 
-Fresh databases start with paid intake and new bounty claims closed. After the preflight succeeds, open only the path needed for the canary with an authenticated `POST /v1/admin/admission` request and record its reason. Close both switches before incident reconciliation or key rotation. The API returns `503` instead of authorizing payment or binding a claimant when the control row cannot be read.
+Fresh databases start with paid intake and new bounty claims closed. Before every authenticated `POST /v1/admin/admission`, read the non-cacheable `GET /v1/admin/admission` and bind the mutation to its `expectedRevision`. A stale request that could enable either path returns `409`; a closure remains fail-safe and wins over an in-flight stale open. Payment admission, new-claim binding, settlement recovery, and control mutation share one PostgreSQL advisory lock across overlapping runtime processes, so a successful close response is global. After the preflight succeeds, open only the path needed for the canary and record its reason. Close both switches before every deploy, incident reconciliation, or key rotation, then retain the returned row from `GET /v1/admin/admission/audit`. The API returns `503` instead of authorizing payment or binding a claimant when the control row cannot be read.
 
 ## Deliberate constraints
 

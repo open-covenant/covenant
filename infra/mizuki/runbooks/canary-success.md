@@ -10,13 +10,14 @@ Objective: produce a public, independently inspectable chain from an operator-co
 - API, signer, updater, coding gateway, PostgreSQL, RPC, facilitator, sandbox, and model route have been healthy for 30 uninterrupted minutes.
 - The signer independently reports enough finalized refund capacity for the full principal, while limits remain $25 per operation and $100 rolling 24 hours.
 - No unresolved refund, escrow, or submitted signer operation exists.
+- The operator has recorded the closed admission revision and verified the append-only audit endpoint.
 - A screen recorder and public evidence note are ready before payment.
 
 Abort if any precondition is false. Do not improvise around a signer, RPC, database, or GitHub failure.
 
 ## Execution
 
-1. Record the issue URL, quoted acceptance criteria, repository default-branch SHA, quote ID, amount, route/model, and UTC time.
+1. Read the authenticated admission control, open only paid intake with its exact `expectedRevision`, and retain the returned audit revision. Record the issue URL, quoted acceptance criteria, repository default-branch SHA, quote ID, amount, route/model, and UTC time.
 2. The operator pays the x402 quote from the dedicated canary wallet. Never copy its private key or seed phrase into a service, log, script argument, or recording.
 3. Record the finalized payment signature and public job receipt. Confirm the payer, mint, amount, recipient, and finality independently on-chain.
 4. Watch the job state through checkout, patch generation, repository checks, one permitted repair pass, and independent review. Do not edit state in PostgreSQL.
@@ -24,7 +25,7 @@ Abort if any precondition is false. Do not improvise around a signer, RPC, datab
 6. Let the repository maintainer review normally. Mizuki must not merge his own PR.
 7. After the maintainer merges, confirm webhook reconciliation records the merge exactly once.
 8. Confirm the public dashboard shows the $2 inflow, model-token and measured sandbox-runtime estimates, current refund liability, and an explicit list of omitted commercial costs. Gross margin must remain `unverified` unless provider billing adjustments, chain/facilitator fees, and infrastructure costs are all durably recorded.
-9. Publish one evidence bundle containing the issue, payment signature, job receipt, PR, checks, independent review result, merge commit, duration, variable execution estimate, omitted cost categories, and gross-margin status. Redact only secrets and non-public request headers.
+9. Close both admission controls using the current revision and retain the final append-only audit entry. Publish one evidence bundle containing the issue, admission audit revisions, payment signature, job receipt, PR, checks, independent review result, merge commit, duration, variable execution estimate, omitted cost categories, and gross-margin status. Redact only secrets and non-public request headers.
 
 ## Pass criteria
 

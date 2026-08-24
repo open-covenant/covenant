@@ -239,7 +239,12 @@ export type OperatorControls = {
   updatedAt: string;
 };
 
+export type OperatorControlAuditEntry = OperatorControls & {
+  expectedRevision: number;
+};
+
 export type OperatorControlsPatch = {
+  expectedRevision: number;
   intakeEnabled?: boolean;
   claimsEnabled?: boolean;
   reason: string;

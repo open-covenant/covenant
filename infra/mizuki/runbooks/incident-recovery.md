@@ -8,7 +8,7 @@ Treat these as P0: signer key exposure, transfer above policy, wrong recipient o
 
 For P0:
 
-1. Set both durable admission controls to `false` with an authenticated `POST /v1/admin/admission` request and an incident-specific reason. Confirm `GET /v1/admission` reports both closed without terminating the API process needed for receipts.
+1. Read the authenticated `GET /v1/admin/admission`, then set both durable controls to `false` with `POST /v1/admin/admission`, its `revision` as `expectedRevision`, and an incident-specific reason. A close is deliberately fail-safe if that revision advances while the request is in flight. Confirm `GET /v1/admission` reports both closed and retain the matching final entry from `GET /v1/admin/admission/audit` without terminating the API process needed for receipts.
 2. Close updater promotion control through authenticated `PUT /v1/admin/promotion-control` and confirm the returned revision. Existing claimant PR submissions and disputes stay available; the claims switch blocks only new bindings.
 3. Preserve API, signer, database, RPC, and webhook logs in read-only storage. Record UTC start time and the last known healthy commit.
 4. Do not rotate or drain the signer wallet until submitted signatures and prepared transaction bytes are reconciled.
@@ -26,7 +26,7 @@ P1 covers signer unavailable, RPC unavailable, price oracle unavailable, refund 
 
 ## Signer unavailable
 
-1. Close paid intake through `POST /v1/admin/admission` and confirm the public status. Existing jobs may finish, but no new liability is accepted.
+1. Read the current authenticated admission revision, close paid intake through `POST /v1/admin/admission` with that `expectedRevision`, and confirm both the public status and append-only audit entry. Existing jobs may finish, but no new liability is accepted.
 2. From the API private network, check `http://mizuki-policy-signer:8792/health`. A failure is not authorization to bypass the signer.
 3. Check signer process status, PostgreSQL connectivity, RPC finality, price-source freshness, and the rolling-limit counters.
 4. Restart only the signer service on the same healthy commit. Startup recovery must load non-terminal operations from PostgreSQL.

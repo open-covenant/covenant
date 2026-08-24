@@ -4,8 +4,6 @@ type Store = Pick<MizukiStore, 'operatorControls' | 'close'>;
 
 interface Dependencies<TStore extends Store> {
   connect: () => Promise<TStore>;
-  assertStaticConfig: () => void;
-  checkReadiness: (store: TStore) => Promise<{ ready: boolean }>;
 }
 
 export async function runPredeploy<TStore extends Store>(
@@ -15,11 +13,7 @@ export async function runPredeploy<TStore extends Store>(
   try {
     const controls = await store.operatorControls();
     if (!controls.intakeEnabled && !controls.claimsEnabled) return;
-
-    deps.assertStaticConfig();
-    const readiness = await deps.checkReadiness(store);
-    if (!readiness.ready)
-      throw new Error('Mizuki dependencies are not ready for an open deployment');
+    throw new Error('Mizuki admission must be closed before deployment');
   } finally {
     await store.close();
   }

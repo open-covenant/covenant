@@ -34,6 +34,7 @@ describe('operator admission controls', () => {
     );
 
     const initial = await fetch(`${base}/v1/admission`);
+    expect(initial.headers.get('cache-control')).toBe('no-store');
     await expect(initial.json()).resolves.toMatchObject({
       intakeEnabled: false,
       claimsEnabled: false,
@@ -41,6 +42,7 @@ describe('operator admission controls', () => {
     });
 
     const body = JSON.stringify({
+      expectedRevision: 0,
       intakeEnabled: true,
       claimsEnabled: true,
       reason: 'canary checks completed successfully',
@@ -66,6 +68,133 @@ describe('operator admission controls', () => {
     });
   });
 
+  it('requires a revision, rejects stale reopens, and exposes the authenticated audit', async () => {
+    const store = new MemoryStore();
+    const base = await serve(dependencies(store));
+    const headers = {
+      authorization: 'Bearer admin-secret',
+      'content-type': 'application/json',
+    };
+
+    const missingRevision = await fetch(`${base}/v1/admin/admission`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        intakeEnabled: true,
+        reason: 'opening without a bound revision',
+      }),
+    });
+    expect(missingRevision.status).toBe(400);
+    await expect(missingRevision.json()).resolves.toEqual({
+      error: 'expectedRevision must be an integer between 0 and 2147483647',
+    });
+
+    const oversizedRevision = await fetch(`${base}/v1/admin/admission`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        expectedRevision: 2_147_483_648,
+        intakeEnabled: false,
+        claimsEnabled: false,
+        reason: 'reject revisions outside the database range',
+      }),
+    });
+    expect(oversizedRevision.status).toBe(400);
+    await expect(oversizedRevision.json()).resolves.toEqual({
+      error: 'expectedRevision must be an integer between 0 and 2147483647',
+    });
+
+    const opened = await fetch(`${base}/v1/admin/admission`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        expectedRevision: 0,
+        intakeEnabled: true,
+        claimsEnabled: true,
+        reason: 'open one bounded canary window',
+      }),
+    });
+    expect(opened.status).toBe(200);
+
+    const closed = await fetch(`${base}/v1/admin/admission`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        expectedRevision: 0,
+        intakeEnabled: false,
+        claimsEnabled: false,
+        reason: 'emergency closure wins over stale state',
+      }),
+    });
+    expect(closed.status).toBe(200);
+    await expect(closed.json()).resolves.toMatchObject({
+      revision: 2,
+      intakeEnabled: false,
+      claimsEnabled: false,
+    });
+
+    const staleOpen = await fetch(`${base}/v1/admin/admission`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        expectedRevision: 0,
+        intakeEnabled: true,
+        claimsEnabled: true,
+        reason: 'delayed retry from an earlier open request',
+      }),
+    });
+    expect(staleOpen.status).toBe(409);
+    await expect(staleOpen.json()).resolves.toEqual({
+      error: 'expected operator admission revision 0; current revision is 2',
+    });
+
+    const futureClose = await fetch(`${base}/v1/admin/admission`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        expectedRevision: 100,
+        intakeEnabled: false,
+        claimsEnabled: false,
+        reason: 'reject a closure from an impossible future revision',
+      }),
+    });
+    expect(futureClose.status).toBe(409);
+    await expect(futureClose.json()).resolves.toEqual({
+      error: 'expected operator admission revision 100; current revision is 2',
+    });
+
+    const unauthorizedAudit = await fetch(`${base}/v1/admin/admission/audit`);
+    expect(unauthorizedAudit.status).toBe(401);
+    expect(unauthorizedAudit.headers.get('cache-control')).toBe('private, no-store');
+    const audit = await fetch(`${base}/v1/admin/admission/audit`, { headers });
+    expect(audit.status).toBe(200);
+    await expect(audit.json()).resolves.toEqual([
+      expect.objectContaining({
+        revision: 0,
+        expectedRevision: 0,
+        intakeEnabled: false,
+        claimsEnabled: false,
+      }),
+      expect.objectContaining({
+        revision: 1,
+        expectedRevision: 0,
+        intakeEnabled: true,
+        claimsEnabled: true,
+      }),
+      expect.objectContaining({
+        revision: 2,
+        expectedRevision: 0,
+        intakeEnabled: false,
+        claimsEnabled: false,
+      }),
+    ]);
+    await expect(store.operatorControls()).resolves.toMatchObject({
+      revision: 2,
+      intakeEnabled: false,
+      claimsEnabled: false,
+    });
+  });
+
   it('keeps controls closed while service dependencies are unavailable', async () => {
     const store = new MemoryStore();
     const base = await serve(
@@ -78,6 +207,7 @@ describe('operator admission controls', () => {
       method: 'POST',
       headers: { authorization: 'Bearer admin-secret', 'content-type': 'application/json' },
       body: JSON.stringify({
+        expectedRevision: 0,
         intakeEnabled: true,
         claimsEnabled: true,
         reason: 'attempted canary while dependencies are unavailable',
@@ -89,6 +219,40 @@ describe('operator admission controls', () => {
       intakeEnabled: false,
       claimsEnabled: false,
       revision: 0,
+    });
+  });
+
+  it('closes intake while preserving open claims during a readiness outage', async () => {
+    const store = new MemoryStore();
+    await store.updateOperatorControls({
+      expectedRevision: 0,
+      intakeEnabled: true,
+      claimsEnabled: true,
+      reason: 'prepare an open state for emergency closure',
+      updatedBy: 'operator',
+    });
+    const base = await serve(
+      dependencies(store, {
+        readiness: { check: vi.fn(async () => ({ ready: false })) },
+      }),
+    );
+
+    const response = await fetch(`${base}/v1/admin/admission`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer admin-secret', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        expectedRevision: 0,
+        intakeEnabled: false,
+        claimsEnabled: true,
+        reason: 'close paid intake while contributor claims continue',
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      revision: 2,
+      intakeEnabled: false,
+      claimsEnabled: true,
     });
   });
 
@@ -106,6 +270,7 @@ describe('operator admission controls', () => {
       method: 'POST',
       headers: { authorization: 'Bearer admin-secret', 'content-type': 'application/json' },
       body: JSON.stringify({
+        expectedRevision: 0,
         intakeEnabled: true,
         reason: 'attempt to open candidate admission',
       }),
@@ -126,6 +291,7 @@ describe('operator admission controls', () => {
   it('does not issue a quote when stale controls are open but readiness is incomplete', async () => {
     const store = new MemoryStore();
     await store.updateOperatorControls({
+      expectedRevision: 0,
       intakeEnabled: true,
       claimsEnabled: true,
       reason: 'simulate stale controls from an earlier deployment',
@@ -194,6 +360,7 @@ describe('operator admission controls', () => {
     const store = new MemoryStore();
     await store.saveQuote(quote);
     await store.updateOperatorControls({
+      expectedRevision: 0,
       intakeEnabled: true,
       claimsEnabled: false,
       reason: 'simulate stale intake from an earlier deployment',
@@ -226,6 +393,7 @@ describe('operator admission controls', () => {
     const store = new MemoryStore();
     await store.saveQuote(quote);
     await store.updateOperatorControls({
+      expectedRevision: 0,
       intakeEnabled: true,
       claimsEnabled: false,
       reason: 'repository admission ordering test',
@@ -275,6 +443,7 @@ describe('operator admission controls', () => {
     const store = new MemoryStore();
     await store.saveQuote(quote);
     await store.updateOperatorControls({
+      expectedRevision: 0,
       intakeEnabled: true,
       claimsEnabled: false,
       reason: 'repository admission failure test',
@@ -419,6 +588,7 @@ describe('public route responses', () => {
   it('rejects feature work before issuing a payment challenge', async () => {
     const store = new MemoryStore();
     await store.updateOperatorControls({
+      expectedRevision: 0,
       intakeEnabled: true,
       claimsEnabled: false,
       reason: 'scope validation test intake',

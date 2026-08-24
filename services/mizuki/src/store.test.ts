@@ -30,6 +30,7 @@ describe('MemoryStore', () => {
       revision: 0,
     });
     const opened = await store.updateOperatorControls({
+      expectedRevision: 0,
       intakeEnabled: true,
       claimsEnabled: true,
       reason: 'operator completed launch checks',
@@ -37,6 +38,49 @@ describe('MemoryStore', () => {
     });
     expect(opened).toMatchObject({ intakeEnabled: true, claimsEnabled: true, revision: 1 });
     await expect(store.operatorControls()).resolves.toEqual(opened);
+  });
+
+  it('rejects a stale reopen, lets an emergency close win, and retains every revision', async () => {
+    const store = new MemoryStore();
+    const [opened, closed] = await Promise.all([
+      store.updateOperatorControls({
+        expectedRevision: 0,
+        intakeEnabled: true,
+        claimsEnabled: true,
+        reason: 'open one bounded canary window',
+        updatedBy: 'operator',
+      }),
+      store.updateOperatorControls({
+        expectedRevision: 0,
+        intakeEnabled: false,
+        claimsEnabled: false,
+        reason: 'emergency closure overrides an in-flight open',
+        updatedBy: 'operator',
+      }),
+    ]);
+
+    expect(opened).toMatchObject({ revision: 1, intakeEnabled: true, claimsEnabled: true });
+    expect(closed).toMatchObject({ revision: 2, intakeEnabled: false, claimsEnabled: false });
+    await expect(
+      store.updateOperatorControls({
+        expectedRevision: 1,
+        intakeEnabled: true,
+        claimsEnabled: true,
+        reason: 'delayed retry from the previous open request',
+        updatedBy: 'operator',
+      }),
+    ).rejects.toThrow('expected operator admission revision 1; current revision is 2');
+    await expect(store.operatorControls()).resolves.toEqual(closed);
+    await expect(store.operatorControlsAudit()).resolves.toEqual([
+      expect.objectContaining({
+        revision: 0,
+        expectedRevision: 0,
+        intakeEnabled: false,
+        claimsEnabled: false,
+      }),
+      expect.objectContaining({ ...opened, expectedRevision: 0 }),
+      expect.objectContaining({ ...closed, expectedRevision: 0 }),
+    ]);
   });
 
   it('deduplicates a paid job by idempotency key', async () => {

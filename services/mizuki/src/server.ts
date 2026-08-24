@@ -27,7 +27,7 @@ const store = config.databaseUrl
 const github = new GithubClient(config);
 const payments = new Payments(config);
 const policy = new PolicySignerClient(config);
-const paymentAdmission = new SerialGate();
+const paymentAdmission = new SerialGate((operation) => store.withAdmissionLock(operation));
 const reviewer = new UsePodContributorReviewer(config, store, github);
 const bounties = new BountyService(store, policy, reviewer, undefined, config);
 const updater =

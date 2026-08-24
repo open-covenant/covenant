@@ -419,6 +419,7 @@ async function serve(
 async function openControls(): Promise<MemoryStore> {
   const store = new MemoryStore();
   await store.updateOperatorControls({
+    expectedRevision: 0,
     intakeEnabled: true,
     claimsEnabled: true,
     reason: 'deployment readiness test controls',

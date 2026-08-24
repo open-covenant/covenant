@@ -1464,8 +1464,30 @@ const coinGeckoSimplePriceSchema = z
       .passthrough(),
   })
   .passthrough();
+const pythHermesPriceSchema = z
+  .object({
+    parsed: z
+      .array(
+        z
+          .object({
+            id: z.string(),
+            price: z
+              .object({
+                price: z.string().regex(/^\d+$/),
+                expo: z.number().int(),
+                publish_time: z.number().int().positive(),
+              })
+              .passthrough(),
+          })
+          .passthrough(),
+      )
+      .min(1),
+  })
+  .passthrough();
 
-type PriceResponseFormat = 'canonical' | 'coinbase_ticker' | 'coingecko_simple';
+const PYTH_SOL_USD_FEED_ID = 'ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d';
+
+type PriceResponseFormat = 'canonical' | 'coinbase_ticker' | 'coingecko_simple' | 'pyth_hermes';
 
 export class HttpUsdPriceOracle implements UsdPriceOracle {
   private readonly responseFormat: PriceResponseFormat;
@@ -1510,7 +1532,11 @@ export class HttpUsdPriceOracle implements UsdPriceOracle {
         true,
       );
     }
-    const parsed = parsePriceResponse(await readLimitedJson(response, 2_048), this.responseFormat);
+    const responseLimit = this.responseFormat === 'pyth_hermes' ? 65_536 : 2_048;
+    const parsed = parsePriceResponse(
+      await readLimitedJson(response, responseLimit),
+      this.responseFormat,
+    );
     if (!parsed)
       throw new PolicyError('price_invalid', 'Price service returned invalid data', 503, true);
     const observedAt = parsed.observedAt;
@@ -1549,6 +1575,20 @@ function priceResponseFormat(value: string): PriceResponseFormat {
   ) {
     return 'coingecko_simple';
   }
+  const pythPath =
+    url.pathname === '/v2/updates/price/latest' ||
+    url.pathname === '/hermes/v2/updates/price/latest';
+  const pythFeedIds = url.searchParams.getAll('ids[]').map((id) => id.replace(/^0x/, ''));
+  if (
+    (url.hostname.toLowerCase() === 'hermes.pyth.network' ||
+      url.hostname.toLowerCase() === 'pyth.dourolabs.app') &&
+    pythPath &&
+    url.searchParams.get('parsed') === 'true' &&
+    pythFeedIds.length === 1 &&
+    pythFeedIds[0] === PYTH_SOL_USD_FEED_ID
+  ) {
+    return 'pyth_hermes';
+  }
   return 'canonical';
 }
 
@@ -1573,6 +1613,17 @@ function parsePriceResponse(
       ? null
       : { priceUsdMicros, observedAt: new Date(parsed.data.time) };
   }
+  if (format === 'pyth_hermes') {
+    const parsed = pythHermesPriceSchema.safeParse(body);
+    if (!parsed.success) return null;
+    const feed = parsed.data.parsed.find((candidate) => candidate.id === PYTH_SOL_USD_FEED_ID);
+    if (!feed) return null;
+    const priceUsdMicros = scaledUsdMicros(feed.price.price, feed.price.expo);
+    const observedAt = new Date(feed.price.publish_time * 1_000);
+    return priceUsdMicros === null || !validDate(observedAt)
+      ? null
+      : { priceUsdMicros, observedAt };
+  }
 
   const parsed = coinGeckoSimplePriceSchema.safeParse(body);
   if (!parsed.success) return null;
@@ -1582,6 +1633,15 @@ function parsePriceResponse(
     return null;
   }
   return { priceUsdMicros, observedAt };
+}
+
+function scaledUsdMicros(value: string, exponent: number): number | null {
+  if (!/^\d+$/.test(value) || exponent < -30 || exponent > 30) return null;
+  const raw = BigInt(value);
+  const scale = exponent + 6;
+  const micros = scale >= 0 ? raw * 10n ** BigInt(scale) : raw / 10n ** BigInt(-scale);
+  if (micros <= 0n || micros > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+  return Number(micros);
 }
 
 function decimalUsdMicros(value: string): number | null {

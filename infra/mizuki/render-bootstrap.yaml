@@ -71,7 +71,7 @@ services:
       - key: MIZUKI_SOL_USD_PRICE_URL
         value: https://api.exchange.coinbase.com/products/SOL-USD/ticker
       - key: MIZUKI_SOL_USD_SECONDARY_PRICE_URL
-        value: https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd&include_last_updated_at=true&precision=6
+        value: https://hermes.pyth.network/v2/updates/price/latest?ids%5B%5D=0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d&parsed=true
       - key: MIZUKI_SOL_USD_MAX_DIVERGENCE_BPS
         value: '500'
       - key: MIZUKI_SOL_USD_MAX_AGE_MS

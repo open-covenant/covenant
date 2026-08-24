@@ -209,6 +209,20 @@ jobs:
         run: |
           set -euo pipefail
 
+          fail() {
+            echo "::error::$1"
+            exit 1
+          }
+
+          require_equal() {
+            local label=$1
+            local actual=$2
+            local expected=$3
+            if [ "$actual" != "$expected" ]; then
+              fail "$label mismatch: expected $expected, received $actual"
+            fi
+          }
+
           if ! printf '%s' "$IMAGE_DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
             echo '::error::builder did not return a SHA-256 image digest'
             exit 1
@@ -230,14 +244,15 @@ jobs:
 
           manifest_sha=$(sha256sum evidence/manifest.oci.json | cut -d' ' -f1)
           manifest_bytes=$(stat --format=%s evidence/manifest.oci.json)
-          test "sha256:$manifest_sha" = "$IMAGE_DIGEST"
-          test "$manifest_bytes" -ge 256
-          test "$manifest_bytes" -le 1048576
+          require_equal 'manifest digest' "sha256:$manifest_sha" "$IMAGE_DIGEST"
+          if [ "$manifest_bytes" -lt 256 ] || [ "$manifest_bytes" -gt 1048576 ]; then
+            fail "manifest size is outside the accepted range: $manifest_bytes bytes"
+          fi
 
-          header_digest=$(awk 'BEGIN { IGNORECASE=1 } /^docker-content-digest:/ { gsub("\\r", ""); print $2 }' evidence/manifest.headers | tail -n 1)
-          test "$header_digest" = "$IMAGE_DIGEST"
+          header_digest=$(awk 'tolower($1) == "docker-content-digest:" { gsub("\\r", "", $2); print $2 }' evidence/manifest.headers | tail -n 1)
+          require_equal 'registry content digest' "$header_digest" "$IMAGE_DIGEST"
 
-          jq -e '
+          if ! jq -e '
             .schemaVersion == 2 and
             .mediaType == "application/vnd.oci.image.manifest.v1+json" and
             (has("manifests") | not) and
@@ -250,7 +265,12 @@ jobs:
               (.size > 0) and
               (.mediaType == "application/vnd.oci.image.layer.v1.tar+gzip" or
                .mediaType == "application/vnd.oci.image.layer.v1.tar+zstd")))
-          ' evidence/manifest.oci.json >/dev/null
+          ' evidence/manifest.oci.json >/dev/null; then
+            manifest_media_type=$(jq -r '.mediaType // "missing"' evidence/manifest.oci.json)
+            config_media_type=$(jq -r '.config.mediaType // "missing"' evidence/manifest.oci.json)
+            layer_media_types=$(jq -cr '[.layers[]?.mediaType] | unique' evidence/manifest.oci.json)
+            fail "invalid OCI manifest: manifest=$manifest_media_type config=$config_media_type layers=$layer_media_types"
+          fi
 
           config_digest=$(jq -er .config.digest evidence/manifest.oci.json)
           config_bytes_expected=$(jq -er .config.size evidence/manifest.oci.json)
@@ -260,9 +280,12 @@ jobs:
             "https://ghcr.io/v2/$image_path/blobs/$config_digest"
           config_sha=$(sha256sum evidence/image-config.oci.json | cut -d' ' -f1)
           config_bytes=$(stat --format=%s evidence/image-config.oci.json)
-          test "sha256:$config_sha" = "$config_digest"
-          test "$config_bytes" = "$config_bytes_expected"
-          jq -e '.os == "linux" and .architecture == "amd64"' evidence/image-config.oci.json >/dev/null
+          require_equal 'image config digest' "sha256:$config_sha" "$config_digest"
+          require_equal 'image config size' "$config_bytes" "$config_bytes_expected"
+          if ! jq -e '.os == "linux" and .architecture == "amd64"' evidence/image-config.oci.json >/dev/null; then
+            platform=$(jq -cr '{os, architecture}' evidence/image-config.oci.json)
+            fail "image config platform is not linux/amd64: $platform"
+          fi
 
           rm evidence/manifest.headers
           image_reference="$IMAGE_NAME@$IMAGE_DIGEST"

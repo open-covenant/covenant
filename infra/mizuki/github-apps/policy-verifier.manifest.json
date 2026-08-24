@@ -1,0 +1,16 @@
+{
+  "name": "Mizuki Policy Verifier",
+  "url": "https://mizuki.covenant.org",
+  "description": "Read-only independent verification of public issue and merge evidence.",
+  "public": true,
+  "request_oauth_on_install": false,
+  "default_permissions": {
+    "checks": "read",
+    "contents": "read",
+    "issues": "read",
+    "metadata": "read",
+    "pull_requests": "read",
+    "statuses": "read"
+  },
+  "default_events": []
+}

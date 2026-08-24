@@ -90,7 +90,9 @@ export class IpBucket {
       // Derive idleTtlMs from refillMs when the caller did not pin it
       // explicitly, so a custom short refill window cannot leave entries
       // pinned for a stale 10-minute default.
-      idleTtlMs: partial.idleTtlMs ?? Math.max(DEFAULT_CONFIG.idleTtlMs, (partial.refillMs ?? DEFAULT_CONFIG.refillMs) * 10),
+      idleTtlMs:
+        partial.idleTtlMs ??
+        Math.max(DEFAULT_CONFIG.idleTtlMs, (partial.refillMs ?? DEFAULT_CONFIG.refillMs) * 10),
     };
   }
 
@@ -125,7 +127,7 @@ export class IpBucket {
         this.slots.set(ip, slot);
         return {
           ok: false,
-          reason: "rate limited; try again shortly",
+          reason: 'rate limited; try again shortly',
           retryAfterMs: this.config.refillMs - since,
         };
       }

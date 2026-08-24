@@ -17,8 +17,8 @@
 #![deny(unsafe_code)]
 
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use axum::{
     extract::State,
@@ -379,7 +379,10 @@ mod tests {
         issued.insert("stale".into(), stale);
         issued.insert("fresh".into(), Instant::now());
         evict_expired(&mut issued);
-        assert!(!issued.contains_key("stale"), "expired nonce must be evicted");
+        assert!(
+            !issued.contains_key("stale"),
+            "expired nonce must be evicted"
+        );
         assert!(issued.contains_key("fresh"), "fresh nonce must survive");
     }
 
@@ -429,7 +432,10 @@ mod tests {
             .expect("verify");
         assert_eq!(out.amount, 5);
         assert_eq!(out.signature, "SiGmAtUrE");
-        assert_eq!(out.credit_account, "CreditPDA1111111111111111111111111111111");
+        assert_eq!(
+            out.credit_account,
+            "CreditPDA1111111111111111111111111111111"
+        );
     }
 
     #[tokio::test]
@@ -449,7 +455,13 @@ mod tests {
             .verify(&envelope("sig", "abc123"), "abc123", 5)
             .await
             .unwrap_err();
-        assert_eq!(err, VerifyError::Underpaid { paid: 2, required: 5 });
+        assert_eq!(
+            err,
+            VerifyError::Underpaid {
+                paid: 2,
+                required: 5
+            }
+        );
     }
 
     #[tokio::test]

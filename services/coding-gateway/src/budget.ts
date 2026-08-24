@@ -1,12 +1,22 @@
-import { readFileSync, writeFileSync } from "node:fs";
-import { randomUUID } from "node:crypto";
-import { config, PRICING } from "./config.js";
-import type { TokenUsage } from "./types.js";
+import {
+  closeSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { dirname } from 'node:path';
+import { config, PRICING } from './config.js';
+import type { TokenUsage } from './types.js';
 
-export type RunOutcome = "completed" | "failed" | "cancelled";
+export type RunOutcome = 'completed' | 'failed' | 'cancelled';
 
 export function modelCostUsd(model: string, u: TokenUsage): number {
-  const p = PRICING[model] ?? PRICING["claude-sonnet-4-6"]!;
+  const p = PRICING[model] ?? PRICING['claude-sonnet-4-6']!;
   return (
     (u.inputTokens * p.input +
       u.outputTokens * p.output +
@@ -17,7 +27,7 @@ export function modelCostUsd(model: string, u: TokenUsage): number {
 }
 
 export function sandboxCostUsd(seconds: number): number {
-  return seconds * config.sandboxUsdPerSec;
+  return seconds * config.sandboxWorstCaseUsdPerSec;
 }
 
 const utcDay = () => new Date().toISOString().slice(0, 10); // YYYY-MM-DD
@@ -29,45 +39,49 @@ export interface BudgetCaps {
   perRunUsdMax: number;
   maxConcurrent: number;
   /**
-   * Wall-clock ceiling for a single run, in ms. Used as the reservation
-   * deadline horizon: a persisted pending reservation is treated as live
-   * on boot until `Date.now()` passes this many ms past its admission, after
-   * which the sandbox's own self-destruct guarantees the leftover spend is
-   * gone.
+   * Wall-clock ceiling for a single run, in ms. Persisted with each pending
+   * reservation as audit context; unresolved reservations are charged in full
+   * on boot regardless of whether this deadline passed.
    */
   wallMs: number;
 }
 
-export type Reservation =
-  | { ok: true; max: number; id: string }
-  | { ok: false; reason: string };
+export type Reservation = { ok: true; max: number; id: string } | { ok: false; reason: string };
 
 interface PendingEntry {
   id: string;
+  runId: string;
   reservedMax: number;
   deadlineEpochMs: number;
+}
+
+interface PersistedLedger {
+  day: string;
+  month: string;
+  dailyUsd: number;
+  monthlyUsd: number;
+  outcomes: Record<RunOutcome, number>;
+  pending: PendingEntry[];
+  killed?: boolean;
 }
 
 /**
  * Daily + monthly USD ledger with a concurrency cap and kill-switch.
  *
- * Admission reserves the per-run *maximum* up front and commits the *actual*
- * cost on completion, so a burst of concurrent runs can't collectively
- * overshoot the cap before any finishes. Counters reset on UTC day/month
- * rollover.
+ * Admission reserves the per-run *maximum* up front and commits the terminal
+ * accounting charge on completion. Callers may conservatively retain a
+ * provider reservation when authoritative billing evidence is unavailable.
+ * A burst of concurrent runs therefore can't collectively overshoot the cap
+ * before any finishes. Counters reset on UTC day/month rollover.
  *
  * Committed spend persists to LEDGER_PATH (a mounted disk) when set, so the
  * caps survive a restart instead of resetting the day's tally to zero; with
  * no path it stays in-memory.
  *
- * In-flight reservations are also persisted as a `pending` list keyed by
- * deadlineEpochMs (admission time + wallMs). On boot, every unexpired entry
- * is reinstated as a live reservation so a crash mid-run can't admit a
- * fresh max-spend wave on top of microVMs that are still burning wallet
- * until their own wall-clock self-destruct. Expired entries are pruned from
- * disk at load. Set `CODER_LEDGER_RESET_PENDING=1` for a one-shot operator
- * override that drops every pending reservation at boot (e.g. when a
- * crash-loop wedges admission with stale markers).
+ * In-flight reservations are also persisted as a `pending` list. On boot,
+ * every pending entry is charged at its full reservation before it is
+ * removed. This remains conservative even if the process was down past the
+ * sandbox deadline or an obsolete reset environment variable is still set.
  */
 export class SpendLedger {
   private day = utcDay();
@@ -80,18 +94,15 @@ export class SpendLedger {
   private outcomes: Record<RunOutcome, number> = { completed: 0, failed: 0, cancelled: 0 };
   private killHandlers = new Set<() => void>();
   private pending: PendingEntry[] = [];
+  private persistenceError?: string;
 
   constructor(
     private readonly caps: BudgetCaps = config,
     private readonly path = process.env.LEDGER_PATH?.trim() || undefined,
     private readonly now: () => number = Date.now,
   ) {
-    // wallMs is the warm-recovery deadline horizon AND the gateway abort timer
-    // (see config.ts). A zero/negative/NaN value silently disables both — for
-    // the abort that's a fast-fail every run; for warm recovery it'd persist
-    // markers that expire instantly on the next boot. Loud-fail matches the
-    // existing nonNegativeInt pattern for the per-IP gate: don't ship with a
-    // silently-disabled control.
+    // wallMs is the gateway abort timer and persisted reservation deadline
+    // metadata. Loud-fail rather than silently disabling either control.
     if (!Number.isFinite(this.caps.wallMs) || this.caps.wallMs <= 0) {
       throw new Error(
         `SpendLedger: wallMs must be a positive finite number, got ${this.caps.wallMs}; set CODER_WALL_MS to a sane per-run wall-clock ceiling`,
@@ -104,107 +115,89 @@ export class SpendLedger {
     if (!this.path) return;
     let raw: string;
     try {
-      raw = readFileSync(this.path, "utf8");
+      raw = readFileSync(this.path, 'utf8');
     } catch (e) {
-      // First boot is the normal ENOENT path; anything else (EACCES, EIO, a
-      // tmpfs that vanished on reboot) is operator misconfiguration that
-      // silently resets the daily cap — surface it instead of swallowing.
       const code = (e as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT") {
-        console.error(
-          `ledger load failed (${this.path}, code=${code ?? "unknown"}): ${(e as Error).message} — starting fresh; check LEDGER_PATH points at persistent storage`,
-        );
+      if (code === 'ENOENT') {
+        this.persist();
+        return;
       }
-      return;
+      throw new Error(
+        `ledger load failed (${this.path}, code=${code ?? 'unknown'}): ${(e as Error).message}`,
+      );
     }
     try {
-      const s = JSON.parse(raw) as {
-        day?: string;
-        month?: string;
-        dailyUsd?: number;
-        monthlyUsd?: number;
-        outcomes?: Partial<Record<RunOutcome, number>>;
-        pending?: unknown;
-      };
-      if (s.day === this.day && typeof s.dailyUsd === "number") this.dailyUsd = s.dailyUsd;
-      if (s.month === this.month && typeof s.monthlyUsd === "number") this.monthlyUsd = s.monthlyUsd;
+      const parsed: unknown = JSON.parse(raw);
+      if (!isPersistedLedger(parsed)) throw new Error('ledger document schema is invalid');
+      const s = parsed;
+      if (s.day === this.day) this.dailyUsd = s.dailyUsd;
+      if (s.month === this.month) this.monthlyUsd = s.monthlyUsd;
       // Outcomes are daily counters — only restore when the persisted day
       // still matches today, so the dashboard reflects today's run mix.
-      if (s.day === this.day && s.outcomes) {
-        for (const k of ["completed", "failed", "cancelled"] as RunOutcome[]) {
-          if (typeof s.outcomes[k] === "number") this.outcomes[k] = s.outcomes[k] as number;
+      if (s.day === this.day) {
+        for (const k of ['completed', 'failed', 'cancelled'] as RunOutcome[]) {
+          this.outcomes[k] = s.outcomes[k];
         }
       }
-      const pruned = this.restorePending(s.pending);
-      if (this.dailyUsd > 0 || this.monthlyUsd > 0 || this.pending.length > 0) {
+      this.killed = s.killed === true;
+      const recovered = this.reconcilePending(s.pending);
+      if (this.dailyUsd > 0 || this.monthlyUsd > 0 || recovered > 0) {
         console.log(
-          `ledger restored from ${this.path}: $${this.dailyUsd.toFixed(4)} today, $${this.monthlyUsd.toFixed(2)} this month, ${this.pending.length} pending reservation(s)`,
+          `ledger restored from ${this.path}: $${this.dailyUsd.toFixed(4)} today, $${this.monthlyUsd.toFixed(2)} this month, ${recovered} crashed reservation(s) charged at maximum`,
         );
       }
-      // Only rewrite when prune-on-load actually changed the on-disk state —
-      // a crash-loop boot must not amplify disk writes on a clean ledger.
-      if (pruned > 0) this.save();
+      if (recovered > 0) this.persist();
     } catch (e) {
-      console.error(
-        `ledger parse failed (${this.path}): ${(e as Error).message} — starting fresh; the file may be truncated`,
-      );
+      throw new Error(`ledger parse failed (${this.path}): ${(e as Error).message}`);
     }
   }
 
   /**
-   * Reinstate persisted pending reservations whose wall-clock deadline is
-   * still in the future, so a fresh process treats the leftover microVMs as
-   * live spend instead of admitting on top of them. Operators can force a
-   * clean slate at boot with CODER_LEDGER_RESET_PENDING=1 — useful when a
-   * crash-loop has wedged admission with stale markers from runs that
-   * already died.
+   * Charge every persisted pending reservation at its full maximum. The
+   * deadline is retained as audit context but never weakens crash accounting:
+   * the absence of a terminal receipt is the ambiguity that matters.
    */
-  private restorePending(raw: unknown): number {
-    if (process.env.CODER_LEDGER_RESET_PENDING === "1") {
-      const dropped = Array.isArray(raw) ? raw.length : 0;
-      console.warn("CODER_LEDGER_RESET_PENDING=1 — dropping every persisted pending reservation");
-      this.pending = [];
-      return dropped;
-    }
-    if (!Array.isArray(raw)) return 0;
-    const now = this.now();
-    const restored: PendingEntry[] = [];
-    let expired = 0;
-    let dropped = 0;
+  private reconcilePending(raw: unknown): number {
+    if (!Array.isArray(raw)) throw new Error('ledger pending reservations are invalid');
+    let recovered = 0;
     for (const entry of raw) {
       if (
         entry &&
-        typeof entry === "object" &&
-        typeof (entry as PendingEntry).id === "string" &&
-        typeof (entry as PendingEntry).reservedMax === "number" &&
-        typeof (entry as PendingEntry).deadlineEpochMs === "number"
+        typeof entry === 'object' &&
+        typeof (entry as PendingEntry).id === 'string' &&
+        typeof (entry as PendingEntry).runId === 'string' &&
+        (entry as PendingEntry).runId.length > 0 &&
+        typeof (entry as PendingEntry).reservedMax === 'number' &&
+        Number.isFinite((entry as PendingEntry).reservedMax) &&
+        (entry as PendingEntry).reservedMax > 0 &&
+        typeof (entry as PendingEntry).deadlineEpochMs === 'number'
       ) {
         const e = entry as PendingEntry;
-        if (e.deadlineEpochMs > now) {
-          restored.push(e);
-          this.reserved += e.reservedMax;
-          this.active += 1;
-        } else {
-          expired += 1;
-        }
+        this.dailyUsd += e.reservedMax;
+        this.monthlyUsd += e.reservedMax;
+        this.outcomes.failed += 1;
+        recovered += 1;
       } else {
-        dropped += 1;
+        throw new Error('ledger contains an invalid pending reservation');
       }
     }
-    this.pending = restored;
-    if (restored.length > 0 || expired > 0) {
+    this.pending = [];
+    if (recovered > 0) {
       console.warn(
-        `ledger warm-recovery: reinstated ${restored.length} pending reservation(s), pruned ${expired} expired`,
+        `ledger crash recovery: charged ${recovered} pending reservation(s) at their full maximum`,
       );
     }
-    return expired + dropped;
+    return recovered;
   }
 
-  private save(): void {
+  private persist(): void {
     if (!this.path) return;
+    mkdirSync(dirname(this.path), { recursive: true });
+    const temp = `${this.path}.${process.pid}.${randomUUID()}.tmp`;
+    let fd: number | undefined;
     try {
       writeFileSync(
-        this.path,
+        temp,
         JSON.stringify({
           day: this.day,
           month: this.month,
@@ -212,10 +205,43 @@ export class SpendLedger {
           monthlyUsd: this.monthlyUsd,
           outcomes: this.outcomes,
           pending: this.pending,
+          killed: this.killed,
         }),
+        { mode: 0o600, flag: 'wx' },
       );
+      fd = openSync(temp, 'r');
+      fsyncSync(fd);
+      closeSync(fd);
+      fd = undefined;
+      renameSync(temp, this.path);
+      const directory = openSync(dirname(this.path), 'r');
+      try {
+        fsyncSync(directory);
+      } finally {
+        closeSync(directory);
+      }
+      JSON.parse(readFileSync(this.path, 'utf8'));
+    } finally {
+      if (fd !== undefined) closeSync(fd);
+      try {
+        unlinkSync(temp);
+      } catch (e) {
+        const code = (e as NodeJS.ErrnoException).code;
+        if (code !== 'ENOENT' && code !== 'ENOTDIR') throw e;
+      }
+    }
+  }
+
+  private save(): boolean {
+    if (!this.path) return true;
+    try {
+      this.persist();
+      return true;
     } catch (e) {
-      console.error("ledger persist failed:", e);
+      this.persistenceError = (e as Error).message;
+      this.engageKill();
+      console.error(`ledger persist failed: ${this.persistenceError}`);
+      return false;
     }
   }
 
@@ -233,56 +259,66 @@ export class SpendLedger {
     }
   }
 
-  /**
-   * Reserve a per-run admission slot. `bypassSpendCaps` skips the daily
-   * and monthly USD checks — used for operator-allowlisted IPs (see
-   * `CODER_EXEMPT_IPS`) — but the kill-switch, the concurrency cap, and
-   * the bookkeeping (`active`, `reserved`, `dailyUsd`/`monthlyUsd`, the
-   * persisted pending entry) still apply, so an exempt run is still
-   * observable on `/v1/budget` and still tears down when the kill
-   * switch fires.
-   */
-  reserve(
-    maxUsd: number = this.caps.perRunUsdMax,
-    bypassSpendCaps: boolean = false,
-  ): Reservation {
+  reserve(maxUsd: number = this.caps.perRunUsdMax, runId: string = randomUUID()): Reservation {
     this.roll();
-    if (this.killed) return { ok: false, reason: "kill-switch engaged" };
-    if (this.active >= this.caps.maxConcurrent) {
-      return { ok: false, reason: "at capacity — try again shortly" };
+    if (!Number.isFinite(maxUsd) || maxUsd <= 0 || maxUsd > this.caps.perRunUsdMax) {
+      return { ok: false, reason: 'invalid per-run spend cap' };
     }
-    if (!bypassSpendCaps) {
-      if (this.dailyUsd + this.reserved + maxUsd > this.caps.dailyUsd) {
-        return { ok: false, reason: "daily free capacity reached — resets at 00:00 UTC" };
-      }
-      if (this.monthlyUsd + this.reserved + maxUsd > this.caps.monthlyUsd) {
-        return { ok: false, reason: "monthly capacity reached" };
-      }
+    if (this.persistenceError) return { ok: false, reason: 'ledger persistence unavailable' };
+    if (this.killed) return { ok: false, reason: 'kill-switch engaged' };
+    if (this.active >= this.caps.maxConcurrent) {
+      return { ok: false, reason: 'at capacity — try again shortly' };
+    }
+    if (this.dailyUsd + this.reserved + maxUsd > this.caps.dailyUsd) {
+      return { ok: false, reason: 'daily free capacity reached — resets at 00:00 UTC' };
+    }
+    if (this.monthlyUsd + this.reserved + maxUsd > this.caps.monthlyUsd) {
+      return { ok: false, reason: 'monthly capacity reached' };
     }
     this.reserved += maxUsd;
     this.active += 1;
     const id = randomUUID();
-    this.pending.push({
+    const pending = {
       id,
+      runId,
       reservedMax: maxUsd,
       deadlineEpochMs: this.now() + this.caps.wallMs,
-    });
+    };
+    this.pending.push(pending);
     // Persist before returning: the whole point is that a crash AFTER admit
     // returns to the caller still has the marker on disk.
-    this.save();
+    if (!this.save()) {
+      this.pending.pop();
+      this.reserved = Math.max(0, this.reserved - maxUsd);
+      this.active = Math.max(0, this.active - 1);
+      return { ok: false, reason: 'ledger persistence unavailable' };
+    }
     return { ok: true, max: maxUsd, id };
   }
 
-  commit(id: string, reservedMax: number, actualUsd: number, outcome: RunOutcome = "completed"): void {
+  commit(
+    id: string,
+    reservedMax: number,
+    actualUsd: number,
+    outcome: RunOutcome = 'completed',
+  ): void {
     this.roll();
-    this.reserved = Math.max(0, this.reserved - reservedMax);
+    const idx = this.pending.findIndex((p) => p.id === id);
+    if (idx < 0) return;
+    const pending = this.pending[idx]!;
+    if (reservedMax !== pending.reservedMax) {
+      throw new Error('reservation amount does not match the persisted ledger entry');
+    }
+    if (!Number.isFinite(actualUsd) || actualUsd < 0) throw new Error('actual cost is invalid');
+    const overrun = actualUsd > pending.reservedMax + 1e-9;
+    this.reserved = Math.max(0, this.reserved - pending.reservedMax);
     this.dailyUsd += actualUsd;
     this.monthlyUsd += actualUsd;
     this.active = Math.max(0, this.active - 1);
     if (outcome in this.outcomes) this.outcomes[outcome] += 1;
     // Purge the pending entry so the on-disk file doesn't grow per-run.
-    const idx = this.pending.findIndex((p) => p.id === id);
-    if (idx >= 0) this.pending.splice(idx, 1);
+    this.pending.splice(idx, 1);
+    if (overrun) this.engageKill();
     this.save();
   }
 
@@ -307,6 +343,12 @@ export class SpendLedger {
    */
   kill(): void {
     if (this.killed) return;
+    this.engageKill();
+    this.save();
+  }
+
+  private engageKill(): void {
+    if (this.killed) return;
     this.killed = true;
     const handlers = [...this.killHandlers];
     this.killHandlers.clear();
@@ -314,10 +356,9 @@ export class SpendLedger {
       try {
         h();
       } catch (e) {
-        console.error("ledger kill handler failed:", e);
+        console.error('ledger kill handler failed:', e);
       }
     }
-    this.save();
   }
 
   snapshot() {
@@ -328,9 +369,33 @@ export class SpendLedger {
       reserved: this.reserved,
       active: this.active,
       killed: this.killed,
+      persistenceReady: this.persistenceError === undefined,
       dailyCap: this.caps.dailyUsd,
       monthlyCap: this.caps.monthlyUsd,
       outcomes: { ...this.outcomes },
     };
   }
+}
+
+function isPersistedLedger(value: unknown): value is PersistedLedger {
+  if (!value || typeof value !== 'object') return false;
+  const ledger = value as Partial<PersistedLedger>;
+  const counter = (candidate: unknown): candidate is number =>
+    typeof candidate === 'number' && Number.isFinite(candidate) && candidate >= 0;
+  const outcome = (candidate: unknown): candidate is number =>
+    counter(candidate) && Number.isSafeInteger(candidate);
+  return (
+    typeof ledger.day === 'string' &&
+    /^\d{4}-\d{2}-\d{2}$/.test(ledger.day) &&
+    typeof ledger.month === 'string' &&
+    /^\d{4}-\d{2}$/.test(ledger.month) &&
+    counter(ledger.dailyUsd) &&
+    counter(ledger.monthlyUsd) &&
+    Boolean(ledger.outcomes) &&
+    outcome(ledger.outcomes?.completed) &&
+    outcome(ledger.outcomes?.failed) &&
+    outcome(ledger.outcomes?.cancelled) &&
+    Array.isArray(ledger.pending) &&
+    (ledger.killed === undefined || typeof ledger.killed === 'boolean')
+  );
 }

@@ -52,6 +52,9 @@ async fn main() {
     let header = signer.build_payment(&req).await.expect("build_payment");
     let json: serde_json::Value =
         serde_json::from_slice(&BASE64.decode(&header).expect("b64")).expect("json");
-    println!("x-payment envelope:\n{}", serde_json::to_string_pretty(&json).unwrap());
+    println!(
+        "x-payment envelope:\n{}",
+        serde_json::to_string_pretty(&json).unwrap()
+    );
     println!("\nER consume signature: {}", json["payload"]["signature"]);
 }

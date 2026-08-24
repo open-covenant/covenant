@@ -9,9 +9,9 @@
 #![deny(unsafe_code)]
 
 pub mod cross_host;
+pub mod er_provider;
 pub mod escrow;
 pub mod http;
-pub mod er_provider;
 pub mod hyre;
 pub mod metaplex;
 pub mod reputation;
@@ -5193,15 +5193,15 @@ impl Server {
             issuer: &issuer,
         };
         let client = covenant_x402::Client::new(covenant_x402::http_client());
-        let outcome =
-            match x402::pay_and_record(&ctx, &config, &client, &signer, peer, &call).await {
-                Ok(o) => o,
-                Err(e) => {
-                    return Response::Error {
-                        message: format!("ER provider call failed: {e}"),
-                    }
+        let outcome = match x402::pay_and_record(&ctx, &config, &client, &signer, peer, &call).await
+        {
+            Ok(o) => o,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("ER provider call failed: {e}"),
                 }
-            };
+            }
+        };
         let status = outcome.response.status().as_u16();
         let body_text = match x402::read_response_body(outcome.response).await {
             Ok(t) => t,
@@ -66975,6 +66975,7 @@ budget_credits_per_hour = {credits}
             .await;
 
         let _ = fac.kill();
+        let _ = fac.wait();
 
         match resp {
             Response::X402Paid {
@@ -66983,7 +66984,10 @@ budget_credits_per_hour = {credits}
                 receipt_id,
             } => {
                 assert_eq!(status, 200, "expected 200 from facilitator; body: {body}");
-                assert!(body.contains("quote"), "facilitator content missing: {body}");
+                assert!(
+                    body.contains("quote"),
+                    "facilitator content missing: {body}"
+                );
                 assert_ne!(receipt_id, Uuid::nil(), "a receipt id must be assigned");
             }
             other => panic!("expected X402Paid, got: {other:?}"),
@@ -67080,6 +67084,7 @@ budget_credits_per_hour = {credits}
             .await;
 
         let _ = fac.kill();
+        let _ = fac.wait();
 
         match resp {
             Response::ToolResult { content, is_error } => {

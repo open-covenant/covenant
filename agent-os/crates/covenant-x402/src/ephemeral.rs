@@ -131,8 +131,9 @@ impl EphemeralSigner {
         er_rpc_url: impl Into<String>,
     ) -> Result<Self> {
         let path = path.as_ref();
-        let keypair = read_keypair_file(path)
-            .map_err(|e| X402Error::Sign(format!("read funding keypair {}: {e}", path.display())))?;
+        let keypair = read_keypair_file(path).map_err(|e| {
+            X402Error::Sign(format!("read funding keypair {}: {e}", path.display()))
+        })?;
         Ok(Self::new(keypair, program_id, er_rpc_url))
     }
 

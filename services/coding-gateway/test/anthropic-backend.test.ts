@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
-import type Anthropic from "@anthropic-ai/sdk";
-import { execTool, previewOf, withTurnCache } from "../src/backends/anthropic.js";
-import type { GatewayEvent, Sandbox } from "../src/types.js";
+import { describe, expect, it } from 'vitest';
+import type Anthropic from '@anthropic-ai/sdk';
+import { execTool, previewOf, withTurnCache } from '../src/backends/anthropic.js';
+import type { GatewayEvent, Sandbox } from '../src/types.js';
 
 // The Anthropic backend's run() loop builds its own client with no injection
 // seam, so it can't be driven without a live key. The novel logic lives in
@@ -11,7 +11,11 @@ import type { GatewayEvent, Sandbox } from "../src/types.js";
 
 function memSandbox(
   files: Record<string, string> = {},
-  execResult: { stdout: string; stderr: string; exitCode: number } = { stdout: "", stderr: "", exitCode: 0 },
+  execResult: { stdout: string; stderr: string; exitCode: number } = {
+    stdout: '',
+    stderr: '',
+    exitCode: 0,
+  },
 ): Sandbox & { execs: string[] } {
   const store = { ...files };
   const execs: string[] = [];
@@ -27,131 +31,143 @@ function memSandbox(
       execs.push(cmd);
       return execResult;
     },
-    previewUrl: async () => "",
+    previewUrl: async () => '',
     destroy: async () => {},
     execs,
   } as Sandbox & { execs: string[] };
 }
 
 function toolUse(name: string, input: Record<string, unknown>): Anthropic.ToolUseBlock {
-  return { id: "toolu_1", name, input } as Anthropic.ToolUseBlock;
+  return { id: 'toolu_1', name, input } as Anthropic.ToolUseBlock;
 }
 
 type Block = Anthropic.ContentBlockParam;
 
-describe("withTurnCache", () => {
-  it("marks only the last block of the last message and leaves the input untouched", () => {
+describe('withTurnCache', () => {
+  it('marks only the last block of the last message and leaves the input untouched', () => {
     const messages = [
-      { role: "user", content: [{ type: "text", text: "first" }] },
-      { role: "assistant", content: [{ type: "text", text: "second" }] },
+      { role: 'user', content: [{ type: 'text', text: 'first' }] },
+      { role: 'assistant', content: [{ type: 'text', text: 'second' }] },
     ] as Anthropic.MessageParam[];
 
     const out = withTurnCache(messages);
 
     // Only the last block of the last message gets the breakpoint.
-    expect((out[1]!.content as Block[])[0]).toMatchObject({ cache_control: { type: "ephemeral" } });
+    expect((out[1]!.content as Block[])[0]).toMatchObject({ cache_control: { type: 'ephemeral' } });
     // Earlier messages are untouched.
-    expect(((out[0]!.content as Block[])[0] as { cache_control?: unknown }).cache_control).toBeUndefined();
+    expect(
+      ((out[0]!.content as Block[])[0] as { cache_control?: unknown }).cache_control,
+    ).toBeUndefined();
     // The input array is neither replaced nor mutated: cloning the block keeps
     // the breakpoint off the shared reference so it can't accumulate across turns.
     expect(out).not.toBe(messages);
-    expect(((messages[1]!.content as Block[])[0] as { cache_control?: unknown }).cache_control).toBeUndefined();
+    expect(
+      ((messages[1]!.content as Block[])[0] as { cache_control?: unknown }).cache_control,
+    ).toBeUndefined();
   });
 
-  it("converts string message content into a cached text block", () => {
-    const messages = [{ role: "user", content: "hello" }] as Anthropic.MessageParam[];
+  it('converts string message content into a cached text block', () => {
+    const messages = [{ role: 'user', content: 'hello' }] as Anthropic.MessageParam[];
 
     const out = withTurnCache(messages);
 
     expect((out[0]!.content as Block[])[0]).toMatchObject({
-      type: "text",
-      text: "hello",
-      cache_control: { type: "ephemeral" },
+      type: 'text',
+      text: 'hello',
+      cache_control: { type: 'ephemeral' },
     });
   });
 
-  it("passes an empty message list through without throwing", () => {
+  it('passes an empty message list through without throwing', () => {
     expect(withTurnCache([])).toEqual([]);
   });
 });
 
-describe("execTool", () => {
-  it("throws when edit_file old_string is not found", async () => {
-    const sandbox = memSandbox({ "a.txt": "hello world" });
+describe('execTool', () => {
+  it('throws when edit_file old_string is not found', async () => {
+    const sandbox = memSandbox({ 'a.txt': 'hello world' });
     const call = execTool(
-      toolUse("edit_file", { path: "a.txt", old_string: "missing", new_string: "x" }),
+      toolUse('edit_file', { path: 'a.txt', old_string: 'missing', new_string: 'x' }),
       sandbox,
       () => {},
     );
     await expect(call).rejects.toThrow(/not found in a\.txt/);
   });
 
-  it("throws when edit_file old_string is not unique", async () => {
-    const sandbox = memSandbox({ "a.txt": "x x" });
+  it('throws when edit_file old_string is not unique', async () => {
+    const sandbox = memSandbox({ 'a.txt': 'x x' });
     const call = execTool(
-      toolUse("edit_file", { path: "a.txt", old_string: "x", new_string: "y" }),
+      toolUse('edit_file', { path: 'a.txt', old_string: 'x', new_string: 'y' }),
       sandbox,
       () => {},
     );
     await expect(call).rejects.toThrow(/not unique in a\.txt/);
   });
 
-  it("throws for an unknown tool", async () => {
-    const call = execTool(toolUse("delete_file", { path: "a.txt" }), memSandbox(), () => {});
+  it('throws for an unknown tool', async () => {
+    const call = execTool(toolUse('delete_file', { path: 'a.txt' }), memSandbox(), () => {});
     await expect(call).rejects.toThrow(/unknown tool: delete_file/);
   });
 
-  it("runs a bash tool call through sandbox.exec and formats exit/stdout/stderr", async () => {
+  it('runs a bash tool call through sandbox.exec and formats exit/stdout/stderr', async () => {
     // The bash arm (anthropic.ts:247-250) is the agent's command tool; the execTool
     // block pinned only error arms, so dropping this case routes bash to unknown-tool.
-    const sandbox = memSandbox({}, { stdout: "file.txt", stderr: "warn", exitCode: 7 });
-    const out = await execTool(toolUse("bash", { command: "ls" }), sandbox, () => {});
-    expect(sandbox.execs).toContain("ls");
-    expect(out).toBe("exit=7\n--- stdout ---\nfile.txt\n--- stderr ---\nwarn");
+    const sandbox = memSandbox({}, { stdout: 'file.txt', stderr: 'warn', exitCode: 7 });
+    const out = await execTool(toolUse('bash', { command: 'ls' }), sandbox, () => {});
+    expect(sandbox.execs).toContain('ls');
+    expect(out).toBe('exit=7\n--- stdout ---\nfile.txt\n--- stderr ---\nwarn');
   });
 
-  it("splices old_string for new_string once on a successful edit_file", async () => {
+  it('splices old_string for new_string once on a successful edit_file', async () => {
     // The edit_file success path (anthropic.ts:242-245) was untested; only the
     // not-found / not-unique error arms are pinned, so a splice-math regression
     // would corrupt the file with every existing test green.
-    const sandbox = memSandbox({ "a.txt": "xx foo yy" });
+    const sandbox = memSandbox({ 'a.txt': 'xx foo yy' });
     const emitted: GatewayEvent[] = [];
     const out = await execTool(
-      toolUse("edit_file", { path: "a.txt", old_string: "foo", new_string: "bar" }),
+      toolUse('edit_file', { path: 'a.txt', old_string: 'foo', new_string: 'bar' }),
       sandbox,
       (e) => emitted.push(e),
     );
-    expect(out).toBe("edited a.txt");
-    expect(await sandbox.readFile("a.txt")).toBe("xx bar yy");
-    expect(emitted.find((e) => e.type === "file.written")).toMatchObject({ path: "a.txt", bytes: 9 });
+    expect(out).toBe('edited a.txt');
+    expect(await sandbox.readFile('a.txt')).toBe('xx bar yy');
+    expect(emitted.find((e) => e.type === 'file.written')).toMatchObject({
+      path: 'a.txt',
+      bytes: 9,
+    });
   });
 
-  it("writes a file via write_file and reports byte length, not char length", async () => {
+  it('writes a file via write_file and reports byte length, not char length', async () => {
     // write_file (anthropic.ts:225-231) emits file.written with Buffer.byteLength of
     // the content; multi-byte content pins byte-count vs char-count, which the
     // execTool block never drove. "héllo" is 5 chars but 6 UTF-8 bytes.
-    const content = "héllo";
+    const content = 'héllo';
     const sandbox = memSandbox();
     const emitted: GatewayEvent[] = [];
-    const out = await execTool(toolUse("write_file", { path: "a.txt", content }), sandbox, (e) => emitted.push(e));
-    expect(await sandbox.readFile("a.txt")).toBe(content);
+    const out = await execTool(toolUse('write_file', { path: 'a.txt', content }), sandbox, (e) =>
+      emitted.push(e),
+    );
+    expect(await sandbox.readFile('a.txt')).toBe(content);
     expect(out).toBe(`wrote ${Buffer.byteLength(content)} bytes to a.txt`);
-    expect(emitted.find((e) => e.type === "file.written")).toMatchObject({ path: "a.txt", bytes: Buffer.byteLength(content) });
+    expect(emitted.find((e) => e.type === 'file.written')).toMatchObject({
+      path: 'a.txt',
+      bytes: Buffer.byteLength(content),
+    });
   });
 });
 
-describe("previewOf", () => {
-  it("truncates a bash command to 120 chars for the event preview", () => {
-    const preview = previewOf(toolUse("bash", { command: "x".repeat(200) }));
+describe('previewOf', () => {
+  it('truncates a bash command to 120 chars for the event preview', () => {
+    const preview = previewOf(toolUse('bash', { command: 'x'.repeat(200) }));
     expect(preview).toHaveLength(120);
-    expect(preview).toBe("x".repeat(120));
+    expect(preview).toBe('x'.repeat(120));
   });
 
-  it("returns the path for a path-bearing tool", () => {
-    expect(previewOf(toolUse("read_file", { path: "src/app.ts" }))).toBe("src/app.ts");
+  it('returns the path for a path-bearing tool', () => {
+    expect(previewOf(toolUse('read_file', { path: 'src/app.ts' }))).toBe('src/app.ts');
   });
 
-  it("returns empty for a tool with neither a command nor a path", () => {
-    expect(previewOf(toolUse("custom", {}))).toBe("");
+  it('returns empty for a tool with neither a command nor a path', () => {
+    expect(previewOf(toolUse('custom', {}))).toBe('');
   });
 });

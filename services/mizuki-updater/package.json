@@ -1,0 +1,27 @@
+{
+  "name": "@covenant/mizuki-updater",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.31.0",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "description": "Signed, independently reviewed autonomous upgrades for Mizuki.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "pg": "8.16.3",
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "25.6.0",
+    "@types/pg": "8.15.6",
+    "typescript": "6.0.3",
+    "vitest": "4.1.5"
+  }
+}

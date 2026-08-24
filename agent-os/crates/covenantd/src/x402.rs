@@ -563,14 +563,20 @@ mod tests {
         assert_eq!(bin, &PathBuf::from("/er-signer"));
         assert_eq!(env.len(), 1);
         // Non-ER network -> default SPL signer.
-        assert_eq!(cfg.signer_parts_for("solana:mainnet").0, &PathBuf::from("/spl-signer"));
+        assert_eq!(
+            cfg.signer_parts_for("solana:mainnet").0,
+            &PathBuf::from("/spl-signer")
+        );
 
         // With no ER signer configured, an ER network falls back to the default.
         let cfg = X402Config {
             er_signer_binary: None,
             ..cfg
         };
-        assert_eq!(cfg.signer_parts_for("solana-er:devnet").0, &PathBuf::from("/spl-signer"));
+        assert_eq!(
+            cfg.signer_parts_for("solana-er:devnet").0,
+            &PathBuf::from("/spl-signer")
+        );
     }
 
     fn agent(tag: u8) -> AgentId {

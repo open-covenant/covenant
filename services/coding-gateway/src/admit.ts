@@ -1,11 +1,13 @@
-import type { IpBucket } from "./ip-bucket.js";
-import type { SpendLedger } from "./budget.js";
+import type { IpBucket } from './ip-bucket.js';
+import type { SpendLedger } from './budget.js';
 
 export type AdmitOutcome =
   | { ok: true; reservedMax: number; reservationId: string; exempt: boolean }
   | { ok: false; reason: string; retryAfterMs?: number };
 
 export interface AdmitInputs {
+  runId: string;
+  maxUsd: number;
   ip: string;
   ipBucket: IpBucket;
   ledger: SpendLedger;
@@ -16,14 +18,7 @@ export interface AdmitInputs {
    * idempotent but the `if` makes the contract explicit.
    */
   ipMaxPerIp: number;
-  /**
-   * Operator-allowlisted IPs that skip the per-IP bucket and the
-   * daily/monthly USD spend caps. The kill-switch, the concurrency cap,
-   * and the bookkeeping still apply, so an exempt run still surfaces on
-   * `/v1/budget` and still tears down when the kill-switch fires.
-   * Defaulted to an empty Set so callers that pre-date the exemption
-   * surface (tests, embedders) keep working unchanged.
-   */
+  /** Operator IPs skip only the per-IP throttle. Spend caps remain hard. */
   exemptIps?: ReadonlySet<string>;
 }
 
@@ -39,6 +34,8 @@ export interface AdmitInputs {
  * the security review of coder-12 flagged as missing.
  */
 export function admitRun({
+  runId,
+  maxUsd,
   ip,
   ipBucket,
   ledger,
@@ -52,7 +49,7 @@ export function admitRun({
       return { ok: false, reason: admission.reason, retryAfterMs: admission.retryAfterMs };
     }
   }
-  const reservation = ledger.reserve(undefined, exempt);
+  const reservation = ledger.reserve(maxUsd, runId);
   if (!reservation.ok) {
     if (!exempt && ipMaxPerIp > 0) ipBucket.release(ip);
     return { ok: false, reason: reservation.reason };

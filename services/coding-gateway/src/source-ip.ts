@@ -1,4 +1,4 @@
-import type { IncomingMessage } from "node:http";
+import type { IncomingMessage } from 'node:http';
 
 /**
  * Resolve the source IP for admission control. The right-most
@@ -17,11 +17,11 @@ import type { IncomingMessage } from "node:http";
  */
 export function sourceIp(req: IncomingMessage, trustedHops: number): string {
   if (trustedHops > 0) {
-    const header = req.headers["x-forwarded-for"];
-    const raw = Array.isArray(header) ? header.join(",") : header;
-    if (typeof raw === "string" && raw.length > 0) {
+    const header = req.headers['x-forwarded-for'];
+    const raw = Array.isArray(header) ? header.join(',') : header;
+    if (typeof raw === 'string' && raw.length > 0) {
       const hops = raw
-        .split(",")
+        .split(',')
         .map((s) => s.trim())
         .filter((s) => s.length > 0);
       if (hops.length > 0) {
@@ -38,7 +38,7 @@ export function sourceIp(req: IncomingMessage, trustedHops: number): string {
     }
   }
   const remote = req.socket.remoteAddress;
-  if (!remote) return "unknown";
+  if (!remote) return 'unknown';
   return stripV4InV6(remote);
 }
 
@@ -48,5 +48,5 @@ export function sourceIp(req: IncomingMessage, trustedHops: number): string {
 // X-Forwarded-For. Without this, the same client would key two buckets
 // and bypass the per-IP cap by alternating between the two forms.
 function stripV4InV6(ip: string): string {
-  return ip.startsWith("::ffff:") ? ip.slice(7) : ip;
+  return ip.startsWith('::ffff:') ? ip.slice(7) : ip;
 }

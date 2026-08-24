@@ -1,0 +1,76 @@
+{
+  "schema": "mizuki.usepod-route-evidence.v1",
+  "capturedAt": "2026-08-23T20:47:54Z",
+  "funding": {
+    "network": "solana-mainnet",
+    "method": "DepositUsdc",
+    "asset": "USDC",
+    "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "amountMicrounits": 50000,
+    "sovereignProgram": "BBAdcqUkg68JXNiPQ1HR1wujfZuayyK3eQTQSYAh6FSW",
+    "signature": "ExRVdguFoDeHTCF9P1yfKozcpxML9Y4s1WdzYTFDdeRcMVkjVGwP4qwmYJpPc4DBwtcbuQwt3QdTNh4KdzRo3ih",
+    "slot": 441239653,
+    "blockTime": "2026-08-23T20:47:54Z",
+    "commitment": "finalized"
+  },
+  "account": {
+    "tokenActivated": true,
+    "catalogModelCount": 1013,
+    "canaryFundingMicrounits": 50000,
+    "productionBalanceFloorMicrounits": 4000000,
+    "productionBalanceFloorMet": false
+  },
+  "routes": {
+    "coding": {
+      "model": "openai/gpt-oss-120b",
+      "route": "marketplace",
+      "toolCall": {
+        "forced": true,
+        "nonceMatched": true
+      },
+      "headers": {
+        "balanceHeaderValidPositive": true,
+        "providerIdPresent": true,
+        "providerCostPresent": false,
+        "providerRequestIdPresent": false
+      },
+      "usage": {
+        "inputTokens": 147,
+        "outputTokens": 61
+      }
+    },
+    "review": {
+      "model": "deepseek-v4-flash",
+      "route": "marketplace",
+      "strictDecisionJsonParsed": true,
+      "maxTokens": 512,
+      "headers": {
+        "balanceHeaderValidPositive": true,
+        "providerIdPresent": true,
+        "providerCostPresent": false,
+        "providerRequestIdPresent": false
+      },
+      "usage": {
+        "inputTokens": 1177,
+        "outputTokens": 493
+      }
+    }
+  },
+  "rejectedCandidates": [
+    {
+      "requestedModel": "deepseek-v3.2",
+      "result": "canonicalized-and-failed-tool-call"
+    },
+    {
+      "requestedModel": "deepseek/deepseek-v3.2",
+      "result": "failed-tool-call-and-conflicting-duplicate-balance-values"
+    }
+  ],
+  "limitations": [
+    "No real-repository coding benchmark has run.",
+    "Canary funding is below the production balance floor.",
+    "The provider returned neither a cost field nor a request identifier for either selected route.",
+    "No credential, deposit code, account balance, or provider identifier is retained in this artifact."
+  ],
+  "launchVerdict": "no-go-paid-intake"
+}

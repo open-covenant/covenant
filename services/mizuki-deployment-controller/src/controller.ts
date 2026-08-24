@@ -1349,7 +1349,7 @@ function serviceFingerprint(service: RenderService): string {
     id: service.id,
     type: service.type,
     autoDeploy: service.autoDeploy,
-    imagePath: service.imagePath,
+    imageRepository: serviceImageRepository(service.imagePath),
     registryCredential: service.registryCredential ?? null,
     runtime: service.serviceDetails.runtime,
     region: service.serviceDetails.region,

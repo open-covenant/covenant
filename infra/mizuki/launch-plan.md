@@ -25,7 +25,7 @@ No features, security-sensitive work, private repositories, or larger scopes ent
 - Prepare a list of 30 public repositories with active maintainers, reproducible Micro issues, recent merges, and permissive contribution rules.
 - Book the first two external maintainers and stream slots.
 
-Exit: all core tests green, 30-minute health soak, no non-terminal signer operations, and canary participants confirmed.
+Exit: all core tests green, a fresh complete production-readiness report, no non-terminal signer operations, and canary participants confirmed.
 
 ### 25–26 August: public canaries
 

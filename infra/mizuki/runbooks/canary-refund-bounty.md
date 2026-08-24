@@ -9,7 +9,7 @@ Use a cooperating operator maintainer and a dedicated public Micro issue in a re
 - The maintainer understands and consents to the temporary App removal and public evidence.
 - There are no other active paid jobs. Stop if normal intake cannot be held during the short canary window.
 - The $2 quote, payer wallet, refund treasury, refund mint, signer limits, and expected rescue bounty amount are recorded.
-- The signer, database, RPC, and price source have been healthy for 30 minutes. Do not combine this drill with infrastructure fault testing.
+- A fresh production-readiness report confirms the signer, database, RPC, and price source are healthy. Do not combine this drill with infrastructure fault testing.
 - A separately controlled contributor identity and wallet are ready to exercise claim, merge, and release. If the contributor is operator-controlled, label that fact publicly and do not count it as external adoption.
 - The operator has rehearsed the post-payment removal timing on devnet. The issue must leave enough route time to remove access before publication; abort before payment if it does not.
 - The operator has recorded the closed admission revision and verified the append-only audit endpoint.

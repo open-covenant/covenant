@@ -34,8 +34,8 @@ describe('updater configuration', () => {
     expect(config.operational).toBeDefined();
     expect(config.operationalFailures).toEqual([]);
     expect(config).toMatchObject({
-      promotionSoakMs: 3 * 60 * 60_000,
-      promotionTimeoutMs: 3 * 60 * 60_000 + 10 * 60_000,
+      promotionSoakMs: 10_000,
+      promotionTimeoutMs: 120_000,
     });
     expect(config.operational).toMatchObject({
       shadowHookUrl: 'http://127.0.0.1:9000/v1/deployments/shadow',
@@ -178,7 +178,7 @@ describe('updater configuration', () => {
         MIZUKI_UPDATER_PROMOTION_SOAK_MS: '60000',
         MIZUKI_UPDATER_PROMOTION_TIMEOUT_MS: '64999',
       }),
-    ).toThrow('Promotion timeout must exceed the soak by at least one poll interval');
+    ).toThrow('Promotion timeout must exceed the observation window by at least one poll interval');
 
     expect(
       loadConfig({

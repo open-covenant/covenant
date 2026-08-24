@@ -127,7 +127,7 @@ describe('deployment controller', () => {
     expect(started.deploymentId).toBe('dep-1');
   });
 
-  it('holds the production slot through soak, finalizes idempotently, then admits the next upgrade', async () => {
+  it('holds the production slot through final verification, then admits the next upgrade', async () => {
     let clock = new Date('2026-08-23T12:00:00.000Z');
     const context = createContext(() => clock);
     const firstShadow = await context.controller.startShadow(fixture(), `${UPGRADE}:shadow`);
@@ -187,7 +187,7 @@ describe('deployment controller', () => {
       context.controller.finalize(finalize, `${UPGRADE}:finalize`),
     ).rejects.toMatchObject({ code: 'promotion_soak_in_progress' });
 
-    clock = new Date(clock.getTime() + 120_000);
+    clock = new Date(clock.getTime() + 10_000);
     await expect(context.controller.finalize(finalize, `${UPGRADE}:finalize`)).resolves.toEqual({
       status: 'completed',
       operationId: firstPromotion.operationId,
@@ -503,6 +503,7 @@ class FakeRender implements RenderGateway {
       throw new ControllerError('render_unavailable', 'Render API request failed', 503, true);
     }
     const deploy = this.add(serviceId, ref, 'api');
+    this.services.get(serviceId)!.imagePath = ref;
     if (this.loseNextDeployResponse) {
       this.loseNextDeployResponse = false;
       throw new ControllerError('render_unavailable', 'Render API request failed', 503, true);
@@ -513,6 +514,7 @@ class FakeRender implements RenderGateway {
   async rollback(serviceId: string, deployId: string): Promise<RenderDeploy> {
     const target = (this.deploys.get(serviceId) ?? []).find((deploy) => deploy.id === deployId)!;
     this.mutations.push({ action: 'rollback', serviceId, target: deployId });
+    this.services.get(serviceId)!.imagePath = target.image!.ref;
     return structuredClone(this.add(serviceId, target.image!.ref, 'rollback'));
   }
 
@@ -559,7 +561,7 @@ function createContext(now: () => Date = () => new Date('2026-08-23T12:00:00.000
       shadowServiceId: 'srv-shadow123',
       productionServiceId: 'srv-production123',
       reconciliationGraceMs: 120_000,
-      minPromotionAgeMs: 120_000,
+      minPromotionAgeMs: 10_000,
     },
     store,
     render,

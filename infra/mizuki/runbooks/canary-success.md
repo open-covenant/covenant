@@ -7,7 +7,7 @@ Objective: produce a public, independently inspectable chain from an operator-co
 - The GitHub App is installed on one operator-controlled public repository listed in `MIZUKI_INTERNAL_REPOS`.
 - The issue is a Micro task with one observable acceptance criterion, no secrets, no generated lockfile churn, no dependency upgrade, and no security-sensitive code.
 - Quote is exactly $2.00 USDC and has not expired.
-- API, signer, updater, coding gateway, PostgreSQL, RPC, facilitator, sandbox, and model route have been healthy for 30 uninterrupted minutes.
+- A fresh production-readiness report confirms the API, signer, updater, coding gateway, PostgreSQL, RPC, facilitator, sandbox, and model route are healthy.
 - The signer independently reports enough finalized refund capacity for the full principal, while limits remain $25 per operation and $100 rolling 24 hours.
 - No unresolved refund, escrow, or submitted signer operation exists.
 - The operator has recorded the closed admission revision and verified the append-only audit endpoint.

@@ -16,15 +16,24 @@ import {
   formatTime,
   formatUsd,
 } from '@/lib/format';
+import { pageMetadata } from '@/lib/page-metadata';
 import type { Bounty } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
-export const metadata: Metadata = {
-  title: 'Bounty receipt',
-  description:
-    'Inspect the scope, claim requirements, review record, and payout evidence for a Mizuki maintenance bounty.',
-};
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}): Promise<Metadata> {
+  const { id } = await params;
+  return pageMetadata({
+    title: 'Bounty receipt',
+    description:
+      'Inspect the scope, claim requirements, review record, and payout evidence for a Mizuki maintenance bounty.',
+    path: `/bounties/${encodeURIComponent(id)}`,
+  });
+}
 
 export default async function BountyDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;

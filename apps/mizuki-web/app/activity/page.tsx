@@ -2,14 +2,16 @@ import type { Metadata } from 'next';
 import { ActivityFeed } from '@/components/activity-feed';
 import { DataError, DemoNotice, EmptyState } from '@/components/data-state';
 import { getActivity } from '@/lib/api';
+import { pageMetadata } from '@/lib/page-metadata';
 
 export const dynamic = 'force-dynamic';
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
   title: 'Public activity',
   description:
     'Follow Mizuki’s published payments, pull requests, refunds, funded bounties, payouts, production changes, and rollbacks.',
-};
+  path: '/activity',
+});
 
 export default async function ActivityPage() {
   const result = await getActivity();

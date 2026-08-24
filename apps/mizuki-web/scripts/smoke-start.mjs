@@ -62,15 +62,32 @@ try {
   const home = await page(port, '/', {});
   assert(home.status === 200, `home returned ${home.status}`);
   assert(home.body.includes('/mizuki-avatar.jpg'), 'home omitted the profile image');
-  assert(
-    /property="og:image" content="[^"]*\/mizuki-avatar\.jpg"/.test(home.body),
-    'home omitted the profile image from Open Graph metadata',
-  );
-  assert(
-    /name="twitter:image" content="[^"]*\/mizuki-avatar\.jpg"/.test(home.body),
-    'home omitted the profile image from Twitter metadata',
-  );
   assert(home.body.includes('/mizuki-icon-64.png'), 'home omitted the browser icon');
+
+  const publicPages = [
+    ['/', home],
+    ['/work', await page(port, '/work', {})],
+    ['/activity', await page(port, '/activity', {})],
+    ['/bounties', await page(port, '/bounties', {})],
+    ['/capabilities', await page(port, '/capabilities', {})],
+    ['/treasury', await page(port, '/treasury', {})],
+    ['/privacy', await page(port, '/privacy', {})],
+    ['/security', await page(port, '/security', {})],
+    ['/support', await page(port, '/support', {})],
+    ['/terms', await page(port, '/terms', {})],
+  ];
+  for (const [path, response] of publicPages) {
+    assert(response.status === 200, `${path} returned ${response.status}`);
+    assertSocialMetadata(response.body, path);
+  }
+
+  const socialImage = await page(port, '/mizuki-og.png', {});
+  assert(socialImage.status === 200, `social image returned ${socialImage.status}`);
+  assert(socialImage.headers['content-type']?.startsWith('image/png'), 'social image is not PNG');
+  assert(
+    Number(socialImage.headers['content-length']) > 10_000,
+    'social image is unexpectedly small',
+  );
 
   const avatar = await page(port, '/mizuki-avatar.jpg', {});
   assert(avatar.status === 200, `profile image returned ${avatar.status}`);
@@ -117,6 +134,7 @@ try {
     const valid = await page(port, `/${resource}/${validId}`, {});
     assert(valid.status === 200, `${resource} valid receipt returned ${valid.status}`);
     assert(valid.body.includes(validId), `${resource} valid receipt did not render its identifier`);
+    assertSocialMetadata(valid.body, `/${resource}/${validId}`);
   }
 
   child.kill('SIGTERM');
@@ -239,6 +257,32 @@ async function withTimeout(promise, timeoutMs, action) {
 
 function assert(condition, message) {
   if (!condition) throw new Error(`${message}\n${output}`);
+}
+
+function assertSocialMetadata(body, path) {
+  const canonical = `https://mizuki.opencovenant.org${path === '/' ? '' : path}`;
+  assert(
+    /property="og:image" content="https:\/\/mizuki\.opencovenant\.org\/mizuki-og\.png"/.test(body),
+    `${path} omitted its Open Graph image`,
+  );
+  assert(
+    /name="twitter:image" content="https:\/\/mizuki\.opencovenant\.org\/mizuki-og\.png"/.test(body),
+    `${path} omitted its Twitter image`,
+  );
+  assert(
+    /name="twitter:card" content="summary_large_image"/.test(body),
+    `${path} omitted the large Twitter card`,
+  );
+  assert(
+    /property="og:image:width" content="1200"/.test(body) &&
+      /property="og:image:height" content="630"/.test(body),
+    `${path} published incorrect social image dimensions`,
+  );
+  assert(
+    /property="og:image:alt" content="Mizuki the Mech — fixed-price GitHub maintenance"/.test(body),
+    `${path} omitted social image alt text`,
+  );
+  assert(body.includes(`rel="canonical" href="${canonical}"`), `${path} omitted its canonical URL`);
 }
 
 function delay(ms) {

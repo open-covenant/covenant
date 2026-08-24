@@ -1,10 +1,12 @@
 import type { Metadata } from 'next';
+import { pageMetadata } from '@/lib/page-metadata';
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
   title: 'Service terms',
   description:
     'Terms for Mizuki paid maintenance jobs, refunds, public records, and contributor bounties.',
-};
+  path: '/terms',
+});
 
 export default function TermsPage() {
   return (

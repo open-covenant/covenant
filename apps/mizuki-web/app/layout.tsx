@@ -1,7 +1,10 @@
 import type { Metadata, Viewport } from 'next';
 import { SiteFooter } from '@/components/site-footer';
 import { SiteHeader } from '@/components/site-header';
+import { getAdmission } from '@/lib/api';
 import './globals.css';
+
+export const dynamic = 'force-dynamic';
 
 export const metadata: Metadata = {
   title: {
@@ -48,16 +51,19 @@ export const viewport: Viewport = {
   themeColor: '#030303',
 };
 
-export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+  const admission = await getAdmission();
+  const intakeOpen = admission.status !== 'error' && admission.data.intakeEnabled;
+
   return (
     <html lang="en">
       <body>
         <a href="#main" className="skip-link">
           Skip to content
         </a>
-        <SiteHeader />
+        <SiteHeader intakeOpen={intakeOpen} />
         <main id="main">{children}</main>
-        <SiteFooter />
+        <SiteFooter intakeOpen={intakeOpen} />
       </body>
     </html>
   );

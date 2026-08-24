@@ -2,14 +2,18 @@ import Image from 'next/image';
 import Link from 'next/link';
 
 const navigation = [
-  { href: '/work', label: 'Submit an issue' },
   { href: '/bounties', label: 'Bounties' },
   { href: '/treasury', label: 'Financials' },
   { href: '/capabilities', label: 'Capabilities' },
   { href: '/activity', label: 'Activity log' },
 ];
 
-export function SiteHeader() {
+export function SiteHeader({ intakeOpen }: { intakeOpen: boolean }) {
+  const links = [
+    { href: '/work', label: intakeOpen ? 'Submit an issue' : 'Service status' },
+    ...navigation,
+  ];
+
   return (
     <header className="site-header">
       <div className="shell header-inner">
@@ -47,7 +51,7 @@ export function SiteHeader() {
           </Link>
         </div>
         <nav className="site-nav" aria-label="Main navigation">
-          {navigation.map((item) => (
+          {links.map((item) => (
             <Link key={item.href} href={item.href}>
               {item.label}
             </Link>
@@ -56,7 +60,7 @@ export function SiteHeader() {
         <details className="mobile-nav">
           <summary>Menu</summary>
           <nav aria-label="Mobile navigation">
-            {navigation.map((item) => (
+            {links.map((item) => (
               <Link key={item.href} href={item.href}>
                 {item.label}
               </Link>
@@ -64,8 +68,10 @@ export function SiteHeader() {
           </nav>
         </details>
         <Link href="/work" className="header-cta">
-          <span className="header-cta-long">Request a quote</span>
-          <span className="header-cta-short">Quote</span>
+          <span className="header-cta-long">
+            {intakeOpen ? 'Request a quote' : 'View service status'}
+          </span>
+          <span className="header-cta-short">{intakeOpen ? 'Quote' : 'Status'}</span>
           <span aria-hidden="true">↗</span>
         </Link>
       </div>

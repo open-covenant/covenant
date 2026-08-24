@@ -1,11 +1,13 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { SiteFooter } from '@/components/site-footer';
 import { SiteHeader } from '@/components/site-header';
 import { metadata } from './layout';
 import manifest from './manifest';
+
+vi.mock('server-only', () => ({}));
 
 const avatarPath = '/mizuki-avatar.jpg';
 
@@ -19,8 +21,8 @@ describe('Mizuki public identity', () => {
   });
 
   it('uses the profile image for visible identity and social previews', () => {
-    expect(renderToStaticMarkup(<SiteHeader />)).toContain('mizuki-avatar.jpg');
-    expect(renderToStaticMarkup(<SiteFooter />)).toContain('mizuki-avatar.jpg');
+    expect(renderToStaticMarkup(<SiteHeader intakeOpen />)).toContain('mizuki-avatar.jpg');
+    expect(renderToStaticMarkup(<SiteFooter intakeOpen />)).toContain('mizuki-avatar.jpg');
     expect(metadata.openGraph).toMatchObject({
       images: [{ url: avatarPath, width: 400, height: 400, alt: 'Mizuki the Mech' }],
     });
@@ -31,10 +33,20 @@ describe('Mizuki public identity', () => {
   });
 
   it('links to the official X profile', () => {
-    const footer = renderToStaticMarkup(<SiteFooter />);
+    const footer = renderToStaticMarkup(<SiteFooter intakeOpen />);
 
     expect(footer).toContain('href="https://x.com/MizukiMech"');
     expect(footer).toContain('@MizukiMech');
+  });
+
+  it('replaces transactional calls to action when paid intake is closed', () => {
+    const header = renderToStaticMarkup(<SiteHeader intakeOpen={false} />);
+    const footer = renderToStaticMarkup(<SiteFooter intakeOpen={false} />);
+
+    expect(header).toContain('View service status');
+    expect(header).not.toContain('Request a quote');
+    expect(footer).toContain('Service status');
+    expect(footer).not.toContain('Submit an issue');
   });
 
   it('publishes browser, Apple, and installable app icons', () => {

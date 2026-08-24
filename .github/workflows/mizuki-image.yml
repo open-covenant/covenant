@@ -487,6 +487,17 @@ jobs:
             api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG"
           }
 
+          verify_draft_target() {
+            jq -e \
+              --arg tag "$RELEASE_TAG" \
+              --arg commit "$RESOLVED_COMMIT" \
+              '.tag_name == $tag and
+               .target_commitish == $commit and
+               .draft == true and
+               .immutable == false' \
+              <<< "$release_json" >/dev/null
+          }
+
           verify_tag_target() {
             local object_type object_sha tag_object
             tag_object=$(api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG")
@@ -632,8 +643,7 @@ jobs:
                 echo '::error::an immutable release appeared after the build; rerun to verify it without rebuilding'
                 exit 1
               fi
-              jq -e '.draft == true and .immutable == false' <<< "$release_json" >/dev/null
-              verify_tag_target
+              verify_draft_target
             elif grep -q 'HTTP 404' release.error; then
               release_json=$(api --method POST "repos/$GITHUB_REPOSITORY/releases" \
                 -f tag_name="$RELEASE_TAG" \
@@ -643,8 +653,7 @@ jobs:
                 -F draft=true \
                 -F prerelease=false \
                 -f make_latest=false)
-              jq -e '.draft == true and .immutable == false' <<< "$release_json" >/dev/null
-              verify_tag_target
+              verify_draft_target
             else
               cat release.error >&2
               exit 1

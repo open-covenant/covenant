@@ -28,6 +28,7 @@ describe('deployment controller config', () => {
       shadowServiceId: 'srv-shadow123',
       productionServiceId: 'srv-production123',
       database: { sslMode: 'verify-full', connectionTimeoutMs: 10_000 },
+      minPromotionAgeMs: 3 * 60 * 60_000,
     });
   });
 

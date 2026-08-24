@@ -253,7 +253,7 @@ The event Blueprint deliberately runs one updater instance and relies on durable
 ## Operations
 
 - Alert on `rollback_failed`, any nonzero `mizuki_updater_errors_total` increase, and upgrades stuck beyond their configured check, shadow-health, or promotion-health deadline.
-- Keep the promotion timeout at least one poll interval longer than the soak. The event Blueprint uses a two-minute soak, a ten-minute deadline, and five-second polls.
+- Keep the promotion timeout at least one poll interval longer than the soak. The event Blueprint uses a three-hour soak, a three-hour-ten-minute deadline, and five-second polls.
 - Preserve audit rows indefinitely. Each receipt links the preceding hash, so deletion or reordering is detectable.
 - Rotate the API token, deployment token, and GitHub App key independently.
 - Rotate proposal keys by adding the new public key, deploying, changing the offline signer, then removing the old key after all old proposals expire.

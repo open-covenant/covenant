@@ -344,7 +344,7 @@ abort 'deployment Render timeout drift' unless controller.fetch('MIZUKI_DEPLOY_R
 abort 'deployment artifact timeout drift' unless controller.fetch('MIZUKI_DEPLOY_ARTIFACT_TIMEOUT_MS')['value'] == '30000'
 abort 'deployment probe timeout drift' unless controller.fetch('MIZUKI_DEPLOY_PROBE_TIMEOUT_MS')['value'] == '10000'
 abort 'deployment reconciliation grace drift' unless controller.fetch('MIZUKI_DEPLOY_RECONCILIATION_GRACE_MS')['value'] == '120000'
-abort 'deployment minimum promotion age drift' unless controller.fetch('MIZUKI_DEPLOY_MIN_PROMOTION_AGE_MS')['value'] == '120000'
+abort 'deployment minimum promotion age drift' unless controller.fetch('MIZUKI_DEPLOY_MIN_PROMOTION_AGE_MS')['value'] == '10800000'
 updater_authorities = %w[MIZUKI_UPDATER_SUBMIT_TOKEN MIZUKI_UPDATER_CONTROL_TOKEN MIZUKI_UPDATER_READ_TOKEN]
 abort 'updater role-specific tokens are missing' unless updater_authorities.all? { |key| updater.key?(key) }
 abort 'legacy shared updater authority present' if updater.key?('MIZUKI_UPDATER_AUTH_TOKEN')
@@ -358,8 +358,8 @@ abort 'updater controller token is not linked' unless service_ref(updater.fetch(
 abort 'updater hook timeout drift' unless updater.fetch('MIZUKI_UPDATER_HOOK_TIMEOUT_MS')['value'] == '90000'
 abort 'updater lease does not safely exceed hook duration' unless updater.fetch('MIZUKI_UPDATER_LEASE_MS')['value'] == '180000'
 abort 'updater retry horizon drift' unless updater.fetch('MIZUKI_UPDATER_MAX_ATTEMPTS')['value'] == '10'
-abort 'updater promotion soak drift' unless updater.fetch('MIZUKI_UPDATER_PROMOTION_SOAK_MS')['value'] == '120000'
-abort 'updater promotion timeout drift' unless updater.fetch('MIZUKI_UPDATER_PROMOTION_TIMEOUT_MS')['value'] == '600000'
+abort 'updater promotion soak drift' unless updater.fetch('MIZUKI_UPDATER_PROMOTION_SOAK_MS')['value'] == '10800000'
+abort 'updater promotion timeout drift' unless updater.fetch('MIZUKI_UPDATER_PROMOTION_TIMEOUT_MS')['value'] == '11400000'
 abort 'updater base branch drift' unless updater.fetch('MIZUKI_UPDATER_ALLOWED_BASE_BRANCHES')['value'] == 'main'
 abort 'updater artifact origin drift' unless updater.fetch('MIZUKI_UPDATER_ARTIFACT_ORIGINS')['value'] == 'https://github.com,https://release-assets.githubusercontent.com'
 abort 'updater mandatory checks drift' unless updater.fetch('MIZUKI_UPDATER_MANDATORY_CHECKS')['value'] == 'application,escrow,rust,landing'

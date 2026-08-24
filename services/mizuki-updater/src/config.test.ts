@@ -33,6 +33,10 @@ describe('updater configuration', () => {
     expect(config.artifactOrigins).toEqual(new Set(['https://artifacts.example.test']));
     expect(config.operational).toBeDefined();
     expect(config.operationalFailures).toEqual([]);
+    expect(config).toMatchObject({
+      promotionSoakMs: 3 * 60 * 60_000,
+      promotionTimeoutMs: 3 * 60 * 60_000 + 10 * 60_000,
+    });
     expect(config.operational).toMatchObject({
       shadowHookUrl: 'http://127.0.0.1:9000/v1/deployments/shadow',
       shadowHealthUrlTemplate: 'http://127.0.0.1:9000/v1/deployments/shadow/{deploymentId}/health',

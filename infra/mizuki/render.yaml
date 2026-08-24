@@ -495,7 +495,7 @@ services:
       - key: MIZUKI_DEPLOY_RECONCILIATION_GRACE_MS
         value: '120000'
       - key: MIZUKI_DEPLOY_MIN_PROMOTION_AGE_MS
-        value: '120000'
+        value: '10800000'
 
   - type: pserv
     name: mizuki-updater
@@ -579,9 +579,9 @@ services:
       - key: MIZUKI_UPDATER_HEALTH_TIMEOUT_MS
         value: '600000'
       - key: MIZUKI_UPDATER_PROMOTION_SOAK_MS
-        value: '120000'
+        value: '10800000'
       - key: MIZUKI_UPDATER_PROMOTION_TIMEOUT_MS
-        value: '600000'
+        value: '11400000'
       - key: MIZUKI_UPDATER_POLL_INTERVAL_MS
         value: '5000'
       - key: MIZUKI_UPDATER_LEASE_MS

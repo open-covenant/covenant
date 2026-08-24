@@ -5,14 +5,22 @@ export function CapabilityReceipts({ capability }: { capability: Capability }) {
   const evidence = capability.evidence;
   const receipts = [
     evidence?.benchmarkReceiptId
-      ? { label: 'Benchmark', value: evidence.benchmarkReceiptId }
+      ? { label: 'Benchmark record', value: evidence.benchmarkReceiptId }
       : undefined,
-    evidence?.reviewReceiptId ? { label: 'Review', value: evidence.reviewReceiptId } : undefined,
-    evidence?.updaterAuditHash ? { label: 'Audit', value: evidence.updaterAuditHash } : undefined,
-    evidence?.manifestHash ? { label: 'Manifest', value: evidence.manifestHash } : undefined,
-    evidence?.deploymentId ? { label: 'Deployment', value: evidence.deploymentId } : undefined,
+    evidence?.reviewReceiptId
+      ? { label: 'Review record', value: evidence.reviewReceiptId }
+      : undefined,
+    evidence?.updaterAuditHash
+      ? { label: 'Release audit', value: evidence.updaterAuditHash }
+      : undefined,
+    evidence?.manifestHash
+      ? { label: 'Release manifest', value: evidence.manifestHash }
+      : undefined,
+    evidence?.deploymentId
+      ? { label: 'Deployment record', value: evidence.deploymentId }
+      : undefined,
     evidence?.promotionOperationId
-      ? { label: 'Promotion', value: evidence.promotionOperationId }
+      ? { label: 'Production release', value: evidence.promotionOperationId }
       : undefined,
   ].filter((receipt): receipt is { label: string; value: string } => Boolean(receipt));
   const pullRequestUrl = githubUrl(evidence?.pullRequestUrl ?? capability.evidenceUrl);

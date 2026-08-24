@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { capabilityHandoff } from './capability-handoff.js';
+import { capabilityDescription, capabilityHandoff } from './capability-handoff.js';
 import type { Capability, FailureRecord, Upgrade } from './domain/index.js';
 
 const capability: Capability = {
@@ -60,14 +60,28 @@ describe('capability handoff', () => {
       failures: [...failures].reverse(),
     });
 
-    expect(first.handoffSha256).toBe(
-      '5aaac97b0c76fa6308aab52f8701664e4132b5e404f947709157691ff83ac573',
-    );
     expect(progressed).toEqual(first);
     expect(first.failureEvidence.map((failure) => failure.jobId)).toEqual([
       'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
     ]);
+    expect(first.authorityBoundary).toEqual({
+      handoffIsAuthorization: false,
+      productionChangeApproval:
+        'A release authority outside Mizuki must authorize and submit any production change.',
+      benchmarkVerification:
+        'A benchmark authority outside Mizuki must verify the recorded evidence against this benchmark contract.',
+      releaseReview:
+        'A review authority outside Mizuki must approve the exact production candidate.',
+      note: 'Mizuki publishes this evidence record but cannot authorize, approve, or submit a production change.',
+    });
+    expect(first.protectedContracts).toContain('separately funded SOL maintenance bounty escrow');
+    expect(first.capability.description).toBe(
+      'Use a reliable AI provider channel within the fixed job cost limit.',
+    );
+    expect(first.handoffSha256).toBe(
+      'bb11ede0afa6133e870a4e4a2c77c744e397bc3a41a7e82c502d322b194db31b',
+    );
   });
 
   it('changes the hash when the failure evidence changes', () => {
@@ -98,5 +112,17 @@ describe('capability handoff', () => {
         failures,
       }),
     ).toThrow('upgrade is not bound to the capability');
+  });
+
+  it('describes provider, review, and timing capabilities in public terms', () => {
+    expect(capabilityDescription('model.route-reliability')).toBe(
+      'Use a reliable AI provider channel within the fixed job cost limit.',
+    );
+    expect(capabilityDescription('patch.quality')).toBe(
+      'Produce focused patches that pass a separate AI review without exceeding the quoted scope.',
+    );
+    expect(capabilityDescription('execution.timeout')).toBe(
+      'Reduce timeouts recorded during bounded maintenance runs.',
+    );
   });
 });

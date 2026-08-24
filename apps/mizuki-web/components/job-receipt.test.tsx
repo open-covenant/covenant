@@ -24,7 +24,8 @@ describe('JobReceipt', () => {
       error: 'The validated patch could not be delivered to GitHub.',
       review: {
         approved: true,
-        reason: 'The bounded patch passed independent review.',
+        reason:
+          'The separate AI review approved the patch against the issue scope and repository checks.',
         reviewedAt: '2026-08-23T10:00:00.000Z',
         artifactHash: 'b'.repeat(64),
         provider,
@@ -38,7 +39,8 @@ describe('JobReceipt', () => {
           costUsd: 0.0175,
           provider,
           approved: false,
-          reason: 'The first patch missed the reported edge case.',
+          reason:
+            'The separate AI review did not approve the patch against the issue scope and repository checks.',
         },
         {
           phase: 'repair',
@@ -46,7 +48,7 @@ describe('JobReceipt', () => {
           artifactHash: 'd'.repeat(64),
           reviewedAt: '2026-08-23T10:00:00.000Z',
           costUsd: 0.12,
-          reason: 'The independent review did not complete reliably.',
+          reason: 'The separate AI review could not be completed.',
         },
       ],
       changedFiles: ['src/fix.ts'],
@@ -66,18 +68,20 @@ describe('JobReceipt', () => {
 
     const html = renderToStaticMarkup(<JobReceipt initial={job} live={false} />);
 
-    expect(html).toContain('Independent review receipt');
+    expect(html).toContain('Separate AI review record');
     expect(html).toContain('review-model');
     expect(html).toContain('provider-7');
     expect(html).toContain('request-9');
-    expect(html).toContain('175000 microunits');
+    expect(html).toContain('$0.175');
     expect(html).toContain('records provider work, not a successful delivery');
     expect(html).toContain('b'.repeat(64));
-    expect(html).toContain('Review attempt ledger');
-    expect(html).toContain('rejected');
-    expect(html).toContain('failed');
-    expect(html).toContain('The first patch missed the reported edge case.');
-    expect(html).toContain('The independent review did not complete reliably.');
+    expect(html).toContain('AI review history');
+    expect(html).toContain('Not approved');
+    expect(html).toContain('Review could not complete');
+    expect(html).toContain(
+      'The separate AI review did not approve the patch against the issue scope and repository checks.',
+    );
+    expect(html).toContain('The separate AI review could not be completed.');
     expect(html).toContain('c'.repeat(64));
     expect(html).toContain('d'.repeat(64));
     expect(html).not.toContain('4000000');

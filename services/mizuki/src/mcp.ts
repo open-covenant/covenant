@@ -49,7 +49,8 @@ server.registerTool(
 server.registerTool(
   'mizuki_bounties',
   {
-    description: 'List public rescue bounties created from fully refunded maintenance jobs.',
+    description:
+      'List public maintenance bounties created after eligible jobs receive a full refund.',
     inputSchema: {},
   },
   async () => result(await call('/v1/bounties')),
@@ -58,7 +59,8 @@ server.registerTool(
 server.registerTool(
   'mizuki_bounty',
   {
-    description: 'Inspect one rescue bounty, its claim, review, and contributor escrow state.',
+    description:
+      'Inspect one maintenance bounty, its claim requirements, separate AI review, maintainer approval, and funded SOL escrow status.',
     inputSchema: { bounty_id: z.string().uuid() },
   },
   async ({ bounty_id }) => result(await call(`/v1/bounties/${bounty_id}`)),
@@ -68,7 +70,7 @@ server.registerTool(
   'mizuki_treasury',
   {
     description:
-      'Inspect signer-verified refund custody and the separate application-ledger allocation model.',
+      'Inspect the refund reserve wallet status and planning estimates derived from service records. Planning estimates do not prove custody or grant spending authority.',
     inputSchema: {},
   },
   async () => result(await call('/v1/treasury')),
@@ -77,7 +79,8 @@ server.registerTool(
 server.registerTool(
   'mizuki_capabilities',
   {
-    description: 'Inspect Mizuki capability proposals and externally authorized upgrade evidence.',
+    description:
+      'Inspect proposed capability changes and the evidence required before a change can reach production.',
     inputSchema: {},
   },
   async () => result(await call('/v1/capabilities')),
@@ -87,7 +90,7 @@ server.registerTool(
   'mizuki_capability_handoff',
   {
     description:
-      'Read the hashed failure and benchmark handoff for an independent upgrade authority.',
+      'Read a hashed record of the failures, benchmark, and approvals required before a capability change can reach production.',
     inputSchema: { capability_id: z.string().uuid() },
   },
   async ({ capability_id }) =>

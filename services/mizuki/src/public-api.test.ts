@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { createRescueBounty } from './domain/index.js';
-import { publicBounty, publicJob, publicTreasury } from './public-api.js';
+import {
+  createContributorEscrow,
+  createRescueBounty,
+  transitionContributorEscrow,
+  transitionRescueBounty,
+} from './domain/index.js';
+import {
+  isPublicBounty,
+  publicActivityFeed,
+  publicBounty,
+  publicJob,
+  publicTreasury,
+} from './public-api.js';
 import { MemoryStore } from './store.js';
 import type { ProviderRouteReceipt, Quote } from './types.js';
 
@@ -23,6 +34,161 @@ const quote: Quote = {
 };
 
 describe('public accounting', () => {
+  it('publishes no bounty record or activity before escrow funding finalizes', async () => {
+    const store = new MemoryStore();
+    const { job } = await store.createJob(
+      quote,
+      { payer: 'payer', transaction: 'payment-public-boundary', amountAtomic: quote.priceAtomic },
+      'payment-public-boundary-key',
+    );
+    const draft = createRescueBounty({
+      id: 'bounty-public-boundary',
+      sourceJobId: job.id,
+      failureReceiptId: 'failure-public-boundary',
+      repository: 'public/tool',
+      issueNumber: 1,
+      issueUrl: quote.issueUrl,
+      jobPriceCents: 200,
+      at: '2026-08-23T09:00:00.000Z',
+    });
+    await store.createBounty(draft);
+    await store.appendActivity('bounty.created', draft.id, {});
+    await store.appendActivity('bounty.funded', draft.id, { transaction: 'premature' });
+
+    expect(await isPublicBounty(store, draft)).toBe(false);
+    expect(await publicActivityFeed(store)).toEqual([]);
+
+    const funding = transitionRescueBounty(draft, 'funding', {
+      at: '2026-08-23T09:01:00.000Z',
+      expectedRevision: draft.revision,
+    });
+    await store.updateBounty(funding, draft.revision);
+    const opened = transitionRescueBounty(funding, 'open', {
+      at: '2026-08-23T09:03:00.000Z',
+      expectedRevision: funding.revision,
+    });
+    await store.updateBounty(opened, funding.revision);
+
+    let escrow = createContributorEscrow({
+      id: 'escrow-public-boundary',
+      bountyId: draft.id,
+      repository: 'public/tool',
+      issueNumber: 1,
+      issueTitle: 'Fix a bounded issue',
+      issueBody: '',
+      baseRef: 'main',
+      baseSha: 'a'.repeat(40),
+      reviewPolicy: { version: 1, model: 'review-model', maxFiles: 3 },
+      amountCents: 1_000,
+      acceptanceHash: 'b'.repeat(64),
+      expiresAt: '2026-08-30T09:00:00.000Z',
+      at: '2026-08-23T09:00:00.000Z',
+    });
+    escrow = await store.saveEscrow(escrow);
+    escrow = transitionContributorEscrow(escrow, 'funding', {
+      at: '2026-08-23T09:01:00.000Z',
+      expectedRevision: escrow.revision,
+    });
+    escrow = await store.saveEscrow(escrow);
+    escrow = transitionContributorEscrow(escrow, 'funded', {
+      at: '2026-08-23T09:02:00.000Z',
+      expectedRevision: escrow.revision,
+      transactionSignature: 'funding-signature',
+      reservationId: 'reservation-public-boundary',
+      amountAtomic: '50000000',
+    });
+    await store.saveEscrow(escrow);
+    await store.appendActivity('bounty.funded', draft.id, {
+      transaction: 'funding-signature',
+    });
+
+    expect(await isPublicBounty(store, opened)).toBe(false);
+    expect(await publicActivityFeed(store)).toEqual([]);
+
+    await store.transitionJob(job.id, 'settlement_pending', 'refunded', {
+      error: 'The patch did not pass repository checks.',
+      refundTransaction: 'customer-refund-public-boundary',
+    });
+
+    expect(await isPublicBounty(store, opened)).toBe(true);
+    expect(await publicActivityFeed(store)).toEqual([
+      expect.objectContaining({
+        kind: 'bounty_funded',
+        title: 'Funded bounty published',
+        transaction: 'funding-signature',
+      }),
+    ]);
+  });
+
+  it('keeps the customer refund and bounty escrow return as separate transactions', async () => {
+    const store = new MemoryStore();
+    const { job } = await store.createJob(
+      quote,
+      { payer: 'payer', transaction: 'customer-payment', amountAtomic: quote.priceAtomic },
+      'customer-payment-key',
+    );
+    await store.transitionJob(job.id, 'settlement_pending', 'refunded', {
+      error: 'The patch did not pass repository checks.',
+      refundTransaction: 'customer-usdc-refund',
+    });
+    const bounty = createRescueBounty({
+      id: 'bounty-split-refunds',
+      sourceJobId: job.id,
+      failureReceiptId: 'failure-split-refunds',
+      repository: 'public/tool',
+      issueNumber: 1,
+      issueUrl: quote.issueUrl,
+      jobPriceCents: 200,
+      at: '2026-08-23T09:00:00.000Z',
+    });
+    let escrow = createContributorEscrow({
+      id: 'escrow-split-refunds',
+      bountyId: bounty.id,
+      repository: 'public/tool',
+      issueNumber: 1,
+      issueTitle: quote.issueTitle,
+      issueBody: '',
+      baseRef: 'main',
+      baseSha: 'a'.repeat(40),
+      reviewPolicy: { version: 1, model: 'review-model', maxFiles: 3 },
+      amountCents: 1_000,
+      acceptanceHash: 'b'.repeat(64),
+      expiresAt: '2026-08-30T09:00:00.000Z',
+      at: '2026-08-23T09:00:00.000Z',
+    });
+    escrow = await store.saveEscrow(escrow);
+    escrow = transitionContributorEscrow(escrow, 'funding', {
+      at: '2026-08-23T09:01:00.000Z',
+      expectedRevision: escrow.revision,
+    });
+    escrow = await store.saveEscrow(escrow);
+    escrow = transitionContributorEscrow(escrow, 'funded', {
+      at: '2026-08-23T09:02:00.000Z',
+      expectedRevision: escrow.revision,
+      transactionSignature: 'bounty-sol-funding',
+      reservationId: 'reservation-split-refunds',
+      amountAtomic: '50000000',
+    });
+    escrow = await store.saveEscrow(escrow);
+    escrow = transitionContributorEscrow(escrow, 'refund_pending', {
+      at: '2026-08-23T09:03:00.000Z',
+      expectedRevision: escrow.revision,
+    });
+    escrow = await store.saveEscrow(escrow);
+    escrow = transitionContributorEscrow(escrow, 'refunded', {
+      at: '2026-08-23T09:04:00.000Z',
+      expectedRevision: escrow.revision,
+      transactionSignature: 'bounty-sol-return',
+    });
+    await store.saveEscrow(escrow);
+
+    await expect(publicBounty(store, bounty)).resolves.toMatchObject({
+      customerRefundTransaction: 'customer-usdc-refund',
+      escrowTransaction: 'bounty-sol-funding',
+      escrowReturnTransaction: 'bounty-sol-return',
+    });
+  });
+
   it('identifies job cost as a partial variable execution estimate', async () => {
     const store = new MemoryStore();
     const { job } = await store.createJob(
@@ -61,7 +227,7 @@ describe('public accounting', () => {
       error: 'UsePod returned 500: secret upstream diagnostic',
     });
 
-    expect(publicJob(failed).error).toBe('The execution route did not complete reliably.');
+    expect(publicJob(failed).error).toBe('A required AI service did not complete the work.');
     expect(JSON.stringify(publicJob(failed))).not.toContain('secret upstream diagnostic');
   });
 
@@ -84,7 +250,7 @@ describe('public accounting', () => {
     await store.patchJob(job.id, {
       reviewReceipt: {
         approved: true,
-        reason: 'The bounded patch passed independent review.',
+        reason: 'The bounded patch passed internal review.',
         reviewedAt: '2026-08-23T10:00:00.000Z',
         artifactHash: 'b'.repeat(64),
         provider,
@@ -95,14 +261,15 @@ describe('public accounting', () => {
       refundTransaction: 'refund-reviewed-job',
     });
 
-    const receipt = publicJob(refunded);
+    const receipt = publicJob({ ...refunded, refundOperationId: 'private-refund-operation' });
 
     expect(receipt).toMatchObject({
       state: 'refunded',
       refundTransaction: 'refund-reviewed-job',
       review: {
         approved: true,
-        reason: 'The bounded patch passed independent review.',
+        reason:
+          'The separate AI review approved the patch against the issue scope and repository checks.',
         reviewedAt: '2026-08-23T10:00:00.000Z',
         artifactHash: 'b'.repeat(64),
         provider: {
@@ -116,6 +283,8 @@ describe('public accounting', () => {
     });
     expect(JSON.stringify(receipt)).not.toContain('balanceRemaining');
     expect(JSON.stringify(receipt)).not.toContain('upstream-secret');
+    expect(JSON.stringify(receipt)).not.toContain('passed internal review');
+    expect(JSON.stringify(receipt)).not.toContain('private-refund-operation');
   });
 
   it('publishes failed and rejected review attempts without exposing internal errors', async () => {
@@ -178,7 +347,8 @@ describe('public accounting', () => {
           costMicrounits: '175000',
         },
         approved: false,
-        reason: 'The patch does not cover the reported edge case.',
+        reason:
+          'The separate AI review did not approve the patch against the issue scope and repository checks.',
       },
       {
         phase: 'repair',
@@ -186,12 +356,13 @@ describe('public accounting', () => {
         artifactHash: 'b'.repeat(64),
         reviewedAt: failedAt,
         costUsd: 0.12,
-        reason: 'The independent review did not complete reliably.',
+        reason: 'The separate AI review could not be completed.',
       },
     ]);
     expect(JSON.stringify(receipt)).not.toContain('secret upstream diagnostic');
     expect(JSON.stringify(receipt)).not.toContain('private-provider-response');
     expect(JSON.stringify(receipt)).not.toContain('balanceRemaining');
+    expect(JSON.stringify(receipt)).not.toContain('reported edge case');
   });
 
   it('publishes bounty review commitments and a whitelisted provider receipt', async () => {
@@ -232,13 +403,35 @@ describe('public accounting', () => {
         diffHash: 'e'.repeat(64),
         provider,
       },
+      dispute: {
+        id: 'dispute-public-receipt',
+        claimantId: 'contributor-private-id',
+        reason: 'private claimant narrative',
+        state: 'refunded',
+        openedAt: '2026-08-23T11:05:00.000Z',
+        resolution: {
+          id: 'resolution-public-receipt',
+          idempotencyKey: 'private-idempotency-key',
+          requestedDecision: 'release',
+          settlementDecision: 'refund',
+          evidence: {
+            summary: 'The exact reviewed commit was not merged before the claim deadline.',
+            references: ['https://github.com/public/tool/pull/7'],
+          },
+          evidenceHash: 'f'.repeat(64),
+          decidedAt: '2026-08-23T11:10:00.000Z',
+          resolvedAt: '2026-08-23T11:12:00.000Z',
+          transactionSignature: 'dispute-sol-return',
+        },
+      },
     };
 
     const receipt = await publicBounty(store, bounty);
 
     expect(receipt.review).toEqual({
       approved: true,
-      reason: 'Repository checks and the bounded patch passed review.',
+      reason:
+        'The separate AI review approved the patch against the issue scope and repository checks.',
       reviewedAt: '2026-08-23T11:00:00.000Z',
       headSha: 'c'.repeat(40),
       baseSha: 'd'.repeat(40),
@@ -254,6 +447,19 @@ describe('public accounting', () => {
     });
     expect(JSON.stringify(receipt)).not.toContain('balanceRemaining');
     expect(JSON.stringify(receipt)).not.toContain('private-upstream-body');
+    expect(JSON.stringify(receipt)).not.toContain('bounded patch passed review');
+    expect(receipt.dispute?.resolution).toEqual({
+      requestedDecision: 'release',
+      settlementDecision: 'refund',
+      summary: 'The exact reviewed commit was not merged before the claim deadline.',
+      references: ['https://github.com/public/tool/pull/7'],
+      evidenceHash: 'f'.repeat(64),
+      decidedAt: '2026-08-23T11:10:00.000Z',
+      resolvedAt: '2026-08-23T11:12:00.000Z',
+      transactionSignature: 'dispute-sol-return',
+    });
+    expect(JSON.stringify(receipt)).not.toContain('private claimant narrative');
+    expect(JSON.stringify(receipt)).not.toContain('private-idempotency-key');
   });
 
   it('publishes native creator fees and distinguishes estimated from recorded costs', async () => {
@@ -308,7 +514,7 @@ describe('public accounting', () => {
     });
     expect(creatorFee).not.toHaveProperty('amountUsd');
     expect(routeCost).toMatchObject({
-      description: 'Variable execution cost estimate',
+      description: 'Tracked model and sandbox cost estimate',
       amountUsd: 0.25,
     });
     expect(operatingCost).toMatchObject({

@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import Image from 'next/image';
 import { ActivityFeed } from '@/components/activity-feed';
 import { BountyCard } from '@/components/bounty-card';
 import { CapabilityFlywheel } from '@/components/capability-flywheel';
@@ -21,65 +22,95 @@ export default async function HomePage() {
         <div className="shell hero-grid">
           <div className="hero-copy">
             <div className="hero-kicker">
-              <span className="live-dot" aria-hidden="true" />
-              Autonomous public maintainer
+              Mizuki the Mech · AI maintenance agent
               {demo && <DemoNotice />}
             </div>
             <h1>
-              Pull request,
+              Validated pull request,
               <br />
-              <em>or every cent back.</em>
+              <em>or a full USDC refund.</em>
             </h1>
             <p className="hero-lede">
-              Give Mizuki one bounded GitHub issue. He pays for independent review, ships a
-              validated patch, and refunds failed work in full.
+              Submit one clearly scoped GitHub issue. Mizuki creates the patch, runs the
+              repository&apos;s checks, and sends it to a separate AI reviewer. If validation fails,
+              a separate policy signer returns the quoted USDC payment to the original payer.
             </p>
             <div className="hero-actions">
               <Link href="/work" className="button button-primary">
                 Submit an issue <span aria-hidden="true">↗</span>
               </Link>
               <Link href="/bounties" className="button button-secondary">
-                Claim rescue work
+                Browse funded bounties
               </Link>
             </div>
             <p className="hero-contract">
-              Public repositories · $2 or $10 fixed price · x402 USDC · no unsolicited pull requests
+              Public repositories only · 2 or 10 USDC via x402 · pull requests only with maintainer
+              authorization
             </p>
           </div>
-          <aside className="hero-proof" aria-label="Mizuki's guarantee">
-            <div className="proof-label">The maintenance contract</div>
-            <div className="proof-outcome">
-              <span>01</span>
-              <div>
-                <strong>Validated pull request</strong>
-                <p>Scoped patch, repository checks, independent model review.</p>
+          <div className="hero-visual" aria-label="Mizuki">
+            <Image
+              src="/mizuki-avatar.jpg"
+              alt="Mizuki"
+              width={700}
+              height={700}
+              className="hero-portrait"
+              priority
+            />
+          </div>
+        </div>
+      </section>
+
+      <section className="maintenance-contract" aria-labelledby="maintenance-contract-title">
+        <div className="shell maintenance-contract-grid">
+          <header className="maintenance-contract-heading">
+            <p className="eyebrow">Fixed-price service guarantee</p>
+            <h2 id="maintenance-contract-title">One paid job. Two possible outcomes.</h2>
+          </header>
+          <div className="maintenance-contract-body">
+            <div className="contract-outcomes">
+              <div className="proof-outcome">
+                <span>01</span>
+                <div>
+                  <strong>Validated pull request</strong>
+                  <p>
+                    A scoped patch that passes repository checks and review by a separate AI
+                    reviewer.
+                  </p>
+                </div>
               </div>
-            </div>
-            <div className="proof-or">or</div>
-            <div className="proof-outcome proof-refund">
-              <span>02</span>
-              <div>
-                <strong>100% refund</strong>
-                <p>Returned to the original payer by a separate policy signer.</p>
+              <div className="proof-or">or</div>
+              <div className="proof-outcome proof-refund">
+                <span>02</span>
+                <div>
+                  <strong>Full USDC refund</strong>
+                  <p>
+                    If validation fails, a separate policy signer returns 100% of the quoted USDC
+                    payment to the original payer. Network fees are excluded.
+                  </p>
+                </div>
               </div>
             </div>
             <div className="proof-footer">
               <span className="shield-mark" aria-hidden="true">
                 ✓
               </span>
-              <span>Financial policy cannot be changed by Mizuki</span>
+              <span>
+                Mizuki cannot move refund funds. A separate signer verifies each payment and
+                enforces the refund policy.
+              </span>
             </div>
-          </aside>
+          </div>
         </div>
       </section>
 
       <section
         className="metrics-band"
-        aria-label={demo ? 'Illustrative commercial metrics' : 'Live commercial metrics'}
+        aria-label={demo ? 'Example commercial metrics' : 'Live commercial metrics'}
       >
         <div className="shell">
           {overview.metrics.status === 'error' ? (
-            <DataError detail={overview.metrics.error} />
+            <DataError />
           ) : (
             <MetricStrip metrics={overview.metrics.data} />
           )}
@@ -90,14 +121,14 @@ export default async function HomePage() {
         <div className="shell">
           <div className="section-heading split-heading flywheel-intro">
             <div>
-              <p className="eyebrow">Public capability flywheel</p>
-              <h2>Commercial receipts create a capability plan. Protection comes first.</h2>
+              <p className="eyebrow">How paid work supports the service</p>
+              <h2>Refund protection comes before reinvestment.</h2>
             </div>
             <p>
-              Refund custody comes from finalized signer evidence. The USDC ledger drives a clearly
-              labeled allocation model. ClawPump-reported creator-fee distributions remain separate
-              in native SOL, and a rescue bounty counts as funded only after its escrow transaction
-              finalizes.
+              New jobs are accepted only when the verified refund reserve covers every outstanding
+              refund. Planned allocations are accounting estimates, not wallet balances. Token
+              creator fees are reported separately in SOL, and bounty funding is counted only after
+              escrow finalizes on-chain.
             </p>
           </div>
           {overview.metrics.status !== 'error' &&
@@ -112,10 +143,7 @@ export default async function HomePage() {
               )}
             />
           ) : (
-            <DataError
-              title="Capability flywheel unavailable"
-              detail="Mizuki will not replace missing accounting records with estimates."
-            />
+            <DataError title="Financial and capability records are temporarily unavailable" />
           )}
         </div>
       </section>
@@ -124,12 +152,13 @@ export default async function HomePage() {
         <div className="shell">
           <div className="section-heading split-heading">
             <div>
-              <p className="eyebrow">Failure is not hidden</p>
-              <h2>A failed job becomes public paid work.</h2>
+              <p className="eyebrow">When validation fails</p>
+              <h2>The customer is refunded before a bounty is published.</h2>
             </div>
             <p>
-              The customer exits whole. Mizuki turns the exact failure into a funded rescue bounty,
-              then records the merged result as new capability evidence.
+              The policy signer returns the full quoted USDC payment to the original payer. Mizuki
+              can then publish the failed task only after a separate SOL reward is secured in
+              escrow. A merged fix can support a future capability update.
             </p>
           </div>
           <Transformation />
@@ -140,18 +169,18 @@ export default async function HomePage() {
         <div className="shell">
           <div className="section-heading heading-with-action">
             <div>
-              <p className="eyebrow">Funded rescue board</p>
-              <h2>Real issues. Clear acceptance. Public payout.</h2>
+              <p className="eyebrow">Maintenance bounties</p>
+              <h2>Funded work with public requirements and payout records.</h2>
             </div>
             <Link href="/bounties" className="button button-secondary">
               View all bounties
             </Link>
           </div>
           {overview.bounties.status === 'error' ? (
-            <DataError detail={overview.bounties.error} />
+            <DataError title="Bounty records are temporarily unavailable" />
           ) : overview.bounties.status === 'empty' ? (
-            <EmptyState title="No rescue bounties are open">
-              When a paid attempt fails, its funded rescue will appear here.
+            <EmptyState title="No maintenance bounties are open">
+              When a paid job fails validation and its bounty is funded, it will appear here.
             </EmptyState>
           ) : (
             <div className="bounty-grid">
@@ -167,31 +196,31 @@ export default async function HomePage() {
         <div className="shell public-books-grid">
           <div>
             <div className="section-heading">
-              <p className="eyebrow">Public books</p>
-              <h2>Protection evidence before expansion.</h2>
+              <p className="eyebrow">Refund and allocation records</p>
+              <h2>Verify refund coverage and planned use of funds.</h2>
               <p>
-                The signer proves refund custody and liabilities independently. Application-ledger
-                allocations show the planned order for operating, improvement, and route-research
-                spending; they are not wallet balances. Rescue work uses separate SOL escrow.
+                A separate policy signer reports the finalized refund-reserve balance and every
+                outstanding refund. Planned allocations are accounting estimates, not wallet
+                balances or permission to spend. Bounty rewards use separate SOL escrow.
               </p>
             </div>
             {overview.treasury.status === 'error' ? (
-              <DataError detail={overview.treasury.error} />
+              <DataError title="Refund and allocation records are temporarily unavailable" />
             ) : (
               <TreasurySnapshot treasury={overview.treasury.data} />
             )}
           </div>
           <div className="capability-column">
             <div className="section-heading">
-              <p className="eyebrow">His body is the code</p>
-              <h2>Capability growth needs receipts.</h2>
+              <p className="eyebrow">Capability change record</p>
+              <h2>Evidence status stays visible for every capability.</h2>
               <p>
-                No vague claims of improvement. Every capability points to a benchmark, pull
-                request, review, and deployment record.
+                Active capabilities link to benchmark, pull-request, separate AI review, and
+                deployment records. Proposed, incomplete, or degraded evidence remains visible.
               </p>
             </div>
             {overview.capabilities.status === 'error' ? (
-              <DataError detail={overview.capabilities.error} />
+              <DataError title="Capability records are temporarily unavailable" />
             ) : overview.capabilities.status === 'empty' ? (
               <EmptyState title="No capability records yet">
                 The first validated upgrade will establish the public baseline.
@@ -206,18 +235,18 @@ export default async function HomePage() {
       <section className="section section-light">
         <div className="shell activity-preview-grid">
           <div className="section-heading sticky-heading">
-            <p className="eyebrow">Public event stream</p>
-            <h2>Watch money become work.</h2>
+            <p className="eyebrow">Public activity log</p>
+            <h2>Follow every payment, refund, bounty, and delivery.</h2>
             <p>
-              Paid jobs, refunds, bounties, merged fixes, payouts, and capability activations appear
-              as they happen.
+              The public activity log records paid jobs, refunds, bounties, merged fixes, payouts,
+              and activated capability updates as they occur.
             </p>
             <Link href="/activity" className="text-link dark-link">
-              Open complete activity <span aria-hidden="true">↗</span>
+              View full activity log <span aria-hidden="true">↗</span>
             </Link>
           </div>
           {overview.activity.status === 'error' ? (
-            <DataError detail={overview.activity.error} />
+            <DataError title="The activity log is temporarily unavailable" />
           ) : overview.activity.status === 'empty' ? (
             <EmptyState title="No public events yet">
               The first paid job will start the public record.
@@ -231,13 +260,13 @@ export default async function HomePage() {
       <section className="section token-section">
         <div className="shell token-grid">
           <div>
-            <p className="eyebrow">Secondary market layer</p>
+            <p className="eyebrow">Token disclosure</p>
             <h2>$MIZUKI</h2>
           </div>
           <p>
-            The token does not govern customer work and promises no revenue. Creator fees are
-            reported separately in native SOL and never count as work revenue, margin, or USDC
-            reserve capacity.
+            The token does not control customer jobs and does not provide a claim on revenue.
+            Creator fees are reported separately in SOL and are excluded from work revenue, margin,
+            and USDC refund capacity.
           </p>
           {process.env.NEXT_PUBLIC_MIZUKI_TOKEN_URL ? (
             <a
@@ -249,7 +278,7 @@ export default async function HomePage() {
               Token activity <span aria-hidden="true">↗</span>
             </a>
           ) : (
-            <span className="token-gate">Activates after both mainnet canaries pass</span>
+            <span className="token-gate">Token activity is not available yet</span>
           )}
         </div>
       </section>

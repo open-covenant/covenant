@@ -8,12 +8,27 @@ import { truncateAddress } from '@/lib/format';
 
 type Challenge = { challengeId?: string; id?: string; message: string };
 
-async function responseJson(response: Response): Promise<Record<string, unknown>> {
+class CustomerClaimError extends Error {}
+
+async function responseJson(
+  response: Response,
+  action: 'challenge' | 'claim',
+): Promise<Record<string, unknown>> {
   const value = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-  if (!response.ok)
-    throw new Error(
-      typeof value.error === 'string' ? value.error : `Request failed (${response.status})`,
+  if (!response.ok) {
+    if (response.status === 401)
+      throw new CustomerClaimError('Sign in with GitHub again, then retry the claim.');
+    if (response.status === 409) {
+      throw new CustomerClaimError(
+        'This bounty is no longer available to claim. Refresh the page.',
+      );
+    }
+    throw new CustomerClaimError(
+      action === 'challenge'
+        ? 'We could not prepare the wallet verification message. Try again.'
+        : 'We could not confirm the claim. Refresh the page before trying again.',
     );
+  }
   return value;
 }
 
@@ -51,7 +66,7 @@ export function WalletProof({
           body: JSON.stringify({ address: connected.account.address }),
         },
       );
-      const challenge = (await responseJson(challengeResponse)) as Challenge;
+      const challenge = (await responseJson(challengeResponse, 'challenge')) as Challenge;
       if (typeof challenge.message !== 'string' || !challenge.message)
         throw new Error('The API returned an invalid wallet challenge');
 
@@ -81,12 +96,16 @@ export function WalletProof({
           }),
         },
       );
-      await responseJson(claimResponse);
+      await responseJson(claimResponse, 'claim');
       setState('complete');
       router.refresh();
     } catch (cause) {
       setState('idle');
-      setError(cause instanceof Error ? cause.message : 'The claim could not be completed');
+      setError(
+        cause instanceof CustomerClaimError
+          ? cause.message
+          : 'We could not verify this wallet or complete the claim. No transfer was authorized. Refresh the page and try again.',
+      );
     }
   }
 
@@ -99,8 +118,11 @@ export function WalletProof({
       <div className="claim-step-heading">
         <span>02</span>
         <div>
-          <strong>Prove your payout wallet</strong>
-          <p>This signature is free. It cannot move funds or authorize a transaction.</p>
+          <strong>Verify your payout wallet</strong>
+          <p>
+            This signs a message only. It does not authorize a payment or allow Mizuki to move
+            funds. The verified address becomes the payout address for this claim.
+          </p>
         </div>
       </div>
 
@@ -115,14 +137,17 @@ export function WalletProof({
                 onClick={() => void connect(wallet)}
               >
                 <span>{wallet.name}</span>
-                <span>{connecting === wallet.name ? 'Connecting…' : 'Connect ↗'}</span>
+                <span>{connecting === wallet.name ? 'Connecting…' : 'Connect'}</span>
               </button>
             ))}
           </div>
         ) : (
           <div className="wallet-missing">
             <strong>No compatible wallet detected</strong>
-            <p>Open this page in a browser with a Wallet Standard-compatible Solana wallet.</p>
+            <p>
+              Install or enable a Solana wallet that supports message signing, then reload this
+              page.
+            </p>
           </div>
         )
       ) : (
@@ -145,19 +170,20 @@ export function WalletProof({
                   ? 'Claiming…'
                   : state === 'complete'
                     ? 'Bounty claimed'
-                    : 'Sign proof and claim'}
+                    : 'Verify wallet and claim bounty'}
           </button>
         </div>
       )}
       {(walletError || error) && (
         <p className="form-error" role="alert">
-          {error || walletError}
+          {error ||
+            (walletError
+              ? 'We could not connect to that wallet. Check the wallet and try again.'
+              : '')}
         </p>
       )}
       {state === 'complete' && (
-        <p className="form-success">
-          Claim accepted. Mizuki has started your immutable 48-hour work window.
-        </p>
+        <p className="form-success">Bounty claimed. Your 48-hour work period has started.</p>
       )}
     </div>
   );

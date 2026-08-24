@@ -20,8 +20,8 @@ test -n "$MIZUKI_PRODUCTION_URL"
 curl -fsS "$MIZUKI_PRODUCTION_URL/healthz"
 curl -fsS "$MIZUKI_PRODUCTION_URL/readyz"
 curl -fsS "$MIZUKI_PRODUCTION_URL/v1/admission"
-curl -fsS https://mizuki.covenant.org/healthz
-curl -fsS https://mizuki.covenant.org/
+curl -fsS https://mizuki.opencovenant.org/healthz
+curl -fsS https://mizuki.opencovenant.org/
 ```
 
 The audit migration is boot-compatible with the previously deployed core: it leaves `commercial-core` at v1 and records the ledger under a separate migration component. A rollback to the old runtime must remain read-only and closed-state only. Do not call its admission mutation endpoint; it cannot append the new ledger. Restore the current runtime before any admission mutation. Any current-row/audit mismatch fails the current runtime closed and requires database reconciliation before service restoration.

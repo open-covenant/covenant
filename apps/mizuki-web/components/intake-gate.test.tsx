@@ -10,7 +10,7 @@ describe('IntakeGate', () => {
       </IntakeGate>,
     );
 
-    expect(html).toContain('Paid issue intake is closed');
+    expect(html).toContain('New paid jobs are temporarily paused');
     expect(html).not.toContain('Get fixed quote');
   });
 
@@ -22,7 +22,7 @@ describe('IntakeGate', () => {
     );
 
     expect(html).toContain('Get fixed quote');
-    expect(html).not.toContain('Paid issue intake is closed');
+    expect(html).not.toContain('New paid jobs are temporarily paused');
   });
 
   it('fails closed when authoritative admission state is unavailable', () => {
@@ -32,8 +32,8 @@ describe('IntakeGate', () => {
       </IntakeGate>,
     );
 
-    expect(html).toContain('Paid issue intake unavailable');
-    expect(html).toContain('Quote and payment controls stay disabled');
+    expect(html).toContain('Issue submission is temporarily unavailable');
+    expect(html).toContain('Quote and payment controls remain unavailable');
     expect(html).not.toContain('Get fixed quote');
   });
 });

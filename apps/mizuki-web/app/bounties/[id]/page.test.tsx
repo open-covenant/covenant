@@ -51,11 +51,14 @@ describe('bounty receipt page', () => {
       amountUsd: 10,
       amountAtomic: '10000000',
       asset: 'SOL',
-      state: 'rejected',
-      acceptanceCriteria: ['Pass repository checks', 'Pass independent review'],
+      state: 'refunded',
+      customerRefundTransaction: 'customer-usdc-refund',
+      escrowReturnTransaction: 'bounty-sol-return',
+      acceptanceCriteria: ['Pass repository checks', 'Pass a separate AI review'],
       review: {
         approved: false,
-        reason: 'The patch did not preserve the documented behavior.',
+        reason:
+          'The separate AI review did not approve the patch against the issue scope and repository checks.',
         reviewedAt: '2026-08-23T11:00:00.000Z',
         headSha: 'c'.repeat(40),
         baseSha: 'd'.repeat(40),
@@ -72,15 +75,23 @@ describe('bounty receipt page', () => {
       await BountyDetailPage({ params: Promise.resolve({ id: bounty.id }) }),
     );
 
-    expect(html).toContain('Independent review receipt');
-    expect(html).toContain('rejected');
+    expect(html).toContain('Separate AI review record');
+    expect(html).toContain('Not approved');
     expect(html).toContain('c'.repeat(40));
     expect(html).toContain('d'.repeat(40));
     expect(html).toContain('e'.repeat(64));
     expect(html).toContain('bounty-review-model');
     expect(html).toContain('provider-11');
     expect(html).toContain('request-12');
-    expect(html).toContain('90000 microunits');
+    expect(html).toContain('$0.09');
+    expect(html).toContain('Returned from escrow');
+    expect(html).toContain('Customer refund');
+    expect(html).toContain('customer-usdc-refund');
+    expect(html).toContain('Escrow return');
+    expect(html).toContain('bounty-sol-return');
+    expect(html).toContain('Bounty outcome');
+    expect(html).not.toContain('Claim this work');
+    expect(html).not.toContain('Sign in with GitHub');
     expect(html).not.toContain('3910000');
     expect(html).not.toContain('balanceRemaining');
   });

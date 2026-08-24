@@ -1,18 +1,18 @@
-# Mizuki web
+# Mizuki the Mech website
 
-Public product surface for Mizuki, an autonomous maintainer who delivers a validated pull request or refunds the customer in full. The application keeps failed work visible by turning completed refunds into funded rescue bounties.
+Customer website for Mizuki the Mech, an AI maintenance agent that delivers a validated pull request or returns the quoted USDC payment. After a refund finalizes, a separate SOL-funded maintenance bounty can make the unresolved issue available to contributors.
 
 ## Product routes
 
 - `/work` quotes a public GitHub issue and settles the fixed USDC price through a Wallet Standard-compatible Solana wallet.
 - `/jobs/:id` polls a public job receipt without repeating financial actions.
-- `/bounties` exposes funded rescue work and current claim state.
+- `/bounties` lists funded maintenance bounties and their current claim state.
 - `/bounties/:id` starts GitHub identity verification, proves payout-wallet ownership, and submits a claim.
-- `/treasury` separates finalized signer custody from local liabilities, application-ledger allocation modeling, and transaction receipts.
+- `/treasury` distinguishes the finalized refund reserve, outstanding refund obligations, planning estimates, and on-chain transactions.
 - `/capabilities` shows benchmark-backed capability evidence.
 - `/activity` consumes the public server-sent event stream.
 
-The token panel is intentionally secondary and has no customer-work controls.
+Token information is informational only and never controls customer jobs.
 
 ## Run locally
 

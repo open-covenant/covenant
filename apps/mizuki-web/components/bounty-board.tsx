@@ -7,9 +7,18 @@ import { BountyCard } from './bounty-card';
 type Filter = 'all' | 'available' | 'in_progress' | 'completed';
 
 const groups: Record<Exclude<Filter, 'all'>, BountyState[]> = {
-  available: ['open', 'awaiting_funding'],
-  in_progress: ['claimed', 'pr_submitted', 'validating', 'disputed'],
-  completed: ['accepted', 'released', 'refunded'],
+  available: ['open'],
+  in_progress: [
+    'claimed',
+    'pr_submitted',
+    'validating',
+    'accepted',
+    'disputed',
+    'claim_refund_pending',
+    'offer_refund_pending',
+    'release_refund_pending',
+  ],
+  completed: ['released', 'expired', 'rejected', 'refunded'],
 };
 
 export function BountyBoard({ bounties }: { bounties: Bounty[] }) {
@@ -55,7 +64,7 @@ export function BountyBoard({ bounties }: { bounties: Bounty[] }) {
           </span>
           <div>
             <strong>No bounties in this state</strong>
-            <p>Change the filter to inspect the rest of the public record.</p>
+            <p>Choose another filter to view the remaining public records.</p>
           </div>
         </div>
       )}

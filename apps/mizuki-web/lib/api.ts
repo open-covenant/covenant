@@ -75,9 +75,12 @@ async function loadDetail<T>(reader: () => Promise<T>, demo: T): Promise<DetailL
 }
 
 function loadError(cause: unknown): Extract<Loadable<never>, { status: 'error' }> {
+  if (process.env.NODE_ENV === 'production') {
+    console.error('Mizuki public-data request failed', cause);
+  }
   return {
     status: 'error',
-    error: cause instanceof Error ? cause.message : 'The Mizuki API is unavailable',
+    error: 'Live records are temporarily unavailable',
   };
 }
 

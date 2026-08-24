@@ -170,7 +170,8 @@ export type Bounty = {
   claimant?: { github: string; wallet?: string };
   escrowTransaction?: string;
   releaseTransaction?: string;
-  refundTransaction?: string;
+  customerRefundTransaction?: string;
+  escrowReturnTransaction?: string;
   pullRequestUrl?: string;
   review?: {
     approved: boolean;
@@ -189,8 +190,12 @@ export type Bounty = {
     resolution?: {
       requestedDecision: 'release' | 'refund';
       settlementDecision: 'release' | 'refund';
+      summary: string;
+      references: string[];
       evidenceHash: string;
+      decidedAt: string;
       resolvedAt?: string;
+      transactionSignature?: string;
     };
   };
   createdAt: string;
@@ -212,8 +217,11 @@ export type LedgerEntry = {
     | 'refund'
     | 'bounty_funding'
     | 'bounty_release'
+    | 'bounty_return'
     | 'route_cost'
     | 'operating_cost'
+    | 'refund_obligation'
+    | 'treasury_deposit'
     | 'allocation';
   amountUsd?: number;
   amountAtomic?: string;

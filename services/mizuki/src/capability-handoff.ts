@@ -25,10 +25,9 @@ export type CapabilityHandoffBody = {
   protectedContracts: string[];
   authorityBoundary: {
     handoffIsAuthorization: false;
-    proposalAuthority: 'external_release_authority';
-    benchmarkAuthority: 'external_benchmark_authority';
-    reviewAuthority: 'external_review_authority';
-    submission: 'Mizuki Updater POST /v1/upgrades';
+    productionChangeApproval: string;
+    benchmarkVerification: string;
+    releaseReview: string;
     note: string;
   };
   createdAt: string;
@@ -70,18 +69,20 @@ export function buildCapabilityHandoff(input: {
       ),
     benchmarkContract: benchmarkContract(capability.key),
     protectedContracts: [
-      'paid job admission and delivery',
-      'full-principal refund liability and recovery',
-      'signer-controlled SOL rescue escrow',
-      'independent policy-signer boundaries',
+      'paid job admission and pull-request delivery',
+      'full refund of the quoted USDC payment',
+      'separately funded SOL maintenance bounty escrow',
+      'separation between Mizuki and the refund policy signer',
     ],
     authorityBoundary: {
       handoffIsAuthorization: false,
-      proposalAuthority: 'external_release_authority',
-      benchmarkAuthority: 'external_benchmark_authority',
-      reviewAuthority: 'external_review_authority',
-      submission: 'Mizuki Updater POST /v1/upgrades',
-      note: 'Mizuki publishes this unsigned handoff but cannot sign or submit an upgrade.',
+      productionChangeApproval:
+        'A release authority outside Mizuki must authorize and submit any production change.',
+      benchmarkVerification:
+        'A benchmark authority outside Mizuki must verify the recorded evidence against this benchmark contract.',
+      releaseReview:
+        'A review authority outside Mizuki must approve the exact production candidate.',
+      note: 'Mizuki publishes this evidence record but cannot authorize, approve, or submit a production change.',
     },
     createdAt: upgrade.createdAt,
   };
@@ -102,15 +103,16 @@ export function hashCapabilityHandoff(handoff: CapabilityHandoffBody): string {
 
 export function capabilityDescription(key: string): string {
   const descriptions: Record<string, string> = {
-    'model.route-reliability': 'Choose a reliable coding route under the fixed job cost ceiling.',
+    'model.route-reliability':
+      'Use a reliable AI provider channel within the fixed job cost limit.',
     'patch.quality':
-      'Produce focused patches that pass independent review without unsafe expansion.',
+      'Produce focused patches that pass a separate AI review without exceeding the quoted scope.',
     'repository.validation':
       'Discover and run the repository checks that cover the requested maintenance work.',
     'scope.classification':
       'Reject risky work before payment and keep accepted jobs within fixed limits.',
     'github.delivery': 'Deliver one consented pull request against the quoted repository revision.',
-    'execution.timeout': 'Complete bounded maintenance runs within the public service deadline.',
+    'execution.timeout': 'Reduce timeouts recorded during bounded maintenance runs.',
     'maintenance.general':
       'Improve reliable completion of small public repository maintenance work.',
   };
@@ -120,7 +122,7 @@ export function capabilityDescription(key: string): string {
 function benchmarkContract(key: string): CapabilityHandoffBody['benchmarkContract'] {
   const metrics: Record<string, string> = {
     'model.route-reliability': 'paid_job_delivery_rate',
-    'patch.quality': 'independent_review_acceptance_rate',
+    'patch.quality': 'separate_ai_review_acceptance_rate',
     'repository.validation': 'repository_validation_pass_rate',
     'scope.classification': 'unsafe_issue_rejection_rate',
     'github.delivery': 'authorized_pr_delivery_rate',

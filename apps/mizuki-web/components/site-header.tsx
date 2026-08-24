@@ -2,32 +2,70 @@ import Image from 'next/image';
 import Link from 'next/link';
 
 const navigation = [
-  { href: '/work', label: 'Hire Mizuki' },
+  { href: '/work', label: 'Submit an issue' },
   { href: '/bounties', label: 'Bounties' },
-  { href: '/treasury', label: 'Treasury' },
+  { href: '/treasury', label: 'Financials' },
   { href: '/capabilities', label: 'Capabilities' },
-  { href: '/activity', label: 'Activity' },
+  { href: '/activity', label: 'Activity log' },
 ];
 
 export function SiteHeader() {
   return (
     <header className="site-header">
       <div className="shell header-inner">
-        <Link href="/" className="brand" aria-label="Mizuki home">
-          <span className="brand-mark" aria-hidden="true">
-            <Image src="/mizuki-avatar.jpg" alt="" width={32} height={32} priority />
-          </span>
-          <span>Mizuki</span>
-        </Link>
-        <nav className="site-nav" aria-label="Primary navigation">
+        <div className="brand-cluster">
+          <a
+            href="https://opencovenant.org"
+            className="covenant-brand"
+            aria-label="OpenCovenant home"
+          >
+            <Image
+              src="/covenant-logo.svg"
+              alt="OpenCovenant"
+              width={255}
+              height={54}
+              className="covenant-wordmark"
+              priority
+            />
+            <Image
+              src="/covenant-logomark.png"
+              alt=""
+              width={28}
+              height={28}
+              className="covenant-mobile-mark"
+              priority
+            />
+          </a>
+          <span className="brand-divider" aria-hidden="true" />
+          <Link href="/" className="brand" aria-label="Mizuki home">
+            <span className="brand-mark" aria-hidden="true">
+              <Image src="/mizuki-avatar.jpg" alt="" width={32} height={32} priority />
+            </span>
+            <span>
+              Mizuki<span className="brand-full"> the Mech</span>
+            </span>
+          </Link>
+        </div>
+        <nav className="site-nav" aria-label="Main navigation">
           {navigation.map((item) => (
             <Link key={item.href} href={item.href}>
               {item.label}
             </Link>
           ))}
         </nav>
+        <details className="mobile-nav">
+          <summary>Menu</summary>
+          <nav aria-label="Mobile navigation">
+            {navigation.map((item) => (
+              <Link key={item.href} href={item.href}>
+                {item.label}
+              </Link>
+            ))}
+          </nav>
+        </details>
         <Link href="/work" className="header-cta">
-          Submit an issue
+          <span className="header-cta-long">Request a quote</span>
+          <span className="header-cta-short">Quote</span>
           <span aria-hidden="true">↗</span>
         </Link>
       </div>

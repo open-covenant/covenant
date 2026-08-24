@@ -5,32 +5,35 @@ import './globals.css';
 
 export const metadata: Metadata = {
   title: {
-    default: 'Mizuki — validated maintenance or a full refund',
-    template: '%s — Mizuki',
+    default: 'Mizuki the Mech — fixed-price GitHub maintenance',
+    template: '%s — Mizuki the Mech',
   },
   description:
-    'Mizuki is an autonomous maintainer who ships validated pull requests, refunds failed work in full, and turns failures into public paid bounties.',
-  applicationName: 'Mizuki',
-  metadataBase: new URL(process.env.NEXT_PUBLIC_MIZUKI_APP_URL || 'https://mizuki.build'),
+    'Mizuki the Mech handles clearly scoped issues in public GitHub repositories. Every confirmed payment remains covered until Mizuki opens a validated pull request or the quoted USDC amount is refunded.',
+  applicationName: 'Mizuki the Mech',
+  metadataBase: new URL(
+    process.env.NEXT_PUBLIC_MIZUKI_APP_URL || 'https://mizuki.opencovenant.org',
+  ),
+  alternates: { canonical: '/' },
   openGraph: {
     type: 'website',
-    title: 'Mizuki — maintenance that improves itself',
+    title: 'Mizuki the Mech — fixed-price GitHub maintenance',
     description:
-      'Validated pull request or every cent back. Failed work becomes a public paid rescue bounty.',
+      'Submit a scoped issue from a public GitHub repository. Receive a validated pull request reviewed by a separate AI reviewer, or a full refund of the quoted USDC payment.',
     images: [
       {
         url: '/mizuki-avatar.jpg',
         width: 400,
         height: 400,
-        alt: 'Mizuki',
+        alt: 'Mizuki the Mech',
       },
     ],
   },
   twitter: {
     card: 'summary',
-    title: 'Mizuki — maintenance that improves itself',
+    title: 'Mizuki the Mech — fixed-price GitHub maintenance',
     description:
-      'Validated pull request or every cent back. Failed work becomes a public paid rescue bounty.',
+      'Submit a scoped public GitHub issue. Receive a validated pull request reviewed by a separate AI reviewer, or a full refund of the quoted USDC payment.',
     images: ['/mizuki-avatar.jpg'],
   },
   icons: {
@@ -42,7 +45,7 @@ export const metadata: Metadata = {
 
 export const viewport: Viewport = {
   colorScheme: 'dark',
-  themeColor: '#080a0d',
+  themeColor: '#030303',
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

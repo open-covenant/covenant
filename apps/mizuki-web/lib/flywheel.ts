@@ -38,19 +38,19 @@ export function tractionTargets(metrics: Metrics): TractionTarget[] {
       'External maintainers',
       metrics.externalMaintainers,
       3,
-      `${metrics.externalRepositories} external repos with a paid, App-authorized job`,
+      `${metrics.externalRepositories} external repositories with a paid, App-authorized job`,
     ),
     {
       id: 'refunds',
       label: 'Successful refunds',
       value:
         refundAttempts === 0 || metrics.refundSuccessRate === null
-          ? 'No attempts'
+          ? 'Not yet measured'
           : formatPercent(metrics.refundSuccessRate),
       target: '100%',
       detail:
         refundAttempts === 0
-          ? 'A finalized refund canary is still required'
+          ? 'No completed refunds are recorded yet'
           : `${metrics.refundCount} finalized · ${metrics.refundPending} pending`,
       met: refundTargetMet,
       progress:
@@ -61,9 +61,9 @@ export function tractionTargets(metrics: Metrics): TractionTarget[] {
     {
       id: 'margin',
       label: 'Gross margin',
-      value: 'Unverified',
+      value: 'Not yet verified',
       target: 'Above $0',
-      detail: `${formatUsd(metrics.recognizedRevenueLessVariableRouteEstimateUsd)} recognized revenue after recorded model and sandbox estimates; excludes ${excludedCosts}`,
+      detail: `Current partial estimate: ${formatUsd(metrics.recognizedRevenueLessVariableRouteEstimateUsd)} after recorded AI model and sandbox costs. It excludes ${excludedCosts}.`,
       met: false,
       progress: 0,
     },
@@ -75,9 +75,9 @@ function costCategoryLabel(value: Metrics['costCoverage']['excluded'][number]): 
     case 'provider_billing_adjustments':
       return 'provider billing adjustments';
     case 'chain_and_facilitator_fees':
-      return 'chain/facilitator fees';
+      return 'Solana network and payment-processing fees';
     case 'infrastructure':
-      return 'infrastructure';
+      return 'infrastructure costs';
   }
 }
 

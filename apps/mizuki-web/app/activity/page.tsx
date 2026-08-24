@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic';
 export const metadata: Metadata = {
   title: 'Public activity',
   description:
-    'Follow Mizuki’s paid jobs, refunds, bounties, pull requests, payouts, upgrades, and rollbacks.',
+    'Follow Mizuki’s published payments, pull requests, refunds, funded bounties, payouts, production changes, and rollbacks.',
 };
 
 export default async function ActivityPage() {
@@ -18,36 +18,37 @@ export default async function ActivityPage() {
       <section className="page-hero shell activity-page-hero">
         <div>
           <p className="eyebrow">
-            Public event stream {result.status !== 'error' && result.demo && <DemoNotice />}
+            Public service activity {result.status !== 'error' && result.demo && <DemoNotice />}
           </p>
-          <h1>Follow every material outcome.</h1>
+          <h1>Follow each material service outcome.</h1>
         </div>
         <div className="page-hero-aside">
           <p>
-            The feed records actions, not promises: paid work, finalized refunds, secured bounties,
-            accepted patches, payouts, activations, and rollbacks.
+            The record distinguishes service events from finalized on-chain transactions. Payments,
+            pull-request delivery, refunds, bounty funding, payouts, production changes, and
+            rollbacks are published as they are recorded.
           </p>
           <div className="event-key">
             <span>
-              <i className="key-paid" /> Money in
+              <i className="key-paid" /> Payment
             </span>
             <span>
-              <i className="key-refund" /> Refund
+              <i className="key-refund" /> Refunds
             </span>
             <span>
-              <i className="key-work" /> Work
+              <i className="key-work" /> Delivery
             </span>
             <span>
-              <i className="key-upgrade" /> Capability
+              <i className="key-upgrade" /> Production change
             </span>
           </div>
         </div>
       </section>
       <section className="shell activity-page-section">
         {result.status === 'error' ? (
-          <DataError title="Activity stream unavailable" detail={result.error} />
+          <DataError title="The activity log is temporarily unavailable" />
         ) : result.status === 'empty' ? (
-          <EmptyState title="No material events yet">
+          <EmptyState title="No activity has been published yet">
             The first paid job will begin the public record.
           </EmptyState>
         ) : (

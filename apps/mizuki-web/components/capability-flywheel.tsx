@@ -1,6 +1,12 @@
 import Link from 'next/link';
 import { tractionTargets } from '@/lib/flywheel';
-import { formatSolLamports, formatTime, formatUsd, formatUsdcAtomic } from '@/lib/format';
+import {
+  formatSolLamports,
+  formatTime,
+  formatUsd,
+  formatUsdcAtomic,
+  stateLabel,
+} from '@/lib/format';
 import type { Capability, Metrics, Treasury } from '@/lib/types';
 
 type Props = {
@@ -23,61 +29,64 @@ export function CapabilityFlywheel({ metrics, treasury, capabilities, demo = fal
     {
       id: 'earn',
       number: '01',
-      kicker: 'Earn',
-      value: `${metrics.paidJobs} paid jobs`,
+      kicker: 'Customer work',
+      value: countLabel(metrics.paidJobs, 'paid job'),
       detail: `${formatUsd(metrics.recognizedRevenueUsd)} recognized revenue · ${formatSolLamports(metrics.platformReportedCreatorFeesSentLamports)} platform-reported creator-fee distributions`,
-      copy: `${formatUsd(metrics.settledCustomerReceiptsUsd)} settled customer receipts are tracked separately until refund liabilities are discharged.`,
+      copy: `${formatUsd(metrics.settledCustomerReceiptsUsd)} in settled customer payments is tracked separately until any related refund obligations are resolved.`,
       href: '/activity',
-      link: 'Inspect inflows',
+      link: 'View payment activity',
     },
     {
       id: 'protect',
       number: '02',
-      kicker: 'Protect',
+      kicker: 'Refund protection',
       value:
         protection.status === 'verified' && protection.finalizedBalanceAtomic !== null
-          ? `${formatUsdcAtomic(protection.finalizedBalanceAtomic)} verified custody`
+          ? `${formatUsdcAtomic(protection.finalizedBalanceAtomic)} verified reserve balance`
           : protection.finalizedBalanceAtomic === null
-            ? 'Signer evidence unavailable'
-            : `${formatUsdcAtomic(protection.finalizedBalanceAtomic)} signer balance · degraded`,
+            ? 'Reserve records unavailable'
+            : `${formatUsdcAtomic(protection.finalizedBalanceAtomic)} reserve balance · needs attention`,
       detail:
         protection.signerOutstandingLiabilityAtomic === null
-          ? 'No fresh finalized refund evidence'
-          : `${formatUsdcAtomic(protection.signerOutstandingLiabilityAtomic)} signer liabilities · ${protection.status}`,
+          ? 'Finalized refund obligations are unavailable'
+          : `${formatUsdcAtomic(protection.signerOutstandingLiabilityAtomic)} in refund obligations · ${stateLabel(protection.status)}`,
       copy:
         protection.status === 'verified'
-          ? 'Finalized signer custody backs the reconciled refund liabilities shown here.'
-          : 'Protection is not marked verified while evidence is missing, stale, incoherent, or unreconciled.',
+          ? 'Verified means the finalized reserve balance covers outstanding refund obligations and matches the service records.'
+          : 'New paid work remains closed while reserve records are missing, stale, inconsistent, or unmatched.',
       href: '/treasury',
-      link: 'Audit the waterfall',
+      link: 'View reserve evidence',
     },
     {
       id: 'expand',
       number: '03',
-      kicker: 'Expand',
-      value: `${formatUsd(metrics.plannedImprovementAllocationUsd)} planned improvement allocation`,
-      detail: `${metrics.bountiesCreated} rescue bounties · ${upgradesInProgress} upgrades in progress`,
+      kicker: 'Planned improvements',
+      value: `${formatUsd(metrics.plannedImprovementAllocationUsd)} planned for improvements`,
+      detail: `${countLabel(metrics.bountiesCreated, 'maintenance bounty', 'maintenance bounties')} · ${countLabel(upgradesInProgress, 'production change')} in progress`,
       copy: treasury.allocationModel.targetsSatisfied
-        ? 'The application ledger models this earmark; it is not wallet custody or spend authority. Rescue bounties use separate signer-controlled SOL escrow.'
-        : 'The application-ledger targets are not filled. No modeled allocation is presented as custody or spend authority.',
+        ? 'This is a planning estimate from service records, not funds held in a wallet or authority to spend. Each bounty requires separate SOL escrow.'
+        : 'Published reserve and operating targets have not been met. Amounts shown here remain planning estimates, not wallet balances or spending authority.',
       href: '/bounties',
-      link: 'Open rescue board',
+      link: 'Browse funded bounties',
     },
     {
       id: 'prove',
       number: '04',
-      kicker: 'Prove',
-      value: `${chainReceipts} on-chain receipts`,
-      detail: `${metrics.bountiesReleased} rescue payouts · ${capabilityReceipts} capability records with evidence`,
-      copy: 'Payout transactions and upgrade evidence close the loop in public.',
+      kicker: 'Public evidence',
+      value: countLabel(chainReceipts, 'on-chain transaction'),
+      detail: `${countLabel(metrics.bountiesReleased, 'bounty payout')} · ${countLabel(capabilityReceipts, 'capability record')} with evidence`,
+      copy: 'Payout transactions and production-change evidence are published for verification.',
       href: '/capabilities',
-      link: 'Review capability evidence',
+      link: 'View production evidence',
     },
   ];
 
   return (
     <div className="flywheel-panel">
-      <ol className="flywheel-stages" aria-label="Mizuki capability funding flywheel">
+      <ol
+        className="flywheel-stages"
+        aria-label="How maintenance revenue supports refunds, bounties, and verified improvements"
+      >
         {stages.map((stage, index) => (
           <li key={stage.id}>
             <div className="flywheel-stage-heading">
@@ -102,12 +111,11 @@ export function CapabilityFlywheel({ metrics, treasury, capabilities, demo = fal
       <section className="traction-board" aria-labelledby="traction-title">
         <div className="traction-heading">
           <div>
-            <p className="eyebrow">Launch proof</p>
-            <h3 id="traction-title">The targets are public. So is the gap.</h3>
+            <p className="eyebrow">Public operating goals</p>
+            <h3 id="traction-title">Published targets and current results</h3>
           </div>
           <p>
-            {demo ? 'Illustrative fixture' : 'Live backend records only'} · updated{' '}
-            {formatTime(metrics.updatedAt)}
+            {demo ? 'Example data' : 'Live service data'} · updated {formatTime(metrics.updatedAt)}
           </p>
         </div>
         <ol className="traction-grid">
@@ -115,7 +123,7 @@ export function CapabilityFlywheel({ metrics, treasury, capabilities, demo = fal
             <li className={target.met ? 'target-met' : ''} key={target.id}>
               <div className="target-topline">
                 <span>{target.label}</span>
-                <strong>{target.met ? 'Met' : 'Open'}</strong>
+                <strong>{target.met ? 'Complete' : 'In progress'}</strong>
               </div>
               <div className="target-value">
                 <strong>{target.value}</strong>
@@ -143,4 +151,8 @@ export function CapabilityFlywheel({ metrics, treasury, capabilities, demo = fal
 function hasCapabilityEvidence(capability: Capability): boolean {
   if (capability.evidenceUrl) return true;
   return Object.values(capability.evidence ?? {}).some(Boolean);
+}
+
+function countLabel(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
 }

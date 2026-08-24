@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { SolanaSignTransactionFeature } from '@solana/wallet-standard-features';
-import { formatUsdcAtomic } from '@/lib/format';
+import { formatTime, formatUsdcAtomic, stateLabel } from '@/lib/format';
 import { githubIssuePattern } from '@/lib/github-url';
 import type { Job, Quote } from '@/lib/types';
 import { useStandardWallet } from '@/lib/wallet-standard';
@@ -11,11 +11,58 @@ import { createPaymentFetch } from '@/lib/x402';
 
 type RequestState = 'idle' | 'quoting' | 'quoted' | 'paying';
 
-async function readResponse<T>(response: Response): Promise<T> {
-  const body = (await response.json().catch(() => ({}))) as T & { error?: string; reason?: string };
-  if (!response.ok)
-    throw new Error(body.error || body.reason || `Request failed (${response.status})`);
+class CustomerRequestError extends Error {}
+
+async function readResponse<T>(
+  response: Response,
+  action: 'quote' | 'payment',
+  quoteId?: string,
+): Promise<T> {
+  const body = (await response.json().catch(() => ({}))) as T & { error?: unknown };
+  if (!response.ok) {
+    throw new CustomerRequestError(
+      requestError(
+        response.status,
+        action,
+        quoteId,
+        typeof body.error === 'string' ? body.error : undefined,
+      ),
+    );
+  }
   return body;
+}
+
+function requestError(
+  status: number,
+  action: 'quote' | 'payment',
+  quoteId?: string,
+  detail = '',
+): string {
+  if (action === 'quote') {
+    if (status === 409)
+      return 'The issue or repository changed. Request a new quote and try again.';
+    if (status === 422) {
+      if (/install|installation|policy verifier/i.test(detail)) {
+        return 'Install both required GitHub Apps on this repository, then request a new quote.';
+      }
+      if (/authoriz|label/i.test(detail)) {
+        return 'Ask a maintainer with triage access or higher to add the mizuki:authorized label, then request a new quote.';
+      }
+      if (/public github|private repository/i.test(detail)) {
+        return 'Mizuki accepts public GitHub repositories only.';
+      }
+      if (/too large|max files|file limit/i.test(detail)) {
+        return 'This issue is too large for the fixed-price service. Reduce it to one small maintenance task.';
+      }
+      if (/outside.*scope|feature|enhancement|sensitive/i.test(detail)) {
+        return 'This issue falls outside the supported maintenance scope. Submit a focused bug fix, test, documentation, lint, type, or configuration repair.';
+      }
+      return 'This issue is not eligible. Confirm the required Apps, authorization label, public-repository setting, and supported scope.';
+    }
+    if (status === 429) return 'Too many quote requests. Wait a moment and try again.';
+    return 'We could not create a quote. No payment was requested.';
+  }
+  return `Payment status could not be confirmed. Do not submit another payment. Check your wallet activity, then contact support with quote ${quoteId ?? 'ID shown above'}.`;
 }
 
 function paymentKey(quoteId: string): string {
@@ -51,12 +98,12 @@ export function QuoteWorkflow() {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ github_issue_url: issueUrl.trim() }),
       });
-      const next = await readResponse<Quote>(response);
+      const next = await readResponse<Quote>(response, 'quote');
       setQuote(next);
       setState('quoted');
     } catch (cause) {
       setState('idle');
-      setError(cause instanceof Error ? cause.message : 'Mizuki could not quote this issue');
+      setError(cause instanceof CustomerRequestError ? cause.message : requestError(0, 'quote'));
     }
   }
 
@@ -82,11 +129,15 @@ export function QuoteWorkflow() {
         },
         body: JSON.stringify({ quote_id: quote.id }),
       });
-      const job = await readResponse<Job>(response);
+      const job = await readResponse<Job>(response, 'payment', quote.id);
       router.push(`/jobs/${encodeURIComponent(job.id)}`);
     } catch (cause) {
       setState('quoted');
-      setError(cause instanceof Error ? cause.message : 'Payment could not be completed');
+      setError(
+        cause instanceof CustomerRequestError
+          ? cause.message
+          : requestError(0, 'payment', quote.id),
+      );
     }
   }
 
@@ -111,12 +162,17 @@ export function QuoteWorkflow() {
             type="submit"
             disabled={state === 'quoting' || state === 'paying'}
           >
-            {state === 'quoting' ? 'Inspecting…' : quote ? 'Refresh quote' : 'Get fixed quote'}
+            {state === 'quoting'
+              ? 'Checking issue…'
+              : quote
+                ? 'Request updated quote'
+                : 'Get fixed quote'}
           </button>
         </div>
         <p id="issue-help">
-          Mizuki reads issue scope and repository metadata. Requesting a quote never creates a pull
-          request.
+          Before continuing, install both required GitHub Apps on this repository and have a
+          maintainer add the <code>mizuki:authorized</code> label. A quote reads public issue and
+          repository metadata but does not create a branch or pull request.
         </p>
       </form>
 
@@ -127,7 +183,7 @@ export function QuoteWorkflow() {
               <span>Fixed quote</span>
               <strong>{formatUsdcAtomic(quote.priceAtomic)}</strong>
             </div>
-            <span className="quote-class">{quote.class}</span>
+            <span className="quote-class">{stateLabel(quote.class)}</span>
           </div>
           <div className="quote-issue">
             <p>
@@ -137,24 +193,30 @@ export function QuoteWorkflow() {
           </div>
           <dl className="quote-limits">
             <div>
-              <dt>Maximum files</dt>
+              <dt>Maximum files changed</dt>
               <dd>{quote.maxFiles}</dd>
             </div>
             <div>
-              <dt>Variable execution estimate ceiling</dt>
-              <dd>${quote.maxCostUsd.toFixed(2)}</dd>
+              <dt>Quote expires</dt>
+              <dd>{formatTime(quote.expiresAt)}</dd>
             </div>
             <div>
               <dt>Guarantee</dt>
-              <dd>PR or full refund</dd>
+              <dd>Validated pull request or full refund of the quoted USDC amount</dd>
             </div>
           </dl>
           <div className="payment-step">
             <div>
               <p className="eyebrow">Pay with a Solana wallet</p>
               <p>
-                Your wallet signs a USDC payment capped at the exact quote. The job starts after
-                settlement.
+                Your wallet authorizes a {formatUsdcAtomic(quote.priceAtomic)} transfer on Solana.
+                The recipient and amount are bound to this quote, and work starts only after payment
+                is confirmed. Your wallet may charge separate SOL network or service fees; those
+                fees are not included in a refund.
+              </p>
+              <p className="payment-consent">
+                By paying, you agree to the <a href="/terms">Service terms</a> and acknowledge the{' '}
+                <a href="/privacy">Privacy and data use notice</a>.
               </p>
             </div>
             {!connected ? (
@@ -168,13 +230,14 @@ export function QuoteWorkflow() {
                       onClick={() => void connect(wallet)}
                     >
                       <span>{wallet.name}</span>
-                      <span>{connecting === wallet.name ? 'Connecting…' : 'Connect ↗'}</span>
+                      <span>{connecting === wallet.name ? 'Connecting…' : 'Connect'}</span>
                     </button>
                   ))}
                 </div>
               ) : (
                 <p className="wallet-missing">
-                  No Wallet Standard-compatible Solana wallet was detected.
+                  No compatible Solana wallet was detected. Install or enable a wallet that supports
+                  Solana transactions, then reload this page.
                 </p>
               )
             ) : (
@@ -195,7 +258,10 @@ export function QuoteWorkflow() {
 
       {(error || walletError) && (
         <p className="form-error" role="alert">
-          {error || walletError}
+          {error ||
+            (walletError
+              ? 'We could not connect to that wallet. Check the wallet and try again.'
+              : '')}
         </p>
       )}
     </div>

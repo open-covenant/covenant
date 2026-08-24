@@ -13,18 +13,19 @@ export function IntakeGate({
     <div className="work-intake">
       {admission.status === 'error' ? (
         <DataError
-          title="Paid issue intake unavailable"
-          detail={`Mizuki could not verify that intake is open (${admission.error}). Quote and payment controls stay disabled.`}
+          title="Issue submission is temporarily unavailable"
+          message="Quote and payment controls remain unavailable until service status can be confirmed. Refresh the page to try again."
         />
       ) : !admission.data.intakeEnabled ? (
-        <EmptyState title="Paid issue intake is closed">
-          New quotes and payments are paused. Existing public job receipts remain available.
+        <EmptyState title="New paid jobs are temporarily paused">
+          Quotes and payments are currently unavailable. Existing public job records remain
+          available.
         </EmptyState>
       ) : (
         <>
           {admission.demo && (
             <p className="eyebrow intake-demo">
-              Illustrative intake <DemoNotice />
+              Example quote flow <DemoNotice />
             </p>
           )}
           {children}

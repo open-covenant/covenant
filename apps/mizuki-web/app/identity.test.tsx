@@ -22,12 +22,19 @@ describe('Mizuki public identity', () => {
     expect(renderToStaticMarkup(<SiteHeader />)).toContain('mizuki-avatar.jpg');
     expect(renderToStaticMarkup(<SiteFooter />)).toContain('mizuki-avatar.jpg');
     expect(metadata.openGraph).toMatchObject({
-      images: [{ url: avatarPath, width: 400, height: 400, alt: 'Mizuki' }],
+      images: [{ url: avatarPath, width: 400, height: 400, alt: 'Mizuki the Mech' }],
     });
     expect(metadata.twitter).toMatchObject({
       card: 'summary',
       images: [avatarPath],
     });
+  });
+
+  it('links to the official X profile', () => {
+    const footer = renderToStaticMarkup(<SiteFooter />);
+
+    expect(footer).toContain('href="https://x.com/MizukiMech"');
+    expect(footer).toContain('@MizukiMech');
   });
 
   it('publishes browser, Apple, and installable app icons', () => {

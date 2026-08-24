@@ -12,7 +12,7 @@ const working = new Set([
   'validating',
 ]);
 
-export function StatusBadge({ state }: { state: string }) {
+export function StatusBadge({ state, label }: { state: string; label?: string }) {
   const tone = positive.has(state)
     ? 'positive'
     : warning.has(state)
@@ -23,7 +23,7 @@ export function StatusBadge({ state }: { state: string }) {
   return (
     <span className={`status-badge status-${tone}`}>
       <span className="status-dot" aria-hidden="true" />
-      {stateLabel(state)}
+      {label ?? stateLabel(state)}
     </span>
   );
 }

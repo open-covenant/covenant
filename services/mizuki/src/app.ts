@@ -9,6 +9,7 @@ import { JobProcessor } from './executor.js';
 import { GithubClient } from './github.js';
 import { metrics, prometheus } from './metrics.js';
 import {
+  isPublicBounty,
   publicActivity,
   publicActivityFeed,
   publicBounty,
@@ -222,15 +223,19 @@ export function createApp(deps: AppDependencies) {
         return json(res, processed ? 202 : 200, { accepted: true, duplicate: !processed });
       }
       if (req.method === 'GET' && url.pathname === '/v1/bounties') {
-        return json(res, 200, {
-          bounties: await Promise.all(
-            (await deps.store.bountiesList()).map((bounty) => publicBounty(deps.store, bounty)),
-          ),
-        });
+        const bounties: Awaited<ReturnType<typeof publicBounty>>[] = [];
+        for (const bounty of await deps.store.bountiesList()) {
+          if (await isPublicBounty(deps.store, bounty)) {
+            bounties.push(await publicBounty(deps.store, bounty));
+          }
+        }
+        return json(res, 200, { bounties });
       }
       if (req.method === 'GET' && parts[0] === 'v1' && parts[1] === 'bounties' && parts[2]) {
         const bounty = await deps.store.bounty(parts[2]);
-        if (!bounty) return json(res, 404, { error: 'bounty not found' });
+        if (!bounty || !(await isPublicBounty(deps.store, bounty))) {
+          return json(res, 404, { error: 'bounty not found' });
+        }
         return json(res, 200, await publicBounty(deps.store, bounty));
       }
       if (
@@ -243,7 +248,9 @@ export function createApp(deps: AppDependencies) {
         admission.consume('bounty_wallet_proof', req);
         const session = requireSession(req, deps.auth);
         const bounty = await deps.store.bounty(parts[2]);
-        if (!bounty) return json(res, 404, { error: 'bounty not found' });
+        if (!bounty || !(await isPublicBounty(deps.store, bounty))) {
+          return json(res, 404, { error: 'bounty not found' });
+        }
         if (bounty.state !== 'open') {
           return json(res, 409, { error: 'bounty is not accepting claims' });
         }
@@ -801,12 +808,15 @@ async function streamActivity(
       const events = (await store.activity(100)).reverse();
       const start = lastId ? events.findIndex((event) => event.id === lastId) + 1 : 0;
       const pending = events.slice(Math.max(0, start));
+      let published = false;
       for (const event of pending) {
         const value = await publicActivity(store, event);
-        res.write(`id: ${event.id}\nevent: activity\ndata: ${JSON.stringify(value)}\n\n`);
         lastId = event.id;
+        if (!value) continue;
+        res.write(`id: ${event.id}\nevent: activity\ndata: ${JSON.stringify(value)}\n\n`);
+        published = true;
       }
-      if (pending.length > 0) lastActivityAt = Date.now();
+      if (published) lastActivityAt = Date.now();
       res.write(': heartbeat\n\n');
       const remaining = Math.max(0, idleTimeoutMs - (Date.now() - lastActivityAt));
       if (remaining === 0) break;

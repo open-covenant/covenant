@@ -6,27 +6,58 @@ export function SiteFooter() {
     <footer className="site-footer">
       <div className="shell footer-grid">
         <div>
-          <div className="brand footer-brand">
-            <span className="brand-mark" aria-hidden="true">
-              <Image src="/mizuki-avatar.jpg" alt="" width={32} height={32} />
-            </span>
-            <span>Mizuki</span>
+          <div className="footer-brand-row">
+            <a href="https://opencovenant.org" aria-label="OpenCovenant home">
+              <Image src="/covenant-logomark.png" alt="OpenCovenant" width={28} height={28} />
+            </a>
+            <div className="brand footer-brand">
+              <span className="brand-mark" aria-hidden="true">
+                <Image src="/mizuki-avatar.jpg" alt="" width={32} height={32} />
+              </span>
+              <span>Mizuki the Mech</span>
+            </div>
           </div>
-          <p className="footer-statement">Validated maintenance or every cent back.</p>
+          <p className="footer-statement">
+            A validated pull request or a full refund of the quoted USDC payment.
+          </p>
+          <p className="footer-protocols">
+            Public GitHub maintenance · USDC payments on Solana · AI execution through UsePod
+          </p>
         </div>
         <div className="footer-links" aria-label="Footer navigation">
-          <Link href="/work">Hire Mizuki</Link>
-          <Link href="/bounties">Claim a bounty</Link>
-          <Link href="/activity">Public receipts</Link>
+          <Link href="/work">Submit an issue</Link>
+          <Link href="/bounties">Browse bounties</Link>
+          <Link href="/activity">Activity log</Link>
           <a href="https://github.com/open-covenant/covenant" rel="noreferrer" target="_blank">
             GitHub <span aria-hidden="true">↗</span>
           </a>
+          <a href="https://x.com/MizukiMech" rel="noreferrer" target="_blank">
+            X · @MizukiMech <span aria-hidden="true">↗</span>
+          </a>
+          <a href="https://opencovenant.org" rel="noreferrer">
+            OpenCovenant <span aria-hidden="true">↗</span>
+          </a>
+          <Link href="/terms">Service terms</Link>
+          <Link href="/privacy">Privacy and data use</Link>
+          <Link href="/security">Security</Link>
+          <Link href="/support">Support</Link>
         </div>
         <div className="footer-operator">
-          <span className="live-dot" aria-hidden="true" />
-          Public operations
-          <small>Payments, refunds, work, and payouts stay inspectable.</small>
+          Public records
+          <small>
+            Payments, refunds, pull requests, bounties, and payouts are recorded publicly.
+          </small>
         </div>
+      </div>
+      <div className="shell footer-bottom">
+        <span>© 2026 OpenCovenant</span>
+        <a
+          href="https://github.com/open-covenant/covenant/blob/main/LICENSE"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Source code license: Apache-2.0 <span aria-hidden="true">↗</span>
+        </a>
       </div>
     </footer>
   );

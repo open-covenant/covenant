@@ -4,8 +4,8 @@ export default function NotFound() {
   return (
     <div className="shell fatal-state">
       <p className="eyebrow">404</p>
-      <h1>No public record exists here.</h1>
-      <p>The identifier may be wrong, or the record may not have reached a public state.</p>
+      <h1>Record not found.</h1>
+      <p>Check the link. The record may not exist or may not yet be public.</p>
       <Link href="/" className="button button-primary">
         Return home
       </Link>

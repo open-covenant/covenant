@@ -22,7 +22,7 @@ describe('Mizuki public identity', () => {
     expect(renderToStaticMarkup(<SiteHeader />)).toContain('mizuki-avatar.jpg');
     expect(renderToStaticMarkup(<SiteFooter />)).toContain('mizuki-avatar.jpg');
     expect(metadata.openGraph).toMatchObject({
-      images: [{ url: avatarPath, width: 400, height: 400, alt: 'Mizuki' }],
+      images: [{ url: avatarPath, width: 400, height: 400, alt: 'Mizuki the Mech' }],
     });
     expect(metadata.twitter).toMatchObject({
       card: 'summary',

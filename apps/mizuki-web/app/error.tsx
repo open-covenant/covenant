@@ -8,14 +8,14 @@ export default function ErrorPage({
 }) {
   return (
     <div className="shell fatal-state">
-      <p className="eyebrow">Request interrupted</p>
-      <h1>This page could not be assembled.</h1>
+      <p className="eyebrow">Page temporarily unavailable</p>
+      <h1>We couldn&apos;t load this page.</h1>
       <p>
-        The public systems remain separate from this interface. Retry the read without repeating any
-        financial action.
+        This display error does not change payment or job state. Try again without resubmitting a
+        payment.
       </p>
       <button type="button" className="button button-primary" onClick={reset}>
-        Retry page
+        Try again
       </button>
     </div>
   );

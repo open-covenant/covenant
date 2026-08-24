@@ -133,6 +133,10 @@ textarea:focus-visible {
   height: 34px;
 }
 
+.covenant-mobile-mark {
+  display: none !important;
+}
+
 .brand-divider {
   width: 1px;
   height: 28px;
@@ -196,6 +200,61 @@ textarea:focus-visible {
   color: var(--white);
 }
 
+.mobile-nav {
+  position: relative;
+  display: none;
+}
+
+.mobile-nav summary {
+  padding: 10px 12px;
+  border: 1px solid #383838;
+  border-radius: 999px;
+  color: #d4d4d4;
+  cursor: pointer;
+  font:
+    500 10px/1 ui-monospace,
+    'SF Mono',
+    Menlo,
+    Consolas,
+    monospace;
+  letter-spacing: 0.12em;
+  list-style: none;
+  text-transform: uppercase;
+}
+
+.mobile-nav summary::-webkit-details-marker {
+  display: none;
+}
+
+.mobile-nav nav {
+  position: absolute;
+  top: calc(100% + 14px);
+  right: 0;
+  display: grid;
+  width: min(280px, calc(100vw - 30px));
+  padding: 8px;
+  border: 1px solid #303030;
+  border-radius: 8px;
+  background: #090909;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+}
+
+.mobile-nav nav a {
+  padding: 13px 14px;
+  border-radius: 5px;
+  color: #bdbdbd;
+  font-size: 12px;
+}
+
+.mobile-nav nav a:hover {
+  background: #151515;
+  color: var(--white);
+}
+
+.header-cta-short {
+  display: none;
+}
+
 .header-cta {
   display: inline-flex;
   align-items: center;
@@ -225,6 +284,21 @@ textarea:focus-visible {
   background: #f5f5f5;
   color: #030303;
   transform: translateY(-1px);
+}
+
+.payment-consent,
+.claim-consent {
+  margin: 14px 0 0;
+  color: #8f8f8f;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.payment-consent a,
+.claim-consent a {
+  color: #d7d7d7;
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .hero {
@@ -383,7 +457,7 @@ textarea:focus-visible {
   margin: 22px 0 0;
   color: #6e6e6e;
   font:
-    500 10px/1.6 ui-monospace,
+    500 12px/1.65 ui-monospace,
     SFMono-Regular,
     Menlo,
     monospace;
@@ -1566,6 +1640,10 @@ textarea:focus-visible {
 }
 
 .footer-bottom {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px 24px;
   margin-top: 48px;
   padding-top: 24px;
   border-top: 1px solid var(--line);
@@ -1577,6 +1655,14 @@ textarea:focus-visible {
     Consolas,
     monospace;
   letter-spacing: 0.08em;
+}
+
+.footer-bottom a {
+  color: #82888b;
+}
+
+.footer-bottom a:hover {
+  color: #d5d8d9;
 }
 
 .fatal-state {
@@ -1884,6 +1970,11 @@ textarea:focus-visible {
   margin-top: 30px;
 }
 
+.scope-policy code {
+  color: #d8dde0;
+  font-size: 0.95em;
+}
+
 .policy-list {
   display: grid;
   gap: 9px;
@@ -1906,15 +1997,57 @@ textarea:focus-visible {
   content: '×';
 }
 
+.onboarding-list {
+  counter-reset: onboarding;
+}
+
+.onboarding-list li {
+  counter-increment: onboarding;
+}
+
+.onboarding-list li::before {
+  width: 28px;
+  color: var(--aqua);
+  content: counter(onboarding, decimal-leading-zero);
+}
+
+.scope-app-actions {
+  display: grid;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.scope-app-actions a {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border: 1px solid #343c44;
+  border-radius: 6px;
+  color: #cdd2d4;
+  font-size: 11px;
+}
+
+.scope-app-actions a:hover {
+  border-color: #66717a;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.scope-section-label {
+  margin-top: 34px;
+}
+
 .scope-note {
   margin: 30px 0 0;
   padding-top: 20px;
   border-top: 1px solid #2b3239;
   color: #747d81;
-  font-size: 10px;
+  font-size: 12px;
+  line-height: 1.7;
 }
 
 .job-lookup {
+  scroll-margin-top: 100px;
   margin-top: 28px;
   padding-top: 25px;
   border-top: 1px solid #2b3239;
@@ -1938,6 +2071,70 @@ textarea:focus-visible {
   cursor: pointer;
   font-size: 10px;
   font-weight: 750;
+}
+
+.service-terms,
+.disclosure-page {
+  padding-top: 88px;
+  padding-bottom: 104px;
+}
+
+.service-terms-grid,
+.disclosure-page {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 28px;
+}
+
+.service-terms-grid article,
+.disclosure-page article {
+  padding: 28px;
+  border: 1px solid #30373e;
+  border-radius: 8px;
+}
+
+.service-terms-grid h3,
+.disclosure-page h2 {
+  margin: 0 0 14px;
+  font-size: 18px;
+}
+
+.service-terms-grid p,
+.disclosure-page p {
+  margin: 0;
+  color: #939a9e;
+  font-size: 13px;
+  line-height: 1.75;
+}
+
+.disclosure-page p a {
+  color: #d6d9da;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.disclosure-page .button {
+  margin-top: 22px;
+}
+
+.bounty-terms-note,
+.claim-contract {
+  margin: 24px 0 0;
+  padding: 16px 18px;
+  border: 1px solid #343c44;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.025);
+  color: #939a9e;
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.reserve-details {
+  margin-top: 18px;
+}
+
+.detail-price small:empty {
+  display: none;
 }
 
 .receipt-section {
@@ -2488,7 +2685,7 @@ textarea:focus-visible {
   min-height: 56px;
   margin: 8px 0 16px;
   color: #7f878a;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .receipt-chain .receipt-link {
@@ -2524,7 +2721,7 @@ textarea:focus-visible {
 .claim-step-heading p {
   margin: 4px 0 0;
   color: #747c80;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .claim-action {
@@ -2548,7 +2745,7 @@ textarea:focus-visible {
 .claimant-actions > p {
   margin: 0;
   color: #858d91;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .claimant-form {
@@ -2618,6 +2815,35 @@ textarea:focus-visible {
   color: #c7cbcc;
   font-size: 11px;
   text-overflow: ellipsis;
+}
+
+.dispute-evidence {
+  display: grid;
+  gap: 18px;
+  margin-top: 20px;
+}
+
+.dispute-evidence > p,
+.closed-bounty-status p {
+  margin: 0;
+  color: #929a9d;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.closed-bounty-status {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+  padding: 18px;
+  border: 1px solid #343c44;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.closed-bounty-status strong {
+  color: #d6d9da;
+  font-size: 15px;
 }
 
 .wallet-options {
@@ -2718,7 +2944,7 @@ textarea:focus-visible {
 .claim-rules dt,
 .claim-rules dd {
   color: #747c80;
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .claim-rules dd {
@@ -2740,7 +2966,7 @@ textarea:focus-visible {
 .current-claim span,
 .current-claim small {
   color: #7f888c;
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .current-claim strong {
@@ -2752,7 +2978,7 @@ textarea:focus-visible {
 .claim-unavailable {
   margin: 14px 0 0;
   color: #8b9295;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .treasury-hero {
@@ -3046,7 +3272,7 @@ textarea:focus-visible {
 
 .capability-column-cards article .eyebrow {
   margin-bottom: 8px;
-  font-size: 7px;
+  font-size: 9px;
 }
 
 .capability-column-cards article h2 {
@@ -3059,7 +3285,8 @@ textarea:focus-visible {
 .capability-column-cards article > p:not(.eyebrow) {
   margin: 9px 0 0;
   color: #7d8589;
-  font-size: 9px;
+  font-size: 11px;
+  line-height: 1.55;
 }
 
 .capability-benchmark {
@@ -3071,7 +3298,7 @@ textarea:focus-visible {
 .capability-benchmark > span {
   color: #6f777b;
   font:
-    650 7px/1.3 ui-monospace,
+    650 9px/1.3 ui-monospace,
     SFMono-Regular,
     Menlo,
     monospace;
@@ -3092,7 +3319,7 @@ textarea:focus-visible {
 
 .capability-benchmark small {
   color: #687074;
-  font-size: 7px;
+  font-size: 9px;
 }
 
 .capability-receipts {
@@ -3111,7 +3338,7 @@ textarea:focus-visible {
   border-radius: 4px;
   color: #7f878b;
   font:
-    650 7px/1.25 ui-monospace,
+    650 9px/1.25 ui-monospace,
     SFMono-Regular,
     Menlo,
     monospace;
@@ -3130,7 +3357,7 @@ textarea:focus-visible {
   margin-top: 16px;
   color: #646c70;
   font:
-    600 7px/1.4 ui-monospace,
+    600 9px/1.4 ui-monospace,
     SFMono-Regular,
     Menlo,
     monospace;
@@ -3143,7 +3370,7 @@ textarea:focus-visible {
 .column-empty {
   margin: 8px;
   color: #5f676b;
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .event-key {
@@ -3214,8 +3441,12 @@ textarea:focus-visible {
     display: none;
   }
 
+  .mobile-nav {
+    display: block;
+  }
+
   .header-inner {
-    grid-template-columns: 1fr auto;
+    grid-template-columns: minmax(0, 1fr) auto auto;
   }
 
   .hero-grid {
@@ -3341,6 +3572,11 @@ textarea:focus-visible {
   .capability-board {
     min-width: 1020px;
   }
+
+  .service-terms-grid,
+  .disclosure-page {
+    grid-template-columns: 1fr 1fr;
+  }
 }
 
 @media (max-width: 720px) {
@@ -3350,22 +3586,47 @@ textarea:focus-visible {
 
   .header-inner {
     min-height: 62px;
+    gap: 8px;
   }
 
   .brand-cluster {
     gap: 9px;
   }
 
-  .covenant-brand img {
-    height: 27px;
+  .covenant-wordmark {
+    display: none !important;
+  }
+
+  .covenant-mobile-mark {
+    display: block !important;
+    width: 26px !important;
+    height: 26px !important;
   }
 
   .brand-divider {
-    height: 24px;
+    display: none;
   }
 
   .brand {
+    gap: 6px;
+    font-size: 10px;
     letter-spacing: 0.13em;
+  }
+
+  .mobile-nav summary {
+    padding-inline: 10px;
+  }
+
+  .brand-full {
+    display: none;
+  }
+
+  .header-cta .header-cta-long {
+    display: none;
+  }
+
+  .header-cta .header-cta-short {
+    display: inline;
   }
 
   .brand-mark {
@@ -3379,7 +3640,16 @@ textarea:focus-visible {
   }
 
   .header-cta span {
+    display: inline;
+  }
+
+  .header-cta > span[aria-hidden='true'] {
     display: none;
+  }
+
+  .service-terms-grid,
+  .disclosure-page {
+    grid-template-columns: 1fr;
   }
 
   .hero {
@@ -3403,7 +3673,8 @@ textarea:focus-visible {
   }
 
   .hero-contract {
-    font-size: 9px;
+    font-size: 11px;
+    line-height: 1.7;
   }
 
   .hero-visual {
@@ -3427,6 +3698,19 @@ textarea:focus-visible {
 
   .maintenance-contract-body {
     padding: 26px 0 32px;
+  }
+
+  .capability-page-section {
+    overflow: visible;
+  }
+
+  .capability-board {
+    grid-template-columns: 1fr;
+    min-width: 0;
+  }
+
+  .capability-column-cards {
+    min-height: 0;
   }
 
   .contract-outcomes {

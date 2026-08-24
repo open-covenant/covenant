@@ -1,11 +1,11 @@
 import type { ReactNode } from 'react';
 
 export function DataError({
-  title = 'Live data unavailable',
-  detail,
+  title = 'Live records are temporarily unavailable',
+  message = 'Refresh the page to try again. No action is required.',
 }: {
   title?: string;
-  detail?: string;
+  message?: string;
 }) {
   return (
     <div className="data-state data-error" role="status">
@@ -14,10 +14,7 @@ export function DataError({
       </span>
       <div>
         <strong>{title}</strong>
-        <p>
-          {detail ||
-            'Mizuki could not reach the public API. This surface will retry when you refresh.'}
-        </p>
+        <p>{message}</p>
       </div>
     </div>
   );
@@ -38,5 +35,5 @@ export function EmptyState({ title, children }: { title: string; children: React
 }
 
 export function DemoNotice() {
-  return <span className="demo-notice">Illustrative data</span>;
+  return <span className="demo-notice">Example data · not real transactions</span>;
 }

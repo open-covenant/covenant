@@ -9,9 +9,9 @@ import type { CapabilityState } from '@/lib/types';
 export const dynamic = 'force-dynamic';
 
 export const metadata: Metadata = {
-  title: 'Capability record',
+  title: 'Production change record',
   description:
-    'See the benchmarks, pull requests, reviews, and deployments behind Mizuki’s claimed improvements.',
+    'Review benchmarks, pull requests, separate AI reviews, and production releases for Mizuki’s capability updates.',
 };
 
 const stateOrder: CapabilityState[] = [
@@ -32,15 +32,16 @@ export default async function CapabilitiesPage() {
       <section className="page-hero shell">
         <div>
           <p className="eyebrow">
-            Evidence-backed evolution {result.status !== 'error' && result.demo && <DemoNotice />}
+            Evidence-backed production changes{' '}
+            {result.status !== 'error' && result.demo && <DemoNotice />}
           </p>
-          <h1>Mizuki’s body is the code he can prove.</h1>
+          <h1>Every capability claim is tied to evidence.</h1>
         </div>
         <div className="page-hero-aside">
           <p>
-            A capability moves forward only when its benchmark, implementation, independent review,
-            and deployment evidence agree. Separate external authorities sign the proposal,
-            benchmark, and review before the updater can change production.
+            A capability is shown as active only when its benchmark, code change, separate AI
+            review, and production deployment are recorded. Missing or degraded evidence remains
+            visible.
           </p>
           <div className="capability-legend">
             {stateOrder.map((state) => (
@@ -51,10 +52,10 @@ export default async function CapabilitiesPage() {
       </section>
       <section className="shell capability-page-section">
         {result.status === 'error' ? (
-          <DataError title="Capability record unavailable" detail={result.error} />
+          <DataError title="Capability records are temporarily unavailable" />
         ) : result.status === 'empty' ? (
-          <EmptyState title="No capability evidence published">
-            The first validated upgrade will establish a public baseline.
+          <EmptyState title="No capability updates have been published yet">
+            The first approved production update will appear here with its supporting records.
           </EmptyState>
         ) : (
           <div className="capability-board">
@@ -79,7 +80,7 @@ export default async function CapabilitiesPage() {
                             <div>
                               <span>{capability.benchmarkBefore ?? '—'}</span>
                               <span aria-hidden="true">→</span>
-                              <strong>{capability.benchmarkAfter ?? 'pending'}</strong>
+                              <strong>{capability.benchmarkAfter ?? 'Not measured yet'}</strong>
                               <small>{capability.benchmarkUnit}</small>
                             </div>
                           </div>
@@ -93,13 +94,15 @@ export default async function CapabilitiesPage() {
                               target="_blank"
                               rel="noreferrer"
                             >
-                              Authority handoff <span aria-hidden="true">↗</span>
+                              View change proposal <span aria-hidden="true">↗</span>
                             </a>
                           )}
                         </div>
                       </article>
                     ))}
-                    {items.length === 0 && <p className="column-empty">Nothing in this state.</p>}
+                    {items.length === 0 && (
+                      <p className="column-empty">No capabilities currently have this status.</p>
+                    )}
                   </div>
                 </section>
               );

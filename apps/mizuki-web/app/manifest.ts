@@ -2,9 +2,10 @@ import type { MetadataRoute } from 'next';
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: 'Mizuki',
+    name: 'Mizuki the Mech',
     short_name: 'Mizuki',
-    description: 'Validated maintenance or a full refund.',
+    description:
+      'Fixed-price maintenance for authorized public GitHub issues, with a qualifying pull request or refund of the quoted USDC payment.',
     start_url: '/',
     display: 'standalone',
     background_color: '#090b0e',

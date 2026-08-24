@@ -106,7 +106,11 @@ try {
     const outage = await page(port, `/${resource}/${outageId}`, {});
     assert(outage.status === 200, `${resource} outage returned ${outage.status}`);
     assert(
-      outage.body.includes(resource === 'jobs' ? 'Job receipt unavailable' : 'Bounty unavailable'),
+      outage.body.includes(
+        resource === 'jobs'
+          ? 'This job record is temporarily unavailable'
+          : 'This bounty record is temporarily unavailable',
+      ),
       `${resource} outage did not render its unavailable state`,
     );
 
@@ -163,12 +167,15 @@ function jobFixture() {
 function bountyFixture() {
   return {
     id: validId,
-    title: 'Smoke-test rescue bounty',
+    title: 'Smoke-test maintenance bounty',
     repository: 'example/project',
     issueUrl: 'https://github.com/example/project/issues/1',
     issueNumber: 1,
     amountUsd: 2,
-    state: 'draft',
+    amountAtomic: '100000000',
+    asset: 'SOL',
+    state: 'open',
+    escrowTransaction: 'smoke-test-escrow-transaction',
     failureClass: 'validation_failed',
     acceptanceCriteria: ['The production receipt renders.'],
     createdAt: timestamp,

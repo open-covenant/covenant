@@ -5,20 +5,20 @@ export function MetricStrip({ metrics }: { metrics: Metrics }) {
   const refundAttempts = metrics.refundCount + metrics.refundPending;
   const values: Array<{ label: string; value: string; highlight?: boolean; note?: string }> = [
     { label: 'Paid jobs', value: String(metrics.paidJobs) },
-    { label: 'Pull requests', value: String(metrics.deliveredPrs) },
-    { label: 'Merged', value: String(metrics.mergedPrs) },
+    { label: 'Pull requests opened', value: String(metrics.deliveredPrs) },
+    { label: 'Pull requests merged', value: String(metrics.mergedPrs) },
     {
-      label: 'Refund success',
+      label: 'Refund completion',
       value:
         refundAttempts === 0 || metrics.refundSuccessRate === null
-          ? 'No attempts'
+          ? 'Not yet measured'
           : formatPercent(metrics.refundSuccessRate),
       highlight: refundAttempts > 0 && metrics.refundPending === 0,
     },
     {
-      label: 'Recognized revenue less partial est.',
+      label: 'Revenue after tracked variable costs',
       value: formatUsd(metrics.recognizedRevenueLessVariableRouteEstimateUsd),
-      note: 'Revenue requires signer discharge; estimate includes model and sandbox, but excludes provider adjustments, chain/facilitator, and infrastructure',
+      note: 'Estimate only. Includes recorded AI model and sandbox costs. Provider billing adjustments, Solana and payment fees, and hosting are still excluded, so gross margin is not verified.',
     },
   ];
 

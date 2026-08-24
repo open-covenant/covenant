@@ -28,7 +28,7 @@ export function CapabilitySnapshot({ capabilities }: { capabilities: Capability[
         </article>
       ))}
       <Link href="/capabilities" className="text-link">
-        View the complete capability record <span aria-hidden="true">↗</span>
+        View all capability records <span aria-hidden="true">↗</span>
       </Link>
     </div>
   );

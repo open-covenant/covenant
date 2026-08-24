@@ -1,5 +1,5 @@
 import { capabilityDescription, capabilityHandoff } from './capability-handoff.js';
-import type { RescueBounty } from './domain/index.js';
+import type { RescueBounty, RescueBountyState } from './domain/index.js';
 import { publicCostCoverage } from './metrics.js';
 import type { MizukiStore } from './store.js';
 import { treasurySnapshot } from './treasury.js';
@@ -17,12 +17,11 @@ export function publicJob(job: Job) {
     prUrl: job.prUrl,
     mergedAt: job.mergedAt,
     refundTransaction: job.refundTransaction,
-    refundOperationId: job.refundOperationId,
     error: publicFailure(job.error),
     review: job.reviewReceipt
       ? {
           approved: job.reviewReceipt.approved,
-          reason: job.reviewReceipt.reason,
+          reason: publicReviewDecision(job.reviewReceipt.approved),
           reviewedAt: job.reviewReceipt.reviewedAt,
           artifactHash: job.reviewReceipt.artifactHash,
           ...(job.reviewReceipt.provider
@@ -40,7 +39,7 @@ export function publicJob(job: Job) {
         costUsd: attempt.costUsd,
         ...(attempt.provider ? { provider: publicProviderReceipt(attempt.provider) } : {}),
         ...(attempt.approved === undefined ? {} : { approved: attempt.approved }),
-        reason: publicReviewReason(status, attempt.approved, attempt.reason),
+        reason: publicReviewReason(status, attempt.approved),
       };
     }),
     changedFiles: job.artifacts?.changedFiles ?? [],
@@ -64,7 +63,9 @@ export async function publicBounty(store: MizukiStore, bounty: RescueBounty) {
     `Resolve issue #${bounty.issueNumber} as written by the maintainer`,
     ...(job ? [`Keep the patch within ${job.quote.maxFiles} changed files`] : []),
     ...validationCommands.map((command) => `Pass ${command}`),
-    'Pass an independent patch review before payout',
+    'Pass a separate AI review before payout',
+    'Receive approval from a non-claimant repository maintainer on the exact reviewed commit',
+    'Merge the approved pull request before the 48-hour claim deadline',
   ];
 
   return {
@@ -83,12 +84,13 @@ export async function publicBounty(store: MizukiStore, bounty: RescueBounty) {
     claimant: contributor ? { github: contributor.githubLogin } : undefined,
     escrowTransaction: escrow?.fundingSignature,
     releaseTransaction: escrow?.releaseSignature,
-    refundTransaction: escrow?.refundSignature ?? job?.refundTransaction,
+    customerRefundTransaction: job?.refundTransaction,
+    escrowReturnTransaction: escrow?.refundSignature,
     pullRequestUrl: bounty.activeClaim?.draftPullRequestUrl,
     review: bounty.validationReceipt
       ? {
           approved: bounty.validationReceipt.approved,
-          reason: bounty.validationReceipt.reason,
+          reason: publicReviewDecision(bounty.validationReceipt.approved),
           reviewedAt: bounty.validationReceipt.reviewedAt,
           headSha: bounty.validationReceipt.headSha,
           baseSha: bounty.validationReceipt.baseSha,
@@ -108,8 +110,12 @@ export async function publicBounty(store: MizukiStore, bounty: RescueBounty) {
             ? {
                 requestedDecision: bounty.dispute.resolution.requestedDecision,
                 settlementDecision: bounty.dispute.resolution.settlementDecision,
+                summary: bounty.dispute.resolution.evidence.summary,
+                references: [...bounty.dispute.resolution.evidence.references],
                 evidenceHash: bounty.dispute.resolution.evidenceHash,
+                decidedAt: bounty.dispute.resolution.decidedAt,
                 resolvedAt: bounty.dispute.resolution.resolvedAt,
+                transactionSignature: bounty.dispute.resolution.transactionSignature,
               }
             : undefined,
         }
@@ -117,6 +123,38 @@ export async function publicBounty(store: MizukiStore, bounty: RescueBounty) {
     createdAt: bounty.createdAt,
     updatedAt: bounty.updatedAt,
   };
+}
+
+const publicBountyStates = new Set<RescueBountyState>([
+  'open',
+  'claimed',
+  'pr_submitted',
+  'validating',
+  'claim_refund_pending',
+  'offer_refund_pending',
+  'release_refund_pending',
+  'accepted',
+  'released',
+  'expired',
+  'rejected',
+  'disputed',
+  'refunded',
+]);
+
+export async function isPublicBounty(store: MizukiStore, bounty: RescueBounty): Promise<boolean> {
+  if (!publicBountyStates.has(bounty.state)) return false;
+  const [escrow, job] = await Promise.all([
+    store.escrowByBounty(bounty.id),
+    store.job(bounty.sourceJobId),
+  ]);
+  return Boolean(
+    job?.state === 'refunded' &&
+    job.refundTransaction &&
+    escrow?.fundingSignature &&
+    escrow.amountAtomic &&
+    /^[0-9]+$/.test(escrow.amountAtomic) &&
+    BigInt(escrow.amountAtomic) > 0n,
+  );
 }
 
 export async function publicTreasury(store: MizukiStore, readiness?: ServiceReadinessReport) {
@@ -141,13 +179,13 @@ export async function publicTreasury(store: MizukiStore, readiness?: ServiceRead
       buckets: [
         {
           id: 'refund_target',
-          label: 'Modeled refund allocation',
+          label: 'Planned refund allocation',
           allocatedUsd: snapshot.allocationModel.refundAllocationUsd,
           targetUsd: snapshot.allocationModel.refundTargetUsd,
         },
         {
           id: 'operating_target',
-          label: 'Modeled operating allocation',
+          label: 'Planned operating allocation',
           allocatedUsd: snapshot.allocationModel.operatingAllocationUsd,
           targetUsd: snapshot.allocationModel.operatingTargetUsd,
         },
@@ -158,7 +196,7 @@ export async function publicTreasury(store: MizukiStore, readiness?: ServiceRead
         },
         {
           id: 'research_plan',
-          label: 'Planned route research allocation',
+          label: 'Planned provider research allocation',
           allocatedUsd: snapshot.allocationModel.plannedResearchAllocationUsd,
         },
       ],
@@ -212,16 +250,27 @@ export async function publicCapabilityHandoff(store: MizukiStore, capabilityId: 
 
 export async function publicActivityFeed(store: MizukiStore, limit = 100) {
   const events = await store.activity(limit);
-  return Promise.all(events.map((event) => publicActivity(store, event)));
+  const published = await Promise.all(events.map((event) => publicActivity(store, event)));
+  return published.filter((event): event is NonNullable<typeof event> => Boolean(event));
 }
 
 export async function publicActivity(store: MizukiStore, event: ActivityEvent) {
+  if (event.kind === 'bounty.created' || event.kind === 'bounty.creation_failed') return undefined;
   const data = event.publicData;
   const job =
     event.kind.startsWith('job.') || event.kind.startsWith('refund.')
       ? await store.job(event.subjectId)
       : undefined;
   const bounty = event.kind.startsWith('bounty.') ? await store.bounty(event.subjectId) : undefined;
+  if (event.kind.startsWith('bounty.') && (!bounty || !(await isPublicBounty(store, bounty)))) {
+    return undefined;
+  }
+  if (event.kind === 'bounty.funded') {
+    const escrow = await store.escrowByBounty(event.subjectId);
+    if (!escrow?.fundingSignature || stringValue(data.transaction) !== escrow.fundingSignature) {
+      return undefined;
+    }
+  }
   const amountUsd = job
     ? Number(job.payment.amountAtomic) / 1_000_000
     : bounty
@@ -233,6 +282,7 @@ export async function publicActivity(store: MizukiStore, event: ActivityEvent) {
     job?.refundTransaction;
 
   const presentation = activityPresentation(event.kind, job, bounty);
+  if (!presentation) return undefined;
   return {
     id: event.id,
     kind: event.kind.replaceAll('.', '_'),
@@ -267,8 +317,11 @@ function ledgerPresentation(kind: LedgerEntry['kind']): {
     | 'refund'
     | 'bounty_funding'
     | 'bounty_release'
+    | 'bounty_return'
     | 'route_cost'
     | 'operating_cost'
+    | 'refund_obligation'
+    | 'treasury_deposit'
     | 'allocation';
   direction: 'credit' | 'debit' | 'allocation';
   description: string;
@@ -278,7 +331,7 @@ function ledgerPresentation(kind: LedgerEntry['kind']): {
       return {
         type: 'customer_receipt',
         direction: 'credit',
-        description: 'Customer payment settlement receipt',
+        description: 'Customer payment finalized',
       };
     case 'creator_fee':
       return {
@@ -287,24 +340,24 @@ function ledgerPresentation(kind: LedgerEntry['kind']): {
         description: 'ClawPump-reported creator fee distribution (native SOL)',
       };
     case 'refund_completed':
-      return { type: 'refund', direction: 'debit', description: 'Customer refunded in full' };
+      return { type: 'refund', direction: 'debit', description: 'Quoted USDC payment refunded' };
     case 'bounty_reserved':
       return {
         type: 'bounty_funding',
         direction: 'debit',
-        description: 'Rescue bounty funded in signer-controlled SOL escrow',
+        description: 'Maintenance bounty funded in dedicated SOL escrow',
       };
     case 'bounty_released':
       return {
         type: 'bounty_release',
         direction: 'allocation',
-        description: 'Rescue escrow principal released to contributor',
+        description: 'Maintenance-bounty escrow released to the contributor',
       };
     case 'route_cost':
       return {
         type: 'route_cost',
         direction: 'debit',
-        description: 'Variable execution cost estimate',
+        description: 'Tracked model and sandbox cost estimate',
       };
     case 'operating_cost':
       return {
@@ -314,21 +367,21 @@ function ledgerPresentation(kind: LedgerEntry['kind']): {
       };
     case 'bounty_returned':
       return {
-        type: 'allocation',
+        type: 'bounty_return',
         direction: 'credit',
-        description: 'Unused rescue escrow principal returned',
+        description: 'Unused maintenance-bounty escrow returned',
       };
     case 'treasury_deposit':
       return {
-        type: 'allocation',
+        type: 'treasury_deposit',
         direction: 'credit',
-        description: 'Recorded treasury allocation entry (not custody proof)',
+        description: 'Planning allocation recorded — not proof of funds',
       };
     case 'refund_liability':
       return {
-        type: 'allocation',
+        type: 'refund_obligation',
         direction: 'allocation',
-        description: 'Application refund liability record',
+        description: 'Outstanding refund obligation recorded',
       };
   }
 }
@@ -337,7 +390,7 @@ function activityPresentation(
   kind: ActivityEvent['kind'],
   job: Job | undefined,
   bounty: RescueBounty | undefined,
-): { title: string; description: string; href?: string } {
+): { title: string; description: string; href?: string } | undefined {
   const issue = job
     ? `${job.quote.owner}/${job.quote.repo} · issue #${job.quote.issueNumber}`
     : bounty
@@ -351,59 +404,51 @@ function activityPresentation(
         href: job ? `/jobs/${job.id}` : undefined,
       };
     case 'job.delivered':
-      return { title: 'Pull request delivered', description: issue, href: job?.prUrl };
+      return { title: 'Pull request opened', description: issue, href: job?.prUrl };
     case 'job.failed':
       return {
         title: 'Paid attempt stopped',
-        description: `${issue}; the full-refund process started.`,
+        description: `${issue}; Mizuki could not open a qualifying pull request, so the refund process started.`,
       };
     case 'refund.pending':
       return {
         title: 'Full refund in progress',
-        description: `${issue}; funds remain a recorded liability until finality.`,
+        description: `${issue}; the quoted USDC payment remains protected until the refund is final.`,
       };
     case 'refund.completed':
       return {
         title: 'Full refund finalized',
-        description: `${issue}; the customer received the complete payment back.`,
+        description: `${issue}; 100% of the quoted USDC payment was returned to the original payer.`,
       };
     case 'bounty.created':
-      return {
-        title: 'Failure became a rescue bounty',
-        description: issue,
-        href: bounty ? `/bounties/${bounty.id}` : undefined,
-      };
     case 'bounty.creation_failed':
-      return {
-        title: 'Bounty creation needs recovery',
-        description: 'The refund completed; the separate rescue workflow is being retried.',
-      };
+      return undefined;
     case 'bounty.funded':
       return {
-        title: 'Rescue bounty opened',
-        description: issue,
+        title: 'Funded bounty published',
+        description: `${issue}; the SOL payout is now in on-chain escrow.`,
         href: bounty ? `/bounties/${bounty.id}` : undefined,
       };
     case 'bounty.claimed':
       return {
-        title: 'Rescue bounty claimed',
+        title: 'Maintenance bounty claimed',
         description: issue,
         href: bounty ? `/bounties/${bounty.id}` : undefined,
       };
     case 'bounty.pr_submitted':
       return {
-        title: 'Rescue pull request submitted',
+        title: 'Maintenance pull request submitted',
         description: issue,
         href: bounty?.activeClaim?.draftPullRequestUrl,
       };
     case 'bounty.accepted':
       return {
-        title: 'Rescue patch accepted',
-        description: `${issue}; payout is awaiting final release.`,
+        title: 'Merged maintenance patch verified',
+        description: `${issue}; payout verification is in progress.`,
       };
     case 'bounty.released':
       return {
-        title: 'Contributor escrow released',
+        title: 'Bounty payout released',
         description: issue,
         href: bounty?.activeClaim?.draftPullRequestUrl,
       };
@@ -417,7 +462,11 @@ function activityPresentation(
     case 'bounty.dispute_resolved':
       return {
         title: 'Bounty dispute resolved',
-        description: `${issue}; the escrow decision is finalized on-chain.`,
+        description:
+          bounty?.dispute?.resolution?.settlementDecision === 'release'
+            ? `${issue}; the contributor payout finalized on-chain.`
+            : `${issue}; the SOL escrow return finalized on-chain.`,
+        href: bounty ? `/bounties/${bounty.id}` : undefined,
       };
     case 'capability.proposed':
       return {
@@ -428,7 +477,8 @@ function activityPresentation(
     case 'capability.activated':
       return {
         title: 'Capability upgrade activated',
-        description: 'Independent evidence passed and the upgrade became active.',
+        description:
+          'Required benchmark, code-change, review, and deployment records were verified before activation.',
         href: '/capabilities',
       };
     case 'capability.rolled_back':
@@ -455,19 +505,19 @@ function publicFailure(value: string | undefined): string | undefined {
   if (!value) return undefined;
   switch (classifyFailure(value)) {
     case 'model_route':
-      return 'The execution route did not complete reliably.';
+      return 'A required AI service did not complete the work.';
     case 'independent_review':
-      return 'The patch did not pass independent review.';
+      return 'The separate AI review did not approve the patch.';
     case 'repository_validation':
-      return 'The patch did not pass the repository validation commands.';
+      return 'The patch did not pass the repository checks.';
     case 'scope_policy':
-      return 'The attempted patch exceeded the quoted scope policy.';
+      return 'The attempted changes exceeded the quoted scope.';
     case 'github_delivery':
       return 'The validated patch could not be delivered to GitHub.';
     case 'execution_timeout':
-      return 'The bounded maintenance run timed out.';
+      return 'The work took too long and stopped before delivery.';
     case 'maintenance_failure':
-      return 'The maintenance run stopped before delivery.';
+      return 'Work stopped before a pull request was opened.';
   }
 }
 
@@ -492,17 +542,19 @@ function publicReviewStatus(attempt: NonNullable<Job['reviewAttempts']>[number])
 function publicReviewReason(
   status: ReturnType<typeof publicReviewStatus>,
   approved: boolean | undefined,
-  reason: string | undefined,
 ): string {
-  if (status === 'failed') return 'The independent review did not complete reliably.';
-  if (status === 'pending') return 'The independent review is awaiting a durable provider receipt.';
+  if (status === 'failed') return 'The separate AI review could not be completed.';
+  if (status === 'pending') return 'The separate AI review is in progress.';
   if (status === 'received') {
-    return 'The provider receipt was recorded before a final review decision.';
+    return 'The AI provider response was recorded; a final review decision is not yet available.';
   }
-  if (reason) return reason;
+  return publicReviewDecision(approved === true);
+}
+
+function publicReviewDecision(approved: boolean): string {
   return approved
-    ? 'The independent review approved the patch.'
-    : 'The independent review rejected the patch.';
+    ? 'The separate AI review approved the patch against the issue scope and repository checks.'
+    : 'The separate AI review did not approve the patch against the issue scope and repository checks.';
 }
 
 function stringValue(value: unknown): string | undefined {

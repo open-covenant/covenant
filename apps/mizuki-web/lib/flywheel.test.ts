@@ -62,7 +62,7 @@ describe('tractionTargets', () => {
   it('does not claim refund success before a refund is finalized', () => {
     const refund = tractionTargets(metrics).find((target) => target.id === 'refunds');
 
-    expect(refund).toMatchObject({ value: 'No attempts', met: false, progress: 0 });
+    expect(refund).toMatchObject({ value: 'Not yet measured', met: false, progress: 0 });
   });
 
   it('requires every attempted refund to be finalized', () => {
@@ -84,16 +84,16 @@ describe('tractionTargets', () => {
     }).find((target) => target.id === 'external-maintainers');
 
     expect(maintainer).toMatchObject({ value: '2', target: '3', met: false });
-    expect(maintainer?.detail).toContain('5 external repos');
+    expect(maintainer?.detail).toContain('5 external repositories');
   });
 
   it('keeps gross margin unverified while commercial costs are omitted', () => {
     const margin = tractionTargets(metrics).find((target) => target.id === 'margin');
 
-    expect(margin).toMatchObject({ value: 'Unverified', met: false, progress: 0 });
+    expect(margin).toMatchObject({ value: 'Not yet verified', met: false, progress: 0 });
     expect(margin?.detail).toContain('provider billing adjustments');
-    expect(margin?.detail).toContain('recorded model and sandbox estimates');
-    expect(margin?.detail).toContain('chain/facilitator fees');
-    expect(margin?.detail).toContain('infrastructure');
+    expect(margin?.detail).toContain('after recorded AI model and sandbox costs');
+    expect(margin?.detail).toContain('Solana network and payment-processing fees');
+    expect(margin?.detail).toContain('infrastructure costs');
   });
 });

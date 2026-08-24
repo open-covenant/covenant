@@ -85,7 +85,7 @@ export function buildWalletProofMessage(
     `${session.domain} wants you to sign in with your Solana account:`,
     walletAddress,
     '',
-    'Authorize this wallet for Mizuki contributor payments.',
+    'Verify this wallet as the payout address for a Mizuki bounty. This message does not authorize a transaction or transfer funds.',
     '',
     `URI: ${session.uri}`,
     'Version: 1',

@@ -4,12 +4,12 @@ import { demoTreasury } from '@/lib/demo';
 import { TreasurySnapshot } from './treasury-snapshot';
 
 describe('TreasurySnapshot', () => {
-  it('labels signer custody and application-ledger allocations as separate evidence', () => {
+  it('labels verified reserve custody and planning records as separate evidence', () => {
     const html = renderToStaticMarkup(<TreasurySnapshot treasury={demoTreasury} />);
 
-    expect(html).toContain('Signer-verified refund custody');
-    expect(html).toContain('Recorded application-ledger net flow');
-    expect(html).toContain('It is not a wallet balance');
+    expect(html).toContain('Verified refund reserve balance');
+    expect(html).toContain('Service-record net flow');
+    expect(html).toContain('not a wallet balance');
     expect(html).toContain('Planned improvement allocation');
   });
 
@@ -33,8 +33,8 @@ describe('TreasurySnapshot', () => {
 
     const html = renderToStaticMarkup(<TreasurySnapshot treasury={treasury} />);
 
-    expect(html).toContain('Fresh finalized signer evidence is unavailable');
-    expect(html).not.toContain('Signer-verified refund custody');
+    expect(html).toContain('Finalized reserve records are unavailable');
+    expect(html).not.toContain('Verified refund reserve balance');
     expect(html).not.toContain('Reserve-cleared');
   });
 });

@@ -14,7 +14,7 @@ describe('CapabilityFlywheel', () => {
       />,
     );
 
-    expect(html).toContain('Illustrative fixture');
-    expect(html).not.toContain('Live backend records only');
+    expect(html).toContain('Example data');
+    expect(html).not.toContain('Live service data');
   });
 });

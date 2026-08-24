@@ -53,12 +53,12 @@ export function ActivityFeed({
       <div className="feed-status" aria-live="polite">
         <span className={`feed-dot feed-${connection}`} aria-hidden="true" />
         {connection === 'live'
-          ? 'Live stream'
+          ? 'Live updates'
           : connection === 'connecting'
-            ? 'Connecting'
+            ? 'Connecting…'
             : live
-              ? 'Reconnecting'
-              : 'Recorded activity'}
+              ? 'Connection interrupted. Retrying…'
+              : 'Latest recorded activity'}
       </div>
       <ol>
         {visible.map((event) => (
@@ -72,13 +72,15 @@ export function ActivityFeed({
               <p>{event.description}</p>
               <div className="event-receipts">
                 {event.amountUsd !== undefined && <span>{formatUsd(event.amountUsd)}</span>}
-                {event.transaction && <span>tx {truncateAddress(event.transaction, 4)}</span>}
+                {event.transaction && (
+                  <span>Transaction {truncateAddress(event.transaction, 4)}</span>
+                )}
                 {event.href &&
                   (event.href.startsWith('/') ? (
-                    <Link href={event.href}>Inspect ↗</Link>
+                    <Link href={event.href}>View details ↗</Link>
                   ) : (
                     <a href={event.href} target="_blank" rel="noreferrer">
-                      Inspect ↗
+                      View details ↗
                     </a>
                   ))}
               </div>

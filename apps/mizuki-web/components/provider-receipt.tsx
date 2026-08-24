@@ -8,12 +8,12 @@ export function ProviderReceiptDetails({ receipt }: { receipt: ProviderRouteRece
         <dd>{receipt.model}</dd>
       </div>
       <div>
-        <dt>Route</dt>
-        <dd>{receipt.route}</dd>
+        <dt>Provider channel</dt>
+        <dd>{receipt.route === 'marketplace' ? 'UsePod marketplace' : receipt.route}</dd>
       </div>
       {receipt.providerId && (
         <div>
-          <dt>Provider ID</dt>
+          <dt>Provider</dt>
           <dd>
             <code>{receipt.providerId}</code>
           </dd>
@@ -21,7 +21,7 @@ export function ProviderReceiptDetails({ receipt }: { receipt: ProviderRouteRece
       )}
       {receipt.requestId && (
         <div>
-          <dt>Request ID</dt>
+          <dt>Request</dt>
           <dd>
             <code>{receipt.requestId}</code>
           </dd>
@@ -29,10 +29,19 @@ export function ProviderReceiptDetails({ receipt }: { receipt: ProviderRouteRece
       )}
       {receipt.costMicrounits && (
         <div>
-          <dt>Provider-reported cost</dt>
-          <dd>{receipt.costMicrounits} microunits</dd>
+          <dt>Marketplace-reported cost</dt>
+          <dd>{formatMicrounits(receipt.costMicrounits)}</dd>
         </div>
       )}
     </dl>
   );
+}
+
+function formatMicrounits(value: string): string {
+  if (!/^[0-9]+$/.test(value)) return 'Amount unavailable';
+  const microunits = BigInt(value);
+  const whole = microunits / 1_000_000n;
+  const fraction = microunits % 1_000_000n;
+  if (fraction === 0n) return `$${whole}`;
+  return `$${whole}.${fraction.toString().padStart(6, '0').replace(/0+$/, '')}`;
 }

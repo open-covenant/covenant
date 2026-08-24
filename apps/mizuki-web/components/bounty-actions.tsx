@@ -50,12 +50,20 @@ export function BountyActions({
 
   async function submitPullRequest(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    await mutate('pr', { pullRequestUrl: prUrl.trim() }, 'Pull request submitted for review.');
+    await mutate(
+      'pr',
+      { pullRequestUrl: prUrl.trim() },
+      'Pull request submitted. Mizuki is checking the exact commit, changed files, repository checks, and separate AI review.',
+    );
   }
 
   async function openDispute(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    await mutate('dispute', { reason: reason.trim() }, 'Dispute opened. Escrow is frozen.');
+    await mutate(
+      'dispute',
+      { reason: reason.trim() },
+      'Dispute opened. The contributor payout is paused while the evidence is reviewed.',
+    );
   }
 
   async function mutate(kind: 'pr' | 'dispute', body: Record<string, string>, message: string) {
@@ -72,18 +80,21 @@ export function BountyActions({
           body: JSON.stringify(body),
         },
       );
-      const result = (await response.json().catch(() => ({}))) as { error?: string };
-      if (!response.ok) throw new Error(result.error ?? `Request failed (${response.status})`);
+      await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setError(actionError(response.status, kind));
+        return;
+      }
       setSuccess(message);
       router.refresh();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'The request could not be completed');
+    } catch {
+      setError(actionError(0, kind));
     } finally {
       setBusy(null);
     }
   }
 
-  if (session === 'loading') return <p className="claim-unavailable">Checking claim identity…</p>;
+  if (session === 'loading') return <p className="claim-unavailable">Checking GitHub sign-in…</p>;
   if (session === 'anonymous') {
     return (
       <div className="claimant-actions">
@@ -93,7 +104,9 @@ export function BountyActions({
     );
   }
   if (session === 'other') {
-    return <p className="claim-unavailable">This work is assigned to @{claimantLogin}.</p>;
+    return (
+      <p className="claim-unavailable">This bounty is currently assigned to @{claimantLogin}.</p>
+    );
   }
 
   const canSubmit = state === 'claimed' && !pullRequestUrl;
@@ -102,7 +115,7 @@ export function BountyActions({
     <div className="claimant-actions">
       {canSubmit && (
         <form className="claimant-form" onSubmit={submitPullRequest}>
-          <label htmlFor="bounty-pr">Draft pull request URL</label>
+          <label htmlFor="bounty-pr">Pull request URL</label>
           <input
             id="bounty-pr"
             type="url"
@@ -113,7 +126,7 @@ export function BountyActions({
             required
           />
           <button className="button button-primary" type="submit" disabled={busy !== null}>
-            {busy === 'pr' ? 'Reviewing…' : 'Submit pull request'}
+            {busy === 'pr' ? 'Submitting for review…' : 'Submit pull request'}
           </button>
         </form>
       )}
@@ -136,8 +149,12 @@ export function BountyActions({
             required
           />
           <button className="button button-secondary" type="submit" disabled={busy !== null}>
-            {busy === 'dispute' ? 'Freezing escrow…' : 'Open dispute'}
+            {busy === 'dispute' ? 'Opening dispute…' : 'Open dispute'}
           </button>
+          <p>
+            Opening a dispute pauses payout until a documented decision to release the contributor
+            payout or return the SOL escrow is recorded.
+          </p>
         </form>
       )}
       {error && (
@@ -148,4 +165,12 @@ export function BountyActions({
       {success && <p className="form-success">{success}</p>}
     </div>
   );
+}
+
+function actionError(status: number, kind: 'pr' | 'dispute'): string {
+  if (status === 401) return 'Sign in with the assigned GitHub account and try again.';
+  if (status === 409) return 'This bounty changed. Refresh the page before trying again.';
+  return kind === 'pr'
+    ? 'We could not submit the pull request for review. Confirm the URL and try again.'
+    : 'We could not open the dispute. Refresh the page and try again.';
 }

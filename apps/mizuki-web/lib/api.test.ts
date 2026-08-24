@@ -39,7 +39,7 @@ describe('receipt detail loading', () => {
 
     await expect(load('receipt-1')).resolves.toEqual({
       status: 'error',
-      error: 'Mizuki API returned 503',
+      error: 'Live records are temporarily unavailable',
     });
   });
 });

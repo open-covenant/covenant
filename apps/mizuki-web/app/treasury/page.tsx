@@ -2,15 +2,22 @@ import type { Metadata } from 'next';
 import { DataError, DemoNotice } from '@/components/data-state';
 import { TransactionLink } from '@/components/transaction-link';
 import { getTreasury } from '@/lib/api';
-import { formatSolLamports, formatTime, formatUsd, formatUsdcAtomic } from '@/lib/format';
+import {
+  formatSolLamports,
+  formatTime,
+  formatUsd,
+  formatUsdcAtomic,
+  stateLabel,
+  truncateAddress,
+} from '@/lib/format';
 import type { LedgerEntry } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
 export const metadata: Metadata = {
-  title: 'Public accounting',
+  title: 'Refund reserve and financial records',
   description:
-    'Inspect signer-verified refund custody, exact liabilities, recorded ledger flows, modeled allocations, and transaction receipts.',
+    'View refund reserve coverage, customer refund obligations, recorded transactions, and allocation plans.',
 };
 
 export default async function TreasuryPage() {
@@ -18,7 +25,7 @@ export default async function TreasuryPage() {
   if (result.status === 'error') {
     return (
       <div className="page-shell shell fatal-state">
-        <DataError title="Treasury unavailable" detail={result.error} />
+        <DataError title="Refund and financial records are temporarily unavailable" />
       </div>
     );
   }
@@ -29,23 +36,30 @@ export default async function TreasuryPage() {
     <div className="page-shell">
       <section className="treasury-hero shell">
         <div>
-          <p className="eyebrow">Custody proof + public ledger {result.demo && <DemoNotice />}</p>
-          <h1>Custody and allocations are different evidence.</h1>
+          <p className="eyebrow">
+            Refund reserve and transaction history {result.demo && <DemoNotice />}
+          </p>
+          <h1>Verified reserve funds are separate from planning estimates.</h1>
           <p>
-            Finalized policy-signer evidence is the only source of truth for refund custody. The USD
-            waterfall below is an application-ledger allocation model, not a wallet balance or spend
-            authorization. Rescue bounties use separate signer-controlled SOL escrow.
+            The refund panel comes from the separate signer&apos;s finalized on-chain balance and
+            registered refund obligations. The planning panel is calculated from service records; it
+            is not a wallet balance and cannot authorize a transfer. Bounty payouts use a different
+            SOL escrow.
           </p>
         </div>
         <div className="treasury-hero-total">
-          <span>{verified ? 'Signer-verified refund custody' : 'Refund protection status'}</span>
+          <span>
+            {verified ? 'Verified refund reserve balance' : 'Refund protection needs attention'}
+          </span>
           <strong>
-            {verified ? formatUsdcAtomic(protection.finalizedBalanceAtomic!) : protection.status}
+            {verified
+              ? formatUsdcAtomic(protection.finalizedBalanceAtomic!)
+              : stateLabel(protection.status)}
           </strong>
           <small>
             {protection.checkedAt
-              ? `Signer checked ${formatTime(protection.checkedAt)}`
-              : 'Fresh signer evidence unavailable'}
+              ? `Verified ${formatTime(protection.checkedAt)}`
+              : 'Current signer evidence is unavailable'}
           </small>
         </div>
       </section>
@@ -53,9 +67,10 @@ export default async function TreasuryPage() {
       <section className="shell treasury-page-grid">
         <div>
           <div className="waterfall-heading">
-            <p className="eyebrow">Application-ledger allocation model</p>
+            <p className="eyebrow">Operating plan · not a wallet balance</p>
             <span>
-              {formatUsd(treasury.localOutstandingLiabilityUsd)} locally recorded liabilities
+              {formatUsd(treasury.localOutstandingLiabilityUsd)} in refund obligations recorded by
+              the service
             </span>
           </div>
           <ol className="waterfall">
@@ -74,7 +89,7 @@ export default async function TreasuryPage() {
                       className="waterfall-track"
                       aria-label={
                         target
-                          ? `${Math.round(ratio)} percent of modeled target`
+                          ? `${Math.round(ratio)} percent of planned target`
                           : 'Planned allocation'
                       }
                     >
@@ -82,8 +97,8 @@ export default async function TreasuryPage() {
                     </div>
                     <small>
                       {target
-                        ? `${formatUsd(target)} modeled target`
-                        : 'Planned allocation; not custody or spend authority'}
+                        ? `${formatUsd(target)} planned target`
+                        : 'Planning estimate; not reserve funds or spending authority'}
                     </small>
                   </div>
                 </li>
@@ -91,33 +106,82 @@ export default async function TreasuryPage() {
             })}
           </ol>
           <div className="policy-note">
-            <strong>Signer evidence boundary</strong>
+            <strong>Reserve reconciliation</strong>
             <p>
-              Status: {protection.status}. Signer liabilities{' '}
+              Reserve status: {stateLabel(protection.status)}. The separate signer reports{' '}
               {protection.signerOutstandingLiabilityAtomic === null
-                ? 'are unavailable'
-                : `are ${formatUsdcAtomic(protection.signerOutstandingLiabilityAtomic)}`}
-              . Local and signer liabilities{' '}
+                ? 'an unavailable amount'
+                : formatUsdcAtomic(protection.signerOutstandingLiabilityAtomic)}{' '}
+              in outstanding refund obligations. These records{' '}
               {protection.liabilityReconciled === true
-                ? 'reconcile'
+                ? 'match the service job records'
                 : protection.liabilityReconciled === false
-                  ? 'do not reconcile'
-                  : 'cannot be compared without fresh evidence'}
+                  ? 'do not match the service job records'
+                  : 'cannot currently be compared with the service job records'}
               .
             </p>
+          </div>
+          <div className="policy-note reserve-details">
+            <strong>Refund reserve details</strong>
+            <dl className="receipt-list">
+              <div>
+                <dt>Treasury address</dt>
+                <dd>{reserveAccount(protection.refundTreasury)}</dd>
+              </div>
+              <div>
+                <dt>Finalized balance</dt>
+                <dd>
+                  {protection.finalizedBalanceAtomic === null
+                    ? 'Unavailable'
+                    : formatUsdcAtomic(protection.finalizedBalanceAtomic)}
+                </dd>
+              </div>
+              <div>
+                <dt>Outstanding refund obligations</dt>
+                <dd>
+                  {protection.signerOutstandingLiabilityAtomic === null
+                    ? 'Unavailable'
+                    : formatUsdcAtomic(protection.signerOutstandingLiabilityAtomic)}
+                </dd>
+              </div>
+              <div>
+                <dt>Balance after refund obligations</dt>
+                <dd>
+                  {protection.unencumberedBalanceAtomic === null
+                    ? 'Unavailable'
+                    : formatUsdcAtomic(protection.unencumberedBalanceAtomic)}
+                </dd>
+              </div>
+              <div>
+                <dt>New-job capacity</dt>
+                <dd>
+                  {protection.newIntakeCapacityAtomic === null
+                    ? 'Unavailable'
+                    : formatUsdcAtomic(protection.newIntakeCapacityAtomic)}
+                </dd>
+              </div>
+              <div>
+                <dt>Daily refund authorization remaining</dt>
+                <dd>
+                  {protection.remainingDailyLimitUsdCents === null
+                    ? 'Unavailable'
+                    : formatUsd(protection.remainingDailyLimitUsdCents / 100)}
+                </dd>
+              </div>
+            </dl>
           </div>
         </div>
 
         <div className="ledger-panel">
           <div className="ledger-heading">
             <div>
-              <p className="eyebrow">Ledger</p>
-              <h2>Recent movement</h2>
+              <p className="eyebrow">Financial records</p>
+              <h2>Recent transactions and estimates</h2>
             </div>
             <span>
               {treasury.plannedRunwayDays === null
-                ? 'No modeled cost baseline'
-                : `${treasury.plannedRunwayDays} modeled days`}
+                ? 'Runway estimate unavailable'
+                : `Estimated runway: ${treasury.plannedRunwayDays} days`}
             </span>
           </div>
           {treasury.ledger.length > 0 ? (
@@ -131,17 +195,17 @@ export default async function TreasuryPage() {
                   <div>
                     <strong>{entry.description}</strong>
                     <span>
-                      {entry.type.replaceAll('_', ' ')} · {formatTime(entry.occurredAt)}
+                      {ledgerEvidenceLabel(entry)} · {formatTime(entry.occurredAt)}
                     </span>
                   </div>
                   {entry.transaction && (
-                    <TransactionLink signature={entry.transaction} label="Receipt" />
+                    <TransactionLink signature={entry.transaction} label="View transaction" />
                   )}
                 </li>
               ))}
             </ol>
           ) : (
-            <p className="receipt-empty">No ledger entries have been published.</p>
+            <p className="receipt-empty">No financial records have been published.</p>
           )}
         </div>
       </section>
@@ -157,5 +221,32 @@ function formatLedgerAmount(entry: LedgerEntry): string {
   if (entry.amountAtomic !== undefined && entry.asset) {
     return `${entry.amountAtomic} ${entry.asset}`;
   }
-  return 'Unpriced';
+  return 'Amount unavailable';
+}
+
+function ledgerEvidenceLabel(entry: LedgerEntry): string {
+  if (entry.transaction) return 'On-chain transaction';
+  if (entry.type === 'allocation' || entry.type === 'treasury_deposit') {
+    return 'Planning allocation';
+  }
+  if (entry.type === 'refund_obligation') return 'Outstanding refund obligation';
+  if (entry.type === 'route_cost') return 'Recorded cost estimate';
+  if (entry.type === 'operating_cost') return 'Recorded operating cost';
+  return 'Service financial record';
+}
+
+function reserveAccount(address: string | null) {
+  if (!address) return 'Unavailable';
+  const base = process.env.NEXT_PUBLIC_SOLANA_EXPLORER_URL || 'https://solscan.io';
+  const cluster =
+    process.env.NEXT_PUBLIC_SOLANA_NETWORK === 'solana-devnet' ? '?cluster=devnet' : '';
+  return (
+    <a
+      href={`${base.replace(/\/$/, '')}/account/${encodeURIComponent(address)}${cluster}`}
+      target="_blank"
+      rel="noreferrer"
+    >
+      {truncateAddress(address, 7)} <span aria-hidden="true">↗</span>
+    </a>
+  );
 }

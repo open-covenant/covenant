@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { formatUsd, formatUsdcAtomic } from '@/lib/format';
+import { formatUsd, formatUsdcAtomic, stateLabel } from '@/lib/format';
 import type { Treasury } from '@/lib/types';
 
 export function TreasurySnapshot({ treasury }: { treasury: Treasury }) {
@@ -10,18 +10,22 @@ export function TreasurySnapshot({ treasury }: { treasury: Treasury }) {
   return (
     <div className="treasury-snapshot">
       <div className="treasury-total">
-        <span>{verified ? 'Signer-verified refund custody' : 'Refund protection'}</span>
+        <span>{verified ? 'Verified refund reserve balance' : 'Refund protection status'}</span>
         <strong>
-          {verified ? formatUsdcAtomic(protection.finalizedBalanceAtomic!) : protection.status}
+          {verified
+            ? formatUsdcAtomic(protection.finalizedBalanceAtomic!)
+            : stateLabel(protection.status)}
         </strong>
         <small>
           {protection.signerOutstandingLiabilityAtomic === null
-            ? 'Fresh finalized signer evidence is unavailable'
-            : `${formatUsdcAtomic(protection.signerOutstandingLiabilityAtomic)} signer liabilities · ${protection.liabilityReconciled ? 'reconciled' : 'mismatch'}`}
+            ? 'Finalized reserve records are unavailable'
+            : protection.liabilityReconciled === true
+              ? `${formatUsdcAtomic(protection.signerOutstandingLiabilityAtomic)} in outstanding refund obligations · records match`
+              : 'Reserve records need reconciliation'}
         </small>
         <small>
-          Recorded application-ledger net flow: {formatUsd(treasury.recordedNetFlowUsd)}. It is not
-          a wallet balance.
+          Service-record net flow: {formatUsd(treasury.recordedNetFlowUsd)}. Used for planning only;
+          it is not a wallet balance.
         </small>
       </div>
       <div className="treasury-bars">
@@ -38,7 +42,7 @@ export function TreasurySnapshot({ treasury }: { treasury: Treasury }) {
         ))}
       </div>
       <Link href="/treasury" className="text-link">
-        Inspect custody and allocation evidence <span aria-hidden="true">↗</span>
+        View reserve and transaction records <span aria-hidden="true">↗</span>
       </Link>
     </div>
   );

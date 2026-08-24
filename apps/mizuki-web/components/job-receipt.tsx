@@ -28,12 +28,12 @@ export function JobReceipt({ initial, live = true }: { initial: Job; live?: bool
         const response = await fetch(`/api/mizuki/v1/jobs/${encodeURIComponent(job.id)}`, {
           cache: 'no-store',
         });
-        const body = (await response.json()) as Job & { error?: string };
-        if (!response.ok) throw new Error(body.error || `Status returned ${response.status}`);
+        const body = (await response.json()) as Job;
+        if (!response.ok) throw new Error('Status refresh failed');
         setJob(body);
         setPollError(null);
-      } catch (cause) {
-        setPollError(cause instanceof Error ? cause.message : 'Status refresh failed');
+      } catch {
+        setPollError('Status refresh failed');
       }
     }, 5_000);
     return () => window.clearInterval(poll);
@@ -69,7 +69,7 @@ export function JobReceipt({ initial, live = true }: { initial: Job; live?: bool
           <div className="refund-path">
             <span>Paid attempt</span>
             <span aria-hidden="true">→</span>
-            <span>Stopped safely</span>
+            <span>No qualifying pull request opened</span>
             <span aria-hidden="true">→</span>
             <strong>
               {job.state === 'refunded' ? 'Full refund finalized' : 'Full refund in progress'}
@@ -78,14 +78,15 @@ export function JobReceipt({ initial, live = true }: { initial: Job; live?: bool
         )}
         {pollError && (
           <p className="poll-warning">
-            Live refresh interrupted: {pollError}. The financial operation is not repeated.
+            Live updates are temporarily unavailable. Refresh the page to check the latest status.
+            No payment or refund will be repeated.
           </p>
         )}
       </div>
 
       <div className="receipt-grid">
         <section>
-          <p className="eyebrow">Job contract</p>
+          <p className="eyebrow">Job details</p>
           <dl className="receipt-list">
             <div>
               <dt>Issue</dt>
@@ -96,22 +97,22 @@ export function JobReceipt({ initial, live = true }: { initial: Job; live?: bool
               </dd>
             </div>
             <div>
-              <dt>Scope</dt>
-              <dd>{job.class}</dd>
+              <dt>Service level</dt>
+              <dd>{stateLabel(job.class)}</dd>
             </div>
             <div>
-              <dt>Price paid</dt>
-              <dd>{formatUsdcAtomic(job.priceAtomic)} USDC</dd>
+              <dt>Quoted amount</dt>
+              <dd>{formatUsdcAtomic(job.priceAtomic)}</dd>
             </div>
             <div>
-              <dt>Variable route estimate</dt>
+              <dt>Estimated compute cost</dt>
               <dd>{formatUsd(job.variableRouteCostEstimateUsd)}</dd>
             </div>
             <div>
-              <dt>Cost coverage</dt>
+              <dt>Estimate coverage</dt>
               <dd>
-                Model and sandbox estimates included; provider adjustments, chain/facilitator, and
-                infrastructure excluded
+                Includes estimated AI model usage and isolated code-execution time. Excludes
+                provider billing adjustments, Solana and payment fees, and hosting costs.
               </dd>
             </div>
             <div>
@@ -126,7 +127,7 @@ export function JobReceipt({ initial, live = true }: { initial: Job; live?: bool
         </section>
 
         <section>
-          <p className="eyebrow">Execution evidence</p>
+          <p className="eyebrow">Patch and check results</p>
           {job.changedFiles.length > 0 ? (
             <ul className="file-list">
               {job.changedFiles.map((file) => (
@@ -134,7 +135,7 @@ export function JobReceipt({ initial, live = true }: { initial: Job; live?: bool
               ))}
             </ul>
           ) : (
-            <p className="receipt-empty">Changed files will appear after the coding run.</p>
+            <p className="receipt-empty">Changed files will appear when a patch is available.</p>
           )}
           {job.validations.length > 0 && (
             <ul className="validation-list">
@@ -143,7 +144,9 @@ export function JobReceipt({ initial, live = true }: { initial: Job; live?: bool
                   <span>{validation.exitCode === 0 ? '✓' : '!'}</span>
                   <code>{validation.command}</code>
                   <strong>
-                    {validation.exitCode === 0 ? 'passed' : `exit ${validation.exitCode}`}
+                    {validation.exitCode === 0
+                      ? 'Passed'
+                      : `Failed (exit code ${validation.exitCode})`}
                   </strong>
                 </li>
               ))}
@@ -155,22 +158,25 @@ export function JobReceipt({ initial, live = true }: { initial: Job; live?: bool
       {job.review && (
         <div className="receipt-grid review-evidence">
           <section>
-            <p className="eyebrow">Independent review receipt</p>
+            <p className="eyebrow">Separate AI review record</p>
             <dl className="receipt-list">
               <div>
                 <dt>Decision</dt>
-                <dd>{job.review.approved ? 'passed' : 'rejected'}</dd>
+                <dd>{job.review.approved ? 'Approved' : 'Not approved'}</dd>
               </div>
               <div>
                 <dt>Reviewed</dt>
                 <dd>{formatTime(job.review.reviewedAt)}</dd>
               </div>
               <div>
-                <dt>Artifact commitment</dt>
+                <dt>Reviewed patch hash</dt>
                 <dd className="review-commitment">{job.review.artifactHash}</dd>
               </div>
             </dl>
             <p className="receipt-review-reason">{job.review.reason}</p>
+            <p className="receipt-empty">
+              This separate AI review is not a human review, maintainer approval, or security audit.
+            </p>
             {failed && (
               <p className="receipt-empty">
                 This review finished before the later delivery failure. It records provider work,
@@ -179,13 +185,11 @@ export function JobReceipt({ initial, live = true }: { initial: Job; live?: bool
             )}
           </section>
           <section>
-            <p className="eyebrow">Provider route</p>
+            <p className="eyebrow">AI provider receipt</p>
             {job.review.provider ? (
               <ProviderReceiptDetails receipt={job.review.provider} />
             ) : (
-              <p className="receipt-empty">
-                No marketplace provider receipt is attached to this review.
-              </p>
+              <p className="receipt-empty">No AI provider receipt is attached to this review.</p>
             )}
           </section>
         </div>
@@ -193,7 +197,7 @@ export function JobReceipt({ initial, live = true }: { initial: Job; live?: bool
 
       {job.reviewAttempts && job.reviewAttempts.length > 0 && (
         <section className="review-attempts">
-          <p className="eyebrow">Review attempt ledger</p>
+          <p className="eyebrow">AI review history</p>
           <div className="review-attempt-grid">
             {job.reviewAttempts.map((attempt, index) => (
               <article
@@ -203,7 +207,9 @@ export function JobReceipt({ initial, live = true }: { initial: Job; live?: bool
                 <dl className="receipt-list">
                   <div>
                     <dt>Phase</dt>
-                    <dd>{attempt.phase}</dd>
+                    <dd>
+                      {attempt.phase === 'implementation' ? 'Initial review' : 'Follow-up review'}
+                    </dd>
                   </div>
                   <div>
                     <dt>Status</dt>
@@ -214,11 +220,11 @@ export function JobReceipt({ initial, live = true }: { initial: Job; live?: bool
                     <dd>{formatTime(attempt.reviewedAt)}</dd>
                   </div>
                   <div>
-                    <dt>Route cost</dt>
+                    <dt>Recorded review cost</dt>
                     <dd>{formatUsd(attempt.costUsd)}</dd>
                   </div>
                   <div>
-                    <dt>Artifact commitment</dt>
+                    <dt>Patch hash</dt>
                     <dd className="review-commitment">{attempt.artifactHash}</dd>
                   </div>
                 </dl>
@@ -247,12 +253,12 @@ export function JobReceipt({ initial, live = true }: { initial: Job; live?: bool
 
       {job.error && (
         <div className="failure-receipt">
-          <span>Failure receipt</span>
+          <span>Job outcome</span>
           <p>{job.error}</p>
           <strong>
             {job.refundTransaction
-              ? 'Refund finalized. Rescue bounty generation follows independently.'
-              : 'Refund processing is isolated from bounty funding.'}
+              ? 'The full quoted USDC payment was returned to the original payer. A maintenance bounty is published only after separate SOL escrow funding succeeds.'
+              : 'The refund has not finalized yet. No maintenance bounty will be offered until it does.'}
           </strong>
         </div>
       )}
@@ -261,12 +267,12 @@ export function JobReceipt({ initial, live = true }: { initial: Job; live?: bool
 }
 
 function reviewAttemptLabel(attempt: ReviewAttempt): string {
-  if (attempt.status !== 'completed') {
-    return attempt.status === 'received' ? 'receipt recorded' : attempt.status;
-  }
-  if (attempt.approved === true) return 'approved';
-  if (attempt.approved === false) return 'rejected';
-  return 'completed';
+  if (attempt.status === 'pending') return 'Pending';
+  if (attempt.status === 'received') return 'Provider receipt recorded';
+  if (attempt.status === 'failed') return 'Review could not complete';
+  if (attempt.approved === true) return 'Approved';
+  if (attempt.approved === false) return 'Not approved';
+  return 'Completed';
 }
 
 function TransactionLinkClient({ signature, label }: { signature: string; label: string }) {

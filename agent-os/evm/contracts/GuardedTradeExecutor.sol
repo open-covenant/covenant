@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import {IERC20} from "./interfaces/IERC20.sol";
+import {IPermit2} from "./interfaces/IPermit2.sol";
 import {TokenTransfers} from "./lib/TokenTransfers.sol";
 import {RwaTradeGuard} from "./RwaTradeGuard.sol";
 
@@ -28,11 +29,16 @@ import {RwaTradeGuard} from "./RwaTradeGuard.sol";
 ///         the settlement asset. `swapData` is swap calldata built off-chain for
 ///         the allowlisted `router` (Uniswap, 1inch, any AMM); the allowlist and
 ///         the balance-delta check are what make an opaque call safe to route.
+///         A venue that settles through Permit2 rather than a plain allowance is
+///         primed once with `primeRouter`.
 contract GuardedTradeExecutor {
     using TokenTransfers for IERC20;
 
     RwaTradeGuard public immutable guard;
     IERC20 public immutable usdg;
+    /// Permit2, where a UniversalRouter-style venue looks for the payer's
+    /// allowance. Zero on a deployment whose venues pull on a plain allowance.
+    IPermit2 public immutable permit2;
     address public owner;
     address public pendingOwner;
 
@@ -43,6 +49,7 @@ contract GuardedTradeExecutor {
     event OwnershipTransferStarted(address indexed from, address indexed to);
     event OwnershipTransferred(address indexed from, address indexed to);
     event RouterSet(address indexed router, bool allowed);
+    event RouterPrimed(address indexed router, uint160 amount, uint48 expiration);
     event Bought(
         address indexed agent, address indexed asset, address indexed router, uint256 usdgSpent, uint256 assetOut
     );
@@ -50,6 +57,7 @@ contract GuardedTradeExecutor {
     error NotOwner();
     error ZeroAddress();
     error RouterNotAllowed(address router);
+    error Permit2Unset();
     error Reentrant();
     error SwapFailed();
     error InsufficientOut(uint256 got, uint256 min);
@@ -66,12 +74,13 @@ contract GuardedTradeExecutor {
         _entered = false;
     }
 
-    constructor(address guard_, address usdg_, address initialOwner) {
+    constructor(address guard_, address usdg_, address permit2_, address initialOwner) {
         if (guard_ == address(0) || usdg_ == address(0) || initialOwner == address(0)) {
             revert ZeroAddress();
         }
         guard = RwaTradeGuard(guard_);
         usdg = IERC20(usdg_);
+        permit2 = IPermit2(permit2_);
         owner = initialOwner;
         emit OwnershipTransferred(address(0), initialOwner);
     }
@@ -95,6 +104,20 @@ contract GuardedTradeExecutor {
         if (router == address(0)) revert ZeroAddress();
         routerAllowed[router] = allowed;
         emit RouterSet(router, allowed);
+    }
+
+    /// Give an allowlisted venue the Permit2 allowance it pulls USDG through.
+    /// Uniswap's UniversalRouter settles a swap by pulling the payer through
+    /// Permit2, not through the plain allowance `buy` sets, so a deployment that
+    /// routes there is primed once per venue. Owner-gated and allowlist-gated:
+    /// the executor holds no funds between trades, so the standing allowance can
+    /// only ever reach the USDG in flight for the trade being executed.
+    function primeRouter(address router, uint160 amount, uint48 expiration) external onlyOwner {
+        if (address(permit2) == address(0)) revert Permit2Unset();
+        if (!routerAllowed[router]) revert RouterNotAllowed(router);
+        usdg.safeApprove(address(permit2), type(uint256).max);
+        permit2.approve(address(usdg), router, amount, expiration);
+        emit RouterPrimed(router, amount, expiration);
     }
 
     // --- the capability ---

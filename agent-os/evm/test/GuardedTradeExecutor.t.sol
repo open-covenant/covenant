@@ -8,6 +8,7 @@ import {MockAggregator} from "./mocks/MockAggregator.sol";
 import {MockTradableStock} from "./mocks/MockTradableStock.sol";
 import {MockUSDG} from "./mocks/MockUSDG.sol";
 import {MockSwapRouter} from "./mocks/MockSwapRouter.sol";
+import {MockPermit2} from "./mocks/MockPermit2.sol";
 
 contract GuardedTradeExecutorTest is Test {
     GuardedTradeExecutor exec;
@@ -16,6 +17,7 @@ contract GuardedTradeExecutorTest is Test {
     MockTradableStock stock;
     MockUSDG usdg;
     MockSwapRouter router;
+    MockPermit2 permit2;
 
     address owner = address(0xA11CE);
     address agent = address(0xA6E27);
@@ -37,10 +39,11 @@ contract GuardedTradeExecutorTest is Test {
         stock = new MockTradableStock(WAD); // multiplier 1.0
         usdg = new MockUSDG();
         router = new MockSwapRouter();
+        permit2 = new MockPermit2();
 
         vm.startPrank(owner);
         guard.setAsset(address(stock), address(feed), CAP, BAND, STALE);
-        exec = new GuardedTradeExecutor(address(guard), address(usdg), owner);
+        exec = new GuardedTradeExecutor(address(guard), address(usdg), address(permit2), owner);
         exec.setRouter(address(router), true);
         vm.stopPrank();
 
@@ -163,7 +166,41 @@ contract GuardedTradeExecutorTest is Test {
 
     function test_ConstructorRejectsZero() public {
         vm.expectRevert(GuardedTradeExecutor.ZeroAddress.selector);
-        new GuardedTradeExecutor(address(0), address(usdg), owner);
+        new GuardedTradeExecutor(address(0), address(usdg), address(permit2), owner);
+    }
+
+    // Priming: a UniversalRouter-style venue pulls through Permit2, so the
+    // executor has to hold its allowance there before it can route.
+    function test_PrimeRouterGrantsPermit2Allowance() public {
+        uint48 expiry = uint48(NOW + 30 days);
+        vm.prank(owner);
+        exec.primeRouter(address(router), type(uint160).max, expiry);
+
+        assertEq(usdg.allowance(address(exec), address(permit2)), type(uint256).max, "permit2 pulls from the executor");
+        (uint160 amount, uint48 expiration,) = permit2.allowance(address(exec), address(usdg), address(router));
+        assertEq(amount, type(uint160).max);
+        assertEq(expiration, expiry);
+    }
+
+    function test_PrimeRouterRefusesUnallowlistedVenue() public {
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSelector(GuardedTradeExecutor.RouterNotAllowed.selector, stranger));
+        exec.primeRouter(stranger, type(uint160).max, uint48(NOW + 1 days));
+    }
+
+    function test_OnlyOwnerPrimes() public {
+        vm.prank(agent);
+        vm.expectRevert(GuardedTradeExecutor.NotOwner.selector);
+        exec.primeRouter(address(router), type(uint160).max, uint48(NOW + 1 days));
+    }
+
+    function test_PrimeRouterRefusedWithoutPermit2() public {
+        vm.startPrank(owner);
+        GuardedTradeExecutor bare = new GuardedTradeExecutor(address(guard), address(usdg), address(0), owner);
+        bare.setRouter(address(router), true);
+        vm.expectRevert(GuardedTradeExecutor.Permit2Unset.selector);
+        bare.primeRouter(address(router), type(uint160).max, uint48(NOW + 1 days));
+        vm.stopPrank();
     }
 }
 

@@ -181,7 +181,7 @@ export class UsePodBackend implements CodingBackend {
         }>;
         usage?: unknown;
       };
-      if (body.model !== this.model) throw new Error('UsePod returned a different model');
+      if (!sameModel(this.model, body.model)) throw new Error('UsePod returned a different model');
       const turnUsage = parseUsePodUsage(body.usage);
       const receipt = accountUsePodTurn(
         routeReceipt,
@@ -239,6 +239,14 @@ export class UsePodBackend implements CodingBackend {
 
     throw new Error(`UsePod backend exceeded ${MAX_TURNS} turns`);
   }
+}
+
+function sameModel(requested: string, returned: unknown): boolean {
+  if (returned === requested) return true;
+  if (typeof returned !== 'string') return false;
+  const separator = requested.indexOf('/');
+  if (separator <= 0 || requested.indexOf('/', separator + 1) !== -1) return false;
+  return returned === `${requested.slice(0, separator)}.${requested.slice(separator + 1)}`;
 }
 
 function addTokens(total: number, increment: number): number {

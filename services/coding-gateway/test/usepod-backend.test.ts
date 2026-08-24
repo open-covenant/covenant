@@ -116,6 +116,37 @@ describe('UsePodBackend', () => {
     expect(urls[0]).toBe('https://usepod.test/proxy/test-key/v1/chat/completions');
   });
 
+  it('accepts UsePod canonicalizing the provider separator without accepting another model', async () => {
+    const response = (model: string) =>
+      Response.json(
+        {
+          model,
+          choices: [{ message: { content: 'Done.' } }],
+          usage: { prompt_tokens: 1, completion_tokens: 1 },
+        },
+        {
+          headers: {
+            'x-pod-route': 'marketplace',
+            'x-balance-remaining': '5000000',
+          },
+        },
+      );
+    const run = () =>
+      new UsePodBackend('https://usepod.test', 'test-key', 'openai/gpt-oss-120b').run({
+        input: 'fix docs',
+        sandbox: {} as Sandbox,
+        signal: new AbortController().signal,
+        emit: () => {},
+        maxProviderCostUsd: 1,
+      });
+
+    vi.stubGlobal('fetch', async () => response('openai.gpt-oss-120b'));
+    await expect(run()).resolves.toMatchObject({ output: 'Done.' });
+
+    vi.stubGlobal('fetch', async () => response('openai.gpt-oss-20b'));
+    await expect(run()).rejects.toThrow('UsePod returned a different model');
+  });
+
   it('checkpoints a billed turn before a later response failure and preserves it on restart', async () => {
     vi.stubGlobal('fetch', async () =>
       Response.json(

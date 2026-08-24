@@ -1,6 +1,10 @@
 import { createHash, generateKeyPairSync, verify as verifySignature } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
-import { GitHubMergeVerifier, type MergeVerificationRequest } from './github.js';
+import {
+  GitHubMergeVerifier,
+  type EscrowTermsRequest,
+  type MergeVerificationRequest,
+} from './github.js';
 
 const APP_ID = '12345';
 const NOW = Date.parse('2026-08-23T12:00:00.000Z');
@@ -39,6 +43,49 @@ function repositoryMergeRequest(repository = 'owner/repository') {
 }
 
 describe('independent GitHub merge verification', () => {
+  it('accepts a GitHub-proven ancestor of the current default branch for escrow terms', async () => {
+    const baseSha = 'd'.repeat(40);
+    const currentSha = 'e'.repeat(40);
+    const { verifier, fetcher } = fixture({ graph: escrowTermsBody(currentSha) });
+    const terms: EscrowTermsRequest = {
+      repository: 'owner/repository',
+      issueNumber: 17,
+      issueTitle: 'Handle empty input',
+      issueBody: 'The parser should accept an empty input.',
+      baseRef: 'main',
+      baseSha,
+    };
+
+    await expect(verifier.verifyEscrowTerms(terms)).resolves.toEqual({
+      ...terms,
+      visibility: 'PUBLIC',
+    });
+    expect(
+      fetcher.mock.calls.some(([input]) =>
+        String(input).includes(`/compare/${baseSha}...${currentSha}?per_page=1&page=1`),
+      ),
+    ).toBe(true);
+  });
+
+  it('rejects an escrow base that is not an ancestor of the default branch', async () => {
+    const baseSha = 'd'.repeat(40);
+    const currentSha = 'e'.repeat(40);
+    const terms: EscrowTermsRequest = {
+      repository: 'owner/repository',
+      issueNumber: 17,
+      issueTitle: 'Handle empty input',
+      issueBody: 'The parser should accept an empty input.',
+      baseRef: 'main',
+      baseSha,
+    };
+    await expect(
+      fixture({
+        graph: escrowTermsBody(currentSha),
+        comparison: comparisonBody('diverged'),
+      }).verifier.verifyEscrowTerms(terms),
+    ).rejects.toMatchObject({ code: 'github_escrow_terms_mismatch', retryable: false });
+  });
+
   it('proves a reviewed commit has no pull request before liability binding', async () => {
     const { verifier, fetcher } = fixture({ commitPulls: [] });
     await expect(
@@ -591,6 +638,7 @@ interface FixtureOptions {
   tokenBodyOverride?: string;
   commitPulls?: object[];
   evidenceStatus?: number;
+  comparison?: object;
   evidenceResponse?: (
     url: string,
     init: RequestInit,
@@ -652,6 +700,9 @@ function fixture(options: FixtureOptions = {}) {
       if (options.evidenceStatus) return new Response(null, { status: options.evidenceStatus });
       if (/\/commits\/[a-f0-9]{40,64}\/pulls$/.test(url)) {
         return json(options.commitPulls ?? []);
+      }
+      if (url.includes('/compare/')) {
+        return json(options.comparison ?? comparisonBody('ahead'));
       }
       if (url.endsWith('/pulls/23/files?per_page=100&page=1')) {
         return json([
@@ -794,5 +845,30 @@ function responseBody(repository = 'owner/repository') {
         },
       },
     },
+  };
+}
+
+function escrowTermsBody(currentSha: string) {
+  return {
+    data: {
+      repository: {
+        nameWithOwner: 'owner/repository',
+        visibility: 'PUBLIC',
+        defaultBranchRef: { name: 'main', target: { oid: currentSha } },
+        issue: {
+          number: 17,
+          title: 'Handle empty input',
+          body: 'The parser should accept an empty input.',
+        },
+      },
+    },
+  };
+}
+
+function comparisonBody(status: 'ahead' | 'behind' | 'diverged' | 'identical') {
+  return {
+    status,
+    base_commit: { sha: 'd'.repeat(40) },
+    merge_base_commit: { sha: 'd'.repeat(40) },
   };
 }

@@ -350,6 +350,14 @@ const escrowTermsResponseSchema = z
   })
   .passthrough();
 
+const comparisonSchema = z
+  .object({
+    status: z.enum(['ahead', 'behind', 'diverged', 'identical']),
+    base_commit: z.object({ sha: z.string().regex(/^[a-f0-9]{40,64}$/) }).passthrough(),
+    merge_base_commit: z.object({ sha: z.string().regex(/^[a-f0-9]{40,64}$/) }).passthrough(),
+  })
+  .passthrough();
+
 const oauthIdentitySchema = z
   .object({ id: z.number().int().positive(), login: z.string().min(1).max(39) })
   .passthrough();
@@ -532,8 +540,7 @@ export class GitHubMergeVerifier implements MergeVerifier {
       issue.number !== request.issueNumber ||
       issue.title !== request.issueTitle ||
       issue.body !== request.issueBody ||
-      base.name !== request.baseRef ||
-      base.target.oid !== request.baseSha
+      base.name !== request.baseRef
     ) {
       throw new PolicyError(
         'github_escrow_terms_mismatch',
@@ -541,11 +548,70 @@ export class GitHubMergeVerifier implements MergeVerifier {
         422,
       );
     }
+    if (base.target.oid !== request.baseSha) {
+      await this.verifyDefaultBranchAncestor(request.repository, request.baseSha, base.target.oid);
+    }
     return {
       ...request,
       repository: request.repository.toLowerCase(),
       visibility: 'PUBLIC',
     };
+  }
+
+  private async verifyDefaultBranchAncestor(
+    repository: string,
+    baseSha: string,
+    currentSha: string,
+  ): Promise<void> {
+    const [owner, name] = repositoryParts(repository);
+    const url = `${GITHUB_API_URL}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/compare/${encodeURIComponent(baseSha)}...${encodeURIComponent(currentSha)}?per_page=1&page=1`;
+    const response = await this.repositoryRequest(
+      repository,
+      url,
+      {
+        headers: {
+          accept: 'application/vnd.github+json',
+          'user-agent': 'mizuki-policy-signer/0.1',
+          'x-github-api-version': GITHUB_API_VERSION,
+        },
+      },
+      'GitHub default branch ancestry is unavailable',
+    );
+    if (response.status === 404 || response.status === 422) {
+      throw new PolicyError(
+        'github_escrow_terms_mismatch',
+        'Escrow base commit is not on the public repository default branch',
+        422,
+      );
+    }
+    if (!response.ok) {
+      throw new PolicyError(
+        'github_unavailable',
+        'GitHub default branch ancestry is unavailable',
+        503,
+        true,
+      );
+    }
+    const comparison = comparisonSchema.safeParse(await readJsonResponse(response, JSON_LIMIT));
+    if (!comparison.success) {
+      throw new PolicyError(
+        'github_invalid_response',
+        'GitHub returned invalid default branch ancestry evidence',
+        503,
+        true,
+      );
+    }
+    if (
+      !['ahead', 'identical'].includes(comparison.data.status) ||
+      comparison.data.base_commit.sha !== baseSha ||
+      comparison.data.merge_base_commit.sha !== baseSha
+    ) {
+      throw new PolicyError(
+        'github_escrow_terms_mismatch',
+        'Escrow base commit is not an ancestor of the public repository default branch',
+        422,
+      );
+    }
   }
 
   async verify(request: MergeVerificationRequest): Promise<VerifiedMerge> {

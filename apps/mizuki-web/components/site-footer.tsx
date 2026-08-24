@@ -27,6 +27,9 @@ export function SiteFooter() {
           <a href="https://github.com/open-covenant/covenant" rel="noreferrer" target="_blank">
             GitHub <span aria-hidden="true">↗</span>
           </a>
+          <a href="https://x.com/MizukiMech" rel="noreferrer" target="_blank">
+            X / @MizukiMech <span aria-hidden="true">↗</span>
+          </a>
           <a href="https://opencovenant.org" rel="noreferrer">
             OpenCovenant <span aria-hidden="true">↗</span>
           </a>

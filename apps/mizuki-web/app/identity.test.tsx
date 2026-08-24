@@ -30,6 +30,13 @@ describe('Mizuki public identity', () => {
     });
   });
 
+  it('links to the official X profile', () => {
+    const footer = renderToStaticMarkup(<SiteFooter />);
+
+    expect(footer).toContain('href="https://x.com/MizukiMech"');
+    expect(footer).toContain('@MizukiMech');
+  });
+
   it('publishes browser, Apple, and installable app icons', () => {
     expect(metadata.icons).toEqual({
       icon: [{ url: '/mizuki-icon-64.png', type: 'image/png', sizes: '64x64' }],

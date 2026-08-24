@@ -86,4 +86,4 @@ The JSON files in `github-apps/` are least-privilege registration inputs, not cr
 
 The policy verifier manifest grants read-only repository access and no events. The signer authenticates the App, discovers the installation for the exact target repository, and directly mints a short-lived repository-scoped token with the manifest's exact four read permissions. Do not give the signer write permission or a core/updater private key.
 
-The core manifest uses stable same-origin callback and webhook endpoints under `mizuki.covenant.org`. Register it only after that hostname, the web proxy's signed-webhook path, and the sole production runtime have been verified end to end.
+The core manifest uses stable same-origin callback and webhook endpoints under `mizuki.opencovenant.org`. Register it only after that hostname, the web proxy's signed-webhook path, and the sole production runtime have been verified end to end.

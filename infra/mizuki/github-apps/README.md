@@ -12,7 +12,7 @@ Mizuki uses three separate GitHub Apps. Their keys and installations must never 
 
 Registration is an authenticated GitHub account action and is intentionally not automated by deployment code.
 
-1. Verify `https://mizuki.covenant.org`, including the OAuth callback and signed-webhook proxy path.
+1. Verify `https://mizuki.opencovenant.org`, including the OAuth callback and signed-webhook proxy path.
 2. Open GitHub **Settings → Developer settings → GitHub Apps → New GitHub App from a manifest**.
 3. Submit the matching `*.manifest.json` file without adding permissions or events.
 4. Generate one private key per App and store it directly in the production secret manager. Never download it into the repository.

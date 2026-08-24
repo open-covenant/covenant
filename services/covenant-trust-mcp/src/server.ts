@@ -13,7 +13,7 @@ import {StdioServerTransport} from '@modelcontextprotocol/sdk/server/stdio.js';
 import {z} from 'zod';
 import express from 'express';
 import {Connection} from '@solana/web3.js';
-import {getReputation, type Reputation} from './reputation.js';
+import {getReputation, warmReputation, type Reputation} from './reputation.js';
 import {getPassport} from './passport.js';
 import {verifyAttestation, type Attestation} from './verify.js';
 import {listVerifiedErs, verifyEnclaveLive, verifyProvenance} from './er.js';
@@ -292,6 +292,7 @@ async function serveHttp(): Promise<void> {
     res.status(405).json({jsonrpc: '2.0', error: {code: -32000, message: 'Method not allowed. POST to /mcp.'}, id: null});
   app.get('/mcp', noGet);
   app.delete('/mcp', noGet);
+  warmReputation(RPC_URL, RPC_TIMEOUT, REPUTATION_LIMIT);
   app.listen(PORT, () => console.error(`covenant-trust-mcp on :${PORT} (POST /mcp)`));
 }
 

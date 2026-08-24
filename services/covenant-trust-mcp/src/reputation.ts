@@ -51,7 +51,9 @@ function score(jobs: number, distinct: number, volMicro: bigint): number {
   return Math.min(jobsScore + cpScore + volScore, 1000);
 }
 
-async function rpc(url: string, timeoutMs: number, method: string, params: unknown): Promise<any> {
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+async function rpcOnce(url: string, timeoutMs: number, method: string, params: unknown): Promise<any> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
@@ -68,6 +70,23 @@ async function rpc(url: string, timeoutMs: number, method: string, params: unkno
   } finally {
     clearTimeout(timer);
   }
+}
+
+// Shared RPC endpoints rate-limit bursts of getTransaction; back off and retry
+// instead of surfacing a transient 429/5xx to the caller.
+async function rpc(url: string, timeoutMs: number, method: string, params: unknown): Promise<any> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await sleep(300 * 4 ** (attempt - 1));
+    try {
+      return await rpcOnce(url, timeoutMs, method, params);
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : "";
+      if (!/status (429|5\d\d)$/.test(message)) throw error;
+    }
+  }
+  throw lastError;
 }
 
 function accountKeys(tx: any): string[] {
@@ -184,16 +203,22 @@ export function computeReputation(
   };
 }
 
-// Fetch the latest `limit` fee-payer signatures, parse every USDC settlement,
-// and score `wallet`. One getTransaction per signature (sequential). Solana caps
-// getSignaturesForAddress at 1000, so a single call can't fan out unbounded.
-export async function getReputation(
-  rpcUrl: string,
-  timeoutMs: number,
-  wallet: string,
-  limit: number,
-): Promise<Reputation> {
-  const lim = Math.max(1, Math.min(Math.floor(limit), 1000));
+const SNAPSHOT_TTL_MS = 120_000;
+const SCAN_PACE_MS = 40;
+
+interface SettlementSnapshot {
+  settlements: Settlement[];
+  fetchedAt: number;
+}
+
+let snapshot: { key: string; value: SettlementSnapshot } | null = null;
+let refreshing: Promise<SettlementSnapshot> | null = null;
+
+// One getTransaction per signature, paced to stay under shared rate limits. A
+// transaction that stays unavailable after retries narrows coverage but must
+// not sink the scan. Solana caps getSignaturesForAddress at 1000, so a single
+// scan can't fan out unbounded.
+async function scanSettlements(rpcUrl: string, timeoutMs: number, lim: number): Promise<SettlementSnapshot> {
   const sigs = await rpc(rpcUrl, timeoutMs, "getSignaturesForAddress", [PAYAI_FEE_PAYER, { limit: lim }]);
   if (!Array.isArray(sigs)) throw new Error("getSignaturesForAddress: result not an array");
   const settlements: Settlement[] = [];
@@ -201,12 +226,55 @@ export async function getReputation(
     if (e?.err != null) continue;
     const sig = e?.signature;
     if (typeof sig !== "string") continue;
-    const tx = await rpc(rpcUrl, timeoutMs, "getTransaction", [
-      sig,
-      { encoding: "jsonParsed", maxSupportedTransactionVersion: 0, commitment: "confirmed" },
-    ]);
-    if (tx == null) continue;
-    settlements.push(...parseSettlements(tx, sig));
+    try {
+      const tx = await rpc(rpcUrl, timeoutMs, "getTransaction", [
+        sig,
+        { encoding: "jsonParsed", maxSupportedTransactionVersion: 0, commitment: "confirmed" },
+      ]);
+      if (tx != null) settlements.push(...parseSettlements(tx, sig));
+    } catch {
+      // skip; settlements are append-only on chain, the next refresh sees it
+    }
+    await sleep(SCAN_PACE_MS);
   }
-  return computeReputation(settlements, wallet, PAYAI_FEE_PAYER);
+  return { settlements, fetchedAt: Date.now() };
+}
+
+// Serve the last snapshot immediately and refresh in the background once it is
+// stale. The scan is per-fee-payer, not per-wallet, so every reputation call
+// shares it; a full rescan is seconds long and must never sit on the request
+// path of an MCP client with a short timeout.
+function snapshotSettlements(rpcUrl: string, timeoutMs: number, lim: number): Promise<SettlementSnapshot> {
+  const key = `${rpcUrl}\n${lim}`;
+  const current = snapshot?.key === key ? snapshot.value : null;
+  const fresh = current !== null && Date.now() - current.fetchedAt < SNAPSHOT_TTL_MS;
+  if (!fresh && refreshing === null) {
+    refreshing = scanSettlements(rpcUrl, timeoutMs, lim)
+      .then((value) => {
+        snapshot = { key, value };
+        return value;
+      })
+      .finally(() => {
+        refreshing = null;
+      });
+    refreshing.catch(() => {});
+  }
+  return current !== null ? Promise.resolve(current) : refreshing!;
+}
+
+export function warmReputation(rpcUrl: string, timeoutMs: number, limit: number): void {
+  const lim = Math.max(1, Math.min(Math.floor(limit), 1000));
+  void snapshotSettlements(rpcUrl, timeoutMs, lim).catch(() => {});
+}
+
+// Score `wallet` against the shared settlement snapshot for the fee payer.
+export async function getReputation(
+  rpcUrl: string,
+  timeoutMs: number,
+  wallet: string,
+  limit: number,
+): Promise<Reputation> {
+  const lim = Math.max(1, Math.min(Math.floor(limit), 1000));
+  const snap = await snapshotSettlements(rpcUrl, timeoutMs, lim);
+  return computeReputation(snap.settlements, wallet, PAYAI_FEE_PAYER);
 }

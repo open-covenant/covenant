@@ -5,7 +5,7 @@ This directory contains the production blueprint and runbooks for Mizuki's comme
 ## Deployment order
 
 1. Review `env-contract.md` and prepare every required secret in a password manager.
-2. Run the repository-bound `$HOME/bin/renderctl status` and `$HOME/bin/renderctl guard`, then validate the selected Blueprint against that exact workspace without mutating it. Never use an unguarded global CLI workspace.
+2. Run the repository-bound `$HOME/bin/renderctl status` and `$HOME/bin/renderctl guard`, then require `$HOME/bin/renderctl exec -- render workspace current -o json` to return the same workspace ID before validating the selected Blueprint. The wrapper must use a repository-isolated Render CLI config; never inherit or repair a global CLI profile during a deployment.
 3. Use `render-bootstrap.yaml` only for the closed private-service bootstrap documented in `render-bootstrap.md`. Apply either Blueprint from protected `main` only.
 4. Promote the existing bootstrap Blueprint by changing that same Blueprint's path to `render.yaml`; never create a second Blueprint that owns the same signer, gateway, updater, or databases.
 5. Confirm the Blueprint-linked signer, gateway, updater, and controller tokens resolve into the production runtime. Do not copy those tokens into another service.

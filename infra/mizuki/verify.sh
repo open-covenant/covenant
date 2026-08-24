@@ -486,6 +486,60 @@ abort 'mainnet preflight overstates release readiness' unless preflight['launchV
   preflight.dig('requiredBeforeDeploy', 'hostedReproducibleBuildForCurrentRevision') == false &&
   preflight.dig('requiredBeforeDeploy', 'twoRpcAgreementAfterFinalDeployment') == false
 
+readiness_path = 'infra/mizuki/evidence/mainnet-readiness-2026-08-24.json'
+readiness_raw = File.binread(readiness_path)
+readiness = JSON.parse(readiness_raw)
+readiness_digest = Digest::SHA256.hexdigest(readiness_raw)
+expected_readiness_digest = 'e345f8249d16671c4474542c9ad8b6d9d06b95cea231821f7a74a2bad40d77e9'
+readiness_ref = "https://raw.githubusercontent.com/open-covenant/covenant/main/#{readiness_path}#sha256=#{readiness_digest}"
+abort 'mainnet readiness evidence digest drift' unless readiness_digest == expected_readiness_digest
+abort 'deployment readiness evidence reference drift' unless File.read('infra/mizuki/deployment-evidence.md').include?(readiness_ref)
+abort 'mainnet readiness schema drift' unless readiness['schema'] == 'mizuki.mainnet-readiness.v1'
+abort 'mainnet readiness timestamp drift' unless readiness['capturedAt'] == '2026-08-24T01:02:55Z'
+abort 'mainnet readiness network drift' unless readiness['network'] == 'solana-mainnet' && readiness['commitment'] == 'finalized'
+abort 'mainnet readiness genesis drift' unless readiness['canonicalGenesisHash'] == '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d'
+readiness_accounts = readiness.fetch('accounts')
+abort 'mainnet readiness program drift' unless readiness_accounts['program'] == preflight.dig('program', 'address')
+abort 'mainnet readiness authority drift' unless [
+  readiness_accounts['releaseDeployer'],
+  readiness_accounts['refundTreasury'],
+  readiness_accounts['escrowAuthority'],
+  readiness_accounts['jobAuthority']
+] == preflight.fetch('accounts').map { |entry| entry.fetch('address') }
+abort 'mainnet readiness token-account drift' unless readiness_accounts['canonicalUsdcAccounts'] == preflight.fetch('accounts').map { |entry| entry.fetch('usdcTokenAccount') }
+abort 'mainnet readiness overstates account state' unless readiness_accounts['allAbsent'] == true
+readiness_observations = readiness.fetch('observations')
+abort 'mainnet readiness observation count drift' unless readiness_observations.length == 2
+abort 'mainnet readiness provider independence drift' unless readiness_observations.map { |observation| URI(observation.fetch('rpc')).host } == [
+  'api.mainnet-beta.solana.com',
+  'solana-rpc.publicnode.com'
+]
+abort 'mainnet readiness observation drift' unless readiness_observations.all? do |observation|
+  observation['slot'] == 441_281_187 && observation['genesisMatch'] == true && observation['result'] == 'all-nine-accounts-absent'
+end
+deployment_rent = readiness.fetch('deploymentRent')
+abort 'mainnet readiness program-data rent drift' unless deployment_rent['programDataBytes'] == 104_421 && deployment_rent['programDataLamports'] == 727_661_040
+abort 'mainnet readiness loader rent drift' unless deployment_rent['programAccountBytes'] == 36 && deployment_rent['programAccountLamports'] == 1_141_440
+abort 'mainnet readiness combined rent drift' unless deployment_rent['combinedPermanentLamports'] == deployment_rent['programDataLamports'] + deployment_rent['programAccountLamports']
+abort 'mainnet readiness deployer floor drift' unless deployment_rent['minimumDeployerLamports'] == 750_000_000 && deployment_rent['deployerLamports'] == 0
+facilitator = readiness.fetch('facilitator')
+abort 'mainnet readiness facilitator drift' unless facilitator['url'] == 'https://facilitator.payai.network' && facilitator['x402Version'] == 2 && facilitator['scheme'] == 'exact'
+abort 'mainnet readiness facilitator network drift' unless facilitator['network'] == 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'
+abort 'mainnet readiness facilitator route drift' unless facilitator['matchingRouteCount'] == 1 && facilitator['advertisedSignerCount'] == 2
+abort 'mainnet readiness facilitator fee payer drift' unless facilitator['feePayer'] == 'CjNFTjvBhbJJd2B5ePPMHRLx1ELZpa8dwQgGL727eKww' && facilitator['feePayerLamports'] == 2_956_725_332
+abort 'mainnet readiness facilitator observations drift' unless facilitator.fetch('balanceObservations').map { |observation| URI(observation.fetch('rpc')).host } == [
+  'api.mainnet-beta.solana.com',
+  'solana-rpc.publicnode.com'
+]
+marketplace = readiness.fetch('marketplace')
+abort 'mainnet readiness marketplace deposit drift' unless marketplace['historicalDepositSignature'] == funding['signature'] && marketplace['historicalDepositSlot'] == funding['slot'] && marketplace['historicalDepositMicrounits'] == funding['amountMicrounits']
+abort 'mainnet readiness marketplace floor drift' unless marketplace['productionFloorMicrounits'] == 4_000_000 && marketplace['minimumHistoricalShortfallMicrounits'] == 3_950_000
+abort 'mainnet readiness overstates marketplace balance' unless marketplace['currentBalanceVerifiable'] == false
+readiness_tariff = readiness.fetch('sandboxTariff')
+abort 'mainnet readiness tariff digest drift' unless readiness_tariff['sourceSha256'] == '28e0e81c35b2d6e8def4bab24d105e5b39d31330c39be20f5411b51df664bbc7'
+abort 'mainnet readiness overstates sandbox readiness' unless readiness_tariff['authenticatedTemplateVerified'] == false && readiness_tariff['fundingVerified'] == false
+abort 'mainnet readiness overstates launch readiness' unless readiness['launchVerdict'] == 'no-go-mainnet-and-paid-intake'
+
 tariff_path = 'infra/mizuki/evidence/e2b-tariff-2026-08-23.json'
 tariff_raw = File.binread(tariff_path)
 tariff = JSON.parse(tariff_raw)

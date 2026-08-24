@@ -1,0 +1,79 @@
+{
+  "schema": "mizuki.mainnet-readiness.v1",
+  "capturedAt": "2026-08-24T01:02:55Z",
+  "network": "solana-mainnet",
+  "commitment": "finalized",
+  "canonicalGenesisHash": "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d",
+  "accounts": {
+    "program": "DNofG7TqkzKau3DAoxykhT5CzZsq5xg6jHdwhExgSXRk",
+    "releaseDeployer": "8d2v1z32d2X4SSGtv1F6tewtEEgEzQNbKsSzoHB9TsD",
+    "refundTreasury": "9gPssTdsyLfoPdTS19Gb5pzJ4s8biVDk7kKVDV3SnPa2",
+    "escrowAuthority": "7SFJTDWwf4ij97cGDsPfCHCqMakV4Z4yaZFpqxdkZCti",
+    "jobAuthority": "4C8ugAFKy9hK3M4UKrAanQYsSByf2ui45bRw4U5ht46F",
+    "canonicalUsdcAccounts": [
+      "2ixd4KHfLqFJftkuQRVNLU3rK9yihyQ6Ag69kB56phaZ",
+      "1juzjwvsJtwJaYUsyYoxJnsYrmjgSkGGxr6URvW4Snh",
+      "6DotobYZywcQW3cTthqwSx8GkU8QmaETMRytKSwDvg62",
+      "5MqzFFZD2GhnJGomZ5XCLCddiBQkbDw5JV8oFZD3n9SV"
+    ],
+    "allAbsent": true
+  },
+  "observations": [
+    {
+      "rpc": "https://api.mainnet-beta.solana.com",
+      "slot": 441281187,
+      "genesisMatch": true,
+      "result": "all-nine-accounts-absent"
+    },
+    {
+      "rpc": "https://solana-rpc.publicnode.com",
+      "slot": 441281187,
+      "genesisMatch": true,
+      "result": "all-nine-accounts-absent"
+    }
+  ],
+  "deploymentRent": {
+    "programDataBytes": 104421,
+    "programDataLamports": 727661040,
+    "programAccountBytes": 36,
+    "programAccountLamports": 1141440,
+    "combinedPermanentLamports": 728802480,
+    "minimumDeployerLamports": 750000000,
+    "deployerLamports": 0
+  },
+  "facilitator": {
+    "url": "https://facilitator.payai.network",
+    "x402Version": 2,
+    "scheme": "exact",
+    "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+    "matchingRouteCount": 1,
+    "advertisedSignerCount": 2,
+    "feePayer": "CjNFTjvBhbJJd2B5ePPMHRLx1ELZpa8dwQgGL727eKww",
+    "feePayerLamports": 2956725332,
+    "balanceObservations": [
+      {
+        "rpc": "https://api.mainnet-beta.solana.com",
+        "slot": 441281243
+      },
+      {
+        "rpc": "https://solana-rpc.publicnode.com",
+        "slot": 441281242
+      }
+    ]
+  },
+  "marketplace": {
+    "historicalDepositSignature": "ExRVdguFoDeHTCF9P1yfKozcpxML9Y4s1WdzYTFDdeRcMVkjVGwP4qwmYJpPc4DBwtcbuQwt3QdTNh4KdzRo3ih",
+    "historicalDepositSlot": 441239653,
+    "historicalDepositMicrounits": 50000,
+    "productionFloorMicrounits": 4000000,
+    "minimumHistoricalShortfallMicrounits": 3950000,
+    "currentBalanceVerifiable": false
+  },
+  "sandboxTariff": {
+    "sourceSha256": "28e0e81c35b2d6e8def4bab24d105e5b39d31330c39be20f5411b51df664bbc7",
+    "validUntil": "2026-08-29T20:32:23Z",
+    "authenticatedTemplateVerified": false,
+    "fundingVerified": false
+  },
+  "launchVerdict": "no-go-mainnet-and-paid-intake"
+}

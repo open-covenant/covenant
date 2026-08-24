@@ -1,6 +1,6 @@
 # Mizuki deployment evidence
 
-- Evidence date: 23 August 2026
+- Evidence date: 24 August 2026
 - Verified web revision: `3b865484c7f9b1d469782437cd858f043cd2f251`
 - Verified API revision: `4fb0378f879c2eb38b8b6c611cc35d940de00029`
 - Launch verdict: **NO-GO for public paid intake**
@@ -26,6 +26,14 @@ The entries in this section describe the closed bootstrap services currently on 
 
 The matching artifact digest proves reproducibility for the hosted build inputs. It does not prove that those bytes are deployed immutably on mainnet or that a live signer is pinned to them.
 
+## Audited release candidate
+
+[Pull request 147](https://github.com/open-covenant/covenant/pull/147) contains the current commercial-core candidate. Its audited code revision is `22850f9fe938ac57c87e3fde5c8e0e00271ee9f0`. The separate push and pull-request Mizuki workflows and repository CI workflows passed every required context, including PostgreSQL-backed application suites, full database dump/restore equality, the scoped production dependency audit, process smokes, Blueprint invariants, Rust, EVM, landing, and Socket checks.
+
+The two hosted escrow runners produced byte-identical program artifacts, Cargo manifests, lockfile, and ABI. Both report artifact SHA-256 `2d24fd43b65a7bb31b39007b93717b1f65615df39aeec33b9eebe83bb89a2237` and Solana executable hash `42bd1e28a27ad9fe1c08f38c83008fe67db12081480b77cf4adeeeb06fcf038a`, and both complete checksum manifests pass. This is repeatability across canonical hosted runners, not an independent third-party audit or on-chain deployment receipt.
+
+The pull request is conflict-free and up to date with `main`, but it has no submitted review. Protected `main` requires a qualifying independent approval after the final push. No service, permanent release, or mainnet ceremony may consume this candidate before that gate passes.
+
 ## Funded provider route canaries
 
 The provider account was activated through a finalized 50,000-microunit canonical-USDC `DepositUsdc` transaction on Solana mainnet. The public transaction is [`ExRVdg…Ro3ih`](https://explorer.solana.com/tx/ExRVdguFoDeHTCF9P1yfKozcpxML9Y4s1WdzYTFDdeRcMVkjVGwP4qwmYJpPc4DBwtcbuQwt3QdTNh4KdzRo3ih), finalized at slot `441239653` with block time `2026-08-23T20:47:54Z` through sovereign program `BBAdcqUkg68JXNiPQ1HR1wujfZuayyK3eQTQSYAh6FSW`. The token became active and the authenticated catalog returned 1,013 models.
@@ -40,31 +48,44 @@ The unqualified `deepseek-v3.2` request canonicalized and failed the tool call. 
 
 This advances route selection, not launch readiness. Canary funding is 0.05 USDC, below the configured 4,000,000-microunit production floor, and no real-repository coding plus sandbox benchmark has passed. Paid intake remains closed.
 
+The 24 August read-only recheck found the required x402 v2 exact mainnet route still advertised with two eligible signers. Two unrelated finalized RPC providers agreed that its selected fee payer held 2,956,725,332 lamports. That is facilitator fee capacity, not Mizuki refund, escrow, settlement, or provider runway.
+
 ## Mainnet release preflight
 
 Independent finalized reads through `api.mainnet-beta.solana.com` and `solana-rpc.publicnode.com` agreed at slots `441245625` and `441245514`: the proposed mainnet program account did not exist; the dedicated deployer, refund treasury, escrow authority, and job authority each had zero lamports; and all four derived canonical-USDC accounts were absent. The redacted result is content-addressed at `https://raw.githubusercontent.com/open-covenant/covenant/main/infra/mizuki/evidence/mainnet-preflight-2026-08-23.json#sha256=8debdc14b45ec698f0af45f1a758036d5c343bf3abe4c66fc2174fde17cbe70e`.
 
 This is a fail-closed funding and non-deployment receipt. It does not authorize a deploy. The release ceremony still requires at least 750,000,000 lamports in the dedicated deployer, independent review, a hosted reproducible build for the exact release revision, final deployment with no upgrade authority, and byte/hash agreement through two unrelated finalized RPC providers.
 
+## 24 August mainnet readiness recheck
+
+The [current redacted receipt](https://raw.githubusercontent.com/open-covenant/covenant/main/infra/mizuki/evidence/mainnet-readiness-2026-08-24.json#sha256=e345f8249d16671c4474542c9ad8b6d9d06b95cea231821f7a74a2bad40d77e9) records a second read-only no-go observation. Both unrelated providers returned the canonical mainnet genesis hash and agreed at finalized slot `441281187` that the proposed program, four project authorities, and four canonical-USDC accounts were all absent.
+
+Current permanent deployment rent is 727,661,040 lamports for the 104,421-byte program-data account plus 1,141,440 lamports for the 36-byte loader Program account: 728,802,480 lamports before transaction fees or ceremony working capital. The committed deployment floor remains 750,000,000 lamports and the dedicated deployer remains absent. The receipt also binds the facilitator observation, the historical 50,000-microunit marketplace deposit, the unproven 4,000,000-microunit live balance floor, and the still-unauthenticated sandbox tariff boundary.
+
 ## Render state
 
-| Resource            | Identifier / address                                                                      | Verified state                                                         |
-| ------------------- | ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| Website             | `srv-da5egcrl550s73cmhqh0` · [mizuki-9by5.onrender.com](https://mizuki-9by5.onrender.com) | Deploy `dep-da5ir6gjo6nc73cmtrmg` live from `3b865484`; Starter        |
-| Website health      | [`/healthz`](https://mizuki-9by5.onrender.com/healthz)                                    | HTTP 200                                                               |
-| Profile image       | [`/mizuki-avatar.jpg`](https://mizuki-9by5.onrender.com/mizuki-avatar.jpg)                | HTTP 200 JPEG; canonical bytes verified by SHA-256                     |
-| API                 | `srv-da5fg02jobas73ei3n30` · [mizuki-api.onrender.com](https://mizuki-api.onrender.com)   | Deploy `dep-da5jc5rbc2fs7399emlg` live from `4fb0378f`; Starter        |
-| API liveness        | [`/healthz`](https://mizuki-api.onrender.com/healthz)                                     | HTTP 200                                                               |
-| API deploy safety   | [`/deployz`](https://mizuki-api.onrender.com/deployz)                                     | HTTP 200                                                               |
-| API readiness       | [`/readyz`](https://mizuki-api.onrender.com/readyz)                                       | HTTP 503; protected dependencies intentionally incomplete              |
-| Admission           | [`/v1/admission`](https://mizuki-api.onrender.com/v1/admission)                           | Intake false; claims false; revision zero                              |
-| Commercial counters | [`/v1/metrics`](https://mizuki-api.onrender.com/v1/metrics)                               | All job, PR, refund, bounty, maintainer, revenue, and flow counts zero |
-| Paid Postgres       | `dpg-da5ekm8u01pc73evr3d0-a`                                                              | Available; Basic 256 MB; PostgreSQL 16; 5 GB; Frankfurt                |
-| Custom domain       | `mizuki.covenant.org`                                                                     | Attached in Render; DNS not verified                                   |
-| Required DNS        | CNAME host `mizuki` → `mizuki-9by5.onrender.com`                                          | Pending at the authoritative DNS provider                              |
-| Policy signer       | —                                                                                         | Not deployed                                                           |
-| Coding gateway      | —                                                                                         | Not deployed                                                           |
-| Updater             | —                                                                                         | Not deployed                                                           |
+| Resource             | Identifier / address                                                                      | Verified state                                                         |
+| -------------------- | ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| Website              | `srv-da5egcrl550s73cmhqh0` · [mizuki-9by5.onrender.com](https://mizuki-9by5.onrender.com) | Deploy `dep-da5ir6gjo6nc73cmtrmg` live from `3b865484`; Starter        |
+| Website health       | [`/healthz`](https://mizuki-9by5.onrender.com/healthz)                                    | HTTP 200                                                               |
+| Profile image        | [`/mizuki-avatar.jpg`](https://mizuki-9by5.onrender.com/mizuki-avatar.jpg)                | HTTP 200 JPEG; canonical bytes verified by SHA-256                     |
+| API                  | `srv-da5fg02jobas73ei3n30` · [mizuki-api.onrender.com](https://mizuki-api.onrender.com)   | Deploy `dep-da5jc5rbc2fs7399emlg` live from `4fb0378f`; Starter        |
+| API liveness         | [`/healthz`](https://mizuki-api.onrender.com/healthz)                                     | HTTP 200                                                               |
+| API deploy safety    | [`/deployz`](https://mizuki-api.onrender.com/deployz)                                     | HTTP 200                                                               |
+| API readiness        | [`/readyz`](https://mizuki-api.onrender.com/readyz)                                       | HTTP 503; protected dependencies intentionally incomplete              |
+| Admission            | [`/v1/admission`](https://mizuki-api.onrender.com/v1/admission)                           | Intake false; claims false; revision zero                              |
+| Commercial counters  | [`/v1/metrics`](https://mizuki-api.onrender.com/v1/metrics)                               | All job, PR, refund, bounty, maintainer, revenue, and flow counts zero |
+| Paid Postgres        | `dpg-da5ekm8u01pc73evr3d0-a`                                                              | Available; Basic 256 MB; PostgreSQL 16; 5 GB; Frankfurt                |
+| Custom domain        | `mizuki.covenant.org`                                                                     | Attached in Render; DNS not verified                                   |
+| Required DNS         | CNAME host `mizuki` → `mizuki-9by5.onrender.com`                                          | Pending at the authoritative DNS provider                              |
+| Policy signer        | —                                                                                         | Not deployed                                                           |
+| Coding gateway       | —                                                                                         | Not deployed                                                           |
+| Updater              | —                                                                                         | Not deployed                                                           |
+| Controller           | —                                                                                         | Not deployed                                                           |
+| Image runtimes       | —                                                                                         | Shadow and production services not deployed                            |
+| Bootstrap Blueprint  | `infra/mizuki/render-bootstrap.yaml`                                                      | Valid; plans three private services and two isolated databases         |
+| Production Blueprint | `infra/mizuki/render.yaml`                                                                | Invalid until the `mizuki-ghcr` registry credential exists             |
+| GitHub Apps          | Core, Policy Verifier, Updater                                                            | No matching Apps or organization installations exist                   |
 
 Both currently hosted Render services have automatic deployment disabled and still point at the unprotected release-candidate branch. They must move to protected `main` only through the reviewed Blueprint promotion. The source-built API is a closed bootstrap deployment, not the production target: it must remain closed and be suspended during the image-runtime cutover. The production Blueprint now permits only `mizuki-runtime-production` to serve the website and use the canonical commercial database. The website currently has demo mode disabled, targets the closed bootstrap API, and shares a valid service-held proxy secret with it. Public verification confirmed:
 

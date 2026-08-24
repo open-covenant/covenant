@@ -7,7 +7,7 @@ The updater intentionally omits deployment-controller settings. It can expose li
 ## Before provisioning
 
 1. Merge the reviewed release to protected `main`, record its full commit SHA, and confirm every required hosted check passed. The Blueprint must not source an unprotected branch.
-2. Run `$HOME/bin/renderctl status` and `$HOME/bin/renderctl guard` from the repository root. Stop if either command fails or reports another workspace.
+2. Run `$HOME/bin/renderctl status` and `$HOME/bin/renderctl guard` from the repository root. Require `$HOME/bin/renderctl exec -- render workspace current -o json` to return the same workspace ID through the repository-isolated CLI config. Stop if any command fails or reports another workspace.
 3. Validate `infra/mizuki/render-bootstrap.yaml`. The expected plan is exactly three private services and two PostgreSQL databases: five actions total.
 4. Supply every `sync: false` value through Render's encrypted initial-Blueprint form. Never place a secret in this repository, a shell history entry, or deployment evidence.
 

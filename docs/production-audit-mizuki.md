@@ -1,45 +1,46 @@
 # Mizuki production-readiness audit
 
-- Audit date: 23 August 2026
+- Audit date: 24 August 2026
 - Launch deadline: 19 September 2026
 - Scope: the Mizuki paid-maintenance engine, refund-to-bounty loop, external policy signer, coding gateway, updater, deployment boundary, and Solana escrow program.
 
 ## Verdict
 
-**NO-GO for public paid intake. Production readiness: 66/100.**
+**NO-GO for public paid intake. Production readiness: 72/100.**
 
-The last hosted release baseline passed at revision `dfeffb0a8c8280bb7b3844bead750fccf7233ae7`, produced a 104,376-byte SBPFv2 artifact, and exercised 31 host and artifact-backed escrow tests. That exact historical artifact was then deployed to devnet and completed fund, bind, exact release, bound-expiry refund, unbound-expiry refund, wrong-claimant rejection, expired-release rejection, and replay rejection with finalized public transactions. A separately funded provider account also completed synthetic coding and review route canaries.
+The exact release candidate at revision `22850f9fe938ac57c87e3fde5c8e0e00271ee9f0` passed every hosted application, escrow, Rust, EVM, landing, dependency, and supply-chain check. Two separate GitHub-hosted runners built byte-identical 104,376-byte SBPFv2 artifacts with raw SHA-256 `2d24fd43b65a7bb31b39007b93717b1f65615df39aeec33b9eebe83bb89a2237` and Solana executable hash `42bd1e28a27ad9fe1c08f38c83008fe67db12081480b77cf4adeeeb06fcf038a`. The candidate remains unmerged because protected `main` requires an independent approval covering the final push.
 
-That is meaningful integration proof, but it is not production proof. The devnet program is upgradeable. The policy signer, coding gateway, updater, GitHub Apps, model route, sandbox, and project settlement accounts are not operating together in production. There is no approved immutable mainnet program, no funded end-to-end settlement path, no independent escrow review, no public paid job, and no public customer-refund-to-funded-bounty canary.
+This is meaningful release evidence, but it is not production proof. The historical devnet program is upgradeable. The policy signer, coding gateway, updater, GitHub Apps, model route, sandbox, and project settlement accounts are not operating together in production. There is no approved immutable mainnet program, no funded end-to-end settlement path, no independent third-party escrow review, no public paid job, and no public customer-refund-to-funded-bounty canary.
 
-Keep paid intake, new bounty claims, and updater promotion closed. A newer release candidate contains additional fail-closed controls for payment admission and recovery, provider-balance admission, updater check identity, and permanent escrow evidence. Those changes are not part of the hosted baseline and do not inherit its evidence. They require a frozen commit, a new clean hosted run, and a new artifact hash before deployment or release claims.
+Keep paid intake, new bounty claims, and updater promotion closed. The candidate's fail-closed controls for payment admission and recovery, provider-balance admission, updater check identity, crash-safe promotion, isolated deployment roles, and permanent escrow evidence have hosted test receipts. None is proven live until the protected merge, permanent releases, closed production deployment, fault drills, funding, and public canaries complete.
 
-| Area                                   | Score | Reason                                                                                                                                |
-| -------------------------------------- | ----: | ------------------------------------------------------------------------------------------------------------------------------------- |
-| Paid maintenance engine                | 19/25 | Bounded source path and funded synthetic model canary; no real-repository sandbox run or paid GitHub publication.                     |
-| Refund-to-bounty engine                | 19/25 | Exact release and both refund paths passed on devnet; the commercial refund-to-public-bounty loop remains unproven.                   |
-| External policy signer                 | 18/25 | Strong independent policy boundary and live canary runner; the service, funded production custody, and mainnet deployment are absent. |
-| Deployment and operations              |  8/15 | Hosted CI, public website/API liveness, and closed controls exist; private services, DNS, restore, and promotion proof do not.        |
-| Live evidence, economics, and traction |  2/10 | Funded model-route canaries passed, but no paid jobs, external maintainers, complete cost receipts, or verified positive margin.      |
+| Area                                   | Score | Reason                                                                                                                                 |
+| -------------------------------------- | ----: | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Paid maintenance engine                | 20/25 | Hosted repository, payment-recovery, gateway, and publication tests pass; no real-repository sandbox run or paid GitHub publication.   |
+| Refund-to-bounty engine                | 20/25 | Hosted exactly-once recovery tests and devnet escrow flows pass; the commercial refund-to-public-bounty loop remains unproven.         |
+| External policy signer                 | 20/25 | The independent evidence, custody, review, and recovery boundary passes hosted tests; the production service and custody are absent.   |
+| Deployment and operations              | 10/15 | Hosted CI, restore equality, zero-authority shadow, and updater recovery pass; private services, DNS, and live promotion proof do not. |
+| Live evidence, economics, and traction |  2/10 | Funded model-route canaries passed, but no paid jobs, external maintainers, complete cost receipts, or verified positive margin.       |
 
-## Historical verified release baseline
+## Current verified release candidate
 
-The [Mizuki workflow](https://github.com/open-covenant/covenant/actions/runs/32662760151) and [repository CI workflow](https://github.com/open-covenant/covenant/actions/runs/32662760145) completed successfully for revision `dfeffb0a8c8280bb7b3844bead750fccf7233ae7`. Every result in this section is historical evidence for that revision only.
+The [push Mizuki workflow](https://github.com/open-covenant/covenant/actions/runs/32677095050), [pull-request Mizuki workflow](https://github.com/open-covenant/covenant/actions/runs/32677097996), [push repository CI](https://github.com/open-covenant/covenant/actions/runs/32677095080), and [pull-request repository CI](https://github.com/open-covenant/covenant/actions/runs/32677097994) completed successfully for the exact candidate tree. Required `application`, `escrow`, `rust`, and `landing` contexts all passed. The branch is up to date with protected `main` and has no merge conflicts.
 
 | Component                                | Hosted result                                                       |
 | ---------------------------------------- | ------------------------------------------------------------------- |
-| `@covenant/mizuki`                       | 248 tests passed; typecheck, build, and process smoke passed        |
-| `@covenant/mizuki-policy-signer`         | 164 tests passed; typecheck and build passed                        |
-| `@covenant/mizuki-updater`               | 64 tests passed; typecheck and build passed                         |
-| `@covenant/mizuki-deployment-controller` | 37 tests passed; typecheck and build passed                         |
-| `@covenant/coding-gateway`               | 159 tests passed; typecheck and build passed                        |
-| `@mizuki/web`                            | 39 tests passed; typecheck, production build, and HTTP smoke passed |
+| `@covenant/mizuki`                       | 312 tests passed; typecheck, build, and process smoke passed        |
+| `@covenant/mizuki-policy-signer`         | 203 tests passed; typecheck and build passed                        |
+| `@covenant/mizuki-updater`               | 96 tests passed; typecheck and build passed                         |
+| `@covenant/mizuki-deployment-controller` | 39 tests passed; typecheck and build passed                         |
+| `@covenant/coding-gateway`               | 179 tests passed; typecheck and build passed                        |
+| `@mizuki/web`                            | 42 tests passed; typecheck, production build, and HTTP smoke passed |
 
-Application total: **711 tests passed across 90 files**. The workflow also exercised full data-and-sequence dump/restore equality across the four isolated test databases. This is CI restore evidence, not a managed production backup or point-in-time recovery drill.
+Application total: **871 tests passed**. The workflow also exercised full data-and-sequence dump/restore equality across the four isolated test databases. This is CI restore evidence, not a managed production backup or point-in-time recovery drill.
 
 Escrow verification passed six host tests and 25 artifact-backed SBPF tests. The hosted artifact archive records:
 
-- Git revision: `dfeffb0a8c8280bb7b3844bead750fccf7233ae7`
+- Push artifact revision: `22850f9fe938ac57c87e3fde5c8e0e00271ee9f0`
+- Pull-request artifact revision: `c26401c0eef01daecccd732ba5d16a26b58b17f8`
 - Artifact SHA-256: `2d24fd43b65a7bb31b39007b93717b1f65615df39aeec33b9eebe83bb89a2237`
 - Solana executable hash: `42bd1e28a27ad9fe1c08f38c83008fe67db12081480b77cf4adeeeb06fcf038a`
 - Artifact length: 104,376 bytes
@@ -47,9 +48,9 @@ Escrow verification passed six host tests and 25 artifact-backed SBPF tests. The
 - SBPF version and flags: v2 and `0x2`
 - Toolchain: `cargo-build-sbf 4.0.0`, platform-tools `v1.53`, Rust `1.89.0`, and `solana-verify 0.5.0`
 
-The archive is retained by the historical workflow for 90 days. It has not been copied into a permanent release, so it remains time-limited evidence rather than a durable public transparency record.
+Both archives pass their complete strict checksum manifests. Their SBPF program bytes, Cargo manifests, lockfile, and ABI are byte-identical despite building on separate hosted runners. They are retained for 90 days and have not yet been copied into a permanent release, so they remain time-limited evidence rather than a durable public transparency record.
 
-## Unverified release-candidate hardening
+## Verified release-candidate hardening
 
 The current release candidate adds four controls that directly address the commercial trust boundary:
 
@@ -58,11 +59,13 @@ The current release candidate adds four controls that directly address the comme
 - Coding-gateway readiness now queries the provider's nonbillable authenticated balance endpoint and requires exactly one `X-Balance-Remaining` header to agree with a safe-integer `usdc_balance`. Readiness and run admission fail closed on a malformed, duplicated, conflicting, or insufficient result, with a floor of 4,000,000 USDC microunits.
 - The protected-main workflow now defines a permanent escrow-release path with the exact SBPF artifact, ABI, manifests, complete checksums, build metadata, toolchain receipts, and provenance. It creates the release as a draft, uploads and verifies every asset, publishes it, and requires the resulting commit-tagged release to report immutable.
 
-The local integrated release gate passes for this candidate: core 298 tests, signer 183 tests, updater 88 tests, deployment controller 36 tests, coding gateway 179 tests, and web 42 tests, with all typechecks, builds, process smokes, formatting, dependency checks, and Blueprint invariants passing. A separate PostgreSQL run passed all 185 signer tests, including all three migrations. These remain local results. The release candidate has not yet produced a hosted receipt or permanent escrow release, and none of these controls is proven live. The historical artifact and test counts above remain the latest hosted baseline.
+The hosted integrated release gate passes with all PostgreSQL suites enabled, every typecheck and build, process smokes, formatting, the scoped production dependency audit, Blueprint invariants, and full data-and-sequence restore equality. The escrow job passes six host tests and 25 LiteSVM lifecycle and adversarial tests against the exact hosted SBPFv2 artifact. These controls are hosted-verified but not live. The candidate has not produced its protected-main permanent escrow or image release, and no private production service uses it.
 
 ## Public deployment boundary
 
-Live probes on 23 August 2026 returned HTTP 200 from the Render website, API liveness, and closed deployment endpoints. API readiness returned HTTP 503 with protected dependencies incomplete, while public admission returned HTTP 200 with paid intake and new claims both false at revision zero. The API and web are deployed from different historical revisions, and both Render services still follow the unprotected release-candidate branch rather than protected `main`. This is a safe closed state, not proof that the current candidate or any private commercial service is deployed.
+Live probes on 24 August 2026 returned HTTP 200 from the Render website, API liveness, and closed deployment endpoints. API readiness returned HTTP 503 with protected dependencies incomplete, while public admission returned HTTP 200 with paid intake and new claims both false at revision zero. The API and web are deployed from different historical revisions, and both Render services still follow the unprotected release-candidate branch rather than protected `main`. This is a safe closed state, not proof that the current candidate or any private commercial service is deployed.
+
+The closed bootstrap Blueprint now validates against the bound Render workspace and plans exactly three private services plus two isolated databases. The full production Blueprint fails validation because the required `mizuki-ghcr` registry credential does not exist. No Mizuki Blueprint owns the current resources, and none of the signer, gateway, updater, controller, shadow runtime, production image runtime, or isolated financial databases exists. The three required GitHub Apps and their organization installations are also absent.
 
 The canonical `mizuki.covenant.org` hostname still resolves through the provider's wildcard A record rather than the required service CNAME, and its TLS certificate does not match the hostname. The Render origin remains the only working public website endpoint until DNS and certificate issuance complete.
 
@@ -149,19 +152,23 @@ The updater is useful only if it stays outside the commercial trust path. The cu
 
 ## P0 launch blockers
 
+### 0. The protected release is not approved or merged
+
+[Pull request 147](https://github.com/open-covenant/covenant/pull/147) is conflict-free, up to date with `main`, and green on every required hosted context. It has no submitted review. Protected `main` requires one approval, dismisses stale approvals, requires approval after the final push by someone other than the pusher, enforces the rule for administrators, and requires linear history. No deployment or permanent release may use the candidate until that exact final head receives a qualifying independent approval and merges through the normal squash or rebase path.
+
 ### 1. The protected commercial services are not live together
 
-The public API correctly remains not ready. There is no production receipt proving authenticated core-to-signer, core-to-gateway, core-to-updater, or GitHub App connectivity; signer-backed repository admission and recovery; provider-balance readiness; exact workflow-producer enforcement; restart recovery; RPC disagreement; or fail-closed startup. Deploy the private services from one verified revision with every public control closed, then prove those properties before a payment challenge can be issued.
+The public API correctly remains not ready. Only the historical source-built API, website, and canonical commercial database exist on Render. There is no production receipt proving authenticated core-to-signer, core-to-gateway, core-to-updater, or GitHub App connectivity; signer-backed repository admission and recovery; provider-balance readiness; exact workflow-producer enforcement; restart recovery; RPC disagreement; or fail-closed startup. The closed bootstrap plan validates, but the full plan cannot validate until the registry credential exists. Deploy the private services from one verified revision with every public control closed, then prove those properties before a payment challenge can be issued.
 
 ### 2. Settlement and custody are not funded end to end
 
-Two unrelated finalized RPC reads at slots `441258031` and `441258032` agreed that the dedicated release, refund, escrow, and job-authority addresses had zero lamports, every derived USDC account was absent, and the proposed mainnet program account did not exist. One facilitator reports exactly one eligible x402 v2 exact Solana-mainnet route with two eligible signers, but the project recipient path is not funded. The marketplace account received a finalized 50,000-microunit canonical-USDC deposit and completed two authenticated canaries, but this 0.05 USDC canary funding is 3,950,000 microunits below the production floor. The credential was intentionally not retained by the public service, so the live balance cannot currently be rechecked. Unrelated wallet balances are not project reserves and must not be moved without explicit provenance and approval.
+Two unrelated finalized RPC reads agreed at slot `441281187` that the dedicated release, refund, escrow, and job-authority addresses, every derived USDC account, and the proposed mainnet program account were absent. One facilitator reports exactly one eligible x402 v2 exact Solana-mainnet route with two eligible signers; its selected fee payer held 2,956,725,332 lamports by both providers. That funds facilitator fees only. The project recipient, refund, escrow, job, and deployment paths remain unfunded. The marketplace account received a finalized 50,000-microunit canonical-USDC deposit and completed two authenticated canaries, but this 0.05 USDC canary funding is at least 3,950,000 microunits below the production floor. The credential was intentionally not retained by the public service, so the live balance cannot currently be rechecked. Unrelated wallet balances are not project reserves and must not be moved without explicit provenance and approval.
 
 Fund only capped canary accounts through documented provider paths. Prove a model tool call, a settlement, exact customer refund capacity, escrow funding, and provider cost receipts before opening intake.
 
 ### 3. Mainnet escrow custody is not release-ready
 
-The devnet program is upgradeable and cannot be used as production immutability evidence. The two-RPC preflight confirms the proposed mainnet program account is absent and the dedicated deployer has zero lamports; it is proof of a blocked boundary, not deployment evidence. The release candidate defines a protected-main workflow for permanent, commit-tagged immutable escrow evidence, but that workflow has not run on the hosting platform and no permanent release exists. There is no approved mainnet program ID, independent third-party review, independent reproducible-build receipt, immutable deployment, or two-unrelated-RPC program-data match. The current mainnet program-data rent estimate for the historical artifact is 0.72766104 SOL, which exceeds the documented project-controlled deployment balance.
+The devnet program is upgradeable and cannot be used as production immutability evidence. The two-RPC preflight confirms the proposed mainnet program account is absent and the dedicated deployer has zero lamports; it is proof of a blocked boundary, not deployment evidence. The release candidate defines a protected-main workflow for permanent, commit-tagged immutable escrow evidence, but that workflow has not run on the hosting platform and no permanent release exists. Two canonical-workflow runners produced identical artifacts, but there is still no approved mainnet program ID, independent third-party review, independently operated reproducible-build receipt, immutable deployment, or two-unrelated-RPC program-data match. Current permanent rent is 0.72766104 SOL for program data plus 0.00114144 SOL for the loader Program account, or 0.72880248 SOL before fees and ceremony working capital. The committed deployer floor is 0.75 SOL and the dedicated deployer has no account.
 
 Complete independent review, reproduce the approved artifact, fund the ceremony wallet with explicit provenance, deploy with `--final`, and verify loader state, null upgrade authority, byte equality, raw SHA-256, and Solana executable hash through two independent finalized RPC providers before enabling escrow signing.
 
@@ -181,7 +188,7 @@ Evidence shows no qualifying paid external jobs, PRs, merges, external maintaine
 
 ## Required execution sequence
 
-1. Freeze one release candidate and rerun application CI, escrow build/tests, dependency audit, process smokes, database restore, and clean-scope packaging from that exact revision. The hosted run must exercise the new signer migration, repository-admission recovery, provider-balance readiness, and updater workflow-identity gate; statically validate the protected-main release definition before merge.
+1. **Completed for the audited code revision:** application CI, escrow build/tests, dependency audit, process smokes, database restore, clean-scope packaging, signer migrations, repository-admission recovery, provider-balance readiness, updater workflow identity, and protected-main release validation all passed on hosted runners. Every later evidence-only commit must repeat the required checks before merge.
 2. After protected-main merge, verify the release job publishes the approved artifact, metadata, checksums, and provenance in a commit-tagged immutable release. Obtain an independent escrow review and independent reproducible-build/hash match.
 3. Create or verify the repository-scoped GitHub Apps, fund provider runway above the pinned floor and custody accounts, and benchmark the exact live model and sandbox route on a real repository.
 4. Deploy the immutable mainnet program from the approved artifact and verify it through two unrelated finalized RPC providers.

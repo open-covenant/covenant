@@ -12,7 +12,7 @@ Do not deploy to mainnet until all of the following are true:
 - Two independent finalized RPC providers return the same program bytes and program metadata.
 - The production authority and fee payer are held outside the API and updater services.
 
-Status on 23 August 2026: the hosted build/test gate and the listed devnet behavior canaries passed for artifact SHA-256 `2d24fd43b65a7bb31b39007b93717b1f65615df39aeec33b9eebe83bb89a2237`. Independent review, an independent reproducible build, an approved immutable mainnet deployment, and two-RPC mainnet verification have not passed. Mainnet remains blocked.
+Status on 24 August 2026: two separate canonical hosted runners produced byte-identical SBPFv2 artifacts for the audited release-candidate tree with SHA-256 `2d24fd43b65a7bb31b39007b93717b1f65615df39aeec33b9eebe83bb89a2237` and Solana executable hash `42bd1e28a27ad9fe1c08f38c83008fe67db12081480b77cf4adeeeb06fcf038a`. Six host tests and 25 artifact-backed LiteSVM tests passed, and the listed historical devnet behavior canaries used the same program bytes. Protected merge, permanent release publication, independent third-party review, an independently operated reproducible build, an approved immutable mainnet deployment, and two-RPC mainnet program-data verification have not passed. Mainnet remains blocked.
 
 ## Program ID strategy
 

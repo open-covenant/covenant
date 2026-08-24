@@ -120,7 +120,7 @@ services:
       - key: USEPOD_BASE_URL
         value: https://api.usepod.ai
       - key: USEPOD_MODEL
-        value: openai/gpt-oss-120b
+        value: deepseek-v3.2
       - key: USEPOD_REVIEW_MODEL
         value: deepseek-v4-flash
       - key: USEPOD_INPUT_USD_PER_MILLION
@@ -332,7 +332,7 @@ services:
       - key: CODER_BACKEND
         value: usepod
       - key: CODER_MODEL
-        value: openai/gpt-oss-120b
+        value: deepseek-v3.2
       - key: CODER_EFFORT
         value: low
       - key: USEPOD_API_KEY

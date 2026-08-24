@@ -4,7 +4,7 @@ import { assertBootConfig, assertLiveConfig, liveConfigIssues, loadConfig } from
 describe('updater configuration', () => {
   it('uses the canary-qualified development routes', () => {
     expect(loadConfig({ MIZUKI_PAYMENT_MODE: 'mock' })).toMatchObject({
-      usePodImplementationModel: 'openai/gpt-oss-120b',
+      usePodImplementationModel: 'deepseek-v3.2',
       usePodModel: 'deepseek-v4-flash',
     });
   });

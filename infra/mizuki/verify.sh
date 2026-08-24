@@ -273,7 +273,7 @@ abort 'runtime payment recipient is not the signer refund treasury' unless servi
 abort 'runtime escrow refund destination is not the isolated escrow authority' unless service_ref(production.fetch('MIZUKI_ESCROW_REFUND_TO'), 'mizuki-policy-signer', 'MIZUKI_ESCROW_AUTHORITY')
 abort 'runtime x402 facilitator is not pinned to HTTPS' unless URI(production.fetch('MIZUKI_X402_FACILITATOR')['value']).scheme == 'https'
 abort 'runtime UsePod origin drift' unless production.fetch('USEPOD_BASE_URL')['value'] == 'https://api.usepod.ai'
-abort 'runtime coding route drift' unless production.fetch('USEPOD_MODEL')['value'] == 'openai/gpt-oss-120b'
+abort 'runtime coding route drift' unless production.fetch('USEPOD_MODEL')['value'] == 'deepseek-v3.2'
 abort 'runtime review route drift' unless production.fetch('USEPOD_REVIEW_MODEL')['value'] == 'deepseek-v4-flash'
 abort 'runtime routes are not independent' if production.fetch('USEPOD_MODEL')['value'] == production.fetch('USEPOD_REVIEW_MODEL')['value']
 abort 'runtime UsePod input ceiling drift' unless production.fetch('USEPOD_MAX_INPUT_PRICE_MICROUNITS')['value'] == '200000'
@@ -395,7 +395,7 @@ disk = services.find { |service| service['name'] == 'mizuki-coding-gateway' }.fe
 abort 'gateway disk is not mounted at /var/data' unless disk['mountPath'] == '/var/data' && disk['sizeGB'].to_i >= 1
 abort 'gateway is not pinned to UsePod' unless gateway.fetch('CODER_BACKEND')['value'] == 'usepod'
 abort 'gateway has an ambiguous legacy route setting' if gateway.key?('USEPOD_MODEL')
-abort 'gateway coding route drift' unless gateway.fetch('CODER_MODEL')['value'] == 'openai/gpt-oss-120b'
+abort 'gateway coding route drift' unless gateway.fetch('CODER_MODEL')['value'] == 'deepseek-v3.2'
 abort 'gateway UsePod token is not secret' unless gateway.fetch('USEPOD_API_KEY')['sync'] == false
 abort 'gateway auth token is not generated' unless gateway.fetch('CODER_AUTH_TOKEN')['generateValue'] == true
 abort 'gateway spend ledger is not persistent' unless gateway.fetch('LEDGER_PATH')['value'].start_with?('/var/data/')
@@ -623,7 +623,7 @@ if rg --hidden -i -n --glob '!verify.sh' --glob '!node_modules/**' --glob '!dist
 fi
 
 identity_matches=$(rg --hidden -n --glob '!verify.sh' --glob '!node_modules/**' --glob '!dist/**' --glob '!.next/**' --glob '!target/**' '/Users/|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' $scope || true)
-identity_matches=$(printf '%s\n' "$identity_matches" | rg -v 'example\.com|users\.noreply\.github\.com|pnpm-lock\.yaml' || true)
+identity_matches=$(printf '%s\n' "$identity_matches" | rg -v 'example\.com|users\.noreply\.github\.com|security@opencovenant\.org|pnpm-lock\.yaml' || true)
 if [ -n "$identity_matches" ]; then
   printf '%s\n' "$identity_matches" >&2
   echo 'Identity-sensitive content found' >&2

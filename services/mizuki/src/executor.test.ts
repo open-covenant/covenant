@@ -762,7 +762,7 @@ function gatewayReadiness(
       tariff: { ok: true, checkedAt, latencyMs: 18 },
     },
     failed: [],
-    model: 'openai/gpt-oss-120b',
+    model: 'deepseek-v3.2',
     backend: 'usepod',
     provider: 'e2b',
     persistentRuns: true,

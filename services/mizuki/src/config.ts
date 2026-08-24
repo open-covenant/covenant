@@ -122,7 +122,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     requireGithubApp: env.MIZUKI_REQUIRE_GITHUB_APP !== '0',
     usePodBaseUrl: env.USEPOD_BASE_URL ?? 'https://api.usepod.ai',
     usePodApiKey: env.USEPOD_API_KEY ?? '',
-    usePodImplementationModel: env.USEPOD_MODEL ?? 'openai/gpt-oss-120b',
+    usePodImplementationModel: env.USEPOD_MODEL ?? 'deepseek-v3.2',
     usePodModel:
       env.USEPOD_REVIEW_MODEL ?? (env.MIZUKI_PAYMENT_MODE === 'mock' ? 'deepseek-v4-flash' : ''),
     usePodInputUsdPerMillion: usePodInputPrice.usd,

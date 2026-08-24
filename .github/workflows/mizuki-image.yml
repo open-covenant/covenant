@@ -484,7 +484,31 @@ jobs:
           }
 
           get_release() {
-            api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG"
+            local release_json
+            if release_json=$(api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" 2>/dev/null); then
+              printf '%s\n' "$release_json"
+              return
+            fi
+
+            api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" | jq -ce \
+              --arg tag "$RELEASE_TAG" \
+              '[.[][] | select(.tag_name == $tag)] |
+               if length == 1 then .[0]
+               elif length == 0 then error("release not found")
+               else error("duplicate release tag")
+               end'
+          }
+
+          verify_draft_target() {
+            local release_json=$1
+            jq -e \
+              --arg tag "$RELEASE_TAG" \
+              --arg commit "$RESOLVED_COMMIT" \
+              '.tag_name == $tag and
+               .target_commitish == $commit and
+               .draft == true and
+               .immutable == false' \
+              <<< "$release_json" >/dev/null
           }
 
           verify_tag_target() {
@@ -632,9 +656,8 @@ jobs:
                 echo '::error::an immutable release appeared after the build; rerun to verify it without rebuilding'
                 exit 1
               fi
-              jq -e '.draft == true and .immutable == false' <<< "$release_json" >/dev/null
-              verify_tag_target
-            elif grep -q 'HTTP 404' release.error; then
+              verify_draft_target "$release_json"
+            elif grep -q 'release not found' release.error; then
               release_json=$(api --method POST "repos/$GITHUB_REPOSITORY/releases" \
                 -f tag_name="$RELEASE_TAG" \
                 -f target_commitish="$RESOLVED_COMMIT" \
@@ -643,8 +666,7 @@ jobs:
                 -F draft=true \
                 -F prerelease=false \
                 -f make_latest=false)
-              jq -e '.draft == true and .immutable == false' <<< "$release_json" >/dev/null
-              verify_tag_target
+              verify_draft_target "$release_json"
             else
               cat release.error >&2
               exit 1

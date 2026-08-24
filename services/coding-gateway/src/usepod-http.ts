@@ -19,6 +19,7 @@ const MAX_RECEIPT_MICROUNITS = BigInt(Math.floor(Number.MAX_SAFE_INTEGER / 30));
 const MAX_CATALOG_BYTES = 1_048_576;
 const MAX_CATALOG_MODELS = 10_000;
 const MAX_BALANCE_BYTES = 16_384;
+const MAX_COMPLETION_BYTES = 2_097_152;
 
 export function usePodUrl(config: UsePodRequestConfig, path: string): string {
   return usePodProxyUrl(config, `v1/${path.replace(/^\/+/, '')}`);
@@ -49,6 +50,11 @@ export function usePodHeaders(config: UsePodRequestConfig): Record<string, strin
     'x-pod-max-price-input': String(config.maxInputPriceMicrounits),
     'x-pod-max-price-output': String(config.maxOutputPriceMicrounits),
   };
+}
+
+export async function parseUsePodCompletion(response: Response): Promise<Record<string, unknown>> {
+  const raw = await boundedBody(response, MAX_COMPLETION_BYTES, 'completion');
+  return uniqueTopLevelObject(raw, 'UsePod completion');
 }
 
 export function providerReceipt(

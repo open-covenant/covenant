@@ -623,7 +623,7 @@ if rg --hidden -i -n --glob '!verify.sh' --glob '!node_modules/**' --glob '!dist
 fi
 
 identity_matches=$(rg --hidden -n --glob '!verify.sh' --glob '!node_modules/**' --glob '!dist/**' --glob '!.next/**' --glob '!target/**' '/Users/|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' $scope || true)
-identity_matches=$(printf '%s\n' "$identity_matches" | rg -v 'example\.com|users\.noreply\.github\.com|pnpm-lock\.yaml' || true)
+identity_matches=$(printf '%s\n' "$identity_matches" | rg -v 'example\.com|users\.noreply\.github\.com|security@opencovenant\.org|pnpm-lock\.yaml' || true)
 if [ -n "$identity_matches" ]; then
   printf '%s\n' "$identity_matches" >&2
   echo 'Identity-sensitive content found' >&2

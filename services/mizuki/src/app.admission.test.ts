@@ -684,7 +684,7 @@ describe('public route responses', () => {
       dependencies(store, {
         config: {
           publicBaseUrl: 'https://mizuki-api.onrender.com',
-          webOrigin: 'https://mizuki.covenant.org',
+          webOrigin: 'https://mizuki.opencovenant.org',
           trustedProxyHops: 1,
           webProxySecret: proxySecret,
         },
@@ -704,7 +704,7 @@ describe('public route responses', () => {
     });
 
     expect(response.status).toBe(302);
-    expect(response.headers.get('location')).toBe('https://mizuki.covenant.org/bounties');
+    expect(response.headers.get('location')).toBe('https://mizuki.opencovenant.org/bounties');
     expect(response.headers.get('set-cookie')).toContain('; Secure');
   });
 

@@ -71,7 +71,7 @@ services:
           name: mizuki-runtime-production
           envVarKey: RENDER_EXTERNAL_URL
       - key: MIZUKI_WEB_ORIGIN
-        value: https://mizuki.covenant.org
+        value: https://mizuki.opencovenant.org
       - key: MIZUKI_TRUSTED_PROXY_HOPS
         value: '1'
       - key: MIZUKI_RATE_LIMIT_MAX_SOURCES
@@ -402,7 +402,7 @@ services:
     startCommand: pnpm --filter @mizuki/web start
     healthCheckPath: /healthz
     domains:
-      - mizuki.covenant.org
+      - mizuki.opencovenant.org
     envVars:
       - key: NODE_ENV
         value: production
@@ -421,7 +421,7 @@ services:
           name: mizuki-runtime-production
           envVarKey: MIZUKI_WEB_PROXY_SECRET
       - key: NEXT_PUBLIC_MIZUKI_APP_URL
-        value: https://mizuki.covenant.org
+        value: https://mizuki.opencovenant.org
       - key: NEXT_PUBLIC_MIZUKI_GITHUB_OAUTH_URL
         value: /api/mizuki/v1/auth/github
       - key: NEXT_PUBLIC_MIZUKI_TOKEN_URL

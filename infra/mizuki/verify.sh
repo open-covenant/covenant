@@ -567,8 +567,8 @@ core_app = JSON.parse(File.read('infra/mizuki/github-apps/core.manifest.json'))
 verifier_app = JSON.parse(File.read('infra/mizuki/github-apps/policy-verifier.manifest.json'))
 updater_app = JSON.parse(File.read('infra/mizuki/github-apps/updater.manifest.json'))
 abort 'core App must be public' unless core_app['public'] == true
-abort 'core App callback drift' unless core_app['callback_urls'] == ['https://mizuki.covenant.org/api/mizuki/v1/auth/github/callback']
-abort 'core App webhook drift' unless core_app.dig('hook_attributes', 'url') == 'https://mizuki.covenant.org/api/mizuki/v1/github/webhook'
+abort 'core App callback drift' unless core_app['callback_urls'] == ['https://mizuki.opencovenant.org/api/mizuki/v1/auth/github/callback']
+abort 'core App webhook drift' unless core_app.dig('hook_attributes', 'url') == 'https://mizuki.opencovenant.org/api/mizuki/v1/github/webhook'
 abort 'core App permission drift' unless core_app['default_permissions'] == {
   'checks' => 'read',
   'contents' => 'write',

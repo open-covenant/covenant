@@ -1,6 +1,6 @@
 {
   "name": "Mizuki Updater",
-  "url": "https://mizuki.covenant.org",
+  "url": "https://mizuki.opencovenant.org",
   "description": "Protected-branch upgrade pull requests, required-check verification, and merge.",
   "public": false,
   "request_oauth_on_install": false,

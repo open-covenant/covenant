@@ -10,14 +10,14 @@ describe('Mizuki API proxy', () => {
   it('replaces untrusted context with the validated Cloudflare address on Render', async () => {
     vi.stubEnv('MIZUKI_API_URL', 'https://mizuki-api.onrender.com');
     vi.stubEnv('MIZUKI_WEB_PROXY_SECRET', 'p'.repeat(32));
-    vi.stubEnv('NEXT_PUBLIC_MIZUKI_APP_URL', 'https://mizuki.covenant.org');
+    vi.stubEnv('NEXT_PUBLIC_MIZUKI_APP_URL', 'https://mizuki.opencovenant.org');
     const upstream = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
       Response.json({ ok: true }, { headers: { 'set-cookie': 'session=upstream' } }),
     );
     vi.stubGlobal('fetch', upstream);
 
     const response = await POST(
-      new Request('https://mizuki.covenant.org/api/mizuki/v1/quotes?source=web', {
+      new Request('https://mizuki.opencovenant.org/api/mizuki/v1/quotes?source=web', {
         method: 'POST',
         headers: {
           authorization: 'Bearer public-token',
@@ -52,7 +52,7 @@ describe('Mizuki API proxy', () => {
     const upstream = vi.fn();
     vi.stubGlobal('fetch', upstream);
     const unavailable = await GET(
-      new Request('https://mizuki.covenant.org/api/mizuki/v1/activity'),
+      new Request('https://mizuki.opencovenant.org/api/mizuki/v1/activity'),
       { params: Promise.resolve({ path: ['v1', 'activity'] }) },
     );
     expect(unavailable.status).toBe(503);
@@ -64,7 +64,7 @@ describe('Mizuki API proxy', () => {
       vi.fn(async () => Response.json({ events: [] })),
     );
     await GET(
-      new Request('https://mizuki.covenant.org/api/mizuki/v1/activity', {
+      new Request('https://mizuki.opencovenant.org/api/mizuki/v1/activity', {
         headers: {
           'cf-connecting-ip': 'not-an-ip',
           'x-forwarded-for': '198.51.100.1',
@@ -76,7 +76,7 @@ describe('Mizuki API proxy', () => {
     expect(new Headers(replacement?.headers).get('x-mizuki-client-ip')).toBeNull();
 
     await GET(
-      new Request('https://mizuki.covenant.org/api/mizuki/v1/activity', {
+      new Request('https://mizuki.opencovenant.org/api/mizuki/v1/activity', {
         headers: { 'x-forwarded-for': '198.51.100.2' },
       }),
       { params: Promise.resolve({ path: ['v1', 'activity'] }) },
@@ -92,17 +92,23 @@ describe('Mizuki API proxy', () => {
     vi.stubGlobal('fetch', upstream);
     vi.stubEnv('MIZUKI_WEB_PROXY_SECRET', 'é'.repeat(15));
 
-    const rejected = await GET(new Request('https://mizuki.covenant.org/api/mizuki/v1/activity'), {
-      params: Promise.resolve({ path: ['v1', 'activity'] }),
-    });
+    const rejected = await GET(
+      new Request('https://mizuki.opencovenant.org/api/mizuki/v1/activity'),
+      {
+        params: Promise.resolve({ path: ['v1', 'activity'] }),
+      },
+    );
     expect(rejected.status).toBe(503);
     expect(upstream).not.toHaveBeenCalled();
 
     const secret = 'é'.repeat(16);
     vi.stubEnv('MIZUKI_WEB_PROXY_SECRET', secret);
-    const accepted = await GET(new Request('https://mizuki.covenant.org/api/mizuki/v1/activity'), {
-      params: Promise.resolve({ path: ['v1', 'activity'] }),
-    });
+    const accepted = await GET(
+      new Request('https://mizuki.opencovenant.org/api/mizuki/v1/activity'),
+      {
+        params: Promise.resolve({ path: ['v1', 'activity'] }),
+      },
+    );
     expect(accepted.status).toBe(200);
     expect(new Headers(upstream.mock.calls[0][1]?.headers).get('x-mizuki-proxy-secret')).toBe(
       secret,
@@ -115,7 +121,7 @@ describe('Mizuki API proxy', () => {
     vi.stubGlobal('fetch', upstream);
 
     const response = await POST(
-      new Request('https://mizuki.covenant.org/api/mizuki/v1/quotes', {
+      new Request('https://mizuki.opencovenant.org/api/mizuki/v1/quotes', {
         method: 'POST',
         headers: { 'content-length': '64001', 'content-type': 'application/json' },
         body: '{}',
@@ -168,7 +174,7 @@ describe('Mizuki API proxy', () => {
     const accepted = await POST(
       streamedRequest(
         [1_000_000],
-        'https://mizuki.covenant.org/api/mizuki/v1/github/webhook',
+        'https://mizuki.opencovenant.org/api/mizuki/v1/github/webhook',
         headers,
       ),
       { params: Promise.resolve({ path }) },
@@ -184,7 +190,7 @@ describe('Mizuki API proxy', () => {
     const rejected = await POST(
       streamedRequest(
         [1_000_000, 1],
-        'https://mizuki.covenant.org/api/mizuki/v1/github/webhook',
+        'https://mizuki.opencovenant.org/api/mizuki/v1/github/webhook',
         headers,
       ),
       { params: Promise.resolve({ path }) },
@@ -199,7 +205,7 @@ describe('Mizuki API proxy', () => {
 
 function streamedRequest(
   chunkSizes: number[],
-  url = 'https://mizuki.covenant.org/api/mizuki/v1/quotes',
+  url = 'https://mizuki.opencovenant.org/api/mizuki/v1/quotes',
   headers: HeadersInit = { 'content-type': 'application/octet-stream' },
 ): Request {
   const body = new ReadableStream<Uint8Array>({

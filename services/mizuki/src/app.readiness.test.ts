@@ -279,8 +279,10 @@ describe('service readiness endpoint', () => {
 describe('deployment readiness endpoint', () => {
   it('serves a strict authenticated functional readiness receipt', async () => {
     const token = 'd'.repeat(32);
+    const check = vi.fn(async () => ({ ready: false }));
+    const checkApplication = vi.fn(async () => ({ ready: true }));
     const base = await serve(
-      { check: vi.fn(async () => ({ ready: true })) } as unknown as ServiceReadiness,
+      { check, checkApplication } as unknown as ServiceReadiness,
       new MemoryStore(),
       token,
     );
@@ -301,12 +303,14 @@ describe('deployment readiness endpoint', () => {
         settlement: 'ok',
       },
     });
+    expect(checkApplication).toHaveBeenCalledTimes(1);
+    expect(check).not.toHaveBeenCalled();
   });
 
   it('fails the functional receipt when any dependency is unready', async () => {
     const token = 'd'.repeat(32);
     const base = await serve(
-      { check: vi.fn(async () => ({ ready: false })) } as unknown as ServiceReadiness,
+      { checkApplication: vi.fn(async () => ({ ready: false })) } as unknown as ServiceReadiness,
       new MemoryStore(),
       token,
     );

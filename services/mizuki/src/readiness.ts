@@ -14,7 +14,12 @@ export const serviceDependencies = [
 ] as const;
 
 export type ServiceDependency = (typeof serviceDependencies)[number];
+export type ApplicationDependency = Exclude<ServiceDependency, 'updater'>;
 export type ReadinessProbe = () => Promise<unknown>;
+
+export const applicationDependencies: readonly ApplicationDependency[] = serviceDependencies.filter(
+  (name): name is ApplicationDependency => name !== 'updater',
+);
 
 const atomicSchema = z
   .string()
@@ -47,15 +52,18 @@ export interface DependencyEvidence {
   refundProtection?: RefundProtectionEvidence;
 }
 
-export interface ServiceReadinessReport {
+interface ReadinessReport<Dependency extends ServiceDependency> {
   ready: boolean;
   checkedAt: string;
   ageMs: number;
   lastSuccessfulAt: string | null;
   lastSuccessfulAgeMs: number | null;
-  dependencies: Record<ServiceDependency, DependencyEvidence>;
-  failed: Array<ServiceDependency | 'stale'>;
+  dependencies: Record<Dependency, DependencyEvidence>;
+  failed: Array<Dependency | 'stale'>;
 }
+
+export type ServiceReadinessReport = ReadinessReport<ServiceDependency>;
+export type ApplicationReadinessReport = ReadinessReport<ApplicationDependency>;
 
 interface Options {
   refreshMs: number;
@@ -65,17 +73,22 @@ interface Options {
   now?: () => number;
 }
 
-interface Snapshot {
+interface Snapshot<Dependency extends ServiceDependency> {
   checkedAtMs: number;
   lastSuccessfulAtMs?: number;
-  dependencies: Record<ServiceDependency, DependencyEvidence>;
+  dependencies: Record<Dependency, DependencyEvidence>;
+}
+
+interface ScopeState<Dependency extends ServiceDependency> {
+  snapshot?: Snapshot<Dependency>;
+  inFlight?: Promise<Snapshot<Dependency>>;
 }
 
 export class ServiceReadiness {
   private readonly now: () => number;
   private readonly failureRetryMs: number;
-  private snapshot?: Snapshot;
-  private inFlight?: Promise<Snapshot>;
+  private readonly operatorState: ScopeState<ServiceDependency> = {};
+  private readonly applicationState: ScopeState<ApplicationDependency> = {};
 
   constructor(
     private readonly probes: Record<ServiceDependency, ReadinessProbe>,
@@ -92,41 +105,53 @@ export class ServiceReadiness {
   }
 
   async check(): Promise<ServiceReadinessReport> {
-    const cached = this.snapshot;
-    if (cached) {
-      const age = this.age(cached);
-      const ready = serviceDependencies.every((name) => cached.dependencies[name].ok);
-      const ttl = ready ? this.options.refreshMs : this.failureRetryMs;
-      if (age <= ttl) return this.report(cached);
-    }
+    return this.checkScope(serviceDependencies, this.operatorState);
+  }
 
-    this.inFlight ??= this.refresh().finally(() => {
-      this.inFlight = undefined;
-    });
-    return this.report(await this.inFlight);
+  async checkApplication(): Promise<ApplicationReadinessReport> {
+    return this.checkScope(applicationDependencies, this.applicationState);
   }
 
   latest(): ServiceReadinessReport | undefined {
-    return this.snapshot ? this.report(this.snapshot) : undefined;
+    const snapshot = this.operatorState.snapshot;
+    return snapshot ? this.report(snapshot, serviceDependencies) : undefined;
   }
 
-  private async refresh(): Promise<Snapshot> {
+  private async checkScope<Dependency extends ServiceDependency>(
+    dependencies: readonly Dependency[],
+    state: ScopeState<Dependency>,
+  ): Promise<ReadinessReport<Dependency>> {
+    const cached = state.snapshot;
+    if (cached) {
+      const age = this.age(cached);
+      const ready = dependencies.every((name) => cached.dependencies[name].ok);
+      const ttl = ready ? this.options.refreshMs : this.failureRetryMs;
+      if (age <= ttl) return this.report(cached, dependencies);
+    }
+
+    state.inFlight ??= this.refresh(dependencies, state).finally(() => {
+      state.inFlight = undefined;
+    });
+    return this.report(await state.inFlight, dependencies);
+  }
+
+  private async refresh<Dependency extends ServiceDependency>(
+    scope: readonly Dependency[],
+    state: ScopeState<Dependency>,
+  ): Promise<Snapshot<Dependency>> {
     const entries = await Promise.all(
-      serviceDependencies.map(async (name) => [name, await this.probe(name)] as const),
+      scope.map(async (name) => [name, await this.probe(name)] as const),
     );
-    const dependencies = Object.fromEntries(entries) as Record<
-      ServiceDependency,
-      DependencyEvidence
-    >;
+    const dependencies = Object.fromEntries(entries) as Record<Dependency, DependencyEvidence>;
     const checkedAtMs = this.now();
     const snapshot = {
       checkedAtMs,
-      lastSuccessfulAtMs: serviceDependencies.every((name) => dependencies[name].ok)
+      lastSuccessfulAtMs: scope.every((name) => dependencies[name].ok)
         ? checkedAtMs
-        : this.snapshot?.lastSuccessfulAtMs,
+        : state.snapshot?.lastSuccessfulAtMs,
       dependencies,
     };
-    this.snapshot = snapshot;
+    state.snapshot = snapshot;
     return snapshot;
   }
 
@@ -156,8 +181,11 @@ export class ServiceReadiness {
     };
   }
 
-  private report(snapshot: Snapshot): ServiceReadinessReport {
-    const failed: Array<ServiceDependency | 'stale'> = serviceDependencies.filter(
+  private report<Dependency extends ServiceDependency>(
+    snapshot: Snapshot<Dependency>,
+    dependencies: readonly Dependency[],
+  ): ReadinessReport<Dependency> {
+    const failed: Array<Dependency | 'stale'> = dependencies.filter(
       (name) => !snapshot.dependencies[name].ok,
     );
     const lastSuccessfulAgeMs =
@@ -181,7 +209,7 @@ export class ServiceReadiness {
     };
   }
 
-  private age(snapshot: Snapshot): number {
+  private age<Dependency extends ServiceDependency>(snapshot: Snapshot<Dependency>): number {
     return Math.max(0, this.now() - snapshot.checkedAtMs);
   }
 }

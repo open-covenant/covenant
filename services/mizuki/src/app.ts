@@ -80,7 +80,7 @@ export function createApp(deps: AppDependencies) {
         if (!admin(req, deps.config.releaseProbeToken)) {
           return json(res, 401, { error: 'unauthorized' });
         }
-        const report = await deps.readiness.check();
+        const report = await deps.readiness.checkApplication();
         if (!report.ready) return json(res, 503, { status: 'unavailable' });
         return json(res, 200, {
           status: 'ok',

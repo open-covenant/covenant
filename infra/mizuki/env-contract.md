@@ -68,6 +68,7 @@ Store `authority_seed` as the API secret and the command output as the signer pu
 | `MIZUKI_SESSION_SECRET`                                                    | Generated secret       | At least 32 characters; absent from signer, gateway, and updater.                                                               |
 | `MIZUKI_WEB_PROXY_SECRET`                                                  | Generated service link | At least 32 UTF-8 bytes; only an exact match authenticates web-provided client context.                                         |
 | `MIZUKI_UPDATER_URL` / `MIZUKI_UPDATER_TOKEN`                              | Private service links  | Authenticated read works; proposal submission with this token returns unauthorized.                                             |
+| `MIZUKI_UPDATER_TIMEOUT_MS`                                                | Fixed duration         | `15000`; gives the `10000` application request headroom and fails before the `20000` outer readiness bound.                     |
 | `MIZUKI_INTERNAL_REPOS`                                                    | Fixed list             | Contains every operator-controlled repository so they cannot count as external traction.                                        |
 
 The GitHub App needs repository Contents read/write, Issues read, Pull requests read/write, Checks read, and Metadata read. Subscribe only to Pull request events. Public v1 intake remains installation- and label-authorized; Mizuki never opens unsolicited PRs.
@@ -146,6 +147,10 @@ The committed all-zero digest is an intentionally non-deployable bootstrap senti
 Production-owned provider, GitHub App, job-authority, signer, updater, live-payment, and production-probe settings are absent from shadow. `MIZUKI_RUNTIME_ROLE=shadow` makes the process reject any such setting, requires mock payments and disables the GitHub App, requires isolated durable storage, and prevents either admission control from being opened. Shadow retains only its own database, admin token, session secret, and web-proxy secret. Its private `/deployz` probe accepts exact `{ "ok": true }`, which proves the candidate booted, migrated and read its isolated database, and found both durable controls closed without giving candidate code an external authority.
 
 `MIZUKI_DEPLOY_PRODUCTION_PROBE_TOKEN` is generated on the controller and linked only to production as `MIZUKI_RELEASE_PROBE_TOKEN`. The controller's route token is separate. Production `MIZUKI_PUBLIC_BASE_URL` follows its Render-provided `RENDER_EXTERNAL_URL`; set controller `MIZUKI_DEPLOY_PRODUCTION_PROBE_URL` to that exact HTTPS origin plus `/internal/mizuki/functional-readiness`. The fixed tokenless shadow probe is `http://mizuki-runtime-shadow:10000/deployz` on the private network.
+
+The production functional probe checks every runtime readiness dependency except the updater. Operator `/readyz`, public-control opening, and paid-job admission continue to require the full updater-inclusive report. Updater readiness still authenticates the controller's complete `/readyz`, including strict production application probing, so the graph terminates at the independently cached functional scope without weakening deployment or rollback evidence.
+
+The updater's `90000` deployment-hook timeout remains available to mutating promotion and rollback calls. It is not the core readiness allowance: a controller readiness traversal that does not finish inside the runtime's `15000` updater request budget fails the operator report closed.
 
 ## Updater
 

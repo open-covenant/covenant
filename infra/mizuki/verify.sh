@@ -268,6 +268,7 @@ abort 'runtime gateway URL is not private service discovery' unless service_ref(
 abort 'runtime gateway token is not linked to gateway' unless service_ref(production.fetch('MIZUKI_CODING_GATEWAY_TOKEN'), 'mizuki-coding-gateway', 'CODER_AUTH_TOKEN')
 abort 'runtime updater URL is not private service discovery' unless service_ref(production.fetch('MIZUKI_UPDATER_URL'), 'mizuki-updater')
 abort 'runtime updater token is not read-only' unless service_ref(production.fetch('MIZUKI_UPDATER_TOKEN'), 'mizuki-updater', 'MIZUKI_UPDATER_READ_TOKEN')
+abort 'runtime updater timeout drift' unless production.fetch('MIZUKI_UPDATER_TIMEOUT_MS')['value'] == '15000'
 abort 'runtime payment recipient is not the signer refund treasury' unless service_ref(production.fetch('MIZUKI_PAY_TO'), 'mizuki-policy-signer', 'MIZUKI_REFUND_TREASURY')
 abort 'runtime escrow refund destination is not the isolated escrow authority' unless service_ref(production.fetch('MIZUKI_ESCROW_REFUND_TO'), 'mizuki-policy-signer', 'MIZUKI_ESCROW_AUTHORITY')
 abort 'runtime x402 facilitator is not pinned to HTTPS' unless URI(production.fetch('MIZUKI_X402_FACILITATOR')['value']).scheme == 'https'
@@ -343,6 +344,10 @@ abort 'legacy shared application probe token present' if controller.key?('MIZUKI
 abort 'deployment Render timeout drift' unless controller.fetch('MIZUKI_DEPLOY_RENDER_TIMEOUT_MS')['value'] == '20000'
 abort 'deployment artifact timeout drift' unless controller.fetch('MIZUKI_DEPLOY_ARTIFACT_TIMEOUT_MS')['value'] == '30000'
 abort 'deployment probe timeout drift' unless controller.fetch('MIZUKI_DEPLOY_PROBE_TIMEOUT_MS')['value'] == '10000'
+application_probe_timeout = Integer(controller.fetch('MIZUKI_DEPLOY_PROBE_TIMEOUT_MS').fetch('value'), 10)
+updater_timeout = Integer(production.fetch('MIZUKI_UPDATER_TIMEOUT_MS').fetch('value'), 10)
+readiness_timeout = Integer(production.fetch('MIZUKI_READINESS_TIMEOUT_MS').fetch('value'), 10)
+abort 'application/updater/readiness timeout ladder drift' unless application_probe_timeout < updater_timeout && updater_timeout < readiness_timeout
 abort 'deployment reconciliation grace drift' unless controller.fetch('MIZUKI_DEPLOY_RECONCILIATION_GRACE_MS')['value'] == '120000'
 abort 'deployment minimum promotion age drift' unless controller.fetch('MIZUKI_DEPLOY_MIN_PROMOTION_AGE_MS')['value'] == '10800000'
 updater_authorities = %w[MIZUKI_UPDATER_SUBMIT_TOKEN MIZUKI_UPDATER_CONTROL_TOKEN MIZUKI_UPDATER_READ_TOKEN]

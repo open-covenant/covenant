@@ -49,6 +49,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
   const readinessRefreshMs = duration(env.MIZUKI_READINESS_REFRESH_MS, 30_000);
   const readinessMaxAgeMs = duration(env.MIZUKI_READINESS_MAX_AGE_MS, 90_000);
   const readinessTimeoutMs = duration(env.MIZUKI_READINESS_TIMEOUT_MS, 20_000);
+  const updaterTimeoutMs = duration(env.MIZUKI_UPDATER_TIMEOUT_MS, 15_000);
   const escrowReadinessMinLamports = atomic(
     env.MIZUKI_ESCROW_READINESS_MIN_LAMPORTS,
     '1000000000',
@@ -59,6 +60,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
   }
   if (readinessTimeoutMs > readinessMaxAgeMs) {
     throw new Error('MIZUKI_READINESS_TIMEOUT_MS must not exceed the maximum evidence age');
+  }
+  if (updaterUrl && updaterTimeoutMs >= readinessTimeoutMs) {
+    throw new Error('MIZUKI_UPDATER_TIMEOUT_MS must be shorter than MIZUKI_READINESS_TIMEOUT_MS');
   }
   const usePodInputPrice = usdPerMillionPrice(
     env.USEPOD_INPUT_USD_PER_MILLION,
@@ -95,7 +99,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     codingGatewayToken: env.MIZUKI_CODING_GATEWAY_TOKEN,
     updaterUrl,
     updaterToken,
-    updaterTimeoutMs: duration(env.MIZUKI_UPDATER_TIMEOUT_MS, 8_000),
+    updaterTimeoutMs,
     updaterPollIntervalMs: duration(env.MIZUKI_UPDATER_POLL_INTERVAL_MS, 60_000),
     paymentMode: env.MIZUKI_PAYMENT_MODE === 'mock' ? ('mock' as const) : ('live' as const),
     payTo: env.MIZUKI_PAY_TO ?? '',
@@ -200,6 +204,9 @@ export function liveConfigIssues(config: Config): string[] {
   requireSecret(missing, 'MIZUKI_WEB_PROXY_SECRET', config.webProxySecret);
   requirePrivateService(missing, 'MIZUKI_UPDATER_URL', config.updaterUrl);
   requireSecret(missing, 'MIZUKI_UPDATER_TOKEN', config.updaterToken);
+  if (config.updaterTimeoutMs < 15_000) {
+    missing.push('MIZUKI_UPDATER_TIMEOUT_MS must be at least 15000');
+  }
 
   if (!config.trustedProxyConfigured || config.trustedProxyHops !== 1) {
     missing.push('MIZUKI_TRUSTED_PROXY_HOPS=1');

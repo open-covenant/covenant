@@ -172,7 +172,7 @@ services:
           name: mizuki-updater
           envVarKey: MIZUKI_UPDATER_READ_TOKEN
       - key: MIZUKI_UPDATER_TIMEOUT_MS
-        value: '8000'
+        value: '15000'
       - key: MIZUKI_UPDATER_POLL_INTERVAL_MS
         value: '60000'
       - key: MIZUKI_GITHUB_APP_ID

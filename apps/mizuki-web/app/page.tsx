@@ -47,7 +47,7 @@ export default async function HomePage() {
               Public repositories · $2 or $10 fixed price · x402 USDC · no unsolicited pull requests
             </p>
           </div>
-          <aside className="hero-visual" aria-label="Mizuki's guarantee">
+          <div className="hero-visual" aria-label="Mizuki">
             <Image
               src="/mizuki-avatar.jpg"
               alt="Mizuki"
@@ -56,8 +56,18 @@ export default async function HomePage() {
               className="hero-portrait"
               priority
             />
-            <div className="hero-proof">
-              <div className="proof-label">The maintenance contract</div>
+          </div>
+        </div>
+      </section>
+
+      <section className="maintenance-contract" aria-labelledby="maintenance-contract-title">
+        <div className="shell maintenance-contract-grid">
+          <header className="maintenance-contract-heading">
+            <p className="eyebrow">Fixed-price guarantee</p>
+            <h2 id="maintenance-contract-title">The maintenance contract</h2>
+          </header>
+          <div className="maintenance-contract-body">
+            <div className="contract-outcomes">
               <div className="proof-outcome">
                 <span>01</span>
                 <div>
@@ -73,14 +83,14 @@ export default async function HomePage() {
                   <p>Returned to the original payer by a separate policy signer.</p>
                 </div>
               </div>
-              <div className="proof-footer">
-                <span className="shield-mark" aria-hidden="true">
-                  ✓
-                </span>
-                <span>Financial policy cannot be changed by Mizuki</span>
-              </div>
             </div>
-          </aside>
+            <div className="proof-footer">
+              <span className="shield-mark" aria-hidden="true">
+                ✓
+              </span>
+              <span>Financial policy cannot be changed by Mizuki</span>
+            </div>
+          </div>
         </div>
       </section>
 

@@ -298,7 +298,7 @@ textarea:focus-visible {
   max-width: 820px;
   margin: 0;
   font-size: clamp(44px, 5.3vw, 74px);
-  font-weight: 300;
+  font-weight: 200;
   letter-spacing: 0.015em;
   line-height: 1.02;
   text-transform: uppercase;
@@ -307,7 +307,7 @@ textarea:focus-visible {
 .hero h1 em {
   color: #a3a3a3;
   font-style: normal;
-  font-weight: 300;
+  font-weight: 200;
 }
 
 .hero-lede {
@@ -406,40 +406,46 @@ textarea:focus-visible {
   mask-image: radial-gradient(circle at center, #000 42%, rgba(0, 0, 0, 0.7) 61%, transparent 76%);
 }
 
-.hero-proof {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  width: min(430px, 88%);
-  padding: 22px;
-  border: 1px solid #2b2b2b;
-  border-radius: 3px;
-  background: rgba(3, 3, 3, 0.9);
-  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.48);
-  backdrop-filter: blur(14px);
+.maintenance-contract {
+  border-block: 1px solid var(--line);
+  background: #050505;
 }
 
-.hero-proof::before {
-  position: absolute;
-  top: -5px;
-  right: 26px;
-  width: 54px;
-  height: 10px;
-  border-radius: 99px;
-  background: #d4d4d4;
-  content: '';
+.maintenance-contract-grid {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.55fr) minmax(0, 1.45fr);
 }
 
-.proof-label {
-  margin-bottom: 24px;
-  color: #747c81;
-  font:
-    700 10px/1 ui-monospace,
-    SFMono-Regular,
-    Menlo,
-    monospace;
-  letter-spacing: 0.12em;
+.maintenance-contract-heading {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 36px 36px 36px 0;
+  border-right: 1px solid var(--line);
+}
+
+.maintenance-contract-heading .eyebrow {
+  margin-bottom: 15px;
+}
+
+.maintenance-contract-heading h2 {
+  max-width: 320px;
+  margin: 0;
+  font-size: clamp(25px, 2.5vw, 36px);
+  font-weight: 200;
+  letter-spacing: 0.08em;
+  line-height: 1.08;
   text-transform: uppercase;
+}
+
+.maintenance-contract-body {
+  padding: 28px 0 28px 36px;
+}
+
+.contract-outcomes {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
 }
 
 .proof-outcome {
@@ -487,7 +493,7 @@ textarea:focus-visible {
   position: relative;
   z-index: 1;
   width: 34px;
-  margin: -5px auto;
+  margin: 0 -5px;
   padding: 5px 0;
   border: 1px solid #363d45;
   border-radius: 999px;
@@ -506,7 +512,7 @@ textarea:focus-visible {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-top: 19px;
+  margin-top: 14px;
   color: #8d9497;
   font-size: 11px;
 }
@@ -740,9 +746,10 @@ textarea:focus-visible {
 .traction-heading h3 {
   margin: 0;
   font-size: clamp(25px, 3.3vw, 40px);
-  font-weight: 670;
-  letter-spacing: -0.045em;
-  line-height: 1.05;
+  font-weight: 200;
+  letter-spacing: 0.035em;
+  line-height: 1.08;
+  text-transform: uppercase;
 }
 
 .traction-heading > p {
@@ -871,7 +878,7 @@ textarea:focus-visible {
   max-width: 760px;
   margin: 0;
   font-size: clamp(32px, 4.2vw, 54px);
-  font-weight: 300;
+  font-weight: 200;
   letter-spacing: 0.035em;
   line-height: 1.08;
   text-transform: uppercase;
@@ -1613,7 +1620,7 @@ textarea:focus-visible {
   max-width: 850px;
   margin: 0;
   font-size: clamp(42px, 6vw, 76px);
-  font-weight: 300;
+  font-weight: 200;
   letter-spacing: 0.025em;
   line-height: 1.02;
   text-transform: uppercase;
@@ -3225,10 +3232,6 @@ textarea:focus-visible {
     margin-inline: auto;
   }
 
-  .hero-proof {
-    width: min(430px, 88%);
-  }
-
   .metric-strip {
     grid-template-columns: repeat(3, 1fr);
   }
@@ -3404,19 +3407,34 @@ textarea:focus-visible {
   }
 
   .hero-visual {
-    min-height: 540px;
+    min-height: 460px;
   }
 
   .hero-portrait {
     width: min(520px, 118%);
-    transform: translate(-50%, -58%);
+    transform: translate(-50%, -50%);
   }
 
-  .hero-proof {
-    right: 50%;
-    width: min(430px, 96%);
-    padding: 17px;
-    transform: translateX(50%);
+  .maintenance-contract-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .maintenance-contract-heading {
+    padding: 32px 0 26px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .maintenance-contract-body {
+    padding: 26px 0 32px;
+  }
+
+  .contract-outcomes {
+    grid-template-columns: 1fr;
+  }
+
+  .proof-or {
+    margin: -5px auto;
   }
 
   .metric-strip {

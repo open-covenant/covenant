@@ -1117,10 +1117,10 @@ export class PostgresStore implements MizukiStore {
           )
         : await this.pool.query<{ payload: ContributorEscrow }>(
             `UPDATE mizuki_contributor_escrows
-           SET state = $3, revision = $4, updated_at = $6, payload = $7::jsonb
-           WHERE id = $1 AND revision = $4 - 1
+           SET state = $2, revision = $3, updated_at = $4, payload = $5::jsonb
+           WHERE id = $1 AND revision = $3 - 1
            RETURNING payload`,
-            values,
+            [escrow.id, escrow.state, escrow.revision, escrow.updatedAt, JSON.stringify(escrow)],
           );
     if (result.rows[0]) return result.rows[0].payload;
 

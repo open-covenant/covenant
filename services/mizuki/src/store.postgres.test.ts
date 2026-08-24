@@ -1,7 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createRescueBounty } from './domain/index.js';
+import {
+  createContributorEscrow,
+  createRescueBounty,
+  transitionContributorEscrow,
+} from './domain/index.js';
 import { COMMERCIAL_CORE_SCHEMA_V1, PostgresStore, StateConflictError } from './store.js';
 import type { Quote } from './types.js';
 
@@ -104,6 +108,40 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
       generation: 1,
       predecessorBountyId: first.id,
     });
+  });
+
+  it('persists contributor escrow state transitions', async () => {
+    const quote = await saveQuote(store);
+    const { job } = await store.createJob(
+      quote,
+      { payer: '7'.repeat(32), transaction: 'settlement-7', amountAtomic: '2000000' },
+      `escrow-${randomUUID()}`,
+    );
+    const createdBounty = bounty(job.id, quote, 0);
+    await store.createBounty(createdBounty);
+    const requested = createContributorEscrow({
+      id: randomUUID(),
+      bountyId: createdBounty.id,
+      repository: `${quote.owner}/${quote.repo}`,
+      issueNumber: quote.issueNumber,
+      issueTitle: quote.issueTitle,
+      issueBody: quote.issueBody,
+      baseRef: quote.defaultBranch,
+      baseSha: quote.baseSha,
+      reviewPolicy: { version: 1, model: 'independent-reviewer', maxFiles: 3 },
+      amountCents: 1_000,
+      acceptanceHash: 'a'.repeat(64),
+      expiresAt: '2099-01-02T00:00:00.000Z',
+      at: '2099-01-01T00:00:00.000Z',
+    });
+    await store.saveEscrow(requested);
+    const funding = transitionContributorEscrow(requested, 'funding', {
+      expectedRevision: requested.revision,
+      at: '2099-01-01T00:01:00.000Z',
+    });
+
+    await expect(store.saveEscrow(funding)).resolves.toEqual(funding);
+    await expect(store.escrow(requested.id)).resolves.toEqual(funding);
   });
 
   it('retries failed webhook work and rejects stale lease completion', async () => {

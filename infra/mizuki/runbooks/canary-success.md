@@ -22,7 +22,7 @@ Abort if any precondition is false. Do not improvise around a signer, RPC, datab
 3. Record the finalized payment signature and public job receipt. Confirm the payer, mint, amount, recipient, and finality independently on-chain.
 4. Watch the job state through checkout, patch generation, repository checks, one permitted repair pass, and independent review. Do not edit state in PostgreSQL.
 5. Confirm the PR is opened by the GitHub App against the pinned base SHA and links the paid issue. Verify diff scope, checks, review receipt, model route, token-rate estimate, measured sandbox-runtime estimate, and sandbox receipt.
-6. Let the repository maintainer review normally. Mizuki must not merge his own PR.
+6. Let the repository maintainer review normally. Mizuki must not merge its own PR.
 7. After the maintainer merges, confirm webhook reconciliation records the merge exactly once.
 8. Confirm the public dashboard shows the $2 inflow, model-token and measured sandbox-runtime estimates, current refund liability, and an explicit list of omitted commercial costs. Gross margin must remain `unverified` unless provider billing adjustments, chain/facilitator fees, and infrastructure costs are all durably recorded.
 9. Close both admission controls using the current revision and retain the final append-only audit entry. Publish one evidence bundle containing the issue, admission audit revisions, payment signature, job receipt, PR, checks, independent review result, merge commit, duration, variable execution estimate, omitted cost categories, and gross-margin status. Redact only secrets and non-public request headers.

@@ -161,6 +161,188 @@ describe('GitHub issue admission', () => {
   });
 });
 
+describe('workbench repository access', () => {
+  it('reads account repository metadata without fetching root contents', async () => {
+    const paths: string[] = [];
+    const github = reviewClient(async (input) => {
+      const url = new URL(String(input));
+      paths.push(url.pathname);
+      if (url.pathname === '/repos/example/project/installation') {
+        return Response.json(coreInstallation());
+      }
+      if (url.pathname === '/app/installations/1/access_tokens') {
+        return Response.json(coreToken());
+      }
+      if (url.pathname === '/repos/example/project') {
+        return Response.json({ private: false, default_branch: 'main' });
+      }
+      if (url.pathname === '/repos/example/project/collaborators/maintainer/permission') {
+        return Response.json({ permission: 'maintain' });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+
+    await expect(
+      github.repositoryMetadataForMaintainer('example', 'project', 'maintainer'),
+    ).resolves.toMatchObject({ repository: 'example/project', permission: 'maintain' });
+    expect(paths).not.toContain('/repos/example/project/contents');
+  });
+
+  it('requires current maintainer access and attributable authorization for eligible issues', async () => {
+    const github = reviewClient(async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/repos/example/project') {
+        return Response.json({ private: false, default_branch: 'main' });
+      }
+      if (url.pathname === '/repos/example/project/installation') {
+        return Response.json(coreInstallation());
+      }
+      if (url.pathname === '/app/installations/1/access_tokens') {
+        return Response.json(coreToken());
+      }
+      if (url.pathname === '/repos/example/project/contents') {
+        return Response.json([{ name: 'package-lock.json' }]);
+      }
+      if (url.pathname === '/repos/example/project/branches/main') {
+        return Response.json({ commit: { sha: 'a'.repeat(40) } });
+      }
+      if (url.pathname === '/repos/example/project/issues' && url.searchParams.has('state')) {
+        return Response.json([
+          {
+            number: 7,
+            title: 'Fix docs typo',
+            body: 'Correct docs/guide.md.',
+            labels: [{ name: 'mizuki:authorized' }],
+          },
+          {
+            number: 8,
+            title: 'Fix another docs typo',
+            body: 'Correct docs/other.md.',
+            labels: [{ name: 'mizuki:authorized' }],
+          },
+          {
+            number: 9,
+            title: 'Fix one more docs typo',
+            body: 'Correct docs/third.md.',
+            labels: [{ name: 'mizuki:authorized' }],
+          },
+        ]);
+      }
+      if (url.pathname === '/repos/example/project/issues/7') {
+        return Response.json({
+          number: 7,
+          title: 'Fix docs typo',
+          body: 'Correct docs/guide.md.',
+          labels: [{ name: 'mizuki:authorized' }],
+        });
+      }
+      if (url.pathname === '/repos/example/project/issues/8') {
+        return Response.json({
+          number: 8,
+          title: 'Fix another docs typo',
+          body: 'Correct docs/other.md.',
+          labels: [{ name: 'mizuki:authorized' }],
+        });
+      }
+      if (url.pathname === '/repos/example/project/issues/9') {
+        return Response.json({
+          number: 9,
+          title: 'Fix one more docs typo',
+          body: 'Correct docs/third.md.',
+          labels: [{ name: 'mizuki:authorized' }],
+        });
+      }
+      if (url.pathname === '/repos/example/project/issues/7/events') {
+        return Response.json([
+          {
+            event: 'labeled',
+            created_at: '2026-08-25T00:00:00.000Z',
+            label: { name: 'mizuki:authorized' },
+            actor: { id: 42, login: 'maintainer', type: 'User' },
+          },
+        ]);
+      }
+      if (url.pathname === '/repos/example/project/issues/8/events') return Response.json([]);
+      if (url.pathname === '/repos/example/project/issues/9/events') {
+        return Response.json({ error: 'upstream unavailable' }, { status: 500 });
+      }
+      if (url.pathname.startsWith('/repos/example/project/collaborators/')) {
+        return Response.json({ permission: 'maintain' });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+
+    const result = await github.issuesForMaintainer('example', 'project', 'maintainer');
+
+    expect(result.repository).toMatchObject({
+      repository: 'example/project',
+      permission: 'maintain',
+    });
+    expect(result.issues).toEqual([
+      expect.objectContaining({
+        number: 7,
+        authorized: true,
+        eligibility: true,
+        class: 'micro',
+      }),
+      expect.objectContaining({
+        number: 8,
+        authorized: false,
+        eligibility: false,
+        reason: 'Have a maintainer remove and reapply the mizuki:authorized label.',
+      }),
+      expect.objectContaining({
+        number: 9,
+        authorized: false,
+        authorizationUnavailable: true,
+        eligibility: false,
+        reason: 'Issue authorization could not be verified. Try again shortly.',
+      }),
+    ]);
+  });
+
+  it('reports transient App verification failures without prescribing installation or relabeling', async () => {
+    const github = reviewClient(async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/repos/example/project/installation') {
+        return Response.json({ error: 'upstream unavailable' }, { status: 500 });
+      }
+      if (url.pathname === '/repos/example/project') {
+        return Response.json({ private: false, default_branch: 'main' });
+      }
+      if (url.pathname === '/repos/example/project/issues/7') {
+        return Response.json({
+          number: 7,
+          title: 'Fix docs typo',
+          body: 'Correct docs/guide.md.',
+          labels: [{ name: 'mizuki:authorized' }],
+        });
+      }
+      if (url.pathname === '/repos/example/project/contents') {
+        return Response.json([{ name: 'package-lock.json' }]);
+      }
+      if (url.pathname === '/repos/example/project/branches/main') {
+        return Response.json({ commit: { sha: 'a'.repeat(40) } });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+
+    const result = await github.preflightIssue(
+      'https://github.com/example/project/issues/7',
+      'maintainer',
+    );
+
+    expect(result.core).toEqual({ status: 'unavailable' });
+    expect(result.issue).toMatchObject({
+      scopeEligible: true,
+      eligibility: false,
+      authorizationUnavailable: true,
+      reason: 'Issue authorization could not be verified. Try again shortly.',
+    });
+    expect(result.blockers.join(' ')).not.toMatch(/install|reapply/i);
+  });
+});
+
 describe('pull request publication recovery', () => {
   it('reuses only a pull request whose head is the checkpointed delivery commit', async () => {
     const expectedHead = 'd'.repeat(40);

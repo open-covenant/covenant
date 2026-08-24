@@ -35,9 +35,11 @@ async function responseJson(
 export function WalletProof({
   bountyId,
   disabled = false,
+  onMutated,
 }: {
   bountyId: string;
   disabled?: boolean;
+  onMutated?: () => void | Promise<void>;
 }) {
   const router = useRouter();
   const {
@@ -98,7 +100,8 @@ export function WalletProof({
       );
       await responseJson(claimResponse, 'claim');
       setState('complete');
-      router.refresh();
+      if (onMutated) await onMutated();
+      else router.refresh();
     } catch (cause) {
       setState('idle');
       setError(

@@ -2,7 +2,7 @@
 
 Mizuki Updater applies signed, benchmarked, independently reviewed changes to Mizuki. It verifies the release evidence, synchronizes a GitHub pull request, waits for every named check, exercises the candidate in a shadow deployment, merges the exact reviewed commit, promotes it, and requires a fresh post-promotion health receipt. Once a shadow exists, any terminal failure invokes rollback.
 
-This service has no wallet keys, financial credentials, transfer methods, or payment endpoints. Mizuki can change his application, but this updater can only operate on explicitly allowed repositories and fixed deployment hooks.
+This service has no wallet keys, financial credentials, transfer methods, or payment endpoints. Mizuki can change its application, but this updater can only operate on explicitly allowed repositories and fixed deployment hooks.
 
 ## Release contract
 

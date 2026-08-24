@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createRescueBounty, type BountyClaim, type RescueBounty } from './domain/index.js';
 import { MemoryStore } from './store.js';
 import type { Payment, Quote } from './types.js';
 
@@ -93,6 +94,109 @@ describe('MemoryStore', () => {
     expect(await store.jobsList()).toHaveLength(1);
   });
 
+  it('links account jobs and repositories without changing anonymous job storage', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    await store.saveQuote(quote);
+    await store.linkQuoteToAccount(quote.id, '42');
+    const repository = await store.linkAccountRepository('42', quote.owner, quote.repo);
+    const { job } = await store.createJob(quote, payment, 'account-job');
+
+    await expect(store.jobsForAccount('42', 100)).resolves.toEqual({
+      jobs: [job],
+      limit: 100,
+      truncated: false,
+    });
+    await expect(store.jobsForAccount('99', 100)).resolves.toEqual({
+      jobs: [],
+      limit: 100,
+      truncated: false,
+    });
+    await expect(store.repositoriesForAccount('42', 25)).resolves.toEqual({
+      repositories: [repository],
+      limit: 25,
+      truncated: false,
+    });
+  });
+
+  it('caps linked repositories while allowing an existing link to be refreshed', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    await Promise.all(
+      Array.from({ length: 25 }, (_, index) =>
+        store.linkAccountRepository('42', 'example', `project-${index}`),
+      ),
+    );
+
+    await expect(store.linkAccountRepository('42', 'Example', 'project-0')).resolves.toMatchObject({
+      repository: 'example/project-0',
+      owner: 'Example',
+    });
+    await expect(store.linkAccountRepository('42', 'example', 'project-25')).rejects.toThrow(
+      'account repository limit of 25 reached',
+    );
+
+    const bounded = await store.repositoriesForAccount('42', 10);
+    expect(bounded.repositories).toHaveLength(10);
+    expect(bounded).toMatchObject({ limit: 10, truncated: true });
+    const complete = await store.repositoriesForAccount('42', 25);
+    expect(complete.repositories).toHaveLength(25);
+    expect(complete).toMatchObject({ limit: 25, truncated: false });
+  });
+
+  it('returns only bounded bounty history for an account', async () => {
+    const store = new MemoryStore();
+    const active = accountBounty('active-bounty', 'source-active', '42', false);
+    const historical = accountBounty('historical-bounty', 'source-historical', '42', true);
+    const unrelated = accountBounty('unrelated-bounty', 'source-unrelated', '99', false);
+    await Promise.all([
+      store.createBounty(active),
+      store.createBounty(historical),
+      store.createBounty(unrelated),
+    ]);
+
+    const bounded = await store.bountiesForAccount('42', 1);
+    expect(bounded.bounties).toHaveLength(1);
+    expect(bounded).toMatchObject({ limit: 1, truncated: true });
+    const complete = await store.bountiesForAccount('42', 100);
+    expect(new Set(complete.bounties.map((bounty) => bounty.id))).toEqual(
+      new Set([active.id, historical.id]),
+    );
+    expect(complete).toMatchObject({ limit: 100, truncated: false });
+  });
+
+  it('does not allow a quote to be reassigned to another account', async () => {
+    const store = new MemoryStore();
+    await Promise.all([
+      store.upsertContributor('42', 'maintainer'),
+      store.upsertContributor('99', 'other-maintainer'),
+    ]);
+    await store.saveQuote(quote);
+    await store.linkQuoteToAccount(quote.id, '42');
+
+    await expect(store.linkQuoteToAccount(quote.id, '99')).rejects.toThrow(
+      'already linked to another account',
+    );
+  });
+
+  it('bounds account job history queries', async () => {
+    const store = new MemoryStore();
+    const secondQuote = { ...quote, id: 'quote-2', issueNumber: 2 };
+    await store.upsertContributor('42', 'maintainer');
+    await Promise.all([store.saveQuote(quote), store.saveQuote(secondQuote)]);
+    await Promise.all([
+      store.linkQuoteToAccount(quote.id, '42'),
+      store.linkQuoteToAccount(secondQuote.id, '42'),
+    ]);
+    await store.createJob(quote, payment, 'bounded-job-1');
+    await store.createJob(secondQuote, { ...payment, transaction: 'tx-2' }, 'bounded-job-2');
+
+    const page = await store.jobsForAccount('42', 1);
+    expect(page.jobs).toHaveLength(1);
+    expect(page).toMatchObject({ limit: 1, truncated: true });
+    await expect(store.jobsForAccount('42', 1_001)).rejects.toThrow('between 1 and 1000');
+  });
+
   it('deduplicates the same payment proof across different idempotency keys', async () => {
     const store = new MemoryStore();
     const paid = { ...payment, signature: 'same-x402-proof' };
@@ -148,3 +252,35 @@ describe('MemoryStore', () => {
     ).rejects.toThrow('reused with different values');
   });
 });
+
+function accountBounty(
+  id: string,
+  sourceJobId: string,
+  claimantId: string,
+  historical: boolean,
+): RescueBounty {
+  const bounty = createRescueBounty({
+    id,
+    sourceJobId,
+    failureReceiptId: `failure:${id}`,
+    repository: 'example/project',
+    issueNumber: 1,
+    issueUrl: 'https://github.com/example/project/issues/1',
+    jobPriceCents: 200,
+    at: '2026-08-25T00:00:00.000Z',
+  });
+  const claim: BountyClaim = {
+    id: `claim:${id}`,
+    claimantId,
+    walletAddress: '1'.repeat(32),
+    state: historical ? 'released' : 'active',
+    claimedAt: bounty.createdAt,
+    leaseExpiresAt: bounty.offerExpiresAt,
+    ...(historical ? { closedAt: bounty.updatedAt } : {}),
+  };
+  return {
+    ...bounty,
+    state: 'open',
+    ...(historical ? { claimHistory: [claim] } : { activeClaim: claim }),
+  };
+}

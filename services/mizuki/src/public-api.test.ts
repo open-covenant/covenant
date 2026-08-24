@@ -203,6 +203,7 @@ describe('public accounting', () => {
     const receipt = publicJob(delivered);
 
     expect(receipt).toMatchObject({
+      issueTitle: 'Fix a bounded issue',
       variableRouteCostEstimateUsd: 0.42,
       costCoverage: {
         included: [

@@ -4,14 +4,14 @@ Traction is the release gate. Internal dogfooding is preparation, not evidence. 
 
 ## Hard gates
 
-| Gate                     | Minimum by 12 Sep | Launch minimum by 19 Sep | Stop condition                                                             |
-| ------------------------ | ----------------: | -----------------------: | -------------------------------------------------------------------------- |
-| Paid external jobs       |                10 |                       10 | Fewer than 7 by 7 Sep triggers daily founder-led onboarding.               |
-| PRs opened               |                 7 |                        7 | Below 70% job-to-PR conversion freezes scope expansion.                    |
-| PRs merged               |                 5 |                        5 | Fewer than 3 by 7 Sep shifts all outreach to merge-ready Micro issues.     |
-| External maintainers     |                 3 |                        3 | Fewer than 2 by 31 Aug ends internal demo work until outreach recovers.    |
-| Refund principal success |              100% |                     100% | Any missed, short, wrong-recipient, or duplicate refund stops intake.      |
-| Gross margin             |          Positive |                 Positive | Negative trailing margin pauses Standard jobs and re-benchmarks the route. |
+| Gate                        | Minimum by 12 Sep | Launch minimum by 19 Sep | Stop condition                                                             |
+| --------------------------- | ----------------: | -----------------------: | -------------------------------------------------------------------------- |
+| Paid external jobs          |                10 |                       10 | Fewer than 7 by 7 Sep triggers daily founder-led onboarding.               |
+| PRs opened                  |                 7 |                        7 | Below 70% job-to-PR conversion freezes scope expansion.                    |
+| PRs merged                  |                 5 |                        5 | Fewer than 3 by 7 Sep shifts all outreach to merge-ready Micro issues.     |
+| External maintainers        |                 3 |                        3 | Fewer than 2 by 31 Aug ends internal demo work until outreach recovers.    |
+| Full payment refund success |              100% |                     100% | Any missed, short, wrong-recipient, or duplicate refund stops intake.      |
+| Gross margin                |          Positive |                 Positive | Negative trailing margin pauses Standard jobs and re-benchmarks the route. |
 
 No features, security-sensitive work, private repositories, or larger scopes enter the queue before every launch minimum is met.
 
@@ -64,7 +64,7 @@ Gate by 12 Sep: 10 paid jobs, 7 PRs, 5 merges, 3 external maintainers, all refun
 ### 13–16 September: reliability buffer
 
 - No scope expansion. Resolve review feedback, merge eligible PRs, reconcile ledger and treasury, and retest recovery.
-- Publish an anonymized route failure matrix and the exact percentage of paid principal refunded.
+- Publish an anonymized route failure matrix and the exact percentage of each quoted USDC payment refunded.
 - Prepare a five-minute recorded fallback demo from real evidence in case live infrastructure fails.
 
 ### 17–19 September: evidence freeze and submission
@@ -81,7 +81,7 @@ Track repository, maintainer handle, issue URL, why it is Micro scope, contact c
 
 Suggested message:
 
-> I am testing Mizuki on real public maintenance work before 19 September. He can take this specific Micro issue for a fixed $2 USDC quote, open a scoped PR, and automatically return 100% of principal if he cannot deliver. You keep normal review and merge control; he never opens unsolicited PRs. Would you install the repository-scoped GitHub App and try this issue on a short live session?
+> I am testing Mizuki on real public maintenance work before 19 September. It can take this specific Micro issue for a fixed $2 USDC quote, open a scoped PR, and automatically return the full quoted USDC payment if it cannot deliver. Solana network and wallet fees are separate. You keep normal review and merge control; it never opens unsolicited PRs. Would you install the repository-scoped GitHub App and try this issue on a short live session?
 
 Follow up once after 48 hours with the public canary receipt. Do not mass-message, scrape private contacts, or offer a testimonial incentive.
 

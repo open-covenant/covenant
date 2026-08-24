@@ -11,6 +11,7 @@ import type {
 import type {
   ActivityEvent,
   ActivityKind,
+  AccountRepository,
   Contributor,
   Job,
   JobState,
@@ -26,6 +27,24 @@ import type {
 
 export type JobPatch = Omit<Partial<Job>, 'id' | 'state' | 'version' | 'createdAt' | 'updatedAt'>;
 
+export type AccountJobsPage = {
+  jobs: Job[];
+  limit: number;
+  truncated: boolean;
+};
+
+export type AccountRepositoriesPage = {
+  repositories: AccountRepository[];
+  limit: number;
+  truncated: boolean;
+};
+
+export type AccountBountiesPage = {
+  bounties: RescueBounty[];
+  limit: number;
+  truncated: boolean;
+};
+
 export type WebhookDeliveryLease =
   | { state: 'started'; leaseId: string }
   | { state: 'completed' | 'busy' };
@@ -38,6 +57,10 @@ export interface MizukiStore {
   updateOperatorControls(patch: OperatorControlsPatch): Promise<OperatorControls>;
   saveQuote(quote: Quote): Promise<Quote>;
   quote(id: string): Promise<Quote | undefined>;
+  linkQuoteToAccount(quoteId: string, githubId: string): Promise<void>;
+  jobsForAccount(githubId: string, limit: number): Promise<AccountJobsPage>;
+  linkAccountRepository(githubId: string, owner: string, repo: string): Promise<AccountRepository>;
+  repositoriesForAccount(githubId: string, limit: number): Promise<AccountRepositoriesPage>;
   createJob(
     quote: Quote,
     payment: Payment,
@@ -77,6 +100,7 @@ export interface MizukiStore {
   bounty(id: string): Promise<RescueBounty | undefined>;
   bountyBySourceJob(jobId: string): Promise<RescueBounty | undefined>;
   bountiesList(): Promise<RescueBounty[]>;
+  bountiesForAccount(githubId: string, limit: number): Promise<AccountBountiesPage>;
   updateBounty(bounty: RescueBounty, expectedRevision: number): Promise<RescueBounty>;
   saveEscrow(escrow: ContributorEscrow): Promise<ContributorEscrow>;
   escrow(id: string): Promise<ContributorEscrow | undefined>;
@@ -98,6 +122,8 @@ export class MemoryStore implements MizukiStore {
   private readonly ledger: LedgerEntry[] = [];
   private readonly events: ActivityEvent[] = [];
   private readonly contributors = new Map<string, Contributor>();
+  private readonly quoteAccounts = new Map<string, string>();
+  private readonly accountRepositories = new Map<string, AccountRepository>();
   private readonly challenges = new Map<string, WalletChallenge>();
   private readonly webhookDeliveries = new Map<
     string,
@@ -156,6 +182,69 @@ export class MemoryStore implements MizukiStore {
 
   async quote(id: string): Promise<Quote | undefined> {
     return clone(this.quotes.get(id));
+  }
+
+  async linkQuoteToAccount(quoteId: string, githubId: string): Promise<void> {
+    if (!this.quotes.has(quoteId)) throw new Error('quote not found');
+    if (!this.contributors.has(githubId)) throw new Error('account not found');
+    const current = this.quoteAccounts.get(quoteId);
+    if (current && current !== githubId) {
+      throw new StateConflictError('quote is already linked to another account');
+    }
+    this.quoteAccounts.set(quoteId, githubId);
+  }
+
+  async jobsForAccount(githubId: string, limit: number): Promise<AccountJobsPage> {
+    const boundedLimit = accountJobLimit(limit);
+    const jobs = [...this.jobs.values()]
+      .filter((job) => this.quoteAccounts.get(job.quote.id) === githubId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .slice(0, boundedLimit + 1)
+      .map((job) => structuredClone(job));
+    return {
+      jobs: jobs.slice(0, boundedLimit),
+      limit: boundedLimit,
+      truncated: jobs.length > boundedLimit,
+    };
+  }
+
+  async linkAccountRepository(
+    githubId: string,
+    owner: string,
+    repo: string,
+  ): Promise<AccountRepository> {
+    if (!this.contributors.has(githubId)) throw new Error('account not found');
+    const repository = normalizedRepository(owner, repo);
+    const key = `${githubId}:${repository}`;
+    if (!this.accountRepositories.has(key)) {
+      const count = [...this.accountRepositories.values()].filter(
+        (candidate) => candidate.githubId === githubId,
+      ).length;
+      if (count >= 25) throw new StateConflictError('account repository limit of 25 reached');
+    }
+    const value = {
+      githubId,
+      owner,
+      repo,
+      repository,
+      verifiedAt: new Date().toISOString(),
+    };
+    this.accountRepositories.set(key, value);
+    return structuredClone(value);
+  }
+
+  async repositoriesForAccount(githubId: string, limit: number): Promise<AccountRepositoriesPage> {
+    const boundedLimit = accountRepositoryLimit(limit);
+    const repositories = [...this.accountRepositories.values()]
+      .filter((repository) => repository.githubId === githubId)
+      .sort((left, right) => left.repository.localeCompare(right.repository))
+      .slice(0, boundedLimit + 1)
+      .map((repository) => structuredClone(repository));
+    return {
+      repositories: repositories.slice(0, boundedLimit),
+      limit: boundedLimit,
+      truncated: repositories.length > boundedLimit,
+    };
   }
 
   async createJob(
@@ -427,6 +516,24 @@ export class MemoryStore implements MizukiStore {
       .map((bounty) => structuredClone(bounty));
   }
 
+  async bountiesForAccount(githubId: string, limit: number): Promise<AccountBountiesPage> {
+    const boundedLimit = accountBountyLimit(limit);
+    const bounties = [...this.bounties.values()]
+      .filter(
+        (bounty) =>
+          bounty.activeClaim?.claimantId === githubId ||
+          bounty.claimHistory.some((claim) => claim.claimantId === githubId),
+      )
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+      .slice(0, boundedLimit + 1)
+      .map((bounty) => structuredClone(bounty));
+    return {
+      bounties: bounties.slice(0, boundedLimit),
+      limit: boundedLimit,
+      truncated: bounties.length > boundedLimit,
+    };
+  }
+
   async updateBounty(bounty: RescueBounty, expectedRevision: number): Promise<RescueBounty> {
     const current = this.bounties.get(bounty.id);
     if (!current) throw new Error(`unknown bounty: ${bounty.id}`);
@@ -667,6 +774,108 @@ export class PostgresStore implements MizukiStore {
       [id],
     );
     return result.rows[0]?.payload;
+  }
+
+  async linkQuoteToAccount(quoteId: string, githubId: string): Promise<void> {
+    const inserted = await this.pool.query<{ github_id: string }>(
+      `INSERT INTO mizuki_account_quotes (github_id, quote_id, created_at)
+       VALUES ($1, $2, now())
+       ON CONFLICT (quote_id) DO NOTHING
+       RETURNING github_id`,
+      [githubId, quoteId],
+    );
+    if (inserted.rows[0]) return;
+    const current = await this.pool.query<{ github_id: string }>(
+      'SELECT github_id FROM mizuki_account_quotes WHERE quote_id = $1',
+      [quoteId],
+    );
+    if (!current.rows[0]) throw new Error('quote or account not found');
+    if (current.rows[0].github_id !== githubId) {
+      throw new StateConflictError('quote is already linked to another account');
+    }
+  }
+
+  async jobsForAccount(githubId: string, limit: number): Promise<AccountJobsPage> {
+    const boundedLimit = accountJobLimit(limit);
+    const result = await this.pool.query<{ payload: Job }>(
+      `SELECT jobs.payload
+       FROM mizuki_jobs AS jobs
+       JOIN mizuki_account_quotes AS links ON links.quote_id = jobs.quote_id
+       WHERE links.github_id = $1
+       ORDER BY jobs.created_at DESC
+       LIMIT $2`,
+      [githubId, boundedLimit + 1],
+    );
+    return {
+      jobs: result.rows.slice(0, boundedLimit).map((row) => row.payload),
+      limit: boundedLimit,
+      truncated: result.rows.length > boundedLimit,
+    };
+  }
+
+  async linkAccountRepository(
+    githubId: string,
+    owner: string,
+    repo: string,
+  ): Promise<AccountRepository> {
+    const repository = normalizedRepository(owner, repo);
+    const verifiedAt = new Date().toISOString();
+    return this.transaction(async (client) => {
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+        `mizuki-account-repositories:${githubId}`,
+      ]);
+      const capacity = await client.query<{ count: number; existing: boolean | null }>(
+        `SELECT count(*)::integer AS count, bool_or(repository = $2) AS existing
+         FROM mizuki_account_repositories
+         WHERE github_id = $1`,
+        [githubId, repository],
+      );
+      const current = capacity.rows[0];
+      if (!current?.existing && (current?.count ?? 0) >= 25) {
+        throw new StateConflictError('account repository limit of 25 reached');
+      }
+      const result = await client.query<{
+        github_id: string;
+        repository: string;
+        owner_name: string;
+        repo_name: string;
+        verified_at: Date;
+      }>(
+        `INSERT INTO mizuki_account_repositories
+           (github_id, repository, owner_name, repo_name, verified_at)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (github_id, repository) DO UPDATE
+         SET owner_name = EXCLUDED.owner_name,
+             repo_name = EXCLUDED.repo_name,
+             verified_at = EXCLUDED.verified_at
+         RETURNING github_id, repository, owner_name, repo_name, verified_at`,
+        [githubId, repository, owner, repo, verifiedAt],
+      );
+      return accountRepositoryFromRow(result.rows[0]!);
+    });
+  }
+
+  async repositoriesForAccount(githubId: string, limit: number): Promise<AccountRepositoriesPage> {
+    const boundedLimit = accountRepositoryLimit(limit);
+    const result = await this.pool.query<{
+      github_id: string;
+      repository: string;
+      owner_name: string;
+      repo_name: string;
+      verified_at: Date;
+    }>(
+      `SELECT github_id, repository, owner_name, repo_name, verified_at
+       FROM mizuki_account_repositories
+       WHERE github_id = $1
+       ORDER BY repository
+       LIMIT $2`,
+      [githubId, boundedLimit + 1],
+    );
+    return {
+      repositories: result.rows.slice(0, boundedLimit).map(accountRepositoryFromRow),
+      limit: boundedLimit,
+      truncated: result.rows.length > boundedLimit,
+    };
   }
 
   async createJob(
@@ -1074,6 +1283,28 @@ export class PostgresStore implements MizukiStore {
     return result.rows.map((row) => row.payload);
   }
 
+  async bountiesForAccount(githubId: string, limit: number): Promise<AccountBountiesPage> {
+    const boundedLimit = accountBountyLimit(limit);
+    const result = await this.pool.query<{ payload: RescueBounty }>(
+      `SELECT payload
+       FROM mizuki_bounties
+       WHERE payload->'activeClaim'->>'claimantId' = $1
+          OR EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements(COALESCE(payload->'claimHistory', '[]'::jsonb)) AS claim
+            WHERE claim->>'claimantId' = $1
+          )
+       ORDER BY created_at DESC
+       LIMIT $2`,
+      [githubId, boundedLimit + 1],
+    );
+    return {
+      bounties: result.rows.slice(0, boundedLimit).map((row) => row.payload),
+      limit: boundedLimit,
+      truncated: result.rows.length > boundedLimit,
+    };
+  }
+
   async updateBounty(bounty: RescueBounty, expectedRevision: number): Promise<RescueBounty> {
     if (bounty.revision !== expectedRevision + 1) {
       throw new StateConflictError(`invalid revision for bounty ${bounty.id}`);
@@ -1349,6 +1580,51 @@ function paymentProofHash(payment: Payment): string | undefined {
     : undefined;
 }
 
+function normalizedRepository(owner: string, repo: string): string {
+  const segment = /^[A-Za-z0-9_.-]{1,100}$/;
+  if (!segment.test(owner) || !segment.test(repo)) {
+    throw new Error('repository identity is invalid');
+  }
+  return `${owner}/${repo}`.toLowerCase();
+}
+
+function accountJobLimit(limit: number): number {
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1_000) {
+    throw new Error('account job limit must be an integer between 1 and 1000');
+  }
+  return limit;
+}
+
+function accountRepositoryLimit(limit: number): number {
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 25) {
+    throw new Error('account repository limit must be an integer between 1 and 25');
+  }
+  return limit;
+}
+
+function accountBountyLimit(limit: number): number {
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+    throw new Error('account bounty limit must be an integer between 1 and 100');
+  }
+  return limit;
+}
+
+function accountRepositoryFromRow(row: {
+  github_id: string;
+  repository: string;
+  owner_name: string;
+  repo_name: string;
+  verified_at: Date;
+}): AccountRepository {
+  return {
+    githubId: row.github_id,
+    owner: row.owner_name,
+    repo: row.repo_name,
+    repository: row.repository,
+    verifiedAt: new Date(row.verified_at).toISOString(),
+  };
+}
+
 async function saveVersioned(
   pool: Pool,
   table: 'mizuki_capabilities' | 'mizuki_upgrades',
@@ -1535,6 +1811,30 @@ CREATE INDEX IF NOT EXISTS mizuki_failures_capability_idx
   ON mizuki_failures(capability_key, occurred_at DESC);
 `;
 
+export const WORKBENCH_ACCOUNTS_SCHEMA_V1 = `
+CREATE TABLE mizuki_account_quotes (
+  github_id text NOT NULL REFERENCES mizuki_contributors(github_id),
+  quote_id uuid NOT NULL UNIQUE REFERENCES mizuki_quotes(id),
+  created_at timestamptz NOT NULL,
+  PRIMARY KEY (github_id, quote_id)
+);
+CREATE INDEX mizuki_account_quotes_github_idx
+  ON mizuki_account_quotes(github_id, created_at DESC);
+
+CREATE TABLE mizuki_account_repositories (
+  github_id text NOT NULL REFERENCES mizuki_contributors(github_id),
+  repository text NOT NULL CHECK (
+    repository ~ '^[a-z0-9_.-]+/[a-z0-9_.-]+$'
+  ),
+  owner_name text NOT NULL CHECK (owner_name ~ '^[A-Za-z0-9_.-]{1,100}$'),
+  repo_name text NOT NULL CHECK (repo_name ~ '^[A-Za-z0-9_.-]{1,100}$'),
+  verified_at timestamptz NOT NULL,
+  PRIMARY KEY (github_id, repository)
+);
+CREATE INDEX mizuki_account_repositories_verified_idx
+  ON mizuki_account_repositories(github_id, verified_at DESC);
+`;
+
 const ADMISSION_CONTROL_AUDIT_SCHEMA = `
 CREATE TABLE mizuki_operator_control_audit (
   revision integer PRIMARY KEY CHECK (revision >= 0),
@@ -1585,6 +1885,10 @@ async function migrate(pool: Pool): Promise<void> {
       {
         name: 'core',
         migrations: [{ version: 1, name: 'commercial-core', sql: COMMERCIAL_CORE_SCHEMA_V1 }],
+      },
+      {
+        name: 'workbench',
+        migrations: [{ version: 1, name: 'workbench-accounts', sql: WORKBENCH_ACCOUNTS_SCHEMA_V1 }],
       },
       {
         name: 'admission-control',

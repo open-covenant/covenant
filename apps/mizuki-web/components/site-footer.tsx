@@ -27,6 +27,7 @@ export function SiteFooter({ intakeOpen }: { intakeOpen: boolean }) {
         <div className="footer-column">
           <h3>Service</h3>
           <nav aria-label="Service links">
+            <Link href="/app">Workbench</Link>
             <Link href="/work">{intakeOpen ? 'Submit an issue' : 'Service status'}</Link>
             <Link href="/bounties">Bounties</Link>
             <Link href="/activity">Log</Link>

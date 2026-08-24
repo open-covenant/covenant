@@ -5,6 +5,10 @@ import type { Config } from './config.js';
 
 export type PublicRoute =
   | 'quote'
+  | 'preflight'
+  | 'account_repositories'
+  | 'repository_connect'
+  | 'repository_issues'
   | 'oauth_start'
   | 'oauth_callback'
   | 'wallet_challenge'
@@ -33,6 +37,10 @@ type SourceBuckets = {
 
 const policies: Record<PublicRoute, Policy> = {
   quote: { capacity: 6, windowMs: 60_000 },
+  preflight: { capacity: 10, windowMs: 60_000 },
+  account_repositories: { capacity: 12, windowMs: 60_000 },
+  repository_connect: { capacity: 6, windowMs: 60_000 },
+  repository_issues: { capacity: 10, windowMs: 60_000 },
   oauth_start: { capacity: 10, windowMs: 60_000 },
   oauth_callback: { capacity: 10, windowMs: 60_000 },
   wallet_challenge: { capacity: 8, windowMs: 60_000 },
@@ -47,6 +55,7 @@ const policies: Record<PublicRoute, Policy> = {
 export class PublicAdmission {
   readonly streams: ActivityStreams;
   private readonly buckets: BoundedTokenBuckets;
+  private readonly accountBuckets: BoundedTokenBuckets;
   private readonly trustedProxyHops: number;
   private readonly webProxySecret: string | undefined;
 
@@ -54,6 +63,7 @@ export class PublicAdmission {
     this.trustedProxyHops = config.trustedProxyHops ?? 0;
     this.webProxySecret = config.webProxySecret;
     this.buckets = new BoundedTokenBuckets(config.rateLimitMaxSources ?? 10_000);
+    this.accountBuckets = new BoundedTokenBuckets(config.rateLimitMaxSources ?? 10_000);
     this.streams = new ActivityStreams(
       config.sseMaxConnections ?? 100,
       config.sseMaxConnectionsPerSource ?? 3,
@@ -66,6 +76,11 @@ export class PublicAdmission {
 
   consume(route: PublicRoute, req: IncomingMessage): void {
     this.buckets.consume(route, this.source(req));
+  }
+
+  consumeAccount(route: PublicRoute, req: IncomingMessage, accountId: string): void {
+    this.consume(route, req);
+    this.accountBuckets.consume(route, accountId);
   }
 }
 

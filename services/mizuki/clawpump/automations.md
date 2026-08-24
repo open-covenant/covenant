@@ -16,8 +16,8 @@ Use the MCP tools interactively so the installed server supplies the current arg
 
 1. `get_account_status` to verify the API key and linked account.
 2. `get_model_catalog` to select a currently available model within the daily budget.
-3. `create_agent` with name `Mizuki`, a male persona, and no trading skill enabled.
-4. `upload_agent_avatar` with `https://mizuki-9by5.onrender.com/mizuki-avatar.jpg` so the agent and public site use the same canonical profile image.
+3. `create_agent` with name `Mizuki the Mech`, the maintenance persona defined in this package, and no trading skill enabled.
+4. `upload_agent_avatar` with `https://mizuki.opencovenant.org/mizuki-avatar.jpg` so the agent and public site use the same canonical profile image.
 5. `get_agent_asset_url` and `get_agent` to verify the stored avatar, then record the agent ID and wallet address in the operator password manager.
 6. `create_custom_skill` using `custom-skill.md` as the content.
 7. `list_custom_skills` and `get_custom_skill` to verify the skill is enabled and unmodified.
@@ -44,8 +44,8 @@ Automation prompts may read Mizuki's public API and dashboard only if the enable
 
 After the first successful paid canary, use `agent_mail_get_address`. If no inbox exists, obtain explicit budget approval and use `agent_mail_create`, which ClawPump documents as an approximately $2 USDC x402 action. Use `agent_mail_send` only for consent-based outreach from the tracked queue. Never bulk-send or include payment links before a maintainer agrees to the specific issue.
 
-## Token gate
+## Token operations
 
-Do not launch a token to manufacture activity. After both operator-funded mainnet canaries pass, use `get_launch_status` and the guided `launch-token` prompt early enough to satisfy the 19 September entry deadline. Require an operator to review name, symbol, mint authority, image, description, payout wallet, and public risk disclosure before invoking a launch tool. Record the returned mint and dashboard URLs through `get_dashboard_urls`. If commercial traction targets remain open, publish the exact gap instead of delaying the required entry step or fabricating activity.
+The token has launched. Use `get_launch_status`, `get_dashboard_urls`, and read-only wallet or market tools to verify its recorded mint, payout wallet, and public links. Do not relaunch it, create a replacement, trade, automate market activity, manufacture volume, or imply that token activity proves maintenance demand. Any future token mutation or paid ClawPump action requires an operator to review the exact action, recipient, amount, and public disclosure first.
 
 The token narrative follows the maintenance evidence. It does not substitute for paid jobs, merged PRs, external maintainers, refunds, or verified positive gross margin with complete cost coverage.

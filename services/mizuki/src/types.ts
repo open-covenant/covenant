@@ -216,6 +216,14 @@ export type Contributor = {
   updatedAt: string;
 };
 
+export type AccountRepository = {
+  githubId: string;
+  owner: string;
+  repo: string;
+  repository: string;
+  verifiedAt: string;
+};
+
 export type WalletChallenge = {
   id: string;
   githubId: string;

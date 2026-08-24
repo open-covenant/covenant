@@ -14,6 +14,7 @@ const TOKEN_MAX_TTL_MS = 65 * 60_000;
 const TOKEN_CACHE_LIMIT = 256;
 const JSON_LIMIT = 65_536;
 const DIFF_LIMIT = 2_000_000;
+const COMPARISON_LIMIT = 2_000_000;
 const INSTALLATION_PERMISSIONS = {
   checks: 'read',
   contents: 'read',
@@ -592,7 +593,9 @@ export class GitHubMergeVerifier implements MergeVerifier {
         true,
       );
     }
-    const comparison = comparisonSchema.safeParse(await readJsonResponse(response, JSON_LIMIT));
+    const comparison = comparisonSchema.safeParse(
+      await readJsonResponse(response, COMPARISON_LIMIT),
+    );
     if (!comparison.success) {
       throw new PolicyError(
         'github_invalid_response',

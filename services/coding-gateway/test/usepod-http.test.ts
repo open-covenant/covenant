@@ -200,7 +200,7 @@ describe('UsePod HTTP contract', () => {
     );
   });
 
-  it('requires matching above-floor balance evidence from the non-billable endpoint', async () => {
+  it('accepts above-floor balance evidence from the non-billable endpoint', async () => {
     const request = vi.fn<typeof fetch>(async (_input, init) => {
       expect(init?.method).toBe('GET');
       expect(new Headers(init?.headers)).toEqual(
@@ -219,6 +219,13 @@ describe('UsePod HTTP contract', () => {
       'https://api.usepod.test/proxy/funded%2Ftoken/balance',
       expect.objectContaining({ method: 'GET' }),
     );
+
+    await expect(
+      probeUsePodBalance(
+        config,
+        vi.fn<typeof fetch>(async () => Response.json({ usdc_balance: 2_000_000 })),
+      ),
+    ).resolves.toBeUndefined();
   });
 
   it('rejects below-floor, conflicting, duplicate, and malformed balance evidence', async () => {
@@ -263,13 +270,6 @@ describe('UsePod HTTP contract', () => {
     await expect(
       probeUsePodBalance(config, response('{"usdc_balance":2000000}', '2000000', 'text/plain')),
     ).rejects.toThrow(/non-JSON/);
-
-    await expect(
-      probeUsePodBalance(
-        config,
-        vi.fn<typeof fetch>(async () => Response.json({ usdc_balance: 2_000_000 })),
-      ),
-    ).rejects.toThrow(/invalid or duplicate/);
 
     await expect(
       probeUsePodBalance(

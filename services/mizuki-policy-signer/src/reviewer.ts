@@ -58,7 +58,7 @@ export class UsePodIndependentReviewer implements IndependentReviewer {
         headers: { accept: 'application/json' },
         signal: AbortSignal.timeout(15_000),
       }),
-      this.fetcher(this.url('balance'), {
+      this.fetcher(this.url('balance', false), {
         method: 'GET',
         redirect: 'error',
         headers: { accept: 'application/json' },
@@ -83,7 +83,10 @@ export class UsePodIndependentReviewer implements IndependentReviewer {
       .safeParse(await boundedJson(balance, MAX_RESPONSE_BYTES));
     const bodyValue = balanceBody.success ? String(balanceBody.data.usdc_balance) : '';
     const headerValue = balance.headers.get('x-balance-remaining')?.trim() ?? '';
-    if (!atomicAtLeast(bodyValue, this.config.minimumBalance) || bodyValue !== headerValue) {
+    if (
+      !atomicAtLeast(bodyValue, this.config.minimumBalance) ||
+      (headerValue && (!validAtomic(headerValue) || bodyValue !== headerValue))
+    ) {
       throw unavailable('independent review balance evidence is invalid or below policy');
     }
   }
@@ -210,7 +213,7 @@ export class UsePodIndependentReviewer implements IndependentReviewer {
     };
   }
 
-  private url(path: string): string {
+  private url(path: string, versioned = true): string {
     const base = new URL(this.config.baseUrl);
     if (base.protocol !== 'https:' || base.username || base.password || base.search || base.hash) {
       throw new Error('Independent review base URL must be a plain HTTPS origin');
@@ -219,7 +222,8 @@ export class UsePodIndependentReviewer implements IndependentReviewer {
     if (prefix.includes('/proxy/')) {
       throw new Error('Independent review base URL must not contain a credential path');
     }
-    base.pathname = `${prefix}/proxy/${encodeURIComponent(this.config.apiKey)}/v1/${path}`;
+    const route = versioned ? `v1/${path}` : path;
+    base.pathname = `${prefix}/proxy/${encodeURIComponent(this.config.apiKey)}/${route}`;
     return base.toString();
   }
 }

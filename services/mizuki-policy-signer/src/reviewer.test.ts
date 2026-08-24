@@ -85,7 +85,7 @@ describe('funded independent review', () => {
     const fetcher = vi.fn(async (input: string | URL | Request) =>
       String(input).endsWith('/models')
         ? json({ object: 'list', data: [{ id: MODEL }] })
-        : json({ usdc_balance: '1000' }, { headers: { 'x-balance-remaining': '1000' } }),
+        : json({ usdc_balance: '1000' }),
     ) as unknown as typeof fetch;
     const reviewer = new UsePodIndependentReviewer(config(), fetcher);
 
@@ -94,6 +94,10 @@ describe('funded independent review', () => {
     for (const [, init] of vi.mocked(fetcher).mock.calls) {
       expect(init).toMatchObject({ method: 'GET', redirect: 'error' });
     }
+    expect(vi.mocked(fetcher).mock.calls.map(([input]) => String(input))).toEqual([
+      'https://api.usepod.example/proxy/review-key/v1/models',
+      'https://api.usepod.example/proxy/review-key/balance',
+    ]);
   });
 
   it('submits exact GitHub-fetched diff bytes under marketplace-only ceilings', async () => {

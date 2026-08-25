@@ -30,6 +30,23 @@ describe('CapabilityService', () => {
     expect(repeated?.id).toBe(first?.id);
   });
 
+  it('records a long structured reviewer failure with a bounded stable code', async () => {
+    const store = new MemoryStore();
+    const service = new CapabilityService(store, undefined, () => new Date('2026-08-22T12:00:00Z'));
+    const error = JSON.stringify({
+      issues: Array.from({ length: 20 }, (_, index) => ({
+        code: 'too_small',
+        path: ['choices', 0, 'message', 'content'],
+        message: `review response issue ${index}`,
+      })),
+    });
+
+    await expect(service.recordFailure(job('micro', error))).resolves.toBeDefined();
+    const [failure] = await store.failuresForCapability('patch.quality');
+    expect(failure.normalizedCode).toHaveLength(80);
+    expect(failure.normalizedCode).toMatch(/^[a-z0-9_]+$/);
+  });
+
   it('activates only after the updater reports a completed signed proposal', async () => {
     const store = new MemoryStore();
     const updater = new MutableUpdater();

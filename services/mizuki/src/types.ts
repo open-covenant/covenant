@@ -101,6 +101,9 @@ export type ReviewAttempt = {
   id: string;
   phase: 'implementation' | 'repair';
   artifactHash: string;
+  attemptNumber?: number;
+  maxAttempts?: number;
+  maxCostUsd?: number;
   status?: 'pending' | 'received' | 'completed' | 'failed';
   provider?: ProviderRouteReceipt;
   costUsd: number;
@@ -110,6 +113,7 @@ export type ReviewAttempt = {
   approved?: boolean;
   reason?: string;
   error?: string;
+  retryable?: boolean;
 };
 
 export type DeliveryEvidence = {

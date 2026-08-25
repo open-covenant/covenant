@@ -168,11 +168,143 @@ describe('JobProcessor', () => {
     });
   });
 
+  it('retries an empty reviewer decision and delivers only after independent approval', async () => {
+    const result = await processReviewSequence('empty-then-approved', [
+      () => reviewContentResponse(''),
+      () => reviewResponse({ approved: true, reason: 'scoped after retry' }),
+    ]);
+
+    expect(result.reviewCalls).toBe(2);
+    expect(
+      result.job.reviewAttempts?.reduce((sum, attempt) => sum + (attempt.maxCostUsd ?? 0), 0),
+    ).toBe(0.12);
+    expect(result.job).toMatchObject({
+      state: 'delivered',
+      estimatedCostUsd: 0.051,
+      reviewReceipt: { approved: true, reason: 'scoped after retry' },
+      reviewAttempts: [
+        {
+          phase: 'implementation',
+          attemptNumber: 1,
+          maxAttempts: 2,
+          maxCostUsd: 0.06,
+          status: 'failed',
+          retryable: true,
+          costUsd: 0.0005,
+        },
+        {
+          phase: 'implementation',
+          attemptNumber: 2,
+          maxAttempts: 2,
+          maxCostUsd: 0.06,
+          status: 'completed',
+          retryable: false,
+          approved: true,
+          costUsd: 0.0005,
+        },
+      ],
+    });
+  });
+
+  it('retries a transient reviewer response within the same fixed phase ceiling', async () => {
+    const result = await processReviewSequence('transient-then-approved', [
+      () => reviewHttpResponse(503, 'provider temporarily unavailable'),
+      () => reviewResponse({ approved: true, reason: 'approved after provider recovery' }),
+    ]);
+
+    expect(result.reviewCalls).toBe(2);
+    expect(result.job).toMatchObject({
+      state: 'delivered',
+      estimatedCostUsd: 0.051,
+      reviewAttempts: [
+        { attemptNumber: 1, status: 'failed', retryable: true, costUsd: 0.0005 },
+        { attemptNumber: 2, status: 'completed', approved: true, costUsd: 0.0005 },
+      ],
+    });
+  });
+
+  it('retries a malformed reviewer decision and delivers only after independent approval', async () => {
+    const result = await processReviewSequence('malformed-then-approved', [
+      () => reviewContentResponse('{"approved":"yes","reason":"invalid"}'),
+      () => reviewResponse({ approved: true, reason: 'valid independent approval' }),
+    ]);
+
+    expect(result.reviewCalls).toBe(2);
+    expect(result.job).toMatchObject({
+      state: 'delivered',
+      reviewReceipt: { approved: true, reason: 'valid independent approval' },
+      reviewAttempts: [
+        { attemptNumber: 1, status: 'failed', retryable: true },
+        { attemptNumber: 2, status: 'completed', approved: true },
+      ],
+    });
+  });
+
+  it('refunds after the deterministic reviewer retry limit is exhausted', async () => {
+    const result = await processReviewSequence('invalid-exhaustion', [
+      () => reviewContentResponse(''),
+      () => reviewContentResponse('{not-json'),
+    ]);
+
+    expect(result.reviewCalls).toBe(2);
+    expect(result.runCalls).toBe(1);
+    expect(result.job).toMatchObject({
+      state: 'refunded',
+      estimatedCostUsd: 0.051,
+      reviewAttempts: [
+        {
+          phase: 'implementation',
+          attemptNumber: 1,
+          maxAttempts: 2,
+          status: 'failed',
+          retryable: true,
+        },
+        {
+          phase: 'implementation',
+          attemptNumber: 2,
+          maxAttempts: 2,
+          status: 'failed',
+          retryable: true,
+        },
+      ],
+    });
+  });
+
+  it('does not retry a valid explicit rejection', async () => {
+    const result = await processReviewSequence('explicit-rejection', [
+      () => reviewResponse({ approved: false, reason: 'missing edge case' }),
+      () => reviewResponse({ approved: true, reason: 'repair is scoped' }),
+    ]);
+
+    expect(result.reviewCalls).toBe(2);
+    expect(result.runCalls).toBe(2);
+    expect(result.job).toMatchObject({
+      state: 'delivered',
+      reviewAttempts: [
+        {
+          phase: 'implementation',
+          attemptNumber: 1,
+          status: 'completed',
+          approved: false,
+          retryable: false,
+        },
+        {
+          phase: 'repair',
+          attemptNumber: 1,
+          status: 'completed',
+          approved: true,
+          retryable: false,
+        },
+      ],
+    });
+  });
+
   it('refunds when the reviewer returns a nearby canonical model identity', async () => {
     const store = new MemoryStore();
     const jobQuote = { ...quote, validationCommands: [] };
     const created = (await store.createJob(jobQuote, payment, 'review-model-mismatch')).job;
     await store.transitionJob(created.id, 'settlement_pending', 'paid');
+    let reviewCalls = 0;
     const request = async (input: string | URL | Request) => {
       const url = String(input);
       if (url.endsWith('/v1/runs')) return Response.json({ run_id: 'run-model-mismatch' });
@@ -185,10 +317,10 @@ describe('JobProcessor', () => {
       }
       if (url.endsWith('/artifacts')) return Response.json({ ...artifacts, validations: [] });
       if (url.endsWith('/chat/completions')) {
-        return reviewResponse(
-          { approved: true, reason: 'scoped' },
-          'deepseek/deepseek-v4-flash-0730',
-        );
+        reviewCalls += 1;
+        return reviewCalls === 1
+          ? reviewResponse({ approved: true, reason: 'scoped' }, 'deepseek/deepseek-v4-flash-0730')
+          : reviewResponse({ approved: true, reason: 'must not be accepted' });
       }
       throw new Error(`unexpected request: ${url}`);
     };
@@ -201,15 +333,63 @@ describe('JobProcessor', () => {
       request as typeof fetch,
     ).process(created.id);
 
+    expect(reviewCalls).toBe(1);
     expect(await store.job(created.id)).toMatchObject({
       state: 'refunded',
       error: 'UsePod reviewer returned a different model',
       reviewAttempts: [
         {
           phase: 'implementation',
+          attemptNumber: 1,
           status: 'failed',
           provider: { model: 'deepseek-v4-flash', route: 'marketplace' },
           error: 'UsePod reviewer returned a different model',
+        },
+      ],
+    });
+  });
+
+  it('does not retry or accept a reviewer response that exceeds its attempt ceiling', async () => {
+    const result = await processReviewSequence('review-spend-cap', [
+      () => reviewCostResponse('70000'),
+      () => reviewResponse({ approved: true, reason: 'must not be accepted' }),
+    ]);
+
+    expect(result.reviewCalls).toBe(1);
+    expect(result.job).toMatchObject({
+      state: 'refunded',
+      estimatedCostUsd: 0.12,
+      reviewAttempts: [
+        {
+          attemptNumber: 1,
+          maxCostUsd: 0.06,
+          costUsd: 0.07,
+          status: 'failed',
+          retryable: false,
+        },
+      ],
+    });
+  });
+
+  it('does not retry or accept a decision whose durable checkpoint failed', async () => {
+    const result = await processReviewSequence(
+      'review-persistence-failure',
+      [
+        () => reviewResponse({ approved: true, reason: 'uncommitted decision' }),
+        () => reviewResponse({ approved: true, reason: 'must not be accepted' }),
+      ],
+      new ReviewDecisionPersistenceStore(),
+    );
+
+    expect(result.reviewCalls).toBe(1);
+    expect(result.job).toMatchObject({
+      state: 'refunded',
+      estimatedCostUsd: 0.0505,
+      reviewAttempts: [
+        {
+          attemptNumber: 1,
+          status: 'received',
+          costUsd: 0.0005,
         },
       ],
     });
@@ -733,9 +913,17 @@ describe('JobProcessor', () => {
 
     expect(await store.job(created.id)).toMatchObject({
       state: 'refunded',
-      estimatedCostUsd: 0.0505,
+      estimatedCostUsd: 0.051,
       reviewAttempts: [
         {
+          attemptNumber: 1,
+          phase: 'implementation',
+          costUsd: 0.0005,
+          provider: { route: 'marketplace', costMicrounits: '500' },
+          error: expect.stringMatching(/invalid token usage/),
+        },
+        {
+          attemptNumber: 2,
           phase: 'implementation',
           costUsd: 0.0005,
           provider: { route: 'marketplace', costMicrounits: '500' },
@@ -745,7 +933,7 @@ describe('JobProcessor', () => {
     });
   });
 
-  it('books the full review allocations when provider cost reports are missing', async () => {
+  it('books the full submitted-attempt allocations when provider cost reports are missing', async () => {
     const store = new MemoryStore();
     const jobQuote = { ...quote, validationCommands: [] };
     const created = (await store.createJob(jobQuote, payment, 'missing-review-cost-key')).job;
@@ -796,17 +984,17 @@ describe('JobProcessor', () => {
     expect(submissions).toBe(2);
     expect(await store.job(created.id)).toMatchObject({
       state: 'refunded',
-      estimatedCostUsd: 0.3,
+      estimatedCostUsd: 0.2,
       reviewAttempts: [
         {
           phase: 'implementation',
-          costUsd: 0.12,
+          costUsd: 0.06,
           status: 'completed',
           provider: { route: 'marketplace' },
         },
         {
           phase: 'repair',
-          costUsd: 0.08,
+          costUsd: 0.04,
           status: 'completed',
           provider: { route: 'marketplace' },
         },
@@ -860,8 +1048,8 @@ describe('JobProcessor', () => {
     await started;
     expect(await store.job(created.id)).toMatchObject({
       state: 'validating',
-      estimatedCostUsd: 0.17,
-      reviewAttempts: [{ status: 'pending', costUsd: 0.12 }],
+      estimatedCostUsd: 0.11,
+      reviewAttempts: [{ status: 'pending', costUsd: 0.06 }],
     });
     expect((await store.job(created.id))?.reviewAttempts?.[0]?.provider).toBeUndefined();
 
@@ -871,13 +1059,13 @@ describe('JobProcessor', () => {
 
     expect(await store.job(created.id)).toMatchObject({
       state: 'refunded',
-      estimatedCostUsd: 0.17,
-      reviewAttempts: [{ status: 'failed', costUsd: 0.12 }],
+      estimatedCostUsd: 0.11,
+      reviewAttempts: [{ status: 'pending', costUsd: 0.06 }],
     });
     expect((await store.job(created.id))?.reviewAttempts?.[0]?.provider).toBeUndefined();
     const routeCost = (await store.ledgerEntries()).find((entry) => entry.kind === 'route_cost');
-    expect(routeCost?.amountUsd).toBe(0.17);
-    expect((await treasurySnapshot(store)).trailingVariableAndOperatingEstimateUsd).toBe(0.17);
+    expect(routeCost?.amountUsd).toBe(0.11);
+    expect((await treasurySnapshot(store)).trailingVariableAndOperatingEstimateUsd).toBe(0.11);
   });
 });
 
@@ -926,4 +1114,112 @@ function reviewResponse(
       },
     },
   );
+}
+
+function reviewContentResponse(content: string): Response {
+  return Response.json(
+    {
+      model: 'deepseek-v4-flash',
+      choices: [{ message: { content } }],
+      usage: { prompt_tokens: 50, completion_tokens: 10 },
+    },
+    {
+      headers: {
+        'x-pod-route': 'marketplace',
+        'x-balance-remaining': '9000000',
+        'x-pod-provider-id': 'provider-1',
+        'x-balance-cost-microunits': '500',
+      },
+    },
+  );
+}
+
+function reviewHttpResponse(status: number, body: string): Response {
+  return new Response(body, {
+    status,
+    headers: {
+      'x-pod-route': 'marketplace',
+      'x-balance-remaining': '9000000',
+      'x-pod-provider-id': 'provider-1',
+      'x-balance-cost-microunits': '500',
+    },
+  });
+}
+
+function reviewCostResponse(costMicrounits: string): Response {
+  const response = reviewResponse({ approved: true, reason: 'over ceiling' });
+  response.headers.set('x-balance-cost-microunits', costMicrounits);
+  return response;
+}
+
+async function processReviewSequence(
+  key: string,
+  responses: Array<() => Response>,
+  store: MemoryStore = new MemoryStore(),
+): Promise<{ job: Job; reviewCalls: number; runCalls: number }> {
+  const jobQuote = { ...quote, validationCommands: [] };
+  const payment: Payment = {
+    payer: '1'.repeat(32),
+    transaction: `payment-${key}`,
+    amountAtomic: '2000000',
+  };
+  const created = (await store.createJob(jobQuote, payment, key)).job;
+  await store.transitionJob(created.id, 'settlement_pending', 'paid');
+  let reviewCalls = 0;
+  let runCalls = 0;
+  const request = async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith('/v1/runs')) {
+      runCalls += 1;
+      const body = JSON.parse(String(init?.body)) as { session_id: string };
+      const phase = body.session_id.endsWith(':repair') ? 'repair' : 'implementation';
+      return Response.json({ run_id: `run-${phase}` });
+    }
+    if (url.endsWith('/run-implementation') || url.endsWith('/run-repair')) {
+      return Response.json({
+        status: 'completed',
+        usage: { inputTokens: 100, outputTokens: 40 },
+        costUsd: 0.05,
+      });
+    }
+    if (url.endsWith('/artifacts')) return Response.json({ ...artifacts, validations: [] });
+    if (url.endsWith('/chat/completions')) {
+      const response = responses[reviewCalls];
+      reviewCalls += 1;
+      if (!response) throw new Error('unexpected reviewer retry');
+      return response();
+    }
+    throw new Error(`unexpected request: ${url}`);
+  };
+  const github = {
+    currentHead: async () => jobQuote.baseSha,
+    publish: async () => 'https://github.com/example/project/pull/review-sequence',
+  };
+
+  await new JobProcessor(
+    loadConfig({ MIZUKI_PAYMENT_MODE: 'mock', USEPOD_API_KEY: 'test' }),
+    store,
+    github,
+    request as typeof fetch,
+  ).process(created.id);
+
+  const job = await store.job(created.id);
+  if (!job) throw new Error('processed job was not found');
+  return { job, reviewCalls, runCalls };
+}
+
+class ReviewDecisionPersistenceStore extends MemoryStore {
+  private rejectDecision = true;
+
+  override async transitionJob(...args: Parameters<MemoryStore['transitionJob']>) {
+    const patch = args[3];
+    if (
+      this.rejectDecision &&
+      patch?.reviewAttempts?.some((attempt) => attempt.status === 'completed')
+    ) {
+      this.rejectDecision = false;
+      throw new Error('review decision checkpoint unavailable');
+    }
+    return super.transitionJob(...args);
+  }
 }

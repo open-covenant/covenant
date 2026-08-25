@@ -41,6 +41,7 @@ type Review = {
 type ReviewPhase = 'implementation' | 'repair';
 export type SpendPhase = 'implementation' | 'implementation-review' | 'repair' | 'repair-review';
 const MAX_REVIEW_OUTPUT_TOKENS = 512;
+const MAX_REVIEW_ATTEMPTS = 2;
 
 const PHASE_WEIGHTS: Record<SpendPhase, number> = {
   implementation: 55,
@@ -520,15 +521,6 @@ export class JobProcessor {
   ): Promise<Review> {
     if (!this.config.usePodApiKey)
       throw new Error('USEPOD_API_KEY is required for independent review');
-    const requestConfig = {
-      baseUrl: this.config.usePodBaseUrl,
-      token: this.config.usePodApiKey,
-      model: this.config.usePodModel,
-      maxInputPriceMicrounits: this.config.usePodMaxInputPriceMicrounits,
-      maxOutputPriceMicrounits: this.config.usePodMaxOutputPriceMicrounits,
-      minimumBalance: this.config.usePodMinimumBalance,
-      maxCostMicrounits: Math.floor(budgetUsd * 1_000_000),
-    };
     const draft = {
       model: this.config.usePodModel,
       temperature: 0,
@@ -551,6 +543,58 @@ export class JobProcessor {
         },
       ],
     };
+    const attemptBudgets = splitReviewBudget(budgetUsd, MAX_REVIEW_ATTEMPTS);
+    let spentUsd = 0;
+    let lastError: ReviewAttemptError | undefined;
+
+    for (const [index, attemptBudgetUsd] of attemptBudgets.entries()) {
+      try {
+        const review = await this.reviewOnce(
+          jobId,
+          phase,
+          quote,
+          artifacts,
+          draft,
+          attemptBudgetUsd,
+          index + 1,
+          attemptBudgets.length,
+        );
+        return { ...review, costUsd: addUsd(spentUsd, review.costUsd) };
+      } catch (cause) {
+        if (!(cause instanceof ReviewAttemptError)) throw cause;
+        spentUsd = addUsd(spentUsd, cause.costUsd);
+        lastError = cause;
+        if (!cause.retryable || index === attemptBudgets.length - 1) {
+          throw new ProviderReviewError(cause.message, spentUsd);
+        }
+        if ((await this.required(jobId)).state !== 'validating') {
+          throw new ProviderReviewError(cause.message, spentUsd);
+        }
+      }
+    }
+
+    throw new ProviderReviewError(lastError?.message ?? 'UsePod reviewer failed', spentUsd);
+  }
+
+  private async reviewOnce(
+    jobId: string,
+    phase: ReviewPhase,
+    quote: Quote,
+    artifacts: RunArtifacts,
+    draft: Record<string, unknown>,
+    budgetUsd: number,
+    attemptNumber: number,
+    maxAttempts: number,
+  ): Promise<Review> {
+    const requestConfig = {
+      baseUrl: this.config.usePodBaseUrl,
+      token: this.config.usePodApiKey,
+      model: this.config.usePodModel,
+      maxInputPriceMicrounits: this.config.usePodMaxInputPriceMicrounits,
+      maxOutputPriceMicrounits: this.config.usePodMaxOutputPriceMicrounits,
+      minimumBalance: this.config.usePodMinimumBalance,
+      maxCostMicrounits: usdMicrounits(budgetUsd, 'review attempt budget'),
+    };
     const maxTokens = boundedMaxTokens(
       draft,
       requestConfig.maxCostMicrounits,
@@ -562,6 +606,9 @@ export class JobProcessor {
       id: randomUUID(),
       phase,
       artifactHash: artifactHash(quote, artifacts),
+      attemptNumber,
+      maxAttempts,
+      maxCostUsd: budgetUsd,
       status: 'pending',
       costUsd: budgetUsd,
       reviewedAt: new Date().toISOString(),
@@ -577,8 +624,8 @@ export class JobProcessor {
       });
     } catch (cause) {
       const message = `UsePod reviewer request failed: ${cause instanceof Error ? cause.message : String(cause)}`;
-      await this.markReviewAttemptFailed(jobId, attempt.id, message);
-      throw new ProviderReviewError(message, budgetUsd);
+      const persisted = await this.markReviewAttemptFailed(jobId, attempt.id, message, true);
+      throw new ReviewAttemptError(message, budgetUsd, persisted);
     }
 
     let receipt;
@@ -586,8 +633,8 @@ export class JobProcessor {
       receipt = usePodReceipt(response, this.config.usePodModel, requestConfig.minimumBalance);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
-      await this.markReviewAttemptFailed(jobId, attempt.id, message);
-      throw new ProviderReviewError(message, budgetUsd);
+      const persisted = await this.markReviewAttemptFailed(jobId, attempt.id, message, true);
+      throw new ReviewAttemptError(message, budgetUsd, persisted);
     }
     const provider = publicUsePodReceipt(receipt);
     const costUsd = provider.costMicrounits
@@ -600,40 +647,72 @@ export class JobProcessor {
         costUsd,
       });
     } catch (cause) {
-      throw new ProviderReviewError(
+      throw new ReviewAttemptError(
         `review receipt persistence failed: ${cause instanceof Error ? cause.message : String(cause)}`,
         budgetUsd,
+        false,
       );
     }
+
+    if (costUsd > budgetUsd) {
+      const message = 'UsePod reviewer exceeded its attempt spend cap';
+      await this.markReviewAttemptFailed(jobId, attempt.id, message, false);
+      throw new ReviewAttemptError(message, costUsd, false);
+    }
+    if (!response.ok) {
+      let responseBody = '';
+      try {
+        responseBody = await response.text();
+      } catch (cause) {
+        responseBody = cause instanceof Error ? cause.message : String(cause);
+      }
+      const message = `UsePod reviewer failed: ${response.status} ${responseBody}`;
+      const retryable = transientReviewStatus(response.status);
+      const persisted = await this.markReviewAttemptFailed(jobId, attempt.id, message, retryable);
+      throw new ReviewAttemptError(message, costUsd, retryable && persisted);
+    }
+
+    let body;
     try {
-      if (costUsd > budgetUsd) {
-        throw new Error('UsePod reviewer exceeded its phase spend cap');
-      }
-      if (!response.ok) {
-        throw new Error(`UsePod reviewer failed: ${response.status} ${await response.text()}`);
-      }
-      const body = z
+      body = z
         .object({
           model: z.string(),
           choices: z.array(z.object({ message: z.object({ content: z.string().min(1) }) })).min(1),
           usage: z.unknown(),
         })
         .parse(await response.json());
-      if (!matchesUsePodModel(this.config.usePodModel, body.model)) {
-        throw new Error('UsePod reviewer returned a different model');
-      }
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      const persisted = await this.markReviewAttemptFailed(jobId, attempt.id, message, true);
+      throw new ReviewAttemptError(message, costUsd, persisted);
+    }
+
+    if (!matchesUsePodModel(this.config.usePodModel, body.model)) {
+      const message = 'UsePod reviewer returned a different model';
+      await this.markReviewAttemptFailed(jobId, attempt.id, message, false);
+      throw new ReviewAttemptError(message, costUsd, false);
+    }
+
+    try {
       const usage = parseUsePodUsage(body.usage);
       const decision = z
         .object({ approved: z.boolean(), reason: z.string().min(1).max(2_000) })
         .strict()
         .parse(JSON.parse(body.choices[0]!.message.content));
-      await this.updateReviewAttempt(jobId, attempt.id, {
-        status: 'completed',
-        inputTokens: usage.promptTokens,
-        outputTokens: usage.completionTokens,
-        approved: decision.approved,
-        reason: decision.reason,
-      });
+      try {
+        await this.updateReviewAttempt(jobId, attempt.id, {
+          status: 'completed',
+          inputTokens: usage.promptTokens,
+          outputTokens: usage.completionTokens,
+          approved: decision.approved,
+          reason: decision.reason,
+          retryable: false,
+        });
+      } catch (cause) {
+        throw new ReviewPersistenceError(
+          `review decision persistence failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+        );
+      }
       return {
         approved: decision.approved,
         reason: decision.reason,
@@ -644,8 +723,11 @@ export class JobProcessor {
       };
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
-      await this.markReviewAttemptFailed(jobId, attempt.id, message);
-      throw new ProviderReviewError(message, costUsd);
+      if (cause instanceof ReviewPersistenceError) {
+        throw new ReviewAttemptError(message, costUsd, false);
+      }
+      const persisted = await this.markReviewAttemptFailed(jobId, attempt.id, message, true);
+      throw new ReviewAttemptError(message, costUsd, persisted);
     }
   }
 
@@ -824,10 +906,15 @@ export class JobProcessor {
     try {
       await this.onRefunded(job);
     } catch (cause) {
-      await this.store.appendActivity('bounty.creation_failed', job.id, {
-        status: 'creation_failed',
-        error: cause instanceof Error ? cause.message : String(cause),
-      });
+      console.error(
+        `bounty creation failed for job ${job.id}: ${cause instanceof Error ? cause.message : String(cause)}`,
+      );
+      await this.store.appendActivity(
+        'bounty.creation_failed',
+        job.id,
+        { status: 'creation_failed' },
+        stableActivityId('bounty.creation_failed', job.id),
+      );
     }
   }
 
@@ -865,7 +952,7 @@ export class JobProcessor {
     if (!Number.isFinite(estimatedCostUsd) || estimatedCostUsd > job.quote.maxCostUsd + 1e-9) {
       throw new Error('review reservation exceeds the job spend cap');
     }
-    await this.store.patchJob(id, {
+    await this.store.transitionJob(id, 'validating', 'validating', {
       reviewAttempts: [...(job.reviewAttempts ?? []), attempt],
       estimatedCostUsd,
     });
@@ -887,7 +974,7 @@ export class JobProcessor {
     if (!Number.isFinite(estimatedCostUsd) || estimatedCostUsd < 0) {
       throw new Error('review cost reconciliation is invalid');
     }
-    await this.store.patchJob(id, {
+    await this.store.transitionJob(id, 'validating', 'validating', {
       reviewAttempts: attempts.map((attempt) =>
         attempt.id === attemptId ? { ...attempt, ...patch } : attempt,
       ),
@@ -899,11 +986,14 @@ export class JobProcessor {
     id: string,
     attemptId: string,
     error: string,
-  ): Promise<void> {
+    retryable: boolean,
+  ): Promise<boolean> {
     try {
-      await this.updateReviewAttempt(id, attemptId, { status: 'failed', error });
+      await this.updateReviewAttempt(id, attemptId, { status: 'failed', error, retryable });
+      return true;
     } catch {
       // The pending full-cost checkpoint remains the conservative source of truth.
+      return false;
     }
   }
 }
@@ -927,6 +1017,18 @@ class ProviderReviewError extends Error {
     super(message);
   }
 }
+
+class ReviewAttemptError extends Error {
+  constructor(
+    message: string,
+    readonly costUsd: number,
+    readonly retryable: boolean,
+  ) {
+    super(message);
+  }
+}
+
+class ReviewPersistenceError extends Error {}
 
 const USDC_MAINNET = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const FORBIDDEN_PATH =
@@ -1013,6 +1115,26 @@ export function phaseBudgetUsd(maxCostUsd: number, spentUsd: number, phase: Spen
 
 function addUsd(left: number, right: number): number {
   return roundUsd(roundUsd(left) + roundUsd(right));
+}
+
+function splitReviewBudget(budgetUsd: number, maxAttempts: number): number[] {
+  const total = usdMicrounits(budgetUsd, 'review budget');
+  const attempts = Math.min(total, maxAttempts);
+  const base = Math.floor(total / attempts);
+  const remainder = total % attempts;
+  return Array.from(
+    { length: attempts },
+    (_, index) => (base + (index < remainder ? 1 : 0)) / 1_000_000,
+  );
+}
+
+function transientReviewStatus(status: number): boolean {
+  return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
+function stableActivityId(kind: string, subjectId: string): string {
+  const hash = createHash('sha256').update(`mizuki-activity-v1:${kind}:${subjectId}`).digest('hex');
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-5${hash.slice(13, 16)}-a${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
 }
 
 function roundUsd(value: number): number {

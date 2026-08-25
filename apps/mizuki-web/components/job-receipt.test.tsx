@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { Job, ProviderRouteReceipt } from '@/lib/types';
-import { JobReceipt } from './job-receipt';
+import { JobReceipt, jobPollingComplete, shouldApplyJobUpdate } from './job-receipt';
 
 describe('JobReceipt', () => {
   it('shows a merged delivery and the discharged refund-liability commitment', () => {
@@ -179,4 +179,67 @@ describe('JobReceipt', () => {
     expect(html).not.toContain('4000000');
     expect(html).not.toContain('balanceRemaining');
   });
+
+  it('keeps a delivered job live until merge and refund-liability discharge are recorded', () => {
+    const delivered = jobFixture({ state: 'delivered' });
+    const merged = jobFixture({ state: 'delivered', mergedAt: '2026-08-25T09:02:00.000Z' });
+    const discharged = jobFixture({
+      state: 'delivered',
+      mergedAt: '2026-08-25T09:02:00.000Z',
+      refundLiabilityDischarge: {
+        dischargedAt: '2026-08-25T09:02:03.000Z',
+        evidenceHash: 'e'.repeat(64),
+      },
+    });
+
+    expect(jobPollingComplete(delivered)).toBe(false);
+    expect(jobPollingComplete(merged)).toBe(false);
+    expect(jobPollingComplete(discharged)).toBe(true);
+    expect(renderToStaticMarkup(<JobReceipt initial={merged} />)).toContain('Live');
+    expect(renderToStaticMarkup(<JobReceipt initial={discharged} />)).not.toContain('Live');
+  });
+
+  it('accepts only newer status records for the same unfinished job', () => {
+    const current = jobFixture({ updatedAt: '2026-08-25T09:01:00.000Z' });
+
+    expect(
+      shouldApplyJobUpdate(current, jobFixture({ updatedAt: '2026-08-25T09:01:01.000Z' })),
+    ).toBe(true);
+    expect(
+      shouldApplyJobUpdate(current, jobFixture({ updatedAt: '2026-08-25T09:01:00.000Z' })),
+    ).toBe(false);
+    expect(
+      shouldApplyJobUpdate(current, jobFixture({ updatedAt: '2026-08-25T09:00:59.000Z' })),
+    ).toBe(false);
+    expect(
+      shouldApplyJobUpdate(
+        current,
+        jobFixture({ id: 'job-other', updatedAt: '2026-08-25T09:01:01.000Z' }),
+      ),
+    ).toBe(false);
+  });
 });
+
+function jobFixture(patch: Partial<Job> = {}): Job {
+  return {
+    id: 'job-live',
+    state: 'running',
+    issueUrl: 'https://github.com/public/tool/issues/3',
+    class: 'micro',
+    priceAtomic: '2000000',
+    changedFiles: [],
+    validations: [],
+    variableRouteCostEstimateUsd: 0.12,
+    costCoverage: {
+      included: [
+        'gateway_model_token_rate_estimate',
+        'gateway_sandbox_runtime_estimate',
+        'reviewer_model_token_rate_estimate',
+      ],
+      excluded: ['provider_billing_adjustments', 'chain_and_facilitator_fees', 'infrastructure'],
+    },
+    createdAt: '2026-08-25T09:00:00.000Z',
+    updatedAt: '2026-08-25T09:01:00.000Z',
+    ...patch,
+  };
+}

@@ -1,8 +1,52 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { logoutWorkbench, onWorkbenchUnauthorized, workbenchRequest } from './workbench-client';
+import {
+  fetchWithDeadline,
+  logoutWorkbench,
+  onWorkbenchUnauthorized,
+  workbenchRequest,
+  WorkbenchRequestTimeoutError,
+} from './workbench-client';
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
+});
+
+describe('bounded Workbench requests', () => {
+  it('propagates a caller abort through the combined request signal', async () => {
+    const caller = new AbortController();
+    const request = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), {
+            once: true,
+          });
+        }),
+    );
+
+    const pending = fetchWithDeadline('/resource', { signal: caller.signal }, request, 10_000);
+    caller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(request.mock.calls[0]?.[1]?.signal).not.toBe(caller.signal);
+  });
+
+  it('ends a stalled request at its deadline', async () => {
+    vi.useFakeTimers();
+    const request = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), {
+            once: true,
+          });
+        }),
+    );
+    const pending = fetchWithDeadline('/resource', {}, request, 1_000);
+    const assertion = expect(pending).rejects.toBeInstanceOf(WorkbenchRequestTimeoutError);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await assertion;
+  });
 });
 
 describe('Workbench session handling', () => {
@@ -49,15 +93,28 @@ describe('Workbench session handling', () => {
   });
 
   it('navigates only after logout succeeds', async () => {
-    const request = vi.fn(async () => Response.json({ ok: true }));
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ csrfToken: 'a'.repeat(43) }))
+      .mockResolvedValueOnce(Response.json({ ok: true }));
     vi.stubGlobal('fetch', request);
     const navigate = vi.fn();
 
     await logoutWorkbench(navigate);
 
-    expect(request).toHaveBeenCalledWith(
+    expect(request).toHaveBeenNthCalledWith(
+      1,
+      '/api/mizuki/v1/auth/csrf',
+      expect.objectContaining({ credentials: 'include' }),
+    );
+    expect(request).toHaveBeenNthCalledWith(
+      2,
       '/api/mizuki/v1/auth/logout',
-      expect.objectContaining({ method: 'POST', credentials: 'include' }),
+      expect.objectContaining({
+        method: 'POST',
+        credentials: 'include',
+        headers: expect.objectContaining({ 'x-mizuki-csrf-token': 'a'.repeat(43) }),
+      }),
     );
     expect(navigate).toHaveBeenCalledOnce();
   });

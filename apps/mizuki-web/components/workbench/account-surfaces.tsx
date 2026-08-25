@@ -14,11 +14,7 @@ import {
   type ApiTokenCredential,
   type ApiTokenScope,
 } from '@/lib/workbench';
-import {
-  logoutWorkbench,
-  useWorkbenchResource,
-  workbenchRequest,
-} from '@/lib/workbench-client';
+import { logoutWorkbench, useWorkbenchResource, workbenchRequest } from '@/lib/workbench-client';
 import {
   WorkbenchError,
   WorkbenchLoading,

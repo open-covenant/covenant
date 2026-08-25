@@ -27,8 +27,21 @@ export type ConnectedWallet = {
   account: WalletAccount;
 };
 
+export type PaymentWalletNetwork = {
+  chain: 'solana:mainnet' | 'solana:devnet';
+  label: 'Solana mainnet' | 'Solana devnet';
+};
+
+export function paymentWalletNetwork(): PaymentWalletNetwork {
+  return process.env.NEXT_PUBLIC_SOLANA_NETWORK === 'solana-devnet'
+    ? { chain: 'solana:devnet', label: 'Solana devnet' }
+    : { chain: 'solana:mainnet', label: 'Solana mainnet' };
+}
+
 export function useStandardWallet(requirement: 'message' | 'transaction') {
   const registry = useMemo(() => getWallets(), []);
+  const paymentNetwork = paymentWalletNetwork();
+  const requiredChain = requirement === 'transaction' ? paymentNetwork.chain : undefined;
   const [wallets, setWallets] = useState<readonly CompatibleWallet[]>([]);
   const [connected, setConnected] = useState<ConnectedWallet | null>(null);
   const [ready, setReady] = useState(false);
@@ -40,10 +53,10 @@ export function useStandardWallet(requirement: 'message' | 'transaction') {
   const refresh = useCallback(() => {
     setWallets(
       registry.get().filter((wallet): wallet is CompatibleWallet => {
-        return supportsWallet(wallet, requirement);
+        return supportsWallet(wallet, requirement, requiredChain);
       }),
     );
-  }, [registry, requirement]);
+  }, [registry, requirement, requiredChain]);
 
   useEffect(() => {
     refresh();
@@ -78,19 +91,29 @@ export function useStandardWallet(requirement: 'message' | 'transaction') {
           'standard:connect'
         ] as StandardConnectFeature['standard:connect'];
         const result = await feature.connect();
-        const account = selectSolanaAccount(result.accounts);
-        if (!account) throw new Error('This wallet did not expose a Solana account');
+        const account = selectSolanaAccount(result.accounts, requiredChain);
+        if (!account) {
+          throw new Error(
+            requiredChain
+              ? `This wallet did not expose a ${paymentNetwork.label} account`
+              : 'This wallet did not expose a Solana account',
+          );
+        }
         if ('standard:events' in wallet.features) {
-          stopObserving.current = observeWalletAccounts(wallet, (next) => {
-            if (connectionGeneration.current !== generation) return;
-            if (!next) {
-              setReady(false);
-              setConnected(null);
-              return;
-            }
-            setConnected({ wallet, account: next });
-            setReady(true);
-          });
+          stopObserving.current = observeWalletAccounts(
+            wallet,
+            (next) => {
+              if (connectionGeneration.current !== generation) return;
+              if (!next) {
+                setReady(false);
+                setConnected(null);
+                return;
+              }
+              setConnected({ wallet, account: next });
+              setReady(true);
+            },
+            requiredChain,
+          );
         } else if (requirement === 'transaction') {
           throw new Error('This wallet cannot report account or disconnect changes');
         }
@@ -108,7 +131,7 @@ export function useStandardWallet(requirement: 'message' | 'transaction') {
         setConnecting(null);
       }
     },
-    [requirement],
+    [paymentNetwork.label, requiredChain, requirement],
   );
 
   const disconnect = useCallback(async () => {
@@ -136,30 +159,43 @@ export function useStandardWallet(requirement: 'message' | 'transaction') {
 export function observeWalletAccounts(
   wallet: CompatibleWallet,
   update: (account: WalletAccount | null) => void,
+  requiredChain?: PaymentWalletNetwork['chain'],
 ): () => void {
   if (!('standard:events' in wallet.features)) {
     throw new Error('This wallet cannot report account or disconnect changes');
   }
   const events = wallet.features['standard:events'] as StandardEventsFeature['standard:events'];
   return events.on('change', ({ accounts }) => {
-    if (accounts) update(selectSolanaAccount(accounts));
+    if (accounts) update(selectSolanaAccount(accounts, requiredChain));
   });
 }
 
-export function selectSolanaAccount(accounts: readonly WalletAccount[]): WalletAccount | null {
+export function selectSolanaAccount(
+  accounts: readonly WalletAccount[],
+  requiredChain?: PaymentWalletNetwork['chain'],
+): WalletAccount | null {
   return (
-    accounts.find((candidate) => candidate.chains.some((chain) => chain.startsWith('solana:'))) ??
-    null
+    accounts.find((candidate) =>
+      requiredChain
+        ? candidate.chains.includes(requiredChain)
+        : candidate.chains.some((chain) => chain.startsWith('solana:')),
+    ) ?? null
   );
 }
 
-function supportsWallet(wallet: Wallet, requirement: 'message' | 'transaction') {
+function supportsWallet(
+  wallet: Wallet,
+  requirement: 'message' | 'transaction',
+  requiredChain?: PaymentWalletNetwork['chain'],
+) {
   const feature = requirement === 'message' ? 'solana:signMessage' : 'solana:signTransaction';
   return (
     'standard:connect' in wallet.features &&
     (requirement === 'message' || 'standard:events' in wallet.features) &&
     feature in wallet.features &&
-    wallet.chains.some((chain) => chain.startsWith('solana:'))
+    (requiredChain
+      ? wallet.chains.includes(requiredChain)
+      : wallet.chains.some((chain) => chain.startsWith('solana:')))
   );
 }
 

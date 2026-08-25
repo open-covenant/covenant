@@ -53,13 +53,32 @@ export class MizukiMcpClient {
       }
       throw cause;
     }
-    const value = await response.json().catch(() => ({ error: 'invalid JSON response' }));
+    let value: unknown;
+    try {
+      value = await response.json();
+    } catch (cause) {
+      if (signal.aborted) {
+        throw new Error(`Mizuki API request timed out after ${this.timeoutMs}ms`);
+      }
+      if (cause instanceof SyntaxError) {
+        throw new Error(`Mizuki API ${response.status}: invalid JSON response`);
+      }
+      throw cause;
+    }
     if (!response.ok) throw new Error(`Mizuki API ${response.status}: ${JSON.stringify(value)}`);
     return value;
   }
 
   async repositories(): Promise<unknown> {
     return this.call('/v1/account/repositories', { authenticated: true });
+  }
+
+  async quote(issueUrl: string): Promise<unknown> {
+    return this.call(this.session ? '/v1/account/quotes' : '/v1/quotes', {
+      authenticated: Boolean(this.session),
+      method: 'POST',
+      body: { github_issue_url: issueUrl },
+    });
   }
 
   async repositoryReadiness(owner: string, repo: string): Promise<unknown> {

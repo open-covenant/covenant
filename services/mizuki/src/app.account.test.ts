@@ -1,7 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp, SerialGate, type AppDependencies } from './app.js';
-import { GithubAccessError, GithubReadinessError } from './github.js';
+import { GithubReadinessError } from './github.js';
 import { PolicyRequestError } from './policy-client.js';
 import { MemoryStore } from './store.js';
 import type { GithubIssue, Payment, Quote } from './types.js';
@@ -562,6 +562,63 @@ describe('workbench account API', () => {
     });
   });
 
+  it('requires an explicit repository link for authenticated issue, preflight, and quote routes', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    await store.updateOperatorControls({
+      expectedRevision: 0,
+      intakeEnabled: true,
+      reason: 'open intake for repository boundary test',
+      updatedBy: 'operator',
+    });
+    const issue = vi.fn(async () => githubIssue);
+    const issuesForMaintainer = vi.fn();
+    const preflightIssue = vi.fn();
+    const repositoryMetadataForMaintainer = vi.fn();
+    const challenge = vi.fn();
+    const base = await serve(
+      dependencies(store, {
+        github: { issue, issuesForMaintainer, preflightIssue, repositoryMetadataForMaintainer },
+        payments: { challenge },
+      }),
+    );
+
+    const issues = await fetch(`${base}/v1/repositories/example/project/issues`, {
+      headers: sessionHeaders,
+    });
+    expect(issues.status).toBe(403);
+
+    const preflight = await fetch(`${base}/v1/preflights`, {
+      method: 'POST',
+      headers: { ...sessionHeaders, 'content-type': 'application/json' },
+      body: JSON.stringify({ github_issue_url: issueUrl }),
+    });
+    expect(preflight.status).toBe(403);
+
+    const quoteResponse = await fetch(`${base}/v1/account/quotes`, {
+      method: 'POST',
+      headers: { ...sessionHeaders, 'content-type': 'application/json' },
+      body: JSON.stringify({ github_issue_url: issueUrl }),
+    });
+    expect(quoteResponse.status).toBe(403);
+    expect(issue).not.toHaveBeenCalled();
+    expect(issuesForMaintainer).not.toHaveBeenCalled();
+    expect(preflightIssue).not.toHaveBeenCalled();
+    expect(repositoryMetadataForMaintainer).not.toHaveBeenCalled();
+    expect(challenge).not.toHaveBeenCalled();
+    await expect(store.repositoriesForAccount('42', 25)).resolves.toMatchObject({
+      repositories: [],
+    });
+
+    const staleSession = await fetch(`${base}/v1/account/quotes`, {
+      method: 'POST',
+      headers: { cookie: 'mizuki_session=expired', 'content-type': 'application/json' },
+      body: JSON.stringify({ github_issue_url: issueUrl }),
+    });
+    expect(staleSession.status).toBe(401);
+    expect(issue).not.toHaveBeenCalled();
+  });
+
   it('uses a bounded account bounty query and exposes its page metadata', async () => {
     const store = new MemoryStore();
     await store.upsertContributor('42', 'maintainer');
@@ -618,6 +675,7 @@ describe('workbench account API', () => {
   it('links a signed-in quote to its verified maintainer account', async () => {
     const store = new MemoryStore();
     await store.upsertContributor('42', 'maintainer');
+    await store.linkAccountRepository('42', 'example', 'project');
     await store.updateOperatorControls({
       expectedRevision: 0,
       intakeEnabled: true,
@@ -643,7 +701,7 @@ describe('workbench account API', () => {
       }),
     );
 
-    const response = await fetch(`${base}/v1/quotes`, {
+    const response = await fetch(`${base}/v1/account/quotes`, {
       method: 'POST',
       headers: { ...sessionHeaders, 'content-type': 'application/json' },
       body: JSON.stringify({ github_issue_url: issueUrl }),
@@ -661,15 +719,14 @@ describe('workbench account API', () => {
   it('does not issue a payable quote when verified account linking is not durable', async () => {
     const store = new MemoryStore();
     await store.upsertContributor('42', 'maintainer');
+    await store.linkAccountRepository('42', 'example', 'project');
     await store.updateOperatorControls({
       expectedRevision: 0,
       intakeEnabled: true,
       reason: 'open intake for durable account link test',
       updatedBy: 'operator',
     });
-    vi.spyOn(store, 'linkAccountRepository').mockRejectedValueOnce(
-      new Error('database write failed'),
-    );
+    vi.spyOn(store, 'linkQuoteToAccount').mockRejectedValueOnce(new Error('database write failed'));
     const challenge = vi.fn(async () => ({ scheme: 'mock' }));
     const base = await serve(
       dependencies(store, {
@@ -681,7 +738,7 @@ describe('workbench account API', () => {
       }),
     );
 
-    const response = await fetch(`${base}/v1/quotes`, {
+    const response = await fetch(`${base}/v1/account/quotes`, {
       method: 'POST',
       headers: { ...sessionHeaders, 'content-type': 'application/json' },
       body: JSON.stringify({ github_issue_url: issueUrl }),
@@ -691,7 +748,7 @@ describe('workbench account API', () => {
     expect(challenge).not.toHaveBeenCalled();
   });
 
-  it('keeps a signed-in contributor quote anonymous when it does not maintain the repository', async () => {
+  it('keeps the public quote route anonymous even when the browser has a session', async () => {
     const store = new MemoryStore();
     await store.upsertContributor('42', 'contributor');
     await store.updateOperatorControls({
@@ -702,12 +759,7 @@ describe('workbench account API', () => {
     });
     const base = await serve(
       dependencies(store, {
-        github: {
-          issue: vi.fn(async () => githubIssue),
-          repositoryMetadataForMaintainer: vi.fn(async () => {
-            throw new GithubAccessError('repository maintainer access is required');
-          }),
-        },
+        github: { issue: vi.fn(async () => githubIssue) },
         payments: { challenge: vi.fn(async () => ({ scheme: 'mock' })) },
       }),
     );
@@ -742,6 +794,7 @@ describe('workbench account API', () => {
   ])('reports policy readiness without misdiagnosing outages', async (failure, status, reason) => {
     const store = new MemoryStore();
     await store.upsertContributor('42', 'maintainer');
+    await store.linkAccountRepository('42', 'example', 'project');
     const base = await serve(
       dependencies(store, {
         github: {

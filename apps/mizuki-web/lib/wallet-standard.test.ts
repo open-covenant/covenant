@@ -2,6 +2,7 @@ import type { WalletAccount } from '@wallet-standard/base';
 import { describe, expect, it, vi } from 'vitest';
 import {
   observeWalletAccounts,
+  paymentWalletNetwork,
   selectSolanaAccount,
   type CompatibleWallet,
 } from './wallet-standard';
@@ -42,6 +43,26 @@ describe('Wallet Standard account observation', () => {
     expect(() => observeWalletAccounts({ features: {} } as CompatibleWallet, vi.fn())).toThrow(
       'cannot report account or disconnect changes',
     );
+  });
+
+  it('selects only an account on the configured payment chain', () => {
+    const devnet = account('devnet', ['solana:devnet']);
+    const mainnet = account('mainnet', ['solana:mainnet']);
+
+    expect(selectSolanaAccount([devnet, mainnet], 'solana:mainnet')).toBe(mainnet);
+    expect(selectSolanaAccount([devnet], 'solana:mainnet')).toBeNull();
+  });
+
+  it('derives the payment label from the configured Solana network', () => {
+    vi.stubEnv('NEXT_PUBLIC_SOLANA_NETWORK', 'solana-devnet');
+    try {
+      expect(paymentWalletNetwork()).toEqual({
+        chain: 'solana:devnet',
+        label: 'Solana devnet',
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 

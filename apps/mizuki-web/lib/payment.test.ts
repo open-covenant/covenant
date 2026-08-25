@@ -4,6 +4,7 @@ import {
   clearWorkbenchPaymentRecovery,
   loadWorkbenchPaymentRecovery,
   PaymentStatusError,
+  issueMatchesRepository,
   quoteMatchesIssue,
   saveWorkbenchPaymentRecovery,
 } from './payment';
@@ -28,6 +29,23 @@ describe('quoteMatchesIssue', () => {
     expect(quoteMatchesIssue(quote, 'https://example.com/open-covenant/covenant/issues/42')).toBe(
       false,
     );
+  });
+});
+
+describe('issueMatchesRepository', () => {
+  it('accepts only issues from the selected repository', () => {
+    expect(
+      issueMatchesRepository(
+        'https://github.com/Open-Covenant/Covenant/issues/42/',
+        'open-covenant/covenant',
+      ),
+    ).toBe(true);
+    expect(
+      issueMatchesRepository(
+        'https://github.com/open-covenant/other/issues/42',
+        'open-covenant/covenant',
+      ),
+    ).toBe(false);
   });
 });
 

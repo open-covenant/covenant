@@ -21,17 +21,11 @@ const repositorySegment = z
 server.registerTool(
   'mizuki_quote',
   {
-    description: 'Get a fixed-price quote and x402 payment requirements for a public GitHub issue.',
+    description:
+      'Get a fixed-price quote and x402 payment requirements for a public GitHub issue. With MIZUKI_SESSION, the repository must already be connected and the quote is linked for payment recovery.',
     inputSchema: { github_issue_url: z.string().url() },
   },
-  async ({ github_issue_url }) =>
-    result(
-      await client.call('/v1/quotes', {
-        method: 'POST',
-        body: { github_issue_url },
-        authenticated: Boolean(session),
-      }),
-    ),
+  async ({ github_issue_url }) => result(await client.quote(github_issue_url)),
 );
 
 server.registerTool(

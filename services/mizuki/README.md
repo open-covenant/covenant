@@ -54,8 +54,9 @@ Before changing the production coding route or model, run `pnpm --filter @covena
 - `GET /v1/account/repositories`, `/v1/account/jobs`, `/v1/account/billing`, and `/v1/account/bounties` return only records linked to the signed-in maintainer account.
 - `POST /v1/account/repositories` with `{"owner":"owner","repo":"repo"}` verifies current maintainer access and explicitly links one public repository to the account.
 - `GET /v1/repositories/:owner/:repo/issues` is read-only and lists bounded maintenance candidates for a linked repository.
-- `POST /v1/preflights` with `{"github_issue_url":"https://github.com/owner/repo/issues/1"}` checks both App installations, maintainer authority, attributable authorization evidence, scope, current repository metadata, and validation commands without creating a quote or accepting payment.
-- `POST /v1/quotes` with `{"github_issue_url":"https://github.com/owner/repo/issues/1"}`.
+- `POST /v1/preflights` with `{"github_issue_url":"https://github.com/owner/repo/issues/1"}` requires a signed-in maintainer and an explicitly connected repository, then checks both App installations, maintainer authority, attributable authorization evidence, scope, current repository metadata, and validation commands without creating a quote or accepting payment.
+- `POST /v1/quotes` with `{"github_issue_url":"https://github.com/owner/repo/issues/1"}` creates a public quote without linking it to a Workbench account.
+- `POST /v1/account/quotes` uses the same input but requires a signed-in maintainer and an explicitly connected repository. It durably links the quote to that account before returning a payment challenge, enabling safe payment-status recovery.
 - `POST /v1/jobs` with `{"quote_id":"..."}`, `Idempotency-Key`, and the x402 v2 `PAYMENT-SIGNATURE` header.
 - `GET /v1/account/quotes/:quoteId/payment-status` with the original `Idempotency-Key` safely distinguishes an existing job reservation from an unpaid quote. It never requests or submits a payment signature.
 - `GET /v1/jobs/:id` for PR, validation, or refund status.

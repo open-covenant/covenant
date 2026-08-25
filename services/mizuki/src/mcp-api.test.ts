@@ -41,6 +41,7 @@ describe('Mizuki MCP API client', () => {
       repository: 'open-covenant/covenant',
       status: 'not_connected',
     });
+    await client.quote('https://github.com/open-covenant/covenant/issues/1');
     await client.issues('open-covenant', 'covenant');
     await client.preflight('https://github.com/open-covenant/covenant/issues/1');
     await client.paymentStatus('11111111-1111-4111-8111-111111111111', 'stable-payment-key');
@@ -48,20 +49,36 @@ describe('Mizuki MCP API client', () => {
     const calls = vi.mocked(request).mock.calls;
     expect(calls.map(([url]) => url)).toEqual([
       'https://mizuki.example/v1/account/repositories',
+      'https://mizuki.example/v1/account/quotes',
       'https://mizuki.example/v1/repositories/open-covenant/covenant/issues',
       'https://mizuki.example/v1/preflights',
       'https://mizuki.example/v1/account/quotes/11111111-1111-4111-8111-111111111111/payment-status',
     ]);
     expect(calls.every(([, init]) => init?.signal instanceof AbortSignal)).toBe(true);
-    expect(calls[2]![1]?.body).toBe(
+    expect(calls[1]![1]?.body).toBe(
       JSON.stringify({
         github_issue_url: 'https://github.com/open-covenant/covenant/issues/1',
       }),
     );
-    expect(new Headers(calls[3]![1]?.headers).get('idempotency-key')).toBe('stable-payment-key');
+    expect(calls[3]![1]?.body).toBe(
+      JSON.stringify({
+        github_issue_url: 'https://github.com/open-covenant/covenant/issues/1',
+      }),
+    );
+    expect(new Headers(calls[4]![1]?.headers).get('idempotency-key')).toBe('stable-payment-key');
     expect(calls.every(([, init]) => new Headers(init?.headers).has('payment-signature'))).toBe(
       false,
     );
+  });
+
+  it('keeps quotes public when the MCP host has no Workbench session', async () => {
+    const request = response({ id: 'quote' });
+    const client = new MizukiMcpClient({ baseUrl: 'https://mizuki.example', request });
+
+    await client.quote('https://github.com/open-covenant/covenant/issues/1');
+
+    expect(vi.mocked(request).mock.calls[0]?.[0]).toBe('https://mizuki.example/v1/quotes');
+    expect(new Headers(vi.mocked(request).mock.calls[0]?.[1]?.headers).has('cookie')).toBe(false);
   });
 
   it('rejects unbounded timeout configuration', () => {
@@ -71,6 +88,34 @@ describe('Mizuki MCP API client', () => {
     expect(
       () => new MizukiMcpClient({ baseUrl: 'https://mizuki.example', timeoutMs: 60_001 }),
     ).toThrow('between 1000 and 60000');
+  });
+
+  it('does not turn a response-body timeout into a successful tool result', async () => {
+    const request = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const signal = init?.signal;
+      return {
+        ok: true,
+        status: 200,
+        json: () =>
+          new Promise((_resolve, reject) => {
+            signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+          }),
+      } as Response;
+    });
+    const client = new MizukiMcpClient({
+      baseUrl: 'https://mizuki.example',
+      timeoutMs: 1_000,
+      request,
+    });
+
+    await expect(client.call('/v1/health')).rejects.toThrow('timed out after 1000ms');
+  });
+
+  it('rejects invalid JSON instead of returning it as a successful result', async () => {
+    const request = vi.fn(async () => new Response('not-json', { status: 200 }));
+    const client = new MizukiMcpClient({ baseUrl: 'https://mizuki.example', request });
+
+    await expect(client.call('/v1/health')).rejects.toThrow('invalid JSON response');
   });
 });
 

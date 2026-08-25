@@ -24,7 +24,7 @@ import {
   publicJob,
   publicTreasury,
 } from './public-api.js';
-import { createQuote } from './quote.js';
+import { createQuote, parseIssueUrl } from './quote.js';
 import { recordPaymentReceipts } from './receipts.js';
 import { assertLiabilityMatchesPayment, recoverSettlement } from './settlement-recovery.js';
 import {
@@ -439,6 +439,19 @@ export function createApp(deps: AppDependencies) {
         if (typeof body.github_issue_url !== 'string') {
           return json(res, 400, { error: 'github_issue_url is required' });
         }
+        const requested = parseIssueUrl(body.github_issue_url);
+        if (
+          !(await accountRepositoryLinked(
+            deps.store,
+            session.githubId,
+            requested.owner,
+            requested.repo,
+          ))
+        ) {
+          return json(res, 403, {
+            error: 'Connect this repository in Workbench before running preflight.',
+          });
+        }
         const inspected = await deps.github.preflightIssue(
           body.github_issue_url,
           session.githubLogin,
@@ -446,9 +459,6 @@ export function createApp(deps: AppDependencies) {
         const policy = await repositoryPolicyReadiness(deps, inspected.repository);
         const blockers = [...inspected.blockers];
         if (policy.status !== 'ready') blockers.push(policy.reason);
-        if (inspected.maintainer.verified) {
-          await deps.store.linkAccountRepository(session.githubId, inspected.owner, inspected.repo);
-        }
         const checkedAt = new Date().toISOString();
         return json(res, 200, {
           repository: {
@@ -501,6 +511,11 @@ export function createApp(deps: AppDependencies) {
       ) {
         const session = requireSession(req, deps.auth);
         admission.consumeAccount('repository_issues', req, session.githubId);
+        if (!(await accountRepositoryLinked(deps.store, session.githubId, parts[2], parts[3]))) {
+          return json(res, 403, {
+            error: 'Connect this repository in Workbench before requesting its issues.',
+          });
+        }
         const result = await deps.github.issuesForMaintainer(
           parts[2],
           parts[3],
@@ -691,40 +706,46 @@ export function createApp(deps: AppDependencies) {
         if (!handoff) return json(res, 404, { error: 'capability handoff not found' });
         return json(res, 200, handoff);
       }
-      if (req.method === 'POST' && url.pathname === '/v1/quotes') {
-        admission.consume('quote', req);
+      if (
+        req.method === 'POST' &&
+        (url.pathname === '/v1/quotes' || url.pathname === '/v1/account/quotes')
+      ) {
+        const accountScoped = url.pathname === '/v1/account/quotes';
+        const session = accountScoped ? requireSession(req, deps.auth) : undefined;
+        if (session) admission.consumeAccount('quote', req, session.githubId);
+        else admission.consume('quote', req);
         const body = await bodyJson<{ github_issue_url?: unknown }>(req);
         if (typeof body.github_issue_url !== 'string') {
           return json(res, 400, { error: 'github_issue_url is required' });
         }
+        const requested = parseIssueUrl(body.github_issue_url);
+        if (
+          session &&
+          !(await accountRepositoryLinked(
+            deps.store,
+            session.githubId,
+            requested.owner,
+            requested.repo,
+          ))
+        ) {
+          return json(res, 403, {
+            error: 'Connect this repository in Workbench before requesting an account quote.',
+          });
+        }
         await assertOperatorControlOpen(deps.store, 'intake', deps.readiness);
         const issue = await deps.github.issue(body.github_issue_url);
-        const session = deps.auth.session?.(cookies(req).mizuki_session);
-        let accountRepository:
-          | Awaited<ReturnType<GithubClient['repositoryMetadataForMaintainer']>>
-          | undefined;
         if (session) {
-          try {
-            accountRepository = await deps.github.repositoryMetadataForMaintainer(
-              issue.owner,
-              issue.repo,
-              session.githubLogin,
-            );
-          } catch (cause) {
-            if (!(cause instanceof GithubAccessError)) throw cause;
-            accountRepository = undefined;
-          }
+          await deps.github.repositoryMetadataForMaintainer(
+            issue.owner,
+            issue.repo,
+            session.githubLogin,
+          );
         }
         const result = await deps.paymentAdmission.run(async () => {
           await assertOperatorControlOpen(deps.store, 'intake', deps.readiness);
           const quote = await deps.store.saveQuote(createQuote(issue));
-          if (session && accountRepository) {
+          if (session) {
             await deps.store.linkQuoteToAccount(quote.id, session.githubId);
-            await deps.store.linkAccountRepository(
-              session.githubId,
-              accountRepository.owner,
-              accountRepository.repo,
-            );
           }
           return { ...quote, payment: await deps.payments.challenge(quote) };
         });
@@ -1313,6 +1334,17 @@ function accountRepositoryInput(body: { repository?: unknown; owner?: unknown; r
   const identity = value.match(/^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)$/);
   if (!identity) throw new InvalidRequestBodyError('repository must be owner/repo');
   return validatedRepository(identity[1]!, identity[2]!);
+}
+
+async function accountRepositoryLinked(
+  store: MizukiStore,
+  githubId: string,
+  owner: string,
+  repo: string,
+): Promise<boolean> {
+  const repository = `${owner}/${repo}`.toLowerCase();
+  const page = await store.repositoriesForAccount(githubId, 25);
+  return page.repositories.some((candidate) => candidate.repository === repository);
 }
 
 function validatedRepository(owner: string, repo: string): { owner: string; repo: string } {

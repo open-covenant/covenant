@@ -138,26 +138,20 @@ export function quoteMatchesIssue(
   quote: Pick<Quote, 'owner' | 'repo' | 'issueNumber'>,
   issueUrl: string,
 ): boolean {
-  try {
-    const url = new URL(issueUrl.trim());
-    const parts = url.pathname.replace(/\/$/, '').split('/').filter(Boolean);
-    if (
-      url.protocol !== 'https:' ||
-      url.hostname.toLowerCase() !== 'github.com' ||
-      parts.length !== 4 ||
-      parts[2] !== 'issues' ||
-      !/^\d+$/.test(parts[3]!)
-    ) {
-      return false;
-    }
-    return (
-      parts[0]!.toLowerCase() === quote.owner.toLowerCase() &&
-      parts[1]!.toLowerCase() === quote.repo.toLowerCase() &&
-      Number(parts[3]) === quote.issueNumber
-    );
-  } catch {
-    return false;
-  }
+  const issue = githubIssueIdentity(issueUrl);
+  return Boolean(
+    issue &&
+    issue.owner === quote.owner.toLowerCase() &&
+    issue.repo === quote.repo.toLowerCase() &&
+    issue.number === quote.issueNumber,
+  );
+}
+
+export function issueMatchesRepository(issueUrl: string, repository: string): boolean {
+  const issue = githubIssueIdentity(issueUrl);
+  const parts = repository.split('/');
+  if (!issue || parts.length !== 2 || !parts[0] || !parts[1]) return false;
+  return issue.owner === parts[0].toLowerCase() && issue.repo === parts[1].toLowerCase();
 }
 
 function isWorkbenchPaymentRecovery(value: unknown): value is WorkbenchPaymentRecovery {
@@ -167,6 +161,31 @@ function isWorkbenchPaymentRecovery(value: unknown): value is WorkbenchPaymentRe
   return (
     value.repository.toLowerCase() === `${value.quote.owner}/${value.quote.repo}`.toLowerCase()
   );
+}
+
+function githubIssueIdentity(
+  value: string,
+): { owner: string; repo: string; number: number } | undefined {
+  try {
+    const url = new URL(value.trim());
+    const parts = url.pathname.replace(/\/$/, '').split('/').filter(Boolean);
+    if (
+      url.protocol !== 'https:' ||
+      url.hostname.toLowerCase() !== 'github.com' ||
+      parts.length !== 4 ||
+      parts[2] !== 'issues' ||
+      !/^\d+$/.test(parts[3]!)
+    ) {
+      return undefined;
+    }
+    return {
+      owner: parts[0]!.toLowerCase(),
+      repo: parts[1]!.toLowerCase(),
+      number: Number(parts[3]),
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function isQuote(value: unknown): value is Quote {

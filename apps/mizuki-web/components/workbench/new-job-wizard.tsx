@@ -9,6 +9,7 @@ import { githubIssuePattern } from '@/lib/github-url';
 import {
   checkQuotePaymentStatus,
   clearWorkbenchPaymentRecovery,
+  issueMatchesRepository,
   loadWorkbenchPaymentRecovery,
   paymentKey,
   quoteExpired,
@@ -30,7 +31,7 @@ import {
   workbenchRequest,
   WorkbenchRequestError,
 } from '@/lib/workbench-client';
-import { useStandardWallet } from '@/lib/wallet-standard';
+import { paymentWalletNetwork, useStandardWallet } from '@/lib/wallet-standard';
 import { createPaymentFetch } from '@/lib/x402';
 import {
   ServiceContractNote,
@@ -264,6 +265,13 @@ function IssueAndPayment({
   async function runPreflight(event?: React.FormEvent<HTMLFormElement>) {
     event?.preventDefault();
     if (quote) clearWorkbenchPaymentRecovery(quote.id);
+    if (!issueMatchesRepository(issueUrl, repository.fullName)) {
+      setState('idle');
+      setError(`Choose an issue from ${repository.fullName} before checking maintenance scope.`);
+      setPreflight(null);
+      setQuote(null);
+      return;
+    }
     setState('checking');
     setError(null);
     setPreflight(null);
@@ -286,11 +294,17 @@ function IssueAndPayment({
 
   async function requestQuote() {
     if (quote) clearWorkbenchPaymentRecovery(quote.id);
+    if (!issueMatchesRepository(issueUrl, repository.fullName)) {
+      setState('idle');
+      setError(`Choose an issue from ${repository.fullName} before requesting a quote.`);
+      setQuote(null);
+      return;
+    }
     setState('quoting');
     setError(null);
     setQuote(null);
     try {
-      const next = await workbenchRequest<Quote>('/v1/quotes', {
+      const next = await workbenchRequest<Quote>('/v1/account/quotes', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ github_issue_url: issueUrl.trim() }),
@@ -305,7 +319,10 @@ function IssueAndPayment({
 
   async function payAndStart() {
     if (!quote || !connected || !walletReady) return;
-    if (!quoteMatchesIssue(quote, issueUrl)) {
+    if (
+      !quoteMatchesIssue(quote, issueUrl) ||
+      !issueMatchesRepository(issueUrl, repository.fullName)
+    ) {
       setQuote(null);
       setState('idle');
       setError('The selected issue changed. Review its scope and request a new fixed quote.');
@@ -320,7 +337,7 @@ function IssueAndPayment({
     const idempotencyKey = paymentKey(quote.id);
     saveWorkbenchPaymentRecovery({
       phase: 'uncertain',
-      repository: repository.fullName,
+      repository: `${quote.owner}/${quote.repo}`,
       issueUrl,
       quote,
     });
@@ -350,7 +367,7 @@ function IssueAndPayment({
     } catch {
       saveWorkbenchPaymentRecovery({
         phase: 'uncertain',
-        repository: repository.fullName,
+        repository: `${quote.owner}/${quote.repo}`,
         issueUrl,
         quote,
       });
@@ -375,7 +392,7 @@ function IssueAndPayment({
       }
       saveWorkbenchPaymentRecovery({
         phase: 'unpaid',
-        repository: repository.fullName,
+        repository: `${quote.owner}/${quote.repo}`,
         issueUrl,
         quote,
       });
@@ -383,7 +400,7 @@ function IssueAndPayment({
     } catch {
       saveWorkbenchPaymentRecovery({
         phase: 'uncertain',
-        repository: repository.fullName,
+        repository: `${quote.owner}/${quote.repo}`,
         issueUrl,
         quote,
       });
@@ -683,7 +700,7 @@ export function ConnectedPaymentSummary({
       <dl>
         <div>
           <dt>Network</dt>
-          <dd>Solana mainnet</dd>
+          <dd>{paymentWalletNetwork().label}</dd>
         </div>
         <div>
           <dt>Asset</dt>

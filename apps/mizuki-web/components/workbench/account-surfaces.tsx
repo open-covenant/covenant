@@ -2,9 +2,10 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { useState } from 'react';
 import { truncateAddress } from '@/lib/format';
 import { normalizeAccount, normalizeRepositories } from '@/lib/workbench';
-import { useWorkbenchResource, workbenchRequest } from '@/lib/workbench-client';
+import { logoutWorkbench, useWorkbenchResource } from '@/lib/workbench-client';
 import {
   WorkbenchError,
   WorkbenchLoading,
@@ -113,11 +114,22 @@ export function Integrations() {
 export function Settings() {
   const router = useRouter();
   const account = useWorkbenchResource('/v1/account', normalizeAccount);
+  const [logoutPending, setLogoutPending] = useState(false);
+  const [logoutError, setLogoutError] = useState<string>();
 
   async function logout() {
-    await workbenchRequest('/v1/auth/logout', { method: 'POST' }).catch(() => undefined);
-    router.push('/');
-    router.refresh();
+    setLogoutPending(true);
+    setLogoutError(undefined);
+    try {
+      await logoutWorkbench(() => {
+        router.push('/');
+        router.refresh();
+      });
+    } catch {
+      setLogoutError('Sign-out could not be confirmed. This page remains signed in; try again.');
+    } finally {
+      setLogoutPending(false);
+    }
   }
 
   return (
@@ -179,9 +191,14 @@ export function Settings() {
           </section>
 
           <section className="workbench-settings-actions">
-            <button type="button" onClick={() => void logout()}>
-              Sign out of Workbench
+            <button type="button" onClick={() => void logout()} disabled={logoutPending}>
+              {logoutPending ? 'Signing out…' : 'Sign out of Workbench'}
             </button>
+            {logoutError && (
+              <p className="workbench-logout-error" role="alert">
+                {logoutError}
+              </p>
+            )}
             <div>
               <Link href="/privacy">Privacy</Link>
               <Link href="/terms">Terms</Link>

@@ -9,6 +9,7 @@ vi.mock('next/navigation', () => ({
   notFound: vi.fn(() => {
     throw new Error('NEXT_NOT_FOUND');
   }),
+  useRouter: vi.fn(() => ({ push: vi.fn(), refresh: vi.fn() })),
 }));
 vi.mock('@/lib/api', () => ({ getBounty: vi.fn() }));
 
@@ -31,6 +32,43 @@ describe('bounty receipt page', () => {
       BountyDetailPage({ params: Promise.resolve({ id: 'bounty-1' }) }),
     ).resolves.toBeTruthy();
     expect(notFound).not.toHaveBeenCalled();
+  });
+
+  it('renders bounded GitHub errors on a public bounty return path', async () => {
+    const bounty: Bounty = {
+      id: 'bounty-open',
+      title: 'Repair a bounded regression',
+      repository: 'public/tool',
+      issueUrl: 'https://github.com/public/tool/issues/1',
+      issueNumber: 1,
+      amountUsd: 10,
+      amountAtomic: '10000000',
+      asset: 'SOL',
+      state: 'open',
+      escrowTransaction: 'bounty-sol-funding',
+      acceptanceCriteria: ['Pass repository checks'],
+      createdAt: '2026-08-23T09:00:00.000Z',
+      updatedAt: '2026-08-23T11:00:00.000Z',
+    };
+    vi.mocked(getBounty).mockResolvedValue({ status: 'ready', data: bounty });
+
+    const html = renderToStaticMarkup(
+      await BountyDetailPage({
+        params: Promise.resolve({ id: bounty.id }),
+        searchParams: Promise.resolve({ auth_error: 'replayed' }),
+      }),
+    );
+
+    expect(html).toContain('This GitHub sign-in request was already used.');
+    expect(html).toContain('role="alert"');
+
+    const unsafeHtml = renderToStaticMarkup(
+      await BountyDetailPage({
+        params: Promise.resolve({ id: bounty.id }),
+        searchParams: Promise.resolve({ auth_error: 'private database detail' }),
+      }),
+    );
+    expect(unsafeHtml).not.toContain('private database detail');
   });
 
   it('renders the exact reviewed diff and public provider receipt without a balance', async () => {

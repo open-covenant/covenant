@@ -43,6 +43,24 @@ describe('ContributorAuth', () => {
     });
   });
 
+  it('recovers a verified return path from denied, expired, or replayed callback state', async () => {
+    const now = Date.parse('2026-08-25T12:00:00.000Z');
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+    const auth = oauthAuth(new MemoryStore(), vi.fn());
+    const publicFlow = await auth.beginGithubOAuth('/bounties/bounty-1?view=criteria');
+    const workbenchFlow = await auth.beginGithubOAuth('/app/jobs/new?issue=7&repository=tool');
+    const publicState = new URL(publicFlow.url).searchParams.get('state')!;
+    const workbenchState = new URL(workbenchFlow.url).searchParams.get('state')!;
+
+    expect(auth.githubOAuthRedirect(publicState)).toBe('/bounties/bounty-1?view=criteria');
+    expect(auth.githubOAuthRedirect(workbenchState)).toBe('/app/jobs/new?issue=7&repository=tool');
+    clock.mockReturnValue(now + 10 * 60_000 + 1);
+    expect(auth.githubOAuthRedirect(publicState)).toBe('/bounties/bounty-1?view=criteria');
+    expect(auth.githubOAuthRedirect(`${publicState}x`)).toBeUndefined();
+    expect(auth.githubOAuthRedirect(undefined)).toBeUndefined();
+    clock.mockRestore();
+  });
+
   it('requires the browser flow cookie and rejects a different browser before token exchange', async () => {
     const request = oauthRequests();
     const auth = oauthAuth(new MemoryStore(), request);

@@ -65,6 +65,16 @@ export class ContributorAuth {
     );
   }
 
+  githubOAuthRedirect(signedState: string | undefined): string | undefined {
+    if (!signedState) return undefined;
+    try {
+      const state = stateSchema.parse(this.verify(signedState));
+      return githubOAuthRedirectPath(state.redirect, '/app');
+    } catch {
+      return undefined;
+    }
+  }
+
   async beginGithubOAuth(redirect = '/bounties'): Promise<{ url: string; flowCookie: string }> {
     this.assertConfigured();
     const safeRedirect = githubOAuthRedirectPath(redirect);

@@ -18,6 +18,7 @@ import {
 } from '@/lib/format';
 import { pageMetadata } from '@/lib/page-metadata';
 import type { Bounty } from '@/lib/types';
+import { githubAuthErrorMessage } from '@/lib/workbench';
 
 export const dynamic = 'force-dynamic';
 
@@ -35,8 +36,17 @@ export async function generateMetadata({
   });
 }
 
-export default async function BountyDetailPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function BountyDetailPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const { id } = await params;
+  const query = searchParams ? await searchParams : undefined;
+  const authErrorValue = Array.isArray(query?.auth_error) ? query.auth_error[0] : query?.auth_error;
+  const authError = githubAuthErrorMessage(authErrorValue);
   const result = await getBounty(id);
   if (result.status === 'not_found') notFound();
   if (result.status === 'error') {
@@ -297,6 +307,11 @@ export default async function BountyDetailPage({ params }: { params: Promise<{ i
         </div>
 
         <aside className="claim-panel">
+          {authError && (
+            <p className="form-error" role="alert">
+              {authError}
+            </p>
+          )}
           {claimable ? (
             <>
               <p className="eyebrow">Claim this work</p>

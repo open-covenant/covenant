@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { getWallets } from '@wallet-standard/app';
 import type { Wallet, WalletAccount } from '@wallet-standard/base';
 import type {
@@ -32,6 +32,20 @@ export type PaymentWalletNetwork = {
   label: 'Solana mainnet' | 'Solana devnet';
 };
 
+export type WalletConnectionState = {
+  connected: ConnectedWallet | null;
+  ready: boolean;
+  connecting: string | null;
+  error: string | null;
+};
+
+const initialConnectionState: WalletConnectionState = {
+  connected: null,
+  ready: false,
+  connecting: null,
+  error: null,
+};
+
 export function paymentWalletNetwork(): PaymentWalletNetwork {
   return process.env.NEXT_PUBLIC_SOLANA_NETWORK === 'solana-devnet'
     ? { chain: 'solana:devnet', label: 'Solana devnet' }
@@ -43,12 +57,22 @@ export function useStandardWallet(requirement: 'message' | 'transaction') {
   const paymentNetwork = paymentWalletNetwork();
   const requiredChain = requirement === 'transaction' ? paymentNetwork.chain : undefined;
   const [wallets, setWallets] = useState<readonly CompatibleWallet[]>([]);
-  const [connected, setConnected] = useState<ConnectedWallet | null>(null);
-  const [ready, setReady] = useState(false);
-  const [connecting, setConnecting] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const stopObserving = useRef<(() => void) | null>(null);
-  const connectionGeneration = useRef(0);
+  const [connection, setConnection] = useState<WalletConnectionState>(initialConnectionState);
+  const publishConnection = useCallback(
+    (patch: Partial<WalletConnectionState>) =>
+      setConnection((current) => ({ ...current, ...patch })),
+    [],
+  );
+  const controller = useMemo(
+    () =>
+      new WalletConnectionController(
+        requirement,
+        requiredChain,
+        paymentNetwork.label,
+        publishConnection,
+      ),
+    [paymentNetwork.label, publishConnection, requiredChain, requirement],
+  );
 
   const refresh = useCallback(() => {
     setWallets(
@@ -68,92 +92,190 @@ export function useStandardWallet(requirement: 'message' | 'transaction') {
     };
   }, [refresh, registry]);
 
-  useEffect(
-    () => () => {
-      connectionGeneration.current += 1;
-      stopObserving.current?.();
-    },
-    [],
-  );
+  useEffect(() => () => controller.dispose(), [controller]);
 
   const connect = useCallback(
-    async (wallet: CompatibleWallet) => {
-      const generation = connectionGeneration.current + 1;
-      connectionGeneration.current = generation;
-      stopObserving.current?.();
-      stopObserving.current = null;
-      setConnected(null);
-      setReady(false);
-      setConnecting(wallet.name);
-      setError(null);
-      try {
-        const feature = wallet.features[
-          'standard:connect'
-        ] as StandardConnectFeature['standard:connect'];
-        const result = await feature.connect();
-        const account = selectSolanaAccount(result.accounts, requiredChain);
-        if (!account) {
-          throw new Error(
-            requiredChain
-              ? `This wallet did not expose a ${paymentNetwork.label} account`
-              : 'This wallet did not expose a Solana account',
-          );
-        }
-        if ('standard:events' in wallet.features) {
-          stopObserving.current = observeWalletAccounts(
-            wallet,
-            (next) => {
-              if (connectionGeneration.current !== generation) return;
-              if (!next) {
-                setReady(false);
-                setConnected(null);
-                return;
-              }
-              setConnected({ wallet, account: next });
-              setReady(true);
-            },
-            requiredChain,
-          );
-        } else if (requirement === 'transaction') {
-          throw new Error('This wallet cannot report account or disconnect changes');
-        }
-        const value = { wallet, account };
-        setConnected(value);
-        setReady(true);
-        return value;
-      } catch (cause) {
-        stopObserving.current?.();
-        stopObserving.current = null;
-        const message = cause instanceof Error ? cause.message : 'Wallet connection was declined';
-        setError(message);
-        throw cause;
-      } finally {
-        setConnecting(null);
-      }
-    },
-    [paymentNetwork.label, requiredChain, requirement],
+    (wallet: CompatibleWallet) => controller.connect(wallet),
+    [controller],
   );
 
-  const disconnect = useCallback(async () => {
-    const wallet = connected?.wallet;
-    connectionGeneration.current += 1;
-    stopObserving.current?.();
-    stopObserving.current = null;
-    setReady(false);
-    setConnected(null);
-    setError(null);
-    if (!wallet || !('standard:disconnect' in wallet.features)) return;
-    try {
-      const feature = wallet.features[
-        'standard:disconnect'
-      ] as StandardDisconnectFeature['standard:disconnect'];
-      await feature.disconnect();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Wallet disconnect failed');
-    }
-  }, [connected]);
+  const disconnect = useCallback(() => controller.disconnect(), [controller]);
 
-  return { wallets, connected, ready, connecting, error, connect, disconnect };
+  return { wallets, ...connection, connect, disconnect };
+}
+
+export class WalletConnectionController {
+  private generation = 0;
+  private activeWallet: CompatibleWallet | null = null;
+  private connected: ConnectedWallet | null = null;
+  private stopObserving: (() => void) | null = null;
+  private operations = Promise.resolve();
+
+  constructor(
+    private readonly requirement: 'message' | 'transaction',
+    private readonly requiredChain: PaymentWalletNetwork['chain'] | undefined,
+    private readonly networkLabel: PaymentWalletNetwork['label'],
+    private readonly publish: (patch: Partial<WalletConnectionState>) => void,
+  ) {}
+
+  connect(wallet: CompatibleWallet): Promise<ConnectedWallet | null> {
+    const generation = this.nextGeneration();
+    const previousWallet = this.activeWallet;
+    this.clearConnection();
+    this.publish({ connected: null, ready: false, connecting: wallet.name, error: null });
+    return this.enqueue(async () => {
+      if (previousWallet) await disconnectWallet(previousWallet);
+      if (!this.current(generation)) return null;
+      return this.connectCurrent(wallet, generation);
+    });
+  }
+
+  disconnect(): Promise<void> {
+    const generation = this.nextGeneration();
+    const wallet = this.activeWallet;
+    this.clearConnection();
+    this.publish({ connected: null, ready: false, connecting: null, error: null });
+    if (!wallet) return Promise.resolve();
+    return this.enqueue(async () => {
+      try {
+        await disconnectWallet(wallet, true);
+      } catch (cause) {
+        if (!this.current(generation)) return;
+        this.publish({ error: walletError(cause, 'Wallet disconnect failed') });
+      }
+    });
+  }
+
+  dispose(): void {
+    this.nextGeneration();
+    this.clearConnection();
+  }
+
+  private async connectCurrent(
+    wallet: CompatibleWallet,
+    generation: number,
+  ): Promise<ConnectedWallet | null> {
+    let unsubscribe: (() => void) | null = null;
+    try {
+      const feature = wallet.features['standard:connect'] as
+        | StandardConnectFeature['standard:connect']
+        | undefined;
+      if (!feature) throw new Error('This wallet cannot open a compatible connection');
+      await feature.connect();
+      if (!this.current(generation)) {
+        await disconnectWallet(wallet);
+        return null;
+      }
+
+      if ('standard:events' in wallet.features) {
+        unsubscribe = observeWalletAccounts(
+          wallet,
+          (account) => this.accountChanged(wallet, account, generation),
+          this.requiredChain,
+        );
+        if (!this.current(generation)) {
+          unsubscribe();
+          await disconnectWallet(wallet);
+          return null;
+        }
+        this.stopObserving = unsubscribe;
+      } else if (this.requirement === 'transaction') {
+        throw new Error('This wallet cannot report account or disconnect changes');
+      }
+
+      const account = selectSolanaAccount(wallet.accounts, this.requiredChain);
+      if (!account) {
+        throw new Error(
+          this.requiredChain
+            ? `This wallet did not expose a ${this.networkLabel} account`
+            : 'This wallet did not expose a Solana account',
+        );
+      }
+      if (!this.current(generation)) {
+        unsubscribe?.();
+        await disconnectWallet(wallet);
+        return null;
+      }
+      const connected = { wallet, account };
+      this.activeWallet = wallet;
+      this.connected = connected;
+      this.publish({ connected, ready: true, error: null });
+      return connected;
+    } catch (cause) {
+      if (!this.current(generation)) return null;
+      unsubscribe?.();
+      if (this.stopObserving === unsubscribe) this.stopObserving = null;
+      await disconnectWallet(wallet);
+      if (!this.current(generation)) return null;
+      this.activeWallet = null;
+      this.connected = null;
+      this.publish({
+        connected: null,
+        ready: false,
+        error: walletError(cause, 'Wallet connection was declined'),
+      });
+      return null;
+    } finally {
+      if (this.current(generation)) this.publish({ connecting: null });
+    }
+  }
+
+  private accountChanged(
+    wallet: CompatibleWallet,
+    account: WalletAccount | null,
+    generation: number,
+  ): void {
+    if (!this.current(generation)) return;
+    if (!account) {
+      this.connected = null;
+      this.publish({ connected: null, ready: false });
+      return;
+    }
+    const connected = { wallet, account };
+    this.connected = connected;
+    this.publish({ connected, ready: true, error: null });
+  }
+
+  private enqueue<T>(operation: () => Promise<T>): Promise<T> {
+    const scheduled = this.operations.then(operation, operation);
+    this.operations = scheduled.then(
+      () => undefined,
+      () => undefined,
+    );
+    return scheduled;
+  }
+
+  private current(generation: number): boolean {
+    return this.generation === generation;
+  }
+
+  private nextGeneration(): number {
+    this.generation += 1;
+    return this.generation;
+  }
+
+  private clearConnection(): void {
+    this.stopObserving?.();
+    this.stopObserving = null;
+    this.activeWallet = null;
+    this.connected = null;
+  }
+}
+
+async function disconnectWallet(wallet: CompatibleWallet, strict = false): Promise<void> {
+  const feature = wallet.features['standard:disconnect'] as
+    | StandardDisconnectFeature['standard:disconnect']
+    | undefined;
+  if (!feature) return;
+  try {
+    await feature.disconnect();
+  } catch (cause) {
+    if (strict) throw cause;
+  }
+}
+
+function walletError(cause: unknown, fallback: string): string {
+  return cause instanceof Error && cause.message ? cause.message : fallback;
 }
 
 export function observeWalletAccounts(

@@ -45,6 +45,11 @@ export async function workbenchRequest<T>(path: string, init?: RequestInit): Pro
   return body;
 }
 
+export async function logoutWorkbench(navigate: () => void | Promise<void>): Promise<void> {
+  await workbenchRequest('/v1/auth/logout', { method: 'POST' });
+  await navigate();
+}
+
 export type WorkbenchResource<T> =
   | { status: 'loading'; refresh: () => void }
   | { status: 'ready'; data: T; refresh: () => void }

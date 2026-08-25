@@ -97,11 +97,29 @@ export type WorkbenchBilling = {
 };
 
 export function workbenchAuthHref(returnTo: string): string {
-  const destination = returnTo === '/app' || returnTo.startsWith('/app/') ? returnTo : '/app';
+  const destination = safeWorkbenchReturnPath(returnTo);
   return `/api/mizuki/v1/auth/github?return_to=${encodeURIComponent(destination)}`;
 }
 
-export function workbenchAuthErrorMessage(value: string | null | undefined): string | undefined {
+function safeWorkbenchReturnPath(value: string): string {
+  try {
+    const base = new URL('https://mizuki.invalid');
+    const target = new URL(value, base);
+    if (
+      target.origin !== base.origin ||
+      target.hash ||
+      (target.pathname !== '/app' && !target.pathname.startsWith('/app/'))
+    ) {
+      return '/app';
+    }
+    target.searchParams.delete('auth_error');
+    return `${target.pathname}${target.search}`;
+  } catch {
+    return '/app';
+  }
+}
+
+export function githubAuthErrorMessage(value: string | null | undefined): string | undefined {
   switch (value) {
     case 'denied':
       return 'GitHub sign-in was cancelled. No account or repository access was changed.';

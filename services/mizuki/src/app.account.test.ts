@@ -309,6 +309,77 @@ describe('workbench account API', () => {
     });
   });
 
+  it('limits sustained payment-status concurrency before it can starve payment admission', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    await store.saveQuote(quote);
+    await store.linkQuoteToAccount(quote.id, '42');
+    const originalQuoteForAccount = store.quoteForAccount.bind(store);
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const quoteForAccount = vi
+      .spyOn(store, 'quoteForAccount')
+      .mockImplementation(async (...args) => {
+        await blocked;
+        return originalQuoteForAccount(...args);
+      });
+    const gate = new SerialGate(undefined, { maxQueued: 2, acquireTimeoutMs: 1_000 });
+    const base = await serve(dependencies(store, { paymentAdmission: gate }));
+
+    let settled = 0;
+    const pending = Array.from({ length: 30 }, (_, index) =>
+      fetch(`${base}/v1/account/quotes/${quote.id}/payment-status`, {
+        headers: { ...sessionHeaders, 'idempotency-key': `payment-status-load-${index}` },
+      }).then((response) => {
+        settled += 1;
+        return response;
+      }),
+    );
+    await vi.waitFor(() => expect(settled).toBe(27));
+    release();
+    const responses = await Promise.all(pending);
+    const statuses = responses.map((response) => response.status);
+
+    expect(statuses.filter((status) => status === 200)).toHaveLength(3);
+    expect(statuses.filter((status) => status === 503)).toHaveLength(9);
+    expect(statuses.filter((status) => status === 429)).toHaveLength(18);
+    expect(quoteForAccount).toHaveBeenCalledTimes(3);
+    expect(
+      responses
+        .filter((response) => response.status === 429 || response.status === 503)
+        .every((response) => response.headers.get('retry-after') !== null),
+    ).toBe(true);
+  });
+
+  it('bounds the serial gate queue without letting a timed-out waiter break serialization', async () => {
+    const gate = new SerialGate(undefined, { maxQueued: 1, acquireTimeoutMs: 20 });
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const active = gate.run(async () => blocked);
+    const timedOutOperation = vi.fn(async () => 'timed-out');
+    const timedOut = gate.run(timedOutOperation);
+
+    await expect(gate.run(async () => 'overflow')).rejects.toThrow(
+      'payment processing is temporarily busy',
+    );
+    await expect(timedOut).rejects.toThrow('payment processing is temporarily busy');
+    expect(timedOutOperation).not.toHaveBeenCalled();
+
+    const nextOperation = vi.fn(async () => 'next');
+    const next = gate.run(nextOperation);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(nextOperation).not.toHaveBeenCalled();
+    release();
+
+    await expect(active).resolves.toBeUndefined();
+    await expect(next).resolves.toBe('next');
+    expect(nextOperation).toHaveBeenCalledOnce();
+  });
+
   it('reports a confirming payment once, then replaces it with one finalized payment', async () => {
     const store = new MemoryStore();
     await store.upsertContributor('42', 'maintainer');

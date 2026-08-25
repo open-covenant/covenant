@@ -4,11 +4,11 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { normalizeAccount, workbenchAuthErrorMessage, workbenchAuthHref } from '@/lib/workbench';
+import { githubAuthErrorMessage, normalizeAccount, workbenchAuthHref } from '@/lib/workbench';
 import {
+  logoutWorkbench,
   onWorkbenchUnauthorized,
   useWorkbenchResource,
-  workbenchRequest,
 } from '@/lib/workbench-client';
 
 export type WorkbenchNavigationItem = {
@@ -36,18 +36,21 @@ export function WorkbenchShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const [authExpired, setAuthExpired] = useState(false);
   const [authError, setAuthError] = useState<string>();
+  const [returnTo, setReturnTo] = useState(pathname);
+  const [logoutPending, setLogoutPending] = useState(false);
+  const [logoutError, setLogoutError] = useState<string>();
   const account = useWorkbenchResource('/v1/account', normalizeAccount);
 
   useEffect(() => onWorkbenchUnauthorized(() => setAuthExpired(true)), []);
   useEffect(() => {
-    setAuthError(
-      workbenchAuthErrorMessage(new URLSearchParams(window.location.search).get('auth_error')),
-    );
+    const params = new URLSearchParams(window.location.search);
+    setAuthError(githubAuthErrorMessage(params.get('auth_error')));
+    setReturnTo(`${pathname}${params.size ? `?${params}` : ''}`);
   }, [pathname]);
 
   if (account.status === 'loading') return <WorkbenchShellLoading />;
   if (account.status === 'unauthorized' || authExpired) {
-    return <WorkbenchSignIn returnTo={pathname} authError={authError} />;
+    return <WorkbenchSignIn returnTo={returnTo} authError={authError} />;
   }
   if (account.status === 'error') {
     return (
@@ -61,9 +64,18 @@ export function WorkbenchShell({ children }: { children: React.ReactNode }) {
   }
 
   async function logout() {
-    await workbenchRequest('/v1/auth/logout', { method: 'POST' }).catch(() => undefined);
-    router.push('/');
-    router.refresh();
+    setLogoutPending(true);
+    setLogoutError(undefined);
+    try {
+      await logoutWorkbench(() => {
+        router.push('/');
+        router.refresh();
+      });
+    } catch {
+      setLogoutError('Sign-out could not be confirmed. This page remains signed in; try again.');
+    } finally {
+      setLogoutPending(false);
+    }
   }
 
   return (
@@ -94,9 +106,14 @@ export function WorkbenchShell({ children }: { children: React.ReactNode }) {
           </div>
           <div>
             <strong>@{account.data.githubLogin}</strong>
-            <button type="button" onClick={() => void logout()}>
-              Sign out
+            <button type="button" onClick={() => void logout()} disabled={logoutPending}>
+              {logoutPending ? 'Signing out…' : 'Sign out'}
             </button>
+            {logoutError && (
+              <span className="workbench-logout-error" role="alert">
+                {logoutError}
+              </span>
+            )}
           </div>
         </div>
       </aside>

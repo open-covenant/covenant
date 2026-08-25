@@ -232,6 +232,23 @@
   font-size: 11px;
 }
 
+.workbench-logout-error {
+  margin: 4px 0 0;
+  color: var(--wb-danger);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.workbench-account .workbench-logout-error {
+  max-width: 150px;
+}
+
+.workbench-account button:disabled,
+.workbench-settings-actions > button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
 .workbench-content {
   min-width: 0;
   padding: clamp(34px, 5vw, 72px) clamp(24px, 5vw, 72px) 80px;
@@ -2016,6 +2033,12 @@
 .workbench-settings-actions > div {
   display: flex;
   gap: 18px;
+}
+
+.workbench-settings-actions > .workbench-logout-error {
+  flex: 1;
+  margin: 0;
+  font-size: 11px;
 }
 
 .workbench-settings-actions a {

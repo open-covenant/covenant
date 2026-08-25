@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   bountyPayoutText,
+  githubAuthErrorMessage,
   isActiveJob,
   normalizeAccount,
   normalizeBounties,
@@ -11,7 +12,6 @@ import {
   normalizeRepositories,
   parseRepositoryLocator,
   type WorkbenchJob,
-  workbenchAuthErrorMessage,
   workbenchAuthHref,
 } from './workbench';
 
@@ -20,6 +20,13 @@ describe('Workbench authentication', () => {
     expect(workbenchAuthHref('/app/jobs/new')).toBe(
       '/api/mizuki/v1/auth/github?return_to=%2Fapp%2Fjobs%2Fnew',
     );
+    expect(
+      workbenchAuthHref(
+        '/app/jobs/new?repository=open-covenant%2Fcovenant&issue=7&auth_error=expired',
+      ),
+    ).toBe(
+      '/api/mizuki/v1/auth/github?return_to=%2Fapp%2Fjobs%2Fnew%3Frepository%3Dopen-covenant%252Fcovenant%26issue%3D7',
+    );
   });
 
   it('rejects destinations outside Workbench', () => {
@@ -27,13 +34,14 @@ describe('Workbench authentication', () => {
       '/api/mizuki/v1/auth/github?return_to=%2Fapp',
     );
     expect(workbenchAuthHref('/application')).toBe('/api/mizuki/v1/auth/github?return_to=%2Fapp');
+    expect(workbenchAuthHref('/app#session')).toBe('/api/mizuki/v1/auth/github?return_to=%2Fapp');
   });
 
   it('shows only bounded OAuth failure messages', () => {
-    expect(workbenchAuthErrorMessage('expired')).toContain('expired');
-    expect(workbenchAuthErrorMessage('replayed')).toContain('already used');
-    expect(workbenchAuthErrorMessage('internal database detail')).toBeUndefined();
-    expect(workbenchAuthErrorMessage('toString')).toBeUndefined();
+    expect(githubAuthErrorMessage('expired')).toContain('expired');
+    expect(githubAuthErrorMessage('replayed')).toContain('already used');
+    expect(githubAuthErrorMessage('internal database detail')).toBeUndefined();
+    expect(githubAuthErrorMessage('toString')).toBeUndefined();
   });
 });
 

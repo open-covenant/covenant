@@ -190,6 +190,8 @@ export function createApp(deps: AppDependencies) {
         res.setHeader('set-cookie', clearFlowCookie);
         res.setHeader('cache-control', 'private, no-store');
         const origin = deps.config.webOrigin ?? deps.config.publicBaseUrl;
+        const failureRedirect =
+          deps.auth.githubOAuthRedirect?.(url.searchParams.get('state') ?? undefined) ?? '/app';
         try {
           admission.consume('oauth_callback', req);
           const oauthError = url.searchParams.get('error');
@@ -198,11 +200,14 @@ export function createApp(deps: AppDependencies) {
               res,
               origin,
               oauthError === 'access_denied' ? 'denied' : 'unavailable',
+              failureRedirect,
             );
           }
           const code = url.searchParams.get('code');
           const state = url.searchParams.get('state');
-          if (!code || !state) return redirectGithubOAuthFailure(res, origin, 'incomplete');
+          if (!code || !state) {
+            return redirectGithubOAuthFailure(res, origin, 'incomplete', failureRedirect);
+          }
           const result = await deps.auth.callback(code, state, cookies(req).mizuki_oauth_flow);
           res.setHeader('set-cookie', [
             clearFlowCookie,
@@ -234,7 +239,7 @@ export function createApp(deps: AppDependencies) {
               }),
             );
           }
-          return redirectGithubOAuthFailure(res, origin, code);
+          return redirectGithubOAuthFailure(res, origin, code, failureRedirect);
         }
       }
       if (req.method === 'GET' && url.pathname === '/v1/auth/session') {
@@ -292,6 +297,7 @@ export function createApp(deps: AppDependencies) {
         }
         const quoteId = parts[3]!;
         if (!UUID_PATTERN.test(quoteId)) return json(res, 404, { error: 'quote not found' });
+        admission.consumeAccount('payment_status', req, session.githubId);
         const status = await deps.paymentAdmission.run(async () => {
           const quote = await deps.store.quoteForAccount(quoteId, session.githubId);
           if (!quote) return { kind: 'not_found' } as const;
@@ -1086,6 +1092,11 @@ export function createApp(deps: AppDependencies) {
         res.setHeader('cache-control', 'private, no-store');
         return json(res, 503, { error: cause.message });
       }
+      if (cause instanceof SerialGateBusyError) {
+        res.setHeader('retry-after', String(cause.retryAfterSeconds));
+        res.setHeader('cache-control', 'private, no-store');
+        return json(res, 503, { error: cause.message });
+      }
       const message = cause instanceof Error ? cause.message : String(cause);
       const status =
         cause instanceof GithubAccessError
@@ -1579,8 +1590,9 @@ function redirectGithubOAuthFailure(
   res: ServerResponse,
   origin: string,
   code: GithubOAuthErrorCode,
+  redirect = '/app',
 ): void {
-  const target = new URL('/app', origin);
+  const target = new URL(githubOAuthRedirectPath(redirect, '/app'), origin);
   target.searchParams.set('auth_error', code);
   res.writeHead(302, { location: target.toString(), 'cache-control': 'private, no-store' });
   res.end();
@@ -1614,22 +1626,82 @@ class InvalidRequestBodyError extends Error {}
 
 export class OperatorAdmissionError extends Error {}
 
-export class SerialGate {
-  private tail = Promise.resolve();
+type SerialGateWaiter = {
+  resolve: () => void;
+  timer: ReturnType<typeof setTimeout>;
+};
 
-  constructor(private readonly exclusive?: <T>(operation: () => Promise<T>) => Promise<T>) {}
+export class SerialGate {
+  private active = false;
+  private readonly queue: SerialGateWaiter[] = [];
+
+  constructor(
+    private readonly exclusive?: <T>(operation: () => Promise<T>) => Promise<T>,
+    private readonly limits: { maxQueued?: number; acquireTimeoutMs?: number } = {},
+  ) {
+    if (!Number.isInteger(this.maxQueued) || this.maxQueued < 0) {
+      throw new Error('serial gate queue limit must be a non-negative integer');
+    }
+    if (!Number.isInteger(this.acquireTimeoutMs) || this.acquireTimeoutMs < 1) {
+      throw new Error('serial gate acquisition timeout must be a positive integer');
+    }
+  }
 
   async run<T>(operation: () => Promise<T>): Promise<T> {
-    const previous = this.tail;
-    let release!: () => void;
-    this.tail = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await previous;
+    await this.acquire();
     try {
       return this.exclusive ? await this.exclusive(operation) : await operation();
     } finally {
-      release();
+      this.release();
     }
+  }
+
+  private acquire(): Promise<void> {
+    if (!this.active) {
+      this.active = true;
+      return Promise.resolve();
+    }
+    if (this.queue.length >= this.maxQueued) return Promise.reject(new SerialGateBusyError());
+
+    return new Promise<void>((resolve, reject) => {
+      let waiter!: SerialGateWaiter;
+      waiter = {
+        resolve,
+        timer: setTimeout(() => {
+          const index = this.queue.indexOf(waiter);
+          if (index === -1) return;
+          this.queue.splice(index, 1);
+          reject(new SerialGateBusyError());
+        }, this.acquireTimeoutMs),
+      };
+      waiter.timer.unref?.();
+      this.queue.push(waiter);
+    });
+  }
+
+  private release(): void {
+    const next = this.queue.shift();
+    if (!next) {
+      this.active = false;
+      return;
+    }
+    clearTimeout(next.timer);
+    next.resolve();
+  }
+
+  private get maxQueued(): number {
+    return this.limits.maxQueued ?? 64;
+  }
+
+  private get acquireTimeoutMs(): number {
+    return this.limits.acquireTimeoutMs ?? 5_000;
+  }
+}
+
+export class SerialGateBusyError extends Error {
+  readonly retryAfterSeconds = 1;
+
+  constructor() {
+    super('payment processing is temporarily busy; retry shortly');
   }
 }

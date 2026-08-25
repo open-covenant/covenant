@@ -57,8 +57,7 @@ describe('Mizuki public identity', () => {
     const header = renderToStaticMarkup(<SiteHeader intakeOpen={false} />);
     const footer = renderToStaticMarkup(<SiteFooter intakeOpen={false} />);
 
-    expect(header).toContain('View service status');
-    expect(header).not.toContain('>Service status</a>');
+    expect(header).not.toContain('service status');
     expect(header).not.toContain('Request a quote');
     expect(footer).toContain('Service status');
     expect(footer).not.toContain('Submit an issue');

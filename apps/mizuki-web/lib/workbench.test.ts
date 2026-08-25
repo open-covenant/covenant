@@ -9,7 +9,23 @@ import {
   normalizePreflight,
   normalizeRepositories,
   parseRepositoryLocator,
+  workbenchAuthHref,
 } from './workbench';
+
+describe('Workbench authentication', () => {
+  it('returns maintainers to the requested Workbench route', () => {
+    expect(workbenchAuthHref('/app/jobs/new')).toBe(
+      '/api/mizuki/v1/auth/github?return_to=%2Fapp%2Fjobs%2Fnew',
+    );
+  });
+
+  it('rejects destinations outside Workbench', () => {
+    expect(workbenchAuthHref('//example.com/steal')).toBe(
+      '/api/mizuki/v1/auth/github?return_to=%2Fapp',
+    );
+    expect(workbenchAuthHref('/application')).toBe('/api/mizuki/v1/auth/github?return_to=%2Fapp');
+  });
+});
 
 describe('Workbench response normalization', () => {
   it('reads the authenticated account contract', () => {

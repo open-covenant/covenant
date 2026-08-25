@@ -19,6 +19,11 @@ import {
 
 const MAX_TURNS = 30;
 const MAX_OUTPUT_TOKENS = 16_000;
+const DEEPSEEK_V32_IDENTITIES = new Set([
+  'deepseek-v3.2',
+  'deepseek.v3.2',
+  'deepseek/deepseek-v3.2',
+]);
 
 type ToolCall = {
   id: string;
@@ -245,7 +250,7 @@ export class UsePodBackend implements CodingBackend {
 function sameModel(requested: string, returned: unknown): boolean {
   if (returned === requested) return true;
   if (typeof returned !== 'string') return false;
-  if (requested === 'deepseek-v3.2') return returned === 'deepseek.v3.2';
+  if (DEEPSEEK_V32_IDENTITIES.has(requested)) return DEEPSEEK_V32_IDENTITIES.has(returned);
   const separator = requested.indexOf('/');
   if (separator <= 0 || requested.indexOf('/', separator + 1) !== -1) return false;
   return returned === `${requested.slice(0, separator)}.${requested.slice(separator + 1)}`;

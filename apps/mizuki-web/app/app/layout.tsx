@@ -7,6 +7,7 @@ export const metadata: Metadata = {
   description:
     'Manage authorized repositories, fixed-price maintenance jobs, pull requests, refunds, and funded bounties.',
   robots: { index: false, follow: false },
+  alternates: { canonical: '/app' },
 };
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {

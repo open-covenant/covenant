@@ -1,7 +1,10 @@
 import type { Metadata } from 'next';
 import { NewJobWizard } from '@/components/workbench/new-job-wizard';
 
-export const metadata: Metadata = { title: 'New maintenance job' };
+export const metadata: Metadata = {
+  title: 'New maintenance job',
+  alternates: { canonical: '/app/jobs/new' },
+};
 
 export default async function NewJobPage({
   searchParams,

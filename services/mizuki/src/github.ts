@@ -9,6 +9,7 @@ const GITHUB_TIMEOUT_MS = 20_000;
 const TOKEN_REFRESH_WINDOW_MS = 5 * 60_000;
 const TOKEN_MAX_TTL_MS = 65 * 60_000;
 const TOKEN_CACHE_LIMIT = 256;
+const DELIVERY_EVIDENCE_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000] as const;
 const CORE_PERMISSIONS = {
   checks: 'read',
   contents: 'write',
@@ -650,7 +651,7 @@ export class GithubClient {
   ): Promise<string> {
     const installationId = job.quote.installationId!;
     const pull = parsePullRequestUrl(pullRequestUrl);
-    const evidence = await this.pullRequestReviewData(pullRequestUrl, installationId);
+    const evidence = await this.stablePullRequestReviewData(pullRequestUrl, installationId);
     const reviewedDiffHash = createHash('sha256').update(artifacts.patch).digest('hex');
     if (
       evidence.headSha !== deliveryCommitSha ||
@@ -669,6 +670,23 @@ export class GithubClient {
       observedAt: new Date().toISOString(),
     });
     return pullRequestUrl;
+  }
+
+  private async stablePullRequestReviewData(
+    pullRequestUrl: string,
+    installationId: number,
+  ): Promise<Awaited<ReturnType<GithubClient['pullRequestReviewData']>>> {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await this.pullRequestReviewData(pullRequestUrl, installationId);
+      } catch (cause) {
+        const delay = DELIVERY_EVIDENCE_RETRY_DELAYS_MS[attempt];
+        if (!(cause instanceof PullRequestEvidenceChangedError) || delay === undefined) {
+          throw cause;
+        }
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
   }
 
   async mergedAt(job: Job): Promise<string | undefined> {
@@ -768,7 +786,9 @@ export class GithubClient {
       confirmed.merged_at !== pull.merged_at ||
       confirmed.merge_commit_sha !== pull.merge_commit_sha
     ) {
-      throw new Error('pull request changed while review evidence was collected');
+      throw new PullRequestEvidenceChangedError(
+        'pull request changed while review evidence was collected',
+      );
     }
     const checksPassed =
       checks.total_count === checks.check_runs.length &&
@@ -1435,6 +1455,8 @@ class GithubApiError extends Error {
     super(message);
   }
 }
+
+class PullRequestEvidenceChangedError extends Error {}
 
 export class GithubAccessError extends Error {}
 

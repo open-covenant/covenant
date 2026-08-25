@@ -366,6 +366,15 @@ describe('pull request publication recovery', () => {
       'GitHub request failed with HTTP 422',
     );
   });
+
+  it('retries evidence collection while GitHub stabilizes merge metadata', async () => {
+    const expectedHead = 'd'.repeat(40);
+    const github = publicationClient(expectedHead, [], true);
+
+    await expect(github.publish(publicationJob(expectedHead), emptyArtifacts)).resolves.toBe(
+      'https://github.com/example/project/pull/31',
+    );
+  });
 });
 
 describe('pull request review evidence', () => {
@@ -667,9 +676,14 @@ const emptyArtifacts: RunArtifacts = {
   validations: [],
 };
 
-function publicationClient(existingHead: string, events: string[] = []): GithubClient {
+function publicationClient(
+  existingHead: string,
+  events: string[] = [],
+  mergeMetadataDrift = false,
+): GithubClient {
   const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
   const expectedHead = 'd'.repeat(40);
+  let metadataReads = 0;
   return new GithubClient(
     loadConfig({
       MIZUKI_PAYMENT_MODE: 'mock',
@@ -709,15 +723,20 @@ function publicationClient(existingHead: string, events: string[] = []): GithubC
         if (new Headers(init?.headers).get('accept') === 'application/vnd.github.v3.diff') {
           return new Response('');
         }
+        const mergeCommitSha = mergeMetadataDrift && metadataReads > 0 ? 'a'.repeat(40) : null;
+        metadataReads += 1;
         return Response.json({
           changed_files: 0,
           merged_at: null,
-          merge_commit_sha: null,
+          merge_commit_sha: mergeCommitSha,
           head: { sha: expectedHead },
           base: { sha: 'b'.repeat(40), ref: 'main' },
         });
       }
-      if (url.pathname === `/repos/example/project/commits/${expectedHead}/check-runs`) {
+      if (
+        url.pathname === `/repos/example/project/commits/${expectedHead}/check-runs` ||
+        url.pathname === `/repos/example/project/commits/${'a'.repeat(40)}/check-runs`
+      ) {
         return Response.json({ total_count: 0, check_runs: [] });
       }
       if (url.pathname === '/repos/example/project/pulls/31/files') {

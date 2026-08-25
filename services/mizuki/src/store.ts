@@ -61,6 +61,7 @@ export interface MizukiStore {
   saveQuote(quote: Quote): Promise<Quote>;
   quote(id: string): Promise<Quote | undefined>;
   linkQuoteToAccount(quoteId: string, githubId: string): Promise<void>;
+  quoteForAccount(quoteId: string, githubId: string): Promise<Quote | undefined>;
   jobsForAccount(githubId: string, limit: number): Promise<AccountJobsPage>;
   linkAccountRepository(githubId: string, owner: string, repo: string): Promise<AccountRepository>;
   repositoriesForAccount(githubId: string, limit: number): Promise<AccountRepositoriesPage>;
@@ -198,6 +199,11 @@ export class MemoryStore implements MizukiStore {
       throw new StateConflictError('quote is already linked to another account');
     }
     this.quoteAccounts.set(quoteId, githubId);
+  }
+
+  async quoteForAccount(quoteId: string, githubId: string): Promise<Quote | undefined> {
+    if (this.quoteAccounts.get(quoteId) !== githubId) return undefined;
+    return clone(this.quotes.get(quoteId));
   }
 
   async jobsForAccount(githubId: string, limit: number): Promise<AccountJobsPage> {
@@ -827,6 +833,17 @@ export class PostgresStore implements MizukiStore {
     if (current.rows[0].github_id !== githubId) {
       throw new StateConflictError('quote is already linked to another account');
     }
+  }
+
+  async quoteForAccount(quoteId: string, githubId: string): Promise<Quote | undefined> {
+    const result = await this.pool.query<{ payload: Quote }>(
+      `SELECT quotes.payload
+       FROM mizuki_quotes AS quotes
+       JOIN mizuki_account_quotes AS links ON links.quote_id = quotes.id
+       WHERE quotes.id = $1 AND links.github_id = $2`,
+      [quoteId, githubId],
+    );
+    return result.rows[0]?.payload;
   }
 
   async jobsForAccount(githubId: string, limit: number): Promise<AccountJobsPage> {

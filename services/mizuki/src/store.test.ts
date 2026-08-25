@@ -134,6 +134,8 @@ describe('MemoryStore', () => {
     const repository = await store.linkAccountRepository('42', quote.owner, quote.repo);
     const { job } = await store.createJob(quote, payment, 'account-job');
 
+    await expect(store.quoteForAccount(quote.id, '42')).resolves.toEqual(quote);
+    await expect(store.quoteForAccount(quote.id, '99')).resolves.toBeUndefined();
     await expect(store.jobsForAccount('42', 100)).resolves.toEqual({
       jobs: [job],
       limit: 100,

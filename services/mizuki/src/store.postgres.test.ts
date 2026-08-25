@@ -572,6 +572,8 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
       await upgraded.upsertContributor(githubId, 'migration-maintainer');
       const quote = await saveQuote(upgraded);
       await upgraded.linkQuoteToAccount(quote.id, githubId);
+      await expect(upgraded.quoteForAccount(quote.id, githubId)).resolves.toEqual(quote);
+      await expect(upgraded.quoteForAccount(quote.id, randomUUID())).resolves.toBeUndefined();
       const repository = await upgraded.linkAccountRepository(githubId, quote.owner, quote.repo);
       const { job } = await upgraded.createJob(
         quote,

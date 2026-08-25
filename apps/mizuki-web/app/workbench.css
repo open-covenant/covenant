@@ -1237,6 +1237,60 @@
   min-height: 48px;
 }
 
+.wizard-payment-recovery {
+  display: grid;
+  gap: 9px;
+  padding: 16px;
+  border: 1px solid rgba(224, 185, 104, 0.4);
+  border-radius: 7px;
+  background: rgba(224, 185, 104, 0.08);
+}
+
+.wizard-payment-recovery.confirmed {
+  border-color: rgba(67, 230, 160, 0.35);
+  background: var(--wb-accent-soft);
+}
+
+.wizard-payment-recovery strong {
+  color: var(--wb-warning);
+  font-size: 13px;
+}
+
+.wizard-payment-recovery.confirmed strong {
+  color: var(--wb-accent);
+}
+
+.wizard-payment-recovery p {
+  max-width: 680px;
+  margin: 0;
+  color: var(--wb-muted);
+  font-size: 11px;
+  line-height: 1.65;
+}
+
+.wizard-payment-recovery code {
+  overflow-wrap: anywhere;
+  color: var(--wb-dim);
+  font-size: 10px;
+}
+
+.wizard-payment-recovery button {
+  min-height: 42px;
+  justify-self: start;
+  padding: 0 14px;
+  border: 1px solid var(--wb-accent);
+  border-radius: 7px;
+  background: var(--wb-accent);
+  color: #06100b;
+  font-size: 12px;
+  font-weight: 680;
+}
+
+.wizard-payment-recovery button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
 .wizard-consent {
   margin: 12px 0 0;
   color: var(--wb-dim);

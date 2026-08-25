@@ -93,6 +93,115 @@ describe('workbench account API', () => {
     expect(anonymous.status).toBe(401);
   });
 
+  it('checks an unpaid quote without requesting payment or repository access', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    await store.saveQuote(quote);
+    await store.linkQuoteToAccount(quote.id, '42');
+    const settle = vi.fn();
+    const github = {
+      assertIssueAuthorization: vi.fn(),
+      currentHead: vi.fn(),
+    };
+    const base = await serve(dependencies(store, { payments: { settle }, github }));
+
+    const response = await fetch(`${base}/v1/account/quotes/${quote.id}/payment-status`, {
+      headers: { ...sessionHeaders, 'idempotency-key': 'payment-recovery-key' },
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('private, no-store');
+    await expect(response.json()).resolves.toEqual({
+      paymentStatus: 'unpaid',
+      quoteId: quote.id,
+      expiresAt: quote.expiresAt,
+    });
+    expect(settle).not.toHaveBeenCalled();
+    expect(github.assertIssueAuthorization).not.toHaveBeenCalled();
+    expect(github.currentHead).not.toHaveBeenCalled();
+  });
+
+  it('returns an existing reservation while paid intake is closed', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    await store.saveQuote(quote);
+    await store.linkQuoteToAccount(quote.id, '42');
+    const { job } = await store.createJob(quote, payment, 'reserved-payment-key');
+    const base = await serve(
+      dependencies(store, { readiness: { check: vi.fn(async () => ({ ready: false })) } }),
+    );
+
+    const response = await fetch(`${base}/v1/account/quotes/${quote.id}/payment-status`, {
+      headers: { ...sessionHeaders, 'idempotency-key': 'reserved-payment-key' },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      paymentStatus: 'job_reserved',
+      quoteId: quote.id,
+      job: { id: job.id, state: 'settlement_pending' },
+    });
+  });
+
+  it('rejects payment recovery outside the quote account or with a reused key', async () => {
+    const store = new MemoryStore();
+    const otherQuote = { ...quote, id: '22222222-2222-4222-8222-222222222222', issueNumber: 8 };
+    await store.upsertContributor('42', 'maintainer');
+    await Promise.all([store.saveQuote(quote), store.saveQuote(otherQuote)]);
+    await Promise.all([
+      store.linkQuoteToAccount(quote.id, '42'),
+      store.linkQuoteToAccount(otherQuote.id, '42'),
+    ]);
+    await store.createJob(otherQuote, payment, 'other-quote-key');
+    const base = await serve(dependencies(store));
+
+    const conflict = await fetch(`${base}/v1/account/quotes/${quote.id}/payment-status`, {
+      headers: { ...sessionHeaders, 'idempotency-key': 'other-quote-key' },
+    });
+    expect(conflict.status).toBe(409);
+    await expect(conflict.json()).resolves.toEqual({ error: 'idempotency key already used' });
+
+    const anonymous = await fetch(`${base}/v1/account/quotes/${quote.id}/payment-status`, {
+      headers: { 'idempotency-key': 'payment-recovery-key' },
+    });
+    expect(anonymous.status).toBe(401);
+
+    const missingKey = await fetch(`${base}/v1/account/quotes/${quote.id}/payment-status`, {
+      headers: sessionHeaders,
+    });
+    expect(missingKey.status).toBe(400);
+  });
+
+  it('waits for an in-flight reservation before reporting payment status', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    await store.saveQuote(quote);
+    await store.linkQuoteToAccount(quote.id, '42');
+    const gate = new SerialGate();
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const reservation = gate.run(async () => {
+      await blocked;
+      return store.createJob(quote, payment, 'in-flight-payment-key');
+    });
+    const base = await serve(dependencies(store, { paymentAdmission: gate }));
+    const response = fetch(`${base}/v1/account/quotes/${quote.id}/payment-status`, {
+      headers: { ...sessionHeaders, 'idempotency-key': 'in-flight-payment-key' },
+    });
+
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    release();
+    const { job } = await reservation;
+    const resolved = await response;
+
+    await expect(resolved.json()).resolves.toMatchObject({
+      paymentStatus: 'job_reserved',
+      job: { id: job.id },
+    });
+  });
+
   it('reports a pending refund without presenting a finalized transaction', async () => {
     const store = new MemoryStore();
     await store.upsertContributor('42', 'maintainer');

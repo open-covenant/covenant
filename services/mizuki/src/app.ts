@@ -242,6 +242,50 @@ export function createApp(deps: AppDependencies) {
           truncated: page.truncated,
         });
       }
+      if (
+        req.method === 'GET' &&
+        parts[0] === 'v1' &&
+        parts[1] === 'account' &&
+        parts[2] === 'quotes' &&
+        parts[3] &&
+        parts[4] === 'payment-status'
+      ) {
+        res.setHeader('cache-control', 'private, no-store');
+        const session = requireSession(req, deps.auth);
+        const key = header(req, 'idempotency-key');
+        if (!key || key.length > 128) {
+          return json(res, 400, { error: 'idempotency-key header is required' });
+        }
+        const status = await deps.paymentAdmission.run(async () => {
+          const quote = await deps.store.quoteForAccount(parts[3]!, session.githubId);
+          if (!quote) return { kind: 'not_found' } as const;
+
+          const keyedJob = await deps.store.jobByIdempotencyKey(key);
+          if (keyedJob && keyedJob.quote.id !== quote.id) {
+            return { kind: 'conflict' } as const;
+          }
+          const job = keyedJob ?? (await deps.store.jobByQuote(quote.id));
+          if (job) return { kind: 'reserved', quote, job } as const;
+          return { kind: 'unpaid', quote } as const;
+        });
+
+        if (status.kind === 'not_found') return json(res, 404, { error: 'quote not found' });
+        if (status.kind === 'conflict') {
+          return json(res, 409, { error: 'idempotency key already used' });
+        }
+        if (status.kind === 'reserved') {
+          return json(res, 200, {
+            paymentStatus: 'job_reserved',
+            quoteId: status.quote.id,
+            job: publicJob(status.job),
+          });
+        }
+        return json(res, 200, {
+          paymentStatus: 'unpaid',
+          quoteId: status.quote.id,
+          expiresAt: status.quote.expiresAt,
+        });
+      }
       if (req.method === 'GET' && url.pathname === '/v1/account/billing') {
         res.setHeader('cache-control', 'private, no-store');
         const session = requireSession(req, deps.auth);

@@ -8,6 +8,7 @@ import { StateConflictError, type MizukiStore } from './store.js';
 import type { Job, ProviderRouteReceipt, Quote, ReviewAttempt, RunArtifacts } from './types.js';
 import {
   boundedMaxTokens,
+  matchesUsePodModel,
   parseUsePodUsage,
   publicUsePodReceipt,
   usePodHeaders,
@@ -613,7 +614,7 @@ export class JobProcessor {
           usage: z.unknown(),
         })
         .parse(await response.json());
-      if (body.model !== this.config.usePodModel) {
+      if (!matchesUsePodModel(this.config.usePodModel, body.model)) {
         throw new Error('UsePod reviewer returned a different model');
       }
       const usage = parseUsePodUsage(body.usage);

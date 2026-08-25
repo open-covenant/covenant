@@ -137,7 +137,10 @@ describe('JobProcessor', () => {
       if (url.endsWith('/artifacts')) return Response.json({ ...artifacts, validations: [] });
       if (url.endsWith('/chat/completions')) {
         expect(JSON.parse(String(init?.body))).toMatchObject({ max_tokens: 512 });
-        return reviewResponse({ approved: true, reason: 'scoped' });
+        return reviewResponse(
+          { approved: true, reason: 'scoped' },
+          'deepseek/deepseek-v4-flash-0731',
+        );
       }
       throw new Error(`unexpected request: ${url}`);
     };
@@ -161,6 +164,53 @@ describe('JobProcessor', () => {
           costMicrounits: '500',
         },
       },
+    });
+  });
+
+  it('refunds when the reviewer returns a nearby canonical model identity', async () => {
+    const store = new MemoryStore();
+    const jobQuote = { ...quote, validationCommands: [] };
+    const created = (await store.createJob(jobQuote, payment, 'review-model-mismatch')).job;
+    await store.transitionJob(created.id, 'settlement_pending', 'paid');
+    const request = async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith('/v1/runs')) return Response.json({ run_id: 'run-model-mismatch' });
+      if (url.endsWith('/v1/runs/run-model-mismatch')) {
+        return Response.json({
+          status: 'completed',
+          usage: { inputTokens: 100, outputTokens: 40 },
+          costUsd: 0.05,
+        });
+      }
+      if (url.endsWith('/artifacts')) return Response.json({ ...artifacts, validations: [] });
+      if (url.endsWith('/chat/completions')) {
+        return reviewResponse(
+          { approved: true, reason: 'scoped' },
+          'deepseek/deepseek-v4-flash-0730',
+        );
+      }
+      throw new Error(`unexpected request: ${url}`);
+    };
+    const github = { currentHead: async () => jobQuote.baseSha, publish: async () => '' };
+
+    await new JobProcessor(
+      loadConfig({ MIZUKI_PAYMENT_MODE: 'mock', USEPOD_API_KEY: 'test' }),
+      store,
+      github,
+      request as typeof fetch,
+    ).process(created.id);
+
+    expect(await store.job(created.id)).toMatchObject({
+      state: 'refunded',
+      error: 'UsePod reviewer returned a different model',
+      reviewAttempts: [
+        {
+          phase: 'implementation',
+          status: 'failed',
+          provider: { model: 'deepseek-v4-flash', route: 'marketplace' },
+          error: 'UsePod reviewer returned a different model',
+        },
+      ],
     });
   });
 
@@ -771,10 +821,13 @@ function gatewayReadiness(
   };
 }
 
-function reviewResponse(decision: { approved: boolean; reason: string }): Response {
+function reviewResponse(
+  decision: { approved: boolean; reason: string },
+  model = 'deepseek-v4-flash',
+): Response {
   return Response.json(
     {
-      model: 'deepseek-v4-flash',
+      model,
       choices: [{ message: { content: JSON.stringify(decision) } }],
       usage: { prompt_tokens: 50, completion_tokens: 10 },
     },

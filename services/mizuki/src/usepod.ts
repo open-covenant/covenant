@@ -28,6 +28,9 @@ const MICROUNITS_PER_USD = 1_000_000n;
 const MAX_RECEIPT_MICROUNITS = BigInt(Number.MAX_SAFE_INTEGER);
 const MAX_CATALOG_BYTES = 1_048_576;
 const MAX_CATALOG_MODELS = 10_000;
+const RESOLVED_MODELS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ['deepseek-v4-flash', new Set(['deepseek/deepseek-v4-flash-0731'])],
+]);
 const modelCatalogSchema = z
   .object({
     object: z.literal('list'),
@@ -136,6 +139,12 @@ export function parseUsePodUsage(value: unknown): UsePodUsage {
     throw new Error('UsePod returned invalid token usage');
   }
   return { promptTokens, completionTokens };
+}
+
+export function matchesUsePodModel(requested: string, returned: unknown): boolean {
+  if (returned === requested) return true;
+  if (typeof returned !== 'string') return false;
+  return RESOLVED_MODELS.get(requested)?.has(returned) ?? false;
 }
 
 export function publicUsePodReceipt(receipt: UsePodRouteReceipt): ProviderRouteReceipt {

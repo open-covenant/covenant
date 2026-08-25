@@ -88,11 +88,15 @@ describe('independent reviewer readiness', () => {
       loadConfig({
         MIZUKI_PAYMENT_MODE: 'mock',
         USEPOD_API_KEY: 'secret',
-        USEPOD_REVIEW_MODEL: 'independent-reviewer',
+        USEPOD_REVIEW_MODEL: 'deepseek-v4-flash',
       }),
       {} as MizukiStore,
       {} as GithubClient,
-      async () => Response.json({ object: 'list', data: [{ id: 'different-route' }] }),
+      async () =>
+        Response.json({
+          object: 'list',
+          data: [{ id: 'deepseek/deepseek-v4-flash-0731' }],
+        }),
     );
     await expect(reviewer.readiness()).rejects.toThrow('does not include the configured model');
   });
@@ -182,6 +186,63 @@ describe('independent paid review', () => {
       approved: true,
       providerReceipt: { model: 'independent-reviewer', route: 'marketplace' },
     });
+  });
+
+  it('accepts the exact canonical identity returned for the reviewer alias', async () => {
+    const reviewer = paidReviewer(
+      async () =>
+        Response.json(
+          {
+            model: 'deepseek/deepseek-v4-flash-0731',
+            choices: [{ message: { content: '{"approved":true,"reason":"scoped fix"}' } }],
+          },
+          {
+            headers: {
+              'x-pod-route': 'marketplace',
+              'x-balance-remaining': '9000000',
+            },
+          },
+        ),
+      true,
+      'deepseek-v4-flash',
+    );
+
+    await expect(
+      runPaidReview(reviewer, {
+        id: 'review-attempt-1',
+        maxCostMicrounits: 1_000,
+      }),
+    ).resolves.toMatchObject({
+      approved: true,
+      providerReceipt: { model: 'deepseek-v4-flash', route: 'marketplace' },
+    });
+  });
+
+  it('rejects a nearby canonical identity for the reviewer alias', async () => {
+    const reviewer = paidReviewer(
+      async () =>
+        Response.json(
+          {
+            model: 'deepseek/deepseek-v4-flash-0730',
+            choices: [{ message: { content: '{"approved":true,"reason":"scoped fix"}' } }],
+          },
+          {
+            headers: {
+              'x-pod-route': 'marketplace',
+              'x-balance-remaining': '9000000',
+            },
+          },
+        ),
+      true,
+      'deepseek-v4-flash',
+    );
+
+    await expect(
+      runPaidReview(reviewer, {
+        id: 'review-attempt-1',
+        maxCostMicrounits: 1_000,
+      }),
+    ).rejects.toThrow('returned a different model');
   });
 
   it('rejects a reported provider cost above the reservation', async () => {
@@ -302,7 +363,11 @@ async function runPaidReview(
   return preflight.kind === 'paid' ? reviewer.review(preflight) : preflight.result;
 }
 
-function paidReviewer(request: typeof fetch, checksPassed = true): UsePodContributorReviewer {
+function paidReviewer(
+  request: typeof fetch,
+  checksPassed = true,
+  model = 'independent-reviewer',
+): UsePodContributorReviewer {
   const store = {
     job: async () => ({
       quote: {
@@ -338,7 +403,7 @@ function paidReviewer(request: typeof fetch, checksPassed = true): UsePodContrib
     loadConfig({
       MIZUKI_PAYMENT_MODE: 'mock',
       USEPOD_API_KEY: 'secret',
-      USEPOD_REVIEW_MODEL: 'independent-reviewer',
+      USEPOD_REVIEW_MODEL: model,
     }),
     store,
     github,

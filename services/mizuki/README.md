@@ -2,7 +2,7 @@
 
 Mizuki sells small, bounded software-maintenance jobs. A maintainer submits a public GitHub issue, receives a fixed USDC quote, pays over x402, and gets either a validated pull request or a refund of the quoted USDC payment. Network and wallet fees are separate.
 
-This is a delivery agent, not a verification wrapper and not a trading bot. The paid result is the code change.
+Mizuki is a delivery agent, not a verification wrapper and not a trading bot. The paid result is the code change.
 
 ## Contract
 

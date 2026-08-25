@@ -64,14 +64,91 @@ function approvedResponse(headers: Record<string, string> = {}): Response {
       model: MODEL,
       choices: [
         {
+          index: 0,
+          finish_reason: 'stop',
           message: {
+            role: 'assistant',
             content: JSON.stringify({ approved: true, reason: 'The patch resolves the issue.' }),
           },
         },
       ],
+      usage: { prompt_tokens: 96, completion_tokens: 63 },
     },
     {
       headers: {
+        'x-pod-route': 'marketplace',
+        'x-balance-remaining': '1000',
+        ...headers,
+      },
+    },
+  );
+}
+
+function streamedApprovedResponse(
+  model = 'deepseek-v4-flash-0731',
+  headers: Record<string, string> = {},
+): Response {
+  const decision = JSON.stringify({ approved: true, reason: 'The patch resolves the issue.' });
+  const frames = [
+    {
+      id: 'request-7',
+      model,
+      choices: [
+        {
+          index: 0,
+          delta: { role: 'assistant', content: '' },
+          finish_reason: null,
+        },
+      ],
+      usage: null,
+    },
+    {
+      id: 'request-7',
+      model,
+      choices: [
+        {
+          index: 0,
+          delta: { content: decision.slice(0, 20) },
+          finish_reason: null,
+        },
+      ],
+      usage: null,
+    },
+    {
+      id: 'request-7',
+      model,
+      choices: [
+        {
+          index: 0,
+          delta: { content: decision.slice(20) },
+          finish_reason: null,
+        },
+      ],
+      usage: null,
+    },
+    {
+      id: 'request-7',
+      model,
+      choices: [
+        {
+          index: 0,
+          delta: { content: '' },
+          finish_reason: 'stop',
+        },
+      ],
+      usage: null,
+    },
+    {
+      model,
+      choices: [],
+      usage: { prompt_tokens: 96, completion_tokens: 63, total_tokens: 159 },
+    },
+  ];
+  return new Response(
+    `${frames.map((frame) => `data: ${JSON.stringify(frame)}\n\n`).join('')}data: [DONE]\n\n`,
+    {
+      headers: {
+        'content-type': 'application/json',
         'x-pod-route': 'marketplace',
         'x-balance-remaining': '1000',
         ...headers,
@@ -135,6 +212,25 @@ describe('funded independent review', () => {
     expect(JSON.parse(body.messages[1]!.content)).toMatchObject({ diff: input.artifact.diff });
   });
 
+  it('sanitizes transport failures before they can expose the tokenized provider URL', async () => {
+    const failing = vi.fn(async (input: string | URL | Request) => {
+      throw new Error(`request failed for ${String(input)}`);
+    }) as unknown as typeof fetch;
+    const reviewer = new UsePodIndependentReviewer(config(), failing);
+
+    for (const operation of [() => reviewer.health(), () => reviewer.review(request())]) {
+      let failure: unknown;
+      try {
+        await operation();
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toMatchObject({ code: 'independent_review_unavailable' });
+      expect(String(failure)).not.toContain('review-key');
+      expect(String(failure)).not.toContain('/proxy/');
+    }
+  });
+
   it('records optional provider, request, and bounded cost evidence when present', async () => {
     const fetcher = vi.fn(async () =>
       approvedResponse({
@@ -150,6 +246,64 @@ describe('funded independent review', () => {
       requestId: 'provider-request-7',
       costMicrounits: '500',
     });
+  });
+
+  it('accepts a complete streamed decision from a qualified resolved model', async () => {
+    const fetcher = vi.fn(async () =>
+      streamedApprovedResponse('deepseek/deepseek-v4-flash-0731', {
+        'x-pod-provider-id': 'provider-7',
+      }),
+    ) as unknown as typeof fetch;
+    const receipt = await new UsePodIndependentReviewer(
+      config({ model: 'deepseek-v4-flash' }),
+      fetcher,
+    ).review(request());
+
+    expect(receipt).toMatchObject({
+      approved: true,
+      model: 'deepseek-v4-flash',
+      resolvedModel: 'deepseek/deepseek-v4-flash-0731',
+      providerId: 'provider-7',
+    });
+  });
+
+  it('fails closed on incomplete, inconsistent, or unqualified streams', async () => {
+    const incomplete = vi.fn(async () => {
+      const response = streamedApprovedResponse();
+      return new Response((await response.text()).replace('data: [DONE]\n\n', ''), {
+        headers: response.headers,
+      });
+    }) as unknown as typeof fetch;
+    await expect(
+      new UsePodIndependentReviewer(config({ model: 'deepseek-v4-flash' }), incomplete).review(
+        request(),
+      ),
+    ).rejects.toMatchObject({ code: 'independent_review_unavailable', retryable: true });
+
+    const inconsistent = vi.fn(async () => {
+      const response = streamedApprovedResponse();
+      return new Response(
+        (await response.text()).replace(
+          '"model":"deepseek-v4-flash-0731","choices":[]',
+          '"model":"different-model","choices":[]',
+        ),
+        { headers: response.headers },
+      );
+    }) as unknown as typeof fetch;
+    await expect(
+      new UsePodIndependentReviewer(config({ model: 'deepseek-v4-flash' }), inconsistent).review(
+        request(),
+      ),
+    ).rejects.toMatchObject({ code: 'independent_review_unavailable', retryable: true });
+
+    const unqualified = vi.fn(async () =>
+      streamedApprovedResponse('unqualified-model'),
+    ) as unknown as typeof fetch;
+    await expect(
+      new UsePodIndependentReviewer(config({ model: 'deepseek-v4-flash' }), unqualified).review(
+        request(),
+      ),
+    ).rejects.toMatchObject({ code: 'independent_review_unavailable', retryable: true });
   });
 
   it('rejects unaffordable or oversized input before making a paid call', async () => {
@@ -170,11 +324,15 @@ describe('funded independent review', () => {
           model: MODEL,
           choices: [
             {
+              index: 0,
+              finish_reason: 'stop',
               message: {
+                role: 'assistant',
                 content: JSON.stringify({ approved: false, reason: 'The issue remains open.' }),
               },
             },
           ],
+          usage: { prompt_tokens: 96, completion_tokens: 63 },
         },
         { headers: { 'x-pod-route': 'marketplace', 'x-balance-remaining': '1000' } },
       ),

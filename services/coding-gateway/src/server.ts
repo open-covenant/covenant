@@ -23,7 +23,14 @@ import { admitRun } from './admit.js';
 import { IdempotencyConflictError, RunStore, type StoredRun } from './run-store.js';
 import { assertProductionConfig } from './config.js';
 import { GatewayReadiness, verifyE2bTariff } from './readiness.js';
-import { captureRepositoryFiles } from './repository-artifacts.js';
+import {
+  MAX_CHANGED_FILES,
+  MAX_PATCH_BYTES,
+  assertRepositoryFileCount,
+  assertRepositoryPatchSize,
+  captureRepositoryFiles,
+} from './repository-artifacts.js';
+import { isolatedShellCommand, quoteShellArgument } from './sandbox-command.js';
 import { probeUsePodBalance, probeUsePodCatalog, type UsePodRequestConfig } from './usepod-http.js';
 
 interface CapturedFile {
@@ -45,10 +52,13 @@ const MAX_FILES = 40;
 const MAX_FILE_BYTES = 64 * 1024;
 const MAX_TOTAL_BYTES = 512 * 1024;
 const MAX_REQUEST_BODY_BYTES = 1_200_000;
+const MAX_CHANGED_PATH_OUTPUT_BYTES = (MAX_CHANGED_FILES + 1) * 8_192;
 
 async function captureFiles(sandbox: {
-  exec: (cmd: string, opts?: { timeoutMs?: number }) => Promise<{ stdout: string }>;
-  readFile: (path: string) => Promise<string>;
+  exec: (
+    cmd: string,
+    opts?: { timeoutMs?: number },
+  ) => Promise<{ stdout: string; exitCode?: number }>;
 }): Promise<CapturedFile[]> {
   const find =
     'find . -maxdepth 5 -type f ' +
@@ -64,14 +74,20 @@ async function captureFiles(sandbox: {
   let total = 0;
   for (const path of paths) {
     if (files.length >= MAX_FILES || total >= MAX_TOTAL_BYTES) break;
-    const raw = await sandbox.readFile(path).catch(() => null);
-    if (raw == null) continue;
-    // Skip apparent binaries (NUL byte) — readFile is UTF-8 only anyway.
+    const captureLimit = Math.min(MAX_FILE_BYTES, MAX_TOTAL_BYTES - total);
+    const result = await sandbox
+      .exec(`head -c ${captureLimit + 1} -- ${quoteShellArgument(path)}`, {
+        timeoutMs: 15_000,
+      })
+      .catch(() => null);
+    if (!result || (result.exitCode !== undefined && result.exitCode !== 0)) continue;
+    const raw = result.stdout;
     if (raw.includes('\u0000')) continue;
-    const truncated = raw.length > MAX_FILE_BYTES;
-    const content = truncated ? raw.slice(0, MAX_FILE_BYTES) : raw;
+    const bytes = Buffer.from(raw, 'utf8');
+    const truncated = bytes.length > captureLimit;
+    const content = truncated ? bytes.subarray(0, captureLimit).toString('utf8') : raw;
     files.push({ path, content, ...(truncated ? { truncated: true } : {}) });
-    total += content.length;
+    total += Buffer.byteLength(content, 'utf8');
   }
   files.sort((a, b) => a.path.localeCompare(b.path));
   return files;
@@ -357,7 +373,11 @@ function startRun(
       // inside the still-alive sandbox for up to 15s, accruing spend the
       // operator just signalled they want to stop.
       run.files =
-        sandbox && !run.abort.signal.aborted ? await captureFiles(sandbox).catch(() => []) : [];
+        sandbox && !run.abort.signal.aborted
+          ? request.repository_url
+            ? await captureRepositoryFiles(sandbox, run.changedFiles ?? []).catch(() => [])
+            : await captureFiles(sandbox).catch(() => [])
+          : [];
       publish(run, { type: 'run.failed', error: run.error });
       ledger.commit(
         reservationId,
@@ -726,9 +746,10 @@ async function collectRepositoryArtifacts(
   sandbox: Sandbox,
   commands: string[],
 ): Promise<Pick<RunArtifacts, 'patch' | 'changedFiles' | 'validations'>> {
+  assertRepositoryFileCount(await listRepositoryChanges(sandbox));
   const validations: ValidationResult[] = [];
   for (const command of commands) {
-    const result = await sandbox.exec(command, { timeoutMs: 300_000 });
+    const result = await sandbox.exec(isolatedShellCommand(command), { timeoutMs: 300_000 });
     validations.push({
       command,
       exitCode: result.exitCode,
@@ -737,22 +758,51 @@ async function collectRepositoryArtifacts(
     });
   }
 
-  await sandbox.exec('git add -N .', { timeoutMs: 30_000 });
-  const [diff, names] = await Promise.all([
-    sandbox.exec('git diff --binary --no-ext-diff', { timeoutMs: 30_000 }),
-    sandbox.exec('git diff --name-only --no-ext-diff', { timeoutMs: 30_000 }),
-  ]);
-  if (diff.exitCode !== 0 || names.exitCode !== 0) {
-    throw new Error('failed to collect repository diff');
-  }
+  assertRepositoryFileCount(await listRepositoryChanges(sandbox));
+  const intent = await sandbox.exec('git add -N .', { timeoutMs: 30_000 });
+  if (intent.exitCode !== 0) throw new Error('failed to prepare repository diff');
+
+  const diff = await sandbox.exec(
+    boundedGitOutput('git diff --binary --no-ext-diff', MAX_PATCH_BYTES + 1),
+    { timeoutMs: 30_000 },
+  );
+  if (diff.exitCode !== 0) throw new Error('failed to collect repository diff');
+  assertRepositoryPatchSize(diff.stdout);
+
+  const names = await sandbox.exec(
+    boundedGitOutput('git diff --name-only -z --no-ext-diff', MAX_CHANGED_PATH_OUTPUT_BYTES),
+    { timeoutMs: 30_000 },
+  );
+  if (names.exitCode !== 0) throw new Error('failed to collect changed file names');
+  const changedFiles = names.stdout.split('\0').filter(Boolean);
+  assertRepositoryFileCount(changedFiles);
   return {
     patch: diff.stdout,
-    changedFiles: names.stdout
-      .split('\n')
-      .map((path) => path.trim())
-      .filter(Boolean),
+    changedFiles,
     validations,
   };
+}
+
+async function listRepositoryChanges(sandbox: Sandbox): Promise<string[]> {
+  const result = await sandbox.exec(
+    boundedGitOutput(
+      'git ls-files --modified --deleted --others --exclude-standard -z',
+      MAX_CHANGED_PATH_OUTPUT_BYTES,
+    ),
+    { timeoutMs: 30_000 },
+  );
+  if (result.exitCode !== 0) throw new Error('failed to enumerate repository changes');
+  return [...new Set(result.stdout.split('\0').filter(Boolean))];
+}
+
+function boundedGitOutput(command: string, maxBytes: number): string {
+  const script = [
+    `${command} | head -c ${maxBytes}`,
+    'statuses=("${PIPESTATUS[@]}")',
+    '[ "${statuses[1]}" -eq 0 ] || exit "${statuses[1]}"',
+    '[ "${statuses[0]}" -eq 0 ] || [ "${statuses[0]}" -eq 141 ]',
+  ].join('\n');
+  return `/bin/bash -c ${quoteShellArgument(script)}`;
 }
 
 export const server = createServer(async (req, res) => {

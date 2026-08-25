@@ -1,4 +1,5 @@
 import { config } from '../config.js';
+import { isolatedShellCommand } from '../sandbox-command.js';
 import type {
   CodingBackend,
   GatewayEvent,
@@ -309,7 +310,9 @@ async function execute(
       return `edited ${path}`;
     }
     case 'bash': {
-      const result = await sandbox.exec(String(input.command), { timeoutMs: 180_000 });
+      const result = await sandbox.exec(isolatedShellCommand(String(input.command)), {
+        timeoutMs: 180_000,
+      });
       return `exit=${result.exitCode}\n${result.stdout}\n${result.stderr}`.slice(0, 32_000);
     }
     default:

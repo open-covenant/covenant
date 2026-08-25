@@ -610,7 +610,7 @@ describe('workbench account API', () => {
     const run = vi.spyOn(gate, 'run');
     const base = await serve(dependencies(store, { paymentAdmission: gate }));
 
-    for (let index = 0; index < 20; index += 1) {
+    for (let index = 0; index < 12; index += 1) {
       const response = await fetch(`${base}/v1/account/quotes/${quote.id}/payment-status`, {
         headers: { ...sessionHeaders, 'idempotency-key': `payment-status-${index}` },
       });
@@ -620,7 +620,7 @@ describe('workbench account API', () => {
       headers: { ...sessionHeaders, 'idempotency-key': 'payment-status-limited' },
     });
     expect(limited.status).toBe(429);
-    expect(run).toHaveBeenCalledTimes(20);
+    expect(run).toHaveBeenCalledTimes(12);
   });
 
   it('reports a confirming payment once, then replaces it with one finalized payment', async () => {

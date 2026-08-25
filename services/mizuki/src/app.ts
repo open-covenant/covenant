@@ -372,7 +372,6 @@ export function createApp(deps: AppDependencies) {
         }
         const quoteId = parts[3]!;
         if (!UUID_PATTERN.test(quoteId)) return json(res, 404, { error: 'quote not found' });
-        admission.consumeAccount('payment_status', req, session.githubId);
         const status = await deps.paymentAdmission.run(async () => {
           const quote = await deps.store.quoteForAccount(quoteId, session.githubId);
           if (!quote) return { kind: 'not_found' } as const;

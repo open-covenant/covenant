@@ -12,7 +12,6 @@ export type PublicRoute =
   | 'payment_status'
   | 'repository_connect'
   | 'repository_issues'
-  | 'payment_status'
   | 'oauth_start'
   | 'oauth_callback'
   | 'wallet_challenge'
@@ -45,7 +44,6 @@ const policies: Record<PublicRoute, Policy> = {
   account_repositories: { capacity: 12, windowMs: 60_000 },
   api_auth: { capacity: 60, windowMs: 60_000 },
   api_tokens: { capacity: 10, windowMs: 60_000 },
-  payment_status: { capacity: 20, windowMs: 60_000 },
   repository_connect: { capacity: 6, windowMs: 60_000 },
   repository_issues: { capacity: 10, windowMs: 60_000 },
   payment_status: { capacity: 12, windowMs: 60_000 },

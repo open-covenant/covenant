@@ -1605,14 +1605,14 @@
 
 .billing-scope-note {
   margin: -4px 0 24px;
-  color: var(--workbench-muted);
+  color: var(--wb-muted);
   font-size: 0.84rem;
   line-height: 1.6;
 }
 
 .job-history-scope-note {
   margin: -14px 0 20px;
-  color: var(--workbench-muted);
+  color: var(--wb-muted);
   font-size: 0.84rem;
   line-height: 1.6;
 }

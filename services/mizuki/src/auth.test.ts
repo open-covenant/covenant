@@ -92,6 +92,20 @@ describe('ContributorAuth', () => {
     clock.mockRestore();
   });
 
+  it('preserves OAuth store outages for the callback availability response', async () => {
+    const store = new MemoryStore();
+    const auth = oauthAuth(store, vi.fn());
+    const authorization = await auth.beginGithubOAuth('/app');
+    const state = new URL(authorization.url).searchParams.get('state')!;
+    vi.spyOn(store, 'consumeGithubOAuthFlow').mockRejectedValueOnce(
+      new Error('database temporarily unavailable'),
+    );
+
+    await expect(auth.callback('code', state, authorization.flowCookie)).rejects.toThrow(
+      'database temporarily unavailable',
+    );
+  });
+
   it('links a wallet after a valid domain-bound signature and rejects replay', async () => {
     const store = new MemoryStore();
     await store.upsertContributor('42', 'maintainer');

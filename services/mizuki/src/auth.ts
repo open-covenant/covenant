@@ -125,7 +125,10 @@ export class ContributorAuth {
           /already used/i.test(cause.message) ? 'replayed' : 'expired',
         );
       }
-      throw new GithubOAuthCallbackError('invalid');
+      if (cause instanceof Error && cause.message === 'OAuth browser flow is invalid') {
+        throw new GithubOAuthCallbackError('invalid');
+      }
+      throw cause;
     }
     const tokenResponse = await this.request('https://github.com/login/oauth/access_token', {
       method: 'POST',

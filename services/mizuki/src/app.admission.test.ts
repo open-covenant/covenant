@@ -9,7 +9,7 @@ import {
 } from './app.js';
 import { GithubReadinessError } from './github.js';
 import { PolicyRequestError, repositoryAdmissionBinding } from './policy-client.js';
-import { MemoryStore } from './store.js';
+import { GithubOAuthCapacityError, MemoryStore } from './store.js';
 import type { Quote, RepositoryAdmissionReceipt } from './types.js';
 
 const servers: Server[] = [];
@@ -762,6 +762,28 @@ describe('public route responses', () => {
       'mizuki_oauth_flow=browser-flow-secret; Path=/api/mizuki/v1/auth/github/callback; HttpOnly; SameSite=Lax; Max-Age=600; Secure',
     );
     expect(beginGithubOAuth).toHaveBeenCalledWith('/app');
+  });
+
+  it('fails closed with retry guidance when browser OAuth capacity is exhausted', async () => {
+    const store = new MemoryStore();
+    const base = await serve(
+      dependencies(store, {
+        auth: {
+          beginGithubOAuth: vi.fn(async () => {
+            throw new GithubOAuthCapacityError();
+          }),
+        },
+      }),
+    );
+
+    const response = await fetch(`${base}/v1/auth/github`, { redirect: 'manual' });
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get('retry-after')).toBe('60');
+    expect(response.headers.get('cache-control')).toBe('private, no-store');
+    await expect(response.json()).resolves.toEqual({
+      error: 'GitHub sign-in is temporarily busy; try again shortly',
+    });
   });
 
   it('sets a Secure OAuth session cookie from an authenticated HTTPS web request', async () => {

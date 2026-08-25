@@ -21,7 +21,12 @@ import {
 import { createQuote } from './quote.js';
 import { recordPaymentReceipts } from './receipts.js';
 import { assertLiabilityMatchesPayment, recoverSettlement } from './settlement-recovery.js';
-import { StateConflictError, type AccountJobsPage, type MizukiStore } from './store.js';
+import {
+  GithubOAuthCapacityError,
+  StateConflictError,
+  type AccountJobsPage,
+  type MizukiStore,
+} from './store.js';
 import { GithubWebhookHandler, verifyGithubWebhook } from './webhooks.js';
 import type { Job, RepositoryAdmissionReceipt } from './types.js';
 import { Payments, USDC_DECIMALS, USDC_MAINNET, paymentRequiredHeader } from './x402.js';
@@ -975,6 +980,11 @@ export function createApp(deps: AppDependencies) {
         res.setHeader('retry-after', String(cause.retryAfterSeconds));
         res.setHeader('cache-control', 'private, no-store');
         return json(res, 429, { error: cause.message });
+      }
+      if (cause instanceof GithubOAuthCapacityError) {
+        res.setHeader('retry-after', '60');
+        res.setHeader('cache-control', 'private, no-store');
+        return json(res, 503, { error: cause.message });
       }
       const message = cause instanceof Error ? cause.message : String(cause);
       const status =

@@ -7,7 +7,13 @@ import {
   createRescueBounty,
   transitionContributorEscrow,
 } from './domain/index.js';
-import { COMMERCIAL_CORE_SCHEMA_V1, PostgresStore, StateConflictError } from './store.js';
+import {
+  COMMERCIAL_CORE_SCHEMA_V1,
+  GithubOAuthCapacityError,
+  MAX_PENDING_GITHUB_OAUTH_FLOWS,
+  PostgresStore,
+  StateConflictError,
+} from './store.js';
 import type { Quote } from './types.js';
 
 const databaseUrl = process.env.MIZUKI_TEST_DATABASE_URL;
@@ -386,6 +392,47 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
           callback.status === 'rejected' && callback.reason instanceof StateConflictError,
       ),
     ).toBe(true);
+  });
+
+  it('caps pending browser OAuth flows across runtime replicas', async () => {
+    const pool = new Pool({ connectionString: databaseUrl });
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + 60_000);
+    const flows = Array.from({ length: MAX_PENDING_GITHUB_OAUTH_FLOWS }, () => randomUUID());
+    const values = flows.map(
+      (_, index) => `($${index * 4 + 1}, $${index * 4 + 2}, $${index * 4 + 3}, $${index * 4 + 4})`,
+    );
+    const parameters = flows.flatMap((id) => [id, 'a'.repeat(43), expiresAt, now]);
+    const replacement = {
+      id: randomUUID(),
+      binding: 'b'.repeat(43),
+      expiresAt: expiresAt.toISOString(),
+      createdAt: now.toISOString(),
+    };
+
+    try {
+      await pool.query('DELETE FROM mizuki_github_oauth_flows');
+      await pool.query(
+        `INSERT INTO mizuki_github_oauth_flows (id, binding, expires_at, created_at)
+         VALUES ${values.join(', ')}`,
+        parameters,
+      );
+
+      await expect(store.saveGithubOAuthFlow(replacement)).rejects.toBeInstanceOf(
+        GithubOAuthCapacityError,
+      );
+      await pool.query('UPDATE mizuki_github_oauth_flows SET consumed_at = now() WHERE id = $1', [
+        flows[0],
+      ]);
+      await expect(store.saveGithubOAuthFlow(replacement)).resolves.toEqual(replacement);
+      const count = await pool.query<{ count: string }>(
+        'SELECT count(*)::text AS count FROM mizuki_github_oauth_flows',
+      );
+      expect(Number(count.rows[0]?.count)).toBe(MAX_PENDING_GITHUB_OAUTH_FLOWS);
+    } finally {
+      await pool.query('DELETE FROM mizuki_github_oauth_flows');
+      await pool.end();
+    }
   });
 
   it('serializes the repository cap per account and keeps listing bounded', async () => {

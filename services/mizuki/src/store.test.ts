@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createRescueBounty, type BountyClaim, type RescueBounty } from './domain/index.js';
-import { MemoryStore } from './store.js';
+import { GithubOAuthCapacityError, MAX_PENDING_GITHUB_OAUTH_FLOWS, MemoryStore } from './store.js';
 import type { Payment, Quote } from './types.js';
 
 const quote: Quote = {
@@ -23,6 +23,38 @@ const quote: Quote = {
 const payment: Payment = { payer: '1'.repeat(32), transaction: 'tx', amountAtomic: '2000000' };
 
 describe('MemoryStore', () => {
+  it('bounds pending browser OAuth flows and reclaims terminal entries', async () => {
+    const store = new MemoryStore();
+    const expiresAt = new Date(Date.now() + 60_000).toISOString();
+    for (let index = 0; index < MAX_PENDING_GITHUB_OAUTH_FLOWS; index += 1) {
+      await store.saveGithubOAuthFlow({
+        id: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+        binding: 'a'.repeat(43),
+        expiresAt,
+        createdAt: new Date().toISOString(),
+      });
+    }
+
+    await expect(
+      store.saveGithubOAuthFlow({
+        id: '10000000-0000-4000-8000-000000000000',
+        binding: 'b'.repeat(43),
+        expiresAt,
+        createdAt: new Date().toISOString(),
+      }),
+    ).rejects.toBeInstanceOf(GithubOAuthCapacityError);
+
+    await store.consumeGithubOAuthFlow('00000000-0000-4000-8000-000000000000', 'a'.repeat(43));
+    await expect(
+      store.saveGithubOAuthFlow({
+        id: '10000000-0000-4000-8000-000000000000',
+        binding: 'b'.repeat(43),
+        expiresAt,
+        createdAt: new Date().toISOString(),
+      }),
+    ).resolves.toMatchObject({ id: '10000000-0000-4000-8000-000000000000' });
+  });
+
   it('starts with paid intake and claims closed and updates them durably for the store lifetime', async () => {
     const store = new MemoryStore();
     await expect(store.operatorControls()).resolves.toMatchObject({

@@ -26,6 +26,8 @@ import type {
   WalletChallenge,
 } from './types.js';
 
+export const MAX_PENDING_GITHUB_OAUTH_FLOWS = 1_000;
+
 export type JobPatch = Omit<Partial<Job>, 'id' | 'state' | 'version' | 'createdAt' | 'updatedAt'>;
 
 export type AccountJobsPage = {
@@ -417,6 +419,17 @@ export class MemoryStore implements MizukiStore {
   }
 
   async saveGithubOAuthFlow(flow: GithubOAuthFlow): Promise<GithubOAuthFlow> {
+    for (const [id, current] of this.githubOAuthFlows) {
+      if (current.consumedAt || Date.parse(current.expiresAt) <= Date.now()) {
+        this.githubOAuthFlows.delete(id);
+      }
+    }
+    if (this.githubOAuthFlows.has(flow.id)) {
+      throw new StateConflictError('OAuth browser flow already exists');
+    }
+    if (this.githubOAuthFlows.size >= MAX_PENDING_GITHUB_OAUTH_FLOWS) {
+      throw new GithubOAuthCapacityError();
+    }
     this.githubOAuthFlows.set(flow.id, structuredClone(flow));
     return structuredClone(flow);
   }
@@ -1147,9 +1160,18 @@ export class PostgresStore implements MizukiStore {
   async saveGithubOAuthFlow(flow: GithubOAuthFlow): Promise<GithubOAuthFlow> {
     await this.transaction(async (client) => {
       await client.query(
-        `DELETE FROM mizuki_github_oauth_flows
-         WHERE expires_at < now() - interval '1 day'`,
+        "SELECT pg_advisory_xact_lock(hashtext('mizuki-github-oauth-flow-admission'))",
       );
+      await client.query(
+        `DELETE FROM mizuki_github_oauth_flows
+         WHERE consumed_at IS NOT NULL OR expires_at <= now()`,
+      );
+      const count = await client.query<{ count: string }>(
+        'SELECT count(*)::text AS count FROM mizuki_github_oauth_flows',
+      );
+      if (Number(count.rows[0]?.count ?? 0) >= MAX_PENDING_GITHUB_OAUTH_FLOWS) {
+        throw new GithubOAuthCapacityError();
+      }
       await client.query(
         `INSERT INTO mizuki_github_oauth_flows
           (id, binding, expires_at, created_at)
@@ -1534,6 +1556,12 @@ export class PostgresStore implements MizukiStore {
 }
 
 export class StateConflictError extends Error {}
+
+export class GithubOAuthCapacityError extends Error {
+  constructor() {
+    super('GitHub sign-in is temporarily busy; try again shortly');
+  }
+}
 
 const terminalEscrowStates = new Set<ContributorEscrow['state']>([
   'released',

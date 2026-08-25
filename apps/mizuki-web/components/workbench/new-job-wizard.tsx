@@ -6,7 +6,16 @@ import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { formatTime, formatUsdcAtomic, stateLabel } from '@/lib/format';
 import { githubIssuePattern } from '@/lib/github-url';
-import { paymentKey, quoteExpired, quoteMatchesIssue, readJsonResponse } from '@/lib/payment';
+import {
+  checkQuotePaymentStatus,
+  clearWorkbenchPaymentRecovery,
+  loadWorkbenchPaymentRecovery,
+  paymentKey,
+  quoteExpired,
+  quoteMatchesIssue,
+  readJsonResponse,
+  saveWorkbenchPaymentRecovery,
+} from '@/lib/payment';
 import type { Job, Quote } from '@/lib/types';
 import {
   normalizeIssues,
@@ -45,10 +54,23 @@ export function NewJobWizard({
   const [selected, setSelected] = useState<string>(
     initialOwner && initialRepo ? `${initialOwner}/${initialRepo}` : '',
   );
+  const [repositoryLocked, setRepositoryLocked] = useState(false);
   const repository =
     repositories.status === 'ready'
       ? repositories.data.find((item) => item.fullName.toLowerCase() === selected.toLowerCase())
       : undefined;
+
+  useEffect(() => {
+    if (selected || repositories.status !== 'ready') return;
+    const recovery = loadWorkbenchPaymentRecovery();
+    if (!recovery) return;
+    const recoverable = repositories.data.find(
+      (item) =>
+        item.readiness === 'ready' &&
+        item.fullName.toLowerCase() === recovery.repository.toLowerCase(),
+    );
+    if (recoverable) setSelected(recoverable.fullName);
+  }, [repositories, selected]);
 
   return (
     <div className="workbench-page narrow-workbench-page">
@@ -92,7 +114,7 @@ export function NewJobWizard({
                     type="button"
                     className={selected === item.fullName ? 'selected' : ''}
                     onClick={() => setSelected(item.fullName)}
-                    disabled={item.readiness !== 'ready'}
+                    disabled={item.readiness !== 'ready' || repositoryLocked}
                     key={item.fullName}
                   >
                     <span>{item.owner}</span>
@@ -111,11 +133,20 @@ export function NewJobWizard({
                   </Link>
                 </p>
               )}
+              {repositoryLocked && (
+                <p className="wizard-help">
+                  Check the current payment status before changing repositories.
+                </p>
+              )}
             </div>
           </section>
 
           {repository?.readiness === 'ready' && (
-            <IssueAndPayment repository={repository} initialIssue={initialIssue} />
+            <IssueAndPayment
+              repository={repository}
+              initialIssue={initialIssue}
+              onPaymentLockChange={setRepositoryLocked}
+            />
           )}
         </>
       ) : null}
@@ -127,9 +158,11 @@ export function NewJobWizard({
 function IssueAndPayment({
   repository,
   initialIssue,
+  onPaymentLockChange,
 }: {
   repository: WorkbenchRepository;
   initialIssue?: number;
+  onPaymentLockChange: (locked: boolean) => void;
 }) {
   const router = useRouter();
   const issues = useWorkbenchResource(
@@ -139,7 +172,16 @@ function IssueAndPayment({
   const [issueUrl, setIssueUrl] = useState('');
   const [preflight, setPreflight] = useState<WorkbenchPreflight | null>(null);
   const [quote, setQuote] = useState<Quote | null>(null);
-  const [state, setState] = useState<'idle' | 'checking' | 'quoting' | 'quoted' | 'paying'>('idle');
+  const [state, setState] = useState<
+    | 'idle'
+    | 'checking'
+    | 'quoting'
+    | 'quoted'
+    | 'paying'
+    | 'payment_uncertain'
+    | 'checking_payment'
+    | 'payment_unpaid'
+  >('idle');
   const [error, setError] = useState<string | null>(null);
   const {
     wallets,
@@ -156,6 +198,15 @@ function IssueAndPayment({
   }, [initialIssue, issueUrl, issues]);
 
   useEffect(() => {
+    const recovery = loadWorkbenchPaymentRecovery();
+    if (recovery?.repository.toLowerCase() === repository.fullName.toLowerCase()) {
+      setIssueUrl(recovery.issueUrl);
+      setPreflight(null);
+      setQuote(recovery.quote);
+      setError(null);
+      setState(recovery.phase === 'unpaid' ? 'payment_unpaid' : 'payment_uncertain');
+      return;
+    }
     setIssueUrl('');
     setPreflight(null);
     setQuote(null);
@@ -163,11 +214,21 @@ function IssueAndPayment({
     setState('idle');
   }, [repository.fullName]);
 
+  const paymentLocked =
+    state === 'paying' || state === 'payment_uncertain' || state === 'checking_payment';
+
+  useEffect(() => {
+    onPaymentLockChange(paymentLocked);
+    return () => onPaymentLockChange(false);
+  }, [onPaymentLockChange, paymentLocked]);
+
   const selectedIssue =
     issues.status === 'ready' ? issues.data.find((item) => item.url === issueUrl) : undefined;
-  const issueSelectionLocked = state === 'checking' || state === 'quoting' || state === 'paying';
+  const issueSelectionLocked =
+    state === 'checking' || state === 'quoting' || state === 'paying' || paymentLocked;
 
   function selectIssue(next: string) {
+    if (quote) clearWorkbenchPaymentRecovery(quote.id);
     setIssueUrl(next);
     setPreflight(null);
     setQuote(null);
@@ -177,6 +238,7 @@ function IssueAndPayment({
 
   async function runPreflight(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (quote) clearWorkbenchPaymentRecovery(quote.id);
     setState('checking');
     setError(null);
     setPreflight(null);
@@ -198,8 +260,10 @@ function IssueAndPayment({
   }
 
   async function requestQuote() {
+    if (quote) clearWorkbenchPaymentRecovery(quote.id);
     setState('quoting');
     setError(null);
+    setQuote(null);
     try {
       const next = await workbenchRequest<Quote>('/v1/quotes', {
         method: 'POST',
@@ -228,6 +292,13 @@ function IssueAndPayment({
       setError('This quote expired. Request a new fixed quote before paying.');
       return;
     }
+    const idempotencyKey = paymentKey(quote.id);
+    saveWorkbenchPaymentRecovery({
+      phase: 'uncertain',
+      repository: repository.fullName,
+      issueUrl,
+      quote,
+    });
     setState('paying');
     setError(null);
     try {
@@ -244,16 +315,56 @@ function IssueAndPayment({
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          'idempotency-key': paymentKey(quote.id),
+          'idempotency-key': idempotencyKey,
         },
         body: JSON.stringify({ quote_id: quote.id }),
       });
       const job = await readJsonResponse<Job>(response);
+      clearWorkbenchPaymentRecovery(quote.id);
       router.push(`/app/jobs/${encodeURIComponent(job.id)}`);
     } catch {
-      setState('quoted');
+      saveWorkbenchPaymentRecovery({
+        phase: 'uncertain',
+        repository: repository.fullName,
+        issueUrl,
+        quote,
+      });
+      setState('payment_uncertain');
+      setError(null);
+    }
+  }
+
+  async function checkPaymentStatus() {
+    if (!quote) return;
+    setState('checking_payment');
+    setError(null);
+    try {
+      const status = await checkQuotePaymentStatus(quote.id, paymentKey(quote.id));
+      if (status.status === 'job_reserved') {
+        clearWorkbenchPaymentRecovery(quote.id);
+        router.push(`/app/jobs/${encodeURIComponent(status.job.id)}`);
+        return;
+      }
+      if (status.expiresAt !== quote.expiresAt) {
+        throw new Error('Payment status did not match the accepted quote');
+      }
+      saveWorkbenchPaymentRecovery({
+        phase: 'unpaid',
+        repository: repository.fullName,
+        issueUrl,
+        quote,
+      });
+      setState('payment_unpaid');
+    } catch {
+      saveWorkbenchPaymentRecovery({
+        phase: 'uncertain',
+        repository: repository.fullName,
+        issueUrl,
+        quote,
+      });
+      setState('payment_uncertain');
       setError(
-        `Payment status could not be confirmed. Do not submit another payment. Check your wallet activity, then use quote ${quote.id} when contacting support.`,
+        'Payment status is still unavailable. No new payment was requested. Try checking again before using Pay.',
       );
     }
   }
@@ -308,7 +419,7 @@ function IssueAndPayment({
                   required
                 />
               </label>
-              <button type="submit" disabled={state === 'checking' || !issueUrl}>
+              <button type="submit" disabled={issueSelectionLocked || !issueUrl}>
                 {state === 'checking' ? 'Checking scope…' : 'Review maintenance scope'}
               </button>
             </form>
@@ -423,46 +534,82 @@ function IssueAndPayment({
               <div className="wizard-step-heading">
                 <div>
                   <span>Payment</span>
-                  <h2>Pay the exact quote and start</h2>
+                  <h2>
+                    {state === 'payment_uncertain' || state === 'checking_payment'
+                      ? 'Confirm the existing payment status'
+                      : 'Pay the exact quote and start'}
+                  </h2>
                 </div>
               </div>
-              {!connected ? (
-                wallets.length > 0 ? (
-                  <div className="workbench-wallet-options">
-                    {wallets.map((wallet) => (
-                      <button
-                        type="button"
-                        key={wallet.name}
-                        disabled={Boolean(connecting)}
-                        onClick={() => void connect(wallet)}
-                      >
-                        <span>{wallet.name}</span>
-                        <strong>{connecting === wallet.name ? 'Connecting…' : 'Connect ↗'}</strong>
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="workbench-wallet-missing">
-                    <strong>No compatible Solana wallet detected</strong>
-                    <p>Open this page in a browser with a Wallet Standard-compatible wallet.</p>
-                  </div>
-                )
+              {state === 'payment_uncertain' || state === 'checking_payment' ? (
+                <PaymentRecoveryNotice
+                  checking={state === 'checking_payment'}
+                  quoteId={quote.id}
+                  check={() => void checkPaymentStatus()}
+                />
+              ) : state === 'payment_unpaid' && quoteExpired(quote) ? (
+                <div className="wizard-payment-recovery confirmed" role="status">
+                  <strong>No confirmed payment or job was found</strong>
+                  <p>
+                    This quote has expired, so it cannot be paid. Request a new fixed quote before
+                    opening the wallet again.
+                  </p>
+                  <button type="button" onClick={() => void requestQuote()}>
+                    Request new fixed quote
+                  </button>
+                </div>
               ) : (
-                <button
-                  className="wizard-pay-button"
-                  type="button"
-                  disabled={state === 'paying'}
-                  onClick={() => void payAndStart()}
-                >
-                  {state === 'paying'
-                    ? 'Confirming payment…'
-                    : `Pay ${formatUsdcAtomic(quote.priceAtomic)} and start`}
-                </button>
+                <>
+                  {state === 'payment_unpaid' && (
+                    <div className="wizard-payment-recovery confirmed" role="status">
+                      <strong>No confirmed payment or job was found</strong>
+                      <p>
+                        This exact quote remains payable until {formatTime(quote.expiresAt)}. Pay
+                        below only if you want to open a new wallet approval.
+                      </p>
+                    </div>
+                  )}
+                  {!connected ? (
+                    wallets.length > 0 ? (
+                      <div className="workbench-wallet-options">
+                        {wallets.map((wallet) => (
+                          <button
+                            type="button"
+                            key={wallet.name}
+                            disabled={Boolean(connecting)}
+                            onClick={() => void connect(wallet)}
+                          >
+                            <span>{wallet.name}</span>
+                            <strong>
+                              {connecting === wallet.name ? 'Connecting…' : 'Connect ↗'}
+                            </strong>
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="workbench-wallet-missing">
+                        <strong>No compatible Solana wallet detected</strong>
+                        <p>Open this page in a browser with a Wallet Standard-compatible wallet.</p>
+                      </div>
+                    )
+                  ) : (
+                    <button
+                      className="wizard-pay-button"
+                      type="button"
+                      disabled={state === 'paying'}
+                      onClick={() => void payAndStart()}
+                    >
+                      {state === 'paying'
+                        ? 'Confirming payment…'
+                        : `Pay ${formatUsdcAtomic(quote.priceAtomic)} and start`}
+                    </button>
+                  )}
+                  <p className="wizard-consent">
+                    By paying, you accept the <Link href="/terms">service terms</Link> and
+                    acknowledge the <Link href="/privacy">privacy notice</Link>.
+                  </p>
+                </>
               )}
-              <p className="wizard-consent">
-                By paying, you accept the <Link href="/terms">service terms</Link> and acknowledge
-                the <Link href="/privacy">privacy notice</Link>.
-              </p>
             </div>
           </section>
         </>
@@ -475,6 +622,32 @@ function IssueAndPayment({
         </div>
       )}
     </>
+  );
+}
+
+export function PaymentRecoveryNotice({
+  checking,
+  quoteId,
+  check,
+}: {
+  checking: boolean;
+  quoteId: string;
+  check: () => void;
+}) {
+  return (
+    <div className="wizard-payment-recovery" role="status" aria-live="polite">
+      <strong>
+        {checking ? 'Checking the existing record…' : 'Payment confirmation was interrupted'}
+      </strong>
+      <p>
+        Do not approve another payment yet. This check only reads the existing quote and job record;
+        it never opens the wallet or requests a signature.
+      </p>
+      <code>Quote {quoteId}</code>
+      <button type="button" disabled={checking} onClick={check}>
+        {checking ? 'Checking payment status…' : 'Check payment status'}
+      </button>
+    </div>
   );
 }
 

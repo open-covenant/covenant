@@ -7,7 +7,13 @@ import {
   createRescueBounty,
   transitionContributorEscrow,
 } from './domain/index.js';
-import { COMMERCIAL_CORE_SCHEMA_V1, PostgresStore, StateConflictError } from './store.js';
+import {
+  COMMERCIAL_CORE_SCHEMA_V1,
+  GithubOAuthCapacityError,
+  MAX_PENDING_GITHUB_OAUTH_FLOWS,
+  PostgresStore,
+  StateConflictError,
+} from './store.js';
 import type { Quote } from './types.js';
 
 const databaseUrl = process.env.MIZUKI_TEST_DATABASE_URL;
@@ -350,17 +356,82 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
         checksum: string;
       }>(
         `SELECT component, version, name, checksum FROM mizuki_schema_migrations
-         WHERE component IN ('core', 'admission-control', 'workbench')
+         WHERE component IN ('core', 'admission-control', 'github-oauth', 'workbench')
          ORDER BY component, version`,
       );
       expect(result.rows).toMatchObject([
         { component: 'admission-control', version: 1, name: 'admission-control-audit' },
         { component: 'core', version: 1, name: 'commercial-core' },
+        { component: 'github-oauth', version: 1, name: 'browser-bound-flow' },
         { component: 'workbench', version: 1, name: 'workbench-accounts' },
       ]);
       expect(result.rows.every((row) => /^[a-f0-9]{64}$/.test(row.checksum))).toBe(true);
     } finally {
       await Promise.all([left.close(), right.close(), pool.end()]);
+    }
+  });
+
+  it('atomically consumes a browser-bound OAuth flow once', async () => {
+    const flow = {
+      id: randomUUID(),
+      binding: 'a'.repeat(43),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      createdAt: new Date().toISOString(),
+    };
+    await store.saveGithubOAuthFlow(flow);
+
+    const callbacks = await Promise.allSettled([
+      store.consumeGithubOAuthFlow(flow.id, flow.binding),
+      store.consumeGithubOAuthFlow(flow.id, flow.binding),
+    ]);
+
+    expect(callbacks.filter((callback) => callback.status === 'fulfilled')).toHaveLength(1);
+    expect(
+      callbacks.some(
+        (callback) =>
+          callback.status === 'rejected' && callback.reason instanceof StateConflictError,
+      ),
+    ).toBe(true);
+  });
+
+  it('caps pending browser OAuth flows across runtime replicas', async () => {
+    const pool = new Pool({ connectionString: databaseUrl });
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + 60_000);
+    const flows = Array.from({ length: MAX_PENDING_GITHUB_OAUTH_FLOWS }, () => randomUUID());
+    const values = flows.map(
+      (_, index) => `($${index * 4 + 1}, $${index * 4 + 2}, $${index * 4 + 3}, $${index * 4 + 4})`,
+    );
+    const parameters = flows.flatMap((id) => [id, 'a'.repeat(43), expiresAt, now]);
+    const replacement = {
+      id: randomUUID(),
+      binding: 'b'.repeat(43),
+      expiresAt: expiresAt.toISOString(),
+      createdAt: now.toISOString(),
+    };
+
+    try {
+      await pool.query('DELETE FROM mizuki_github_oauth_flows');
+      await pool.query(
+        `INSERT INTO mizuki_github_oauth_flows (id, binding, expires_at, created_at)
+         VALUES ${values.join(', ')}`,
+        parameters,
+      );
+
+      await expect(store.saveGithubOAuthFlow(replacement)).rejects.toBeInstanceOf(
+        GithubOAuthCapacityError,
+      );
+      await pool.query('UPDATE mizuki_github_oauth_flows SET consumed_at = now() WHERE id = $1', [
+        flows[0],
+      ]);
+      await expect(store.saveGithubOAuthFlow(replacement)).resolves.toEqual(replacement);
+      const count = await pool.query<{ count: string }>(
+        'SELECT count(*)::text AS count FROM mizuki_github_oauth_flows',
+      );
+      expect(Number(count.rows[0]?.count)).toBe(MAX_PENDING_GITHUB_OAUTH_FLOWS);
+    } finally {
+      await pool.query('DELETE FROM mizuki_github_oauth_flows');
+      await pool.end();
     }
   });
 
@@ -501,6 +572,8 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
       await upgraded.upsertContributor(githubId, 'migration-maintainer');
       const quote = await saveQuote(upgraded);
       await upgraded.linkQuoteToAccount(quote.id, githubId);
+      await expect(upgraded.quoteForAccount(quote.id, githubId)).resolves.toEqual(quote);
+      await expect(upgraded.quoteForAccount(quote.id, randomUUID())).resolves.toBeUndefined();
       const repository = await upgraded.linkAccountRepository(githubId, quote.owner, quote.repo);
       const { job } = await upgraded.createJob(
         quote,
@@ -511,6 +584,21 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
         jobs: [job],
         limit: 100,
         truncated: false,
+        obligationCount: 1,
+      });
+      await upgraded.transitionJob(job.id, 'settlement_pending', 'delivered', {
+        refundLiabilityId: 'postgres-liability-1',
+      });
+      await expect(upgraded.jobsForAccount(githubId, 100)).resolves.toMatchObject({
+        jobs: [expect.objectContaining({ id: job.id })],
+        obligationCount: 1,
+      });
+      await upgraded.patchJob(job.id, {
+        refundLiabilityDischargedAt: '2026-08-25T05:00:00.000Z',
+      });
+      await expect(upgraded.jobsForAccount(githubId, 100)).resolves.toMatchObject({
+        jobs: [expect.objectContaining({ id: job.id })],
+        obligationCount: 0,
       });
       const secondQuote = await saveQuote(upgraded);
       await upgraded.linkQuoteToAccount(secondQuote.id, githubId);
@@ -520,11 +608,11 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
         `migration-second-${randomUUID()}`,
       );
       const bounded = await upgraded.jobsForAccount(githubId, 1);
-      expect(bounded.jobs).toHaveLength(1);
-      expect(bounded).toMatchObject({ limit: 1, truncated: true });
+      expect(bounded.jobs).toHaveLength(2);
+      expect(bounded).toMatchObject({ limit: 1, truncated: false, obligationCount: 1 });
       const complete = await upgraded.jobsForAccount(githubId, 100);
       expect(complete.jobs).toHaveLength(2);
-      expect(complete).toMatchObject({ limit: 100, truncated: false });
+      expect(complete).toMatchObject({ limit: 100, truncated: false, obligationCount: 1 });
       await expect(upgraded.repositoriesForAccount(githubId, 25)).resolves.toEqual({
         repositories: [repository],
         limit: 25,
@@ -548,12 +636,13 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
           name: string;
         }>(
           `SELECT component, version, name FROM mizuki_schema_migrations
-           WHERE component IN ('core', 'admission-control', 'workbench')
+           WHERE component IN ('core', 'admission-control', 'github-oauth', 'workbench')
            ORDER BY component, version`,
         );
         expect(migrations.rows).toEqual([
           { component: 'admission-control', version: 1, name: 'admission-control-audit' },
           { component: 'core', version: 1, name: 'commercial-core' },
+          { component: 'github-oauth', version: 1, name: 'browser-bound-flow' },
           { component: 'workbench', version: 1, name: 'workbench-accounts' },
         ]);
       } finally {

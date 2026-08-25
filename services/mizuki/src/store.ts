@@ -13,6 +13,7 @@ import type {
   ActivityKind,
   AccountRepository,
   Contributor,
+  GithubOAuthFlow,
   Job,
   JobState,
   LedgerEntry,
@@ -25,12 +26,15 @@ import type {
   WalletChallenge,
 } from './types.js';
 
+export const MAX_PENDING_GITHUB_OAUTH_FLOWS = 1_000;
+
 export type JobPatch = Omit<Partial<Job>, 'id' | 'state' | 'version' | 'createdAt' | 'updatedAt'>;
 
 export type AccountJobsPage = {
   jobs: Job[];
   limit: number;
   truncated: boolean;
+  obligationCount: number;
 };
 
 export type AccountRepositoriesPage = {
@@ -58,6 +62,7 @@ export interface MizukiStore {
   saveQuote(quote: Quote): Promise<Quote>;
   quote(id: string): Promise<Quote | undefined>;
   linkQuoteToAccount(quoteId: string, githubId: string): Promise<void>;
+  quoteForAccount(quoteId: string, githubId: string): Promise<Quote | undefined>;
   jobsForAccount(githubId: string, limit: number): Promise<AccountJobsPage>;
   linkAccountRepository(githubId: string, owner: string, repo: string): Promise<AccountRepository>;
   repositoriesForAccount(githubId: string, limit: number): Promise<AccountRepositoriesPage>;
@@ -89,6 +94,8 @@ export interface MizukiStore {
   activity(limit?: number): Promise<ActivityEvent[]>;
   upsertContributor(githubId: string, githubLogin: string): Promise<Contributor>;
   contributor(githubId: string): Promise<Contributor | undefined>;
+  saveGithubOAuthFlow(flow: GithubOAuthFlow): Promise<GithubOAuthFlow>;
+  consumeGithubOAuthFlow(id: string, binding: string): Promise<GithubOAuthFlow>;
   saveWalletChallenge(challenge: WalletChallenge): Promise<WalletChallenge>;
   walletChallenge(id: string, githubId: string): Promise<WalletChallenge | undefined>;
   consumeWalletChallenge(id: string, githubId: string): Promise<WalletChallenge>;
@@ -124,6 +131,7 @@ export class MemoryStore implements MizukiStore {
   private readonly contributors = new Map<string, Contributor>();
   private readonly quoteAccounts = new Map<string, string>();
   private readonly accountRepositories = new Map<string, AccountRepository>();
+  private readonly githubOAuthFlows = new Map<string, GithubOAuthFlow>();
   private readonly challenges = new Map<string, WalletChallenge>();
   private readonly webhookDeliveries = new Map<
     string,
@@ -194,17 +202,24 @@ export class MemoryStore implements MizukiStore {
     this.quoteAccounts.set(quoteId, githubId);
   }
 
+  async quoteForAccount(quoteId: string, githubId: string): Promise<Quote | undefined> {
+    if (this.quoteAccounts.get(quoteId) !== githubId) return undefined;
+    return clone(this.quotes.get(quoteId));
+  }
+
   async jobsForAccount(githubId: string, limit: number): Promise<AccountJobsPage> {
     const boundedLimit = accountJobLimit(limit);
-    const jobs = [...this.jobs.values()]
+    const accountJobs = [...this.jobs.values()]
       .filter((job) => this.quoteAccounts.get(job.quote.id) === githubId)
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-      .slice(0, boundedLimit + 1)
-      .map((job) => structuredClone(job));
+      .sort(accountJobOrder);
+    const obligations = accountJobs.filter(accountJobIsObligation);
+    const terminal = accountJobs.filter((job) => !accountJobIsObligation(job));
+    const history = terminal.slice(0, boundedLimit);
     return {
-      jobs: jobs.slice(0, boundedLimit),
+      jobs: [...obligations, ...history].sort(accountJobOrder).map((job) => structuredClone(job)),
       limit: boundedLimit,
-      truncated: jobs.length > boundedLimit,
+      truncated: terminal.length > boundedLimit,
+      obligationCount: obligations.length,
     };
   }
 
@@ -410,6 +425,34 @@ export class MemoryStore implements MizukiStore {
 
   async contributor(githubId: string): Promise<Contributor | undefined> {
     return clone(this.contributors.get(githubId));
+  }
+
+  async saveGithubOAuthFlow(flow: GithubOAuthFlow): Promise<GithubOAuthFlow> {
+    for (const [id, current] of this.githubOAuthFlows) {
+      if (current.consumedAt || Date.parse(current.expiresAt) <= Date.now()) {
+        this.githubOAuthFlows.delete(id);
+      }
+    }
+    if (this.githubOAuthFlows.has(flow.id)) {
+      throw new StateConflictError('OAuth browser flow already exists');
+    }
+    if (this.githubOAuthFlows.size >= MAX_PENDING_GITHUB_OAUTH_FLOWS) {
+      throw new GithubOAuthCapacityError();
+    }
+    this.githubOAuthFlows.set(flow.id, structuredClone(flow));
+    return structuredClone(flow);
+  }
+
+  async consumeGithubOAuthFlow(id: string, binding: string): Promise<GithubOAuthFlow> {
+    const flow = this.githubOAuthFlows.get(id);
+    if (!flow || flow.binding !== binding) throw new Error('OAuth browser flow is invalid');
+    if (flow.consumedAt) throw new StateConflictError('OAuth browser flow was already used');
+    if (Date.parse(flow.expiresAt) <= Date.now()) {
+      throw new StateConflictError('OAuth browser flow expired');
+    }
+    const consumed = { ...flow, consumedAt: new Date().toISOString() };
+    this.githubOAuthFlows.set(id, consumed);
+    return structuredClone(consumed);
   }
 
   async saveWalletChallenge(challenge: WalletChallenge): Promise<WalletChallenge> {
@@ -795,21 +838,66 @@ export class PostgresStore implements MizukiStore {
     }
   }
 
+  async quoteForAccount(quoteId: string, githubId: string): Promise<Quote | undefined> {
+    const result = await this.pool.query<{ payload: Quote }>(
+      `SELECT quotes.payload
+       FROM mizuki_quotes AS quotes
+       JOIN mizuki_account_quotes AS links ON links.quote_id = quotes.id
+       WHERE quotes.id = $1 AND links.github_id = $2`,
+      [quoteId, githubId],
+    );
+    return result.rows[0]?.payload;
+  }
+
   async jobsForAccount(githubId: string, limit: number): Promise<AccountJobsPage> {
     const boundedLimit = accountJobLimit(limit);
-    const result = await this.pool.query<{ payload: Job }>(
-      `SELECT jobs.payload
-       FROM mizuki_jobs AS jobs
-       JOIN mizuki_account_quotes AS links ON links.quote_id = jobs.quote_id
-       WHERE links.github_id = $1
-       ORDER BY jobs.created_at DESC
-       LIMIT $2`,
+    const result = await this.pool.query<{
+      payload: Job;
+      obligation: boolean;
+      id: string;
+      created_at: Date;
+    }>(
+      `WITH account_jobs AS MATERIALIZED (
+         SELECT jobs.id, jobs.created_at, jobs.payload,
+           jobs.state <> 'refunded' AND (
+             jobs.state <> 'delivered' OR (
+               jobs.payload ? 'refundLiabilityId' AND
+               NOT (jobs.payload ? 'refundLiabilityDischargedAt')
+             )
+           ) AS obligation
+         FROM mizuki_jobs AS jobs
+         JOIN mizuki_account_quotes AS links ON links.quote_id = jobs.quote_id
+         WHERE links.github_id = $1
+       ), obligations AS (
+         SELECT id, created_at, payload, true AS obligation
+         FROM account_jobs
+         WHERE obligation
+       ), terminal_history AS (
+         SELECT id, created_at, payload, false AS obligation
+         FROM account_jobs
+         WHERE NOT obligation
+         ORDER BY created_at DESC, id DESC
+         LIMIT $2
+       )
+       SELECT id, created_at, payload, obligation
+       FROM (
+         SELECT * FROM obligations
+         UNION ALL
+         SELECT * FROM terminal_history
+       ) AS selected_jobs
+       ORDER BY created_at DESC, id DESC`,
       [githubId, boundedLimit + 1],
     );
+    const terminal = result.rows.filter((row) => !row.obligation);
+    const includedTerminal = new Set(terminal.slice(0, boundedLimit).map((row) => row.id));
+    const jobs = result.rows
+      .filter((row) => row.obligation || includedTerminal.has(row.id))
+      .map((row) => row.payload);
     return {
-      jobs: result.rows.slice(0, boundedLimit).map((row) => row.payload),
+      jobs,
       limit: boundedLimit,
-      truncated: result.rows.length > boundedLimit,
+      truncated: terminal.length > boundedLimit,
+      obligationCount: result.rows.filter((row) => row.obligation).length,
     };
   }
 
@@ -1121,6 +1209,77 @@ export class PostgresStore implements MizukiStore {
       [githubId],
     );
     return result.rows[0]?.payload;
+  }
+
+  async saveGithubOAuthFlow(flow: GithubOAuthFlow): Promise<GithubOAuthFlow> {
+    await this.transaction(async (client) => {
+      await client.query(
+        "SELECT pg_advisory_xact_lock(hashtext('mizuki-github-oauth-flow-admission'))",
+      );
+      await client.query(
+        `DELETE FROM mizuki_github_oauth_flows
+         WHERE consumed_at IS NOT NULL OR expires_at <= now()`,
+      );
+      const count = await client.query<{ count: string }>(
+        'SELECT count(*)::text AS count FROM mizuki_github_oauth_flows',
+      );
+      if (Number(count.rows[0]?.count ?? 0) >= MAX_PENDING_GITHUB_OAUTH_FLOWS) {
+        throw new GithubOAuthCapacityError();
+      }
+      await client.query(
+        `INSERT INTO mizuki_github_oauth_flows
+          (id, binding, expires_at, created_at)
+         VALUES ($1, $2, $3, $4)`,
+        [flow.id, flow.binding, flow.expiresAt, flow.createdAt],
+      );
+    });
+    return flow;
+  }
+
+  async consumeGithubOAuthFlow(id: string, binding: string): Promise<GithubOAuthFlow> {
+    return this.transaction(async (client) => {
+      const result = await client.query<{
+        id: string;
+        binding: string;
+        expires_at: Date;
+        created_at: Date;
+        consumed_at: Date;
+      }>(
+        `UPDATE mizuki_github_oauth_flows
+         SET consumed_at = now()
+         WHERE id = $1 AND binding = $2 AND consumed_at IS NULL AND expires_at > now()
+         RETURNING id, binding, expires_at, created_at, consumed_at`,
+        [id, binding],
+      );
+      const row = result.rows[0];
+      if (row) {
+        return {
+          id: row.id,
+          binding: row.binding,
+          expiresAt: row.expires_at.toISOString(),
+          createdAt: row.created_at.toISOString(),
+          consumedAt: row.consumed_at.toISOString(),
+        };
+      }
+
+      const current = await client.query<{
+        binding: string;
+        expires_at: Date;
+        consumed_at: Date | null;
+      }>(
+        `SELECT binding, expires_at, consumed_at
+         FROM mizuki_github_oauth_flows WHERE id = $1`,
+        [id],
+      );
+      const existing = current.rows[0];
+      if (!existing || existing.binding !== binding) {
+        throw new Error('OAuth browser flow is invalid');
+      }
+      if (existing.consumed_at) {
+        throw new StateConflictError('OAuth browser flow was already used');
+      }
+      throw new StateConflictError('OAuth browser flow expired');
+    });
   }
 
   async saveWalletChallenge(challenge: WalletChallenge): Promise<WalletChallenge> {
@@ -1452,6 +1611,12 @@ export class PostgresStore implements MizukiStore {
 
 export class StateConflictError extends Error {}
 
+export class GithubOAuthCapacityError extends Error {
+  constructor() {
+    super('GitHub sign-in is temporarily busy; try again shortly');
+  }
+}
+
 const terminalEscrowStates = new Set<ContributorEscrow['state']>([
   'released',
   'refunded',
@@ -1593,6 +1758,16 @@ function accountJobLimit(limit: number): number {
     throw new Error('account job limit must be an integer between 1 and 1000');
   }
   return limit;
+}
+
+function accountJobIsObligation(job: Job): boolean {
+  if (job.state === 'refunded') return false;
+  if (job.state !== 'delivered') return true;
+  return Boolean(job.refundLiabilityId && !job.refundLiabilityDischargedAt);
+}
+
+function accountJobOrder(left: Job, right: Job): number {
+  return right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id);
 }
 
 function accountRepositoryLimit(limit: number): number {
@@ -1835,6 +2010,18 @@ CREATE INDEX mizuki_account_repositories_verified_idx
   ON mizuki_account_repositories(github_id, verified_at DESC);
 `;
 
+export const GITHUB_OAUTH_FLOW_SCHEMA_V1 = `
+CREATE TABLE mizuki_github_oauth_flows (
+  id uuid PRIMARY KEY,
+  binding text NOT NULL CHECK (binding ~ '^[A-Za-z0-9_-]{43}$'),
+  expires_at timestamptz NOT NULL,
+  consumed_at timestamptz,
+  created_at timestamptz NOT NULL
+);
+CREATE INDEX mizuki_github_oauth_flows_expiry_idx
+  ON mizuki_github_oauth_flows(expires_at);
+`;
+
 const ADMISSION_CONTROL_AUDIT_SCHEMA = `
 CREATE TABLE mizuki_operator_control_audit (
   revision integer PRIMARY KEY CHECK (revision >= 0),
@@ -1889,6 +2076,10 @@ async function migrate(pool: Pool): Promise<void> {
       {
         name: 'workbench',
         migrations: [{ version: 1, name: 'workbench-accounts', sql: WORKBENCH_ACCOUNTS_SCHEMA_V1 }],
+      },
+      {
+        name: 'github-oauth',
+        migrations: [{ version: 1, name: 'browser-bound-flow', sql: GITHUB_OAUTH_FLOW_SCHEMA_V1 }],
       },
       {
         name: 'admission-control',

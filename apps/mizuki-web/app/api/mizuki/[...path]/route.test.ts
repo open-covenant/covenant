@@ -47,6 +47,50 @@ describe('Mizuki API proxy', () => {
     expect(headers.get('x-mizuki-proxy-secret')).toBe('p'.repeat(32));
   });
 
+  it('preserves separate OAuth flow and session cookies from the runtime', async () => {
+    vi.stubEnv('MIZUKI_WEB_PROXY_SECRET', 'p'.repeat(32));
+    const headers = new Headers();
+    headers.append('set-cookie', 'mizuki_oauth_flow=; Path=/callback; Max-Age=0; HttpOnly');
+    headers.append('set-cookie', 'mizuki_session=signed; Path=/; HttpOnly');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(null, { status: 302, headers })),
+    );
+
+    const response = await GET(
+      new Request(
+        'https://mizuki.opencovenant.org/api/mizuki/v1/auth/github/callback?code=code&state=state',
+      ),
+      { params: Promise.resolve({ path: ['v1', 'auth', 'github', 'callback'] }) },
+    );
+
+    expect(response.status).toBe(302);
+    expect(response.headers.getSetCookie()).toEqual([
+      'mizuki_oauth_flow=; Path=/callback; Max-Age=0; HttpOnly',
+      'mizuki_session=signed; Path=/; HttpOnly',
+    ]);
+  });
+
+  it('forwards the upstream request reference', async () => {
+    vi.stubEnv('MIZUKI_WEB_PROXY_SECRET', 'p'.repeat(32));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        Response.json(
+          { error: 'request failed; retry later' },
+          { status: 500, headers: { 'x-request-id': 'request-reference' } },
+        ),
+      ),
+    );
+
+    const response = await GET(
+      new Request('https://mizuki.opencovenant.org/api/mizuki/v1/account'),
+      { params: Promise.resolve({ path: ['v1', 'account'] }) },
+    );
+
+    expect(response.headers.get('x-request-id')).toBe('request-reference');
+  });
+
   it('fails closed without proxy authentication and ignores spoofed XFF', async () => {
     vi.stubEnv('MIZUKI_WEB_PROXY_SECRET', '');
     const upstream = vi.fn();

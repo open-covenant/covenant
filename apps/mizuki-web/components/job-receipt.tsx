@@ -5,7 +5,7 @@ import { formatTime, formatUsdcAtomic, formatUsd, stateLabel } from '@/lib/forma
 import type { Job, ReviewAttempt } from '@/lib/types';
 import { ProviderReceiptDetails } from './provider-receipt';
 
-const terminal = new Set(['delivered', 'rejected', 'failed', 'refunded']);
+const terminal = new Set(['delivered', 'refunded']);
 const stages = ['paid', 'running', 'validating', 'delivered'] as const;
 
 function stagePosition(state: Job['state']): number {
@@ -41,6 +41,7 @@ export function JobReceipt({ initial, live = true }: { initial: Job; live?: bool
 
   const progress = stagePosition(job.state);
   const failed = ['rejected', 'failed', 'refund_pending', 'refunded'].includes(job.state);
+  const state = job.mergedAt ? 'Merged' : stateLabel(job.state);
 
   return (
     <div className="job-receipt">
@@ -48,7 +49,7 @@ export function JobReceipt({ initial, live = true }: { initial: Job; live?: bool
         <div className="job-status-heading">
           <div>
             <span>Current state</span>
-            <strong className={failed ? 'state-failed' : ''}>{stateLabel(job.state)}</strong>
+            <strong className={failed ? 'state-failed' : ''}>{state}</strong>
           </div>
           {live && !terminal.has(job.state) && (
             <span className="processing-indicator">
@@ -60,8 +61,12 @@ export function JobReceipt({ initial, live = true }: { initial: Job; live?: bool
           <ol className="job-progress">
             {stages.map((stage, index) => (
               <li className={index <= progress ? 'complete' : ''} key={stage}>
-                <span>{index < progress ? '✓' : String(index + 1).padStart(2, '0')}</span>
-                {stateLabel(stage)}
+                <span>
+                  {index < progress || (stage === 'delivered' && job.mergedAt)
+                    ? '✓'
+                    : String(index + 1).padStart(2, '0')}
+                </span>
+                {stage === 'delivered' && job.mergedAt ? 'Merged' : stateLabel(stage)}
               </li>
             ))}
           </ol>
@@ -234,6 +239,65 @@ export function JobReceipt({ initial, live = true }: { initial: Job; live?: bool
             ))}
           </div>
         </section>
+      )}
+
+      {job.deliveryEvidence && (
+        <div className="receipt-grid review-evidence">
+          <section>
+            <p className="eyebrow">Delivery commitment</p>
+            <dl className="receipt-list">
+              <div>
+                <dt>Pull request</dt>
+                <dd>#{job.deliveryEvidence.pullRequestNumber}</dd>
+              </div>
+              <div>
+                <dt>Delivered head</dt>
+                <dd className="review-commitment">{job.deliveryEvidence.headSha}</dd>
+              </div>
+              <div>
+                <dt>Quoted base</dt>
+                <dd className="review-commitment">
+                  {job.deliveryEvidence.baseRef} · {job.deliveryEvidence.baseSha}
+                </dd>
+              </div>
+              <div>
+                <dt>Canonical patch hash</dt>
+                <dd className="review-commitment">{job.deliveryEvidence.diffHash}</dd>
+              </div>
+              <div>
+                <dt>Recorded</dt>
+                <dd>{formatTime(job.deliveryEvidence.observedAt)}</dd>
+              </div>
+            </dl>
+          </section>
+          <section>
+            <p className="eyebrow">Merge and refund-liability evidence</p>
+            <dl className="receipt-list">
+              <div>
+                <dt>Repository outcome</dt>
+                <dd>{job.mergedAt ? `Merged ${formatTime(job.mergedAt)}` : 'Awaiting merge'}</dd>
+              </div>
+              <div>
+                <dt>Refund liability</dt>
+                <dd>
+                  {job.refundLiabilityDischarge
+                    ? `Discharged ${formatTime(job.refundLiabilityDischarge.dischargedAt)}`
+                    : 'Active until a qualifying merge or refund'}
+                </dd>
+              </div>
+              {job.refundLiabilityDischarge && (
+                <div>
+                  <dt>Policy evidence hash</dt>
+                  <dd className="review-commitment">{job.refundLiabilityDischarge.evidenceHash}</dd>
+                </div>
+              )}
+            </dl>
+            <p className="receipt-empty">
+              The separate policy signer verifies the required exact-head approval and repository
+              merge before it can discharge the refund liability.
+            </p>
+          </section>
+        </div>
       )}
 
       <div className="receipt-actions">

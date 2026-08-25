@@ -1,11 +1,11 @@
 import { generateKeyPairSync, sign } from 'node:crypto';
 import { getBase58Decoder } from '@solana/kit';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ContributorAuth } from './auth.js';
 import { MemoryStore } from './store.js';
 
-describe('ContributorAuth wallet proof', () => {
-  it('routes the OAuth callback through the web origin so the session cookie is first-party', () => {
+describe('ContributorAuth', () => {
+  it('routes the OAuth callback through the web origin so the session cookie is first-party', async () => {
     const auth = new ContributorAuth(
       {
         publicBaseUrl: 'https://api.mizuki.example',
@@ -16,10 +16,66 @@ describe('ContributorAuth wallet proof', () => {
       },
       new MemoryStore(),
     );
-    const authorize = new URL(auth.authorizeUrl('/bounties/bounty-1'));
+    const authorization = await auth.beginGithubOAuth('/bounties/bounty-1');
+    const authorize = new URL(authorization.url);
     expect(authorize.searchParams.get('redirect_uri')).toBe(
       'https://mizuki.example/api/mizuki/v1/auth/github/callback',
     );
+  });
+
+  it('keeps redirects on the first-party path allowlist', async () => {
+    const auth = oauthAuth(new MemoryStore(), vi.fn());
+    const authorization = await auth.beginGithubOAuth('https://attacker.example/session');
+    const payload = signedPayload(new URL(authorization.url).searchParams.get('state')!);
+
+    expect(payload).toMatchObject({ redirect: '/bounties' });
+  });
+
+  it('requires the browser flow cookie and rejects a different browser before token exchange', async () => {
+    const request = oauthRequests();
+    const auth = oauthAuth(new MemoryStore(), request);
+    const authorization = await auth.beginGithubOAuth('/app');
+    const state = new URL(authorization.url).searchParams.get('state')!;
+
+    await expect(auth.callback('code', state, undefined)).rejects.toThrow('cookie is required');
+    await expect(auth.callback('code', state, 'different-browser')).rejects.toThrow(
+      'browser flow is invalid',
+    );
+    expect(request).not.toHaveBeenCalled();
+    await expect(auth.callback('code', state, authorization.flowCookie)).resolves.toMatchObject({
+      redirect: '/app',
+    });
+  });
+
+  it('consumes the browser flow before exchanging the code and rejects replay', async () => {
+    const request = oauthRequests();
+    const auth = oauthAuth(new MemoryStore(), request);
+    const authorization = await auth.beginGithubOAuth('/app');
+    const state = new URL(authorization.url).searchParams.get('state')!;
+
+    await expect(auth.callback('code', state, authorization.flowCookie)).resolves.toMatchObject({
+      redirect: '/app',
+    });
+    await expect(auth.callback('code', state, authorization.flowCookie)).rejects.toThrow(
+      'already used',
+    );
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects an expired browser flow before token exchange', async () => {
+    const now = Date.parse('2026-08-25T12:00:00.000Z');
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+    const request = vi.fn();
+    const auth = oauthAuth(new MemoryStore(), request);
+    const authorization = await auth.beginGithubOAuth('/app');
+    const state = new URL(authorization.url).searchParams.get('state')!;
+    clock.mockReturnValue(now + 10 * 60_000 + 1);
+
+    await expect(auth.callback('code', state, authorization.flowCookie)).rejects.toThrow(
+      'OAuth state expired',
+    );
+    expect(request).not.toHaveBeenCalled();
+    clock.mockRestore();
   });
 
   it('links a wallet after a valid domain-bound signature and rejects replay', async () => {
@@ -112,8 +168,9 @@ describe('ContributorAuth wallet proof', () => {
       requests as typeof fetch,
       registrar,
     );
-    const state = new URL(auth.authorizeUrl()).searchParams.get('state')!;
-    const result = await auth.callback('code', state);
+    const authorization = await auth.beginGithubOAuth();
+    const state = new URL(authorization.url).searchParams.get('state')!;
+    const result = await auth.callback('code', state, authorization.flowCookie);
     expect(registeredToken).toBe(accessToken);
     expect(auth.session(result.session)).toMatchObject({
       githubId: '42',
@@ -123,3 +180,36 @@ describe('ContributorAuth wallet proof', () => {
     expect(result.session).not.toContain(accessToken);
   });
 });
+
+function oauthAuth(store: MemoryStore, request: typeof fetch | ReturnType<typeof vi.fn>) {
+  return new ContributorAuth(
+    {
+      publicBaseUrl: 'https://api.mizuki.example',
+      webOrigin: 'https://mizuki.example',
+      githubClientId: 'client',
+      githubClientSecret: 'secret',
+      sessionSecret: 's'.repeat(32),
+    },
+    store,
+    request as typeof fetch,
+  );
+}
+
+function oauthRequests() {
+  return vi.fn(async (input: string | URL | Request) => {
+    const url = String(input);
+    if (url.includes('/login/oauth/access_token')) {
+      return Response.json({ access_token: 'temporary-token' });
+    }
+    if (url === 'https://api.github.com/user') {
+      return Response.json({ id: 42, login: 'maintainer' });
+    }
+    throw new Error(`unexpected request: ${url}`);
+  });
+}
+
+function signedPayload(value: string): Record<string, unknown> {
+  const [payload] = value.split('.');
+  if (!payload) throw new Error('state payload is missing');
+  return JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as Record<string, unknown>;
+}

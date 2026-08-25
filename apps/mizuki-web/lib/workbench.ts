@@ -60,6 +60,7 @@ export type WorkbenchJobPage = {
   jobs: WorkbenchJob[];
   limit?: number;
   truncated: boolean;
+  obligationCount: number;
 };
 
 export type BillingEntry = {
@@ -78,7 +79,8 @@ export type WorkbenchBilling = {
   walletAddress?: string;
   limit?: number;
   truncated: boolean;
-  totalsScope?: 'account_lifetime' | 'latest_jobs';
+  obligationCount: number;
+  totalsScope?: 'account_lifetime' | 'latest_terminal_jobs_and_all_obligations';
   entries: BillingEntry[];
 };
 
@@ -312,6 +314,7 @@ export function normalizeJobPage(value: unknown): WorkbenchJobPage {
     jobs: listFrom<WorkbenchJob>(value, 'jobs'),
     limit: number(source.limit),
     truncated: bool(source.truncated) ?? false,
+    obligationCount: number(source.obligationCount) ?? 0,
   };
 }
 
@@ -370,8 +373,10 @@ export function normalizeBilling(value: unknown): WorkbenchBilling {
     walletAddress: text(source.walletAddress) ?? text(source.payerWallet),
     limit: number(source.limit),
     truncated: bool(source.truncated) ?? false,
+    obligationCount: number(source.obligationCount) ?? 0,
     totalsScope:
-      source.totalsScope === 'account_lifetime' || source.totalsScope === 'latest_jobs'
+      source.totalsScope === 'account_lifetime' ||
+      source.totalsScope === 'latest_terminal_jobs_and_all_obligations'
         ? source.totalsScope
         : undefined,
     entries: entries.sort(
@@ -448,5 +453,5 @@ export function jobIssueNumber(job: WorkbenchJob): number | undefined {
 }
 
 export function isActiveJob(job: WorkbenchJob): boolean {
-  return !['delivered', 'rejected', 'failed', 'refunded'].includes(job.state);
+  return !['delivered', 'refunded'].includes(job.state);
 }

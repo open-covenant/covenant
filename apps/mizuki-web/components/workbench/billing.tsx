@@ -38,8 +38,10 @@ export function Billing() {
 
   const payments = billing.data.entries.filter((entry) => entry.kind === 'payment');
   const refunds = billing.data.entries.filter((entry) => entry.kind === 'refund');
+  const confirmingPayments = payments.filter((entry) => entry.state === 'pending');
   const pendingRefunds = refunds.filter((entry) => entry.state === 'pending');
   const paidAtomic = payments
+    .filter((entry) => entry.state === 'finalized')
     .reduce((total, entry) => total + BigInt(entry.amountAtomic || '0'), 0n)
     .toString();
   const refundedAtomic = refunds
@@ -73,9 +75,14 @@ export function Billing() {
 
       <div className="workbench-summary-grid billing-summary-grid">
         <SummaryCard
+          label="Payments confirming"
+          value={confirmingPayments.length}
+          detail="Awaiting settlement confirmation; do not pay again"
+        />
+        <SummaryCard
           label="Paid"
           value={formatUsdcAtomic(paidAtomic)}
-          detail="Direct job payments"
+          detail="Finalized direct job payments"
         />
         <SummaryCard
           label="Refunded"
@@ -91,8 +98,9 @@ export function Billing() {
 
       {billing.data.truncated && (
         <p className="billing-scope-note">
-          Showing the latest {billing.data.limit?.toLocaleString() ?? 'available'} jobs. The totals
-          on this page cover the records shown, not the account’s complete history.
+          Every payment or refund still in progress is included. Completed history is limited to the
+          latest {billing.data.limit?.toLocaleString() ?? 'available'} jobs, so totals cover the
+          records shown rather than the account’s complete lifetime.
         </p>
       )}
 

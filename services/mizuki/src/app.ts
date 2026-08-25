@@ -1,7 +1,7 @@
-import { timingSafeEqual } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { ActivityStreams, PublicAdmission, RateLimitError, requestScheme } from './admission.js';
-import type { ContributorAuth } from './auth.js';
+import { GITHUB_OAUTH_FLOW_TTL_SECONDS, type ContributorAuth } from './auth.js';
 import type { BountyService } from './bounties.js';
 import type { Config } from './config.js';
 import { dashboard } from './dashboard.js';
@@ -21,7 +21,12 @@ import {
 import { createQuote } from './quote.js';
 import { recordPaymentReceipts } from './receipts.js';
 import { assertLiabilityMatchesPayment, recoverSettlement } from './settlement-recovery.js';
-import { StateConflictError, type AccountJobsPage, type MizukiStore } from './store.js';
+import {
+  GithubOAuthCapacityError,
+  StateConflictError,
+  type AccountJobsPage,
+  type MizukiStore,
+} from './store.js';
 import { GithubWebhookHandler, verifyGithubWebhook } from './webhooks.js';
 import type { Job, RepositoryAdmissionReceipt } from './types.js';
 import { Payments, USDC_DECIMALS, USDC_MAINNET, paymentRequiredHeader } from './x402.js';
@@ -37,6 +42,7 @@ import {
 import type { ServiceReadiness } from './readiness.js';
 
 const MAX_POSTGRES_INTEGER = 2_147_483_647;
+const UUID_PATTERN = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
 
 export type AppDependencies = {
   config: Config;
@@ -55,8 +61,12 @@ export type AppDependencies = {
 export function createApp(deps: AppDependencies) {
   const admission = new PublicAdmission(deps.config);
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+    const requestId = randomUUID();
+    let requestPath = '/';
+    res.setHeader('x-request-id', requestId);
     try {
       const url = new URL(req.url ?? '/', 'http://localhost');
+      requestPath = url.pathname;
       const parts = url.pathname.split('/').filter(Boolean);
 
       applyCors(req, res, deps.config.webOrigin);
@@ -151,28 +161,45 @@ export function createApp(deps: AppDependencies) {
         admission.consume('oauth_start', req);
         const redirect =
           url.searchParams.get('return_to') ?? url.searchParams.get('redirect') ?? undefined;
+        const authorization = await deps.auth.beginGithubOAuth(redirect);
         res.writeHead(302, {
-          location: deps.auth.authorizeUrl(redirect),
+          location: authorization.url,
+          'set-cookie': githubOAuthFlowCookie(
+            authorization.flowCookie,
+            req,
+            deps.config.trustedProxyHops ?? 0,
+            deps.config.webProxySecret,
+          ),
           'cache-control': 'no-store',
         });
         res.end();
         return;
       }
       if (req.method === 'GET' && url.pathname === '/v1/auth/github/callback') {
+        const clearFlowCookie = expiredGithubOAuthFlowCookie(
+          req,
+          deps.config.trustedProxyHops ?? 0,
+          deps.config.webProxySecret,
+        );
+        res.setHeader('set-cookie', clearFlowCookie);
+        res.setHeader('cache-control', 'private, no-store');
         admission.consume('oauth_callback', req);
         const code = url.searchParams.get('code');
         const state = url.searchParams.get('state');
         if (!code || !state) return json(res, 400, { error: 'OAuth callback is incomplete' });
-        const result = await deps.auth.callback(code, state);
+        const result = await deps.auth.callback(code, state, cookies(req).mizuki_oauth_flow);
         const origin = deps.config.webOrigin ?? deps.config.publicBaseUrl;
-        res.writeHead(302, {
-          location: `${origin.replace(/\/$/, '')}${result.redirect}`,
-          'set-cookie': sessionCookie(
+        res.setHeader('set-cookie', [
+          clearFlowCookie,
+          sessionCookie(
             result.session,
             req,
             deps.config.trustedProxyHops ?? 0,
             deps.config.webProxySecret,
           ),
+        ]);
+        res.writeHead(302, {
+          location: `${origin.replace(/\/$/, '')}${result.redirect}`,
           'cache-control': 'no-store',
         });
         res.end();
@@ -214,6 +241,53 @@ export function createApp(deps: AppDependencies) {
           jobs: page.jobs.map(publicJob),
           limit: page.limit,
           truncated: page.truncated,
+          obligationCount: page.obligationCount,
+        });
+      }
+      if (
+        req.method === 'GET' &&
+        parts[0] === 'v1' &&
+        parts[1] === 'account' &&
+        parts[2] === 'quotes' &&
+        parts[3] &&
+        parts[4] === 'payment-status'
+      ) {
+        res.setHeader('cache-control', 'private, no-store');
+        const session = requireSession(req, deps.auth);
+        const key = header(req, 'idempotency-key');
+        if (!key || key.length > 128) {
+          return json(res, 400, { error: 'idempotency-key header is required' });
+        }
+        const quoteId = parts[3]!;
+        if (!UUID_PATTERN.test(quoteId)) return json(res, 404, { error: 'quote not found' });
+        const status = await deps.paymentAdmission.run(async () => {
+          const quote = await deps.store.quoteForAccount(quoteId, session.githubId);
+          if (!quote) return { kind: 'not_found' } as const;
+
+          const keyedJob = await deps.store.jobByIdempotencyKey(key);
+          if (keyedJob && keyedJob.quote.id !== quote.id) {
+            return { kind: 'conflict' } as const;
+          }
+          const job = keyedJob ?? (await deps.store.jobByQuote(quote.id));
+          if (job) return { kind: 'reserved', quote, job } as const;
+          return { kind: 'unpaid', quote } as const;
+        });
+
+        if (status.kind === 'not_found') return json(res, 404, { error: 'quote not found' });
+        if (status.kind === 'conflict') {
+          return json(res, 409, { error: 'idempotency key already used' });
+        }
+        if (status.kind === 'reserved') {
+          return json(res, 200, {
+            paymentStatus: 'job_reserved',
+            quoteId: status.quote.id,
+            job: publicJob(status.job),
+          });
+        }
+        return json(res, 200, {
+          paymentStatus: 'unpaid',
+          quoteId: status.quote.id,
+          expiresAt: status.quote.expiresAt,
         });
       }
       if (req.method === 'GET' && url.pathname === '/v1/account/billing') {
@@ -265,6 +339,7 @@ export function createApp(deps: AppDependencies) {
               blockers,
             };
           } catch (cause) {
+            if (cause instanceof GithubReadinessError) throw cause;
             return {
               owner: saved.owner,
               repo: saved.repo,
@@ -652,7 +727,12 @@ export function createApp(deps: AppDependencies) {
           quote.authorizationReceipt?.evidenceHash,
           { title: quote.issueTitle, body: quote.issueBody },
         );
-        const head = await deps.github.currentHead(quote.owner, quote.repo, quote.defaultBranch);
+        const head = await deps.github.currentHead(
+          quote.owner,
+          quote.repo,
+          quote.defaultBranch,
+          quote.installationId,
+        );
         if (head !== quote.baseSha)
           return json(res, 409, { error: 'repository changed; request a new quote' });
         const paymentSignature = header(req, 'payment-signature');
@@ -949,6 +1029,11 @@ export function createApp(deps: AppDependencies) {
         res.setHeader('cache-control', 'private, no-store');
         return json(res, 429, { error: cause.message });
       }
+      if (cause instanceof GithubOAuthCapacityError) {
+        res.setHeader('retry-after', '60');
+        res.setHeader('cache-control', 'private, no-store');
+        return json(res, 503, { error: cause.message });
+      }
       const message = cause instanceof Error ? cause.message : String(cause);
       const status =
         cause instanceof GithubAccessError
@@ -986,6 +1071,27 @@ export function createApp(deps: AppDependencies) {
               : cause instanceof OperatorAdmissionError
                 ? message
                 : 'request failed; retry later';
+      if (status >= 500) {
+        console.error(
+          JSON.stringify({
+            level: 'error',
+            event: 'http_request_failed',
+            requestId,
+            method: req.method ?? 'UNKNOWN',
+            path: requestPath,
+            status,
+            error: {
+              type: cause instanceof Error ? cause.constructor.name : typeof cause,
+              ...(cause instanceof GithubReadinessError
+                ? {
+                    code: cause.code,
+                    ...(cause.upstreamStatus ? { upstreamStatus: cause.upstreamStatus } : {}),
+                  }
+                : {}),
+            },
+          }),
+        );
+      }
       return json(res, status, { error: publicMessage });
     }
   };
@@ -1150,6 +1256,7 @@ function applyCors(
     'content-type,idempotency-key,payment-signature,last-event-id',
   );
   res.setHeader('access-control-allow-methods', 'GET,POST,OPTIONS');
+  res.setHeader('access-control-expose-headers', 'x-request-id');
   res.setHeader('vary', 'origin');
 }
 
@@ -1225,6 +1332,40 @@ function sessionCookie(
   ].join('; ');
 }
 
+function githubOAuthFlowCookie(
+  value: string,
+  req: IncomingMessage,
+  trustedProxyHops: number,
+  webProxySecret: string | undefined,
+): string {
+  const secure = requestScheme(req, trustedProxyHops, webProxySecret) === 'https';
+  return [
+    `mizuki_oauth_flow=${encodeURIComponent(value)}`,
+    'Path=/api/mizuki/v1/auth/github/callback',
+    'HttpOnly',
+    'SameSite=Lax',
+    `Max-Age=${GITHUB_OAUTH_FLOW_TTL_SECONDS}`,
+    ...(secure ? ['Secure'] : []),
+  ].join('; ');
+}
+
+function expiredGithubOAuthFlowCookie(
+  req: IncomingMessage,
+  trustedProxyHops: number,
+  webProxySecret: string | undefined,
+): string {
+  const secure = requestScheme(req, trustedProxyHops, webProxySecret) === 'https';
+  return [
+    'mizuki_oauth_flow=',
+    'Path=/api/mizuki/v1/auth/github/callback',
+    'HttpOnly',
+    'SameSite=Lax',
+    'Max-Age=0',
+    'Expires=Thu, 01 Jan 1970 00:00:00 GMT',
+    ...(secure ? ['Secure'] : []),
+  ].join('; ');
+}
+
 function expiredSessionCookie(
   req: IncomingMessage,
   trustedProxyHops: number,
@@ -1244,46 +1385,63 @@ function expiredSessionCookie(
 
 function accountBilling(mode: Config['paymentMode'], page: AccountJobsPage) {
   const { jobs } = page;
-  const paid = jobs.filter(
+  const confirming = jobs.filter(
+    (job) => job.state === 'settlement_pending' || job.payment.transaction === 'pending',
+  );
+  const settled = jobs.filter(
     (job) => job.state !== 'settlement_pending' && job.payment.transaction !== 'pending',
   );
-  const refunded = paid.filter((job) => job.state === 'refunded' && job.refundTransaction);
-  const delivered = paid.filter((job) => job.state === 'delivered');
-  const protectedJobs = paid.filter((job) => !['delivered', 'refunded'].includes(job.state));
-  const transactions = paid
-    .flatMap((job) => [
-      {
-        jobId: job.id,
-        type: 'payment' as const,
-        status: 'finalized' as const,
-        amountAtomic: job.payment.amountAtomic,
-        transaction: job.payment.transaction,
-        createdAt: job.createdAt,
-      },
-      ...(job.refundTransaction
-        ? [
-            {
-              jobId: job.id,
-              type: 'refund' as const,
-              status: 'finalized' as const,
-              amountAtomic: job.payment.amountAtomic,
-              transaction: job.refundTransaction,
-              createdAt: job.updatedAt,
-            },
-          ]
-        : job.state === 'refund_pending'
+  const refunded = settled.filter((job) => job.state === 'refunded' && job.refundTransaction);
+  const delivered = settled.filter((job) => job.state === 'delivered');
+  const protectedJobs = settled.filter((job) => {
+    if (job.state === 'refunded') return false;
+    if (job.state !== 'delivered') return true;
+    return Boolean(job.refundLiabilityId && !job.refundLiabilityDischargedAt);
+  });
+  const transactions = jobs
+    .flatMap((job) => {
+      const paymentPending =
+        job.state === 'settlement_pending' || job.payment.transaction === 'pending';
+      return [
+        {
+          id: `payment:${job.id}`,
+          jobId: job.id,
+          type: 'payment' as const,
+          status: paymentPending ? ('pending' as const) : ('finalized' as const),
+          amountAtomic: job.payment.amountAtomic,
+          transaction: job.payment.transaction === 'pending' ? null : job.payment.transaction,
+          repository: `${job.quote.owner}/${job.quote.repo}`,
+          createdAt: job.createdAt,
+        },
+        ...(!paymentPending && job.refundTransaction
           ? [
               {
+                id: `refund:${job.id}`,
                 jobId: job.id,
                 type: 'refund' as const,
-                status: 'pending' as const,
+                status: 'finalized' as const,
                 amountAtomic: job.payment.amountAtomic,
-                transaction: null,
+                transaction: job.refundTransaction,
+                repository: `${job.quote.owner}/${job.quote.repo}`,
                 createdAt: job.updatedAt,
               },
             ]
-          : []),
-    ])
+          : !paymentPending && ['failed', 'rejected', 'refund_pending'].includes(job.state)
+            ? [
+                {
+                  id: `refund:${job.id}`,
+                  jobId: job.id,
+                  type: 'refund' as const,
+                  status: 'pending' as const,
+                  amountAtomic: job.payment.amountAtomic,
+                  transaction: null,
+                  repository: `${job.quote.owner}/${job.quote.repo}`,
+                  createdAt: job.updatedAt,
+                },
+              ]
+            : []),
+      ];
+    })
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   return {
     mode,
@@ -1291,9 +1449,13 @@ function accountBilling(mode: Config['paymentMode'], page: AccountJobsPage) {
     decimals: USDC_DECIMALS,
     limit: page.limit,
     truncated: page.truncated,
-    totalsScope: page.truncated ? ('latest_jobs' as const) : ('account_lifetime' as const),
+    obligationCount: page.obligationCount,
+    totalsScope: page.truncated
+      ? ('latest_terminal_jobs_and_all_obligations' as const)
+      : ('account_lifetime' as const),
     totals: {
-      paidAtomic: sumJobAmounts(paid),
+      confirmingAtomic: sumJobAmounts(confirming),
+      paidAtomic: sumJobAmounts(settled),
       refundedAtomic: sumJobAmounts(refunded),
       deliveredAtomic: sumJobAmounts(delivered),
       protectedAtomic: sumJobAmounts(protectedJobs),

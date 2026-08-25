@@ -6,6 +6,7 @@ import { MemoryStore } from './store.js';
 import { treasurySnapshot } from './treasury.js';
 import type { FinancialPolicy, RefundLiability } from './policy-client.js';
 import type { Job, Payment, Quote, RunArtifacts } from './types.js';
+import { USDC_MAINNET } from './x402.js';
 
 const quote: Quote = {
   id: 'quote-1',
@@ -388,6 +389,91 @@ describe('JobProcessor', () => {
       estimatedCostUsd: 0.12,
     });
   });
+
+  it.each(['failed', 'rejected'] as const)(
+    'recovers a persisted %s job after a restart',
+    async (state) => {
+      const store = new MemoryStore();
+      const created = (await store.createJob(quote, payment, `restart-${state}`)).job;
+      await store.transitionJob(created.id, 'settlement_pending', 'paid');
+      if (state === 'failed') {
+        await store.transitionJob(created.id, 'paid', 'failed', { error: 'worker stopped' });
+      } else {
+        await store.transitionJob(created.id, 'paid', 'admitted');
+        await store.transitionJob(created.id, 'admitted', 'running');
+        await store.transitionJob(created.id, 'running', 'validating');
+        await store.transitionJob(created.id, 'validating', 'rejected', {
+          error: 'review rejected repair',
+        });
+      }
+      const refund = vi.fn(async () => ({
+        id: '33333333-3333-4333-8333-333333333333',
+        kind: 'refund' as const,
+        status: 'finalized' as const,
+        amountUsdCents: 200,
+        amountAtomic: payment.amountAtomic,
+        asset: USDC_MAINNET,
+        recipient: payment.payer,
+        transactionSignature: `refund-${state}`,
+        error: null,
+        createdAt: '2026-08-25T08:00:00.000Z',
+        updatedAt: '2026-08-25T08:00:01.000Z',
+      }));
+      const processor = new JobProcessor(
+        loadConfig({ MIZUKI_PAYMENT_MODE: 'live' }),
+        store,
+        { currentHead: async () => quote.baseSha, publish: async () => '' },
+        fetch,
+        undefined,
+        { refund } as unknown as FinancialPolicy,
+      );
+
+      await expect(processor.reconcileRefunds()).resolves.toEqual({ completed: 1, pending: 0 });
+      expect(refund).toHaveBeenCalledOnce();
+      expect(refund).toHaveBeenCalledWith(created.id, payment.transaction);
+      expect(await store.job(created.id)).toMatchObject({
+        state: 'refunded',
+        refundTransaction: `refund-${state}`,
+      });
+      expect(
+        (await store.ledgerEntries()).filter((entry) => entry.kind === 'refund_liability'),
+      ).toHaveLength(1);
+
+      const restarted = new JobProcessor(
+        loadConfig({ MIZUKI_PAYMENT_MODE: 'live' }),
+        store,
+        { currentHead: async () => quote.baseSha, publish: async () => '' },
+        fetch,
+        undefined,
+        { refund } as unknown as FinancialPolicy,
+      );
+      await expect(restarted.reconcileRefunds()).resolves.toEqual({ completed: 0, pending: 0 });
+      expect(refund).toHaveBeenCalledOnce();
+      expect(
+        (await store.ledgerEntries()).filter((entry) => entry.kind === 'refund_liability'),
+      ).toHaveLength(1);
+    },
+  );
+
+  it.each(['failed', 'rejected'] as const)(
+    'allows an operator refund retry from %s',
+    async (state) => {
+      const store = new MemoryStore();
+      const created = (await store.createJob(quote, payment, `operator-${state}`)).job;
+      await store.transitionJob(created.id, 'settlement_pending', 'paid');
+      await store.transitionJob(created.id, 'paid', state, { error: 'worker stopped' });
+      const processor = new JobProcessor(loadConfig({ MIZUKI_PAYMENT_MODE: 'mock' }), store, {
+        currentHead: async () => quote.baseSha,
+        publish: async () => '',
+      });
+
+      await expect(processor.retryRefund(created.id)).resolves.toBeUndefined();
+      expect(await store.job(created.id)).toMatchObject({
+        state: 'refunded',
+        refundTransaction: `mock-refund-${created.id}`,
+      });
+    },
+  );
 
   it('retains completed gateway cost when its artifact receipt is unavailable', async () => {
     const store = new MemoryStore();

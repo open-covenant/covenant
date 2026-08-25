@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   bountyPayoutText,
+  isActiveJob,
   normalizeAccount,
   normalizeBounties,
   normalizeBilling,
@@ -9,6 +10,7 @@ import {
   normalizePreflight,
   normalizeRepositories,
   parseRepositoryLocator,
+  type WorkbenchJob,
   workbenchAuthHref,
 } from './workbench';
 
@@ -28,6 +30,15 @@ describe('Workbench authentication', () => {
 });
 
 describe('Workbench response normalization', () => {
+  it('keeps failed and rejected jobs active until their refund is finalized', () => {
+    for (const state of ['failed', 'rejected', 'refund_pending'] as const) {
+      expect(isActiveJob({ state } as WorkbenchJob)).toBe(true);
+    }
+    for (const state of ['delivered', 'refunded'] as const) {
+      expect(isActiveJob({ state } as WorkbenchJob)).toBe(false);
+    }
+  });
+
   it('reads the authenticated account contract', () => {
     expect(
       normalizeAccount({
@@ -128,8 +139,9 @@ describe('Workbench response normalization', () => {
         jobs: [],
         limit: 100,
         truncated: true,
+        obligationCount: 4,
       }),
-    ).toEqual({ jobs: [], limit: 100, truncated: true });
+    ).toEqual({ jobs: [], limit: 100, truncated: true, obligationCount: 4 });
   });
 
   it('surfaces blockers from a preflight that is not ready', () => {
@@ -211,13 +223,15 @@ describe('Workbench response normalization', () => {
         transactions: [],
         limit: 1000,
         truncated: true,
-        totalsScope: 'latest_jobs',
+        obligationCount: 3,
+        totalsScope: 'latest_terminal_jobs_and_all_obligations',
       }),
     ).toMatchObject({
       entries: [],
       limit: 1000,
       truncated: true,
-      totalsScope: 'latest_jobs',
+      obligationCount: 3,
+      totalsScope: 'latest_terminal_jobs_and_all_obligations',
     });
   });
 

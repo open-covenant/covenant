@@ -1,6 +1,6 @@
 # Mizuki operations
 
-This directory contains the production blueprint and runbooks for Mizuki's commercial maintenance service. The design keeps the transaction signer on Render's private network and gives the API no signing key.
+This directory contains the production blueprint and runbooks for Mizuki's paid repository maintenance service. The design keeps the transaction signer on Render's private network and gives the API no signing key.
 
 ## Deployment order
 

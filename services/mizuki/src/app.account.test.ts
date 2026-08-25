@@ -113,7 +113,11 @@ describe('workbench account API', () => {
 
     const missingToken = await fetch(`${base}/v1/account/api-tokens`, {
       method: 'POST',
-      headers: { ...sessionHeaders, 'content-type': 'application/json' },
+      headers: {
+        cookie: sessionHeaders.cookie,
+        origin: sessionHeaders.origin,
+        'content-type': 'application/json',
+      },
       body: JSON.stringify(input),
     });
     expect(missingToken.status).toBe(403);
@@ -500,78 +504,28 @@ describe('workbench account API', () => {
     expect(missingKey.status).toBe(400);
   });
 
-  it('waits for an in-flight reservation before reporting payment status', async () => {
+  it('keeps payment-status reads out of the commercial admission lane', async () => {
     const store = new MemoryStore();
     await store.upsertContributor('42', 'maintainer');
     await store.saveQuote(quote);
     await store.linkQuoteToAccount(quote.id, '42');
     const gate = new SerialGate();
+    const run = vi.spyOn(gate, 'run');
     let release!: () => void;
     const blocked = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const reservation = gate.run(async () => {
-      await blocked;
-      return store.createJob(quote, payment, 'in-flight-payment-key');
-    });
+    const active = gate.run(async () => blocked);
     const base = await serve(dependencies(store, { paymentAdmission: gate }));
-    const response = fetch(`${base}/v1/account/quotes/${quote.id}/payment-status`, {
+    const response = await fetch(`${base}/v1/account/quotes/${quote.id}/payment-status`, {
       headers: { ...sessionHeaders, 'idempotency-key': 'in-flight-payment-key' },
     });
 
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ paymentStatus: 'unpaid' });
+    expect(run).toHaveBeenCalledTimes(1);
     release();
-    const { job } = await reservation;
-    const resolved = await response;
-
-    await expect(resolved.json()).resolves.toMatchObject({
-      paymentStatus: 'job_reserved',
-      job: { id: job.id },
-    });
-  });
-
-  it('limits sustained payment-status concurrency before it can starve payment admission', async () => {
-    const store = new MemoryStore();
-    await store.upsertContributor('42', 'maintainer');
-    await store.saveQuote(quote);
-    await store.linkQuoteToAccount(quote.id, '42');
-    const originalQuoteForAccount = store.quoteForAccount.bind(store);
-    let release!: () => void;
-    const blocked = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const quoteForAccount = vi
-      .spyOn(store, 'quoteForAccount')
-      .mockImplementation(async (...args) => {
-        await blocked;
-        return originalQuoteForAccount(...args);
-      });
-    const gate = new SerialGate(undefined, { maxQueued: 2, acquireTimeoutMs: 1_000 });
-    const base = await serve(dependencies(store, { paymentAdmission: gate }));
-
-    let settled = 0;
-    const pending = Array.from({ length: 30 }, (_, index) =>
-      fetch(`${base}/v1/account/quotes/${quote.id}/payment-status`, {
-        headers: { ...sessionHeaders, 'idempotency-key': `payment-status-load-${index}` },
-      }).then((response) => {
-        settled += 1;
-        return response;
-      }),
-    );
-    await vi.waitFor(() => expect(settled).toBe(27));
-    release();
-    const responses = await Promise.all(pending);
-    const statuses = responses.map((response) => response.status);
-
-    expect(statuses.filter((status) => status === 200)).toHaveLength(3);
-    expect(statuses.filter((status) => status === 503)).toHaveLength(9);
-    expect(statuses.filter((status) => status === 429)).toHaveLength(18);
-    expect(quoteForAccount).toHaveBeenCalledTimes(3);
-    expect(
-      responses
-        .filter((response) => response.status === 429 || response.status === 503)
-        .every((response) => response.headers.get('retry-after') !== null),
-    ).toBe(true);
+    await active;
   });
 
   it('bounds the serial gate queue without letting a timed-out waiter break serialization', async () => {
@@ -601,7 +555,7 @@ describe('workbench account API', () => {
     expect(nextOperation).toHaveBeenCalledOnce();
   });
 
-  it('rate limits payment-status reads before they can starve the settlement gate', async () => {
+  it('rate limits payment-status reads without entering the settlement gate', async () => {
     const store = new MemoryStore();
     await store.upsertContributor('42', 'maintainer');
     await store.saveQuote(quote);
@@ -620,7 +574,7 @@ describe('workbench account API', () => {
       headers: { ...sessionHeaders, 'idempotency-key': 'payment-status-limited' },
     });
     expect(limited.status).toBe(429);
-    expect(run).toHaveBeenCalledTimes(12);
+    expect(run).not.toHaveBeenCalled();
   });
 
   it('reports a confirming payment once, then replaces it with one finalized payment', async () => {
@@ -1209,6 +1163,7 @@ function dependencies(
 const sessionHeaders = {
   cookie: 'mizuki_session=session',
   origin: 'https://mizuki.example',
+  'x-mizuki-csrf-token': 'c'.repeat(43),
 };
 const issueUrl = 'https://github.com/example/project/issues/7';
 const quote: Quote = {

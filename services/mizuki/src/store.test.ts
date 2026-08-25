@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { API_TOKEN_MAX_ACTIVE, ApiTokenCapacityError, createApiToken } from './api-tokens.js';
+import {
+  API_TOKEN_MAX_ACTIVE,
+  API_TOKEN_TERMINAL_HISTORY_LIMIT,
+  ApiTokenCapacityError,
+  createApiToken,
+} from './api-tokens.js';
 import { createRescueBounty, type BountyClaim, type RescueBounty } from './domain/index.js';
 import { GithubOAuthCapacityError, MAX_PENDING_GITHUB_OAUTH_FLOWS, MemoryStore } from './store.js';
 import type { Payment, Quote } from './types.js';
@@ -55,7 +60,7 @@ describe('MemoryStore', () => {
     }
 
     const tokens = await store.apiTokensForAccount('42');
-    expect(tokens).toHaveLength(100);
+    expect(tokens).toHaveLength(API_TOKEN_TERMINAL_HISTORY_LIMIT + 1);
     expect(tokens[0]?.id).toBe(active.record.id);
   });
 
@@ -278,9 +283,10 @@ describe('MemoryStore', () => {
     expect(bounded.bounties).toHaveLength(1);
     expect(bounded).toMatchObject({ limit: 1, truncated: true });
     const complete = await store.bountiesForAccount('42', 100);
-    expect(new Set(complete.bounties.map((bounty) => bounty.id))).toEqual(
+    expect(new Set(complete.bounties.map(({ bounty }) => bounty.id))).toEqual(
       new Set([active.id, historical.id]),
     );
+    expect(complete.bounties.every(({ claim }) => claim.claimantId === '42')).toBe(true);
     expect(complete).toMatchObject({ limit: 100, truncated: false });
   });
 

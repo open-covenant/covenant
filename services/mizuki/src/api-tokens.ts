@@ -4,6 +4,8 @@ import { API_TOKEN_SCOPES, type AccountApiToken, type ApiTokenScope } from './ty
 export const API_TOKEN_VERSION_PREFIX = 'mzk_v1_';
 export const API_TOKEN_MAX_ACTIVE = 20;
 export const API_TOKEN_MAX_LIFETIME_DAYS = 365;
+export const API_TOKEN_TERMINAL_HISTORY_LIMIT = 80;
+export const API_TOKEN_HISTORY_RETENTION_DAYS = 90;
 
 const LOOKUP_LENGTH = 12;
 const tokenPattern = /^mzk_v1_[A-Za-z0-9_-]{12}_[A-Za-z0-9_-]{43}$/;

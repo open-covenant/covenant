@@ -43,6 +43,7 @@ import {
 } from './store.js';
 import { GithubWebhookHandler, verifyGithubWebhook } from './webhooks.js';
 import type { Job, RepositoryAdmissionReceipt } from './types.js';
+import type { BountyClaim, RescueBounty } from './domain/index.js';
 import type { ApiTokenScope } from './types.js';
 import { Payments, USDC_DECIMALS, USDC_MAINNET, paymentRequiredHeader } from './x402.js';
 import {
@@ -266,6 +267,7 @@ export function createApp(deps: AppDependencies) {
         return json(res, 200, { csrfToken });
       }
       if (req.method === 'POST' && url.pathname === '/v1/auth/logout') {
+        requireCsrfSession(req, deps.auth, deps.config.webOrigin);
         res.setHeader(
           'set-cookie',
           expiredSessionCookie(req, deps.config.trustedProxyHops ?? 0, deps.config.webProxySecret),
@@ -372,18 +374,7 @@ export function createApp(deps: AppDependencies) {
         }
         const quoteId = parts[3]!;
         if (!UUID_PATTERN.test(quoteId)) return json(res, 404, { error: 'quote not found' });
-        const status = await deps.paymentAdmission.run(async () => {
-          const quote = await deps.store.quoteForAccount(quoteId, session.githubId);
-          if (!quote) return { kind: 'not_found' } as const;
-
-          const keyedJob = await deps.store.jobByIdempotencyKey(key);
-          if (keyedJob && keyedJob.quote.id !== quote.id) {
-            return { kind: 'conflict' } as const;
-          }
-          const job = keyedJob ?? (await deps.store.jobByQuote(quote.id));
-          if (job) return { kind: 'reserved', quote, job } as const;
-          return { kind: 'unpaid', quote } as const;
-        });
+        const status = await deps.store.paymentStatusForAccount(quoteId, session.githubId, key);
 
         if (status.kind === 'not_found') return json(res, 404, { error: 'quote not found' });
         if (status.kind === 'conflict') {
@@ -408,13 +399,27 @@ export function createApp(deps: AppDependencies) {
         const page = await deps.store.jobsForAccount(session.githubId, 1_000);
         return json(res, 200, accountBilling(deps.config.paymentMode, page));
       }
+      if (
+        req.method === 'GET' &&
+        parts[0] === 'v1' &&
+        parts[1] === 'account' &&
+        parts[2] === 'bounties' &&
+        parts[3] &&
+        parts.length === 4
+      ) {
+        res.setHeader('cache-control', 'private, no-store');
+        const session = requireSession(req, deps.auth);
+        const entry = await deps.store.bountyForAccount(parts[3], session.githubId);
+        if (!entry) return json(res, 404, { error: 'account bounty not found' });
+        return json(res, 200, await publicAccountBounty(deps.store, entry));
+      }
       if (req.method === 'GET' && url.pathname === '/v1/account/bounties') {
         res.setHeader('cache-control', 'private, no-store');
         const session = requireSession(req, deps.auth);
         const page = await deps.store.bountiesForAccount(session.githubId, 100);
         return json(res, 200, {
           bounties: await Promise.all(
-            page.bounties.map((bounty) => publicBounty(deps.store, bounty)),
+            page.bounties.map((entry) => publicAccountBounty(deps.store, entry)),
           ),
           limit: page.limit,
           truncated: page.truncated,
@@ -481,7 +486,7 @@ export function createApp(deps: AppDependencies) {
         });
       }
       if (req.method === 'POST' && url.pathname === '/v1/account/repositories') {
-        const session = requireSession(req, deps.auth);
+        const session = requireCsrfSession(req, deps.auth, deps.config.webOrigin);
         admission.consumeAccount('repository_connect', req, session.githubId);
         const body = await bodyJson<{
           repository?: unknown;
@@ -621,7 +626,7 @@ export function createApp(deps: AppDependencies) {
       }
       if (req.method === 'POST' && url.pathname === '/v1/auth/wallet/challenges') {
         admission.consume('wallet_challenge', req);
-        const session = requireSession(req, deps.auth);
+        const session = requireCsrfSession(req, deps.auth, deps.config.webOrigin);
         const body = await bodyJson<{ wallet?: unknown }>(req);
         if (typeof body.wallet !== 'string') return json(res, 400, { error: 'wallet is required' });
         const challenge = await deps.auth.createWalletChallenge(session, body.wallet);
@@ -629,7 +634,7 @@ export function createApp(deps: AppDependencies) {
       }
       if (req.method === 'POST' && url.pathname === '/v1/auth/wallet/verify') {
         admission.consume('wallet_verify', req);
-        const session = requireSession(req, deps.auth);
+        const session = requireCsrfSession(req, deps.auth, deps.config.webOrigin);
         const body = await bodyJson<{ challengeId?: unknown; signature?: unknown }>(req);
         if (typeof body.challengeId !== 'string' || typeof body.signature !== 'string') {
           return json(res, 400, { error: 'challengeId and signature are required' });
@@ -682,7 +687,7 @@ export function createApp(deps: AppDependencies) {
         parts[3] === 'wallet-proof'
       ) {
         admission.consume('bounty_wallet_proof', req);
-        const session = requireSession(req, deps.auth);
+        const session = requireCsrfSession(req, deps.auth, deps.config.webOrigin);
         const bounty = await deps.store.bounty(parts[2]);
         if (!bounty || !(await isPublicBounty(deps.store, bounty))) {
           return json(res, 404, { error: 'bounty not found' });
@@ -731,7 +736,7 @@ export function createApp(deps: AppDependencies) {
         parts[3] === 'claim'
       ) {
         admission.consume('bounty_claim', req);
-        const session = requireSession(req, deps.auth);
+        const session = requireCsrfSession(req, deps.auth, deps.config.webOrigin);
         const contributor = await deps.store.contributor(session.githubId);
         if (!contributor) return json(res, 401, { error: 'contributor not found' });
         const body = await bodyJson<{
@@ -757,7 +762,7 @@ export function createApp(deps: AppDependencies) {
         parts[3] === 'pr'
       ) {
         admission.consume('bounty_pr', req);
-        const session = requireSession(req, deps.auth);
+        const session = requireCsrfSession(req, deps.auth, deps.config.webOrigin);
         const contributor = await deps.store.contributor(session.githubId);
         if (!contributor) return json(res, 401, { error: 'contributor not found' });
         const body = await bodyJson<{ pullRequestUrl?: unknown }>(req);
@@ -779,7 +784,7 @@ export function createApp(deps: AppDependencies) {
         parts[3] === 'disputes'
       ) {
         admission.consume('bounty_dispute', req);
-        const session = requireSession(req, deps.auth);
+        const session = requireCsrfSession(req, deps.auth, deps.config.webOrigin);
         const contributor = await deps.store.contributor(session.githubId);
         if (!contributor) return json(res, 401, { error: 'contributor not found' });
         const body = await bodyJson<{ reason?: unknown }>(req);
@@ -807,7 +812,10 @@ export function createApp(deps: AppDependencies) {
       ) {
         const accountScoped = url.pathname === '/v1/account/quotes';
         const session = accountScoped
-          ? await requireAccountPrincipal(req, deps.auth, admission, 'jobs:write')
+          ? await requireAccountPrincipal(req, deps.auth, admission, 'jobs:write', {
+              csrf: true,
+              configuredOrigin: deps.config.webOrigin,
+            })
           : undefined;
         if (session) admission.consumeAccount('quote', req, session.githubId);
         else admission.consume('quote', req);
@@ -1508,11 +1516,19 @@ async function requireAccountPrincipal(
   auth: ContributorAuth,
   admission: PublicAdmission,
   scope: ApiTokenScope,
+  options: { csrf?: boolean; configuredOrigin?: string } = {},
 ) {
-  const session = auth.session(cookies(req).mizuki_session);
-  if (session) return session;
-
+  const sessionValue = cookies(req).mizuki_session;
+  const session = auth.session(sessionValue);
   const authorization = header(req, 'authorization');
+  if (session && authorization) throw new ApiTokenAuthError('invalid');
+  if (session) {
+    if (options.csrf) {
+      return requireCsrfSession(req, auth, options.configuredOrigin);
+    }
+    return session;
+  }
+
   const bearer = authorization?.match(/^Bearer ([^\s,]+)$/i)?.[1];
   if (!bearer) {
     if (authorization) throw new ApiTokenAuthError('invalid');
@@ -1678,6 +1694,28 @@ function accountBilling(mode: Config['paymentMode'], page: AccountJobsPage) {
       protectedAtomic: sumJobAmounts(protectedJobs),
     },
     transactions,
+  };
+}
+
+function publicAccountClaim(claim: BountyClaim, current: boolean) {
+  return {
+    id: claim.id,
+    state: claim.state,
+    current,
+    claimedAt: claim.claimedAt,
+    leaseExpiresAt: claim.leaseExpiresAt,
+    ...(claim.draftPullRequestUrl ? { pullRequestUrl: claim.draftPullRequestUrl } : {}),
+    ...(claim.closedAt ? { closedAt: claim.closedAt } : {}),
+  };
+}
+
+async function publicAccountBounty(
+  store: MizukiStore,
+  entry: { bounty: RescueBounty; claim: BountyClaim },
+) {
+  return {
+    ...(await publicBounty(store, entry.bounty)),
+    accountClaim: publicAccountClaim(entry.claim, entry.bounty.activeClaim?.id === entry.claim.id),
   };
 }
 

@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createApiToken } from './api-tokens.js';
+import { API_TOKEN_TERMINAL_HISTORY_LIMIT, createApiToken } from './api-tokens.js';
 import {
   type BountyClaim,
   createContributorEscrow,
@@ -98,7 +98,7 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
       await store.revokeApiToken(terminal.record.id, githubId, new Date().toISOString());
     }
     const listed = await store.apiTokensForAccount(githubId);
-    expect(listed).toHaveLength(100);
+    expect(listed).toHaveLength(API_TOKEN_TERMINAL_HISTORY_LIMIT + 1);
     expect(listed[0]?.id).toBe(stored.id);
 
     const revoked = await store.revokeApiToken(stored.id, githubId, new Date().toISOString());
@@ -558,9 +558,15 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
     expect(bounded.bounties).toHaveLength(1);
     expect(bounded).toMatchObject({ limit: 1, truncated: true });
     const complete = await store.bountiesForAccount(githubId, 100);
-    expect(new Set(complete.bounties.map((candidate) => candidate.id))).toEqual(
+    expect(new Set(complete.bounties.map(({ bounty }) => bounty.id))).toEqual(
       new Set([active.id, historical.id]),
     );
+    expect(complete.bounties.every(({ claim }) => claim.claimantId === githubId)).toBe(true);
+    await expect(store.bountyForAccount(active.id, githubId)).resolves.toMatchObject({
+      bounty: { id: active.id },
+      claim: { id: active.activeClaim.id },
+    });
+    await expect(store.bountyForAccount(unrelated.id, githubId)).resolves.toBeUndefined();
     expect(complete).toMatchObject({ limit: 100, truncated: false });
   });
 

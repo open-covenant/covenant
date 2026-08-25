@@ -42,7 +42,7 @@ MIZUKI_ADMIN_TOKEN=replace-with-at-least-32-characters MIZUKI_PAYMENT_MODE=mock 
 
 The in-memory development store also starts closed. Open it deliberately through `POST /v1/admin/admission` before submitting a mock job.
 
-Copy `.env.example` into the deployment secret manager. Do not commit a populated env file.
+Use `.env.example` for local configuration. Production values and service boundaries are defined in `infra/mizuki/env-contract.md` and `infra/mizuki/render.yaml`; keep credentials in the deployment secret manager and never commit a populated env file.
 
 The coding gateway needs `CODER_BACKEND=usepod`, a pinned `CODER_MODEL`, `USEPOD_API_KEY`, `E2B_API_KEY`, authenticated access, and persistent ledger/run-store paths. Mizuki needs a dedicated Postgres database, GitHub App credentials, the x402 treasury, a distinct reviewer route, the private policy-signer link, and a dedicated refund-liability authority key.
 

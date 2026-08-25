@@ -3,11 +3,14 @@ import { isDeepStrictEqual } from 'node:util';
 import { Pool, type PoolClient } from 'pg';
 import {
   API_TOKEN_MAX_ACTIVE,
+  API_TOKEN_HISTORY_RETENTION_DAYS,
+  API_TOKEN_TERMINAL_HISTORY_LIMIT,
   ApiTokenCapacityError,
   apiTokenState,
   normalizedScopes,
 } from './api-tokens.js';
 import type {
+  BountyClaim,
   Capability,
   ContributorEscrow,
   FailureRecord,
@@ -50,8 +53,16 @@ export type AccountRepositoriesPage = {
   truncated: boolean;
 };
 
+export type AccountPaymentStatus =
+  | { kind: 'not_found' }
+  | { kind: 'conflict' }
+  | { kind: 'reserved'; quote: Quote; job: Job }
+  | { kind: 'unpaid'; quote: Quote };
+
+export type AccountBounty = { bounty: RescueBounty; claim: BountyClaim };
+
 export type AccountBountiesPage = {
-  bounties: RescueBounty[];
+  bounties: AccountBounty[];
   limit: number;
   truncated: boolean;
 };
@@ -71,6 +82,11 @@ export interface MizukiStore {
   quote(id: string): Promise<Quote | undefined>;
   linkQuoteToAccount(quoteId: string, githubId: string): Promise<void>;
   quoteForAccount(quoteId: string, githubId: string): Promise<Quote | undefined>;
+  paymentStatusForAccount(
+    quoteId: string,
+    githubId: string,
+    idempotencyKey: string,
+  ): Promise<AccountPaymentStatus>;
   jobsForAccount(githubId: string, limit: number): Promise<AccountJobsPage>;
   linkAccountRepository(githubId: string, owner: string, repo: string): Promise<AccountRepository>;
   repositoriesForAccount(githubId: string, limit: number): Promise<AccountRepositoriesPage>;
@@ -121,6 +137,7 @@ export interface MizukiStore {
   bountyBySourceJob(jobId: string): Promise<RescueBounty | undefined>;
   bountiesList(): Promise<RescueBounty[]>;
   bountiesForAccount(githubId: string, limit: number): Promise<AccountBountiesPage>;
+  bountyForAccount(id: string, githubId: string): Promise<AccountBounty | undefined>;
   updateBounty(bounty: RescueBounty, expectedRevision: number): Promise<RescueBounty>;
   saveEscrow(escrow: ContributorEscrow): Promise<ContributorEscrow>;
   escrow(id: string): Promise<ContributorEscrow | undefined>;
@@ -227,6 +244,19 @@ export class MemoryStore implements MizukiStore {
   async quoteForAccount(quoteId: string, githubId: string): Promise<Quote | undefined> {
     if (this.quoteAccounts.get(quoteId) !== githubId) return undefined;
     return clone(this.quotes.get(quoteId));
+  }
+
+  async paymentStatusForAccount(
+    quoteId: string,
+    githubId: string,
+    idempotencyKey: string,
+  ): Promise<AccountPaymentStatus> {
+    const quote = await this.quoteForAccount(quoteId, githubId);
+    if (!quote) return { kind: 'not_found' };
+    const keyedJob = await this.jobByIdempotencyKey(idempotencyKey);
+    if (keyedJob && keyedJob.quote.id !== quote.id) return { kind: 'conflict' };
+    const job = keyedJob ?? (await this.jobByQuote(quote.id));
+    return job ? { kind: 'reserved', quote, job } : { kind: 'unpaid', quote };
   }
 
   async jobsForAccount(githubId: string, limit: number): Promise<AccountJobsPage> {
@@ -453,6 +483,7 @@ export class MemoryStore implements MizukiStore {
 
   async createApiToken(token: AccountApiToken): Promise<AccountApiToken> {
     if (!this.contributors.has(token.githubId)) throw new Error('account not found');
+    this.pruneApiTokenHistory(token.githubId, token.createdAt);
     const active = [...this.apiTokens.values()].filter(
       (candidate) =>
         candidate.githubId === token.githubId &&
@@ -470,6 +501,26 @@ export class MemoryStore implements MizukiStore {
     }
     this.apiTokens.set(token.id, structuredClone(token));
     return structuredClone(token);
+  }
+
+  private pruneApiTokenHistory(githubId: string, at: string): void {
+    const now = Date.parse(at);
+    const cutoff = now - API_TOKEN_HISTORY_RETENTION_DAYS * 24 * 60 * 60_000;
+    const terminal = [...this.apiTokens.values()]
+      .filter(
+        (token) =>
+          token.githubId === githubId &&
+          (Boolean(token.revokedAt) || Date.parse(token.expiresAt) <= now),
+      )
+      .sort((left, right) => terminalTokenAt(right).localeCompare(terminalTokenAt(left)));
+    terminal.forEach((token, index) => {
+      if (
+        Date.parse(terminalTokenAt(token)) < cutoff ||
+        index >= API_TOKEN_TERMINAL_HISTORY_LIMIT
+      ) {
+        this.apiTokens.delete(token.id);
+      }
+    });
   }
 
   async apiTokensForAccount(githubId: string): Promise<AccountApiToken[]> {
@@ -511,6 +562,7 @@ export class MemoryStore implements MizukiStore {
     if (current.revokedAt) return structuredClone(current);
     const revoked = { ...current, revokedAt: at };
     this.apiTokens.set(id, revoked);
+    this.pruneApiTokenHistory(githubId, at);
     return structuredClone(revoked);
   }
 
@@ -649,19 +701,29 @@ export class MemoryStore implements MizukiStore {
   async bountiesForAccount(githubId: string, limit: number): Promise<AccountBountiesPage> {
     const boundedLimit = accountBountyLimit(limit);
     const bounties = [...this.bounties.values()]
-      .filter(
-        (bounty) =>
-          bounty.activeClaim?.claimantId === githubId ||
-          bounty.claimHistory.some((claim) => claim.claimantId === githubId),
+      .flatMap((bounty) => {
+        const claim = accountBountyClaim(bounty, githubId);
+        return claim ? [{ bounty, claim }] : [];
+      })
+      .sort(
+        (left, right) =>
+          right.claim.claimedAt.localeCompare(left.claim.claimedAt) ||
+          right.claim.id.localeCompare(left.claim.id),
       )
-      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
       .slice(0, boundedLimit + 1)
-      .map((bounty) => structuredClone(bounty));
+      .map((entry) => structuredClone(entry));
     return {
       bounties: bounties.slice(0, boundedLimit),
       limit: boundedLimit,
       truncated: bounties.length > boundedLimit,
     };
+  }
+
+  async bountyForAccount(id: string, githubId: string): Promise<AccountBounty | undefined> {
+    const bounty = this.bounties.get(id);
+    if (!bounty) return undefined;
+    const claim = accountBountyClaim(bounty, githubId);
+    return claim ? structuredClone({ bounty, claim }) : undefined;
   }
 
   async updateBounty(bounty: RescueBounty, expectedRevision: number): Promise<RescueBounty> {
@@ -968,6 +1030,37 @@ export class PostgresStore implements MizukiStore {
       [quoteId, githubId],
     );
     return result.rows[0]?.payload;
+  }
+
+  async paymentStatusForAccount(
+    quoteId: string,
+    githubId: string,
+    idempotencyKey: string,
+  ): Promise<AccountPaymentStatus> {
+    const result = await this.pool.query<{
+      quote_payload: Quote;
+      keyed_job_payload: Job | null;
+      reserved_job_payload: Job | null;
+    }>(
+      `SELECT quotes.payload AS quote_payload,
+              keyed.payload AS keyed_job_payload,
+              reserved.payload AS reserved_job_payload
+       FROM mizuki_quotes AS quotes
+       JOIN mizuki_account_quotes AS links ON links.quote_id = quotes.id
+       LEFT JOIN mizuki_jobs AS keyed ON keyed.idempotency_key = $3
+       LEFT JOIN mizuki_jobs AS reserved ON reserved.quote_id = quotes.id
+       WHERE quotes.id = $1 AND links.github_id = $2`,
+      [quoteId, githubId, idempotencyKey],
+    );
+    const row = result.rows[0];
+    if (!row) return { kind: 'not_found' };
+    if (row.keyed_job_payload && row.keyed_job_payload.quote.id !== row.quote_payload.id) {
+      return { kind: 'conflict' };
+    }
+    const job = row.keyed_job_payload ?? row.reserved_job_payload;
+    return job
+      ? { kind: 'reserved', quote: row.quote_payload, job }
+      : { kind: 'unpaid', quote: row.quote_payload };
   }
 
   async jobsForAccount(githubId: string, limit: number): Promise<AccountJobsPage> {
@@ -1339,6 +1432,7 @@ export class PostgresStore implements MizukiStore {
       await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
         `mizuki-api-tokens:${token.githubId}`,
       ]);
+      await pruneApiTokenHistory(client, token.githubId, token.createdAt);
       const capacity = await client.query<{ count: number }>(
         `SELECT count(*)::integer AS count
          FROM mizuki_account_api_tokens
@@ -1411,15 +1505,22 @@ export class PostgresStore implements MizukiStore {
     githubId: string,
     at: string,
   ): Promise<AccountApiToken | undefined> {
-    const result = await this.pool.query<ApiTokenRow>(
-      `UPDATE mizuki_account_api_tokens
-       SET revoked_at = COALESCE(revoked_at, $3)
-       WHERE id = $1 AND github_id = $2
-       RETURNING id, github_id, name, prefix, token_hash, scopes, expires_at, created_at,
-                 last_used_at, revoked_at`,
-      [id, githubId, at],
-    );
-    return result.rows[0] ? apiTokenFromRow(result.rows[0]) : undefined;
+    return this.transaction(async (client) => {
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+        `mizuki-api-tokens:${githubId}`,
+      ]);
+      const result = await client.query<ApiTokenRow>(
+        `UPDATE mizuki_account_api_tokens
+         SET revoked_at = COALESCE(revoked_at, $3)
+         WHERE id = $1 AND github_id = $2
+         RETURNING id, github_id, name, prefix, token_hash, scopes, expires_at, created_at,
+                   last_used_at, revoked_at`,
+        [id, githubId, at],
+      );
+      const token = result.rows[0] ? apiTokenFromRow(result.rows[0]) : undefined;
+      await pruneApiTokenHistory(client, githubId, at);
+      return token;
+    });
   }
 
   async saveGithubOAuthFlow(flow: GithubOAuthFlow): Promise<GithubOAuthFlow> {
@@ -1655,24 +1756,44 @@ export class PostgresStore implements MizukiStore {
 
   async bountiesForAccount(githubId: string, limit: number): Promise<AccountBountiesPage> {
     const boundedLimit = accountBountyLimit(limit);
-    const result = await this.pool.query<{ payload: RescueBounty }>(
-      `SELECT payload
-       FROM mizuki_bounties
-       WHERE payload->'activeClaim'->>'claimantId' = $1
-          OR EXISTS (
-            SELECT 1
-            FROM jsonb_array_elements(COALESCE(payload->'claimHistory', '[]'::jsonb)) AS claim
-            WHERE claim->>'claimantId' = $1
-          )
-       ORDER BY created_at DESC
+    const result = await this.pool.query<{ payload: RescueBounty; account_claim: BountyClaim }>(
+      `SELECT bounties.payload, account_claim.value AS account_claim
+       FROM mizuki_bounties AS bounties
+       CROSS JOIN LATERAL (
+         SELECT claim.value
+         FROM jsonb_array_elements(
+           CASE
+             WHEN bounties.payload->'activeClaim'->>'claimantId' = $1
+               THEN jsonb_build_array(bounties.payload->'activeClaim')
+             ELSE '[]'::jsonb
+           END || COALESCE(bounties.payload->'claimHistory', '[]'::jsonb)
+         ) AS claim(value)
+         WHERE claim.value->>'claimantId' = $1
+         ORDER BY claim.value->>'claimedAt' DESC, claim.value->>'id' DESC
+         LIMIT 1
+       ) AS account_claim
+       ORDER BY account_claim.value->>'claimedAt' DESC, account_claim.value->>'id' DESC
        LIMIT $2`,
       [githubId, boundedLimit + 1],
     );
     return {
-      bounties: result.rows.slice(0, boundedLimit).map((row) => row.payload),
+      bounties: result.rows
+        .slice(0, boundedLimit)
+        .map((row) => ({ bounty: row.payload, claim: row.account_claim })),
       limit: boundedLimit,
       truncated: result.rows.length > boundedLimit,
     };
+  }
+
+  async bountyForAccount(id: string, githubId: string): Promise<AccountBounty | undefined> {
+    const result = await this.pool.query<{ payload: RescueBounty }>(
+      'SELECT payload FROM mizuki_bounties WHERE id = $1',
+      [id],
+    );
+    const bounty = result.rows[0]?.payload;
+    if (!bounty) return undefined;
+    const claim = accountBountyClaim(bounty, githubId);
+    return claim ? { bounty, claim } : undefined;
   }
 
   async updateBounty(bounty: RescueBounty, expectedRevision: number): Promise<RescueBounty> {
@@ -1877,6 +1998,44 @@ function updateJob(current: Job, state: JobState, patch: JobPatch): Job {
 
 function clone<T>(value: T | undefined): T | undefined {
   return value === undefined ? undefined : structuredClone(value);
+}
+
+function terminalTokenAt(token: AccountApiToken): string {
+  return token.revokedAt ?? token.expiresAt;
+}
+
+function accountBountyClaim(bounty: RescueBounty, githubId: string): BountyClaim | undefined {
+  const claims = [
+    ...(bounty.activeClaim?.claimantId === githubId ? [bounty.activeClaim] : []),
+    ...bounty.claimHistory.filter((claim) => claim.claimantId === githubId),
+  ];
+  return claims.sort((left, right) => right.claimedAt.localeCompare(left.claimedAt))[0];
+}
+
+async function pruneApiTokenHistory(
+  client: PoolClient,
+  githubId: string,
+  at: string,
+): Promise<void> {
+  await client.query(
+    `DELETE FROM mizuki_account_api_tokens
+     WHERE github_id = $1
+       AND (revoked_at IS NOT NULL OR expires_at <= $2)
+       AND COALESCE(revoked_at, expires_at) <
+         $2::timestamptz - ($3::integer * interval '1 day')`,
+    [githubId, at, API_TOKEN_HISTORY_RETENTION_DAYS],
+  );
+  await client.query(
+    `DELETE FROM mizuki_account_api_tokens
+     WHERE id IN (
+       SELECT id
+       FROM mizuki_account_api_tokens
+       WHERE github_id = $1 AND (revoked_at IS NOT NULL OR expires_at <= $2)
+       ORDER BY COALESCE(revoked_at, expires_at) DESC, created_at DESC, id DESC
+       OFFSET $3
+     )`,
+    [githubId, at, API_TOKEN_TERMINAL_HISTORY_LIMIT],
+  );
 }
 
 async function withKeyLock<T>(

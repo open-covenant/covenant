@@ -157,6 +157,8 @@ export type Job = {
   artifacts?: RunArtifacts;
   inputTokens: number;
   outputTokens: number;
+  reviewInputTokens?: number;
+  reviewOutputTokens?: number;
   estimatedCostUsd: number;
   version: number;
 };

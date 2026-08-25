@@ -350,6 +350,7 @@ export class JobProcessor {
       if (!['admitted', 'running', 'validating'].includes(snapshot.state)) continue;
       if (Date.parse(snapshot.updatedAt) > staleBefore) continue;
       let job = await this.required(snapshot.id);
+      job = await this.reconcileReviewUsage(job);
       if (job.state === 'validating' && job.artifacts && job.reviewReceipt?.approved) {
         try {
           enforcePolicy(job.quote, job.artifacts);
@@ -387,11 +388,13 @@ export class JobProcessor {
           if (current.state !== 'validating') continue;
           job = await this.store.transitionJob(job.id, 'validating', 'failed', {
             error: `delivery recovery failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+            ...interruptedReviewPatch(job),
           });
         }
       } else {
         job = await this.store.transitionJob(job.id, job.state, 'failed', {
           error: 'maintenance run was interrupted before a durable delivery checkpoint',
+          ...interruptedReviewPatch(job),
         });
       }
       try {
@@ -650,14 +653,52 @@ export class JobProcessor {
       throw new ReviewAttemptError(message, budgetUsd, persisted);
     }
 
+    let responseText = '';
+    let responseValue: unknown;
+    let responseParseError: string | undefined;
+    try {
+      responseText = await response.text();
+      try {
+        responseValue = JSON.parse(responseText);
+      } catch (cause) {
+        responseParseError = cause instanceof Error ? cause.message : String(cause);
+      }
+    } catch (cause) {
+      responseParseError = `UsePod reviewer body read failed: ${cause instanceof Error ? cause.message : String(cause)}`;
+    }
+
+    let usage: ReturnType<typeof parseUsePodUsage> | undefined;
+    let usageError: string | undefined;
+    if (responseValue && typeof responseValue === 'object' && 'usage' in responseValue) {
+      try {
+        usage = parseUsePodUsage((responseValue as { usage: unknown }).usage);
+      } catch (cause) {
+        usageError = cause instanceof Error ? cause.message : String(cause);
+      }
+    } else {
+      usageError = responseParseError ?? 'UsePod reviewer omitted token usage';
+    }
+
     let receipt;
     try {
       receipt = usePodReceipt(response, this.config.usePodModel, requestConfig.minimumBalance);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
       const retryable = response.ok || transientReviewStatus(response.status);
-      const persisted = await this.markReviewAttemptFailed(jobId, attempt.id, message, retryable);
-      throw new ReviewAttemptError(message, budgetUsd, retryable && persisted);
+      const persisted = await this.markReviewAttemptFailed(
+        jobId,
+        attempt.id,
+        message,
+        retryable,
+        usage,
+      );
+      throw new ReviewAttemptError(
+        message,
+        budgetUsd,
+        retryable && persisted,
+        usage?.promptTokens,
+        usage?.completionTokens,
+      );
     }
     const provider = publicUsePodReceipt(receipt);
     const costUsd = provider.costMicrounits
@@ -668,61 +709,90 @@ export class JobProcessor {
         status: 'received',
         provider,
         costUsd,
+        ...(usage ? { inputTokens: usage.promptTokens, outputTokens: usage.completionTokens } : {}),
       });
     } catch (cause) {
+      const message = `review receipt persistence failed: ${cause instanceof Error ? cause.message : String(cause)}`;
+      await this.markReviewAttemptFailed(jobId, attempt.id, message, false, usage, {
+        provider,
+        costUsd,
+      });
       throw new ReviewAttemptError(
-        `review receipt persistence failed: ${cause instanceof Error ? cause.message : String(cause)}`,
-        budgetUsd,
+        message,
+        Math.max(budgetUsd, costUsd),
         false,
+        usage?.promptTokens,
+        usage?.completionTokens,
       );
     }
 
     if (costUsd > budgetUsd) {
       const message = 'UsePod reviewer exceeded its attempt spend cap';
-      await this.markReviewAttemptFailed(jobId, attempt.id, message, false);
-      throw new ReviewAttemptError(message, costUsd, false);
+      await this.markReviewAttemptFailed(jobId, attempt.id, message, false, usage);
+      throw new ReviewAttemptError(
+        message,
+        costUsd,
+        false,
+        usage?.promptTokens,
+        usage?.completionTokens,
+      );
     }
     if (!response.ok) {
-      let responseBody = '';
-      try {
-        responseBody = await response.text();
-      } catch (cause) {
-        responseBody = cause instanceof Error ? cause.message : String(cause);
-      }
-      const message = `UsePod reviewer failed: ${response.status} ${responseBody}`;
+      const message = `UsePod reviewer failed: ${response.status} ${responseText || responseParseError || ''}`;
       const retryable = transientReviewStatus(response.status);
-      const persisted = await this.markReviewAttemptFailed(jobId, attempt.id, message, retryable);
-      throw new ReviewAttemptError(message, costUsd, retryable && persisted);
+      const persisted = await this.markReviewAttemptFailed(
+        jobId,
+        attempt.id,
+        message,
+        retryable,
+        usage,
+      );
+      throw new ReviewAttemptError(
+        message,
+        costUsd,
+        retryable && persisted,
+        usage?.promptTokens,
+        usage?.completionTokens,
+      );
     }
 
     let body;
     try {
+      if (responseParseError) throw new Error(responseParseError);
       body = z
         .object({
           model: z.string(),
           choices: z.array(z.object({ message: z.object({ content: z.string() }) })).min(1),
           usage: z.unknown(),
         })
-        .parse(await response.json());
+        .parse(responseValue);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
+      const persisted = await this.markReviewAttemptFailed(jobId, attempt.id, message, true, usage);
+      throw new ReviewAttemptError(
+        message,
+        costUsd,
+        persisted,
+        usage?.promptTokens,
+        usage?.completionTokens,
+      );
+    }
+
+    if (!usage) {
+      const message = usageError ?? 'UsePod reviewer returned invalid token usage';
       const persisted = await this.markReviewAttemptFailed(jobId, attempt.id, message, true);
       throw new ReviewAttemptError(message, costUsd, persisted);
     }
-
     if (!matchesUsePodModel(this.config.usePodModel, body.model)) {
       const message = 'UsePod reviewer returned a different model';
-      await this.markReviewAttemptFailed(jobId, attempt.id, message, false);
-      throw new ReviewAttemptError(message, costUsd, false);
-    }
-
-    let usage;
-    try {
-      usage = parseUsePodUsage(body.usage);
-    } catch (cause) {
-      const message = cause instanceof Error ? cause.message : String(cause);
-      const persisted = await this.markReviewAttemptFailed(jobId, attempt.id, message, true);
-      throw new ReviewAttemptError(message, costUsd, persisted);
+      await this.markReviewAttemptFailed(jobId, attempt.id, message, false, usage);
+      throw new ReviewAttemptError(
+        message,
+        costUsd,
+        false,
+        usage.promptTokens,
+        usage.completionTokens,
+      );
     }
     if (usage.completionTokens > maxTokens) {
       const message = 'UsePod reviewer exceeded its output token ceiling';
@@ -991,6 +1061,13 @@ export class JobProcessor {
     outputTokens: number,
     variableCostUsd: number,
   ): Promise<void> {
+    const job = await this.required(id);
+    if (
+      inputTokens < (job.reviewInputTokens ?? 0) ||
+      outputTokens < (job.reviewOutputTokens ?? 0)
+    ) {
+      throw new Error('job token totals cannot be lower than durable review usage');
+    }
     await this.store.patchJob(id, {
       inputTokens,
       outputTokens,
@@ -1000,13 +1077,15 @@ export class JobProcessor {
 
   private async reserveReviewAttempt(id: string, attempt: ReviewAttempt): Promise<void> {
     const job = await this.required(id);
+    const attempts = [...(job.reviewAttempts ?? []), attempt];
     const estimatedCostUsd = addUsd(job.estimatedCostUsd, attempt.costUsd);
     if (!Number.isFinite(estimatedCostUsd) || estimatedCostUsd > job.quote.maxCostUsd + 1e-9) {
       throw new Error('review reservation exceeds the job spend cap');
     }
     await this.store.transitionJob(id, 'validating', 'validating', {
-      reviewAttempts: [...(job.reviewAttempts ?? []), attempt],
+      reviewAttempts: attempts,
       estimatedCostUsd,
+      ...reviewUsagePatch(job, attempts),
     });
   }
 
@@ -1021,17 +1100,33 @@ export class JobProcessor {
       throw new Error('review receipt checkpoint is missing');
     }
     const previous = attempts.find((attempt) => attempt.id === attemptId)!;
+    const nextAttempts = attempts.map((attempt) =>
+      attempt.id === attemptId ? { ...attempt, ...patch } : attempt,
+    );
     const nextCostUsd = patch.costUsd ?? previous.costUsd;
     const estimatedCostUsd = roundUsd(job.estimatedCostUsd - previous.costUsd + nextCostUsd);
     if (!Number.isFinite(estimatedCostUsd) || estimatedCostUsd < 0) {
       throw new Error('review cost reconciliation is invalid');
     }
     await this.store.transitionJob(id, 'validating', 'validating', {
-      reviewAttempts: attempts.map((attempt) =>
-        attempt.id === attemptId ? { ...attempt, ...patch } : attempt,
-      ),
+      reviewAttempts: nextAttempts,
       estimatedCostUsd,
+      ...reviewUsagePatch(job, nextAttempts),
     });
+  }
+
+  private async reconcileReviewUsage(job: Job): Promise<Job> {
+    if (!job.reviewAttempts?.length) return job;
+    const patch = reviewUsagePatch(job, job.reviewAttempts);
+    if (
+      job.reviewInputTokens === patch.reviewInputTokens &&
+      job.reviewOutputTokens === patch.reviewOutputTokens &&
+      job.inputTokens === patch.inputTokens &&
+      job.outputTokens === patch.outputTokens
+    ) {
+      return job;
+    }
+    return this.store.transitionJob(job.id, job.state, job.state, patch);
   }
 
   private async markReviewAttemptFailed(
@@ -1040,12 +1135,14 @@ export class JobProcessor {
     error: string,
     retryable: boolean,
     usage?: { promptTokens: number; completionTokens: number },
+    receipt?: { provider: ProviderRouteReceipt; costUsd: number },
   ): Promise<boolean> {
     try {
       await this.updateReviewAttempt(id, attemptId, {
         status: 'failed',
         error,
         retryable,
+        ...receipt,
         ...(usage ? { inputTokens: usage.promptTokens, outputTokens: usage.completionTokens } : {}),
       });
       return true;
@@ -1054,6 +1151,67 @@ export class JobProcessor {
       return false;
     }
   }
+}
+
+function reviewUsagePatch(job: Job, attempts: ReviewAttempt[]) {
+  const previous = reviewUsage(job.reviewAttempts ?? []);
+  const next = reviewUsage(attempts);
+  const accountedInput = job.reviewInputTokens ?? previous.inputTokens;
+  const accountedOutput = job.reviewOutputTokens ?? previous.outputTokens;
+  const baseInput = job.inputTokens - accountedInput;
+  const baseOutput = job.outputTokens - accountedOutput;
+  if (!Number.isSafeInteger(baseInput) || baseInput < 0) {
+    throw new Error('review input token reconciliation is invalid');
+  }
+  if (!Number.isSafeInteger(baseOutput) || baseOutput < 0) {
+    throw new Error('review output token reconciliation is invalid');
+  }
+  return {
+    inputTokens: safeTokenSum(baseInput, next.inputTokens),
+    outputTokens: safeTokenSum(baseOutput, next.outputTokens),
+    reviewInputTokens: next.inputTokens,
+    reviewOutputTokens: next.outputTokens,
+  };
+}
+
+function reviewUsage(attempts: ReviewAttempt[]) {
+  return attempts.reduce(
+    (total, attempt) => ({
+      inputTokens: safeTokenSum(total.inputTokens, attempt.inputTokens ?? 0),
+      outputTokens: safeTokenSum(total.outputTokens, attempt.outputTokens ?? 0),
+    }),
+    { inputTokens: 0, outputTokens: 0 },
+  );
+}
+
+function safeTokenSum(left: number, right: number): number {
+  return safeTokenCount.parse(left + right);
+}
+
+function interruptedReviewPatch(job: Job) {
+  if (!job.reviewAttempts?.some((attempt) => !settledReviewAttempt(attempt))) {
+    return {};
+  }
+  return {
+    reviewAttempts: job.reviewAttempts.map((attempt) =>
+      settledReviewAttempt(attempt)
+        ? attempt
+        : {
+            ...attempt,
+            status: 'failed' as const,
+            error: 'review interrupted before a durable decision checkpoint',
+            retryable: false,
+          },
+    ),
+  };
+}
+
+function settledReviewAttempt(attempt: ReviewAttempt): boolean {
+  return (
+    ['completed', 'failed'].includes(attempt.status ?? '') ||
+    attempt.approved !== undefined ||
+    attempt.error !== undefined
+  );
 }
 
 class GatewayRunError extends Error {

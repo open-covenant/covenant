@@ -16,6 +16,26 @@ describe('CapabilityService', () => {
     ]);
   });
 
+  it('serializes concurrent failure recording into one capability workflow', async () => {
+    const store = new MemoryStore();
+    const service = new CapabilityService(store, undefined, () => new Date('2026-08-22T12:00:00Z'));
+    const failed = job('standard', 'UsePod route timed out', 'concurrent');
+
+    const upgrades = await Promise.all([
+      service.recordFailure(failed),
+      service.recordFailure(failed),
+      service.recordFailure(failed),
+    ]);
+
+    expect(new Set(upgrades.map((upgrade) => upgrade?.id)).size).toBe(1);
+    expect(await store.failuresForCapability('model.route-reliability')).toHaveLength(1);
+    expect(await store.capabilitiesList()).toHaveLength(1);
+    expect(await store.upgradesList()).toHaveLength(1);
+    expect(
+      (await store.activity()).filter((event) => event.kind === 'capability.proposed'),
+    ).toHaveLength(1);
+  });
+
   it('publishes the first refunded micro failure and reuses its active proposal', async () => {
     const store = new MemoryStore();
     let day = 22;

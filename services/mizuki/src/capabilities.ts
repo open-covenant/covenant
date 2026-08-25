@@ -68,6 +68,12 @@ export class CapabilityService {
 
   async recordFailure(job: Job): Promise<Upgrade | undefined> {
     const capabilityKey = classifyCapability(job.error ?? 'maintenance failure');
+    return this.store.withCapabilityFailureLock(capabilityKey, () =>
+      this.recordFailureLocked(job, capabilityKey),
+    );
+  }
+
+  private async recordFailureLocked(job: Job, capabilityKey: string): Promise<Upgrade | undefined> {
     const history = await this.store.failuresForCapability(capabilityKey);
     const recorded = history.find((failure) => failure.id === job.id);
     const failure: FailureRecord = recorded ?? {

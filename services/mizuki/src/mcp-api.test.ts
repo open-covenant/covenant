@@ -117,12 +117,14 @@ describe('Mizuki MCP API client', () => {
   });
 
   it('requires encrypted transport outside loopback development', () => {
+    const credentialUrl = new URL('https://api.example/v1');
+    credentialUrl.username = 'caller';
+    credentialUrl.password = 'credential';
+
     expect(() => new MizukiMcpClient({ baseUrl: 'not a URL' })).toThrow('invalid');
     expect(() => new MizukiMcpClient({ baseUrl: 'http://api.example' })).toThrow('HTTPS');
     expect(() => new MizukiMcpClient({ baseUrl: 'ftp://api.example' })).toThrow('HTTPS');
-    expect(() => new MizukiMcpClient({ baseUrl: 'https://user:secret@api.example/v1' })).toThrow(
-      'credentials',
-    );
+    expect(() => new MizukiMcpClient({ baseUrl: credentialUrl.toString() })).toThrow('credentials');
     expect(() => new MizukiMcpClient({ baseUrl: 'http://127.0.0.1:8787' })).not.toThrow();
   });
 

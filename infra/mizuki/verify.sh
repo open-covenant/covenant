@@ -606,7 +606,7 @@ RUBY
 
 jq -e '
   .mcpServers["clawpump-agents"].command == "npx" and
-  .mcpServers["clawpump-agents"].args == ["@clawpump/agents"] and
+  .mcpServers["clawpump-agents"].args == ["--yes", "@clawpump/agents@0.1.23"] and
   (.mcpServers["clawpump-agents"].env.CLAWPUMP_API_KEY | startswith("cpk_replace"))
 ' services/mizuki/clawpump/mcp.json.example >/dev/null
 

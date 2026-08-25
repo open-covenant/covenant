@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { formatTime } from '@/lib/format';
 import { normalizeIssues, normalizeRepositories, parseRepositoryLocator } from '@/lib/workbench';
+import type { InstallationStatus } from '@/lib/workbench';
 import { useWorkbenchResource, workbenchRequest } from '@/lib/workbench-client';
 import {
   LastChecked,
@@ -41,7 +42,11 @@ export function Repositories() {
       ) : repositories.status === 'ready' && repositories.data.length > 0 ? (
         <div className="workbench-repository-grid">
           {repositories.data.map((repository) => (
-            <RepositoryCard repository={repository} key={repository.fullName} />
+            <RepositoryCard
+              repository={repository}
+              retry={repositories.refresh}
+              key={repository.fullName}
+            />
           ))}
         </div>
       ) : repositories.status === 'ready' ? (
@@ -83,6 +88,10 @@ export function RepositoryWorkspace({ owner, repo }: { owner: string; repo: stri
             >
               Start a job
             </Link>
+          ) : repository?.readiness === 'unavailable' ? (
+            <button type="button" onClick={repositories.refresh}>
+              Retry status
+            </button>
           ) : undefined
         }
       />
@@ -106,7 +115,11 @@ export function RepositoryWorkspace({ owner, repo }: { owner: string; repo: stri
               <div>
                 <span>Repository readiness</span>
                 <h2>
-                  {repository.readiness === 'ready' ? 'Ready for paid work' : 'Setup required'}
+                  {repository.readiness === 'ready'
+                    ? 'Ready for paid work'
+                    : repository.readiness === 'unavailable'
+                      ? 'Readiness temporarily unavailable'
+                      : 'Setup required'}
                 </h2>
               </div>
               <WorkbenchStatus value={repository.readiness} />
@@ -114,23 +127,34 @@ export function RepositoryWorkspace({ owner, repo }: { owner: string; repo: stri
             <div className="repository-readiness-checks">
               <ReadinessCheck
                 label="Maintenance App"
-                ready={repository.maintenanceAppInstalled}
+                status={repository.maintenanceAppStatus}
                 actionUrl={maintenanceAppUrl}
+                retry={repositories.refresh}
               />
               <ReadinessCheck
                 label="Policy verifier"
-                ready={repository.verifierAppInstalled}
+                status={repository.verifierAppStatus}
                 actionUrl={verifierAppUrl}
+                retry={repositories.refresh}
               />
               <ReadinessCheck
                 label="Repository checks"
-                ready={repository.readiness === 'ready'}
+                status={
+                  repository.readiness === 'ready'
+                    ? 'installed'
+                    : repository.readiness === 'unavailable'
+                      ? 'unavailable'
+                      : 'missing'
+                }
                 detail={
                   repository.validationCommands.join(' · ') ||
                   (repository.readiness === 'ready'
                     ? 'Confirmed for each issue during preflight'
-                    : 'Confirmed after both Apps are installed')
+                    : repository.readiness === 'unavailable'
+                      ? 'Status could not be confirmed. Retry the readiness check.'
+                      : 'Confirmed after both Apps are installed')
                 }
+                retry={repositories.refresh}
               />
             </div>
             {repository.reason && (
@@ -272,7 +296,11 @@ export function RepositoryOnboarding() {
           </div>
           <div className="workbench-repository-grid">
             {connected.map((repository) => (
-              <RepositoryCard repository={repository} key={repository.fullName} />
+              <RepositoryCard
+                repository={repository}
+                retry={repositories.refresh}
+                key={repository.fullName}
+              />
             ))}
           </div>
         </section>
@@ -353,28 +381,44 @@ function RepositoryConnector({ refresh }: { refresh: () => void }) {
   );
 }
 
-function ReadinessCheck({
+export function ReadinessCheck({
   label,
-  ready,
+  status,
   detail,
   actionUrl,
+  retry,
 }: {
   label: string;
-  ready: boolean;
+  status: InstallationStatus;
   detail?: string;
   actionUrl?: string;
+  retry?: () => void;
 }) {
+  const ready = status === 'installed';
+  const unavailable = status === 'unavailable';
   return (
-    <div className={ready ? 'ready' : ''}>
-      <span aria-hidden="true">{ready ? '✓' : '!'}</span>
+    <div className={ready ? 'ready' : unavailable ? 'unavailable' : ''}>
+      <span aria-hidden="true">{ready ? '✓' : unavailable ? '…' : '!'}</span>
       <div>
         <strong>{label}</strong>
-        <p>{detail || (ready ? 'Verified on this repository' : 'Required on this repository')}</p>
+        <p>
+          {detail ||
+            (ready
+              ? 'Verified on this repository'
+              : unavailable
+                ? 'Status could not be confirmed'
+                : 'Required on this repository')}
+        </p>
       </div>
-      {!ready && actionUrl && (
+      {status === 'missing' && actionUrl && (
         <a href={actionUrl} target="_blank" rel="noreferrer">
           Install ↗
         </a>
+      )}
+      {unavailable && retry && (
+        <button type="button" onClick={retry}>
+          Retry
+        </button>
       )}
     </div>
   );

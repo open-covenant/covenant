@@ -7,6 +7,7 @@ import {
   SerialGate,
   type AppDependencies,
 } from './app.js';
+import { GithubOAuthCallbackError } from './auth.js';
 import { GithubReadinessError } from './github.js';
 import { PolicyRequestError, repositoryAdmissionBinding } from './policy-client.js';
 import { GithubOAuthCapacityError, MemoryStore } from './store.js';
@@ -820,29 +821,65 @@ describe('public route responses', () => {
     expect(callback).toHaveBeenCalledWith('code', 'state', 'browser-flow-secret');
   });
 
-  it('clears the OAuth flow cookie on incomplete and rejected callbacks without logging secrets', async () => {
+  it('clears the OAuth flow cookie and redirects callback failures to bounded Workbench errors', async () => {
     const store = new MemoryStore();
-    const callback = vi.fn(async () => {
-      throw new Error('OAuth browser flow is invalid');
-    });
+    const callback = vi
+      .fn()
+      .mockRejectedValueOnce(new GithubOAuthCallbackError('replayed'))
+      .mockRejectedValueOnce(new GithubOAuthCallbackError('expired'))
+      .mockRejectedValueOnce(new Error('private database detail'));
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const base = await serve(dependencies(store, { auth: { callback } }));
+    const base = await serve(
+      dependencies(store, {
+        config: {
+          publicBaseUrl: 'https://mizuki-api.onrender.com',
+          webOrigin: 'https://mizuki.opencovenant.org',
+        },
+        auth: { callback },
+      }),
+    );
 
     const incomplete = await fetch(`${base}/v1/auth/github/callback?state=signed-state`, {
       headers: { cookie: 'mizuki_oauth_flow=sensitive-browser-secret' },
+      redirect: 'manual',
     });
-    expect(incomplete.status).toBe(400);
+    expect(incomplete.status).toBe(302);
+    expect(incomplete.headers.get('location')).toBe(
+      'https://mizuki.opencovenant.org/app?auth_error=incomplete',
+    );
     expect(incomplete.headers.get('set-cookie')).toContain('mizuki_oauth_flow=;');
     expect(incomplete.headers.get('set-cookie')).toContain('Max-Age=0');
 
-    const rejected = await fetch(
-      `${base}/v1/auth/github/callback?code=temporary-code&state=signed-state`,
-      { headers: { cookie: 'mizuki_oauth_flow=sensitive-browser-secret' } },
+    const denied = await fetch(
+      `${base}/v1/auth/github/callback?error=access_denied&state=signed-state`,
+      {
+        headers: { cookie: 'mizuki_oauth_flow=sensitive-browser-secret' },
+        redirect: 'manual',
+      },
     );
-    expect(rejected.status).toBe(422);
-    expect(rejected.headers.get('set-cookie')).toContain('mizuki_oauth_flow=;');
-    expect(await rejected.text()).not.toContain('sensitive-browser-secret');
-    expect(consoleError).not.toHaveBeenCalled();
+    expect(denied.headers.get('location')).toBe(
+      'https://mizuki.opencovenant.org/app?auth_error=denied',
+    );
+
+    for (const expected of ['replayed', 'expired', 'unavailable']) {
+      const rejected = await fetch(
+        `${base}/v1/auth/github/callback?code=temporary-code&state=signed-state`,
+        {
+          headers: { cookie: 'mizuki_oauth_flow=sensitive-browser-secret' },
+          redirect: 'manual',
+        },
+      );
+      expect(rejected.status).toBe(302);
+      expect(rejected.headers.get('location')).toBe(
+        `https://mizuki.opencovenant.org/app?auth_error=${expected}`,
+      );
+      expect(rejected.headers.get('set-cookie')).toContain('mizuki_oauth_flow=;');
+      expect(await rejected.text()).not.toContain('sensitive-browser-secret');
+      expect(rejected.headers.get('location')).not.toContain('private database detail');
+    }
+    expect(callback).toHaveBeenCalledTimes(3);
+    expect(JSON.stringify(consoleError.mock.calls)).not.toContain('private database detail');
+    expect(JSON.stringify(consoleError.mock.calls)).not.toContain('sensitive-browser-secret');
     consoleError.mockRestore();
   });
 

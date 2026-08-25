@@ -87,6 +87,7 @@
 
 .workbench-new-job,
 .workbench-page-action > a,
+.workbench-page-action > button,
 .workbench-first-run > a,
 .workbench-empty-action > a,
 .repository-connector button,
@@ -111,6 +112,7 @@
 
 .workbench-new-job:hover,
 .workbench-page-action > a:hover,
+.workbench-page-action > button:hover,
 .workbench-first-run > a:hover,
 .workbench-empty-action > a:hover,
 .repository-connector button:hover,
@@ -294,7 +296,8 @@
   line-height: 1.6;
 }
 
-.workbench-page-action > a {
+.workbench-page-action > a,
+.workbench-page-action > button {
   min-width: 174px;
   padding: 0 18px;
 }
@@ -512,8 +515,12 @@
 }
 
 .workbench-inline-empty a,
+.workbench-inline-empty button,
 .workbench-empty a,
 .workbench-error button {
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: var(--wb-accent);
   font-size: 12px;
 }
@@ -621,8 +628,12 @@
   font-size: 13px;
 }
 
-.workbench-attention-bar a {
+.workbench-attention-bar a,
+.workbench-attention-bar button {
   flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: var(--wb-warning);
   font-size: 12px;
 }
@@ -716,6 +727,12 @@
   border-top: 1px solid var(--wb-line);
   color: #c7ceca;
   font-size: 12px;
+  width: 100%;
+  border-right: 0;
+  border-bottom: 0;
+  border-left: 0;
+  background: transparent;
+  text-align: left;
 }
 
 .repository-readiness-panel {
@@ -756,6 +773,11 @@
   color: var(--wb-accent);
 }
 
+.repository-readiness-checks > div.unavailable > span {
+  border-color: var(--wb-line-strong);
+  color: var(--wb-muted);
+}
+
 .repository-readiness-checks strong {
   display: block;
   font-size: 12px;
@@ -768,7 +790,11 @@
   font-size: 11px;
 }
 
-.repository-readiness-checks a {
+.repository-readiness-checks a,
+.repository-readiness-checks button {
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: var(--wb-accent);
   font-size: 11px;
 }
@@ -1078,7 +1104,12 @@
   font-size: 12px;
 }
 
-.wizard-help a {
+.wizard-help a,
+.wizard-help button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
   text-decoration: underline;
 }
 

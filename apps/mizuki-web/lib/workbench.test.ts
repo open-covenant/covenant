@@ -11,6 +11,7 @@ import {
   normalizeRepositories,
   parseRepositoryLocator,
   type WorkbenchJob,
+  workbenchAuthErrorMessage,
   workbenchAuthHref,
 } from './workbench';
 
@@ -26,6 +27,13 @@ describe('Workbench authentication', () => {
       '/api/mizuki/v1/auth/github?return_to=%2Fapp',
     );
     expect(workbenchAuthHref('/application')).toBe('/api/mizuki/v1/auth/github?return_to=%2Fapp');
+  });
+
+  it('shows only bounded OAuth failure messages', () => {
+    expect(workbenchAuthErrorMessage('expired')).toContain('expired');
+    expect(workbenchAuthErrorMessage('replayed')).toContain('already used');
+    expect(workbenchAuthErrorMessage('internal database detail')).toBeUndefined();
+    expect(workbenchAuthErrorMessage('toString')).toBeUndefined();
   });
 });
 
@@ -74,11 +82,49 @@ describe('Workbench response normalization', () => {
       expect.objectContaining({
         fullName: 'open-covenant/covenant',
         readiness: 'ready',
-        maintenanceAppInstalled: true,
-        verifierAppInstalled: true,
+        maintenanceAppStatus: 'installed',
+        verifierAppStatus: 'installed',
         validationCommands: [],
       }),
     ]);
+  });
+
+  it('preserves repository and installation outages without requesting installation', () => {
+    expect(
+      normalizeRepositories({
+        repositories: [
+          {
+            repository: 'open-covenant/covenant',
+            readyForWork: false,
+            verifierAppInstalled: false,
+            core: { status: 'ready' },
+            policy: { status: 'unavailable' },
+            blockers: ['The policy verifier is temporarily unavailable.'],
+          },
+        ],
+      })[0],
+    ).toMatchObject({
+      readiness: 'unavailable',
+      maintenanceAppStatus: 'installed',
+      verifierAppStatus: 'unavailable',
+    });
+
+    expect(
+      normalizeRepositories({
+        repositories: [
+          {
+            repository: 'open-covenant/covenant',
+            readyForWork: false,
+            core: { status: 'action_required' },
+            policy: { status: 'ready' },
+          },
+        ],
+      })[0],
+    ).toMatchObject({
+      readiness: 'action_required',
+      maintenanceAppStatus: 'missing',
+      verifierAppStatus: 'installed',
+    });
   });
 
   it('does not treat an authorized but ineligible issue as ready', () => {
@@ -178,10 +224,13 @@ describe('Workbench response normalization', () => {
           authorized: true,
           eligibility: true,
         },
-        checks: { eligibility: { status: 'ready' } },
+        checks: {
+          policy: { status: 'unavailable' },
+          eligibility: { status: 'ready' },
+        },
       }),
     ).toMatchObject({
-      eligibility: 'action_required',
+      eligibility: 'unavailable',
       reason: 'Policy verifier status is unavailable',
     });
   });

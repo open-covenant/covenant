@@ -1,7 +1,13 @@
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { ActivityStreams, PublicAdmission, RateLimitError, requestScheme } from './admission.js';
-import { GITHUB_OAUTH_FLOW_TTL_SECONDS, type ContributorAuth } from './auth.js';
+import {
+  GITHUB_OAUTH_FLOW_TTL_SECONDS,
+  GithubOAuthCallbackError,
+  githubOAuthRedirectPath,
+  type ContributorAuth,
+  type GithubOAuthErrorCode,
+} from './auth.js';
 import type { BountyService } from './bounties.js';
 import type { Config } from './config.js';
 import { dashboard } from './dashboard.js';
@@ -183,27 +189,53 @@ export function createApp(deps: AppDependencies) {
         );
         res.setHeader('set-cookie', clearFlowCookie);
         res.setHeader('cache-control', 'private, no-store');
-        admission.consume('oauth_callback', req);
-        const code = url.searchParams.get('code');
-        const state = url.searchParams.get('state');
-        if (!code || !state) return json(res, 400, { error: 'OAuth callback is incomplete' });
-        const result = await deps.auth.callback(code, state, cookies(req).mizuki_oauth_flow);
         const origin = deps.config.webOrigin ?? deps.config.publicBaseUrl;
-        res.setHeader('set-cookie', [
-          clearFlowCookie,
-          sessionCookie(
-            result.session,
-            req,
-            deps.config.trustedProxyHops ?? 0,
-            deps.config.webProxySecret,
-          ),
-        ]);
-        res.writeHead(302, {
-          location: `${origin.replace(/\/$/, '')}${result.redirect}`,
-          'cache-control': 'no-store',
-        });
-        res.end();
-        return;
+        try {
+          admission.consume('oauth_callback', req);
+          const oauthError = url.searchParams.get('error');
+          if (oauthError) {
+            return redirectGithubOAuthFailure(
+              res,
+              origin,
+              oauthError === 'access_denied' ? 'denied' : 'unavailable',
+            );
+          }
+          const code = url.searchParams.get('code');
+          const state = url.searchParams.get('state');
+          if (!code || !state) return redirectGithubOAuthFailure(res, origin, 'incomplete');
+          const result = await deps.auth.callback(code, state, cookies(req).mizuki_oauth_flow);
+          res.setHeader('set-cookie', [
+            clearFlowCookie,
+            sessionCookie(
+              result.session,
+              req,
+              deps.config.trustedProxyHops ?? 0,
+              deps.config.webProxySecret,
+            ),
+          ]);
+          res.writeHead(302, {
+            location: new URL(githubOAuthRedirectPath(result.redirect), origin).toString(),
+            'cache-control': 'no-store',
+          });
+          res.end();
+          return;
+        } catch (cause) {
+          const code =
+            cause instanceof GithubOAuthCallbackError ? cause.code : ('unavailable' as const);
+          if (cause instanceof RateLimitError) {
+            res.setHeader('retry-after', String(cause.retryAfterSeconds));
+          } else if (!(cause instanceof GithubOAuthCallbackError)) {
+            console.error(
+              JSON.stringify({
+                level: 'error',
+                event: 'github_oauth_callback_failed',
+                requestId,
+                error: { type: cause instanceof Error ? cause.constructor.name : typeof cause },
+              }),
+            );
+          }
+          return redirectGithubOAuthFailure(res, origin, code);
+        }
       }
       if (req.method === 'GET' && url.pathname === '/v1/auth/session') {
         const session = deps.auth.session?.(cookies(req).mizuki_session);
@@ -315,50 +347,47 @@ export function createApp(deps: AppDependencies) {
         const page = await deps.store.repositoriesForAccount(session.githubId, 25);
         const repositories = await mapConcurrent(page.repositories, 4, async (saved) => {
           const checkedAt = new Date().toISOString();
-          try {
-            const [repository, policy] = await Promise.all([
-              deps.github.repositoryMetadataForMaintainer(
-                saved.owner,
-                saved.repo,
-                session.githubLogin,
+          const [repositoryResult, policy] = await Promise.all([
+            deps.github
+              .repositoryMetadataForMaintainer(saved.owner, saved.repo, session.githubLogin)
+              .then(
+                (repository) => ({ status: 'fulfilled' as const, repository }),
+                (cause: unknown) => ({ status: 'rejected' as const, cause }),
               ),
-              repositoryPolicyReadiness(deps, saved.repository),
-            ]);
-            const blockers = policy.status === 'ready' ? [] : [policy.reason];
-            return {
-              owner: repository.owner,
-              repo: repository.repo,
-              repository: repository.repository,
-              defaultBranch: repository.defaultBranch,
-              permission: repository.permission,
-              core: { status: 'ready' as const },
-              policy,
-              validationCommands: [],
-              checkedAt,
-              readyForWork: blockers.length === 0,
-              blockers,
-            };
-          } catch (cause) {
-            if (cause instanceof GithubReadinessError) throw cause;
-            return {
-              owner: saved.owner,
-              repo: saved.repo,
-              repository: saved.repository,
-              defaultBranch: '',
-              permission: null,
-              core: {
-                status:
-                  cause instanceof GithubAccessError
-                    ? ('action_required' as const)
-                    : ('unavailable' as const),
-              },
-              policy: { status: 'unknown' as const },
-              validationCommands: [],
-              checkedAt,
-              readyForWork: false,
-              blockers: [accountRepositoryBlocker(cause)],
-            };
-          }
+            repositoryPolicyReadiness(deps, saved.repository),
+          ]);
+          const core =
+            repositoryResult.status === 'fulfilled'
+              ? ({ status: 'ready' } as const)
+              : ({
+                  status:
+                    repositoryResult.cause instanceof GithubAccessError
+                      ? ('action_required' as const)
+                      : ('unavailable' as const),
+                } as const);
+          const readiness = repositoryReadiness(core.status, policy.status);
+          const blockers = [
+            ...(repositoryResult.status === 'rejected'
+              ? [accountRepositoryBlocker(repositoryResult.cause)]
+              : []),
+            ...(policy.status === 'ready' ? [] : [policy.reason]),
+          ];
+          const repository =
+            repositoryResult.status === 'fulfilled' ? repositoryResult.repository : undefined;
+          return {
+            owner: repository?.owner ?? saved.owner,
+            repo: repository?.repo ?? saved.repo,
+            repository: repository?.repository ?? saved.repository,
+            defaultBranch: repository?.defaultBranch ?? '',
+            permission: repository?.permission ?? null,
+            core,
+            policy,
+            readiness,
+            validationCommands: [],
+            checkedAt,
+            readyForWork: readiness === 'ready',
+            blockers,
+          };
         });
         return json(res, 200, {
           repositories,
@@ -383,6 +412,7 @@ export function createApp(deps: AppDependencies) {
         await deps.store.linkAccountRepository(session.githubId, repository.owner, repository.repo);
         const policy = await repositoryPolicyReadiness(deps, repository.repository);
         const blockers = policy.status === 'ready' ? [] : [policy.reason];
+        const readiness = repositoryReadiness('ready', policy.status);
         const checkedAt = new Date().toISOString();
         res.setHeader('cache-control', 'private, no-store');
         return json(res, 201, {
@@ -394,9 +424,10 @@ export function createApp(deps: AppDependencies) {
             permission: repository.permission,
             core: { status: 'ready' },
             policy,
+            readiness,
             validationCommands: [],
             checkedAt,
-            readyForWork: blockers.length === 0,
+            readyForWork: readiness === 'ready',
             blockers,
           },
         });
@@ -1501,6 +1532,26 @@ function accountRepositoryBlocker(cause: unknown): string {
   if (cause instanceof GithubAccessError) return cause.message;
   if (cause instanceof GithubReadinessError) return cause.message;
   return 'Repository readiness could not be verified. Try again shortly.';
+}
+
+function repositoryReadiness(
+  core: 'ready' | 'action_required' | 'unavailable',
+  policy: 'ready' | 'action_required' | 'unavailable',
+): 'ready' | 'action_required' | 'unavailable' {
+  if (core === 'unavailable' || policy === 'unavailable') return 'unavailable';
+  if (core === 'action_required' || policy === 'action_required') return 'action_required';
+  return 'ready';
+}
+
+function redirectGithubOAuthFailure(
+  res: ServerResponse,
+  origin: string,
+  code: GithubOAuthErrorCode,
+): void {
+  const target = new URL('/app', origin);
+  target.searchParams.set('auth_error', code);
+  res.writeHead(302, { location: target.toString(), 'cache-control': 'private, no-store' });
+  res.end();
 }
 
 async function mapConcurrent<T, R>(

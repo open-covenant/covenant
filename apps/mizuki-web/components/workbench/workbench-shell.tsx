@@ -3,8 +3,13 @@
 import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { normalizeAccount, workbenchAuthHref } from '@/lib/workbench';
-import { useWorkbenchResource, workbenchRequest } from '@/lib/workbench-client';
+import { useEffect, useState } from 'react';
+import { normalizeAccount, workbenchAuthErrorMessage, workbenchAuthHref } from '@/lib/workbench';
+import {
+  onWorkbenchUnauthorized,
+  useWorkbenchResource,
+  workbenchRequest,
+} from '@/lib/workbench-client';
 
 const primaryNavigation = [
   { href: '/app', label: 'Overview', exact: true },
@@ -22,10 +27,21 @@ const secondaryNavigation = [
 export function WorkbenchShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
+  const [authExpired, setAuthExpired] = useState(false);
+  const [authError, setAuthError] = useState<string>();
   const account = useWorkbenchResource('/v1/account', normalizeAccount);
 
+  useEffect(() => onWorkbenchUnauthorized(() => setAuthExpired(true)), []);
+  useEffect(() => {
+    setAuthError(
+      workbenchAuthErrorMessage(new URLSearchParams(window.location.search).get('auth_error')),
+    );
+  }, [pathname]);
+
   if (account.status === 'loading') return <WorkbenchShellLoading />;
-  if (account.status === 'unauthorized') return <WorkbenchSignIn returnTo={pathname} />;
+  if (account.status === 'unauthorized' || authExpired) {
+    return <WorkbenchSignIn returnTo={pathname} authError={authError} />;
+  }
   if (account.status === 'error') {
     return (
       <WorkbenchAccessState
@@ -127,12 +143,15 @@ function WorkbenchNavLink({
   );
 }
 
-function WorkbenchSignIn({ returnTo }: { returnTo: string }) {
+function WorkbenchSignIn({ returnTo, authError }: { returnTo: string; authError?: string }) {
   return (
     <WorkbenchAccessState
       mark="M"
       title="Sign in to Mizuki Workbench"
-      detail="Use GitHub to manage public repositories, request fixed quotes, and track pull requests or refunds."
+      detail={
+        authError ??
+        'Use GitHub to manage public repositories, request fixed quotes, and track pull requests or refunds.'
+      }
       action={
         <a href={workbenchAuthHref(returnTo)}>
           Continue with GitHub <span aria-hidden="true">↗</span>

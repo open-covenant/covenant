@@ -11,6 +11,14 @@ export class WorkbenchRequestError extends Error {
   }
 }
 
+type UnauthorizedListener = () => void;
+const unauthorizedListeners = new Set<UnauthorizedListener>();
+
+export function onWorkbenchUnauthorized(listener: UnauthorizedListener): () => void {
+  unauthorizedListeners.add(listener);
+  return () => unauthorizedListeners.delete(listener);
+}
+
 export async function workbenchRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/api/mizuki${path}`, {
     ...init,
@@ -26,6 +34,9 @@ export async function workbenchRequest<T>(path: string, init?: RequestInit): Pro
     reason?: string;
   };
   if (!response.ok) {
+    if (response.status === 401) {
+      for (const listener of unauthorizedListeners) listener();
+    }
     throw new WorkbenchRequestError(
       body.error || body.reason || `Request failed (${response.status})`,
       response.status,

@@ -52,6 +52,7 @@ export function Dashboard() {
     .slice(0, 5);
   const readyRepositories = repositories.data.filter((item) => item.readiness === 'ready');
   const actionRequired = repositories.data.filter((item) => item.readiness === 'action_required');
+  const unavailable = repositories.data.filter((item) => item.readiness === 'unavailable');
   const finalizedRefunds = jobs.data.filter((item) => item.state === 'refunded').length;
   const totalPaid = paidTotal(jobs.data);
 
@@ -66,6 +67,16 @@ export function Dashboard() {
 
       {repositories.data.length === 0 ? (
         <FirstRepository />
+      ) : unavailable.length > 0 ? (
+        <div className="workbench-attention-bar">
+          <div>
+            <strong>{unavailable.length} repository checks are temporarily unavailable</strong>
+            <p>Installation status is unchanged. Retry before requesting paid work.</p>
+          </div>
+          <button type="button" onClick={repositories.refresh}>
+            Retry status
+          </button>
+        </div>
       ) : actionRequired.length > 0 ? (
         <div className="workbench-attention-bar">
           <div>
@@ -134,8 +145,20 @@ export function Dashboard() {
           {readyRepositories.length > 0 ? (
             <div className="dashboard-repositories">
               {readyRepositories.slice(0, 3).map((repository) => (
-                <RepositoryCard repository={repository} key={repository.fullName} />
+                <RepositoryCard
+                  repository={repository}
+                  retry={repositories.refresh}
+                  key={repository.fullName}
+                />
               ))}
+            </div>
+          ) : unavailable.length > 0 ? (
+            <div className="workbench-inline-empty">
+              <strong>Repository status is temporarily unavailable</strong>
+              <p>No installation change is required until the readiness check completes.</p>
+              <button type="button" onClick={repositories.refresh}>
+                Retry status
+              </button>
             </div>
           ) : (
             <div className="workbench-inline-empty">

@@ -21,11 +21,10 @@ afterEach(async () => {
 });
 
 describe('workbench account API', () => {
-  it('returns 503 when authenticated repository access is unavailable', async () => {
+  it('keeps repository and policy readiness independent during a GitHub outage', async () => {
     const store = new MemoryStore();
     await store.upsertContributor('42', 'maintainer');
     await store.linkAccountRepository('42', 'example', 'project');
-    vi.spyOn(console, 'error').mockImplementation(() => {});
     const base = await serve(
       dependencies(store, {
         github: {
@@ -37,6 +36,9 @@ describe('workbench account API', () => {
             );
           }),
         },
+        policy: {
+          assertRepositoryReady: vi.fn(async () => ({ verifierAppId: '20', installationId: 30 })),
+        },
       }),
     );
 
@@ -44,11 +46,62 @@ describe('workbench account API', () => {
       headers: sessionHeaders,
     });
 
-    expect(response.status).toBe(503);
+    expect(response.status).toBe(200);
     expect(response.headers.get('x-request-id')).toBeTruthy();
-    await expect(response.json()).resolves.toEqual({
-      error: 'GitHub repository access is temporarily unavailable. Please try again shortly.',
+    await expect(response.json()).resolves.toMatchObject({
+      repositories: [
+        {
+          repository: 'example/project',
+          core: { status: 'unavailable' },
+          policy: { status: 'ready' },
+          readiness: 'unavailable',
+          readyForWork: false,
+          blockers: [
+            'GitHub repository access is temporarily unavailable. Please try again shortly.',
+          ],
+        },
+      ],
     });
+  });
+
+  it('does not report a policy signer outage as a missing installation', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    await store.linkAccountRepository('42', 'example', 'project');
+    const base = await serve(
+      dependencies(store, {
+        github: {
+          repositoryMetadataForMaintainer: vi.fn(async () => repositoryMetadata),
+        },
+        policy: {
+          assertRepositoryReady: vi.fn(async () => {
+            throw new Error('private signer detail');
+          }),
+        },
+      }),
+    );
+
+    const response = await fetch(`${base}/v1/account/repositories`, {
+      headers: sessionHeaders,
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      repositories: [
+        {
+          core: { status: 'ready' },
+          policy: {
+            status: 'unavailable',
+            reason: 'The read-only policy verifier is temporarily unavailable.',
+          },
+          readiness: 'unavailable',
+          readyForWork: false,
+          blockers: ['The read-only policy verifier is temporarily unavailable.'],
+        },
+      ],
+    });
+    expect(JSON.stringify(body)).not.toContain('private signer detail');
   });
 
   it('returns only the signed-in account jobs and real settlement totals', async () => {

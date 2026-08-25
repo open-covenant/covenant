@@ -59,6 +59,9 @@ export function NewJobWizard({
     repositories.status === 'ready'
       ? repositories.data.find((item) => item.fullName.toLowerCase() === selected.toLowerCase())
       : undefined;
+  const repositoryOutage =
+    repositories.status === 'ready' &&
+    repositories.data.some((item) => item.readiness === 'unavailable');
 
   useEffect(() => {
     if (selected || repositories.status !== 'ready') return;
@@ -120,17 +123,37 @@ export function NewJobWizard({
                     <span>{item.owner}</span>
                     <strong>{item.repo}</strong>
                     <small>
-                      {item.readiness === 'ready' ? 'Ready for work' : 'Setup required'}
+                      {item.readiness === 'ready'
+                        ? 'Ready for work'
+                        : item.readiness === 'unavailable'
+                          ? 'Status unavailable'
+                          : 'Setup required'}
                     </small>
                   </button>
                 ))}
               </div>
               {repository?.readiness !== 'ready' && selected && (
                 <p className="wizard-help">
-                  Finish the repository setup before requesting a quote.{' '}
-                  <Link href={`/app/repositories/${repository?.owner}/${repository?.repo}`}>
-                    Review requirements
-                  </Link>
+                  {repository?.readiness === 'unavailable'
+                    ? 'Repository readiness could not be confirmed. '
+                    : 'Finish the repository setup before requesting a quote. '}
+                  {repository?.readiness === 'unavailable' ? (
+                    <button type="button" onClick={repositories.refresh}>
+                      Retry status
+                    </button>
+                  ) : (
+                    <Link href={`/app/repositories/${repository?.owner}/${repository?.repo}`}>
+                      Review requirements
+                    </Link>
+                  )}
+                </p>
+              )}
+              {repositoryOutage && !selected && (
+                <p className="wizard-help">
+                  One or more repository checks are temporarily unavailable.{' '}
+                  <button type="button" onClick={repositories.refresh}>
+                    Retry status
+                  </button>
                 </p>
               )}
               {repositoryLocked && (
@@ -236,8 +259,8 @@ function IssueAndPayment({
     setState('idle');
   }
 
-  async function runPreflight(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function runPreflight(event?: React.FormEvent<HTMLFormElement>) {
+    event?.preventDefault();
     if (quote) clearWorkbenchPaymentRecovery(quote.id);
     setState('checking');
     setError(null);
@@ -439,7 +462,9 @@ function IssueAndPayment({
                     ? 'Ready for a fixed quote'
                     : preflight.eligibility === 'unsupported'
                       ? 'This issue is not supported'
-                      : 'Issue changes required'}
+                      : preflight.eligibility === 'unavailable'
+                        ? 'Readiness temporarily unavailable'
+                        : 'Issue changes required'}
                 </h2>
               </div>
               <WorkbenchStatus value={preflight.eligibility} />
@@ -472,11 +497,15 @@ function IssueAndPayment({
                 {state === 'quoting' ? 'Creating quote…' : 'Get fixed quote'}
               </button>
             )}
-            {preflight.eligibility !== 'ready' && (
+            {preflight.eligibility === 'unavailable' ? (
+              <button type="button" onClick={() => void runPreflight()}>
+                Retry readiness
+              </button>
+            ) : preflight.eligibility !== 'ready' ? (
               <a href={preflight.issue.url} target="_blank" rel="noreferrer">
                 Update issue on GitHub ↗
               </a>
-            )}
+            ) : null}
           </div>
         </section>
       )}
@@ -672,9 +701,12 @@ function IssueOption({
       <span>Issue #{issue.number}</span>
       <strong>{issue.title}</strong>
       <small>
-        {issue.authorized
-          ? issue.reason || 'Maintainer authorization confirmed'
-          : 'Authorization label required'}
+        {issue.reason ||
+          (issue.eligibility === 'unavailable'
+            ? 'Authorization status is temporarily unavailable'
+            : issue.authorized
+              ? 'Maintainer authorization confirmed'
+              : 'Authorization label required')}
       </small>
     </button>
   );

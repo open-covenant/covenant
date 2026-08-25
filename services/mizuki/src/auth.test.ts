@@ -1,7 +1,7 @@
 import { generateKeyPairSync, sign } from 'node:crypto';
 import { getBase58Decoder } from '@solana/kit';
 import { describe, expect, it, vi } from 'vitest';
-import { ContributorAuth } from './auth.js';
+import { ContributorAuth, GithubOAuthCallbackError } from './auth.js';
 import { MemoryStore } from './store.js';
 
 describe('ContributorAuth', () => {
@@ -25,10 +25,22 @@ describe('ContributorAuth', () => {
 
   it('keeps redirects on the first-party path allowlist', async () => {
     const auth = oauthAuth(new MemoryStore(), vi.fn());
-    const authorization = await auth.beginGithubOAuth('https://attacker.example/session');
-    const payload = signedPayload(new URL(authorization.url).searchParams.get('state')!);
+    for (const destination of [
+      'https://attacker.example/session',
+      '//attacker.example/app',
+      '/application',
+      '/settings',
+      '/app#credential',
+    ]) {
+      const authorization = await auth.beginGithubOAuth(destination);
+      const payload = signedPayload(new URL(authorization.url).searchParams.get('state')!);
+      expect(payload).toMatchObject({ redirect: '/bounties' });
+    }
 
-    expect(payload).toMatchObject({ redirect: '/bounties' });
+    const allowed = await auth.beginGithubOAuth('/app/jobs/new?issue=7');
+    expect(signedPayload(new URL(allowed.url).searchParams.get('state')!)).toMatchObject({
+      redirect: '/app/jobs/new?issue=7',
+    });
   });
 
   it('requires the browser flow cookie and rejects a different browser before token exchange', async () => {
@@ -37,10 +49,12 @@ describe('ContributorAuth', () => {
     const authorization = await auth.beginGithubOAuth('/app');
     const state = new URL(authorization.url).searchParams.get('state')!;
 
-    await expect(auth.callback('code', state, undefined)).rejects.toThrow('cookie is required');
-    await expect(auth.callback('code', state, 'different-browser')).rejects.toThrow(
-      'browser flow is invalid',
-    );
+    await expect(auth.callback('code', state, undefined)).rejects.toMatchObject({
+      code: 'invalid',
+    });
+    await expect(auth.callback('code', state, 'different-browser')).rejects.toMatchObject({
+      code: 'invalid',
+    });
     expect(request).not.toHaveBeenCalled();
     await expect(auth.callback('code', state, authorization.flowCookie)).resolves.toMatchObject({
       redirect: '/app',
@@ -56,9 +70,9 @@ describe('ContributorAuth', () => {
     await expect(auth.callback('code', state, authorization.flowCookie)).resolves.toMatchObject({
       redirect: '/app',
     });
-    await expect(auth.callback('code', state, authorization.flowCookie)).rejects.toThrow(
-      'already used',
-    );
+    await expect(
+      auth.callback('code', state, authorization.flowCookie),
+    ).rejects.toMatchObject<GithubOAuthCallbackError>({ code: 'replayed' });
     expect(request).toHaveBeenCalledTimes(2);
   });
 
@@ -71,9 +85,9 @@ describe('ContributorAuth', () => {
     const state = new URL(authorization.url).searchParams.get('state')!;
     clock.mockReturnValue(now + 10 * 60_000 + 1);
 
-    await expect(auth.callback('code', state, authorization.flowCookie)).rejects.toThrow(
-      'OAuth state expired',
-    );
+    await expect(
+      auth.callback('code', state, authorization.flowCookie),
+    ).rejects.toMatchObject<GithubOAuthCallbackError>({ code: 'expired' });
     expect(request).not.toHaveBeenCalled();
     clock.mockRestore();
   });

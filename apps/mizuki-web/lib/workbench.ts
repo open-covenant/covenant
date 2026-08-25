@@ -8,7 +8,14 @@ export type WorkbenchAccount = {
   walletAddress?: string;
 };
 
-export type RepositoryReadiness = 'ready' | 'action_required' | 'unsupported' | 'checking';
+export type RepositoryReadiness =
+  | 'ready'
+  | 'action_required'
+  | 'unavailable'
+  | 'unsupported'
+  | 'checking';
+
+export type InstallationStatus = 'installed' | 'missing' | 'unavailable';
 
 export type WorkbenchRepository = {
   owner: string;
@@ -16,8 +23,8 @@ export type WorkbenchRepository = {
   fullName: string;
   defaultBranch?: string;
   readiness: RepositoryReadiness;
-  maintenanceAppInstalled: boolean;
-  verifierAppInstalled: boolean;
+  maintenanceAppStatus: InstallationStatus;
+  verifierAppStatus: InstallationStatus;
   validationCommands: string[];
   eligibleIssueCount?: number;
   lastCheckedAt?: string;
@@ -25,7 +32,12 @@ export type WorkbenchRepository = {
   actionUrl?: string;
 };
 
-export type IssueEligibility = 'ready' | 'action_required' | 'unsupported' | 'checking';
+export type IssueEligibility =
+  | 'ready'
+  | 'action_required'
+  | 'unavailable'
+  | 'unsupported'
+  | 'checking';
 
 export type WorkbenchIssue = {
   number: number;
@@ -87,6 +99,25 @@ export type WorkbenchBilling = {
 export function workbenchAuthHref(returnTo: string): string {
   const destination = returnTo === '/app' || returnTo.startsWith('/app/') ? returnTo : '/app';
   return `/api/mizuki/v1/auth/github?return_to=${encodeURIComponent(destination)}`;
+}
+
+export function workbenchAuthErrorMessage(value: string | null | undefined): string | undefined {
+  switch (value) {
+    case 'denied':
+      return 'GitHub sign-in was cancelled. No account or repository access was changed.';
+    case 'expired':
+      return 'This GitHub sign-in request expired. Start a new sign-in to continue.';
+    case 'incomplete':
+      return 'GitHub returned an incomplete sign-in response. Start the sign-in again.';
+    case 'invalid':
+      return 'This GitHub sign-in response could not be verified. Start a new sign-in.';
+    case 'replayed':
+      return 'This GitHub sign-in request was already used. Start a new sign-in to continue.';
+    case 'unavailable':
+      return 'GitHub sign-in is temporarily unavailable. Try again shortly.';
+    default:
+      return undefined;
+  }
 }
 
 type UnknownRecord = Record<string, unknown>;
@@ -165,15 +196,29 @@ export function normalizeRepositories(value: unknown): WorkbenchRepository[] {
     const status = text(source.readiness) ?? text(source.status);
     const core = record(source.core);
     const policy = record(source.policy);
+    const coreStatus = text(core.status);
+    const policyStatus = text(policy.status);
     const blockers = strings(source.blockers);
     const readiness: RepositoryReadiness =
-      status === 'ready' || source.readyForWork === true
-        ? 'ready'
+      status === 'unavailable' ||
+      coreStatus === 'unavailable' ||
+      policyStatus === 'unavailable' ||
+      policyStatus === 'unknown'
+        ? 'unavailable'
         : status === 'unsupported'
           ? 'unsupported'
           : status === 'checking'
             ? 'checking'
-            : 'action_required';
+            : status === 'ready' || source.readyForWork === true
+              ? 'ready'
+              : status === 'action_required' ||
+                  source.readyForWork === false ||
+                  coreStatus === 'action_required' ||
+                  policyStatus === 'action_required'
+                ? 'action_required'
+                : coreStatus === 'ready' && policyStatus === 'ready'
+                  ? 'ready'
+                  : 'unavailable';
     const installation = record(source.installation);
 
     return [
@@ -183,23 +228,18 @@ export function normalizeRepositories(value: unknown): WorkbenchRepository[] {
         fullName: `${owner}/${repo}`,
         defaultBranch: text(source.defaultBranch) ?? text(source.default_branch),
         readiness,
-        maintenanceAppInstalled:
-          bool(source.maintenanceAppInstalled) ??
-          bool(source.coreAppInstalled) ??
-          (text(core.status) ? ['ready', 'installed'].includes(text(core.status)!) : undefined) ??
-          bool(core.installed) ??
-          bool(core.ready) ??
-          bool(installation.maintenance) ??
-          false,
-        verifierAppInstalled:
-          bool(source.verifierAppInstalled) ??
-          (text(policy.status)
-            ? ['ready', 'installed'].includes(text(policy.status)!)
-            : undefined) ??
-          bool(policy.installed) ??
-          bool(policy.ready) ??
-          bool(installation.verifier) ??
-          false,
+        maintenanceAppStatus: normalizeInstallationStatus(
+          text(source.maintenanceAppStatus) ?? text(source.coreAppStatus),
+          bool(source.maintenanceAppInstalled) ?? bool(source.coreAppInstalled),
+          coreStatus,
+          bool(core.installed) ?? bool(core.ready) ?? bool(installation.maintenance),
+        ),
+        verifierAppStatus: normalizeInstallationStatus(
+          text(source.verifierAppStatus),
+          bool(source.verifierAppInstalled),
+          policyStatus,
+          bool(policy.installed) ?? bool(policy.ready) ?? bool(installation.verifier),
+        ),
         validationCommands:
           strings(source.validationCommands).length > 0
             ? strings(source.validationCommands)
@@ -227,8 +267,10 @@ export function normalizeIssues(value: unknown): WorkbenchIssue[] {
     const authorized = bool(source.authorized) ?? bool(source.hasAuthorizationLabel) ?? false;
     const status = text(source.eligibility) ?? text(source.status);
     const eligible = bool(source.eligibility);
-    const eligibility: IssueEligibility =
-      eligible === true
+    const unavailable = status === 'unavailable' || bool(source.authorizationUnavailable) === true;
+    const eligibility: IssueEligibility = unavailable
+      ? 'unavailable'
+      : eligible === true
         ? 'ready'
         : eligible === false
           ? 'action_required'
@@ -261,25 +303,38 @@ export function normalizePreflight(value: unknown): WorkbenchPreflight {
   const source = record(value);
   const repositoryRecord = record(source.repository);
   const checks = record(source.checks);
+  const coreCheck = record(checks.core);
+  const policyCheck = record(checks.policy);
+  const maintainerCheck = record(checks.maintainer);
+  const authorizationCheck = record(checks.authorization);
   const eligibilityCheck = record(checks.eligibility);
   const rawIssue = record(source.issue);
   const issue = normalizeIssues({ items: [rawIssue] })[0];
   if (!issue) throw new Error('The preflight response did not include an issue');
   const status = text(source.eligibility) ?? text(source.status);
   const checkedEligibility = text(eligibilityCheck.status);
+  const checkStatuses = [
+    text(coreCheck.status),
+    text(policyCheck.status),
+    text(maintainerCheck.status),
+    text(authorizationCheck.status),
+    checkedEligibility,
+  ];
   const readyForWork = bool(source.readyForWork) ?? bool(repositoryRecord.readyForWork);
   const eligibility: WorkbenchPreflight['eligibility'] =
-    readyForWork === true
-      ? 'ready'
-      : readyForWork === false
-        ? 'action_required'
-        : status === 'ready'
+    status === 'unavailable' || checkStatuses.includes('unavailable')
+      ? 'unavailable'
+      : status === 'unsupported'
+        ? 'unsupported'
+        : readyForWork === true
           ? 'ready'
-          : checkedEligibility === 'ready'
-            ? 'ready'
-            : status === 'unsupported'
-              ? 'unsupported'
-              : 'action_required';
+          : readyForWork === false
+            ? 'action_required'
+            : status === 'ready'
+              ? 'ready'
+              : checkedEligibility === 'ready'
+                ? 'ready'
+                : 'action_required';
   const jobClass = text(source.class) ?? text(rawIssue.class);
   const blockers = [...strings(source.blockers), ...strings(repositoryRecord.blockers)];
   const repositoryName =
@@ -302,6 +357,36 @@ export function normalizePreflight(value: unknown): WorkbenchPreflight {
       (blockers.length > 0 ? blockers.join(' · ') : undefined),
     quote: source.quote ? (source.quote as Quote) : undefined,
   };
+}
+
+function normalizeInstallationStatus(
+  explicitStatus: string | undefined,
+  explicitInstalled: boolean | undefined,
+  checkStatus: string | undefined,
+  legacyInstalled: boolean | undefined,
+): InstallationStatus {
+  if (
+    explicitStatus === 'installed' ||
+    explicitStatus === 'missing' ||
+    explicitStatus === 'unavailable'
+  ) {
+    return explicitStatus;
+  }
+  if (checkStatus === 'unavailable' || checkStatus === 'unknown' || checkStatus === 'checking') {
+    return 'unavailable';
+  }
+  if (checkStatus === 'ready' || checkStatus === 'installed') return 'installed';
+  if (
+    checkStatus === 'action_required' ||
+    checkStatus === 'missing' ||
+    checkStatus === 'required' ||
+    checkStatus === 'not_installed'
+  ) {
+    return 'missing';
+  }
+  if (explicitInstalled !== undefined) return explicitInstalled ? 'installed' : 'missing';
+  if (legacyInstalled !== undefined) return legacyInstalled ? 'installed' : 'missing';
+  return 'unavailable';
 }
 
 export function normalizeJobs(value: unknown): WorkbenchJob[] {

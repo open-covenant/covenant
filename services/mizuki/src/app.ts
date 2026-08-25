@@ -1,7 +1,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { ActivityStreams, PublicAdmission, RateLimitError, requestScheme } from './admission.js';
-import type { ContributorAuth } from './auth.js';
+import { GITHUB_OAUTH_FLOW_TTL_SECONDS, type ContributorAuth } from './auth.js';
 import type { BountyService } from './bounties.js';
 import type { Config } from './config.js';
 import { dashboard } from './dashboard.js';
@@ -151,28 +151,45 @@ export function createApp(deps: AppDependencies) {
         admission.consume('oauth_start', req);
         const redirect =
           url.searchParams.get('return_to') ?? url.searchParams.get('redirect') ?? undefined;
+        const authorization = await deps.auth.beginGithubOAuth(redirect);
         res.writeHead(302, {
-          location: deps.auth.authorizeUrl(redirect),
+          location: authorization.url,
+          'set-cookie': githubOAuthFlowCookie(
+            authorization.flowCookie,
+            req,
+            deps.config.trustedProxyHops ?? 0,
+            deps.config.webProxySecret,
+          ),
           'cache-control': 'no-store',
         });
         res.end();
         return;
       }
       if (req.method === 'GET' && url.pathname === '/v1/auth/github/callback') {
+        const clearFlowCookie = expiredGithubOAuthFlowCookie(
+          req,
+          deps.config.trustedProxyHops ?? 0,
+          deps.config.webProxySecret,
+        );
+        res.setHeader('set-cookie', clearFlowCookie);
+        res.setHeader('cache-control', 'private, no-store');
         admission.consume('oauth_callback', req);
         const code = url.searchParams.get('code');
         const state = url.searchParams.get('state');
         if (!code || !state) return json(res, 400, { error: 'OAuth callback is incomplete' });
-        const result = await deps.auth.callback(code, state);
+        const result = await deps.auth.callback(code, state, cookies(req).mizuki_oauth_flow);
         const origin = deps.config.webOrigin ?? deps.config.publicBaseUrl;
-        res.writeHead(302, {
-          location: `${origin.replace(/\/$/, '')}${result.redirect}`,
-          'set-cookie': sessionCookie(
+        res.setHeader('set-cookie', [
+          clearFlowCookie,
+          sessionCookie(
             result.session,
             req,
             deps.config.trustedProxyHops ?? 0,
             deps.config.webProxySecret,
           ),
+        ]);
+        res.writeHead(302, {
+          location: `${origin.replace(/\/$/, '')}${result.redirect}`,
           'cache-control': 'no-store',
         });
         res.end();
@@ -1221,6 +1238,40 @@ function sessionCookie(
     'HttpOnly',
     'SameSite=Lax',
     'Max-Age=604800',
+    ...(secure ? ['Secure'] : []),
+  ].join('; ');
+}
+
+function githubOAuthFlowCookie(
+  value: string,
+  req: IncomingMessage,
+  trustedProxyHops: number,
+  webProxySecret: string | undefined,
+): string {
+  const secure = requestScheme(req, trustedProxyHops, webProxySecret) === 'https';
+  return [
+    `mizuki_oauth_flow=${encodeURIComponent(value)}`,
+    'Path=/api/mizuki/v1/auth/github/callback',
+    'HttpOnly',
+    'SameSite=Lax',
+    `Max-Age=${GITHUB_OAUTH_FLOW_TTL_SECONDS}`,
+    ...(secure ? ['Secure'] : []),
+  ].join('; ');
+}
+
+function expiredGithubOAuthFlowCookie(
+  req: IncomingMessage,
+  trustedProxyHops: number,
+  webProxySecret: string | undefined,
+): string {
+  const secure = requestScheme(req, trustedProxyHops, webProxySecret) === 'https';
+  return [
+    'mizuki_oauth_flow=',
+    'Path=/api/mizuki/v1/auth/github/callback',
+    'HttpOnly',
+    'SameSite=Lax',
+    'Max-Age=0',
+    'Expires=Thu, 01 Jan 1970 00:00:00 GMT',
     ...(secure ? ['Secure'] : []),
   ].join('; ');
 }

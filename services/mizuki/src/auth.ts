@@ -14,7 +14,14 @@ const tokenSchema = z.object({
   githubGrantExpiresAt: z.string().datetime({ offset: true }).optional(),
   exp: z.number().int(),
 });
-const stateSchema = z.object({ redirect: z.string(), exp: z.number().int(), nonce: z.string() });
+const stateSchema = z.object({
+  redirect: z.string(),
+  exp: z.number().int(),
+  nonce: z.string().uuid(),
+  browserBinding: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+});
+
+export const GITHUB_OAUTH_FLOW_TTL_SECONDS = 10 * 60;
 
 export type ContributorSession = z.infer<typeof tokenSchema>;
 
@@ -38,14 +45,26 @@ export class ContributorAuth {
     );
   }
 
-  authorizeUrl(redirect = '/bounties'): string {
+  async beginGithubOAuth(redirect = '/bounties'): Promise<{ url: string; flowCookie: string }> {
     this.assertConfigured();
     const safeRedirect =
       redirect.startsWith('/') && !redirect.startsWith('//') ? redirect : '/bounties';
+    const now = Date.now();
+    const expiresAt = now + GITHUB_OAUTH_FLOW_TTL_SECONDS * 1_000;
+    const nonce = randomUUID();
+    const flowCookie = randomBytes(32).toString('base64url');
+    const browserBinding = this.browserBinding(flowCookie);
+    await this.store.saveGithubOAuthFlow({
+      id: nonce,
+      binding: browserBinding,
+      expiresAt: new Date(expiresAt).toISOString(),
+      createdAt: new Date(now).toISOString(),
+    });
     const state = this.sign({
       redirect: safeRedirect,
-      exp: Date.now() + 10 * 60_000,
-      nonce: randomBytes(16).toString('base64url'),
+      exp: expiresAt,
+      nonce,
+      browserBinding,
     });
     const callback = `${this.config.webOrigin!.replace(/\/$/, '')}/api/mizuki/v1/auth/github/callback`;
     const query = new URLSearchParams({
@@ -54,12 +73,13 @@ export class ContributorAuth {
       scope: 'read:user',
       state,
     });
-    return `https://github.com/login/oauth/authorize?${query}`;
+    return { url: `https://github.com/login/oauth/authorize?${query}`, flowCookie };
   }
 
   async callback(
     code: string,
     signedState: string,
+    flowCookie: string | undefined,
   ): Promise<{
     contributor: Contributor;
     session: string;
@@ -68,6 +88,12 @@ export class ContributorAuth {
     this.assertConfigured();
     const state = stateSchema.parse(this.verify(signedState));
     if (state.exp <= Date.now()) throw new Error('OAuth state expired');
+    if (!flowCookie) throw new Error('OAuth browser flow cookie is required');
+    const browserBinding = this.browserBinding(flowCookie);
+    if (!equal(browserBinding, state.browserBinding)) {
+      throw new Error('OAuth browser flow is invalid');
+    }
+    await this.store.consumeGithubOAuthFlow(state.nonce, state.browserBinding);
     const tokenResponse = await this.request('https://github.com/login/oauth/access_token', {
       method: 'POST',
       headers: { accept: 'application/json', 'content-type': 'application/json' },
@@ -189,6 +215,14 @@ export class ContributorAuth {
     return JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as unknown;
   }
 
+  private browserBinding(flowCookie: string): string {
+    if (!this.config.sessionSecret) throw new Error('MIZUKI_SESSION_SECRET is not configured');
+    return createHmac('sha256', this.config.sessionSecret)
+      .update('mizuki.github-oauth-flow.v1\0')
+      .update(flowCookie)
+      .digest('base64url');
+  }
+
   private assertConfigured(): void {
     if (!this.config.githubClientId || !this.config.githubClientSecret) {
       throw new Error('GitHub OAuth is not configured');
@@ -201,4 +235,8 @@ export class ContributorAuth {
 
 function mac(value: string, secret: string): string {
   return createHmac('sha256', secret).update(value).digest('base64url');
+}
+
+function equal(left: string, right: string): boolean {
+  return left.length === right.length && timingSafeEqual(Buffer.from(left), Buffer.from(right));
 }

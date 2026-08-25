@@ -24,7 +24,6 @@ const forwardedResponseHeaders = [
   'location',
   'payment-required',
   'payment-response',
-  'set-cookie',
 ];
 
 async function proxy(
@@ -84,6 +83,8 @@ async function proxy(
       const value = upstream.headers.get(name);
       if (value) responseHeaders.set(name, value);
     }
+    const setCookies = upstream.headers.getSetCookie();
+    for (const value of setCookies) responseHeaders.append('set-cookie', value);
     responseHeaders.set('x-content-type-options', 'nosniff');
     return new Response(upstream.body, {
       status: upstream.status,

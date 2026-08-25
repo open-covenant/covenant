@@ -238,6 +238,14 @@ export type WalletChallenge = {
   createdAt: string;
 };
 
+export type GithubOAuthFlow = {
+  id: string;
+  binding: string;
+  expiresAt: string;
+  createdAt: string;
+  consumedAt?: string;
+};
+
 export type OperatorControls = {
   intakeEnabled: boolean;
   claimsEnabled: boolean;

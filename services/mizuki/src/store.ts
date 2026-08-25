@@ -13,6 +13,7 @@ import type {
   ActivityKind,
   AccountRepository,
   Contributor,
+  GithubOAuthFlow,
   Job,
   JobState,
   LedgerEntry,
@@ -89,6 +90,8 @@ export interface MizukiStore {
   activity(limit?: number): Promise<ActivityEvent[]>;
   upsertContributor(githubId: string, githubLogin: string): Promise<Contributor>;
   contributor(githubId: string): Promise<Contributor | undefined>;
+  saveGithubOAuthFlow(flow: GithubOAuthFlow): Promise<GithubOAuthFlow>;
+  consumeGithubOAuthFlow(id: string, binding: string): Promise<GithubOAuthFlow>;
   saveWalletChallenge(challenge: WalletChallenge): Promise<WalletChallenge>;
   walletChallenge(id: string, githubId: string): Promise<WalletChallenge | undefined>;
   consumeWalletChallenge(id: string, githubId: string): Promise<WalletChallenge>;
@@ -124,6 +127,7 @@ export class MemoryStore implements MizukiStore {
   private readonly contributors = new Map<string, Contributor>();
   private readonly quoteAccounts = new Map<string, string>();
   private readonly accountRepositories = new Map<string, AccountRepository>();
+  private readonly githubOAuthFlows = new Map<string, GithubOAuthFlow>();
   private readonly challenges = new Map<string, WalletChallenge>();
   private readonly webhookDeliveries = new Map<
     string,
@@ -410,6 +414,23 @@ export class MemoryStore implements MizukiStore {
 
   async contributor(githubId: string): Promise<Contributor | undefined> {
     return clone(this.contributors.get(githubId));
+  }
+
+  async saveGithubOAuthFlow(flow: GithubOAuthFlow): Promise<GithubOAuthFlow> {
+    this.githubOAuthFlows.set(flow.id, structuredClone(flow));
+    return structuredClone(flow);
+  }
+
+  async consumeGithubOAuthFlow(id: string, binding: string): Promise<GithubOAuthFlow> {
+    const flow = this.githubOAuthFlows.get(id);
+    if (!flow || flow.binding !== binding) throw new Error('OAuth browser flow is invalid');
+    if (flow.consumedAt) throw new StateConflictError('OAuth browser flow was already used');
+    if (Date.parse(flow.expiresAt) <= Date.now()) {
+      throw new StateConflictError('OAuth browser flow expired');
+    }
+    const consumed = { ...flow, consumedAt: new Date().toISOString() };
+    this.githubOAuthFlows.set(id, consumed);
+    return structuredClone(consumed);
   }
 
   async saveWalletChallenge(challenge: WalletChallenge): Promise<WalletChallenge> {
@@ -1121,6 +1142,68 @@ export class PostgresStore implements MizukiStore {
       [githubId],
     );
     return result.rows[0]?.payload;
+  }
+
+  async saveGithubOAuthFlow(flow: GithubOAuthFlow): Promise<GithubOAuthFlow> {
+    await this.transaction(async (client) => {
+      await client.query(
+        `DELETE FROM mizuki_github_oauth_flows
+         WHERE expires_at < now() - interval '1 day'`,
+      );
+      await client.query(
+        `INSERT INTO mizuki_github_oauth_flows
+          (id, binding, expires_at, created_at)
+         VALUES ($1, $2, $3, $4)`,
+        [flow.id, flow.binding, flow.expiresAt, flow.createdAt],
+      );
+    });
+    return flow;
+  }
+
+  async consumeGithubOAuthFlow(id: string, binding: string): Promise<GithubOAuthFlow> {
+    return this.transaction(async (client) => {
+      const result = await client.query<{
+        id: string;
+        binding: string;
+        expires_at: Date;
+        created_at: Date;
+        consumed_at: Date;
+      }>(
+        `UPDATE mizuki_github_oauth_flows
+         SET consumed_at = now()
+         WHERE id = $1 AND binding = $2 AND consumed_at IS NULL AND expires_at > now()
+         RETURNING id, binding, expires_at, created_at, consumed_at`,
+        [id, binding],
+      );
+      const row = result.rows[0];
+      if (row) {
+        return {
+          id: row.id,
+          binding: row.binding,
+          expiresAt: row.expires_at.toISOString(),
+          createdAt: row.created_at.toISOString(),
+          consumedAt: row.consumed_at.toISOString(),
+        };
+      }
+
+      const current = await client.query<{
+        binding: string;
+        expires_at: Date;
+        consumed_at: Date | null;
+      }>(
+        `SELECT binding, expires_at, consumed_at
+         FROM mizuki_github_oauth_flows WHERE id = $1`,
+        [id],
+      );
+      const existing = current.rows[0];
+      if (!existing || existing.binding !== binding) {
+        throw new Error('OAuth browser flow is invalid');
+      }
+      if (existing.consumed_at) {
+        throw new StateConflictError('OAuth browser flow was already used');
+      }
+      throw new StateConflictError('OAuth browser flow expired');
+    });
   }
 
   async saveWalletChallenge(challenge: WalletChallenge): Promise<WalletChallenge> {
@@ -1835,6 +1918,18 @@ CREATE INDEX mizuki_account_repositories_verified_idx
   ON mizuki_account_repositories(github_id, verified_at DESC);
 `;
 
+export const GITHUB_OAUTH_FLOW_SCHEMA_V1 = `
+CREATE TABLE mizuki_github_oauth_flows (
+  id uuid PRIMARY KEY,
+  binding text NOT NULL CHECK (binding ~ '^[A-Za-z0-9_-]{43}$'),
+  expires_at timestamptz NOT NULL,
+  consumed_at timestamptz,
+  created_at timestamptz NOT NULL
+);
+CREATE INDEX mizuki_github_oauth_flows_expiry_idx
+  ON mizuki_github_oauth_flows(expires_at);
+`;
+
 const ADMISSION_CONTROL_AUDIT_SCHEMA = `
 CREATE TABLE mizuki_operator_control_audit (
   revision integer PRIMARY KEY CHECK (revision >= 0),
@@ -1889,6 +1984,10 @@ async function migrate(pool: Pool): Promise<void> {
       {
         name: 'workbench',
         migrations: [{ version: 1, name: 'workbench-accounts', sql: WORKBENCH_ACCOUNTS_SCHEMA_V1 }],
+      },
+      {
+        name: 'github-oauth',
+        migrations: [{ version: 1, name: 'browser-bound-flow', sql: GITHUB_OAUTH_FLOW_SCHEMA_V1 }],
       },
       {
         name: 'admission-control',

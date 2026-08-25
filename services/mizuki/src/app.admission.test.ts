@@ -664,8 +664,11 @@ describe('public route responses', () => {
 
   it('returns 429 with Retry-After when a source exceeds the OAuth bucket', async () => {
     const store = new MemoryStore();
-    const authorizeUrl = vi.fn(() => 'https://github.com/login/oauth/authorize');
-    const base = await serve(dependencies(store, { auth: { authorizeUrl } }));
+    const beginGithubOAuth = vi.fn(async () => ({
+      url: 'https://github.com/login/oauth/authorize',
+      flowCookie: 'browser-flow',
+    }));
+    const base = await serve(dependencies(store, { auth: { beginGithubOAuth } }));
 
     for (let index = 0; index < 10; index += 1) {
       const response = await fetch(`${base}/v1/auth/github`, { redirect: 'manual' });
@@ -674,12 +677,43 @@ describe('public route responses', () => {
     const limited = await fetch(`${base}/v1/auth/github`, { redirect: 'manual' });
     expect(limited.status).toBe(429);
     expect(limited.headers.get('retry-after')).toBe('6');
-    expect(authorizeUrl).toHaveBeenCalledTimes(10);
+    expect(beginGithubOAuth).toHaveBeenCalledTimes(10);
+  });
+
+  it('sets a short-lived browser-bound OAuth cookie at authorization start', async () => {
+    const store = new MemoryStore();
+    const proxySecret = 'p'.repeat(32);
+    const beginGithubOAuth = vi.fn(async () => ({
+      url: 'https://github.com/login/oauth/authorize?state=signed-state',
+      flowCookie: 'browser-flow-secret',
+    }));
+    const base = await serve(
+      dependencies(store, {
+        config: { trustedProxyHops: 1, webProxySecret: proxySecret },
+        auth: { beginGithubOAuth },
+      }),
+    );
+
+    const response = await fetch(`${base}/v1/auth/github?return_to=%2Fapp`, {
+      headers: {
+        'x-mizuki-forwarded-proto': 'https',
+        'x-mizuki-proxy-secret': proxySecret,
+      },
+      redirect: 'manual',
+    });
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get('location')).toContain('state=signed-state');
+    expect(response.headers.get('set-cookie')).toBe(
+      'mizuki_oauth_flow=browser-flow-secret; Path=/api/mizuki/v1/auth/github/callback; HttpOnly; SameSite=Lax; Max-Age=600; Secure',
+    );
+    expect(beginGithubOAuth).toHaveBeenCalledWith('/app');
   });
 
   it('sets a Secure OAuth session cookie from an authenticated HTTPS web request', async () => {
     const store = new MemoryStore();
     const proxySecret = 'p'.repeat(32);
+    const callback = vi.fn(async () => ({ session: 'signed-session', redirect: '/bounties' }));
     const base = await serve(
       dependencies(store, {
         config: {
@@ -688,14 +722,13 @@ describe('public route responses', () => {
           trustedProxyHops: 1,
           webProxySecret: proxySecret,
         },
-        auth: {
-          callback: vi.fn(async () => ({ session: 'signed-session', redirect: '/bounties' })),
-        },
+        auth: { callback },
       }),
     );
 
     const response = await fetch(`${base}/v1/auth/github/callback?code=code&state=state`, {
       headers: {
+        cookie: 'mizuki_oauth_flow=browser-flow-secret',
         'x-forwarded-proto': 'http',
         'x-mizuki-forwarded-proto': 'https',
         'x-mizuki-proxy-secret': proxySecret,
@@ -705,7 +738,36 @@ describe('public route responses', () => {
 
     expect(response.status).toBe(302);
     expect(response.headers.get('location')).toBe('https://mizuki.opencovenant.org/bounties');
+    expect(response.headers.get('set-cookie')).toContain('mizuki_oauth_flow=;');
+    expect(response.headers.get('set-cookie')).toContain('mizuki_session=signed-session;');
     expect(response.headers.get('set-cookie')).toContain('; Secure');
+    expect(callback).toHaveBeenCalledWith('code', 'state', 'browser-flow-secret');
+  });
+
+  it('clears the OAuth flow cookie on incomplete and rejected callbacks without logging secrets', async () => {
+    const store = new MemoryStore();
+    const callback = vi.fn(async () => {
+      throw new Error('OAuth browser flow is invalid');
+    });
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const base = await serve(dependencies(store, { auth: { callback } }));
+
+    const incomplete = await fetch(`${base}/v1/auth/github/callback?state=signed-state`, {
+      headers: { cookie: 'mizuki_oauth_flow=sensitive-browser-secret' },
+    });
+    expect(incomplete.status).toBe(400);
+    expect(incomplete.headers.get('set-cookie')).toContain('mizuki_oauth_flow=;');
+    expect(incomplete.headers.get('set-cookie')).toContain('Max-Age=0');
+
+    const rejected = await fetch(
+      `${base}/v1/auth/github/callback?code=temporary-code&state=signed-state`,
+      { headers: { cookie: 'mizuki_oauth_flow=sensitive-browser-secret' } },
+    );
+    expect(rejected.status).toBe(422);
+    expect(rejected.headers.get('set-cookie')).toContain('mizuki_oauth_flow=;');
+    expect(await rejected.text()).not.toContain('sensitive-browser-secret');
+    expect(consoleError).not.toHaveBeenCalled();
+    consoleError.mockRestore();
   });
 
   it('closes an activity stream after its configured idle lifetime', async () => {

@@ -350,18 +350,42 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
         checksum: string;
       }>(
         `SELECT component, version, name, checksum FROM mizuki_schema_migrations
-         WHERE component IN ('core', 'admission-control', 'workbench')
+         WHERE component IN ('core', 'admission-control', 'github-oauth', 'workbench')
          ORDER BY component, version`,
       );
       expect(result.rows).toMatchObject([
         { component: 'admission-control', version: 1, name: 'admission-control-audit' },
         { component: 'core', version: 1, name: 'commercial-core' },
+        { component: 'github-oauth', version: 1, name: 'browser-bound-flow' },
         { component: 'workbench', version: 1, name: 'workbench-accounts' },
       ]);
       expect(result.rows.every((row) => /^[a-f0-9]{64}$/.test(row.checksum))).toBe(true);
     } finally {
       await Promise.all([left.close(), right.close(), pool.end()]);
     }
+  });
+
+  it('atomically consumes a browser-bound OAuth flow once', async () => {
+    const flow = {
+      id: randomUUID(),
+      binding: 'a'.repeat(43),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      createdAt: new Date().toISOString(),
+    };
+    await store.saveGithubOAuthFlow(flow);
+
+    const callbacks = await Promise.allSettled([
+      store.consumeGithubOAuthFlow(flow.id, flow.binding),
+      store.consumeGithubOAuthFlow(flow.id, flow.binding),
+    ]);
+
+    expect(callbacks.filter((callback) => callback.status === 'fulfilled')).toHaveLength(1);
+    expect(
+      callbacks.some(
+        (callback) =>
+          callback.status === 'rejected' && callback.reason instanceof StateConflictError,
+      ),
+    ).toBe(true);
   });
 
   it('serializes the repository cap per account and keeps listing bounded', async () => {
@@ -548,12 +572,13 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
           name: string;
         }>(
           `SELECT component, version, name FROM mizuki_schema_migrations
-           WHERE component IN ('core', 'admission-control', 'workbench')
+           WHERE component IN ('core', 'admission-control', 'github-oauth', 'workbench')
            ORDER BY component, version`,
         );
         expect(migrations.rows).toEqual([
           { component: 'admission-control', version: 1, name: 'admission-control-audit' },
           { component: 'core', version: 1, name: 'commercial-core' },
+          { component: 'github-oauth', version: 1, name: 'browser-bound-flow' },
           { component: 'workbench', version: 1, name: 'workbench-accounts' },
         ]);
       } finally {

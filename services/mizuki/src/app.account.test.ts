@@ -95,6 +95,43 @@ describe('workbench account API', () => {
     expect(anonymous.status).toBe(401);
   });
 
+  it('keeps delivered work protected until its refund liability is discharged', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    await store.saveQuote(quote);
+    await store.linkQuoteToAccount(quote.id, '42');
+    const { job } = await store.createJob(quote, payment, 'delivered-liability');
+    await store.transitionJob(job.id, 'settlement_pending', 'delivered', {
+      refundLiabilityId: 'liability-1',
+    });
+    const base = await serve(dependencies(store));
+
+    const protectedBilling = await fetch(`${base}/v1/account/billing`, {
+      headers: sessionHeaders,
+    });
+    await expect(protectedBilling.json()).resolves.toMatchObject({
+      obligationCount: 1,
+      totals: {
+        deliveredAtomic: '2000000',
+        protectedAtomic: '2000000',
+      },
+    });
+
+    await store.patchJob(job.id, {
+      refundLiabilityDischargedAt: '2026-08-25T05:00:00.000Z',
+    });
+    const dischargedBilling = await fetch(`${base}/v1/account/billing`, {
+      headers: sessionHeaders,
+    });
+    await expect(dischargedBilling.json()).resolves.toMatchObject({
+      obligationCount: 0,
+      totals: {
+        deliveredAtomic: '2000000',
+        protectedAtomic: '0',
+      },
+    });
+  });
+
   it('checks an unpaid quote without requesting payment or repository access', async () => {
     const store = new MemoryStore();
     await store.upsertContributor('42', 'maintainer');
@@ -121,6 +158,21 @@ describe('workbench account API', () => {
     expect(settle).not.toHaveBeenCalled();
     expect(github.assertIssueAuthorization).not.toHaveBeenCalled();
     expect(github.currentHead).not.toHaveBeenCalled();
+  });
+
+  it('rejects a malformed payment-status quote id before reading the store', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    const quoteForAccount = vi.spyOn(store, 'quoteForAccount');
+    const base = await serve(dependencies(store));
+
+    const response = await fetch(`${base}/v1/account/quotes/not-a-uuid/payment-status`, {
+      headers: { ...sessionHeaders, 'idempotency-key': 'malformed-quote-id' },
+    });
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({ error: 'quote not found' });
+    expect(quoteForAccount).not.toHaveBeenCalled();
   });
 
   it('returns an existing reservation while paid intake is closed', async () => {
@@ -253,37 +305,40 @@ describe('workbench account API', () => {
     ]);
   });
 
-  it('reports a pending refund without presenting a finalized transaction', async () => {
-    const store = new MemoryStore();
-    await store.upsertContributor('42', 'maintainer');
-    await store.saveQuote(quote);
-    await store.linkQuoteToAccount(quote.id, '42');
-    const { job } = await store.createJob(quote, payment, 'refund-pending-job');
-    await store.transitionJob(job.id, 'settlement_pending', 'refund_pending');
-    const base = await serve(dependencies(store));
+  it.each(['failed', 'rejected', 'refund_pending'] as const)(
+    'reports a pending refund for a %s job without presenting a finalized transaction',
+    async (state) => {
+      const store = new MemoryStore();
+      await store.upsertContributor('42', 'maintainer');
+      await store.saveQuote(quote);
+      await store.linkQuoteToAccount(quote.id, '42');
+      const { job } = await store.createJob(quote, payment, 'refund-pending-job');
+      await store.transitionJob(job.id, 'settlement_pending', state);
+      const base = await serve(dependencies(store));
 
-    const response = await fetch(`${base}/v1/account/billing`, { headers: sessionHeaders });
-    const body = (await response.json()) as {
-      transactions: Array<Record<string, unknown>>;
-    };
+      const response = await fetch(`${base}/v1/account/billing`, { headers: sessionHeaders });
+      const body = (await response.json()) as {
+        transactions: Array<Record<string, unknown>>;
+      };
 
-    expect(body.transactions).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          jobId: job.id,
-          type: 'refund',
-          status: 'pending',
-          transaction: null,
-        }),
-        expect.objectContaining({
-          jobId: job.id,
-          type: 'payment',
-          status: 'finalized',
-          transaction: 'settlement',
-        }),
-      ]),
-    );
-  });
+      expect(body.transactions).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            jobId: job.id,
+            type: 'refund',
+            status: 'pending',
+            transaction: null,
+          }),
+          expect.objectContaining({
+            jobId: job.id,
+            type: 'payment',
+            status: 'finalized',
+            transaction: 'settlement',
+          }),
+        ]),
+      );
+    },
+  );
 
   it('marks billing totals as a bounded window when account history is truncated', async () => {
     const store = new MemoryStore();

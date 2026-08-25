@@ -251,6 +251,32 @@ describe('MemoryStore', () => {
     await expect(store.jobsForAccount('42', 1_001)).rejects.toThrow('between 1 and 1000');
   });
 
+  it('keeps a delivered job in obligations until its live liability is discharged', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    await store.saveQuote(quote);
+    await store.linkQuoteToAccount(quote.id, '42');
+    const { job } = await store.createJob(quote, payment, 'delivered-liability');
+    await store.transitionJob(job.id, 'settlement_pending', 'delivered', {
+      refundLiabilityId: 'liability-1',
+    });
+
+    await expect(store.jobsForAccount('42', 1)).resolves.toMatchObject({
+      jobs: [expect.objectContaining({ id: job.id })],
+      obligationCount: 1,
+      truncated: false,
+    });
+
+    await store.patchJob(job.id, {
+      refundLiabilityDischargedAt: '2026-08-25T05:00:00.000Z',
+    });
+    await expect(store.jobsForAccount('42', 1)).resolves.toMatchObject({
+      jobs: [expect.objectContaining({ id: job.id })],
+      obligationCount: 0,
+      truncated: false,
+    });
+  });
+
   it('deduplicates the same payment proof across different idempotency keys', async () => {
     const store = new MemoryStore();
     const paid = { ...payment, signature: 'same-x402-proof' };

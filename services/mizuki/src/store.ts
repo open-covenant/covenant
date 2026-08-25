@@ -858,18 +858,24 @@ export class PostgresStore implements MizukiStore {
       created_at: Date;
     }>(
       `WITH account_jobs AS MATERIALIZED (
-         SELECT jobs.id, jobs.created_at, jobs.state, jobs.payload
+         SELECT jobs.id, jobs.created_at, jobs.payload,
+           jobs.state <> 'refunded' AND (
+             jobs.state <> 'delivered' OR (
+               jobs.payload ? 'refundLiabilityId' AND
+               NOT (jobs.payload ? 'refundLiabilityDischargedAt')
+             )
+           ) AS obligation
          FROM mizuki_jobs AS jobs
          JOIN mizuki_account_quotes AS links ON links.quote_id = jobs.quote_id
          WHERE links.github_id = $1
        ), obligations AS (
          SELECT id, created_at, payload, true AS obligation
          FROM account_jobs
-         WHERE state NOT IN ('delivered', 'refunded')
+         WHERE obligation
        ), terminal_history AS (
          SELECT id, created_at, payload, false AS obligation
          FROM account_jobs
-         WHERE state IN ('delivered', 'refunded')
+         WHERE NOT obligation
          ORDER BY created_at DESC, id DESC
          LIMIT $2
        )
@@ -1755,7 +1761,9 @@ function accountJobLimit(limit: number): number {
 }
 
 function accountJobIsObligation(job: Job): boolean {
-  return job.state !== 'delivered' && job.state !== 'refunded';
+  if (job.state === 'refunded') return false;
+  if (job.state !== 'delivered') return true;
+  return Boolean(job.refundLiabilityId && !job.refundLiabilityDischargedAt);
 }
 
 function accountJobOrder(left: Job, right: Job): number {

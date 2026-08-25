@@ -42,6 +42,7 @@ import {
 import type { ServiceReadiness } from './readiness.js';
 
 const MAX_POSTGRES_INTEGER = 2_147_483_647;
+const UUID_PATTERN = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
 
 export type AppDependencies = {
   config: Config;
@@ -257,8 +258,10 @@ export function createApp(deps: AppDependencies) {
         if (!key || key.length > 128) {
           return json(res, 400, { error: 'idempotency-key header is required' });
         }
+        const quoteId = parts[3]!;
+        if (!UUID_PATTERN.test(quoteId)) return json(res, 404, { error: 'quote not found' });
         const status = await deps.paymentAdmission.run(async () => {
-          const quote = await deps.store.quoteForAccount(parts[3]!, session.githubId);
+          const quote = await deps.store.quoteForAccount(quoteId, session.githubId);
           if (!quote) return { kind: 'not_found' } as const;
 
           const keyedJob = await deps.store.jobByIdempotencyKey(key);
@@ -1390,7 +1393,11 @@ function accountBilling(mode: Config['paymentMode'], page: AccountJobsPage) {
   );
   const refunded = settled.filter((job) => job.state === 'refunded' && job.refundTransaction);
   const delivered = settled.filter((job) => job.state === 'delivered');
-  const protectedJobs = settled.filter((job) => !['delivered', 'refunded'].includes(job.state));
+  const protectedJobs = settled.filter((job) => {
+    if (job.state === 'refunded') return false;
+    if (job.state !== 'delivered') return true;
+    return Boolean(job.refundLiabilityId && !job.refundLiabilityDischargedAt);
+  });
   const transactions = jobs
     .flatMap((job) => {
       const paymentPending =
@@ -1419,7 +1426,7 @@ function accountBilling(mode: Config['paymentMode'], page: AccountJobsPage) {
                 createdAt: job.updatedAt,
               },
             ]
-          : !paymentPending && job.state === 'refund_pending'
+          : !paymentPending && ['failed', 'rejected', 'refund_pending'].includes(job.state)
             ? [
                 {
                   id: `refund:${job.id}`,

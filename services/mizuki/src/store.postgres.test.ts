@@ -586,6 +586,20 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
         truncated: false,
         obligationCount: 1,
       });
+      await upgraded.transitionJob(job.id, 'settlement_pending', 'delivered', {
+        refundLiabilityId: 'postgres-liability-1',
+      });
+      await expect(upgraded.jobsForAccount(githubId, 100)).resolves.toMatchObject({
+        jobs: [expect.objectContaining({ id: job.id })],
+        obligationCount: 1,
+      });
+      await upgraded.patchJob(job.id, {
+        refundLiabilityDischargedAt: '2026-08-25T05:00:00.000Z',
+      });
+      await expect(upgraded.jobsForAccount(githubId, 100)).resolves.toMatchObject({
+        jobs: [expect.objectContaining({ id: job.id })],
+        obligationCount: 0,
+      });
       const secondQuote = await saveQuote(upgraded);
       await upgraded.linkQuoteToAccount(secondQuote.id, githubId);
       await upgraded.createJob(
@@ -595,10 +609,10 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
       );
       const bounded = await upgraded.jobsForAccount(githubId, 1);
       expect(bounded.jobs).toHaveLength(2);
-      expect(bounded).toMatchObject({ limit: 1, truncated: false, obligationCount: 2 });
+      expect(bounded).toMatchObject({ limit: 1, truncated: false, obligationCount: 1 });
       const complete = await upgraded.jobsForAccount(githubId, 100);
       expect(complete.jobs).toHaveLength(2);
-      expect(complete).toMatchObject({ limit: 100, truncated: false, obligationCount: 2 });
+      expect(complete).toMatchObject({ limit: 100, truncated: false, obligationCount: 1 });
       await expect(upgraded.repositoriesForAccount(githubId, 25)).resolves.toEqual({
         repositories: [repository],
         limit: 25,

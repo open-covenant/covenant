@@ -6,7 +6,7 @@ import { useState } from 'react';
 import { formatTime } from '@/lib/format';
 import { normalizeIssues, normalizeRepositories, parseRepositoryLocator } from '@/lib/workbench';
 import type { InstallationStatus } from '@/lib/workbench';
-import { useWorkbenchResource, workbenchRequest } from '@/lib/workbench-client';
+import { useWorkbenchResource, workbenchMutation } from '@/lib/workbench-client';
 import {
   LastChecked,
   RepositoryCard,
@@ -330,7 +330,7 @@ function RepositoryConnector({ refresh }: { refresh: () => void }) {
     setState('checking');
     setError(null);
     try {
-      await workbenchRequest('/v1/account/repositories', {
+      await workbenchMutation('/v1/account/repositories', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ owner: repository.owner, repo: repository.repo }),

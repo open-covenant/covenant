@@ -40,6 +40,9 @@ export function WorkbenchStatus({ value }: { value: string }) {
       : value === 'action_required' ||
           value === 'unavailable' ||
           value === 'refund_pending' ||
+          value === 'claim_refund_pending' ||
+          value === 'offer_refund_pending' ||
+          value === 'release_refund_pending' ||
           value === 'pending'
         ? 'warning'
         : value === 'unsupported' ||

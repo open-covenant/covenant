@@ -44,8 +44,14 @@ export function WorkbenchShell({ children }: { children: React.ReactNode }) {
   useEffect(() => onWorkbenchUnauthorized(() => setAuthExpired(true)), []);
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    setAuthError(githubAuthErrorMessage(params.get('auth_error')));
-    setReturnTo(`${pathname}${params.size ? `?${params}` : ''}`);
+    const message = githubAuthErrorMessage(params.get('auth_error'));
+    params.delete('auth_error');
+    const cleanPath = `${pathname}${params.size ? `?${params}` : ''}`;
+    setAuthError(message);
+    setReturnTo(cleanPath);
+    if (message && `${window.location.pathname}${window.location.search}` !== cleanPath) {
+      window.history.replaceState(window.history.state, '', cleanPath);
+    }
   }, [pathname]);
 
   if (account.status === 'loading') return <WorkbenchShellLoading />;
@@ -126,7 +132,17 @@ export function WorkbenchShell({ children }: { children: React.ReactNode }) {
         <Link href="/app/jobs/new">New job</Link>
       </header>
 
-      <section className="workbench-content">{children}</section>
+      <section className="workbench-content">
+        {authError && (
+          <div className="workbench-auth-alert" role="alert">
+            <span>{authError}</span>
+            <button type="button" onClick={() => setAuthError(undefined)} aria-label="Dismiss">
+              Dismiss
+            </button>
+          </div>
+        )}
+        {children}
+      </section>
 
       <nav className="workbench-mobile-nav" aria-label="Workbench navigation">
         {primaryNavigation.slice(0, 4).map((item) => (

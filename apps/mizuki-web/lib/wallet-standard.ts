@@ -172,6 +172,7 @@ export class WalletConnectionController {
           wallet,
           (account) => this.accountChanged(wallet, account, generation),
           this.requiredChain,
+          this.requirement,
         );
         if (!this.current(generation)) {
           unsubscribe();
@@ -183,12 +184,12 @@ export class WalletConnectionController {
         throw new Error('This wallet cannot report account or disconnect changes');
       }
 
-      const account = selectSolanaAccount(wallet.accounts, this.requiredChain);
+      const account = selectSolanaAccount(wallet.accounts, this.requiredChain, this.requirement);
       if (!account) {
         throw new Error(
           this.requiredChain
-            ? `This wallet did not expose a ${this.networkLabel} account`
-            : 'This wallet did not expose a Solana account',
+            ? `This wallet did not expose a compatible ${this.networkLabel} account`
+            : 'This wallet did not expose a compatible Solana account',
         );
       }
       if (!this.current(generation)) {
@@ -282,25 +283,35 @@ export function observeWalletAccounts(
   wallet: CompatibleWallet,
   update: (account: WalletAccount | null) => void,
   requiredChain?: PaymentWalletNetwork['chain'],
+  requirement?: 'message' | 'transaction',
 ): () => void {
   if (!('standard:events' in wallet.features)) {
     throw new Error('This wallet cannot report account or disconnect changes');
   }
   const events = wallet.features['standard:events'] as StandardEventsFeature['standard:events'];
   return events.on('change', ({ accounts }) => {
-    if (accounts) update(selectSolanaAccount(accounts, requiredChain));
+    if (accounts) update(selectSolanaAccount(accounts, requiredChain, requirement));
   });
 }
 
 export function selectSolanaAccount(
   accounts: readonly WalletAccount[],
   requiredChain?: PaymentWalletNetwork['chain'],
+  requirement?: 'message' | 'transaction',
 ): WalletAccount | null {
+  const requiredFeature =
+    requirement === 'message'
+      ? 'solana:signMessage'
+      : requirement === 'transaction'
+        ? 'solana:signTransaction'
+        : undefined;
   return (
-    accounts.find((candidate) =>
-      requiredChain
-        ? candidate.chains.includes(requiredChain)
-        : candidate.chains.some((chain) => chain.startsWith('solana:')),
+    accounts.find(
+      (candidate) =>
+        (requiredChain
+          ? candidate.chains.includes(requiredChain)
+          : candidate.chains.some((chain) => chain.startsWith('solana:'))) &&
+        (!requiredFeature || candidate.features.includes(requiredFeature)),
     ) ?? null
   );
 }

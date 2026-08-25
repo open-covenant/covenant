@@ -55,6 +55,14 @@ describe('Wallet Standard account observation', () => {
     expect(selectSolanaAccount([devnet], 'solana:mainnet')).toBeNull();
   });
 
+  it('selects an account that supports the required operation', () => {
+    const readOnly = account('read-only', ['solana:mainnet'], []);
+    const signing = account('signing', ['solana:mainnet'], ['solana:signTransaction']);
+
+    expect(selectSolanaAccount([readOnly, signing], 'solana:mainnet', 'transaction')).toBe(signing);
+    expect(selectSolanaAccount([readOnly], 'solana:mainnet', 'transaction')).toBeNull();
+  });
+
   it('derives the payment label from the configured Solana network', () => {
     vi.stubEnv('NEXT_PUBLIC_SOLANA_NETWORK', 'solana-devnet');
     try {
@@ -209,11 +217,15 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function account(address: string, chains: string[] = ['solana:mainnet']): WalletAccount {
+function account(
+  address: string,
+  chains: string[] = ['solana:mainnet'],
+  features: string[] = ['solana:signTransaction'],
+): WalletAccount {
   return {
     address,
     publicKey: new Uint8Array(32),
     chains,
-    features: [],
+    features,
   } as WalletAccount;
 }

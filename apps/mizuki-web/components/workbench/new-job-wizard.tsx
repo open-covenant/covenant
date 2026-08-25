@@ -45,6 +45,7 @@ import {
   WorkbenchPageHeader,
   WorkbenchStatus,
 } from './workbench-primitives';
+import { OrganizationRepositorySelector } from './organization-repository-selector';
 
 export function NewJobWizard({
   initialOwner,
@@ -116,35 +117,17 @@ export function NewJobWizard({
             <div className="wizard-step-content">
               <div className="wizard-step-heading">
                 <div>
-                  <span>Repository</span>
-                  <h2>Choose a ready repository</h2>
+                  <span>Organization and repository</span>
+                  <h2>Choose an organization and ready repository</h2>
                 </div>
                 {repository && <WorkbenchStatus value={repository.readiness} />}
               </div>
-              <div className="wizard-repository-grid">
-                {repositories.data.map((item) => (
-                  <button
-                    type="button"
-                    className={
-                      selected.toLowerCase() === item.fullName.toLowerCase() ? 'selected' : ''
-                    }
-                    onClick={() => setSelected(item.fullName)}
-                    aria-pressed={selected.toLowerCase() === item.fullName.toLowerCase()}
-                    disabled={item.readiness !== 'ready' || repositoryLocked}
-                    key={item.fullName}
-                  >
-                    <span>{item.owner}</span>
-                    <strong>{item.repo}</strong>
-                    <small>
-                      {item.readiness === 'ready'
-                        ? 'Ready for work'
-                        : item.readiness === 'unavailable'
-                          ? 'Status unavailable'
-                          : 'Setup required'}
-                    </small>
-                  </button>
-                ))}
-              </div>
+              <OrganizationRepositorySelector
+                repositories={repositories.data}
+                selected={selected}
+                disabled={repositoryLocked}
+                onSelect={setSelected}
+              />
               {selected && !repository && (
                 <p className="wizard-help">
                   That repository is not connected to this account.{' '}
@@ -923,7 +906,7 @@ function IssueOption({
 function WizardProgress({ repository }: { repository?: WorkbenchRepository }) {
   return (
     <ol className="wizard-progress" aria-label="New job progress">
-      {['Repository', 'Issue', 'Preflight', 'Contract', 'Pay'].map((label, index) => (
+      {['Organization & repo', 'Issue', 'Preflight', 'Contract', 'Pay'].map((label, index) => (
         <li className={index === 0 && repository ? 'complete' : ''} key={label}>
           <span>{String(index + 1).padStart(2, '0')}</span>
           {label}

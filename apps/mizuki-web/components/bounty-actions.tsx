@@ -4,8 +4,9 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { GithubClaimButton } from './github-claim-button';
 import type { BountyState } from '@/lib/types';
+import { sessionCsrfToken } from '@/lib/workbench-client';
 
-type SessionState = 'loading' | 'anonymous' | 'claimant' | 'other';
+type SessionState = 'loading' | 'anonymous' | 'claimant' | 'other' | 'unavailable';
 
 export function BountyActions({
   bountyId,
@@ -31,6 +32,7 @@ export function BountyActions({
   const [busy, setBusy] = useState<'pr' | 'dispute' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [sessionAttempt, setSessionAttempt] = useState(0);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -41,16 +43,18 @@ export function BountyActions({
     })
       .then(async (response) => {
         if (response.status === 401) return setSession('anonymous');
+        if (!response.ok) throw new Error('session unavailable');
         const body = (await response.json()) as { contributor?: { githubLogin?: string } };
         const login = body.contributor?.githubLogin;
+        if (!login) throw new Error('session response is incomplete');
         setSession(login?.toLowerCase() === claimantLogin.toLowerCase() ? 'claimant' : 'other');
       })
       .catch((cause) => {
         if (cause instanceof DOMException && cause.name === 'AbortError') return;
-        setSession('anonymous');
+        setSession('unavailable');
       });
     return () => controller.abort();
-  }, [claimantLogin]);
+  }, [claimantLogin, sessionAttempt]);
 
   async function submitPullRequest(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -75,12 +79,16 @@ export function BountyActions({
     setError(null);
     setSuccess(null);
     try {
+      const csrfToken = await sessionCsrfToken();
       const response = await fetch(
         `/api/mizuki/v1/bounties/${encodeURIComponent(bountyId)}/${kind === 'pr' ? 'pr' : 'disputes'}`,
         {
           method: 'POST',
           credentials: 'include',
-          headers: { 'content-type': 'application/json' },
+          headers: {
+            'content-type': 'application/json',
+            'x-mizuki-csrf-token': csrfToken,
+          },
           body: JSON.stringify(body),
         },
       );
@@ -100,6 +108,23 @@ export function BountyActions({
   }
 
   if (session === 'loading') return <p className="claim-unavailable">Checking GitHub sign-in…</p>;
+  if (session === 'unavailable') {
+    return (
+      <div className="claimant-actions">
+        <p>GitHub sign-in status is temporarily unavailable. No bounty state was changed.</p>
+        <button
+          className="button button-secondary"
+          type="button"
+          onClick={() => {
+            setSession('loading');
+            setSessionAttempt((attempt) => attempt + 1);
+          }}
+        >
+          Try again
+        </button>
+      </div>
+    );
+  }
   if (session === 'anonymous') {
     return (
       <div className="claimant-actions">

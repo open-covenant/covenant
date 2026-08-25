@@ -9,12 +9,11 @@ import {
   normalizeAccount,
   normalizeApiTokenCredential,
   normalizeApiTokens,
-  normalizeCsrfToken,
   normalizeRepositories,
   type ApiTokenCredential,
   type ApiTokenScope,
 } from '@/lib/workbench';
-import { logoutWorkbench, useWorkbenchResource, workbenchRequest } from '@/lib/workbench-client';
+import { logoutWorkbench, useWorkbenchResource, workbenchMutation } from '@/lib/workbench-client';
 import {
   WorkbenchError,
   WorkbenchLoading,
@@ -33,7 +32,7 @@ export function Integrations() {
       <WorkbenchPageHeader
         eyebrow="Connected services"
         title="Integrations"
-        description="Manage repository access, payment connections, and scoped credentials for MCP clients."
+        description="Manage repository access, payment connections, and scoped credentials for API clients."
       />
 
       <section className="workbench-panel integration-panel">
@@ -142,14 +141,10 @@ export function MachineAccess() {
     setPending(true);
     setError(undefined);
     try {
-      const csrfToken = normalizeCsrfToken(await workbenchRequest<unknown>('/v1/auth/csrf'));
       const expiresAt = new Date(Date.now() + duration * 24 * 60 * 60_000).toISOString();
-      const value = await workbenchRequest<unknown>('/v1/account/api-tokens', {
+      const value = await workbenchMutation<unknown>('/v1/account/api-tokens', {
         method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'x-mizuki-csrf-token': csrfToken,
-        },
+        headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: name.trim(), scopes, expiresAt }),
       });
       setCredential(normalizeApiTokenCredential(value));
@@ -175,10 +170,8 @@ export function MachineAccess() {
     setPending(true);
     setError(undefined);
     try {
-      const csrfToken = normalizeCsrfToken(await workbenchRequest<unknown>('/v1/auth/csrf'));
-      await workbenchRequest(`/v1/account/api-tokens/${encodeURIComponent(id)}/revoke`, {
+      await workbenchMutation(`/v1/account/api-tokens/${encodeURIComponent(id)}/revoke`, {
         method: 'POST',
-        headers: { 'x-mizuki-csrf-token': csrfToken },
       });
       tokens.refresh();
     } catch (cause) {
@@ -193,20 +186,28 @@ export function MachineAccess() {
       <div className="workbench-panel-heading">
         <div>
           <span>Machine access</span>
-          <h2>MCP API tokens</h2>
+          <h2>Scoped API tokens</h2>
         </div>
-        <WorkbenchStatus value={tokens.status === 'ready' ? 'ready' : 'checking'} />
+        <WorkbenchStatus
+          value={
+            tokens.status === 'ready'
+              ? 'ready'
+              : tokens.status === 'error'
+                ? 'unavailable'
+                : 'checking'
+          }
+        />
       </div>
       <p className="machine-access-intro">
-        Create an account-bound credential for Mizuki's MCP server. Tokens can access only the
-        operations granted by their scopes; they cannot install GitHub Apps, submit wallet
-        signatures, or create another token.
+        Create an account-bound credential for another agent or API client. Each token is limited to
+        the selected operations; it cannot install GitHub Apps, submit wallet signatures, or create
+        another token.
       </p>
       <div className="machine-access-config">
-        <span>MCP host configuration</span>
-        <code>MIZUKI_API_URL=https://mizuki.opencovenant.org/api/mizuki</code>
-        <code>MIZUKI_API_TOKEN=&lt;token copied after creation&gt;</code>
-        <p>Keep the token in the MCP host's secret storage. Do not commit it to a repository.</p>
+        <span>HTTPS API</span>
+        <code>Base URL: https://mizuki.opencovenant.org/api/mizuki</code>
+        <code>Authorization: Bearer &lt;token copied after creation&gt;</code>
+        <p>Keep the token in the client's secret storage. Do not commit it to a repository.</p>
       </div>
 
       {credential && (

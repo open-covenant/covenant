@@ -140,11 +140,13 @@ describe('MemoryStore', () => {
       jobs: [job],
       limit: 100,
       truncated: false,
+      obligationCount: 1,
     });
     await expect(store.jobsForAccount('99', 100)).resolves.toEqual({
       jobs: [],
       limit: 100,
       truncated: false,
+      obligationCount: 0,
     });
     await expect(store.repositoriesForAccount('42', 25)).resolves.toEqual({
       repositories: [repository],
@@ -216,18 +218,36 @@ describe('MemoryStore', () => {
   it('bounds account job history queries', async () => {
     const store = new MemoryStore();
     const secondQuote = { ...quote, id: 'quote-2', issueNumber: 2 };
+    const activeQuote = { ...quote, id: 'quote-3', issueNumber: 3 };
     await store.upsertContributor('42', 'maintainer');
-    await Promise.all([store.saveQuote(quote), store.saveQuote(secondQuote)]);
+    await Promise.all([
+      store.saveQuote(quote),
+      store.saveQuote(secondQuote),
+      store.saveQuote(activeQuote),
+    ]);
     await Promise.all([
       store.linkQuoteToAccount(quote.id, '42'),
       store.linkQuoteToAccount(secondQuote.id, '42'),
+      store.linkQuoteToAccount(activeQuote.id, '42'),
     ]);
-    await store.createJob(quote, payment, 'bounded-job-1');
-    await store.createJob(secondQuote, { ...payment, transaction: 'tx-2' }, 'bounded-job-2');
+    const { job: first } = await store.createJob(quote, payment, 'bounded-job-1');
+    const { job: second } = await store.createJob(
+      secondQuote,
+      { ...payment, transaction: 'tx-2' },
+      'bounded-job-2',
+    );
+    const { job: active } = await store.createJob(
+      activeQuote,
+      { ...payment, transaction: 'tx-3' },
+      'active-job',
+    );
+    await store.transitionJob(first.id, 'settlement_pending', 'delivered');
+    await store.transitionJob(second.id, 'settlement_pending', 'refunded');
 
     const page = await store.jobsForAccount('42', 1);
-    expect(page.jobs).toHaveLength(1);
-    expect(page).toMatchObject({ limit: 1, truncated: true });
+    expect(page.jobs).toHaveLength(2);
+    expect(page.jobs.map((job) => job.id)).toContain(active.id);
+    expect(page).toMatchObject({ limit: 1, truncated: true, obligationCount: 1 });
     await expect(store.jobsForAccount('42', 1_001)).rejects.toThrow('between 1 and 1000');
   });
 

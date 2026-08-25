@@ -34,6 +34,7 @@ export type AccountJobsPage = {
   jobs: Job[];
   limit: number;
   truncated: boolean;
+  obligationCount: number;
 };
 
 export type AccountRepositoriesPage = {
@@ -208,15 +209,17 @@ export class MemoryStore implements MizukiStore {
 
   async jobsForAccount(githubId: string, limit: number): Promise<AccountJobsPage> {
     const boundedLimit = accountJobLimit(limit);
-    const jobs = [...this.jobs.values()]
+    const accountJobs = [...this.jobs.values()]
       .filter((job) => this.quoteAccounts.get(job.quote.id) === githubId)
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-      .slice(0, boundedLimit + 1)
-      .map((job) => structuredClone(job));
+      .sort(accountJobOrder);
+    const obligations = accountJobs.filter(accountJobIsObligation);
+    const terminal = accountJobs.filter((job) => !accountJobIsObligation(job));
+    const history = terminal.slice(0, boundedLimit);
     return {
-      jobs: jobs.slice(0, boundedLimit),
+      jobs: [...obligations, ...history].sort(accountJobOrder).map((job) => structuredClone(job)),
       limit: boundedLimit,
-      truncated: jobs.length > boundedLimit,
+      truncated: terminal.length > boundedLimit,
+      obligationCount: obligations.length,
     };
   }
 
@@ -848,19 +851,47 @@ export class PostgresStore implements MizukiStore {
 
   async jobsForAccount(githubId: string, limit: number): Promise<AccountJobsPage> {
     const boundedLimit = accountJobLimit(limit);
-    const result = await this.pool.query<{ payload: Job }>(
-      `SELECT jobs.payload
-       FROM mizuki_jobs AS jobs
-       JOIN mizuki_account_quotes AS links ON links.quote_id = jobs.quote_id
-       WHERE links.github_id = $1
-       ORDER BY jobs.created_at DESC
-       LIMIT $2`,
+    const result = await this.pool.query<{
+      payload: Job;
+      obligation: boolean;
+      id: string;
+      created_at: Date;
+    }>(
+      `WITH account_jobs AS MATERIALIZED (
+         SELECT jobs.id, jobs.created_at, jobs.state, jobs.payload
+         FROM mizuki_jobs AS jobs
+         JOIN mizuki_account_quotes AS links ON links.quote_id = jobs.quote_id
+         WHERE links.github_id = $1
+       ), obligations AS (
+         SELECT id, created_at, payload, true AS obligation
+         FROM account_jobs
+         WHERE state NOT IN ('delivered', 'refunded')
+       ), terminal_history AS (
+         SELECT id, created_at, payload, false AS obligation
+         FROM account_jobs
+         WHERE state IN ('delivered', 'refunded')
+         ORDER BY created_at DESC, id DESC
+         LIMIT $2
+       )
+       SELECT id, created_at, payload, obligation
+       FROM (
+         SELECT * FROM obligations
+         UNION ALL
+         SELECT * FROM terminal_history
+       ) AS selected_jobs
+       ORDER BY created_at DESC, id DESC`,
       [githubId, boundedLimit + 1],
     );
+    const terminal = result.rows.filter((row) => !row.obligation);
+    const includedTerminal = new Set(terminal.slice(0, boundedLimit).map((row) => row.id));
+    const jobs = result.rows
+      .filter((row) => row.obligation || includedTerminal.has(row.id))
+      .map((row) => row.payload);
     return {
-      jobs: result.rows.slice(0, boundedLimit).map((row) => row.payload),
+      jobs,
       limit: boundedLimit,
-      truncated: result.rows.length > boundedLimit,
+      truncated: terminal.length > boundedLimit,
+      obligationCount: result.rows.filter((row) => row.obligation).length,
     };
   }
 
@@ -1721,6 +1752,14 @@ function accountJobLimit(limit: number): number {
     throw new Error('account job limit must be an integer between 1 and 1000');
   }
   return limit;
+}
+
+function accountJobIsObligation(job: Job): boolean {
+  return job.state !== 'delivered' && job.state !== 'refunded';
+}
+
+function accountJobOrder(left: Job, right: Job): number {
+  return right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id);
 }
 
 function accountRepositoryLimit(limit: number): number {

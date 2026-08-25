@@ -68,8 +68,9 @@ export function Jobs() {
 
       {jobs.status === 'ready' && jobs.data.truncated && (
         <p className="job-history-scope-note">
-          Showing the latest {jobs.data.limit?.toLocaleString() ?? 'available'} jobs. Filters apply
-          to this bounded history.
+          Every job with payment, delivery, or refund work still in progress is included, plus the
+          latest {jobs.data.limit?.toLocaleString() ?? 'available'} completed jobs. Filters apply to
+          these records.
         </p>
       )}
 

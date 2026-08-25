@@ -240,6 +240,7 @@ export function createApp(deps: AppDependencies) {
           jobs: page.jobs.map(publicJob),
           limit: page.limit,
           truncated: page.truncated,
+          obligationCount: page.obligationCount,
         });
       }
       if (
@@ -1381,46 +1382,59 @@ function expiredSessionCookie(
 
 function accountBilling(mode: Config['paymentMode'], page: AccountJobsPage) {
   const { jobs } = page;
-  const paid = jobs.filter(
+  const confirming = jobs.filter(
+    (job) => job.state === 'settlement_pending' || job.payment.transaction === 'pending',
+  );
+  const settled = jobs.filter(
     (job) => job.state !== 'settlement_pending' && job.payment.transaction !== 'pending',
   );
-  const refunded = paid.filter((job) => job.state === 'refunded' && job.refundTransaction);
-  const delivered = paid.filter((job) => job.state === 'delivered');
-  const protectedJobs = paid.filter((job) => !['delivered', 'refunded'].includes(job.state));
-  const transactions = paid
-    .flatMap((job) => [
-      {
-        jobId: job.id,
-        type: 'payment' as const,
-        status: 'finalized' as const,
-        amountAtomic: job.payment.amountAtomic,
-        transaction: job.payment.transaction,
-        createdAt: job.createdAt,
-      },
-      ...(job.refundTransaction
-        ? [
-            {
-              jobId: job.id,
-              type: 'refund' as const,
-              status: 'finalized' as const,
-              amountAtomic: job.payment.amountAtomic,
-              transaction: job.refundTransaction,
-              createdAt: job.updatedAt,
-            },
-          ]
-        : job.state === 'refund_pending'
+  const refunded = settled.filter((job) => job.state === 'refunded' && job.refundTransaction);
+  const delivered = settled.filter((job) => job.state === 'delivered');
+  const protectedJobs = settled.filter((job) => !['delivered', 'refunded'].includes(job.state));
+  const transactions = jobs
+    .flatMap((job) => {
+      const paymentPending =
+        job.state === 'settlement_pending' || job.payment.transaction === 'pending';
+      return [
+        {
+          id: `payment:${job.id}`,
+          jobId: job.id,
+          type: 'payment' as const,
+          status: paymentPending ? ('pending' as const) : ('finalized' as const),
+          amountAtomic: job.payment.amountAtomic,
+          transaction: job.payment.transaction === 'pending' ? null : job.payment.transaction,
+          repository: `${job.quote.owner}/${job.quote.repo}`,
+          createdAt: job.createdAt,
+        },
+        ...(!paymentPending && job.refundTransaction
           ? [
               {
+                id: `refund:${job.id}`,
                 jobId: job.id,
                 type: 'refund' as const,
-                status: 'pending' as const,
+                status: 'finalized' as const,
                 amountAtomic: job.payment.amountAtomic,
-                transaction: null,
+                transaction: job.refundTransaction,
+                repository: `${job.quote.owner}/${job.quote.repo}`,
                 createdAt: job.updatedAt,
               },
             ]
-          : []),
-    ])
+          : !paymentPending && job.state === 'refund_pending'
+            ? [
+                {
+                  id: `refund:${job.id}`,
+                  jobId: job.id,
+                  type: 'refund' as const,
+                  status: 'pending' as const,
+                  amountAtomic: job.payment.amountAtomic,
+                  transaction: null,
+                  repository: `${job.quote.owner}/${job.quote.repo}`,
+                  createdAt: job.updatedAt,
+                },
+              ]
+            : []),
+      ];
+    })
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   return {
     mode,
@@ -1428,9 +1442,13 @@ function accountBilling(mode: Config['paymentMode'], page: AccountJobsPage) {
     decimals: USDC_DECIMALS,
     limit: page.limit,
     truncated: page.truncated,
-    totalsScope: page.truncated ? ('latest_jobs' as const) : ('account_lifetime' as const),
+    obligationCount: page.obligationCount,
+    totalsScope: page.truncated
+      ? ('latest_terminal_jobs_and_all_obligations' as const)
+      : ('account_lifetime' as const),
     totals: {
-      paidAtomic: sumJobAmounts(paid),
+      confirmingAtomic: sumJobAmounts(confirming),
+      paidAtomic: sumJobAmounts(settled),
       refundedAtomic: sumJobAmounts(refunded),
       deliveredAtomic: sumJobAmounts(delivered),
       protectedAtomic: sumJobAmounts(protectedJobs),

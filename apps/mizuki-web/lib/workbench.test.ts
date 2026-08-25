@@ -139,8 +139,9 @@ describe('Workbench response normalization', () => {
         jobs: [],
         limit: 100,
         truncated: true,
+        obligationCount: 4,
       }),
-    ).toEqual({ jobs: [], limit: 100, truncated: true });
+    ).toEqual({ jobs: [], limit: 100, truncated: true, obligationCount: 4 });
   });
 
   it('surfaces blockers from a preflight that is not ready', () => {
@@ -222,13 +223,15 @@ describe('Workbench response normalization', () => {
         transactions: [],
         limit: 1000,
         truncated: true,
-        totalsScope: 'latest_jobs',
+        obligationCount: 3,
+        totalsScope: 'latest_terminal_jobs_and_all_obligations',
       }),
     ).toMatchObject({
       entries: [],
       limit: 1000,
       truncated: true,
-      totalsScope: 'latest_jobs',
+      obligationCount: 3,
+      totalsScope: 'latest_terminal_jobs_and_all_obligations',
     });
   });
 

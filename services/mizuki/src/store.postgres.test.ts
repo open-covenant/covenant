@@ -584,6 +584,7 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
         jobs: [job],
         limit: 100,
         truncated: false,
+        obligationCount: 1,
       });
       const secondQuote = await saveQuote(upgraded);
       await upgraded.linkQuoteToAccount(secondQuote.id, githubId);
@@ -593,11 +594,11 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
         `migration-second-${randomUUID()}`,
       );
       const bounded = await upgraded.jobsForAccount(githubId, 1);
-      expect(bounded.jobs).toHaveLength(1);
-      expect(bounded).toMatchObject({ limit: 1, truncated: true });
+      expect(bounded.jobs).toHaveLength(2);
+      expect(bounded).toMatchObject({ limit: 1, truncated: false, obligationCount: 2 });
       const complete = await upgraded.jobsForAccount(githubId, 100);
       expect(complete.jobs).toHaveLength(2);
-      expect(complete).toMatchObject({ limit: 100, truncated: false });
+      expect(complete).toMatchObject({ limit: 100, truncated: false, obligationCount: 2 });
       await expect(upgraded.repositoriesForAccount(githubId, 25)).resolves.toEqual({
         repositories: [repository],
         limit: 25,

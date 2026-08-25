@@ -71,6 +71,7 @@ describe('workbench account API', () => {
       jobs: [{ id: job.id, state: 'paid' }],
       limit: 100,
       truncated: false,
+      obligationCount: 1,
     });
 
     const billing = await fetch(`${base}/v1/account/billing`, { headers: sessionHeaders });
@@ -81,6 +82,7 @@ describe('workbench account API', () => {
       truncated: false,
       totalsScope: 'account_lifetime',
       totals: {
+        confirmingAtomic: '0',
         paidAtomic: '2000000',
         refundedAtomic: '0',
         deliveredAtomic: '0',
@@ -202,6 +204,55 @@ describe('workbench account API', () => {
     });
   });
 
+  it('reports a confirming payment once, then replaces it with one finalized payment', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    await store.saveQuote(quote);
+    await store.linkQuoteToAccount(quote.id, '42');
+    const pendingPayment = { ...payment, transaction: 'pending' };
+    const { job } = await store.createJob(quote, pendingPayment, 'confirming-payment');
+    const base = await serve(dependencies(store));
+
+    const confirming = await fetch(`${base}/v1/account/billing`, { headers: sessionHeaders });
+    const confirmingBody = (await confirming.json()) as {
+      totals: { confirmingAtomic: string; paidAtomic: string };
+      transactions: Array<Record<string, unknown>>;
+    };
+    expect(confirmingBody.totals).toMatchObject({
+      confirmingAtomic: '2000000',
+      paidAtomic: '0',
+    });
+    expect(confirmingBody.transactions).toEqual([
+      expect.objectContaining({
+        id: `payment:${job.id}`,
+        jobId: job.id,
+        type: 'payment',
+        status: 'pending',
+        transaction: null,
+      }),
+    ]);
+
+    await store.transitionJob(job.id, 'settlement_pending', 'paid', { payment });
+    const finalized = await fetch(`${base}/v1/account/billing`, { headers: sessionHeaders });
+    const finalizedBody = (await finalized.json()) as {
+      totals: { confirmingAtomic: string; paidAtomic: string };
+      transactions: Array<Record<string, unknown>>;
+    };
+    expect(finalizedBody.totals).toMatchObject({
+      confirmingAtomic: '0',
+      paidAtomic: '2000000',
+    });
+    expect(finalizedBody.transactions).toEqual([
+      expect.objectContaining({
+        id: `payment:${job.id}`,
+        jobId: job.id,
+        type: 'payment',
+        status: 'finalized',
+        transaction: 'settlement',
+      }),
+    ]);
+  });
+
   it('reports a pending refund without presenting a finalized transaction', async () => {
     const store = new MemoryStore();
     await store.upsertContributor('42', 'maintainer');
@@ -241,6 +292,7 @@ describe('workbench account API', () => {
       jobs: [],
       limit: 1_000,
       truncated: true,
+      obligationCount: 3,
     });
     const base = await serve(dependencies(store));
 
@@ -249,7 +301,8 @@ describe('workbench account API', () => {
     await expect(response.json()).resolves.toMatchObject({
       limit: 1_000,
       truncated: true,
-      totalsScope: 'latest_jobs',
+      obligationCount: 3,
+      totalsScope: 'latest_terminal_jobs_and_all_obligations',
     });
   });
 
@@ -493,6 +546,7 @@ describe('workbench account API', () => {
     await expect(store.jobsForAccount('42', 100)).resolves.toMatchObject({
       jobs: [expect.any(Object)],
       truncated: false,
+      obligationCount: 1,
     });
   });
 
@@ -562,6 +616,7 @@ describe('workbench account API', () => {
       jobs: [],
       limit: 100,
       truncated: false,
+      obligationCount: 0,
     });
   });
 

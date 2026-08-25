@@ -1,4 +1,5 @@
 import { Sandbox, ALL_TRAFFIC, type SandboxOpts } from 'e2b';
+import { posix } from 'node:path';
 import type { Sandbox as ISandbox, SandboxProvider, SandboxSpec, ExecResult } from '../types.js';
 import { validateE2bEgressPolicy, validateRunEgressAllowlist } from '../egress-policy.js';
 
@@ -7,6 +8,7 @@ import { validateE2bEgressPolicy, validateRunEgressAllowlist } from '../egress-p
 // agent thrash on a phantom-broken workspace. Give each command room up to a
 // few minutes; the sandbox wall-clock (spec.wallMs) is still the hard ceiling.
 const DEFAULT_CMD_TIMEOUT_MS = 300_000;
+const WORKSPACE_ROOT = '/tmp/mizuki-workspace';
 
 export interface E2bIdentityExpectation {
   templateId: string;
@@ -33,18 +35,19 @@ export interface E2bIdentityExpectation {
 class E2bSandbox implements ISandbox {
   constructor(private readonly sbx: Sandbox) {}
 
-  readFile(path: string): Promise<string> {
-    return this.sbx.files.read(path);
+  async readFile(path: string): Promise<string> {
+    return this.sbx.files.read(workspacePath(path));
   }
 
   async writeFile(path: string, content: string): Promise<void> {
-    await this.sbx.files.write(path, content);
+    await this.sbx.files.write(workspacePath(path), content);
   }
 
   async exec(cmd: string, opts: { timeoutMs?: number } = {}): Promise<ExecResult> {
     try {
       const r = await this.sbx.commands.run(cmd, {
         timeoutMs: opts.timeoutMs ?? DEFAULT_CMD_TIMEOUT_MS,
+        cwd: WORKSPACE_ROOT,
       });
       return { stdout: r.stdout, stderr: r.stderr, exitCode: r.exitCode };
     } catch (e) {
@@ -103,32 +106,41 @@ export class E2bSandboxProvider implements SandboxProvider {
       },
     };
     const sbx = template ? await Sandbox.create(template, opts) : await Sandbox.create(opts);
-    if (this.expected) await this.assertIdentity(sbx, this.expected);
-    return new E2bSandbox(sbx);
-  }
-
-  private async assertIdentity(sbx: Sandbox, expected: E2bIdentityExpectation): Promise<void> {
     try {
-      const info = await sbx.getInfo();
-      const actual = {
-        templateId: info.templateId,
-        cpuCount: info.cpuCount,
-        memoryMb: info.memoryMB,
-      };
-      if (
-        actual.templateId !== expected.templateId ||
-        actual.cpuCount !== expected.cpuCount ||
-        actual.memoryMb !== expected.memoryMb
-      ) {
-        throw new Error(
-          `sandbox identity mismatch: expected template ${expected.templateId} ` +
-            `${expected.cpuCount} vCPU/${expected.memoryMb} MiB, received ` +
-            `${actual.templateId} ${actual.cpuCount} vCPU/${actual.memoryMb} MiB`,
-        );
-      }
+      if (this.expected) await this.assertIdentity(sbx, this.expected);
+      await sbx.files.makeDir(WORKSPACE_ROOT);
+      return new E2bSandbox(sbx);
     } catch (cause) {
       await sbx.kill().catch(() => undefined);
       throw cause;
     }
   }
+
+  private async assertIdentity(sbx: Sandbox, expected: E2bIdentityExpectation): Promise<void> {
+    const info = await sbx.getInfo();
+    const actual = {
+      templateId: info.templateId,
+      cpuCount: info.cpuCount,
+      memoryMb: info.memoryMB,
+    };
+    if (
+      actual.templateId !== expected.templateId ||
+      actual.cpuCount !== expected.cpuCount ||
+      actual.memoryMb !== expected.memoryMb
+    ) {
+      throw new Error(
+        `sandbox identity mismatch: expected template ${expected.templateId} ` +
+          `${expected.cpuCount} vCPU/${expected.memoryMb} MiB, received ` +
+          `${actual.templateId} ${actual.cpuCount} vCPU/${actual.memoryMb} MiB`,
+      );
+    }
+  }
+}
+
+function workspacePath(path: string): string {
+  const resolved = posix.resolve(WORKSPACE_ROOT, path);
+  if (resolved !== WORKSPACE_ROOT && !resolved.startsWith(`${WORKSPACE_ROOT}/`)) {
+    throw new Error(`path escapes workspace: ${path}`);
+  }
+  return resolved;
 }

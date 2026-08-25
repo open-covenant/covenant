@@ -1,7 +1,7 @@
 import { createHash, generateKeyPairSync } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { loadConfig } from './config.js';
-import { assertIssueAuthorized, GithubClient } from './github.js';
+import { assertIssueAuthorized, deliveryDiffHash, GithubClient } from './github.js';
 import type { Job, RunArtifacts } from './types.js';
 
 describe('GitHub issue authorization', () => {
@@ -392,6 +392,64 @@ describe('pull request publication recovery', () => {
     expect(events.filter((event) => event === 'metadata')).toHaveLength(4);
     expect(events.filter((event) => event === 'diff')).toHaveLength(2);
   });
+
+  it('ignores only index object abbreviation length in delivery evidence', async () => {
+    const expectedHead = 'd'.repeat(40);
+    const reviewed =
+      'diff --git a/docs/guide.md b/docs/guide.md\n' +
+      'index adc7fc1..a3f8a51 100644\n' +
+      '--- a/docs/guide.md\n' +
+      '+++ b/docs/guide.md\n' +
+      '@@ -1 +1 @@\n' +
+      '-old\n' +
+      '+new\n';
+    const published = reviewed.replace('adc7fc1..a3f8a51', 'adc7fc169..a3f8a5189');
+    const github = publicationClient(expectedHead, [], false, published);
+
+    expect(deliveryDiffHash(reviewed)).toBe(
+      '8ceb7d8b40d653eaa60db13f165834810c44fb6e3615cfd0433ac5f4b2c3eddf',
+    );
+
+    await expect(
+      github.publish(publicationJob(expectedHead), { ...emptyArtifacts, patch: reviewed }),
+    ).resolves.toBe('https://github.com/example/project/pull/31');
+  });
+
+  it('rejects changed diff content after independent review', async () => {
+    const expectedHead = 'd'.repeat(40);
+    const reviewed =
+      'diff --git a/docs/guide.md b/docs/guide.md\n' +
+      'index adc7fc1..a3f8a51 100644\n' +
+      '--- a/docs/guide.md\n' +
+      '+++ b/docs/guide.md\n' +
+      '@@ -1 +1 @@\n' +
+      '-old\n' +
+      '+new\n';
+    const published = reviewed
+      .replace('adc7fc1..a3f8a51', 'adc7fc169..a3f8a5189')
+      .replace('+new', '+different');
+    const github = publicationClient(expectedHead, [], false, published);
+
+    await expect(
+      github.publish(publicationJob(expectedHead), { ...emptyArtifacts, patch: reviewed }),
+    ).rejects.toThrow('published pull request does not match the reviewed delivery artifact');
+  });
+
+  it('preserves file modes and non-header content in the delivery hash', () => {
+    const reviewed =
+      'diff --git a/docs/guide.md b/docs/guide.md\n' +
+      'index adc7fc1..a3f8a51 100644\n' +
+      '--- a/docs/guide.md\n' +
+      '+++ b/docs/guide.md\n' +
+      '@@ -1 +1 @@\n' +
+      '-old\n' +
+      '+index deadbee..feedbee 100644\n';
+    const hash = deliveryDiffHash(reviewed);
+
+    expect(deliveryDiffHash(reviewed.replace('100644\n---', '100755\n---'))).not.toBe(hash);
+    expect(deliveryDiffHash(reviewed.replace('+index deadbee', '+index badc0de'))).not.toBe(hash);
+    expect(deliveryDiffHash(reviewed.replace(' 100644\n---', ' suffix\n---'))).not.toBe(hash);
+  });
 });
 
 describe('pull request review evidence', () => {
@@ -697,6 +755,7 @@ function publicationClient(
   existingHead: string,
   events: string[] = [],
   mergeMetadataDrift: false | 'transient' | 'persistent' = false,
+  publishedDiff = '',
 ): GithubClient {
   const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
   const expectedHead = 'd'.repeat(40);
@@ -739,7 +798,7 @@ function publicationClient(
       if (url.pathname === '/repos/example/project/pulls/31') {
         if (new Headers(init?.headers).get('accept') === 'application/vnd.github.v3.diff') {
           events.push('diff');
-          return new Response('');
+          return new Response(publishedDiff);
         }
         events.push('metadata');
         const mergeCommitSha =
@@ -752,7 +811,7 @@ function publicationClient(
               : null;
         metadataReads += 1;
         return Response.json({
-          changed_files: 0,
+          changed_files: publishedDiff ? 1 : 0,
           merged_at: null,
           merge_commit_sha: mergeCommitSha,
           head: { sha: expectedHead },
@@ -768,7 +827,9 @@ function publicationClient(
       }
       if (url.pathname === '/repos/example/project/pulls/31/files') {
         events.push('files');
-        return Response.json([]);
+        return Response.json(
+          publishedDiff ? [{ filename: 'docs/guide.md', status: 'modified', patch: '+new' }] : [],
+        );
       }
       if (url.pathname === '/repos/example/project/pulls' && method === 'POST') {
         return Response.json({ message: 'A pull request already exists' }, { status: 422 });

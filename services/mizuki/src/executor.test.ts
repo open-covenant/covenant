@@ -1,7 +1,7 @@
-import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { loadConfig } from './config.js';
 import { enforcePolicy, JobProcessor, phaseBudgetPlan, phaseBudgetUsd } from './executor.js';
+import { deliveryDiffHash } from './github.js';
 import { MemoryStore } from './store.js';
 import { treasurySnapshot } from './treasury.js';
 import type { FinancialPolicy, RefundLiability } from './policy-client.js';
@@ -238,7 +238,7 @@ describe('JobProcessor', () => {
       throw new Error(`unexpected request: ${url}`);
     };
     const events: string[] = [];
-    const diffHash = createHash('sha256').update(artifacts.patch).digest('hex');
+    const diffHash = deliveryDiffHash(artifacts.patch);
     const headSha = 'b'.repeat(40);
     const bindRefundLiabilityDelivery = vi.fn(async (_id, input) => {
       events.push('binding');

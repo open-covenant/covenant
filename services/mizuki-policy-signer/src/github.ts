@@ -15,6 +15,8 @@ const TOKEN_CACHE_LIMIT = 256;
 const JSON_LIMIT = 65_536;
 const DIFF_LIMIT = 2_000_000;
 const COMPARISON_LIMIT = 2_000_000;
+const DELIVERY_DIFF_DOMAIN = 'mizuki.delivery-diff.v1\0';
+const DIFF_INDEX_OBJECTS = /^index ([0-9a-f]{4,64})\.\.([0-9a-f]{4,64})( [0-7]{6})?$/gm;
 const INSTALLATION_PERMISSIONS = {
   checks: 'read',
   contents: 'read',
@@ -975,9 +977,23 @@ export class GitHubMergeVerifier implements MergeVerifier {
       request.reviewedHeadSha,
     );
 
-    const diffHash = createHash('sha256')
-      .update(await this.pullRequestDiff(request.repository, owner, name, pullRequest.number))
-      .digest('hex');
+    const diffBytes = await this.pullRequestDiff(
+      request.repository,
+      owner,
+      name,
+      pullRequest.number,
+    );
+    let diff: string;
+    try {
+      diff = new TextDecoder('utf-8', { fatal: true }).decode(diffBytes);
+    } catch {
+      throw new PolicyError(
+        'github_review_files_unsafe',
+        'Pull request diff is not valid UTF-8 text',
+        422,
+      );
+    }
+    const diffHash = deliveryDiffHash(diff);
     const confirmation = responseSchema.safeParse(
       await this.graphql(request.repository, {
         query,
@@ -1611,6 +1627,19 @@ export function createGitHubAppJwt(appId: string, privateKey: KeyObject, nowMs: 
   const message = `${header}.${payload}`;
   const signature = sign('RSA-SHA256', Buffer.from(message), privateKey).toString('base64url');
   return `${message}.${signature}`;
+}
+
+export function deliveryDiffHash(diff: string): string {
+  return createHash('sha256')
+    .update(DELIVERY_DIFF_DOMAIN)
+    .update(
+      diff.replace(DIFF_INDEX_OBJECTS, (_line, oldObject, newObject, mode = '') => {
+        const oldKind = /^0+$/.test(oldObject) ? '<zero>' : '<object>';
+        const newKind = /^0+$/.test(newObject) ? '<zero>' : '<object>';
+        return `index ${oldKind}..${newKind}${mode}`;
+      }),
+    )
+    .digest('hex');
 }
 
 function withAuthorization(init: RequestInit, token: string): RequestInit {

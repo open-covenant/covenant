@@ -1,6 +1,7 @@
 import { createHash, generateKeyPairSync, verify as verifySignature } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  deliveryDiffHash,
   GitHubMergeVerifier,
   type EscrowTermsRequest,
   type MergeVerificationRequest,
@@ -12,6 +13,7 @@ const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2_
 const PRIVATE_KEY = privateKey.export({ format: 'pem', type: 'pkcs8' }).toString();
 const pullDiff = 'diff --git a/src/parser.ts b/src/parser.ts\n+handle empty input\n';
 const reviewedDiffHash = createHash('sha256').update(pullDiff).digest('hex');
+const deliveryReviewedDiffHash = deliveryDiffHash(pullDiff);
 const request: MergeVerificationRequest = {
   repository: 'owner/repository',
   issueNumber: 17,
@@ -28,7 +30,10 @@ const request: MergeVerificationRequest = {
   authorizedAt: new Date('2026-08-22T12:00:00.000Z'),
 };
 
-function repositoryMergeRequest(repository = 'owner/repository') {
+function repositoryMergeRequest(
+  repository = 'owner/repository',
+  diffHash = deliveryReviewedDiffHash,
+) {
   return {
     repository,
     issueNumber: 17,
@@ -37,7 +42,7 @@ function repositoryMergeRequest(repository = 'owner/repository') {
     reviewedHeadSha: 'b'.repeat(40),
     reviewedBaseSha: 'd'.repeat(40),
     reviewedBaseRef: 'main',
-    reviewedDiffHash,
+    reviewedDiffHash: diffHash,
     notBefore: new Date('2026-08-22T12:00:00.000Z'),
   };
 }
@@ -123,10 +128,43 @@ describe('independent GitHub merge verification', () => {
       headCommitOid: 'b'.repeat(40),
       baseCommitOid: 'd'.repeat(40),
       baseRefName: 'main',
-      diffHash: reviewedDiffHash,
+      diffHash: deliveryReviewedDiffHash,
       createdAt: '2026-08-22T12:01:00.000Z',
       mergedAt: '2026-08-22T12:05:00.000Z',
     });
+  });
+
+  it('accepts equivalent Git index object abbreviations for liability discharge', async () => {
+    const reviewed = deliveryDiff('adc7fc1', 'a3f8a51');
+    const published = deliveryDiff('adc7fc169', 'a3f8a5189');
+    const reviewedHash = deliveryDiffHash(reviewed);
+
+    expect(reviewedHash).toBe('8ceb7d8b40d653eaa60db13f165834810c44fb6e3615cfd0433ac5f4b2c3eddf');
+
+    await expect(
+      fixture({ diff: published }).verifier.verifyRepositoryMerge(
+        repositoryMergeRequest('owner/repository', reviewedHash),
+      ),
+    ).resolves.toMatchObject({ diffHash: reviewedHash });
+  });
+
+  it('rejects changed delivery content, paths, and modes', async () => {
+    const reviewed = deliveryDiff('adc7fc1', 'a3f8a51');
+    const published = deliveryDiff('adc7fc169', 'a3f8a5189');
+    const reviewedHash = deliveryDiffHash(reviewed);
+    const changed = [
+      published.replace('+new', '+different'),
+      published.replaceAll('docs/guide.md', 'docs/other.md'),
+      published.replace('100644', '100755'),
+    ];
+
+    for (const diff of changed) {
+      await expect(
+        fixture({ diff }).verifier.verifyRepositoryMerge(
+          repositoryMergeRequest('owner/repository', reviewedHash),
+        ),
+      ).rejects.toMatchObject({ code: 'github_review_diff_mismatch' });
+    }
   });
 
   it('rejects discharge evidence targeting a different base repository', async () => {
@@ -787,6 +825,18 @@ function json(body: object, status = 200, contentType = 'application/json') {
 
 function mintCalls(fetcher: ReturnType<typeof vi.fn>) {
   return fetcher.mock.calls.filter(([input]) => String(input).includes('/access_tokens'));
+}
+
+function deliveryDiff(oldObject: string, newObject: string): string {
+  return (
+    'diff --git a/docs/guide.md b/docs/guide.md\n' +
+    `index ${oldObject}..${newObject} 100644\n` +
+    '--- a/docs/guide.md\n' +
+    '+++ b/docs/guide.md\n' +
+    '@@ -1 +1 @@\n' +
+    '-old\n' +
+    '+new\n'
+  );
 }
 
 function responseBody(repository = 'owner/repository') {

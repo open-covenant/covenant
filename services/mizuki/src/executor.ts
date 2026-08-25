@@ -296,7 +296,9 @@ export class JobProcessor {
   async retryRefund(id: string): Promise<void> {
     const job = await this.required(id);
     if (job.state === 'refunded') return;
-    if (job.state !== 'refund_pending') throw new Error('job does not have a pending refund');
+    if (!['failed', 'rejected', 'refund_pending'].includes(job.state)) {
+      throw new Error('job is not eligible for refund recovery');
+    }
     await this.refund(id);
   }
 
@@ -304,7 +306,7 @@ export class JobProcessor {
     let completed = 0;
     let pending = 0;
     for (const job of await this.store.jobsList()) {
-      if (job.state !== 'refund_pending') continue;
+      if (!['failed', 'rejected', 'refund_pending'].includes(job.state)) continue;
       await this.refund(job.id);
       if ((await this.required(job.id)).state === 'refunded') completed += 1;
       else pending += 1;
@@ -647,20 +649,21 @@ export class JobProcessor {
   private async refund(id: string): Promise<void> {
     let job = await this.required(id);
     try {
-      if (job.state !== 'refund_pending') {
-        job = await this.store.transitionJob(id, ['failed', 'rejected'], 'refund_pending');
-        await this.store.appendLedger({
-          kind: 'refund_liability',
-          referenceId: id,
-          asset: USDC_MAINNET,
-          amountAtomic: job.payment.amountAtomic,
-          amountUsd: Number(job.payment.amountAtomic) / 1_000_000,
-          transaction: job.payment.transaction,
-        });
-        await this.store.appendActivity('refund.pending', id, {
-          settlementTransaction: job.payment.transaction,
-        });
+      if (job.state === 'failed' || job.state === 'rejected') {
+        try {
+          job = await this.store.transitionJob(id, job.state, 'refund_pending');
+        } catch (cause) {
+          if (!(cause instanceof StateConflictError)) throw cause;
+          job = await this.required(id);
+          if (job.state === 'refunded') {
+            await this.afterRefund(job);
+            return;
+          }
+          if (job.state !== 'refund_pending') throw cause;
+        }
       }
+      if (job.state !== 'refund_pending') throw new Error('job does not have a pending refund');
+      await this.recordRefundPendingReceipts(job);
       if (this.config.paymentMode === 'mock') {
         const refunded = await this.completeRefund(job, `mock-refund-${job.id}`);
         await this.afterRefund(refunded);
@@ -791,6 +794,25 @@ export class JobProcessor {
     if (!exists) {
       await this.store.appendActivity('refund.completed', job.id, {
         transaction: job.refundTransaction,
+      });
+    }
+  }
+
+  private async recordRefundPendingReceipts(job: Job): Promise<void> {
+    await this.store.appendLedger({
+      kind: 'refund_liability',
+      referenceId: job.id,
+      asset: USDC_MAINNET,
+      amountAtomic: job.payment.amountAtomic,
+      amountUsd: Number(job.payment.amountAtomic) / 1_000_000,
+      transaction: job.payment.transaction,
+    });
+    const exists = (await this.store.activity(500)).some(
+      (event) => event.kind === 'refund.pending' && event.subjectId === job.id,
+    );
+    if (!exists) {
+      await this.store.appendActivity('refund.pending', job.id, {
+        settlementTransaction: job.payment.transaction,
       });
     }
   }

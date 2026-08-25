@@ -448,5 +448,5 @@ export function jobIssueNumber(job: WorkbenchJob): number | undefined {
 }
 
 export function isActiveJob(job: WorkbenchJob): boolean {
-  return !['delivered', 'rejected', 'failed', 'refunded'].includes(job.state);
+  return !['delivered', 'refunded'].includes(job.state);
 }

@@ -54,6 +54,44 @@ describe('JobReceipt', () => {
     expect(html).toContain('required exact-head approval');
   });
 
+  it.each(['failed', 'rejected'] as const)(
+    'keeps live status updates active while a %s job enters refund recovery',
+    (state) => {
+      const html = renderToStaticMarkup(
+        <JobReceipt
+          initial={{
+            id: `job-${state}`,
+            state,
+            issueUrl: 'https://github.com/public/tool/issues/2',
+            class: 'micro',
+            priceAtomic: '2000000',
+            error: 'Delivery stopped before refund recovery completed.',
+            changedFiles: [],
+            validations: [],
+            variableRouteCostEstimateUsd: 0.12,
+            costCoverage: {
+              included: [
+                'gateway_model_token_rate_estimate',
+                'gateway_sandbox_runtime_estimate',
+                'reviewer_model_token_rate_estimate',
+              ],
+              excluded: [
+                'provider_billing_adjustments',
+                'chain_and_facilitator_fees',
+                'infrastructure',
+              ],
+            },
+            createdAt: '2026-08-25T08:00:00.000Z',
+            updatedAt: '2026-08-25T08:01:00.000Z',
+          }}
+        />,
+      );
+
+      expect(html).toContain('Live');
+      expect(html).toContain('Full refund in progress');
+    },
+  );
+
   it('shows provider work on a refunded job without exposing the funded balance', () => {
     const provider = {
       model: 'review-model',

@@ -5,7 +5,7 @@ import { formatTime, formatUsdcAtomic, formatUsd, stateLabel } from '@/lib/forma
 import type { Job, ReviewAttempt } from '@/lib/types';
 import { ProviderReceiptDetails } from './provider-receipt';
 
-const terminal = new Set(['delivered', 'rejected', 'failed', 'refunded']);
+const terminal = new Set(['delivered', 'refunded']);
 const stages = ['paid', 'running', 'validating', 'delivered'] as const;
 
 function stagePosition(state: Job['state']): number {

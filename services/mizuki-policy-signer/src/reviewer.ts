@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { PolicyError, requestHash } from './domain.js';
 import type { MergeEvidence, MergeReviewArtifact } from './github.js';
+import { matchesUsePodModel, readUsePodCompletion } from './usepod-response.js';
 
 const MAX_RESPONSE_BYTES = 65_536;
 const MAX_CATALOG_BYTES = 1_048_576;
@@ -30,6 +31,7 @@ export interface IndependentReviewReceipt {
   approved: true;
   reason: string;
   model: string;
+  resolvedModel?: string;
   route: 'marketplace';
   inputHash: string;
   reviewedAt: string;
@@ -51,20 +53,26 @@ export class UsePodIndependentReviewer implements IndependentReviewer {
   ) {}
 
   async health(): Promise<void> {
-    const [catalog, balance] = await Promise.all([
-      this.fetcher(this.url('models'), {
-        method: 'GET',
-        redirect: 'error',
-        headers: { accept: 'application/json' },
-        signal: AbortSignal.timeout(15_000),
-      }),
-      this.fetcher(this.url('balance', false), {
-        method: 'GET',
-        redirect: 'error',
-        headers: { accept: 'application/json' },
-        signal: AbortSignal.timeout(15_000),
-      }),
-    ]);
+    let catalog: Response;
+    let balance: Response;
+    try {
+      [catalog, balance] = await Promise.all([
+        this.fetcher(this.url('models'), {
+          method: 'GET',
+          redirect: 'error',
+          headers: { accept: 'application/json' },
+          signal: AbortSignal.timeout(15_000),
+        }),
+        this.fetcher(this.url('balance', false), {
+          method: 'GET',
+          redirect: 'error',
+          headers: { accept: 'application/json' },
+          signal: AbortSignal.timeout(15_000),
+        }),
+      ]);
+    } catch {
+      throw unavailable('independent review readiness request failed');
+    }
     if (!catalog.ok) throw unavailable(`review model catalog returned ${catalog.status}`);
     const catalogBody = z
       .object({
@@ -143,42 +151,40 @@ export class UsePodIndependentReviewer implements IndependentReviewer {
       response_format: { type: 'json_object' },
       messages,
     };
-    const response = await this.fetcher(this.url('chat/completions'), {
-      method: 'POST',
-      redirect: 'error',
-      headers: {
-        'content-type': 'application/json',
-        'x-pod-routing-mode': 'marketplace-only',
-        'x-pod-no-retention': 'true',
-        'x-pod-max-price-input': String(this.config.maxInputPriceMicrounits),
-        'x-pod-max-price-output': String(this.config.maxOutputPriceMicrounits),
-        'x-request-id': inputHash,
-      },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(60_000),
-    });
+    let response: Response;
+    try {
+      response = await this.fetcher(this.url('chat/completions'), {
+        method: 'POST',
+        redirect: 'error',
+        headers: {
+          'content-type': 'application/json',
+          'x-pod-routing-mode': 'marketplace-only',
+          'x-pod-no-retention': 'true',
+          'x-pod-max-price-input': String(this.config.maxInputPriceMicrounits),
+          'x-pod-max-price-output': String(this.config.maxOutputPriceMicrounits),
+          'x-request-id': inputHash,
+        },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(60_000),
+      });
+    } catch {
+      throw unavailable('independent review request failed');
+    }
     if (!response.ok) throw unavailable(`independent review returned ${response.status}`);
     const route = response.headers.get('x-pod-route')?.trim().toLowerCase();
     const balance = response.headers.get('x-balance-remaining')?.trim() ?? '';
     if (route !== 'marketplace' || !atomicAtLeast(balance, this.config.minimumBalance)) {
       throw unavailable('independent review route or funded balance evidence is invalid');
     }
-    const body = z
-      .object({
-        model: z.string().min(1).max(256),
-        choices: z
-          .array(z.object({ message: z.object({ content: z.string().min(1) }) }))
-          .min(1)
-          .max(8),
-      })
-      .passthrough()
-      .safeParse(await boundedJson(response, MAX_RESPONSE_BYTES));
-    if (!body.success || body.data.model !== this.config.model) {
+    const completion = await readUsePodCompletion(response).catch(() => {
+      throw unavailable('independent review returned an invalid completion');
+    });
+    if (!matchesUsePodModel(this.config.model, completion.model)) {
       throw unavailable('independent review response did not match the configured model');
     }
     let decision: unknown;
     try {
-      decision = JSON.parse(body.data.choices[0]!.message.content);
+      decision = JSON.parse(completion.content);
     } catch {
       throw unavailable('independent review returned malformed decision JSON');
     }
@@ -203,7 +209,8 @@ export class UsePodIndependentReviewer implements IndependentReviewer {
     return {
       approved: true,
       reason: parsed.data.reason,
-      model: body.data.model,
+      model: this.config.model,
+      ...(completion.model === this.config.model ? {} : { resolvedModel: completion.model }),
       route: 'marketplace',
       inputHash,
       reviewedAt: this.now().toISOString(),

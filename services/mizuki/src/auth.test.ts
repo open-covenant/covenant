@@ -1,10 +1,96 @@
-import { generateKeyPairSync, sign } from 'node:crypto';
+import { createHmac, generateKeyPairSync, sign } from 'node:crypto';
 import { getBase58Decoder } from '@solana/kit';
 import { describe, expect, it, vi } from 'vitest';
-import { ContributorAuth } from './auth.js';
+import { createApiToken } from './api-tokens.js';
+import { ApiTokenAuthError, ContributorAuth, GithubOAuthCallbackError } from './auth.js';
 import { MemoryStore } from './store.js';
 
 describe('ContributorAuth', () => {
+  it('binds CSRF tokens to a valid browser session', () => {
+    const secret = 's'.repeat(32);
+    const auth = new ContributorAuth(
+      {
+        publicBaseUrl: 'https://api.mizuki.example',
+        webOrigin: 'https://mizuki.example',
+        githubClientId: 'client',
+        githubClientSecret: 'secret',
+        sessionSecret: secret,
+      },
+      new MemoryStore(),
+    );
+    const session = signedSession(
+      { githubId: '42', githubLogin: 'maintainer', exp: Date.now() + 60_000 },
+      secret,
+    );
+    const otherSession = signedSession(
+      { githubId: '7', githubLogin: 'contributor', exp: Date.now() + 60_000 },
+      secret,
+    );
+    const token = auth.csrfToken(session);
+
+    expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(auth.verifyCsrfToken(session, token)).toBe(true);
+    expect(auth.verifyCsrfToken(otherSession, token)).toBe(false);
+    expect(auth.verifyCsrfToken(session, 'invalid')).toBe(false);
+    expect(auth.csrfToken('invalid-session')).toBeUndefined();
+  });
+
+  it('authenticates scoped API tokens, records use, and fails closed after revocation', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    const auth = new ContributorAuth(
+      {
+        publicBaseUrl: 'https://api.mizuki.example',
+        webOrigin: 'https://mizuki.example',
+        githubClientId: 'client',
+        githubClientSecret: 'secret',
+        sessionSecret: 's'.repeat(32),
+      },
+      store,
+    );
+    const credential = createApiToken({
+      githubId: '42',
+      name: 'MCP',
+      scopes: ['repositories:read'],
+      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60_000).toISOString(),
+    });
+    await store.createApiToken(credential.record);
+
+    await expect(auth.apiToken(credential.token, 'repositories:read')).resolves.toMatchObject({
+      kind: 'api_token',
+      tokenId: credential.record.id,
+      githubId: '42',
+      githubLogin: 'maintainer',
+      scopes: ['repositories:read'],
+    });
+    expect((await store.apiTokenByPrefix(credential.record.prefix))?.lastUsedAt).toBeTruthy();
+    await expect(
+      auth.apiToken(credential.token, 'jobs:write'),
+    ).rejects.toMatchObject<ApiTokenAuthError>({ code: 'insufficient_scope' });
+
+    const wrongToken = `${credential.token.slice(0, -1)}${credential.token.endsWith('a') ? 'b' : 'a'}`;
+    await expect(
+      auth.apiToken(wrongToken, 'repositories:read'),
+    ).rejects.toMatchObject<ApiTokenAuthError>({ code: 'invalid' });
+    await store.revokeApiToken(credential.record.id, '42', new Date().toISOString());
+    await expect(
+      auth.apiToken(credential.token, 'repositories:read'),
+    ).rejects.toMatchObject<ApiTokenAuthError>({ code: 'invalid' });
+
+    const expired = createApiToken({
+      githubId: '42',
+      name: 'Expired MCP',
+      scopes: ['repositories:read'],
+      expiresAt: new Date(Date.now() + 24 * 60 * 60_000).toISOString(),
+    });
+    expired.record.createdAt = '2026-01-01T00:00:00.000Z';
+    expired.record.expiresAt = '2026-01-02T00:00:00.000Z';
+    await store.createApiToken(expired.record);
+    await expect(
+      auth.apiToken(expired.token, 'repositories:read'),
+    ).rejects.toMatchObject<ApiTokenAuthError>({ code: 'invalid' });
+  });
+
   it('routes the OAuth callback through the web origin so the session cookie is first-party', async () => {
     const auth = new ContributorAuth(
       {
@@ -25,10 +111,40 @@ describe('ContributorAuth', () => {
 
   it('keeps redirects on the first-party path allowlist', async () => {
     const auth = oauthAuth(new MemoryStore(), vi.fn());
-    const authorization = await auth.beginGithubOAuth('https://attacker.example/session');
-    const payload = signedPayload(new URL(authorization.url).searchParams.get('state')!);
+    for (const destination of [
+      'https://attacker.example/session',
+      '//attacker.example/app',
+      '/application',
+      '/settings',
+      '/app#credential',
+    ]) {
+      const authorization = await auth.beginGithubOAuth(destination);
+      const payload = signedPayload(new URL(authorization.url).searchParams.get('state')!);
+      expect(payload).toMatchObject({ redirect: '/bounties' });
+    }
 
-    expect(payload).toMatchObject({ redirect: '/bounties' });
+    const allowed = await auth.beginGithubOAuth('/app/jobs/new?issue=7');
+    expect(signedPayload(new URL(allowed.url).searchParams.get('state')!)).toMatchObject({
+      redirect: '/app/jobs/new?issue=7',
+    });
+  });
+
+  it('recovers a verified return path from denied, expired, or replayed callback state', async () => {
+    const now = Date.parse('2026-08-25T12:00:00.000Z');
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+    const auth = oauthAuth(new MemoryStore(), vi.fn());
+    const publicFlow = await auth.beginGithubOAuth('/bounties/bounty-1?view=criteria');
+    const workbenchFlow = await auth.beginGithubOAuth('/app/jobs/new?issue=7&repository=tool');
+    const publicState = new URL(publicFlow.url).searchParams.get('state')!;
+    const workbenchState = new URL(workbenchFlow.url).searchParams.get('state')!;
+
+    expect(auth.githubOAuthRedirect(publicState)).toBe('/bounties/bounty-1?view=criteria');
+    expect(auth.githubOAuthRedirect(workbenchState)).toBe('/app/jobs/new?issue=7&repository=tool');
+    clock.mockReturnValue(now + 10 * 60_000 + 1);
+    expect(auth.githubOAuthRedirect(publicState)).toBe('/bounties/bounty-1?view=criteria');
+    expect(auth.githubOAuthRedirect(`${publicState}x`)).toBeUndefined();
+    expect(auth.githubOAuthRedirect(undefined)).toBeUndefined();
+    clock.mockRestore();
   });
 
   it('requires the browser flow cookie and rejects a different browser before token exchange', async () => {
@@ -37,10 +153,12 @@ describe('ContributorAuth', () => {
     const authorization = await auth.beginGithubOAuth('/app');
     const state = new URL(authorization.url).searchParams.get('state')!;
 
-    await expect(auth.callback('code', state, undefined)).rejects.toThrow('cookie is required');
-    await expect(auth.callback('code', state, 'different-browser')).rejects.toThrow(
-      'browser flow is invalid',
-    );
+    await expect(auth.callback('code', state, undefined)).rejects.toMatchObject({
+      code: 'invalid',
+    });
+    await expect(auth.callback('code', state, 'different-browser')).rejects.toMatchObject({
+      code: 'invalid',
+    });
     expect(request).not.toHaveBeenCalled();
     await expect(auth.callback('code', state, authorization.flowCookie)).resolves.toMatchObject({
       redirect: '/app',
@@ -56,9 +174,9 @@ describe('ContributorAuth', () => {
     await expect(auth.callback('code', state, authorization.flowCookie)).resolves.toMatchObject({
       redirect: '/app',
     });
-    await expect(auth.callback('code', state, authorization.flowCookie)).rejects.toThrow(
-      'already used',
-    );
+    await expect(
+      auth.callback('code', state, authorization.flowCookie),
+    ).rejects.toMatchObject<GithubOAuthCallbackError>({ code: 'replayed' });
     expect(request).toHaveBeenCalledTimes(2);
   });
 
@@ -71,11 +189,25 @@ describe('ContributorAuth', () => {
     const state = new URL(authorization.url).searchParams.get('state')!;
     clock.mockReturnValue(now + 10 * 60_000 + 1);
 
-    await expect(auth.callback('code', state, authorization.flowCookie)).rejects.toThrow(
-      'OAuth state expired',
-    );
+    await expect(
+      auth.callback('code', state, authorization.flowCookie),
+    ).rejects.toMatchObject<GithubOAuthCallbackError>({ code: 'expired' });
     expect(request).not.toHaveBeenCalled();
     clock.mockRestore();
+  });
+
+  it('preserves OAuth store outages for the callback availability response', async () => {
+    const store = new MemoryStore();
+    const auth = oauthAuth(store, vi.fn());
+    const authorization = await auth.beginGithubOAuth('/app');
+    const state = new URL(authorization.url).searchParams.get('state')!;
+    vi.spyOn(store, 'consumeGithubOAuthFlow').mockRejectedValueOnce(
+      new Error('database temporarily unavailable'),
+    );
+
+    await expect(auth.callback('code', state, authorization.flowCookie)).rejects.toThrow(
+      'database temporarily unavailable',
+    );
   });
 
   it('links a wallet after a valid domain-bound signature and rejects replay', async () => {
@@ -212,4 +344,10 @@ function signedPayload(value: string): Record<string, unknown> {
   const [payload] = value.split('.');
   if (!payload) throw new Error('state payload is missing');
   return JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as Record<string, unknown>;
+}
+
+function signedSession(payload: Record<string, unknown>, secret: string): string {
+  const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const signature = createHmac('sha256', secret).update(encoded).digest('base64url');
+  return `${encoded}.${signature}`;
 }

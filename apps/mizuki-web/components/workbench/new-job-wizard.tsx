@@ -2,19 +2,23 @@
 
 import type { SolanaSignTransactionFeature } from '@solana/wallet-standard-features';
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { formatTime, formatUsdcAtomic, stateLabel } from '@/lib/format';
+import { formatTime, formatUsdcAtomic, stateLabel, truncateAddress } from '@/lib/format';
 import { githubIssuePattern } from '@/lib/github-url';
 import {
   checkQuotePaymentStatus,
   clearWorkbenchPaymentRecovery,
+  issueMatchesRepository,
   loadWorkbenchPaymentRecovery,
-  paymentKey,
+  paymentAccountId,
+  PaymentRecoveryStorageError,
+  prepareWorkbenchPaymentRecovery,
   quoteExpired,
   quoteMatchesIssue,
   readJsonResponse,
   saveWorkbenchPaymentRecovery,
+  type WorkbenchPaymentRecovery,
 } from '@/lib/payment';
 import type { Job, Quote } from '@/lib/types';
 import {
@@ -27,10 +31,11 @@ import {
 } from '@/lib/workbench';
 import {
   useWorkbenchResource,
+  workbenchMutation,
   workbenchRequest,
   WorkbenchRequestError,
 } from '@/lib/workbench-client';
-import { useStandardWallet } from '@/lib/wallet-standard';
+import { paymentWalletNetwork, useStandardWallet } from '@/lib/wallet-standard';
 import { createPaymentFetch } from '@/lib/x402';
 import {
   ServiceContractNote,
@@ -40,6 +45,7 @@ import {
   WorkbenchPageHeader,
   WorkbenchStatus,
 } from './workbench-primitives';
+import { OrganizationRepositorySelector } from './organization-repository-selector';
 
 export function NewJobWizard({
   initialOwner,
@@ -51,18 +57,22 @@ export function NewJobWizard({
   initialIssue?: number;
 }) {
   const repositories = useWorkbenchResource('/v1/account/repositories', normalizeRepositories);
+  const paymentAccount = useWorkbenchResource('/v1/account', paymentAccountId);
   const [selected, setSelected] = useState<string>(
     initialOwner && initialRepo ? `${initialOwner}/${initialRepo}` : '',
   );
   const [repositoryLocked, setRepositoryLocked] = useState(false);
   const repository =
     repositories.status === 'ready'
-      ? repositories.data.find((item) => item.fullName.toLowerCase() === selected.toLowerCase())
+      ? findSelectedRepository(repositories.data, selected)
       : undefined;
+  const repositoryOutage =
+    repositories.status === 'ready' &&
+    repositories.data.some((item) => item.readiness === 'unavailable');
 
   useEffect(() => {
-    if (selected || repositories.status !== 'ready') return;
-    const recovery = loadWorkbenchPaymentRecovery();
+    if (selected || repositories.status !== 'ready' || paymentAccount.status !== 'ready') return;
+    const recovery = loadWorkbenchPaymentRecovery(paymentAccount.data);
     if (!recovery) return;
     const recoverable = repositories.data.find(
       (item) =>
@@ -70,7 +80,11 @@ export function NewJobWizard({
         item.fullName.toLowerCase() === recovery.repository.toLowerCase(),
     );
     if (recoverable) setSelected(recoverable.fullName);
-  }, [repositories, selected]);
+  }, [paymentAccount, repositories, selected]);
+
+  useEffect(() => {
+    if (repository && selected !== repository.fullName) setSelected(repository.fullName);
+  }, [repository, selected]);
 
   return (
     <div className="workbench-page narrow-workbench-page">
@@ -103,34 +117,47 @@ export function NewJobWizard({
             <div className="wizard-step-content">
               <div className="wizard-step-heading">
                 <div>
-                  <span>Repository</span>
-                  <h2>Choose a ready repository</h2>
+                  <span>Organization and repository</span>
+                  <h2>Choose an organization and ready repository</h2>
                 </div>
                 {repository && <WorkbenchStatus value={repository.readiness} />}
               </div>
-              <div className="wizard-repository-grid">
-                {repositories.data.map((item) => (
-                  <button
-                    type="button"
-                    className={selected === item.fullName ? 'selected' : ''}
-                    onClick={() => setSelected(item.fullName)}
-                    disabled={item.readiness !== 'ready' || repositoryLocked}
-                    key={item.fullName}
-                  >
-                    <span>{item.owner}</span>
-                    <strong>{item.repo}</strong>
-                    <small>
-                      {item.readiness === 'ready' ? 'Ready for work' : 'Setup required'}
-                    </small>
-                  </button>
-                ))}
-              </div>
-              {repository?.readiness !== 'ready' && selected && (
+              <OrganizationRepositorySelector
+                repositories={repositories.data}
+                selected={selected}
+                disabled={repositoryLocked}
+                onSelect={setSelected}
+              />
+              {selected && !repository && (
                 <p className="wizard-help">
-                  Finish the repository setup before requesting a quote.{' '}
-                  <Link href={`/app/repositories/${repository?.owner}/${repository?.repo}`}>
-                    Review requirements
-                  </Link>
+                  That repository is not connected to this account.{' '}
+                  <Link href="/app/onboarding">Review connected repositories</Link>
+                </p>
+              )}
+              {repository && repository.readiness !== 'ready' && (
+                <p className="wizard-help">
+                  {repository.readiness === 'unavailable'
+                    ? 'Repository readiness could not be confirmed. '
+                    : 'Finish the repository setup before requesting a quote. '}
+                  {repository.readiness === 'unavailable' ? (
+                    <button type="button" onClick={repositories.refresh}>
+                      Retry status
+                    </button>
+                  ) : (
+                    <Link
+                      href={`/app/repositories/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}`}
+                    >
+                      Review requirements
+                    </Link>
+                  )}
+                </p>
+              )}
+              {repositoryOutage && !selected && (
+                <p className="wizard-help">
+                  One or more repository checks are temporarily unavailable.{' '}
+                  <button type="button" onClick={repositories.refresh}>
+                    Retry status
+                  </button>
                 </p>
               )}
               {repositoryLocked && (
@@ -145,6 +172,9 @@ export function NewJobWizard({
             <IssueAndPayment
               repository={repository}
               initialIssue={initialIssue}
+              accountId={paymentAccount.status === 'ready' ? paymentAccount.data : undefined}
+              accountLoading={paymentAccount.status === 'loading'}
+              refreshAccount={paymentAccount.refresh}
               onPaymentLockChange={setRepositoryLocked}
             />
           )}
@@ -155,13 +185,28 @@ export function NewJobWizard({
   );
 }
 
+export function findSelectedRepository(
+  repositories: readonly WorkbenchRepository[],
+  selected: string,
+): WorkbenchRepository | undefined {
+  const target = selected.trim().toLowerCase();
+  if (!target) return undefined;
+  return repositories.find((repository) => repository.fullName.toLowerCase() === target);
+}
+
 function IssueAndPayment({
   repository,
   initialIssue,
+  accountId,
+  accountLoading,
+  refreshAccount,
   onPaymentLockChange,
 }: {
   repository: WorkbenchRepository;
   initialIssue?: number;
+  accountId?: string;
+  accountLoading: boolean;
+  refreshAccount: () => void;
   onPaymentLockChange: (locked: boolean) => void;
 }) {
   const router = useRouter();
@@ -181,14 +226,18 @@ function IssueAndPayment({
     | 'payment_uncertain'
     | 'checking_payment'
     | 'payment_unpaid'
+    | 'revalidating_payment'
   >('idle');
   const [error, setError] = useState<string | null>(null);
+  const paymentStatusController = useRef<AbortController | null>(null);
   const {
     wallets,
     connected,
+    ready: walletReady,
     connecting,
     error: walletError,
     connect,
+    disconnect,
   } = useStandardWallet('transaction');
 
   useEffect(() => {
@@ -198,13 +247,27 @@ function IssueAndPayment({
   }, [initialIssue, issueUrl, issues]);
 
   useEffect(() => {
-    const recovery = loadWorkbenchPaymentRecovery();
+    if (!accountId) {
+      setIssueUrl('');
+      setPreflight(null);
+      setQuote(null);
+      setError(null);
+      setState('idle');
+      return;
+    }
+    const recovery = loadWorkbenchPaymentRecovery(accountId);
     if (recovery?.repository.toLowerCase() === repository.fullName.toLowerCase()) {
       setIssueUrl(recovery.issueUrl);
       setPreflight(null);
       setQuote(recovery.quote);
       setError(null);
-      setState(recovery.phase === 'unpaid' ? 'payment_unpaid' : 'payment_uncertain');
+      setState(
+        recovery.phase === 'unpaid'
+          ? 'payment_unpaid'
+          : recovery.phase === 'prepared'
+            ? 'quoted'
+            : 'payment_uncertain',
+      );
       return;
     }
     setIssueUrl('');
@@ -212,10 +275,17 @@ function IssueAndPayment({
     setQuote(null);
     setError(null);
     setState('idle');
-  }, [repository.fullName]);
+  }, [accountId, repository.fullName]);
+
+  useEffect(() => {
+    return () => paymentStatusController.current?.abort();
+  }, [accountId, repository.fullName]);
 
   const paymentLocked =
-    state === 'paying' || state === 'payment_uncertain' || state === 'checking_payment';
+    state === 'paying' ||
+    state === 'payment_uncertain' ||
+    state === 'checking_payment' ||
+    state === 'revalidating_payment';
 
   useEffect(() => {
     onPaymentLockChange(paymentLocked);
@@ -228,7 +298,7 @@ function IssueAndPayment({
     state === 'checking' || state === 'quoting' || state === 'paying' || paymentLocked;
 
   function selectIssue(next: string) {
-    if (quote) clearWorkbenchPaymentRecovery(quote.id);
+    if (quote && accountId) clearWorkbenchPaymentRecovery(accountId, quote.id);
     setIssueUrl(next);
     setPreflight(null);
     setQuote(null);
@@ -236,9 +306,16 @@ function IssueAndPayment({
     setState('idle');
   }
 
-  async function runPreflight(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (quote) clearWorkbenchPaymentRecovery(quote.id);
+  async function runPreflight(event?: React.FormEvent<HTMLFormElement>) {
+    event?.preventDefault();
+    if (quote && accountId) clearWorkbenchPaymentRecovery(accountId, quote.id);
+    if (!issueMatchesRepository(issueUrl, repository.fullName)) {
+      setState('idle');
+      setError(`Choose an issue from ${repository.fullName} before checking maintenance scope.`);
+      setPreflight(null);
+      setQuote(null);
+      return;
+    }
     setState('checking');
     setError(null);
     setPreflight(null);
@@ -260,12 +337,18 @@ function IssueAndPayment({
   }
 
   async function requestQuote() {
-    if (quote) clearWorkbenchPaymentRecovery(quote.id);
+    if (quote && accountId) clearWorkbenchPaymentRecovery(accountId, quote.id);
+    if (!issueMatchesRepository(issueUrl, repository.fullName)) {
+      setState('idle');
+      setError(`Choose an issue from ${repository.fullName} before requesting a quote.`);
+      setQuote(null);
+      return;
+    }
     setState('quoting');
     setError(null);
     setQuote(null);
     try {
-      const next = await workbenchRequest<Quote>('/v1/quotes', {
+      const next = await workbenchMutation<Quote>('/v1/account/quotes', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ github_issue_url: issueUrl.trim() }),
@@ -279,8 +362,15 @@ function IssueAndPayment({
   }
 
   async function payAndStart() {
-    if (!quote || !connected) return;
-    if (!quoteMatchesIssue(quote, issueUrl)) {
+    if (!quote || !connected || !walletReady) return;
+    if (!accountId) {
+      setError('Payment is unavailable until the signed-in GitHub account can be verified.');
+      return;
+    }
+    if (
+      !quoteMatchesIssue(quote, issueUrl) ||
+      !issueMatchesRepository(issueUrl, repository.fullName)
+    ) {
       setQuote(null);
       setState('idle');
       setError('The selected issue changed. Review its scope and request a new fixed quote.');
@@ -292,80 +382,134 @@ function IssueAndPayment({
       setError('This quote expired. Request a new fixed quote before paying.');
       return;
     }
-    const idempotencyKey = paymentKey(quote.id);
-    saveWorkbenchPaymentRecovery({
-      phase: 'uncertain',
-      repository: repository.fullName,
-      issueUrl,
-      quote,
-    });
-    setState('paying');
+
+    let recovery: WorkbenchPaymentRecovery | undefined;
+    let walletSigned = false;
     setError(null);
     try {
-      const feature = connected.wallet.features[
+      recovery = prepareWorkbenchPaymentRecovery({
+        accountId,
+        repository: `${quote.owner}/${quote.repo}`,
+        issueUrl,
+        quote,
+      });
+      const walletFeature = connected.wallet.features[
         'solana:signTransaction'
       ] as SolanaSignTransactionFeature['solana:signTransaction'];
+      const feature: SolanaSignTransactionFeature['solana:signTransaction'] = {
+        ...walletFeature,
+        async signTransaction(...inputs) {
+          const signed = await walletFeature.signTransaction(...inputs);
+          walletSigned = true;
+          return signed;
+        },
+      };
       const paidFetch = createPaymentFetch({
         account: connected.account,
         feature,
         quotePayment: quote.payment,
         quoteAmount: quote.priceAtomic,
       });
+      recovery = { ...recovery, phase: 'attempting' };
+      saveWorkbenchPaymentRecovery(recovery);
+      setState('paying');
       const response = await paidFetch('/api/mizuki/v1/jobs', {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          'idempotency-key': idempotencyKey,
+          'idempotency-key': recovery.idempotencyKey,
         },
         body: JSON.stringify({ quote_id: quote.id }),
       });
       const job = await readJsonResponse<Job>(response);
-      clearWorkbenchPaymentRecovery(quote.id);
+      clearWorkbenchPaymentRecovery(accountId, quote.id);
       router.push(`/app/jobs/${encodeURIComponent(job.id)}`);
-    } catch {
-      saveWorkbenchPaymentRecovery({
-        phase: 'uncertain',
-        repository: repository.fullName,
-        issueUrl,
-        quote,
-      });
+    } catch (cause) {
+      if (!walletSigned) {
+        clearWorkbenchPaymentRecovery(accountId, quote.id);
+        setState('quoted');
+        setError(paymentAttemptError(cause));
+        return;
+      }
+      if (recovery) {
+        try {
+          saveWorkbenchPaymentRecovery({ ...recovery, phase: 'uncertain' });
+        } catch {
+          // The read-verified attempting record remains the recovery source.
+        }
+      }
       setState('payment_uncertain');
       setError(null);
     }
   }
 
   async function checkPaymentStatus() {
-    if (!quote) return;
+    if (!quote || !accountId) return;
+    const recovery = loadWorkbenchPaymentRecovery(accountId);
+    if (!recovery || recovery.quote.id !== quote.id) {
+      setState('payment_uncertain');
+      setError(
+        'The secure payment recovery record is unavailable. Do not approve another payment in this tab.',
+      );
+      return;
+    }
+    paymentStatusController.current?.abort();
+    const controller = new AbortController();
+    paymentStatusController.current = controller;
     setState('checking_payment');
     setError(null);
     try {
-      const status = await checkQuotePaymentStatus(quote.id, paymentKey(quote.id));
+      const status = await checkQuotePaymentStatus(quote.id, recovery.idempotencyKey, {
+        signal: controller.signal,
+      });
       if (status.status === 'job_reserved') {
-        clearWorkbenchPaymentRecovery(quote.id);
+        clearWorkbenchPaymentRecovery(accountId, quote.id);
         router.push(`/app/jobs/${encodeURIComponent(status.job.id)}`);
         return;
       }
       if (status.expiresAt !== quote.expiresAt) {
         throw new Error('Payment status did not match the accepted quote');
       }
-      saveWorkbenchPaymentRecovery({
-        phase: 'unpaid',
-        repository: repository.fullName,
-        issueUrl,
-        quote,
-      });
+      saveWorkbenchPaymentRecovery({ ...recovery, phase: 'unpaid' });
       setState('payment_unpaid');
-    } catch {
-      saveWorkbenchPaymentRecovery({
-        phase: 'uncertain',
-        repository: repository.fullName,
-        issueUrl,
-        quote,
-      });
+    } catch (cause) {
+      if (controller.signal.aborted) return;
+      try {
+        saveWorkbenchPaymentRecovery({ ...recovery, phase: 'uncertain' });
+      } catch {
+        // The earlier recovery record retains the exact idempotency key.
+      }
       setState('payment_uncertain');
       setError(
-        'Payment status is still unavailable. No new payment was requested. Try checking again before using Pay.',
+        cause instanceof Error
+          ? `${cause.message} No new payment was requested.`
+          : 'Payment status is unavailable. No new payment was requested.',
       );
+    } finally {
+      if (paymentStatusController.current === controller) {
+        paymentStatusController.current = null;
+      }
+    }
+  }
+
+  async function revalidatePaymentRetry() {
+    if (!quote || !accountId) return;
+    setState('revalidating_payment');
+    setError(null);
+    try {
+      const value = await workbenchRequest<unknown>('/v1/preflights', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ github_issue_url: issueUrl.trim() }),
+      });
+      const next = normalizePreflight(value);
+      clearWorkbenchPaymentRecovery(accountId, quote.id);
+      setPreflight(next);
+      setQuote(null);
+      setState('idle');
+    } catch (cause) {
+      setState('payment_unpaid');
+      setError(preflightError(cause));
     }
   }
 
@@ -439,7 +583,9 @@ function IssueAndPayment({
                     ? 'Ready for a fixed quote'
                     : preflight.eligibility === 'unsupported'
                       ? 'This issue is not supported'
-                      : 'Issue changes required'}
+                      : preflight.eligibility === 'unavailable'
+                        ? 'Readiness temporarily unavailable'
+                        : 'Issue changes required'}
                 </h2>
               </div>
               <WorkbenchStatus value={preflight.eligibility} />
@@ -472,11 +618,15 @@ function IssueAndPayment({
                 {state === 'quoting' ? 'Creating quote…' : 'Get fixed quote'}
               </button>
             )}
-            {preflight.eligibility !== 'ready' && (
+            {preflight.eligibility === 'unavailable' ? (
+              <button type="button" onClick={() => void runPreflight()}>
+                Retry readiness
+              </button>
+            ) : preflight.eligibility !== 'ready' ? (
               <a href={preflight.issue.url} target="_blank" rel="noreferrer">
                 Update issue on GitHub ↗
               </a>
-            )}
+            ) : null}
           </div>
         </section>
       )}
@@ -537,38 +687,57 @@ function IssueAndPayment({
                   <h2>
                     {state === 'payment_uncertain' || state === 'checking_payment'
                       ? 'Confirm the existing payment status'
-                      : 'Pay the exact quote and start'}
+                      : state === 'payment_unpaid' || state === 'revalidating_payment'
+                        ? 'Recheck eligibility before retrying'
+                        : 'Pay the exact quote and start'}
                   </h2>
                 </div>
               </div>
-              {state === 'payment_uncertain' || state === 'checking_payment' ? (
+              {!accountId ? (
+                <div className="wizard-payment-recovery" role="status">
+                  <strong>
+                    {accountLoading
+                      ? 'Verifying the signed-in GitHub account…'
+                      : 'Payment is temporarily unavailable'}
+                  </strong>
+                  <p>
+                    The signed-in account must be verified before this tab can create a secure
+                    payment recovery record or open a wallet approval.
+                  </p>
+                  {!accountLoading && (
+                    <button type="button" onClick={refreshAccount}>
+                      Retry account verification
+                    </button>
+                  )}
+                </div>
+              ) : state === 'payment_uncertain' || state === 'checking_payment' ? (
                 <PaymentRecoveryNotice
                   checking={state === 'checking_payment'}
                   quoteId={quote.id}
                   check={() => void checkPaymentStatus()}
                 />
-              ) : state === 'payment_unpaid' && quoteExpired(quote) ? (
+              ) : state === 'payment_unpaid' || state === 'revalidating_payment' ? (
                 <div className="wizard-payment-recovery confirmed" role="status">
-                  <strong>No confirmed payment or job was found</strong>
+                  <strong>No payment or job was found</strong>
                   <p>
-                    This quote has expired, so it cannot be paid. Request a new fixed quote before
-                    opening the wallet again.
+                    {quoteExpired(quote)
+                      ? 'This quote has expired.'
+                      : 'The previous attempt did not create a payment or reserve a job.'}{' '}
+                    Recheck issue eligibility and request a new fixed quote before opening the
+                    wallet again.
                   </p>
-                  <button type="button" onClick={() => void requestQuote()}>
-                    Request new fixed quote
+                  <button
+                    type="button"
+                    disabled={state === 'revalidating_payment'}
+                    onClick={() => void revalidatePaymentRetry()}
+                  >
+                    {state === 'revalidating_payment'
+                      ? 'Rechecking eligibility…'
+                      : 'Recheck issue eligibility'}
                   </button>
                 </div>
               ) : (
                 <>
-                  {state === 'payment_unpaid' && (
-                    <div className="wizard-payment-recovery confirmed" role="status">
-                      <strong>No confirmed payment or job was found</strong>
-                      <p>
-                        This exact quote remains payable until {formatTime(quote.expiresAt)}. Pay
-                        below only if you want to open a new wallet approval.
-                      </p>
-                    </div>
-                  )}
                   {!connected ? (
                     wallets.length > 0 ? (
                       <div className="workbench-wallet-options">
@@ -593,16 +762,14 @@ function IssueAndPayment({
                       </div>
                     )
                   ) : (
-                    <button
-                      className="wizard-pay-button"
-                      type="button"
-                      disabled={state === 'paying'}
-                      onClick={() => void payAndStart()}
-                    >
-                      {state === 'paying'
-                        ? 'Confirming payment…'
-                        : `Pay ${formatUsdcAtomic(quote.priceAtomic)} and start`}
-                    </button>
+                    <ConnectedPaymentSummary
+                      address={connected.account.address}
+                      amountAtomic={quote.priceAtomic}
+                      ready={walletReady}
+                      paying={state === 'paying'}
+                      changeWallet={() => void disconnect()}
+                      pay={() => void payAndStart()}
+                    />
                   )}
                   <p className="wizard-consent">
                     By paying, you accept the <Link href="/terms">service terms</Link> and
@@ -622,6 +789,58 @@ function IssueAndPayment({
         </div>
       )}
     </>
+  );
+}
+
+export function ConnectedPaymentSummary({
+  address,
+  amountAtomic,
+  ready,
+  paying,
+  changeWallet,
+  pay,
+}: {
+  address: string;
+  amountAtomic: string;
+  ready: boolean;
+  paying: boolean;
+  changeWallet: () => void;
+  pay: () => void;
+}) {
+  return (
+    <div className="wizard-connected-payment">
+      <div className="wizard-connected-payment-heading">
+        <div>
+          <span>Connected payer</span>
+          <strong title={address}>{truncateAddress(address, 7)}</strong>
+        </div>
+        <button type="button" disabled={paying} onClick={changeWallet}>
+          Change wallet
+        </button>
+      </div>
+      <dl>
+        <div>
+          <dt>Network</dt>
+          <dd>{paymentWalletNetwork().label}</dd>
+        </div>
+        <div>
+          <dt>Asset</dt>
+          <dd>USDC</dd>
+        </div>
+        <div>
+          <dt>Exact amount</dt>
+          <dd>{formatUsdcAtomic(amountAtomic)}</dd>
+        </div>
+      </dl>
+      <p>
+        {ready
+          ? 'Wallet account and disconnect changes are being monitored.'
+          : 'Waiting for the wallet account subscription before payment can begin.'}
+      </p>
+      <button className="wizard-pay-button" type="button" disabled={paying || !ready} onClick={pay}>
+        {paying ? 'Confirming payment…' : `Pay ${formatUsdcAtomic(amountAtomic)} and start`}
+      </button>
+    </div>
   );
 }
 
@@ -666,15 +885,19 @@ function IssueOption({
     <button
       type="button"
       className={selected ? 'selected' : ''}
+      aria-pressed={selected}
       onClick={select}
       disabled={disabled}
     >
       <span>Issue #{issue.number}</span>
       <strong>{issue.title}</strong>
       <small>
-        {issue.authorized
-          ? issue.reason || 'Maintainer authorization confirmed'
-          : 'Authorization label required'}
+        {issue.reason ||
+          (issue.eligibility === 'unavailable'
+            ? 'Authorization status is temporarily unavailable'
+            : issue.authorized
+              ? 'Maintainer authorization confirmed'
+              : 'Authorization label required')}
       </small>
     </button>
   );
@@ -683,7 +906,7 @@ function IssueOption({
 function WizardProgress({ repository }: { repository?: WorkbenchRepository }) {
   return (
     <ol className="wizard-progress" aria-label="New job progress">
-      {['Repository', 'Issue', 'Preflight', 'Contract', 'Pay'].map((label, index) => (
+      {['Organization & repo', 'Issue', 'Preflight', 'Contract', 'Pay'].map((label, index) => (
         <li className={index === 0 && repository ? 'complete' : ''} key={label}>
           <span>{String(index + 1).padStart(2, '0')}</span>
           {label}
@@ -709,4 +932,12 @@ function quoteError(cause: unknown): string {
     if (cause.status === 429) return 'Too many quote requests. Wait a moment and try again.';
   }
   return 'A fixed quote could not be created. No payment was requested.';
+}
+
+function paymentAttemptError(cause: unknown): string {
+  if (cause instanceof PaymentRecoveryStorageError) return cause.message;
+  if (cause instanceof Error && cause.message) {
+    return `${cause.message} No payment or job was created.`;
+  }
+  return 'Payment could not start. No payment or job was created.';
 }

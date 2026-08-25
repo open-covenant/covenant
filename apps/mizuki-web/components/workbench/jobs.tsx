@@ -46,7 +46,7 @@ export function Jobs() {
       />
 
       <div className="workbench-filter-bar">
-        <div aria-label="Filter jobs">
+        <div role="group" aria-label="Filter jobs">
           {(['all', 'active', 'delivered', 'refunded'] as const).map((value) => (
             <button
               type="button"

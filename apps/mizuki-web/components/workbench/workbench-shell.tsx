@@ -3,29 +3,61 @@
 import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { normalizeAccount, workbenchAuthHref } from '@/lib/workbench';
-import { useWorkbenchResource, workbenchRequest } from '@/lib/workbench-client';
+import { useEffect, useState } from 'react';
+import { githubAuthErrorMessage, normalizeAccount, workbenchAuthHref } from '@/lib/workbench';
+import {
+  logoutWorkbench,
+  onWorkbenchUnauthorized,
+  useWorkbenchResource,
+} from '@/lib/workbench-client';
 
-const primaryNavigation = [
-  { href: '/app', label: 'Overview', exact: true },
-  { href: '/app/repositories', label: 'Repositories' },
-  { href: '/app/jobs', label: 'Jobs' },
-  { href: '/app/bounties', label: 'Bounties' },
-  { href: '/app/billing', label: 'Payments & refunds' },
+export type WorkbenchNavigationItem = {
+  href: string;
+  label: string;
+  icon: string;
+  exact?: boolean;
+};
+
+export const primaryNavigation: WorkbenchNavigationItem[] = [
+  { href: '/app', label: 'Overview', icon: '⌂', exact: true },
+  { href: '/app/repositories', label: 'Repositories', icon: '▦' },
+  { href: '/app/jobs', label: 'Jobs', icon: '✓' },
+  { href: '/app/bounties', label: 'Bounties', icon: '◇' },
+  { href: '/app/billing', label: 'Payments & refunds', icon: '$' },
 ];
 
-const secondaryNavigation = [
-  { href: '/app/integrations', label: 'Integrations' },
-  { href: '/app/settings', label: 'Settings' },
+export const secondaryNavigation: WorkbenchNavigationItem[] = [
+  { href: '/app/integrations', label: 'Integrations', icon: '↔' },
+  { href: '/app/settings', label: 'Settings', icon: '⚙' },
 ];
 
 export function WorkbenchShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
+  const [authExpired, setAuthExpired] = useState(false);
+  const [authError, setAuthError] = useState<string>();
+  const [returnTo, setReturnTo] = useState(pathname);
+  const [logoutPending, setLogoutPending] = useState(false);
+  const [logoutError, setLogoutError] = useState<string>();
   const account = useWorkbenchResource('/v1/account', normalizeAccount);
 
+  useEffect(() => onWorkbenchUnauthorized(() => setAuthExpired(true)), []);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const message = githubAuthErrorMessage(params.get('auth_error'));
+    params.delete('auth_error');
+    const cleanPath = `${pathname}${params.size ? `?${params}` : ''}`;
+    setAuthError(message);
+    setReturnTo(cleanPath);
+    if (message && `${window.location.pathname}${window.location.search}` !== cleanPath) {
+      window.history.replaceState(window.history.state, '', cleanPath);
+    }
+  }, [pathname]);
+
   if (account.status === 'loading') return <WorkbenchShellLoading />;
-  if (account.status === 'unauthorized') return <WorkbenchSignIn returnTo={pathname} />;
+  if (account.status === 'unauthorized' || authExpired) {
+    return <WorkbenchSignIn returnTo={returnTo} authError={authError} />;
+  }
   if (account.status === 'error') {
     return (
       <WorkbenchAccessState
@@ -38,9 +70,18 @@ export function WorkbenchShell({ children }: { children: React.ReactNode }) {
   }
 
   async function logout() {
-    await workbenchRequest('/v1/auth/logout', { method: 'POST' }).catch(() => undefined);
-    router.push('/');
-    router.refresh();
+    setLogoutPending(true);
+    setLogoutError(undefined);
+    try {
+      await logoutWorkbench(() => {
+        router.push('/');
+        router.refresh();
+      });
+    } catch {
+      setLogoutError('Sign-out could not be confirmed. This page remains signed in; try again.');
+    } finally {
+      setLogoutPending(false);
+    }
   }
 
   return (
@@ -55,7 +96,10 @@ export function WorkbenchShell({ children }: { children: React.ReactNode }) {
         </Link>
 
         <Link className="workbench-new-job" href="/app/jobs/new">
-          <span aria-hidden="true">+</span> New maintenance job
+          <span className="workbench-new-job-icon" aria-hidden="true">
+            +
+          </span>
+          <span>New job</span>
         </Link>
 
         <WorkbenchNavigation pathname={pathname} items={primaryNavigation} />
@@ -68,9 +112,14 @@ export function WorkbenchShell({ children }: { children: React.ReactNode }) {
           </div>
           <div>
             <strong>@{account.data.githubLogin}</strong>
-            <button type="button" onClick={() => void logout()}>
-              Sign out
+            <button type="button" onClick={() => void logout()} disabled={logoutPending}>
+              {logoutPending ? 'Signing out…' : 'Sign out'}
             </button>
+            {logoutError && (
+              <span className="workbench-logout-error" role="alert">
+                {logoutError}
+              </span>
+            )}
           </div>
         </div>
       </aside>
@@ -83,13 +132,26 @@ export function WorkbenchShell({ children }: { children: React.ReactNode }) {
         <Link href="/app/jobs/new">New job</Link>
       </header>
 
-      <section className="workbench-content">{children}</section>
+      <section className="workbench-content">
+        {authError && (
+          <div className="workbench-auth-alert" role="alert">
+            <span>{authError}</span>
+            <button type="button" onClick={() => setAuthError(undefined)} aria-label="Dismiss">
+              Dismiss
+            </button>
+          </div>
+        )}
+        {children}
+      </section>
 
       <nav className="workbench-mobile-nav" aria-label="Workbench navigation">
         {primaryNavigation.slice(0, 4).map((item) => (
           <WorkbenchNavLink item={item} pathname={pathname} key={item.href} />
         ))}
-        <WorkbenchNavLink item={{ href: '/app/settings', label: 'More' }} pathname={pathname} />
+        <WorkbenchNavLink
+          item={{ href: '/app/settings', label: 'More', icon: '•••' }}
+          pathname={pathname}
+        />
       </nav>
     </div>
   );
@@ -100,7 +162,7 @@ function WorkbenchNavigation({
   items,
 }: {
   pathname: string;
-  items: Array<{ href: string; label: string; exact?: boolean }>;
+  items: WorkbenchNavigationItem[];
 }) {
   return (
     <nav className="workbench-navigation" aria-label="Workbench sections">
@@ -111,28 +173,33 @@ function WorkbenchNavigation({
   );
 }
 
-function WorkbenchNavLink({
+export function WorkbenchNavLink({
   item,
   pathname,
 }: {
-  item: { href: string; label: string; exact?: boolean };
+  item: WorkbenchNavigationItem;
   pathname: string;
 }) {
   const current = item.exact ? pathname === item.href : pathname.startsWith(item.href);
   return (
     <Link href={item.href} aria-current={current ? 'page' : undefined}>
-      <i aria-hidden="true" />
+      <span className="workbench-nav-icon" aria-hidden="true">
+        {item.icon}
+      </span>
       <span>{item.label}</span>
     </Link>
   );
 }
 
-function WorkbenchSignIn({ returnTo }: { returnTo: string }) {
+function WorkbenchSignIn({ returnTo, authError }: { returnTo: string; authError?: string }) {
   return (
     <WorkbenchAccessState
       mark="M"
       title="Sign in to Mizuki Workbench"
-      detail="Use GitHub to manage public repositories, request fixed quotes, and track pull requests or refunds."
+      detail={
+        authError ??
+        'Use GitHub to manage public repositories, request fixed quotes, and track pull requests or refunds.'
+      }
       action={
         <a href={workbenchAuthHref(returnTo)}>
           Continue with GitHub <span aria-hidden="true">↗</span>

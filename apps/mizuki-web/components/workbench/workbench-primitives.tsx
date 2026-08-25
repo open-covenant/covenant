@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { formatTime, formatUsdcAtomic, relativeTime, stateLabel } from '@/lib/format';
-import type { WorkbenchJob, WorkbenchRepository } from '@/lib/workbench';
+import type { InstallationStatus, WorkbenchJob, WorkbenchRepository } from '@/lib/workbench';
 import { jobIssueNumber, jobRepository } from '@/lib/workbench';
 
 export function WorkbenchPageHeader({
@@ -34,20 +34,35 @@ export function WorkbenchStatus({ value }: { value: string }) {
     value === 'delivered' ||
     value === 'refunded' ||
     value === 'released' ||
-    value === 'finalized'
+    value === 'finalized' ||
+    value === 'active'
       ? 'positive'
-      : value === 'action_required' || value === 'refund_pending' || value === 'pending'
+      : value === 'action_required' ||
+          value === 'unavailable' ||
+          value === 'refund_pending' ||
+          value === 'claim_refund_pending' ||
+          value === 'offer_refund_pending' ||
+          value === 'release_refund_pending' ||
+          value === 'pending'
         ? 'warning'
-        : value === 'unsupported' || value === 'rejected' || value === 'failed'
+        : value === 'unsupported' ||
+            value === 'rejected' ||
+            value === 'failed' ||
+            value === 'expired' ||
+            value === 'revoked'
           ? 'negative'
           : 'neutral';
   const labels: Record<string, string> = {
     action_required: 'Action required',
+    active: 'Active',
     checking: 'Checking',
     failed: 'Failed',
     finalized: 'Finalized',
     pending: 'Pending',
     ready: 'Ready',
+    revoked: 'Revoked',
+    expired: 'Expired',
+    unavailable: 'Temporarily unavailable',
     unsupported: 'Unsupported',
   };
   const label = labels[value] ?? stateLabel(value);
@@ -129,7 +144,13 @@ export function SummaryCard({
   );
 }
 
-export function RepositoryCard({ repository }: { repository: WorkbenchRepository }) {
+export function RepositoryCard({
+  repository,
+  retry,
+}: {
+  repository: WorkbenchRepository;
+  retry?: () => void;
+}) {
   const href = `/app/repositories/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}`;
   return (
     <article className="workbench-repository-card">
@@ -146,11 +167,11 @@ export function RepositoryCard({ repository }: { repository: WorkbenchRepository
       <dl className="repository-checks">
         <div>
           <dt>Maintenance App</dt>
-          <dd>{repository.maintenanceAppInstalled ? 'Installed' : 'Required'}</dd>
+          <dd>{installationLabel(repository.maintenanceAppStatus)}</dd>
         </div>
         <div>
           <dt>Policy verifier</dt>
-          <dd>{repository.verifierAppInstalled ? 'Installed' : 'Required'}</dd>
+          <dd>{installationLabel(repository.verifierAppStatus)}</dd>
         </div>
         <div>
           <dt>Eligible issues</dt>
@@ -158,12 +179,24 @@ export function RepositoryCard({ repository }: { repository: WorkbenchRepository
         </div>
       </dl>
       {repository.reason && <p className="workbench-card-reason">{repository.reason}</p>}
-      <Link className="workbench-card-link" href={href}>
-        {repository.readiness === 'ready' ? 'Open repository' : 'Review requirements'}
-        <span aria-hidden="true">↗</span>
-      </Link>
+      {repository.readiness === 'unavailable' && retry ? (
+        <button className="workbench-card-link" type="button" onClick={retry}>
+          Retry readiness <span aria-hidden="true">↻</span>
+        </button>
+      ) : (
+        <Link className="workbench-card-link" href={href}>
+          {repository.readiness === 'ready' ? 'Open repository' : 'Review requirements'}
+          <span aria-hidden="true">↗</span>
+        </Link>
+      )}
     </article>
   );
+}
+
+function installationLabel(status: InstallationStatus): string {
+  if (status === 'installed') return 'Installed';
+  if (status === 'missing') return 'Required';
+  return 'Unavailable';
 }
 
 export function JobRow({ job }: { job: WorkbenchJob }) {

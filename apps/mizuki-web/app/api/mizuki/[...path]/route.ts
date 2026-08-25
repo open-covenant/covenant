@@ -13,7 +13,9 @@ const forwardedRequestHeaders = [
   'cookie',
   'idempotency-key',
   'last-event-id',
+  'origin',
   'payment-signature',
+  'x-mizuki-csrf-token',
 ];
 
 const githubWebhookHeaders = ['x-github-delivery', 'x-github-event', 'x-hub-signature-256'];

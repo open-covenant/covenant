@@ -2,9 +2,18 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { truncateAddress } from '@/lib/format';
-import { normalizeAccount, normalizeRepositories } from '@/lib/workbench';
-import { useWorkbenchResource, workbenchRequest } from '@/lib/workbench-client';
+import { useState } from 'react';
+import { formatTime, truncateAddress } from '@/lib/format';
+import {
+  API_TOKEN_SCOPES,
+  normalizeAccount,
+  normalizeApiTokenCredential,
+  normalizeApiTokens,
+  normalizeRepositories,
+  type ApiTokenCredential,
+  type ApiTokenScope,
+} from '@/lib/workbench';
+import { logoutWorkbench, useWorkbenchResource, workbenchMutation } from '@/lib/workbench-client';
 import {
   WorkbenchError,
   WorkbenchLoading,
@@ -23,7 +32,7 @@ export function Integrations() {
       <WorkbenchPageHeader
         eyebrow="Connected services"
         title="Integrations"
-        description="Review the GitHub access required for repository maintenance and the payment tools used per job."
+        description="Manage repository access, payment connections, and scoped credentials for API clients."
       />
 
       <section className="workbench-panel integration-panel">
@@ -89,12 +98,9 @@ export function Integrations() {
           <div className="integration-heading">
             <div className="integration-mark">API</div>
             <div>
-              <span>Machine access</span>
-              <h2>No Workbench credentials</h2>
-              <p>
-                Workbench does not issue customer API keys or webhooks in this release. No hidden
-                credential has been created for this account.
-              </p>
+              <span>Distribution</span>
+              <h2>ClawPump</h2>
+              <p>Open Mizuki's marketplace listing and review its public agent activity.</p>
             </div>
           </div>
           <a
@@ -106,18 +112,251 @@ export function Integrations() {
           </a>
         </section>
       </div>
+
+      <MachineAccess />
     </div>
   );
+}
+
+export function MachineAccess() {
+  const tokens = useWorkbenchResource('/v1/account/api-tokens', normalizeApiTokens);
+  const [name, setName] = useState('MCP client');
+  const [duration, setDuration] = useState(90);
+  const [scopes, setScopes] = useState<ApiTokenScope[]>([...API_TOKEN_SCOPES]);
+  const [credential, setCredential] = useState<ApiTokenCredential>();
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string>();
+  const [copied, setCopied] = useState(false);
+
+  function toggleScope(scope: ApiTokenScope) {
+    setScopes((current) =>
+      current.includes(scope)
+        ? current.filter((candidate) => candidate !== scope)
+        : API_TOKEN_SCOPES.filter((candidate) => [...current, scope].includes(candidate)),
+    );
+  }
+
+  async function create() {
+    if (credential || scopes.length === 0 || !name.trim()) return;
+    setPending(true);
+    setError(undefined);
+    try {
+      const expiresAt = new Date(Date.now() + duration * 24 * 60 * 60_000).toISOString();
+      const value = await workbenchMutation<unknown>('/v1/account/api-tokens', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: name.trim(), scopes, expiresAt }),
+      });
+      setCredential(normalizeApiTokenCredential(value));
+      tokens.refresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'The API token could not be created.');
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function copySecret() {
+    if (!credential) return;
+    try {
+      await navigator.clipboard.writeText(credential.secret);
+      setCopied(true);
+    } catch {
+      setError('Copy failed. Select the token value and copy it manually.');
+    }
+  }
+
+  async function revoke(id: string) {
+    setPending(true);
+    setError(undefined);
+    try {
+      await workbenchMutation(`/v1/account/api-tokens/${encodeURIComponent(id)}/revoke`, {
+        method: 'POST',
+      });
+      tokens.refresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'The API token could not be revoked.');
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <section className="workbench-panel machine-access-panel">
+      <div className="workbench-panel-heading">
+        <div>
+          <span>Machine access</span>
+          <h2>Scoped API tokens</h2>
+        </div>
+        <WorkbenchStatus
+          value={
+            tokens.status === 'ready'
+              ? 'ready'
+              : tokens.status === 'error'
+                ? 'unavailable'
+                : 'checking'
+          }
+        />
+      </div>
+      <p className="machine-access-intro">
+        Create an account-bound credential for another agent or API client. Each token is limited to
+        the selected operations; it cannot install GitHub Apps, submit wallet signatures, or create
+        another token.
+      </p>
+      <div className="machine-access-config">
+        <span>HTTPS API</span>
+        <code>Base URL: https://mizuki.opencovenant.org/api/mizuki</code>
+        <code>Authorization: Bearer &lt;token copied after creation&gt;</code>
+        <p>Keep the token in the client's secret storage. Do not commit it to a repository.</p>
+      </div>
+
+      {credential && (
+        <div className="machine-token-secret" role="status">
+          <div>
+            <strong>Copy this token now</strong>
+            <p>This value is shown once. Mizuki stores only its prefix and cryptographic hash.</p>
+          </div>
+          <code>{credential.secret}</code>
+          <div className="machine-token-secret-actions">
+            <button type="button" onClick={() => void copySecret()}>
+              {copied ? 'Copied' : 'Copy token'}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setCredential(undefined);
+                setCopied(false);
+              }}
+            >
+              I have stored it
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="machine-access-layout">
+        <form
+          className="machine-token-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void create();
+          }}
+        >
+          <label>
+            Token name
+            <input
+              value={name}
+              maxLength={80}
+              onChange={(event) => setName(event.target.value)}
+              disabled={pending || Boolean(credential)}
+            />
+          </label>
+          <label>
+            Expiration
+            <select
+              value={duration}
+              onChange={(event) => setDuration(Number(event.target.value))}
+              disabled={pending || Boolean(credential)}
+            >
+              <option value={30}>30 days</option>
+              <option value={90}>90 days</option>
+              <option value={365}>1 year</option>
+            </select>
+          </label>
+          <fieldset disabled={pending || Boolean(credential)}>
+            <legend>Scopes</legend>
+            {API_TOKEN_SCOPES.map((scope) => (
+              <label key={scope}>
+                <input
+                  type="checkbox"
+                  checked={scopes.includes(scope)}
+                  onChange={() => toggleScope(scope)}
+                />
+                <span>
+                  <strong>{scope}</strong>
+                  <small>{scopeDescription(scope)}</small>
+                </span>
+              </label>
+            ))}
+          </fieldset>
+          <button
+            type="submit"
+            disabled={pending || Boolean(credential) || !name.trim() || scopes.length === 0}
+          >
+            {pending ? 'Creating…' : 'Create API token'}
+          </button>
+          {error && <p className="workbench-form-error">{error}</p>}
+        </form>
+
+        <div className="machine-token-records">
+          <div>
+            <strong>Active and recent tokens</strong>
+            <p>All active tokens remain visible. Last-used times update after authentication.</p>
+          </div>
+          {tokens.status === 'loading' ? (
+            <WorkbenchLoading label="Loading API tokens" />
+          ) : tokens.status === 'error' ? (
+            <WorkbenchError title="API tokens could not be loaded" retry={tokens.refresh} />
+          ) : tokens.status === 'ready' && tokens.data.length > 0 ? (
+            tokens.data.map((token) => (
+              <article key={token.id}>
+                <div>
+                  <strong>{token.name}</strong>
+                  <code>{token.prefix}…</code>
+                </div>
+                <WorkbenchStatus value={token.state} />
+                <p>{token.scopes.join(' · ')}</p>
+                <dl>
+                  <div>
+                    <dt>Expires</dt>
+                    <dd>{formatTime(token.expiresAt)}</dd>
+                  </div>
+                  <div>
+                    <dt>Last used</dt>
+                    <dd>{token.lastUsedAt ? formatTime(token.lastUsedAt) : 'Never'}</dd>
+                  </div>
+                </dl>
+                {token.state === 'active' && (
+                  <button type="button" disabled={pending} onClick={() => void revoke(token.id)}>
+                    Revoke
+                  </button>
+                )}
+              </article>
+            ))
+          ) : (
+            <p className="machine-token-empty">No API tokens have been issued.</p>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function scopeDescription(scope: ApiTokenScope): string {
+  if (scope === 'repositories:read') return 'Repository readiness, eligible issues, and preflight';
+  if (scope === 'jobs:read') return 'Quote payment recovery and reservation status';
+  return 'Create account-linked maintenance quotes';
 }
 
 export function Settings() {
   const router = useRouter();
   const account = useWorkbenchResource('/v1/account', normalizeAccount);
+  const [logoutPending, setLogoutPending] = useState(false);
+  const [logoutError, setLogoutError] = useState<string>();
 
   async function logout() {
-    await workbenchRequest('/v1/auth/logout', { method: 'POST' }).catch(() => undefined);
-    router.push('/');
-    router.refresh();
+    setLogoutPending(true);
+    setLogoutError(undefined);
+    try {
+      await logoutWorkbench(() => {
+        router.push('/');
+        router.refresh();
+      });
+    } catch {
+      setLogoutError('Sign-out could not be confirmed. This page remains signed in; try again.');
+    } finally {
+      setLogoutPending(false);
+    }
   }
 
   return (
@@ -179,9 +418,14 @@ export function Settings() {
           </section>
 
           <section className="workbench-settings-actions">
-            <button type="button" onClick={() => void logout()}>
-              Sign out of Workbench
+            <button type="button" onClick={() => void logout()} disabled={logoutPending}>
+              {logoutPending ? 'Signing out…' : 'Sign out of Workbench'}
             </button>
+            {logoutError && (
+              <p className="workbench-logout-error" role="alert">
+                {logoutError}
+              </p>
+            )}
             <div>
               <Link href="/privacy">Privacy</Link>
               <Link href="/terms">Terms</Link>

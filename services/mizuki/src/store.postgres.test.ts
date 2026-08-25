@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { API_TOKEN_TERMINAL_HISTORY_LIMIT, createApiToken } from './api-tokens.js';
 import {
   type BountyClaim,
   createContributorEscrow,
@@ -13,12 +14,23 @@ import {
   MAX_PENDING_GITHUB_OAUTH_FLOWS,
   PostgresStore,
   StateConflictError,
+  WORKBENCH_API_TOKENS_SCHEMA_V1,
 } from './store.js';
 import type { Quote } from './types.js';
 
 const databaseUrl = process.env.MIZUKI_TEST_DATABASE_URL;
 const DEPLOYED_CORE_V1_CHECKSUM =
   '1e1c7b752aead2d673a8d82fba69113344ada76444a1263e6bc80bffb0d80429';
+const WORKBENCH_API_TOKENS_V1_CHECKSUM =
+  '4787de73a64016308c8823bcbd209e0638a1d8fa57b3c3a2f2517a86120c412b';
+
+describe('PostgresStore schema', () => {
+  it('keeps the API token migration immutable', () => {
+    expect(createHash('sha256').update(WORKBENCH_API_TOKENS_SCHEMA_V1).digest('hex')).toBe(
+      WORKBENCH_API_TOKENS_V1_CHECKSUM,
+    );
+  });
+});
 
 describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
   let store: PostgresStore;
@@ -51,6 +63,47 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
         (claim) => claim.status === 'rejected' && claim.reason instanceof StateConflictError,
       ),
     ).toBe(true);
+  });
+
+  it('persists only hashed API token credentials and revokes them atomically', async () => {
+    const githubId = `token-${randomUUID()}`;
+    await store.upsertContributor(githubId, 'token-maintainer');
+    const credential = createApiToken({
+      githubId,
+      name: 'Postgres MCP',
+      scopes: ['repositories:read', 'jobs:read'],
+      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60_000).toISOString(),
+    });
+
+    const stored = await store.createApiToken(credential.record);
+    expect(JSON.stringify(stored)).not.toContain(credential.token);
+    await expect(store.apiTokenByPrefix(stored.prefix)).resolves.toEqual(stored);
+    const usedAt = new Date(Date.now() + 1_000).toISOString();
+    await expect(store.markApiTokenUsed(stored.id, usedAt)).resolves.toBe(true);
+    await expect(
+      store.markApiTokenUsed(stored.id, new Date(Date.parse(usedAt) - 500).toISOString()),
+    ).resolves.toBe(true);
+    await expect(store.apiTokenByPrefix(stored.prefix)).resolves.toMatchObject({
+      lastUsedAt: usedAt,
+    });
+
+    for (let index = 1; index <= 105; index += 1) {
+      const terminal = createApiToken({
+        githubId,
+        name: `Terminal Postgres MCP ${index}`,
+        scopes: ['jobs:read'],
+        expiresAt: new Date(Date.now() + 24 * 60 * 60_000).toISOString(),
+      });
+      await store.createApiToken(terminal.record);
+      await store.revokeApiToken(terminal.record.id, githubId, new Date().toISOString());
+    }
+    const listed = await store.apiTokensForAccount(githubId);
+    expect(listed).toHaveLength(API_TOKEN_TERMINAL_HISTORY_LIMIT + 1);
+    expect(listed[0]?.id).toBe(stored.id);
+
+    const revoked = await store.revokeApiToken(stored.id, githubId, new Date().toISOString());
+    expect(revoked?.revokedAt).toBeTruthy();
+    await expect(store.markApiTokenUsed(stored.id, new Date().toISOString())).resolves.toBe(false);
   });
 
   it('serializes one payment proof across different request keys', async () => {
@@ -356,7 +409,9 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
         checksum: string;
       }>(
         `SELECT component, version, name, checksum FROM mizuki_schema_migrations
-         WHERE component IN ('core', 'admission-control', 'github-oauth', 'workbench')
+         WHERE component IN (
+           'core', 'admission-control', 'github-oauth', 'workbench', 'workbench-api-tokens'
+         )
          ORDER BY component, version`,
       );
       expect(result.rows).toMatchObject([
@@ -364,6 +419,7 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
         { component: 'core', version: 1, name: 'commercial-core' },
         { component: 'github-oauth', version: 1, name: 'browser-bound-flow' },
         { component: 'workbench', version: 1, name: 'workbench-accounts' },
+        { component: 'workbench-api-tokens', version: 1, name: 'scoped-api-tokens' },
       ]);
       expect(result.rows.every((row) => /^[a-f0-9]{64}$/.test(row.checksum))).toBe(true);
     } finally {
@@ -502,9 +558,15 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
     expect(bounded.bounties).toHaveLength(1);
     expect(bounded).toMatchObject({ limit: 1, truncated: true });
     const complete = await store.bountiesForAccount(githubId, 100);
-    expect(new Set(complete.bounties.map((candidate) => candidate.id))).toEqual(
+    expect(new Set(complete.bounties.map(({ bounty }) => bounty.id))).toEqual(
       new Set([active.id, historical.id]),
     );
+    expect(complete.bounties.every(({ claim }) => claim.claimantId === githubId)).toBe(true);
+    await expect(store.bountyForAccount(active.id, githubId)).resolves.toMatchObject({
+      bounty: { id: active.id },
+      claim: { id: active.activeClaim.id },
+    });
+    await expect(store.bountyForAccount(unrelated.id, githubId)).resolves.toBeUndefined();
     expect(complete).toMatchObject({ limit: 100, truncated: false });
   });
 
@@ -636,7 +698,9 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
           name: string;
         }>(
           `SELECT component, version, name FROM mizuki_schema_migrations
-           WHERE component IN ('core', 'admission-control', 'github-oauth', 'workbench')
+           WHERE component IN (
+             'core', 'admission-control', 'github-oauth', 'workbench', 'workbench-api-tokens'
+           )
            ORDER BY component, version`,
         );
         expect(migrations.rows).toEqual([
@@ -644,6 +708,7 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
           { component: 'core', version: 1, name: 'commercial-core' },
           { component: 'github-oauth', version: 1, name: 'browser-bound-flow' },
           { component: 'workbench', version: 1, name: 'workbench-accounts' },
+          { component: 'workbench-api-tokens', version: 1, name: 'scoped-api-tokens' },
         ]);
       } finally {
         await verificationPool.end();

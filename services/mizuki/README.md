@@ -29,7 +29,7 @@ GitHub issue -> scoped quote -> x402 USDC settlement -> isolated checkout
                                                               -> externally signed upgrade evidence
 ```
 
-The model runs in the existing Covenant coding gateway. It receives an ephemeral checkout and no GitHub or wallet credentials. Mizuki publishes accepted files with the GitHub Git Data API. Production must use E2B or another hardened sandbox; repository runs fail closed on the gateway's local provider unless `ALLOW_LOCAL_REPOSITORY_RUNS=1` is deliberately set for trusted development. Configure and verify `E2B_EGRESS_ALLOW` before accepting public work.
+The model runs in the closed coding gateway. It receives an ephemeral checkout and no GitHub or wallet credentials. Mizuki publishes accepted files with the GitHub Git Data API. Production must use E2B or another hardened sandbox; repository runs fail closed on the gateway's local provider unless `ALLOW_LOCAL_REPOSITORY_RUNS=1` is deliberately set for trusted development. Configure and verify `E2B_EGRESS_ALLOW` before accepting public work.
 
 ## Run locally
 
@@ -42,7 +42,7 @@ MIZUKI_ADMIN_TOKEN=replace-with-at-least-32-characters MIZUKI_PAYMENT_MODE=mock 
 
 The in-memory development store also starts closed. Open it deliberately through `POST /v1/admin/admission` before submitting a mock job.
 
-Copy `.env.example` into the deployment secret manager. Do not commit a populated env file.
+Use `.env.example` for local configuration. Production values and service boundaries are defined in `infra/mizuki/env-contract.md` and `infra/mizuki/render.yaml`; keep credentials in the deployment secret manager and never commit a populated env file.
 
 The coding gateway needs `CODER_BACKEND=usepod`, a pinned `CODER_MODEL`, `USEPOD_API_KEY`, `E2B_API_KEY`, authenticated access, and persistent ledger/run-store paths. Mizuki needs a dedicated Postgres database, GitHub App credentials, the x402 treasury, a distinct reviewer route, the private policy-signer link, and a dedicated refund-liability authority key.
 
@@ -54,9 +54,11 @@ Before changing the production coding route or model, run `pnpm --filter @covena
 - `GET /v1/account/repositories`, `/v1/account/jobs`, `/v1/account/billing`, and `/v1/account/bounties` return only records linked to the signed-in maintainer account.
 - `POST /v1/account/repositories` with `{"owner":"owner","repo":"repo"}` verifies current maintainer access and explicitly links one public repository to the account.
 - `GET /v1/repositories/:owner/:repo/issues` is read-only and lists bounded maintenance candidates for a linked repository.
-- `POST /v1/preflights` with `{"github_issue_url":"https://github.com/owner/repo/issues/1"}` checks both App installations, maintainer authority, attributable authorization evidence, scope, current repository metadata, and validation commands without creating a quote or accepting payment.
-- `POST /v1/quotes` with `{"github_issue_url":"https://github.com/owner/repo/issues/1"}`.
+- `POST /v1/preflights` with `{"github_issue_url":"https://github.com/owner/repo/issues/1"}` requires a signed-in maintainer and an explicitly connected repository, then checks both App installations, maintainer authority, attributable authorization evidence, scope, current repository metadata, and validation commands without creating a quote or accepting payment.
+- `POST /v1/quotes` with `{"github_issue_url":"https://github.com/owner/repo/issues/1"}` creates a public quote without linking it to a Workbench account.
+- `POST /v1/account/quotes` uses the same input but requires a signed-in maintainer and an explicitly connected repository. It durably links the quote to that account before returning a payment challenge, enabling safe payment-status recovery.
 - `POST /v1/jobs` with `{"quote_id":"..."}`, `Idempotency-Key`, and the x402 v2 `PAYMENT-SIGNATURE` header.
+- `GET /v1/account/quotes/:quoteId/payment-status` with the original `Idempotency-Key` safely distinguishes an existing job reservation from an unpaid quote. It never requests or submits a payment signature.
 - `GET /v1/jobs/:id` for PR, validation, or refund status.
 - `GET /v1/metrics` and `GET /metrics` for the public unit-economics dashboard.
 - `GET /v1/admission` for the public paid-intake and new-claim switch status. Both switches start closed on a fresh database.
@@ -64,7 +66,9 @@ Before changing the production coding route or model, run `pnpm --filter @covena
 - `GET /v1/admin/admission` and `POST /v1/admin/admission` require the admin bearer token. Updates accept `intakeEnabled`, `claimsEnabled`, and a 10-500 character `reason`; paid authorization and settlement read the durable switch inside the same serial gate.
 - `POST /v1/admin/bounties/:bountyId/disputes/:disputeId/resolve` requires the admin bearer token, an idempotency key, a release/refund decision, and normalized public evidence. Retryable signer failures remain pending. A dispute cannot pretend to freeze a release that has already begun.
 
-Run `pnpm --filter @covenant/mizuki mcp` to expose `mizuki_quote`, `mizuki_submit`, and `mizuki_status` over stdio. A wallet-capable host creates the x402 signature; Mizuki never asks an MCP client for a private key.
+Run `pnpm --filter @covenant/mizuki mcp` to expose quote, submission, status, repository readiness, issue preflight, and payment-recovery tools over stdio. A wallet-capable host creates the x402 signature; Mizuki never asks an MCP client for a private key. Every MCP API request has a bounded timeout, configurable from 1,000 to 60,000 milliseconds with `MIZUKI_MCP_TIMEOUT_MS`.
+
+Create a scoped token in Workbench under Integrations, copy it once, and store it as `MIZUKI_API_TOKEN` in the MCP host's secret storage. Mizuki stores only a versioned prefix and SHA-256 hash. Repository and issue tools require `repositories:read`; account quote creation requires `jobs:write`; payment recovery requires `jobs:read`. Tokens are account-bound, expire within one year, can be revoked immediately, and never replace the browser's HttpOnly session cookie. They do not accept a GitHub token as a substitute and cannot connect a new repository; complete that explicit authorization in Workbench first.
 
 Expensive public mutations use bounded per-source token buckets and return `429` with `Retry-After`. Production on Render must set `MIZUKI_TRUSTED_PROXY_HOPS=1` and share `MIZUKI_WEB_PROXY_SECRET` only with the same-origin web proxy. The setting enables Render-specific edge trust; it is not a generic proxy-chain depth. Direct ingress validates Cloudflare's overwritten `CF-Connecting-IP` value and ignores `X-Forwarded-For`, which Cloudflare appends to caller-controlled values. Missing or malformed edge identity falls back to the direct socket. The authenticated web proxy context carries the same validated address without trusting browser-supplied Mizuki headers. Activity streams have global, per-source, and idle-lifetime caps.
 

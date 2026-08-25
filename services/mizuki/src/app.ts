@@ -1,7 +1,21 @@
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { ActivityStreams, PublicAdmission, RateLimitError, requestScheme } from './admission.js';
-import { GITHUB_OAUTH_FLOW_TTL_SECONDS, type ContributorAuth } from './auth.js';
+import {
+  ApiTokenCapacityError,
+  ApiTokenInputError,
+  createApiToken,
+  normalizedScopes,
+  publicApiToken,
+} from './api-tokens.js';
+import {
+  ApiTokenAuthError,
+  GITHUB_OAUTH_FLOW_TTL_SECONDS,
+  GithubOAuthCallbackError,
+  githubOAuthRedirectPath,
+  type ContributorAuth,
+  type GithubOAuthErrorCode,
+} from './auth.js';
 import type { BountyService } from './bounties.js';
 import type { Config } from './config.js';
 import { dashboard } from './dashboard.js';
@@ -18,7 +32,7 @@ import {
   publicJob,
   publicTreasury,
 } from './public-api.js';
-import { createQuote } from './quote.js';
+import { createQuote, parseIssueUrl } from './quote.js';
 import { recordPaymentReceipts } from './receipts.js';
 import { assertLiabilityMatchesPayment, recoverSettlement } from './settlement-recovery.js';
 import {
@@ -29,6 +43,8 @@ import {
 } from './store.js';
 import { GithubWebhookHandler, verifyGithubWebhook } from './webhooks.js';
 import type { Job, RepositoryAdmissionReceipt } from './types.js';
+import type { BountyClaim, RescueBounty } from './domain/index.js';
+import type { ApiTokenScope } from './types.js';
 import { Payments, USDC_DECIMALS, USDC_MAINNET, paymentRequiredHeader } from './x402.js';
 import {
   assertRefundCapacity,
@@ -183,27 +199,58 @@ export function createApp(deps: AppDependencies) {
         );
         res.setHeader('set-cookie', clearFlowCookie);
         res.setHeader('cache-control', 'private, no-store');
-        admission.consume('oauth_callback', req);
-        const code = url.searchParams.get('code');
-        const state = url.searchParams.get('state');
-        if (!code || !state) return json(res, 400, { error: 'OAuth callback is incomplete' });
-        const result = await deps.auth.callback(code, state, cookies(req).mizuki_oauth_flow);
         const origin = deps.config.webOrigin ?? deps.config.publicBaseUrl;
-        res.setHeader('set-cookie', [
-          clearFlowCookie,
-          sessionCookie(
-            result.session,
-            req,
-            deps.config.trustedProxyHops ?? 0,
-            deps.config.webProxySecret,
-          ),
-        ]);
-        res.writeHead(302, {
-          location: `${origin.replace(/\/$/, '')}${result.redirect}`,
-          'cache-control': 'no-store',
-        });
-        res.end();
-        return;
+        const failureRedirect =
+          deps.auth.githubOAuthRedirect?.(url.searchParams.get('state') ?? undefined) ?? '/app';
+        try {
+          admission.consume('oauth_callback', req);
+          const oauthError = url.searchParams.get('error');
+          if (oauthError) {
+            return redirectGithubOAuthFailure(
+              res,
+              origin,
+              oauthError === 'access_denied' ? 'denied' : 'unavailable',
+              failureRedirect,
+            );
+          }
+          const code = url.searchParams.get('code');
+          const state = url.searchParams.get('state');
+          if (!code || !state) {
+            return redirectGithubOAuthFailure(res, origin, 'incomplete', failureRedirect);
+          }
+          const result = await deps.auth.callback(code, state, cookies(req).mizuki_oauth_flow);
+          res.setHeader('set-cookie', [
+            clearFlowCookie,
+            sessionCookie(
+              result.session,
+              req,
+              deps.config.trustedProxyHops ?? 0,
+              deps.config.webProxySecret,
+            ),
+          ]);
+          res.writeHead(302, {
+            location: new URL(githubOAuthRedirectPath(result.redirect), origin).toString(),
+            'cache-control': 'no-store',
+          });
+          res.end();
+          return;
+        } catch (cause) {
+          const code =
+            cause instanceof GithubOAuthCallbackError ? cause.code : ('unavailable' as const);
+          if (cause instanceof RateLimitError) {
+            res.setHeader('retry-after', String(cause.retryAfterSeconds));
+          } else if (!(cause instanceof GithubOAuthCallbackError)) {
+            console.error(
+              JSON.stringify({
+                level: 'error',
+                event: 'github_oauth_callback_failed',
+                requestId,
+                error: { type: cause instanceof Error ? cause.constructor.name : typeof cause },
+              }),
+            );
+          }
+          return redirectGithubOAuthFailure(res, origin, code, failureRedirect);
+        }
       }
       if (req.method === 'GET' && url.pathname === '/v1/auth/session') {
         const session = deps.auth.session?.(cookies(req).mizuki_session);
@@ -211,7 +258,16 @@ export function createApp(deps: AppDependencies) {
         const contributor = await deps.store.contributor(session.githubId);
         return json(res, 200, { contributor });
       }
+      if (req.method === 'GET' && url.pathname === '/v1/auth/csrf') {
+        res.setHeader('cache-control', 'private, no-store');
+        const sessionValue = cookies(req).mizuki_session;
+        requireSession(req, deps.auth);
+        const csrfToken = deps.auth.csrfToken(sessionValue);
+        if (!csrfToken) throw new Error('CSRF protection is unavailable');
+        return json(res, 200, { csrfToken });
+      }
       if (req.method === 'POST' && url.pathname === '/v1/auth/logout') {
+        requireCsrfSession(req, deps.auth, deps.config.webOrigin);
         res.setHeader(
           'set-cookie',
           expiredSessionCookie(req, deps.config.trustedProxyHops ?? 0, deps.config.webProxySecret),
@@ -233,6 +289,63 @@ export function createApp(deps: AppDependencies) {
           },
         });
       }
+      if (req.method === 'GET' && url.pathname === '/v1/account/api-tokens') {
+        res.setHeader('cache-control', 'private, no-store');
+        const session = requireSession(req, deps.auth);
+        admission.consumeAccount('api_tokens', req, session.githubId);
+        const tokens = await deps.store.apiTokensForAccount(session.githubId);
+        return json(res, 200, { tokens: tokens.map((token) => publicApiToken(token)) });
+      }
+      if (req.method === 'POST' && url.pathname === '/v1/account/api-tokens') {
+        res.setHeader('cache-control', 'private, no-store');
+        const session = requireCsrfSession(req, deps.auth, deps.config.webOrigin);
+        admission.consumeAccount('api_tokens', req, session.githubId);
+        const value = await bodyJson<unknown>(req);
+        if (!value || typeof value !== 'object' || Array.isArray(value)) {
+          throw new InvalidRequestBodyError('name, scopes, and expiresAt are required');
+        }
+        const body = value as Record<string, unknown>;
+        if (
+          typeof body.name !== 'string' ||
+          !Array.isArray(body.scopes) ||
+          !body.scopes.every((scope) => typeof scope === 'string') ||
+          typeof body.expiresAt !== 'string'
+        ) {
+          throw new InvalidRequestBodyError('name, scopes, and expiresAt are required');
+        }
+        const credential = createApiToken({
+          githubId: session.githubId,
+          name: body.name,
+          scopes: normalizedScopes(body.scopes),
+          expiresAt: body.expiresAt,
+        });
+        const stored = await deps.store.createApiToken(credential.record);
+        return json(res, 201, {
+          token: publicApiToken(stored),
+          secret: credential.token,
+        });
+      }
+      if (
+        req.method === 'POST' &&
+        parts[0] === 'v1' &&
+        parts[1] === 'account' &&
+        parts[2] === 'api-tokens' &&
+        parts[3] &&
+        parts[4] === 'revoke' &&
+        parts.length === 5
+      ) {
+        res.setHeader('cache-control', 'private, no-store');
+        const session = requireCsrfSession(req, deps.auth, deps.config.webOrigin);
+        admission.consumeAccount('api_tokens', req, session.githubId);
+        if (!UUID_PATTERN.test(parts[3])) return json(res, 404, { error: 'API token not found' });
+        const revoked = await deps.store.revokeApiToken(
+          parts[3],
+          session.githubId,
+          new Date().toISOString(),
+        );
+        if (!revoked) return json(res, 404, { error: 'API token not found' });
+        return json(res, 200, { token: publicApiToken(revoked) });
+      }
       if (req.method === 'GET' && url.pathname === '/v1/account/jobs') {
         res.setHeader('cache-control', 'private, no-store');
         const session = requireSession(req, deps.auth);
@@ -253,25 +366,15 @@ export function createApp(deps: AppDependencies) {
         parts[4] === 'payment-status'
       ) {
         res.setHeader('cache-control', 'private, no-store');
-        const session = requireSession(req, deps.auth);
+        const session = await requireAccountPrincipal(req, deps.auth, admission, 'jobs:read');
+        admission.consumeAccount('payment_status', req, session.githubId);
         const key = header(req, 'idempotency-key');
         if (!key || key.length > 128) {
           return json(res, 400, { error: 'idempotency-key header is required' });
         }
         const quoteId = parts[3]!;
         if (!UUID_PATTERN.test(quoteId)) return json(res, 404, { error: 'quote not found' });
-        const status = await deps.paymentAdmission.run(async () => {
-          const quote = await deps.store.quoteForAccount(quoteId, session.githubId);
-          if (!quote) return { kind: 'not_found' } as const;
-
-          const keyedJob = await deps.store.jobByIdempotencyKey(key);
-          if (keyedJob && keyedJob.quote.id !== quote.id) {
-            return { kind: 'conflict' } as const;
-          }
-          const job = keyedJob ?? (await deps.store.jobByQuote(quote.id));
-          if (job) return { kind: 'reserved', quote, job } as const;
-          return { kind: 'unpaid', quote } as const;
-        });
+        const status = await deps.store.paymentStatusForAccount(quoteId, session.githubId, key);
 
         if (status.kind === 'not_found') return json(res, 404, { error: 'quote not found' });
         if (status.kind === 'conflict') {
@@ -296,13 +399,27 @@ export function createApp(deps: AppDependencies) {
         const page = await deps.store.jobsForAccount(session.githubId, 1_000);
         return json(res, 200, accountBilling(deps.config.paymentMode, page));
       }
+      if (
+        req.method === 'GET' &&
+        parts[0] === 'v1' &&
+        parts[1] === 'account' &&
+        parts[2] === 'bounties' &&
+        parts[3] &&
+        parts.length === 4
+      ) {
+        res.setHeader('cache-control', 'private, no-store');
+        const session = requireSession(req, deps.auth);
+        const entry = await deps.store.bountyForAccount(parts[3], session.githubId);
+        if (!entry) return json(res, 404, { error: 'account bounty not found' });
+        return json(res, 200, await publicAccountBounty(deps.store, entry));
+      }
       if (req.method === 'GET' && url.pathname === '/v1/account/bounties') {
         res.setHeader('cache-control', 'private, no-store');
         const session = requireSession(req, deps.auth);
         const page = await deps.store.bountiesForAccount(session.githubId, 100);
         return json(res, 200, {
           bounties: await Promise.all(
-            page.bounties.map((bounty) => publicBounty(deps.store, bounty)),
+            page.bounties.map((entry) => publicAccountBounty(deps.store, entry)),
           ),
           limit: page.limit,
           truncated: page.truncated,
@@ -310,55 +427,57 @@ export function createApp(deps: AppDependencies) {
       }
       if (req.method === 'GET' && url.pathname === '/v1/account/repositories') {
         res.setHeader('cache-control', 'private, no-store');
-        const session = requireSession(req, deps.auth);
+        const session = await requireAccountPrincipal(
+          req,
+          deps.auth,
+          admission,
+          'repositories:read',
+        );
         admission.consumeAccount('account_repositories', req, session.githubId);
         const page = await deps.store.repositoriesForAccount(session.githubId, 25);
         const repositories = await mapConcurrent(page.repositories, 4, async (saved) => {
           const checkedAt = new Date().toISOString();
-          try {
-            const [repository, policy] = await Promise.all([
-              deps.github.repositoryMetadataForMaintainer(
-                saved.owner,
-                saved.repo,
-                session.githubLogin,
+          const [repositoryResult, policy] = await Promise.all([
+            deps.github
+              .repositoryMetadataForMaintainer(saved.owner, saved.repo, session.githubLogin)
+              .then(
+                (repository) => ({ status: 'fulfilled' as const, repository }),
+                (cause: unknown) => ({ status: 'rejected' as const, cause }),
               ),
-              repositoryPolicyReadiness(deps, saved.repository),
-            ]);
-            const blockers = policy.status === 'ready' ? [] : [policy.reason];
-            return {
-              owner: repository.owner,
-              repo: repository.repo,
-              repository: repository.repository,
-              defaultBranch: repository.defaultBranch,
-              permission: repository.permission,
-              core: { status: 'ready' as const },
-              policy,
-              validationCommands: [],
-              checkedAt,
-              readyForWork: blockers.length === 0,
-              blockers,
-            };
-          } catch (cause) {
-            if (cause instanceof GithubReadinessError) throw cause;
-            return {
-              owner: saved.owner,
-              repo: saved.repo,
-              repository: saved.repository,
-              defaultBranch: '',
-              permission: null,
-              core: {
-                status:
-                  cause instanceof GithubAccessError
-                    ? ('action_required' as const)
-                    : ('unavailable' as const),
-              },
-              policy: { status: 'unknown' as const },
-              validationCommands: [],
-              checkedAt,
-              readyForWork: false,
-              blockers: [accountRepositoryBlocker(cause)],
-            };
-          }
+            repositoryPolicyReadiness(deps, saved.repository),
+          ]);
+          const core =
+            repositoryResult.status === 'fulfilled'
+              ? ({ status: 'ready' } as const)
+              : ({
+                  status:
+                    repositoryResult.cause instanceof GithubAccessError
+                      ? ('action_required' as const)
+                      : ('unavailable' as const),
+                } as const);
+          const readiness = repositoryReadiness(core.status, policy.status);
+          const blockers = [
+            ...(repositoryResult.status === 'rejected'
+              ? [accountRepositoryBlocker(repositoryResult.cause)]
+              : []),
+            ...(policy.status === 'ready' ? [] : [policy.reason]),
+          ];
+          const repository =
+            repositoryResult.status === 'fulfilled' ? repositoryResult.repository : undefined;
+          return {
+            owner: repository?.owner ?? saved.owner,
+            repo: repository?.repo ?? saved.repo,
+            repository: repository?.repository ?? saved.repository,
+            defaultBranch: repository?.defaultBranch ?? '',
+            permission: repository?.permission ?? null,
+            core,
+            policy,
+            readiness,
+            validationCommands: [],
+            checkedAt,
+            readyForWork: readiness === 'ready',
+            blockers,
+          };
         });
         return json(res, 200, {
           repositories,
@@ -367,7 +486,7 @@ export function createApp(deps: AppDependencies) {
         });
       }
       if (req.method === 'POST' && url.pathname === '/v1/account/repositories') {
-        const session = requireSession(req, deps.auth);
+        const session = requireCsrfSession(req, deps.auth, deps.config.webOrigin);
         admission.consumeAccount('repository_connect', req, session.githubId);
         const body = await bodyJson<{
           repository?: unknown;
@@ -383,6 +502,7 @@ export function createApp(deps: AppDependencies) {
         await deps.store.linkAccountRepository(session.githubId, repository.owner, repository.repo);
         const policy = await repositoryPolicyReadiness(deps, repository.repository);
         const blockers = policy.status === 'ready' ? [] : [policy.reason];
+        const readiness = repositoryReadiness('ready', policy.status);
         const checkedAt = new Date().toISOString();
         res.setHeader('cache-control', 'private, no-store');
         return json(res, 201, {
@@ -394,19 +514,38 @@ export function createApp(deps: AppDependencies) {
             permission: repository.permission,
             core: { status: 'ready' },
             policy,
+            readiness,
             validationCommands: [],
             checkedAt,
-            readyForWork: blockers.length === 0,
+            readyForWork: readiness === 'ready',
             blockers,
           },
         });
       }
       if (req.method === 'POST' && url.pathname === '/v1/preflights') {
-        const session = requireSession(req, deps.auth);
+        const session = await requireAccountPrincipal(
+          req,
+          deps.auth,
+          admission,
+          'repositories:read',
+        );
         admission.consumeAccount('preflight', req, session.githubId);
         const body = await bodyJson<{ github_issue_url?: unknown }>(req);
         if (typeof body.github_issue_url !== 'string') {
           return json(res, 400, { error: 'github_issue_url is required' });
+        }
+        const requested = parseIssueUrl(body.github_issue_url);
+        if (
+          !(await accountRepositoryLinked(
+            deps.store,
+            session.githubId,
+            requested.owner,
+            requested.repo,
+          ))
+        ) {
+          return json(res, 403, {
+            error: 'Connect this repository in Workbench before running preflight.',
+          });
         }
         const inspected = await deps.github.preflightIssue(
           body.github_issue_url,
@@ -415,9 +554,6 @@ export function createApp(deps: AppDependencies) {
         const policy = await repositoryPolicyReadiness(deps, inspected.repository);
         const blockers = [...inspected.blockers];
         if (policy.status !== 'ready') blockers.push(policy.reason);
-        if (inspected.maintainer.verified) {
-          await deps.store.linkAccountRepository(session.githubId, inspected.owner, inspected.repo);
-        }
         const checkedAt = new Date().toISOString();
         return json(res, 200, {
           repository: {
@@ -468,8 +604,18 @@ export function createApp(deps: AppDependencies) {
         parts[3] &&
         parts[4] === 'issues'
       ) {
-        const session = requireSession(req, deps.auth);
+        const session = await requireAccountPrincipal(
+          req,
+          deps.auth,
+          admission,
+          'repositories:read',
+        );
         admission.consumeAccount('repository_issues', req, session.githubId);
+        if (!(await accountRepositoryLinked(deps.store, session.githubId, parts[2], parts[3]))) {
+          return json(res, 403, {
+            error: 'Connect this repository in Workbench before requesting its issues.',
+          });
+        }
         const result = await deps.github.issuesForMaintainer(
           parts[2],
           parts[3],
@@ -480,7 +626,7 @@ export function createApp(deps: AppDependencies) {
       }
       if (req.method === 'POST' && url.pathname === '/v1/auth/wallet/challenges') {
         admission.consume('wallet_challenge', req);
-        const session = requireSession(req, deps.auth);
+        const session = requireCsrfSession(req, deps.auth, deps.config.webOrigin);
         const body = await bodyJson<{ wallet?: unknown }>(req);
         if (typeof body.wallet !== 'string') return json(res, 400, { error: 'wallet is required' });
         const challenge = await deps.auth.createWalletChallenge(session, body.wallet);
@@ -488,7 +634,7 @@ export function createApp(deps: AppDependencies) {
       }
       if (req.method === 'POST' && url.pathname === '/v1/auth/wallet/verify') {
         admission.consume('wallet_verify', req);
-        const session = requireSession(req, deps.auth);
+        const session = requireCsrfSession(req, deps.auth, deps.config.webOrigin);
         const body = await bodyJson<{ challengeId?: unknown; signature?: unknown }>(req);
         if (typeof body.challengeId !== 'string' || typeof body.signature !== 'string') {
           return json(res, 400, { error: 'challengeId and signature are required' });
@@ -541,7 +687,7 @@ export function createApp(deps: AppDependencies) {
         parts[3] === 'wallet-proof'
       ) {
         admission.consume('bounty_wallet_proof', req);
-        const session = requireSession(req, deps.auth);
+        const session = requireCsrfSession(req, deps.auth, deps.config.webOrigin);
         const bounty = await deps.store.bounty(parts[2]);
         if (!bounty || !(await isPublicBounty(deps.store, bounty))) {
           return json(res, 404, { error: 'bounty not found' });
@@ -590,7 +736,7 @@ export function createApp(deps: AppDependencies) {
         parts[3] === 'claim'
       ) {
         admission.consume('bounty_claim', req);
-        const session = requireSession(req, deps.auth);
+        const session = requireCsrfSession(req, deps.auth, deps.config.webOrigin);
         const contributor = await deps.store.contributor(session.githubId);
         if (!contributor) return json(res, 401, { error: 'contributor not found' });
         const body = await bodyJson<{
@@ -616,7 +762,7 @@ export function createApp(deps: AppDependencies) {
         parts[3] === 'pr'
       ) {
         admission.consume('bounty_pr', req);
-        const session = requireSession(req, deps.auth);
+        const session = requireCsrfSession(req, deps.auth, deps.config.webOrigin);
         const contributor = await deps.store.contributor(session.githubId);
         if (!contributor) return json(res, 401, { error: 'contributor not found' });
         const body = await bodyJson<{ pullRequestUrl?: unknown }>(req);
@@ -638,7 +784,7 @@ export function createApp(deps: AppDependencies) {
         parts[3] === 'disputes'
       ) {
         admission.consume('bounty_dispute', req);
-        const session = requireSession(req, deps.auth);
+        const session = requireCsrfSession(req, deps.auth, deps.config.webOrigin);
         const contributor = await deps.store.contributor(session.githubId);
         if (!contributor) return json(res, 401, { error: 'contributor not found' });
         const body = await bodyJson<{ reason?: unknown }>(req);
@@ -660,40 +806,51 @@ export function createApp(deps: AppDependencies) {
         if (!handoff) return json(res, 404, { error: 'capability handoff not found' });
         return json(res, 200, handoff);
       }
-      if (req.method === 'POST' && url.pathname === '/v1/quotes') {
-        admission.consume('quote', req);
+      if (
+        req.method === 'POST' &&
+        (url.pathname === '/v1/quotes' || url.pathname === '/v1/account/quotes')
+      ) {
+        const accountScoped = url.pathname === '/v1/account/quotes';
+        const session = accountScoped
+          ? await requireAccountPrincipal(req, deps.auth, admission, 'jobs:write', {
+              csrf: true,
+              configuredOrigin: deps.config.webOrigin,
+            })
+          : undefined;
+        if (session) admission.consumeAccount('quote', req, session.githubId);
+        else admission.consume('quote', req);
         const body = await bodyJson<{ github_issue_url?: unknown }>(req);
         if (typeof body.github_issue_url !== 'string') {
           return json(res, 400, { error: 'github_issue_url is required' });
         }
+        const requested = parseIssueUrl(body.github_issue_url);
+        if (
+          session &&
+          !(await accountRepositoryLinked(
+            deps.store,
+            session.githubId,
+            requested.owner,
+            requested.repo,
+          ))
+        ) {
+          return json(res, 403, {
+            error: 'Connect this repository in Workbench before requesting an account quote.',
+          });
+        }
         await assertOperatorControlOpen(deps.store, 'intake', deps.readiness);
         const issue = await deps.github.issue(body.github_issue_url);
-        const session = deps.auth.session?.(cookies(req).mizuki_session);
-        let accountRepository:
-          | Awaited<ReturnType<GithubClient['repositoryMetadataForMaintainer']>>
-          | undefined;
         if (session) {
-          try {
-            accountRepository = await deps.github.repositoryMetadataForMaintainer(
-              issue.owner,
-              issue.repo,
-              session.githubLogin,
-            );
-          } catch (cause) {
-            if (!(cause instanceof GithubAccessError)) throw cause;
-            accountRepository = undefined;
-          }
+          await deps.github.repositoryMetadataForMaintainer(
+            issue.owner,
+            issue.repo,
+            session.githubLogin,
+          );
         }
         const result = await deps.paymentAdmission.run(async () => {
           await assertOperatorControlOpen(deps.store, 'intake', deps.readiness);
           const quote = await deps.store.saveQuote(createQuote(issue));
-          if (session && accountRepository) {
+          if (session) {
             await deps.store.linkQuoteToAccount(quote.id, session.githubId);
-            await deps.store.linkAccountRepository(
-              session.githubId,
-              accountRepository.owner,
-              accountRepository.repo,
-            );
           }
           return { ...quote, payment: await deps.payments.challenge(quote) };
         });
@@ -1034,33 +1191,46 @@ export function createApp(deps: AppDependencies) {
         res.setHeader('cache-control', 'private, no-store');
         return json(res, 503, { error: cause.message });
       }
+      if (cause instanceof SerialGateBusyError) {
+        res.setHeader('retry-after', String(cause.retryAfterSeconds));
+        res.setHeader('cache-control', 'private, no-store');
+        return json(res, 503, { error: cause.message });
+      }
       const message = cause instanceof Error ? cause.message : String(cause);
       const status =
-        cause instanceof GithubAccessError
-          ? 403
-          : cause instanceof GithubReadinessError
-            ? 503
-            : /not signed in|unauthorized/i.test(message)
-              ? 401
-              : cause instanceof InvalidRequestBodyError
-                ? 400
-                : cause instanceof StateConflictError
-                  ? 409
-                  : cause instanceof RefundCapacityError
-                    ? 503
-                    : cause instanceof OperatorAdmissionError
-                      ? 503
-                      : /not found/i.test(message)
-                        ? 404
-                        : /already|changed after the quote|concurrent|expected|not accepting|does not match the active|not funded|dispute intake|can no longer/i.test(
-                              message,
-                            )
-                          ? 409
-                          : /outside Mizuki|public GitHub|install the Mizuki|issue is too large|invalid|expired|required|incomplete/i.test(
-                                message,
-                              )
-                            ? 422
-                            : 500;
+        cause instanceof ApiTokenAuthError
+          ? cause.code === 'insufficient_scope'
+            ? 403
+            : 401
+          : cause instanceof CsrfValidationError
+            ? 403
+            : cause instanceof GithubAccessError
+              ? 403
+              : cause instanceof GithubReadinessError
+                ? 503
+                : /not signed in|unauthorized/i.test(message)
+                  ? 401
+                  : cause instanceof InvalidRequestBodyError || cause instanceof ApiTokenInputError
+                    ? 400
+                    : cause instanceof ApiTokenCapacityError
+                      ? 409
+                      : cause instanceof StateConflictError
+                        ? 409
+                        : cause instanceof RefundCapacityError
+                          ? 503
+                          : cause instanceof OperatorAdmissionError
+                            ? 503
+                            : /not found/i.test(message)
+                              ? 404
+                              : /already|changed after the quote|concurrent|expected|not accepting|does not match the active|not funded|dispute intake|can no longer/i.test(
+                                    message,
+                                  )
+                                ? 409
+                                : /outside Mizuki|public GitHub|install the Mizuki|issue is too large|invalid|expired|required|incomplete/i.test(
+                                      message,
+                                    )
+                                  ? 422
+                                  : 500;
       const publicMessage =
         cause instanceof GithubReadinessError
           ? cause.message
@@ -1253,7 +1423,7 @@ function applyCors(
   res.setHeader('access-control-allow-credentials', 'true');
   res.setHeader(
     'access-control-allow-headers',
-    'content-type,idempotency-key,payment-signature,last-event-id',
+    'content-type,idempotency-key,payment-signature,last-event-id,x-mizuki-csrf-token',
   );
   res.setHeader('access-control-allow-methods', 'GET,POST,OPTIONS');
   res.setHeader('access-control-expose-headers', 'x-request-id');
@@ -1284,6 +1454,17 @@ function accountRepositoryInput(body: { repository?: unknown; owner?: unknown; r
   return validatedRepository(identity[1]!, identity[2]!);
 }
 
+async function accountRepositoryLinked(
+  store: MizukiStore,
+  githubId: string,
+  owner: string,
+  repo: string,
+): Promise<boolean> {
+  const repository = `${owner}/${repo}`.toLowerCase();
+  const page = await store.repositoriesForAccount(githubId, 25);
+  return page.repositories.some((candidate) => candidate.repository === repository);
+}
+
 function validatedRepository(owner: string, repo: string): { owner: string; repo: string } {
   const segment = /^[A-Za-z0-9_.-]{1,100}$/;
   if (!segment.test(owner) || !segment.test(repo)) {
@@ -1303,6 +1484,58 @@ function requireSession(req: IncomingMessage, auth: ContributorAuth) {
   const session = auth.session(cookies(req).mizuki_session);
   if (!session) throw new Error('not signed in');
   return session;
+}
+
+function requireCsrfSession(
+  req: IncomingMessage,
+  auth: ContributorAuth,
+  configuredOrigin: string | undefined,
+) {
+  const sessionValue = cookies(req).mizuki_session;
+  const session = auth.session(sessionValue);
+  if (!session) throw new Error('not signed in');
+
+  let expectedOrigin: string | undefined;
+  try {
+    expectedOrigin = configuredOrigin ? new URL(configuredOrigin).origin : undefined;
+  } catch {
+    expectedOrigin = undefined;
+  }
+  if (
+    !expectedOrigin ||
+    header(req, 'origin') !== expectedOrigin ||
+    !auth.verifyCsrfToken(sessionValue, header(req, 'x-mizuki-csrf-token'))
+  ) {
+    throw new CsrfValidationError();
+  }
+  return session;
+}
+
+async function requireAccountPrincipal(
+  req: IncomingMessage,
+  auth: ContributorAuth,
+  admission: PublicAdmission,
+  scope: ApiTokenScope,
+  options: { csrf?: boolean; configuredOrigin?: string } = {},
+) {
+  const sessionValue = cookies(req).mizuki_session;
+  const session = auth.session(sessionValue);
+  const authorization = header(req, 'authorization');
+  if (session && authorization) throw new ApiTokenAuthError('invalid');
+  if (session) {
+    if (options.csrf) {
+      return requireCsrfSession(req, auth, options.configuredOrigin);
+    }
+    return session;
+  }
+
+  const bearer = authorization?.match(/^Bearer ([^\s,]+)$/i)?.[1];
+  if (!bearer) {
+    if (authorization) throw new ApiTokenAuthError('invalid');
+    throw new Error('not signed in');
+  }
+  admission.consume('api_auth', req);
+  return auth.apiToken(bearer, scope);
 }
 
 function cookies(req: IncomingMessage): Record<string, string> {
@@ -1464,6 +1697,28 @@ function accountBilling(mode: Config['paymentMode'], page: AccountJobsPage) {
   };
 }
 
+function publicAccountClaim(claim: BountyClaim, current: boolean) {
+  return {
+    id: claim.id,
+    state: claim.state,
+    current,
+    claimedAt: claim.claimedAt,
+    leaseExpiresAt: claim.leaseExpiresAt,
+    ...(claim.draftPullRequestUrl ? { pullRequestUrl: claim.draftPullRequestUrl } : {}),
+    ...(claim.closedAt ? { closedAt: claim.closedAt } : {}),
+  };
+}
+
+async function publicAccountBounty(
+  store: MizukiStore,
+  entry: { bounty: RescueBounty; claim: BountyClaim },
+) {
+  return {
+    ...(await publicBounty(store, entry.bounty)),
+    accountClaim: publicAccountClaim(entry.claim, entry.bounty.activeClaim?.id === entry.claim.id),
+  };
+}
+
 function sumJobAmounts(jobs: Job[]): string {
   return jobs.reduce((total, job) => total + BigInt(job.payment.amountAtomic), 0n).toString();
 }
@@ -1503,6 +1758,27 @@ function accountRepositoryBlocker(cause: unknown): string {
   return 'Repository readiness could not be verified. Try again shortly.';
 }
 
+function repositoryReadiness(
+  core: 'ready' | 'action_required' | 'unavailable',
+  policy: 'ready' | 'action_required' | 'unavailable',
+): 'ready' | 'action_required' | 'unavailable' {
+  if (core === 'unavailable' || policy === 'unavailable') return 'unavailable';
+  if (core === 'action_required' || policy === 'action_required') return 'action_required';
+  return 'ready';
+}
+
+function redirectGithubOAuthFailure(
+  res: ServerResponse,
+  origin: string,
+  code: GithubOAuthErrorCode,
+  redirect = '/app',
+): void {
+  const target = new URL(githubOAuthRedirectPath(redirect, '/app'), origin);
+  target.searchParams.set('auth_error', code);
+  res.writeHead(302, { location: target.toString(), 'cache-control': 'private, no-store' });
+  res.end();
+}
+
 async function mapConcurrent<T, R>(
   values: T[],
   concurrency: number,
@@ -1529,24 +1805,90 @@ class ConcurrentPaymentReservation extends Error {
 
 class InvalidRequestBodyError extends Error {}
 
+class CsrfValidationError extends Error {
+  constructor() {
+    super('CSRF validation failed');
+  }
+}
+
 export class OperatorAdmissionError extends Error {}
 
-export class SerialGate {
-  private tail = Promise.resolve();
+type SerialGateWaiter = {
+  resolve: () => void;
+  timer: ReturnType<typeof setTimeout>;
+};
 
-  constructor(private readonly exclusive?: <T>(operation: () => Promise<T>) => Promise<T>) {}
+export class SerialGate {
+  private active = false;
+  private readonly queue: SerialGateWaiter[] = [];
+
+  constructor(
+    private readonly exclusive?: <T>(operation: () => Promise<T>) => Promise<T>,
+    private readonly limits: { maxQueued?: number; acquireTimeoutMs?: number } = {},
+  ) {
+    if (!Number.isInteger(this.maxQueued) || this.maxQueued < 0) {
+      throw new Error('serial gate queue limit must be a non-negative integer');
+    }
+    if (!Number.isInteger(this.acquireTimeoutMs) || this.acquireTimeoutMs < 1) {
+      throw new Error('serial gate acquisition timeout must be a positive integer');
+    }
+  }
 
   async run<T>(operation: () => Promise<T>): Promise<T> {
-    const previous = this.tail;
-    let release!: () => void;
-    this.tail = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await previous;
+    await this.acquire();
     try {
       return this.exclusive ? await this.exclusive(operation) : await operation();
     } finally {
-      release();
+      this.release();
     }
+  }
+
+  private acquire(): Promise<void> {
+    if (!this.active) {
+      this.active = true;
+      return Promise.resolve();
+    }
+    if (this.queue.length >= this.maxQueued) return Promise.reject(new SerialGateBusyError());
+
+    return new Promise<void>((resolve, reject) => {
+      let waiter!: SerialGateWaiter;
+      waiter = {
+        resolve,
+        timer: setTimeout(() => {
+          const index = this.queue.indexOf(waiter);
+          if (index === -1) return;
+          this.queue.splice(index, 1);
+          reject(new SerialGateBusyError());
+        }, this.acquireTimeoutMs),
+      };
+      waiter.timer.unref?.();
+      this.queue.push(waiter);
+    });
+  }
+
+  private release(): void {
+    const next = this.queue.shift();
+    if (!next) {
+      this.active = false;
+      return;
+    }
+    clearTimeout(next.timer);
+    next.resolve();
+  }
+
+  private get maxQueued(): number {
+    return this.limits.maxQueued ?? 64;
+  }
+
+  private get acquireTimeoutMs(): number {
+    return this.limits.acquireTimeoutMs ?? 5_000;
+  }
+}
+
+export class SerialGateBusyError extends Error {
+  readonly retryAfterSeconds = 1;
+
+  constructor() {
+    super('payment processing is temporarily busy; retry shortly');
   }
 }

@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import type { SolanaSignMessageFeature } from '@solana/wallet-standard-features';
 import { bytesToBase64, useStandardWallet } from '@/lib/wallet-standard';
 import { truncateAddress } from '@/lib/format';
+import { sessionCsrfToken } from '@/lib/workbench-client';
 
 type Challenge = { challengeId?: string; id?: string; message: string };
 
@@ -59,12 +60,16 @@ export function WalletProof({
     setError(null);
     try {
       setState('challenging');
+      const csrfToken = await sessionCsrfToken();
       const challengeResponse = await fetch(
         `/api/mizuki/v1/bounties/${encodeURIComponent(bountyId)}/wallet-proof`,
         {
           method: 'POST',
           credentials: 'include',
-          headers: { 'content-type': 'application/json' },
+          headers: {
+            'content-type': 'application/json',
+            'x-mizuki-csrf-token': csrfToken,
+          },
           body: JSON.stringify({ address: connected.account.address }),
         },
       );
@@ -91,6 +96,7 @@ export function WalletProof({
           headers: {
             'content-type': 'application/json',
             'idempotency-key': crypto.randomUUID(),
+            'x-mizuki-csrf-token': csrfToken,
           },
           body: JSON.stringify({
             challenge_id: challenge.challengeId || challenge.id,

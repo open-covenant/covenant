@@ -6,7 +6,8 @@ import { BountyActions } from '@/components/bounty-actions';
 import { GithubClaimButton } from '@/components/github-claim-button';
 import { TransactionLink } from '@/components/transaction-link';
 import { WalletProof } from '@/components/wallet-proof';
-import { bountyStateLabel, failureLabel, formatTime } from '@/lib/format';
+import { bountyStateLabel, failureLabel, formatTime, stateLabel } from '@/lib/format';
+import type { Bounty } from '@/lib/types';
 import { bountyPayoutText, normalizeBounties, normalizeBounty } from '@/lib/workbench';
 import { useWorkbenchResource } from '@/lib/workbench-client';
 import {
@@ -31,13 +32,9 @@ export function BountyWorkspace() {
     }
     if (accountBounties.status !== 'ready') return [];
     if (filter === 'completed') {
-      return accountBounties.data.filter((item) =>
-        ['accepted', 'released', 'expired', 'rejected', 'refunded'].includes(item.state),
-      );
+      return bountiesForFilter(accountBounties.data, filter);
     }
-    return accountBounties.data.filter((item) =>
-      ['claimed', 'pr_submitted', 'validating', 'disputed'].includes(item.state),
-    );
+    return bountiesForFilter(accountBounties.data, filter);
   }, [accountBounties, availableBounties, filter]);
   const currentResource = filter === 'available' ? availableBounties : accountBounties;
 
@@ -50,7 +47,7 @@ export function BountyWorkspace() {
         action={<Link href="/bounties">View public board</Link>}
       />
       <div className="workbench-filter-bar">
-        <div aria-label="Filter bounties">
+        <div role="group" aria-label="Filter bounties">
           {(['available', 'my_work', 'completed'] as const).map((value) => (
             <button
               type="button"
@@ -108,8 +105,30 @@ export function BountyWorkspace() {
   );
 }
 
+export function bountiesForFilter(bounties: readonly Bounty[], filter: BountyFilter): Bounty[] {
+  if (filter === 'available') return bounties.filter((bounty) => bounty.state === 'open');
+  if (filter === 'completed') {
+    return bounties.filter((bounty) =>
+      ['released', 'expired', 'rejected', 'refunded'].includes(bounty.accountClaim?.state ?? ''),
+    );
+  }
+  return bounties.filter(
+    (bounty) =>
+      (bounty.accountClaim?.current === true &&
+        ['claim_refund_pending', 'offer_refund_pending', 'release_refund_pending'].includes(
+          bounty.state,
+        )) ||
+      ['active', 'draft_submitted', 'validating', 'disputed', 'accepted'].includes(
+        bounty.accountClaim?.state ?? '',
+      ),
+  );
+}
+
 export function BountyRoom({ id }: { id: string }) {
-  const bounty = useWorkbenchResource(`/v1/bounties/${encodeURIComponent(id)}`, normalizeBounty);
+  const bounty = useWorkbenchResource(
+    `/v1/account/bounties/${encodeURIComponent(id)}`,
+    normalizeBounty,
+  );
 
   if (bounty.status === 'loading') {
     return (
@@ -153,6 +172,37 @@ export function BountyRoom({ id }: { id: string }) {
 
       <div className="bounty-room-grid">
         <div className="bounty-room-main">
+          {value.accountClaim && (
+            <section className="workbench-panel">
+              <div className="workbench-panel-heading">
+                <div>
+                  <span>Your claim</span>
+                  <h2>{stateLabel(value.accountClaim.state)}</h2>
+                </div>
+                <WorkbenchStatus value={value.accountClaim.state} />
+              </div>
+              <dl className="receipt-list">
+                <div>
+                  <dt>Claimed</dt>
+                  <dd>{formatTime(value.accountClaim.claimedAt)}</dd>
+                </div>
+                <div>
+                  <dt>Work period ends</dt>
+                  <dd>{formatTime(value.accountClaim.leaseExpiresAt)}</dd>
+                </div>
+                <div>
+                  <dt>Current assignment</dt>
+                  <dd>{value.accountClaim.current ? 'This claim' : 'A later claim'}</dd>
+                </div>
+              </dl>
+              {value.accountClaim.pullRequestUrl && (
+                <a href={value.accountClaim.pullRequestUrl} target="_blank" rel="noreferrer">
+                  Open your submitted pull request ↗
+                </a>
+              )}
+            </section>
+          )}
+
           <section className="workbench-panel">
             <div className="workbench-panel-heading">
               <div>

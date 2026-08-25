@@ -222,6 +222,24 @@ export type Bounty = {
   };
   createdAt: string;
   updatedAt: string;
+  accountClaim?: {
+    id: string;
+    current: boolean;
+    state:
+      | 'active'
+      | 'draft_submitted'
+      | 'validating'
+      | 'accepted'
+      | 'released'
+      | 'expired'
+      | 'rejected'
+      | 'disputed'
+      | 'refunded';
+    claimedAt: string;
+    leaseExpiresAt: string;
+    pullRequestUrl?: string;
+    closedAt?: string;
+  };
 };
 
 export type TreasuryAllocationBucket = {

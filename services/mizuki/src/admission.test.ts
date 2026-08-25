@@ -36,6 +36,9 @@ describe('public admission limits', () => {
 
   it.each([
     ['account_repositories' as const, 12],
+    ['api_auth' as const, 60],
+    ['api_tokens' as const, 10],
+    ['payment_status' as const, 12],
     ['repository_connect' as const, 6],
     ['repository_issues' as const, 10],
   ])('bounds GitHub-backed %s requests per source', (route, capacity) => {
@@ -50,6 +53,8 @@ describe('public admission limits', () => {
   it.each([
     ['preflight' as const, 10],
     ['account_repositories' as const, 12],
+    ['api_tokens' as const, 10],
+    ['payment_status' as const, 12],
     ['repository_connect' as const, 6],
     ['repository_issues' as const, 10],
   ])('bounds GitHub-backed %s requests per account across sources', (route, capacity) => {

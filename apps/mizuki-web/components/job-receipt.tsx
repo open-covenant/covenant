@@ -1,12 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { formatTime, formatUsdcAtomic, formatUsd, stateLabel } from '@/lib/format';
 import type { Job, ReviewAttempt } from '@/lib/types';
+import { fetchWithDeadline } from '@/lib/workbench-client';
 import { ProviderReceiptDetails } from './provider-receipt';
 
-const terminal = new Set(['delivered', 'refunded']);
 const stages = ['paid', 'running', 'validating', 'delivered'] as const;
+const pollTimeoutMs = 12_000;
 
 function stagePosition(state: Job['state']): number {
   if (state === 'quoted' || state === 'settlement_pending') return -1;
@@ -20,24 +21,52 @@ function stagePosition(state: Job['state']): number {
 export function JobReceipt({ initial, live = true }: { initial: Job; live?: boolean }) {
   const [job, setJob] = useState(initial);
   const [pollError, setPollError] = useState<string | null>(null);
+  const currentJob = useRef(initial);
 
   useEffect(() => {
-    if (!live || terminal.has(job.state)) return;
-    const poll = window.setInterval(async () => {
+    currentJob.current = job;
+  }, [job]);
+
+  useEffect(() => {
+    if (!live || jobPollingComplete(currentJob.current)) return;
+    let stopped = false;
+    let timer: number | undefined;
+    let controller: AbortController | undefined;
+
+    async function poll() {
+      controller = new AbortController();
       try {
-        const response = await fetch(`/api/mizuki/v1/jobs/${encodeURIComponent(job.id)}`, {
-          cache: 'no-store',
-        });
+        const response = await fetchWithDeadline(
+          `/api/mizuki/v1/jobs/${encodeURIComponent(initial.id)}`,
+          { cache: 'no-store', signal: controller.signal },
+          fetch,
+          pollTimeoutMs,
+        );
         const body = (await response.json()) as Job;
         if (!response.ok) throw new Error('Status refresh failed');
-        setJob(body);
+        if (shouldApplyJobUpdate(currentJob.current, body)) {
+          currentJob.current = body;
+          setJob(body);
+        }
         setPollError(null);
-      } catch {
+      } catch (cause) {
+        if (stopped || (cause instanceof DOMException && cause.name === 'AbortError')) return;
         setPollError('Status refresh failed');
+      } finally {
+        controller = undefined;
+        if (!stopped && !jobPollingComplete(currentJob.current)) {
+          timer = window.setTimeout(poll, 5_000);
+        }
       }
-    }, 5_000);
-    return () => window.clearInterval(poll);
-  }, [job.id, job.state, live]);
+    }
+
+    timer = window.setTimeout(poll, 5_000);
+    return () => {
+      stopped = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+      controller?.abort();
+    };
+  }, [initial.id, live]);
 
   const progress = stagePosition(job.state);
   const failed = ['rejected', 'failed', 'refund_pending', 'refunded'].includes(job.state);
@@ -51,7 +80,7 @@ export function JobReceipt({ initial, live = true }: { initial: Job; live?: bool
             <span>Current state</span>
             <strong className={failed ? 'state-failed' : ''}>{state}</strong>
           </div>
-          {live && !terminal.has(job.state) && (
+          {live && !jobPollingComplete(job) && (
             <span className="processing-indicator">
               <i aria-hidden="true" /> Live
             </span>
@@ -327,6 +356,24 @@ export function JobReceipt({ initial, live = true }: { initial: Job; live?: bool
         </div>
       )}
     </div>
+  );
+}
+
+export function shouldApplyJobUpdate(current: Job, next: Job): boolean {
+  if (current.id !== next.id || jobPollingComplete(current)) return false;
+  const currentUpdatedAt = Date.parse(current.updatedAt);
+  const nextUpdatedAt = Date.parse(next.updatedAt);
+  if (!Number.isFinite(nextUpdatedAt)) return false;
+  return !Number.isFinite(currentUpdatedAt) || nextUpdatedAt > currentUpdatedAt;
+}
+
+export function jobPollingComplete(job: Job): boolean {
+  if (job.state === 'refunded') return Boolean(job.refundTransaction);
+  return Boolean(
+    job.state === 'delivered' &&
+    job.mergedAt &&
+    job.refundLiabilityDischarge?.dischargedAt &&
+    job.refundLiabilityDischarge.evidenceHash,
   );
 }
 

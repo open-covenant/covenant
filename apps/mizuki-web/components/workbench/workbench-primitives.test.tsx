@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { WorkbenchRepository } from '@/lib/workbench';
+import { ReadinessCheck } from './repositories';
 import { RepositoryCard, ServiceContractNote, WorkbenchEmpty } from './workbench-primitives';
 
 describe('Workbench product copy', () => {
@@ -18,8 +19,8 @@ describe('Workbench product copy', () => {
       repo: 'covenant',
       fullName: 'open-covenant/covenant',
       readiness: 'ready',
-      maintenanceAppInstalled: true,
-      verifierAppInstalled: true,
+      maintenanceAppStatus: 'installed',
+      verifierAppStatus: 'installed',
       validationCommands: [],
     };
     const html = renderToStaticMarkup(<RepositoryCard repository={repository} />);
@@ -27,6 +28,32 @@ describe('Workbench product copy', () => {
     expect(html).toContain('Ready');
     expect(html).toContain('Check repository');
     expect(html).not.toContain('0</dd>');
+  });
+
+  it('offers Retry for an outage and Install only for a missing App', () => {
+    const unavailable = renderToStaticMarkup(
+      <ReadinessCheck
+        label="Policy verifier"
+        status="unavailable"
+        actionUrl="https://github.com/apps/example/installations/new"
+        retry={() => undefined}
+      />,
+    );
+    const missing = renderToStaticMarkup(
+      <ReadinessCheck
+        label="Policy verifier"
+        status="missing"
+        actionUrl="https://github.com/apps/example/installations/new"
+        retry={() => undefined}
+      />,
+    );
+
+    expect(unavailable).toContain('Status could not be confirmed');
+    expect(unavailable).toContain('Retry');
+    expect(unavailable).not.toContain('Install ↗');
+    expect(missing).toContain('Required on this repository');
+    expect(missing).toContain('Install ↗');
+    expect(missing).not.toContain('Retry');
   });
 
   it('provides a useful zero state', () => {

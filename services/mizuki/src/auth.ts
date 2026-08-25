@@ -1,10 +1,11 @@
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { address, getPublicKeyFromAddress } from '@solana/kit';
 import { z } from 'zod';
+import { apiTokenCandidate, apiTokenHashMatches, apiTokenState } from './api-tokens.js';
 import type { Config } from './config.js';
 import type { GithubIdentityRegistrar } from './policy-client.js';
-import type { MizukiStore } from './store.js';
-import type { Contributor, WalletChallenge } from './types.js';
+import { StateConflictError, type MizukiStore } from './store.js';
+import type { ApiTokenScope, Contributor, WalletChallenge } from './types.js';
 
 const githubUserSchema = z.object({ id: z.number().int().positive(), login: z.string().min(1) });
 const tokenSchema = z.object({
@@ -23,7 +24,45 @@ const stateSchema = z.object({
 
 export const GITHUB_OAUTH_FLOW_TTL_SECONDS = 10 * 60;
 
+export type GithubOAuthErrorCode =
+  | 'denied'
+  | 'expired'
+  | 'incomplete'
+  | 'invalid'
+  | 'replayed'
+  | 'unavailable';
+
+export class GithubOAuthCallbackError extends Error {
+  constructor(readonly code: Extract<GithubOAuthErrorCode, 'expired' | 'invalid' | 'replayed'>) {
+    super(
+      code === 'expired'
+        ? 'OAuth browser flow expired'
+        : code === 'replayed'
+          ? 'OAuth browser flow was already used'
+          : 'OAuth browser flow is invalid',
+    );
+  }
+}
+
 export type ContributorSession = z.infer<typeof tokenSchema>;
+
+export type ApiTokenPrincipal = {
+  kind: 'api_token';
+  tokenId: string;
+  githubId: string;
+  githubLogin: string;
+  scopes: ApiTokenScope[];
+};
+
+export class ApiTokenAuthError extends Error {
+  constructor(readonly code: 'invalid' | 'insufficient_scope') {
+    super(
+      code === 'insufficient_scope'
+        ? 'API token does not grant the required scope'
+        : 'API token is invalid, expired, or revoked',
+    );
+  }
+}
 
 export class ContributorAuth {
   constructor(
@@ -45,10 +84,19 @@ export class ContributorAuth {
     );
   }
 
+  githubOAuthRedirect(signedState: string | undefined): string | undefined {
+    if (!signedState) return undefined;
+    try {
+      const state = stateSchema.parse(this.verify(signedState));
+      return githubOAuthRedirectPath(state.redirect, '/app');
+    } catch {
+      return undefined;
+    }
+  }
+
   async beginGithubOAuth(redirect = '/bounties'): Promise<{ url: string; flowCookie: string }> {
     this.assertConfigured();
-    const safeRedirect =
-      redirect.startsWith('/') && !redirect.startsWith('//') ? redirect : '/bounties';
+    const safeRedirect = githubOAuthRedirectPath(redirect);
     const now = Date.now();
     const expiresAt = now + GITHUB_OAUTH_FLOW_TTL_SECONDS * 1_000;
     const nonce = randomUUID();
@@ -86,14 +134,31 @@ export class ContributorAuth {
     redirect: string;
   }> {
     this.assertConfigured();
-    const state = stateSchema.parse(this.verify(signedState));
-    if (state.exp <= Date.now()) throw new Error('OAuth state expired');
-    if (!flowCookie) throw new Error('OAuth browser flow cookie is required');
+    let state: z.infer<typeof stateSchema>;
+    try {
+      state = stateSchema.parse(this.verify(signedState));
+    } catch {
+      throw new GithubOAuthCallbackError('invalid');
+    }
+    if (state.exp <= Date.now()) throw new GithubOAuthCallbackError('expired');
+    if (!flowCookie) throw new GithubOAuthCallbackError('invalid');
     const browserBinding = this.browserBinding(flowCookie);
     if (!equal(browserBinding, state.browserBinding)) {
-      throw new Error('OAuth browser flow is invalid');
+      throw new GithubOAuthCallbackError('invalid');
     }
-    await this.store.consumeGithubOAuthFlow(state.nonce, state.browserBinding);
+    try {
+      await this.store.consumeGithubOAuthFlow(state.nonce, state.browserBinding);
+    } catch (cause) {
+      if (cause instanceof StateConflictError) {
+        throw new GithubOAuthCallbackError(
+          /already used/i.test(cause.message) ? 'replayed' : 'expired',
+        );
+      }
+      if (cause instanceof Error && cause.message === 'OAuth browser flow is invalid') {
+        throw new GithubOAuthCallbackError('invalid');
+      }
+      throw cause;
+    }
     const tokenResponse = await this.request('https://github.com/login/oauth/access_token', {
       method: 'POST',
       headers: { accept: 'application/json', 'content-type': 'application/json' },
@@ -146,6 +211,51 @@ export class ContributorAuth {
     } catch {
       return undefined;
     }
+  }
+
+  csrfToken(sessionValue: string | undefined): string | undefined {
+    if (!sessionValue || !this.config.sessionSecret || !this.session(sessionValue))
+      return undefined;
+    return createHmac('sha256', this.config.sessionSecret)
+      .update('mizuki.workbench-csrf.v1\0')
+      .update(sessionValue)
+      .digest('base64url');
+  }
+
+  verifyCsrfToken(sessionValue: string | undefined, token: string | undefined): boolean {
+    const expected = this.csrfToken(sessionValue);
+    return Boolean(
+      expected && token && /^[A-Za-z0-9_-]{43}$/.test(token) && equal(expected, token),
+    );
+  }
+
+  async apiToken(value: string, requiredScope: ApiTokenScope): Promise<ApiTokenPrincipal> {
+    const candidate = apiTokenCandidate(value);
+    const record = candidate ? await this.store.apiTokenByPrefix(candidate.prefix) : undefined;
+    const matches = apiTokenHashMatches(
+      record?.tokenHash ?? '0'.repeat(64),
+      candidate?.tokenHash ?? 'f'.repeat(64),
+    );
+    if (!candidate || !record || !matches || apiTokenState(record) !== 'active') {
+      throw new ApiTokenAuthError('invalid');
+    }
+    if (!record.scopes.includes(requiredScope)) {
+      throw new ApiTokenAuthError('insufficient_scope');
+    }
+
+    const usedAt = new Date().toISOString();
+    if (!(await this.store.markApiTokenUsed(record.id, usedAt))) {
+      throw new ApiTokenAuthError('invalid');
+    }
+    const contributor = await this.store.contributor(record.githubId);
+    if (!contributor) throw new ApiTokenAuthError('invalid');
+    return {
+      kind: 'api_token',
+      tokenId: record.id,
+      githubId: contributor.githubId,
+      githubLogin: contributor.githubLogin,
+      scopes: [...record.scopes],
+    };
   }
 
   async createWalletChallenge(
@@ -230,6 +340,23 @@ export class ContributorAuth {
     if (!this.config.webOrigin || !this.config.sessionSecret) {
       throw new Error('contributor session configuration is incomplete');
     }
+  }
+}
+
+export function githubOAuthRedirectPath(value: string | undefined, fallback = '/bounties'): string {
+  if (!value) return fallback;
+  try {
+    const base = new URL('https://mizuki.invalid');
+    const target = new URL(value, base);
+    if (target.origin !== base.origin || target.hash) return fallback;
+    const allowed =
+      target.pathname === '/app' ||
+      target.pathname.startsWith('/app/') ||
+      target.pathname === '/bounties' ||
+      target.pathname.startsWith('/bounties/');
+    return allowed ? `${target.pathname}${target.search}` : fallback;
+  } catch {
+    return fallback;
   }
 }
 

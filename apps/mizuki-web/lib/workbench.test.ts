@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   bountyPayoutText,
+  githubAuthErrorMessage,
   isActiveJob,
   normalizeAccount,
+  normalizeApiTokenCredential,
+  normalizeApiTokens,
   normalizeBounties,
   normalizeBilling,
+  normalizeCsrfToken,
   normalizeIssues,
   normalizeJobPage,
   normalizePreflight,
@@ -19,6 +23,13 @@ describe('Workbench authentication', () => {
     expect(workbenchAuthHref('/app/jobs/new')).toBe(
       '/api/mizuki/v1/auth/github?return_to=%2Fapp%2Fjobs%2Fnew',
     );
+    expect(
+      workbenchAuthHref(
+        '/app/jobs/new?repository=open-covenant%2Fcovenant&issue=7&auth_error=expired',
+      ),
+    ).toBe(
+      '/api/mizuki/v1/auth/github?return_to=%2Fapp%2Fjobs%2Fnew%3Frepository%3Dopen-covenant%252Fcovenant%26issue%3D7',
+    );
   });
 
   it('rejects destinations outside Workbench', () => {
@@ -26,6 +37,14 @@ describe('Workbench authentication', () => {
       '/api/mizuki/v1/auth/github?return_to=%2Fapp',
     );
     expect(workbenchAuthHref('/application')).toBe('/api/mizuki/v1/auth/github?return_to=%2Fapp');
+    expect(workbenchAuthHref('/app#session')).toBe('/api/mizuki/v1/auth/github?return_to=%2Fapp');
+  });
+
+  it('shows only bounded OAuth failure messages', () => {
+    expect(githubAuthErrorMessage('expired')).toContain('expired');
+    expect(githubAuthErrorMessage('replayed')).toContain('already used');
+    expect(githubAuthErrorMessage('internal database detail')).toBeUndefined();
+    expect(githubAuthErrorMessage('toString')).toBeUndefined();
   });
 });
 
@@ -57,6 +76,44 @@ describe('Workbench response normalization', () => {
     });
   });
 
+  it('reads public API token metadata without accepting hashes or malformed secrets', () => {
+    const metadata = {
+      id: '11111111-1111-4111-8111-111111111111',
+      name: 'Release MCP',
+      prefix: 'mzk_v1_abcdefghijkl',
+      scopes: ['repositories:read', 'jobs:read'],
+      state: 'active',
+      expiresAt: '2026-11-25T10:00:00.000Z',
+      createdAt: '2026-08-25T10:00:00.000Z',
+      lastUsedAt: '2026-08-25T10:05:00.000Z',
+    };
+    expect(normalizeApiTokens({ tokens: [metadata] })).toEqual([metadata]);
+
+    const secret = `mzk_v1_${'a'.repeat(12)}_${'b'.repeat(43)}`;
+    expect(normalizeApiTokenCredential({ token: metadata, secret })).toEqual({
+      token: metadata,
+      secret,
+    });
+    expect(() => normalizeApiTokenCredential({ token: metadata, secret: 'redacted' })).toThrow(
+      'one-time secret',
+    );
+    expect(() => normalizeApiTokens({ tokens: [{ ...metadata, scopes: ['admin'] }] })).toThrow(
+      'incomplete',
+    );
+    expect(() =>
+      normalizeApiTokens({ tokens: [{ ...metadata, scopes: ['jobs:read', 'jobs:read'] }] }),
+    ).toThrow('incomplete');
+    expect(() =>
+      normalizeApiTokens({ tokens: [{ ...metadata, prefix: 'mzk_v1_invalid' }] }),
+    ).toThrow('incomplete');
+  });
+
+  it('accepts only fixed-length CSRF tokens', () => {
+    const token = 'c'.repeat(43);
+    expect(normalizeCsrfToken({ csrfToken: token })).toBe(token);
+    expect(() => normalizeCsrfToken({ csrfToken: 'invalid' })).toThrow('invalid');
+  });
+
   it('reads nested repository installation state without requiring list-level commands', () => {
     expect(
       normalizeRepositories({
@@ -74,11 +131,49 @@ describe('Workbench response normalization', () => {
       expect.objectContaining({
         fullName: 'open-covenant/covenant',
         readiness: 'ready',
-        maintenanceAppInstalled: true,
-        verifierAppInstalled: true,
+        maintenanceAppStatus: 'installed',
+        verifierAppStatus: 'installed',
         validationCommands: [],
       }),
     ]);
+  });
+
+  it('preserves repository and installation outages without requesting installation', () => {
+    expect(
+      normalizeRepositories({
+        repositories: [
+          {
+            repository: 'open-covenant/covenant',
+            readyForWork: false,
+            verifierAppInstalled: false,
+            core: { status: 'ready' },
+            policy: { status: 'unavailable' },
+            blockers: ['The policy verifier is temporarily unavailable.'],
+          },
+        ],
+      })[0],
+    ).toMatchObject({
+      readiness: 'unavailable',
+      maintenanceAppStatus: 'installed',
+      verifierAppStatus: 'unavailable',
+    });
+
+    expect(
+      normalizeRepositories({
+        repositories: [
+          {
+            repository: 'open-covenant/covenant',
+            readyForWork: false,
+            core: { status: 'action_required' },
+            policy: { status: 'ready' },
+          },
+        ],
+      })[0],
+    ).toMatchObject({
+      readiness: 'action_required',
+      maintenanceAppStatus: 'missing',
+      verifierAppStatus: 'installed',
+    });
   });
 
   it('does not treat an authorized but ineligible issue as ready', () => {
@@ -178,10 +273,13 @@ describe('Workbench response normalization', () => {
           authorized: true,
           eligibility: true,
         },
-        checks: { eligibility: { status: 'ready' } },
+        checks: {
+          policy: { status: 'unavailable' },
+          eligibility: { status: 'ready' },
+        },
       }),
     ).toMatchObject({
-      eligibility: 'action_required',
+      eligibility: 'unavailable',
       reason: 'Policy verifier status is unavailable',
     });
   });

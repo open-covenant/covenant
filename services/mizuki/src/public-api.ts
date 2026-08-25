@@ -17,6 +17,23 @@ export function publicJob(job: Job) {
     paymentTransaction: job.payment.transaction,
     prUrl: job.prUrl,
     mergedAt: job.mergedAt,
+    deliveryEvidence: job.deliveryEvidence
+      ? {
+          pullRequestNumber: job.deliveryEvidence.pullRequestNumber,
+          headSha: job.deliveryEvidence.headSha,
+          baseSha: job.deliveryEvidence.baseSha,
+          baseRef: job.deliveryEvidence.baseRef,
+          diffHash: job.deliveryEvidence.diffHash,
+          observedAt: job.deliveryEvidence.observedAt,
+        }
+      : undefined,
+    refundLiabilityDischarge:
+      job.refundLiabilityDischargedAt && job.refundLiabilityDischargeEvidenceHash
+        ? {
+            dischargedAt: job.refundLiabilityDischargedAt,
+            evidenceHash: job.refundLiabilityDischargeEvidenceHash,
+          }
+        : undefined,
     refundTransaction: job.refundTransaction,
     error: publicFailure(job.error),
     review: job.reviewReceipt

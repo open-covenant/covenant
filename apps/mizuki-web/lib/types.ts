@@ -71,6 +71,18 @@ export type Job = {
   paymentTransaction?: string;
   prUrl?: string;
   mergedAt?: string;
+  deliveryEvidence?: {
+    pullRequestNumber: number;
+    headSha: string;
+    baseSha: string;
+    baseRef: string;
+    diffHash: string;
+    observedAt: string;
+  };
+  refundLiabilityDischarge?: {
+    dischargedAt: string;
+    evidenceHash: string;
+  };
   refundTransaction?: string;
   error?: string;
   review?: {

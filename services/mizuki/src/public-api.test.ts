@@ -217,6 +217,50 @@ describe('public accounting', () => {
     expect(receipt).not.toHaveProperty('estimatedCostUsd');
   });
 
+  it('publishes exact delivery and refund-liability discharge commitments', async () => {
+    const store = new MemoryStore();
+    const { job } = await store.createJob(
+      quote,
+      { payer: 'payer', transaction: 'payment-evidence', amountAtomic: quote.priceAtomic },
+      'payment-evidence-key',
+    );
+    const delivered = await store.transitionJob(job.id, 'settlement_pending', 'delivered', {
+      prUrl: 'https://github.com/public/tool/pull/7',
+      mergedAt: '2026-08-23T11:00:00.000Z',
+      deliveryEvidence: {
+        pullRequestNumber: 7,
+        headSha: 'b'.repeat(40),
+        baseSha: 'a'.repeat(40),
+        baseRef: 'main',
+        diffHash: 'c'.repeat(64),
+        observedAt: '2026-08-23T10:00:00.000Z',
+      },
+      refundLiabilityDischargedAt: '2026-08-23T11:00:03.000Z',
+      refundLiabilityDischargeEvidenceHash: 'd'.repeat(64),
+      refundLiabilityId: 'private-liability-id',
+    });
+
+    const receipt = publicJob(delivered);
+
+    expect(receipt).toMatchObject({
+      mergedAt: '2026-08-23T11:00:00.000Z',
+      deliveryEvidence: {
+        pullRequestNumber: 7,
+        headSha: 'b'.repeat(40),
+        baseSha: 'a'.repeat(40),
+        baseRef: 'main',
+        diffHash: 'c'.repeat(64),
+        observedAt: '2026-08-23T10:00:00.000Z',
+      },
+      refundLiabilityDischarge: {
+        dischargedAt: '2026-08-23T11:00:03.000Z',
+        evidenceHash: 'd'.repeat(64),
+      },
+    });
+    expect(receipt).not.toHaveProperty('refundLiabilityId');
+    expect(JSON.stringify(receipt)).not.toContain('private-liability-id');
+  });
+
   it('does not expose upstream failure bodies in public job receipts', async () => {
     const store = new MemoryStore();
     const { job } = await store.createJob(

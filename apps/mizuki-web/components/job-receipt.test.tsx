@@ -4,6 +4,56 @@ import type { Job, ProviderRouteReceipt } from '@/lib/types';
 import { JobReceipt } from './job-receipt';
 
 describe('JobReceipt', () => {
+  it('shows a merged delivery and the discharged refund-liability commitment', () => {
+    const job: Job = {
+      id: 'job-merged',
+      state: 'delivered',
+      issueUrl: 'https://github.com/public/tool/issues/1',
+      class: 'micro',
+      priceAtomic: '2000000',
+      paymentTransaction: 'payment-merged',
+      prUrl: 'https://github.com/public/tool/pull/7',
+      mergedAt: '2026-08-23T11:00:00.000Z',
+      deliveryEvidence: {
+        pullRequestNumber: 7,
+        headSha: 'b'.repeat(40),
+        baseSha: 'a'.repeat(40),
+        baseRef: 'main',
+        diffHash: 'c'.repeat(64),
+        observedAt: '2026-08-23T10:00:00.000Z',
+      },
+      refundLiabilityDischarge: {
+        dischargedAt: '2026-08-23T11:00:03.000Z',
+        evidenceHash: 'd'.repeat(64),
+      },
+      changedFiles: ['README.md'],
+      validations: [{ command: 'prettier --check README.md', exitCode: 0 }],
+      variableRouteCostEstimateUsd: 0.2,
+      costCoverage: {
+        included: [
+          'gateway_model_token_rate_estimate',
+          'gateway_sandbox_runtime_estimate',
+          'reviewer_model_token_rate_estimate',
+        ],
+        excluded: ['provider_billing_adjustments', 'chain_and_facilitator_fees', 'infrastructure'],
+      },
+      createdAt: '2026-08-23T09:00:00.000Z',
+      updatedAt: '2026-08-23T11:00:03.000Z',
+    };
+
+    const html = renderToStaticMarkup(<JobReceipt initial={job} live={false} />);
+
+    expect(html).toContain('Merged');
+    expect(html).toContain('Delivery commitment');
+    expect(html).toContain('#7');
+    expect(html).toContain('b'.repeat(40));
+    expect(html).toContain('c'.repeat(64));
+    expect(html).toContain('Merge and refund-liability evidence');
+    expect(html).toContain('Discharged');
+    expect(html).toContain('d'.repeat(64));
+    expect(html).toContain('required exact-head approval');
+  });
+
   it('shows provider work on a refunded job without exposing the funded balance', () => {
     const provider = {
       model: 'review-model',

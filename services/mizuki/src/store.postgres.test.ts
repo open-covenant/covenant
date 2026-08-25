@@ -14,20 +14,20 @@ import {
   MAX_PENDING_GITHUB_OAUTH_FLOWS,
   PostgresStore,
   StateConflictError,
-  WORKBENCH_API_TOKENS_SCHEMA_V2,
+  WORKBENCH_API_TOKENS_SCHEMA_V1,
 } from './store.js';
 import type { Quote } from './types.js';
 
 const databaseUrl = process.env.MIZUKI_TEST_DATABASE_URL;
 const DEPLOYED_CORE_V1_CHECKSUM =
   '1e1c7b752aead2d673a8d82fba69113344ada76444a1263e6bc80bffb0d80429';
-const WORKBENCH_API_TOKENS_V2_CHECKSUM =
+const WORKBENCH_API_TOKENS_V1_CHECKSUM =
   '4787de73a64016308c8823bcbd209e0638a1d8fa57b3c3a2f2517a86120c412b';
 
 describe('PostgresStore schema', () => {
   it('keeps the API token migration immutable', () => {
-    expect(createHash('sha256').update(WORKBENCH_API_TOKENS_SCHEMA_V2).digest('hex')).toBe(
-      WORKBENCH_API_TOKENS_V2_CHECKSUM,
+    expect(createHash('sha256').update(WORKBENCH_API_TOKENS_SCHEMA_V1).digest('hex')).toBe(
+      WORKBENCH_API_TOKENS_V1_CHECKSUM,
     );
   });
 });
@@ -409,7 +409,9 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
         checksum: string;
       }>(
         `SELECT component, version, name, checksum FROM mizuki_schema_migrations
-         WHERE component IN ('core', 'admission-control', 'github-oauth', 'workbench')
+         WHERE component IN (
+           'core', 'admission-control', 'github-oauth', 'workbench', 'workbench-api-tokens'
+         )
          ORDER BY component, version`,
       );
       expect(result.rows).toMatchObject([
@@ -417,7 +419,7 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
         { component: 'core', version: 1, name: 'commercial-core' },
         { component: 'github-oauth', version: 1, name: 'browser-bound-flow' },
         { component: 'workbench', version: 1, name: 'workbench-accounts' },
-        { component: 'workbench', version: 2, name: 'scoped-api-tokens' },
+        { component: 'workbench-api-tokens', version: 1, name: 'scoped-api-tokens' },
       ]);
       expect(result.rows.every((row) => /^[a-f0-9]{64}$/.test(row.checksum))).toBe(true);
     } finally {
@@ -690,7 +692,9 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
           name: string;
         }>(
           `SELECT component, version, name FROM mizuki_schema_migrations
-           WHERE component IN ('core', 'admission-control', 'github-oauth', 'workbench')
+           WHERE component IN (
+             'core', 'admission-control', 'github-oauth', 'workbench', 'workbench-api-tokens'
+           )
            ORDER BY component, version`,
         );
         expect(migrations.rows).toEqual([
@@ -698,7 +702,7 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
           { component: 'core', version: 1, name: 'commercial-core' },
           { component: 'github-oauth', version: 1, name: 'browser-bound-flow' },
           { component: 'workbench', version: 1, name: 'workbench-accounts' },
-          { component: 'workbench', version: 2, name: 'scoped-api-tokens' },
+          { component: 'workbench-api-tokens', version: 1, name: 'scoped-api-tokens' },
         ]);
       } finally {
         await verificationPool.end();

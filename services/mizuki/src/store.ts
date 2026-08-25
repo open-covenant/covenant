@@ -2270,7 +2270,7 @@ CREATE INDEX mizuki_account_repositories_verified_idx
   ON mizuki_account_repositories(github_id, verified_at DESC);
 `;
 
-export const WORKBENCH_API_TOKENS_SCHEMA_V2 = `
+export const WORKBENCH_API_TOKENS_SCHEMA_V1 = `
 CREATE TABLE mizuki_account_api_tokens (
   id uuid PRIMARY KEY,
   github_id text NOT NULL REFERENCES mizuki_contributors(github_id),
@@ -2365,9 +2365,12 @@ async function migrate(pool: Pool): Promise<void> {
       },
       {
         name: 'workbench',
+        migrations: [{ version: 1, name: 'workbench-accounts', sql: WORKBENCH_ACCOUNTS_SCHEMA_V1 }],
+      },
+      {
+        name: 'workbench-api-tokens',
         migrations: [
-          { version: 1, name: 'workbench-accounts', sql: WORKBENCH_ACCOUNTS_SCHEMA_V1 },
-          { version: 2, name: 'scoped-api-tokens', sql: WORKBENCH_API_TOKENS_SCHEMA_V2 },
+          { version: 1, name: 'scoped-api-tokens', sql: WORKBENCH_API_TOKENS_SCHEMA_V1 },
         ],
       },
       {

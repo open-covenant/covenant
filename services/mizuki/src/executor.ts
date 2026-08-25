@@ -9,11 +9,14 @@ import type { Job, ProviderRouteReceipt, Quote, ReviewAttempt, RunArtifacts } fr
 import {
   boundedMaxTokens,
   matchesUsePodModel,
+  parseUsePodReviewDecision,
   parseUsePodUsage,
   publicUsePodReceipt,
+  readUsePodChatCompletion,
   usePodHeaders,
   usePodReceipt,
   usePodUrl,
+  UsePodReceiptError,
 } from './usepod.js';
 
 const safeTokenCount = z
@@ -531,6 +534,7 @@ export class JobProcessor {
     const draft = {
       model: this.config.usePodModel,
       temperature: 0,
+      stream: false,
       max_tokens: MAX_REVIEW_OUTPUT_TOKENS,
       response_format: { type: 'json_object' },
       messages: [
@@ -643,61 +647,71 @@ export class JobProcessor {
     try {
       response = await this.request(usePodUrl(requestConfig, 'chat/completions'), {
         method: 'POST',
-        headers: usePodHeaders(requestConfig),
+        redirect: 'error',
+        headers: { ...usePodHeaders(requestConfig), 'x-request-id': attempt.id },
         body: JSON.stringify({ ...draft, max_tokens: maxTokens }),
         signal: AbortSignal.timeout(60_000),
       });
-    } catch (cause) {
-      const message = `UsePod reviewer request failed: ${cause instanceof Error ? cause.message : String(cause)}`;
+    } catch {
+      const message = 'UsePod reviewer request failed';
       const persisted = await this.markReviewAttemptFailed(jobId, attempt.id, message, true);
       throw new ReviewAttemptError(message, budgetUsd, persisted);
     }
 
-    let responseText = '';
-    let responseValue: unknown;
-    let responseParseError: string | undefined;
+    let completion: Awaited<ReturnType<typeof readUsePodChatCompletion>>;
     try {
-      responseText = await response.text();
-      try {
-        responseValue = JSON.parse(responseText);
-      } catch (cause) {
-        responseParseError = cause instanceof Error ? cause.message : String(cause);
-      }
-    } catch (cause) {
-      responseParseError = `UsePod reviewer body read failed: ${cause instanceof Error ? cause.message : String(cause)}`;
+      completion = await readUsePodChatCompletion(response);
+    } catch {
+      completion = {
+        ok: false as const,
+        error: 'UsePod review response could not be read',
+        retryable: true,
+      };
     }
 
     let usage: ReturnType<typeof parseUsePodUsage> | undefined;
     let usageError: string | undefined;
-    if (responseValue && typeof responseValue === 'object' && 'usage' in responseValue) {
+    if (completion.usage !== undefined) {
       try {
-        usage = parseUsePodUsage((responseValue as { usage: unknown }).usage);
+        usage = parseUsePodUsage(completion.usage);
       } catch (cause) {
         usageError = cause instanceof Error ? cause.message : String(cause);
       }
     } else {
-      usageError = responseParseError ?? 'UsePod reviewer omitted token usage';
+      usageError = completion.ok ? 'UsePod reviewer omitted token usage' : completion.error;
     }
-    const returnedModel =
-      responseValue &&
-      typeof responseValue === 'object' &&
-      'model' in responseValue &&
-      typeof (responseValue as { model?: unknown }).model === 'string'
-        ? (responseValue as { model: string }).model
-        : undefined;
+    const returnedModel = completion.model;
     const wrongModel =
       returnedModel !== undefined && !matchesUsePodModel(this.config.usePodModel, returnedModel);
+    const outputTokenCeilingExceeded = usage !== undefined && usage.completionTokens > maxTokens;
+    const terminalCompletionError =
+      !completion.ok && !completion.retryable ? completion.error : undefined;
 
     let receipt;
     try {
-      receipt = usePodReceipt(response, this.config.usePodModel, requestConfig.minimumBalance);
+      receipt = usePodReceipt(
+        response,
+        this.config.usePodModel,
+        requestConfig.minimumBalance,
+        returnedModel,
+      );
     } catch (cause) {
       const message = wrongModel
         ? 'UsePod reviewer returned a different model'
-        : cause instanceof Error
-          ? cause.message
-          : String(cause);
-      const retryable = !wrongModel && (response.ok || transientReviewStatus(response.status));
+        : outputTokenCeilingExceeded
+          ? 'UsePod reviewer exceeded its output token ceiling'
+          : terminalCompletionError
+            ? terminalCompletionError
+            : cause instanceof UsePodReceiptError
+              ? cause.message
+              : 'UsePod reviewer returned an invalid receipt';
+      const retryable =
+        !wrongModel &&
+        !outputTokenCeilingExceeded &&
+        !terminalCompletionError &&
+        cause instanceof UsePodReceiptError &&
+        cause.retryable &&
+        (response.ok || transientReviewStatus(response.status));
       const persisted = await this.markReviewAttemptFailed(
         jobId,
         attempt.id,
@@ -750,11 +764,43 @@ export class JobProcessor {
         usage?.completionTokens,
       );
     }
+    if (wrongModel) {
+      const message = 'UsePod reviewer returned a different model';
+      await this.markReviewAttemptFailed(jobId, attempt.id, message, false, usage);
+      throw new ReviewAttemptError(
+        message,
+        costUsd,
+        false,
+        usage?.promptTokens,
+        usage?.completionTokens,
+      );
+    }
+    if (outputTokenCeilingExceeded && usage) {
+      const message = 'UsePod reviewer exceeded its output token ceiling';
+      await this.markReviewAttemptFailed(jobId, attempt.id, message, false, usage);
+      throw new ReviewAttemptError(
+        message,
+        costUsd,
+        false,
+        usage.promptTokens,
+        usage.completionTokens,
+      );
+    }
+
+    if (!completion.ok && !completion.retryable) {
+      const message = completion.error;
+      await this.markReviewAttemptFailed(jobId, attempt.id, message, false, usage);
+      throw new ReviewAttemptError(
+        message,
+        costUsd,
+        false,
+        usage?.promptTokens,
+        usage?.completionTokens,
+      );
+    }
     if (!response.ok) {
-      const message = wrongModel
-        ? 'UsePod reviewer returned a different model'
-        : `UsePod reviewer failed: ${response.status} ${responseText || responseParseError || ''}`;
-      const retryable = !wrongModel && transientReviewStatus(response.status);
+      const message = `UsePod reviewer failed with HTTP ${response.status}`;
+      const retryable = transientReviewStatus(response.status);
       const persisted = await this.markReviewAttemptFailed(
         jobId,
         attempt.id,
@@ -770,65 +816,35 @@ export class JobProcessor {
         usage?.completionTokens,
       );
     }
-    if (wrongModel) {
-      const message = 'UsePod reviewer returned a different model';
-      await this.markReviewAttemptFailed(jobId, attempt.id, message, false, usage);
+
+    if (!completion.ok) {
+      const message = completion.error;
+      const persisted = await this.markReviewAttemptFailed(
+        jobId,
+        attempt.id,
+        message,
+        completion.retryable,
+        usage,
+      );
       throw new ReviewAttemptError(
         message,
         costUsd,
-        false,
+        completion.retryable && persisted,
         usage?.promptTokens,
         usage?.completionTokens,
       );
     }
-
-    let body;
-    try {
-      if (responseParseError) throw new Error(responseParseError);
-      body = z
-        .object({
-          model: z.string(),
-          choices: z.array(z.object({ message: z.object({ content: z.string() }) })).min(1),
-          usage: z.unknown(),
-        })
-        .parse(responseValue);
-    } catch (cause) {
-      const message = cause instanceof Error ? cause.message : String(cause);
-      const persisted = await this.markReviewAttemptFailed(jobId, attempt.id, message, true, usage);
-      throw new ReviewAttemptError(
-        message,
-        costUsd,
-        persisted,
-        usage?.promptTokens,
-        usage?.completionTokens,
-      );
-    }
-
     if (!usage) {
       const message = usageError ?? 'UsePod reviewer returned invalid token usage';
-      const persisted = await this.markReviewAttemptFailed(jobId, attempt.id, message, true);
-      throw new ReviewAttemptError(message, costUsd, persisted);
-    }
-    if (usage.completionTokens > maxTokens) {
-      const message = 'UsePod reviewer exceeded its output token ceiling';
-      await this.markReviewAttemptFailed(jobId, attempt.id, message, false, usage);
-      throw new ReviewAttemptError(
-        message,
-        costUsd,
-        false,
-        usage.promptTokens,
-        usage.completionTokens,
-      );
+      await this.markReviewAttemptFailed(jobId, attempt.id, message, false);
+      throw new ReviewAttemptError(message, costUsd, false);
     }
 
     let decision;
     try {
-      decision = z
-        .object({ approved: z.boolean(), reason: z.string().min(1).max(2_000) })
-        .strict()
-        .parse(JSON.parse(body.choices[0]!.message.content));
-    } catch (cause) {
-      const message = cause instanceof Error ? cause.message : String(cause);
+      decision = parseUsePodReviewDecision(completion.content);
+    } catch {
+      const message = 'UsePod reviewer returned an invalid decision';
       const persisted = await this.markReviewAttemptFailed(jobId, attempt.id, message, true, usage);
       throw new ReviewAttemptError(
         message,

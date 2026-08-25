@@ -122,6 +122,12 @@ export async function publicBounty(store: MizukiStore, bounty: RescueBounty) {
           baseSha: bounty.validationReceipt.baseSha,
           baseRef: bounty.validationReceipt.baseRef,
           diffHash: bounty.validationReceipt.diffHash,
+          ...(bounty.validationReceipt.inputTokens === undefined
+            ? {}
+            : { inputTokens: bounty.validationReceipt.inputTokens }),
+          ...(bounty.validationReceipt.outputTokens === undefined
+            ? {}
+            : { outputTokens: bounty.validationReceipt.outputTokens }),
           ...(bounty.validationReceipt.provider
             ? { provider: publicProviderReceipt(bounty.validationReceipt.provider) }
             : {}),
@@ -550,6 +556,7 @@ function publicFailure(value: string | undefined): string | undefined {
 function publicProviderReceipt(receipt: ProviderRouteReceipt): ProviderRouteReceipt {
   return {
     model: receipt.model,
+    ...(receipt.resolvedModel ? { resolvedModel: receipt.resolvedModel } : {}),
     route: receipt.route,
     ...(receipt.providerId ? { providerId: receipt.providerId } : {}),
     ...(receipt.requestId ? { requestId: receipt.requestId } : {}),

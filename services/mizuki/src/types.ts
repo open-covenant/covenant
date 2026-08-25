@@ -91,6 +91,7 @@ export type RunArtifacts = {
 
 export type ProviderRouteReceipt = {
   model: string;
+  resolvedModel?: string;
   route: 'marketplace';
   providerId?: string;
   requestId?: string;

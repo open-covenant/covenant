@@ -95,6 +95,7 @@ describe('JobReceipt', () => {
   it('shows provider work on a refunded job without exposing the funded balance', () => {
     const provider = {
       model: 'review-model',
+      resolvedModel: 'review-model-20260825',
       route: 'marketplace',
       providerId: 'provider-7',
       requestId: 'request-9',
@@ -157,7 +158,10 @@ describe('JobReceipt', () => {
     const html = renderToStaticMarkup(<JobReceipt initial={job} live={false} />);
 
     expect(html).toContain('Separate AI review record');
+    expect(html).toContain('Requested model');
     expect(html).toContain('review-model');
+    expect(html).toContain('Returned model');
+    expect(html).toContain('review-model-20260825');
     expect(html).toContain('provider-7');
     expect(html).toContain('request-9');
     expect(html).toContain('$0.175');

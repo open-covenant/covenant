@@ -39,6 +39,22 @@ import type { Contributor, Job, ProviderRouteReceipt } from './types.js';
 
 export type ContributorPatchReviewAttempt = { id: string; maxCostMicrounits: number };
 
+export type ContributorPatchReviewAccounting = {
+  providerReceipt: ProviderRouteReceipt;
+  inputTokens?: number;
+  outputTokens?: number;
+};
+
+export class ContributorPatchReviewError extends Error {
+  constructor(
+    message: string,
+    readonly accounting: ContributorPatchReviewAccounting,
+  ) {
+    super(message);
+    this.name = 'ContributorPatchReviewError';
+  }
+}
+
 export type ContributorPatchReviewEvidence = {
   headSha: string;
   baseSha: string;
@@ -50,6 +66,8 @@ export type ContributorPatchReviewResult = ContributorPatchReviewEvidence & {
   approved: boolean;
   reason: string;
   providerReceipt?: ProviderRouteReceipt;
+  inputTokens?: number;
+  outputTokens?: number;
 };
 
 export type ContributorPatchPaidPreflight = {
@@ -75,7 +93,10 @@ export interface ContributorPatchReviewer {
     pullRequestUrl: string,
     attempt: ContributorPatchReviewAttempt,
   ): Promise<ContributorPatchReviewPreflight>;
-  review(preflight: ContributorPatchPaidPreflight): Promise<ContributorPatchReviewResult>;
+  review(
+    preflight: ContributorPatchPaidPreflight,
+    checkpoint?: (accounting: ContributorPatchReviewAccounting) => Promise<void>,
+  ): Promise<ContributorPatchReviewResult>;
   mergedEvidence(
     bounty: RescueBounty,
     pullRequestUrl: string,
@@ -474,7 +495,8 @@ export class BountyService {
 
         if (bounty.state === 'validating' && bounty.activeClaim?.draftPullRequestUrl) {
           if (
-            bounty.validationAttempt?.status === 'submitted' &&
+            bounty.validationAttempt &&
+            ['submitted', 'received'].includes(bounty.validationAttempt.status) &&
             !submittedReviewIsStale(bounty.validationAttempt, this.now())
           ) {
             continue;
@@ -1257,7 +1279,7 @@ export class BountyService {
 
     const attempt = validating.validationAttempt;
     if (!attempt || attempt.pullRequestUrl !== pullRequestUrl) return validating;
-    if (attempt.status === 'submitted') {
+    if (attempt.status === 'submitted' || attempt.status === 'received') {
       if (!recovering || !submittedReviewIsStale(attempt, this.now())) return validating;
       return this.failValidation(
         validating,
@@ -1290,10 +1312,20 @@ export class BountyService {
 
     let review: ContributorPatchReviewResult;
     try {
-      review = await this.reviewer.review(preflight);
+      review = await this.reviewer.review(preflight, async (accounting) => {
+        validating = await this.markValidationReceived(validating, attempt.id, accounting);
+      });
     } catch (providerError) {
       try {
-        await this.failValidation(validating, attempt.id, providerError, 'provider_error');
+        await this.failValidation(
+          validating,
+          attempt.id,
+          providerError,
+          'provider_error',
+          providerError instanceof ContributorPatchReviewError
+            ? providerError.accounting
+            : undefined,
+        );
       } catch (checkpointError) {
         throw new AggregateError(
           [providerError, checkpointError],
@@ -1303,7 +1335,7 @@ export class BountyService {
       throw providerError;
     }
 
-    return this.completeValidation(validating, attempt, review);
+    return this.completeValidation(validating, validating.validationAttempt ?? attempt, review);
   }
 
   private async completeValidation(
@@ -1332,6 +1364,8 @@ export class BountyService {
         baseRef: review.baseRef,
         diffHash: review.diffHash,
         ...(review.providerReceipt ? { provider: review.providerReceipt } : {}),
+        ...(review.inputTokens === undefined ? {} : { inputTokens: review.inputTokens }),
+        ...(review.outputTokens === undefined ? {} : { outputTokens: review.outputTokens }),
       },
     };
     await this.store.updateBounty(completedBounty, validating.revision);
@@ -1352,17 +1386,49 @@ export class BountyService {
     return this.store.updateBounty(submitted, bounty.revision);
   }
 
+  private async markValidationReceived(
+    bounty: RescueBounty,
+    attemptId: string,
+    accounting: ContributorPatchReviewAccounting,
+  ): Promise<RescueBounty> {
+    const current = await this.required(bounty.id);
+    const attempt = current.validationAttempt;
+    if (current.state !== 'validating' || attempt?.id !== attemptId) {
+      throw new Error('bounty review attempt changed before receipt checkpoint');
+    }
+    if (attempt.status === 'received') return current;
+    if (attempt.status !== 'submitted') {
+      throw new Error('bounty review attempt is not awaiting a provider receipt');
+    }
+    const updatedAt = this.now().toISOString();
+    const received: RescueBounty = {
+      ...current,
+      validationAttempt: {
+        ...attempt,
+        status: 'received',
+        updatedAt,
+        provider: accounting.providerReceipt,
+        ...(accounting.inputTokens === undefined ? {} : { inputTokens: accounting.inputTokens }),
+        ...(accounting.outputTokens === undefined ? {} : { outputTokens: accounting.outputTokens }),
+      },
+      updatedAt,
+      revision: current.revision + 1,
+    };
+    return this.store.updateBounty(received, current.revision);
+  }
+
   private async failValidation(
     bounty: RescueBounty,
     attemptId: string,
     error: unknown,
     failureKind: NonNullable<BountyValidationAttempt['failureKind']>,
+    accounting?: ContributorPatchReviewAccounting,
   ): Promise<RescueBounty> {
     const current = await this.required(bounty.id);
     if (
       current.state !== 'validating' ||
       current.validationAttempt?.id !== attemptId ||
-      current.validationAttempt.status !== 'submitted'
+      !['submitted', 'received'].includes(current.validationAttempt.status)
     ) {
       return current;
     }
@@ -1378,6 +1444,11 @@ export class BountyService {
         updatedAt: failed.updatedAt,
         failureKind,
         error: (error instanceof Error ? error.message : String(error)).slice(0, 2_000),
+        ...(accounting?.providerReceipt ? { provider: accounting.providerReceipt } : {}),
+        ...(accounting?.inputTokens === undefined ? {} : { inputTokens: accounting.inputTokens }),
+        ...(accounting?.outputTokens === undefined
+          ? {}
+          : { outputTokens: accounting.outputTokens }),
       },
     };
     return this.store.updateBounty(value, current.revision);

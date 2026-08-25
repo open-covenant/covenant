@@ -650,7 +650,7 @@ export class GithubClient {
   ): Promise<string> {
     const installationId = job.quote.installationId!;
     const pull = parsePullRequestUrl(pullRequestUrl);
-    const evidence = await this.pullRequestReviewData(pullRequestUrl, installationId);
+    const evidence = await this.stablePullRequestReviewData(pullRequestUrl, installationId);
     const reviewedDiffHash = createHash('sha256').update(artifacts.patch).digest('hex');
     if (
       evidence.headSha !== deliveryCommitSha ||
@@ -669,6 +669,18 @@ export class GithubClient {
       observedAt: new Date().toISOString(),
     });
     return pullRequestUrl;
+  }
+
+  private async stablePullRequestReviewData(
+    pullRequestUrl: string,
+    installationId: number,
+  ): Promise<Awaited<ReturnType<GithubClient['pullRequestReviewData']>>> {
+    try {
+      return await this.pullRequestReviewData(pullRequestUrl, installationId);
+    } catch (cause) {
+      if (!(cause instanceof PullRequestMergeMetadataChangedError)) throw cause;
+      return this.pullRequestReviewData(pullRequestUrl, installationId);
+    }
   }
 
   async mergedAt(job: Job): Promise<string | undefined> {
@@ -765,10 +777,12 @@ export class GithubClient {
       confirmed.base.sha !== pull.base.sha ||
       confirmed.base.ref !== pull.base.ref ||
       confirmed.changed_files !== pull.changed_files ||
-      confirmed.merged_at !== pull.merged_at ||
-      confirmed.merge_commit_sha !== pull.merge_commit_sha
+      confirmed.merged_at !== pull.merged_at
     ) {
       throw new Error('pull request changed while review evidence was collected');
+    }
+    if (confirmed.merge_commit_sha !== pull.merge_commit_sha) {
+      throw new PullRequestMergeMetadataChangedError();
     }
     const checksPassed =
       checks.total_count === checks.check_runs.length &&
@@ -1433,6 +1447,12 @@ class GithubApiError extends Error {
     message: string,
   ) {
     super(message);
+  }
+}
+
+class PullRequestMergeMetadataChangedError extends Error {
+  constructor() {
+    super('pull request changed while review evidence was collected');
   }
 }
 

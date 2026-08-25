@@ -366,6 +366,32 @@ describe('pull request publication recovery', () => {
       'GitHub request failed with HTTP 422',
     );
   });
+
+  it('retries evidence collection while GitHub stabilizes merge metadata', async () => {
+    const expectedHead = 'd'.repeat(40);
+    const events: string[] = [];
+    const github = publicationClient(expectedHead, events, 'transient');
+
+    await expect(github.publish(publicationJob(expectedHead), emptyArtifacts)).resolves.toBe(
+      'https://github.com/example/project/pull/31',
+    );
+    expect(events.filter((event) => event === 'metadata')).toHaveLength(4);
+    expect(events.filter((event) => event === 'diff')).toHaveLength(2);
+    expect(events.filter((event) => event === 'checks')).toHaveLength(2);
+    expect(events.filter((event) => event === 'files')).toHaveLength(2);
+  });
+
+  it('stops after one retry when merge metadata keeps changing', async () => {
+    const expectedHead = 'd'.repeat(40);
+    const events: string[] = [];
+    const github = publicationClient(expectedHead, events, 'persistent');
+
+    await expect(github.publish(publicationJob(expectedHead), emptyArtifacts)).rejects.toThrow(
+      'pull request changed while review evidence was collected',
+    );
+    expect(events.filter((event) => event === 'metadata')).toHaveLength(4);
+    expect(events.filter((event) => event === 'diff')).toHaveLength(2);
+  });
 });
 
 describe('pull request review evidence', () => {
@@ -667,9 +693,14 @@ const emptyArtifacts: RunArtifacts = {
   validations: [],
 };
 
-function publicationClient(existingHead: string, events: string[] = []): GithubClient {
+function publicationClient(
+  existingHead: string,
+  events: string[] = [],
+  mergeMetadataDrift: false | 'transient' | 'persistent' = false,
+): GithubClient {
   const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
   const expectedHead = 'd'.repeat(40);
+  let metadataReads = 0;
   return new GithubClient(
     loadConfig({
       MIZUKI_PAYMENT_MODE: 'mock',
@@ -707,20 +738,36 @@ function publicationClient(existingHead: string, events: string[] = []): GithubC
       }
       if (url.pathname === '/repos/example/project/pulls/31') {
         if (new Headers(init?.headers).get('accept') === 'application/vnd.github.v3.diff') {
+          events.push('diff');
           return new Response('');
         }
+        events.push('metadata');
+        const mergeCommitSha =
+          mergeMetadataDrift === 'transient'
+            ? metadataReads > 0
+              ? 'a'.repeat(40)
+              : null
+            : mergeMetadataDrift === 'persistent' && metadataReads % 2 === 1
+              ? 'a'.repeat(40)
+              : null;
+        metadataReads += 1;
         return Response.json({
           changed_files: 0,
           merged_at: null,
-          merge_commit_sha: null,
+          merge_commit_sha: mergeCommitSha,
           head: { sha: expectedHead },
           base: { sha: 'b'.repeat(40), ref: 'main' },
         });
       }
-      if (url.pathname === `/repos/example/project/commits/${expectedHead}/check-runs`) {
+      if (
+        url.pathname === `/repos/example/project/commits/${expectedHead}/check-runs` ||
+        url.pathname === `/repos/example/project/commits/${'a'.repeat(40)}/check-runs`
+      ) {
+        events.push('checks');
         return Response.json({ total_count: 0, check_runs: [] });
       }
       if (url.pathname === '/repos/example/project/pulls/31/files') {
+        events.push('files');
         return Response.json([]);
       }
       if (url.pathname === '/repos/example/project/pulls' && method === 'POST') {

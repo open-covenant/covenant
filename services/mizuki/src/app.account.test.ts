@@ -96,9 +96,26 @@ describe('workbench account API', () => {
       headers: { ...sessionHeaders, 'x-mizuki-csrf-token': csrf.csrfToken },
     });
     expect(revoked.status).toBe(200);
-    const revokedBody = await revoked.json();
+    const revokedBody = (await revoked.json()) as {
+      token: { id: string; state: string; revokedAt: string };
+    };
     expect(revokedBody).toMatchObject({ token: { state: 'revoked' } });
+    expect(revokedBody.token.revokedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
     expect(JSON.stringify(revokedBody)).not.toContain(credential.secret);
+
+    const relisted = await fetch(`${base}/v1/account/api-tokens`, { headers: sessionHeaders });
+    const relistedBody = await relisted.json();
+    expect(relistedBody).toMatchObject({
+      tokens: [
+        {
+          id: credential.token.id,
+          state: 'revoked',
+          revokedAt: revokedBody.token.revokedAt,
+        },
+      ],
+    });
+    expect(JSON.stringify(relistedBody)).not.toContain(credential.secret);
+    expect(JSON.stringify(relistedBody)).not.toContain(stored[0]!.tokenHash);
   });
 
   it('rejects token mutations without a session-bound CSRF token and exact browser origin', async () => {
@@ -289,6 +306,83 @@ describe('workbench account API', () => {
     expect(assertRepositoryReady).toHaveBeenCalledTimes(2);
   });
 
+  it('lists only bearer account jobs and rejects mixed browser and bearer credentials', async () => {
+    const store = new MemoryStore();
+    const otherQuote = { ...quote, id: '22222222-2222-4222-8222-222222222222', issueNumber: 8 };
+    await Promise.all([
+      store.upsertContributor('42', 'maintainer'),
+      store.upsertContributor('99', 'other-maintainer'),
+      store.saveQuote(quote),
+      store.saveQuote(otherQuote),
+    ]);
+    await Promise.all([
+      store.linkQuoteToAccount(quote.id, '42'),
+      store.linkQuoteToAccount(otherQuote.id, '99'),
+    ]);
+    const { job } = await store.createJob(quote, payment, 'maintainer-account-job');
+    await store.createJob(
+      otherQuote,
+      { ...payment, payer: '2'.repeat(32), transaction: 'other-settlement' },
+      'other-account-job',
+    );
+    const apiToken = vi.fn(async (value: string, _scope: string) => {
+      if (value === 'mzk_v1_legacy-jobs-reader') {
+        throw new ApiTokenAuthError('insufficient_scope');
+      }
+      return {
+        kind: 'api_token' as const,
+        tokenId: '11111111-1111-4111-8111-111111111111',
+        githubId: '42',
+        githubLogin: 'maintainer',
+        scopes: ['account:jobs:read' as const],
+      };
+    });
+    const session = vi.fn((value: string | undefined) =>
+      value === 'session'
+        ? { githubId: '42', githubLogin: 'maintainer', exp: Date.now() + 60_000 }
+        : undefined,
+    );
+    const base = await serve(dependencies(store, { auth: { session, apiToken } }));
+
+    const response = await fetch(`${base}/v1/account/jobs`, {
+      headers: { authorization: 'Bearer mzk_v1_jobs-reader' },
+    });
+
+    expect(response.status).toBe(200);
+    expect(apiToken).toHaveBeenCalledWith('mzk_v1_jobs-reader', 'account:jobs:read');
+    await expect(response.json()).resolves.toMatchObject({
+      jobs: [{ id: job.id }],
+      limit: 20,
+      obligationCount: 1,
+    });
+
+    const legacy = await fetch(`${base}/v1/account/jobs`, {
+      headers: { authorization: 'Bearer mzk_v1_legacy-jobs-reader' },
+    });
+    expect(legacy.status).toBe(403);
+    expect(apiToken).toHaveBeenCalledWith('mzk_v1_legacy-jobs-reader', 'account:jobs:read');
+
+    const maximum = await fetch(`${base}/v1/account/jobs?limit=100`, {
+      headers: { authorization: 'Bearer mzk_v1_jobs-reader' },
+    });
+    expect(maximum.status).toBe(200);
+    await expect(maximum.json()).resolves.toMatchObject({ limit: 100 });
+
+    const overLimit = await fetch(`${base}/v1/account/jobs?limit=101`, {
+      headers: { authorization: 'Bearer mzk_v1_jobs-reader' },
+    });
+    expect(overLimit.status).toBe(400);
+    await expect(overLimit.json()).resolves.toEqual({
+      error: 'limit must be an integer between 1 and 100',
+    });
+
+    const mixed = await fetch(`${base}/v1/account/jobs`, {
+      headers: { ...sessionHeaders, authorization: 'Bearer mzk_v1_jobs-reader' },
+    });
+    expect(mixed.status).toBe(401);
+    expect(apiToken).toHaveBeenCalledTimes(4);
+  });
+
   it('returns a redacted forbidden response when an API token lacks a route scope', async () => {
     const store = new MemoryStore();
     const secret = 'mzk_v1_sensitive-machine-token';
@@ -315,6 +409,12 @@ describe('workbench account API', () => {
   });
 
   it.each([
+    {
+      route: 'account job listing',
+      path: '/v1/account/jobs',
+      scope: 'account:jobs:read',
+      init: { headers: {} },
+    },
     {
       route: 'account quote creation',
       path: '/v1/account/quotes',

@@ -232,7 +232,16 @@ export type AccountRepository = {
   verifiedAt: string;
 };
 
-export const API_TOKEN_SCOPES = ['repositories:read', 'jobs:read', 'jobs:write'] as const;
+export const API_TOKEN_SCOPES = [
+  'repositories:read',
+  'jobs:read',
+  'jobs:write',
+  'account:jobs:read',
+] as const;
+
+export const ACCOUNT_JOB_HISTORY_BROWSER_DEFAULT_LIMIT = 100;
+export const ACCOUNT_JOB_HISTORY_API_DEFAULT_LIMIT = 20;
+export const ACCOUNT_JOB_HISTORY_MAX_LIMIT = 100;
 
 export type ApiTokenScope = (typeof API_TOKEN_SCOPES)[number];
 

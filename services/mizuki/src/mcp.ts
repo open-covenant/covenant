@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { MizukiMcpClient } from './mcp-api.js';
+import { ACCOUNT_JOB_HISTORY_API_DEFAULT_LIMIT, ACCOUNT_JOB_HISTORY_MAX_LIMIT } from './types.js';
 
 const baseUrl = process.env.MIZUKI_API_URL ?? 'http://127.0.0.1:8787';
 const apiToken = process.env.MIZUKI_API_TOKEN;
@@ -58,6 +59,23 @@ server.registerTool(
     inputSchema: { job_id: z.string().uuid() },
   },
   async ({ job_id }) => result(await client.call(`/v1/jobs/${job_id}`)),
+);
+
+server.registerTool(
+  'mizuki_jobs',
+  {
+    description:
+      'List bounded job history linked to the authenticated maintainer account. Requires an account:jobs:read MIZUKI_API_TOKEN.',
+    inputSchema: {
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(ACCOUNT_JOB_HISTORY_MAX_LIMIT)
+        .default(ACCOUNT_JOB_HISTORY_API_DEFAULT_LIMIT),
+    },
+  },
+  async ({ limit }) => result(await client.jobs(limit)),
 );
 
 server.registerTool(

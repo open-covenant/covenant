@@ -50,9 +50,10 @@ describe('account API tokens', () => {
   });
 
   it('normalizes supported scopes and rejects duplicates, unknown values, and empty grants', () => {
-    expect(normalizedScopes(['jobs:write', 'repositories:read'])).toEqual([
+    expect(normalizedScopes(['account:jobs:read', 'jobs:write', 'repositories:read'])).toEqual([
       'repositories:read',
       'jobs:write',
+      'account:jobs:read',
     ]);
     expect(() => normalizedScopes([])).toThrow(ApiTokenInputError);
     expect(() => normalizedScopes(['jobs:read', 'jobs:read'])).toThrow(ApiTokenInputError);

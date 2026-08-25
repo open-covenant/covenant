@@ -15,6 +15,7 @@ import {
   PostgresStore,
   StateConflictError,
   WORKBENCH_API_TOKENS_SCHEMA_V1,
+  WORKBENCH_API_TOKENS_SCHEMA_V2,
 } from './store.js';
 import type { Quote } from './types.js';
 
@@ -23,11 +24,16 @@ const DEPLOYED_CORE_V1_CHECKSUM =
   '1e1c7b752aead2d673a8d82fba69113344ada76444a1263e6bc80bffb0d80429';
 const WORKBENCH_API_TOKENS_V1_CHECKSUM =
   '4787de73a64016308c8823bcbd209e0638a1d8fa57b3c3a2f2517a86120c412b';
+const WORKBENCH_API_TOKENS_V2_CHECKSUM =
+  '004f7fcd323b618508c2b6c9fcc0722f8e2bbbbd93425ec3c61e8735d7f49d24';
 
 describe('PostgresStore schema', () => {
-  it('keeps the API token migration immutable', () => {
+  it('keeps the API token migrations immutable', () => {
     expect(createHash('sha256').update(WORKBENCH_API_TOKENS_SCHEMA_V1).digest('hex')).toBe(
       WORKBENCH_API_TOKENS_V1_CHECKSUM,
+    );
+    expect(createHash('sha256').update(WORKBENCH_API_TOKENS_SCHEMA_V2).digest('hex')).toBe(
+      WORKBENCH_API_TOKENS_V2_CHECKSUM,
     );
   });
 });
@@ -71,7 +77,7 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
     const credential = createApiToken({
       githubId,
       name: 'Postgres MCP',
-      scopes: ['repositories:read', 'jobs:read'],
+      scopes: ['repositories:read', 'jobs:read', 'jobs:write', 'account:jobs:read'],
       expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60_000).toISOString(),
     });
 
@@ -420,6 +426,11 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
         { component: 'github-oauth', version: 1, name: 'browser-bound-flow' },
         { component: 'workbench', version: 1, name: 'workbench-accounts' },
         { component: 'workbench-api-tokens', version: 1, name: 'scoped-api-tokens' },
+        {
+          component: 'workbench-api-tokens',
+          version: 2,
+          name: 'account-job-history-scope',
+        },
       ]);
       expect(result.rows.every((row) => /^[a-f0-9]{64}$/.test(row.checksum))).toBe(true);
     } finally {
@@ -709,6 +720,11 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
           { component: 'github-oauth', version: 1, name: 'browser-bound-flow' },
           { component: 'workbench', version: 1, name: 'workbench-accounts' },
           { component: 'workbench-api-tokens', version: 1, name: 'scoped-api-tokens' },
+          {
+            component: 'workbench-api-tokens',
+            version: 2,
+            name: 'account-job-history-scope',
+          },
         ]);
       } finally {
         await verificationPool.end();

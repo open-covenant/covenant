@@ -1,3 +1,5 @@
+import { ACCOUNT_JOB_HISTORY_API_DEFAULT_LIMIT, ACCOUNT_JOB_HISTORY_MAX_LIMIT } from './types.js';
+
 type RequestOptions = {
   method?: 'GET' | 'POST';
   body?: unknown;
@@ -71,6 +73,15 @@ export class MizukiMcpClient {
 
   async repositories(): Promise<unknown> {
     return this.call('/v1/account/repositories', { authenticated: true });
+  }
+
+  async jobs(limit = ACCOUNT_JOB_HISTORY_API_DEFAULT_LIMIT): Promise<unknown> {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > ACCOUNT_JOB_HISTORY_MAX_LIMIT) {
+      throw new Error(
+        `MCP job history limit must be an integer between 1 and ${ACCOUNT_JOB_HISTORY_MAX_LIMIT}`,
+      );
+    }
+    return this.call(`/v1/account/jobs?limit=${limit}`, { authenticated: true });
   }
 
   async quote(issueUrl: string): Promise<unknown> {

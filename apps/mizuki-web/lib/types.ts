@@ -59,6 +59,7 @@ export type ReviewAttempt = {
   attemptNumber?: number;
   maxAttempts?: number;
   maxCostUsd?: number;
+  maxOutputTokens?: number;
   provider?: ProviderRouteReceipt;
   approved?: boolean;
   reason: string;

@@ -58,6 +58,9 @@ export function publicJob(job: Job) {
         ...(attempt.attemptNumber === undefined ? {} : { attemptNumber: attempt.attemptNumber }),
         ...(attempt.maxAttempts === undefined ? {} : { maxAttempts: attempt.maxAttempts }),
         ...(attempt.maxCostUsd === undefined ? {} : { maxCostUsd: attempt.maxCostUsd }),
+        ...(attempt.maxOutputTokens === undefined
+          ? {}
+          : { maxOutputTokens: attempt.maxOutputTokens }),
         ...(attempt.provider ? { provider: publicProviderReceipt(attempt.provider) } : {}),
         ...(attempt.approved === undefined ? {} : { approved: attempt.approved }),
         reason: publicReviewReason(status, attempt.approved),

@@ -50,7 +50,8 @@ describe('CapabilityService', () => {
   it('activates only after the updater reports a completed signed proposal', async () => {
     const store = new MemoryStore();
     const updater = new MutableUpdater();
-    const service = new CapabilityService(store, updater, () => new Date('2026-08-22T12:00:00Z'));
+    let now = '2026-08-22T12:00:00Z';
+    const service = new CapabilityService(store, updater, () => new Date(now));
     const proposal = await service.recordFailure(job('standard', 'route failed'));
     updater.observed = await boundObservedUpgrade(store, proposal!.id, 'completed');
 
@@ -83,6 +84,12 @@ describe('CapabilityService', () => {
     expect(
       (await store.activity()).filter((event) => event.kind === 'capability.activated'),
     ).toHaveLength(1);
+
+    now = '2026-08-23T12:00:00Z';
+    const replay = await service.recordFailure(job('standard', 'route failed'));
+    expect(replay?.id).toBe(proposal?.id);
+    expect(await store.upgradesList()).toHaveLength(1);
+    expect((await store.capabilitiesList())[0].state).toBe('active');
   });
 
   it('does not activate while the promoted candidate is still in its soak window', async () => {

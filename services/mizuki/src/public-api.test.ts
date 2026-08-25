@@ -360,6 +360,7 @@ describe('public accounting', () => {
           attemptNumber: 1,
           maxAttempts: 2,
           maxCostUsd: 0.06,
+          maxOutputTokens: 256,
           reviewedAt: rejectedAt,
           costUsd: 0.0175,
           provider,
@@ -388,6 +389,7 @@ describe('public accounting', () => {
         attemptNumber: 1,
         maxAttempts: 2,
         maxCostUsd: 0.06,
+        maxOutputTokens: 256,
         reviewedAt: rejectedAt,
         costUsd: 0.0175,
         provider: {

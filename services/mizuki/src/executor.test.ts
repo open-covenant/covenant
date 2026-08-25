@@ -137,7 +137,7 @@ describe('JobProcessor', () => {
       }
       if (url.endsWith('/artifacts')) return Response.json({ ...artifacts, validations: [] });
       if (url.endsWith('/chat/completions')) {
-        expect(JSON.parse(String(init?.body))).toMatchObject({ max_tokens: 512 });
+        expect(JSON.parse(String(init?.body))).toMatchObject({ max_tokens: 256 });
         return reviewResponse(
           { approved: true, reason: 'scoped' },
           'deepseek/deepseek-v4-flash-0731',
@@ -178,6 +178,9 @@ describe('JobProcessor', () => {
     expect(
       result.job.reviewAttempts?.reduce((sum, attempt) => sum + (attempt.maxCostUsd ?? 0), 0),
     ).toBe(0.12);
+    expect(
+      result.job.reviewAttempts?.reduce((sum, attempt) => sum + (attempt.maxOutputTokens ?? 0), 0),
+    ).toBe(512);
     expect(result.job).toMatchObject({
       state: 'delivered',
       estimatedCostUsd: 0.051,
@@ -188,6 +191,7 @@ describe('JobProcessor', () => {
           attemptNumber: 1,
           maxAttempts: 2,
           maxCostUsd: 0.06,
+          maxOutputTokens: 256,
           status: 'failed',
           retryable: true,
           costUsd: 0.0005,
@@ -197,6 +201,7 @@ describe('JobProcessor', () => {
           attemptNumber: 2,
           maxAttempts: 2,
           maxCostUsd: 0.06,
+          maxOutputTokens: 256,
           status: 'completed',
           retryable: false,
           approved: true,
@@ -219,6 +224,54 @@ describe('JobProcessor', () => {
       reviewAttempts: [
         { attemptNumber: 1, status: 'failed', retryable: true, costUsd: 0.0005 },
         { attemptNumber: 2, status: 'completed', approved: true, costUsd: 0.0005 },
+      ],
+    });
+  });
+
+  it('does not retry a permanent HTTP failure without a provider receipt', async () => {
+    const result = await processReviewSequence('permanent-http-failure', [
+      () => new Response('invalid credentials', { status: 401 }),
+      () => reviewResponse({ approved: true, reason: 'must not be accepted' }),
+    ]);
+
+    expect(result.reviewCalls).toBe(1);
+    expect(result.job).toMatchObject({
+      state: 'refunded',
+      estimatedCostUsd: 0.11,
+      reviewAttempts: [
+        {
+          attemptNumber: 1,
+          status: 'failed',
+          retryable: false,
+          costUsd: 0.06,
+        },
+      ],
+    });
+  });
+
+  it('does not retry a provider that exceeds the output token ceiling', async () => {
+    const result = await processReviewSequence('review-token-cap', [
+      () =>
+        reviewContentResponse('{"approved":true,"reason":"over token cap"}', {
+          prompt_tokens: 50,
+          completion_tokens: 257,
+        }),
+      () => reviewResponse({ approved: true, reason: 'must not be accepted' }),
+    ]);
+
+    expect(result.reviewCalls).toBe(1);
+    expect(result.job).toMatchObject({
+      state: 'refunded',
+      inputTokens: 150,
+      outputTokens: 297,
+      reviewAttempts: [
+        {
+          attemptNumber: 1,
+          maxOutputTokens: 256,
+          outputTokens: 257,
+          status: 'failed',
+          retryable: false,
+        },
       ],
     });
   });
@@ -251,6 +304,8 @@ describe('JobProcessor', () => {
     expect(result.job).toMatchObject({
       state: 'refunded',
       estimatedCostUsd: 0.051,
+      inputTokens: 200,
+      outputTokens: 60,
       reviewAttempts: [
         {
           phase: 'implementation',
@@ -1116,12 +1171,15 @@ function reviewResponse(
   );
 }
 
-function reviewContentResponse(content: string): Response {
+function reviewContentResponse(
+  content: string,
+  usage = { prompt_tokens: 50, completion_tokens: 10 },
+): Response {
   return Response.json(
     {
       model: 'deepseek-v4-flash',
       choices: [{ message: { content } }],
-      usage: { prompt_tokens: 50, completion_tokens: 10 },
+      usage,
     },
     {
       headers: {

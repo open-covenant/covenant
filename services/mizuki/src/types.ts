@@ -104,6 +104,7 @@ export type ReviewAttempt = {
   attemptNumber?: number;
   maxAttempts?: number;
   maxCostUsd?: number;
+  maxOutputTokens?: number;
   status?: 'pending' | 'received' | 'completed' | 'failed';
   provider?: ProviderRouteReceipt;
   costUsd: number;

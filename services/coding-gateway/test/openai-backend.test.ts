@@ -3,6 +3,7 @@ import type OpenAI from 'openai';
 import type { ResponseStreamEvent } from 'openai/resources/responses/responses.js';
 import { OpenaiBackend, reasoningEffort } from '../src/backends/openai.js';
 import { selectBackend } from '../src/backends/index.js';
+import { isolatedShellCommand } from '../src/sandbox-command.js';
 import type { GatewayEvent, Sandbox } from '../src/types.js';
 
 // Parity is asserted at the GatewayEvent contract (types.ts) — the shared surface
@@ -488,7 +489,7 @@ describe('OpenaiBackend.run', () => {
       emit: (e) => emitted.push(e),
     });
 
-    expect(sandbox.execs).toContain('ls');
+    expect(sandbox.execs).toContain(isolatedShellCommand('ls'));
     expect(emitted.find((e) => e.type === 'tool.started')).toMatchObject({
       tool: 'bash',
       preview: 'ls',

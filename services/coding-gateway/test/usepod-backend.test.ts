@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { UsePodBackend } from '../src/backends/usepod.js';
 import { RunStore, type StoredRun } from '../src/run-store.js';
+import { isolatedShellCommand } from '../src/sandbox-command.js';
 import type { GatewayEvent, ProviderReceipt, Sandbox } from '../src/types.js';
 
 const directories: string[] = [];
@@ -114,6 +115,67 @@ describe('UsePodBackend', () => {
     expect(new Headers(requests[0]!.headers).get('x-pod-max-price-input')).toBe('200000');
     expect(new Headers(requests[0]!.headers).get('x-pod-max-price-output')).toBe('400000');
     expect(urls[0]).toBe('https://usepod.test/proxy/test-key/v1/chat/completions');
+  });
+
+  it('runs bash calls with isolated package-manager state', async () => {
+    let turn = 0;
+    vi.stubGlobal('fetch', async () => {
+      turn++;
+      return Response.json(
+        turn === 1
+          ? {
+              model: 'deepseek-v3.2',
+              choices: [
+                {
+                  message: {
+                    content: null,
+                    tool_calls: [
+                      {
+                        id: 'call-1',
+                        function: {
+                          name: 'bash',
+                          arguments: JSON.stringify({ command: `printf "%s" "maintainer's head"` }),
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+              usage: { prompt_tokens: 2, completion_tokens: 1 },
+            }
+          : {
+              model: 'deepseek-v3.2',
+              choices: [{ message: { content: 'Done.' } }],
+              usage: { prompt_tokens: 2, completion_tokens: 1 },
+            },
+        {
+          headers: {
+            'x-pod-route': 'marketplace',
+            'x-balance-remaining': '5000000',
+          },
+        },
+      );
+    });
+    const exec = vi.fn(async () => ({ stdout: "maintainer's head", stderr: '', exitCode: 0 }));
+    const sandbox = {
+      readFile: async () => '',
+      writeFile: async () => {},
+      exec,
+      previewUrl: async () => '',
+      destroy: async () => {},
+    } satisfies Sandbox;
+
+    await new UsePodBackend('https://usepod.test', 'test-key', 'deepseek-v3.2').run({
+      input: 'check docs',
+      sandbox,
+      signal: new AbortController().signal,
+      emit: () => {},
+      maxProviderCostUsd: 1,
+    });
+
+    expect(exec).toHaveBeenCalledWith(isolatedShellCommand(`printf "%s" "maintainer's head"`), {
+      timeoutMs: 180_000,
+    });
   });
 
   it('accepts documented UsePod model canonicalization without accepting another model', async () => {

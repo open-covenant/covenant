@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../config.js';
+import { isolatedShellCommand } from '../sandbox-command.js';
 import type { CodingBackend, GatewayEvent, Sandbox, TokenUsage } from '../types.js';
 
 const MAX_TOKENS = 64_000;
@@ -247,7 +248,7 @@ export async function execTool(
       return `edited ${path}`;
     }
     case 'bash': {
-      const r = await sandbox.exec(String(input.command));
+      const r = await sandbox.exec(isolatedShellCommand(String(input.command)));
       return `exit=${r.exitCode}\n--- stdout ---\n${r.stdout}\n--- stderr ---\n${r.stderr}`;
     }
     default:

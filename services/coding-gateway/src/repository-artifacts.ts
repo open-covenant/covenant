@@ -1,6 +1,7 @@
 import type { Sandbox } from './types.js';
 
-const MAX_CHANGED_FILES = 40;
+export const MAX_CHANGED_FILES = 40;
+export const MAX_PATCH_BYTES = 1_000_000;
 const MAX_FILE_BYTES = 128_000;
 const MAX_TOTAL_BYTES = 512 * 1024;
 
@@ -13,9 +14,7 @@ export async function captureRepositoryFiles(
   sandbox: Pick<Sandbox, 'readFile'>,
   paths: string[],
 ): Promise<RepositoryFile[]> {
-  if (paths.length > MAX_CHANGED_FILES) {
-    throw new Error(`repository change exceeds the ${MAX_CHANGED_FILES}-file capture limit`);
-  }
+  assertRepositoryFileCount(paths);
 
   const files: RepositoryFile[] = [];
   let totalBytes = 0;
@@ -39,4 +38,16 @@ export async function captureRepositoryFiles(
     files.push({ path, content });
   }
   return files;
+}
+
+export function assertRepositoryFileCount(paths: string[]): void {
+  if (paths.length > MAX_CHANGED_FILES) {
+    throw new Error(`repository change exceeds the ${MAX_CHANGED_FILES}-file capture limit`);
+  }
+}
+
+export function assertRepositoryPatchSize(patch: string): void {
+  if (Buffer.byteLength(patch, 'utf8') > MAX_PATCH_BYTES) {
+    throw new Error(`repository patch exceeds the ${MAX_PATCH_BYTES}-byte limit`);
+  }
 }

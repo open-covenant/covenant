@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { captureRepositoryFiles } from '../src/repository-artifacts.js';
+import { assertRepositoryPatchSize, captureRepositoryFiles } from '../src/repository-artifacts.js';
 
 function sandbox(files: Record<string, string>) {
   return {
@@ -35,5 +35,27 @@ describe('repository artifact capture', () => {
     await expect(
       captureRepositoryFiles(sandbox({ 'binary.dat': 'prefix\u0000suffix' }), ['binary.dat']),
     ).rejects.toThrow('binary changed file is unsupported: binary.dat');
+  });
+
+  it('rejects more than 40 changed files before reading any of them', async () => {
+    let reads = 0;
+    const paths = Array.from({ length: 41 }, (_, index) => `file-${index}.txt`);
+    const source = {
+      async readFile() {
+        reads++;
+        return 'content';
+      },
+    };
+
+    await expect(captureRepositoryFiles(source, paths)).rejects.toThrow(
+      'repository change exceeds the 40-file capture limit',
+    );
+    expect(reads).toBe(0);
+  });
+
+  it('rejects a patch above the review and persistence limit', () => {
+    expect(() => assertRepositoryPatchSize('a'.repeat(1_000_001))).toThrow(
+      'repository patch exceeds the 1000000-byte limit',
+    );
   });
 });

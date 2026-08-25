@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type Anthropic from '@anthropic-ai/sdk';
 import { execTool, previewOf, withTurnCache } from '../src/backends/anthropic.js';
+import { isolatedShellCommand } from '../src/sandbox-command.js';
 import type { GatewayEvent, Sandbox } from '../src/types.js';
 
 // The Anthropic backend's run() loop builds its own client with no injection
@@ -114,7 +115,7 @@ describe('execTool', () => {
     // block pinned only error arms, so dropping this case routes bash to unknown-tool.
     const sandbox = memSandbox({}, { stdout: 'file.txt', stderr: 'warn', exitCode: 7 });
     const out = await execTool(toolUse('bash', { command: 'ls' }), sandbox, () => {});
-    expect(sandbox.execs).toContain('ls');
+    expect(sandbox.execs).toContain(isolatedShellCommand('ls'));
     expect(out).toBe('exit=7\n--- stdout ---\nfile.txt\n--- stderr ---\nwarn');
   });
 

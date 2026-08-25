@@ -9,7 +9,6 @@ const GITHUB_TIMEOUT_MS = 20_000;
 const TOKEN_REFRESH_WINDOW_MS = 5 * 60_000;
 const TOKEN_MAX_TTL_MS = 65 * 60_000;
 const TOKEN_CACHE_LIMIT = 256;
-const DELIVERY_EVIDENCE_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000] as const;
 const CORE_PERMISSIONS = {
   checks: 'read',
   contents: 'write',
@@ -676,16 +675,11 @@ export class GithubClient {
     pullRequestUrl: string,
     installationId: number,
   ): Promise<Awaited<ReturnType<GithubClient['pullRequestReviewData']>>> {
-    for (let attempt = 0; ; attempt += 1) {
-      try {
-        return await this.pullRequestReviewData(pullRequestUrl, installationId);
-      } catch (cause) {
-        const delay = DELIVERY_EVIDENCE_RETRY_DELAYS_MS[attempt];
-        if (!(cause instanceof PullRequestEvidenceChangedError) || delay === undefined) {
-          throw cause;
-        }
-        await new Promise((resolve) => setTimeout(resolve, delay));
-      }
+    try {
+      return await this.pullRequestReviewData(pullRequestUrl, installationId);
+    } catch (cause) {
+      if (!(cause instanceof PullRequestMergeMetadataChangedError)) throw cause;
+      return this.pullRequestReviewData(pullRequestUrl, installationId);
     }
   }
 
@@ -783,12 +777,12 @@ export class GithubClient {
       confirmed.base.sha !== pull.base.sha ||
       confirmed.base.ref !== pull.base.ref ||
       confirmed.changed_files !== pull.changed_files ||
-      confirmed.merged_at !== pull.merged_at ||
-      confirmed.merge_commit_sha !== pull.merge_commit_sha
+      confirmed.merged_at !== pull.merged_at
     ) {
-      throw new PullRequestEvidenceChangedError(
-        'pull request changed while review evidence was collected',
-      );
+      throw new Error('pull request changed while review evidence was collected');
+    }
+    if (confirmed.merge_commit_sha !== pull.merge_commit_sha) {
+      throw new PullRequestMergeMetadataChangedError();
     }
     const checksPassed =
       checks.total_count === checks.check_runs.length &&
@@ -1456,7 +1450,11 @@ class GithubApiError extends Error {
   }
 }
 
-class PullRequestEvidenceChangedError extends Error {}
+class PullRequestMergeMetadataChangedError extends Error {
+  constructor() {
+    super('pull request changed while review evidence was collected');
+  }
+}
 
 export class GithubAccessError extends Error {}
 

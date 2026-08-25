@@ -1,7 +1,8 @@
-import { ensureRefundCapacity } from './app.js';
+import { ensurePaymentCapacity } from './app.js';
 import type { Config } from './config.js';
 import { liveConfigIssues } from './config.js';
 import type { UsePodContributorReviewer } from './contributor-reviewer.js';
+import { MIN_RESCUE_BOUNTY_CENTS } from './domain/index.js';
 import type { JobProcessor } from './executor.js';
 import type { GithubClient } from './github.js';
 import type { PaymentPolicy } from './policy-client.js';
@@ -32,7 +33,9 @@ export function createServiceReadiness(deps: Dependencies): ServiceReadiness {
       },
       coding_gateway: () => processor.readiness(),
       policy_signer: async () =>
-        refundProtectionEvidence(await ensureRefundCapacity({ config, store, policy }, 0n)),
+        refundProtectionEvidence(
+          await ensurePaymentCapacity({ config, store, policy }, 0n, MIN_RESCUE_BOUNTY_CENTS),
+        ),
       github_app: () => github.readiness(),
       reviewer_route: () => reviewer.readiness(),
       updater: async () => {

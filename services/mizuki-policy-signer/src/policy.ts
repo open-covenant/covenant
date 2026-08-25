@@ -570,15 +570,21 @@ export class PolicyService {
       const evidence = await this.probeReadiness();
       if (!evidence.healthy || !evidence.chain) return this.unavailableReadiness();
 
-      const [pendingRefundRaw, rollingSpendUsdCents] = await Promise.all([
-        this.store.pendingRefundRawAmount(),
-        this.store.rollingSpendUsdCents('refund', this.now()),
-      ]);
+      const [pendingRefundRaw, rollingRefundSpendUsdCents, rollingEscrowSpendUsdCents] =
+        await Promise.all([
+          this.store.pendingRefundRawAmount(),
+          this.store.rollingSpendUsdCents('refund', this.now()),
+          this.store.rollingSpendUsdCents('escrow', this.now()),
+        ]);
       const finalizedBalanceRaw = evidence.chain.refundRawAmount;
       const treasuryAvailable = BigInt(finalizedBalanceRaw) - BigInt(pendingRefundRaw);
       const remainingRefundLimitUsdCents = Math.max(
         0,
-        this.config.refundDailyLimitUsdCents - rollingSpendUsdCents,
+        this.config.refundDailyLimitUsdCents - rollingRefundSpendUsdCents,
+      );
+      const remainingEscrowLimitUsdCents = Math.max(
+        0,
+        this.config.escrowDailyLimitUsdCents - rollingEscrowSpendUsdCents,
       );
       const limitAvailable = rawCapacityForUsdCents(
         remainingRefundLimitUsdCents,
@@ -595,6 +601,9 @@ export class PolicyService {
         treasuryAvailableRefundRaw: (treasuryAvailable > 0n ? treasuryAvailable : 0n).toString(),
         remainingRefundLimitUsdCents,
         availableRefundRaw: (available > 0n ? available : 0n).toString(),
+        escrowRollingLimitUsdCents: this.config.escrowDailyLimitUsdCents,
+        rollingEscrowSpendUsdCents,
+        remainingEscrowLimitUsdCents,
         escrowAuthority: this.config.escrowAuthority,
         finalizedEscrowBalanceLamports: evidence.chain.escrowLamports,
         availableEscrowReserveLamports: evidence.chain.availableEscrowReserveLamports,
@@ -680,6 +689,9 @@ export class PolicyService {
       treasuryAvailableRefundRaw: null,
       remainingRefundLimitUsdCents: null,
       availableRefundRaw: null,
+      escrowRollingLimitUsdCents: this.config.escrowDailyLimitUsdCents,
+      rollingEscrowSpendUsdCents: null,
+      remainingEscrowLimitUsdCents: null,
       escrowAuthority: this.config.escrowAuthority,
       finalizedEscrowBalanceLamports: null,
       availableEscrowReserveLamports: null,

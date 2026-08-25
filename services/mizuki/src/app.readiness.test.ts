@@ -1,11 +1,13 @@
 import { createServer, type Server } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createApp, ensureRefundCapacity, SerialGate, type AppDependencies } from './app.js';
+import { createApp, ensurePaymentCapacity, SerialGate, type AppDependencies } from './app.js';
 import { loadConfig } from './config.js';
 import { UsePodContributorReviewer } from './contributor-reviewer.js';
+import type { ContributorEscrow, RescueBounty } from './domain/index.js';
 import type { GithubClient } from './github.js';
 import { ServiceReadiness, serviceDependencies } from './readiness.js';
 import { MemoryStore, type MizukiStore } from './store.js';
+import type { Quote } from './types.js';
 
 const servers: Server[] = [];
 
@@ -243,23 +245,25 @@ describe('service readiness endpoint', () => {
       treasuryAvailableRefundRaw: '11000000',
       remainingRefundLimitUsdCents: 1_100,
       availableRefundRaw: '11000000',
+      remainingEscrowLimitUsdCents: 1_000,
       escrowAuthority: 'escrow-authority',
       finalizedEscrowBalanceLamports: '1100000000',
       availableEscrowReserveLamports: '1000000000',
     };
     await expect(
-      ensureRefundCapacity(
+      ensurePaymentCapacity(
         {
           config,
           store,
           policy: { readiness: async () => readiness } as unknown as AppDependencies['policy'],
         },
         2_000_000n,
+        1_000,
       ),
     ).resolves.toEqual(readiness);
 
     await expect(
-      ensureRefundCapacity(
+      ensurePaymentCapacity(
         {
           config,
           store,
@@ -271,8 +275,147 @@ describe('service readiness endpoint', () => {
           } as unknown as AppDependencies['policy'],
         },
         2_000_000n,
+        1_000,
       ),
     ).rejects.toThrow('escrow capacity');
+
+    await expect(
+      ensurePaymentCapacity(
+        {
+          config,
+          store,
+          policy: {
+            readiness: async () => ({
+              ...readiness,
+              remainingEscrowLimitUsdCents: 999,
+            }),
+          } as unknown as AppDependencies['policy'],
+        },
+        2_000_000n,
+        1_000,
+      ),
+    ).rejects.toThrow('rolling escrow capacity');
+  });
+
+  it('reserves successor capacity while an expired claim escrow refund is pending', async () => {
+    const config = loadConfig({
+      MIZUKI_PAYMENT_MODE: 'mock',
+      MIZUKI_PAY_TO: 'refund-treasury',
+      CLAWPUMP_PAYOUT_WALLET: 'escrow-authority',
+      MIZUKI_ESCROW_READINESS_MIN_LAMPORTS: '1000000000',
+    });
+    const store = new MemoryStore();
+    const quote: Quote = {
+      id: '11111111-1111-4111-8111-111111111111',
+      issueUrl: 'https://github.com/example/project/issues/1',
+      owner: 'example',
+      repo: 'project',
+      issueNumber: 1,
+      issueTitle: 'Fix docs',
+      issueBody: '',
+      baseSha: 'a'.repeat(40),
+      defaultBranch: 'main',
+      class: 'micro',
+      priceAtomic: '2000000',
+      maxFiles: 3,
+      maxCostUsd: 0.8,
+      validationCommands: [],
+      expiresAt: '2099-01-01T00:00:00.000Z',
+    };
+    const { job } = await store.createJob(
+      quote,
+      { payer: 'payer', transaction: 'payment', amountAtomic: quote.priceAtomic },
+      'paid-job',
+    );
+    await store.transitionJob(job.id, 'settlement_pending', 'refunded', {
+      refundTransaction: 'refund',
+    });
+    const bounty: RescueBounty = {
+      id: '22222222-2222-4222-8222-222222222222',
+      sourceJobId: job.id,
+      failureReceiptId: `failure:${job.id}`,
+      repository: 'example/project',
+      issueNumber: 1,
+      issueUrl: quote.issueUrl,
+      priceCents: 1_000,
+      generation: 0,
+      offerExpiresAt: '2026-08-30T00:00:00.000Z',
+      state: 'claim_refund_pending',
+      activeClaim: {
+        id: 'claim-1',
+        claimantId: 'github:1',
+        walletAddress: 'claimant-wallet',
+        state: 'expired',
+        claimedAt: '2026-08-20T00:00:00.000Z',
+        leaseExpiresAt: '2026-08-22T00:00:00.000Z',
+        closedAt: '2026-08-22T00:00:00.000Z',
+      },
+      claimHistory: [],
+      createdAt: '2026-08-20T00:00:00.000Z',
+      updatedAt: '2026-08-22T00:00:00.000Z',
+      revision: 5,
+    };
+    await store.createBounty(bounty);
+    await store.saveEscrow({
+      id: '33333333-3333-4333-8333-333333333333',
+      bountyId: bounty.id,
+      repository: bounty.repository,
+      issueNumber: bounty.issueNumber,
+      issueTitle: quote.issueTitle,
+      issueBody: quote.issueBody,
+      baseRef: quote.defaultBranch,
+      baseSha: quote.baseSha,
+      reviewPolicy: { version: 1, model: 'reviewer', maxFiles: quote.maxFiles },
+      amountCents: bounty.priceCents,
+      acceptanceHash: 'b'.repeat(64),
+      expiresAt: bounty.offerExpiresAt,
+      state: 'refund_pending',
+      reservationId: 'historic-reservation',
+      amountAtomic: '100000000',
+      fundingSignature: 'historic-funding',
+      createdAt: bounty.createdAt,
+      updatedAt: bounty.updatedAt,
+      revision: 0,
+    } satisfies ContributorEscrow);
+    const readiness = {
+      healthy: true,
+      refundTreasury: 'refund-treasury',
+      refundMint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+      refundDecimals: 6,
+      finalizedBalanceRaw: '12000000',
+      pendingRefundRaw: '0',
+      treasuryAvailableRefundRaw: '12000000',
+      remainingRefundLimitUsdCents: 1_200,
+      availableRefundRaw: '12000000',
+      remainingEscrowLimitUsdCents: 1_999,
+      escrowAuthority: 'escrow-authority',
+      finalizedEscrowBalanceLamports: '1100000000',
+      availableEscrowReserveLamports: '1000000000',
+    };
+    const order: string[] = [];
+    const bountyBySourceJob = store.bountyBySourceJob.bind(store);
+    vi.spyOn(store, 'bountyBySourceJob').mockImplementation(async (jobId) => {
+      order.push('application');
+      return bountyBySourceJob(jobId);
+    });
+
+    await expect(
+      ensurePaymentCapacity(
+        {
+          config,
+          store,
+          policy: {
+            readiness: async () => {
+              order.push('signer');
+              return readiness;
+            },
+          } as unknown as AppDependencies['policy'],
+        },
+        2_000_000n,
+        1_000,
+      ),
+    ).rejects.toThrow('rolling escrow capacity');
+    expect(order).toEqual(['application', 'signer']);
   });
 });
 

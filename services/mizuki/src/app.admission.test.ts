@@ -392,6 +392,113 @@ describe('operator admission controls', () => {
     await expect(store.jobByIdempotencyKey('unready-job')).resolves.toBeUndefined();
   });
 
+  it('rejects a payment before settlement when its rescue bounty exceeds rolling capacity', async () => {
+    const store = new MemoryStore();
+    await store.saveQuote(quote);
+    await store.updateOperatorControls({
+      expectedRevision: 0,
+      intakeEnabled: true,
+      claimsEnabled: false,
+      reason: 'rescue capacity test',
+      updatedBy: 'test',
+    });
+    const settle = vi.fn();
+    const createRepositoryAdmission = vi.fn();
+    const base = await serve(
+      dependencies(store, {
+        config: livePaymentConfig,
+        github: {
+          assertIssueAuthorization: vi.fn(async () => undefined),
+          currentHead: vi.fn(async () => quote.baseSha),
+        },
+        payments: { settle },
+        policy: {
+          readiness: vi.fn(async () => ({
+            ...signerReadiness,
+            remainingEscrowLimitUsdCents: 999,
+          })),
+          createRepositoryAdmission,
+        },
+      }),
+    );
+
+    const response = await fetch(`${base}/v1/jobs`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'idempotency-key': 'rescue-capacity-job',
+        'payment-signature': 'signed-payment-proof',
+      },
+      body: JSON.stringify({ quote_id: quote.id }),
+    });
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      error: 'rescue-bounty protection is temporarily unavailable',
+    });
+    expect(settle).not.toHaveBeenCalled();
+    expect(createRepositoryAdmission).not.toHaveBeenCalled();
+    await expect(store.jobByIdempotencyKey('rescue-capacity-job')).resolves.toBeUndefined();
+  });
+
+  it('holds rescue capacity after refund until the bounty has signer-backed funding', async () => {
+    const store = new MemoryStore();
+    const existingQuote: Quote = {
+      ...quote,
+      id: '22222222-2222-4222-8222-222222222222',
+      issueUrl: 'https://github.com/example/project/issues/2',
+      issueNumber: 2,
+    };
+    await store.saveQuote(existingQuote);
+    const { job: refundedJob } = await store.createJob(
+      existingQuote,
+      { payer: 'payer', transaction: 'existing-payment', amountAtomic: '2000000' },
+      'existing-paid-job',
+    );
+    await store.transitionJob(refundedJob.id, 'settlement_pending', 'refunded', {
+      refundTransaction: 'existing-refund',
+    });
+    await store.saveQuote(quote);
+    await store.updateOperatorControls({
+      expectedRevision: 0,
+      intakeEnabled: true,
+      claimsEnabled: false,
+      reason: 'contingent rescue capacity test',
+      updatedBy: 'test',
+    });
+    const settle = vi.fn();
+    const base = await serve(
+      dependencies(store, {
+        config: livePaymentConfig,
+        github: {
+          assertIssueAuthorization: vi.fn(async () => undefined),
+          currentHead: vi.fn(async () => quote.baseSha),
+        },
+        payments: { settle },
+        policy: {
+          readiness: vi.fn(async () => ({
+            ...signerReadiness,
+            remainingEscrowLimitUsdCents: 1_999,
+          })),
+        },
+      }),
+    );
+
+    const response = await fetch(`${base}/v1/jobs`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'idempotency-key': 'second-paid-job',
+        'payment-signature': 'signed-payment-proof',
+      },
+      body: JSON.stringify({ quote_id: quote.id }),
+    });
+
+    expect(response.status).toBe(503);
+    expect(settle).not.toHaveBeenCalled();
+    await expect(store.jobByIdempotencyKey('second-paid-job')).resolves.toBeUndefined();
+  });
+
   it('probes the exact verifier repository inside the live gate before settlement', async () => {
     const store = new MemoryStore();
     await store.saveQuote(quote);
@@ -986,6 +1093,7 @@ const signerReadiness = {
   treasuryAvailableRefundRaw: '1000000000',
   remainingRefundLimitUsdCents: 100_000,
   availableRefundRaw: '1000000000',
+  remainingEscrowLimitUsdCents: 100_000,
   escrowAuthority: 'escrow-authority',
   finalizedEscrowBalanceLamports: '1000000000',
   availableEscrowReserveLamports: '1000000000',

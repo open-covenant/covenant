@@ -2,6 +2,7 @@ import { createHash, createPrivateKey, createPublicKey, verify } from 'node:cryp
 import { describe, expect, it, vi } from 'vitest';
 import {
   assertRefundCapacity,
+  assertRescueCapacity,
   PolicyRequestError,
   PolicySignerClient,
   type RepositoryAdmissionBinding,
@@ -635,6 +636,7 @@ describe('PolicySignerClient', () => {
       treasuryAvailableRefundRaw: '11000000',
       remainingRefundLimitUsdCents: 1_100,
       availableRefundRaw: '11000000',
+      remainingEscrowLimitUsdCents: 1_000,
       escrowAuthority: 'escrow-authority',
       finalizedEscrowBalanceLamports: '2000000000',
       availableEscrowReserveLamports: '1900000000',
@@ -650,6 +652,7 @@ describe('PolicySignerClient', () => {
         proposedPaymentRaw: 2_000_000n,
       }),
     ).not.toThrow();
+    expect(() => assertRescueCapacity(readiness, 1_000)).not.toThrow();
     expect(() =>
       assertRefundCapacity({
         readiness,
@@ -681,6 +684,12 @@ describe('PolicySignerClient', () => {
         proposedPaymentRaw: 1n,
       }),
     ).toThrow('configured escrow return recipient');
+    expect(() =>
+      assertRescueCapacity({ ...readiness, remainingEscrowLimitUsdCents: 999 }, 1_000),
+    ).toThrow('rolling escrow capacity');
+    expect(() =>
+      assertRescueCapacity({ ...readiness, remainingEscrowLimitUsdCents: undefined }, 1_000),
+    ).toThrow('rolling escrow capacity');
   });
 });
 

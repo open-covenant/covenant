@@ -678,13 +678,26 @@ export class JobProcessor {
     } else {
       usageError = responseParseError ?? 'UsePod reviewer omitted token usage';
     }
+    const returnedModel =
+      responseValue &&
+      typeof responseValue === 'object' &&
+      'model' in responseValue &&
+      typeof (responseValue as { model?: unknown }).model === 'string'
+        ? (responseValue as { model: string }).model
+        : undefined;
+    const wrongModel =
+      returnedModel !== undefined && !matchesUsePodModel(this.config.usePodModel, returnedModel);
 
     let receipt;
     try {
       receipt = usePodReceipt(response, this.config.usePodModel, requestConfig.minimumBalance);
     } catch (cause) {
-      const message = cause instanceof Error ? cause.message : String(cause);
-      const retryable = response.ok || transientReviewStatus(response.status);
+      const message = wrongModel
+        ? 'UsePod reviewer returned a different model'
+        : cause instanceof Error
+          ? cause.message
+          : String(cause);
+      const retryable = !wrongModel && (response.ok || transientReviewStatus(response.status));
       const persisted = await this.markReviewAttemptFailed(
         jobId,
         attempt.id,
@@ -738,8 +751,10 @@ export class JobProcessor {
       );
     }
     if (!response.ok) {
-      const message = `UsePod reviewer failed: ${response.status} ${responseText || responseParseError || ''}`;
-      const retryable = transientReviewStatus(response.status);
+      const message = wrongModel
+        ? 'UsePod reviewer returned a different model'
+        : `UsePod reviewer failed: ${response.status} ${responseText || responseParseError || ''}`;
+      const retryable = !wrongModel && transientReviewStatus(response.status);
       const persisted = await this.markReviewAttemptFailed(
         jobId,
         attempt.id,
@@ -751,6 +766,17 @@ export class JobProcessor {
         message,
         costUsd,
         retryable && persisted,
+        usage?.promptTokens,
+        usage?.completionTokens,
+      );
+    }
+    if (wrongModel) {
+      const message = 'UsePod reviewer returned a different model';
+      await this.markReviewAttemptFailed(jobId, attempt.id, message, false, usage);
+      throw new ReviewAttemptError(
+        message,
+        costUsd,
+        false,
         usage?.promptTokens,
         usage?.completionTokens,
       );
@@ -782,17 +808,6 @@ export class JobProcessor {
       const message = usageError ?? 'UsePod reviewer returned invalid token usage';
       const persisted = await this.markReviewAttemptFailed(jobId, attempt.id, message, true);
       throw new ReviewAttemptError(message, costUsd, persisted);
-    }
-    if (!matchesUsePodModel(this.config.usePodModel, body.model)) {
-      const message = 'UsePod reviewer returned a different model';
-      await this.markReviewAttemptFailed(jobId, attempt.id, message, false, usage);
-      throw new ReviewAttemptError(
-        message,
-        costUsd,
-        false,
-        usage.promptTokens,
-        usage.completionTokens,
-      );
     }
     if (usage.completionTokens > maxTokens) {
       const message = 'UsePod reviewer exceeded its output token ceiling';

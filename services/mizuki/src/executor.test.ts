@@ -408,6 +408,35 @@ describe('JobProcessor', () => {
     });
   });
 
+  it('does not retry a wrong-model response when its usage and decision are unusable', async () => {
+    const result = await processReviewSequence('wrong-model-invalid-body', [
+      () =>
+        reviewContentResponse(
+          '',
+          { prompt_tokens: 'invalid', completion_tokens: 10 },
+          'deepseek/deepseek-v4-flash-0730',
+        ),
+      () => reviewResponse({ approved: true, reason: 'must not be accepted' }),
+    ]);
+
+    expect(result.reviewCalls).toBe(1);
+    expect(result.job).toMatchObject({
+      state: 'refunded',
+      error: 'UsePod reviewer returned a different model',
+      inputTokens: 100,
+      outputTokens: 40,
+      reviewAttempts: [
+        {
+          attemptNumber: 1,
+          status: 'failed',
+          retryable: false,
+          costUsd: 0.0005,
+          error: 'UsePod reviewer returned a different model',
+        },
+      ],
+    });
+  });
+
   it('does not retry or accept a reviewer response that exceeds its attempt ceiling', async () => {
     const result = await processReviewSequence('review-spend-cap', [
       () => reviewCostResponse('70000'),
@@ -1282,11 +1311,12 @@ function reviewResponse(
 
 function reviewContentResponse(
   content: string,
-  usage = { prompt_tokens: 50, completion_tokens: 10 },
+  usage: unknown = { prompt_tokens: 50, completion_tokens: 10 },
+  model = 'deepseek-v4-flash',
 ): Response {
   return Response.json(
     {
-      model: 'deepseek-v4-flash',
+      model,
       choices: [{ message: { content } }],
       usage,
     },

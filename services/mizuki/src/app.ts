@@ -1,4 +1,4 @@
-import { timingSafeEqual } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { ActivityStreams, PublicAdmission, RateLimitError, requestScheme } from './admission.js';
 import { GITHUB_OAUTH_FLOW_TTL_SECONDS, type ContributorAuth } from './auth.js';
@@ -55,8 +55,12 @@ export type AppDependencies = {
 export function createApp(deps: AppDependencies) {
   const admission = new PublicAdmission(deps.config);
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+    const requestId = randomUUID();
+    let requestPath = '/';
+    res.setHeader('x-request-id', requestId);
     try {
       const url = new URL(req.url ?? '/', 'http://localhost');
+      requestPath = url.pathname;
       const parts = url.pathname.split('/').filter(Boolean);
 
       applyCors(req, res, deps.config.webOrigin);
@@ -282,6 +286,7 @@ export function createApp(deps: AppDependencies) {
               blockers,
             };
           } catch (cause) {
+            if (cause instanceof GithubReadinessError) throw cause;
             return {
               owner: saved.owner,
               repo: saved.repo,
@@ -669,7 +674,12 @@ export function createApp(deps: AppDependencies) {
           quote.authorizationReceipt?.evidenceHash,
           { title: quote.issueTitle, body: quote.issueBody },
         );
-        const head = await deps.github.currentHead(quote.owner, quote.repo, quote.defaultBranch);
+        const head = await deps.github.currentHead(
+          quote.owner,
+          quote.repo,
+          quote.defaultBranch,
+          quote.installationId,
+        );
         if (head !== quote.baseSha)
           return json(res, 409, { error: 'repository changed; request a new quote' });
         const paymentSignature = header(req, 'payment-signature');
@@ -1003,6 +1013,27 @@ export function createApp(deps: AppDependencies) {
               : cause instanceof OperatorAdmissionError
                 ? message
                 : 'request failed; retry later';
+      if (status >= 500) {
+        console.error(
+          JSON.stringify({
+            level: 'error',
+            event: 'http_request_failed',
+            requestId,
+            method: req.method ?? 'UNKNOWN',
+            path: requestPath,
+            status,
+            error: {
+              type: cause instanceof Error ? cause.constructor.name : typeof cause,
+              ...(cause instanceof GithubReadinessError
+                ? {
+                    code: cause.code,
+                    ...(cause.upstreamStatus ? { upstreamStatus: cause.upstreamStatus } : {}),
+                  }
+                : {}),
+            },
+          }),
+        );
+      }
       return json(res, status, { error: publicMessage });
     }
   };
@@ -1167,6 +1198,7 @@ function applyCors(
     'content-type,idempotency-key,payment-signature,last-event-id',
   );
   res.setHeader('access-control-allow-methods', 'GET,POST,OPTIONS');
+  res.setHeader('access-control-expose-headers', 'x-request-id');
   res.setHeader('vary', 'origin');
 }
 

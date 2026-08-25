@@ -1,7 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp, SerialGate, type AppDependencies } from './app.js';
-import { GithubAccessError } from './github.js';
+import { GithubAccessError, GithubReadinessError } from './github.js';
 import { PolicyRequestError } from './policy-client.js';
 import { MemoryStore } from './store.js';
 import type { GithubIssue, Payment, Quote } from './types.js';
@@ -17,9 +17,40 @@ afterEach(async () => {
         }),
     ),
   );
+  vi.restoreAllMocks();
 });
 
 describe('workbench account API', () => {
+  it('returns 503 when authenticated repository access is unavailable', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    await store.linkAccountRepository('42', 'example', 'project');
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const base = await serve(
+      dependencies(store, {
+        github: {
+          repositoryMetadataForMaintainer: vi.fn(async () => {
+            throw new GithubReadinessError(
+              'unavailable',
+              'GitHub repository access is temporarily unavailable. Please try again shortly.',
+              429,
+            );
+          }),
+        },
+      }),
+    );
+
+    const response = await fetch(`${base}/v1/account/repositories`, {
+      headers: sessionHeaders,
+    });
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get('x-request-id')).toBeTruthy();
+    await expect(response.json()).resolves.toEqual({
+      error: 'GitHub repository access is temporarily unavailable. Please try again shortly.',
+    });
+  });
+
   it('returns only the signed-in account jobs and real settlement totals', async () => {
     const store = new MemoryStore();
     await store.upsertContributor('42', 'maintainer');

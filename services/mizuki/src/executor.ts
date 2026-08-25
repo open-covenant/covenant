@@ -144,6 +144,7 @@ export class JobProcessor {
         job.quote.owner,
         job.quote.repo,
         job.quote.defaultBranch,
+        job.quote.installationId,
       );
       if (head !== job.quote.baseSha)
         throw new Error('repository head changed after quote; request a new quote');
@@ -235,6 +236,7 @@ export class JobProcessor {
         job.quote.owner,
         job.quote.repo,
         job.quote.defaultBranch,
+        job.quote.installationId,
       );
       if (finalHead !== job.quote.baseSha)
         throw new Error('repository head changed during execution; request a new quote');
@@ -353,6 +355,7 @@ export class JobProcessor {
             job.quote.owner,
             job.quote.repo,
             job.quote.defaultBranch,
+            job.quote.installationId,
           );
           if (head !== job.quote.baseSha)
             throw new Error('repository changed before delivery recovery');

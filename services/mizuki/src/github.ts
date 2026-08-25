@@ -6,6 +6,10 @@ import type { GithubAuthorizationReceipt, GithubIssue, Job, RunArtifacts } from 
 
 type Fetch = typeof fetch;
 const GITHUB_TIMEOUT_MS = 20_000;
+const GITHUB_AUTH_UNAVAILABLE = 'Delivery GitHub App authentication is unavailable.';
+const GITHUB_PROVENANCE_UNAVAILABLE = 'Delivery GitHub App configuration could not be verified.';
+const GITHUB_REPOSITORY_UNAVAILABLE =
+  'GitHub repository access is temporarily unavailable. Please try again shortly.';
 const TOKEN_REFRESH_WINDOW_MS = 5 * 60_000;
 const TOKEN_MAX_TTL_MS = 65 * 60_000;
 const TOKEN_CACHE_LIMIT = 256;
@@ -166,26 +170,33 @@ export class GithubClient {
 
   async issue(issueUrl: string): Promise<GithubIssue> {
     const { owner, repo, number } = parseIssueUrl(issueUrl);
+    const installationId = await this.installation(owner, repo);
+    if (this.config.requireGithubApp && installationId === undefined) {
+      throw new GithubAccessError(
+        'Install the Mizuki GitHub App on this repository before requesting a quote.',
+      );
+    }
+    const repositoryPath = `/repos/${owner}/${repo}`;
+    const read = <T>(path: string): Promise<T> =>
+      installationId === undefined
+        ? this.api<T>(path)
+        : this.repositoryApi<T>(owner, repo, installationId, path);
     const [repository, issue, contents] = await Promise.all([
-      this.api<{ private: boolean; default_branch: string }>(`/repos/${owner}/${repo}`),
-      this.api<{
+      read<{ private: boolean; default_branch: string }>(repositoryPath),
+      read<{
         title: string;
         body: string | null;
         labels: Array<{ name?: string }>;
         pull_request?: unknown;
-      }>(`/repos/${owner}/${repo}/issues/${number}`),
-      this.api<Array<{ name: string }>>(`/repos/${owner}/${repo}/contents`),
+      }>(`${repositoryPath}/issues/${number}`),
+      read<Array<{ name: string }>>(`${repositoryPath}/contents`),
     ]);
     if (repository.private) throw new Error('Mizuki v1 supports public repositories only');
     assertNotPullRequest(issue);
 
-    const branch = await this.api<{ commit: { sha: string } }>(
-      `/repos/${owner}/${repo}/branches/${encodeURIComponent(repository.default_branch)}`,
+    const branch = await read<{ commit: { sha: string } }>(
+      `${repositoryPath}/branches/${encodeURIComponent(repository.default_branch)}`,
     );
-    const installationId = await this.installation(owner, repo);
-    if (this.config.requireGithubApp && installationId === undefined) {
-      throw new Error('install the Mizuki GitHub App on this repository before requesting a quote');
-    }
     if (this.config.requireGithubApp) {
       assertIssueAuthorized(
         issue.labels.flatMap((label) => (label.name ? [label.name] : [])),
@@ -315,6 +326,7 @@ export class GithubClient {
               );
               authorized = true;
             } catch (cause) {
+              if (cause instanceof GithubReadinessError) throw cause;
               authorizationUnavailable = githubAuthorizationUnavailable(cause);
               authorizationReason = authorizationUnavailable
                 ? 'Issue authorization could not be verified. Try again shortly.'
@@ -343,8 +355,12 @@ export class GithubClient {
       installationId = await this.installation(owner, repo);
     } catch (cause) {
       if (!(cause instanceof GithubReadinessError)) throw cause;
+      if (this.config.requireGithubApp) throw cause;
       coreUnavailable = true;
       blockers.push(cause.message);
+    }
+    if (this.config.requireGithubApp && installationId === undefined) {
+      throw new GithubAccessError('Install the Mizuki GitHub App on this repository first.');
     }
     if (!installationId && !coreUnavailable) {
       blockers.push('Install the delivery GitHub App on this repository.');
@@ -403,6 +419,7 @@ export class GithubClient {
         permission = await this.maintainerPermission(owner, repo, installationId, githubLogin);
       } catch (cause) {
         if (cause instanceof GithubAccessError) throw cause;
+        if (cause instanceof GithubReadinessError) throw cause;
         maintainerUnavailable = true;
         blockers.push('Repository maintainer access could not be verified. Try again shortly.');
       }
@@ -437,6 +454,7 @@ export class GithubClient {
           });
           authorized = true;
         } catch (cause) {
+          if (cause instanceof GithubReadinessError) throw cause;
           authorizationUnavailable = githubAuthorizationUnavailable(cause);
           authorizationReason = authorizationUnavailable
             ? 'Issue authorization could not be verified. Try again shortly.'
@@ -477,8 +495,35 @@ export class GithubClient {
     };
   }
 
-  async currentHead(owner: string, repo: string, branch: string): Promise<string> {
-    const result = await this.api<{ commit: { sha: string } }>(
+  async currentHead(
+    owner: string,
+    repo: string,
+    branch: string,
+    expectedInstallationId?: number,
+  ): Promise<string> {
+    const installationId = await this.installation(owner, repo);
+    if (expectedInstallationId !== undefined && installationId !== expectedInstallationId) {
+      throw new GithubAccessError('The GitHub App installation changed after the quote.');
+    }
+    if (this.config.requireGithubApp && expectedInstallationId === undefined) {
+      throw new GithubReadinessError(
+        'provenance',
+        'GitHub App access could not be verified. Request a new quote before payment.',
+      );
+    }
+    if (installationId === undefined) {
+      if (this.config.requireGithubApp) {
+        throw new GithubAccessError('The Mizuki GitHub App is not installed on this repository.');
+      }
+      const result = await this.api<{ commit: { sha: string } }>(
+        `/repos/${owner}/${repo}/branches/${encodeURIComponent(branch)}`,
+      );
+      return result.commit.sha;
+    }
+    const result = await this.repositoryApi<{ commit: { sha: string } }>(
+      owner,
+      repo,
+      installationId,
       `/repos/${owner}/${repo}/branches/${encodeURIComponent(branch)}`,
     );
     return result.commit.sha;
@@ -815,10 +860,7 @@ export class GithubClient {
   private async installation(owner: string, repo: string): Promise<number | undefined> {
     if (!this.config.githubAppId || !this.config.githubPrivateKey) {
       if (this.config.requireGithubApp) {
-        throw new GithubReadinessError(
-          'credentials',
-          'Delivery GitHub App authentication is unavailable.',
-        );
+        throw new GithubReadinessError('credentials', GITHUB_AUTH_UNAVAILABLE);
       }
       return undefined;
     }
@@ -829,10 +871,7 @@ export class GithubClient {
         signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
       });
     } catch {
-      throw new GithubReadinessError(
-        'unavailable',
-        'GitHub repository verification is temporarily unavailable.',
-      );
+      throw new GithubReadinessError('unavailable', GITHUB_REPOSITORY_UNAVAILABLE);
     }
     if (response.status === 404) return undefined;
     if (!response.ok) throw githubReadinessFromStatus(response.status);
@@ -840,30 +879,18 @@ export class GithubClient {
     try {
       installation = installationSchema.parse(await response.json());
     } catch {
-      throw new GithubReadinessError(
-        'provenance',
-        'Delivery GitHub App configuration could not be verified.',
-      );
+      throw new GithubReadinessError('provenance', GITHUB_PROVENANCE_UNAVAILABLE);
     }
     if (String(installation.app_id) !== this.config.githubAppId) {
-      throw new GithubReadinessError(
-        'provenance',
-        'Delivery GitHub App configuration could not be verified.',
-      );
+      throw new GithubReadinessError('provenance', GITHUB_PROVENANCE_UNAVAILABLE);
     }
     if (installation.suspended_at) {
-      throw new GithubReadinessError(
-        'provenance',
-        'Delivery GitHub App configuration could not be verified.',
-      );
+      throw new GithubReadinessError('provenance', GITHUB_PROVENANCE_UNAVAILABLE);
     }
     try {
       assertExactPermissions(installation.permissions, CORE_PERMISSIONS, 'GitHub App installation');
     } catch {
-      throw new GithubReadinessError(
-        'provenance',
-        'Delivery GitHub App configuration could not be verified.',
-      );
+      throw new GithubReadinessError('provenance', GITHUB_PROVENANCE_UNAVAILABLE);
     }
     return installation.id;
   }
@@ -1205,10 +1232,7 @@ export class GithubClient {
     } catch (cause) {
       if (cause instanceof GithubReadinessError) throw cause;
       if (cause instanceof GithubApiError) throw githubReadinessFromStatus(cause.status);
-      throw new GithubReadinessError(
-        'provenance',
-        'Delivery GitHub App configuration could not be verified.',
-      );
+      throw new GithubReadinessError('provenance', GITHUB_PROVENANCE_UNAVAILABLE);
     }
   }
 
@@ -1271,11 +1295,17 @@ export class GithubClient {
     try {
       return await this.api<T>(path, { ...options, token: first.token });
     } catch (cause) {
-      if (!(cause instanceof GithubApiError) || cause.status !== 401) throw cause;
+      if (!(cause instanceof GithubApiError) || cause.status !== 401) {
+        throw operationalGithubError(cause);
+      }
     }
     this.invalidateToken(owner, repo, installationId, first.token);
     const replacement = await this.installationToken(owner, repo, installationId);
-    return this.api<T>(path, { ...options, token: replacement.token });
+    try {
+      return await this.api<T>(path, { ...options, token: replacement.token });
+    } catch (cause) {
+      throw operationalGithubError(cause);
+    }
   }
 
   private async repositoryApiText(
@@ -1289,11 +1319,17 @@ export class GithubClient {
     try {
       return await this.apiText(path, first.token, accept);
     } catch (cause) {
-      if (!(cause instanceof GithubApiError) || cause.status !== 401) throw cause;
+      if (!(cause instanceof GithubApiError) || cause.status !== 401) {
+        throw operationalGithubError(cause);
+      }
     }
     this.invalidateToken(owner, repo, installationId, first.token);
     const replacement = await this.installationToken(owner, repo, installationId);
-    return this.apiText(path, replacement.token, accept);
+    try {
+      return await this.apiText(path, replacement.token, accept);
+    } catch (cause) {
+      throw operationalGithubError(cause);
+    }
   }
 
   private appJwt(): string {
@@ -1313,26 +1349,40 @@ export class GithubClient {
     path: string,
     options: { method?: string; token?: string; body?: unknown } = {},
   ): Promise<T> {
-    const response = await this.request(`https://api.github.com${path}`, {
-      method: options.method,
-      headers: this.headers(options.token),
-      body: options.body === undefined ? undefined : JSON.stringify(options.body),
-      signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
-    });
+    let response: Response;
+    try {
+      response = await this.request(`https://api.github.com${path}`, {
+        method: options.method,
+        headers: this.headers(options.token),
+        body: options.body === undefined ? undefined : JSON.stringify(options.body),
+        signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
+      });
+    } catch {
+      throw new GithubReadinessError('unavailable', GITHUB_REPOSITORY_UNAVAILABLE);
+    }
     if (!response.ok) {
       throw new GithubApiError(
         response.status,
         `GitHub request failed with HTTP ${response.status}`,
       );
     }
-    return (await response.json()) as T;
+    try {
+      return (await response.json()) as T;
+    } catch {
+      throw new GithubReadinessError('unavailable', GITHUB_REPOSITORY_UNAVAILABLE);
+    }
   }
 
   private async apiText(path: string, token: string, accept: string): Promise<string> {
-    const response = await this.request(`https://api.github.com${path}`, {
-      headers: { ...this.headers(token), accept },
-      signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
-    });
+    let response: Response;
+    try {
+      response = await this.request(`https://api.github.com${path}`, {
+        headers: { ...this.headers(token), accept },
+        signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
+      });
+    } catch {
+      throw new GithubReadinessError('unavailable', GITHUB_REPOSITORY_UNAVAILABLE);
+    }
     if (!response.ok) {
       throw new GithubApiError(response.status, `GitHub GET ${path} failed: ${response.status}`);
     }
@@ -1478,6 +1528,7 @@ export class GithubReadinessError extends Error {
   constructor(
     readonly code: 'credentials' | 'provenance' | 'unavailable',
     message: string,
+    readonly upstreamStatus?: number,
   ) {
     super(message);
   }
@@ -1487,21 +1538,23 @@ class GithubAuthorizationError extends Error {}
 
 function githubReadinessFromStatus(status: number): GithubReadinessError {
   if (status === 401) {
-    return new GithubReadinessError(
-      'credentials',
-      'Delivery GitHub App authentication is unavailable.',
-    );
+    return new GithubReadinessError('credentials', GITHUB_AUTH_UNAVAILABLE, status);
   }
   if (status === 403 || status === 429 || status >= 500) {
-    return new GithubReadinessError(
-      'unavailable',
-      'GitHub repository verification is temporarily unavailable.',
-    );
+    return new GithubReadinessError('unavailable', GITHUB_REPOSITORY_UNAVAILABLE, status);
   }
-  return new GithubReadinessError(
-    'provenance',
-    'Delivery GitHub App configuration could not be verified.',
-  );
+  return new GithubReadinessError('provenance', GITHUB_PROVENANCE_UNAVAILABLE, status);
+}
+
+function operationalGithubError(cause: unknown): unknown {
+  if (cause instanceof GithubReadinessError) return cause;
+  if (
+    cause instanceof GithubApiError &&
+    (cause.status === 401 || cause.status === 403 || cause.status === 429 || cause.status >= 500)
+  ) {
+    return githubReadinessFromStatus(cause.status);
+  }
+  return cause;
 }
 
 function githubAuthorizationUnavailable(cause: unknown): boolean {

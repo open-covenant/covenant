@@ -1,6 +1,6 @@
 # Mizuki the Mech website
 
-Customer website for Mizuki the Mech, an AI maintenance agent that delivers a validated pull request or returns the quoted USDC payment. After a refund finalizes, a separate SOL-funded maintenance bounty can make the unresolved issue available to contributors.
+Public customer website for Mizuki the Mech, an AI maintenance agent that delivers a validated pull request or returns the quoted USDC payment. After a refund finalizes, a separate SOL-funded maintenance bounty can make the unresolved issue available to contributors.
 
 ## Product routes
 

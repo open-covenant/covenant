@@ -4,9 +4,15 @@ export function ProviderReceiptDetails({ receipt }: { receipt: ProviderRouteRece
   return (
     <dl className="receipt-list provider-route-receipt">
       <div>
-        <dt>Model</dt>
+        <dt>Requested model</dt>
         <dd>{receipt.model}</dd>
       </div>
+      {receipt.resolvedModel && receipt.resolvedModel !== receipt.model && (
+        <div>
+          <dt>Returned model</dt>
+          <dd>{receipt.resolvedModel}</dd>
+        </div>
+      )}
       <div>
         <dt>Provider channel</dt>
         <dd>{receipt.route === 'marketplace' ? 'UsePod marketplace' : receipt.route}</dd>

@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { BountyService, type ContributorPatchReviewer } from './bounties.js';
+import { loadConfig } from './config.js';
+import { UsePodContributorReviewer } from './contributor-reviewer.js';
 import { fingerprintBountyDisputeEvidence, type ContributorEscrow } from './domain/index.js';
+import type { GithubClient } from './github.js';
 import { PolicyRequestError, type FinancialPolicy, type PolicyOperation } from './policy-client.js';
+import { publicBounty } from './public-api.js';
 import { MemoryStore } from './store.js';
 import type { Job, Quote } from './types.js';
 
@@ -110,6 +114,13 @@ describe('BountyService', () => {
       baseSha: reviewedBaseSha,
       baseRef: 'main',
       diffHash: reviewedDiffHash,
+      inputTokens: 20,
+      outputTokens: 8,
+      provider: {
+        model: 'independent-reviewer',
+        resolvedModel: 'independent-reviewer-20260825',
+        costMicrounits: '1',
+      },
     });
     const replay = await service.submitPullRequest(
       created.id,
@@ -178,6 +189,107 @@ describe('BountyService', () => {
     expect(policy.releaseInputs).toEqual([]);
     expect(await store.bounty(bounty.id)).toMatchObject({ state: 'pr_submitted' });
     expect(await store.escrowByBounty(bounty.id)).toMatchObject({ state: 'bound' });
+  });
+
+  it('checkpoints paid provider evidence before rejecting a malformed decision', async () => {
+    const store = new ReviewCheckpointStore();
+    const job = await refundedJob(store);
+    const secret = 'private-provider-diagnostic';
+    const github = {
+      pullRequestReviewData: async () => ({
+        headSha: reviewedHeadSha,
+        baseSha: reviewedBaseSha,
+        baseRef: 'main',
+        diffHash: reviewedDiffHash,
+        diff: 'diff --git a/src/parser.ts b/src/parser.ts',
+        changedFiles: 1,
+        files: [{ filename: 'src/parser.ts', status: 'modified', patchAvailable: true }],
+        mergedAt: null,
+        mergeCommitSha: null,
+        checksPassed: true,
+        checkCount: 1,
+      }),
+    } as unknown as GithubClient;
+    const provider = new UsePodContributorReviewer(
+      loadConfig({
+        MIZUKI_PAYMENT_MODE: 'mock',
+        USEPOD_API_KEY: 'funded-token',
+        USEPOD_REVIEW_MODEL: 'deepseek-v4-flash',
+      }),
+      store,
+      github,
+      async () =>
+        Response.json(
+          {
+            model: 'deepseek-v4-flash-260425',
+            choices: [
+              {
+                index: 0,
+                finish_reason: 'stop',
+                message: {
+                  role: 'assistant',
+                  content: `{"approved":true,"approved":false,"reason":"${secret}"}`,
+                },
+              },
+            ],
+            usage: { prompt_tokens: 31, completion_tokens: 12 },
+          },
+          {
+            headers: {
+              'x-pod-route': 'marketplace',
+              'x-balance-remaining': '9000000',
+              'x-pod-provider-id': 'provider-3d0',
+              'x-request-id': 'provider-request-22',
+              'x-balance-cost-microunits': '700',
+            },
+          },
+        ),
+    );
+    const service = new BountyService(store, new MockPolicy(), provider, tickingClock(), {
+      ...bountyConfig,
+      usePodModel: 'deepseek-v4-flash',
+    });
+    const bounty = await service.createAfterRefund(job);
+    const contributor = await store.upsertContributor('review-checkpoint', 'maintainer');
+    const challenge = await service.createClaimChallenge(
+      bounty.id,
+      contributor,
+      '1'.repeat(32),
+      randomGrantId(),
+    );
+    await service.claim(bounty.id, contributor, challenge.id, 'signature');
+
+    await expect(
+      service.submitPullRequest(
+        bounty.id,
+        contributor,
+        'https://github.com/example/project/pull/22',
+      ),
+    ).rejects.toThrow('UsePod bounty review returned an invalid decision');
+
+    const failed = await store.bounty(bounty.id);
+    expect(store.sawReceived).toBe(true);
+    expect(failed).toMatchObject({
+      state: 'pr_submitted',
+      validationAttempt: {
+        status: 'failed',
+        failureKind: 'provider_error',
+        error: 'UsePod bounty review returned an invalid decision',
+        inputTokens: 31,
+        outputTokens: 12,
+        provider: {
+          model: 'deepseek-v4-flash',
+          resolvedModel: 'deepseek-v4-flash-260425',
+          route: 'marketplace',
+          providerId: 'provider-3d0',
+          requestId: 'provider-request-22',
+          costMicrounits: '700',
+        },
+      },
+    });
+    expect(JSON.stringify(failed)).not.toContain(secret);
+    expect(JSON.stringify(await store.activity())).not.toContain(secret);
+    expect(JSON.stringify(await publicBounty(store, failed!))).not.toContain(secret);
   });
 
   it('persists one paid review attempt before concurrent submissions reach the provider', async () => {
@@ -475,7 +587,7 @@ describe('BountyService', () => {
     expect(reviewCalls).toBe(1);
   });
 
-  it('terminalizes a stale submitted review after restart without another provider call', async () => {
+  it('terminalizes a stale received review after restart without another provider call', async () => {
     const store = new FailOnceReviewCompletionStore();
     const job = await refundedJob(store);
     let nowMs = Date.parse('2026-08-22T10:00:00Z');
@@ -487,9 +599,15 @@ describe('BountyService', () => {
       new MockPolicy(),
       {
         ...initialReviewer,
-        review: async (...args) => {
+        review: async (preflight, checkpoint) => {
           initialReviewCalls += 1;
-          return initialReviewer.review(...args);
+          const result = await initialReviewer.review(preflight);
+          await checkpoint?.({
+            providerReceipt: result.providerReceipt!,
+            inputTokens: result.inputTokens,
+            outputTokens: result.outputTokens,
+          });
+          return result;
         },
       },
       now,
@@ -512,7 +630,12 @@ describe('BountyService', () => {
     expect(initialReviewCalls).toBe(1);
     expect(await store.bounty(bounty.id)).toMatchObject({
       state: 'validating',
-      validationAttempt: { status: 'submitted' },
+      validationAttempt: {
+        status: 'received',
+        inputTokens: 20,
+        outputTokens: 8,
+        provider: { requestId: 'review-request', costMicrounits: '1' },
+      },
     });
     expect(
       (await store.ledgerEntries()).filter((entry) => entry.kind === 'operating_cost'),
@@ -545,6 +668,9 @@ describe('BountyService', () => {
         status: 'failed',
         failureKind: 'indeterminate_after_recovery',
         error: expect.stringContaining('will not be retried'),
+        inputTokens: 20,
+        outputTokens: 8,
+        provider: { requestId: 'review-request', costMicrounits: '1' },
       },
     });
     await expect(
@@ -1016,6 +1142,15 @@ describe('BountyService', () => {
   });
 });
 
+class ReviewCheckpointStore extends MemoryStore {
+  sawReceived = false;
+
+  override async updateBounty(...args: Parameters<MemoryStore['updateBounty']>) {
+    if (args[0].validationAttempt?.status === 'received') this.sawReceived = true;
+    return super.updateBounty(...args);
+  }
+}
+
 class FailOnceBoundStore extends MemoryStore {
   failNextBound = false;
 
@@ -1145,10 +1280,13 @@ function reviewer(
       ...evidence,
       providerReceipt: {
         model: 'independent-reviewer',
+        resolvedModel: 'independent-reviewer-20260825',
         route: 'marketplace',
         requestId: 'review-request',
         costMicrounits: '1',
       },
+      inputTokens: 20,
+      outputTokens: 8,
     }),
     mergedEvidence: async () => ({
       ...merged,

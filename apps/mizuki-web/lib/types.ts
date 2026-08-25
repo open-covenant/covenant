@@ -44,6 +44,7 @@ export type Validation = {
 
 export type ProviderRouteReceipt = {
   model: string;
+  resolvedModel?: string;
   route: 'marketplace';
   providerId?: string;
   requestId?: string;
@@ -200,6 +201,8 @@ export type Bounty = {
     baseSha: string;
     baseRef: string;
     diffHash: string;
+    inputTokens?: number;
+    outputTokens?: number;
     provider?: ProviderRouteReceipt;
   };
   dispute?: {

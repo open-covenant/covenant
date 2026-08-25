@@ -137,7 +137,11 @@ describe('JobProcessor', () => {
       }
       if (url.endsWith('/artifacts')) return Response.json({ ...artifacts, validations: [] });
       if (url.endsWith('/chat/completions')) {
-        expect(JSON.parse(String(init?.body))).toMatchObject({ max_tokens: 256 });
+        expect(init?.redirect).toBe('error');
+        expect(new Headers(init?.headers).get('x-request-id')).toMatch(
+          /^[0-9a-f]{8}-[0-9a-f-]{27}$/,
+        );
+        expect(JSON.parse(String(init?.body))).toMatchObject({ max_tokens: 256, stream: false });
         return reviewResponse(
           { approved: true, reason: 'scoped' },
           'deepseek/deepseek-v4-flash-0731',
@@ -211,6 +215,121 @@ describe('JobProcessor', () => {
     });
   });
 
+  it('aggregates a bounded mislabeled SSE review and persists its billable evidence', async () => {
+    const result = await processReviewSequence('sse-approved', [
+      () => executorSseReviewResponse({ approved: true, reason: 'scoped stream review' }),
+    ]);
+
+    expect(result.reviewCalls).toBe(1);
+    expect(result.job).toMatchObject({
+      state: 'delivered',
+      inputTokens: 148,
+      outputTokens: 49,
+      reviewAttempts: [
+        {
+          status: 'completed',
+          inputTokens: 48,
+          outputTokens: 9,
+          provider: {
+            model: 'deepseek-v4-flash',
+            resolvedModel: 'deepseek-v4-flash-0731',
+            route: 'marketplace',
+            costMicrounits: '600',
+          },
+        },
+      ],
+    });
+  });
+
+  it.each([
+    {
+      name: 'changed model',
+      response: () =>
+        executorRawSseResponse([
+          reviewStreamChunk('{"approved":', null),
+          reviewStreamChunk('true,"reason":"must not pass"}', 'stop', 'deepseek-v4-flash-260425'),
+          reviewStreamUsage(),
+          '[DONE]',
+        ]),
+      error: 'changed model identity',
+    },
+    {
+      name: 'changed request',
+      response: () =>
+        executorRawSseResponse([
+          reviewStreamChunk('{"approved":', null),
+          reviewStreamChunk('true,"reason":"must not pass"}', 'stop', undefined, 'chatcmpl-job-2'),
+          reviewStreamUsage(),
+          '[DONE]',
+        ]),
+      error: 'changed request identity',
+    },
+    {
+      name: 'conflicting usage',
+      response: () =>
+        executorRawSseResponse([
+          reviewStreamChunk('{"approved":true,"reason":"must not pass"}', 'stop'),
+          reviewStreamUsage(),
+          JSON.stringify({
+            model: 'deepseek-v4-flash-0731',
+            choices: [],
+            usage: { prompt_tokens: 49, completion_tokens: 9 },
+          }),
+          '[DONE]',
+        ]),
+      error: 'conflicting usage',
+    },
+    {
+      name: 'invalid usage',
+      response: () => {
+        const response = reviewContentResponse('{"approved":true,"reason":"must not pass"}', {
+          prompt_tokens: '48',
+          completion_tokens: 9,
+        });
+        response.headers.delete('x-pod-route');
+        return response;
+      },
+      error: 'invalid token usage',
+    },
+  ])('does not retry terminal reviewer evidence: $name', async ({ name, response, error }) => {
+    const result = await processReviewSequence(`terminal-${name.replaceAll(' ', '-')}`, [
+      response,
+      () => reviewResponse({ approved: true, reason: 'must not be accepted' }),
+    ]);
+
+    expect(result.reviewCalls).toBe(1);
+    expect(result.job).toMatchObject({
+      state: 'refunded',
+      reviewAttempts: [
+        {
+          status: 'failed',
+          retryable: false,
+          error: expect.stringContaining(error),
+        },
+      ],
+    });
+  });
+
+  it('retries one incomplete SSE response and then accepts a complete response', async () => {
+    const result = await processReviewSequence('incomplete-sse-then-approved', [
+      () =>
+        executorRawSseResponse([
+          reviewStreamChunk('{"approved":true,"reason":"incomplete"}', 'stop'),
+          reviewStreamUsage(),
+        ]),
+      () => reviewResponse({ approved: true, reason: 'complete after retry' }),
+    ]);
+
+    expect(result.reviewCalls).toBe(2);
+    expect(result.job).toMatchObject({
+      state: 'delivered',
+      reviewAttempts: [
+        { status: 'failed', retryable: true, error: expect.stringContaining('ended before') },
+        { status: 'completed', approved: true },
+      ],
+    });
+  });
+
   it('retries a transient reviewer response within the same fixed phase ceiling', async () => {
     const result = await processReviewSequence('transient-then-approved', [
       () => reviewHttpResponse(503, 'provider temporarily unavailable'),
@@ -227,6 +346,71 @@ describe('JobProcessor', () => {
       ],
     });
   });
+
+  it('does not persist a tokenized proxy URL from reviewer transport failures', async () => {
+    const secret = 'sentinel-funded-token';
+    const fail = () => {
+      throw new Error(`connect failed at https://api.usepod.test/proxy/${secret}/v1`);
+    };
+    const result = await processReviewSequence('sanitized-transport', [fail, fail]);
+
+    expect(result.reviewCalls).toBe(2);
+    expect(result.job).toMatchObject({
+      state: 'refunded',
+      reviewAttempts: [
+        { status: 'failed', retryable: true, error: 'UsePod reviewer request failed' },
+        { status: 'failed', retryable: true, error: 'UsePod reviewer request failed' },
+      ],
+    });
+    expect(JSON.stringify(result.job)).not.toContain(secret);
+    expect(JSON.stringify(result.job)).not.toContain('/proxy/');
+  });
+
+  it.each([
+    ['non-marketplace route', 'x-pod-route', 'centralized', 'unacceptable route'],
+    ['unfunded balance', 'x-balance-remaining', '0', 'funded-balance floor'],
+    ['invalid cost', 'x-balance-cost-microunits', '1.5', 'invalid cost receipt'],
+    ['invalid request receipt', 'x-request-id', 'request id', 'invalid x-request-id receipt'],
+  ])(
+    'does not retry a permanent reviewer receipt failure: %s',
+    async (_name, header, value, error) => {
+      const result = await processReviewSequence(`receipt-${header}`, [
+        () => reviewHeaderResponse(header, value),
+        () => reviewResponse({ approved: true, reason: 'must not be accepted' }),
+      ]);
+
+      expect(result.reviewCalls).toBe(1);
+      expect(result.job).toMatchObject({
+        state: 'refunded',
+        reviewAttempts: [
+          {
+            status: 'failed',
+            retryable: false,
+            error: expect.stringContaining(error),
+          },
+        ],
+      });
+    },
+  );
+
+  it.each(['x-pod-route', 'x-balance-remaining'])(
+    'retries a reviewer response missing transient receipt evidence: %s',
+    async (header) => {
+      const result = await processReviewSequence(`missing-${header}`, [
+        () => reviewWithoutHeader(header),
+        () => reviewResponse({ approved: true, reason: 'approved after receipt recovery' }),
+      ]);
+
+      expect(result.reviewCalls).toBe(2);
+      expect(result.job).toMatchObject({
+        state: 'delivered',
+        reviewAttempts: [
+          { status: 'failed', retryable: true },
+          { status: 'completed', approved: true },
+        ],
+      });
+    },
+  );
 
   it('does not retry a permanent HTTP failure without a provider receipt', async () => {
     const result = await processReviewSequence('permanent-http-failure', [
@@ -252,10 +436,15 @@ describe('JobProcessor', () => {
   it('does not retry a provider that exceeds the output token ceiling', async () => {
     const result = await processReviewSequence('review-token-cap', [
       () =>
-        reviewContentResponse('{"approved":true,"reason":"over token cap"}', {
-          prompt_tokens: 50,
-          completion_tokens: 257,
-        }),
+        reviewContentResponse(
+          '{"approved":true,"reason":"over token cap"}',
+          {
+            prompt_tokens: 50,
+            completion_tokens: 257,
+          },
+          'deepseek-v4-flash',
+          503,
+        ),
       () => reviewResponse({ approved: true, reason: 'must not be accepted' }),
     ]);
 
@@ -1031,20 +1220,14 @@ describe('JobProcessor', () => {
 
     expect(await store.job(created.id)).toMatchObject({
       state: 'refunded',
-      estimatedCostUsd: 0.051,
+      estimatedCostUsd: 0.0505,
       reviewAttempts: [
         {
           attemptNumber: 1,
           phase: 'implementation',
           costUsd: 0.0005,
           provider: { route: 'marketplace', costMicrounits: '500' },
-          error: expect.stringMatching(/invalid token usage/),
-        },
-        {
-          attemptNumber: 2,
-          phase: 'implementation',
-          costUsd: 0.0005,
-          provider: { route: 'marketplace', costMicrounits: '500' },
+          retryable: false,
           error: expect.stringMatching(/invalid token usage/),
         },
       ],
@@ -1076,7 +1259,11 @@ describe('JobProcessor', () => {
           {
             model: 'deepseek-v4-flash',
             choices: [
-              { message: { content: JSON.stringify({ approved: false, reason: 'repair' }) } },
+              {
+                index: 0,
+                finish_reason: 'stop',
+                message: { content: JSON.stringify({ approved: false, reason: 'repair' }) },
+              },
             ],
             usage: { prompt_tokens: 50, completion_tokens: 10 },
           },
@@ -1295,7 +1482,13 @@ function reviewResponse(
   return Response.json(
     {
       model,
-      choices: [{ message: { content: JSON.stringify(decision) } }],
+      choices: [
+        {
+          index: 0,
+          finish_reason: 'stop',
+          message: { role: 'assistant', reasoning_content: '', content: JSON.stringify(decision) },
+        },
+      ],
       usage: { prompt_tokens: 50, completion_tokens: 10 },
     },
     {
@@ -1313,14 +1506,16 @@ function reviewContentResponse(
   content: string,
   usage: unknown = { prompt_tokens: 50, completion_tokens: 10 },
   model = 'deepseek-v4-flash',
+  status = 200,
 ): Response {
   return Response.json(
     {
       model,
-      choices: [{ message: { content } }],
+      choices: [{ index: 0, finish_reason: 'stop', message: { content } }],
       usage,
     },
     {
+      status,
       headers: {
         'x-pod-route': 'marketplace',
         'x-balance-remaining': '9000000',
@@ -1343,9 +1538,107 @@ function reviewHttpResponse(status: number, body: string): Response {
   });
 }
 
+function executorSseReviewResponse(decision: { approved: boolean; reason: string }): Response {
+  const model = 'deepseek-v4-flash-0731';
+  const content = JSON.stringify(decision);
+  const midpoint = Math.ceil(content.length / 2);
+  const frames = [
+    {
+      id: 'chatcmpl-job-1',
+      model,
+      choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }],
+      usage: null,
+    },
+    {
+      id: 'chatcmpl-job-1',
+      model,
+      choices: [{ index: 0, delta: { content: content.slice(0, midpoint) }, finish_reason: null }],
+      usage: null,
+    },
+    {
+      id: 'chatcmpl-job-1',
+      model,
+      choices: [{ index: 0, delta: { content: content.slice(midpoint) }, finish_reason: null }],
+      usage: null,
+    },
+    {
+      id: 'chatcmpl-job-1',
+      model,
+      choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+      usage: null,
+    },
+    {
+      model,
+      choices: [],
+      usage: { prompt_tokens: 48, completion_tokens: 9 },
+    },
+    '[DONE]',
+  ];
+  return new Response(
+    frames
+      .map((frame) => `data: ${typeof frame === 'string' ? frame : JSON.stringify(frame)}\n\n`)
+      .join(''),
+    {
+      headers: {
+        'content-type': 'application/json',
+        'x-pod-route': 'marketplace',
+        'x-balance-remaining': '9000000',
+        'x-pod-provider-id': 'provider-20bf',
+        'x-balance-cost-microunits': '600',
+      },
+    },
+  );
+}
+
+function reviewStreamChunk(
+  content: string,
+  finishReason: 'stop' | null,
+  model = 'deepseek-v4-flash-0731',
+  id = 'chatcmpl-job-1',
+) {
+  return JSON.stringify({
+    id,
+    model,
+    choices: [{ index: 0, delta: { content }, finish_reason: finishReason }],
+    usage: null,
+  });
+}
+
+function reviewStreamUsage() {
+  return JSON.stringify({
+    model: 'deepseek-v4-flash-0731',
+    choices: [],
+    usage: { prompt_tokens: 48, completion_tokens: 9 },
+  });
+}
+
+function executorRawSseResponse(frames: string[]): Response {
+  return new Response(frames.map((frame) => `data: ${frame}\n\n`).join(''), {
+    headers: {
+      'content-type': 'application/json',
+      'x-pod-route': 'marketplace',
+      'x-balance-remaining': '9000000',
+      'x-pod-provider-id': 'provider-20bf',
+      'x-balance-cost-microunits': '600',
+    },
+  });
+}
+
 function reviewCostResponse(costMicrounits: string): Response {
   const response = reviewResponse({ approved: true, reason: 'over ceiling' });
   response.headers.set('x-balance-cost-microunits', costMicrounits);
+  return response;
+}
+
+function reviewHeaderResponse(name: string, value: string): Response {
+  const response = reviewResponse({ approved: true, reason: 'untrusted receipt' });
+  response.headers.set(name, value);
+  return response;
+}
+
+function reviewWithoutHeader(name: string): Response {
+  const response = reviewResponse({ approved: true, reason: 'missing receipt' });
+  response.headers.delete(name);
   return response;
 }
 

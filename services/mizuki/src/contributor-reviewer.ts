@@ -1,6 +1,7 @@
-import { z } from 'zod';
+import { ContributorPatchReviewError } from './bounties.js';
 import type {
   ContributorPatchPaidPreflight,
+  ContributorPatchReviewAccounting,
   ContributorPatchReviewAttempt,
   ContributorPatchReviewer,
 } from './bounties.js';
@@ -11,16 +12,17 @@ import type { MizukiStore } from './store.js';
 import {
   boundedMaxTokens,
   matchesUsePodModel,
+  parseUsePodReviewDecision,
+  parseUsePodUsage,
   probeUsePodCatalog,
   publicUsePodReceipt,
+  readUsePodChatCompletion,
   usePodHeaders,
   usePodReceipt,
   usePodUrl,
 } from './usepod.js';
 
-const decisionSchema = z.object({ approved: z.boolean(), reason: z.string().min(1).max(2_000) });
 const MAX_REVIEW_OUTPUT_TOKENS = 512;
-const MAX_REVIEW_RESPONSE_BYTES = 64 * 1024;
 const forbiddenPath =
   /(^|\/)(\.github\/workflows|\.env|secrets?|vendor|generated|dist|build|node_modules)(\/|$)|(^|\/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock)$/i;
 
@@ -111,42 +113,89 @@ export class UsePodContributorReviewer implements ContributorPatchReviewer {
     };
   }
 
-  async review(preflight: ContributorPatchPaidPreflight) {
+  async review(
+    preflight: ContributorPatchPaidPreflight,
+    checkpoint?: (accounting: ContributorPatchReviewAccounting) => Promise<void>,
+  ) {
     const requestConfig = this.requestConfig();
-    const response = await this.request(usePodUrl(requestConfig, 'chat/completions'), {
-      method: 'POST',
-      redirect: 'error',
-      headers: { ...usePodHeaders(requestConfig), 'x-request-id': preflight.attempt.id },
-      body: JSON.stringify(
-        reviewRequest(preflight.providerInput, preflight.providerInput.maxOutputTokens),
-      ),
-      signal: AbortSignal.timeout(60_000),
-    });
-    if (!response.ok) throw new Error(`UsePod bounty review failed: ${response.status}`);
+    let response: Response;
+    try {
+      response = await this.request(usePodUrl(requestConfig, 'chat/completions'), {
+        method: 'POST',
+        redirect: 'error',
+        headers: { ...usePodHeaders(requestConfig), 'x-request-id': preflight.attempt.id },
+        body: JSON.stringify(
+          reviewRequest(preflight.providerInput, preflight.providerInput.maxOutputTokens),
+        ),
+        signal: AbortSignal.timeout(60_000),
+      });
+    } catch {
+      throw new Error('UsePod bounty review request failed');
+    }
+    const completion = await readUsePodChatCompletion(response);
     const receipt = usePodReceipt(
       response,
       preflight.providerInput.model,
       requestConfig.minimumBalance,
+      completion.model,
     );
+    const providerReceipt = publicUsePodReceipt(receipt);
+    let usage: ReturnType<typeof parseUsePodUsage> | undefined;
+    if (completion.usage !== undefined) {
+      try {
+        usage = parseUsePodUsage(completion.usage);
+      } catch {
+        usage = undefined;
+      }
+    }
+    const accounting: ContributorPatchReviewAccounting = {
+      providerReceipt,
+      ...(usage ? { inputTokens: usage.promptTokens, outputTokens: usage.completionTokens } : {}),
+    };
+    if (checkpoint) {
+      try {
+        await checkpoint(accounting);
+      } catch {
+        providerReviewFailure('UsePod bounty review receipt persistence failed', accounting);
+      }
+    }
     if (
       receipt.costMicrounits &&
       BigInt(receipt.costMicrounits) > BigInt(preflight.attempt.maxCostMicrounits)
     ) {
-      throw new Error('UsePod bounty review exceeded its reserved provider cost');
+      providerReviewFailure('UsePod bounty review exceeded its reserved provider cost', accounting);
     }
-    const body = z
-      .object({
-        model: z.string(),
-        choices: z.array(z.object({ message: z.object({ content: z.string() }) })).min(1),
-      })
-      .parse(await readReviewJson(response));
-    if (!matchesUsePodModel(preflight.providerInput.model, body.model)) {
-      throw new Error('UsePod bounty review returned a different model');
+    if (!response.ok) {
+      providerReviewFailure(`UsePod bounty review failed with HTTP ${response.status}`, accounting);
+    }
+    if (completion.model && !matchesUsePodModel(preflight.providerInput.model, completion.model)) {
+      providerReviewFailure('UsePod bounty review returned a different model', accounting);
+    }
+    if (!usage) {
+      providerReviewFailure(
+        completion.ok ? 'UsePod bounty review returned invalid token usage' : completion.error,
+        accounting,
+      );
+    }
+    if (!completion.ok) providerReviewFailure(completion.error, accounting);
+    if (!matchesUsePodModel(preflight.providerInput.model, completion.model)) {
+      providerReviewFailure('UsePod bounty review returned a different model', accounting);
+    }
+    if (usage.completionTokens > preflight.providerInput.maxOutputTokens) {
+      providerReviewFailure('UsePod bounty review exceeded its output token ceiling', accounting);
+    }
+    let decision;
+    try {
+      decision = parseUsePodReviewDecision(completion.content);
+    } catch {
+      providerReviewFailure('UsePod bounty review returned an invalid decision', accounting);
     }
     return {
-      ...decisionSchema.parse(JSON.parse(body.choices[0]!.message.content)),
+      ...decision,
       ...preflight.evidence,
-      providerReceipt: publicUsePodReceipt(receipt),
+      providerReceipt,
+      inputTokens: usage.promptTokens,
+      outputTokens: usage.completionTokens,
     };
   }
 
@@ -185,45 +234,11 @@ export class UsePodContributorReviewer implements ContributorPatchReviewer {
   }
 }
 
-async function readReviewJson(response: Response): Promise<unknown> {
-  const length = response.headers.get('content-length')?.trim();
-  if (length && (!/^\d+$/.test(length) || BigInt(length) > BigInt(MAX_REVIEW_RESPONSE_BYTES))) {
-    throw new Error('UsePod bounty review response exceeded the size limit');
-  }
-  const contentType = response.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase();
-  if (contentType !== 'application/json' || !response.body) {
-    throw new Error('UsePod bounty review returned an invalid JSON response');
-  }
-
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let received = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      received += value.byteLength;
-      if (received > MAX_REVIEW_RESPONSE_BYTES) {
-        await reader.cancel();
-        throw new Error('UsePod bounty review response exceeded the size limit');
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-
-  const bytes = new Uint8Array(received);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  try {
-    return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) as unknown;
-  } catch {
-    throw new Error('UsePod bounty review returned an invalid JSON response');
-  }
+function providerReviewFailure(
+  message: string,
+  accounting: ContributorPatchReviewAccounting,
+): never {
+  throw new ContributorPatchReviewError(message, accounting);
 }
 
 function reviewRequest(
@@ -233,6 +248,7 @@ function reviewRequest(
   return {
     model: input.model,
     temperature: 0,
+    stream: false,
     max_tokens: maxOutputTokens,
     response_format: { type: 'json_object' },
     messages: [

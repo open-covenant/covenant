@@ -127,13 +127,21 @@ describe('independent paid review', () => {
       const headers = new Headers(init?.headers);
       expect(headers.get('x-request-id')).toBe('review-attempt-1');
       expect(headers.get('x-pod-routing-mode')).toBe('marketplace-only');
-      const body = JSON.parse(String(init?.body)) as { max_tokens: number };
+      const body = JSON.parse(String(init?.body)) as { max_tokens: number; stream: boolean };
       expect(body.max_tokens).toBeGreaterThan(0);
       expect(body.max_tokens).toBeLessThanOrEqual(512);
+      expect(body.stream).toBe(false);
       return Response.json(
         {
           model: 'independent-reviewer',
-          choices: [{ message: { content: '{"approved":true,"reason":"scoped fix"}' } }],
+          choices: [
+            {
+              index: 0,
+              finish_reason: 'stop',
+              message: { content: '{"approved":true,"reason":"scoped fix"}' },
+            },
+          ],
+          usage: { prompt_tokens: 20, completion_tokens: 8 },
         },
         {
           headers: {
@@ -158,6 +166,8 @@ describe('independent paid review', () => {
         requestId: 'provider-request-9',
         costMicrounits: '450',
       },
+      inputTokens: 20,
+      outputTokens: 8,
     });
   });
 
@@ -166,7 +176,14 @@ describe('independent paid review', () => {
       Response.json(
         {
           model: 'independent-reviewer',
-          choices: [{ message: { content: '{"approved":true,"reason":"scoped fix"}' } }],
+          choices: [
+            {
+              index: 0,
+              finish_reason: 'stop',
+              message: { content: '{"approved":true,"reason":"scoped fix"}' },
+            },
+          ],
+          usage: { prompt_tokens: 20, completion_tokens: 8 },
         },
         {
           headers: {
@@ -194,7 +211,14 @@ describe('independent paid review', () => {
         Response.json(
           {
             model: 'deepseek/deepseek-v4-flash-0731',
-            choices: [{ message: { content: '{"approved":true,"reason":"scoped fix"}' } }],
+            choices: [
+              {
+                index: 0,
+                finish_reason: 'stop',
+                message: { content: '{"approved":true,"reason":"scoped fix"}' },
+              },
+            ],
+            usage: { prompt_tokens: 20, completion_tokens: 8 },
           },
           {
             headers: {
@@ -214,8 +238,85 @@ describe('independent paid review', () => {
       }),
     ).resolves.toMatchObject({
       approved: true,
-      providerReceipt: { model: 'deepseek-v4-flash', route: 'marketplace' },
+      providerReceipt: {
+        model: 'deepseek-v4-flash',
+        resolvedModel: 'deepseek/deepseek-v4-flash-0731',
+        route: 'marketplace',
+      },
     });
+  });
+
+  it('accepts a bounded mislabeled SSE response and retains canonical model and usage evidence', async () => {
+    const request = vi.fn<typeof fetch>(async (_input, init) => {
+      expect(JSON.parse(String(init?.body))).toMatchObject({ stream: false });
+      return contributorSseResponse();
+    });
+    const reviewer = paidReviewer(request, true, 'deepseek-v4-flash');
+
+    await expect(
+      runPaidReview(reviewer, {
+        id: 'review-attempt-1',
+        maxCostMicrounits: 1_000,
+      }),
+    ).resolves.toMatchObject({
+      approved: true,
+      inputTokens: 24,
+      outputTokens: 9,
+      providerReceipt: {
+        model: 'deepseek-v4-flash',
+        resolvedModel: 'deepseek-v4-flash-0731',
+        route: 'marketplace',
+        costMicrounits: '600',
+      },
+    });
+  });
+
+  it('does not expose malformed upstream content in a review failure', async () => {
+    const secret = 'private-provider-diagnostic';
+    const reviewer = paidReviewer(
+      async () =>
+        new Response(`{${secret}`, {
+          headers: {
+            'content-type': 'application/json',
+            'x-pod-route': 'marketplace',
+            'x-balance-remaining': '9000000',
+            'x-balance-cost-microunits': '600',
+          },
+        }),
+    );
+
+    let failure: unknown;
+    try {
+      await runPaidReview(reviewer, {
+        id: 'review-attempt-1',
+        maxCostMicrounits: 1_000,
+      });
+    } catch (cause) {
+      failure = cause;
+    }
+    expect(failure).toBeInstanceOf(Error);
+    expect(String(failure)).toContain('malformed JSON');
+    expect(String(failure)).not.toContain(secret);
+  });
+
+  it('does not expose a tokenized proxy URL from a transport failure', async () => {
+    const secret = 'sentinel-funded-token';
+    const reviewer = paidReviewer(async (input) => {
+      throw new Error(`connect failed for ${String(input)}/${secret}`);
+    });
+
+    let failure: unknown;
+    try {
+      await runPaidReview(reviewer, {
+        id: 'review-attempt-1',
+        maxCostMicrounits: 1_000,
+      });
+    } catch (cause) {
+      failure = cause;
+    }
+    expect(String(failure)).toBe('Error: UsePod bounty review request failed');
+    expect(String(failure)).not.toContain(secret);
+    expect(String(failure)).not.toContain('/proxy/');
   });
 
   it('rejects a nearby canonical identity for the reviewer alias', async () => {
@@ -224,7 +325,14 @@ describe('independent paid review', () => {
         Response.json(
           {
             model: 'deepseek/deepseek-v4-flash-0730',
-            choices: [{ message: { content: '{"approved":true,"reason":"scoped fix"}' } }],
+            choices: [
+              {
+                index: 0,
+                finish_reason: 'stop',
+                message: { content: '{"approved":true,"reason":"scoped fix"}' },
+              },
+            ],
+            usage: { prompt_tokens: 20, completion_tokens: 8 },
           },
           {
             headers: {
@@ -250,7 +358,14 @@ describe('independent paid review', () => {
       Response.json(
         {
           model: 'independent-reviewer',
-          choices: [{ message: { content: '{"approved":true,"reason":"scoped fix"}' } }],
+          choices: [
+            {
+              index: 0,
+              finish_reason: 'stop',
+              message: { content: '{"approved":true,"reason":"scoped fix"}' },
+            },
+          ],
+          usage: { prompt_tokens: 20, completion_tokens: 8 },
         },
         {
           headers: {
@@ -408,5 +523,54 @@ function paidReviewer(
     store,
     github,
     request,
+  );
+}
+
+function contributorSseResponse(): Response {
+  const model = 'deepseek-v4-flash-0731';
+  const frames = [
+    {
+      id: 'chatcmpl-bounty-1',
+      model,
+      choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }],
+      usage: null,
+    },
+    {
+      id: 'chatcmpl-bounty-1',
+      model,
+      choices: [
+        {
+          index: 0,
+          delta: { content: '{"approved":true,"reason":"scoped fix"}' },
+          finish_reason: null,
+        },
+      ],
+      usage: null,
+    },
+    {
+      id: 'chatcmpl-bounty-1',
+      model,
+      choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+      usage: null,
+    },
+    {
+      model,
+      choices: [],
+      usage: { prompt_tokens: 24, completion_tokens: 9 },
+    },
+    '[DONE]',
+  ];
+  return new Response(
+    frames
+      .map((frame) => `data: ${typeof frame === 'string' ? frame : JSON.stringify(frame)}\n\n`)
+      .join(''),
+    {
+      headers: {
+        'content-type': 'application/json',
+        'x-pod-route': 'marketplace',
+        'x-balance-remaining': '9000000',
+        'x-balance-cost-microunits': '600',
+      },
+    },
   );
 }

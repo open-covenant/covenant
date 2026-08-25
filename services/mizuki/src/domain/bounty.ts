@@ -88,12 +88,22 @@ export type BountyValidationAttempt = {
   id: string;
   requestKey: string;
   pullRequestUrl: string;
-  status: 'reserved' | 'submitted' | 'completed' | 'failed';
+  status: 'reserved' | 'submitted' | 'received' | 'completed' | 'failed';
   maxCostMicrounits: string;
   startedAt: string;
   updatedAt: string;
   failureKind?: 'provider_error' | 'indeterminate_after_recovery';
   error?: string;
+  provider?: {
+    model: string;
+    resolvedModel?: string;
+    route: 'marketplace';
+    providerId?: string;
+    requestId?: string;
+    costMicrounits?: string;
+  };
+  inputTokens?: number;
+  outputTokens?: number;
 };
 
 export type RescueBounty = {
@@ -118,8 +128,11 @@ export type RescueBounty = {
     baseSha: string;
     baseRef: string;
     diffHash: string;
+    inputTokens?: number;
+    outputTokens?: number;
     provider?: {
       model: string;
+      resolvedModel?: string;
       route: 'marketplace';
       providerId?: string;
       requestId?: string;

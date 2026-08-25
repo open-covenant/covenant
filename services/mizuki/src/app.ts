@@ -43,15 +43,21 @@ import {
 } from './store.js';
 import { GithubWebhookHandler, verifyGithubWebhook } from './webhooks.js';
 import type { Job, RepositoryAdmissionReceipt } from './types.js';
-import type { BountyClaim, RescueBounty } from './domain/index.js';
+import {
+  calculateRescueBountyPriceCents,
+  type BountyClaim,
+  type RescueBounty,
+} from './domain/index.js';
 import type { ApiTokenScope } from './types.js';
 import { Payments, USDC_DECIMALS, USDC_MAINNET, paymentRequiredHeader } from './x402.js';
 import {
   assertRefundCapacity,
+  assertRescueCapacity,
   refundLiabilityCommitment,
   repositoryAdmissionBinding,
   PolicyRequestError,
   RefundCapacityError,
+  RescueCapacityError,
   type PaymentPolicy,
   type PolicyReadiness,
 } from './policy-client.js';
@@ -929,7 +935,11 @@ export function createApp(deps: AppDependencies) {
             });
           payment = await deps.paymentAdmission.run(async () => {
             if (deps.config.paymentMode === 'live' && paymentSignature) {
-              await ensureRefundCapacity(deps, BigInt(quote.priceAtomic));
+              await ensurePaymentCapacity(
+                deps,
+                BigInt(quote.priceAtomic),
+                calculateRescueBountyPriceCents(Number(BigInt(quote.priceAtomic) / 10_000n)),
+              );
             }
             await assertOperatorControlOpen(deps.store, 'intake', deps.readiness);
             const result = await settle();
@@ -1216,7 +1226,8 @@ export function createApp(deps: AppDependencies) {
                       ? 409
                       : cause instanceof StateConflictError
                         ? 409
-                        : cause instanceof RefundCapacityError
+                        : cause instanceof RefundCapacityError ||
+                            cause instanceof RescueCapacityError
                           ? 503
                           : cause instanceof OperatorAdmissionError
                             ? 503
@@ -1238,9 +1249,11 @@ export function createApp(deps: AppDependencies) {
             ? message
             : cause instanceof RefundCapacityError
               ? 'refund protection is temporarily unavailable'
-              : cause instanceof OperatorAdmissionError
-                ? message
-                : 'request failed; retry later';
+              : cause instanceof RescueCapacityError
+                ? 'rescue-bounty protection is temporarily unavailable'
+                : cause instanceof OperatorAdmissionError
+                  ? message
+                  : 'request failed; retry later';
       if (status >= 500) {
         console.error(
           JSON.stringify({
@@ -1277,20 +1290,34 @@ function operatorControlTransitionOpens(
   );
 }
 
-export async function ensureRefundCapacity(
+export async function ensurePaymentCapacity(
   deps: Pick<AppDependencies, 'config' | 'store' | 'policy'>,
   proposedPaymentRaw: bigint,
+  requiredRescueBountyUsdCents: number,
 ): Promise<PolicyReadiness> {
+  const unfinishedJobs = (
+    await Promise.all(
+      (await deps.store.jobsList()).map(async (job) => {
+        if (job.state === 'delivered') return null;
+        if (job.state !== 'refunded') return job;
+        return (await rescueCommitmentRepresentedBySigner(deps.store, job)) ? null : job;
+      }),
+    )
+  ).filter((job): job is Job => job !== null);
+  const unfinishedLiabilityRaw = unfinishedJobs
+    .filter((job) => !job.refundLiabilityId)
+    .reduce((total, job) => total + BigInt(job.payment.amountAtomic), 0n);
+  const contingentRescueBountyUsdCents = unfinishedJobs.reduce(
+    (total, job) =>
+      total + calculateRescueBountyPriceCents(Number(BigInt(job.quote.priceAtomic) / 10_000n)),
+    0,
+  );
   let readiness;
   try {
     readiness = await deps.policy.readiness();
   } catch {
     throw new RefundCapacityError('refund signer readiness check failed');
   }
-  const jobs = await deps.store.jobsList();
-  const unfinishedLiabilityRaw = jobs
-    .filter((job) => !['delivered', 'refunded'].includes(job.state) && !job.refundLiabilityId)
-    .reduce((total, job) => total + BigInt(job.payment.amountAtomic), 0n);
   assertRefundCapacity({
     readiness,
     treasury: deps.config.payTo,
@@ -1300,14 +1327,31 @@ export async function ensureRefundCapacity(
     unfinishedLiabilityRaw,
     proposedPaymentRaw,
   });
+  assertRescueCapacity(readiness, contingentRescueBountyUsdCents + requiredRescueBountyUsdCents);
   if (
     readiness.availableEscrowReserveLamports === null ||
     BigInt(readiness.availableEscrowReserveLamports) <
       BigInt(deps.config.escrowReadinessMinLamports)
   ) {
-    throw new RefundCapacityError('escrow capacity cannot fund the configured rescue reserve');
+    throw new RescueCapacityError('escrow capacity cannot fund the configured rescue reserve');
   }
   return readiness;
+}
+
+async function rescueCommitmentRepresentedBySigner(store: MizukiStore, job: Job): Promise<boolean> {
+  const bounty = await store.bountyBySourceJob(job.id);
+  if (!bounty) return false;
+  if (['claimed', 'pr_submitted', 'validating', 'claim_refund_pending'].includes(bounty.state)) {
+    return false;
+  }
+  if (
+    bounty.state === 'refunded' &&
+    bounty.claimHistory.some((claim) => claim.state === 'expired')
+  ) {
+    return false;
+  }
+  const escrow = await store.escrowByBounty(bounty.id);
+  return Boolean(escrow?.reservationId && escrow.fundingSignature);
 }
 
 async function streamActivity(

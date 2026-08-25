@@ -484,6 +484,9 @@ describe('production readiness', () => {
     await expect(policy.readiness()).resolves.toMatchObject({
       healthy: false,
       availableRefundRaw: null,
+      escrowRollingLimitUsdCents: 10_000,
+      rollingEscrowSpendUsdCents: null,
+      remainingEscrowLimitUsdCents: null,
       availableEscrowReserveLamports: null,
     });
   });
@@ -1269,6 +1272,12 @@ describe('contributor escrow policy', () => {
     await expect(
       policy.createEscrow(escrowRequest('bounty-cap'), 'escrow-cap'),
     ).resolves.toMatchObject({ status: 'finalized' });
+    await expect(policy.readiness()).resolves.toMatchObject({
+      remainingRefundLimitUsdCents: 0,
+      escrowRollingLimitUsdCents: 1_000,
+      rollingEscrowSpendUsdCents: 1_000,
+      remainingEscrowLimitUsdCents: 0,
+    });
   });
 
   it('rejects reserve value above either the operation or absolute asset ceiling', async () => {

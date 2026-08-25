@@ -577,6 +577,9 @@ export interface RefundReadinessView {
   treasuryAvailableRefundRaw: string | null;
   remainingRefundLimitUsdCents: number | null;
   availableRefundRaw: string | null;
+  escrowRollingLimitUsdCents: number;
+  rollingEscrowSpendUsdCents: number | null;
+  remainingEscrowLimitUsdCents: number | null;
   escrowAuthority: string;
   finalizedEscrowBalanceLamports: string | null;
   availableEscrowReserveLamports: string | null;

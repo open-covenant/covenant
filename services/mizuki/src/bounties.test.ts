@@ -1341,6 +1341,7 @@ class MockPolicy implements FinancialPolicy {
       treasuryAvailableRefundRaw: '1000000000',
       remainingRefundLimitUsdCents: 100_000,
       availableRefundRaw: '1000000000',
+      remainingEscrowLimitUsdCents: 100_000,
       escrowAuthority: 'escrow-authority',
       finalizedEscrowBalanceLamports: '1000000000',
       availableEscrowReserveLamports: '900000000',

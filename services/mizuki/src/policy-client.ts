@@ -72,6 +72,9 @@ const readinessSchema = z
       .string()
       .regex(/^[0-9]+$/)
       .nullable(),
+    escrowRollingLimitUsdCents: z.number().int().positive().optional(),
+    rollingEscrowSpendUsdCents: z.number().int().nonnegative().nullable().optional(),
+    remainingEscrowLimitUsdCents: z.number().int().nonnegative().nullable().optional(),
     escrowAuthority: z.string().min(1),
     finalizedEscrowBalanceLamports: z
       .string()
@@ -952,7 +955,24 @@ export function assertRefundCapacity(input: {
   }
 }
 
+export function assertRescueCapacity(
+  readiness: PolicyReadiness,
+  requiredBountyUsdCents: number,
+): void {
+  if (!Number.isSafeInteger(requiredBountyUsdCents) || requiredBountyUsdCents < 0) {
+    throw new Error('rescue bounty requirement must be a non-negative integer');
+  }
+  if (
+    readiness.remainingEscrowLimitUsdCents == null ||
+    readiness.remainingEscrowLimitUsdCents < requiredBountyUsdCents
+  ) {
+    throw new RescueCapacityError("rolling escrow capacity cannot fund this job's rescue bounty");
+  }
+}
+
 export class RefundCapacityError extends Error {}
+
+export class RescueCapacityError extends Error {}
 
 export class PendingPolicyOperationError extends Error {
   constructor(

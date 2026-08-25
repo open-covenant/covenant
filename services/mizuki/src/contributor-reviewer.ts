@@ -10,6 +10,7 @@ import { GithubClient, parsePullRequestUrl } from './github.js';
 import type { MizukiStore } from './store.js';
 import {
   boundedMaxTokens,
+  matchesUsePodModel,
   probeUsePodCatalog,
   publicUsePodReceipt,
   usePodHeaders,
@@ -139,7 +140,7 @@ export class UsePodContributorReviewer implements ContributorPatchReviewer {
         choices: z.array(z.object({ message: z.object({ content: z.string() }) })).min(1),
       })
       .parse(await readReviewJson(response));
-    if (body.model !== preflight.providerInput.model) {
+    if (!matchesUsePodModel(preflight.providerInput.model, body.model)) {
       throw new Error('UsePod bounty review returned a different model');
     }
     return {

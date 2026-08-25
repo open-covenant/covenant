@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   boundedMaxTokens,
+  matchesUsePodModel,
   publicUsePodReceipt,
   parseUsePodUsage,
   probeUsePodCatalog,
@@ -116,6 +117,25 @@ describe('UsePod request contract', () => {
     const outputCost = Math.ceil((tokens * 400_000) / 1_000_000);
     expect(tokens).toBeLessThanOrEqual(1_000);
     expect(inputCost + outputCost).toBeLessThanOrEqual(5_000);
+  });
+
+  it('binds the reviewer alias to the exact marketplace canonical identity', () => {
+    expect(matchesUsePodModel('deepseek-v4-flash', 'deepseek-v4-flash')).toBe(true);
+    expect(matchesUsePodModel('deepseek-v4-flash', 'deepseek/deepseek-v4-flash-0731')).toBe(true);
+    for (const returned of [
+      'deepseek/deepseek-v4-flash',
+      'deepseek/deepseek-v4-flash-0730',
+      'deepseek/deepseek-v4-flash-07310',
+      'deepseek-v4-flash-vision-exp',
+      'deepseek-v3.2',
+      'DeepSeek/deepseek-v4-flash-0731',
+      'deepseek/deepseek-v4-flash-0731 ',
+      undefined,
+    ]) {
+      expect(matchesUsePodModel('deepseek-v4-flash', returned)).toBe(false);
+    }
+    expect(matchesUsePodModel('deepseek/deepseek-v4-flash-0731', 'deepseek-v4-flash')).toBe(false);
+    expect(matchesUsePodModel('constructor', 'deepseek/deepseek-v4-flash-0731')).toBe(false);
   });
 
   it.each([401, 403])('fails catalog readiness on HTTP %i', async (status) => {

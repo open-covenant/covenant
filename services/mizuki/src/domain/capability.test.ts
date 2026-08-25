@@ -29,9 +29,17 @@ describe('failure-to-upgrade triggers', () => {
     expect(normalizeFailureCode(' Validation Failed: TypeScript ')).toBe(
       'validation_failed_typescript',
     );
-    expect(() => normalizeFailureCode('---')).toThrowError(
-      expect.objectContaining<Partial<DomainRuleError>>({ code: 'INVALID_FAILURE_CODE' }),
-    );
+    expect(normalizeFailureCode('---')).toMatch(/^failure_[a-f0-9]{16}$/);
+    const structured = JSON.stringify({
+      issues: Array.from({ length: 20 }, (_, index) => ({
+        path: ['choices', 0, 'message', 'content'],
+        message: `review response issue ${index}`,
+      })),
+    });
+    const normalized = normalizeFailureCode(structured);
+    expect(normalized).toHaveLength(80);
+    expect(normalized).toMatch(/^[a-z0-9_]+$/);
+    expect(normalizeFailureCode(structured)).toBe(normalized);
   });
 
   it('publishes the first paid failure and records a repeated failure within seven days', () => {

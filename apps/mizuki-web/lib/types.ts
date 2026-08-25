@@ -56,6 +56,12 @@ export type ReviewAttempt = {
   artifactHash: string;
   reviewedAt: string;
   costUsd: number;
+  attemptNumber?: number;
+  maxAttempts?: number;
+  maxCostUsd?: number;
+  maxOutputTokens?: number;
+  inputTokens?: number;
+  outputTokens?: number;
   provider?: ProviderRouteReceipt;
   approved?: boolean;
   reason: string;

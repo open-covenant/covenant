@@ -56,6 +56,7 @@ export type WebhookDeliveryLease =
 export interface MizukiStore {
   readiness(): Promise<void>;
   withAdmissionLock<T>(operation: () => Promise<T>): Promise<T>;
+  withCapabilityFailureLock<T>(capabilityKey: string, operation: () => Promise<T>): Promise<T>;
   operatorControls(): Promise<OperatorControls>;
   operatorControlsAudit(): Promise<OperatorControlAuditEntry[]>;
   updateOperatorControls(patch: OperatorControlsPatch): Promise<OperatorControls>;
@@ -142,6 +143,7 @@ export class MemoryStore implements MizukiStore {
   private readonly capabilities = new Map<string, Capability>();
   private readonly upgrades = new Map<string, Upgrade>();
   private readonly failures: FailureRecord[] = [];
+  private readonly capabilityFailureLocks = new Map<string, Promise<void>>();
   private controls: OperatorControls = initialOperatorControls();
   private readonly controlsAudit: OperatorControlAuditEntry[] = [
     { ...structuredClone(this.controls), expectedRevision: 0 },
@@ -151,6 +153,13 @@ export class MemoryStore implements MizukiStore {
 
   async withAdmissionLock<T>(operation: () => Promise<T>): Promise<T> {
     return operation();
+  }
+
+  async withCapabilityFailureLock<T>(
+    capabilityKey: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    return withKeyLock(this.capabilityFailureLocks, capabilityKey, operation);
   }
 
   async operatorControls(): Promise<OperatorControls> {
@@ -304,6 +313,8 @@ export class MemoryStore implements MizukiStore {
       updatedAt: now,
       inputTokens: 0,
       outputTokens: 0,
+      reviewInputTokens: 0,
+      reviewOutputTokens: 0,
       estimatedCostUsd: 0,
       version: 0,
     };
@@ -669,6 +680,8 @@ export class MemoryStore implements MizukiStore {
 }
 
 export class PostgresStore implements MizukiStore {
+  private readonly capabilityFailureLocks = new Map<string, Promise<void>>();
+
   private constructor(private readonly pool: Pool) {}
 
   async readiness(): Promise<void> {
@@ -701,6 +714,38 @@ export class PostgresStore implements MizukiStore {
       }
       client.release();
     }
+  }
+
+  async withCapabilityFailureLock<T>(
+    capabilityKey: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    return withKeyLock(this.capabilityFailureLocks, capabilityKey, async () => {
+      const client = await this.pool.connect();
+      let acquired = false;
+      try {
+        await client.query(
+          "SELECT pg_advisory_lock(hashtext('mizuki-capability-failure'), hashtext($1::text))",
+          [capabilityKey],
+        );
+        acquired = true;
+        return await operation();
+      } finally {
+        try {
+          if (acquired) {
+            const result = await client.query<{ unlocked: boolean }>(
+              "SELECT pg_advisory_unlock(hashtext('mizuki-capability-failure'), hashtext($1::text)) AS unlocked",
+              [capabilityKey],
+            );
+            if (!result.rows[0]?.unlocked) throw new Error('capability failure lock was not held');
+          }
+        } catch (cause) {
+          client.release(cause instanceof Error ? cause : new Error(String(cause)));
+          throw cause;
+        }
+        client.release();
+      }
+    });
   }
 
   async operatorControls(): Promise<OperatorControls> {
@@ -986,6 +1031,8 @@ export class PostgresStore implements MizukiStore {
         updatedAt: now,
         inputTokens: 0,
         outputTokens: 0,
+        reviewInputTokens: 0,
+        reviewOutputTokens: 0,
         estimatedCostUsd: 0,
         version: 0,
       };
@@ -1666,6 +1713,27 @@ function updateJob(current: Job, state: JobState, patch: JobPatch): Job {
 
 function clone<T>(value: T | undefined): T | undefined {
   return value === undefined ? undefined : structuredClone(value);
+}
+
+async function withKeyLock<T>(
+  locks: Map<string, Promise<void>>,
+  key: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const previous = locks.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const tail = previous.then(() => current);
+  locks.set(key, tail);
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (locks.get(key) === tail) locks.delete(key);
+  }
 }
 
 type OperatorControlRow = {

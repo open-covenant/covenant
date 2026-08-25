@@ -48,13 +48,21 @@ export function publicJob(job: Job) {
         }
       : undefined,
     reviewAttempts: job.reviewAttempts?.map((attempt) => {
-      const status = publicReviewStatus(attempt);
+      const status = publicReviewStatus(job.state, attempt);
       return {
         phase: attempt.phase,
         status,
         artifactHash: attempt.artifactHash,
         reviewedAt: attempt.reviewedAt,
         costUsd: attempt.costUsd,
+        ...(attempt.attemptNumber === undefined ? {} : { attemptNumber: attempt.attemptNumber }),
+        ...(attempt.maxAttempts === undefined ? {} : { maxAttempts: attempt.maxAttempts }),
+        ...(attempt.maxCostUsd === undefined ? {} : { maxCostUsd: attempt.maxCostUsd }),
+        ...(attempt.maxOutputTokens === undefined
+          ? {}
+          : { maxOutputTokens: attempt.maxOutputTokens }),
+        ...(attempt.inputTokens === undefined ? {} : { inputTokens: attempt.inputTokens }),
+        ...(attempt.outputTokens === undefined ? {} : { outputTokens: attempt.outputTokens }),
         ...(attempt.provider ? { provider: publicProviderReceipt(attempt.provider) } : {}),
         ...(attempt.approved === undefined ? {} : { approved: attempt.approved }),
         reason: publicReviewReason(status, attempt.approved),
@@ -549,12 +557,26 @@ function publicProviderReceipt(receipt: ProviderRouteReceipt): ProviderRouteRece
   };
 }
 
-function publicReviewStatus(attempt: NonNullable<Job['reviewAttempts']>[number]) {
-  if (attempt.status) return attempt.status;
-  if (attempt.error) return 'failed' as const;
-  if (attempt.approved !== undefined) return 'completed' as const;
-  if (attempt.provider) return 'received' as const;
-  return 'pending' as const;
+function publicReviewStatus(
+  jobState: Job['state'],
+  attempt: NonNullable<Job['reviewAttempts']>[number],
+) {
+  const status = attempt.status
+    ? attempt.status
+    : attempt.error
+      ? ('failed' as const)
+      : attempt.approved !== undefined
+        ? ('completed' as const)
+        : attempt.provider
+          ? ('received' as const)
+          : ('pending' as const);
+  if (
+    ['failed', 'rejected', 'refund_pending', 'refunded', 'delivered'].includes(jobState) &&
+    !['completed', 'failed'].includes(status)
+  ) {
+    return 'failed' as const;
+  }
+  return status;
 }
 
 function publicReviewReason(

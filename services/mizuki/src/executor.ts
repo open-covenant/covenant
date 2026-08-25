@@ -41,6 +41,7 @@ type Review = {
 type ReviewPhase = 'implementation' | 'repair';
 export type SpendPhase = 'implementation' | 'implementation-review' | 'repair' | 'repair-review';
 const MAX_REVIEW_OUTPUT_TOKENS = 512;
+const MAX_REVIEW_ATTEMPTS = 2;
 
 const PHASE_WEIGHTS: Record<SpendPhase, number> = {
   implementation: 55,
@@ -271,6 +272,10 @@ export class JobProcessor {
       if (cause instanceof GatewayRunError || cause instanceof ProviderReviewError) {
         variableCostUsd = addUsd(variableCostUsd, cause.costUsd);
       }
+      if (cause instanceof ProviderReviewError) {
+        inputTokens += cause.inputTokens;
+        outputTokens += cause.outputTokens;
+      }
       const error = cause instanceof Error ? cause.message : String(cause);
       const current = await this.required(id);
       if (['delivered', 'refund_pending', 'refunded'].includes(current.state)) return;
@@ -345,6 +350,7 @@ export class JobProcessor {
       if (!['admitted', 'running', 'validating'].includes(snapshot.state)) continue;
       if (Date.parse(snapshot.updatedAt) > staleBefore) continue;
       let job = await this.required(snapshot.id);
+      job = await this.reconcileReviewUsage(job);
       if (job.state === 'validating' && job.artifacts && job.reviewReceipt?.approved) {
         try {
           enforcePolicy(job.quote, job.artifacts);
@@ -382,11 +388,13 @@ export class JobProcessor {
           if (current.state !== 'validating') continue;
           job = await this.store.transitionJob(job.id, 'validating', 'failed', {
             error: `delivery recovery failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+            ...interruptedReviewPatch(job),
           });
         }
       } else {
         job = await this.store.transitionJob(job.id, job.state, 'failed', {
           error: 'maintenance run was interrupted before a durable delivery checkpoint',
+          ...interruptedReviewPatch(job),
         });
       }
       try {
@@ -520,15 +528,6 @@ export class JobProcessor {
   ): Promise<Review> {
     if (!this.config.usePodApiKey)
       throw new Error('USEPOD_API_KEY is required for independent review');
-    const requestConfig = {
-      baseUrl: this.config.usePodBaseUrl,
-      token: this.config.usePodApiKey,
-      model: this.config.usePodModel,
-      maxInputPriceMicrounits: this.config.usePodMaxInputPriceMicrounits,
-      maxOutputPriceMicrounits: this.config.usePodMaxOutputPriceMicrounits,
-      minimumBalance: this.config.usePodMinimumBalance,
-      maxCostMicrounits: Math.floor(budgetUsd * 1_000_000),
-    };
     const draft = {
       model: this.config.usePodModel,
       temperature: 0,
@@ -551,17 +550,90 @@ export class JobProcessor {
         },
       ],
     };
+    const attemptBudgets = splitReviewBudget(budgetUsd, MAX_REVIEW_ATTEMPTS);
+    const outputTokenBudgets = splitIntegerBudget(MAX_REVIEW_OUTPUT_TOKENS, attemptBudgets.length);
+    let spentUsd = 0;
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let lastError: ReviewAttemptError | undefined;
+
+    for (const [index, attemptBudgetUsd] of attemptBudgets.entries()) {
+      try {
+        const review = await this.reviewOnce(
+          jobId,
+          phase,
+          quote,
+          artifacts,
+          draft,
+          attemptBudgetUsd,
+          outputTokenBudgets[index]!,
+          index + 1,
+          attemptBudgets.length,
+        );
+        return {
+          ...review,
+          inputTokens: inputTokens + review.inputTokens,
+          outputTokens: outputTokens + review.outputTokens,
+          costUsd: addUsd(spentUsd, review.costUsd),
+        };
+      } catch (cause) {
+        if (!(cause instanceof ReviewAttemptError)) throw cause;
+        spentUsd = addUsd(spentUsd, cause.costUsd);
+        inputTokens += cause.inputTokens;
+        outputTokens += cause.outputTokens;
+        lastError = cause;
+        if (!cause.retryable || index === attemptBudgets.length - 1) {
+          throw new ProviderReviewError(cause.message, spentUsd, inputTokens, outputTokens);
+        }
+        if ((await this.required(jobId)).state !== 'validating') {
+          throw new ProviderReviewError(cause.message, spentUsd, inputTokens, outputTokens);
+        }
+      }
+    }
+
+    throw new ProviderReviewError(
+      lastError?.message ?? 'UsePod reviewer failed',
+      spentUsd,
+      inputTokens,
+      outputTokens,
+    );
+  }
+
+  private async reviewOnce(
+    jobId: string,
+    phase: ReviewPhase,
+    quote: Quote,
+    artifacts: RunArtifacts,
+    draft: Record<string, unknown>,
+    budgetUsd: number,
+    outputTokenCeiling: number,
+    attemptNumber: number,
+    maxAttempts: number,
+  ): Promise<Review> {
+    const requestConfig = {
+      baseUrl: this.config.usePodBaseUrl,
+      token: this.config.usePodApiKey,
+      model: this.config.usePodModel,
+      maxInputPriceMicrounits: this.config.usePodMaxInputPriceMicrounits,
+      maxOutputPriceMicrounits: this.config.usePodMaxOutputPriceMicrounits,
+      minimumBalance: this.config.usePodMinimumBalance,
+      maxCostMicrounits: usdMicrounits(budgetUsd, 'review attempt budget'),
+    };
     const maxTokens = boundedMaxTokens(
       draft,
       requestConfig.maxCostMicrounits,
       requestConfig.maxInputPriceMicrounits,
       requestConfig.maxOutputPriceMicrounits,
-      MAX_REVIEW_OUTPUT_TOKENS,
+      outputTokenCeiling,
     );
     const attempt: ReviewAttempt = {
       id: randomUUID(),
       phase,
       artifactHash: artifactHash(quote, artifacts),
+      attemptNumber,
+      maxAttempts,
+      maxCostUsd: budgetUsd,
+      maxOutputTokens: maxTokens,
       status: 'pending',
       costUsd: budgetUsd,
       reviewedAt: new Date().toISOString(),
@@ -577,17 +649,69 @@ export class JobProcessor {
       });
     } catch (cause) {
       const message = `UsePod reviewer request failed: ${cause instanceof Error ? cause.message : String(cause)}`;
-      await this.markReviewAttemptFailed(jobId, attempt.id, message);
-      throw new ProviderReviewError(message, budgetUsd);
+      const persisted = await this.markReviewAttemptFailed(jobId, attempt.id, message, true);
+      throw new ReviewAttemptError(message, budgetUsd, persisted);
     }
+
+    let responseText = '';
+    let responseValue: unknown;
+    let responseParseError: string | undefined;
+    try {
+      responseText = await response.text();
+      try {
+        responseValue = JSON.parse(responseText);
+      } catch (cause) {
+        responseParseError = cause instanceof Error ? cause.message : String(cause);
+      }
+    } catch (cause) {
+      responseParseError = `UsePod reviewer body read failed: ${cause instanceof Error ? cause.message : String(cause)}`;
+    }
+
+    let usage: ReturnType<typeof parseUsePodUsage> | undefined;
+    let usageError: string | undefined;
+    if (responseValue && typeof responseValue === 'object' && 'usage' in responseValue) {
+      try {
+        usage = parseUsePodUsage((responseValue as { usage: unknown }).usage);
+      } catch (cause) {
+        usageError = cause instanceof Error ? cause.message : String(cause);
+      }
+    } else {
+      usageError = responseParseError ?? 'UsePod reviewer omitted token usage';
+    }
+    const returnedModel =
+      responseValue &&
+      typeof responseValue === 'object' &&
+      'model' in responseValue &&
+      typeof (responseValue as { model?: unknown }).model === 'string'
+        ? (responseValue as { model: string }).model
+        : undefined;
+    const wrongModel =
+      returnedModel !== undefined && !matchesUsePodModel(this.config.usePodModel, returnedModel);
 
     let receipt;
     try {
       receipt = usePodReceipt(response, this.config.usePodModel, requestConfig.minimumBalance);
     } catch (cause) {
-      const message = cause instanceof Error ? cause.message : String(cause);
-      await this.markReviewAttemptFailed(jobId, attempt.id, message);
-      throw new ProviderReviewError(message, budgetUsd);
+      const message = wrongModel
+        ? 'UsePod reviewer returned a different model'
+        : cause instanceof Error
+          ? cause.message
+          : String(cause);
+      const retryable = !wrongModel && (response.ok || transientReviewStatus(response.status));
+      const persisted = await this.markReviewAttemptFailed(
+        jobId,
+        attempt.id,
+        message,
+        retryable,
+        usage,
+      );
+      throw new ReviewAttemptError(
+        message,
+        budgetUsd,
+        retryable && persisted,
+        usage?.promptTokens,
+        usage?.completionTokens,
+      );
     }
     const provider = publicUsePodReceipt(receipt);
     const costUsd = provider.costMicrounits
@@ -598,55 +722,150 @@ export class JobProcessor {
         status: 'received',
         provider,
         costUsd,
+        ...(usage ? { inputTokens: usage.promptTokens, outputTokens: usage.completionTokens } : {}),
       });
     } catch (cause) {
-      throw new ProviderReviewError(
-        `review receipt persistence failed: ${cause instanceof Error ? cause.message : String(cause)}`,
-        budgetUsd,
+      const message = `review receipt persistence failed: ${cause instanceof Error ? cause.message : String(cause)}`;
+      await this.markReviewAttemptFailed(jobId, attempt.id, message, false, usage, {
+        provider,
+        costUsd,
+      });
+      throw new ReviewAttemptError(
+        message,
+        Math.max(budgetUsd, costUsd),
+        false,
+        usage?.promptTokens,
+        usage?.completionTokens,
       );
     }
+
+    if (costUsd > budgetUsd) {
+      const message = 'UsePod reviewer exceeded its attempt spend cap';
+      await this.markReviewAttemptFailed(jobId, attempt.id, message, false, usage);
+      throw new ReviewAttemptError(
+        message,
+        costUsd,
+        false,
+        usage?.promptTokens,
+        usage?.completionTokens,
+      );
+    }
+    if (!response.ok) {
+      const message = wrongModel
+        ? 'UsePod reviewer returned a different model'
+        : `UsePod reviewer failed: ${response.status} ${responseText || responseParseError || ''}`;
+      const retryable = !wrongModel && transientReviewStatus(response.status);
+      const persisted = await this.markReviewAttemptFailed(
+        jobId,
+        attempt.id,
+        message,
+        retryable,
+        usage,
+      );
+      throw new ReviewAttemptError(
+        message,
+        costUsd,
+        retryable && persisted,
+        usage?.promptTokens,
+        usage?.completionTokens,
+      );
+    }
+    if (wrongModel) {
+      const message = 'UsePod reviewer returned a different model';
+      await this.markReviewAttemptFailed(jobId, attempt.id, message, false, usage);
+      throw new ReviewAttemptError(
+        message,
+        costUsd,
+        false,
+        usage?.promptTokens,
+        usage?.completionTokens,
+      );
+    }
+
+    let body;
     try {
-      if (costUsd > budgetUsd) {
-        throw new Error('UsePod reviewer exceeded its phase spend cap');
-      }
-      if (!response.ok) {
-        throw new Error(`UsePod reviewer failed: ${response.status} ${await response.text()}`);
-      }
-      const body = z
+      if (responseParseError) throw new Error(responseParseError);
+      body = z
         .object({
           model: z.string(),
-          choices: z.array(z.object({ message: z.object({ content: z.string().min(1) }) })).min(1),
+          choices: z.array(z.object({ message: z.object({ content: z.string() }) })).min(1),
           usage: z.unknown(),
         })
-        .parse(await response.json());
-      if (!matchesUsePodModel(this.config.usePodModel, body.model)) {
-        throw new Error('UsePod reviewer returned a different model');
-      }
-      const usage = parseUsePodUsage(body.usage);
-      const decision = z
+        .parse(responseValue);
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      const persisted = await this.markReviewAttemptFailed(jobId, attempt.id, message, true, usage);
+      throw new ReviewAttemptError(
+        message,
+        costUsd,
+        persisted,
+        usage?.promptTokens,
+        usage?.completionTokens,
+      );
+    }
+
+    if (!usage) {
+      const message = usageError ?? 'UsePod reviewer returned invalid token usage';
+      const persisted = await this.markReviewAttemptFailed(jobId, attempt.id, message, true);
+      throw new ReviewAttemptError(message, costUsd, persisted);
+    }
+    if (usage.completionTokens > maxTokens) {
+      const message = 'UsePod reviewer exceeded its output token ceiling';
+      await this.markReviewAttemptFailed(jobId, attempt.id, message, false, usage);
+      throw new ReviewAttemptError(
+        message,
+        costUsd,
+        false,
+        usage.promptTokens,
+        usage.completionTokens,
+      );
+    }
+
+    let decision;
+    try {
+      decision = z
         .object({ approved: z.boolean(), reason: z.string().min(1).max(2_000) })
         .strict()
         .parse(JSON.parse(body.choices[0]!.message.content));
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      const persisted = await this.markReviewAttemptFailed(jobId, attempt.id, message, true, usage);
+      throw new ReviewAttemptError(
+        message,
+        costUsd,
+        persisted,
+        usage.promptTokens,
+        usage.completionTokens,
+      );
+    }
+
+    try {
       await this.updateReviewAttempt(jobId, attempt.id, {
         status: 'completed',
         inputTokens: usage.promptTokens,
         outputTokens: usage.completionTokens,
         approved: decision.approved,
         reason: decision.reason,
+        retryable: false,
       });
-      return {
-        approved: decision.approved,
-        reason: decision.reason,
-        inputTokens: usage.promptTokens,
-        outputTokens: usage.completionTokens,
-        providerReceipt: provider,
-        costUsd,
-      };
     } catch (cause) {
-      const message = cause instanceof Error ? cause.message : String(cause);
-      await this.markReviewAttemptFailed(jobId, attempt.id, message);
-      throw new ProviderReviewError(message, costUsd);
+      const message = `review decision persistence failed: ${cause instanceof Error ? cause.message : String(cause)}`;
+      throw new ReviewAttemptError(
+        message,
+        costUsd,
+        false,
+        usage.promptTokens,
+        usage.completionTokens,
+      );
     }
+    return {
+      approved: decision.approved,
+      reason: decision.reason,
+      inputTokens: usage.promptTokens,
+      outputTokens: usage.completionTokens,
+      providerReceipt: provider,
+      costUsd,
+    };
   }
 
   private async refund(id: string): Promise<void> {
@@ -824,10 +1043,15 @@ export class JobProcessor {
     try {
       await this.onRefunded(job);
     } catch (cause) {
-      await this.store.appendActivity('bounty.creation_failed', job.id, {
-        status: 'creation_failed',
-        error: cause instanceof Error ? cause.message : String(cause),
-      });
+      console.error(
+        `bounty creation failed for job ${job.id}: ${cause instanceof Error ? cause.message : String(cause)}`,
+      );
+      await this.store.appendActivity(
+        'bounty.creation_failed',
+        job.id,
+        { status: 'creation_failed' },
+        stableActivityId('bounty.creation_failed', job.id),
+      );
     }
   }
 
@@ -852,6 +1076,13 @@ export class JobProcessor {
     outputTokens: number,
     variableCostUsd: number,
   ): Promise<void> {
+    const job = await this.required(id);
+    if (
+      inputTokens < (job.reviewInputTokens ?? 0) ||
+      outputTokens < (job.reviewOutputTokens ?? 0)
+    ) {
+      throw new Error('job token totals cannot be lower than durable review usage');
+    }
     await this.store.patchJob(id, {
       inputTokens,
       outputTokens,
@@ -861,13 +1092,15 @@ export class JobProcessor {
 
   private async reserveReviewAttempt(id: string, attempt: ReviewAttempt): Promise<void> {
     const job = await this.required(id);
+    const attempts = [...(job.reviewAttempts ?? []), attempt];
     const estimatedCostUsd = addUsd(job.estimatedCostUsd, attempt.costUsd);
     if (!Number.isFinite(estimatedCostUsd) || estimatedCostUsd > job.quote.maxCostUsd + 1e-9) {
       throw new Error('review reservation exceeds the job spend cap');
     }
-    await this.store.patchJob(id, {
-      reviewAttempts: [...(job.reviewAttempts ?? []), attempt],
+    await this.store.transitionJob(id, 'validating', 'validating', {
+      reviewAttempts: attempts,
       estimatedCostUsd,
+      ...reviewUsagePatch(job, attempts),
     });
   }
 
@@ -882,30 +1115,118 @@ export class JobProcessor {
       throw new Error('review receipt checkpoint is missing');
     }
     const previous = attempts.find((attempt) => attempt.id === attemptId)!;
+    const nextAttempts = attempts.map((attempt) =>
+      attempt.id === attemptId ? { ...attempt, ...patch } : attempt,
+    );
     const nextCostUsd = patch.costUsd ?? previous.costUsd;
     const estimatedCostUsd = roundUsd(job.estimatedCostUsd - previous.costUsd + nextCostUsd);
     if (!Number.isFinite(estimatedCostUsd) || estimatedCostUsd < 0) {
       throw new Error('review cost reconciliation is invalid');
     }
-    await this.store.patchJob(id, {
-      reviewAttempts: attempts.map((attempt) =>
-        attempt.id === attemptId ? { ...attempt, ...patch } : attempt,
-      ),
+    await this.store.transitionJob(id, 'validating', 'validating', {
+      reviewAttempts: nextAttempts,
       estimatedCostUsd,
+      ...reviewUsagePatch(job, nextAttempts),
     });
+  }
+
+  private async reconcileReviewUsage(job: Job): Promise<Job> {
+    if (!job.reviewAttempts?.length) return job;
+    const patch = reviewUsagePatch(job, job.reviewAttempts);
+    if (
+      job.reviewInputTokens === patch.reviewInputTokens &&
+      job.reviewOutputTokens === patch.reviewOutputTokens &&
+      job.inputTokens === patch.inputTokens &&
+      job.outputTokens === patch.outputTokens
+    ) {
+      return job;
+    }
+    return this.store.transitionJob(job.id, job.state, job.state, patch);
   }
 
   private async markReviewAttemptFailed(
     id: string,
     attemptId: string,
     error: string,
-  ): Promise<void> {
+    retryable: boolean,
+    usage?: { promptTokens: number; completionTokens: number },
+    receipt?: { provider: ProviderRouteReceipt; costUsd: number },
+  ): Promise<boolean> {
     try {
-      await this.updateReviewAttempt(id, attemptId, { status: 'failed', error });
+      await this.updateReviewAttempt(id, attemptId, {
+        status: 'failed',
+        error,
+        retryable,
+        ...receipt,
+        ...(usage ? { inputTokens: usage.promptTokens, outputTokens: usage.completionTokens } : {}),
+      });
+      return true;
     } catch {
       // The pending full-cost checkpoint remains the conservative source of truth.
+      return false;
     }
   }
+}
+
+function reviewUsagePatch(job: Job, attempts: ReviewAttempt[]) {
+  const previous = reviewUsage(job.reviewAttempts ?? []);
+  const next = reviewUsage(attempts);
+  const accountedInput = job.reviewInputTokens ?? previous.inputTokens;
+  const accountedOutput = job.reviewOutputTokens ?? previous.outputTokens;
+  const baseInput = job.inputTokens - accountedInput;
+  const baseOutput = job.outputTokens - accountedOutput;
+  if (!Number.isSafeInteger(baseInput) || baseInput < 0) {
+    throw new Error('review input token reconciliation is invalid');
+  }
+  if (!Number.isSafeInteger(baseOutput) || baseOutput < 0) {
+    throw new Error('review output token reconciliation is invalid');
+  }
+  return {
+    inputTokens: safeTokenSum(baseInput, next.inputTokens),
+    outputTokens: safeTokenSum(baseOutput, next.outputTokens),
+    reviewInputTokens: next.inputTokens,
+    reviewOutputTokens: next.outputTokens,
+  };
+}
+
+function reviewUsage(attempts: ReviewAttempt[]) {
+  return attempts.reduce(
+    (total, attempt) => ({
+      inputTokens: safeTokenSum(total.inputTokens, attempt.inputTokens ?? 0),
+      outputTokens: safeTokenSum(total.outputTokens, attempt.outputTokens ?? 0),
+    }),
+    { inputTokens: 0, outputTokens: 0 },
+  );
+}
+
+function safeTokenSum(left: number, right: number): number {
+  return safeTokenCount.parse(left + right);
+}
+
+function interruptedReviewPatch(job: Job) {
+  if (!job.reviewAttempts?.some((attempt) => !settledReviewAttempt(attempt))) {
+    return {};
+  }
+  return {
+    reviewAttempts: job.reviewAttempts.map((attempt) =>
+      settledReviewAttempt(attempt)
+        ? attempt
+        : {
+            ...attempt,
+            status: 'failed' as const,
+            error: 'review interrupted before a durable decision checkpoint',
+            retryable: false,
+          },
+    ),
+  };
+}
+
+function settledReviewAttempt(attempt: ReviewAttempt): boolean {
+  return (
+    ['completed', 'failed'].includes(attempt.status ?? '') ||
+    attempt.approved !== undefined ||
+    attempt.error !== undefined
+  );
 }
 
 class GatewayRunError extends Error {
@@ -923,6 +1244,20 @@ class ProviderReviewError extends Error {
   constructor(
     message: string,
     readonly costUsd: number,
+    readonly inputTokens: number,
+    readonly outputTokens: number,
+  ) {
+    super(message);
+  }
+}
+
+class ReviewAttemptError extends Error {
+  constructor(
+    message: string,
+    readonly costUsd: number,
+    readonly retryable: boolean,
+    readonly inputTokens = 0,
+    readonly outputTokens = 0,
   ) {
     super(message);
   }
@@ -1013,6 +1348,32 @@ export function phaseBudgetUsd(maxCostUsd: number, spentUsd: number, phase: Spen
 
 function addUsd(left: number, right: number): number {
   return roundUsd(roundUsd(left) + roundUsd(right));
+}
+
+function splitReviewBudget(budgetUsd: number, maxAttempts: number): number[] {
+  const total = usdMicrounits(budgetUsd, 'review budget');
+  const attempts = Math.min(total, maxAttempts);
+  const base = Math.floor(total / attempts);
+  const remainder = total % attempts;
+  return Array.from(
+    { length: attempts },
+    (_, index) => (base + (index < remainder ? 1 : 0)) / 1_000_000,
+  );
+}
+
+function splitIntegerBudget(total: number, parts: number): number[] {
+  const base = Math.floor(total / parts);
+  const remainder = total % parts;
+  return Array.from({ length: parts }, (_, index) => base + (index < remainder ? 1 : 0));
+}
+
+function transientReviewStatus(status: number): boolean {
+  return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
+function stableActivityId(kind: string, subjectId: string): string {
+  const hash = createHash('sha256').update(`mizuki-activity-v1:${kind}:${subjectId}`).digest('hex');
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-5${hash.slice(13, 16)}-a${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
 }
 
 function roundUsd(value: number): number {

@@ -357,8 +357,14 @@ describe('public accounting', () => {
           phase: 'implementation',
           status: 'completed',
           artifactHash: 'a'.repeat(64),
+          attemptNumber: 1,
+          maxAttempts: 2,
+          maxCostUsd: 0.06,
+          maxOutputTokens: 256,
           reviewedAt: rejectedAt,
           costUsd: 0.0175,
+          inputTokens: 120,
+          outputTokens: 24,
           provider,
           approved: false,
           reason: 'The patch does not cover the reported edge case.',
@@ -382,8 +388,14 @@ describe('public accounting', () => {
         phase: 'implementation',
         status: 'completed',
         artifactHash: 'a'.repeat(64),
+        attemptNumber: 1,
+        maxAttempts: 2,
+        maxCostUsd: 0.06,
+        maxOutputTokens: 256,
         reviewedAt: rejectedAt,
         costUsd: 0.0175,
+        inputTokens: 120,
+        outputTokens: 24,
         provider: {
           model: 'review-model',
           route: 'marketplace',
@@ -408,6 +420,34 @@ describe('public accounting', () => {
     expect(JSON.stringify(receipt)).not.toContain('private-provider-response');
     expect(JSON.stringify(receipt)).not.toContain('balanceRemaining');
     expect(JSON.stringify(receipt)).not.toContain('reported edge case');
+  });
+
+  it('does not publish unfinished review attempts as active after a job terminates', async () => {
+    const store = new MemoryStore();
+    const { job } = await store.createJob(
+      quote,
+      { payer: 'payer', transaction: 'payment-stale-review', amountAtomic: quote.priceAtomic },
+      'payment-stale-review-key',
+    );
+    const refunded = await store.transitionJob(job.id, 'settlement_pending', 'refunded', {
+      reviewAttempts: [
+        {
+          id: 'review-interrupted',
+          phase: 'implementation',
+          status: 'pending',
+          artifactHash: 'a'.repeat(64),
+          reviewedAt: '2026-08-23T10:00:00.000Z',
+          costUsd: 0.06,
+        },
+      ],
+    });
+
+    expect(publicJob(refunded).reviewAttempts).toMatchObject([
+      {
+        status: 'failed',
+        reason: 'The separate AI review could not be completed.',
+      },
+    ]);
   });
 
   it('publishes bounty review commitments and a whitelisted provider receipt', async () => {

@@ -68,15 +68,35 @@ export class CapabilityService {
 
   async recordFailure(job: Job): Promise<Upgrade | undefined> {
     const capabilityKey = classifyCapability(job.error ?? 'maintenance failure');
-    const failure: FailureRecord = {
+    return this.store.withCapabilityFailureLock(capabilityKey, () =>
+      this.recordFailureLocked(job, capabilityKey),
+    );
+  }
+
+  private async recordFailureLocked(job: Job, capabilityKey: string): Promise<Upgrade | undefined> {
+    const history = await this.store.failuresForCapability(capabilityKey);
+    const recorded = history.find((failure) => failure.id === job.id);
+    const failure: FailureRecord = recorded ?? {
       id: job.id,
       capabilityKey,
       normalizedCode: normalizeFailureCode(job.error ?? 'maintenance_failure'),
       jobClass: job.quote.class,
       occurredAt: this.now().toISOString(),
     };
-    const history = await this.store.failuresForCapability(capabilityKey);
     await this.store.saveFailure(failure);
+    if (recorded) {
+      const capability = await this.store.capabilityByKey(capabilityKey);
+      if (capability) {
+        const handled = (await this.store.upgradesList())
+          .filter(
+            (upgrade) =>
+              upgrade.capabilityId === capability.id &&
+              Date.parse(upgrade.createdAt) >= Date.parse(failure.occurredAt),
+          )
+          .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
+        if (handled) return handled;
+      }
+    }
     const decision = evaluateUpgradeTrigger({ failure, history });
     if (!decision.triggered) return undefined;
 

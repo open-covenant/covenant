@@ -16,6 +16,26 @@ describe('CapabilityService', () => {
     ]);
   });
 
+  it('serializes concurrent failure recording into one capability workflow', async () => {
+    const store = new MemoryStore();
+    const service = new CapabilityService(store, undefined, () => new Date('2026-08-22T12:00:00Z'));
+    const failed = job('standard', 'UsePod route timed out', 'concurrent');
+
+    const upgrades = await Promise.all([
+      service.recordFailure(failed),
+      service.recordFailure(failed),
+      service.recordFailure(failed),
+    ]);
+
+    expect(new Set(upgrades.map((upgrade) => upgrade?.id)).size).toBe(1);
+    expect(await store.failuresForCapability('model.route-reliability')).toHaveLength(1);
+    expect(await store.capabilitiesList()).toHaveLength(1);
+    expect(await store.upgradesList()).toHaveLength(1);
+    expect(
+      (await store.activity()).filter((event) => event.kind === 'capability.proposed'),
+    ).toHaveLength(1);
+  });
+
   it('publishes the first refunded micro failure and reuses its active proposal', async () => {
     const store = new MemoryStore();
     let day = 22;
@@ -30,10 +50,28 @@ describe('CapabilityService', () => {
     expect(repeated?.id).toBe(first?.id);
   });
 
+  it('records a long structured reviewer failure with a bounded stable code', async () => {
+    const store = new MemoryStore();
+    const service = new CapabilityService(store, undefined, () => new Date('2026-08-22T12:00:00Z'));
+    const error = JSON.stringify({
+      issues: Array.from({ length: 20 }, (_, index) => ({
+        code: 'too_small',
+        path: ['choices', 0, 'message', 'content'],
+        message: `review response issue ${index}`,
+      })),
+    });
+
+    await expect(service.recordFailure(job('micro', error))).resolves.toBeDefined();
+    const [failure] = await store.failuresForCapability('patch.quality');
+    expect(failure.normalizedCode).toHaveLength(80);
+    expect(failure.normalizedCode).toMatch(/^[a-z0-9_]+$/);
+  });
+
   it('activates only after the updater reports a completed signed proposal', async () => {
     const store = new MemoryStore();
     const updater = new MutableUpdater();
-    const service = new CapabilityService(store, updater, () => new Date('2026-08-22T12:00:00Z'));
+    let now = '2026-08-22T12:00:00Z';
+    const service = new CapabilityService(store, updater, () => new Date(now));
     const proposal = await service.recordFailure(job('standard', 'route failed'));
     updater.observed = await boundObservedUpgrade(store, proposal!.id, 'completed');
 
@@ -66,6 +104,12 @@ describe('CapabilityService', () => {
     expect(
       (await store.activity()).filter((event) => event.kind === 'capability.activated'),
     ).toHaveLength(1);
+
+    now = '2026-08-23T12:00:00Z';
+    const replay = await service.recordFailure(job('standard', 'route failed'));
+    expect(replay?.id).toBe(proposal?.id);
+    expect(await store.upgradesList()).toHaveLength(1);
+    expect((await store.capabilitiesList())[0].state).toBe('active');
   });
 
   it('does not activate while the promoted candidate is still in its soak window', async () => {

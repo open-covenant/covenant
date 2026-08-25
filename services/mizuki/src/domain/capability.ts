@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   DomainRuleError,
   assertExpectedRevision,
@@ -133,17 +134,18 @@ const upgradeTransitions: TransitionTable<UpgradeState> = {
 };
 
 export function normalizeFailureCode(value: string): string {
-  const code = assertNonEmpty(value, 'failure code')
+  const source = String(value);
+  const code = source
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '');
-  if (!code || code.length > 80) {
-    throw new DomainRuleError(
-      'INVALID_FAILURE_CODE',
-      'Failure code must normalize to 1-80 characters',
-    );
-  }
-  return code;
+  const digest = createHash('sha256')
+    .update(code || source)
+    .digest('hex')
+    .slice(0, 16);
+  if (!code) return `failure_${digest}`;
+  if (code.length <= 80) return code;
+  return `${code.slice(0, 63).replace(/_+$/g, '')}_${digest}`;
 }
 
 export function evaluateUpgradeTrigger(input: {

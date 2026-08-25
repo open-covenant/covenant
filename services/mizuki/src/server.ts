@@ -18,6 +18,8 @@ import { recoverSettlement } from './settlement-recovery.js';
 import { GithubWebhookHandler } from './webhooks.js';
 import { UpdaterStatusClient } from './updater-client.js';
 import { createServiceReadiness } from './service-readiness.js';
+import { runRefundFollowup } from './refund-followup.js';
+import type { Job } from './types.js';
 
 const config = loadConfig();
 assertBootConfig(config);
@@ -36,16 +38,18 @@ const updater =
     : undefined;
 const capabilities = new CapabilityService(store, updater);
 const earnings = new EarningsReconciler(store, new ClawPumpClient(config));
-const processor = new JobProcessor(
-  config,
-  store,
-  github,
-  fetch,
-  async (job) => {
-    await Promise.all([bounties.createAfterRefund(job), capabilities.recordFailure(job)]);
-  },
-  policy,
-);
+const recoverRefundFollowup = async (job: Job) => {
+  await runRefundFollowup(job, {
+    createBounty: (refunded) => bounties.createAfterRefund(refunded),
+    recordFailure: (refunded) => capabilities.recordFailure(refunded),
+    reportCapabilityFailure: (refunded, cause) => {
+      console.error(
+        `capability recording failed for job ${refunded.id}: ${cause instanceof Error ? cause.message : String(cause)}`,
+      );
+    },
+  });
+};
+const processor = new JobProcessor(config, store, github, fetch, recoverRefundFollowup, policy);
 const readiness = createServiceReadiness({
   config,
   store,
@@ -148,9 +152,7 @@ async function refreshMerges(): Promise<void> {
 async function refreshBounties(): Promise<void> {
   await runBountyRecovery({
     jobs: () => store.jobsList(),
-    recoverRefunded: async (job) => {
-      await Promise.all([bounties.createAfterRefund(job), capabilities.recordFailure(job)]);
-    },
+    recoverRefunded: recoverRefundFollowup,
     refreshMerged: refreshMergedBounties,
     expireOffers: () => bounties.expireOffers(),
     expireClaims: () => bounties.expireClaims(),

@@ -534,6 +534,7 @@ export function createApp(deps: AppDependencies) {
           deps.auth,
           admission,
           'repositories:read',
+          { csrf: true, configuredOrigin: deps.config.webOrigin },
         );
         admission.consumeAccount('preflight', req, session.githubId);
         const body = await bodyJson<{ github_issue_url?: unknown }>(req);

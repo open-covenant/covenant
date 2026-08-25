@@ -32,7 +32,6 @@ import {
 import {
   useWorkbenchResource,
   workbenchMutation,
-  workbenchRequest,
   WorkbenchRequestError,
 } from '@/lib/workbench-client';
 import { paymentWalletNetwork, useStandardWallet } from '@/lib/wallet-standard';
@@ -321,7 +320,7 @@ function IssueAndPayment({
     setPreflight(null);
     setQuote(null);
     try {
-      const value = await workbenchRequest<unknown>('/v1/preflights', {
+      const value = await workbenchMutation<unknown>('/v1/preflights', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ github_issue_url: issueUrl.trim() }),
@@ -497,7 +496,7 @@ function IssueAndPayment({
     setState('revalidating_payment');
     setError(null);
     try {
-      const value = await workbenchRequest<unknown>('/v1/preflights', {
+      const value = await workbenchMutation<unknown>('/v1/preflights', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ github_issue_url: issueUrl.trim() }),

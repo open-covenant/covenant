@@ -182,6 +182,113 @@ describe('workbench account API', () => {
     });
   });
 
+  it('protects cookie-authenticated preflights while preserving scoped bearer access', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    await store.linkAccountRepository('42', 'example', 'project');
+    const issue = {
+      number: 7,
+      title: 'Fix docs typo',
+      url: issueUrl,
+      labels: ['mizuki:authorized'],
+      authorized: true,
+      scopeEligible: true,
+      eligibility: true,
+      class: 'micro' as const,
+      priceAtomic: '2000000',
+      maxFiles: 3,
+      validationCommands: ['npm test'],
+    };
+    const preflightIssue = vi.fn(async () => ({
+      owner: 'example',
+      repo: 'project',
+      repository: 'example/project',
+      defaultBranch: 'main',
+      core: { status: 'ready' as const, installationId: 10 },
+      maintainer: { verified: true, permission: 'maintain' as const },
+      issue,
+      blockers: [],
+    }));
+    const assertRepositoryReady = vi.fn(async () => ({
+      verifierAppId: '20',
+      installationId: 30,
+    }));
+    const apiToken = vi.fn(async (value: string, scope: string) => ({
+      kind: 'api_token' as const,
+      tokenId: '11111111-1111-4111-8111-111111111111',
+      githubId: '42',
+      githubLogin: 'maintainer',
+      scopes: [scope],
+    }));
+    const base = await serve(
+      dependencies(store, {
+        auth: {
+          session: vi.fn((value: string | undefined) =>
+            value === 'session'
+              ? { githubId: '42', githubLogin: 'maintainer', exp: Date.now() + 60_000 }
+              : undefined,
+          ),
+          csrfToken: vi.fn((value: string | undefined) =>
+            value === 'session' ? 'c'.repeat(43) : undefined,
+          ),
+          verifyCsrfToken: vi.fn(
+            (value: string | undefined, token: string | undefined) =>
+              value === 'session' && token === 'c'.repeat(43),
+          ),
+          apiToken,
+        },
+        github: { preflightIssue },
+        policy: { assertRepositoryReady },
+      }),
+    );
+    const body = JSON.stringify({ github_issue_url: issueUrl });
+
+    const missingToken = await fetch(`${base}/v1/preflights`, {
+      method: 'POST',
+      headers: {
+        cookie: sessionHeaders.cookie,
+        origin: sessionHeaders.origin,
+        'content-type': 'application/json',
+      },
+      body,
+    });
+    expect(missingToken.status).toBe(403);
+    await expect(missingToken.json()).resolves.toEqual({ error: 'CSRF validation failed' });
+
+    const wrongOrigin = await fetch(`${base}/v1/preflights`, {
+      method: 'POST',
+      headers: {
+        ...sessionHeaders,
+        origin: 'https://attacker.example',
+        'content-type': 'application/json',
+      },
+      body,
+    });
+    expect(wrongOrigin.status).toBe(403);
+    expect(preflightIssue).not.toHaveBeenCalled();
+    expect(assertRepositoryReady).not.toHaveBeenCalled();
+
+    const browser = await fetch(`${base}/v1/preflights`, {
+      method: 'POST',
+      headers: { ...sessionHeaders, 'content-type': 'application/json' },
+      body,
+    });
+    expect(browser.status).toBe(200);
+
+    const bearer = await fetch(`${base}/v1/preflights`, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer mzk_v1_machine-credential',
+        'content-type': 'application/json',
+      },
+      body,
+    });
+    expect(bearer.status).toBe(200);
+    expect(apiToken).toHaveBeenCalledWith('mzk_v1_machine-credential', 'repositories:read');
+    expect(preflightIssue).toHaveBeenCalledTimes(2);
+    expect(assertRepositoryReady).toHaveBeenCalledTimes(2);
+  });
+
   it('returns a redacted forbidden response when an API token lacks a route scope', async () => {
     const store = new MemoryStore();
     const secret = 'mzk_v1_sensitive-machine-token';

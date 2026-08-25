@@ -9,6 +9,8 @@ const GITHUB_TIMEOUT_MS = 20_000;
 const TOKEN_REFRESH_WINDOW_MS = 5 * 60_000;
 const TOKEN_MAX_TTL_MS = 65 * 60_000;
 const TOKEN_CACHE_LIMIT = 256;
+const DELIVERY_DIFF_DOMAIN = 'mizuki.delivery-diff.v1\0';
+const DIFF_INDEX_OBJECTS = /^index ([0-9a-f]{4,64})\.\.([0-9a-f]{4,64})( [0-7]{6})?$/gm;
 const CORE_PERMISSIONS = {
   checks: 'read',
   contents: 'write',
@@ -651,12 +653,13 @@ export class GithubClient {
     const installationId = job.quote.installationId!;
     const pull = parsePullRequestUrl(pullRequestUrl);
     const evidence = await this.stablePullRequestReviewData(pullRequestUrl, installationId);
-    const reviewedDiffHash = createHash('sha256').update(artifacts.patch).digest('hex');
+    const reviewedDiffHash = deliveryDiffHash(artifacts.patch);
+    const publishedDiffHash = deliveryDiffHash(evidence.diff);
     if (
       evidence.headSha !== deliveryCommitSha ||
       evidence.baseSha !== job.quote.baseSha ||
       evidence.baseRef !== job.quote.defaultBranch ||
-      evidence.diffHash !== reviewedDiffHash
+      publishedDiffHash !== reviewedDiffHash
     ) {
       throw new Error('published pull request does not match the reviewed delivery artifact');
     }
@@ -665,7 +668,7 @@ export class GithubClient {
       headSha: evidence.headSha,
       baseSha: evidence.baseSha,
       baseRef: evidence.baseRef,
-      diffHash: evidence.diffHash,
+      diffHash: publishedDiffHash,
       observedAt: new Date().toISOString(),
     });
     return pullRequestUrl;
@@ -1439,6 +1442,19 @@ function assertExactPermissions<T extends Record<string, 'read' | 'write'>>(
 
 function tokenCacheKey(owner: string, repo: string, installationId: number): string {
   return `${installationId}:${owner.toLowerCase()}/${repo.toLowerCase()}`;
+}
+
+export function deliveryDiffHash(diff: string): string {
+  return createHash('sha256')
+    .update(DELIVERY_DIFF_DOMAIN)
+    .update(
+      diff.replace(DIFF_INDEX_OBJECTS, (_line, oldObject, newObject, mode = '') => {
+        const oldKind = /^0+$/.test(oldObject) ? '<zero>' : '<object>';
+        const newKind = /^0+$/.test(newObject) ? '<zero>' : '<object>';
+        return `index ${oldKind}..${newKind}${mode}`;
+      }),
+    )
+    .digest('hex');
 }
 
 class GithubApiError extends Error {

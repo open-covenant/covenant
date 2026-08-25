@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { Config } from './config.js';
-import type { GithubClient } from './github.js';
+import { deliveryDiffHash, type GithubClient } from './github.js';
 import type { FinancialPolicy } from './policy-client.js';
 import { PendingPolicyOperationError } from './policy-client.js';
 import { StateConflictError, type MizukiStore } from './store.js';
@@ -714,7 +714,7 @@ export class JobProcessor {
       reviewedHeadSha: deliveryCommitSha,
       reviewedBaseSha: job.quote.baseSha,
       reviewedBaseRef: job.quote.defaultBranch,
-      reviewedDiffHash: createHash('sha256').update(artifacts.patch).digest('hex'),
+      reviewedDiffHash: deliveryDiffHash(artifacts.patch),
     };
     const liability = await this.policy.bindRefundLiabilityDelivery(job.refundLiabilityId, input);
     if (

@@ -4,8 +4,11 @@ import {
   githubAuthErrorMessage,
   isActiveJob,
   normalizeAccount,
+  normalizeApiTokenCredential,
+  normalizeApiTokens,
   normalizeBounties,
   normalizeBilling,
+  normalizeCsrfToken,
   normalizeIssues,
   normalizeJobPage,
   normalizePreflight,
@@ -71,6 +74,44 @@ describe('Workbench response normalization', () => {
       displayName: undefined,
       walletAddress: 'wallet-address',
     });
+  });
+
+  it('reads public API token metadata without accepting hashes or malformed secrets', () => {
+    const metadata = {
+      id: '11111111-1111-4111-8111-111111111111',
+      name: 'Release MCP',
+      prefix: 'mzk_v1_abcdefghijkl',
+      scopes: ['repositories:read', 'jobs:read'],
+      state: 'active',
+      expiresAt: '2026-11-25T10:00:00.000Z',
+      createdAt: '2026-08-25T10:00:00.000Z',
+      lastUsedAt: '2026-08-25T10:05:00.000Z',
+    };
+    expect(normalizeApiTokens({ tokens: [metadata] })).toEqual([metadata]);
+
+    const secret = `mzk_v1_${'a'.repeat(12)}_${'b'.repeat(43)}`;
+    expect(normalizeApiTokenCredential({ token: metadata, secret })).toEqual({
+      token: metadata,
+      secret,
+    });
+    expect(() => normalizeApiTokenCredential({ token: metadata, secret: 'redacted' })).toThrow(
+      'one-time secret',
+    );
+    expect(() => normalizeApiTokens({ tokens: [{ ...metadata, scopes: ['admin'] }] })).toThrow(
+      'incomplete',
+    );
+    expect(() =>
+      normalizeApiTokens({ tokens: [{ ...metadata, scopes: ['jobs:read', 'jobs:read'] }] }),
+    ).toThrow('incomplete');
+    expect(() =>
+      normalizeApiTokens({ tokens: [{ ...metadata, prefix: 'mzk_v1_invalid' }] }),
+    ).toThrow('incomplete');
+  });
+
+  it('accepts only fixed-length CSRF tokens', () => {
+    const token = 'c'.repeat(43);
+    expect(normalizeCsrfToken({ csrfToken: token })).toBe(token);
+    expect(() => normalizeCsrfToken({ csrfToken: 'invalid' })).toThrow('invalid');
   });
 
   it('reads nested repository installation state without requiring list-level commands', () => {

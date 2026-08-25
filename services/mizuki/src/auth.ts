@@ -1,10 +1,11 @@
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { address, getPublicKeyFromAddress } from '@solana/kit';
 import { z } from 'zod';
+import { apiTokenCandidate, apiTokenHashMatches, apiTokenState } from './api-tokens.js';
 import type { Config } from './config.js';
 import type { GithubIdentityRegistrar } from './policy-client.js';
 import { StateConflictError, type MizukiStore } from './store.js';
-import type { Contributor, WalletChallenge } from './types.js';
+import type { ApiTokenScope, Contributor, WalletChallenge } from './types.js';
 
 const githubUserSchema = z.object({ id: z.number().int().positive(), login: z.string().min(1) });
 const tokenSchema = z.object({
@@ -44,6 +45,24 @@ export class GithubOAuthCallbackError extends Error {
 }
 
 export type ContributorSession = z.infer<typeof tokenSchema>;
+
+export type ApiTokenPrincipal = {
+  kind: 'api_token';
+  tokenId: string;
+  githubId: string;
+  githubLogin: string;
+  scopes: ApiTokenScope[];
+};
+
+export class ApiTokenAuthError extends Error {
+  constructor(readonly code: 'invalid' | 'insufficient_scope') {
+    super(
+      code === 'insufficient_scope'
+        ? 'API token does not grant the required scope'
+        : 'API token is invalid, expired, or revoked',
+    );
+  }
+}
 
 export class ContributorAuth {
   constructor(
@@ -192,6 +211,51 @@ export class ContributorAuth {
     } catch {
       return undefined;
     }
+  }
+
+  csrfToken(sessionValue: string | undefined): string | undefined {
+    if (!sessionValue || !this.config.sessionSecret || !this.session(sessionValue))
+      return undefined;
+    return createHmac('sha256', this.config.sessionSecret)
+      .update('mizuki.workbench-csrf.v1\0')
+      .update(sessionValue)
+      .digest('base64url');
+  }
+
+  verifyCsrfToken(sessionValue: string | undefined, token: string | undefined): boolean {
+    const expected = this.csrfToken(sessionValue);
+    return Boolean(
+      expected && token && /^[A-Za-z0-9_-]{43}$/.test(token) && equal(expected, token),
+    );
+  }
+
+  async apiToken(value: string, requiredScope: ApiTokenScope): Promise<ApiTokenPrincipal> {
+    const candidate = apiTokenCandidate(value);
+    const record = candidate ? await this.store.apiTokenByPrefix(candidate.prefix) : undefined;
+    const matches = apiTokenHashMatches(
+      record?.tokenHash ?? '0'.repeat(64),
+      candidate?.tokenHash ?? 'f'.repeat(64),
+    );
+    if (!candidate || !record || !matches || apiTokenState(record) !== 'active') {
+      throw new ApiTokenAuthError('invalid');
+    }
+    if (!record.scopes.includes(requiredScope)) {
+      throw new ApiTokenAuthError('insufficient_scope');
+    }
+
+    const usedAt = new Date().toISOString();
+    if (!(await this.store.markApiTokenUsed(record.id, usedAt))) {
+      throw new ApiTokenAuthError('invalid');
+    }
+    const contributor = await this.store.contributor(record.githubId);
+    if (!contributor) throw new ApiTokenAuthError('invalid');
+    return {
+      kind: 'api_token',
+      tokenId: record.id,
+      githubId: contributor.githubId,
+      githubLogin: contributor.githubLogin,
+      scopes: [...record.scopes],
+    };
   }
 
   async createWalletChallenge(

@@ -34,23 +34,31 @@ export function WorkbenchStatus({ value }: { value: string }) {
     value === 'delivered' ||
     value === 'refunded' ||
     value === 'released' ||
-    value === 'finalized'
+    value === 'finalized' ||
+    value === 'active'
       ? 'positive'
       : value === 'action_required' ||
           value === 'unavailable' ||
           value === 'refund_pending' ||
           value === 'pending'
         ? 'warning'
-        : value === 'unsupported' || value === 'rejected' || value === 'failed'
+        : value === 'unsupported' ||
+            value === 'rejected' ||
+            value === 'failed' ||
+            value === 'expired' ||
+            value === 'revoked'
           ? 'negative'
           : 'neutral';
   const labels: Record<string, string> = {
     action_required: 'Action required',
+    active: 'Active',
     checking: 'Checking',
     failed: 'Failed',
     finalized: 'Finalized',
     pending: 'Pending',
     ready: 'Ready',
+    revoked: 'Revoked',
+    expired: 'Expired',
     unavailable: 'Temporarily unavailable',
     unsupported: 'Unsupported',
   };

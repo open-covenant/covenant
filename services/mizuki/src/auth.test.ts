@@ -1,10 +1,96 @@
-import { generateKeyPairSync, sign } from 'node:crypto';
+import { createHmac, generateKeyPairSync, sign } from 'node:crypto';
 import { getBase58Decoder } from '@solana/kit';
 import { describe, expect, it, vi } from 'vitest';
-import { ContributorAuth, GithubOAuthCallbackError } from './auth.js';
+import { createApiToken } from './api-tokens.js';
+import { ApiTokenAuthError, ContributorAuth, GithubOAuthCallbackError } from './auth.js';
 import { MemoryStore } from './store.js';
 
 describe('ContributorAuth', () => {
+  it('binds CSRF tokens to a valid browser session', () => {
+    const secret = 's'.repeat(32);
+    const auth = new ContributorAuth(
+      {
+        publicBaseUrl: 'https://api.mizuki.example',
+        webOrigin: 'https://mizuki.example',
+        githubClientId: 'client',
+        githubClientSecret: 'secret',
+        sessionSecret: secret,
+      },
+      new MemoryStore(),
+    );
+    const session = signedSession(
+      { githubId: '42', githubLogin: 'maintainer', exp: Date.now() + 60_000 },
+      secret,
+    );
+    const otherSession = signedSession(
+      { githubId: '7', githubLogin: 'contributor', exp: Date.now() + 60_000 },
+      secret,
+    );
+    const token = auth.csrfToken(session);
+
+    expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(auth.verifyCsrfToken(session, token)).toBe(true);
+    expect(auth.verifyCsrfToken(otherSession, token)).toBe(false);
+    expect(auth.verifyCsrfToken(session, 'invalid')).toBe(false);
+    expect(auth.csrfToken('invalid-session')).toBeUndefined();
+  });
+
+  it('authenticates scoped API tokens, records use, and fails closed after revocation', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    const auth = new ContributorAuth(
+      {
+        publicBaseUrl: 'https://api.mizuki.example',
+        webOrigin: 'https://mizuki.example',
+        githubClientId: 'client',
+        githubClientSecret: 'secret',
+        sessionSecret: 's'.repeat(32),
+      },
+      store,
+    );
+    const credential = createApiToken({
+      githubId: '42',
+      name: 'MCP',
+      scopes: ['repositories:read'],
+      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60_000).toISOString(),
+    });
+    await store.createApiToken(credential.record);
+
+    await expect(auth.apiToken(credential.token, 'repositories:read')).resolves.toMatchObject({
+      kind: 'api_token',
+      tokenId: credential.record.id,
+      githubId: '42',
+      githubLogin: 'maintainer',
+      scopes: ['repositories:read'],
+    });
+    expect((await store.apiTokenByPrefix(credential.record.prefix))?.lastUsedAt).toBeTruthy();
+    await expect(
+      auth.apiToken(credential.token, 'jobs:write'),
+    ).rejects.toMatchObject<ApiTokenAuthError>({ code: 'insufficient_scope' });
+
+    const wrongToken = `${credential.token.slice(0, -1)}${credential.token.endsWith('a') ? 'b' : 'a'}`;
+    await expect(
+      auth.apiToken(wrongToken, 'repositories:read'),
+    ).rejects.toMatchObject<ApiTokenAuthError>({ code: 'invalid' });
+    await store.revokeApiToken(credential.record.id, '42', new Date().toISOString());
+    await expect(
+      auth.apiToken(credential.token, 'repositories:read'),
+    ).rejects.toMatchObject<ApiTokenAuthError>({ code: 'invalid' });
+
+    const expired = createApiToken({
+      githubId: '42',
+      name: 'Expired MCP',
+      scopes: ['repositories:read'],
+      expiresAt: new Date(Date.now() + 24 * 60 * 60_000).toISOString(),
+    });
+    expired.record.createdAt = '2026-01-01T00:00:00.000Z';
+    expired.record.expiresAt = '2026-01-02T00:00:00.000Z';
+    await store.createApiToken(expired.record);
+    await expect(
+      auth.apiToken(expired.token, 'repositories:read'),
+    ).rejects.toMatchObject<ApiTokenAuthError>({ code: 'invalid' });
+  });
+
   it('routes the OAuth callback through the web origin so the session cookie is first-party', async () => {
     const auth = new ContributorAuth(
       {
@@ -258,4 +344,10 @@ function signedPayload(value: string): Record<string, unknown> {
   const [payload] = value.split('.');
   if (!payload) throw new Error('state payload is missing');
   return JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as Record<string, unknown>;
+}
+
+function signedSession(payload: Record<string, unknown>, secret: string): string {
+  const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const signature = createHmac('sha256', secret).update(encoded).digest('base64url');
+  return `${encoded}.${signature}`;
 }

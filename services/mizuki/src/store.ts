@@ -1,6 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { Pool, type PoolClient } from 'pg';
+import {
+  API_TOKEN_MAX_ACTIVE,
+  ApiTokenCapacityError,
+  apiTokenState,
+  normalizedScopes,
+} from './api-tokens.js';
 import type {
   Capability,
   ContributorEscrow,
@@ -11,6 +17,7 @@ import type {
 import type {
   ActivityEvent,
   ActivityKind,
+  AccountApiToken,
   AccountRepository,
   Contributor,
   GithubOAuthFlow,
@@ -95,6 +102,11 @@ export interface MizukiStore {
   activity(limit?: number): Promise<ActivityEvent[]>;
   upsertContributor(githubId: string, githubLogin: string): Promise<Contributor>;
   contributor(githubId: string): Promise<Contributor | undefined>;
+  createApiToken(token: AccountApiToken): Promise<AccountApiToken>;
+  apiTokensForAccount(githubId: string): Promise<AccountApiToken[]>;
+  apiTokenByPrefix(prefix: string): Promise<AccountApiToken | undefined>;
+  markApiTokenUsed(id: string, at: string): Promise<boolean>;
+  revokeApiToken(id: string, githubId: string, at: string): Promise<AccountApiToken | undefined>;
   saveGithubOAuthFlow(flow: GithubOAuthFlow): Promise<GithubOAuthFlow>;
   consumeGithubOAuthFlow(id: string, binding: string): Promise<GithubOAuthFlow>;
   saveWalletChallenge(challenge: WalletChallenge): Promise<WalletChallenge>;
@@ -130,6 +142,7 @@ export class MemoryStore implements MizukiStore {
   private readonly ledger: LedgerEntry[] = [];
   private readonly events: ActivityEvent[] = [];
   private readonly contributors = new Map<string, Contributor>();
+  private readonly apiTokens = new Map<string, AccountApiToken>();
   private readonly quoteAccounts = new Map<string, string>();
   private readonly accountRepositories = new Map<string, AccountRepository>();
   private readonly githubOAuthFlows = new Map<string, GithubOAuthFlow>();
@@ -436,6 +449,69 @@ export class MemoryStore implements MizukiStore {
 
   async contributor(githubId: string): Promise<Contributor | undefined> {
     return clone(this.contributors.get(githubId));
+  }
+
+  async createApiToken(token: AccountApiToken): Promise<AccountApiToken> {
+    if (!this.contributors.has(token.githubId)) throw new Error('account not found');
+    const active = [...this.apiTokens.values()].filter(
+      (candidate) =>
+        candidate.githubId === token.githubId &&
+        !candidate.revokedAt &&
+        Date.parse(candidate.expiresAt) > Date.parse(token.createdAt),
+    );
+    if (active.length >= API_TOKEN_MAX_ACTIVE) throw new ApiTokenCapacityError();
+    if (
+      this.apiTokens.has(token.id) ||
+      [...this.apiTokens.values()].some(
+        (candidate) => candidate.prefix === token.prefix || candidate.tokenHash === token.tokenHash,
+      )
+    ) {
+      throw new StateConflictError('API token identifier already exists');
+    }
+    this.apiTokens.set(token.id, structuredClone(token));
+    return structuredClone(token);
+  }
+
+  async apiTokensForAccount(githubId: string): Promise<AccountApiToken[]> {
+    const now = new Date();
+    return [...this.apiTokens.values()]
+      .filter((token) => token.githubId === githubId)
+      .sort((left, right) => {
+        const activeOrder =
+          Number(apiTokenState(right, now) === 'active') -
+          Number(apiTokenState(left, now) === 'active');
+        return activeOrder || right.createdAt.localeCompare(left.createdAt);
+      })
+      .slice(0, 100)
+      .map((token) => structuredClone(token));
+  }
+
+  async apiTokenByPrefix(prefix: string): Promise<AccountApiToken | undefined> {
+    return clone([...this.apiTokens.values()].find((token) => token.prefix === prefix));
+  }
+
+  async markApiTokenUsed(id: string, at: string): Promise<boolean> {
+    const current = this.apiTokens.get(id);
+    if (!current || current.revokedAt || Date.parse(current.expiresAt) <= Date.parse(at)) {
+      return false;
+    }
+    const lastUsedAt =
+      current.lastUsedAt && current.lastUsedAt.localeCompare(at) > 0 ? current.lastUsedAt : at;
+    this.apiTokens.set(id, { ...current, lastUsedAt });
+    return true;
+  }
+
+  async revokeApiToken(
+    id: string,
+    githubId: string,
+    at: string,
+  ): Promise<AccountApiToken | undefined> {
+    const current = this.apiTokens.get(id);
+    if (!current || current.githubId !== githubId) return undefined;
+    if (current.revokedAt) return structuredClone(current);
+    const revoked = { ...current, revokedAt: at };
+    this.apiTokens.set(id, revoked);
+    return structuredClone(revoked);
   }
 
   async saveGithubOAuthFlow(flow: GithubOAuthFlow): Promise<GithubOAuthFlow> {
@@ -1258,6 +1334,94 @@ export class PostgresStore implements MizukiStore {
     return result.rows[0]?.payload;
   }
 
+  async createApiToken(token: AccountApiToken): Promise<AccountApiToken> {
+    return this.transaction(async (client) => {
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+        `mizuki-api-tokens:${token.githubId}`,
+      ]);
+      const capacity = await client.query<{ count: number }>(
+        `SELECT count(*)::integer AS count
+         FROM mizuki_account_api_tokens
+         WHERE github_id = $1 AND revoked_at IS NULL AND expires_at > $2`,
+        [token.githubId, token.createdAt],
+      );
+      if ((capacity.rows[0]?.count ?? 0) >= API_TOKEN_MAX_ACTIVE) {
+        throw new ApiTokenCapacityError();
+      }
+      const result = await client.query<ApiTokenRow>(
+        `INSERT INTO mizuki_account_api_tokens (
+           id, github_id, name, prefix, token_hash, scopes, expires_at, created_at
+         ) VALUES ($1, $2, $3, $4, $5, $6::text[], $7, $8)
+         RETURNING id, github_id, name, prefix, token_hash, scopes, expires_at, created_at,
+                   last_used_at, revoked_at`,
+        [
+          token.id,
+          token.githubId,
+          token.name,
+          token.prefix,
+          token.tokenHash,
+          token.scopes,
+          token.expiresAt,
+          token.createdAt,
+        ],
+      );
+      return apiTokenFromRow(result.rows[0]!);
+    });
+  }
+
+  async apiTokensForAccount(githubId: string): Promise<AccountApiToken[]> {
+    const result = await this.pool.query<ApiTokenRow>(
+      `SELECT id, github_id, name, prefix, token_hash, scopes, expires_at, created_at,
+              last_used_at, revoked_at
+       FROM mizuki_account_api_tokens
+       WHERE github_id = $1
+       ORDER BY (revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP) DESC,
+                created_at DESC, id DESC
+       LIMIT 100`,
+      [githubId],
+    );
+    return result.rows.map(apiTokenFromRow);
+  }
+
+  async apiTokenByPrefix(prefix: string): Promise<AccountApiToken | undefined> {
+    const result = await this.pool.query<ApiTokenRow>(
+      `SELECT id, github_id, name, prefix, token_hash, scopes, expires_at, created_at,
+              last_used_at, revoked_at
+       FROM mizuki_account_api_tokens WHERE prefix = $1`,
+      [prefix],
+    );
+    return result.rows[0] ? apiTokenFromRow(result.rows[0]) : undefined;
+  }
+
+  async markApiTokenUsed(id: string, at: string): Promise<boolean> {
+    const result = await this.pool.query(
+      `UPDATE mizuki_account_api_tokens
+       SET last_used_at = CASE
+         WHEN last_used_at IS NULL OR last_used_at < $2 THEN $2
+         ELSE last_used_at
+       END
+       WHERE id = $1 AND revoked_at IS NULL AND expires_at > $2`,
+      [id, at],
+    );
+    return result.rowCount === 1;
+  }
+
+  async revokeApiToken(
+    id: string,
+    githubId: string,
+    at: string,
+  ): Promise<AccountApiToken | undefined> {
+    const result = await this.pool.query<ApiTokenRow>(
+      `UPDATE mizuki_account_api_tokens
+       SET revoked_at = COALESCE(revoked_at, $3)
+       WHERE id = $1 AND github_id = $2
+       RETURNING id, github_id, name, prefix, token_hash, scopes, expires_at, created_at,
+                 last_used_at, revoked_at`,
+      [id, githubId, at],
+    );
+    return result.rows[0] ? apiTokenFromRow(result.rows[0]) : undefined;
+  }
+
   async saveGithubOAuthFlow(flow: GithubOAuthFlow): Promise<GithubOAuthFlow> {
     await this.transaction(async (client) => {
       await client.query(
@@ -1749,6 +1913,19 @@ type OperatorControlAuditRow = OperatorControlRow & {
   expected_revision: number;
 };
 
+type ApiTokenRow = {
+  id: string;
+  github_id: string;
+  name: string;
+  prefix: string;
+  token_hash: string;
+  scopes: string[];
+  expires_at: Date | string;
+  created_at: Date | string;
+  last_used_at: Date | string | null;
+  revoked_at: Date | string | null;
+};
+
 function initialOperatorControls(): OperatorControls {
   return {
     intakeEnabled: false,
@@ -1865,6 +2042,21 @@ function accountRepositoryFromRow(row: {
     repo: row.repo_name,
     repository: row.repository,
     verifiedAt: new Date(row.verified_at).toISOString(),
+  };
+}
+
+function apiTokenFromRow(row: ApiTokenRow): AccountApiToken {
+  return {
+    id: row.id,
+    githubId: row.github_id,
+    name: row.name,
+    prefix: row.prefix,
+    tokenHash: row.token_hash,
+    scopes: normalizedScopes(row.scopes),
+    expiresAt: new Date(row.expires_at).toISOString(),
+    createdAt: new Date(row.created_at).toISOString(),
+    ...(row.last_used_at ? { lastUsedAt: new Date(row.last_used_at).toISOString() } : {}),
+    ...(row.revoked_at ? { revokedAt: new Date(row.revoked_at).toISOString() } : {}),
   };
 }
 
@@ -2078,6 +2270,36 @@ CREATE INDEX mizuki_account_repositories_verified_idx
   ON mizuki_account_repositories(github_id, verified_at DESC);
 `;
 
+export const WORKBENCH_API_TOKENS_SCHEMA_V2 = `
+CREATE TABLE mizuki_account_api_tokens (
+  id uuid PRIMARY KEY,
+  github_id text NOT NULL REFERENCES mizuki_contributors(github_id),
+  name text NOT NULL CHECK (char_length(name) BETWEEN 1 AND 80),
+  prefix text NOT NULL UNIQUE CHECK (prefix ~ '^mzk_v1_[A-Za-z0-9_-]{12}$'),
+  token_hash text NOT NULL UNIQUE CHECK (token_hash ~ '^[a-f0-9]{64}$'),
+  scopes text[] NOT NULL CHECK (
+    cardinality(scopes) BETWEEN 1 AND 3 AND
+    scopes <@ ARRAY['repositories:read', 'jobs:read', 'jobs:write']::text[] AND
+    cardinality(scopes) =
+      CASE WHEN scopes @> ARRAY['repositories:read']::text[] THEN 1 ELSE 0 END +
+      CASE WHEN scopes @> ARRAY['jobs:read']::text[] THEN 1 ELSE 0 END +
+      CASE WHEN scopes @> ARRAY['jobs:write']::text[] THEN 1 ELSE 0 END
+  ),
+  expires_at timestamptz NOT NULL,
+  created_at timestamptz NOT NULL,
+  last_used_at timestamptz,
+  revoked_at timestamptz,
+  CHECK (expires_at > created_at),
+  CHECK (last_used_at IS NULL OR last_used_at >= created_at),
+  CHECK (revoked_at IS NULL OR revoked_at >= created_at)
+);
+CREATE INDEX mizuki_account_api_tokens_account_idx
+  ON mizuki_account_api_tokens(github_id, created_at DESC);
+CREATE INDEX mizuki_account_api_tokens_active_idx
+  ON mizuki_account_api_tokens(github_id, expires_at)
+  WHERE revoked_at IS NULL;
+`;
+
 export const GITHUB_OAUTH_FLOW_SCHEMA_V1 = `
 CREATE TABLE mizuki_github_oauth_flows (
   id uuid PRIMARY KEY,
@@ -2143,7 +2365,10 @@ async function migrate(pool: Pool): Promise<void> {
       },
       {
         name: 'workbench',
-        migrations: [{ version: 1, name: 'workbench-accounts', sql: WORKBENCH_ACCOUNTS_SCHEMA_V1 }],
+        migrations: [
+          { version: 1, name: 'workbench-accounts', sql: WORKBENCH_ACCOUNTS_SCHEMA_V1 },
+          { version: 2, name: 'scoped-api-tokens', sql: WORKBENCH_API_TOKENS_SCHEMA_V2 },
+        ],
       },
       {
         name: 'github-oauth',

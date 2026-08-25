@@ -232,6 +232,23 @@ export type AccountRepository = {
   verifiedAt: string;
 };
 
+export const API_TOKEN_SCOPES = ['repositories:read', 'jobs:read', 'jobs:write'] as const;
+
+export type ApiTokenScope = (typeof API_TOKEN_SCOPES)[number];
+
+export type AccountApiToken = {
+  id: string;
+  githubId: string;
+  name: string;
+  prefix: string;
+  tokenHash: string;
+  scopes: ApiTokenScope[];
+  expiresAt: string;
+  createdAt: string;
+  lastUsedAt?: string;
+  revokedAt?: string;
+};
+
 export type WalletChallenge = {
   id: string;
   githubId: string;

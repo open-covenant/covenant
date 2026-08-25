@@ -29,7 +29,7 @@ GitHub issue -> scoped quote -> x402 USDC settlement -> isolated checkout
                                                               -> externally signed upgrade evidence
 ```
 
-The model runs in the existing Covenant coding gateway. It receives an ephemeral checkout and no GitHub or wallet credentials. Mizuki publishes accepted files with the GitHub Git Data API. Production must use E2B or another hardened sandbox; repository runs fail closed on the gateway's local provider unless `ALLOW_LOCAL_REPOSITORY_RUNS=1` is deliberately set for trusted development. Configure and verify `E2B_EGRESS_ALLOW` before accepting public work.
+The model runs in the closed coding gateway. It receives an ephemeral checkout and no GitHub or wallet credentials. Mizuki publishes accepted files with the GitHub Git Data API. Production must use E2B or another hardened sandbox; repository runs fail closed on the gateway's local provider unless `ALLOW_LOCAL_REPOSITORY_RUNS=1` is deliberately set for trusted development. Configure and verify `E2B_EGRESS_ALLOW` before accepting public work.
 
 ## Run locally
 
@@ -68,7 +68,7 @@ Before changing the production coding route or model, run `pnpm --filter @covena
 
 Run `pnpm --filter @covenant/mizuki mcp` to expose quote, submission, status, repository readiness, issue preflight, and payment-recovery tools over stdio. A wallet-capable host creates the x402 signature; Mizuki never asks an MCP client for a private key. Every MCP API request has a bounded timeout, configurable from 1,000 to 60,000 milliseconds with `MIZUKI_MCP_TIMEOUT_MS`.
 
-Repository, issue, and payment-recovery tools fail closed unless `MIZUKI_SESSION` contains a valid signed Workbench session supplied through the MCP host’s secret storage. They reuse the same authenticated maintainer, GitHub App, repository-link, and quote-account checks as Workbench. They do not accept a GitHub token as a substitute and cannot connect a new repository; complete that explicit authorization in Workbench first.
+Create a scoped token in Workbench under Integrations, copy it once, and store it as `MIZUKI_API_TOKEN` in the MCP host's secret storage. Mizuki stores only a versioned prefix and SHA-256 hash. Repository and issue tools require `repositories:read`; account quote creation requires `jobs:write`; payment recovery requires `jobs:read`. Tokens are account-bound, expire within one year, can be revoked immediately, and never replace the browser's HttpOnly session cookie. They do not accept a GitHub token as a substitute and cannot connect a new repository; complete that explicit authorization in Workbench first.
 
 Expensive public mutations use bounded per-source token buckets and return `429` with `Retry-After`. Production on Render must set `MIZUKI_TRUSTED_PROXY_HOPS=1` and share `MIZUKI_WEB_PROXY_SECRET` only with the same-origin web proxy. The setting enables Render-specific edge trust; it is not a generic proxy-chain depth. Direct ingress validates Cloudflare's overwritten `CF-Connecting-IP` value and ignores `X-Forwarded-For`, which Cloudflare appends to caller-controlled values. Missing or malformed edge identity falls back to the direct socket. The authenticated web proxy context carries the same validated address without trusting browser-supplied Mizuki headers. Activity streams have global, per-source, and idle-lifetime caps.
 

@@ -1,6 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp, SerialGate, type AppDependencies } from './app.js';
+import { ApiTokenAuthError } from './auth.js';
 import { GithubReadinessError } from './github.js';
 import { PolicyRequestError } from './policy-client.js';
 import { MemoryStore } from './store.js';
@@ -21,6 +22,226 @@ afterEach(async () => {
 });
 
 describe('workbench account API', () => {
+  it('creates, lists, and revokes one-time scoped API tokens through the browser session', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    const base = await serve(dependencies(store));
+
+    const csrfResponse = await fetch(`${base}/v1/auth/csrf`, { headers: sessionHeaders });
+    expect(csrfResponse.status).toBe(200);
+    expect(csrfResponse.headers.get('cache-control')).toBe('private, no-store');
+    const csrf = (await csrfResponse.json()) as { csrfToken: string };
+
+    const created = await fetch(`${base}/v1/account/api-tokens`, {
+      method: 'POST',
+      headers: {
+        ...sessionHeaders,
+        'content-type': 'application/json',
+        'x-mizuki-csrf-token': csrf.csrfToken,
+      },
+      body: JSON.stringify({
+        name: 'Release MCP',
+        scopes: ['repositories:read', 'jobs:read'],
+        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60_000).toISOString(),
+      }),
+    });
+    expect(created.status).toBe(201);
+    expect(created.headers.get('cache-control')).toBe('private, no-store');
+    const credential = (await created.json()) as {
+      secret: string;
+      token: { id: string; prefix: string; state: string };
+    };
+    expect(credential.secret).toMatch(/^mzk_v1_[A-Za-z0-9_-]{12}_[A-Za-z0-9_-]{43}$/);
+    expect(credential.token).toMatchObject({ state: 'active' });
+    const stored = await store.apiTokensForAccount('42');
+    expect(stored).toHaveLength(1);
+    expect(stored[0]?.tokenHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(JSON.stringify(stored)).not.toContain(credential.secret);
+
+    const listed = await fetch(`${base}/v1/account/api-tokens`, { headers: sessionHeaders });
+    const listBody = (await listed.json()) as Record<string, unknown>;
+    expect(listBody).toMatchObject({
+      tokens: [
+        {
+          id: credential.token.id,
+          name: 'Release MCP',
+          scopes: ['repositories:read', 'jobs:read'],
+          state: 'active',
+        },
+      ],
+    });
+    expect(JSON.stringify(listBody)).not.toContain(credential.secret);
+    expect(JSON.stringify(listBody)).not.toContain(stored[0]!.tokenHash);
+
+    const bearerCannotMint = await fetch(`${base}/v1/account/api-tokens`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${credential.secret}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        name: 'Nested token',
+        scopes: ['jobs:read'],
+        expiresAt: new Date(Date.now() + 24 * 60 * 60_000).toISOString(),
+      }),
+    });
+    expect(bearerCannotMint.status).toBe(401);
+    const bearerCannotList = await fetch(`${base}/v1/account/api-tokens`, {
+      headers: { authorization: `Bearer ${credential.secret}` },
+    });
+    expect(bearerCannotList.status).toBe(401);
+
+    const revoked = await fetch(`${base}/v1/account/api-tokens/${credential.token.id}/revoke`, {
+      method: 'POST',
+      headers: { ...sessionHeaders, 'x-mizuki-csrf-token': csrf.csrfToken },
+    });
+    expect(revoked.status).toBe(200);
+    const revokedBody = await revoked.json();
+    expect(revokedBody).toMatchObject({ token: { state: 'revoked' } });
+    expect(JSON.stringify(revokedBody)).not.toContain(credential.secret);
+  });
+
+  it('rejects token mutations without a session-bound CSRF token and exact browser origin', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    const base = await serve(dependencies(store));
+    const input = {
+      name: 'Release MCP',
+      scopes: ['repositories:read'],
+      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60_000).toISOString(),
+    };
+
+    const missingToken = await fetch(`${base}/v1/account/api-tokens`, {
+      method: 'POST',
+      headers: { ...sessionHeaders, 'content-type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    expect(missingToken.status).toBe(403);
+    await expect(missingToken.json()).resolves.toEqual({ error: 'CSRF validation failed' });
+
+    const wrongOrigin = await fetch(`${base}/v1/account/api-tokens`, {
+      method: 'POST',
+      headers: {
+        ...sessionHeaders,
+        origin: 'https://attacker.example',
+        'content-type': 'application/json',
+        'x-mizuki-csrf-token': 'c'.repeat(43),
+      },
+      body: JSON.stringify(input),
+    });
+    expect(wrongOrigin.status).toBe(403);
+
+    const invalidBody = await fetch(`${base}/v1/account/api-tokens`, {
+      method: 'POST',
+      headers: {
+        ...sessionHeaders,
+        'content-type': 'application/json',
+        'x-mizuki-csrf-token': 'c'.repeat(43),
+      },
+      body: 'null',
+    });
+    expect(invalidBody.status).toBe(400);
+    expect(await store.apiTokensForAccount('42')).toEqual([]);
+  });
+
+  it('accepts scoped bearer access on MCP-safe routes without a browser cookie', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    await store.linkAccountRepository('42', 'example', 'project');
+    const apiToken = vi.fn(async (value: string, scope: string) => ({
+      kind: 'api_token' as const,
+      tokenId: '11111111-1111-4111-8111-111111111111',
+      githubId: '42',
+      githubLogin: 'maintainer',
+      scopes: [scope],
+    }));
+    const base = await serve(
+      dependencies(store, {
+        auth: { session: vi.fn(), apiToken },
+        github: {
+          repositoryMetadataForMaintainer: vi.fn(async () => repositoryMetadata),
+        },
+        policy: {
+          assertRepositoryReady: vi.fn(async () => ({ verifierAppId: '20', installationId: 30 })),
+        },
+      }),
+    );
+
+    const response = await fetch(`${base}/v1/account/repositories`, {
+      headers: { authorization: 'Bearer mzk_v1_machine-credential' },
+    });
+
+    expect(response.status).toBe(200);
+    expect(apiToken).toHaveBeenCalledWith('mzk_v1_machine-credential', 'repositories:read');
+    await expect(response.json()).resolves.toMatchObject({
+      repositories: [{ repository: 'example/project' }],
+    });
+  });
+
+  it('returns a redacted forbidden response when an API token lacks a route scope', async () => {
+    const store = new MemoryStore();
+    const secret = 'mzk_v1_sensitive-machine-token';
+    const base = await serve(
+      dependencies(store, {
+        auth: {
+          session: vi.fn(),
+          apiToken: vi.fn(async () => {
+            throw new ApiTokenAuthError('insufficient_scope');
+          }),
+        },
+      }),
+    );
+
+    const response = await fetch(`${base}/v1/preflights`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${secret}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ github_issue_url: issueUrl }),
+    });
+    expect(response.status).toBe(403);
+    const body = await response.text();
+    expect(body).toContain('required scope');
+    expect(body).not.toContain(secret);
+  });
+
+  it.each([
+    {
+      route: 'account quote creation',
+      path: '/v1/account/quotes',
+      scope: 'jobs:write',
+      init: {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ github_issue_url: issueUrl }),
+      },
+    },
+    {
+      route: 'payment recovery',
+      path: `/v1/account/quotes/${quote.id}/payment-status`,
+      scope: 'jobs:read',
+      init: { headers: { 'idempotency-key': 'scope-matrix-payment' } },
+    },
+  ])('requires the $scope scope for $route', async ({ path, scope, init }) => {
+    const apiToken = vi.fn(async () => {
+      throw new ApiTokenAuthError('insufficient_scope');
+    });
+    const base = await serve(
+      dependencies(new MemoryStore(), {
+        auth: { session: vi.fn(), apiToken },
+      }),
+    );
+
+    const response = await fetch(`${base}${path}`, {
+      ...init,
+      headers: {
+        ...init.headers,
+        authorization: 'Bearer mzk_v1_scope-matrix',
+      },
+    });
+
+    expect(response.status).toBe(403);
+    expect(apiToken).toHaveBeenCalledWith('mzk_v1_scope-matrix', scope);
+  });
+
   it('keeps repository and policy readiness independent during a GitHub outage', async () => {
     const store = new MemoryStore();
     await store.upsertContributor('42', 'maintainer');
@@ -378,6 +599,28 @@ describe('workbench account API', () => {
     await expect(active).resolves.toBeUndefined();
     await expect(next).resolves.toBe('next');
     expect(nextOperation).toHaveBeenCalledOnce();
+  });
+
+  it('rate limits payment-status reads before they can starve the settlement gate', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    await store.saveQuote(quote);
+    await store.linkQuoteToAccount(quote.id, '42');
+    const gate = new SerialGate();
+    const run = vi.spyOn(gate, 'run');
+    const base = await serve(dependencies(store, { paymentAdmission: gate }));
+
+    for (let index = 0; index < 20; index += 1) {
+      const response = await fetch(`${base}/v1/account/quotes/${quote.id}/payment-status`, {
+        headers: { ...sessionHeaders, 'idempotency-key': `payment-status-${index}` },
+      });
+      expect(response.status).toBe(200);
+    }
+    const limited = await fetch(`${base}/v1/account/quotes/${quote.id}/payment-status`, {
+      headers: { ...sessionHeaders, 'idempotency-key': 'payment-status-limited' },
+    });
+    expect(limited.status).toBe(429);
+    expect(run).toHaveBeenCalledTimes(20);
   });
 
   it('reports a confirming payment once, then replaces it with one finalized payment', async () => {
@@ -929,6 +1172,7 @@ function dependencies(
   return {
     config: {
       paymentMode: 'mock',
+      webOrigin: 'https://mizuki.example',
       trustedProxyHops: 0,
       rateLimitMaxSources: 100,
       sseMaxConnections: 10,
@@ -945,6 +1189,13 @@ function dependencies(
           ? { githubId: '42', githubLogin: 'maintainer', exp: Date.now() + 60_000 }
           : undefined,
       ),
+      csrfToken: vi.fn((value: string | undefined) =>
+        value === 'session' ? 'c'.repeat(43) : undefined,
+      ),
+      verifyCsrfToken: vi.fn(
+        (value: string | undefined, token: string | undefined) =>
+          value === 'session' && token === 'c'.repeat(43),
+      ),
     },
     webhooks: {},
     bounties: {},
@@ -955,7 +1206,10 @@ function dependencies(
   } as unknown as AppDependencies;
 }
 
-const sessionHeaders = { cookie: 'mizuki_session=session' };
+const sessionHeaders = {
+  cookie: 'mizuki_session=session',
+  origin: 'https://mizuki.example',
+};
 const issueUrl = 'https://github.com/example/project/issues/7';
 const quote: Quote = {
   id: '11111111-1111-4111-8111-111111111111',

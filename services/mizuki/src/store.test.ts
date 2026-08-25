@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { API_TOKEN_MAX_ACTIVE, ApiTokenCapacityError, createApiToken } from './api-tokens.js';
 import { createRescueBounty, type BountyClaim, type RescueBounty } from './domain/index.js';
 import { GithubOAuthCapacityError, MAX_PENDING_GITHUB_OAUTH_FLOWS, MemoryStore } from './store.js';
 import type { Payment, Quote } from './types.js';
@@ -23,6 +24,88 @@ const quote: Quote = {
 const payment: Payment = { payer: '1'.repeat(32), transaction: 'tx', amountAtomic: '2000000' };
 
 describe('MemoryStore', () => {
+  it('keeps every active API token discoverable after terminal history exceeds the page limit', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    const startedAt = Date.now();
+    const active = createApiToken({
+      githubId: '42',
+      name: 'Long-lived MCP',
+      scopes: ['repositories:read'],
+      expiresAt: new Date(startedAt + 30 * 24 * 60 * 60_000).toISOString(),
+      now: new Date(startedAt),
+    });
+    await store.createApiToken(active.record);
+
+    for (let index = 1; index <= 105; index += 1) {
+      const createdAt = new Date(startedAt + index * 1_000);
+      const terminal = createApiToken({
+        githubId: '42',
+        name: `Terminal MCP ${index}`,
+        scopes: ['jobs:read'],
+        expiresAt: new Date(createdAt.getTime() + 24 * 60 * 60_000).toISOString(),
+        now: createdAt,
+      });
+      await store.createApiToken(terminal.record);
+      await store.revokeApiToken(
+        terminal.record.id,
+        '42',
+        new Date(createdAt.getTime() + 1).toISOString(),
+      );
+    }
+
+    const tokens = await store.apiTokensForAccount('42');
+    expect(tokens).toHaveLength(100);
+    expect(tokens[0]?.id).toBe(active.record.id);
+  });
+
+  it('keeps API tokens account-bound, revocable, and capped', async () => {
+    const store = new MemoryStore();
+    await Promise.all([
+      store.upsertContributor('42', 'maintainer'),
+      store.upsertContributor('99', 'other-maintainer'),
+    ]);
+    const records = [];
+    for (let index = 0; index < API_TOKEN_MAX_ACTIVE; index += 1) {
+      const credential = createApiToken({
+        githubId: '42',
+        name: `MCP ${index + 1}`,
+        scopes: ['repositories:read'],
+        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60_000).toISOString(),
+      });
+      records.push(await store.createApiToken(credential.record));
+    }
+    expect(await store.apiTokensForAccount('42')).toHaveLength(API_TOKEN_MAX_ACTIVE);
+    expect(await store.apiTokensForAccount('99')).toEqual([]);
+
+    const overflow = createApiToken({
+      githubId: '42',
+      name: 'Overflow',
+      scopes: ['jobs:read'],
+      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60_000).toISOString(),
+    });
+    await expect(store.createApiToken(overflow.record)).rejects.toBeInstanceOf(
+      ApiTokenCapacityError,
+    );
+
+    const first = records[0]!;
+    const usedAt = new Date(Date.now() + 1_000).toISOString();
+    await expect(store.markApiTokenUsed(first.id, usedAt)).resolves.toBe(true);
+    await expect(
+      store.markApiTokenUsed(first.id, new Date(Date.parse(usedAt) - 500).toISOString()),
+    ).resolves.toBe(true);
+    expect((await store.apiTokenByPrefix(first.prefix))?.lastUsedAt).toBe(usedAt);
+    await expect(
+      store.revokeApiToken(first.id, '99', new Date().toISOString()),
+    ).resolves.toBeUndefined();
+    const revoked = await store.revokeApiToken(first.id, '42', new Date().toISOString());
+    expect(revoked?.revokedAt).toBeTruthy();
+    await expect(store.markApiTokenUsed(first.id, new Date().toISOString())).resolves.toBe(false);
+    await expect(store.createApiToken(overflow.record)).resolves.toMatchObject({
+      id: overflow.record.id,
+    });
+  });
+
   it('bounds pending browser OAuth flows and reclaims terminal entries', async () => {
     const store = new MemoryStore();
     const expiresAt = new Date(Date.now() + 60_000).toISOString();

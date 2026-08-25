@@ -96,6 +96,27 @@ export type WorkbenchBilling = {
   entries: BillingEntry[];
 };
 
+export const API_TOKEN_SCOPES = ['repositories:read', 'jobs:read', 'jobs:write'] as const;
+
+export type ApiTokenScope = (typeof API_TOKEN_SCOPES)[number];
+
+export type WorkbenchApiToken = {
+  id: string;
+  name: string;
+  prefix: string;
+  scopes: ApiTokenScope[];
+  state: 'active' | 'expired' | 'revoked';
+  expiresAt: string;
+  createdAt: string;
+  lastUsedAt?: string;
+  revokedAt?: string;
+};
+
+export type ApiTokenCredential = {
+  token: WorkbenchApiToken;
+  secret: string;
+};
+
 export function workbenchAuthHref(returnTo: string): string {
   const destination = safeWorkbenchReturnPath(returnTo);
   return `/api/mizuki/v1/auth/github?return_to=${encodeURIComponent(destination)}`;
@@ -200,6 +221,27 @@ export function normalizeAccount(value: unknown): WorkbenchAccount {
       text(user.walletAddress) ??
       text(contributor.walletAddress),
   };
+}
+
+export function normalizeApiTokens(value: unknown): WorkbenchApiToken[] {
+  return listFrom<unknown>(value, 'tokens').map(normalizeApiToken);
+}
+
+export function normalizeApiTokenCredential(value: unknown): ApiTokenCredential {
+  const source = record(value);
+  const secret = text(source.secret);
+  if (!secret || !/^mzk_v1_[A-Za-z0-9_-]{12}_[A-Za-z0-9_-]{43}$/.test(secret)) {
+    throw new Error('The API token response did not include a valid one-time secret');
+  }
+  return { token: normalizeApiToken(source.token), secret };
+}
+
+export function normalizeCsrfToken(value: unknown): string {
+  const csrfToken = text(record(value).csrfToken);
+  if (!csrfToken || !/^[A-Za-z0-9_-]{43}$/.test(csrfToken)) {
+    throw new Error('The security token response was invalid');
+  }
+  return csrfToken;
 }
 
 export function normalizeRepositories(value: unknown): WorkbenchRepository[] {
@@ -405,6 +447,61 @@ function normalizeInstallationStatus(
   if (explicitInstalled !== undefined) return explicitInstalled ? 'installed' : 'missing';
   if (legacyInstalled !== undefined) return legacyInstalled ? 'installed' : 'missing';
   return 'unavailable';
+}
+
+function normalizeApiToken(value: unknown): WorkbenchApiToken {
+  const source = record(value);
+  const id = text(source.id);
+  const name = text(source.name);
+  const prefix = text(source.prefix);
+  const expiresAt = text(source.expiresAt);
+  const createdAt = text(source.createdAt);
+  const lastUsedAt = text(source.lastUsedAt);
+  const revokedAt = text(source.revokedAt);
+  const state = text(source.state);
+  const scopes = strings(source.scopes);
+  if (
+    !id?.match(/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i) ||
+    !name ||
+    name.length > 80 ||
+    !prefix?.match(/^mzk_v1_[A-Za-z0-9_-]{12}$/) ||
+    !validIsoTimestamp(expiresAt) ||
+    !validIsoTimestamp(createdAt) ||
+    Date.parse(expiresAt) <= Date.parse(createdAt) ||
+    (lastUsedAt !== undefined && !validIsoTimestamp(lastUsedAt)) ||
+    (lastUsedAt !== undefined && Date.parse(lastUsedAt) < Date.parse(createdAt)) ||
+    (revokedAt !== undefined && !validIsoTimestamp(revokedAt)) ||
+    (revokedAt !== undefined && Date.parse(revokedAt) < Date.parse(createdAt)) ||
+    (state === 'revoked' && !revokedAt) ||
+    (state !== 'revoked' && revokedAt !== undefined) ||
+    (state !== 'active' && state !== 'expired' && state !== 'revoked') ||
+    scopes.length === 0 ||
+    new Set(scopes).size !== scopes.length ||
+    !scopes.every((scope): scope is ApiTokenScope =>
+      API_TOKEN_SCOPES.includes(scope as ApiTokenScope),
+    )
+  ) {
+    throw new Error('The API token response is incomplete');
+  }
+  return {
+    id,
+    name,
+    prefix,
+    scopes,
+    state,
+    expiresAt,
+    createdAt,
+    lastUsedAt,
+    revokedAt,
+  };
+}
+
+function validIsoTimestamp(value: string | undefined): value is string {
+  return Boolean(
+    value &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) &&
+    Number.isFinite(Date.parse(value)),
+  );
 }
 
 export function normalizeJobs(value: unknown): WorkbenchJob[] {

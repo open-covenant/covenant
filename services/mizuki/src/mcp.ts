@@ -4,11 +4,11 @@ import { z } from 'zod';
 import { MizukiMcpClient } from './mcp-api.js';
 
 const baseUrl = process.env.MIZUKI_API_URL ?? 'http://127.0.0.1:8787';
-const session = process.env.MIZUKI_SESSION;
+const apiToken = process.env.MIZUKI_API_TOKEN;
 const timeoutValue = process.env.MIZUKI_MCP_TIMEOUT_MS;
 const client = new MizukiMcpClient({
   baseUrl,
-  session,
+  apiToken,
   ...(timeoutValue ? { timeoutMs: Number(timeoutValue) } : {}),
 });
 const server = new McpServer({ name: 'mizuki', version: '0.1.0' });
@@ -22,7 +22,7 @@ server.registerTool(
   'mizuki_quote',
   {
     description:
-      'Get a fixed-price quote and x402 payment requirements for a public GitHub issue. With MIZUKI_SESSION, the repository must already be connected and the quote is linked for payment recovery.',
+      'Get a fixed-price quote and x402 payment requirements for a public GitHub issue. With MIZUKI_API_TOKEN, the repository must already be connected and the quote is linked for payment recovery.',
     inputSchema: { github_issue_url: z.string().url() },
   },
   async ({ github_issue_url }) => result(await client.quote(github_issue_url)),
@@ -64,7 +64,7 @@ server.registerTool(
   'mizuki_repositories',
   {
     description:
-      'List repositories linked to the authenticated maintainer and their current readiness. Requires MIZUKI_SESSION.',
+      'List repositories linked to the authenticated maintainer and their current readiness. Requires a repositories:read MIZUKI_API_TOKEN.',
     inputSchema: {},
   },
   async () => result(await client.repositories()),
@@ -84,7 +84,7 @@ server.registerTool(
   'mizuki_repository_issues',
   {
     description:
-      'List bounded maintenance candidates for a linked repository after authenticated maintainer checks. Requires MIZUKI_SESSION.',
+      'List bounded maintenance candidates for a linked repository after authenticated maintainer checks. Requires a repositories:read MIZUKI_API_TOKEN.',
     inputSchema: { owner: repositorySegment, repo: repositorySegment },
   },
   async ({ owner, repo }) => result(await client.issues(owner, repo)),
@@ -94,7 +94,7 @@ server.registerTool(
   'mizuki_preflight',
   {
     description:
-      'Run repository, authorization, scope, and maintainer readiness checks for one issue without creating a quote or payment. Requires MIZUKI_SESSION.',
+      'Run repository, authorization, scope, and maintainer readiness checks for one issue without creating a quote or payment. Requires a repositories:read MIZUKI_API_TOKEN.',
     inputSchema: { github_issue_url: z.string().url() },
   },
   async ({ github_issue_url }) => result(await client.preflight(github_issue_url)),
@@ -104,7 +104,7 @@ server.registerTool(
   'mizuki_payment_status',
   {
     description:
-      'Safely check whether an exact quote and idempotency key already reserved a job. This read never requests a wallet signature or submits payment. Requires MIZUKI_SESSION.',
+      'Safely check whether an exact quote and idempotency key already reserved a job. This read never requests a wallet signature or submits payment. Requires a jobs:read MIZUKI_API_TOKEN.',
     inputSchema: {
       quote_id: z.string().uuid(),
       idempotency_key: z.string().min(8).max(128),

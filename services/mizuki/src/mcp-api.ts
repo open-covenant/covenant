@@ -7,20 +7,20 @@ type RequestOptions = {
 
 export type MizukiMcpClientOptions = {
   baseUrl: string;
-  session?: string;
+  apiToken?: string;
   timeoutMs?: number;
   request?: typeof fetch;
 };
 
 export class MizukiMcpClient {
   private readonly baseUrl: string;
-  private readonly session?: string;
+  private readonly apiToken?: string;
   private readonly timeoutMs: number;
   private readonly requestFn: typeof fetch;
 
   constructor(options: MizukiMcpClientOptions) {
-    this.baseUrl = options.baseUrl.replace(/\/$/, '');
-    this.session = options.session;
+    this.baseUrl = validatedBaseUrl(options.baseUrl);
+    this.apiToken = options.apiToken;
     this.timeoutMs = boundedTimeout(options.timeoutMs);
     this.requestFn = options.request ?? fetch;
   }
@@ -28,15 +28,15 @@ export class MizukiMcpClient {
   async call(path: string, options: RequestOptions = {}): Promise<unknown> {
     if (!path.startsWith('/v1/')) throw new Error('Mizuki MCP API path must start with /v1/');
     const headers = new Headers(options.headers);
+    headers.delete('authorization');
+    headers.delete('cookie');
     headers.set('accept', 'application/json');
     if (options.body !== undefined) headers.set('content-type', 'application/json');
     if (options.authenticated) {
-      if (!this.session) {
-        throw new Error(
-          'This MCP tool requires an authenticated Mizuki Workbench session in MIZUKI_SESSION',
-        );
+      if (!this.apiToken) {
+        throw new Error('This MCP tool requires a scoped Mizuki API token in MIZUKI_API_TOKEN');
       }
-      headers.set('cookie', `mizuki_session=${encodeURIComponent(this.session)}`);
+      headers.set('authorization', `Bearer ${this.apiToken}`);
     }
     const signal = AbortSignal.timeout(this.timeoutMs);
     let response: Response;
@@ -74,8 +74,8 @@ export class MizukiMcpClient {
   }
 
   async quote(issueUrl: string): Promise<unknown> {
-    return this.call(this.session ? '/v1/account/quotes' : '/v1/quotes', {
-      authenticated: Boolean(this.session),
+    return this.call(this.apiToken ? '/v1/account/quotes' : '/v1/quotes', {
+      authenticated: Boolean(this.apiToken),
       method: 'POST',
       body: { github_issue_url: issueUrl },
     });
@@ -124,6 +124,24 @@ export class MizukiMcpClient {
       headers: { 'idempotency-key': idempotencyKey },
     });
   }
+}
+
+function validatedBaseUrl(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error('Mizuki MCP API URL is invalid');
+  }
+  const loopback =
+    url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]';
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) {
+    throw new Error('Mizuki MCP API URL must use HTTPS outside local development');
+  }
+  if (url.username || url.password || url.search || url.hash) {
+    throw new Error('Mizuki MCP API URL cannot include credentials, a query, or a fragment');
+  }
+  return url.toString().replace(/\/$/, '');
 }
 
 function boundedTimeout(value: number | undefined): number {

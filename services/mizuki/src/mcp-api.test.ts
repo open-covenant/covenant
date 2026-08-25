@@ -2,11 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { MizukiMcpClient } from './mcp-api.js';
 
 describe('Mizuki MCP API client', () => {
-  it('adds an authenticated session and timeout signal to maintainer reads', async () => {
+  it('adds a scoped bearer token and timeout signal to maintainer reads', async () => {
     const request = response({ repositories: [] });
     const client = new MizukiMcpClient({
       baseUrl: 'https://mizuki.example/',
-      session: 'signed session',
+      apiToken: 'mzk_v1_machine-token',
       timeoutMs: 2_000,
       request,
     });
@@ -18,14 +18,15 @@ describe('Mizuki MCP API client', () => {
     expect(url).toBe('https://mizuki.example/v1/account/repositories');
     expect(init?.method).toBe('GET');
     expect(init?.signal).toBeInstanceOf(AbortSignal);
-    expect(headers.get('cookie')).toBe('mizuki_session=signed%20session');
+    expect(headers.get('authorization')).toBe('Bearer mzk_v1_machine-token');
+    expect(headers.has('cookie')).toBe(false);
   });
 
   it('fails closed before making an unauthenticated maintainer request', async () => {
     const request = response({ repositories: [] });
     const client = new MizukiMcpClient({ baseUrl: 'https://mizuki.example', request });
 
-    await expect(client.repositories()).rejects.toThrow('requires an authenticated');
+    await expect(client.repositories()).rejects.toThrow('MIZUKI_API_TOKEN');
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -33,7 +34,7 @@ describe('Mizuki MCP API client', () => {
     const request = response({ repositories: [] });
     const client = new MizukiMcpClient({
       baseUrl: 'https://mizuki.example',
-      session: 'session',
+      apiToken: 'mzk_v1_machine-token',
       request,
     });
 
@@ -69,16 +70,41 @@ describe('Mizuki MCP API client', () => {
     expect(calls.every(([, init]) => new Headers(init?.headers).has('payment-signature'))).toBe(
       false,
     );
+    expect(
+      calls.every(
+        ([, init]) =>
+          new Headers(init?.headers).get('authorization') === 'Bearer mzk_v1_machine-token' &&
+          !new Headers(init?.headers).has('cookie'),
+      ),
+    ).toBe(true);
   });
 
-  it('keeps quotes public when the MCP host has no Workbench session', async () => {
+  it('keeps quotes public when the MCP host has no API token', async () => {
     const request = response({ id: 'quote' });
     const client = new MizukiMcpClient({ baseUrl: 'https://mizuki.example', request });
 
     await client.quote('https://github.com/open-covenant/covenant/issues/1');
 
     expect(vi.mocked(request).mock.calls[0]?.[0]).toBe('https://mizuki.example/v1/quotes');
-    expect(new Headers(vi.mocked(request).mock.calls[0]?.[1]?.headers).has('cookie')).toBe(false);
+    const headers = new Headers(vi.mocked(request).mock.calls[0]?.[1]?.headers);
+    expect(headers.has('cookie')).toBe(false);
+    expect(headers.has('authorization')).toBe(false);
+  });
+
+  it('never forwards caller-supplied browser credentials', async () => {
+    const request = response({ ok: true });
+    const client = new MizukiMcpClient({ baseUrl: 'https://mizuki.example', request });
+
+    await client.call('/v1/health', {
+      headers: {
+        authorization: 'Bearer caller-supplied',
+        cookie: 'mizuki_session=browser-session',
+      },
+    });
+
+    const headers = new Headers(vi.mocked(request).mock.calls[0]?.[1]?.headers);
+    expect(headers.has('authorization')).toBe(false);
+    expect(headers.has('cookie')).toBe(false);
   });
 
   it('rejects unbounded timeout configuration', () => {
@@ -88,6 +114,16 @@ describe('Mizuki MCP API client', () => {
     expect(
       () => new MizukiMcpClient({ baseUrl: 'https://mizuki.example', timeoutMs: 60_001 }),
     ).toThrow('between 1000 and 60000');
+  });
+
+  it('requires encrypted transport outside loopback development', () => {
+    expect(() => new MizukiMcpClient({ baseUrl: 'not a URL' })).toThrow('invalid');
+    expect(() => new MizukiMcpClient({ baseUrl: 'http://api.example' })).toThrow('HTTPS');
+    expect(() => new MizukiMcpClient({ baseUrl: 'ftp://api.example' })).toThrow('HTTPS');
+    expect(() => new MizukiMcpClient({ baseUrl: 'https://user:secret@api.example/v1' })).toThrow(
+      'credentials',
+    );
+    expect(() => new MizukiMcpClient({ baseUrl: 'http://127.0.0.1:8787' })).not.toThrow();
   });
 
   it('does not turn a response-body timeout into a successful tool result', async () => {

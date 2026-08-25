@@ -2,6 +2,14 @@ import { randomUUID, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { ActivityStreams, PublicAdmission, RateLimitError, requestScheme } from './admission.js';
 import {
+  ApiTokenCapacityError,
+  ApiTokenInputError,
+  createApiToken,
+  normalizedScopes,
+  publicApiToken,
+} from './api-tokens.js';
+import {
+  ApiTokenAuthError,
   GITHUB_OAUTH_FLOW_TTL_SECONDS,
   GithubOAuthCallbackError,
   githubOAuthRedirectPath,
@@ -35,6 +43,7 @@ import {
 } from './store.js';
 import { GithubWebhookHandler, verifyGithubWebhook } from './webhooks.js';
 import type { Job, RepositoryAdmissionReceipt } from './types.js';
+import type { ApiTokenScope } from './types.js';
 import { Payments, USDC_DECIMALS, USDC_MAINNET, paymentRequiredHeader } from './x402.js';
 import {
   assertRefundCapacity,
@@ -248,6 +257,14 @@ export function createApp(deps: AppDependencies) {
         const contributor = await deps.store.contributor(session.githubId);
         return json(res, 200, { contributor });
       }
+      if (req.method === 'GET' && url.pathname === '/v1/auth/csrf') {
+        res.setHeader('cache-control', 'private, no-store');
+        const sessionValue = cookies(req).mizuki_session;
+        requireSession(req, deps.auth);
+        const csrfToken = deps.auth.csrfToken(sessionValue);
+        if (!csrfToken) throw new Error('CSRF protection is unavailable');
+        return json(res, 200, { csrfToken });
+      }
       if (req.method === 'POST' && url.pathname === '/v1/auth/logout') {
         res.setHeader(
           'set-cookie',
@@ -270,6 +287,63 @@ export function createApp(deps: AppDependencies) {
           },
         });
       }
+      if (req.method === 'GET' && url.pathname === '/v1/account/api-tokens') {
+        res.setHeader('cache-control', 'private, no-store');
+        const session = requireSession(req, deps.auth);
+        admission.consumeAccount('api_tokens', req, session.githubId);
+        const tokens = await deps.store.apiTokensForAccount(session.githubId);
+        return json(res, 200, { tokens: tokens.map((token) => publicApiToken(token)) });
+      }
+      if (req.method === 'POST' && url.pathname === '/v1/account/api-tokens') {
+        res.setHeader('cache-control', 'private, no-store');
+        const session = requireCsrfSession(req, deps.auth, deps.config.webOrigin);
+        admission.consumeAccount('api_tokens', req, session.githubId);
+        const value = await bodyJson<unknown>(req);
+        if (!value || typeof value !== 'object' || Array.isArray(value)) {
+          throw new InvalidRequestBodyError('name, scopes, and expiresAt are required');
+        }
+        const body = value as Record<string, unknown>;
+        if (
+          typeof body.name !== 'string' ||
+          !Array.isArray(body.scopes) ||
+          !body.scopes.every((scope) => typeof scope === 'string') ||
+          typeof body.expiresAt !== 'string'
+        ) {
+          throw new InvalidRequestBodyError('name, scopes, and expiresAt are required');
+        }
+        const credential = createApiToken({
+          githubId: session.githubId,
+          name: body.name,
+          scopes: normalizedScopes(body.scopes),
+          expiresAt: body.expiresAt,
+        });
+        const stored = await deps.store.createApiToken(credential.record);
+        return json(res, 201, {
+          token: publicApiToken(stored),
+          secret: credential.token,
+        });
+      }
+      if (
+        req.method === 'POST' &&
+        parts[0] === 'v1' &&
+        parts[1] === 'account' &&
+        parts[2] === 'api-tokens' &&
+        parts[3] &&
+        parts[4] === 'revoke' &&
+        parts.length === 5
+      ) {
+        res.setHeader('cache-control', 'private, no-store');
+        const session = requireCsrfSession(req, deps.auth, deps.config.webOrigin);
+        admission.consumeAccount('api_tokens', req, session.githubId);
+        if (!UUID_PATTERN.test(parts[3])) return json(res, 404, { error: 'API token not found' });
+        const revoked = await deps.store.revokeApiToken(
+          parts[3],
+          session.githubId,
+          new Date().toISOString(),
+        );
+        if (!revoked) return json(res, 404, { error: 'API token not found' });
+        return json(res, 200, { token: publicApiToken(revoked) });
+      }
       if (req.method === 'GET' && url.pathname === '/v1/account/jobs') {
         res.setHeader('cache-control', 'private, no-store');
         const session = requireSession(req, deps.auth);
@@ -290,7 +364,8 @@ export function createApp(deps: AppDependencies) {
         parts[4] === 'payment-status'
       ) {
         res.setHeader('cache-control', 'private, no-store');
-        const session = requireSession(req, deps.auth);
+        const session = await requireAccountPrincipal(req, deps.auth, admission, 'jobs:read');
+        admission.consumeAccount('payment_status', req, session.githubId);
         const key = header(req, 'idempotency-key');
         if (!key || key.length > 128) {
           return json(res, 400, { error: 'idempotency-key header is required' });
@@ -348,7 +423,12 @@ export function createApp(deps: AppDependencies) {
       }
       if (req.method === 'GET' && url.pathname === '/v1/account/repositories') {
         res.setHeader('cache-control', 'private, no-store');
-        const session = requireSession(req, deps.auth);
+        const session = await requireAccountPrincipal(
+          req,
+          deps.auth,
+          admission,
+          'repositories:read',
+        );
         admission.consumeAccount('account_repositories', req, session.githubId);
         const page = await deps.store.repositoriesForAccount(session.githubId, 25);
         const repositories = await mapConcurrent(page.repositories, 4, async (saved) => {
@@ -439,7 +519,12 @@ export function createApp(deps: AppDependencies) {
         });
       }
       if (req.method === 'POST' && url.pathname === '/v1/preflights') {
-        const session = requireSession(req, deps.auth);
+        const session = await requireAccountPrincipal(
+          req,
+          deps.auth,
+          admission,
+          'repositories:read',
+        );
         admission.consumeAccount('preflight', req, session.githubId);
         const body = await bodyJson<{ github_issue_url?: unknown }>(req);
         if (typeof body.github_issue_url !== 'string') {
@@ -515,7 +600,12 @@ export function createApp(deps: AppDependencies) {
         parts[3] &&
         parts[4] === 'issues'
       ) {
-        const session = requireSession(req, deps.auth);
+        const session = await requireAccountPrincipal(
+          req,
+          deps.auth,
+          admission,
+          'repositories:read',
+        );
         admission.consumeAccount('repository_issues', req, session.githubId);
         if (!(await accountRepositoryLinked(deps.store, session.githubId, parts[2], parts[3]))) {
           return json(res, 403, {
@@ -717,7 +807,9 @@ export function createApp(deps: AppDependencies) {
         (url.pathname === '/v1/quotes' || url.pathname === '/v1/account/quotes')
       ) {
         const accountScoped = url.pathname === '/v1/account/quotes';
-        const session = accountScoped ? requireSession(req, deps.auth) : undefined;
+        const session = accountScoped
+          ? await requireAccountPrincipal(req, deps.auth, admission, 'jobs:write')
+          : undefined;
         if (session) admission.consumeAccount('quote', req, session.githubId);
         else admission.consume('quote', req);
         const body = await bodyJson<{ github_issue_url?: unknown }>(req);
@@ -1099,31 +1191,39 @@ export function createApp(deps: AppDependencies) {
       }
       const message = cause instanceof Error ? cause.message : String(cause);
       const status =
-        cause instanceof GithubAccessError
-          ? 403
-          : cause instanceof GithubReadinessError
-            ? 503
-            : /not signed in|unauthorized/i.test(message)
-              ? 401
-              : cause instanceof InvalidRequestBodyError
-                ? 400
-                : cause instanceof StateConflictError
-                  ? 409
-                  : cause instanceof RefundCapacityError
-                    ? 503
-                    : cause instanceof OperatorAdmissionError
-                      ? 503
-                      : /not found/i.test(message)
-                        ? 404
-                        : /already|changed after the quote|concurrent|expected|not accepting|does not match the active|not funded|dispute intake|can no longer/i.test(
-                              message,
-                            )
-                          ? 409
-                          : /outside Mizuki|public GitHub|install the Mizuki|issue is too large|invalid|expired|required|incomplete/i.test(
-                                message,
-                              )
-                            ? 422
-                            : 500;
+        cause instanceof ApiTokenAuthError
+          ? cause.code === 'insufficient_scope'
+            ? 403
+            : 401
+          : cause instanceof CsrfValidationError
+            ? 403
+            : cause instanceof GithubAccessError
+              ? 403
+              : cause instanceof GithubReadinessError
+                ? 503
+                : /not signed in|unauthorized/i.test(message)
+                  ? 401
+                  : cause instanceof InvalidRequestBodyError || cause instanceof ApiTokenInputError
+                    ? 400
+                    : cause instanceof ApiTokenCapacityError
+                      ? 409
+                      : cause instanceof StateConflictError
+                        ? 409
+                        : cause instanceof RefundCapacityError
+                          ? 503
+                          : cause instanceof OperatorAdmissionError
+                            ? 503
+                            : /not found/i.test(message)
+                              ? 404
+                              : /already|changed after the quote|concurrent|expected|not accepting|does not match the active|not funded|dispute intake|can no longer/i.test(
+                                    message,
+                                  )
+                                ? 409
+                                : /outside Mizuki|public GitHub|install the Mizuki|issue is too large|invalid|expired|required|incomplete/i.test(
+                                      message,
+                                    )
+                                  ? 422
+                                  : 500;
       const publicMessage =
         cause instanceof GithubReadinessError
           ? cause.message
@@ -1316,7 +1416,7 @@ function applyCors(
   res.setHeader('access-control-allow-credentials', 'true');
   res.setHeader(
     'access-control-allow-headers',
-    'content-type,idempotency-key,payment-signature,last-event-id',
+    'content-type,idempotency-key,payment-signature,last-event-id,x-mizuki-csrf-token',
   );
   res.setHeader('access-control-allow-methods', 'GET,POST,OPTIONS');
   res.setHeader('access-control-expose-headers', 'x-request-id');
@@ -1377,6 +1477,50 @@ function requireSession(req: IncomingMessage, auth: ContributorAuth) {
   const session = auth.session(cookies(req).mizuki_session);
   if (!session) throw new Error('not signed in');
   return session;
+}
+
+function requireCsrfSession(
+  req: IncomingMessage,
+  auth: ContributorAuth,
+  configuredOrigin: string | undefined,
+) {
+  const sessionValue = cookies(req).mizuki_session;
+  const session = auth.session(sessionValue);
+  if (!session) throw new Error('not signed in');
+
+  let expectedOrigin: string | undefined;
+  try {
+    expectedOrigin = configuredOrigin ? new URL(configuredOrigin).origin : undefined;
+  } catch {
+    expectedOrigin = undefined;
+  }
+  if (
+    !expectedOrigin ||
+    header(req, 'origin') !== expectedOrigin ||
+    !auth.verifyCsrfToken(sessionValue, header(req, 'x-mizuki-csrf-token'))
+  ) {
+    throw new CsrfValidationError();
+  }
+  return session;
+}
+
+async function requireAccountPrincipal(
+  req: IncomingMessage,
+  auth: ContributorAuth,
+  admission: PublicAdmission,
+  scope: ApiTokenScope,
+) {
+  const session = auth.session(cookies(req).mizuki_session);
+  if (session) return session;
+
+  const authorization = header(req, 'authorization');
+  const bearer = authorization?.match(/^Bearer ([^\s,]+)$/i)?.[1];
+  if (!bearer) {
+    if (authorization) throw new ApiTokenAuthError('invalid');
+    throw new Error('not signed in');
+  }
+  admission.consume('api_auth', req);
+  return auth.apiToken(bearer, scope);
 }
 
 function cookies(req: IncomingMessage): Record<string, string> {
@@ -1623,6 +1767,12 @@ class ConcurrentPaymentReservation extends Error {
 }
 
 class InvalidRequestBodyError extends Error {}
+
+class CsrfValidationError extends Error {
+  constructor() {
+    super('CSRF validation failed');
+  }
+}
 
 export class OperatorAdmissionError extends Error {}
 

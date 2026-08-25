@@ -71,6 +71,26 @@ describe('Mizuki API proxy', () => {
     ]);
   });
 
+  it('forwards the upstream request reference', async () => {
+    vi.stubEnv('MIZUKI_WEB_PROXY_SECRET', 'p'.repeat(32));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        Response.json(
+          { error: 'request failed; retry later' },
+          { status: 500, headers: { 'x-request-id': 'request-reference' } },
+        ),
+      ),
+    );
+
+    const response = await GET(
+      new Request('https://mizuki.opencovenant.org/api/mizuki/v1/account'),
+      { params: Promise.resolve({ path: ['v1', 'account'] }) },
+    );
+
+    expect(response.headers.get('x-request-id')).toBe('request-reference');
+  });
+
   it('fails closed without proxy authentication and ignores spoofed XFF', async () => {
     vi.stubEnv('MIZUKI_WEB_PROXY_SECRET', '');
     const upstream = vi.fn();

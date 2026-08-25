@@ -24,6 +24,7 @@ const forwardedResponseHeaders = [
   'location',
   'payment-required',
   'payment-response',
+  'x-request-id',
 ];
 
 async function proxy(

@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { formatTime, formatUsdcAtomic, truncateAddress } from '@/lib/format';
-import { normalizeBilling } from '@/lib/workbench';
+import { normalizeBilling, type BillingEntry } from '@/lib/workbench';
 import { useWorkbenchResource } from '@/lib/workbench-client';
 import {
   SummaryCard,
@@ -125,34 +125,7 @@ export function Billing() {
               <span />
             </div>
             {billing.data.entries.map((entry) => (
-              <article key={entry.id}>
-                <strong>{entry.kind === 'refund' ? 'Refund' : 'Payment'}</strong>
-                <span>
-                  {entry.jobId ? (
-                    <Link href={`/app/jobs/${encodeURIComponent(entry.jobId)}`}>
-                      {entry.repository || entry.jobId.slice(0, 10)}
-                    </Link>
-                  ) : (
-                    entry.repository || 'Job record'
-                  )}
-                </span>
-                <WorkbenchStatus value={entry.state} />
-                <span>{formatUsdcAtomic(entry.amountAtomic)}</span>
-                <span>{entry.occurredAt ? formatTime(entry.occurredAt) : 'Time unavailable'}</span>
-                <span>
-                  {entry.transaction ? (
-                    <a
-                      href={`https://solscan.io/tx/${encodeURIComponent(entry.transaction)}`}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      Transaction ↗
-                    </a>
-                  ) : (
-                    '—'
-                  )}
-                </span>
-              </article>
+              <BillingEntryRow entry={entry} key={entry.id} />
             ))}
           </div>
         ) : (
@@ -164,5 +137,55 @@ export function Billing() {
         )}
       </section>
     </div>
+  );
+}
+
+export function BillingEntryRow({ entry }: { entry: BillingEntry }) {
+  return (
+    <article aria-label={`${entry.kind === 'refund' ? 'Refund' : 'Payment'} record`}>
+      <div className="billing-ledger-cell">
+        <span className="billing-ledger-label">Type</span>
+        <strong>{entry.kind === 'refund' ? 'Refund' : 'Payment'}</strong>
+      </div>
+      <div className="billing-ledger-cell">
+        <span className="billing-ledger-label">Job</span>
+        <span>
+          {entry.jobId ? (
+            <Link href={`/app/jobs/${encodeURIComponent(entry.jobId)}`}>
+              {entry.repository || entry.jobId.slice(0, 10)}
+            </Link>
+          ) : (
+            entry.repository || 'Job record'
+          )}
+        </span>
+      </div>
+      <div className="billing-ledger-cell">
+        <span className="billing-ledger-label">Status</span>
+        <WorkbenchStatus value={entry.state} />
+      </div>
+      <div className="billing-ledger-cell">
+        <span className="billing-ledger-label">Amount</span>
+        <span>{formatUsdcAtomic(entry.amountAtomic)}</span>
+      </div>
+      <div className="billing-ledger-cell billing-ledger-recorded">
+        <span className="billing-ledger-label">Recorded</span>
+        <span>{entry.occurredAt ? formatTime(entry.occurredAt) : 'Time unavailable'}</span>
+      </div>
+      <div className="billing-ledger-cell billing-ledger-evidence">
+        <span className="billing-ledger-label">Evidence</span>
+        {entry.transaction ? (
+          <a
+            href={`https://solscan.io/tx/${encodeURIComponent(entry.transaction)}`}
+            target="_blank"
+            rel="noreferrer"
+            aria-label={`Open ${entry.kind} transaction evidence on Solscan`}
+          >
+            Transaction ↗
+          </a>
+        ) : (
+          <span>Not finalized</span>
+        )}
+      </div>
+    </article>
   );
 }

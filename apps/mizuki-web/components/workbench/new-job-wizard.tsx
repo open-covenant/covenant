@@ -4,7 +4,7 @@ import type { SolanaSignTransactionFeature } from '@solana/wallet-standard-featu
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { formatTime, formatUsdcAtomic, stateLabel } from '@/lib/format';
+import { formatTime, formatUsdcAtomic, stateLabel, truncateAddress } from '@/lib/format';
 import { githubIssuePattern } from '@/lib/github-url';
 import {
   checkQuotePaymentStatus,
@@ -209,9 +209,11 @@ function IssueAndPayment({
   const {
     wallets,
     connected,
+    ready: walletReady,
     connecting,
     error: walletError,
     connect,
+    disconnect,
   } = useStandardWallet('transaction');
 
   useEffect(() => {
@@ -302,7 +304,7 @@ function IssueAndPayment({
   }
 
   async function payAndStart() {
-    if (!quote || !connected) return;
+    if (!quote || !connected || !walletReady) return;
     if (!quoteMatchesIssue(quote, issueUrl)) {
       setQuote(null);
       setState('idle');
@@ -622,16 +624,14 @@ function IssueAndPayment({
                       </div>
                     )
                   ) : (
-                    <button
-                      className="wizard-pay-button"
-                      type="button"
-                      disabled={state === 'paying'}
-                      onClick={() => void payAndStart()}
-                    >
-                      {state === 'paying'
-                        ? 'Confirming payment…'
-                        : `Pay ${formatUsdcAtomic(quote.priceAtomic)} and start`}
-                    </button>
+                    <ConnectedPaymentSummary
+                      address={connected.account.address}
+                      amountAtomic={quote.priceAtomic}
+                      ready={walletReady}
+                      paying={state === 'paying'}
+                      changeWallet={() => void disconnect()}
+                      pay={() => void payAndStart()}
+                    />
                   )}
                   <p className="wizard-consent">
                     By paying, you accept the <Link href="/terms">service terms</Link> and
@@ -651,6 +651,58 @@ function IssueAndPayment({
         </div>
       )}
     </>
+  );
+}
+
+export function ConnectedPaymentSummary({
+  address,
+  amountAtomic,
+  ready,
+  paying,
+  changeWallet,
+  pay,
+}: {
+  address: string;
+  amountAtomic: string;
+  ready: boolean;
+  paying: boolean;
+  changeWallet: () => void;
+  pay: () => void;
+}) {
+  return (
+    <div className="wizard-connected-payment">
+      <div className="wizard-connected-payment-heading">
+        <div>
+          <span>Connected payer</span>
+          <strong title={address}>{truncateAddress(address, 7)}</strong>
+        </div>
+        <button type="button" disabled={paying} onClick={changeWallet}>
+          Change wallet
+        </button>
+      </div>
+      <dl>
+        <div>
+          <dt>Network</dt>
+          <dd>Solana mainnet</dd>
+        </div>
+        <div>
+          <dt>Asset</dt>
+          <dd>USDC</dd>
+        </div>
+        <div>
+          <dt>Exact amount</dt>
+          <dd>{formatUsdcAtomic(amountAtomic)}</dd>
+        </div>
+      </dl>
+      <p>
+        {ready
+          ? 'Wallet account and disconnect changes are being monitored.'
+          : 'Waiting for the wallet account subscription before payment can begin.'}
+      </p>
+      <button className="wizard-pay-button" type="button" disabled={paying || !ready} onClick={pay}>
+        {paying ? 'Confirming payment…' : `Pay ${formatUsdcAtomic(amountAtomic)} and start`}
+      </button>
+    </div>
   );
 }
 

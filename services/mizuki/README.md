@@ -57,6 +57,7 @@ Before changing the production coding route or model, run `pnpm --filter @covena
 - `POST /v1/preflights` with `{"github_issue_url":"https://github.com/owner/repo/issues/1"}` checks both App installations, maintainer authority, attributable authorization evidence, scope, current repository metadata, and validation commands without creating a quote or accepting payment.
 - `POST /v1/quotes` with `{"github_issue_url":"https://github.com/owner/repo/issues/1"}`.
 - `POST /v1/jobs` with `{"quote_id":"..."}`, `Idempotency-Key`, and the x402 v2 `PAYMENT-SIGNATURE` header.
+- `GET /v1/account/quotes/:quoteId/payment-status` with the original `Idempotency-Key` safely distinguishes an existing job reservation from an unpaid quote. It never requests or submits a payment signature.
 - `GET /v1/jobs/:id` for PR, validation, or refund status.
 - `GET /v1/metrics` and `GET /metrics` for the public unit-economics dashboard.
 - `GET /v1/admission` for the public paid-intake and new-claim switch status. Both switches start closed on a fresh database.
@@ -64,7 +65,9 @@ Before changing the production coding route or model, run `pnpm --filter @covena
 - `GET /v1/admin/admission` and `POST /v1/admin/admission` require the admin bearer token. Updates accept `intakeEnabled`, `claimsEnabled`, and a 10-500 character `reason`; paid authorization and settlement read the durable switch inside the same serial gate.
 - `POST /v1/admin/bounties/:bountyId/disputes/:disputeId/resolve` requires the admin bearer token, an idempotency key, a release/refund decision, and normalized public evidence. Retryable signer failures remain pending. A dispute cannot pretend to freeze a release that has already begun.
 
-Run `pnpm --filter @covenant/mizuki mcp` to expose `mizuki_quote`, `mizuki_submit`, and `mizuki_status` over stdio. A wallet-capable host creates the x402 signature; Mizuki never asks an MCP client for a private key.
+Run `pnpm --filter @covenant/mizuki mcp` to expose quote, submission, status, repository readiness, issue preflight, and payment-recovery tools over stdio. A wallet-capable host creates the x402 signature; Mizuki never asks an MCP client for a private key. Every MCP API request has a bounded timeout, configurable from 1,000 to 60,000 milliseconds with `MIZUKI_MCP_TIMEOUT_MS`.
+
+Repository, issue, and payment-recovery tools fail closed unless `MIZUKI_SESSION` contains a valid signed Workbench session supplied through the MCP host’s secret storage. They reuse the same authenticated maintainer, GitHub App, repository-link, and quote-account checks as Workbench. They do not accept a GitHub token as a substitute and cannot connect a new repository; complete that explicit authorization in Workbench first.
 
 Expensive public mutations use bounded per-source token buckets and return `429` with `Retry-After`. Production on Render must set `MIZUKI_TRUSTED_PROXY_HOPS=1` and share `MIZUKI_WEB_PROXY_SECRET` only with the same-origin web proxy. The setting enables Render-specific edge trust; it is not a generic proxy-chain depth. Direct ingress validates Cloudflare's overwritten `CF-Connecting-IP` value and ignores `X-Forwarded-For`, which Cloudflare appends to caller-controlled values. Missing or malformed edge identity falls back to the direct socket. The authenticated web proxy context carries the same validated address without trusting browser-supplied Mizuki headers. Activity streams have global, per-source, and idle-lifetime caps.
 

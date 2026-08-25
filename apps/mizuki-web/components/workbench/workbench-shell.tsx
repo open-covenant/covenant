@@ -11,17 +11,24 @@ import {
   workbenchRequest,
 } from '@/lib/workbench-client';
 
-const primaryNavigation = [
-  { href: '/app', label: 'Overview', exact: true },
-  { href: '/app/repositories', label: 'Repositories' },
-  { href: '/app/jobs', label: 'Jobs' },
-  { href: '/app/bounties', label: 'Bounties' },
-  { href: '/app/billing', label: 'Payments & refunds' },
+export type WorkbenchNavigationItem = {
+  href: string;
+  label: string;
+  icon: string;
+  exact?: boolean;
+};
+
+export const primaryNavigation: WorkbenchNavigationItem[] = [
+  { href: '/app', label: 'Overview', icon: '⌂', exact: true },
+  { href: '/app/repositories', label: 'Repositories', icon: '▦' },
+  { href: '/app/jobs', label: 'Jobs', icon: '✓' },
+  { href: '/app/bounties', label: 'Bounties', icon: '◇' },
+  { href: '/app/billing', label: 'Payments & refunds', icon: '$' },
 ];
 
-const secondaryNavigation = [
-  { href: '/app/integrations', label: 'Integrations' },
-  { href: '/app/settings', label: 'Settings' },
+export const secondaryNavigation: WorkbenchNavigationItem[] = [
+  { href: '/app/integrations', label: 'Integrations', icon: '↔' },
+  { href: '/app/settings', label: 'Settings', icon: '⚙' },
 ];
 
 export function WorkbenchShell({ children }: { children: React.ReactNode }) {
@@ -71,7 +78,10 @@ export function WorkbenchShell({ children }: { children: React.ReactNode }) {
         </Link>
 
         <Link className="workbench-new-job" href="/app/jobs/new">
-          <span aria-hidden="true">+</span> New maintenance job
+          <span className="workbench-new-job-icon" aria-hidden="true">
+            +
+          </span>
+          <span>New job</span>
         </Link>
 
         <WorkbenchNavigation pathname={pathname} items={primaryNavigation} />
@@ -105,7 +115,10 @@ export function WorkbenchShell({ children }: { children: React.ReactNode }) {
         {primaryNavigation.slice(0, 4).map((item) => (
           <WorkbenchNavLink item={item} pathname={pathname} key={item.href} />
         ))}
-        <WorkbenchNavLink item={{ href: '/app/settings', label: 'More' }} pathname={pathname} />
+        <WorkbenchNavLink
+          item={{ href: '/app/settings', label: 'More', icon: '•••' }}
+          pathname={pathname}
+        />
       </nav>
     </div>
   );
@@ -116,7 +129,7 @@ function WorkbenchNavigation({
   items,
 }: {
   pathname: string;
-  items: Array<{ href: string; label: string; exact?: boolean }>;
+  items: WorkbenchNavigationItem[];
 }) {
   return (
     <nav className="workbench-navigation" aria-label="Workbench sections">
@@ -127,17 +140,19 @@ function WorkbenchNavigation({
   );
 }
 
-function WorkbenchNavLink({
+export function WorkbenchNavLink({
   item,
   pathname,
 }: {
-  item: { href: string; label: string; exact?: boolean };
+  item: WorkbenchNavigationItem;
   pathname: string;
 }) {
   const current = item.exact ? pathname === item.href : pathname.startsWith(item.href);
   return (
     <Link href={item.href} aria-current={current ? 'page' : undefined}>
-      <i aria-hidden="true" />
+      <span className="workbench-nav-icon" aria-hidden="true">
+        {item.icon}
+      </span>
       <span>{item.label}</span>
     </Link>
   );

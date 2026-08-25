@@ -3748,6 +3748,7 @@ textarea:focus-visible {
 
   .contract-outcomes {
     grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr);
   }
 
   .proof-or {

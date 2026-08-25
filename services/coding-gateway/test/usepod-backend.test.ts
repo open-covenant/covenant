@@ -157,6 +157,9 @@ describe('UsePodBackend', () => {
     vi.stubGlobal('fetch', async () => response('deepseek.v3.2'));
     await expect(deepseek()).resolves.toMatchObject({ output: 'Done.' });
 
+    vi.stubGlobal('fetch', async () => response('deepseek/deepseek-v3.2'));
+    await expect(deepseek()).resolves.toMatchObject({ output: 'Done.' });
+
     vi.stubGlobal('fetch', async () => response('deepseek.v3.1'));
     await expect(deepseek()).rejects.toThrow('UsePod returned a different model');
   });

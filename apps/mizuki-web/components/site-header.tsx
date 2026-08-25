@@ -63,13 +63,13 @@ export function SiteHeader({ intakeOpen }: { intakeOpen: boolean }) {
             ))}
           </nav>
         </details>
-        <Link href="/work" className="header-cta">
-          <span className="header-cta-long">
-            {intakeOpen ? 'Request a quote' : 'View service status'}
-          </span>
-          <span className="header-cta-short">{intakeOpen ? 'Quote' : 'Status'}</span>
-          <span aria-hidden="true">↗</span>
-        </Link>
+        {intakeOpen && (
+          <Link href="/work" className="header-cta">
+            <span className="header-cta-long">Request a quote</span>
+            <span className="header-cta-short">Quote</span>
+            <span aria-hidden="true">↗</span>
+          </Link>
+        )}
       </div>
     </header>
   );

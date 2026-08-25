@@ -3,7 +3,7 @@
 import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { normalizeAccount } from '@/lib/workbench';
+import { normalizeAccount, workbenchAuthHref } from '@/lib/workbench';
 import { useWorkbenchResource, workbenchRequest } from '@/lib/workbench-client';
 
 const primaryNavigation = [
@@ -25,7 +25,7 @@ export function WorkbenchShell({ children }: { children: React.ReactNode }) {
   const account = useWorkbenchResource('/v1/account', normalizeAccount);
 
   if (account.status === 'loading') return <WorkbenchShellLoading />;
-  if (account.status === 'unauthorized') return <WorkbenchSignIn />;
+  if (account.status === 'unauthorized') return <WorkbenchSignIn returnTo={pathname} />;
   if (account.status === 'error') {
     return (
       <WorkbenchAccessState
@@ -127,14 +127,14 @@ function WorkbenchNavLink({
   );
 }
 
-function WorkbenchSignIn() {
+function WorkbenchSignIn({ returnTo }: { returnTo: string }) {
   return (
     <WorkbenchAccessState
       mark="M"
       title="Sign in to Mizuki Workbench"
       detail="Use GitHub to manage public repositories, request fixed quotes, and track pull requests or refunds."
       action={
-        <a href="/api/mizuki/v1/auth/github?return_to=%2Fapp">
+        <a href={workbenchAuthHref(returnTo)}>
           Continue with GitHub <span aria-hidden="true">↗</span>
         </a>
       }

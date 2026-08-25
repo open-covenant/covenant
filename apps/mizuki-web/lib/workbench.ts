@@ -82,6 +82,11 @@ export type WorkbenchBilling = {
   entries: BillingEntry[];
 };
 
+export function workbenchAuthHref(returnTo: string): string {
+  const destination = returnTo === '/app' || returnTo.startsWith('/app/') ? returnTo : '/app';
+  return `/api/mizuki/v1/auth/github?return_to=${encodeURIComponent(destination)}`;
+}
+
 type UnknownRecord = Record<string, unknown>;
 
 function record(value: unknown): UnknownRecord {

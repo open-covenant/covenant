@@ -183,7 +183,10 @@ export function createApp(deps: AppDependencies) {
         admission.consume('oauth_start', req);
         const redirect =
           url.searchParams.get('return_to') ?? url.searchParams.get('redirect') ?? undefined;
-        const authorization = await deps.auth.beginGithubOAuth(redirect);
+        const pullRequest = url.searchParams.get('authorize_pr');
+        const authorization = pullRequest
+          ? await deps.auth.beginGithubOAuth(redirect, pullRequest)
+          : await deps.auth.beginGithubOAuth(redirect);
         res.writeHead(302, {
           location: authorization.url,
           'set-cookie': githubOAuthFlowCookie(

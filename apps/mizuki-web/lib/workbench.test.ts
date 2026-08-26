@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  authorizePullRequestHref,
   bountyPayoutText,
   githubAuthErrorMessage,
   isActiveJob,
@@ -39,6 +40,28 @@ describe('Workbench authentication', () => {
     );
     expect(workbenchAuthHref('/application')).toBe('/api/mizuki/v1/auth/github?return_to=%2Fapp');
     expect(workbenchAuthHref('/app#session')).toBe('/api/mizuki/v1/auth/github?return_to=%2Fapp');
+  });
+
+  it('builds an in-app pull request authorization flow', () => {
+    expect(
+      authorizePullRequestHref({
+        repository: 'open-covenant/covenant',
+        number: 196,
+        title: 'RWA firewall',
+        url: 'https://github.com/open-covenant/covenant/pull/196',
+        state: 'open',
+        draft: false,
+        authorized: false,
+        headRef: 'feat/rwa-firewall',
+        headSha: 'a'.repeat(40),
+        baseRef: 'main',
+        createdAt: '2026-08-26T10:00:00.000Z',
+        updatedAt: '2026-08-26T11:00:00.000Z',
+        provenance: { kind: 'unlinked' },
+      }),
+    ).toBe(
+      '/api/mizuki/v1/auth/github?return_to=%2Fapp%2Fjobs%2Fnew%3Fowner%3Dopen-covenant%26repo%3Dcovenant&authorize_pr=https%3A%2F%2Fgithub.com%2Fopen-covenant%2Fcovenant%2Fpull%2F196',
+    );
   });
 
   it('shows only bounded OAuth failure messages', () => {

@@ -5,6 +5,7 @@ import { useMemo, useState } from 'react';
 import { JobReceipt } from '@/components/job-receipt';
 import { formatTime, formatUsdcAtomic, relativeTime, stateLabel } from '@/lib/format';
 import {
+  authorizePullRequestHref,
   isActiveJob,
   jobIssueNumber,
   jobRepository,
@@ -183,8 +184,13 @@ export function RepositoryPullRequests({ repository }: { repository?: string } =
 
 function PullRequestRow({ pullRequest }: { pullRequest: WorkbenchPullRequest }) {
   return (
-    <a href={pullRequest.url} target="_blank" rel="noreferrer">
-      <div className="repository-pull-request-main">
+    <div className="repository-pull-request-row">
+      <a
+        className="repository-pull-request-main"
+        href={pullRequest.url}
+        target="_blank"
+        rel="noreferrer"
+      >
         <span>
           {pullRequest.repository} · #{pullRequest.number}
           {pullRequest.author ? ` · @${pullRequest.author}` : ''}
@@ -194,19 +200,30 @@ function PullRequestRow({ pullRequest }: { pullRequest: WorkbenchPullRequest }) 
           {pullRequest.headRef} → {pullRequest.baseRef} · updated{' '}
           {relativeTime(pullRequest.updatedAt)}
         </small>
-      </div>
+      </a>
       <div className="repository-pull-request-meta">
-        <span className={`pull-request-provenance ${pullRequest.provenance.kind}`}>
+        <span
+          className={`pull-request-provenance ${pullRequest.authorized ? 'authorized' : pullRequest.provenance.kind}`}
+        >
           {pullRequestProvenanceLabel(pullRequest)}
         </span>
         <WorkbenchStatus value={pullRequest.draft ? 'draft' : pullRequest.state} />
-        <span aria-hidden="true">↗</span>
+        {pullRequest.authorized ? (
+          <a href={pullRequest.url} target="_blank" rel="noreferrer" aria-label="Open on GitHub">
+            ↗
+          </a>
+        ) : (
+          <Link className="authorize-pull-request" href={authorizePullRequestHref(pullRequest)}>
+            Authorize
+          </Link>
+        )}
       </div>
-    </a>
+    </div>
   );
 }
 
 function pullRequestProvenanceLabel(pullRequest: WorkbenchPullRequest): string {
+  if (pullRequest.authorized) return 'Authorized pull request';
   if (pullRequest.provenance.kind === 'paid_job') return 'Paid Mizuki job';
   if (pullRequest.provenance.kind === 'bounty') return 'Funded bounty';
   return 'Unlinked repository PR';

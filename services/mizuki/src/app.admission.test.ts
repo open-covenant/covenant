@@ -872,6 +872,26 @@ describe('public route responses', () => {
     expect(beginGithubOAuth).toHaveBeenCalledWith('/app');
   });
 
+  it('binds pull request authorization to the OAuth flow', async () => {
+    const store = new MemoryStore();
+    const beginGithubOAuth = vi.fn(async () => ({
+      url: 'https://github.com/login/oauth/authorize?state=signed-state',
+      flowCookie: 'browser-flow-secret',
+    }));
+    const base = await serve(dependencies(store, { auth: { beginGithubOAuth } }));
+
+    const response = await fetch(
+      `${base}/v1/auth/github?return_to=%2Fapp%2Fjobs%2Fnew&authorize_pr=https%3A%2F%2Fgithub.com%2Fopen-covenant%2Fcovenant%2Fpull%2F196`,
+      { redirect: 'manual' },
+    );
+
+    expect(response.status).toBe(302);
+    expect(beginGithubOAuth).toHaveBeenCalledWith(
+      '/app/jobs/new',
+      'https://github.com/open-covenant/covenant/pull/196',
+    );
+  });
+
   it('fails closed with retry guidance when browser OAuth capacity is exhausted', async () => {
     const store = new MemoryStore();
     const base = await serve(

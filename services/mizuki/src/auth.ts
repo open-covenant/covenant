@@ -8,6 +8,11 @@ import { StateConflictError, type MizukiStore } from './store.js';
 import type { ApiTokenScope, Contributor, WalletChallenge } from './types.js';
 
 const githubUserSchema = z.object({ id: z.number().int().positive(), login: z.string().min(1) });
+const pullRequestAuthorizationSchema = z.object({
+  owner: z.string().regex(/^[A-Za-z0-9_.-]{1,100}$/),
+  repo: z.string().regex(/^[A-Za-z0-9_.-]{1,100}$/),
+  number: z.number().int().positive().max(2_147_483_647),
+});
 const tokenSchema = z.object({
   githubId: z.string(),
   githubLogin: z.string(),
@@ -20,6 +25,7 @@ const stateSchema = z.object({
   exp: z.number().int(),
   nonce: z.string().uuid(),
   browserBinding: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  authorizePullRequest: pullRequestAuthorizationSchema.optional(),
 });
 
 export const GITHUB_OAUTH_FLOW_TTL_SECONDS = 10 * 60;
@@ -29,17 +35,22 @@ export type GithubOAuthErrorCode =
   | 'expired'
   | 'incomplete'
   | 'invalid'
+  | 'permission'
   | 'replayed'
   | 'unavailable';
 
 export class GithubOAuthCallbackError extends Error {
-  constructor(readonly code: Extract<GithubOAuthErrorCode, 'expired' | 'invalid' | 'replayed'>) {
+  constructor(
+    readonly code: Extract<GithubOAuthErrorCode, 'expired' | 'invalid' | 'permission' | 'replayed'>,
+  ) {
     super(
       code === 'expired'
         ? 'OAuth browser flow expired'
-        : code === 'replayed'
-          ? 'OAuth browser flow was already used'
-          : 'OAuth browser flow is invalid',
+        : code === 'permission'
+          ? 'GitHub did not grant permission to authorize this pull request'
+          : code === 'replayed'
+            ? 'OAuth browser flow was already used'
+            : 'OAuth browser flow is invalid',
     );
   }
 }
@@ -69,7 +80,8 @@ export class ContributorAuth {
     private readonly config: Pick<
       Config,
       'publicBaseUrl' | 'webOrigin' | 'githubClientId' | 'githubClientSecret' | 'sessionSecret'
-    >,
+    > &
+      Partial<Pick<Config, 'githubAuthorizationLabel'>>,
     private readonly store: MizukiStore,
     private readonly request: typeof fetch = fetch,
     private readonly identityRegistrar?: GithubIdentityRegistrar,
@@ -94,7 +106,10 @@ export class ContributorAuth {
     }
   }
 
-  async beginGithubOAuth(redirect = '/bounties'): Promise<{ url: string; flowCookie: string }> {
+  async beginGithubOAuth(
+    redirect = '/bounties',
+    authorizePullRequest?: string,
+  ): Promise<{ url: string; flowCookie: string }> {
     this.assertConfigured();
     const safeRedirect = githubOAuthRedirectPath(redirect);
     const now = Date.now();
@@ -102,6 +117,9 @@ export class ContributorAuth {
     const nonce = randomUUID();
     const flowCookie = randomBytes(32).toString('base64url');
     const browserBinding = this.browserBinding(flowCookie);
+    const authorization = authorizePullRequest
+      ? parsePullRequestAuthorization(authorizePullRequest)
+      : undefined;
     await this.store.saveGithubOAuthFlow({
       id: nonce,
       binding: browserBinding,
@@ -113,12 +131,13 @@ export class ContributorAuth {
       exp: expiresAt,
       nonce,
       browserBinding,
+      ...(authorization ? { authorizePullRequest: authorization } : {}),
     });
     const callback = `${this.config.webOrigin!.replace(/\/$/, '')}/api/mizuki/v1/auth/github/callback`;
     const query = new URLSearchParams({
       client_id: this.config.githubClientId!,
       redirect_uri: callback,
-      scope: 'read:user',
+      scope: authorization ? 'read:user public_repo' : 'read:user',
       state,
       prompt: 'select_account',
     });
@@ -172,7 +191,7 @@ export class ContributorAuth {
     });
     if (!tokenResponse.ok) throw new Error(`GitHub OAuth exchange failed: ${tokenResponse.status}`);
     const tokenBody = z
-      .object({ access_token: z.string().min(1) })
+      .object({ access_token: z.string().min(1), scope: z.string().optional() })
       .parse(await tokenResponse.json());
     const userResponse = await this.request('https://api.github.com/user', {
       headers: {
@@ -195,6 +214,17 @@ export class ContributorAuth {
       throw new Error('policy signer GitHub identity does not match the OAuth user');
     }
     const contributor = await this.store.upsertContributor(String(user.id), user.login);
+    if (state.authorizePullRequest) {
+      const scopes = new Set((tokenBody.scope ?? '').split(/[ ,]+/).filter(Boolean));
+      if (!scopes.has('public_repo') && !scopes.has('repo')) {
+        throw new GithubOAuthCallbackError('permission');
+      }
+      await this.authorizePullRequest(
+        tokenBody.access_token,
+        contributor,
+        state.authorizePullRequest,
+      );
+    }
     const session = this.sign({
       githubId: contributor.githubId,
       githubLogin: contributor.githubLogin,
@@ -202,6 +232,78 @@ export class ContributorAuth {
       exp: Date.now() + 7 * 24 * 60 * 60_000,
     });
     return { contributor, session, redirect: state.redirect };
+  }
+
+  private async authorizePullRequest(
+    accessToken: string,
+    contributor: Contributor,
+    target: z.infer<typeof pullRequestAuthorizationSchema>,
+  ): Promise<void> {
+    const linked = await this.store.repositoriesForAccount(contributor.githubId, 25);
+    const repository = `${target.owner}/${target.repo}`.toLowerCase();
+    if (!linked.repositories.some((candidate) => candidate.repository === repository)) {
+      throw new GithubOAuthCallbackError('permission');
+    }
+
+    const headers = {
+      accept: 'application/vnd.github+json',
+      authorization: `Bearer ${accessToken}`,
+      'content-type': 'application/json',
+      'user-agent': 'mizuki-maintainer',
+      'x-github-api-version': '2022-11-28',
+    };
+    const root = `https://api.github.com/repos/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repo)}`;
+    const [repositoryResponse, pullResponse] = await Promise.all([
+      this.request(root, { headers, signal: AbortSignal.timeout(15_000) }),
+      this.request(`${root}/pulls/${target.number}`, {
+        headers,
+        signal: AbortSignal.timeout(15_000),
+      }),
+    ]);
+    if (!repositoryResponse.ok || !pullResponse.ok) {
+      throw new GithubOAuthCallbackError('permission');
+    }
+    const access = z
+      .object({
+        private: z.literal(false),
+        permissions: z.object({
+          admin: z.boolean(),
+          maintain: z.boolean().optional(),
+          push: z.boolean(),
+          triage: z.boolean().optional(),
+        }),
+      })
+      .safeParse(await repositoryResponse.json());
+    if (!access.success) throw new GithubOAuthCallbackError('permission');
+    if (
+      !access.data.permissions.admin &&
+      !access.data.permissions.maintain &&
+      !access.data.permissions.push &&
+      !access.data.permissions.triage
+    ) {
+      throw new GithubOAuthCallbackError('permission');
+    }
+    if (!z.object({ state: z.literal('open') }).safeParse(await pullResponse.json()).success) {
+      throw new GithubOAuthCallbackError('permission');
+    }
+
+    const label = this.config.githubAuthorizationLabel ?? 'mizuki:authorized';
+    const labelResponse = await this.request(`${root}/issues/${target.number}/labels`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ labels: [label] }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!labelResponse.ok) throw new GithubOAuthCallbackError('permission');
+    const labels = z.array(z.object({ name: z.string() })).safeParse(await labelResponse.json());
+    if (!labels.success) throw new GithubOAuthCallbackError('permission');
+    if (
+      !labels.data.some(
+        (candidate) => candidate.name.trim().toLowerCase() === label.trim().toLowerCase(),
+      )
+    ) {
+      throw new GithubOAuthCallbackError('permission');
+    }
   }
 
   session(value: string | undefined): ContributorSession | undefined {
@@ -359,6 +461,20 @@ export function githubOAuthRedirectPath(value: string | undefined, fallback = '/
   } catch {
     return fallback;
   }
+}
+
+function parsePullRequestAuthorization(
+  value: string,
+): z.infer<typeof pullRequestAuthorizationSchema> {
+  const match = value.match(
+    /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/pull\/(\d+)(?:[/?#].*)?$/,
+  );
+  if (!match) throw new GithubOAuthCallbackError('invalid');
+  return pullRequestAuthorizationSchema.parse({
+    owner: match[1],
+    repo: match[2],
+    number: Number(match[3]),
+  });
 }
 
 function mac(value: string, secret: string): string {

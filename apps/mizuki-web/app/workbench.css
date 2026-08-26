@@ -620,12 +620,16 @@
 }
 
 .repository-pull-request-list {
-  overflow: hidden;
+  max-height: min(440px, 55vh);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   border: 1px solid var(--wb-line);
   border-radius: 2px;
 }
 
-.repository-pull-request-list > a {
+.repository-pull-request-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   min-height: 92px;
@@ -636,11 +640,11 @@
   transition: background 140ms ease;
 }
 
-.repository-pull-request-list > a:last-child {
+.repository-pull-request-row:last-child {
   border-bottom: 0;
 }
 
-.repository-pull-request-list > a:hover {
+.repository-pull-request-row:hover {
   background: var(--wb-panel-raised);
 }
 
@@ -648,6 +652,24 @@
   display: grid;
   min-width: 0;
   gap: 6px;
+}
+
+.authorize-pull-request {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  padding: 0 12px;
+  border: 1px solid var(--wb-line-strong);
+  border-radius: 999px;
+  color: var(--wb-text);
+  font:
+    600 9px/1 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .repository-pull-request-main span,
@@ -695,7 +717,8 @@
 }
 
 .pull-request-provenance.paid_job,
-.pull-request-provenance.bounty {
+.pull-request-provenance.bounty,
+.pull-request-provenance.authorized {
   border-color: var(--wb-line-strong);
   color: var(--wb-text);
 }

@@ -100,6 +100,7 @@ const pullRequestListSchema = z.array(
     html_url: z.string().url(),
     state: z.enum(['open', 'closed']),
     draft: z.boolean(),
+    labels: z.array(z.object({ name: z.string().min(1) })).default([]),
     user: z.object({ login: z.string().min(1) }).nullable(),
     head: z.object({ ref: z.string().min(1), sha: z.string().regex(/^[a-f0-9]{40,64}$/) }),
     base: z.object({ ref: z.string().min(1) }),
@@ -149,6 +150,7 @@ export type WorkbenchPullRequest = {
   url: string;
   state: 'open' | 'closed' | 'merged';
   draft: boolean;
+  authorized: boolean;
   author?: string;
   headRef: string;
   headSha: string;
@@ -397,6 +399,7 @@ export class GithubClient {
         url: pull.html_url,
         state: pull.merged_at ? 'merged' : pull.state,
         draft: pull.draft,
+        authorized: hasAuthorizationLabel(pull.labels, this.config.githubAuthorizationLabel),
         ...(pull.user ? { author: pull.user.login } : {}),
         headRef: pull.head.ref,
         headSha: pull.head.sha,

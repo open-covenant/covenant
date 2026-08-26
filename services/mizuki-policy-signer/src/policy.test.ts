@@ -469,6 +469,50 @@ describe('production readiness', () => {
     });
   });
 
+  it('serves recent healthy evidence through a transient RPC outage and expires it', async () => {
+    let now = new Date('2026-08-23T12:00:00.000Z');
+    const { chain, policy } = fixture({ now: () => new Date(now) });
+    const first = await policy.probeReadiness();
+    let healthCalls = 0;
+    chain.health = async () => {
+      healthCalls += 1;
+      throw new PolicyError('rpc_unavailable', 'RPC is unavailable', 503, true);
+    };
+
+    now = new Date(now.getTime() + 14_999);
+    await expect(policy.probeReadiness()).resolves.toEqual(first);
+    expect(healthCalls).toBe(0);
+
+    now = new Date(now.getTime() + 1);
+    await expect(policy.probeReadiness()).resolves.toEqual(first);
+    expect(healthCalls).toBe(2);
+
+    now = new Date(now.getTime() + 15_001);
+    await expect(policy.probeReadiness()).resolves.toMatchObject({
+      healthy: false,
+      checks: { rpcConsensus: false },
+    });
+    expect(healthCalls).toBe(4);
+  });
+
+  it('expires readiness evidence when the clock moves backward', async () => {
+    let now = new Date('2026-08-23T12:00:00.000Z');
+    const { chain, policy } = fixture({ now: () => new Date(now) });
+    await policy.probeReadiness();
+    let healthCalls = 0;
+    chain.health = async () => {
+      healthCalls += 1;
+      throw new PolicyError('rpc_unavailable', 'RPC is unavailable', 503, true);
+    };
+
+    now = new Date(now.getTime() - 1);
+    await expect(policy.probeReadiness()).resolves.toMatchObject({
+      healthy: false,
+      checks: { rpcConsensus: false },
+    });
+    expect(healthCalls).toBe(2);
+  });
+
   it('fails readiness when the signer credential cannot be verified', async () => {
     const { merges, policy } = fixture();
     merges.error = new PolicyError(

@@ -69,9 +69,14 @@ export interface PolicyServiceConfig {
   leaseMs?: number;
 }
 
+const READINESS_REFRESH_MS = 15_000;
+const READINESS_MAX_STALE_MS = 30_000;
+
 export class PolicyService {
   private readonly leaseMs: number;
   private readonly jobAuthorityPublicKey: PublicKey;
+  private readinessCache?: { evidence: SignerReadinessEvidence; succeededAtMs: number };
+  private readinessInFlight?: Promise<SignerReadinessEvidence>;
 
   constructor(
     private readonly config: PolicyServiceConfig,
@@ -614,6 +619,35 @@ export class PolicyService {
   }
 
   async probeReadiness(): Promise<SignerReadinessEvidence> {
+    const cached = this.readinessCache;
+    if (cached && this.readinessAge(cached) < READINESS_REFRESH_MS) return cached.evidence;
+
+    this.readinessInFlight ??= this.refreshReadiness().finally(() => {
+      this.readinessInFlight = undefined;
+    });
+    return this.readinessInFlight;
+  }
+
+  private async refreshReadiness(): Promise<SignerReadinessEvidence> {
+    let evidence = await this.collectReadiness();
+    if (!evidence.healthy) evidence = await this.collectReadiness();
+    if (evidence.healthy) {
+      this.readinessCache = { evidence, succeededAtMs: this.now().getTime() };
+      return evidence;
+    }
+
+    const cached = this.readinessCache;
+    return cached && this.readinessAge(cached) <= READINESS_MAX_STALE_MS
+      ? cached.evidence
+      : evidence;
+  }
+
+  private readinessAge(cached: { succeededAtMs: number }): number {
+    const ageMs = this.now().getTime() - cached.succeededAtMs;
+    return ageMs < 0 ? Number.POSITIVE_INFINITY : ageMs;
+  }
+
+  private async collectReadiness(): Promise<SignerReadinessEvidence> {
     const [database, chain, prices, github, reviewer] = await Promise.allSettled([
       this.store.ping(),
       this.chain.health(),

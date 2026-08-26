@@ -1,7 +1,6 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { formatTime, truncateAddress } from '@/lib/format';
 import {
@@ -339,7 +338,6 @@ function scopeDescription(scope: ApiTokenScope): string {
 }
 
 export function Settings() {
-  const router = useRouter();
   const account = useWorkbenchResource('/v1/account', normalizeAccount);
   const [logoutPending, setLogoutPending] = useState(false);
   const [logoutError, setLogoutError] = useState<string>();
@@ -349,8 +347,7 @@ export function Settings() {
     setLogoutError(undefined);
     try {
       await logoutWorkbench(() => {
-        router.push('/');
-        router.refresh();
+        window.location.replace('/app');
       });
     } catch {
       setLogoutError('Sign-out could not be confirmed. This page remains signed in; try again.');

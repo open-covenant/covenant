@@ -22,6 +22,7 @@ const githubWebhookHeaders = ['x-github-delivery', 'x-github-event', 'x-hub-sign
 
 const forwardedResponseHeaders = [
   'cache-control',
+  'clear-site-data',
   'content-type',
   'location',
   'payment-required',

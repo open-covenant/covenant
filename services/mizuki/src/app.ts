@@ -278,6 +278,7 @@ export function createApp(deps: AppDependencies) {
           'set-cookie',
           expiredSessionCookie(req, deps.config.trustedProxyHops ?? 0, deps.config.webProxySecret),
         );
+        res.setHeader('clear-site-data', '"cache", "cookies", "storage"');
         res.setHeader('cache-control', 'private, no-store');
         return json(res, 200, { ok: true });
       }

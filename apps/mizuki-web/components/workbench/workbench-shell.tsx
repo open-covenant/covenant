@@ -2,7 +2,7 @@
 
 import Image from 'next/image';
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { githubAuthErrorMessage, normalizeAccount, workbenchAuthHref } from '@/lib/workbench';
 import {
@@ -33,7 +33,6 @@ export const secondaryNavigation: WorkbenchNavigationItem[] = [
 
 export function WorkbenchShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const router = useRouter();
   const [authExpired, setAuthExpired] = useState(false);
   const [authError, setAuthError] = useState<string>();
   const [returnTo, setReturnTo] = useState(pathname);
@@ -74,8 +73,7 @@ export function WorkbenchShell({ children }: { children: React.ReactNode }) {
     setLogoutError(undefined);
     try {
       await logoutWorkbench(() => {
-        router.push('/');
-        router.refresh();
+        window.location.replace('/app');
       });
     } catch {
       setLogoutError('Sign-out could not be confirmed. This page remains signed in; try again.');

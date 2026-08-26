@@ -75,6 +75,36 @@ describe('Mizuki API proxy', () => {
     ]);
   });
 
+  it('forwards logout site-data clearing instructions', async () => {
+    vi.stubEnv('MIZUKI_WEB_PROXY_SECRET', 'p'.repeat(32));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        Response.json(
+          { ok: true },
+          {
+            headers: {
+              'cache-control': 'private, no-store',
+              'clear-site-data': '"cache", "cookies", "storage"',
+              'set-cookie': 'mizuki_session=; Path=/; Max-Age=0; HttpOnly',
+            },
+          },
+        ),
+      ),
+    );
+
+    const response = await POST(
+      new Request('https://mizuki.opencovenant.org/api/mizuki/v1/auth/logout', {
+        method: 'POST',
+      }),
+      { params: Promise.resolve({ path: ['v1', 'auth', 'logout'] }) },
+    );
+
+    expect(response.headers.get('cache-control')).toBe('private, no-store');
+    expect(response.headers.get('clear-site-data')).toBe('"cache", "cookies", "storage"');
+    expect(response.headers.get('set-cookie')).toContain('Max-Age=0');
+  });
+
   it('forwards the upstream request reference', async () => {
     vi.stubEnv('MIZUKI_WEB_PROXY_SECRET', 'p'.repeat(32));
     vi.stubGlobal(

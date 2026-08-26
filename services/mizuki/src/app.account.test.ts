@@ -692,6 +692,8 @@ describe('workbench account API', () => {
     expect(response.status).toBe(200);
     expect(response.headers.get('set-cookie')).toContain('mizuki_session=;');
     expect(response.headers.get('set-cookie')).toContain('Max-Age=0');
+    expect(response.headers.get('clear-site-data')).toBe('"cache", "cookies", "storage"');
+    expect(response.headers.get('cache-control')).toBe('private, no-store');
   });
 
   it('returns verified repository, issue, and preflight contracts', async () => {

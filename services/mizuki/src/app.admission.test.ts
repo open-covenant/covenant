@@ -975,6 +975,7 @@ describe('public route responses', () => {
       .fn()
       .mockRejectedValueOnce(new GithubOAuthCallbackError('replayed'))
       .mockRejectedValueOnce(new GithubOAuthCallbackError('expired'))
+      .mockRejectedValueOnce(new GithubOAuthCallbackError('inactive'))
       .mockRejectedValueOnce(new Error('private database detail'));
     const githubOAuthRedirect = vi.fn((state: string | undefined) =>
       state === 'signed-state' ? '/bounties/bounty-7?source=claim' : undefined,
@@ -1020,7 +1021,7 @@ describe('public route responses', () => {
       'https://mizuki.opencovenant.org/app?auth_error=denied',
     );
 
-    for (const expected of ['replayed', 'expired', 'unavailable']) {
+    for (const expected of ['replayed', 'expired', 'inactive', 'unavailable']) {
       const rejected = await fetch(
         `${base}/v1/auth/github/callback?code=temporary-code&state=signed-state`,
         {
@@ -1036,7 +1037,7 @@ describe('public route responses', () => {
       expect(await rejected.text()).not.toContain('sensitive-browser-secret');
       expect(rejected.headers.get('location')).not.toContain('private database detail');
     }
-    expect(callback).toHaveBeenCalledTimes(3);
+    expect(callback).toHaveBeenCalledTimes(4);
     expect(githubOAuthRedirect).toHaveBeenCalledWith('signed-state');
     expect(githubOAuthRedirect).toHaveBeenCalledWith('invalid-state');
     expect(JSON.stringify(consoleError.mock.calls)).not.toContain('private database detail');

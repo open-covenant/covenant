@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   authorizeIssueHref,
   authorizePullRequestHref,
+  canAuthorizePullRequest,
   bountyPayoutText,
   githubAuthErrorMessage,
   isActiveJob,
@@ -65,6 +66,29 @@ describe('Workbench authentication', () => {
     );
   });
 
+  it('offers authorization only for open, unauthorized pull requests', () => {
+    const pullRequest = {
+      repository: 'open-covenant/covenant',
+      number: 169,
+      title: 'Fix paid maintenance delivery',
+      url: 'https://github.com/open-covenant/covenant/pull/169',
+      state: 'open' as const,
+      draft: false,
+      authorized: false,
+      headRef: 'fix/mizuki-paid-delivery',
+      headSha: 'a'.repeat(40),
+      baseRef: 'main',
+      createdAt: '2026-08-23T10:00:00.000Z',
+      updatedAt: '2026-08-23T11:00:00.000Z',
+      provenance: { kind: 'unlinked' as const },
+    };
+
+    expect(canAuthorizePullRequest(pullRequest)).toBe(true);
+    expect(canAuthorizePullRequest({ ...pullRequest, state: 'closed' })).toBe(false);
+    expect(canAuthorizePullRequest({ ...pullRequest, state: 'merged' })).toBe(false);
+    expect(canAuthorizePullRequest({ ...pullRequest, authorized: true })).toBe(false);
+  });
+
   it('builds an in-app issue authorization flow', () => {
     expect(
       authorizeIssueHref(
@@ -86,6 +110,7 @@ describe('Workbench authentication', () => {
   it('shows only bounded OAuth failure messages', () => {
     expect(githubAuthErrorMessage('expired')).toContain('expired');
     expect(githubAuthErrorMessage('replayed')).toContain('already used');
+    expect(githubAuthErrorMessage('inactive')).toContain('closed or merged');
     expect(githubAuthErrorMessage('internal database detail')).toBeUndefined();
     expect(githubAuthErrorMessage('toString')).toBeUndefined();
   });

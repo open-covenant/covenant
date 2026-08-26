@@ -255,6 +255,47 @@ describe('ContributorAuth', () => {
     expect(JSON.stringify(await store.contributor('42'))).not.toContain('temporary-token');
   });
 
+  it('reports a merged pull request as inactive without attempting to label it', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    await store.linkAccountRepository('42', 'open-covenant', 'covenant');
+    const requests = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/login/oauth/access_token')) {
+        return Response.json({ access_token: 'temporary-token', scope: 'read:user,public_repo' });
+      }
+      if (url === 'https://api.github.com/user') {
+        return Response.json({ id: 42, login: 'maintainer' });
+      }
+      if (url === 'https://api.github.com/repos/open-covenant/covenant') {
+        return Response.json({
+          private: false,
+          permissions: { admin: false, maintain: true, push: true, triage: true },
+        });
+      }
+      if (url === 'https://api.github.com/repos/open-covenant/covenant/pulls/169') {
+        return Response.json({ state: 'closed', merged_at: '2026-08-23T12:00:00.000Z' });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+    const auth = oauthAuth(store, requests);
+    const authorization = await auth.beginGithubOAuth(
+      '/app/jobs/new?owner=open-covenant&repo=covenant',
+      'https://github.com/open-covenant/covenant/pull/169',
+    );
+
+    await expect(
+      auth.callback(
+        'code',
+        new URL(authorization.url).searchParams.get('state')!,
+        authorization.flowCookie,
+      ),
+    ).rejects.toMatchObject<GithubOAuthCallbackError>({ code: 'inactive' });
+    expect(requests.mock.calls.map(([input]) => String(input))).not.toContain(
+      'https://api.github.com/repos/open-covenant/covenant/issues/169/labels',
+    );
+  });
+
   it('authorizes a connected issue as the signed-in maintainer without storing OAuth access', async () => {
     const store = new MemoryStore();
     await store.upsertContributor('42', 'maintainer');

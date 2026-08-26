@@ -159,6 +159,10 @@ export function authorizePullRequestHref(pullRequest: WorkbenchPullRequest): str
   })}`;
 }
 
+export function canAuthorizePullRequest(pullRequest: WorkbenchPullRequest): boolean {
+  return pullRequest.state === 'open' && !pullRequest.authorized;
+}
+
 export function authorizeIssueHref(issue: WorkbenchIssue, owner: string, repo: string): string {
   const returnTo = `/app/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
   return `/api/mizuki/v1/auth/github?${new URLSearchParams({
@@ -191,6 +195,8 @@ export function githubAuthErrorMessage(value: string | null | undefined): string
       return 'GitHub sign-in was cancelled. No account or repository access was changed.';
     case 'expired':
       return 'This GitHub sign-in request expired. Start a new sign-in to continue.';
+    case 'inactive':
+      return 'This issue or pull request is already closed or merged and cannot be authorized for new work.';
     case 'incomplete':
       return 'GitHub returned an incomplete sign-in response. Start the sign-in again.';
     case 'invalid':

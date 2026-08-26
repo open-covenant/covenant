@@ -46,6 +46,7 @@ import {
   WorkbenchStatus,
 } from './workbench-primitives';
 import { OrganizationRepositorySelector } from './organization-repository-selector';
+import { RepositoryPullRequests } from './jobs';
 
 export function NewJobWizard({
   initialOwner,
@@ -169,14 +170,17 @@ export function NewJobWizard({
           </section>
 
           {repository?.readiness === 'ready' && (
-            <IssueAndPayment
-              repository={repository}
-              initialIssue={initialIssue}
-              accountId={paymentAccount.status === 'ready' ? paymentAccount.data : undefined}
-              accountLoading={paymentAccount.status === 'loading'}
-              refreshAccount={paymentAccount.refresh}
-              onPaymentLockChange={setRepositoryLocked}
-            />
+            <>
+              <RepositoryPullRequests repository={repository.fullName} />
+              <IssueAndPayment
+                repository={repository}
+                initialIssue={initialIssue}
+                accountId={paymentAccount.status === 'ready' ? paymentAccount.data : undefined}
+                accountLoading={paymentAccount.status === 'loading'}
+                refreshAccount={paymentAccount.refresh}
+                onPaymentLockChange={setRepositoryLocked}
+              />
+            </>
           )}
         </>
       ) : null}

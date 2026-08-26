@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import type { WorkbenchRepository } from '@/lib/workbench';
+import { WorkbenchSelect } from './workbench-select';
 
 export function OrganizationRepositorySelector({
   repositories,
@@ -30,27 +31,21 @@ export function OrganizationRepositorySelector({
 
   return (
     <div className="wizard-organization-selector">
-      <label htmlFor="workbench-organization">
-        GitHub organization or owner
-        <span className="wizard-select-control">
-          <select
-            id="workbench-organization"
-            value={organization}
-            disabled={disabled}
-            onChange={(event) => {
-              setOrganization(event.target.value);
-              onSelect('');
-            }}
-          >
-            <option value="">Choose an organization</option>
-            {organizations.map((owner) => (
-              <option value={owner} key={owner.toLowerCase()}>
-                {owner}
-              </option>
-            ))}
-          </select>
-        </span>
-      </label>
+      <div className="workbench-field">
+        <span id="workbench-organization-label">GitHub organization or owner</span>
+        <WorkbenchSelect
+          id="workbench-organization"
+          labelledBy="workbench-organization-label"
+          value={organization}
+          placeholder="Choose an organization"
+          options={organizations.map((owner) => ({ value: owner, label: owner }))}
+          disabled={disabled}
+          onChange={(owner) => {
+            setOrganization(owner);
+            onSelect('');
+          }}
+        />
+      </div>
 
       {organization && (
         <div className="wizard-repository-grid" aria-label={`Repositories in ${organization}`}>

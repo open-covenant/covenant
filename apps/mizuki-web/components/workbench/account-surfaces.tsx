@@ -19,6 +19,7 @@ import {
   WorkbenchPageHeader,
   WorkbenchStatus,
 } from './workbench-primitives';
+import { WorkbenchSelect } from './workbench-select';
 
 const maintenanceAppUrl = 'https://github.com/apps/mizuki-the-mech-core/installations/new';
 const verifierAppUrl = 'https://github.com/apps/mizuki-the-mech-policy-verifier/installations/new';
@@ -250,18 +251,22 @@ export function MachineAccess() {
               disabled={pending || Boolean(credential)}
             />
           </label>
-          <label>
-            Expiration
-            <select
-              value={duration}
-              onChange={(event) => setDuration(Number(event.target.value))}
+          <div className="workbench-field">
+            <span id="machine-token-expiration-label">Expiration</span>
+            <WorkbenchSelect
+              id="machine-token-expiration"
+              labelledBy="machine-token-expiration-label"
+              value={String(duration)}
+              placeholder="Choose an expiration"
+              options={[
+                { value: '30', label: '30 days' },
+                { value: '90', label: '90 days' },
+                { value: '365', label: '1 year' },
+              ]}
               disabled={pending || Boolean(credential)}
-            >
-              <option value={30}>30 days</option>
-              <option value={90}>90 days</option>
-              <option value={365}>1 year</option>
-            </select>
-          </label>
+              onChange={(nextDuration) => setDuration(Number(nextDuration))}
+            />
+          </div>
           <fieldset disabled={pending || Boolean(credential)}>
             <legend>Scopes</legend>
             {API_TOKEN_SCOPES.map((scope) => (

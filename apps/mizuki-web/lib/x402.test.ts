@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { parsePaymentTerms, selectPaymentRequirements } from './x402';
+import { parsePaymentTerms, paymentPreparationError, selectPaymentRequirements } from './x402';
 
 const network = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp';
 const asset = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
@@ -56,5 +56,23 @@ describe('x402 quote policy', () => {
     expect(() => selectPaymentRequirements(2, [requirements, requirements], terms)).toThrow(
       'does not match',
     );
+  });
+
+  it('explains an unfunded wallet without exposing SDK internals', () => {
+    expect(
+      paymentPreparationError(new Error('insufficient token balance'), '2 USDC'),
+    ).toBe(
+      'Your connected wallet does not have enough USDC on Solana to pay the 2 USDC quote. Add USDC to this wallet and try again. No payment or job was created.',
+    );
+  });
+
+  it('does not expose spend-control configuration to customers', () => {
+    const message = paymentPreparationError(
+      new Error('All payment requirements were rejected by spendControls.maxAmountPerPayment'),
+      '2 USDC',
+    );
+    expect(message).toContain('Workbench could not authorize this quote amount');
+    expect(message).not.toContain('spendControls');
+    expect(message).not.toContain('maxAmountPerPayment');
   });
 });

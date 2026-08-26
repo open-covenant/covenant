@@ -37,9 +37,26 @@ export function createPaymentFetch(input: {
 
   return wrapFetchWithPaymentFromConfig(fetch, {
     schemes: [{ network: terms.network, client: scheme }],
+    spendControls: { maxAmountPerPayment: '$10' },
     paymentRequirementsSelector: (version, requirements) =>
       selectPaymentRequirements(version, requirements, terms),
   });
+}
+
+export function paymentPreparationError(cause: unknown, quoteAmount: string): string {
+  const message = cause instanceof Error ? cause.message : '';
+
+  if (/insufficient|not enough|low balance|balance.*(?:small|low|zero)/i.test(message)) {
+    return `Your connected wallet does not have enough USDC on Solana to pay the ${quoteAmount} quote. Add USDC to this wallet and try again. No payment or job was created.`;
+  }
+  if (/rejected by spendControls|per.payment.cap|maxAmountPerPayment/i.test(message)) {
+    return 'Workbench could not authorize this quote amount. Refresh the page and request a new quote. Your wallet was not charged and no job was created.';
+  }
+  if (/user rejected|declined|cancelled|canceled/i.test(message)) {
+    return 'Payment was cancelled in your wallet. No payment or job was created.';
+  }
+
+  return `Payment could not start. Confirm that the connected wallet has at least ${quoteAmount} on Solana, then try again. No payment or job was created.`;
 }
 
 export function parsePaymentTerms(value: unknown, quoteAmount: string): PaymentTerms {

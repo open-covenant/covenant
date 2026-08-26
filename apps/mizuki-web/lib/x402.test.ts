@@ -85,6 +85,17 @@ describe('x402 quote policy', () => {
     expect(message).not.toContain('403');
   });
 
+  it('does not blame the wallet for an RPC request contract error', () => {
+    const message = paymentPreparationError(
+      new Error('Failed to create payment payload: HTTP error (400): Bad Request'),
+      '2 USDC',
+    );
+
+    expect(message).toContain('Solana payment network could not prepare the transaction');
+    expect(message).not.toContain('Reconnect the wallet');
+    expect(message).not.toContain('400');
+  });
+
   it('does not claim an unknown preparation error means insufficient funds', () => {
     const message = paymentPreparationError(new Error('unexpected wallet adapter error'), '2 USDC');
 

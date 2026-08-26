@@ -78,15 +78,20 @@ export async function POST(request: Request): Promise<Response> {
 
 function allowedParams(request: RpcRequest): boolean {
   if (request.method === 'getLatestBlockhash') {
-    return request.params === undefined || request.params.length === 0;
+    if (request.params?.length !== 1) return false;
+    const [config] = request.params;
+    return (
+      isRecord(config) && Object.keys(config).length === 1 && config.commitment === 'confirmed'
+    );
   }
   if (request.method !== 'getAccountInfo' || request.params?.length !== 2) return false;
   const [account, config] = request.params;
   return (
     account === USDC_MAINNET &&
     isRecord(config) &&
-    Object.keys(config).length === 1 &&
-    config.encoding === 'base64'
+    Object.keys(config).length === 2 &&
+    config.encoding === 'base64' &&
+    config.commitment === 'confirmed'
   );
 }
 

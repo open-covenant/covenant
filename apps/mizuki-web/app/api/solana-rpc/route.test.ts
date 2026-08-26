@@ -3,6 +3,7 @@ import { POST } from './route';
 
 const endpoint = 'https://mainnet.helius-rpc.com/?api-key=test-key';
 const mint = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+const confirmed = { commitment: 'confirmed' };
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -19,7 +20,7 @@ describe('Solana payment RPC', () => {
     );
 
     const response = await POST(
-      request({ jsonrpc: '2.0', id: 7, method: 'getLatestBlockhash', params: [] }),
+      request({ jsonrpc: '2.0', id: 7, method: 'getLatestBlockhash', params: [confirmed] }),
     );
 
     expect(response.status).toBe(200);
@@ -36,7 +37,7 @@ describe('Solana payment RPC', () => {
           jsonrpc: '2.0',
           id: 7,
           method: 'getLatestBlockhash',
-          params: [],
+          params: [confirmed],
         }),
       }),
     );
@@ -55,7 +56,7 @@ describe('Solana payment RPC', () => {
           jsonrpc: '2.0',
           id: 8,
           method: 'getAccountInfo',
-          params: [mint, { encoding: 'base64' }],
+          params: [mint, { encoding: 'base64', commitment: 'confirmed' }],
         },
         '203.0.113.8',
       ),
@@ -91,9 +92,11 @@ describe('Solana payment RPC', () => {
     const upstream = vi.spyOn(globalThis, 'fetch');
 
     for (const [index, params] of [
-      ['11111111111111111111111111111111', { encoding: 'base64' }],
-      [mint, { encoding: 'jsonParsed' }],
+      ['11111111111111111111111111111111', { encoding: 'base64', commitment: 'confirmed' }],
+      [mint, { encoding: 'base64' }],
+      [mint, { encoding: 'jsonParsed', commitment: 'confirmed' }],
       [mint, { encoding: 'base64', commitment: 'finalized' }],
+      [mint, { encoding: 'base64', commitment: 'confirmed', dataSlice: { offset: 0, length: 1 } }],
     ].entries()) {
       const response = await POST(
         request(
@@ -106,12 +109,34 @@ describe('Solana payment RPC', () => {
     expect(upstream).not.toHaveBeenCalled();
   });
 
+  it('rejects changed blockhash options', async () => {
+    process.env.MIZUKI_SOLANA_RPC_URL = endpoint;
+    const upstream = vi.spyOn(globalThis, 'fetch');
+
+    for (const [index, params] of [
+      [],
+      [{ commitment: 'finalized' }],
+      [{ commitment: 'confirmed', minContextSlot: 1 }],
+    ].entries()) {
+      const response = await POST(
+        request(
+          { jsonrpc: '2.0', id: index, method: 'getLatestBlockhash', params },
+          `192.0.2.${index + 60}`,
+        ),
+      );
+      expect(response.status).toBe(400);
+    }
+    expect(upstream).not.toHaveBeenCalled();
+  });
+
   it('rejects cross-origin browser requests', async () => {
     process.env.MIZUKI_SOLANA_RPC_URL = endpoint;
     const response = await POST(
-      request({ jsonrpc: '2.0', id: 1, method: 'getLatestBlockhash', params: [] }, '192.0.2.10', {
-        origin: 'https://example.com',
-      }),
+      request(
+        { jsonrpc: '2.0', id: 1, method: 'getLatestBlockhash', params: [confirmed] },
+        '192.0.2.10',
+        { origin: 'https://example.com' },
+      ),
     );
     expect(response.status).toBe(403);
   });
@@ -124,14 +149,17 @@ describe('Solana payment RPC', () => {
     for (let index = 0; index < 30; index += 1) {
       const response = await POST(
         request(
-          { jsonrpc: '2.0', id: index, method: 'getLatestBlockhash', params: [] },
+          { jsonrpc: '2.0', id: index, method: 'getLatestBlockhash', params: [confirmed] },
           '192.0.2.30',
         ),
       );
       expect(response.status).toBe(200);
     }
     const blocked = await POST(
-      request({ jsonrpc: '2.0', id: 31, method: 'getLatestBlockhash', params: [] }, '192.0.2.30'),
+      request(
+        { jsonrpc: '2.0', id: 31, method: 'getLatestBlockhash', params: [confirmed] },
+        '192.0.2.30',
+      ),
     );
     expect(blocked.status).toBe(429);
   });
@@ -141,7 +169,10 @@ describe('Solana payment RPC', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('x'.repeat(64_001)));
 
     const response = await POST(
-      request({ jsonrpc: '2.0', id: 1, method: 'getLatestBlockhash', params: [] }, '192.0.2.40'),
+      request(
+        { jsonrpc: '2.0', id: 1, method: 'getLatestBlockhash', params: [confirmed] },
+        '192.0.2.40',
+      ),
     );
 
     expect(response.status).toBe(502);
@@ -149,7 +180,10 @@ describe('Solana payment RPC', () => {
 
   it('fails closed when the server-side endpoint is missing', async () => {
     const response = await POST(
-      request({ jsonrpc: '2.0', id: 1, method: 'getLatestBlockhash', params: [] }, '192.0.2.50'),
+      request(
+        { jsonrpc: '2.0', id: 1, method: 'getLatestBlockhash', params: [confirmed] },
+        '192.0.2.50',
+      ),
     );
     expect(response.status).toBe(503);
   });

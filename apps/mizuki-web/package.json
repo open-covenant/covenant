@@ -11,6 +11,8 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@reown/appkit": "1.8.20",
+    "@reown/appkit-adapter-solana": "1.8.20",
     "@solana/kit": "5.1.0",
     "@wallet-standard/app": "1.1.0",
     "@wallet-standard/base": "1.1.0",

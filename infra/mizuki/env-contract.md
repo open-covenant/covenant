@@ -131,6 +131,7 @@ The gateway receives no GitHub App key, treasury key, signer token, updater toke
 | `MIZUKI_WEB_PROXY_SECRET`             | Server-only proxy-context credential linked from the API; at least 32 UTF-8 bytes and never exposed to the browser. |
 | `NEXT_PUBLIC_MIZUKI_APP_URL`          | Exact HTTPS web origin.                                                                                             |
 | `NEXT_PUBLIC_MIZUKI_GITHUB_OAUTH_URL` | Same-origin public API proxy path.                                                                                  |
+| `NEXT_PUBLIC_REOWN_PROJECT_ID`        | Public Reown project identifier, restricted in Reown to the exact production and local-development origins.         |
 | `NEXT_PUBLIC_SOLANA_NETWORK`          | Exactly `solana` for production.                                                                                    |
 | `NEXT_PUBLIC_SOLANA_RPC_URL`          | Exactly `https://mizuki.opencovenant.org/api/solana-rpc`; the browser uses this same-origin, read-only proxy.       |
 | `MIZUKI_SOLANA_RPC_URL`               | Server-only Helius mainnet URL; its API key must never enter the browser bundle or public responses.                |

@@ -236,7 +236,13 @@ export function QuoteWorkflow() {
                       onClick={() => void connect(wallet)}
                     >
                       <span>{wallet.name}</span>
-                      <span>{connecting === wallet.name ? 'Connecting…' : 'Connect'}</span>
+                      <span>
+                        {connecting === wallet.name
+                          ? 'Connecting…'
+                          : wallet.name === 'WalletConnect'
+                            ? 'Scan QR or open wallet'
+                            : 'Connect'}
+                      </span>
                     </button>
                   ))}
                 </div>

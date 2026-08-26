@@ -3,14 +3,16 @@
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
 import { JobReceipt } from '@/components/job-receipt';
-import { formatTime, formatUsdcAtomic, stateLabel } from '@/lib/format';
+import { formatTime, formatUsdcAtomic, relativeTime, stateLabel } from '@/lib/format';
 import {
   isActiveJob,
   jobIssueNumber,
   jobRepository,
   normalizeJob,
   normalizeJobPage,
+  normalizePullRequestPage,
   type WorkbenchJob,
+  type WorkbenchPullRequest,
 } from '@/lib/workbench';
 import { useWorkbenchResource } from '@/lib/workbench-client';
 import {
@@ -101,8 +103,102 @@ export function Jobs() {
           }
         />
       ) : null}
+      <RepositoryPullRequests />
     </div>
   );
+}
+
+export function RepositoryPullRequests() {
+  const pullRequests = useWorkbenchResource('/v1/account/pull-requests', normalizePullRequestPage);
+
+  return (
+    <section className="workbench-panel repository-pull-requests">
+      <div className="workbench-panel-heading">
+        <div>
+          <span>Connected repositories</span>
+          <h2>Pull requests</h2>
+        </div>
+        {pullRequests.status === 'ready' ? (
+          <button type="button" onClick={pullRequests.refresh}>
+            Refresh
+          </button>
+        ) : null}
+      </div>
+      <p className="repository-pull-requests-intro">
+        Recent pull requests from repositories connected to this GitHub account. Paid jobs and
+        funded bounties are identified from Mizuki records; other repository work remains visibly
+        unlinked.
+      </p>
+
+      {pullRequests.status === 'loading' ? (
+        <WorkbenchLoading label="Loading repository pull requests" />
+      ) : pullRequests.status === 'error' ? (
+        <WorkbenchError
+          title="Repository pull requests could not be loaded"
+          detail="Paid jobs remain available above. No repository or payment action was attempted."
+          retry={pullRequests.refresh}
+        />
+      ) : pullRequests.status === 'unauthorized' ? null : pullRequests.data.pullRequests.length >
+        0 ? (
+        <div className="repository-pull-request-list">
+          {pullRequests.data.pullRequests.map((pullRequest) => (
+            <PullRequestRow
+              pullRequest={pullRequest}
+              key={`${pullRequest.repository}#${pullRequest.number}`}
+            />
+          ))}
+        </div>
+      ) : (
+        <div className="workbench-inline-empty">
+          <strong>No pull requests found</strong>
+          <p>Recent pull requests will appear after a connected repository has activity.</p>
+        </div>
+      )}
+
+      {pullRequests.status === 'ready' && pullRequests.data.unavailableRepositories.length > 0 && (
+        <p className="repository-pull-requests-note">
+          Pull requests could not be refreshed for{' '}
+          {pullRequests.data.unavailableRepositories.join(', ')}.
+        </p>
+      )}
+      {pullRequests.status === 'ready' && pullRequests.data.truncated && (
+        <p className="repository-pull-requests-note">
+          Showing the 100 most recently updated pull requests.
+        </p>
+      )}
+    </section>
+  );
+}
+
+function PullRequestRow({ pullRequest }: { pullRequest: WorkbenchPullRequest }) {
+  return (
+    <a href={pullRequest.url} target="_blank" rel="noreferrer">
+      <div className="repository-pull-request-main">
+        <span>
+          {pullRequest.repository} · #{pullRequest.number}
+          {pullRequest.author ? ` · @${pullRequest.author}` : ''}
+        </span>
+        <strong>{pullRequest.title}</strong>
+        <small>
+          {pullRequest.headRef} → {pullRequest.baseRef} · updated{' '}
+          {relativeTime(pullRequest.updatedAt)}
+        </small>
+      </div>
+      <div className="repository-pull-request-meta">
+        <span className={`pull-request-provenance ${pullRequest.provenance.kind}`}>
+          {pullRequestProvenanceLabel(pullRequest)}
+        </span>
+        <WorkbenchStatus value={pullRequest.draft ? 'draft' : pullRequest.state} />
+        <span aria-hidden="true">↗</span>
+      </div>
+    </a>
+  );
+}
+
+function pullRequestProvenanceLabel(pullRequest: WorkbenchPullRequest): string {
+  if (pullRequest.provenance.kind === 'paid_job') return 'Paid Mizuki job';
+  if (pullRequest.provenance.kind === 'bounty') return 'Funded bounty';
+  return 'Unlinked repository PR';
 }
 
 export function JobRoom({ id }: { id: string }) {

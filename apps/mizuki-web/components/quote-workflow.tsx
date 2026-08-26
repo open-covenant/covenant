@@ -7,7 +7,7 @@ import { formatTime, formatUsdcAtomic, stateLabel } from '@/lib/format';
 import { githubIssuePattern } from '@/lib/github-url';
 import type { Job, Quote } from '@/lib/types';
 import { useStandardWallet } from '@/lib/wallet-standard';
-import { createPaymentFetch } from '@/lib/x402';
+import { createPaymentFetch, paymentPreparationError } from '@/lib/x402';
 
 type RequestState = 'idle' | 'quoting' | 'quoted' | 'paying';
 
@@ -136,7 +136,7 @@ export function QuoteWorkflow() {
       setError(
         cause instanceof CustomerRequestError
           ? cause.message
-          : requestError(0, 'payment', quote.id),
+          : paymentPreparationError(cause, formatUsdcAtomic(quote.priceAtomic)),
       );
     }
   }

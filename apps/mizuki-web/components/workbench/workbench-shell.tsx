@@ -2,7 +2,7 @@
 
 import Image from 'next/image';
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { githubAuthErrorMessage, normalizeAccount, workbenchAuthHref } from '@/lib/workbench';
 import {
@@ -19,21 +19,20 @@ export type WorkbenchNavigationItem = {
 };
 
 export const primaryNavigation: WorkbenchNavigationItem[] = [
-  { href: '/app', label: 'Overview', icon: '⌂', exact: true },
-  { href: '/app/repositories', label: 'Repositories', icon: '▦' },
-  { href: '/app/jobs', label: 'Jobs', icon: '✓' },
-  { href: '/app/bounties', label: 'Bounties', icon: '◇' },
-  { href: '/app/billing', label: 'Payments & refunds', icon: '$' },
+  { href: '/app', label: 'Overview', icon: '01', exact: true },
+  { href: '/app/repositories', label: 'Repositories', icon: '02' },
+  { href: '/app/jobs', label: 'Jobs', icon: '03' },
+  { href: '/app/bounties', label: 'Bounties', icon: '04' },
+  { href: '/app/billing', label: 'Payments & refunds', icon: '05' },
 ];
 
 export const secondaryNavigation: WorkbenchNavigationItem[] = [
-  { href: '/app/integrations', label: 'Integrations', icon: '↔' },
-  { href: '/app/settings', label: 'Settings', icon: '⚙' },
+  { href: '/app/integrations', label: 'Integrations', icon: '06' },
+  { href: '/app/settings', label: 'Settings', icon: '07' },
 ];
 
 export function WorkbenchShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const router = useRouter();
   const [authExpired, setAuthExpired] = useState(false);
   const [authError, setAuthError] = useState<string>();
   const [returnTo, setReturnTo] = useState(pathname);
@@ -74,8 +73,7 @@ export function WorkbenchShell({ children }: { children: React.ReactNode }) {
     setLogoutError(undefined);
     try {
       await logoutWorkbench(() => {
-        router.push('/');
-        router.refresh();
+        window.location.replace('/app');
       });
     } catch {
       setLogoutError('Sign-out could not be confirmed. This page remains signed in; try again.');
@@ -87,11 +85,18 @@ export function WorkbenchShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="workbench-shell">
       <aside className="workbench-rail">
+        <a
+          className="workbench-covenant-brand"
+          href="https://opencovenant.org"
+          aria-label="Covenant home"
+        >
+          <Image src="/covenant-logo.svg" alt="Covenant" width={255} height={54} priority />
+        </a>
         <Link className="workbench-brand" href="/app" aria-label="Mizuki Workbench home">
           <Image src="/mizuki-avatar.jpg" alt="" width={38} height={38} priority />
           <span>
             <strong>Mizuki</strong>
-            <small>Workbench</small>
+            <small>Maintenance workbench</small>
           </span>
         </Link>
 
@@ -126,8 +131,16 @@ export function WorkbenchShell({ children }: { children: React.ReactNode }) {
 
       <header className="workbench-mobile-header">
         <Link href="/app" aria-label="Mizuki Workbench home">
+          <Image
+            className="workbench-mobile-covenant"
+            src="/covenant-logomark.png"
+            alt=""
+            width={24}
+            height={24}
+          />
+          <span className="workbench-mobile-divider" aria-hidden="true" />
           <Image src="/mizuki-avatar.jpg" alt="" width={32} height={32} />
-          <strong>Mizuki Workbench</strong>
+          <strong>Mizuki</strong>
         </Link>
         <Link href="/app/jobs/new">New job</Link>
       </header>
@@ -149,7 +162,7 @@ export function WorkbenchShell({ children }: { children: React.ReactNode }) {
           <WorkbenchNavLink item={item} pathname={pathname} key={item.href} />
         ))}
         <WorkbenchNavLink
-          item={{ href: '/app/settings', label: 'More', icon: '•••' }}
+          item={{ href: '/app/settings', label: 'More', icon: '07' }}
           pathname={pathname}
         />
       </nav>
@@ -194,7 +207,7 @@ export function WorkbenchNavLink({
 function WorkbenchSignIn({ returnTo, authError }: { returnTo: string; authError?: string }) {
   return (
     <WorkbenchAccessState
-      mark="M"
+      mark="01"
       title="Sign in to Mizuki Workbench"
       detail={
         authError ??
@@ -225,10 +238,20 @@ function WorkbenchAccessState({
 }) {
   return (
     <div className="workbench-access">
+      <a
+        className="workbench-access-covenant"
+        href="https://opencovenant.org"
+        aria-label="Covenant home"
+      >
+        <Image src="/covenant-logo.svg" alt="Covenant" width={255} height={54} priority />
+      </a>
       <div className="workbench-access-card">
         <Link className="workbench-access-brand" href="/">
           <Image src="/mizuki-avatar.jpg" alt="" width={48} height={48} priority />
-          <span>Mizuki the Mech</span>
+          <span>
+            <strong>Mizuki the Mech</strong>
+            <small>Maintenance workbench</small>
+          </span>
         </Link>
         <span className="workbench-access-mark" aria-hidden="true">
           {mark}

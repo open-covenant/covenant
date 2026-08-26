@@ -32,7 +32,7 @@ export function SiteFrame({
       <a href="#main" className="skip-link">
         Skip to content
       </a>
-      <SiteHeader intakeOpen={intakeOpen} />
+      <SiteHeader />
       <main id="main">{children}</main>
       <SiteFooter intakeOpen={intakeOpen} />
     </>

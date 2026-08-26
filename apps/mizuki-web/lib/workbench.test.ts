@@ -12,6 +12,7 @@ import {
   normalizeIssues,
   normalizeJobPage,
   normalizePreflight,
+  normalizePullRequestPage,
   normalizeRepositories,
   parseRepositoryLocator,
   type WorkbenchJob,
@@ -73,6 +74,42 @@ describe('Workbench response normalization', () => {
       githubAvatarUrl: undefined,
       displayName: undefined,
       walletAddress: 'wallet-address',
+    });
+  });
+
+  it('preserves repository pull requests and their commercial provenance', () => {
+    expect(
+      normalizePullRequestPage({
+        pullRequests: [
+          {
+            repository: 'open-covenant/covenant',
+            number: 196,
+            title: 'Add the RWA firewall',
+            url: 'https://github.com/open-covenant/covenant/pull/196',
+            state: 'open',
+            draft: false,
+            author: 'mizuki0x',
+            headRef: 'feat/rwa-firewall',
+            headSha: 'b'.repeat(40),
+            baseRef: 'main',
+            createdAt: '2026-08-26T06:43:34.000Z',
+            updatedAt: '2026-08-26T12:00:00.000Z',
+            provenance: { kind: 'unlinked' },
+          },
+        ],
+        truncated: false,
+        unavailableRepositories: [],
+      }),
+    ).toMatchObject({
+      pullRequests: [
+        {
+          repository: 'open-covenant/covenant',
+          number: 196,
+          provenance: { kind: 'unlinked' },
+        },
+      ],
+      truncated: false,
+      unavailableRepositories: [],
     });
   });
 

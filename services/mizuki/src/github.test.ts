@@ -224,6 +224,60 @@ describe('workbench repository access', () => {
     expect(paths).not.toContain('/repos/example/project/contents');
   });
 
+  it('lists recent pull requests after verifying the maintainer and App installation', async () => {
+    const github = reviewClient(async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/repos/example/project/installation') {
+        return Response.json(coreInstallation());
+      }
+      if (url.pathname === '/app/installations/1/access_tokens') {
+        return Response.json(coreToken());
+      }
+      if (url.pathname === '/repos/example/project') {
+        return Response.json({ private: false, default_branch: 'main' });
+      }
+      if (url.pathname === '/repos/example/project/collaborators/maintainer/permission') {
+        return Response.json({ permission: 'maintain' });
+      }
+      if (url.pathname === '/repos/example/project/pulls') {
+        expect(url.searchParams.get('state')).toBe('all');
+        expect(url.searchParams.get('sort')).toBe('updated');
+        return Response.json([
+          {
+            number: 196,
+            title: 'Add the RWA firewall',
+            html_url: 'https://github.com/example/project/pull/196',
+            state: 'open',
+            draft: false,
+            user: { login: 'contributor' },
+            head: { ref: 'feat/rwa-firewall', sha: 'b'.repeat(40) },
+            base: { ref: 'main' },
+            created_at: '2026-08-26T06:43:34.000Z',
+            updated_at: '2026-08-26T12:00:00.000Z',
+            merged_at: null,
+          },
+        ]);
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+
+    await expect(
+      github.pullRequestsForMaintainer('example', 'project', 'maintainer'),
+    ).resolves.toMatchObject({
+      repository: { repository: 'example/project', permission: 'maintain' },
+      pullRequests: [
+        {
+          number: 196,
+          title: 'Add the RWA firewall',
+          state: 'open',
+          author: 'contributor',
+          headRef: 'feat/rwa-firewall',
+          baseRef: 'main',
+        },
+      ],
+    });
+  });
+
   it('requires current maintainer access and attributable authorization for eligible issues', async () => {
     const github = reviewClient(async (input) => {
       const url = new URL(String(input));

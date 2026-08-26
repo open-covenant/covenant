@@ -2,14 +2,13 @@ import Image from 'next/image';
 import Link from 'next/link';
 
 const navigation = [
-  { href: '/app', label: 'Workbench' },
   { href: '/bounties', label: 'Bounties' },
   { href: '/treasury', label: 'Financials' },
   { href: '/capabilities', label: 'Capabilities' },
   { href: '/activity', label: 'Log' },
 ];
 
-export function SiteHeader({ intakeOpen }: { intakeOpen: boolean }) {
+export function SiteHeader() {
   return (
     <header className="site-header">
       <div className="shell header-inner">
@@ -63,13 +62,11 @@ export function SiteHeader({ intakeOpen }: { intakeOpen: boolean }) {
             ))}
           </nav>
         </details>
-        {intakeOpen && (
-          <Link href="/work" className="header-cta">
-            <span className="header-cta-long">Request a quote</span>
-            <span className="header-cta-short">Quote</span>
-            <span aria-hidden="true">↗</span>
-          </Link>
-        )}
+        <Link href="/app" className="header-cta">
+          <span className="header-cta-long">Open Workbench</span>
+          <span className="header-cta-short">Workbench</span>
+          <span aria-hidden="true">↗</span>
+        </Link>
       </div>
     </header>
   );

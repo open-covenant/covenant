@@ -36,7 +36,7 @@ import {
   WorkbenchRequestError,
 } from '@/lib/workbench-client';
 import { paymentWalletNetwork, useStandardWallet } from '@/lib/wallet-standard';
-import { createPaymentFetch } from '@/lib/x402';
+import { createPaymentFetch, paymentPreparationError } from '@/lib/x402';
 import {
   ServiceContractNote,
   WorkbenchEmpty,
@@ -428,7 +428,7 @@ function IssueAndPayment({
       if (!walletSigned) {
         clearWorkbenchPaymentRecovery(accountId, quote.id);
         setState('quoted');
-        setError(paymentAttemptError(cause));
+        setError(paymentAttemptError(cause, formatUsdcAtomic(quote.priceAtomic)));
         return;
       }
       if (recovery) {
@@ -930,14 +930,14 @@ function quoteError(cause: unknown): string {
     if (cause.status === 409) return 'The issue or repository changed. Run preflight again.';
     if (cause.status === 422) return cause.message;
     if (cause.status === 429) return 'Too many quote requests. Wait a moment and try again.';
+    if (cause.status === 503) {
+      return 'Paid maintenance is temporarily unavailable while service readiness is restored. No payment was requested.';
+    }
   }
   return 'A fixed quote could not be created. No payment was requested.';
 }
 
-function paymentAttemptError(cause: unknown): string {
+function paymentAttemptError(cause: unknown, quoteAmount: string): string {
   if (cause instanceof PaymentRecoveryStorageError) return cause.message;
-  if (cause instanceof Error && cause.message) {
-    return `${cause.message} No payment or job was created.`;
-  }
-  return 'Payment could not start. No payment or job was created.';
+  return paymentPreparationError(cause, quoteAmount);
 }

@@ -373,6 +373,72 @@ describe('workbench account API', () => {
     expect(anonymous.status).toBe(401);
   });
 
+  it('lists connected repository pull requests with truthful job provenance', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    await store.linkAccountRepository('42', 'example', 'project');
+    await store.saveQuote(quote);
+    await store.linkQuoteToAccount(quote.id, '42');
+    const { job } = await store.createJob(quote, payment, 'account-job');
+    await store.transitionJob(job.id, 'settlement_pending', 'delivered', {
+      prUrl: 'https://github.com/example/project/pull/185',
+    });
+    const pullRequestsForMaintainer = vi.fn(async () => ({
+      repository: repositoryMetadata,
+      pullRequests: [
+        {
+          number: 196,
+          title: 'Add the RWA firewall',
+          url: 'https://github.com/example/project/pull/196',
+          state: 'open' as const,
+          draft: false,
+          author: 'contributor',
+          headRef: 'feat/rwa-firewall',
+          headSha: 'b'.repeat(40),
+          baseRef: 'main',
+          createdAt: '2026-08-26T06:43:34.000Z',
+          updatedAt: '2026-08-26T12:00:00.000Z',
+        },
+        {
+          number: 185,
+          title: 'Delivered maintenance patch',
+          url: 'https://github.com/example/project/pull/185',
+          state: 'merged' as const,
+          draft: false,
+          author: 'mizuki0x',
+          headRef: 'mizuki/job',
+          headSha: 'c'.repeat(40),
+          baseRef: 'main',
+          createdAt: '2026-08-25T06:43:34.000Z',
+          updatedAt: '2026-08-25T12:00:00.000Z',
+        },
+      ],
+    }));
+    const base = await serve(dependencies(store, { github: { pullRequestsForMaintainer } }));
+
+    const response = await fetch(`${base}/v1/account/pull-requests`, {
+      headers: sessionHeaders,
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('private, no-store');
+    await expect(response.json()).resolves.toMatchObject({
+      pullRequests: [
+        { number: 196, provenance: { kind: 'unlinked' } },
+        {
+          number: 185,
+          provenance: { kind: 'paid_job', jobId: job.id, state: 'delivered' },
+        },
+      ],
+      truncated: false,
+      unavailableRepositories: [],
+    });
+    expect(pullRequestsForMaintainer).toHaveBeenCalledWith('example', 'project', 'maintainer');
+
+    const anonymous = await fetch(`${base}/v1/account/pull-requests`);
+    expect(anonymous.status).toBe(401);
+  });
+
   it('keeps delivered work protected until its refund liability is discharged', async () => {
     const store = new MemoryStore();
     await store.upsertContributor('42', 'maintainer');
@@ -692,6 +758,8 @@ describe('workbench account API', () => {
     expect(response.status).toBe(200);
     expect(response.headers.get('set-cookie')).toContain('mizuki_session=;');
     expect(response.headers.get('set-cookie')).toContain('Max-Age=0');
+    expect(response.headers.get('clear-site-data')).toBe('"cache", "cookies", "storage"');
+    expect(response.headers.get('cache-control')).toBe('private, no-store');
   });
 
   it('returns verified repository, issue, and preflight contracts', async () => {

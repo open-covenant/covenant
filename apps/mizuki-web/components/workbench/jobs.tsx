@@ -108,8 +108,16 @@ export function Jobs() {
   );
 }
 
-export function RepositoryPullRequests() {
+export function RepositoryPullRequests({ repository }: { repository?: string } = {}) {
   const pullRequests = useWorkbenchResource('/v1/account/pull-requests', normalizePullRequestPage);
+  const visiblePullRequests =
+    pullRequests.status === 'ready' && repository
+      ? pullRequests.data.pullRequests.filter(
+          (pullRequest) => pullRequest.repository.toLowerCase() === repository.toLowerCase(),
+        )
+      : pullRequests.status === 'ready'
+        ? pullRequests.data.pullRequests
+        : [];
 
   return (
     <section className="workbench-panel repository-pull-requests">
@@ -125,9 +133,9 @@ export function RepositoryPullRequests() {
         ) : null}
       </div>
       <p className="repository-pull-requests-intro">
-        Recent pull requests from repositories connected to this GitHub account. Paid jobs and
-        funded bounties are identified from Mizuki records; other repository work remains visibly
-        unlinked.
+        {repository
+          ? `Recent pull requests in ${repository}. Open one to review its current work; fixed-quote maintenance starts from an authorized issue below.`
+          : 'Recent pull requests from repositories connected to this GitHub account. Paid jobs and funded bounties are identified from Mizuki records; other repository work remains visibly unlinked.'}
       </p>
 
       {pullRequests.status === 'loading' ? (
@@ -138,10 +146,9 @@ export function RepositoryPullRequests() {
           detail="Paid jobs remain available above. No repository or payment action was attempted."
           retry={pullRequests.refresh}
         />
-      ) : pullRequests.status === 'unauthorized' ? null : pullRequests.data.pullRequests.length >
-        0 ? (
+      ) : pullRequests.status === 'unauthorized' ? null : visiblePullRequests.length > 0 ? (
         <div className="repository-pull-request-list">
-          {pullRequests.data.pullRequests.map((pullRequest) => (
+          {visiblePullRequests.map((pullRequest) => (
             <PullRequestRow
               pullRequest={pullRequest}
               key={`${pullRequest.repository}#${pullRequest.number}`}
@@ -151,7 +158,11 @@ export function RepositoryPullRequests() {
       ) : (
         <div className="workbench-inline-empty">
           <strong>No pull requests found</strong>
-          <p>Recent pull requests will appear after a connected repository has activity.</p>
+          <p>
+            {repository
+              ? `No recent pull requests were found in ${repository}.`
+              : 'Recent pull requests will appear after a connected repository has activity.'}
+          </p>
         </div>
       )}
 

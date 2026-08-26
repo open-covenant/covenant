@@ -364,6 +364,52 @@ export function createApp(deps: AppDependencies) {
           obligationCount: page.obligationCount,
         });
       }
+      if (req.method === 'GET' && url.pathname === '/v1/account/pull-requests') {
+        res.setHeader('cache-control', 'private, no-store');
+        const session = await requireAccountPrincipal(
+          req,
+          deps.auth,
+          admission,
+          'repositories:read',
+        );
+        admission.consumeAccount('repository_pull_requests', req, session.githubId);
+        const [page, jobs, bounties] = await Promise.all([
+          deps.store.repositoriesForAccount(session.githubId, 25),
+          deps.store.jobsList(),
+          deps.store.bountiesList(),
+        ]);
+        const repositories = await mapConcurrent(page.repositories, 4, async (saved) => {
+          try {
+            const result = await deps.github.pullRequestsForMaintainer(
+              saved.owner,
+              saved.repo,
+              session.githubLogin,
+            );
+            return { status: 'ready' as const, ...result };
+          } catch {
+            return { status: 'unavailable' as const, repository: saved.repository };
+          }
+        });
+        const pullRequests = repositories
+          .flatMap((result) =>
+            result.status === 'ready'
+              ? result.pullRequests.map((pullRequest) => ({
+                  repository: result.repository.repository,
+                  ...pullRequest,
+                  provenance: pullRequestProvenance(pullRequest.url, jobs, bounties),
+                }))
+              : [],
+          )
+          .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
+        return json(res, 200, {
+          pullRequests: pullRequests.slice(0, 100),
+          truncated: pullRequests.length > 100 || page.truncated,
+          unavailableRepositories: repositories.flatMap((result) =>
+            result.status === 'unavailable' ? [result.repository] : [],
+          ),
+          checkedAt: new Date().toISOString(),
+        });
+      }
       if (
         req.method === 'GET' &&
         parts[0] === 'v1' &&
@@ -1822,6 +1868,38 @@ function redirectGithubOAuthFailure(
   target.searchParams.set('auth_error', code);
   res.writeHead(302, { location: target.toString(), 'cache-control': 'private, no-store' });
   res.end();
+}
+
+function pullRequestProvenance(
+  pullRequestUrl: string,
+  jobs: Job[],
+  bounties: RescueBounty[],
+):
+  | { kind: 'paid_job'; jobId: string; state: Job['state'] }
+  | { kind: 'bounty'; bountyId: string; state: RescueBounty['state'] }
+  | { kind: 'unlinked' } {
+  const target = normalizedGithubUrl(pullRequestUrl);
+  const job = jobs.find((candidate) => normalizedGithubUrl(candidate.prUrl) === target);
+  if (job) return { kind: 'paid_job', jobId: job.id, state: job.state };
+
+  const bounty = bounties.find((candidate) =>
+    [candidate.activeClaim, ...candidate.claimHistory].some(
+      (claim) => normalizedGithubUrl(claim?.draftPullRequestUrl) === target,
+    ),
+  );
+  if (bounty) return { kind: 'bounty', bountyId: bounty.id, state: bounty.state };
+  return { kind: 'unlinked' };
+}
+
+function normalizedGithubUrl(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:' || url.hostname.toLowerCase() !== 'github.com') return undefined;
+    return `${url.origin.toLowerCase()}${url.pathname.replace(/\/$/, '').toLowerCase()}`;
+  } catch {
+    return undefined;
+  }
 }
 
 async function mapConcurrent<T, R>(

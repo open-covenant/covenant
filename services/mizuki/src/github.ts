@@ -93,6 +93,21 @@ const pullRequestFilesSchema = z.array(
     patch: z.string().optional(),
   }),
 );
+const pullRequestListSchema = z.array(
+  z.object({
+    number: z.number().int().positive(),
+    title: z.string().min(1),
+    html_url: z.string().url(),
+    state: z.enum(['open', 'closed']),
+    draft: z.boolean(),
+    user: z.object({ login: z.string().min(1) }).nullable(),
+    head: z.object({ ref: z.string().min(1), sha: z.string().regex(/^[a-f0-9]{40,64}$/) }),
+    base: z.object({ ref: z.string().min(1) }),
+    created_at: z.string().datetime({ offset: true }),
+    updated_at: z.string().datetime({ offset: true }),
+    merged_at: z.string().datetime({ offset: true }).nullable().optional(),
+  }),
+);
 
 interface CachedInstallationToken {
   token: string;
@@ -126,6 +141,20 @@ export type WorkbenchIssue = {
   maxFiles?: number;
   validationCommands: string[];
   reason?: string;
+};
+
+export type WorkbenchPullRequest = {
+  number: number;
+  title: string;
+  url: string;
+  state: 'open' | 'closed' | 'merged';
+  draft: boolean;
+  author?: string;
+  headRef: string;
+  headSha: string;
+  baseRef: string;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type IssuePreflight = {
@@ -343,6 +372,38 @@ export class GithubClient {
           return authorizationUnavailable ? { ...result, authorizationUnavailable: true } : result;
         },
       ),
+    };
+  }
+
+  async pullRequestsForMaintainer(
+    owner: string,
+    repo: string,
+    githubLogin: string,
+  ): Promise<{ repository: RepositoryMetadata; pullRequests: WorkbenchPullRequest[] }> {
+    const repository = await this.repositoryMetadataForMaintainer(owner, repo, githubLogin);
+    const pulls = pullRequestListSchema.parse(
+      await this.repositoryApi(
+        repository.owner,
+        repository.repo,
+        repository.installationId,
+        `/repos/${repository.owner}/${repository.repo}/pulls?state=all&sort=updated&direction=desc&per_page=30`,
+      ),
+    );
+    return {
+      repository,
+      pullRequests: pulls.map((pull) => ({
+        number: pull.number,
+        title: pull.title,
+        url: pull.html_url,
+        state: pull.merged_at ? 'merged' : pull.state,
+        draft: pull.draft,
+        ...(pull.user ? { author: pull.user.login } : {}),
+        headRef: pull.head.ref,
+        headSha: pull.head.sha,
+        baseRef: pull.base.ref,
+        createdAt: pull.created_at,
+        updatedAt: pull.updated_at,
+      })),
     };
   }
 

@@ -75,6 +75,32 @@ export type WorkbenchJobPage = {
   obligationCount: number;
 };
 
+export type WorkbenchPullRequest = {
+  repository: string;
+  number: number;
+  title: string;
+  url: string;
+  state: 'open' | 'closed' | 'merged';
+  draft: boolean;
+  author?: string;
+  headRef: string;
+  headSha: string;
+  baseRef: string;
+  createdAt: string;
+  updatedAt: string;
+  provenance:
+    | { kind: 'paid_job'; jobId: string; state: string }
+    | { kind: 'bounty'; bountyId: string; state: string }
+    | { kind: 'unlinked' };
+};
+
+export type WorkbenchPullRequestPage = {
+  pullRequests: WorkbenchPullRequest[];
+  truncated: boolean;
+  unavailableRepositories: string[];
+  checkedAt?: string;
+};
+
 export type BillingEntry = {
   id: string;
   kind: 'payment' | 'refund';
@@ -525,6 +551,76 @@ export function normalizeJob(value: unknown): WorkbenchJob {
     throw new Error('The job response is incomplete');
   }
   return candidate as WorkbenchJob;
+}
+
+export function normalizePullRequestPage(value: unknown): WorkbenchPullRequestPage {
+  const source = record(value);
+  const pullRequests = listFrom<unknown>(value, 'pullRequests').flatMap((item) => {
+    const pull = record(item);
+    const provenance = record(pull.provenance);
+    const repository = text(pull.repository);
+    const pullNumber = number(pull.number);
+    const title = text(pull.title);
+    const url = text(pull.url);
+    const state = text(pull.state);
+    const headRef = text(pull.headRef);
+    const headSha = text(pull.headSha);
+    const baseRef = text(pull.baseRef);
+    const createdAt = text(pull.createdAt);
+    const updatedAt = text(pull.updatedAt);
+    if (
+      !repository ||
+      pullNumber === undefined ||
+      !title ||
+      !url ||
+      !headRef ||
+      !headSha ||
+      !baseRef ||
+      !createdAt ||
+      !updatedAt ||
+      (state !== 'open' && state !== 'closed' && state !== 'merged')
+    ) {
+      return [];
+    }
+
+    const kind = text(provenance.kind);
+    const jobId = text(provenance.jobId);
+    const bountyId = text(provenance.bountyId);
+    const normalizedState: WorkbenchPullRequest['state'] = state;
+    const normalizedProvenance: WorkbenchPullRequest['provenance'] =
+      kind === 'paid_job' && jobId
+        ? { kind, jobId, state: text(provenance.state) ?? 'unknown' }
+        : kind === 'bounty' && bountyId
+          ? {
+              kind,
+              bountyId,
+              state: text(provenance.state) ?? 'unknown',
+            }
+          : { kind: 'unlinked' };
+    return [
+      {
+        repository,
+        number: pullNumber,
+        title,
+        url,
+        state: normalizedState,
+        draft: bool(pull.draft) ?? false,
+        ...(text(pull.author) ? { author: text(pull.author) } : {}),
+        headRef,
+        headSha,
+        baseRef,
+        createdAt,
+        updatedAt,
+        provenance: normalizedProvenance,
+      },
+    ];
+  });
+  return {
+    pullRequests,
+    truncated: bool(source.truncated) ?? false,
+    unavailableRepositories: strings(source.unavailableRepositories),
+    checkedAt: text(source.checkedAt),
+  };
 }
 
 export function normalizeBilling(value: unknown): WorkbenchBilling {

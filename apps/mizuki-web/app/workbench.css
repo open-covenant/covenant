@@ -607,6 +607,106 @@
   border-radius: 2px;
 }
 
+.repository-pull-requests {
+  margin-top: 28px;
+}
+
+.repository-pull-requests-intro {
+  max-width: 820px;
+  margin: -6px 0 22px;
+  color: var(--wb-muted);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.repository-pull-request-list {
+  overflow: hidden;
+  border: 1px solid var(--wb-line);
+  border-radius: 2px;
+}
+
+.repository-pull-request-list > a {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-height: 92px;
+  align-items: center;
+  gap: 20px;
+  padding: 16px;
+  border-bottom: 1px solid var(--wb-line);
+  transition: background 140ms ease;
+}
+
+.repository-pull-request-list > a:last-child {
+  border-bottom: 0;
+}
+
+.repository-pull-request-list > a:hover {
+  background: var(--wb-panel-raised);
+}
+
+.repository-pull-request-main {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.repository-pull-request-main span,
+.repository-pull-request-main small {
+  overflow: hidden;
+  color: var(--wb-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repository-pull-request-main strong {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 560;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repository-pull-request-meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  color: var(--wb-dim);
+}
+
+.pull-request-provenance {
+  display: inline-flex;
+  min-height: 26px;
+  align-items: center;
+  padding: 0 9px;
+  border: 1px solid var(--wb-line);
+  border-radius: 999px;
+  color: var(--wb-muted);
+  font:
+    600 9px/1 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.pull-request-provenance.paid_job,
+.pull-request-provenance.bounty {
+  border-color: var(--wb-line-strong);
+  color: var(--wb-text);
+}
+
+.repository-pull-requests-note {
+  margin: 14px 0 0;
+  color: var(--wb-dim);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 .full-job-list {
   padding: 0;
 }
@@ -3265,6 +3365,16 @@
 
   .list-skeleton {
     grid-column: auto;
+  }
+
+  .repository-pull-request-list > a {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+  }
+
+  .repository-pull-request-meta {
+    flex-wrap: wrap;
+    justify-content: flex-start;
   }
 }
 

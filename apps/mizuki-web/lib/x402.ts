@@ -37,7 +37,15 @@ export function createPaymentFetch(input: {
 
   return wrapFetchWithPaymentFromConfig(fetch, {
     schemes: [{ network: terms.network, client: scheme }],
-    spendControls: { maxAmountPerPayment: '$10' },
+    spendControls: {
+      allowedAssets: [
+        {
+          network: terms.network,
+          asset: terms.asset,
+          maxAmountPerPayment: terms.amount,
+        },
+      ],
+    },
     paymentRequirementsSelector: (version, requirements) =>
       selectPaymentRequirements(version, requirements, terms),
   });
@@ -55,8 +63,21 @@ export function paymentPreparationError(cause: unknown, quoteAmount: string): st
   if (/user rejected|declined|cancelled|canceled/i.test(message)) {
     return 'Payment was cancelled in your wallet. No payment or job was created.';
   }
+  if (/does not expose solana:mainnet/i.test(message)) {
+    return 'The connected wallet is not available on Solana mainnet. Switch networks or connect another Solana wallet. No payment or job was created.';
+  }
+  if (/payment (?:request|challenge) does not match|fixed quote/i.test(message)) {
+    return 'The payment request no longer matches this quote. Refresh the page and request a new quote. No payment or job was created.';
+  }
+  if (
+    /rpc|failed to fetch|network|http[^\n]{0,30}(?:403|429|5\d\d)|blockhash|account info/i.test(
+      message,
+    )
+  ) {
+    return 'The Solana payment network could not prepare the transaction. Try again in a moment. Your wallet was not charged and no job was created.';
+  }
 
-  return `Payment could not start. Confirm that the connected wallet has at least ${quoteAmount} on Solana, then try again. No payment or job was created.`;
+  return 'Payment could not start. Reconnect the wallet and try again. Your wallet was not charged and no job was created.';
 }
 
 export function parsePaymentTerms(value: unknown, quoteAmount: string): PaymentTerms {

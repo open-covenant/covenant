@@ -429,6 +429,8 @@ services:
       - key: NEXT_PUBLIC_SOLANA_NETWORK
         value: solana
       - key: NEXT_PUBLIC_SOLANA_RPC_URL
+        value: https://mizuki.opencovenant.org/api/solana-rpc
+      - key: MIZUKI_SOLANA_RPC_URL
         sync: false
       - key: NEXT_PUBLIC_SOLANA_EXPLORER_URL
         value: https://solscan.io

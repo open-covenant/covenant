@@ -120,6 +120,7 @@ export class ContributorAuth {
       redirect_uri: callback,
       scope: 'read:user',
       state,
+      prompt: 'select_account',
     });
     return { url: `https://github.com/login/oauth/authorize?${query}`, flowCookie };
   }

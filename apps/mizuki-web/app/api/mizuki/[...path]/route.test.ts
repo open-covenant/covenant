@@ -103,6 +103,31 @@ describe('Mizuki API proxy', () => {
     expect(response.headers.get('set-cookie')).toContain('Max-Age=0');
   });
 
+  it('forces the GitHub account picker for Workbench sign-in', async () => {
+    vi.stubEnv('MIZUKI_WEB_PROXY_SECRET', 'p'.repeat(32));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(null, {
+          status: 302,
+          headers: {
+            location:
+              'https://github.com/login/oauth/authorize?client_id=client&state=signed-state',
+          },
+        }),
+      ),
+    );
+
+    const response = await GET(
+      new Request('https://mizuki.opencovenant.org/api/mizuki/v1/auth/github'),
+      { params: Promise.resolve({ path: ['v1', 'auth', 'github'] }) },
+    );
+
+    const location = new URL(response.headers.get('location')!);
+    expect(location.origin).toBe('https://github.com');
+    expect(location.searchParams.get('prompt')).toBe('select_account');
+  });
+
   it('forwards the upstream request reference', async () => {
     vi.stubEnv('MIZUKI_WEB_PROXY_SECRET', 'p'.repeat(32));
     vi.stubGlobal(

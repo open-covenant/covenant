@@ -103,6 +103,7 @@ describe('ContributorAuth', () => {
       new MemoryStore(),
     );
     const authorization = await auth.beginGithubOAuth('/bounties/bounty-1');
+    expect(new URL(authorization.url).searchParams.get('prompt')).toBe('select_account');
     const authorize = new URL(authorization.url);
     expect(authorize.searchParams.get('redirect_uri')).toBe(
       'https://mizuki.example/api/mizuki/v1/auth/github/callback',

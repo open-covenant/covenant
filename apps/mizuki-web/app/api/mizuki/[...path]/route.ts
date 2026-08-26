@@ -91,6 +91,10 @@ async function proxy(
       responseHeaders.set('cache-control', 'private, no-store');
       responseHeaders.set('clear-site-data', '"cache", "cookies", "storage"');
     }
+    if (path.join('/') === 'v1/auth/github') {
+      const location = responseHeaders.get('location');
+      if (location) responseHeaders.set('location', githubAccountPickerUrl(location));
+    }
     const setCookies = upstream.headers.getSetCookie();
     for (const value of setCookies) responseHeaders.append('set-cookie', value);
     responseHeaders.set('x-content-type-options', 'nosniff');
@@ -109,6 +113,23 @@ async function proxy(
       },
       { status: 502 },
     );
+  }
+}
+
+function githubAccountPickerUrl(location: string): string {
+  try {
+    const target = new URL(location);
+    if (
+      target.protocol !== 'https:' ||
+      target.hostname !== 'github.com' ||
+      target.pathname !== '/login/oauth/authorize'
+    ) {
+      return location;
+    }
+    target.searchParams.set('prompt', 'select_account');
+    return target.toString();
+  } catch {
+    return location;
   }
 }
 

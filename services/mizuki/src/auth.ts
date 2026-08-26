@@ -53,11 +53,11 @@ export class GithubOAuthCallbackError extends Error {
         ? 'OAuth browser flow expired'
         : code === 'inactive'
           ? 'Repository item is already closed or merged'
-        : code === 'permission'
-          ? 'GitHub did not grant permission to authorize this repository item'
-          : code === 'replayed'
-            ? 'OAuth browser flow was already used'
-            : 'OAuth browser flow is invalid',
+          : code === 'permission'
+            ? 'GitHub did not grant permission to authorize this repository item'
+            : code === 'replayed'
+              ? 'OAuth browser flow was already used'
+              : 'OAuth browser flow is invalid',
     );
   }
 }
@@ -157,7 +157,10 @@ export class ContributorAuth {
       prompt: 'select_account',
     });
     if (!this.config.githubAppId) {
-      query.set('scope', authorization || issueAuthorization ? 'read:user public_repo' : 'read:user');
+      query.set(
+        'scope',
+        authorization || issueAuthorization ? 'read:user public_repo' : 'read:user',
+      );
     }
     return { url: `https://github.com/login/oauth/authorize?${query}`, flowCookie };
   }

@@ -218,7 +218,7 @@ describe('ContributorAuth', () => {
     const requests = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
       if (url.includes('/login/oauth/access_token')) {
-        return Response.json({ access_token: 'temporary-token', scope: 'read:user,public_repo' });
+        return Response.json({ access_token: 'temporary-token', scope: '' });
       }
       if (url === 'https://api.github.com/user') {
         return Response.json({ id: 42, login: 'maintainer' });
@@ -239,13 +239,24 @@ describe('ContributorAuth', () => {
       }
       throw new Error(`unexpected request: ${url}`);
     });
-    const auth = oauthAuth(store, requests);
+    const auth = new ContributorAuth(
+      {
+        publicBaseUrl: 'https://api.mizuki.example',
+        webOrigin: 'https://mizuki.example',
+        githubAppId: '123',
+        githubClientId: 'Iv23liGithubAppTest1',
+        githubClientSecret: 'secret',
+        sessionSecret: 's'.repeat(32),
+      },
+      store,
+      requests as typeof fetch,
+    );
     const authorization = await auth.beginGithubOAuth(
       '/app/jobs/new?owner=open-covenant&repo=covenant',
       'https://github.com/open-covenant/covenant/pull/196',
     );
     const authorizeUrl = new URL(authorization.url);
-    expect(authorizeUrl.searchParams.get('scope')).toBe('read:user public_repo');
+    expect(authorizeUrl.searchParams.has('scope')).toBe(false);
 
     await expect(
       auth.callback('code', authorizeUrl.searchParams.get('state')!, authorization.flowCookie),

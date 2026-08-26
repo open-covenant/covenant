@@ -82,6 +82,7 @@ export type WorkbenchPullRequest = {
   url: string;
   state: 'open' | 'closed' | 'merged';
   draft: boolean;
+  authorized: boolean;
   author?: string;
   headRef: string;
   headSha: string;
@@ -148,6 +149,16 @@ export function workbenchAuthHref(returnTo: string): string {
   return `/api/mizuki/v1/auth/github?return_to=${encodeURIComponent(destination)}`;
 }
 
+export function authorizePullRequestHref(pullRequest: WorkbenchPullRequest): string {
+  const repository = parseRepositoryLocator(pullRequest.repository);
+  if (!repository) return pullRequest.url;
+  const returnTo = `/app/jobs/new?owner=${encodeURIComponent(repository.owner)}&repo=${encodeURIComponent(repository.repo)}`;
+  return `/api/mizuki/v1/auth/github?${new URLSearchParams({
+    return_to: returnTo,
+    authorize_pr: pullRequest.url,
+  })}`;
+}
+
 function safeWorkbenchReturnPath(value: string): string {
   try {
     const base = new URL('https://mizuki.invalid');
@@ -176,6 +187,8 @@ export function githubAuthErrorMessage(value: string | null | undefined): string
       return 'GitHub returned an incomplete sign-in response. Start the sign-in again.';
     case 'invalid':
       return 'This GitHub sign-in response could not be verified. Start a new sign-in.';
+    case 'permission':
+      return 'GitHub could not confirm maintainer permission for that pull request. Check repository access and try again.';
     case 'replayed':
       return 'This GitHub sign-in request was already used. Start a new sign-in to continue.';
     case 'unavailable':
@@ -605,6 +618,7 @@ export function normalizePullRequestPage(value: unknown): WorkbenchPullRequestPa
         url,
         state: normalizedState,
         draft: bool(pull.draft) ?? false,
+        authorized: bool(pull.authorized) ?? false,
         ...(text(pull.author) ? { author: text(pull.author) } : {}),
         headRef,
         headSha,

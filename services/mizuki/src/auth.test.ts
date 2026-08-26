@@ -211,6 +211,69 @@ describe('ContributorAuth', () => {
     );
   });
 
+  it('authorizes a connected pull request as the signed-in maintainer without storing OAuth access', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    await store.linkAccountRepository('42', 'open-covenant', 'covenant');
+    const requests = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/login/oauth/access_token')) {
+        return Response.json({ access_token: 'temporary-token', scope: 'read:user,public_repo' });
+      }
+      if (url === 'https://api.github.com/user') {
+        return Response.json({ id: 42, login: 'maintainer' });
+      }
+      if (url === 'https://api.github.com/repos/open-covenant/covenant') {
+        return Response.json({
+          private: false,
+          permissions: { admin: false, maintain: true, push: true, triage: true },
+        });
+      }
+      if (url === 'https://api.github.com/repos/open-covenant/covenant/pulls/196') {
+        return Response.json({ state: 'open' });
+      }
+      if (url === 'https://api.github.com/repos/open-covenant/covenant/issues/196/labels') {
+        expect(init?.method).toBe('POST');
+        expect(JSON.parse(String(init?.body))).toEqual({ labels: ['mizuki:authorized'] });
+        return Response.json([{ name: 'mizuki:authorized' }]);
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+    const auth = oauthAuth(store, requests);
+    const authorization = await auth.beginGithubOAuth(
+      '/app/jobs/new?owner=open-covenant&repo=covenant',
+      'https://github.com/open-covenant/covenant/pull/196',
+    );
+    const authorizeUrl = new URL(authorization.url);
+    expect(authorizeUrl.searchParams.get('scope')).toBe('read:user public_repo');
+
+    await expect(
+      auth.callback('code', authorizeUrl.searchParams.get('state')!, authorization.flowCookie),
+    ).resolves.toMatchObject({
+      redirect: '/app/jobs/new?owner=open-covenant&repo=covenant',
+    });
+    expect(JSON.stringify(await store.contributor('42'))).not.toContain('temporary-token');
+  });
+
+  it('fails closed when GitHub does not grant pull request authorization scope', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    await store.linkAccountRepository('42', 'open-covenant', 'covenant');
+    const auth = oauthAuth(store, oauthRequests());
+    const authorization = await auth.beginGithubOAuth(
+      '/app/jobs/new',
+      'https://github.com/open-covenant/covenant/pull/196',
+    );
+
+    await expect(
+      auth.callback(
+        'code',
+        new URL(authorization.url).searchParams.get('state')!,
+        authorization.flowCookie,
+      ),
+    ).rejects.toMatchObject<GithubOAuthCallbackError>({ code: 'permission' });
+  });
+
   it('links a wallet after a valid domain-bound signature and rejects replay', async () => {
     const store = new MemoryStore();
     await store.upsertContributor('42', 'maintainer');

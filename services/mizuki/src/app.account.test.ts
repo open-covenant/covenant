@@ -392,6 +392,7 @@ describe('workbench account API', () => {
           url: 'https://github.com/example/project/pull/196',
           state: 'open' as const,
           draft: false,
+          authorized: true,
           author: 'contributor',
           headRef: 'feat/rwa-firewall',
           headSha: 'b'.repeat(40),
@@ -405,6 +406,7 @@ describe('workbench account API', () => {
           url: 'https://github.com/example/project/pull/185',
           state: 'merged' as const,
           draft: false,
+          authorized: false,
           author: 'mizuki0x',
           headRef: 'mizuki/job',
           headSha: 'c'.repeat(40),
@@ -424,7 +426,7 @@ describe('workbench account API', () => {
     expect(response.headers.get('cache-control')).toBe('private, no-store');
     await expect(response.json()).resolves.toMatchObject({
       pullRequests: [
-        { number: 196, provenance: { kind: 'unlinked' } },
+        { number: 196, authorized: true, provenance: { kind: 'unlinked' } },
         {
           number: 185,
           provenance: { kind: 'paid_job', jobId: job.id, state: 'delivered' },

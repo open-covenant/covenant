@@ -1290,7 +1290,7 @@ export function createApp(deps: AppDependencies) {
                                     message,
                                   )
                                 ? 409
-                                : /outside Mizuki|public GitHub|install the Mizuki|issue is too large|invalid|expired|required|incomplete/i.test(
+                                : /outside Mizuki|public GitHub|install the Mizuki|issue is too large|invalid|expired|required|incomplete|existing pull requests cannot be used as job intake/i.test(
                                       message,
                                     )
                                   ? 422

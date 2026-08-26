@@ -39,7 +39,7 @@ describe('GitHub issue admission', () => {
       request as typeof fetch,
     );
     await expect(github.issue('https://github.com/example/project/issues/7')).rejects.toThrow(
-      'pull request URLs cannot be submitted',
+      'Choose an open GitHub issue for paid maintenance',
     );
   });
 

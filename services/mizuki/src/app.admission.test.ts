@@ -695,6 +695,43 @@ describe('operator admission controls', () => {
 });
 
 describe('public route responses', () => {
+  it('rejects pull requests as job intake with a clear client error', async () => {
+    const store = new MemoryStore();
+    await store.updateOperatorControls({
+      expectedRevision: 0,
+      intakeEnabled: true,
+      claimsEnabled: false,
+      reason: 'pull request input test',
+      updatedBy: 'test',
+    });
+    const challenge = vi.fn();
+    const base = await serve(
+      dependencies(store, {
+        github: {
+          issue: vi.fn(async () => {
+            throw new Error(
+              'Choose an open GitHub issue for paid maintenance. Existing pull requests cannot be used as job intake.',
+            );
+          }),
+        },
+        payments: { challenge },
+      }),
+    );
+
+    const response = await fetch(`${base}/v1/quotes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ github_issue_url: 'https://github.com/example/project/issues/7' }),
+    });
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toEqual({
+      error:
+        'Choose an open GitHub issue for paid maintenance. Existing pull requests cannot be used as job intake.',
+    });
+    expect(challenge).not.toHaveBeenCalled();
+  });
+
   it('returns a correlated 503 without exposing GitHub failure details', async () => {
     const store = new MemoryStore();
     await store.updateOperatorControls({

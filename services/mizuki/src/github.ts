@@ -1523,7 +1523,9 @@ async function mapConcurrent<T, R>(
 
 function assertNotPullRequest(issue: { pull_request?: unknown }): void {
   if (issue.pull_request !== undefined) {
-    throw new Error('pull request URLs cannot be submitted as maintenance issues');
+    throw new Error(
+      'Choose an open GitHub issue for paid maintenance. Existing pull requests cannot be used as job intake.',
+    );
   }
 }
 

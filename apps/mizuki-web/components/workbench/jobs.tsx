@@ -6,6 +6,7 @@ import { JobReceipt } from '@/components/job-receipt';
 import { formatTime, formatUsdcAtomic, relativeTime, stateLabel } from '@/lib/format';
 import {
   authorizePullRequestHref,
+  canAuthorizePullRequest,
   isActiveJob,
   jobIssueNumber,
   jobRepository,
@@ -208,7 +209,7 @@ function PullRequestRow({ pullRequest }: { pullRequest: WorkbenchPullRequest }) 
           {pullRequestProvenanceLabel(pullRequest)}
         </span>
         <WorkbenchStatus value={pullRequest.draft ? 'draft' : pullRequest.state} />
-        {pullRequest.authorized ? (
+        {!canAuthorizePullRequest(pullRequest) ? (
           <a href={pullRequest.url} target="_blank" rel="noreferrer" aria-label="Open on GitHub">
             ↗
           </a>

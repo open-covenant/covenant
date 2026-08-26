@@ -34,6 +34,7 @@ export const GITHUB_OAUTH_FLOW_TTL_SECONDS = 10 * 60;
 export type GithubOAuthErrorCode =
   | 'denied'
   | 'expired'
+  | 'inactive'
   | 'incomplete'
   | 'invalid'
   | 'permission'
@@ -42,11 +43,16 @@ export type GithubOAuthErrorCode =
 
 export class GithubOAuthCallbackError extends Error {
   constructor(
-    readonly code: Extract<GithubOAuthErrorCode, 'expired' | 'invalid' | 'permission' | 'replayed'>,
+    readonly code: Extract<
+      GithubOAuthErrorCode,
+      'expired' | 'inactive' | 'invalid' | 'permission' | 'replayed'
+    >,
   ) {
     super(
       code === 'expired'
         ? 'OAuth browser flow expired'
+        : code === 'inactive'
+          ? 'Repository item is already closed or merged'
         : code === 'permission'
           ? 'GitHub did not grant permission to authorize this repository item'
           : code === 'replayed'
@@ -313,11 +319,12 @@ export class ContributorAuth {
       throw new GithubOAuthCallbackError('permission');
     }
     const item = z
-      .object({ state: z.literal('open'), pull_request: z.unknown().optional() })
+      .object({ state: z.enum(['open', 'closed']), pull_request: z.unknown().optional() })
       .safeParse(await itemResponse.json());
     if (!item.success || (kind === 'issue' && item.data.pull_request !== undefined)) {
       throw new GithubOAuthCallbackError('permission');
     }
+    if (item.data.state !== 'open') throw new GithubOAuthCallbackError('inactive');
 
     const label = this.config.githubAuthorizationLabel ?? 'mizuki:authorized';
     const labelResponse = await this.request(`${root}/issues/${target.number}/labels`, {

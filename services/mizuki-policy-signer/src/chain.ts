@@ -1464,6 +1464,13 @@ const coinGeckoSimplePriceSchema = z
       .passthrough(),
   })
   .passthrough();
+const binanceTickerSchema = z
+  .object({
+    symbol: z.literal('SOLUSDC'),
+    lastPrice: z.string().regex(/^(?:0|[1-9]\d*)(?:\.\d+)?$/),
+    closeTime: z.number().int().positive(),
+  })
+  .passthrough();
 const pythHermesPriceSchema = z
   .object({
     parsed: z
@@ -1487,7 +1494,12 @@ const pythHermesPriceSchema = z
 
 const PYTH_SOL_USD_FEED_ID = 'ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d';
 
-type PriceResponseFormat = 'canonical' | 'coinbase_ticker' | 'coingecko_simple' | 'pyth_hermes';
+type PriceResponseFormat =
+  | 'canonical'
+  | 'coinbase_ticker'
+  | 'coingecko_simple'
+  | 'binance_24hr'
+  | 'pyth_hermes';
 
 export class HttpUsdPriceOracle implements UsdPriceOracle {
   private readonly responseFormat: PriceResponseFormat;
@@ -1513,7 +1525,9 @@ export class HttpUsdPriceOracle implements UsdPriceOracle {
       response = await this.fetcher(this.url, {
         headers: {
           accept: 'application/json',
-          ...(this.responseFormat === 'coinbase_ticker' ? { 'cache-control': 'no-cache' } : {}),
+          ...(this.responseFormat === 'coinbase_ticker' || this.responseFormat === 'binance_24hr'
+            ? { 'cache-control': 'no-cache' }
+            : {}),
           ...(this.token ? { authorization: `Bearer ${this.token}` } : {}),
         },
         redirect: 'error',
@@ -1575,6 +1589,13 @@ function priceResponseFormat(value: string): PriceResponseFormat {
   ) {
     return 'coingecko_simple';
   }
+  if (
+    url.hostname.toLowerCase() === 'api.binance.com' &&
+    url.pathname === '/api/v3/ticker/24hr' &&
+    url.searchParams.get('symbol') === 'SOLUSDC'
+  ) {
+    return 'binance_24hr';
+  }
   const pythPath =
     url.pathname === '/v2/updates/price/latest' ||
     url.pathname === '/hermes/v2/updates/price/latest';
@@ -1620,6 +1641,15 @@ function parsePriceResponse(
     if (!feed) return null;
     const priceUsdMicros = scaledUsdMicros(feed.price.price, feed.price.expo);
     const observedAt = new Date(feed.price.publish_time * 1_000);
+    return priceUsdMicros === null || !validDate(observedAt)
+      ? null
+      : { priceUsdMicros, observedAt };
+  }
+  if (format === 'binance_24hr') {
+    const parsed = binanceTickerSchema.safeParse(body);
+    if (!parsed.success) return null;
+    const priceUsdMicros = decimalUsdMicros(parsed.data.lastPrice);
+    const observedAt = new Date(parsed.data.closeTime);
     return priceUsdMicros === null || !validDate(observedAt)
       ? null
       : { priceUsdMicros, observedAt };

@@ -159,6 +159,14 @@ export function authorizePullRequestHref(pullRequest: WorkbenchPullRequest): str
   })}`;
 }
 
+export function authorizeIssueHref(issue: WorkbenchIssue, owner: string, repo: string): string {
+  const returnTo = `/app/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+  return `/api/mizuki/v1/auth/github?${new URLSearchParams({
+    return_to: returnTo,
+    authorize_issue: issue.url,
+  })}`;
+}
+
 function safeWorkbenchReturnPath(value: string): string {
   try {
     const base = new URL('https://mizuki.invalid');
@@ -188,7 +196,7 @@ export function githubAuthErrorMessage(value: string | null | undefined): string
     case 'invalid':
       return 'This GitHub sign-in response could not be verified. Start a new sign-in.';
     case 'permission':
-      return 'GitHub could not confirm maintainer permission for that pull request. Check repository access and try again.';
+      return 'GitHub could not confirm maintainer permission for that issue or pull request. Check repository access and try again.';
     case 'replayed':
       return 'This GitHub sign-in request was already used. Start a new sign-in to continue.';
     case 'unavailable':

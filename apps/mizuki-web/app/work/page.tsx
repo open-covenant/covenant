@@ -55,8 +55,8 @@ export default async function WorkPage() {
               write code.
             </li>
             <li>
-              Ask a maintainer with triage access or higher to add the{' '}
-              <code>mizuki:authorized</code> label to the issue.
+              Open the repository in Mizuki Workbench and authorize the issue with one click. Only
+              maintainers with triage access or higher can complete this step.
             </li>
             <li>Paste the issue URL into the quote form.</li>
           </ol>

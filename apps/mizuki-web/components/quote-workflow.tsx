@@ -46,7 +46,7 @@ function requestError(
         return 'Install both required GitHub Apps on this repository, then request a new quote.';
       }
       if (/authoriz|label/i.test(detail)) {
-        return 'Ask a maintainer with triage access or higher to add the mizuki:authorized label, then request a new quote.';
+        return 'This issue has not been authorized for paid work. Open its repository in Workbench and choose Authorize, then request a new quote.';
       }
       if (/public github|private repository/i.test(detail)) {
         return 'Mizuki accepts public GitHub repositories only.';
@@ -57,7 +57,7 @@ function requestError(
       if (/outside.*scope|feature|enhancement|sensitive/i.test(detail)) {
         return 'This issue falls outside the supported maintenance scope. Submit a focused bug fix, test, documentation, lint, type, or configuration repair.';
       }
-      return 'This issue is not eligible. Confirm the required Apps, authorization label, public-repository setting, and supported scope.';
+      return 'This issue is not eligible. Confirm the required Apps, authorize the issue in Workbench, and check that it is public and within the supported scope.';
     }
     if (status === 429) return 'Too many quote requests. Wait a moment and try again.';
     return 'We could not create a quote. No payment was requested.';
@@ -170,9 +170,9 @@ export function QuoteWorkflow() {
           </button>
         </div>
         <p id="issue-help">
-          Before continuing, install both required GitHub Apps on this repository and have a
-          maintainer add the <code>mizuki:authorized</code> label. A quote reads public issue and
-          repository metadata but does not create a branch or pull request.
+          Before continuing, connect the repository and authorize the issue in{' '}
+          <a href="/app">Mizuki Workbench</a>. A quote reads public issue and repository metadata
+          but does not create a branch or pull request.
         </p>
       </form>
 

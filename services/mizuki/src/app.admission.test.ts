@@ -892,6 +892,27 @@ describe('public route responses', () => {
     );
   });
 
+  it('binds issue authorization to the OAuth flow', async () => {
+    const store = new MemoryStore();
+    const beginGithubOAuth = vi.fn(async () => ({
+      url: 'https://github.com/login/oauth/authorize?state=signed-state',
+      flowCookie: 'browser-flow-secret',
+    }));
+    const base = await serve(dependencies(store, { auth: { beginGithubOAuth } }));
+
+    const response = await fetch(
+      `${base}/v1/auth/github?return_to=%2Fapp%2Frepositories%2Fopen-covenant%2Fcovenant&authorize_issue=https%3A%2F%2Fgithub.com%2Fopen-covenant%2Fcovenant%2Fissues%2F197`,
+      { redirect: 'manual' },
+    );
+
+    expect(response.status).toBe(302);
+    expect(beginGithubOAuth).toHaveBeenCalledWith(
+      '/app/repositories/open-covenant/covenant',
+      undefined,
+      'https://github.com/open-covenant/covenant/issues/197',
+    );
+  });
+
   it('fails closed with retry guidance when browser OAuth capacity is exhausted', async () => {
     const store = new MemoryStore();
     const base = await serve(

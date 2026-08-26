@@ -716,6 +716,21 @@ describe('price feed policy', () => {
     });
   });
 
+  it('accepts the official Binance SOL/USDC ticker response', async () => {
+    const oracle = priceOracle(
+      {
+        symbol: 'SOLUSDC',
+        lastPrice: '149.98765490',
+        closeTime: now - 2_000,
+      },
+      'https://api.binance.com/api/v3/ticker/24hr?symbol=SOLUSDC',
+    );
+    await expect(oracle.solUsd()).resolves.toEqual({
+      priceUsdMicros: 149_987_654,
+      observedAt: new Date(now - 2_000),
+    });
+  });
+
   it('accepts the official Pyth Hermes SOL/USD response', async () => {
     const oracle = priceOracle(
       {
@@ -763,6 +778,18 @@ describe('price feed policy', () => {
       'CoinGecko stale timestamp',
       'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd&include_last_updated_at=true',
       { solana: { usd: 150, last_updated_at: Math.floor((now - 301_000) / 1_000) } },
+      'price_stale',
+    ],
+    [
+      'Binance wrong market',
+      'https://api.binance.com/api/v3/ticker/24hr?symbol=SOLUSDC',
+      { symbol: 'SOLUSDT', lastPrice: '150.00', closeTime: now },
+      'price_invalid',
+    ],
+    [
+      'Binance stale close time',
+      'https://api.binance.com/api/v3/ticker/24hr?symbol=SOLUSDC',
+      { symbol: 'SOLUSDC', lastPrice: '150.00', closeTime: now - 300_001 },
       'price_stale',
     ],
     [

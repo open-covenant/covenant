@@ -123,6 +123,44 @@
       "spendWindow": {
         "windowSecs": 86400,
         "capUsdE8": 75000000
+      },
+      "liveSession": {
+        "ran": "2026-08-25T13:03:37Z",
+        "trader": "0xEB262a96A796aeE8fb42478E37c86f32069993BE",
+        "oracleAtRun": "AAPL/USD $311.48, feed 151s old",
+        "note": "one policy, five outcomes, in one sitting on mainnet. The two refusals and the window refusal are real reverted transactions carrying no logs, so nothing moved; the buy and the sell are real fills. The trader ended the session flat, 0.500000 USDG in and 0.499790 USDG out, the difference being the venue's spread on a round trip of about thirty cents.",
+        "outcomes": [
+          {
+            "step": "a 100 AAPL order, about $31k, against a $250 per-trade cap",
+            "result": "reverted NotionalOverCap",
+            "tx": "0x6cc39206e27a1ff853f7fdea7ed0d77a7e825e306e418091553d3e08407c2c94",
+            "block": 45749306
+          },
+          {
+            "step": "a fill quoted 2% off the oracle, inside the size cap",
+            "result": "reverted PriceOutsideBand at 208bps against a 50bps band",
+            "tx": "0xdfc241c269209a175d6b6120a48a65c681eb9101367f9e3bbecbe94755991f46",
+            "block": 45749351
+          },
+          {
+            "step": "a bounded buy, 0.30 USDG through the Uniswap v4 pool",
+            "result": "filled 0.000963 AAPL, charged $0.30 to the day's budget",
+            "tx": "0xae7522f584c5b0c802b4b12fa6b2486375cc602a6043a084ed96d2103bdb4b04",
+            "block": 45749401
+          },
+          {
+            "step": "the exit, selling the position back under the same bounds",
+            "result": "returned 0.299790 USDG, position closed, budget at $0.60",
+            "tx": "0x3aa75706aa5e88a6421005825b47a3ee76227e80e01cfaada906bf88b8adf5ac",
+            "block": 45749478
+          },
+          {
+            "step": "one more in-cap trade with the day's budget spent",
+            "result": "reverted WindowCapExceeded, $0.90 against a $0.75 window",
+            "tx": "0x3df1e7fc8b2028a5719925e6bb03211b593722101a7d6c371dc43f6fc442c7a9",
+            "block": 45749531
+          }
+        ]
       }
     },
     "guardedTradeExecutor": {

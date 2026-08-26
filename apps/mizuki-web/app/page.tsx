@@ -38,15 +38,12 @@ export default async function HomePage() {
               a separate policy signer returns the quoted USDC payment to the original payer.
             </p>
             <div className="hero-actions">
-              <Link
-                href="/work"
-                className={`button ${intakeOpen ? 'button-primary' : 'button-secondary'}`}
-              >
-                {intakeOpen ? 'Submit an issue' : 'View service status'}{' '}
+              <Link href="/app" className="button button-primary">
+                Open Workbench{' '}
                 <span aria-hidden="true">↗</span>
               </Link>
-              <Link href="/bounties" className="button button-secondary">
-                Browse funded bounties
+              <Link href="/work" className="button button-secondary">
+                View service status
               </Link>
             </div>
             <p className="hero-contract">

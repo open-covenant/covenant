@@ -19,7 +19,7 @@ describe('Mizuki public identity', () => {
   });
 
   it('uses the profile image for visible identity and a large social preview card', () => {
-    expect(renderToStaticMarkup(<SiteHeader intakeOpen />)).toContain('mizuki-avatar.jpg');
+    expect(renderToStaticMarkup(<SiteHeader />)).toContain('mizuki-avatar.jpg');
     expect(renderToStaticMarkup(<SiteFooter intakeOpen />)).toContain('mizuki-avatar.jpg');
     expect(metadata.openGraph).toMatchObject({
       images: [
@@ -53,12 +53,14 @@ describe('Mizuki public identity', () => {
     expect(footer).toContain('>ClawPump</a>');
   });
 
-  it('replaces transactional calls to action when paid intake is closed', () => {
-    const header = renderToStaticMarkup(<SiteHeader intakeOpen={false} />);
+  it('keeps the Workbench accessible when paid intake is closed', () => {
+    const header = renderToStaticMarkup(<SiteHeader />);
     const footer = renderToStaticMarkup(<SiteFooter intakeOpen={false} />);
 
     expect(header).not.toContain('service status');
     expect(header).not.toContain('Request a quote');
+    expect(header).toContain('href="/app"');
+    expect(header).toContain('Open Workbench');
     expect(footer).toContain('Service status');
     expect(footer).not.toContain('Submit an issue');
   });

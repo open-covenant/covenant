@@ -262,10 +262,10 @@ textarea:focus-visible {
   gap: 12px;
   min-height: 38px;
   padding: 0 18px;
-  border: 1px solid #383838;
+  border: 1px solid #f5f5f5;
   border-radius: 999px;
-  background: transparent;
-  color: #d4d4d4;
+  background: #f5f5f5;
+  color: #030303;
   font:
     500 10px/1 ui-monospace,
     'SF Mono',
@@ -280,8 +280,8 @@ textarea:focus-visible {
 }
 
 .header-cta:hover {
-  border-color: #f5f5f5;
-  background: #f5f5f5;
+  border-color: #d4d4d4;
+  background: #d4d4d4;
   color: #030303;
   transform: translateY(-1px);
 }

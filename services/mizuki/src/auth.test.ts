@@ -255,6 +255,61 @@ describe('ContributorAuth', () => {
     expect(JSON.stringify(await store.contributor('42'))).not.toContain('temporary-token');
   });
 
+  it('authorizes a connected issue as the signed-in maintainer without storing OAuth access', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    await store.linkAccountRepository('42', 'open-covenant', 'covenant');
+    const requests = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/login/oauth/access_token')) {
+        return Response.json({ access_token: 'temporary-token', scope: 'read:user,public_repo' });
+      }
+      if (url === 'https://api.github.com/user') {
+        return Response.json({ id: 42, login: 'maintainer' });
+      }
+      if (url === 'https://api.github.com/repos/open-covenant/covenant') {
+        return Response.json({
+          private: false,
+          permissions: { admin: false, maintain: true, push: true, triage: true },
+        });
+      }
+      if (url === 'https://api.github.com/repos/open-covenant/covenant/issues/197') {
+        return Response.json({ state: 'open' });
+      }
+      if (url === 'https://api.github.com/repos/open-covenant/covenant/issues/197/labels') {
+        expect(init?.method).toBe('POST');
+        expect(JSON.parse(String(init?.body))).toEqual({ labels: ['mizuki:authorized'] });
+        return Response.json([{ name: 'mizuki:authorized' }]);
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+    const auth = oauthAuth(store, requests);
+    const authorization = await auth.beginGithubOAuth(
+      '/app/repositories/open-covenant/covenant',
+      undefined,
+      'https://github.com/open-covenant/covenant/issues/197',
+    );
+    const authorizeUrl = new URL(authorization.url);
+    expect(authorizeUrl.searchParams.get('scope')).toBe('read:user public_repo');
+
+    await expect(
+      auth.callback('code', authorizeUrl.searchParams.get('state')!, authorization.flowCookie),
+    ).resolves.toMatchObject({ redirect: '/app/repositories/open-covenant/covenant' });
+    expect(JSON.stringify(await store.contributor('42'))).not.toContain('temporary-token');
+  });
+
+  it('rejects pull request URLs submitted as issue authorization targets', async () => {
+    const auth = oauthAuth(new MemoryStore(), vi.fn());
+
+    await expect(
+      auth.beginGithubOAuth(
+        '/app',
+        undefined,
+        'https://github.com/open-covenant/covenant/pull/196',
+      ),
+    ).rejects.toMatchObject<GithubOAuthCallbackError>({ code: 'invalid' });
+  });
+
   it('fails closed when GitHub does not grant pull request authorization scope', async () => {
     const store = new MemoryStore();
     await store.upsertContributor('42', 'maintainer');

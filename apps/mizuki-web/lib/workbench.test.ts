@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  authorizeIssueHref,
   authorizePullRequestHref,
   bountyPayoutText,
   githubAuthErrorMessage,
@@ -61,6 +62,24 @@ describe('Workbench authentication', () => {
       }),
     ).toBe(
       '/api/mizuki/v1/auth/github?return_to=%2Fapp%2Fjobs%2Fnew%3Fowner%3Dopen-covenant%26repo%3Dcovenant&authorize_pr=https%3A%2F%2Fgithub.com%2Fopen-covenant%2Fcovenant%2Fpull%2F196',
+    );
+  });
+
+  it('builds an in-app issue authorization flow', () => {
+    expect(
+      authorizeIssueHref(
+        {
+          number: 197,
+          title: 'Fix the repository selector',
+          url: 'https://github.com/open-covenant/covenant/issues/197',
+          authorized: false,
+          eligibility: 'action_required',
+        },
+        'open-covenant',
+        'covenant',
+      ),
+    ).toBe(
+      '/api/mizuki/v1/auth/github?return_to=%2Fapp%2Frepositories%2Fopen-covenant%2Fcovenant&authorize_issue=https%3A%2F%2Fgithub.com%2Fopen-covenant%2Fcovenant%2Fissues%2F197',
     );
   });
 

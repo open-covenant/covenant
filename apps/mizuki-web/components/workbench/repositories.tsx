@@ -4,7 +4,12 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { formatTime } from '@/lib/format';
-import { normalizeIssues, normalizeRepositories, parseRepositoryLocator } from '@/lib/workbench';
+import {
+  authorizeIssueHref,
+  normalizeIssues,
+  normalizeRepositories,
+  parseRepositoryLocator,
+} from '@/lib/workbench';
 import type { InstallationStatus } from '@/lib/workbench';
 import { useWorkbenchResource, workbenchMutation } from '@/lib/workbench-client';
 import {
@@ -192,7 +197,7 @@ export function RepositoryWorkspace({ owner, repo }: { owner: string; repo: stri
                         {issue.reason ||
                           (issue.authorized
                             ? 'Maintainer authorization confirmed.'
-                            : 'Add the mizuki:authorized label before requesting a quote.')}
+                            : 'Authorize this issue in Workbench to make it available for a fixed quote.')}
                       </p>
                     </div>
                     <WorkbenchStatus value={issue.eligibility} />
@@ -207,14 +212,17 @@ export function RepositoryWorkspace({ owner, repo }: { owner: string; repo: stri
                           Request quote
                         </Link>
                       )}
+                      {!issue.authorized && issue.eligibility === 'action_required' && (
+                        <Link href={authorizeIssueHref(issue, owner, repo)}>Authorize</Link>
+                      )}
                     </div>
                   </article>
                 ))}
               </div>
             ) : issues.status === 'ready' ? (
               <WorkbenchEmpty
-                title="No issues are ready"
-                detail="Add the mizuki:authorized label to one clearly scoped issue, then check again."
+                title="No open issues found"
+                detail="Create a clearly scoped GitHub issue, then return here to authorize it and request a quote."
                 action={
                   <a
                     href={`https://github.com/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues`}

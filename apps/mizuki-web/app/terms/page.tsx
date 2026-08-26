@@ -44,8 +44,8 @@ export default function TermsPage() {
           <h2>Authorization and supported work</h2>
           <p>
             Restrict both required GitHub App installations to the selected public repository. A
-            maintainer with triage access or higher must apply the <code>mizuki:authorized</code>{' '}
-            label. Mizuki may refuse work that is too large, introduces features, changes sensitive
+            maintainer with triage access or higher must authorize the issue in Mizuki Workbench.
+            Mizuki may refuse work that is too large, introduces features, changes sensitive
             systems, or falls outside the published scope.
           </p>
         </article>

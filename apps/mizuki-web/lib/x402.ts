@@ -70,7 +70,7 @@ export function paymentPreparationError(cause: unknown, quoteAmount: string): st
     return 'The payment request no longer matches this quote. Refresh the page and request a new quote. No payment or job was created.';
   }
   if (
-    /rpc|failed to fetch|network|http[^\n]{0,30}(?:403|429|5\d\d)|blockhash|account info/i.test(
+    /rpc|failed to fetch|network|http[^\n]{0,30}(?:4\d\d|5\d\d)|blockhash|account info/i.test(
       message,
     )
   ) {

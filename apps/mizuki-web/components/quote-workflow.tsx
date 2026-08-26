@@ -9,7 +9,7 @@ import type { Job, Quote } from '@/lib/types';
 import { useStandardWallet } from '@/lib/wallet-standard';
 import { createPaymentFetch, paymentPreparationError } from '@/lib/x402';
 
-type RequestState = 'idle' | 'quoting' | 'quoted' | 'paying';
+type RequestState = 'idle' | 'quoting' | 'quoted' | 'paying' | 'payment_uncertain';
 
 class CustomerRequestError extends Error {}
 
@@ -111,10 +111,19 @@ export function QuoteWorkflow() {
     if (!quote || !connected) return;
     setState('paying');
     setError(null);
+    let walletSigned = false;
     try {
-      const feature = connected.wallet.features[
+      const walletFeature = connected.wallet.features[
         'solana:signTransaction'
       ] as SolanaSignTransactionFeature['solana:signTransaction'];
+      const feature: SolanaSignTransactionFeature['solana:signTransaction'] = {
+        ...walletFeature,
+        async signTransaction(...inputs) {
+          const signed = await walletFeature.signTransaction(...inputs);
+          walletSigned = true;
+          return signed;
+        },
+      };
       const paidFetch = createPaymentFetch({
         account: connected.account,
         feature,
@@ -132,12 +141,9 @@ export function QuoteWorkflow() {
       const job = await readResponse<Job>(response, 'payment', quote.id);
       router.push(`/jobs/${encodeURIComponent(job.id)}`);
     } catch (cause) {
-      setState('quoted');
-      setError(
-        cause instanceof CustomerRequestError
-          ? cause.message
-          : paymentPreparationError(cause, formatUsdcAtomic(quote.priceAtomic)),
-      );
+      const failure = publicPaymentFailure(cause, walletSigned, quote.id, quote.priceAtomic);
+      setState(failure.uncertain ? 'payment_uncertain' : 'quoted');
+      setError(failure.message);
     }
   }
 
@@ -160,7 +166,7 @@ export function QuoteWorkflow() {
           <button
             className="button button-primary"
             type="submit"
-            disabled={state === 'quoting' || state === 'paying'}
+            disabled={state === 'quoting' || state === 'paying' || state === 'payment_uncertain'}
           >
             {state === 'quoting'
               ? 'Checking issue…'
@@ -244,12 +250,14 @@ export function QuoteWorkflow() {
               <button
                 className="button button-primary pay-button"
                 type="button"
-                disabled={state === 'paying'}
+                disabled={state === 'paying' || state === 'payment_uncertain'}
                 onClick={() => void payAndRun()}
               >
                 {state === 'paying'
                   ? 'Settling payment…'
-                  : `Pay ${formatUsdcAtomic(quote.priceAtomic)} and start`}
+                  : state === 'payment_uncertain'
+                    ? 'Check payment status before retrying'
+                    : `Pay ${formatUsdcAtomic(quote.priceAtomic)} and start`}
               </button>
             )}
           </div>
@@ -266,4 +274,21 @@ export function QuoteWorkflow() {
       )}
     </div>
   );
+}
+
+export function publicPaymentFailure(
+  cause: unknown,
+  walletSigned: boolean,
+  quoteId: string,
+  amountAtomic: string,
+): { message: string; uncertain: boolean } {
+  const uncertain = walletSigned || cause instanceof CustomerRequestError;
+  return {
+    uncertain,
+    message: uncertain
+      ? cause instanceof CustomerRequestError
+        ? cause.message
+        : requestError(0, 'payment', quoteId)
+      : paymentPreparationError(cause, formatUsdcAtomic(amountAtomic)),
+  };
 }

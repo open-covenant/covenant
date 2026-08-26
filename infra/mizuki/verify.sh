@@ -226,7 +226,8 @@ end
 
 abort 'web proxy secret is not linked to the canonical production runtime' unless service_ref(web.fetch('MIZUKI_WEB_PROXY_SECRET'), 'mizuki-runtime-production', 'MIZUKI_WEB_PROXY_SECRET')
 abort 'web API origin is not linked to the canonical production runtime' unless service_ref(web.fetch('MIZUKI_API_URL'), 'mizuki-runtime-production', 'RENDER_EXTERNAL_URL')
-abort 'web Solana RPC is not operator-pinned' unless web.fetch('NEXT_PUBLIC_SOLANA_RPC_URL')['sync'] == false
+abort 'web Solana RPC proxy drift' unless web.fetch('NEXT_PUBLIC_SOLANA_RPC_URL')['value'] == 'https://mizuki.opencovenant.org/api/solana-rpc'
+abort 'web server-side Solana RPC is not operator-pinned' unless web.fetch('MIZUKI_SOLANA_RPC_URL')['sync'] == false
 
 shadow_keys = %w[
   NODE_ENV

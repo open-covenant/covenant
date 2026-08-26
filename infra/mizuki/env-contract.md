@@ -132,7 +132,8 @@ The gateway receives no GitHub App key, treasury key, signer token, updater toke
 | `NEXT_PUBLIC_MIZUKI_APP_URL`          | Exact HTTPS web origin.                                                                                             |
 | `NEXT_PUBLIC_MIZUKI_GITHUB_OAUTH_URL` | Same-origin public API proxy path.                                                                                  |
 | `NEXT_PUBLIC_SOLANA_NETWORK`          | Exactly `solana` for production.                                                                                    |
-| `NEXT_PUBLIC_SOLANA_RPC_URL`          | Production mainnet RPC suitable for browser mint and blockhash reads; public by design, never embed a secret token. |
+| `NEXT_PUBLIC_SOLANA_RPC_URL`          | Exactly `https://mizuki.opencovenant.org/api/solana-rpc`; the browser uses this same-origin, read-only proxy.       |
+| `MIZUKI_SOLANA_RPC_URL`               | Server-only Helius mainnet URL; its API key must never enter the browser bundle or public responses.                |
 
 The web service receives no custody key or signer, updater, gateway, or API admin authority. It holds only the narrowly scoped `MIZUKI_WEB_PROXY_SECRET`, which authenticates server-side client-IP and scheme context and cannot authorize an API operation. The web proxy derives client identity only from Render's validated `CF-Connecting-IP` value, ignores `X-Forwarded-For`, and replaces browser-supplied Mizuki context headers. Never expose the credential through `NEXT_PUBLIC_*`; rotate the API and web values together. The wallet signs the official x402 SVM transaction, and the server-side proxy forwards only allowlisted request headers and bodies no larger than the API's 64,000-byte limit.
 

@@ -334,14 +334,14 @@
 }
 
 .workbench-page-header p,
-.workbench-panel-heading span,
-.repository-readiness-heading span,
-.wizard-step-heading span,
+.workbench-panel-heading > div > span,
+.workbench-panel-heading > span:not(.workbench-status),
+.repository-readiness-heading > div > span,
+.wizard-step-heading > div > span,
 .wizard-contract-heading > div > span,
 .billing-policy-notice span,
 .integration-heading span,
 .workbench-bounty-card > span,
-.settings-panel .workbench-panel-heading span,
 .bounty-claim-panel > span,
 .job-room-header p,
 .bounty-room-header p,
@@ -467,9 +467,10 @@
   align-items: center;
 }
 
-.workbench-panel-heading span,
-.repository-readiness-heading span,
-.wizard-step-heading span {
+.workbench-panel-heading > div > span,
+.workbench-panel-heading > span:not(.workbench-status),
+.repository-readiness-heading > div > span,
+.wizard-step-heading > div > span {
   display: block;
   margin-bottom: 8px;
 }
@@ -666,8 +667,10 @@
   display: inline-flex;
   width: max-content;
   max-width: 100%;
-  min-height: 25px;
+  height: 26px;
   align-items: center;
+  justify-content: center;
+  margin: 0;
   padding: 1px 9px 0;
   border: 1px solid var(--wb-line-strong);
   border-radius: 999px;
@@ -677,6 +680,13 @@
   line-height: 1;
   letter-spacing: 0.05em;
   text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.workbench-panel-heading > .workbench-status,
+.wizard-step-heading > .workbench-status {
+  align-self: center;
+  margin: 0;
 }
 
 .workbench-status.positive {

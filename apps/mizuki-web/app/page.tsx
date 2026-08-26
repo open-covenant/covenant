@@ -39,8 +39,7 @@ export default async function HomePage() {
             </p>
             <div className="hero-actions">
               <Link href="/app" className="button button-primary">
-                Open Workbench{' '}
-                <span aria-hidden="true">↗</span>
+                Open Workbench <span aria-hidden="true">↗</span>
               </Link>
               <Link href="/work" className="button button-secondary">
                 View service status

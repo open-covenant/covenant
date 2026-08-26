@@ -59,9 +59,7 @@ describe('x402 quote policy', () => {
   });
 
   it('explains an unfunded wallet without exposing SDK internals', () => {
-    expect(
-      paymentPreparationError(new Error('insufficient token balance'), '2 USDC'),
-    ).toBe(
+    expect(paymentPreparationError(new Error('insufficient token balance'), '2 USDC')).toBe(
       'Your connected wallet does not have enough USDC on Solana to pay the 2 USDC quote. Add USDC to this wallet and try again. No payment or job was created.',
     );
   });

@@ -107,14 +107,15 @@ describe('Mizuki API proxy', () => {
     vi.stubEnv('MIZUKI_WEB_PROXY_SECRET', 'p'.repeat(32));
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () =>
-        new Response(null, {
-          status: 302,
-          headers: {
-            location:
-              'https://github.com/login/oauth/authorize?client_id=client&state=signed-state',
-          },
-        }),
+      vi.fn(
+        async () =>
+          new Response(null, {
+            status: 302,
+            headers: {
+              location:
+                'https://github.com/login/oauth/authorize?client_id=client&state=signed-state',
+            },
+          }),
       ),
     );
 

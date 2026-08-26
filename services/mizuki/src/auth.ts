@@ -86,7 +86,12 @@ export class ContributorAuth {
   constructor(
     private readonly config: Pick<
       Config,
-      'publicBaseUrl' | 'webOrigin' | 'githubClientId' | 'githubClientSecret' | 'sessionSecret'
+      | 'publicBaseUrl'
+      | 'webOrigin'
+      | 'githubAppId'
+      | 'githubClientId'
+      | 'githubClientSecret'
+      | 'sessionSecret'
     > &
       Partial<Pick<Config, 'githubAuthorizationLabel'>>,
     private readonly store: MizukiStore,
@@ -148,10 +153,12 @@ export class ContributorAuth {
     const query = new URLSearchParams({
       client_id: this.config.githubClientId!,
       redirect_uri: callback,
-      scope: authorization || issueAuthorization ? 'read:user public_repo' : 'read:user',
       state,
       prompt: 'select_account',
     });
+    if (!this.config.githubAppId) {
+      query.set('scope', authorization || issueAuthorization ? 'read:user public_repo' : 'read:user');
+    }
     return { url: `https://github.com/login/oauth/authorize?${query}`, flowCookie };
   }
 
@@ -226,10 +233,7 @@ export class ContributorAuth {
     }
     const contributor = await this.store.upsertContributor(String(user.id), user.login);
     if (state.authorizePullRequest) {
-      const scopes = new Set((tokenBody.scope ?? '').split(/[ ,]+/).filter(Boolean));
-      if (!scopes.has('public_repo') && !scopes.has('repo')) {
-        throw new GithubOAuthCallbackError('permission');
-      }
+      this.assertRepositoryAuthorizationGrant(tokenBody.scope);
       await this.authorizePullRequest(
         tokenBody.access_token,
         contributor,
@@ -237,10 +241,7 @@ export class ContributorAuth {
       );
     }
     if (state.authorizeIssue) {
-      const scopes = new Set((tokenBody.scope ?? '').split(/[ ,]+/).filter(Boolean));
-      if (!scopes.has('public_repo') && !scopes.has('repo')) {
-        throw new GithubOAuthCallbackError('permission');
-      }
+      this.assertRepositoryAuthorizationGrant(tokenBody.scope);
       await this.authorizeIssue(tokenBody.access_token, contributor, state.authorizeIssue);
     }
     const session = this.sign({
@@ -258,6 +259,14 @@ export class ContributorAuth {
     target: z.infer<typeof repositoryItemAuthorizationSchema>,
   ): Promise<void> {
     await this.authorizeRepositoryItem(accessToken, contributor, target, 'pull_request');
+  }
+
+  private assertRepositoryAuthorizationGrant(scope: string | undefined): void {
+    if (this.config.githubAppId) return;
+    const scopes = new Set((scope ?? '').split(/[ ,]+/).filter(Boolean));
+    if (!scopes.has('public_repo') && !scopes.has('repo')) {
+      throw new GithubOAuthCallbackError('permission');
+    }
   }
 
   private async authorizeIssue(

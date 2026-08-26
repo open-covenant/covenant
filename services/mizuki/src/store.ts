@@ -35,6 +35,7 @@ import type {
   PaymentAttemptStage,
   Quote,
   RepositoryAdmissionReceipt,
+  SocialPostReceipt,
   WalletChallenge,
 } from './types.js';
 import { calculateRescueBountyPriceCents } from './domain/bounty.js';
@@ -190,6 +191,8 @@ export interface MizukiStore {
   saveFailure(failure: FailureRecord): Promise<FailureRecord>;
   failuresForCapability(capabilityKey: string): Promise<FailureRecord[]>;
   capabilityByKey(key: string): Promise<Capability | undefined>;
+  saveSocialPost(receipt: SocialPostReceipt): Promise<SocialPostReceipt>;
+  socialPosts(limit?: number): Promise<SocialPostReceipt[]>;
   close(): Promise<void>;
 }
 
@@ -214,6 +217,7 @@ export class MemoryStore implements MizukiStore {
   private readonly capabilities = new Map<string, Capability>();
   private readonly upgrades = new Map<string, Upgrade>();
   private readonly failures: FailureRecord[] = [];
+  private readonly socialPostReceipts: SocialPostReceipt[] = [];
   private readonly capabilityFailureLocks = new Map<string, Promise<void>>();
   private controls: OperatorControls = initialOperatorControls();
   private readonly controlsAudit: OperatorControlAuditEntry[] = [
@@ -1048,6 +1052,31 @@ export class MemoryStore implements MizukiStore {
 
   async capabilityByKey(key: string): Promise<Capability | undefined> {
     return clone([...this.capabilities.values()].find((capability) => capability.key === key));
+  }
+
+  async saveSocialPost(receipt: SocialPostReceipt): Promise<SocialPostReceipt> {
+    const existing = this.socialPostReceipts.find(
+      (candidate) =>
+        candidate.id === receipt.id ||
+        candidate.cursor === receipt.cursor ||
+        candidate.sourceHash === receipt.sourceHash ||
+        candidate.postId === receipt.postId,
+    );
+    if (existing) {
+      if (!isDeepStrictEqual(existing, receipt)) {
+        throw new StateConflictError('social post receipt conflicts with an existing receipt');
+      }
+      return structuredClone(existing);
+    }
+    this.socialPostReceipts.push(structuredClone(receipt));
+    return structuredClone(receipt);
+  }
+
+  async socialPosts(limit = 100): Promise<SocialPostReceipt[]> {
+    return [...this.socialPostReceipts]
+      .sort((left, right) => right.postedAt.localeCompare(left.postedAt))
+      .slice(0, Math.min(Math.max(limit, 1), 500))
+      .map((receipt) => structuredClone(receipt));
   }
 
   async close(): Promise<void> {}
@@ -2430,6 +2459,46 @@ export class PostgresStore implements MizukiStore {
     return result.rows[0]?.payload;
   }
 
+  async saveSocialPost(receipt: SocialPostReceipt): Promise<SocialPostReceipt> {
+    const inserted = await this.pool.query<{ payload: SocialPostReceipt }>(
+      `INSERT INTO mizuki_social_posts
+        (id, kind, cursor, source_hash, post_id, posted_at, payload)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+       ON CONFLICT DO NOTHING
+       RETURNING payload`,
+      [
+        receipt.id,
+        receipt.kind,
+        receipt.cursor,
+        receipt.sourceHash,
+        receipt.postId,
+        receipt.postedAt,
+        JSON.stringify(receipt),
+      ],
+    );
+    if (inserted.rows[0]) return inserted.rows[0].payload;
+    const existing = await this.pool.query<{ payload: SocialPostReceipt }>(
+      `SELECT payload FROM mizuki_social_posts
+       WHERE id = $1 OR cursor = $2 OR source_hash = $3 OR post_id = $4
+       ORDER BY posted_at ASC LIMIT 1`,
+      [receipt.id, receipt.cursor, receipt.sourceHash, receipt.postId],
+    );
+    const value = existing.rows[0]?.payload;
+    if (!value) throw new Error('social post insert conflicted without an existing row');
+    if (!isDeepStrictEqual(value, receipt)) {
+      throw new StateConflictError('social post receipt conflicts with an existing receipt');
+    }
+    return value;
+  }
+
+  async socialPosts(limit = 100): Promise<SocialPostReceipt[]> {
+    const result = await this.pool.query<{ payload: SocialPostReceipt }>(
+      'SELECT payload FROM mizuki_social_posts ORDER BY posted_at DESC LIMIT $1',
+      [Math.min(Math.max(limit, 1), 500)],
+    );
+    return result.rows.map((row) => row.payload);
+  }
+
   async close(): Promise<void> {
     await this.pool.end();
   }
@@ -3191,6 +3260,32 @@ CREATE TRIGGER mizuki_operator_control_audit_no_truncate
   FOR EACH STATEMENT EXECUTE FUNCTION mizuki_reject_operator_control_audit_mutation();
 `;
 
+export const SOCIAL_POSTS_SCHEMA_V1 = `
+CREATE TABLE mizuki_social_posts (
+  id uuid PRIMARY KEY,
+  kind text NOT NULL,
+  cursor text NOT NULL UNIQUE,
+  source_hash text NOT NULL UNIQUE CHECK (source_hash ~ '^[a-f0-9]{64}$'),
+  post_id text NOT NULL UNIQUE,
+  posted_at timestamptz NOT NULL,
+  payload jsonb NOT NULL
+);
+CREATE INDEX mizuki_social_posts_posted_idx
+  ON mizuki_social_posts(posted_at DESC);
+CREATE FUNCTION mizuki_reject_social_post_mutation() RETURNS trigger
+  LANGUAGE plpgsql AS $$
+  BEGIN
+    RAISE EXCEPTION 'social post receipts are append-only';
+  END;
+  $$;
+CREATE TRIGGER mizuki_social_posts_append_only
+  BEFORE UPDATE OR DELETE ON mizuki_social_posts
+  FOR EACH ROW EXECUTE FUNCTION mizuki_reject_social_post_mutation();
+CREATE TRIGGER mizuki_social_posts_no_truncate
+  BEFORE TRUNCATE ON mizuki_social_posts
+  FOR EACH STATEMENT EXECUTE FUNCTION mizuki_reject_social_post_mutation();
+`;
+
 async function migrate(pool: Pool): Promise<void> {
   const client = await pool.connect();
   try {
@@ -3233,6 +3328,10 @@ async function migrate(pool: Pool): Promise<void> {
         migrations: [
           { version: 1, name: 'admission-control-audit', sql: ADMISSION_CONTROL_AUDIT_SCHEMA },
         ],
+      },
+      {
+        name: 'social',
+        migrations: [{ version: 1, name: 'social-post-receipts', sql: SOCIAL_POSTS_SCHEMA_V1 }],
       },
     ];
     for (const component of components) {

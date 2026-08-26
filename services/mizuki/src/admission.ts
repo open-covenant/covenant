@@ -22,6 +22,7 @@ export type PublicRoute =
   | 'bounty_claim'
   | 'bounty_pr'
   | 'bounty_dispute'
+  | 'social_validate'
   | 'job';
 
 type Policy = {
@@ -59,6 +60,7 @@ const policies: Record<PublicRoute, Policy> = {
   bounty_claim: { capacity: 6, windowMs: 60_000 },
   bounty_pr: { capacity: 6, windowMs: 60_000 },
   bounty_dispute: { capacity: 4, windowMs: 60_000 },
+  social_validate: { capacity: 20, windowMs: 60_000 },
   job: { capacity: 8, windowMs: 60_000 },
 };
 

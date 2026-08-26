@@ -70,6 +70,8 @@ import {
   type PolicyReadiness,
 } from './policy-client.js';
 import type { ServiceReadiness } from './readiness.js';
+import { buildSocialBrief, snapshotFromSocialBrief } from './social.js';
+import { validateSocialDraft } from './social-validator.js';
 
 const MAX_POSTGRES_INTEGER = 2_147_483_647;
 const UUID_PATTERN = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
@@ -158,6 +160,41 @@ export function createApp(deps: AppDependencies) {
         const report = await deps.readiness.check();
         res.setHeader('cache-control', 'no-store');
         return json(res, 200, await metrics(deps.config, deps.store, report));
+      }
+      if (req.method === 'GET' && url.pathname === '/v1/social/brief') {
+        const kind = url.searchParams.get('kind') ?? 'stats';
+        if (kind !== 'stats') return json(res, 400, { error: 'unsupported social brief kind' });
+        const report = await deps.readiness.check();
+        res.setHeader('cache-control', 'no-store');
+        return json(res, 200, await buildSocialBrief(deps.config, deps.store, report));
+      }
+      if (req.method === 'POST' && url.pathname === '/v1/social/validate') {
+        admission.consume('social_validate', req);
+        const body = await bodyJson<{
+          cursor?: unknown;
+          sourceHash?: unknown;
+          output?: unknown;
+        }>(req);
+        if (
+          typeof body.cursor !== 'string' ||
+          typeof body.sourceHash !== 'string' ||
+          typeof body.output !== 'string'
+        ) {
+          return json(res, 400, { error: 'cursor, sourceHash, and output are required' });
+        }
+        const report = await deps.readiness.check();
+        const brief = await buildSocialBrief(deps.config, deps.store, report);
+        if (body.cursor !== brief.cursor || body.sourceHash !== brief.sourceHash) {
+          return json(res, 409, { error: 'social brief no longer matches the current source' });
+        }
+        const previous = await deps.store.socialPosts(500);
+        const validation = validateSocialDraft(brief, body.output, {
+          previousTexts: previous.map((post) => post.text),
+          seenCursors: previous.map((post) => post.cursor),
+          seenSourceHashes: previous.map((post) => post.sourceHash),
+        });
+        res.setHeader('cache-control', 'no-store');
+        return json(res, validation.valid ? 200 : 422, validation);
       }
       if (req.method === 'GET' && url.pathname === '/metrics') {
         const report = await deps.readiness.check();
@@ -1480,6 +1517,57 @@ export function createApp(deps: AppDependencies) {
       if (url.pathname === '/v1/admin/jobs' && req.method === 'GET') {
         if (!admin(req, deps.config.adminToken)) return json(res, 401, { error: 'unauthorized' });
         return json(res, 200, await deps.store.jobsList());
+      }
+      if (url.pathname === '/v1/admin/social/posts' && req.method === 'GET') {
+        if (!admin(req, deps.config.adminToken)) return json(res, 401, { error: 'unauthorized' });
+        return json(res, 200, { posts: await deps.store.socialPosts(500) });
+      }
+      if (url.pathname === '/v1/admin/social/posts' && req.method === 'POST') {
+        if (!admin(req, deps.config.adminToken)) return json(res, 401, { error: 'unauthorized' });
+        const body = await bodyJson<{
+          kind?: unknown;
+          cursor?: unknown;
+          sourceHash?: unknown;
+          postId?: unknown;
+          text?: unknown;
+        }>(req);
+        if (body.kind !== 'stats') return json(res, 400, { error: 'unsupported social post kind' });
+        if (typeof body.cursor !== 'string' || typeof body.sourceHash !== 'string') {
+          return json(res, 400, { error: 'cursor and sourceHash are required' });
+        }
+        if (typeof body.postId !== 'string' || !/^\d{1,32}$/.test(body.postId)) {
+          return json(res, 400, { error: 'postId must be a numeric X post ID' });
+        }
+        if (typeof body.text !== 'string') return json(res, 400, { error: 'text is required' });
+
+        const report = await deps.readiness.check();
+        const brief = await buildSocialBrief(deps.config, deps.store, report);
+        if (body.cursor !== brief.cursor || body.sourceHash !== brief.sourceHash) {
+          return json(res, 409, { error: 'social brief no longer matches the current source' });
+        }
+        const previous = await deps.store.socialPosts(500);
+        const validation = validateSocialDraft(brief, `POST\n${body.text}`, {
+          previousTexts: previous.map((post) => post.text),
+          seenCursors: previous.map((post) => post.cursor),
+          seenSourceHashes: previous.map((post) => post.sourceHash),
+        });
+        if (!validation.valid || validation.decision !== 'post') {
+          return json(res, 422, {
+            error: 'social post failed validation',
+            reasons: validation.valid ? ['post_required'] : validation.errors,
+          });
+        }
+        const receipt = await deps.store.saveSocialPost({
+          id: randomUUID(),
+          kind: body.kind,
+          cursor: brief.cursor,
+          sourceHash: brief.sourceHash,
+          postId: body.postId,
+          text: validation.text,
+          snapshot: snapshotFromSocialBrief(brief),
+          postedAt: new Date().toISOString(),
+        });
+        return json(res, 201, receipt);
       }
       if (url.pathname === '/v1/admission' && req.method === 'GET') {
         res.setHeader('cache-control', 'no-store');

@@ -15,22 +15,30 @@ import {
   GithubOAuthCapacityError,
   MAX_PENDING_GITHUB_OAUTH_FLOWS,
   PostgresStore,
+  SOCIAL_POSTS_SCHEMA_V1,
   StateConflictError,
   WORKBENCH_API_TOKENS_SCHEMA_V1,
 } from './store.js';
 import { RefundCapacityError } from './policy-client.js';
-import type { Quote } from './types.js';
+import type { Quote, SocialPostReceipt } from './types.js';
 
 const databaseUrl = process.env.MIZUKI_TEST_DATABASE_URL;
 const DEPLOYED_CORE_V1_CHECKSUM =
   '1e1c7b752aead2d673a8d82fba69113344ada76444a1263e6bc80bffb0d80429';
 const WORKBENCH_API_TOKENS_V1_CHECKSUM =
   '4787de73a64016308c8823bcbd209e0638a1d8fa57b3c3a2f2517a86120c412b';
+const SOCIAL_POSTS_V1_CHECKSUM = '8785618d0a00ad135060f64d37fd786215042104ac9f73f081396a9ca8babd7d';
 
 describe('PostgresStore schema', () => {
   it('keeps the API token migration immutable', () => {
     expect(createHash('sha256').update(WORKBENCH_API_TOKENS_SCHEMA_V1).digest('hex')).toBe(
       WORKBENCH_API_TOKENS_V1_CHECKSUM,
+    );
+  });
+
+  it('keeps the social receipt migration immutable', () => {
+    expect(createHash('sha256').update(SOCIAL_POSTS_SCHEMA_V1).digest('hex')).toBe(
+      SOCIAL_POSTS_V1_CHECKSUM,
     );
   });
 });
@@ -349,6 +357,34 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
       ),
     ]);
     expect(values[0]).toEqual(values[1]);
+  });
+
+  it('persists one immutable receipt per social source and post', async () => {
+    const receipt = socialReceipt();
+    await expect(store.saveSocialPost(receipt)).resolves.toEqual(receipt);
+    await expect(store.saveSocialPost(receipt)).resolves.toEqual(receipt);
+    await expect(store.socialPosts()).resolves.toContainEqual(receipt);
+    await expect(
+      store.saveSocialPost({ ...receipt, id: randomUUID(), text: 'different text' }),
+    ).rejects.toBeInstanceOf(StateConflictError);
+
+    const pool = new Pool({ connectionString: databaseUrl });
+    try {
+      await expect(
+        pool.query('UPDATE mizuki_social_posts SET post_id = $1 WHERE id = $2', [
+          randomUUID(),
+          receipt.id,
+        ]),
+      ).rejects.toThrow('social post receipts are append-only');
+      await expect(
+        pool.query('DELETE FROM mizuki_social_posts WHERE id = $1', [receipt.id]),
+      ).rejects.toThrow('social post receipts are append-only');
+      await expect(pool.query('TRUNCATE mizuki_social_posts')).rejects.toThrow(
+        'social post receipts are append-only',
+      );
+    } finally {
+      await pool.end();
+    }
   });
 
   it('recovers operator admission controls after reconnecting', async () => {
@@ -778,7 +814,8 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
       }>(
         `SELECT component, version, name, checksum FROM mizuki_schema_migrations
          WHERE component IN (
-           'core', 'admission-control', 'github-oauth', 'workbench', 'workbench-api-tokens'
+           'core', 'admission-control', 'github-oauth', 'social', 'workbench',
+           'workbench-api-tokens'
          )
          ORDER BY component, version`,
       );
@@ -786,6 +823,7 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
         { component: 'admission-control', version: 1, name: 'admission-control-audit' },
         { component: 'core', version: 1, name: 'commercial-core' },
         { component: 'github-oauth', version: 1, name: 'browser-bound-flow' },
+        { component: 'social', version: 1, name: 'social-post-receipts' },
         { component: 'workbench', version: 1, name: 'workbench-accounts' },
         { component: 'workbench', version: 2, name: 'payment-attempts' },
         { component: 'workbench-api-tokens', version: 1, name: 'scoped-api-tokens' },
@@ -1068,7 +1106,8 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
         }>(
           `SELECT component, version, name FROM mizuki_schema_migrations
            WHERE component IN (
-             'core', 'admission-control', 'github-oauth', 'workbench', 'workbench-api-tokens'
+             'core', 'admission-control', 'github-oauth', 'social', 'workbench',
+             'workbench-api-tokens'
            )
            ORDER BY component, version`,
         );
@@ -1076,6 +1115,7 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
           { component: 'admission-control', version: 1, name: 'admission-control-audit' },
           { component: 'core', version: 1, name: 'commercial-core' },
           { component: 'github-oauth', version: 1, name: 'browser-bound-flow' },
+          { component: 'social', version: 1, name: 'social-post-receipts' },
           { component: 'workbench', version: 1, name: 'workbench-accounts' },
           { component: 'workbench', version: 2, name: 'payment-attempts' },
           { component: 'workbench-api-tokens', version: 1, name: 'scoped-api-tokens' },
@@ -1142,5 +1182,34 @@ function accountClaim(claimantId: string, state: BountyClaim['state']): BountyCl
     claimedAt: at,
     leaseExpiresAt: '2026-08-27T00:00:00.000Z',
     ...(state === 'active' ? {} : { closedAt: at }),
+  };
+}
+
+function socialReceipt(): SocialPostReceipt {
+  return {
+    id: randomUUID(),
+    kind: 'stats',
+    cursor: `stats:${randomUUID()}`,
+    sourceHash: randomUUID().replaceAll('-', '').repeat(2),
+    postId: randomUUID(),
+    text: 'Internal test activity stayed separate from external work.',
+    snapshot: {
+      internalPaidAttempts: 1,
+      externalPaidJobs: 0,
+      unclassifiedPaidAttempts: 0,
+      internalOpenedPrs: 1,
+      externalOpenedPrs: 0,
+      unclassifiedOpenedPrs: 0,
+      internalMergedPrs: 1,
+      externalMergedPrs: 0,
+      unclassifiedMergedPrs: 0,
+      internalRefunds: 0,
+      externalRefunds: 0,
+      unclassifiedRefunds: 0,
+      refundSuccessRate: null,
+      externalMaintainers: 0,
+      grossMarginStatus: 'unverified',
+    },
+    postedAt: new Date().toISOString(),
   };
 }

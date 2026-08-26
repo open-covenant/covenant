@@ -328,6 +328,37 @@ export type OperatorControlsPatch = {
   updatedBy: string;
 };
 
+export type SocialPostKind = 'stats';
+
+export type SocialStatsSnapshot = {
+  internalPaidAttempts: number;
+  externalPaidJobs: number;
+  unclassifiedPaidAttempts: number;
+  internalOpenedPrs: number;
+  externalOpenedPrs: number;
+  unclassifiedOpenedPrs: number;
+  internalMergedPrs: number;
+  externalMergedPrs: number;
+  unclassifiedMergedPrs: number;
+  internalRefunds: number;
+  externalRefunds: number;
+  unclassifiedRefunds: number;
+  refundSuccessRate: number | null;
+  externalMaintainers: number;
+  grossMarginStatus: 'unverified';
+};
+
+export type SocialPostReceipt = {
+  id: string;
+  kind: SocialPostKind;
+  cursor: string;
+  sourceHash: string;
+  postId: string;
+  text: string;
+  snapshot: SocialStatsSnapshot;
+  postedAt: string;
+};
+
 export type GithubIssue = {
   owner: string;
   repo: string;

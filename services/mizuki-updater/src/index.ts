@@ -3,6 +3,7 @@ import { HttpDeploymentGateway } from './deployment.js';
 import { GitHubAppGateway } from './github.js';
 import { UpdaterMetrics } from './metrics.js';
 import { PostgresUpgradeRepository } from './postgres.js';
+import { createStableReadinessProbe } from './readiness.js';
 import { createUpdaterServer } from './server.js';
 import { InMemoryUpgradeRepository } from './store.js';
 import { UpdaterService } from './updater.js';
@@ -71,6 +72,12 @@ const service =
         metrics,
       )
     : undefined;
+const operationalReadiness =
+  github && deployments
+    ? createStableReadinessProbe(async () => {
+        await Promise.all([github.readiness(), deployments.readiness()]);
+      })
+    : undefined;
 
 await repository.migrate();
 const server = createUpdaterServer({
@@ -81,12 +88,7 @@ const server = createUpdaterServer({
   controlToken: config.controlToken,
   readToken: config.readToken,
   operationalFailures: config.operationalFailures,
-  operationalReadiness:
-    github && deployments
-      ? async () => {
-          await Promise.all([github.readiness(), deployments.readiness()]);
-        }
-      : undefined,
+  operationalReadiness,
 });
 server.headersTimeout = 10_000;
 server.requestTimeout = 15_000;

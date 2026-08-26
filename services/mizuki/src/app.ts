@@ -48,7 +48,12 @@ import {
   type BountyClaim,
   type RescueBounty,
 } from './domain/index.js';
-import type { ApiTokenScope } from './types.js';
+import {
+  ACCOUNT_JOB_HISTORY_API_DEFAULT_LIMIT,
+  ACCOUNT_JOB_HISTORY_BROWSER_DEFAULT_LIMIT,
+  ACCOUNT_JOB_HISTORY_MAX_LIMIT,
+  type ApiTokenScope,
+} from './types.js';
 import { Payments, USDC_DECIMALS, USDC_MAINNET, paymentRequiredHeader } from './x402.js';
 import {
   assertRefundCapacity,
@@ -358,8 +363,19 @@ export function createApp(deps: AppDependencies) {
       }
       if (req.method === 'GET' && url.pathname === '/v1/account/jobs') {
         res.setHeader('cache-control', 'private, no-store');
-        const session = requireSession(req, deps.auth);
-        const page = await deps.store.jobsForAccount(session.githubId, 100);
+        const principal = await requireAccountPrincipal(
+          req,
+          deps.auth,
+          admission,
+          'account:jobs:read',
+        );
+        admission.consumeAccount('account_jobs', req, principal.githubId);
+        const defaultLimit =
+          'kind' in principal && principal.kind === 'api_token'
+            ? ACCOUNT_JOB_HISTORY_API_DEFAULT_LIMIT
+            : ACCOUNT_JOB_HISTORY_BROWSER_DEFAULT_LIMIT;
+        const limit = accountJobQueryLimit(url.searchParams.getAll('limit'), defaultLimit);
+        const page = await deps.store.jobsForAccount(principal.githubId, limit);
         return json(res, 200, {
           jobs: page.jobs.map(publicJob),
           limit: page.limit,
@@ -584,6 +600,7 @@ export function createApp(deps: AppDependencies) {
           deps.auth,
           admission,
           'repositories:read',
+          { csrf: true, configuredOrigin: deps.config.webOrigin },
         );
         admission.consumeAccount('preflight', req, session.githubId);
         const body = await bodyJson<{ github_issue_url?: unknown }>(req);
@@ -1270,7 +1287,9 @@ export function createApp(deps: AppDependencies) {
                 ? 503
                 : /not signed in|unauthorized/i.test(message)
                   ? 401
-                  : cause instanceof InvalidRequestBodyError || cause instanceof ApiTokenInputError
+                  : cause instanceof InvalidRequestBodyError ||
+                      cause instanceof InvalidQueryParameterError ||
+                      cause instanceof ApiTokenInputError
                     ? 400
                     : cause instanceof ApiTokenCapacityError
                       ? 409
@@ -1528,6 +1547,22 @@ function boundedInt(value: string | null, fallback: number, min: number, max: nu
   if (value === null) return fallback;
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed >= min && parsed <= max ? parsed : fallback;
+}
+
+function accountJobQueryLimit(values: string[], fallback: number): number {
+  if (values.length === 0) return fallback;
+  if (values.length !== 1 || !/^[1-9]\d{0,2}$/.test(values[0]!)) {
+    throw new InvalidQueryParameterError(
+      `limit must be an integer between 1 and ${ACCOUNT_JOB_HISTORY_MAX_LIMIT}`,
+    );
+  }
+  const limit = Number(values[0]);
+  if (limit > ACCOUNT_JOB_HISTORY_MAX_LIMIT) {
+    throw new InvalidQueryParameterError(
+      `limit must be an integer between 1 and ${ACCOUNT_JOB_HISTORY_MAX_LIMIT}`,
+    );
+  }
+  return limit;
 }
 
 function accountRepositoryInput(body: { repository?: unknown; owner?: unknown; repo?: unknown }): {
@@ -1930,6 +1965,7 @@ class ConcurrentPaymentReservation extends Error {
 }
 
 class InvalidRequestBodyError extends Error {}
+class InvalidQueryParameterError extends Error {}
 
 class CsrfValidationError extends Error {
   constructor() {

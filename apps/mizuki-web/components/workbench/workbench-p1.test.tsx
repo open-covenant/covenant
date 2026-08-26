@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import { BillingEntryRow } from './billing';
+import { MachineTokenRecord } from './account-surfaces';
 import { ConnectedPaymentSummary } from './new-job-wizard';
 import { WorkbenchNavLink } from './workbench-shell';
 
@@ -61,5 +62,34 @@ describe('Workbench responsive records and controls', () => {
     expect(html).toContain('Change wallet');
     expect(html).toContain('before payment can begin');
     expect(html).toContain('disabled=""');
+  });
+
+  it('shows created and exact revoked token history without a revoke control', () => {
+    const html = renderToStaticMarkup(
+      <MachineTokenRecord
+        token={{
+          id: '11111111-1111-4111-8111-111111111111',
+          name: 'Release MCP',
+          prefix: 'mzk_v1_abcdefghijkl',
+          scopes: ['account:jobs:read'],
+          state: 'revoked',
+          createdAt: '2026-08-25T10:00:00.000Z',
+          expiresAt: '2026-11-25T10:00:00.000Z',
+          lastUsedAt: '2026-08-25T10:05:00.000Z',
+          revokedAt: '2026-08-25T10:30:00.000Z',
+        }}
+        pending={false}
+        revoke={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain(
+      '<dt>Created</dt><dd><time dateTime="2026-08-25T10:00:00.000Z">Aug 25, 2026, 10:00 UTC</time></dd>',
+    );
+    expect(html).toContain(
+      '<dt>Revoked</dt><dd><time dateTime="2026-08-25T10:30:00.000Z">Aug 25, 2026, 10:30 UTC</time></dd>',
+    );
+    expect(html).toContain('Revoked');
+    expect(html).not.toContain('>Revoke</button>');
   });
 });

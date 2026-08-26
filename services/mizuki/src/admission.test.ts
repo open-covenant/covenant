@@ -35,6 +35,7 @@ describe('public admission limits', () => {
   });
 
   it.each([
+    ['account_jobs' as const, 30],
     ['account_repositories' as const, 12],
     ['api_auth' as const, 60],
     ['api_tokens' as const, 10],
@@ -52,6 +53,7 @@ describe('public admission limits', () => {
 
   it.each([
     ['preflight' as const, 10],
+    ['account_jobs' as const, 30],
     ['account_repositories' as const, 12],
     ['api_tokens' as const, 10],
     ['payment_status' as const, 12],

@@ -141,7 +141,7 @@ describe('Workbench response normalization', () => {
       id: '11111111-1111-4111-8111-111111111111',
       name: 'Release MCP',
       prefix: 'mzk_v1_abcdefghijkl',
-      scopes: ['repositories:read', 'jobs:read'],
+      scopes: ['repositories:read', 'account:jobs:read'],
       state: 'active',
       expiresAt: '2026-11-25T10:00:00.000Z',
       createdAt: '2026-08-25T10:00:00.000Z',
@@ -154,6 +154,15 @@ describe('Workbench response normalization', () => {
       token: metadata,
       secret,
     });
+    const revoked = {
+      ...metadata,
+      state: 'revoked',
+      revokedAt: '2026-08-25T10:30:00.000Z',
+    };
+    expect(normalizeApiTokens({ tokens: [revoked] })).toEqual([revoked]);
+    expect(() => normalizeApiTokens({ tokens: [{ ...metadata, state: 'revoked' }] })).toThrow(
+      'incomplete',
+    );
     expect(() => normalizeApiTokenCredential({ token: metadata, secret: 'redacted' })).toThrow(
       'one-time secret',
     );

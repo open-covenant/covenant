@@ -123,7 +123,12 @@ export type WorkbenchBilling = {
   entries: BillingEntry[];
 };
 
-export const API_TOKEN_SCOPES = ['repositories:read', 'jobs:read', 'jobs:write'] as const;
+export const API_TOKEN_SCOPES = [
+  'repositories:read',
+  'jobs:read',
+  'jobs:write',
+  'account:jobs:read',
+] as const;
 
 export type ApiTokenScope = (typeof API_TOKEN_SCOPES)[number];
 

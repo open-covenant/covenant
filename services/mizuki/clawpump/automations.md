@@ -5,10 +5,12 @@ Use the documented local Agent MCP server. Keep the API key in the MCP client's 
 Official reference: <https://clawpump.tech/docs>
 
 ```sh
-npx @clawpump/agents --claude
+npx --yes @clawpump/agents@0.1.23 --claude
 ```
 
-For any other stdio MCP client, configure `npx @clawpump/agents` and set `CLAWPUMP_API_KEY`. If the package is unavailable, stop and follow the local-checkout fallback in the official ClawPump documentation. Do not substitute an undocumented HTTP endpoint.
+Pin `@clawpump/agents` to `0.1.23`. The published `0.1.24` and `0.1.25` packages omit the runtime files required by their executable. Do not float this dependency until a complete later package is verified.
+
+For any other stdio MCP client, configure `npx --yes @clawpump/agents@0.1.23` and set `CLAWPUMP_API_KEY`. If the package is unavailable, stop and follow the local-checkout fallback in the official ClawPump documentation. Do not substitute an undocumented HTTP endpoint or send the API key to a hosted MCP endpoint that expects OAuth.
 
 ## Agent creation
 

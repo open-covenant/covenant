@@ -27,7 +27,46 @@ describe('Mizuki MCP API client', () => {
     const client = new MizukiMcpClient({ baseUrl: 'https://mizuki.example', request });
 
     await expect(client.repositories()).rejects.toThrow('MIZUKI_API_TOKEN');
+    await expect(client.jobs()).rejects.toThrow('MIZUKI_API_TOKEN');
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it('lists account jobs with the scoped bearer token and no browser credentials', async () => {
+    const request = response({ jobs: [] });
+    const client = new MizukiMcpClient({
+      baseUrl: 'https://mizuki.example',
+      apiToken: 'mzk_v1_machine-token',
+      request,
+    });
+
+    await expect(client.jobs()).resolves.toEqual({ jobs: [] });
+
+    const [url, init] = vi.mocked(request).mock.calls[0]!;
+    const headers = new Headers(init?.headers);
+    expect(url).toBe('https://mizuki.example/v1/account/jobs?limit=20');
+    expect(init?.method).toBe('GET');
+    expect(headers.get('authorization')).toBe('Bearer mzk_v1_machine-token');
+    expect(headers.has('cookie')).toBe(false);
+  });
+
+  it('bounds account job history requests from one through one hundred', async () => {
+    const request = response({ jobs: [] });
+    const client = new MizukiMcpClient({
+      baseUrl: 'https://mizuki.example',
+      apiToken: 'mzk_v1_machine-token',
+      request,
+    });
+
+    await client.jobs(1);
+    await client.jobs(100);
+    await expect(client.jobs(0)).rejects.toThrow('between 1 and 100');
+    await expect(client.jobs(101)).rejects.toThrow('between 1 and 100');
+    await expect(client.jobs(1.5)).rejects.toThrow('between 1 and 100');
+
+    expect(vi.mocked(request).mock.calls.map(([url]) => url)).toEqual([
+      'https://mizuki.example/v1/account/jobs?limit=1',
+      'https://mizuki.example/v1/account/jobs?limit=100',
+    ]);
   });
 
   it('uses authenticated readiness, issue, preflight, and payment recovery routes', async () => {

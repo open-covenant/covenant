@@ -6,6 +6,7 @@ import type { Config } from './config.js';
 export type PublicRoute =
   | 'quote'
   | 'preflight'
+  | 'account_jobs'
   | 'account_repositories'
   | 'api_auth'
   | 'api_tokens'
@@ -42,6 +43,7 @@ type SourceBuckets = {
 const policies: Record<PublicRoute, Policy> = {
   quote: { capacity: 6, windowMs: 60_000 },
   preflight: { capacity: 10, windowMs: 60_000 },
+  account_jobs: { capacity: 30, windowMs: 60_000 },
   account_repositories: { capacity: 12, windowMs: 60_000 },
   api_auth: { capacity: 60, windowMs: 60_000 },
   api_tokens: { capacity: 10, windowMs: 60_000 },

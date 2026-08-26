@@ -2459,6 +2459,23 @@ CREATE INDEX mizuki_account_api_tokens_active_idx
   WHERE revoked_at IS NULL;
 `;
 
+export const WORKBENCH_API_TOKENS_SCHEMA_V2 = `
+ALTER TABLE mizuki_account_api_tokens
+  DROP CONSTRAINT mizuki_account_api_tokens_scopes_check;
+ALTER TABLE mizuki_account_api_tokens
+  ADD CONSTRAINT mizuki_account_api_tokens_scopes_check CHECK (
+    cardinality(scopes) BETWEEN 1 AND 4 AND
+    scopes <@ ARRAY[
+      'repositories:read', 'jobs:read', 'jobs:write', 'account:jobs:read'
+    ]::text[] AND
+    cardinality(scopes) =
+      CASE WHEN scopes @> ARRAY['repositories:read']::text[] THEN 1 ELSE 0 END +
+      CASE WHEN scopes @> ARRAY['jobs:read']::text[] THEN 1 ELSE 0 END +
+      CASE WHEN scopes @> ARRAY['jobs:write']::text[] THEN 1 ELSE 0 END +
+      CASE WHEN scopes @> ARRAY['account:jobs:read']::text[] THEN 1 ELSE 0 END
+  );
+`;
+
 export const GITHUB_OAUTH_FLOW_SCHEMA_V1 = `
 CREATE TABLE mizuki_github_oauth_flows (
   id uuid PRIMARY KEY,
@@ -2530,6 +2547,11 @@ async function migrate(pool: Pool): Promise<void> {
         name: 'workbench-api-tokens',
         migrations: [
           { version: 1, name: 'scoped-api-tokens', sql: WORKBENCH_API_TOKENS_SCHEMA_V1 },
+          {
+            version: 2,
+            name: 'account-job-history-scope',
+            sql: WORKBENCH_API_TOKENS_SCHEMA_V2,
+          },
         ],
       },
       {

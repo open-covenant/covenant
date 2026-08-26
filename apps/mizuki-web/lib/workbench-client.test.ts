@@ -118,4 +118,14 @@ describe('Workbench session handling', () => {
     );
     expect(navigate).toHaveBeenCalledOnce();
   });
+
+  it('rejects unsafe requests that bypass the mutation helper', async () => {
+    const request = vi.fn();
+    vi.stubGlobal('fetch', request);
+
+    await expect(workbenchRequest('/v1/preflights', { method: 'POST' })).rejects.toThrow(
+      'Unsafe Workbench requests must use workbenchMutation',
+    );
+    expect(request).not.toHaveBeenCalled();
+  });
 });

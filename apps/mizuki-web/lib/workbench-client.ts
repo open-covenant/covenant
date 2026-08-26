@@ -28,7 +28,7 @@ export function onWorkbenchUnauthorized(listener: UnauthorizedListener): () => v
   return () => unauthorizedListeners.delete(listener);
 }
 
-export async function workbenchRequest<T>(path: string, init?: RequestInit): Promise<T> {
+async function sendWorkbenchRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetchWithDeadline(
     `/api/mizuki${path}`,
     {
@@ -57,6 +57,15 @@ export async function workbenchRequest<T>(path: string, init?: RequestInit): Pro
     );
   }
   return body;
+}
+
+export async function workbenchRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = init?.method?.toUpperCase() ?? 'GET';
+  if (method !== 'GET' && method !== 'HEAD') {
+    throw new Error('Unsafe Workbench requests must use workbenchMutation');
+  }
+
+  return sendWorkbenchRequest<T>(path, init);
 }
 
 export async function fetchWithDeadline(
@@ -98,7 +107,7 @@ export async function workbenchMutation<T>(path: string, init: RequestInit): Pro
     throw new Error('Workbench mutations require an unsafe HTTP method');
   }
   const csrfToken = await sessionCsrfToken();
-  return workbenchRequest<T>(path, {
+  return sendWorkbenchRequest<T>(path, {
     ...init,
     headers: {
       ...init.headers,

@@ -91,6 +91,42 @@ describe('ContributorAuth', () => {
     ).rejects.toMatchObject<ApiTokenAuthError>({ code: 'invalid' });
   });
 
+  it('does not treat jobs:read as account job history access', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    const auth = new ContributorAuth(
+      {
+        publicBaseUrl: 'https://api.mizuki.example',
+        webOrigin: 'https://mizuki.example',
+        githubClientId: 'client',
+        githubClientSecret: 'secret',
+        sessionSecret: 's'.repeat(32),
+      },
+      store,
+    );
+    const legacy = createApiToken({
+      githubId: '42',
+      name: 'Payment recovery',
+      scopes: ['jobs:read'],
+      expiresAt: new Date(Date.now() + 24 * 60 * 60_000).toISOString(),
+    });
+    const history = createApiToken({
+      githubId: '42',
+      name: 'Account history',
+      scopes: ['account:jobs:read'],
+      expiresAt: new Date(Date.now() + 24 * 60 * 60_000).toISOString(),
+    });
+    await Promise.all([store.createApiToken(legacy.record), store.createApiToken(history.record)]);
+
+    await expect(
+      auth.apiToken(legacy.token, 'account:jobs:read'),
+    ).rejects.toMatchObject<ApiTokenAuthError>({ code: 'insufficient_scope' });
+    await expect(auth.apiToken(history.token, 'account:jobs:read')).resolves.toMatchObject({
+      githubId: '42',
+      scopes: ['account:jobs:read'],
+    });
+  });
+
   it('routes the OAuth callback through the web origin so the session cookie is first-party', async () => {
     const auth = new ContributorAuth(
       {

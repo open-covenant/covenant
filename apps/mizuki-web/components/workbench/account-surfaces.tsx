@@ -11,6 +11,7 @@ import {
   normalizeRepositories,
   type ApiTokenCredential,
   type ApiTokenScope,
+  type WorkbenchApiToken,
 } from '@/lib/workbench';
 import { logoutWorkbench, useWorkbenchResource, workbenchMutation } from '@/lib/workbench-client';
 import {
@@ -303,29 +304,7 @@ export function MachineAccess() {
             <WorkbenchError title="API tokens could not be loaded" retry={tokens.refresh} />
           ) : tokens.status === 'ready' && tokens.data.length > 0 ? (
             tokens.data.map((token) => (
-              <article key={token.id}>
-                <div>
-                  <strong>{token.name}</strong>
-                  <code>{token.prefix}…</code>
-                </div>
-                <WorkbenchStatus value={token.state} />
-                <p>{token.scopes.join(' · ')}</p>
-                <dl>
-                  <div>
-                    <dt>Expires</dt>
-                    <dd>{formatTime(token.expiresAt)}</dd>
-                  </div>
-                  <div>
-                    <dt>Last used</dt>
-                    <dd>{token.lastUsedAt ? formatTime(token.lastUsedAt) : 'Never'}</dd>
-                  </div>
-                </dl>
-                {token.state === 'active' && (
-                  <button type="button" disabled={pending} onClick={() => void revoke(token.id)}>
-                    Revoke
-                  </button>
-                )}
-              </article>
+              <MachineTokenRecord key={token.id} token={token} pending={pending} revoke={revoke} />
             ))
           ) : (
             <p className="machine-token-empty">No API tokens have been issued.</p>
@@ -338,8 +317,67 @@ export function MachineAccess() {
 
 function scopeDescription(scope: ApiTokenScope): string {
   if (scope === 'repositories:read') return 'Repository readiness, eligible issues, and preflight';
-  if (scope === 'jobs:read') return 'Quote payment recovery and reservation status';
+  if (scope === 'jobs:read') return 'Payment recovery for account-linked quotes';
+  if (scope === 'account:jobs:read') return 'Account job history';
   return 'Create account-linked maintenance quotes';
+}
+
+export function MachineTokenRecord({
+  token,
+  pending,
+  revoke,
+}: {
+  token: WorkbenchApiToken;
+  pending: boolean;
+  revoke: (id: string) => void | Promise<void>;
+}) {
+  return (
+    <article>
+      <div>
+        <strong>{token.name}</strong>
+        <code>{token.prefix}…</code>
+      </div>
+      <WorkbenchStatus value={token.state} />
+      <p>{token.scopes.join(' · ')}</p>
+      <dl>
+        <div>
+          <dt>Created</dt>
+          <dd>
+            <time dateTime={token.createdAt}>{formatTime(token.createdAt)}</time>
+          </dd>
+        </div>
+        <div>
+          <dt>Expires</dt>
+          <dd>
+            <time dateTime={token.expiresAt}>{formatTime(token.expiresAt)}</time>
+          </dd>
+        </div>
+        <div>
+          <dt>Last used</dt>
+          <dd>
+            {token.lastUsedAt ? (
+              <time dateTime={token.lastUsedAt}>{formatTime(token.lastUsedAt)}</time>
+            ) : (
+              'Never'
+            )}
+          </dd>
+        </div>
+        {token.revokedAt && (
+          <div>
+            <dt>Revoked</dt>
+            <dd>
+              <time dateTime={token.revokedAt}>{formatTime(token.revokedAt)}</time>
+            </dd>
+          </div>
+        )}
+      </dl>
+      {token.state === 'active' && (
+        <button type="button" disabled={pending} onClick={() => void revoke(token.id)}>
+          Revoke
+        </button>
+      )}
+    </article>
+  );
 }
 
 export function Settings() {

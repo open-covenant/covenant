@@ -2,9 +2,7 @@
   "mcpServers": {
     "clawpump-agents": {
       "command": "npx",
-      "args": [
-        "@clawpump/agents"
-      ],
+      "args": ["--yes", "@clawpump/agents@0.1.23"],
       "env": {
         "CLAWPUMP_API_KEY": "cpk_replace_in_local_secret_store"
       }

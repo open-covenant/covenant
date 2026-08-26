@@ -32,22 +32,24 @@ export function OrganizationRepositorySelector({
     <div className="wizard-organization-selector">
       <label htmlFor="workbench-organization">
         GitHub organization or owner
-        <select
-          id="workbench-organization"
-          value={organization}
-          disabled={disabled}
-          onChange={(event) => {
-            setOrganization(event.target.value);
-            onSelect('');
-          }}
-        >
-          <option value="">Choose an organization</option>
-          {organizations.map((owner) => (
-            <option value={owner} key={owner.toLowerCase()}>
-              {owner}
-            </option>
-          ))}
-        </select>
+        <span className="wizard-select-control">
+          <select
+            id="workbench-organization"
+            value={organization}
+            disabled={disabled}
+            onChange={(event) => {
+              setOrganization(event.target.value);
+              onSelect('');
+            }}
+          >
+            <option value="">Choose an organization</option>
+            {organizations.map((owner) => (
+              <option value={owner} key={owner.toLowerCase()}>
+                {owner}
+              </option>
+            ))}
+          </select>
+        </span>
       </label>
 
       {organization && (

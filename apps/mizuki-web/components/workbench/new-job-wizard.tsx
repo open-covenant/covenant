@@ -930,6 +930,9 @@ function quoteError(cause: unknown): string {
     if (cause.status === 409) return 'The issue or repository changed. Run preflight again.';
     if (cause.status === 422) return cause.message;
     if (cause.status === 429) return 'Too many quote requests. Wait a moment and try again.';
+    if (cause.status === 503) {
+      return 'Paid maintenance is temporarily unavailable while service readiness is restored. No payment was requested.';
+    }
   }
   return 'A fixed quote could not be created. No payment was requested.';
 }

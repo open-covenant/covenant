@@ -84,8 +84,6 @@ describe('Mizuki API proxy', () => {
           { ok: true },
           {
             headers: {
-              'cache-control': 'private, no-store',
-              'clear-site-data': '"cache", "cookies", "storage"',
               'set-cookie': 'mizuki_session=; Path=/; Max-Age=0; HttpOnly',
             },
           },

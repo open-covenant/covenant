@@ -87,6 +87,10 @@ async function proxy(
       const value = upstream.headers.get(name);
       if (value) responseHeaders.set(name, value);
     }
+    if (upstream.ok && path.join('/') === 'v1/auth/logout') {
+      responseHeaders.set('cache-control', 'private, no-store');
+      responseHeaders.set('clear-site-data', '"cache", "cookies", "storage"');
+    }
     const setCookies = upstream.headers.getSetCookie();
     for (const value of setCookies) responseHeaders.append('set-cookie', value);
     responseHeaders.set('x-content-type-options', 'nosniff');

@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import { BillingEntryRow } from './billing';
-import { ConnectedPaymentSummary } from './new-job-wizard';
+import { ConnectedPaymentSummary, PaymentRecoveryNotice } from './new-job-wizard';
 import { WorkbenchNavLink } from './workbench-shell';
 
 describe('Workbench responsive records and controls', () => {
@@ -61,5 +61,20 @@ describe('Workbench responsive records and controls', () => {
     expect(html).toContain('Change wallet');
     expect(html).toContain('before payment can begin');
     expect(html).toContain('disabled=""');
+  });
+
+  it('explains the read-only payment recovery check without prompting another payment', () => {
+    const html = renderToStaticMarkup(
+      <PaymentRecoveryNotice
+        quoteId="c33d57fa-fe99-4afa-a624-543991dcc7cf"
+        checking
+        check={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain('Checking your payment status');
+    expect(html).toContain('never opens the wallet or requests a signature');
+    expect(html).toContain('c33d57fa-fe99-4afa-a624-543991dcc7cf');
+    expect(html).not.toContain('Payment confirmation was interrupted');
   });
 });

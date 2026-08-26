@@ -12,6 +12,7 @@ import type {
   StandardDisconnectFeature,
   StandardEventsFeature,
 } from '@wallet-standard/features';
+import { connectWithWalletConnect, signWalletConnectTransactions } from './reown-appkit';
 
 export type CompatibleWallet = Wallet &
   Partial<
@@ -46,6 +47,8 @@ const initialConnectionState: WalletConnectionState = {
   error: null,
 };
 
+const walletConnectAdapters = new WeakMap<CompatibleWallet, CompatibleWallet>();
+
 export function paymentWalletNetwork(): PaymentWalletNetwork {
   return process.env.NEXT_PUBLIC_SOLANA_NETWORK === 'solana-devnet'
     ? { chain: 'solana:devnet', label: 'Solana devnet' }
@@ -76,9 +79,12 @@ export function useStandardWallet(requirement: 'message' | 'transaction') {
 
   const refresh = useCallback(() => {
     setWallets(
-      registry.get().filter((wallet): wallet is CompatibleWallet => {
-        return supportsWallet(wallet, requirement, requiredChain);
-      }),
+      registry
+        .get()
+        .map(adaptWalletConnect)
+        .filter((wallet): wallet is CompatibleWallet =>
+          supportsWallet(wallet, requirement, requiredChain),
+        ),
     );
   }, [registry, requirement, requiredChain]);
 
@@ -95,7 +101,14 @@ export function useStandardWallet(requirement: 'message' | 'transaction') {
   useEffect(() => () => controller.dispose(), [controller]);
 
   const connect = useCallback(
-    (wallet: CompatibleWallet) => controller.connect(wallet),
+    (wallet: CompatibleWallet) => {
+      if (wallet.name !== 'WalletConnect') return controller.connect(wallet);
+      return connectWithWalletConnect(
+        () => controller.connect(wallet),
+        () => controller.cancelPending(),
+        (message) => controller.reportError(message),
+      );
+    },
     [controller],
   );
 
@@ -107,9 +120,10 @@ export function useStandardWallet(requirement: 'message' | 'transaction') {
 export class WalletConnectionController {
   private generation = 0;
   private activeWallet: CompatibleWallet | null = null;
+  private pendingWallet: CompatibleWallet | null = null;
   private connected: ConnectedWallet | null = null;
   private stopObserving: (() => void) | null = null;
-  private operations = Promise.resolve();
+  private disconnects = new WeakMap<CompatibleWallet, Promise<void>>();
 
   constructor(
     private readonly requirement: 'message' | 'transaction',
@@ -122,12 +136,14 @@ export class WalletConnectionController {
     const generation = this.nextGeneration();
     const previousWallet = this.activeWallet;
     this.clearConnection();
+    this.pendingWallet = wallet;
     this.publish({ connected: null, ready: false, connecting: wallet.name, error: null });
-    return this.enqueue(async () => {
-      if (previousWallet) await disconnectWallet(previousWallet);
+    return (async () => {
+      if (previousWallet) await this.startDisconnect(previousWallet);
+      await this.waitForDisconnect(wallet);
       if (!this.current(generation)) return null;
       return this.connectCurrent(wallet, generation);
-    });
+    })();
   }
 
   disconnect(): Promise<void> {
@@ -136,14 +152,27 @@ export class WalletConnectionController {
     this.clearConnection();
     this.publish({ connected: null, ready: false, connecting: null, error: null });
     if (!wallet) return Promise.resolve();
-    return this.enqueue(async () => {
+    return (async () => {
       try {
-        await disconnectWallet(wallet, true);
+        await this.startDisconnect(wallet, true);
       } catch (cause) {
         if (!this.current(generation)) return;
         this.publish({ error: walletError(cause, 'Wallet disconnect failed') });
       }
-    });
+    })();
+  }
+
+  cancelPending(): void {
+    const wallet = this.pendingWallet;
+    if (!wallet) return;
+    this.nextGeneration();
+    this.clearConnection();
+    this.publish({ connected: null, ready: false, connecting: null, error: null });
+    void this.startDisconnect(wallet);
+  }
+
+  reportError(error: string): void {
+    this.publish({ connecting: null, error });
   }
 
   dispose(): void {
@@ -163,7 +192,7 @@ export class WalletConnectionController {
       if (!feature) throw new Error('This wallet cannot open a compatible connection');
       await feature.connect();
       if (!this.current(generation)) {
-        await disconnectWallet(wallet);
+        await this.disconnectSuperseded(wallet);
         return null;
       }
 
@@ -176,7 +205,7 @@ export class WalletConnectionController {
         );
         if (!this.current(generation)) {
           unsubscribe();
-          await disconnectWallet(wallet);
+          await this.disconnectSuperseded(wallet);
           return null;
         }
         this.stopObserving = unsubscribe;
@@ -194,10 +223,11 @@ export class WalletConnectionController {
       }
       if (!this.current(generation)) {
         unsubscribe?.();
-        await disconnectWallet(wallet);
+        await this.disconnectSuperseded(wallet);
         return null;
       }
       const connected = { wallet, account };
+      this.pendingWallet = null;
       this.activeWallet = wallet;
       this.connected = connected;
       this.publish({ connected, ready: true, error: null });
@@ -206,7 +236,7 @@ export class WalletConnectionController {
       if (!this.current(generation)) return null;
       unsubscribe?.();
       if (this.stopObserving === unsubscribe) this.stopObserving = null;
-      await disconnectWallet(wallet);
+      await this.startDisconnect(wallet);
       if (!this.current(generation)) return null;
       this.activeWallet = null;
       this.connected = null;
@@ -217,7 +247,10 @@ export class WalletConnectionController {
       });
       return null;
     } finally {
-      if (this.current(generation)) this.publish({ connecting: null });
+      if (this.current(generation)) {
+        this.pendingWallet = null;
+        this.publish({ connecting: null });
+      }
     }
   }
 
@@ -237,13 +270,27 @@ export class WalletConnectionController {
     this.publish({ connected, ready: true, error: null });
   }
 
-  private enqueue<T>(operation: () => Promise<T>): Promise<T> {
-    const scheduled = this.operations.then(operation, operation);
-    this.operations = scheduled.then(
-      () => undefined,
-      () => undefined,
-    );
-    return scheduled;
+  private async disconnectSuperseded(wallet: CompatibleWallet): Promise<void> {
+    if (wallet === this.activeWallet || wallet === this.pendingWallet) return;
+    await this.startDisconnect(wallet);
+  }
+
+  private async waitForDisconnect(wallet: CompatibleWallet): Promise<void> {
+    try {
+      await this.disconnects.get(wallet);
+    } catch {
+      // The next connection still gets a chance to restore the wallet session.
+    }
+  }
+
+  private startDisconnect(wallet: CompatibleWallet, strict = false): Promise<void> {
+    const existing = this.disconnects.get(wallet);
+    if (existing) return existing;
+    const operation = disconnectWallet(wallet, strict).finally(() => {
+      if (this.disconnects.get(wallet) === operation) this.disconnects.delete(wallet);
+    });
+    this.disconnects.set(wallet, operation);
+    return operation;
   }
 
   private current(generation: number): boolean {
@@ -259,8 +306,42 @@ export class WalletConnectionController {
     this.stopObserving?.();
     this.stopObserving = null;
     this.activeWallet = null;
+    this.pendingWallet = null;
     this.connected = null;
   }
+}
+
+export function adaptWalletConnect(wallet: Wallet): CompatibleWallet {
+  const compatible = wallet as CompatibleWallet;
+  if (wallet.name !== 'WalletConnect' || !('solana:signTransaction' in wallet.features)) {
+    return compatible;
+  }
+  const cached = walletConnectAdapters.get(compatible);
+  if (cached) return cached;
+
+  const feature = wallet.features[
+    'solana:signTransaction'
+  ] as SolanaSignTransactionFeature['solana:signTransaction'];
+  const features = {
+    ...wallet.features,
+    'solana:signTransaction': {
+      ...feature,
+      supportedTransactionVersions: ['legacy', 0] as const,
+      signTransaction: signWalletConnectTransactions,
+    },
+  };
+  const adapter: CompatibleWallet = {
+    version: wallet.version,
+    name: wallet.name,
+    icon: wallet.icon,
+    chains: wallet.chains,
+    features,
+    get accounts() {
+      return wallet.accounts;
+    },
+  };
+  walletConnectAdapters.set(compatible, adapter);
+  return adapter;
 }
 
 async function disconnectWallet(wallet: CompatibleWallet, strict = false): Promise<void> {
@@ -276,7 +357,17 @@ async function disconnectWallet(wallet: CompatibleWallet, strict = false): Promi
 }
 
 function walletError(cause: unknown, fallback: string): string {
-  return cause instanceof Error && cause.message ? cause.message : fallback;
+  if (!(cause instanceof Error) || !cause.message) return fallback;
+  if (/compatible solana (mainnet|devnet) account|not available on solana/i.test(cause.message)) {
+    return 'This wallet is not connected to the required Solana network. Switch networks or use another wallet.';
+  }
+  if (/reject|declin|cancel|closed/i.test(cause.message)) {
+    return 'Wallet connection was cancelled. No payment or job was created.';
+  }
+  if (/walletconnect|relay|pairing|topic|wc:|APKT\d+/i.test(cause.message)) {
+    return 'WalletConnect could not open a secure session. Reopen the wallet and try again.';
+  }
+  return fallback;
 }
 
 export function observeWalletAccounts(

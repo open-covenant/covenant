@@ -75,7 +75,7 @@ describe('Wallet Standard account observation', () => {
     }
   });
 
-  it('serializes overlapping connections and ignores stale completion state', async () => {
+  it('starts a replacement connection immediately and ignores stale completion state', async () => {
     const firstConnect = deferred<void>();
     const secondConnect = deferred<void>();
     const first = wallet('First', firstConnect.promise);
@@ -83,15 +83,8 @@ describe('Wallet Standard account observation', () => {
     const { controller, state } = connectionController();
 
     const firstOperation = controller.connect(first.wallet);
-    await Promise.resolve();
-    expect(first.connect).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(first.connect).toHaveBeenCalledOnce());
     const secondOperation = controller.connect(second.wallet);
-    expect(second.connect).not.toHaveBeenCalled();
-
-    first.setAccounts([account('first')]);
-    firstConnect.resolve();
-    await firstOperation;
-    expect(first.disconnect).toHaveBeenCalledOnce();
     await vi.waitFor(() => expect(second.connect).toHaveBeenCalledOnce());
     expect(state.current).toMatchObject({ connected: null, connecting: 'Second', error: null });
 
@@ -100,6 +93,11 @@ describe('Wallet Standard account observation', () => {
     await secondOperation;
     expect(state.current.connected?.wallet).toBe(second.wallet);
     expect(state.current.connected?.account.address).toBe('second');
+
+    first.setAccounts([account('first')]);
+    firstConnect.resolve();
+    await firstOperation;
+    expect(first.disconnect).toHaveBeenCalledOnce();
     expect(state.current).toMatchObject({ ready: true, connecting: null, error: null });
   });
 
@@ -140,6 +138,123 @@ describe('Wallet Standard account observation', () => {
 
     expect(state.current.connected?.wallet).toBe(second.wallet);
     expect(state.current).toMatchObject({ ready: true, connecting: null, error: null });
+  });
+
+  it('cancels an unfinished WalletConnect session and starts another wallet immediately', async () => {
+    const connection = deferred<void>();
+    const pending = wallet('WalletConnect', connection.promise);
+    const replacement = wallet('Replacement', Promise.resolve());
+    replacement.setAccounts([account('replacement')]);
+    const { controller, state } = connectionController();
+
+    const operation = controller.connect(pending.wallet);
+    await vi.waitFor(() => expect(pending.connect).toHaveBeenCalledOnce());
+    controller.cancelPending();
+
+    expect(state.current).toMatchObject({ connected: null, ready: false, connecting: null });
+    expect(pending.disconnect).toHaveBeenCalledOnce();
+
+    const replacementOperation = controller.connect(replacement.wallet);
+    await vi.waitFor(() => expect(replacement.connect).toHaveBeenCalledOnce());
+    await replacementOperation;
+    expect(state.current.connected?.wallet).toBe(replacement.wallet);
+
+    pending.setAccounts([account('late-account')]);
+    connection.resolve();
+    await operation;
+
+    expect(pending.disconnect).toHaveBeenCalledTimes(2);
+    expect(state.current.connected?.wallet).toBe(replacement.wallet);
+    expect(state.current).toMatchObject({ ready: true, connecting: null, error: null });
+  });
+
+  it('waits for a cancelled WalletConnect teardown before retrying the same wallet', async () => {
+    const connection = deferred<void>();
+    const teardown = deferred<void>();
+    const pending = wallet('WalletConnect', connection.promise, teardown.promise);
+    const { controller, state } = connectionController();
+
+    const first = controller.connect(pending.wallet);
+    await vi.waitFor(() => expect(pending.connect).toHaveBeenCalledOnce());
+    controller.cancelPending();
+    const retry = controller.connect(pending.wallet);
+
+    await Promise.resolve();
+    expect(pending.connect).toHaveBeenCalledOnce();
+    teardown.resolve();
+    await vi.waitFor(() => expect(pending.connect).toHaveBeenCalledTimes(2));
+
+    pending.setAccounts([account('connected')]);
+    connection.resolve();
+    await Promise.all([first, retry]);
+    expect(state.current.connected?.wallet).toBe(pending.wallet);
+    expect(state.current).toMatchObject({ ready: true, connecting: null, error: null });
+  });
+
+  it('waits for an active wallet to disconnect before reconnecting it', async () => {
+    const teardown = deferred<void>();
+    const connected = wallet('Wallet', Promise.resolve(), teardown.promise);
+    connected.setAccounts([account('connected')]);
+    const { controller, state } = connectionController();
+
+    await controller.connect(connected.wallet);
+    const disconnect = controller.disconnect();
+    const reconnect = controller.connect(connected.wallet);
+
+    await Promise.resolve();
+    expect(connected.connect).toHaveBeenCalledOnce();
+    teardown.resolve();
+    await disconnect;
+    await reconnect;
+
+    expect(connected.connect).toHaveBeenCalledTimes(2);
+    expect(state.current.connected?.wallet).toBe(connected.wallet);
+    expect(state.current).toMatchObject({ ready: true, connecting: null, error: null });
+  });
+
+  it('does not race teardown when switching from one wallet and immediately back', async () => {
+    const teardown = deferred<void>();
+    const first = wallet('First', Promise.resolve(), teardown.promise);
+    const second = wallet('Second', Promise.resolve());
+    first.setAccounts([account('first')]);
+    second.setAccounts([account('second')]);
+    const { controller, state } = connectionController();
+
+    await controller.connect(first.wallet);
+    const switchAway = controller.connect(second.wallet);
+    const switchBack = controller.connect(first.wallet);
+
+    await Promise.resolve();
+    expect(first.connect).toHaveBeenCalledOnce();
+    expect(second.connect).not.toHaveBeenCalled();
+
+    teardown.resolve();
+    await Promise.all([switchAway, switchBack]);
+
+    expect(first.connect).toHaveBeenCalledTimes(2);
+    expect(second.connect).not.toHaveBeenCalled();
+    expect(state.current.connected?.wallet).toBe(first.wallet);
+    expect(state.current).toMatchObject({ ready: true, connecting: null, error: null });
+  });
+
+  it('does not expose WalletConnect session details in connection errors', async () => {
+    const pending = wallet(
+      'WalletConnect',
+      Promise.reject(
+        new Error(
+          'APKT005 relay failed for wc:pairing@2?topic=private-topic&projectId=b12827dfd1ff27064b91c710188bdbe4',
+        ),
+      ),
+    );
+    const { controller, state } = connectionController();
+
+    await controller.connect(pending.wallet);
+
+    expect(state.current.error).toBe(
+      'WalletConnect could not open a secure session. Reopen the wallet and try again.',
+    );
+    expect(state.current.error).not.toContain('projectId');
+    expect(state.current.error).not.toContain('private-topic');
   });
 });
 

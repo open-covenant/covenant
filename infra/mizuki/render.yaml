@@ -424,6 +424,8 @@ services:
         value: https://mizuki.opencovenant.org
       - key: NEXT_PUBLIC_MIZUKI_GITHUB_OAUTH_URL
         value: /api/mizuki/v1/auth/github
+      - key: NEXT_PUBLIC_REOWN_PROJECT_ID
+        value: b12827dfd1ff27064b91c710188bdbe4
       - key: NEXT_PUBLIC_MIZUKI_TOKEN_URL
         sync: false
       - key: NEXT_PUBLIC_SOLANA_NETWORK

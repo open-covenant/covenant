@@ -54,6 +54,12 @@ importers:
 
   apps/mizuki-web:
     dependencies:
+      '@reown/appkit':
+        specifier: 1.8.20
+        version: 1.8.20(@react-native-async-storage/async-storage@1.24.0(react-native@0.85.3(@babel/core@7.29.6)(@types/react@19.2.14)(bufferutil@4.1.0)(react@19.2.6)(utf-8-validate@6.0.6)))(@types/react@19.2.14)(bufferutil@4.1.0)(fastestsmallesttextencoderdecoder@1.0.22)(ioredis@5.10.1)(react@19.2.6)(typescript@6.0.3)(use-sync-external-store@1.2.0(react@19.2.6))(utf-8-validate@6.0.6)(zod@3.25.76)
+      '@reown/appkit-adapter-solana':
+        specifier: 1.8.20
+        version: 1.8.20(@react-native-async-storage/async-storage@1.24.0(react-native@0.85.3(@babel/core@7.29.6)(@types/react@19.2.14)(bufferutil@4.1.0)(react@19.2.6)(utf-8-validate@6.0.6)))(@types/react@19.2.14)(bufferutil@4.1.0)(fastestsmallesttextencoderdecoder@1.0.22)(ioredis@5.10.1)(react@19.2.6)(typescript@6.0.3)(use-sync-external-store@1.2.0(react@19.2.6))(utf-8-validate@6.0.6)(zod@3.25.76)
       '@solana/kit':
         specifier: 5.1.0
         version: 5.1.0(fastestsmallesttextencoderdecoder@1.0.22)(typescript@6.0.3)(ws@8.21.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))

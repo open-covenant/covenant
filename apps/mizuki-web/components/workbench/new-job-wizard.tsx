@@ -13,6 +13,7 @@ import {
   loadWorkbenchPaymentRecovery,
   paymentAccountId,
   PaymentRecoveryStorageError,
+  PaymentStatusError,
   prepareWorkbenchPaymentRecovery,
   quoteExpired,
   quoteMatchesIssue,
@@ -265,13 +266,9 @@ function IssueAndPayment({
       setPreflight(null);
       setQuote(recovery.quote);
       setError(null);
-      setState(
-        recovery.phase === 'unpaid'
-          ? 'payment_unpaid'
-          : recovery.phase === 'prepared'
-            ? 'quoted'
-            : 'payment_uncertain',
-      );
+      if (recovery.phase === 'unpaid') setState('payment_unpaid');
+      else if (recovery.phase === 'prepared') setState('quoted');
+      else void resolvePaymentRecovery(recovery);
       return;
     }
     setIssueUrl('');
@@ -457,21 +454,25 @@ function IssueAndPayment({
       );
       return;
     }
+    await resolvePaymentRecovery(recovery);
+  }
+
+  async function resolvePaymentRecovery(recovery: WorkbenchPaymentRecovery) {
     paymentStatusController.current?.abort();
     const controller = new AbortController();
     paymentStatusController.current = controller;
     setState('checking_payment');
     setError(null);
     try {
-      const status = await checkQuotePaymentStatus(quote.id, recovery.idempotencyKey, {
+      const status = await checkQuotePaymentStatus(recovery.quote.id, recovery.idempotencyKey, {
         signal: controller.signal,
       });
       if (status.status === 'job_reserved') {
-        clearWorkbenchPaymentRecovery(accountId, quote.id);
+        clearWorkbenchPaymentRecovery(recovery.accountId, recovery.quote.id);
         router.push(`/app/jobs/${encodeURIComponent(status.job.id)}`);
         return;
       }
-      if (status.expiresAt !== quote.expiresAt) {
+      if (status.expiresAt !== recovery.quote.expiresAt) {
         throw new Error('Payment status did not match the accepted quote');
       }
       saveWorkbenchPaymentRecovery({ ...recovery, phase: 'unpaid' });
@@ -484,11 +485,7 @@ function IssueAndPayment({
         // The earlier recovery record retains the exact idempotency key.
       }
       setState('payment_uncertain');
-      setError(
-        cause instanceof Error
-          ? `${cause.message} No new payment was requested.`
-          : 'Payment status is unavailable. No new payment was requested.',
-      );
+      setError(paymentStatusError(cause));
     } finally {
       if (paymentStatusController.current === controller) {
         paymentStatusController.current = null;
@@ -754,7 +751,11 @@ function IssueAndPayment({
                           >
                             <span>{wallet.name}</span>
                             <strong>
-                              {connecting === wallet.name ? 'Connecting…' : 'Connect ↗'}
+                              {connecting === wallet.name
+                                ? 'Connecting…'
+                                : wallet.name === 'WalletConnect'
+                                  ? 'Scan QR or open wallet ↗'
+                                  : 'Connect ↗'}
                             </strong>
                           </button>
                         ))}
@@ -860,11 +861,11 @@ export function PaymentRecoveryNotice({
   return (
     <div className="wizard-payment-recovery" role="status" aria-live="polite">
       <strong>
-        {checking ? 'Checking the existing record…' : 'Payment confirmation was interrupted'}
+        {checking ? 'Checking your payment status…' : 'Payment status needs confirmation'}
       </strong>
       <p>
-        Do not approve another payment yet. This check only reads the existing quote and job record;
-        it never opens the wallet or requests a signature.
+        Workbench reads the existing quote and job record before allowing another attempt. This
+        check never opens the wallet or requests a signature.
       </p>
       <code>Quote {quoteId}</code>
       <button type="button" disabled={checking} onClick={check}>
@@ -939,6 +940,24 @@ function quoteError(cause: unknown): string {
     }
   }
   return 'A fixed quote could not be created. No payment was requested.';
+}
+
+function paymentStatusError(cause: unknown): string {
+  if (cause instanceof PaymentStatusError) {
+    if (cause.status === 401) {
+      return 'Your GitHub session expired. Sign in again to check this payment. Do not approve another payment yet.';
+    }
+    if (cause.status === 404) {
+      return 'The saved quote could not be found for this account. Do not approve another payment; contact support with the quote ID.';
+    }
+    if (cause.status === 409) {
+      return 'This payment reference conflicts with another request. Do not approve another payment; contact support with the quote ID.';
+    }
+    if (cause.status === 429) {
+      return 'Payment status is being checked too frequently. Wait a moment and try again. No new payment was requested.';
+    }
+  }
+  return 'Payment status could not be confirmed. No new payment was requested. Try the read-only status check again.';
 }
 
 function paymentAttemptError(cause: unknown, quoteAmount: string): string {

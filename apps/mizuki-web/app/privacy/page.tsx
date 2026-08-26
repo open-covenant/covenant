@@ -98,6 +98,12 @@ export default function PrivacyPage() {
             authorize a transfer. The verified address becomes the payout address for the selected
             bounty claim.
           </p>
+          <p>
+            WalletConnect connections use Reown&apos;s relay and wallet-discovery services. Reown
+            may receive connection metadata needed to establish the session. Mizuki receives the
+            public wallet address and signed response, never the wallet&apos;s private key or seed
+            phrase.
+          </p>
         </article>
         <article className="detail-panel">
           <h2>Retention</h2>

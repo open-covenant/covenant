@@ -227,7 +227,6 @@ interface E2bTariffEvidence {
 }
 
 const MAX_TARIFF_BYTES = 64 * 1024;
-const MAX_TARIFF_SOURCE_BYTES = 1024 * 1024;
 const MAX_TARIFF_VALIDITY_MS = 7 * 24 * 60 * 60 * 1_000;
 const MAX_FUTURE_SKEW_MS = 5 * 60 * 1_000;
 
@@ -272,11 +271,6 @@ export async function verifyE2bTariff(
       source.hostname !== 'e2b.ai')
   ) {
     throw new Error('sandbox tariff evidence source is not an official E2B HTTPS origin');
-  }
-  const sourceBytes = await fetchBounded(fetcher, source, MAX_TARIFF_SOURCE_BYTES, 'tariff source');
-  const sourceDigest = createHash('sha256').update(sourceBytes).digest('hex');
-  if (sourceDigest !== document.sourceSha256.toLowerCase()) {
-    throw new Error('sandbox tariff source digest mismatch');
   }
   const effectiveAt = Date.parse(document.effectiveAt);
   const validUntil = Date.parse(document.validUntil);

@@ -114,7 +114,7 @@ jobs:
           pg_restore -h 127.0.0.1 -U postgres -d mizuki_updater_restore --exit-on-error /tmp/mizuki-updater.dump
           pg_restore -h 127.0.0.1 -U postgres -d mizuki_deployment_restore --exit-on-error /tmp/mizuki-deployment.dump
           test "$(psql -h 127.0.0.1 -U postgres -d mizuki_core_restore -Atc "SELECT count(*) FROM mizuki_schema_migrations WHERE component = 'core'")" = '1'
-          test "$(psql -h 127.0.0.1 -U postgres -d mizuki_core_restore -Atc "SELECT count(*) FROM mizuki_schema_migrations WHERE component = 'workbench'")" = '1'
+          test "$(psql -h 127.0.0.1 -U postgres -d mizuki_core_restore -Atc "SELECT count(*) FROM mizuki_schema_migrations WHERE component = 'workbench'")" = '2'
           test "$(psql -h 127.0.0.1 -U postgres -d mizuki_core_restore -Atc "SELECT count(*) FROM mizuki_schema_migrations WHERE component = 'github-oauth'")" = '1'
           test "$(psql -h 127.0.0.1 -U postgres -d mizuki_core_restore -Atc "SELECT count(*) FROM mizuki_schema_migrations WHERE component = 'admission-control'")" = '1'
           test "$(psql -h 127.0.0.1 -U postgres -d mizuki_core_restore -Atc "SELECT to_regclass('public.mizuki_account_quotes') IS NOT NULL")" = 't'

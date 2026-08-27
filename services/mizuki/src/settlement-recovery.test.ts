@@ -52,6 +52,78 @@ describe('settlement recovery', () => {
     expect(stored).not.toHaveProperty('paymentIntentId');
   });
 
+  it('retries the exact signed payment when a protected intent has not reached the facilitator', async () => {
+    const store = new MemoryStore();
+    const key = 'protected-intent-before-facilitator';
+    const receipt = admissionReceipt(key);
+    const created = await store.createJob(
+      quote,
+      pendingPayment,
+      key,
+      receipt,
+      '22222222-2222-4222-8222-222222222222',
+    );
+    const intentId = '55555555-5555-4555-8555-555555555555';
+    const job = await store.patchJob(created.job.id, { paymentIntentId: intentId });
+    const reconcilePaymentIntent = vi.fn(async () => {
+      throw new PolicyRequestError(
+        'payment_intent_pending',
+        409,
+        'payment intent is still inside its settlement window',
+      );
+    });
+    const retrySettlement = vi.fn(async () => settledPayment);
+    const activatePaymentIntent = vi.fn(async () => ({
+      paymentIntent: {
+        id: intentId,
+        jobId: job.id,
+        quoteId: quote.id,
+        repositoryAdmissionId: receipt.id,
+        status: 'activated',
+        payer: settledPayment.payer,
+        payee: PAY_TO,
+        mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+        rawAmount: quote.priceAtomic,
+        amountUsdCents: 200,
+        bountyAmountUsdCents: 1_000,
+        bountyReserveLamports: '100000000',
+        memo: `mizuki:payment:v1:${quote.id}`,
+        paymentWindowStartUnixSeconds: 1,
+        paymentWindowEndUnixSeconds: 2,
+        settlementSignature: settledPayment.transaction,
+        liabilityId: LIABILITY_ID,
+        createdAt: '2026-08-23T00:00:00.000Z',
+        activatedAt: '2026-08-23T00:01:00.000Z',
+        expiredAt: null,
+      },
+      refundLiability: liability(job.id),
+    }));
+
+    const recovered = await recoverSettlement(job, {
+      paymentMode: 'live',
+      payTo: PAY_TO,
+      store,
+      payments: { retrySettlement },
+      policy: policy({
+        reconcilePaymentIntent,
+        validateRepositoryAdmission: vi.fn(async () => receipt),
+        reconcileRepositorySettlement: vi.fn(async () => {
+          throw settlementAbsent();
+        }),
+        activatePaymentIntent,
+      }),
+    });
+
+    expect(recovered).toMatchObject({
+      state: 'paid',
+      payment: { transaction: settledPayment.transaction },
+      paymentIntentId: intentId,
+      refundLiabilityId: LIABILITY_ID,
+    });
+    expect(retrySettlement).toHaveBeenCalledOnce();
+    expect(activatePaymentIntent).toHaveBeenCalledWith(intentId, settledPayment.transaction);
+  });
+
   it('fails closed before an automatic retry when durable admission is missing', async () => {
     const store = new MemoryStore();
     const { job } = await store.createJob(quote, pendingPayment, 'missing-admission');

@@ -46,6 +46,7 @@ export interface OperationStore {
   ): Promise<PaymentIntent>;
   getPaymentIntent(id: string): Promise<PaymentIntent | null>;
   getPaymentIntentByAdmission(id: string): Promise<PaymentIntent | null>;
+  getPaymentIntentByJob(jobId: string): Promise<PaymentIntent | null>;
   activatePaymentIntent(
     intentId: string,
     liability: RefundLiability,
@@ -277,10 +278,9 @@ export class InMemoryOperationStore implements OperationStore {
           true,
         );
       }
-      const bountyReserved = activeIntents.reduce(
-        (total, entry) => total + BigInt(entry.bountyReserveLamports),
-        0n,
-      );
+      const bountyReserved = activeIntents
+        .filter((entry) => this.isBountyReserveOutstanding(entry))
+        .reduce((total, entry) => total + BigInt(entry.bountyReserveLamports), 0n);
       if (
         bountyReserved + BigInt(intent.bountyReserveLamports) >
         BigInt(limits.bountyCapacityLamports)
@@ -343,6 +343,14 @@ export class InMemoryOperationStore implements OperationStore {
   async getPaymentIntentByAdmission(id: string): Promise<PaymentIntent | null> {
     return this.exclusive(() => {
       const intentId = this.paymentIntentByAdmission.get(id);
+      const intent = intentId ? this.paymentIntents.get(intentId) : undefined;
+      return intent ? clonePaymentIntent(intent) : null;
+    });
+  }
+
+  async getPaymentIntentByJob(jobId: string): Promise<PaymentIntent | null> {
+    return this.exclusive(() => {
+      const intentId = this.paymentIntentByJob.get(jobId);
       const intent = intentId ? this.paymentIntents.get(intentId) : undefined;
       return intent ? clonePaymentIntent(intent) : null;
     });
@@ -1056,7 +1064,7 @@ export class InMemoryOperationStore implements OperationStore {
   async pendingBountyReserveLamports(): Promise<string> {
     return this.exclusive(() =>
       [...this.paymentIntents.values()]
-        .filter((entry) => entry.status !== 'expired_unpaid')
+        .filter((entry) => this.isBountyReserveOutstanding(entry))
         .reduce((total, entry) => total + BigInt(entry.bountyReserveLamports), 0n)
         .toString(),
     );
@@ -1110,6 +1118,22 @@ export class InMemoryOperationStore implements OperationStore {
     if (liability.dischargedAt) return false;
     const operation = this.lookup(this.byResource.get(`refund:${liability.settlementSignature}`));
     return operation?.status !== 'finalized';
+  }
+
+  private isBountyReserveOutstanding(intent: PaymentIntent): boolean {
+    if (intent.status === 'expired_unpaid') return false;
+    if (intent.liabilityId) {
+      const liability = [...this.refundLiabilities.values()].find(
+        (entry) => entry.id === intent.liabilityId,
+      );
+      if (liability?.dischargedAt) return false;
+    }
+    return ![...this.records.values()].some(
+      (record) =>
+        record.kind === 'escrow_reserve' &&
+        record.status === 'finalized' &&
+        record.details.sourceJobId === intent.jobId,
+    );
   }
 
   private async exclusive<T>(fn: () => T | Promise<T>): Promise<T> {

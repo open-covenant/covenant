@@ -511,6 +511,7 @@ describe('workbench account API', () => {
     await store.upsertContributor('42', 'maintainer');
     await store.saveQuote(quote);
     await store.linkQuoteToAccount(quote.id, '42');
+    await openIntake(store);
     const challenge = vi.fn(async () => ({ x402Version: 2, accepts: [{ scheme: 'exact' }] }));
     const base = await serve(dependencies(store, { payments: { challenge } }));
 
@@ -556,6 +557,73 @@ describe('workbench account API', () => {
         attempt: { id: body.attempt.id, stage },
       });
     }
+  });
+
+  it('rejects a payment attempt before persistence when refund fees are not covered', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    await store.saveQuote(quote);
+    await store.linkQuoteToAccount(quote.id, '42');
+    await openIntake(store);
+    const createPaymentAttempt = vi.spyOn(store, 'createPaymentAttempt');
+    const paymentAdmission = new SerialGate();
+    const admissionRun = vi.spyOn(paymentAdmission, 'run');
+    const challenge = vi.fn();
+    const base = await serve(
+      dependencies(store, {
+        config: {
+          paymentMode: 'live',
+          webOrigin: 'https://mizuki.example',
+          trustedProxyHops: 0,
+          rateLimitMaxSources: 100,
+          sseMaxConnections: 10,
+          sseMaxConnectionsPerSource: 2,
+          githubAuthorizationLabel: 'mizuki:authorized',
+          payTo: 'refund-treasury',
+          escrowRefundTo: 'escrow-authority',
+          escrowReadinessMinLamports: 1_000_000,
+        },
+        payments: { challenge },
+        paymentAdmission,
+        policy: {
+          readiness: vi.fn(async () => ({
+            healthy: true,
+            refundTreasury: 'refund-treasury',
+            refundMint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+            refundDecimals: 6,
+            finalizedBalanceRaw: '1000000000',
+            pendingRefundRaw: '0',
+            treasuryAvailableRefundRaw: '1000000000',
+            remainingRefundLimitUsdCents: 100_000,
+            availableRefundRaw: '1000000000',
+            availableRefundTransactions: 0,
+            remainingEscrowLimitUsdCents: 100_000,
+            escrowAuthority: 'escrow-authority',
+            finalizedEscrowBalanceLamports: '1000000000',
+            availableEscrowReserveLamports: '1000000000',
+          })),
+        },
+      }),
+    );
+
+    const response = await fetch(`${base}/v1/account/payment-attempts`, {
+      method: 'POST',
+      headers: { ...sessionHeaders, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        quote_id: quote.id,
+        wallet: payment.payer,
+        app_build: 'release-f3be9e6',
+      }),
+    });
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      error: 'refund protection is temporarily unavailable',
+    });
+    expect(admissionRun).toHaveBeenCalledOnce();
+    expect(createPaymentAttempt).not.toHaveBeenCalled();
+    expect(challenge).not.toHaveBeenCalled();
+    await expect(store.activePaymentAttempt('42')).resolves.toBeUndefined();
   });
 
   it('keeps an expired signed attempt indeterminate when no job was ever reserved', async () => {
@@ -612,6 +680,7 @@ describe('workbench account API', () => {
     await store.upsertContributor('42', 'maintainer');
     await store.saveQuote(quote);
     await store.linkQuoteToAccount(quote.id, '42');
+    await openIntake(store);
     const attempt = await store.createPaymentAttempt({
       githubId: '42',
       quoteId: quote.id,
@@ -1543,6 +1612,15 @@ function dependencies(
     readiness: { check: vi.fn(async () => ({ ready: true })) },
     ...overrides,
   } as unknown as AppDependencies;
+}
+
+async function openIntake(store: MemoryStore): Promise<void> {
+  await store.updateOperatorControls({
+    expectedRevision: 0,
+    intakeEnabled: true,
+    reason: 'open paid intake for payment attempt test',
+    updatedBy: 'test',
+  });
 }
 
 const sessionHeaders = {

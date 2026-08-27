@@ -482,16 +482,27 @@ export function createApp(deps: AppDependencies) {
         ) {
           throw new InvalidRequestBodyError('quote_id, wallet, and app_build are required');
         }
-        const quote = await deps.store.quoteForAccount(body.quote_id, session.githubId);
+        const { app_build: appBuild, quote_id: quoteId, wallet } = body;
+        const quote = await deps.store.quoteForAccount(quoteId, session.githubId);
         if (!quote) return json(res, 404, { error: 'quote not found' });
         if (Date.parse(quote.expiresAt) <= Date.now()) {
           return json(res, 409, { error: 'quote expired' });
         }
-        const attempt = await deps.store.createPaymentAttempt({
-          githubId: session.githubId,
-          quoteId: quote.id,
-          wallet: body.wallet,
-          appBuild: body.app_build,
+        const attempt = await deps.paymentAdmission.run(async () => {
+          await assertOperatorControlOpen(deps.store, 'intake', deps.readiness);
+          if (deps.config.paymentMode === 'live') {
+            await ensurePaymentCapacity(
+              deps,
+              BigInt(quote.priceAtomic),
+              calculateRescueBountyPriceCents(Number(BigInt(quote.priceAtomic) / 10_000n)),
+            );
+          }
+          return deps.store.createPaymentAttempt({
+            githubId: session.githubId,
+            quoteId: quote.id,
+            wallet,
+            appBuild,
+          });
         });
         const job = attempt.jobId ? await deps.store.job(attempt.jobId) : undefined;
         return json(res, 201, paymentAttemptResponse(attempt, job, requestId));

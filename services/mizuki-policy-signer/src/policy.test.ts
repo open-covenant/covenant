@@ -570,6 +570,71 @@ describe('refund policy', () => {
     });
   });
 
+  it('releases reserved bounty capacity after successful work discharges the liability', async () => {
+    const { chain, policy, store } = fixture();
+    const admission = await store.getRepositoryAdmission(DEFAULT_ADMISSION_ID);
+    const intent = await policy.createPaymentIntent(
+      signedPaymentIntentRequest('job-bounty-success'),
+      'payment-intent-bounty-success',
+    );
+    expect(await store.pendingBountyReserveLamports()).toBe('100000000');
+
+    const facts = {
+      ...settlement('7'.repeat(64)),
+      payer: admission!.settlementPayer!,
+    };
+    chain.settlements.set(facts.signature, facts);
+    const activation = await policy.activatePaymentIntent(
+      intent.id,
+      { settlementSignature: facts.signature },
+      'activate-bounty-success',
+    );
+    await bindDelivery(policy, activation.refundLiability.id, intent.jobId, facts.signature);
+    await policy.dischargeRefundLiability(
+      activation.refundLiability.id,
+      signedDischargeRequest(intent.jobId, facts.signature, 'owner/repository', 23),
+      'discharge-bounty-success',
+    );
+
+    expect(await store.pendingBountyReserveLamports()).toBe('0');
+  });
+
+  it('hands reserved bounty capacity to escrow only after a finalized refund', async () => {
+    const { chain, policy, store } = fixture();
+    const admission = await store.getRepositoryAdmission(DEFAULT_ADMISSION_ID);
+    const intent = await policy.createPaymentIntent(
+      signedPaymentIntentRequest('job-bounty-refund'),
+      'payment-intent-bounty-refund',
+    );
+    const facts = {
+      ...settlement('8'.repeat(64)),
+      payer: admission!.settlementPayer!,
+    };
+    chain.settlements.set(facts.signature, facts);
+    await policy.activatePaymentIntent(
+      intent.id,
+      { settlementSignature: facts.signature },
+      'activate-bounty-refund',
+    );
+
+    const escrow = escrowRequest('bounty-refund', undefined, {
+      sourceJobId: intent.jobId,
+    });
+    await expect(policy.createEscrow(escrow, 'escrow-before-refund')).rejects.toMatchObject({
+      code: 'bounty_reserve_not_refunded',
+    });
+    await policy.refund(
+      signedRefundRequest('execute', intent.jobId, facts.signature),
+      'refund-bounty-source',
+    );
+    expect(await store.pendingBountyReserveLamports()).toBe('100000000');
+
+    await expect(policy.createEscrow(escrow, 'escrow-after-refund')).resolves.toMatchObject({
+      status: 'finalized',
+    });
+    expect(await store.pendingBountyReserveLamports()).toBe('0');
+  });
+
   it('rejects a payment intent when signer SOL cannot cover fees and recipient ATA rent', async () => {
     const { chain, policy } = fixture();
     chain.refundSignerLamports = chain.refundAtaRentLamports;
@@ -1753,6 +1818,7 @@ describe('store policy invariants', () => {
 function escrowRequest(
   bountyId: string,
   expiresAt = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
+  overrides: { sourceJobId?: string; amountUsdCents?: number } = {},
 ) {
   const request = {
     bountyId,
@@ -1765,6 +1831,7 @@ function escrowRequest(
     baseRef: 'main',
     baseSha: 'd'.repeat(40),
     reviewPolicy: { version: 1 as const, model: 'independent-reviewer', maxFiles: 3 },
+    ...overrides,
   };
   return { ...request, acceptanceHash: escrowAcceptanceHash(request) };
 }

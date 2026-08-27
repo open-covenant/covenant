@@ -434,11 +434,17 @@ function IssueAndPayment({
         return;
       }
       if (recovery) {
+        const uncertainRecovery: WorkbenchPaymentRecovery = {
+          ...recovery,
+          phase: 'uncertain',
+        };
         try {
-          saveWorkbenchPaymentRecovery({ ...recovery, phase: 'uncertain' });
+          saveWorkbenchPaymentRecovery(uncertainRecovery);
         } catch {
           // The read-verified attempting record remains the recovery source.
         }
+        await resolvePaymentRecovery(uncertainRecovery);
+        return;
       }
       setState('payment_uncertain');
       setError(null);

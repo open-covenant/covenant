@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import { BillingEntryRow } from './billing';
@@ -87,5 +88,18 @@ describe('Workbench responsive records and controls', () => {
     expect(html).toContain('never opens the wallet or requests a signature');
     expect(html).toContain('c33d57fa-fe99-4afa-a624-543991dcc7cf');
     expect(html).not.toContain('Payment confirmation was interrupted');
+  });
+
+  it('checks the account record automatically after the wallet returns a signed transaction', () => {
+    const source = readFileSync(new URL('./new-job-wizard.tsx', import.meta.url), 'utf8');
+    const start = source.indexOf('async function payAndStart()');
+    const end = source.indexOf('async function checkPaymentStatus()', start);
+    const paymentAttempt = source.slice(start, end);
+
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    expect(paymentAttempt).toMatch(
+      /if \(recovery\) \{[\s\S]*await resolvePaymentRecovery\(uncertainRecovery\);[\s\S]*return;/,
+    );
   });
 });

@@ -10,7 +10,7 @@ const MAX_RATE_LIMIT_SOURCES = 10_000;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const PUBLIC_ORIGIN = 'https://mizuki.opencovenant.org';
 const USDC_MAINNET = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
-const ALLOWED_METHODS = new Set(['getAccountInfo', 'getLatestBlockhash']);
+const ALLOWED_METHODS = new Set(['getAccountInfo', 'getLatestBlockhash', 'getTokenAccountBalance']);
 const rateLimits = new Map<string, { count: number; resetAt: number }>();
 
 type RpcRequest = {
@@ -82,6 +82,15 @@ function allowedParams(request: RpcRequest): boolean {
       request.params === undefined ||
       request.params.length === 0 ||
       (request.params.length === 1 && isConfirmedConfig(request.params[0]))
+    );
+  }
+  if (request.method === 'getTokenAccountBalance') {
+    if (request.params?.length !== 2) return false;
+    const [account, config] = request.params;
+    return (
+      typeof account === 'string' &&
+      /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(account) &&
+      isConfirmedConfig(config)
     );
   }
   if (request.method !== 'getAccountInfo' || request.params?.length !== 2) return false;

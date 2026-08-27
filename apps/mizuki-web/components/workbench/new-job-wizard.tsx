@@ -43,7 +43,7 @@ import {
   WorkbenchRequestError,
 } from '@/lib/workbench-client';
 import { paymentWalletNetwork } from '@/lib/wallet-standard';
-import { createPaymentFetch, paymentPreparationError } from '@/lib/x402';
+import { assertPaymentBalance, createPaymentFetch, paymentPreparationError } from '@/lib/x402';
 import {
   ServiceContractNote,
   WorkbenchEmpty,
@@ -479,6 +479,7 @@ function IssueAndPayment({
         quote,
       });
       paymentRecovery.current = recovery;
+      await assertPaymentBalance(connected.account.address, quote.priceAtomic);
       const walletFeature = connected.wallet.features[
         'solana:signTransaction'
       ] as SolanaSignTransactionFeature['solana:signTransaction'];

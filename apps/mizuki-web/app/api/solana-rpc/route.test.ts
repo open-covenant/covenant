@@ -70,6 +70,55 @@ describe('Solana payment RPC', () => {
     expect(upstream).toHaveBeenCalledOnce();
   });
 
+  it('allows a confirmed token-account balance read for payment preflight', async () => {
+    process.env.MIZUKI_SOLANA_RPC_URL = endpoint;
+    const upstream = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      Response.json({
+        jsonrpc: '2.0',
+        id: 'mizuki-payment-balance',
+        result: { value: { amount: '4000000', decimals: 6, uiAmountString: '4' } },
+      }),
+    );
+    const tokenAccount = '11111111111111111111111111111111';
+
+    const response = await POST(
+      request({
+        jsonrpc: '2.0',
+        id: 'mizuki-payment-balance',
+        method: 'getTokenAccountBalance',
+        params: [tokenAccount, { commitment: 'confirmed' }],
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(upstream).toHaveBeenCalledOnce();
+  });
+
+  it('rejects malformed or non-confirmed token-account balance reads', async () => {
+    process.env.MIZUKI_SOLANA_RPC_URL = endpoint;
+    const upstream = vi.spyOn(globalThis, 'fetch');
+
+    for (const [index, params] of [
+      ['not-an-address', { commitment: 'confirmed' }],
+      ['11111111111111111111111111111111', { commitment: 'finalized' }],
+      ['11111111111111111111111111111111'],
+    ].entries()) {
+      const response = await POST(
+        request(
+          {
+            jsonrpc: '2.0',
+            id: index,
+            method: 'getTokenAccountBalance',
+            params,
+          },
+          `198.51.100.${index + 80}`,
+        ),
+      );
+      expect(response.status).toBe(400);
+    }
+    expect(upstream).not.toHaveBeenCalled();
+  });
+
   it.each(['getBalance', 'sendTransaction', 'simulateTransaction'])(
     'rejects unsupported method %s',
     async (method) => {

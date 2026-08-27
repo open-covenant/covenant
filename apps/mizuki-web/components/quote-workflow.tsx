@@ -7,7 +7,7 @@ import { formatTime, formatUsdcAtomic, stateLabel } from '@/lib/format';
 import { githubIssuePattern } from '@/lib/github-url';
 import type { Job, Quote } from '@/lib/types';
 import { useStandardWallet } from '@/lib/wallet-standard';
-import { createPaymentFetch, paymentPreparationError } from '@/lib/x402';
+import { assertPaymentBalance, createPaymentFetch, paymentPreparationError } from '@/lib/x402';
 
 type RequestState = 'idle' | 'quoting' | 'quoted' | 'paying' | 'payment_uncertain';
 
@@ -113,6 +113,7 @@ export function QuoteWorkflow() {
     setError(null);
     let walletSigned = false;
     try {
+      await assertPaymentBalance(connected.account.address, quote.priceAtomic);
       const walletFeature = connected.wallet.features[
         'solana:signTransaction'
       ] as SolanaSignTransactionFeature['solana:signTransaction'];

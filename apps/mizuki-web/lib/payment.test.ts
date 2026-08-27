@@ -64,7 +64,9 @@ describe('payment status recovery', () => {
     ).rejects.toEqual(new WorkbenchRequestError('service dependencies are not ready', 503));
 
     await expect(
-      readJsonResponse(Response.json({ reason: 'repository changed' }, { status: 409 })),
+      readJsonResponse(
+        Response.json({ error: 'Payment required', reason: 'repository changed' }, { status: 409 }),
+      ),
     ).rejects.toEqual(new WorkbenchRequestError('repository changed', 409));
   });
 

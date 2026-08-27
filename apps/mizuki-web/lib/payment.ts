@@ -231,7 +231,7 @@ export async function readJsonResponse<T>(response: Response): Promise<T> {
   };
   if (!response.ok) {
     throw new WorkbenchRequestError(
-      body.error || body.reason || `Request failed (${response.status})`,
+      body.reason || body.error || `Request failed (${response.status})`,
       response.status,
     );
   }

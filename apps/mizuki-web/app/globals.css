@@ -1,20 +1,29 @@
 :root {
-  --ink: #030303;
-  --ink-raised: #080808;
-  --ink-soft: #101010;
-  --paper: #080808;
-  --paper-deep: #101010;
-  --white: #f5f5f5;
-  --muted: #8a8a8a;
-  --muted-dark: #8a8a8a;
-  --line: #242424;
-  --line-light: #242424;
-  --acid: #f5f5f5;
-  --aqua: #a3a3a3;
-  --coral: #d4d4d4;
-  --amber: #a3a3a3;
+  --ink: #f4f2f9;
+  --ink-raised: #ffffff;
+  --ink-soft: #eae7f2;
+  --paper: #ffffff;
+  --paper-deep: #eae7f2;
+  --white: #141220;
+  --muted: #625c78;
+  --muted-dark: #86809c;
+  --line: #ddd8e9;
+  --line-light: #eae6f2;
+  --acid: #141220;
+  --aqua: #0f9e78;
+  --coral: #8b2fd8;
+  --amber: #3a6bc9;
   --shell: 1280px;
-  --radius: 3px;
+  --radius: 4px;
+
+  --g1: #a03bf0;
+  --g2: #4c7fde;
+  --g3: #1de3ae;
+  --ramp: linear-gradient(115deg, var(--g1), var(--g2), var(--g3));
+
+  --font-display: var(--font-archivo), 'Arial Black', sans-serif;
+  --font-ui: var(--font-jetbrains), ui-monospace, SFMono-Regular, Menlo, monospace;
+  --header-h: 81px;
 }
 
 * {
@@ -101,8 +110,8 @@ textarea:focus-visible {
   position: sticky;
   z-index: 50;
   top: 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(3, 3, 3, 0.86);
+  border-bottom: 1px solid rgba(20, 18, 32, 0.12);
+  background: rgba(244, 242, 249, 0.86);
   backdrop-filter: blur(14px);
 }
 
@@ -140,7 +149,7 @@ textarea:focus-visible {
 .brand-divider {
   width: 1px;
   height: 28px;
-  background: #303030;
+  background: #ddd8e9;
 }
 
 .brand {
@@ -163,7 +172,7 @@ textarea:focus-visible {
   width: 32px;
   height: 32px;
   overflow: hidden;
-  border: 1px solid #404040;
+  border: 1px solid #ddd8e9;
   border-radius: 50%;
   background: var(--ink-soft);
   box-shadow: none;
@@ -207,9 +216,9 @@ textarea:focus-visible {
 
 .mobile-nav summary {
   padding: 10px 12px;
-  border: 1px solid #383838;
+  border: 1px solid #ddd8e9;
   border-radius: 999px;
-  color: #d4d4d4;
+  color: #2a2640;
   cursor: pointer;
   font:
     500 10px/1 ui-monospace,
@@ -233,9 +242,9 @@ textarea:focus-visible {
   display: grid;
   width: min(280px, calc(100vw - 30px));
   padding: 8px;
-  border: 1px solid #303030;
+  border: 1px solid #ddd8e9;
   border-radius: 8px;
-  background: #090909;
+  background: #ffffff;
   box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
 }
 
@@ -247,7 +256,7 @@ textarea:focus-visible {
 }
 
 .mobile-nav nav a:hover {
-  background: #151515;
+  background: #ffffff;
   color: var(--white);
 }
 
@@ -262,10 +271,10 @@ textarea:focus-visible {
   gap: 12px;
   min-height: 38px;
   padding: 0 18px;
-  border: 1px solid #f5f5f5;
+  border: 1px solid #141220;
   border-radius: 999px;
-  background: #f5f5f5;
-  color: #030303;
+  background: var(--acid);
+  color: #ffffff;
   font:
     500 10px/1 ui-monospace,
     'SF Mono',
@@ -280,9 +289,9 @@ textarea:focus-visible {
 }
 
 .header-cta:hover {
-  border-color: #d4d4d4;
-  background: #d4d4d4;
-  color: #030303;
+  border-color: #2a2640;
+  background: #2a2640;
+  color: #ffffff;
   transform: translateY(-1px);
 }
 
@@ -308,13 +317,13 @@ textarea:focus-visible {
   padding: clamp(64px, 8vw, 116px) 0 72px;
   background:
     radial-gradient(circle at 78% 28%, rgba(71, 87, 166, 0.13), transparent 32%),
-    linear-gradient(180deg, #030303 0%, #050505 100%);
+    linear-gradient(180deg, #ffffff 0%, #ffffff 100%);
 }
 
 .hero::after {
   position: absolute;
   inset: 0;
-  background-image: linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px);
+  background-image: linear-gradient(rgba(20, 18, 32, 0.018) 1px, transparent 1px);
   background-size: 100% 88px;
   content: '';
   pointer-events: none;
@@ -361,7 +370,7 @@ textarea:focus-visible {
 .demo-notice {
   margin-left: 8px;
   padding: 4px 7px;
-  border: 1px solid #3d444c;
+  border: 1px solid #ddd8e9;
   border-radius: 999px;
   color: #c9cdce;
   font-size: 9px;
@@ -434,23 +443,23 @@ textarea:focus-visible {
 }
 
 .button-primary {
-  background: #f5f5f5;
+  background: var(--acid);
   color: var(--ink);
 }
 
 .button-primary:hover:not(:disabled) {
-  background: #d4d4d4;
+  background: #2a2640;
 }
 
 .button-secondary {
-  border-color: #303030;
+  border-color: #ddd8e9;
   background: transparent;
   color: var(--white);
 }
 
 .button-secondary:hover:not(:disabled) {
-  border-color: #757d83;
-  background: rgba(255, 255, 255, 0.04);
+  border-color: var(--muted);
+  background: rgba(20, 18, 32, 0.04);
 }
 
 .hero-contract {
@@ -482,7 +491,7 @@ textarea:focus-visible {
 
 .maintenance-contract {
   border-block: 1px solid var(--line);
-  background: #050505;
+  background: #ffffff;
 }
 
 .maintenance-contract-grid {
@@ -527,9 +536,9 @@ textarea:focus-visible {
   grid-template-columns: 38px 1fr;
   gap: 14px;
   padding: 19px;
-  border: 1px solid #292929;
+  border: 1px solid #ddd8e9;
   border-radius: 2px;
-  background: #060606;
+  background: #ffffff;
 }
 
 .proof-outcome > span {
@@ -549,7 +558,7 @@ textarea:focus-visible {
 
 .proof-outcome p {
   margin: 0;
-  color: #858c90;
+  color: var(--muted);
   font-size: 12px;
   line-height: 1.55;
 }
@@ -560,7 +569,7 @@ textarea:focus-visible {
 
 .proof-refund > span,
 .proof-refund strong {
-  color: #f5f5f5;
+  color: #141220;
 }
 
 .proof-or {
@@ -570,7 +579,7 @@ textarea:focus-visible {
   width: 34px;
   margin: 0 -5px;
   padding: 5px 0;
-  border: 1px solid #363d45;
+  border: 1px solid #ddd8e9;
   border-radius: 999px;
   background: var(--ink-raised);
   color: #6e767a;
@@ -600,12 +609,12 @@ textarea:focus-visible {
   border-radius: 50%;
   background: rgba(163, 163, 163, 0.12);
   color: var(--aqua);
-  font-weight: 900;
+  font-weight: 600;
 }
 
 .metrics-band {
   border-block: 1px solid var(--line);
-  background: #050505;
+  background: #ffffff;
 }
 
 .metrics-band-state {
@@ -647,7 +656,7 @@ textarea:focus-visible {
 }
 
 .metric-strip .metric-highlight dd {
-  color: #f5f5f5;
+  color: #141220;
 }
 
 .metric-strip small {
@@ -676,7 +685,7 @@ textarea:focus-visible {
   left: 50%;
   width: 1px;
   height: 100%;
-  background: rgba(255, 255, 255, 0.025);
+  background: rgba(20, 18, 32, 0.025);
   content: '';
 }
 
@@ -705,7 +714,7 @@ textarea:focus-visible {
   min-height: 355px;
   flex-direction: column;
   padding: 25px;
-  border: 1px solid #303740;
+  border: 1px solid #ddd8e9;
   border-right: 0;
   background: rgba(17, 21, 27, 0.82);
 }
@@ -715,7 +724,7 @@ textarea:focus-visible {
 }
 
 .flywheel-stages > li:last-child {
-  border-right: 1px solid #303740;
+  border-right: 1px solid #ddd8e9;
   border-radius: 0 12px 12px 0;
 }
 
@@ -808,7 +817,7 @@ textarea:focus-visible {
 .traction-board {
   margin-top: 23px;
   padding: clamp(25px, 4vw, 42px);
-  border: 1px solid #303740;
+  border: 1px solid #ddd8e9;
   border-radius: 12px;
   background: rgba(12, 15, 19, 0.9);
 }
@@ -847,16 +856,16 @@ textarea:focus-visible {
   grid-template-columns: repeat(3, 1fr);
   margin: 0;
   padding: 0;
-  border-top: 1px solid #2b3239;
-  border-left: 1px solid #2b3239;
+  border-top: 1px solid #ddd8e9;
+  border-left: 1px solid #ddd8e9;
   list-style: none;
 }
 
 .traction-grid li {
   min-height: 190px;
   padding: 20px;
-  border-right: 1px solid #2b3239;
-  border-bottom: 1px solid #2b3239;
+  border-right: 1px solid #ddd8e9;
+  border-bottom: 1px solid #ddd8e9;
 }
 
 .target-topline span,
@@ -910,7 +919,7 @@ textarea:focus-visible {
   margin-top: 15px;
   overflow: hidden;
   border-radius: 99px;
-  background: #282f36;
+  background: #ddd8e9;
 }
 
 .target-track > span {
@@ -941,7 +950,7 @@ textarea:focus-visible {
 }
 
 .section-ink {
-  background: #0c0f13;
+  background: #ffffff;
 }
 
 .section-heading {
@@ -1024,7 +1033,7 @@ textarea:focus-visible {
 .transformation-number {
   display: block;
   margin-bottom: 52px;
-  color: #8a8f8d;
+  color: var(--muted);
   font:
     700 11px/1 ui-monospace,
     SFMono-Regular,
@@ -1055,7 +1064,7 @@ textarea:focus-visible {
   border: 1px solid var(--line-light);
   border-radius: 50%;
   background: var(--paper);
-  color: #707674;
+  color: var(--muted);
 }
 
 .bounty-grid {
@@ -1070,7 +1079,7 @@ textarea:focus-visible {
   flex-direction: column;
   justify-content: space-between;
   padding: 23px;
-  border: 1px solid #2e343b;
+  border: 1px solid #ddd8e9;
   border-radius: var(--radius);
   background: var(--ink-raised);
   transition:
@@ -1101,7 +1110,7 @@ textarea:focus-visible {
   align-items: center;
   gap: 7px;
   padding: 6px 9px;
-  border: 1px solid #3c444c;
+  border: 1px solid #ddd8e9;
   border-radius: 999px;
   color: #b5bbbe;
   font:
@@ -1196,7 +1205,7 @@ textarea:focus-visible {
 
 .treasury-snapshot {
   padding: 28px;
-  border: 1px solid #2d343c;
+  border: 1px solid #ddd8e9;
   border-radius: var(--radius);
   background: var(--ink-raised);
 }
@@ -1205,7 +1214,7 @@ textarea:focus-visible {
   display: flex;
   flex-direction: column;
   padding-bottom: 26px;
-  border-bottom: 1px solid #2c3239;
+  border-bottom: 1px solid #ddd8e9;
 }
 
 .treasury-total > span,
@@ -1254,7 +1263,7 @@ textarea:focus-visible {
   height: 4px;
   overflow: hidden;
   border-radius: 99px;
-  background: #272d34;
+  background: #ddd8e9;
 }
 
 .treasury-bar-track > span {
@@ -1269,7 +1278,7 @@ textarea:focus-visible {
 }
 
 .capability-snapshot {
-  border-top: 1px solid #30363d;
+  border-top: 1px solid #ddd8e9;
 }
 
 .capability-snapshot article {
@@ -1277,7 +1286,7 @@ textarea:focus-visible {
   grid-template-columns: 42px 1fr;
   gap: 16px;
   padding: 24px 0;
-  border-bottom: 1px solid #30363d;
+  border-bottom: 1px solid #ddd8e9;
 }
 
 .capability-index {
@@ -1452,7 +1461,7 @@ textarea:focus-visible {
 .event-receipts span,
 .event-receipts a {
   padding: 4px 7px;
-  border: 1px solid #242424;
+  border: 1px solid #ddd8e9;
   border-radius: 4px;
   color: #606666;
   font:
@@ -1520,7 +1529,7 @@ textarea:focus-visible {
   align-items: center;
   gap: 10px;
   padding: 12px 14px;
-  border: 1px solid #343b43;
+  border: 1px solid #ddd8e9;
   border-radius: 4px;
   color: #b4b7b8;
   transition:
@@ -1552,9 +1561,9 @@ textarea:focus-visible {
   gap: 15px;
   min-height: 92px;
   padding: 18px;
-  border: 1px solid #343b42;
+  border: 1px solid #ddd8e9;
   border-radius: 9px;
-  background: rgba(255, 255, 255, 0.025);
+  background: rgba(20, 18, 32, 0.025);
 }
 
 .section-light .data-state {
@@ -1594,7 +1603,7 @@ textarea:focus-visible {
 
 .site-footer {
   padding: 64px 0 32px;
-  background: #030303;
+  background: #ffffff;
 }
 
 .footer-grid {
@@ -1645,7 +1654,7 @@ textarea:focus-visible {
 
 .footer-column h3 {
   margin: 0 0 20px;
-  color: #d5d8d9;
+  color: var(--muted);
   font:
     600 10px/1.4 ui-monospace,
     'SF Mono',
@@ -1695,7 +1704,7 @@ textarea:focus-visible {
 }
 
 .footer-bottom a:hover {
-  color: #d5d8d9;
+  color: var(--muted);
 }
 
 .fatal-state {
@@ -1826,7 +1835,7 @@ textarea:focus-visible {
   width: 100%;
   min-height: 52px;
   padding: 0 16px;
-  border: 1px solid #3a424a;
+  border: 1px solid #ddd8e9;
   border-radius: 8px;
   background: var(--ink-raised);
   color: var(--white);
@@ -1846,7 +1855,7 @@ textarea:focus-visible {
 .quote-result {
   margin-top: 28px;
   overflow: hidden;
-  border: 1px solid #363e46;
+  border: 1px solid #ddd8e9;
   border-radius: 12px;
   background: var(--ink-raised);
 }
@@ -1857,7 +1866,7 @@ textarea:focus-visible {
   justify-content: space-between;
   gap: 20px;
   padding: 25px;
-  border-bottom: 1px solid #30363e;
+  border-bottom: 1px solid #ddd8e9;
   background: linear-gradient(105deg, rgba(201, 255, 87, 0.07), transparent 55%);
 }
 
@@ -1917,12 +1926,12 @@ textarea:focus-visible {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   margin: 0;
-  border-block: 1px solid #30363e;
+  border-block: 1px solid #ddd8e9;
 }
 
 .quote-limits > div {
   padding: 18px;
-  border-right: 1px solid #30363e;
+  border-right: 1px solid #ddd8e9;
 }
 
 .quote-limits > div:last-child {
@@ -1989,9 +1998,9 @@ textarea:focus-visible {
 
 .scope-policy {
   padding: 26px;
-  border: 1px solid #30373f;
+  border: 1px solid #ddd8e9;
   border-radius: 10px;
-  background: #0d1014;
+  background: #ffffff;
 }
 
 .scope-policy h2 {
@@ -2055,7 +2064,7 @@ textarea:focus-visible {
   align-items: center;
   justify-content: space-between;
   padding: 12px 14px;
-  border: 1px solid #343c44;
+  border: 1px solid #ddd8e9;
   border-radius: 6px;
   color: #cdd2d4;
   font-size: 11px;
@@ -2063,7 +2072,7 @@ textarea:focus-visible {
 
 .scope-app-actions a:hover {
   border-color: #66717a;
-  background: rgba(255, 255, 255, 0.03);
+  background: rgba(20, 18, 32, 0.03);
 }
 
 .scope-section-label {
@@ -2073,7 +2082,7 @@ textarea:focus-visible {
 .scope-note {
   margin: 30px 0 0;
   padding-top: 20px;
-  border-top: 1px solid #2b3239;
+  border-top: 1px solid #ddd8e9;
   color: #747d81;
   font-size: 12px;
   line-height: 1.7;
@@ -2083,7 +2092,7 @@ textarea:focus-visible {
   scroll-margin-top: 100px;
   margin-top: 28px;
   padding-top: 25px;
-  border-top: 1px solid #2b3239;
+  border-top: 1px solid #ddd8e9;
 }
 
 .job-lookup > div {
@@ -2100,7 +2109,7 @@ textarea:focus-visible {
 .job-lookup button {
   border: 0;
   border-radius: 0 6px 6px 0;
-  background: #282f36;
+  background: #ddd8e9;
   cursor: pointer;
   font-size: 10px;
   font-weight: 750;
@@ -2122,7 +2131,7 @@ textarea:focus-visible {
 .service-terms-grid article,
 .disclosure-page article {
   padding: 28px;
-  border: 1px solid #30373e;
+  border: 1px solid #ddd8e9;
   border-radius: 8px;
 }
 
@@ -2141,7 +2150,7 @@ textarea:focus-visible {
 }
 
 .disclosure-page p a {
-  color: #d6d9da;
+  color: var(--muted);
   text-decoration: underline;
   text-underline-offset: 3px;
 }
@@ -2154,9 +2163,9 @@ textarea:focus-visible {
 .claim-contract {
   margin: 24px 0 0;
   padding: 16px 18px;
-  border: 1px solid #343c44;
+  border: 1px solid #ddd8e9;
   border-radius: 7px;
-  background: rgba(255, 255, 255, 0.025);
+  background: rgba(20, 18, 32, 0.025);
   color: #939a9e;
   font-size: 13px;
   line-height: 1.65;
@@ -2176,7 +2185,7 @@ textarea:focus-visible {
 
 .job-status-panel {
   overflow: hidden;
-  border: 1px solid #343c44;
+  border: 1px solid #ddd8e9;
   border-radius: 11px;
   background: var(--ink-raised);
 }
@@ -2187,7 +2196,7 @@ textarea:focus-visible {
   justify-content: space-between;
   gap: 20px;
   padding: 23px 26px;
-  border-bottom: 1px solid #30373e;
+  border-bottom: 1px solid #ddd8e9;
 }
 
 .job-status-heading > div {
@@ -2234,7 +2243,7 @@ textarea:focus-visible {
   height: 7px;
   border-radius: 50%;
   background: var(--aqua);
-  box-shadow: 0 0 0 5px rgba(255, 255, 255, 0.08);
+  box-shadow: 0 0 0 5px rgba(20, 18, 32, 0.08);
 }
 
 .job-progress {
@@ -2251,7 +2260,7 @@ textarea:focus-visible {
   align-items: center;
   gap: 11px;
   padding: 24px;
-  border-right: 1px solid #30373e;
+  border-right: 1px solid #ddd8e9;
   color: #626b70;
   font:
     650 10px/1.3 ui-monospace,
@@ -2270,7 +2279,7 @@ textarea:focus-visible {
   width: 23px;
   height: 23px;
   place-items: center;
-  border: 1px solid #3a424a;
+  border: 1px solid #ddd8e9;
   border-radius: 50%;
   font-size: 8px;
 }
@@ -2313,7 +2322,7 @@ textarea:focus-visible {
 
 .receipt-list {
   margin: 0;
-  border-top: 1px solid #30373e;
+  border-top: 1px solid #ddd8e9;
 }
 
 .receipt-list > div {
@@ -2321,7 +2330,7 @@ textarea:focus-visible {
   justify-content: space-between;
   gap: 20px;
   padding: 13px 0;
-  border-bottom: 1px solid #30373e;
+  border-bottom: 1px solid #ddd8e9;
 }
 
 .receipt-list dt {
@@ -2384,13 +2393,13 @@ textarea:focus-visible {
 .validation-list {
   margin: 0;
   padding: 0;
-  border-top: 1px solid #30373e;
+  border-top: 1px solid #ddd8e9;
   list-style: none;
 }
 
 .file-list li {
   padding: 11px 0;
-  border-bottom: 1px solid #30373e;
+  border-bottom: 1px solid #ddd8e9;
   color: #aab0b2;
   font:
     550 11px/1.4 ui-monospace,
@@ -2409,7 +2418,7 @@ textarea:focus-visible {
   align-items: center;
   gap: 10px;
   padding: 12px 0;
-  border-bottom: 1px solid #30373e;
+  border-bottom: 1px solid #ddd8e9;
 }
 
 .validation-list li > span {
@@ -2448,9 +2457,9 @@ textarea:focus-visible {
   gap: 5px;
   min-width: 0;
   padding: 15px;
-  border: 1px solid #323940;
+  border: 1px solid #ddd8e9;
   border-radius: 7px;
-  background: rgba(255, 255, 255, 0.02);
+  background: rgba(20, 18, 32, 0.02);
 }
 
 .receipt-link:hover {
@@ -2528,7 +2537,7 @@ textarea:focus-visible {
   width: 22px;
   height: 22px;
   place-items: center;
-  border: 1px solid #3b434a;
+  border: 1px solid #ddd8e9;
   border-radius: 50%;
   color: var(--aqua);
   font:
@@ -2570,7 +2579,7 @@ textarea:focus-visible {
 
 .filter-group button {
   padding: 8px 11px;
-  border: 1px solid #363d45;
+  border: 1px solid #ddd8e9;
   border-radius: 999px;
   background: transparent;
   color: #8b9396;
@@ -2620,7 +2629,7 @@ textarea:focus-visible {
   display: grid;
   min-width: 160px;
   padding-left: 28px;
-  border-left: 1px solid #343b43;
+  border-left: 1px solid #ddd8e9;
 }
 
 .detail-price span,
@@ -2656,13 +2665,13 @@ textarea:focus-visible {
 
 .detail-panel {
   padding-bottom: 55px;
-  border-bottom: 1px solid #30373e;
+  border-bottom: 1px solid #ddd8e9;
 }
 
 .criteria-list {
   margin: 0 0 30px;
   padding: 0;
-  border-top: 1px solid #30373e;
+  border-top: 1px solid #ddd8e9;
   list-style: none;
 }
 
@@ -2671,7 +2680,7 @@ textarea:focus-visible {
   grid-template-columns: 35px 1fr;
   gap: 18px;
   padding: 18px 0;
-  border-bottom: 1px solid #30373e;
+  border-bottom: 1px solid #ddd8e9;
   color: #c7cbcc;
   font-size: 13px;
 }
@@ -2690,13 +2699,13 @@ textarea:focus-visible {
 .receipt-chain {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  border-block: 1px solid #30373e;
+  border-block: 1px solid #ddd8e9;
 }
 
 .receipt-chain > div {
   min-width: 0;
   padding: 22px;
-  border-right: 1px solid #30373e;
+  border-right: 1px solid #ddd8e9;
 }
 
 .receipt-chain > div:first-child {
@@ -2734,7 +2743,7 @@ textarea:focus-visible {
   position: sticky;
   top: 105px;
   padding: 25px;
-  border: 1px solid #343c44;
+  border: 1px solid #ddd8e9;
   border-radius: 11px;
   background: var(--ink-raised);
 }
@@ -2764,7 +2773,7 @@ textarea:focus-visible {
 .wallet-proof {
   margin-top: 25px;
   padding-top: 25px;
-  border-top: 1px solid #30373e;
+  border-top: 1px solid #ddd8e9;
 }
 
 .claimant-actions {
@@ -2772,7 +2781,7 @@ textarea:focus-visible {
   gap: 18px;
   margin-top: 22px;
   padding-top: 22px;
-  border-top: 1px solid #30373e;
+  border-top: 1px solid #ddd8e9;
 }
 
 .claimant-actions > p {
@@ -2796,9 +2805,9 @@ textarea:focus-visible {
 .claimant-form textarea {
   width: 100%;
   padding: 11px 12px;
-  border: 1px solid #3a424a;
+  border: 1px solid #ddd8e9;
   border-radius: 6px;
-  background: #0c0f13;
+  background: #ffffff;
   color: var(--white);
   font-size: 11px;
 }
@@ -2814,7 +2823,7 @@ textarea:focus-visible {
 
 .dispute-form {
   padding-top: 18px;
-  border-top: 1px solid #30373e;
+  border-top: 1px solid #ddd8e9;
 }
 
 .dispute-receipt {
@@ -2822,7 +2831,7 @@ textarea:focus-visible {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 1px;
   margin-top: 18px;
-  background: #30373e;
+  background: #ddd8e9;
 }
 
 .dispute-receipt > div {
@@ -2869,13 +2878,13 @@ textarea:focus-visible {
   gap: 10px;
   margin-top: 18px;
   padding: 18px;
-  border: 1px solid #343c44;
+  border: 1px solid #ddd8e9;
   border-radius: 7px;
-  background: rgba(255, 255, 255, 0.025);
+  background: rgba(20, 18, 32, 0.025);
 }
 
 .closed-bounty-status strong {
-  color: #d6d9da;
+  color: var(--muted);
   font-size: 15px;
 }
 
@@ -2891,9 +2900,9 @@ textarea:focus-visible {
   justify-content: space-between;
   gap: 10px;
   padding: 0 12px;
-  border: 1px solid #3a424a;
+  border: 1px solid #ddd8e9;
   border-radius: 6px;
-  background: #0c0f13;
+  background: #ffffff;
   cursor: pointer;
   color: #c4c9ca;
   font-size: 11px;
@@ -2916,7 +2925,7 @@ textarea:focus-visible {
 .wallet-missing {
   margin: 0;
   padding: 12px;
-  border: 1px dashed #3c444b;
+  border: 1px dashed #ddd8e9;
   border-radius: 6px;
   color: #7a8285;
   font-size: 10px;
@@ -2943,7 +2952,7 @@ textarea:focus-visible {
   justify-content: space-between;
   gap: 15px;
   padding: 11px;
-  border: 1px solid #303840;
+  border: 1px solid #ddd8e9;
   border-radius: 6px;
 }
 
@@ -2963,7 +2972,7 @@ textarea:focus-visible {
 
 .claim-rules {
   margin: 25px 0 0;
-  border-top: 1px solid #30373e;
+  border-top: 1px solid #ddd8e9;
 }
 
 .claim-rules > div {
@@ -2971,7 +2980,7 @@ textarea:focus-visible {
   justify-content: space-between;
   gap: 15px;
   padding: 10px 0;
-  border-bottom: 1px solid #30373e;
+  border-bottom: 1px solid #ddd8e9;
 }
 
 .claim-rules dt,
@@ -2991,9 +3000,9 @@ textarea:focus-visible {
   flex-direction: column;
   margin-top: 22px;
   padding: 15px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  border: 1px solid rgba(20, 18, 32, 0.18);
   border-radius: 7px;
-  background: rgba(255, 255, 255, 0.035);
+  background: rgba(20, 18, 32, 0.035);
 }
 
 .current-claim span,
@@ -3037,7 +3046,7 @@ textarea:focus-visible {
   flex-direction: column;
   align-items: end;
   padding-left: 30px;
-  border-left: 1px solid #343b43;
+  border-left: 1px solid #ddd8e9;
 }
 
 .treasury-hero-total span,
@@ -3092,7 +3101,7 @@ textarea:focus-visible {
 .waterfall {
   margin: 0;
   padding: 0;
-  border-top: 1px solid #30373e;
+  border-top: 1px solid #ddd8e9;
   list-style: none;
 }
 
@@ -3101,7 +3110,7 @@ textarea:focus-visible {
   grid-template-columns: 35px 1fr;
   gap: 14px;
   padding: 20px 0;
-  border-bottom: 1px solid #30373e;
+  border-bottom: 1px solid #ddd8e9;
 }
 
 .waterfall-index {
@@ -3131,7 +3140,7 @@ textarea:focus-visible {
   margin: 12px 0 8px;
   overflow: hidden;
   border-radius: 99px;
-  background: #272d34;
+  background: #ddd8e9;
 }
 
 .waterfall-track span {
@@ -3149,9 +3158,9 @@ textarea:focus-visible {
 .policy-note {
   margin-top: 25px;
   padding: 18px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(20, 18, 32, 0.16);
   border-radius: 7px;
-  background: rgba(255, 255, 255, 0.025);
+  background: rgba(20, 18, 32, 0.025);
 }
 
 .policy-note strong {
@@ -3193,7 +3202,7 @@ textarea:focus-visible {
 .ledger-list {
   margin: 0;
   padding: 0;
-  border-top: 1px solid #30373e;
+  border-top: 1px solid #ddd8e9;
   list-style: none;
 }
 
@@ -3203,7 +3212,7 @@ textarea:focus-visible {
   align-items: center;
   gap: 15px;
   padding: 14px 0;
-  border-bottom: 1px solid #30373e;
+  border-bottom: 1px solid #ddd8e9;
 }
 
 .ledger-amount {
@@ -3258,14 +3267,14 @@ textarea:focus-visible {
 .capability-board {
   display: grid;
   grid-template-columns: repeat(5, minmax(190px, 1fr));
-  border-top: 1px solid #30373e;
-  border-left: 1px solid #30373e;
+  border-top: 1px solid #ddd8e9;
+  border-left: 1px solid #ddd8e9;
 }
 
 .capability-board > section {
   min-width: 0;
-  border-right: 1px solid #30373e;
-  border-bottom: 1px solid #30373e;
+  border-right: 1px solid #ddd8e9;
+  border-bottom: 1px solid #ddd8e9;
 }
 
 .capability-column-heading {
@@ -3275,8 +3284,8 @@ textarea:focus-visible {
   gap: 8px;
   min-height: 65px;
   padding: 12px;
-  border-bottom: 1px solid #30373e;
-  background: #0d1014;
+  border-bottom: 1px solid #ddd8e9;
+  background: #ffffff;
 }
 
 .capability-column-heading > span {
@@ -3298,7 +3307,7 @@ textarea:focus-visible {
 
 .capability-column-cards article {
   padding: 15px;
-  border: 1px solid #313840;
+  border: 1px solid #ddd8e9;
   border-radius: 7px;
   background: var(--ink-raised);
 }
@@ -3325,7 +3334,7 @@ textarea:focus-visible {
 .capability-benchmark {
   margin-top: 18px;
   padding-top: 11px;
-  border-top: 1px solid #30373e;
+  border-top: 1px solid #ddd8e9;
 }
 
 .capability-benchmark > span {
@@ -3367,7 +3376,7 @@ textarea:focus-visible {
   max-width: 100%;
   overflow: hidden;
   padding: 5px 6px;
-  border: 1px solid #343c44;
+  border: 1px solid #ddd8e9;
   border-radius: 4px;
   color: #7f878b;
   font:
@@ -3446,12 +3455,12 @@ textarea:focus-visible {
 }
 
 .activity-page-section .activity-feed ol {
-  border-color: #30373e;
+  border-color: #ddd8e9;
 }
 
 .activity-page-section .activity-feed li {
   padding-block: 27px;
-  border-color: #30373e;
+  border-color: #ddd8e9;
 }
 
 .activity-page-section .event-body p {
@@ -3461,7 +3470,7 @@ textarea:focus-visible {
 
 .activity-page-section .event-receipts span,
 .activity-page-section .event-receipts a {
-  border-color: #343c44;
+  border-color: #ddd8e9;
   color: #858d91;
 }
 
@@ -3517,7 +3526,7 @@ textarea:focus-visible {
   .flywheel-stages > li:first-child,
   .flywheel-stages > li:last-child {
     min-height: 320px;
-    border: 1px solid #303740;
+    border: 1px solid #ddd8e9;
     border-radius: 10px;
   }
 
@@ -3927,7 +3936,7 @@ textarea:focus-visible {
 
   .quote-limits > div {
     border-right: 0;
-    border-bottom: 1px solid #30363e;
+    border-bottom: 1px solid #ddd8e9;
   }
 
   .quote-limits > div:last-child {
@@ -3947,7 +3956,7 @@ textarea:focus-visible {
   }
 
   .job-progress li:nth-child(n + 3) {
-    border-top: 1px solid #30373e;
+    border-top: 1px solid #ddd8e9;
   }
 
   .receipt-grid {
@@ -3980,7 +3989,7 @@ textarea:focus-visible {
     justify-content: start;
     gap: 8px;
     padding: 20px 0 0;
-    border-top: 1px solid #343b43;
+    border-top: 1px solid #ddd8e9;
     border-left: 0;
   }
 
@@ -3997,7 +4006,7 @@ textarea:focus-visible {
   .receipt-chain > div:last-child {
     padding: 20px 0;
     border-right: 0;
-    border-bottom: 1px solid #30373e;
+    border-bottom: 1px solid #ddd8e9;
   }
 
   .receipt-chain > div:last-child {
@@ -4015,7 +4024,7 @@ textarea:focus-visible {
   .treasury-hero-total {
     align-items: start;
     padding: 20px 0 0;
-    border-top: 1px solid #343b43;
+    border-top: 1px solid #ddd8e9;
     border-left: 0;
   }
 
@@ -4054,4 +4063,859 @@ textarea:focus-visible {
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* Covenant identity layer. Loaded last so it wins over the base sheet without
+   editing it: mono body, extended-grotesque display, ramp accents. */
+
+body {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+h1,
+h2,
+h3,
+.bounty-detail-hero h1,
+.treasury-hero h1 {
+  font-family: var(--font-display);
+  font-variation-settings: 'wdth' 125;
+  font-weight: 600;
+  letter-spacing: -0.05em;
+  line-height: 0.9;
+  text-transform: uppercase;
+  text-wrap: balance;
+}
+
+h1,
+.bounty-detail-hero h1,
+.treasury-hero h1 {
+  font-size: clamp(2.75rem, 7vw, 5.6rem);
+  line-height: 0.84;
+  padding-block-end: 0.1em;
+}
+
+h2 {
+  font-size: clamp(1.75rem, 3.6vw, 2.9rem);
+}
+
+h3 {
+  font-size: clamp(1.1rem, 1.8vw, 1.5rem);
+  letter-spacing: -0.03em;
+}
+
+.brand,
+.site-nav a,
+.header-cta,
+.eyebrow,
+.tag,
+.pill {
+  font-family: var(--font-ui);
+}
+
+.ramp-text {
+  background: var(--ramp);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.header-cta {
+  border-color: transparent;
+  background: var(--ramp);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.header-cta:hover,
+.header-cta:focus-visible {
+  filter: brightness(1.12);
+}
+
+.mizuki-mark {
+  height: 22px;
+  width: auto;
+  display: block;
+}
+
+.covenant-brand .covenant-wordmark {
+  height: 26px;
+  width: auto;
+}
+
+::selection {
+  background: var(--g2);
+  color: var(--ink);
+}
+
+:focus-visible {
+  outline: 2px solid var(--g3);
+  outline-offset: 3px;
+}
+
+/* Hero: sticky canvas stage carrying the logomark assembly, with the display
+   pair split across it. Mirrors the marketing site. */
+
+.hero-stage {
+  position: relative;
+  min-height: 165vh;
+}
+
+.hero-canvas-wrap {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 165vh;
+}
+
+.hero-canvas-track {
+  position: relative;
+  height: 165vh;
+}
+
+.hero-sticky {
+  position: sticky;
+  top: 0;
+  height: 100dvh;
+  overflow: clip;
+  background: var(--ink);
+}
+
+.hero-scene {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+}
+
+.hero-scene canvas,
+.hero-ribbon canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+.hero-veil {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  background:
+    linear-gradient(to bottom, rgba(244, 242, 249, 0.86) 0%, rgba(244, 242, 249, 0) 28%),
+    linear-gradient(to top, rgba(244, 242, 249, 0.92) 0%, rgba(244, 242, 249, 0) 44%);
+}
+
+.hero-overlay {
+  position: relative;
+  z-index: 4;
+  min-height: 165vh;
+  pointer-events: none;
+}
+
+.hero-title-stack {
+  display: flex;
+  min-height: calc(100dvh - var(--header-h));
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 44px 50px 52px;
+}
+
+.hero-title-group {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1.4rem;
+}
+
+.hero-display {
+  margin: 0;
+  padding-block-end: 0.12em;
+  font-family: var(--font-display);
+  font-variation-settings: 'wdth' 125;
+  font-weight: 600;
+  font-size: clamp(3rem, 9.6vw, 120px);
+  line-height: 0.66;
+  letter-spacing: -0.06em;
+  text-transform: uppercase;
+  color: var(--white);
+}
+
+.hero-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--white) 78%, transparent);
+}
+
+.hero-meta-dim {
+  color: var(--muted-dark);
+}
+
+.hero-bottom {
+  width: 100%;
+}
+
+.hero-meta-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 2rem;
+  margin-bottom: 2rem;
+}
+
+.hero-meta-right {
+  display: flex;
+  align-items: center;
+  gap: 2rem;
+}
+
+.hero-split {
+  display: flex;
+  align-items: flex-end;
+  gap: 2rem;
+}
+
+.hero-copy-col {
+  width: 33.3333%;
+  pointer-events: auto;
+}
+
+.hero-lede {
+  max-width: 32rem;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+  text-align: justify;
+  text-align-last: left;
+  hyphens: auto;
+  text-wrap: pretty;
+}
+
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 1.6rem;
+}
+
+.hero-contract {
+  margin: 1.1rem 0 0;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--muted-dark);
+}
+
+.hero-title-right {
+  display: flex;
+  flex: 1;
+  justify-content: flex-end;
+}
+
+.hero-title-right .hero-display {
+  text-align: right;
+}
+
+@media (max-width: 900px) {
+  .hero-title-stack {
+    padding: 36px 20px 44px;
+  }
+  .hero-split {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2.5rem;
+  }
+  .hero-copy-col {
+    width: 100%;
+  }
+  .hero-title-right {
+    justify-content: flex-start;
+    width: 100%;
+  }
+  .hero-title-right .hero-display {
+    text-align: left;
+  }
+  .hero-meta-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.9rem;
+  }
+}
+
+/* The meta row crosses the brightest part of the canvas, so it carries its own
+   contrast rather than relying on the veil. */
+.hero-meta-row .hero-meta {
+  color: color-mix(in srgb, var(--white) 78%, transparent);
+  text-shadow: 0 1px 10px rgba(244, 242, 249, 0.95);
+}
+
+.hero-meta-row .hero-meta-dim {
+  color: color-mix(in srgb, var(--white) 52%, transparent);
+}
+
+/* The logomark is a 7:5 wordmark, not a round avatar: no circular crop. */
+.brand-mark {
+  width: auto;
+  height: 22px;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: none;
+}
+
+.brand-mark img {
+  width: auto;
+  height: 100%;
+  object-fit: contain;
+}
+
+.covenant-mobile-mark {
+  height: 20px;
+  width: auto;
+}
+
+.covenant-mark-inline {
+  height: 22px;
+  width: auto;
+}
+
+/* Keep the guarantee pair clear of the meta row on short viewports. */
+.hero-title-right .hero-display {
+  white-space: nowrap;
+}
+
+.is-loading,
+.is-loading body {
+  overflow: hidden;
+}
+
+.curtain {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+}
+
+.curtain-grid {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: repeat(var(--curtain-cols), 1fr);
+  grid-auto-rows: calc(100vw / var(--curtain-cols));
+  align-content: start;
+  overflow: hidden;
+}
+
+.curtain-cell {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--ink-soft);
+  border-radius: 0;
+  opacity: 1;
+  transform: scale(1);
+  transition:
+    transform 0.62s cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 0.62s cubic-bezier(0.16, 1, 0.3, 1),
+    border-radius 0.62s cubic-bezier(0.16, 1, 0.3, 1);
+  transition-delay: var(--cell-delay, 0s);
+}
+
+/* Cells shrink into the mark's module before they clear. */
+.curtain.is-clearing .curtain-cell {
+  transform: scale(0.24);
+  border-radius: 22%;
+  opacity: 0;
+}
+
+.curtain-brand {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+
+.curtain-brand img {
+  width: min(110px, 20vw);
+  height: auto;
+  transition:
+    opacity 0.4s ease,
+    transform 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.curtain.is-clearing .curtain-brand img {
+  opacity: 0;
+  transform: scale(0.82);
+}
+
+.word-mask {
+  display: inline-block;
+  overflow: hidden;
+  vertical-align: bottom;
+}
+
+.word {
+  display: inline-block;
+  transform: translateY(102%);
+  transition: transform 0.78s cubic-bezier(0.16, 1, 0.3, 1);
+  transition-delay: var(--word-delay, 0s);
+}
+
+.is-in .word {
+  transform: translateY(0);
+}
+
+.site-motion .reveal {
+  opacity: 0;
+  transform: translateY(18px);
+  transition:
+    opacity 0.7s cubic-bezier(0.16, 1, 0.3, 1),
+    transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.site-motion .reveal.is-in {
+  opacity: 1;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .word {
+    transform: none;
+    transition: none;
+  }
+  .site-motion .reveal {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Header and footer run edge to edge; only their content is inset. */
+.site-header .shell,
+.site-footer .shell {
+  width: 100%;
+  max-width: none;
+  margin-inline: 0;
+  padding-inline: clamp(20px, 3.4vw, 50px);
+}
+
+/* Section headings carry their own weight/tracking from the old extralight
+   treatment, which outranks the bare element selector above. */
+.hero h1,
+.maintenance-contract-heading h2,
+.traction-heading h3,
+.section-heading h2,
+.section-heading h3,
+.treasury-hero h1,
+.ledger-heading h2,
+.quote-issue h2,
+.bounty-detail-title h1,
+.capability-column-cards article h2 {
+  font-family: var(--font-display);
+  font-variation-settings: 'wdth' 125;
+  font-weight: 600;
+  letter-spacing: -0.045em;
+  line-height: 0.92;
+  text-transform: uppercase;
+}
+
+/* Dark bands. These break up the paper page, so everything inside them has to
+   invert: type, hairlines, panels, and the action button picks up the ramp. */
+.section-ink,
+.section-dark {
+  --line: #2a2640;
+  --line-light: #322d4a;
+  --muted: #a49ec0;
+  --muted-dark: #8079a0;
+  background: #0d0b16;
+  color: #f3f1fa;
+}
+
+.section-ink h1,
+.section-ink h2,
+.section-ink h3,
+.section-dark h1,
+.section-dark h2,
+.section-dark h3 {
+  color: #f3f1fa;
+}
+
+.section-ink .eyebrow,
+.section-dark .eyebrow {
+  color: #8079a0;
+}
+
+.section-ink p,
+.section-dark p,
+.section-ink dd,
+.section-dark dd,
+.section-ink li,
+.section-dark li {
+  color: #a49ec0;
+}
+
+.section-ink .data-state,
+.section-dark .data-state,
+.section-ink article,
+.section-dark article {
+  border-color: #2a2640;
+  background: #14111f;
+}
+
+.section-ink .data-state strong,
+.section-dark .data-state strong,
+.section-ink article h3,
+.section-dark article h3 {
+  color: #f3f1fa;
+}
+
+.section-ink .button,
+.section-dark .button {
+  border-color: transparent;
+  background: var(--ramp);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.section-ink .button:hover:not(:disabled),
+.section-dark .button:hover:not(:disabled) {
+  background: var(--ramp);
+  filter: brightness(1.12);
+}
+
+/* Header goes dark the moment the page leaves the top. */
+.site-header.is-scrolled {
+  background: #0d0b16;
+  border-bottom-color: #2a2640;
+}
+
+.site-header.is-scrolled .brand,
+.site-header.is-scrolled .topbar-name {
+  color: #f3f1fa;
+}
+
+.site-header.is-scrolled .site-nav a,
+.site-header.is-scrolled .mobile-nav > summary {
+  color: #a49ec0;
+}
+
+.site-header.is-scrolled .site-nav a:hover,
+.site-header.is-scrolled .site-nav a:focus-visible {
+  color: #f3f1fa;
+}
+
+.site-header.is-scrolled .brand-divider {
+  background: #2a2640;
+}
+
+.hero-cursor {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease;
+  will-change: transform, opacity;
+}
+
+.hero-cursor.is-visible {
+  opacity: 1;
+}
+
+.hero-cursor-cross-h,
+.hero-cursor-cross-v {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  color: #ffffff;
+}
+
+.hero-cursor-cross-h {
+  width: 260px;
+  height: 1px;
+  transform: translate(-50%, -50%);
+  background: linear-gradient(
+    to right,
+    currentColor 0 45%,
+    transparent 45% 55%,
+    currentColor 55% 100%
+  );
+}
+
+.hero-cursor-cross-v {
+  width: 1px;
+  height: 150px;
+  transform: translate(-50%, -50%);
+  background: linear-gradient(
+    to bottom,
+    currentColor 0 42%,
+    transparent 42% 58%,
+    currentColor 58% 100%
+  );
+}
+
+.hero-cursor-readout {
+  position: absolute;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--white);
+  opacity: 0.62;
+}
+
+.hero-cursor-readout b {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.hero-cursor-readout.is-tl {
+  right: 22px;
+  bottom: 26px;
+}
+
+.hero-cursor-readout.is-tr {
+  left: 22px;
+  bottom: 26px;
+}
+
+.hero-cursor-readout.is-bl {
+  right: 22px;
+  top: 26px;
+}
+
+.hero-cursor-readout.is-br {
+  left: 22px;
+  top: 26px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-cursor {
+    display: none;
+  }
+}
+
+/* Inputs and code chips inside a dark band. */
+.section-ink .token-contract,
+.section-dark .token-contract {
+  border-color: #2a2640;
+  background: #14111f;
+  color: #f3f1fa;
+}
+
+.section-ink .token-contract code,
+.section-dark .token-contract code {
+  color: #a49ec0;
+}
+
+.section-ink .token-details > span,
+.section-dark .token-details > span {
+  color: #8079a0;
+}
+
+/* The footer closes the page under the dark band above it. */
+.site-footer {
+  --line: #2a2640;
+  --line-light: #322d4a;
+  --muted: #a49ec0;
+  --muted-dark: #8079a0;
+  background: #0d0b16;
+  color: #f3f1fa;
+  border-top-color: #2a2640;
+}
+
+.site-footer a,
+.site-footer p,
+.site-footer li {
+  color: #a49ec0;
+}
+
+.site-footer a:hover,
+.site-footer a:focus-visible {
+  color: #f3f1fa;
+}
+
+.site-footer h2,
+.site-footer h3,
+.site-footer .brand,
+.site-footer strong {
+  color: #f3f1fa;
+}
+
+/* The HUD readouts cross every value in the field, so they invert against
+   whatever is under them rather than picking one fixed tone. */
+.hero-cursor-readout {
+  color: #ffffff;
+  opacity: 0.9;
+  mix-blend-mode: difference;
+}
+
+.hero-cursor-cross-h,
+.hero-cursor-cross-v {
+  opacity: 0.4;
+  mix-blend-mode: difference;
+}
+
+/* Token disclosure, folded into the footer as fine print. */
+.token-note {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 32px;
+  flex-wrap: wrap;
+  margin-top: 44px;
+  padding-top: 22px;
+  border-top: 1px solid var(--line);
+}
+
+.token-note p {
+  max-width: 62ch;
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--muted-dark);
+}
+
+.token-note-tag {
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.token-note-links {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  flex-wrap: wrap;
+  font-size: 11px;
+}
+
+.token-note-links code {
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+.token-note-links a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* The footer already separates itself by changing ground; the grid's own rule
+   and second helping of padding just left an empty strip above it. */
+.site-footer .footer-grid {
+  border-top: 0;
+  padding-top: 0;
+}
+
+/* Dark bands dissolve into the page through the module field. */
+.section-dark,
+.section-ink,
+.site-footer {
+  position: relative;
+}
+
+.section-edge {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 150px;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.section-edge canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.section-edge.is-top {
+  top: 0;
+  transform: translateY(-100%);
+}
+
+.section-edge.is-bottom {
+  bottom: 0;
+  transform: translateY(100%);
+}
+
+/* Content sits above the dissolve. */
+.section-dark > .shell,
+.section-ink > .shell,
+.site-footer > .shell {
+  position: relative;
+  z-index: 2;
+}
+
+/* The dissolve strips sit outside the section box, so these bands cannot clip. */
+.section-dark,
+.section-ink {
+  overflow: visible;
+}
+
+/* Every section's content sits above the dissolve strips, not just the dark
+   ones — otherwise a band's edge paints over its neighbour's text. */
+main .shell {
+  position: relative;
+  z-index: 2;
+}
+
+@media (max-width: 900px) {
+  /* Narrow viewports: the strip is a larger share of the screen, so it has to
+     be shorter or it eats the section it is introducing. */
+  .section-edge {
+    height: 80px;
+  }
+
+  /* The field sits behind the whole hero on one column rather than beside it,
+     so it has to give way to the copy. */
+  .hero-scene {
+    opacity: 0.5;
+  }
+
+  .hero-veil {
+    background:
+      linear-gradient(to bottom, rgba(244, 242, 249, 0.92) 0%, rgba(244, 242, 249, 0.45) 34%),
+      linear-gradient(to top, rgba(244, 242, 249, 0.95) 0%, rgba(244, 242, 249, 0.5) 46%);
+  }
+
+  .hero-meta-row {
+    margin-bottom: 1.2rem;
+  }
+
+  .hero-lede {
+    font-size: 12px;
+  }
+
+  .hero-actions {
+    margin-top: 1.1rem;
+  }
+
+  .hero-title-stack {
+    padding-bottom: 60px;
+  }
+}
+
+/* The dissolve belongs under every section's content, never over it. */
+.section-edge {
+  z-index: 0;
+}
+
+/* Scoped away from the hero: its canvas wrapper is absolutely positioned and
+   must not be forced relative. */
+main > section:not(.hero-stage) > *:not(.section-edge),
+.site-footer > *:not(.section-edge) {
+  position: relative;
+  z-index: 2;
 }

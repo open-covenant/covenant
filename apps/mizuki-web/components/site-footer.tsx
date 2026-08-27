@@ -1,18 +1,33 @@
 import Image from 'next/image';
 import Link from 'next/link';
+import { SectionEdge } from './section-edge';
+import { TokenNote } from './token-disclosure';
 
 export function SiteFooter({ intakeOpen }: { intakeOpen: boolean }) {
   return (
     <footer className="site-footer">
+      <SectionEdge position="top" seed={4.1} />
       <div className="shell footer-grid">
         <div className="footer-intro">
           <div className="footer-brand-row">
             <a href="https://opencovenant.org" aria-label="OpenCovenant home">
-              <Image src="/covenant-logomark.png" alt="OpenCovenant" width={28} height={28} />
+              <Image
+                src="/covenant-mark.svg"
+                alt="OpenCovenant"
+                width={1140}
+                height={1050}
+                className="covenant-mark-inline"
+              />
             </a>
             <div className="brand footer-brand">
               <span className="brand-mark" aria-hidden="true">
-                <Image src="/mizuki-avatar.jpg" alt="" width={32} height={32} />
+                <Image
+                  src="/mizuki-mark.svg"
+                  alt=""
+                  width={1470}
+                  height={1050}
+                  className="mizuki-mark"
+                />
               </span>
               <span>Mizuki the Mech</span>
             </div>
@@ -84,6 +99,9 @@ export function SiteFooter({ intakeOpen }: { intakeOpen: boolean }) {
             <Link href="/privacy">Privacy</Link>
           </nav>
         </div>
+      </div>
+      <div className="shell">
+        <TokenNote />
       </div>
       <div className="shell footer-bottom">
         <span>© 2026 OpenCovenant</span>

@@ -61,7 +61,7 @@ try {
 
   const home = await page(port, '/', {});
   assert(home.status === 200, `home returned ${home.status}`);
-  assert(home.body.includes('/mizuki-avatar.jpg'), 'home omitted the profile image');
+  assert(home.body.includes('/mizuki-mark.svg'), 'home omitted the logomark');
   assert(home.body.includes('/mizuki-icon-64.png'), 'home omitted the browser icon');
 
   const publicPages = [

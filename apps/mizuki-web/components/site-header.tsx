@@ -19,18 +19,18 @@ export function SiteHeader() {
             aria-label="OpenCovenant home"
           >
             <Image
-              src="/covenant-logo.svg"
+              src="/covenant-mark.svg"
               alt="OpenCovenant"
-              width={255}
-              height={54}
+              width={1140}
+              height={1050}
               className="covenant-wordmark"
               priority
             />
             <Image
-              src="/covenant-logomark.png"
+              src="/covenant-mark.svg"
               alt=""
-              width={28}
-              height={28}
+              width={1140}
+              height={1050}
               className="covenant-mobile-mark"
               priority
             />
@@ -38,7 +38,14 @@ export function SiteHeader() {
           <span className="brand-divider" aria-hidden="true" />
           <Link href="/" className="brand" aria-label="Mizuki home">
             <span className="brand-mark" aria-hidden="true">
-              <Image src="/mizuki-avatar.jpg" alt="" width={32} height={32} priority />
+              <Image
+                src="/mizuki-mark.svg"
+                alt=""
+                width={1470}
+                height={1050}
+                className="mizuki-mark"
+                priority
+              />
             </span>
             <span>
               Mizuki<span className="brand-full"> the Mech</span>

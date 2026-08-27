@@ -1,12 +1,14 @@
 import Link from 'next/link';
-import Image from 'next/image';
 import { ActivityFeed } from '@/components/activity-feed';
+import { ModuleCurtain } from '@/components/module-curtain';
+import { RibbonField } from '@/components/ribbon-field';
+import { SectionEdge } from '@/components/section-edge';
+import { SiteMotion } from '@/components/site-motion';
 import { BountyCard } from '@/components/bounty-card';
 import { CapabilityFlywheel } from '@/components/capability-flywheel';
 import { CapabilitySnapshot } from '@/components/capability-snapshot';
 import { DataError, DemoNotice, EmptyState } from '@/components/data-state';
 import { MetricStrip } from '@/components/metric-strip';
-import { TokenDisclosure } from '@/components/token-disclosure';
 import { Transformation } from '@/components/transformation';
 import { TreasurySnapshot } from '@/components/treasury-snapshot';
 import { getAdmission, getOverview } from '@/lib/api';
@@ -20,46 +22,63 @@ export default async function HomePage() {
 
   return (
     <>
-      <section className="hero">
-        <div className="shell hero-grid">
-          <div className="hero-copy">
-            <div className="hero-kicker">
-              Mizuki the Mech · AI maintenance agent
-              {demo && <DemoNotice />}
+      <ModuleCurtain />
+      <SiteMotion />
+      <section className="hero-stage">
+        <div className="hero-canvas-wrap">
+          <div className="hero-canvas-track">
+            <div className="hero-sticky">
+              <RibbonField className="hero-scene" />
+              <div className="hero-veil" />
             </div>
-            <h1>
-              Validated pull request,
-              <br />
-              <em>or a full USDC refund.</em>
-            </h1>
-            <p className="hero-lede">
-              Submit one clearly scoped GitHub issue. Mizuki creates the patch, runs the
-              repository&apos;s checks, and sends it to a separate AI reviewer. If validation fails,
-              a separate policy signer returns the quoted USDC payment to the original payer.
-            </p>
-            <div className="hero-actions">
-              <Link href="/app" className="button button-primary">
-                Open Workbench <span aria-hidden="true">↗</span>
-              </Link>
-              <Link href="/work" className="button button-secondary">
-                View service status
-              </Link>
-            </div>
-            <p className="hero-contract">
-              {intakeOpen
-                ? 'Public repositories only · 2 or 10 USDC via x402 · pull requests only with maintainer authorization'
-                : 'Paid intake is temporarily paused · no new payments are being accepted · public records remain available'}
-            </p>
           </div>
-          <div className="hero-visual" aria-label="Mizuki">
-            <Image
-              src="/mizuki-avatar.jpg"
-              alt="Mizuki"
-              width={700}
-              height={700}
-              className="hero-portrait"
-              priority
-            />
+        </div>
+
+        <div className="hero-overlay">
+          <div className="hero-title-stack">
+            <div className="hero-title-group">
+              <p className="hero-meta">
+                Mizuki the Mech · AI maintenance agent
+                {demo && <DemoNotice />}
+              </p>
+              <p className="hero-display">Merged</p>
+            </div>
+
+            <div className="hero-bottom">
+              <div className="hero-meta-row">
+                <p className="hero-meta hero-meta-dim">Public repositories only</p>
+                <div className="hero-meta-right">
+                  <p className="hero-meta hero-meta-dim">2 or 10 USDC via x402</p>
+                  <p className="hero-meta">{intakeOpen ? 'Intake open' : 'Intake paused'}</p>
+                </div>
+              </div>
+
+              <div className="hero-split">
+                <div className="hero-copy-col">
+                  <p className="hero-lede">
+                    Submit one clearly scoped GitHub issue. Mizuki writes the patch, runs the
+                    repository&apos;s checks, and sends it to a separate AI reviewer. If validation
+                    fails, a separate policy signer returns the quoted USDC to the original payer.
+                  </p>
+                  <div className="hero-actions">
+                    <Link href="/app" className="button button-primary">
+                      Open Workbench <span aria-hidden="true">↗</span>
+                    </Link>
+                    <Link href="/work" className="button button-secondary">
+                      View service status
+                    </Link>
+                  </div>
+                  <p className="hero-contract">
+                    {intakeOpen
+                      ? 'Pull requests only with maintainer authorization'
+                      : 'Paid intake is paused · public records remain available'}
+                  </p>
+                </div>
+                <div className="hero-title-right">
+                  <p className="hero-display">Refunded</p>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </section>
@@ -120,7 +139,9 @@ export default async function HomePage() {
         </div>
       </section>
 
-      <section className="section flywheel-section">
+      <section className="section section-dark flywheel-section">
+        <SectionEdge position="top" seed={0.4} />
+        <SectionEdge position="bottom" seed={1.9} />
         <div className="shell">
           <div className="section-heading split-heading flywheel-intro">
             <div>
@@ -168,7 +189,8 @@ export default async function HomePage() {
         </div>
       </section>
 
-      <section className="section">
+      <section className="section section-dark">
+        <SectionEdge position="top" seed={2.6} />
         <div className="shell">
           <div className="section-heading heading-with-action">
             <div>
@@ -196,6 +218,7 @@ export default async function HomePage() {
       </section>
 
       <section className="section section-ink public-books-section">
+        <SectionEdge position="bottom" seed={3.3} />
         <div className="shell public-books-grid">
           <div>
             <div className="section-heading">
@@ -259,8 +282,6 @@ export default async function HomePage() {
           )}
         </div>
       </section>
-
-      <TokenDisclosure />
     </>
   );
 }

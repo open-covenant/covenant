@@ -1,7 +1,23 @@
 import type { Metadata, Viewport } from 'next';
+import { Archivo, JetBrains_Mono } from 'next/font/google';
 import { SiteFrame } from '@/components/site-frame';
 import { getAdmission } from '@/lib/api';
 import './globals.css';
+
+const archivo = Archivo({
+  subsets: ['latin'],
+  axes: ['wdth'],
+  weight: 'variable',
+  display: 'swap',
+  variable: '--font-archivo',
+});
+
+const jetbrains = JetBrains_Mono({
+  subsets: ['latin'],
+  weight: ['300', '400', '500', '600'],
+  display: 'swap',
+  variable: '--font-jetbrains',
+});
 
 export const dynamic = 'force-dynamic';
 
@@ -49,7 +65,7 @@ export const metadata: Metadata = {
 
 export const viewport: Viewport = {
   colorScheme: 'dark',
-  themeColor: '#030303',
+  themeColor: '#07060b',
 };
 
 export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
@@ -57,7 +73,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
   const intakeOpen = admission.status !== 'error' && admission.data.intakeEnabled;
 
   return (
-    <html lang="en">
+    <html lang="en" className={`${archivo.variable} ${jetbrains.variable}`}>
       <body>
         <SiteFrame intakeOpen={intakeOpen}>{children}</SiteFrame>
       </body>

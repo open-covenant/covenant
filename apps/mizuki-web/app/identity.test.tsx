@@ -18,9 +18,9 @@ describe('Mizuki public identity', () => {
     );
   });
 
-  it('uses the profile image for visible identity and a large social preview card', () => {
-    expect(renderToStaticMarkup(<SiteHeader />)).toContain('mizuki-avatar.jpg');
-    expect(renderToStaticMarkup(<SiteFooter intakeOpen />)).toContain('mizuki-avatar.jpg');
+  it('uses the logomark for visible identity and a large social preview card', () => {
+    expect(renderToStaticMarkup(<SiteHeader />)).toContain('mizuki-mark.svg');
+    expect(renderToStaticMarkup(<SiteFooter intakeOpen />)).toContain('mizuki-mark.svg');
     expect(metadata.openGraph).toMatchObject({
       images: [
         {

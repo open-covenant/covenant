@@ -1,7 +1,7 @@
 [package]
 name = "covenant-settlement-program"
 version = "0.1.0"
-description = "Covenant Solana protocol program for external COVNT staking, credits, escrow, and receipt anchors."
+description = "Covenant Solana protocol program for USDC compute settlement, external COVNT utility, and receipt anchors."
 edition = "2021"
 license = "Apache-2.0"
 

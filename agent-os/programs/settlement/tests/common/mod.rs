@@ -18,8 +18,9 @@ use solana_sdk::{
 };
 
 use covenant_settlement_program::{
-    instruction as ix, AnchorReceiptBatchArgs, Config, CreateTaskArgs, CreditAccount,
-    InitializeArgs, RegisterAgentArgs, StakePosition, Task, ID,
+    instruction as ix, AnchorReceiptBatchArgs, ComputeEscrow, ComputePaymentConfig, Config,
+    CreateTaskArgs, CreditAccount, FundComputeJobArgs, InitializeArgs, RegisterAgentArgs,
+    StakePosition, Task, ID,
 };
 use solana_sdk::clock::Clock;
 
@@ -41,6 +42,10 @@ pub struct Env {
 
 pub fn config_pda() -> Pubkey {
     Pubkey::find_program_address(&[b"config"], &ID).0
+}
+
+pub fn compute_config_pda() -> Pubkey {
+    Pubkey::find_program_address(&[b"compute_config"], &ID).0
 }
 
 pub fn credits_pda(owner: &Pubkey) -> Pubkey {
@@ -362,6 +367,10 @@ pub fn token_balance(env: &Env, account: &Pubkey) -> u64 {
 }
 
 pub fn create_mint(svm: &mut LiteSVM, payer: &Keypair) -> Pubkey {
+    create_mint_with_decimals(svm, payer, DECIMALS)
+}
+
+pub fn create_mint_with_decimals(svm: &mut LiteSVM, payer: &Keypair, decimals: u8) -> Pubkey {
     let mint = Keypair::new();
     let rent = svm.minimum_balance_for_rent_exemption(spl_token::state::Mint::LEN);
     let create = system_instruction::create_account(
@@ -376,7 +385,7 @@ pub fn create_mint(svm: &mut LiteSVM, payer: &Keypair) -> Pubkey {
         &mint.pubkey(),
         &payer.pubkey(),
         None,
-        DECIMALS,
+        decimals,
     )
     .unwrap();
     send(svm, payer, &[create, init], &[&mint]).expect("create mint");
@@ -447,10 +456,13 @@ pub const E_PROTOCOL_PAUSED: u32 = 6002;
 
 /// Anchor's built-in seeds-constraint violation.
 pub const E_CONSTRAINT_SEEDS: u32 = 2006;
+/// Anchor's built-in address-constraint violation.
+pub const E_CONSTRAINT_ADDRESS: u32 = 2012;
 
 // Custom error codes (Anchor offsets `CovenantError` from 6000 in declaration order).
 pub const E_ZERO_AMOUNT: u32 = 6000;
 pub const E_UNAUTHORIZED: u32 = 6003;
+pub const E_WRONG_MINT: u32 = 6004;
 pub const E_AGENT_INACTIVE: u32 = 6005;
 pub const E_INSUFFICIENT_CREDITS: u32 = 6007;
 pub const E_INSUFFICIENT_STAKE: u32 = 6008;
@@ -466,9 +478,24 @@ pub const E_REVIEW_WINDOW_NOT_ELAPSED: u32 = 6017;
 pub const E_REVIEW_WINDOW_ELAPSED: u32 = 6018;
 pub const E_INVALID_REVIEW_WINDOW: u32 = 6019;
 pub const E_INVALID_DEADLINE: u32 = 6020;
+pub const E_INVALID_USDC_MINT: u32 = 6021;
+pub const E_INVALID_COMPUTE_COMMITMENT: u32 = 6022;
+pub const E_INVALID_COMPUTE_PROVIDER: u32 = 6023;
+pub const E_INVALID_COMPUTE_EXPIRY: u32 = 6024;
+pub const E_INVALID_COMPUTE_AUTHORITY: u32 = 6025;
+pub const E_COMPUTE_OVERCHARGE: u32 = 6026;
+pub const E_WRONG_COMPUTE_STATUS: u32 = 6027;
+pub const E_COMPUTE_TERMINAL_MISMATCH: u32 = 6028;
+pub const E_COMPUTE_REFUND_UNAUTHORIZED: u32 = 6029;
+pub const E_INVALID_COMPUTE_VAULT_BALANCE: u32 = 6030;
+pub const E_COMPUTE_ESCROW_EXPIRED: u32 = 6031;
 
 pub fn task_pda(task_id: &[u8; 32]) -> Pubkey {
     Pubkey::find_program_address(&[b"task", task_id], &ID).0
+}
+
+pub fn compute_escrow_pda(job_id: &[u8; 32]) -> Pubkey {
+    Pubkey::find_program_address(&[b"compute_escrow", job_id], &ID).0
 }
 
 pub fn receipt_batch_pda(batch_id: &[u8; 32]) -> Pubkey {
@@ -979,6 +1006,258 @@ pub fn refund_task(
         }],
         &extra,
     )
+}
+
+pub struct ComputeCtx {
+    pub compute_config: Pubkey,
+    pub settlement_authority: Keypair,
+    pub usdc_mint: Pubkey,
+    pub escrow: Pubkey,
+    pub escrow_vault: Pubkey,
+    pub client_usdc: Pubkey,
+    pub provider: Pubkey,
+    pub provider_usdc: Pubkey,
+}
+
+pub fn initialize_compute_payments(
+    env: &mut Env,
+    usdc_mint: &Pubkey,
+    settlement_authority: &Pubkey,
+) -> Result<Pubkey, TransactionError> {
+    let compute_config = compute_config_pda();
+    let data = ix::InitializeComputePayments {
+        settlement_authority: *settlement_authority,
+    }
+    .data();
+    let metas = vec![
+        AccountMeta::new_readonly(env.config, false),
+        AccountMeta::new(compute_config, false),
+        AccountMeta::new(env.payer.pubkey(), true),
+        AccountMeta::new_readonly(*usdc_mint, false),
+        AccountMeta::new_readonly(system_program::ID, false),
+    ];
+    let payer = env.payer.insecure_clone();
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[],
+    )?;
+    Ok(compute_config)
+}
+
+pub fn update_compute_settlement_authority(
+    env: &mut Env,
+    settlement_authority: &Pubkey,
+) -> Result<(), TransactionError> {
+    let data = ix::UpdateComputeSettlementAuthority {
+        settlement_authority: *settlement_authority,
+    }
+    .data();
+    let metas = vec![
+        AccountMeta::new_readonly(env.config, false),
+        AccountMeta::new(compute_config_pda(), false),
+        AccountMeta::new_readonly(env.payer.pubkey(), true),
+    ];
+    let payer = env.payer.insecure_clone();
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[],
+    )
+}
+
+pub fn setup_compute_job(
+    env: &mut Env,
+    job_id: &[u8; 32],
+    max_usdc_amount: u64,
+    expires_at: i64,
+) -> ComputeCtx {
+    let payer = env.payer.insecure_clone();
+    let usdc_mint = create_mint_with_decimals(&mut env.svm, &payer, 6);
+    let settlement_authority = Keypair::new();
+    let compute_config =
+        initialize_compute_payments(env, &usdc_mint, &settlement_authority.pubkey())
+            .expect("initialize compute payments");
+
+    let provider = Keypair::new().pubkey();
+    let escrow = compute_escrow_pda(job_id);
+    let client_usdc = create_token_account(&mut env.svm, &payer, &usdc_mint, &env.payer.pubkey());
+    let provider_usdc = create_token_account(&mut env.svm, &payer, &usdc_mint, &provider);
+    let escrow_vault = create_token_account(&mut env.svm, &payer, &usdc_mint, &escrow);
+    mint_to(
+        &mut env.svm,
+        &payer,
+        &usdc_mint,
+        &client_usdc,
+        max_usdc_amount + 2_000_000,
+    );
+
+    let data = ix::FundComputeJob {
+        args: FundComputeJobArgs {
+            job_id: *job_id,
+            quote_commitment: [42u8; 32],
+            provider,
+            max_usdc_amount,
+            expires_at,
+        },
+    }
+    .data();
+    let metas = vec![
+        AccountMeta::new_readonly(env.config, false),
+        AccountMeta::new_readonly(compute_config, false),
+        AccountMeta::new(escrow, false),
+        AccountMeta::new(env.payer.pubkey(), true),
+        AccountMeta::new(client_usdc, false),
+        AccountMeta::new_readonly(provider_usdc, false),
+        AccountMeta::new(escrow_vault, false),
+        AccountMeta::new_readonly(usdc_mint, false),
+        AccountMeta::new_readonly(spl_token::ID, false),
+        AccountMeta::new_readonly(system_program::ID, false),
+    ];
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[],
+    )
+    .expect("fund compute job");
+
+    ComputeCtx {
+        compute_config,
+        settlement_authority,
+        usdc_mint,
+        escrow,
+        escrow_vault,
+        client_usdc,
+        provider,
+        provider_usdc,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn settle_compute_job(
+    env: &mut Env,
+    compute: &ComputeCtx,
+    authority: &Keypair,
+    provider_usdc: &Pubkey,
+    usdc_mint: &Pubkey,
+    actual_usdc_amount: u64,
+    receipt_commitment: [u8; 32],
+) -> Result<(), TransactionError> {
+    settle_compute_job_with_vault(
+        env,
+        compute,
+        authority,
+        &compute.escrow_vault,
+        provider_usdc,
+        usdc_mint,
+        actual_usdc_amount,
+        receipt_commitment,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn settle_compute_job_with_vault(
+    env: &mut Env,
+    compute: &ComputeCtx,
+    authority: &Keypair,
+    escrow_vault: &Pubkey,
+    provider_usdc: &Pubkey,
+    usdc_mint: &Pubkey,
+    actual_usdc_amount: u64,
+    receipt_commitment: [u8; 32],
+) -> Result<(), TransactionError> {
+    let data = ix::SettleComputeJob {
+        actual_usdc_amount,
+        receipt_commitment,
+    }
+    .data();
+    let metas = vec![
+        AccountMeta::new_readonly(env.config, false),
+        AccountMeta::new_readonly(compute.compute_config, false),
+        AccountMeta::new(compute.escrow, false),
+        AccountMeta::new_readonly(authority.pubkey(), true),
+        AccountMeta::new(*escrow_vault, false),
+        AccountMeta::new(*provider_usdc, false),
+        AccountMeta::new(compute.client_usdc, false),
+        AccountMeta::new_readonly(*usdc_mint, false),
+        AccountMeta::new_readonly(spl_token::ID, false),
+    ];
+    let payer = env.payer.insecure_clone();
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[authority],
+    )
+}
+
+pub fn refund_compute_job(
+    env: &mut Env,
+    compute: &ComputeCtx,
+    authority: &Keypair,
+    refund_commitment: [u8; 32],
+) -> Result<(), TransactionError> {
+    let data = ix::RefundComputeJob { refund_commitment }.data();
+    let metas = vec![
+        AccountMeta::new_readonly(env.config, false),
+        AccountMeta::new_readonly(compute.compute_config, false),
+        AccountMeta::new(compute.escrow, false),
+        AccountMeta::new_readonly(authority.pubkey(), true),
+        AccountMeta::new(compute.escrow_vault, false),
+        AccountMeta::new(compute.client_usdc, false),
+        AccountMeta::new_readonly(compute.usdc_mint, false),
+        AccountMeta::new_readonly(spl_token::ID, false),
+    ];
+    let payer = env.payer.insecure_clone();
+    let extra: Vec<&Keypair> = if authority.pubkey() == payer.pubkey() {
+        vec![]
+    } else {
+        vec![authority]
+    };
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &extra,
+    )
+}
+
+pub fn compute_payment_config(env: &Env) -> ComputePaymentConfig {
+    let account = env
+        .svm
+        .get_account(&compute_config_pda())
+        .expect("compute config exists");
+    let mut data = account.data();
+    ComputePaymentConfig::try_deserialize(&mut data).expect("compute config")
+}
+
+pub fn compute_escrow(env: &Env, escrow: &Pubkey) -> ComputeEscrow {
+    let account = env.svm.get_account(escrow).expect("compute escrow exists");
+    let mut data = account.data();
+    ComputeEscrow::try_deserialize(&mut data).expect("compute escrow")
 }
 
 pub fn update_authority(env: &mut Env, new_authority: &Pubkey) -> Result<(), TransactionError> {

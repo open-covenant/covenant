@@ -3,6 +3,9 @@
 //! `$COVNT` is an external SPL mint. The program never mints it; protocol
 //! utility comes from staking, escrowing, burning, and metering it into
 //! non-transferable credits.
+//!
+//! Compute payments use a separately configured six-decimal USDC mint. COVNT
+//! is not required to fund or settle a compute job.
 
 #![allow(deprecated)]
 #![allow(unexpected_cfgs)]
@@ -482,6 +485,283 @@ pub mod settlement {
             amount_covnt: ctx.accounts.task.amount_covnt,
             deadline: ctx.accounts.task.deadline,
             refunded_at: now,
+        });
+        Ok(())
+    }
+
+    pub fn initialize_compute_payments(
+        ctx: Context<InitializeComputePayments>,
+        settlement_authority: Pubkey,
+    ) -> Result<()> {
+        require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
+        require!(
+            settlement_authority != Pubkey::default(),
+            CovenantError::InvalidComputeAuthority
+        );
+        require!(
+            ctx.accounts.usdc_mint.decimals == 6
+                && ctx.accounts.usdc_mint.key() != ctx.accounts.config.covnt_mint,
+            CovenantError::InvalidUsdcMint
+        );
+
+        let compute_config = &mut ctx.accounts.compute_config;
+        compute_config.usdc_mint = ctx.accounts.usdc_mint.key();
+        compute_config.settlement_authority = settlement_authority;
+        compute_config.bump = ctx.bumps.compute_config;
+
+        emit!(ComputePaymentsInitialized {
+            usdc_mint: compute_config.usdc_mint,
+            settlement_authority,
+        });
+        Ok(())
+    }
+
+    pub fn update_compute_settlement_authority(
+        ctx: Context<UpdateComputeSettlementAuthority>,
+        settlement_authority: Pubkey,
+    ) -> Result<()> {
+        require!(
+            settlement_authority != Pubkey::default(),
+            CovenantError::InvalidComputeAuthority
+        );
+
+        let previous = ctx.accounts.compute_config.settlement_authority;
+        ctx.accounts.compute_config.settlement_authority = settlement_authority;
+        emit!(ComputeSettlementAuthorityUpdated {
+            previous,
+            settlement_authority,
+        });
+        Ok(())
+    }
+
+    pub fn fund_compute_job(ctx: Context<FundComputeJob>, args: FundComputeJobArgs) -> Result<()> {
+        require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
+        require!(
+            args.job_id != [0u8; 32] && args.quote_commitment != [0u8; 32],
+            CovenantError::InvalidComputeCommitment
+        );
+        require!(args.max_usdc_amount > 0, CovenantError::ZeroAmount);
+        require!(
+            args.provider != Pubkey::default() && args.provider != ctx.accounts.client.key(),
+            CovenantError::InvalidComputeProvider
+        );
+        let now = Clock::get()?.unix_timestamp;
+        require!(args.expires_at > now, CovenantError::InvalidComputeExpiry);
+        require!(
+            ctx.accounts.escrow_vault.amount == 0,
+            CovenantError::InvalidComputeVaultBalance
+        );
+
+        token_interface::transfer_checked(
+            ctx.accounts.compute_fund_ctx(),
+            args.max_usdc_amount,
+            ctx.accounts.usdc_mint.decimals,
+        )?;
+        ctx.accounts.escrow_vault.reload()?;
+        require!(
+            ctx.accounts.escrow_vault.amount == args.max_usdc_amount,
+            CovenantError::InvalidComputeVaultBalance
+        );
+
+        let escrow = &mut ctx.accounts.escrow;
+        escrow.job_id = args.job_id;
+        escrow.quote_commitment = args.quote_commitment;
+        escrow.client = ctx.accounts.client.key();
+        escrow.provider = args.provider;
+        escrow.client_usdc = ctx.accounts.client_usdc.key();
+        escrow.provider_usdc = ctx.accounts.provider_usdc.key();
+        escrow.escrow_vault = ctx.accounts.escrow_vault.key();
+        escrow.usdc_mint = ctx.accounts.usdc_mint.key();
+        escrow.max_usdc_amount = args.max_usdc_amount;
+        escrow.actual_usdc_amount = 0;
+        escrow.refunded_usdc_amount = 0;
+        escrow.expires_at = args.expires_at;
+        escrow.created_at = now;
+        escrow.terminal_at = 0;
+        escrow.terminal_commitment = [0u8; 32];
+        escrow.terminal_authority = Pubkey::default();
+        escrow.status = COMPUTE_FUNDED;
+        escrow.bump = ctx.bumps.escrow;
+
+        emit!(ComputeJobFunded {
+            job_id: escrow.job_id,
+            quote_commitment: escrow.quote_commitment,
+            client: escrow.client,
+            provider: escrow.provider,
+            client_usdc: escrow.client_usdc,
+            provider_usdc: escrow.provider_usdc,
+            escrow_vault: escrow.escrow_vault,
+            usdc_mint: escrow.usdc_mint,
+            max_usdc_amount: escrow.max_usdc_amount,
+            expires_at: escrow.expires_at,
+        });
+        Ok(())
+    }
+
+    pub fn settle_compute_job(
+        ctx: Context<SettleComputeJob>,
+        actual_usdc_amount: u64,
+        receipt_commitment: [u8; 32],
+    ) -> Result<()> {
+        let signer = ctx.accounts.settlement_authority.key();
+        match ctx.accounts.escrow.status {
+            COMPUTE_SETTLED => {
+                require!(
+                    ctx.accounts.escrow.terminal_authority == signer,
+                    CovenantError::Unauthorized
+                );
+                require!(
+                    ctx.accounts.escrow.actual_usdc_amount == actual_usdc_amount
+                        && ctx.accounts.escrow.terminal_commitment == receipt_commitment,
+                    CovenantError::ComputeTerminalMismatch
+                );
+                return Ok(());
+            }
+            COMPUTE_REFUNDED => return err!(CovenantError::WrongComputeStatus),
+            COMPUTE_FUNDED => {}
+            _ => return err!(CovenantError::WrongComputeStatus),
+        }
+
+        require!(
+            signer == ctx.accounts.compute_config.settlement_authority,
+            CovenantError::Unauthorized
+        );
+        require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
+        require!(
+            receipt_commitment != [0u8; 32],
+            CovenantError::InvalidComputeCommitment
+        );
+        require!(
+            actual_usdc_amount <= ctx.accounts.escrow.max_usdc_amount,
+            CovenantError::ComputeOvercharge
+        );
+        let now = Clock::get()?.unix_timestamp;
+        require!(
+            now < ctx.accounts.escrow.expires_at,
+            CovenantError::ComputeEscrowExpired
+        );
+
+        let vault_amount = ctx.accounts.escrow_vault.amount;
+        require!(
+            vault_amount >= ctx.accounts.escrow.max_usdc_amount,
+            CovenantError::InvalidComputeVaultBalance
+        );
+        let refund_amount = vault_amount
+            .checked_sub(actual_usdc_amount)
+            .ok_or(CovenantError::Overflow)?;
+        let job_id = ctx.accounts.escrow.job_id;
+        let signer_seeds: &[&[u8]] = &[
+            b"compute_escrow",
+            job_id.as_ref(),
+            &[ctx.accounts.escrow.bump],
+        ];
+
+        if actual_usdc_amount > 0 {
+            token_interface::transfer_checked(
+                ctx.accounts
+                    .compute_provider_transfer_ctx()
+                    .with_signer(&[signer_seeds]),
+                actual_usdc_amount,
+                ctx.accounts.usdc_mint.decimals,
+            )?;
+        }
+        if refund_amount > 0 {
+            token_interface::transfer_checked(
+                ctx.accounts
+                    .compute_client_transfer_ctx()
+                    .with_signer(&[signer_seeds]),
+                refund_amount,
+                ctx.accounts.usdc_mint.decimals,
+            )?;
+        }
+
+        let escrow = &mut ctx.accounts.escrow;
+        escrow.actual_usdc_amount = actual_usdc_amount;
+        escrow.refunded_usdc_amount = refund_amount;
+        escrow.terminal_at = now;
+        escrow.terminal_commitment = receipt_commitment;
+        escrow.terminal_authority = signer;
+        escrow.status = COMPUTE_SETTLED;
+
+        emit!(ComputeJobSettled {
+            job_id,
+            quote_commitment: escrow.quote_commitment,
+            receipt_commitment,
+            provider: escrow.provider,
+            actual_usdc_amount,
+            refunded_usdc_amount: refund_amount,
+            settled_at: now,
+        });
+        Ok(())
+    }
+
+    pub fn refund_compute_job(
+        ctx: Context<RefundComputeJob>,
+        refund_commitment: [u8; 32],
+    ) -> Result<()> {
+        let signer = ctx.accounts.authority.key();
+        match ctx.accounts.escrow.status {
+            COMPUTE_REFUNDED => {
+                require!(
+                    ctx.accounts.escrow.terminal_authority == signer
+                        && ctx.accounts.escrow.terminal_commitment == refund_commitment,
+                    CovenantError::ComputeTerminalMismatch
+                );
+                return Ok(());
+            }
+            COMPUTE_SETTLED => return err!(CovenantError::WrongComputeStatus),
+            COMPUTE_FUNDED => {}
+            _ => return err!(CovenantError::WrongComputeStatus),
+        }
+
+        require!(
+            refund_commitment != [0u8; 32],
+            CovenantError::InvalidComputeCommitment
+        );
+        let now = Clock::get()?.unix_timestamp;
+        let settlement_refund = signer == ctx.accounts.compute_config.settlement_authority;
+        let expired = now >= ctx.accounts.escrow.expires_at;
+        let expired_client_refund = signer == ctx.accounts.escrow.client && expired;
+        require!(
+            settlement_refund || expired_client_refund,
+            CovenantError::ComputeRefundUnauthorized
+        );
+
+        let refund_amount = ctx.accounts.escrow_vault.amount;
+        require!(
+            refund_amount >= ctx.accounts.escrow.max_usdc_amount,
+            CovenantError::InvalidComputeVaultBalance
+        );
+        let job_id = ctx.accounts.escrow.job_id;
+        let signer_seeds: &[&[u8]] = &[
+            b"compute_escrow",
+            job_id.as_ref(),
+            &[ctx.accounts.escrow.bump],
+        ];
+        token_interface::transfer_checked(
+            ctx.accounts
+                .compute_client_transfer_ctx()
+                .with_signer(&[signer_seeds]),
+            refund_amount,
+            ctx.accounts.usdc_mint.decimals,
+        )?;
+
+        let escrow = &mut ctx.accounts.escrow;
+        escrow.actual_usdc_amount = 0;
+        escrow.refunded_usdc_amount = refund_amount;
+        escrow.terminal_at = now;
+        escrow.terminal_commitment = refund_commitment;
+        escrow.terminal_authority = signer;
+        escrow.status = COMPUTE_REFUNDED;
+
+        emit!(ComputeJobRefunded {
+            job_id,
+            quote_commitment: escrow.quote_commitment,
+            refund_commitment,
+            client: escrow.client,
+            refunded_usdc_amount: refund_amount,
+            refunded_at: now,
+            expired,
         });
         Ok(())
     }
@@ -1165,6 +1445,238 @@ impl<'info> RefundTask<'info> {
 }
 
 #[derive(Accounts)]
+pub struct InitializeComputePayments<'info> {
+    #[account(
+        seeds = [b"config"],
+        bump = config.bump,
+        has_one = authority @ CovenantError::Unauthorized,
+    )]
+    pub config: Account<'info, Config>,
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + ComputePaymentConfig::INIT_SPACE,
+        seeds = [b"compute_config"],
+        bump,
+    )]
+    pub compute_config: Box<Account<'info, ComputePaymentConfig>>,
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    pub usdc_mint: InterfaceAccount<'info, Mint>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct UpdateComputeSettlementAuthority<'info> {
+    #[account(
+        seeds = [b"config"],
+        bump = config.bump,
+        has_one = authority @ CovenantError::Unauthorized,
+    )]
+    pub config: Account<'info, Config>,
+    #[account(
+        mut,
+        seeds = [b"compute_config"],
+        bump = compute_config.bump,
+    )]
+    pub compute_config: Account<'info, ComputePaymentConfig>,
+    pub authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+#[instruction(args: FundComputeJobArgs)]
+pub struct FundComputeJob<'info> {
+    #[account(
+        seeds = [b"config"],
+        bump = config.bump,
+    )]
+    pub config: Box<Account<'info, Config>>,
+    #[account(
+        seeds = [b"compute_config"],
+        bump = compute_config.bump,
+    )]
+    pub compute_config: Box<Account<'info, ComputePaymentConfig>>,
+    #[account(
+        init,
+        payer = client,
+        space = 8 + ComputeEscrow::INIT_SPACE,
+        seeds = [b"compute_escrow", args.job_id.as_ref()],
+        bump,
+    )]
+    pub escrow: Box<Account<'info, ComputeEscrow>>,
+    #[account(mut)]
+    pub client: Signer<'info>,
+    #[account(
+        mut,
+        constraint = client_usdc.owner == client.key() @ CovenantError::Unauthorized,
+        constraint = client_usdc.mint == compute_config.usdc_mint @ CovenantError::WrongMint,
+    )]
+    pub client_usdc: Box<InterfaceAccount<'info, TokenAccount>>,
+    #[account(
+        constraint = provider_usdc.owner == args.provider @ CovenantError::Unauthorized,
+        constraint = provider_usdc.mint == compute_config.usdc_mint @ CovenantError::WrongMint,
+    )]
+    pub provider_usdc: Box<InterfaceAccount<'info, TokenAccount>>,
+    #[account(
+        mut,
+        constraint = escrow_vault.owner == escrow.key() @ CovenantError::Unauthorized,
+        constraint = escrow_vault.mint == compute_config.usdc_mint @ CovenantError::WrongMint,
+    )]
+    pub escrow_vault: Box<InterfaceAccount<'info, TokenAccount>>,
+    #[account(
+        constraint = usdc_mint.key() == compute_config.usdc_mint @ CovenantError::WrongMint,
+    )]
+    pub usdc_mint: Box<InterfaceAccount<'info, Mint>>,
+    pub token_program: Interface<'info, TokenInterface>,
+    pub system_program: Program<'info, System>,
+}
+
+impl<'info> FundComputeJob<'info> {
+    fn compute_fund_ctx(&self) -> CpiContext<'_, '_, '_, 'info, TransferChecked<'info>> {
+        CpiContext::new(
+            self.token_program.to_account_info(),
+            TransferChecked {
+                mint: self.usdc_mint.to_account_info(),
+                from: self.client_usdc.to_account_info(),
+                to: self.escrow_vault.to_account_info(),
+                authority: self.client.to_account_info(),
+            },
+        )
+    }
+}
+
+#[derive(Accounts)]
+pub struct SettleComputeJob<'info> {
+    #[account(
+        seeds = [b"config"],
+        bump = config.bump,
+    )]
+    pub config: Box<Account<'info, Config>>,
+    #[account(
+        seeds = [b"compute_config"],
+        bump = compute_config.bump,
+    )]
+    pub compute_config: Box<Account<'info, ComputePaymentConfig>>,
+    #[account(
+        mut,
+        seeds = [b"compute_escrow", escrow.job_id.as_ref()],
+        bump = escrow.bump,
+    )]
+    pub escrow: Box<Account<'info, ComputeEscrow>>,
+    pub settlement_authority: Signer<'info>,
+    #[account(
+        mut,
+        address = escrow.escrow_vault,
+        constraint = escrow_vault.owner == escrow.key() @ CovenantError::Unauthorized,
+        constraint = escrow_vault.mint == escrow.usdc_mint @ CovenantError::WrongMint,
+    )]
+    pub escrow_vault: Box<InterfaceAccount<'info, TokenAccount>>,
+    #[account(
+        mut,
+        address = escrow.provider_usdc,
+        constraint = provider_usdc.owner == escrow.provider @ CovenantError::Unauthorized,
+        constraint = provider_usdc.mint == escrow.usdc_mint @ CovenantError::WrongMint,
+    )]
+    pub provider_usdc: Box<InterfaceAccount<'info, TokenAccount>>,
+    #[account(
+        mut,
+        address = escrow.client_usdc,
+        constraint = client_usdc.owner == escrow.client @ CovenantError::Unauthorized,
+        constraint = client_usdc.mint == escrow.usdc_mint @ CovenantError::WrongMint,
+    )]
+    pub client_usdc: Box<InterfaceAccount<'info, TokenAccount>>,
+    #[account(
+        constraint = usdc_mint.key() == compute_config.usdc_mint @ CovenantError::WrongMint,
+        constraint = usdc_mint.key() == escrow.usdc_mint @ CovenantError::WrongMint,
+    )]
+    pub usdc_mint: Box<InterfaceAccount<'info, Mint>>,
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+impl<'info> SettleComputeJob<'info> {
+    fn compute_provider_transfer_ctx(
+        &self,
+    ) -> CpiContext<'_, '_, '_, 'info, TransferChecked<'info>> {
+        CpiContext::new(
+            self.token_program.to_account_info(),
+            TransferChecked {
+                mint: self.usdc_mint.to_account_info(),
+                from: self.escrow_vault.to_account_info(),
+                to: self.provider_usdc.to_account_info(),
+                authority: self.escrow.to_account_info(),
+            },
+        )
+    }
+
+    fn compute_client_transfer_ctx(&self) -> CpiContext<'_, '_, '_, 'info, TransferChecked<'info>> {
+        CpiContext::new(
+            self.token_program.to_account_info(),
+            TransferChecked {
+                mint: self.usdc_mint.to_account_info(),
+                from: self.escrow_vault.to_account_info(),
+                to: self.client_usdc.to_account_info(),
+                authority: self.escrow.to_account_info(),
+            },
+        )
+    }
+}
+
+#[derive(Accounts)]
+pub struct RefundComputeJob<'info> {
+    #[account(
+        seeds = [b"config"],
+        bump = config.bump,
+    )]
+    pub config: Box<Account<'info, Config>>,
+    #[account(
+        seeds = [b"compute_config"],
+        bump = compute_config.bump,
+    )]
+    pub compute_config: Box<Account<'info, ComputePaymentConfig>>,
+    #[account(
+        mut,
+        seeds = [b"compute_escrow", escrow.job_id.as_ref()],
+        bump = escrow.bump,
+    )]
+    pub escrow: Box<Account<'info, ComputeEscrow>>,
+    pub authority: Signer<'info>,
+    #[account(
+        mut,
+        address = escrow.escrow_vault,
+        constraint = escrow_vault.owner == escrow.key() @ CovenantError::Unauthorized,
+        constraint = escrow_vault.mint == escrow.usdc_mint @ CovenantError::WrongMint,
+    )]
+    pub escrow_vault: Box<InterfaceAccount<'info, TokenAccount>>,
+    #[account(
+        mut,
+        address = escrow.client_usdc,
+        constraint = client_usdc.owner == escrow.client @ CovenantError::Unauthorized,
+        constraint = client_usdc.mint == escrow.usdc_mint @ CovenantError::WrongMint,
+    )]
+    pub client_usdc: Box<InterfaceAccount<'info, TokenAccount>>,
+    #[account(
+        constraint = usdc_mint.key() == compute_config.usdc_mint @ CovenantError::WrongMint,
+        constraint = usdc_mint.key() == escrow.usdc_mint @ CovenantError::WrongMint,
+    )]
+    pub usdc_mint: Box<InterfaceAccount<'info, Mint>>,
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+impl<'info> RefundComputeJob<'info> {
+    fn compute_client_transfer_ctx(&self) -> CpiContext<'_, '_, '_, 'info, TransferChecked<'info>> {
+        CpiContext::new(
+            self.token_program.to_account_info(),
+            TransferChecked {
+                mint: self.usdc_mint.to_account_info(),
+                from: self.escrow_vault.to_account_info(),
+                to: self.client_usdc.to_account_info(),
+                authority: self.escrow.to_account_info(),
+            },
+        )
+    }
+}
+
+#[derive(Accounts)]
 pub struct BurnCovnt<'info> {
     #[account(
         seeds = [b"config"],
@@ -1297,6 +1809,15 @@ pub struct CreateTaskArgs {
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub struct FundComputeJobArgs {
+    pub job_id: [u8; 32],
+    pub quote_commitment: [u8; 32],
+    pub provider: Pubkey,
+    pub max_usdc_amount: u64,
+    pub expires_at: i64,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct AnchorReceiptBatchArgs {
     pub batch_id: [u8; 32],
     pub merkle_root: [u8; 32],
@@ -1307,6 +1828,10 @@ pub const TASK_FUNDED: u8 = 1;
 pub const TASK_SUBMITTED: u8 = 2;
 pub const TASK_RELEASED: u8 = 3;
 pub const TASK_REFUNDED: u8 = 4;
+
+pub const COMPUTE_FUNDED: u8 = 1;
+pub const COMPUTE_SETTLED: u8 = 2;
+pub const COMPUTE_REFUNDED: u8 = 3;
 
 #[account]
 #[derive(InitSpace)]
@@ -1379,6 +1904,37 @@ pub struct Task {
     pub submitted_at: i64,
     /// Seconds after submission before the provider may self-claim.
     pub review_window: i64,
+    pub status: u8,
+    pub bump: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct ComputePaymentConfig {
+    pub usdc_mint: Pubkey,
+    pub settlement_authority: Pubkey,
+    pub bump: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct ComputeEscrow {
+    pub job_id: [u8; 32],
+    pub quote_commitment: [u8; 32],
+    pub client: Pubkey,
+    pub provider: Pubkey,
+    pub client_usdc: Pubkey,
+    pub provider_usdc: Pubkey,
+    pub escrow_vault: Pubkey,
+    pub usdc_mint: Pubkey,
+    pub max_usdc_amount: u64,
+    pub actual_usdc_amount: u64,
+    pub refunded_usdc_amount: u64,
+    pub expires_at: i64,
+    pub created_at: i64,
+    pub terminal_at: i64,
+    pub terminal_commitment: [u8; 32],
+    pub terminal_authority: Pubkey,
     pub status: u8,
     pub bump: u8,
 }
@@ -1517,6 +2073,54 @@ pub struct TaskRefunded {
 }
 
 #[event]
+pub struct ComputePaymentsInitialized {
+    pub usdc_mint: Pubkey,
+    pub settlement_authority: Pubkey,
+}
+
+#[event]
+pub struct ComputeSettlementAuthorityUpdated {
+    pub previous: Pubkey,
+    pub settlement_authority: Pubkey,
+}
+
+#[event]
+pub struct ComputeJobFunded {
+    pub job_id: [u8; 32],
+    pub quote_commitment: [u8; 32],
+    pub client: Pubkey,
+    pub provider: Pubkey,
+    pub client_usdc: Pubkey,
+    pub provider_usdc: Pubkey,
+    pub escrow_vault: Pubkey,
+    pub usdc_mint: Pubkey,
+    pub max_usdc_amount: u64,
+    pub expires_at: i64,
+}
+
+#[event]
+pub struct ComputeJobSettled {
+    pub job_id: [u8; 32],
+    pub quote_commitment: [u8; 32],
+    pub receipt_commitment: [u8; 32],
+    pub provider: Pubkey,
+    pub actual_usdc_amount: u64,
+    pub refunded_usdc_amount: u64,
+    pub settled_at: i64,
+}
+
+#[event]
+pub struct ComputeJobRefunded {
+    pub job_id: [u8; 32],
+    pub quote_commitment: [u8; 32],
+    pub refund_commitment: [u8; 32],
+    pub client: Pubkey,
+    pub refunded_usdc_amount: u64,
+    pub refunded_at: i64,
+    pub expired: bool,
+}
+
+#[event]
 pub struct CovntBurned {
     pub owner: Pubkey,
     pub amount: u64,
@@ -1617,4 +2221,26 @@ pub enum CovenantError {
     InvalidReviewWindow,
     #[msg("deadline must be in the future")]
     InvalidDeadline,
+    #[msg("compute payment mint must be a configured six-decimal non-COVNT mint")]
+    InvalidUsdcMint,
+    #[msg("compute job and terminal commitments must be non-zero")]
+    InvalidComputeCommitment,
+    #[msg("compute provider must be a distinct non-zero address")]
+    InvalidComputeProvider,
+    #[msg("compute escrow expiry must be in the future")]
+    InvalidComputeExpiry,
+    #[msg("compute settlement authority must be non-zero")]
+    InvalidComputeAuthority,
+    #[msg("actual compute charge exceeds the authorized maximum")]
+    ComputeOvercharge,
+    #[msg("compute escrow is in the wrong state")]
+    WrongComputeStatus,
+    #[msg("terminal compute replay does not match the recorded outcome")]
+    ComputeTerminalMismatch,
+    #[msg("compute refund requires the settlement authority or the client after expiry")]
+    ComputeRefundUnauthorized,
+    #[msg("compute escrow vault balance does not cover the authorized maximum")]
+    InvalidComputeVaultBalance,
+    #[msg("compute escrow has expired and can only be refunded")]
+    ComputeEscrowExpired,
 }

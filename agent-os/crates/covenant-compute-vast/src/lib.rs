@@ -1306,7 +1306,10 @@ impl RawInstance {
         let token = parse_jupyter_token(self.jupyter_token.as_deref())?;
         let complete = self.id == Some(launch.instance_id)
             && self.label.as_deref() == Some(&launch.label)
-            && self.bundle_id == Some(launch.offer.id)
+            // Vast stopped returning bundle_id on instance show (null since
+            // 2026-08); a present value must still match (rejected above), but
+            // absence no longer blocks readiness.
+            && self.bundle_id.is_none_or(|id| id == launch.offer.id)
             && self.image_uuid.is_some()
             && self.image_runtype.is_some()
             && self.gpu_name.is_some()

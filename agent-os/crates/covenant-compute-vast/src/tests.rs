@@ -555,6 +555,27 @@ async fn exposes_a_redacted_workspace_access_url_only_when_ready() {
 }
 
 #[tokio::test]
+async fn workspace_is_ready_without_bundle_id() {
+    // Vast stopped returning bundle_id on instance show (null since 2026-08);
+    // readiness must not depend on it.
+    let server = MockServer::start().await;
+    let mut body = workspace_instance();
+    body["instances"]["bundle_id"] = serde_json::Value::Null;
+    Mock::given(method("GET"))
+        .and(path("/api/v0/instances/99/"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        .mount(&server)
+        .await;
+
+    let facts = client(&server, 640_000)
+        .workspace(&workspace_launch())
+        .await
+        .unwrap();
+    assert!(facts.ready);
+    assert!(facts.access.is_some());
+}
+
+#[tokio::test]
 async fn missing_workspace_access_facts_remain_loading() {
     for field in ["public_ipaddr", "jupyter_token"] {
         let server = MockServer::start().await;

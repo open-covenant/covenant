@@ -1096,11 +1096,20 @@ function paymentAttemptRequestError(cause: WorkbenchRequestError): string {
   if (cause.status === 404) {
     return 'This quote is no longer available. Refresh the page and request a new fixed quote. No payment or job was created.';
   }
+  if (cause.status === 403) {
+    return 'Workbench can no longer start work in this repository. Review the repository connection and request a new quote. No payment or job was created.';
+  }
   if (cause.status === 409) {
     if (/expired/i.test(cause.message)) {
       return 'This quote expired. Refresh the page and request a new fixed quote. No payment or job was created.';
     }
+    if (/repository changed|issue.*changed|authorization/i.test(cause.message)) {
+      return 'The repository or issue changed after this quote was created. Review it and request a new fixed quote. No payment or job was created.';
+    }
     return 'This quote already has a payment attempt. Refresh Workbench and check its status before trying again. No new payment was requested.';
+  }
+  if (cause.status === 402) {
+    return "The payment authorization was not accepted. Check this payment's status before trying again. No new payment was requested.";
   }
   if (cause.status === 429) {
     return 'Payment was requested too many times. Wait a moment and try again. No payment or job was created.';

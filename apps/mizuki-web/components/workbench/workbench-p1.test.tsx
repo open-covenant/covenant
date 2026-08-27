@@ -136,6 +136,18 @@ describe('Workbench responsive records and controls', () => {
         '2 USDC',
       ),
     ).not.toContain('Reconnect');
+    expect(
+      paymentAttemptError(
+        new WorkbenchRequestError('repository changed; request a new quote', 409),
+        '2 USDC',
+      ),
+    ).toContain('repository or issue changed');
+    expect(
+      paymentAttemptError(new WorkbenchRequestError('repository access revoked', 403), '2 USDC'),
+    ).toContain('repository connection');
+    expect(
+      paymentAttemptError(new WorkbenchRequestError('payment verification failed', 402), '2 USDC'),
+    ).toContain("Check this payment's status");
   });
 
   it('classifies recovery reads using the error returned by Workbench requests', () => {

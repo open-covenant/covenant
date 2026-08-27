@@ -9,9 +9,11 @@ import {
   normalizePaymentAttempt,
   prepareWorkbenchPaymentRecovery,
   issueMatchesRepository,
+  readJsonResponse,
   quoteMatchesIssue,
   saveWorkbenchPaymentRecovery,
 } from './payment';
+import { WorkbenchRequestError } from './workbench-client';
 import type { Quote } from './types';
 
 describe('quoteMatchesIssue', () => {
@@ -54,6 +56,18 @@ describe('issueMatchesRepository', () => {
 });
 
 describe('payment status recovery', () => {
+  it('preserves paid-request HTTP status for customer-safe error classification', async () => {
+    await expect(
+      readJsonResponse(
+        Response.json({ error: 'service dependencies are not ready' }, { status: 503 }),
+      ),
+    ).rejects.toEqual(new WorkbenchRequestError('service dependencies are not ready', 503));
+
+    await expect(
+      readJsonResponse(Response.json({ reason: 'repository changed' }, { status: 409 })),
+    ).rejects.toEqual(new WorkbenchRequestError('repository changed', 409));
+  });
+
   it('does not reopen the wallet from stale retry-safe state after local authorization', () => {
     expect(paymentRetryAllowed({ walletAuthorized: true }, { retrySafe: true })).toBe(false);
     expect(paymentRetryAllowed({ walletAuthorized: false }, { retrySafe: true })).toBe(true);

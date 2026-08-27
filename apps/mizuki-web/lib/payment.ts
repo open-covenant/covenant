@@ -230,7 +230,10 @@ export async function readJsonResponse<T>(response: Response): Promise<T> {
     reason?: string;
   };
   if (!response.ok) {
-    throw new Error(body.error || body.reason || `Request failed (${response.status})`);
+    throw new WorkbenchRequestError(
+      body.error || body.reason || `Request failed (${response.status})`,
+      response.status,
+    );
   }
   return body;
 }

@@ -873,6 +873,7 @@ export class BountyService {
       if (!sourceJob) throw new Error('source job is missing for bounty escrow');
       const acceptance = {
         bountyId: bounty.id,
+        sourceJobId: bounty.sourceJobId,
         amountUsdCents: bounty.priceCents,
         expiresAt: bounty.offerExpiresAt,
         repository: bounty.repository,
@@ -904,7 +905,7 @@ export class BountyService {
       });
       escrow = await this.store.saveEscrow(escrow);
     }
-    escrow = await this.reserveEscrow(escrow);
+    escrow = await this.reserveEscrow(escrow, bounty.sourceJobId);
     if (
       escrow.state !== 'funded' ||
       !escrow.fundingSignature ||
@@ -935,7 +936,10 @@ export class BountyService {
     return opened;
   }
 
-  private async reserveEscrow(initial: ContributorEscrow): Promise<ContributorEscrow> {
+  private async reserveEscrow(
+    initial: ContributorEscrow,
+    sourceJobId: string,
+  ): Promise<ContributorEscrow> {
     let escrow = initial;
     if (['funded', 'bound', 'release_pending', 'released'].includes(escrow.state)) {
       return escrow;
@@ -951,6 +955,7 @@ export class BountyService {
       throw new Error(`escrow funding cannot resume from ${escrow.state}`);
     const operation = await this.policy.reserveEscrow({
       bountyId: escrow.bountyId,
+      sourceJobId,
       repository: escrow.repository,
       issueNumber: escrow.issueNumber,
       baseRef: escrow.baseRef,

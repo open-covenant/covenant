@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { describe, expect, it } from 'vitest';
-import type { RepositoryAdmission } from './domain.js';
+import type { PaymentIntent, RefundLiability, RepositoryAdmission } from './domain.js';
 import { PostgresOperationStore } from './postgres.js';
 
 const databaseUrl = process.env.MIZUKI_SIGNER_TEST_DATABASE_URL;
@@ -108,4 +108,153 @@ describe.skipIf(!databaseUrl)('PostgresOperationStore migrations', () => {
       await Promise.all([writer.close(), restarted.close()]);
     }
   });
+
+  it('releases a payment intent bounty reserve after its liability is discharged', async () => {
+    const store = new PostgresOperationStore(databaseUrl!);
+    const now = new Date();
+    const admission = repositoryAdmission(now);
+    const jobId = `job-${randomUUID()}`;
+    const intent: PaymentIntent = {
+      id: randomUUID(),
+      idempotencyKey: `payment-intent-${randomUUID()}`,
+      requestHash: randomBytes(32).toString('hex'),
+      jobId,
+      quoteId: admission.quoteId,
+      repositoryAdmissionId: admission.id,
+      repositoryAdmissionEvidenceHash: admission.evidenceHash,
+      repository: admission.repository,
+      issueNumber: admission.issueNumber,
+      baseRef: admission.baseRef,
+      baseSha: admission.baseSha,
+      repositoryAuthorizedAt: admission.admittedAt,
+      authorizationEvidenceHash: randomBytes(32).toString('hex'),
+      payer: admission.settlementPayer!,
+      payee: '6'.repeat(32),
+      mint: '7'.repeat(32),
+      rawAmount: '2000000',
+      amountUsdCents: 200,
+      bountyAmountUsdCents: 1_000,
+      bountyReserveLamports: '12345',
+      memo: admission.settlementMemo!,
+      signedMessageHash: admission.settlementMessageHash,
+      payerSignature: admission.settlementClientSignature,
+      paymentWindowStartUnixSeconds: admission.paymentWindowStartUnixSeconds,
+      paymentWindowEndUnixSeconds: admission.paymentWindowEndUnixSeconds,
+      status: 'reserved',
+      settlementSignature: null,
+      liabilityId: null,
+      activationIdempotencyKey: null,
+      createdAt: now,
+      activatedAt: null,
+      expiredAt: null,
+    };
+    const liability: RefundLiability = {
+      id: randomUUID(),
+      idempotencyKey: `liability-${randomUUID()}`,
+      requestHash: randomBytes(32).toString('hex'),
+      jobId,
+      repositoryAdmissionId: admission.id,
+      settlementSignature: randomBytes(64).toString('base64url'),
+      repository: admission.repository,
+      issueNumber: admission.issueNumber,
+      baseRef: admission.baseRef,
+      baseSha: admission.baseSha,
+      repositoryAuthorizedAt: admission.admittedAt,
+      authorizationEvidenceHash: intent.authorizationEvidenceHash,
+      reviewedHeadSha: null,
+      reviewedBaseSha: null,
+      reviewedBaseRef: null,
+      reviewedDiffHash: null,
+      deliveryBoundAt: null,
+      deliveryBindingIdempotencyKey: null,
+      deliveryBindingRequestHash: null,
+      deliveryBindingHash: null,
+      payer: intent.payer,
+      treasury: intent.payee,
+      mint: intent.mint,
+      rawAmount: intent.rawAmount,
+      decimals: 6,
+      amountUsdCents: intent.amountUsdCents,
+      settlementSlot: 42,
+      settlementBlockTimeUnixSeconds: Math.floor(now.getTime() / 1_000),
+      createdAt: now,
+      dischargedAt: null,
+      dischargeEvidenceHash: null,
+      dischargeEvidence: null,
+      dischargeIdempotencyKey: null,
+      dischargeRequestHash: null,
+    };
+    try {
+      await store.migrate();
+      const before = BigInt(await store.pendingBountyReserveLamports());
+      await store.registerRepositoryAdmission(admission);
+      await store.reservePaymentIntent(
+        intent,
+        {
+          refundCapacityRaw: '1000000000000',
+          bountyCapacityLamports: '1000000000000',
+          refundSignerLamports: '1000000000000',
+          refundCostLamports: '1',
+          refundDailyLimitUsdCents: 1_000_000_000,
+          escrowDailyLimitUsdCents: 1_000_000_000,
+        },
+        now,
+      );
+      await store.activatePaymentIntent(intent.id, liability, `activate-${randomUUID()}`, now);
+
+      expect(await store.getPaymentIntentByJob(jobId)).toMatchObject({ id: intent.id });
+      expect(BigInt(await store.pendingBountyReserveLamports())).toBe(before + 12_345n);
+
+      await store.dischargeRefundLiability(
+        liability.id,
+        `discharge-${randomUUID()}`,
+        randomBytes(32).toString('hex'),
+        randomBytes(32).toString('hex'),
+        { outcome: 'merged' },
+        now,
+      );
+      expect(BigInt(await store.pendingBountyReserveLamports())).toBe(before);
+    } finally {
+      await store.close();
+    }
+  });
 });
+
+function repositoryAdmission(admittedAt: Date): RepositoryAdmission {
+  const quoteId = randomUUID();
+  return {
+    id: randomUUID(),
+    idempotencyKey: `repository-admission-${randomUUID()}`,
+    requestHash: randomBytes(32).toString('hex'),
+    quoteId,
+    repository: 'owner/repository',
+    issueNumber: 17,
+    baseRef: 'main',
+    baseSha: 'b'.repeat(40),
+    reservationKeyHash: randomBytes(32).toString('hex'),
+    paymentAuthorizationHash: randomBytes(32).toString('hex'),
+    settlementMessageHash: randomBytes(32).toString('hex'),
+    settlementClientSignature: '8'.repeat(64),
+    settlementFeePayer: '4'.repeat(32),
+    settlementPayer: '5'.repeat(32),
+    settlementMemo: `mizuki:payment:v1:${quoteId}`,
+    settlementRawAmount: '2000000',
+    paymentWindowStartUnixSeconds: Math.floor(admittedAt.getTime() / 1_000),
+    paymentWindowEndUnixSeconds: Math.floor(admittedAt.getTime() / 1_000) + 360,
+    verifierAppId: '12345',
+    installationId: 777,
+    repositorySelection: 'selected',
+    permissions: {
+      checks: 'read',
+      contents: 'read',
+      issues: 'read',
+      metadata: 'read',
+      pull_requests: 'read',
+      statuses: 'read',
+    },
+    tokenRepositories: 1,
+    tokenExpiresAt: new Date(admittedAt.getTime() + 60 * 60_000),
+    admittedAt,
+    evidenceHash: randomBytes(32).toString('hex'),
+  };
+}

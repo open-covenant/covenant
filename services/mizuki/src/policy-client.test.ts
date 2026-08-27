@@ -674,6 +674,7 @@ describe('PolicySignerClient', () => {
       treasuryAvailableRefundRaw: '11000000',
       remainingRefundLimitUsdCents: 1_100,
       availableRefundRaw: '11000000',
+      availableRefundTransactions: 1,
       remainingEscrowLimitUsdCents: 1_000,
       escrowAuthority: 'escrow-authority',
       finalizedEscrowBalanceLamports: '2000000000',
@@ -691,6 +692,16 @@ describe('PolicySignerClient', () => {
       }),
     ).not.toThrow();
     expect(() => assertRescueCapacity(readiness, 1_000)).not.toThrow();
+    expect(() =>
+      assertRefundCapacity({
+        readiness: { ...readiness, availableRefundTransactions: 0 },
+        treasury: 'treasury',
+        mint: 'mint',
+        decimals: 6,
+        unfinishedLiabilityRaw: 0n,
+        proposedPaymentRaw: 1n,
+      }),
+    ).toThrow('cannot fund another protected refund');
     expect(() =>
       assertRefundCapacity({
         readiness,

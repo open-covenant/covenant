@@ -1190,6 +1190,7 @@ const signerReadiness = {
   treasuryAvailableRefundRaw: '1000000000',
   remainingRefundLimitUsdCents: 100_000,
   availableRefundRaw: '1000000000',
+  availableRefundTransactions: 100,
   remainingEscrowLimitUsdCents: 100_000,
   escrowAuthority: 'escrow-authority',
   finalizedEscrowBalanceLamports: '1000000000',

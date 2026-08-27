@@ -401,6 +401,7 @@ export interface GithubIdentityRegistrar {
 export interface FinancialPolicy extends PaymentPolicy {
   reserveEscrow(input: {
     bountyId: string;
+    sourceJobId?: string;
     repository: string;
     issueNumber: number;
     issueTitle: string;
@@ -721,6 +722,7 @@ export class PolicySignerClient implements FinancialPolicy {
 
   async reserveEscrow(input: {
     bountyId: string;
+    sourceJobId?: string;
     repository: string;
     issueNumber: number;
     issueTitle: string;
@@ -1087,6 +1089,13 @@ export function assertRefundCapacity(input: {
   const { readiness } = input;
   if (!readiness.healthy || readiness.availableRefundRaw === null) {
     throw new RefundCapacityError('refund signer is not ready');
+  }
+  if (
+    readiness.availableRefundTransactions === null ||
+    readiness.availableRefundTransactions === undefined ||
+    readiness.availableRefundTransactions < 1
+  ) {
+    throw new RefundCapacityError('refund signer cannot fund another protected refund');
   }
   if (readiness.refundTreasury !== input.treasury) {
     throw new RefundCapacityError('refund signer treasury does not match the payment recipient');

@@ -33,22 +33,26 @@ export async function recoverSettlement(
   let payment = job.payment;
   let liabilityId = job.refundLiabilityId;
   if (deps.paymentMode === 'live' && job.paymentIntentId && payment.transaction === 'pending') {
-    const reconciled = await deps.policy.reconcilePaymentIntent(job.paymentIntentId);
-    if (isPaymentIntentActivation(reconciled)) {
-      payment = paymentFromIntentActivation(job, reconciled, deps.payTo);
-      liabilityId = reconciled.refundLiability.id;
-      await deps.store.patchJob(job.id, {
-        payment,
-        refundLiabilityId: liabilityId,
-      });
-      return deps.store.transitionJob(job.id, 'settlement_pending', 'paid', {
-        payment,
-        paymentIntentId: job.paymentIntentId,
-        refundLiabilityId: liabilityId,
-      });
-    }
-    if (reconciled.status === 'expired_unpaid') {
-      throw new Error('payment authorization expired without settlement');
+    try {
+      const reconciled = await deps.policy.reconcilePaymentIntent(job.paymentIntentId);
+      if (isPaymentIntentActivation(reconciled)) {
+        payment = paymentFromIntentActivation(job, reconciled, deps.payTo);
+        liabilityId = reconciled.refundLiability.id;
+        await deps.store.patchJob(job.id, {
+          payment,
+          refundLiabilityId: liabilityId,
+        });
+        return deps.store.transitionJob(job.id, 'settlement_pending', 'paid', {
+          payment,
+          paymentIntentId: job.paymentIntentId,
+          refundLiabilityId: liabilityId,
+        });
+      }
+      if (reconciled.status === 'expired_unpaid') {
+        throw new Error('payment authorization expired without settlement');
+      }
+    } catch (error) {
+      if (!paymentIntentPending(error)) throw error;
     }
   }
   if (deps.paymentMode === 'live' && payment.transaction !== 'pending') {
@@ -177,6 +181,10 @@ function settlementScanMiss(error: unknown): boolean {
     error instanceof PolicyRequestError &&
     ['settlement_not_found', 'settlement_scan_exhausted'].includes(error.code)
   );
+}
+
+function paymentIntentPending(error: unknown): boolean {
+  return error instanceof PolicyRequestError && error.code === 'payment_intent_pending';
 }
 
 function settlementSignatureRejected(error: unknown): boolean {

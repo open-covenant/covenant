@@ -31,7 +31,13 @@ export const secondaryNavigation: WorkbenchNavigationItem[] = [
   { href: '/app/settings', label: 'Settings', icon: '07' },
 ];
 
-export function WorkbenchShell({ children }: { children: React.ReactNode }) {
+export function WorkbenchShell({
+  children,
+  walletControl,
+}: {
+  children: React.ReactNode;
+  walletControl: React.ReactNode;
+}) {
   const pathname = usePathname();
   const [authExpired, setAuthExpired] = useState(false);
   const [authError, setAuthError] = useState<string>();
@@ -129,21 +135,7 @@ export function WorkbenchShell({ children }: { children: React.ReactNode }) {
         </div>
       </aside>
 
-      <header className="workbench-mobile-header">
-        <Link href="/app" aria-label="Mizuki Workbench home">
-          <Image
-            className="workbench-mobile-covenant"
-            src="/covenant-logomark.png"
-            alt=""
-            width={24}
-            height={24}
-          />
-          <span className="workbench-mobile-divider" aria-hidden="true" />
-          <Image src="/mizuki-avatar.jpg" alt="" width={32} height={32} />
-          <strong>Mizuki</strong>
-        </Link>
-        <Link href="/app/jobs/new">New job</Link>
-      </header>
+      <WorkbenchHeader walletControl={walletControl} />
 
       <section className="workbench-content">
         {authError && (
@@ -167,6 +159,35 @@ export function WorkbenchShell({ children }: { children: React.ReactNode }) {
         />
       </nav>
     </div>
+  );
+}
+
+export function WorkbenchHeader({ walletControl }: { walletControl: React.ReactNode }) {
+  return (
+    <header className="workbench-header">
+      <Link className="workbench-header-brand" href="/app" aria-label="Mizuki Workbench home">
+        <Image
+          className="workbench-header-covenant"
+          src="/covenant-logomark.png"
+          alt=""
+          width={24}
+          height={24}
+        />
+        <span className="workbench-header-divider" aria-hidden="true" />
+        <Image src="/mizuki-avatar.jpg" alt="" width={32} height={32} />
+        <strong>Mizuki</strong>
+      </Link>
+      <div className="workbench-header-context">
+        <span>Authenticated console</span>
+        <strong>Maintenance workbench</strong>
+      </div>
+      <div className="workbench-header-actions">
+        <Link className="workbench-header-new-job" href="/app/jobs/new">
+          New job
+        </Link>
+        {walletControl}
+      </div>
+    </header>
   );
 }
 
@@ -277,6 +298,9 @@ function WorkbenchShellLoading() {
           <div className="workbench-skeleton nav-skeleton" key={index} />
         ))}
       </aside>
+      <header className="workbench-header">
+        <div className="workbench-skeleton header-skeleton" />
+      </header>
       <section className="workbench-content">
         <div className="workbench-skeleton heading-skeleton" />
         <div className="workbench-skeleton panel-skeleton" />

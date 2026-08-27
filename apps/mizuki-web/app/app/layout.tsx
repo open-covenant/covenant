@@ -1,5 +1,9 @@
 import type { Metadata } from 'next';
 import { WorkbenchShell } from '@/components/workbench/workbench-shell';
+import {
+  WorkbenchWalletControl,
+  WorkbenchWalletProvider,
+} from '@/components/workbench/workbench-wallet';
 import '../workbench.css';
 
 export const metadata: Metadata = {
@@ -11,5 +15,9 @@ export const metadata: Metadata = {
 };
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
-  return <WorkbenchShell>{children}</WorkbenchShell>;
+  return (
+    <WorkbenchWalletProvider>
+      <WorkbenchShell walletControl={<WorkbenchWalletControl />}>{children}</WorkbenchShell>
+    </WorkbenchWalletProvider>
+  );
 }

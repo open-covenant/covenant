@@ -123,7 +123,7 @@ jobs:
           test "$(psql -h 127.0.0.1 -U postgres -d mizuki_core_restore -Atc "SELECT count(*) FROM pg_trigger AS trigger JOIN pg_class AS relation ON relation.oid = trigger.tgrelid JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace WHERE trigger.tgname IN ('mizuki_operator_control_audit_append_only', 'mizuki_operator_control_audit_no_truncate') AND relation.relname = 'mizuki_operator_control_audit' AND namespace.nspname = 'public' AND trigger.tgenabled = 'O' AND NOT trigger.tgisinternal")" = '2'
           ! psql -h 127.0.0.1 -U postgres -d mizuki_core_restore -v ON_ERROR_STOP=1 -c "UPDATE mizuki_operator_control_audit SET reason = 'restore gate mutation'"
           ! psql -h 127.0.0.1 -U postgres -d mizuki_core_restore -v ON_ERROR_STOP=1 -c "TRUNCATE mizuki_operator_control_audit"
-          test "$(psql -h 127.0.0.1 -U postgres -d mizuki_signer_restore -Atc "SELECT count(*) FROM mizuki_schema_migrations WHERE component = 'policy-signer'")" = '3'
+          test "$(psql -h 127.0.0.1 -U postgres -d mizuki_signer_restore -Atc "SELECT count(*) FROM mizuki_schema_migrations WHERE component = 'policy-signer'")" = '4'
           test "$(psql -h 127.0.0.1 -U postgres -d mizuki_updater_restore -Atc "SELECT count(*) FROM mizuki_updater_migrations")" = '4'
           test "$(psql -h 127.0.0.1 -U postgres -d mizuki_deployment_restore -Atc "SELECT count(*) FROM mizuki_deployment_migrations")" = '2'
           test "$(psql -h 127.0.0.1 -U postgres -d mizuki_deployment_restore -Atc "SELECT count(*) FROM pg_trigger WHERE tgname = 'mizuki_deployment_events_append_only' AND NOT tgisinternal")" = '1'

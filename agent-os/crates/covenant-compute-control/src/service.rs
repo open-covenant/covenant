@@ -184,7 +184,7 @@ impl ControlPlane {
             job_id: job.id.clone(),
             idempotency_key: job.idempotency_key.clone(),
             plan: job.plan.clone(),
-            started_at_ms: job.created_at_ms,
+            started_at_ms: job.ready_at_ms.unwrap_or(requested_at_ms),
             requested_at_ms,
         };
         match self.provider.launch(request).await {
@@ -248,7 +248,7 @@ impl ControlPlane {
                 job_id: job.id.clone(),
                 provider_job_id: provider_job_id.clone(),
                 plan: job.plan.clone(),
-                started_at_ms: job.created_at_ms,
+                started_at_ms: job.ready_at_ms.unwrap_or(requested_at_ms),
                 requested_at_ms,
             })
             .await
@@ -276,7 +276,7 @@ impl ControlPlane {
                 job_id: job.id.clone(),
                 provider_job_id: job.provider_job_id.clone(),
                 plan: job.plan.clone(),
-                started_at_ms: job.created_at_ms,
+                started_at_ms: job.ready_at_ms.unwrap_or(requested_at_ms),
                 requested_at_ms,
             })
             .await
@@ -317,7 +317,7 @@ impl ControlPlane {
                 job_id: job.id.clone(),
                 provider_job_id: Some(provider_job_id),
                 plan: job.plan.clone(),
-                started_at_ms: job.created_at_ms,
+                started_at_ms: job.ready_at_ms.unwrap_or(u64::MAX),
                 requested_at_ms: now_ms()?,
             })
             .await?;

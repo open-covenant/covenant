@@ -34,6 +34,7 @@ struct FakeProvider {
     poll_release: Notify,
     jobs: Mutex<HashMap<String, (LaunchPlan, ProviderJob)>>,
     control_ids: Mutex<HashMap<String, String>>,
+    last_cancel_window: Mutex<Option<(u64, u64)>>,
 }
 
 impl FakeProvider {
@@ -54,6 +55,7 @@ impl FakeProvider {
             poll_release: Notify::new(),
             jobs: Mutex::new(HashMap::new()),
             control_ids: Mutex::new(HashMap::new()),
+            last_cancel_window: Mutex::new(None),
         }
     }
 
@@ -170,6 +172,8 @@ impl ProviderBackend for FakeProvider {
             return Err(ProviderError::Unavailable);
         }
         self.cancellations.fetch_add(1, Ordering::SeqCst);
+        *self.last_cancel_window.lock().await =
+            Some((request.started_at_ms, request.requested_at_ms));
         let provider_id = match request.provider_job_id {
             Some(id) => id,
             None => match self.control_ids.lock().await.get(&request.job_id).cloned() {
@@ -392,6 +396,53 @@ async fn cancellation_is_idempotent_and_releases_unused_reservation() {
         .submit(&owner, "after-cancel", plan(1_800))
         .await
         .expect("released reservation permits the next launch");
+}
+
+#[tokio::test]
+async fn cancel_before_ready_bills_zero_runtime() {
+    let temp = TempDir::new().unwrap();
+    let provider = Arc::new(FakeProvider::new(vec![offer()]));
+    provider.set_launch_provisioning(true);
+    let control = control_plane(&temp, Arc::clone(&provider)).await.unwrap();
+    let owner = principal("owner-a", 360_000);
+    let job = control
+        .submit(&owner, "never-ready", plan(1_800))
+        .await
+        .unwrap();
+    assert_eq!(job.status, JobStatus::Provisioning);
+
+    control.cancel(&owner, &job.id).await.unwrap();
+    let (started, requested) = provider.last_cancel_window.lock().await.unwrap();
+    // Never went running: the billing window collapses to zero.
+    assert!(started >= requested);
+}
+
+#[tokio::test]
+async fn cancel_after_ready_bills_from_first_running_observation() {
+    let temp = TempDir::new().unwrap();
+    let provider = Arc::new(FakeProvider::new(vec![offer()]));
+    provider.set_launch_provisioning(true);
+    let control = control_plane(&temp, Arc::clone(&provider)).await.unwrap();
+    let owner = principal("owner-a", 360_000);
+    let job = control
+        .submit(&owner, "goes-ready", plan(1_800))
+        .await
+        .unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+    let before_ready = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    provider.mark_running().await;
+    let refreshed = control.job(&owner, &job.id).await.unwrap();
+    assert_eq!(refreshed.status, JobStatus::Running);
+
+    control.cancel(&owner, &job.id).await.unwrap();
+    let (started, requested) = provider.last_cancel_window.lock().await.unwrap();
+    // Billing starts at the recorded ready observation, not at submission.
+    assert!(started >= before_ready);
+    assert!(started <= requested);
 }
 
 #[tokio::test]

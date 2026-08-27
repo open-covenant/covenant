@@ -76,6 +76,7 @@ pub struct StoredJob {
     pub error: Option<String>,
     pub receipt: Option<ComputeReceipt>,
     pub created_at_ms: u64,
+    pub ready_at_ms: Option<u64>,
 }
 
 impl StoredJob {
@@ -190,6 +191,7 @@ impl SqliteStore {
                         receipt_json TEXT,
                         created_at_ms INTEGER NOT NULL,
                         updated_at_ms INTEGER NOT NULL,
+                        ready_at_ms INTEGER,
                         UNIQUE (owner, idempotency_key)
                     );
 
@@ -197,6 +199,15 @@ impl SqliteStore {
                     ON jobs(owner, created_at_ms DESC);
                     "#,
                 )?;
+                // Pre-existing databases lack ready_at_ms; a duplicate-column
+                // error means the schema above already carries it.
+                if let Err(error) =
+                    connection.execute("ALTER TABLE jobs ADD COLUMN ready_at_ms INTEGER", [])
+                {
+                    if !error.to_string().contains("duplicate column") {
+                        return Err(error.into());
+                    }
+                }
                 Ok(())
             })
             .await?;
@@ -443,14 +454,19 @@ impl SqliteStore {
                 };
                 transaction.execute(
                     "UPDATE jobs
-                     SET state = ?2, provider_job_id = ?3, error = ?4, updated_at_ms = ?5
+                     SET state = ?2, provider_job_id = ?3, error = ?4, updated_at_ms = ?5,
+                         ready_at_ms = CASE
+                             WHEN ?6 AND ready_at_ms IS NULL THEN ?5
+                             ELSE ready_at_ms
+                         END
                      WHERE id = ?1",
                     params![
                         id,
                         state.as_str(),
                         provider.id,
                         provider.error,
-                        sql_u64(now_ms)?
+                        sql_u64(now_ms)?,
+                        state == StoredState::Running,
                     ],
                 )?;
             }
@@ -515,7 +531,7 @@ fn load_job(connection: &Connection, id: &str) -> Result<StoredJob, StoreError> 
     connection
         .query_row(
             "SELECT owner, idempotency_key, plan_json, state, provider_job_id,
-                    committed_usdc_micros, error, receipt_json, created_at_ms
+                    committed_usdc_micros, error, receipt_json, created_at_ms, ready_at_ms
              FROM jobs WHERE id = ?1",
             params![id],
             |row| {
@@ -529,6 +545,7 @@ fn load_job(connection: &Connection, id: &str) -> Result<StoredJob, StoreError> 
                     row.get::<_, Option<String>>(6)?,
                     row.get::<_, Option<String>>(7)?,
                     row.get::<_, i64>(8)?,
+                    row.get::<_, Option<i64>>(9)?,
                 ))
             },
         )
@@ -545,6 +562,7 @@ fn load_job(connection: &Connection, id: &str) -> Result<StoredJob, StoreError> 
                 error,
                 receipt_json,
                 created_at_ms,
+                ready_at_ms,
             )| {
                 Ok(StoredJob {
                     id: id.to_owned(),
@@ -559,6 +577,7 @@ fn load_job(connection: &Connection, id: &str) -> Result<StoredJob, StoreError> 
                         .map(|json| serde_json::from_str(&json).map_err(|_| StoreError::Corrupt))
                         .transpose()?,
                     created_at_ms: read_u64(created_at_ms)?,
+                    ready_at_ms: ready_at_ms.map(read_u64).transpose()?,
                 })
             },
         )

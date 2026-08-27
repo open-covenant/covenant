@@ -72,6 +72,22 @@ const readinessSchema = z
       .string()
       .regex(/^[0-9]+$/)
       .nullable(),
+    refundSignerLamports: z
+      .string()
+      .regex(/^[0-9]+$/)
+      .nullable()
+      .optional(),
+    refundFeeReserveLamports: z
+      .string()
+      .regex(/^[0-9]+$/)
+      .optional(),
+    refundAtaRentLamports: z
+      .string()
+      .regex(/^[0-9]+$/)
+      .nullable()
+      .optional(),
+    pendingRefundCount: z.number().int().nonnegative().nullable().optional(),
+    availableRefundTransactions: z.number().int().nonnegative().nullable().optional(),
     escrowRollingLimitUsdCents: z.number().int().positive().optional(),
     rollingEscrowSpendUsdCents: z.number().int().nonnegative().nullable().optional(),
     remainingEscrowLimitUsdCents: z.number().int().nonnegative().nullable().optional(),

@@ -37,6 +37,13 @@ describe('Workbench responsive records and controls', () => {
     expect(html).toContain('workbench-nav-icon');
   });
 
+  it('does not advertise a second quote flow outside Workbench', () => {
+    const source = readFileSync(new URL('./workbench-shell.tsx', import.meta.url), 'utf8');
+
+    expect(source).toContain('Learn how paid maintenance works');
+    expect(source).not.toContain('Request a quote without opening Workbench');
+  });
+
   it('keeps recorded time and transaction evidence in every billing row', () => {
     const html = renderToStaticMarkup(
       <BillingEntryRow

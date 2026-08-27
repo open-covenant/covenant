@@ -254,7 +254,7 @@ function WorkbenchSignIn({ returnTo, authError }: { returnTo: string; authError?
           Continue with GitHub <span aria-hidden="true">↗</span>
         </a>
       }
-      secondary={<Link href="/work">Request a quote without opening Workbench</Link>}
+      secondary={<Link href="/work">Learn how paid maintenance works</Link>}
     />
   );
 }

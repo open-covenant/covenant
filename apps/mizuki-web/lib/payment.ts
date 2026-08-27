@@ -8,6 +8,9 @@ import {
 
 const recoveryStorageKey = 'mizuki:workbench:payment-recovery';
 const paymentStatusTimeoutMs = 12_000;
+const paymentRecoveryPollBaseMs = 1_000;
+const paymentRecoveryPollMaxMs = 8_000;
+const paymentAuthorizationWindowMs = 300_000;
 
 type PaymentStorage = Pick<Storage, 'getItem' | 'removeItem' | 'setItem'>;
 
@@ -51,6 +54,7 @@ export type QuotePaymentStatus =
 export type WorkbenchPaymentRecovery = {
   phase: 'prepared' | 'attempting' | 'uncertain' | 'unpaid';
   walletAuthorized?: boolean;
+  walletAuthorizedAt?: string;
   accountId: string;
   attemptId: string;
   idempotencyKey: string;
@@ -137,21 +141,51 @@ export async function findActivePaymentAttempt(): Promise<ActivePaymentAttempt> 
 export async function reconcilePaymentAttempt(
   attemptId: string,
   expectedQuoteId: string,
-  options: { signal?: AbortSignal; attempts?: number } = {},
+  options: {
+    signal?: AbortSignal;
+    attempts?: number;
+    walletAuthorized?: boolean;
+    deadlineMs?: number;
+  } = {},
 ): Promise<PaymentAttempt> {
   const attempts = Math.max(1, Math.min(options.attempts ?? 4, 6));
-  let lastError: unknown;
-  for (let index = 0; index < attempts; index += 1) {
+  let consecutiveFailures = 0;
+  let pollIndex = 0;
+  let lastPending: PaymentAttempt | undefined;
+
+  while (true) {
     if (options.signal?.aborted) throw abortReason(options.signal);
     try {
-      return await checkPaymentAttempt(attemptId, expectedQuoteId);
+      const attempt = await checkPaymentAttempt(attemptId, expectedQuoteId);
+      consecutiveFailures = 0;
+      if (!paymentAttemptNeedsReconciliation(attempt, options.walletAuthorized === true)) {
+        return attempt;
+      }
+
+      lastPending = attempt;
+      const deadline = paymentRecoveryDeadline(attempt, options.deadlineMs);
+      if (deadline === undefined || deadline <= Date.now()) return attempt;
+      await wait(
+        Math.min(paymentRecoveryDelay(pollIndex), Math.max(0, deadline - Date.now())),
+        options.signal,
+      );
+      pollIndex += 1;
     } catch (cause) {
-      lastError = cause;
-      if (!retryableAttemptRead(cause) || index === attempts - 1) throw cause;
-      await wait(attemptReadDelay(index), options.signal);
+      if (options.signal?.aborted) throw abortReason(options.signal);
+      consecutiveFailures += 1;
+      if (!retryableAttemptRead(cause) || consecutiveFailures >= attempts) throw cause;
+
+      const deadline = lastPending
+        ? paymentRecoveryDeadline(lastPending, options.deadlineMs)
+        : options.deadlineMs;
+      if (deadline !== undefined && deadline <= Date.now()) return lastPending!;
+      const delay = attemptReadDelay(consecutiveFailures - 1);
+      await wait(
+        deadline === undefined ? delay : Math.min(delay, Math.max(0, deadline - Date.now())),
+        options.signal,
+      );
     }
   }
-  throw lastError;
 }
 
 export function normalizePaymentAttempt(value: unknown, expectedQuoteId?: string): PaymentAttempt {
@@ -230,7 +264,10 @@ export async function readJsonResponse<T>(response: Response): Promise<T> {
     reason?: string;
   };
   if (!response.ok) {
-    throw new Error(body.error || body.reason || `Request failed (${response.status})`);
+    throw new WorkbenchRequestError(
+      body.reason || body.error || `Request failed (${response.status})`,
+      response.status,
+    );
   }
   return body;
 }
@@ -383,6 +420,14 @@ function isWorkbenchPaymentRecovery(value: unknown): value is WorkbenchPaymentRe
   if (value.walletAuthorized !== undefined && typeof value.walletAuthorized !== 'boolean') {
     return false;
   }
+  if (
+    value.walletAuthorizedAt !== undefined &&
+    (value.walletAuthorized !== true ||
+      typeof value.walletAuthorizedAt !== 'string' ||
+      Number.isNaN(Date.parse(value.walletAuthorizedAt)))
+  ) {
+    return false;
+  }
   if (typeof value.attemptId !== 'string' || !validBoundedId(value.attemptId)) return false;
   if (typeof value.idempotencyKey !== 'string' || !validIdempotencyKey(value.idempotencyKey)) {
     return false;
@@ -514,6 +559,53 @@ function validIdempotencyKey(value: string): boolean {
 
 function retryableAttemptRead(cause: unknown): boolean {
   return !(cause instanceof WorkbenchRequestError) || cause.status === 429 || cause.status >= 500;
+}
+
+function paymentAttemptNeedsReconciliation(
+  attempt: PaymentAttempt,
+  walletAuthorized: boolean,
+): boolean {
+  if (attempt.job || ['job_reserved', 'expired_unpaid'].includes(attempt.paymentStatus)) {
+    return false;
+  }
+  return (
+    walletAuthorized ||
+    ['wallet_signed', 'submitting', 'indeterminate'].includes(attempt.paymentStatus)
+  );
+}
+
+function attemptExpiry(attempt: PaymentAttempt): number | undefined {
+  if (!attempt.expiresAt) return undefined;
+  const expiry = Date.parse(attempt.expiresAt);
+  return Number.isNaN(expiry) ? undefined : expiry;
+}
+
+function paymentRecoveryDeadline(
+  attempt: PaymentAttempt,
+  clientDeadline?: number,
+): number | undefined {
+  const serverDeadline = attemptExpiry(attempt);
+  if (serverDeadline === undefined) return clientDeadline;
+  if (clientDeadline === undefined) return serverDeadline;
+  return Math.min(serverDeadline, clientDeadline);
+}
+
+export function walletAuthorizationDeadline(
+  recovery: Pick<WorkbenchPaymentRecovery, 'walletAuthorizedAt' | 'quote'>,
+): number | undefined {
+  if (!recovery.walletAuthorizedAt) return undefined;
+  const authorizedAt = Date.parse(recovery.walletAuthorizedAt);
+  const quoteExpiresAt = Date.parse(recovery.quote.expiresAt);
+  if (!Number.isFinite(authorizedAt)) return undefined;
+  const paymentDeadline = authorizedAt + paymentAuthorizationWindowMs;
+  return Number.isFinite(quoteExpiresAt)
+    ? Math.min(paymentDeadline, quoteExpiresAt)
+    : paymentDeadline;
+}
+
+function paymentRecoveryDelay(index: number): number {
+  const base = Math.min(paymentRecoveryPollMaxMs, paymentRecoveryPollBaseMs * 2 ** index);
+  return base + Math.floor(Math.random() * Math.max(1, base / 4));
 }
 
 function attemptReadDelay(index: number): number {

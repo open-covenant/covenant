@@ -37,6 +37,13 @@ describe('Workbench responsive records and controls', () => {
     expect(html).toContain('workbench-nav-icon');
   });
 
+  it('does not advertise a second quote flow outside Workbench', () => {
+    const source = readFileSync(new URL('./workbench-shell.tsx', import.meta.url), 'utf8');
+
+    expect(source).toContain('Learn how paid maintenance works');
+    expect(source).not.toContain('Request a quote without opening Workbench');
+  });
+
   it('keeps recorded time and transaction evidence in every billing row', () => {
     const html = renderToStaticMarkup(
       <BillingEntryRow
@@ -105,8 +112,13 @@ describe('Workbench responsive records and controls', () => {
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     expect(paymentAttempt).toContain('await createPaymentAttempt');
+    expect(paymentAttempt).toContain('await assertPaymentBalance');
     expect(paymentAttempt).toContain('payment_attempt_id: attempt.id');
     expect(paymentAttempt).toContain('await resolvePaymentRecovery(');
+    expect(paymentAttempt).toContain('clearWorkbenchPaymentRecovery(accountId, quote.id)');
+    expect(paymentAttempt.indexOf('await assertPaymentBalance')).toBeLessThan(
+      paymentAttempt.indexOf('await createPaymentAttempt'),
+    );
     expect(paymentAttempt.indexOf('await createPaymentAttempt')).toBeLessThan(
       paymentAttempt.indexOf('createPaymentFetch'),
     );
@@ -136,6 +148,18 @@ describe('Workbench responsive records and controls', () => {
         '2 USDC',
       ),
     ).not.toContain('Reconnect');
+    expect(
+      paymentAttemptError(
+        new WorkbenchRequestError('repository changed; request a new quote', 409),
+        '2 USDC',
+      ),
+    ).toContain('repository or issue changed');
+    expect(
+      paymentAttemptError(new WorkbenchRequestError('repository access revoked', 403), '2 USDC'),
+    ).toContain('repository connection');
+    expect(
+      paymentAttemptError(new WorkbenchRequestError('payment verification failed', 402), '2 USDC'),
+    ).toContain("Check this payment's status");
   });
 
   it('classifies recovery reads using the error returned by Workbench requests', () => {

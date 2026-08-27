@@ -1811,8 +1811,40 @@ textarea:focus-visible {
   margin-bottom: 14px;
 }
 
-.quote-workflow {
+.workbench-entry {
   min-width: 0;
+  padding: clamp(28px, 4vw, 48px);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--ink-raised);
+}
+
+.workbench-entry h2 {
+  max-width: 620px;
+  margin: 18px 0;
+  font-size: clamp(28px, 4vw, 50px);
+  font-family: var(--font-display);
+  font-variation-settings: 'wdth' 125;
+  font-weight: 600;
+  line-height: 0.96;
+  letter-spacing: -0.045em;
+  text-transform: uppercase;
+}
+
+.workbench-entry > p:not(.eyebrow) {
+  max-width: 640px;
+  color: var(--muted);
+  line-height: 1.65;
+}
+
+.workbench-entry .button {
+  margin-top: 20px;
+}
+
+.workbench-entry .workbench-entry-note {
+  margin: 18px 0 0;
+  color: var(--muted-dark);
+  font-size: 12px;
 }
 
 .issue-form label,

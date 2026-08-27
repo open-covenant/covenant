@@ -9,9 +9,13 @@ import {
   normalizePaymentAttempt,
   prepareWorkbenchPaymentRecovery,
   issueMatchesRepository,
+  readJsonResponse,
   quoteMatchesIssue,
+  reconcilePaymentAttempt,
   saveWorkbenchPaymentRecovery,
+  walletAuthorizationDeadline,
 } from './payment';
+import { WorkbenchRequestError } from './workbench-client';
 import type { Quote } from './types';
 
 describe('quoteMatchesIssue', () => {
@@ -54,6 +58,20 @@ describe('issueMatchesRepository', () => {
 });
 
 describe('payment status recovery', () => {
+  it('preserves paid-request HTTP status for customer-safe error classification', async () => {
+    await expect(
+      readJsonResponse(
+        Response.json({ error: 'service dependencies are not ready' }, { status: 503 }),
+      ),
+    ).rejects.toEqual(new WorkbenchRequestError('service dependencies are not ready', 503));
+
+    await expect(
+      readJsonResponse(
+        Response.json({ error: 'Payment required', reason: 'repository changed' }, { status: 409 }),
+      ),
+    ).rejects.toEqual(new WorkbenchRequestError('repository changed', 409));
+  });
+
   it('does not reopen the wallet from stale retry-safe state after local authorization', () => {
     expect(paymentRetryAllowed({ walletAuthorized: true }, { retrySafe: true })).toBe(false);
     expect(paymentRetryAllowed({ walletAuthorized: false }, { retrySafe: true })).toBe(true);
@@ -272,6 +290,133 @@ describe('Workbench payment recovery storage', () => {
 });
 
 describe('server-owned payment attempts', () => {
+  it('recovers a lost payment response through bounded read-only polling', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-27T12:00:00.000Z'));
+    const expiresAt = new Date(Date.now() + 60_000).toISOString();
+    const responses = [
+      paymentAttemptResponse('submitting', expiresAt),
+      paymentAttemptResponse('indeterminate', expiresAt),
+      paymentAttemptResponse('job_reserved', expiresAt, {
+        id: 'job-11111111',
+        state: 'settlement_pending',
+      }),
+    ];
+    const request = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      Response.json(responses.shift()),
+    );
+    const paymentSubmission = vi.fn(async () => {
+      throw new Error('payment response lost');
+    });
+    vi.stubGlobal('fetch', request);
+
+    try {
+      const recovered = paymentSubmission().catch(() =>
+        reconcilePaymentAttempt('attempt-11111111', quote.id),
+      );
+      await vi.runAllTimersAsync();
+
+      await expect(recovered).resolves.toMatchObject({
+        paymentStatus: 'job_reserved',
+        job: { id: 'job-11111111' },
+      });
+      expect(paymentSubmission).toHaveBeenCalledTimes(1);
+      expect(request).toHaveBeenCalledTimes(3);
+      for (const [, init] of request.mock.calls) {
+        const headers = new Headers(init?.headers);
+        expect(init?.method).toBeUndefined();
+        expect(init?.body).toBeUndefined();
+        expect(headers.get('payment-signature')).toBeNull();
+        expect(headers.get('x-payment')).toBeNull();
+      }
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps polling an earlier server stage after the wallet has signed', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-27T12:00:00.000Z'));
+    const expiresAt = new Date(Date.now() + 60_000).toISOString();
+    const responses = [
+      paymentAttemptResponse('created', expiresAt),
+      paymentAttemptResponse('wallet_opened', expiresAt),
+      paymentAttemptResponse('job_reserved', expiresAt, {
+        id: 'job-11111111',
+        state: 'settlement_pending',
+      }),
+    ];
+    const request = vi.fn(async () => Response.json(responses.shift()));
+    vi.stubGlobal('fetch', request);
+
+    try {
+      const recovered = reconcilePaymentAttempt('attempt-11111111', quote.id, {
+        walletAuthorized: true,
+        deadlineMs: Date.now() + 60_000,
+      });
+      await vi.runAllTimersAsync();
+
+      await expect(recovered).resolves.toMatchObject({
+        paymentStatus: 'job_reserved',
+        job: { id: 'job-11111111' },
+      });
+      expect(request).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops read-only polling at the canonical attempt deadline', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-27T12:00:00.000Z'));
+    const expiresAt = new Date(Date.now() + 2_500).toISOString();
+    const request = vi.fn(async () =>
+      Response.json(paymentAttemptResponse('indeterminate', expiresAt)),
+    );
+    vi.stubGlobal('fetch', request);
+
+    try {
+      const recovered = reconcilePaymentAttempt('attempt-11111111', quote.id);
+      await vi.runAllTimersAsync();
+
+      await expect(recovered).resolves.toMatchObject({ paymentStatus: 'indeterminate' });
+      expect(request.mock.calls.length).toBeGreaterThan(1);
+      expect(Date.now()).toBe(Date.parse(expiresAt));
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
+  it('cancels pending reads without leaving a recovery timer running', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-27T12:00:00.000Z'));
+    const expiresAt = new Date(Date.now() + 60_000).toISOString();
+    const request = vi.fn(async () =>
+      Response.json(paymentAttemptResponse('submitting', expiresAt)),
+    );
+    const controller = new AbortController();
+    vi.stubGlobal('fetch', request);
+
+    try {
+      const recovery = reconcilePaymentAttempt('attempt-11111111', quote.id, {
+        signal: controller.signal,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request).toHaveBeenCalledTimes(1);
+
+      controller.abort();
+      await expect(recovery).rejects.toMatchObject({ name: 'AbortError' });
+      await vi.runAllTimersAsync();
+      expect(request).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
   it('uses canonical top-level status and reserved job data', () => {
     expect(
       normalizePaymentAttempt(
@@ -317,6 +462,45 @@ describe('server-owned payment attempts', () => {
     ).toThrow('did not match');
   });
 });
+
+describe('wallet authorization deadline', () => {
+  it('uses the earlier of the five-minute payment window and quote expiry', () => {
+    const signedAt = Date.parse('2026-08-27T12:00:00.000Z');
+
+    expect(
+      walletAuthorizationDeadline({
+        walletAuthorizedAt: new Date(signedAt).toISOString(),
+        quote: { ...quote, expiresAt: new Date(signedAt + 900_000).toISOString() },
+      }),
+    ).toBe(signedAt + 300_000);
+    expect(
+      walletAuthorizationDeadline({
+        walletAuthorizedAt: new Date(signedAt).toISOString(),
+        quote: { ...quote, expiresAt: new Date(signedAt + 120_000).toISOString() },
+      }),
+    ).toBe(signedAt + 120_000);
+  });
+});
+
+function paymentAttemptResponse(
+  paymentStatus: 'created' | 'wallet_opened' | 'submitting' | 'indeterminate' | 'job_reserved',
+  expiresAt: string,
+  job?: { id: string; state: string },
+) {
+  return {
+    attempt: {
+      id: 'attempt-11111111',
+      quoteId: quote.id,
+      idempotencyKey: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      stage: paymentStatus,
+      retrySafe: false,
+      expiresAt,
+    },
+    paymentStatus,
+    retrySafe: false,
+    ...(job ? { job } : {}),
+  };
+}
 
 describe('paymentAccountId', () => {
   it('uses the immutable GitHub id rather than the mutable login', () => {

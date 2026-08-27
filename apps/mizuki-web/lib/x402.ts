@@ -51,7 +51,9 @@ export type PaymentClientStage = 'wallet_opened' | 'wallet_signed' | 'submitting
 
 export type PaymentClientErrorCode =
   | 'challenge_invalid'
+  | 'insufficient_funds'
   | 'rpc_unavailable'
+  | 'wallet_authorization_failed'
   | 'wallet_disconnected'
   | 'wallet_rejected'
   | 'wallet_response_invalid'
@@ -66,6 +68,75 @@ export class PaymentClientError extends Error {
   ) {
     super(message, options);
     this.name = 'PaymentClientError';
+  }
+}
+
+export async function assertPaymentBalance(
+  wallet: string,
+  amountAtomic: string,
+  request: typeof fetch = fetch,
+): Promise<void> {
+  if (process.env.NEXT_PUBLIC_SOLANA_NETWORK === 'solana-devnet') return;
+  let tokenAccount: string;
+  try {
+    tokenAccount = await associatedTokenAddress(wallet, USDC_MAINNET, TOKEN_PROGRAM);
+  } catch (cause) {
+    throw new PaymentClientError('wallet_disconnected', 'The payment wallet is invalid', {
+      cause,
+    });
+  }
+
+  let response: Response;
+  try {
+    response = await fetchWithDeadline(
+      '/api/solana-rpc',
+      {
+        method: 'POST',
+        cache: 'no-store',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 'mizuki-payment-balance',
+          method: 'getTokenAccountBalance',
+          params: [tokenAccount, { commitment: 'confirmed' }],
+        }),
+      },
+      request,
+      PAYMENT_CHALLENGE_TIMEOUT_MS,
+    );
+  } catch (cause) {
+    throw new PaymentClientError(
+      'rpc_unavailable',
+      'The Solana payment balance could not be checked',
+      { cause },
+    );
+  }
+
+  const body = (await response.json().catch(() => undefined)) as unknown;
+  if (!response.ok || !isRecord(body)) {
+    throw new PaymentClientError('rpc_unavailable', 'The Solana payment balance was unavailable');
+  }
+  if (isRecord(body.error)) {
+    const message = typeof body.error.message === 'string' ? body.error.message : '';
+    if (/could not find account|account.*not found/i.test(message)) {
+      throw new PaymentClientError(
+        'insufficient_funds',
+        'The connected wallet has no USDC token account',
+      );
+    }
+    throw new PaymentClientError('rpc_unavailable', 'The Solana payment balance was unavailable');
+  }
+  const result = isRecord(body.result) ? body.result : undefined;
+  const value = result && isRecord(result.value) ? result.value : undefined;
+  const balance = value?.amount;
+  if (typeof balance !== 'string' || !/^\d+$/.test(balance)) {
+    throw new PaymentClientError('rpc_unavailable', 'The Solana payment balance was invalid');
+  }
+  if (!/^\d+$/.test(amountAtomic) || BigInt(balance) < BigInt(amountAtomic)) {
+    throw new PaymentClientError(
+      'insufficient_funds',
+      'The connected wallet has insufficient USDC',
+    );
   }
 }
 
@@ -173,12 +244,16 @@ export function paymentPreparationError(cause: unknown, quoteAmount: string): st
         return 'Payment was cancelled in your wallet. Your wallet was not charged and no job was created.';
       case 'wallet_disconnected':
         return 'The payment wallet disconnected. Reconnect it and try again. Your wallet was not charged and no job was created.';
+      case 'wallet_authorization_failed':
+        return 'The wallet could not authorize this payment. Check the wallet for details or try another supported wallet. No payment or job was created.';
       case 'wallet_signature_invalid':
       case 'wallet_response_invalid':
       case 'wallet_transaction_unsafe':
         return 'The wallet could not safely authorize this payment. Update or reconnect the wallet, or choose another supported wallet. No payment or job was created.';
       case 'challenge_invalid':
         return 'The payment request no longer matches this quote. Refresh the page and request a new quote. No payment or job was created.';
+      case 'insufficient_funds':
+        return `Your connected wallet does not have enough USDC on Solana to pay the ${quoteAmount} quote. Add USDC to this wallet and try again. No payment or job was created.`;
       case 'rpc_unavailable':
         return 'The Solana payment network could not prepare the transaction. Try again in a moment. Your wallet was not charged and no job was created.';
     }
@@ -220,7 +295,7 @@ export function paymentPreparationError(cause: unknown, quoteAmount: string): st
     return 'The Solana payment network could not prepare the transaction. Try again in a moment. Your wallet was not charged and no job was created.';
   }
 
-  return 'Payment could not start. Reconnect the wallet and try again. Your wallet was not charged and no job was created.';
+  return 'The wallet could not authorize this payment. Check the wallet for details or try another supported wallet. No payment or job was created.';
 }
 
 export function parsePaymentTerms(value: unknown, quoteAmount: string): PaymentTerms {
@@ -443,17 +518,7 @@ function walletSigner(
           })),
         );
       } catch (cause) {
-        const message = cause instanceof Error ? cause.message : '';
-        const code = /reject|declin|cancel/i.test(message)
-          ? 'wallet_rejected'
-          : 'wallet_disconnected';
-        throw new PaymentClientError(
-          code,
-          code === 'wallet_rejected'
-            ? 'The wallet rejected the payment request'
-            : 'The wallet disconnected before authorizing the payment',
-          { cause },
-        );
+        throw walletSigningFailure(cause);
       }
       if (walletResults.length !== transactions.length) {
         throw new PaymentClientError(
@@ -485,6 +550,62 @@ function walletSigner(
       return signatures;
     },
   };
+}
+
+function walletSigningFailure(cause: unknown): PaymentClientError {
+  const detail = walletErrorDetail(cause);
+  if (/\b4001\b|reject|declin|cancel|user denied|user refused/i.test(detail)) {
+    return new PaymentClientError('wallet_rejected', 'The wallet rejected the payment request', {
+      cause,
+    });
+  }
+  if (
+    /disconnect|not connected|session.*(?:closed|expired|missing|not found)|account.*(?:changed|mismatch|does not match)|network.*(?:changed|mismatch)|chain.*(?:changed|mismatch)/i.test(
+      detail,
+    )
+  ) {
+    return new PaymentClientError(
+      'wallet_disconnected',
+      'The wallet disconnected before authorizing the payment',
+      { cause },
+    );
+  }
+  if (
+    /malformed|invalid.*(?:response|transaction|signature)|incomplete|did not sign|not a signer|unsupported|does not support.*sign|cannot sign/i.test(
+      detail,
+    )
+  ) {
+    return new PaymentClientError(
+      'wallet_response_invalid',
+      'The wallet returned an unsupported signing response',
+      { cause },
+    );
+  }
+  return new PaymentClientError(
+    'wallet_authorization_failed',
+    'The wallet could not authorize the payment',
+    { cause },
+  );
+}
+
+function walletErrorDetail(cause: unknown): string {
+  const detail: string[] = [];
+  let current = cause;
+  for (let depth = 0; depth < 3 && current; depth += 1) {
+    if (current instanceof Error) {
+      detail.push(current.name, current.message);
+      current = current.cause;
+      continue;
+    }
+    if (!isRecord(current)) break;
+    if (typeof current.name === 'string') detail.push(current.name);
+    if (typeof current.message === 'string') detail.push(current.message);
+    if (typeof current.code === 'string' || typeof current.code === 'number') {
+      detail.push(String(current.code));
+    }
+    current = current.cause;
+  }
+  return detail.join(' ');
 }
 
 function notifyStage(

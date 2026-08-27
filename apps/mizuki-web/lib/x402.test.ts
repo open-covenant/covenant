@@ -21,6 +21,7 @@ import {
 import type { WalletAccount } from '@wallet-standard/base';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  assertPaymentBalance,
   createPaymentFetch,
   LIGHTHOUSE_PROGRAM,
   parsePaymentTerms,
@@ -332,6 +333,82 @@ describe('x402 quote policy', () => {
     );
   });
 
+  it.each([
+    ['disconnect', new Error('Wallet disconnected'), 'wallet_disconnected'],
+    ['expired session', new Error('WalletConnect session expired'), 'wallet_disconnected'],
+    ['account change', new Error('Wallet account changed'), 'wallet_disconnected'],
+    [
+      'malformed response',
+      new Error('WalletConnect returned an invalid signing response'),
+      'wallet_response_invalid',
+    ],
+    [
+      'unsupported signing method',
+      new Error('WalletConnect wallet does not support transaction signing'),
+      'wallet_response_invalid',
+    ],
+    [
+      'unknown provider failure',
+      new Error('Unexpected provider error'),
+      'wallet_authorization_failed',
+    ],
+  ])(
+    'classifies a wallet %s without falsely reporting a disconnect',
+    async (_case, failure, code) => {
+      const { payer, paymentRequired } = await livePaymentFixture();
+      const paidFetch = createPaymentFetch({
+        account: payer.account,
+        feature: {
+          ...payer.feature,
+          async signTransaction(): Promise<never> {
+            throw failure;
+          },
+        },
+        quotePayment: paymentRequired,
+        quoteAmount: requirements.amount,
+        request: vi.fn(async () => paymentChallenge(paymentRequired)),
+      });
+
+      let cause: unknown;
+      try {
+        await paidFetch('https://mizuki.example/api/mizuki/v1/jobs', {
+          method: 'POST',
+          body: '{}',
+        });
+      } catch (error) {
+        cause = error;
+      }
+
+      expect(cause).toMatchObject({ code });
+      const message = paymentPreparationError(cause, '2 USDC');
+      if (code === 'wallet_disconnected') expect(message).toContain('disconnected');
+      else expect(message).not.toContain('disconnected');
+    },
+  );
+
+  it('recognizes a provider rejection code without requiring an Error instance', async () => {
+    const { payer, paymentRequired } = await livePaymentFixture();
+    const paidFetch = createPaymentFetch({
+      account: payer.account,
+      feature: {
+        ...payer.feature,
+        async signTransaction(): Promise<never> {
+          throw { code: 4001 };
+        },
+      },
+      quotePayment: paymentRequired,
+      quoteAmount: requirements.amount,
+      request: vi.fn(async () => paymentChallenge(paymentRequired)),
+    });
+
+    await expect(
+      paidFetch('https://mizuki.example/api/mizuki/v1/jobs', {
+        method: 'POST',
+        body: '{}',
+      }),
+    ).rejects.toMatchObject({ code: 'wallet_rejected' });
+  });
+
   it('selects the one route that exactly matches the accepted quote', () => {
     const terms = parsePaymentTerms(
       { x402Version: 2, accepts: [requirements] },
@@ -406,6 +483,58 @@ describe('x402 quote policy', () => {
     );
   });
 
+  it('checks the canonical USDC balance before opening the wallet', async () => {
+    const request = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      Response.json({
+        jsonrpc: '2.0',
+        id: 'mizuki-payment-balance',
+        result: { value: { amount: '4000000', decimals: 6, uiAmountString: '4' } },
+      }),
+    );
+
+    await expect(assertPaymentBalance('1'.repeat(32), '2000000', request)).resolves.toBeUndefined();
+
+    const [, init] = request.mock.calls[0]!;
+    expect(JSON.parse(String(init?.body))).toMatchObject({
+      method: 'getTokenAccountBalance',
+      params: [expect.any(String), { commitment: 'confirmed' }],
+    });
+  });
+
+  it('stops an underfunded wallet before transaction signing', async () => {
+    const request = vi.fn(async () =>
+      Response.json({
+        jsonrpc: '2.0',
+        id: 'mizuki-payment-balance',
+        result: { value: { amount: '1999999', decimals: 6, uiAmountString: '1.999999' } },
+      }),
+    );
+
+    await expect(assertPaymentBalance('1'.repeat(32), '2000000', request)).rejects.toMatchObject({
+      code: 'insufficient_funds',
+    });
+  });
+
+  it('distinguishes a missing USDC account from an unavailable RPC', async () => {
+    const missing = vi.fn(async () =>
+      Response.json({
+        jsonrpc: '2.0',
+        id: 'mizuki-payment-balance',
+        error: { code: -32602, message: 'Invalid param: could not find account' },
+      }),
+    );
+    const unavailable = vi.fn(async () =>
+      Response.json({ error: 'Solana RPC is unavailable' }, { status: 502 }),
+    );
+
+    await expect(assertPaymentBalance('1'.repeat(32), '2000000', missing)).rejects.toMatchObject({
+      code: 'insufficient_funds',
+    });
+    await expect(
+      assertPaymentBalance('1'.repeat(32), '2000000', unavailable),
+    ).rejects.toMatchObject({ code: 'rpc_unavailable' });
+  });
+
   it('does not expose spend-control configuration to customers', () => {
     const message = paymentPreparationError(
       new Error('All payment requirements were rejected by spendControls.maxAmountPerPayment'),
@@ -433,7 +562,8 @@ describe('x402 quote policy', () => {
   it('does not claim an unknown preparation error means insufficient funds', () => {
     const message = paymentPreparationError(new Error('unexpected wallet adapter error'), '2 USDC');
 
-    expect(message).toContain('Reconnect the wallet');
+    expect(message).toContain('wallet could not authorize this payment');
+    expect(message).not.toContain('Reconnect');
     expect(message).not.toContain('at least 2 USDC');
   });
 

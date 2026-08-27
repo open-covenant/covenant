@@ -24,6 +24,7 @@ import {
   reconcilePaymentAttempt,
   reportPaymentAttemptStage,
   saveWorkbenchPaymentRecovery,
+  walletAuthorizationDeadline,
   withPaymentAttemptLock,
   type WorkbenchPaymentRecovery,
 } from '@/lib/payment';
@@ -43,7 +44,7 @@ import {
   WorkbenchRequestError,
 } from '@/lib/workbench-client';
 import { paymentWalletNetwork } from '@/lib/wallet-standard';
-import { createPaymentFetch, paymentPreparationError } from '@/lib/x402';
+import { assertPaymentBalance, createPaymentFetch, paymentPreparationError } from '@/lib/x402';
 import {
   ServiceContractNote,
   WorkbenchEmpty,
@@ -331,7 +332,11 @@ function IssueAndPayment({
   }, [accountId, repository.fullName]);
 
   useEffect(() => {
-    return () => paymentStatusController.current?.abort();
+    return () => {
+      const controller = paymentStatusController.current;
+      paymentStatusController.current = null;
+      controller?.abort();
+    };
   }, [accountId, repository.fullName]);
 
   const paymentLocked =
@@ -444,6 +449,7 @@ function IssueAndPayment({
     setError(null);
     setState('paying');
     try {
+      await assertPaymentBalance(connected.account.address, quote.priceAtomic);
       const attempt = await createPaymentAttempt({
         quoteId: quote.id,
         wallet: connected.account.address,
@@ -451,6 +457,8 @@ function IssueAndPayment({
       attemptId = attempt.id;
       if (attempt.job || attempt.paymentStatus === 'job_reserved') {
         if (!attempt.job) throw new Error('The reserved payment attempt did not include its job');
+        clearWorkbenchPaymentRecovery(accountId, quote.id);
+        paymentRecovery.current = null;
         router.push(`/app/jobs/${encodeURIComponent(attempt.job.id)}`);
         return;
       }
@@ -458,6 +466,7 @@ function IssueAndPayment({
         recovery = {
           phase: 'uncertain',
           walletAuthorized: true,
+          walletAuthorizedAt: new Date().toISOString(),
           accountId,
           attemptId: attempt.id,
           idempotencyKey: attempt.idempotencyKey,
@@ -490,7 +499,12 @@ function IssueAndPayment({
         quoteAmount: quote.priceAtomic,
         onStage(stage) {
           if (stage === 'wallet_signed') {
-            recovery = { ...recovery!, phase: 'attempting', walletAuthorized: true };
+            recovery = {
+              ...recovery!,
+              phase: 'attempting',
+              walletAuthorized: true,
+              walletAuthorizedAt: recovery!.walletAuthorizedAt ?? new Date().toISOString(),
+            };
             paymentRecovery.current = recovery;
             saveWorkbenchPaymentRecovery(recovery);
           }
@@ -566,6 +580,8 @@ function IssueAndPayment({
     try {
       const status = await reconcilePaymentAttempt(recovery.attemptId, recovery.quote.id, {
         signal: controller.signal,
+        walletAuthorized: recovery.walletAuthorized === true,
+        deadlineMs: walletAuthorizationDeadline(recovery),
       });
       if (status.job || status.paymentStatus === 'job_reserved') {
         if (!status.job) throw new Error('The reserved payment attempt did not include its job');
@@ -1096,11 +1112,20 @@ function paymentAttemptRequestError(cause: WorkbenchRequestError): string {
   if (cause.status === 404) {
     return 'This quote is no longer available. Refresh the page and request a new fixed quote. No payment or job was created.';
   }
+  if (cause.status === 403) {
+    return 'Workbench can no longer start work in this repository. Review the repository connection and request a new quote. No payment or job was created.';
+  }
   if (cause.status === 409) {
     if (/expired/i.test(cause.message)) {
       return 'This quote expired. Refresh the page and request a new fixed quote. No payment or job was created.';
     }
+    if (/repository changed|issue.*changed|authorization/i.test(cause.message)) {
+      return 'The repository or issue changed after this quote was created. Review it and request a new fixed quote. No payment or job was created.';
+    }
     return 'This quote already has a payment attempt. Refresh Workbench and check its status before trying again. No new payment was requested.';
+  }
+  if (cause.status === 402) {
+    return "The payment authorization was not accepted. Check this payment's status before trying again. No new payment was requested.";
   }
   if (cause.status === 429) {
     return 'Payment was requested too many times. Wait a moment and try again. No payment or job was created.';

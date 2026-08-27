@@ -2150,6 +2150,7 @@ dependencies = [
  "covenant-robinhood",
  "covenant-router",
  "covenant-runtime",
+ "covenant-rwa-firewall",
  "covenant-sap-bridge",
  "covenant-sdk",
  "covenant-settlement",

@@ -1814,22 +1814,26 @@ textarea:focus-visible {
 .workbench-entry {
   min-width: 0;
   padding: clamp(28px, 4vw, 48px);
-  border: 1px solid #33383b;
-  background: #080909;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--ink-raised);
 }
 
 .workbench-entry h2 {
   max-width: 620px;
   margin: 18px 0;
   font-size: clamp(28px, 4vw, 50px);
-  font-weight: 350;
-  line-height: 1.06;
-  letter-spacing: -0.035em;
+  font-family: var(--font-display);
+  font-variation-settings: 'wdth' 125;
+  font-weight: 600;
+  line-height: 0.96;
+  letter-spacing: -0.045em;
+  text-transform: uppercase;
 }
 
 .workbench-entry > p:not(.eyebrow) {
   max-width: 640px;
-  color: #92999c;
+  color: var(--muted);
   line-height: 1.65;
 }
 
@@ -1839,7 +1843,7 @@ textarea:focus-visible {
 
 .workbench-entry .workbench-entry-note {
   margin: 18px 0 0;
-  color: #676f73;
+  color: var(--muted-dark);
   font-size: 12px;
 }
 

@@ -156,6 +156,19 @@ read for browser builds):
 const mainnet = resolveSolanaNetwork({ cluster: 'mainnet' });
 ```
 
+### Staged compute settlement
+
+Compute escrow is implemented in program source but is not part of the current
+mainnet settlement deployment. The `prepare*Compute*Instruction` builders
+therefore require an explicit `{ programId, cluster, rpcUrl }` deployment on
+every call. `deriveComputeConfigPda` and `deriveComputeEscrowPda` likewise
+require an explicit program ID. There is no default compute deployment.
+The instruction builders reject the SDK's current settlement program ID on
+`mainnet` and `mainnet-beta` until compute support is actually deployed there.
+
+These builders are for a verified future deployment or local validator; do not
+send them to the SDK's current default settlement program.
+
 ## Surface
 
 | Area | Exports |
@@ -165,6 +178,7 @@ const mainnet = resolveSolanaNetwork({ cluster: 'mainnet' });
 | PDA derivation | `deriveConfigPda`, `deriveAgentPda`, `deriveTaskPda`, `deriveCreditsPda`, `deriveStakePositionPda`, `deriveReceiptBatchPda`, `deriveAssociatedTokenAddress`, the stake-program `derive*Pda`, `SETTLEMENT_PROGRAM_ID`, `STAKE_PROGRAM_ID` |
 | Account reads | `fetchConfig`, `fetchAgent`, `fetchTask`, `fetchCreditAccount`, `fetchStakePosition`, `fetchReceiptBatch`, and the matching `decode*` |
 | Settlement instructions | `prepareRegisterAgentInstruction`, `prepareStakeInstruction`, `prepareBuyCreditsInstruction`, `prepareCreateTaskInstruction`, `prepareReleaseTaskInstruction`, `prepareAnchorReceiptBatchInstruction` |
+| Staged compute settlement | `prepareInitializeComputePaymentsInstruction`, `prepareUpdateComputeSettlementAuthorityInstruction`, `prepareFundComputeJobInstruction`, `prepareSettleComputeJobInstruction`, `prepareRefundComputeJobInstruction`, `deriveComputeConfigPda`, `deriveComputeEscrowPda` |
 | Stake-program instructions | `prepareStakeInitializeInstruction`, `prepareStakeCreatePositionInstruction`, `prepareStakeIncreaseAmountInstruction`, `prepareStakeClaimInstruction`, `prepareStakeClosePositionInstruction`, plus the fee-router, pause, and authority admin builders |
 | Transactions and serialization | `buildTransaction`, `sendAndConfirmSignedTransaction`, `toTransactionInstruction`, `toTransactionInstructions` |
 | Addresses and hashing | `isSolanaAddress`, `assertSolanaAddress`, `assertHash32`, `hash32FromText`, `toBase58`, `toPublicKey`, `ACCOUNT_SEEDS` |

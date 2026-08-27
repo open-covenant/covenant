@@ -5,6 +5,7 @@
 // from what the on-chain program accepts without the IDL changing too.
 import { PublicKey, TransactionInstruction } from '@solana/web3.js';
 import type { PreparedSolanaBundle, PreparedSolanaInstruction } from './instructions.js';
+import { computeSettlementIdl } from './idl/compute-settlement.js';
 import { settlementIdl } from './idl/settlement.js';
 import { stakeIdl } from './idl/stake.js';
 import * as borsh from './borsh.js';
@@ -37,7 +38,11 @@ interface Idl {
   types?: { name: string; type: { fields: IdlField[] } }[];
 }
 
-const IDLS: Idl[] = [settlementIdl as unknown as Idl, stakeIdl as unknown as Idl];
+const IDLS: Idl[] = [
+  computeSettlementIdl as unknown as Idl,
+  settlementIdl as unknown as Idl,
+  stakeIdl as unknown as Idl,
+];
 
 // The human-facing descriptors name a few fields differently from the on-chain
 // IDL (and carry the odd display-only field the program does not accept). Keyed

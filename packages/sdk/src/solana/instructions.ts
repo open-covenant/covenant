@@ -1,6 +1,6 @@
 import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
-import { COVENANT_TOKEN_SYMBOL } from '../config.js';
+import { COVENANT_TOKEN_SYMBOL, DEFAULT_PROTOCOL_PROGRAM_ID } from '../config.js';
 import {
   assertHash32,
   assertSolanaAddress,
@@ -95,6 +95,63 @@ export interface AnchorReceiptBatchInput {
   batchId: Hash32;
   merkleRoot: Hash32;
   receiptCount: number;
+}
+
+export interface ComputeProgramDeployment {
+  programId: SolanaAddress;
+  cluster: string;
+  rpcUrl: string;
+}
+
+interface ComputeInstructionInput {
+  deployment: ComputeProgramDeployment;
+  configAccount: SolanaAddress;
+  computeConfigAccount: SolanaAddress;
+}
+
+export interface InitializeComputePaymentsInput extends ComputeInstructionInput {
+  authority: SolanaAddress;
+  usdcMint: SolanaAddress;
+  settlementAuthority: SolanaAddress;
+}
+
+export interface UpdateComputeSettlementAuthorityInput extends ComputeInstructionInput {
+  authority: SolanaAddress;
+  settlementAuthority: SolanaAddress;
+}
+
+export interface FundComputeJobInput extends ComputeInstructionInput {
+  escrowAccount: SolanaAddress;
+  client: SolanaAddress;
+  clientUsdcAccount: SolanaAddress;
+  providerUsdcAccount: SolanaAddress;
+  escrowVault: SolanaAddress;
+  usdcMint: SolanaAddress;
+  jobId: Hash32;
+  quoteCommitment: Hash32;
+  provider: SolanaAddress;
+  maxUsdcAmount: string;
+  expiresAt: string;
+}
+
+export interface SettleComputeJobInput extends ComputeInstructionInput {
+  escrowAccount: SolanaAddress;
+  settlementAuthority: SolanaAddress;
+  escrowVault: SolanaAddress;
+  providerUsdcAccount: SolanaAddress;
+  clientUsdcAccount: SolanaAddress;
+  usdcMint: SolanaAddress;
+  actualUsdcAmount: string;
+  receiptCommitment: Hash32;
+}
+
+export interface RefundComputeJobInput extends ComputeInstructionInput {
+  escrowAccount: SolanaAddress;
+  authority: SolanaAddress;
+  escrowVault: SolanaAddress;
+  clientUsdcAccount: SolanaAddress;
+  usdcMint: SolanaAddress;
+  refundCommitment: Hash32;
 }
 
 const SYSTEM_PROGRAM_ID = '11111111111111111111111111111111';
@@ -236,6 +293,109 @@ export function prepareAnchorReceiptBatchInstruction(
   });
 }
 
+export function prepareInitializeComputePaymentsInstruction(
+  input: InitializeComputePaymentsInput,
+): PreparedSolanaBundle {
+  return computeBundle(input.deployment, {
+    instruction: 'initialize_compute_payments',
+    accounts: [
+      meta('config', input.configAccount, false, false),
+      meta('compute_config', input.computeConfigAccount, false, true),
+      meta('authority', input.authority, true, true),
+      meta('usdc_mint', input.usdcMint, false, false),
+      meta('system_program', SYSTEM_PROGRAM_ID, false, false),
+    ],
+    data: {
+      settlement_authority: assertSolanaAddress(input.settlementAuthority, 'settlement authority'),
+    },
+  });
+}
+
+export function prepareUpdateComputeSettlementAuthorityInstruction(
+  input: UpdateComputeSettlementAuthorityInput,
+): PreparedSolanaBundle {
+  return computeBundle(input.deployment, {
+    instruction: 'update_compute_settlement_authority',
+    accounts: [
+      meta('config', input.configAccount, false, false),
+      meta('compute_config', input.computeConfigAccount, false, true),
+      meta('authority', input.authority, true, false),
+    ],
+    data: {
+      settlement_authority: assertSolanaAddress(input.settlementAuthority, 'settlement authority'),
+    },
+  });
+}
+
+export function prepareFundComputeJobInstruction(input: FundComputeJobInput): PreparedSolanaBundle {
+  return computeBundle(input.deployment, {
+    instruction: 'fund_compute_job',
+    accounts: [
+      meta('config', input.configAccount, false, false),
+      meta('compute_config', input.computeConfigAccount, false, false),
+      meta('escrow', input.escrowAccount, false, true),
+      meta('client', input.client, true, true),
+      meta('client_usdc', input.clientUsdcAccount, false, true),
+      meta('provider_usdc', input.providerUsdcAccount, false, false),
+      meta('escrow_vault', input.escrowVault, false, true),
+      meta('usdc_mint', input.usdcMint, false, false),
+      meta('token_program', TOKEN_PROGRAM_ID, false, false),
+      meta('system_program', SYSTEM_PROGRAM_ID, false, false),
+    ],
+    data: {
+      job_id: assertHash32(input.jobId, 'job id'),
+      quote_commitment: assertHash32(input.quoteCommitment, 'quote commitment'),
+      provider: assertSolanaAddress(input.provider, 'provider'),
+      max_usdc_amount: input.maxUsdcAmount,
+      expires_at: input.expiresAt,
+    },
+  });
+}
+
+export function prepareSettleComputeJobInstruction(
+  input: SettleComputeJobInput,
+): PreparedSolanaBundle {
+  return computeBundle(input.deployment, {
+    instruction: 'settle_compute_job',
+    accounts: [
+      meta('config', input.configAccount, false, false),
+      meta('compute_config', input.computeConfigAccount, false, false),
+      meta('escrow', input.escrowAccount, false, true),
+      meta('settlement_authority', input.settlementAuthority, true, false),
+      meta('escrow_vault', input.escrowVault, false, true),
+      meta('provider_usdc', input.providerUsdcAccount, false, true),
+      meta('client_usdc', input.clientUsdcAccount, false, true),
+      meta('usdc_mint', input.usdcMint, false, false),
+      meta('token_program', TOKEN_PROGRAM_ID, false, false),
+    ],
+    data: {
+      actual_usdc_amount: input.actualUsdcAmount,
+      receipt_commitment: assertHash32(input.receiptCommitment, 'receipt commitment'),
+    },
+  });
+}
+
+export function prepareRefundComputeJobInstruction(
+  input: RefundComputeJobInput,
+): PreparedSolanaBundle {
+  return computeBundle(input.deployment, {
+    instruction: 'refund_compute_job',
+    accounts: [
+      meta('config', input.configAccount, false, false),
+      meta('compute_config', input.computeConfigAccount, false, false),
+      meta('escrow', input.escrowAccount, false, true),
+      meta('authority', input.authority, true, false),
+      meta('escrow_vault', input.escrowVault, false, true),
+      meta('client_usdc', input.clientUsdcAccount, false, true),
+      meta('usdc_mint', input.usdcMint, false, false),
+      meta('token_program', TOKEN_PROGRAM_ID, false, false),
+    ],
+    data: {
+      refund_commitment: assertHash32(input.refundCommitment, 'refund commitment'),
+    },
+  });
+}
+
 function bundle(
   network: ReturnType<typeof resolveSolanaNetwork>,
   instruction: PreparedSolanaInstruction,
@@ -245,6 +405,31 @@ function bundle(
     cluster: network.cluster,
     rpcUrl: network.rpcUrl,
     instructions: [instruction],
+  };
+}
+
+function computeBundle(
+  deployment: ComputeProgramDeployment,
+  instruction: Omit<PreparedSolanaInstruction, 'programId'>,
+): PreparedSolanaBundle {
+  if (!deployment) throw new Error('an explicit compute deployment is required');
+  const programId = assertSolanaAddress(deployment.programId, 'compute program id');
+  const cluster = deployment.cluster.trim();
+  const rpcUrl = deployment.rpcUrl.trim();
+  if (!cluster) throw new Error('compute cluster is required');
+  if (!rpcUrl) throw new Error('compute RPC URL is required');
+  if (
+    programId === DEFAULT_PROTOCOL_PROGRAM_ID &&
+    ['mainnet', 'mainnet-beta'].includes(cluster.toLowerCase())
+  ) {
+    throw new Error('compute settlement is not deployed at the current mainnet program');
+  }
+
+  return {
+    chain: 'solana',
+    cluster,
+    rpcUrl,
+    instructions: [{ ...instruction, programId }],
   };
 }
 

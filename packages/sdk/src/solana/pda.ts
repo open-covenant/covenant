@@ -52,6 +52,16 @@ export function deriveReceiptBatchPda(batchId: Hash32, programId: Address = SETT
   return derive([utf8('receipt_batch'), hash(batchId)], programId);
 }
 
+// Compute is staged source and is not deployed at SETTLEMENT_PROGRAM_ID.
+// Requiring a program id prevents callers from silently targeting mainnet.
+export function deriveComputeConfigPda(programId: Address): DerivedPda {
+  return derive([utf8('compute_config')], programId);
+}
+
+export function deriveComputeEscrowPda(jobId: Hash32, programId: Address): DerivedPda {
+  return derive([utf8('compute_escrow'), hash(jobId)], programId);
+}
+
 // Stake-program PDAs (CstkpU2q...).
 
 export function deriveStakeConfigPda(programId: Address = STAKE_PROGRAM_ID): DerivedPda {

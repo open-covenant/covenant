@@ -52,6 +52,61 @@
       "name": "anchor_receipt_batch",
       "accounts": ["config", "batch", "authority", "system_program"],
       "data_keys": ["batch_id", "merkle_root", "receipt_count"]
+    },
+    {
+      "name": "initialize_compute_payments",
+      "accounts": ["config", "compute_config", "authority", "usdc_mint", "system_program"],
+      "data_keys": ["settlement_authority"]
+    },
+    {
+      "name": "update_compute_settlement_authority",
+      "accounts": ["config", "compute_config", "authority"],
+      "data_keys": ["settlement_authority"]
+    },
+    {
+      "name": "fund_compute_job",
+      "accounts": [
+        "config",
+        "compute_config",
+        "escrow",
+        "client",
+        "client_usdc",
+        "provider_usdc",
+        "escrow_vault",
+        "usdc_mint",
+        "token_program",
+        "system_program"
+      ],
+      "data_keys": ["expires_at", "job_id", "max_usdc_amount", "provider", "quote_commitment"]
+    },
+    {
+      "name": "settle_compute_job",
+      "accounts": [
+        "config",
+        "compute_config",
+        "escrow",
+        "settlement_authority",
+        "escrow_vault",
+        "provider_usdc",
+        "client_usdc",
+        "usdc_mint",
+        "token_program"
+      ],
+      "data_keys": ["actual_usdc_amount", "receipt_commitment"]
+    },
+    {
+      "name": "refund_compute_job",
+      "accounts": [
+        "config",
+        "compute_config",
+        "escrow",
+        "authority",
+        "escrow_vault",
+        "client_usdc",
+        "usdc_mint",
+        "token_program"
+      ],
+      "data_keys": ["refund_commitment"]
     }
   ]
 }

@@ -28,4 +28,6 @@ export const ACCOUNT_SEEDS = Object.freeze({
   stake: 'stake',
   task: 'task',
   receiptBatch: 'receipt_batch',
+  computeConfig: 'compute_config',
+  computeEscrow: 'compute_escrow',
 });

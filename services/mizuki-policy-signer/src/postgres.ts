@@ -19,6 +19,22 @@ import type {
   StoreStats,
 } from './store.js';
 
+const OUTSTANDING_BOUNTY_RESERVE = `
+  intent.status <> 'expired_unpaid'
+  AND NOT EXISTS (
+    SELECT 1
+      FROM mizuki_signer_refund_liabilities liability
+     WHERE liability.id = intent.liability_id
+       AND liability.discharged_at IS NOT NULL
+  )
+  AND NOT EXISTS (
+    SELECT 1
+      FROM mizuki_signer_operations escrow
+     WHERE escrow.kind = 'escrow_reserve'
+       AND escrow.status = 'finalized'
+       AND escrow.details ->> 'sourceJobId' = intent.job_id
+  )`;
+
 const SIGNER_SCHEMA = `
       CREATE TABLE IF NOT EXISTS mizuki_signer_operations (
         id uuid PRIMARY KEY,
@@ -612,8 +628,9 @@ export class PostgresOperationStore implements OperationStore {
             WHERE operation.id IS NULL AND liability.discharged_at IS NULL)
            + (SELECT COUNT(*) FROM mizuki_signer_payment_intents WHERE status = 'reserved'))::text
             AS refund_count,
-          (SELECT COALESCE(SUM(bounty_reserve_lamports), 0)::text
-             FROM mizuki_signer_payment_intents WHERE status <> 'expired_unpaid') AS bounty_lamports,
+          (SELECT COALESCE(SUM(intent.bounty_reserve_lamports), 0)::text
+             FROM mizuki_signer_payment_intents intent
+            WHERE ${OUTSTANDING_BOUNTY_RESERVE}) AS bounty_lamports,
           (SELECT COALESCE(SUM(amount_usd_cents), 0)::text
              FROM mizuki_signer_payment_intents
             WHERE created_at >= clock_timestamp() - interval '24 hours') AS refund_cents,
@@ -728,6 +745,14 @@ export class PostgresOperationStore implements OperationStore {
     const result = await this.pool.query(
       'SELECT * FROM mizuki_signer_payment_intents WHERE repository_admission_id = $1',
       [id],
+    );
+    return result.rows[0] ? mapPaymentIntent(result.rows[0]) : null;
+  }
+
+  async getPaymentIntentByJob(jobId: string): Promise<PaymentIntent | null> {
+    const result = await this.pool.query(
+      'SELECT * FROM mizuki_signer_payment_intents WHERE job_id = $1',
+      [jobId],
     );
     return result.rows[0] ? mapPaymentIntent(result.rows[0]) : null;
   }
@@ -1774,8 +1799,9 @@ export class PostgresOperationStore implements OperationStore {
 
   async pendingBountyReserveLamports(): Promise<string> {
     const result = await this.pool.query<{ total: string }>(
-      `SELECT COALESCE(SUM(bounty_reserve_lamports), 0)::text AS total
-         FROM mizuki_signer_payment_intents WHERE status <> 'expired_unpaid'`,
+      `SELECT COALESCE(SUM(intent.bounty_reserve_lamports), 0)::text AS total
+         FROM mizuki_signer_payment_intents intent
+        WHERE ${OUTSTANDING_BOUNTY_RESERVE}`,
     );
     return result.rows[0]?.total ?? '0';
   }

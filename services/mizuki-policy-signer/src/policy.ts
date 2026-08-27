@@ -1088,6 +1088,7 @@ export class PolicyService {
         422,
       );
     }
+    await this.assertBountyReserveHandoff(request);
     const termsEvidence = await this.merges.verifyEscrowTerms({
       repository: request.repository,
       issueNumber: request.issueNumber,
@@ -1164,6 +1165,7 @@ export class PolicyService {
         recipient: 'escrow-vault',
         details: {
           bountyId: request.bountyId,
+          ...(request.sourceJobId ? { sourceJobId: request.sourceJobId } : {}),
           bountyDigest,
           acceptanceHash: request.acceptanceHash,
           expiresAt: request.expiresAt,
@@ -1195,6 +1197,45 @@ export class PolicyService {
       this.now(),
     );
     return this.drive(record.id);
+  }
+
+  private async assertBountyReserveHandoff(request: CreateEscrowRequest): Promise<void> {
+    if (!request.sourceJobId) return;
+    const intent = await this.store.getPaymentIntentByJob(request.sourceJobId);
+    if (
+      !intent ||
+      intent.status !== 'activated' ||
+      !intent.liabilityId ||
+      !intent.settlementSignature
+    ) {
+      throw new PolicyError(
+        'bounty_reserve_not_found',
+        'Bounty escrow is not backed by an activated payment reserve',
+        422,
+      );
+    }
+    if (intent.bountyAmountUsdCents !== request.amountUsdCents) {
+      throw new PolicyError(
+        'bounty_reserve_mismatch',
+        'Bounty escrow amount does not match the protected payment reserve',
+        422,
+      );
+    }
+    const liability = await this.store.getRefundLiability(intent.settlementSignature);
+    const refund = await this.store.getByResourceKey(`refund:${intent.settlementSignature}`);
+    if (
+      !liability ||
+      liability.id !== intent.liabilityId ||
+      liability.jobId !== request.sourceJobId ||
+      liability.dischargedAt ||
+      refund?.status !== 'finalized'
+    ) {
+      throw new PolicyError(
+        'bounty_reserve_not_refunded',
+        'Bounty escrow requires a finalized refund for the source job',
+        409,
+      );
+    }
   }
 
   async issueGitHubIdentityGrant(

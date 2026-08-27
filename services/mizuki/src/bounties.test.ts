@@ -36,9 +36,10 @@ describe('BountyService', () => {
   it('uses finalized SOL escrow as the sole funding gate without a manual USD ledger seed', async () => {
     const store = new MemoryStore();
     const job = await refundedJob(store);
+    const policy = new MockPolicy();
     const service = new BountyService(
       store,
-      new MockPolicy(),
+      policy,
       reviewer({ approved: true, reason: 'scoped and correct' }),
       tickingClock(),
       bountyConfig,
@@ -52,6 +53,13 @@ describe('BountyService', () => {
       amountAtomic: '2000000000',
       fundingSignature: expect.any(String),
     });
+    expect(policy.reserveInputs).toEqual([
+      expect.objectContaining({
+        bountyId: bounty.id,
+        sourceJobId: job.id,
+        amountUsdCents: bounty.priceCents,
+      }),
+    ]);
     expect(await store.ledgerEntries()).toEqual([
       expect.objectContaining({
         kind: 'bounty_reserved',
@@ -1308,6 +1316,7 @@ class MockPolicy implements FinancialPolicy {
   releaseFailuresRemaining = 0;
   escrowRefundRecipient = 'treasury';
   lastRefundReason?: 'expired' | 'rejected' | 'dispute_resolved';
+  readonly reserveInputs: Array<Parameters<FinancialPolicy['reserveEscrow']>[0]> = [];
   readonly releaseInputs: Array<{
     repository: string;
     issueNumber: number;
@@ -1376,7 +1385,10 @@ class MockPolicy implements FinancialPolicy {
     throw new Error('not used by bounty tests');
   }
 
-  async reserveEscrow(input: { amountUsdCents: number }): Promise<PolicyOperation> {
+  async reserveEscrow(
+    input: Parameters<FinancialPolicy['reserveEscrow']>[0],
+  ): Promise<PolicyOperation> {
+    this.reserveInputs.push(input);
     return this.result('escrow_reserve', 'vault', input.amountUsdCents);
   }
 

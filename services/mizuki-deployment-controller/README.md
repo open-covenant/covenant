@@ -53,6 +53,10 @@ Stable idempotency keys are checked before the artifact is downloaded. Render se
 
 An unhealthy shadow is restored to its exact recorded baseline before its reservation is released. Promotion first restores shadow, records the exact production baseline, and deploys the reviewed image digest. The single production slot remains owned until the updater explicitly finalizes the exact active, healthy promotion after the hard ten-second observation interval, or rollback restores the baseline. Elapsed time alone never releases the slot. Finalization is idempotent and rechecks immutable Render evidence plus the functional probe. Rollback can recover a lost promotion receipt from independent Render evidence even when the caller lacks the promotion ID. Rollback completes only after the exact baseline digest is live and passes the functional probe.
 
+A forward-only shadow database migration can make an older baseline image fail during Render's pre-deploy phase. That failure remains closed by default. An operator may explicitly adopt the reviewed candidate as the next shadow baseline with `POST /v1/deployments/shadow/adopt`. Adoption is allowed only when the candidate already passed the functional probe, the exact recorded rollback ended in `pre_deploy_failed`, no production promotion started, the same immutable candidate is still the only live shadow deploy, and a fresh bracketed functional probe succeeds. Adoption performs no Render or production mutation. It preserves the original baseline and failed-restore receipt, marks the old operation closed, appends `shadow_baseline_adopted`, and releases the shadow slot. The failed operation cannot later be promoted or rolled back; the updater must begin a new deployment operation.
+
+The adoption request uses `Idempotency-Key: <upgradeId>:adopt-shadow` and binds the upgrade, proposal, candidate deploy and digest, failed restore deploy, and original baseline deploy and digest. The only accepted reason is `schema_incompatible_baseline`. Exact retries return the recorded result; a changed request fails with an idempotency or binding conflict. After adoption, resolve the updater's failed promotion reservation with its existing `resolve-failure` control operation, then explicitly reopen promotions. Adoption does not change updater state or promotion control.
+
 ## Routes
 
 All routes require `Authorization: Bearer $MIZUKI_DEPLOY_AUTH_TOKEN`.
@@ -60,6 +64,7 @@ All routes require `Authorization: Bearer $MIZUKI_DEPLOY_AUTH_TOKEN`.
 - `GET /healthz` checks Postgres without external mutations.
 - `GET /readyz` validates Postgres, both Render targets, functional application probes, and any active operation evidence.
 - `POST /v1/deployments/shadow`
+- `POST /v1/deployments/shadow/adopt`
 - `GET /v1/deployments/shadow/:deploymentId/health`
 - `POST /v1/deployments/promote`
 - `GET /v1/deployments/production/:deploymentId/health`

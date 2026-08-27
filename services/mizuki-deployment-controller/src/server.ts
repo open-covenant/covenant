@@ -8,6 +8,7 @@ import {
   finalizeRequestSchema,
   promotionRequestSchema,
   rollbackRequestSchema,
+  shadowAdoptionRequestSchema,
   shadowRequestSchema,
 } from './domain.js';
 import type { OperationStore } from './store.js';
@@ -58,6 +59,13 @@ async function route(
     const key = idempotencyKey.parse(request.headers['idempotency-key']);
     const input = shadowRequestSchema.parse(await readJson(request));
     writeJson(response, 200, await deps.controller.startShadow(input, key));
+    return;
+  }
+  if (method === 'POST' && url.pathname === '/v1/deployments/shadow/adopt') {
+    requireJson(request);
+    const key = idempotencyKey.parse(request.headers['idempotency-key']);
+    const input = shadowAdoptionRequestSchema.parse(await readJson(request));
+    writeJson(response, 200, await deps.controller.adoptShadow(input, key));
     return;
   }
   if (method === 'POST' && url.pathname === '/v1/deployments/promote') {

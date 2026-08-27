@@ -82,6 +82,21 @@ export const rollbackRequestSchema = z
   })
   .strict();
 
+export const shadowAdoptionRequestSchema = z
+  .object({
+    version: z.literal(1),
+    upgradeId: externalId,
+    proposalId: externalId,
+    deploymentId: externalId,
+    restoreDeploymentId: externalId,
+    candidateSha: gitSha,
+    candidateArtifactSha256: sha256,
+    baselineDeploymentId: externalId,
+    baselineArtifactSha256: sha256,
+    reason: z.literal('schema_incompatible_baseline'),
+  })
+  .strict();
+
 export const finalizeRequestSchema = z
   .object({
     version: z.literal(1),
@@ -98,6 +113,7 @@ export type ShadowRequest = z.infer<typeof shadowRequestSchema>;
 export type PromotionRequest = z.infer<typeof promotionRequestSchema>;
 export type FinalizeRequest = z.infer<typeof finalizeRequestSchema>;
 export type RollbackRequest = z.infer<typeof rollbackRequestSchema>;
+export type ShadowAdoptionRequest = z.infer<typeof shadowAdoptionRequestSchema>;
 export type ActionState = 'reserved' | 'triggering' | 'triggered' | 'completed' | 'failed';
 
 export interface DeploymentOperation {

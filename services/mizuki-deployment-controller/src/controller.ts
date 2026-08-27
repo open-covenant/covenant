@@ -8,6 +8,7 @@ import {
   type FinalizeRequest,
   type PromotionRequest,
   type RollbackRequest,
+  type ShadowAdoptionRequest,
   type ShadowRequest,
 } from './domain.js';
 import type { ApplicationGateway } from './probe.js';
@@ -165,6 +166,103 @@ export class DeploymentController {
     });
   }
 
+  async adoptShadow(
+    input: ShadowAdoptionRequest,
+    idempotencyKey: string,
+  ): Promise<{ status: 'completed'; operationId: string }> {
+    this.assertKey(idempotencyKey, input.upgradeId, 'adopt-shadow');
+    const hash = requestHash(input);
+
+    return this.store.withMutationLock(async () => {
+      const operation = await this.requireByShadow(input.deploymentId);
+      this.assertShadowAdoptionBinding(operation, input);
+
+      const adoption = (await this.store.events(operation.upgradeId)).find(
+        (event) => event.type === 'shadow_baseline_adopted',
+      );
+      if (adoption) {
+        const expectedKey = adoption.detail.idempotencyKey;
+        const expectedHash = adoption.detail.requestHash;
+        if (typeof expectedKey !== 'string' || typeof expectedHash !== 'string') {
+          throw internalState('Shadow adoption audit evidence is incomplete');
+        }
+        this.assertActionReplay(expectedKey, expectedHash, idempotencyKey, hash);
+        if (operation.shadowRestoreState !== 'failed' || operation.shadowActive) {
+          throw internalState('Shadow adoption evidence is incomplete');
+        }
+        return { status: 'completed', operationId: input.deploymentId };
+      }
+
+      this.assertShadowAdoptionState(operation);
+      const service = await this.requireService('shadow');
+      if (
+        !matchesServiceFingerprint(
+          service,
+          operation.shadowServiceFingerprint,
+          exactImageRef(
+            `${this.config.imageRepository}@sha256:${operation.shadowBaselineArtifactSha256}`,
+          ),
+        )
+      ) {
+        throw new ControllerError(
+          'render_service_drift',
+          'Render service configuration changed',
+          409,
+        );
+      }
+
+      const restore = await this.render.deployment(
+        this.config.shadowServiceId,
+        input.restoreDeploymentId,
+      );
+      this.assertArtifact(
+        restore,
+        operation.shadowBaselineArtifactSha256,
+        exactImageRef(
+          `${this.config.imageRepository}@sha256:${operation.shadowBaselineArtifactSha256}`,
+        ),
+      );
+      if (restore.trigger !== 'rollback' || restore.status !== 'pre_deploy_failed') {
+        throw new ControllerError(
+          'shadow_adoption_restore_mismatch',
+          'Only the recorded failed baseline rollback can be adopted',
+          409,
+        );
+      }
+
+      const current = await this.currentLive(this.config.shadowServiceId);
+      if (current.id !== input.deploymentId || !this.matchesArtifact(current, operation)) {
+        throw new ControllerError(
+          'shadow_drift',
+          'The reviewed shadow candidate is not the active deployment',
+          409,
+        );
+      }
+      await this.assertBoundApplication(this.config.shadowServiceId, current);
+
+      operation.shadowRestoreState = 'failed';
+      operation.shadowActive = false;
+      operation.updatedAt = this.now();
+      await this.store.save(
+        operation,
+        operationEvent(
+          operation,
+          'shadow_baseline_adopted',
+          {
+            deployId: input.deploymentId,
+            failedRestoreDeployId: input.restoreDeploymentId,
+            artifactSha256: operation.artifactSha256,
+            idempotencyKey,
+            requestHash: hash,
+            reason: input.reason,
+          },
+          this.now(),
+        ),
+      );
+      return { status: 'completed', operationId: input.deploymentId };
+    });
+  }
+
   async promote(
     input: PromotionRequest,
     idempotencyKey: string,
@@ -174,6 +272,7 @@ export class DeploymentController {
     return this.store.withMutationLock(async () => {
       const operation = await this.requireByShadow(input.deploymentId);
       this.assertBinding(operation, input);
+      this.assertShadowNotAdopted(operation);
       if (operation.promotionIdempotencyKey) {
         this.assertActionReplay(
           operation.promotionIdempotencyKey,
@@ -304,6 +403,7 @@ export class DeploymentController {
     return this.store.withMutationLock(async () => {
       const operation = await this.requireByShadow(input.deploymentId);
       this.assertBinding(operation, input);
+      this.assertShadowNotAdopted(operation);
       if (
         operation.mergeSha !== input.mergeSha ||
         operation.promotionDeployId !== input.promotionOperationId
@@ -371,6 +471,7 @@ export class DeploymentController {
     return this.store.withMutationLock(async () => {
       const operation = await this.requireByShadow(input.deploymentId);
       this.assertBinding(operation, input);
+      this.assertShadowNotAdopted(operation);
       if (operation.rollbackIdempotencyKey) {
         this.assertActionReplay(
           operation.rollbackIdempotencyKey,
@@ -1064,6 +1165,72 @@ export class DeploymentController {
         409,
       );
     }
+  }
+
+  private assertShadowAdoptionBinding(
+    operation: DeploymentOperation,
+    input: ShadowAdoptionRequest,
+  ): void {
+    if (
+      operation.upgradeId !== input.upgradeId ||
+      operation.proposalId !== input.proposalId ||
+      operation.shadowDeployId !== input.deploymentId ||
+      operation.shadowRestoreDeployId !== input.restoreDeploymentId ||
+      operation.candidateSha !== input.candidateSha ||
+      operation.artifactSha256 !== input.candidateArtifactSha256 ||
+      operation.shadowBaselineDeployId !== input.baselineDeploymentId ||
+      operation.shadowBaselineArtifactSha256 !== input.baselineArtifactSha256
+    ) {
+      throw new ControllerError(
+        'operation_binding_mismatch',
+        'Request does not match the recorded deployment operation',
+        409,
+      );
+    }
+  }
+
+  private assertShadowAdoptionState(operation: DeploymentOperation): void {
+    if (
+      !operation.shadowActive ||
+      operation.shadowState !== 'completed' ||
+      operation.shadowRestoreState !== 'triggered' ||
+      !operation.shadowDeployId ||
+      !operation.shadowRestoreDeployId
+    ) {
+      throw new ControllerError(
+        'shadow_adoption_not_allowed',
+        'Shadow adoption requires a healthy candidate and a failed restore in progress',
+        409,
+      );
+    }
+    if (
+      operation.promotionIdempotencyKey ||
+      operation.promotionRequestHash ||
+      operation.promotionState ||
+      operation.mergeSha ||
+      operation.productionServiceFingerprint ||
+      operation.productionBaselineDeployId ||
+      operation.productionBaselineArtifactSha256 ||
+      operation.promotionStartedAt ||
+      operation.promotionDeployId ||
+      operation.productionActive ||
+      operation.productionFinalizedAt
+    ) {
+      throw new ControllerError(
+        'shadow_adoption_not_allowed',
+        'Shadow cannot be adopted after production promotion has started',
+        409,
+      );
+    }
+  }
+
+  private assertShadowNotAdopted(operation: DeploymentOperation): void {
+    if (operation.shadowRestoreState !== 'failed' || operation.shadowActive) return;
+    throw new ControllerError(
+      'shadow_baseline_adopted',
+      'The failed operation is closed; submit a new deployment operation',
+      409,
+    );
   }
 
   private assertActionReplay(

@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { ArtifactGateway } from './artifact.js';
 import { DeploymentController } from './controller.js';
-import { ControllerError, operationEvent, requestHash, type ShadowRequest } from './domain.js';
+import {
+  ControllerError,
+  operationEvent,
+  requestHash,
+  type ShadowAdoptionRequest,
+  type ShadowRequest,
+} from './domain.js';
 import type { ApplicationGateway } from './probe.js';
 import type { RenderDeploy, RenderGateway, RenderService } from './render.js';
 import { MemoryOperationStore } from './store.js';
@@ -371,6 +377,112 @@ describe('deployment controller', () => {
     expect(context.render.mutations).toHaveLength(2);
   });
 
+  it('adopts a healthy candidate after its exact baseline restore fails before deploy', async () => {
+    const context = createContext();
+    const recovery = await prepareFailedShadowRestore(context);
+    const mutationCount = context.render.mutations.length;
+
+    await expect(
+      context.controller.adoptShadow(recovery.adoption, `${UPGRADE}:adopt-shadow`),
+    ).resolves.toEqual({ status: 'completed', operationId: recovery.started.deploymentId });
+    await expect(
+      context.controller.adoptShadow(recovery.adoption, `${UPGRADE}:adopt-shadow`),
+    ).resolves.toEqual({ status: 'completed', operationId: recovery.started.deploymentId });
+
+    expect(context.render.mutations).toHaveLength(mutationCount);
+    expect(await context.store.activeShadow()).toBeNull();
+    await expect(context.store.get(UPGRADE)).resolves.toMatchObject({
+      shadowRestoreState: 'failed',
+      shadowRestoreDeployId: recovery.adoption.restoreDeploymentId,
+      shadowActive: false,
+      shadowBaselineDeployId: 'dep-shadow-baseline',
+      shadowBaselineArtifactSha256: BASELINE_ARTIFACT,
+    });
+    const adoptionEvents = (await context.store.events(UPGRADE)).filter(
+      (event) => event.type === 'shadow_baseline_adopted',
+    );
+    expect(adoptionEvents).toHaveLength(1);
+    expect(adoptionEvents[0]?.detail).toMatchObject({
+      idempotencyKey: `${UPGRADE}:adopt-shadow`,
+      requestHash: requestHash(recovery.adoption),
+      failedRestoreDeployId: recovery.adoption.restoreDeploymentId,
+    });
+    await expect(context.controller.readiness()).resolves.toBeUndefined();
+    await expect(
+      context.controller.promote(recovery.promotion, `${UPGRADE}:promote`),
+    ).rejects.toMatchObject({ code: 'shadow_baseline_adopted', status: 409 });
+    await expect(
+      context.controller.rollback(recovery.rollback, `${UPGRADE}:rollback`),
+    ).rejects.toMatchObject({ code: 'shadow_baseline_adopted', status: 409 });
+
+    const next = fixture();
+    next.upgradeId = 'upgrade-2';
+    next.proposalId = 'proposal-2';
+    await expect(context.controller.startShadow(next, 'upgrade-2:shadow')).resolves.toEqual({
+      deploymentId: 'dep-3',
+    });
+    await expect(context.store.get('upgrade-2')).resolves.toMatchObject({
+      shadowBaselineDeployId: recovery.started.deploymentId,
+      shadowBaselineArtifactSha256: ARTIFACT,
+    });
+  });
+
+  it('keeps the shadow slot locked unless the exact failed restore and live candidate are proven', async () => {
+    const pending = createContext();
+    const pendingRecovery = await prepareFailedShadowRestore(pending, false);
+    await expect(
+      pending.controller.adoptShadow(pendingRecovery.adoption, `${UPGRADE}:adopt-shadow`),
+    ).rejects.toMatchObject({ code: 'shadow_adoption_restore_mismatch', status: 409 });
+    expect(await pending.store.activeShadow()).not.toBeNull();
+
+    const drifted = createContext();
+    const driftedRecovery = await prepareFailedShadowRestore(drifted);
+    drifted.render.addExternal('srv-shadow123', '9'.repeat(64));
+    await expect(
+      drifted.controller.adoptShadow(driftedRecovery.adoption, `${UPGRADE}:adopt-shadow`),
+    ).rejects.toMatchObject({ code: 'shadow_drift', status: 409 });
+    expect(await drifted.store.activeShadow()).not.toBeNull();
+
+    const serviceDrift = createContext();
+    const serviceDriftRecovery = await prepareFailedShadowRestore(serviceDrift);
+    serviceDrift.render.services.get('srv-shadow123')!.serviceDetails.region = 'oregon';
+    await expect(
+      serviceDrift.controller.adoptShadow(serviceDriftRecovery.adoption, `${UPGRADE}:adopt-shadow`),
+    ).rejects.toMatchObject({ code: 'render_service_drift', status: 409 });
+    expect(await serviceDrift.store.activeShadow()).not.toBeNull();
+
+    const promoted = createContext();
+    const promotedRecovery = await prepareFailedShadowRestore(promoted);
+    const operation = await promoted.store.get(UPGRADE);
+    if (!operation) throw new Error('operation fixture is missing');
+    operation.promotionIdempotencyKey = `${UPGRADE}:promote`;
+    operation.promotionRequestHash = requestHash(promotedRecovery.promotion);
+    operation.promotionState = 'reserved';
+    await promoted.store.save(
+      operation,
+      operationEvent(operation, 'promotion_fixture', {}, operation.updatedAt),
+    );
+    await expect(
+      promoted.controller.adoptShadow(promotedRecovery.adoption, `${UPGRADE}:adopt-shadow`),
+    ).rejects.toMatchObject({ code: 'shadow_adoption_not_allowed', status: 409 });
+    expect(await promoted.store.activeShadow()).not.toBeNull();
+  });
+
+  it('does not release the shadow slot when the adoption application probe fails', async () => {
+    const context = createContext();
+    const recovery = await prepareFailedShadowRestore(context);
+    context.applications.failNext = new ControllerError(
+      'application_probe_unhealthy',
+      'dependency failed',
+      502,
+    );
+
+    await expect(
+      context.controller.adoptShadow(recovery.adoption, `${UPGRADE}:adopt-shadow`),
+    ).rejects.toMatchObject({ code: 'application_probe_unhealthy' });
+    expect(await context.store.activeShadow()).not.toBeNull();
+  });
+
   it('rejects repository, binding, and mutation-time service drift', async () => {
     const denied = createContext();
     const badRepository = fixture();
@@ -563,6 +675,10 @@ class FakeRender implements RenderGateway {
     this.deploys.get(serviceId)!.find((deploy) => deploy.id === deployId)!.image!.ref = ref;
   }
 
+  setStatus(serviceId: string, deployId: string, status: RenderDeploy['status']): void {
+    this.deploys.get(serviceId)!.find((deploy) => deploy.id === deployId)!.status = status;
+  }
+
   private add(serviceId: string, ref: string, trigger: RenderDeploy['trigger']): RenderDeploy {
     const artifactSha256 = ref.slice(ref.indexOf('@sha256:') + '@sha256:'.length);
     const deploy = deployment(`dep-${this.next++}`, artifactSha256, 'created', trigger, ref);
@@ -614,6 +730,57 @@ function fixture(): ShadowRequest {
     },
     prNumber: 42,
   };
+}
+
+async function prepareFailedShadowRestore(
+  context: ReturnType<typeof createContext>,
+  failRestore = true,
+) {
+  const started = await context.controller.startShadow(fixture(), `${UPGRADE}:shadow`);
+  context.render.setLive('srv-shadow123', started.deploymentId);
+  await context.controller.shadowHealth(started.deploymentId);
+  const promotion = {
+    version: 1 as const,
+    upgradeId: UPGRADE,
+    proposalId: 'proposal-1',
+    deploymentId: started.deploymentId,
+    candidateSha: CANDIDATE,
+    mergeSha: MERGE,
+  };
+  await expect(context.controller.promote(promotion, `${UPGRADE}:promote`)).rejects.toMatchObject({
+    code: 'shadow_restore_in_progress',
+  });
+  const restoreDeploymentId = 'dep-2';
+  if (failRestore) {
+    context.render.setStatus('srv-shadow123', restoreDeploymentId, 'pre_deploy_failed');
+    await expect(context.controller.promote(promotion, `${UPGRADE}:promote`)).rejects.toMatchObject(
+      { code: 'shadow_restore_failed' },
+    );
+  }
+  const rollback = {
+    version: 1 as const,
+    upgradeId: UPGRADE,
+    proposalId: 'proposal-1',
+    deploymentId: started.deploymentId,
+    candidateSha: CANDIDATE,
+    reason: 'restore failed before production promotion',
+  };
+  await expect(context.controller.rollback(rollback, `${UPGRADE}:rollback`)).rejects.toMatchObject({
+    code: failRestore ? 'shadow_restore_failed' : 'shadow_restore_in_progress',
+  });
+  const adoption: ShadowAdoptionRequest = {
+    version: 1,
+    upgradeId: UPGRADE,
+    proposalId: 'proposal-1',
+    deploymentId: started.deploymentId,
+    restoreDeploymentId,
+    candidateSha: CANDIDATE,
+    candidateArtifactSha256: ARTIFACT,
+    baselineDeploymentId: 'dep-shadow-baseline',
+    baselineArtifactSha256: BASELINE_ARTIFACT,
+    reason: 'schema_incompatible_baseline',
+  };
+  return { started, promotion, rollback, adoption };
 }
 
 function service(id: string, type: RenderService['type']): RenderService {

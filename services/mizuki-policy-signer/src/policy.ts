@@ -10,8 +10,11 @@ import type {
   BindEscrowRequest,
   BindRefundLiabilityDeliveryRequest,
   CreateEscrowRequest,
+  CreatePaymentIntentRequest,
   DischargeRefundLiabilityRequest,
   OperationRecord,
+  PaymentIntent,
+  PaymentIntentActivationView,
   PreparedTransaction,
   RefundLiability,
   RefundEscrowRequest,
@@ -40,6 +43,9 @@ import {
   refundDischargeAuthorizationMessage,
   requestHash,
   x402PaymentAuthorizationSchema,
+  paymentIntentAuthorizationMessage,
+  paymentIntentView,
+  refundLiabilityView,
 } from './domain.js';
 import type { MergeVerifier, RepositoryReadinessEvidence } from './github.js';
 import type { SignerMetrics } from './metrics.js';
@@ -63,6 +69,7 @@ export interface PolicyServiceConfig {
   escrowDailyLimitUsdCents: number;
   maxEscrowLamports?: number;
   solFeeReserveLamports: number;
+  refundFeeReserveLamports?: number;
   bindChallengeTtlSeconds: number;
   claimTtlSeconds: number;
   githubGrantTtlSeconds: number;
@@ -118,6 +125,26 @@ export class PolicyService {
     }
     this.assertRefundAuthorization('register', request);
     const admission = await this.refundLiabilityAdmission(request);
+    const protectedIntent = await this.store.getPaymentIntentByAdmission(admission.id);
+    if (protectedIntent) {
+      const activated = await this.activatePaymentIntent(
+        protectedIntent.id,
+        { settlementSignature: request.settlementSignature },
+        idempotencyKey,
+      );
+      const liability = await this.store.getRefundLiability(
+        activated.refundLiability.settlementSignature,
+      );
+      if (!liability) {
+        throw new PolicyError(
+          'payment_intent_corrupt',
+          'Activated payment intent is missing its refund liability',
+          503,
+          true,
+        );
+      }
+      return liability;
+    }
 
     const authorization = this.settlementAuthorization(admission);
     const facts = await this.chain.readAuthorizedSettlement(
@@ -260,6 +287,8 @@ export class PolicyService {
       settlementMessageHash: settlementIdentity.messageHash,
       settlementClientSignature: settlementIdentity.clientSignature,
       settlementFeePayer: settlementIdentity.feePayer,
+      settlementPayer: settlementIdentity.payer,
+      settlementMemo: settlementIdentity.memo,
       settlementRawAmount: parsedAuthorization.accepted.amount,
       paymentWindowStartUnixSeconds: Math.floor(admittedAt.getTime() / 1_000) - 30,
       paymentWindowEndUnixSeconds:
@@ -305,6 +334,285 @@ export class PolicyService {
       );
     }
     return admission;
+  }
+
+  async createPaymentIntent(
+    request: CreatePaymentIntentRequest,
+    idempotencyKey: string,
+  ): Promise<PaymentIntent> {
+    const { authorizationSignature: _, ...authorization } = request;
+    this.assertAuthorization(
+      paymentIntentAuthorizationMessage(authorization),
+      request.authorizationExpiresAt,
+      request.authorizationSignature,
+      'payment_intent',
+    );
+    const admission = await this.store.getRepositoryAdmission(request.repositoryAdmissionId);
+    if (!admission) {
+      throw new PolicyError(
+        'repository_admission_not_found',
+        'Repository admission was not found',
+        404,
+      );
+    }
+    assertRepositoryAdmissionIntegrity(admission);
+    if (
+      admission.evidenceHash !== request.repositoryAdmissionEvidenceHash ||
+      admission.repository !== request.repository ||
+      admission.issueNumber !== request.issueNumber ||
+      admission.baseRef !== request.baseRef ||
+      admission.baseSha !== request.baseSha
+    ) {
+      throw new PolicyError(
+        'repository_admission_mismatch',
+        'Repository admission does not match the payment intent',
+        422,
+      );
+    }
+    const expectedMemo = paymentIntentMemo(admission.quoteId);
+    if (!admission.settlementPayer || admission.settlementMemo !== expectedMemo) {
+      throw new PolicyError(
+        'payment_intent_memo_mismatch',
+        'Payment authorization is missing the quote-bound seller memo',
+        422,
+      );
+    }
+    const amountUsdCents = tokenAmountUsdCents(
+      admission.settlementRawAmount,
+      this.config.refundDecimals,
+    );
+    this.assertOperationLimit(amountUsdCents);
+    this.assertOperationLimit(request.bountyAmountUsdCents);
+    const [capacity, price] = await Promise.all([this.chain.capacity(), this.prices.solUsd()]);
+    const bountyReserveLamports = usdCentsToLamports(
+      request.bountyAmountUsdCents,
+      price.priceUsdMicros,
+    );
+    const bountyCapacityLamports = availableEscrowReserve(
+      capacity,
+      this.config.solFeeReserveLamports,
+    );
+    const refundCostLamports =
+      BigInt(capacity.refundAtaRentLamports) + BigInt(this.refundFeeReserveLamports());
+    const immutableRequest = paymentIntentRequestIdentity(request);
+    return this.store.reservePaymentIntent(
+      {
+        id: randomUUID(),
+        idempotencyKey,
+        requestHash: requestHash(immutableRequest),
+        jobId: request.jobId,
+        quoteId: admission.quoteId,
+        repositoryAdmissionId: admission.id,
+        repositoryAdmissionEvidenceHash: admission.evidenceHash,
+        repository: request.repository,
+        issueNumber: request.issueNumber,
+        baseRef: request.baseRef,
+        baseSha: request.baseSha,
+        repositoryAuthorizedAt: new Date(request.repositoryAuthorizedAt),
+        authorizationEvidenceHash: request.authorizationEvidenceHash,
+        payer: admission.settlementPayer,
+        payee: this.config.refundTreasury,
+        mint: this.config.refundMint,
+        rawAmount: admission.settlementRawAmount,
+        amountUsdCents,
+        bountyAmountUsdCents: request.bountyAmountUsdCents,
+        bountyReserveLamports: bountyReserveLamports.toString(),
+        memo: expectedMemo,
+        signedMessageHash: admission.settlementMessageHash,
+        payerSignature: admission.settlementClientSignature,
+        paymentWindowStartUnixSeconds: admission.paymentWindowStartUnixSeconds,
+        paymentWindowEndUnixSeconds: admission.paymentWindowEndUnixSeconds,
+        status: 'reserved',
+        settlementSignature: null,
+        liabilityId: null,
+        activationIdempotencyKey: null,
+        createdAt: this.now(),
+        activatedAt: null,
+        expiredAt: null,
+      },
+      {
+        refundCapacityRaw: capacity.refundRawAmount,
+        bountyCapacityLamports,
+        refundSignerLamports: capacity.refundSignerLamports,
+        refundCostLamports: refundCostLamports.toString(),
+        refundDailyLimitUsdCents: this.config.refundDailyLimitUsdCents,
+        escrowDailyLimitUsdCents: this.config.escrowDailyLimitUsdCents,
+      },
+      this.now(),
+    );
+  }
+
+  async getPaymentIntent(id: string): Promise<PaymentIntent> {
+    const intent = await this.store.getPaymentIntent(id);
+    if (!intent) {
+      throw new PolicyError('payment_intent_not_found', 'Payment intent was not found', 404);
+    }
+    return intent;
+  }
+
+  async activatePaymentIntent(
+    id: string,
+    request: { settlementSignature: string },
+    idempotencyKey: string,
+  ): Promise<PaymentIntentActivationView> {
+    const intent = await this.getPaymentIntent(id);
+    if (intent.status === 'activated') {
+      const replay = await this.store.activatePaymentIntent(
+        intent.id,
+        this.liabilityFromIntent(intent, {
+          signature: intent.settlementSignature!,
+          payer: intent.payer,
+          recipient: intent.payee,
+          mint: intent.mint,
+          rawAmount: intent.rawAmount,
+          decimals: this.config.refundDecimals,
+          finalized: true,
+          succeeded: true,
+          slot: 0,
+          blockTimeUnixSeconds: intent.paymentWindowStartUnixSeconds,
+        }),
+        idempotencyKey,
+        this.now(),
+      );
+      return {
+        paymentIntent: paymentIntentView(replay.intent),
+        refundLiability: refundLiabilityView(replay.liability),
+      };
+    }
+    const admission = await this.store.getRepositoryAdmission(intent.repositoryAdmissionId);
+    if (!admission || admission.evidenceHash !== intent.repositoryAdmissionEvidenceHash) {
+      throw new PolicyError(
+        'payment_intent_corrupt',
+        'Payment intent repository admission is unavailable',
+        503,
+        true,
+      );
+    }
+    const authorization = this.settlementAuthorization(admission);
+    const facts = await this.chain.readAuthorizedSettlement(
+      request.settlementSignature,
+      authorization,
+    );
+    return this.activatePaymentIntentWithFacts(intent, facts, idempotencyKey);
+  }
+
+  async reconcilePaymentIntent(
+    id: string,
+    idempotencyKey: string,
+  ): Promise<PaymentIntentActivationView | PaymentIntent> {
+    const intent = await this.getPaymentIntent(id);
+    if (intent.status === 'activated') {
+      return this.activatePaymentIntent(
+        id,
+        { settlementSignature: intent.settlementSignature! },
+        intent.activationIdempotencyKey!,
+      );
+    }
+    if (intent.status === 'expired_unpaid') return intent;
+    const admission = await this.store.getRepositoryAdmission(intent.repositoryAdmissionId);
+    if (!admission || admission.evidenceHash !== intent.repositoryAdmissionEvidenceHash) {
+      throw new PolicyError(
+        'payment_intent_corrupt',
+        'Payment intent repository admission is unavailable',
+        503,
+        true,
+      );
+    }
+    try {
+      const facts = await this.chain.reconcileSettlement(this.settlementAuthorization(admission));
+      return this.activatePaymentIntentWithFacts(intent, facts, idempotencyKey);
+    } catch (error) {
+      if (!(error instanceof PolicyError) || error.code !== 'settlement_not_found') throw error;
+      if ((await this.chain.unixTime()) <= intent.paymentWindowEndUnixSeconds) {
+        throw new PolicyError(
+          'payment_intent_pending',
+          'Payment intent is still inside its settlement window',
+          409,
+          true,
+        );
+      }
+      return this.store.expirePaymentIntent(intent.id, this.now());
+    }
+  }
+
+  private async activatePaymentIntentWithFacts(
+    intent: PaymentIntent,
+    facts: SettlementFacts,
+    idempotencyKey: string,
+  ): Promise<PaymentIntentActivationView> {
+    this.validateSettlement(facts);
+    this.validatePaymentWindow(facts, {
+      messageHash: intent.signedMessageHash,
+      clientSignature: intent.payerSignature,
+      feePayer: '',
+      rawAmount: intent.rawAmount,
+      notBeforeUnixSeconds: intent.paymentWindowStartUnixSeconds,
+      notAfterUnixSeconds: intent.paymentWindowEndUnixSeconds,
+    });
+    if (
+      facts.payer !== intent.payer ||
+      facts.recipient !== intent.payee ||
+      facts.mint !== intent.mint ||
+      facts.rawAmount !== intent.rawAmount
+    ) {
+      throw new PolicyError(
+        'payment_intent_settlement_mismatch',
+        'Finalized settlement does not match the protected payment intent',
+        422,
+      );
+    }
+    const stored = await this.store.activatePaymentIntent(
+      intent.id,
+      this.liabilityFromIntent(intent, facts),
+      idempotencyKey,
+      this.now(),
+    );
+    return {
+      paymentIntent: paymentIntentView(stored.intent),
+      refundLiability: refundLiabilityView(stored.liability),
+    };
+  }
+
+  private liabilityFromIntent(intent: PaymentIntent, facts: SettlementFacts): RefundLiability {
+    return {
+      id: randomUUID(),
+      idempotencyKey: `payment-intent-liability:${intent.id}`,
+      requestHash: requestHash({
+        paymentIntentId: intent.id,
+        settlementSignature: facts.signature,
+      }),
+      jobId: intent.jobId,
+      repositoryAdmissionId: intent.repositoryAdmissionId,
+      settlementSignature: facts.signature,
+      repository: intent.repository,
+      issueNumber: intent.issueNumber,
+      baseRef: intent.baseRef,
+      baseSha: intent.baseSha,
+      repositoryAuthorizedAt: new Date(intent.repositoryAuthorizedAt),
+      authorizationEvidenceHash: intent.authorizationEvidenceHash,
+      reviewedHeadSha: null,
+      reviewedBaseSha: null,
+      reviewedBaseRef: null,
+      reviewedDiffHash: null,
+      deliveryBoundAt: null,
+      deliveryBindingIdempotencyKey: null,
+      deliveryBindingRequestHash: null,
+      deliveryBindingHash: null,
+      payer: facts.payer,
+      treasury: facts.recipient,
+      mint: facts.mint,
+      rawAmount: facts.rawAmount,
+      decimals: facts.decimals,
+      amountUsdCents: intent.amountUsdCents,
+      settlementSlot: facts.slot,
+      settlementBlockTimeUnixSeconds: facts.blockTimeUnixSeconds,
+      createdAt: this.now(),
+      dischargedAt: null,
+      dischargeEvidenceHash: null,
+      dischargeEvidence: null,
+      dischargeIdempotencyKey: null,
+      dischargeRequestHash: null,
+    };
   }
 
   async reconcileRepositorySettlement(
@@ -412,9 +720,26 @@ export class PolicyService {
   async refund(request: RefundRequest, idempotencyKey: string): Promise<OperationRecord> {
     const immutableRequest = refundRequestIdentity(request);
     const clientRequestHash = requestHash(immutableRequest);
-    const existing = await this.idempotentReplay(idempotencyKey, 'refund', clientRequestHash);
-    if (existing) return existing;
     this.assertRefundAuthorization('execute', request);
+    const existingCommand = await this.store.getRefundCommandByIdempotencyKey(idempotencyKey);
+    if (existingCommand?.currentOperationId) {
+      const existingOperation = await this.store.get(existingCommand.currentOperationId);
+      if (
+        !existingOperation ||
+        existingCommand.jobId !== request.jobId ||
+        existingOperation.details.settlementSignature !== request.settlementSignature
+      ) {
+        throw new PolicyError(
+          'idempotency_conflict',
+          'Idempotency key was already used for a different request',
+          409,
+        );
+      }
+      if (existingOperation.status !== 'rejected') {
+        const recovered = await this.drive(existingOperation.id);
+        if (recovered.status !== 'rejected') return recovered;
+      }
+    }
     const liability = await this.store.getRefundLiability(request.settlementSignature);
     if (!liability || liability.jobId !== request.jobId) {
       throw new PolicyError(
@@ -426,10 +751,21 @@ export class PolicyService {
     const facts = await this.chain.readSettlement(request.settlementSignature);
     this.validateSettlement(facts);
     this.assertLiabilityFacts(liability, facts);
-    if (BigInt(await this.chain.refundCapacity()) < BigInt(facts.rawAmount)) {
+    const capacity = await this.chain.capacity();
+    if (BigInt(capacity.refundRawAmount) < BigInt(facts.rawAmount)) {
       throw new PolicyError(
         'refund_pool_insufficient',
         'Protected refund pool is insufficient',
+        503,
+        true,
+      );
+    }
+    const refundCostLamports =
+      BigInt(capacity.refundAtaRentLamports) + BigInt(this.refundFeeReserveLamports());
+    if (BigInt(capacity.refundSignerLamports) < refundCostLamports) {
+      throw new PolicyError(
+        'refund_signer_sol_insufficient',
+        'Refund signer SOL cannot cover transaction fees and recipient token-account rent',
         503,
         true,
       );
@@ -570,12 +906,19 @@ export class PolicyService {
       const evidence = await this.probeReadiness();
       if (!evidence.healthy || !evidence.chain) return this.unavailableReadiness();
 
-      const [pendingRefundRaw, rollingRefundSpendUsdCents, rollingEscrowSpendUsdCents] =
-        await Promise.all([
-          this.store.pendingRefundRawAmount(),
-          this.store.rollingSpendUsdCents('refund', this.now()),
-          this.store.rollingSpendUsdCents('escrow', this.now()),
-        ]);
+      const [
+        pendingRefundRaw,
+        pendingRefundCount,
+        pendingBountyReserveLamports,
+        rollingRefundSpendUsdCents,
+        rollingEscrowSpendUsdCents,
+      ] = await Promise.all([
+        this.store.pendingRefundRawAmount(),
+        this.store.pendingRefundCount(),
+        this.store.pendingBountyReserveLamports(),
+        this.store.rollingSpendUsdCents('refund', this.now()),
+        this.store.rollingSpendUsdCents('escrow', this.now()),
+      ]);
       const finalizedBalanceRaw = evidence.chain.refundRawAmount;
       const treasuryAvailable = BigInt(finalizedBalanceRaw) - BigInt(pendingRefundRaw);
       const remainingRefundLimitUsdCents = Math.max(
@@ -591,6 +934,19 @@ export class PolicyService {
         this.config.refundDecimals,
       );
       const available = treasuryAvailable < limitAvailable ? treasuryAvailable : limitAvailable;
+      const refundCostLamports =
+        BigInt(evidence.chain.refundAtaRentLamports) + BigInt(this.refundFeeReserveLamports());
+      const signerCapacity = BigInt(evidence.chain.refundSignerLamports) / refundCostLamports;
+      const availableRefundTransactions = Number(
+        signerCapacity > BigInt(pendingRefundCount)
+          ? signerCapacity - BigInt(pendingRefundCount)
+          : 0n,
+      );
+      const chainEscrowAvailable = BigInt(evidence.chain.availableEscrowReserveLamports);
+      const availableBountyReserve =
+        chainEscrowAvailable > BigInt(pendingBountyReserveLamports)
+          ? chainEscrowAvailable - BigInt(pendingBountyReserveLamports)
+          : 0n;
       return {
         healthy: true,
         refundTreasury: this.config.refundTreasury,
@@ -601,12 +957,17 @@ export class PolicyService {
         treasuryAvailableRefundRaw: (treasuryAvailable > 0n ? treasuryAvailable : 0n).toString(),
         remainingRefundLimitUsdCents,
         availableRefundRaw: (available > 0n ? available : 0n).toString(),
+        refundSignerLamports: evidence.chain.refundSignerLamports,
+        refundFeeReserveLamports: String(this.refundFeeReserveLamports()),
+        refundAtaRentLamports: evidence.chain.refundAtaRentLamports,
+        pendingRefundCount,
+        availableRefundTransactions,
         escrowRollingLimitUsdCents: this.config.escrowDailyLimitUsdCents,
         rollingEscrowSpendUsdCents,
         remainingEscrowLimitUsdCents,
         escrowAuthority: this.config.escrowAuthority,
         finalizedEscrowBalanceLamports: evidence.chain.escrowLamports,
-        availableEscrowReserveLamports: evidence.chain.availableEscrowReserveLamports,
+        availableEscrowReserveLamports: availableBountyReserve.toString(),
       };
     } catch {
       return this.unavailableReadiness();
@@ -654,6 +1015,8 @@ export class PolicyService {
               refundMint: this.config.refundMint,
               refundDecimals: this.config.refundDecimals,
               refundRawAmount: chain.value.refundRawAmount,
+              refundSignerLamports: chain.value.refundSignerLamports,
+              refundAtaRentLamports: chain.value.refundAtaRentLamports,
               escrowAuthority: this.config.escrowAuthority,
               escrowLamports: chain.value.escrowLamports,
               availableEscrowReserveLamports: availableEscrowReserve(
@@ -689,6 +1052,11 @@ export class PolicyService {
       treasuryAvailableRefundRaw: null,
       remainingRefundLimitUsdCents: null,
       availableRefundRaw: null,
+      refundSignerLamports: null,
+      refundFeeReserveLamports: String(this.refundFeeReserveLamports()),
+      refundAtaRentLamports: null,
+      pendingRefundCount: null,
+      availableRefundTransactions: null,
       escrowRollingLimitUsdCents: this.config.escrowDailyLimitUsdCents,
       rollingEscrowSpendUsdCents: null,
       remainingEscrowLimitUsdCents: null,
@@ -1526,9 +1894,14 @@ export class PolicyService {
     message: string,
     authorizationExpiresAt: string,
     authorizationSignature: string,
-    kind: 'refund' | 'escrow_release' = 'refund',
+    kind: 'refund' | 'escrow_release' | 'payment_intent' = 'refund',
   ): void {
-    const label = kind === 'refund' ? 'Refund' : 'Escrow release';
+    const label =
+      kind === 'refund'
+        ? 'Refund'
+        : kind === 'escrow_release'
+          ? 'Escrow release'
+          : 'Payment intent';
     const now = this.now().getTime();
     const expiresAt = new Date(authorizationExpiresAt).getTime();
     if (expiresAt <= now) {
@@ -1583,6 +1956,10 @@ export class PolicyService {
       );
     }
   }
+
+  private refundFeeReserveLamports(): number {
+    return this.config.refundFeeReserveLamports ?? 10_000;
+  }
 }
 
 function tokenAmountUsdCents(rawAmount: string, decimals: number): number {
@@ -1599,6 +1976,17 @@ function refundRequestIdentity(
   request: Pick<RefundRequest, 'jobId' | 'settlementSignature'>,
 ): Pick<RefundRequest, 'jobId' | 'settlementSignature'> {
   return { jobId: request.jobId, settlementSignature: request.settlementSignature };
+}
+
+function paymentIntentRequestIdentity(
+  request: CreatePaymentIntentRequest,
+): Omit<CreatePaymentIntentRequest, 'authorizationExpiresAt' | 'authorizationSignature'> {
+  const { authorizationExpiresAt: _, authorizationSignature: __, ...identity } = request;
+  return identity;
+}
+
+function paymentIntentMemo(quoteId: string): string {
+  return `mizuki:payment:v1:${quoteId}`;
 }
 
 type RepositoryAdmissionIdentity = Pick<
@@ -1638,12 +2026,20 @@ function repositoryAdmissionIdentity(
 function repositoryAdmissionEvidenceHash(
   admission: Omit<RepositoryAdmission, 'evidenceHash'>,
 ): string {
+  const protectedPayment =
+    admission.settlementPayer && admission.settlementMemo
+      ? {
+          settlementPayer: admission.settlementPayer,
+          settlementMemo: admission.settlementMemo,
+        }
+      : {};
   return requestHash({
-    version: 1,
+    version: admission.settlementPayer && admission.settlementMemo ? 2 : 1,
     ...repositoryAdmissionIdentity(admission),
     settlementMessageHash: admission.settlementMessageHash,
     settlementClientSignature: admission.settlementClientSignature,
     settlementFeePayer: admission.settlementFeePayer,
+    ...protectedPayment,
     settlementRawAmount: admission.settlementRawAmount,
     paymentWindowStartUnixSeconds: admission.paymentWindowStartUnixSeconds,
     paymentWindowEndUnixSeconds: admission.paymentWindowEndUnixSeconds,

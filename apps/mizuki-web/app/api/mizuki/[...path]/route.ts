@@ -87,6 +87,9 @@ async function proxy(
       const value = upstream.headers.get(name);
       if (value) responseHeaders.set(name, value);
     }
+    if (path[1] === 'account' || path[1] === 'jobs' || path[1] === 'auth') {
+      responseHeaders.set('cache-control', 'private, no-store, max-age=0');
+    }
     if (upstream.ok && path.join('/') === 'v1/auth/logout') {
       responseHeaders.set('cache-control', 'private, no-store');
       responseHeaders.set('clear-site-data', '"cache", "cookies", "storage"');
@@ -98,6 +101,10 @@ async function proxy(
     const setCookies = upstream.headers.getSetCookie();
     for (const value of setCookies) responseHeaders.append('set-cookie', value);
     responseHeaders.set('x-content-type-options', 'nosniff');
+    responseHeaders.set(
+      'x-mizuki-web-build',
+      process.env.NEXT_PUBLIC_MIZUKI_BUILD_ID?.trim() || 'development',
+    );
     return new Response(upstream.body, {
       status: upstream.status,
       statusText: upstream.statusText,

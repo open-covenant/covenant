@@ -1,15 +1,17 @@
 import type { Config } from './config.js';
+import { calculateRescueBountyPriceCents } from './domain/bounty.js';
 import {
   PolicyRequestError,
   refundLiabilityCommitment,
   repositoryAdmissionBinding,
   type PaymentPolicy,
+  type PaymentIntentActivation,
   type RefundLiability,
   type SettlementEvidence,
 } from './policy-client.js';
 import type { MizukiStore } from './store.js';
 import type { Job, Payment, RepositoryAdmissionReceipt } from './types.js';
-import { Payments, USDC_DECIMALS, USDC_MAINNET } from './x402.js';
+import { paymentMemo, Payments, USDC_DECIMALS, USDC_MAINNET } from './x402.js';
 
 export interface SettlementRecoveryDependencies {
   paymentMode: Config['paymentMode'];
@@ -27,16 +29,36 @@ export async function recoverSettlement(
     throw new Error('settlement is not pending');
   }
 
+  job = await ensurePaymentIntent(job, deps);
   let payment = job.payment;
   let liabilityId = job.refundLiabilityId;
+  if (deps.paymentMode === 'live' && job.paymentIntentId && payment.transaction === 'pending') {
+    const reconciled = await deps.policy.reconcilePaymentIntent(job.paymentIntentId);
+    if (isPaymentIntentActivation(reconciled)) {
+      payment = paymentFromIntentActivation(job, reconciled, deps.payTo);
+      liabilityId = reconciled.refundLiability.id;
+      await deps.store.patchJob(job.id, {
+        payment,
+        refundLiabilityId: liabilityId,
+      });
+      return deps.store.transitionJob(job.id, 'settlement_pending', 'paid', {
+        payment,
+        paymentIntentId: job.paymentIntentId,
+        refundLiabilityId: liabilityId,
+      });
+    }
+    if (reconciled.status === 'expired_unpaid') {
+      throw new Error('payment authorization expired without settlement');
+    }
+  }
   if (deps.paymentMode === 'live' && payment.transaction !== 'pending') {
     try {
-      liabilityId = await registerLiability(job, payment, deps.policy);
+      liabilityId = await activateOrRegisterLiability(job, payment, deps.policy);
     } catch (error) {
       if (!settlementSignatureRejected(error)) throw error;
       payment = await reconcileLivePayment(job, deps);
       await deps.store.patchJob(job.id, { payment });
-      liabilityId = await registerLiability(job, payment, deps.policy);
+      liabilityId = await activateOrRegisterLiability(job, payment, deps.policy);
     }
   } else {
     if (deps.paymentMode === 'live') {
@@ -54,7 +76,7 @@ export async function recoverSettlement(
     }
     await deps.store.patchJob(job.id, { payment });
     if (deps.paymentMode === 'live') {
-      liabilityId = await registerLiability(job, payment, deps.policy);
+      liabilityId = await activateOrRegisterLiability(job, payment, deps.policy);
     }
   }
 
@@ -65,6 +87,34 @@ export async function recoverSettlement(
     payment,
     refundLiabilityId: liabilityId,
   });
+}
+
+async function ensurePaymentIntent(job: Job, deps: SettlementRecoveryDependencies): Promise<Job> {
+  if (deps.paymentMode !== 'live' || !job.paymentAttemptId || job.paymentIntentId) {
+    return job;
+  }
+  if (!job.repositoryAdmission) {
+    throw new Error('durable repository admission is unavailable');
+  }
+
+  const intent = await deps.policy.reservePaymentIntent(
+    job.id,
+    refundLiabilityCommitment(job.quote),
+    job.repositoryAdmission,
+    calculateRescueBountyPriceCents(Number(BigInt(job.quote.priceAtomic) / 10_000n)),
+  );
+  if (
+    intent.jobId !== job.id ||
+    intent.quoteId !== job.quote.id ||
+    intent.repositoryAdmissionId !== job.repositoryAdmission.id ||
+    intent.rawAmount !== job.quote.priceAtomic ||
+    intent.memo !== paymentMemo(job.quote.id) ||
+    intent.status !== 'reserved'
+  ) {
+    throw new Error('payment intent does not match the reserved payment');
+  }
+
+  return deps.store.patchJob(job.id, { paymentIntentId: intent.id });
 }
 
 async function recoverLivePayment(
@@ -184,4 +234,77 @@ async function registerLiability(
   );
   assertLiabilityMatchesPayment(liability, job.id, payment, job.quote, job.repositoryAdmission);
   return liability.id;
+}
+
+async function activateOrRegisterLiability(
+  job: Job,
+  payment: Payment,
+  policy: PaymentPolicy,
+): Promise<string> {
+  if (!job.paymentIntentId) return registerLiability(job, payment, policy);
+  if (!job.repositoryAdmission) {
+    throw new Error('durable repository admission is unavailable');
+  }
+  const activation = await policy.activatePaymentIntent(job.paymentIntentId, payment.transaction);
+  if (
+    activation.paymentIntent.id !== job.paymentIntentId ||
+    activation.paymentIntent.jobId !== job.id ||
+    activation.paymentIntent.quoteId !== job.quote.id ||
+    activation.paymentIntent.status !== 'activated' ||
+    activation.paymentIntent.settlementSignature !== payment.transaction ||
+    activation.paymentIntent.liabilityId !== activation.refundLiability.id
+  ) {
+    throw new Error('payment intent activation does not match the reserved job');
+  }
+  assertLiabilityMatchesPayment(
+    activation.refundLiability,
+    job.id,
+    payment,
+    job.quote,
+    job.repositoryAdmission,
+  );
+  return activation.refundLiability.id;
+}
+
+function isPaymentIntentActivation(
+  value: Awaited<ReturnType<PaymentPolicy['reconcilePaymentIntent']>>,
+): value is PaymentIntentActivation {
+  return 'paymentIntent' in value && 'refundLiability' in value;
+}
+
+function paymentFromIntentActivation(
+  job: Job,
+  activation: PaymentIntentActivation,
+  payTo: string | undefined,
+): Payment {
+  if (!payTo) throw new Error('payment treasury is unavailable during settlement recovery');
+  const intent = activation.paymentIntent;
+  if (
+    intent.id !== job.paymentIntentId ||
+    intent.jobId !== job.id ||
+    intent.quoteId !== job.quote.id ||
+    intent.status !== 'activated' ||
+    intent.payee !== payTo ||
+    intent.mint !== USDC_MAINNET ||
+    intent.rawAmount !== job.quote.priceAtomic ||
+    !intent.settlementSignature ||
+    intent.liabilityId !== activation.refundLiability.id
+  ) {
+    throw new Error('reconciled payment intent does not match the reserved job');
+  }
+  const payment: Payment = {
+    ...job.payment,
+    payer: intent.payer,
+    transaction: intent.settlementSignature,
+    amountAtomic: intent.rawAmount,
+  };
+  if (!job.repositoryAdmission) throw new Error('durable repository admission is unavailable');
+  assertLiabilityMatchesPayment(
+    activation.refundLiability,
+    job.id,
+    payment,
+    job.quote,
+    job.repositoryAdmission,
+  );
+  return payment;
 }

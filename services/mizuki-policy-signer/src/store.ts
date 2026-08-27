@@ -1,9 +1,12 @@
+import { randomUUID } from 'node:crypto';
 import type {
   BindChallenge,
   GitHubIdentityGrant,
   OperationRecord,
   OperationStatus,
+  PaymentIntent,
   PreparedTransaction,
+  RefundCommand,
   RefundLiability,
   RepositoryAdmission,
   ReserveOperation,
@@ -36,6 +39,20 @@ export interface OperationStore {
   registerRepositoryAdmission(admission: RepositoryAdmission): Promise<RepositoryAdmission>;
   getRepositoryAdmission(id: string): Promise<RepositoryAdmission | null>;
   getRepositoryAdmissionByIdempotencyKey(key: string): Promise<RepositoryAdmission | null>;
+  reservePaymentIntent(
+    intent: PaymentIntent,
+    limits: PaymentIntentReserveLimits,
+    now: Date,
+  ): Promise<PaymentIntent>;
+  getPaymentIntent(id: string): Promise<PaymentIntent | null>;
+  getPaymentIntentByAdmission(id: string): Promise<PaymentIntent | null>;
+  activatePaymentIntent(
+    intentId: string,
+    liability: RefundLiability,
+    activationIdempotencyKey: string,
+    now: Date,
+  ): Promise<{ intent: PaymentIntent; liability: RefundLiability }>;
+  expirePaymentIntent(id: string, now: Date): Promise<PaymentIntent>;
   registerRefundLiability(
     liability: RefundLiability,
     maxOutstandingRaw: string,
@@ -60,6 +77,8 @@ export interface OperationStore {
     now: Date,
   ): Promise<RefundLiability>;
   reserveRefund(input: ReserveOperation, liabilityId: string, now: Date): Promise<OperationRecord>;
+  getRefundCommand(id: string): Promise<RefundCommand | null>;
+  getRefundCommandByIdempotencyKey(key: string): Promise<RefundCommand | null>;
   reserve(input: ReserveOperation, dailyLimitUsdCents: number, now: Date): Promise<OperationRecord>;
   issueGitHubIdentityGrant(grant: GitHubIdentityGrant): Promise<GitHubIdentityGrant>;
   getGitHubIdentityGrant(id: string): Promise<GitHubIdentityGrant | null>;
@@ -90,9 +109,20 @@ export interface OperationStore {
   listRecoverable(limit: number): Promise<OperationRecord[]>;
   stats(): Promise<StoreStats>;
   pendingRefundRawAmount(): Promise<string>;
+  pendingRefundCount(): Promise<number>;
+  pendingBountyReserveLamports(): Promise<string>;
   rollingSpendUsdCents(bucket: 'refund' | 'escrow', now: Date): Promise<number>;
   ping(): Promise<void>;
   close(): Promise<void>;
+}
+
+export interface PaymentIntentReserveLimits {
+  refundCapacityRaw: string;
+  bountyCapacityLamports: string;
+  refundSignerLamports: string;
+  refundCostLamports: string;
+  refundDailyLimitUsdCents: number;
+  escrowDailyLimitUsdCents: number;
 }
 
 export class InMemoryOperationStore implements OperationStore {
@@ -111,6 +141,17 @@ export class InMemoryOperationStore implements OperationStore {
   private readonly liabilityByJob = new Map<string, string>();
   private readonly liabilityDeliveryByIdempotency = new Map<string, string>();
   private readonly liabilityDischargeByIdempotency = new Map<string, string>();
+  private readonly paymentIntents = new Map<string, PaymentIntent>();
+  private readonly paymentIntentByIdempotency = new Map<string, string>();
+  private readonly paymentIntentByAdmission = new Map<string, string>();
+  private readonly paymentIntentByJob = new Map<string, string>();
+  private readonly paymentIntentByQuote = new Map<string, string>();
+  private readonly paymentIntentByMessage = new Map<string, string>();
+  private readonly paymentIntentBySignature = new Map<string, string>();
+  private readonly refundCommands = new Map<string, RefundCommand>();
+  private readonly refundCommandByIdempotency = new Map<string, string>();
+  private readonly refundCommandByLiability = new Map<string, string>();
+  private readonly refundCommandByOperation = new Map<string, string>();
   private tail: Promise<void> = Promise.resolve();
 
   async migrate(): Promise<void> {}
@@ -162,6 +203,231 @@ export class InMemoryOperationStore implements OperationStore {
       const id = this.admissionByIdempotency.get(key);
       const admission = id ? this.repositoryAdmissions.get(id) : undefined;
       return admission ? cloneAdmission(admission) : null;
+    });
+  }
+
+  async reservePaymentIntent(
+    intent: PaymentIntent,
+    limits: PaymentIntentReserveLimits,
+    now: Date,
+  ): Promise<PaymentIntent> {
+    return this.exclusive(() => {
+      const idempotentId = this.paymentIntentByIdempotency.get(intent.idempotencyKey);
+      if (idempotentId) {
+        const existing = this.paymentIntents.get(idempotentId)!;
+        if (existing.requestHash !== intent.requestHash) {
+          throw new PolicyError(
+            'idempotency_conflict',
+            'Idempotency key was already used for a different request',
+            409,
+          );
+        }
+        return clonePaymentIntent(existing);
+      }
+      if (
+        this.paymentIntentByAdmission.has(intent.repositoryAdmissionId) ||
+        this.paymentIntentByJob.has(intent.jobId) ||
+        this.paymentIntentByQuote.has(intent.quoteId) ||
+        this.paymentIntentByMessage.has(intent.signedMessageHash) ||
+        this.paymentIntentBySignature.has(intent.payerSignature)
+      ) {
+        throw new PolicyError(
+          'payment_intent_conflict',
+          'Payment authorization is already bound to a different intent',
+          409,
+        );
+      }
+
+      const activeIntents = [...this.paymentIntents.values()].filter(
+        (entry) => entry.status !== 'expired_unpaid',
+      );
+      const outstandingLiabilities = [...this.refundLiabilities.values()].filter((entry) =>
+        this.isLiabilityOutstanding(entry),
+      );
+      const reservedRefundRaw = activeIntents
+        .filter((entry) => entry.status === 'reserved')
+        .reduce((total, entry) => total + BigInt(entry.rawAmount), 0n);
+      const liabilityRaw = outstandingLiabilities.reduce(
+        (total, entry) => total + BigInt(entry.rawAmount),
+        0n,
+      );
+      if (
+        liabilityRaw + reservedRefundRaw + BigInt(intent.rawAmount) >
+        BigInt(limits.refundCapacityRaw)
+      ) {
+        throw new PolicyError(
+          'refund_pool_insufficient',
+          'Protected refund pool cannot cover the payment intent',
+          503,
+          true,
+        );
+      }
+      const refundCount =
+        outstandingLiabilities.length +
+        activeIntents.filter((entry) => entry.status === 'reserved').length +
+        1;
+      if (
+        BigInt(refundCount) * BigInt(limits.refundCostLamports) >
+        BigInt(limits.refundSignerLamports)
+      ) {
+        throw new PolicyError(
+          'refund_signer_sol_insufficient',
+          'Refund signer SOL cannot cover all protected refunds',
+          503,
+          true,
+        );
+      }
+      const bountyReserved = activeIntents.reduce(
+        (total, entry) => total + BigInt(entry.bountyReserveLamports),
+        0n,
+      );
+      if (
+        bountyReserved + BigInt(intent.bountyReserveLamports) >
+        BigInt(limits.bountyCapacityLamports)
+      ) {
+        throw new PolicyError(
+          'bounty_pool_insufficient',
+          'Bounty escrow cannot cover the payment intent',
+          503,
+          true,
+        );
+      }
+      const cutoff = now.getTime() - 24 * 60 * 60 * 1_000;
+      const recentIntents = [...this.paymentIntents.values()].filter(
+        (entry) => entry.createdAt.getTime() >= cutoff,
+      );
+      if (
+        recentIntents.reduce((total, entry) => total + entry.amountUsdCents, 0) +
+          intent.amountUsdCents >
+        limits.refundDailyLimitUsdCents
+      ) {
+        throw new PolicyError(
+          'daily_limit_exceeded',
+          'Rolling 24-hour refund intent limit exceeded',
+          429,
+          true,
+        );
+      }
+      if (
+        recentIntents.reduce((total, entry) => total + entry.bountyAmountUsdCents, 0) +
+          intent.bountyAmountUsdCents >
+        limits.escrowDailyLimitUsdCents
+      ) {
+        throw new PolicyError(
+          'daily_limit_exceeded',
+          'Rolling 24-hour bounty intent limit exceeded',
+          429,
+          true,
+        );
+      }
+
+      const stored = clonePaymentIntent({ ...intent, createdAt: new Date(now) });
+      this.paymentIntents.set(stored.id, stored);
+      this.paymentIntentByIdempotency.set(stored.idempotencyKey, stored.id);
+      this.paymentIntentByAdmission.set(stored.repositoryAdmissionId, stored.id);
+      this.paymentIntentByJob.set(stored.jobId, stored.id);
+      this.paymentIntentByQuote.set(stored.quoteId, stored.id);
+      this.paymentIntentByMessage.set(stored.signedMessageHash, stored.id);
+      this.paymentIntentBySignature.set(stored.payerSignature, stored.id);
+      return clonePaymentIntent(stored);
+    });
+  }
+
+  async getPaymentIntent(id: string): Promise<PaymentIntent | null> {
+    return this.exclusive(() => {
+      const intent = this.paymentIntents.get(id);
+      return intent ? clonePaymentIntent(intent) : null;
+    });
+  }
+
+  async getPaymentIntentByAdmission(id: string): Promise<PaymentIntent | null> {
+    return this.exclusive(() => {
+      const intentId = this.paymentIntentByAdmission.get(id);
+      const intent = intentId ? this.paymentIntents.get(intentId) : undefined;
+      return intent ? clonePaymentIntent(intent) : null;
+    });
+  }
+
+  async activatePaymentIntent(
+    intentId: string,
+    liability: RefundLiability,
+    activationIdempotencyKey: string,
+    now: Date,
+  ): Promise<{ intent: PaymentIntent; liability: RefundLiability }> {
+    return this.exclusive(() => {
+      const intent = this.paymentIntents.get(intentId);
+      if (!intent) {
+        throw new PolicyError('payment_intent_not_found', 'Payment intent was not found', 404);
+      }
+      if (intent.status === 'expired_unpaid') {
+        throw new PolicyError('payment_intent_expired', 'Payment intent has expired unpaid', 409);
+      }
+      if (intent.status === 'activated') {
+        if (
+          intent.activationIdempotencyKey !== activationIdempotencyKey ||
+          intent.settlementSignature !== liability.settlementSignature ||
+          !intent.liabilityId
+        ) {
+          throw new PolicyError(
+            'payment_intent_activation_conflict',
+            'Payment intent is already activated by a different settlement',
+            409,
+          );
+        }
+        const existing = this.refundLiabilities.get(intent.settlementSignature!);
+        if (!existing || existing.id !== intent.liabilityId) {
+          throw new PolicyError(
+            'payment_intent_corrupt',
+            'Activated payment intent is missing its refund liability',
+            503,
+            true,
+          );
+        }
+        return { intent: clonePaymentIntent(intent), liability: cloneLiability(existing) };
+      }
+      if (
+        this.refundLiabilities.has(liability.settlementSignature) ||
+        this.liabilityByJob.has(liability.jobId)
+      ) {
+        throw new PolicyError(
+          'settlement_liability_conflict',
+          'Settlement or job is already registered to a refund liability',
+          409,
+        );
+      }
+      const storedLiability = cloneLiability({ ...liability, createdAt: new Date(now) });
+      this.refundLiabilities.set(storedLiability.settlementSignature, storedLiability);
+      this.liabilityByIdempotency.set(
+        storedLiability.idempotencyKey,
+        storedLiability.settlementSignature,
+      );
+      this.liabilityByJob.set(storedLiability.jobId, storedLiability.settlementSignature);
+      intent.status = 'activated';
+      intent.settlementSignature = storedLiability.settlementSignature;
+      intent.liabilityId = storedLiability.id;
+      intent.activationIdempotencyKey = activationIdempotencyKey;
+      intent.activatedAt = new Date(now);
+      return { intent: clonePaymentIntent(intent), liability: cloneLiability(storedLiability) };
+    });
+  }
+
+  async expirePaymentIntent(id: string, now: Date): Promise<PaymentIntent> {
+    return this.exclusive(() => {
+      const intent = this.paymentIntents.get(id);
+      if (!intent) {
+        throw new PolicyError('payment_intent_not_found', 'Payment intent was not found', 404);
+      }
+      if (intent.status === 'activated') {
+        throw new PolicyError(
+          'payment_intent_activated',
+          'An activated payment intent cannot expire unpaid',
+          409,
+        );
+      }
+      if (intent.status === 'expired_unpaid') return clonePaymentIntent(intent);
+      intent.status = 'expired_unpaid';
+      intent.expiredAt = new Date(now);
+      return clonePaymentIntent(intent);
     });
   }
 
@@ -360,16 +626,20 @@ export class InMemoryOperationStore implements OperationStore {
     now: Date,
   ): Promise<OperationRecord> {
     return this.exclusive(() => {
-      const idempotent = this.lookup(this.byIdempotency.get(input.idempotencyKey));
-      if (idempotent) {
-        if (idempotent.requestHash !== input.requestHash) {
+      const existingCommandId = this.refundCommandByIdempotency.get(input.idempotencyKey);
+      const command = existingCommandId ? this.refundCommands.get(existingCommandId)! : null;
+      if (command) {
+        if (command.requestHash !== input.requestHash || command.liabilityId !== liabilityId) {
           throw new PolicyError(
             'idempotency_conflict',
             'Idempotency key was already used for a different request',
             409,
           );
         }
-        return clone(idempotent);
+        const current = command.currentOperationId
+          ? this.records.get(command.currentOperationId)
+          : undefined;
+        if (current && current.status !== 'rejected') return clone(current);
       }
       const liability = [...this.refundLiabilities.values()].find(
         (entry) => entry.id === liabilityId,
@@ -384,6 +654,14 @@ export class InMemoryOperationStore implements OperationStore {
           409,
         );
       }
+      const liabilityCommandId = this.refundCommandByLiability.get(liabilityId);
+      if (liabilityCommandId && liabilityCommandId !== command?.id) {
+        throw new PolicyError(
+          'resource_conflict',
+          'Refund liability is already bound to another logical command',
+          409,
+        );
+      }
       const resource = this.lookup(this.byResource.get(input.resourceKey));
       if (resource) {
         if (resource.status !== 'rejected') {
@@ -395,11 +673,58 @@ export class InMemoryOperationStore implements OperationStore {
         }
         this.archiveRejectedResource(resource);
       }
-      const record = makeRecord(input, now);
+      const storedCommand = command ?? {
+        id: randomUUID(),
+        idempotencyKey: input.idempotencyKey,
+        requestHash: input.requestHash,
+        liabilityId,
+        jobId: String(input.details.jobId),
+        status: 'pending' as const,
+        currentOperationId: null,
+        attemptCount: 0,
+        createdAt: new Date(now),
+        updatedAt: new Date(now),
+      };
+      const attemptNumber = storedCommand.attemptCount + 1;
+      const record = makeRecord(
+        {
+          ...input,
+          idempotencyKey: `refund-attempt:${storedCommand.id}:${attemptNumber}`,
+          details: {
+            ...input.details,
+            refundCommandId: storedCommand.id,
+            refundAttemptNumber: attemptNumber,
+          },
+        },
+        now,
+      );
       this.records.set(record.id, record);
       this.byIdempotency.set(record.idempotencyKey, record.id);
       this.byResource.set(record.resourceKey, record.id);
+      storedCommand.currentOperationId = record.id;
+      storedCommand.attemptCount = attemptNumber;
+      storedCommand.status = 'pending';
+      storedCommand.updatedAt = new Date(now);
+      this.refundCommands.set(storedCommand.id, storedCommand);
+      this.refundCommandByIdempotency.set(storedCommand.idempotencyKey, storedCommand.id);
+      this.refundCommandByLiability.set(liabilityId, storedCommand.id);
+      this.refundCommandByOperation.set(record.id, storedCommand.id);
       return clone(record);
+    });
+  }
+
+  async getRefundCommand(id: string): Promise<RefundCommand | null> {
+    return this.exclusive(() => {
+      const command = this.refundCommands.get(id);
+      return command ? cloneRefundCommand(command) : null;
+    });
+  }
+
+  async getRefundCommandByIdempotencyKey(key: string): Promise<RefundCommand | null> {
+    return this.exclusive(() => {
+      const id = this.refundCommandByIdempotency.get(key);
+      const command = id ? this.refundCommands.get(id) : undefined;
+      return command ? cloneRefundCommand(command) : null;
     });
   }
 
@@ -650,6 +975,24 @@ export class InMemoryOperationStore implements OperationStore {
       applyPatch(record, patch);
       record.updatedAt = new Date();
       record.version += 1;
+      const commandId = this.refundCommandByOperation.get(record.id);
+      if (commandId) {
+        const command = this.refundCommands.get(commandId)!;
+        command.status =
+          record.status === 'finalized'
+            ? 'finalized'
+            : record.status === 'reconciling' &&
+                [
+                  'broadcast_indeterminate',
+                  'transaction_outcome_indeterminate',
+                  'signed_transaction_missing',
+                ].includes(record.errorCode ?? '')
+              ? 'indeterminate'
+              : record.status === 'submitted' || record.status === 'broadcasting'
+                ? 'submitted'
+                : 'pending';
+        command.updatedAt = new Date(record.updatedAt);
+      }
       return clone(record);
     });
   }
@@ -694,17 +1037,50 @@ export class InMemoryOperationStore implements OperationStore {
       for (const liability of this.refundLiabilities.values()) {
         if (this.isLiabilityOutstanding(liability)) total += BigInt(liability.rawAmount);
       }
+      for (const intent of this.paymentIntents.values()) {
+        if (intent.status === 'reserved') total += BigInt(intent.rawAmount);
+      }
       return total.toString();
     });
+  }
+
+  async pendingRefundCount(): Promise<number> {
+    return this.exclusive(
+      () =>
+        [...this.refundLiabilities.values()].filter((entry) => this.isLiabilityOutstanding(entry))
+          .length +
+        [...this.paymentIntents.values()].filter((entry) => entry.status === 'reserved').length,
+    );
+  }
+
+  async pendingBountyReserveLamports(): Promise<string> {
+    return this.exclusive(() =>
+      [...this.paymentIntents.values()]
+        .filter((entry) => entry.status !== 'expired_unpaid')
+        .reduce((total, entry) => total + BigInt(entry.bountyReserveLamports), 0n)
+        .toString(),
+    );
   }
 
   async rollingSpendUsdCents(bucket: 'refund' | 'escrow', now: Date): Promise<number> {
     return this.exclusive(() => {
       const cutoff = now.getTime() - 24 * 60 * 60 * 1_000;
       if (bucket === 'refund') {
-        return [...this.refundLiabilities.values()]
-          .filter((liability) => liability.createdAt.getTime() >= cutoff)
+        const intentLiabilities = new Set(
+          [...this.paymentIntents.values()]
+            .map((intent) => intent.liabilityId)
+            .filter((id): id is string => Boolean(id)),
+        );
+        const intents = [...this.paymentIntents.values()]
+          .filter((intent) => intent.createdAt.getTime() >= cutoff)
+          .reduce((total, intent) => total + intent.amountUsdCents, 0);
+        const legacyLiabilities = [...this.refundLiabilities.values()]
+          .filter(
+            (liability) =>
+              liability.createdAt.getTime() >= cutoff && !intentLiabilities.has(liability.id),
+          )
           .reduce((total, liability) => total + liability.amountUsdCents, 0);
+        return intents + legacyLiabilities;
       }
       return [...this.records.values()]
         .filter(
@@ -818,6 +1194,24 @@ function cloneLiability(liability: RefundLiability): RefundLiability {
     dischargeEvidence: liability.dischargeEvidence
       ? structuredClone(liability.dischargeEvidence)
       : null,
+  };
+}
+
+function clonePaymentIntent(intent: PaymentIntent): PaymentIntent {
+  return {
+    ...intent,
+    repositoryAuthorizedAt: new Date(intent.repositoryAuthorizedAt),
+    createdAt: new Date(intent.createdAt),
+    activatedAt: intent.activatedAt ? new Date(intent.activatedAt) : null,
+    expiredAt: intent.expiredAt ? new Date(intent.expiredAt) : null,
+  };
+}
+
+function cloneRefundCommand(command: RefundCommand): RefundCommand {
+  return {
+    ...command,
+    createdAt: new Date(command.createdAt),
+    updatedAt: new Date(command.updatedAt),
   };
 }
 

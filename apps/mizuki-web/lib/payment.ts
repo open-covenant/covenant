@@ -1,10 +1,48 @@
 import type { Job, Quote } from './types';
-import { fetchWithDeadline } from './workbench-client';
+import {
+  fetchWithDeadline,
+  workbenchMutation,
+  workbenchRequest,
+  WorkbenchRequestError,
+} from './workbench-client';
 
 const recoveryStorageKey = 'mizuki:workbench:payment-recovery';
 const paymentStatusTimeoutMs = 12_000;
 
 type PaymentStorage = Pick<Storage, 'getItem' | 'removeItem' | 'setItem'>;
+
+export const paymentAttemptStages = [
+  'created',
+  'wallet_opened',
+  'wallet_signed',
+  'submitting',
+] as const;
+
+export type PaymentAttemptStage = (typeof paymentAttemptStages)[number];
+
+export type PaymentAttemptStatus =
+  | PaymentAttemptStage
+  | 'job_reserved'
+  | 'expired_unpaid'
+  | 'indeterminate';
+
+export type PaymentAttempt = {
+  id: string;
+  quoteId: string;
+  idempotencyKey: string;
+  stage: PaymentAttemptStatus;
+  paymentStatus: PaymentAttemptStatus;
+  retrySafe: boolean;
+  expiresAt?: string;
+  job?: Job;
+  requestId?: string;
+  buildId?: string;
+};
+
+export type ActivePaymentAttempt = {
+  attempt: PaymentAttempt | null;
+  quote?: Quote;
+};
 
 export type QuotePaymentStatus =
   | { status: 'job_reserved'; job: Job }
@@ -13,6 +51,7 @@ export type QuotePaymentStatus =
 export type WorkbenchPaymentRecovery = {
   phase: 'prepared' | 'attempting' | 'uncertain' | 'unpaid';
   accountId: string;
+  attemptId: string;
   idempotencyKey: string;
   repository: string;
   issueUrl: string;
@@ -32,6 +71,156 @@ export class PaymentStatusError extends Error {
   ) {
     super(message);
   }
+}
+
+export class PaymentAttemptBusyError extends Error {
+  constructor() {
+    super('This payment is already open in another Workbench tab.');
+  }
+}
+
+export function paymentApplicationBuild(): string {
+  return process.env.NEXT_PUBLIC_MIZUKI_BUILD_ID?.trim() || 'development';
+}
+
+export async function createPaymentAttempt(input: {
+  quoteId: string;
+  wallet: string;
+  appBuild?: string;
+}): Promise<PaymentAttempt> {
+  const value = await workbenchMutation<unknown>('/v1/account/payment-attempts', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      quote_id: input.quoteId,
+      wallet: input.wallet,
+      app_build: input.appBuild ?? paymentApplicationBuild(),
+    }),
+  });
+  return normalizePaymentAttempt(value, input.quoteId);
+}
+
+export async function reportPaymentAttemptStage(
+  attemptId: string,
+  stage: Exclude<PaymentAttemptStage, 'created'>,
+): Promise<void> {
+  publishPaymentAttempt({ attemptId, stage });
+  await workbenchMutation(`/v1/account/payment-attempts/${encodeURIComponent(attemptId)}/stage`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ stage }),
+  });
+}
+
+export async function checkPaymentAttempt(
+  attemptId: string,
+  expectedQuoteId?: string,
+): Promise<PaymentAttempt> {
+  return normalizePaymentAttempt(
+    await workbenchRequest<unknown>(
+      `/v1/account/payment-attempts/${encodeURIComponent(attemptId)}`,
+    ),
+    expectedQuoteId,
+  );
+}
+
+export async function findActivePaymentAttempt(): Promise<ActivePaymentAttempt> {
+  const value = await workbenchRequest<unknown>('/v1/account/payment-attempts/active');
+  if (!isRecord(value)) throw new Error('The active payment response was invalid');
+  if (value.attempt === null && value.paymentStatus === 'none') return { attempt: null };
+  const attempt = normalizePaymentAttempt(value);
+  const quote = value.quote === undefined ? undefined : parseQuote(value.quote);
+  return { attempt, ...(quote ? { quote } : {}) };
+}
+
+export async function reconcilePaymentAttempt(
+  attemptId: string,
+  expectedQuoteId: string,
+  options: { signal?: AbortSignal; attempts?: number } = {},
+): Promise<PaymentAttempt> {
+  const attempts = Math.max(1, Math.min(options.attempts ?? 4, 6));
+  let lastError: unknown;
+  for (let index = 0; index < attempts; index += 1) {
+    if (options.signal?.aborted) throw abortReason(options.signal);
+    try {
+      return await checkPaymentAttempt(attemptId, expectedQuoteId);
+    } catch (cause) {
+      lastError = cause;
+      if (!retryableAttemptRead(cause) || index === attempts - 1) throw cause;
+      await wait(attemptReadDelay(index), options.signal);
+    }
+  }
+  throw lastError;
+}
+
+export function normalizePaymentAttempt(value: unknown, expectedQuoteId?: string): PaymentAttempt {
+  const source =
+    isRecord(value) && isRecord(value.attempt)
+      ? {
+          ...value.attempt,
+          paymentStatus: value.paymentStatus ?? value.payment_status ?? value.attempt.paymentStatus,
+          retrySafe: value.retrySafe ?? value.retry_safe ?? value.attempt.retrySafe,
+          job: value.job ?? value.attempt.job,
+          requestId: value.requestId ?? value.attempt.requestId,
+          buildId: value.buildId ?? value.attempt.buildId,
+        }
+      : value;
+  if (!isRecord(source)) throw new Error('The payment attempt response was invalid');
+  const id = readBoundedId(source.id);
+  const quoteId = readBoundedId(source.quoteId ?? source.quote_id);
+  const idempotencyKey = readIdempotencyKey(source.idempotencyKey ?? source.idempotency_key);
+  const rawStage = source.stage;
+  if (!paymentAttemptStatus(rawStage)) {
+    throw new Error('The payment attempt stage was invalid');
+  }
+  const rawStatus = source.paymentStatus ?? source.payment_status ?? source.status ?? rawStage;
+  if (!paymentAttemptStatus(rawStatus)) {
+    throw new Error('The payment attempt status was invalid');
+  }
+  if (expectedQuoteId && quoteId !== expectedQuoteId) {
+    throw new Error('Payment status did not match the accepted quote');
+  }
+  const job = source.job === undefined ? undefined : parseJob(source.job);
+  if (rawStatus === 'job_reserved' && !job) {
+    throw new Error('The reserved payment attempt did not include its job');
+  }
+  const expiresAt = typeof source.expiresAt === 'string' ? source.expiresAt : undefined;
+  if (expiresAt && Number.isNaN(Date.parse(expiresAt))) {
+    throw new Error('The payment attempt expiry was invalid');
+  }
+  return {
+    id,
+    quoteId,
+    idempotencyKey,
+    stage: rawStage,
+    paymentStatus: rawStatus,
+    retrySafe: source.retrySafe === true || source.retry_safe === true,
+    ...(expiresAt ? { expiresAt } : {}),
+    ...(job ? { job } : {}),
+    ...(typeof source.requestId === 'string' ? { requestId: source.requestId } : {}),
+    ...(typeof source.buildId === 'string' ? { buildId: source.buildId } : {}),
+  };
+}
+
+export async function withPaymentAttemptLock<T>(
+  attemptId: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  if (typeof navigator === 'undefined' || !navigator.locks) return operation();
+  const result = await navigator.locks.request(
+    `mizuki:payment-attempt:${attemptId}`,
+    { ifAvailable: true },
+    async (lock) => {
+      if (!lock) throw new PaymentAttemptBusyError();
+      publishPaymentAttempt({ attemptId, stage: 'created', active: true });
+      try {
+        return await operation();
+      } finally {
+        publishPaymentAttempt({ attemptId, stage: 'created', active: false });
+      }
+    },
+  );
+  return result;
 }
 
 export async function readJsonResponse<T>(response: Response): Promise<T> {
@@ -105,24 +294,12 @@ export function paymentAccountId(value: unknown): string {
 }
 
 export function prepareWorkbenchPaymentRecovery(
-  input: Omit<WorkbenchPaymentRecovery, 'idempotencyKey' | 'phase'>,
+  input: Omit<WorkbenchPaymentRecovery, 'phase'>,
   storage: PaymentStorage | undefined = browserSessionStorage(),
 ): WorkbenchPaymentRecovery {
-  const current = readWorkbenchPaymentRecovery(storage);
-  if (current && current.accountId !== input.accountId) {
-    throw new PaymentRecoveryStorageError(
-      'This tab contains an unresolved payment from a different GitHub account. Sign back into that account to resolve it before paying again.',
-    );
-  }
-  if (current && current.quote.id !== input.quote.id) {
-    throw new PaymentRecoveryStorageError(
-      'Resolve the existing payment status in this tab before starting another payment.',
-    );
-  }
   const recovery: WorkbenchPaymentRecovery = {
     ...input,
     phase: 'prepared',
-    idempotencyKey: current?.idempotencyKey ?? crypto.randomUUID(),
   };
   saveWorkbenchPaymentRecovery(recovery, storage);
   return recovery;
@@ -131,17 +308,17 @@ export function prepareWorkbenchPaymentRecovery(
 export function saveWorkbenchPaymentRecovery(
   recovery: WorkbenchPaymentRecovery,
   storage: PaymentStorage | undefined = browserSessionStorage(),
-): void {
-  if (!storage) throw new PaymentRecoveryStorageError();
+): boolean {
+  if (!storage) return false;
   if (!isWorkbenchPaymentRecovery(recovery)) {
-    throw new PaymentRecoveryStorageError('The payment recovery record was invalid.');
+    return false;
   }
   const encoded = JSON.stringify(recovery);
   try {
     storage.setItem(recoveryStorageKey, encoded);
-    if (storage.getItem(recoveryStorageKey) !== encoded) throw new PaymentRecoveryStorageError();
+    return storage.getItem(recoveryStorageKey) === encoded;
   } catch {
-    throw new PaymentRecoveryStorageError();
+    return false;
   }
 }
 
@@ -201,12 +378,8 @@ function isWorkbenchPaymentRecovery(value: unknown): value is WorkbenchPaymentRe
     return false;
   }
   if (typeof value.accountId !== 'string' || !/^[1-9]\d*$/.test(value.accountId)) return false;
-  if (
-    typeof value.idempotencyKey !== 'string' ||
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-      value.idempotencyKey,
-    )
-  ) {
+  if (typeof value.attemptId !== 'string' || !validBoundedId(value.attemptId)) return false;
+  if (typeof value.idempotencyKey !== 'string' || !validIdempotencyKey(value.idempotencyKey)) {
     return false;
   }
   if (typeof value.repository !== 'string' || typeof value.issueUrl !== 'string') return false;
@@ -287,6 +460,86 @@ function isQuote(value: unknown): value is Quote {
 
 function isJob(value: unknown): value is Job {
   return isRecord(value) && typeof value.id === 'string' && typeof value.state === 'string';
+}
+
+function parseJob(value: unknown): Job | undefined {
+  return isJob(value) ? value : undefined;
+}
+
+function parseQuote(value: unknown): Quote | undefined {
+  return isQuote(value) ? value : undefined;
+}
+
+function paymentAttemptStatus(value: unknown): value is PaymentAttemptStatus {
+  return (
+    paymentAttemptStages.includes(value as PaymentAttemptStage) ||
+    value === 'job_reserved' ||
+    value === 'expired_unpaid' ||
+    value === 'indeterminate'
+  );
+}
+
+function readBoundedId(value: unknown): string {
+  if (typeof value !== 'string' || !validBoundedId(value)) {
+    throw new Error('The payment attempt identifier was invalid');
+  }
+  return value;
+}
+
+function validBoundedId(value: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9:_-]{7,127}$/.test(value);
+}
+
+function readIdempotencyKey(value: unknown): string {
+  if (typeof value !== 'string' || !validIdempotencyKey(value)) {
+    throw new Error('The payment attempt idempotency key was invalid');
+  }
+  return value;
+}
+
+function validIdempotencyKey(value: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9:_-]{15,127}$/.test(value);
+}
+
+function retryableAttemptRead(cause: unknown): boolean {
+  return !(cause instanceof WorkbenchRequestError) || cause.status === 429 || cause.status >= 500;
+}
+
+function attemptReadDelay(index: number): number {
+  const base = Math.min(2_000, 250 * 2 ** index);
+  return base + Math.floor(Math.random() * Math.max(1, base / 4));
+}
+
+function wait(milliseconds: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(abortReason(signal));
+  return new Promise((resolve, reject) => {
+    const done = () => {
+      signal?.removeEventListener('abort', abort);
+      resolve();
+    };
+    const timer = setTimeout(done, milliseconds);
+    const abort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
+      reject(abortReason(signal!));
+    };
+    signal?.addEventListener('abort', abort, { once: true });
+  });
+}
+
+function abortReason(signal: AbortSignal): unknown {
+  return signal.reason ?? new DOMException('The operation was aborted', 'AbortError');
+}
+
+function publishPaymentAttempt(message: {
+  attemptId: string;
+  stage: PaymentAttemptStage;
+  active?: boolean;
+}): void {
+  if (typeof BroadcastChannel === 'undefined') return;
+  const channel = new BroadcastChannel('mizuki:payment-attempts');
+  channel.postMessage({ ...message, at: Date.now() });
+  channel.close();
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

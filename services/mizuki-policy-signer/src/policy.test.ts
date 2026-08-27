@@ -1,5 +1,12 @@
 import { createHash, createPrivateKey, sign } from 'node:crypto';
-import { Keypair, SystemProgram, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
+import {
+  Keypair,
+  PublicKey,
+  SystemProgram,
+  TransactionInstruction,
+  TransactionMessage,
+  VersionedTransaction,
+} from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 import {
   authorizedSettlementTransaction,
@@ -9,6 +16,7 @@ import {
 } from './chain.js';
 import type {
   BindRefundLiabilityDeliveryRequest,
+  CreatePaymentIntentRequest,
   DischargeRefundLiabilityRequest,
   RefundRequest,
   RegisterRefundLiabilityRequest,
@@ -17,6 +25,7 @@ import type {
 } from './domain.js';
 import {
   operationView,
+  paymentIntentAuthorizationMessage,
   PAYMENT_AUTHORIZATION_MAX_BYTES,
   PolicyError,
   escrowAcceptanceHash,
@@ -144,12 +153,14 @@ function fixture(
     settlementMessageHash: settlementIdentity.messageHash,
     settlementClientSignature: settlementIdentity.clientSignature,
     settlementFeePayer: settlementIdentity.feePayer,
+    settlementPayer: settlementIdentity.payer,
+    settlementMemo: settlementIdentity.memo,
     settlementRawAmount: '2000000',
     paymentWindowStartUnixSeconds: Math.floor(admittedAt.getTime() / 1_000) - 30,
     paymentWindowEndUnixSeconds: Math.floor(admittedAt.getTime() / 1_000) + 330,
   };
   defaultAdmissionEvidenceHash = requestHash({
-    version: 1,
+    version: 2,
     ...identity,
     ...binding,
     verifierAppId: '12345',
@@ -223,6 +234,11 @@ function paymentAuthorization(quoteId: string): {
         fromPubkey: payer.publicKey,
         toPubkey: recipient.publicKey,
         lamports: 1,
+      }),
+      new TransactionInstruction({
+        programId: new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr'),
+        keys: [],
+        data: Buffer.from(`mizuki:payment:v1:${quoteId}`),
       }),
     ],
   }).compileToV0Message();
@@ -507,6 +523,65 @@ describe('production readiness', () => {
 });
 
 describe('refund policy', () => {
+  it('reserves refund and bounty capacity before settlement and activates one liability', async () => {
+    const { chain, policy, store } = fixture();
+    const admission = await store.getRepositoryAdmission(DEFAULT_ADMISSION_ID);
+    expect(admission?.settlementPayer).toBeTruthy();
+
+    const intent = await policy.createPaymentIntent(
+      signedPaymentIntentRequest('job-protected'),
+      'payment-intent-job-protected',
+    );
+    expect(intent).toMatchObject({
+      status: 'reserved',
+      rawAmount: '2000000',
+      amountUsdCents: 200,
+      bountyAmountUsdCents: 1_000,
+      memo: `mizuki:payment:v1:${DEFAULT_ADMISSION_ID}`,
+    });
+    await expect(policy.readiness()).resolves.toMatchObject({
+      pendingRefundRaw: '2000000',
+      pendingRefundCount: 1,
+    });
+
+    const facts = {
+      ...settlement(),
+      payer: admission!.settlementPayer!,
+    };
+    chain.settlements.set(facts.signature, facts);
+    const activated = await policy.activatePaymentIntent(
+      intent.id,
+      { settlementSignature: facts.signature },
+      'activate-job-protected',
+    );
+
+    expect(activated.paymentIntent).toMatchObject({
+      status: 'activated',
+      settlementSignature: facts.signature,
+    });
+    expect(activated.refundLiability).toMatchObject({
+      jobId: 'job-protected',
+      settlementSignature: facts.signature,
+      rawAmount: '2000000',
+    });
+    await expect(policy.readiness()).resolves.toMatchObject({
+      pendingRefundRaw: '2000000',
+      pendingRefundCount: 1,
+    });
+  });
+
+  it('rejects a payment intent when signer SOL cannot cover fees and recipient ATA rent', async () => {
+    const { chain, policy } = fixture();
+    chain.refundSignerLamports = chain.refundAtaRentLamports;
+
+    await expect(
+      policy.createPaymentIntent(
+        signedPaymentIntentRequest('job-no-refund-sol'),
+        'payment-intent-no-refund-sol',
+      ),
+    ).rejects.toMatchObject({ code: 'refund_signer_sol_insufficient' });
+  });
+
   it('requires action-bound authorization and a pre-registered job liability', async () => {
     const { chain, policy } = fixture();
     const facts = settlement();
@@ -915,6 +990,39 @@ describe('refund policy', () => {
     expect(chain.preparedOperations).toContainEqual(
       expect.objectContaining({ payer: PAYER, rawAmount: '2000000' }),
     );
+  });
+
+  it('creates a second durable attempt after a safely failed refund transaction', async () => {
+    const { chain, policy, store } = fixture();
+    const facts = settlement();
+    chain.settlements.set(facts.signature, facts);
+    await policy.registerRefundLiability(
+      signedRefundRequest('register', 'job-retry-refund', facts.signature),
+      'register-retry-refund',
+    );
+    chain.autoFinalize = false;
+
+    const first = await policy.refund(
+      signedRefundRequest('execute', 'job-retry-refund', facts.signature),
+      'logical-refund-retry',
+    );
+    expect(first.status).toBe('submitted');
+    chain.states.set(first.transactionSignature!, 'failed');
+    chain.autoFinalize = true;
+
+    const second = await policy.refund(
+      signedRefundRequest('execute', 'job-retry-refund', facts.signature),
+      'logical-refund-retry',
+    );
+    expect(second.status).toBe('finalized');
+    expect(second.id).not.toBe(first.id);
+    const commandId = String(second.details.refundCommandId);
+    await expect(store.getRefundCommand(commandId)).resolves.toMatchObject({
+      id: commandId,
+      attemptCount: 2,
+      currentOperationId: second.id,
+      status: 'finalized',
+    });
   });
 
   it.each([
@@ -1681,6 +1789,29 @@ async function reserveAndBind(policy: PolicyService, bountyId: string, offerExpi
 
 function signChallenge(message: string): string {
   return signWithKey(CLAIMANT_KEYPAIR, message);
+}
+
+function signedPaymentIntentRequest(
+  jobId: string,
+  authorizationExpiresAt = new Date(Date.now() + 10 * 60 * 1_000).toISOString(),
+): CreatePaymentIntentRequest {
+  const unsigned = {
+    jobId,
+    repositoryAdmissionId: DEFAULT_ADMISSION_ID,
+    repositoryAdmissionEvidenceHash: defaultAdmissionEvidenceHash,
+    repository: 'owner/repository',
+    issueNumber: 17,
+    baseRef: 'main',
+    baseSha: 'd'.repeat(40),
+    repositoryAuthorizedAt: '2026-08-22T11:00:00.000Z',
+    authorizationEvidenceHash: 'e'.repeat(64),
+    bountyAmountUsdCents: 1_000,
+    authorizationExpiresAt,
+  };
+  return {
+    ...unsigned,
+    authorizationSignature: signWithKey(JOB_AUTHORITY, paymentIntentAuthorizationMessage(unsigned)),
+  };
 }
 
 function signedRefundRequest(

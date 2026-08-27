@@ -43,6 +43,7 @@ const SETTLEMENT_SCAN_PAGE_SIZE = 256;
 const SETTLEMENT_SCAN_MAX_SIGNATURES = 4_096;
 const SETTLEMENT_FETCH_BATCH = 32;
 const MAX_WIRE_TRANSACTION_BYTES = 1_232;
+const TOKEN_ACCOUNT_BYTES = 165;
 export const SOLANA_MAINNET_GENESIS_HASH = '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d';
 
 export interface ChainGateway {
@@ -64,6 +65,8 @@ export interface ChainGateway {
 
 export interface ChainCapacity {
   refundRawAmount: string;
+  refundSignerLamports: string;
+  refundAtaRentLamports: string;
   escrowLamports: string;
   stateRentLamports: string;
   vaultRentLamports: string;
@@ -461,6 +464,8 @@ export class SolanaChainGateway implements ChainGateway {
       operation.kind === 'refund'
         ? {
             refundRawAmount: await this.readRefundCapacityConsensus(),
+            refundSignerLamports: '0',
+            refundAtaRentLamports: '0',
             escrowLamports: '0',
             stateRentLamports: '0',
             vaultRentLamports: '0',
@@ -667,12 +672,16 @@ export class SolanaChainGateway implements ChainGateway {
   private async readCapacityFrom(connection: Connection): Promise<ChainCapacity> {
     const [
       refundRawAmount,
+      refundSignerLamports,
+      refundAtaRentLamports,
       escrowLamports,
       stateRentLamports,
       vaultRentLamports,
       guardRentLamports,
     ] = await Promise.all([
       this.readRefundCapacityFrom(connection),
+      connection.getBalance(this.refundSigner.publicKey, 'finalized'),
+      connection.getMinimumBalanceForRentExemption(TOKEN_ACCOUNT_BYTES, 'finalized'),
       connection.getBalance(this.escrowSigner.publicKey, 'finalized'),
       connection.getMinimumBalanceForRentExemption(ESCROW_STATE_BYTES, 'finalized'),
       connection.getMinimumBalanceForRentExemption(ESCROW_VAULT_BYTES, 'finalized'),
@@ -680,6 +689,8 @@ export class SolanaChainGateway implements ChainGateway {
     ]);
     return {
       refundRawAmount,
+      refundSignerLamports: String(refundSignerLamports),
+      refundAtaRentLamports: String(refundAtaRentLamports),
       escrowLamports: String(escrowLamports),
       stateRentLamports: String(stateRentLamports),
       vaultRentLamports: String(vaultRentLamports),
@@ -1061,7 +1072,9 @@ function agreedAuthorizedSettlementError(errors: unknown[]): PolicyError | null 
 export interface AuthorizedSettlementTransaction {
   messageHash: string;
   feePayer: string;
+  payer: string;
   clientSignature: string;
+  memo: string | null;
 }
 
 export function authorizedSettlementTransaction(
@@ -1088,11 +1101,13 @@ export function authorizedSettlementTransaction(
   }
   const signatures = transaction.signatures;
   const firstKey = transaction.message.staticAccountKeys[0];
+  const payerKey = transaction.message.staticAccountKeys[1];
   if (
     transaction.message.version !== 0 ||
     transaction.message.header.numRequiredSignatures !== 2 ||
     signatures.length !== 2 ||
     !firstKey ||
+    !payerKey ||
     firstKey.toBase58() !== authorization.feePayer ||
     !allZero(signatures[0]!) ||
     allZero(signatures[1]!)
@@ -1103,12 +1118,36 @@ export function authorizedSettlementTransaction(
       422,
     );
   }
+  const memoInstructions = transaction.message.compiledInstructions.filter((instruction) =>
+    transaction.message.staticAccountKeys[instruction.programIdIndex]?.equals(MEMO_PROGRAM_ID),
+  );
+  let memo: string | null = null;
+  if (memoInstructions.length > 0) {
+    if (memoInstructions.length !== 1 || memoInstructions[0]!.accountKeyIndexes.length !== 0) {
+      throw new PolicyError(
+        'payment_authorization_invalid',
+        'Payment authorization contains an invalid seller memo',
+        422,
+      );
+    }
+    try {
+      memo = new TextDecoder('utf-8', { fatal: true }).decode(memoInstructions[0]!.data);
+    } catch {
+      throw new PolicyError(
+        'payment_authorization_invalid',
+        'Payment authorization contains an invalid seller memo',
+        422,
+      );
+    }
+  }
   return {
     messageHash: createHash('sha256')
       .update(Buffer.from(transaction.message.serialize()))
       .digest('hex'),
     feePayer: authorization.feePayer,
+    payer: payerKey.toBase58(),
     clientSignature: base58Encode(signatures[1]!),
+    memo,
   };
 }
 
@@ -1288,6 +1327,8 @@ export function consensusTransactionState(
 export function consensusCapacity(primary: ChainCapacity, secondary: ChainCapacity): ChainCapacity {
   if (
     primary.refundRawAmount !== secondary.refundRawAmount ||
+    primary.refundSignerLamports !== secondary.refundSignerLamports ||
+    primary.refundAtaRentLamports !== secondary.refundAtaRentLamports ||
     primary.escrowLamports !== secondary.escrowLamports ||
     primary.stateRentLamports !== secondary.stateRentLamports ||
     primary.vaultRentLamports !== secondary.vaultRentLamports ||
@@ -1454,6 +1495,13 @@ const coinbaseTickerSchema = z
     time: z.string().datetime({ offset: true }),
   })
   .passthrough();
+const binance24hrTickerSchema = z
+  .object({
+    symbol: z.literal('SOLUSDC'),
+    lastPrice: z.string().regex(/^(?:0|[1-9]\d*)(?:\.\d+)?$/),
+    closeTime: z.number().int().positive().safe(),
+  })
+  .passthrough();
 const coinGeckoSimplePriceSchema = z
   .object({
     solana: z
@@ -1487,7 +1535,12 @@ const pythHermesPriceSchema = z
 
 const PYTH_SOL_USD_FEED_ID = 'ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d';
 
-type PriceResponseFormat = 'canonical' | 'coinbase_ticker' | 'coingecko_simple' | 'pyth_hermes';
+type PriceResponseFormat =
+  | 'canonical'
+  | 'binance_24hr'
+  | 'coinbase_ticker'
+  | 'coingecko_simple'
+  | 'pyth_hermes';
 
 export class HttpUsdPriceOracle implements UsdPriceOracle {
   private readonly responseFormat: PriceResponseFormat;
@@ -1513,7 +1566,9 @@ export class HttpUsdPriceOracle implements UsdPriceOracle {
       response = await this.fetcher(this.url, {
         headers: {
           accept: 'application/json',
-          ...(this.responseFormat === 'coinbase_ticker' ? { 'cache-control': 'no-cache' } : {}),
+          ...(this.responseFormat === 'coinbase_ticker' || this.responseFormat === 'binance_24hr'
+            ? { 'cache-control': 'no-cache' }
+            : {}),
           ...(this.token ? { authorization: `Bearer ${this.token}` } : {}),
         },
         redirect: 'error',
@@ -1564,6 +1619,15 @@ export class HttpUsdPriceOracle implements UsdPriceOracle {
 function priceResponseFormat(value: string): PriceResponseFormat {
   const url = new URL(value);
   if (
+    url.protocol === 'https:' &&
+    url.hostname.toLowerCase() === 'api.binance.com' &&
+    url.pathname === '/api/v3/ticker/24hr' &&
+    url.search === '?symbol=SOLUSDC' &&
+    url.hash === ''
+  ) {
+    return 'binance_24hr';
+  }
+  if (
     url.hostname.toLowerCase() === 'api.exchange.coinbase.com' &&
     url.pathname === '/products/SOL-USD/ticker'
   ) {
@@ -1612,6 +1676,15 @@ function parsePriceResponse(
     return priceUsdMicros === null
       ? null
       : { priceUsdMicros, observedAt: new Date(parsed.data.time) };
+  }
+  if (format === 'binance_24hr') {
+    const parsed = binance24hrTickerSchema.safeParse(body);
+    if (!parsed.success) return null;
+    const priceUsdMicros = decimalUsdMicros(parsed.data.lastPrice);
+    const observedAt = new Date(parsed.data.closeTime);
+    return priceUsdMicros === null || !validDate(observedAt)
+      ? null
+      : { priceUsdMicros, observedAt };
   }
   if (format === 'pyth_hermes') {
     const parsed = pythHermesPriceSchema.safeParse(body);
@@ -1760,6 +1833,8 @@ export class MockChainGateway implements ChainGateway {
   autoFinalize = true;
   throwAfterBroadcastOnce = false;
   refundRawAmount = 1_000_000_000n;
+  refundSignerLamports = 1_000_000_000n;
+  refundAtaRentLamports = 2_039_280n;
   escrowLamports = 100_000_000_000n;
   stateRentLamports = 2_000_000n;
   vaultRentLamports = 1_000_000n;
@@ -1866,6 +1941,8 @@ export class MockChainGateway implements ChainGateway {
   async capacity(): Promise<ChainCapacity> {
     return {
       refundRawAmount: this.refundRawAmount.toString(),
+      refundSignerLamports: this.refundSignerLamports.toString(),
+      refundAtaRentLamports: this.refundAtaRentLamports.toString(),
       escrowLamports: this.escrowLamports.toString(),
       stateRentLamports: this.stateRentLamports.toString(),
       vaultRentLamports: this.vaultRentLamports.toString(),

@@ -10,6 +10,48 @@ import { MemoryStore } from './store.js';
 import type { Job, Quote, RepositoryAdmissionReceipt } from './types.js';
 
 describe('settlement recovery', () => {
+  it('never settles a Workbench payment before the signer reserves its payment intent', async () => {
+    const store = new MemoryStore();
+    const key = 'missing-payment-intent';
+    const receipt = admissionReceipt(key);
+    const { job } = await store.createJob(
+      quote,
+      pendingPayment,
+      key,
+      receipt,
+      '22222222-2222-4222-8222-222222222222',
+    );
+    const retrySettlement = vi.fn();
+    const reserveError = new Error('refund capacity is unavailable');
+    const reservePaymentIntent = vi.fn(async () => {
+      throw reserveError;
+    });
+
+    await expect(
+      recoverSettlement(job, {
+        paymentMode: 'live',
+        payTo: PAY_TO,
+        store,
+        payments: { retrySettlement },
+        policy: policy({ reservePaymentIntent }),
+      }),
+    ).rejects.toBe(reserveError);
+
+    expect(reservePaymentIntent).toHaveBeenCalledWith(
+      job.id,
+      expect.objectContaining({ repository: 'example/project' }),
+      receipt,
+      1_000,
+    );
+    expect(retrySettlement).not.toHaveBeenCalled();
+    const stored = await store.job(job.id);
+    expect(stored).toMatchObject({
+      state: 'settlement_pending',
+      payment: { transaction: 'pending' },
+    });
+    expect(stored).not.toHaveProperty('paymentIntentId');
+  });
+
   it('fails closed before an automatic retry when durable admission is missing', async () => {
     const store = new MemoryStore();
     const { job } = await store.createJob(quote, pendingPayment, 'missing-admission');

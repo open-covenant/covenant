@@ -10,6 +10,7 @@ import {
   onWorkbenchUnauthorized,
   useWorkbenchResource,
 } from '@/lib/workbench-client';
+import { paymentApplicationBuild } from '@/lib/payment';
 
 export type WorkbenchNavigationItem = {
   href: string;
@@ -147,6 +148,9 @@ export function WorkbenchShell({
           </div>
         )}
         {children}
+        <footer className="workbench-diagnostic" aria-label="Workbench build">
+          Build {shortBuildId(paymentApplicationBuild())}
+        </footer>
       </section>
 
       <nav className="workbench-mobile-nav" aria-label="Workbench navigation">
@@ -160,6 +164,10 @@ export function WorkbenchShell({
       </nav>
     </div>
   );
+}
+
+function shortBuildId(value: string): string {
+  return value === 'development' ? value : value.slice(0, 12);
 }
 
 export function WorkbenchHeader({ walletControl }: { walletControl: React.ReactNode }) {

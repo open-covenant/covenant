@@ -22,6 +22,9 @@ describe.skipIf(!databaseUrl)('PostgresOperationStore migrations', () => {
          WHERE table_schema = 'public' AND table_name IN (
            'mizuki_signer_operations',
            'mizuki_signer_refund_liabilities',
+           'mizuki_signer_payment_intents',
+           'mizuki_signer_refund_commands',
+           'mizuki_signer_refund_attempts',
            'mizuki_signer_bind_challenges',
            'mizuki_signer_repository_admissions'
          ) ORDER BY table_name`,
@@ -31,11 +34,15 @@ describe.skipIf(!databaseUrl)('PostgresOperationStore migrations', () => {
         { version: 1, name: 'policy-and-custody-core' },
         { version: 2, name: 'repository-admission-receipts' },
         { version: 3, name: 'delayed-liability-safety' },
+        { version: 4, name: 'payment-intents-and-retryable-refunds' },
       ]);
       expect(migrations.rows.every((row) => /^[a-f0-9]{64}$/.test(row.checksum))).toBe(true);
       expect(tables.rows.map((row) => row.name)).toEqual([
         'mizuki_signer_bind_challenges',
         'mizuki_signer_operations',
+        'mizuki_signer_payment_intents',
+        'mizuki_signer_refund_attempts',
+        'mizuki_signer_refund_commands',
         'mizuki_signer_refund_liabilities',
         'mizuki_signer_repository_admissions',
       ]);
@@ -62,6 +69,8 @@ describe.skipIf(!databaseUrl)('PostgresOperationStore migrations', () => {
       settlementMessageHash: randomBytes(32).toString('hex'),
       settlementClientSignature: '3'.repeat(64),
       settlementFeePayer: '4'.repeat(32),
+      settlementPayer: '5'.repeat(32),
+      settlementMemo: `mizuki:payment:v1:${randomUUID()}`,
       settlementRawAmount: '2000000',
       paymentWindowStartUnixSeconds: 1_774_182_370,
       paymentWindowEndUnixSeconds: 1_774_182_730,

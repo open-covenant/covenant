@@ -1,9 +1,11 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { Pool, type PoolClient, type QueryResultRow } from 'pg';
 import type {
   BindChallenge,
   GitHubIdentityGrant,
   OperationRecord,
+  PaymentIntent,
+  RefundCommand,
   RefundLiability,
   RepositoryAdmission,
   ReserveOperation,
@@ -12,6 +14,7 @@ import { PolicyError } from './domain.js';
 import type {
   OperationPatch,
   OperationStore,
+  PaymentIntentReserveLimits,
   RefundLiabilityDeliveryBinding,
   StoreStats,
 } from './store.js';
@@ -294,6 +297,74 @@ const DELAYED_LIABILITY_SAFETY_SCHEMA = `
         FOREIGN KEY (repository_admission_id)
         REFERENCES mizuki_signer_repository_admissions(id);`;
 
+const PAYMENT_INTENT_AND_REFUND_COMMAND_SCHEMA = `
+      ALTER TABLE mizuki_signer_repository_admissions
+        ADD COLUMN IF NOT EXISTS settlement_payer varchar(44),
+        ADD COLUMN IF NOT EXISTS settlement_memo text;
+      CREATE TABLE IF NOT EXISTS mizuki_signer_payment_intents (
+        id uuid PRIMARY KEY,
+        idempotency_key text NOT NULL UNIQUE,
+        request_hash char(64) NOT NULL CHECK (request_hash ~ '^[a-f0-9]{64}$'),
+        job_id text NOT NULL UNIQUE,
+        quote_id uuid NOT NULL UNIQUE,
+        repository_admission_id uuid NOT NULL UNIQUE REFERENCES mizuki_signer_repository_admissions(id),
+        repository_admission_evidence_hash char(64) NOT NULL CHECK (repository_admission_evidence_hash ~ '^[a-f0-9]{64}$'),
+        repository text NOT NULL,
+        issue_number integer NOT NULL CHECK (issue_number > 0),
+        base_ref text NOT NULL,
+        base_sha text NOT NULL CHECK (base_sha ~ '^[a-f0-9]{40,64}$'),
+        repository_authorized_at timestamptz NOT NULL,
+        authorization_evidence_hash char(64) NOT NULL CHECK (authorization_evidence_hash ~ '^[a-f0-9]{64}$'),
+        payer varchar(44) NOT NULL,
+        payee varchar(44) NOT NULL,
+        mint varchar(44) NOT NULL,
+        raw_amount numeric(78, 0) NOT NULL CHECK (raw_amount > 0),
+        amount_usd_cents integer NOT NULL CHECK (amount_usd_cents > 0),
+        bounty_amount_usd_cents integer NOT NULL CHECK (bounty_amount_usd_cents > 0),
+        bounty_reserve_lamports numeric(20, 0) NOT NULL CHECK (bounty_reserve_lamports > 0),
+        memo text NOT NULL,
+        signed_message_hash char(64) NOT NULL UNIQUE CHECK (signed_message_hash ~ '^[a-f0-9]{64}$'),
+        payer_signature varchar(88) NOT NULL UNIQUE,
+        payment_window_start bigint NOT NULL,
+        payment_window_end bigint NOT NULL CHECK (payment_window_end > payment_window_start),
+        status text NOT NULL CHECK (status IN ('reserved', 'activated', 'expired_unpaid')),
+        settlement_signature varchar(88) UNIQUE,
+        liability_id uuid UNIQUE REFERENCES mizuki_signer_refund_liabilities(id),
+        activation_idempotency_key text UNIQUE,
+        created_at timestamptz NOT NULL,
+        activated_at timestamptz,
+        expired_at timestamptz,
+        CHECK (
+          (status = 'reserved' AND settlement_signature IS NULL AND liability_id IS NULL AND activated_at IS NULL AND expired_at IS NULL)
+          OR (status = 'activated' AND settlement_signature IS NOT NULL AND liability_id IS NOT NULL AND activation_idempotency_key IS NOT NULL AND activated_at IS NOT NULL AND expired_at IS NULL)
+          OR (status = 'expired_unpaid' AND settlement_signature IS NULL AND liability_id IS NULL AND activated_at IS NULL AND expired_at IS NOT NULL)
+        )
+      );
+      CREATE TABLE IF NOT EXISTS mizuki_signer_refund_commands (
+        id uuid PRIMARY KEY,
+        idempotency_key text NOT NULL UNIQUE,
+        request_hash char(64) NOT NULL CHECK (request_hash ~ '^[a-f0-9]{64}$'),
+        liability_id uuid NOT NULL UNIQUE REFERENCES mizuki_signer_refund_liabilities(id),
+        job_id text NOT NULL,
+        status text NOT NULL CHECK (status IN ('pending', 'submitted', 'finalized', 'indeterminate')),
+        current_operation_id uuid REFERENCES mizuki_signer_operations(id),
+        attempt_count integer NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+        created_at timestamptz NOT NULL,
+        updated_at timestamptz NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS mizuki_signer_refund_attempts (
+        id uuid PRIMARY KEY,
+        command_id uuid NOT NULL REFERENCES mizuki_signer_refund_commands(id),
+        attempt_number integer NOT NULL CHECK (attempt_number > 0),
+        operation_id uuid NOT NULL UNIQUE REFERENCES mizuki_signer_operations(id),
+        created_at timestamptz NOT NULL,
+        UNIQUE (command_id, attempt_number)
+      );
+      CREATE INDEX IF NOT EXISTS mizuki_signer_payment_intents_status
+        ON mizuki_signer_payment_intents (status, created_at);
+      CREATE INDEX IF NOT EXISTS mizuki_signer_refund_attempts_command
+        ON mizuki_signer_refund_attempts (command_id, attempt_number DESC);`;
+
 export class PostgresOperationStore implements OperationStore {
   private readonly pool: Pool;
 
@@ -329,6 +400,11 @@ export class PostgresOperationStore implements OperationStore {
         { version: 1, name: 'policy-and-custody-core', sql: SIGNER_SCHEMA },
         { version: 2, name: 'repository-admission-receipts', sql: REPOSITORY_ADMISSION_SCHEMA },
         { version: 3, name: 'delayed-liability-safety', sql: DELAYED_LIABILITY_SAFETY_SCHEMA },
+        {
+          version: 4,
+          name: 'payment-intents-and-retryable-refunds',
+          sql: PAYMENT_INTENT_AND_REFUND_COMMAND_SCHEMA,
+        },
       ].map((migration) => ({
         ...migration,
         checksum: createHash('sha256').update(migration.sql).digest('hex'),
@@ -405,12 +481,13 @@ export class PostgresOperationStore implements OperationStore {
            id, idempotency_key, request_hash, quote_id, repository, issue_number,
            base_ref, base_sha, reservation_key_hash, payment_authorization_hash,
            settlement_message_hash, settlement_client_signature, settlement_fee_payer,
-           settlement_raw_amount, payment_window_start, payment_window_end, verifier_app_id,
+           settlement_payer, settlement_memo, settlement_raw_amount,
+           payment_window_start, payment_window_end, verifier_app_id,
            installation_id, repository_selection, permissions, token_repositories,
            token_expires_at, admitted_at, evidence_hash
          ) VALUES (
            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-           $14, $15, $16, $17, $18, $19, $20::jsonb, $21, $22, $23, $24
+           $14, $15, $16, $17, $18, $19, $20, $21, $22::jsonb, $23, $24, $25, $26
          ) RETURNING *`,
         [
           admission.id,
@@ -426,6 +503,8 @@ export class PostgresOperationStore implements OperationStore {
           admission.settlementMessageHash,
           admission.settlementClientSignature,
           admission.settlementFeePayer,
+          admission.settlementPayer,
+          admission.settlementMemo,
           admission.settlementRawAmount,
           admission.paymentWindowStartUnixSeconds,
           admission.paymentWindowEndUnixSeconds,
@@ -463,6 +542,328 @@ export class PostgresOperationStore implements OperationStore {
       [key],
     );
     return result.rows[0] ? mapRepositoryAdmission(result.rows[0]) : null;
+  }
+
+  async reservePaymentIntent(
+    intent: PaymentIntent,
+    limits: PaymentIntentReserveLimits,
+    _now: Date,
+  ): Promise<PaymentIntent> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
+      await client.query("SELECT pg_advisory_xact_lock(hashtext('mizuki-signer-payment-intents'))");
+      const idempotent = await client.query(
+        'SELECT * FROM mizuki_signer_payment_intents WHERE idempotency_key = $1',
+        [intent.idempotencyKey],
+      );
+      if (idempotent.rows[0]) {
+        const existing = mapPaymentIntent(idempotent.rows[0]);
+        if (existing.requestHash !== intent.requestHash) {
+          throw new PolicyError(
+            'idempotency_conflict',
+            'Idempotency key was already used for a different request',
+            409,
+          );
+        }
+        await client.query('COMMIT');
+        return existing;
+      }
+      const conflict = await client.query(
+        `SELECT id FROM mizuki_signer_payment_intents
+          WHERE repository_admission_id = $1 OR job_id = $2 OR quote_id = $3
+             OR signed_message_hash = $4 OR payer_signature = $5`,
+        [
+          intent.repositoryAdmissionId,
+          intent.jobId,
+          intent.quoteId,
+          intent.signedMessageHash,
+          intent.payerSignature,
+        ],
+      );
+      if (conflict.rows[0]) {
+        throw new PolicyError(
+          'payment_intent_conflict',
+          'Payment authorization is already bound to a different intent',
+          409,
+        );
+      }
+      const capacity = await client.query<{
+        liability_raw: string;
+        reserved_raw: string;
+        refund_count: string;
+        bounty_lamports: string;
+        refund_cents: string;
+        bounty_cents: string;
+      }>(`
+        SELECT
+          (SELECT COALESCE(SUM(liability.raw_amount), 0)::text
+             FROM mizuki_signer_refund_liabilities liability
+        LEFT JOIN mizuki_signer_operations operation
+               ON operation.resource_key = 'refund:' || liability.settlement_signature
+              AND operation.status = 'finalized'
+            WHERE operation.id IS NULL AND liability.discharged_at IS NULL) AS liability_raw,
+          (SELECT COALESCE(SUM(raw_amount), 0)::text
+             FROM mizuki_signer_payment_intents WHERE status = 'reserved') AS reserved_raw,
+          ((SELECT COUNT(*) FROM mizuki_signer_refund_liabilities liability
+        LEFT JOIN mizuki_signer_operations operation
+               ON operation.resource_key = 'refund:' || liability.settlement_signature
+              AND operation.status = 'finalized'
+            WHERE operation.id IS NULL AND liability.discharged_at IS NULL)
+           + (SELECT COUNT(*) FROM mizuki_signer_payment_intents WHERE status = 'reserved'))::text
+            AS refund_count,
+          (SELECT COALESCE(SUM(bounty_reserve_lamports), 0)::text
+             FROM mizuki_signer_payment_intents WHERE status <> 'expired_unpaid') AS bounty_lamports,
+          (SELECT COALESCE(SUM(amount_usd_cents), 0)::text
+             FROM mizuki_signer_payment_intents
+            WHERE created_at >= clock_timestamp() - interval '24 hours') AS refund_cents,
+          (SELECT COALESCE(SUM(bounty_amount_usd_cents), 0)::text
+             FROM mizuki_signer_payment_intents
+            WHERE created_at >= clock_timestamp() - interval '24 hours') AS bounty_cents
+      `);
+      const totals = capacity.rows[0]!;
+      if (
+        BigInt(totals.liability_raw) + BigInt(totals.reserved_raw) + BigInt(intent.rawAmount) >
+        BigInt(limits.refundCapacityRaw)
+      ) {
+        throw new PolicyError(
+          'refund_pool_insufficient',
+          'Protected refund pool cannot cover the payment intent',
+          503,
+          true,
+        );
+      }
+      if (
+        (BigInt(totals.refund_count) + 1n) * BigInt(limits.refundCostLamports) >
+        BigInt(limits.refundSignerLamports)
+      ) {
+        throw new PolicyError(
+          'refund_signer_sol_insufficient',
+          'Refund signer SOL cannot cover all protected refunds',
+          503,
+          true,
+        );
+      }
+      if (
+        BigInt(totals.bounty_lamports) + BigInt(intent.bountyReserveLamports) >
+        BigInt(limits.bountyCapacityLamports)
+      ) {
+        throw new PolicyError(
+          'bounty_pool_insufficient',
+          'Bounty escrow cannot cover the payment intent',
+          503,
+          true,
+        );
+      }
+      if (
+        Number(totals.refund_cents) + intent.amountUsdCents > limits.refundDailyLimitUsdCents ||
+        Number(totals.bounty_cents) + intent.bountyAmountUsdCents > limits.escrowDailyLimitUsdCents
+      ) {
+        throw new PolicyError(
+          'daily_limit_exceeded',
+          'Rolling 24-hour payment intent limit exceeded',
+          429,
+          true,
+        );
+      }
+      const inserted = await client.query(
+        `INSERT INTO mizuki_signer_payment_intents (
+           id, idempotency_key, request_hash, job_id, quote_id, repository_admission_id,
+           repository_admission_evidence_hash, repository, issue_number, base_ref, base_sha,
+           repository_authorized_at, authorization_evidence_hash, payer, payee, mint,
+           raw_amount, amount_usd_cents, bounty_amount_usd_cents, bounty_reserve_lamports,
+           memo, signed_message_hash, payer_signature, payment_window_start, payment_window_end,
+           status, created_at
+         ) VALUES (
+           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+           $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, 'reserved', clock_timestamp()
+         ) RETURNING *`,
+        [
+          intent.id,
+          intent.idempotencyKey,
+          intent.requestHash,
+          intent.jobId,
+          intent.quoteId,
+          intent.repositoryAdmissionId,
+          intent.repositoryAdmissionEvidenceHash,
+          intent.repository,
+          intent.issueNumber,
+          intent.baseRef,
+          intent.baseSha,
+          intent.repositoryAuthorizedAt,
+          intent.authorizationEvidenceHash,
+          intent.payer,
+          intent.payee,
+          intent.mint,
+          intent.rawAmount,
+          intent.amountUsdCents,
+          intent.bountyAmountUsdCents,
+          intent.bountyReserveLamports,
+          intent.memo,
+          intent.signedMessageHash,
+          intent.payerSignature,
+          intent.paymentWindowStartUnixSeconds,
+          intent.paymentWindowEndUnixSeconds,
+        ],
+      );
+      await client.query('COMMIT');
+      return mapPaymentIntent(inserted.rows[0]);
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async getPaymentIntent(id: string): Promise<PaymentIntent | null> {
+    const result = await this.pool.query(
+      'SELECT * FROM mizuki_signer_payment_intents WHERE id = $1',
+      [id],
+    );
+    return result.rows[0] ? mapPaymentIntent(result.rows[0]) : null;
+  }
+
+  async getPaymentIntentByAdmission(id: string): Promise<PaymentIntent | null> {
+    const result = await this.pool.query(
+      'SELECT * FROM mizuki_signer_payment_intents WHERE repository_admission_id = $1',
+      [id],
+    );
+    return result.rows[0] ? mapPaymentIntent(result.rows[0]) : null;
+  }
+
+  async activatePaymentIntent(
+    intentId: string,
+    liability: RefundLiability,
+    activationIdempotencyKey: string,
+    _now: Date,
+  ): Promise<{ intent: PaymentIntent; liability: RefundLiability }> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
+      const intentResult = await client.query(
+        'SELECT * FROM mizuki_signer_payment_intents WHERE id = $1 FOR UPDATE',
+        [intentId],
+      );
+      const intent = intentResult.rows[0] ? mapPaymentIntent(intentResult.rows[0]) : null;
+      if (!intent) {
+        throw new PolicyError('payment_intent_not_found', 'Payment intent was not found', 404);
+      }
+      if (intent.status === 'expired_unpaid') {
+        throw new PolicyError('payment_intent_expired', 'Payment intent has expired unpaid', 409);
+      }
+      if (intent.status === 'activated') {
+        if (
+          intent.activationIdempotencyKey !== activationIdempotencyKey ||
+          intent.settlementSignature !== liability.settlementSignature ||
+          !intent.liabilityId
+        ) {
+          throw new PolicyError(
+            'payment_intent_activation_conflict',
+            'Payment intent is already activated by a different settlement',
+            409,
+          );
+        }
+        const existing = await client.query(
+          'SELECT * FROM mizuki_signer_refund_liabilities WHERE id = $1',
+          [intent.liabilityId],
+        );
+        if (!existing.rows[0]) {
+          throw new PolicyError(
+            'payment_intent_corrupt',
+            'Activated payment intent is missing its refund liability',
+            503,
+            true,
+          );
+        }
+        await client.query('COMMIT');
+        return { intent, liability: mapLiability(existing.rows[0]) };
+      }
+      const conflict = await client.query(
+        `SELECT id FROM mizuki_signer_refund_liabilities
+          WHERE settlement_signature = $1 OR job_id = $2`,
+        [liability.settlementSignature, liability.jobId],
+      );
+      if (conflict.rows[0]) {
+        throw new PolicyError(
+          'settlement_liability_conflict',
+          'Settlement or job is already registered to a refund liability',
+          409,
+        );
+      }
+      const liabilityResult = await client.query(
+        `INSERT INTO mizuki_signer_refund_liabilities (
+           id, idempotency_key, request_hash, job_id, repository_admission_id,
+           settlement_signature, payer, repository, issue_number, base_ref, base_sha,
+           repository_authorized_at, authorization_evidence_hash, treasury, mint,
+           raw_amount, decimals, settlement_slot, amount_usd_cents,
+           settlement_block_time, created_at
+         ) VALUES (
+           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+           $16, $17, $18, $19, $20, clock_timestamp()
+         ) RETURNING *`,
+        [
+          liability.id,
+          liability.idempotencyKey,
+          liability.requestHash,
+          liability.jobId,
+          liability.repositoryAdmissionId,
+          liability.settlementSignature,
+          liability.payer,
+          liability.repository,
+          liability.issueNumber,
+          liability.baseRef,
+          liability.baseSha,
+          liability.repositoryAuthorizedAt,
+          liability.authorizationEvidenceHash,
+          liability.treasury,
+          liability.mint,
+          liability.rawAmount,
+          liability.decimals,
+          liability.settlementSlot,
+          liability.amountUsdCents,
+          liability.settlementBlockTimeUnixSeconds,
+        ],
+      );
+      const updated = await client.query(
+        `UPDATE mizuki_signer_payment_intents
+            SET status = 'activated', settlement_signature = $2, liability_id = $3,
+                activation_idempotency_key = $4, activated_at = clock_timestamp()
+          WHERE id = $1 RETURNING *`,
+        [intentId, liability.settlementSignature, liability.id, activationIdempotencyKey],
+      );
+      await client.query('COMMIT');
+      return {
+        intent: mapPaymentIntent(updated.rows[0]),
+        liability: mapLiability(liabilityResult.rows[0]),
+      };
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async expirePaymentIntent(id: string, _now: Date): Promise<PaymentIntent> {
+    const result = await this.pool.query(
+      `UPDATE mizuki_signer_payment_intents
+          SET status = 'expired_unpaid', expired_at = clock_timestamp()
+        WHERE id = $1 AND status = 'reserved'
+      RETURNING *`,
+      [id],
+    );
+    if (result.rows[0]) return mapPaymentIntent(result.rows[0]);
+    const existing = await this.getPaymentIntent(id);
+    if (!existing) {
+      throw new PolicyError('payment_intent_not_found', 'Payment intent was not found', 404);
+    }
+    if (existing.status === 'expired_unpaid') return existing;
+    throw new PolicyError(
+      'payment_intent_activated',
+      'An activated payment intent cannot expire unpaid',
+      409,
+    );
   }
 
   async registerRefundLiability(
@@ -781,6 +1182,7 @@ export class PostgresOperationStore implements OperationStore {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
+      await client.query("SELECT pg_advisory_xact_lock(hashtext('mizuki-signer-refund-commands'))");
       const liabilityResult = await client.query(
         'SELECT * FROM mizuki_signer_refund_liabilities WHERE id = $1 FOR UPDATE',
         [liabilityId],
@@ -789,22 +1191,54 @@ export class PostgresOperationStore implements OperationStore {
       if (!liability || liability.settlementSignature !== input.details.settlementSignature) {
         throw new PolicyError('refund_liability_not_found', 'Refund liability was not found', 404);
       }
-      const idempotent = await this.findOne(client, 'idempotency_key', input.idempotencyKey);
-      if (idempotent) {
-        if (idempotent.requestHash !== input.requestHash) {
+      const commandResult = await client.query(
+        'SELECT * FROM mizuki_signer_refund_commands WHERE idempotency_key = $1 FOR UPDATE',
+        [input.idempotencyKey],
+      );
+      let command = commandResult.rows[0] ? mapRefundCommand(commandResult.rows[0]) : null;
+      if (command) {
+        if (command.requestHash !== input.requestHash || command.liabilityId !== liabilityId) {
           throw new PolicyError(
             'idempotency_conflict',
             'Idempotency key was already used for a different request',
             409,
           );
         }
-        await client.query('COMMIT');
-        return idempotent;
+        if (command.currentOperationId) {
+          const current = await client.query(
+            'SELECT * FROM mizuki_signer_operations WHERE id = $1',
+            [command.currentOperationId],
+          );
+          const operation = current.rows[0] ? mapRow(current.rows[0]) : null;
+          if (!operation) {
+            throw new PolicyError(
+              'refund_command_corrupt',
+              'Refund command is missing its current attempt',
+              503,
+              true,
+            );
+          }
+          if (operation.status !== 'rejected') {
+            await client.query('COMMIT');
+            return operation;
+          }
+        }
       }
       if (liability.dischargedAt) {
         throw new PolicyError(
           'refund_liability_discharged',
           'Discharged refund liability cannot be executed',
+          409,
+        );
+      }
+      const conflictingCommand = await client.query<{ id: string }>(
+        'SELECT id FROM mizuki_signer_refund_commands WHERE liability_id = $1',
+        [liabilityId],
+      );
+      if (conflictingCommand.rows[0] && conflictingCommand.rows[0].id !== command?.id) {
+        throw new PolicyError(
+          'resource_conflict',
+          'Refund liability is already bound to another logical command',
           409,
         );
       }
@@ -821,6 +1255,31 @@ export class PostgresOperationStore implements OperationStore {
       }
       const clock = await client.query<{ now: Date }>('SELECT clock_timestamp() AS now');
       const now = new Date(clock.rows[0].now);
+      if (!command) {
+        const created = await client.query(
+          `INSERT INTO mizuki_signer_refund_commands (
+             id, idempotency_key, request_hash, liability_id, job_id, status,
+             current_operation_id, attempt_count, created_at, updated_at
+           ) VALUES ($1, $2, $3, $4, $5, 'pending', NULL, 0, $6, $6)
+           RETURNING *`,
+          [
+            randomUUID(),
+            input.idempotencyKey,
+            input.requestHash,
+            liabilityId,
+            input.details.jobId,
+            now,
+          ],
+        );
+        command = mapRefundCommand(created.rows[0]);
+      }
+      const attemptNumber = command.attemptCount + 1;
+      const operationIdempotencyKey = `refund-attempt:${command.id}:${attemptNumber}`;
+      const details = {
+        ...input.details,
+        refundCommandId: command.id,
+        refundAttemptNumber: attemptNumber,
+      };
       const inserted = await client.query(
         `INSERT INTO mizuki_signer_operations (
            id, idempotency_key, resource_key, request_hash, kind, status,
@@ -829,7 +1288,7 @@ export class PostgresOperationStore implements OperationStore {
          RETURNING *`,
         [
           input.id,
-          input.idempotencyKey,
+          operationIdempotencyKey,
           input.resourceKey,
           input.requestHash,
           input.kind,
@@ -837,9 +1296,21 @@ export class PostgresOperationStore implements OperationStore {
           input.spendBucket,
           input.asset,
           input.recipient,
-          input.details,
+          details,
           now,
         ],
+      );
+      await client.query(
+        `INSERT INTO mizuki_signer_refund_attempts (
+           id, command_id, attempt_number, operation_id, created_at
+         ) VALUES ($1, $2, $3, $4, $5)`,
+        [randomUUID(), command.id, attemptNumber, input.id, now],
+      );
+      await client.query(
+        `UPDATE mizuki_signer_refund_commands
+            SET current_operation_id = $2, attempt_count = $3, status = 'pending', updated_at = $4
+          WHERE id = $1`,
+        [command.id, input.id, attemptNumber, now],
       );
       await client.query('COMMIT');
       return mapRow(inserted.rows[0]);
@@ -849,6 +1320,22 @@ export class PostgresOperationStore implements OperationStore {
     } finally {
       client.release();
     }
+  }
+
+  async getRefundCommand(id: string): Promise<RefundCommand | null> {
+    const result = await this.pool.query(
+      'SELECT * FROM mizuki_signer_refund_commands WHERE id = $1',
+      [id],
+    );
+    return result.rows[0] ? mapRefundCommand(result.rows[0]) : null;
+  }
+
+  async getRefundCommandByIdempotencyKey(key: string): Promise<RefundCommand | null> {
+    const result = await this.pool.query(
+      'SELECT * FROM mizuki_signer_refund_commands WHERE idempotency_key = $1',
+      [key],
+    );
+    return result.rows[0] ? mapRefundCommand(result.rows[0]) : null;
   }
 
   async reserve(
@@ -1198,7 +1685,27 @@ export class PostgresOperationStore implements OperationStore {
       if (!exists) throw new PolicyError('operation_not_found', 'Operation was not found', 404);
       throw new PolicyError('version_conflict', 'Operation changed concurrently', 409, true);
     }
-    return mapRow(result.rows[0]);
+    const record = mapRow(result.rows[0]);
+    const commandStatus =
+      record.status === 'finalized'
+        ? 'finalized'
+        : record.status === 'reconciling' &&
+            [
+              'broadcast_indeterminate',
+              'transaction_outcome_indeterminate',
+              'signed_transaction_missing',
+            ].includes(record.errorCode ?? '')
+          ? 'indeterminate'
+          : record.status === 'submitted' || record.status === 'broadcasting'
+            ? 'submitted'
+            : 'pending';
+    await this.pool.query(
+      `UPDATE mizuki_signer_refund_commands
+          SET status = $2, updated_at = clock_timestamp()
+        WHERE current_operation_id = $1`,
+      [record.id, commandStatus],
+    );
+    return record;
   }
 
   async releaseLease(id: string, owner: string): Promise<void> {
@@ -1237,12 +1744,38 @@ export class PostgresOperationStore implements OperationStore {
 
   async pendingRefundRawAmount(): Promise<string> {
     const result = await this.pool.query<{ total: string }>(
-      `SELECT COALESCE(SUM(liability.raw_amount), 0)::text AS total
-         FROM mizuki_signer_refund_liabilities liability
-    LEFT JOIN mizuki_signer_operations operation
-           ON operation.resource_key = 'refund:' || liability.settlement_signature
-          AND operation.status = 'finalized'
-        WHERE operation.id IS NULL AND liability.discharged_at IS NULL`,
+      `SELECT (COALESCE((
+         SELECT SUM(liability.raw_amount)
+           FROM mizuki_signer_refund_liabilities liability
+      LEFT JOIN mizuki_signer_operations operation
+             ON operation.resource_key = 'refund:' || liability.settlement_signature
+            AND operation.status = 'finalized'
+          WHERE operation.id IS NULL AND liability.discharged_at IS NULL
+       ), 0) + COALESCE((
+         SELECT SUM(raw_amount) FROM mizuki_signer_payment_intents WHERE status = 'reserved'
+       ), 0))::text AS total`,
+    );
+    return result.rows[0]?.total ?? '0';
+  }
+
+  async pendingRefundCount(): Promise<number> {
+    const result = await this.pool.query<{ total: string }>(`
+      SELECT ((SELECT COUNT(*)
+                 FROM mizuki_signer_refund_liabilities liability
+            LEFT JOIN mizuki_signer_operations operation
+                   ON operation.resource_key = 'refund:' || liability.settlement_signature
+                  AND operation.status = 'finalized'
+                WHERE operation.id IS NULL AND liability.discharged_at IS NULL)
+              + (SELECT COUNT(*) FROM mizuki_signer_payment_intents WHERE status = 'reserved'))::text
+             AS total
+    `);
+    return Number(result.rows[0]?.total ?? 0);
+  }
+
+  async pendingBountyReserveLamports(): Promise<string> {
+    const result = await this.pool.query<{ total: string }>(
+      `SELECT COALESCE(SUM(bounty_reserve_lamports), 0)::text AS total
+         FROM mizuki_signer_payment_intents WHERE status <> 'expired_unpaid'`,
     );
     return result.rows[0]?.total ?? '0';
   }
@@ -1250,9 +1783,16 @@ export class PostgresOperationStore implements OperationStore {
   async rollingSpendUsdCents(bucket: 'refund' | 'escrow', _now: Date): Promise<number> {
     if (bucket === 'refund') {
       const result = await this.pool.query<{ total: string }>(
-        `SELECT COALESCE(SUM(amount_usd_cents), 0)::text AS total
-           FROM mizuki_signer_refund_liabilities
-          WHERE created_at >= clock_timestamp() - interval '24 hours'`,
+        `SELECT (COALESCE((
+           SELECT SUM(amount_usd_cents) FROM mizuki_signer_payment_intents
+            WHERE created_at >= clock_timestamp() - interval '24 hours'
+         ), 0) + COALESCE((
+           SELECT SUM(liability.amount_usd_cents)
+             FROM mizuki_signer_refund_liabilities liability
+        LEFT JOIN mizuki_signer_payment_intents intent ON intent.liability_id = liability.id
+            WHERE liability.created_at >= clock_timestamp() - interval '24 hours'
+              AND intent.id IS NULL
+         ), 0))::text AS total`,
       );
       return Number(result.rows[0]?.total ?? 0);
     }
@@ -1393,6 +1933,58 @@ function mapLiability(row: QueryResultRow): RefundLiability {
   };
 }
 
+function mapPaymentIntent(row: QueryResultRow): PaymentIntent {
+  return {
+    id: row.id,
+    idempotencyKey: row.idempotency_key,
+    requestHash: row.request_hash,
+    jobId: row.job_id,
+    quoteId: row.quote_id,
+    repositoryAdmissionId: row.repository_admission_id,
+    repositoryAdmissionEvidenceHash: row.repository_admission_evidence_hash,
+    repository: row.repository,
+    issueNumber: row.issue_number,
+    baseRef: row.base_ref,
+    baseSha: row.base_sha,
+    repositoryAuthorizedAt: new Date(row.repository_authorized_at),
+    authorizationEvidenceHash: row.authorization_evidence_hash,
+    payer: row.payer,
+    payee: row.payee,
+    mint: row.mint,
+    rawAmount: String(row.raw_amount),
+    amountUsdCents: row.amount_usd_cents,
+    bountyAmountUsdCents: row.bounty_amount_usd_cents,
+    bountyReserveLamports: String(row.bounty_reserve_lamports),
+    memo: row.memo,
+    signedMessageHash: row.signed_message_hash,
+    payerSignature: row.payer_signature,
+    paymentWindowStartUnixSeconds: Number(row.payment_window_start),
+    paymentWindowEndUnixSeconds: Number(row.payment_window_end),
+    status: row.status,
+    settlementSignature: row.settlement_signature,
+    liabilityId: row.liability_id,
+    activationIdempotencyKey: row.activation_idempotency_key,
+    createdAt: new Date(row.created_at),
+    activatedAt: row.activated_at ? new Date(row.activated_at) : null,
+    expiredAt: row.expired_at ? new Date(row.expired_at) : null,
+  };
+}
+
+function mapRefundCommand(row: QueryResultRow): RefundCommand {
+  return {
+    id: row.id,
+    idempotencyKey: row.idempotency_key,
+    requestHash: row.request_hash,
+    liabilityId: row.liability_id,
+    jobId: row.job_id,
+    status: row.status,
+    currentOperationId: row.current_operation_id,
+    attemptCount: row.attempt_count,
+    createdAt: new Date(row.created_at),
+    updatedAt: new Date(row.updated_at),
+  };
+}
+
 function mapRepositoryAdmission(row: QueryResultRow): RepositoryAdmission {
   return {
     id: row.id,
@@ -1408,6 +2000,8 @@ function mapRepositoryAdmission(row: QueryResultRow): RepositoryAdmission {
     settlementMessageHash: row.settlement_message_hash,
     settlementClientSignature: row.settlement_client_signature,
     settlementFeePayer: row.settlement_fee_payer,
+    settlementPayer: row.settlement_payer,
+    settlementMemo: row.settlement_memo,
     settlementRawAmount: String(row.settlement_raw_amount),
     paymentWindowStartUnixSeconds: Number(row.payment_window_start),
     paymentWindowEndUnixSeconds: Number(row.payment_window_end),

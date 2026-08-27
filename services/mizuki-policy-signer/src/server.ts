@@ -5,15 +5,20 @@ import {
   bindChallengeRequestSchema,
   bindEscrowRequestSchema,
   bindRefundLiabilityDeliveryRequestSchema,
+  activatePaymentIntentRequestSchema,
+  createPaymentIntentRequestSchema,
   createEscrowRequestSchema,
   dischargeRefundLiabilityRequestSchema,
   githubIdentityGrantRequestSchema,
   operationView,
+  paymentIntentView,
   PolicyError,
   refundLiabilityView,
   refundEscrowRequestSchema,
   refundRequestSchema,
   reconcileRepositorySettlementRequestSchema,
+  reconcilePaymentIntentRequestSchema,
+  refundCommandView,
   registerRefundLiabilityRequestSchema,
   repositoryAdmissionRequestSchema,
   repositoryAdmissionView,
@@ -106,6 +111,57 @@ async function route(
       idempotencyKey(request),
     );
     writeJson(response, 201, repositoryAdmissionView(admission));
+    return;
+  }
+
+  if (method === 'POST' && url.pathname === '/v1/payment-intents') {
+    deps.metrics.increment('requests');
+    const intent = await deps.service.createPaymentIntent(
+      await parseBody(request, createPaymentIntentRequestSchema),
+      idempotencyKey(request),
+    );
+    writeJson(response, 201, paymentIntentView(intent));
+    return;
+  }
+  const paymentIntent = url.pathname.match(/^\/v1\/payment-intents\/([0-9a-f-]+)$/i);
+  if (method === 'GET' && paymentIntent) {
+    writeJson(
+      response,
+      200,
+      paymentIntentView(
+        await deps.service.getPaymentIntent(operationIdSchema.parse(paymentIntent[1])),
+      ),
+    );
+    return;
+  }
+  const activatePaymentIntent = url.pathname.match(
+    /^\/v1\/payment-intents\/([0-9a-f-]+)\/activate$/i,
+  );
+  if (method === 'POST' && activatePaymentIntent) {
+    deps.metrics.increment('requests');
+    const activation = await deps.service.activatePaymentIntent(
+      operationIdSchema.parse(activatePaymentIntent[1]),
+      await parseBody(request, activatePaymentIntentRequestSchema),
+      idempotencyKey(request),
+    );
+    writeJson(response, 200, activation);
+    return;
+  }
+  const reconcilePaymentIntent = url.pathname.match(
+    /^\/v1\/payment-intents\/([0-9a-f-]+)\/reconcile$/i,
+  );
+  if (method === 'POST' && reconcilePaymentIntent) {
+    deps.metrics.increment('requests');
+    await parseBody(request, reconcilePaymentIntentRequestSchema);
+    const reconciled = await deps.service.reconcilePaymentIntent(
+      operationIdSchema.parse(reconcilePaymentIntent[1]),
+      idempotencyKey(request),
+    );
+    writeJson(
+      response,
+      200,
+      'refundLiability' in reconciled ? reconciled : paymentIntentView(reconciled),
+    );
     return;
   }
   const validateAdmission = url.pathname.match(
@@ -247,6 +303,15 @@ async function route(
   if (method === 'GET' && operation) {
     const record = await deps.service.get(operationIdSchema.parse(operation[1]));
     writeJson(response, 200, operationView(record));
+    return;
+  }
+
+  const refundCommand = url.pathname.match(/^\/v1\/refund-commands\/([0-9a-f-]+)$/i);
+  if (method === 'GET' && refundCommand) {
+    const command = await deps.store.getRefundCommand(operationIdSchema.parse(refundCommand[1]));
+    if (!command)
+      throw new PolicyError('refund_command_not_found', 'Refund command was not found', 404);
+    writeJson(response, 200, refundCommandView(command));
     return;
   }
 

@@ -64,6 +64,44 @@ const liabilityAdmission = {
 };
 
 describe('PolicySignerClient', () => {
+  it('accepts signer transaction-capacity evidence', async () => {
+    const readiness = {
+      healthy: true,
+      refundTreasury: 'treasury',
+      refundMint: 'mint',
+      refundDecimals: 6,
+      finalizedBalanceRaw: '12000000',
+      pendingRefundRaw: '1000000',
+      treasuryAvailableRefundRaw: '11000000',
+      remainingRefundLimitUsdCents: 1_100,
+      availableRefundRaw: '11000000',
+      refundSignerLamports: '5000000',
+      refundFeeReserveLamports: '10000',
+      refundAtaRentLamports: '2039280',
+      pendingRefundCount: 0,
+      availableRefundTransactions: 2,
+      escrowRollingLimitUsdCents: 10_000,
+      rollingEscrowSpendUsdCents: 0,
+      remainingEscrowLimitUsdCents: 10_000,
+      escrowAuthority: 'escrow-authority',
+      finalizedEscrowBalanceLamports: '2000000000',
+      availableEscrowReserveLamports: '1900000000',
+    };
+    const client = new PolicySignerClient(
+      {
+        policySignerUrl: 'http://signer',
+        policySignerToken: 'token',
+        jobAuthoritySeed: authoritySeedBase64,
+        githubAppId: '111',
+      },
+      (async () => Response.json(readiness)) as typeof fetch,
+      60_000,
+      () => new Date('2026-08-22T00:00:00.000Z'),
+    );
+
+    await expect(client.readiness()).resolves.toEqual(readiness);
+  });
+
   it('requires exact-repository evidence from a distinct verifier App', async () => {
     const evidence = {
       ready: true,

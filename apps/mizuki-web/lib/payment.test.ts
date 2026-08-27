@@ -258,6 +258,33 @@ describe('Workbench payment recovery storage', () => {
     expect(paymentPromptRetryAllowed(restored, attempt)).toBe(true);
     expect(
       paymentPromptRetryAllowed(restored && { ...restored, phase: 'attempting' }, attempt),
+    ).toBe(true);
+    expect(
+      paymentPromptRetryAllowed(restored, {
+        ...attempt,
+        paymentStatus: 'created',
+      }),
+    ).toBe(true);
+    expect(
+      paymentPromptRetryAllowed(restored && { ...restored, phase: 'uncertain' }, attempt),
+    ).toBe(false);
+    expect(
+      paymentPromptRetryAllowed(restored, {
+        ...attempt,
+        paymentStatus: 'wallet_signed',
+      }),
+    ).toBe(false);
+    expect(
+      paymentPromptRetryAllowed(restored, {
+        ...attempt,
+        promptAuthorization: {
+          ...attempt.promptAuthorization!,
+          nonce: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        },
+      }),
+    ).toBe(false);
+    expect(
+      paymentPromptRetryAllowed(restored && { ...restored, walletAuthorized: true }, attempt),
     ).toBe(false);
   });
 

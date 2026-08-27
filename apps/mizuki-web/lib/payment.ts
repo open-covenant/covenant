@@ -502,10 +502,11 @@ export function paymentPromptRetryAllowed(
   attempt: Pick<PaymentAttempt, 'id' | 'paymentStatus' | 'promptAuthorization'>,
 ): boolean {
   return Boolean(
-    recovery?.phase === 'prepared' &&
+    recovery &&
+    ['prepared', 'attempting'].includes(recovery.phase) &&
     recovery.attemptId === attempt.id &&
     recovery.walletAuthorized !== true &&
-    attempt.paymentStatus === 'wallet_opened' &&
+    ['created', 'wallet_opened'].includes(attempt.paymentStatus) &&
     attempt.promptAuthorization?.nonce === recovery.promptNonce,
   );
 }

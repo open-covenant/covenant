@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { computeConfigFromEnv, ComputeSession } from '../compute.js';
 import { config } from '../config.js';
 import { isolatedShellCommand } from '../sandbox-command.js';
 import type { CodingBackend, GatewayEvent, Sandbox, TokenUsage } from '../types.js';
@@ -72,6 +73,28 @@ const TOOLS: Anthropic.Tool[] = [
   },
 ];
 
+const GPU_WORKSPACE_TOOL: Anthropic.Tool = {
+  name: 'gpu_workspace',
+  description:
+    'Rent a dedicated bounded GPU workspace (CUDA + Jupyter) with real, capped USDC spend. ' +
+    'Use only when the task genuinely needs a GPU. action=launch starts one on the cheapest ' +
+    'available GPU (billing only accrues once it is running), status polls it (returns the ' +
+    'Jupyter access URL when ready; provisioning can take minutes), cancel stops it and ' +
+    'returns the billing receipt. Anything left running is cancelled when the run ends.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      action: { type: 'string', enum: ['launch', 'status', 'cancel'] },
+      job_id: { type: 'string', description: 'Required for status and cancel' },
+      duration_secs: {
+        type: 'number',
+        description: 'Optional booking window for launch; clamped to the configured maximum',
+      },
+    },
+    required: ['action'],
+  },
+};
+
 export class AnthropicBackend implements CodingBackend {
   readonly id = 'anthropic' as const;
   private readonly client: Anthropic;
@@ -87,6 +110,9 @@ export class AnthropicBackend implements CodingBackend {
     emit: (e: GatewayEvent) => void;
   }): Promise<{ output: string; usage: TokenUsage }> {
     const { input, sandbox, signal, emit } = opts;
+    const computeCfg = computeConfigFromEnv();
+    const compute = computeCfg ? new ComputeSession(computeCfg) : null;
+    const tools = compute ? [...TOOLS, GPU_WORKSPACE_TOOL] : TOOLS;
     const messages: Anthropic.MessageParam[] = [{ role: 'user', content: input }];
     const usage: TokenUsage = {
       inputTokens: 0,
@@ -102,6 +128,7 @@ export class AnthropicBackend implements CodingBackend {
       ? ({ type: 'adaptive', display: 'summarized' } as const)
       : ({ type: 'adaptive' } as const);
 
+    try {
     for (let turn = 0; turn < MAX_TURNS; turn++) {
       if (signal.aborted) throw new Error('run aborted');
 
@@ -112,7 +139,7 @@ export class AnthropicBackend implements CodingBackend {
           thinking,
           output_config: { effort: config.effort },
           system: [{ type: 'text', text: SYSTEM, cache_control: { type: 'ephemeral' } }],
-          tools: TOOLS,
+          tools,
           messages: withTurnCache(messages),
         },
         { signal },
@@ -159,7 +186,7 @@ export class AnthropicBackend implements CodingBackend {
         let isError = false;
         let out = '';
         try {
-          out = await execTool(tu, sandbox, emit);
+          out = await execTool(tu, sandbox, emit, compute);
         } catch (e) {
           isError = true;
           out = `error: ${(e as Error).message}`;
@@ -177,6 +204,22 @@ export class AnthropicBackend implements CodingBackend {
 
     emit({ type: 'run.failed', error: `exceeded ${MAX_TURNS} turns` });
     return { output: finalText, usage };
+    } finally {
+      // Success, failure, or abort: never leak a billed workspace past the run.
+      await reapCompute(compute, emit);
+    }
+  }
+}
+
+async function reapCompute(
+  compute: ComputeSession | null,
+  emit: (e: GatewayEvent) => void,
+): Promise<void> {
+  if (!compute) return;
+  const reaped = await compute.reap();
+  for (const id of reaped) {
+    emit({ type: 'tool.completed', tool: 'gpu_workspace', duration_s: 0, error: false });
+    emit({ type: 'message.delta', text: `\n[gpu_workspace ${id} cancelled at run end]` });
   }
 }
 
@@ -220,9 +263,35 @@ export async function execTool(
   tu: Anthropic.ToolUseBlock,
   sandbox: Sandbox,
   emit: (e: GatewayEvent) => void,
+  compute: ComputeSession | null = null,
 ): Promise<string> {
   const input = tu.input as Record<string, unknown>;
   switch (tu.name) {
+    case 'gpu_workspace': {
+      if (!compute) throw new Error('gpu_workspace is not enabled on this gateway');
+      const action = String(input.action);
+      if (action === 'launch') {
+        const job = await compute.launch(
+          typeof input.duration_secs === 'number' ? input.duration_secs : undefined,
+        );
+        return JSON.stringify({
+          job_id: job.id,
+          status: job.status,
+          offer_id: job.offer_id,
+          maximum_usdc_micros: job.maximum_usdc_micros,
+        });
+      }
+      const jobId = String(input.job_id ?? '');
+      if (!jobId) throw new Error('job_id is required');
+      const job = action === 'cancel' ? await compute.cancel(jobId) : await compute.status(jobId);
+      return JSON.stringify({
+        job_id: job.id,
+        status: job.status,
+        access_url: job.access_url,
+        error: job.error,
+        receipt: job.receipt,
+      });
+    }
     case 'read_file':
       return sandbox.readFile(String(input.path));
     case 'write_file': {

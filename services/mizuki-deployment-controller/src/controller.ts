@@ -186,12 +186,7 @@ export class DeploymentController {
         if (typeof expectedKey !== 'string' || typeof expectedHash !== 'string') {
           throw internalState('Shadow adoption audit evidence is incomplete');
         }
-        this.assertActionReplay(
-          expectedKey,
-          expectedHash,
-          idempotencyKey,
-          hash,
-        );
+        this.assertActionReplay(expectedKey, expectedHash, idempotencyKey, hash);
         if (operation.shadowRestoreState !== 'failed' || operation.shadowActive) {
           throw internalState('Shadow adoption evidence is incomplete');
         }

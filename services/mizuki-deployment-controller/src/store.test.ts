@@ -75,8 +75,12 @@ describe('Postgres operation ledger', () => {
     await store.save(operation, event);
 
     const statements = pool.clients[0].statements;
-    const update = statements.find(({ text }) => text.includes('UPDATE mizuki_deployment_operations'));
-    const append = statements.find(({ text }) => text.includes('INSERT INTO mizuki_deployment_events'));
+    const update = statements.find(({ text }) =>
+      text.includes('UPDATE mizuki_deployment_operations'),
+    );
+    const append = statements.find(({ text }) =>
+      text.includes('INSERT INTO mizuki_deployment_events'),
+    );
     const record = JSON.parse(String(update?.values?.[9])) as Record<string, unknown>;
     const detail = JSON.parse(String(append?.values?.[3])) as Record<string, unknown>;
     expect(record).toMatchObject({ shadowRestoreState: 'failed', shadowActive: false });

@@ -447,10 +447,7 @@ describe('deployment controller', () => {
     const serviceDriftRecovery = await prepareFailedShadowRestore(serviceDrift);
     serviceDrift.render.services.get('srv-shadow123')!.serviceDetails.region = 'oregon';
     await expect(
-      serviceDrift.controller.adoptShadow(
-        serviceDriftRecovery.adoption,
-        `${UPGRADE}:adopt-shadow`,
-      ),
+      serviceDrift.controller.adoptShadow(serviceDriftRecovery.adoption, `${UPGRADE}:adopt-shadow`),
     ).rejects.toMatchObject({ code: 'render_service_drift', status: 409 });
     expect(await serviceDrift.store.activeShadow()).not.toBeNull();
 
@@ -750,15 +747,15 @@ async function prepareFailedShadowRestore(
     candidateSha: CANDIDATE,
     mergeSha: MERGE,
   };
-  await expect(
-    context.controller.promote(promotion, `${UPGRADE}:promote`),
-  ).rejects.toMatchObject({ code: 'shadow_restore_in_progress' });
+  await expect(context.controller.promote(promotion, `${UPGRADE}:promote`)).rejects.toMatchObject({
+    code: 'shadow_restore_in_progress',
+  });
   const restoreDeploymentId = 'dep-2';
   if (failRestore) {
     context.render.setStatus('srv-shadow123', restoreDeploymentId, 'pre_deploy_failed');
-    await expect(
-      context.controller.promote(promotion, `${UPGRADE}:promote`),
-    ).rejects.toMatchObject({ code: 'shadow_restore_failed' });
+    await expect(context.controller.promote(promotion, `${UPGRADE}:promote`)).rejects.toMatchObject(
+      { code: 'shadow_restore_failed' },
+    );
   }
   const rollback = {
     version: 1 as const,
@@ -768,9 +765,7 @@ async function prepareFailedShadowRestore(
     candidateSha: CANDIDATE,
     reason: 'restore failed before production promotion',
   };
-  await expect(
-    context.controller.rollback(rollback, `${UPGRADE}:rollback`),
-  ).rejects.toMatchObject({
+  await expect(context.controller.rollback(rollback, `${UPGRADE}:rollback`)).rejects.toMatchObject({
     code: failRestore ? 'shadow_restore_failed' : 'shadow_restore_in_progress',
   });
   const adoption: ShadowAdoptionRequest = {

@@ -108,8 +108,8 @@ export function createPaymentFetch(input: {
   };
   const request = input.request ?? fetch;
   const observedRequest: typeof fetch = async (target, init) => {
-    const outgoing = new Request(target, init);
-    if (outgoing.headers.has('payment-signature') || outgoing.headers.has('x-payment')) {
+    const headers = target instanceof Request ? target.headers : new Headers(init?.headers);
+    if (headers.has('payment-signature') || headers.has('x-payment')) {
       await input.onStage?.('submitting');
     }
     return request(target, init);

@@ -18,8 +18,9 @@ import {
   type SignatureBytes,
 } from '@solana/kit';
 import type { WalletAccount } from '@wallet-standard/base';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  createPaymentFetch,
   LIGHTHOUSE_PROGRAM,
   parsePaymentTerms,
   paymentPreparationError,
@@ -48,6 +49,35 @@ afterEach(() => {
 });
 
 describe('x402 quote policy', () => {
+  it('does not consume a POST body while observing payment headers', async () => {
+    const payer = await paymentFixture();
+    const request = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const outgoing = new Request(input, init);
+      expect(await outgoing.json()).toEqual({ quote_id: 'quote-1' });
+      return Response.json({ ok: true });
+    });
+    const paidFetch = createPaymentFetch({
+      account: payer.payer,
+      feature: {
+        version: '1.0.0',
+        supportedTransactionVersions: [0],
+        signTransaction: vi.fn(),
+      },
+      quotePayment: { x402Version: 2, accepts: [requirements] },
+      quoteAmount: requirements.amount,
+      request,
+    });
+
+    const response = await paidFetch('https://mizuki.example/v1/jobs', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ quote_id: 'quote-1' }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(request).toHaveBeenCalledOnce();
+  });
+
   it('selects the one route that exactly matches the accepted quote', () => {
     const terms = parsePaymentTerms(
       { x402Version: 2, accepts: [requirements] },

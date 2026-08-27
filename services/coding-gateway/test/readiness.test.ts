@@ -171,13 +171,15 @@ describe('E2B tariff readiness', () => {
   it('fetches and hashes evidence whose formula covers the verified template resources', async () => {
     const raw = JSON.stringify(evidence);
     const reference = contentAddressedReference(raw);
+    const fetcher = responseFetcher(raw);
 
-    await expect(
-      verifyE2bTariff({ reference, ...expected }, responseFetcher(raw, source), tariffNow),
-    ).resolves.toEqual({ validUntilMs: Date.parse(evidence.validUntil) });
+    await expect(verifyE2bTariff({ reference, ...expected }, fetcher, tariffNow)).resolves.toEqual({
+      validUntilMs: Date.parse(evidence.validUntil),
+    });
+    expect(fetcher).toHaveBeenCalledOnce();
   });
 
-  it('fails closed on an unfetched digest, resource drift, or an understated formula', async () => {
+  it('fails closed on an invalid digest, provenance, resource drift, or formula', async () => {
     const raw = JSON.stringify(evidence);
     await expect(
       verifyE2bTariff(
@@ -185,24 +187,28 @@ describe('E2B tariff readiness', () => {
           reference: 'https://evidence.example/e2b-tariff.json#sha256=' + '0'.repeat(64),
           ...expected,
         },
-        responseFetcher(raw, source),
+        responseFetcher(raw),
         tariffNow,
       ),
     ).rejects.toThrow(/digest mismatch/);
 
+    const invalidSource = JSON.stringify({
+      ...evidence,
+      sourceUrl: 'https://example.com/pricing',
+    });
     await expect(
       verifyE2bTariff(
-        { reference: contentAddressedReference(raw), ...expected },
-        responseFetcher(raw, 'changed provider rate card'),
+        { reference: contentAddressedReference(invalidSource), ...expected },
+        responseFetcher(invalidSource),
         tariffNow,
       ),
-    ).rejects.toThrow(/source digest mismatch/);
+    ).rejects.toThrow(/official E2B/);
 
     const drifted = JSON.stringify({ ...evidence, cpuCount: 8 });
     await expect(
       verifyE2bTariff(
         { reference: contentAddressedReference(drifted), ...expected },
-        responseFetcher(drifted, source),
+        responseFetcher(drifted),
         tariffNow,
       ),
     ).rejects.toThrow(/does not match/);
@@ -211,7 +217,7 @@ describe('E2B tariff readiness', () => {
     await expect(
       verifyE2bTariff(
         { reference: contentAddressedReference(understated), ...expected },
-        responseFetcher(understated, source),
+        responseFetcher(understated),
         tariffNow,
       ),
     ).rejects.toThrow(/does not cover/);
@@ -224,7 +230,7 @@ describe('E2B tariff readiness', () => {
     await expect(
       verifyE2bTariff(
         { reference: contentAddressedReference(stale), ...expected },
-        responseFetcher(stale, source),
+        responseFetcher(stale),
         tariffNow,
       ),
     ).rejects.toThrow(/stale/);
@@ -276,11 +282,8 @@ function contentAddressedReference(raw: string): string {
   return `https://evidence.example/e2b-tariff.json#sha256=${digest}`;
 }
 
-function responseFetcher(evidence: string, source: string): typeof fetch {
-  return vi.fn(async (input: URL | RequestInfo) => {
-    const url = input instanceof URL ? input : new URL(String(input));
-    return new Response(url.hostname.endsWith('e2b.dev') ? source : evidence, { status: 200 });
-  }) as unknown as typeof fetch;
+function responseFetcher(evidence: string): typeof fetch {
+  return vi.fn(async () => new Response(evidence, { status: 200 })) as unknown as typeof fetch;
 }
 
 const tariffNow = () => Date.parse('2026-08-24T00:00:00.000Z');

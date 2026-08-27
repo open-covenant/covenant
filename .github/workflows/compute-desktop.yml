@@ -1,0 +1,278 @@
+name: compute desktop
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "compute-v*"
+    paths:
+      - "apps/covenant-compute/**"
+      - "agent-os/crates/covenant-compute/**"
+      - "agent-os/crates/covenant-compute-authority/**"
+      - "agent-os/crates/covenant-compute-control/**"
+      - "agent-os/crates/covenant-compute-vast/**"
+      - "agent-os/Cargo.toml"
+      - "agent-os/Cargo.lock"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/compute-desktop.yml"
+  pull_request:
+    paths:
+      - "apps/covenant-compute/**"
+      - "agent-os/crates/covenant-compute/**"
+      - "agent-os/crates/covenant-compute-authority/**"
+      - "agent-os/crates/covenant-compute-control/**"
+      - "agent-os/crates/covenant-compute-vast/**"
+      - "agent-os/Cargo.toml"
+      - "agent-os/Cargo.lock"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/compute-desktop.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS DMG
+            os: macos-latest
+            bundles: dmg
+            target: universal-apple-darwin
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
+            artifact: covenant-compute-macos-universal
+          - name: Linux AppImage
+            os: ubuntu-22.04
+            bundles: appimage,deb,rpm
+            target: ""
+            rust_targets: ""
+            artifact: covenant-compute-linux-x86_64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+
+      - name: Install Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            file \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            patchelf \
+            rpm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.96.1
+          targets: ${{ matrix.rust_targets }}
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093
+        with:
+          version: 10.31.0
+
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Test desktop runtime
+        run: |
+          pnpm --dir apps/covenant-compute test
+          cargo test --locked --manifest-path apps/covenant-compute/src-tauri/Cargo.toml
+          cargo test --locked --manifest-path agent-os/Cargo.toml \
+            -p covenant-compute \
+            -p covenant-compute-authority \
+            -p covenant-compute-control \
+            -p covenant-compute-vast
+          cargo clippy --locked --manifest-path agent-os/Cargo.toml \
+            -p covenant-compute \
+            -p covenant-compute-authority \
+            -p covenant-compute-control \
+            -p covenant-compute-vast \
+            --all-targets -- -D warnings
+
+      - name: Require matching release version
+        if: github.ref_type == 'tag'
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          APP_VERSION="$(python3 -c 'import json; print(json.load(open("apps/covenant-compute/src-tauri/tauri.conf.json"))["version"])')"
+          test "$RELEASE_TAG" = "compute-v$APP_VERSION"
+
+      - name: Require live release API
+        if: github.ref_type == 'tag'
+        env:
+          RELEASE_TOKEN: ${{ secrets.COVENANT_COMPUTE_RELEASE_TOKEN }}
+        run: |
+          test -n "$RELEASE_TOKEN"
+          curl --fail --retry 3 --silent --show-error \
+            https://compute.opencovenant.org/healthz |
+            python3 -c 'import json,sys; assert json.load(sys.stdin) == {"status": "ok"}'
+          curl --fail --retry 3 --silent --show-error \
+            -H "Authorization: Bearer $RELEASE_TOKEN" \
+            https://compute.opencovenant.org/v1/offers |
+            python3 -c 'import json,sys; data=json.load(sys.stdin); assert isinstance(data,list) and data'
+
+      - name: Require Apple release credentials
+        if: runner.os == 'macOS' && github.ref_type == 'tag'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          test -n "$APPLE_CERTIFICATE"
+          test -n "$APPLE_CERTIFICATE_PASSWORD"
+          test -n "$APPLE_ID"
+          test -n "$APPLE_PASSWORD"
+          test -n "$APPLE_SIGNING_IDENTITY"
+          test -n "$APPLE_TEAM_ID"
+
+      - name: Build desktop bundles
+        working-directory: apps/covenant-compute
+        env:
+          APPLE_CERTIFICATE: ${{ runner.os == 'macOS' && github.ref_type == 'tag' && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ runner.os == 'macOS' && github.ref_type == 'tag' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_ID: ${{ runner.os == 'macOS' && github.ref_type == 'tag' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ runner.os == 'macOS' && github.ref_type == 'tag' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && github.ref_type == 'tag' && secrets.APPLE_SIGNING_IDENTITY || '-' }}
+          APPLE_TEAM_ID: ${{ runner.os == 'macOS' && github.ref_type == 'tag' && secrets.APPLE_TEAM_ID || '' }}
+          BUNDLE_TARGETS: ${{ matrix.bundles }}
+          BUILD_TARGET: ${{ matrix.target }}
+        run: |
+          CARGO_ROOT="${CARGO_HOME:-$HOME/.cargo}"
+          RUSTUP_ROOT="${RUSTUP_HOME:-$HOME/.rustup}"
+          export RUSTFLAGS="--remap-path-prefix=$GITHUB_WORKSPACE=/workspace --remap-path-prefix=$CARGO_ROOT=/cargo --remap-path-prefix=$RUSTUP_ROOT=/rustup --remap-path-prefix=$HOME=/build"
+          if [ -n "$BUILD_TARGET" ]; then
+            pnpm exec tauri build --bundles "$BUNDLE_TARGETS" --target "$BUILD_TARGET"
+          else
+            pnpm exec tauri build --bundles "$BUNDLE_TARGETS"
+          fi
+
+      - name: Verify macOS bundle
+        if: runner.os == 'macOS'
+        run: |
+          DMG="$(find apps/covenant-compute/src-tauri/target -path '*/bundle/dmg/*.dmg' -print -quit)"
+          test -n "$DMG"
+          hdiutil verify "$DMG"
+          MOUNT_DIR="$(mktemp -d)"
+          trap 'hdiutil detach "$MOUNT_DIR" >/dev/null 2>&1 || true; rmdir "$MOUNT_DIR" >/dev/null 2>&1 || true' EXIT
+          printf 'Y\n' |
+            hdiutil attach -readonly -nobrowse -mountpoint "$MOUNT_DIR" "$DMG"
+          codesign --verify --deep --strict --verbose=2 "$MOUNT_DIR/Covenant Compute.app"
+          test -s "$MOUNT_DIR/Covenant Compute.app/Contents/Resources/licenses/LICENSE"
+          test -s "$MOUNT_DIR/Covenant Compute.app/Contents/Resources/licenses/NOTICE"
+          file "$MOUNT_DIR/Covenant Compute.app/Contents/MacOS/covenant-compute-desktop" |
+            grep -F 'universal binary'
+          if find "$MOUNT_DIR/Covenant Compute.app" -type f -exec strings {} + |
+            grep -Eq '/(Users|home)/[^/[:space:]]+/'; then
+            echo "bundle contains an unremapped build-home path" >&2
+            exit 1
+          fi
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            spctl --assess --type execute --verbose=4 "$MOUNT_DIR/Covenant Compute.app"
+          fi
+
+      - name: Verify Linux bundles
+        if: runner.os == 'Linux'
+        run: |
+          APPIMAGE="$(find apps/covenant-compute/src-tauri/target -path '*/bundle/appimage/*.AppImage' -print -quit)"
+          DEB="$(find apps/covenant-compute/src-tauri/target -path '*/bundle/deb/*.deb' -print -quit)"
+          RPM="$(find apps/covenant-compute/src-tauri/target -path '*/bundle/rpm/*.rpm' -print -quit)"
+          test -s "$APPIMAGE"
+          dpkg-deb --info "$DEB"
+          rpm --query --package --info "$RPM"
+          if strings apps/covenant-compute/src-tauri/target/release/covenant-compute-desktop |
+            grep -Eq '/(Users|home)/[^/[:space:]]+/'; then
+            echo "bundle contains an unremapped build-home path" >&2
+            exit 1
+          fi
+
+      - name: Upload desktop bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            apps/covenant-compute/src-tauri/target/*/release/bundle/dmg/*.dmg
+            apps/covenant-compute/src-tauri/target/*/release/bundle/appimage/*.AppImage
+            apps/covenant-compute/src-tauri/target/*/release/bundle/deb/*.deb
+            apps/covenant-compute/src-tauri/target/*/release/bundle/rpm/*.rpm
+            apps/covenant-compute/src-tauri/target/release/bundle/dmg/*.dmg
+            apps/covenant-compute/src-tauri/target/release/bundle/appimage/*.AppImage
+            apps/covenant-compute/src-tauri/target/release/bundle/deb/*.deb
+            apps/covenant-compute/src-tauri/target/release/bundle/rpm/*.rpm
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: sign and publish
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Download bundles
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          path: dist
+
+      - name: Flatten bundles
+        run: |
+          mkdir -p release
+          find dist -type f -exec cp {} release/ \;
+          cd release
+          sha256sum * > checksums.txt
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@f713795cb21599bc4e5c4b58cbad1da852d7eeb9
+        with:
+          cosign-release: v2.4.1
+
+      - name: Sign bundles
+        working-directory: release
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          for artifact in *; do
+            cosign sign-blob --yes \
+              --output-signature "${artifact}.sig" \
+              --output-certificate "${artifact}.pem" \
+              "${artifact}"
+          done
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Covenant Compute ${TAG#compute-v}" \
+            --generate-notes \
+            --prerelease \
+            release/*

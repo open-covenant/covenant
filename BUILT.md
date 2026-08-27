@@ -23,6 +23,15 @@ Audit (`covenant-audit`) is a cross-cutting accountability layer underlying Iden
 
 The agent-to-service payment rail over HTTP 402 (x402) is live today and is distinct from the internal-receipt settlement above: the daemon can pay for metered x402 resources outbound, and Covenant operates a deployed x402 seller that settles in USDC on Solana mainnet — selling Covenant-Verified attestations, on-chain identity passports, and reputation reads, with the seller's signing key published at `/.well-known/x402` — alongside an escrow service and an Ephemeral-Rollup credit facilitator (the facilitator settles ER credits on devnet). What is *not* production is the daemon-driven anchoring of internal resource receipts to the settlement program; the payment rail being live does not change that boundary.
 
+Covenant Compute is a separate product alpha in this repository. Its Tauri
+desktop, bounded launch client, durable SQLite control plane, and Vast GPU
+adapter are implemented. The first available workload is a CUDA and Jupyter
+workspace; ComfyUI and Open WebUI remain release previews. The beta accounting
+path reserves an operator-funded allowance and produces provider-derived usage
+evidence. It does not move user USDC. A separate Solana USDC compute escrow is
+implemented and locally tested, but is not deployed or wired into the desktop
+and control plane.
+
 The loop also has practical enforcement:
 
 - a tracked pre-commit hook for one-session-per-checkout protection;
@@ -86,7 +95,7 @@ Covenant does not currently claim:
 - production multi-peer operation across untrusted hosts;
 - the daemon-driven on-chain settlement lifecycle in production (the Solana settlement program is live on mainnet; per-intent consume is not yet production);
 - public benchmarked self-improvement;
-- a release-ready installer, or a multi-language SDK ecosystem beyond the published TypeScript `@covenant-org/sdk`.
+- a publicly release-ready Covenant Compute installer, or a multi-language SDK ecosystem beyond the published TypeScript `@covenant-org/sdk`.
 
 Those are roadmap items. The current system is a working local substrate with strong primitives in some areas and deliberately marked gaps in others.
 

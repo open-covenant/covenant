@@ -23,6 +23,30 @@ Covenant sits below agent applications and above the host operating system. It o
 - **Paper:** [DOI: 10.5281/zenodo.20134416](https://doi.org/10.5281/zenodo.20134416)
 - **Token:** $CVNT · [`2mNVZ6aEjrGwiUVCfz7XGWpiXuWzgBDoznwE579upump`](https://pump.fun/coin/2mNVZ6aEjrGwiUVCfz7XGWpiXuWzgBDoznwE579upump)
 
+## Covenant Compute
+
+Covenant Compute is the first installable product built on the runtime: a
+macOS and Linux desktop app for launching a time-boxed GPU workspace. The user
+sets a maximum beta allowance, reviews the exact GPU and rate, opens the
+workspace, and can stop it from the same app. The control plane owns the
+deadline, idempotency, provider cleanup, and receipt.
+
+The current private alpha releases one workload: a CUDA and Jupyter workspace
+on eligible Vast marketplace capacity. ComfyUI and Open WebUI are visible as previews, but
+cannot launch until their pinned images and secure access routes pass the same
+gate. The desktop, durable control plane, provider adapter, and packaging
+workflow are in [`apps/covenant-compute`](./apps/covenant-compute/) and
+[`agent-os/crates/covenant-compute-control`](./agent-os/crates/covenant-compute-control/).
+
+This is source-complete alpha work, not a public service announcement. There is
+no hosted endpoint, funded live-provider canary, self-serve wallet flow, or
+signed release yet. Private-beta usage is an operator-funded allowance
+denominated in USDC. The separate Solana compute escrow is implemented in
+source but is not deployed or connected to the desktop payment path. Vast does
+not expose a per-instance billing deadline: the control plane requests deletion
+at expiry and retries failures, but provider billing can continue until deletion
+is confirmed.
+
 ## Quick start
 
 > Try it without installing — **[sandbox.opencovenant.org](https://sandbox.opencovenant.org)**. Public operator console wired to a live daemon, state resets every 12 hours.

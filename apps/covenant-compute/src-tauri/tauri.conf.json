@@ -1,0 +1,54 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Covenant Compute",
+  "version": "0.1.0",
+  "identifier": "org.opencovenant.compute",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Covenant Compute",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 960,
+        "minHeight": 640,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "targets": [
+      "dmg",
+      "appimage",
+      "deb",
+      "rpm"
+    ],
+    "resources": {
+      "../../../LICENSE": "licenses/LICENSE",
+      "../../../NOTICE.md": "licenses/NOTICE"
+    },
+    "license": "Apache-2.0",
+    "licenseFile": "../../../LICENSE",
+    "category": "Utility",
+    "shortDescription": "Launch bounded GPU workloads.",
+    "longDescription": "Covenant Compute launches curated GPU workloads with explicit duration, trust, and USDC-denominated allowance policies."
+  }
+}

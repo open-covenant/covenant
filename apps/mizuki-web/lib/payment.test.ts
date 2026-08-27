@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  authorizePaymentPrompt,
   checkQuotePaymentStatus,
   clearWorkbenchPaymentRecovery,
+  createPaymentPromptNonce,
   loadWorkbenchPaymentRecovery,
   paymentAccountId,
+  paymentPromptRetryAllowed,
   paymentRetryAllowed,
   PaymentStatusError,
   normalizePaymentAttempt,
@@ -17,6 +20,8 @@ import {
 } from './payment';
 import { WorkbenchRequestError } from './workbench-client';
 import type { Quote } from './types';
+
+const recoveryPromptNonce = '11111111-1111-4111-8111-111111111111';
 
 describe('quoteMatchesIssue', () => {
   const quote = { owner: 'open-covenant', repo: 'covenant', issueNumber: 42 };
@@ -148,6 +153,7 @@ describe('Workbench payment recovery storage', () => {
       accountId: '42',
       attemptId: 'attempt-11111111',
       idempotencyKey: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      promptNonce: recoveryPromptNonce,
       repository: 'open-covenant/covenant',
       issueUrl: quote.issueUrl,
       quote,
@@ -168,6 +174,7 @@ describe('Workbench payment recovery storage', () => {
         accountId: '42',
         attemptId: 'attempt-11111111',
         idempotencyKey: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        promptNonce: recoveryPromptNonce,
         repository: 'attacker/other',
         issueUrl: quote.issueUrl,
         quote,
@@ -185,6 +192,7 @@ describe('Workbench payment recovery storage', () => {
       accountId: '42',
       attemptId: 'attempt-11111111',
       idempotencyKey: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      promptNonce: recoveryPromptNonce,
       repository: 'open-covenant/covenant',
       issueUrl: quote.issueUrl,
       quote,
@@ -202,6 +210,7 @@ describe('Workbench payment recovery storage', () => {
       accountId: '42',
       attemptId: 'attempt-11111111',
       idempotencyKey: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      promptNonce: recoveryPromptNonce,
       repository: 'open-covenant/covenant',
       issueUrl: quote.issueUrl,
       quote,
@@ -214,6 +223,42 @@ describe('Workbench payment recovery storage', () => {
     expect(retried.phase).toBe('prepared');
     expect(retried.idempotencyKey).toBe(first.idempotencyKey);
     expect(retried.attemptId).toBe(first.attemptId);
+    expect(retried.promptNonce).toBe(first.promptNonce);
+  });
+
+  it('restores a prepared retry for the same server-owned prompt after reload', () => {
+    const storage = memoryStorage();
+    prepareWorkbenchPaymentRecovery(
+      {
+        accountId: '42',
+        attemptId: 'attempt-11111111',
+        idempotencyKey: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        promptNonce: recoveryPromptNonce,
+        repository: 'open-covenant/covenant',
+        issueUrl: quote.issueUrl,
+        quote,
+      },
+      storage,
+    );
+    const restored = loadWorkbenchPaymentRecovery('42', storage);
+    const attempt = normalizePaymentAttempt({
+      id: 'attempt-11111111',
+      quoteId: quote.id,
+      idempotencyKey: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      stage: 'wallet_opened',
+      paymentStatus: 'wallet_opened',
+      retrySafe: false,
+      promptAuthorization: {
+        nonce: recoveryPromptNonce,
+        authorizedAt: '2026-08-27T12:00:00.000Z',
+      },
+    });
+
+    expect(restored?.phase).toBe('prepared');
+    expect(paymentPromptRetryAllowed(restored, attempt)).toBe(true);
+    expect(
+      paymentPromptRetryAllowed(restored && { ...restored, phase: 'attempting' }, attempt),
+    ).toBe(false);
   });
 
   it('does not let unavailable browser storage block a server-owned payment attempt', () => {
@@ -229,6 +274,7 @@ describe('Workbench payment recovery storage', () => {
         accountId: '42',
         attemptId: 'attempt-11111111',
         idempotencyKey: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        promptNonce: recoveryPromptNonce,
         repository: 'open-covenant/covenant',
         issueUrl: quote.issueUrl,
         quote,
@@ -248,6 +294,7 @@ describe('Workbench payment recovery storage', () => {
         accountId: '42',
         attemptId: 'attempt-11111111',
         idempotencyKey: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        promptNonce: recoveryPromptNonce,
         repository: 'open-covenant/covenant',
         issueUrl: canonicalQuote.issueUrl,
         quote: canonicalQuote,
@@ -265,6 +312,7 @@ describe('Workbench payment recovery storage', () => {
         accountId: '42',
         attemptId: 'attempt-11111111',
         idempotencyKey: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        promptNonce: recoveryPromptNonce,
         repository: 'open-covenant/covenant',
         issueUrl: quote.issueUrl,
         quote,
@@ -277,6 +325,7 @@ describe('Workbench payment recovery storage', () => {
         accountId: '7',
         attemptId: 'attempt-22222222',
         idempotencyKey: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        promptNonce: '22222222-2222-4222-8222-222222222222',
         repository: 'open-covenant/covenant',
         issueUrl: quote.issueUrl,
         quote,
@@ -290,6 +339,47 @@ describe('Workbench payment recovery storage', () => {
 });
 
 describe('server-owned payment attempts', () => {
+  it('binds prompt authorization to one client-generated nonce', async () => {
+    const authorizedAt = '2026-08-27T12:00:00.000Z';
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ csrfToken: 'a'.repeat(43) }))
+      .mockResolvedValueOnce(
+        Response.json({
+          ...paymentAttemptResponse('wallet_opened', quote.expiresAt),
+          promptAuthorization: { nonce: recoveryPromptNonce, authorizedAt },
+        }),
+      );
+    vi.stubGlobal('fetch', request);
+
+    try {
+      await expect(
+        authorizePaymentPrompt('attempt-11111111', recoveryPromptNonce, quote.id),
+      ).resolves.toMatchObject({
+        promptAuthorization: { nonce: recoveryPromptNonce, authorizedAt },
+      });
+      expect(request).toHaveBeenCalledTimes(2);
+      const [target, init] = request.mock.calls[1]!;
+      expect(target).toBe('/api/mizuki/v1/account/payment-attempts/attempt-11111111/prompt');
+      expect(init?.method).toBe('POST');
+      expect(new Headers(init?.headers).get('x-mizuki-csrf-token')).toBe('a'.repeat(43));
+      expect(JSON.parse(String(init?.body))).toEqual({ prompt_nonce: recoveryPromptNonce });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('generates a version-four nonce for a new payment attempt', () => {
+    vi.stubGlobal('crypto', {
+      randomUUID: () => recoveryPromptNonce,
+    });
+    try {
+      expect(createPaymentPromptNonce()).toBe(recoveryPromptNonce);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('recovers a lost payment response through bounded read-only polling', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-08-27T12:00:00.000Z'));
@@ -328,6 +418,7 @@ describe('server-owned payment attempts', () => {
         expect(init?.body).toBeUndefined();
         expect(headers.get('payment-signature')).toBeNull();
         expect(headers.get('x-payment')).toBeNull();
+        expect(headers.get('x-mizuki-prompt-nonce')).toBeNull();
       }
     } finally {
       vi.unstubAllGlobals();
@@ -427,6 +518,10 @@ describe('server-owned payment attempts', () => {
             idempotencyKey: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
             stage: 'submitting',
             retrySafe: false,
+            promptAuthorization: {
+              nonce: recoveryPromptNonce,
+              authorizedAt: '2026-08-27T12:00:00.000Z',
+            },
           },
           paymentStatus: 'job_reserved',
           retrySafe: false,
@@ -443,6 +538,10 @@ describe('server-owned payment attempts', () => {
       job: { id: 'job-11111111' },
       requestId: 'request-11111111',
       buildId: 'build-11111111',
+      promptAuthorization: {
+        nonce: recoveryPromptNonce,
+        authorizedAt: '2026-08-27T12:00:00.000Z',
+      },
     });
   });
 

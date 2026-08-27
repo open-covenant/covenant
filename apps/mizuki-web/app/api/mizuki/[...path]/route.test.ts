@@ -26,6 +26,7 @@ describe('Mizuki API proxy', () => {
           origin: 'https://mizuki.opencovenant.org',
           'x-forwarded-for': '203.0.113.9, 198.51.100.8',
           'x-mizuki-csrf-token': 'c'.repeat(43),
+          'x-mizuki-prompt-nonce': '11111111-1111-4111-8111-111111111111',
           'x-mizuki-client-ip': '203.0.113.10',
           'x-mizuki-forwarded-proto': 'http',
           'x-mizuki-proxy-secret': 'attacker-controlled',
@@ -44,6 +45,7 @@ describe('Mizuki API proxy', () => {
     expect(headers.get('authorization')).toBe('Bearer public-token');
     expect(headers.get('origin')).toBe('https://mizuki.opencovenant.org');
     expect(headers.get('x-mizuki-csrf-token')).toBe('c'.repeat(43));
+    expect(headers.get('x-mizuki-prompt-nonce')).toBe('11111111-1111-4111-8111-111111111111');
     expect(headers.get('cf-connecting-ip')).toBeNull();
     expect(headers.get('x-forwarded-for')).toBeNull();
     expect(headers.get('x-mizuki-client-ip')).toBe('198.51.100.8');

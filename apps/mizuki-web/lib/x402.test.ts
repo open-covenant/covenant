@@ -22,10 +22,12 @@ import type { WalletAccount } from '@wallet-standard/base';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   assertPaymentBalance,
+  canRetryWalletPrompt,
   createPaymentFetch,
   LIGHTHOUSE_PROGRAM,
   parsePaymentTerms,
   paymentPreparationError,
+  PaymentClientError,
   selectPaymentRequirements,
   validateWalletSignedTransaction,
   type PaymentTerms,
@@ -36,6 +38,7 @@ const asset = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const payTo = '2'.repeat(32);
 const feePayer = '3'.repeat(32);
 const memo = 'mizuki:quote:11111111-1111-4111-8111-111111111111';
+const promptNonce = '11111111-1111-4111-8111-111111111111';
 const requirements = {
   scheme: 'exact',
   network,
@@ -45,6 +48,13 @@ const requirements = {
   maxTimeoutSeconds: 300,
   extra: { feePayer, memo },
 } as const;
+
+function paymentPrompt() {
+  return {
+    promptNonce,
+    authorizePrompt: vi.fn(async () => undefined),
+  };
+}
 
 afterEach(() => {
   delete process.env.NEXT_PUBLIC_SOLANA_NETWORK;
@@ -61,6 +71,7 @@ describe('x402 quote policy', () => {
       return Response.json({ ok: true });
     });
     const paidFetch = createPaymentFetch({
+      ...paymentPrompt(),
       account: payer.payer,
       feature: {
         version: '1.0.0',
@@ -85,14 +96,25 @@ describe('x402 quote policy', () => {
   it('preserves the body through the 402 challenge, wallet signature, and paid retry', async () => {
     const { payer, accepted, paymentRequired, rpc } = await livePaymentFixture();
     const stages: string[] = [];
-    const resourceRequests: Array<{ body: unknown; idempotencyKey: string | null; paid: boolean }> =
-      [];
+    const resourceRequests: Array<{
+      body: unknown;
+      idempotencyKey: string | null;
+      paid: boolean;
+      promptNonce: string | null;
+    }> = [];
+    const sign = vi.spyOn(payer.feature, 'signTransaction');
+    const authorizePrompt = vi.fn(async () => {
+      expect(resourceRequests).toHaveLength(1);
+      expect(resourceRequests[0]?.promptNonce).toBeNull();
+      expect(sign).not.toHaveBeenCalled();
+    });
     const request = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const outgoing = new Request(input, init);
       resourceRequests.push({
         body: await outgoing.clone().json(),
         idempotencyKey: outgoing.headers.get('idempotency-key'),
         paid: outgoing.headers.has('payment-signature'),
+        promptNonce: outgoing.headers.get('x-mizuki-prompt-nonce'),
       });
       if (resourceRequests.length === 1) {
         return paymentChallenge(paymentRequired);
@@ -100,6 +122,8 @@ describe('x402 quote policy', () => {
       return Response.json({ id: 'job-1', state: 'paid' }, { status: 201 });
     });
     const paidFetch = createPaymentFetch({
+      promptNonce,
+      authorizePrompt,
       account: payer.account,
       feature: payer.feature,
       quotePayment: paymentRequired,
@@ -122,22 +146,110 @@ describe('x402 quote policy', () => {
         body: { quote_id: 'quote-1', payment_attempt_id: 'attempt-1' },
         idempotencyKey: 'attempt-1',
         paid: false,
+        promptNonce: null,
       },
       {
         body: { quote_id: 'quote-1', payment_attempt_id: 'attempt-1' },
         idempotencyKey: 'attempt-1',
         paid: true,
+        promptNonce,
       },
     ]);
     expect(stages).toEqual(['wallet_opened', 'wallet_signed', 'submitting']);
+    expect(authorizePrompt).toHaveBeenCalledOnce();
+    expect(sign).toHaveBeenCalledOnce();
     expect(rpc).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not open the wallet when prompt authorization is denied', async () => {
+    const { payer, paymentRequired } = await livePaymentFixture();
+    const sign = vi.spyOn(payer.feature, 'signTransaction');
+    const authorizePrompt = vi.fn(async () => {
+      throw new Error('Paid maintenance is temporarily unavailable');
+    });
+    const request = vi.fn<typeof fetch>(async () => paymentChallenge(paymentRequired));
+    const paidFetch = createPaymentFetch({
+      account: payer.account,
+      feature: payer.feature,
+      quotePayment: paymentRequired,
+      quoteAmount: requirements.amount,
+      promptNonce,
+      authorizePrompt,
+      request,
+    });
+
+    await expect(
+      paidFetch('https://mizuki.example/api/mizuki/v1/jobs', {
+        method: 'POST',
+        body: '{}',
+      }),
+    ).rejects.toThrow('temporarily unavailable');
+    expect(request).toHaveBeenCalledOnce();
+    expect(authorizePrompt).toHaveBeenCalledOnce();
+    expect(sign).not.toHaveBeenCalled();
+    expect(
+      new Headers(request.mock.calls[0]?.[1]?.headers).get('x-mizuki-prompt-nonce'),
+    ).toBeNull();
+  });
+
+  it('reuses the same nonce after a lost prompt response before opening the wallet', async () => {
+    const { payer, paymentRequired } = await livePaymentFixture();
+    const sign = vi.spyOn(payer.feature, 'signTransaction');
+    const authorizePrompt = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce(undefined);
+    const stages: string[] = [];
+    const request = vi.fn<typeof fetch>(async (input, init) => {
+      const outgoing = new Request(input, init);
+      if (outgoing.headers.has('payment-signature')) {
+        return Response.json({ id: 'job-1', state: 'paid' }, { status: 201 });
+      }
+      return paymentChallenge(paymentRequired);
+    });
+    const paidFetch = createPaymentFetch({
+      account: payer.account,
+      feature: payer.feature,
+      quotePayment: paymentRequired,
+      quoteAmount: requirements.amount,
+      promptNonce,
+      authorizePrompt,
+      onStage(stage) {
+        stages.push(stage);
+      },
+      request,
+    });
+
+    await expect(
+      paidFetch('https://mizuki.example/api/mizuki/v1/jobs', {
+        method: 'POST',
+        body: '{}',
+      }),
+    ).rejects.toThrow('Failed to fetch');
+    expect(sign).not.toHaveBeenCalled();
+
+    await expect(
+      paidFetch('https://mizuki.example/api/mizuki/v1/jobs', {
+        method: 'POST',
+        body: '{}',
+      }),
+    ).resolves.toMatchObject({ status: 201 });
+    expect(authorizePrompt).toHaveBeenCalledTimes(2);
+    expect(sign).toHaveBeenCalledOnce();
+    expect(stages).toEqual(['wallet_opened', 'wallet_signed', 'submitting']);
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(
+      request.mock.calls.map(([, init]) => new Headers(init?.headers).get('x-mizuki-prompt-nonce')),
+    ).toEqual([null, null, promptNonce]);
   });
 
   it('does not open the wallet when the resource does not request payment', async () => {
     const { payer, paymentRequired } = await livePaymentFixture();
     const sign = vi.spyOn(payer.feature, 'signTransaction');
     const request = vi.fn(async () => Response.json({ error: 'unavailable' }, { status: 503 }));
+    const prompt = paymentPrompt();
     const paidFetch = createPaymentFetch({
+      ...prompt,
       account: payer.account,
       feature: payer.feature,
       quotePayment: paymentRequired,
@@ -152,6 +264,7 @@ describe('x402 quote policy', () => {
 
     expect(response.status).toBe(503);
     expect(sign).not.toHaveBeenCalled();
+    expect(prompt.authorizePrompt).not.toHaveBeenCalled();
     expect(request).toHaveBeenCalledOnce();
   });
 
@@ -168,7 +281,9 @@ describe('x402 quote policy', () => {
       ],
     };
     const request = vi.fn(async () => paymentChallenge(changed));
+    const prompt = paymentPrompt();
     const paidFetch = createPaymentFetch({
+      ...prompt,
       account: payer.account,
       feature: payer.feature,
       quotePayment: paymentRequired,
@@ -183,6 +298,7 @@ describe('x402 quote policy', () => {
       }),
     ).rejects.toThrow('payment challenge does not match');
     expect(sign).not.toHaveBeenCalled();
+    expect(prompt.authorizePrompt).not.toHaveBeenCalled();
     expect(request).toHaveBeenCalledOnce();
   });
 
@@ -194,7 +310,9 @@ describe('x402 quote policy', () => {
       .fn<typeof fetch>()
       .mockResolvedValueOnce(paymentChallenge(paymentRequired))
       .mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    const prompt = paymentPrompt();
     const paidFetch = createPaymentFetch({
+      ...prompt,
       account: payer.account,
       feature: payer.feature,
       quotePayment: paymentRequired,
@@ -214,6 +332,7 @@ describe('x402 quote policy', () => {
     expect(sign).toHaveBeenCalledOnce();
     expect(request).toHaveBeenCalledTimes(2);
     expect(stages).toEqual(['wallet_opened', 'wallet_signed', 'submitting']);
+    expect(prompt.authorizePrompt).toHaveBeenCalledOnce();
   });
 
   it('does not reopen the wallet when the paid retry still returns 402', async () => {
@@ -221,6 +340,7 @@ describe('x402 quote policy', () => {
     const sign = vi.spyOn(payer.feature, 'signTransaction');
     const request = vi.fn(async () => paymentChallenge(paymentRequired));
     const paidFetch = createPaymentFetch({
+      ...paymentPrompt(),
       account: payer.account,
       feature: payer.feature,
       quotePayment: paymentRequired,
@@ -246,6 +366,7 @@ describe('x402 quote policy', () => {
       .mockResolvedValueOnce(paymentChallenge(paymentRequired))
       .mockResolvedValueOnce(Response.json({ id: 'job-1' }, { status: 201 }));
     const paidFetch = createPaymentFetch({
+      ...paymentPrompt(),
       account: payer.account,
       feature: payer.feature,
       quotePayment: paymentRequired,
@@ -284,6 +405,7 @@ describe('x402 quote policy', () => {
           }),
       );
     const paidFetch = createPaymentFetch({
+      ...paymentPrompt(),
       account: payer.account,
       feature: payer.feature,
       quotePayment: paymentRequired,
@@ -309,7 +431,9 @@ describe('x402 quote policy', () => {
         throw new Error('User rejected request');
       },
     };
+    const prompt = paymentPrompt();
     const paidFetch = createPaymentFetch({
+      ...prompt,
       account: payer.account,
       feature: rejectedFeature,
       quotePayment: paymentRequired,
@@ -331,6 +455,30 @@ describe('x402 quote policy', () => {
     expect(paymentPreparationError(cause, '2 USDC')).toContain(
       'Payment was cancelled in your wallet',
     );
+    await expect(
+      paidFetch('https://mizuki.example/api/mizuki/v1/jobs', {
+        method: 'POST',
+        body: '{}',
+      }),
+    ).rejects.toMatchObject({ code: 'wallet_rejected' });
+    expect(prompt.authorizePrompt).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    'wallet_rejected',
+    'wallet_disconnected',
+    'wallet_authorization_failed',
+    'wallet_response_invalid',
+    'wallet_signature_invalid',
+    'wallet_transaction_unsafe',
+  ] as const)('allows a same-nonce retry after %s before submission', (code) => {
+    expect(canRetryWalletPrompt(new PaymentClientError(code, code))).toBe(true);
+  });
+
+  it('requires a fresh quote after a challenge mismatch', () => {
+    expect(
+      canRetryWalletPrompt(new PaymentClientError('challenge_invalid', 'challenge mismatch')),
+    ).toBe(false);
   });
 
   it.each([
@@ -357,6 +505,7 @@ describe('x402 quote policy', () => {
     async (_case, failure, code) => {
       const { payer, paymentRequired } = await livePaymentFixture();
       const paidFetch = createPaymentFetch({
+        ...paymentPrompt(),
         account: payer.account,
         feature: {
           ...payer.feature,
@@ -389,6 +538,7 @@ describe('x402 quote policy', () => {
   it('recognizes a provider rejection code without requiring an Error instance', async () => {
     const { payer, paymentRequired } = await livePaymentFixture();
     const paidFetch = createPaymentFetch({
+      ...paymentPrompt(),
       account: payer.account,
       feature: {
         ...payer.feature,

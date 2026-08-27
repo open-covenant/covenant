@@ -11,6 +11,8 @@ const paymentStatusTimeoutMs = 12_000;
 const paymentRecoveryPollBaseMs = 1_000;
 const paymentRecoveryPollMaxMs = 8_000;
 const paymentAuthorizationWindowMs = 300_000;
+const paymentPromptNoncePattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type PaymentStorage = Pick<Storage, 'getItem' | 'removeItem' | 'setItem'>;
 
@@ -36,10 +38,16 @@ export type PaymentAttempt = {
   stage: PaymentAttemptStatus;
   paymentStatus: PaymentAttemptStatus;
   retrySafe: boolean;
+  promptAuthorization?: PaymentPromptAuthorization;
   expiresAt?: string;
   job?: Job;
   requestId?: string;
   buildId?: string;
+};
+
+export type PaymentPromptAuthorization = {
+  nonce: string;
+  authorizedAt: string;
 };
 
 export type ActivePaymentAttempt = {
@@ -58,6 +66,7 @@ export type WorkbenchPaymentRecovery = {
   accountId: string;
   attemptId: string;
   idempotencyKey: string;
+  promptNonce: string;
   repository: string;
   issueUrl: string;
   quote: Quote;
@@ -103,6 +112,37 @@ export async function createPaymentAttempt(input: {
     }),
   });
   return normalizePaymentAttempt(value, input.quoteId);
+}
+
+export function createPaymentPromptNonce(): string {
+  const nonce = globalThis.crypto?.randomUUID?.();
+  if (!nonce || !paymentPromptNoncePattern.test(nonce)) {
+    throw new PaymentRecoveryStorageError('Secure wallet authorization is unavailable.');
+  }
+  return nonce;
+}
+
+export async function authorizePaymentPrompt(
+  attemptId: string,
+  promptNonce: string,
+  expectedQuoteId: string,
+): Promise<PaymentAttempt> {
+  if (!validPromptNonce(promptNonce)) {
+    throw new Error('The wallet authorization identifier was invalid');
+  }
+  const value = await workbenchMutation<unknown>(
+    `/v1/account/payment-attempts/${encodeURIComponent(attemptId)}/prompt`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ prompt_nonce: promptNonce }),
+    },
+  );
+  const attempt = normalizePaymentAttempt(value, expectedQuoteId);
+  if (attempt.id !== attemptId || attempt.promptAuthorization?.nonce !== promptNonce) {
+    throw new Error('Wallet authorization did not match the payment attempt');
+  }
+  return attempt;
 }
 
 export async function reportPaymentAttemptStage(
@@ -198,6 +238,11 @@ export function normalizePaymentAttempt(value: unknown, expectedQuoteId?: string
           job: value.job ?? value.attempt.job,
           requestId: value.requestId ?? value.attempt.requestId,
           buildId: value.buildId ?? value.attempt.buildId,
+          promptAuthorization:
+            value.promptAuthorization ??
+            value.prompt_authorization ??
+            value.attempt.promptAuthorization ??
+            value.attempt.prompt_authorization,
         }
       : value;
   if (!isRecord(source)) throw new Error('The payment attempt response was invalid');
@@ -223,6 +268,10 @@ export function normalizePaymentAttempt(value: unknown, expectedQuoteId?: string
   if (expiresAt && Number.isNaN(Date.parse(expiresAt))) {
     throw new Error('The payment attempt expiry was invalid');
   }
+  const promptAuthorization =
+    source.promptAuthorization === undefined && source.prompt_authorization === undefined
+      ? undefined
+      : parsePromptAuthorization(source.promptAuthorization ?? source.prompt_authorization);
   return {
     id,
     quoteId,
@@ -230,6 +279,7 @@ export function normalizePaymentAttempt(value: unknown, expectedQuoteId?: string
     stage: rawStage,
     paymentStatus: rawStatus,
     retrySafe: source.retrySafe === true || source.retry_safe === true,
+    ...(promptAuthorization ? { promptAuthorization } : {}),
     ...(expiresAt ? { expiresAt } : {}),
     ...(job ? { job } : {}),
     ...(typeof source.requestId === 'string' ? { requestId: source.requestId } : {}),
@@ -432,6 +482,7 @@ function isWorkbenchPaymentRecovery(value: unknown): value is WorkbenchPaymentRe
   if (typeof value.idempotencyKey !== 'string' || !validIdempotencyKey(value.idempotencyKey)) {
     return false;
   }
+  if (typeof value.promptNonce !== 'string' || !validPromptNonce(value.promptNonce)) return false;
   if (typeof value.repository !== 'string' || typeof value.issueUrl !== 'string') return false;
   if (!isQuote(value.quote) || !quoteMatchesIssue(value.quote, value.issueUrl)) return false;
   return (
@@ -444,6 +495,19 @@ export function paymentRetryAllowed(
   attempt: Pick<PaymentAttempt, 'retrySafe'>,
 ): boolean {
   return attempt.retrySafe && recovery.walletAuthorized !== true;
+}
+
+export function paymentPromptRetryAllowed(
+  recovery: WorkbenchPaymentRecovery | null | undefined,
+  attempt: Pick<PaymentAttempt, 'id' | 'paymentStatus' | 'promptAuthorization'>,
+): boolean {
+  return Boolean(
+    recovery?.phase === 'prepared' &&
+    recovery.attemptId === attempt.id &&
+    recovery.walletAuthorized !== true &&
+    attempt.paymentStatus === 'wallet_opened' &&
+    attempt.promptAuthorization?.nonce === recovery.promptNonce,
+  );
 }
 
 function readWorkbenchPaymentRecovery(
@@ -555,6 +619,20 @@ function readIdempotencyKey(value: unknown): string {
 
 function validIdempotencyKey(value: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9:_-]{15,127}$/.test(value);
+}
+
+function validPromptNonce(value: string): boolean {
+  return paymentPromptNoncePattern.test(value);
+}
+
+function parsePromptAuthorization(value: unknown): PaymentPromptAuthorization {
+  if (!isRecord(value) || !validPromptNonce(String(value.nonce))) {
+    throw new Error('The wallet authorization response was invalid');
+  }
+  if (typeof value.authorizedAt !== 'string' || Number.isNaN(Date.parse(value.authorizedAt))) {
+    throw new Error('The wallet authorization timestamp was invalid');
+  }
+  return { nonce: String(value.nonce), authorizedAt: value.authorizedAt };
 }
 
 function retryableAttemptRead(cause: unknown): boolean {

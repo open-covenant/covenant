@@ -16,6 +16,7 @@ const forwardedRequestHeaders = [
   'origin',
   'payment-signature',
   'x-mizuki-csrf-token',
+  'x-mizuki-prompt-nonce',
 ];
 
 const githubWebhookHeaders = ['x-github-delivery', 'x-github-event', 'x-hub-signature-256'];

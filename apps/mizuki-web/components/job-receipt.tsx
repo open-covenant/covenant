@@ -10,7 +10,8 @@ const stages = ['paid', 'running', 'validating', 'delivered'] as const;
 const pollTimeoutMs = 12_000;
 
 function stagePosition(state: Job['state']): number {
-  if (state === 'quoted' || state === 'settlement_pending') return -1;
+  if (state === 'quoted' || state === 'settlement_pending' || state === 'payment_expired')
+    return -1;
   if (state === 'paid' || state === 'admitted') return 0;
   if (state === 'running') return 1;
   if (state === 'validating') return 2;
@@ -69,7 +70,9 @@ export function JobReceipt({ initial, live = true }: { initial: Job; live?: bool
   }, [initial.id, live]);
 
   const progress = stagePosition(job.state);
-  const failed = ['rejected', 'failed', 'refund_pending', 'refunded'].includes(job.state);
+  const paymentExpired = job.state === 'payment_expired';
+  const failed =
+    paymentExpired || ['rejected', 'failed', 'refund_pending', 'refunded'].includes(job.state);
   const state = job.mergedAt ? 'Merged' : stateLabel(job.state);
 
   return (
@@ -99,6 +102,12 @@ export function JobReceipt({ initial, live = true }: { initial: Job; live?: bool
               </li>
             ))}
           </ol>
+        ) : paymentExpired ? (
+          <div className="refund-path">
+            <span>Payment authorization</span>
+            <span aria-hidden="true">→</span>
+            <strong>No payment settled</strong>
+          </div>
         ) : (
           <div className="refund-path">
             <span>Paid attempt</span>
@@ -349,9 +358,11 @@ export function JobReceipt({ initial, live = true }: { initial: Job; live?: bool
           <span>Job outcome</span>
           <p>{job.error}</p>
           <strong>
-            {job.refundTransaction
-              ? 'The full quoted USDC payment was returned to the original payer. A maintenance bounty is published only after separate SOL escrow funding succeeds.'
-              : 'The refund has not finalized yet. No maintenance bounty will be offered until it does.'}
+            {paymentExpired
+              ? 'The payment authorization expired without a finalized charge. No refund is required.'
+              : job.refundTransaction
+                ? 'The full quoted USDC payment was returned to the original payer. A maintenance bounty is published only after separate SOL escrow funding succeeds.'
+                : 'The refund has not finalized yet. No maintenance bounty will be offered until it does.'}
           </strong>
         </div>
       )}
@@ -368,6 +379,7 @@ export function shouldApplyJobUpdate(current: Job, next: Job): boolean {
 }
 
 export function jobPollingComplete(job: Job): boolean {
+  if (job.state === 'payment_expired') return true;
   if (job.state === 'refunded') return Boolean(job.refundTransaction);
   return Boolean(
     job.state === 'delivered' &&

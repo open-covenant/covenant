@@ -2,6 +2,7 @@ export type JobClass = 'micro' | 'standard';
 
 export type JobState =
   | 'settlement_pending'
+  | 'payment_expired'
   | 'paid'
   | 'admitted'
   | 'running'
@@ -71,6 +72,10 @@ export type CustomerPaymentAttempt = {
   stage: PaymentAttemptStage;
   retrySafe: boolean;
   expiresAt: string;
+  paymentWindowEndUnixSeconds?: number;
+  promptNonce?: string;
+  promptAuthorizedAt?: string;
+  serverAcceptedAt?: string;
   createdAt: string;
   updatedAt: string;
   jobId?: string;
@@ -172,6 +177,7 @@ export type Job = {
   refundTransaction?: string;
   refundOperationId?: string;
   paymentIntentId?: string;
+  paymentWindowEndUnixSeconds?: number;
   refundLiabilityId?: string;
   refundLiabilityDischargedAt?: string;
   refundLiabilityDischargeEvidenceHash?: string;

@@ -1,4 +1,4 @@
-import { createHash, createPrivateKey, sign } from 'node:crypto';
+import { createHash, createPrivateKey, randomUUID, sign } from 'node:crypto';
 import {
   Keypair,
   PublicKey,
@@ -20,6 +20,7 @@ import type {
   DischargeRefundLiabilityRequest,
   RefundRequest,
   RegisterRefundLiabilityRequest,
+  RepositoryAdmission,
   RepositoryAdmissionRequest,
   SettlementFacts,
 } from './domain.js';
@@ -97,9 +98,10 @@ function fixture(
     escrowAuthority?: string;
   } = {},
 ) {
+  const now = () => options.now?.() ?? new Date();
   const store = new InMemoryOperationStore();
   const chain = new MockChainGateway();
-  chain.now = () => (options.now ? options.now().getTime() : Date.now());
+  chain.now = () => now().getTime();
   const metrics = new SignerMetrics();
   const merges = new MockMergeVerifier();
   const reviewer = new MockIndependentReviewer();
@@ -130,7 +132,7 @@ function fixture(
     metrics,
     options.now,
   );
-  const admittedAt = options.now?.() ?? new Date();
+  const admittedAt = now();
   const payment = paymentAuthorization(DEFAULT_ADMISSION_ID);
   const paymentAuthorizationHash = createHash('sha256').update(payment.header).digest('hex');
   const settlementIdentity = authorizedSettlementTransaction({
@@ -200,7 +202,7 @@ function fixture(
     admittedAt,
     evidenceHash: defaultAdmissionEvidenceHash,
   });
-  return { store, chain, metrics, merges, reviewer, policy };
+  return { store, chain, metrics, merges, reviewer, policy, now };
 }
 
 function settlement(signature = '6'.repeat(64), rawAmount = '2000000'): SettlementFacts {
@@ -523,6 +525,120 @@ describe('production readiness', () => {
 });
 
 describe('refund policy', () => {
+  it('keeps an unresolved intent reserved after its payment window', async () => {
+    let now = new Date('2026-08-22T12:00:00.000Z');
+    const { chain, policy, store } = fixture({ now: () => new Date(now) });
+    const intent = await policy.createPaymentIntent(
+      signedPaymentIntentRequest(
+        'job-window-authority',
+        new Date(now.getTime() + 10 * 60_000).toISOString(),
+      ),
+      'payment-intent-window-authority',
+    );
+
+    now = new Date(intent.paymentWindowEndUnixSeconds * 1_000);
+    await expect(
+      policy.reconcilePaymentIntent(intent.id, 'reconcile-at-window-end'),
+    ).rejects.toMatchObject({ code: 'payment_intent_pending' });
+
+    now = new Date(intent.paymentWindowEndUnixSeconds * 1_000 + 1_000);
+    await expect(
+      policy.reconcilePaymentIntent(intent.id, 'reconcile-after-window-end'),
+    ).rejects.toMatchObject({ code: 'payment_intent_pending' });
+
+    now = new Date(intent.paymentWindowEndUnixSeconds * 1_000 + 24 * 60 * 60_000);
+    await expect(
+      policy.reconcilePaymentIntent(intent.id, 'reconcile-day-after-window-end'),
+    ).rejects.toMatchObject({ code: 'payment_intent_pending' });
+    await expect(store.getPaymentIntent(intent.id)).resolves.toMatchObject({
+      status: 'reserved',
+      expiredAt: null,
+    });
+    await expect(policy.readiness()).resolves.toMatchObject({
+      pendingRefundRaw: intent.rawAmount,
+      pendingRefundCount: 1,
+    });
+    expect(await store.pendingBountyReserveLamports()).toBe(intent.bountyReserveLamports);
+
+    const admission = await store.getRepositoryAdmission(intent.repositoryAdmissionId);
+    const facts = {
+      ...settlement('Z'.repeat(64)),
+      payer: admission!.settlementPayer!,
+      blockTimeUnixSeconds: intent.paymentWindowStartUnixSeconds,
+    };
+    chain.reconciledSettlements.set(intent.signedMessageHash, facts);
+
+    await expect(
+      policy.reconcilePaymentIntent(intent.id, 'reconcile-late-finalization'),
+    ).resolves.toMatchObject({
+      paymentIntent: { status: 'activated', settlementSignature: facts.signature },
+      refundLiability: { settlementSignature: facts.signature },
+    });
+  });
+
+  it('does not poison a concurrent late finalization after a scan miss', async () => {
+    let now = new Date('2026-08-22T12:00:00.000Z');
+    const { chain, policy, store } = fixture({ now: () => new Date(now) });
+    const intent = await policy.createPaymentIntent(
+      signedPaymentIntentRequest(
+        'job-window-race',
+        new Date(now.getTime() + 10 * 60_000).toISOString(),
+      ),
+      'payment-intent-window-race',
+    );
+    const admission = await store.getRepositoryAdmission(intent.repositoryAdmissionId);
+    const facts = {
+      ...settlement('Y'.repeat(64)),
+      payer: admission!.settlementPayer!,
+      blockTimeUnixSeconds: intent.paymentWindowStartUnixSeconds,
+    };
+    let releaseMiss!: () => void;
+    let reportMissStarted!: () => void;
+    const missHeld = new Promise<void>((resolve) => {
+      releaseMiss = resolve;
+    });
+    const missStarted = new Promise<void>((resolve) => {
+      reportMissStarted = resolve;
+    });
+    let reconciliation = 0;
+    chain.reconcileSettlement = async () => {
+      reconciliation += 1;
+      if (reconciliation === 1) {
+        reportMissStarted();
+        await missHeld;
+        throw new PolicyError(
+          'settlement_not_found',
+          'A finalized settlement for this payment authorization was not found',
+          422,
+          true,
+        );
+      }
+      return facts;
+    };
+    now = new Date(intent.paymentWindowEndUnixSeconds * 1_000 + 1_000);
+
+    const missed = policy.reconcilePaymentIntent(intent.id, 'reconcile-window-race-miss').then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    await missStarted;
+    await expect(
+      policy.reconcilePaymentIntent(intent.id, 'reconcile-window-race-finalized'),
+    ).resolves.toMatchObject({
+      paymentIntent: { status: 'activated', settlementSignature: facts.signature },
+    });
+    releaseMiss();
+
+    await expect(missed).resolves.toMatchObject({
+      error: { code: 'payment_intent_pending' },
+    });
+    await expect(store.getPaymentIntent(intent.id)).resolves.toMatchObject({
+      status: 'activated',
+      settlementSignature: facts.signature,
+    });
+    await expect(store.pendingRefundCount()).resolves.toBe(1);
+  });
+
   it('reserves refund and bounty capacity before settlement and activates one liability', async () => {
     const { chain, policy, store } = fixture();
     const admission = await store.getRepositoryAdmission(DEFAULT_ADMISSION_ID);
@@ -568,6 +684,168 @@ describe('refund policy', () => {
       pendingRefundRaw: '2000000',
       pendingRefundCount: 1,
     });
+  });
+
+  it('releases reserved bounty capacity after successful work discharges the liability', async () => {
+    const { chain, policy, store } = fixture();
+    const admission = await store.getRepositoryAdmission(DEFAULT_ADMISSION_ID);
+    const intent = await policy.createPaymentIntent(
+      signedPaymentIntentRequest('job-bounty-success'),
+      'payment-intent-bounty-success',
+    );
+    expect(await store.pendingBountyReserveLamports()).toBe('100000000');
+
+    const facts = {
+      ...settlement('7'.repeat(64)),
+      payer: admission!.settlementPayer!,
+    };
+    chain.settlements.set(facts.signature, facts);
+    const activation = await policy.activatePaymentIntent(
+      intent.id,
+      { settlementSignature: facts.signature },
+      'activate-bounty-success',
+    );
+    await bindDelivery(policy, activation.refundLiability.id, intent.jobId, facts.signature);
+    await policy.dischargeRefundLiability(
+      activation.refundLiability.id,
+      signedDischargeRequest(intent.jobId, facts.signature, 'owner/repository', 23),
+      'discharge-bounty-success',
+    );
+
+    expect(await store.pendingBountyReserveLamports()).toBe('0');
+  });
+
+  it('hands reserved bounty capacity to escrow only after a finalized refund', async () => {
+    const { chain, policy, store } = fixture();
+    const admission = await store.getRepositoryAdmission(DEFAULT_ADMISSION_ID);
+    const intent = await policy.createPaymentIntent(
+      signedPaymentIntentRequest('job-bounty-refund'),
+      'payment-intent-bounty-refund',
+    );
+    const facts = {
+      ...settlement('8'.repeat(64)),
+      payer: admission!.settlementPayer!,
+    };
+    chain.settlements.set(facts.signature, facts);
+    await policy.activatePaymentIntent(
+      intent.id,
+      { settlementSignature: facts.signature },
+      'activate-bounty-refund',
+    );
+
+    const escrow = escrowRequest('bounty-refund', undefined, {
+      sourceJobId: intent.jobId,
+    });
+    await expect(policy.createEscrow(escrow, 'escrow-before-refund')).rejects.toMatchObject({
+      code: 'bounty_reserve_not_refunded',
+    });
+    await policy.refund(
+      signedRefundRequest('execute', intent.jobId, facts.signature),
+      'refund-bounty-source',
+    );
+    expect(await store.pendingBountyReserveLamports()).toBe('100000000');
+
+    await expect(policy.createEscrow(escrow, 'escrow-after-refund')).resolves.toMatchObject({
+      status: 'finalized',
+    });
+    expect(await store.pendingBountyReserveLamports()).toBe('0');
+  });
+
+  it('does not spend another job bounty reserve after adverse SOL price movement', async () => {
+    let priceUsdMicros = 100_000_000;
+    const context = fixture({
+      prices: {
+        solUsd: async () => ({ priceUsdMicros, observedAt: new Date() }),
+      },
+    });
+    const request = escrowRequest('bounty-price-drift');
+    await protectBountySource(context, request);
+    expect(await context.store.pendingBountyReserveLamports()).toBe('100000000');
+
+    priceUsdMicros = 50_000_000;
+    await expect(context.policy.createEscrow(request, 'bounty-price-drift')).rejects.toMatchObject({
+      code: 'bounty_reserve_price_drift',
+      retryable: true,
+    });
+    expect(await context.store.pendingBountyReserveLamports()).toBe('100000000');
+    expect(
+      context.chain.preparedOperations.filter(({ kind }) => kind === 'escrow_reserve'),
+    ).toHaveLength(0);
+  });
+
+  it('restores bounty capacity only after an escrow refund finalizes and replaces it once', async () => {
+    let now = new Date('2026-08-22T12:00:00.000Z');
+    const context = fixture({ now: () => new Date(now) });
+    const { chain, policy, store } = context;
+    const firstRequest = escrowRequest('bounty-lifecycle-first', '2026-08-22T14:00:00.000Z');
+    await protectBountySource(context, firstRequest);
+    expect(await store.pendingBountyReserveLamports()).toBe('100000000');
+
+    const first = await policy.createEscrow(firstRequest, 'bounty-lifecycle-first');
+    expect(await store.pendingBountyReserveLamports()).toBe('0');
+
+    now = new Date(firstRequest.expiresAt);
+    chain.autoFinalize = false;
+    const refund = await policy.refundEscrow(
+      first.id,
+      { reasonCode: 'expired' },
+      'bounty-lifecycle-refund',
+    );
+    expect(refund.status).toBe('submitted');
+    expect(await store.pendingBountyReserveLamports()).toBe('0');
+    await expect(policy.readiness()).resolves.toMatchObject({ healthy: false });
+
+    chain.states.set(refund.transactionSignature!, 'finalized');
+    chain.autoFinalize = true;
+    await expect(policy.drive(refund.id)).resolves.toMatchObject({ status: 'finalized' });
+    expect(await store.pendingBountyReserveLamports()).toBe('100000000');
+
+    const replacement = await policy.createEscrow(
+      escrowRequest('bounty-lifecycle-replacement', undefined, {
+        sourceJobId: firstRequest.sourceJobId,
+      }),
+      'bounty-lifecycle-replacement',
+    );
+    expect(replacement.status).toBe('finalized');
+    expect(await store.pendingBountyReserveLamports()).toBe('0');
+  });
+
+  it('atomically assigns one active escrow per refunded source job', async () => {
+    const context = fixture();
+    const { chain, policy } = context;
+    const left = escrowRequest('bounty-handoff-left');
+    await protectBountySource(context, left);
+    const right = escrowRequest('bounty-handoff-right', undefined, {
+      sourceJobId: left.sourceJobId,
+    });
+
+    const outcomes = await Promise.allSettled([
+      policy.createEscrow(left, 'bounty-handoff-left'),
+      policy.createEscrow(right, 'bounty-handoff-right'),
+    ]);
+    const winner = outcomes.find(
+      (
+        result,
+      ): result is PromiseFulfilledResult<Awaited<ReturnType<PolicyService['createEscrow']>>> =>
+        result.status === 'fulfilled',
+    );
+    expect(winner).toBeDefined();
+    expect(outcomes.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(outcomes.find((result) => result.status === 'rejected')).toMatchObject({
+      reason: { code: 'bounty_handoff_active' },
+    });
+    expect(
+      chain.preparedOperations.filter((operation) => operation.kind === 'escrow_reserve'),
+    ).toHaveLength(1);
+    const winningRequest = winner!.value.details.bountyId === left.bountyId ? left : right;
+    await expect(
+      policy.createEscrow(
+        winningRequest,
+        winner!.value.details.bountyId === left.bountyId
+          ? 'bounty-handoff-left'
+          : 'bounty-handoff-right',
+      ),
+    ).resolves.toMatchObject({ id: winner!.value.id });
   });
 
   it('rejects a payment intent when signer SOL cannot cover fees and recipient ATA rent', async () => {
@@ -1354,8 +1632,9 @@ describe('refund policy', () => {
 
 describe('contributor escrow policy', () => {
   it('funds a claimant-free vault before the bounty can open', async () => {
-    const { chain, policy } = fixture();
-    const reserve = await policy.createEscrow(escrowRequest('bounty-1'), 'escrow-key-1');
+    const context = fixture();
+    const { chain } = context;
+    const reserve = await createProtectedEscrow(context, escrowRequest('bounty-1'), 'escrow-key-1');
 
     expect(reserve.status).toBe('finalized');
     expect(reserve.recipient).toBe('escrow-vault');
@@ -1366,19 +1645,17 @@ describe('contributor escrow policy', () => {
       escrowAddress: expect.any(String),
       vaultAddress: expect.any(String),
     });
-    expect(chain.preparedOperations[0]).toEqual(
-      expect.objectContaining({ kind: 'escrow_reserve', amountLamports: '100000000' }),
-    );
+    expect(
+      chain.preparedOperations.find((operation) => operation.kind === 'escrow_reserve'),
+    ).toEqual(expect.objectContaining({ kind: 'escrow_reserve', amountLamports: '100000000' }));
   });
 
   it('separates protected refund capacity from the escrow spending cap', async () => {
-    const { chain, policy } = fixture({ refundDailyLimit: 200, escrowDailyLimit: 1_000 });
-    const facts = settlement('F'.repeat(64), '2000000');
-    chain.settlements.set(facts.signature, facts);
-    await registerAndRefund(policy, 'job-cap', facts.signature, 'refund-cap');
+    const context = fixture({ refundDailyLimit: 200, escrowDailyLimit: 1_000 });
+    const { policy } = context;
 
     await expect(
-      policy.createEscrow(escrowRequest('bounty-cap'), 'escrow-cap'),
+      createProtectedEscrow(context, escrowRequest('bounty-cap'), 'escrow-cap'),
     ).resolves.toMatchObject({ status: 'finalized' });
     await expect(policy.readiness()).resolves.toMatchObject({
       remainingRefundLimitUsdCents: 0,
@@ -1397,7 +1674,8 @@ describe('contributor escrow policy', () => {
       amountUsdCents: 2_501,
     };
     await expect(
-      overOperation.policy.createEscrow(
+      createProtectedEscrow(
+        overOperation,
         {
           ...overOperationRequest,
           acceptanceHash: escrowAcceptanceHash(overOperationRequest),
@@ -1408,21 +1686,29 @@ describe('contributor escrow policy', () => {
 
     const overAsset = fixture({ maxEscrowLamports: 50_000_000 });
     await expect(
-      overAsset.policy.createEscrow(escrowRequest('bounty-asset'), 'escrow-asset'),
+      createProtectedEscrow(overAsset, escrowRequest('bounty-asset'), 'escrow-asset'),
     ).rejects.toMatchObject({ code: 'escrow_asset_limit_exceeded' });
   });
 
   it('rejects a reserve when SOL cannot cover principal, both rents, and fee reserve', async () => {
-    const { chain, policy } = fixture();
+    const context = fixture();
+    const { chain, policy } = context;
+    const request = escrowRequest('bounty-capacity');
+    await protectBountySource(context, request);
     chain.escrowLamports = 102_999_999n;
-    await expect(
-      policy.createEscrow(escrowRequest('bounty-capacity'), 'escrow-capacity'),
-    ).rejects.toMatchObject({ code: 'escrow_pool_insufficient' });
+    await expect(policy.createEscrow(request, 'escrow-capacity')).rejects.toMatchObject({
+      code: 'escrow_pool_insufficient',
+    });
   });
 
   it('requires a signer-issued challenge and a valid claimant wallet signature', async () => {
-    const { policy } = fixture();
-    const reserve = await policy.createEscrow(escrowRequest('bounty-bind'), 'reserve-bind');
+    const context = fixture();
+    const { policy } = context;
+    const reserve = await createProtectedEscrow(
+      context,
+      escrowRequest('bounty-bind'),
+      'reserve-bind',
+    );
     const grant = await policy.issueGitHubIdentityGrant({ accessToken: 'o'.repeat(20) });
     const challenge = await policy.issueBindChallenge(reserve.id, {
       claimantWallet: CLAIMANT,
@@ -1448,8 +1734,13 @@ describe('contributor escrow policy', () => {
   });
 
   it('atomically consumes a challenge and permits only one claimant binding', async () => {
-    const { policy } = fixture();
-    const reserve = await policy.createEscrow(escrowRequest('bounty-bind-race'), 'reserve-race');
+    const context = fixture();
+    const { policy } = context;
+    const reserve = await createProtectedEscrow(
+      context,
+      escrowRequest('bounty-bind-race'),
+      'reserve-race',
+    );
     const grant = await policy.issueGitHubIdentityGrant({ accessToken: 'o'.repeat(20) });
     const challenge = await policy.issueBindChallenge(reserve.id, {
       claimantWallet: CLAIMANT,
@@ -1466,8 +1757,13 @@ describe('contributor escrow policy', () => {
   });
 
   it('independently verifies a short-lived GitHub OAuth identity grant', async () => {
-    const { chain, merges, policy } = fixture();
-    const reserve = await policy.createEscrow(escrowRequest('bounty-login'), 'reserve-login');
+    const context = fixture();
+    const { chain, merges, policy } = context;
+    const reserve = await createProtectedEscrow(
+      context,
+      escrowRequest('bounty-login'),
+      'reserve-login',
+    );
     const preparedBefore = chain.preparedOperations.length;
     merges.error = new PolicyError('github_identity_invalid', 'missing', 422);
 
@@ -1478,9 +1774,18 @@ describe('contributor escrow policy', () => {
   });
 
   it('consumes a GitHub identity grant exactly once', async () => {
-    const { policy } = fixture();
-    const first = await policy.createEscrow(escrowRequest('bounty-grant-a'), 'reserve-grant-a');
-    const second = await policy.createEscrow(escrowRequest('bounty-grant-b'), 'reserve-grant-b');
+    const context = fixture();
+    const { policy } = context;
+    const first = await createProtectedEscrow(
+      context,
+      escrowRequest('bounty-grant-a'),
+      'reserve-grant-a',
+    );
+    const second = await createProtectedEscrow(
+      context,
+      escrowRequest('bounty-grant-b'),
+      'reserve-grant-b',
+    );
     const grant = await policy.issueGitHubIdentityGrant({ accessToken: 'o'.repeat(20) });
     await policy.issueBindChallenge(first.id, {
       claimantWallet: CLAIMANT,
@@ -1495,8 +1800,9 @@ describe('contributor escrow policy', () => {
   });
 
   it('persists independent merge evidence before release broadcast', async () => {
-    const { policy, store, merges } = fixture();
-    const { reserve, binding } = await reserveAndBind(policy, 'bounty-evidence');
+    const context = fixture();
+    const { policy, store, merges } = context;
+    const { reserve, binding } = await reserveAndBind(context, 'bounty-evidence');
     const release = await policy.releaseEscrow(
       reserve.id,
       releaseRequest(reserve.id, binding.createdAt.toISOString()),
@@ -1521,8 +1827,9 @@ describe('contributor escrow policy', () => {
   });
 
   it('replays only the exact reviewed revision for a release key', async () => {
-    const { policy, merges } = fixture();
-    const { reserve, binding } = await reserveAndBind(policy, 'bounty-release-replay');
+    const context = fixture();
+    const { policy, merges } = context;
+    const { reserve, binding } = await reserveAndBind(context, 'bounty-release-replay');
     const input = releaseRequest(reserve.id, binding.createdAt.toISOString());
     const released = await policy.releaseEscrow(reserve.id, input, 'release-review-bound');
 
@@ -1541,8 +1848,9 @@ describe('contributor escrow policy', () => {
 
   it('permits one paid review attempt while preserving the expiry refund path', async () => {
     let now = new Date('2026-08-22T12:00:00.000Z');
-    const { policy, reviewer } = fixture({ now: () => new Date(now) });
-    const { reserve, binding, challenge } = await reserveAndBind(policy, 'bounty-review-attempt');
+    const context = fixture({ now: () => new Date(now) });
+    const { policy, reviewer } = context;
+    const { reserve, binding, challenge } = await reserveAndBind(context, 'bounty-review-attempt');
     reviewer.error = new PolicyError(
       'independent_review_rejected',
       'Independent review rejected the release',
@@ -1569,8 +1877,13 @@ describe('contributor escrow policy', () => {
   });
 
   it('does not release without a finalized claimant binding', async () => {
-    const { policy } = fixture();
-    const reserve = await policy.createEscrow(escrowRequest('bounty-unbound'), 'reserve-unbound');
+    const context = fixture();
+    const { policy } = context;
+    const reserve = await createProtectedEscrow(
+      context,
+      escrowRequest('bounty-unbound'),
+      'reserve-unbound',
+    );
     await expect(
       policy.releaseEscrow(
         reserve.id,
@@ -1582,8 +1895,10 @@ describe('contributor escrow policy', () => {
 
   it('uses offer expiry for unbound refunds at the exact boundary', async () => {
     let now = new Date('2026-08-22T12:00:00.000Z');
-    const { chain, policy } = fixture({ now: () => new Date(now) });
-    const reserve = await policy.createEscrow(
+    const context = fixture({ now: () => new Date(now) });
+    const { chain, policy } = context;
+    const reserve = await createProtectedEscrow(
+      context,
       escrowRequest('bounty-unbound-expiry', '2026-08-22T14:00:00.000Z'),
       'reserve-unbound-expiry',
     );
@@ -1600,9 +1915,10 @@ describe('contributor escrow policy', () => {
 
   it('uses the immutable 48-hour binding expiry instead of offer expiry', async () => {
     let now = new Date('2026-08-22T12:00:00.000Z');
-    const { policy } = fixture({ now: () => new Date(now) });
+    const context = fixture({ now: () => new Date(now) });
+    const { policy } = context;
     const { reserve, challenge } = await reserveAndBind(
-      policy,
+      context,
       'bounty-bound-expiry',
       '2026-08-22T14:00:00.000Z',
     );
@@ -1618,8 +1934,9 @@ describe('contributor escrow policy', () => {
 
   it('serializes concurrent release and eligible refund to one terminal resolution', async () => {
     let now = new Date('2026-08-22T12:00:00.000Z');
-    const { policy } = fixture({ now: () => new Date(now) });
-    const { reserve, challenge, binding } = await reserveAndBind(policy, 'bounty-resolution-race');
+    const context = fixture({ now: () => new Date(now) });
+    const { policy } = context;
+    const { reserve, challenge, binding } = await reserveAndBind(context, 'bounty-resolution-race');
     now = new Date(challenge.claimExpiresAt);
     const outcomes = await Promise.allSettled([
       policy.releaseEscrow(
@@ -1641,8 +1958,9 @@ describe('contributor escrow policy', () => {
   });
 
   it('rejects a PR that merged after the immutable claim expiry', async () => {
-    const { merges, policy } = fixture();
-    const { reserve, challenge, binding } = await reserveAndBind(policy, 'bounty-late-merge');
+    const context = fixture();
+    const { merges, policy } = context;
+    const { reserve, challenge, binding } = await reserveAndBind(context, 'bounty-late-merge');
     const original = merges.verify.bind(merges);
     merges.verify = async (request) => {
       const verified = await original(request);
@@ -1666,8 +1984,9 @@ describe('contributor escrow policy', () => {
 
   it('locks an expired missing release transaction against a competing refund', async () => {
     let now = new Date('2026-08-22T12:00:00.000Z');
-    const { chain, policy } = fixture({ now: () => new Date(now) });
-    const { reserve, challenge, binding } = await reserveAndBind(policy, 'bounty-release-handoff');
+    const context = fixture({ now: () => new Date(now) });
+    const { chain, policy } = context;
+    const { reserve, challenge, binding } = await reserveAndBind(context, 'bounty-release-handoff');
     chain.autoFinalize = false;
     const release = await policy.releaseEscrow(
       reserve.id,
@@ -1697,9 +2016,10 @@ describe('contributor escrow policy', () => {
 
   it('does not let a permanent prepare failure occupy the resolution resource forever', async () => {
     let now = new Date('2026-08-22T12:00:00.000Z');
-    const { chain, policy } = fixture({ now: () => new Date(now) });
+    const context = fixture({ now: () => new Date(now) });
+    const { chain, policy } = context;
     const { reserve, challenge, binding } = await reserveAndBind(
-      policy,
+      context,
       'bounty-prepare-rejection',
     );
     const originalPrepare = chain.prepare.bind(chain);
@@ -1727,11 +2047,13 @@ describe('contributor escrow policy', () => {
   });
 
   it('never permits the same external bounty ID to fund a second vault', async () => {
-    const { policy } = fixture();
-    await policy.createEscrow(escrowRequest('bounty-tombstone'), 'reserve-first');
-    await expect(
-      policy.createEscrow(escrowRequest('bounty-tombstone'), 'reserve-second'),
-    ).rejects.toMatchObject({ code: 'resource_conflict' });
+    const context = fixture();
+    const { policy } = context;
+    const request = escrowRequest('bounty-tombstone');
+    await createProtectedEscrow(context, request, 'reserve-first');
+    await expect(policy.createEscrow(request, 'reserve-second')).rejects.toMatchObject({
+      code: 'resource_conflict',
+    });
   });
 });
 
@@ -1753,9 +2075,11 @@ describe('store policy invariants', () => {
 function escrowRequest(
   bountyId: string,
   expiresAt = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
+  overrides: { sourceJobId?: string; amountUsdCents?: number } = {},
 ) {
   const request = {
     bountyId,
+    sourceJobId: overrides.sourceJobId ?? `job-${bountyId}`,
     amountUsdCents: 1_000,
     expiresAt,
     repository: 'owner/repository',
@@ -1765,26 +2089,160 @@ function escrowRequest(
     baseRef: 'main',
     baseSha: 'd'.repeat(40),
     reviewPolicy: { version: 1 as const, model: 'independent-reviewer', maxFiles: 3 },
+    ...(overrides.amountUsdCents === undefined ? {} : { amountUsdCents: overrides.amountUsdCents }),
   };
   return { ...request, acceptanceHash: escrowAcceptanceHash(request) };
 }
 
-async function reserveAndBind(policy: PolicyService, bountyId: string, offerExpiresAt?: string) {
-  const reserve = await policy.createEscrow(
+async function createProtectedEscrow(
+  context: ReturnType<typeof fixture>,
+  request: ReturnType<typeof escrowRequest>,
+  idempotencyKey: string,
+) {
+  await protectBountySource(context, request);
+  return context.policy.createEscrow(request, idempotencyKey);
+}
+
+async function reserveAndBind(
+  context: ReturnType<typeof fixture>,
+  bountyId: string,
+  offerExpiresAt?: string,
+) {
+  const reserve = await createProtectedEscrow(
+    context,
     escrowRequest(bountyId, offerExpiresAt),
     `reserve-${bountyId}`,
   );
-  const grant = await policy.issueGitHubIdentityGrant({ accessToken: 'o'.repeat(20) });
-  const challenge = await policy.issueBindChallenge(reserve.id, {
+  const grant = await context.policy.issueGitHubIdentityGrant({ accessToken: 'o'.repeat(20) });
+  const challenge = await context.policy.issueBindChallenge(reserve.id, {
     claimantWallet: CLAIMANT,
     githubGrantId: grant.id,
   });
-  const binding = await policy.bindEscrow(
+  const binding = await context.policy.bindEscrow(
     reserve.id,
     { challengeId: challenge.id, signature: signChallenge(challenge.message) },
     `bind-${bountyId}`,
   );
   return { reserve, challenge, binding };
+}
+
+let bountySourceSequence = 0;
+
+async function protectBountySource(
+  context: ReturnType<typeof fixture>,
+  request: ReturnType<typeof escrowRequest>,
+): Promise<void> {
+  const quoteId = randomUUID();
+  const admissionId = randomUUID();
+  const authorization = paymentAuthorization(quoteId);
+  const identity = authorizedSettlementTransaction({
+    wireTransaction: authorization.wireTransaction,
+    feePayer: authorization.feePayer,
+    rawAmount: '2000000',
+    notBeforeUnixSeconds: 0,
+  });
+  const admittedAt = context.now();
+  const admissionIdentity = {
+    quoteId,
+    repository: request.repository,
+    issueNumber: request.issueNumber,
+    baseRef: request.baseRef,
+    baseSha: request.baseSha,
+    reservationKeyHash: createHash('sha256').update(`reservation:${quoteId}`).digest('hex'),
+    paymentAuthorizationHash: createHash('sha256').update(authorization.header).digest('hex'),
+  };
+  const binding = {
+    settlementMessageHash: identity.messageHash,
+    settlementClientSignature: identity.clientSignature,
+    settlementFeePayer: identity.feePayer,
+    settlementPayer: identity.payer,
+    settlementMemo: identity.memo,
+    settlementRawAmount: '2000000',
+    paymentWindowStartUnixSeconds: Math.floor(admittedAt.getTime() / 1_000) - 30,
+    paymentWindowEndUnixSeconds: Math.floor(admittedAt.getTime() / 1_000) + 330,
+  };
+  const evidence = {
+    version: 2,
+    ...admissionIdentity,
+    ...binding,
+    verifierAppId: '12345',
+    installationId: 777,
+    repositorySelection: 'selected' as const,
+    permissions: {
+      checks: 'read' as const,
+      contents: 'read' as const,
+      issues: 'read' as const,
+      metadata: 'read' as const,
+      pull_requests: 'read' as const,
+      statuses: 'read' as const,
+    },
+    tokenRepositories: 1,
+    tokenExpiresAt: new Date(admittedAt.getTime() + 60 * 60_000).toISOString(),
+    admittedAt: admittedAt.toISOString(),
+  };
+  const admission: RepositoryAdmission = {
+    id: admissionId,
+    idempotencyKey: `admission-${admissionId}`,
+    requestHash: requestHash(admissionIdentity),
+    ...admissionIdentity,
+    ...binding,
+    verifierAppId: evidence.verifierAppId,
+    installationId: evidence.installationId,
+    repositorySelection: evidence.repositorySelection,
+    permissions: evidence.permissions,
+    tokenRepositories: evidence.tokenRepositories,
+    tokenExpiresAt: new Date(evidence.tokenExpiresAt),
+    admittedAt,
+    evidenceHash: requestHash(evidence),
+  };
+  await context.store.registerRepositoryAdmission(admission);
+  const unsigned = {
+    jobId: request.sourceJobId,
+    repositoryAdmissionId: admission.id,
+    repositoryAdmissionEvidenceHash: admission.evidenceHash,
+    repository: request.repository,
+    issueNumber: request.issueNumber,
+    baseRef: request.baseRef,
+    baseSha: request.baseSha,
+    repositoryAuthorizedAt: admission.admittedAt.toISOString(),
+    authorizationEvidenceHash: createHash('sha256')
+      .update(`authorization:${request.sourceJobId}`)
+      .digest('hex'),
+    bountyAmountUsdCents: request.amountUsdCents,
+    authorizationExpiresAt: new Date(context.now().getTime() + 10 * 60_000).toISOString(),
+  };
+  const intent = await context.policy.createPaymentIntent(
+    {
+      ...unsigned,
+      authorizationSignature: signWithKey(
+        JOB_AUTHORITY,
+        paymentIntentAuthorizationMessage(unsigned),
+      ),
+    },
+    `intent-${request.sourceJobId}`,
+  );
+  const signatureAlphabet = '23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+  const signature =
+    signatureAlphabet[bountySourceSequence++ % signatureAlphabet.length]!.repeat(64);
+  context.chain.settlements.set(signature, {
+    ...settlement(signature),
+    payer: admission.settlementPayer!,
+    blockTimeUnixSeconds: Math.floor(admittedAt.getTime() / 1_000),
+  });
+  await context.policy.activatePaymentIntent(
+    intent.id,
+    { settlementSignature: signature },
+    `activate-${request.sourceJobId}`,
+  );
+  await context.policy.refund(
+    signedRefundRequest(
+      'execute',
+      request.sourceJobId,
+      signature,
+      new Date(context.now().getTime() + 10 * 60_000).toISOString(),
+    ),
+    `refund-${request.sourceJobId}`,
+  );
 }
 
 function signChallenge(message: string): string {

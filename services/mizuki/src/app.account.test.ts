@@ -1,6 +1,6 @@
 import { createServer, type Server } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createApp, SerialGate, type AppDependencies } from './app.js';
+import { createApp, ensurePaymentCapacity, SerialGate, type AppDependencies } from './app.js';
 import { ApiTokenAuthError } from './auth.js';
 import { GithubReadinessError } from './github.js';
 import { PolicyRequestError } from './policy-client.js';
@@ -22,6 +22,25 @@ afterEach(async () => {
 });
 
 describe('workbench account API', () => {
+  it('allows the prompt nonce on browser payment preflights', async () => {
+    const base = await serve(dependencies(new MemoryStore()));
+    const response = await fetch(`${base}/v1/jobs`, {
+      method: 'OPTIONS',
+      headers: {
+        origin: 'https://mizuki.example',
+        'access-control-request-method': 'POST',
+        'access-control-request-headers':
+          'content-type,idempotency-key,payment-signature,x-mizuki-prompt-nonce',
+      },
+    });
+
+    expect(response.status).toBe(204);
+    expect(response.headers.get('access-control-allow-origin')).toBe('https://mizuki.example');
+    expect(response.headers.get('access-control-allow-headers')?.split(',')).toContain(
+      'x-mizuki-prompt-nonce',
+    );
+  });
+
   it('creates, lists, and revokes one-time scoped API tokens through the browser session', async () => {
     const store = new MemoryStore();
     await store.upsertContributor('42', 'maintainer');
@@ -511,6 +530,7 @@ describe('workbench account API', () => {
     await store.upsertContributor('42', 'maintainer');
     await store.saveQuote(quote);
     await store.linkQuoteToAccount(quote.id, '42');
+    await openIntake(store);
     const challenge = vi.fn(async () => ({ x402Version: 2, accepts: [{ scheme: 'exact' }] }));
     const base = await serve(dependencies(store, { payments: { challenge } }));
 
@@ -528,6 +548,10 @@ describe('workbench account API', () => {
       attempt: { id: string; idempotencyKey: string; stage: string; retrySafe: boolean };
     };
     expect(body.attempt).toMatchObject({ stage: 'created', retrySafe: true });
+    expect(body.attempt).toMatchObject({
+      expiresAt: quote.expiresAt,
+      authoritativeDeadline: { source: 'quote', expiresAt: quote.expiresAt },
+    });
     expect(body.attempt.id).toMatch(/^[0-9a-f-]{36}$/i);
     expect(body.attempt.idempotencyKey).toMatch(/^[0-9a-f-]{36}$/i);
 
@@ -553,12 +577,328 @@ describe('workbench account API', () => {
       });
       expect(updated.status).toBe(200);
       await expect(updated.json()).resolves.toMatchObject({
-        attempt: { id: body.attempt.id, stage },
+        retrySafe: true,
+        authoritativeDeadline: { source: 'quote', expiresAt: quote.expiresAt },
+        attempt: {
+          id: body.attempt.id,
+          stage,
+          retrySafe: true,
+          expiresAt: quote.expiresAt,
+        },
       });
     }
   });
 
-  it('keeps an expired signed attempt indeterminate when no job was ever reserved', async () => {
+  it('authorizes one recoverable wallet prompt nonce and rejects competing clients', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    await store.saveQuote(quote);
+    await store.linkQuoteToAccount(quote.id, '42');
+    await openIntake(store);
+    const attempt = await store.createPaymentAttempt({
+      githubId: '42',
+      quoteId: quote.id,
+      wallet: payment.payer,
+      appBuild: 'release-test',
+    });
+    const base = await serve(dependencies(store));
+
+    const first = await authorizePaymentPrompt(base, attempt.id);
+    expect(first.status).toBe(200);
+    const firstBody = (await first.json()) as {
+      promptAuthorization: { nonce: string; authorizedAt: string };
+    };
+    expect(firstBody.promptAuthorization).toMatchObject({ nonce: paymentPromptNonce });
+    expect(firstBody).toMatchObject({
+      attempt: {
+        id: attempt.id,
+        stage: 'wallet_opened',
+        retrySafe: false,
+        promptAuthorization: firstBody.promptAuthorization,
+      },
+      authoritativeDeadline: { source: 'reconciliation', expiresAt: null },
+    });
+
+    const replay = await authorizePaymentPrompt(base, attempt.id);
+    expect(replay.status).toBe(200);
+    await expect(replay.json()).resolves.toMatchObject({
+      promptAuthorization: firstBody.promptAuthorization,
+      attempt: { promptAuthorization: firstBody.promptAuthorization },
+    });
+
+    const competing = await authorizePaymentPrompt(
+      base,
+      attempt.id,
+      'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    );
+    expect(competing.status).toBe(409);
+    await expect(competing.json()).resolves.toEqual({
+      error: 'wallet prompt is already authorized in another client',
+    });
+
+    const recovered = await fetch(`${base}/v1/account/payment-attempts/${attempt.id}`, {
+      headers: sessionHeaders,
+    });
+    await expect(recovered.json()).resolves.toMatchObject({
+      attempt: { promptAuthorization: firstBody.promptAuthorization },
+    });
+  });
+
+  it('keeps an expired prompt authorization reserved for settlement reconciliation', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    await store.saveQuote(quote);
+    await store.linkQuoteToAccount(quote.id, '42');
+    await openIntake(store);
+    const attempt = await store.createPaymentAttempt({
+      githubId: '42',
+      quoteId: quote.id,
+      wallet: payment.payer,
+      appBuild: 'release-test',
+    });
+    const base = await serve(dependencies(store));
+
+    const authorized = await authorizePaymentPrompt(base, attempt.id);
+    expect(authorized.status).toBe(200);
+    vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2100-01-01T00:00:00.000Z'));
+
+    const replay = await authorizePaymentPrompt(base, attempt.id);
+    expect(replay.status).toBe(409);
+    await expect(replay.json()).resolves.toEqual({
+      error: 'payment attempt requires settlement reconciliation',
+    });
+    await expect(store.paymentAttempt(attempt.id, '42')).resolves.toMatchObject({
+      stage: 'wallet_opened',
+      retrySafe: false,
+      promptNonce: paymentPromptNonce,
+    });
+  });
+
+  it('rejects signed submissions that did not authorize the wallet prompt', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    await store.saveQuote(quote);
+    await store.linkQuoteToAccount(quote.id, '42');
+    await openIntake(store);
+    const attempt = await store.createPaymentAttempt({
+      githubId: '42',
+      quoteId: quote.id,
+      wallet: payment.payer,
+      appBuild: 'release-test',
+    });
+    const settle = vi.fn();
+    const base = await serve(
+      dependencies(store, {
+        github: {
+          assertIssueAuthorization: vi.fn(async () => undefined),
+          currentHead: vi.fn(async () => quote.baseSha),
+        },
+        payments: { settle },
+      }),
+    );
+
+    const response = await fetch(`${base}/v1/jobs`, {
+      method: 'POST',
+      headers: {
+        ...sessionHeaders,
+        'content-type': 'application/json',
+        'idempotency-key': attempt.idempotencyKey,
+        'payment-signature': 'signed-payment',
+        'x-mizuki-prompt-nonce': paymentPromptNonce,
+      },
+      body: JSON.stringify({ quote_id: quote.id, payment_attempt_id: attempt.id }),
+    });
+
+    expect(response.status).toBe(409);
+    expect(settle).not.toHaveBeenCalled();
+    await expect(store.paymentAttempt(attempt.id, '42')).resolves.toMatchObject({
+      stage: 'created',
+      retrySafe: true,
+    });
+
+    const prompt = await authorizePaymentPrompt(base, attempt.id);
+    expect(prompt.status).toBe(200);
+    for (const nonce of [undefined, 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb']) {
+      const headers: Record<string, string> = {
+        ...sessionHeaders,
+        'content-type': 'application/json',
+        'idempotency-key': attempt.idempotencyKey,
+        'payment-signature': 'signed-payment',
+      };
+      if (nonce) headers['x-mizuki-prompt-nonce'] = nonce;
+      const rejected = await fetch(`${base}/v1/jobs`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ quote_id: quote.id, payment_attempt_id: attempt.id }),
+      });
+      expect(rejected.status).toBe(409);
+    }
+    expect(settle).not.toHaveBeenCalled();
+  });
+
+  it('returns the unsigned live x402 challenge before requiring an attempt', async () => {
+    const store = new MemoryStore();
+    await store.saveQuote(quote);
+    await openIntake(store);
+    const challenge = paymentChallenge(quote);
+    const settle = vi.fn(async (_quote, signature) => ({
+      ok: false as const,
+      challenge,
+      ...(signature ? { reason: 'unexpected signature' } : {}),
+    }));
+    const base = await serve(
+      dependencies(store, {
+        config: {
+          paymentMode: 'live',
+          webOrigin: 'https://mizuki.example',
+          trustedProxyHops: 0,
+          rateLimitMaxSources: 100,
+          sseMaxConnections: 10,
+          sseMaxConnectionsPerSource: 2,
+          githubAuthorizationLabel: 'mizuki:authorized',
+          payTo: 'refund-treasury',
+          escrowRefundTo: 'escrow-authority',
+          escrowReadinessMinLamports: 1_000_000,
+        },
+        github: {
+          assertIssueAuthorization: vi.fn(async () => undefined),
+          currentHead: vi.fn(async () => quote.baseSha),
+        },
+        payments: { settle },
+        policy: { readiness: vi.fn(async () => exactSingleJobReadiness()) },
+      }),
+    );
+
+    const response = await fetch(`${base}/v1/jobs`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'idempotency-key': 'unsigned-live-challenge',
+      },
+      body: JSON.stringify({ quote_id: quote.id }),
+    });
+
+    expect(response.status).toBe(402);
+    expect(settle).toHaveBeenCalledWith(quote, undefined, expect.any(Function));
+    expect(response.headers.get('payment-required')).toBeTruthy();
+  });
+
+  it('preserves signed MCP submissions without a browser payment attempt', async () => {
+    const store = new MemoryStore();
+    await store.saveQuote(quote);
+    await openIntake(store);
+    const challenge = paymentChallenge(quote);
+    const settle = vi.fn(async () => ({
+      ok: false as const,
+      challenge,
+      reason: 'payment verification failed',
+    }));
+    const base = await serve(
+      dependencies(store, {
+        config: {
+          paymentMode: 'live',
+          webOrigin: 'https://mizuki.example',
+          trustedProxyHops: 0,
+          rateLimitMaxSources: 100,
+          sseMaxConnections: 10,
+          sseMaxConnectionsPerSource: 2,
+          githubAuthorizationLabel: 'mizuki:authorized',
+          payTo: 'refund-treasury',
+          escrowRefundTo: 'escrow-authority',
+          escrowReadinessMinLamports: 1_000_000,
+        },
+        github: {
+          assertIssueAuthorization: vi.fn(async () => undefined),
+          currentHead: vi.fn(async () => quote.baseSha),
+        },
+        payments: { settle },
+        policy: { readiness: vi.fn(async () => exactSingleJobReadiness()) },
+      }),
+    );
+
+    const response = await fetch(`${base}/v1/jobs`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'idempotency-key': 'live-attempt-bypass',
+        'payment-signature': 'signed-payment',
+      },
+      body: JSON.stringify({ quote_id: quote.id }),
+    });
+
+    expect(response.status).toBe(402);
+    expect(settle).toHaveBeenCalledWith(quote, 'signed-payment', expect.any(Function));
+    await expect(store.jobByQuote(quote.id)).resolves.toBeUndefined();
+  });
+
+  it('rejects a payment attempt before persistence when refund fees are not covered', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    await store.saveQuote(quote);
+    await store.linkQuoteToAccount(quote.id, '42');
+    await openIntake(store);
+    const createPaymentAttempt = vi.spyOn(store, 'createPaymentAttempt');
+    const paymentAdmission = new SerialGate();
+    const admissionRun = vi.spyOn(paymentAdmission, 'run');
+    const challenge = vi.fn();
+    const base = await serve(
+      dependencies(store, {
+        config: {
+          paymentMode: 'live',
+          webOrigin: 'https://mizuki.example',
+          trustedProxyHops: 0,
+          rateLimitMaxSources: 100,
+          sseMaxConnections: 10,
+          sseMaxConnectionsPerSource: 2,
+          githubAuthorizationLabel: 'mizuki:authorized',
+          payTo: 'refund-treasury',
+          escrowRefundTo: 'escrow-authority',
+          escrowReadinessMinLamports: 1_000_000,
+        },
+        payments: { challenge },
+        paymentAdmission,
+        policy: {
+          readiness: vi.fn(async () => ({
+            healthy: true,
+            refundTreasury: 'refund-treasury',
+            refundMint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+            refundDecimals: 6,
+            finalizedBalanceRaw: '1000000000',
+            pendingRefundRaw: '0',
+            treasuryAvailableRefundRaw: '1000000000',
+            remainingRefundLimitUsdCents: 100_000,
+            availableRefundRaw: '1000000000',
+            availableRefundTransactions: 0,
+            remainingEscrowLimitUsdCents: 100_000,
+            escrowAuthority: 'escrow-authority',
+            finalizedEscrowBalanceLamports: '1000000000',
+            availableEscrowReserveLamports: '1000000000',
+          })),
+        },
+      }),
+    );
+
+    const response = await fetch(`${base}/v1/account/payment-attempts`, {
+      method: 'POST',
+      headers: { ...sessionHeaders, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        quote_id: quote.id,
+        wallet: payment.payer,
+        app_build: 'release-f3be9e6',
+      }),
+    });
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      error: 'refund protection is temporarily unavailable',
+    });
+    expect(admissionRun).toHaveBeenCalledOnce();
+    expect(createPaymentAttempt).not.toHaveBeenCalled();
+    expect(challenge).not.toHaveBeenCalled();
+    await expect(store.activePaymentAttempt('42')).resolves.toBeUndefined();
+  });
+
+  it('expires client-reported signing safely when no job submission reached the server', async () => {
     const store = new MemoryStore();
     const expiredQuote = {
       ...quote,
@@ -593,9 +933,9 @@ describe('workbench account API', () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
-      paymentStatus: 'indeterminate',
-      retrySafe: false,
-      attempt: { id: attempt.id, stage: 'indeterminate', retrySafe: false },
+      paymentStatus: 'expired_unpaid',
+      retrySafe: true,
+      attempt: { id: attempt.id, stage: 'expired_unpaid', retrySafe: true },
     });
     await expect(
       store.createPaymentAttempt({
@@ -604,7 +944,7 @@ describe('workbench account API', () => {
         wallet: payment.payer,
         appBuild: 'release-f3be9e6',
       }),
-    ).rejects.toThrow('resolve the active payment attempt');
+    ).resolves.toMatchObject({ quoteId: nextQuote.id, stage: 'created', retrySafe: true });
   });
 
   it('binds direct recovery to the reserved job without returning it as a new active attempt', async () => {
@@ -612,6 +952,7 @@ describe('workbench account API', () => {
     await store.upsertContributor('42', 'maintainer');
     await store.saveQuote(quote);
     await store.linkQuoteToAccount(quote.id, '42');
+    await openIntake(store);
     const attempt = await store.createPaymentAttempt({
       githubId: '42',
       quoteId: quote.id,
@@ -672,6 +1013,76 @@ describe('workbench account API', () => {
       attempt: null,
       paymentStatus: 'none',
     });
+  });
+
+  it('does not resurrect an expired unpaid payment reservation during recovery reads', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    await store.saveQuote(quote);
+    await store.linkQuoteToAccount(quote.id, '42');
+    const attempt = await store.createPaymentAttempt({
+      githubId: '42',
+      quoteId: quote.id,
+      wallet: payment.payer,
+      appBuild: 'release-test',
+    });
+    const { job } = await store.createJob(
+      quote,
+      { ...payment, transaction: 'pending', signature: 'signed-payment' },
+      attempt.idempotencyKey,
+      undefined,
+      attempt.id,
+    );
+    await store.bindPaymentAttemptJob(attempt.id, '42', job.id);
+    await store.expirePaymentReservation(job.id, attempt.id);
+    const base = await serve(dependencies(store));
+
+    for (let read = 0; read < 2; read += 1) {
+      const direct = await fetch(`${base}/v1/account/payment-attempts/${attempt.id}`, {
+        headers: sessionHeaders,
+      });
+      expect(direct.status).toBe(200);
+      await expect(direct.json()).resolves.toMatchObject({
+        paymentStatus: 'expired_unpaid',
+        attempt: { id: attempt.id, stage: 'expired_unpaid', retrySafe: true },
+      });
+    }
+
+    const active = await fetch(`${base}/v1/account/payment-attempts/active`, {
+      headers: sessionHeaders,
+    });
+    await expect(active.json()).resolves.toMatchObject({
+      attempt: null,
+      paymentStatus: 'none',
+    });
+
+    const status = await fetch(`${base}/v1/account/quotes/${quote.id}/payment-status`, {
+      headers: { ...sessionHeaders, 'idempotency-key': attempt.idempotencyKey },
+    });
+    await expect(status.json()).resolves.toMatchObject({ paymentStatus: 'unpaid' });
+    await expect(store.paymentAttempt(attempt.id, '42')).resolves.toMatchObject({
+      stage: 'expired_unpaid',
+      retrySafe: true,
+    });
+    await expect(store.jobsForAccount('42', 100)).resolves.toMatchObject({
+      obligationCount: 0,
+    });
+
+    const renewedQuote = {
+      ...quote,
+      id: '22222222-2222-4222-8222-222222222222',
+      expiresAt: '2099-01-01T00:05:00.000Z',
+    };
+    await store.saveQuote(renewedQuote);
+    await store.linkQuoteToAccount(renewedQuote.id, '42');
+    await expect(
+      store.createPaymentAttempt({
+        githubId: '42',
+        quoteId: renewedQuote.id,
+        wallet: payment.payer,
+        appBuild: 'release-renewed',
+      }),
+    ).resolves.toMatchObject({ quoteId: renewedQuote.id, stage: 'created' });
   });
 
   it('reuses an unpaid attempt across builds and supersedes it for a different quote', async () => {
@@ -739,7 +1150,341 @@ describe('workbench account API', () => {
     ).rejects.toThrow('resolve the active payment attempt');
   });
 
-  it('binds job creation to the server attempt key and exact paying wallet', async () => {
+  it('replaces an untouched quote attempt without double-counting refund capacity', async () => {
+    const store = new MemoryStore();
+    const nextQuote = { ...quote, id: '22222222-2222-4222-8222-222222222222', issueNumber: 8 };
+    await store.upsertContributor('42', 'maintainer');
+    await Promise.all([store.saveQuote(quote), store.saveQuote(nextQuote)]);
+    await Promise.all([
+      store.linkQuoteToAccount(quote.id, '42'),
+      store.linkQuoteToAccount(nextQuote.id, '42'),
+    ]);
+    await openIntake(store);
+    const base = await serve(
+      dependencies(store, {
+        config: {
+          paymentMode: 'live',
+          webOrigin: 'https://mizuki.example',
+          trustedProxyHops: 0,
+          rateLimitMaxSources: 100,
+          sseMaxConnections: 10,
+          sseMaxConnectionsPerSource: 2,
+          githubAuthorizationLabel: 'mizuki:authorized',
+          payTo: 'refund-treasury',
+          escrowRefundTo: 'escrow-authority',
+          escrowReadinessMinLamports: 1_000_000,
+        },
+        policy: { readiness: vi.fn(async () => exactSingleJobReadiness()) },
+      }),
+    );
+
+    const create = (quoteId: string) =>
+      fetch(`${base}/v1/account/payment-attempts`, {
+        method: 'POST',
+        headers: { ...sessionHeaders, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          quote_id: quoteId,
+          wallet: payment.payer,
+          app_build: 'release-test',
+        }),
+      });
+    const firstResponse = await create(quote.id);
+    expect(firstResponse.status).toBe(201);
+    const first = (await firstResponse.json()) as { attempt: { id: string } };
+    const secondResponse = await create(nextQuote.id);
+    expect(secondResponse.status).toBe(201);
+    const next = (await secondResponse.json()) as {
+      attempt: { id: string; quoteId: string; stage: string };
+    };
+    expect(next).toMatchObject({
+      attempt: { quoteId: nextQuote.id, stage: 'created' },
+    });
+    await expect(store.paymentAttempt(first.attempt.id, '42')).resolves.toMatchObject({
+      stage: 'expired_unpaid',
+    });
+    await expect(store.paymentAttemptCapacity()).resolves.toEqual({
+      refundRaw: '0',
+      refundTransactions: 0,
+      bountyUsdCents: 0,
+    });
+    const prompt = await authorizePaymentPrompt(base, next.attempt.id);
+    expect(prompt.status).toBe(200);
+    await expect(store.paymentAttemptCapacity()).resolves.toEqual({
+      refundRaw: nextQuote.priceAtomic,
+      refundTransactions: 1,
+      bountyUsdCents: 1_000,
+    });
+  });
+
+  it('does not double-count a signer-protected job during exact-capacity admission', async () => {
+    const store = new MemoryStore();
+    const { job } = await store.createJob(
+      quote,
+      { ...payment, transaction: 'pending', signature: 'signed-payment' },
+      'protected-capacity-job',
+    );
+    await store.patchJob(job.id, { paymentIntentId: 'payment-intent-1' });
+
+    await expect(
+      ensurePaymentCapacity(
+        {
+          config: {
+            payTo: 'refund-treasury',
+            escrowRefundTo: 'escrow-authority',
+            escrowReadinessMinLamports: 1_000_000,
+          },
+          store,
+          policy: { readiness: vi.fn(async () => exactSingleJobReadiness()) },
+        } as never,
+        2_000_000n,
+        1_000,
+      ),
+    ).resolves.toMatchObject({ availableRefundRaw: '2000000' });
+  });
+
+  it('does not open the wallet when readiness fails before prompt authorization', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    await store.saveQuote(quote);
+    await store.linkQuoteToAccount(quote.id, '42');
+    await openIntake(store);
+    const attempt = await store.createPaymentAttempt({
+      githubId: '42',
+      quoteId: quote.id,
+      wallet: payment.payer,
+      appBuild: 'release-test',
+    });
+    const settle = vi.fn();
+    const base = await serve(
+      dependencies(store, {
+        github: {
+          assertIssueAuthorization: vi.fn(async () => undefined),
+          currentHead: vi.fn(async () => quote.baseSha),
+        },
+        payments: { settle },
+        readiness: { check: vi.fn(async () => ({ ready: false, reason: 'runtime unavailable' })) },
+      }),
+    );
+
+    const response = await submitPayment(base, attempt, 'signed-payment');
+
+    expect(response.status).toBe(503);
+    expect(settle).not.toHaveBeenCalled();
+    await expect(store.paymentAttempt(attempt.id, '42')).resolves.toMatchObject({
+      stage: 'created',
+      retrySafe: true,
+    });
+    await expect(store.jobByQuote(quote.id)).resolves.toBeUndefined();
+
+    const status = await fetch(`${base}/v1/account/payment-attempts/${attempt.id}`, {
+      headers: sessionHeaders,
+    });
+    const statusBody = (await status.json()) as {
+      attempt: Record<string, unknown>;
+      authoritativeDeadline: { source: string; expiresAt: string | null };
+    };
+    expect(statusBody.authoritativeDeadline).toEqual({
+      source: 'quote',
+      expiresAt: quote.expiresAt,
+    });
+    expect(statusBody.attempt).toHaveProperty('expiresAt', quote.expiresAt);
+  });
+
+  it('keeps a rejected payment payload bound to its reusable prompt nonce', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    await store.saveQuote(quote);
+    await store.linkQuoteToAccount(quote.id, '42');
+    await openIntake(store);
+    const attempt = await store.createPaymentAttempt({
+      githubId: '42',
+      quoteId: quote.id,
+      wallet: payment.payer,
+      appBuild: 'release-test',
+    });
+    const base = await serve(
+      dependencies(store, {
+        github: {
+          assertIssueAuthorization: vi.fn(async () => undefined),
+          currentHead: vi.fn(async () => quote.baseSha),
+        },
+        payments: {
+          settle: vi.fn(async () => ({
+            ok: false as const,
+            challenge: paymentChallenge(quote),
+            reason: 'payment verification failed',
+          })),
+        },
+      }),
+    );
+
+    const response = await submitPayment(base, attempt, 'signed-payment');
+
+    expect(response.status).toBe(402);
+    await expect(store.paymentAttempt(attempt.id, '42')).resolves.toMatchObject({
+      stage: 'wallet_opened',
+      retrySafe: false,
+      promptNonce: paymentPromptNonce,
+    });
+    await expect(store.jobByQuote(quote.id)).resolves.toBeUndefined();
+  });
+
+  it('reports the signer payment window instead of quote expiry for protected jobs', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    await store.saveQuote(quote);
+    await store.linkQuoteToAccount(quote.id, '42');
+    const attempt = await store.createPaymentAttempt({
+      githubId: '42',
+      quoteId: quote.id,
+      wallet: payment.payer,
+      appBuild: 'release-test',
+    });
+    await store.updatePaymentAttemptStage(attempt.id, '42', 'submitting', 'server');
+    const { job } = await store.createJob(
+      quote,
+      { ...payment, transaction: 'pending', signature: 'signed-payment' },
+      attempt.idempotencyKey,
+      undefined,
+      attempt.id,
+    );
+    const paymentIntentId = '55555555-5555-4555-8555-555555555555';
+    await store.patchJob(job.id, { paymentIntentId });
+    const paymentWindowEndUnixSeconds = 1_800_000_000;
+    const getPaymentIntent = vi.fn(async () => ({
+      id: paymentIntentId,
+      jobId: job.id,
+      quoteId: quote.id,
+      paymentWindowEndUnixSeconds,
+    }));
+    const base = await serve(dependencies(store, { policy: { getPaymentIntent } }));
+
+    const response = await fetch(`${base}/v1/account/payment-attempts/${attempt.id}`, {
+      headers: sessionHeaders,
+    });
+    const expiresAt = new Date(paymentWindowEndUnixSeconds * 1_000).toISOString();
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      authoritativeDeadline: { source: 'payment_intent', expiresAt },
+      attempt: {
+        id: attempt.id,
+        expiresAt,
+        authoritativeDeadline: { source: 'payment_intent', expiresAt },
+      },
+    });
+    expect(getPaymentIntent).toHaveBeenCalledWith(paymentIntentId);
+    await expect(store.job(job.id)).resolves.toMatchObject({ paymentWindowEndUnixSeconds });
+    await expect(store.paymentAttempt(attempt.id, '42')).resolves.toMatchObject({
+      paymentWindowEndUnixSeconds,
+    });
+  });
+
+  it('rejects a stale signed request when another replica replaced its untouched attempt', async () => {
+    const store = new MemoryStore();
+    const replacementQuote = {
+      ...quote,
+      id: '22222222-2222-4222-8222-222222222222',
+      issueNumber: 8,
+    };
+    await store.upsertContributor('42', 'maintainer');
+    await Promise.all([store.saveQuote(quote), store.saveQuote(replacementQuote)]);
+    await Promise.all([
+      store.linkQuoteToAccount(quote.id, '42'),
+      store.linkQuoteToAccount(replacementQuote.id, '42'),
+    ]);
+    await openIntake(store);
+    const stale = await store.createPaymentAttempt({
+      githubId: '42',
+      quoteId: quote.id,
+      wallet: payment.payer,
+      appBuild: 'release-old',
+    });
+    let replacementId: string | undefined;
+    const gate = new SerialGate(async (operation) => {
+      const replacement = await store.createPaymentAttempt({
+        githubId: '42',
+        quoteId: replacementQuote.id,
+        wallet: payment.payer,
+        appBuild: 'release-new',
+      });
+      replacementId = replacement.id;
+      return operation();
+    });
+    const settle = vi.fn();
+    const base = await serve(
+      dependencies(store, {
+        github: {
+          assertIssueAuthorization: vi.fn(async () => undefined),
+          currentHead: vi.fn(async () => quote.baseSha),
+        },
+        paymentAdmission: gate,
+        payments: { settle },
+      }),
+    );
+
+    const response = await submitPayment(base, stale, 'signed-payment');
+
+    expect(response.status).toBe(409);
+    expect(settle).not.toHaveBeenCalled();
+    await expect(store.paymentAttempt(stale.id, '42')).resolves.toMatchObject({
+      stage: 'expired_unpaid',
+      retrySafe: true,
+    });
+    await expect(store.activePaymentAttempt('42')).resolves.toMatchObject({
+      id: replacementId,
+      stage: 'created',
+    });
+  });
+
+  it('recovers a persisted reservation after its database response is lost', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    await store.saveQuote(quote);
+    await store.linkQuoteToAccount(quote.id, '42');
+    await openIntake(store);
+    const attempt = await store.createPaymentAttempt({
+      githubId: '42',
+      quoteId: quote.id,
+      wallet: payment.payer,
+      appBuild: 'release-test',
+    });
+    const originalCreateJob = store.createJob.bind(store);
+    vi.spyOn(store, 'createJob').mockImplementationOnce(async (...args) => {
+      await originalCreateJob(...args);
+      throw new Error('database response lost');
+    });
+    const settle = vi.fn(async (_quote, _signature, persist) => {
+      await persist({ ...payment, transaction: 'pending', signature: 'signed-payment' });
+      throw new Error('unreachable');
+    });
+    const base = await serve(
+      dependencies(store, {
+        github: {
+          assertIssueAuthorization: vi.fn(async () => undefined),
+          currentHead: vi.fn(async () => quote.baseSha),
+        },
+        payments: { settle },
+      }),
+    );
+
+    const response = await submitPayment(base, attempt, 'signed-payment');
+
+    expect(response.status).toBe(500);
+    const reserved = await store.jobByQuote(quote.id);
+    expect(reserved).toMatchObject({ state: 'settlement_pending', paymentAttemptId: attempt.id });
+    await expect(store.paymentAttempt(attempt.id, '42')).resolves.toMatchObject({
+      stage: 'job_reserved',
+      retrySafe: false,
+      jobId: reserved!.id,
+    });
+    const retry = await submitPayment(base, attempt, 'signed-payment');
+    expect(retry.status).toBe(200);
+    await expect(retry.json()).resolves.toMatchObject({ id: reserved!.id });
+    expect(settle).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a mismatched server-accepted wallet authorization non-retryable', async () => {
     const store = new MemoryStore();
     await store.upsertContributor('42', 'maintainer');
     await store.saveQuote(quote);
@@ -758,7 +1503,7 @@ describe('workbench account API', () => {
     });
     const settle = vi.fn(async (_quote, _signature, persist) => {
       await expect(store.paymentAttempt(attempt.id, '42')).resolves.toMatchObject({
-        stage: 'submitting',
+        stage: 'wallet_opened',
         retrySafe: false,
       });
       const authorized = {
@@ -781,34 +1526,69 @@ describe('workbench account API', () => {
       }),
     );
 
-    const mismatched = await fetch(`${base}/v1/jobs`, {
-      method: 'POST',
-      headers: {
-        ...sessionHeaders,
-        'content-type': 'application/json',
-        'idempotency-key': attempt.idempotencyKey,
-        'payment-signature': 'signed-payment',
-      },
-      body: JSON.stringify({ quote_id: quote.id, payment_attempt_id: attempt.id }),
-    });
+    const mismatched = await submitPayment(base, attempt, 'signed-payment');
     expect(mismatched.status).toBe(409);
     await expect(store.jobByQuote(quote.id)).resolves.toBeUndefined();
+    await expect(store.paymentAttempt(attempt.id, '42')).resolves.toMatchObject({
+      stage: 'indeterminate',
+      retrySafe: false,
+    });
 
-    settle.mockImplementationOnce(async (_quote, _signature, persist) => {
+    const retryQuote = {
+      ...quote,
+      id: '22222222-2222-4222-8222-222222222222',
+      expiresAt: '2099-01-01T00:05:00.000Z',
+    };
+    await store.saveQuote(retryQuote);
+    await store.linkQuoteToAccount(retryQuote.id, '42');
+    await expect(
+      store.createPaymentAttempt({
+        githubId: '42',
+        quoteId: retryQuote.id,
+        wallet: payment.payer,
+        appBuild: 'release-f3be9e6',
+      }),
+    ).rejects.toThrow('resolve the active payment attempt');
+  });
+
+  it('binds an exact paying wallet to the server-owned attempt and job', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    await store.saveQuote(quote);
+    await store.linkQuoteToAccount(quote.id, '42');
+    await openIntake(store);
+    const attempt = await store.createPaymentAttempt({
+      githubId: '42',
+      quoteId: quote.id,
+      wallet: payment.payer,
+      appBuild: 'release-test',
+    });
+    const settle = vi.fn(async (_quote, _signature, persist) => {
+      await expect(store.paymentAttempt(attempt.id, '42')).resolves.toMatchObject({
+        stage: 'wallet_opened',
+        retrySafe: false,
+      });
       const authorized = { ...payment, transaction: 'pending', signature: 'signed-payment' };
       await persist(authorized);
+      await expect(store.paymentAttempt(attempt.id, '42')).resolves.toMatchObject({
+        stage: 'submitting',
+        retrySafe: false,
+      });
       return { ok: true as const, payment: { ...authorized, transaction: 'settlement' } };
     });
-    const accepted = await fetch(`${base}/v1/jobs`, {
-      method: 'POST',
-      headers: {
-        ...sessionHeaders,
-        'content-type': 'application/json',
-        'idempotency-key': attempt.idempotencyKey,
-        'payment-signature': 'signed-payment',
-      },
-      body: JSON.stringify({ quote_id: quote.id, payment_attempt_id: attempt.id }),
-    });
+    const base = await serve(
+      dependencies(store, {
+        github: {
+          assertIssueAuthorization: vi.fn(async () => undefined),
+          currentHead: vi.fn(async () => quote.baseSha),
+        },
+        payments: { settle },
+        processor: { process: vi.fn(async () => undefined) },
+      }),
+    );
+
+    const accepted = await submitPayment(base, attempt, 'signed-payment');
+
     expect(accepted.status).toBe(202);
     await expect(accepted.json()).resolves.toMatchObject({ state: 'paid' });
     await expect(store.jobByQuote(quote.id)).resolves.toMatchObject({
@@ -1543,6 +2323,91 @@ function dependencies(
     readiness: { check: vi.fn(async () => ({ ready: true })) },
     ...overrides,
   } as unknown as AppDependencies;
+}
+
+async function openIntake(store: MemoryStore): Promise<void> {
+  await store.updateOperatorControls({
+    expectedRevision: 0,
+    intakeEnabled: true,
+    reason: 'open paid intake for payment attempt test',
+    updatedBy: 'test',
+  });
+}
+
+const paymentPromptNonce = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+
+async function authorizePaymentPrompt(
+  base: string,
+  attemptId: string,
+  promptNonce = paymentPromptNonce,
+): Promise<Response> {
+  return fetch(`${base}/v1/account/payment-attempts/${attemptId}/prompt`, {
+    method: 'POST',
+    headers: { ...sessionHeaders, 'content-type': 'application/json' },
+    body: JSON.stringify({ prompt_nonce: promptNonce }),
+  });
+}
+
+async function submitPayment(
+  base: string,
+  attempt: { id: string; idempotencyKey: string; quoteId: string },
+  signature: string,
+): Promise<Response> {
+  const prompt = await authorizePaymentPrompt(base, attempt.id);
+  if (!prompt.ok) return prompt;
+  return fetch(`${base}/v1/jobs`, {
+    method: 'POST',
+    headers: {
+      ...sessionHeaders,
+      'content-type': 'application/json',
+      'idempotency-key': attempt.idempotencyKey,
+      'payment-signature': signature,
+      'x-mizuki-prompt-nonce': paymentPromptNonce,
+    },
+    body: JSON.stringify({ quote_id: attempt.quoteId, payment_attempt_id: attempt.id }),
+  });
+}
+
+function exactSingleJobReadiness() {
+  return {
+    healthy: true,
+    refundTreasury: 'refund-treasury',
+    refundMint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+    refundDecimals: 6,
+    finalizedBalanceRaw: '2000000',
+    pendingRefundRaw: '0',
+    treasuryAvailableRefundRaw: '2000000',
+    remainingRefundLimitUsdCents: 200,
+    availableRefundRaw: '2000000',
+    availableRefundTransactions: 1,
+    remainingEscrowLimitUsdCents: 1_000,
+    escrowAuthority: 'escrow-authority',
+    finalizedEscrowBalanceLamports: '1000000',
+    availableEscrowReserveLamports: '1000000',
+  };
+}
+
+function paymentChallenge(value: Quote) {
+  return {
+    x402Version: 2,
+    resource: {
+      url: `https://mizuki.example/v1/jobs?quote_id=${value.id}`,
+      description: 'Mizuki software maintenance job',
+      mimeType: 'application/json',
+    },
+    accepts: [
+      {
+        scheme: 'exact',
+        network: 'solana:mainnet',
+        amount: value.priceAtomic,
+        payTo: '1'.repeat(32),
+        maxTimeoutSeconds: 300,
+        asset: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+        extra: { feePayer: '1'.repeat(32), memo: `mizuki:payment:v1:${value.id}` },
+      },
+    ],
+    error: 'Payment required',
+  };
 }
 
 const sessionHeaders = {

@@ -37,8 +37,10 @@ import type {
   RepositoryAdmissionReceipt,
   WalletChallenge,
 } from './types.js';
+import { calculateRescueBountyPriceCents } from './domain/bounty.js';
 
 export const MAX_PENDING_GITHUB_OAUTH_FLOWS = 1_000;
+const UUID_PATTERN = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
 
 export type JobPatch = Omit<Partial<Job>, 'id' | 'state' | 'version' | 'createdAt' | 'updatedAt'>;
 
@@ -73,6 +75,12 @@ export type WebhookDeliveryLease =
   | { state: 'started'; leaseId: string }
   | { state: 'completed' | 'busy' };
 
+export type PaymentAttemptCapacity = {
+  refundRaw: string;
+  refundTransactions: number;
+  bountyUsdCents: number;
+};
+
 export interface MizukiStore {
   readiness(): Promise<void>;
   withAdmissionLock<T>(operation: () => Promise<T>): Promise<T>;
@@ -98,17 +106,26 @@ export interface MizukiStore {
   paymentAttempt(id: string, githubId: string): Promise<CustomerPaymentAttempt | undefined>;
   activePaymentAttempt(githubId: string): Promise<CustomerPaymentAttempt | undefined>;
   latestPaymentAttempt(githubId: string): Promise<CustomerPaymentAttempt | undefined>;
+  paymentAttemptCapacity(excludedAttemptId?: string): Promise<PaymentAttemptCapacity>;
+  authorizePaymentPrompt(
+    id: string,
+    githubId: string,
+    promptNonce: string,
+  ): Promise<CustomerPaymentAttempt>;
   updatePaymentAttemptStage(
     id: string,
     githubId: string,
     stage: PaymentAttemptStage,
+    source?: 'client' | 'server',
   ): Promise<CustomerPaymentAttempt>;
   bindPaymentAttemptJob(
     id: string,
     githubId: string,
     jobId: string,
     settlementTransaction?: string,
+    paymentWindowEndUnixSeconds?: number,
   ): Promise<CustomerPaymentAttempt>;
+  expirePaymentReservation(jobId: string, attemptId: string): Promise<Job>;
   jobsForAccount(githubId: string, limit: number): Promise<AccountJobsPage>;
   linkAccountRepository(githubId: string, owner: string, repo: string): Promise<AccountRepository>;
   repositoriesForAccount(githubId: string, limit: number): Promise<AccountRepositoriesPage>;
@@ -280,6 +297,7 @@ export class MemoryStore implements MizukiStore {
     const keyedJob = await this.jobByIdempotencyKey(idempotencyKey);
     if (keyedJob && keyedJob.quote.id !== quote.id) return { kind: 'conflict' };
     const job = keyedJob ?? (await this.jobByQuote(quote.id));
+    if (job?.state === 'payment_expired') return { kind: 'unpaid', quote };
     return job ? { kind: 'reserved', quote, job } : { kind: 'unpaid', quote };
   }
 
@@ -302,10 +320,16 @@ export class MemoryStore implements MizukiStore {
     }
     const active = await this.activePaymentAttempt(input.githubId);
     if (active) {
-      if (!active.retrySafe) {
+      if (
+        active.stage !== 'created' &&
+        (!active.retrySafe || Date.parse(active.expiresAt) > Date.now())
+      ) {
         throw new StateConflictError('resolve the active payment attempt before starting another');
       }
-      this.paymentAttempts.set(active.id, transitionPaymentAttempt(active, 'expired_unpaid'));
+      this.paymentAttempts.set(
+        active.id,
+        transitionPaymentAttempt(active, 'expired_unpaid', 'server'),
+      );
     }
     const now = new Date().toISOString();
     const attempt: CustomerPaymentAttempt = {
@@ -350,14 +374,54 @@ export class MemoryStore implements MizukiStore {
     );
   }
 
+  async paymentAttemptCapacity(excludedAttemptId?: string): Promise<PaymentAttemptCapacity> {
+    let refundRaw = 0n;
+    let refundTransactions = 0;
+    let bountyUsdCents = 0;
+    const now = Date.now();
+
+    for (const current of this.paymentAttempts.values()) {
+      if (current.id === excludedAttemptId || isPaymentAttemptTerminal(current)) continue;
+      if (current.retrySafe && Date.parse(current.expiresAt) <= now) {
+        this.paymentAttempts.set(
+          current.id,
+          transitionPaymentAttempt(current, 'expired_unpaid', 'server'),
+        );
+        continue;
+      }
+      if (!current.promptAuthorizedAt && !current.serverAcceptedAt) continue;
+      const quote = this.quotes.get(current.quoteId);
+      if (!quote) throw new Error(`payment attempt ${current.id} has no quote`);
+      const raw = BigInt(quote.priceAtomic);
+      refundRaw += raw;
+      refundTransactions += 1;
+      bountyUsdCents += calculateRescueBountyPriceCents(Number(raw / 10_000n));
+    }
+
+    return { refundRaw: refundRaw.toString(), refundTransactions, bountyUsdCents };
+  }
+
   async updatePaymentAttemptStage(
     id: string,
     githubId: string,
     stage: PaymentAttemptStage,
+    source: 'client' | 'server' = 'client',
   ): Promise<CustomerPaymentAttempt> {
     const current = await this.paymentAttempt(id, githubId);
     if (!current) throw new Error('payment attempt not found');
-    const attempt = transitionPaymentAttempt(current, stage);
+    const attempt = transitionPaymentAttempt(current, stage, source);
+    this.paymentAttempts.set(id, attempt);
+    return structuredClone(attempt);
+  }
+
+  async authorizePaymentPrompt(
+    id: string,
+    githubId: string,
+    promptNonce: string,
+  ): Promise<CustomerPaymentAttempt> {
+    const current = await this.paymentAttempt(id, githubId);
+    if (!current) throw new Error('payment attempt not found');
+    const attempt = authorizePaymentPrompt(current, promptNonce);
     this.paymentAttempts.set(id, attempt);
     return structuredClone(attempt);
   }
@@ -367,11 +431,34 @@ export class MemoryStore implements MizukiStore {
     githubId: string,
     jobId: string,
     settlementTransaction?: string,
+    paymentWindowEndUnixSeconds?: number,
   ): Promise<CustomerPaymentAttempt> {
     const current = await this.paymentAttempt(id, githubId);
     if (!current) throw new Error('payment attempt not found');
+    if (current.stage === 'expired_unpaid') {
+      throw new StateConflictError('payment attempt has expired unpaid');
+    }
+    const job = this.jobs.get(jobId);
+    if (!job || job.state === 'payment_expired') {
+      throw new StateConflictError('payment reservation is not recoverable');
+    }
     if (current.jobId && current.jobId !== jobId) {
       throw new StateConflictError('payment attempt is already bound to another job');
+    }
+    const paymentWindowEnd = job.paymentWindowEndUnixSeconds ?? paymentWindowEndUnixSeconds;
+    if (
+      job.paymentWindowEndUnixSeconds !== undefined &&
+      paymentWindowEndUnixSeconds !== undefined &&
+      job.paymentWindowEndUnixSeconds !== paymentWindowEndUnixSeconds
+    ) {
+      throw new StateConflictError('payment authorization deadline does not match the job');
+    }
+    if (
+      current.paymentWindowEndUnixSeconds !== undefined &&
+      paymentWindowEnd !== undefined &&
+      current.paymentWindowEndUnixSeconds !== paymentWindowEnd
+    ) {
+      throw new StateConflictError('payment authorization deadline is already bound');
     }
     const attempt: CustomerPaymentAttempt = {
       ...current,
@@ -379,10 +466,31 @@ export class MemoryStore implements MizukiStore {
       retrySafe: false,
       jobId,
       ...(settlementTransaction ? { settlementTransaction } : {}),
+      ...(paymentWindowEnd !== undefined
+        ? { paymentWindowEndUnixSeconds: validPaymentWindowEnd(paymentWindowEnd) }
+        : {}),
       updatedAt: new Date().toISOString(),
     };
     this.paymentAttempts.set(id, attempt);
     return structuredClone(attempt);
+  }
+
+  async expirePaymentReservation(jobId: string, attemptId: string): Promise<Job> {
+    const currentJob = this.jobs.get(jobId);
+    if (!currentJob) throw new Error(`unknown job: ${jobId}`);
+    if (currentJob.state === 'payment_expired') return structuredClone(currentJob);
+    const currentAttempt = this.paymentAttempts.get(attemptId);
+    assertExpirablePaymentReservation(currentJob, currentAttempt, attemptId);
+    const attempt = expiredReservedPaymentAttempt(
+      currentAttempt!,
+      currentJob.paymentWindowEndUnixSeconds,
+    );
+    const job = updateJob(currentJob, 'payment_expired', {
+      error: 'Payment authorization expired without settlement',
+    });
+    this.paymentAttempts.set(attempt.id, attempt);
+    this.jobs.set(job.id, job);
+    return structuredClone(job);
   }
 
   async jobsForAccount(githubId: string, limit: number): Promise<AccountJobsPage> {
@@ -1186,6 +1294,7 @@ export class PostgresStore implements MizukiStore {
       return { kind: 'conflict' };
     }
     const job = row.keyed_job_payload ?? row.reserved_job_payload;
+    if (job?.state === 'payment_expired') return { kind: 'unpaid', quote: row.quote_payload };
     return job
       ? { kind: 'reserved', quote: row.quote_payload, job }
       : { kind: 'unpaid', quote: row.quote_payload };
@@ -1231,12 +1340,18 @@ export class PostgresStore implements MizukiStore {
       );
       if (active.rows[0]) {
         const attempt = active.rows[0].payload;
-        if (!attempt.retrySafe) {
+        if (
+          attempt.stage !== 'created' &&
+          (!attempt.retrySafe || Date.parse(attempt.expiresAt) > Date.now())
+        ) {
           throw new StateConflictError(
             'resolve the active payment attempt before starting another',
           );
         }
-        await savePaymentAttempt(client, transitionPaymentAttempt(attempt, 'expired_unpaid'));
+        await savePaymentAttempt(
+          client,
+          transitionPaymentAttempt(attempt, 'expired_unpaid', 'server'),
+        );
       }
       const now = new Date().toISOString();
       const attempt: CustomerPaymentAttempt = {
@@ -1301,10 +1416,50 @@ export class PostgresStore implements MizukiStore {
     return result.rows[0]?.payload;
   }
 
+  async paymentAttemptCapacity(excludedAttemptId?: string): Promise<PaymentAttemptCapacity> {
+    return this.transaction(async (client) => {
+      const result = await client.query<{
+        attempt: CustomerPaymentAttempt;
+        quote: Quote;
+      }>(
+        `SELECT attempts.payload AS attempt, quotes.payload AS quote
+           FROM mizuki_payment_attempts attempts
+           JOIN mizuki_quotes quotes ON quotes.id = attempts.quote_id
+          WHERE attempts.stage NOT IN ('job_reserved', 'expired_unpaid')
+            AND ($1::uuid IS NULL OR attempts.id <> $1::uuid)
+          ORDER BY attempts.created_at
+          FOR UPDATE OF attempts`,
+        [excludedAttemptId ?? null],
+      );
+      let refundRaw = 0n;
+      let refundTransactions = 0;
+      let bountyUsdCents = 0;
+      const now = Date.now();
+
+      for (const row of result.rows) {
+        if (row.attempt.retrySafe && Date.parse(row.attempt.expiresAt) <= now) {
+          await savePaymentAttempt(
+            client,
+            transitionPaymentAttempt(row.attempt, 'expired_unpaid', 'server'),
+          );
+          continue;
+        }
+        if (!row.attempt.promptAuthorizedAt && !row.attempt.serverAcceptedAt) continue;
+        const raw = BigInt(row.quote.priceAtomic);
+        refundRaw += raw;
+        refundTransactions += 1;
+        bountyUsdCents += calculateRescueBountyPriceCents(Number(raw / 10_000n));
+      }
+
+      return { refundRaw: refundRaw.toString(), refundTransactions, bountyUsdCents };
+    });
+  }
+
   async updatePaymentAttemptStage(
     id: string,
     githubId: string,
     stage: PaymentAttemptStage,
+    source: 'client' | 'server' = 'client',
   ): Promise<CustomerPaymentAttempt> {
     return this.transaction(async (client) => {
       const result = await client.query<{ payload: CustomerPaymentAttempt }>(
@@ -1313,7 +1468,25 @@ export class PostgresStore implements MizukiStore {
         [id, githubId],
       );
       if (!result.rows[0]) throw new Error('payment attempt not found');
-      const attempt = transitionPaymentAttempt(result.rows[0].payload, stage);
+      const attempt = transitionPaymentAttempt(result.rows[0].payload, stage, source);
+      await savePaymentAttempt(client, attempt);
+      return attempt;
+    });
+  }
+
+  async authorizePaymentPrompt(
+    id: string,
+    githubId: string,
+    promptNonce: string,
+  ): Promise<CustomerPaymentAttempt> {
+    return this.transaction(async (client) => {
+      const result = await client.query<{ payload: CustomerPaymentAttempt }>(
+        `SELECT payload FROM mizuki_payment_attempts
+         WHERE id = $1 AND github_id = $2 FOR UPDATE`,
+        [id, githubId],
+      );
+      if (!result.rows[0]) throw new Error('payment attempt not found');
+      const attempt = authorizePaymentPrompt(result.rows[0].payload, promptNonce);
       await savePaymentAttempt(client, attempt);
       return attempt;
     });
@@ -1324,8 +1497,10 @@ export class PostgresStore implements MizukiStore {
     githubId: string,
     jobId: string,
     settlementTransaction?: string,
+    paymentWindowEndUnixSeconds?: number,
   ): Promise<CustomerPaymentAttempt> {
     return this.transaction(async (client) => {
+      const job = await lockedJob(client, jobId);
       const result = await client.query<{ payload: CustomerPaymentAttempt }>(
         `SELECT payload FROM mizuki_payment_attempts
          WHERE id = $1 AND github_id = $2 FOR UPDATE`,
@@ -1333,8 +1508,29 @@ export class PostgresStore implements MizukiStore {
       );
       if (!result.rows[0]) throw new Error('payment attempt not found');
       const current = result.rows[0].payload;
+      if (current.stage === 'expired_unpaid') {
+        throw new StateConflictError('payment attempt has expired unpaid');
+      }
+      if (job.state === 'payment_expired') {
+        throw new StateConflictError('payment reservation is not recoverable');
+      }
       if (current.jobId && current.jobId !== jobId) {
         throw new StateConflictError('payment attempt is already bound to another job');
+      }
+      const paymentWindowEnd = job.paymentWindowEndUnixSeconds ?? paymentWindowEndUnixSeconds;
+      if (
+        job.paymentWindowEndUnixSeconds !== undefined &&
+        paymentWindowEndUnixSeconds !== undefined &&
+        job.paymentWindowEndUnixSeconds !== paymentWindowEndUnixSeconds
+      ) {
+        throw new StateConflictError('payment authorization deadline does not match the job');
+      }
+      if (
+        current.paymentWindowEndUnixSeconds !== undefined &&
+        paymentWindowEnd !== undefined &&
+        current.paymentWindowEndUnixSeconds !== paymentWindowEnd
+      ) {
+        throw new StateConflictError('payment authorization deadline is already bound');
       }
       const attempt: CustomerPaymentAttempt = {
         ...current,
@@ -1342,10 +1538,35 @@ export class PostgresStore implements MizukiStore {
         retrySafe: false,
         jobId,
         ...(settlementTransaction ? { settlementTransaction } : {}),
+        ...(paymentWindowEnd !== undefined
+          ? { paymentWindowEndUnixSeconds: validPaymentWindowEnd(paymentWindowEnd) }
+          : {}),
         updatedAt: new Date().toISOString(),
       };
       await savePaymentAttempt(client, attempt);
       return attempt;
+    });
+  }
+
+  async expirePaymentReservation(jobId: string, attemptId: string): Promise<Job> {
+    return this.transaction(async (client) => {
+      const currentJob = await lockedJob(client, jobId);
+      if (currentJob.state === 'payment_expired') return currentJob;
+      const result = await client.query<{ payload: CustomerPaymentAttempt }>(
+        'SELECT payload FROM mizuki_payment_attempts WHERE id = $1 FOR UPDATE',
+        [attemptId],
+      );
+      const currentAttempt = result.rows[0]?.payload;
+      assertExpirablePaymentReservation(currentJob, currentAttempt, attemptId);
+      await savePaymentAttempt(
+        client,
+        expiredReservedPaymentAttempt(currentAttempt!, currentJob.paymentWindowEndUnixSeconds),
+      );
+      const job = updateJob(currentJob, 'payment_expired', {
+        error: 'Payment authorization expired without settlement',
+      });
+      await writeJob(client, job);
+      return job;
     });
   }
 
@@ -1359,7 +1580,7 @@ export class PostgresStore implements MizukiStore {
     }>(
       `WITH account_jobs AS MATERIALIZED (
          SELECT jobs.id, jobs.created_at, jobs.payload,
-           jobs.state <> 'refunded' AND (
+           jobs.state NOT IN ('refunded', 'payment_expired') AND (
              jobs.state <> 'delivered' OR (
                jobs.payload ? 'refundLiabilityId' AND
                NOT (jobs.payload ? 'refundLiabilityDischargedAt')
@@ -2297,17 +2518,126 @@ const PAYMENT_ATTEMPT_TRANSITIONS: Record<PaymentAttemptStage, readonly PaymentA
 function transitionPaymentAttempt(
   current: CustomerPaymentAttempt,
   stage: PaymentAttemptStage,
+  source: 'client' | 'server' = 'client',
 ): CustomerPaymentAttempt {
-  if (current.stage === stage) return current;
+  const now = new Date().toISOString();
+  const serverEvidence = paymentAttemptServerEvidence(stage, source, now);
+  if (current.stage === stage) {
+    if (
+      source !== 'server' ||
+      (current.retrySafe === false &&
+        (!serverEvidence.promptAuthorizedAt || current.promptAuthorizedAt) &&
+        (!serverEvidence.serverAcceptedAt || current.serverAcceptedAt))
+    ) {
+      return current;
+    }
+    return {
+      ...current,
+      retrySafe: false,
+      ...serverEvidence,
+      updatedAt: now,
+    };
+  }
   if (!PAYMENT_ATTEMPT_TRANSITIONS[current.stage].includes(stage)) {
     throw new StateConflictError(`payment attempt is ${current.stage}; cannot move to ${stage}`);
   }
   return {
     ...current,
     stage,
-    retrySafe: stage === 'created' || stage === 'wallet_opened' || stage === 'expired_unpaid',
+    retrySafe:
+      stage === 'expired_unpaid'
+        ? true
+        : source === 'server' && paymentProtectedStage(stage)
+          ? false
+          : current.retrySafe,
+    ...serverEvidence,
+    updatedAt: now,
+  };
+}
+
+function paymentProtectedStage(stage: PaymentAttemptStage): boolean {
+  return stage === 'wallet_opened' || stage === 'submitting' || stage === 'indeterminate';
+}
+
+function paymentAttemptServerEvidence(
+  stage: PaymentAttemptStage,
+  source: 'client' | 'server',
+  at: string,
+): Pick<CustomerPaymentAttempt, 'promptAuthorizedAt' | 'serverAcceptedAt'> {
+  if (source !== 'server') return {};
+  if (stage === 'wallet_opened') return { promptAuthorizedAt: at };
+  if (stage === 'submitting' || stage === 'indeterminate') return { serverAcceptedAt: at };
+  return {};
+}
+
+function authorizePaymentPrompt(
+  current: CustomerPaymentAttempt,
+  promptNonce: string,
+): CustomerPaymentAttempt {
+  if (!UUID_PATTERN.test(promptNonce)) {
+    throw new StateConflictError('payment prompt nonce is invalid');
+  }
+  if (current.promptNonce) {
+    if (current.promptNonce !== promptNonce) {
+      throw new StateConflictError('wallet prompt is already authorized in another client');
+    }
+    return current;
+  }
+  if (!['created', 'wallet_opened'].includes(current.stage)) {
+    throw new StateConflictError(
+      `payment attempt is ${current.stage}; wallet prompt cannot be authorized`,
+    );
+  }
+  return {
+    ...transitionPaymentAttempt(current, 'wallet_opened', 'server'),
+    promptNonce,
+  };
+}
+
+function isPaymentAttemptTerminal(attempt: CustomerPaymentAttempt): boolean {
+  return attempt.stage === 'job_reserved' || attempt.stage === 'expired_unpaid';
+}
+
+function assertExpirablePaymentReservation(
+  job: Job,
+  attempt: CustomerPaymentAttempt | undefined,
+  attemptId: string,
+): void {
+  if (
+    job.state !== 'settlement_pending' ||
+    job.payment.transaction !== 'pending' ||
+    job.refundLiabilityId ||
+    job.paymentAttemptId !== attemptId ||
+    !attempt ||
+    (attempt.jobId !== undefined && attempt.jobId !== job.id) ||
+    !['submitting', 'job_reserved'].includes(attempt.stage)
+  ) {
+    throw new StateConflictError('payment reservation cannot expire after economic activity');
+  }
+}
+
+function expiredReservedPaymentAttempt(
+  attempt: CustomerPaymentAttempt,
+  paymentWindowEndUnixSeconds?: number,
+): CustomerPaymentAttempt {
+  return {
+    ...attempt,
+    stage: 'expired_unpaid',
+    retrySafe: true,
+    jobId: undefined,
+    settlementTransaction: undefined,
+    ...(paymentWindowEndUnixSeconds !== undefined
+      ? { paymentWindowEndUnixSeconds: validPaymentWindowEnd(paymentWindowEndUnixSeconds) }
+      : {}),
     updatedAt: new Date().toISOString(),
   };
+}
+
+function validPaymentWindowEnd(value: number): number {
+  if (!Number.isSafeInteger(value) || value <= 0 || value > 253_402_300_799) {
+    throw new StateConflictError('payment authorization deadline is invalid');
+  }
+  return value;
 }
 
 async function savePaymentAttempt(
@@ -2499,7 +2829,7 @@ function accountJobLimit(limit: number): number {
 }
 
 function accountJobIsObligation(job: Job): boolean {
-  if (job.state === 'refunded') return false;
+  if (job.state === 'refunded' || job.state === 'payment_expired') return false;
   if (job.state !== 'delivered') return true;
   return Boolean(job.refundLiabilityId && !job.refundLiabilityDischargedAt);
 }

@@ -7,13 +7,16 @@ import { useRouter } from 'next/navigation';
 import { formatTime, formatUsdcAtomic, stateLabel, truncateAddress } from '@/lib/format';
 import { githubIssuePattern } from '@/lib/github-url';
 import {
+  authorizePaymentPrompt,
   checkPaymentAttempt,
   clearWorkbenchPaymentRecovery,
   createPaymentAttempt,
+  createPaymentPromptNonce,
   findActivePaymentAttempt,
   issueMatchesRepository,
   loadWorkbenchPaymentRecovery,
   paymentAccountId,
+  paymentPromptRetryAllowed,
   paymentRetryAllowed,
   PaymentAttemptBusyError,
   PaymentStatusError,
@@ -44,7 +47,12 @@ import {
   WorkbenchRequestError,
 } from '@/lib/workbench-client';
 import { paymentWalletNetwork } from '@/lib/wallet-standard';
-import { assertPaymentBalance, createPaymentFetch, paymentPreparationError } from '@/lib/x402';
+import {
+  assertPaymentBalance,
+  canRetryWalletPrompt,
+  createPaymentFetch,
+  paymentPreparationError,
+} from '@/lib/x402';
 import {
   ServiceContractNote,
   WorkbenchEmpty,
@@ -309,6 +317,7 @@ function IssueAndPayment({
           accountId,
           attemptId: result.attempt.id,
           idempotencyKey: result.attempt.idempotencyKey,
+          promptNonce: result.attempt.promptAuthorization?.nonce ?? createPaymentPromptNonce(),
           repository: activeRepository,
           issueUrl: result.quote.issueUrl,
           quote: result.quote,
@@ -450,6 +459,11 @@ function IssueAndPayment({
     setState('paying');
     try {
       await assertPaymentBalance(connected.account.address, quote.priceAtomic);
+      const cachedRecovery =
+        paymentRecovery.current?.accountId === accountId &&
+        paymentRecovery.current.quote.id === quote.id
+          ? paymentRecovery.current
+          : loadWorkbenchPaymentRecovery(accountId);
       const attempt = await createPaymentAttempt({
         quoteId: quote.id,
         wallet: connected.account.address,
@@ -462,7 +476,12 @@ function IssueAndPayment({
         router.push(`/app/jobs/${encodeURIComponent(attempt.job.id)}`);
         return;
       }
-      if (!attempt.retrySafe) {
+      const promptNonce =
+        attempt.promptAuthorization?.nonce ??
+        (cachedRecovery?.attemptId === attempt.id ? cachedRecovery.promptNonce : undefined) ??
+        createPaymentPromptNonce();
+      const reusablePrompt = paymentPromptRetryAllowed(cachedRecovery, attempt);
+      if (!attempt.retrySafe && !reusablePrompt) {
         recovery = {
           phase: 'uncertain',
           walletAuthorized: true,
@@ -470,6 +489,7 @@ function IssueAndPayment({
           accountId,
           attemptId: attempt.id,
           idempotencyKey: attempt.idempotencyKey,
+          promptNonce,
           repository: `${quote.owner}/${quote.repo}`,
           issueUrl,
           quote,
@@ -483,6 +503,7 @@ function IssueAndPayment({
         accountId,
         attemptId: attempt.id,
         idempotencyKey: attempt.idempotencyKey,
+        promptNonce,
         repository: `${quote.owner}/${quote.repo}`,
         issueUrl,
         quote,
@@ -497,6 +518,10 @@ function IssueAndPayment({
         feature: walletFeature,
         quotePayment: quote.payment,
         quoteAmount: quote.priceAtomic,
+        promptNonce,
+        async authorizePrompt() {
+          await authorizePaymentPrompt(attempt.id, promptNonce, quote.id);
+        },
         onStage(stage) {
           if (stage === 'wallet_signed') {
             recovery = {
@@ -538,6 +563,25 @@ function IssueAndPayment({
       router.push(`/app/jobs/${encodeURIComponent(job.id)}`);
     } catch (cause) {
       if (recovery) {
+        if (recovery.walletAuthorized !== true && !canRetryWalletPrompt(cause)) {
+          clearWorkbenchPaymentRecovery(accountId, quote.id);
+          paymentRecovery.current = null;
+          setQuote(null);
+          setState('idle');
+          setError(paymentAttemptError(cause, formatUsdcAtomic(quote.priceAtomic), attemptId));
+          return;
+        }
+        if (recovery.walletAuthorized !== true) {
+          const prepared: WorkbenchPaymentRecovery = {
+            ...recovery,
+            phase: 'prepared',
+          };
+          paymentRecovery.current = prepared;
+          saveWorkbenchPaymentRecovery(prepared);
+          setState('quoted');
+          setError(paymentAttemptError(cause, formatUsdcAtomic(quote.priceAtomic), attemptId));
+          return;
+        }
         const uncertainRecovery: WorkbenchPaymentRecovery = {
           ...recovery,
           phase: 'uncertain',

@@ -9,6 +9,7 @@ export async function treasurySnapshot(store: MizukiStore, readiness?: ServiceRe
   const localOutstandingLiabilityAtomic = jobs
     .filter((job) => {
       if (job.state === 'refunded') return false;
+      if (job.state === 'payment_expired') return false;
       if (job.refundLiabilityId) return !job.refundLiabilityDischargedAt;
       return !['delivered', 'settlement_pending'].includes(job.state);
     })

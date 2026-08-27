@@ -283,15 +283,19 @@ const paymentIntentSchema = z
     bountyAmountUsdCents: z.number().int().positive(),
     bountyReserveLamports: z.string().regex(/^\d+$/),
     memo: z.string().min(1).max(128),
-    paymentWindowStartUnixSeconds: z.number().int().safe(),
-    paymentWindowEndUnixSeconds: z.number().int().safe(),
+    paymentWindowStartUnixSeconds: z.number().int().positive().max(253_402_300_799),
+    paymentWindowEndUnixSeconds: z.number().int().positive().max(253_402_300_799),
     settlementSignature: z.string().nullable(),
     liabilityId: z.string().uuid().nullable(),
     createdAt: z.string().datetime({ offset: true }),
     activatedAt: z.string().datetime({ offset: true }).nullable(),
     expiredAt: z.string().datetime({ offset: true }).nullable(),
   })
-  .strict();
+  .strict()
+  .refine((intent) => intent.paymentWindowEndUnixSeconds > intent.paymentWindowStartUnixSeconds, {
+    message: 'payment intent window is invalid',
+    path: ['paymentWindowEndUnixSeconds'],
+  });
 
 export type PaymentIntent = z.infer<typeof paymentIntentSchema>;
 
@@ -372,6 +376,7 @@ export interface PaymentPolicy extends RefundCapacityPolicy {
     admission: RepositoryAdmissionReceipt,
     bountyAmountUsdCents: number,
   ): Promise<PaymentIntent>;
+  getPaymentIntent(paymentIntentId: string): Promise<PaymentIntent>;
   activatePaymentIntent(
     paymentIntentId: string,
     settlementSignature: string,
@@ -401,6 +406,7 @@ export interface GithubIdentityRegistrar {
 export interface FinancialPolicy extends PaymentPolicy {
   reserveEscrow(input: {
     bountyId: string;
+    sourceJobId: string;
     repository: string;
     issueNumber: number;
     issueTitle: string;
@@ -550,6 +556,12 @@ export class PolicySignerClient implements FinancialPolicy {
           ).toString('base64'),
         }),
       }),
+    );
+  }
+
+  async getPaymentIntent(paymentIntentId: string): Promise<PaymentIntent> {
+    return paymentIntentSchema.parse(
+      await this.callJson(`/v1/payment-intents/${paymentIntentId}`, { method: 'GET' }),
     );
   }
 
@@ -721,6 +733,7 @@ export class PolicySignerClient implements FinancialPolicy {
 
   async reserveEscrow(input: {
     bountyId: string;
+    sourceJobId: string;
     repository: string;
     issueNumber: number;
     issueTitle: string;
@@ -1083,10 +1096,22 @@ export function assertRefundCapacity(input: {
   escrowAuthority?: string;
   unfinishedLiabilityRaw: bigint;
   proposedPaymentRaw: bigint;
+  requiredRefundTransactions?: number;
 }): void {
   const { readiness } = input;
   if (!readiness.healthy || readiness.availableRefundRaw === null) {
     throw new RefundCapacityError('refund signer is not ready');
+  }
+  const requiredRefundTransactions = input.requiredRefundTransactions ?? 1;
+  if (!Number.isSafeInteger(requiredRefundTransactions) || requiredRefundTransactions < 0) {
+    throw new Error('required refund transactions must be a non-negative integer');
+  }
+  if (
+    readiness.availableRefundTransactions === null ||
+    readiness.availableRefundTransactions === undefined ||
+    readiness.availableRefundTransactions < requiredRefundTransactions
+  ) {
+    throw new RefundCapacityError('refund signer cannot fund another protected refund');
   }
   if (readiness.refundTreasury !== input.treasury) {
     throw new RefundCapacityError('refund signer treasury does not match the payment recipient');

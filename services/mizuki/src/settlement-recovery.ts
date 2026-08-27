@@ -15,6 +15,7 @@ import { paymentMemo, Payments, USDC_DECIMALS, USDC_MAINNET } from './x402.js';
 
 export interface SettlementRecoveryDependencies {
   paymentMode: Config['paymentMode'];
+  paymentExpiryWritesEnabled?: boolean;
   payTo?: Config['payTo'];
   store: MizukiStore;
   payments: Pick<Payments, 'retrySettlement'>;
@@ -33,22 +34,32 @@ export async function recoverSettlement(
   let payment = job.payment;
   let liabilityId = job.refundLiabilityId;
   if (deps.paymentMode === 'live' && job.paymentIntentId && payment.transaction === 'pending') {
-    const reconciled = await deps.policy.reconcilePaymentIntent(job.paymentIntentId);
-    if (isPaymentIntentActivation(reconciled)) {
-      payment = paymentFromIntentActivation(job, reconciled, deps.payTo);
-      liabilityId = reconciled.refundLiability.id;
-      await deps.store.patchJob(job.id, {
-        payment,
-        refundLiabilityId: liabilityId,
-      });
-      return deps.store.transitionJob(job.id, 'settlement_pending', 'paid', {
-        payment,
-        paymentIntentId: job.paymentIntentId,
-        refundLiabilityId: liabilityId,
-      });
-    }
-    if (reconciled.status === 'expired_unpaid') {
-      throw new Error('payment authorization expired without settlement');
+    try {
+      const reconciled = await deps.policy.reconcilePaymentIntent(job.paymentIntentId);
+      if (isPaymentIntentActivation(reconciled)) {
+        payment = paymentFromIntentActivation(job, reconciled, deps.payTo);
+        liabilityId = reconciled.refundLiability.id;
+        await deps.store.patchJob(job.id, {
+          payment,
+          refundLiabilityId: liabilityId,
+        });
+        return deps.store.transitionJob(job.id, 'settlement_pending', 'paid', {
+          payment,
+          paymentIntentId: job.paymentIntentId,
+          refundLiabilityId: liabilityId,
+        });
+      }
+      if (reconciled.status === 'expired_unpaid') {
+        if (deps.paymentExpiryWritesEnabled !== true) {
+          throw new Error('payment expiry writes are disabled during compatibility rollout');
+        }
+        if (!job.paymentAttemptId) {
+          throw new Error('expired payment intent has no customer payment attempt');
+        }
+        return deps.store.expirePaymentReservation(job.id, job.paymentAttemptId);
+      }
+    } catch (error) {
+      if (!paymentIntentPending(error)) throw error;
     }
   }
   if (deps.paymentMode === 'live' && payment.transaction !== 'pending') {
@@ -90,8 +101,16 @@ export async function recoverSettlement(
 }
 
 async function ensurePaymentIntent(job: Job, deps: SettlementRecoveryDependencies): Promise<Job> {
-  if (deps.paymentMode !== 'live' || !job.paymentAttemptId || job.paymentIntentId) {
+  if (deps.paymentMode !== 'live' || !job.paymentAttemptId) {
     return job;
+  }
+  if (job.paymentIntentId) {
+    if (job.paymentWindowEndUnixSeconds !== undefined) return job;
+    const intent = await deps.policy.getPaymentIntent(job.paymentIntentId);
+    assertPaymentIntentMatchesJob(intent, job);
+    return deps.store.patchJob(job.id, {
+      paymentWindowEndUnixSeconds: intent.paymentWindowEndUnixSeconds,
+    });
   }
   if (!job.repositoryAdmission) {
     throw new Error('durable repository admission is unavailable');
@@ -103,18 +122,31 @@ async function ensurePaymentIntent(job: Job, deps: SettlementRecoveryDependencie
     job.repositoryAdmission,
     calculateRescueBountyPriceCents(Number(BigInt(job.quote.priceAtomic) / 10_000n)),
   );
+  assertPaymentIntentMatchesJob(intent, job);
   if (
-    intent.jobId !== job.id ||
-    intent.quoteId !== job.quote.id ||
     intent.repositoryAdmissionId !== job.repositoryAdmission.id ||
     intent.rawAmount !== job.quote.priceAtomic ||
     intent.memo !== paymentMemo(job.quote.id) ||
     intent.status !== 'reserved'
-  ) {
+  )
+    throw new Error('payment intent does not match the reserved payment');
+
+  return deps.store.patchJob(job.id, {
+    paymentIntentId: intent.id,
+    paymentWindowEndUnixSeconds: intent.paymentWindowEndUnixSeconds,
+  });
+}
+
+function assertPaymentIntentMatchesJob(
+  intent: Awaited<ReturnType<PaymentPolicy['getPaymentIntent']>>,
+  job: Job,
+): void {
+  if (intent.id !== job.paymentIntentId && job.paymentIntentId !== undefined) {
     throw new Error('payment intent does not match the reserved payment');
   }
-
-  return deps.store.patchJob(job.id, { paymentIntentId: intent.id });
+  if (intent.jobId !== job.id || intent.quoteId !== job.quote.id) {
+    throw new Error('payment intent does not match the reserved payment');
+  }
 }
 
 async function recoverLivePayment(
@@ -177,6 +209,10 @@ function settlementScanMiss(error: unknown): boolean {
     error instanceof PolicyRequestError &&
     ['settlement_not_found', 'settlement_scan_exhausted'].includes(error.code)
   );
+}
+
+function paymentIntentPending(error: unknown): boolean {
+  return error instanceof PolicyRequestError && error.code === 'payment_intent_pending';
 }
 
 function settlementSignatureRejected(error: unknown): boolean {

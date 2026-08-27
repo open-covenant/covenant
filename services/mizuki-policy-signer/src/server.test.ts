@@ -1,6 +1,13 @@
 import { createHash, createPrivateKey, sign } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
-import { Keypair, SystemProgram, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
+import {
+  Keypair,
+  PublicKey,
+  SystemProgram,
+  TransactionInstruction,
+  TransactionMessage,
+  VersionedTransaction,
+} from '@solana/web3.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { authorizedSettlementTransaction, FixedUsdPriceOracle, MockChainGateway } from './chain.js';
 import {
@@ -8,6 +15,7 @@ import {
   createEscrowRequestSchema,
   escrowAcceptanceHash,
   escrowReleaseAuthorizationMessage,
+  paymentIntentAuthorizationMessage,
   PolicyError,
   refundAuthorizationMessage,
   refundDeliveryBindingAuthorizationMessage,
@@ -26,6 +34,8 @@ const TOKEN = 'test-token-with-at-least-thirty-two-characters';
 const TREASURY = '2'.repeat(32);
 const MINT = '3'.repeat(32);
 const SIGNATURE = '6'.repeat(64);
+const BOUNTY_SIGNATURE = '7'.repeat(64);
+const BOUNTY_SOURCE_JOB = 'job-http-bounty';
 const CLAIMANT = Keypair.generate();
 const JOB_AUTHORITY = Keypair.generate();
 const DEFAULT_ADMISSION_QUOTE = '99999999-9999-4999-8999-999999999999';
@@ -37,9 +47,11 @@ describe('signer HTTP service', () => {
   let origin: string;
   let merges: MockMergeVerifier;
   let chain: MockChainGateway;
+  let service: PolicyService;
+  let store: InMemoryOperationStore;
 
   beforeEach(async () => {
-    const store = new InMemoryOperationStore();
+    store = new InMemoryOperationStore();
     chain = new MockChainGateway();
     const metrics = new SignerMetrics();
     chain.settlements.set(SIGNATURE, {
@@ -55,7 +67,7 @@ describe('signer HTTP service', () => {
       blockTimeUnixSeconds: Math.floor(Date.now() / 1_000),
     });
     merges = new MockMergeVerifier();
-    const service = new PolicyService(
+    service = new PolicyService(
       {
         refundTreasury: TREASURY,
         escrowAuthority: '5'.repeat(32),
@@ -104,6 +116,55 @@ describe('signer HTTP service', () => {
   afterEach(async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
+
+  async function prepareHttpBounty(): Promise<void> {
+    const admission = await store.getRepositoryAdmission(repositoryAdmissionId);
+    if (!admission) throw new Error('server test admission is unavailable');
+    const intentAuthorization = {
+      jobId: BOUNTY_SOURCE_JOB,
+      repositoryAdmissionId: admission.id,
+      repositoryAdmissionEvidenceHash: admission.evidenceHash,
+      repository: admission.repository,
+      issueNumber: admission.issueNumber,
+      baseRef: admission.baseRef,
+      baseSha: admission.baseSha,
+      repositoryAuthorizedAt: admission.admittedAt.toISOString(),
+      authorizationEvidenceHash: 'e'.repeat(64),
+      bountyAmountUsdCents: 1_000,
+      authorizationExpiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+    };
+    const intent = await service.createPaymentIntent(
+      {
+        ...intentAuthorization,
+        authorizationSignature: signWithKey(
+          JOB_AUTHORITY,
+          paymentIntentAuthorizationMessage(intentAuthorization),
+        ),
+      },
+      'server-bounty-intent',
+    );
+    chain.settlements.set(BOUNTY_SIGNATURE, {
+      signature: BOUNTY_SIGNATURE,
+      payer: admission.settlementPayer!,
+      recipient: TREASURY,
+      mint: MINT,
+      rawAmount: '2000000',
+      decimals: 6,
+      finalized: true,
+      succeeded: true,
+      slot: 2,
+      blockTimeUnixSeconds: Math.floor(Date.now() / 1_000),
+    });
+    await service.activatePaymentIntent(
+      intent.id,
+      { settlementSignature: BOUNTY_SIGNATURE },
+      'server-bounty-activation',
+    );
+    await service.refund(
+      signedRefundRequest('execute', BOUNTY_SOURCE_JOB, BOUNTY_SIGNATURE),
+      'server-bounty-refund',
+    );
+  }
 
   it('requires bearer authentication', async () => {
     const response = await fetch(`${origin}/v1/operations/00000000-0000-4000-8000-000000000000`);
@@ -356,6 +417,7 @@ describe('signer HTTP service', () => {
   });
 
   it('serves reserve, challenge, and signed bind as distinct finalized operations', async () => {
+    await prepareHttpBounty();
     const reserveResponse = await fetch(`${origin}/v1/escrows`, {
       method: 'POST',
       headers: mutationHeaders('reserve-http'),
@@ -428,6 +490,7 @@ describe('signer HTTP service', () => {
   });
 
   it('accepts the largest issue body admitted by the paid-job service', async () => {
+    await prepareHttpBounty();
     const { acceptanceHash: _, ...terms } = escrowRequest('large-issue-http');
     const request = { ...terms, issueBody: 'x'.repeat(48_000) };
     const response = await fetch(`${origin}/v1/escrows`, {
@@ -657,6 +720,7 @@ function escrowRequest(
 ) {
   const request = {
     bountyId,
+    sourceJobId: BOUNTY_SOURCE_JOB,
     amountUsdCents: 1_000,
     expiresAt,
     repository: 'owner/repository',
@@ -686,6 +750,11 @@ function settlementAuthorization(quoteId: string): {
         fromPubkey: payer.publicKey,
         toPubkey: recipient.publicKey,
         lamports: 1,
+      }),
+      new TransactionInstruction({
+        programId: new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr'),
+        keys: [],
+        data: Buffer.from(`mizuki:payment:v1:${quoteId}`),
       }),
     ],
   }).compileToV0Message();

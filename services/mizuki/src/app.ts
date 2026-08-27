@@ -482,19 +482,34 @@ export function createApp(deps: AppDependencies) {
         ) {
           throw new InvalidRequestBodyError('quote_id, wallet, and app_build are required');
         }
-        const quote = await deps.store.quoteForAccount(body.quote_id, session.githubId);
+        const { app_build: appBuild, quote_id: quoteId, wallet } = body;
+        const quote = await deps.store.quoteForAccount(quoteId, session.githubId);
         if (!quote) return json(res, 404, { error: 'quote not found' });
         if (Date.parse(quote.expiresAt) <= Date.now()) {
           return json(res, 409, { error: 'quote expired' });
         }
-        const attempt = await deps.store.createPaymentAttempt({
-          githubId: session.githubId,
-          quoteId: quote.id,
-          wallet: body.wallet,
-          appBuild: body.app_build,
+        const attempt = await deps.paymentAdmission.run(async () => {
+          await assertOperatorControlOpen(deps.store, 'intake', deps.readiness);
+          if (deps.config.paymentMode === 'live') {
+            const active = await deps.store.activePaymentAttempt(session.githubId);
+            await ensurePaymentCapacity(
+              deps,
+              BigInt(quote.priceAtomic),
+              calculateRescueBountyPriceCents(Number(BigInt(quote.priceAtomic) / 10_000n)),
+              active && (active.quoteId === quote.id || active.stage === 'created')
+                ? active.id
+                : undefined,
+            );
+          }
+          return deps.store.createPaymentAttempt({
+            githubId: session.githubId,
+            quoteId: quote.id,
+            wallet,
+            appBuild,
+          });
         });
         const job = attempt.jobId ? await deps.store.job(attempt.jobId) : undefined;
-        return json(res, 201, paymentAttemptResponse(attempt, job, requestId));
+        return json(res, 201, await paymentAttemptResponse(deps, attempt, job, requestId));
       }
       if (
         parts[0] === 'v1' &&
@@ -519,9 +534,10 @@ export function createApp(deps: AppDependencies) {
             return json(res, 200, { attempt: null, paymentStatus: 'none', requestId });
           }
         }
-        job ??= attempt.jobId
+        const candidateJob = attempt.jobId
           ? await deps.store.job(attempt.jobId)
           : await deps.store.jobByQuote(attempt.quoteId);
+        job ??= candidateJob && paymentRecoveryActive(candidateJob) ? candidateJob : undefined;
         if (job && attempt.stage !== 'job_reserved') {
           attempt = await deps.store.bindPaymentAttemptJob(
             attempt.id,
@@ -545,7 +561,7 @@ export function createApp(deps: AppDependencies) {
             ? { ...quote, payment: await deps.payments.challenge(quote) }
             : quote;
         return json(res, 200, {
-          ...paymentAttemptResponse(attempt, job, requestId),
+          ...(await paymentAttemptResponse(deps, attempt, job, requestId)),
           ...(recoverableQuote ? { quote: recoverableQuote } : {}),
         });
       }
@@ -565,9 +581,10 @@ export function createApp(deps: AppDependencies) {
         }
         let attempt = await deps.store.paymentAttempt(parts[3], session.githubId);
         if (!attempt) return json(res, 404, { error: 'payment attempt not found' });
-        const job = attempt.jobId
+        const candidateJob = attempt.jobId
           ? await deps.store.job(attempt.jobId)
           : await deps.store.jobByQuote(attempt.quoteId);
+        const job = candidateJob && paymentRecoveryActive(candidateJob) ? candidateJob : undefined;
         if (job && attempt.stage !== 'job_reserved') {
           attempt = await deps.store.bindPaymentAttemptJob(
             attempt.id,
@@ -585,7 +602,66 @@ export function createApp(deps: AppDependencies) {
             );
           }
         }
-        return json(res, 200, paymentAttemptResponse(attempt, job, requestId));
+        return json(res, 200, await paymentAttemptResponse(deps, attempt, job, requestId));
+      }
+      if (
+        parts[0] === 'v1' &&
+        parts[1] === 'account' &&
+        parts[2] === 'payment-attempts' &&
+        parts[3] &&
+        parts[4] === 'prompt' &&
+        parts.length === 5 &&
+        req.method === 'POST'
+      ) {
+        res.setHeader('cache-control', 'private, no-store');
+        const session = await requireAccountPrincipal(req, deps.auth, admission, 'jobs:write', {
+          csrf: true,
+          configuredOrigin: deps.config.webOrigin,
+        });
+        admission.consumeAccount('payment_attempt', req, session.githubId);
+        if (!UUID_PATTERN.test(parts[3])) {
+          return json(res, 404, { error: 'payment attempt not found' });
+        }
+        const body = await bodyJson<{ prompt_nonce?: unknown }>(req);
+        if (typeof body.prompt_nonce !== 'string' || !UUID_PATTERN.test(body.prompt_nonce)) {
+          throw new InvalidRequestBodyError('prompt_nonce is required');
+        }
+        const promptNonce = body.prompt_nonce;
+        const attempt = await deps.paymentAdmission.run(async () => {
+          await assertOperatorControlOpen(deps.store, 'intake', deps.readiness);
+          const current = await deps.store.paymentAttempt(parts[3]!, session.githubId);
+          if (!current) throw new StateConflictError('payment attempt not found');
+          if (Date.parse(current.expiresAt) <= Date.now()) {
+            if (current.retrySafe) {
+              await deps.store.updatePaymentAttemptStage(
+                current.id,
+                current.githubId,
+                'expired_unpaid',
+                'server',
+              );
+              throw new StateConflictError('payment attempt expired unpaid');
+            }
+            throw new StateConflictError('payment attempt requires settlement reconciliation');
+          }
+          if (deps.config.paymentMode === 'live' && !current.promptAuthorizedAt) {
+            const quote = await deps.store.quoteForAccount(current.quoteId, session.githubId);
+            if (!quote) throw new StateConflictError('payment quote is unavailable');
+            await ensurePaymentCapacity(
+              deps,
+              BigInt(quote.priceAtomic),
+              calculateRescueBountyPriceCents(Number(BigInt(quote.priceAtomic) / 10_000n)),
+              current.id,
+            );
+          }
+          return deps.store.authorizePaymentPrompt(current.id, session.githubId, promptNonce);
+        });
+        return json(res, 200, {
+          ...(await paymentAttemptResponse(deps, attempt, undefined, requestId)),
+          promptAuthorization: {
+            nonce: attempt.promptNonce,
+            authorizedAt: attempt.promptAuthorizedAt,
+          },
+        });
       }
       if (
         parts[0] === 'v1' &&
@@ -619,7 +695,7 @@ export function createApp(deps: AppDependencies) {
           session.githubId,
           body.stage as (typeof clientStages)[number],
         );
-        return json(res, 200, paymentAttemptResponse(attempt, undefined, requestId));
+        return json(res, 200, await paymentAttemptResponse(deps, attempt, undefined, requestId));
       }
       if (req.method === 'GET' && url.pathname === '/v1/account/billing') {
         res.setHeader('cache-control', 'private, no-store');
@@ -1091,6 +1167,8 @@ export function createApp(deps: AppDependencies) {
         const body = await bodyJson<{ quote_id?: unknown; payment_attempt_id?: unknown }>(req);
         if (typeof body.quote_id !== 'string')
           return json(res, 400, { error: 'quote_id is required' });
+        const paymentSignature = header(req, 'payment-signature');
+        const promptNonce = header(req, 'x-mizuki-prompt-nonce');
         let paymentAttempt: CustomerPaymentAttempt | undefined;
         if (body.payment_attempt_id !== undefined) {
           if (
@@ -1141,32 +1219,6 @@ export function createApp(deps: AppDependencies) {
           return json(res, 200, publicJob(reserved));
         }
         admission.consume('job', req);
-        if (Date.parse(quote.expiresAt) <= Date.now())
-          return json(res, 409, { error: 'quote expired' });
-        await deps.github.assertIssueAuthorization(
-          quote.owner,
-          quote.repo,
-          quote.issueNumber,
-          quote.installationId,
-          quote.authorizationReceipt?.evidenceHash,
-          { title: quote.issueTitle, body: quote.issueBody },
-        );
-        const head = await deps.github.currentHead(
-          quote.owner,
-          quote.repo,
-          quote.defaultBranch,
-          quote.installationId,
-        );
-        if (head !== quote.baseSha)
-          return json(res, 409, { error: 'repository changed; request a new quote' });
-        const paymentSignature = header(req, 'payment-signature');
-        if (paymentAttempt && paymentSignature) {
-          paymentAttempt = await deps.store.updatePaymentAttemptStage(
-            paymentAttempt.id,
-            paymentAttempt.githubId,
-            'submitting',
-          );
-        }
         let pendingJobId: string | undefined;
         let paymentIntentId: string | undefined;
         let refundLiabilityId: string | undefined;
@@ -1175,6 +1227,14 @@ export function createApp(deps: AppDependencies) {
         try {
           const settle = () =>
             deps.payments.settle(quote, paymentSignature, async (authorized) => {
+              if (paymentAttempt) {
+                paymentAttempt = await deps.store.updatePaymentAttemptStage(
+                  paymentAttempt.id,
+                  paymentAttempt.githubId,
+                  'submitting',
+                  'server',
+                );
+              }
               if (paymentAttempt && authorized.payer !== paymentAttempt.wallet) {
                 throw new StateConflictError(
                   'payment wallet does not match the authorized attempt',
@@ -1196,6 +1256,7 @@ export function createApp(deps: AppDependencies) {
                 repositoryAdmission,
                 paymentAttempt?.id,
               );
+              pendingJobId = reservation.job.id;
               repositoryAdmission = reservation.job.repositoryAdmission;
               if (deps.config.paymentMode === 'live' && !repositoryAdmission) {
                 throw new Error('durable repository admission was not persisted');
@@ -1206,7 +1267,6 @@ export function createApp(deps: AppDependencies) {
                 }
                 throw new ConcurrentPaymentReservation(reservation.job);
               }
-              pendingJobId = reservation.job.id;
               if (deps.config.paymentMode === 'live') {
                 const bountyAmountUsdCents = calculateRescueBountyPriceCents(
                   Number(BigInt(quote.priceAtomic) / 10_000n),
@@ -1228,15 +1288,74 @@ export function createApp(deps: AppDependencies) {
                   throw new Error('payment intent does not match the quoted payment');
                 }
                 paymentIntentId = intent.id;
-                await deps.store.patchJob(reservation.job.id, { paymentIntentId: intent.id });
+                await deps.store.patchJob(reservation.job.id, {
+                  paymentIntentId: intent.id,
+                  paymentWindowEndUnixSeconds: intent.paymentWindowEndUnixSeconds,
+                });
+                if (paymentAttempt) {
+                  paymentAttempt = await deps.store.bindPaymentAttemptJob(
+                    paymentAttempt.id,
+                    paymentAttempt.githubId,
+                    reservation.job.id,
+                    undefined,
+                    intent.paymentWindowEndUnixSeconds,
+                  );
+                }
               }
             });
           payment = await deps.paymentAdmission.run(async () => {
+            if (paymentAttempt && paymentSignature) {
+              paymentAttempt = await deps.store.paymentAttempt(
+                paymentAttempt.id,
+                paymentAttempt.githubId,
+              );
+              if (!paymentAttempt) throw new StateConflictError('payment attempt not found');
+              if (!paymentAttempt.promptAuthorizedAt || paymentAttempt.retrySafe) {
+                throw new StateConflictError(
+                  'authorize the wallet prompt before submitting payment',
+                );
+              }
+              if (!promptNonce || promptNonce !== paymentAttempt.promptNonce) {
+                throw new StateConflictError(
+                  'payment submission does not match the authorized wallet prompt',
+                );
+              }
+              const concurrent =
+                (await deps.store.jobByIdempotencyKey(key)) ??
+                (await deps.store.jobByQuote(quote.id));
+              if (concurrent) {
+                if (concurrent.quote.id !== quote.id) {
+                  throw new StateConflictError('payment reservation belongs to another quote');
+                }
+                throw new ConcurrentPaymentReservation(concurrent);
+              }
+            }
+            if (Date.parse(quote.expiresAt) <= Date.now()) {
+              throw new StateConflictError('quote expired');
+            }
+            await deps.github.assertIssueAuthorization(
+              quote.owner,
+              quote.repo,
+              quote.issueNumber,
+              quote.installationId,
+              quote.authorizationReceipt?.evidenceHash,
+              { title: quote.issueTitle, body: quote.issueBody },
+            );
+            const head = await deps.github.currentHead(
+              quote.owner,
+              quote.repo,
+              quote.defaultBranch,
+              quote.installationId,
+            );
+            if (head !== quote.baseSha) {
+              throw new StateConflictError('repository changed; request a new quote');
+            }
             if (deps.config.paymentMode === 'live' && paymentSignature) {
               await ensurePaymentCapacity(
                 deps,
                 BigInt(quote.priceAtomic),
                 calculateRescueBountyPriceCents(Number(BigInt(quote.priceAtomic) / 10_000n)),
+                paymentAttempt?.id,
               );
             }
             await assertOperatorControlOpen(deps.store, 'intake', deps.readiness);
@@ -1274,7 +1393,40 @@ export function createApp(deps: AppDependencies) {
           });
         } catch (cause) {
           if (cause instanceof ConcurrentPaymentReservation) {
+            if (paymentAttempt) {
+              await deps.store.bindPaymentAttemptJob(
+                paymentAttempt.id,
+                paymentAttempt.githubId,
+                cause.job.id,
+                cause.job.payment.transaction === 'pending'
+                  ? undefined
+                  : cause.job.payment.transaction,
+              );
+            }
             return json(res, 202, publicJob(cause.job));
+          }
+          if (paymentAttempt && !pendingJobId) {
+            const recovered =
+              (await deps.store.jobByIdempotencyKey(key)) ??
+              (await deps.store.jobByQuote(quote.id));
+            if (recovered?.quote.id === quote.id) {
+              pendingJobId = recovered.id;
+              await deps.store.bindPaymentAttemptJob(
+                paymentAttempt.id,
+                paymentAttempt.githubId,
+                recovered.id,
+                recovered.payment.transaction === 'pending'
+                  ? undefined
+                  : recovered.payment.transaction,
+              );
+            } else if (['submitting', 'indeterminate'].includes(paymentAttempt.stage)) {
+              await deps.store.updatePaymentAttemptStage(
+                paymentAttempt.id,
+                paymentAttempt.githubId,
+                'indeterminate',
+                'server',
+              );
+            }
           }
           throw cause;
         }
@@ -1495,6 +1647,7 @@ export function createApp(deps: AppDependencies) {
           // already be settled on-chain, so recovery must remain available during an incident.
           return recoverSettlement(job, {
             paymentMode: deps.config.paymentMode,
+            paymentExpiryWritesEnabled: deps.config.paymentExpiryWritesEnabled,
             payTo: deps.config.payTo,
             store: deps.store,
             payments: deps.payments,
@@ -1609,24 +1762,35 @@ export async function ensurePaymentCapacity(
   deps: Pick<AppDependencies, 'config' | 'store' | 'policy'>,
   proposedPaymentRaw: bigint,
   requiredRescueBountyUsdCents: number,
+  excludedPaymentAttemptId?: string,
 ): Promise<PolicyReadiness> {
+  const attemptCapacity = await deps.store.paymentAttemptCapacity(excludedPaymentAttemptId);
   const unfinishedJobs = (
     await Promise.all(
       (await deps.store.jobsList()).map(async (job) => {
-        if (job.state === 'delivered') return null;
+        if (job.state === 'delivered' || job.state === 'payment_expired') return null;
         if (job.state !== 'refunded') return job;
         return (await rescueCommitmentRepresentedBySigner(deps.store, job)) ? null : job;
       }),
     )
   ).filter((job): job is Job => job !== null);
-  const unfinishedLiabilityRaw = unfinishedJobs
-    .filter((job) => !job.refundLiabilityId)
-    .reduce((total, job) => total + BigInt(job.payment.amountAtomic), 0n);
-  const contingentRescueBountyUsdCents = unfinishedJobs.reduce(
-    (total, job) =>
-      total + calculateRescueBountyPriceCents(Number(BigInt(job.quote.priceAtomic) / 10_000n)),
-    0,
+  const runtimeUnprotectedJobs = unfinishedJobs.filter(
+    (job) => !job.refundLiabilityId && !job.paymentIntentId,
   );
+  const unfinishedLiabilityRaw = runtimeUnprotectedJobs.reduce(
+    (total, job) => total + BigInt(job.payment.amountAtomic),
+    0n,
+  );
+  const locallyReservedRefundRaw = unfinishedLiabilityRaw + BigInt(attemptCapacity.refundRaw);
+  const locallyReservedRefundTransactions =
+    runtimeUnprotectedJobs.length + attemptCapacity.refundTransactions;
+  const contingentRescueBountyUsdCents = unfinishedJobs
+    .filter((job) => !job.paymentIntentId)
+    .reduce(
+      (total, job) =>
+        total + calculateRescueBountyPriceCents(Number(BigInt(job.quote.priceAtomic) / 10_000n)),
+      0,
+    );
   let readiness;
   try {
     readiness = await deps.policy.readiness();
@@ -1639,10 +1803,14 @@ export async function ensurePaymentCapacity(
     mint: USDC_MAINNET,
     decimals: USDC_DECIMALS,
     escrowAuthority: deps.config.escrowRefundTo,
-    unfinishedLiabilityRaw,
+    unfinishedLiabilityRaw: locallyReservedRefundRaw,
     proposedPaymentRaw,
+    requiredRefundTransactions: locallyReservedRefundTransactions + 1,
   });
-  assertRescueCapacity(readiness, contingentRescueBountyUsdCents + requiredRescueBountyUsdCents);
+  assertRescueCapacity(
+    readiness,
+    contingentRescueBountyUsdCents + attemptCapacity.bountyUsdCents + requiredRescueBountyUsdCents,
+  );
   if (
     readiness.availableEscrowReserveLamports === null ||
     BigInt(readiness.availableEscrowReserveLamports) <
@@ -1745,11 +1913,29 @@ function json(res: ServerResponse, status: number, value: unknown): void {
   res.end(JSON.stringify(value));
 }
 
-function paymentAttemptResponse(
+async function paymentAttemptResponse(
+  deps: Pick<AppDependencies, 'policy' | 'store'>,
   attempt: CustomerPaymentAttempt,
   job: Job | undefined,
   requestId: string,
 ) {
+  job = job ? await hydratePaymentIntentWindow(deps, job) : undefined;
+  const paymentWindowEndUnixSeconds =
+    attempt.paymentWindowEndUnixSeconds ?? job?.paymentWindowEndUnixSeconds;
+  if (
+    job &&
+    paymentWindowEndUnixSeconds !== undefined &&
+    attempt.paymentWindowEndUnixSeconds !== paymentWindowEndUnixSeconds
+  ) {
+    attempt = await deps.store.bindPaymentAttemptJob(
+      attempt.id,
+      attempt.githubId,
+      job.id,
+      job.payment.transaction === 'pending' ? undefined : job.payment.transaction,
+      paymentWindowEndUnixSeconds,
+    );
+  }
+  const authoritativeDeadline = paymentAttemptDeadline(attempt, job);
   const publicAttempt = {
     id: attempt.id,
     quoteId: attempt.quoteId,
@@ -1758,22 +1944,83 @@ function paymentAttemptResponse(
     idempotencyKey: attempt.idempotencyKey,
     stage: attempt.stage,
     retrySafe: attempt.retrySafe,
-    expiresAt: attempt.expiresAt,
+    authoritativeDeadline,
+    ...(authoritativeDeadline.expiresAt ? { expiresAt: authoritativeDeadline.expiresAt } : {}),
     createdAt: attempt.createdAt,
     updatedAt: attempt.updatedAt,
     ...(attempt.jobId ? { jobId: attempt.jobId } : {}),
     ...(attempt.settlementTransaction
       ? { settlementTransaction: attempt.settlementTransaction }
       : {}),
+    ...(attempt.promptNonce && attempt.promptAuthorizedAt
+      ? {
+          promptAuthorization: {
+            nonce: attempt.promptNonce,
+            authorizedAt: attempt.promptAuthorizedAt,
+          },
+        }
+      : {}),
   };
   return {
     attempt: publicAttempt,
     paymentStatus: attempt.stage,
     retrySafe: attempt.retrySafe,
+    authoritativeDeadline,
     ...(job ? { job: publicJob(job) } : {}),
     requestId,
     buildId: attempt.appBuild,
   };
+}
+
+async function hydratePaymentIntentWindow(
+  deps: Pick<AppDependencies, 'policy' | 'store'>,
+  job: Job,
+): Promise<Job> {
+  if (job.paymentWindowEndUnixSeconds !== undefined || !job.paymentIntentId) return job;
+  try {
+    const intent = await deps.policy.getPaymentIntent(job.paymentIntentId);
+    if (
+      intent.id !== job.paymentIntentId ||
+      intent.jobId !== job.id ||
+      intent.quoteId !== job.quote.id
+    ) {
+      throw new Error('payment intent does not match the reserved job');
+    }
+    return deps.store.patchJob(job.id, {
+      paymentWindowEndUnixSeconds: intent.paymentWindowEndUnixSeconds,
+    });
+  } catch (error) {
+    console.error(
+      `failed to read payment authorization deadline for job ${job.id}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return job;
+  }
+}
+
+function paymentAttemptDeadline(
+  attempt: CustomerPaymentAttempt,
+  job: Job | undefined,
+): {
+  source: 'quote' | 'payment_intent' | 'reconciliation';
+  expiresAt: string | null;
+} {
+  const paymentWindowEndUnixSeconds =
+    attempt.paymentWindowEndUnixSeconds ?? job?.paymentWindowEndUnixSeconds;
+  if (paymentWindowEndUnixSeconds !== undefined) {
+    if (
+      Number.isSafeInteger(paymentWindowEndUnixSeconds) &&
+      paymentWindowEndUnixSeconds > 0 &&
+      paymentWindowEndUnixSeconds <= 253_402_300_799
+    ) {
+      return {
+        source: 'payment_intent',
+        expiresAt: new Date(paymentWindowEndUnixSeconds * 1_000).toISOString(),
+      };
+    }
+    return { source: 'reconciliation', expiresAt: null };
+  }
+  if (attempt.retrySafe) return { source: 'quote', expiresAt: attempt.expiresAt };
+  return { source: 'reconciliation', expiresAt: null };
 }
 
 function expiredPaymentAttemptStage(
@@ -1783,7 +2030,7 @@ function expiredPaymentAttemptStage(
 }
 
 function paymentRecoveryActive(job: Job): boolean {
-  return job.state !== 'delivered' && job.state !== 'refunded';
+  return !['delivered', 'refunded', 'payment_expired'].includes(job.state);
 }
 
 function isSolanaAddress(value: string): boolean {
@@ -1832,7 +2079,7 @@ function applyCors(
   res.setHeader('access-control-allow-credentials', 'true');
   res.setHeader(
     'access-control-allow-headers',
-    'content-type,idempotency-key,payment-signature,last-event-id,x-mizuki-csrf-token',
+    'content-type,idempotency-key,payment-signature,last-event-id,x-mizuki-csrf-token,x-mizuki-prompt-nonce',
   );
   res.setHeader('access-control-allow-methods', 'GET,POST,PATCH,OPTIONS');
   res.setHeader('access-control-expose-headers', 'x-request-id');
@@ -2026,7 +2273,7 @@ function expiredSessionCookie(
 }
 
 function accountBilling(mode: Config['paymentMode'], page: AccountJobsPage) {
-  const { jobs } = page;
+  const jobs = page.jobs.filter((job) => job.state !== 'payment_expired');
   const confirming = jobs.filter(
     (job) => job.state === 'settlement_pending' || job.payment.transaction === 'pending',
   );

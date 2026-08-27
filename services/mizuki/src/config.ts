@@ -90,6 +90,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     readinessMaxAgeMs,
     readinessTimeoutMs,
     escrowReadinessMinLamports,
+    paymentExpiryWritesEnabled: featureFlag(
+      env.MIZUKI_PAYMENT_EXPIRY_WRITES_ENABLED,
+      'MIZUKI_PAYMENT_EXPIRY_WRITES_ENABLED',
+    ),
     publicBaseUrl: env.MIZUKI_PUBLIC_BASE_URL ?? 'http://127.0.0.1:8787',
     webOrigin: env.MIZUKI_WEB_ORIGIN,
     databaseUrl: env.MIZUKI_DATABASE_URL,
@@ -378,6 +382,12 @@ function atomic(value: string | undefined, fallback: string, name: string): stri
   const parsed = value ?? fallback;
   if (!/^[1-9][0-9]*$/.test(parsed)) throw new Error(`${name} must be a positive atomic amount`);
   return parsed;
+}
+
+function featureFlag(value: string | undefined, name: string): boolean {
+  if (value === undefined || value === '0') return false;
+  if (value === '1') return true;
+  throw new Error(`${name} must be 0 or 1`);
 }
 
 function decimal(value: string | undefined, fallback: string, name: string): string {

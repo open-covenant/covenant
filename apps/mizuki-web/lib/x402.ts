@@ -37,6 +37,8 @@ const MAX_LIGHTHOUSE_INSTRUCTIONS = 2;
 const PAYMENT_CHALLENGE_TIMEOUT_MS = 15_000;
 const PAYMENT_SUBMISSION_TIMEOUT_MS = 60_000;
 const WALLET_SIGNED_STAGE_TIMEOUT_MS = 1_500;
+const PAYMENT_PROMPT_NONCE_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export type PaymentTerms = {
   amount: string;
@@ -145,16 +147,25 @@ export function createPaymentFetch(input: {
   feature: SolanaSignTransactionFeature['solana:signTransaction'];
   quotePayment: unknown;
   quoteAmount: string;
+  promptNonce: string;
+  authorizePrompt: () => Promise<void>;
   onStage?: (stage: PaymentClientStage) => void | Promise<void>;
   request?: typeof fetch;
   requestTimeoutMs?: number;
   paidRequestTimeoutMs?: number;
   stageConfirmationTimeoutMs?: number;
 }): typeof fetch {
+  if (!PAYMENT_PROMPT_NONCE_PATTERN.test(input.promptNonce)) {
+    throw new PaymentClientError(
+      'challenge_invalid',
+      'The wallet authorization identifier is invalid',
+    );
+  }
   const terms = parsePaymentTerms(input.quotePayment, input.quoteAmount);
-  let paymentError: PaymentClientError | undefined;
+  let paymentError: unknown;
   let walletTransaction: Uint8Array | undefined;
   const signer = walletSigner(input.account, input.feature, terms.network, terms, {
+    authorizePrompt: input.authorizePrompt,
     onStage: input.onStage,
     stageConfirmationTimeoutMs: input.stageConfirmationTimeoutMs ?? WALLET_SIGNED_STAGE_TIMEOUT_MS,
     capture: (transaction) => {
@@ -175,7 +186,7 @@ export function createPaymentFetch(input: {
       try {
         payload = await delegate.createPaymentPayload(...args);
       } catch (cause) {
-        if (cause instanceof PaymentClientError) paymentError = cause;
+        paymentError = cause;
         throw cause;
       }
       if (!walletTransaction) {
@@ -196,16 +207,19 @@ export function createPaymentFetch(input: {
   };
   const request = input.request ?? fetch;
   const observedRequest: typeof fetch = async (target, init) => {
-    const headers = target instanceof Request ? target.headers : new Headers(init?.headers);
+    const headers = new Headers(target instanceof Request ? target.headers : undefined);
+    new Headers(init?.headers).forEach((value, name) => headers.set(name, value));
     const signal = init?.signal ?? (target instanceof Request ? target.signal : undefined);
-    if (headers.has('payment-signature') || headers.has('x-payment')) {
+    const signedPayment = headers.has('payment-signature') || headers.has('x-payment');
+    if (signedPayment) {
+      headers.set('x-mizuki-prompt-nonce', input.promptNonce);
       notifyStage(input.onStage, 'submitting');
     }
     return fetchWithDeadline(
       target,
-      { ...init, signal },
+      { ...init, headers, signal },
       request,
-      headers.has('payment-signature') || headers.has('x-payment')
+      signedPayment
         ? (input.paidRequestTimeoutMs ?? PAYMENT_SUBMISSION_TIMEOUT_MS)
         : (input.requestTimeoutMs ?? PAYMENT_CHALLENGE_TIMEOUT_MS),
     );
@@ -230,7 +244,7 @@ export function createPaymentFetch(input: {
     try {
       return await paymentFetch(target, init);
     } catch (cause) {
-      if (paymentError) throw paymentError;
+      if (paymentError !== undefined) throw paymentError;
       throw cause;
     }
   };
@@ -296,6 +310,10 @@ export function paymentPreparationError(cause: unknown, quoteAmount: string): st
   }
 
   return 'The wallet could not authorize this payment. Check the wallet for details or try another supported wallet. No payment or job was created.';
+}
+
+export function canRetryWalletPrompt(cause: unknown): boolean {
+  return !(cause instanceof PaymentClientError && cause.code === 'challenge_invalid');
 }
 
 export function parsePaymentTerms(value: unknown, quoteAmount: string): PaymentTerms {
@@ -489,6 +507,7 @@ function walletSigner(
   network: PaymentTerms['network'],
   terms: PaymentTerms,
   hooks: {
+    authorizePrompt: () => Promise<void>;
     onStage?: (stage: PaymentClientStage) => void | Promise<void>;
     stageConfirmationTimeoutMs: number;
     capture: (transaction: Uint8Array) => void;
@@ -507,6 +526,7 @@ function walletSigner(
   return {
     address: signerAddress,
     async signTransactions(transactions): Promise<readonly SignatureDictionary[]> {
+      await hooks.authorizePrompt();
       notifyStage(hooks.onStage, 'wallet_opened');
       let walletResults: Awaited<ReturnType<typeof feature.signTransaction>>;
       try {

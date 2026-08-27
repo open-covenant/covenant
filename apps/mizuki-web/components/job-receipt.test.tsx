@@ -199,6 +199,21 @@ describe('JobReceipt', () => {
     expect(renderToStaticMarkup(<JobReceipt initial={discharged} />)).not.toContain('Live');
   });
 
+  it('shows an expired authorization as unpaid and terminal', () => {
+    const expired = jobFixture({
+      state: 'payment_expired',
+      paymentTransaction: undefined,
+      error: 'Payment authorization expired without settlement',
+    });
+    const html = renderToStaticMarkup(<JobReceipt initial={expired} />);
+
+    expect(jobPollingComplete(expired)).toBe(true);
+    expect(html).toContain('No payment settled');
+    expect(html).toContain('No refund is required');
+    expect(html).not.toContain('Full refund in progress');
+    expect(html).not.toContain('Live');
+  });
+
   it('accepts only newer status records for the same unfinished job', () => {
     const current = jobFixture({ updatedAt: '2026-08-25T09:01:00.000Z' });
 

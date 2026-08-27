@@ -2,8 +2,10 @@ import { createHash, randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { API_TOKEN_TERMINAL_HISTORY_LIMIT, createApiToken } from './api-tokens.js';
+import { ensurePaymentCapacity } from './app.js';
 import {
   type BountyClaim,
+  calculateRescueBountyPriceCents,
   createContributorEscrow,
   createRescueBounty,
   transitionContributorEscrow,
@@ -16,6 +18,7 @@ import {
   StateConflictError,
   WORKBENCH_API_TOKENS_SCHEMA_V1,
 } from './store.js';
+import { RefundCapacityError } from './policy-client.js';
 import type { Quote } from './types.js';
 
 const databaseUrl = process.env.MIZUKI_TEST_DATABASE_URL;
@@ -149,6 +152,114 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
     expect(new Set([left.job.id, right.job.id]).size).toBe(1);
     expect([left.created, right.created].filter(Boolean)).toHaveLength(1);
     await expect(store.jobByQuote(quote.id)).resolves.toMatchObject({ id: left.job.id });
+  });
+
+  it('keeps expired unpaid reservations terminal across account recovery queries', async () => {
+    const githubId = randomUUID();
+    const quote = await saveQuote(store);
+    await store.upsertContributor(githubId, 'payment-expiry-maintainer');
+    await store.linkQuoteToAccount(quote.id, githubId);
+    const attempt = await store.createPaymentAttempt({
+      githubId,
+      quoteId: quote.id,
+      wallet: '1'.repeat(32),
+      appBuild: 'release-test',
+    });
+    const { job } = await store.createJob(
+      quote,
+      {
+        payer: '1'.repeat(32),
+        transaction: 'pending',
+        amountAtomic: quote.priceAtomic,
+        signature: `signed-${randomUUID()}`,
+      },
+      attempt.idempotencyKey,
+      undefined,
+      attempt.id,
+    );
+    const paymentWindowEndUnixSeconds = 1_800_000_000;
+    await store.patchJob(job.id, {
+      paymentIntentId: '55555555-5555-4555-8555-555555555555',
+      paymentWindowEndUnixSeconds,
+    });
+    await store.bindPaymentAttemptJob(
+      attempt.id,
+      githubId,
+      job.id,
+      undefined,
+      paymentWindowEndUnixSeconds,
+    );
+    await expect(
+      store.bindPaymentAttemptJob(
+        attempt.id,
+        githubId,
+        job.id,
+        undefined,
+        paymentWindowEndUnixSeconds + 1,
+      ),
+    ).rejects.toThrow('payment authorization deadline does not match the job');
+    const expired = await store.expirePaymentReservation(job.id, attempt.id);
+
+    await expect(store.jobsForAccount(githubId, 100)).resolves.toEqual({
+      jobs: [expired],
+      limit: 100,
+      truncated: false,
+      obligationCount: 0,
+    });
+    await expect(
+      store.paymentStatusForAccount(quote.id, githubId, attempt.idempotencyKey),
+    ).resolves.toMatchObject({ kind: 'unpaid' });
+    await expect(store.bindPaymentAttemptJob(attempt.id, githubId, job.id)).rejects.toThrow(
+      'payment attempt has expired unpaid',
+    );
+    await expect(store.paymentAttempt(attempt.id, githubId)).resolves.toMatchObject({
+      paymentWindowEndUnixSeconds,
+    });
+  });
+
+  it('uses one lock order when recovery binding races payment expiry', async () => {
+    const peer = await PostgresStore.connect(databaseUrl!);
+    const githubId = randomUUID();
+    const quote = await saveQuote(store);
+    await store.upsertContributor(githubId, 'payment-lock-maintainer');
+    await store.linkQuoteToAccount(quote.id, githubId);
+    const attempt = await store.createPaymentAttempt({
+      githubId,
+      quoteId: quote.id,
+      wallet: '1'.repeat(32),
+      appBuild: 'release-test',
+    });
+    await store.updatePaymentAttemptStage(attempt.id, githubId, 'submitting', 'server');
+    const { job } = await store.createJob(
+      quote,
+      {
+        payer: '1'.repeat(32),
+        transaction: 'pending',
+        amountAtomic: quote.priceAtomic,
+        signature: `signed-${randomUUID()}`,
+      },
+      attempt.idempotencyKey,
+      undefined,
+      attempt.id,
+    );
+
+    try {
+      const [binding, expiry] = await Promise.allSettled([
+        store.bindPaymentAttemptJob(attempt.id, githubId, job.id),
+        peer.expirePaymentReservation(job.id, attempt.id),
+      ]);
+      expect(expiry.status).toBe('fulfilled');
+      if (binding.status === 'rejected') {
+        expect(binding.reason).toBeInstanceOf(StateConflictError);
+      }
+      await expect(store.job(job.id)).resolves.toMatchObject({ state: 'payment_expired' });
+      await expect(store.paymentAttempt(attempt.id, githubId)).resolves.toMatchObject({
+        stage: 'expired_unpaid',
+        retrySafe: true,
+      });
+    } finally {
+      await peer.close();
+    }
   });
 
   it('stores separate terminal bounty generations without duplicating one generation', async () => {
@@ -391,6 +502,263 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
     } finally {
       releaseFirst();
       await Promise.allSettled([first, second]);
+      await peer.close();
+    }
+  });
+
+  it('prevents a replacement attempt after another replica accepts the signed attempt', async () => {
+    const peer = await PostgresStore.connect(databaseUrl!);
+    const githubId = randomUUID();
+    const signedQuote = await saveQuote(store);
+    const replacementQuote = await saveQuote(peer);
+    await store.upsertContributor(githubId, 'signed-race-maintainer');
+    await Promise.all([
+      store.linkQuoteToAccount(signedQuote.id, githubId),
+      peer.linkQuoteToAccount(replacementQuote.id, githubId),
+    ]);
+    const attempt = await store.createPaymentAttempt({
+      githubId,
+      quoteId: signedQuote.id,
+      wallet: '1'.repeat(32),
+      appBuild: 'release-test',
+    });
+    let releaseSigned!: () => void;
+    let markSigned!: () => void;
+    const signedHeld = new Promise<void>((resolve) => {
+      releaseSigned = resolve;
+    });
+    const signedAccepted = new Promise<void>((resolve) => {
+      markSigned = resolve;
+    });
+    const signed = store.withAdmissionLock(async () => {
+      await store.updatePaymentAttemptStage(attempt.id, githubId, 'submitting', 'server');
+      markSigned();
+      await signedHeld;
+    });
+    await signedAccepted;
+    const replacement = peer.withAdmissionLock(() =>
+      peer.createPaymentAttempt({
+        githubId,
+        quoteId: replacementQuote.id,
+        wallet: '1'.repeat(32),
+        appBuild: 'release-test',
+      }),
+    );
+
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      await expect(peer.activePaymentAttempt(githubId)).resolves.toMatchObject({ id: attempt.id });
+      releaseSigned();
+      await signed;
+      await expect(replacement).rejects.toThrow('resolve the active payment attempt');
+      await expect(store.paymentAttempt(attempt.id, githubId)).resolves.toMatchObject({
+        stage: 'submitting',
+        retrySafe: false,
+      });
+      await expect(store.quoteForAccount(replacementQuote.id, githubId)).resolves.toBeDefined();
+      await expect(store.activePaymentAttempt(githubId)).resolves.toMatchObject({ id: attempt.id });
+    } finally {
+      releaseSigned();
+      await Promise.allSettled([signed, replacement]);
+      await peer.close();
+    }
+  });
+
+  it('rejects a stale signed request after another replica atomically replaces it', async () => {
+    const peer = await PostgresStore.connect(databaseUrl!);
+    const githubId = randomUUID();
+    const staleQuote = await saveQuote(store);
+    const replacementQuote = await saveQuote(peer);
+    await store.upsertContributor(githubId, 'replacement-race-maintainer');
+    await Promise.all([
+      store.linkQuoteToAccount(staleQuote.id, githubId),
+      peer.linkQuoteToAccount(replacementQuote.id, githubId),
+    ]);
+    const stale = await store.createPaymentAttempt({
+      githubId,
+      quoteId: staleQuote.id,
+      wallet: '1'.repeat(32),
+      appBuild: 'release-test',
+    });
+    let releaseReplacement!: () => void;
+    let markReplacement!: () => void;
+    const replacementHeld = new Promise<void>((resolve) => {
+      releaseReplacement = resolve;
+    });
+    const replacementCreated = new Promise<void>((resolve) => {
+      markReplacement = resolve;
+    });
+    let replacementId: string | undefined;
+    const replacement = peer.withAdmissionLock(async () => {
+      const created = await peer.createPaymentAttempt({
+        githubId,
+        quoteId: replacementQuote.id,
+        wallet: '1'.repeat(32),
+        appBuild: 'release-test',
+      });
+      replacementId = created.id;
+      markReplacement();
+      await replacementHeld;
+      return created;
+    });
+    await replacementCreated;
+    const signed = store.withAdmissionLock(() =>
+      store.updatePaymentAttemptStage(stale.id, githubId, 'submitting', 'server'),
+    );
+
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      releaseReplacement();
+      await expect(replacement).resolves.toMatchObject({ id: replacementId });
+      await expect(signed).rejects.toThrow('payment attempt is expired_unpaid');
+      await expect(store.paymentAttempt(stale.id, githubId)).resolves.toMatchObject({
+        stage: 'expired_unpaid',
+        retrySafe: true,
+      });
+      await expect(store.activePaymentAttempt(githubId)).resolves.toMatchObject({
+        id: replacementId,
+        stage: 'created',
+      });
+    } finally {
+      releaseReplacement();
+      await Promise.allSettled([replacement, signed]);
+      await peer.close();
+    }
+  });
+
+  it('authorizes exactly one prompt nonce across independent runtime pools', async () => {
+    const peer = await PostgresStore.connect(databaseUrl!);
+    const githubId = randomUUID();
+    const quote = await saveQuote(store);
+    await store.upsertContributor(githubId, 'prompt-race-maintainer');
+    await store.linkQuoteToAccount(quote.id, githubId);
+    const attempt = await store.createPaymentAttempt({
+      githubId,
+      quoteId: quote.id,
+      wallet: '1'.repeat(32),
+      appBuild: 'release-test',
+    });
+    const firstNonce = randomUUID();
+    const secondNonce = randomUUID();
+
+    try {
+      const results = await Promise.allSettled([
+        store.authorizePaymentPrompt(attempt.id, githubId, firstNonce),
+        peer.authorizePaymentPrompt(attempt.id, githubId, secondNonce),
+      ]);
+      expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+      expect(
+        results.some(
+          (result) =>
+            result.status === 'rejected' &&
+            result.reason instanceof StateConflictError &&
+            result.reason.message === 'wallet prompt is already authorized in another client',
+        ),
+      ).toBe(true);
+      const winner = results.find((result) => result.status === 'fulfilled');
+      if (!winner || winner.status !== 'fulfilled') throw new Error('prompt race had no winner');
+      await expect(store.paymentAttempt(attempt.id, githubId)).resolves.toMatchObject({
+        stage: 'wallet_opened',
+        retrySafe: false,
+        promptNonce: winner.value.promptNonce,
+        promptAuthorizedAt: winner.value.promptAuthorizedAt,
+      });
+      await expect(
+        peer.authorizePaymentPrompt(attempt.id, githubId, winner.value.promptNonce!),
+      ).resolves.toMatchObject({
+        promptNonce: winner.value.promptNonce,
+        promptAuthorizedAt: winner.value.promptAuthorizedAt,
+      });
+    } finally {
+      await peer.close();
+    }
+  });
+
+  it('admits only one cross-account wallet prompt against one job of capacity', async () => {
+    const peer = await PostgresStore.connect(databaseUrl!);
+    const firstGithubId = randomUUID();
+    const secondGithubId = randomUUID();
+    const firstQuote = await saveQuote(store);
+    const secondQuote = await saveQuote(peer);
+    await Promise.all([
+      store.upsertContributor(firstGithubId, 'first-capacity-maintainer'),
+      peer.upsertContributor(secondGithubId, 'second-capacity-maintainer'),
+    ]);
+    await Promise.all([
+      store.linkQuoteToAccount(firstQuote.id, firstGithubId),
+      peer.linkQuoteToAccount(secondQuote.id, secondGithubId),
+    ]);
+    const activeAttempts = await store.paymentAttemptCapacity();
+    const unfinishedJobs = (await store.jobsList()).filter(
+      (job) => job.state !== 'delivered' && job.state !== 'payment_expired',
+    );
+    const unfinishedWithoutLiability = unfinishedJobs.filter((job) => !job.refundLiabilityId);
+    const baselineRefundRaw = unfinishedWithoutLiability.reduce(
+      (total, job) => total + BigInt(job.payment.amountAtomic),
+      BigInt(activeAttempts.refundRaw),
+    );
+    const baselineRefundTransactions =
+      unfinishedWithoutLiability.length + activeAttempts.refundTransactions;
+    const baselineBountyUsdCents = unfinishedJobs.reduce(
+      (total, job) =>
+        total + calculateRescueBountyPriceCents(Number(BigInt(job.quote.priceAtomic) / 10_000n)),
+      activeAttempts.bountyUsdCents,
+    );
+    const readiness = {
+      healthy: true,
+      refundTreasury: 'refund-treasury',
+      refundMint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+      refundDecimals: 6,
+      finalizedBalanceRaw: (baselineRefundRaw + 2_000_000n).toString(),
+      pendingRefundRaw: '0',
+      treasuryAvailableRefundRaw: (baselineRefundRaw + 2_000_000n).toString(),
+      remainingRefundLimitUsdCents: 1_000_000,
+      availableRefundRaw: (baselineRefundRaw + 2_000_000n).toString(),
+      availableRefundTransactions: baselineRefundTransactions + 1,
+      remainingEscrowLimitUsdCents: baselineBountyUsdCents + 1_000,
+      escrowAuthority: 'escrow-authority',
+      finalizedEscrowBalanceLamports: '1000000',
+      availableEscrowReserveLamports: '1000000',
+    };
+    const config = {
+      payTo: 'refund-treasury',
+      escrowRefundTo: 'escrow-authority',
+      escrowReadinessMinLamports: 1_000_000,
+    };
+    const policy = { readiness: async () => readiness };
+    const admit = (candidate: PostgresStore, githubId: string, quote: Quote) =>
+      candidate.withAdmissionLock(async () => {
+        await ensurePaymentCapacity(
+          { config, store: candidate, policy } as never,
+          BigInt(quote.priceAtomic),
+          1_000,
+        );
+        const attempt = await candidate.createPaymentAttempt({
+          githubId,
+          quoteId: quote.id,
+          wallet: '1'.repeat(32),
+          appBuild: 'release-test',
+        });
+        return candidate.authorizePaymentPrompt(attempt.id, githubId, randomUUID());
+      });
+
+    try {
+      const results = await Promise.allSettled([
+        admit(store, firstGithubId, firstQuote),
+        admit(peer, secondGithubId, secondQuote),
+      ]);
+      expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+      expect(
+        results.some(
+          (result) => result.status === 'rejected' && result.reason instanceof RefundCapacityError,
+        ),
+      ).toBe(true);
+      await expect(store.paymentAttemptCapacity()).resolves.toEqual({
+        refundRaw: (BigInt(activeAttempts.refundRaw) + 2_000_000n).toString(),
+        refundTransactions: activeAttempts.refundTransactions + 1,
+        bountyUsdCents: activeAttempts.bountyUsdCents + 1_000,
+      });
+    } finally {
       await peer.close();
     }
   });

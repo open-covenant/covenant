@@ -15,6 +15,18 @@ This directory contains the production blueprint and runbooks for Mizuki's comme
 9. Register the signer's escrow authority as the ClawPump payout wallet through the operator-controlled signed wallet flow. Confirm the platform displays the exact address and retain the registration receipt.
 10. Run the read-only checks below before any payment.
 
+### Payment-expiry reader-first rollout
+
+`payment_expired` is a new terminal job state. Deploy it in two phases so an overlapping older runtime cannot bind a terminal attempt back to a job:
+
+1. Close both durable admission controls and leave `MIZUKI_PAYMENT_EXPIRY_WRITES_ENABLED=0`.
+2. Deploy the signer migration, then shadow, then production runtime. Do not invoke settlement recovery manually during this phase.
+3. Wait for Render to report the previous production instance stopped. Confirm only the new immutable image is serving, then read `/v1/admin/admission` and verify both controls remain closed.
+4. Exercise read-only recovery against a fixture containing `payment_expired`; the attempt endpoint must remain `expired_unpaid`, payment status must remain `unpaid`, and account obligations must remain zero.
+5. Change `MIZUKI_PAYMENT_EXPIRY_WRITES_ENABLED` to `1` and deploy production again. Every overlapping instance now contains the terminal-state reader guards.
+6. Run settlement recovery for one signer-confirmed `expired_unpaid` fixture, repeat the read-only checks, and only then run the paid/refund canaries.
+7. Reopen intake only after the invariant scan is clean. A rollback to an image without the reader guards must keep intake closed and the expiry write gate disabled.
+
 ```sh
 test -n "$MIZUKI_PRODUCTION_URL"
 curl -fsS "$MIZUKI_PRODUCTION_URL/healthz"

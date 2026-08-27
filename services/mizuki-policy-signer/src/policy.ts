@@ -508,7 +508,14 @@ export class PolicyService {
         intent.activationIdempotencyKey!,
       );
     }
-    if (intent.status === 'expired_unpaid') return intent;
+    if (intent.status === 'expired_unpaid') {
+      throw new PolicyError(
+        'payment_intent_expiry_unverified',
+        'A legacy payment intent was expired without transaction-expiry proof',
+        503,
+        true,
+      );
+    }
     const admission = await this.store.getRepositoryAdmission(intent.repositoryAdmissionId);
     if (!admission || admission.evidenceHash !== intent.repositoryAdmissionEvidenceHash) {
       throw new PolicyError(
@@ -523,15 +530,12 @@ export class PolicyService {
       return this.activatePaymentIntentWithFacts(intent, facts, idempotencyKey);
     } catch (error) {
       if (!(error instanceof PolicyError) || error.code !== 'settlement_not_found') throw error;
-      if ((await this.chain.unixTime()) <= intent.paymentWindowEndUnixSeconds) {
-        throw new PolicyError(
-          'payment_intent_pending',
-          'Payment intent is still inside its settlement window',
-          409,
-          true,
-        );
-      }
-      return this.store.expirePaymentIntent(intent.id, this.now());
+      throw new PolicyError(
+        'payment_intent_pending',
+        'Payment intent remains reserved until transaction expiry and non-settlement are proven',
+        409,
+        true,
+      );
     }
   }
 
@@ -910,15 +914,18 @@ export class PolicyService {
         pendingRefundRaw,
         pendingRefundCount,
         pendingBountyReserveLamports,
+        pendingEscrowRefund,
         rollingRefundSpendUsdCents,
         rollingEscrowSpendUsdCents,
       ] = await Promise.all([
         this.store.pendingRefundRawAmount(),
         this.store.pendingRefundCount(),
         this.store.pendingBountyReserveLamports(),
+        this.store.hasPendingEscrowRefund(),
         this.store.rollingSpendUsdCents('refund', this.now()),
         this.store.rollingSpendUsdCents('escrow', this.now()),
       ]);
+      if (pendingEscrowRefund) return this.unavailableReadiness();
       const finalizedBalanceRaw = evidence.chain.refundRawAmount;
       const treasuryAvailable = BigInt(finalizedBalanceRaw) - BigInt(pendingRefundRaw);
       const remainingRefundLimitUsdCents = Math.max(
@@ -1088,6 +1095,7 @@ export class PolicyService {
         422,
       );
     }
+    const protectedIntent = await this.assertBountyReserveHandoff(request);
     const termsEvidence = await this.merges.verifyEscrowTerms({
       repository: request.repository,
       issueNumber: request.issueNumber,
@@ -1124,6 +1132,14 @@ export class PolicyService {
     }
     const price = await this.prices.solUsd();
     const amountLamports = usdCentsToLamports(request.amountUsdCents, price.priceUsdMicros);
+    if (amountLamports > BigInt(protectedIntent.bountyReserveLamports)) {
+      throw new PolicyError(
+        'bounty_reserve_price_drift',
+        'Current SOL price exceeds the bounty capacity reserved when payment was accepted',
+        503,
+        true,
+      );
+    }
     if (amountLamports > BigInt(this.config.maxEscrowLamports ?? 1_000_000_000)) {
       throw new PolicyError(
         'escrow_asset_limit_exceeded',
@@ -1164,6 +1180,7 @@ export class PolicyService {
         recipient: 'escrow-vault',
         details: {
           bountyId: request.bountyId,
+          sourceJobId: request.sourceJobId,
           bountyDigest,
           acceptanceHash: request.acceptanceHash,
           expiresAt: request.expiresAt,
@@ -1195,6 +1212,57 @@ export class PolicyService {
       this.now(),
     );
     return this.drive(record.id);
+  }
+
+  private async assertBountyReserveHandoff(request: CreateEscrowRequest): Promise<PaymentIntent> {
+    const intent = await this.store.getPaymentIntentByJob(request.sourceJobId);
+    if (
+      !intent ||
+      intent.status !== 'activated' ||
+      !intent.liabilityId ||
+      !intent.settlementSignature
+    ) {
+      throw new PolicyError(
+        'bounty_reserve_not_found',
+        'Bounty escrow is not backed by an activated payment reserve',
+        422,
+      );
+    }
+    if (intent.bountyAmountUsdCents !== request.amountUsdCents) {
+      throw new PolicyError(
+        'bounty_reserve_mismatch',
+        'Bounty escrow amount does not match the protected payment reserve',
+        422,
+      );
+    }
+    if (
+      intent.repository !== request.repository ||
+      intent.issueNumber !== request.issueNumber ||
+      intent.baseRef !== request.baseRef ||
+      intent.baseSha !== request.baseSha
+    ) {
+      throw new PolicyError(
+        'bounty_reserve_mismatch',
+        'Bounty escrow repository terms do not match the protected payment reserve',
+        422,
+      );
+    }
+    const liability = await this.store.getRefundLiability(intent.settlementSignature);
+    const refund = await this.store.getByResourceKey(`refund:${intent.settlementSignature}`);
+    if (
+      !liability ||
+      liability.id !== intent.liabilityId ||
+      liability.jobId !== request.sourceJobId ||
+      liability.dischargedAt ||
+      refund?.status !== 'finalized'
+    ) {
+      throw new PolicyError(
+        'bounty_reserve_not_refunded',
+        'Bounty escrow requires a finalized refund for the source job',
+        409,
+      );
+    }
+    return intent;
   }
 
   async issueGitHubIdentityGrant(

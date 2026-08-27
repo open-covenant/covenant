@@ -501,7 +501,8 @@ describe('operator admission controls', () => {
 
   it('probes the exact verifier repository inside the live gate before settlement', async () => {
     const store = new MemoryStore();
-    await store.saveQuote(quote);
+    const authorizedQuote = quoteWithAuthorization();
+    await store.saveQuote(authorizedQuote);
     await store.updateOperatorControls({
       expectedRevision: 0,
       intakeEnabled: true,
@@ -514,6 +515,18 @@ describe('operator admission controls', () => {
       order.push('repository');
       return admissionReceipt(binding);
     });
+    const reservePaymentIntent = vi.fn(async (jobId: string) => {
+      order.push('intent');
+      return {
+        id: '44444444-4444-4444-8444-444444444444',
+        jobId,
+        quoteId: authorizedQuote.id,
+        repositoryAdmissionId: '33333333-3333-4333-8333-333333333333',
+        rawAmount: authorizedQuote.priceAtomic,
+        memo: `mizuki:payment:v1:${authorizedQuote.id}`,
+        status: 'reserved',
+      };
+    });
     const settle = vi.fn(async (_quote, _signature, persist) => {
       await persist(authorizedPayment);
       order.push('settle');
@@ -524,10 +537,14 @@ describe('operator admission controls', () => {
         config: livePaymentConfig,
         github: {
           assertIssueAuthorization: vi.fn(async () => undefined),
-          currentHead: vi.fn(async () => quote.baseSha),
+          currentHead: vi.fn(async () => authorizedQuote.baseSha),
         },
         payments: { settle },
-        policy: { readiness: vi.fn(async () => signerReadiness), createRepositoryAdmission },
+        policy: {
+          readiness: vi.fn(async () => signerReadiness),
+          createRepositoryAdmission,
+          reservePaymentIntent,
+        },
       }),
     );
 
@@ -543,10 +560,11 @@ describe('operator admission controls', () => {
 
     expect(response.status).toBe(500);
     expect(createRepositoryAdmission).toHaveBeenCalledWith(
-      repositoryAdmissionBinding(quote, 'live-ordering-job', 'signed-payment-proof'),
+      repositoryAdmissionBinding(authorizedQuote, 'live-ordering-job', 'signed-payment-proof'),
       'signed-payment-proof',
     );
-    expect(order).toEqual(['repository', 'settle']);
+    expect(reservePaymentIntent).toHaveBeenCalledOnce();
+    expect(order).toEqual(['repository', 'intent', 'settle']);
   });
 
   it('does not broadcast when exact-repository verifier admission fails', async () => {

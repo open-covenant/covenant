@@ -4,8 +4,8 @@ import {
   clearWorkbenchPaymentRecovery,
   loadWorkbenchPaymentRecovery,
   paymentAccountId,
-  PaymentRecoveryStorageError,
   PaymentStatusError,
+  normalizePaymentAttempt,
   prepareWorkbenchPaymentRecovery,
   issueMatchesRepository,
   quoteMatchesIssue,
@@ -122,6 +122,7 @@ describe('Workbench payment recovery storage', () => {
     const recovery = {
       phase: 'uncertain' as const,
       accountId: '42',
+      attemptId: 'attempt-11111111',
       idempotencyKey: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       repository: 'open-covenant/covenant',
       issueUrl: quote.issueUrl,
@@ -141,6 +142,7 @@ describe('Workbench payment recovery storage', () => {
       JSON.stringify({
         phase: 'uncertain',
         accountId: '42',
+        attemptId: 'attempt-11111111',
         idempotencyKey: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
         repository: 'attacker/other',
         issueUrl: quote.issueUrl,
@@ -157,6 +159,7 @@ describe('Workbench payment recovery storage', () => {
     const recovery = {
       phase: 'attempting' as const,
       accountId: '42',
+      attemptId: 'attempt-11111111',
       idempotencyKey: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       repository: 'open-covenant/covenant',
       issueUrl: quote.issueUrl,
@@ -169,10 +172,12 @@ describe('Workbench payment recovery storage', () => {
     expect(loadWorkbenchPaymentRecovery('42', storage)).toEqual(recovery);
   });
 
-  it('reuses the exact durable idempotency key for the same account and quote', () => {
+  it('caches the server-owned attempt and idempotency key without replacing either', () => {
     const storage = memoryStorage();
     const input = {
       accountId: '42',
+      attemptId: 'attempt-11111111',
+      idempotencyKey: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       repository: 'open-covenant/covenant',
       issueUrl: quote.issueUrl,
       quote,
@@ -184,9 +189,10 @@ describe('Workbench payment recovery storage', () => {
 
     expect(retried.phase).toBe('prepared');
     expect(retried.idempotencyKey).toBe(first.idempotencyKey);
+    expect(retried.attemptId).toBe(first.attemptId);
   });
 
-  it('blocks payment preparation when storage cannot be read back', () => {
+  it('does not let unavailable browser storage block a server-owned payment attempt', () => {
     const values = new Map<string, string>();
     const storage = {
       getItem: () => null,
@@ -194,24 +200,11 @@ describe('Workbench payment recovery storage', () => {
       removeItem: (key: string) => values.delete(key),
     };
 
-    expect(() =>
-      prepareWorkbenchPaymentRecovery(
-        {
-          accountId: '42',
-          repository: 'open-covenant/covenant',
-          issueUrl: quote.issueUrl,
-          quote,
-        },
-        storage,
-      ),
-    ).toThrow(PaymentRecoveryStorageError);
-  });
-
-  it('blocks a second account from replacing an unresolved payment record', () => {
-    const storage = memoryStorage();
-    prepareWorkbenchPaymentRecovery(
+    const recovery = prepareWorkbenchPaymentRecovery(
       {
         accountId: '42',
+        attemptId: 'attempt-11111111',
+        idempotencyKey: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
         repository: 'open-covenant/covenant',
         issueUrl: quote.issueUrl,
         quote,
@@ -219,17 +212,85 @@ describe('Workbench payment recovery storage', () => {
       storage,
     );
 
-    expect(() =>
-      prepareWorkbenchPaymentRecovery(
+    expect(recovery.attemptId).toBe('attempt-11111111');
+    expect(loadWorkbenchPaymentRecovery('42', storage)).toBeNull();
+  });
+
+  it('allows the signed-in account to replace the optional cache', () => {
+    const storage = memoryStorage();
+    prepareWorkbenchPaymentRecovery(
+      {
+        accountId: '42',
+        attemptId: 'attempt-11111111',
+        idempotencyKey: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        repository: 'open-covenant/covenant',
+        issueUrl: quote.issueUrl,
+        quote,
+      },
+      storage,
+    );
+
+    prepareWorkbenchPaymentRecovery(
+      {
+        accountId: '7',
+        attemptId: 'attempt-22222222',
+        idempotencyKey: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        repository: 'open-covenant/covenant',
+        issueUrl: quote.issueUrl,
+        quote,
+      },
+      storage,
+    );
+
+    expect(loadWorkbenchPaymentRecovery('42', storage)).toBeNull();
+    expect(loadWorkbenchPaymentRecovery('7', storage)?.attemptId).toBe('attempt-22222222');
+  });
+});
+
+describe('server-owned payment attempts', () => {
+  it('uses canonical top-level status and reserved job data', () => {
+    expect(
+      normalizePaymentAttempt(
         {
-          accountId: '7',
-          repository: 'open-covenant/covenant',
-          issueUrl: quote.issueUrl,
-          quote,
+          attempt: {
+            id: 'attempt-11111111',
+            quoteId: quote.id,
+            idempotencyKey: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            stage: 'submitting',
+            retrySafe: false,
+          },
+          paymentStatus: 'job_reserved',
+          retrySafe: false,
+          job: { id: 'job-11111111', state: 'settlement_pending' },
+          requestId: 'request-11111111',
+          buildId: 'build-11111111',
         },
-        storage,
+        quote.id,
       ),
-    ).toThrow('different GitHub account');
+    ).toMatchObject({
+      id: 'attempt-11111111',
+      paymentStatus: 'job_reserved',
+      retrySafe: false,
+      job: { id: 'job-11111111' },
+      requestId: 'request-11111111',
+      buildId: 'build-11111111',
+    });
+  });
+
+  it('rejects a status bound to a different quote', () => {
+    expect(() =>
+      normalizePaymentAttempt(
+        {
+          id: 'attempt-11111111',
+          quoteId: '22222222-2222-4222-8222-222222222222',
+          idempotencyKey: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          stage: 'created',
+          paymentStatus: 'created',
+          retrySafe: true,
+        },
+        quote.id,
+      ),
+    ).toThrow('did not match');
   });
 });
 

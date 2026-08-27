@@ -49,6 +49,34 @@ export type Payment = {
   signature?: string;
 };
 
+export const PAYMENT_ATTEMPT_STAGES = [
+  'created',
+  'wallet_opened',
+  'wallet_signed',
+  'submitting',
+  'job_reserved',
+  'expired_unpaid',
+  'indeterminate',
+] as const;
+
+export type PaymentAttemptStage = (typeof PAYMENT_ATTEMPT_STAGES)[number];
+
+export type CustomerPaymentAttempt = {
+  id: string;
+  githubId: string;
+  quoteId: string;
+  wallet: string;
+  appBuild: string;
+  idempotencyKey: string;
+  stage: PaymentAttemptStage;
+  retrySafe: boolean;
+  expiresAt: string;
+  createdAt: string;
+  updatedAt: string;
+  jobId?: string;
+  settlementTransaction?: string;
+};
+
 export type RepositoryAdmissionReceipt = {
   id: string;
   quoteId: string;
@@ -130,6 +158,7 @@ export type DeliveryEvidence = {
 export type Job = {
   id: string;
   idempotencyKey: string;
+  paymentAttemptId?: string;
   quote: Quote;
   payment: Payment;
   repositoryAdmission?: RepositoryAdmissionReceipt;
@@ -142,6 +171,7 @@ export type Job = {
   error?: string;
   refundTransaction?: string;
   refundOperationId?: string;
+  paymentIntentId?: string;
   refundLiabilityId?: string;
   refundLiabilityDischargedAt?: string;
   refundLiabilityDischargeEvidenceHash?: string;

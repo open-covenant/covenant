@@ -166,6 +166,32 @@ export const reconcileRepositorySettlementRequestSchema = z
   })
   .strict();
 
+export const createPaymentIntentRequestSchema = z
+  .object({
+    jobId: externalIdSchema,
+    repositoryAdmissionId: z.string().uuid(),
+    repositoryAdmissionEvidenceHash: hashSchema,
+    repository: repositorySchema,
+    issueNumber: z.number().int().positive().max(2_147_483_647),
+    baseRef: gitRefSchema,
+    baseSha: gitCommitShaSchema,
+    repositoryAuthorizedAt: z.string().datetime({ offset: true }),
+    authorizationEvidenceHash: hashSchema,
+    bountyAmountUsdCents: z.number().int().positive(),
+    authorizationExpiresAt: z.string().datetime({ offset: true }),
+    authorizationSignature: z
+      .string()
+      .regex(/^[A-Za-z0-9+/]{86}==$/)
+      .refine((value) => Buffer.from(value, 'base64').length === 64),
+  })
+  .strict();
+
+export const activatePaymentIntentRequestSchema = z
+  .object({ settlementSignature: signatureSchema })
+  .strict();
+
+export const reconcilePaymentIntentRequestSchema = z.object({}).strict();
+
 export const x402PaymentAuthorizationSchema = z
   .object({
     x402Version: z.literal(2),
@@ -260,6 +286,8 @@ export type ValidateRepositoryAdmissionRequest = z.infer<
 export type ReconcileRepositorySettlementRequest = z.infer<
   typeof reconcileRepositorySettlementRequestSchema
 >;
+export type CreatePaymentIntentRequest = z.infer<typeof createPaymentIntentRequestSchema>;
+export type ActivatePaymentIntentRequest = z.infer<typeof activatePaymentIntentRequestSchema>;
 export type X402PaymentAuthorization = z.infer<typeof x402PaymentAuthorizationSchema>;
 export type BindEscrowRequest = z.infer<typeof bindEscrowRequestSchema>;
 export type ReleaseEscrowRequest = z.infer<typeof releaseEscrowRequestSchema>;
@@ -369,6 +397,8 @@ export interface RepositoryAdmission {
   settlementMessageHash: string;
   settlementClientSignature: string;
   settlementFeePayer: string;
+  settlementPayer: string | null;
+  settlementMemo: string | null;
   settlementRawAmount: string;
   paymentWindowStartUnixSeconds: number;
   paymentWindowEndUnixSeconds: number;
@@ -387,6 +417,99 @@ export interface RepositoryAdmission {
   tokenExpiresAt: Date;
   admittedAt: Date;
   evidenceHash: string;
+}
+
+export type PaymentIntentStatus = 'reserved' | 'activated' | 'expired_unpaid';
+
+export interface PaymentIntent {
+  id: string;
+  idempotencyKey: string;
+  requestHash: string;
+  jobId: string;
+  quoteId: string;
+  repositoryAdmissionId: string;
+  repositoryAdmissionEvidenceHash: string;
+  repository: string;
+  issueNumber: number;
+  baseRef: string;
+  baseSha: string;
+  repositoryAuthorizedAt: Date;
+  authorizationEvidenceHash: string;
+  payer: string;
+  payee: string;
+  mint: string;
+  rawAmount: string;
+  amountUsdCents: number;
+  bountyAmountUsdCents: number;
+  bountyReserveLamports: string;
+  memo: string;
+  signedMessageHash: string;
+  payerSignature: string;
+  paymentWindowStartUnixSeconds: number;
+  paymentWindowEndUnixSeconds: number;
+  status: PaymentIntentStatus;
+  settlementSignature: string | null;
+  liabilityId: string | null;
+  activationIdempotencyKey: string | null;
+  createdAt: Date;
+  activatedAt: Date | null;
+  expiredAt: Date | null;
+}
+
+export interface PaymentIntentView {
+  id: string;
+  jobId: string;
+  quoteId: string;
+  repositoryAdmissionId: string;
+  status: PaymentIntentStatus;
+  payer: string;
+  payee: string;
+  mint: string;
+  rawAmount: string;
+  amountUsdCents: number;
+  bountyAmountUsdCents: number;
+  bountyReserveLamports: string;
+  memo: string;
+  paymentWindowStartUnixSeconds: number;
+  paymentWindowEndUnixSeconds: number;
+  settlementSignature: string | null;
+  liabilityId: string | null;
+  createdAt: string;
+  activatedAt: string | null;
+  expiredAt: string | null;
+}
+
+export interface PaymentIntentActivationView {
+  paymentIntent: PaymentIntentView;
+  refundLiability: RefundLiabilityView;
+}
+
+export type RefundCommandStatus = 'pending' | 'submitted' | 'finalized' | 'indeterminate';
+
+export interface RefundCommand {
+  id: string;
+  idempotencyKey: string;
+  requestHash: string;
+  liabilityId: string;
+  jobId: string;
+  status: RefundCommandStatus;
+  currentOperationId: string | null;
+  attemptCount: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export function refundCommandView(command: RefundCommand) {
+  return {
+    id: command.id,
+    jobId: command.jobId,
+    liabilityId: command.liabilityId,
+    status: command.status,
+    currentOperationId: command.currentOperationId,
+    attemptCount: command.attemptCount,
+    createdAt: command.createdAt.toISOString(),
+    updatedAt: command.updatedAt.toISOString(),
+  };
 }
 
 export interface RepositoryAdmissionView {
@@ -577,6 +700,11 @@ export interface RefundReadinessView {
   treasuryAvailableRefundRaw: string | null;
   remainingRefundLimitUsdCents: number | null;
   availableRefundRaw: string | null;
+  refundSignerLamports: string | null;
+  refundFeeReserveLamports: string;
+  refundAtaRentLamports: string | null;
+  pendingRefundCount: number | null;
+  availableRefundTransactions: number | null;
   escrowRollingLimitUsdCents: number;
   rollingEscrowSpendUsdCents: number | null;
   remainingEscrowLimitUsdCents: number | null;
@@ -607,6 +735,8 @@ export interface SignerReadinessEvidence {
     refundMint: string;
     refundDecimals: number;
     refundRawAmount: string;
+    refundSignerLamports: string;
+    refundAtaRentLamports: string;
     escrowAuthority: string;
     escrowLamports: string;
     availableEscrowReserveLamports: string;
@@ -621,6 +751,51 @@ export interface SignerReadinessEvidence {
       observedAt: string;
     }>;
   } | null;
+}
+
+export function paymentIntentView(intent: PaymentIntent): PaymentIntentView {
+  return {
+    id: intent.id,
+    jobId: intent.jobId,
+    quoteId: intent.quoteId,
+    repositoryAdmissionId: intent.repositoryAdmissionId,
+    status: intent.status,
+    payer: intent.payer,
+    payee: intent.payee,
+    mint: intent.mint,
+    rawAmount: intent.rawAmount,
+    amountUsdCents: intent.amountUsdCents,
+    bountyAmountUsdCents: intent.bountyAmountUsdCents,
+    bountyReserveLamports: intent.bountyReserveLamports,
+    memo: intent.memo,
+    paymentWindowStartUnixSeconds: intent.paymentWindowStartUnixSeconds,
+    paymentWindowEndUnixSeconds: intent.paymentWindowEndUnixSeconds,
+    settlementSignature: intent.settlementSignature,
+    liabilityId: intent.liabilityId,
+    createdAt: intent.createdAt.toISOString(),
+    activatedAt: intent.activatedAt?.toISOString() ?? null,
+    expiredAt: intent.expiredAt?.toISOString() ?? null,
+  };
+}
+
+export function paymentIntentAuthorizationMessage(
+  request: Omit<CreatePaymentIntentRequest, 'authorizationSignature'>,
+): string {
+  return [
+    'Mizuki payment intent authorization',
+    'Version: 1',
+    `Job: ${request.jobId}`,
+    `Repository Admission: ${request.repositoryAdmissionId}`,
+    `Repository Admission Evidence: ${request.repositoryAdmissionEvidenceHash}`,
+    `Repository: ${request.repository.toLowerCase()}`,
+    `Issue: ${request.issueNumber}`,
+    `Base Ref: ${request.baseRef}`,
+    `Base SHA: ${request.baseSha}`,
+    `Repository Authorized At: ${new Date(request.repositoryAuthorizedAt).toISOString()}`,
+    `Authorization Evidence: ${request.authorizationEvidenceHash}`,
+    `Bounty Amount USD Cents: ${request.bountyAmountUsdCents}`,
+    `Expires At: ${new Date(request.authorizationExpiresAt).toISOString()}`,
+  ].join('\n');
 }
 
 export function operationView(record: OperationRecord): OperationView {

@@ -7,18 +7,23 @@ import { useRouter } from 'next/navigation';
 import { formatTime, formatUsdcAtomic, stateLabel, truncateAddress } from '@/lib/format';
 import { githubIssuePattern } from '@/lib/github-url';
 import {
-  checkQuotePaymentStatus,
+  checkPaymentAttempt,
   clearWorkbenchPaymentRecovery,
+  createPaymentAttempt,
+  findActivePaymentAttempt,
   issueMatchesRepository,
   loadWorkbenchPaymentRecovery,
   paymentAccountId,
-  PaymentRecoveryStorageError,
+  PaymentAttemptBusyError,
   PaymentStatusError,
   prepareWorkbenchPaymentRecovery,
   quoteExpired,
   quoteMatchesIssue,
   readJsonResponse,
+  reconcilePaymentAttempt,
+  reportPaymentAttemptStage,
   saveWorkbenchPaymentRecovery,
+  withPaymentAttemptLock,
   type WorkbenchPaymentRecovery,
 } from '@/lib/payment';
 import type { Job, Quote } from '@/lib/types';
@@ -76,13 +81,31 @@ export function NewJobWizard({
   useEffect(() => {
     if (selected || repositories.status !== 'ready' || paymentAccount.status !== 'ready') return;
     const recovery = loadWorkbenchPaymentRecovery(paymentAccount.data);
-    if (!recovery) return;
-    const recoverable = repositories.data.find(
-      (item) =>
-        item.readiness === 'ready' &&
-        item.fullName.toLowerCase() === recovery.repository.toLowerCase(),
-    );
-    if (recoverable) setSelected(recoverable.fullName);
+    if (recovery) {
+      const recoverable = repositories.data.find(
+        (item) =>
+          item.readiness === 'ready' &&
+          item.fullName.toLowerCase() === recovery.repository.toLowerCase(),
+      );
+      if (recoverable) setSelected(recoverable.fullName);
+      return;
+    }
+    let active = true;
+    void findActivePaymentAttempt()
+      .then((result) => {
+        if (!active || !result.attempt || !result.quote) return;
+        const repositoryName = `${result.quote.owner}/${result.quote.repo}`;
+        const recoverable = repositories.data.find(
+          (item) =>
+            item.readiness === 'ready' &&
+            item.fullName.toLowerCase() === repositoryName.toLowerCase(),
+        );
+        if (recoverable) setSelected(recoverable.fullName);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
   }, [paymentAccount, repositories, selected]);
 
   useEffect(() => {
@@ -236,6 +259,7 @@ function IssueAndPayment({
   >('idle');
   const [error, setError] = useState<string | null>(null);
   const paymentStatusController = useRef<AbortController | null>(null);
+  const paymentRecovery = useRef<WorkbenchPaymentRecovery | null>(null);
   const {
     wallets,
     connected,
@@ -263,6 +287,7 @@ function IssueAndPayment({
     }
     const recovery = loadWorkbenchPaymentRecovery(accountId);
     if (recovery?.repository.toLowerCase() === repository.fullName.toLowerCase()) {
+      paymentRecovery.current = recovery;
       setIssueUrl(recovery.issueUrl);
       setPreflight(null);
       setQuote(recovery.quote);
@@ -272,11 +297,36 @@ function IssueAndPayment({
       else void resolvePaymentRecovery(recovery);
       return;
     }
+    let active = true;
+    void findActivePaymentAttempt()
+      .then((result) => {
+        if (!active || !result.attempt || !result.quote) return;
+        const activeRepository = `${result.quote.owner}/${result.quote.repo}`;
+        if (activeRepository.toLowerCase() !== repository.fullName.toLowerCase()) return;
+        const recovered = prepareWorkbenchPaymentRecovery({
+          accountId,
+          attemptId: result.attempt.id,
+          idempotencyKey: result.attempt.idempotencyKey,
+          repository: activeRepository,
+          issueUrl: result.quote.issueUrl,
+          quote: result.quote,
+        });
+        paymentRecovery.current = recovered;
+        setIssueUrl(result.quote.issueUrl);
+        setPreflight(null);
+        setQuote(result.quote);
+        setError(null);
+        void resolvePaymentRecovery(recovered);
+      })
+      .catch(() => undefined);
     setIssueUrl('');
     setPreflight(null);
     setQuote(null);
     setError(null);
     setState('idle');
+    return () => {
+      active = false;
+    };
   }, [accountId, repository.fullName]);
 
   useEffect(() => {
@@ -300,7 +350,10 @@ function IssueAndPayment({
     state === 'checking' || state === 'quoting' || state === 'paying' || paymentLocked;
 
   function selectIssue(next: string) {
-    if (quote && accountId) clearWorkbenchPaymentRecovery(accountId, quote.id);
+    if (quote && accountId) {
+      clearWorkbenchPaymentRecovery(accountId, quote.id);
+      paymentRecovery.current = null;
+    }
     setIssueUrl(next);
     setPreflight(null);
     setQuote(null);
@@ -386,74 +439,109 @@ function IssueAndPayment({
     }
 
     let recovery: WorkbenchPaymentRecovery | undefined;
-    let walletSigned = false;
+    let attemptId: string | undefined;
     setError(null);
+    setState('paying');
     try {
+      const attempt = await createPaymentAttempt({
+        quoteId: quote.id,
+        wallet: connected.account.address,
+      });
+      attemptId = attempt.id;
+      if (attempt.job || attempt.paymentStatus === 'job_reserved') {
+        if (!attempt.job) throw new Error('The reserved payment attempt did not include its job');
+        router.push(`/app/jobs/${encodeURIComponent(attempt.job.id)}`);
+        return;
+      }
+      if (!attempt.retrySafe) {
+        recovery = {
+          phase: 'uncertain',
+          accountId,
+          attemptId: attempt.id,
+          idempotencyKey: attempt.idempotencyKey,
+          repository: `${quote.owner}/${quote.repo}`,
+          issueUrl,
+          quote,
+        };
+        paymentRecovery.current = recovery;
+        saveWorkbenchPaymentRecovery(recovery);
+        await resolvePaymentRecovery(recovery);
+        return;
+      }
       recovery = prepareWorkbenchPaymentRecovery({
         accountId,
+        attemptId: attempt.id,
+        idempotencyKey: attempt.idempotencyKey,
         repository: `${quote.owner}/${quote.repo}`,
         issueUrl,
         quote,
       });
+      paymentRecovery.current = recovery;
       const walletFeature = connected.wallet.features[
         'solana:signTransaction'
       ] as SolanaSignTransactionFeature['solana:signTransaction'];
-      const feature: SolanaSignTransactionFeature['solana:signTransaction'] = {
-        ...walletFeature,
-        async signTransaction(...inputs) {
-          const signed = await walletFeature.signTransaction(...inputs);
-          walletSigned = true;
-          return signed;
-        },
-      };
+      let stageReport = Promise.resolve();
       const paidFetch = createPaymentFetch({
         account: connected.account,
-        feature,
+        feature: walletFeature,
         quotePayment: quote.payment,
         quoteAmount: quote.priceAtomic,
+        onStage(stage) {
+          if (stage === 'wallet_signed') {
+            recovery = { ...recovery!, phase: 'attempting' };
+            paymentRecovery.current = recovery;
+            saveWorkbenchPaymentRecovery(recovery);
+          }
+          stageReport = stageReport
+            .then(() => reportPaymentAttemptStage(attempt.id, stage))
+            .catch(() => undefined);
+          return stageReport;
+        },
       });
       recovery = { ...recovery, phase: 'attempting' };
       saveWorkbenchPaymentRecovery(recovery);
-      setState('paying');
-      const response = await paidFetch('/api/mizuki/v1/jobs', {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'idempotency-key': recovery.idempotencyKey,
-        },
-        body: JSON.stringify({ quote_id: quote.id }),
+      const job = await withPaymentAttemptLock(attempt.id, async () => {
+        const current = await checkPaymentAttempt(attempt.id, quote.id);
+        if (current.job) return current.job;
+        if (!current.retrySafe) throw new PaymentAttemptBusyError();
+        const response = await paidFetch('/api/mizuki/v1/jobs', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'idempotency-key': recovery!.idempotencyKey,
+          },
+          body: JSON.stringify({
+            quote_id: quote.id,
+            payment_attempt_id: attempt.id,
+          }),
+        });
+        return readJsonResponse<Job>(response);
       });
-      const job = await readJsonResponse<Job>(response);
       clearWorkbenchPaymentRecovery(accountId, quote.id);
+      paymentRecovery.current = null;
       router.push(`/app/jobs/${encodeURIComponent(job.id)}`);
     } catch (cause) {
-      if (!walletSigned) {
-        clearWorkbenchPaymentRecovery(accountId, quote.id);
-        setState('quoted');
-        setError(paymentAttemptError(cause, formatUsdcAtomic(quote.priceAtomic)));
-        return;
-      }
       if (recovery) {
         const uncertainRecovery: WorkbenchPaymentRecovery = {
           ...recovery,
           phase: 'uncertain',
         };
-        try {
-          saveWorkbenchPaymentRecovery(uncertainRecovery);
-        } catch {
-          // The read-verified attempting record remains the recovery source.
-        }
-        await resolvePaymentRecovery(uncertainRecovery);
+        paymentRecovery.current = uncertainRecovery;
+        saveWorkbenchPaymentRecovery(uncertainRecovery);
+        await resolvePaymentRecovery(
+          uncertainRecovery,
+          paymentAttemptError(cause, formatUsdcAtomic(quote.priceAtomic), attemptId),
+        );
         return;
       }
-      setState('payment_uncertain');
-      setError(null);
+      setState('quoted');
+      setError(paymentAttemptError(cause, formatUsdcAtomic(quote.priceAtomic), attemptId));
     }
   }
 
   async function checkPaymentStatus() {
     if (!quote || !accountId) return;
-    const recovery = loadWorkbenchPaymentRecovery(accountId);
+    const recovery = paymentRecovery.current ?? loadWorkbenchPaymentRecovery(accountId);
     if (!recovery || recovery.quote.id !== quote.id) {
       setState('payment_uncertain');
       setError(
@@ -464,33 +552,51 @@ function IssueAndPayment({
     await resolvePaymentRecovery(recovery);
   }
 
-  async function resolvePaymentRecovery(recovery: WorkbenchPaymentRecovery) {
+  async function resolvePaymentRecovery(
+    recovery: WorkbenchPaymentRecovery,
+    safeRetryMessage?: string,
+  ) {
     paymentStatusController.current?.abort();
     const controller = new AbortController();
     paymentStatusController.current = controller;
     setState('checking_payment');
     setError(null);
     try {
-      const status = await checkQuotePaymentStatus(recovery.quote.id, recovery.idempotencyKey, {
+      const status = await reconcilePaymentAttempt(recovery.attemptId, recovery.quote.id, {
         signal: controller.signal,
       });
-      if (status.status === 'job_reserved') {
+      if (status.job || status.paymentStatus === 'job_reserved') {
+        if (!status.job) throw new Error('The reserved payment attempt did not include its job');
         clearWorkbenchPaymentRecovery(recovery.accountId, recovery.quote.id);
+        paymentRecovery.current = null;
         router.push(`/app/jobs/${encodeURIComponent(status.job.id)}`);
         return;
       }
-      if (status.expiresAt !== recovery.quote.expiresAt) {
-        throw new Error('Payment status did not match the accepted quote');
+      if (status.paymentStatus === 'expired_unpaid') {
+        const unpaid = { ...recovery, phase: 'unpaid' as const };
+        paymentRecovery.current = unpaid;
+        saveWorkbenchPaymentRecovery(unpaid);
+        setState('payment_unpaid');
+        return;
       }
-      saveWorkbenchPaymentRecovery({ ...recovery, phase: 'unpaid' });
-      setState('payment_unpaid');
+      if (status.retrySafe) {
+        const prepared = { ...recovery, phase: 'prepared' as const };
+        paymentRecovery.current = prepared;
+        saveWorkbenchPaymentRecovery(prepared);
+        setState('quoted');
+        setError(safeRetryMessage ?? null);
+        return;
+      }
+      const uncertain = { ...recovery, phase: 'uncertain' as const };
+      paymentRecovery.current = uncertain;
+      saveWorkbenchPaymentRecovery(uncertain);
+      setState('payment_uncertain');
+      setError(null);
     } catch (cause) {
       if (controller.signal.aborted) return;
-      try {
-        saveWorkbenchPaymentRecovery({ ...recovery, phase: 'uncertain' });
-      } catch {
-        // The earlier recovery record retains the exact idempotency key.
-      }
+      const uncertain = { ...recovery, phase: 'uncertain' as const };
+      paymentRecovery.current = uncertain;
+      saveWorkbenchPaymentRecovery(uncertain);
       setState('payment_uncertain');
       setError(paymentStatusError(cause));
     } finally {
@@ -967,7 +1073,10 @@ function paymentStatusError(cause: unknown): string {
   return 'Payment status could not be confirmed. No new payment was requested. Try the read-only status check again.';
 }
 
-function paymentAttemptError(cause: unknown, quoteAmount: string): string {
-  if (cause instanceof PaymentRecoveryStorageError) return cause.message;
-  return paymentPreparationError(cause, quoteAmount);
+function paymentAttemptError(cause: unknown, quoteAmount: string, attemptId?: string): string {
+  const message =
+    cause instanceof PaymentAttemptBusyError
+      ? `${cause.message} Check its status before trying again.`
+      : paymentPreparationError(cause, quoteAmount);
+  return attemptId ? `${message} Reference ${attemptId}.` : message;
 }

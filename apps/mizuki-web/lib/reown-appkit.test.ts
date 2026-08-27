@@ -202,7 +202,7 @@ describe('Reown AppKit', () => {
     );
   });
 
-  it('accepts a full signed transaction only when its message is unchanged', async () => {
+  it('preserves the full wallet transaction for downstream payment validation', async () => {
     const { signWalletConnectTransactions } = await import('./reown-appkit');
     const originalBytes = versionedTransaction();
     const original = getTransactionDecoder().decode(originalBytes);
@@ -223,7 +223,13 @@ describe('Reown AppKit', () => {
     });
     expect(result!.signedTransaction).toEqual(signedBytes);
 
-    const changedBytes = versionedTransaction('SysvarRent111111111111111111111111111111111');
+    const changed = getTransactionDecoder().decode(
+      versionedTransaction('SysvarRent111111111111111111111111111111111'),
+    );
+    const changedBytes = getTransactionEncoder().encode({
+      ...changed,
+      signatures: { ...changed.signatures, [address(payer)]: signatureBytes },
+    });
     mocks.request.mockResolvedValue({
       transaction: getBase64Decoder().decode(changedBytes),
     });
@@ -233,7 +239,7 @@ describe('Reown AppKit', () => {
         chain: 'solana:mainnet',
         transaction: originalBytes,
       }),
-    ).rejects.toThrow('changed the payment transaction');
+    ).resolves.toEqual([{ signedTransaction: changedBytes }]);
   });
 
   it('uses the underlying requester when AppKit returns a wrapped reconnect provider', async () => {

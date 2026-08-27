@@ -18,6 +18,10 @@ export const SOLANA_MAINNET = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp';
 export const PAYMENT_AUTHORIZATION_MAX_BYTES = 12_000;
 const MOCK_FEE_PAYER = '2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4';
 
+export function paymentMemo(quoteId: string): string {
+  return `mizuki:payment:v1:${quoteId}`;
+}
+
 export type PaymentAttempt =
   | { ok: true; payment: Payment; responseHeader?: string }
   | { ok: false; challenge: PaymentRequired; reason?: string };
@@ -214,6 +218,7 @@ export class Payments {
       maxTimeoutSeconds: 300,
       extra: {
         description: `${quote.class} maintenance job for ${quote.owner}/${quote.repo}#${quote.issueNumber}`,
+        memo: paymentMemo(quote.id),
       },
     });
     const accepted = requirements.find((candidate) => this.matchesQuote(candidate, quote));
@@ -241,6 +246,7 @@ export class Payments {
       requirements.asset === USDC_MAINNET &&
       requirements.payTo === this.config.payTo &&
       requirements.amount === quote.priceAtomic &&
+      requirements.extra?.memo === paymentMemo(quote.id) &&
       requirements.maxTimeoutSeconds === 300
     );
   }
@@ -339,7 +345,7 @@ function mockChallenge(quote: Quote, config: Config): PaymentRequired {
         payTo: config.payTo || '11111111111111111111111111111111',
         maxTimeoutSeconds: 300,
         asset: USDC_MAINNET,
-        extra: { feePayer: MOCK_FEE_PAYER },
+        extra: { feePayer: MOCK_FEE_PAYER, memo: paymentMemo(quote.id) },
       },
     ],
     error: 'Payment required',

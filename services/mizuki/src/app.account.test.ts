@@ -506,6 +506,223 @@ describe('workbench account API', () => {
     expect(github.currentHead).not.toHaveBeenCalled();
   });
 
+  it('creates and recovers a server-owned payment attempt without browser storage', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    await store.saveQuote(quote);
+    await store.linkQuoteToAccount(quote.id, '42');
+    const base = await serve(dependencies(store));
+
+    const created = await fetch(`${base}/v1/account/payment-attempts`, {
+      method: 'POST',
+      headers: { ...sessionHeaders, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        quote_id: quote.id,
+        wallet: payment.payer,
+        app_build: 'release-f3be9e6',
+      }),
+    });
+    expect(created.status).toBe(201);
+    const body = (await created.json()) as {
+      attempt: { id: string; idempotencyKey: string; stage: string; retrySafe: boolean };
+    };
+    expect(body.attempt).toMatchObject({ stage: 'created', retrySafe: true });
+    expect(body.attempt.id).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(body.attempt.idempotencyKey).toMatch(/^[0-9a-f-]{36}$/i);
+
+    const active = await fetch(`${base}/v1/account/payment-attempts/active`, {
+      headers: sessionHeaders,
+    });
+    expect(active.status).toBe(200);
+    await expect(active.json()).resolves.toMatchObject({
+      paymentStatus: 'created',
+      attempt: { id: body.attempt.id, quoteId: quote.id },
+      quote: { id: quote.id },
+    });
+
+    for (const stage of ['wallet_opened', 'wallet_signed', 'submitting']) {
+      const updated = await fetch(`${base}/v1/account/payment-attempts/${body.attempt.id}/stage`, {
+        method: 'PATCH',
+        headers: { ...sessionHeaders, 'content-type': 'application/json' },
+        body: JSON.stringify({ stage }),
+      });
+      expect(updated.status).toBe(200);
+      await expect(updated.json()).resolves.toMatchObject({
+        attempt: { id: body.attempt.id, stage },
+      });
+    }
+  });
+
+  it('closes an expired signed attempt when no job was ever reserved', async () => {
+    const store = new MemoryStore();
+    const expiredQuote = {
+      ...quote,
+      id: '22222222-2222-4222-8222-222222222222',
+      expiresAt: '2026-01-01T00:00:00.000Z',
+    };
+    const nextQuote = {
+      ...quote,
+      id: '33333333-3333-4333-8333-333333333333',
+      issueNumber: 8,
+    };
+    await store.upsertContributor('42', 'maintainer');
+    await Promise.all([store.saveQuote(expiredQuote), store.saveQuote(nextQuote)]);
+    await Promise.all([
+      store.linkQuoteToAccount(expiredQuote.id, '42'),
+      store.linkQuoteToAccount(nextQuote.id, '42'),
+    ]);
+    const attempt = await store.createPaymentAttempt({
+      githubId: '42',
+      quoteId: expiredQuote.id,
+      wallet: payment.payer,
+      appBuild: 'release-f3be9e6',
+    });
+    await store.updatePaymentAttemptStage(attempt.id, '42', 'wallet_opened');
+    await store.updatePaymentAttemptStage(attempt.id, '42', 'wallet_signed');
+    await store.updatePaymentAttemptStage(attempt.id, '42', 'submitting');
+    const base = await serve(dependencies(store));
+
+    const response = await fetch(`${base}/v1/account/payment-attempts/active`, {
+      headers: sessionHeaders,
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      paymentStatus: 'expired_unpaid',
+      retrySafe: true,
+      attempt: { id: attempt.id, stage: 'expired_unpaid', retrySafe: true },
+    });
+    await expect(
+      store.createPaymentAttempt({
+        githubId: '42',
+        quoteId: nextQuote.id,
+        wallet: payment.payer,
+        appBuild: 'release-f3be9e6',
+      }),
+    ).resolves.toMatchObject({ quoteId: nextQuote.id, stage: 'created' });
+  });
+
+  it('binds payment recovery to the reserved job and rejects a second active quote', async () => {
+    const store = new MemoryStore();
+    const otherQuote = { ...quote, id: '22222222-2222-4222-8222-222222222222', issueNumber: 8 };
+    await store.upsertContributor('42', 'maintainer');
+    await Promise.all([store.saveQuote(quote), store.saveQuote(otherQuote)]);
+    await Promise.all([
+      store.linkQuoteToAccount(quote.id, '42'),
+      store.linkQuoteToAccount(otherQuote.id, '42'),
+    ]);
+    const attempt = await store.createPaymentAttempt({
+      githubId: '42',
+      quoteId: quote.id,
+      wallet: payment.payer,
+      appBuild: 'release-f3be9e6',
+    });
+    await expect(
+      store.createPaymentAttempt({
+        githubId: '42',
+        quoteId: otherQuote.id,
+        wallet: payment.payer,
+        appBuild: 'release-f3be9e6',
+      }),
+    ).rejects.toThrow('resolve the active payment attempt');
+    const { job } = await store.createJob(
+      quote,
+      payment,
+      attempt.idempotencyKey,
+      undefined,
+      attempt.id,
+    );
+    const base = await serve(dependencies(store));
+
+    const response = await fetch(`${base}/v1/account/payment-attempts/active`, {
+      headers: sessionHeaders,
+    });
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      paymentStatus: 'job_reserved',
+      attempt: { id: attempt.id, jobId: job.id, settlementTransaction: 'settlement' },
+      job: { id: job.id },
+    });
+  });
+
+  it('binds job creation to the server attempt key and exact paying wallet', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    await store.saveQuote(quote);
+    await store.linkQuoteToAccount(quote.id, '42');
+    await store.updateOperatorControls({
+      expectedRevision: 0,
+      intakeEnabled: true,
+      reason: 'payment attempt integration test',
+      updatedBy: 'test',
+    });
+    const attempt = await store.createPaymentAttempt({
+      githubId: '42',
+      quoteId: quote.id,
+      wallet: payment.payer,
+      appBuild: 'release-f3be9e6',
+    });
+    const settle = vi.fn(async (_quote, _signature, persist) => {
+      const authorized = {
+        ...payment,
+        payer: '2'.repeat(32),
+        transaction: 'pending',
+        signature: 'signed-payment',
+      };
+      await persist(authorized);
+      return { ok: true as const, payment: { ...authorized, transaction: 'settlement' } };
+    });
+    const base = await serve(
+      dependencies(store, {
+        github: {
+          assertIssueAuthorization: vi.fn(async () => undefined),
+          currentHead: vi.fn(async () => quote.baseSha),
+        },
+        payments: { settle },
+        processor: { process: vi.fn(async () => undefined) },
+      }),
+    );
+
+    const mismatched = await fetch(`${base}/v1/jobs`, {
+      method: 'POST',
+      headers: {
+        ...sessionHeaders,
+        'content-type': 'application/json',
+        'idempotency-key': attempt.idempotencyKey,
+        'payment-signature': 'signed-payment',
+      },
+      body: JSON.stringify({ quote_id: quote.id, payment_attempt_id: attempt.id }),
+    });
+    expect(mismatched.status).toBe(409);
+    await expect(store.jobByQuote(quote.id)).resolves.toBeUndefined();
+
+    settle.mockImplementationOnce(async (_quote, _signature, persist) => {
+      const authorized = { ...payment, transaction: 'pending', signature: 'signed-payment' };
+      await persist(authorized);
+      return { ok: true as const, payment: { ...authorized, transaction: 'settlement' } };
+    });
+    const accepted = await fetch(`${base}/v1/jobs`, {
+      method: 'POST',
+      headers: {
+        ...sessionHeaders,
+        'content-type': 'application/json',
+        'idempotency-key': attempt.idempotencyKey,
+        'payment-signature': 'signed-payment',
+      },
+      body: JSON.stringify({ quote_id: quote.id, payment_attempt_id: attempt.id }),
+    });
+    expect(accepted.status).toBe(202);
+    await expect(accepted.json()).resolves.toMatchObject({ state: 'paid' });
+    await expect(store.jobByQuote(quote.id)).resolves.toMatchObject({
+      payment: { payer: payment.payer, transaction: 'settlement' },
+      paymentAttemptId: attempt.id,
+    });
+    await expect(store.paymentAttempt(attempt.id, '42')).resolves.toMatchObject({
+      stage: 'job_reserved',
+      settlementTransaction: 'settlement',
+    });
+  });
+
   it('rejects a malformed payment-status quote id before reading the store', async () => {
     const store = new MemoryStore();
     await store.upsertContributor('42', 'maintainer');

@@ -90,7 +90,7 @@ describe('Workbench responsive records and controls', () => {
     expect(html).not.toContain('Payment confirmation was interrupted');
   });
 
-  it('checks the account record automatically after the wallet returns a signed transaction', () => {
+  it('binds every signed retry to a server attempt and reconciles failures', () => {
     const source = readFileSync(new URL('./new-job-wizard.tsx', import.meta.url), 'utf8');
     const start = source.indexOf('async function payAndStart()');
     const end = source.indexOf('async function checkPaymentStatus()', start);
@@ -98,8 +98,11 @@ describe('Workbench responsive records and controls', () => {
 
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
-    expect(paymentAttempt).toMatch(
-      /if \(recovery\) \{[\s\S]*await resolvePaymentRecovery\(uncertainRecovery\);[\s\S]*return;/,
+    expect(paymentAttempt).toContain('await createPaymentAttempt');
+    expect(paymentAttempt).toContain('payment_attempt_id: attempt.id');
+    expect(paymentAttempt).toContain('await resolvePaymentRecovery(');
+    expect(paymentAttempt.indexOf('await createPaymentAttempt')).toBeLessThan(
+      paymentAttempt.indexOf('createPaymentFetch'),
     );
   });
 });

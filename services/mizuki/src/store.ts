@@ -23,6 +23,7 @@ import type {
   AccountApiToken,
   AccountRepository,
   Contributor,
+  CustomerPaymentAttempt,
   GithubOAuthFlow,
   Job,
   JobState,
@@ -31,6 +32,7 @@ import type {
   OperatorControls,
   OperatorControlsPatch,
   Payment,
+  PaymentAttemptStage,
   Quote,
   RepositoryAdmissionReceipt,
   WalletChallenge,
@@ -87,6 +89,26 @@ export interface MizukiStore {
     githubId: string,
     idempotencyKey: string,
   ): Promise<AccountPaymentStatus>;
+  createPaymentAttempt(input: {
+    githubId: string;
+    quoteId: string;
+    wallet: string;
+    appBuild: string;
+  }): Promise<CustomerPaymentAttempt>;
+  paymentAttempt(id: string, githubId: string): Promise<CustomerPaymentAttempt | undefined>;
+  activePaymentAttempt(githubId: string): Promise<CustomerPaymentAttempt | undefined>;
+  latestPaymentAttempt(githubId: string): Promise<CustomerPaymentAttempt | undefined>;
+  updatePaymentAttemptStage(
+    id: string,
+    githubId: string,
+    stage: PaymentAttemptStage,
+  ): Promise<CustomerPaymentAttempt>;
+  bindPaymentAttemptJob(
+    id: string,
+    githubId: string,
+    jobId: string,
+    settlementTransaction?: string,
+  ): Promise<CustomerPaymentAttempt>;
   jobsForAccount(githubId: string, limit: number): Promise<AccountJobsPage>;
   linkAccountRepository(githubId: string, owner: string, repo: string): Promise<AccountRepository>;
   repositoriesForAccount(githubId: string, limit: number): Promise<AccountRepositoriesPage>;
@@ -95,6 +117,7 @@ export interface MizukiStore {
     payment: Payment,
     idempotencyKey: string,
     repositoryAdmission?: RepositoryAdmissionReceipt,
+    paymentAttemptId?: string,
   ): Promise<{ job: Job; created: boolean }>;
   job(id: string): Promise<Job | undefined>;
   jobByIdempotencyKey(key: string): Promise<Job | undefined>;
@@ -161,6 +184,7 @@ export class MemoryStore implements MizukiStore {
   private readonly contributors = new Map<string, Contributor>();
   private readonly apiTokens = new Map<string, AccountApiToken>();
   private readonly quoteAccounts = new Map<string, string>();
+  private readonly paymentAttempts = new Map<string, CustomerPaymentAttempt>();
   private readonly accountRepositories = new Map<string, AccountRepository>();
   private readonly githubOAuthFlows = new Map<string, GithubOAuthFlow>();
   private readonly challenges = new Map<string, WalletChallenge>();
@@ -259,6 +283,105 @@ export class MemoryStore implements MizukiStore {
     return job ? { kind: 'reserved', quote, job } : { kind: 'unpaid', quote };
   }
 
+  async createPaymentAttempt(input: {
+    githubId: string;
+    quoteId: string;
+    wallet: string;
+    appBuild: string;
+  }): Promise<CustomerPaymentAttempt> {
+    const quote = await this.quoteForAccount(input.quoteId, input.githubId);
+    if (!quote) throw new Error('quote not found');
+    const existing = [...this.paymentAttempts.values()].find(
+      (attempt) => attempt.quoteId === input.quoteId && attempt.githubId === input.githubId,
+    );
+    if (existing) {
+      if (existing.wallet !== input.wallet || existing.appBuild !== input.appBuild) {
+        throw new StateConflictError('quote already has a payment attempt');
+      }
+      return structuredClone(existing);
+    }
+    const active = await this.activePaymentAttempt(input.githubId);
+    if (active) {
+      throw new StateConflictError('resolve the active payment attempt before starting another');
+    }
+    const now = new Date().toISOString();
+    const attempt: CustomerPaymentAttempt = {
+      id: randomUUID(),
+      githubId: input.githubId,
+      quoteId: input.quoteId,
+      wallet: input.wallet,
+      appBuild: input.appBuild,
+      idempotencyKey: randomUUID(),
+      stage: 'created',
+      retrySafe: true,
+      expiresAt: quote.expiresAt,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.paymentAttempts.set(attempt.id, attempt);
+    return structuredClone(attempt);
+  }
+
+  async paymentAttempt(id: string, githubId: string): Promise<CustomerPaymentAttempt | undefined> {
+    const attempt = this.paymentAttempts.get(id);
+    return attempt?.githubId === githubId ? structuredClone(attempt) : undefined;
+  }
+
+  async activePaymentAttempt(githubId: string): Promise<CustomerPaymentAttempt | undefined> {
+    return clone(
+      [...this.paymentAttempts.values()]
+        .filter(
+          (attempt) =>
+            attempt.githubId === githubId &&
+            !['job_reserved', 'expired_unpaid'].includes(attempt.stage),
+        )
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0],
+    );
+  }
+
+  async latestPaymentAttempt(githubId: string): Promise<CustomerPaymentAttempt | undefined> {
+    return clone(
+      [...this.paymentAttempts.values()]
+        .filter((attempt) => attempt.githubId === githubId && attempt.stage !== 'expired_unpaid')
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0],
+    );
+  }
+
+  async updatePaymentAttemptStage(
+    id: string,
+    githubId: string,
+    stage: PaymentAttemptStage,
+  ): Promise<CustomerPaymentAttempt> {
+    const current = await this.paymentAttempt(id, githubId);
+    if (!current) throw new Error('payment attempt not found');
+    const attempt = transitionPaymentAttempt(current, stage);
+    this.paymentAttempts.set(id, attempt);
+    return structuredClone(attempt);
+  }
+
+  async bindPaymentAttemptJob(
+    id: string,
+    githubId: string,
+    jobId: string,
+    settlementTransaction?: string,
+  ): Promise<CustomerPaymentAttempt> {
+    const current = await this.paymentAttempt(id, githubId);
+    if (!current) throw new Error('payment attempt not found');
+    if (current.jobId && current.jobId !== jobId) {
+      throw new StateConflictError('payment attempt is already bound to another job');
+    }
+    const attempt: CustomerPaymentAttempt = {
+      ...current,
+      stage: 'job_reserved',
+      retrySafe: false,
+      jobId,
+      ...(settlementTransaction ? { settlementTransaction } : {}),
+      updatedAt: new Date().toISOString(),
+    };
+    this.paymentAttempts.set(id, attempt);
+    return structuredClone(attempt);
+  }
+
   async jobsForAccount(githubId: string, limit: number): Promise<AccountJobsPage> {
     const boundedLimit = accountJobLimit(limit);
     const accountJobs = [...this.jobs.values()]
@@ -319,6 +442,7 @@ export class MemoryStore implements MizukiStore {
     payment: Payment,
     idempotencyKey: string,
     repositoryAdmission?: RepositoryAdmissionReceipt,
+    paymentAttemptId?: string,
   ): Promise<{ job: Job; created: boolean }> {
     const proofHash = paymentProofHash(payment);
     const candidates = [...this.jobs.values()].filter(
@@ -348,6 +472,7 @@ export class MemoryStore implements MizukiStore {
     const job: Job = {
       id: randomUUID(),
       idempotencyKey,
+      ...(paymentAttemptId ? { paymentAttemptId } : {}),
       quote: structuredClone(quote),
       payment: structuredClone(payment),
       ...(repositoryAdmission ? { repositoryAdmission: structuredClone(repositoryAdmission) } : {}),
@@ -1063,6 +1188,157 @@ export class PostgresStore implements MizukiStore {
       : { kind: 'unpaid', quote: row.quote_payload };
   }
 
+  async createPaymentAttempt(input: {
+    githubId: string;
+    quoteId: string;
+    wallet: string;
+    appBuild: string;
+  }): Promise<CustomerPaymentAttempt> {
+    return this.transaction(async (client) => {
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+        `mizuki-payment-attempt:${input.githubId}`,
+      ]);
+      const quote = await client.query<{ expires_at: Date }>(
+        `SELECT quotes.expires_at
+         FROM mizuki_quotes AS quotes
+         JOIN mizuki_account_quotes AS links ON links.quote_id = quotes.id
+         WHERE quotes.id = $1 AND links.github_id = $2
+         FOR UPDATE`,
+        [input.quoteId, input.githubId],
+      );
+      if (!quote.rows[0]) throw new Error('quote not found');
+      const current = await client.query<{ payload: CustomerPaymentAttempt }>(
+        `SELECT payload FROM mizuki_payment_attempts
+         WHERE quote_id = $1 AND github_id = $2`,
+        [input.quoteId, input.githubId],
+      );
+      if (current.rows[0]) {
+        const attempt = current.rows[0].payload;
+        if (attempt.wallet !== input.wallet || attempt.appBuild !== input.appBuild) {
+          throw new StateConflictError('quote already has a payment attempt');
+        }
+        return attempt;
+      }
+      const active = await client.query<{ payload: CustomerPaymentAttempt }>(
+        `SELECT payload FROM mizuki_payment_attempts
+         WHERE github_id = $1 AND stage NOT IN ('job_reserved', 'expired_unpaid')
+         ORDER BY created_at DESC LIMIT 1`,
+        [input.githubId],
+      );
+      if (active.rows[0]) {
+        throw new StateConflictError('resolve the active payment attempt before starting another');
+      }
+      const now = new Date().toISOString();
+      const attempt: CustomerPaymentAttempt = {
+        id: randomUUID(),
+        githubId: input.githubId,
+        quoteId: input.quoteId,
+        wallet: input.wallet,
+        appBuild: input.appBuild,
+        idempotencyKey: randomUUID(),
+        stage: 'created',
+        retrySafe: true,
+        expiresAt: quote.rows[0].expires_at.toISOString(),
+        createdAt: now,
+        updatedAt: now,
+      };
+      await client.query(
+        `INSERT INTO mizuki_payment_attempts
+          (id, github_id, quote_id, idempotency_key, stage, retry_safe, expires_at,
+           created_at, updated_at, payload)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9::jsonb)`,
+        [
+          attempt.id,
+          attempt.githubId,
+          attempt.quoteId,
+          attempt.idempotencyKey,
+          attempt.stage,
+          attempt.retrySafe,
+          attempt.expiresAt,
+          now,
+          JSON.stringify(attempt),
+        ],
+      );
+      return attempt;
+    });
+  }
+
+  async paymentAttempt(id: string, githubId: string): Promise<CustomerPaymentAttempt | undefined> {
+    const result = await this.pool.query<{ payload: CustomerPaymentAttempt }>(
+      'SELECT payload FROM mizuki_payment_attempts WHERE id = $1 AND github_id = $2',
+      [id, githubId],
+    );
+    return result.rows[0]?.payload;
+  }
+
+  async activePaymentAttempt(githubId: string): Promise<CustomerPaymentAttempt | undefined> {
+    const result = await this.pool.query<{ payload: CustomerPaymentAttempt }>(
+      `SELECT payload FROM mizuki_payment_attempts
+       WHERE github_id = $1 AND stage NOT IN ('job_reserved', 'expired_unpaid')
+       ORDER BY created_at DESC LIMIT 1`,
+      [githubId],
+    );
+    return result.rows[0]?.payload;
+  }
+
+  async latestPaymentAttempt(githubId: string): Promise<CustomerPaymentAttempt | undefined> {
+    const result = await this.pool.query<{ payload: CustomerPaymentAttempt }>(
+      `SELECT payload FROM mizuki_payment_attempts
+       WHERE github_id = $1 AND stage <> 'expired_unpaid'
+       ORDER BY created_at DESC LIMIT 1`,
+      [githubId],
+    );
+    return result.rows[0]?.payload;
+  }
+
+  async updatePaymentAttemptStage(
+    id: string,
+    githubId: string,
+    stage: PaymentAttemptStage,
+  ): Promise<CustomerPaymentAttempt> {
+    return this.transaction(async (client) => {
+      const result = await client.query<{ payload: CustomerPaymentAttempt }>(
+        `SELECT payload FROM mizuki_payment_attempts
+         WHERE id = $1 AND github_id = $2 FOR UPDATE`,
+        [id, githubId],
+      );
+      if (!result.rows[0]) throw new Error('payment attempt not found');
+      const attempt = transitionPaymentAttempt(result.rows[0].payload, stage);
+      await savePaymentAttempt(client, attempt);
+      return attempt;
+    });
+  }
+
+  async bindPaymentAttemptJob(
+    id: string,
+    githubId: string,
+    jobId: string,
+    settlementTransaction?: string,
+  ): Promise<CustomerPaymentAttempt> {
+    return this.transaction(async (client) => {
+      const result = await client.query<{ payload: CustomerPaymentAttempt }>(
+        `SELECT payload FROM mizuki_payment_attempts
+         WHERE id = $1 AND github_id = $2 FOR UPDATE`,
+        [id, githubId],
+      );
+      if (!result.rows[0]) throw new Error('payment attempt not found');
+      const current = result.rows[0].payload;
+      if (current.jobId && current.jobId !== jobId) {
+        throw new StateConflictError('payment attempt is already bound to another job');
+      }
+      const attempt: CustomerPaymentAttempt = {
+        ...current,
+        stage: 'job_reserved',
+        retrySafe: false,
+        jobId,
+        ...(settlementTransaction ? { settlementTransaction } : {}),
+        updatedAt: new Date().toISOString(),
+      };
+      await savePaymentAttempt(client, attempt);
+      return attempt;
+    });
+  }
+
   async jobsForAccount(githubId: string, limit: number): Promise<AccountJobsPage> {
     const boundedLimit = accountJobLimit(limit);
     const result = await this.pool.query<{
@@ -1185,6 +1461,7 @@ export class PostgresStore implements MizukiStore {
     payment: Payment,
     idempotencyKey: string,
     repositoryAdmission?: RepositoryAdmissionReceipt,
+    paymentAttemptId?: string,
   ): Promise<{ job: Job; created: boolean }> {
     return this.transaction(async (client) => {
       const now = new Date().toISOString();
@@ -1192,6 +1469,7 @@ export class PostgresStore implements MizukiStore {
       const job: Job = {
         id: randomUUID(),
         idempotencyKey,
+        ...(paymentAttemptId ? { paymentAttemptId } : {}),
         quote,
         payment,
         ...(repositoryAdmission ? { repositoryAdmission } : {}),
@@ -1996,6 +2274,52 @@ function updateJob(current: Job, state: JobState, patch: JobPatch): Job {
   };
 }
 
+const PAYMENT_ATTEMPT_TRANSITIONS: Record<PaymentAttemptStage, readonly PaymentAttemptStage[]> = {
+  created: ['wallet_opened', 'expired_unpaid'],
+  wallet_opened: ['wallet_signed', 'expired_unpaid'],
+  wallet_signed: ['submitting', 'indeterminate', 'job_reserved', 'expired_unpaid'],
+  submitting: ['indeterminate', 'job_reserved', 'expired_unpaid'],
+  indeterminate: ['job_reserved', 'expired_unpaid'],
+  job_reserved: [],
+  expired_unpaid: [],
+};
+
+function transitionPaymentAttempt(
+  current: CustomerPaymentAttempt,
+  stage: PaymentAttemptStage,
+): CustomerPaymentAttempt {
+  if (current.stage === stage) return current;
+  if (!PAYMENT_ATTEMPT_TRANSITIONS[current.stage].includes(stage)) {
+    throw new StateConflictError(`payment attempt is ${current.stage}; cannot move to ${stage}`);
+  }
+  return {
+    ...current,
+    stage,
+    retrySafe: stage === 'created' || stage === 'wallet_opened' || stage === 'expired_unpaid',
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+async function savePaymentAttempt(
+  client: PoolClient,
+  attempt: CustomerPaymentAttempt,
+): Promise<void> {
+  const result = await client.query(
+    `UPDATE mizuki_payment_attempts
+     SET stage = $3, retry_safe = $4, updated_at = $5, payload = $6::jsonb
+     WHERE id = $1 AND github_id = $2`,
+    [
+      attempt.id,
+      attempt.githubId,
+      attempt.stage,
+      attempt.retrySafe,
+      attempt.updatedAt,
+      JSON.stringify(attempt),
+    ],
+  );
+  if (result.rowCount !== 1) throw new StateConflictError('payment attempt changed concurrently');
+}
+
 function clone<T>(value: T | undefined): T | undefined {
   return value === undefined ? undefined : structuredClone(value);
 }
@@ -2429,6 +2753,31 @@ CREATE INDEX mizuki_account_repositories_verified_idx
   ON mizuki_account_repositories(github_id, verified_at DESC);
 `;
 
+export const PAYMENT_ATTEMPTS_SCHEMA_V1 = `
+CREATE TABLE mizuki_payment_attempts (
+  id uuid PRIMARY KEY,
+  github_id text NOT NULL REFERENCES mizuki_contributors(github_id),
+  quote_id uuid NOT NULL UNIQUE REFERENCES mizuki_quotes(id),
+  idempotency_key uuid NOT NULL UNIQUE,
+  stage text NOT NULL CHECK (stage IN (
+    'created', 'wallet_opened', 'wallet_signed', 'submitting',
+    'job_reserved', 'expired_unpaid', 'indeterminate'
+  )),
+  retry_safe boolean NOT NULL,
+  expires_at timestamptz NOT NULL,
+  created_at timestamptz NOT NULL,
+  updated_at timestamptz NOT NULL,
+  payload jsonb NOT NULL
+);
+CREATE INDEX mizuki_payment_attempts_account_idx
+  ON mizuki_payment_attempts(github_id, created_at DESC);
+CREATE INDEX mizuki_payment_attempts_stage_idx
+  ON mizuki_payment_attempts(stage, updated_at);
+CREATE UNIQUE INDEX mizuki_payment_attempts_one_active_per_account_idx
+  ON mizuki_payment_attempts(github_id)
+  WHERE stage NOT IN ('job_reserved', 'expired_unpaid');
+`;
+
 export const WORKBENCH_API_TOKENS_SCHEMA_V1 = `
 CREATE TABLE mizuki_account_api_tokens (
   id uuid PRIMARY KEY,
@@ -2524,7 +2873,10 @@ async function migrate(pool: Pool): Promise<void> {
       },
       {
         name: 'workbench',
-        migrations: [{ version: 1, name: 'workbench-accounts', sql: WORKBENCH_ACCOUNTS_SCHEMA_V1 }],
+        migrations: [
+          { version: 1, name: 'workbench-accounts', sql: WORKBENCH_ACCOUNTS_SCHEMA_V1 },
+          { version: 2, name: 'payment-attempts', sql: PAYMENT_ATTEMPTS_SCHEMA_V1 },
+        ],
       },
       {
         name: 'workbench-api-tokens',

@@ -252,6 +252,42 @@ const refundLiabilitySchema = z.object({
 
 export type RefundLiability = z.infer<typeof refundLiabilitySchema>;
 
+const paymentIntentSchema = z
+  .object({
+    id: z.string().uuid(),
+    jobId: z.string().uuid(),
+    quoteId: z.string().uuid(),
+    repositoryAdmissionId: z.string().uuid(),
+    status: z.enum(['reserved', 'activated', 'expired_unpaid']),
+    payer: z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/),
+    payee: z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/),
+    mint: z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/),
+    rawAmount: z.string().regex(/^[1-9]\d*$/),
+    amountUsdCents: z.number().int().positive(),
+    bountyAmountUsdCents: z.number().int().positive(),
+    bountyReserveLamports: z.string().regex(/^\d+$/),
+    memo: z.string().min(1).max(128),
+    paymentWindowStartUnixSeconds: z.number().int().safe(),
+    paymentWindowEndUnixSeconds: z.number().int().safe(),
+    settlementSignature: z.string().nullable(),
+    liabilityId: z.string().uuid().nullable(),
+    createdAt: z.string().datetime({ offset: true }),
+    activatedAt: z.string().datetime({ offset: true }).nullable(),
+    expiredAt: z.string().datetime({ offset: true }).nullable(),
+  })
+  .strict();
+
+export type PaymentIntent = z.infer<typeof paymentIntentSchema>;
+
+const paymentIntentActivationSchema = z
+  .object({
+    paymentIntent: paymentIntentSchema,
+    refundLiability: refundLiabilitySchema,
+  })
+  .strict();
+
+export type PaymentIntentActivation = z.infer<typeof paymentIntentActivationSchema>;
+
 export interface RefundLiabilityCommitment {
   repository: string;
   issueNumber: number;
@@ -314,6 +350,17 @@ export interface PaymentPolicy extends RefundCapacityPolicy {
     binding: RepositoryAdmissionBinding,
   ): Promise<RepositoryAdmissionReceipt>;
   reconcileRepositorySettlement(receipt: RepositoryAdmissionReceipt): Promise<SettlementEvidence>;
+  reservePaymentIntent(
+    jobId: string,
+    commitment: RefundLiabilityCommitment,
+    admission: RepositoryAdmissionReceipt,
+    bountyAmountUsdCents: number,
+  ): Promise<PaymentIntent>;
+  activatePaymentIntent(
+    paymentIntentId: string,
+    settlementSignature: string,
+  ): Promise<PaymentIntentActivation>;
+  reconcilePaymentIntent(paymentIntentId: string): Promise<PaymentIntentActivation | PaymentIntent>;
   registerRefundLiability(
     jobId: string,
     settlementSignature: string,
@@ -429,6 +476,96 @@ export class PolicySignerClient implements FinancialPolicy {
         body: JSON.stringify(body),
       }),
     );
+  }
+
+  async reservePaymentIntent(
+    jobId: string,
+    commitment: RefundLiabilityCommitment,
+    admission: RepositoryAdmissionReceipt,
+    bountyAmountUsdCents: number,
+  ): Promise<PaymentIntent> {
+    const parsedAdmission = repositoryAdmissionSchema.parse(admission);
+    this.assertAdmissionCommitment(parsedAdmission, commitment);
+    if (!Number.isSafeInteger(bountyAmountUsdCents) || bountyAmountUsdCents <= 0) {
+      throw new Error('bounty reserve must be a positive integer number of cents');
+    }
+    const authorizationExpiresAt = new Date(this.now().getTime() + 5 * 60_000).toISOString();
+    const repository = commitment.repository.toLowerCase();
+    const repositoryAuthorizedAt = new Date(commitment.repositoryAuthorizedAt).toISOString();
+    const message = [
+      'Mizuki payment intent authorization',
+      'Version: 1',
+      `Job: ${jobId}`,
+      `Repository Admission: ${parsedAdmission.id}`,
+      `Repository Admission Evidence: ${parsedAdmission.evidenceHash}`,
+      `Repository: ${repository}`,
+      `Issue: ${commitment.issueNumber}`,
+      `Base Ref: ${commitment.baseRef}`,
+      `Base SHA: ${commitment.baseSha}`,
+      `Repository Authorized At: ${repositoryAuthorizedAt}`,
+      `Authorization Evidence: ${commitment.authorizationEvidenceHash}`,
+      `Bounty Amount USD Cents: ${bountyAmountUsdCents}`,
+      `Expires At: ${authorizationExpiresAt}`,
+    ].join('\n');
+    if (!this.jobAuthorityKey) throw new Error('job authority is not configured');
+    return paymentIntentSchema.parse(
+      await this.callJson('/v1/payment-intents', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'idempotency-key': `mizuki-payment-intent-${jobId}`,
+        },
+        body: JSON.stringify({
+          jobId,
+          repositoryAdmissionId: parsedAdmission.id,
+          repositoryAdmissionEvidenceHash: parsedAdmission.evidenceHash,
+          repository,
+          issueNumber: commitment.issueNumber,
+          baseRef: commitment.baseRef,
+          baseSha: commitment.baseSha,
+          repositoryAuthorizedAt,
+          authorizationEvidenceHash: commitment.authorizationEvidenceHash,
+          bountyAmountUsdCents,
+          authorizationExpiresAt,
+          authorizationSignature: sign(
+            null,
+            Buffer.from(message, 'utf8'),
+            this.jobAuthorityKey,
+          ).toString('base64'),
+        }),
+      }),
+    );
+  }
+
+  async activatePaymentIntent(
+    paymentIntentId: string,
+    settlementSignature: string,
+  ): Promise<PaymentIntentActivation> {
+    return paymentIntentActivationSchema.parse(
+      await this.callJson(`/v1/payment-intents/${paymentIntentId}/activate`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'idempotency-key': `mizuki-payment-intent-activate-${paymentIntentId}`,
+        },
+        body: JSON.stringify({ settlementSignature }),
+      }),
+    );
+  }
+
+  async reconcilePaymentIntent(
+    paymentIntentId: string,
+  ): Promise<PaymentIntentActivation | PaymentIntent> {
+    const value = await this.callJson(`/v1/payment-intents/${paymentIntentId}/reconcile`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'idempotency-key': `mizuki-payment-intent-reconcile-${paymentIntentId}`,
+      },
+      body: '{}',
+    });
+    const activation = paymentIntentActivationSchema.safeParse(value);
+    return activation.success ? activation.data : paymentIntentSchema.parse(value);
   }
 
   async refund(jobId: string, settlementSignature: string): Promise<PolicyOperation> {

@@ -77,6 +77,7 @@ const envSchema = z
     MIZUKI_ESCROW_DAILY_LIMIT_USD_CENTS: z.coerce.number().int().positive().default(10_000),
     MIZUKI_MAX_ESCROW_LAMPORTS: z.coerce.number().int().positive().default(1_000_000_000),
     MIZUKI_SOL_FEE_RESERVE_LAMPORTS: z.coerce.number().int().positive().default(1_000_000),
+    MIZUKI_REFUND_FEE_RESERVE_LAMPORTS: z.coerce.number().int().positive().default(10_000),
     MIZUKI_BIND_CHALLENGE_TTL_SECONDS: z.coerce.number().int().min(60).max(900).default(600),
     MIZUKI_GITHUB_GRANT_TTL_SECONDS: z.coerce.number().int().min(60).max(900).default(600),
     MIZUKI_CLAIM_TTL_SECONDS: z.coerce.number().int().min(172_800).max(604_800).default(172_800),
@@ -129,6 +130,7 @@ export interface SignerConfig {
   escrowDailyLimitUsdCents: number;
   maxEscrowLamports: number;
   solFeeReserveLamports: number;
+  refundFeeReserveLamports: number;
   bindChallengeTtlSeconds: number;
   githubGrantTtlSeconds: number;
   claimTtlSeconds: number;
@@ -256,6 +258,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SignerConfig {
     escrowDailyLimitUsdCents: parsed.MIZUKI_ESCROW_DAILY_LIMIT_USD_CENTS,
     maxEscrowLamports: parsed.MIZUKI_MAX_ESCROW_LAMPORTS,
     solFeeReserveLamports: parsed.MIZUKI_SOL_FEE_RESERVE_LAMPORTS,
+    refundFeeReserveLamports: parsed.MIZUKI_REFUND_FEE_RESERVE_LAMPORTS,
     bindChallengeTtlSeconds: parsed.MIZUKI_BIND_CHALLENGE_TTL_SECONDS,
     githubGrantTtlSeconds: parsed.MIZUKI_GITHUB_GRANT_TTL_SECONDS,
     claimTtlSeconds: parsed.MIZUKI_CLAIM_TTL_SECONDS,

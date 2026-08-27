@@ -74,6 +74,7 @@ const policy = new PolicyService(
     escrowDailyLimitUsdCents: config.escrowDailyLimitUsdCents,
     maxEscrowLamports: config.maxEscrowLamports,
     solFeeReserveLamports: config.solFeeReserveLamports,
+    refundFeeReserveLamports: config.refundFeeReserveLamports,
     bindChallengeTtlSeconds: config.bindChallengeTtlSeconds,
     githubGrantTtlSeconds: config.githubGrantTtlSeconds,
     claimTtlSeconds: config.claimTtlSeconds,

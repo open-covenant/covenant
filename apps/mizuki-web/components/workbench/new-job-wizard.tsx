@@ -36,7 +36,7 @@ import {
   workbenchRequest,
   WorkbenchRequestError,
 } from '@/lib/workbench-client';
-import { paymentWalletNetwork, useStandardWallet } from '@/lib/wallet-standard';
+import { paymentWalletNetwork } from '@/lib/wallet-standard';
 import { createPaymentFetch, paymentPreparationError } from '@/lib/x402';
 import {
   ServiceContractNote,
@@ -47,6 +47,7 @@ import {
   WorkbenchStatus,
 } from './workbench-primitives';
 import { OrganizationRepositorySelector } from './organization-repository-selector';
+import { useWorkbenchWallet } from './workbench-wallet';
 import { RepositoryPullRequests } from './jobs';
 
 export function NewJobWizard({
@@ -243,7 +244,7 @@ function IssueAndPayment({
     error: walletError,
     connect,
     disconnect,
-  } = useStandardWallet('transaction');
+  } = useWorkbenchWallet();
 
   useEffect(() => {
     if (issues.status !== 'ready' || issueUrl) return;

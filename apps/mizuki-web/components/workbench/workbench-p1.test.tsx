@@ -2,7 +2,13 @@ import { readFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import { BillingEntryRow } from './billing';
-import { ConnectedPaymentSummary, PaymentRecoveryNotice } from './new-job-wizard';
+import {
+  ConnectedPaymentSummary,
+  paymentAttemptError,
+  PaymentRecoveryNotice,
+  paymentStatusError,
+} from './new-job-wizard';
+import { WorkbenchRequestError } from '../../lib/workbench-client';
 import { WorkbenchHeader, WorkbenchNavLink } from './workbench-shell';
 
 describe('Workbench responsive records and controls', () => {
@@ -103,6 +109,44 @@ describe('Workbench responsive records and controls', () => {
     expect(paymentAttempt).toContain('await resolvePaymentRecovery(');
     expect(paymentAttempt.indexOf('await createPaymentAttempt')).toBeLessThan(
       paymentAttempt.indexOf('createPaymentFetch'),
+    );
+  });
+
+  it('classifies payment-attempt API failures without blaming the wallet', () => {
+    expect(
+      paymentAttemptError(
+        new WorkbenchRequestError('service dependencies are not ready', 503),
+        '2 USDC',
+      ),
+    ).toBe(
+      'The payment service is temporarily unavailable. Try again in a moment. No payment or job was created.',
+    );
+    expect(paymentAttemptError(new WorkbenchRequestError('quote expired', 409), '2 USDC')).toBe(
+      'This quote expired. Refresh the page and request a new fixed quote. No payment or job was created.',
+    );
+    expect(
+      paymentAttemptError(
+        new WorkbenchRequestError('resolve the active payment attempt', 409),
+        '2 USDC',
+      ),
+    ).toContain('already has a payment attempt');
+    expect(
+      paymentAttemptError(
+        new WorkbenchRequestError('service dependencies are not ready', 503),
+        '2 USDC',
+      ),
+    ).not.toContain('Reconnect');
+  });
+
+  it('classifies recovery reads using the error returned by Workbench requests', () => {
+    expect(paymentStatusError(new WorkbenchRequestError('quote not found', 404))).toContain(
+      'saved quote could not be found',
+    );
+    expect(paymentStatusError(new WorkbenchRequestError('conflict', 409))).toContain(
+      'conflicts with another request',
+    );
+    expect(paymentStatusError(new WorkbenchRequestError('rate limited', 429))).toContain(
+      'being checked too frequently',
     );
   });
 });

@@ -164,6 +164,11 @@ export default function RobinhoodPage() {
           </p>
           <p className={`${paragraph} mt-6`}>
             Pairs with{" "}
+            <a className={link} href="/equities">
+              bounded equity trading
+            </a>{" "}
+            on the same chain, where the bound is the price and size of a trade rather
+            than the size of a payment, and{" "}
             <a className={link} href="/guard">
               Covenant Guard
             </a>

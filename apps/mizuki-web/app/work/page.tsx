@@ -1,8 +1,6 @@
 import type { Metadata } from 'next';
-import { IntakeGate } from '@/components/intake-gate';
+import Link from 'next/link';
 import { JobLookup } from '@/components/job-lookup';
-import { QuoteWorkflow } from '@/components/quote-workflow';
-import { getAdmission } from '@/lib/api';
 import { pageMetadata } from '@/lib/page-metadata';
 
 export const dynamic = 'force-dynamic';
@@ -15,8 +13,6 @@ export const metadata: Metadata = pageMetadata({
 });
 
 export default async function WorkPage() {
-  const admission = await getAdmission();
-
   return (
     <div className="page-shell">
       <section className="page-hero shell work-hero">
@@ -38,9 +34,21 @@ export default async function WorkPage() {
         </div>
       </section>
       <section className="shell work-grid">
-        <IntakeGate admission={admission}>
-          <QuoteWorkflow />
-        </IntakeGate>
+        <section className="workbench-entry" aria-labelledby="workbench-entry-title">
+          <p className="eyebrow">Mizuki Workbench</p>
+          <h2 id="workbench-entry-title">Start and manage paid maintenance in one place.</h2>
+          <p>
+            Sign in with GitHub, choose a repository, authorize an eligible issue, receive a fixed
+            quote, connect a Solana wallet, and follow the job through pull request or refund.
+          </p>
+          <Link className="button button-primary" href="/app/jobs/new">
+            Open Workbench
+          </Link>
+          <p className="workbench-entry-note">
+            Requesting a quote is free. Your wallet opens only after you review and approve a fixed
+            quote.
+          </p>
+        </section>
         <aside className="scope-policy">
           <p className="eyebrow">Before requesting a quote</p>
           <h2>Authorize one repository</h2>
@@ -58,7 +66,7 @@ export default async function WorkPage() {
               Open the repository in Mizuki Workbench and authorize the issue with one click. Only
               maintainers with triage access or higher can complete this step.
             </li>
-            <li>Paste the issue URL into the quote form.</li>
+            <li>Choose the issue and request a fixed quote in Workbench.</li>
           </ol>
           <div className="scope-app-actions">
             <a

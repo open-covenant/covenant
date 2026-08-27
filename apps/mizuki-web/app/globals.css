@@ -1815,6 +1815,38 @@ textarea:focus-visible {
   min-width: 0;
 }
 
+.workbench-entry {
+  min-width: 0;
+  padding: clamp(28px, 4vw, 48px);
+  border: 1px solid #33383b;
+  background: #080909;
+}
+
+.workbench-entry h2 {
+  max-width: 620px;
+  margin: 18px 0;
+  font-size: clamp(28px, 4vw, 50px);
+  font-weight: 350;
+  line-height: 1.06;
+  letter-spacing: -0.035em;
+}
+
+.workbench-entry > p:not(.eyebrow) {
+  max-width: 640px;
+  color: #92999c;
+  line-height: 1.65;
+}
+
+.workbench-entry .button {
+  margin-top: 20px;
+}
+
+.workbench-entry .workbench-entry-note {
+  margin: 18px 0 0;
+  color: #676f73;
+  font-size: 12px;
+}
+
 .issue-form label,
 .job-lookup > label {
   display: block;

@@ -53,6 +53,7 @@ export type PaymentClientErrorCode =
   | 'challenge_invalid'
   | 'insufficient_funds'
   | 'rpc_unavailable'
+  | 'wallet_authorization_failed'
   | 'wallet_disconnected'
   | 'wallet_rejected'
   | 'wallet_response_invalid'
@@ -243,6 +244,8 @@ export function paymentPreparationError(cause: unknown, quoteAmount: string): st
         return 'Payment was cancelled in your wallet. Your wallet was not charged and no job was created.';
       case 'wallet_disconnected':
         return 'The payment wallet disconnected. Reconnect it and try again. Your wallet was not charged and no job was created.';
+      case 'wallet_authorization_failed':
+        return 'The wallet could not authorize this payment. Check the wallet for details or try another supported wallet. No payment or job was created.';
       case 'wallet_signature_invalid':
       case 'wallet_response_invalid':
       case 'wallet_transaction_unsafe':
@@ -292,7 +295,7 @@ export function paymentPreparationError(cause: unknown, quoteAmount: string): st
     return 'The Solana payment network could not prepare the transaction. Try again in a moment. Your wallet was not charged and no job was created.';
   }
 
-  return 'Payment could not start. Reconnect the wallet and try again. Your wallet was not charged and no job was created.';
+  return 'The wallet could not authorize this payment. Check the wallet for details or try another supported wallet. No payment or job was created.';
 }
 
 export function parsePaymentTerms(value: unknown, quoteAmount: string): PaymentTerms {
@@ -515,17 +518,7 @@ function walletSigner(
           })),
         );
       } catch (cause) {
-        const message = cause instanceof Error ? cause.message : '';
-        const code = /reject|declin|cancel/i.test(message)
-          ? 'wallet_rejected'
-          : 'wallet_disconnected';
-        throw new PaymentClientError(
-          code,
-          code === 'wallet_rejected'
-            ? 'The wallet rejected the payment request'
-            : 'The wallet disconnected before authorizing the payment',
-          { cause },
-        );
+        throw walletSigningFailure(cause);
       }
       if (walletResults.length !== transactions.length) {
         throw new PaymentClientError(
@@ -557,6 +550,62 @@ function walletSigner(
       return signatures;
     },
   };
+}
+
+function walletSigningFailure(cause: unknown): PaymentClientError {
+  const detail = walletErrorDetail(cause);
+  if (/\b4001\b|reject|declin|cancel|user denied|user refused/i.test(detail)) {
+    return new PaymentClientError('wallet_rejected', 'The wallet rejected the payment request', {
+      cause,
+    });
+  }
+  if (
+    /disconnect|not connected|session.*(?:closed|expired|missing|not found)|account.*(?:changed|mismatch|does not match)|network.*(?:changed|mismatch)|chain.*(?:changed|mismatch)/i.test(
+      detail,
+    )
+  ) {
+    return new PaymentClientError(
+      'wallet_disconnected',
+      'The wallet disconnected before authorizing the payment',
+      { cause },
+    );
+  }
+  if (
+    /malformed|invalid.*(?:response|transaction|signature)|incomplete|did not sign|not a signer|unsupported|does not support.*sign|cannot sign/i.test(
+      detail,
+    )
+  ) {
+    return new PaymentClientError(
+      'wallet_response_invalid',
+      'The wallet returned an unsupported signing response',
+      { cause },
+    );
+  }
+  return new PaymentClientError(
+    'wallet_authorization_failed',
+    'The wallet could not authorize the payment',
+    { cause },
+  );
+}
+
+function walletErrorDetail(cause: unknown): string {
+  const detail: string[] = [];
+  let current = cause;
+  for (let depth = 0; depth < 3 && current; depth += 1) {
+    if (current instanceof Error) {
+      detail.push(current.name, current.message);
+      current = current.cause;
+      continue;
+    }
+    if (!isRecord(current)) break;
+    if (typeof current.name === 'string') detail.push(current.name);
+    if (typeof current.message === 'string') detail.push(current.message);
+    if (typeof current.code === 'string' || typeof current.code === 'number') {
+      detail.push(String(current.code));
+    }
+    current = current.cause;
+  }
+  return detail.join(' ');
 }
 
 function notifyStage(

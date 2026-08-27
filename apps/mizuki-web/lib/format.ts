@@ -77,6 +77,7 @@ export function stateLabel(value: string): string {
     standard: 'Standard',
     quoted: 'Quote created',
     settlement_pending: 'Payment pending',
+    payment_expired: 'Payment authorization expired',
     paid: 'Payment confirmed',
     admitted: 'Payment confirmed',
     running: 'Work in progress',

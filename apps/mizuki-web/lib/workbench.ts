@@ -777,5 +777,5 @@ export function jobIssueNumber(job: WorkbenchJob): number | undefined {
 }
 
 export function isActiveJob(job: WorkbenchJob): boolean {
-  return !['delivered', 'refunded'].includes(job.state);
+  return !['delivered', 'refunded', 'payment_expired'].includes(job.state);
 }

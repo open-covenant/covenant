@@ -12,6 +12,7 @@ export type JobClass = 'micro' | 'standard';
 export type JobState =
   | 'quoted'
   | 'settlement_pending'
+  | 'payment_expired'
   | 'paid'
   | 'admitted'
   | 'running'

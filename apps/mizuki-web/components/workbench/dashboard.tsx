@@ -197,7 +197,7 @@ function FirstRepository() {
 
 function paidTotal(jobs: WorkbenchJob[]): string {
   return jobs
-    .filter((job) => !['quoted', 'settlement_pending'].includes(job.state))
+    .filter((job) => !['quoted', 'settlement_pending', 'payment_expired'].includes(job.state))
     .reduce((total, job) => total + BigInt(job.priceAtomic || '0'), 0n)
     .toString();
 }

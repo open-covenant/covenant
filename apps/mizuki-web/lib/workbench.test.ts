@@ -121,7 +121,7 @@ describe('Workbench response normalization', () => {
     for (const state of ['failed', 'rejected', 'refund_pending'] as const) {
       expect(isActiveJob({ state } as WorkbenchJob)).toBe(true);
     }
-    for (const state of ['delivered', 'refunded'] as const) {
+    for (const state of ['delivered', 'refunded', 'payment_expired'] as const) {
       expect(isActiveJob({ state } as WorkbenchJob)).toBe(false);
     }
   });

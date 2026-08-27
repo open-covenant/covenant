@@ -100,7 +100,14 @@ export function WorkbenchShell({
           <Image src="/covenant-mark.svg" alt="Covenant" width={1140} height={1050} priority />
         </a>
         <Link className="workbench-brand" href="/app" aria-label="Mizuki Workbench home">
-          <Image src="/mizuki-mark.svg" alt="" width={1470} height={1050} className="mizuki-mark" priority />
+          <Image
+            src="/mizuki-mark.svg"
+            alt=""
+            width={1470}
+            height={1050}
+            className="mizuki-mark"
+            priority
+          />
           <span>
             <strong>Mizuki</strong>
             <small>Maintenance workbench</small>
@@ -276,7 +283,14 @@ function WorkbenchAccessState({
       </a>
       <div className="workbench-access-card">
         <Link className="workbench-access-brand" href="/">
-          <Image src="/mizuki-mark.svg" alt="" width={1470} height={1050} className="mizuki-mark" priority />
+          <Image
+            src="/mizuki-mark.svg"
+            alt=""
+            width={1470}
+            height={1050}
+            className="mizuki-mark"
+            priority
+          />
           <span>
             <strong>Mizuki the Mech</strong>
             <small>Maintenance workbench</small>

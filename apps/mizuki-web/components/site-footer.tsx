@@ -11,11 +11,23 @@ export function SiteFooter({ intakeOpen }: { intakeOpen: boolean }) {
         <div className="footer-intro">
           <div className="footer-brand-row">
             <a href="https://opencovenant.org" aria-label="OpenCovenant home">
-              <Image src="/covenant-mark.svg" alt="OpenCovenant" width={1140} height={1050} className="covenant-mark-inline" />
+              <Image
+                src="/covenant-mark.svg"
+                alt="OpenCovenant"
+                width={1140}
+                height={1050}
+                className="covenant-mark-inline"
+              />
             </a>
             <div className="brand footer-brand">
               <span className="brand-mark" aria-hidden="true">
-                <Image src="/mizuki-mark.svg" alt="" width={1470} height={1050} className="mizuki-mark" />
+                <Image
+                  src="/mizuki-mark.svg"
+                  alt=""
+                  width={1470}
+                  height={1050}
+                  className="mizuki-mark"
+                />
               </span>
               <span>Mizuki the Mech</span>
             </div>

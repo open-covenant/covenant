@@ -1,13 +1,13 @@
 'use client';
 
-import { useEffect } from "react";
+import { useEffect } from 'react';
 
 // Splits a heading into words wrapped in masks so they can be lifted into view
 // one at a time. Walks text nodes in place so inline wrappers (the gradient
 // span) survive the split. Runs on the client, so the markup stays plain HTML
 // for crawlers and for anyone whose JS never executes.
 function splitTextNode(node: Text, counter: { i: number }) {
-  const words = (node.textContent ?? "").split(/(\s+)/);
+  const words = (node.textContent ?? '').split(/(\s+)/);
   const frag = document.createDocumentFragment();
   for (const part of words) {
     if (!part) continue;
@@ -15,12 +15,12 @@ function splitTextNode(node: Text, counter: { i: number }) {
       frag.append(document.createTextNode(part));
       continue;
     }
-    const mask = document.createElement("span");
-    mask.className = "word-mask";
-    const inner = document.createElement("span");
-    inner.className = "word";
+    const mask = document.createElement('span');
+    mask.className = 'word-mask';
+    const inner = document.createElement('span');
+    inner.className = 'word';
     inner.textContent = part;
-    inner.style.setProperty("--word-delay", `${(counter.i += 1) * 0.055 - 0.055}s`);
+    inner.style.setProperty('--word-delay', `${(counter.i += 1) * 0.055 - 0.055}s`);
     mask.append(inner);
     frag.append(mask);
   }
@@ -28,7 +28,7 @@ function splitTextNode(node: Text, counter: { i: number }) {
 }
 
 function prepareWordReveal(el: HTMLElement) {
-  if (el.dataset.split === "true") return;
+  if (el.dataset.split === 'true') return;
   const counter = { i: 0 };
   const walk = (parent: Node) => {
     for (const child of [...parent.childNodes]) {
@@ -40,11 +40,11 @@ function prepareWordReveal(el: HTMLElement) {
       const el = child as HTMLElement;
       // background-clip:text cannot paint into nested spans, so a gradient
       // word is lifted whole rather than split.
-      if (el.classList.contains("ramp-text")) {
-        const mask = document.createElement("span");
-        mask.className = "word-mask";
-        el.classList.add("word");
-        el.style.setProperty("--word-delay", `${(counter.i += 1) * 0.055 - 0.055}s`);
+      if (el.classList.contains('ramp-text')) {
+        const mask = document.createElement('span');
+        mask.className = 'word-mask';
+        el.classList.add('word');
+        el.style.setProperty('--word-delay', `${(counter.i += 1) * 0.055 - 0.055}s`);
         el.replaceWith(mask);
         mask.append(el);
         continue;
@@ -53,55 +53,55 @@ function prepareWordReveal(el: HTMLElement) {
     }
   };
   walk(el);
-  el.dataset.split = "true";
+  el.dataset.split = 'true';
 }
 
 // Mizuki's pipeline, read out around the cursor: how a scoped issue becomes a
 // patch, passes the repository's checks, and clears a separate AI reviewer.
 const READOUTS = [
-  { slot: "tl", label: "SCOPE", speed: 1.0, cross: 0.6, phase: 0.0 },
-  { slot: "tr", label: "PATCH", speed: 1.6, cross: -0.9, phase: 1.7 },
-  { slot: "bl", label: "CHECKS", speed: -1.3, cross: 0.7, phase: 3.1 },
-  { slot: "br", label: "REVIEW", speed: 2.1, cross: 1.2, phase: 4.6 },
+  { slot: 'tl', label: 'SCOPE', speed: 1.0, cross: 0.6, phase: 0.0 },
+  { slot: 'tr', label: 'PATCH', speed: 1.6, cross: -0.9, phase: 1.7 },
+  { slot: 'bl', label: 'CHECKS', speed: -1.3, cross: 0.7, phase: 3.1 },
+  { slot: 'br', label: 'REVIEW', speed: 2.1, cross: 1.2, phase: 4.6 },
 ];
 
 export function SiteMotion() {
   useEffect(() => {
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const topbar = document.querySelector<HTMLElement>(".site-header");
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const topbar = document.querySelector<HTMLElement>('.site-header');
     let last = window.scrollY;
 
     const onScroll = () => {
       const y = window.scrollY;
-      if (topbar) topbar.classList.toggle("is-scrolled", y > 40);
+      if (topbar) topbar.classList.toggle('is-scrolled', y > 40);
 
       last = y;
     };
 
     // Only hide-then-reveal once JS is running; without this the sections
     // stay at opacity 0 for anyone whose JS never executes.
-    document.documentElement.classList.add("site-motion");
+    document.documentElement.classList.add('site-motion');
 
     if (!reduced) {
-      document.querySelectorAll<HTMLElement>("[data-reveal-words]").forEach(prepareWordReveal);
+      document.querySelectorAll<HTMLElement>('[data-reveal-words]').forEach(prepareWordReveal);
     }
 
-    const targets = document.querySelectorAll<HTMLElement>(".reveal, [data-reveal-words]");
+    const targets = document.querySelectorAll<HTMLElement>('.reveal, [data-reveal-words]');
     const io = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
           if (!entry.isIntersecting) continue;
-          entry.target.classList.add("is-in");
+          entry.target.classList.add('is-in');
           io.unobserve(entry.target);
         }
       },
-      { rootMargin: "0px 0px -12% 0px" },
+      { rootMargin: '0px 0px -12% 0px' },
     );
     targets.forEach((el) => io.observe(el));
 
     // Hero cursor: a difference-blended dot with a label, alive only while the
     // pointer is over the stage.
-    const stage = document.querySelector<HTMLElement>(".hero-stage");
+    const stage = document.querySelector<HTMLElement>('.hero-stage');
     let orb: HTMLElement | null = null;
     let orbFrame = 0;
     let ox = 0;
@@ -113,8 +113,8 @@ export function SiteMotion() {
       tx = event.clientX;
       ty = event.clientY;
     };
-    const onEnter = () => orb?.classList.add("is-visible");
-    const onLeave = () => orb?.classList.remove("is-visible");
+    const onEnter = () => orb?.classList.add('is-visible');
+    const onLeave = () => orb?.classList.remove('is-visible');
 
     const values = new Map<string, HTMLElement>();
     const shown = new Map<string, number>();
@@ -150,11 +150,11 @@ export function SiteMotion() {
       orbFrame = requestAnimationFrame(trackOrb);
     };
 
-    const fine = window.matchMedia("(pointer: fine)").matches;
+    const fine = window.matchMedia('(pointer: fine)').matches;
     if (!reduced && fine && stage) {
-      orb = document.createElement("div");
-      orb.className = "hero-cursor";
-      orb.setAttribute("aria-hidden", "true");
+      orb = document.createElement('div');
+      orb.className = 'hero-cursor';
+      orb.setAttribute('aria-hidden', 'true');
       orb.innerHTML =
         '<span class="hero-cursor-cross-h"></span>' +
         '<span class="hero-cursor-cross-v"></span>' +
@@ -163,25 +163,25 @@ export function SiteMotion() {
             `<span class="hero-cursor-readout is-${r.slot}">${r.label} <b data-readout="${r.slot}">0.00</b></span>`,
         ).join('');
       document.body.append(orb);
-      orb.querySelectorAll<HTMLElement>("[data-readout]").forEach((el) => {
-        values.set(el.dataset.readout ?? "", el);
+      orb.querySelectorAll<HTMLElement>('[data-readout]').forEach((el) => {
+        values.set(el.dataset.readout ?? '', el);
       });
-      stage.addEventListener("pointermove", onMove, { passive: true });
-      stage.addEventListener("pointerenter", onEnter);
-      stage.addEventListener("pointerleave", onLeave);
+      stage.addEventListener('pointermove', onMove, { passive: true });
+      stage.addEventListener('pointerenter', onEnter);
+      stage.addEventListener('pointerleave', onLeave);
       orbFrame = requestAnimationFrame(trackOrb);
     }
 
-    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener('scroll', onScroll, { passive: true });
     return () => {
-      window.removeEventListener("scroll", onScroll);
-      stage?.removeEventListener("pointermove", onMove);
-      stage?.removeEventListener("pointerenter", onEnter);
-      stage?.removeEventListener("pointerleave", onLeave);
+      window.removeEventListener('scroll', onScroll);
+      stage?.removeEventListener('pointermove', onMove);
+      stage?.removeEventListener('pointerenter', onEnter);
+      stage?.removeEventListener('pointerleave', onLeave);
       if (orbFrame) cancelAnimationFrame(orbFrame);
       orb?.remove();
       io.disconnect();
-      document.documentElement.classList.remove("site-motion");
+      document.documentElement.classList.remove('site-motion');
     };
   }, []);
 

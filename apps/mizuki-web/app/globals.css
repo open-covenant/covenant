@@ -4455,7 +4455,6 @@ h3 {
   transform: scale(0.82);
 }
 
-
 .word-mask {
   display: inline-block;
   overflow: hidden;
@@ -4632,7 +4631,6 @@ h3 {
   opacity: 1;
 }
 
-
 .hero-cursor-cross-h,
 .hero-cursor-cross-v {
   position: absolute;
@@ -4767,7 +4765,6 @@ h3 {
   opacity: 0.4;
   mix-blend-mode: difference;
 }
-
 
 /* Token disclosure, folded into the footer as fine print. */
 .token-note {

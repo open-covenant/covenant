@@ -89,9 +89,11 @@ describe('x402 quote policy', () => {
       requirements.amount,
     );
     expect(() =>
-      selectPaymentRequirements(2, [
-        { ...requirements, extra: { feePayer, memo: `${memo}-changed` } },
-      ], terms),
+      selectPaymentRequirements(
+        2,
+        [{ ...requirements, extra: { feePayer, memo: `${memo}-changed` } }],
+        terms,
+      ),
     ).toThrow('does not match');
   });
 
@@ -171,12 +173,17 @@ describe('wallet-returned SVM transaction validation', () => {
       code: 'wallet_transaction_unsafe',
     });
     await expect(
-      validate(fixture, appendInstruction(fixture.original, 'BPFLoaderUpgradeab1e11111111111111111111111')),
+      validate(
+        fixture,
+        appendInstruction(fixture.original, 'BPFLoaderUpgradeab1e11111111111111111111111'),
+      ),
     ).rejects.toMatchObject({ code: 'wallet_transaction_unsafe' });
-    await expect(validate(fixture, addLighthouse(fixture.original, 1, AccountRole.READONLY_SIGNER)))
-      .rejects.toMatchObject({ code: 'wallet_transaction_unsafe' });
-    await expect(validate(fixture, addLighthouse(fixture.original, 1, AccountRole.WRITABLE)))
-      .rejects.toMatchObject({ code: 'wallet_transaction_unsafe' });
+    await expect(
+      validate(fixture, addLighthouse(fixture.original, 1, AccountRole.READONLY_SIGNER)),
+    ).rejects.toMatchObject({ code: 'wallet_transaction_unsafe' });
+    await expect(
+      validate(fixture, addLighthouse(fixture.original, 1, AccountRole.WRITABLE)),
+    ).rejects.toMatchObject({ code: 'wallet_transaction_unsafe' });
   });
 
   it('rejects an absent or invalid payer signature', async () => {
@@ -235,22 +242,31 @@ async function paymentFixture() {
     (value) => setTransactionMessageFeePayer(address(feePayerAddress), value),
     (value) =>
       setTransactionMessageLifetimeUsingBlockhash(
-        { blockhash: blockhash(getBase58Decoder().decode(new Uint8Array(32).fill(4))), lastValidBlockHeight: 1n },
+        {
+          blockhash: blockhash(getBase58Decoder().decode(new Uint8Array(32).fill(4))),
+          lastValidBlockHeight: 1n,
+        },
         value,
       ),
-    (value) => appendTransactionMessageInstruction(
-      { programAddress: address(computeBudgetProgram), data: new Uint8Array([2, 32, 78, 0, 0]) },
-      value,
-    ),
-    (value) => appendTransactionMessageInstruction(
-      { programAddress: address(computeBudgetProgram), data: new Uint8Array([3, 1, 0, 0, 0, 0, 0, 0, 0]) },
-      value,
-    ),
+    (value) =>
+      appendTransactionMessageInstruction(
+        { programAddress: address(computeBudgetProgram), data: new Uint8Array([2, 32, 78, 0, 0]) },
+        value,
+      ),
+    (value) =>
+      appendTransactionMessageInstruction(
+        {
+          programAddress: address(computeBudgetProgram),
+          data: new Uint8Array([3, 1, 0, 0, 0, 0, 0, 0, 0]),
+        },
+        value,
+      ),
     (value) => appendTransactionMessageInstruction(transfer, value),
-    (value) => appendTransactionMessageInstruction(
-      { programAddress: address(memoProgram), data: new TextEncoder().encode(memo) },
-      value,
-    ),
+    (value) =>
+      appendTransactionMessageInstruction(
+        { programAddress: address(memoProgram), data: new TextEncoder().encode(memo) },
+        value,
+      ),
   );
   const unsigned = new Uint8Array(getTransactionEncoder().encode(compileTransaction(message)));
   const original = transactionWithSignature(unsigned, payerAddress, 7);
@@ -329,7 +345,9 @@ function changeMemo(transaction: Uint8Array): Uint8Array {
 
 function decompile(transaction: Uint8Array) {
   const decoded = getTransactionDecoder().decode(transaction);
-  return decompileTransactionMessage(getCompiledTransactionMessageDecoder().decode(decoded.messageBytes));
+  return decompileTransactionMessage(
+    getCompiledTransactionMessageDecoder().decode(decoded.messageBytes),
+  );
 }
 
 function encodeSigned(message: ReturnType<typeof decompile>): Uint8Array {

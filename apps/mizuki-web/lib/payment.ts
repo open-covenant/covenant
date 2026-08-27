@@ -168,9 +168,7 @@ export function normalizePaymentAttempt(value: unknown, expectedQuoteId?: string
   if (!isRecord(source)) throw new Error('The payment attempt response was invalid');
   const id = readBoundedId(source.id);
   const quoteId = readBoundedId(source.quoteId ?? source.quote_id);
-  const idempotencyKey = readIdempotencyKey(
-    source.idempotencyKey ?? source.idempotency_key,
-  );
+  const idempotencyKey = readIdempotencyKey(source.idempotencyKey ?? source.idempotency_key);
   const rawStage = source.stage;
   if (!paymentAttemptStatus(rawStage)) {
     throw new Error('The payment attempt stage was invalid');
@@ -381,10 +379,7 @@ function isWorkbenchPaymentRecovery(value: unknown): value is WorkbenchPaymentRe
   }
   if (typeof value.accountId !== 'string' || !/^[1-9]\d*$/.test(value.accountId)) return false;
   if (typeof value.attemptId !== 'string' || !validBoundedId(value.attemptId)) return false;
-  if (
-    typeof value.idempotencyKey !== 'string' ||
-    !validIdempotencyKey(value.idempotencyKey)
-  ) {
+  if (typeof value.idempotencyKey !== 'string' || !validIdempotencyKey(value.idempotencyKey)) {
     return false;
   }
   if (typeof value.repository !== 'string' || typeof value.issueUrl !== 'string') return false;

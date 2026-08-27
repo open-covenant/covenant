@@ -178,9 +178,16 @@ export function paymentPreparationError(cause: unknown, quoteAmount: string): st
 
 export function parsePaymentTerms(value: unknown, quoteAmount: string): PaymentTerms {
   if (!isRecord(value) || value.x402Version !== 2 || !Array.isArray(value.accepts)) {
-    throw new PaymentClientError('challenge_invalid', 'The quote has no valid x402 v2 payment request');
+    throw new PaymentClientError(
+      'challenge_invalid',
+      'The quote has no valid x402 v2 payment request',
+    );
   }
-  if (!/^\d+$/.test(quoteAmount) || BigInt(quoteAmount) < 1n || BigInt(quoteAmount) > MAX_PAYMENT_ATOMIC) {
+  if (
+    !/^\d+$/.test(quoteAmount) ||
+    BigInt(quoteAmount) < 1n ||
+    BigInt(quoteAmount) > MAX_PAYMENT_ATOMIC
+  ) {
     throw new PaymentClientError('challenge_invalid', 'The fixed quote exceeds the payment limit');
   }
   const requirements = value.accepts[0];
@@ -389,7 +396,9 @@ function walletSigner(
         );
       } catch (cause) {
         const message = cause instanceof Error ? cause.message : '';
-        const code = /reject|declin|cancel/i.test(message) ? 'wallet_rejected' : 'wallet_disconnected';
+        const code = /reject|declin|cancel/i.test(message)
+          ? 'wallet_rejected'
+          : 'wallet_disconnected';
         throw new PaymentClientError(code, 'The wallet did not authorize the payment', { cause });
       }
       if (walletResults.length !== transactions.length) {
@@ -552,7 +561,8 @@ function equalInstruction(
   if (leftAccounts.length !== rightAccounts.length) return false;
   return leftAccounts.every(
     (account, index) =>
-      account.address === rightAccounts[index]?.address && account.role === rightAccounts[index]?.role,
+      account.address === rightAccounts[index]?.address &&
+      account.role === rightAccounts[index]?.role,
   );
 }
 

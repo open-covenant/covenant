@@ -4,6 +4,7 @@ import {
   observeWalletAccounts,
   paymentWalletNetwork,
   selectSolanaAccount,
+  supportsWallet,
   type CompatibleWallet,
   type WalletConnectionState,
   WalletConnectionController,
@@ -61,6 +62,35 @@ describe('Wallet Standard account observation', () => {
 
     expect(selectSolanaAccount([readOnly, signing], 'solana:mainnet', 'transaction')).toBe(signing);
     expect(selectSolanaAccount([readOnly], 'solana:mainnet', 'transaction')).toBeNull();
+  });
+
+  it('does not advertise a wallet that cannot sign version-zero payments', () => {
+    const base = wallet('Versioned', Promise.resolve()).wallet;
+    const compatible = {
+      ...base,
+      features: {
+        ...base.features,
+        'solana:signTransaction': {
+          version: '1.0.0',
+          supportedTransactionVersions: [0],
+          signTransaction: vi.fn(),
+        },
+      },
+    } as CompatibleWallet;
+    expect(supportsWallet(compatible, 'transaction', 'solana:mainnet')).toBe(true);
+
+    const legacy = {
+      ...base,
+      features: {
+        ...base.features,
+        'solana:signTransaction': {
+          version: '1.0.0',
+          supportedTransactionVersions: ['legacy'],
+          signTransaction: vi.fn(),
+        },
+      },
+    } as CompatibleWallet;
+    expect(supportsWallet(legacy, 'transaction', 'solana:mainnet')).toBe(false);
   });
 
   it('derives the payment label from the configured Solana network', () => {

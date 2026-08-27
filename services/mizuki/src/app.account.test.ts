@@ -511,7 +511,8 @@ describe('workbench account API', () => {
     await store.upsertContributor('42', 'maintainer');
     await store.saveQuote(quote);
     await store.linkQuoteToAccount(quote.id, '42');
-    const base = await serve(dependencies(store));
+    const challenge = vi.fn(async () => ({ x402Version: 2, accepts: [{ scheme: 'exact' }] }));
+    const base = await serve(dependencies(store, { payments: { challenge } }));
 
     const created = await fetch(`${base}/v1/account/payment-attempts`, {
       method: 'POST',
@@ -537,8 +538,12 @@ describe('workbench account API', () => {
     await expect(active.json()).resolves.toMatchObject({
       paymentStatus: 'created',
       attempt: { id: body.attempt.id, quoteId: quote.id },
-      quote: { id: quote.id },
+      quote: {
+        id: quote.id,
+        payment: { x402Version: 2, accepts: [{ scheme: 'exact' }] },
+      },
     });
+    expect(challenge).toHaveBeenCalledWith(quote);
 
     for (const stage of ['wallet_opened', 'wallet_signed', 'submitting']) {
       const updated = await fetch(`${base}/v1/account/payment-attempts/${body.attempt.id}/stage`, {
@@ -553,7 +558,7 @@ describe('workbench account API', () => {
     }
   });
 
-  it('closes an expired signed attempt when no job was ever reserved', async () => {
+  it('keeps an expired signed attempt indeterminate when no job was ever reserved', async () => {
     const store = new MemoryStore();
     const expiredQuote = {
       ...quote,
@@ -588,9 +593,9 @@ describe('workbench account API', () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
-      paymentStatus: 'expired_unpaid',
-      retrySafe: true,
-      attempt: { id: attempt.id, stage: 'expired_unpaid', retrySafe: true },
+      paymentStatus: 'indeterminate',
+      retrySafe: false,
+      attempt: { id: attempt.id, stage: 'indeterminate', retrySafe: false },
     });
     await expect(
       store.createPaymentAttempt({
@@ -599,32 +604,20 @@ describe('workbench account API', () => {
         wallet: payment.payer,
         appBuild: 'release-f3be9e6',
       }),
-    ).resolves.toMatchObject({ quoteId: nextQuote.id, stage: 'created' });
+    ).rejects.toThrow('resolve the active payment attempt');
   });
 
-  it('binds payment recovery to the reserved job and rejects a second active quote', async () => {
+  it('binds direct recovery to the reserved job without returning it as a new active attempt', async () => {
     const store = new MemoryStore();
-    const otherQuote = { ...quote, id: '22222222-2222-4222-8222-222222222222', issueNumber: 8 };
     await store.upsertContributor('42', 'maintainer');
-    await Promise.all([store.saveQuote(quote), store.saveQuote(otherQuote)]);
-    await Promise.all([
-      store.linkQuoteToAccount(quote.id, '42'),
-      store.linkQuoteToAccount(otherQuote.id, '42'),
-    ]);
+    await store.saveQuote(quote);
+    await store.linkQuoteToAccount(quote.id, '42');
     const attempt = await store.createPaymentAttempt({
       githubId: '42',
       quoteId: quote.id,
       wallet: payment.payer,
       appBuild: 'release-f3be9e6',
     });
-    await expect(
-      store.createPaymentAttempt({
-        githubId: '42',
-        quoteId: otherQuote.id,
-        wallet: payment.payer,
-        appBuild: 'release-f3be9e6',
-      }),
-    ).rejects.toThrow('resolve the active payment attempt');
     const { job } = await store.createJob(
       quote,
       payment,
@@ -634,15 +627,116 @@ describe('workbench account API', () => {
     );
     const base = await serve(dependencies(store));
 
-    const response = await fetch(`${base}/v1/account/payment-attempts/active`, {
+    const recovered = await fetch(`${base}/v1/account/payment-attempts/${attempt.id}`, {
       headers: sessionHeaders,
     });
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
+    expect(recovered.status).toBe(200);
+    await expect(recovered.json()).resolves.toMatchObject({
       paymentStatus: 'job_reserved',
       attempt: { id: attempt.id, jobId: job.id, settlementTransaction: 'settlement' },
       job: { id: job.id },
     });
+
+    const active = await fetch(`${base}/v1/account/payment-attempts/active`, {
+      headers: sessionHeaders,
+    });
+    expect(active.status).toBe(200);
+    await expect(active.json()).resolves.toMatchObject({
+      paymentStatus: 'job_reserved',
+      attempt: { id: attempt.id },
+      job: { id: job.id },
+    });
+
+    const recreated = await fetch(`${base}/v1/account/payment-attempts`, {
+      method: 'POST',
+      headers: { ...sessionHeaders, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        quote_id: quote.id,
+        wallet: payment.payer,
+        app_build: 'release-new',
+      }),
+    });
+    expect(recreated.status).toBe(201);
+    await expect(recreated.json()).resolves.toMatchObject({
+      paymentStatus: 'job_reserved',
+      attempt: { id: attempt.id },
+      job: { id: job.id },
+    });
+
+    await store.transitionJob(job.id, 'settlement_pending', 'delivered');
+    const completed = await fetch(`${base}/v1/account/payment-attempts/active`, {
+      headers: sessionHeaders,
+    });
+    expect(completed.status).toBe(200);
+    await expect(completed.json()).resolves.toMatchObject({
+      attempt: null,
+      paymentStatus: 'none',
+    });
+  });
+
+  it('reuses an unpaid attempt across builds and supersedes it for a different quote', async () => {
+    const store = new MemoryStore();
+    const nextQuote = { ...quote, id: '22222222-2222-4222-8222-222222222222', issueNumber: 8 };
+    await store.upsertContributor('42', 'maintainer');
+    await Promise.all([store.saveQuote(quote), store.saveQuote(nextQuote)]);
+    await Promise.all([
+      store.linkQuoteToAccount(quote.id, '42'),
+      store.linkQuoteToAccount(nextQuote.id, '42'),
+    ]);
+    const attempt = await store.createPaymentAttempt({
+      githubId: '42',
+      quoteId: quote.id,
+      wallet: payment.payer,
+      appBuild: 'release-old',
+    });
+
+    await expect(
+      store.createPaymentAttempt({
+        githubId: '42',
+        quoteId: quote.id,
+        wallet: payment.payer,
+        appBuild: 'release-new',
+      }),
+    ).resolves.toMatchObject({ id: attempt.id, appBuild: 'release-old' });
+    await expect(
+      store.createPaymentAttempt({
+        githubId: '42',
+        quoteId: nextQuote.id,
+        wallet: payment.payer,
+        appBuild: 'release-new',
+      }),
+    ).resolves.toMatchObject({ quoteId: nextQuote.id, stage: 'created' });
+    await expect(store.paymentAttempt(attempt.id, '42')).resolves.toMatchObject({
+      stage: 'expired_unpaid',
+    });
+  });
+
+  it('does not supersede an attempt after the wallet has signed', async () => {
+    const store = new MemoryStore();
+    const nextQuote = { ...quote, id: '22222222-2222-4222-8222-222222222222', issueNumber: 8 };
+    await store.upsertContributor('42', 'maintainer');
+    await Promise.all([store.saveQuote(quote), store.saveQuote(nextQuote)]);
+    await Promise.all([
+      store.linkQuoteToAccount(quote.id, '42'),
+      store.linkQuoteToAccount(nextQuote.id, '42'),
+    ]);
+    const attempt = await store.createPaymentAttempt({
+      githubId: '42',
+      quoteId: quote.id,
+      wallet: payment.payer,
+      appBuild: 'release-old',
+    });
+    await store.updatePaymentAttemptStage(attempt.id, '42', 'wallet_opened');
+    await store.updatePaymentAttemptStage(attempt.id, '42', 'wallet_signed');
+
+    await expect(
+      store.createPaymentAttempt({
+        githubId: '42',
+        quoteId: nextQuote.id,
+        wallet: payment.payer,
+        appBuild: 'release-new',
+      }),
+    ).rejects.toThrow('resolve the active payment attempt');
   });
 
   it('binds job creation to the server attempt key and exact paying wallet', async () => {
@@ -663,6 +757,10 @@ describe('workbench account API', () => {
       appBuild: 'release-f3be9e6',
     });
     const settle = vi.fn(async (_quote, _signature, persist) => {
+      await expect(store.paymentAttempt(attempt.id, '42')).resolves.toMatchObject({
+        stage: 'submitting',
+        retrySafe: false,
+      });
       const authorized = {
         ...payment,
         payer: '2'.repeat(32),

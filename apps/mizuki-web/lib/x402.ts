@@ -20,6 +20,7 @@ import type { SolanaSignTransactionFeature } from '@solana/wallet-standard-featu
 import type { WalletAccount } from '@wallet-standard/base';
 import { wrapFetchWithPaymentFromConfig, type PaymentRequirements } from '@x402/fetch';
 import { ExactSvmScheme } from '@x402/svm/exact/client';
+import { fetchWithDeadline } from './workbench-client';
 
 const SOLANA_MAINNET = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp';
 const SOLANA_DEVNET = 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1';
@@ -33,6 +34,9 @@ const MEMO_PROGRAM = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
 export const LIGHTHOUSE_PROGRAM = 'L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95';
 const MAX_PAYMENT_ATOMIC = 10_000_000n;
 const MAX_LIGHTHOUSE_INSTRUCTIONS = 2;
+const PAYMENT_CHALLENGE_TIMEOUT_MS = 15_000;
+const PAYMENT_SUBMISSION_TIMEOUT_MS = 60_000;
+const WALLET_SIGNED_STAGE_TIMEOUT_MS = 1_500;
 
 export type PaymentTerms = {
   amount: string;
@@ -72,11 +76,17 @@ export function createPaymentFetch(input: {
   quoteAmount: string;
   onStage?: (stage: PaymentClientStage) => void | Promise<void>;
   request?: typeof fetch;
+  requestTimeoutMs?: number;
+  paidRequestTimeoutMs?: number;
+  stageConfirmationTimeoutMs?: number;
 }): typeof fetch {
   const terms = parsePaymentTerms(input.quotePayment, input.quoteAmount);
+  let paymentError: PaymentClientError | undefined;
   let walletTransaction: Uint8Array | undefined;
   const signer = walletSigner(input.account, input.feature, terms.network, terms, {
     onStage: input.onStage,
+    stageConfirmationTimeoutMs:
+      input.stageConfirmationTimeoutMs ?? WALLET_SIGNED_STAGE_TIMEOUT_MS,
     capture: (transaction) => {
       walletTransaction = transaction;
     },
@@ -90,12 +100,20 @@ export function createPaymentFetch(input: {
       ...args: Parameters<ExactSvmScheme['createPaymentPayload']>
     ): Promise<Awaited<ReturnType<ExactSvmScheme['createPaymentPayload']>>> {
       walletTransaction = undefined;
-      const payload = await delegate.createPaymentPayload(...args);
+      paymentError = undefined;
+      let payload: Awaited<ReturnType<ExactSvmScheme['createPaymentPayload']>>;
+      try {
+        payload = await delegate.createPaymentPayload(...args);
+      } catch (cause) {
+        if (cause instanceof PaymentClientError) paymentError = cause;
+        throw cause;
+      }
       if (!walletTransaction) {
-        throw new PaymentClientError(
+        paymentError = new PaymentClientError(
           'wallet_response_invalid',
           'The wallet did not return a signed payment transaction',
         );
+        throw paymentError;
       }
       return {
         ...payload,
@@ -109,13 +127,21 @@ export function createPaymentFetch(input: {
   const request = input.request ?? fetch;
   const observedRequest: typeof fetch = async (target, init) => {
     const headers = target instanceof Request ? target.headers : new Headers(init?.headers);
+    const signal = init?.signal ?? (target instanceof Request ? target.signal : undefined);
     if (headers.has('payment-signature') || headers.has('x-payment')) {
-      await input.onStage?.('submitting');
+      notifyStage(input.onStage, 'submitting');
     }
-    return request(target, init);
+    return fetchWithDeadline(
+      target,
+      { ...init, signal },
+      request,
+      headers.has('payment-signature') || headers.has('x-payment')
+        ? (input.paidRequestTimeoutMs ?? PAYMENT_SUBMISSION_TIMEOUT_MS)
+        : (input.requestTimeoutMs ?? PAYMENT_CHALLENGE_TIMEOUT_MS),
+    );
   };
 
-  return wrapFetchWithPaymentFromConfig(observedRequest, {
+  const paymentFetch = wrapFetchWithPaymentFromConfig(observedRequest, {
     schemes: [{ network: terms.network, client: scheme }],
     spendControls: {
       allowedAssets: [
@@ -129,6 +155,15 @@ export function createPaymentFetch(input: {
     paymentRequirementsSelector: (version, requirements) =>
       selectPaymentRequirements(version, requirements, terms),
   });
+  return async (target, init) => {
+    paymentError = undefined;
+    try {
+      return await paymentFetch(target, init);
+    } catch (cause) {
+      if (paymentError) throw paymentError;
+      throw cause;
+    }
+  };
 }
 
 export function paymentPreparationError(cause: unknown, quoteAmount: string): string {
@@ -158,6 +193,19 @@ export function paymentPreparationError(cause: unknown, quoteAmount: string): st
   }
   if (/user rejected|declined|cancelled|canceled/i.test(message)) {
     return 'Payment was cancelled in your wallet. Your wallet was not charged and no job was created.';
+  }
+  if (/wallet rejected the payment request/i.test(message)) {
+    return 'Payment was cancelled in your wallet. Your wallet was not charged and no job was created.';
+  }
+  if (/wallet disconnected/i.test(message)) {
+    return 'The payment wallet disconnected. Reconnect it and try again. Your wallet was not charged and no job was created.';
+  }
+  if (
+    /wallet.*(?:incomplete|invalid|different transaction|did not sign|changed protected|unsupported transaction)/i.test(
+      message,
+    )
+  ) {
+    return 'The wallet could not safely authorize this payment. Update or reconnect the wallet, or choose another supported wallet. No payment or job was created.';
   }
   if (/does not expose solana:mainnet/i.test(message)) {
     return 'The connected wallet is not available on Solana mainnet. Switch networks or connect another Solana wallet. No payment or job was created.';
@@ -368,6 +416,7 @@ function walletSigner(
   terms: PaymentTerms,
   hooks: {
     onStage?: (stage: PaymentClientStage) => void | Promise<void>;
+    stageConfirmationTimeoutMs: number;
     capture: (transaction: Uint8Array) => void;
   },
 ): TransactionSigner {
@@ -384,7 +433,7 @@ function walletSigner(
   return {
     address: signerAddress,
     async signTransactions(transactions): Promise<readonly SignatureDictionary[]> {
-      await hooks.onStage?.('wallet_opened');
+      notifyStage(hooks.onStage, 'wallet_opened');
       let walletResults: Awaited<ReturnType<typeof feature.signTransaction>>;
       try {
         walletResults = await feature.signTransaction(
@@ -399,7 +448,13 @@ function walletSigner(
         const code = /reject|declin|cancel/i.test(message)
           ? 'wallet_rejected'
           : 'wallet_disconnected';
-        throw new PaymentClientError(code, 'The wallet did not authorize the payment', { cause });
+        throw new PaymentClientError(
+          code,
+          code === 'wallet_rejected'
+            ? 'The wallet rejected the payment request'
+            : 'The wallet disconnected before authorizing the payment',
+          { cause },
+        );
       }
       if (walletResults.length !== transactions.length) {
         throw new PaymentClientError(
@@ -427,10 +482,42 @@ function walletSigner(
         hooks.capture(signedBytes);
         signatures.push({ [signerAddress]: signature });
       }
-      await hooks.onStage?.('wallet_signed');
+      await confirmStage(hooks.onStage, 'wallet_signed', hooks.stageConfirmationTimeoutMs);
       return signatures;
     },
   };
+}
+
+function notifyStage(
+  handler: ((stage: PaymentClientStage) => void | Promise<void>) | undefined,
+  stage: PaymentClientStage,
+): void {
+  try {
+    void Promise.resolve(handler?.(stage)).catch(() => undefined);
+  } catch {
+    return;
+  }
+}
+
+async function confirmStage(
+  handler: ((stage: PaymentClientStage) => void | Promise<void>) | undefined,
+  stage: PaymentClientStage,
+  timeoutMs: number,
+): Promise<void> {
+  if (!handler) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      Promise.resolve()
+        .then(() => handler(stage))
+        .catch(() => undefined),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 async function validateTransfer(

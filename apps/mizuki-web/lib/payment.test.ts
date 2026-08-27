@@ -4,6 +4,7 @@ import {
   clearWorkbenchPaymentRecovery,
   loadWorkbenchPaymentRecovery,
   paymentAccountId,
+  paymentRetryAllowed,
   PaymentStatusError,
   normalizePaymentAttempt,
   prepareWorkbenchPaymentRecovery,
@@ -53,6 +54,11 @@ describe('issueMatchesRepository', () => {
 });
 
 describe('payment status recovery', () => {
+  it('does not reopen the wallet from stale retry-safe state after local authorization', () => {
+    expect(paymentRetryAllowed({ walletAuthorized: true }, { retrySafe: true })).toBe(false);
+    expect(paymentRetryAllowed({ walletAuthorized: false }, { retrySafe: true })).toBe(true);
+  });
+
   it('checks the existing record without a payment header, body, or wallet request', async () => {
     const request = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
       Response.json({
@@ -214,6 +220,24 @@ describe('Workbench payment recovery storage', () => {
 
     expect(recovery.attemptId).toBe('attempt-11111111');
     expect(loadWorkbenchPaymentRecovery('42', storage)).toBeNull();
+  });
+
+  it('accepts a canonical recovery quote before a new payment challenge is attached', () => {
+    const storage = memoryStorage();
+    const canonicalQuote = { ...quote, payment: undefined };
+    const recovery = prepareWorkbenchPaymentRecovery(
+      {
+        accountId: '42',
+        attemptId: 'attempt-11111111',
+        idempotencyKey: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        repository: 'open-covenant/covenant',
+        issueUrl: canonicalQuote.issueUrl,
+        quote: canonicalQuote,
+      },
+      storage,
+    );
+
+    expect(loadWorkbenchPaymentRecovery('42', storage)).toEqual(recovery);
   });
 
   it('allows the signed-in account to replace the optional cache', () => {

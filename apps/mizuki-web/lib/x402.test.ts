@@ -2,6 +2,7 @@ import {
   AccountRole,
   address,
   appendTransactionMessageInstruction,
+  assertIsSignatureBytes,
   blockhash,
   compileTransaction,
   createTransactionMessage,
@@ -46,6 +47,8 @@ const requirements = {
 
 afterEach(() => {
   delete process.env.NEXT_PUBLIC_SOLANA_NETWORK;
+  delete process.env.NEXT_PUBLIC_SOLANA_RPC_URL;
+  vi.unstubAllGlobals();
 });
 
 describe('x402 quote policy', () => {
@@ -76,6 +79,257 @@ describe('x402 quote policy', () => {
 
     expect(response.status).toBe(200);
     expect(request).toHaveBeenCalledOnce();
+  });
+
+  it('preserves the body through the 402 challenge, wallet signature, and paid retry', async () => {
+    const { payer, accepted, paymentRequired, rpc } = await livePaymentFixture();
+    const stages: string[] = [];
+    const resourceRequests: Array<{ body: unknown; idempotencyKey: string | null; paid: boolean }> =
+      [];
+    const request = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const outgoing = new Request(input, init);
+      resourceRequests.push({
+        body: await outgoing.clone().json(),
+        idempotencyKey: outgoing.headers.get('idempotency-key'),
+        paid: outgoing.headers.has('payment-signature'),
+      });
+      if (resourceRequests.length === 1) {
+        return paymentChallenge(paymentRequired);
+      }
+      return Response.json({ id: 'job-1', state: 'paid' }, { status: 201 });
+    });
+    const paidFetch = createPaymentFetch({
+      account: payer.account,
+      feature: payer.feature,
+      quotePayment: paymentRequired,
+      quoteAmount: accepted.amount,
+      onStage(stage) {
+        stages.push(stage);
+      },
+      request,
+    });
+
+    const response = await paidFetch('https://mizuki.example/api/mizuki/v1/jobs', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'idempotency-key': 'attempt-1' },
+      body: JSON.stringify({ quote_id: 'quote-1', payment_attempt_id: 'attempt-1' }),
+    });
+
+    expect(response.status).toBe(201);
+    expect(resourceRequests).toEqual([
+      {
+        body: { quote_id: 'quote-1', payment_attempt_id: 'attempt-1' },
+        idempotencyKey: 'attempt-1',
+        paid: false,
+      },
+      {
+        body: { quote_id: 'quote-1', payment_attempt_id: 'attempt-1' },
+        idempotencyKey: 'attempt-1',
+        paid: true,
+      },
+    ]);
+    expect(stages).toEqual(['wallet_opened', 'wallet_signed', 'submitting']);
+    expect(rpc).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not open the wallet when the resource does not request payment', async () => {
+    const { payer, paymentRequired } = await livePaymentFixture();
+    const sign = vi.spyOn(payer.feature, 'signTransaction');
+    const request = vi.fn(async () => Response.json({ error: 'unavailable' }, { status: 503 }));
+    const paidFetch = createPaymentFetch({
+      account: payer.account,
+      feature: payer.feature,
+      quotePayment: paymentRequired,
+      quoteAmount: requirements.amount,
+      request,
+    });
+
+    const response = await paidFetch('https://mizuki.example/api/mizuki/v1/jobs', {
+      method: 'POST',
+      body: '{}',
+    });
+
+    expect(response.status).toBe(503);
+    expect(sign).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it('rejects a changed live challenge before opening the wallet', async () => {
+    const { payer, accepted, paymentRequired } = await livePaymentFixture();
+    const sign = vi.spyOn(payer.feature, 'signTransaction');
+    const changed = {
+      ...paymentRequired,
+      accepts: [
+        {
+          ...accepted,
+          payTo: getBase58Decoder().decode(new Uint8Array(32).fill(7)),
+        },
+      ],
+    };
+    const request = vi.fn(async () => paymentChallenge(changed));
+    const paidFetch = createPaymentFetch({
+      account: payer.account,
+      feature: payer.feature,
+      quotePayment: paymentRequired,
+      quoteAmount: accepted.amount,
+      request,
+    });
+
+    await expect(
+      paidFetch('https://mizuki.example/api/mizuki/v1/jobs', {
+        method: 'POST',
+        body: '{}',
+      }),
+    ).rejects.toThrow('payment challenge does not match');
+    expect(sign).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it('does not silently retry or reopen the wallet when the paid response is lost', async () => {
+    const { payer, paymentRequired } = await livePaymentFixture();
+    const sign = vi.spyOn(payer.feature, 'signTransaction');
+    const stages: string[] = [];
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(paymentChallenge(paymentRequired))
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    const paidFetch = createPaymentFetch({
+      account: payer.account,
+      feature: payer.feature,
+      quotePayment: paymentRequired,
+      quoteAmount: requirements.amount,
+      onStage(stage) {
+        stages.push(stage);
+      },
+      request,
+    });
+
+    await expect(
+      paidFetch('https://mizuki.example/api/mizuki/v1/jobs', {
+        method: 'POST',
+        body: '{}',
+      }),
+    ).rejects.toThrow('Failed to fetch');
+    expect(sign).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(stages).toEqual(['wallet_opened', 'wallet_signed', 'submitting']);
+  });
+
+  it('does not reopen the wallet when the paid retry still returns 402', async () => {
+    const { payer, paymentRequired } = await livePaymentFixture();
+    const sign = vi.spyOn(payer.feature, 'signTransaction');
+    const request = vi.fn(async () => paymentChallenge(paymentRequired));
+    const paidFetch = createPaymentFetch({
+      account: payer.account,
+      feature: payer.feature,
+      quotePayment: paymentRequired,
+      quoteAmount: requirements.amount,
+      request,
+    });
+
+    const response = await paidFetch('https://mizuki.example/api/mizuki/v1/jobs', {
+      method: 'POST',
+      body: '{}',
+    });
+
+    expect(response.status).toBe(402);
+    expect(sign).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not let diagnostic stage reporting delay transaction submission', async () => {
+    const { payer, paymentRequired } = await livePaymentFixture();
+    const stages: string[] = [];
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(paymentChallenge(paymentRequired))
+      .mockResolvedValueOnce(Response.json({ id: 'job-1' }, { status: 201 }));
+    const paidFetch = createPaymentFetch({
+      account: payer.account,
+      feature: payer.feature,
+      quotePayment: paymentRequired,
+      quoteAmount: requirements.amount,
+      onStage(stage) {
+        stages.push(stage);
+        return new Promise(() => undefined);
+      },
+      request,
+      stageConfirmationTimeoutMs: 1,
+    });
+
+    const response = await paidFetch('https://mizuki.example/api/mizuki/v1/jobs', {
+      method: 'POST',
+      body: '{}',
+    });
+
+    expect(response.status).toBe(201);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(stages).toEqual(['wallet_opened', 'wallet_signed', 'submitting']);
+  });
+
+  it('times out a lost paid response so server recovery can begin', async () => {
+    const { payer, paymentRequired } = await livePaymentFixture();
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(paymentChallenge(paymentRequired))
+      .mockImplementationOnce(
+        (_input, init) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener(
+              'abort',
+              () => reject(init.signal?.reason ?? new DOMException('Aborted', 'AbortError')),
+              { once: true },
+            );
+          }),
+      );
+    const paidFetch = createPaymentFetch({
+      account: payer.account,
+      feature: payer.feature,
+      quotePayment: paymentRequired,
+      quoteAmount: requirements.amount,
+      request,
+      paidRequestTimeoutMs: 10,
+    });
+
+    await expect(
+      paidFetch('https://mizuki.example/api/mizuki/v1/jobs', {
+        method: 'POST',
+        body: '{}',
+      }),
+    ).rejects.toThrow('timed out');
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserves the wallet rejection code across the x402 wrapper', async () => {
+    const { payer, paymentRequired } = await livePaymentFixture();
+    const rejectedFeature = {
+      ...payer.feature,
+      async signTransaction(): Promise<never> {
+        throw new Error('User rejected request');
+      },
+    };
+    const paidFetch = createPaymentFetch({
+      account: payer.account,
+      feature: rejectedFeature,
+      quotePayment: paymentRequired,
+      quoteAmount: requirements.amount,
+      request: vi.fn(async () => paymentChallenge(paymentRequired)),
+    });
+
+    let cause: unknown;
+    try {
+      await paidFetch('https://mizuki.example/api/mizuki/v1/jobs', {
+        method: 'POST',
+        body: '{}',
+      });
+    } catch (error) {
+      cause = error;
+    }
+
+    expect(cause).toMatchObject({ code: 'wallet_rejected' });
+    expect(paymentPreparationError(cause, '2 USDC')).toContain(
+      'Payment was cancelled in your wallet',
+    );
   });
 
   it('selects the one route that exactly matches the accepted quote', () => {
@@ -181,6 +435,26 @@ describe('x402 quote policy', () => {
 
     expect(message).toContain('Reconnect the wallet');
     expect(message).not.toContain('at least 2 USDC');
+  });
+
+  it.each([
+    [
+      'Failed to create payment payload: The wallet rejected the payment request',
+      'Payment was cancelled in your wallet',
+    ],
+    [
+      'Failed to create payment payload: The wallet disconnected before authorizing the payment',
+      'The payment wallet disconnected',
+    ],
+    [
+      'Failed to create payment payload: The wallet changed protected payment instructions',
+      'The wallet could not safely authorize this payment',
+    ],
+  ])('translates wrapped wallet failures without exposing SDK internals', (failure, expected) => {
+    const message = paymentPreparationError(new Error(failure), '2 USDC');
+
+    expect(message).toContain(expected);
+    expect(message).not.toContain('payment payload');
   });
 });
 
@@ -405,5 +679,119 @@ function validate(fixture: Awaited<ReturnType<typeof paymentFixture>>, signed: U
     payer: fixture.payer,
     terms: fixture.terms,
     verifySignature: async () => true,
+  });
+}
+
+async function signingWallet() {
+  const keys = await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify']);
+  const publicKey = new Uint8Array(await crypto.subtle.exportKey('raw', keys.publicKey));
+  const payerAddress = getBase58Decoder().decode(publicKey);
+  const account: WalletAccount = {
+    address: payerAddress,
+    publicKey,
+    chains: ['solana:mainnet'],
+    features: ['solana:signTransaction'],
+  };
+  const feature = {
+    version: '1.0.0' as const,
+    supportedTransactionVersions: [0] as const,
+    async signTransaction(...inputs: readonly { transaction: Uint8Array }[]) {
+      return Promise.all(
+        inputs.map(async (input) => {
+          const transaction = getTransactionDecoder().decode(input.transaction);
+          const message = Uint8Array.from(transaction.messageBytes);
+          const signature = new Uint8Array(
+            await crypto.subtle.sign('Ed25519', keys.privateKey, message),
+          );
+          assertIsSignatureBytes(signature);
+          return {
+            signedTransaction: new Uint8Array(
+              getTransactionEncoder().encode({
+                ...transaction,
+                signatures: {
+                  ...transaction.signatures,
+                  [address(payerAddress)]: signature,
+                },
+              }),
+            ),
+          };
+        }),
+      );
+    },
+  };
+  return { account, feature };
+}
+
+function mintAccountResponse(id: number): Response {
+  const data = new Uint8Array(82);
+  data[44] = 6;
+  data[45] = 1;
+  return Response.json({
+    jsonrpc: '2.0',
+    id,
+    result: {
+      context: { slot: 1 },
+      value: {
+        data: [Buffer.from(data).toString('base64'), 'base64'],
+        executable: false,
+        lamports: 1,
+        owner: tokenProgram,
+        rentEpoch: 0,
+        space: data.byteLength,
+      },
+    },
+  });
+}
+
+function blockhashResponse(id: number): Response {
+  return Response.json({
+    jsonrpc: '2.0',
+    id,
+    result: {
+      context: { slot: 1 },
+      value: {
+        blockhash: getBase58Decoder().decode(new Uint8Array(32).fill(4)),
+        lastValidBlockHeight: 10,
+      },
+    },
+  });
+}
+
+async function livePaymentFixture() {
+  const payer = await signingWallet();
+  const recipient = getBase58Decoder().decode(new Uint8Array(32).fill(3));
+  const sponsor = getBase58Decoder().decode(new Uint8Array(32).fill(2));
+  const accepted = {
+    ...requirements,
+    payTo: recipient,
+    extra: { feePayer: sponsor, memo },
+  };
+  const paymentRequired = {
+    x402Version: 2,
+    resource: {
+      url: 'https://mizuki.example/v1/jobs?quote_id=quote-1',
+      description: 'Start one fixed-price maintenance job',
+      mimeType: 'application/json',
+    },
+    accepts: [accepted],
+    extensions: {},
+  };
+  const rpc = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const call = (await new Request(input, init).json()) as { id: number; method: string };
+    if (call.method === 'getAccountInfo') return mintAccountResponse(call.id);
+    if (call.method === 'getLatestBlockhash') return blockhashResponse(call.id);
+    return Response.json({ jsonrpc: '2.0', id: call.id, error: { code: -32601 } });
+  });
+  vi.stubGlobal('fetch', rpc);
+  process.env.NEXT_PUBLIC_SOLANA_RPC_URL = 'https://rpc.mizuki.example';
+  return { accepted, payer, paymentRequired, rpc };
+}
+
+function paymentChallenge(paymentRequired: unknown): Response {
+  return Response.json(paymentRequired, {
+    status: 402,
+    headers: {
+      'payment-required': Buffer.from(JSON.stringify(paymentRequired)).toString('base64'),
+    },
   });
 }

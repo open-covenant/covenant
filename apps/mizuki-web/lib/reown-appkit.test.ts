@@ -242,6 +242,25 @@ describe('Reown AppKit', () => {
     ).resolves.toEqual([{ signedTransaction: changedBytes }]);
   });
 
+  it('attaches a detached signature to a wallet-returned transaction', async () => {
+    const { signWalletConnectTransactions } = await import('./reown-appkit');
+    const transaction = versionedTransaction();
+    const signatureBytes = new Uint8Array(64).fill(6);
+    mocks.request.mockResolvedValue({
+      transaction: getBase64Decoder().decode(transaction),
+      signature: getBase58Decoder().decode(signatureBytes),
+    });
+
+    const [result] = await signWalletConnectTransactions({
+      account: walletAccount(),
+      chain: 'solana:mainnet',
+      transaction,
+    });
+    const decoded = getTransactionDecoder().decode(result!.signedTransaction);
+
+    expect(decoded.signatures[address(payer)]).toEqual(signatureBytes);
+  });
+
   it('uses the underlying requester when AppKit returns a wrapped reconnect provider', async () => {
     const { signWalletConnectTransactions } = await import('./reown-appkit');
     mocks.appKit.getProvider.mockReturnValue(mocks.wrappedProvider);

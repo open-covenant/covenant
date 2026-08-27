@@ -493,7 +493,8 @@ export function createApp(deps: AppDependencies) {
           wallet: body.wallet,
           appBuild: body.app_build,
         });
-        return json(res, 201, paymentAttemptResponse(attempt, undefined, requestId));
+        const job = attempt.jobId ? await deps.store.job(attempt.jobId) : undefined;
+        return json(res, 201, paymentAttemptResponse(attempt, job, requestId));
       }
       if (
         parts[0] === 'v1' &&
@@ -506,11 +507,19 @@ export function createApp(deps: AppDependencies) {
         res.setHeader('cache-control', 'private, no-store');
         const session = await requireAccountPrincipal(req, deps.auth, admission, 'jobs:read');
         admission.consumeAccount('payment_status', req, session.githubId);
-        let attempt = await deps.store.latestPaymentAttempt(session.githubId);
+        let attempt = await deps.store.activePaymentAttempt(session.githubId);
+        let job: Job | undefined;
         if (!attempt) {
-          return json(res, 200, { attempt: null, paymentStatus: 'none', requestId });
+          const latest = await deps.store.latestPaymentAttempt(session.githubId);
+          const latestJob = latest?.jobId ? await deps.store.job(latest.jobId) : undefined;
+          if (latest?.stage === 'job_reserved' && latestJob && paymentRecoveryActive(latestJob)) {
+            attempt = latest;
+            job = latestJob;
+          } else {
+            return json(res, 200, { attempt: null, paymentStatus: 'none', requestId });
+          }
         }
-        const job = attempt.jobId
+        job ??= attempt.jobId
           ? await deps.store.job(attempt.jobId)
           : await deps.store.jobByQuote(attempt.quoteId);
         if (job && attempt.stage !== 'job_reserved') {
@@ -521,18 +530,23 @@ export function createApp(deps: AppDependencies) {
             job.payment.transaction === 'pending' ? undefined : job.payment.transaction,
           );
         } else if (!job && Date.parse(attempt.expiresAt) <= Date.now()) {
-          if (attempt.stage !== 'expired_unpaid') {
+          const terminalStage = expiredPaymentAttemptStage(attempt);
+          if (attempt.stage !== terminalStage) {
             attempt = await deps.store.updatePaymentAttemptStage(
               attempt.id,
               session.githubId,
-              'expired_unpaid',
+              terminalStage,
             );
           }
         }
         const quote = await deps.store.quoteForAccount(attempt.quoteId, session.githubId);
+        const recoverableQuote =
+          quote && attempt.retrySafe && attempt.stage !== 'expired_unpaid'
+            ? { ...quote, payment: await deps.payments.challenge(quote) }
+            : quote;
         return json(res, 200, {
           ...paymentAttemptResponse(attempt, job, requestId),
-          ...(quote ? { quote } : {}),
+          ...(recoverableQuote ? { quote: recoverableQuote } : {}),
         });
       }
       if (
@@ -562,11 +576,12 @@ export function createApp(deps: AppDependencies) {
             job.payment.transaction === 'pending' ? undefined : job.payment.transaction,
           );
         } else if (!job && Date.parse(attempt.expiresAt) <= Date.now()) {
-          if (attempt.stage !== 'expired_unpaid') {
+          const terminalStage = expiredPaymentAttemptStage(attempt);
+          if (attempt.stage !== terminalStage) {
             attempt = await deps.store.updatePaymentAttemptStage(
               attempt.id,
               session.githubId,
-              'expired_unpaid',
+              terminalStage,
             );
           }
         }
@@ -1145,6 +1160,13 @@ export function createApp(deps: AppDependencies) {
         if (head !== quote.baseSha)
           return json(res, 409, { error: 'repository changed; request a new quote' });
         const paymentSignature = header(req, 'payment-signature');
+        if (paymentAttempt && paymentSignature) {
+          paymentAttempt = await deps.store.updatePaymentAttemptStage(
+            paymentAttempt.id,
+            paymentAttempt.githubId,
+            'submitting',
+          );
+        }
         let pendingJobId: string | undefined;
         let paymentIntentId: string | undefined;
         let refundLiabilityId: string | undefined;
@@ -1752,6 +1774,16 @@ function paymentAttemptResponse(
     requestId,
     buildId: attempt.appBuild,
   };
+}
+
+function expiredPaymentAttemptStage(
+  attempt: CustomerPaymentAttempt,
+): 'expired_unpaid' | 'indeterminate' {
+  return attempt.retrySafe ? 'expired_unpaid' : 'indeterminate';
+}
+
+function paymentRecoveryActive(job: Job): boolean {
+  return job.state !== 'delivered' && job.state !== 'refunded';
 }
 
 function isSolanaAddress(value: string): boolean {

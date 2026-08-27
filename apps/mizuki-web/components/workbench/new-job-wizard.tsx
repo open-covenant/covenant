@@ -14,6 +14,7 @@ import {
   issueMatchesRepository,
   loadWorkbenchPaymentRecovery,
   paymentAccountId,
+  paymentRetryAllowed,
   PaymentAttemptBusyError,
   PaymentStatusError,
   prepareWorkbenchPaymentRecovery,
@@ -456,6 +457,7 @@ function IssueAndPayment({
       if (!attempt.retrySafe) {
         recovery = {
           phase: 'uncertain',
+          walletAuthorized: true,
           accountId,
           attemptId: attempt.id,
           idempotencyKey: attempt.idempotencyKey,
@@ -488,7 +490,7 @@ function IssueAndPayment({
         quoteAmount: quote.priceAtomic,
         onStage(stage) {
           if (stage === 'wallet_signed') {
-            recovery = { ...recovery!, phase: 'attempting' };
+            recovery = { ...recovery!, phase: 'attempting', walletAuthorized: true };
             paymentRecovery.current = recovery;
             saveWorkbenchPaymentRecovery(recovery);
           }
@@ -579,7 +581,7 @@ function IssueAndPayment({
         setState('payment_unpaid');
         return;
       }
-      if (status.retrySafe) {
+      if (paymentRetryAllowed(recovery, status)) {
         const prepared = { ...recovery, phase: 'prepared' as const };
         paymentRecovery.current = prepared;
         saveWorkbenchPaymentRecovery(prepared);

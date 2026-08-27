@@ -295,14 +295,17 @@ export class MemoryStore implements MizukiStore {
       (attempt) => attempt.quoteId === input.quoteId && attempt.githubId === input.githubId,
     );
     if (existing) {
-      if (existing.wallet !== input.wallet || existing.appBuild !== input.appBuild) {
+      if (existing.wallet !== input.wallet) {
         throw new StateConflictError('quote already has a payment attempt');
       }
       return structuredClone(existing);
     }
     const active = await this.activePaymentAttempt(input.githubId);
     if (active) {
-      throw new StateConflictError('resolve the active payment attempt before starting another');
+      if (!active.retrySafe) {
+        throw new StateConflictError('resolve the active payment attempt before starting another');
+      }
+      this.paymentAttempts.set(active.id, transitionPaymentAttempt(active, 'expired_unpaid'));
     }
     const now = new Date().toISOString();
     const attempt: CustomerPaymentAttempt = {
@@ -1214,7 +1217,7 @@ export class PostgresStore implements MizukiStore {
       );
       if (current.rows[0]) {
         const attempt = current.rows[0].payload;
-        if (attempt.wallet !== input.wallet || attempt.appBuild !== input.appBuild) {
+        if (attempt.wallet !== input.wallet) {
           throw new StateConflictError('quote already has a payment attempt');
         }
         return attempt;
@@ -1222,11 +1225,18 @@ export class PostgresStore implements MizukiStore {
       const active = await client.query<{ payload: CustomerPaymentAttempt }>(
         `SELECT payload FROM mizuki_payment_attempts
          WHERE github_id = $1 AND stage NOT IN ('job_reserved', 'expired_unpaid')
-         ORDER BY created_at DESC LIMIT 1`,
+         ORDER BY created_at DESC LIMIT 1
+         FOR UPDATE`,
         [input.githubId],
       );
       if (active.rows[0]) {
-        throw new StateConflictError('resolve the active payment attempt before starting another');
+        const attempt = active.rows[0].payload;
+        if (!attempt.retrySafe) {
+          throw new StateConflictError(
+            'resolve the active payment attempt before starting another',
+          );
+        }
+        await savePaymentAttempt(client, transitionPaymentAttempt(attempt, 'expired_unpaid'));
       }
       const now = new Date().toISOString();
       const attempt: CustomerPaymentAttempt = {
@@ -2275,8 +2285,8 @@ function updateJob(current: Job, state: JobState, patch: JobPatch): Job {
 }
 
 const PAYMENT_ATTEMPT_TRANSITIONS: Record<PaymentAttemptStage, readonly PaymentAttemptStage[]> = {
-  created: ['wallet_opened', 'expired_unpaid'],
-  wallet_opened: ['wallet_signed', 'expired_unpaid'],
+  created: ['wallet_opened', 'submitting', 'expired_unpaid'],
+  wallet_opened: ['wallet_signed', 'submitting', 'expired_unpaid'],
   wallet_signed: ['submitting', 'indeterminate', 'job_reserved', 'expired_unpaid'],
   submitting: ['indeterminate', 'job_reserved', 'expired_unpaid'],
   indeterminate: ['job_reserved', 'expired_unpaid'],

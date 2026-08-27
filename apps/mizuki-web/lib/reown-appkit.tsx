@@ -192,16 +192,24 @@ function readSignedTransaction(input: SolanaSignTransactionInput, response: unkn
     const bytes = getBase64Encoder().encode(response.transaction);
     const signed = decoder.decode(bytes);
     const signer = address(input.account.address);
-    const signature = signed.signatures[signer];
-    if (!signature || signature.every((byte) => byte === 0)) {
-      throw new Error('WalletConnect did not sign the payment transaction');
+    const embedded = signed.signatures[signer];
+    if (embedded && embedded.some((byte) => byte !== 0)) {
+      return new Uint8Array(bytes);
     }
-    return new Uint8Array(bytes);
+    if (typeof response.signature === 'string') {
+      const signature = readSignature(response.signature);
+      return new Uint8Array(
+        encoder.encode({
+          ...signed,
+          signatures: { ...signed.signatures, [signer]: signature },
+        }),
+      );
+    }
+    throw new Error('WalletConnect did not sign the payment transaction');
   }
 
   if (typeof response.signature === 'string') {
-    const signature = getBase58Encoder().encode(response.signature);
-    assertIsSignatureBytes(signature);
+    const signature = readSignature(response.signature);
     const signer = address(input.account.address);
     if (!(signer in original.signatures)) {
       throw new Error('WalletConnect account is not a signer for this transaction');
@@ -215,6 +223,12 @@ function readSignedTransaction(input: SolanaSignTransactionInput, response: unkn
   }
 
   throw new Error('WalletConnect returned an invalid signing response');
+}
+
+function readSignature(value: string) {
+  const signature = getBase58Encoder().encode(value);
+  assertIsSignatureBytes(signature);
+  return signature;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

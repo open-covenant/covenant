@@ -407,16 +407,21 @@ export function selectSolanaAccount(
   );
 }
 
-function supportsWallet(
+export function supportsWallet(
   wallet: Wallet,
   requirement: 'message' | 'transaction',
   requiredChain?: PaymentWalletNetwork['chain'],
 ) {
   const feature = requirement === 'message' ? 'solana:signMessage' : 'solana:signTransaction';
+  const transactionFeature = wallet.features['solana:signTransaction'] as
+    | SolanaSignTransactionFeature['solana:signTransaction']
+    | undefined;
   return (
     'standard:connect' in wallet.features &&
     (requirement === 'message' || 'standard:events' in wallet.features) &&
     feature in wallet.features &&
+    (requirement !== 'transaction' ||
+      transactionFeature?.supportedTransactionVersions.includes(0) === true) &&
     (requiredChain
       ? wallet.chains.includes(requiredChain)
       : wallet.chains.some((chain) => chain.startsWith('solana:')))

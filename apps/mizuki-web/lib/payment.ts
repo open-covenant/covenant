@@ -50,6 +50,7 @@ export type QuotePaymentStatus =
 
 export type WorkbenchPaymentRecovery = {
   phase: 'prepared' | 'attempting' | 'uncertain' | 'unpaid';
+  walletAuthorized?: boolean;
   accountId: string;
   attemptId: string;
   idempotencyKey: string;
@@ -300,6 +301,7 @@ export function prepareWorkbenchPaymentRecovery(
   const recovery: WorkbenchPaymentRecovery = {
     ...input,
     phase: 'prepared',
+    walletAuthorized: input.walletAuthorized ?? false,
   };
   saveWorkbenchPaymentRecovery(recovery, storage);
   return recovery;
@@ -378,6 +380,9 @@ function isWorkbenchPaymentRecovery(value: unknown): value is WorkbenchPaymentRe
     return false;
   }
   if (typeof value.accountId !== 'string' || !/^[1-9]\d*$/.test(value.accountId)) return false;
+  if (value.walletAuthorized !== undefined && typeof value.walletAuthorized !== 'boolean') {
+    return false;
+  }
   if (typeof value.attemptId !== 'string' || !validBoundedId(value.attemptId)) return false;
   if (typeof value.idempotencyKey !== 'string' || !validIdempotencyKey(value.idempotencyKey)) {
     return false;
@@ -387,6 +392,13 @@ function isWorkbenchPaymentRecovery(value: unknown): value is WorkbenchPaymentRe
   return (
     value.repository.toLowerCase() === `${value.quote.owner}/${value.quote.repo}`.toLowerCase()
   );
+}
+
+export function paymentRetryAllowed(
+  recovery: Pick<WorkbenchPaymentRecovery, 'walletAuthorized'>,
+  attempt: Pick<PaymentAttempt, 'retrySafe'>,
+): boolean {
+  return attempt.retrySafe && recovery.walletAuthorized !== true;
 }
 
 function readWorkbenchPaymentRecovery(
@@ -453,8 +465,7 @@ function isQuote(value: unknown): value is Quote {
     /^[1-9]\d*$/.test(value.priceAtomic) &&
     Number.isInteger(value.maxFiles) &&
     typeof value.maxCostUsd === 'number' &&
-    typeof value.expiresAt === 'string' &&
-    value.payment !== undefined
+    typeof value.expiresAt === 'string'
   );
 }
 

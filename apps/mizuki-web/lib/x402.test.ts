@@ -302,14 +302,15 @@ describe('x402 quote policy', () => {
     expect(request).toHaveBeenCalledOnce();
   });
 
-  it('does not silently retry or reopen the wallet when the paid response is lost', async () => {
+  it('replays the exact signed request once without reopening the wallet', async () => {
     const { payer, paymentRequired } = await livePaymentFixture();
     const sign = vi.spyOn(payer.feature, 'signTransaction');
     const stages: string[] = [];
     const request = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(paymentChallenge(paymentRequired))
-      .mockRejectedValueOnce(new TypeError('Failed to fetch'));
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce(Response.json({ id: 'job-1' }, { status: 202 }));
     const prompt = paymentPrompt();
     const paidFetch = createPaymentFetch({
       ...prompt,
@@ -323,6 +324,50 @@ describe('x402 quote policy', () => {
       request,
     });
 
+    const response = await paidFetch('https://mizuki.example/api/mizuki/v1/jobs', {
+      method: 'POST',
+      body: '{}',
+    });
+    const signedRequests = request.mock.calls
+      .slice(1)
+      .map(([target, init]) => new Request(target, init));
+
+    expect(response.status).toBe(202);
+    expect(sign).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(stages).toEqual(['wallet_opened', 'wallet_signed', 'submitting']);
+    expect(prompt.authorizePrompt).toHaveBeenCalledOnce();
+    expect(await Promise.all(signedRequests.map((outgoing) => outgoing.clone().text()))).toEqual([
+      '{}',
+      '{}',
+    ]);
+    expect(signedRequests[0]?.headers.get('payment-signature')).toBeTruthy();
+    expect(signedRequests[1]?.headers.get('payment-signature')).toBe(
+      signedRequests[0]?.headers.get('payment-signature'),
+    );
+    expect(signedRequests.map((outgoing) => outgoing.headers.get('x-mizuki-prompt-nonce'))).toEqual(
+      [promptNonce, promptNonce],
+    );
+  });
+
+  it('stops after one exact replay when signed transport remains unavailable', async () => {
+    const { payer, paymentRequired } = await livePaymentFixture();
+    const sign = vi.spyOn(payer.feature, 'signTransaction');
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(paymentChallenge(paymentRequired))
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    const prompt = paymentPrompt();
+    const paidFetch = createPaymentFetch({
+      ...prompt,
+      account: payer.account,
+      feature: payer.feature,
+      quotePayment: paymentRequired,
+      quoteAmount: requirements.amount,
+      request,
+    });
+
     await expect(
       paidFetch('https://mizuki.example/api/mizuki/v1/jobs', {
         method: 'POST',
@@ -330,9 +375,8 @@ describe('x402 quote policy', () => {
       }),
     ).rejects.toThrow('Failed to fetch');
     expect(sign).toHaveBeenCalledOnce();
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(stages).toEqual(['wallet_opened', 'wallet_signed', 'submitting']);
     expect(prompt.authorizePrompt).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledTimes(3);
   });
 
   it('does not reopen the wallet when the paid retry still returns 402', async () => {
@@ -394,7 +438,7 @@ describe('x402 quote policy', () => {
     const request = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(paymentChallenge(paymentRequired))
-      .mockImplementationOnce(
+      .mockImplementation(
         (_input, init) =>
           new Promise<Response>((_resolve, reject) => {
             init?.signal?.addEventListener(
@@ -420,6 +464,35 @@ describe('x402 quote policy', () => {
         body: '{}',
       }),
     ).rejects.toThrow('timed out');
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not replay a signed request after the caller cancels it', async () => {
+    const { payer, paymentRequired } = await livePaymentFixture();
+    const controller = new AbortController();
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(paymentChallenge(paymentRequired))
+      .mockImplementationOnce(async () => {
+        controller.abort();
+        throw new TypeError('Failed to fetch');
+      });
+    const paidFetch = createPaymentFetch({
+      ...paymentPrompt(),
+      account: payer.account,
+      feature: payer.feature,
+      quotePayment: paymentRequired,
+      quoteAmount: requirements.amount,
+      request,
+    });
+
+    await expect(
+      paidFetch('https://mizuki.example/api/mizuki/v1/jobs', {
+        method: 'POST',
+        body: '{}',
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow();
     expect(request).toHaveBeenCalledTimes(2);
   });
 

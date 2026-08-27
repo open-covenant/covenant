@@ -20,7 +20,7 @@ import type { SolanaSignTransactionFeature } from '@solana/wallet-standard-featu
 import type { WalletAccount } from '@wallet-standard/base';
 import { wrapFetchWithPaymentFromConfig, type PaymentRequirements } from '@x402/fetch';
 import { ExactSvmScheme } from '@x402/svm/exact/client';
-import { fetchWithDeadline } from './workbench-client';
+import { fetchWithDeadline, WorkbenchRequestTimeoutError } from './workbench-client';
 
 const SOLANA_MAINNET = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp';
 const SOLANA_DEVNET = 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1';
@@ -215,14 +215,17 @@ export function createPaymentFetch(input: {
       headers.set('x-mizuki-prompt-nonce', input.promptNonce);
       notifyStage(input.onStage, 'submitting');
     }
-    return fetchWithDeadline(
-      target,
-      { ...init, headers, signal },
-      request,
-      signedPayment
-        ? (input.paidRequestTimeoutMs ?? PAYMENT_SUBMISSION_TIMEOUT_MS)
-        : (input.requestTimeoutMs ?? PAYMENT_CHALLENGE_TIMEOUT_MS),
-    );
+    const requestInit = { ...init, headers, signal };
+    const timeoutMs = signedPayment
+      ? (input.paidRequestTimeoutMs ?? PAYMENT_SUBMISSION_TIMEOUT_MS)
+      : (input.requestTimeoutMs ?? PAYMENT_CHALLENGE_TIMEOUT_MS);
+    const replayTarget = signedPayment ? cloneReplayTarget(target, init?.body) : undefined;
+    try {
+      return await fetchWithDeadline(target, requestInit, request, timeoutMs);
+    } catch (cause) {
+      if (!replayTarget || !signedPaymentReplayAllowed(cause, signal)) throw cause;
+      return fetchWithDeadline(replayTarget, requestInit, request, timeoutMs);
+    }
   };
 
   const paymentFetch = wrapFetchWithPaymentFromConfig(observedRequest, {
@@ -637,6 +640,31 @@ function notifyStage(
   } catch {
     return;
   }
+}
+
+function cloneReplayTarget(
+  target: RequestInfo | URL,
+  body: BodyInit | null | undefined,
+): RequestInfo | URL | undefined {
+  if (!replayableBody(body)) return undefined;
+  try {
+    return target instanceof Request ? target.clone() : target;
+  } catch {
+    return undefined;
+  }
+}
+
+function replayableBody(body: BodyInit | null | undefined): boolean {
+  if (body === undefined || body === null || typeof body === 'string') return true;
+  if (typeof URLSearchParams !== 'undefined' && body instanceof URLSearchParams) return true;
+  if (typeof Blob !== 'undefined' && body instanceof Blob) return true;
+  if (body instanceof ArrayBuffer || ArrayBuffer.isView(body)) return true;
+  return false;
+}
+
+function signedPaymentReplayAllowed(cause: unknown, signal: AbortSignal | undefined): boolean {
+  if (signal?.aborted) return false;
+  return cause instanceof WorkbenchRequestTimeoutError || cause instanceof TypeError;
 }
 
 async function confirmStage(

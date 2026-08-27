@@ -544,7 +544,9 @@ function IssueAndPayment({
       const job = await withPaymentAttemptLock(attempt.id, async () => {
         const current = await checkPaymentAttempt(attempt.id, quote.id);
         if (current.job) return current.job;
-        if (!current.retrySafe) throw new PaymentAttemptBusyError();
+        if (!current.retrySafe && !paymentPromptRetryAllowed(recovery, current)) {
+          throw new PaymentAttemptBusyError();
+        }
         const response = await paidFetch('/api/mizuki/v1/jobs', {
           method: 'POST',
           headers: {
@@ -641,7 +643,7 @@ function IssueAndPayment({
         setState('payment_unpaid');
         return;
       }
-      if (paymentRetryAllowed(recovery, status)) {
+      if (paymentRetryAllowed(recovery, status) || paymentPromptRetryAllowed(recovery, status)) {
         const prepared = { ...recovery, phase: 'prepared' as const };
         paymentRecovery.current = prepared;
         saveWorkbenchPaymentRecovery(prepared);

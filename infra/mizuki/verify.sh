@@ -316,7 +316,7 @@ abort 'primary RPC is not operator-pinned' unless signer.fetch('MIZUKI_SIGNER_RP
 abort 'secondary RPC is not operator-pinned' unless signer.fetch('MIZUKI_SIGNER_SECONDARY_RPC_URL')['sync'] == false
 abort 'signer RPC timeout drift' unless signer.fetch('MIZUKI_SIGNER_RPC_TIMEOUT_MS')['value'] == '5000'
 abort 'primary price URL drift' unless signer.fetch('MIZUKI_SOL_USD_PRICE_URL')['value'] == 'https://api.exchange.coinbase.com/products/SOL-USD/ticker'
-abort 'secondary price URL drift' unless signer.fetch('MIZUKI_SOL_USD_SECONDARY_PRICE_URL')['value'] == 'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd&include_last_updated_at=true&precision=6'
+abort 'secondary price URL drift' unless signer.fetch('MIZUKI_SOL_USD_SECONDARY_PRICE_URL')['value'] == 'https://api.binance.com/api/v3/ticker/24hr?symbol=SOLUSDC'
 abort 'public price feeds must not require tokens' if signer.key?('MIZUKI_SOL_USD_PRICE_TOKEN') || signer.key?('MIZUKI_SOL_USD_SECONDARY_PRICE_TOKEN')
 abort 'price divergence limit drift' unless signer.fetch('MIZUKI_SOL_USD_MAX_DIVERGENCE_BPS')['value'] == '500'
 abort 'price observation age drift' unless signer.fetch('MIZUKI_SOL_USD_MAX_AGE_MS')['value'] == '300000'

@@ -1495,6 +1495,13 @@ const coinbaseTickerSchema = z
     time: z.string().datetime({ offset: true }),
   })
   .passthrough();
+const binance24hrTickerSchema = z
+  .object({
+    symbol: z.literal('SOLUSDC'),
+    lastPrice: z.string().regex(/^(?:0|[1-9]\d*)(?:\.\d+)?$/),
+    closeTime: z.number().int().positive().safe(),
+  })
+  .passthrough();
 const coinGeckoSimplePriceSchema = z
   .object({
     solana: z
@@ -1528,7 +1535,12 @@ const pythHermesPriceSchema = z
 
 const PYTH_SOL_USD_FEED_ID = 'ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d';
 
-type PriceResponseFormat = 'canonical' | 'coinbase_ticker' | 'coingecko_simple' | 'pyth_hermes';
+type PriceResponseFormat =
+  | 'canonical'
+  | 'binance_24hr'
+  | 'coinbase_ticker'
+  | 'coingecko_simple'
+  | 'pyth_hermes';
 
 export class HttpUsdPriceOracle implements UsdPriceOracle {
   private readonly responseFormat: PriceResponseFormat;
@@ -1554,7 +1566,9 @@ export class HttpUsdPriceOracle implements UsdPriceOracle {
       response = await this.fetcher(this.url, {
         headers: {
           accept: 'application/json',
-          ...(this.responseFormat === 'coinbase_ticker' ? { 'cache-control': 'no-cache' } : {}),
+          ...(this.responseFormat === 'coinbase_ticker' || this.responseFormat === 'binance_24hr'
+            ? { 'cache-control': 'no-cache' }
+            : {}),
           ...(this.token ? { authorization: `Bearer ${this.token}` } : {}),
         },
         redirect: 'error',
@@ -1605,6 +1619,15 @@ export class HttpUsdPriceOracle implements UsdPriceOracle {
 function priceResponseFormat(value: string): PriceResponseFormat {
   const url = new URL(value);
   if (
+    url.protocol === 'https:' &&
+    url.hostname.toLowerCase() === 'api.binance.com' &&
+    url.pathname === '/api/v3/ticker/24hr' &&
+    url.search === '?symbol=SOLUSDC' &&
+    url.hash === ''
+  ) {
+    return 'binance_24hr';
+  }
+  if (
     url.hostname.toLowerCase() === 'api.exchange.coinbase.com' &&
     url.pathname === '/products/SOL-USD/ticker'
   ) {
@@ -1653,6 +1676,15 @@ function parsePriceResponse(
     return priceUsdMicros === null
       ? null
       : { priceUsdMicros, observedAt: new Date(parsed.data.time) };
+  }
+  if (format === 'binance_24hr') {
+    const parsed = binance24hrTickerSchema.safeParse(body);
+    if (!parsed.success) return null;
+    const priceUsdMicros = decimalUsdMicros(parsed.data.lastPrice);
+    const observedAt = new Date(parsed.data.closeTime);
+    return priceUsdMicros === null || !validDate(observedAt)
+      ? null
+      : { priceUsdMicros, observedAt };
   }
   if (format === 'pyth_hermes') {
     const parsed = pythHermesPriceSchema.safeParse(body);

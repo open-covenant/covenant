@@ -700,6 +700,22 @@ describe('price feed policy', () => {
     });
   });
 
+  it('accepts the official Binance SOLUSDC 24-hour ticker response', async () => {
+    const oracle = priceOracle(
+      {
+        symbol: 'SOLUSDC',
+        priceChange: '1.00000000',
+        lastPrice: '150.12345678',
+        closeTime: now - 1_000,
+      },
+      'https://api.binance.com/api/v3/ticker/24hr?symbol=SOLUSDC',
+    );
+    await expect(oracle.solUsd()).resolves.toEqual({
+      priceUsdMicros: 150_123_456,
+      observedAt: new Date(now - 1_000),
+    });
+  });
+
   it('accepts the official CoinGecko simple-price response', async () => {
     const oracle = priceOracle(
       {
@@ -752,6 +768,24 @@ describe('price feed policy', () => {
       'https://api.exchange.coinbase.com/products/SOL-USD/ticker',
       { price: '150.00', time: new Date(now - 300_001).toISOString() },
       'price_stale',
+    ],
+    [
+      'Binance malformed last price',
+      'https://api.binance.com/api/v3/ticker/24hr?symbol=SOLUSDC',
+      { symbol: 'SOLUSDC', lastPrice: 150, closeTime: now },
+      'price_invalid',
+    ],
+    [
+      'Binance stale close time',
+      'https://api.binance.com/api/v3/ticker/24hr?symbol=SOLUSDC',
+      { symbol: 'SOLUSDC', lastPrice: '150.00', closeTime: now - 300_001 },
+      'price_stale',
+    ],
+    [
+      'Binance unapproved endpoint',
+      'https://api.binance.com/api/v3/ticker/24hr?symbol=SOLUSDT',
+      { lastPrice: '150.00', closeTime: now },
+      'price_invalid',
     ],
     [
       'CoinGecko missing timestamp',

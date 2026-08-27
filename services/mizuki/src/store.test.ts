@@ -366,6 +366,64 @@ describe('MemoryStore', () => {
     });
   });
 
+  it('keeps expired unpaid reservations out of account obligations', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    await store.saveQuote(quote);
+    await store.linkQuoteToAccount(quote.id, '42');
+    const attempt = await store.createPaymentAttempt({
+      githubId: '42',
+      quoteId: quote.id,
+      wallet: payment.payer,
+      appBuild: 'release-test',
+    });
+    const { job } = await store.createJob(
+      quote,
+      { ...payment, transaction: 'pending', signature: 'signed-payment' },
+      attempt.idempotencyKey,
+      undefined,
+      attempt.id,
+    );
+    const paymentWindowEndUnixSeconds = 1_800_000_000;
+    await store.patchJob(job.id, {
+      paymentIntentId: '55555555-5555-4555-8555-555555555555',
+      paymentWindowEndUnixSeconds,
+    });
+    await store.bindPaymentAttemptJob(
+      attempt.id,
+      '42',
+      job.id,
+      undefined,
+      paymentWindowEndUnixSeconds,
+    );
+    await expect(
+      store.bindPaymentAttemptJob(
+        attempt.id,
+        '42',
+        job.id,
+        undefined,
+        paymentWindowEndUnixSeconds + 1,
+      ),
+    ).rejects.toThrow('payment authorization deadline does not match the job');
+    const expired = await store.expirePaymentReservation(job.id, attempt.id);
+
+    await expect(store.jobsForAccount('42', 100)).resolves.toEqual({
+      jobs: [expired],
+      limit: 100,
+      truncated: false,
+      obligationCount: 0,
+    });
+    await expect(
+      store.paymentStatusForAccount(quote.id, '42', attempt.idempotencyKey),
+    ).resolves.toMatchObject({ kind: 'unpaid' });
+    await expect(store.bindPaymentAttemptJob(attempt.id, '42', job.id)).rejects.toThrow(
+      'payment attempt has expired unpaid',
+    );
+    await expect(store.paymentAttempt(attempt.id, '42')).resolves.toMatchObject({
+      paymentWindowEndUnixSeconds,
+    });
+  });
+
   it('deduplicates the same payment proof across different idempotency keys', async () => {
     const store = new MemoryStore();
     const paid = { ...payment, signature: 'same-x402-proof' };

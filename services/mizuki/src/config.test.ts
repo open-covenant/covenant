@@ -107,6 +107,16 @@ describe('updater configuration', () => {
     );
   });
 
+  it('keeps payment-expiry writes disabled until the reader-first rollout completes', () => {
+    expect(loadConfig({}).paymentExpiryWritesEnabled).toBe(false);
+    expect(
+      loadConfig({ MIZUKI_PAYMENT_EXPIRY_WRITES_ENABLED: '1' }).paymentExpiryWritesEnabled,
+    ).toBe(true);
+    expect(() => loadConfig({ MIZUKI_PAYMENT_EXPIRY_WRITES_ENABLED: 'true' })).toThrow(
+      'must be 0 or 1',
+    );
+  });
+
   it('enforces a zero-authority shadow boot boundary', () => {
     const shadow = {
       MIZUKI_RUNTIME_ROLE: 'shadow',

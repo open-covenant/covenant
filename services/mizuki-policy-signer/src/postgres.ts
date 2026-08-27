@@ -33,7 +33,30 @@ const OUTSTANDING_BOUNTY_RESERVE = `
      WHERE escrow.kind = 'escrow_reserve'
        AND escrow.status = 'finalized'
        AND escrow.details ->> 'sourceJobId' = intent.job_id
+       AND NOT EXISTS (
+         SELECT 1
+           FROM mizuki_signer_operations resolution
+          WHERE resolution.resource_key = 'escrow_resolution:' || escrow.id::text
+            AND resolution.kind = 'escrow_refund'
+            AND resolution.status = 'finalized'
+       )
   )`;
+
+const BOUNTY_SOURCE_JOB_SCHEMA = `
+  ALTER TABLE mizuki_signer_operations
+    ADD CONSTRAINT mizuki_signer_escrow_source_job
+    CHECK (
+      kind <> 'escrow_reserve'
+      OR (
+        details ? 'sourceJobId'
+        AND jsonb_typeof(details -> 'sourceJobId') = 'string'
+        AND details ->> 'sourceJobId' ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      )
+    ) NOT VALID;
+  CREATE INDEX mizuki_signer_escrow_source_job_idx
+    ON mizuki_signer_operations ((details ->> 'sourceJobId'))
+    WHERE kind = 'escrow_reserve';
+`;
 
 const SIGNER_SCHEMA = `
       CREATE TABLE IF NOT EXISTS mizuki_signer_operations (
@@ -421,6 +444,7 @@ export class PostgresOperationStore implements OperationStore {
           name: 'payment-intents-and-retryable-refunds',
           sql: PAYMENT_INTENT_AND_REFUND_COMMAND_SCHEMA,
         },
+        { version: 5, name: 'bounty-source-job-handoffs', sql: BOUNTY_SOURCE_JOB_SCHEMA },
       ].map((migration) => ({
         ...migration,
         checksum: createHash('sha256').update(migration.sql).digest('hex'),
@@ -611,6 +635,7 @@ export class PostgresOperationStore implements OperationStore {
         bounty_lamports: string;
         refund_cents: string;
         bounty_cents: string;
+        pending_escrow_refunds: string;
       }>(`
         SELECT
           (SELECT COALESCE(SUM(liability.raw_amount), 0)::text
@@ -636,9 +661,21 @@ export class PostgresOperationStore implements OperationStore {
             WHERE created_at >= clock_timestamp() - interval '24 hours') AS refund_cents,
           (SELECT COALESCE(SUM(bounty_amount_usd_cents), 0)::text
              FROM mizuki_signer_payment_intents
-            WHERE created_at >= clock_timestamp() - interval '24 hours') AS bounty_cents
+            WHERE created_at >= clock_timestamp() - interval '24 hours') AS bounty_cents,
+          (SELECT COUNT(*)::text
+             FROM mizuki_signer_operations
+            WHERE kind = 'escrow_refund'
+              AND status NOT IN ('finalized', 'rejected')) AS pending_escrow_refunds
       `);
       const totals = capacity.rows[0]!;
+      if (BigInt(totals.pending_escrow_refunds) > 0n) {
+        throw new PolicyError(
+          'escrow_refund_reconciling',
+          'Bounty escrow refund reconciliation is still pending',
+          503,
+          true,
+        );
+      }
       if (
         BigInt(totals.liability_raw) + BigInt(totals.reserved_raw) + BigInt(intent.rawAmount) >
         BigInt(limits.refundCapacityRaw)
@@ -868,27 +905,6 @@ export class PostgresOperationStore implements OperationStore {
     } finally {
       client.release();
     }
-  }
-
-  async expirePaymentIntent(id: string, _now: Date): Promise<PaymentIntent> {
-    const result = await this.pool.query(
-      `UPDATE mizuki_signer_payment_intents
-          SET status = 'expired_unpaid', expired_at = clock_timestamp()
-        WHERE id = $1 AND status = 'reserved'
-      RETURNING *`,
-      [id],
-    );
-    if (result.rows[0]) return mapPaymentIntent(result.rows[0]);
-    const existing = await this.getPaymentIntent(id);
-    if (!existing) {
-      throw new PolicyError('payment_intent_not_found', 'Payment intent was not found', 404);
-    }
-    if (existing.status === 'expired_unpaid') return existing;
-    throw new PolicyError(
-      'payment_intent_activated',
-      'An activated payment intent cannot expire unpaid',
-      409,
-    );
   }
 
   async registerRefundLiability(
@@ -1278,6 +1294,7 @@ export class PostgresOperationStore implements OperationStore {
         }
         await this.archiveRejectedResource(client, resource);
       }
+
       const clock = await client.query<{ now: Date }>('SELECT clock_timestamp() AS now');
       const now = new Date(clock.rows[0].now);
       if (!command) {
@@ -1366,6 +1383,21 @@ export class PostgresOperationStore implements OperationStore {
   async reserve(
     input: ReserveOperation,
     dailyLimitUsdCents: number,
+    now: Date,
+  ): Promise<OperationRecord> {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        return await this.reserveTransaction(input, dailyLimitUsdCents, now);
+      } catch (error) {
+        if (!isSerializationFailure(error) || attempt === 2) throw error;
+      }
+    }
+    throw new Error('operation reservation retry exhausted');
+  }
+
+  private async reserveTransaction(
+    input: ReserveOperation,
+    dailyLimitUsdCents: number,
     _now: Date,
   ): Promise<OperationRecord> {
     const client = await this.pool.connect();
@@ -1398,6 +1430,10 @@ export class PostgresOperationStore implements OperationStore {
           );
         }
         await this.archiveRejectedResource(client, resource);
+      }
+
+      if (input.kind === 'escrow_reserve') {
+        await this.assertEscrowHandoff(client, input);
       }
 
       const cutoff = new Date(now.getTime() - 24 * 60 * 60 * 1000);
@@ -1806,6 +1842,17 @@ export class PostgresOperationStore implements OperationStore {
     return result.rows[0]?.total ?? '0';
   }
 
+  async hasPendingEscrowRefund(): Promise<boolean> {
+    const result = await this.pool.query<{ pending: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1 FROM mizuki_signer_operations
+          WHERE kind = 'escrow_refund'
+            AND status NOT IN ('finalized', 'rejected')
+       ) AS pending`,
+    );
+    return result.rows[0]?.pending === true;
+  }
+
   async rollingSpendUsdCents(bucket: 'refund' | 'escrow', _now: Date): Promise<number> {
     if (bucket === 'refund') {
       const result = await this.pool.query<{ total: string }>(
@@ -1864,6 +1911,121 @@ export class PostgresOperationStore implements OperationStore {
       [record.id, `rejected:${record.id}:${record.resourceKey}`],
     );
   }
+
+  private async assertEscrowHandoff(client: PoolClient, input: ReserveOperation): Promise<void> {
+    const sourceJobId = escrowSourceJobId(input);
+    const intentResult = await client.query(
+      'SELECT * FROM mizuki_signer_payment_intents WHERE job_id = $1 FOR UPDATE',
+      [sourceJobId],
+    );
+    const intent = intentResult.rows[0] ? mapPaymentIntent(intentResult.rows[0]) : null;
+    if (
+      !intent ||
+      intent.status !== 'activated' ||
+      !intent.liabilityId ||
+      !intent.settlementSignature
+    ) {
+      throw new PolicyError(
+        'bounty_reserve_not_found',
+        'Bounty escrow is not backed by an activated payment reserve',
+        422,
+      );
+    }
+    if (
+      intent.bountyAmountUsdCents !== input.amountUsdCents ||
+      intent.repository !== input.details.repository ||
+      intent.issueNumber !== input.details.issueNumber ||
+      intent.baseRef !== input.details.baseRef ||
+      intent.baseSha !== input.details.baseSha
+    ) {
+      throw new PolicyError(
+        'bounty_reserve_mismatch',
+        'Bounty escrow terms do not match the protected payment reserve',
+        422,
+      );
+    }
+    if (escrowAmountLamports(input) > BigInt(intent.bountyReserveLamports)) {
+      throw new PolicyError(
+        'bounty_reserve_price_drift',
+        'Escrow amount exceeds the bounty capacity reserved at payment admission',
+        503,
+        true,
+      );
+    }
+    const liabilityResult = await client.query(
+      'SELECT * FROM mizuki_signer_refund_liabilities WHERE id = $1 FOR UPDATE',
+      [intent.liabilityId],
+    );
+    const liability = liabilityResult.rows[0] ? mapLiability(liabilityResult.rows[0]) : null;
+    const refund = await this.findOne(
+      client,
+      'resource_key',
+      `refund:${intent.settlementSignature}`,
+    );
+    if (
+      !liability ||
+      liability.jobId !== sourceJobId ||
+      liability.dischargedAt ||
+      refund?.kind !== 'refund' ||
+      refund.status !== 'finalized'
+    ) {
+      throw new PolicyError(
+        'bounty_reserve_not_refunded',
+        'Bounty escrow requires a finalized refund for the source job',
+        409,
+      );
+    }
+    const active = await client.query(
+      `SELECT escrow.id
+         FROM mizuki_signer_operations escrow
+        WHERE escrow.kind = 'escrow_reserve'
+          AND escrow.details ->> 'sourceJobId' = $1
+          AND escrow.status <> 'rejected'
+          AND NOT EXISTS (
+            SELECT 1 FROM mizuki_signer_operations resolution
+             WHERE resolution.resource_key = 'escrow_resolution:' || escrow.id::text
+               AND resolution.kind = 'escrow_refund'
+               AND resolution.status = 'finalized'
+          )
+        LIMIT 1`,
+      [sourceJobId],
+    );
+    if (active.rows[0]) {
+      throw new PolicyError(
+        'bounty_handoff_active',
+        'Bounty reserve is already assigned to an active escrow',
+        409,
+      );
+    }
+  }
+}
+
+function escrowSourceJobId(input: ReserveOperation): string {
+  const value = input.details.sourceJobId;
+  if (
+    input.kind !== 'escrow_reserve' ||
+    typeof value !== 'string' ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)
+  ) {
+    throw new PolicyError(
+      'bounty_source_job_required',
+      'Bounty escrow requires a valid source job',
+      422,
+    );
+  }
+  return value;
+}
+
+function escrowAmountLamports(input: ReserveOperation): bigint {
+  const value = input.details.amountLamports;
+  if (input.kind !== 'escrow_reserve' || typeof value !== 'string' || !/^[1-9]\d*$/.test(value)) {
+    throw new PolicyError(
+      'bounty_reserve_mismatch',
+      'Bounty escrow requires an exact positive lamport amount',
+      422,
+    );
+  }
+  return BigInt(value);
 }
 
 function mapRow(row: QueryResultRow): OperationRecord {
@@ -2040,4 +2202,13 @@ function mapRepositoryAdmission(row: QueryResultRow): RepositoryAdmission {
     admittedAt: new Date(row.admitted_at),
     evidenceHash: row.evidence_hash,
   };
+}
+
+function isSerializationFailure(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as { code?: unknown }).code === '40001'
+  );
 }

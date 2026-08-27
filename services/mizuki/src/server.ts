@@ -199,6 +199,7 @@ async function refreshFinancialOperations(): Promise<void> {
           const paid = await paymentAdmission.run(async () => {
             return recoverSettlement(job, {
               paymentMode: config.paymentMode,
+              paymentExpiryWritesEnabled: config.paymentExpiryWritesEnabled,
               payTo: config.payTo,
               store,
               payments,

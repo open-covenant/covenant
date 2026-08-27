@@ -53,7 +53,6 @@ export interface OperationStore {
     activationIdempotencyKey: string,
     now: Date,
   ): Promise<{ intent: PaymentIntent; liability: RefundLiability }>;
-  expirePaymentIntent(id: string, now: Date): Promise<PaymentIntent>;
   registerRefundLiability(
     liability: RefundLiability,
     maxOutstandingRaw: string,
@@ -112,6 +111,7 @@ export interface OperationStore {
   pendingRefundRawAmount(): Promise<string>;
   pendingRefundCount(): Promise<number>;
   pendingBountyReserveLamports(): Promise<string>;
+  hasPendingEscrowRefund(): Promise<boolean>;
   rollingSpendUsdCents(bucket: 'refund' | 'escrow', now: Date): Promise<number>;
   ping(): Promise<void>;
   close(): Promise<void>;
@@ -242,6 +242,14 @@ export class InMemoryOperationStore implements OperationStore {
       const activeIntents = [...this.paymentIntents.values()].filter(
         (entry) => entry.status !== 'expired_unpaid',
       );
+      if (this.pendingEscrowRefund()) {
+        throw new PolicyError(
+          'escrow_refund_reconciling',
+          'Bounty escrow refund reconciliation is still pending',
+          503,
+          true,
+        );
+      }
       const outstandingLiabilities = [...this.refundLiabilities.values()].filter((entry) =>
         this.isLiabilityOutstanding(entry),
       );
@@ -416,26 +424,6 @@ export class InMemoryOperationStore implements OperationStore {
       intent.activationIdempotencyKey = activationIdempotencyKey;
       intent.activatedAt = new Date(now);
       return { intent: clonePaymentIntent(intent), liability: cloneLiability(storedLiability) };
-    });
-  }
-
-  async expirePaymentIntent(id: string, now: Date): Promise<PaymentIntent> {
-    return this.exclusive(() => {
-      const intent = this.paymentIntents.get(id);
-      if (!intent) {
-        throw new PolicyError('payment_intent_not_found', 'Payment intent was not found', 404);
-      }
-      if (intent.status === 'activated') {
-        throw new PolicyError(
-          'payment_intent_activated',
-          'An activated payment intent cannot expire unpaid',
-          409,
-        );
-      }
-      if (intent.status === 'expired_unpaid') return clonePaymentIntent(intent);
-      intent.status = 'expired_unpaid';
-      intent.expiredAt = new Date(now);
-      return clonePaymentIntent(intent);
     });
   }
 
@@ -681,6 +669,7 @@ export class InMemoryOperationStore implements OperationStore {
         }
         this.archiveRejectedResource(resource);
       }
+
       const storedCommand = command ?? {
         id: randomUUID(),
         idempotencyKey: input.idempotencyKey,
@@ -765,6 +754,8 @@ export class InMemoryOperationStore implements OperationStore {
         }
         this.archiveRejectedResource(resource);
       }
+
+      if (input.kind === 'escrow_reserve') this.assertEscrowHandoff(input);
 
       const cutoff = now.getTime() - 24 * 60 * 60 * 1000;
       const reserved = [...this.records.values()]
@@ -1070,6 +1061,10 @@ export class InMemoryOperationStore implements OperationStore {
     );
   }
 
+  async hasPendingEscrowRefund(): Promise<boolean> {
+    return this.exclusive(() => this.pendingEscrowRefund());
+  }
+
   async rollingSpendUsdCents(bucket: 'refund' | 'escrow', now: Date): Promise<number> {
     return this.exclusive(() => {
       const cutoff = now.getTime() - 24 * 60 * 60 * 1_000;
@@ -1132,7 +1127,92 @@ export class InMemoryOperationStore implements OperationStore {
       (record) =>
         record.kind === 'escrow_reserve' &&
         record.status === 'finalized' &&
-        record.details.sourceJobId === intent.jobId,
+        record.details.sourceJobId === intent.jobId &&
+        !this.finalizedEscrowRefund(record.id),
+    );
+  }
+
+  private assertEscrowHandoff(input: ReserveOperation): void {
+    const sourceJobId = escrowSourceJobId(input);
+    const intentId = this.paymentIntentByJob.get(sourceJobId);
+    const intent = intentId ? this.paymentIntents.get(intentId) : undefined;
+    if (
+      !intent ||
+      intent.status !== 'activated' ||
+      !intent.liabilityId ||
+      !intent.settlementSignature
+    ) {
+      throw new PolicyError(
+        'bounty_reserve_not_found',
+        'Bounty escrow is not backed by an activated payment reserve',
+        422,
+      );
+    }
+    if (
+      intent.bountyAmountUsdCents !== input.amountUsdCents ||
+      intent.repository !== input.details.repository ||
+      intent.issueNumber !== input.details.issueNumber ||
+      intent.baseRef !== input.details.baseRef ||
+      intent.baseSha !== input.details.baseSha
+    ) {
+      throw new PolicyError(
+        'bounty_reserve_mismatch',
+        'Bounty escrow terms do not match the protected payment reserve',
+        422,
+      );
+    }
+    if (escrowAmountLamports(input) > BigInt(intent.bountyReserveLamports)) {
+      throw new PolicyError(
+        'bounty_reserve_price_drift',
+        'Escrow amount exceeds the bounty capacity reserved at payment admission',
+        503,
+        true,
+      );
+    }
+    const liability = [...this.refundLiabilities.values()].find(
+      (entry) => entry.id === intent.liabilityId,
+    );
+    const refund = this.lookup(this.byResource.get(`refund:${intent.settlementSignature}`));
+    if (
+      !liability ||
+      liability.jobId !== sourceJobId ||
+      liability.dischargedAt ||
+      refund?.kind !== 'refund' ||
+      refund.status !== 'finalized'
+    ) {
+      throw new PolicyError(
+        'bounty_reserve_not_refunded',
+        'Bounty escrow requires a finalized refund for the source job',
+        409,
+      );
+    }
+    const active = [...this.records.values()].some(
+      (record) =>
+        record.kind === 'escrow_reserve' &&
+        record.status !== 'rejected' &&
+        record.details.sourceJobId === sourceJobId &&
+        !this.finalizedEscrowRefund(record.id),
+    );
+    if (active) {
+      throw new PolicyError(
+        'bounty_handoff_active',
+        'Bounty reserve is already assigned to an active escrow',
+        409,
+      );
+    }
+  }
+
+  private finalizedEscrowRefund(escrowOperationId: string): boolean {
+    const resolution = this.lookup(this.byResource.get(`escrow_resolution:${escrowOperationId}`));
+    return resolution?.kind === 'escrow_refund' && resolution.status === 'finalized';
+  }
+
+  private pendingEscrowRefund(): boolean {
+    return [...this.records.values()].some(
+      (record) =>
+        record.kind === 'escrow_refund' &&
+        record.status !== 'finalized' &&
+        record.status !== 'rejected',
     );
   }
 
@@ -1149,6 +1229,34 @@ export class InMemoryOperationStore implements OperationStore {
       release();
     }
   }
+}
+
+function escrowSourceJobId(input: ReserveOperation): string {
+  const value = input.details.sourceJobId;
+  if (
+    input.kind !== 'escrow_reserve' ||
+    typeof value !== 'string' ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)
+  ) {
+    throw new PolicyError(
+      'bounty_source_job_required',
+      'Bounty escrow requires a valid source job',
+      422,
+    );
+  }
+  return value;
+}
+
+function escrowAmountLamports(input: ReserveOperation): bigint {
+  const value = input.details.amountLamports;
+  if (input.kind !== 'escrow_reserve' || typeof value !== 'string' || !/^[1-9]\d*$/.test(value)) {
+    throw new PolicyError(
+      'bounty_reserve_mismatch',
+      'Bounty escrow requires an exact positive lamport amount',
+      422,
+    );
+  }
+  return BigInt(value);
 }
 
 function applyPatch(record: OperationRecord, patch: OperationPatch): void {

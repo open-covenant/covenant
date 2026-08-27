@@ -93,7 +93,7 @@ export const bindRefundLiabilityDeliveryRequestSchema = z
 export const createEscrowRequestSchema = z
   .object({
     bountyId: externalIdSchema,
-    sourceJobId: externalIdSchema.optional(),
+    sourceJobId: externalIdSchema,
     amountUsdCents: z.number().int().positive(),
     acceptanceHash: hashSchema,
     expiresAt: z.string().datetime({ offset: true }),

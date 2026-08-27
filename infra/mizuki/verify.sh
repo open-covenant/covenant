@@ -263,6 +263,7 @@ abort 'runtime readiness refresh drift' unless production.fetch('MIZUKI_READINES
 abort 'runtime readiness max age drift' unless production.fetch('MIZUKI_READINESS_MAX_AGE_MS')['value'] == '90000'
 abort 'runtime readiness timeout drift' unless production.fetch('MIZUKI_READINESS_TIMEOUT_MS')['value'] == '20000'
 abort 'runtime escrow readiness floor drift' unless production.fetch('MIZUKI_ESCROW_READINESS_MIN_LAMPORTS')['value'] == '500000000'
+abort 'runtime payment expiry rollout gate must default closed' unless production.fetch('MIZUKI_PAYMENT_EXPIRY_WRITES_ENABLED')['value'] == '0'
 abort 'runtime signer URL is not private service discovery' unless service_ref(production.fetch('MIZUKI_POLICY_SIGNER_URL'), 'mizuki-policy-signer')
 abort 'runtime signer token is not linked to signer' unless service_ref(production.fetch('MIZUKI_POLICY_SIGNER_TOKEN'), 'mizuki-policy-signer', 'MIZUKI_SIGNER_AUTH_TOKEN')
 abort 'runtime gateway URL is not private service discovery' unless service_ref(production.fetch('MIZUKI_CODING_GATEWAY_URL'), 'mizuki-coding-gateway')

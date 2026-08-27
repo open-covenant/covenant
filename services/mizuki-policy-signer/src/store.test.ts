@@ -1,7 +1,30 @@
 import { describe, expect, it } from 'vitest';
+import { PolicyError } from './domain.js';
 import { InMemoryOperationStore } from './store.js';
 
 describe('operation recovery order', () => {
+  it('rejects a direct bounty reserve without a source job', async () => {
+    const store = new InMemoryOperationStore();
+    await expect(
+      store.reserve(
+        {
+          id: 'escrow-without-source',
+          idempotencyKey: 'escrow-without-source',
+          resourceKey: 'escrow:without-source',
+          requestHash: 'a'.repeat(64),
+          kind: 'escrow_reserve',
+          amountUsdCents: 1_000,
+          spendBucket: 'escrow',
+          asset: 'SOL',
+          recipient: 'escrow-vault',
+          details: {},
+        },
+        10_000,
+        new Date(),
+      ),
+    ).rejects.toMatchObject<Partial<PolicyError>>({ code: 'bounty_source_job_required' });
+  });
+
   it('rotates attempted operations behind untouched work', async () => {
     const store = new InMemoryOperationStore();
     const start = new Date('2026-08-01T00:00:00.000Z');

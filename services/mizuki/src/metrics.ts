@@ -24,7 +24,9 @@ export async function metrics(
     treasurySnapshot(store, readiness),
     store.ledgerEntries(),
   ]);
-  const paid = jobs.filter((job) => job.state !== 'settlement_pending');
+  const paid = jobs.filter(
+    (job) => job.state !== 'settlement_pending' && job.state !== 'payment_expired',
+  );
   const settlementPending = jobs.filter((job) => job.state === 'settlement_pending');
   const delivered = jobs.filter((job) => job.state === 'delivered');
   const merged = delivered.filter((job) => job.mergedAt);
@@ -35,7 +37,7 @@ export async function metrics(
   const refunds = refundObligations.filter((job) => job.state === 'refunded');
   const refundPending = refundObligations.filter((job) => job.state !== 'refunded');
   const externalJobs = jobs.filter((job) => {
-    if (job.state === 'settlement_pending') return false;
+    if (job.state === 'settlement_pending' || job.state === 'payment_expired') return false;
     if (!job.quote.installationId || !job.quote.authorizationReceipt) return false;
     return !config.internalRepos.has(`${job.quote.owner}/${job.quote.repo}`.toLowerCase());
   });

@@ -3,6 +3,7 @@ import {
   PolicyRequestError,
   repositoryAdmissionBinding,
   type PaymentPolicy,
+  type PaymentIntent,
   type SettlementEvidence,
 } from './policy-client.js';
 import { recoverSettlement } from './settlement-recovery.js';
@@ -10,6 +11,83 @@ import { MemoryStore } from './store.js';
 import type { Job, Quote, RepositoryAdmissionReceipt } from './types.js';
 
 describe('settlement recovery', () => {
+  it('closes an expired unpaid signer intent without creating a refund liability', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    await store.saveQuote(quote);
+    await store.linkQuoteToAccount(quote.id, '42');
+    const attempt = await store.createPaymentAttempt({
+      githubId: '42',
+      quoteId: quote.id,
+      wallet: pendingPayment.payer,
+      appBuild: 'release-test',
+    });
+    await store.updatePaymentAttemptStage(attempt.id, '42', 'submitting', 'server');
+    const receipt = admissionReceipt(attempt.idempotencyKey);
+    const created = await store.createJob(
+      quote,
+      pendingPayment,
+      attempt.idempotencyKey,
+      receipt,
+      attempt.id,
+    );
+    const intentId = '55555555-5555-4555-8555-555555555555';
+    const job = await store.patchJob(created.job.id, { paymentIntentId: intentId });
+    const retrySettlement = vi.fn();
+    const activatePaymentIntent = vi.fn();
+    const registerRefundLiability = vi.fn();
+    const intent = paymentIntent(job, receipt, {
+      status: 'expired_unpaid',
+      expiredAt: '2026-08-23T00:05:01.000Z',
+    });
+    const getPaymentIntent = vi.fn(async () => intent);
+
+    await expect(
+      recoverSettlement(job, {
+        paymentMode: 'live',
+        paymentExpiryWritesEnabled: false,
+        payTo: PAY_TO,
+        store,
+        payments: { retrySettlement },
+        policy: policy({
+          getPaymentIntent,
+          reconcilePaymentIntent: vi.fn(async () => intent),
+        }),
+      }),
+    ).rejects.toThrow('payment expiry writes are disabled');
+    const pending = await store.job(job.id);
+    expect(pending).toMatchObject({
+      state: 'settlement_pending',
+      paymentWindowEndUnixSeconds: intent.paymentWindowEndUnixSeconds,
+    });
+
+    const recovered = await recoverSettlement(pending!, {
+      paymentMode: 'live',
+      paymentExpiryWritesEnabled: true,
+      payTo: PAY_TO,
+      store,
+      payments: { retrySettlement },
+      policy: policy({
+        getPaymentIntent,
+        reconcilePaymentIntent: vi.fn(async () => intent),
+        activatePaymentIntent,
+        registerRefundLiability,
+      }),
+    });
+
+    expect(recovered).toMatchObject({ state: 'payment_expired' });
+    expect(recovered).not.toHaveProperty('refundLiabilityId');
+    await expect(store.paymentAttempt(attempt.id, '42')).resolves.toMatchObject({
+      stage: 'expired_unpaid',
+      retrySafe: true,
+      paymentWindowEndUnixSeconds: intent.paymentWindowEndUnixSeconds,
+    });
+    expect(retrySettlement).not.toHaveBeenCalled();
+    expect(activatePaymentIntent).not.toHaveBeenCalled();
+    expect(registerRefundLiability).not.toHaveBeenCalled();
+    expect(getPaymentIntent).toHaveBeenCalledOnce();
+  });
+
   it('never settles a Workbench payment before the signer reserves its payment intent', async () => {
     const store = new MemoryStore();
     const key = 'missing-payment-intent';
@@ -105,6 +183,7 @@ describe('settlement recovery', () => {
       store,
       payments: { retrySettlement },
       policy: policy({
+        getPaymentIntent: vi.fn(async () => paymentIntent(job, receipt)),
         reconcilePaymentIntent,
         validateRepositoryAdmission: vi.fn(async () => receipt),
         reconcileRepositorySettlement: vi.fn(async () => {
@@ -673,4 +752,34 @@ function settlementAbsent(): PolicyRequestError {
 
 function policy(overrides: Record<string, unknown>): PaymentPolicy {
   return overrides as unknown as PaymentPolicy;
+}
+
+function paymentIntent(
+  job: Job,
+  receipt: RepositoryAdmissionReceipt,
+  overrides: Partial<PaymentIntent> = {},
+): PaymentIntent {
+  return {
+    id: job.paymentIntentId ?? '55555555-5555-4555-8555-555555555555',
+    jobId: job.id,
+    quoteId: job.quote.id,
+    repositoryAdmissionId: receipt.id,
+    status: 'reserved',
+    payer: pendingPayment.payer,
+    payee: PAY_TO,
+    mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+    rawAmount: job.quote.priceAtomic,
+    amountUsdCents: 200,
+    bountyAmountUsdCents: 1_000,
+    bountyReserveLamports: '100000000',
+    memo: `mizuki:payment:v1:${job.quote.id}`,
+    paymentWindowStartUnixSeconds: 1,
+    paymentWindowEndUnixSeconds: 2,
+    settlementSignature: null,
+    liabilityId: null,
+    createdAt: '2026-08-23T00:00:00.000Z',
+    activatedAt: null,
+    expiredAt: null,
+    ...overrides,
+  };
 }

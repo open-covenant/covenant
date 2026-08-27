@@ -112,8 +112,12 @@ describe('Workbench responsive records and controls', () => {
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     expect(paymentAttempt).toContain('await createPaymentAttempt');
+    expect(paymentAttempt).toContain('await assertPaymentBalance');
     expect(paymentAttempt).toContain('payment_attempt_id: attempt.id');
     expect(paymentAttempt).toContain('await resolvePaymentRecovery(');
+    expect(paymentAttempt.indexOf('await assertPaymentBalance')).toBeLessThan(
+      paymentAttempt.indexOf('await createPaymentAttempt'),
+    );
     expect(paymentAttempt.indexOf('await createPaymentAttempt')).toBeLessThan(
       paymentAttempt.indexOf('createPaymentFetch'),
     );

@@ -448,6 +448,7 @@ function IssueAndPayment({
     setError(null);
     setState('paying');
     try {
+      await assertPaymentBalance(connected.account.address, quote.priceAtomic);
       const attempt = await createPaymentAttempt({
         quoteId: quote.id,
         wallet: connected.account.address,
@@ -483,7 +484,6 @@ function IssueAndPayment({
         quote,
       });
       paymentRecovery.current = recovery;
-      await assertPaymentBalance(connected.account.address, quote.priceAtomic);
       const walletFeature = connected.wallet.features[
         'solana:signTransaction'
       ] as SolanaSignTransactionFeature['solana:signTransaction'];

@@ -8,8 +8,8 @@ export default function manifest(): MetadataRoute.Manifest {
       'Fixed-price maintenance for authorized public GitHub issues, with a qualifying pull request or refund of the quoted USDC payment.',
     start_url: '/',
     display: 'standalone',
-    background_color: '#090b0e',
-    theme_color: '#090b0e',
+    background_color: '#07060b',
+    theme_color: '#07060b',
     icons: [
       {
         src: '/mizuki-icon-192.png',

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1470 1050" fill="none" role="img" aria-label="Mizuki">
+  <defs>
+    <linearGradient id="mizukiMark" x1="0" y1="0" x2="1470" y2="1050" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#A03BF0"/>
+      <stop offset="0.5" stop-color="#4C7FDE"/>
+      <stop offset="1" stop-color="#1DE3AE"/>
+    </linearGradient>
+  </defs>
+  <path fill="url(#mizukiMark)" d="M38 0h554a38 38 0 0 1 38 38v134a38 38 0 0 0 38 38h134a38 38 0 0 0 38-38V38a38 38 0 0 1 38-38h344a38 38 0 0 1 38 38v134a38 38 0 0 0 38 38h134a38 38 0 0 1 38 38v764a38 38 0 0 1-38 38h-134a38 38 0 0 1-38-38V248a38 38 0 0 0-38-38H878a38 38 0 0 0-38 38v764a38 38 0 0 1-38 38H668a38 38 0 0 1-38-38V248a38 38 0 0 0-38-38H248a38 38 0 0 0-38 38v764a38 38 0 0 1-38 38H38a38 38 0 0 1-38-38V38a38 38 0 0 1 38-38Z"/>
+</svg>

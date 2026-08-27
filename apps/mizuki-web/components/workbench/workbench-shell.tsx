@@ -97,10 +97,10 @@ export function WorkbenchShell({
           href="https://opencovenant.org"
           aria-label="Covenant home"
         >
-          <Image src="/covenant-logo.svg" alt="Covenant" width={255} height={54} priority />
+          <Image src="/covenant-mark.svg" alt="Covenant" width={1140} height={1050} priority />
         </a>
         <Link className="workbench-brand" href="/app" aria-label="Mizuki Workbench home">
-          <Image src="/mizuki-avatar.jpg" alt="" width={38} height={38} priority />
+          <Image src="/mizuki-mark.svg" alt="" width={1470} height={1050} className="mizuki-mark" priority />
           <span>
             <strong>Mizuki</strong>
             <small>Maintenance workbench</small>
@@ -176,13 +176,13 @@ export function WorkbenchHeader({ walletControl }: { walletControl: React.ReactN
       <Link className="workbench-header-brand" href="/app" aria-label="Mizuki Workbench home">
         <Image
           className="workbench-header-covenant"
-          src="/covenant-logomark.png"
+          src="/covenant-mark.svg"
           alt=""
           width={24}
           height={24}
         />
         <span className="workbench-header-divider" aria-hidden="true" />
-        <Image src="/mizuki-avatar.jpg" alt="" width={32} height={32} />
+        <Image src="/mizuki-mark.svg" alt="" width={1470} height={1050} className="mizuki-mark" />
         <strong>Mizuki</strong>
       </Link>
       <div className="workbench-header-context">
@@ -272,11 +272,11 @@ function WorkbenchAccessState({
         href="https://opencovenant.org"
         aria-label="Covenant home"
       >
-        <Image src="/covenant-logo.svg" alt="Covenant" width={255} height={54} priority />
+        <Image src="/covenant-mark.svg" alt="Covenant" width={1140} height={1050} priority />
       </a>
       <div className="workbench-access-card">
         <Link className="workbench-access-brand" href="/">
-          <Image src="/mizuki-avatar.jpg" alt="" width={48} height={48} priority />
+          <Image src="/mizuki-mark.svg" alt="" width={1470} height={1050} className="mizuki-mark" priority />
           <span>
             <strong>Mizuki the Mech</strong>
             <small>Maintenance workbench</small>

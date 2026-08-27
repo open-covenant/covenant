@@ -1,17 +1,21 @@
 .workbench-root {
-  --wb-bg: #030303;
-  --wb-rail: #030303;
-  --wb-panel: #080808;
-  --wb-panel-raised: #0d0d0d;
-  --wb-line: #262626;
-  --wb-line-strong: #404040;
-  --wb-text: #f5f5f5;
-  --wb-muted: #a3a3a3;
-  --wb-dim: #737373;
-  --wb-accent: #f5f5f5;
-  --wb-accent-soft: rgba(245, 245, 245, 0.06);
-  --wb-warning: #e0b968;
-  --wb-danger: #e18383;
+  --wb-bg: #f4f2f9;
+  --wb-rail: #ffffff;
+  --wb-panel: #ffffff;
+  --wb-panel-raised: #eae7f2;
+  --wb-line: #ddd8e9;
+  --wb-line-strong: #bfb8d4;
+  --wb-text: #141220;
+  --wb-muted: #625c78;
+  --wb-dim: #86809c;
+  --wb-accent: #141220;
+  --wb-accent-soft: rgba(76, 127, 222, 0.10);
+  --wb-warning: #9a6f10;
+  --wb-danger: #c0392b;
+  --wb-g1: #a03bf0;
+  --wb-g2: #4c7fde;
+  --wb-g3: #1de3ae;
+  --wb-ramp: linear-gradient(115deg, var(--wb-g1), var(--wb-g2), var(--wb-g3));
   min-height: 100vh;
   background: var(--wb-bg);
   color: var(--wb-text);
@@ -3781,4 +3785,61 @@
   font-size: 0.6875rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
+}
+
+/* Covenant identity layer — see globals.css. */
+
+.workbench-root {
+  font-family: var(--font-ui);
+}
+
+.workbench-root h1,
+.workbench-root h2 {
+  font-family: var(--font-display);
+  font-variation-settings: 'wdth' 125;
+  font-weight: 600;
+  letter-spacing: -0.04em;
+  line-height: 0.92;
+  text-transform: uppercase;
+}
+
+.workbench-header-new-job,
+.workbench-wallet-trigger {
+  font-size: 10px;
+}
+
+.workbench-wallet-trigger {
+  border-color: transparent;
+  background: var(--wb-ramp);
+  color: #ffffff;
+}
+
+.workbench-root :focus-visible {
+  outline: 2px solid var(--wb-g3);
+  outline-offset: 2px;
+}
+
+/* The logomarks are near-square, not the old wide wordmark: size by height. */
+.workbench-access-covenant img,
+.workbench-header-covenant img,
+.workbench-mobile-covenant img {
+  width: auto;
+  height: 26px;
+}
+
+.workbench-access-mark img,
+.workbench-header-brand img,
+.workbench-mobile-brand img {
+  width: auto;
+  height: 22px;
+  object-fit: contain;
+  border-radius: 0;
+}
+
+/* Leftover avatar treatment: the logomark is 7:5 and must not be clipped. */
+.workbench-access-brand img {
+  width: auto;
+  height: 22px;
+  border-radius: 0;
+  object-fit: contain;
 }

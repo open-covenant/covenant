@@ -10,9 +10,10 @@ describe('deployment controller HTTP service', () => {
   let server: ReturnType<typeof createControllerServer>;
   let origin: string;
   const readiness = vi.fn(async () => {});
+  const adoptShadow = vi.fn(async () => ({ status: 'completed' as const, operationId: 'dep-1' }));
 
   beforeEach(async () => {
-    const controller = { readiness } as unknown as DeploymentController;
+    const controller = { readiness, adoptShadow } as unknown as DeploymentController;
     server = createControllerServer({
       controller,
       store: new MemoryOperationStore(),
@@ -24,6 +25,7 @@ describe('deployment controller HTTP service', () => {
 
   afterEach(async () => {
     readiness.mockClear();
+    adoptShadow.mockClear();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
@@ -56,6 +58,43 @@ describe('deployment controller HTTP service', () => {
     });
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({ error: { code: 'invalid_request' } });
+  });
+
+  it('authenticates and dispatches an exact shadow adoption request', async () => {
+    const input = {
+      version: 1,
+      upgradeId: 'upgrade-1',
+      proposalId: 'proposal-1',
+      deploymentId: 'dep-1',
+      restoreDeploymentId: 'dep-2',
+      candidateSha: 'a'.repeat(40),
+      candidateArtifactSha256: 'f'.repeat(64),
+      baselineDeploymentId: 'dep-shadow-baseline',
+      baselineArtifactSha256: 'c'.repeat(64),
+      reason: 'schema_incompatible_baseline',
+    };
+    const unauthorized = await fetch(`${origin}/v1/deployments/shadow/adopt`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'idempotency-key': 'upgrade-1:adopt-shadow',
+      },
+      body: JSON.stringify(input),
+    });
+    expect(unauthorized.status).toBe(401);
+
+    const response = await fetch(`${origin}/v1/deployments/shadow/adopt`, {
+      method: 'POST',
+      headers: {
+        ...bearer(),
+        'content-type': 'application/json',
+        'idempotency-key': 'upgrade-1:adopt-shadow',
+      },
+      body: JSON.stringify(input),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: 'completed', operationId: 'dep-1' });
+    expect(adoptShadow).toHaveBeenCalledWith(input, 'upgrade-1:adopt-shadow');
   });
 });
 

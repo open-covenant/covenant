@@ -59,6 +59,35 @@ describe('Postgres operation ledger', () => {
     ]);
   });
 
+  it('keeps shadow adoption evidence out of the strict operation record', async () => {
+    const pool = new FakePool();
+    const store = new PostgresOperationStore(database, pool);
+    const operation = fixtureOperation();
+    operation.shadowState = 'completed';
+    operation.shadowRestoreState = 'failed';
+    operation.shadowRestoreDeployId = 'dep-restore-failed';
+    operation.shadowActive = false;
+    const event = operationEvent(operation, 'shadow_baseline_adopted', {
+      idempotencyKey: 'upgrade-1:adopt-shadow',
+      requestHash: '9'.repeat(64),
+    });
+
+    await store.save(operation, event);
+
+    const statements = pool.clients[0].statements;
+    const update = statements.find(({ text }) => text.includes('UPDATE mizuki_deployment_operations'));
+    const append = statements.find(({ text }) => text.includes('INSERT INTO mizuki_deployment_events'));
+    const record = JSON.parse(String(update?.values?.[9])) as Record<string, unknown>;
+    const detail = JSON.parse(String(append?.values?.[3])) as Record<string, unknown>;
+    expect(record).toMatchObject({ shadowRestoreState: 'failed', shadowActive: false });
+    expect(Object.keys(record).some((key) => key.toLowerCase().includes('adoption'))).toBe(false);
+    expect(detail).toEqual({
+      idempotencyKey: 'upgrade-1:adopt-shadow',
+      requestHash: '9'.repeat(64),
+    });
+    expect(statements.at(-1)?.text).toBe('COMMIT');
+  });
+
   it('rolls back the state write when the append-only event fails', async () => {
     const pool = new FakePool(true);
     const store = new PostgresOperationStore(database, pool);

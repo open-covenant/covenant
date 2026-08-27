@@ -419,6 +419,7 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
         { component: 'core', version: 1, name: 'commercial-core' },
         { component: 'github-oauth', version: 1, name: 'browser-bound-flow' },
         { component: 'workbench', version: 1, name: 'workbench-accounts' },
+        { component: 'workbench', version: 2, name: 'payment-attempts' },
         { component: 'workbench-api-tokens', version: 1, name: 'scoped-api-tokens' },
       ]);
       expect(result.rows.every((row) => /^[a-f0-9]{64}$/.test(row.checksum))).toBe(true);
@@ -708,6 +709,7 @@ describe.skipIf(!databaseUrl)('PostgresStore integration', () => {
           { component: 'core', version: 1, name: 'commercial-core' },
           { component: 'github-oauth', version: 1, name: 'browser-bound-flow' },
           { component: 'workbench', version: 1, name: 'workbench-accounts' },
+          { component: 'workbench', version: 2, name: 'payment-attempts' },
           { component: 'workbench-api-tokens', version: 1, name: 'scoped-api-tokens' },
         ]);
       } finally {

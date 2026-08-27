@@ -1057,8 +1057,8 @@ function quoteError(cause: unknown): string {
   return 'A fixed quote could not be created. No payment was requested.';
 }
 
-function paymentStatusError(cause: unknown): string {
-  if (cause instanceof PaymentStatusError) {
+export function paymentStatusError(cause: unknown): string {
+  if (cause instanceof PaymentStatusError || cause instanceof WorkbenchRequestError) {
     if (cause.status === 401) {
       return 'Your GitHub session expired. Sign in again to check this payment. Do not approve another payment yet.';
     }
@@ -1075,10 +1075,38 @@ function paymentStatusError(cause: unknown): string {
   return 'Payment status could not be confirmed. No new payment was requested. Try the read-only status check again.';
 }
 
-function paymentAttemptError(cause: unknown, quoteAmount: string, attemptId?: string): string {
+export function paymentAttemptError(
+  cause: unknown,
+  quoteAmount: string,
+  attemptId?: string,
+): string {
   const message =
     cause instanceof PaymentAttemptBusyError
       ? `${cause.message} Check its status before trying again.`
-      : paymentPreparationError(cause, quoteAmount);
+      : cause instanceof WorkbenchRequestError
+        ? paymentAttemptRequestError(cause)
+        : paymentPreparationError(cause, quoteAmount);
   return attemptId ? `${message} Reference ${attemptId}.` : message;
+}
+
+function paymentAttemptRequestError(cause: WorkbenchRequestError): string {
+  if (cause.status === 401) {
+    return 'Your GitHub session expired. Sign in again before paying. No payment or job was created.';
+  }
+  if (cause.status === 404) {
+    return 'This quote is no longer available. Refresh the page and request a new fixed quote. No payment or job was created.';
+  }
+  if (cause.status === 409) {
+    if (/expired/i.test(cause.message)) {
+      return 'This quote expired. Refresh the page and request a new fixed quote. No payment or job was created.';
+    }
+    return 'This quote already has a payment attempt. Refresh Workbench and check its status before trying again. No new payment was requested.';
+  }
+  if (cause.status === 429) {
+    return 'Payment was requested too many times. Wait a moment and try again. No payment or job was created.';
+  }
+  if (cause.status >= 500) {
+    return 'The payment service is temporarily unavailable. Try again in a moment. No payment or job was created.';
+  }
+  return 'Workbench could not create the payment attempt. Refresh the page and try again. No payment or job was created.';
 }

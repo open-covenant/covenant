@@ -657,6 +657,20 @@ prefixes = %w[
   services__mizuki-deployment-controller
   services__coding-gateway
 ]
+# Advisories with no released fix anywhere upstream. Each entry carries why the
+# exposure is acceptable for this app. The allowance is conditional: the moment a
+# patched version exists the advisory stops matching here and the audit fails
+# again, which is what forces the bump rather than letting the exception rot.
+unfixed_allowed = {
+  'bigint-buffer' => 'native fast path under @solana/spl-token; the pure-JS fallback is what runs, and no patched release exists',
+  'image-size' => 'react-native CLI tooling reached through @walletconnect/keyvaluestorage; never loaded by the web bundle, and no patched release exists'
+}
+
+def unpatched?(advisory)
+  patched = advisory['patched_versions'].to_s.strip
+  patched.empty? || patched == '<0.0.0'
+end
+
 blocked = data.fetch('advisories', {}).values.each_with_object([]) do |advisory, matches|
   next unless %w[moderate high critical].include?(advisory['severity'])
 
@@ -665,6 +679,11 @@ blocked = data.fetch('advisories', {}).values.each_with_object([]) do |advisory,
     prefixes.any? { |prefix| path == prefix || path.start_with?("#{prefix}>") }
   end
   next if scoped.empty?
+
+  if unfixed_allowed.key?(advisory['module_name']) && unpatched?(advisory)
+    warn "allowed (no fix upstream): #{advisory['module_name']} - #{unfixed_allowed.fetch(advisory['module_name'])}"
+    next
+  end
 
   matches << "#{advisory['severity']}: #{advisory['module_name']} (#{scoped.join(', ')})"
 end

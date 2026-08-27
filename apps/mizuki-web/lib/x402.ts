@@ -85,8 +85,7 @@ export function createPaymentFetch(input: {
   let walletTransaction: Uint8Array | undefined;
   const signer = walletSigner(input.account, input.feature, terms.network, terms, {
     onStage: input.onStage,
-    stageConfirmationTimeoutMs:
-      input.stageConfirmationTimeoutMs ?? WALLET_SIGNED_STAGE_TIMEOUT_MS,
+    stageConfirmationTimeoutMs: input.stageConfirmationTimeoutMs ?? WALLET_SIGNED_STAGE_TIMEOUT_MS,
     capture: (transaction) => {
       walletTransaction = transaction;
     },

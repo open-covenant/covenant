@@ -305,10 +305,7 @@ export class MemoryStore implements MizukiStore {
       if (!active.retrySafe) {
         throw new StateConflictError('resolve the active payment attempt before starting another');
       }
-      this.paymentAttempts.set(
-        active.id,
-        transitionPaymentAttempt(active, 'expired_unpaid'),
-      );
+      this.paymentAttempts.set(active.id, transitionPaymentAttempt(active, 'expired_unpaid'));
     }
     const now = new Date().toISOString();
     const attempt: CustomerPaymentAttempt = {
@@ -1235,7 +1232,9 @@ export class PostgresStore implements MizukiStore {
       if (active.rows[0]) {
         const attempt = active.rows[0].payload;
         if (!attempt.retrySafe) {
-          throw new StateConflictError('resolve the active payment attempt before starting another');
+          throw new StateConflictError(
+            'resolve the active payment attempt before starting another',
+          );
         }
         await savePaymentAttempt(client, transitionPaymentAttempt(attempt, 'expired_unpaid'));
       }

@@ -24,6 +24,7 @@ import {
   reconcilePaymentAttempt,
   reportPaymentAttemptStage,
   saveWorkbenchPaymentRecovery,
+  walletAuthorizationDeadline,
   withPaymentAttemptLock,
   type WorkbenchPaymentRecovery,
 } from '@/lib/payment';
@@ -463,6 +464,7 @@ function IssueAndPayment({
         recovery = {
           phase: 'uncertain',
           walletAuthorized: true,
+          walletAuthorizedAt: new Date().toISOString(),
           accountId,
           attemptId: attempt.id,
           idempotencyKey: attempt.idempotencyKey,
@@ -495,7 +497,12 @@ function IssueAndPayment({
         quoteAmount: quote.priceAtomic,
         onStage(stage) {
           if (stage === 'wallet_signed') {
-            recovery = { ...recovery!, phase: 'attempting', walletAuthorized: true };
+            recovery = {
+              ...recovery!,
+              phase: 'attempting',
+              walletAuthorized: true,
+              walletAuthorizedAt: recovery!.walletAuthorizedAt ?? new Date().toISOString(),
+            };
             paymentRecovery.current = recovery;
             saveWorkbenchPaymentRecovery(recovery);
           }
@@ -571,6 +578,8 @@ function IssueAndPayment({
     try {
       const status = await reconcilePaymentAttempt(recovery.attemptId, recovery.quote.id, {
         signal: controller.signal,
+        walletAuthorized: recovery.walletAuthorized === true,
+        deadlineMs: walletAuthorizationDeadline(recovery),
       });
       if (status.job || status.paymentStatus === 'job_reserved') {
         if (!status.job) throw new Error('The reserved payment attempt did not include its job');

@@ -13,6 +13,7 @@ import {
   quoteMatchesIssue,
   reconcilePaymentAttempt,
   saveWorkbenchPaymentRecovery,
+  walletAuthorizationDeadline,
 } from './payment';
 import { WorkbenchRequestError } from './workbench-client';
 import type { Quote } from './types';
@@ -334,6 +335,39 @@ describe('server-owned payment attempts', () => {
     }
   });
 
+  it('keeps polling an earlier server stage after the wallet has signed', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-27T12:00:00.000Z'));
+    const expiresAt = new Date(Date.now() + 60_000).toISOString();
+    const responses = [
+      paymentAttemptResponse('created', expiresAt),
+      paymentAttemptResponse('wallet_opened', expiresAt),
+      paymentAttemptResponse('job_reserved', expiresAt, {
+        id: 'job-11111111',
+        state: 'settlement_pending',
+      }),
+    ];
+    const request = vi.fn(async () => Response.json(responses.shift()));
+    vi.stubGlobal('fetch', request);
+
+    try {
+      const recovered = reconcilePaymentAttempt('attempt-11111111', quote.id, {
+        walletAuthorized: true,
+        deadlineMs: Date.now() + 60_000,
+      });
+      await vi.runAllTimersAsync();
+
+      await expect(recovered).resolves.toMatchObject({
+        paymentStatus: 'job_reserved',
+        job: { id: 'job-11111111' },
+      });
+      expect(request).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
   it('stops read-only polling at the canonical attempt deadline', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-08-27T12:00:00.000Z'));
@@ -429,8 +463,27 @@ describe('server-owned payment attempts', () => {
   });
 });
 
+describe('wallet authorization deadline', () => {
+  it('uses the earlier of the five-minute payment window and quote expiry', () => {
+    const signedAt = Date.parse('2026-08-27T12:00:00.000Z');
+
+    expect(
+      walletAuthorizationDeadline({
+        walletAuthorizedAt: new Date(signedAt).toISOString(),
+        quote: { ...quote, expiresAt: new Date(signedAt + 900_000).toISOString() },
+      }),
+    ).toBe(signedAt + 300_000);
+    expect(
+      walletAuthorizationDeadline({
+        walletAuthorizedAt: new Date(signedAt).toISOString(),
+        quote: { ...quote, expiresAt: new Date(signedAt + 120_000).toISOString() },
+      }),
+    ).toBe(signedAt + 120_000);
+  });
+});
+
 function paymentAttemptResponse(
-  paymentStatus: 'submitting' | 'indeterminate' | 'job_reserved',
+  paymentStatus: 'created' | 'wallet_opened' | 'submitting' | 'indeterminate' | 'job_reserved',
   expiresAt: string,
   job?: { id: string; state: string },
 ) {

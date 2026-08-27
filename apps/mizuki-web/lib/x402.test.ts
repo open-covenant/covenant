@@ -74,16 +74,19 @@ describe('x402 quote policy', () => {
     expect(message).not.toContain('maxAmountPerPayment');
   });
 
-  it('reports an unavailable browser RPC without blaming the wallet balance', () => {
-    const message = paymentPreparationError(
-      new Error('Failed to create payment payload: HTTP error (403): Access forbidden'),
-      '2 USDC',
-    );
+  it.each([400, 403])(
+    'reports an unavailable browser RPC after HTTP %s without blaming the wallet balance',
+    (status) => {
+      const message = paymentPreparationError(
+        new Error(`Failed to create payment payload: HTTP error (${status}): RPC unavailable`),
+        '2 USDC',
+      );
 
-    expect(message).toContain('Solana payment network could not prepare the transaction');
-    expect(message).not.toContain('balance');
-    expect(message).not.toContain('403');
-  });
+      expect(message).toContain('Solana payment network could not prepare the transaction');
+      expect(message).not.toContain('balance');
+      expect(message).not.toContain(String(status));
+    },
+  );
 
   it('does not claim an unknown preparation error means insufficient funds', () => {
     const message = paymentPreparationError(new Error('unexpected wallet adapter error'), '2 USDC');

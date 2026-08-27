@@ -78,16 +78,27 @@ export async function POST(request: Request): Promise<Response> {
 
 function allowedParams(request: RpcRequest): boolean {
   if (request.method === 'getLatestBlockhash') {
-    return request.params === undefined || request.params.length === 0;
+    return (
+      request.params === undefined ||
+      request.params.length === 0 ||
+      (request.params.length === 1 && isConfirmedConfig(request.params[0]))
+    );
   }
   if (request.method !== 'getAccountInfo' || request.params?.length !== 2) return false;
   const [account, config] = request.params;
+  if (account !== USDC_MAINNET || !isRecord(config) || config.encoding !== 'base64') return false;
+  const keys = Object.keys(config);
   return (
-    account === USDC_MAINNET &&
-    isRecord(config) &&
-    Object.keys(config).length === 1 &&
-    config.encoding === 'base64'
+    (keys.length === 1 && keys[0] === 'encoding') ||
+    (keys.length === 2 &&
+      keys.includes('encoding') &&
+      keys.includes('commitment') &&
+      config.commitment === 'confirmed')
   );
+}
+
+function isConfirmedConfig(value: unknown): value is { commitment: 'confirmed' } {
+  return isRecord(value) && Object.keys(value).length === 1 && value.commitment === 'confirmed';
 }
 
 function parseRpcRequest(body: Uint8Array): RpcRequest | undefined {

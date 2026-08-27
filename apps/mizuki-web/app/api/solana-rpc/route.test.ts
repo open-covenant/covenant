@@ -19,7 +19,12 @@ describe('Solana payment RPC', () => {
     );
 
     const response = await POST(
-      request({ jsonrpc: '2.0', id: 7, method: 'getLatestBlockhash', params: [] }),
+      request({
+        jsonrpc: '2.0',
+        id: 7,
+        method: 'getLatestBlockhash',
+        params: [{ commitment: 'confirmed' }],
+      }),
     );
 
     expect(response.status).toBe(200);
@@ -36,7 +41,7 @@ describe('Solana payment RPC', () => {
           jsonrpc: '2.0',
           id: 7,
           method: 'getLatestBlockhash',
-          params: [],
+          params: [{ commitment: 'confirmed' }],
         }),
       }),
     );
@@ -55,7 +60,7 @@ describe('Solana payment RPC', () => {
           jsonrpc: '2.0',
           id: 8,
           method: 'getAccountInfo',
-          params: [mint, { encoding: 'base64' }],
+          params: [mint, { encoding: 'base64', commitment: 'confirmed' }],
         },
         '203.0.113.8',
       ),
@@ -94,11 +99,37 @@ describe('Solana payment RPC', () => {
       ['11111111111111111111111111111111', { encoding: 'base64' }],
       [mint, { encoding: 'jsonParsed' }],
       [mint, { encoding: 'base64', commitment: 'finalized' }],
+      [mint, { encoding: 'base64', commitment: 'confirmed', dataSlice: { offset: 0, length: 1 } }],
     ].entries()) {
       const response = await POST(
         request(
           { jsonrpc: '2.0', id: index, method: 'getAccountInfo', params },
           `198.51.100.${index + 1}`,
+        ),
+      );
+      expect(response.status).toBe(400);
+    }
+    expect(upstream).not.toHaveBeenCalled();
+  });
+
+  it('rejects changed blockhash commitment options', async () => {
+    process.env.MIZUKI_SOLANA_RPC_URL = endpoint;
+    const upstream = vi.spyOn(globalThis, 'fetch');
+
+    for (const [index, config] of [
+      { commitment: 'finalized' },
+      { commitment: 'confirmed', minContextSlot: 1 },
+      { encoding: 'base64' },
+    ].entries()) {
+      const response = await POST(
+        request(
+          {
+            jsonrpc: '2.0',
+            id: index,
+            method: 'getLatestBlockhash',
+            params: [config],
+          },
+          `198.51.100.${index + 20}`,
         ),
       );
       expect(response.status).toBe(400);

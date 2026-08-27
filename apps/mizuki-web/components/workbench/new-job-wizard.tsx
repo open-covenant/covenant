@@ -331,7 +331,11 @@ function IssueAndPayment({
   }, [accountId, repository.fullName]);
 
   useEffect(() => {
-    return () => paymentStatusController.current?.abort();
+    return () => {
+      const controller = paymentStatusController.current;
+      paymentStatusController.current = null;
+      controller?.abort();
+    };
   }, [accountId, repository.fullName]);
 
   const paymentLocked =

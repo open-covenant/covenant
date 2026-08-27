@@ -8,6 +8,8 @@ import {
 
 const recoveryStorageKey = 'mizuki:workbench:payment-recovery';
 const paymentStatusTimeoutMs = 12_000;
+const paymentRecoveryPollBaseMs = 1_000;
+const paymentRecoveryPollMaxMs = 8_000;
 
 type PaymentStorage = Pick<Storage, 'getItem' | 'removeItem' | 'setItem'>;
 
@@ -140,18 +142,39 @@ export async function reconcilePaymentAttempt(
   options: { signal?: AbortSignal; attempts?: number } = {},
 ): Promise<PaymentAttempt> {
   const attempts = Math.max(1, Math.min(options.attempts ?? 4, 6));
-  let lastError: unknown;
-  for (let index = 0; index < attempts; index += 1) {
+  let consecutiveFailures = 0;
+  let pollIndex = 0;
+  let lastPending: PaymentAttempt | undefined;
+
+  while (true) {
     if (options.signal?.aborted) throw abortReason(options.signal);
     try {
-      return await checkPaymentAttempt(attemptId, expectedQuoteId);
+      const attempt = await checkPaymentAttempt(attemptId, expectedQuoteId);
+      consecutiveFailures = 0;
+      if (!paymentAttemptNeedsReconciliation(attempt)) return attempt;
+
+      lastPending = attempt;
+      const deadline = attemptExpiry(attempt);
+      if (deadline === undefined || deadline <= Date.now()) return attempt;
+      await wait(
+        Math.min(paymentRecoveryDelay(pollIndex), Math.max(0, deadline - Date.now())),
+        options.signal,
+      );
+      pollIndex += 1;
     } catch (cause) {
-      lastError = cause;
-      if (!retryableAttemptRead(cause) || index === attempts - 1) throw cause;
-      await wait(attemptReadDelay(index), options.signal);
+      if (options.signal?.aborted) throw abortReason(options.signal);
+      consecutiveFailures += 1;
+      if (!retryableAttemptRead(cause) || consecutiveFailures >= attempts) throw cause;
+
+      const deadline = lastPending ? attemptExpiry(lastPending) : undefined;
+      if (deadline !== undefined && deadline <= Date.now()) return lastPending!;
+      const delay = attemptReadDelay(consecutiveFailures - 1);
+      await wait(
+        deadline === undefined ? delay : Math.min(delay, Math.max(0, deadline - Date.now())),
+        options.signal,
+      );
     }
   }
-  throw lastError;
 }
 
 export function normalizePaymentAttempt(value: unknown, expectedQuoteId?: string): PaymentAttempt {
@@ -517,6 +540,23 @@ function validIdempotencyKey(value: string): boolean {
 
 function retryableAttemptRead(cause: unknown): boolean {
   return !(cause instanceof WorkbenchRequestError) || cause.status === 429 || cause.status >= 500;
+}
+
+function paymentAttemptNeedsReconciliation(attempt: PaymentAttempt): boolean {
+  return (
+    !attempt.job && ['wallet_signed', 'submitting', 'indeterminate'].includes(attempt.paymentStatus)
+  );
+}
+
+function attemptExpiry(attempt: PaymentAttempt): number | undefined {
+  if (!attempt.expiresAt) return undefined;
+  const expiry = Date.parse(attempt.expiresAt);
+  return Number.isNaN(expiry) ? undefined : expiry;
+}
+
+function paymentRecoveryDelay(index: number): number {
+  const base = Math.min(paymentRecoveryPollMaxMs, paymentRecoveryPollBaseMs * 2 ** index);
+  return base + Math.floor(Math.random() * Math.max(1, base / 4));
 }
 
 function attemptReadDelay(index: number): number {

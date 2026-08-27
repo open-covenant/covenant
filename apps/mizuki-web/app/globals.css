@@ -1811,10 +1811,6 @@ textarea:focus-visible {
   margin-bottom: 14px;
 }
 
-.quote-workflow {
-  min-width: 0;
-}
-
 .workbench-entry {
   min-width: 0;
   padding: clamp(28px, 4vw, 48px);

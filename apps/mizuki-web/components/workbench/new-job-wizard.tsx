@@ -457,6 +457,8 @@ function IssueAndPayment({
       attemptId = attempt.id;
       if (attempt.job || attempt.paymentStatus === 'job_reserved') {
         if (!attempt.job) throw new Error('The reserved payment attempt did not include its job');
+        clearWorkbenchPaymentRecovery(accountId, quote.id);
+        paymentRecovery.current = null;
         router.push(`/app/jobs/${encodeURIComponent(attempt.job.id)}`);
         return;
       }

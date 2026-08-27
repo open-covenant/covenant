@@ -115,6 +115,7 @@ describe('Workbench responsive records and controls', () => {
     expect(paymentAttempt).toContain('await assertPaymentBalance');
     expect(paymentAttempt).toContain('payment_attempt_id: attempt.id');
     expect(paymentAttempt).toContain('await resolvePaymentRecovery(');
+    expect(paymentAttempt).toContain('clearWorkbenchPaymentRecovery(accountId, quote.id)');
     expect(paymentAttempt.indexOf('await assertPaymentBalance')).toBeLessThan(
       paymentAttempt.indexOf('await createPaymentAttempt'),
     );

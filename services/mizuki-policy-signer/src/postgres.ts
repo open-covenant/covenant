@@ -295,7 +295,7 @@ const DELAYED_LIABILITY_SAFETY_SCHEMA = `
       ALTER TABLE mizuki_signer_refund_liabilities
         ADD CONSTRAINT mizuki_signer_refund_repository_admission_fk
         FOREIGN KEY (repository_admission_id)
-      REFERENCES mizuki_signer_repository_admissions(id);`;
+        REFERENCES mizuki_signer_repository_admissions(id);`;
 
 const PAYMENT_INTENT_AND_REFUND_COMMAND_SCHEMA = `
       ALTER TABLE mizuki_signer_repository_admissions

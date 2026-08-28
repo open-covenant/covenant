@@ -687,22 +687,45 @@ function IssueAndPayment({
 
   async function revalidatePaymentRetry() {
     if (!quote || !accountId) return;
+    const previousQuoteId = quote.id;
     setState('revalidating_payment');
     setError(null);
+    clearWorkbenchPaymentRecovery(accountId, previousQuoteId);
+    paymentRecovery.current = null;
+
+    let next: WorkbenchPreflight;
     try {
       const value = await workbenchRequest<unknown>('/v1/preflights', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ github_issue_url: issueUrl.trim() }),
       });
-      const next = normalizePreflight(value);
-      clearWorkbenchPaymentRecovery(accountId, quote.id);
-      setPreflight(next);
-      setQuote(null);
-      setState('idle');
+      next = normalizePreflight(value);
     } catch (cause) {
       setState('payment_unpaid');
       setError(preflightError(cause));
+      return;
+    }
+
+    setPreflight(next);
+    if (next.eligibility !== 'ready') {
+      setQuote(null);
+      setState('idle');
+      return;
+    }
+
+    try {
+      const freshQuote = await workbenchMutation<Quote>('/v1/account/quotes', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ github_issue_url: issueUrl.trim() }),
+      });
+      setQuote(freshQuote);
+      setState('quoted');
+    } catch (cause) {
+      setQuote(null);
+      setState('idle');
+      setError(quoteError(cause));
     }
   }
 
@@ -881,7 +904,7 @@ function IssueAndPayment({
                     {state === 'payment_uncertain' || state === 'checking_payment'
                       ? 'Confirm the existing payment status'
                       : state === 'payment_unpaid' || state === 'revalidating_payment'
-                        ? 'Recheck eligibility before retrying'
+                        ? 'Create a fresh quote before retrying'
                         : 'Pay the exact quote and start'}
                   </h2>
                 </div>
@@ -917,8 +940,7 @@ function IssueAndPayment({
                     {quoteExpired(quote)
                       ? 'This quote has expired.'
                       : 'The previous attempt did not create a payment or reserve a job.'}{' '}
-                    Recheck issue eligibility and request a new fixed quote before opening the
-                    wallet again.
+                    Create a fresh fixed quote before opening the wallet again.
                   </p>
                   <button
                     type="button"
@@ -926,8 +948,8 @@ function IssueAndPayment({
                     onClick={() => void revalidatePaymentRetry()}
                   >
                     {state === 'revalidating_payment'
-                      ? 'Rechecking eligibility…'
-                      : 'Recheck issue eligibility'}
+                      ? 'Creating a fresh quote…'
+                      : 'Create a fresh quote'}
                   </button>
                 </div>
               ) : (

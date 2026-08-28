@@ -3856,3 +3856,20 @@ html:has(.workbench-root) body {
   background: var(--wb-bg, #07060b);
   color: #edebf5;
 }
+
+/* Rail brand: the mark is a 7:5 wordmark, so the old circular avatar crop and
+   the wordmark-era fixed width both distort it. `:last-of-type` outranks a
+   plain descendant selector, so the reset has to restate it. */
+.workbench-brand img,
+.workbench-header-brand img:last-of-type {
+  width: auto;
+  height: 22px;
+  border: 0;
+  border-radius: 0;
+  object-fit: contain;
+}
+
+.workbench-covenant-brand img {
+  width: auto;
+  height: 26px;
+}

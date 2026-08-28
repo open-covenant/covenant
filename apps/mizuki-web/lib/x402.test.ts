@@ -829,6 +829,33 @@ describe('wallet-returned SVM transaction validation', () => {
     });
   });
 
+  it('allows Lighthouse to inspect the existing payer and payment accounts', async () => {
+    const fixture = await paymentFixture();
+    const lighthouseAccounts: Array<[string, AccountRole]> = [
+      [fixture.payer.address, AccountRole.READONLY_SIGNER],
+      [fixture.source, AccountRole.WRITABLE],
+      [fixture.destination, AccountRole.WRITABLE],
+    ];
+    const signed = lighthouseAccounts.reduce(
+      (transaction, [accountAddress, role]) =>
+        addLighthouseAccount(transaction, accountAddress, role),
+      fixture.original,
+    );
+
+    await expect(validate(fixture, signed)).resolves.toBeDefined();
+  });
+
+  it('does not let Lighthouse use the facilitator signature', async () => {
+    const fixture = await paymentFixture();
+
+    await expect(
+      validate(
+        fixture,
+        addLighthouseAccount(fixture.original, fixture.terms.feePayer, AccountRole.READONLY_SIGNER),
+      ),
+    ).rejects.toMatchObject({ code: 'wallet_transaction_unsafe' });
+  });
+
   it('rejects a changed transfer, memo, unknown program, signer, or writable account', async () => {
     const fixture = await paymentFixture();
 
@@ -846,6 +873,12 @@ describe('wallet-returned SVM transaction validation', () => {
     ).rejects.toMatchObject({ code: 'wallet_transaction_unsafe' });
     await expect(
       validate(fixture, addLighthouse(fixture.original, 1, AccountRole.READONLY_SIGNER)),
+    ).rejects.toMatchObject({ code: 'wallet_transaction_unsafe' });
+    await expect(
+      validate(
+        fixture,
+        addLighthouseAccount(fixture.original, fixture.payer.address, AccountRole.WRITABLE_SIGNER),
+      ),
     ).rejects.toMatchObject({ code: 'wallet_transaction_unsafe' });
     await expect(
       validate(fixture, addLighthouse(fixture.original, 1, AccountRole.WRITABLE)),
@@ -942,7 +975,7 @@ async function paymentFixture() {
     chains: ['solana:mainnet'],
     features: ['solana:signTransaction'],
   };
-  return { original, payer, terms };
+  return { original, payer, terms, source, destination };
 }
 
 async function associatedTokenAddress(owner: string, mint: string): Promise<string> {
@@ -978,6 +1011,25 @@ function addLighthouse(
   return encodeSigned({
     ...message,
     instructions: [...message.instructions, ...additions],
+  } as ReturnType<typeof decompile>);
+}
+
+function addLighthouseAccount(
+  transaction: Uint8Array,
+  accountAddress: string,
+  role: AccountRole,
+): Uint8Array {
+  const message = decompile(transaction);
+  return encodeSigned({
+    ...message,
+    instructions: [
+      ...message.instructions,
+      {
+        programAddress: address(LIGHTHOUSE_PROGRAM),
+        accounts: [{ address: address(accountAddress), role }],
+        data: new Uint8Array([1]),
+      },
+    ],
   } as ReturnType<typeof decompile>);
 }
 

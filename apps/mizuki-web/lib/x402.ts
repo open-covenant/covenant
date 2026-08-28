@@ -477,7 +477,12 @@ export async function validateWalletSignedTransaction(
   }
 
   await validateTransfer(originalInstructions[2], input.payer.address, input.terms);
-  validateOptionalInstructions(originalInstructions[3], signedInstructions.slice(3), input.terms);
+  validateOptionalInstructions(
+    originalInstructions[3],
+    signedInstructions.slice(3),
+    input.terms,
+    input.payer.address,
+  );
   validateWritableAccounts(originalInstructions, signedInstructions);
 
   const signature = signed.signatures[address(input.payer.address)];
@@ -721,6 +726,7 @@ function validateOptionalInstructions(
   originalMemo: ReturnType<typeof decompileTransactionMessage>['instructions'][number] | undefined,
   instructions: readonly ReturnType<typeof decompileTransactionMessage>['instructions'][number][],
   terms: PaymentTerms,
+  payer: string,
 ): void {
   if (
     !originalMemo ||
@@ -742,7 +748,13 @@ function validateOptionalInstructions(
     throw unsafeWalletTransaction();
   }
   for (const instruction of lighthouse) {
-    if ((instruction.accounts ?? []).some((account) => isSignerRole(account.role))) {
+    if (
+      (instruction.accounts ?? []).some(
+        (account) =>
+          account.address === terms.feePayer ||
+          (isSignerRole(account.role) && account.address !== payer),
+      )
+    ) {
       throw unsafeWalletTransaction();
     }
   }

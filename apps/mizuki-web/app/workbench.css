@@ -1,17 +1,17 @@
 .workbench-root {
-  --wb-bg: #f4f2f9;
-  --wb-rail: #ffffff;
-  --wb-panel: #ffffff;
-  --wb-panel-raised: #eae7f2;
-  --wb-line: #ddd8e9;
-  --wb-line-strong: #bfb8d4;
-  --wb-text: #141220;
-  --wb-muted: #625c78;
-  --wb-dim: #86809c;
-  --wb-accent: #141220;
-  --wb-accent-soft: rgba(76, 127, 222, 0.1);
-  --wb-warning: #9a6f10;
-  --wb-danger: #c0392b;
+  --wb-bg: #07060b;
+  --wb-rail: #050409;
+  --wb-panel: #0e0c16;
+  --wb-panel-raised: #14121f;
+  --wb-line: #1d1a2b;
+  --wb-line-strong: #322c47;
+  --wb-text: #edebf5;
+  --wb-muted: #8e88a8;
+  --wb-dim: #5f5a75;
+  --wb-accent: #edebf5;
+  --wb-accent-soft: rgba(76, 127, 222, 0.12);
+  --wb-warning: #e0b968;
+  --wb-danger: #e18383;
   --wb-g1: #a03bf0;
   --wb-g2: #4c7fde;
   --wb-g3: #1de3ae;
@@ -3803,9 +3803,14 @@
   text-transform: uppercase;
 }
 
+/* `.workbench-root button { font: inherit }` outranks a bare class, so the
+   trigger has to restate the font it shares with the new-job control. */
 .workbench-header-new-job,
-.workbench-wallet-trigger {
+.workbench-root .workbench-wallet-trigger {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
 }
 
 .workbench-wallet-trigger {
@@ -3842,4 +3847,12 @@
   height: 22px;
   border-radius: 0;
   object-fit: contain;
+}
+
+/* The workbench is dark regardless of the marketing site's light ground, so
+   the page behind it has to match — otherwise overscroll flashes paper. */
+html:has(.workbench-root),
+html:has(.workbench-root) body {
+  background: var(--wb-bg, #07060b);
+  color: #edebf5;
 }

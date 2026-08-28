@@ -60,6 +60,11 @@ jobs:
           CREATE DATABASE mizuki_updater;
           CREATE DATABASE mizuki_deployment;
           SQL
+      # verify.sh greps with ripgrep. Without it the leak and identity scans
+      # exit 127, which reads as "no matches" and passes silently.
+      - name: install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+
       - name: verify application and deployment artifacts
         env:
           MIZUKI_SKIP_ESCROW: '1'

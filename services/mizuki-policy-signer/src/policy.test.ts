@@ -270,14 +270,11 @@ describe('production readiness', () => {
   it('accepts compact and legacy quote-bound payment memos only', () => {
     expect(paymentIntentMemo(DEFAULT_ADMISSION_ID)).toBe('mizuki:mZmZmZmZSZmJmZmZmZmZmQ');
     expect(Buffer.byteLength(paymentIntentMemo(DEFAULT_ADMISSION_ID), 'utf8')).toBe(29);
-    expect(paymentIntentMemoMatches(paymentIntentMemo(DEFAULT_ADMISSION_ID), DEFAULT_ADMISSION_ID)).toBe(
-      true,
-    );
     expect(
-      paymentIntentMemoMatches(
-        `mizuki:payment:v1:${DEFAULT_ADMISSION_ID}`,
-        DEFAULT_ADMISSION_ID,
-      ),
+      paymentIntentMemoMatches(paymentIntentMemo(DEFAULT_ADMISSION_ID), DEFAULT_ADMISSION_ID),
+    ).toBe(true);
+    expect(
+      paymentIntentMemoMatches(`mizuki:payment:v1:${DEFAULT_ADMISSION_ID}`, DEFAULT_ADMISSION_ID),
     ).toBe(true);
     expect(paymentIntentMemoMatches('mizuki:AAAAAAAAAAAAAAAAAAAAAA', DEFAULT_ADMISSION_ID)).toBe(
       false,

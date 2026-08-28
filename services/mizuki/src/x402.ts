@@ -24,7 +24,12 @@ export function paymentMemo(quoteId: string): string {
 
 export type PaymentAttempt =
   | { ok: true; payment: Payment; responseHeader?: string }
-  | { ok: false; challenge: PaymentRequired; reason?: string };
+  | {
+      ok: false;
+      challenge: PaymentRequired;
+      reason?: string;
+      definitivelyUnpaid?: true;
+    };
 
 export class Payments {
   private readonly server?: x402ResourceServer;
@@ -96,6 +101,7 @@ export class Payments {
           ok: false,
           challenge: await this.challenge(quote),
           reason: 'invalid mock payment',
+          definitivelyUnpaid: true,
         };
       }
       const authorized: Payment = {
@@ -119,6 +125,7 @@ export class Payments {
         ok: false,
         challenge: await this.challenge(quote),
         reason: 'invalid payment signature header',
+        definitivelyUnpaid: true,
       };
     }
 
@@ -128,6 +135,7 @@ export class Payments {
         ok: false,
         challenge: await this.challenge(quote),
         reason: 'payment resource does not match quote',
+        definitivelyUnpaid: true,
       };
     }
     const accepted = this.server!.findMatchingRequirements([requirements], payload);
@@ -136,6 +144,7 @@ export class Payments {
         ok: false,
         challenge: await this.challenge(quote),
         reason: 'payment requirements do not match quote',
+        definitivelyUnpaid: true,
       };
     }
 
@@ -145,6 +154,7 @@ export class Payments {
         ok: false,
         challenge: await this.challenge(quote),
         reason: verified.invalidReason ?? verified.invalidMessage ?? 'payment verification failed',
+        definitivelyUnpaid: true,
       };
     }
     if (!verified.payer) throw new Error('facilitator verification returned no payer');

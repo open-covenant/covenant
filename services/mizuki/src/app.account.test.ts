@@ -1290,7 +1290,7 @@ describe('workbench account API', () => {
     expect(statusBody.attempt).toHaveProperty('expiresAt', quote.expiresAt);
   });
 
-  it('keeps a rejected payment payload bound to its reusable prompt nonce', async () => {
+  it('ends a definitively rejected signed payment without reserving a job', async () => {
     const store = new MemoryStore();
     await store.upsertContributor('42', 'maintainer');
     await store.saveQuote(quote);
@@ -1313,6 +1313,7 @@ describe('workbench account API', () => {
             ok: false as const,
             challenge: paymentChallenge(quote),
             reason: 'payment verification failed',
+            definitivelyUnpaid: true as const,
           })),
         },
       }),
@@ -1322,8 +1323,8 @@ describe('workbench account API', () => {
 
     expect(response.status).toBe(402);
     await expect(store.paymentAttempt(attempt.id, '42')).resolves.toMatchObject({
-      stage: 'wallet_opened',
-      retrySafe: false,
+      stage: 'expired_unpaid',
+      retrySafe: true,
       promptNonce: paymentPromptNonce,
     });
     await expect(store.jobByQuote(quote.id)).resolves.toBeUndefined();

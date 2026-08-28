@@ -2062,6 +2062,50 @@
   font-size: 10px;
 }
 
+.wizard-payment-recovery-progress {
+  display: grid;
+  gap: 7px;
+  width: min(100%, 680px);
+  margin: 3px 0 4px;
+}
+
+.wizard-payment-recovery-progress-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  color: var(--wb-muted);
+  font-size: 10px;
+}
+
+.wizard-payment-recovery-progress-track {
+  position: relative;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(224, 185, 104, 0.16);
+}
+
+.wizard-payment-recovery-progress-track > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--wb-warning);
+  transition: width 250ms linear;
+}
+
+.wizard-payment-recovery-progress small {
+  color: var(--wb-dim);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wizard-payment-recovery-progress-track > span {
+    transition: none;
+  }
+}
+
 .wizard-payment-recovery button {
   min-height: 42px;
   justify-self: start;

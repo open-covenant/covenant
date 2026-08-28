@@ -4951,3 +4951,24 @@ main > section:not(.hero-stage) > *:not(.section-edge),
   position: relative;
   z-index: 2;
 }
+
+/* A transparent border over a gradient leaves a composite seam on the curve;
+   the ramp buttons carry no border at all. */
+.section-ink .button,
+.section-dark .button,
+.header-cta {
+  border: 0;
+  padding: 0 25px;
+}
+
+/* The dark band's dissolve reaches up into this strip, so the figures need
+   room below them to stay clear of it. */
+.metrics-band {
+  padding-bottom: 176px;
+}
+
+@media (max-width: 900px) {
+  .metrics-band {
+    padding-bottom: 104px;
+  }
+}

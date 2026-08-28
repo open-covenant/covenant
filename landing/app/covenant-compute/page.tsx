@@ -6,7 +6,7 @@ import { SiteHeader } from "../SiteHeader";
 export const metadata: Metadata = {
   title: "The model you paid for is not always the model that ran",
   description:
-    "Every request on the Covenant inference network returns a signed receipt naming the model that served it, with hashes of the input and output. The prompt itself is never stored.",
+    "Covenant Compute rents GPU workspaces and inference under a spend limit set before the job starts. Every request returns a signed receipt naming the model that served it. The prompt itself is never stored.",
   alternates: { canonical: "/covenant-compute" },
   openGraph: {
     type: "article",
@@ -78,6 +78,24 @@ export default function InferenceReceiptsPost() {
           <p>
             We are building an inference network where both of those become checkable facts instead
             of promises.
+          </p>
+
+          <h2>Update, 28 August 2026: GPU workspaces</h2>
+          <p>
+            The network now rents whole GPUs alongside inference. You choose from live market offers
+            and get a dedicated CUDA and Jupyter workspace with a spend limit fixed before it starts.
+            An agent can rent one on its own behalf, under a per-run budget and a launch cap it
+            cannot exceed.
+          </p>
+          <p>
+            Billing starts when the machine answers, not when the request went out. Cancel early and
+            the unused allowance is released. The receipt names the runtime you were charged for, the
+            amount returned, and what the startup window cost us to absorb.
+          </p>
+          <p>
+            The inference network runs on our own nodes. This GPU capacity is rented from an external
+            marketplace, so its receipt records our metering of that provider. Onchain settlement for
+            these jobs is written and tested, and not yet deployed. Access is a private beta.
           </p>
 
           <h2>A receipt for every request</h2>

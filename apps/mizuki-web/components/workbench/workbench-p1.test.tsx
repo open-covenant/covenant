@@ -16,13 +16,13 @@ import { WorkbenchHeader, WorkbenchNavLink } from './workbench-shell';
 describe('Workbench responsive records and controls', () => {
   it('keeps the shared payment wallet control in the Workbench header', () => {
     const html = renderToStaticMarkup(
-      <WorkbenchHeader walletControl={<button type="button">Connect wallet</button>} />,
+      <WorkbenchHeader walletControl={<button type="button">Connect</button>} />,
     );
 
     expect(html).toContain('workbench-header');
     expect(html).toContain('Maintenance workbench');
     expect(html).toContain('href="/app/jobs/new"');
-    expect(html).toContain('Connect wallet');
+    expect(html).toContain('Connect');
   });
 
   it('keeps navigation icons distinguishable while preserving visible labels', () => {

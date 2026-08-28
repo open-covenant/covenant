@@ -25,7 +25,7 @@ describe('Workbench wallet control', () => {
     );
 
     expect(html).toContain('aria-label="Connect payment wallet"');
-    expect(html).toContain('Connect wallet');
+    expect(html).toContain('>Connect<');
     expect(html).toContain('Choose a Solana wallet');
     expect(html).toContain('WalletConnect');
     expect(html).toContain('Scan a QR code or open a mobile wallet');

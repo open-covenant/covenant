@@ -90,7 +90,7 @@ export function WorkbenchWalletControlView({
     ? 'Connecting…'
     : active
       ? truncateAddress(active.account.address, 5)
-      : 'Connect wallet';
+      : 'Connect';
 
   return (
     <div className="workbench-wallet-control" ref={root}>

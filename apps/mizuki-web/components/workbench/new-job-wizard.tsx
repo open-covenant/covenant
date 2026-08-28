@@ -29,6 +29,7 @@ import {
   reportPaymentAttemptStage,
   saveWorkbenchPaymentRecovery,
   withPaymentAttemptLock,
+  type PaymentAttempt,
   type PaymentAttemptStatus,
   type PaymentReconciliationProgress,
   type WorkbenchPaymentRecovery,
@@ -216,6 +217,7 @@ export function NewJobWizard({
                 accountLoading={paymentAccount.status === 'loading'}
                 refreshAccount={paymentAccount.refresh}
                 onPaymentLockChange={setRepositoryLocked}
+                onRecoverRepository={setSelected}
               />
             </>
           )}
@@ -242,6 +244,7 @@ function IssueAndPayment({
   accountLoading,
   refreshAccount,
   onPaymentLockChange,
+  onRecoverRepository,
 }: {
   repository: WorkbenchRepository;
   initialIssue?: number;
@@ -249,6 +252,7 @@ function IssueAndPayment({
   accountLoading: boolean;
   refreshAccount: () => void;
   onPaymentLockChange: (locked: boolean) => void;
+  onRecoverRepository: (repository: string) => void;
 }) {
   const router = useRouter();
   const issues = useWorkbenchResource(
@@ -318,21 +322,21 @@ function IssueAndPayment({
         if (!active || !result.attempt || !result.quote) return;
         const activeRepository = `${result.quote.owner}/${result.quote.repo}`;
         if (activeRepository.toLowerCase() !== repository.fullName.toLowerCase()) return;
-        const recovered = prepareWorkbenchPaymentRecovery({
+        const recovered = recoveryFromAttempt(
           accountId,
-          attemptId: result.attempt.id,
-          idempotencyKey: result.attempt.idempotencyKey,
-          promptNonce: result.attempt.promptAuthorization?.nonce ?? createPaymentPromptNonce(),
-          repository: activeRepository,
-          issueUrl: result.quote.issueUrl,
-          quote: result.quote,
-        });
+          result.attempt,
+          result.quote,
+          loadWorkbenchPaymentRecovery(accountId),
+        );
+        saveWorkbenchPaymentRecovery(recovered);
         paymentRecovery.current = recovered;
-        setIssueUrl(result.quote.issueUrl);
+        setIssueUrl(recovered.issueUrl);
         setPreflight(null);
-        setQuote(result.quote);
+        setQuote(recovered.quote);
         setError(null);
-        void resolvePaymentRecovery(recovered);
+        if (recovered.phase === 'unpaid') setState('payment_unpaid');
+        else if (recovered.phase === 'prepared') setState('quoted');
+        else void resolvePaymentRecovery(recovered);
       })
       .catch(() => undefined);
     setIssueUrl('');
@@ -358,6 +362,10 @@ function IssueAndPayment({
     state === 'payment_uncertain' ||
     state === 'checking_payment' ||
     state === 'revalidating_payment';
+  const recoveryWallet = paymentRecovery.current?.wallet;
+  const paymentWalletMismatch = Boolean(
+    connected && recoveryWallet && connected.account.address !== recoveryWallet,
+  );
 
   useEffect(() => {
     onPaymentLockChange(paymentLocked);
@@ -451,34 +459,83 @@ function IssueAndPayment({
       setError('The selected issue changed. Review its scope and request a new fixed quote.');
       return;
     }
-    if (quoteExpired(quote)) {
-      setQuote(null);
-      setState('idle');
-      setError('This quote expired. Request a new fixed quote before paying.');
-      return;
-    }
-
+    let paymentQuote = quote;
     let recovery: WorkbenchPaymentRecovery | undefined;
     let attemptId: string | undefined;
     setError(null);
     setState('paying');
     try {
-      await assertPaymentBalance(connected.account.address, quote.priceAtomic);
       const cachedRecovery =
         paymentRecovery.current?.accountId === accountId &&
         paymentRecovery.current.quote.id === quote.id
           ? paymentRecovery.current
           : loadWorkbenchPaymentRecovery(accountId);
-      const attempt = await createPaymentAttempt({
-        quoteId: quote.id,
-        wallet: connected.account.address,
-      });
+      const active = await findActivePaymentAttempt();
+      let attempt: PaymentAttempt | undefined;
+      if (active.attempt && active.quote && paymentAttemptBlocksQuote(active.attempt, quote.id)) {
+        const continuesCurrentQuote =
+          active.attempt.quoteId === quote.id &&
+          active.attempt.wallet === connected.account.address &&
+          (active.attempt.paymentStatus === 'created' ||
+            paymentPromptRetryAllowed(cachedRecovery, active.attempt));
+        if (continuesCurrentQuote) {
+          attempt = active.attempt;
+          paymentQuote =
+            active.attempt.paymentStatus === 'created'
+              ? active.quote
+              : recoveryFromAttempt(accountId, active.attempt, active.quote, cachedRecovery).quote;
+          setQuote(paymentQuote);
+        } else {
+          attemptId = active.attempt.id;
+          await adoptPaymentAttempt(active.attempt, active.quote, cachedRecovery);
+          return;
+        }
+      }
+      if (quoteExpired(paymentQuote)) {
+        setQuote(null);
+        setState('idle');
+        setError('This quote expired. Request a new fixed quote before paying.');
+        return;
+      }
+      await assertPaymentBalance(connected.account.address, paymentQuote.priceAtomic);
+      if (!attempt) {
+        try {
+          attempt = await createPaymentAttempt({
+            quoteId: paymentQuote.id,
+            wallet: connected.account.address,
+          });
+        } catch (cause) {
+          if (!(cause instanceof WorkbenchRequestError) || cause.status !== 409) throw cause;
+          const active = await findActivePaymentAttempt();
+          if (
+            !active.attempt ||
+            !active.quote ||
+            !paymentAttemptBlocksQuote(active.attempt, paymentQuote.id)
+          ) {
+            throw cause;
+          }
+          attemptId = active.attempt.id;
+          await adoptPaymentAttempt(active.attempt, active.quote, cachedRecovery);
+          return;
+        }
+      }
       attemptId = attempt.id;
       if (attempt.job || attempt.paymentStatus === 'job_reserved') {
         if (!attempt.job) throw new Error('The reserved payment attempt did not include its job');
-        clearWorkbenchPaymentRecovery(accountId, quote.id);
+        clearWorkbenchPaymentRecovery(accountId, paymentQuote.id);
         paymentRecovery.current = null;
         router.push(`/app/jobs/${encodeURIComponent(attempt.job.id)}`);
+        return;
+      }
+      if (
+        attempt.paymentStatus !== 'created' &&
+        !paymentPromptRetryAllowed(cachedRecovery, attempt)
+      ) {
+        await adoptPaymentAttempt(attempt, paymentQuote, cachedRecovery);
+        return;
+      }
+      if (attempt.wallet !== connected.account.address) {
+        await adoptPaymentAttempt(attempt, paymentQuote, cachedRecovery);
         return;
       }
       const promptNonce =
@@ -500,9 +557,10 @@ function IssueAndPayment({
           attemptId: attempt.id,
           idempotencyKey: attempt.idempotencyKey,
           promptNonce,
-          repository: `${quote.owner}/${quote.repo}`,
-          issueUrl,
-          quote,
+          repository: `${paymentQuote.owner}/${paymentQuote.repo}`,
+          issueUrl: paymentQuote.issueUrl,
+          quote: paymentQuote,
+          wallet: attempt.wallet,
         };
         paymentRecovery.current = recovery;
         saveWorkbenchPaymentRecovery(recovery);
@@ -514,9 +572,10 @@ function IssueAndPayment({
         attemptId: attempt.id,
         idempotencyKey: attempt.idempotencyKey,
         promptNonce,
-        repository: `${quote.owner}/${quote.repo}`,
-        issueUrl,
-        quote,
+        repository: `${paymentQuote.owner}/${paymentQuote.repo}`,
+        issueUrl: paymentQuote.issueUrl,
+        quote: paymentQuote,
+        wallet: attempt.wallet,
       });
       paymentRecovery.current = recovery;
       const walletFeature = connected.wallet.features[
@@ -526,11 +585,11 @@ function IssueAndPayment({
       const paidFetch = createPaymentFetch({
         account: connected.account,
         feature: walletFeature,
-        quotePayment: quote.payment,
-        quoteAmount: quote.priceAtomic,
+        quotePayment: paymentQuote.payment,
+        quoteAmount: paymentQuote.priceAtomic,
         promptNonce,
         async authorizePrompt() {
-          await authorizePaymentPrompt(attempt.id, promptNonce, quote.id);
+          await authorizePaymentPrompt(attempt.id, promptNonce, paymentQuote.id);
         },
         onStage(stage) {
           if (stage === 'wallet_signed') {
@@ -552,7 +611,7 @@ function IssueAndPayment({
       recovery = { ...recovery, phase: 'attempting' };
       saveWorkbenchPaymentRecovery(recovery);
       const job = await withPaymentAttemptLock(attempt.id, async () => {
-        const current = await checkPaymentAttempt(attempt.id, quote.id);
+        const current = await checkPaymentAttempt(attempt.id, paymentQuote.id);
         if (current.job) return current.job;
         if (!current.retrySafe && !paymentPromptRetryAllowed(recovery, current)) {
           throw new PaymentAttemptBusyError();
@@ -564,23 +623,25 @@ function IssueAndPayment({
             'idempotency-key': recovery!.idempotencyKey,
           },
           body: JSON.stringify({
-            quote_id: quote.id,
+            quote_id: paymentQuote.id,
             payment_attempt_id: attempt.id,
           }),
         });
         return readJsonResponse<Job>(response);
       });
-      clearWorkbenchPaymentRecovery(accountId, quote.id);
+      clearWorkbenchPaymentRecovery(accountId, paymentQuote.id);
       paymentRecovery.current = null;
       router.push(`/app/jobs/${encodeURIComponent(job.id)}`);
     } catch (cause) {
       if (recovery) {
         if (recovery.walletAuthorized !== true && !canRetryWalletPrompt(cause)) {
-          clearWorkbenchPaymentRecovery(accountId, quote.id);
+          clearWorkbenchPaymentRecovery(accountId, paymentQuote.id);
           paymentRecovery.current = null;
           setQuote(null);
           setState('idle');
-          setError(paymentAttemptError(cause, formatUsdcAtomic(quote.priceAtomic), attemptId));
+          setError(
+            paymentAttemptError(cause, formatUsdcAtomic(paymentQuote.priceAtomic), attemptId),
+          );
           return;
         }
         if (recovery.walletAuthorized !== true) {
@@ -591,7 +652,9 @@ function IssueAndPayment({
           paymentRecovery.current = prepared;
           saveWorkbenchPaymentRecovery(prepared);
           setState('quoted');
-          setError(paymentAttemptError(cause, formatUsdcAtomic(quote.priceAtomic), attemptId));
+          setError(
+            paymentAttemptError(cause, formatUsdcAtomic(paymentQuote.priceAtomic), attemptId),
+          );
           return;
         }
         const uncertainRecovery: WorkbenchPaymentRecovery = {
@@ -602,13 +665,53 @@ function IssueAndPayment({
         saveWorkbenchPaymentRecovery(uncertainRecovery);
         await resolvePaymentRecovery(
           uncertainRecovery,
-          paymentAttemptError(cause, formatUsdcAtomic(quote.priceAtomic), attemptId),
+          paymentAttemptError(cause, formatUsdcAtomic(paymentQuote.priceAtomic), attemptId),
         );
         return;
       }
       setState('quoted');
-      setError(paymentAttemptError(cause, formatUsdcAtomic(quote.priceAtomic), attemptId));
+      setError(paymentAttemptError(cause, formatUsdcAtomic(paymentQuote.priceAtomic), attemptId));
     }
+  }
+
+  async function adoptPaymentAttempt(
+    attempt: PaymentAttempt,
+    canonicalQuote: Quote,
+    cachedRecovery?: WorkbenchPaymentRecovery | null,
+  ) {
+    if (attempt.job || attempt.paymentStatus === 'job_reserved') {
+      if (!attempt.job) throw new Error('The reserved payment attempt did not include its job');
+      clearWorkbenchPaymentRecovery(accountId!, canonicalQuote.id);
+      paymentRecovery.current = null;
+      router.push(`/app/jobs/${encodeURIComponent(attempt.job.id)}`);
+      return;
+    }
+
+    const recovered = recoveryFromAttempt(accountId!, attempt, canonicalQuote, cachedRecovery);
+    paymentRecovery.current = recovered;
+    saveWorkbenchPaymentRecovery(recovered);
+    setIssueUrl(recovered.issueUrl);
+    setPreflight(null);
+    setQuote(recovered.quote);
+    setError(null);
+
+    const activeRepository = `${canonicalQuote.owner}/${canonicalQuote.repo}`;
+    if (activeRepository.toLowerCase() !== repository.fullName.toLowerCase()) {
+      onRecoverRepository(activeRepository);
+      return;
+    }
+    if (recovered.phase === 'unpaid') {
+      setState('payment_unpaid');
+      return;
+    }
+    if (recovered.phase === 'prepared') {
+      setState('quoted');
+      if (attempt.wallet !== connected?.account.address) {
+        setError(originalWalletMessage(attempt.wallet));
+      }
+      return;
+    }
+    await resolvePaymentRecovery(recovered);
   }
 
   async function checkPaymentStatus() {
@@ -985,8 +1088,13 @@ function IssueAndPayment({
                     <ConnectedPaymentSummary
                       address={connected.account.address}
                       amountAtomic={quote.priceAtomic}
-                      ready={walletReady}
+                      ready={walletReady && !paymentWalletMismatch}
                       paying={state === 'paying'}
+                      blockedReason={
+                        paymentWalletMismatch && recoveryWallet
+                          ? originalWalletMessage(recoveryWallet)
+                          : undefined
+                      }
                       changeWallet={() => void disconnect()}
                       pay={() => void payAndStart()}
                     />
@@ -1017,6 +1125,7 @@ export function ConnectedPaymentSummary({
   amountAtomic,
   ready,
   paying,
+  blockedReason,
   changeWallet,
   pay,
 }: {
@@ -1024,6 +1133,7 @@ export function ConnectedPaymentSummary({
   amountAtomic: string;
   ready: boolean;
   paying: boolean;
+  blockedReason?: string;
   changeWallet: () => void;
   pay: () => void;
 }) {
@@ -1053,9 +1163,10 @@ export function ConnectedPaymentSummary({
         </div>
       </dl>
       <p>
-        {ready
-          ? 'Wallet account and disconnect changes are being monitored.'
-          : 'Waiting for the wallet account subscription before payment can begin.'}
+        {blockedReason ??
+          (ready
+            ? 'Wallet account and disconnect changes are being monitored.'
+            : 'Waiting for the wallet account subscription before payment can begin.')}
       </p>
       <button className="wizard-pay-button" type="button" disabled={paying || !ready} onClick={pay}>
         {paying ? 'Confirming payment…' : `Pay ${formatUsdcAtomic(amountAtomic)} and start`}
@@ -1208,6 +1319,70 @@ function WizardProgress({ repository }: { repository?: WorkbenchRepository }) {
       ))}
     </ol>
   );
+}
+
+export function recoveryFromAttempt(
+  accountId: string,
+  attempt: PaymentAttempt,
+  quote: Quote,
+  cached?: WorkbenchPaymentRecovery | null,
+): WorkbenchPaymentRecovery {
+  if (attempt.quoteId !== quote.id) {
+    throw new Error('The active payment attempt did not match its quote');
+  }
+  const sameAttempt = cached?.accountId === accountId && cached.attemptId === attempt.id;
+  const existing = sameAttempt ? cached : undefined;
+  const promptNonce =
+    attempt.promptAuthorization?.nonce ?? existing?.promptNonce ?? createPaymentPromptNonce();
+  const reusablePrompt =
+    paymentPromptRetryAllowed(existing, attempt) && Boolean(existing?.quote.payment);
+  const recoveryQuote = reusablePrompt ? existing!.quote : quote;
+  const walletAuthorized =
+    existing?.walletAuthorized === true ||
+    ['wallet_signed', 'submitting', 'indeterminate'].includes(attempt.paymentStatus);
+  const phase =
+    attempt.paymentStatus === 'expired_unpaid'
+      ? 'unpaid'
+      : attempt.paymentStatus === 'created' || reusablePrompt
+        ? 'prepared'
+        : 'uncertain';
+
+  return {
+    phase,
+    walletAuthorized,
+    ...(walletAuthorized
+      ? {
+          walletAuthorizedAt:
+            existing?.walletAuthorizedAt ??
+            attempt.promptAuthorization?.authorizedAt ??
+            new Date().toISOString(),
+        }
+      : {}),
+    accountId,
+    attemptId: attempt.id,
+    idempotencyKey: attempt.idempotencyKey,
+    promptNonce,
+    repository: `${recoveryQuote.owner}/${recoveryQuote.repo}`,
+    issueUrl: recoveryQuote.issueUrl,
+    quote: recoveryQuote,
+    wallet: attempt.wallet,
+  };
+}
+
+export function paymentAttemptBlocksQuote(
+  attempt: Pick<PaymentAttempt, 'paymentStatus' | 'quoteId'>,
+  quoteId: string,
+): boolean {
+  return (
+    attempt.quoteId === quoteId ||
+    ['wallet_opened', 'wallet_signed', 'submitting', 'indeterminate'].includes(
+      attempt.paymentStatus,
+    )
+  );
+}
+
+function originalWalletMessage(wallet: string): string {
+  return `Reconnect the wallet ending ${wallet.slice(-8)} to continue this payment attempt. No new payment was requested.`;
 }
 
 function preflightError(cause: unknown): string {

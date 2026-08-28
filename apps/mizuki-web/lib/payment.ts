@@ -13,6 +13,7 @@ const paymentRecoveryPollMaxMs = 8_000;
 export const paymentRecoveryForegroundMs = 30_000;
 const paymentPromptNoncePattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const solanaAddressPattern = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
 type PaymentStorage = Pick<Storage, 'getItem' | 'removeItem' | 'setItem'>;
 
@@ -34,6 +35,7 @@ export type PaymentAttemptStatus =
 export type PaymentAttempt = {
   id: string;
   quoteId: string;
+  wallet: string;
   idempotencyKey: string;
   stage: PaymentAttemptStatus;
   paymentStatus: PaymentAttemptStatus;
@@ -88,6 +90,7 @@ export type WorkbenchPaymentRecovery = {
   repository: string;
   issueUrl: string;
   quote: Quote;
+  wallet?: string;
 };
 
 export class PaymentRecoveryStorageError extends Error {
@@ -344,6 +347,7 @@ export function normalizePaymentAttempt(value: unknown, expectedQuoteId?: string
   if (!isRecord(source)) throw new Error('The payment attempt response was invalid');
   const id = readBoundedId(source.id);
   const quoteId = readBoundedId(source.quoteId ?? source.quote_id);
+  const wallet = readSolanaAddress(source.wallet);
   const idempotencyKey = readIdempotencyKey(source.idempotencyKey ?? source.idempotency_key);
   const rawStage = source.stage;
   if (!paymentAttemptStatus(rawStage)) {
@@ -375,6 +379,7 @@ export function normalizePaymentAttempt(value: unknown, expectedQuoteId?: string
   return {
     id,
     quoteId,
+    wallet,
     idempotencyKey,
     stage: rawStage,
     paymentStatus: rawStatus,
@@ -585,6 +590,7 @@ function isWorkbenchPaymentRecovery(value: unknown): value is WorkbenchPaymentRe
   }
   if (typeof value.promptNonce !== 'string' || !validPromptNonce(value.promptNonce)) return false;
   if (typeof value.repository !== 'string' || typeof value.issueUrl !== 'string') return false;
+  if (value.wallet !== undefined && !solanaAddressPattern.test(String(value.wallet))) return false;
   if (!isQuote(value.quote) || !quoteMatchesIssue(value.quote, value.issueUrl)) return false;
   return (
     value.repository.toLowerCase() === `${value.quote.owner}/${value.quote.repo}`.toLowerCase()
@@ -607,6 +613,7 @@ export function paymentPromptRetryAllowed(
     ['prepared', 'attempting'].includes(recovery.phase) &&
     recovery.attemptId === attempt.id &&
     recovery.walletAuthorized !== true &&
+    recovery.quote.payment !== undefined &&
     ['created', 'wallet_opened'].includes(attempt.paymentStatus) &&
     attempt.promptAuthorization?.nonce === recovery.promptNonce,
   );
@@ -715,6 +722,13 @@ function validBoundedId(value: string): boolean {
 function readIdempotencyKey(value: unknown): string {
   if (typeof value !== 'string' || !validIdempotencyKey(value)) {
     throw new Error('The payment attempt idempotency key was invalid');
+  }
+  return value;
+}
+
+function readSolanaAddress(value: unknown): string {
+  if (typeof value !== 'string' || !solanaAddressPattern.test(value)) {
+    throw new Error('The payment attempt wallet was invalid');
   }
   return value;
 }

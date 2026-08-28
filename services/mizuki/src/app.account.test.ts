@@ -645,7 +645,7 @@ describe('workbench account API', () => {
     });
   });
 
-  it('keeps an expired prompt authorization reserved for settlement reconciliation', async () => {
+  it('expires a prompt authorization when no payment submission reached the server', async () => {
     const store = new MemoryStore();
     await store.upsertContributor('42', 'maintainer');
     await store.saveQuote(quote);
@@ -663,15 +663,68 @@ describe('workbench account API', () => {
     expect(authorized.status).toBe(200);
     vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2100-01-01T00:00:00.000Z'));
 
-    const replay = await authorizePaymentPrompt(base, attempt.id);
-    expect(replay.status).toBe(409);
-    await expect(replay.json()).resolves.toEqual({
-      error: 'payment attempt requires settlement reconciliation',
+    const active = await fetch(`${base}/v1/account/payment-attempts/active`, {
+      headers: sessionHeaders,
+    });
+    expect(active.status).toBe(200);
+    await expect(active.json()).resolves.toMatchObject({
+      paymentStatus: 'expired_unpaid',
+      retrySafe: true,
+      attempt: {
+        id: attempt.id,
+        stage: 'expired_unpaid',
+        retrySafe: true,
+        promptAuthorization: { nonce: paymentPromptNonce },
+      },
+    });
+
+    const direct = await fetch(`${base}/v1/account/payment-attempts/${attempt.id}`, {
+      headers: sessionHeaders,
+    });
+    expect(direct.status).toBe(200);
+    await expect(direct.json()).resolves.toMatchObject({
+      paymentStatus: 'expired_unpaid',
+      attempt: { id: attempt.id, stage: 'expired_unpaid', retrySafe: true },
     });
     await expect(store.paymentAttempt(attempt.id, '42')).resolves.toMatchObject({
-      stage: 'wallet_opened',
-      retrySafe: false,
+      stage: 'expired_unpaid',
+      retrySafe: true,
       promptNonce: paymentPromptNonce,
+    });
+  });
+
+  it('keeps an expired server-accepted payment attempt indeterminate', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    await store.saveQuote(quote);
+    await store.linkQuoteToAccount(quote.id, '42');
+    await openIntake(store);
+    const attempt = await store.createPaymentAttempt({
+      githubId: '42',
+      quoteId: quote.id,
+      wallet: payment.payer,
+      appBuild: 'release-test',
+    });
+    const base = await serve(dependencies(store));
+
+    const authorized = await authorizePaymentPrompt(base, attempt.id);
+    expect(authorized.status).toBe(200);
+    await store.updatePaymentAttemptStage(attempt.id, '42', 'submitting', 'server');
+    vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2100-01-01T00:00:00.000Z'));
+
+    const active = await fetch(`${base}/v1/account/payment-attempts/active`, {
+      headers: sessionHeaders,
+    });
+    expect(active.status).toBe(200);
+    await expect(active.json()).resolves.toMatchObject({
+      paymentStatus: 'indeterminate',
+      retrySafe: false,
+      attempt: { id: attempt.id, stage: 'indeterminate', retrySafe: false },
+    });
+    await expect(store.paymentAttempt(attempt.id, '42')).resolves.toMatchObject({
+      stage: 'indeterminate',
+      retrySafe: false,
+      serverAcceptedAt: expect.any(String),
     });
   });
 

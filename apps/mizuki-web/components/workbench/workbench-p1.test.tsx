@@ -4,9 +4,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { BillingEntryRow } from './billing';
 import {
   ConnectedPaymentSummary,
+  paymentAttemptBlocksQuote,
   paymentAttemptError,
   PaymentRecoveryNotice,
   paymentStatusError,
+  recoveryFromAttempt,
 } from './new-job-wizard';
 import { WorkbenchRequestError } from '../../lib/workbench-client';
 import { WorkbenchHeader, WorkbenchNavLink } from './workbench-shell';
@@ -126,19 +128,116 @@ describe('Workbench responsive records and controls', () => {
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     expect(paymentAttempt).toContain('await createPaymentAttempt');
+    expect(paymentAttempt).toContain('await findActivePaymentAttempt');
+    expect(paymentAttempt).toContain('recoveryFromAttempt(accountId');
+    expect(paymentAttempt).toContain('setQuote(paymentQuote)');
+    expect(paymentAttempt).toContain('quotePayment: paymentQuote.payment');
     expect(paymentAttempt).toContain('await assertPaymentBalance');
     expect(paymentAttempt).toContain('payment_attempt_id: attempt.id');
     expect(paymentAttempt).toContain('await resolvePaymentRecovery(');
     expect(paymentAttempt).toContain(
       '!current.retrySafe && !paymentPromptRetryAllowed(recovery, current)',
     );
-    expect(paymentAttempt).toContain('clearWorkbenchPaymentRecovery(accountId, quote.id)');
+    expect(paymentAttempt).toContain('clearWorkbenchPaymentRecovery(accountId, paymentQuote.id)');
+    expect(paymentAttempt.indexOf('await findActivePaymentAttempt')).toBeLessThan(
+      paymentAttempt.indexOf('await assertPaymentBalance'),
+    );
     expect(paymentAttempt.indexOf('await assertPaymentBalance')).toBeLessThan(
       paymentAttempt.indexOf('await createPaymentAttempt'),
     );
     expect(paymentAttempt.indexOf('await createPaymentAttempt')).toBeLessThan(
       paymentAttempt.indexOf('createPaymentFetch'),
     );
+    expect(source.match(/setQuote\(recovered\.quote\)/g)).toHaveLength(2);
+  });
+
+  it('adopts a server-owned attempt without reopening an uncertain wallet prompt', () => {
+    const quote = {
+      id: '11111111-1111-4111-8111-111111111111',
+      issueUrl: 'https://github.com/open-covenant/covenant/issues/146',
+      owner: 'open-covenant',
+      repo: 'covenant',
+      issueNumber: 146,
+      issueTitle: 'Independent audit request',
+      class: 'micro' as const,
+      priceAtomic: '2000000',
+      maxFiles: 3,
+      maxCostUsd: 0.8,
+      expiresAt: '2099-01-01T00:00:00.000Z',
+      payment: { x402Version: 2 },
+    };
+    const attempt = {
+      id: 'attempt-11111111',
+      quoteId: quote.id,
+      wallet: 'FTT2gzXLipTfg3ijqiGQRkMHjAA52eYLAoB3TM3e9p8n',
+      idempotencyKey: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      stage: 'wallet_opened' as const,
+      paymentStatus: 'wallet_opened' as const,
+      retrySafe: false,
+      promptAuthorization: {
+        nonce: '11111111-1111-4111-8111-111111111111',
+        authorizedAt: '2026-08-28T21:10:52.000Z',
+      },
+    };
+
+    expect(recoveryFromAttempt('42', attempt, quote)).toMatchObject({
+      phase: 'uncertain',
+      walletAuthorized: false,
+      wallet: attempt.wallet,
+      attemptId: attempt.id,
+    });
+    expect(
+      recoveryFromAttempt(
+        '42',
+        attempt,
+        { ...quote, payment: undefined },
+        {
+          phase: 'prepared',
+          walletAuthorized: false,
+          accountId: '42',
+          attemptId: attempt.id,
+          idempotencyKey: attempt.idempotencyKey,
+          promptNonce: attempt.promptAuthorization.nonce,
+          repository: `${quote.owner}/${quote.repo}`,
+          issueUrl: quote.issueUrl,
+          quote,
+          wallet: attempt.wallet,
+        },
+      ),
+    ).toMatchObject({ phase: 'prepared', quote: { payment: quote.payment } });
+    expect(
+      recoveryFromAttempt(
+        '42',
+        { ...attempt, stage: 'submitting', paymentStatus: 'submitting' },
+        quote,
+      ),
+    ).toMatchObject({ phase: 'uncertain', walletAuthorized: true });
+    expect(
+      recoveryFromAttempt(
+        '42',
+        { ...attempt, stage: 'expired_unpaid', paymentStatus: 'expired_unpaid', retrySafe: true },
+        quote,
+      ),
+    ).toMatchObject({ phase: 'unpaid', walletAuthorized: false });
+  });
+
+  it('recovers only attempts that can block the selected quote', () => {
+    const attempt = {
+      quoteId: 'old-quote',
+      paymentStatus: 'created' as const,
+    };
+
+    expect(paymentAttemptBlocksQuote(attempt, 'current-quote')).toBe(false);
+    expect(
+      paymentAttemptBlocksQuote({ ...attempt, paymentStatus: 'expired_unpaid' }, 'current-quote'),
+    ).toBe(false);
+    expect(
+      paymentAttemptBlocksQuote({ ...attempt, paymentStatus: 'job_reserved' }, 'current-quote'),
+    ).toBe(false);
+    expect(
+      paymentAttemptBlocksQuote({ ...attempt, paymentStatus: 'wallet_opened' }, 'current-quote'),
+    ).toBe(true);
+    expect(paymentAttemptBlocksQuote(attempt, 'old-quote')).toBe(true);
   });
 
   it('replaces a definitively unpaid attempt with a fresh quote in one action', () => {

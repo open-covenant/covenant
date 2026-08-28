@@ -22,6 +22,7 @@ import { WorkbenchRequestError } from './workbench-client';
 import type { Quote } from './types';
 
 const recoveryPromptNonce = '11111111-1111-4111-8111-111111111111';
+const paymentWallet = 'FTT2gzXLipTfg3ijqiGQRkMHjAA52eYLAoB3TM3e9p8n';
 
 describe('quoteMatchesIssue', () => {
   const quote = { owner: 'open-covenant', repo: 'covenant', issueNumber: 42 };
@@ -244,6 +245,7 @@ describe('Workbench payment recovery storage', () => {
     const attempt = normalizePaymentAttempt({
       id: 'attempt-11111111',
       quoteId: quote.id,
+      wallet: paymentWallet,
       idempotencyKey: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       stage: 'wallet_opened',
       paymentStatus: 'wallet_opened',
@@ -285,6 +287,12 @@ describe('Workbench payment recovery storage', () => {
     ).toBe(false);
     expect(
       paymentPromptRetryAllowed(restored && { ...restored, walletAuthorized: true }, attempt),
+    ).toBe(false);
+    expect(
+      paymentPromptRetryAllowed(
+        restored && { ...restored, quote: { ...restored.quote, payment: undefined } },
+        attempt,
+      ),
     ).toBe(false);
   });
 
@@ -601,6 +609,7 @@ describe('server-owned payment attempts', () => {
           attempt: {
             id: 'attempt-11111111',
             quoteId: quote.id,
+            wallet: paymentWallet,
             idempotencyKey: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
             stage: 'submitting',
             retrySafe: false,
@@ -623,6 +632,7 @@ describe('server-owned payment attempts', () => {
       ),
     ).toMatchObject({
       id: 'attempt-11111111',
+      wallet: paymentWallet,
       paymentStatus: 'job_reserved',
       retrySafe: false,
       job: { id: 'job-11111111' },
@@ -645,6 +655,7 @@ describe('server-owned payment attempts', () => {
         {
           id: 'attempt-11111111',
           quoteId: '22222222-2222-4222-8222-222222222222',
+          wallet: paymentWallet,
           idempotencyKey: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
           stage: 'created',
           paymentStatus: 'created',
@@ -653,6 +664,18 @@ describe('server-owned payment attempts', () => {
         quote.id,
       ),
     ).toThrow('did not match');
+  });
+
+  it('rejects an invalid server-owned payment wallet', () => {
+    expect(() =>
+      normalizePaymentAttempt({
+        ...paymentAttemptResponse('created', quote.expiresAt),
+        attempt: {
+          ...paymentAttemptResponse('created', quote.expiresAt).attempt,
+          wallet: 'not-a-solana-wallet',
+        },
+      }),
+    ).toThrow('payment attempt wallet was invalid');
   });
 
   it('accepts a reconciliation deadline with no safe retry time', () => {
@@ -685,6 +708,7 @@ function paymentAttemptResponse(
     attempt: {
       id: 'attempt-11111111',
       quoteId: quote.id,
+      wallet: paymentWallet,
       idempotencyKey: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       stage: paymentStatus,
       retrySafe: false,

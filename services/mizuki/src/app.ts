@@ -2044,7 +2044,10 @@ function paymentAttemptDeadline(
 function expiredPaymentAttemptStage(
   attempt: CustomerPaymentAttempt,
 ): 'expired_unpaid' | 'indeterminate' {
-  return attempt.retrySafe ? 'expired_unpaid' : 'indeterminate';
+  if (attempt.retrySafe || attempt.serverAcceptedAt === undefined) {
+    return 'expired_unpaid';
+  }
+  return 'indeterminate';
 }
 
 function paymentRecoveryActive(job: Job): boolean {

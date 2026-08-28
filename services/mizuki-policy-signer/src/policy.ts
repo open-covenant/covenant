@@ -369,8 +369,12 @@ export class PolicyService {
         422,
       );
     }
-    const expectedMemo = paymentIntentMemo(admission.quoteId);
-    if (!admission.settlementPayer || admission.settlementMemo !== expectedMemo) {
+    const settlementMemo = admission.settlementMemo;
+    if (
+      !admission.settlementPayer ||
+      !settlementMemo ||
+      !paymentIntentMemoMatches(settlementMemo, admission.quoteId)
+    ) {
       throw new PolicyError(
         'payment_intent_memo_mismatch',
         'Payment authorization is missing the quote-bound seller memo',
@@ -417,7 +421,7 @@ export class PolicyService {
         amountUsdCents,
         bountyAmountUsdCents: request.bountyAmountUsdCents,
         bountyReserveLamports: bountyReserveLamports.toString(),
-        memo: expectedMemo,
+        memo: settlementMemo,
         signedMessageHash: admission.settlementMessageHash,
         payerSignature: admission.settlementClientSignature,
         paymentWindowStartUnixSeconds: admission.paymentWindowStartUnixSeconds,
@@ -2053,8 +2057,16 @@ function paymentIntentRequestIdentity(
   return identity;
 }
 
-function paymentIntentMemo(quoteId: string): string {
-  return `mizuki:payment:v1:${quoteId}`;
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function paymentIntentMemo(quoteId: string): string {
+  if (!UUID_PATTERN.test(quoteId)) throw new Error('payment quote id must be a UUID');
+  return `mizuki:${Buffer.from(quoteId.replaceAll('-', ''), 'hex').toString('base64url')}`;
+}
+
+export function paymentIntentMemoMatches(memo: string, quoteId: string): boolean {
+  return memo === paymentIntentMemo(quoteId) || memo === `mizuki:payment:v1:${quoteId}`;
 }
 
 type RepositoryAdmissionIdentity = Pick<

@@ -7,6 +7,8 @@ import {
   PAYMENT_AUTHORIZATION_MAX_BYTES,
   Payments,
   paymentAuthorizationSizeAllowed,
+  paymentMemo,
+  paymentMemoMatches,
   SOLANA_MAINNET,
 } from './x402.js';
 
@@ -29,6 +31,15 @@ const quote: Quote = {
 };
 
 describe('Payments mock mode', () => {
+  it('binds the quote with a compact memo that fits the exact-SVM compute budget', () => {
+    expect(paymentMemo(quote.id)).toBe('mizuki:T49wr-j0Tgqfx32I9uKBqw');
+    expect(Buffer.byteLength(paymentMemo(quote.id), 'utf8')).toBe(29);
+    expect(paymentMemoMatches(paymentMemo(quote.id), quote.id)).toBe(true);
+    expect(paymentMemoMatches(`mizuki:payment:v1:${quote.id}`, quote.id)).toBe(true);
+    expect(paymentMemoMatches('mizuki:AAAAAAAAAAAAAAAAAAAAAA', quote.id)).toBe(false);
+    expect(() => paymentMemo('not-a-uuid')).toThrow('payment quote id must be a UUID');
+  });
+
   it('uses the signer recovery request bound as the payment authorization limit', () => {
     expect(paymentAuthorizationSizeAllowed('A'.repeat(PAYMENT_AUTHORIZATION_MAX_BYTES))).toBe(true);
     expect(paymentAuthorizationSizeAllowed('A'.repeat(PAYMENT_AUTHORIZATION_MAX_BYTES + 1))).toBe(
@@ -136,7 +147,7 @@ describe('Payments live x402 boundary', () => {
         asset: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
         amount: quote.priceAtomic,
         payTo: treasury,
-        extra: { feePayer },
+        extra: { feePayer, memo: paymentMemo(quote.id) },
       });
       const wrongResourceSignature = encodePaymentSignatureHeader({
         x402Version: 2,

@@ -6,6 +6,7 @@ import { GithubReadinessError } from './github.js';
 import { PolicyRequestError } from './policy-client.js';
 import { MemoryStore } from './store.js';
 import type { GithubIssue, Payment, Quote } from './types.js';
+import { paymentMemo } from './x402.js';
 
 const servers: Server[] = [];
 
@@ -2404,7 +2405,7 @@ function paymentChallenge(value: Quote) {
         payTo: '1'.repeat(32),
         maxTimeoutSeconds: 300,
         asset: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
-        extra: { feePayer: '1'.repeat(32), memo: `mizuki:payment:v1:${value.id}` },
+        extra: { feePayer: '1'.repeat(32), memo: paymentMemo(value.id) },
       },
     ],
     error: 'Payment required',

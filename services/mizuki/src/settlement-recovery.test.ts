@@ -9,6 +9,7 @@ import {
 import { recoverSettlement } from './settlement-recovery.js';
 import { MemoryStore } from './store.js';
 import type { Job, Quote, RepositoryAdmissionReceipt } from './types.js';
+import { paymentMemo } from './x402.js';
 
 describe('settlement recovery', () => {
   it('closes an expired unpaid signer intent without creating a refund liability', async () => {
@@ -165,7 +166,7 @@ describe('settlement recovery', () => {
         amountUsdCents: 200,
         bountyAmountUsdCents: 1_000,
         bountyReserveLamports: '100000000',
-        memo: `mizuki:payment:v1:${quote.id}`,
+        memo: paymentMemo(quote.id),
         paymentWindowStartUnixSeconds: 1,
         paymentWindowEndUnixSeconds: 2,
         settlementSignature: settledPayment.transaction,
@@ -772,7 +773,7 @@ function paymentIntent(
     amountUsdCents: 200,
     bountyAmountUsdCents: 1_000,
     bountyReserveLamports: '100000000',
-    memo: `mizuki:payment:v1:${job.quote.id}`,
+    memo: paymentMemo(job.quote.id),
     paymentWindowStartUnixSeconds: 1,
     paymentWindowEndUnixSeconds: 2,
     settlementSignature: null,

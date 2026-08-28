@@ -40,7 +40,7 @@ import {
 } from './domain.js';
 import { MockMergeVerifier } from './github.js';
 import { SignerMetrics } from './metrics.js';
-import { PolicyService } from './policy.js';
+import { paymentIntentMemo, paymentIntentMemoMatches, PolicyService } from './policy.js';
 import { MockIndependentReviewer } from './reviewer.js';
 import { InMemoryOperationStore } from './store.js';
 
@@ -240,7 +240,7 @@ function paymentAuthorization(quoteId: string): {
       new TransactionInstruction({
         programId: new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr'),
         keys: [],
-        data: Buffer.from(`mizuki:payment:v1:${quoteId}`),
+        data: Buffer.from(paymentIntentMemo(quoteId)),
       }),
     ],
   }).compileToV0Message();
@@ -267,6 +267,23 @@ function paymentAuthorization(quoteId: string): {
 }
 
 describe('production readiness', () => {
+  it('accepts compact and legacy quote-bound payment memos only', () => {
+    expect(paymentIntentMemo(DEFAULT_ADMISSION_ID)).toBe('mizuki:mZmZmZmZSZmJmZmZmZmZmQ');
+    expect(Buffer.byteLength(paymentIntentMemo(DEFAULT_ADMISSION_ID), 'utf8')).toBe(29);
+    expect(paymentIntentMemoMatches(paymentIntentMemo(DEFAULT_ADMISSION_ID), DEFAULT_ADMISSION_ID)).toBe(
+      true,
+    );
+    expect(
+      paymentIntentMemoMatches(
+        `mizuki:payment:v1:${DEFAULT_ADMISSION_ID}`,
+        DEFAULT_ADMISSION_ID,
+      ),
+    ).toBe(true);
+    expect(paymentIntentMemoMatches('mizuki:AAAAAAAAAAAAAAAAAAAAAA', DEFAULT_ADMISSION_ID)).toBe(
+      false,
+    );
+  });
+
   it('accepts exactly the payment authorization size supported by core recovery', () => {
     const request = (paymentAuthorization: string) => ({
       quoteId: '11111111-1111-4111-8111-111111111111',
@@ -653,7 +670,7 @@ describe('refund policy', () => {
       rawAmount: '2000000',
       amountUsdCents: 200,
       bountyAmountUsdCents: 1_000,
-      memo: `mizuki:payment:v1:${DEFAULT_ADMISSION_ID}`,
+      memo: paymentIntentMemo(DEFAULT_ADMISSION_ID),
     });
     await expect(policy.readiness()).resolves.toMatchObject({
       pendingRefundRaw: '2000000',

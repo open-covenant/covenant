@@ -93,12 +93,26 @@ describe('Workbench responsive records and controls', () => {
       <PaymentRecoveryNotice
         quoteId="c33d57fa-fe99-4afa-a624-543991dcc7cf"
         checking
+        progress={{
+          startedAtMs: 1_000,
+          foregroundDeadlineAtMs: 31_000,
+          observedAtMs: 11_000,
+          elapsedMs: 10_000,
+          remainingMs: 20_000,
+          pollCount: 2,
+          latestStatus: 'submitting',
+          outcome: 'checking',
+        }}
         check={vi.fn()}
       />,
     );
 
     expect(html).toContain('Checking your payment status');
     expect(html).toContain('never opens the wallet or requests a signature');
+    expect(html).toContain('role="progressbar"');
+    expect(html).toContain('10s / 30s');
+    expect(html).toContain('Checking the submitted payment');
+    expect(html).toContain('aria-valuenow="33"');
     expect(html).toContain('c33d57fa-fe99-4afa-a624-543991dcc7cf');
     expect(html).not.toContain('Payment confirmation was interrupted');
   });

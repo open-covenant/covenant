@@ -1431,6 +1431,24 @@ export function createApp(deps: AppDependencies) {
           throw cause;
         }
         if (!payment.ok) {
+          if (paymentAttempt && paymentSignature && payment.definitivelyUnpaid === true) {
+            paymentAttempt = await deps.store.updatePaymentAttemptStage(
+              paymentAttempt.id,
+              paymentAttempt.githubId,
+              'expired_unpaid',
+              'server',
+            );
+            console.warn(
+              JSON.stringify({
+                event: 'payment_verification_rejected',
+                quoteId: quote.id,
+                attemptId: paymentAttempt.id,
+                reason: (payment.reason ?? 'payment verification failed')
+                  .replace(/[\r\n\t]/g, ' ')
+                  .slice(0, 240),
+              }),
+            );
+          }
           res.setHeader('payment-required', paymentRequiredHeader(payment.challenge));
           res.setHeader('cache-control', 'private, no-store');
           return json(res, 402, {

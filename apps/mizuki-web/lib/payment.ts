@@ -10,7 +10,7 @@ const recoveryStorageKey = 'mizuki:workbench:payment-recovery';
 const paymentStatusTimeoutMs = 12_000;
 const paymentRecoveryPollBaseMs = 1_000;
 const paymentRecoveryPollMaxMs = 8_000;
-const paymentAuthorizationWindowMs = 300_000;
+export const paymentRecoveryForegroundMs = 30_000;
 const paymentPromptNoncePattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -39,10 +39,28 @@ export type PaymentAttempt = {
   paymentStatus: PaymentAttemptStatus;
   retrySafe: boolean;
   promptAuthorization?: PaymentPromptAuthorization;
+  authoritativeDeadline?: PaymentAuthoritativeDeadline;
   expiresAt?: string;
   job?: Job;
   requestId?: string;
   buildId?: string;
+};
+
+export type PaymentAuthoritativeDeadline = {
+  source: 'quote' | 'payment_intent' | 'reconciliation';
+  expiresAt: string | null;
+};
+
+export type PaymentReconciliationProgress = {
+  startedAtMs: number;
+  foregroundDeadlineAtMs: number;
+  observedAtMs: number;
+  elapsedMs: number;
+  remainingMs: number;
+  pollCount: number;
+  latestStatus?: PaymentAttemptStatus;
+  authoritativeDeadline?: PaymentAuthoritativeDeadline;
+  outcome: 'checking' | 'resolved' | 'window_elapsed' | 'failed';
 };
 
 export type PaymentPromptAuthorization = {
@@ -90,6 +108,12 @@ export class PaymentStatusError extends Error {
 export class PaymentAttemptBusyError extends Error {
   constructor() {
     super('This payment is already open in another Workbench tab.');
+  }
+}
+
+export class PaymentReconciliationTimeoutError extends Error {
+  constructor() {
+    super('The payment status check reached its 30-second limit.');
   }
 }
 
@@ -160,10 +184,12 @@ export async function reportPaymentAttemptStage(
 export async function checkPaymentAttempt(
   attemptId: string,
   expectedQuoteId?: string,
+  options: { signal?: AbortSignal } = {},
 ): Promise<PaymentAttempt> {
   return normalizePaymentAttempt(
     await workbenchRequest<unknown>(
       `/v1/account/payment-attempts/${encodeURIComponent(attemptId)}`,
+      { signal: options.signal },
     ),
     expectedQuoteId,
   );
@@ -185,46 +211,111 @@ export async function reconcilePaymentAttempt(
     signal?: AbortSignal;
     attempts?: number;
     walletAuthorized?: boolean;
-    deadlineMs?: number;
+    foregroundMs?: number;
+    onProgress?: (progress: PaymentReconciliationProgress) => void;
   } = {},
 ): Promise<PaymentAttempt> {
   const attempts = Math.max(1, Math.min(options.attempts ?? 4, 6));
+  const foregroundMs = Math.max(
+    1_000,
+    Math.min(options.foregroundMs ?? paymentRecoveryForegroundMs, paymentRecoveryForegroundMs),
+  );
+  const startedAtMs = Date.now();
+  const foregroundDeadlineAtMs = startedAtMs + foregroundMs;
+  const controller = new AbortController();
+  let foregroundElapsed = false;
   let consecutiveFailures = 0;
   let pollIndex = 0;
+  let pollCount = 0;
   let lastPending: PaymentAttempt | undefined;
+  let lastFailure: unknown;
 
-  while (true) {
-    if (options.signal?.aborted) throw abortReason(options.signal);
-    try {
-      const attempt = await checkPaymentAttempt(attemptId, expectedQuoteId);
-      consecutiveFailures = 0;
-      if (!paymentAttemptNeedsReconciliation(attempt, options.walletAuthorized === true)) {
-        return attempt;
+  const abortFromCaller = () => controller.abort(abortReason(options.signal!));
+  options.signal?.addEventListener('abort', abortFromCaller, { once: true });
+  const foregroundTimer = setTimeout(() => {
+    foregroundElapsed = true;
+    controller.abort(new PaymentReconciliationTimeoutError());
+  }, foregroundMs);
+
+  const publishProgress = (
+    outcome: PaymentReconciliationProgress['outcome'],
+    attempt?: PaymentAttempt,
+  ) => {
+    const observedAtMs = Math.min(Date.now(), foregroundDeadlineAtMs);
+    options.onProgress?.({
+      startedAtMs,
+      foregroundDeadlineAtMs,
+      observedAtMs,
+      elapsedMs: Math.max(0, observedAtMs - startedAtMs),
+      remainingMs: Math.max(0, foregroundDeadlineAtMs - observedAtMs),
+      pollCount,
+      ...(attempt ? { latestStatus: attempt.paymentStatus } : {}),
+      ...(attempt?.authoritativeDeadline
+        ? { authoritativeDeadline: attempt.authoritativeDeadline }
+        : {}),
+      outcome,
+    });
+  };
+
+  publishProgress('checking');
+  try {
+    while (true) {
+      if (options.signal?.aborted) throw abortReason(options.signal);
+      if (foregroundElapsed || Date.now() >= foregroundDeadlineAtMs) {
+        if (!lastPending) throw lastFailure ?? new PaymentReconciliationTimeoutError();
+        publishProgress('window_elapsed', lastPending);
+        return lastPending;
       }
 
-      lastPending = attempt;
-      const deadline = paymentRecoveryDeadline(attempt, options.deadlineMs);
-      if (deadline === undefined || deadline <= Date.now()) return attempt;
-      await wait(
-        Math.min(paymentRecoveryDelay(pollIndex), Math.max(0, deadline - Date.now())),
-        options.signal,
-      );
-      pollIndex += 1;
-    } catch (cause) {
-      if (options.signal?.aborted) throw abortReason(options.signal);
-      consecutiveFailures += 1;
-      if (!retryableAttemptRead(cause) || consecutiveFailures >= attempts) throw cause;
+      try {
+        pollCount += 1;
+        const attempt = await checkPaymentAttempt(attemptId, expectedQuoteId, {
+          signal: controller.signal,
+        });
+        consecutiveFailures = 0;
+        publishProgress('checking', attempt);
+        if (!paymentAttemptNeedsReconciliation(attempt, options.walletAuthorized === true)) {
+          publishProgress('resolved', attempt);
+          return attempt;
+        }
 
-      const deadline = lastPending
-        ? paymentRecoveryDeadline(lastPending, options.deadlineMs)
-        : options.deadlineMs;
-      if (deadline !== undefined && deadline <= Date.now()) return lastPending!;
-      const delay = attemptReadDelay(consecutiveFailures - 1);
-      await wait(
-        deadline === undefined ? delay : Math.min(delay, Math.max(0, deadline - Date.now())),
-        options.signal,
-      );
+        lastPending = attempt;
+        const remaining = foregroundDeadlineAtMs - Date.now();
+        if (remaining <= 0) {
+          publishProgress('window_elapsed', attempt);
+          return attempt;
+        }
+        await wait(Math.min(paymentRecoveryDelay(pollIndex), remaining), controller.signal);
+        pollIndex += 1;
+      } catch (cause) {
+        if (options.signal?.aborted) throw abortReason(options.signal);
+        if (foregroundElapsed) {
+          if (!lastPending) throw lastFailure ?? new PaymentReconciliationTimeoutError();
+          publishProgress('window_elapsed', lastPending);
+          return lastPending;
+        }
+        lastFailure = cause;
+        consecutiveFailures += 1;
+        if (!retryableAttemptRead(cause) || consecutiveFailures >= attempts) throw cause;
+
+        const remaining = foregroundDeadlineAtMs - Date.now();
+        if (remaining <= 0) {
+          if (!lastPending) throw cause;
+          publishProgress('window_elapsed', lastPending);
+          return lastPending;
+        }
+        await wait(
+          Math.min(attemptReadDelay(consecutiveFailures - 1), remaining),
+          controller.signal,
+        );
+      }
     }
+  } catch (cause) {
+    publishProgress('failed', lastPending);
+    throw cause;
+  } finally {
+    clearTimeout(foregroundTimer);
+    options.signal?.removeEventListener('abort', abortFromCaller);
   }
 }
 
@@ -238,6 +329,11 @@ export function normalizePaymentAttempt(value: unknown, expectedQuoteId?: string
           job: value.job ?? value.attempt.job,
           requestId: value.requestId ?? value.attempt.requestId,
           buildId: value.buildId ?? value.attempt.buildId,
+          authoritativeDeadline:
+            value.authoritativeDeadline ??
+            value.authoritative_deadline ??
+            value.attempt.authoritativeDeadline ??
+            value.attempt.authoritative_deadline,
           promptAuthorization:
             value.promptAuthorization ??
             value.prompt_authorization ??
@@ -272,6 +368,10 @@ export function normalizePaymentAttempt(value: unknown, expectedQuoteId?: string
     source.promptAuthorization === undefined && source.prompt_authorization === undefined
       ? undefined
       : parsePromptAuthorization(source.promptAuthorization ?? source.prompt_authorization);
+  const authoritativeDeadline =
+    source.authoritativeDeadline === undefined && source.authoritative_deadline === undefined
+      ? undefined
+      : parseAuthoritativeDeadline(source.authoritativeDeadline ?? source.authoritative_deadline);
   return {
     id,
     quoteId,
@@ -280,6 +380,7 @@ export function normalizePaymentAttempt(value: unknown, expectedQuoteId?: string
     paymentStatus: rawStatus,
     retrySafe: source.retrySafe === true || source.retry_safe === true,
     ...(promptAuthorization ? { promptAuthorization } : {}),
+    ...(authoritativeDeadline ? { authoritativeDeadline } : {}),
     ...(expiresAt ? { expiresAt } : {}),
     ...(job ? { job } : {}),
     ...(typeof source.requestId === 'string' ? { requestId: source.requestId } : {}),
@@ -636,6 +737,28 @@ function parsePromptAuthorization(value: unknown): PaymentPromptAuthorization {
   return { nonce: String(value.nonce), authorizedAt: value.authorizedAt };
 }
 
+function parseAuthoritativeDeadline(value: unknown): PaymentAuthoritativeDeadline {
+  if (!isRecord(value)) throw new Error('The payment deadline response was invalid');
+  const source = value.source;
+  const expiresAt = value.expiresAt !== undefined ? value.expiresAt : value.expires_at;
+  if (!['quote', 'payment_intent', 'reconciliation'].includes(String(source))) {
+    throw new Error('The payment deadline source was invalid');
+  }
+  if (
+    expiresAt !== null &&
+    (typeof expiresAt !== 'string' || Number.isNaN(Date.parse(expiresAt)))
+  ) {
+    throw new Error('The payment deadline was invalid');
+  }
+  if (source !== 'reconciliation' && expiresAt === null) {
+    throw new Error('The payment deadline was incomplete');
+  }
+  return {
+    source: source as PaymentAuthoritativeDeadline['source'],
+    expiresAt: expiresAt as string | null,
+  };
+}
+
 function retryableAttemptRead(cause: unknown): boolean {
   return !(cause instanceof WorkbenchRequestError) || cause.status === 429 || cause.status >= 500;
 }
@@ -651,35 +774,6 @@ function paymentAttemptNeedsReconciliation(
     walletAuthorized ||
     ['wallet_signed', 'submitting', 'indeterminate'].includes(attempt.paymentStatus)
   );
-}
-
-function attemptExpiry(attempt: PaymentAttempt): number | undefined {
-  if (!attempt.expiresAt) return undefined;
-  const expiry = Date.parse(attempt.expiresAt);
-  return Number.isNaN(expiry) ? undefined : expiry;
-}
-
-function paymentRecoveryDeadline(
-  attempt: PaymentAttempt,
-  clientDeadline?: number,
-): number | undefined {
-  const serverDeadline = attemptExpiry(attempt);
-  if (serverDeadline === undefined) return clientDeadline;
-  if (clientDeadline === undefined) return serverDeadline;
-  return Math.min(serverDeadline, clientDeadline);
-}
-
-export function walletAuthorizationDeadline(
-  recovery: Pick<WorkbenchPaymentRecovery, 'walletAuthorizedAt' | 'quote'>,
-): number | undefined {
-  if (!recovery.walletAuthorizedAt) return undefined;
-  const authorizedAt = Date.parse(recovery.walletAuthorizedAt);
-  const quoteExpiresAt = Date.parse(recovery.quote.expiresAt);
-  if (!Number.isFinite(authorizedAt)) return undefined;
-  const paymentDeadline = authorizedAt + paymentAuthorizationWindowMs;
-  return Number.isFinite(quoteExpiresAt)
-    ? Math.min(paymentDeadline, quoteExpiresAt)
-    : paymentDeadline;
 }
 
 function paymentRecoveryDelay(index: number): number {

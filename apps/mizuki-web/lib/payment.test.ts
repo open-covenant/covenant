@@ -7,6 +7,7 @@ import {
   loadWorkbenchPaymentRecovery,
   paymentAccountId,
   paymentPromptRetryAllowed,
+  PaymentReconciliationTimeoutError,
   paymentRetryAllowed,
   PaymentStatusError,
   normalizePaymentAttempt,
@@ -16,7 +17,6 @@ import {
   quoteMatchesIssue,
   reconcilePaymentAttempt,
   saveWorkbenchPaymentRecovery,
-  walletAuthorizationDeadline,
 } from './payment';
 import { WorkbenchRequestError } from './workbench-client';
 import type { Quote } from './types';
@@ -471,7 +471,7 @@ describe('server-owned payment attempts', () => {
     try {
       const recovered = reconcilePaymentAttempt('attempt-11111111', quote.id, {
         walletAuthorized: true,
-        deadlineMs: Date.now() + 60_000,
+        foregroundMs: 30_000,
       });
       await vi.runAllTimersAsync();
 
@@ -486,7 +486,7 @@ describe('server-owned payment attempts', () => {
     }
   });
 
-  it('stops read-only polling at the canonical attempt deadline', async () => {
+  it('stops read-only polling at the foreground check limit', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-08-27T12:00:00.000Z'));
     const expiresAt = new Date(Date.now() + 2_500).toISOString();
@@ -496,12 +496,71 @@ describe('server-owned payment attempts', () => {
     vi.stubGlobal('fetch', request);
 
     try {
-      const recovered = reconcilePaymentAttempt('attempt-11111111', quote.id);
+      const recovered = reconcilePaymentAttempt('attempt-11111111', quote.id, {
+        foregroundMs: 2_500,
+      });
       await vi.runAllTimersAsync();
 
       await expect(recovered).resolves.toMatchObject({ paymentStatus: 'indeterminate' });
       expect(request.mock.calls.length).toBeGreaterThan(1);
-      expect(Date.now()).toBe(Date.parse(expiresAt));
+      expect(Date.now()).toBe(Date.parse('2026-08-27T12:00:00.000Z') + 2_500);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
+  it('publishes real progress through the bounded foreground check', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-27T12:00:00.000Z'));
+    const progress = vi.fn();
+    const request = vi.fn(async () =>
+      Response.json(paymentAttemptResponse('indeterminate', quote.expiresAt)),
+    );
+    vi.stubGlobal('fetch', request);
+
+    try {
+      const recovered = reconcilePaymentAttempt('attempt-11111111', quote.id, {
+        foregroundMs: 2_500,
+        onProgress: progress,
+      });
+      await vi.runAllTimersAsync();
+
+      await expect(recovered).resolves.toMatchObject({ paymentStatus: 'indeterminate' });
+      expect(progress.mock.calls.at(-1)?.[0]).toMatchObject({
+        elapsedMs: 2_500,
+        remainingMs: 0,
+        latestStatus: 'indeterminate',
+        outcome: 'window_elapsed',
+      });
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
+  it('aborts a hung status read at the foreground check limit', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-27T12:00:00.000Z'));
+    const request = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), {
+            once: true,
+          });
+        }),
+    );
+    vi.stubGlobal('fetch', request);
+
+    try {
+      const recovery = reconcilePaymentAttempt('attempt-11111111', quote.id, {
+        foregroundMs: 1_000,
+      });
+      const rejection = expect(recovery).rejects.toBeInstanceOf(PaymentReconciliationTimeoutError);
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      await rejection;
+      expect(request).toHaveBeenCalledTimes(1);
     } finally {
       vi.unstubAllGlobals();
       vi.useRealTimers();
@@ -555,6 +614,10 @@ describe('server-owned payment attempts', () => {
           job: { id: 'job-11111111', state: 'settlement_pending' },
           requestId: 'request-11111111',
           buildId: 'build-11111111',
+          authoritativeDeadline: {
+            source: 'payment_intent',
+            expiresAt: '2026-08-27T12:05:00.000Z',
+          },
         },
         quote.id,
       ),
@@ -565,6 +628,10 @@ describe('server-owned payment attempts', () => {
       job: { id: 'job-11111111' },
       requestId: 'request-11111111',
       buildId: 'build-11111111',
+      authoritativeDeadline: {
+        source: 'payment_intent',
+        expiresAt: '2026-08-27T12:05:00.000Z',
+      },
       promptAuthorization: {
         nonce: recoveryPromptNonce,
         authorizedAt: '2026-08-27T12:00:00.000Z',
@@ -587,24 +654,25 @@ describe('server-owned payment attempts', () => {
       ),
     ).toThrow('did not match');
   });
-});
 
-describe('wallet authorization deadline', () => {
-  it('uses the earlier of the five-minute payment window and quote expiry', () => {
-    const signedAt = Date.parse('2026-08-27T12:00:00.000Z');
+  it('accepts a reconciliation deadline with no safe retry time', () => {
+    expect(
+      normalizePaymentAttempt({
+        ...paymentAttemptResponse('submitting', quote.expiresAt),
+        authoritativeDeadline: { source: 'reconciliation', expiresAt: null },
+      }),
+    ).toMatchObject({
+      authoritativeDeadline: { source: 'reconciliation', expiresAt: null },
+    });
+  });
 
-    expect(
-      walletAuthorizationDeadline({
-        walletAuthorizedAt: new Date(signedAt).toISOString(),
-        quote: { ...quote, expiresAt: new Date(signedAt + 900_000).toISOString() },
+  it('rejects a malformed authoritative payment deadline', () => {
+    expect(() =>
+      normalizePaymentAttempt({
+        ...paymentAttemptResponse('submitting', quote.expiresAt),
+        authoritativeDeadline: { source: 'payment_intent', expiresAt: null },
       }),
-    ).toBe(signedAt + 300_000);
-    expect(
-      walletAuthorizationDeadline({
-        walletAuthorizedAt: new Date(signedAt).toISOString(),
-        quote: { ...quote, expiresAt: new Date(signedAt + 120_000).toISOString() },
-      }),
-    ).toBe(signedAt + 120_000);
+    ).toThrow('deadline was incomplete');
   });
 });
 

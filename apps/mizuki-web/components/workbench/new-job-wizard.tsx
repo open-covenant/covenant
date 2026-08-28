@@ -17,6 +17,7 @@ import {
   loadWorkbenchPaymentRecovery,
   paymentAccountId,
   paymentPromptRetryAllowed,
+  paymentRecoveryForegroundMs,
   paymentRetryAllowed,
   PaymentAttemptBusyError,
   PaymentStatusError,
@@ -27,8 +28,9 @@ import {
   reconcilePaymentAttempt,
   reportPaymentAttemptStage,
   saveWorkbenchPaymentRecovery,
-  walletAuthorizationDeadline,
   withPaymentAttemptLock,
+  type PaymentAttemptStatus,
+  type PaymentReconciliationProgress,
   type WorkbenchPaymentRecovery,
 } from '@/lib/payment';
 import type { Job, Quote } from '@/lib/types';
@@ -268,6 +270,9 @@ function IssueAndPayment({
     | 'revalidating_payment'
   >('idle');
   const [error, setError] = useState<string | null>(null);
+  const [paymentProgress, setPaymentProgress] = useState<PaymentReconciliationProgress | null>(
+    null,
+  );
   const paymentStatusController = useRef<AbortController | null>(null);
   const paymentRecovery = useRef<WorkbenchPaymentRecovery | null>(null);
   const {
@@ -484,8 +489,13 @@ function IssueAndPayment({
       if (!attempt.retrySafe && !reusablePrompt) {
         recovery = {
           phase: 'uncertain',
-          walletAuthorized: true,
-          walletAuthorizedAt: new Date().toISOString(),
+          ...(cachedRecovery?.attemptId === attempt.id &&
+          cachedRecovery.walletAuthorized !== undefined
+            ? { walletAuthorized: cachedRecovery.walletAuthorized }
+            : {}),
+          ...(cachedRecovery?.attemptId === attempt.id && cachedRecovery.walletAuthorizedAt
+            ? { walletAuthorizedAt: cachedRecovery.walletAuthorizedAt }
+            : {}),
           accountId,
           attemptId: attempt.id,
           idempotencyKey: attempt.idempotencyKey,
@@ -621,14 +631,19 @@ function IssueAndPayment({
     paymentStatusController.current?.abort();
     const controller = new AbortController();
     paymentStatusController.current = controller;
+    setPaymentProgress(null);
     setState('checking_payment');
     setError(null);
     try {
       const status = await reconcilePaymentAttempt(recovery.attemptId, recovery.quote.id, {
         signal: controller.signal,
         walletAuthorized: recovery.walletAuthorized === true,
-        deadlineMs: walletAuthorizationDeadline(recovery),
+        foregroundMs: paymentRecoveryForegroundMs,
+        onProgress(progress) {
+          if (paymentStatusController.current === controller) setPaymentProgress(progress);
+        },
       });
+      if (paymentStatusController.current !== controller || controller.signal.aborted) return;
       if (status.job || status.paymentStatus === 'job_reserved') {
         if (!status.job) throw new Error('The reserved payment attempt did not include its job');
         clearWorkbenchPaymentRecovery(recovery.accountId, recovery.quote.id);
@@ -891,6 +906,7 @@ function IssueAndPayment({
               ) : state === 'payment_uncertain' || state === 'checking_payment' ? (
                 <PaymentRecoveryNotice
                   checking={state === 'checking_payment'}
+                  progress={paymentProgress}
                   quoteId={quote.id}
                   check={() => void checkPaymentStatus()}
                 />
@@ -1028,16 +1044,45 @@ export function ConnectedPaymentSummary({
 
 export function PaymentRecoveryNotice({
   checking,
+  progress,
   quoteId,
   check,
 }: {
   checking: boolean;
+  progress: PaymentReconciliationProgress | null;
   quoteId: string;
   check: () => void;
 }) {
+  const [observedAtMs, setObservedAtMs] = useState(progress?.observedAtMs ?? Date.now());
+  const startedAtMs = progress?.startedAtMs ?? observedAtMs;
+  const deadlineAtMs =
+    progress?.foregroundDeadlineAtMs ?? startedAtMs + paymentRecoveryForegroundMs;
+  const totalMs = Math.max(1, deadlineAtMs - startedAtMs);
+  const elapsedMs = Math.max(
+    0,
+    Math.min(
+      totalMs,
+      (checking ? observedAtMs : (progress?.observedAtMs ?? observedAtMs)) - startedAtMs,
+    ),
+  );
+  const progressPercent = Math.round((elapsedMs / totalMs) * 100);
+  const elapsedSeconds = Math.floor(elapsedMs / 1_000);
+  const totalSeconds = Math.ceil(totalMs / 1_000);
+
+  useEffect(() => {
+    if (!checking) return;
+    setObservedAtMs(Date.now());
+    const timer = window.setInterval(() => setObservedAtMs(Date.now()), 250);
+    return () => window.clearInterval(timer);
+  }, [checking, startedAtMs]);
+
+  useEffect(() => {
+    if (progress) setObservedAtMs(progress.observedAtMs);
+  }, [progress]);
+
   return (
-    <div className="wizard-payment-recovery" role="status" aria-live="polite">
-      <strong>
+    <div className="wizard-payment-recovery">
+      <strong role="status" aria-live="polite">
         {checking ? 'Checking your payment status…' : 'Payment status needs confirmation'}
       </strong>
       <p>
@@ -1045,11 +1090,56 @@ export function PaymentRecoveryNotice({
         check never opens the wallet or requests a signature.
       </p>
       <code>Quote {quoteId}</code>
+      {checking ? (
+        <div className="wizard-payment-recovery-progress" aria-live="off">
+          <div className="wizard-payment-recovery-progress-meta">
+            <span>Read-only status check</span>
+            <span>
+              {elapsedSeconds}s / {totalSeconds}s
+            </span>
+          </div>
+          <div
+            className="wizard-payment-recovery-progress-track"
+            role="progressbar"
+            aria-label="Payment status check progress"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={progressPercent}
+            aria-valuetext={`${elapsedSeconds} seconds of ${totalSeconds}`}
+          >
+            <span style={{ width: `${progressPercent}%` }} />
+          </div>
+          <small>
+            {paymentRecoveryStageLabel(progress?.latestStatus)}. This check stops automatically
+            after {totalSeconds} seconds and never reopens the wallet.
+          </small>
+        </div>
+      ) : null}
       <button type="button" disabled={checking} onClick={check}>
         {checking ? 'Checking payment status…' : 'Check payment status'}
       </button>
     </div>
   );
+}
+
+function paymentRecoveryStageLabel(status?: PaymentAttemptStatus): string {
+  switch (status) {
+    case 'created':
+      return 'Preparing the payment record';
+    case 'wallet_opened':
+      return 'Checking the wallet approval';
+    case 'wallet_signed':
+    case 'submitting':
+      return 'Checking the submitted payment';
+    case 'indeterminate':
+      return 'Confirming the payment outcome';
+    case 'job_reserved':
+      return 'The maintenance job is reserved';
+    case 'expired_unpaid':
+      return 'No payment or job was found';
+    default:
+      return 'Connecting to the payment service';
+  }
 }
 
 function IssueOption({

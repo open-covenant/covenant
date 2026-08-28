@@ -37,7 +37,7 @@ const network = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp';
 const asset = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const payTo = '2'.repeat(32);
 const feePayer = '3'.repeat(32);
-const memo = 'mizuki:quote:11111111-1111-4111-8111-111111111111';
+const memo = 'mizuki:ERERERERQRGBEREREREREQ';
 const promptNonce = '11111111-1111-4111-8111-111111111111';
 const requirements = {
   scheme: 'exact',

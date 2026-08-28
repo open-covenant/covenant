@@ -12,6 +12,7 @@ import { GithubReadinessError } from './github.js';
 import { PolicyRequestError, repositoryAdmissionBinding } from './policy-client.js';
 import { GithubOAuthCapacityError, MemoryStore } from './store.js';
 import type { Quote, RepositoryAdmissionReceipt } from './types.js';
+import { paymentMemo } from './x402.js';
 
 const servers: Server[] = [];
 
@@ -523,7 +524,7 @@ describe('operator admission controls', () => {
         quoteId: authorizedQuote.id,
         repositoryAdmissionId: '33333333-3333-4333-8333-333333333333',
         rawAmount: authorizedQuote.priceAtomic,
-        memo: `mizuki:payment:v1:${authorizedQuote.id}`,
+        memo: paymentMemo(authorizedQuote.id),
         status: 'reserved',
       };
     });

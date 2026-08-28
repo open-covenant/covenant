@@ -11,7 +11,7 @@ import {
 } from './policy-client.js';
 import type { MizukiStore } from './store.js';
 import type { Job, Payment, RepositoryAdmissionReceipt } from './types.js';
-import { paymentMemo, Payments, USDC_DECIMALS, USDC_MAINNET } from './x402.js';
+import { paymentMemoMatches, Payments, USDC_DECIMALS, USDC_MAINNET } from './x402.js';
 
 export interface SettlementRecoveryDependencies {
   paymentMode: Config['paymentMode'];
@@ -126,7 +126,7 @@ async function ensurePaymentIntent(job: Job, deps: SettlementRecoveryDependencie
   if (
     intent.repositoryAdmissionId !== job.repositoryAdmission.id ||
     intent.rawAmount !== job.quote.priceAtomic ||
-    intent.memo !== paymentMemo(job.quote.id) ||
+    !paymentMemoMatches(intent.memo, job.quote.id) ||
     intent.status !== 'reserved'
   )
     throw new Error('payment intent does not match the reserved payment');

@@ -17,9 +17,16 @@ export const SOLANA_MAINNET = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp';
 
 export const PAYMENT_AUTHORIZATION_MAX_BYTES = 12_000;
 const MOCK_FEE_PAYER = '2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4';
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function paymentMemo(quoteId: string): string {
-  return `mizuki:payment:v1:${quoteId}`;
+  if (!UUID_PATTERN.test(quoteId)) throw new Error('payment quote id must be a UUID');
+  return `mizuki:${Buffer.from(quoteId.replaceAll('-', ''), 'hex').toString('base64url')}`;
+}
+
+export function paymentMemoMatches(memo: string, quoteId: string): boolean {
+  return memo === paymentMemo(quoteId) || memo === `mizuki:payment:v1:${quoteId}`;
 }
 
 export type PaymentAttempt =
@@ -256,7 +263,8 @@ export class Payments {
       requirements.asset === USDC_MAINNET &&
       requirements.payTo === this.config.payTo &&
       requirements.amount === quote.priceAtomic &&
-      requirements.extra?.memo === paymentMemo(quote.id) &&
+      typeof requirements.extra?.memo === 'string' &&
+      paymentMemoMatches(requirements.extra.memo, quote.id) &&
       requirements.maxTimeoutSeconds === 300
     );
   }

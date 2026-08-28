@@ -55,7 +55,7 @@ import {
   Payments,
   USDC_DECIMALS,
   USDC_MAINNET,
-  paymentMemo,
+  paymentMemoMatches,
   paymentRequiredHeader,
 } from './x402.js';
 import {
@@ -1282,7 +1282,7 @@ export function createApp(deps: AppDependencies) {
                   intent.quoteId !== quote.id ||
                   intent.repositoryAdmissionId !== repositoryAdmission!.id ||
                   intent.rawAmount !== quote.priceAtomic ||
-                  intent.memo !== paymentMemo(quote.id) ||
+                  !paymentMemoMatches(intent.memo, quote.id) ||
                   intent.status !== 'reserved'
                 ) {
                   throw new Error('payment intent does not match the quoted payment');

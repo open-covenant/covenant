@@ -141,6 +141,27 @@ describe('Workbench responsive records and controls', () => {
     );
   });
 
+  it('replaces a definitively unpaid attempt with a fresh quote in one action', () => {
+    const source = readFileSync(new URL('./new-job-wizard.tsx', import.meta.url), 'utf8');
+    const start = source.indexOf('async function revalidatePaymentRetry()');
+    const end = source.indexOf('\n  return (', start);
+    const renewal = source.slice(start, end);
+
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    expect(renewal).toContain('clearWorkbenchPaymentRecovery(accountId, previousQuoteId)');
+    expect(renewal).toContain('paymentRecovery.current = null');
+    expect(renewal).toContain("workbenchRequest<unknown>('/v1/preflights'");
+    expect(renewal).toContain("workbenchMutation<Quote>('/v1/account/quotes'");
+    expect(renewal).toContain('setQuote(freshQuote)');
+    expect(renewal).toContain("setState('quoted')");
+    expect(renewal.indexOf("workbenchRequest<unknown>('/v1/preflights'")).toBeLessThan(
+      renewal.indexOf("workbenchMutation<Quote>('/v1/account/quotes'"),
+    );
+    expect(source).toContain('Create a fresh quote');
+    expect(source).not.toContain('Recheck issue eligibility');
+  });
+
   it('classifies payment-attempt API failures without blaming the wallet', () => {
     expect(
       paymentAttemptError(

@@ -812,12 +812,21 @@ describe('x402 quote policy', () => {
 });
 
 describe('wallet-returned SVM transaction validation', () => {
-  it('preserves an unchanged transaction and Phantom or Solflare Lighthouse additions', async () => {
+  it('preserves an unchanged transaction and supported Lighthouse additions', async () => {
     const fixture = await paymentFixture();
 
     await expect(validate(fixture, fixture.original)).resolves.toBeDefined();
     await expect(validate(fixture, addLighthouse(fixture.original, 1))).resolves.toBeDefined();
     await expect(validate(fixture, addLighthouse(fixture.original, 2))).resolves.toBeDefined();
+    await expect(validate(fixture, addLighthouse(fixture.original, 3))).resolves.toBeDefined();
+  });
+
+  it('rejects more Lighthouse instructions than the facilitator accepts', async () => {
+    const fixture = await paymentFixture();
+
+    await expect(validate(fixture, addLighthouse(fixture.original, 4))).rejects.toMatchObject({
+      code: 'wallet_transaction_unsafe',
+    });
   });
 
   it('rejects a changed transfer, memo, unknown program, signer, or writable account', async () => {

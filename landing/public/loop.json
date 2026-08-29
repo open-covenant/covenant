@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-08-28T23:44:40.080Z",
+  "updatedAt": "2026-08-29T00:04:44.199Z",
   "branch": "loop/main-track",
   "totals": {
     "events": 13142,
@@ -12,10 +12,6 @@
     "velocity": 0
   },
   "daily": [
-    {
-      "date": "08-08",
-      "count": 0
-    },
     {
       "date": "08-09",
       "count": 0
@@ -95,13 +91,13 @@
     {
       "date": "08-28",
       "count": 0
+    },
+    {
+      "date": "08-29",
+      "count": 0
     }
   ],
   "cumulative": [
-    {
-      "date": "08-08",
-      "total": 1538
-    },
     {
       "date": "08-09",
       "total": 1538
@@ -180,6 +176,10 @@
     },
     {
       "date": "08-28",
+      "total": 1541
+    },
+    {
+      "date": "08-29",
       "total": 1541
     }
   ],

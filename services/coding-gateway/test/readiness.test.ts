@@ -116,6 +116,42 @@ describe('GatewayReadiness', () => {
     });
   });
 
+  it('reports a rejected compute token without closing intake for other runs', async () => {
+    const readiness = new GatewayReadiness({
+      provider: fakeProvider(fakeSandbox()),
+      model: { expectedModel: 'deepseek-v3.2', check: vi.fn(async () => undefined) },
+      compute: {
+        check: vi.fn(async () => {
+          throw new Error('compute control plane readiness failed with HTTP 401');
+        }),
+      },
+      refreshMs: 100,
+      maxAgeMs: 300,
+      timeoutMs: 20,
+      failureRetryMs: 10,
+      now: () => 1_000,
+    });
+
+    // Renting GPUs is optional, so a compute outage is visible but not fatal.
+    await expect(readiness.check()).resolves.toMatchObject({
+      ready: true,
+      dependencies: { compute: { ok: false } },
+      failed: expect.arrayContaining(['compute']),
+    });
+  });
+
+  it('treats an unconfigured compute feature as healthy', async () => {
+    const readiness = createReadiness(
+      fakeProvider(fakeSandbox()),
+      async () => undefined,
+      () => 1_000,
+    );
+    await expect(readiness.check()).resolves.toMatchObject({
+      ready: true,
+      dependencies: { compute: { ok: true } },
+    });
+  });
+
   it('does not serve cached readiness past the tariff validity deadline', async () => {
     let now = 1_000;
     const tariffCheck = vi.fn(async () => {

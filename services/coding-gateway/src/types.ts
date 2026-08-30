@@ -43,7 +43,7 @@ export interface RunState {
   providerReceipts?: ProviderReceipt[];
 }
 
-/** GET /v1/capabilities — the three features the daemon gates on plus the
+/** GET /v1/capabilities: the three features the daemon gates on plus the
  *  optional approval channel. */
 export interface GatewayCapabilities {
   features: {
@@ -127,6 +127,11 @@ export interface CodingBackend {
     maxProviderCostUsd: number;
     recordProviderRequest?: () => void | Promise<void>;
     recordProviderReceipt?: (receipt: ProviderReceipt) => void | Promise<void>;
+    /**
+     * Real USDC committed to rented GPU capacity. Reported even when the run
+     * throws, since the spend has already happened.
+     */
+    recordComputeUsd?: (usd: number) => void;
   }): Promise<{ output: string; usage: TokenUsage; providerReceipts?: ProviderReceipt[] }>;
 }
 
@@ -154,7 +159,7 @@ export interface Sandbox {
   readFile(path: string): Promise<string>;
   writeFile(path: string, content: string): Promise<void>;
   exec(cmd: string, opts?: { timeoutMs?: number }): Promise<ExecResult>;
-  /** Public URL serving a port inside the sandbox — used to preview a built
+  /** Public URL serving a port inside the sandbox. Used to preview a built
    *  web app in the UI (WS4). */
   previewUrl(port: number): Promise<string>;
   destroy(): Promise<void>;

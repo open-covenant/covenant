@@ -16,12 +16,14 @@ import { selectBackend } from './backends/index.js';
 import { LocalSandboxProvider } from './sandbox/local.js';
 import { E2bSandboxProvider } from './sandbox/e2b.js';
 import { config } from './config.js';
+import { computeConfig, computeSummary, probeComputeControlPlane } from './compute.js';
 import { SpendLedger, modelCostUsd, sandboxCostUsd } from './budget.js';
 import { IpBucket } from './ip-bucket.js';
 import { sourceIp } from './source-ip.js';
 import { admitRun } from './admit.js';
 import { IdempotencyConflictError, RunStore, type StoredRun } from './run-store.js';
 import { assertProductionConfig } from './config.js';
+import { ConfigError } from './config-error.js';
 import { GatewayReadiness, verifyE2bTariff } from './readiness.js';
 import {
   MAX_CHANGED_FILES,
@@ -45,7 +47,7 @@ interface Run extends StoredRun {
 }
 
 // The sandbox is torn down when a run ends, so the only chance to show what
-// got built is to read the workspace just before destroy. Cap aggressively —
+// got built is to read the workspace just before destroy. Cap aggressively;
 // this is for a UI file tree, not a backup: skip dependency/build/VCS dirs and
 // dotfiles, limit count + per-file + total bytes, and tolerate binaries.
 const MAX_FILES = 40;
@@ -123,7 +125,7 @@ const provider: SandboxProvider = process.env.E2B_API_KEY
   ? new E2bSandboxProvider(process.env.E2B_API_KEY, e2bIdentity, config.e2bEgressAllowlist)
   : new LocalSandboxProvider();
 
-const PORT = Number(process.env.PORT ?? process.env.GATEWAY_PORT ?? 8642);
+const PORT = listenPort();
 const modelProbe = modelProbeConfig();
 const readiness = new GatewayReadiness({
   provider,
@@ -139,10 +141,35 @@ const readiness = new GatewayReadiness({
           }),
       }
     : undefined,
+  compute: computeProbeConfig(),
   refreshMs: config.readinessRefreshMs,
   maxAgeMs: config.readinessMaxAgeMs,
   timeoutMs: config.readinessTimeoutMs,
 });
+
+function listenPort(): number {
+  const raw = process.env.PORT ?? process.env.GATEWAY_PORT;
+  if (raw === undefined || raw === '') return 8642;
+  const port = Number(raw);
+  // Number('http') is NaN and listen(NaN) binds a random port, which reads as a
+  // working boot on an address nothing is configured to reach.
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new ConfigError(
+      `PORT=${JSON.stringify(raw)} is not valid: set it to a port from 1 to 65535`,
+    );
+  }
+  return port;
+}
+
+/** USD as an operator reads it. The ledger itself keeps full precision. */
+const roundUsd = (value: number): number => Math.round(value * 1e6) / 1e6;
+
+function computeBanner(): string {
+  if (!computeConfig) return 'off';
+  const budget = (computeConfig.maxUsdcMicros / 1_000_000).toFixed(2);
+  const host = new URL(computeConfig.apiUrl).host;
+  return `on ($${budget}/run, ${computeConfig.maxLaunches} launch max, ${computeConfig.maxDurationSecs}s max, ${host})`;
+}
 
 // Serialize a GatewayEvent as the SSE frame covenantd's HermesRunner parses:
 // it keys on `event` + `run_id` (not `type`) and reads `duration` in seconds
@@ -265,10 +292,13 @@ function startRun(
   void (async () => {
     let sandbox: Awaited<ReturnType<SandboxProvider['create']>> | undefined;
     let sandboxCreateAttempted = false;
+    // Committed GPU spend is charged on both the completed and failed paths, so
+    // it has to outlive the try.
+    let computeUsd = 0;
     try {
       // provider.create() is INSIDE the try: an E2B / network failure here must
       // still release the reservation, free the concurrency slot, and
-      // unsubscribe the kill handler — otherwise repeated provider failures
+      // unsubscribe the kill handler; otherwise repeated provider failures
       // silently wedge the gateway at its caps with zero actual spend.
       //
       // Bracket the create() with abort checks so a kill that fires before the
@@ -297,6 +327,9 @@ function startRun(
         signal: run.abort.signal,
         emit: (e) => publish(run, e),
         maxProviderCostUsd: providerBudgetUsd(reservedMax),
+        recordComputeUsd: (usd) => {
+          computeUsd += usd;
+        },
         recordProviderRequest: () => {
           const previous = run.providerRequestCount ?? 0;
           run.providerRequestCount = previous + 1;
@@ -337,7 +370,7 @@ function startRun(
       }
       // Snapshot the workspace BEFORE flipping status to completed, so a
       // client that polls and immediately fetches /files never races the
-      // capture (status is the signal the run — and its artifacts — are ready).
+      // capture (status is the signal that the run and its artifacts are ready).
       run.files = request.repository_url
         ? await captureRepositoryFiles(sandbox, run.changedFiles ?? [])
         : await captureFiles(sandbox).catch(() => []);
@@ -348,7 +381,7 @@ function startRun(
         run.providerRequestCount ?? 0,
         providerReceipts ?? run.providerReceipts,
         usage,
-        sandboxAccountingChargeUsd(sandboxCreateAttempted),
+        sandboxAccountingChargeUsd(sandboxCreateAttempted) + computeUsd,
         reservedMax,
       );
       console.log(
@@ -365,7 +398,7 @@ function startRun(
       run.costUsd = failedRunCost(
         run.providerRequestCount ?? 0,
         run.providerReceipts,
-        sandboxAccountingChargeUsd(sandboxCreateAttempted),
+        sandboxAccountingChargeUsd(sandboxCreateAttempted) + computeUsd,
         reservedMax,
       );
       if (run.costUsd > reservedMax + 1e-9) ledger.kill();
@@ -399,7 +432,7 @@ function startRun(
       // Release the per-IP slot on every terminal outcome (success,
       // failure, cancel). A leak here would pin the bucket against a
       // legit client until the next service restart. Exempt IPs never
-      // took a slot, so skip — release would be a harmless no-op against
+      // took a slot, so skip it: release would be a harmless no-op against
       // the slot map, but skipping keeps the intent explicit.
       if (!exempt) ipBucket.release(sourceIpStr);
       if (sandbox) await sandbox.destroy().catch(() => {});
@@ -455,6 +488,12 @@ function modelProbeConfig(): { expectedModel: string; check: () => Promise<void>
         config.model,
       ),
   };
+}
+
+function computeProbeConfig(): { check: () => Promise<void> } | undefined {
+  const cfg = computeConfig;
+  if (!cfg) return undefined;
+  return { check: () => probeComputeControlPlane(cfg) };
 }
 
 function balanceProbeConfig(): { check: () => Promise<void> } | undefined {
@@ -853,19 +892,28 @@ export const server = createServer(async (req, res) => {
           run_events_sse: true,
           run_stop: true,
           run_approval_response: false,
+          gpu_workspace: computeConfig !== null,
         },
+        compute: computeSummary(computeConfig),
+        sandbox: { provider: provider.id },
       });
     }
 
     if (req.method === 'GET' && url.pathname === '/v1/budget') {
+      const snapshot = ledger.snapshot();
       return json(res, 200, {
-        ...ledger.snapshot(),
+        ...snapshot,
+        dailyUsd: roundUsd(snapshot.dailyUsd),
+        monthlyUsd: roundUsd(snapshot.monthlyUsd),
+        reserved: roundUsd(snapshot.reserved),
+        dailyCap: roundUsd(snapshot.dailyCap),
+        monthlyCap: roundUsd(snapshot.monthlyCap),
         accounting: {
           sandbox: {
             method: 'pinned-worst-case-tariff',
             usdPerSec: config.sandboxWorstCaseUsdPerSec,
             tariffRef: config.sandboxTariffRef,
-            maximumPerRunUsd: maximumSandboxCostUsd(),
+            maximumPerRunUsd: roundUsd(maximumSandboxCostUsd()),
             authoritativeBillingReceipt: false,
             identity: e2bIdentity ?? null,
           },
@@ -945,7 +993,7 @@ export const server = createServer(async (req, res) => {
           output: run.output,
           error: run.error,
           usage: run.usage,
-          costUsd: run.costUsd,
+          costUsd: run.costUsd === undefined ? undefined : roundUsd(run.costUsd),
           providerReceipts: run.providerReceipts,
         } satisfies RunState);
       }
@@ -1003,13 +1051,23 @@ if (process.env.NODE_ENV !== 'test') {
   // Operator kill-switch: `kill -USR1 <pid>` refuses new runs and aborts every
   // in-flight one. No HTTP surface, so no auth to get wrong. Idempotent.
   process.on('SIGUSR1', () => {
-    console.warn(`SIGUSR1 received — engaging kill-switch (active=${ledger.snapshot().active})`);
+    console.warn(`SIGUSR1 received: engaging kill-switch (active=${ledger.snapshot().active})`);
     ledger.kill();
   });
   server.listen(PORT, () => {
     console.log(
-      `coding-gateway listening on :${PORT} (model=${config.model}, effort=${config.effort})`,
+      `coding-gateway listening on :${PORT} (model=${config.model}, effort=${config.effort}, sandbox=${provider.id}, compute=${computeBanner()})`,
     );
+    if (provider.id === 'local') {
+      console.warn(
+        'sandbox=local: the agent runs shell commands directly on this host, with no egress allowlist and no cpu/memory/disk caps. Local development only. Set E2B_API_KEY for the isolated provider.',
+      );
+    }
+    if (!config.authToken) {
+      console.warn(
+        'CODER_AUTH_TOKEN is unset: POST /v1/runs is unauthenticated and any caller that can reach this port can start a paid run. Keep the service on a private network.',
+      );
+    }
     void readiness.check().then((report) => {
       if (!report.ready) console.error(`readiness failed: ${report.failed.join(',')}`);
     });

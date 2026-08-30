@@ -65,6 +65,26 @@ describe('config env validation', () => {
     await expect(loadConfig()).rejects.toThrow(/TRUSTED_PROXY_HOPS/);
   });
 
+  // The "set it to 0" advice belongs only to knobs where 0 is a real value.
+  // On a knob with a minimum of 1 it sent the operator to a second failed boot.
+  it('states the range each knob actually accepts', async () => {
+    process.env['CODER_READINESS_REFRESH_MS'] = '0';
+    await expect(loadConfig()).rejects.toThrow(
+      'CODER_READINESS_REFRESH_MS="0" is not valid: set it to a whole number between 10000 and 300000',
+    );
+    delete process.env['CODER_READINESS_REFRESH_MS'];
+
+    process.env['CODER_IP_MAX_PER_IP'] = '-1';
+    await expect(loadConfig()).rejects.toThrow(/CODER_IP_MAX_PER_IP=0 opts out of the control/);
+  });
+
+  it('names a rejected value a ConfigError so the entry point prints it without a stack', async () => {
+    process.env['TRUSTED_PROXY_HOPS'] = 'two';
+    // Not instanceof: vi.resetModules() gives the reloaded config its own copy
+    // of the class.
+    await expect(loadConfig()).rejects.toMatchObject({ name: 'ConfigError' });
+  });
+
   it('refuses a fractional CODER_IP_REFILL_MS to keep ms math integer-clean', async () => {
     process.env['CODER_IP_REFILL_MS'] = '1.5';
     await expect(loadConfig()).rejects.toThrow(/CODER_IP_REFILL_MS/);

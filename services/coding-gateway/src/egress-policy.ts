@@ -1,3 +1,5 @@
+import { ConfigError } from './config-error.js';
+
 const SUPPORTED_E2B_EGRESS_HOSTS = new Set([
   'github.com',
   'codeload.github.com',
@@ -17,11 +19,15 @@ export function parseE2bEgressPolicy(raw: string | undefined): readonly string[]
   if (raw === undefined || raw.trim() === '') return Object.freeze([]);
 
   const hosts = raw.split(',').map((value) => value.trim().toLowerCase());
-  if (hosts.some((host) => !host)) {
-    throw new Error('E2B_EGRESS_ALLOW must not contain empty entries');
+  try {
+    if (hosts.some((host) => !host)) {
+      throw new Error('E2B_EGRESS_ALLOW must not contain empty entries');
+    }
+    return validatePolicy(hosts, 'E2B_EGRESS_ALLOW');
+  } catch (cause) {
+    // Re-typed so the entry point prints it as a config problem, not a crash.
+    throw new ConfigError((cause as Error).message);
   }
-
-  return validatePolicy(hosts, 'E2B_EGRESS_ALLOW');
 }
 
 export function validateE2bEgressPolicy(hosts: readonly string[]): readonly string[] {

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { SandboxProvider } from './types.js';
 
-export type ReadinessDependency = 'model' | 'balance' | 'sandbox' | 'tariff';
+export type ReadinessDependency = 'model' | 'balance' | 'sandbox' | 'tariff' | 'compute';
 
 export interface ReadinessEvidence {
   ok: boolean;
@@ -33,11 +33,17 @@ interface TariffProbe {
   check: () => Promise<{ validUntilMs: number }>;
 }
 
+/** Present only when the GPU feature is configured; absent counts as healthy. */
+interface ComputeProbe {
+  check: () => Promise<void>;
+}
+
 interface Options {
   provider: SandboxProvider;
   model: ModelProbe;
   balance?: BalanceProbe;
   tariff?: TariffProbe;
+  compute?: ComputeProbe;
   refreshMs: number;
   maxAgeMs: number;
   timeoutMs: number;
@@ -86,16 +92,17 @@ export class GatewayReadiness {
 
   private async refresh(): Promise<Snapshot> {
     let tariffValidUntilMs: number | undefined;
-    const [model, balance, sandbox, tariff] = await Promise.all([
+    const [model, balance, sandbox, tariff, compute] = await Promise.all([
       this.probe('model', () => this.probeModel()),
       this.probe('balance', () => this.probeBalance()),
       this.probe('sandbox', () => this.probeSandbox()),
       this.probe('tariff', async () => {
         tariffValidUntilMs = await this.probeTariff();
       }),
+      this.probe('compute', () => this.probeCompute()),
     ]);
     const checkedAtMs = this.now();
-    const dependencies = { model, balance, sandbox, tariff };
+    const dependencies = { model, balance, sandbox, tariff, compute };
     const snapshot = {
       checkedAtMs,
       tariffValidUntilMs,
@@ -144,6 +151,10 @@ export class GatewayReadiness {
     return (await this.options.tariff?.check())?.validUntilMs;
   }
 
+  private async probeCompute(): Promise<void> {
+    await this.options.compute?.check();
+  }
+
   private report(snapshot: Snapshot): GatewayReadinessReport {
     const ageMs = this.age(snapshot);
     const failed: Array<ReadinessDependency | 'stale'> = (
@@ -165,8 +176,10 @@ export class GatewayReadiness {
     if (lastSuccessfulAgeMs === null || lastSuccessfulAgeMs > this.options.maxAgeMs) {
       failed.push('stale');
     }
+    // Compute is reported but never blocking, for the reason in dependenciesReady.
+    const blocking = failed.filter((dependency) => dependency !== 'compute');
     return {
-      ready: failed.length === 0,
+      ready: blocking.length === 0,
       model: this.options.model.expectedModel,
       checkedAt: new Date(snapshot.checkedAtMs).toISOString(),
       ageMs,
@@ -192,6 +205,9 @@ export class GatewayReadiness {
   }
 }
 
+// Compute is deliberately absent: renting GPUs is an optional add-on, so an
+// outage there must not close intake for runs that never touch one. Its health
+// is still reported, and gpu_workspace fails closed on its own.
 function dependenciesReady(dependencies: Record<ReadinessDependency, ReadinessEvidence>): boolean {
   return (
     dependencies.model.ok &&

@@ -1,3 +1,4 @@
+import { ConfigError } from './config-error.js';
 import { parseE2bEgressPolicy } from './egress-policy.js';
 
 /** Gateway configuration and model pricing, all overridable by env. */
@@ -41,21 +42,21 @@ const sandboxTariffRef = tariffReference(
   'development-unverified',
   'CODER_E2B_TARIFF_REF',
 );
-const readinessRefreshMs = boundedDuration(
+const readinessRefreshMs = boundedInteger(
   process.env.CODER_READINESS_REFRESH_MS,
   120_000,
   'CODER_READINESS_REFRESH_MS',
   10_000,
   300_000,
 );
-const readinessMaxAgeMs = boundedDuration(
+const readinessMaxAgeMs = boundedInteger(
   process.env.CODER_READINESS_MAX_AGE_MS,
   300_000,
   'CODER_READINESS_MAX_AGE_MS',
   30_000,
   600_000,
 );
-const readinessTimeoutMs = boundedDuration(
+const readinessTimeoutMs = boundedInteger(
   process.env.CODER_READINESS_TIMEOUT_MS,
   20_000,
   'CODER_READINESS_TIMEOUT_MS',
@@ -64,16 +65,16 @@ const readinessTimeoutMs = boundedDuration(
 );
 const e2bEgressAllowlist = parseE2bEgressPolicy(process.env.E2B_EGRESS_ALLOW);
 if (readinessMaxAgeMs < readinessRefreshMs) {
-  throw new Error('CODER_READINESS_MAX_AGE_MS must not be shorter than the refresh interval');
+  throw new ConfigError('CODER_READINESS_MAX_AGE_MS must not be shorter than the refresh interval');
 }
 if (readinessTimeoutMs > readinessMaxAgeMs) {
-  throw new Error('CODER_READINESS_TIMEOUT_MS must not exceed the maximum evidence age');
+  throw new ConfigError('CODER_READINESS_TIMEOUT_MS must not exceed the maximum evidence age');
 }
 
 export const config = {
   authToken: process.env.CODER_AUTH_TOKEN,
   backend: (process.env.CODER_BACKEND ?? 'anthropic') as 'anthropic' | 'openai' | 'usepod',
-  // Public default is Sonnet 4.6 — strong coding at ~5x lower cost than Opus,
+  // Public default is Sonnet 4.6: strong coding at ~5x lower cost than Opus,
   // so the $200/mo budget survives public traffic. Set CODER_MODEL to
   // claude-opus-4-7 for a gated top-quality tier.
   model,
@@ -85,7 +86,7 @@ export const config = {
   usePodMinimumBalance,
   // Public (Sonnet) default is "low": on open-ended build prompts ("make a
   // Next.js app with X") high effort burns minutes on a single upfront
-  // thinking block before the first tool call — measured ~3min — which reads
+  // thinking block before the first tool call (measured ~3min), which reads
   // as a hang. Low gets to the first action in seconds and still drives a
   // real scaffold→install→build loop. The gated Opus tier keeps "xhigh".
   // Override per-deploy with CODER_EFFORT.
@@ -134,7 +135,7 @@ export const config = {
 
   // Per-IP admission gate. With CODER_MAX_CONCURRENT=2 a single anonymous
   // client can otherwise occupy both slots and burn the entire daily cap
-  // alone before Turnstile / edge gates land — one in-flight per IP is
+  // alone before Turnstile / edge gates land. One in-flight per IP is
   // the cheapest stop-gap. Set CODER_IP_MAX_PER_IP=0 to disable
   // explicitly (typos like `=true` would otherwise silently disable
   // through Number() → NaN → NaN > 0 false).
@@ -143,7 +144,7 @@ export const config = {
   // How many trusted proxies sit between the gateway and the public
   // internet. The right-most TRUSTED_PROXY_HOPS entries of
   // X-Forwarded-For are honored; everything left is treated as client-
-  // controlled and ignored. Default 0 (use the socket peer) — safe for
+  // controlled and ignored. Default 0 (use the socket peer) is safe for
   // any deployment but collapses every visitor behind shared NAT to one
   // address. Picking too large lets a client rotate IPs via the header.
   trustedProxyHops: nonNegativeInt(process.env.TRUSTED_PROXY_HOPS, 0, 'TRUSTED_PROXY_HOPS'),
@@ -291,38 +292,60 @@ export function assertProductionConfig(env: NodeJS.ProcessEnv = process.env): vo
     if (!egress.has(host)) missing.push(`E2B_EGRESS_ALLOW:${host}`);
   }
   if (missing.length > 0) {
-    throw new Error(`production gateway configuration is incomplete: ${missing.join(', ')}`);
+    throw new ConfigError(`production gateway configuration is incomplete: ${missing.join(', ')}`);
   }
 }
 
 /**
- * Parse a non-negative integer env value, falling back to `fallback` on
- * an absent value but **refusing** garbage (negative, NaN, fractional)
- * — a silent `Number()` cast would let a typo like
- * `CODER_IP_MAX_PER_IP=true` (→ NaN → `NaN > 0` false) bypass the
- * per-IP gate without any visible signal. Loud-fail at boot is the
- * cheaper failure mode for a security-sensitive control.
+ * Parse a whole-number env value, falling back to `fallback` on an absent one
+ * but refusing garbage (negative, NaN, fractional, out of range). A silent
+ * `Number()` cast would let a typo like `CODER_IP_MAX_PER_IP=true` (NaN, so
+ * `NaN > 0` is false) bypass the per-IP gate without any visible signal.
+ *
+ * `accepted` states the range this specific knob takes, so the failure never
+ * suggests a value that would fail on the next boot.
  */
-function nonNegativeInt(raw: string | undefined, fallback: number, name: string): number {
+function wholeNumber(
+  raw: string | undefined,
+  fallback: number,
+  name: string,
+  min: number,
+  max: number,
+  accepted: string,
+): number {
   if (raw === undefined || raw === '') return fallback;
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n < 0 || !Number.isInteger(n)) {
-    throw new Error(
-      `${name}=${JSON.stringify(raw)} is not a non-negative integer — refusing to boot with a silently-disabled control. Set ${name}=0 to opt out explicitly.`,
-    );
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < min || value > max) {
+    throw new ConfigError(`${name}=${JSON.stringify(raw)} is not valid: ${accepted}`);
   }
-  return n;
+  return value;
+}
+
+function nonNegativeInt(raw: string | undefined, fallback: number, name: string): number {
+  return wholeNumber(
+    raw,
+    fallback,
+    name,
+    0,
+    Number.MAX_SAFE_INTEGER,
+    `set it to a whole number of 0 or more. ${name}=0 opts out of the control explicitly.`,
+  );
 }
 
 function positiveInt(raw: string | undefined, fallback: number, name: string): number {
-  const value = nonNegativeInt(raw, fallback, name);
-  if (value === 0) throw new Error(`${name} must be greater than zero`);
-  return value;
+  return wholeNumber(
+    raw,
+    fallback,
+    name,
+    1,
+    Number.MAX_SAFE_INTEGER,
+    'set it to a whole number of 1 or more',
+  );
 }
 
 function positiveNumber(raw: string | undefined, fallback: number, name: string): number {
   const value = nonNegativeNumber(raw, fallback, name);
-  if (value === 0) throw new Error(`${name} must be greater than zero`);
+  if (value === 0) throw new ConfigError(`${name} must be greater than zero`);
   return value;
 }
 
@@ -333,14 +356,14 @@ function boundedPositiveNumber(
   max: number,
 ): number {
   const value = positiveNumber(raw, fallback, name);
-  if (value > max) throw new Error(`${name} must be no more than ${max}`);
+  if (value > max) throw new ConfigError(`${name} must be no more than ${max}`);
   return value;
 }
 
 function tariffReference(raw: string | undefined, fallback: string, name: string): string {
   if (raw === undefined || raw === '') {
     if (fallback) return fallback;
-    throw new Error(`${name} must be a content-addressed evidence reference`);
+    throw new ConfigError(`${name} must be a content-addressed evidence reference`);
   }
   const value = raw.trim();
   try {
@@ -356,47 +379,40 @@ function tariffReference(raw: string | undefined, fallback: string, name: string
   } catch {
     // Report the same operator-facing contract below.
   }
-  throw new Error(`${name} must be a fetchable HTTPS reference ending in #sha256=<digest>`);
+  throw new ConfigError(`${name} must be a fetchable HTTPS reference ending in #sha256=<digest>`);
 }
 
 function optionalTemplateId(raw: string | undefined): string | undefined {
   const value = raw?.trim();
   if (!value) return undefined;
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]{5,127}$/.test(value)) {
-    throw new Error('E2B_TEMPLATE_ID must be an immutable provider template identifier');
+    throw new ConfigError('E2B_TEMPLATE_ID must be an immutable provider template identifier');
   }
   return value;
 }
 
-function boundedDuration(
+export function boundedInteger(
   raw: string | undefined,
   fallback: number,
   name: string,
   min: number,
   max: number,
 ): number {
-  const value = positiveInt(raw, fallback, name);
-  if (value < min || value > max) throw new Error(`${name} must be between ${min} and ${max}`);
-  return value;
-}
-
-function boundedInteger(
-  raw: string | undefined,
-  fallback: number,
-  name: string,
-  min: number,
-  max: number,
-): number {
-  const value = positiveInt(raw, fallback, name);
-  if (value < min || value > max) throw new Error(`${name} must be between ${min} and ${max}`);
-  return value;
+  return wholeNumber(
+    raw,
+    fallback,
+    name,
+    min,
+    max,
+    `set it to a whole number between ${min} and ${max}`,
+  );
 }
 
 function nonNegativeNumber(raw: string | undefined, fallback: number, name: string): number {
   if (raw === undefined || raw === '') return fallback;
   const value = Number(raw);
   if (!Number.isFinite(value) || value < 0) {
-    throw new Error(`${name} must be a non-negative finite number`);
+    throw new ConfigError(`${name} must be a non-negative finite number`);
   }
   return value;
 }
@@ -408,12 +424,12 @@ function usdPerMillionPrice(
 ): { usd: number; microunits: number } {
   const value = (raw ?? fallback).trim();
   if (!/^\d{1,3}(?:\.\d{1,6})?$/.test(value)) {
-    throw new Error(`${name} must be a decimal with no more than six fractional digits`);
+    throw new ConfigError(`${name} must be a decimal with no more than six fractional digits`);
   }
   const [whole, fraction = ''] = value.split('.');
   const microunits = BigInt(whole!) * 1_000_000n + BigInt(fraction.padEnd(6, '0'));
   if (microunits <= 0n || microunits > 100_000_000n) {
-    throw new Error(`${name} must be greater than zero and no more than 100`);
+    throw new ConfigError(`${name} must be greater than zero and no more than 100`);
   }
   return { usd: Number(microunits) / 1_000_000, microunits: Number(microunits) };
 }
@@ -421,7 +437,7 @@ function usdPerMillionPrice(
 function atomicUnits(raw: string | undefined, fallback: string, name: string): string {
   const value = raw === undefined || raw === '' ? fallback : raw;
   if (!/^[1-9]\d{0,47}$/.test(value)) {
-    throw new Error(`${name} must be a positive whole number of USDC microunits`);
+    throw new ConfigError(`${name} must be a positive whole number of USDC microunits`);
   }
   return value;
 }

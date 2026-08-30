@@ -6,7 +6,7 @@
   "description": "Hermes /v1-compatible gateway that runs a pluggable coding agent inside an ephemeral sandbox and streams tool/file events back to covenantd.",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/server.js",
+    "start": "node dist/main.js",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

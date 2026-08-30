@@ -172,7 +172,7 @@ services:
     rootDir: services/coding-gateway
     buildCommand: pnpm install --ignore-workspace --frozen-lockfile=false && pnpm build
     startCommand: pnpm start
-    healthCheckPath: /v1/capabilities
+    healthCheckPath: /healthz  # unauthenticated liveness; /readyz and /v1/* need CODER_AUTH_TOKEN
     buildFilter:
       paths:
         - services/coding-gateway/**
@@ -187,12 +187,28 @@ services:
         value: "6"
       - key: CODER_MONTHLY_USD
         value: "200"
+      - key: CODER_AUTH_TOKEN
+        sync: false  # bearer for /readyz + /v1/*; unset leaves POST /v1/runs open to anything on the private network
       - key: ANTHROPIC_API_KEY
         sync: false  # set via Render API after first deploy
       - key: OPENAI_API_KEY
         sync: false  # codex backend (coder-05)
       - key: E2B_API_KEY
         sync: false  # ephemeral sandbox provider
+      # GPU workspaces on the Covenant compute market. Unset COMPUTE_API_TOKEN
+      # leaves the gpu_workspace tool out of the agent's tool list entirely; the
+      # bounds below only apply once it is set. $0.20 funds one 1800s booking at
+      # up to 400000 micro-USDC per GPU-hour.
+      - key: COMPUTE_API_TOKEN
+        sync: false  # compute control-plane bearer; set in dashboard
+      - key: COMPUTE_API_URL
+        value: https://compute.opencovenant.org
+      - key: COMPUTE_MAX_USDC_MICROS
+        value: "200000"
+      - key: COMPUTE_MAX_DURATION_SECS
+        value: "1800"
+      - key: COMPUTE_MAX_LAUNCHES
+        value: "1"
 
   # Settlement publisher: tails the daemon's audit feed and posts a
   # `consume_credits` transaction on devnet for each dispatched intent so

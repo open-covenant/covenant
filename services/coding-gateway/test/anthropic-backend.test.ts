@@ -1,6 +1,15 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type Anthropic from '@anthropic-ai/sdk';
-import { execTool, previewOf, withTurnCache } from '../src/backends/anthropic.js';
+import {
+  computePreview,
+  execTool,
+  gpuWorkspaceTool,
+  previewOf,
+  reapNote,
+  toolsFor,
+  withTurnCache,
+} from '../src/backends/anthropic.js';
+import { ComputeSession, type ComputeConfig } from '../src/compute.js';
 import { isolatedShellCommand } from '../src/sandbox-command.js';
 import type { GatewayEvent, Sandbox } from '../src/types.js';
 
@@ -44,6 +53,50 @@ function toolUse(name: string, input: Record<string, unknown>): Anthropic.ToolUs
 
 type Block = Anthropic.ContentBlockParam;
 
+const COMPUTE_CFG: ComputeConfig = {
+  apiUrl: 'https://compute.test',
+  apiToken: 'beta-token',
+  maxUsdcMicros: 200_000,
+  maxDurationSecs: 1_800,
+  maxLaunches: 4,
+};
+
+/** A control plane with one cheap offer, jobs named j1, j2, ... in order. */
+function mockMarket(job: Record<string, unknown> = {}) {
+  let launched = 0;
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(url), init });
+      const collection = String(url).endsWith('/v1/jobs');
+      const body = String(url).endsWith('/v1/offers')
+        ? [
+            {
+              id: 'a',
+              gpu: { model: 'RTX 4090', vram_mib: 49_140 },
+              rate_usdc_micros_per_hour: 100_000,
+              online: true,
+            },
+          ]
+        : {
+            id: collection ? `j${++launched}` : String(url).split('/').pop(),
+            status: 'provisioning',
+            offer_id: 'vast:1:1',
+            maximum_usdc_micros: 50_000,
+            access_url: null,
+            error: null,
+            receipt: null,
+            ...job,
+          };
+      return new Response(JSON.stringify(body), { status: 200 });
+    }),
+  );
+  return calls;
+}
+
+afterEach(() => vi.unstubAllGlobals());
+
 describe('withTurnCache', () => {
   it('marks only the last block of the last message and leaves the input untouched', () => {
     const messages = [
@@ -53,9 +106,7 @@ describe('withTurnCache', () => {
 
     const out = withTurnCache(messages);
 
-    // Only the last block of the last message gets the breakpoint.
     expect((out[1]!.content as Block[])[0]).toMatchObject({ cache_control: { type: 'ephemeral' } });
-    // Earlier messages are untouched.
     expect(
       ((out[0]!.content as Block[])[0] as { cache_control?: unknown }).cache_control,
     ).toBeUndefined();
@@ -111,8 +162,8 @@ describe('execTool', () => {
   });
 
   it('runs a bash tool call through sandbox.exec and formats exit/stdout/stderr', async () => {
-    // The bash arm (anthropic.ts:247-250) is the agent's command tool; the execTool
-    // block pinned only error arms, so dropping this case routes bash to unknown-tool.
+    // bash is the agent's command tool and only its error arms are pinned
+    // elsewhere, so a regression here falls through to the unknown-tool default.
     const sandbox = memSandbox({}, { stdout: 'file.txt', stderr: 'warn', exitCode: 7 });
     const out = await execTool(toolUse('bash', { command: 'ls' }), sandbox, () => {});
     expect(sandbox.execs).toContain(isolatedShellCommand('ls'));
@@ -120,9 +171,8 @@ describe('execTool', () => {
   });
 
   it('splices old_string for new_string once on a successful edit_file', async () => {
-    // The edit_file success path (anthropic.ts:242-245) was untested; only the
-    // not-found / not-unique error arms are pinned, so a splice-math regression
-    // would corrupt the file with every existing test green.
+    // Only the not-found and not-unique arms are pinned above, so splice math
+    // that drifts would corrupt the file with every other test still green.
     const sandbox = memSandbox({ 'a.txt': 'xx foo yy' });
     const emitted: GatewayEvent[] = [];
     const out = await execTool(
@@ -139,9 +189,8 @@ describe('execTool', () => {
   });
 
   it('writes a file via write_file and reports byte length, not char length', async () => {
-    // write_file (anthropic.ts:225-231) emits file.written with Buffer.byteLength of
-    // the content; multi-byte content pins byte-count vs char-count, which the
-    // execTool block never drove. "héllo" is 5 chars but 6 UTF-8 bytes.
+    // file.written must report byte length: "héllo" is 5 characters and 6 UTF-8
+    // bytes, so a char-count regression stays invisible on ASCII content.
     const content = 'héllo';
     const sandbox = memSandbox();
     const emitted: GatewayEvent[] = [];
@@ -170,5 +219,194 @@ describe('previewOf', () => {
 
   it('returns empty for a tool with neither a command nor a path', () => {
     expect(previewOf(toolUse('custom', {}))).toBe('');
+  });
+});
+
+describe('gpu_workspace tool gating', () => {
+  it('advertises the GPU tool only when compute is configured', () => {
+    expect(toolsFor(null).map((t) => t.name)).not.toContain('gpu_workspace');
+    expect(toolsFor(COMPUTE_CFG).map((t) => t.name)).toContain('gpu_workspace');
+    expect(toolsFor(COMPUTE_CFG)).toHaveLength(toolsFor(null).length + 1);
+  });
+
+  it('states the run budget, the launch cap and the booking window', () => {
+    const description = gpuWorkspaceTool(COMPUTE_CFG).description!;
+    expect(description).toContain('4 GPU workspaces');
+    expect(description).toContain('$0.20');
+    expect(description).toContain('default 1800s');
+    expect(description).toContain('maximum 1800s');
+    expect(gpuWorkspaceTool({ ...COMPUTE_CFG, maxLaunches: 1 }).description).toContain(
+      '1 GPU workspace ',
+    );
+  });
+
+  it('tells the model to wait between status polls', () => {
+    // Seven back-to-back polls in 25s, each a full model turn re-sending the
+    // whole transcript, on a provider that takes minutes to provision.
+    expect(gpuWorkspaceTool(COMPUTE_CFG).description).toMatch(/sleep 25/);
+  });
+
+  it('tells the model it cannot reach the workspace and that the URL is a credential', () => {
+    // Sandbox egress is restricted to package registries, so an agent that
+    // believes it can drive the GPU itself spends real USDC on nothing.
+    const description = gpuWorkspaceTool(COMPUTE_CFG).description!;
+    expect(description).toMatch(/cannot use the workspace yourself/);
+    expect(description).toMatch(/package registries/);
+    expect(description).toMatch(/live credential/);
+  });
+});
+
+describe('computePreview', () => {
+  it('records what was booked, so audit does not depend on the model narrating it', () => {
+    const result = JSON.stringify({
+      job_id: 'j1',
+      status: 'provisioning',
+      offer_id: 'vast:46151930:29558',
+      maximum_usdc_micros: 188_593,
+    });
+    expect(computePreview({ action: 'launch' }, result, false)).toBe(
+      'launch job=j1 status=provisioning offer=vast:46151930:29558 booked_max_usdc_micros=188593',
+    );
+  });
+
+  it('records what a cancel charged and refunded', () => {
+    const result = JSON.stringify({
+      job_id: 'j1',
+      status: 'cancelled',
+      access_url: null,
+      error: null,
+      receipt: { runtime_secs: 120, charged_usdc_micros: 12_573, refunded_usdc_micros: 176_020 },
+    });
+    expect(computePreview({ action: 'cancel' }, result, false)).toBe(
+      'cancel job=j1 status=cancelled charged_usdc_micros=12573 refunded_usdc_micros=176020',
+    );
+  });
+
+  it('never carries the access URL, which is a live credential', () => {
+    const result = JSON.stringify({
+      job_id: 'j1',
+      status: 'running',
+      access_url: 'https://gpu.test/lab?token=secret',
+      error: null,
+      receipt: null,
+    });
+    const preview = computePreview({ action: 'status' }, result, false);
+    expect(preview).toBe('status job=j1 status=running');
+    expect(preview).not.toContain('secret');
+  });
+
+  it('records the refusal when a call fails', () => {
+    expect(
+      computePreview(
+        { action: 'launch' },
+        'error: launch cap reached: this run may launch 1 GPU workspace',
+        true,
+      ),
+    ).toBe('launch failed: launch cap reached: this run may launch 1 GPU workspace');
+  });
+});
+
+describe('execTool gpu_workspace', () => {
+  it('refuses when the gateway has no compute configuration', async () => {
+    const call = execTool(toolUse('gpu_workspace', { action: 'launch' }), memSandbox(), () => {});
+    await expect(call).rejects.toThrow(/not enabled on this gateway/);
+  });
+
+  it('launches and reports the job identity and its committed maximum', async () => {
+    mockMarket();
+    const out = await execTool(
+      toolUse('gpu_workspace', { action: 'launch' }),
+      memSandbox(),
+      () => {},
+      new ComputeSession(COMPUTE_CFG),
+    );
+    expect(JSON.parse(out)).toEqual({
+      job_id: 'j1',
+      status: 'provisioning',
+      offer_id: 'vast:1:1',
+      maximum_usdc_micros: 50_000,
+    });
+  });
+
+  it('reads a duration the model sent as a string instead of booking the maximum', async () => {
+    const calls = mockMarket();
+    await execTool(
+      toolUse('gpu_workspace', { action: 'launch', duration_secs: '600' }),
+      memSandbox(),
+      () => {},
+      new ComputeSession(COMPUTE_CFG),
+    );
+    const post = calls.find((c) => c.init?.method === 'POST')!;
+    expect(JSON.parse(String(post.init!.body)).duration_secs).toBe(600);
+  });
+
+  it('returns the access URL, error and receipt on status', async () => {
+    mockMarket({ status: 'running', access_url: 'https://gpu.test/lab?token=secret' });
+    const compute = new ComputeSession(COMPUTE_CFG);
+    await execTool(toolUse('gpu_workspace', { action: 'launch' }), memSandbox(), () => {}, compute);
+    const out = await execTool(
+      toolUse('gpu_workspace', { action: 'status', job_id: 'j1' }),
+      memSandbox(),
+      () => {},
+      compute,
+    );
+    expect(JSON.parse(out)).toMatchObject({
+      job_id: 'j1',
+      status: 'running',
+      access_url: 'https://gpu.test/lab?token=secret',
+    });
+  });
+
+  it('refuses a job id that walks out of the jobs route', async () => {
+    const calls = mockMarket();
+    const compute = new ComputeSession(COMPUTE_CFG);
+    await execTool(toolUse('gpu_workspace', { action: 'launch' }), memSandbox(), () => {}, compute);
+    const call = execTool(
+      toolUse('gpu_workspace', { action: 'status', job_id: '../../v1/admin/tokens' }),
+      memSandbox(),
+      () => {},
+      compute,
+    );
+    await expect(call).rejects.toThrow(/not a job id/);
+    expect(calls.some((c) => c.url.includes('admin'))).toBe(false);
+  });
+
+  it('rejects an action outside the schema enum', async () => {
+    const call = execTool(
+      toolUse('gpu_workspace', { action: 'destroy', job_id: 'j1' }),
+      memSandbox(),
+      () => {},
+      new ComputeSession(COMPUTE_CFG),
+    );
+    await expect(call).rejects.toThrow(/must be launch, status, or cancel/);
+  });
+
+  it('requires a job id for status and cancel', async () => {
+    const call = execTool(
+      toolUse('gpu_workspace', { action: 'cancel' }),
+      memSandbox(),
+      () => {},
+      new ComputeSession(COMPUTE_CFG),
+    );
+    await expect(call).rejects.toThrow(/job_id is required/);
+  });
+});
+
+describe('reapNote', () => {
+  it('is empty when the gateway has no compute session', async () => {
+    expect(await reapNote(null)).toBe('');
+  });
+
+  it('is empty when the run launched nothing', async () => {
+    expect(await reapNote(new ComputeSession(COMPUTE_CFG))).toBe('');
+  });
+
+  it('names every workspace cancelled at run end', async () => {
+    mockMarket({ status: 'cancelled' });
+    const compute = new ComputeSession(COMPUTE_CFG);
+    await compute.launch();
+    await compute.launch();
+    expect(await reapNote(compute)).toBe('\n[gpu_workspace cancelled at run end: j1, j2]');
+    expect(await reapNote(compute)).toBe('');
   });
 });

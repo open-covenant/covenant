@@ -20,19 +20,19 @@ const SYSTEM = `You are a coding agent working inside an ephemeral sandbox with 
 few-minute wall-clock budget, so work efficiently and don't waste steps.
 Build what the user asks: create and edit files, run commands, install
 dependencies, and verify your work by running it. The working directory is the
-workspace root; use relative paths. Prefer small, verifiable steps — write a
+workspace root; use relative paths. Prefer small, verifiable steps: write a
 file, run it, read the output, fix.
 Be fast with dependencies: scaffold without redundant installs (e.g.
 \`create-next-app --skip-install\` then a single install), prefer \`pnpm\` when
-available. A clean typecheck (or a successful build) is enough to verify — you
+available. A clean typecheck (or a successful build) is enough to verify; you
 don't need a full production build unless asked.
-NEVER run a long-lived or blocking command directly — a dev server, \`npm run
+NEVER run a long-lived or blocking command directly: a dev server, \`npm run
 dev\`, a file watcher, \`npm start\`. It never exits, so it hangs your session
 until it times out and burns your whole budget. To check a server, bound it:
 \`timeout 8 npm run dev\` (or background it, sleep, curl, then kill it). To
 verify a web app, prefer a typecheck/build over starting a server at all.
 If an install looks broken, reinstall cleanly (\`rm -rf node_modules\` then
-install) — never hand-delete files inside node_modules.
+install). Never hand-delete files inside node_modules.
 Finish with a short summary of what you built and how to run it.`;
 
 const TOOLS: FunctionTool[] = [
@@ -97,9 +97,10 @@ export class OpenaiBackend implements CodingBackend {
   private _client?: OpenAI;
 
   // Production calls this with no argument; the client is built lazily on first
-  // run so a missing OPENAI_API_KEY errors at run time, not at backend selection
-  // — matching the Anthropic adapter, whose SDK doesn't validate credentials at
-  // construction. Tests inject a fake client to drive the loop without a key.
+  // run so a missing OPENAI_API_KEY errors at run time, not at backend
+  // selection, matching the Anthropic adapter, whose SDK doesn't validate
+  // credentials at construction. Tests inject a fake client to drive the loop
+  // without a key.
   constructor(clientOrApiKey?: OpenAI | string) {
     if (typeof clientOrApiKey === 'string') this.apiKey = clientOrApiKey;
     else if (clientOrApiKey) this.injectedClient = clientOrApiKey;

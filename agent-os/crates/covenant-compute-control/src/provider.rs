@@ -2,13 +2,34 @@ use async_trait::async_trait;
 use covenant_compute::{ComputeOffer, ComputeReceipt, JobStatus, LaunchPlan};
 use thiserror::Error;
 
+/// Durable timestamps a provider needs to bill and to report the provisioning
+/// window. Billing runs from `ready_at_ms`; the window before it is provider
+/// cost the operator absorbs.
+#[derive(Debug, Clone, Copy)]
+pub struct JobClock {
+    pub created_at_ms: u64,
+    pub ready_at_ms: Option<u64>,
+    pub requested_at_ms: u64,
+}
+
+impl JobClock {
+    pub fn billed_from_ms(&self) -> u64 {
+        self.ready_at_ms.unwrap_or(self.requested_at_ms)
+    }
+
+    pub fn provisioning_secs(&self) -> u64 {
+        self.ready_at_ms.map_or(0, |ready| {
+            ready.saturating_sub(self.created_at_ms).div_ceil(1_000)
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ProviderLaunch {
     pub job_id: String,
     pub idempotency_key: String,
     pub plan: LaunchPlan,
-    pub started_at_ms: u64,
-    pub requested_at_ms: u64,
+    pub clock: JobClock,
 }
 
 #[derive(Debug, Clone)]
@@ -16,8 +37,7 @@ pub struct ProviderCancel {
     pub job_id: String,
     pub provider_job_id: Option<String>,
     pub plan: LaunchPlan,
-    pub started_at_ms: u64,
-    pub requested_at_ms: u64,
+    pub clock: JobClock,
 }
 
 #[derive(Debug, Clone)]
@@ -25,8 +45,7 @@ pub struct ProviderPoll {
     pub job_id: String,
     pub provider_job_id: String,
     pub plan: LaunchPlan,
-    pub started_at_ms: u64,
-    pub requested_at_ms: u64,
+    pub clock: JobClock,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,6 +65,8 @@ pub enum ProviderError {
     Rejected,
     #[error("provider returned invalid state")]
     InvalidState,
+    #[error("provider credentials or configuration are rejected")]
+    Configuration,
     #[error("provider operation failed")]
     Operation,
 }

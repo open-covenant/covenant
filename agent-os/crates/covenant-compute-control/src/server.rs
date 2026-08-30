@@ -6,9 +6,13 @@ use std::sync::Arc;
 use covenant_compute::AppCatalog;
 use thiserror::Error;
 use tokio::net::TcpListener;
+use tokio::signal;
 use tokio::time::{self, Duration};
 
-use crate::{router, AuthConfigError, AuthRegistry, ControlPlane, ProviderBackend, SqliteStore};
+use crate::{
+    router, AuthConfigError, AuthRegistry, ControlPlane, ProviderBackend, RecoveryReport,
+    SqliteStore,
+};
 
 pub struct ServerConfig {
     pub bind: SocketAddr,
@@ -47,29 +51,28 @@ pub async fn serve(
     }
     let store = SqliteStore::open(&config.database_path).await?;
     let control = ControlPlane::new(AppCatalog::builtin(), store, provider);
-    let recovery = control.recover().await?;
-    tracing::info!(
-        recovered_jobs = recovery.recovered,
-        deferred_jobs = recovery.deferred,
-        "compute recovery pass completed"
+    // One unrecoverable job must not keep the service from starting; the
+    // reconciler retries every pass.
+    report_recovery(
+        "compute startup reconciliation completed",
+        control.recover().await,
     );
+    // A first launch fails silently when no offer clears the configured
+    // ceilings, so probe once at startup rather than at the first request.
+    match control.offers().await {
+        Ok(offers) => tracing::info!(offers = offers.len(), "compute offer probe completed"),
+        Err(error) => tracing::warn!(%error, "compute offer probe failed"),
+    }
     let reconciler = control.clone();
     tokio::spawn(async move {
         let mut interval = time::interval(Duration::from_secs(15));
         interval.tick().await;
         loop {
             interval.tick().await;
-            match reconciler.recover().await {
-                Ok(report) if report.recovered > 0 || report.deferred > 0 => {
-                    tracing::info!(
-                        recovered_jobs = report.recovered,
-                        deferred_jobs = report.deferred,
-                        "compute reconciliation pass completed"
-                    );
-                }
-                Ok(_) => {}
-                Err(_) => tracing::error!("compute reconciliation pass failed"),
-            }
+            report_recovery(
+                "compute reconciliation pass completed",
+                reconciler.recover().await,
+            );
         }
     });
     let listener = TcpListener::bind(config.bind)
@@ -77,8 +80,49 @@ pub async fn serve(
         .map_err(|_| StartupError::Bind)?;
     tracing::info!(address = %config.bind, provider = %config.provider, "compute control plane listening");
     axum::serve(listener, router(config.auth, control))
+        .with_graceful_shutdown(shutdown())
         .await
         .map_err(|_| StartupError::Serve)
+}
+
+fn report_recovery(message: &'static str, result: Result<RecoveryReport, crate::ServiceError>) {
+    match result {
+        Ok(report) if report.reconciled > 0 || report.deferred > 0 || report.released > 0 => {
+            tracing::info!(
+                jobs_reconciled = report.reconciled,
+                jobs_deferred = report.deferred,
+                allocations_released = report.released,
+                "{message}"
+            );
+        }
+        Ok(_) => {}
+        Err(error) => tracing::error!(%error, "compute reconciliation pass failed"),
+    }
+}
+
+/// Deploys send SIGTERM; draining in flight requests keeps a launch from being
+/// killed between allocating a machine and recording it.
+async fn shutdown() {
+    let interrupt = async {
+        let _ = signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        match signal::unix::signal(signal::unix::SignalKind::terminate()) {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(error) => tracing::error!(%error, "SIGTERM handler could not be installed"),
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        () = interrupt => {}
+        () = terminate => {}
+    }
+    tracing::info!("compute control plane draining in-flight requests");
 }
 
 fn required(name: &'static str) -> Result<String, StartupError> {
@@ -106,6 +150,6 @@ pub enum StartupError {
     Serve,
     #[error("configured production provider is not linked: {0}")]
     ProviderNotLinked(String),
-    #[error("configured production provider is invalid")]
-    ProviderConfiguration,
+    #[error(transparent)]
+    ProviderConfiguration(#[from] crate::VastBackendConfigError),
 }

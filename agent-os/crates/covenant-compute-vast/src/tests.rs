@@ -160,8 +160,8 @@ async fn ranks_only_admitted_offers_under_both_caps() {
             "direct_port_count": {"gte": 1},
             "disk_space": {"gte": 16},
             "allocated_storage": 16,
-            "inet_down_cost": {"lte": 0.0},
-            "inet_up_cost": {"lte": 0.0},
+            "inet_down_cost": {"lte": 0.05},
+            "inet_up_cost": {"lte": 0.05},
             "cuda_max_good": {"gte": 12.4},
             "gpu_arch": {"eq": "nvidia"},
             "cpu_arch": {"eq": "amd64"}
@@ -186,10 +186,11 @@ async fn ranks_only_admitted_offers_under_both_caps() {
         .mount(&server)
         .await;
 
-    let offers = client(&server, 640_000)
+    let ranked = client(&server, 640_000)
         .ranked_offers(8, &[20], 700_000)
         .await
         .unwrap();
+    let offers = ranked.offers;
     assert_eq!(
         offers.iter().map(|offer| offer.id).collect::<Vec<_>>(),
         vec![1]
@@ -206,10 +207,56 @@ async fn ranks_only_admitted_offers_under_both_caps() {
             minor: 4
         }
     );
+    assert_eq!(
+        ranked.survey,
+        OfferSurvey {
+            returned: 4,
+            gpu_class: 1,
+            price_ceiling: 1,
+            rejected_machine: 1,
+            admitted: 1,
+            ..OfferSurvey::default()
+        }
+    );
 }
 
 #[tokio::test]
-async fn honours_the_configurable_bandwidth_ceiling() {
+async fn an_empty_search_reports_which_constraint_emptied_it() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v0/bundles/"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "offers": [offer(1, 10, 0.80), offer(2, 20, 0.81)]
+        })))
+        .mount(&server)
+        .await;
+
+    // The market the operator complained about: every offer priced above the
+    // configured hourly ceiling.
+    let ranked = client(&server, 640_000)
+        .ranked_offers(8, &[], 640_000)
+        .await
+        .unwrap();
+
+    assert!(ranked.offers.is_empty());
+    assert_eq!(ranked.survey.returned, 2);
+    assert_eq!(ranked.survey.price_ceiling, 2);
+    assert_eq!(ranked.survey.admitted, 0);
+}
+
+#[test]
+fn shipped_defaults_clear_the_current_forty_gigabyte_market() {
+    let config = VastConfig::default();
+    assert_eq!(config.max_hourly_micros, 1_000_000);
+    assert_eq!(config.min_gpu_memory_mib, 40_000);
+    assert_eq!(config.max_inet_cost_micros, 50_000);
+    assert!(config.gpu_models.len() > 1);
+    assert!(config.gpu_models.iter().any(|model| model == "L40S"));
+    config.validate().unwrap();
+}
+
+#[tokio::test]
+async fn honors_the_configurable_bandwidth_ceiling() {
     let bw_offer = |id: u64, inet: f64| {
         json!({
             "id": id, "machine_id": id * 10, "gpu_name": "L40S", "gpu_ram": 46068,
@@ -242,13 +289,20 @@ async fn honours_the_configurable_bandwidth_ceiling() {
     let offers = vast.offers().await.unwrap();
     assert_eq!(offers.iter().map(|o| o.id).collect::<Vec<_>>(), vec![1, 2]);
 
-    // A host over the ceiling is a nonconforming response and must be rejected.
+    // A host over the ceiling drops out of the search and is refused outright
+    // once it is the offer being paid for.
     let over = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/api/v0/bundles/"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "offers": [bw_offer(1, 0.0), bw_offer(2, 0.10)]
         })))
+        .mount(&over)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path("/api/v0/asks/2/"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"new_contract": 99})))
+        .expect(0)
         .mount(&over)
         .await;
     let vast = VastClient::new(
@@ -260,10 +314,44 @@ async fn honours_the_configurable_bandwidth_ceiling() {
         ApiToken::new(TOKEN).unwrap(),
     )
     .unwrap();
-    assert!(matches!(
-        vast.offers().await.unwrap_err(),
-        VastError::InvalidResponse { .. }
-    ));
+    let offers = vast.offers().await.unwrap();
+    assert_eq!(offers.iter().map(|o| o.id).collect::<Vec<_>>(), vec![1]);
+
+    let refused = vast
+        .launch_workspace(WorkspaceLaunchRequest {
+            workload_id: "job_123".to_owned(),
+            image: IMAGE.to_owned(),
+            max_hourly_micros: 640_000,
+            rejected_machine_ids: Vec::new(),
+            required_offer: quoted_offer(2, 20, 500_000),
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(refused, VastError::InvalidResponse { .. }));
+    over.verify().await;
+}
+
+#[tokio::test]
+async fn one_nonconforming_offer_does_not_empty_the_search() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v0/bundles/"))
+        .and(body_partial_json(json!({"order": [["dph_total", "asc"]]})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "offers": [offer(1, 10, 0.59), {"id": 2, "machine_id": 20, "gpu_name": "L40S",
+                "gpu_ram": 46068, "dph_total": 0.50, "inet_down_cost": 0.10,
+                "inet_up_cost": 0.0, "verification": "verified", "reliability": 0.999,
+                "rentable": true, "rented": false, "direct_port_count": 2,
+                "cuda_max_good": 12.4, "num_gpus": 1, "gpu_arch": "nvidia",
+                "cpu_arch": "amd64"}]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let offers = client(&server, 640_000).offers().await.unwrap();
+    assert_eq!(offers.iter().map(|o| o.id).collect::<Vec<_>>(), vec![1]);
+    server.verify().await;
 }
 
 #[tokio::test]
@@ -285,9 +373,9 @@ async fn rejects_nonconforming_offer_facts_before_spending() {
         ("num_gpus", Some(json!(2))),
         ("gpu_arch", Some(json!("amd"))),
         ("cpu_arch", Some(json!("arm64"))),
-        ("inet_down_cost", Some(json!(0.001))),
+        ("inet_down_cost", Some(json!(0.06))),
         ("inet_down_cost", None),
-        ("inet_up_cost", Some(json!(0.001))),
+        ("inet_up_cost", Some(json!(0.06))),
         ("inet_up_cost", None),
     ];
 
@@ -838,6 +926,234 @@ async fn destroy_is_idempotent_for_missing_or_gone_instances() {
 }
 
 #[tokio::test]
+async fn a_refused_destroy_is_not_reported_as_destroyed() {
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path("/api/v0/instances/40/"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "success": false, "msg": "instance is not owned by this account"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/api/v0/instances/41/"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"success": true})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = client(&server, 640_000);
+    assert!(matches!(
+        client.destroy(40).await.unwrap_err(),
+        VastError::InvalidResponse {
+            reason: "provider did not destroy the instance",
+            ..
+        }
+    ));
+    client.destroy(41).await.unwrap();
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn a_refused_ssh_attachment_destroys_the_instance() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v0/bundles/"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "offers": [offer(7, 70, 0.59)]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path("/api/v0/asks/7/"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"new_contract": 99})))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v0/instances/99/ssh/"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"success": false})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/api/v0/instances/99/"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"success": true})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let error = client(&server, 640_000)
+        .launch(launch_request(640_000, quoted_offer(7, 70, 590_000)))
+        .await
+        .unwrap_err();
+    assert!(matches!(error, VastError::SshKeyAttachment(_)));
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn a_refused_create_is_a_provider_refusal_not_a_decode_failure() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v0/bundles/"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "offers": [offer(7, 70, 0.59)]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path("/api/v0/asks/7/"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "success": false, "msg": "no such ask"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let error = client(&server, 640_000)
+        .launch_workspace(WorkspaceLaunchRequest {
+            workload_id: "job_123".to_owned(),
+            image: IMAGE.to_owned(),
+            max_hourly_micros: 640_000,
+            rejected_machine_ids: Vec::new(),
+            required_offer: quoted_offer(7, 70, 590_000),
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        VastError::Refused {
+            operation: "workspace creation"
+        }
+    ));
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn a_vanished_instance_reads_as_terminally_absent() {
+    for body in [json!({"instances": null}), json!({})] {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v0/instances/99/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let client = client(&server, 640_000);
+        let facts = client.workspace(&workspace_launch()).await.unwrap();
+        assert_eq!(facts.status, "deleted");
+        assert!(!facts.ready);
+        assert!(facts.access.is_none());
+
+        let facts = client.instance(99).await.unwrap();
+        assert_eq!(facts.status, "deleted");
+        assert!(!facts.ready);
+    }
+
+    let missing = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v0/instances/99/"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&missing)
+        .await;
+    let facts = client(&missing, 640_000)
+        .workspace(&workspace_launch())
+        .await
+        .unwrap();
+    assert_eq!(facts.status, "deleted");
+    assert!(!facts.ready);
+}
+
+#[tokio::test]
+async fn a_non_object_instance_payload_is_rejected() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v0/instances/99/"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"instances": []})))
+        .mount(&server)
+        .await;
+
+    assert!(matches!(
+        client(&server, 640_000)
+            .workspace(&workspace_launch())
+            .await
+            .unwrap_err(),
+        VastError::InvalidResponse {
+            reason: "instance is not an object",
+            ..
+        }
+    ));
+}
+
+#[tokio::test]
+async fn recovery_reads_one_bounded_page_and_fails_closed_when_truncated() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/instances/"))
+        .and(query_param("limit", "25"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "success": true,
+            "next_token": "eyJpZCI6IDh9",
+            "instances": [{"id": 8, "label": "covenant-workload-job_123"}]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    assert!(matches!(
+        client(&server, 640_000)
+            .recover("job_123")
+            .await
+            .unwrap_err(),
+        VastError::InvalidResponse {
+            reason: "instance list was truncated",
+            ..
+        }
+    ));
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn a_harmless_reprice_and_a_rewritten_registry_keep_the_workspace() {
+    let server = MockServer::start().await;
+    let mut body = workspace_instance();
+    body["instances"]["dph_total"] = json!(0.50);
+    body["instances"]["image_uuid"] = json!(IMAGE.trim_start_matches("docker.io/"));
+    Mock::given(method("GET"))
+        .and(path("/api/v0/instances/99/"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        .mount(&server)
+        .await;
+
+    let facts = client(&server, 640_000)
+        .workspace(&workspace_launch())
+        .await
+        .unwrap();
+    assert!(facts.ready);
+    assert_eq!(facts.hourly_micros, 500_000);
+}
+
+#[tokio::test]
+async fn readiness_does_not_require_direct_ports() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v0/instances/13/"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "instances": {
+                "actual_status": "running", "gpu_name": "L40S", "gpu_ram": 46068,
+                "verification": "verified", "dph_total": 0.5363,
+                "ssh_host": "ssh1.vast.ai", "ssh_port": 18004, "machine_id": 24733
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let facts = client(&server, 640_000).instance(13).await.unwrap();
+    assert!(facts.ready);
+    assert_eq!(facts.direct_ports_available, None);
+}
+
+#[tokio::test]
 async fn redirects_are_not_followed() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -878,16 +1194,29 @@ async fn errors_never_include_credentials_or_provider_bodies() {
         )
         .mount(&server)
         .await;
+    // A decode failure carries provider values, so it is asserted on {:?}:
+    // thiserror ignores the alternate flag and would hide a source-borne leak.
+    Mock::given(method("GET"))
+        .and(path("/api/v0/instances/99/"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "instances": {"jupyter_token": 12345, "label": "secret token must not appear"}
+        })))
+        .mount(&server)
+        .await;
 
     let client = client(&server, 640_000);
-    let rendered = format!("{:#}", client.offers().await.unwrap_err());
+    let rendered = format!("{:?}", client.offers().await.unwrap_err());
     assert!(!rendered.contains(TOKEN));
     assert!(!rendered.contains("provider echoed"));
     assert!(!format!("{client:?}").contains(TOKEN));
+
+    let decode = client.workspace(&workspace_launch()).await.unwrap_err();
+    assert!(matches!(decode, VastError::Decode { .. }));
+    assert!(!format!("{decode:?}").contains("secret token must not appear"));
 }
 
 #[tokio::test]
-async fn rejects_malformed_offer_responses() {
+async fn malformed_offers_are_dropped_from_the_search() {
     let cases = [
         json!({"offers": [offer(0, 10, 0.50)]}),
         json!({"offers": [offer(1, 0, 0.50)]}),
@@ -904,10 +1233,7 @@ async fn rejects_malformed_offer_responses() {
             .respond_with(ResponseTemplate::new(200).set_body_json(body))
             .mount(&server)
             .await;
-        assert!(matches!(
-            client(&server, 640_000).offers().await.unwrap_err(),
-            VastError::InvalidResponse { .. }
-        ));
+        assert!(client(&server, 640_000).offers().await.unwrap().is_empty());
     }
 }
 

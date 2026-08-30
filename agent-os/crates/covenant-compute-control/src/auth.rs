@@ -76,7 +76,11 @@ impl AuthRegistry {
             .get(AUTHORIZATION)
             .and_then(|value| value.to_str().ok())
             .ok_or(AuthError::Missing)?;
-        let token = value.strip_prefix("Bearer ").ok_or(AuthError::Invalid)?;
+        // RFC 7235: the scheme is case-insensitive.
+        let (scheme, token) = value.split_once(' ').ok_or(AuthError::Invalid)?;
+        if !scheme.eq_ignore_ascii_case("Bearer") {
+            return Err(AuthError::Invalid);
+        }
         validate_token(token).map_err(|_| AuthError::Invalid)?;
         let supplied = hash_token(token.as_bytes());
 
@@ -175,6 +179,16 @@ mod tests {
         let principal = registry().authenticate(&headers).unwrap();
         assert_eq!(principal.id, "beta-a");
         assert_eq!(principal.spend_cap_usdc_micros, 1_000);
+    }
+
+    #[test]
+    fn the_bearer_scheme_is_matched_case_insensitively() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_static("bearer a-secret-token-for-tests"),
+        );
+        assert_eq!(registry().authenticate(&headers).unwrap().id, "beta-a");
     }
 
     #[test]

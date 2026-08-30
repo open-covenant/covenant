@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use covenant_compute::{ComputeJob, ComputeReceipt, JobStatus, LaunchPlan};
@@ -8,7 +8,11 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::provider::ProviderJob;
+use crate::provider::{JobClock, ProviderJob};
+
+const DEFAULT_PROVISIONING_TIMEOUT_SECS: u64 = 600;
+const PROVISIONING_TIMEOUT_ENV: &str = "COVENANT_COMPUTE_PROVISIONING_TIMEOUT_SECS";
+const JOB_PAGE_LIMIT: usize = 100;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubmitDisposition {
@@ -102,6 +106,14 @@ impl StoredJob {
         }
     }
 
+    pub fn clock(&self, requested_at_ms: u64) -> JobClock {
+        JobClock {
+            created_at_ms: self.created_at_ms,
+            ready_at_ms: self.ready_at_ms,
+            requested_at_ms,
+        }
+    }
+
     pub fn is_prepared(&self) -> bool {
         self.state == StoredState::Prepared
     }
@@ -114,13 +126,31 @@ impl StoredJob {
         self.state.terminal()
     }
 
+    /// Rented time is billed from the first running observation, so the
+    /// deadline runs from there too. Before that the job is bounded by the
+    /// provisioning timeout instead, which the provider bills against us.
     pub fn deadline_reached(&self, now_ms: u64) -> bool {
+        let Some(ready_at_ms) = self.ready_at_ms else {
+            return now_ms >= self.created_at_ms.saturating_add(provisioning_timeout_ms());
+        };
         self.plan
             .duration_secs
             .checked_mul(1_000)
-            .and_then(|duration| self.created_at_ms.checked_add(duration))
+            .and_then(|duration| ready_at_ms.checked_add(duration))
             .is_none_or(|deadline| now_ms >= deadline)
     }
+}
+
+fn provisioning_timeout_ms() -> u64 {
+    static TIMEOUT_MS: OnceLock<u64> = OnceLock::new();
+    *TIMEOUT_MS.get_or_init(|| {
+        std::env::var(PROVISIONING_TIMEOUT_ENV)
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|secs| (1..=86_400).contains(secs))
+            .unwrap_or(DEFAULT_PROVISIONING_TIMEOUT_SECS)
+            .saturating_mul(1_000)
+    })
 }
 
 #[derive(Clone)]
@@ -142,8 +172,6 @@ impl SqliteStore {
                 connection.execute_batch(
                     r#"
                     PRAGMA journal_mode = WAL;
-                    PRAGMA foreign_keys = ON;
-                    PRAGMA synchronous = FULL;
 
                     CREATE TABLE IF NOT EXISTS spend_accounts (
                         owner TEXT PRIMARY KEY,
@@ -192,6 +220,7 @@ impl SqliteStore {
                         created_at_ms INTEGER NOT NULL,
                         updated_at_ms INTEGER NOT NULL,
                         ready_at_ms INTEGER,
+                        provider_released_at_ms INTEGER,
                         UNIQUE (owner, idempotency_key)
                     );
 
@@ -199,19 +228,52 @@ impl SqliteStore {
                     ON jobs(owner, created_at_ms DESC);
                     "#,
                 )?;
-                // Pre-existing databases lack ready_at_ms; a duplicate-column
-                // error means the schema above already carries it.
-                if let Err(error) =
-                    connection.execute("ALTER TABLE jobs ADD COLUMN ready_at_ms INTEGER", [])
-                {
-                    if !error.to_string().contains("duplicate column") {
-                        return Err(error.into());
+                for (column, definition) in [
+                    ("ready_at_ms", "ALTER TABLE jobs ADD COLUMN ready_at_ms INTEGER"),
+                    (
+                        "provider_released_at_ms",
+                        "ALTER TABLE jobs ADD COLUMN provider_released_at_ms INTEGER",
+                    ),
+                ] {
+                    if !jobs_has_column(connection, column)? {
+                        connection.execute(definition, [])?;
                     }
                 }
                 Ok(())
             })
             .await?;
         Ok(store)
+    }
+
+    /// Resolves an already-used idempotency key without touching the provider.
+    /// `Ok(None)` means the key is new.
+    pub async fn replay(
+        &self,
+        owner: &str,
+        idempotency_key: &str,
+        plan: &LaunchPlan,
+    ) -> Result<Option<StoredJob>, StoreError> {
+        let owner = owner.to_owned();
+        let idempotency_key = idempotency_key.to_owned();
+        let plan = plan.clone();
+        self.run(move |connection| {
+            let fingerprint = plan_fingerprint(&plan)?;
+            let existing = connection
+                .query_row(
+                    "SELECT request_fingerprint, id FROM jobs WHERE owner = ?1 AND idempotency_key = ?2",
+                    params![owner, idempotency_key],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )
+                .optional()?;
+            let Some((existing_fingerprint, job_id)) = existing else {
+                return Ok(None);
+            };
+            if existing_fingerprint != fingerprint {
+                return Err(StoreError::IdempotencyConflict);
+            }
+            load_job(connection, &job_id).map(Some)
+        })
+        .await
     }
 
     pub async fn submit(
@@ -263,8 +325,17 @@ impl SqliteStore {
                 params![owner],
                 |row| row.get(0),
             )?;
+            // A reconfigured cap is honored as long as it still covers what the
+            // owner has already reserved or spent.
             if configured_cap != cap {
-                return Err(StoreError::SpendCapChanged);
+                let updated = transaction.execute(
+                    "UPDATE spend_accounts SET cap_usdc_micros = ?2
+                     WHERE owner = ?1 AND ?2 >= reserved_usdc_micros + committed_usdc_micros",
+                    params![owner, cap],
+                )?;
+                if updated != 1 {
+                    return Err(StoreError::SpendCapBelowCommitments);
+                }
             }
             let updated = transaction.execute(
                 "UPDATE spend_accounts
@@ -367,14 +438,15 @@ impl SqliteStore {
         let owner = owner.to_owned();
         self.run(move |connection| {
             let mut statement = connection.prepare(
-                "SELECT id FROM jobs WHERE owner = ?1 ORDER BY created_at_ms DESC, id DESC",
+                "SELECT id FROM jobs WHERE owner = ?1
+                 ORDER BY created_at_ms DESC, id DESC LIMIT ?2",
             )?;
             let ids = statement
-                .query_map(params![owner], |row| row.get::<_, String>(0))?
+                .query_map(params![owner, JOB_PAGE_LIMIT], |row| {
+                    row.get::<_, String>(0)
+                })?
                 .collect::<Result<Vec<_>, _>>()?;
-            ids.into_iter()
-                .map(|id| load_job(connection, &id))
-                .collect()
+            Ok(load_readable(connection, ids))
         })
         .await
     }
@@ -389,9 +461,39 @@ impl SqliteStore {
             let ids = statement
                 .query_map([], |row| row.get::<_, String>(0))?
                 .collect::<Result<Vec<_>, _>>()?;
-            ids.into_iter()
-                .map(|id| load_job(connection, &id))
-                .collect()
+            Ok(load_readable(connection, ids))
+        })
+        .await
+    }
+
+    /// Settled jobs that still hold a provider allocation nobody has confirmed
+    /// torn down. Each one is a machine billing against a closed ledger entry.
+    pub async fn unreleased_jobs(&self) -> Result<Vec<StoredJob>, StoreError> {
+        self.run(move |connection| {
+            let mut statement = connection.prepare(
+                "SELECT id FROM jobs
+                 WHERE state IN ('succeeded', 'failed', 'cancelled')
+                   AND provider_job_id IS NOT NULL
+                   AND provider_released_at_ms IS NULL
+                 ORDER BY created_at_ms, id",
+            )?;
+            let ids = statement
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(load_readable(connection, ids))
+        })
+        .await
+    }
+
+    pub async fn mark_released(&self, id: &str, now_ms: u64) -> Result<(), StoreError> {
+        let id = id.to_owned();
+        self.run(move |connection| {
+            connection.execute(
+                "UPDATE jobs SET provider_released_at_ms = COALESCE(provider_released_at_ms, ?2)
+                 WHERE id = ?1",
+                params![id, sql_u64(now_ms)?],
+            )?;
+            Ok(())
         })
         .await
     }
@@ -436,8 +538,31 @@ impl SqliteStore {
                 connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let current = load_job(&transaction, &id)?;
             if current.state.terminal() {
+                // The allocation still has to be traceable after settlement,
+                // otherwise a failed teardown leaves a machine nobody can find.
+                if valid_provider_text(&provider.id, 300) {
+                    if provider.status.terminal() {
+                        transaction.execute(
+                            "UPDATE jobs
+                             SET provider_job_id = COALESCE(provider_job_id, ?2),
+                                 provider_released_at_ms = COALESCE(provider_released_at_ms, ?3)
+                             WHERE id = ?1",
+                            params![id, provider.id, sql_u64(now_ms)?],
+                        )?;
+                    } else {
+                        // A live allocation reported against a settled job owes
+                        // teardown again, under the id that actually exists.
+                        transaction.execute(
+                            "UPDATE jobs
+                             SET provider_job_id = ?2, provider_released_at_ms = NULL
+                             WHERE id = ?1",
+                            params![id, provider.id],
+                        )?;
+                    }
+                }
+                let job = load_job(&transaction, &id)?;
                 transaction.commit()?;
-                return Ok(current);
+                return Ok(job);
             }
             validate_provider_job(&current, &provider)?;
 
@@ -472,6 +597,7 @@ impl SqliteStore {
             }
             let job = load_job(&transaction, &id)?;
             transaction.commit()?;
+            report_transition(&current, &job, &provider.id);
             Ok(job)
         })
         .await
@@ -493,7 +619,12 @@ impl SqliteStore {
                 transaction.commit()?;
                 return Ok(current);
             }
-            if current.state != StoredState::Prepared || current.provider_job_id.is_some() {
+            // A cancel can land between the launch call and its rejection.
+            if !matches!(
+                current.state,
+                StoredState::Prepared | StoredState::CancelRequested
+            ) || current.provider_job_id.is_some()
+            {
                 return Err(StoreError::InvalidState);
             }
             release_reservation(&transaction, &current, 0)?;
@@ -520,11 +651,32 @@ impl SqliteStore {
             let mut connection = Connection::open(path.as_ref())?;
             connection.busy_timeout(Duration::from_secs(5))?;
             connection.pragma_update(None, "foreign_keys", "ON")?;
+            connection.pragma_update(None, "synchronous", "FULL")?;
             operation(&mut connection)
         })
         .await
         .map_err(|_| StoreError::Worker)?
     }
+}
+
+/// An unreadable row must not take the whole sweep down with it: skipping it
+/// keeps every other job reconcilable.
+fn load_readable(connection: &Connection, ids: Vec<String>) -> Vec<StoredJob> {
+    ids.into_iter()
+        .filter_map(|id| match load_job(connection, &id) {
+            Ok(job) => Some(job),
+            Err(error) => {
+                tracing::error!(job_id = %id, %error, "durable job row could not be read");
+                None
+            }
+        })
+        .collect()
+}
+
+fn jobs_has_column(connection: &Connection, column: &str) -> Result<bool, StoreError> {
+    Ok(connection
+        .prepare("SELECT 1 FROM pragma_table_info('jobs') WHERE name = ?1")?
+        .exists(params![column])?)
 }
 
 fn load_job(connection: &Connection, id: &str) -> Result<StoredJob, StoreError> {
@@ -654,10 +806,12 @@ fn settle(
         .map(serde_json::to_string)
         .transpose()
         .map_err(|_| StoreError::Serialization)?;
+    // A terminal provider report is issued only after teardown was confirmed.
     transaction.execute(
         "UPDATE jobs
          SET state = ?2, provider_job_id = ?3,
-             committed_usdc_micros = ?4, error = ?5, receipt_json = ?6, updated_at_ms = ?7
+             committed_usdc_micros = ?4, error = ?5, receipt_json = ?6, updated_at_ms = ?7,
+             provider_released_at_ms = COALESCE(provider_released_at_ms, ?7)
          WHERE id = ?1",
         params![
             current.id,
@@ -670,6 +824,35 @@ fn settle(
         ],
     )?;
     Ok(())
+}
+
+/// The transitions that move money, reported once the write is durable. An
+/// operator answering a disputed charge otherwise has only the reconciliation
+/// heartbeat to work from.
+fn report_transition(before: &StoredJob, after: &StoredJob, provider_job_id: &str) {
+    if before.ready_at_ms.is_none() && after.ready_at_ms.is_some() {
+        tracing::info!(
+            job_id = %after.id,
+            %provider_job_id,
+            duration_secs = after.plan.duration_secs,
+            "compute job is running and billing has started"
+        );
+    }
+    let Some(receipt) = &after.receipt else {
+        return;
+    };
+    tracing::info!(
+        job_id = %after.id,
+        %provider_job_id,
+        status = after.state.as_str(),
+        runtime_secs = receipt.runtime_secs,
+        charged_usdc_micros = receipt.charged_usdc_micros,
+        refunded_usdc_micros = receipt.refunded_usdc_micros,
+        provisioning_secs = receipt.provisioning_secs,
+        provisioning_usdc_micros = receipt.provisioning_usdc_micros,
+        commitment = %receipt.commitment,
+        "compute job settled"
+    );
 }
 
 fn release_reservation(
@@ -730,8 +913,8 @@ pub enum StoreError {
     IdempotencyConflict,
     #[error("spend cap is exhausted")]
     SpendCapExceeded,
-    #[error("configured spend cap differs from the durable account")]
-    SpendCapChanged,
+    #[error("configured spend cap is below the owner's outstanding commitments")]
+    SpendCapBelowCommitments,
     #[error("amount exceeds the durable store range")]
     AmountOutOfRange,
     #[error("launch plan is invalid")]

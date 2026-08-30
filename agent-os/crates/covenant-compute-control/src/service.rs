@@ -3,7 +3,8 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use covenant_compute::{
-    AppAvailability, AppCatalog, ComputeJob, ComputeOffer, LaunchPlan, TrustClass,
+    AppAvailability, AppCatalog, ComputeApp, ComputeJob, ComputeOffer, LaunchPlan,
+    MIN_DURATION_SECS,
 };
 use futures::{stream, StreamExt};
 use thiserror::Error;
@@ -20,8 +21,10 @@ const RECONCILE_CONCURRENCY: usize = 8;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RecoveryReport {
-    pub recovered: usize,
+    /// In-flight jobs polled successfully, not a failure count.
+    pub reconciled: usize,
     pub deferred: usize,
+    pub released: usize,
 }
 
 #[derive(Clone)]
@@ -29,7 +32,7 @@ pub struct ControlPlane {
     catalog: AppCatalog,
     store: SqliteStore,
     provider: Arc<dyn ProviderBackend>,
-    launch_guards: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
+    pub(crate) launch_guards: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
 }
 
 impl ControlPlane {
@@ -46,10 +49,12 @@ impl ControlPlane {
         }
     }
 
+    pub fn apps(&self) -> &[ComputeApp] {
+        self.catalog.apps()
+    }
+
     pub async fn offers(&self) -> Result<Vec<ComputeOffer>, ServiceError> {
-        let offers = self.provider.offers().await?;
-        validate_offer_set(&offers)?;
-        Ok(offers)
+        conforming_offers(self.provider.offers().await?)
     }
 
     pub async fn submit(
@@ -59,6 +64,16 @@ impl ControlPlane {
         plan: LaunchPlan,
     ) -> Result<ComputeJob, ServiceError> {
         validate_idempotency_key(idempotency_key)?;
+        // A returning caller is resolved against the durable record first.
+        // Validating the plan against live offers would answer a retry, or a
+        // reused key, with a stale-offer error once the market rotated.
+        if let Some(job) = self
+            .store
+            .replay(&principal.id, idempotency_key, &plan)
+            .await?
+        {
+            return self.dispatch(job, SubmitDisposition::Replay).await;
+        }
         self.validate_plan(&plan).await?;
         let submitted = self
             .store
@@ -70,20 +85,27 @@ impl ControlPlane {
                 now_ms()?,
             )
             .await?;
+        self.dispatch(submitted.job, submitted.disposition).await
+    }
 
-        if submitted.job.is_terminal() {
-            return Ok(submitted.job.wire());
+    async fn dispatch(
+        &self,
+        job: StoredJob,
+        disposition: SubmitDisposition,
+    ) -> Result<ComputeJob, ServiceError> {
+        if job.is_terminal() {
+            return Ok(job.wire());
         }
-        if submitted.job.is_cancel_requested() {
-            return self.cancel_coordinated(submitted.job).await;
+        if job.is_cancel_requested() {
+            return self.cancel_coordinated(job).await;
         }
-        if submitted.job.is_prepared() {
-            return self.launch_provider(submitted.job).await;
+        if job.is_prepared() {
+            return self.launch_provider(job).await;
         }
-        if submitted.disposition == SubmitDisposition::Replay {
-            return self.refresh(submitted.job).await;
+        if disposition == SubmitDisposition::Replay {
+            return self.refresh(job).await;
         }
-        Ok(submitted.job.wire())
+        Ok(job.wire())
     }
 
     pub async fn jobs(&self, principal: &Principal) -> Result<Vec<ComputeJob>, ServiceError> {
@@ -115,6 +137,7 @@ impl ControlPlane {
         if job.is_terminal() {
             return Ok(job.wire());
         }
+        tracing::info!(job_id = %job.id, "compute job cancellation requested");
         self.cancel_coordinated(job).await
     }
 
@@ -126,32 +149,74 @@ impl ControlPlane {
             .buffer_unordered(RECONCILE_CONCURRENCY);
         while let Some(result) = results.next().await {
             match result {
-                Ok(_) => report.recovered += 1,
+                Ok(_) => report.reconciled += 1,
+                Err(error @ ServiceError::Provider(ProviderError::Configuration)) => {
+                    tracing::error!(%error, "compute provider credentials are rejected");
+                    first_fatal.get_or_insert(error);
+                }
                 Err(ServiceError::Provider(_)) => report.deferred += 1,
-                Err(error) if first_fatal.is_none() => first_fatal = Some(error),
-                Err(_) => {}
+                Err(error) => {
+                    tracing::error!(%error, "compute job reconciliation failed");
+                    first_fatal.get_or_insert(error);
+                }
             }
         }
+        report.released = self.release_orphans().await?;
         first_fatal.map_or(Ok(report), Err)
+    }
+
+    /// Tears down allocations left behind by a settled job. Without this the
+    /// only teardown attempt is the one made at settlement time.
+    async fn release_orphans(&self) -> Result<usize, ServiceError> {
+        let mut released = 0;
+        for job in self.store.unreleased_jobs().await? {
+            match self.release_provider(&job).await {
+                Ok(()) => released += 1,
+                Err(error) => tracing::error!(
+                    job_id = %job.id,
+                    %error,
+                    "settled job still holds a provider allocation"
+                ),
+            }
+        }
+        Ok(released)
     }
 
     async fn validate_plan(&self, plan: &LaunchPlan) -> Result<(), ServiceError> {
         let catalog_app = self
             .catalog
             .app(&plan.app.id)
-            .map_err(|_| ServiceError::InvalidPlan)?;
-        if catalog_app != &plan.app
-            || plan.app.availability != AppAvailability::Available
-            || plan.app.image.is_none()
-            || plan.duration_secs == 0
-            || plan.duration_secs > plan.app.max_duration_secs
-            || !plan.offer.online
-            || plan.offer.gpu.vram_mib < plan.app.min_vram_mib
-            || plan.offer.trust_class < plan.app.min_trust.max(TrustClass::Open)
-            || plan.maximum_usdc_micros
-                != quote_maximum(plan.offer.rate_usdc_micros_per_hour, plan.duration_secs)?
+            .map_err(|_| PlanRejection::UnknownApp)?;
+        if catalog_app != &plan.app {
+            return Err(PlanRejection::CatalogMismatch.into());
+        }
+        if plan.app.availability != AppAvailability::Available || plan.app.image.is_none() {
+            return Err(PlanRejection::AppUnavailable.into());
+        }
+        if plan.duration_secs < MIN_DURATION_SECS || plan.duration_secs > plan.app.max_duration_secs
         {
-            return Err(ServiceError::InvalidPlan);
+            return Err(PlanRejection::Duration {
+                minimum_secs: MIN_DURATION_SECS,
+                maximum_secs: plan.app.max_duration_secs,
+            }
+            .into());
+        }
+        if !plan.offer.online {
+            return Err(PlanRejection::OfferOffline.into());
+        }
+        if plan.offer.gpu.vram_mib < plan.app.min_vram_mib {
+            return Err(PlanRejection::GpuMemory.into());
+        }
+        if plan.offer.trust_class < plan.app.min_trust {
+            return Err(PlanRejection::TrustClass.into());
+        }
+        let expected = quote_maximum(plan.offer.rate_usdc_micros_per_hour, plan.duration_secs)
+            .ok_or(PlanRejection::OfferRate)?;
+        if plan.maximum_usdc_micros != expected {
+            return Err(PlanRejection::Maximum {
+                expected_usdc_micros: expected,
+            }
+            .into());
         }
 
         let offers = self.offers().await?;
@@ -170,10 +235,7 @@ impl ControlPlane {
         }
         let requested_at_ms = now_ms()?;
         if job.deadline_reached(requested_at_ms) {
-            let job = self
-                .store
-                .request_cancel(&job.owner, &job.id, requested_at_ms)
-                .await?;
+            let job = self.mark_overdue(job, requested_at_ms).await?;
             return self.cancel_provider(job).await;
         }
         if !job.is_prepared() {
@@ -184,12 +246,10 @@ impl ControlPlane {
             job_id: job.id.clone(),
             idempotency_key: job.idempotency_key.clone(),
             plan: job.plan.clone(),
-            started_at_ms: job.ready_at_ms.unwrap_or(requested_at_ms),
-            requested_at_ms,
+            clock: job.clock(requested_at_ms),
         };
         match self.provider.launch(request).await {
             Ok(provider_job) => {
-                let provider_job_id = provider_job.id.clone();
                 let provider_status = provider_job.status;
                 let access_url = provider_job.access_url.clone();
                 let recorded = self
@@ -198,7 +258,13 @@ impl ControlPlane {
                     .await?;
                 if recorded.is_terminal() {
                     if !provider_status.terminal() {
-                        self.cleanup_late_launch(&recorded, provider_job_id).await?;
+                        if let Err(error) = self.release_provider(&recorded).await {
+                            tracing::error!(
+                                job_id = %recorded.id,
+                                %error,
+                                "late launch allocation could not be torn down"
+                            );
+                        }
                     }
                     return Ok(recorded.wire());
                 }
@@ -228,11 +294,9 @@ impl ControlPlane {
         if job.is_terminal() {
             return Ok(job.wire());
         }
-        if job.deadline_reached(now_ms()?) {
-            let job = self
-                .store
-                .request_cancel(&job.owner, &job.id, now_ms()?)
-                .await?;
+        let requested_at_ms = now_ms()?;
+        if job.deadline_reached(requested_at_ms) {
+            let job = self.mark_overdue(job, requested_at_ms).await?;
             return self.cancel_coordinated(job).await;
         }
         if job.is_prepared() {
@@ -241,15 +305,13 @@ impl ControlPlane {
         let Some(provider_job_id) = &job.provider_job_id else {
             return Err(ServiceError::InvalidDurableState);
         };
-        let requested_at_ms = now_ms()?;
         match self
             .provider
             .job(ProviderPoll {
                 job_id: job.id.clone(),
                 provider_job_id: provider_job_id.clone(),
                 plan: job.plan.clone(),
-                started_at_ms: job.ready_at_ms.unwrap_or(requested_at_ms),
-                requested_at_ms,
+                clock: job.clock(requested_at_ms),
             })
             .await
         {
@@ -268,6 +330,24 @@ impl ControlPlane {
         }
     }
 
+    /// Records the deadline before the cancellation it triggers, so a disputed
+    /// charge can be read back from the log in the order it happened.
+    async fn mark_overdue(
+        &self,
+        job: StoredJob,
+        requested_at_ms: u64,
+    ) -> Result<StoredJob, ServiceError> {
+        tracing::info!(
+            job_id = %job.id,
+            duration_secs = job.plan.duration_secs,
+            "compute job reached its deadline"
+        );
+        Ok(self
+            .store
+            .request_cancel(&job.owner, &job.id, requested_at_ms)
+            .await?)
+    }
+
     async fn cancel_provider(&self, job: StoredJob) -> Result<ComputeJob, ServiceError> {
         let requested_at_ms = now_ms()?;
         match self
@@ -276,12 +356,18 @@ impl ControlPlane {
                 job_id: job.id.clone(),
                 provider_job_id: job.provider_job_id.clone(),
                 plan: job.plan.clone(),
-                started_at_ms: job.ready_at_ms.unwrap_or(requested_at_ms),
-                requested_at_ms,
+                clock: job.clock(requested_at_ms),
             })
             .await
         {
             Ok(provider_job) => {
+                if provider_job.status.terminal() {
+                    tracing::info!(
+                        job_id = %job.id,
+                        provider_job_id = %provider_job.id,
+                        "compute provider teardown confirmed"
+                    );
+                }
                 let access_url = provider_job.access_url.clone();
                 Ok(with_access(
                     self.store
@@ -306,29 +392,32 @@ impl ControlPlane {
         self.cancel_provider(job).await
     }
 
-    async fn cleanup_late_launch(
-        &self,
-        job: &StoredJob,
-        provider_job_id: String,
-    ) -> Result<(), ServiceError> {
+    async fn release_provider(&self, job: &StoredJob) -> Result<(), ServiceError> {
+        let requested_at_ms = now_ms()?;
         let cleanup = self
             .provider
             .cancel(ProviderCancel {
                 job_id: job.id.clone(),
-                provider_job_id: Some(provider_job_id),
+                provider_job_id: job.provider_job_id.clone(),
                 plan: job.plan.clone(),
-                started_at_ms: job.ready_at_ms.unwrap_or(u64::MAX),
-                requested_at_ms: now_ms()?,
+                clock: job.clock(requested_at_ms),
             })
             .await?;
         if !cleanup.status.terminal() {
             return Err(ServiceError::Provider(ProviderError::InvalidState));
         }
+        self.store.mark_released(&job.id, now_ms()?).await?;
+        tracing::info!(
+            job_id = %job.id,
+            provider_job_id = %cleanup.id,
+            "compute provider teardown confirmed after settlement"
+        );
         Ok(())
     }
 
     async fn launch_guard(&self, job_id: &str) -> Arc<Mutex<()>> {
         let mut guards = self.launch_guards.lock().await;
+        guards.retain(|_, guard| Arc::strong_count(guard) > 1);
         Arc::clone(
             guards
                 .entry(job_id.to_owned())
@@ -337,11 +426,9 @@ impl ControlPlane {
     }
 
     async fn reconcile_job(&self, job: StoredJob) -> Result<ComputeJob, ServiceError> {
-        if job.deadline_reached(now_ms()?) && !job.is_cancel_requested() {
-            let job = self
-                .store
-                .request_cancel(&job.owner, &job.id, now_ms()?)
-                .await?;
+        let requested_at_ms = now_ms()?;
+        if job.deadline_reached(requested_at_ms) && !job.is_cancel_requested() {
+            let job = self.mark_overdue(job, requested_at_ms).await?;
             return self.cancel_coordinated(job).await;
         }
         if job.is_prepared() {
@@ -361,28 +448,37 @@ fn with_access(mut job: ComputeJob, access_url: Option<String>) -> ComputeJob {
     job
 }
 
-fn validate_offer_set(offers: &[ComputeOffer]) -> Result<(), ServiceError> {
+/// One malformed offer must not take the catalog down; losing every offer to
+/// malformation is a provider fault worth reporting.
+fn conforming_offers(offers: Vec<ComputeOffer>) -> Result<Vec<ComputeOffer>, ServiceError> {
     let mut ids = std::collections::HashSet::new();
-    for offer in offers {
-        if offer.id.is_empty()
-            || offer.id.len() > 200
-            || offer.gpu.model.trim().is_empty()
-            || offer.gpu.vram_mib == 0
-            || offer.rate_usdc_micros_per_hour == 0
-            || !ids.insert(&offer.id)
-        {
-            return Err(ServiceError::InvalidProviderOffers);
-        }
+    let supplied = offers.len();
+    let retained: Vec<ComputeOffer> = offers
+        .into_iter()
+        .filter(|offer| {
+            let valid = !offer.id.is_empty()
+                && offer.id.len() <= 200
+                && !offer.gpu.model.trim().is_empty()
+                && offer.gpu.vram_mib != 0
+                && offer.rate_usdc_micros_per_hour != 0
+                && ids.insert(offer.id.clone());
+            if !valid {
+                tracing::warn!(offer_id = %offer.id, "dropping malformed provider offer");
+            }
+            valid
+        })
+        .collect();
+    if retained.is_empty() && supplied > 0 {
+        return Err(ServiceError::InvalidProviderOffers);
     }
-    Ok(())
+    Ok(retained)
 }
 
-fn quote_maximum(rate_per_hour: u64, duration_secs: u64) -> Result<u64, ServiceError> {
+fn quote_maximum(rate_per_hour: u64, duration_secs: u64) -> Option<u64> {
     rate_per_hour
         .checked_mul(duration_secs)
         .and_then(|value| value.checked_add(3_599))
         .and_then(|value| value.checked_div(3_600))
-        .ok_or(ServiceError::InvalidPlan)
 }
 
 fn validate_idempotency_key(value: &str) -> Result<(), ServiceError> {
@@ -412,10 +508,53 @@ fn now_ms() -> Result<u64, ServiceError> {
     u64::try_from(millis).map_err(|_| ServiceError::Clock)
 }
 
+/// Why a launch plan was refused. Every arm names the field the caller has to
+/// change; collapsing them loses the only clue a first-time caller gets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum PlanRejection {
+    #[error("launch plan names an app that is not in the catalog")]
+    UnknownApp,
+    #[error("launch plan does not match the released catalog")]
+    CatalogMismatch,
+    #[error("app is not released for launch")]
+    AppUnavailable,
+    #[error("duration_secs must be between {minimum_secs} and {maximum_secs}")]
+    Duration {
+        minimum_secs: u64,
+        maximum_secs: u64,
+    },
+    #[error("the selected offer is offline")]
+    OfferOffline,
+    #[error("the selected offer has less GPU memory than the app requires")]
+    GpuMemory,
+    #[error("the selected offer is below the app's minimum trust class")]
+    TrustClass,
+    #[error("the offer rate cannot be priced for this duration")]
+    OfferRate,
+    #[error("maximum_usdc_micros must be {expected_usdc_micros} for this offer and duration")]
+    Maximum { expected_usdc_micros: u64 },
+}
+
+impl PlanRejection {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::UnknownApp => "unknown_app",
+            Self::CatalogMismatch => "invalid_launch_plan",
+            Self::AppUnavailable => "app_unavailable",
+            Self::Duration { .. } => "invalid_duration",
+            Self::OfferOffline => "offer_offline",
+            Self::GpuMemory => "insufficient_gpu_memory",
+            Self::TrustClass => "insufficient_trust",
+            Self::OfferRate => "invalid_offer_rate",
+            Self::Maximum { .. } => "invalid_maximum_usdc_micros",
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum ServiceError {
-    #[error("launch plan does not match the immutable catalog")]
-    InvalidPlan,
+    #[error(transparent)]
+    InvalidPlan(#[from] PlanRejection),
     #[error("launch offer is no longer available")]
     StaleOffer,
     #[error("provider returned invalid offers")]

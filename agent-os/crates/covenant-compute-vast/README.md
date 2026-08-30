@@ -10,10 +10,18 @@ adapter can create a billable instance:
 - exactly one NVIDIA GPU on an AMD64 host
 - at least one direct port
 - `cuda_max_good >= 12.4`
+- per-GB upload and download charges present and at or below the configured
+  ceiling, which defaults to $0.05
 
 The adapter retains those facts on `Offer` and re-runs the search immediately
 before creation. Quote identity, machine, GPU, memory, and price must still
 match the accepted `OfferQuote`.
+
+`ranked_offers` returns the admitted offers together with an `OfferSurvey`
+counting what the provider returned and how many offers each filter removed.
+The control plane logs it, so an empty result names the constraint that emptied
+it. Every filter and its environment variable is documented in the
+[control-plane README](../covenant-compute-control/README.md).
 
 The only registered workspace image is the immutable
 `docker.io/nvidia/cuda@sha256:cff3a0d82d2c2b47bab252d67fa9b34a20ef4c50781d98501b5c7367ea9afd10`

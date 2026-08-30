@@ -1,8 +1,10 @@
 //! Managed Vast.ai capacity for Covenant Compute.
 //!
-//! [`VastClient::launch`] is the only public creation path. It selects an
-//! offer below both the operator ceiling and the workload cap before creating
-//! a digest-pinned instance and attaching its SSH key.
+//! Instances are created only by [`VastClient::launch_workspace`], which runs
+//! the Jupyter workspace, and [`VastClient::launch`], which runs an SSH
+//! workload. Both re-confirm the quoted offer against a live search and refuse
+//! anything above the operator ceiling or the workload cap before creating a
+//! digest-pinned instance.
 //!
 //! This file modifies Apache-2.0-licensed upstream software. See `NOTICE`.
 
@@ -16,17 +18,23 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use url::{Host, Url};
 
 const DEFAULT_API_URL: &str = "https://console.vast.ai/api/v0/";
-const DEFAULT_MAX_HOURLY_MICROS: u64 = 640_000;
+// $1.00/hr matches the 30-minute, $0.50 default allowance the catalog ships and
+// clears the 40 GB professional class, which trades between $0.34 and $1.00.
+const DEFAULT_MAX_HOURLY_MICROS: u64 = 1_000_000;
 const DEFAULT_DISK_GB: u32 = 16;
-const DEFAULT_GPU_MODELS: &str = "L40S";
-const DEFAULT_MIN_GPU_MEMORY_MIB: u64 = 45_000;
-// Max acceptable per-GB bandwidth cost (USD micros). 0 keeps the original
-// free-bandwidth-only behavior; set the env to accept cheap-bandwidth hosts.
-const DEFAULT_MAX_INET_COST_MICROS: u64 = 0;
+const DEFAULT_GPU_MODELS: &str = "L40S,L40,RTX 6000Ada,RTX A6000,A40,A100 PCIE,A100 SXM4";
+const DEFAULT_MIN_GPU_MEMORY_MIB: u64 = 40_000;
+// Max acceptable per-GB bandwidth cost (USD micros). Hosts in this class no
+// longer offer free transfer, so a zero ceiling admits nothing.
+const DEFAULT_MAX_INET_COST_MICROS: u64 = 50_000;
 const MAX_INET_COST_MICROS: u64 = 1_000_000;
 const MAX_HOURLY_MICROS: u64 = 10_000_000;
 const MAX_RESPONSE_BYTES: usize = 1_048_576;
 const MIN_RELIABILITY: f64 = 0.99;
+/// Terminal status reported for an instance the provider no longer has.
+const ABSENT_STATUS: &str = "deleted";
+/// Maximum page size accepted by the keyset-paginated instance list.
+const INSTANCE_PAGE_LIMIT: &str = "25";
 const WORKSPACE_IMAGE: &str =
     "docker.io/nvidia/cuda@sha256:cff3a0d82d2c2b47bab252d67fa9b34a20ef4c50781d98501b5c7367ea9afd10";
 const WORKSPACE_MIN_CUDA: CudaVersion = CudaVersion {
@@ -53,8 +61,12 @@ pub enum VastError {
     InvalidRequest(&'static str),
     #[error("Vast credentials are not configured")]
     CredentialsMissing,
-    #[error("could not read the Vast credential file")]
-    CredentialRead(#[source] std::io::Error),
+    #[error("could not read the Vast credential file {path}")]
+    CredentialRead {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
     #[error("the Vast API credential is invalid")]
     InvalidCredential,
     #[error("could not build the Vast HTTP client")]
@@ -72,17 +84,21 @@ pub enum VastError {
     },
     #[error("{operation} response exceeded {MAX_RESPONSE_BYTES} bytes")]
     ResponseTooLarge { operation: &'static str },
-    #[error("{operation} returned invalid JSON")]
+    // The serde error is deliberately not a source: it quotes provider values,
+    // which can carry workspace credentials.
+    #[error("{operation} returned invalid JSON at line {line} column {column}")]
     Decode {
         operation: &'static str,
-        #[source]
-        source: serde_json::Error,
+        line: usize,
+        column: usize,
     },
     #[error("{operation} returned invalid data: {reason}")]
     InvalidResponse {
         operation: &'static str,
         reason: &'static str,
     },
+    #[error("the provider refused {operation}")]
+    Refused { operation: &'static str },
     #[error("no eligible GPU capacity is available within the workload cap")]
     NoCapacity,
     #[error("the required offer is no longer available at the quoted terms")]
@@ -115,7 +131,11 @@ impl ApiToken {
     }
 
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
-        let value = fs::read_to_string(path).map_err(VastError::CredentialRead)?;
+        let path = path.as_ref();
+        let value = fs::read_to_string(path).map_err(|source| VastError::CredentialRead {
+            path: path.display().to_string(),
+            source,
+        })?;
         Self::new(value)
     }
 
@@ -289,6 +309,30 @@ pub struct Offer {
     pub gpu_count: u16,
     pub gpu_arch: String,
     pub cpu_arch: String,
+}
+
+/// Why an offer search ended up the size it did. An empty result is otherwise
+/// indistinguishable from an empty market, and the operator cannot tell which
+/// configured ceiling to move.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct OfferSurvey {
+    /// Offers the provider returned for the configured search.
+    pub returned: usize,
+    pub bandwidth_cost: usize,
+    /// Dropped for missing or contradictory host evidence: verification,
+    /// reliability, direct ports, architecture, or CUDA compatibility.
+    pub host_evidence: usize,
+    pub gpu_class: usize,
+    pub price_ceiling: usize,
+    pub rejected_machine: usize,
+    /// Offers left after ranking and the caller's limit.
+    pub admitted: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RankedOffers {
+    pub offers: Vec<Offer>,
+    pub survey: OfferSurvey,
 }
 
 impl Offer {
@@ -479,6 +523,37 @@ impl VastClient {
     }
 
     pub async fn offers(&self) -> Result<Vec<Offer>> {
+        Ok(self.surveyed_offers().await?.0)
+    }
+
+    async fn surveyed_offers(&self) -> Result<(Vec<Offer>, OfferSurvey)> {
+        let ceiling = self.config.max_inet_cost_micros;
+        let raw = self.raw_offers().await?;
+        let mut survey = OfferSurvey {
+            returned: raw.len(),
+            ..OfferSurvey::default()
+        };
+        let mut offers = Vec::with_capacity(raw.len());
+        for entry in raw {
+            if check_inet_cost(&entry, ceiling).is_err() {
+                survey.bandwidth_cost += 1;
+                continue;
+            }
+            match Offer::try_from(entry) {
+                Ok(offer) => offers.push(offer),
+                Err(_) => survey.host_evidence += 1,
+            }
+        }
+        let mut ids = HashSet::with_capacity(offers.len());
+        if offers.iter().any(|offer| !ids.insert(offer.id)) {
+            return Err(invalid_response("offer search", "offer IDs are duplicated"));
+        }
+        Ok((offers, survey))
+    }
+
+    /// Search results as returned. Nonconforming entries are only fatal once an
+    /// offer is selected; see [`VastClient::confirm_offer`].
+    async fn raw_offers(&self) -> Result<Vec<RawOffer>> {
         let request = self
             .client
             .post(self.endpoint("bundles/")?)
@@ -500,23 +575,13 @@ impl VastClient {
                 "gpu_arch": {"eq": "nvidia"},
                 "cpu_arch": {"eq": "amd64"},
                 "type": "ondemand",
+                // Vast orders by score by default and truncates server-side, so
+                // without this the cheapest hosts never reach ranked_offers.
+                "order": [["dph_total", "asc"]],
                 "limit": 64
             }));
         let response: OfferResponse = self.request_json(request, "offer search").await?;
-        let ceiling = self.config.max_inet_cost_micros;
-        let offers: Vec<Offer> = response
-            .offers
-            .into_iter()
-            .map(|raw| {
-                check_inet_cost(&raw, ceiling)?;
-                Offer::try_from(raw)
-            })
-            .collect::<Result<_>>()?;
-        let mut ids = HashSet::with_capacity(offers.len());
-        if offers.iter().any(|offer| !ids.insert(offer.id)) {
-            return Err(invalid_response("offer search", "offer IDs are duplicated"));
-        }
-        Ok(offers)
+        Ok(response.offers)
     }
 
     pub async fn ranked_offers(
@@ -524,7 +589,7 @@ impl VastClient {
         limit: usize,
         rejected_machine_ids: &[u64],
         workload_cap_micros: u64,
-    ) -> Result<Vec<Offer>> {
+    ) -> Result<RankedOffers> {
         if !(1..=64).contains(&limit) {
             return Err(VastError::InvalidRequest(
                 "offer limit must be between 1 and 64",
@@ -541,19 +606,23 @@ impl VastClient {
             ));
         }
         let ceiling = self.config.max_hourly_micros.min(workload_cap_micros);
-        let mut offers: Vec<_> = self
-            .offers()
-            .await?
-            .into_iter()
-            .filter(|offer| {
-                self.admits(&offer.gpu_model, offer.gpu_memory_mib)
-                    && offer.hourly_micros <= ceiling
-                    && !rejected_machine_ids.contains(&offer.machine_id)
-            })
-            .collect();
+        let (candidates, mut survey) = self.surveyed_offers().await?;
+        let mut offers = Vec::with_capacity(candidates.len());
+        for offer in candidates {
+            if !self.admits(&offer.gpu_model, offer.gpu_memory_mib) {
+                survey.gpu_class += 1;
+            } else if offer.hourly_micros > ceiling {
+                survey.price_ceiling += 1;
+            } else if rejected_machine_ids.contains(&offer.machine_id) {
+                survey.rejected_machine += 1;
+            } else {
+                offers.push(offer);
+            }
+        }
         offers.sort_by_key(|offer| (offer.hourly_micros, offer.id));
         offers.truncate(limit);
-        Ok(offers)
+        survey.admitted = offers.len();
+        Ok(RankedOffers { offers, survey })
     }
 
     pub async fn launch(&self, request: LaunchRequest) -> Result<Launch> {
@@ -612,29 +681,47 @@ impl VastClient {
 
     pub async fn instance(&self, instance_id: u64) -> Result<InstanceFacts> {
         validate_instance_id(instance_id)?;
-        let request = self
-            .client
-            .get(self.endpoint(&format!("instances/{instance_id}/"))?)
-            .bearer_auth(self.token.expose());
-        let response: InstanceResponse = self.request_json(request, "instance lookup").await?;
-        response.instances.into_facts(instance_id)
+        let Some(instance) = self.show(instance_id, "instance lookup").await? else {
+            return Ok(absent_instance_facts(instance_id));
+        };
+        instance.into_facts(instance_id)
     }
 
     pub async fn workspace(&self, launch: &WorkspaceLaunch) -> Result<WorkspaceFacts> {
         validate_instance_id(launch.instance_id)?;
         launch.offer.validate()?;
         validate_workspace_image(&launch.image)?;
-        let request = self
-            .client
-            .get(self.endpoint(&format!("instances/{}/", launch.instance_id))?)
-            .bearer_auth(self.token.expose());
-        let response: InstanceResponse = self.request_json(request, "workspace lookup").await?;
-        let instance = if response.instances.needs_port_mapping_fallback()? {
+        let Some(instance) = self.show(launch.instance_id, "workspace lookup").await? else {
+            return Ok(absent_workspace_facts(launch.instance_id));
+        };
+        let instance = if instance.needs_port_mapping_fallback()? {
             self.workspace_instance_v1(launch.instance_id).await?
         } else {
-            response.instances
+            instance
         };
         instance.into_workspace_facts(launch)
+    }
+
+    /// `None` reports an instance that no longer exists, which Vast signals
+    /// either with a null body or with a 404.
+    async fn show(&self, instance_id: u64, operation: &'static str) -> Result<Option<RawInstance>> {
+        let request = self
+            .client
+            .get(self.endpoint(&format!("instances/{instance_id}/"))?)
+            .bearer_auth(self.token.expose());
+        let response = self.send(request, operation).await?;
+        if matches!(response.status(), StatusCode::NOT_FOUND | StatusCode::GONE) {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            return Err(VastError::UnexpectedStatus {
+                operation,
+                status: response.status(),
+            });
+        }
+        decode_json::<InstanceResponse>(response, operation)
+            .await?
+            .instance(operation)
     }
 
     pub async fn recover(&self, workload_id: &str) -> Result<Vec<u64>> {
@@ -650,13 +737,24 @@ impl VastClient {
                 &serde_json::json!({"label": {"eq": &label}}).to_string(),
             )
             .append_pair("select_cols", r#"["id","label"]"#)
-            .append_pair("limit", "100");
+            .append_pair("limit", INSTANCE_PAGE_LIMIT);
         let request = self.client.get(url).bearer_auth(self.token.expose());
         let response: InstancesResponse = self.request_json(request, "instance recovery").await?;
         if !response.success {
             return Err(invalid_response(
                 "instance recovery",
                 "provider reported an unsuccessful lookup",
+            ));
+        }
+        // A truncated page cannot prove an instance is absent, and acting on
+        // that would either double-launch or leave a rental running.
+        if response
+            .next_token
+            .is_some_and(|token| !token.trim().is_empty())
+        {
+            return Err(invalid_response(
+                "instance recovery",
+                "instance list was truncated",
             ));
         }
         let mut matches = Vec::new();
@@ -698,15 +796,21 @@ impl VastClient {
                 operation: "instance destruction",
                 source,
             })?;
-        if matches!(response.status(), StatusCode::NOT_FOUND | StatusCode::GONE)
-            || response.status().is_success()
-        {
+        if matches!(response.status(), StatusCode::NOT_FOUND | StatusCode::GONE) {
             return Ok(());
         }
-        Err(VastError::UnexpectedStatus {
-            operation: "instance destruction",
-            status: response.status(),
-        })
+        if !response.status().is_success() {
+            return Err(VastError::UnexpectedStatus {
+                operation: "instance destruction",
+                status: response.status(),
+            });
+        }
+        confirm_ack(
+            response,
+            "instance destruction",
+            "provider did not destroy the instance",
+        )
+        .await
     }
 
     async fn create(&self, offer_id: u64, image: &str, label: &str) -> Result<u64> {
@@ -726,13 +830,7 @@ impl VastClient {
                 cancel_unavail: true,
             });
         let response: CreateResponse = self.request_json(request, "instance creation").await?;
-        if response.new_contract == 0 {
-            return Err(VastError::InvalidResponse {
-                operation: "instance creation",
-                reason: "instance ID is zero",
-            });
-        }
-        Ok(response.new_contract)
+        response.instance_id("instance creation")
     }
 
     async fn create_workspace(&self, offer_id: u64, image: &str, label: &str) -> Result<u64> {
@@ -754,13 +852,7 @@ impl VastClient {
                 cancel_unavail: true,
             });
         let response: CreateResponse = self.request_json(request, "workspace creation").await?;
-        if response.new_contract == 0 {
-            return Err(invalid_response(
-                "workspace creation",
-                "instance ID is zero",
-            ));
-        }
-        Ok(response.new_contract)
+        response.instance_id("workspace creation")
     }
 
     async fn workspace_instance_v1(&self, instance_id: u64) -> Result<RawInstance> {
@@ -812,13 +904,17 @@ impl VastClient {
         workload_cap_micros: u64,
         rejected_machine_ids: &[u64],
     ) -> Result<Offer> {
-        let offer = self
-            .offers()
+        let raw = self
+            .raw_offers()
             .await?
             .into_iter()
-            .find(|offer| offer.id == required.id)
-            .filter(|offer| offer.quote() == *required)
+            .find(|raw| raw.id == required.id)
             .ok_or(VastError::OfferChanged)?;
+        check_inet_cost(&raw, self.config.max_inet_cost_micros)?;
+        let offer = Offer::try_from(raw)?;
+        if offer.quote() != *required {
+            return Err(VastError::OfferChanged);
+        }
         let ceiling = self.config.max_hourly_micros.min(workload_cap_micros);
         if !self.admits(&offer.gpu_model, offer.gpu_memory_mib)
             || offer.hourly_micros > ceiling
@@ -837,7 +933,12 @@ impl VastClient {
             .post(self.endpoint(&format!("instances/{instance_id}/ssh/"))?)
             .bearer_auth(self.token.expose())
             .json(&serde_json::json!({"ssh_key": ssh_key}));
-        self.request_empty(request, "SSH key attachment").await
+        self.request_empty(
+            request,
+            "SSH key attachment",
+            "provider did not attach the SSH key",
+        )
+        .await
     }
 
     fn endpoint(&self, path: &str) -> Result<Url> {
@@ -847,16 +948,20 @@ impl VastClient {
             .map_err(|_| VastError::Configuration("Vast API endpoint is invalid"))
     }
 
-    async fn request_empty(&self, request: RequestBuilder, operation: &'static str) -> Result<()> {
+    async fn request_empty(
+        &self,
+        request: RequestBuilder,
+        operation: &'static str,
+        reason: &'static str,
+    ) -> Result<()> {
         let response = self.send(request, operation).await?;
-        if response.status().is_success() {
-            Ok(())
-        } else {
-            Err(VastError::UnexpectedStatus {
+        if !response.status().is_success() {
+            return Err(VastError::UnexpectedStatus {
                 operation,
                 status: response.status(),
-            })
+            });
         }
+        confirm_ack(response, operation, reason).await
     }
 
     async fn request_json<T: DeserializeOwned>(
@@ -1043,13 +1148,54 @@ struct WorkspaceCreateRequest<'a> {
 }
 
 #[derive(Deserialize)]
+struct ProviderAck {
+    #[serde(default)]
+    success: Option<bool>,
+}
+
+#[derive(Deserialize)]
 struct CreateResponse {
-    new_contract: u64,
+    #[serde(default)]
+    success: Option<bool>,
+    #[serde(default)]
+    new_contract: Option<u64>,
+}
+
+impl CreateResponse {
+    fn instance_id(self, operation: &'static str) -> Result<u64> {
+        if self.success == Some(false) {
+            return Err(VastError::Refused { operation });
+        }
+        self.new_contract
+            .filter(|id| *id != 0)
+            .ok_or_else(|| invalid_response(operation, "instance ID is zero"))
+    }
 }
 
 #[derive(Deserialize)]
 struct InstanceResponse {
-    instances: RawInstance,
+    #[serde(default)]
+    instances: Option<serde_json::Value>,
+}
+
+impl InstanceResponse {
+    /// `None` means the instance no longer exists: Vast answers a show for a
+    /// destroyed instance with HTTP 200 and a null body.
+    fn instance(self, operation: &'static str) -> Result<Option<RawInstance>> {
+        match self.instances {
+            None | Some(serde_json::Value::Null) => Ok(None),
+            Some(value @ serde_json::Value::Object(_)) => {
+                let instance =
+                    serde_json::from_value(value).map_err(|error| VastError::Decode {
+                        operation,
+                        line: error.line(),
+                        column: error.column(),
+                    })?;
+                Ok(Some(instance))
+            }
+            Some(_) => Err(invalid_response(operation, "instance is not an object")),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -1153,11 +1299,12 @@ impl RawInstance {
             .unwrap_or_default();
         let (direct_ports_available, direct_port_start) =
             parse_direct_port(self.direct_port_start)?;
+        // direct_port_start is absent on hosts without direct ports, so it
+        // cannot gate readiness.
         let complete = self.gpu_name.is_some()
             && self.gpu_ram.is_some()
             && self.verification.is_some()
             && self.dph_total.is_some()
-            && self.direct_port_start.is_some()
             && self.machine_id.is_some_and(|id| id != 0);
         let ready = self.actual_status.as_deref() == Some("running") && complete;
         let status = match self.actual_status {
@@ -1234,11 +1381,17 @@ impl RawInstance {
             ));
         }
 
-        reject_mismatch(
-            self.image_uuid.as_deref(),
-            &launch.image,
-            "workspace image does not match",
-        )?;
+        // Vast rewrites the registry prefix, so only the digest is comparable.
+        if self
+            .image_uuid
+            .as_deref()
+            .is_some_and(|image| image_digest(image) != image_digest(&launch.image))
+        {
+            return Err(invalid_response(
+                "workspace lookup",
+                "workspace image does not match",
+            ));
+        }
         reject_mismatch(
             self.label.as_deref(),
             &launch.label,
@@ -1294,10 +1447,11 @@ impl RawInstance {
             .map(hourly_micros)
             .transpose()
             .map_err(|reason| invalid_response("workspace lookup", reason))?;
-        if hourly_micros.is_some_and(|value| value != launch.offer.hourly_micros) {
+        // A reprice below the quote is harmless; only an overcharge is fatal.
+        if hourly_micros.is_some_and(|value| value > launch.offer.hourly_micros) {
             return Err(invalid_response(
                 "workspace lookup",
-                "workspace price does not match",
+                "workspace price is above the quote",
             ));
         }
 
@@ -1357,6 +1511,8 @@ struct InstancesResponse {
     success: bool,
     #[serde(default)]
     instances: Vec<ListedInstance>,
+    #[serde(default)]
+    next_token: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1376,6 +1532,28 @@ async fn decode_json<T: DeserializeOwned>(
     response: Response,
     operation: &'static str,
 ) -> Result<T> {
+    let body = read_bounded(response, operation).await?;
+    parse_json(&body, operation)
+}
+
+/// Vast answers a refused mutation with HTTP 200 and `success: false`, so a 2xx
+/// alone does not mean the mutation happened.
+async fn confirm_ack(
+    response: Response,
+    operation: &'static str,
+    reason: &'static str,
+) -> Result<()> {
+    let body = read_bounded(response, operation).await?;
+    if body.iter().all(u8::is_ascii_whitespace) {
+        return Ok(());
+    }
+    if parse_json::<ProviderAck>(&body, operation)?.success == Some(false) {
+        return Err(invalid_response(operation, reason));
+    }
+    Ok(())
+}
+
+async fn read_bounded(response: Response, operation: &'static str) -> Result<Vec<u8>> {
     if response
         .content_length()
         .is_some_and(|length| length > MAX_RESPONSE_BYTES as u64)
@@ -1391,11 +1569,51 @@ async fn decode_json<T: DeserializeOwned>(
         }
         body.extend_from_slice(&chunk);
     }
-    serde_json::from_slice(&body).map_err(|source| VastError::Decode { operation, source })
+    Ok(body)
+}
+
+fn parse_json<T: DeserializeOwned>(body: &[u8], operation: &'static str) -> Result<T> {
+    serde_json::from_slice(body).map_err(|error| VastError::Decode {
+        operation,
+        line: error.line(),
+        column: error.column(),
+    })
 }
 
 fn invalid_response(operation: &'static str, reason: &'static str) -> VastError {
     VastError::InvalidResponse { operation, reason }
+}
+
+fn absent_instance_facts(instance_id: u64) -> InstanceFacts {
+    InstanceFacts {
+        instance_id,
+        status: ABSENT_STATUS.to_owned(),
+        ready: false,
+        gpu_model: String::new(),
+        gpu_memory_mib: 0,
+        verification: String::new(),
+        hourly_micros: 0,
+        machine_id: 0,
+        ssh: None,
+        direct_ports_available: None,
+        direct_port_start: None,
+    }
+}
+
+fn absent_workspace_facts(instance_id: u64) -> WorkspaceFacts {
+    WorkspaceFacts {
+        instance_id,
+        status: ABSENT_STATUS.to_owned(),
+        ready: false,
+        gpu_model: String::new(),
+        gpu_memory_mib: 0,
+        verification: String::new(),
+        hourly_micros: 0,
+        machine_id: 0,
+        image: String::new(),
+        runtime: String::new(),
+        access: None,
+    }
 }
 
 fn validate_cap_and_rejections(cap_micros: u64, rejected_machine_ids: &[u64]) -> Result<()> {
@@ -1546,6 +1764,10 @@ fn validate_digest_pinned_image(image: &str) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+fn image_digest(image: &str) -> Option<&str> {
+    image.rsplit_once("@sha256:").map(|(_, digest)| digest)
 }
 
 fn validate_workspace_image(image: &str) -> Result<()> {
@@ -1701,6 +1923,7 @@ fn env_parse_message(key: &str) -> &'static str {
         MAX_HOURLY_ENV => "COVENANT_VAST_MAX_HOURLY_MICROS must be an unsigned integer",
         MIN_GPU_MEMORY_ENV => "COVENANT_VAST_MIN_GPU_MEMORY_MIB must be an unsigned integer",
         DISK_GB_ENV => "COVENANT_VAST_DISK_GB must be an unsigned integer",
+        MAX_INET_COST_ENV => "COVENANT_VAST_MAX_INET_COST_MICROS must be an unsigned integer",
         _ => "environment value must be an unsigned integer",
     }
 }

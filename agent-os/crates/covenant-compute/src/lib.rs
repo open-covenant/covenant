@@ -11,6 +11,11 @@ use thiserror::Error;
 
 const MAX_RESPONSE_BYTES: u64 = 1_048_576;
 
+/// Shortest bookable session. Allocating a GPU and starting the workspace has
+/// been observed to take minutes, and a booking that expires inside that window
+/// bills for a workspace the customer never reached.
+pub const MIN_DURATION_SECS: u64 = 300;
+
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 #[error("{message}")]
 pub struct ProviderApiError {
@@ -43,6 +48,47 @@ impl ProviderApiError {
             (422, "invalid_launch_plan", "launch plan does not match the released catalog") => (
                 "invalid_launch_plan",
                 "launch plan does not match the released catalog",
+            ),
+            (422, "unknown_app", "launch plan names an app that is not in the catalog") => (
+                "unknown_app",
+                "launch plan names an app that is not in the catalog",
+            ),
+            (422, "app_unavailable", "app is not released for launch") => {
+                ("app_unavailable", "app is not released for launch")
+            }
+            (422, "offer_offline", "the selected offer is offline") => {
+                ("offer_offline", "the selected offer is offline")
+            }
+            (
+                422,
+                "insufficient_gpu_memory",
+                "the selected offer has less GPU memory than the app requires",
+            ) => (
+                "insufficient_gpu_memory",
+                "the selected offer has less GPU memory than the app requires",
+            ),
+            (
+                422,
+                "insufficient_trust",
+                "the selected offer is below the app's minimum trust class",
+            ) => (
+                "insufficient_trust",
+                "the selected offer is below the app's minimum trust class",
+            ),
+            (422, "invalid_offer_rate", "the offer rate cannot be priced for this duration") => (
+                "invalid_offer_rate",
+                "the offer rate cannot be priced for this duration",
+            ),
+            // These two carry a computed bound in the wire message. Substituting
+            // a constant keeps provider-controlled text away from the caller
+            // while still naming the field at fault.
+            (422, "invalid_duration", _) => (
+                "invalid_duration",
+                "requested duration is outside the app's supported range",
+            ),
+            (422, "invalid_maximum_usdc_micros", _) => (
+                "invalid_maximum_usdc_micros",
+                "maximum_usdc_micros does not match the quoted price",
             ),
             (409, "stale_offer", "the selected offer is no longer available") => {
                 ("stale_offer", "the selected offer is no longer available")
@@ -316,6 +362,14 @@ pub struct ComputeReceipt {
     pub app_id: String,
     pub provider: String,
     pub runtime_secs: u64,
+    /// Time from job creation to the first running observation. The provider
+    /// bills it; the customer is not charged for it.
+    #[serde(default)]
+    pub provisioning_secs: u64,
+    /// `provisioning_secs` priced at the same hourly rate as the charge, so the
+    /// absorbed provider cost is readable from the receipt alone.
+    #[serde(default)]
+    pub provisioning_usdc_micros: u64,
     pub charged_usdc_micros: u64,
     pub refunded_usdc_micros: u64,
     pub commitment: String,
@@ -371,9 +425,12 @@ impl ComputeClient {
         if app.availability != AppAvailability::Available {
             return Err(ComputeError::AppUnavailable(app.id));
         }
-        if request.duration_secs == 0 || request.duration_secs > app.max_duration_secs {
+        if request.duration_secs < MIN_DURATION_SECS
+            || request.duration_secs > app.max_duration_secs
+        {
             return Err(ComputeError::DurationExceeded {
                 requested: request.duration_secs,
+                minimum: MIN_DURATION_SECS,
                 maximum: app.max_duration_secs,
             });
         }
@@ -383,8 +440,7 @@ impl ComputeClient {
 
         let min_trust = request
             .min_trust
-            .unwrap_or(app.min_trust)
-            .max(app.min_trust);
+            .map_or(app.min_trust, |requested| requested.max(app.min_trust));
         let mut compatible = self
             .provider
             .offers()
@@ -437,7 +493,7 @@ impl ComputeClient {
                 .ok_or(ComputeError::InvalidLaunchPlan)?;
         if app != &plan.app
             || plan.app.availability != AppAvailability::Available
-            || plan.duration_secs == 0
+            || plan.duration_secs < MIN_DURATION_SECS
             || plan.duration_secs > plan.app.max_duration_secs
             || !plan.offer.online
             || plan.offer.gpu.vram_mib < plan.app.min_vram_mib
@@ -622,7 +678,6 @@ impl ComputeProvider for HttpComputeProvider {
     async fn cancel(&self, id: &str) -> Result<ComputeJob, ComputeError> {
         let response = self
             .request(Method::DELETE, &format!("v1/jobs/{id}"))?
-            .header("Idempotency-Key", uuid::Uuid::new_v4().to_string())
             .send()
             .await
             .map_err(|_| ComputeError::ProviderTransport)?;
@@ -690,8 +745,14 @@ pub enum ComputeError {
     AppUnavailable(String),
     #[error("container image must be pinned to a sha256 digest")]
     ImageNotPinned,
-    #[error("requested duration {requested}s exceeds the app maximum {maximum}s")]
-    DurationExceeded { requested: u64, maximum: u64 },
+    #[error(
+        "requested duration {requested}s is outside the supported range {minimum}s to {maximum}s"
+    )]
+    DurationExceeded {
+        requested: u64,
+        minimum: u64,
+        maximum: u64,
+    },
     #[error("maximum spend must be greater than zero")]
     ZeroBudget,
     #[error("no online GPU satisfies the app policy and spend limit")]
@@ -933,6 +994,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_booking_shorter_than_provisioning_is_refused_with_the_accepted_range() {
+        let provider = Arc::new(FakeProvider::new(vec![offer(
+            "gpu",
+            800_000,
+            48_000,
+            TrustClass::Open,
+        )]));
+        let client = ComputeClient::new(available_catalog(), provider);
+        let error = client
+            .plan(LaunchRequest {
+                app_id: "app".into(),
+                duration_secs: 10,
+                max_usdc_micros: 500_000,
+                min_trust: None,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error,
+            ComputeError::DurationExceeded {
+                requested: 10,
+                minimum: MIN_DURATION_SECS,
+                maximum: 7_200,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_hand_built_short_plan_is_refused_before_the_provider_is_called() {
+        let provider = Arc::new(FakeProvider::new(vec![offer(
+            "gpu",
+            800_000,
+            48_000,
+            TrustClass::Open,
+        )]));
+        let client = ComputeClient::new(available_catalog(), Arc::clone(&provider) as _);
+        let mut plan = client
+            .plan(LaunchRequest {
+                app_id: "app".into(),
+                duration_secs: MIN_DURATION_SECS,
+                max_usdc_micros: 500_000,
+                min_trust: None,
+            })
+            .await
+            .unwrap();
+        plan.duration_secs = MIN_DURATION_SECS - 1;
+        plan.maximum_usdc_micros =
+            quote_maximum(plan.offer.rate_usdc_micros_per_hour, plan.duration_secs).unwrap();
+
+        let error = client.launch_plan(&plan, "short-plan").await.unwrap_err();
+        assert_eq!(error, ComputeError::InvalidLaunchPlan);
+        assert!(provider.jobs().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn plan_fails_closed_when_the_spend_limit_is_too_low() {
         let provider = Arc::new(FakeProvider::new(vec![offer(
             "gpu",
@@ -1053,6 +1169,28 @@ mod tests {
             .unwrap_err();
         assert_eq!(error, ComputeError::InvalidLaunchPlan);
         assert!(client.jobs().await.unwrap().is_empty());
+    }
+
+    #[test]
+    fn launch_plan_rejections_keep_a_specific_code_and_a_constant_message() {
+        let unknown = ProviderApiError::from_wire(
+            422,
+            "unknown_app",
+            "launch plan names an app that is not in the catalog",
+        )
+        .unwrap();
+        assert_eq!(unknown.code(), "unknown_app");
+
+        let priced = ProviderApiError::from_wire(
+            422,
+            "invalid_maximum_usdc_micros",
+            "maximum_usdc_micros must be 66914 for this offer and duration",
+        )
+        .unwrap();
+        assert_eq!(priced.code(), "invalid_maximum_usdc_micros");
+        assert!(!priced.message().contains("66914"));
+
+        assert!(ProviderApiError::from_wire(422, "unknown_app", "rewritten upstream").is_none());
     }
 
     #[test]

@@ -28,13 +28,15 @@ services:
         sync: false
       - key: COVENANT_VAST_API_KEY
         sync: false
+      # Offer constraints. These repeat the crate defaults so the deployed
+      # fleet is visible here; the crate README explains each one.
       - key: COVENANT_VAST_MAX_HOURLY_MICROS
-        value: "640000"
+        value: "1000000"
       - key: COVENANT_VAST_GPU_MODELS
-        value: L40S
+        value: L40S,L40,RTX 6000Ada,RTX A6000,A40,A100 PCIE,A100 SXM4
       - key: COVENANT_VAST_MIN_GPU_MEMORY_MIB
-        value: "45000"
-      # Max per-GB bandwidth cost (USD micros) a host may charge. 0 = free-only
-      # (strictest, few hosts qualify); 50000 = accept hosts up to $0.05/GB.
+        value: "40000"
+      # Max per-GB transfer cost (USD micros) a host may charge. Hosts in this
+      # class no longer offer free transfer, so 0 admits nothing.
       - key: COVENANT_VAST_MAX_INET_COST_MICROS
         value: "50000"

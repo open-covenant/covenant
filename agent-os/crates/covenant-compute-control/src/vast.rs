@@ -1,13 +1,14 @@
 use async_trait::async_trait;
 use covenant_compute::{ComputeOffer, ComputeReceipt, GpuSpec, JobStatus, LaunchPlan, TrustClass};
 use covenant_compute_vast::{
-    workspace_label, Offer, OfferQuote, VastClient, VastError, WorkspaceFacts, WorkspaceLaunch,
-    WorkspaceLaunchRequest,
+    workspace_label, Offer, OfferQuote, OfferSurvey, VastClient, VastConfig, VastError,
+    WorkspaceFacts, WorkspaceLaunch, WorkspaceLaunchRequest,
 };
 use thiserror::Error;
 
 use crate::{
-    ProviderBackend, ProviderCancel, ProviderError, ProviderJob, ProviderLaunch, ProviderPoll,
+    JobClock, ProviderBackend, ProviderCancel, ProviderError, ProviderJob, ProviderLaunch,
+    ProviderPoll,
 };
 
 #[derive(Clone)]
@@ -21,9 +22,17 @@ impl VastBackend {
     }
 
     pub fn from_environment() -> Result<Self, VastBackendConfigError> {
-        let client = VastClient::from_environment()
-            .map_err(|_| VastBackendConfigError::Invalid)?
-            .ok_or(VastBackendConfigError::Missing)?;
+        let client = VastClient::from_environment()?.ok_or(VastBackendConfigError::Missing)?;
+        let config = client.config();
+        tracing::info!(
+            api_url = %config.api_url,
+            gpu_models = %config.gpu_models.join(","),
+            min_gpu_memory_mib = config.min_gpu_memory_mib,
+            max_hourly_micros = config.max_hourly_micros,
+            max_inet_cost_micros = config.max_inet_cost_micros,
+            disk_gb = config.disk_gb,
+            "Vast offer search constraints"
+        );
         Ok(Self::new(client))
     }
 
@@ -34,12 +43,16 @@ impl VastBackend {
         match self.client.workspace(launch).await {
             Ok(facts) => Ok(facts),
             Err(error) if invalid_workspace_state(&error) => {
-                let provider_error = map_vast_error(error);
-                self.client
-                    .destroy(launch.instance_id)
-                    .await
-                    .map_err(map_vast_error)?;
-                Err(provider_error)
+                // Report why the workspace was rejected, not why the cleanup
+                // that followed it went wrong.
+                if let Err(cleanup) = self.client.destroy(launch.instance_id).await {
+                    tracing::error!(
+                        instance_id = launch.instance_id,
+                        %cleanup,
+                        "rejected workspace could not be destroyed"
+                    );
+                }
+                Err(map_vast_error(error))
             }
             Err(error) => Err(map_vast_error(error)),
         }
@@ -50,8 +63,7 @@ impl VastBackend {
         job_id: &str,
         provider_job_id: u64,
         plan: &LaunchPlan,
-        started_at_ms: u64,
-        requested_at_ms: u64,
+        clock: JobClock,
     ) -> Result<ProviderJob, ProviderError> {
         let launch = workspace_launch(job_id, provider_job_id, plan)?;
         let facts = self.workspace_facts(&launch).await?;
@@ -61,15 +73,14 @@ impl VastBackend {
                 .await
                 .map_err(map_vast_error)?;
         }
-        provider_job(facts, job_id, plan, started_at_ms, requested_at_ms)
+        provider_job(facts, job_id, plan, clock)
     }
 
     async fn recover_one(
         &self,
         job_id: &str,
         plan: &LaunchPlan,
-        started_at_ms: u64,
-        requested_at_ms: u64,
+        clock: JobClock,
     ) -> Result<Option<ProviderJob>, ProviderError> {
         let mut instances = self.client.recover(job_id).await.map_err(map_vast_error)?;
         let Some(primary) = instances.first().copied() else {
@@ -81,32 +92,26 @@ impl VastBackend {
                 .await
                 .map_err(map_vast_error)?;
         }
-        self.workspace(job_id, primary, plan, started_at_ms, requested_at_ms)
-            .await
-            .map(Some)
+        self.workspace(job_id, primary, plan, clock).await.map(Some)
     }
 }
 
 #[async_trait]
 impl ProviderBackend for VastBackend {
     async fn offers(&self) -> Result<Vec<ComputeOffer>, ProviderError> {
-        self.client
-            .ranked_offers(64, &[], self.client.config().max_hourly_micros)
+        let config = self.client.config();
+        let ranked = self
+            .client
+            .ranked_offers(64, &[], config.max_hourly_micros)
             .await
-            .map_err(map_vast_error)?
-            .into_iter()
-            .map(compute_offer)
-            .collect()
+            .map_err(map_vast_error)?;
+        report_survey(&ranked.survey, config);
+        ranked.offers.into_iter().map(compute_offer).collect()
     }
 
     async fn launch(&self, request: ProviderLaunch) -> Result<ProviderJob, ProviderError> {
         if let Some(job) = self
-            .recover_one(
-                &request.job_id,
-                &request.plan,
-                request.started_at_ms,
-                request.requested_at_ms,
-            )
+            .recover_one(&request.job_id, &request.plan, request.clock)
             .await?
         {
             return Ok(job);
@@ -130,25 +135,13 @@ impl ProviderBackend for VastBackend {
             .await
             .map_err(map_vast_error)?;
         let facts = self.workspace_facts(&launch).await?;
-        provider_job(
-            facts,
-            &request.job_id,
-            &request.plan,
-            request.started_at_ms,
-            request.requested_at_ms,
-        )
+        provider_job(facts, &request.job_id, &request.plan, request.clock)
     }
 
     async fn job(&self, request: ProviderPoll) -> Result<ProviderJob, ProviderError> {
         let instance_id = provider_instance_id(&request.provider_job_id)?;
-        self.workspace(
-            &request.job_id,
-            instance_id,
-            &request.plan,
-            request.started_at_ms,
-            request.requested_at_ms,
-        )
-        .await
+        self.workspace(&request.job_id, instance_id, &request.plan, request.clock)
+            .await
     }
 
     async fn cancel(&self, request: ProviderCancel) -> Result<ProviderJob, ProviderError> {
@@ -157,38 +150,36 @@ impl ProviderBackend for VastBackend {
             .as_deref()
             .map(provider_instance_id)
             .transpose()?;
+        let mut instances = Vec::new();
         if let Some(instance) = known_instance {
             self.client
                 .destroy(instance)
                 .await
                 .map_err(map_vast_error)?;
+            instances.push(instance);
         }
-        let mut instances = self
+        for instance in self
             .client
             .recover(&request.job_id)
             .await
-            .map_err(map_vast_error)?;
-        instances.extend(known_instance);
-        instances.sort_unstable();
-        instances.dedup();
-        for instance in &instances {
-            self.client
-                .destroy(*instance)
-                .await
-                .map_err(map_vast_error)?;
+            .map_err(map_vast_error)?
+        {
+            if Some(instance) != known_instance {
+                self.client
+                    .destroy(instance)
+                    .await
+                    .map_err(map_vast_error)?;
+                instances.push(instance);
+            }
         }
+        instances.sort_unstable();
 
+        // Nothing was ever allocated, so there is nothing to bill.
         let runtime_secs = if instances.is_empty() {
             0
         } else {
-            request
-                .requested_at_ms
-                .saturating_sub(request.started_at_ms)
-                .div_ceil(1_000)
-                .min(request.plan.duration_secs)
+            runtime_secs(&request.plan, request.clock)
         };
-        let charge = quote_maximum(request.plan.offer.rate_usdc_micros_per_hour, runtime_secs)?
-            .min(request.plan.maximum_usdc_micros);
         let provider_id = instances
             .first()
             .map(u64::to_string)
@@ -202,17 +193,13 @@ impl ProviderBackend for VastBackend {
             status: JobStatus::Cancelled,
             access_url: None,
             error: None,
-            receipt: Some(ComputeReceipt {
-                id: format!("vast-{}", request.job_id),
-                job_id: request.job_id,
-                app_id: request.plan.app.id,
-                provider: "vast".into(),
+            receipt: Some(usage_receipt(
+                &request.job_id,
+                &request.plan,
+                request.clock,
                 runtime_secs,
-                charged_usdc_micros: charge,
-                refunded_usdc_micros: request.plan.maximum_usdc_micros - charge,
                 commitment,
-                transaction: None,
-            }),
+            )?),
         })
     }
 }
@@ -259,8 +246,7 @@ fn provider_job(
     facts: WorkspaceFacts,
     job_id: &str,
     plan: &LaunchPlan,
-    started_at_ms: u64,
-    requested_at_ms: u64,
+    clock: JobClock,
 ) -> Result<ProviderJob, ProviderError> {
     let terminal_failure = provider_failed(&facts);
     let receipt = terminal_failure
@@ -268,8 +254,8 @@ fn provider_job(
             usage_receipt(
                 job_id,
                 plan,
-                started_at_ms,
-                requested_at_ms,
+                clock,
+                runtime_secs(plan, clock),
                 format!("vast:instance:{}:provider_stopped", facts.instance_id),
             )
         })
@@ -305,27 +291,66 @@ fn provider_failed(facts: &WorkspaceFacts) -> bool {
 fn usage_receipt(
     job_id: &str,
     plan: &LaunchPlan,
-    started_at_ms: u64,
-    requested_at_ms: u64,
+    clock: JobClock,
+    runtime_secs: u64,
     commitment: String,
 ) -> Result<ComputeReceipt, ProviderError> {
-    let runtime_secs = requested_at_ms
-        .saturating_sub(started_at_ms)
-        .div_ceil(1_000)
-        .min(plan.duration_secs);
-    let charge = quote_maximum(plan.offer.rate_usdc_micros_per_hour, runtime_secs)?
-        .min(plan.maximum_usdc_micros);
+    let rate = plan.offer.rate_usdc_micros_per_hour;
+    let charge = quote_maximum(rate, runtime_secs)?.min(plan.maximum_usdc_micros);
+    let provisioning_secs = clock.provisioning_secs();
     Ok(ComputeReceipt {
         id: format!("vast-{job_id}"),
         job_id: job_id.to_owned(),
         app_id: plan.app.id.clone(),
         provider: "vast".into(),
         runtime_secs,
+        provisioning_secs,
+        provisioning_usdc_micros: quote_maximum(rate, provisioning_secs)?,
         charged_usdc_micros: charge,
         refunded_usdc_micros: plan.maximum_usdc_micros - charge,
         commitment,
         transaction: None,
     })
+}
+
+/// Billed time runs from the first running observation and never past the
+/// selected duration.
+fn runtime_secs(plan: &LaunchPlan, clock: JobClock) -> u64 {
+    clock
+        .requested_at_ms
+        .saturating_sub(clock.billed_from_ms())
+        .div_ceil(1_000)
+        .min(plan.duration_secs)
+}
+
+/// An empty offer list is the first thing a new operator hits. Naming the
+/// constraint that emptied it is the difference between a one-line env change
+/// and reading the adapter source.
+fn report_survey(survey: &OfferSurvey, config: &VastConfig) {
+    if survey.admitted == 0 {
+        tracing::warn!(
+            provider_offers = survey.returned,
+            dropped_bandwidth_cost = survey.bandwidth_cost,
+            dropped_host_evidence = survey.host_evidence,
+            dropped_gpu_class = survey.gpu_class,
+            dropped_price_ceiling = survey.price_ceiling,
+            gpu_models = %config.gpu_models.join(","),
+            min_gpu_memory_mib = config.min_gpu_memory_mib,
+            max_hourly_micros = config.max_hourly_micros,
+            max_inet_cost_micros = config.max_inet_cost_micros,
+            "no compute offer met the configured constraints"
+        );
+        return;
+    }
+    tracing::info!(
+        provider_offers = survey.returned,
+        dropped_bandwidth_cost = survey.bandwidth_cost,
+        dropped_host_evidence = survey.host_evidence,
+        dropped_gpu_class = survey.gpu_class,
+        dropped_price_ceiling = survey.price_ceiling,
+        admitted = survey.admitted,
+        "compute offer search completed"
+    );
 }
 
 fn parse_offer_id(value: &str) -> Result<(u64, u64), ProviderError> {
@@ -362,14 +387,28 @@ fn quote_maximum(rate_per_hour: u64, duration_secs: u64) -> Result<u64, Provider
 
 fn map_vast_error(error: VastError) -> ProviderError {
     match error {
-        VastError::NoCapacity | VastError::OfferChanged | VastError::InvalidRequest(_) => {
-            ProviderError::Rejected
-        }
+        VastError::NoCapacity
+        | VastError::OfferChanged
+        | VastError::InvalidRequest(_)
+        | VastError::Refused { .. } => ProviderError::Rejected,
         VastError::Transport { .. } => ProviderError::Unavailable,
         VastError::UnexpectedStatus { status, .. }
             if status.is_server_error() || status.as_u16() == 429 =>
         {
             ProviderError::Unavailable
+        }
+        // Credential and configuration faults never clear on their own.
+        VastError::UnexpectedStatus { status, .. } if matches!(status.as_u16(), 401 | 403) => {
+            tracing::error!(status = status.as_u16(), "Vast rejected the API credential");
+            ProviderError::Configuration
+        }
+        VastError::Configuration(_)
+        | VastError::CredentialsMissing
+        | VastError::CredentialRead { .. }
+        | VastError::InvalidCredential
+        | VastError::ClientBuild(_) => {
+            tracing::error!(%error, "Vast provider configuration is unusable");
+            ProviderError::Configuration
         }
         VastError::Decode { .. }
         | VastError::InvalidResponse { .. }
@@ -389,17 +428,136 @@ fn invalid_workspace_state(error: &VastError) -> bool {
 
 #[derive(Debug, Error)]
 pub enum VastBackendConfigError {
-    #[error("Vast provider credentials are not configured")]
+    #[error(
+        "Vast credentials are not configured: set COVENANT_VAST_API_KEY or \
+         COVENANT_VAST_API_KEY_FILE"
+    )]
     Missing,
-    #[error("Vast provider configuration is invalid")]
-    Invalid,
+    #[error(transparent)]
+    Invalid(#[from] VastError),
 }
 
 #[cfg(test)]
 mod tests {
+    use axum::http::StatusCode;
+    use covenant_compute::AppCatalog;
     use covenant_compute_vast::CudaVersion;
 
     use super::*;
+
+    fn plan() -> LaunchPlan {
+        LaunchPlan {
+            app: AppCatalog::builtin().app("gpu-workspace").unwrap().clone(),
+            offer: ComputeOffer {
+                id: "vast:7:70".into(),
+                gpu: GpuSpec {
+                    model: "L40S".into(),
+                    vram_mib: 46_068,
+                    cuda_major: 12,
+                },
+                rate_usdc_micros_per_hour: 720_000,
+                trust_class: TrustClass::Open,
+                online: true,
+            },
+            duration_secs: 1_800,
+            maximum_usdc_micros: 360_000,
+        }
+    }
+
+    #[test]
+    fn a_vanished_instance_settles_with_a_metered_receipt() {
+        let plan = plan();
+        let facts = WorkspaceFacts {
+            instance_id: 99,
+            status: "deleted".into(),
+            ready: false,
+            gpu_model: String::new(),
+            gpu_memory_mib: 0,
+            verification: String::new(),
+            hourly_micros: 0,
+            machine_id: 0,
+            image: String::new(),
+            runtime: String::new(),
+            access: None,
+        };
+
+        let clock = JobClock {
+            created_at_ms: 0,
+            ready_at_ms: Some(30_000),
+            requested_at_ms: 90_000,
+        };
+        let job = provider_job(facts, "job-1", &plan, clock).unwrap();
+        assert_eq!(job.status, JobStatus::Failed);
+        let receipt = job.receipt.unwrap();
+        assert_eq!(receipt.runtime_secs, 60);
+        assert_eq!(receipt.charged_usdc_micros, 12_000);
+        assert_eq!(receipt.refunded_usdc_micros, 348_000);
+        // The 30 s the provider billed before the workspace answered is
+        // reported and priced at the same rate, not charged.
+        assert_eq!(receipt.provisioning_secs, 30);
+        assert_eq!(receipt.provisioning_usdc_micros, 6_000);
+    }
+
+    #[test]
+    fn a_job_that_never_became_ready_reports_no_provisioning_window() {
+        let clock = JobClock {
+            created_at_ms: 1_000,
+            ready_at_ms: None,
+            requested_at_ms: 145_000,
+        };
+        let receipt =
+            usage_receipt("job-2", &plan(), clock, 0, "vast:instance:1:test".into()).unwrap();
+        assert_eq!(receipt.runtime_secs, 0);
+        assert_eq!(receipt.provisioning_secs, 0);
+        assert_eq!(receipt.provisioning_usdc_micros, 0);
+        assert_eq!(receipt.charged_usdc_micros, 0);
+    }
+
+    #[test]
+    fn a_provisioning_window_longer_than_the_session_is_priced_in_full() {
+        let plan = plan();
+        // The window a live L40S took to answer, against the shortest session
+        // the control plane accepts.
+        let clock = JobClock {
+            created_at_ms: 0,
+            ready_at_ms: Some(207_000),
+            requested_at_ms: 207_000 + 300_000,
+        };
+        let receipt = usage_receipt(
+            "job-3",
+            &plan,
+            clock,
+            runtime_secs(&plan, clock),
+            "vast:instance:1:destroyed".into(),
+        )
+        .unwrap();
+
+        assert_eq!(receipt.runtime_secs, 300);
+        assert_eq!(receipt.charged_usdc_micros, 60_000);
+        assert_eq!(receipt.provisioning_secs, 207);
+        assert_eq!(receipt.provisioning_usdc_micros, 41_400);
+    }
+
+    #[test]
+    fn credential_faults_are_not_reported_as_a_transient_outage() {
+        assert!(matches!(
+            map_vast_error(VastError::UnexpectedStatus {
+                operation: "offer search",
+                status: StatusCode::UNAUTHORIZED,
+            }),
+            ProviderError::Configuration
+        ));
+        assert!(matches!(
+            map_vast_error(VastError::CredentialsMissing),
+            ProviderError::Configuration
+        ));
+        assert!(matches!(
+            map_vast_error(VastError::Refused {
+                operation: "workspace creation",
+            }),
+            ProviderError::Rejected
+        ));
+    }
 
     #[test]
     fn compute_offer_reports_returned_cuda_compatibility() {

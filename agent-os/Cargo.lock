@@ -1252,17 +1252,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "covenant-compute-authority"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "serde",
- "thiserror 1.0.69",
- "tokio",
- "uuid",
-]
-
-[[package]]
 name = "covenant-compute-control"
 version = "0.1.0"
 dependencies = [
@@ -9812,6 +9801,7 @@ dependencies = [
  "pin-project-lite",
  "sync_wrapper 1.0.2",
  "tokio",
+ "tokio-util",
  "tower-layer",
  "tower-service",
  "tracing",
@@ -9829,6 +9819,7 @@ dependencies = [
  "http 1.4.1",
  "http-body 1.0.1",
  "pin-project-lite",
+ "tokio",
  "tower",
  "tower-layer",
  "tower-service",

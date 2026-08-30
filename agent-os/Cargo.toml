@@ -33,7 +33,6 @@ members = [
     "crates/covenant-sap-bridge",
     "crates/covenant-stake-keeper",
     "crates/covenant-compute",
-    "crates/covenant-compute-authority",
     "crates/covenant-compute-control",
     "crates/covenant-compute-vast",
     "crates/covenantd",
@@ -80,7 +79,7 @@ k256 = "0.13"
 sha3 = "0.10"
 rand = "0.9"
 axum = "0.7"
-tower-http = { version = "0.6", features = ["cors", "trace"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "timeout"] }
 solana-sdk = "2"
 solana-client = "2"
 sha2 = "0.11"

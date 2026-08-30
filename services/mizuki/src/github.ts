@@ -184,6 +184,7 @@ export class GithubClient {
   constructor(
     private readonly config: Config,
     private readonly request: Fetch = fetch,
+    private readonly evidenceRetryDelayMs = 2_000,
   ) {}
 
   async readiness(): Promise<void> {
@@ -787,12 +788,27 @@ export class GithubClient {
     pullRequestUrl: string,
     installationId: number,
   ): Promise<Awaited<ReturnType<GithubClient['pullRequestReviewData']>>> {
-    try {
-      return await this.pullRequestReviewData(pullRequestUrl, installationId);
-    } catch (cause) {
-      if (!(cause instanceof PullRequestMergeMetadataChangedError)) throw cause;
-      return this.pullRequestReviewData(pullRequestUrl, installationId);
+    // GitHub fills in changed_files and merge_commit_sha asynchronously, so the two
+    // reads that bracket evidence collection routinely disagree on a pull request
+    // opened seconds earlier. Retrying is the difference between delivering a job
+    // and refunding one whose pull request is already published and green.
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      if (attempt > 0 && this.evidenceRetryDelayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, this.evidenceRetryDelayMs * attempt));
+      }
+      try {
+        return await this.pullRequestReviewData(pullRequestUrl, installationId);
+      } catch (cause) {
+        const drifted =
+          cause instanceof PullRequestMergeMetadataChangedError ||
+          (cause instanceof Error &&
+            cause.message === 'pull request changed while review evidence was collected');
+        if (!drifted) throw cause;
+        lastError = cause;
+      }
     }
+    throw lastError;
   }
 
   async mergedAt(job: Job): Promise<string | undefined> {

@@ -67,7 +67,10 @@ export function providerReceipt(
     throw new Error(`UsePod returned an unacceptable route: ${route || 'missing'}`);
   }
 
-  const balanceRemaining = response.headers.get('x-balance-remaining')?.trim();
+  // UsePod sends x-balance-remaining more than once, so Headers.get joins the
+  // values ("-131150, 4999997"). The live figure is the last parsable one; the
+  // joined string fails validDecimal, which reads as an unfunded account.
+  const balanceRemaining = latestBalance(response.headers.get('x-balance-remaining'));
   if (!balanceRemaining || !decimalAtLeast(balanceRemaining, minimumBalance)) {
     if (balanceRemaining && positiveDecimal(balanceRemaining)) {
       throw new Error('UsePod balance is below the configured funded-balance floor');
@@ -413,6 +416,15 @@ function positiveDecimal(value: string): boolean {
 
 export function validBalanceFloor(value: string): boolean {
   return /^[1-9]\d{0,47}$/.test(value);
+}
+
+export function latestBalance(header: string | null): string | undefined {
+  if (!header) return undefined;
+  const parts = header
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => validDecimal(part));
+  return parts.length ? parts[parts.length - 1] : undefined;
 }
 
 function decimalAtLeast(value: string, floor: string): boolean {

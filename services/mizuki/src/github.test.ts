@@ -524,7 +524,7 @@ describe('pull request publication recovery', () => {
     expect(events.filter((event) => event === 'files')).toHaveLength(2);
   });
 
-  it('stops after one retry when merge metadata keeps changing', async () => {
+  it('gives up once the bounded evidence retries are exhausted', async () => {
     const expectedHead = 'd'.repeat(40);
     const events: string[] = [];
     const github = publicationClient(expectedHead, events, 'persistent');
@@ -532,8 +532,8 @@ describe('pull request publication recovery', () => {
     await expect(github.publish(publicationJob(expectedHead), emptyArtifacts)).rejects.toThrow(
       'pull request changed while review evidence was collected',
     );
-    expect(events.filter((event) => event === 'metadata')).toHaveLength(4);
-    expect(events.filter((event) => event === 'diff')).toHaveLength(2);
+    expect(events.filter((event) => event === 'metadata')).toHaveLength(8);
+    expect(events.filter((event) => event === 'diff')).toHaveLength(4);
   });
 
   it('ignores only index object abbreviation length in delivery evidence', async () => {
@@ -872,6 +872,7 @@ function reviewClient(request: typeof fetch): GithubClient {
       MIZUKI_GITHUB_PRIVATE_KEY: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
     }),
     request,
+    0,
   );
 }
 
@@ -1009,6 +1010,7 @@ function publicationClient(
       }
       throw new Error(`unexpected request: ${method} ${url}`);
     },
+    0,
   );
 }
 

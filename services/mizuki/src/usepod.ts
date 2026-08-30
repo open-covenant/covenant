@@ -163,11 +163,14 @@ export function usePodReceipt(
   if (route !== 'marketplace') {
     throw new UsePodReceiptError('UsePod returned an unacceptable route', false);
   }
-  const balanceRemaining = response.headers.get('x-balance-remaining')?.trim();
-  if (!balanceRemaining) {
+  // UsePod sends x-balance-remaining more than once, so Headers.get joins the
+  // values ("-131150, 4999997"). The live figure is the last parsable one.
+  const rawBalance = response.headers.get('x-balance-remaining')?.trim();
+  const balanceRemaining = latestBalance(rawBalance ?? null);
+  if (!rawBalance) {
     throw new UsePodReceiptError('UsePod did not prove a funded balance after the request', true);
   }
-  if (!validDecimal(balanceRemaining)) {
+  if (!balanceRemaining) {
     throw new UsePodReceiptError('UsePod returned an invalid balance receipt', false);
   }
   if (!decimalAtLeast(balanceRemaining, minimumBalance)) {
@@ -703,6 +706,15 @@ function optionalReceiptId(response: Response, name: string): string | undefined
 
 function positiveDecimal(value: string): boolean {
   return validDecimal(value) && /[1-9]/.test(value);
+}
+
+export function latestBalance(header: string | null): string | undefined {
+  if (!header) return undefined;
+  const parts = header
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => validDecimal(part));
+  return parts.length ? parts[parts.length - 1] : undefined;
 }
 
 function decimalAtLeast(value: string, floor: string): boolean {

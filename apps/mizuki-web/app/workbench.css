@@ -3917,3 +3917,50 @@ html:has(.workbench-root) body {
   width: auto;
   height: 26px;
 }
+
+/* One Connect button opens the wallet choice as a modal rather than a dropdown
+   anchored under the trigger, so the list has room and cannot be clipped by the
+   header on short viewports. */
+.workbench-wallet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: rgba(7, 6, 11, 0.72);
+}
+
+.workbench-wallet-control .workbench-wallet-menu {
+  position: fixed;
+  z-index: 91;
+  top: 50%;
+  left: 50%;
+  right: auto;
+  width: min(420px, calc(100vw - 32px));
+  max-height: min(80dvh, 640px);
+  transform: translate(-50%, -50%);
+  border-radius: 4px;
+}
+
+.workbench-wallet-menu > header {
+  position: relative;
+  padding-right: 32px;
+}
+
+.workbench-wallet-close {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--wb-muted);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.workbench-wallet-close:hover,
+.workbench-wallet-close:focus-visible {
+  color: var(--wb-text);
+}

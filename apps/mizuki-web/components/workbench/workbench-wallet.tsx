@@ -112,11 +112,22 @@ export function WorkbenchWalletControlView({
         </span>
       </button>
 
+      {open && (
+        <div
+          className="workbench-wallet-backdrop"
+          onClick={() => {
+            setOpen(false);
+            trigger.current?.focus();
+          }}
+        />
+      )}
+
       <section
         ref={panel}
         id={menuId}
         className="workbench-wallet-menu"
         role="dialog"
+        aria-modal="true"
         aria-label="Payment wallet"
         tabIndex={-1}
         hidden={!open}
@@ -125,6 +136,17 @@ export function WorkbenchWalletControlView({
           <span>Payment wallet</span>
           <h2>{active ? 'Wallet connected' : 'Choose a Solana wallet'}</h2>
           <p>Used only when you approve a fixed-price USDC payment.</p>
+          <button
+            type="button"
+            className="workbench-wallet-close"
+            aria-label="Close payment wallet"
+            onClick={() => {
+              setOpen(false);
+              trigger.current?.focus();
+            }}
+          >
+            &times;
+          </button>
         </header>
 
         {active ? (

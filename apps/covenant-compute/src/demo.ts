@@ -120,12 +120,18 @@ function receipt(job: DemoJob, status: 'completed' | 'cancelled'): ComputeReceip
       ? Math.min(job.maximum_usdc_micros, Math.ceil((222_000 * runtime) / 3_600))
       : job.maximum_usdc_micros;
 
+  // A plausible provisioning window so the demo shows the absorbed cost the
+  // real receipt carries.
+  const provisioning = 140;
+
   return {
     id: `receipt-${job.id}`,
     job_id: job.id,
     app_id: job.app_id,
     provider: 'demo',
     runtime_secs: runtime,
+    provisioning_secs: provisioning,
+    provisioning_usdc_micros: Math.ceil((222_000 * provisioning) / 3_600),
     charged_usdc_micros: charged,
     refunded_usdc_micros: job.maximum_usdc_micros - charged,
     commitment: `demo-${job.id}-commitment`,

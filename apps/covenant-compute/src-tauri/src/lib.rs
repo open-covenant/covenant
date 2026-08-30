@@ -2,18 +2,20 @@
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 use covenant_compute::{
     AppCatalog, ComputeApp, ComputeClient, ComputeError, ComputeJob, ComputeOffer, ComputeReceipt,
     HttpComputeProvider, JobStatus, LaunchPlan, LaunchRequest, ProviderApiError,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
 use url::{Host, Url};
 
 const DEFAULT_CONTROL_PLANE: &str = "https://compute.opencovenant.org";
 const JUPYTER_SETUP_GUIDE_URL: &str = "https://docs.vast.ai/guides/instances/connect/jupyter";
+const MAX_HEALTH_BYTES: usize = 1_024;
 
 struct DesktopState {
     catalog: AppCatalog,
@@ -23,6 +25,7 @@ struct DesktopState {
     jobs: RwLock<BTreeMap<String, ComputeJob>>,
     plans: RwLock<BTreeMap<String, ReviewedPlan>>,
     endpoint_label: Option<String>,
+    health: Option<HealthProbe>,
 }
 
 #[derive(Clone)]
@@ -132,9 +135,13 @@ impl DesktopState {
             },
         };
 
+        let base_provider = base_provider.ok();
         Self {
             catalog,
-            base_provider: base_provider.ok(),
+            health: base_provider
+                .as_ref()
+                .and_then(|_| HealthProbe::new(base_url)),
+            base_provider,
             active_client: RwLock::new(ActiveClient {
                 template: environment_client.clone(),
                 generation: 0,
@@ -154,7 +161,7 @@ impl DesktopState {
             message: snapshot
                 .configuration_error
                 .clone()
-                .unwrap_or_else(|| "compute runtime is not configured".to_owned()),
+                .unwrap_or_else(|| "The runtime is not configured.".to_owned()),
         })?;
         Ok(ClientSnapshot {
             client,
@@ -188,7 +195,7 @@ impl DesktopState {
                 .template
                 .configuration_error
                 .clone()
-                .unwrap_or_else(|| "compute runtime is not configured".to_owned()),
+                .unwrap_or_else(|| "The runtime is not configured.".to_owned()),
         })?;
         active.in_flight_mutations = active
             .in_flight_mutations
@@ -207,7 +214,7 @@ impl DesktopState {
             .clone()
             .ok_or_else(|| CommandError {
                 code: "runtime_not_configured",
-                message: "configure a valid compute control-plane endpoint first".to_owned(),
+                message: "Configure a valid runtime endpoint before setting a token.".to_owned(),
             })?
             .with_bearer_token(token)?;
         let template = ClientTemplate {
@@ -294,7 +301,7 @@ impl DesktopState {
         if plans.len() >= 64 && !plans.contains_key(&idempotency_key) {
             return Err(CommandError {
                 code: "too_many_reviewed_plans",
-                message: "start the application again before reviewing more launches".to_owned(),
+                message: "Restart the app before reviewing more launches.".to_owned(),
             });
         }
         plans.insert(idempotency_key, reviewed);
@@ -320,7 +327,7 @@ impl DesktopState {
             .cloned()
             .ok_or_else(|| CommandError {
                 code: "quote_not_reviewed",
-                message: "review the exact quote again before launching".to_owned(),
+                message: "Review the exact quote again before launching.".to_owned(),
             })
     }
 
@@ -377,9 +384,72 @@ impl DesktopState {
             .open_url(access_url.as_str(), None::<&str>)
             .map_err(|_| CommandError {
                 code: "open_failed",
-                message: "the operating system could not open the workload".to_owned(),
+                message: "The operating system could not open the workload.".to_owned(),
             })
     }
+}
+
+struct HealthProbe {
+    client: reqwest::Client,
+    url: Url,
+}
+
+enum HealthFailure {
+    Unreachable,
+    Unhealthy,
+}
+
+#[derive(Deserialize)]
+struct Health {
+    status: String,
+}
+
+impl HealthProbe {
+    fn new(base_url: &str) -> Option<Self> {
+        Some(Self {
+            client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(10))
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .ok()?,
+            url: Url::parse(base_url).ok()?.join("healthz").ok()?,
+        })
+    }
+
+    async fn check(&self) -> Result<(), HealthFailure> {
+        let response = self
+            .client
+            .get(self.url.clone())
+            .send()
+            .await
+            .map_err(|_| HealthFailure::Unreachable)?;
+        if !response.status().is_success() {
+            return Err(HealthFailure::Unhealthy);
+        }
+
+        let body = read_health_body(response)
+            .await
+            .ok_or(HealthFailure::Unhealthy)?;
+        if !healthy_body(&body) {
+            return Err(HealthFailure::Unhealthy);
+        }
+        Ok(())
+    }
+}
+
+async fn read_health_body(mut response: reqwest::Response) -> Option<Vec<u8>> {
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.ok()? {
+        if body.len() + chunk.len() > MAX_HEALTH_BYTES {
+            return None;
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Some(body)
+}
+
+fn healthy_body(body: &[u8]) -> bool {
+    serde_json::from_slice::<Health>(body).is_ok_and(|health| health.status == "ok")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -449,23 +519,21 @@ impl CommandError {
     fn internal() -> Self {
         Self {
             code: "internal_error",
-            message: "the desktop runtime could not update its local state".to_owned(),
+            message: "The app could not update its local state.".to_owned(),
         }
     }
 
     fn auth_changed() -> Self {
         Self {
             code: "authentication_changed",
-            message: "authentication changed while the request was in progress; try again"
-                .to_owned(),
+            message: "Access changed while the request was in progress. Try again.".to_owned(),
         }
     }
 
     fn mutation_in_progress() -> Self {
         Self {
             code: "request_in_progress",
-            message: "wait for the current launch or stop request before changing access"
-                .to_owned(),
+            message: "Finish the current launch or stop before changing access.".to_owned(),
         }
     }
 
@@ -526,15 +594,10 @@ fn provider_command_code(code: &str) -> &'static str {
     }
 }
 
-fn authentication_required(error: &ComputeError) -> bool {
-    matches!(error, ComputeError::ProviderStatus(401 | 403))
-        || matches!(error, ComputeError::ProviderApi(error) if error.status() == 401)
-}
-
 #[tauri::command]
 async fn runtime_status(state: State<'_, DesktopState>) -> Result<RuntimeStatus, CommandError> {
     let snapshot = state.runtime_snapshot()?;
-    let Some(client) = snapshot.client else {
+    let (Some(_), Some(health)) = (&snapshot.client, &state.health) else {
         return Ok(RuntimeStatus {
             state: RuntimeState::Degraded,
             endpoint_label: state.endpoint_label.clone(),
@@ -544,34 +607,36 @@ async fn runtime_status(state: State<'_, DesktopState>) -> Result<RuntimeStatus,
         });
     };
 
-    let result = client.offers().await;
+    let result = health.check().await;
     state.ensure_generation(snapshot.generation)?;
+    let authenticated = snapshot.authentication.source != AuthSource::None;
     Ok(match result {
-        Ok(_) => RuntimeStatus {
-            state: RuntimeState::Connected,
-            endpoint_label: state.endpoint_label.clone(),
-            message: None,
-            authentication: snapshot.authentication,
-            token_required: false,
-        },
-        Err(ComputeError::ProviderTransport) => RuntimeStatus {
+        Err(HealthFailure::Unreachable) => RuntimeStatus {
             state: RuntimeState::Offline,
             endpoint_label: state.endpoint_label.clone(),
-            message: Some("compute control plane is unreachable".to_owned()),
+            message: Some("The runtime is unreachable.".to_owned()),
             authentication: snapshot.authentication,
             token_required: false,
         },
-        Err(error) if authentication_required(&error) => RuntimeStatus {
+        Err(HealthFailure::Unhealthy) => RuntimeStatus {
             state: RuntimeState::Degraded,
             endpoint_label: state.endpoint_label.clone(),
-            message: Some("a private-beta access token is required or was not accepted".to_owned()),
+            message: Some("The runtime reported an unhealthy status.".to_owned()),
+            authentication: snapshot.authentication,
+            token_required: false,
+        },
+        // Every /v1 route needs a bearer token, so no configured credential means one is required.
+        Ok(()) if !authenticated => RuntimeStatus {
+            state: RuntimeState::Degraded,
+            endpoint_label: state.endpoint_label.clone(),
+            message: Some("A private-beta access token is required.".to_owned()),
             authentication: snapshot.authentication,
             token_required: true,
         },
-        Err(error) => RuntimeStatus {
-            state: RuntimeState::Degraded,
+        Ok(()) => RuntimeStatus {
+            state: RuntimeState::Connected,
             endpoint_label: state.endpoint_label.clone(),
-            message: Some(error.to_string()),
+            message: None,
             authentication: snapshot.authentication,
             token_required: false,
         },
@@ -615,7 +680,7 @@ async fn plan_job(
     if !valid_idempotency_key(&idempotency_key) {
         return Err(CommandError {
             code: "invalid_launch",
-            message: "the launch idempotency key is invalid".to_owned(),
+            message: "The launch idempotency key is invalid.".to_owned(),
         });
     }
 
@@ -643,7 +708,7 @@ async fn launch_job(
     if reviewed.request != request {
         return Err(CommandError {
             code: "quote_changed",
-            message: "the launch limits changed after quote review".to_owned(),
+            message: "The launch limits changed after the quote was reviewed.".to_owned(),
         });
     }
     let job = snapshot
@@ -695,13 +760,13 @@ async fn open_access_url(
     if !view.access_ready {
         return Err(CommandError {
             code: "access_not_ready",
-            message: "the workload access endpoint is not ready".to_owned(),
+            message: "The workload is not ready to open yet.".to_owned(),
         });
     }
 
     let access_url = job.access_url.ok_or_else(|| CommandError {
         code: "access_not_ready",
-        message: "the workload access endpoint is not ready".to_owned(),
+        message: "The workload is not ready to open yet.".to_owned(),
     })?;
     let access_url = validate_access_url(&access_url)?;
     state.open_access_if_current(snapshot.generation, &app, &access_url)
@@ -713,7 +778,7 @@ fn open_jupyter_setup_guide(app: AppHandle) -> Result<(), CommandError> {
         .open_url(JUPYTER_SETUP_GUIDE_URL, None::<&str>)
         .map_err(|_| CommandError {
             code: "open_failed",
-            message: "the operating system could not open the setup guide".to_owned(),
+            message: "The operating system could not open the setup guide.".to_owned(),
         })
 }
 
@@ -753,7 +818,7 @@ fn validate_access_url(value: &str) -> Result<Url, CommandError> {
 fn invalid_access_url() -> CommandError {
     CommandError {
         code: "invalid_access_url",
-        message: "the provider returned an unsafe workload access endpoint".to_owned(),
+        message: "The provider returned an unsafe workload URL.".to_owned(),
     }
 }
 
@@ -847,6 +912,14 @@ mod tests {
             "idempotency_conflict"
         );
         assert_eq!(provider_command_code("untrusted_code"), "provider_error");
+    }
+
+    #[test]
+    fn health_probe_accepts_only_a_reported_ok_status() {
+        assert!(healthy_body(br#"{"status":"ok"}"#));
+        assert!(!healthy_body(br#"{"status":"degraded"}"#));
+        assert!(!healthy_body(b"ok"));
+        assert!(!healthy_body(b""));
     }
 
     #[test]

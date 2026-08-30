@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  formatDuration,
+  errorCode,
   errorMessage,
+  formatDuration,
+  formatElapsed,
   formatUsdc,
   formatVram,
   isValidAccessUrl,
+  launchRecovery,
+  launchRecoveryCopy,
   showPrivateBetaAccess,
   shortId,
 } from './domain';
@@ -27,6 +31,12 @@ describe('compute formatting', () => {
     expect(shortId('job-1')).toBe('job-1');
     expect(shortId('job-0123456789abcdef')).toBe('job-012…9abcdef');
   });
+
+  it('counts elapsed time up without rounding away seconds', () => {
+    expect(formatElapsed(9)).toBe('0:09');
+    expect(formatElapsed(185)).toBe('3:05');
+    expect(formatElapsed(3_725)).toBe('1:02:05');
+  });
 });
 
 describe('native command errors', () => {
@@ -37,6 +47,33 @@ describe('native command errors', () => {
     expect(errorMessage({ code: 'provider_unreachable' })).toBe(
       'The runtime returned an unexpected error.',
     );
+  });
+
+  it('extracts a command code only when the runtime reports one', () => {
+    expect(errorCode({ code: 'stale_offer', message: 'Offer is gone.' })).toBe('stale_offer');
+    expect(errorCode(new Error('Offer is gone.'))).toBeNull();
+    expect(errorCode({ code: '  ' })).toBeNull();
+    expect(errorCode(null)).toBeNull();
+  });
+});
+
+describe('launch recovery', () => {
+  it('requotes when the reserved GPU is gone', () => {
+    expect(launchRecovery({ code: 'stale_offer', message: 'gone' })).toBe('requote');
+    expect(launchRecovery({ code: 'no_compatible_offer', message: 'gone' })).toBe('requote');
+    expect(launchRecoveryCopy.requote).toContain('taken');
+    expect(launchRecoveryCopy.requote).toContain('fresh quote');
+  });
+
+  it('routes rejected tokens and outdated plans to their own remedies', () => {
+    expect(launchRecovery({ code: 'unauthorized' })).toBe('reauthenticate');
+    expect(launchRecovery({ code: 'invalid_launch_plan' })).toBe('outdated');
+    expect(launchRecoveryCopy.outdated).toContain('latest release');
+  });
+
+  it('reports every other failure as-is', () => {
+    expect(launchRecovery({ code: 'spend_cap_exceeded' })).toBe('report');
+    expect(launchRecovery(new Error('network down'))).toBe('report');
   });
 });
 

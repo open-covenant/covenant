@@ -9,7 +9,6 @@ on:
     paths:
       - "apps/covenant-compute/**"
       - "agent-os/crates/covenant-compute/**"
-      - "agent-os/crates/covenant-compute-authority/**"
       - "agent-os/crates/covenant-compute-control/**"
       - "agent-os/crates/covenant-compute-vast/**"
       - "agent-os/Cargo.toml"
@@ -21,7 +20,6 @@ on:
     paths:
       - "apps/covenant-compute/**"
       - "agent-os/crates/covenant-compute/**"
-      - "agent-os/crates/covenant-compute-authority/**"
       - "agent-os/crates/covenant-compute-control/**"
       - "agent-os/crates/covenant-compute-vast/**"
       - "agent-os/Cargo.toml"
@@ -92,6 +90,12 @@ jobs:
         with:
           version: 10.31.0
 
+      - name: Install Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
 
@@ -101,12 +105,10 @@ jobs:
           cargo test --locked --manifest-path apps/covenant-compute/src-tauri/Cargo.toml
           cargo test --locked --manifest-path agent-os/Cargo.toml \
             -p covenant-compute \
-            -p covenant-compute-authority \
             -p covenant-compute-control \
             -p covenant-compute-vast
           cargo clippy --locked --manifest-path agent-os/Cargo.toml \
             -p covenant-compute \
-            -p covenant-compute-authority \
             -p covenant-compute-control \
             -p covenant-compute-vast \
             --all-targets -- -D warnings
@@ -131,7 +133,7 @@ jobs:
           curl --fail --retry 3 --silent --show-error \
             -H "Authorization: Bearer $RELEASE_TOKEN" \
             https://compute.opencovenant.org/v1/offers |
-            python3 -c 'import json,sys; data=json.load(sys.stdin); assert isinstance(data,list) and data'
+            python3 -c 'import json,sys; assert isinstance(json.load(sys.stdin),list)'
 
       - name: Require Apple release credentials
         if: runner.os == 'macOS' && github.ref_type == 'tag'

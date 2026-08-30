@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import type { ComputeApp, ComputeJob, JobStatus } from '../domain';
 import {
   formatDuration,
+  formatElapsed,
   formatUsdc,
   shortId,
   terminalStatuses,
@@ -15,6 +16,7 @@ interface JobPanelProps {
   job: ComputeJob;
   onCancel: () => Promise<void>;
   onOpen: () => Promise<void>;
+  startedAt: number | null;
 }
 
 const statusCopy: Record<JobStatus, string> = {
@@ -34,17 +36,41 @@ export const stopStorageCopy = {
   armed: 'Stopping permanently deletes workspace storage. Download your work before confirming.',
 } as const;
 
-export function JobPanel({ app, busy, job, onCancel, onOpen }: JobPanelProps) {
+export const slowProvisioningCopy =
+  'This is taking longer than usual. You can stop the workspace at any time.';
+
+export const unreportedFailureCopy = 'The provider did not report a reason for this failure.';
+
+const slowProvisioningSecs = 180;
+
+export function JobPanel({ app, busy, job, onCancel, onOpen, startedAt }: JobPanelProps) {
   const [cancelArmed, setCancelArmed] = useState(false);
-  const [copied, setCopied] = useState<string | null>(null);
+  const [copyState, setCopyState] = useState<{ label: string; failed: boolean } | null>(null);
+  const [now, setNow] = useState(() => Date.now());
   const terminal = terminalStatuses.has(job.status);
   const currentProgress = progress.indexOf(job.status);
   const hasSettlement = job.receipt?.transaction != null;
+  const elapsedSecs =
+    startedAt === null ? null : Math.max(0, Math.floor((now - startedAt) / 1_000));
+  const slowProvisioning =
+    job.status === 'provisioning' && elapsedSecs !== null && elapsedSecs >= slowProvisioningSecs;
+  const copiedLabel = copyState && !copyState.failed ? copyState.label : null;
+  const copyFailedLabel = copyState?.failed ? copyState.label : null;
+
+  useEffect(() => {
+    if (startedAt === null) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [startedAt]);
 
   async function copy(label: string, value: string) {
-    await navigator.clipboard.writeText(value);
-    setCopied(label);
-    window.setTimeout(() => setCopied(null), 1_500);
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopyState({ label, failed: false });
+    } catch {
+      setCopyState({ label, failed: true });
+    }
+    window.setTimeout(() => setCopyState(null), 1_500);
   }
 
   async function cancel() {
@@ -71,32 +97,38 @@ export function JobPanel({ app, busy, job, onCancel, onOpen }: JobPanelProps) {
 
       <div className="job-panel__identity">
         <code>{shortId(job.id, 9)}</code>
-        <button
-          aria-label="Copy workload ID"
-          className="icon-button"
-          onClick={() => void copy('job', job.id)}
-          type="button"
-        >
-          <Icon name={copied === 'job' ? 'check' : 'copy'} />
-        </button>
+        <div className="job-panel__copy">
+          {copyFailedLabel === 'job' && <span className="copy-failed">Couldn’t copy</span>}
+          <button
+            aria-label="Copy workload ID"
+            className="icon-button"
+            onClick={() => void copy('job', job.id)}
+            type="button"
+          >
+            <Icon name={copiedLabel === 'job' ? 'check' : 'copy'} />
+          </button>
+        </div>
       </div>
 
       {!terminal && (
-        <>
-          <div className="job-progress" aria-label={statusCopy[job.status]}>
-            {progress.map((status, index) => {
-              const complete = currentProgress >= index || job.status === 'stopping';
-              return (
-                <span
-                  className={`job-progress__step${complete ? ' job-progress__step--complete' : ''}`}
-                  key={status}
-                />
-              );
-            })}
-          </div>
-          <p className="job-panel__status-copy">{statusCopy[job.status]}</p>
-        </>
+        <div className="job-progress" aria-label={statusCopy[job.status]}>
+          {progress.map((status, index) => {
+            const complete = currentProgress >= index || job.status === 'stopping';
+            return (
+              <span
+                className={`job-progress__step${complete ? ' job-progress__step--complete' : ''}`}
+                key={status}
+              />
+            );
+          })}
+        </div>
       )}
+
+      <p className="job-panel__status-copy">
+        {statusCopy[job.status]}
+        {elapsedSecs !== null && <span>{formatElapsed(elapsedSecs)} elapsed</span>}
+        {slowProvisioning && <small>{slowProvisioningCopy}</small>}
+      </p>
 
       {job.status === 'running' && job.access_ready && (
         <button
@@ -109,7 +141,11 @@ export function JobPanel({ app, busy, job, onCancel, onOpen }: JobPanelProps) {
         </button>
       )}
 
-      {job.error && <p className="inline-alert inline-alert--error">{job.error}</p>}
+      {(job.error || job.status === 'failed') && (
+        <p className="inline-alert inline-alert--error">
+          {job.error ?? unreportedFailureCopy}
+        </p>
+      )}
 
       {!terminal && (
         <div className="job-panel__actions">
@@ -163,20 +199,32 @@ export function JobPanel({ app, busy, job, onCancel, onOpen }: JobPanelProps) {
               <dt>{hasSettlement ? 'Returned' : 'Allowance released'}</dt>
               <dd>{formatUsdc(job.receipt.refunded_usdc_micros)}</dd>
             </div>
+            {job.receipt.provisioning_secs > 0 && (
+              <div>
+                <dt>Startup, not charged</dt>
+                <dd>
+                  {formatDuration(job.receipt.provisioning_secs)} ·{' '}
+                  {formatUsdc(job.receipt.provisioning_usdc_micros)}
+                </dd>
+              </div>
+            )}
           </dl>
           <div className="receipt__commitment">
             <span>
               <small>Commitment</small>
               <code>{shortId(job.receipt.commitment, 10)}</code>
             </span>
-            <button
-              aria-label="Copy receipt commitment"
-              className="icon-button"
-              onClick={() => void copy('receipt', job.receipt!.commitment)}
-              type="button"
-            >
-              <Icon name={copied === 'receipt' ? 'check' : 'copy'} />
-            </button>
+            <div className="job-panel__copy">
+              {copyFailedLabel === 'receipt' && <span className="copy-failed">Couldn’t copy</span>}
+              <button
+                aria-label="Copy receipt commitment"
+                className="icon-button"
+                onClick={() => void copy('receipt', job.receipt!.commitment)}
+                type="button"
+              >
+                <Icon name={copiedLabel === 'receipt' ? 'check' : 'copy'} />
+              </button>
+            </div>
           </div>
         </div>
       )}

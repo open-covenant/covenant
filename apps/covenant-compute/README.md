@@ -19,8 +19,9 @@ service:
   system only after scheme and host validation.
 - The `covenant-compute-control` service implements authenticated ownership,
   durable SQLite reservations, restart recovery, deadline cancellation, and a
-  Vast Jupyter workspace adapter. `covenant-compute-authority` carries the
-  reusable authority contract.
+  Vast Jupyter workspace adapter. Its
+  [README](../../agent-os/crates/covenant-compute-control/README.md) documents
+  the HTTP API and every configuration variable.
 - The current private-beta control path accounts against an operator-funded
   allowance. It does not connect a consumer wallet or move user USDC.
 - The allowance caps beta-account usage, not the provider invoice. Vast has no
@@ -46,6 +47,9 @@ Run the interface against the explicit simulation:
 VITE_COMPUTE_DEMO=true pnpm --dir apps/covenant-compute dev
 ```
 
+The dev server binds `127.0.0.1:1420` and fails rather than moving to another
+port if that one is taken.
+
 Run the native application against a control plane:
 
 ```bash
@@ -66,11 +70,14 @@ when the app exits or the user clears the session.
 
 ## Validation
 
+Run these from the repository root; every path below is relative to it.
+
 ```bash
 pnpm --dir apps/covenant-compute test
 pnpm --dir apps/covenant-compute build
 cargo test --manifest-path agent-os/Cargo.toml -p covenant-compute
-cargo test --manifest-path agent-os/Cargo.toml -p covenant-compute-authority
+cargo test --manifest-path agent-os/Cargo.toml -p covenant-compute-control
+cargo test --manifest-path agent-os/Cargo.toml -p covenant-compute-vast
 cargo test --manifest-path apps/covenant-compute/src-tauri/Cargo.toml
 ```
 
@@ -94,8 +101,8 @@ persistent disk, and custom-domain configuration.
 
 Vast direct Jupyter uses a provider root certificate. A first-time macOS user
 must install and trust it before the operating system will reliably open a
-workspace; the app links to Vast's certificate setup guide. This remains part of
-the clean-machine release canary.
+workspace; the app links to Vast's certificate setup guide. Walking that path on
+a clean machine is part of the release check below.
 
 The production release gate remains a clean-machine install that can launch a
 real GPU workspace, open it, cancel it, and display a transaction-backed charge

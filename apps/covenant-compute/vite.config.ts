@@ -1,7 +1,7 @@
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [react()],
   clearScreen: false,
   server: {
@@ -16,6 +16,6 @@ export default defineConfig({
   },
   build: {
     target: ['es2022', 'chrome105', 'safari13'],
-    sourcemap: true,
+    sourcemap: mode !== 'production',
   },
-});
+}));

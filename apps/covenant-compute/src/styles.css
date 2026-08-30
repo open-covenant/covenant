@@ -218,6 +218,12 @@ code {
   box-shadow: 0 0 0 4px rgba(240, 120, 115, 0.09);
 }
 
+/* Cancelling is the customer's own action, so it reads as neutral, not failure. */
+.job-status--cancelled .status-dot {
+  background: var(--muted-bright);
+  box-shadow: 0 0 0 4px rgba(144, 153, 151, 0.08);
+}
+
 .icon-button {
   display: inline-grid;
   width: 28px;
@@ -1207,6 +1213,10 @@ main > .inline-alert {
   color: var(--danger);
 }
 
+.job-status--cancelled {
+  color: var(--muted-bright);
+}
+
 .job-panel__identity {
   display: flex;
   align-items: center;
@@ -1246,6 +1256,29 @@ main > .inline-alert {
   margin: 0 0 22px;
   color: var(--muted);
   font-size: 10px;
+}
+
+.job-panel__status-copy span {
+  margin-left: 7px;
+  color: var(--muted-bright);
+  font-variant-numeric: tabular-nums;
+}
+
+.job-panel__status-copy small {
+  display: block;
+  margin-top: 7px;
+  font-size: 10px;
+}
+
+.job-panel__copy {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.copy-failed {
+  color: var(--muted);
+  font-size: 9px;
 }
 
 .primary-button--access {

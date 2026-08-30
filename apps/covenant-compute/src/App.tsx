@@ -15,11 +15,15 @@ import type {
   TrustClass,
 } from './domain';
 import {
+  errorCode,
   errorMessage,
+  MIN_DURATION_MINUTES,
   formatDuration,
   formatTrust,
   formatUsdc,
   formatVram,
+  launchRecovery,
+  launchRecoveryCopy,
   showPrivateBetaAccess,
   terminalStatuses,
   trustClasses,
@@ -80,7 +84,9 @@ export default function App() {
   const [accessToken, setAccessToken] = useState('');
   const [accessPending, setAccessPending] = useState(false);
   const [accessError, setAccessError] = useState<string | null>(null);
+  const [pollGeneration, setPollGeneration] = useState(0);
   const refreshGeneration = useRef(0);
+  const jobStarts = useRef(new Map<string, number>());
 
   const selectedApp = apps.find((app) => app.id === selectedId);
   const onlineOffers = offers.filter((offer) => offer.online);
@@ -99,6 +105,7 @@ export default function App() {
     const generation = ++refreshGeneration.current;
     setConnecting(true);
     setLoadError(null);
+    setPollGeneration((current) => current + 1);
 
     const [runtimeResult, appsResult, offersResult, jobsResult] = await Promise.allSettled([
       computeApi.runtimeStatus(),
@@ -108,7 +115,7 @@ export default function App() {
     ]);
     if (generation !== refreshGeneration.current) return;
 
-    const nextRuntime =
+    const reportedRuntime =
       runtimeResult.status === 'fulfilled'
         ? runtimeResult.value
         : {
@@ -118,6 +125,11 @@ export default function App() {
             authentication: { source: 'none' },
             token_required: false,
           } satisfies RuntimeStatus;
+    // The health probe is unauthenticated, so a rejected token only shows up here.
+    const nextRuntime =
+      offersResult.status === 'rejected' && errorCode(offersResult.reason) === 'unauthorized'
+        ? { ...reportedRuntime, token_required: true }
+        : reportedRuntime;
     setRuntime(nextRuntime);
 
     if (appsResult.status === 'fulfilled') {
@@ -145,12 +157,11 @@ export default function App() {
       }
     }
 
-    if (jobsResult.status === 'fulfilled' && jobsResult.value.length) {
+    if (jobsResult.status === 'fulfilled') {
       setJob(
         (current) =>
           current ??
           jobsResult.value.find((candidate) => !terminalStatuses.has(candidate.status)) ??
-          jobsResult.value.at(-1) ??
           null,
       );
     }
@@ -175,15 +186,38 @@ export default function App() {
   useEffect(() => {
     if (!job || terminalStatuses.has(job.status)) return;
 
-    const timer = window.setInterval(() => {
-      void computeApi
-        .getJob(job.id)
-        .then(setJob)
-        .catch((error: unknown) => setActionError(`Status refresh failed. ${errorMessage(error)}`));
-    }, 2_500);
+    const id = job.id;
+    let active = true;
+    let failures = 0;
+    let timer = 0;
 
-    return () => window.clearInterval(timer);
-  }, [job?.id, job?.status]);
+    async function poll() {
+      try {
+        const next = await computeApi.getJob(id);
+        if (!active) return;
+        failures = 0;
+        setJob(next);
+      } catch (error) {
+        if (!active) return;
+        failures += 1;
+        if (failures >= 5) {
+          setActionError(
+            'Status updates paused after repeated failures. Use Refresh to resume.',
+          );
+          return;
+        }
+        setActionError(`Status refresh failed. ${errorMessage(error)}`);
+      }
+      if (active) timer = window.setTimeout(() => void poll(), 2_500);
+    }
+
+    timer = window.setTimeout(() => void poll(), 2_500);
+
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [job?.id, job?.status, pollGeneration]);
 
   const trustOptions = useMemo(() => {
     if (!selectedApp) return trustClasses;
@@ -202,7 +236,16 @@ export default function App() {
     setSelectedId(app.id);
   }
 
-  async function reviewQuote() {
+  // The control plane reports no start time, so the first sighting of a live job is the reference.
+  function firstSeen(id: string): number {
+    const seen = jobStarts.current.get(id);
+    if (seen !== undefined) return seen;
+    const now = Date.now();
+    jobStarts.current.set(id, now);
+    return now;
+  }
+
+  async function reviewQuote(notice: string | null = null) {
     if (!selectedApp) return;
     setQuotePending(true);
     setActionError(null);
@@ -211,6 +254,7 @@ export default function App() {
       const idempotencyKey = crypto.randomUUID();
       setPlan(await computeApi.planJob(request, idempotencyKey));
       setPlanKey(idempotencyKey);
+      setActionError(notice);
     } catch (error) {
       setPlan(null);
       setPlanKey(null);
@@ -230,7 +274,22 @@ export default function App() {
       setPlan(null);
       setPlanKey(null);
     } catch (error) {
-      setActionError(errorMessage(error));
+      switch (launchRecovery(error)) {
+        case 'requote':
+          setPlan(null);
+          setPlanKey(null);
+          await reviewQuote(launchRecoveryCopy.requote);
+          break;
+        case 'reauthenticate':
+          setRuntime((current) => ({ ...current, token_required: true }));
+          setActionError(launchRecoveryCopy.reauthenticate);
+          break;
+        case 'outdated':
+          setActionError(launchRecoveryCopy.outdated);
+          break;
+        default:
+          setActionError(errorMessage(error));
+      }
     } finally {
       setLaunchPending(false);
     }
@@ -296,6 +355,7 @@ export default function App() {
   }
 
   const runtimeLabel = connecting ? 'Connecting' : runtime.state;
+  const startedAt = job && !terminalStatuses.has(job.status) ? firstSeen(job.id) : null;
   const canQuote =
     runtime.state === 'connected' &&
     !connecting &&
@@ -492,7 +552,7 @@ export default function App() {
               <Icon name="shield" />
               <p>
                 <strong>The beta account cannot be charged past its allowance.</strong>
-                The control plane requests deletion at the selected duration and retries
+                Covenant Compute requests deletion at the selected duration and retries
                 until Vast confirms it. Provider billing may continue during an outage;
                 this build does not connect a wallet or move user funds.
                 <button
@@ -515,6 +575,7 @@ export default function App() {
                   job={job}
                   onCancel={cancel}
                   onOpen={openWorkspace}
+                  startedAt={startedAt}
                 />
                 {terminalStatuses.has(job.status) && (
                   <button
@@ -586,7 +647,7 @@ export default function App() {
                       <input
                         id="duration"
                         max={Math.floor(selectedApp.max_duration_secs / 60)}
-                        min="1"
+                        min={MIN_DURATION_MINUTES}
                         onChange={(event) =>
                           updateRequest(() => setDurationMinutes(Number(event.target.value)))
                         }
@@ -746,7 +807,7 @@ export default function App() {
       <footer>
         <span>Covenant Compute alpha</span>
         <span>Usage priced in USDC; wallet settlement is not active</span>
-        <span>Terminal usage produces provider evidence</span>
+        <span>Every settled job carries a provider receipt</span>
       </footer>
     </div>
   );

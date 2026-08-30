@@ -72,11 +72,19 @@ export interface ComputeReceipt {
   app_id: string;
   provider: string;
   runtime_secs: number;
+  /// Time the provider spent bringing the workspace up. Billed to us by the
+  /// provider, absorbed rather than charged on.
+  provisioning_secs: number;
+  provisioning_usdc_micros: number;
   charged_usdc_micros: number;
   refunded_usdc_micros: number;
   commitment: string;
   transaction: string | null;
 }
+
+/// The control plane refuses a shorter booking, since provisioning alone can
+/// outlast it.
+export const MIN_DURATION_MINUTES = 5;
 
 export interface ComputeJob {
   id: string;
@@ -151,6 +159,48 @@ export function errorMessage(error: unknown): string {
     if (typeof message === 'string' && message.trim()) return message;
   }
   return 'The runtime returned an unexpected error.';
+}
+
+export function errorCode(error: unknown): string | null {
+  if (typeof error === 'object' && error !== null && 'code' in error) {
+    const code = Reflect.get(error, 'code');
+    if (typeof code === 'string' && code.trim()) return code;
+  }
+  return null;
+}
+
+export type LaunchRecovery = 'requote' | 'reauthenticate' | 'outdated' | 'report';
+
+export const launchRecoveryCopy: Record<Exclude<LaunchRecovery, 'report'>, string> = {
+  requote:
+    'That GPU was taken before the launch completed. Here is a fresh quote to review.',
+  reauthenticate:
+    'Your access token was not accepted. Enter a current invite token to launch.',
+  outdated:
+    'This version of the app is out of date. Download the latest release to launch.',
+};
+
+export function launchRecovery(error: unknown): LaunchRecovery {
+  switch (errorCode(error)) {
+    case 'stale_offer':
+    case 'no_compatible_offer':
+      return 'requote';
+    case 'unauthorized':
+      return 'reauthenticate';
+    case 'invalid_launch_plan':
+      return 'outdated';
+    default:
+      return 'report';
+  }
+}
+
+export function formatElapsed(seconds: number): string {
+  const total = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(total / 3_600);
+  const minutes = Math.floor(total / 60) % 60;
+  const rest = (total % 60).toString().padStart(2, '0');
+  if (!hours) return `${minutes}:${rest}`;
+  return `${hours}:${minutes.toString().padStart(2, '0')}:${rest}`;
 }
 
 export function showPrivateBetaAccess(

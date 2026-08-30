@@ -815,9 +815,11 @@ describe('refund policy', () => {
     expect(await store.pendingBountyReserveLamports()).toBe('100000000');
 
     const replacement = await policy.createEscrow(
-      escrowRequest('bounty-lifecycle-replacement', undefined, {
-        sourceJobId: firstRequest.sourceJobId,
-      }),
+      escrowRequest(
+        'bounty-lifecycle-replacement',
+        new Date(now.getTime() + 2 * 60 * 60 * 1000).toISOString(),
+        { sourceJobId: firstRequest.sourceJobId },
+      ),
       'bounty-lifecycle-replacement',
     );
     expect(replacement.status).toBe('finalized');
@@ -2124,7 +2126,13 @@ async function reserveAndBind(
 ) {
   const reserve = await createProtectedEscrow(
     context,
-    escrowRequest(bountyId, offerExpiresAt),
+    escrowRequest(
+      bountyId,
+      // Tests that pin the chain clock must derive the offer expiry from it too.
+      // Defaulting to the real clock drifts past the eight day ceiling once wall
+      // time moves on, which fails these cases on a date rather than a change.
+      offerExpiresAt ?? new Date(context.now().getTime() + 2 * 60 * 60 * 1000).toISOString(),
+    ),
     `reserve-${bountyId}`,
   );
   const grant = await context.policy.issueGitHubIdentityGrant({ accessToken: 'o'.repeat(20) });

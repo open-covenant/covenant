@@ -58,8 +58,9 @@ export function deriveComputeConfigPda(programId: Address): DerivedPda {
   return derive([utf8('compute_config')], programId);
 }
 
-export function deriveComputeEscrowPda(jobId: Hash32, programId: Address): DerivedPda {
-  return derive([utf8('compute_escrow'), hash(jobId)], programId);
+// Scoped to the client so a job id seen in flight cannot be squatted.
+export function deriveComputeEscrowPda(jobId: Hash32, client: Address, programId: Address): DerivedPda {
+  return derive([utf8('compute_escrow'), hash(jobId), toPublicKey(client).toBuffer()], programId);
 }
 
 // Stake-program PDAs (CstkpU2q...).

@@ -1,4 +1,4 @@
-// Generated from the on-chain program IDL — do not edit by hand.
+// Generated from the on-chain program IDL. Do not edit by hand.
 // Anchor IDL for the covenant settlement program (cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y).
 export const settlementIdl = {
   "address": "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y",

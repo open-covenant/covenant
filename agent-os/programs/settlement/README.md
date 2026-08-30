@@ -16,8 +16,9 @@ accepted USDC mint and a settlement authority. The authority can be rotated by
 the protocol administrator.
 
 `fund_compute_job` creates the canonical
-`[b"compute_escrow", job_id]` PDA and deposits the client's maximum authorized
-USDC amount. The account permanently binds:
+`[b"compute_escrow", job_id, client]` PDA and deposits the client's maximum
+authorized USDC amount. Scoping the seeds to the client keeps a job ID seen in
+flight from being squatted. The account permanently binds:
 
 - the job ID and quote commitment;
 - the client and provider;
@@ -25,13 +26,23 @@ USDC amount. The account permanently binds:
 - the USDC mint, maximum charge, and expiry.
 
 `settle_compute_job` requires the current settlement authority. It rejects an
-actual charge above the maximum, pays the provider, and returns every remaining
-vault token to the client in the same Solana transaction.
+actual charge above the maximum, pays the provider, and returns the rest of the
+authorized maximum to the client in the same Solana transaction. Payouts are
+computed from the recorded maximum, never the live vault balance, so
+`actual + refunded == maximum` holds even if a third party sends tokens to the
+vault address.
 
-`refund_compute_job` returns the full vault to the client. The settlement
-authority can invoke it for a failed job at any time; the client can invoke it
-once the escrow expires. Refund remains available while the broader protocol
-is paused so a pause cannot strand deposited USDC.
+Expiry is bounded on both ends. A client must fund at least
+`MIN_COMPUTE_ESCROW_SECONDS` of runway, and settlement stays open for
+`COMPUTE_SETTLEMENT_GRACE_SECONDS` past `expires_at`, so a client cannot pick an
+expiry that consumes compute and then reclaims the deposit.
+
+`refund_compute_job` returns the authorized maximum to the client. The
+settlement authority can invoke it for a failed job at any time; the client can
+invoke it once the grace window closes. Refund remains available while the
+broader protocol is paused so a pause cannot strand deposited USDC. Replaying a
+refund matches on the commitment alone, so an authority retry that lands after
+the client's own refund succeeds instead of failing.
 
 Settled and refunded accounts remain allocated with zero-balance vaults.
 Repeating the exact terminal instruction succeeds without moving tokens.

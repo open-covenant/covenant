@@ -494,8 +494,8 @@ pub fn task_pda(task_id: &[u8; 32]) -> Pubkey {
     Pubkey::find_program_address(&[b"task", task_id], &ID).0
 }
 
-pub fn compute_escrow_pda(job_id: &[u8; 32]) -> Pubkey {
-    Pubkey::find_program_address(&[b"compute_escrow", job_id], &ID).0
+pub fn compute_escrow_pda(job_id: &[u8; 32], client: &Pubkey) -> Pubkey {
+    Pubkey::find_program_address(&[b"compute_escrow", job_id, client.as_ref()], &ID).0
 }
 
 pub fn receipt_batch_pda(batch_id: &[u8; 32]) -> Pubkey {
@@ -1082,6 +1082,18 @@ pub fn setup_compute_job(
     max_usdc_amount: u64,
     expires_at: i64,
 ) -> ComputeCtx {
+    setup_compute_job_with_dust(env, job_id, max_usdc_amount, expires_at, 0)
+}
+
+/// Same as `setup_compute_job`, but seeds the escrow vault with `vault_dust`
+/// before funding, as a third party who guessed the job id could.
+pub fn setup_compute_job_with_dust(
+    env: &mut Env,
+    job_id: &[u8; 32],
+    max_usdc_amount: u64,
+    expires_at: i64,
+    vault_dust: u64,
+) -> ComputeCtx {
     let payer = env.payer.insecure_clone();
     let usdc_mint = create_mint_with_decimals(&mut env.svm, &payer, 6);
     let settlement_authority = Keypair::new();
@@ -1090,7 +1102,7 @@ pub fn setup_compute_job(
             .expect("initialize compute payments");
 
     let provider = Keypair::new().pubkey();
-    let escrow = compute_escrow_pda(job_id);
+    let escrow = compute_escrow_pda(job_id, &env.payer.pubkey());
     let client_usdc = create_token_account(&mut env.svm, &payer, &usdc_mint, &env.payer.pubkey());
     let provider_usdc = create_token_account(&mut env.svm, &payer, &usdc_mint, &provider);
     let escrow_vault = create_token_account(&mut env.svm, &payer, &usdc_mint, &escrow);
@@ -1101,6 +1113,9 @@ pub fn setup_compute_job(
         &client_usdc,
         max_usdc_amount + 2_000_000,
     );
+    if vault_dust > 0 {
+        mint_to(&mut env.svm, &payer, &usdc_mint, &escrow_vault, vault_dust);
+    }
 
     let data = ix::FundComputeJob {
         args: FundComputeJobArgs {
@@ -1146,6 +1161,65 @@ pub fn setup_compute_job(
         provider,
         provider_usdc,
     }
+}
+
+/// Fund a second escrow against an existing compute config under a different
+/// client, so job-id collisions and fund-time guards can be exercised.
+pub fn fund_compute_job_as(
+    env: &mut Env,
+    compute: &ComputeCtx,
+    client: &Keypair,
+    job_id: &[u8; 32],
+    max_usdc_amount: u64,
+    expires_at: i64,
+) -> Result<Pubkey, TransactionError> {
+    let payer = env.payer.insecure_clone();
+    env.svm.airdrop(&client.pubkey(), 1_000_000_000).unwrap();
+    let escrow = compute_escrow_pda(job_id, &client.pubkey());
+    let client_usdc =
+        create_token_account(&mut env.svm, &payer, &compute.usdc_mint, &client.pubkey());
+    let escrow_vault = create_token_account(&mut env.svm, &payer, &compute.usdc_mint, &escrow);
+    mint_to(
+        &mut env.svm,
+        &payer,
+        &compute.usdc_mint,
+        &client_usdc,
+        max_usdc_amount,
+    );
+
+    let data = ix::FundComputeJob {
+        args: FundComputeJobArgs {
+            job_id: *job_id,
+            quote_commitment: [42u8; 32],
+            provider: compute.provider,
+            max_usdc_amount,
+            expires_at,
+        },
+    }
+    .data();
+    let metas = vec![
+        AccountMeta::new_readonly(env.config, false),
+        AccountMeta::new_readonly(compute.compute_config, false),
+        AccountMeta::new(escrow, false),
+        AccountMeta::new(client.pubkey(), true),
+        AccountMeta::new(client_usdc, false),
+        AccountMeta::new_readonly(compute.provider_usdc, false),
+        AccountMeta::new(escrow_vault, false),
+        AccountMeta::new_readonly(compute.usdc_mint, false),
+        AccountMeta::new_readonly(spl_token::ID, false),
+        AccountMeta::new_readonly(system_program::ID, false),
+    ];
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[client],
+    )?;
+    Ok(escrow)
 }
 
 #[allow(clippy::too_many_arguments)]

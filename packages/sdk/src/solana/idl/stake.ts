@@ -1,4 +1,4 @@
-// Generated from the on-chain program IDL — do not edit by hand.
+// Generated from the on-chain program IDL. Do not edit by hand.
 // Anchor IDL for the covenant stake program (CstkpU2q9RngbHh21WVAYeQjbN9UWgcH9pAiQcMaEcED).
 export const stakeIdl = {
   "address": "CstkpU2q9RngbHh21WVAYeQjbN9UWgcH9pAiQcMaEcED",

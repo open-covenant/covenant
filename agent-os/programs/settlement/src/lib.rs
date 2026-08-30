@@ -520,6 +520,7 @@ pub mod settlement {
         ctx: Context<UpdateComputeSettlementAuthority>,
         settlement_authority: Pubkey,
     ) -> Result<()> {
+        require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
         require!(
             settlement_authority != Pubkey::default(),
             CovenantError::InvalidComputeAuthority
@@ -546,12 +547,18 @@ pub mod settlement {
             CovenantError::InvalidComputeProvider
         );
         let now = Clock::get()?.unix_timestamp;
-        require!(args.expires_at > now, CovenantError::InvalidComputeExpiry);
+        let earliest_expiry = now
+            .checked_add(MIN_COMPUTE_ESCROW_SECONDS)
+            .ok_or(CovenantError::Overflow)?;
         require!(
-            ctx.accounts.escrow_vault.amount == 0,
-            CovenantError::InvalidComputeVaultBalance
+            args.expires_at >= earliest_expiry,
+            CovenantError::InvalidComputeExpiry
         );
 
+        // The vault is a plain token account at a derivable address, so a third
+        // party can seed it. Measure the deposit as a delta instead of demanding
+        // an empty vault, which would let one micro-USDC brick the job id.
+        let before = ctx.accounts.escrow_vault.amount;
         token_interface::transfer_checked(
             ctx.accounts.compute_fund_ctx(),
             args.max_usdc_amount,
@@ -559,7 +566,7 @@ pub mod settlement {
         )?;
         ctx.accounts.escrow_vault.reload()?;
         require!(
-            ctx.accounts.escrow_vault.amount == args.max_usdc_amount,
+            ctx.accounts.escrow_vault.amount.checked_sub(before) == Some(args.max_usdc_amount),
             CovenantError::InvalidComputeVaultBalance
         );
 
@@ -637,22 +644,28 @@ pub mod settlement {
         );
         let now = Clock::get()?.unix_timestamp;
         require!(
-            now < ctx.accounts.escrow.expires_at,
+            now < compute_refund_opens_at(ctx.accounts.escrow.expires_at)?,
             CovenantError::ComputeEscrowExpired
         );
 
-        let vault_amount = ctx.accounts.escrow_vault.amount;
         require!(
-            vault_amount >= ctx.accounts.escrow.max_usdc_amount,
+            ctx.accounts.escrow_vault.amount >= ctx.accounts.escrow.max_usdc_amount,
             CovenantError::InvalidComputeVaultBalance
         );
-        let refund_amount = vault_amount
+        // Paid out against the authorized maximum, never the live vault balance:
+        // a donation to the vault must not inflate the client's refund.
+        let refund_amount = ctx
+            .accounts
+            .escrow
+            .max_usdc_amount
             .checked_sub(actual_usdc_amount)
             .ok_or(CovenantError::Overflow)?;
         let job_id = ctx.accounts.escrow.job_id;
+        let client = ctx.accounts.escrow.client;
         let signer_seeds: &[&[u8]] = &[
             b"compute_escrow",
             job_id.as_ref(),
+            client.as_ref(),
             &[ctx.accounts.escrow.bump],
         ];
 
@@ -701,10 +714,12 @@ pub mod settlement {
     ) -> Result<()> {
         let signer = ctx.accounts.authority.key();
         match ctx.accounts.escrow.status {
+            // The commitment alone identifies the outcome. Keying the replay on
+            // the terminal signer would fail a settlement-authority retry that
+            // lands after the client's own expiry refund.
             COMPUTE_REFUNDED => {
                 require!(
-                    ctx.accounts.escrow.terminal_authority == signer
-                        && ctx.accounts.escrow.terminal_commitment == refund_commitment,
+                    ctx.accounts.escrow.terminal_commitment == refund_commitment,
                     CovenantError::ComputeTerminalMismatch
                 );
                 return Ok(());
@@ -720,22 +735,24 @@ pub mod settlement {
         );
         let now = Clock::get()?.unix_timestamp;
         let settlement_refund = signer == ctx.accounts.compute_config.settlement_authority;
-        let expired = now >= ctx.accounts.escrow.expires_at;
+        let expired = now >= compute_refund_opens_at(ctx.accounts.escrow.expires_at)?;
         let expired_client_refund = signer == ctx.accounts.escrow.client && expired;
         require!(
             settlement_refund || expired_client_refund,
             CovenantError::ComputeRefundUnauthorized
         );
 
-        let refund_amount = ctx.accounts.escrow_vault.amount;
+        let refund_amount = ctx.accounts.escrow.max_usdc_amount;
         require!(
-            refund_amount >= ctx.accounts.escrow.max_usdc_amount,
+            ctx.accounts.escrow_vault.amount >= refund_amount,
             CovenantError::InvalidComputeVaultBalance
         );
         let job_id = ctx.accounts.escrow.job_id;
+        let client = ctx.accounts.escrow.client;
         let signer_seeds: &[&[u8]] = &[
             b"compute_escrow",
             job_id.as_ref(),
+            client.as_ref(),
             &[ctx.accounts.escrow.bump],
         ];
         token_interface::transfer_checked(
@@ -1500,7 +1517,7 @@ pub struct FundComputeJob<'info> {
         init,
         payer = client,
         space = 8 + ComputeEscrow::INIT_SPACE,
-        seeds = [b"compute_escrow", args.job_id.as_ref()],
+        seeds = [b"compute_escrow", args.job_id.as_ref(), client.key().as_ref()],
         bump,
     )]
     pub escrow: Box<Account<'info, ComputeEscrow>>,
@@ -1559,7 +1576,7 @@ pub struct SettleComputeJob<'info> {
     pub compute_config: Box<Account<'info, ComputePaymentConfig>>,
     #[account(
         mut,
-        seeds = [b"compute_escrow", escrow.job_id.as_ref()],
+        seeds = [b"compute_escrow", escrow.job_id.as_ref(), escrow.client.as_ref()],
         bump = escrow.bump,
     )]
     pub escrow: Box<Account<'info, ComputeEscrow>>,
@@ -1635,7 +1652,7 @@ pub struct RefundComputeJob<'info> {
     pub compute_config: Box<Account<'info, ComputePaymentConfig>>,
     #[account(
         mut,
-        seeds = [b"compute_escrow", escrow.job_id.as_ref()],
+        seeds = [b"compute_escrow", escrow.job_id.as_ref(), escrow.client.as_ref()],
         bump = escrow.bump,
     )]
     pub escrow: Box<Account<'info, ComputeEscrow>>,
@@ -1832,6 +1849,20 @@ pub const TASK_REFUNDED: u8 = 4;
 pub const COMPUTE_FUNDED: u8 = 1;
 pub const COMPUTE_SETTLED: u8 = 2;
 pub const COMPUTE_REFUNDED: u8 = 3;
+
+/// Shortest escrow the client may fund. The provider never signs the quote, so
+/// without a floor a client could fund with a one-second expiry, consume the
+/// compute, and reclaim the whole deposit.
+pub const MIN_COMPUTE_ESCROW_SECONDS: i64 = 300;
+/// Settlement stays open this long past `expires_at`, and the client's
+/// unilateral refund opens when it closes.
+pub const COMPUTE_SETTLEMENT_GRACE_SECONDS: i64 = 3_600;
+
+fn compute_refund_opens_at(expires_at: i64) -> Result<i64> {
+    expires_at
+        .checked_add(COMPUTE_SETTLEMENT_GRACE_SECONDS)
+        .ok_or_else(|| CovenantError::Overflow.into())
+}
 
 #[account]
 #[derive(InitSpace)]
@@ -2227,7 +2258,7 @@ pub enum CovenantError {
     InvalidComputeCommitment,
     #[msg("compute provider must be a distinct non-zero address")]
     InvalidComputeProvider,
-    #[msg("compute escrow expiry must be in the future")]
+    #[msg("compute escrow expiry is inside the minimum escrow window")]
     InvalidComputeExpiry,
     #[msg("compute settlement authority must be non-zero")]
     InvalidComputeAuthority,
@@ -2237,10 +2268,10 @@ pub enum CovenantError {
     WrongComputeStatus,
     #[msg("terminal compute replay does not match the recorded outcome")]
     ComputeTerminalMismatch,
-    #[msg("compute refund requires the settlement authority or the client after expiry")]
+    #[msg("compute refund requires the settlement authority, or the client once the grace window closes")]
     ComputeRefundUnauthorized,
     #[msg("compute escrow vault balance does not cover the authorized maximum")]
     InvalidComputeVaultBalance,
-    #[msg("compute escrow has expired and can only be refunded")]
+    #[msg("compute settlement window has closed; the escrow can only be refunded")]
     ComputeEscrowExpired,
 }

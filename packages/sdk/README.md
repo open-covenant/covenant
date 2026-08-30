@@ -161,10 +161,15 @@ const mainnet = resolveSolanaNetwork({ cluster: 'mainnet' });
 Compute escrow is implemented in program source but is not part of the current
 mainnet settlement deployment. The `prepare*Compute*Instruction` builders
 therefore require an explicit `{ programId, cluster, rpcUrl }` deployment on
-every call. `deriveComputeConfigPda` and `deriveComputeEscrowPda` likewise
-require an explicit program ID. There is no default compute deployment.
-The instruction builders reject the SDK's current settlement program ID on
-`mainnet` and `mainnet-beta` until compute support is actually deployed there.
+every call, and reject an `rpcUrl` whose host serves a different cluster than
+the one declared. `deriveComputeConfigPda` and `deriveComputeEscrowPda` likewise
+require an explicit program ID; an escrow address is derived from the job ID and
+the funding client. There is no default compute deployment. The instruction
+builders reject the SDK's current settlement program ID on `mainnet` and
+`mainnet-beta` until compute support is actually deployed there.
+
+`fund`, `settle`, and `refund` default `tokenProgram` to Tokenkeg; pass the
+Token-2022 program ID for a Token-2022 payment mint.
 
 These builders are for a verified future deployment or local validator; do not
 send them to the SDK's current default settlement program.
@@ -176,7 +181,7 @@ send them to the SDK's current default settlement program.
 | Client | `CovenantClient` |
 | Signers | `keypairSigner`, `walletAdapterSigner` |
 | PDA derivation | `deriveConfigPda`, `deriveAgentPda`, `deriveTaskPda`, `deriveCreditsPda`, `deriveStakePositionPda`, `deriveReceiptBatchPda`, `deriveAssociatedTokenAddress`, the stake-program `derive*Pda`, `SETTLEMENT_PROGRAM_ID`, `STAKE_PROGRAM_ID` |
-| Account reads | `fetchConfig`, `fetchAgent`, `fetchTask`, `fetchCreditAccount`, `fetchStakePosition`, `fetchReceiptBatch`, and the matching `decode*` |
+| Account reads | `fetchConfig`, `fetchAgent`, `fetchTask`, `fetchCreditAccount`, `fetchStakePosition`, `fetchReceiptBatch`, `fetchComputeEscrow`, `fetchComputePaymentConfig`, and the matching `decode*` |
 | Settlement instructions | `prepareRegisterAgentInstruction`, `prepareStakeInstruction`, `prepareBuyCreditsInstruction`, `prepareCreateTaskInstruction`, `prepareReleaseTaskInstruction`, `prepareAnchorReceiptBatchInstruction` |
 | Staged compute settlement | `prepareInitializeComputePaymentsInstruction`, `prepareUpdateComputeSettlementAuthorityInstruction`, `prepareFundComputeJobInstruction`, `prepareSettleComputeJobInstruction`, `prepareRefundComputeJobInstruction`, `deriveComputeConfigPda`, `deriveComputeEscrowPda` |
 | Stake-program instructions | `prepareStakeInitializeInstruction`, `prepareStakeCreatePositionInstruction`, `prepareStakeIncreaseAmountInstruction`, `prepareStakeClaimInstruction`, `prepareStakeClosePositionInstruction`, plus the fee-router, pause, and authority admin builders |

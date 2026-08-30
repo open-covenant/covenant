@@ -52,6 +52,33 @@ export interface StakePositionAccount {
   bump: number;
 }
 
+export interface ComputeEscrowAccount {
+  jobId: Hash32;
+  quoteCommitment: Hash32;
+  client: SolanaAddress;
+  provider: SolanaAddress;
+  clientUsdc: SolanaAddress;
+  providerUsdc: SolanaAddress;
+  escrowVault: SolanaAddress;
+  usdcMint: SolanaAddress;
+  maxUsdcAmount: bigint;
+  actualUsdcAmount: bigint;
+  refundedUsdcAmount: bigint;
+  expiresAt: bigint;
+  createdAt: bigint;
+  terminalAt: bigint;
+  terminalCommitment: Hash32;
+  terminalAuthority: SolanaAddress;
+  status: number;
+  bump: number;
+}
+
+export interface ComputePaymentConfigAccount {
+  usdcMint: SolanaAddress;
+  settlementAuthority: SolanaAddress;
+  bump: number;
+}
+
 export interface TaskAccount {
   taskId: Hash32;
   client: SolanaAddress;
@@ -68,6 +95,8 @@ export interface TaskAccount {
 
 const DISCRIMINATORS = {
   Agent: [47, 166, 112, 147, 155, 197, 86, 7],
+  ComputeEscrow: [56, 57, 151, 207, 152, 81, 212, 113],
+  ComputePaymentConfig: [199, 106, 161, 139, 149, 124, 183, 244],
   Config: [155, 12, 170, 224, 30, 250, 204, 130],
   CreditAccount: [196, 171, 234, 132, 239, 255, 21, 96],
   ReceiptBatch: [234, 250, 48, 59, 242, 148, 55, 76],
@@ -115,6 +144,37 @@ export function decodeAgent(data: Uint8Array): AgentAccount {
     stake: r.u64(),
     reputation: r.u64(),
     active: r.bool(),
+    bump: r.u8(),
+  }));
+}
+
+export function decodeComputeEscrow(data: Uint8Array): ComputeEscrowAccount {
+  return decodeAccount(data, 'ComputeEscrow', (r) => ({
+    jobId: r.hash32(),
+    quoteCommitment: r.hash32(),
+    client: r.pubkey(),
+    provider: r.pubkey(),
+    clientUsdc: r.pubkey(),
+    providerUsdc: r.pubkey(),
+    escrowVault: r.pubkey(),
+    usdcMint: r.pubkey(),
+    maxUsdcAmount: r.u64(),
+    actualUsdcAmount: r.u64(),
+    refundedUsdcAmount: r.u64(),
+    expiresAt: r.i64(),
+    createdAt: r.i64(),
+    terminalAt: r.i64(),
+    terminalCommitment: r.hash32(),
+    terminalAuthority: r.pubkey(),
+    status: r.u8(),
+    bump: r.u8(),
+  }));
+}
+
+export function decodeComputePaymentConfig(data: Uint8Array): ComputePaymentConfigAccount {
+  return decodeAccount(data, 'ComputePaymentConfig', (r) => ({
+    usdcMint: r.pubkey(),
+    settlementAuthority: r.pubkey(),
     bump: r.u8(),
   }));
 }
@@ -185,6 +245,15 @@ async function fetchDecoded<T>(
 
 export const fetchAgent = (connection: Connection, address: Address): Promise<AgentAccount | null> =>
   fetchDecoded(connection, address, decodeAgent);
+export const fetchComputeEscrow = (
+  connection: Connection,
+  address: Address,
+): Promise<ComputeEscrowAccount | null> => fetchDecoded(connection, address, decodeComputeEscrow);
+export const fetchComputePaymentConfig = (
+  connection: Connection,
+  address: Address,
+): Promise<ComputePaymentConfigAccount | null> =>
+  fetchDecoded(connection, address, decodeComputePaymentConfig);
 export const fetchConfig = (connection: Connection, address: Address): Promise<ConfigAccount | null> =>
   fetchDecoded(connection, address, decodeConfig);
 export const fetchCreditAccount = (connection: Connection, address: Address): Promise<CreditAccount | null> =>

@@ -109,6 +109,11 @@ interface ComputeInstructionInput {
   computeConfigAccount: SolanaAddress;
 }
 
+// The program takes any SPL token interface; Tokenkeg is only the default.
+interface ComputeTokenInput {
+  tokenProgram?: SolanaAddress;
+}
+
 export interface InitializeComputePaymentsInput extends ComputeInstructionInput {
   authority: SolanaAddress;
   usdcMint: SolanaAddress;
@@ -120,7 +125,7 @@ export interface UpdateComputeSettlementAuthorityInput extends ComputeInstructio
   settlementAuthority: SolanaAddress;
 }
 
-export interface FundComputeJobInput extends ComputeInstructionInput {
+export interface FundComputeJobInput extends ComputeInstructionInput, ComputeTokenInput {
   escrowAccount: SolanaAddress;
   client: SolanaAddress;
   clientUsdcAccount: SolanaAddress;
@@ -134,7 +139,7 @@ export interface FundComputeJobInput extends ComputeInstructionInput {
   expiresAt: string;
 }
 
-export interface SettleComputeJobInput extends ComputeInstructionInput {
+export interface SettleComputeJobInput extends ComputeInstructionInput, ComputeTokenInput {
   escrowAccount: SolanaAddress;
   settlementAuthority: SolanaAddress;
   escrowVault: SolanaAddress;
@@ -145,7 +150,7 @@ export interface SettleComputeJobInput extends ComputeInstructionInput {
   receiptCommitment: Hash32;
 }
 
-export interface RefundComputeJobInput extends ComputeInstructionInput {
+export interface RefundComputeJobInput extends ComputeInstructionInput, ComputeTokenInput {
   escrowAccount: SolanaAddress;
   authority: SolanaAddress;
   escrowVault: SolanaAddress;
@@ -339,7 +344,7 @@ export function prepareFundComputeJobInstruction(input: FundComputeJobInput): Pr
       meta('provider_usdc', input.providerUsdcAccount, false, false),
       meta('escrow_vault', input.escrowVault, false, true),
       meta('usdc_mint', input.usdcMint, false, false),
-      meta('token_program', TOKEN_PROGRAM_ID, false, false),
+      meta('token_program', input.tokenProgram ?? TOKEN_PROGRAM_ID, false, false),
       meta('system_program', SYSTEM_PROGRAM_ID, false, false),
     ],
     data: {
@@ -366,7 +371,7 @@ export function prepareSettleComputeJobInstruction(
       meta('provider_usdc', input.providerUsdcAccount, false, true),
       meta('client_usdc', input.clientUsdcAccount, false, true),
       meta('usdc_mint', input.usdcMint, false, false),
-      meta('token_program', TOKEN_PROGRAM_ID, false, false),
+      meta('token_program', input.tokenProgram ?? TOKEN_PROGRAM_ID, false, false),
     ],
     data: {
       actual_usdc_amount: input.actualUsdcAmount,
@@ -388,7 +393,7 @@ export function prepareRefundComputeJobInstruction(
       meta('escrow_vault', input.escrowVault, false, true),
       meta('client_usdc', input.clientUsdcAccount, false, true),
       meta('usdc_mint', input.usdcMint, false, false),
-      meta('token_program', TOKEN_PROGRAM_ID, false, false),
+      meta('token_program', input.tokenProgram ?? TOKEN_PROGRAM_ID, false, false),
     ],
     data: {
       refund_commitment: assertHash32(input.refundCommitment, 'refund commitment'),
@@ -408,6 +413,30 @@ function bundle(
   };
 }
 
+const CLUSTER_ALIASES: Record<string, string> = {
+  mainnet: 'mainnet',
+  'mainnet-beta': 'mainnet',
+  devnet: 'devnet',
+  testnet: 'testnet',
+  localnet: 'localnet',
+  localhost: 'localnet',
+};
+
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1', '[::1]']);
+const CLUSTER_HOSTS: Array<[string, RegExp]> = [
+  ['mainnet', /(^|[.-])mainnet([.-]|$)/],
+  ['devnet', /(^|[.-])devnet([.-]|$)/],
+  ['testnet', /(^|[.-])testnet([.-]|$)/],
+];
+
+// The cluster a host advertises, or null when it keeps that private (a
+// dedicated RPC on a vanity domain). Naming is the only signal available
+// without a getGenesisHash round trip, which a builder must stay free of.
+function hostCluster(host: string): string | null {
+  if (LOCAL_HOSTS.has(host)) return 'localnet';
+  return CLUSTER_HOSTS.find(([, pattern]) => pattern.test(host))?.[0] ?? null;
+}
+
 function computeBundle(
   deployment: ComputeProgramDeployment,
   instruction: Omit<PreparedSolanaInstruction, 'programId'>,
@@ -418,10 +447,20 @@ function computeBundle(
   const rpcUrl = deployment.rpcUrl.trim();
   if (!cluster) throw new Error('compute cluster is required');
   if (!rpcUrl) throw new Error('compute RPC URL is required');
-  if (
-    programId === DEFAULT_PROTOCOL_PROGRAM_ID &&
-    ['mainnet', 'mainnet-beta'].includes(cluster.toLowerCase())
-  ) {
+
+  const declared = CLUSTER_ALIASES[cluster.toLowerCase()];
+  if (!declared) throw new Error(`unknown compute cluster: ${cluster}`);
+  let host: string;
+  try {
+    host = new URL(rpcUrl).hostname.toLowerCase();
+  } catch {
+    throw new Error(`compute RPC URL must be an absolute URL, got: ${rpcUrl}`);
+  }
+  const actual = hostCluster(host);
+  if (actual && actual !== declared) {
+    throw new Error(`compute RPC URL ${host} serves ${actual}, not the declared cluster ${cluster}`);
+  }
+  if (programId === DEFAULT_PROTOCOL_PROGRAM_ID && declared === 'mainnet') {
     throw new Error('compute settlement is not deployed at the current mainnet program');
   }
 

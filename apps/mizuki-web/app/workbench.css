@@ -1926,11 +1926,13 @@
 
 .workbench-wallet-dialog .workbench-wallet-backdrop {
   position: absolute;
+  z-index: 0;
   inset: 0;
 }
 
 .workbench-wallet-dialog .workbench-wallet-menu {
   position: relative;
+  z-index: 1;
   top: auto;
   right: auto;
   width: min(420px, calc(100vw - 32px));

@@ -821,6 +821,48 @@ describe('wallet-returned SVM transaction validation', () => {
     await expect(validate(fixture, addLighthouse(fixture.original, 3))).resolves.toBeDefined();
   });
 
+  it('accepts a wallet-raised compute-unit limit within the network maximum', async () => {
+    const fixture = await paymentFixture();
+    const raised = changeComputeBudget(
+      fixture.original,
+      0,
+      new Uint8Array([2, 0x80, 0x1a, 0x06, 0x00]),
+    );
+
+    await expect(validate(fixture, raised)).resolves.toBeDefined();
+    await expect(validate(fixture, addLighthouse(raised, 3))).resolves.toBeDefined();
+  });
+
+  it('rejects a lowered or oversized compute-unit limit and a changed price', async () => {
+    const fixture = await paymentFixture();
+    const cases = [
+      changeComputeBudget(fixture.original, 0, new Uint8Array([2, 0x10, 0x27, 0x00, 0x00])),
+      changeComputeBudget(fixture.original, 0, new Uint8Array([2, 0x60, 0xe3, 0x16, 0x00])),
+      changeComputeBudget(fixture.original, 1, new Uint8Array([3, 2, 0, 0, 0, 0, 0, 0, 0])),
+    ];
+
+    for (const signed of cases) {
+      await expect(validate(fixture, signed)).rejects.toMatchObject({
+        code: 'wallet_transaction_unsafe',
+        diagnostic: expect.stringContaining('compute_budget_changed'),
+      });
+    }
+  });
+
+  it('names the failed protection in the rejection diagnostic', async () => {
+    const fixture = await paymentFixture();
+
+    await expect(validate(fixture, changeTransferAmount(fixture.original))).rejects.toMatchObject({
+      diagnostic: expect.stringContaining('transfer_changed'),
+    });
+    await expect(validate(fixture, changeMemo(fixture.original))).rejects.toMatchObject({
+      diagnostic: expect.stringContaining('trailing_instructions'),
+    });
+    await expect(validate(fixture, addLighthouse(fixture.original, 4))).rejects.toMatchObject({
+      diagnostic: expect.stringContaining('instruction_count'),
+    });
+  });
+
   it('rejects more Lighthouse instructions than the facilitator accepts', async () => {
     const fixture = await paymentFixture();
 
@@ -1042,6 +1084,13 @@ function appendInstruction(transaction: Uint8Array, programAddress: string): Uin
       { programAddress: address(programAddress), data: new Uint8Array([1]) },
     ],
   } as ReturnType<typeof decompile>);
+}
+
+function changeComputeBudget(transaction: Uint8Array, index: number, data: Uint8Array): Uint8Array {
+  const message = decompile(transaction);
+  const instructions = [...message.instructions];
+  instructions[index] = { ...instructions[index]!, data };
+  return encodeSigned({ ...message, instructions } as ReturnType<typeof decompile>);
 }
 
 function changeTransferAmount(transaction: Uint8Array): Uint8Array {

@@ -590,6 +590,65 @@ describe('workbench account API', () => {
     }
   });
 
+  it('records a client payment failure diagnostic against the attempt', async () => {
+    const store = new MemoryStore();
+    await store.upsertContributor('42', 'maintainer');
+    await store.saveQuote(quote);
+    await store.linkQuoteToAccount(quote.id, '42');
+    await openIntake(store);
+    const attempt = await store.createPaymentAttempt({
+      githubId: '42',
+      quoteId: quote.id,
+      wallet: payment.payer,
+      appBuild: 'release-f3be9e6',
+    });
+    const base = await serve(dependencies(store));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    try {
+      const recorded = await fetch(`${base}/v1/account/payment-attempts/${attempt.id}/failure`, {
+        method: 'POST',
+        headers: { ...sessionHeaders, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          code: 'wallet_transaction_unsafe',
+          diagnostic: 'compute_budget_changed original=[budget:5d0a] signed=[budget:5d0a]',
+        }),
+      });
+      expect(recorded.status).toBe(202);
+      await expect(recorded.json()).resolves.toEqual({ recorded: true });
+      const logged = warn.mock.calls
+        .map(([line]) => String(line))
+        .find((line) => line.includes('payment_client_failure'));
+      expect(logged).toBeDefined();
+      expect(JSON.parse(logged!)).toMatchObject({
+        event: 'payment_client_failure',
+        attemptId: attempt.id,
+        quoteId: quote.id,
+        code: 'wallet_transaction_unsafe',
+        diagnostic: 'compute_budget_changed original=[budget:5d0a] signed=[budget:5d0a]',
+      });
+
+      const invalidCode = await fetch(`${base}/v1/account/payment-attempts/${attempt.id}/failure`, {
+        method: 'POST',
+        headers: { ...sessionHeaders, 'content-type': 'application/json' },
+        body: JSON.stringify({ code: 'Not A Code!' }),
+      });
+      expect(invalidCode.status).toBe(400);
+
+      const missing = await fetch(
+        `${base}/v1/account/payment-attempts/1cf571dd-38b8-4f7c-b4a1-000000000000/failure`,
+        {
+          method: 'POST',
+          headers: { ...sessionHeaders, 'content-type': 'application/json' },
+          body: JSON.stringify({ code: 'wallet_rejected' }),
+        },
+      );
+      expect(missing.status).toBe(404);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it('authorizes one recoverable wallet prompt nonce and rejects competing clients', async () => {
     const store = new MemoryStore();
     await store.upsertContributor('42', 'maintainer');

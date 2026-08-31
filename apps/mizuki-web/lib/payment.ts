@@ -184,6 +184,20 @@ export async function reportPaymentAttemptStage(
   });
 }
 
+export async function reportPaymentAttemptFailure(
+  attemptId: string,
+  failure: { code: string; diagnostic?: string },
+): Promise<void> {
+  await workbenchMutation(`/v1/account/payment-attempts/${encodeURIComponent(attemptId)}/failure`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      code: failure.code,
+      ...(failure.diagnostic ? { diagnostic: failure.diagnostic } : {}),
+    }),
+  });
+}
+
 export async function checkPaymentAttempt(
   attemptId: string,
   expectedQuoteId?: string,

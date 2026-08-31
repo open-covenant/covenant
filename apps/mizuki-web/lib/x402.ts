@@ -63,13 +63,16 @@ export type PaymentClientErrorCode =
   | 'wallet_transaction_unsafe';
 
 export class PaymentClientError extends Error {
+  readonly diagnostic?: string;
+
   constructor(
     readonly code: PaymentClientErrorCode,
     message: string,
-    options?: ErrorOptions,
+    options?: ErrorOptions & { diagnostic?: string },
   ) {
-    super(message, options);
+    super(message, options?.cause !== undefined ? { cause: options.cause } : undefined);
     this.name = 'PaymentClientError';
+    this.diagnostic = options?.diagnostic;
   }
 }
 
@@ -431,15 +434,22 @@ export async function validateWalletSignedTransaction(
   const signedCompiled = messageDecoder.decode(signed.messageBytes);
   const originalSigners = signerAddresses(originalCompiled);
   const signedSigners = signerAddresses(signedCompiled);
-  if (
-    String(originalCompiled.lifetimeToken) !== String(signedCompiled.lifetimeToken) ||
-    originalSigners[0] !== input.terms.feePayer ||
-    !sameStrings(originalSigners, signedSigners) ||
-    !signedSigners.includes(input.payer.address) ||
-    hasAddressTableLookups(originalCompiled) ||
-    hasAddressTableLookups(signedCompiled)
-  ) {
-    throw unsafeWalletTransaction();
+  if (hasAddressTableLookups(originalCompiled) || hasAddressTableLookups(signedCompiled)) {
+    throw unsafeWalletTransaction('address_table_lookups');
+  }
+  if (String(originalCompiled.lifetimeToken) !== String(signedCompiled.lifetimeToken)) {
+    throw unsafeWalletTransaction('lifetime_token_changed');
+  }
+  if (originalSigners[0] !== input.terms.feePayer) {
+    throw unsafeWalletTransaction('fee_payer_not_first');
+  }
+  if (!sameStrings(originalSigners, signedSigners)) {
+    throw unsafeWalletTransaction(
+      `signer_set_changed original=${originalSigners.length} signed=${signedSigners.length}`,
+    );
+  }
+  if (!signedSigners.includes(input.payer.address)) {
+    throw unsafeWalletTransaction('payer_not_signer');
   }
 
   let originalMessage: ReturnType<typeof decompileTransactionMessage>;
@@ -451,29 +461,45 @@ export async function validateWalletSignedTransaction(
     throw new PaymentClientError(
       'wallet_transaction_unsafe',
       'The wallet added unsupported transaction accounts',
-      { cause },
+      { cause, diagnostic: 'decompile_failed' },
     );
   }
   const originalInstructions = originalMessage.instructions;
   const signedInstructions = signedMessage.instructions;
   if (
     originalMessage.feePayer.address !== input.terms.feePayer ||
-    signedMessage.feePayer.address !== input.terms.feePayer ||
+    signedMessage.feePayer.address !== input.terms.feePayer
+  ) {
+    throw unsafeWalletTransaction('fee_payer_changed');
+  }
+  if (
     originalInstructions.length !== 4 ||
     signedInstructions.length < 4 ||
     signedInstructions.length > 4 + MAX_LIGHTHOUSE_INSTRUCTIONS
   ) {
-    throw unsafeWalletTransaction();
+    throw unsafeWalletTransaction(
+      `instruction_count ${shapeSummary(originalInstructions, signedInstructions)}`,
+    );
   }
 
   if (
     originalInstructions[0]?.programAddress !== COMPUTE_BUDGET_PROGRAM ||
-    originalInstructions[1]?.programAddress !== COMPUTE_BUDGET_PROGRAM ||
-    !equalInstruction(originalInstructions[0], signedInstructions[0]) ||
-    !equalInstruction(originalInstructions[1], signedInstructions[1]) ||
-    !equalInstruction(originalInstructions[2], signedInstructions[2])
+    originalInstructions[1]?.programAddress !== COMPUTE_BUDGET_PROGRAM
   ) {
-    throw unsafeWalletTransaction();
+    throw unsafeWalletTransaction('compute_budget_missing');
+  }
+  if (
+    !equalComputeBudgetInstruction(originalInstructions[0], signedInstructions[0]) ||
+    !equalComputeBudgetInstruction(originalInstructions[1], signedInstructions[1])
+  ) {
+    throw unsafeWalletTransaction(
+      `compute_budget_changed ${shapeSummary(originalInstructions, signedInstructions)}`,
+    );
+  }
+  if (!equalInstruction(originalInstructions[2], signedInstructions[2])) {
+    throw unsafeWalletTransaction(
+      `transfer_changed ${shapeSummary(originalInstructions, signedInstructions)}`,
+    );
   }
 
   await validateTransfer(originalInstructions[2], input.payer.address, input.terms);
@@ -490,6 +516,7 @@ export async function validateWalletSignedTransaction(
     throw new PaymentClientError(
       'wallet_signature_invalid',
       'The wallet did not sign the payment transaction',
+      { diagnostic: 'payer_signature_missing' },
     );
   }
   const verify = input.verifySignature ?? verifyTransactionSignature;
@@ -503,6 +530,7 @@ export async function validateWalletSignedTransaction(
     throw new PaymentClientError(
       'wallet_signature_invalid',
       'The wallet returned a signature for a different transaction',
+      { diagnostic: 'payer_signature_mismatch' },
     );
   }
 
@@ -582,9 +610,11 @@ function walletSigner(
 
 function walletSigningFailure(cause: unknown): PaymentClientError {
   const detail = walletErrorDetail(cause);
+  const diagnostic = `wallet_error ${detail.slice(0, 200)}`;
   if (/\b4001\b|reject|declin|cancel|user denied|user refused/i.test(detail)) {
     return new PaymentClientError('wallet_rejected', 'The wallet rejected the payment request', {
       cause,
+      diagnostic,
     });
   }
   if (
@@ -595,7 +625,7 @@ function walletSigningFailure(cause: unknown): PaymentClientError {
     return new PaymentClientError(
       'wallet_disconnected',
       'The wallet disconnected before authorizing the payment',
-      { cause },
+      { cause, diagnostic },
     );
   }
   if (
@@ -606,13 +636,13 @@ function walletSigningFailure(cause: unknown): PaymentClientError {
     return new PaymentClientError(
       'wallet_response_invalid',
       'The wallet returned an unsupported signing response',
-      { cause },
+      { cause, diagnostic },
     );
   }
   return new PaymentClientError(
     'wallet_authorization_failed',
     'The wallet could not authorize the payment',
-    { cause },
+    { cause, diagnostic },
   );
 }
 
@@ -699,12 +729,12 @@ async function validateTransfer(
   terms: PaymentTerms,
 ): Promise<void> {
   if (!instruction || ![TOKEN_PROGRAM, TOKEN_2022_PROGRAM].includes(instruction.programAddress)) {
-    throw unsafeWalletTransaction();
+    throw unsafeWalletTransaction('transfer_program');
   }
   const data = instruction.data;
   const accounts = instruction.accounts ?? [];
   if (!data || data.length < 10 || data[0] !== 12 || accounts.length !== 4) {
-    throw unsafeWalletTransaction();
+    throw unsafeWalletTransaction('transfer_layout');
   }
   const amount = new DataView(data.buffer, data.byteOffset, data.byteLength).getBigUint64(1, true);
   const tokenProgram = instruction.programAddress;
@@ -718,7 +748,7 @@ async function validateTransfer(
     accounts[3]?.address !== payer ||
     !isSignerRole(accounts[3].role)
   ) {
-    throw unsafeWalletTransaction();
+    throw unsafeWalletTransaction('transfer_terms');
   }
 }
 
@@ -733,7 +763,7 @@ function validateOptionalInstructions(
     originalMemo.programAddress !== MEMO_PROGRAM ||
     new TextDecoder().decode(originalMemo.data) !== terms.memo
   ) {
-    throw unsafeWalletTransaction();
+    throw unsafeWalletTransaction('memo_terms');
   }
   const memos = instructions.filter((instruction) => instruction.programAddress === MEMO_PROGRAM);
   const lighthouse = instructions.filter(
@@ -745,7 +775,9 @@ function validateOptionalInstructions(
     lighthouse.length > MAX_LIGHTHOUSE_INSTRUCTIONS ||
     memos.length + lighthouse.length !== instructions.length
   ) {
-    throw unsafeWalletTransaction();
+    throw unsafeWalletTransaction(
+      `trailing_instructions memos=${memos.length} lighthouse=${lighthouse.length} trailing=${instructions.length}`,
+    );
   }
   for (const instruction of lighthouse) {
     if (
@@ -755,7 +787,7 @@ function validateOptionalInstructions(
           (isSignerRole(account.role) && account.address !== payer),
       )
     ) {
-      throw unsafeWalletTransaction();
+      throw unsafeWalletTransaction('lighthouse_accounts');
     }
   }
 }
@@ -768,7 +800,9 @@ function validateWritableAccounts(
   for (const instruction of signed) {
     for (const account of instruction.accounts ?? []) {
       if (isWritableRole(account.role) && !originalWritable.has(account.address)) {
-        throw unsafeWalletTransaction();
+        throw unsafeWalletTransaction(
+          `writable_escalation ${instructionLabel(instruction)} ${account.address}`,
+        );
       }
     }
   }
@@ -857,10 +891,65 @@ async function verifyTransactionSignature(
   }
 }
 
-function unsafeWalletTransaction(): PaymentClientError {
+function unsafeWalletTransaction(diagnostic: string): PaymentClientError {
   return new PaymentClientError(
     'wallet_transaction_unsafe',
     'The wallet changed protected payment instructions',
+    { diagnostic },
+  );
+}
+
+const PROGRAM_LABELS: Record<string, string> = {
+  [COMPUTE_BUDGET_PROGRAM]: 'budget',
+  [TOKEN_PROGRAM]: 'token',
+  [TOKEN_2022_PROGRAM]: 'token22',
+  [MEMO_PROGRAM]: 'memo',
+  [LIGHTHOUSE_PROGRAM]: 'lighthouse',
+};
+
+function instructionLabel(
+  instruction: ReturnType<typeof decompileTransactionMessage>['instructions'][number],
+): string {
+  const label =
+    PROGRAM_LABELS[instruction.programAddress] ?? instruction.programAddress.slice(0, 8);
+  return `${label}:${instruction.data?.length ?? 0}d${(instruction.accounts ?? []).length}a`;
+}
+
+function shapeSummary(
+  original: readonly ReturnType<typeof decompileTransactionMessage>['instructions'][number][],
+  signed: readonly ReturnType<typeof decompileTransactionMessage>['instructions'][number][],
+): string {
+  return `original=[${original.map(instructionLabel).join(',')}] signed=[${signed.map(instructionLabel).join(',')}]`;
+}
+
+const COMPUTE_UNIT_LIMIT_DISCRIMINATOR = 2;
+const MAX_COMPUTE_UNIT_LIMIT = 1_400_000;
+
+function computeUnitLimitValue(
+  instruction: ReturnType<typeof decompileTransactionMessage>['instructions'][number] | undefined,
+): number | undefined {
+  if (!instruction || instruction.programAddress !== COMPUTE_BUDGET_PROGRAM) return undefined;
+  const data = instruction.data;
+  if (!data || data.length !== 5 || data[0] !== COMPUTE_UNIT_LIMIT_DISCRIMINATOR) return undefined;
+  if ((instruction.accounts ?? []).length > 0) return undefined;
+  return new DataView(data.buffer, data.byteOffset, data.byteLength).getUint32(1, true);
+}
+
+function equalComputeBudgetInstruction(
+  original: ReturnType<typeof decompileTransactionMessage>['instructions'][number] | undefined,
+  signed: ReturnType<typeof decompileTransactionMessage>['instructions'][number] | undefined,
+): boolean {
+  if (equalInstruction(original, signed)) return true;
+  // Phantom raises the compute-unit limit to cover the Lighthouse guard
+  // instructions it appends. A raised limit only spends more of the quoted
+  // priority fee, so accept it; the price instruction must stay untouched.
+  const originalLimit = computeUnitLimitValue(original);
+  const signedLimit = computeUnitLimitValue(signed);
+  return (
+    originalLimit !== undefined &&
+    signedLimit !== undefined &&
+    signedLimit >= originalLimit &&
+    signedLimit <= MAX_COMPUTE_UNIT_LIMIT
   );
 }
 

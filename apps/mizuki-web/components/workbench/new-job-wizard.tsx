@@ -26,6 +26,7 @@ import {
   quoteMatchesIssue,
   readJsonResponse,
   reconcilePaymentAttempt,
+  reportPaymentAttemptFailure,
   reportPaymentAttemptStage,
   saveWorkbenchPaymentRecovery,
   withPaymentAttemptLock,
@@ -54,6 +55,7 @@ import {
   assertPaymentBalance,
   canRetryWalletPrompt,
   createPaymentFetch,
+  PaymentClientError,
   paymentPreparationError,
 } from '@/lib/x402';
 import {
@@ -633,6 +635,7 @@ function IssueAndPayment({
       paymentRecovery.current = null;
       router.push(`/app/jobs/${encodeURIComponent(job.id)}`);
     } catch (cause) {
+      reportPaymentFailureDiagnostic(attemptId, cause);
       if (recovery) {
         if (recovery.walletAuthorized !== true && !canRetryWalletPrompt(cause)) {
           clearWorkbenchPaymentRecovery(accountId, paymentQuote.id);
@@ -1436,6 +1439,18 @@ export function paymentAttemptError(
         ? paymentAttemptRequestError(cause)
         : paymentPreparationError(cause, quoteAmount);
   return attemptId ? `${message} Reference ${attemptId}.` : message;
+}
+
+function reportPaymentFailureDiagnostic(attemptId: string | undefined, cause: unknown): void {
+  if (!attemptId) return;
+  const code = cause instanceof PaymentClientError ? cause.code : 'unclassified';
+  const detail = cause instanceof PaymentClientError ? cause.diagnostic : undefined;
+  const message = cause instanceof Error ? cause.message : String(cause);
+  const diagnostic = [detail, message].filter(Boolean).join(' | ').slice(0, 600);
+  void reportPaymentAttemptFailure(attemptId, {
+    code,
+    ...(diagnostic ? { diagnostic } : {}),
+  }).catch(() => undefined);
 }
 
 function paymentAttemptRequestError(cause: WorkbenchRequestError): string {

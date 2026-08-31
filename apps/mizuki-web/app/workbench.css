@@ -2278,6 +2278,35 @@
   margin: 0;
 }
 
+.workbench-job-room .job-status-panel {
+  border-color: var(--wb-line);
+  background: var(--wb-panel);
+}
+
+.workbench-job-room .job-status-heading,
+.workbench-job-room .job-progress li,
+.workbench-job-room .job-progress li span {
+  border-color: var(--wb-line);
+}
+
+.workbench-job-room .job-status-heading > div > span,
+.workbench-job-room .processing-indicator,
+.workbench-job-room .refund-path {
+  color: var(--wb-muted);
+}
+
+.workbench-job-room .processing-indicator i {
+  box-shadow: 0 0 0 5px rgba(237, 235, 245, 0.06);
+}
+
+.workbench-job-room .job-progress li {
+  color: var(--wb-dim);
+}
+
+.workbench-job-room .job-progress li.complete {
+  color: var(--wb-text);
+}
+
 .billing-policy-notice {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

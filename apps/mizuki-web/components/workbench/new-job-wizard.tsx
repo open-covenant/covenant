@@ -211,7 +211,7 @@ export function NewJobWizard({
 
           {repository?.readiness === 'ready' && (
             <>
-              <RepositoryPullRequests repository={repository.fullName} />
+              <RepositoryPullRequests repository={repository.fullName} authorize={false} />
               <IssueAndPayment
                 repository={repository}
                 initialIssue={initialIssue}

@@ -110,7 +110,10 @@ export function Jobs() {
   );
 }
 
-export function RepositoryPullRequests({ repository }: { repository?: string } = {}) {
+export function RepositoryPullRequests({
+  repository,
+  authorize = true,
+}: { repository?: string; authorize?: boolean } = {}) {
   const pullRequests = useWorkbenchResource('/v1/account/pull-requests', normalizePullRequestPage);
   const visiblePullRequests =
     pullRequests.status === 'ready' && repository
@@ -153,6 +156,7 @@ export function RepositoryPullRequests({ repository }: { repository?: string } =
           {visiblePullRequests.map((pullRequest) => (
             <PullRequestRow
               pullRequest={pullRequest}
+              authorize={authorize}
               key={`${pullRequest.repository}#${pullRequest.number}`}
             />
           ))}
@@ -183,7 +187,13 @@ export function RepositoryPullRequests({ repository }: { repository?: string } =
   );
 }
 
-function PullRequestRow({ pullRequest }: { pullRequest: WorkbenchPullRequest }) {
+function PullRequestRow({
+  pullRequest,
+  authorize,
+}: {
+  pullRequest: WorkbenchPullRequest;
+  authorize: boolean;
+}) {
   return (
     <div className="repository-pull-request-row">
       <a
@@ -209,7 +219,7 @@ function PullRequestRow({ pullRequest }: { pullRequest: WorkbenchPullRequest }) 
           {pullRequestProvenanceLabel(pullRequest)}
         </span>
         <WorkbenchStatus value={pullRequest.draft ? 'draft' : pullRequest.state} />
-        {!canAuthorizePullRequest(pullRequest) ? (
+        {!authorize || !canAuthorizePullRequest(pullRequest) ? (
           <a href={pullRequest.url} target="_blank" rel="noreferrer" aria-label="Open on GitHub">
             ↗
           </a>

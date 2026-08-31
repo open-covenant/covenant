@@ -2397,6 +2397,13 @@
   color: var(--wb-text);
 }
 
+.workbench-job-room .job-progress li.complete span {
+  border-color: rgba(29, 227, 174, 0.45);
+  background: rgba(29, 227, 174, 0.1);
+  color: var(--wb-g3);
+  font-size: 10px;
+}
+
 .billing-policy-notice {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

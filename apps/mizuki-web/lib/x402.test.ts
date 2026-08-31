@@ -856,17 +856,40 @@ describe('wallet-returned SVM transaction validation', () => {
       diagnostic: expect.stringContaining('transfer_changed'),
     });
     await expect(validate(fixture, changeMemo(fixture.original))).rejects.toMatchObject({
-      diagnostic: expect.stringContaining('trailing_instructions'),
+      diagnostic: expect.stringContaining('memo_changed'),
     });
-    await expect(validate(fixture, addLighthouse(fixture.original, 4))).rejects.toMatchObject({
+    await expect(validate(fixture, addLighthouse(fixture.original, 7))).rejects.toMatchObject({
       diagnostic: expect.stringContaining('instruction_count'),
+    });
+  });
+
+  it('accepts the Phantom guard shape that brackets the transfer', async () => {
+    const fixture = await paymentFixture();
+
+    await expect(validate(fixture, bracketWithLighthouse(fixture.original))).resolves.toBeDefined();
+  });
+
+  it('lets a Lighthouse guard write only to its payer-derived memory account', async () => {
+    const fixture = await paymentFixture();
+    const memory = await lighthouseMemoryAddress(fixture.payer.address, 0);
+
+    await expect(
+      validate(fixture, addLighthouseAccount(fixture.original, memory, AccountRole.WRITABLE)),
+    ).resolves.toBeDefined();
+
+    const foreign = getBase58Decoder().decode(new Uint8Array(32).fill(9));
+    await expect(
+      validate(fixture, addLighthouseAccount(fixture.original, foreign, AccountRole.WRITABLE)),
+    ).rejects.toMatchObject({
+      code: 'wallet_transaction_unsafe',
+      diagnostic: expect.stringContaining('writable_escalation'),
     });
   });
 
   it('rejects more Lighthouse instructions than the facilitator accepts', async () => {
     const fixture = await paymentFixture();
 
-    await expect(validate(fixture, addLighthouse(fixture.original, 4))).rejects.toMatchObject({
+    await expect(validate(fixture, addLighthouse(fixture.original, 7))).rejects.toMatchObject({
       code: 'wallet_transaction_unsafe',
     });
   });
@@ -1084,6 +1107,41 @@ function appendInstruction(transaction: Uint8Array, programAddress: string): Uin
       { programAddress: address(programAddress), data: new Uint8Array([1]) },
     ],
   } as ReturnType<typeof decompile>);
+}
+
+function bracketWithLighthouse(transaction: Uint8Array): Uint8Array {
+  const message = decompile(transaction);
+  const guard = (byte: number, size: number) => ({
+    programAddress: address(LIGHTHOUSE_PROGRAM),
+    accounts: [],
+    data: new Uint8Array(size).fill(byte),
+  });
+  const [limit, price, transfer, memoInstruction] = message.instructions;
+  return encodeSigned({
+    ...message,
+    instructions: [
+      limit!,
+      price!,
+      guard(1, 17),
+      guard(2, 52),
+      guard(3, 16),
+      transfer!,
+      memoInstruction!,
+      guard(4, 27),
+    ],
+  } as ReturnType<typeof decompile>);
+}
+
+async function lighthouseMemoryAddress(payer: string, memoryId: number): Promise<string> {
+  const [memory] = await getProgramDerivedAddress({
+    programAddress: address(LIGHTHOUSE_PROGRAM),
+    seeds: [
+      new TextEncoder().encode('memory'),
+      getAddressEncoder().encode(address(payer)),
+      new Uint8Array([memoryId]),
+    ],
+  });
+  return memory;
 }
 
 function changeComputeBudget(transaction: Uint8Array, index: number, data: Uint8Array): Uint8Array {

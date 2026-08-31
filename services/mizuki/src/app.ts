@@ -697,6 +697,49 @@ export function createApp(deps: AppDependencies) {
         );
         return json(res, 200, await paymentAttemptResponse(deps, attempt, undefined, requestId));
       }
+      if (
+        parts[0] === 'v1' &&
+        parts[1] === 'account' &&
+        parts[2] === 'payment-attempts' &&
+        parts[3] &&
+        parts[4] === 'failure' &&
+        parts.length === 5 &&
+        req.method === 'POST'
+      ) {
+        res.setHeader('cache-control', 'private, no-store');
+        const session = await requireAccountPrincipal(req, deps.auth, admission, 'jobs:write', {
+          csrf: true,
+          configuredOrigin: deps.config.webOrigin,
+        });
+        admission.consumeAccount('payment_attempt', req, session.githubId);
+        if (!UUID_PATTERN.test(parts[3])) {
+          return json(res, 404, { error: 'payment attempt not found' });
+        }
+        const body = await bodyJson<{ code?: unknown; diagnostic?: unknown }>(req);
+        if (typeof body.code !== 'string' || !/^[a-z0-9_]{1,40}$/.test(body.code)) {
+          throw new InvalidRequestBodyError('code is invalid');
+        }
+        if (
+          body.diagnostic !== undefined &&
+          (typeof body.diagnostic !== 'string' || body.diagnostic.length > 1_000)
+        ) {
+          throw new InvalidRequestBodyError('diagnostic is invalid');
+        }
+        const attempt = await deps.store.paymentAttempt(parts[3], session.githubId);
+        if (!attempt) return json(res, 404, { error: 'payment attempt not found' });
+        const diagnostic = body.diagnostic?.replace(/[^\x20-\x7e]+/g, ' ').trim();
+        console.warn(
+          JSON.stringify({
+            event: 'payment_client_failure',
+            attemptId: attempt.id,
+            quoteId: attempt.quoteId,
+            stage: attempt.stage,
+            code: body.code,
+            ...(diagnostic ? { diagnostic } : {}),
+          }),
+        );
+        return json(res, 202, { recorded: true });
+      }
       if (req.method === 'GET' && url.pathname === '/v1/account/billing') {
         res.setHeader('cache-control', 'private, no-store');
         const session = requireSession(req, deps.auth);

@@ -520,7 +520,12 @@ export async function validateWalletSignedTransaction(
     input.terms,
     input.payer.address,
   );
-  await validateWritableAccounts(originalInstructions, signedInstructions, input.payer.address);
+  await validateWritableAccounts(
+    originalInstructions,
+    signedInstructions,
+    input.payer.address,
+    input.terms.feePayer,
+  );
 
   const signature = signed.signatures[address(input.payer.address)];
   if (!signature || signature.every((byte) => byte === 0)) {
@@ -781,22 +786,45 @@ function validateOptionalInstructions(
     throw unsafeWalletTransaction('memo_changed');
   }
   for (const instruction of lighthouse) {
-    if (
-      (instruction.accounts ?? []).some(
-        (account) =>
-          account.address === terms.feePayer ||
-          (isSignerRole(account.role) && account.address !== payer),
-      )
-    ) {
-      throw unsafeWalletTransaction('lighthouse_accounts');
+    for (const account of instruction.accounts ?? []) {
+      // Compiled messages carry account-level roles, so a guard that merely
+      // reads the fee payer's lamports still decompiles with the fee payer's
+      // signer role. Lighthouse can only assert state or write to its own
+      // memory accounts, so referencing an existing transaction signer is
+      // harmless; any signer beyond the payer and fee payer stays rejected.
+      const foreignSigner =
+        isSignerRole(account.role) &&
+        account.address !== payer &&
+        account.address !== terms.feePayer;
+      if (foreignSigner) {
+        throw unsafeWalletTransaction(
+          `lighthouse_accounts ${lighthouseAccountSummary(lighthouse)}`,
+        );
+      }
     }
   }
+}
+
+function lighthouseAccountSummary(
+  lighthouse: readonly ReturnType<typeof decompileTransactionMessage>['instructions'][number][],
+): string {
+  return lighthouse
+    .map((instruction) =>
+      (instruction.accounts ?? [])
+        .map((account) => {
+          const role = `${isSignerRole(account.role) ? 's' : ''}${isWritableRole(account.role) ? 'w' : ''}`;
+          return `${account.address.slice(0, 8)}:${role || 'r'}`;
+        })
+        .join('+'),
+    )
+    .join(',');
 }
 
 async function validateWritableAccounts(
   original: ReturnType<typeof decompileTransactionMessage>['instructions'],
   signed: ReturnType<typeof decompileTransactionMessage>['instructions'],
   payer: string,
+  feePayer: string,
 ): Promise<void> {
   const originalWritable = writableAddresses(original);
   const lighthouseMemory = await lighthouseMemoryAddresses(payer);
@@ -806,8 +834,11 @@ async function validateWritableAccounts(
       if (!isWritableRole(account.role) || originalWritable.has(account.address)) continue;
       // Lighthouse guards snapshot pre-transfer state into a memory account
       // owned by the Lighthouse program and derived from the payer, so writing
-      // to it cannot move the payment or any other asset.
+      // to it cannot move the payment or any other asset. A guard reading the
+      // fee payer inherits its account-level writable role; Lighthouse cannot
+      // spend from it.
       if (isLighthouse && lighthouseMemory.has(account.address)) continue;
+      if (isLighthouse && account.address === feePayer) continue;
       throw unsafeWalletTransaction(
         `writable_escalation ${instructionLabel(instruction)} ${account.address}`,
       );

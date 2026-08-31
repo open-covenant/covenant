@@ -211,3 +211,77 @@ function createReadiness(
     now,
   });
 }
+
+describe('readiness failure logging', () => {
+  it('logs why a dependency failed without publishing it in the report', async () => {
+    let now = 1_000;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const probes = healthyProbes();
+    probes.policy_signer = vi.fn(async () => {
+      throw new Error(
+        'refund signer cannot fund another protected refund: 0 available, 1 required',
+      );
+    });
+
+    try {
+      const report = await createReadiness(probes, () => now).check();
+
+      expect(report.dependencies.policy_signer.ok).toBe(false);
+      expect(JSON.stringify(report)).not.toContain('0 available');
+      const logged = warn.mock.calls
+        .map(([line]) => String(line))
+        .find((line) => line.includes('readiness_dependency_failed'));
+      expect(logged).toBeDefined();
+      expect(JSON.parse(logged!)).toMatchObject({
+        event: 'readiness_dependency_failed',
+        dependency: 'policy_signer',
+        reason: expect.stringContaining('0 available'),
+      });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('names the incomplete configuration entries in the log', async () => {
+    let now = 1_000;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const probes = healthyProbes();
+    probes.configuration = vi.fn(async () => ({
+      issues: ['MIZUKI_X402_FACILITATOR must be https'],
+    }));
+
+    try {
+      await createReadiness(probes, () => now).check();
+
+      const logged = warn.mock.calls
+        .map(([line]) => String(line))
+        .find((line) => line.includes('readiness_dependency_failed'));
+      expect(logged).toContain('MIZUKI_X402_FACILITATOR');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('logs an unchanged failure once so the transition stays visible', async () => {
+    let now = 1_000;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const probes = healthyProbes();
+    probes.github_app = vi.fn(async () => {
+      throw new Error('github app credential was rejected');
+    });
+
+    try {
+      const readiness = createReadiness(probes, () => now);
+      await readiness.check();
+      now += 1_000;
+      await readiness.check();
+
+      const logged = warn.mock.calls
+        .map(([line]) => String(line))
+        .filter((line) => line.includes('readiness_dependency_failed'));
+      expect(logged).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});

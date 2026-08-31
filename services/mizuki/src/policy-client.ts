@@ -1111,7 +1111,12 @@ export function assertRefundCapacity(input: {
     readiness.availableRefundTransactions === undefined ||
     readiness.availableRefundTransactions < requiredRefundTransactions
   ) {
-    throw new RefundCapacityError('refund signer cannot fund another protected refund');
+    // Refund capacity is bounded by the signer's own SOL, so an exhausted
+    // signer stops every new job. Report the shortfall and the account to
+    // top up, because the remedy is funding rather than a code change.
+    throw new RefundCapacityError(
+      `refund signer cannot fund another protected refund: ${readiness.availableRefundTransactions ?? 0} available, ${requiredRefundTransactions} required (signer ${readiness.refundTreasury} holds ${readiness.refundSignerLamports ?? 'unknown'} lamports)`,
+    );
   }
   if (readiness.refundTreasury !== input.treasury) {
     throw new RefundCapacityError('refund signer treasury does not match the payment recipient');

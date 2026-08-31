@@ -65,6 +65,24 @@ interface ReadinessReport<Dependency extends ServiceDependency> {
 export type ServiceReadinessReport = ReadinessReport<ServiceDependency>;
 export type ApplicationReadinessReport = ReadinessReport<ApplicationDependency>;
 
+const MAX_REASON_LENGTH = 300;
+
+/**
+ * The readiness report is served publicly, so an upstream failure must never
+ * reach it. Operators still need the cause, and they have no shell on the
+ * private services behind these probes, so the reason goes to the service log
+ * instead: a red probe with no explanation anywhere is undiagnosable.
+ */
+function readinessFailureReason(cause: unknown): string {
+  const message =
+    cause instanceof Error && cause.message
+      ? cause.message
+      : typeof cause === 'string' && cause
+        ? cause
+        : 'readiness probe failed';
+  return message.replace(/\s+/g, ' ').trim().slice(0, MAX_REASON_LENGTH);
+}
+
 interface Options {
   refreshMs: number;
   maxAgeMs: number;
@@ -89,6 +107,7 @@ export class ServiceReadiness {
   private readonly failureRetryMs: number;
   private readonly operatorState: ScopeState<ServiceDependency> = {};
   private readonly applicationState: ScopeState<ApplicationDependency> = {};
+  private readonly lastFailureReason = new Map<ServiceDependency, string>();
 
   constructor(
     private readonly probes: Record<ServiceDependency, ReadinessProbe>,
@@ -155,6 +174,18 @@ export class ServiceReadiness {
     return snapshot;
   }
 
+  /**
+   * Log each distinct failure once. Probes re-run every few seconds, so
+   * repeating an unchanged reason would bury the transition that matters.
+   */
+  private reportFailure(name: ServiceDependency, reason: string): void {
+    if (this.lastFailureReason.get(name) === reason) return;
+    this.lastFailureReason.set(name, reason);
+    console.warn(
+      JSON.stringify({ event: 'readiness_dependency_failed', dependency: name, reason }),
+    );
+  }
+
   private async probe(name: ServiceDependency): Promise<DependencyEvidence> {
     const startedAt = this.now();
     let ok = false;
@@ -164,12 +195,16 @@ export class ServiceReadiness {
       const result = await withTimeout(this.probes[name](), this.options.timeoutMs);
       if (name === 'configuration') {
         configurationIssues = configurationSchema.parse(result).issues;
-        if (configurationIssues.length > 0) throw new Error('configuration is incomplete');
+        if (configurationIssues.length > 0) {
+          throw new Error(`configuration is incomplete: ${configurationIssues.join('; ')}`);
+        }
       }
       if (name === 'policy_signer') refundProtection = refundProtectionSchema.parse(result);
       ok = true;
-    } catch {
+      this.lastFailureReason.delete(name);
+    } catch (cause) {
       ok = false;
+      this.reportFailure(name, readinessFailureReason(cause));
     }
     const finishedAt = this.now();
     return {

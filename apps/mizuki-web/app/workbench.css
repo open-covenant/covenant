@@ -1904,6 +1904,39 @@
   color: #d4d4d4;
 }
 
+.wizard-wallet-connect {
+  display: grid;
+  gap: 10px;
+}
+
+.wizard-wallet-connect > p {
+  margin: 0;
+  color: var(--wb-muted);
+  font-size: 11px;
+}
+
+.workbench-wallet-dialog {
+  position: fixed;
+  z-index: 90;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+}
+
+.workbench-wallet-dialog .workbench-wallet-backdrop {
+  position: absolute;
+  inset: 0;
+}
+
+.workbench-wallet-dialog .workbench-wallet-menu {
+  position: relative;
+  top: auto;
+  right: auto;
+  width: min(420px, calc(100vw - 32px));
+  max-height: min(560px, calc(100dvh - 48px));
+}
+
 .workbench-wallet-options {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2304,6 +2337,63 @@
 }
 
 .workbench-job-room .job-progress li.complete {
+  color: var(--wb-text);
+}
+
+.workbench-job-room .job-status-panel.done {
+  border-color: rgba(29, 227, 174, 0.35);
+}
+
+.workbench-job-room .job-status-heading > div > strong.state-complete {
+  color: var(--wb-g3);
+}
+
+.workbench-job-room .job-status-heading .state-note {
+  color: var(--wb-muted);
+}
+
+.workbench-job-room .processing-indicator.complete {
+  color: var(--wb-g3);
+}
+
+.workbench-job-room .processing-indicator.complete i {
+  background: var(--wb-g3);
+  box-shadow: 0 0 0 5px rgba(29, 227, 174, 0.12);
+}
+
+.workbench-job-room .job-progress-rail {
+  gap: 0;
+}
+
+.workbench-job-room .job-progress-rail i {
+  background: var(--wb-line);
+}
+
+.workbench-job-room .job-progress-rail i.filled {
+  background: var(--wb-ramp);
+}
+
+.workbench-job-room .job-status-panel.done .job-progress-rail i.filled {
+  background: var(--wb-g3);
+}
+
+.workbench-job-room .job-progress-rail i.running::after {
+  background: linear-gradient(90deg, transparent, var(--wb-g2) 45%, var(--wb-g3) 55%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workbench-job-room .job-progress-rail i.running::after {
+    background: var(--wb-g2);
+  }
+}
+
+.workbench-job-room .job-progress li.active {
+  color: var(--wb-text);
+}
+
+.workbench-job-room .job-progress li.active span {
+  border-color: rgba(76, 127, 222, 0.6);
+  background: rgba(76, 127, 222, 0.12);
   color: var(--wb-text);
 }
 

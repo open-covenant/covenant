@@ -188,28 +188,12 @@ export function WorkbenchWalletControlView({
             </div>
           </>
         ) : wallets.length > 0 ? (
-          <div className="workbench-wallet-list">
-            {wallets.map((wallet, index) => (
-              <button
-                ref={index === 0 ? firstAction : undefined}
-                type="button"
-                key={wallet.name}
-                disabled={Boolean(connecting)}
-                onClick={() => void connect(wallet)}
-              >
-                <span aria-hidden="true">{String(index + 1).padStart(2, '0')}</span>
-                <span>
-                  <strong>{wallet.name}</strong>
-                  <small>
-                    {wallet.name === 'WalletConnect'
-                      ? 'Scan a QR code or open a mobile wallet'
-                      : 'Connect the browser wallet'}
-                  </small>
-                </span>
-                <span aria-hidden="true">{connecting === wallet.name ? '…' : '↗'}</span>
-              </button>
-            ))}
-          </div>
+          <WalletChoiceList
+            wallets={wallets}
+            connecting={connecting}
+            connect={connect}
+            firstAction={firstAction}
+          />
         ) : (
           <p className="workbench-wallet-empty">
             No compatible wallet is available. Install a Wallet Standard wallet or use WalletConnect
@@ -217,6 +201,120 @@ export function WorkbenchWalletControlView({
           </p>
         )}
 
+        {error && (
+          <p className="workbench-wallet-error" role="alert">
+            {error}
+          </p>
+        )}
+      </section>
+    </div>
+  );
+}
+
+export function WalletChoiceList({
+  wallets,
+  connecting,
+  connect,
+  firstAction,
+}: {
+  wallets: WorkbenchWalletSession['wallets'];
+  connecting: WorkbenchWalletSession['connecting'];
+  connect: WorkbenchWalletSession['connect'];
+  firstAction?: React.RefObject<HTMLButtonElement | null>;
+}) {
+  return (
+    <div className="workbench-wallet-list">
+      {wallets.map((wallet, index) => (
+        <button
+          ref={index === 0 ? firstAction : undefined}
+          type="button"
+          key={wallet.name}
+          disabled={Boolean(connecting)}
+          onClick={() => void connect(wallet)}
+        >
+          <span aria-hidden="true">{String(index + 1).padStart(2, '0')}</span>
+          <span>
+            <strong>{wallet.name}</strong>
+            <small>
+              {wallet.name === 'WalletConnect'
+                ? 'Scan a QR code or open a mobile wallet'
+                : 'Connect the browser wallet'}
+            </small>
+          </span>
+          <span aria-hidden="true">{connecting === wallet.name ? '…' : '↗'}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export function WalletChoiceDialog({
+  wallets,
+  connecting,
+  connect,
+  error,
+  onClose,
+}: {
+  wallets: WorkbenchWalletSession['wallets'];
+  connecting: WorkbenchWalletSession['connecting'];
+  connect: WorkbenchWalletSession['connect'];
+  error: WorkbenchWalletSession['error'];
+  onClose: () => void;
+}) {
+  const panel = useRef<HTMLElement>(null);
+  const firstAction = useRef<HTMLButtonElement>(null);
+  const titleId = useId();
+
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => (firstAction.current ?? panel.current)?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, []);
+
+  useEffect(() => {
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === 'Escape') onClose();
+    }
+    document.addEventListener('keydown', closeOnEscape);
+    return () => document.removeEventListener('keydown', closeOnEscape);
+  }, [onClose]);
+
+  return (
+    <div className="workbench-wallet-dialog">
+      <div className="workbench-wallet-backdrop" onClick={onClose} />
+      <section
+        ref={panel}
+        className="workbench-wallet-menu"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+      >
+        <header>
+          <span>Payment wallet</span>
+          <h2 id={titleId}>Choose a Solana wallet</h2>
+          <p>Used only when you approve a fixed-price USDC payment.</p>
+          <button
+            type="button"
+            className="workbench-wallet-close"
+            aria-label="Close payment wallet"
+            onClick={onClose}
+          >
+            &times;
+          </button>
+        </header>
+        {wallets.length > 0 ? (
+          <WalletChoiceList
+            wallets={wallets}
+            connecting={connecting}
+            connect={connect}
+            firstAction={firstAction}
+          />
+        ) : (
+          <p className="workbench-wallet-empty">
+            No compatible wallet is available. Install a Wallet Standard wallet or use WalletConnect
+            on a supported device.
+          </p>
+        )}
         {error && (
           <p className="workbench-wallet-error" role="alert">
             {error}

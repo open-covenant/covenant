@@ -73,31 +73,61 @@ export function JobReceipt({ initial, live = true }: { initial: Job; live?: bool
   const paymentExpired = job.state === 'payment_expired';
   const failed =
     paymentExpired || ['rejected', 'failed', 'refund_pending', 'refunded'].includes(job.state);
+  const done = !failed && (Boolean(job.mergedAt) || job.state === 'delivered');
   const state = job.mergedAt ? 'Merged' : stateLabel(job.state);
 
   return (
     <div className="job-receipt">
-      <div className="job-status-panel">
+      <div className={done ? 'job-status-panel done' : 'job-status-panel'}>
         <div className="job-status-heading">
           <div>
             <span>Current state</span>
-            <strong className={failed ? 'state-failed' : ''}>{state}</strong>
+            <strong className={failed ? 'state-failed' : done ? 'state-complete' : ''}>
+              {state}
+            </strong>
+            {done && (
+              <p className="state-note">
+                {job.mergedAt
+                  ? 'Job complete. The pull request is merged.'
+                  : 'Job complete. The validated pull request is ready to review.'}
+              </p>
+            )}
           </div>
-          {live && !jobPollingComplete(job) && (
-            <span className="processing-indicator">
-              <i aria-hidden="true" /> Live
+          {done ? (
+            <span className="processing-indicator complete">
+              <i aria-hidden="true" /> Complete
             </span>
+          ) : (
+            live &&
+            !jobPollingComplete(job) && (
+              <span className="processing-indicator">
+                <i aria-hidden="true" /> Live
+              </span>
+            )
           )}
         </div>
+        {!failed && (
+          <div className="job-progress-rail" aria-hidden="true">
+            {stages.map((stage, index) => (
+              <i
+                key={stage}
+                className={
+                  done || index < progress ? 'filled' : index === progress ? 'running' : ''
+                }
+              />
+            ))}
+          </div>
+        )}
         {!failed ? (
           <ol className="job-progress">
             {stages.map((stage, index) => (
-              <li className={index <= progress ? 'complete' : ''} key={stage}>
-                <span>
-                  {index < progress || (stage === 'delivered' && job.mergedAt)
-                    ? '✓'
-                    : String(index + 1).padStart(2, '0')}
-                </span>
+              <li
+                className={
+                  done || index < progress ? 'complete' : index === progress ? 'active' : ''
+                }
+                key={stage}
+              >
+                <span>{done || index < progress ? '✓' : String(index + 1).padStart(2, '0')}</span>
                 {stage === 'delivered' && job.mergedAt ? 'Merged' : stateLabel(stage)}
               </li>
             ))}

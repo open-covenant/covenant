@@ -910,15 +910,26 @@ describe('wallet-returned SVM transaction validation', () => {
     await expect(validate(fixture, signed)).resolves.toBeDefined();
   });
 
-  it('does not let Lighthouse use the facilitator signature', async () => {
+  it('does not let Lighthouse introduce a signer beyond the payer and fee payer', async () => {
     const fixture = await paymentFixture();
+    const foreign = getBase58Decoder().decode(new Uint8Array(32).fill(11));
 
     await expect(
       validate(
         fixture,
-        addLighthouseAccount(fixture.original, fixture.terms.feePayer, AccountRole.READONLY_SIGNER),
+        addLighthouseAccount(fixture.original, foreign, AccountRole.READONLY_SIGNER),
       ),
     ).rejects.toMatchObject({ code: 'wallet_transaction_unsafe' });
+  });
+
+  it('lets a Lighthouse guard reference the fee payer account', async () => {
+    const fixture = await paymentFixture();
+
+    for (const role of [AccountRole.READONLY, AccountRole.READONLY_SIGNER, AccountRole.WRITABLE]) {
+      await expect(
+        validate(fixture, addLighthouseAccount(fixture.original, fixture.terms.feePayer, role)),
+      ).resolves.toBeDefined();
+    }
   });
 
   it('rejects a changed transfer, memo, unknown program, signer, or writable account', async () => {

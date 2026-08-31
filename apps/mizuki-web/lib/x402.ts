@@ -33,7 +33,7 @@ const COMPUTE_BUDGET_PROGRAM = 'ComputeBudget111111111111111111111111111111';
 const MEMO_PROGRAM = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
 export const LIGHTHOUSE_PROGRAM = 'L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95';
 const MAX_PAYMENT_ATOMIC = 10_000_000n;
-const MAX_LIGHTHOUSE_INSTRUCTIONS = 3;
+const MAX_LIGHTHOUSE_INSTRUCTIONS = 6;
 const PAYMENT_CHALLENGE_TIMEOUT_MS = 15_000;
 const PAYMENT_SUBMISSION_TIMEOUT_MS = 60_000;
 const WALLET_SIGNED_STAGE_TIMEOUT_MS = 1_500;
@@ -472,10 +472,20 @@ export async function validateWalletSignedTransaction(
   ) {
     throw unsafeWalletTransaction('fee_payer_changed');
   }
+  // Phantom brackets the transfer with Lighthouse guard instructions (some
+  // inserted before it, some appended), so the wallet's Lighthouse additions
+  // may appear at any position. Everything that is not Lighthouse must be
+  // exactly our four instructions, in order.
+  const coreInstructions = signedInstructions.filter(
+    (instruction) => instruction.programAddress !== LIGHTHOUSE_PROGRAM,
+  );
+  const lighthouseInstructions = signedInstructions.filter(
+    (instruction) => instruction.programAddress === LIGHTHOUSE_PROGRAM,
+  );
   if (
     originalInstructions.length !== 4 ||
-    signedInstructions.length < 4 ||
-    signedInstructions.length > 4 + MAX_LIGHTHOUSE_INSTRUCTIONS
+    coreInstructions.length !== 4 ||
+    lighthouseInstructions.length > MAX_LIGHTHOUSE_INSTRUCTIONS
   ) {
     throw unsafeWalletTransaction(
       `instruction_count ${shapeSummary(originalInstructions, signedInstructions)}`,
@@ -489,14 +499,14 @@ export async function validateWalletSignedTransaction(
     throw unsafeWalletTransaction('compute_budget_missing');
   }
   if (
-    !equalComputeBudgetInstruction(originalInstructions[0], signedInstructions[0]) ||
-    !equalComputeBudgetInstruction(originalInstructions[1], signedInstructions[1])
+    !equalComputeBudgetInstruction(originalInstructions[0], coreInstructions[0]) ||
+    !equalComputeBudgetInstruction(originalInstructions[1], coreInstructions[1])
   ) {
     throw unsafeWalletTransaction(
       `compute_budget_changed ${shapeSummary(originalInstructions, signedInstructions)}`,
     );
   }
-  if (!equalInstruction(originalInstructions[2], signedInstructions[2])) {
+  if (!equalInstruction(originalInstructions[2], coreInstructions[2])) {
     throw unsafeWalletTransaction(
       `transfer_changed ${shapeSummary(originalInstructions, signedInstructions)}`,
     );
@@ -505,11 +515,12 @@ export async function validateWalletSignedTransaction(
   await validateTransfer(originalInstructions[2], input.payer.address, input.terms);
   validateOptionalInstructions(
     originalInstructions[3],
-    signedInstructions.slice(3),
+    coreInstructions[3],
+    lighthouseInstructions,
     input.terms,
     input.payer.address,
   );
-  validateWritableAccounts(originalInstructions, signedInstructions);
+  await validateWritableAccounts(originalInstructions, signedInstructions, input.payer.address);
 
   const signature = signed.signatures[address(input.payer.address)];
   if (!signature || signature.every((byte) => byte === 0)) {
@@ -754,7 +765,8 @@ async function validateTransfer(
 
 function validateOptionalInstructions(
   originalMemo: ReturnType<typeof decompileTransactionMessage>['instructions'][number] | undefined,
-  instructions: readonly ReturnType<typeof decompileTransactionMessage>['instructions'][number][],
+  signedMemo: ReturnType<typeof decompileTransactionMessage>['instructions'][number] | undefined,
+  lighthouse: readonly ReturnType<typeof decompileTransactionMessage>['instructions'][number][],
   terms: PaymentTerms,
   payer: string,
 ): void {
@@ -765,19 +777,8 @@ function validateOptionalInstructions(
   ) {
     throw unsafeWalletTransaction('memo_terms');
   }
-  const memos = instructions.filter((instruction) => instruction.programAddress === MEMO_PROGRAM);
-  const lighthouse = instructions.filter(
-    (instruction) => instruction.programAddress === LIGHTHOUSE_PROGRAM,
-  );
-  if (
-    memos.length !== 1 ||
-    !equalInstruction(originalMemo, memos[0]) ||
-    lighthouse.length > MAX_LIGHTHOUSE_INSTRUCTIONS ||
-    memos.length + lighthouse.length !== instructions.length
-  ) {
-    throw unsafeWalletTransaction(
-      `trailing_instructions memos=${memos.length} lighthouse=${lighthouse.length} trailing=${instructions.length}`,
-    );
+  if (!equalInstruction(originalMemo, signedMemo)) {
+    throw unsafeWalletTransaction('memo_changed');
   }
   for (const instruction of lighthouse) {
     if (
@@ -792,20 +793,49 @@ function validateOptionalInstructions(
   }
 }
 
-function validateWritableAccounts(
+async function validateWritableAccounts(
   original: ReturnType<typeof decompileTransactionMessage>['instructions'],
   signed: ReturnType<typeof decompileTransactionMessage>['instructions'],
-): void {
+  payer: string,
+): Promise<void> {
   const originalWritable = writableAddresses(original);
+  const lighthouseMemory = await lighthouseMemoryAddresses(payer);
   for (const instruction of signed) {
+    const isLighthouse = instruction.programAddress === LIGHTHOUSE_PROGRAM;
     for (const account of instruction.accounts ?? []) {
-      if (isWritableRole(account.role) && !originalWritable.has(account.address)) {
-        throw unsafeWalletTransaction(
-          `writable_escalation ${instructionLabel(instruction)} ${account.address}`,
-        );
-      }
+      if (!isWritableRole(account.role) || originalWritable.has(account.address)) continue;
+      // Lighthouse guards snapshot pre-transfer state into a memory account
+      // owned by the Lighthouse program and derived from the payer, so writing
+      // to it cannot move the payment or any other asset.
+      if (isLighthouse && lighthouseMemory.has(account.address)) continue;
+      throw unsafeWalletTransaction(
+        `writable_escalation ${instructionLabel(instruction)} ${account.address}`,
+      );
     }
   }
+}
+
+async function lighthouseMemoryAddresses(payer: string): Promise<Set<string>> {
+  const encoder = getAddressEncoder();
+  const seedsForId = (memoryId: number) => [
+    new TextEncoder().encode('memory'),
+    encoder.encode(address(payer)),
+    new Uint8Array([memoryId]),
+  ];
+  const derived = await Promise.all(
+    Array.from({ length: 4 }, async (_, memoryId) => {
+      try {
+        const [memory] = await getProgramDerivedAddress({
+          programAddress: address(LIGHTHOUSE_PROGRAM),
+          seeds: seedsForId(memoryId),
+        });
+        return memory as string;
+      } catch {
+        return undefined;
+      }
+    }),
+  );
+  return new Set(derived.filter((value): value is string => value !== undefined));
 }
 
 function writableAddresses(

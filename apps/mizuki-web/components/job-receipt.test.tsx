@@ -195,8 +195,11 @@ describe('JobReceipt', () => {
     expect(jobPollingComplete(delivered)).toBe(false);
     expect(jobPollingComplete(merged)).toBe(false);
     expect(jobPollingComplete(discharged)).toBe(true);
-    expect(renderToStaticMarkup(<JobReceipt initial={merged} />)).toContain('Live');
-    expect(renderToStaticMarkup(<JobReceipt initial={discharged} />)).not.toContain('Live');
+    const mergedHtml = renderToStaticMarkup(<JobReceipt initial={merged} />);
+    expect(mergedHtml).toContain('Complete');
+    expect(mergedHtml).toContain('Job complete. The pull request is merged.');
+    expect(mergedHtml).not.toContain('Live');
+    expect(renderToStaticMarkup(<JobReceipt initial={discharged} />)).toContain('Complete');
   });
 
   it('shows an expired authorization as unpaid and terminal', () => {

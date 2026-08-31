@@ -2278,6 +2278,65 @@ textarea:focus-visible {
   box-shadow: 0 0 0 5px rgba(20, 18, 32, 0.08);
 }
 
+.job-status-heading:has(+ .job-progress-rail) {
+  border-bottom: 0;
+}
+
+.job-status-heading .state-note {
+  margin: 6px 0 0;
+  color: #767e82;
+  font-size: 12px;
+}
+
+.job-status-heading > div > strong.state-complete {
+  color: var(--aqua);
+}
+
+.processing-indicator.complete {
+  color: var(--aqua);
+}
+
+.job-progress-rail {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 2px;
+  height: 3px;
+}
+
+.job-progress-rail i {
+  position: relative;
+  overflow: hidden;
+  background: #ddd8e9;
+}
+
+.job-progress-rail i.filled {
+  background: var(--aqua);
+}
+
+.job-progress-rail i.running::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, var(--aqua) 45%, var(--aqua) 55%, transparent);
+  animation: job-rail-sweep 1.8s ease-in-out infinite;
+}
+
+@keyframes job-rail-sweep {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .job-progress-rail i.running::after {
+    transform: none;
+    background: var(--aqua);
+    opacity: 0.45;
+    animation: none;
+  }
+}
+
 .job-progress {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -2314,6 +2373,15 @@ textarea:focus-visible {
   border: 1px solid #ddd8e9;
   border-radius: 50%;
   font-size: 8px;
+}
+
+.job-progress li.active {
+  color: #2b2438;
+}
+
+.job-progress li.active span {
+  border-color: var(--aqua);
+  color: var(--aqua);
 }
 
 .job-progress li.complete {

@@ -67,7 +67,7 @@ import {
   WorkbenchStatus,
 } from './workbench-primitives';
 import { OrganizationRepositorySelector } from './organization-repository-selector';
-import { useWorkbenchWallet } from './workbench-wallet';
+import { useWorkbenchWallet, WalletChoiceDialog } from './workbench-wallet';
 import { RepositoryPullRequests } from './jobs';
 
 export function NewJobWizard({
@@ -276,6 +276,7 @@ function IssueAndPayment({
     | 'revalidating_payment'
   >('idle');
   const [error, setError] = useState<string | null>(null);
+  const [walletDialogOpen, setWalletDialogOpen] = useState(false);
   const [paymentProgress, setPaymentProgress] = useState<PaymentReconciliationProgress | null>(
     null,
   );
@@ -290,6 +291,10 @@ function IssueAndPayment({
     connect,
     disconnect,
   } = useWorkbenchWallet();
+
+  useEffect(() => {
+    if (connected) setWalletDialogOpen(false);
+  }, [connected]);
 
   useEffect(() => {
     if (issues.status !== 'ready' || issueUrl) return;
@@ -1062,24 +1067,28 @@ function IssueAndPayment({
                 <>
                   {!connected ? (
                     wallets.length > 0 ? (
-                      <div className="workbench-wallet-options">
-                        {wallets.map((wallet) => (
-                          <button
-                            type="button"
-                            key={wallet.name}
-                            disabled={Boolean(connecting)}
-                            onClick={() => void connect(wallet)}
-                          >
-                            <span>{wallet.name}</span>
-                            <strong>
-                              {connecting === wallet.name
-                                ? 'Connecting…'
-                                : wallet.name === 'WalletConnect'
-                                  ? 'Scan QR or open wallet ↗'
-                                  : 'Connect ↗'}
-                            </strong>
-                          </button>
-                        ))}
+                      <div className="wizard-wallet-connect">
+                        <button
+                          type="button"
+                          className="wizard-pay-button"
+                          disabled={Boolean(connecting)}
+                          onClick={() => setWalletDialogOpen(true)}
+                        >
+                          {connecting ? 'Connecting…' : 'Connect payment wallet'}
+                        </button>
+                        <p>
+                          Choose a Solana wallet in the next step. It is used only when you approve
+                          the exact quote.
+                        </p>
+                        {walletDialogOpen && (
+                          <WalletChoiceDialog
+                            wallets={wallets}
+                            connecting={connecting}
+                            connect={connect}
+                            error={walletError}
+                            onClose={() => setWalletDialogOpen(false)}
+                          />
+                        )}
                       </div>
                     ) : (
                       <div className="workbench-wallet-missing">

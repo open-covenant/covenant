@@ -1523,7 +1523,9 @@ function repositoryIdentity(owner: string, repo: string): { owner: string; repo:
 function publicEligibilityReason(cause: unknown): string {
   const message = cause instanceof Error ? cause.message : '';
   if (/supported deterministic validation command/i.test(message)) {
-    return 'This repository does not expose a supported validation command.';
+    // Naming the files is the difference between a dead end and a fix: the
+    // maintainer can add the one their stack already uses and qualify.
+    return 'This repository does not expose a supported validation command. Mizuki runs the test command implied by a lockfile or manifest in the repository root: pnpm-lock.yaml, package-lock.json, yarn.lock, Cargo.toml, pyproject.toml, pytest.ini, or go.mod.';
   }
   if (/maintenance-only scope|outside Mizuki|safe MVP scope|too large/i.test(message)) {
     return 'This issue is outside the supported maintenance scope.';

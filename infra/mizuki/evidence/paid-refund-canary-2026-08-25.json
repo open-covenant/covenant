@@ -1,0 +1,60 @@
+{
+  "kind": "mizuki_paid_refund_canary",
+  "jobId": "e2dc9151-a20d-4322-9b2c-ca2764ba55c2",
+  "quoteId": "91900979-deaf-4957-b670-35b7ed9f5fdf",
+  "issueUrl": "https://github.com/open-covenant/covenant/issues/188",
+  "baseCommit": "ba5e38e71fa2ef94804c2e2c041e2a8be2ae2bce",
+  "class": "micro",
+  "priceAtomic": "2000000",
+  "payer": "EQEC5iGiNe7Doo53dWmgAsthRAjcv6bNJVvVP8okjzE1",
+  "result": {
+    "state": "refunded",
+    "successCanary": false,
+    "pullRequestOpened": false,
+    "failureClass": "independent_review",
+    "failureSummary": "The patch and deterministic repository check passed, but the independent reviewer returned an unusable empty response.",
+    "externalTractionCredit": false
+  },
+  "work": {
+    "changedFiles": ["infra/mizuki/README.md"],
+    "validationCommand": "npx --yes prettier@3.6.2 --check infra/mizuki/README.md",
+    "validationExitCode": 0,
+    "reviewModel": "deepseek-v4-flash",
+    "reviewRoute": "marketplace",
+    "providerId": "7ae6c424-9863-4563-8863-19a06c65d00b",
+    "requestId": "01M0VSJ6M7S0CWD3EJG36NWNZD",
+    "variableExecutionEstimateUsd": 0.244458,
+    "completeCommercialCostVerified": false
+  },
+  "settlement": {
+    "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "amountAtomic": "2000000",
+    "transaction": "2cYJ3Nm3DFCBfHsNdjAKgDihShguMjTkQShwJ33Q44MMXUd5fhxM4wSHRxwY2oSPzjU4En4oDVrut67yL3yPifq5",
+    "slot": 441570743,
+    "blockTime": "2026-08-25T06:25:07.000Z",
+    "finalizedByTwoRpcProviders": true
+  },
+  "refund": {
+    "amountAtomic": "2000000",
+    "principalReturnPercent": 100,
+    "recipient": "EQEC5iGiNe7Doo53dWmgAsthRAjcv6bNJVvVP8okjzE1",
+    "transaction": "4SB5iwJQ3uD2BwdiLPFnrVGDCJBEAfQ8NiQRxSugL2guQNi9tqa5bR2c1LtHEuiuhZjGgZKK2iay1Sgp4RhdP5i2",
+    "slot": 441570953,
+    "blockTime": "2026-08-25T06:26:25.000Z",
+    "finalizedByTwoRpcProviders": true,
+    "operationId": "84ca7119-0897-483d-a394-a2c5bfb3742b",
+    "liabilityId": "c02b48ae-7789-444a-ad76-27c63a033e94",
+    "finalizedOperations": 1,
+    "duplicateTransfers": 0
+  },
+  "rescueBounty": {
+    "id": "6f01971d-c6ef-4997-abc4-541d55670f2e",
+    "amountUsdCents": 1000,
+    "stateAtReceipt": "funding",
+    "signerOperationCreated": false,
+    "rollingEscrowSpendUsdCents": 10000,
+    "rollingEscrowLimitUsdCents": 10000,
+    "firstCapacityReleaseAt": "2026-08-25T18:37:04.611Z",
+    "recovery": "The runtime retries the same durable bounty after signer capacity becomes available."
+  }
+}

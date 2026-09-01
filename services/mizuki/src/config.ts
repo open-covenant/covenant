@@ -109,6 +109,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     payTo: env.MIZUKI_PAY_TO ?? '',
     escrowRefundTo: env.MIZUKI_ESCROW_REFUND_TO ?? '',
     facilitator: env.MIZUKI_X402_FACILITATOR ?? 'https://facilitator.payai.network',
+    facilitatorToken: env.MIZUKI_X402_FACILITATOR_TOKEN,
     policySignerUrl: optionalHttpUrl(env.MIZUKI_POLICY_SIGNER_URL),
     policySignerToken: env.MIZUKI_POLICY_SIGNER_TOKEN,
     jobAuthoritySeed,
@@ -179,7 +180,7 @@ export function liveConfigIssues(config: Config): string[] {
   requireValue(missing, 'MIZUKI_DATABASE_URL', config.databaseUrl);
   requireHttps(missing, 'MIZUKI_PUBLIC_BASE_URL', config.publicBaseUrl);
   requireHttps(missing, 'MIZUKI_WEB_ORIGIN', config.webOrigin);
-  requireHttps(missing, 'MIZUKI_X402_FACILITATOR', config.facilitator);
+  requireFacilitator(missing, 'MIZUKI_X402_FACILITATOR', config.facilitator);
   requireHttps(missing, 'USEPOD_BASE_URL', config.usePodBaseUrl);
   requirePrivateService(missing, 'MIZUKI_CODING_GATEWAY_URL', config.codingGatewayUrl);
   requirePrivateService(missing, 'MIZUKI_POLICY_SIGNER_URL', config.policySignerUrl);
@@ -421,6 +422,19 @@ function requireHttps(missing: string[], name: string, value: string | undefined
   } catch {
     missing.push(name);
   }
+}
+
+/**
+ * The facilitator is either a public https endpoint or, when Mizuki hosts its
+ * own, a Render private service reachable only over http on an internal
+ * hostname. Accept exactly those two shapes: anything else on the open
+ * internet must still be https.
+ */
+function requireFacilitator(missing: string[], name: string, value: string | undefined): void {
+  const https: string[] = [];
+  requireHttps(https, name, value);
+  if (https.length === 0) return;
+  requirePrivateService(missing, name, value);
 }
 
 function requirePrivateService(missing: string[], name: string, value: string | undefined): void {

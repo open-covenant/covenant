@@ -34,6 +34,7 @@ expected = {
   'mizuki-runtime-shadow' => ['pserv', 'image', nil],
   'mizuki-runtime-production' => ['web', 'image', '/deployz'],
   'mizuki-policy-signer' => ['pserv', 'node', nil],
+  'mizuki-facilitator' => ['pserv', 'node', nil],
   'mizuki-coding-gateway' => ['pserv', 'node', nil],
   'mizuki' => ['web', 'node', '/healthz'],
   'mizuki-deployment-controller' => ['pserv', 'node', nil],
@@ -111,6 +112,7 @@ abort 'database set mismatch' unless databases.map { |database| database.fetch('
 
 bootstrap_service_names = %w[
   mizuki-policy-signer
+  mizuki-facilitator
   mizuki-coding-gateway
   mizuki-updater
 ]
@@ -612,7 +614,7 @@ jq -e '
   (.mcpServers["clawpump-agents"].env.CLAWPUMP_API_KEY | startswith("cpk_replace"))
 ' services/mizuki/clawpump/mcp.json.example >/dev/null
 
-scope='.github/workflows/mizuki.yml .github/workflows/mizuki-image.yml apps/mizuki-web services/mizuki services/mizuki-policy-signer services/mizuki-updater services/mizuki-deployment-controller services/coding-gateway infra/mizuki programs/mizuki-escrow docs/production-audit-mizuki.md'
+scope='.github/workflows/mizuki.yml .github/workflows/mizuki-image.yml apps/mizuki-web services/mizuki services/mizuki-policy-signer services/mizuki-facilitator services/mizuki-updater services/mizuki-deployment-controller services/coding-gateway infra/mizuki programs/mizuki-escrow docs/production-audit-mizuki.md'
 blocked=$(printf '\153\141\155\151\171\157')
 if rg --hidden -i -l --glob '!verify.sh' --glob '!node_modules/**' --glob '!dist/**' --glob '!.next/**' --glob '!target/**' "$blocked" $scope >/dev/null; then
   echo 'Blocked legacy term found' >&2
@@ -640,6 +642,7 @@ pnpm exec prettier --ignore-path .gitignore --check \
   'infra/mizuki/**/*.{yaml,md,json}' \
   'services/mizuki/**/*.{ts,mjs,json,md}' \
   'services/mizuki-policy-signer/**/*.{ts,json,md}' \
+  'services/mizuki-facilitator/**/*.{ts,json,md}' \
   'services/mizuki-updater/**/*.{ts,json,md}' \
   'services/mizuki-deployment-controller/**/*.{ts,json,md}' \
   'services/coding-gateway/**/*.{ts,json,md}' \
@@ -654,6 +657,7 @@ prefixes = %w[
   apps__mizuki-web
   services__mizuki
   services__mizuki-policy-signer
+  services__mizuki-facilitator
   services__mizuki-updater
   services__mizuki-deployment-controller
   services__coding-gateway
@@ -702,6 +706,9 @@ pnpm --filter @covenant/mizuki smoke
 pnpm --filter @covenant/mizuki-policy-signer typecheck
 pnpm --filter @covenant/mizuki-policy-signer test
 pnpm --filter @covenant/mizuki-policy-signer build
+pnpm --filter @covenant/mizuki-facilitator typecheck
+pnpm --filter @covenant/mizuki-facilitator test
+pnpm --filter @covenant/mizuki-facilitator build
 pnpm --filter @covenant/mizuki-updater typecheck
 pnpm --filter @covenant/mizuki-updater test
 pnpm --filter @covenant/mizuki-updater build

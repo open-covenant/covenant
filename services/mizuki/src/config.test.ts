@@ -167,43 +167,49 @@ describe('updater configuration', () => {
   });
 });
 
+const COMPLETE_LIVE_ENV = {
+  MIZUKI_PAYMENT_MODE: 'live',
+  MIZUKI_DATABASE_URL: 'postgres://mizuki:secret@database/mizuki',
+  MIZUKI_PUBLIC_BASE_URL: 'https://api.example.com',
+  MIZUKI_WEB_ORIGIN: 'https://mizuki.example.com',
+  MIZUKI_TRUSTED_PROXY_HOPS: '1',
+  MIZUKI_X402_FACILITATOR: 'https://facilitator.example.com',
+  MIZUKI_PAY_TO: '11111111111111111111111111111111',
+  MIZUKI_ESCROW_REFUND_TO: 'So11111111111111111111111111111111111111112',
+  MIZUKI_POLICY_SIGNER_URL: 'http://signer:8792',
+  MIZUKI_POLICY_SIGNER_TOKEN: 'p'.repeat(32),
+  MIZUKI_JOB_AUTHORITY_SEED: Buffer.alloc(32, 7).toString('base64'),
+  MIZUKI_ADMIN_TOKEN: 'a'.repeat(32),
+  MIZUKI_RELEASE_PROBE_TOKEN: 'd'.repeat(32),
+  MIZUKI_CODING_GATEWAY_URL: 'http://gateway:8642',
+  MIZUKI_CODING_GATEWAY_TOKEN: 'c'.repeat(32),
+  USEPOD_API_KEY: 'usepod-key',
+  USEPOD_BASE_URL: 'https://api.usepod.ai',
+  USEPOD_MODEL: 'coder-route',
+  USEPOD_REVIEW_MODEL: 'reviewer-route',
+  USEPOD_INPUT_USD_PER_MILLION: '0.2',
+  USEPOD_OUTPUT_USD_PER_MILLION: '0.4',
+  USEPOD_MAX_INPUT_PRICE_MICROUNITS: '200000',
+  USEPOD_MAX_OUTPUT_PRICE_MICROUNITS: '400000',
+  USEPOD_MIN_BALANCE: '2000000',
+  MIZUKI_BOUNTY_REVIEW_MAX_COST_MICROUNITS: '50000',
+  MIZUKI_GITHUB_APP_ID: '1234',
+  MIZUKI_GITHUB_PRIVATE_KEY: '-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----',
+  MIZUKI_GITHUB_CLIENT_ID: 'client-id',
+  MIZUKI_GITHUB_CLIENT_SECRET: 'g'.repeat(32),
+  MIZUKI_GITHUB_WEBHOOK_SECRET: 'w'.repeat(32),
+  MIZUKI_SESSION_SECRET: 's'.repeat(32),
+  MIZUKI_WEB_PROXY_SECRET: 'p'.repeat(32),
+  MIZUKI_UPDATER_URL: 'http://updater:8793',
+  MIZUKI_UPDATER_TOKEN: 'u'.repeat(32),
+};
+
+function completeLiveEnv(): Record<string, string> {
+  return { ...COMPLETE_LIVE_ENV };
+}
+
 describe('live configuration', () => {
-  const complete = {
-    MIZUKI_PAYMENT_MODE: 'live',
-    MIZUKI_DATABASE_URL: 'postgres://mizuki:secret@database/mizuki',
-    MIZUKI_PUBLIC_BASE_URL: 'https://api.example.com',
-    MIZUKI_WEB_ORIGIN: 'https://mizuki.example.com',
-    MIZUKI_TRUSTED_PROXY_HOPS: '1',
-    MIZUKI_X402_FACILITATOR: 'https://facilitator.example.com',
-    MIZUKI_PAY_TO: '11111111111111111111111111111111',
-    MIZUKI_ESCROW_REFUND_TO: 'So11111111111111111111111111111111111111112',
-    MIZUKI_POLICY_SIGNER_URL: 'http://signer:8792',
-    MIZUKI_POLICY_SIGNER_TOKEN: 'p'.repeat(32),
-    MIZUKI_JOB_AUTHORITY_SEED: Buffer.alloc(32, 7).toString('base64'),
-    MIZUKI_ADMIN_TOKEN: 'a'.repeat(32),
-    MIZUKI_RELEASE_PROBE_TOKEN: 'd'.repeat(32),
-    MIZUKI_CODING_GATEWAY_URL: 'http://gateway:8642',
-    MIZUKI_CODING_GATEWAY_TOKEN: 'c'.repeat(32),
-    USEPOD_API_KEY: 'usepod-key',
-    USEPOD_BASE_URL: 'https://api.usepod.ai',
-    USEPOD_MODEL: 'coder-route',
-    USEPOD_REVIEW_MODEL: 'reviewer-route',
-    USEPOD_INPUT_USD_PER_MILLION: '0.2',
-    USEPOD_OUTPUT_USD_PER_MILLION: '0.4',
-    USEPOD_MAX_INPUT_PRICE_MICROUNITS: '200000',
-    USEPOD_MAX_OUTPUT_PRICE_MICROUNITS: '400000',
-    USEPOD_MIN_BALANCE: '2000000',
-    MIZUKI_BOUNTY_REVIEW_MAX_COST_MICROUNITS: '50000',
-    MIZUKI_GITHUB_APP_ID: '1234',
-    MIZUKI_GITHUB_PRIVATE_KEY: '-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----',
-    MIZUKI_GITHUB_CLIENT_ID: 'client-id',
-    MIZUKI_GITHUB_CLIENT_SECRET: 'g'.repeat(32),
-    MIZUKI_GITHUB_WEBHOOK_SECRET: 'w'.repeat(32),
-    MIZUKI_SESSION_SECRET: 's'.repeat(32),
-    MIZUKI_WEB_PROXY_SECRET: 'p'.repeat(32),
-    MIZUKI_UPDATER_URL: 'http://updater:8793',
-    MIZUKI_UPDATER_TOKEN: 'u'.repeat(32),
-  };
+  const complete = completeLiveEnv();
 
   it('accepts the complete fail-closed production contract', () => {
     expect(() => assertLiveConfig(loadConfig(complete))).not.toThrow();
@@ -324,5 +330,37 @@ describe('live configuration', () => {
         }),
       ),
     ).not.toThrow();
+  });
+});
+
+describe('facilitator address', () => {
+  it('accepts a self-hosted facilitator on the private network', () => {
+    const config = loadConfig({
+      ...completeLiveEnv(),
+      MIZUKI_X402_FACILITATOR: 'http://mizuki-facilitator:8402',
+    } as never);
+
+    expect(liveConfigIssues(config)).not.toContain('MIZUKI_X402_FACILITATOR');
+  });
+
+  it('accepts a public https facilitator', () => {
+    const config = loadConfig({
+      ...completeLiveEnv(),
+      MIZUKI_X402_FACILITATOR: 'https://facilitator.payai.network',
+    } as never);
+
+    expect(liveConfigIssues(config)).not.toContain('MIZUKI_X402_FACILITATOR');
+  });
+
+  it.each([
+    ['plain http on a public host', 'http://facilitator.payai.network'],
+    ['a private-service URL with a path', 'http://mizuki-facilitator:8402/verify'],
+    ['a private-service URL without a port', 'http://mizuki-facilitator'],
+    ['localhost', 'http://localhost:8402'],
+    ['a non-URL', 'facilitator'],
+  ])('rejects %s', (_name, url) => {
+    const config = loadConfig({ ...completeLiveEnv(), MIZUKI_X402_FACILITATOR: url } as never);
+
+    expect(liveConfigIssues(config)).toContain('MIZUKI_X402_FACILITATOR');
   });
 });

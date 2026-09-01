@@ -150,7 +150,12 @@ services:
           name: mizuki-policy-signer
           envVarKey: MIZUKI_ESCROW_AUTHORITY
       - key: MIZUKI_X402_FACILITATOR
-        value: https://facilitator.payai.network
+        value: http://mizuki-facilitator:8402
+      - key: MIZUKI_X402_FACILITATOR_TOKEN
+        fromService:
+          type: pserv
+          name: mizuki-facilitator
+          envVarKey: MIZUKI_FACILITATOR_TOKEN
       - key: MIZUKI_POLICY_SIGNER_URL
         fromService:
           type: pserv
@@ -308,6 +313,34 @@ services:
         value: '172800'
       - key: MIZUKI_SIGNER_MOCK_MODE
         value: 'false'
+
+  - type: pserv
+    name: mizuki-facilitator
+    runtime: node
+    repo: https://github.com/open-covenant/covenant
+    branch: main
+    plan: starter
+    region: frankfurt
+    numInstances: 1
+    autoDeploy: false
+    maxShutdownDelaySeconds: 120
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @covenant/mizuki-facilitator build
+    startCommand: pnpm --filter @covenant/mizuki-facilitator start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MIZUKI_FACILITATOR_HOST
+        value: 0.0.0.0
+      - key: MIZUKI_FACILITATOR_PORT
+        value: '8402'
+      - key: MIZUKI_FACILITATOR_TOKEN
+        generateValue: true
+      - key: MIZUKI_FACILITATOR_RPC_URL
+        sync: false
+      - key: MIZUKI_FACILITATOR_FEE_PAYER_PRIVATE_KEY_JSON
+        sync: false
+      - key: MIZUKI_FACILITATOR_FEE_PAYER_PUBLIC_KEY
+        sync: false
 
   - type: pserv
     name: mizuki-coding-gateway

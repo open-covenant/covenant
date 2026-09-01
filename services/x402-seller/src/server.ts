@@ -39,6 +39,12 @@ import {
 } from './attest.js';
 import { getTransferActivity } from './reputation.js';
 import { verifyErEnclave, ErEnclaveError } from './er-enclave.js';
+import {
+  assessRepository,
+  isRepositoryName,
+  MaintenanceLookupError,
+  SUPPORTED_MANIFESTS,
+} from './maintenance.js';
 
 const PORT = Number(process.env.PORT ?? 10000);
 const PAY_TO = process.env.COVENANT_TREASURY ?? '8xbXHAhiVe2BrYDq4qpTA5SSYJG9XNjNN6jcrudhTKCM';
@@ -49,6 +55,9 @@ const ZAUTH_API_KEY = process.env.ZAUTH_API_KEY;
 const RPC_URL =
   process.env.COVENANT_SOLANA_MAINNET_RPC_URL ?? 'https://api.mainnet-beta.solana.com';
 const RPC_TIMEOUT = Number(process.env.RPC_TIMEOUT_MS ?? 9000);
+// Optional: raises the GitHub read limit for the maintenance assessment from
+// 60/hour to 5000/hour. The endpoint reads public repositories either way.
+const GITHUB_TOKEN = process.env.MIZUKI_ASSESS_GITHUB_TOKEN;
 const REPUTATION_LIMIT = Number(process.env.REPUTATION_LIMIT ?? 100);
 
 const SOLANA_MAINNET = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp' as const;
@@ -73,6 +82,7 @@ app.get('/health', (_req: Request, res: Response) => {
     ok: true,
     service: 'covenant-x402-seller',
     resources: [
+      '/x402/mizuki/assess/:owner/:repo',
       '/x402/passport/:asset',
       '/x402/attest',
       '/x402/payai/reputation/:wallet',
@@ -139,6 +149,29 @@ const gate = (amount: string, description: string, extensions: Record<string, un
 });
 
 const routes: RoutesConfig = {
+  'GET /x402/mizuki/assess/:owner/:repo': gate(
+    '1000',
+    'Assess whether a public GitHub repository qualifies for Mizuki automated maintenance and report the validation command Mizuki would run. This observes repository manifests; it is not a quote and reserves nothing.',
+    declareDiscoveryExtension({
+      pathParams: { owner: 'open-covenant', repo: 'covenant' },
+      pathParamsSchema: {
+        properties: {
+          owner: { type: 'string', description: 'GitHub owner or organisation' },
+          repo: { type: 'string', description: 'GitHub repository name' },
+        },
+        required: ['owner', 'repo'],
+      },
+      output: {
+        example: {
+          repository: 'open-covenant/covenant',
+          eligible: true,
+          detectedManifest: 'pnpm-lock.yaml',
+          validationCommand: 'pnpm test',
+          defaultBranch: 'main',
+        },
+      },
+    }),
+  ),
   'GET /x402/passport/:asset': gate(
     '1000',
     'Observe an MPL Core asset, its 014 Registry binding, and DAS-reported AppData. This does not prove identity or claim truth.',
@@ -264,6 +297,23 @@ app.post('/x402/attest', (req: Request, res: Response) => {
 
 // Legacy route name retained for compatibility. The response is a bounded
 // transfer-activity observation, not reputation.
+app.get('/x402/mizuki/assess/:owner/:repo', async (req: Request, res: Response) => {
+  const { owner, repo } = req.params;
+  if (!isRepositoryName(owner) || !isRepositoryName(repo)) {
+    res.status(400).json({ error: 'owner and repo must be GitHub name segments' });
+    return;
+  }
+  try {
+    res.json(await assessRepository(owner, repo, { token: GITHUB_TOKEN, timeoutMs: RPC_TIMEOUT }));
+  } catch (error) {
+    if (error instanceof MaintenanceLookupError) {
+      res.status(error.status).json({ error: error.message, supportedManifests: SUPPORTED_MANIFESTS });
+      return;
+    }
+    res.status(502).json({ error: 'GitHub upstream unavailable' });
+  }
+});
+
 app.get('/x402/payai/reputation/:wallet', async (req: Request, res: Response) => {
   if (!attestor) {
     res.status(503).json({ error: 'attestation signer not configured' });

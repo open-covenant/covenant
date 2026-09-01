@@ -89,3 +89,21 @@ describe('parseIssueUrl', () => {
     expect(() => parseIssueUrl('https://gitlab.com/example/project/issues/12')).toThrow();
   });
 });
+
+describe('ineligible repository guidance', () => {
+  it('names the manifests that would qualify a repository', () => {
+    expect(() =>
+      createQuote({
+        owner: 'example',
+        repo: 'project',
+        number: 1,
+        title: 'Fix a typo in the docs',
+        body: 'The README has a typo.',
+        labels: [],
+        defaultBranch: 'main',
+        baseSha: 'a'.repeat(40),
+        rootFiles: ['README.md'],
+      }),
+    ).toThrow(/supported deterministic validation command/);
+  });
+});

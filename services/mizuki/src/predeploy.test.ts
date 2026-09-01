@@ -3,41 +3,56 @@ import { runPredeploy } from './predeploy.js';
 import type { OperatorControls } from './types.js';
 
 describe('predeploy gate', () => {
-  it('passes only when both durable controls are closed', async () => {
+  it('bypasses static and dynamic checks when both durable controls are closed', async () => {
     const store = testStore(controls(false, false));
+    const assertStaticConfig = vi.fn();
+    const checkReadiness = vi.fn(async () => ({ ready: false }));
 
-    await expect(runPredeploy({ connect: async () => store })).resolves.toBeUndefined();
+    await expect(
+      runPredeploy({ connect: async () => store, assertStaticConfig, checkReadiness }),
+    ).resolves.toBeUndefined();
 
+    expect(assertStaticConfig).not.toHaveBeenCalled();
+    expect(checkReadiness).not.toHaveBeenCalled();
     expect(store.close).toHaveBeenCalledOnce();
   });
 
-  it('rejects deployment while paid intake is open', async () => {
+  it('passes an open deployment only after static and dynamic readiness succeed', async () => {
     const store = testStore(controls(true, false));
+    const assertStaticConfig = vi.fn();
+    const checkReadiness = vi.fn(async () => ({ ready: true }));
 
-    await expect(runPredeploy({ connect: async () => store })).rejects.toThrow(
-      'admission must be closed before deployment',
-    );
+    await expect(
+      runPredeploy({ connect: async () => store, assertStaticConfig, checkReadiness }),
+    ).resolves.toBeUndefined();
 
+    expect(assertStaticConfig).toHaveBeenCalledOnce();
+    expect(checkReadiness).toHaveBeenCalledWith(store);
     expect(store.close).toHaveBeenCalledOnce();
   });
 
-  it('rejects deployment while claims are open', async () => {
+  it('rejects an open deployment when dynamic readiness is incomplete', async () => {
     const store = testStore(controls(false, true));
+    const checkReadiness = vi.fn(async () => ({ ready: false }));
 
-    await expect(runPredeploy({ connect: async () => store })).rejects.toThrow(
-      'admission must be closed before deployment',
-    );
+    await expect(
+      runPredeploy({ connect: async () => store, assertStaticConfig: vi.fn(), checkReadiness }),
+    ).rejects.toThrow('dependencies are not ready');
 
     expect(store.close).toHaveBeenCalledOnce();
   });
 
   it('rejects deployment when durable controls cannot be read', async () => {
     const store = testStore(new Error('database unavailable'));
+    const assertStaticConfig = vi.fn();
+    const checkReadiness = vi.fn(async () => ({ ready: true }));
 
-    await expect(runPredeploy({ connect: async () => store })).rejects.toThrow(
-      'database unavailable',
-    );
+    await expect(
+      runPredeploy({ connect: async () => store, assertStaticConfig, checkReadiness }),
+    ).rejects.toThrow('database unavailable');
 
+    expect(assertStaticConfig).not.toHaveBeenCalled();
+    expect(checkReadiness).not.toHaveBeenCalled();
     expect(store.close).toHaveBeenCalledOnce();
   });
 });

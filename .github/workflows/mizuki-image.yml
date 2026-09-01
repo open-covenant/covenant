@@ -459,6 +459,8 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write
+    outputs:
+      image_reference: ${{ steps.release.outputs.image_reference }}
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       GH_TOKEN: ${{ github.token }}
@@ -473,6 +475,7 @@ jobs:
           path: evidence
 
       - name: publish or verify immutable release
+        id: release
         env:
           BUILD_RESULT: ${{ needs.build.result }}
           IMMUTABLE_EXISTS: ${{ needs.resolve.outputs.immutable_exists }}
@@ -713,6 +716,7 @@ jobs:
 
           image_reference=$(jq -er '.image.reference' verified-evidence/promotion-input.json)
           manifest_url=$(jq -er '.image.manifest.browserDownloadUrl' verified-evidence/promotion-input.json)
+          echo "image_reference=$image_reference" >> "$GITHUB_OUTPUT"
           {
             echo '### Immutable Mizuki image release'
             echo
@@ -722,3 +726,78 @@ jobs:
             echo
             echo "Release: https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    needs: [resolve, publish]
+    if: github.repository == 'open-covenant/covenant' && needs.publish.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions: {}
+    environment: mizuki-production
+    steps:
+      - name: promote the published image to production
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          SERVICE_ID: ${{ vars.MIZUKI_PRODUCTION_SERVICE_ID }}
+          IMAGE_REFERENCE: ${{ needs.publish.outputs.image_reference }}
+          RESOLVED_COMMIT: ${{ needs.resolve.outputs.commit }}
+        run: |
+          set -euo pipefail
+
+          test -n "$RENDER_API_KEY" || { echo '::error::RENDER_API_KEY is not configured'; exit 1; }
+          test -n "$SERVICE_ID" || { echo '::error::MIZUKI_PRODUCTION_SERVICE_ID is not configured'; exit 1; }
+
+          # The reference comes from the verified promotion input, so it is always
+          # digest-qualified. Refuse anything else rather than let a tag through.
+          case "$IMAGE_REFERENCE" in
+            ghcr.io/open-covenant/covenant/mizuki@sha256:*) ;;
+            *) echo "::error::refusing to promote a reference that is not a Mizuki digest: $IMAGE_REFERENCE"; exit 1 ;;
+          esac
+
+          render() {
+            local method=$1 path=$2
+            shift 2
+            curl -fsS --max-time 30 --retry 3 --retry-connrefused \
+              -X "$method" \
+              -H "authorization: Bearer $RENDER_API_KEY" \
+              -H 'content-type: application/json' \
+              "https://api.render.com/v1$path" "$@"
+          }
+
+          previous=$(render GET "/services/$SERVICE_ID" | jq -er '.imagePath')
+          echo "rollback reference: $previous"
+
+          if [ "$previous" = "$IMAGE_REFERENCE" ]; then
+            echo "production already runs $IMAGE_REFERENCE"
+            exit 0
+          fi
+
+          deploy_id=$(render POST "/services/$SERVICE_ID/deploys" \
+            -d "$(jq -nc --arg image "$IMAGE_REFERENCE" '{imageUrl: $image}')" \
+            | jq -er '.id')
+          echo "deploy $deploy_id promoting $IMAGE_REFERENCE"
+
+          for _ in $(seq 1 60); do
+            status=$(render GET "/services/$SERVICE_ID/deploys/$deploy_id" | jq -er '.status')
+            case "$status" in
+              live)
+                echo "::notice::production is live on $IMAGE_REFERENCE ($RESOLVED_COMMIT)"
+                {
+                  echo '### Mizuki production promoted'
+                  echo
+                  echo "\`$IMAGE_REFERENCE\`"
+                  echo
+                  echo "Rollback: \`$previous\`"
+                } >> "$GITHUB_STEP_SUMMARY"
+                exit 0
+                ;;
+              build_failed|update_failed|canceled|pre_deploy_failed)
+                echo "::error::deploy $deploy_id ended as $status; production still runs $previous"
+                exit 1
+                ;;
+            esac
+            sleep 15
+          done
+
+          echo "::error::deploy $deploy_id did not settle within 15 minutes"
+          exit 1

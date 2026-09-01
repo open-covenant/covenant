@@ -275,7 +275,12 @@ abort 'runtime updater token is not read-only' unless service_ref(production.fet
 abort 'runtime updater timeout drift' unless production.fetch('MIZUKI_UPDATER_TIMEOUT_MS')['value'] == '15000'
 abort 'runtime payment recipient is not the signer refund treasury' unless service_ref(production.fetch('MIZUKI_PAY_TO'), 'mizuki-policy-signer', 'MIZUKI_REFUND_TREASURY')
 abort 'runtime escrow refund destination is not the isolated escrow authority' unless service_ref(production.fetch('MIZUKI_ESCROW_REFUND_TO'), 'mizuki-policy-signer', 'MIZUKI_ESCROW_AUTHORITY')
-abort 'runtime x402 facilitator is not pinned to HTTPS' unless URI(production.fetch('MIZUKI_X402_FACILITATOR')['value']).scheme == 'https'
+facilitator_uri = URI(production.fetch('MIZUKI_X402_FACILITATOR')['value'])
+# The facilitator is either Mizuki's own private service, reachable on the
+# internal network over http, or a third party, which must still be HTTPS.
+facilitator_private = facilitator_uri.scheme == 'http' && facilitator_uri.host == 'mizuki-facilitator' && facilitator_uri.port == 8402
+abort 'runtime x402 facilitator is neither the private service nor HTTPS' unless facilitator_private || facilitator_uri.scheme == 'https'
+abort 'runtime facilitator token is not linked to the facilitator' if facilitator_private && !service_ref(production.fetch('MIZUKI_X402_FACILITATOR_TOKEN'), 'mizuki-facilitator', 'MIZUKI_FACILITATOR_TOKEN')
 abort 'runtime UsePod origin drift' unless production.fetch('USEPOD_BASE_URL')['value'] == 'https://api.usepod.ai'
 abort 'runtime coding route drift' unless production.fetch('USEPOD_MODEL')['value'] == 'deepseek-v3.2'
 abort 'runtime review route drift' unless production.fetch('USEPOD_REVIEW_MODEL')['value'] == 'deepseek-v4-flash'

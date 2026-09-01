@@ -43,10 +43,23 @@ promotion-input bundles against the protected workflow identity and its recorded
 then emits the same promotion URL. A mutable draft may be repaired; a published non-immutable
 release or an immutable release that fails any check is a hard failure.
 
+## Promotion
+
+Promotion is automatic. Once the `publish` job has created and verified the immutable release, the
+`deploy` job in the same workflow reads the digest-qualified reference out of the verified
+`promotion-input.json`, refuses anything that is not a `mizuki@sha256:` reference, and sends it to
+the Render API for the production runtime. The job records the outgoing reference as the rollback
+target in its run summary, waits for the deploy to reach `live`, and fails the run on any terminal
+state other than `live`.
+
+The Render credential is held in the branch-restricted `mizuki-production` GitHub environment, so
+only a workflow running on `main` can reach it. To roll back, send the previous reference from the
+run summary to the same endpoint, or rerun the workflow for the last good commit.
+
 ## Operator verification
 
-Download the evidence from the commit release and verify it before copying the reference into an
-upgrade manifest:
+The workflow already performs this verification before it promotes. Repeat it by hand only when
+investigating an incident or promoting out of band:
 
 ```bash
 gh release download mizuki-image-<full-commit-sha> \

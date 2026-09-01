@@ -8,13 +8,14 @@ const config = {
   clawPumpAgentId: 'mizuki-agent',
 };
 
+// Shape observed live from ClawPump: the agent id is in the path, not the body.
 function earnings(totalSent: number) {
   return {
-    agentId: 'mizuki-agent',
     totalEarned: totalSent,
     totalSent,
     totalPending: 0,
     totalHeld: 0,
+    totalFailed: 0,
     recentDistributions: [],
   };
 }
@@ -30,11 +31,23 @@ describe('ClawPump earnings', () => {
     });
     expect(request).toHaveBeenCalledOnce();
     expect(request.mock.calls[0]?.[0]).toBe(
-      'https://clawpump.tech/api/fees/earnings?agentId=mizuki-agent',
+      'https://clawpump.tech/api/agents/mizuki-agent/earnings',
     );
     expect(request.mock.calls[0]?.[1]?.headers).toEqual({
       authorization: 'Bearer cpk_test',
     });
+  });
+
+  it('records the sub-lamport SOL precision ClawPump actually reports', async () => {
+    const store = new MemoryStore();
+    const request = vi.fn(async () => Response.json(earnings(1.16282653808594)));
+    const reconciler = new EarningsReconciler(store, new ClawPumpClient(config, request));
+
+    await reconciler.reconcile();
+
+    expect(await store.ledgerEntries()).toEqual([
+      expect.objectContaining({ kind: 'creator_fee', amountAtomic: '1162826538' }),
+    ]);
   });
 
   it('records only the exact cumulative SOL delta and is idempotent', async () => {
@@ -76,11 +89,13 @@ describe('ClawPump earnings', () => {
     await expect(client.earnings()).rejects.toThrow('does not match the configured agent');
   });
 
-  it('rejects a cumulative amount with fractional lamports', async () => {
-    const client = new ClawPumpClient(config, async () => Response.json(earnings(0.0000000005)));
+  it('rejects a cumulative amount that is not a usable SOL balance', async () => {
+    const negative = new ClawPumpClient(config, async () => Response.json(earnings(-1)));
+    await expect(new EarningsReconciler(new MemoryStore(), negative).reconcile()).rejects.toThrow();
 
-    await expect(new EarningsReconciler(new MemoryStore(), client).reconcile()).rejects.toThrow(
-      'whole lamports',
+    const enormous = new ClawPumpClient(config, async () => Response.json(earnings(1e12)));
+    await expect(new EarningsReconciler(new MemoryStore(), enormous).reconcile()).rejects.toThrow(
+      'out of range',
     );
   });
 

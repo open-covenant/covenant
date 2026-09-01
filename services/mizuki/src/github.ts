@@ -28,6 +28,7 @@ const githubAppSchema = z.object({
   slug: z.string().min(1).max(100),
   permissions: permissionSchema,
 });
+const installationScopeSchema = z.object({ repository_selection: z.string().min(1) }).passthrough();
 const installationSchema = z
   .object({
     id: z.number().int().positive(),
@@ -955,9 +956,20 @@ export class GithubClient {
     }
     if (response.status === 404) return undefined;
     if (!response.ok) throw githubReadinessFromStatus(response.status);
+    const body = await response.json();
+    // Mizuki requires the App to be installed on selected repositories rather
+    // than all of them, so it can only ever see the repositories a maintainer
+    // chose. Reporting that as unverifiable provenance sends the maintainer to
+    // a retry that can never succeed; it is a setup step with a clear remedy.
+    const scope = installationScopeSchema.safeParse(body);
+    if (scope.success && scope.data.repository_selection !== 'selected') {
+      throw new GithubAccessError(
+        'Reinstall the Mizuki GitHub App and choose "Only select repositories", then pick this repository.',
+      );
+    }
     let installation: z.infer<typeof installationSchema>;
     try {
-      installation = installationSchema.parse(await response.json());
+      installation = installationSchema.parse(body);
     } catch {
       throw new GithubReadinessError('provenance', GITHUB_PROVENANCE_UNAVAILABLE);
     }

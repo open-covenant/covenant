@@ -198,6 +198,28 @@ describe('GitHub issue admission', () => {
 });
 
 describe('workbench repository access', () => {
+  it('tells a maintainer how to fix an App installed on every repository', async () => {
+    const github = reviewClient(async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/repos/example/project/installation') {
+        return Response.json(coreInstallation(1, { repository_selection: 'all' }));
+      }
+      if (url.pathname === '/repos/example/project') {
+        return Response.json({ private: false, default_branch: 'main' });
+      }
+      if (url.pathname === '/repos/example/project/collaborators/maintainer/permission') {
+        return Response.json({ permission: 'maintain' });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+
+    // The remedy has to reach the maintainer: reported as unverifiable
+    // provenance it renders as a retry that can never succeed.
+    await expect(
+      github.repositoryMetadataForMaintainer('example', 'project', 'maintainer'),
+    ).rejects.toThrow(/Only select repositories/);
+  });
+
   it('reads account repository metadata without fetching root contents', async () => {
     const paths: string[] = [];
     const github = reviewClient(async (input) => {

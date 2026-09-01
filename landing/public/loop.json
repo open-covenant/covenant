@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-09-01T14:55:49.336Z",
+  "updatedAt": "2026-09-01T15:15:53.704Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 13142,
-    "tasks": 1539,
+    "events": 13150,
+    "tasks": 1540,
     "integrated": 1541
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1533,
     "proposed": 1,
-    "blocked": 5
+    "blocked": 5,
+    "ready": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "memory-tier-working-lifecycle-doc-accuracy",
+    "state": "ready",
+    "since": "2026-09-01T15:15:42.338Z"
+  },
   "recent": [
     {
       "at": "2026-08-11T04:33:38.837Z",

@@ -34,6 +34,7 @@ expected = {
   'mizuki-runtime-shadow' => ['pserv', 'image', nil],
   'mizuki-runtime-production' => ['web', 'image', '/deployz'],
   'mizuki-policy-signer' => ['pserv', 'node', nil],
+  'mizuki-facilitator' => ['pserv', 'node', nil],
   'mizuki-coding-gateway' => ['pserv', 'node', nil],
   'mizuki' => ['web', 'node', '/healthz'],
   'mizuki-deployment-controller' => ['pserv', 'node', nil],
@@ -111,6 +112,7 @@ abort 'database set mismatch' unless databases.map { |database| database.fetch('
 
 bootstrap_service_names = %w[
   mizuki-policy-signer
+  mizuki-facilitator
   mizuki-coding-gateway
   mizuki-updater
 ]
@@ -273,7 +275,12 @@ abort 'runtime updater token is not read-only' unless service_ref(production.fet
 abort 'runtime updater timeout drift' unless production.fetch('MIZUKI_UPDATER_TIMEOUT_MS')['value'] == '15000'
 abort 'runtime payment recipient is not the signer refund treasury' unless service_ref(production.fetch('MIZUKI_PAY_TO'), 'mizuki-policy-signer', 'MIZUKI_REFUND_TREASURY')
 abort 'runtime escrow refund destination is not the isolated escrow authority' unless service_ref(production.fetch('MIZUKI_ESCROW_REFUND_TO'), 'mizuki-policy-signer', 'MIZUKI_ESCROW_AUTHORITY')
-abort 'runtime x402 facilitator is not pinned to HTTPS' unless URI(production.fetch('MIZUKI_X402_FACILITATOR')['value']).scheme == 'https'
+facilitator_uri = URI(production.fetch('MIZUKI_X402_FACILITATOR')['value'])
+# The facilitator is either Mizuki's own private service, reachable on the
+# internal network over http, or a third party, which must still be HTTPS.
+facilitator_private = facilitator_uri.scheme == 'http' && facilitator_uri.host == 'mizuki-facilitator' && facilitator_uri.port == 8402
+abort 'runtime x402 facilitator is neither the private service nor HTTPS' unless facilitator_private || facilitator_uri.scheme == 'https'
+abort 'runtime facilitator token is not linked to the facilitator' if facilitator_private && !service_ref(production.fetch('MIZUKI_X402_FACILITATOR_TOKEN'), 'mizuki-facilitator', 'MIZUKI_FACILITATOR_TOKEN')
 abort 'runtime UsePod origin drift' unless production.fetch('USEPOD_BASE_URL')['value'] == 'https://api.usepod.ai'
 abort 'runtime coding route drift' unless production.fetch('USEPOD_MODEL')['value'] == 'deepseek-v3.2'
 abort 'runtime review route drift' unless production.fetch('USEPOD_REVIEW_MODEL')['value'] == 'deepseek-v4-flash'
@@ -612,7 +619,7 @@ jq -e '
   (.mcpServers["clawpump-agents"].env.CLAWPUMP_API_KEY | startswith("cpk_replace"))
 ' services/mizuki/clawpump/mcp.json.example >/dev/null
 
-scope='.github/workflows/mizuki.yml .github/workflows/mizuki-image.yml apps/mizuki-web services/mizuki services/mizuki-policy-signer services/mizuki-updater services/mizuki-deployment-controller services/coding-gateway infra/mizuki programs/mizuki-escrow docs/production-audit-mizuki.md'
+scope='.github/workflows/mizuki.yml .github/workflows/mizuki-image.yml apps/mizuki-web services/mizuki services/mizuki-policy-signer services/mizuki-facilitator services/mizuki-updater services/mizuki-deployment-controller services/coding-gateway infra/mizuki programs/mizuki-escrow docs/production-audit-mizuki.md'
 blocked=$(printf '\153\141\155\151\171\157')
 if rg --hidden -i -l --glob '!verify.sh' --glob '!node_modules/**' --glob '!dist/**' --glob '!.next/**' --glob '!target/**' "$blocked" $scope >/dev/null; then
   echo 'Blocked legacy term found' >&2
@@ -640,6 +647,7 @@ pnpm exec prettier --ignore-path .gitignore --check \
   'infra/mizuki/**/*.{yaml,md,json}' \
   'services/mizuki/**/*.{ts,mjs,json,md}' \
   'services/mizuki-policy-signer/**/*.{ts,json,md}' \
+  'services/mizuki-facilitator/**/*.{ts,json,md}' \
   'services/mizuki-updater/**/*.{ts,json,md}' \
   'services/mizuki-deployment-controller/**/*.{ts,json,md}' \
   'services/coding-gateway/**/*.{ts,json,md}' \
@@ -654,6 +662,7 @@ prefixes = %w[
   apps__mizuki-web
   services__mizuki
   services__mizuki-policy-signer
+  services__mizuki-facilitator
   services__mizuki-updater
   services__mizuki-deployment-controller
   services__coding-gateway
@@ -702,6 +711,9 @@ pnpm --filter @covenant/mizuki smoke
 pnpm --filter @covenant/mizuki-policy-signer typecheck
 pnpm --filter @covenant/mizuki-policy-signer test
 pnpm --filter @covenant/mizuki-policy-signer build
+pnpm --filter @covenant/mizuki-facilitator typecheck
+pnpm --filter @covenant/mizuki-facilitator test
+pnpm --filter @covenant/mizuki-facilitator build
 pnpm --filter @covenant/mizuki-updater typecheck
 pnpm --filter @covenant/mizuki-updater test
 pnpm --filter @covenant/mizuki-updater build

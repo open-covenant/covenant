@@ -46,7 +46,29 @@ export class Payments {
     if (config.paymentMode !== 'live') return;
     if (!config.payTo) return;
 
-    const facilitator = new HTTPFacilitatorClient({ url: config.facilitator, timeoutMs: 15_000 });
+    // A self-hosted facilitator signs and broadcasts with its own funded fee
+    // payer, so it authenticates its caller. The hook must be keyed by path;
+    // a flat headers object throws rather than silently dropping auth.
+    //
+    // Only ever present the credential to the private service it belongs to.
+    // A public facilitator is a third party, and sending it our bearer token
+    // would disclose the credential that spends our fee payer.
+    const token = privateFacilitator(config.facilitator) ? config.facilitatorToken : undefined;
+    const facilitator = new HTTPFacilitatorClient({
+      url: config.facilitator,
+      // The facilitator waits on confirmation before answering settle; a
+      // shorter deadline here would abandon a payment that is still landing
+      // and invite a retry of a transaction already in flight.
+      timeoutMs: 45_000,
+      ...(token
+        ? {
+            createAuthHeaders: async () => {
+              const headers = { Authorization: `Bearer ${token}` };
+              return { verify: headers, settle: headers, supported: headers };
+            },
+          }
+        : {}),
+    });
     const server = new x402ResourceServer(facilitator);
     registerExactSvmScheme(server, { networks: [SOLANA_MAINNET] });
     this.facilitator = facilitator;
@@ -55,7 +77,13 @@ export class Payments {
 
   async initialize(): Promise<void> {
     if (!this.server) return;
-    this.initialized ??= this.server.initialize();
+    // A rejected promise is still a value, so caching one would fail every
+    // later payment and settlement recovery until the process restarted.
+    // Clear it so the next caller retries the facilitator.
+    this.initialized ??= this.server.initialize().catch((error: unknown) => {
+      this.initialized = undefined;
+      throw error;
+    });
     await this.initialized;
   }
 
@@ -285,6 +313,15 @@ export class Payments {
 
 export function paymentAuthorizationSizeAllowed(value: string): boolean {
   return Buffer.byteLength(value, 'utf8') <= PAYMENT_AUTHORIZATION_MAX_BYTES;
+}
+
+function privateFacilitator(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' && !url.hostname.includes('.') && url.hostname !== 'localhost';
+  } catch {
+    return false;
+  }
 }
 
 function isSupportedResponse(value: unknown): value is {

@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { encodePaymentSignatureHeader } from '@x402/core/http';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { loadConfig } from './config.js';
 import type { Quote } from './types.js';
 import {
@@ -207,5 +207,27 @@ describe('Payments live x402 boundary', () => {
         facilitator.close((error) => (error ? reject(error) : resolve())),
       );
     }
+  });
+});
+
+describe('facilitator client wiring', () => {
+  it('retries facilitator initialization after a failure', async () => {
+    let attempts = 0;
+    const payments = new Payments({
+      paymentMode: 'live',
+      payTo: 'HN7cABqLq46Es1jh92dQQisAq662SmxELLLsHHe4YWrH',
+      facilitator: 'https://facilitator.example',
+    } as never);
+    const server = {
+      initialize: vi.fn(async () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error('facilitator unavailable');
+      }),
+    };
+    (payments as unknown as { server: unknown }).server = server;
+
+    await expect(payments.initialize()).rejects.toThrow('facilitator unavailable');
+    await expect(payments.initialize()).resolves.toBeUndefined();
+    expect(server.initialize).toHaveBeenCalledTimes(2);
   });
 });

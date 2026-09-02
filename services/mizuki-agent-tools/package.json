@@ -1,0 +1,64 @@
+{
+  "name": "mizuki-agent-tools",
+  "version": "0.1.1",
+  "description": "Mizuki tools for LangChain and any JavaScript agent: quote, assess, and track fixed-price GitHub maintenance paid in USDC on Solana.",
+  "keywords": [
+    "langchain",
+    "agent",
+    "tools",
+    "x402",
+    "solana",
+    "usdc",
+    "github",
+    "mizuki"
+  ],
+  "license": "Apache-2.0",
+  "homepage": "https://mizuki.opencovenant.org",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/open-covenant/covenant.git",
+    "directory": "services/mizuki-agent-tools"
+  },
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./langchain": {
+      "types": "./dist/langchain.d.ts",
+      "default": "./dist/langchain.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --test src/*.test.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "peerDependencies": {
+    "@langchain/core": ">=0.3",
+    "zod": ">=3"
+  },
+  "peerDependenciesMeta": {
+    "@langchain/core": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@langchain/core": "0.3.78",
+    "@types/node": "24.10.1",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3",
+    "zod": "3.25.76"
+  }
+}

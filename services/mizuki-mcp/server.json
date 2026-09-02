@@ -1,0 +1,39 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "org.opencovenant/mizuki",
+  "title": "Mizuki",
+  "description": "Quote, pay for, and track fixed-price maintenance on public GitHub repositories. Mizuki returns a pull request that passes the repository's own checks, or refunds the quoted amount. Settlement is USDC on Solana over x402.",
+  "repository": { "url": "https://github.com/open-covenant/covenant", "source": "github" },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "mizuki-mcp",
+      "version": "0.1.0",
+      "transport": { "type": "stdio" },
+      "environmentVariables": [
+        {
+          "name": "MIZUKI_API_URL",
+          "description": "Mizuki API base URL. Defaults to the public service.",
+          "format": "string",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "MIZUKI_API_TOKEN",
+          "description": "Maintainer API token. Only needed for repository, preflight, and payment-status tools; quoting and public reads work without it.",
+          "format": "string",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "MIZUKI_MCP_TIMEOUT_MS",
+          "description": "Per-request timeout in milliseconds.",
+          "format": "string",
+          "isRequired": false,
+          "isSecret": false
+        }
+      ]
+    }
+  ]
+}

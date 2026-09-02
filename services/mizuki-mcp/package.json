@@ -1,0 +1,48 @@
+{
+  "name": "mizuki-mcp",
+  "version": "0.1.0",
+  "description": "Quote, pay for, and track fixed-price maintenance on public GitHub repositories from any MCP client. Settlement is USDC on Solana over x402.",
+  "keywords": [
+    "mcp",
+    "modelcontextprotocol",
+    "x402",
+    "solana",
+    "usdc",
+    "github",
+    "agent",
+    "mizuki"
+  ],
+  "license": "Apache-2.0",
+  "homepage": "https://mizuki.opencovenant.org",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/open-covenant/covenant.git",
+    "directory": "services/mizuki-mcp"
+  },
+  "type": "module",
+  "bin": {
+    "mizuki-mcp": "dist/server.js"
+  },
+  "main": "dist/server.js",
+  "files": [
+    "dist",
+    "README.md",
+    "server.json"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.26.0",
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "@types/node": "24.10.1"
+  }
+}

@@ -1010,6 +1010,24 @@ export function createApp(deps: AppDependencies) {
         const processed = await deps.webhooks.handle(delivery, event, raw);
         return json(res, processed ? 202 : 200, { accepted: true, duplicate: !processed });
       }
+      // Public evidence of the work that has actually been paid for. Every entry
+      // names a settled Solana transaction and, where one exists, the pull request
+      // it produced, so a reader can check the claim rather than take it.
+      if (req.method === 'GET' && url.pathname === '/v1/proof') {
+        const requested = Number(url.searchParams.get('limit') ?? '50');
+        const jobs = await deps.store.settledJobs(requested);
+        const settled = jobs.map(publicJob);
+        return json(res, 200, {
+          observedAt: new Date().toISOString(),
+          settlement: {
+            network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+            asset: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+          },
+          count: settled.length,
+          jobs: settled,
+        });
+      }
+
       if (req.method === 'GET' && url.pathname === '/v1/bounties') {
         const bounties: Awaited<ReturnType<typeof publicBounty>>[] = [];
         for (const bounty of await deps.store.bountiesList()) {

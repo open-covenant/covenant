@@ -127,6 +127,7 @@ export interface MizukiStore {
   ): Promise<CustomerPaymentAttempt>;
   expirePaymentReservation(jobId: string, attemptId: string): Promise<Job>;
   jobsForAccount(githubId: string, limit: number): Promise<AccountJobsPage>;
+  settledJobs(limit: number): Promise<Job[]>;
   linkAccountRepository(githubId: string, owner: string, repo: string): Promise<AccountRepository>;
   repositoriesForAccount(githubId: string, limit: number): Promise<AccountRepositoriesPage>;
   createJob(
@@ -507,6 +508,14 @@ export class MemoryStore implements MizukiStore {
       truncated: terminal.length > boundedLimit,
       obligationCount: obligations.length,
     };
+  }
+
+  async settledJobs(limit: number): Promise<Job[]> {
+    return [...this.jobs.values()]
+      .filter(jobIsSettled)
+      .sort(accountJobOrder)
+      .slice(0, proofFeedLimit(limit))
+      .map((job) => structuredClone(job));
   }
 
   async linkAccountRepository(
@@ -1620,6 +1629,19 @@ export class PostgresStore implements MizukiStore {
       truncated: terminal.length > boundedLimit,
       obligationCount: result.rows.filter((row) => row.obligation).length,
     };
+  }
+
+  async settledJobs(limit: number): Promise<Job[]> {
+    const result = await this.pool.query<{ payload: Job }>(
+      `SELECT payload
+         FROM mizuki_jobs
+        WHERE payload -> 'payment' ->> 'transaction' IS NOT NULL
+          AND payload -> 'payment' ->> 'transaction' <> 'pending'
+        ORDER BY created_at DESC, id DESC
+        LIMIT $1`,
+      [proofFeedLimit(limit)],
+    );
+    return result.rows.map((row) => row.payload);
   }
 
   async linkAccountRepository(
@@ -2826,6 +2848,17 @@ function accountJobLimit(limit: number): number {
     throw new Error('account job limit must be an integer between 1 and 1000');
   }
   return limit;
+}
+
+/** The feed shows work that was actually paid for, so a job without a settled payment is not evidence. */
+function jobIsSettled(job: Job): boolean {
+  return Boolean(job.payment?.transaction) && job.payment.transaction !== 'pending';
+}
+
+/** Bounds the public feed so one request cannot ask for the whole history. */
+function proofFeedLimit(limit: number): number {
+  if (!Number.isFinite(limit) || limit < 1) return 50;
+  return Math.min(Math.floor(limit), 200);
 }
 
 function accountJobIsObligation(job: Job): boolean {

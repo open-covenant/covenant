@@ -17,7 +17,10 @@ describe('priced assessment route', () => {
       }),
     );
 
-    const response = await GET(new Request('https://mizuki.test/'), params('open-covenant', 'covenant'));
+    const response = await GET(
+      new Request('https://mizuki.test/'),
+      params('open-covenant', 'covenant'),
+    );
 
     expect(response.status).toBe(402);
     expect(response.headers.get('payment-required')).toBe(challenge);
@@ -52,7 +55,10 @@ describe('priced assessment route', () => {
   it('reports an unreachable assessment service as a gateway failure', async () => {
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('connect ECONNREFUSED'));
 
-    const response = await GET(new Request('https://mizuki.test/'), params('open-covenant', 'covenant'));
+    const response = await GET(
+      new Request('https://mizuki.test/'),
+      params('open-covenant', 'covenant'),
+    );
 
     expect(response.status).toBe(502);
   });

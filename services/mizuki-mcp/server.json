@@ -2,15 +2,20 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "org.opencovenant/mizuki",
   "title": "Mizuki",
-  "description": "Quote, pay for, and track fixed-price maintenance on public GitHub repositories. Mizuki returns a pull request that passes the repository's own checks, or refunds the quoted amount. Settlement is USDC on Solana over x402.",
-  "repository": { "url": "https://github.com/open-covenant/covenant", "source": "github" },
-  "version": "0.1.0",
+  "description": "Fixed-price maintenance for public GitHub issues, paid in USDC on Solana.",
+  "repository": {
+    "url": "https://github.com/open-covenant/covenant",
+    "source": "github"
+  },
+  "version": "0.1.2",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "mizuki-mcp",
-      "version": "0.1.0",
-      "transport": { "type": "stdio" },
+      "version": "0.1.2",
+      "transport": {
+        "type": "stdio"
+      },
       "environmentVariables": [
         {
           "name": "MIZUKI_API_URL",

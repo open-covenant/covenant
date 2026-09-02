@@ -1,6 +1,6 @@
 {
   "name": "mizuki-mcp",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Quote, pay for, and track fixed-price maintenance on public GitHub repositories from any MCP client. Settlement is USDC on Solana over x402.",
   "keywords": [
     "mcp",
@@ -44,5 +44,6 @@
   "devDependencies": {
     "typescript": "5.9.3",
     "@types/node": "24.10.1"
-  }
+  },
+  "mcpName": "org.opencovenant/mizuki"
 }

@@ -14,8 +14,10 @@
  * Env (Render vars):
  *   PORT                            listen port (Render injects)
  *   COVENANT_TREASURY               payTo — where USDC revenue lands
- *   X402_FACILITATOR_URL            facilitator base (verify/settle + feePayer)
- *   FACILITATOR_PUBKEY              sponsor feePayer advertised in the challenge
+ *   X402_FACILITATOR_URL            fallback facilitator base, used without CDP
+ *   FACILITATOR_PUBKEY              fallback sponsor feePayer for that facilitator
+ *   CDP_API_KEY_ID                  Coinbase facilitator key id; enables Bazaar
+ *   CDP_API_KEY_SECRET              Coinbase facilitator key secret (64-byte b64)
  *   X402_SYNC_FACILITATOR           "false" to skip facilitator sync at boot
  *   ZAUTH_API_KEY                   zauth provider key (telemetry; optional)
  *   COVENANT_SOLANA_MAINNET_RPC_URL DAS-capable RPC for the passport lookup
@@ -30,6 +32,7 @@ import { HTTPFacilitatorClient, type RoutesConfig } from '@x402/core/server';
 import { ExactSvmScheme } from '@x402/svm/exact/server';
 import { declareDiscoveryExtension } from '@x402/extensions/bazaar';
 import { zauthProvider } from '@zauthx402/sdk/middleware';
+import { CDP_FACILITATOR_URL, cdpAuthHeaders, cdpFeePayer } from './cdp.js';
 import { getPassport } from './passport.js';
 import {
   Attestor,
@@ -49,8 +52,11 @@ import {
 const PORT = Number(process.env.PORT ?? 10000);
 const PAY_TO = process.env.COVENANT_TREASURY ?? '8xbXHAhiVe2BrYDq4qpTA5SSYJG9XNjNN6jcrudhTKCM';
 const FACILITATOR_URL = process.env.X402_FACILITATOR_URL ?? 'https://facilitator.payai.network';
-const FEE_PAYER = process.env.FACILITATOR_PUBKEY ?? '2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4';
+const FALLBACK_FEE_PAYER =
+  process.env.FACILITATOR_PUBKEY ?? '2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4';
 const SYNC = process.env.X402_SYNC_FACILITATOR !== 'false';
+const CDP_KEY_ID = process.env.CDP_API_KEY_ID;
+const CDP_KEY_SECRET = process.env.CDP_API_KEY_SECRET;
 const ZAUTH_API_KEY = process.env.ZAUTH_API_KEY;
 const RPC_URL =
   process.env.COVENANT_SOLANA_MAINNET_RPC_URL ?? 'https://api.mainnet-beta.solana.com';
@@ -62,6 +68,24 @@ const REPUTATION_LIMIT = Number(process.env.REPUTATION_LIMIT ?? 100);
 
 const SOLANA_MAINNET = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp' as const;
 const USDC_SOLANA = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+
+// The challenge must advertise the sponsor belonging to whichever facilitator
+// will settle, because the payer builds the transaction around it. Reading it
+// from CDP rather than configuration means the two cannot drift apart.
+const FEE_PAYER = await (async () => {
+  if (!CDP_KEY_ID || !CDP_KEY_SECRET) return FALLBACK_FEE_PAYER;
+  try {
+    const sponsor = await cdpFeePayer(CDP_KEY_ID, CDP_KEY_SECRET, SOLANA_MAINNET);
+    if (sponsor) return sponsor;
+    throw new Error(`CDP does not sponsor exact/${SOLANA_MAINNET} at v2`);
+  } catch (cause) {
+    // Advertising the wrong sponsor produces transactions the facilitator will
+    // not sign, so refuse to boot rather than serve a challenge nobody can pay.
+    throw new Error(
+      `could not resolve the CDP fee payer: ${cause instanceof Error ? cause.message : String(cause)}`,
+    );
+  }
+})();
 
 const attestor = process.env.COVENANT_ATTEST_KEYPAIR
   ? new Attestor(JSON.parse(process.env.COVENANT_ATTEST_KEYPAIR) as number[])
@@ -127,7 +151,15 @@ if (ZAUTH_API_KEY) {
   console.warn('ZAUTH_API_KEY unset — running without zauth provider telemetry');
 }
 
-const facilitator = new HTTPFacilitatorClient({ url: FACILITATOR_URL });
+// Settlement goes to Coinbase when CDP credentials are present, because the
+// Bazaar indexes what Coinbase settles and nothing else. Without them the
+// seller keeps its previous facilitator and simply stays undiscoverable.
+const facilitator = CDP_KEY_ID && CDP_KEY_SECRET
+  ? new HTTPFacilitatorClient({
+      url: CDP_FACILITATOR_URL,
+      createAuthHeaders: cdpAuthHeaders(CDP_KEY_ID, CDP_KEY_SECRET),
+    })
+  : new HTTPFacilitatorClient({ url: FACILITATOR_URL });
 
 // `extensions` carries the bazaar discovery declaration so each resource is
 // listed in the facilitator's discovery catalog (x402scan, the PayAI bazaar).

@@ -61,8 +61,11 @@ Before changing the production coding route or model, run `pnpm --filter @covena
 - `GET /v1/account/quotes/:quoteId/payment-status` with the original `Idempotency-Key` safely distinguishes an existing job reservation from an unpaid quote. It never requests or submits a payment signature.
 - `GET /v1/jobs/:id` for PR, validation, or refund status.
 - `GET /v1/metrics` and `GET /metrics` for the public unit-economics dashboard.
+- `GET /v1/social/brief?kind=stats` returns a deterministic, 15-minute fact pack with internal, external, and unclassified provenance. It blocks publication when evidence, refund protection, aggregate consistency, or provenance is unsafe.
+- `POST /v1/social/validate` validates a proposed `POST` or `SKIP` response against the current brief without publishing it.
 - `GET /v1/admission` for the public paid-intake and new-claim switch status. Both switches start closed on a fresh database.
 - `GET /v1/admin/jobs`, `POST /v1/admin/refunds/:jobId`, and `POST /v1/admin/settlements/:jobId` require the admin bearer token. Payment authorization is durably reserved before facilitator settlement; the last endpoint reconciles an indeterminate settlement after a process or network failure.
+- `GET /v1/admin/social/posts` and `POST /v1/admin/social/posts` require the admin bearer token. The latter records a confirmed X post only after the current brief and proposed copy pass deterministic validation; cursor, source hash, and post ID are unique.
 - `GET /v1/admin/admission` and `POST /v1/admin/admission` require the admin bearer token. Updates accept `intakeEnabled`, `claimsEnabled`, and a 10-500 character `reason`; paid authorization and settlement read the durable switch inside the same serial gate.
 - `POST /v1/admin/bounties/:bountyId/disputes/:disputeId/resolve` requires the admin bearer token, an idempotency key, a release/refund decision, and normalized public evidence. Retryable signer failures remain pending. A dispute cannot pretend to freeze a release that has already begun.
 
@@ -71,6 +74,19 @@ Run `pnpm --filter @covenant/mizuki mcp` to expose quote, submission, status, re
 Create a scoped token in Workbench under Integrations, copy it once, and store it as `MIZUKI_API_TOKEN` in the MCP host's secret storage. Mizuki stores only a versioned prefix and SHA-256 hash. Repository and issue tools require `repositories:read`; account quote creation requires `jobs:write`; payment recovery requires `jobs:read`. Tokens are account-bound, expire within one year, can be revoked immediately, and never replace the browser's HttpOnly session cookie. They do not accept a GitHub token as a substitute and cannot connect a new repository; complete that explicit authorization in Workbench first.
 
 Expensive public mutations use bounded per-source token buckets and return `429` with `Retry-After`. Production on Render must set `MIZUKI_TRUSTED_PROXY_HOPS=1` and share `MIZUKI_WEB_PROXY_SECRET` only with the same-origin web proxy. The setting enables Render-specific edge trust; it is not a generic proxy-chain depth. Direct ingress validates Cloudflare's overwritten `CF-Connecting-IP` value and ignores `X-Forwarded-For`, which Cloudflare appends to caller-controlled values. Missing or malformed edge identity falls back to the direct socket. The authenticated web proxy context carries the same validated address without trusting browser-supplied Mizuki headers. Activity streams have global, per-source, and idle-lifetime caps.
+
+## X publishing gate
+
+ClawPump's built-in Twitter skill is delivery-only. The versioned `Mizuki publisher` skill controls voice and post selection; this service remains the source of truth for facts, deduplication, and confirmed-post receipts. Interval auto-posting stays disabled.
+
+Before the first X post, run a 24-hour dry run against the deployed public endpoints:
+
+1. Capture at least four stats briefs across the day and preserve their cursor, source hash, timestamps, evidence, and blocked reasons.
+2. Ask the agent for `POST` or `SKIP` using only the fresh fact pack, then submit the result to `/v1/social/validate`.
+3. Confirm internal test activity is never presented as customer traction, stale or unchanged facts produce `SKIP`, all numeric claims match the brief, and every URL uses an allowed origin.
+4. Keep every draft operator-visible and publish nothing during the dry run.
+
+After the 24-hour gate passes, the first canary is still operator-reviewed. Record a receipt only after X confirms the post ID. Product-update posts remain manual until a deployed public release manifest exists; an internal merge is not deployment evidence.
 
 ## GitHub App
 

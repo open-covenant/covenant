@@ -1,0 +1,4 @@
+interface:
+  display_name: 'Mizuki Publisher'
+  short_description: 'Draft evidence-bound updates in Mizuki voice'
+  default_prompt: 'Use $mizuki-publisher to turn this verified fact pack into a concise X post or a reason to skip.'

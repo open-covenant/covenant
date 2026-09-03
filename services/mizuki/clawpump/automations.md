@@ -27,6 +27,8 @@ Do not put the ClawPump API key, agent ID, wallet private material, or local MCP
 
 ## Automations
 
+Twitter interval auto-posting is intentionally disabled. The one-day social dry run is an operator-observed validation exercise, not a ClawPump automation. Do not create or arm a social publisher until the dry-run evidence and first supervised canary have been reviewed.
+
 ClawPump documents schedule-triggered prompt automations through `create_automation`. Create them through the installed MCP tool or the guided `setup-automations` prompt so the live server validates the trigger and action schema. Do not handcraft requests to guessed endpoints.
 
 Create these prompt actions one at a time. Immediately pause each new rule with `update_automation`, manually fire it once with `trigger_automation`, inspect the run, then arm it:

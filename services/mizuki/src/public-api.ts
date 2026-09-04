@@ -78,7 +78,11 @@ export function publicJob(job: Job) {
   };
 }
 
-export async function publicBounty(store: MizukiStore, bounty: RescueBounty) {
+export async function publicBounty(
+  store: MizukiStore,
+  bounty: RescueBounty,
+  claimsEnabled = false,
+) {
   const [job, escrow, contributor] = await Promise.all([
     store.job(bounty.sourceJobId),
     store.escrowByBounty(bounty.id),
@@ -104,6 +108,8 @@ export async function publicBounty(store: MizukiStore, bounty: RescueBounty) {
     amountAtomic: escrow?.amountAtomic,
     asset: 'SOL',
     state: bounty.state,
+    claimable: bountyClaimable(bounty, claimsEnabled),
+    offerExpiresAt: bounty.offerExpiresAt,
     failureClass: classifyFailure(job?.error),
     acceptanceCriteria,
     claimExpiresAt: bounty.activeClaim?.leaseExpiresAt,
@@ -172,6 +178,30 @@ const publicBountyStates = new Set<RescueBountyState>([
   'disputed',
   'refunded',
 ]);
+
+/**
+ * Whether a reader could actually claim this bounty right now.
+ *
+ * The public list is a full record, so it carries settled and expired bounties
+ * alongside live ones. Without saying which is which, a board of eleven closed
+ * offers reads as eleven pieces of available work: a contributor picks one,
+ * does it, and finds there was never anything to claim. That happened.
+ *
+ * Claiming also depends on the operator control, so an offer inside its window
+ * is still not claimable while claiming is switched off.
+ */
+export function bountyClaimable(
+  bounty: RescueBounty,
+  claimsEnabled: boolean,
+  now: Date = new Date(),
+): boolean {
+  return (
+    claimsEnabled &&
+    bounty.state === 'open' &&
+    !bounty.activeClaim &&
+    Date.parse(bounty.offerExpiresAt) > now.getTime()
+  );
+}
 
 export async function isPublicBounty(store: MizukiStore, bounty: RescueBounty): Promise<boolean> {
   if (!publicBountyStates.has(bounty.state)) return false;

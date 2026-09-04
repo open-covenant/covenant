@@ -27,7 +27,14 @@ jobs:
 
       - name: renew the tariff evidence
         id: renew
-        run: node scripts/renew-e2b-tariff.mjs >> "$GITHUB_OUTPUT"
+        run: |
+          set -euo pipefail
+          node scripts/renew-e2b-tariff.mjs >> "$GITHUB_OUTPUT"
+          file=$(grep '^file=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2-)
+          # Format before hashing. Repository formatting rewrites this file, so a
+          # digest taken beforehand would not match the committed bytes.
+          npx --yes prettier@3.6.2 --write "$file"
+          echo "sha256=$(shasum -a 256 "$file" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
       - name: open a pull request with the renewed window
         env:

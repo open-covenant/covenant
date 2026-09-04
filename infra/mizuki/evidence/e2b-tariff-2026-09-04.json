@@ -8,8 +8,8 @@
   "templateId": "aaj2iho3gnyf5fcvln83",
   "cpuCount": 4,
   "memoryMb": 4096,
-  "cpuUsdPerCoreSecond": 1.4e-05,
-  "memoryUsdPerGibSecond": 4.5e-06,
+  "cpuUsdPerCoreSecond": 1.4e-5,
+  "memoryUsdPerGibSecond": 4.5e-6,
   "fixedUsdPerSecond": 0,
   "safetyMultiplier": 2,
   "worstCaseUsdPerSecond": 0.0002

@@ -14,7 +14,6 @@
  */
 
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 
 const EVIDENCE_DIR = 'infra/mizuki/evidence';
@@ -40,7 +39,9 @@ const target = join(EVIDENCE_DIR, `e2b-tariff-${day}.json`);
 const body = `${JSON.stringify(renewed, null, 2)}\n`;
 writeFileSync(target, body);
 
-const digest = createHash('sha256').update(body).digest('hex');
 console.log(`file=${target}`);
-console.log(`sha256=${digest}`);
 console.log(`validUntil=${renewed.validUntil}`);
+// The digest is deliberately not computed here. Repository formatting rewrites
+// this file (prettier normalises exponents such as 1.4e-05 to 1.4e-5), so a
+// hash taken now would not match the bytes that get committed. The caller
+// formats first, then hashes.

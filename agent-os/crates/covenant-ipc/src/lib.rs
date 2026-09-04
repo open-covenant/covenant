@@ -520,6 +520,39 @@ pub enum Request {
     /// later release on. Returns [`Response::SpendGrantCharged`]. `grant_id` and
     /// `amount` are decimal strings (u128); `provider` is a `0x…` address;
     /// `spec_id` is 32-byte `0x…` hex; `deadline` is a unix-seconds bound.
+    /// Trade a tokenized equity under the on-chain firewall — the *bounded
+    /// trading* leg. Requires capability `wallet.trade.authorize`. The daemon
+    /// reads the guard's own bounds and the asset's live oracle context, judges
+    /// the trade against them, and refuses locally with a named reason rather
+    /// than paying gas to be told no; the executor then calls the guard again
+    /// inside the transaction, so the bound holds on chain either way. `side` is
+    /// `"buy"` or `"sell"`. `max_in` is what the executor may pull (settlement
+    /// units buying, token units selling) and `min_out` the floor the fill has
+    /// to clear, both decimal strings (u128). `quoted_price_usd_e8` is the
+    /// worst-case price per whole token the caller commits to. `router` is a
+    /// `0x…` address that has to be allowlisted on the executor, and `swap_data`
+    /// is `0x…` venue calldata built for it. Returns [`Response::RwaTraded`].
+    RwaTrade {
+        asset: String,
+        side: String,
+        max_in: String,
+        min_out: String,
+        quoted_price_usd_e8: String,
+        router: String,
+        swap_data: String,
+    },
+    /// Judge a tokenized-equity trade without committing to it, through the
+    /// deployed guard's own `view`. Requires capability `wallet.trade.authorize`.
+    /// Nothing is signed and no gas is spent: the answer is the verdict the
+    /// guard would give the same trade right now, which is what a caller wants
+    /// before it builds venue calldata. Returns [`Response::RwaPreviewed`].
+    RwaPreview {
+        asset: String,
+        side: String,
+        max_in: String,
+        min_out: String,
+        quoted_price_usd_e8: String,
+    },
     SpendGrantCharge {
         grant_id: String,
         provider: String,
@@ -1232,6 +1265,22 @@ pub enum Response {
     /// Result of [`Request::SpendGrantCharge`]. `call_id` is the on-chain call
     /// identifier (decimal u128) the later settle acts on; `tx_hash` (`0x…`) and
     /// `block_number` pin the `chargeCall` that locked the hold.
+    /// Result of [`Request::RwaTrade`]. `tx_hash` (`0x…`) and `block_number`
+    /// pin the trade the executor landed; `side` echoes which leg ran.
+    RwaTraded {
+        side: String,
+        tx_hash: String,
+        block_number: u64,
+    },
+    /// Result of [`Request::RwaPreview`]. `allowed` is the guard's verdict for
+    /// the trade as proposed; `notional_usd_e8` and `shares_e18` carry what it
+    /// priced the trade at when allowed, and `reason` names the refusal when not.
+    RwaPreviewed {
+        allowed: bool,
+        notional_usd_e8: String,
+        shares_e18: String,
+        reason: Option<String>,
+    },
     SpendGrantCharged {
         call_id: String,
         tx_hash: String,

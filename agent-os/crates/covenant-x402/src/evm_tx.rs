@@ -368,6 +368,36 @@ mod rpc {
             Ok(self.quantity("eth_estimateGas", json!([call])).await? as u64)
         }
 
+        /// One `eth_call` at the latest block, returning the raw return data.
+        /// A revert surfaces as [`EvmTxError::Rpc`] carrying the contract's
+        /// custom-error selector in `data`, so a guard's named refusal reaches
+        /// the caller without a transaction ever being signed.
+        pub async fn eth_call(&self, to: &[u8; 20], data: &[u8]) -> Result<Vec<u8>, EvmTxError> {
+            let call = json!({ "to": hex_0x(to), "data": hex_0x(data) });
+            let result = self.rpc("eth_call", json!([call, "latest"])).await?;
+            let s = result.as_str().ok_or_else(|| EvmTxError::Decode {
+                method: "eth_call".into(),
+                detail: format!("expected hex return data, got {result}"),
+            })?;
+            let body = s.strip_prefix("0x").unwrap_or(s);
+            if body.len() % 2 != 0 {
+                return Err(EvmTxError::Decode {
+                    method: "eth_call".into(),
+                    detail: format!("odd-length return data: {s}"),
+                });
+            }
+            (0..body.len() / 2)
+                .map(|i| {
+                    u8::from_str_radix(&body[i * 2..i * 2 + 2], 16).map_err(|_| {
+                        EvmTxError::Decode {
+                            method: "eth_call".into(),
+                            detail: format!("non-hex return data: {s}"),
+                        }
+                    })
+                })
+                .collect()
+        }
+
         pub async fn send_raw(&self, raw: &[u8]) -> Result<[u8; 32], EvmTxError> {
             let result = self
                 .rpc("eth_sendRawTransaction", json!([hex_0x(raw)]))

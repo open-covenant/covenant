@@ -112,7 +112,158 @@
           "symbol": "AAPL",
           "token": "0xaF3D76f1834A1d425780943C99Ea8A608f8a93f9",
           "feed": "0x6B22A786bAa607d76728168703a39Ea9C99f2cD0",
-          "feedDescription": "Robinhood AAPL / USD",
+          "notionalCapUsdE8": 25000000000,
+          "bandBps": 50,
+          "maxStalenessSecs": 3600
+        },
+        {
+          "symbol": "AMD",
+          "token": "0x86923f96303D656E4aa86D9d42D1e57ad2023fdC",
+          "feed": "0x943A29E7ae51A4798823ca9eEd2ed533B2A22C72",
+          "notionalCapUsdE8": 25000000000,
+          "bandBps": 50,
+          "maxStalenessSecs": 3600
+        },
+        {
+          "symbol": "AMZN",
+          "token": "0x12f190a9F9d7D37a250758b26824B97CE941bF54",
+          "feed": "0x9244830430bC7D9C9A48dd47603F24AD61f7c56e",
+          "notionalCapUsdE8": 25000000000,
+          "bandBps": 50,
+          "maxStalenessSecs": 3600
+        },
+        {
+          "symbol": "BABA",
+          "token": "0xad25Ac6C84D497db898fa1E8387bf6Af3532a1c4",
+          "feed": "0x62Cc8F9b5f56a33c9C8A60c8B92779f523c4E984",
+          "notionalCapUsdE8": 25000000000,
+          "bandBps": 50,
+          "maxStalenessSecs": 3600
+        },
+        {
+          "symbol": "COIN",
+          "token": "0x6330D8C3178a418788dF01a47479c0ce7CCF450b",
+          "feed": "0xA3a468A452940B7D6b69991207B508c609a98Ef2",
+          "notionalCapUsdE8": 25000000000,
+          "bandBps": 50,
+          "maxStalenessSecs": 3600
+        },
+        {
+          "symbol": "CRCL",
+          "token": "0xdF0992E440dD0be65BD8439b609d6D4366bf1CB5",
+          "feed": "0x025Ba3B3569Ca7d15Da7BFC1648F13F06A072851",
+          "notionalCapUsdE8": 25000000000,
+          "bandBps": 50,
+          "maxStalenessSecs": 3600
+        },
+        {
+          "symbol": "CRWV",
+          "token": "0x5f10A1C971B69e47e059e1dC91901B59b3fB49C3",
+          "feed": "0x288b837A17fED1aa00c1df832ef79D0C77336c10",
+          "notionalCapUsdE8": 25000000000,
+          "bandBps": 50,
+          "maxStalenessSecs": 3600
+        },
+        {
+          "symbol": "GOOGL",
+          "token": "0x2e0847E8910a9732eB3fb1bb4b70a580ADAD4FE3",
+          "feed": "0xA04EE5c4c8827F17e82f93bE9e19DeA221A749a8",
+          "notionalCapUsdE8": 25000000000,
+          "bandBps": 50,
+          "maxStalenessSecs": 3600
+        },
+        {
+          "symbol": "INTC",
+          "token": "0xc72b96e0E48ecd4DC75E1e45396e26300BC39681",
+          "feed": "0x127B1DeDeE6269E962a59E6C1295b4002c56c403",
+          "notionalCapUsdE8": 25000000000,
+          "bandBps": 50,
+          "maxStalenessSecs": 3600
+        },
+        {
+          "symbol": "META",
+          "token": "0xc0D6457C16Cc70d6790Dd43521C899C87ce02f35",
+          "feed": "0x5cBC53D382E56cBb223f118CF8Eefb6c9c2759f5",
+          "notionalCapUsdE8": 25000000000,
+          "bandBps": 50,
+          "maxStalenessSecs": 3600
+        },
+        {
+          "symbol": "MSFT",
+          "token": "0xe93237C50D904957Cf27E7B1133b510C669c2e74",
+          "feed": "0x45C3C877C15E6BA2EBB19eA114Ea508d14C1Af2E",
+          "notionalCapUsdE8": 25000000000,
+          "bandBps": 50,
+          "maxStalenessSecs": 3600
+        },
+        {
+          "symbol": "MU",
+          "token": "0xfF080c8ce2E5feadaCa0Da81314Ae59D232d4afD",
+          "feed": "0x425EEFdCf05ed6526C3cE61Af99429A228a6d596",
+          "notionalCapUsdE8": 25000000000,
+          "bandBps": 50,
+          "maxStalenessSecs": 3600
+        },
+        {
+          "symbol": "NVDA",
+          "token": "0xd0601CE157Db5bdC3162BbaC2a2C8aF5320D9EEC",
+          "feed": "0x379EC4f7C378F34a1B47E4F3cbeBCbAC3E8E9F15",
+          "notionalCapUsdE8": 25000000000,
+          "bandBps": 50,
+          "maxStalenessSecs": 3600
+        },
+        {
+          "symbol": "ORCL",
+          "token": "0xb0992820E760d836549ba69BC7598b4af75dEE03",
+          "feed": "0x0e6a64a2B58A6693a531E6c555f3A5d042eEA844",
+          "notionalCapUsdE8": 25000000000,
+          "bandBps": 50,
+          "maxStalenessSecs": 3600
+        },
+        {
+          "symbol": "PLTR",
+          "token": "0x894E1EC2D74FFE5AEF8Dc8A9e84686acCB964F2A",
+          "feed": "0x820ABedFF239034956B7A9d2F0a331f9F075eB4c",
+          "notionalCapUsdE8": 25000000000,
+          "bandBps": 50,
+          "maxStalenessSecs": 3600
+        },
+        {
+          "symbol": "QQQ",
+          "token": "0xD5f3879160bc7c32ebb4dC785F8a4F505888de68",
+          "feed": "0x41ed2c58611790af0760e31e80Bb427e4e83D603",
+          "notionalCapUsdE8": 25000000000,
+          "bandBps": 50,
+          "maxStalenessSecs": 3600
+        },
+        {
+          "symbol": "SNDK",
+          "token": "0xB90A19fF0Af67f7779afF50A882A9CfF42446400",
+          "feed": "0xd1016D9Da414B13D55abe02221A8A145eB89aA0D",
+          "notionalCapUsdE8": 25000000000,
+          "bandBps": 50,
+          "maxStalenessSecs": 3600
+        },
+        {
+          "symbol": "SPCX",
+          "token": "0x4a0E65A3EcceC6dBe60AE065F2e7bb85Fae35eEa",
+          "feed": "0x42a95341ff361e81fd934F39943c5C98F6991844",
+          "notionalCapUsdE8": 25000000000,
+          "bandBps": 50,
+          "maxStalenessSecs": 3600
+        },
+        {
+          "symbol": "SPY",
+          "token": "0x117cc2133c37B721F49dE2A7a74833232B3B4C0C",
+          "feed": "0x319724394D3A0e3669269846abE664Cd621f9f6A",
+          "notionalCapUsdE8": 25000000000,
+          "bandBps": 50,
+          "maxStalenessSecs": 3600
+        },
+        {
+          "symbol": "TSLA",
+          "token": "0x322F0929c4625eD5bAd873c95208D54E1c003b2d",
+          "feed": "0x4A1166a659A55625345e9515b32adECea5547C38",
           "notionalCapUsdE8": 25000000000,
           "bandBps": 50,
           "maxStalenessSecs": 3600
@@ -161,7 +312,8 @@
             "block": 45749531
           }
         ]
-      }
+      },
+      "assetNote": "20 Robinhood Stock Tokens, each pinned to its own 8-decimal Chainlink feed under the same pilot bounds. Feeds were resolved by reading description() and decimals() off every verified aggregator proxy on 4663 rather than from an address list: each ticker has two proxies with identical descriptions that share one underlying aggregator, so the pair is redundancy rather than a choice, and AAPL stays on the proxy already proven end to end. Every token was checked against the canonical Stock Token beacon 0xe10b6f6B275de231345c20D14Ab812db62151b00 before registration, which is what separates the real asset from the look-alikes that share its ticker. BE is deliberately absent: no Chainlink feed for it exists on this chain, so it is not tradeable through the guard."
     },
     "guardedTradeExecutor": {
       "address": "0xE94A70f8C864cA3CaE85c74F92Ab8783d2d039A3",

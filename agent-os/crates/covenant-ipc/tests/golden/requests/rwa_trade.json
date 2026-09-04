@@ -1,0 +1,10 @@
+{
+  "kind": "rwa_trade",
+  "asset": "0xafafafafafafafafafafafafafafafafafafafaf",
+  "side": "buy",
+  "max_in": "300000",
+  "min_out": "963328227165637",
+  "quoted_price_usd_e8": "31054000000",
+  "router": "0x8888888888888888888888888888888888888888",
+  "swap_data": "0xdeadbeef"
+}

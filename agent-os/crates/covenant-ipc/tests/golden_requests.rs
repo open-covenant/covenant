@@ -86,6 +86,8 @@ const EXPECTED_REQUEST_KINDS: &[&str] = &[
     "authorize_spend",
     "settle_spend",
     "prove_completion",
+    "rwa_trade",
+    "rwa_preview",
     "spend_grant_charge",
     "spend_grant_settle",
     "record_escrow_release",
@@ -314,6 +316,22 @@ fn golden_request_vectors() -> Vec<Request> {
             network: "solana".into(),
             provider: "orbserv".into(),
         },
+        Request::RwaTrade {
+            asset: format!("0x{}", "af".repeat(20)),
+            side: "buy".into(),
+            max_in: "300000".into(),
+            min_out: "963328227165637".into(),
+            quoted_price_usd_e8: "31054000000".into(),
+            router: format!("0x{}", "88".repeat(20)),
+            swap_data: "0xdeadbeef".into(),
+        },
+        Request::RwaPreview {
+            asset: format!("0x{}", "af".repeat(20)),
+            side: "sell".into(),
+            max_in: "963328227165637".into(),
+            min_out: "299790".into(),
+            quoted_price_usd_e8: "31054000000".into(),
+        },
         Request::SpendGrantCharge {
             grant_id: "1".into(),
             provider: format!("0x{}", "c0".repeat(20)),
@@ -470,6 +488,8 @@ fn assert_request_variant_coverage(req: &Request) {
         | Request::AuthorizeSpend { .. }
         | Request::SettleSpend { .. }
         | Request::ProveCompletion { .. }
+        | Request::RwaTrade { .. }
+        | Request::RwaPreview { .. }
         | Request::SpendGrantCharge { .. }
         | Request::SpendGrantSettle { .. }
         | Request::RecordEscrowRelease { .. }

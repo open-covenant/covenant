@@ -1,0 +1,7 @@
+{
+  "kind": "rwa_previewed",
+  "allowed": false,
+  "notional_usd_e8": "0",
+  "shares_e18": "0",
+  "reason": "notional 3101268706220 exceeds the per-trade cap 25000000000 (USD*1e8)"
+}

@@ -439,6 +439,14 @@ export class BountyService {
   }
 
   async expireOffers(): Promise<number> {
+    // An offer is a promise to pay for work. Letting the clock run while nobody
+    // is allowed to claim turns that promise into a trap: a contributor sees a
+    // funded bounty, does the work, and finds the offer gone because a switch
+    // on our side was off the whole time. That happened, so the clock only runs
+    // while the offer is actually claimable.
+    const controls = await this.store.operatorControls();
+    if (!controls.claimsEnabled) return 0;
+
     let expired = 0;
     for (const bounty of await this.store.bountiesList()) {
       if (bounty.state !== 'open' || bounty.activeClaim) continue;

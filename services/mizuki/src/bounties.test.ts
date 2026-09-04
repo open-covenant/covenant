@@ -838,6 +838,36 @@ describe('BountyService', () => {
     expect((await store.escrowByBounty(replacement!.id))?.state).toBe('funded');
   });
 
+  it('does not run the offer clock while nobody is allowed to claim', async () => {
+    const store = new MemoryStore();
+    const job = await refundedJob(store);
+    await store.appendLedger({
+      kind: 'treasury_deposit',
+      referenceId: 'deposit-claims-closed',
+      asset: 'USDC',
+      amountAtomic: '200000000',
+      amountUsd: 200,
+    });
+    let nowMs = Date.parse('2026-08-22T10:00:00.000Z');
+    const now = () => new Date(nowMs);
+    const policy = new MockPolicy(now);
+    policy.escrowRefundRecipient = 'escrow-authority';
+    const service = new BountyService(store, policy, reviewer(), now, {
+      escrowRefundTo: 'escrow-authority',
+    });
+    const bounty = await service.createAfterRefund(job);
+
+    // Well past the deadline, but claims are closed, so the offer was never
+    // one a contributor could act on.
+    nowMs = Date.parse(bounty.offerExpiresAt) + 7 * 24 * 60 * 60 * 1000;
+    expect(await service.expireOffers()).toBe(0);
+    expect((await store.bounty(bounty.id))?.state).toBe('open');
+
+    // Once claiming is possible again the deadline applies as normal.
+    await openClaims(store);
+    expect(await service.expireOffers()).toBe(1);
+  });
+
   it('closes an unclaimed offer only after its escrow refund finalizes', async () => {
     const store = new MemoryStore();
     const job = await refundedJob(store);
@@ -856,6 +886,7 @@ describe('BountyService', () => {
       escrowRefundTo: 'escrow-authority',
     });
     const bounty = await service.createAfterRefund(job);
+    await openClaims(store);
 
     nowMs = Date.parse(bounty.offerExpiresAt);
     policy.failEscrowRefund = true;
@@ -1508,4 +1539,14 @@ class MockPolicy implements FinancialPolicy {
 
 function randomGrantId(): string {
   return `10000000-0000-4000-8000-${String(Math.floor(Math.random() * 1_000_000_000_000)).padStart(12, '0')}`;
+}
+
+async function openClaims(store: MemoryStore): Promise<void> {
+  const controls = await store.operatorControls();
+  await store.updateOperatorControls({
+    expectedRevision: controls.revision,
+    claimsEnabled: true,
+    reason: 'test: bounty claims are open',
+    updatedBy: 'test',
+  });
 }

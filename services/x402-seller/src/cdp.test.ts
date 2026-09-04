@@ -1,10 +1,5 @@
 import assert from 'node:assert/strict';
-import {
-  createPublicKey,
-  generateKeyPairSync,
-  randomBytes,
-  verify as edVerify,
-} from 'node:crypto';
+import { createPublicKey, generateKeyPairSync, randomBytes, verify as edVerify } from 'node:crypto';
 import { test } from 'node:test';
 import { cdpAuthHeaders, cdpFeePayer, cdpPrivateKey, mintCdpJwt } from './cdp.js';
 
@@ -13,10 +8,9 @@ function testSecret() {
   const { privateKey, publicKey } = generateKeyPairSync('ed25519');
   const seed = privateKey.export({ format: 'jwk' }).d as string;
   const pub = publicKey.export({ format: 'jwk' }).x as string;
-  return Buffer.concat([
-    Buffer.from(seed, 'base64url'),
-    Buffer.from(pub, 'base64url'),
-  ]).toString('base64');
+  return Buffer.concat([Buffer.from(seed, 'base64url'), Buffer.from(pub, 'base64url')]).toString(
+    'base64',
+  );
 }
 
 const decode = (segment: string) => JSON.parse(Buffer.from(segment, 'base64url').toString('utf8'));
@@ -75,10 +69,7 @@ test('reads the sponsor for the exact network and protocol version in use', asyn
       headers: { 'content-type': 'application/json' },
     })) as unknown as typeof fetch;
 
-  assert.equal(
-    await cdpFeePayer('key-id', testSecret(), 'solana:main', fetchImpl),
-    'right',
-  );
+  assert.equal(await cdpFeePayer('key-id', testSecret(), 'solana:main', fetchImpl), 'right');
 });
 
 test('reports no sponsor when the network is unsupported', async () => {

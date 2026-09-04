@@ -54,7 +54,12 @@ export function mintCdpJwt(
   now: number = Math.floor(Date.now() / 1000),
 ): string {
   const header = b64url(
-    JSON.stringify({ typ: 'JWT', alg: 'EdDSA', kid: keyId, nonce: randomBytes(16).toString('hex') }),
+    JSON.stringify({
+      typ: 'JWT',
+      alg: 'EdDSA',
+      kid: keyId,
+      nonce: randomBytes(16).toString('hex'),
+    }),
   );
   const claims = b64url(
     JSON.stringify({

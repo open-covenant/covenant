@@ -26,9 +26,14 @@ let qvlReady: Promise<typeof import('@phala/dcap-qvl-web')> | undefined;
 function loadQvl(): Promise<typeof import('@phala/dcap-qvl-web')> {
   return (qvlReady ??= (async () => {
     const qvl = await import('@phala/dcap-qvl-web');
-    await qvl.default({ module_or_path: readFileSync(require.resolve('@phala/dcap-qvl-web/dcap-qvl-web_bg.wasm')) });
+    await qvl.default({
+      module_or_path: readFileSync(require.resolve('@phala/dcap-qvl-web/dcap-qvl-web_bg.wasm')),
+    });
     return qvl;
-  })().catch((e) => { qvlReady = undefined; throw e; }));
+  })().catch((e) => {
+    qvlReady = undefined;
+    throw e;
+  }));
 }
 
 const rejectAfter = <T>(ms: number, msg: string): Promise<T> =>
@@ -51,7 +56,10 @@ export interface EnclaveResult {
 }
 
 export class ErEnclaveError extends Error {
-  constructor(readonly status: number, message: string) {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
     super(message);
   }
 }
@@ -88,30 +96,41 @@ export async function verifyErEnclave(
     signal: AbortSignal.timeout(10_000),
   });
   if (!routerRes.ok) throw new ErEnclaveError(502, 'Magic Router unavailable');
-  const routes = ((await routerRes.json()) as { result?: Array<{ identity: string; fqdn: string }> }).result ?? [];
+  const routes =
+    ((await routerRes.json()) as { result?: Array<{ identity: string; fqdn: string }> }).result ??
+    [];
   const route = routes.find((r) => r.identity === validator);
   if (!route) throw new ErEnclaveError(404, 'validator is not served by the Magic Router');
 
-  const quoteUrl = new URL(`quote?challenge=${encodeURIComponent(challenge.toString('base64'))}`, route.fqdn).toString();
+  const quoteUrl = new URL(
+    `quote?challenge=${encodeURIComponent(challenge.toString('base64'))}`,
+    route.fqdn,
+  ).toString();
   const qres = await fetch(quoteUrl, { signal: AbortSignal.timeout(15_000) });
   // 404 means no quote endpoint (an open, non-TEE validator); a 5xx is a
   // transient failure of a real one, not proof it lacks an enclave.
-  if (qres.status === 404) throw new ErEnclaveError(404, 'this ER serves no enclave quote — open, non-TEE validator');
+  if (qres.status === 404)
+    throw new ErEnclaveError(404, 'this ER serves no enclave quote — open, non-TEE validator');
   if (!qres.ok) throw new ErEnclaveError(502, `quote endpoint returned ${qres.status}`);
   const q = (await qres.json()) as { quote?: string };
-  if (!q.quote) throw new ErEnclaveError(404, 'this ER serves no enclave quote — open, non-TEE validator');
+  if (!q.quote)
+    throw new ErEnclaveError(404, 'this ER serves no enclave quote — open, non-TEE validator');
   const rawQuote = Uint8Array.from(Buffer.from(q.quote, 'base64'));
 
   const qvl = await loadQvl();
   const collateral = await Promise.race([
     qvl.js_get_collateral(PCCS, rawQuote),
-    rejectAfter<Awaited<ReturnType<typeof qvl.js_get_collateral>>>(COLLATERAL_TIMEOUT_MS, 'PCCS collateral fetch timeout'),
+    rejectAfter<Awaited<ReturnType<typeof qvl.js_get_collateral>>>(
+      COLLATERAL_TIMEOUT_MS,
+      'PCCS collateral fetch timeout',
+    ),
   ]);
   const result = qvl.js_verify(rawQuote, collateral, BigInt(Math.floor(Date.now() / 1000)));
   const report = result.report?.TD10 ?? result.report?.TD15;
   if (!report) throw new ErEnclaveError(502, 'DCAP result carries no TD report');
   const reportData = String(report.report_data).replace(/^0x/, '').toLowerCase();
-  if (reportData !== challenge.toString('hex')) throw new ErEnclaveError(502, 'report_data != challenge (stale or replayed quote)');
+  if (reportData !== challenge.toString('hex'))
+    throw new ErEnclaveError(502, 'report_data != challenge (stale or replayed quote)');
 
   const hex = (v: unknown): string | null => (v == null ? null : String(v).replace(/^0x/, ''));
   return {

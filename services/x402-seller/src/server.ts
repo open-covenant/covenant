@@ -18,6 +18,10 @@
  *   FACILITATOR_PUBKEY              fallback sponsor feePayer for that facilitator
  *   CDP_API_KEY_ID                  Coinbase facilitator key id; enables Bazaar
  *   CDP_API_KEY_SECRET              Coinbase facilitator key secret (64-byte b64)
+ *   MIZUKI_MINT                     SPL mint agents may pay in besides USDC
+ *   MIZUKI_USD_NANOS                nano-USDC per whole MIZUKI; required with a mint
+ *   MIZUKI_DECIMALS                 MIZUKI decimals (default 6)
+ *   MIZUKI_DISCOUNT_BPS             discount off the USDC price (default 2000 = 20%)
  *   X402_SYNC_FACILITATOR           "false" to skip facilitator sync at boot
  *   ZAUTH_API_KEY                   zauth provider key (telemetry; optional)
  *   COVENANT_SOLANA_MAINNET_RPC_URL DAS-capable RPC for the passport lookup
@@ -55,6 +59,18 @@ const FACILITATOR_URL = process.env.X402_FACILITATOR_URL ?? 'https://facilitator
 const FALLBACK_FEE_PAYER =
   process.env.FACILITATOR_PUBKEY ?? '2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4';
 const SYNC = process.env.X402_SYNC_FACILITATOR !== 'false';
+// Paying in MIZUKI is optional. Without a mint configured the routes quote USDC
+// alone, which is what they did before.
+const MIZUKI_MINT = process.env.MIZUKI_MINT;
+const MIZUKI_DECIMALS = Number(process.env.MIZUKI_DECIMALS ?? 6);
+// A thin-liquidity token is a worse asset for the payer to part with, so paying
+// in it costs less than paying in USDC. Expressed in basis points off the USDC
+// price: 2000 means the MIZUKI price is 80% of it.
+const MIZUKI_DISCOUNT_BPS = Number(process.env.MIZUKI_DISCOUNT_BPS ?? 2000);
+// USDC per whole MIZUKI, in NANO-USDC. Micro-USDC is too coarse: the token
+// trades near 0.0000064 USDC, which micro-USDC would round to 6 and overcharge
+// a payer by about seven percent. Required whenever a mint is configured.
+const MIZUKI_USD_NANOS = process.env.MIZUKI_USD_NANOS;
 const CDP_KEY_ID = process.env.CDP_API_KEY_ID;
 const CDP_KEY_SECRET = process.env.CDP_API_KEY_SECRET;
 const ZAUTH_API_KEY = process.env.ZAUTH_API_KEY;
@@ -154,25 +170,69 @@ if (ZAUTH_API_KEY) {
 // Settlement goes to Coinbase when CDP credentials are present, because the
 // Bazaar indexes what Coinbase settles and nothing else. Without them the
 // seller keeps its previous facilitator and simply stays undiscoverable.
-const facilitator = CDP_KEY_ID && CDP_KEY_SECRET
-  ? new HTTPFacilitatorClient({
-      url: CDP_FACILITATOR_URL,
-      createAuthHeaders: cdpAuthHeaders(CDP_KEY_ID, CDP_KEY_SECRET),
-    })
-  : new HTTPFacilitatorClient({ url: FACILITATOR_URL });
+const facilitator =
+  CDP_KEY_ID && CDP_KEY_SECRET
+    ? new HTTPFacilitatorClient({
+        url: CDP_FACILITATOR_URL,
+        createAuthHeaders: cdpAuthHeaders(CDP_KEY_ID, CDP_KEY_SECRET),
+      })
+    : new HTTPFacilitatorClient({ url: FACILITATOR_URL });
 
 // `extensions` carries the bazaar discovery declaration so each resource is
 // listed in the facilitator's discovery catalog (x402scan, the PayAI bazaar).
 // Without it the routes still settle but stay invisible to discovery crawlers.
-const gate = (amount: string, description: string, extensions: Record<string, unknown>) => ({
-  accepts: {
+/**
+ * What one call costs, in every asset it can be paid in.
+ *
+ * x402 lets a resource quote several payment options and lets the payer choose,
+ * so an agent holding MIZUKI can settle in MIZUKI and one holding USDC can
+ * settle in USDC. Both land in the same treasury on the same network.
+ */
+function priceOptions(usdcAmount: string) {
+  const usdc = {
     scheme: 'exact' as const,
     network: SOLANA_MAINNET,
     payTo: PAY_TO,
-    price: { asset: USDC_SOLANA, amount },
+    price: { asset: USDC_SOLANA, amount: usdcAmount },
     maxTimeoutSeconds: 300,
     extra: { feePayer: FEE_PAYER },
-  },
+  };
+  const mizuki = mizukiPrice(usdcAmount);
+  return mizuki ? [usdc, mizuki] : usdc;
+}
+
+/**
+ * The same call priced in MIZUKI, or nothing when MIZUKI is not configured.
+ *
+ * Refuses rather than guesses: without a rate there is no honest conversion,
+ * and quoting a made-up one would take real value from a payer.
+ */
+function mizukiPrice(usdcAmount: string) {
+  if (!MIZUKI_MINT || !MIZUKI_USD_NANOS) return undefined;
+  const rate = BigInt(MIZUKI_USD_NANOS);
+  if (rate <= 0n) throw new Error('MIZUKI_USD_NANOS must be a positive number of nano-USDC');
+  if (MIZUKI_DISCOUNT_BPS < 0 || MIZUKI_DISCOUNT_BPS >= 10_000) {
+    throw new Error('MIZUKI_DISCOUNT_BPS must be between 0 and 9999');
+  }
+  // usdcAmount is micro-USDC; the rate is nano-USDC, so scale the value to nano
+  // before dividing.
+  const discountedNanos =
+    (BigInt(usdcAmount) * 1_000n * BigInt(10_000 - MIZUKI_DISCOUNT_BPS)) / 10_000n;
+  // Round up, so a rounding step never charges less than the discounted price.
+  const scale = 10n ** BigInt(MIZUKI_DECIMALS);
+  const amount = (discountedNanos * scale + rate - 1n) / rate;
+  return {
+    scheme: 'exact' as const,
+    network: SOLANA_MAINNET,
+    payTo: PAY_TO,
+    price: { asset: MIZUKI_MINT, amount: (amount > 0n ? amount : 1n).toString() },
+    maxTimeoutSeconds: 300,
+    extra: { feePayer: FEE_PAYER },
+  };
+}
+
+const gate = (amount: string, description: string, extensions: Record<string, unknown>) => ({
+  accepts: priceOptions(amount),
   description,
   mimeType: 'application/json',
   serviceName: 'Covenant',
@@ -339,7 +399,9 @@ app.get('/x402/mizuki/assess/:owner/:repo', async (req: Request, res: Response) 
     res.json(await assessRepository(owner, repo, { token: GITHUB_TOKEN, timeoutMs: RPC_TIMEOUT }));
   } catch (error) {
     if (error instanceof MaintenanceLookupError) {
-      res.status(error.status).json({ error: error.message, supportedManifests: SUPPORTED_MANIFESTS });
+      res
+        .status(error.status)
+        .json({ error: error.message, supportedManifests: SUPPORTED_MANIFESTS });
       return;
     }
     res.status(502).json({ error: 'GitHub upstream unavailable' });

@@ -68,7 +68,7 @@ const HTML = `<!doctype html>
       </div>
       <table id="premium-table">
         <thead>
-          <tr><th>Symbol</th><th class="num">On chain</th><th class="num">Reference</th><th>Source</th><th class="num">Premium</th><th class="num">Liquidity</th><th></th></tr>
+          <tr><th>Symbol</th><th class="num">On chain</th><th class="num">Reference</th><th>Source</th><th class="num">Premium</th><th></th></tr>
         </thead>
         <tbody id="premium-rows"><tr><td colspan="7" class="note">Reading prices.</td></tr></tbody>
       </table>
@@ -361,7 +361,9 @@ async function loadStatus() {
 async function loadPremium() {
   const body = await api('/v1/premium?limit=25');
   const items = (body.premium || []).slice().sort(function (a, b) {
-    return (b.referenceSource ? 1 : 0) - (a.referenceSource ? 1 : 0);
+    const ua = a.referenceSource && !a.stalePool ? 1 : 0;
+    const ub = b.referenceSource && !b.stalePool ? 1 : 0;
+    return ub - ua;
   });
   const rows = items.map(function (item) {
     return function () {
@@ -369,11 +371,11 @@ async function loadPremium() {
       cell(row, item.symbol);
       cell(row, usd(item.onchainMid), 'num');
       cell(row, item.reference ? usd(item.reference) : '', 'num');
-      const source = cell(row, item.referenceSource || 'no reference');
-      if (!item.referenceSource) source.classList.add('muted');
-      const premium = cell(row, item.referenceSource ? bps(item.premiumBps) : '', 'num');
-      if (item.premiumBps && item.referenceSource) premium.classList.add(item.premiumBps.value >= 0 ? 'pos' : 'neg');
-      cell(row, compact(item.liquidity), 'num');
+      const usable = Boolean(item.referenceSource) && !item.stalePool;
+      const source = cell(row, item.stalePool ? 'pool has not traded in 6h' : (item.referenceSource || 'no reference'));
+      if (!usable) source.classList.add('muted');
+      const premium = cell(row, usable ? bps(item.premiumBps) : '', 'num');
+      if (item.premiumBps && usable) premium.classList.add(item.premiumBps.value >= 0 ? 'pos' : 'neg');
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'link';

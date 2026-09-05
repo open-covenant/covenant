@@ -322,10 +322,18 @@ function routeTable(ui: ReturnType<typeof createUiSurface>): Entry[] {
     route('GET', '/v1/premium', true, async ({ desk, url }) => {
       const limit = intParam(url, 'limit') ?? intParam(url, 'top') ?? 20;
       const rows = await desk.fairvalue.premium.all({ limit });
-      const premium = rows.map((row) => ({
-        ...row,
-        liquidity: row.pool ? desk.store.getPool(row.pool)?.liquidity?.toString() : undefined,
-      }));
+      const since = Date.now() - 6 * 60 * 60 * 1000;
+      const premium = rows.map((row) => {
+        const recent = desk.store.listObservations({ symbol: row.symbol, since, limit: 400 })
+          .filter((entry) => entry.pool === row.pool && entry.onchainMidUsd !== undefined)
+          .map((entry) => entry.onchainMidUsd as number);
+        const stalePool = recent.length >= 10 && Math.min(...recent) === Math.max(...recent);
+        return {
+          ...row,
+          liquidity: row.pool ? desk.store.getPool(row.pool)?.liquidity?.toString() : undefined,
+          stalePool,
+        };
+      });
       return { premium, asOf: Date.now() };
     }),
 

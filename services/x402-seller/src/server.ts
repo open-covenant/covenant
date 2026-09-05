@@ -37,6 +37,7 @@ import { ExactSvmScheme } from '@x402/svm/exact/server';
 import { declareDiscoveryExtension } from '@x402/extensions/bazaar';
 import { zauthProvider } from '@zauthx402/sdk/middleware';
 import { CDP_FACILITATOR_URL, cdpAuthHeaders, cdpFeePayer } from './cdp.js';
+import { AssetRoutedFacilitator } from './facilitator-router.js';
 import { getPassport } from './passport.js';
 import {
   Attestor,
@@ -62,6 +63,11 @@ const SYNC = process.env.X402_SYNC_FACILITATOR !== 'false';
 // Paying in MIZUKI is optional. Without a mint configured the routes quote USDC
 // alone, which is what they did before.
 const MIZUKI_MINT = process.env.MIZUKI_MINT;
+// Coinbase settles USDC and refuses other SPL assets, so a token payment needs
+// a facilitator of our own. Without one the token is simply not offered.
+const SELF_FACILITATOR_URL = process.env.SELF_FACILITATOR_URL;
+const SELF_FACILITATOR_TOKEN = process.env.SELF_FACILITATOR_TOKEN;
+const SELF_FEE_PAYER = process.env.SELF_FACILITATOR_FEE_PAYER;
 const MIZUKI_DECIMALS = Number(process.env.MIZUKI_DECIMALS ?? 6);
 // A thin-liquidity token is a worse asset for the payer to part with, so paying
 // in it costs less than paying in USDC. Expressed in basis points off the USDC
@@ -170,13 +176,37 @@ if (ZAUTH_API_KEY) {
 // Settlement goes to Coinbase when CDP credentials are present, because the
 // Bazaar indexes what Coinbase settles and nothing else. Without them the
 // seller keeps its previous facilitator and simply stays undiscoverable.
-const facilitator =
+const coinbase =
   CDP_KEY_ID && CDP_KEY_SECRET
     ? new HTTPFacilitatorClient({
         url: CDP_FACILITATOR_URL,
         createAuthHeaders: cdpAuthHeaders(CDP_KEY_ID, CDP_KEY_SECRET),
       })
     : new HTTPFacilitatorClient({ url: FACILITATOR_URL });
+
+const selfHosted = SELF_FACILITATOR_URL
+  ? new HTTPFacilitatorClient({
+      url: SELF_FACILITATOR_URL,
+      ...(SELF_FACILITATOR_TOKEN
+        ? {
+            createAuthHeaders: async () => {
+              const bearer = { Authorization: `Bearer ${SELF_FACILITATOR_TOKEN}` };
+              return { verify: bearer, settle: bearer, supported: bearer };
+            },
+          }
+        : {}),
+    })
+  : undefined;
+
+// USDC keeps going to Coinbase, so the resource stays in the Bazaar. Anything
+// else goes to ours, because Coinbase refuses to settle it.
+const facilitator = selfHosted
+  ? new AssetRoutedFacilitator({
+      primary: coinbase,
+      fallback: selfHosted,
+      primaryAssets: [USDC_SOLANA],
+    })
+  : coinbase;
 
 // `extensions` carries the bazaar discovery declaration so each resource is
 // listed in the facilitator's discovery catalog (x402scan, the PayAI bazaar).

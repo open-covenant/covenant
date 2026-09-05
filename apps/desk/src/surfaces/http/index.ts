@@ -327,10 +327,10 @@ function routeTable(ui: ReturnType<typeof createUiSurface>): Entry[] {
         const recent = desk.store.listObservations({ symbol: row.symbol, since, limit: 400 })
           .filter((entry) => entry.pool === row.pool && entry.onchainMidUsd !== undefined)
           .map((entry) => entry.onchainMidUsd as number);
-        const low = Math.min(...recent);
-        const high = Math.max(...recent);
-        const rangeBps = recent.length ? ((high - low) / ((high + low) / 2)) * 10_000 : 0;
-        const stalePool = recent.length >= 10 && rangeBps < 2;
+        // A pool that trades prints a slightly different mid almost every pass.
+        // One that has not traded repeats the same handful of values for hours.
+        const distinct = new Set(recent.map((mid) => mid.toPrecision(9))).size;
+        const stalePool = recent.length >= 30 && distinct <= 3;
         return {
           ...row,
           liquidity: row.pool ? desk.store.getPool(row.pool)?.liquidity?.toString() : undefined,

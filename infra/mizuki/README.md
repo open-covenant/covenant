@@ -73,6 +73,15 @@ Fresh databases start with paid intake and new bounty claims closed. Before ever
 - Public intake stays limited to public repositories and Micro or Standard work until the traction gates are passed.
 - Mainnet intake remains closed until the immutable escrow program ID and executable hash are pinned, independently reviewed, and exercised on devnet.
 
+## Pinned Mizuki escrow review artifact
+
+This entry is a documentation record only and does not itself approve a release.
+
+- Source revision: `50445a50ae31d3ce1a810e06aafd933f67accb9b`
+- Hosted run: https://github.com/open-covenant/covenant/actions/runs/32657243641
+- Artifact: `mizuki-escrow-50445a50ae31d3ce1a810e06aafd933f67accb9b`
+- Solana executable hash: `6e876e2689aca3ff933a76f9643f66e558c200c5fe6491bd92ffa35519ccfa1c`
+
 ## Files
 
 - `render-bootstrap.yaml`: closed signer, gateway, and updater bootstrap.

@@ -322,7 +322,11 @@ function routeTable(ui: ReturnType<typeof createUiSurface>): Entry[] {
     route('GET', '/v1/premium', true, async ({ desk, url }) => {
       const limit = intParam(url, 'limit') ?? intParam(url, 'top') ?? 20;
       const rows = await desk.fairvalue.premium.all({ limit });
-      return { premium: rows, asOf: Date.now() };
+      const premium = rows.map((row) => ({
+        ...row,
+        liquidity: row.pool ? desk.store.getPool(row.pool)?.liquidity?.toString() : undefined,
+      }));
+      return { premium, asOf: Date.now() };
     }),
 
     route('POST', '/v1/orders', true, async ({ desk, body }) => {

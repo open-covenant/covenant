@@ -225,7 +225,7 @@ th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--lin
 th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
 tbody tr:last-child td { border-bottom: none; }
 .num { text-align: right; font-variant-numeric: tabular-nums; }
-.pos { color: var(--up); }
+.pos { color: var(--up); } .muted { color: #6b7280; }
 .neg { color: var(--down); }
 
 .note { color: var(--muted); font-size: 12px; }
@@ -360,15 +360,19 @@ async function loadStatus() {
 
 async function loadPremium() {
   const body = await api('/v1/premium?limit=25');
-  const rows = (body.premium || []).map(function (item) {
+  const items = (body.premium || []).slice().sort(function (a, b) {
+    return (b.referenceSource ? 1 : 0) - (a.referenceSource ? 1 : 0);
+  });
+  const rows = items.map(function (item) {
     return function () {
       const row = document.createElement('tr');
       cell(row, item.symbol);
       cell(row, usd(item.onchainMid), 'num');
-      cell(row, usd(item.reference), 'num');
-      cell(row, item.referenceSource || '');
-      const premium = cell(row, bps(item.premiumBps), 'num');
-      if (item.premiumBps) premium.classList.add(item.premiumBps.value >= 0 ? 'pos' : 'neg');
+      cell(row, item.reference ? usd(item.reference) : '', 'num');
+      const source = cell(row, item.referenceSource || 'no reference');
+      if (!item.referenceSource) source.classList.add('muted');
+      const premium = cell(row, item.referenceSource ? bps(item.premiumBps) : '', 'num');
+      if (item.premiumBps && item.referenceSource) premium.classList.add(item.premiumBps.value >= 0 ? 'pos' : 'neg');
       cell(row, compact(item.liquidity), 'num');
       const button = document.createElement('button');
       button.type = 'button';

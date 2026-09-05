@@ -238,7 +238,12 @@ function priceOptions(usdcAmount: string) {
  * and quoting a made-up one would take real value from a payer.
  */
 function mizukiPrice(usdcAmount: string) {
-  if (!MIZUKI_MINT || !MIZUKI_USD_NANOS) return undefined;
+  // Offered only when a facilitator that will settle it is configured. Coinbase
+  // refuses non-USDC SPL assets, so quoting the token against Coinbase's sponsor
+  // produces a payment that fails preflight every time.
+  if (!MIZUKI_MINT || !MIZUKI_USD_NANOS || !SELF_FACILITATOR_URL || !SELF_FEE_PAYER) {
+    return undefined;
+  }
   const rate = BigInt(MIZUKI_USD_NANOS);
   if (rate <= 0n) throw new Error('MIZUKI_USD_NANOS must be a positive number of nano-USDC');
   if (MIZUKI_DISCOUNT_BPS < 0 || MIZUKI_DISCOUNT_BPS >= 10_000) {
@@ -257,7 +262,8 @@ function mizukiPrice(usdcAmount: string) {
     payTo: PAY_TO,
     price: { asset: MIZUKI_MINT, amount: (amount > 0n ? amount : 1n).toString() },
     maxTimeoutSeconds: 300,
-    extra: { feePayer: FEE_PAYER },
+    // Our facilitator's sponsor, because ours is the one that will settle this.
+    extra: { feePayer: SELF_FEE_PAYER },
   };
 }
 

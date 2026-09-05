@@ -1,0 +1,17 @@
+{
+  "name": "agent-hires-mizuki",
+  "private": true,
+  "type": "module",
+  "description": "An agent assesses a repository, quotes an authorized issue, and prepares the hire, using the published mizuki-agent-tools LangChain tools and a real Solana wallet.",
+  "scripts": {
+    "hire": "node hire-mizuki.mjs"
+  },
+  "dependencies": {
+    "@langchain/core": "0.3.78",
+    "@solana/kit": "8.2.0",
+    "@x402/core": "2.23.0",
+    "@x402/svm": "2.23.0",
+    "mizuki-agent-tools": "0.1.1",
+    "zod": "3.25.76"
+  }
+}

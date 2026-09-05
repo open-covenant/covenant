@@ -3,7 +3,7 @@
  *
  * The router takes a string of command bytes and one input per command. A v4
  * swap is a single command, `V4_SWAP`, whose input is a second string of action
- * bytes and one parameter per action. The desk sends three actions every time:
+ * bytes and one parameter per action. The router on 4663 runs the v4 periphery whose single-swap struct still carries `sqrtPriceLimitX96` (sent as 0, no limit). The desk sends three actions every time:
  * the swap, then `SETTLE_ALL` to pay the pool from the caller's Permit2
  * allowance, then `TAKE_ALL` to collect the output. `TAKE_ALL` carries the
  * minimum, so a route that fills worse than the quote reverts rather than
@@ -142,6 +142,7 @@ export function encodeV4Swap(input: EncodeInput, router: Address): EncodedSwap {
           zeroForOne: sameAddress(firstHop.pool.currency0, input.tokenIn),
           amountIn: input.amountIn,
           amountOutMinimum: input.minAmountOut,
+          sqrtPriceLimitX96: 0n,
           hookData: '0x',
         },
       ])

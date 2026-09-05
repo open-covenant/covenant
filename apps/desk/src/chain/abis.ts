@@ -317,6 +317,7 @@ export const swapActionAbi = {
         { name: 'zeroForOne', type: 'bool' },
         { name: 'amountIn', type: 'uint128' },
         { name: 'amountOutMinimum', type: 'uint128' },
+        { name: 'sqrtPriceLimitX96', type: 'uint160' },
         { name: 'hookData', type: 'bytes' },
       ],
     },

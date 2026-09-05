@@ -23,6 +23,7 @@ interface Fixture {
   feedFails?: boolean;
   mark?: number;
   ask?: number;
+  bid?: number;
   halted?: boolean;
   quotedAt?: number;
 }
@@ -55,9 +56,9 @@ function build(fixture: Fixture) {
           ? undefined
           : {
               symbol: 'AAPL',
-              bid: fixture.ask - 0.03,
+              bid: fixture.bid ?? fixture.ask - 0.03,
               ask: fixture.ask,
-              mid: fixture.ask - 0.015,
+              mid: ((fixture.bid ?? fixture.ask - 0.03) + fixture.ask) / 2,
               halted: fixture.halted ?? false,
               generatedAt: fixture.quotedAt ?? WEEKEND - 60_000,
             },
@@ -92,12 +93,21 @@ describe('reference selection', () => {
     expect(candidates[0]?.stale).toBe(true);
   });
 
+  it('uses the issuer bid alone when the ask is a placeholder far above it', async () => {
+    const reference = build({ feed: FEED, bid: 406.51, ask: 500 });
+    const resolved = await reference.resolve('AAPL', WEEKEND);
+
+    expect(resolved.chosen?.source).toBe('rhj');
+    expect(resolved.chosen?.price.value).toBeCloseTo(406.51 * MULTIPLIER, 6);
+    expect(resolved.chosen?.note).toContain('only the bid is used');
+  });
+
   it('falls to the issuer ask when the venue does not list the symbol', async () => {
     const reference = build({ feed: FEED, ask: 321.34 });
     const resolved = await reference.resolve('AAPL', WEEKEND);
 
     expect(resolved.chosen?.source).toBe('rhj');
-    expect(resolved.chosen?.price.value).toBeCloseTo(321.34 * MULTIPLIER, 6);
+    expect(resolved.chosen?.price.value).toBeCloseTo((321.34 - 0.015) * MULTIPLIER, 6);
     expect(resolved.unavailable.map((entry) => entry.source)).toContain('lighter-rh');
   });
 

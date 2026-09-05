@@ -22,7 +22,8 @@ import type { Reference, ResolvedReference, Session } from './contracts.js';
 import type { LighterMarkSource, RhjPriceSource } from './sources.js';
 
 /** An issuer quote older than this is not used as a reference. */
-export const RHJ_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+export const RHJ_MAX_SPREAD_BPS = 200;
+const RHJ_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 export interface ReferenceDeps {
   readonly logger: Logger;
@@ -177,18 +178,32 @@ async function readRhj(deps: ReferenceDeps, symbol: string, multiplier: number, 
     const notes: string[] = [];
     if (quote.halted) notes.push('The issuer has halted trading in this symbol.');
     if (tooOld) notes.push('The quote is more than 24 hours old.');
+
+    let price = quote.ask;
+    let side = 'ask';
+    if (quote.bid !== undefined && quote.bid > 0) {
+      const spreadBps = ((quote.ask - quote.bid) / ((quote.ask + quote.bid) / 2)) * 10_000;
+      if (spreadBps <= RHJ_MAX_SPREAD_BPS) {
+        price = (quote.ask + quote.bid) / 2;
+        side = 'mid';
+      } else {
+        price = quote.bid;
+        side = 'bid';
+        notes.push(`The issuer ask sits ${Math.round(spreadBps)} bps above the bid, so only the bid is used.`);
+      }
+    }
     if (notes.length === 0) {
       notes.push(
         multiplier === 1
-          ? 'Issuer ask from the assets API.'
-          : `Issuer ask from the assets API times the ${multiplier} share multiplier.`,
+          ? `Issuer ${side} from the assets API.`
+          : `Issuer ${side} from the assets API times the ${multiplier} share multiplier.`,
       );
     }
 
     return {
       candidate: {
         symbol,
-        price: quantity(quote.ask * multiplier, 'USD', 'rhj', quote.generatedAt),
+        price: quantity(price * multiplier, 'USD', 'rhj', quote.generatedAt),
         source: 'rhj',
         updatedAt: quote.generatedAt,
         ageSec: ageSeconds(now, quote.generatedAt),

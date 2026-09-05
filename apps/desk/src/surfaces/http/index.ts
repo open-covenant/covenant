@@ -327,7 +327,10 @@ function routeTable(ui: ReturnType<typeof createUiSurface>): Entry[] {
         const recent = desk.store.listObservations({ symbol: row.symbol, since, limit: 400 })
           .filter((entry) => entry.pool === row.pool && entry.onchainMidUsd !== undefined)
           .map((entry) => entry.onchainMidUsd as number);
-        const stalePool = recent.length >= 10 && Math.min(...recent) === Math.max(...recent);
+        const low = Math.min(...recent);
+        const high = Math.max(...recent);
+        const rangeBps = recent.length ? ((high - low) / ((high + low) / 2)) * 10_000 : 0;
+        const stalePool = recent.length >= 10 && rangeBps < 2;
         return {
           ...row,
           liquidity: row.pool ? desk.store.getPool(row.pool)?.liquidity?.toString() : undefined,

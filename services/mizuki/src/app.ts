@@ -1030,19 +1030,36 @@ export function createApp(deps: AppDependencies) {
 
       if (req.method === 'GET' && url.pathname === '/v1/bounties') {
         const bounties: Awaited<ReturnType<typeof publicBounty>>[] = [];
+        const { claimsEnabled } = await deps.store.operatorControls();
         for (const bounty of await deps.store.bountiesList()) {
           if (await isPublicBounty(deps.store, bounty)) {
-            bounties.push(await publicBounty(deps.store, bounty));
+            bounties.push(await publicBounty(deps.store, bounty, claimsEnabled));
           }
         }
-        return json(res, 200, { bounties });
+        // This list is the full record, settled and expired bounties included.
+        // Saying how many are actually claimable keeps a board of closed offers
+        // from reading as available work.
+        const claimable = bounties.filter((bounty) => bounty.claimable);
+        return json(res, 200, {
+          bounties,
+          claimableCount: claimable.length,
+          claimableIds: claimable.map((bounty) => bounty.id),
+        });
       }
       if (req.method === 'GET' && parts[0] === 'v1' && parts[1] === 'bounties' && parts[2]) {
         const bounty = await deps.store.bounty(parts[2]);
         if (!bounty || !(await isPublicBounty(deps.store, bounty))) {
           return json(res, 404, { error: 'bounty not found' });
         }
-        return json(res, 200, await publicBounty(deps.store, bounty));
+        return json(
+          res,
+          200,
+          await publicBounty(
+            deps.store,
+            bounty,
+            (await deps.store.operatorControls()).claimsEnabled,
+          ),
+        );
       }
       if (
         req.method === 'POST' &&

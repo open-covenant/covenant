@@ -119,6 +119,9 @@ export type DisputeResolutionInput = {
 const MAX_BOUNTY_REVIEW_COST_MICROUNITS = 1_000_000;
 const SUBMITTED_REVIEW_STALE_MS = 2 * 60_000;
 
+/** How many times an offer may be re-posted before the work is left alone. */
+const MAX_BOUNTY_GENERATIONS = 3;
+
 export class BountyService {
   private readonly refundRecipient: string;
   private readonly reviewMaxCostMicrounits: number;
@@ -143,17 +146,36 @@ export class BountyService {
     if (job.state !== 'refunded') throw new Error('rescue bounty requires a completed refund');
     const latest = await this.store.bountyBySourceJob(job.id);
     if (latest) {
-      if (
-        latest.state !== 'refunded' ||
-        !latest.claimHistory.some((claim) => claim.state === 'expired')
-      ) {
-        return ['draft', 'awaiting_funding', 'funding'].includes(latest.state)
-          ? this.fund(latest)
-          : latest;
+      const claimAbandoned =
+        latest.state === 'refunded' &&
+        latest.claimHistory.some((claim) => claim.state === 'expired');
+      if (claimAbandoned || this.offerLapsedUnclaimed(latest)) {
+        return this.createGeneration(job, latest.generation + 1, latest.id);
       }
-      return this.createGeneration(job, latest.generation + 1, latest.id);
+      return ['draft', 'awaiting_funding', 'funding'].includes(latest.state)
+        ? this.fund(latest)
+        : latest;
     }
     return this.createGeneration(job, 0);
+  }
+
+  /**
+   * Whether an offer expired without anyone ever claiming it.
+   *
+   * The work is still wanted in that case: nobody looked at it, or nobody
+   * could. Eleven offers lapsed this way while claiming was switched off, so
+   * the expiry said nothing about demand. A fresh generation gives the work
+   * another window.
+   *
+   * Bounded, because the alternative is an offer that funds escrow, lapses,
+   * and funds again forever.
+   */
+  private offerLapsedUnclaimed(bounty: RescueBounty): boolean {
+    return (
+      bounty.state === 'expired' &&
+      bounty.claimHistory.length === 0 &&
+      bounty.generation + 1 < MAX_BOUNTY_GENERATIONS
+    );
   }
 
   private async createGeneration(
@@ -439,6 +461,14 @@ export class BountyService {
   }
 
   async expireOffers(): Promise<number> {
+    // An offer is a promise to pay for work. Letting the clock run while nobody
+    // is allowed to claim turns that promise into a trap: a contributor sees a
+    // funded bounty, does the work, and finds the offer gone because a switch
+    // on our side was off the whole time. That happened, so the clock only runs
+    // while the offer is actually claimable.
+    const controls = await this.store.operatorControls();
+    if (!controls.claimsEnabled) return 0;
+
     let expired = 0;
     for (const bounty of await this.store.bountiesList()) {
       if (bounty.state !== 'open' || bounty.activeClaim) continue;

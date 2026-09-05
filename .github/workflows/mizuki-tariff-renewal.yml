@@ -1,0 +1,71 @@
+name: mizuki-tariff-renewal
+
+# The coding gateway refuses to be ready unless its E2B sandbox tariff evidence
+# sits inside a seven-day validity window. Renewing that by hand meant the
+# document eventually expired, the gateway answered 503, and Mizuki could
+# neither admit paid work nor open bounty claims. This runs the clock instead.
+on:
+  schedule:
+    - cron: '0 6 * * 1,4' # Mondays and Thursdays, comfortably inside the window
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  renew:
+    if: github.repository == 'open-covenant/covenant'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: renew the tariff evidence
+        id: renew
+        run: |
+          set -euo pipefail
+          node scripts/renew-e2b-tariff.mjs >> "$GITHUB_OUTPUT"
+          file=$(grep '^file=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2-)
+          # Format before hashing. Repository formatting rewrites this file, so a
+          # digest taken beforehand would not match the committed bytes.
+          npx --yes prettier@3.6.2 --write "$file"
+          echo "sha256=$(shasum -a 256 "$file" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: open a pull request with the renewed window
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FILE: ${{ steps.renew.outputs.file }}
+          SHA256: ${{ steps.renew.outputs.sha256 }}
+          VALID_UNTIL: ${{ steps.renew.outputs.validUntil }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet && git diff --cached --quiet && [ -z "$(git status --porcelain)" ]; then
+            echo "evidence already current"
+            exit 0
+          fi
+          branch="chore/e2b-tariff-$(date -u +%Y-%m-%d)"
+          git config user.name 'mizuki0x'
+          git config user.email 'admin@tracehub.app'
+          git checkout -b "$branch"
+          git add infra/mizuki/evidence
+          git commit -m "Renew the E2B tariff evidence
+
+          Valid until $VALID_UNTIL. Rates and sandbox identity are unchanged;
+          only the window moves."
+          git push -u origin "$branch"
+          gh pr create \
+            --title "Renew the E2B tariff evidence" \
+            --body "Automated renewal. Valid until \`$VALID_UNTIL\`.
+
+          After merging, point \`CODER_E2B_TARIFF_REF\` on \`mizuki-coding-gateway\` at:
+
+          \`\`\`
+          https://raw.githubusercontent.com/open-covenant/covenant/<merge-sha>/$FILE#sha256=$SHA256
+          \`\`\`
+
+          The gateway must then be redeployed, because it reads this only at boot and automatic deploys are off."

@@ -66,20 +66,37 @@ export type ServiceReadinessReport = ReadinessReport<ServiceDependency>;
 export type ApplicationReadinessReport = ReadinessReport<ApplicationDependency>;
 
 const MAX_REASON_LENGTH = 300;
+const MAX_CAUSE_DEPTH = 5;
+
+function describeFailure(cause: unknown): string {
+  if (cause instanceof Error && cause.message) return cause.message;
+  if (typeof cause === 'string' && cause) return cause;
+  return 'readiness probe failed';
+}
 
 /**
  * The readiness report is served publicly, so an upstream failure must never
  * reach it. Operators still need the cause, and they have no shell on the
  * private services behind these probes, so the reason goes to the service log
  * instead: a red probe with no explanation anywhere is undiagnosable.
+ *
+ * Probes wrap the errors they catch, so the chain is walked as well as the
+ * outermost message. The outer message names the check that failed and the
+ * inner one says why, and only the pair is actionable.
  */
 function readinessFailureReason(cause: unknown): string {
-  const message =
-    cause instanceof Error && cause.message
-      ? cause.message
-      : typeof cause === 'string' && cause
-        ? cause
-        : 'readiness probe failed';
+  const chain: string[] = [];
+  let current: unknown = cause;
+  for (
+    let depth = 0;
+    depth < MAX_CAUSE_DEPTH && current !== undefined && current !== null;
+    depth++
+  ) {
+    const message = describeFailure(current);
+    if (chain.at(-1) !== message) chain.push(message);
+    current = current instanceof Error ? current.cause : undefined;
+  }
+  const message = chain.length > 0 ? chain.join(': caused by ') : 'readiness probe failed';
   return message.replace(/\s+/g, ' ').trim().slice(0, MAX_REASON_LENGTH);
 }
 

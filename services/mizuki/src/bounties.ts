@@ -149,7 +149,7 @@ export class BountyService {
       const claimAbandoned =
         latest.state === 'refunded' &&
         latest.claimHistory.some((claim) => claim.state === 'expired');
-      if (claimAbandoned || this.offerLapsedUnclaimed(latest)) {
+      if (claimAbandoned || this.offerLapsedUnclaimed(job, latest)) {
         return this.createGeneration(job, latest.generation + 1, latest.id);
       }
       return ['draft', 'awaiting_funding', 'funding'].includes(latest.state)
@@ -169,12 +169,16 @@ export class BountyService {
    *
    * Bounded, because the alternative is an offer that funds escrow, lapses,
    * and funds again forever.
+   *
+   * Only where the reserve behind the refund is still there to pay from. An
+   * offer nobody can be paid from is worse than no offer at all.
    */
-  private offerLapsedUnclaimed(bounty: RescueBounty): boolean {
+  private offerLapsedUnclaimed(job: Job, bounty: RescueBounty): boolean {
     return (
       bounty.state === 'expired' &&
       bounty.claimHistory.length === 0 &&
-      bounty.generation + 1 < MAX_BOUNTY_GENERATIONS
+      bounty.generation + 1 < MAX_BOUNTY_GENERATIONS &&
+      Boolean(job.paymentIntentId)
     );
   }
 
@@ -885,11 +889,28 @@ export class BountyService {
     );
   }
 
+  /**
+   * Whether the source job still carries the payment reserve that a bounty
+   * escrow is funded from. Escrow already on chain is proof enough on its own,
+   * so a half-finished funding attempt still resumes.
+   */
+  private async fundableFromReserve(bounty: RescueBounty): Promise<boolean> {
+    const escrow = await this.store.escrowByBounty(bounty.id);
+    if (escrow?.reservationId && escrow.fundingSignature) return true;
+    const sourceJob = await this.store.job(bounty.sourceJobId);
+    return Boolean(sourceJob?.paymentIntentId);
+  }
+
   private async fund(bounty: RescueBounty): Promise<RescueBounty> {
     if (bounty.state === 'open') return bounty;
     if (!['draft', 'awaiting_funding', 'funding'].includes(bounty.state)) {
       throw new Error(`bounty funding cannot resume from ${bounty.state}`);
     }
+    // Escrow is funded out of the reserve held against the source job's
+    // payment. Refunds taken before reserves existed have none, so asking the
+    // signer to fund them fails the same way every minute for as long as the
+    // service runs. Leave the offer where it is rather than retry forever.
+    if (!(await this.fundableFromReserve(bounty))) return bounty;
     if (bounty.state !== 'funding') {
       const next = transitionRescueBounty(bounty, 'funding', {
         at: this.now().toISOString(),

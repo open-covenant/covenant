@@ -868,6 +868,48 @@ describe('BountyService', () => {
     expect(second.generation).toBe(first.generation + 1);
   });
 
+  it('leaves a lapsed offer alone when no reserve is left to pay it from', async () => {
+    const store = new MemoryStore();
+    const job = await refundedJob(store);
+    await store.patchJob(job.id, { paymentIntentId: undefined });
+    let nowMs = Date.parse('2026-08-22T10:00:00.000Z');
+    const now = () => new Date(nowMs);
+    const policy = new MockPolicy(now);
+    policy.escrowRefundRecipient = 'escrow-authority';
+    const service = new BountyService(store, policy, reviewer(), now, {
+      escrowRefundTo: 'escrow-authority',
+    });
+    const bounty = {
+      id: '55555555-5555-4555-8555-555555555555',
+      sourceJobId: job.id,
+      failureReceiptId: `failure:${job.id}`,
+      repository: 'example/project',
+      issueNumber: 1,
+      issueUrl: quote.issueUrl,
+      priceCents: 1_000,
+      generation: 0,
+      offerExpiresAt: '2026-08-25T10:00:00.000Z',
+      state: 'expired' as const,
+      claimHistory: [],
+      createdAt: '2026-08-22T10:00:00.000Z',
+      updatedAt: '2026-08-25T10:00:00.000Z',
+      revision: 3,
+    };
+    await store.createBounty(bounty);
+
+    // Escrow is funded from the reserve held against the job's payment. A refund
+    // taken before reserves existed has none, so a re-post would be an offer
+    // nobody could ever be paid from.
+    const current = await service.createAfterRefund({
+      ...job,
+      paymentIntentId: undefined,
+    });
+
+    expect(current.id).toBe(bounty.id);
+    expect(current.state).toBe('expired');
+    expect(policy.reserveInputs).toEqual([]);
+  });
+
   it('stops re-posting an offer after the generation cap', async () => {
     const store = new MemoryStore();
     const job = await refundedJob(store);
@@ -1338,6 +1380,10 @@ async function refundedJob(store: MemoryStore): Promise<Job> {
     { payer: '3'.repeat(32), transaction: 'settlement', amountAtomic: quote.priceAtomic },
     `key-${Math.random()}`,
   );
+  // Every paid job holds a reserve with the signer, and bounty escrow is funded
+  // out of it, so a fixture without one does not describe a job we could pay a
+  // contributor for.
+  await store.patchJob(job.id, { paymentIntentId: `intent-${job.id}` });
   await store.transitionJob(job.id, 'settlement_pending', 'paid');
   await store.transitionJob(job.id, 'paid', 'failed', { error: 'route failed' });
   await store.transitionJob(job.id, 'failed', 'refund_pending');

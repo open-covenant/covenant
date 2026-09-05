@@ -141,7 +141,36 @@ export class UpdaterStatusClient implements UpgradeStatusReader {
       }),
       this.getByProposalId('mizuki-readiness-probe'),
     ]);
-    if (!response.ok) throw new Error('updater service is not ready');
+    if (!response.ok) {
+      throw new Error(`updater service is not ready (${await updaterFailureDetail(response)})`);
+    }
     readinessSchema.parse(await response.json());
   }
+}
+
+/**
+ * The updater's own readiness body names the dependency that went red. Without
+ * it the caller learns only that something is wrong, which is not enough to act
+ * on when the updater runs as a private service with no reachable log.
+ */
+async function updaterFailureDetail(response: Response): Promise<string> {
+  const parts = [`HTTP ${response.status}`];
+  try {
+    const body = (await response.json()) as {
+      failed?: unknown;
+      dependencies?: Record<string, { configurationIssues?: unknown } | undefined>;
+    };
+    if (Array.isArray(body.failed) && body.failed.length > 0) {
+      parts.push(`failed: ${body.failed.map(String).join(', ')}`);
+    }
+    for (const [name, dependency] of Object.entries(body.dependencies ?? {})) {
+      const issues = dependency?.configurationIssues;
+      if (Array.isArray(issues) && issues.length > 0) {
+        parts.push(`${name}: ${issues.map(String).join('; ')}`);
+      }
+    }
+  } catch {
+    // The body is advisory. The status on its own is still worth reporting.
+  }
+  return parts.join('; ');
 }

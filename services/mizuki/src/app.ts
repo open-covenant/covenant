@@ -1890,8 +1890,11 @@ export async function ensurePaymentCapacity(
   let readiness;
   try {
     readiness = await deps.policy.readiness();
-  } catch {
-    throw new RefundCapacityError('refund signer readiness check failed');
+  } catch (cause) {
+    // The signer answers with the check that went red. Dropping it here left
+    // the readiness log saying only that something failed, which is the
+    // difference between a ten-minute diagnosis and a day of log archaeology.
+    throw new RefundCapacityError('refund signer readiness check failed', { cause });
   }
   assertRefundCapacity({
     readiness,
@@ -1930,7 +1933,13 @@ async function rescueCommitmentRepresentedBySigner(store: MizukiStore, job: Job)
     return false;
   }
   const escrow = await store.escrowByBounty(bounty.id);
-  return Boolean(escrow?.reservationId && escrow.fundingSignature);
+  if (escrow?.reservationId && escrow.fundingSignature) return true;
+  // The signer funds a bounty escrow only against an activated payment reserve
+  // for the source job, so a refund that predates the reserve can never draw on
+  // the escrow limit again. Holding capacity for it anyway is not caution: it
+  // permanently reserves money that will never be spent, and once enough
+  // refunds accumulate the limit is exhausted and no new job can be bought.
+  return !job.paymentIntentId;
 }
 
 async function streamActivity(

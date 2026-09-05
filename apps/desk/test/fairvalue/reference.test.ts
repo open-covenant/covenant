@@ -93,13 +93,15 @@ describe('reference selection', () => {
     expect(candidates[0]?.stale).toBe(true);
   });
 
-  it('uses the issuer bid alone when the ask is a placeholder far above it', async () => {
+  it('treats a wide issuer quote as indicative and does not choose it', async () => {
     const reference = build({ feed: FEED, bid: 406.51, ask: 500 });
     const resolved = await reference.resolve('AAPL', WEEKEND);
 
-    expect(resolved.chosen?.source).toBe('rhj');
-    expect(resolved.chosen?.price.value).toBeCloseTo(406.51 * MULTIPLIER, 6);
-    expect(resolved.chosen?.note).toContain('only the bid is used');
+    const issuer = resolved.candidates.find((entry) => entry.source === 'rhj');
+    expect(issuer?.stale).toBe(true);
+    expect(issuer?.price.value).toBeCloseTo(406.51 * MULTIPLIER, 6);
+    expect(issuer?.note).toContain('indicative');
+    expect(resolved.chosen?.source).not.toBe('rhj');
   });
 
   it('falls to the issuer ask when the venue does not list the symbol', async () => {

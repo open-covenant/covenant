@@ -181,6 +181,7 @@ async function readRhj(deps: ReferenceDeps, symbol: string, multiplier: number, 
 
     let price = quote.ask;
     let side = 'ask';
+    let indicative = false;
     if (quote.bid !== undefined && quote.bid > 0) {
       const spreadBps = ((quote.ask - quote.bid) / ((quote.ask + quote.bid) / 2)) * 10_000;
       if (spreadBps <= RHJ_MAX_SPREAD_BPS) {
@@ -189,7 +190,8 @@ async function readRhj(deps: ReferenceDeps, symbol: string, multiplier: number, 
       } else {
         price = quote.bid;
         side = 'bid';
-        notes.push(`The issuer ask sits ${Math.round(spreadBps)} bps above the bid, so only the bid is used.`);
+        indicative = true;
+        notes.push(`The issuer quote is indicative: the ask sits ${Math.round(spreadBps)} bps above the bid.`);
       }
     }
     if (notes.length === 0) {
@@ -207,7 +209,7 @@ async function readRhj(deps: ReferenceDeps, symbol: string, multiplier: number, 
         source: 'rhj',
         updatedAt: quote.generatedAt,
         ageSec: ageSeconds(now, quote.generatedAt),
-        stale: quote.halted || tooOld,
+        stale: quote.halted || tooOld || indicative,
         note: notes.join(' '),
       },
     };

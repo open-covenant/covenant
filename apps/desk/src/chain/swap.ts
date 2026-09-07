@@ -3,7 +3,7 @@
  *
  * The router takes a string of command bytes and one input per command. A v4
  * swap is a single command, `V4_SWAP`, whose input is a second string of action
- * bytes and one parameter per action. The router on 4663 runs the v4 periphery whose single-swap struct still carries `sqrtPriceLimitX96` (sent as 0, no limit). The desk sends three actions every time:
+ * bytes and one parameter per action. The desk sends three actions every time:
  * the swap, then `SETTLE_ALL` to pay the pool from the caller's Permit2
  * allowance, then `TAKE_ALL` to collect the output. `TAKE_ALL` carries the
  * minimum, so a route that fills worse than the quote reverts rather than
@@ -120,7 +120,8 @@ export interface SwapDeps {
  *   actions   0x06 0x0c 0x0f  for one pool
  *             0x07 0x0c 0x0f  for two or more
  *   params[0] the swap: the pool key and direction for a single hop, or the
- *             input currency and the path for a multi-hop route
+ *             input currency and the path for a multi-hop route. Both carry
+ *             this chain's per-hop price floor, left empty (see `abis.ts`)
  *   params[1] SETTLE_ALL (currencyIn, amountIn), the most the router may pull
  *   params[2] TAKE_ALL (currencyOut, minAmountOut), the least it must deliver
  */
@@ -142,7 +143,7 @@ export function encodeV4Swap(input: EncodeInput, router: Address): EncodedSwap {
           zeroForOne: sameAddress(firstHop.pool.currency0, input.tokenIn),
           amountIn: input.amountIn,
           amountOutMinimum: input.minAmountOut,
-          sqrtPriceLimitX96: 0n,
+          minHopPriceX36: 0n,
           hookData: '0x',
         },
       ])
@@ -150,6 +151,7 @@ export function encodeV4Swap(input: EncodeInput, router: Address): EncodedSwap {
         {
           currencyIn: input.tokenIn,
           path: input.hops.map((hop) => pathKeyFor(hop)),
+          minHopPriceX36: [],
           amountIn: input.amountIn,
           amountOutMinimum: input.minAmountOut,
         },

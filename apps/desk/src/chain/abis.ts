@@ -307,6 +307,18 @@ export const poolManagerAbi = [
 ] as const;
 
 /** ABI fragments for the two v4 router actions the desk encodes. */
+/**
+ * Swap action parameters as the router on 4663 decodes them.
+ *
+ * This chain runs a fork of the v4 periphery that adds a per-hop price floor
+ * to every swap struct. On a single swap the field is one word, `minHopPriceX36`,
+ * where the mainline periphery puts `sqrtPriceLimitX96`; both are sent as zero,
+ * so the bytes are the same either way. On a multi-hop swap the field is an
+ * array sitting between the path and the amounts, and the mainline layout does
+ * not decode: getting it wrong reverts the whole call with no reason data.
+ * A zero-length array turns the check off, which is what the desk sends. The
+ * desk bounds a route with `amountOutMinimum` and `TAKE_ALL` instead.
+ */
 export const swapActionAbi = {
   /** `SWAP_EXACT_IN_SINGLE` parameters. */
   exactInputSingle: [
@@ -317,7 +329,7 @@ export const swapActionAbi = {
         { name: 'zeroForOne', type: 'bool' },
         { name: 'amountIn', type: 'uint128' },
         { name: 'amountOutMinimum', type: 'uint128' },
-        { name: 'sqrtPriceLimitX96', type: 'uint160' },
+        { name: 'minHopPriceX36', type: 'uint256' },
         { name: 'hookData', type: 'bytes' },
       ],
     },
@@ -329,6 +341,7 @@ export const swapActionAbi = {
       components: [
         { name: 'currencyIn', type: 'address' },
         { name: 'path', type: 'tuple[]', components: pathKeyComponents },
+        { name: 'minHopPriceX36', type: 'uint256[]' },
         { name: 'amountIn', type: 'uint128' },
         { name: 'amountOutMinimum', type: 'uint128' },
       ],

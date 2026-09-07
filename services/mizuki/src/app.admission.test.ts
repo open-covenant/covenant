@@ -568,6 +568,72 @@ describe('operator admission controls', () => {
     expect(order).toEqual(['repository', 'intent', 'settle']);
   });
 
+  it('answers a payment the chain has not finalized yet with the reserved job, never a 404', async () => {
+    const store = new MemoryStore();
+    const authorizedQuote = quoteWithAuthorization();
+    await store.saveQuote(authorizedQuote);
+    await store.updateOperatorControls({
+      expectedRevision: 0,
+      intakeEnabled: true,
+      claimsEnabled: false,
+      reason: 'unfinalized settlement test',
+      updatedBy: 'test',
+    });
+    const createRepositoryAdmission = vi.fn(async (binding) => admissionReceipt(binding));
+    const reservePaymentIntent = vi.fn(async (jobId: string) => ({
+      id: '44444444-4444-4444-8444-444444444444',
+      jobId,
+      quoteId: authorizedQuote.id,
+      repositoryAdmissionId: '33333333-3333-4333-8333-333333333333',
+      rawAmount: authorizedQuote.priceAtomic,
+      memo: paymentMemo(authorizedQuote.id),
+      status: 'reserved',
+    }));
+    const settle = vi.fn(async (_quote, _signature, persist) => {
+      await persist(authorizedPayment);
+      return { ok: true, payment: authorizedPayment };
+    });
+    // The signer only reads finalized state, so a payment signed seconds ago is
+    // genuinely absent from its view while still being perfectly valid.
+    const activatePaymentIntent = vi.fn(async () => {
+      throw new PolicyRequestError('settlement_not_found', 422, 'settlement was not found');
+    });
+    const base = await serve(
+      dependencies(store, {
+        config: livePaymentConfig,
+        github: {
+          assertIssueAuthorization: vi.fn(async () => undefined),
+          currentHead: vi.fn(async () => authorizedQuote.baseSha),
+        },
+        payments: { settle },
+        policy: {
+          readiness: vi.fn(async () => signerReadiness),
+          createRepositoryAdmission,
+          reservePaymentIntent,
+          activatePaymentIntent,
+        },
+      }),
+    );
+
+    const response = await fetch(`${base}/v1/jobs`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'idempotency-key': 'unfinalized-settlement',
+        'payment-signature': 'signed-payment-proof',
+      },
+      body: JSON.stringify({ quote_id: authorizedQuote.id }),
+    });
+    const body = await response.json();
+
+    // 202 with the job, so a paying agent polls that job instead of buying a second one.
+    expect(response.status).toBe(202);
+    expect(activatePaymentIntent).toHaveBeenCalledOnce();
+    const reserved = await store.jobByIdempotencyKey('unfinalized-settlement');
+    expect(reserved).toBeDefined();
+    expect(body.id).toBe(reserved!.id);
+  });
+
   it('does not broadcast when exact-repository verifier admission fails', async () => {
     const store = new MemoryStore();
     await store.saveQuote(quote);

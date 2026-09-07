@@ -202,7 +202,7 @@ function fixture(
     admittedAt,
     evidenceHash: defaultAdmissionEvidenceHash,
   });
-  return { store, chain, metrics, merges, reviewer, policy, now };
+  return { store, chain, metrics, merges, reviewer, policy, now, admittedAt };
 }
 
 function settlement(signature = '6'.repeat(64), rawAmount = '2000000'): SettlementFacts {
@@ -913,7 +913,7 @@ describe('refund policy', () => {
   });
 
   it('rejects expired authorization and settlement outside the admitted payment window', async () => {
-    const { chain, policy } = fixture();
+    const { chain, policy, admittedAt } = fixture();
     const facts = settlement();
     chain.settlements.set(facts.signature, facts);
     await expect(
@@ -928,7 +928,10 @@ describe('refund policy', () => {
       ),
     ).rejects.toMatchObject({ code: 'refund_authorization_expired' });
 
-    facts.blockTimeUnixSeconds -= 31;
+    // One second before the window the admission actually opened. Taking this from
+    // the admission rather than a fresh clock read keeps the settlement outside the
+    // window however long the fixture above took to build.
+    facts.blockTimeUnixSeconds = Math.floor(admittedAt.getTime() / 1_000) - 31;
     await expect(
       policy.registerRefundLiability(
         signedRefundRequest('register', 'job-historical', facts.signature),

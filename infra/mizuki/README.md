@@ -1,4 +1,4 @@
-# Mizuki operations
+# Mizuki the Mech operations
 
 This directory contains the production blueprint and runbooks for Mizuki the Mech's commercial maintenance service. The design keeps the transaction signer on Render's private network and gives the API no signing key.
 

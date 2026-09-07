@@ -171,6 +171,10 @@ for a symbol you pick.
   credentials. Sending an order needs a funded sub-account on the Lighter
   Robinhood Chain venue and its key in `keys.env`. Without one, `hedge apply`
   returns the plan and the reason it was not sent.
+- **Paired tokens.** Tokens launched on LONG, PAIR, Bankr, Doppler and Pons sit
+  in Uniswap v4 pools the desk fills directly, in two hops through the stock
+  token. A token with no Uniswap route the desk can build is quoted and not
+  filled, and the refusal says so.
 - **One chain.** Chain 4663 only. No custody, no hosted keeper, no bridge.
 - **First start takes about ten minutes.** The desk reads every Uniswap v4 pool
   on chain 4663 that holds a stock token, which today is more than fifty

@@ -13,7 +13,7 @@ what you found.
 - `eth_getLogs`: block range is NOT limited; the limit is **10,000 matching logs
   per query** (error -32000 "logs matched by query exceeds limit of 10000").
   Split the range on that error.
-- USDG `0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168` (decimals: VERIFY on chain).
+- USDG `0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168`, 6 decimals (read on chain 2026-09-05).
 - WETH9 `0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73`.
 - Multicall3 `0xcA11bde05977b3631167028862bE2a173976CA11` (has code).
 - Permit2 `0x000000000022D473030F116dDEE9F6B43aC78BA3` (has code).
@@ -50,6 +50,30 @@ what you found.
   and `~/Projects/covenant/covenant-rwa-pr/agent-os/crates/covenant-rwa-firewall/src/lib.rs`
   (Permit2-primed on both legs; refuses off-hours with StalePriceFeed, which is
   the behaviour Desk must NOT copy).
+
+## The UniversalRouter on 4663 is a fork (verified 2026-09-07)
+
+Both v4 swap structs carry an extra per-hop price floor that mainline does not:
+`ExactInputSingleParams { poolKey, zeroForOne, amountIn, amountOutMinimum,
+uint256 minHopPriceX36, hookData }` and `ExactInputParams { currencyIn,
+PathKey[] path, uint256[] minHopPriceX36, amountIn, amountOutMinimum }`. The
+array must be empty or path-length (`InvalidHopPriceLength()`). Omitting it
+reverts with empty data. `SWAP_EXACT_OUT*` carry the same layout. Encoded in
+`src/chain/swap.ts`; tests carry a vector from a settled transaction.
+
+## Paired-token venues (verified 2026-09-07, see src/chain/venues/*.md)
+
+- LONG-listed tokens (Artificial Inu etc.) sit in Clanker pools with hook
+  `ClankerHookStaticFeeV2` `0x48b8f6ad…` which never checks the caller. The desk
+  fills them through the UniversalRouter (AI fill tx `0x6184cf25…` via the order
+  engine). LONG's own router `0x6F6F5E1b…` (selector `0x39ecce49`) requires a
+  backend-signed order and is not needed. Bankr launches on Clanker too.
+- PAIR pools carry `PairV4Hook` `0x16D15606…` (beforeInitialize only): plain.
+  Fill tx `0xcdb8b95a…`. Launch data via `PairLaunchpadV5Upgradeable`
+  `0x8660A7F0…` (`getLaunchPool`). The aggregator does NOT enforce a 15% impact
+  cap; PAIR's 1% is a static pool fee.
+- Doppler, Pons, LaunchToken and hookless pools: 150 of 150 deepest simulate
+  and fill through the same path.
 
 ## Robinhood Stock Tokens
 

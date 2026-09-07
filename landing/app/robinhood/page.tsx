@@ -4,7 +4,7 @@ import { SiteHeader } from '../SiteHeader';
 
 const TITLE = 'Covenant Desk on Robinhood Chain';
 const DESCRIPTION =
-  "A local desk for Robinhood Chain stock tokens. It prices every token against a reference that stays awake when Wall Street is closed, fills conditional orders on Uniswap, and sizes the hedge on Lighter's Robinhood Chain venue. Runs on your machine; your agent connects over MCP. Underneath it, two onchain bounds the agent cannot break, proven live in real USDG.";
+  "A local desk for Robinhood Chain stock tokens and the memecoins paired with them. It prices every token against a reference that stays awake when Wall Street is closed, fills conditional orders on Uniswap, and sizes the hedge on Lighter's Robinhood Chain venue. Runs on your machine; your agent connects over MCP. Underneath it, two onchain bounds the agent cannot break, proven live in real USDG.";
 
 export const metadata: Metadata = {
   title: TITLE,
@@ -159,6 +159,22 @@ const DESK_PROOFS: Proof[] = [
       "The premium was 2 basis points against the Lighter mark. 0.30 USDG into 0.0012993 NVDA, quoted, simulated and settled by the desk on the agent's own key.",
     tx: '0x0467fe8105a67beb8be17738fcefa80bb03fa62d713c0b20d5f9def98a36204d',
   },
+  {
+    tag: 'Monday, Labor Day',
+    result: 'Filled',
+    attempt: 'The same condition on Artificial Inu, the memecoin quoted in NVDA, 0.03 USDG.',
+    detail:
+      'Two hops, USDG into NVDA into AI, through the Uniswap v4 router. 514,054 AI delivered at the quoted amount to the wei.',
+    tx: '0x6184cf25699923427eaa0eda18771c54f238dfc6c61647ab8ee869016fd00b9e',
+  },
+  {
+    tag: 'A PAIR token',
+    result: 'Filled',
+    attempt: 'PAIR, quoted in SPY on pair.fund, 0.02 USDG through the same path.',
+    detail:
+      '0.963 PAIR delivered. PAIR pools are plain Uniswap v4 pools; no other router is involved.',
+    tx: '0xcdb8b95a80c9feaeec85f6064b7daeafcf2784c2e2df81589d5e20b121cc76c6',
+  },
 ];
 
 const WEEKEND = [
@@ -280,7 +296,7 @@ covenant-desk start
             ))}
           </dl>
 
-          <p className={`${eyebrow} mt-12`}>first fill, proven onchain</p>
+          <p className={`${eyebrow} mt-12`}>fills, proven onchain</p>
           <Proofs proofs={DESK_PROOFS} />
           <dl className="mt-8 divide-y divide-neutral-800/70 border-y border-neutral-800/70">
             <Row label="Asset">
@@ -293,9 +309,10 @@ covenant-desk start
             </Row>
           </dl>
           <p className={`${paragraph} mt-3 text-neutral-500`}>
-            Tokens launched on LONG trade only through LONG&apos;s own router today, so the desk
-            quotes them and does not yet fill them. Hedge execution needs a funded account on
-            Lighter&apos;s Robinhood Chain venue; without one the desk returns the sized plan.
+            Tokens launched on LONG, PAIR and Bankr sit in Uniswap v4 pools the desk fills directly;
+            a token that has no Uniswap route the desk can build is quoted and not filled, and the
+            desk says so. Hedge execution needs a funded account on Lighter&apos;s Robinhood Chain
+            venue; without one the desk returns the sized plan.
           </p>
         </section>
 

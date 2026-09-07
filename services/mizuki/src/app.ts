@@ -24,6 +24,7 @@ import { JobProcessor } from './executor.js';
 import { GithubAccessError, GithubClient, GithubReadinessError } from './github.js';
 import { metrics, prometheus } from './metrics.js';
 import {
+  deliveredIssueUrls,
   isPublicBounty,
   publicActivity,
   publicActivityFeed,
@@ -1035,9 +1036,11 @@ export function createApp(deps: AppDependencies) {
       if (req.method === 'GET' && url.pathname === '/v1/bounties') {
         const bounties: Awaited<ReturnType<typeof publicBounty>>[] = [];
         const { claimsEnabled } = await deps.store.operatorControls();
+        // Read once for the whole list rather than per bounty.
+        const delivered = await deliveredIssueUrls(deps.store);
         for (const bounty of await deps.store.bountiesList()) {
           if (await isPublicBounty(deps.store, bounty)) {
-            bounties.push(await publicBounty(deps.store, bounty, claimsEnabled));
+            bounties.push(await publicBounty(deps.store, bounty, claimsEnabled, delivered));
           }
         }
         // This list is the full record, settled and expired bounties included.
@@ -1062,6 +1065,7 @@ export function createApp(deps: AppDependencies) {
             deps.store,
             bounty,
             (await deps.store.operatorControls()).claimsEnabled,
+            await deliveredIssueUrls(deps.store),
           ),
         );
       }

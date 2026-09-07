@@ -82,6 +82,7 @@ export async function publicBounty(
   store: MizukiStore,
   bounty: RescueBounty,
   claimsEnabled = false,
+  deliveredIssues: ReadonlySet<string> = new Set(),
 ) {
   const [job, escrow, contributor] = await Promise.all([
     store.job(bounty.sourceJobId),
@@ -108,7 +109,7 @@ export async function publicBounty(
     amountAtomic: escrow?.amountAtomic,
     asset: 'SOL',
     state: bounty.state,
-    claimable: bountyClaimable(bounty, claimsEnabled),
+    claimable: bountyClaimable(bounty, claimsEnabled, new Date(), deliveredIssues),
     offerExpiresAt: bounty.offerExpiresAt,
     failureClass: classifyFailure(job?.error),
     acceptanceCriteria,
@@ -194,12 +195,29 @@ export function bountyClaimable(
   bounty: RescueBounty,
   claimsEnabled: boolean,
   now: Date = new Date(),
+  deliveredIssues: ReadonlySet<string> = new Set(),
 ): boolean {
   return (
     claimsEnabled &&
     bounty.state === 'open' &&
     !bounty.activeClaim &&
+    // Nothing stops a later customer buying the same issue. Once one of those
+    // jobs delivers, a contributor taking this offer would write a patch that
+    // cannot be accepted, so the offer stops being advertised. Its escrow is
+    // left alone and returns on the normal expiry path, because escrow is a
+    // promise the signer will not let us take back early.
+    !deliveredIssues.has(bounty.issueUrl) &&
     Date.parse(bounty.offerExpiresAt) > now.getTime()
+  );
+}
+
+/** Issues a paid job has already delivered, so no offer for them is still open work. */
+export async function deliveredIssueUrls(store: MizukiStore): Promise<Set<string>> {
+  const jobs = await store.jobsList();
+  return new Set(
+    jobs
+      .filter((job) => ['delivered', 'merged'].includes(job.state))
+      .map((job) => job.quote.issueUrl),
   );
 }
 

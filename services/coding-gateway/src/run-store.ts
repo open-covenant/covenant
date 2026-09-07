@@ -11,7 +11,11 @@ import {
 } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
-import { usePodCeilingCostMicrounits, validCostMicrounits } from './usepod-http.js';
+import {
+  isMarketplaceRoute,
+  usePodCeilingCostMicrounits,
+  validCostMicrounits,
+} from './usepod-http.js';
 import type {
   GatewayEvent,
   ProviderReceipt,
@@ -263,7 +267,7 @@ function isProviderReceipt(value: unknown): value is ProviderReceipt {
   return (
     typeof receipt.model === 'string' &&
     receipt.model.length > 0 &&
-    receipt.route === 'marketplace' &&
+    isMarketplaceRoute(receipt.route) &&
     typeof receipt.balanceRemaining === 'string' &&
     /^\d{1,48}(?:\.\d{1,18})?$/.test(receipt.balanceRemaining) &&
     /[1-9]/.test(receipt.balanceRemaining) &&

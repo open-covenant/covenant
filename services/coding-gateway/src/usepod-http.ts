@@ -24,7 +24,7 @@ const MAX_CATALOG_MODELS = 10_000;
  * A predicate rather than a set membership test, so the receipt below carries
  * the narrowed type instead of a bare string.
  */
-function isMarketplaceRoute(value: string | undefined): value is MarketplaceRoute {
+export function isMarketplaceRoute(value: string | undefined): value is MarketplaceRoute {
   return value === 'marketplace' || value === 'per-request';
 }
 

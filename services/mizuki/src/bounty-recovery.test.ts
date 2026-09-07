@@ -28,6 +28,10 @@ describe('bounty recovery', () => {
       fundAwaiting: async () => {
         phases.push('funding');
       },
+      retireUnfundable: async () => {
+        phases.push('retire');
+        throw new Error('store unavailable');
+      },
       reconcileFinancial: async () => {
         phases.push('financial');
         return { failed: 2 };
@@ -39,8 +43,12 @@ describe('bounty recovery', () => {
     await expect(runBountyRecovery(actions)).resolves.toBeUndefined();
 
     expect(recovered).toEqual(['first', 'second']);
-    expect(phases).toEqual(['merged', 'offers', 'claims', 'funding', 'financial']);
-    expect(failures).toEqual(['refunded job first', 'merge refresh']);
+    expect(phases).toEqual(['merged', 'offers', 'claims', 'funding', 'retire', 'financial']);
+    expect(failures).toEqual([
+      'refunded job first',
+      'merge refresh',
+      'unfundable offer retirement',
+    ]);
     expect(actions.reportPendingFinancial).toHaveBeenCalledWith(2);
   });
 
@@ -63,6 +71,9 @@ describe('bounty recovery', () => {
       fundAwaiting: async () => {
         phases.push('funding');
       },
+      retireUnfundable: async () => {
+        phases.push('retire');
+      },
       reconcileFinancial: async () => {
         phases.push('financial');
         return { failed: 0 };
@@ -75,6 +86,6 @@ describe('bounty recovery', () => {
 
     expect(actions.recoverRefunded).not.toHaveBeenCalled();
     expect(actions.reportFailure).toHaveBeenCalledWith('job scan', expect.any(Error));
-    expect(phases).toEqual(['merged', 'offers', 'claims', 'funding', 'financial']);
+    expect(phases).toEqual(['merged', 'offers', 'claims', 'funding', 'retire', 'financial']);
   });
 });

@@ -214,6 +214,7 @@ export type ActivityKind =
   | 'bounty.accepted'
   | 'bounty.released'
   | 'bounty.expired'
+  | 'bounty.retired'
   | 'bounty.disputed'
   | 'bounty.dispute_resolved'
   | 'capability.proposed'

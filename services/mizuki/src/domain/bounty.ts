@@ -554,6 +554,31 @@ export function expireRescueBountyOffer(
   };
 }
 
+/**
+ * Withdraw an offer whose issue no longer needs the work.
+ *
+ * The same state change as expiry, and it returns the escrow the same way. The
+ * clock check is what differs: an offer for an issue that has already been
+ * delivered should close now rather than keep advertising work nobody can be
+ * paid for, however much of its window is left.
+ */
+export function withdrawRescueBountyOffer(
+  bounty: RescueBounty,
+  command: BountyCommand,
+): RescueBounty {
+  assertExpectedRevision(bounty.revision, command.expectedRevision);
+  assertNotBefore(command.at, bounty.updatedAt, 'offer withdrawal time');
+  if (bounty.state !== 'open' || bounty.activeClaim) {
+    throw new DomainRuleError('OFFER_NOT_WITHDRAWABLE', 'Bounty does not have an open offer');
+  }
+  return {
+    ...bounty,
+    state: 'offer_refund_pending',
+    updatedAt: new Date(timestampMs(command.at)).toISOString(),
+    revision: bounty.revision + 1,
+  };
+}
+
 export function finalizeRescueBountyOfferRefund(
   bounty: RescueBounty,
   command: BountyCommand,

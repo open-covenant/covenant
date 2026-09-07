@@ -32,6 +32,9 @@ describe('bounty recovery', () => {
         phases.push('retire');
         throw new Error('store unavailable');
       },
+      retireDelivered: async () => {
+        phases.push('delivered');
+      },
       reconcileFinancial: async () => {
         phases.push('financial');
         return { failed: 2 };
@@ -43,7 +46,15 @@ describe('bounty recovery', () => {
     await expect(runBountyRecovery(actions)).resolves.toBeUndefined();
 
     expect(recovered).toEqual(['first', 'second']);
-    expect(phases).toEqual(['merged', 'offers', 'claims', 'funding', 'retire', 'financial']);
+    expect(phases).toEqual([
+      'merged',
+      'offers',
+      'claims',
+      'funding',
+      'retire',
+      'delivered',
+      'financial',
+    ]);
     expect(failures).toEqual([
       'refunded job first',
       'merge refresh',
@@ -74,6 +85,9 @@ describe('bounty recovery', () => {
       retireUnfundable: async () => {
         phases.push('retire');
       },
+      retireDelivered: async () => {
+        phases.push('delivered');
+      },
       reconcileFinancial: async () => {
         phases.push('financial');
         return { failed: 0 };
@@ -86,6 +100,14 @@ describe('bounty recovery', () => {
 
     expect(actions.recoverRefunded).not.toHaveBeenCalled();
     expect(actions.reportFailure).toHaveBeenCalledWith('job scan', expect.any(Error));
-    expect(phases).toEqual(['merged', 'offers', 'claims', 'funding', 'retire', 'financial']);
+    expect(phases).toEqual([
+      'merged',
+      'offers',
+      'claims',
+      'funding',
+      'retire',
+      'delivered',
+      'financial',
+    ]);
   });
 });

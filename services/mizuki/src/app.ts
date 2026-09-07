@@ -1695,6 +1695,10 @@ export function createApp(deps: AppDependencies) {
         if (!admin(req, deps.config.adminToken)) return json(res, 401, { error: 'unauthorized' });
         return json(res, 200, { expired: await deps.bounties.expireClaims() });
       }
+      if (url.pathname === '/v1/admin/bounties/retire' && req.method === 'POST') {
+        if (!admin(req, deps.config.adminToken)) return json(res, 401, { error: 'unauthorized' });
+        return json(res, 200, { retired: await deps.bounties.retireUnfundableOffers() });
+      }
       if (
         req.method === 'POST' &&
         parts[0] === 'v1' &&

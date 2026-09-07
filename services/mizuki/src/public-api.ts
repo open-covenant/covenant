@@ -317,7 +317,13 @@ export async function publicActivityFeed(store: MizukiStore, limit = 100) {
 }
 
 export async function publicActivity(store: MizukiStore, event: ActivityEvent) {
-  if (event.kind === 'bounty.created' || event.kind === 'bounty.creation_failed') return undefined;
+  if (
+    event.kind === 'bounty.created' ||
+    event.kind === 'bounty.creation_failed' ||
+    event.kind === 'bounty.retired'
+  ) {
+    return undefined;
+  }
   const data = event.publicData;
   const job =
     event.kind.startsWith('job.') || event.kind.startsWith('refund.')
@@ -484,6 +490,10 @@ function activityPresentation(
       };
     case 'bounty.created':
     case 'bounty.creation_failed':
+    // Retirement closes an offer that never held escrow. The expiry wording
+    // below reports returned escrow, which for these would be a return that
+    // never happened, so the record stays internal.
+    case 'bounty.retired':
       return undefined;
     case 'bounty.funded':
       return {

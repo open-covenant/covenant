@@ -45,3 +45,24 @@ describe('UsePod route acceptance', () => {
     expect(() => providerReceipt(reply('  Per-Request '), 'm', '1')).not.toThrow();
   });
 });
+
+describe('a receipt the gateway writes must survive its own reload', () => {
+  it('accepts every route it is willing to write', async () => {
+    // The write path and the persisted-record validator drifted apart once:
+    // providerReceipt() accepted `per-request` while isProviderReceipt() still
+    // required `marketplace`, so the gateway wrote a record it then refused to
+    // load, and crash-looped on boot. They now share one predicate.
+    const { isMarketplaceRoute } = await import('../src/usepod-http.js');
+    for (const route of ['marketplace', 'per-request'] as const) {
+      const receipt = providerReceipt(
+        new Response('{}', {
+          status: 200,
+          headers: { 'x-pod-route': route, 'x-balance-remaining': '3944191' },
+        }),
+        'supergemma4-26b',
+        '1',
+      );
+      expect(isMarketplaceRoute(receipt.route)).toBe(true);
+    }
+  });
+});

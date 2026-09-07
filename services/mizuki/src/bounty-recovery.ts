@@ -7,6 +7,8 @@ export interface BountyRecoveryActions {
   expireOffers(): Promise<unknown>;
   expireClaims(): Promise<unknown>;
   fundAwaiting(): Promise<unknown>;
+  retireUnfundable(): Promise<unknown>;
+  retireDelivered(): Promise<unknown>;
   reconcileFinancial(): Promise<{ failed: number }>;
   reportFailure(context: string, cause: unknown): void;
   reportPendingFinancial(count: number): void;
@@ -33,6 +35,12 @@ export async function runBountyRecovery(actions: BountyRecoveryActions): Promise
   await attempt(actions, 'offer expiry', actions.expireOffers);
   await attempt(actions, 'claim expiry', actions.expireClaims);
   await attempt(actions, 'escrow funding', actions.fundAwaiting);
+  // After funding, so an offer is only retired once the reserve behind it has
+  // had its chance to pay.
+  await attempt(actions, 'unfundable offer retirement', actions.retireUnfundable);
+  // An issue somebody already paid to have fixed is not work an outside
+  // contributor can still be paid for.
+  await attempt(actions, 'delivered offer retirement', actions.retireDelivered);
   const recovery = await attempt(actions, 'financial reconciliation', actions.reconcileFinancial);
   if (recovery && recovery.failed > 0) actions.reportPendingFinancial(recovery.failed);
 }

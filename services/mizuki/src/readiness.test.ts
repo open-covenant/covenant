@@ -242,6 +242,32 @@ describe('readiness failure logging', () => {
     }
   });
 
+  it('logs the wrapped cause alongside the check that reported it', async () => {
+    let now = 1_000;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const probes = healthyProbes();
+    probes.policy_signer = vi.fn(async () => {
+      throw new Error('refund signer readiness check failed', {
+        cause: new Error('policy signer returned 503: priceConsensus'),
+      });
+    });
+
+    try {
+      const report = await createReadiness(probes, () => now).check();
+
+      expect(report.dependencies.policy_signer.ok).toBe(false);
+      expect(JSON.stringify(report)).not.toContain('priceConsensus');
+      const logged = warn.mock.calls
+        .map(([line]) => String(line))
+        .find((line) => line.includes('readiness_dependency_failed'));
+      expect(JSON.parse(logged!).reason).toBe(
+        'refund signer readiness check failed: caused by policy signer returned 503: priceConsensus',
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it('names the incomplete configuration entries in the log', async () => {
     let now = 1_000;
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);

@@ -35,7 +35,11 @@ import {
 } from './public-api.js';
 import { createQuote, parseIssueUrl } from './quote.js';
 import { recordPaymentReceipts } from './receipts.js';
-import { assertLiabilityMatchesPayment, recoverSettlement } from './settlement-recovery.js';
+import {
+  assertLiabilityMatchesPayment,
+  recoverSettlement,
+  settlementScanMiss,
+} from './settlement-recovery.js';
 import {
   GithubOAuthCapacityError,
   StateConflictError,
@@ -1030,19 +1034,36 @@ export function createApp(deps: AppDependencies) {
 
       if (req.method === 'GET' && url.pathname === '/v1/bounties') {
         const bounties: Awaited<ReturnType<typeof publicBounty>>[] = [];
+        const { claimsEnabled } = await deps.store.operatorControls();
         for (const bounty of await deps.store.bountiesList()) {
           if (await isPublicBounty(deps.store, bounty)) {
-            bounties.push(await publicBounty(deps.store, bounty));
+            bounties.push(await publicBounty(deps.store, bounty, claimsEnabled));
           }
         }
-        return json(res, 200, { bounties });
+        // This list is the full record, settled and expired bounties included.
+        // Saying how many are actually claimable keeps a board of closed offers
+        // from reading as available work.
+        const claimable = bounties.filter((bounty) => bounty.claimable);
+        return json(res, 200, {
+          bounties,
+          claimableCount: claimable.length,
+          claimableIds: claimable.map((bounty) => bounty.id),
+        });
       }
       if (req.method === 'GET' && parts[0] === 'v1' && parts[1] === 'bounties' && parts[2]) {
         const bounty = await deps.store.bounty(parts[2]);
         if (!bounty || !(await isPublicBounty(deps.store, bounty))) {
           return json(res, 404, { error: 'bounty not found' });
         }
-        return json(res, 200, await publicBounty(deps.store, bounty));
+        return json(
+          res,
+          200,
+          await publicBounty(
+            deps.store,
+            bounty,
+            (await deps.store.operatorControls()).claimsEnabled,
+          ),
+        );
       }
       if (
         req.method === 'POST' &&
@@ -1466,6 +1487,25 @@ export function createApp(deps: AppDependencies) {
             }
             return json(res, 202, publicJob(cause.job));
           }
+          // The buyer signed and broadcast, and the chain has not finalized it yet.
+          // Reporting that as "not found" invites a second purchase for work already
+          // paid for, so answer with the reserved job and let the buyer poll it.
+          if (settlementScanMiss(cause) && pendingJobId) {
+            const reserved = await deps.store.job(pendingJobId);
+            if (reserved) {
+              if (paymentAttempt) {
+                await deps.store.bindPaymentAttemptJob(
+                  paymentAttempt.id,
+                  paymentAttempt.githubId,
+                  reserved.id,
+                  reserved.payment.transaction === 'pending'
+                    ? undefined
+                    : reserved.payment.transaction,
+                );
+              }
+              return json(res, 202, publicJob(reserved));
+            }
+          }
           if (paymentAttempt && !pendingJobId) {
             const recovered =
               (await deps.store.jobByIdempotencyKey(key)) ??
@@ -1654,6 +1694,10 @@ export function createApp(deps: AppDependencies) {
       if (url.pathname === '/v1/admin/bounties/expire' && req.method === 'POST') {
         if (!admin(req, deps.config.adminToken)) return json(res, 401, { error: 'unauthorized' });
         return json(res, 200, { expired: await deps.bounties.expireClaims() });
+      }
+      if (url.pathname === '/v1/admin/bounties/retire' && req.method === 'POST') {
+        if (!admin(req, deps.config.adminToken)) return json(res, 401, { error: 'unauthorized' });
+        return json(res, 200, { retired: await deps.bounties.retireUnfundableOffers() });
       }
       if (
         req.method === 'POST' &&
@@ -1873,8 +1917,11 @@ export async function ensurePaymentCapacity(
   let readiness;
   try {
     readiness = await deps.policy.readiness();
-  } catch {
-    throw new RefundCapacityError('refund signer readiness check failed');
+  } catch (cause) {
+    // The signer answers with the check that went red. Dropping it here left
+    // the readiness log saying only that something failed, which is the
+    // difference between a ten-minute diagnosis and a day of log archaeology.
+    throw new RefundCapacityError('refund signer readiness check failed', { cause });
   }
   assertRefundCapacity({
     readiness,
@@ -1913,7 +1960,13 @@ async function rescueCommitmentRepresentedBySigner(store: MizukiStore, job: Job)
     return false;
   }
   const escrow = await store.escrowByBounty(bounty.id);
-  return Boolean(escrow?.reservationId && escrow.fundingSignature);
+  if (escrow?.reservationId && escrow.fundingSignature) return true;
+  // The signer funds a bounty escrow only against an activated payment reserve
+  // for the source job, so a refund that predates the reserve can never draw on
+  // the escrow limit again. Holding capacity for it anyway is not caution: it
+  // permanently reserves money that will never be spent, and once enough
+  // refunds accumulate the limit is exhausted and no new job can be bought.
+  return !job.paymentIntentId;
 }
 
 async function streamActivity(

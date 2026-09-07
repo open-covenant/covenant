@@ -987,9 +987,11 @@ export class MemoryStore implements MizukiStore {
       if (escrow.revision !== 0) {
         throw new StateConflictError(`escrow ${escrow.id} must start at revision 0`);
       }
-      const duplicateClaim = [...this.escrows.values()].find(
-        (candidate) => candidate.claimId === escrow.claimId,
-      );
+      // An escrow without a claim is an offer escrow, and two of those are not
+      // duplicates. Postgres agrees, because NULL never equals NULL.
+      const duplicateClaim = escrow.claimId
+        ? [...this.escrows.values()].find((candidate) => candidate.claimId === escrow.claimId)
+        : undefined;
       if (duplicateClaim)
         throw new StateConflictError(`escrow already exists for claim ${escrow.claimId}`);
       const active = [...this.escrows.values()].find(

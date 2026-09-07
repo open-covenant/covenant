@@ -929,7 +929,10 @@ export class PolicyService {
         this.store.rollingSpendUsdCents('refund', this.now()),
         this.store.rollingSpendUsdCents('escrow', this.now()),
       ]);
-      if (pendingEscrowRefund) return this.unavailableReadiness();
+      if (pendingEscrowRefund) {
+        reportSignerReadinessUnavailable('an escrow refund is still pending settlement');
+        return this.unavailableReadiness();
+      }
       const finalizedBalanceRaw = evidence.chain.refundRawAmount;
       const treasuryAvailable = BigInt(finalizedBalanceRaw) - BigInt(pendingRefundRaw);
       const remainingRefundLimitUsdCents = Math.max(
@@ -980,7 +983,10 @@ export class PolicyService {
         finalizedEscrowBalanceLamports: evidence.chain.escrowLamports,
         availableEscrowReserveLamports: availableBountyReserve.toString(),
       };
-    } catch {
+    } catch (cause) {
+      reportSignerReadinessUnavailable(
+        cause instanceof Error ? cause.message : 'readiness could not be computed',
+      );
       return this.unavailableReadiness();
     }
   }
@@ -1010,6 +1016,20 @@ export class PolicyService {
       bountyCustody: chainReady,
     };
     const healthy = Object.values(checks).every(Boolean);
+    if (!healthy) {
+      reportSignerReadinessFailure(
+        Object.entries(checks)
+          .filter(([, passed]) => !passed)
+          .map(([check]) => check),
+        {
+          database,
+          chain,
+          prices: prices as PromiseSettledResult<unknown>,
+          githubCredential: github,
+          independentReviewer: reviewer,
+        },
+      );
+    }
 
     return {
       healthy,
@@ -2507,4 +2527,51 @@ function requiredNumberDetail(record: OperationRecord, key: string): number {
 function safeMessage(error: unknown): string {
   if (!(error instanceof Error)) return 'Transaction broadcast result is indeterminate';
   return error.message.slice(0, 240);
+}
+
+let lastReadinessFailure: string | undefined;
+
+/**
+ * The signer refuses readiness as a single unhealthy flag, and it runs as a
+ * private service with no reachable console, so an operator seeing the runtime
+ * go red has no way to learn which of the eight checks refused. Name the failed
+ * checks and the error behind each one.
+ *
+ * Logged once per distinct failure, because readiness is polled every few
+ * seconds and a repeated line would bury the transition that matters.
+ */
+function reportSignerReadinessFailure(
+  failed: string[],
+  results: Record<string, PromiseSettledResult<unknown>>,
+): void {
+  const reasons: Record<string, string> = {};
+  for (const [name, result] of Object.entries(results)) {
+    if (result.status === 'rejected') {
+      reasons[name] = String(
+        result.reason instanceof Error ? result.reason.message : result.reason,
+      ).slice(0, 240);
+    }
+  }
+  const line = JSON.stringify({
+    event: 'signer_readiness_unhealthy',
+    failed,
+    reasons,
+  });
+  if (lastReadinessFailure === line) return;
+  lastReadinessFailure = line;
+  process.stderr.write(`${line}\n`);
+}
+
+/**
+ * Readiness answers with an unavailable view rather than an error, so the store
+ * queries behind it fail silently. Say which one, once.
+ */
+export function reportSignerReadinessUnavailable(reason: string): void {
+  const line = JSON.stringify({
+    event: 'signer_readiness_unavailable',
+    reason: reason.slice(0, 240),
+  });
+  if (lastReadinessFailure === line) return;
+  lastReadinessFailure = line;
+  process.stderr.write(`${line}\n`);
 }

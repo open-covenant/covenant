@@ -7,6 +7,7 @@ import {
   createRescueBounty,
   expireAcceptedRescueBountyRelease,
   expireRescueBountyOffer,
+  withdrawRescueBountyOffer,
   expireRescueBountyClaim,
   fingerprintBountyDisputeEvidence,
   finalizeRescueBountyDisputeResolution,
@@ -119,6 +120,9 @@ export type DisputeResolutionInput = {
 const MAX_BOUNTY_REVIEW_COST_MICROUNITS = 1_000_000;
 const SUBMITTED_REVIEW_STALE_MS = 2 * 60_000;
 
+/** How many times an offer may be re-posted before the work is left alone. */
+const MAX_BOUNTY_GENERATIONS = 3;
+
 export class BountyService {
   private readonly refundRecipient: string;
   private readonly reviewMaxCostMicrounits: number;
@@ -143,17 +147,40 @@ export class BountyService {
     if (job.state !== 'refunded') throw new Error('rescue bounty requires a completed refund');
     const latest = await this.store.bountyBySourceJob(job.id);
     if (latest) {
-      if (
-        latest.state !== 'refunded' ||
-        !latest.claimHistory.some((claim) => claim.state === 'expired')
-      ) {
-        return ['draft', 'awaiting_funding', 'funding'].includes(latest.state)
-          ? this.fund(latest)
-          : latest;
+      const claimAbandoned =
+        latest.state === 'refunded' &&
+        latest.claimHistory.some((claim) => claim.state === 'expired');
+      if (claimAbandoned || this.offerLapsedUnclaimed(job, latest)) {
+        return this.createGeneration(job, latest.generation + 1, latest.id);
       }
-      return this.createGeneration(job, latest.generation + 1, latest.id);
+      return ['draft', 'awaiting_funding', 'funding'].includes(latest.state)
+        ? this.fund(latest)
+        : latest;
     }
     return this.createGeneration(job, 0);
+  }
+
+  /**
+   * Whether an offer expired without anyone ever claiming it.
+   *
+   * The work is still wanted in that case: nobody looked at it, or nobody
+   * could. Eleven offers lapsed this way while claiming was switched off, so
+   * the expiry said nothing about demand. A fresh generation gives the work
+   * another window.
+   *
+   * Bounded, because the alternative is an offer that funds escrow, lapses,
+   * and funds again forever.
+   *
+   * Only where the reserve behind the refund is still there to pay from. An
+   * offer nobody can be paid from is worse than no offer at all.
+   */
+  private offerLapsedUnclaimed(job: Job, bounty: RescueBounty): boolean {
+    return (
+      bounty.state === 'expired' &&
+      bounty.claimHistory.length === 0 &&
+      bounty.generation + 1 < MAX_BOUNTY_GENERATIONS &&
+      Boolean(job.paymentIntentId)
+    );
   }
 
   private async createGeneration(
@@ -439,6 +466,14 @@ export class BountyService {
   }
 
   async expireOffers(): Promise<number> {
+    // An offer is a promise to pay for work. Letting the clock run while nobody
+    // is allowed to claim turns that promise into a trap: a contributor sees a
+    // funded bounty, does the work, and finds the offer gone because a switch
+    // on our side was off the whole time. That happened, so the clock only runs
+    // while the offer is actually claimable.
+    const controls = await this.store.operatorControls();
+    if (!controls.claimsEnabled) return 0;
+
     let expired = 0;
     for (const bounty of await this.store.bountiesList()) {
       if (bounty.state !== 'open' || bounty.activeClaim) continue;
@@ -456,6 +491,103 @@ export class BountyService {
       expired += 1;
     }
     return expired;
+  }
+
+  /**
+   * Close offers for issues that have since been fixed and paid for.
+   *
+   * A rescue offer exists because one job failed to deliver an issue. Nothing
+   * stops a later customer buying that same issue, and when that job delivers,
+   * the offer is asking outside contributors to write a patch for work that is
+   * already merged. Their time is wasted and the patch cannot be accepted.
+   *
+   * Expiry is the terminal state the state machine already uses for an offer
+   * whose window closed with nobody paid, which is exactly what happened here.
+   */
+  async retireDeliveredOffers(): Promise<string[]> {
+    const jobs = await this.store.jobsList();
+    const delivered = new Set(
+      jobs
+        .filter((job) => ['delivered', 'merged'].includes(job.state))
+        .map((job) => job.quote.issueUrl),
+    );
+    if (delivered.size === 0) return [];
+
+    const retired: string[] = [];
+    for (const bounty of await this.store.bountiesList()) {
+      if (bounty.state !== 'open' || bounty.activeClaim) continue;
+      const source = await this.store.job(bounty.sourceJobId);
+      if (!source || !delivered.has(source.quote.issueUrl)) continue;
+
+      const at = this.now().toISOString();
+      const pending = withdrawRescueBountyOffer(bounty, { at, expectedRevision: bounty.revision });
+      await this.store.updateBounty(pending, bounty.revision);
+      await this.store.appendActivity('bounty.retired', bounty.id, {
+        reason: 'issue_already_delivered',
+        sourceJobId: bounty.sourceJobId,
+        generation: bounty.generation,
+      });
+      // The escrow behind a withdrawn offer goes back the same way an expired
+      // offer's escrow does.
+      try {
+        await this.settleExpiredOffer(pending);
+      } catch {
+        // The durable pending state is retried by reconcileFinancialOperations.
+      }
+      retired.push(bounty.id);
+    }
+    return retired;
+  }
+
+  /**
+   * Close offers that no reserve can ever pay for.
+   *
+   * A rescue offer is funded from the reserve held against the source job's
+   * payment. Refunds taken before reserves existed have none, so their offers
+   * stop part-way through funding and stay there: the signer refuses them, and
+   * no later event changes that. A record of offers that cannot be funded and
+   * cannot be claimed says work is available when none is.
+   *
+   * Expiry is what the state machine already means by an offer whose window
+   * closed with nobody paid. It is terminal, it moves no money, and it is where
+   * the predecessor of each of these offers already ended.
+   */
+  async retireUnfundableOffers(): Promise<string[]> {
+    const retired: string[] = [];
+    for (const bounty of await this.store.bountiesList()) {
+      if (!['draft', 'awaiting_funding', 'funding'].includes(bounty.state)) continue;
+      if (bounty.activeClaim || bounty.claimHistory.length > 0) continue;
+      if (await this.fundableFromReserve(bounty)) continue;
+      // Escrow that reached the chain is a payout somebody is owed, whatever
+      // the source job's reserve says. Those are settled by the refund path.
+      const escrow = await this.store.escrowByBounty(bounty.id);
+      if (escrow?.reservationId || escrow?.fundingSignature || escrow?.amountAtomic) continue;
+
+      const at = this.now().toISOString();
+      // A failed reservation leaves the offer in 'funding', which the state
+      // machine only lets out through 'awaiting_funding'.
+      let current = bounty;
+      if (current.state === 'funding') {
+        current = await this.store.updateBounty(
+          transitionRescueBounty(current, 'awaiting_funding', {
+            at,
+            expectedRevision: current.revision,
+          }),
+          current.revision,
+        );
+      }
+      const closed = await this.store.updateBounty(
+        transitionRescueBounty(current, 'expired', { at, expectedRevision: current.revision }),
+        current.revision,
+      );
+      await this.store.appendActivity('bounty.retired', closed.id, {
+        reason: 'reserve_unavailable',
+        sourceJobId: closed.sourceJobId,
+        generation: closed.generation,
+      });
+      retired.push(closed.id);
+    }
+    return retired;
   }
 
   async reconcileFinancialOperations(): Promise<{ recovered: number; failed: number }> {
@@ -855,11 +987,28 @@ export class BountyService {
     );
   }
 
+  /**
+   * Whether the source job still carries the payment reserve that a bounty
+   * escrow is funded from. Escrow already on chain is proof enough on its own,
+   * so a half-finished funding attempt still resumes.
+   */
+  private async fundableFromReserve(bounty: RescueBounty): Promise<boolean> {
+    const escrow = await this.store.escrowByBounty(bounty.id);
+    if (escrow?.reservationId && escrow.fundingSignature) return true;
+    const sourceJob = await this.store.job(bounty.sourceJobId);
+    return Boolean(sourceJob?.paymentIntentId);
+  }
+
   private async fund(bounty: RescueBounty): Promise<RescueBounty> {
     if (bounty.state === 'open') return bounty;
     if (!['draft', 'awaiting_funding', 'funding'].includes(bounty.state)) {
       throw new Error(`bounty funding cannot resume from ${bounty.state}`);
     }
+    // Escrow is funded out of the reserve held against the source job's
+    // payment. Refunds taken before reserves existed have none, so asking the
+    // signer to fund them fails the same way every minute for as long as the
+    // service runs. Leave the offer where it is rather than retry forever.
+    if (!(await this.fundableFromReserve(bounty))) return bounty;
     if (bounty.state !== 'funding') {
       const next = transitionRescueBounty(bounty, 'funding', {
         at: this.now().toISOString(),

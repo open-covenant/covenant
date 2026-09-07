@@ -157,6 +157,8 @@ async function refreshBounties(): Promise<void> {
     expireOffers: () => bounties.expireOffers(),
     expireClaims: () => bounties.expireClaims(),
     fundAwaiting: () => bounties.fundAwaiting(),
+    retireUnfundable: () => bounties.retireUnfundableOffers(),
+    retireDelivered: () => bounties.retireDeliveredOffers(),
     reconcileFinancial: () => bounties.reconcileFinancialOperations(),
     reportFailure: (context, cause) => {
       console.error(

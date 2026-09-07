@@ -1,3 +1,5 @@
+export type MarketplaceRoute = 'marketplace' | 'per-request';
+
 /**
  * Contract for the Covenant coding gateway.
  *
@@ -105,7 +107,8 @@ export interface ProviderAccounting {
 
 export interface ProviderReceipt {
   model: string;
-  route: 'marketplace';
+  /** The marketplace route that served the request: `per-request` today, `marketplace` historically. */
+  route: MarketplaceRoute;
   balanceRemaining: string;
   providerId?: string;
   requestId?: string;

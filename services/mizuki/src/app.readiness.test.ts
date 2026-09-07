@@ -419,6 +419,90 @@ describe('service readiness endpoint', () => {
     ).rejects.toThrow('rolling escrow capacity');
     expect(order).toEqual(['application', 'signer']);
   });
+
+  it('frees escrow capacity held for a settled refund that predates payment reserves', async () => {
+    const config = loadConfig({
+      MIZUKI_PAYMENT_MODE: 'mock',
+      MIZUKI_PAY_TO: 'refund-treasury',
+      CLAWPUMP_PAYOUT_WALLET: 'escrow-authority',
+      MIZUKI_ESCROW_READINESS_MIN_LAMPORTS: '1000000000',
+    });
+    const store = new MemoryStore();
+    const quote: Quote = {
+      id: '11111111-1111-4111-8111-111111111111',
+      issueUrl: 'https://github.com/example/project/issues/1',
+      owner: 'example',
+      repo: 'project',
+      issueNumber: 1,
+      issueTitle: 'Fix docs',
+      issueBody: '',
+      baseSha: 'a'.repeat(40),
+      defaultBranch: 'main',
+      class: 'micro',
+      priceAtomic: '2000000',
+      maxFiles: 3,
+      maxCostUsd: 0.8,
+      validationCommands: [],
+      expiresAt: '2099-01-01T00:00:00.000Z',
+    };
+    const { job } = await store.createJob(
+      quote,
+      { payer: 'payer', transaction: 'payment', amountAtomic: quote.priceAtomic },
+      'legacy-refund',
+    );
+    await store.transitionJob(job.id, 'settlement_pending', 'refunded', {
+      refundTransaction: 'refund',
+      refundLiabilityId: 'liability-1',
+    });
+    // The offer was funded, lapsed and returned once, then re-posted as a fresh
+    // generation that the signer will never fund because the job carries no
+    // payment reserve. That successor must not hold escrow capacity open.
+    await store.createBounty({
+      id: '22222222-2222-4222-8222-222222222222',
+      sourceJobId: job.id,
+      failureReceiptId: `failure:${job.id}`,
+      repository: 'example/project',
+      issueNumber: 1,
+      issueUrl: quote.issueUrl,
+      priceCents: 1_000,
+      generation: 1,
+      predecessorBountyId: '44444444-4444-4444-8444-444444444444',
+      offerExpiresAt: '2026-09-12T00:00:00.000Z',
+      state: 'funding',
+      claimHistory: [],
+      createdAt: '2026-09-05T00:00:00.000Z',
+      updatedAt: '2026-09-05T00:00:00.000Z',
+      revision: 1,
+    } satisfies RescueBounty);
+    const readiness = {
+      healthy: true,
+      refundTreasury: 'refund-treasury',
+      refundMint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+      refundDecimals: 6,
+      finalizedBalanceRaw: '12000000',
+      pendingRefundRaw: '0',
+      treasuryAvailableRefundRaw: '12000000',
+      remainingRefundLimitUsdCents: 1_200,
+      availableRefundRaw: '12000000',
+      availableRefundTransactions: 10,
+      remainingEscrowLimitUsdCents: 1_000,
+      escrowAuthority: 'escrow-authority',
+      finalizedEscrowBalanceLamports: '1100000000',
+      availableEscrowReserveLamports: '1000000000',
+    };
+
+    await expect(
+      ensurePaymentCapacity(
+        {
+          config,
+          store,
+          policy: { readiness: async () => readiness } as unknown as AppDependencies['policy'],
+        },
+        0n,
+        1_000,
+      ),
+    ).resolves.toEqual(readiness);
+  });
 });
 
 describe('deployment readiness endpoint', () => {

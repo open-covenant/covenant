@@ -2,10 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { BountyService, type ContributorPatchReviewer } from './bounties.js';
 import { loadConfig } from './config.js';
 import { UsePodContributorReviewer } from './contributor-reviewer.js';
-import { fingerprintBountyDisputeEvidence, type ContributorEscrow } from './domain/index.js';
+import {
+  fingerprintBountyDisputeEvidence,
+  type ContributorEscrow,
+  type RescueBounty,
+} from './domain/index.js';
 import type { GithubClient } from './github.js';
 import { PolicyRequestError, type FinancialPolicy, type PolicyOperation } from './policy-client.js';
-import { publicBounty } from './public-api.js';
+import { publicActivityFeed, publicBounty } from './public-api.js';
 import { MemoryStore } from './store.js';
 import type { Job, Quote } from './types.js';
 
@@ -838,6 +842,264 @@ describe('BountyService', () => {
     expect((await store.escrowByBounty(replacement!.id))?.state).toBe('funded');
   });
 
+  it('re-posts an offer that lapsed without anyone claiming it', async () => {
+    const store = new MemoryStore();
+    const job = await refundedJob(store);
+    await store.appendLedger({
+      kind: 'treasury_deposit',
+      referenceId: 'deposit-relist',
+      asset: 'USDC',
+      amountAtomic: '400000000',
+      amountUsd: 400,
+    });
+    let nowMs = Date.parse('2026-08-22T10:00:00.000Z');
+    const now = () => new Date(nowMs);
+    const policy = new MockPolicy(now);
+    policy.escrowRefundRecipient = 'escrow-authority';
+    const service = new BountyService(store, policy, reviewer(), now, {
+      escrowRefundTo: 'escrow-authority',
+    });
+    const first = await service.createAfterRefund(job);
+    await openClaims(store);
+
+    nowMs = Date.parse(first.offerExpiresAt);
+    expect(await service.expireOffers()).toBe(1);
+    expect((await store.bounty(first.id))?.state).toBe('expired');
+
+    // Nobody ever claimed it, so the work is still wanted.
+    const second = await service.createAfterRefund(job);
+    expect(second.id).not.toBe(first.id);
+    expect(second.generation).toBe(first.generation + 1);
+  });
+
+  it('leaves a lapsed offer alone when no reserve is left to pay it from', async () => {
+    const store = new MemoryStore();
+    const job = await refundedJob(store);
+    await store.patchJob(job.id, { paymentIntentId: undefined });
+    let nowMs = Date.parse('2026-08-22T10:00:00.000Z');
+    const now = () => new Date(nowMs);
+    const policy = new MockPolicy(now);
+    policy.escrowRefundRecipient = 'escrow-authority';
+    const service = new BountyService(store, policy, reviewer(), now, {
+      escrowRefundTo: 'escrow-authority',
+    });
+    const bounty = {
+      id: '55555555-5555-4555-8555-555555555555',
+      sourceJobId: job.id,
+      failureReceiptId: `failure:${job.id}`,
+      repository: 'example/project',
+      issueNumber: 1,
+      issueUrl: quote.issueUrl,
+      priceCents: 1_000,
+      generation: 0,
+      offerExpiresAt: '2026-08-25T10:00:00.000Z',
+      state: 'expired' as const,
+      claimHistory: [],
+      createdAt: '2026-08-22T10:00:00.000Z',
+      updatedAt: '2026-08-25T10:00:00.000Z',
+      revision: 3,
+    };
+    await store.createBounty(bounty);
+
+    // Escrow is funded from the reserve held against the job's payment. A refund
+    // taken before reserves existed has none, so a re-post would be an offer
+    // nobody could ever be paid from.
+    const current = await service.createAfterRefund({
+      ...job,
+      paymentIntentId: undefined,
+    });
+
+    expect(current.id).toBe(bounty.id);
+    expect(current.state).toBe('expired');
+    expect(policy.reserveInputs).toEqual([]);
+  });
+
+  it('retires an offer that lost the reserve it would have been paid from', async () => {
+    const store = new MemoryStore();
+    const now = tickingClock();
+    const { service, bounty, job } = await parkedOffer(store, now);
+    expect(bounty.state).toBe('funding');
+
+    const retired = await service.retireUnfundableOffers();
+
+    expect(retired).toEqual([bounty.id]);
+    const closed = await store.bounty(bounty.id);
+    expect(closed?.state).toBe('expired');
+    // Terminal, so the next sweep has nothing left to do.
+    expect(await service.retireUnfundableOffers()).toEqual([]);
+    // The escrow never reached the chain, so nothing is settled on the way out.
+    const escrow = await store.escrowByBounty(bounty.id);
+    expect(escrow?.state).toBe('funding');
+    expect(escrow?.fundingSignature).toBeUndefined();
+    // A retired offer is closed for good: it never claimed escrow, so there is
+    // nothing to re-post and nothing a contributor could be paid from.
+    const after = await service.createAfterRefund(await store.job(job.id));
+    expect(after.id).toBe(bounty.id);
+    expect(after.state).toBe('expired');
+    // Retirement is recorded for an operator but never published, because the
+    // public wording for a closed offer reports escrow going back to the
+    // treasury and no escrow was ever held here.
+    expect(await store.activity(100)).toContainEqual(
+      expect.objectContaining({
+        kind: 'bounty.retired',
+        subjectId: bounty.id,
+        publicData: expect.objectContaining({ reason: 'reserve_unavailable' }),
+      }),
+    );
+    expect(await publicActivityFeed(store, 100)).toEqual([]);
+  });
+
+  it('retires an open offer once a later job has delivered the same issue', async () => {
+    const store = new MemoryStore();
+    const job = await refundedJob(store);
+    const service = new BountyService(
+      store,
+      new MockPolicy(),
+      reviewer({ approved: true, reason: 'scoped and correct' }),
+      tickingClock(),
+      bountyConfig,
+    );
+    const bounty = await service.createAfterRefund(job);
+    expect(bounty.state).toBe('open');
+
+    // Nothing stops a second customer buying the same issue, and this one delivered.
+    const reQuote = { ...quote, id: '77777777-7777-4777-8777-777777777777' };
+    await store.saveQuote(reQuote);
+    const { job: second } = await store.createJob(
+      reQuote,
+      {
+        payer: '4'.repeat(32),
+        transaction: 'second-settlement',
+        amountAtomic: reQuote.priceAtomic,
+      },
+      'second-purchase',
+    );
+    await store.transitionJob(second.id, 'settlement_pending', 'paid');
+    await store.transitionJob(second.id, 'paid', 'delivering');
+    await store.transitionJob(second.id, 'delivering', 'validating');
+    await store.transitionJob(second.id, 'validating', 'delivered');
+
+    const retired = await service.retireDeliveredOffers();
+
+    expect(retired).toEqual([bounty.id]);
+    expect((await store.bounty(bounty.id))?.state).toBe('expired');
+    // Terminal, so the next sweep has nothing left to do.
+    expect(await service.retireDeliveredOffers()).toEqual([]);
+    expect(await store.activity(100)).toContainEqual(
+      expect.objectContaining({
+        kind: 'bounty.retired',
+        subjectId: bounty.id,
+        publicData: expect.objectContaining({ reason: 'issue_already_delivered' }),
+      }),
+    );
+  });
+
+  it('leaves an offer open while its issue is still unfixed', async () => {
+    const store = new MemoryStore();
+    const job = await refundedJob(store);
+    const service = new BountyService(
+      store,
+      new MockPolicy(),
+      reviewer({ approved: true, reason: 'scoped and correct' }),
+      tickingClock(),
+      bountyConfig,
+    );
+    const bounty = await service.createAfterRefund(job);
+
+    expect(await service.retireDeliveredOffers()).toEqual([]);
+    expect((await store.bounty(bounty.id))?.state).toBe('open');
+  });
+
+  it('leaves an unfunded offer alone while its reserve is intact', async () => {
+    const store = new MemoryStore();
+    const now = tickingClock();
+    const { service, bounty } = await parkedOffer(store, now, { keepReserve: true });
+
+    expect(await service.retireUnfundableOffers()).toEqual([]);
+    expect((await store.bounty(bounty.id))?.state).toBe('funding');
+  });
+
+  it('leaves an offer alone once its escrow has been reserved with the signer', async () => {
+    const store = new MemoryStore();
+    const now = tickingClock();
+    const { service, bounty } = await parkedOffer(store, now);
+    const escrow = await store.escrowByBounty(bounty.id);
+    // A half-written reservation is money the signer may already hold. The
+    // refund path settles that, so retirement leaves it where it is.
+    await store.saveEscrow({
+      ...escrow!,
+      reservationId: 'reservation-1',
+      amountAtomic: '2000000000',
+      revision: escrow!.revision + 1,
+    });
+
+    expect(await service.retireUnfundableOffers()).toEqual([]);
+    expect((await store.bounty(bounty.id))?.state).toBe('funding');
+  });
+
+  it('stops re-posting an offer after the generation cap', async () => {
+    const store = new MemoryStore();
+    const job = await refundedJob(store);
+    await store.appendLedger({
+      kind: 'treasury_deposit',
+      referenceId: 'deposit-cap',
+      asset: 'USDC',
+      amountAtomic: '900000000',
+      amountUsd: 900,
+    });
+    let nowMs = Date.parse('2026-08-22T10:00:00.000Z');
+    const now = () => new Date(nowMs);
+    const policy = new MockPolicy(now);
+    policy.escrowRefundRecipient = 'escrow-authority';
+    const service = new BountyService(store, policy, reviewer(), now, {
+      escrowRefundTo: 'escrow-authority',
+    });
+    await openClaims(store);
+
+    let current = await service.createAfterRefund(job);
+    const seen = new Set([current.id]);
+    for (let round = 0; round < 5; round += 1) {
+      nowMs = Date.parse(current.offerExpiresAt);
+      await service.expireOffers();
+      current = await service.createAfterRefund(job);
+      seen.add(current.id);
+    }
+
+    // Three generations, then the work is left alone rather than funding escrow forever.
+    expect(seen.size).toBe(3);
+    expect(current.generation).toBe(2);
+  });
+
+  it('does not run the offer clock while nobody is allowed to claim', async () => {
+    const store = new MemoryStore();
+    const job = await refundedJob(store);
+    await store.appendLedger({
+      kind: 'treasury_deposit',
+      referenceId: 'deposit-claims-closed',
+      asset: 'USDC',
+      amountAtomic: '200000000',
+      amountUsd: 200,
+    });
+    let nowMs = Date.parse('2026-08-22T10:00:00.000Z');
+    const now = () => new Date(nowMs);
+    const policy = new MockPolicy(now);
+    policy.escrowRefundRecipient = 'escrow-authority';
+    const service = new BountyService(store, policy, reviewer(), now, {
+      escrowRefundTo: 'escrow-authority',
+    });
+    const bounty = await service.createAfterRefund(job);
+
+    // Well past the deadline, but claims are closed, so the offer was never
+    // one a contributor could act on.
+    nowMs = Date.parse(bounty.offerExpiresAt) + 7 * 24 * 60 * 60 * 1000;
+    expect(await service.expireOffers()).toBe(0);
+    expect((await store.bounty(bounty.id))?.state).toBe('open');
+
+    // Once claiming is possible again the deadline applies as normal.
+    await openClaims(store);
+    expect(await service.expireOffers()).toBe(1);
+  });
+
   it('closes an unclaimed offer only after its escrow refund finalizes', async () => {
     const store = new MemoryStore();
     const job = await refundedJob(store);
@@ -856,6 +1118,7 @@ describe('BountyService', () => {
       escrowRefundTo: 'escrow-authority',
     });
     const bounty = await service.createAfterRefund(job);
+    await openClaims(store);
 
     nowMs = Date.parse(bounty.offerExpiresAt);
     policy.failEscrowRefund = true;
@@ -1244,12 +1507,39 @@ async function refundedJob(store: MemoryStore): Promise<Job> {
     { payer: '3'.repeat(32), transaction: 'settlement', amountAtomic: quote.priceAtomic },
     `key-${Math.random()}`,
   );
+  // Every paid job holds a reserve with the signer, and bounty escrow is funded
+  // out of it, so a fixture without one does not describe a job we could pay a
+  // contributor for.
+  await store.patchJob(job.id, { paymentIntentId: `intent-${job.id}` });
   await store.transitionJob(job.id, 'settlement_pending', 'paid');
   await store.transitionJob(job.id, 'paid', 'failed', { error: 'route failed' });
   await store.transitionJob(job.id, 'failed', 'refund_pending');
   return store.transitionJob(job.id, 'refund_pending', 'refunded', {
     refundTransaction: 'refund',
   });
+}
+
+/**
+ * An offer stopped part-way through funding, which is where eleven re-posted
+ * offers ended up in production: the signer refused the reservation, so the
+ * bounty sits in 'funding' behind an escrow row that never reached the chain.
+ *
+ * By default the source job's payment reserve is then removed, because the
+ * refunds behind those offers were taken before reserves existed.
+ */
+async function parkedOffer(
+  store: MemoryStore,
+  now: () => Date,
+  options: { keepReserve?: boolean } = {},
+): Promise<{ service: BountyService; bounty: RescueBounty; job: Job }> {
+  const job = await refundedJob(store);
+  const policy = new MockPolicy(now);
+  policy.failEscrowReserve = true;
+  const service = new BountyService(store, policy, reviewer(), now, bountyConfig);
+  await expect(service.createAfterRefund(job)).rejects.toThrow('escrow reservation refused');
+  if (!options.keepReserve) await store.patchJob(job.id, { paymentIntentId: undefined });
+  const [bounty] = await store.bountiesList();
+  return { service, bounty, job: await store.job(job.id) };
 }
 
 function tickingClock(): () => Date {
@@ -1312,6 +1602,7 @@ class MockPolicy implements FinancialPolicy {
   private readonly resolutionOperations = new Map<string, PolicyOperation>();
   private releasePause?: { started: () => void; gate: Promise<void> };
   failEscrowRefund = false;
+  failEscrowReserve = false;
   refundNotExpired = false;
   releaseFailuresRemaining = 0;
   escrowRefundRecipient = 'treasury';
@@ -1389,6 +1680,7 @@ class MockPolicy implements FinancialPolicy {
     input: Parameters<FinancialPolicy['reserveEscrow']>[0],
   ): Promise<PolicyOperation> {
     this.reserveInputs.push(input);
+    if (this.failEscrowReserve) throw new Error('escrow reservation refused');
     return this.result('escrow_reserve', 'vault', input.amountUsdCents);
   }
 
@@ -1508,4 +1800,14 @@ class MockPolicy implements FinancialPolicy {
 
 function randomGrantId(): string {
   return `10000000-0000-4000-8000-${String(Math.floor(Math.random() * 1_000_000_000_000)).padStart(12, '0')}`;
+}
+
+async function openClaims(store: MemoryStore): Promise<void> {
+  const controls = await store.operatorControls();
+  await store.updateOperatorControls({
+    expectedRevision: controls.revision,
+    claimsEnabled: true,
+    reason: 'test: bounty claims are open',
+    updatedBy: 'test',
+  });
 }

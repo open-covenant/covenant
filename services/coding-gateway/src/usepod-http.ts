@@ -1,4 +1,4 @@
-import type { AccountedProviderReceipt, ProviderReceipt } from './types.js';
+import type { MarketplaceRoute, AccountedProviderReceipt, ProviderReceipt } from './types.js';
 
 export interface UsePodRequestConfig {
   baseUrl: string;
@@ -18,7 +18,15 @@ const MICROUNITS_PER_USD = 1_000_000n;
 const MAX_RECEIPT_MICROUNITS = BigInt(Math.floor(Number.MAX_SAFE_INTEGER / 30));
 const MAX_CATALOG_BYTES = 1_048_576;
 const MAX_CATALOG_MODELS = 10_000;
-const MARKETPLACE_ROUTES = new Set(['marketplace', 'per-request']);
+/**
+ * Whether UsePod served this from the marketplace.
+ *
+ * A predicate rather than a set membership test, so the receipt below carries
+ * the narrowed type instead of a bare string.
+ */
+function isMarketplaceRoute(value: string | undefined): value is MarketplaceRoute {
+  return value === 'marketplace' || value === 'per-request';
+}
 
 const MAX_BALANCE_BYTES = 16_384;
 const MAX_COMPLETION_BYTES = 2_097_152;
@@ -73,7 +81,7 @@ export function providerReceipt(
   // the second lock rather than the first. Rejecting an unrecognised value keeps
   // it that way when UsePod adds a route we have not seen.
   const route = response.headers.get('x-pod-route')?.trim().toLowerCase();
-  if (!MARKETPLACE_ROUTES.has(route ?? '')) {
+  if (!isMarketplaceRoute(route)) {
     throw new Error(`UsePod returned an unacceptable route: ${route || 'missing'}`);
   }
 

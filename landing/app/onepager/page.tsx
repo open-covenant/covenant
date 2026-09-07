@@ -130,7 +130,7 @@ export default function OnePagerPage() {
             run on mainnet through <span className="lit">Metaplex</span> (the MPL Agent registry and MPL Core); safe swap,
             perps, and prediction skills execute real mainnet transactions through <span className="lit">Jupiter</span>;
             agent reputation is live in the <span className="lit">PayAI</span> bazaar alongside x402 payments, never
-            touching them; and credit delegation is proven on <span className="lit">MagicBlock</span>&rsquo;s mainnet
+            touching them; and credit delegation is proven on <span className="lit">MagicBlock</span>&rsquo;s devnet
             ephemeral rollups. Identity resolves through <span className="lit">Solana Name Service</span> (.sol), paid and
             independently verifiable attestation endpoints are in review for the <span className="lit">Solana Foundation</span>&rsquo;s
             pay.sh registry, and a flagship safe-execution partnership with <span className="lit">Xona</span> is forming.

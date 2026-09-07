@@ -35,7 +35,11 @@ import {
 } from './public-api.js';
 import { createQuote, parseIssueUrl } from './quote.js';
 import { recordPaymentReceipts } from './receipts.js';
-import { assertLiabilityMatchesPayment, recoverSettlement } from './settlement-recovery.js';
+import {
+  assertLiabilityMatchesPayment,
+  recoverSettlement,
+  settlementScanMiss,
+} from './settlement-recovery.js';
 import {
   GithubOAuthCapacityError,
   StateConflictError,
@@ -1482,6 +1486,25 @@ export function createApp(deps: AppDependencies) {
               );
             }
             return json(res, 202, publicJob(cause.job));
+          }
+          // The buyer signed and broadcast, and the chain has not finalized it yet.
+          // Reporting that as "not found" invites a second purchase for work already
+          // paid for, so answer with the reserved job and let the buyer poll it.
+          if (settlementScanMiss(cause) && pendingJobId) {
+            const reserved = await deps.store.job(pendingJobId);
+            if (reserved) {
+              if (paymentAttempt) {
+                await deps.store.bindPaymentAttemptJob(
+                  paymentAttempt.id,
+                  paymentAttempt.githubId,
+                  reserved.id,
+                  reserved.payment.transaction === 'pending'
+                    ? undefined
+                    : reserved.payment.transaction,
+                );
+              }
+              return json(res, 202, publicJob(reserved));
+            }
           }
           if (paymentAttempt && !pendingJobId) {
             const recovered =

@@ -204,7 +204,14 @@ function paymentFromEvidence(
   };
 }
 
-function settlementScanMiss(error: unknown): boolean {
+/**
+ * Whether the chain has not shown this settlement yet.
+ *
+ * A payment is signed and broadcast well before it finalizes, and the policy
+ * signer only reads finalized state. So a miss here means the payment is still
+ * in flight, which is a wait, not an absence.
+ */
+export function settlementScanMiss(error: unknown): boolean {
   return (
     error instanceof PolicyRequestError &&
     ['settlement_not_found', 'settlement_scan_exhausted'].includes(error.code)

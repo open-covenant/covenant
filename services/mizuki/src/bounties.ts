@@ -7,7 +7,6 @@ import {
   createRescueBounty,
   expireAcceptedRescueBountyRelease,
   expireRescueBountyOffer,
-  withdrawRescueBountyOffer,
   expireRescueBountyClaim,
   fingerprintBountyDisputeEvidence,
   finalizeRescueBountyDisputeResolution,
@@ -491,52 +490,6 @@ export class BountyService {
       expired += 1;
     }
     return expired;
-  }
-
-  /**
-   * Close offers for issues that have since been fixed and paid for.
-   *
-   * A rescue offer exists because one job failed to deliver an issue. Nothing
-   * stops a later customer buying that same issue, and when that job delivers,
-   * the offer is asking outside contributors to write a patch for work that is
-   * already merged. Their time is wasted and the patch cannot be accepted.
-   *
-   * Expiry is the terminal state the state machine already uses for an offer
-   * whose window closed with nobody paid, which is exactly what happened here.
-   */
-  async retireDeliveredOffers(): Promise<string[]> {
-    const jobs = await this.store.jobsList();
-    const delivered = new Set(
-      jobs
-        .filter((job) => ['delivered', 'merged'].includes(job.state))
-        .map((job) => job.quote.issueUrl),
-    );
-    if (delivered.size === 0) return [];
-
-    const retired: string[] = [];
-    for (const bounty of await this.store.bountiesList()) {
-      if (bounty.state !== 'open' || bounty.activeClaim) continue;
-      const source = await this.store.job(bounty.sourceJobId);
-      if (!source || !delivered.has(source.quote.issueUrl)) continue;
-
-      const at = this.now().toISOString();
-      const pending = withdrawRescueBountyOffer(bounty, { at, expectedRevision: bounty.revision });
-      await this.store.updateBounty(pending, bounty.revision);
-      await this.store.appendActivity('bounty.retired', bounty.id, {
-        reason: 'issue_already_delivered',
-        sourceJobId: bounty.sourceJobId,
-        generation: bounty.generation,
-      });
-      // The escrow behind a withdrawn offer goes back the same way an expired
-      // offer's escrow does.
-      try {
-        await this.settleExpiredOffer(pending);
-      } catch {
-        // The durable pending state is retried by reconcileFinancialOperations.
-      }
-      retired.push(bounty.id);
-    }
-    return retired;
   }
 
   /**

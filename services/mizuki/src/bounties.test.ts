@@ -949,67 +949,6 @@ describe('BountyService', () => {
     expect(await publicActivityFeed(store, 100)).toEqual([]);
   });
 
-  it('retires an open offer once a later job has delivered the same issue', async () => {
-    const store = new MemoryStore();
-    const job = await refundedJob(store);
-    const service = new BountyService(
-      store,
-      new MockPolicy(),
-      reviewer({ approved: true, reason: 'scoped and correct' }),
-      tickingClock(),
-      bountyConfig,
-    );
-    const bounty = await service.createAfterRefund(job);
-    expect(bounty.state).toBe('open');
-
-    // Nothing stops a second customer buying the same issue, and this one delivered.
-    const reQuote = { ...quote, id: '77777777-7777-4777-8777-777777777777' };
-    await store.saveQuote(reQuote);
-    const { job: second } = await store.createJob(
-      reQuote,
-      {
-        payer: '4'.repeat(32),
-        transaction: 'second-settlement',
-        amountAtomic: reQuote.priceAtomic,
-      },
-      'second-purchase',
-    );
-    await store.transitionJob(second.id, 'settlement_pending', 'paid');
-    await store.transitionJob(second.id, 'paid', 'delivering');
-    await store.transitionJob(second.id, 'delivering', 'validating');
-    await store.transitionJob(second.id, 'validating', 'delivered');
-
-    const retired = await service.retireDeliveredOffers();
-
-    expect(retired).toEqual([bounty.id]);
-    expect((await store.bounty(bounty.id))?.state).toBe('expired');
-    // Terminal, so the next sweep has nothing left to do.
-    expect(await service.retireDeliveredOffers()).toEqual([]);
-    expect(await store.activity(100)).toContainEqual(
-      expect.objectContaining({
-        kind: 'bounty.retired',
-        subjectId: bounty.id,
-        publicData: expect.objectContaining({ reason: 'issue_already_delivered' }),
-      }),
-    );
-  });
-
-  it('leaves an offer open while its issue is still unfixed', async () => {
-    const store = new MemoryStore();
-    const job = await refundedJob(store);
-    const service = new BountyService(
-      store,
-      new MockPolicy(),
-      reviewer({ approved: true, reason: 'scoped and correct' }),
-      tickingClock(),
-      bountyConfig,
-    );
-    const bounty = await service.createAfterRefund(job);
-
-    expect(await service.retireDeliveredOffers()).toEqual([]);
-    expect((await store.bounty(bounty.id))?.state).toBe('open');
-  });
-
   it('leaves an unfunded offer alone while its reserve is intact', async () => {
     const store = new MemoryStore();
     const now = tickingClock();

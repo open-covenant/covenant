@@ -7,6 +7,7 @@ const bounty = (over: Partial<RescueBounty> = {}) =>
   ({
     state: 'open',
     offerExpiresAt: '2026-09-10T00:00:00.000Z',
+    issueUrl: 'https://github.com/example/project/issues/7',
     activeClaim: undefined,
     ...over,
   }) as RescueBounty;
@@ -34,6 +35,23 @@ describe('bountyClaimable', () => {
     for (const state of ['expired', 'released', 'rejected', 'refunded'] as const) {
       expect(bountyClaimable(bounty({ state }), true, now)).toBe(false);
     }
+  });
+
+  it('is not claimable once a paid job has delivered the same issue', () => {
+    // A rescue offer follows a job that failed. Nothing stops a later customer
+    // buying that issue, and when that job delivers, a contributor taking this
+    // offer would write a patch nobody can accept.
+    const delivered = new Set(['https://github.com/example/project/issues/7']);
+    expect(bountyClaimable(bounty(), true, now, delivered)).toBe(false);
+    // A different issue is untouched by that delivery.
+    expect(
+      bountyClaimable(
+        bounty({ issueUrl: 'https://github.com/example/project/issues/8' }),
+        true,
+        now,
+        delivered,
+      ),
+    ).toBe(true);
   });
 
   it('is not claimable while someone else holds the claim', () => {

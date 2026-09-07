@@ -2,10 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { BountyService, type ContributorPatchReviewer } from './bounties.js';
 import { loadConfig } from './config.js';
 import { UsePodContributorReviewer } from './contributor-reviewer.js';
-import { fingerprintBountyDisputeEvidence, type ContributorEscrow } from './domain/index.js';
+import {
+  fingerprintBountyDisputeEvidence,
+  type ContributorEscrow,
+  type RescueBounty,
+} from './domain/index.js';
 import type { GithubClient } from './github.js';
 import { PolicyRequestError, type FinancialPolicy, type PolicyOperation } from './policy-client.js';
-import { publicBounty } from './public-api.js';
+import { publicActivityFeed, publicBounty } from './public-api.js';
 import { MemoryStore } from './store.js';
 import type { Job, Quote } from './types.js';
 
@@ -910,6 +914,68 @@ describe('BountyService', () => {
     expect(policy.reserveInputs).toEqual([]);
   });
 
+  it('retires an offer that lost the reserve it would have been paid from', async () => {
+    const store = new MemoryStore();
+    const now = tickingClock();
+    const { service, bounty, job } = await parkedOffer(store, now);
+    expect(bounty.state).toBe('funding');
+
+    const retired = await service.retireUnfundableOffers();
+
+    expect(retired).toEqual([bounty.id]);
+    const closed = await store.bounty(bounty.id);
+    expect(closed?.state).toBe('expired');
+    // Terminal, so the next sweep has nothing left to do.
+    expect(await service.retireUnfundableOffers()).toEqual([]);
+    // The escrow never reached the chain, so nothing is settled on the way out.
+    const escrow = await store.escrowByBounty(bounty.id);
+    expect(escrow?.state).toBe('funding');
+    expect(escrow?.fundingSignature).toBeUndefined();
+    // A retired offer is closed for good: it never claimed escrow, so there is
+    // nothing to re-post and nothing a contributor could be paid from.
+    const after = await service.createAfterRefund(await store.job(job.id));
+    expect(after.id).toBe(bounty.id);
+    expect(after.state).toBe('expired');
+    // Retirement is recorded for an operator but never published, because the
+    // public wording for a closed offer reports escrow going back to the
+    // treasury and no escrow was ever held here.
+    expect(await store.activity(100)).toContainEqual(
+      expect.objectContaining({
+        kind: 'bounty.retired',
+        subjectId: bounty.id,
+        publicData: expect.objectContaining({ reason: 'reserve_unavailable' }),
+      }),
+    );
+    expect(await publicActivityFeed(store, 100)).toEqual([]);
+  });
+
+  it('leaves an unfunded offer alone while its reserve is intact', async () => {
+    const store = new MemoryStore();
+    const now = tickingClock();
+    const { service, bounty } = await parkedOffer(store, now, { keepReserve: true });
+
+    expect(await service.retireUnfundableOffers()).toEqual([]);
+    expect((await store.bounty(bounty.id))?.state).toBe('funding');
+  });
+
+  it('leaves an offer alone once its escrow has been reserved with the signer', async () => {
+    const store = new MemoryStore();
+    const now = tickingClock();
+    const { service, bounty } = await parkedOffer(store, now);
+    const escrow = await store.escrowByBounty(bounty.id);
+    // A half-written reservation is money the signer may already hold. The
+    // refund path settles that, so retirement leaves it where it is.
+    await store.saveEscrow({
+      ...escrow!,
+      reservationId: 'reservation-1',
+      amountAtomic: '2000000000',
+      revision: escrow!.revision + 1,
+    });
+
+    expect(await service.retireUnfundableOffers()).toEqual([]);
+    expect((await store.bounty(bounty.id))?.state).toBe('funding');
+  });
+
   it('stops re-posting an offer after the generation cap', async () => {
     const store = new MemoryStore();
     const job = await refundedJob(store);
@@ -1392,6 +1458,29 @@ async function refundedJob(store: MemoryStore): Promise<Job> {
   });
 }
 
+/**
+ * An offer stopped part-way through funding, which is where eleven re-posted
+ * offers ended up in production: the signer refused the reservation, so the
+ * bounty sits in 'funding' behind an escrow row that never reached the chain.
+ *
+ * By default the source job's payment reserve is then removed, because the
+ * refunds behind those offers were taken before reserves existed.
+ */
+async function parkedOffer(
+  store: MemoryStore,
+  now: () => Date,
+  options: { keepReserve?: boolean } = {},
+): Promise<{ service: BountyService; bounty: RescueBounty; job: Job }> {
+  const job = await refundedJob(store);
+  const policy = new MockPolicy(now);
+  policy.failEscrowReserve = true;
+  const service = new BountyService(store, policy, reviewer(), now, bountyConfig);
+  await expect(service.createAfterRefund(job)).rejects.toThrow('escrow reservation refused');
+  if (!options.keepReserve) await store.patchJob(job.id, { paymentIntentId: undefined });
+  const [bounty] = await store.bountiesList();
+  return { service, bounty, job: await store.job(job.id) };
+}
+
 function tickingClock(): () => Date {
   let time = Date.parse('2026-08-22T10:00:00Z');
   return () => new Date((time += 1_000));
@@ -1452,6 +1541,7 @@ class MockPolicy implements FinancialPolicy {
   private readonly resolutionOperations = new Map<string, PolicyOperation>();
   private releasePause?: { started: () => void; gate: Promise<void> };
   failEscrowRefund = false;
+  failEscrowReserve = false;
   refundNotExpired = false;
   releaseFailuresRemaining = 0;
   escrowRefundRecipient = 'treasury';
@@ -1529,6 +1619,7 @@ class MockPolicy implements FinancialPolicy {
     input: Parameters<FinancialPolicy['reserveEscrow']>[0],
   ): Promise<PolicyOperation> {
     this.reserveInputs.push(input);
+    if (this.failEscrowReserve) throw new Error('escrow reservation refused');
     return this.result('escrow_reserve', 'vault', input.amountUsdCents);
   }
 

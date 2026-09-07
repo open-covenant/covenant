@@ -492,6 +492,57 @@ export class BountyService {
     return expired;
   }
 
+  /**
+   * Close offers that no reserve can ever pay for.
+   *
+   * A rescue offer is funded from the reserve held against the source job's
+   * payment. Refunds taken before reserves existed have none, so their offers
+   * stop part-way through funding and stay there: the signer refuses them, and
+   * no later event changes that. A record of offers that cannot be funded and
+   * cannot be claimed says work is available when none is.
+   *
+   * Expiry is what the state machine already means by an offer whose window
+   * closed with nobody paid. It is terminal, it moves no money, and it is where
+   * the predecessor of each of these offers already ended.
+   */
+  async retireUnfundableOffers(): Promise<string[]> {
+    const retired: string[] = [];
+    for (const bounty of await this.store.bountiesList()) {
+      if (!['draft', 'awaiting_funding', 'funding'].includes(bounty.state)) continue;
+      if (bounty.activeClaim || bounty.claimHistory.length > 0) continue;
+      if (await this.fundableFromReserve(bounty)) continue;
+      // Escrow that reached the chain is a payout somebody is owed, whatever
+      // the source job's reserve says. Those are settled by the refund path.
+      const escrow = await this.store.escrowByBounty(bounty.id);
+      if (escrow?.reservationId || escrow?.fundingSignature || escrow?.amountAtomic) continue;
+
+      const at = this.now().toISOString();
+      // A failed reservation leaves the offer in 'funding', which the state
+      // machine only lets out through 'awaiting_funding'.
+      let current = bounty;
+      if (current.state === 'funding') {
+        current = await this.store.updateBounty(
+          transitionRescueBounty(current, 'awaiting_funding', {
+            at,
+            expectedRevision: current.revision,
+          }),
+          current.revision,
+        );
+      }
+      const closed = await this.store.updateBounty(
+        transitionRescueBounty(current, 'expired', { at, expectedRevision: current.revision }),
+        current.revision,
+      );
+      await this.store.appendActivity('bounty.retired', closed.id, {
+        reason: 'reserve_unavailable',
+        sourceJobId: closed.sourceJobId,
+        generation: closed.generation,
+      });
+      retired.push(closed.id);
+    }
+    return retired;
+  }
+
   async reconcileFinancialOperations(): Promise<{ recovered: number; failed: number }> {
     let recovered = 0;
     let failed = 0;

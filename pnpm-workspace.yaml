@@ -18,6 +18,7 @@ packages:
   - services/mizuki-deployment-controller
   - services/mizuki-updater
   - apps/mizuki-web
+  - apps/desk
   - services/telegram-bot
   - services/fairscale-bridge
   - services/witness-verifier

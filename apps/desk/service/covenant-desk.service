@@ -1,0 +1,47 @@
+; Keeps Covenant Desk running for one user.
+;
+; "covenant-desk service install --systemd" writes this file to
+; ~/.config/systemd/user/covenant-desk.service with the two placeholders
+; replaced, then enables it. To install it by hand, replace __DESK_MAIN__ with
+; the output of "command -v covenant-desk" and __DESK_HOME__ with your desk
+; directory, then run:
+;
+;   systemctl --user daemon-reload
+;   systemctl --user enable --now covenant-desk
+;
+; The desk listens on 127.0.0.1 only. Nothing is exposed to the network.
+
+[Unit]
+Description=Covenant Desk
+Documentation=https://opencovenant.org
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=__DESK_MAIN__ start --foreground
+Environment=DESK_HOME=__DESK_HOME__
+Environment=NODE_ENV=production
+WorkingDirectory=__DESK_HOME__
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+; The desk reads its keys from __DESK_HOME__/keys.env and writes its database
+; there. Nothing else on the machine needs to be writable.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=__DESK_HOME__
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+StandardOutput=append:__DESK_HOME__/desk.log
+StandardError=append:__DESK_HOME__/desk.log
+
+[Install]
+WantedBy=default.target

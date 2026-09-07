@@ -1,0 +1,56 @@
+{
+  "name": "@covenant-org/desk",
+  "version": "0.1.0",
+  "description": "Local execution desk for Robinhood Chain stock tokens and the memecoins paired with them.",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "covenant-desk": "dist/surfaces/cli/main.js"
+  },
+  "keywords": [
+    "robinhood-chain",
+    "uniswap-v4",
+    "stock-tokens",
+    "mcp",
+    "trading"
+  ],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/open-covenant/covenant.git",
+    "directory": "apps/desk"
+  },
+  "homepage": "https://opencovenant.org",
+  "bugs": {
+    "url": "https://github.com/open-covenant/covenant/issues"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "files": [
+    "dist",
+    "data",
+    "service",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && chmod +x dist/surfaces/cli/main.js",
+    "start": "node dist/surfaces/cli/main.js start --foreground",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "lint": "echo skip",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.26.0",
+    "lighter-agent-sdk": "0.1.1",
+    "viem": "^2.56.3",
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "25.6.0",
+    "tsx": "^4.21.0",
+    "typescript": "6.0.3",
+    "vitest": "^4.1.5"
+  }
+}

@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Keeps Covenant Desk running for the logged-in user.
+
+  "covenant-desk service install --launchd" writes this file to
+  ~/Library/LaunchAgents/com.opencovenant.desk.plist with the three
+  placeholders replaced, then loads it. To install it by hand, replace
+  __NODE__ with the output of "command -v node", __DESK_MAIN__ with the
+  output of "command -v covenant-desk", and __DESK_HOME__ with your desk
+  directory, then run:
+
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.opencovenant.desk.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.opencovenant.desk</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NODE__</string>
+    <string>__DESK_MAIN__</string>
+    <string>start</string>
+    <string>--foreground</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>DESK_HOME</key>
+    <string>__DESK_HOME__</string>
+    <key>NODE_ENV</key>
+    <string>production</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <key>WorkingDirectory</key>
+  <string>__DESK_HOME__</string>
+
+  <key>StandardOutPath</key>
+  <string>__DESK_HOME__/desk.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>__DESK_HOME__/desk.log</string>
+</dict>
+</plist>

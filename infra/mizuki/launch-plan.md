@@ -29,8 +29,7 @@ Exit: all core tests green, a fresh complete production-readiness report, no non
 
 ### 25–26 August: public canaries
 
-- 25 Aug: run and publish the $2 successful-job canary.
-- 26 Aug: run and publish the forced full refund-to-bounty canary.
+- 25 Aug: run and publish both public canaries: the $2 successful-job canary and the forced full refund-to-bounty canary.
 - Post the evidence thread and dashboard after each, including measured variable execution estimates, omitted commercial costs, gross-margin status, and failure details.
 
 Exit: one external paid merge, one 100% finalized refund, one rescue bounty, and no duplicate financial side effects. Any failure consumes the next day as a core-only incident day.

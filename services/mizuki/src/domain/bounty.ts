@@ -574,6 +574,25 @@ export function finalizeRescueBountyOfferRefund(
   };
 }
 
+/**
+ * Whether a rejected contributor still has time to challenge the decision.
+ *
+ * The lease exists to stop someone sitting on a claim without working. It was
+ * never meant to time-limit an appeal against our own review, which is what it
+ * became: a contributor submitted correct work, an automated review turned it
+ * down, and the clock kept running while they had no reason to know a dispute
+ * was the only route left to being paid.
+ *
+ * So a rejected claim keeps its hold until the offer window closes. That date
+ * was published with the offer, it is already the outer bound on the whole
+ * bounty, and it cannot stretch forever.
+ */
+export function rescueBountyDisputeWindowOpen(bounty: RescueBounty, at: string): boolean {
+  if (bounty.state !== 'pr_submitted' || bounty.dispute) return false;
+  if (!bounty.validationReceipt || bounty.validationReceipt.approved) return false;
+  return timestampMs(at) < timestampMs(bounty.offerExpiresAt);
+}
+
 export function expireRescueBountyClaim(
   bounty: RescueBounty,
   command: BountyCommand,
@@ -582,6 +601,12 @@ export function expireRescueBountyClaim(
   assertNotBefore(command.at, bounty.updatedAt, 'claim expiry time');
   if (!['claimed', 'pr_submitted', 'validating'].includes(bounty.state)) {
     throw new DomainRuleError('CLAIM_NOT_EXPIRABLE', 'Bounty does not have an expirable claim');
+  }
+  if (rescueBountyDisputeWindowOpen(bounty, command.at)) {
+    throw new DomainRuleError(
+      'CLAIM_DISPUTE_WINDOW_OPEN',
+      'Rejected claim still has time to open a dispute',
+    );
   }
   const claim = requireActiveClaim(bounty);
   if (timestampMs(command.at) < timestampMs(claim.leaseExpiresAt)) {

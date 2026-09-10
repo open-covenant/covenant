@@ -796,6 +796,82 @@ describe('BountyService', () => {
     expect((await store.bounty(bounty.id))?.state).toBe('claimed');
   });
 
+  it('holds a rejected claim past its lease so the contributor can still dispute', async () => {
+    const store = new MemoryStore();
+    const job = await refundedJob(store);
+    let nowMs = Date.now() + 1_000;
+    const now = () => new Date(nowMs);
+    const service = new BountyService(
+      store,
+      new MockPolicy(now),
+      // The exact case a contributor hit: correct work, turned down by the review.
+      reviewer({ approved: false, reason: 'reviewer disagreed' }),
+      now,
+      bountyConfig,
+    );
+    const bounty = await service.createAfterRefund(job);
+    const claimant = await store.upsertContributor('rejected-claimant', 'claimant');
+    const challenge = await service.createClaimChallenge(
+      bounty.id,
+      claimant,
+      '1'.repeat(32),
+      randomGrantId(),
+    );
+    await service.claim(bounty.id, claimant, challenge.id, 'signature');
+    await service.submitPullRequest(
+      bounty.id,
+      claimant,
+      'https://github.com/example/project/pull/91',
+    );
+    const reviewed = await store.bounty(bounty.id);
+    expect(reviewed).toMatchObject({
+      state: 'pr_submitted',
+      validationReceipt: { approved: false },
+    });
+
+    // The lease runs out. The clock must not take the appeal with it.
+    nowMs = Date.parse(challenge.claimExpiresAt);
+    expect(await service.expireClaims()).toBe(0);
+    expect((await store.bounty(bounty.id))?.state).toBe('pr_submitted');
+    expect((await store.bounty(bounty.id))?.activeClaim?.claimantId).toBe(claimant.githubId);
+
+    // The offer window is the outer bound, so the hold cannot last forever.
+    nowMs = Date.parse(reviewed!.offerExpiresAt) + 1_000;
+    expect(await service.expireClaims()).toBe(1);
+    expect((await store.bounty(bounty.id))?.state).toBe('refunded');
+  });
+
+  it('expires an approved claim on its lease, because nothing is left to dispute', async () => {
+    const store = new MemoryStore();
+    const job = await refundedJob(store);
+    let nowMs = Date.now() + 1_000;
+    const now = () => new Date(nowMs);
+    const service = new BountyService(
+      store,
+      new MockPolicy(now),
+      reviewer({ approved: true, reason: 'scoped and correct' }),
+      now,
+      bountyConfig,
+    );
+    const bounty = await service.createAfterRefund(job);
+    const claimant = await store.upsertContributor('approved-claimant', 'claimant');
+    const challenge = await service.createClaimChallenge(
+      bounty.id,
+      claimant,
+      '1'.repeat(32),
+      randomGrantId(),
+    );
+    await service.claim(bounty.id, claimant, challenge.id, 'signature');
+    await service.submitPullRequest(
+      bounty.id,
+      claimant,
+      'https://github.com/example/project/pull/92',
+    );
+
+    nowMs = Date.parse(challenge.claimExpiresAt);
+    expect(await service.expireClaims()).toBe(1);
+  });
+
   it('keeps an expired claim locked until its refund finalizes, then funds a new generation', async () => {
     const store = new MemoryStore();
     const job = await refundedJob(store);

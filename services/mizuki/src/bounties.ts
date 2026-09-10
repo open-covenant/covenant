@@ -8,6 +8,7 @@ import {
   expireAcceptedRescueBountyRelease,
   expireRescueBountyOffer,
   expireRescueBountyClaim,
+  rescueBountyDisputeWindowOpen,
   fingerprintBountyDisputeEvidence,
   finalizeRescueBountyDisputeResolution,
   finalizeExpiredReleaseRefund,
@@ -448,6 +449,9 @@ export class BountyService {
       if (!bounty.activeClaim || !['claimed', 'pr_submitted', 'validating'].includes(bounty.state))
         continue;
       if (Date.parse(bounty.activeClaim.leaseExpiresAt) > this.now().getTime()) continue;
+      // A contributor the review turned down keeps their hold until the offer
+      // window closes, so the lease clock cannot run out the appeal.
+      if (rescueBountyDisputeWindowOpen(bounty, this.now().toISOString())) continue;
       const pending = expireRescueBountyClaim(bounty, {
         at: this.now().toISOString(),
         expectedRevision: bounty.revision,

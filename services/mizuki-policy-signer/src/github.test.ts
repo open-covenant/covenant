@@ -272,11 +272,44 @@ describe('independent GitHub merge verification', () => {
     const graph = responseBody();
     graph.data.repository.pullRequest.mergeCommit!.parents.nodes = [
       { oid: 'e'.repeat(40) },
-      { oid: 'b'.repeat(40) },
+      { oid: 'c'.repeat(40) },
     ];
     await expect(fixture({ graph }).verifier.verify(request)).rejects.toMatchObject({
       code: 'github_merge_lineage_mismatch',
     });
+  });
+
+  it('accepts a merge built on a base that moved on after the review', async () => {
+    // Anything else merging first leaves the reviewed base behind. The diff is
+    // still compared byte for byte, so the change being paid for is unchanged.
+    const graph = responseBody();
+    graph.data.repository.pullRequest.mergeCommit!.parents.nodes = [{ oid: 'e'.repeat(40) }];
+
+    const { evidence } = await fixture({ graph }).verifier.verify(request);
+
+    expect(evidence.baseCommitOid).toBe('e'.repeat(40));
+  });
+
+  it('rejects a merge whose parent does not descend from the reviewed base', async () => {
+    const graph = responseBody();
+    graph.data.repository.pullRequest.mergeCommit!.parents.nodes = [{ oid: 'e'.repeat(40) }];
+
+    await expect(
+      fixture({ graph, comparison: comparisonBody('diverged') }).verifier.verify(request),
+    ).rejects.toMatchObject({ code: 'github_merge_lineage_mismatch' });
+  });
+
+  it('refuses to release when GitHub cannot place the merge against the reviewed base', async () => {
+    const graph = responseBody();
+    graph.data.repository.pullRequest.mergeCommit!.parents.nodes = [{ oid: 'e'.repeat(40) }];
+
+    await expect(
+      fixture({
+        graph,
+        evidenceResponse: (url, _init, fallback) =>
+          url.includes('/compare/') ? new Response(null, { status: 500 }) : fallback(),
+      }).verifier.verify(request),
+    ).rejects.toMatchObject({ code: 'github_compare_unavailable' });
   });
 
   it('rejects an unmerged PR', async () => {

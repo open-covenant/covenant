@@ -1324,6 +1324,61 @@ describe('BountyService', () => {
     ).toHaveLength(1);
   });
 
+  it('pays out a dispute the review had rejected, without rewriting the receipt', async () => {
+    const store = new MemoryStore();
+    const job = await refundedJob(store);
+    await store.appendLedger({
+      kind: 'treasury_deposit',
+      referenceId: 'deposit-dispute-overturn',
+      asset: 'USDC',
+      amountAtomic: '200000000',
+      amountUsd: 200,
+    });
+    const service = new BountyService(
+      store,
+      new MockPolicy(),
+      // A rejection is the only thing anyone opens a dispute about, so this is
+      // the case the appeal has to survive.
+      reviewer({ approved: false, reason: 'reviewer disagreed' }),
+      tickingClock(),
+      bountyConfig,
+    );
+    const bounty = await service.createAfterRefund(job);
+    const contributor = await store.upsertContributor('overturned', 'maintainer');
+    const challenge = await service.createClaimChallenge(
+      bounty.id,
+      contributor,
+      '1'.repeat(32),
+      randomGrantId(),
+    );
+    await service.claim(bounty.id, contributor, challenge.id, 'signature');
+    const pullRequestUrl = 'https://github.com/example/project/pull/11';
+    await service.submitPullRequest(bounty.id, contributor, pullRequestUrl);
+    expect((await store.bounty(bounty.id))?.validationReceipt?.approved).toBe(false);
+
+    const disputed = await service.openDispute(
+      bounty.id,
+      contributor,
+      'The patch meets the acceptance criteria as written.',
+    );
+    const released = await service.resolveDispute(bounty.id, disputed.dispute!.id, {
+      decision: 'release',
+      evidence: {
+        summary: 'The diff resolves the issue as written and the repository checks passed.',
+        references: [pullRequestUrl],
+      },
+      idempotencyKey: 'resolve:dispute-overturn',
+    });
+
+    expect(released.state).toBe('released');
+    expect(released.dispute?.resolution?.settlementDecision).toBe('release');
+    // The reviewer's verdict is a record of what it said, so the payout leaves it as it was.
+    expect(released.validationReceipt?.approved).toBe(false);
+    expect(
+      (await store.ledgerEntries()).filter((entry) => entry.kind === 'bounty_released'),
+    ).toHaveLength(1);
+  });
+
   it('keeps a refund decision pending until the signer can finalize it', async () => {
     const store = new MemoryStore();
     const job = await refundedJob(store);

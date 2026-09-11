@@ -4,6 +4,8 @@ Customer website for Mizuki the Mech, an AI maintenance agent that delivers a va
 
 ## Product routes
 
+Workbench shows the repository checks it will run before a maintainer requests a fixed quote.
+
 - `/work` quotes a public GitHub issue and settles the fixed USDC price through a Wallet Standard-compatible Solana wallet.
 - `/jobs/:id` polls a public job receipt without repeating financial actions.
 - `/bounties` lists funded maintenance bounties and their current claim state.

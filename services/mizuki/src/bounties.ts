@@ -8,6 +8,7 @@ import {
   expireAcceptedRescueBountyRelease,
   expireRescueBountyOffer,
   expireRescueBountyClaim,
+  rescueBountyDisputeWindowOpen,
   fingerprintBountyDisputeEvidence,
   finalizeRescueBountyDisputeResolution,
   finalizeExpiredReleaseRefund,
@@ -448,6 +449,9 @@ export class BountyService {
       if (!bounty.activeClaim || !['claimed', 'pr_submitted', 'validating'].includes(bounty.state))
         continue;
       if (Date.parse(bounty.activeClaim.leaseExpiresAt) > this.now().getTime()) continue;
+      // A contributor the review turned down keeps their hold until the offer
+      // window closes, so the lease clock cannot run out the appeal.
+      if (rescueBountyDisputeWindowOpen(bounty, this.now().toISOString())) continue;
       const pending = expireRescueBountyClaim(bounty, {
         at: this.now().toISOString(),
         expectedRevision: bounty.revision,
@@ -762,7 +766,7 @@ export class BountyService {
     if (!evidence.references.includes(pullRequestUrl)) {
       throw new Error('release evidence must reference the active claim pull request');
     }
-    assertReleaseEvidenceAvailable(bounty, pullRequestUrl);
+    assertReleaseEvidenceAvailable(bounty, pullRequestUrl, true);
     if (
       !bounty.activeClaim?.leaseExpiresAt ||
       Date.parse(bounty.activeClaim.leaseExpiresAt) <= this.now().getTime()
@@ -1619,10 +1623,11 @@ function releaseEvidence(
     mergedAt: string;
     mergeCommitSha: string;
   },
+  resolutionPending = false,
 ) {
   const receipt = bounty.validationReceipt;
-  assertReleaseEvidenceAvailable(bounty, pullRequestUrl);
-  assertReviewedMerge(bounty, merge);
+  assertReleaseEvidenceAvailable(bounty, pullRequestUrl, resolutionPending);
+  assertReviewedMerge(bounty, merge, resolutionPending);
   if (!receipt?.provider) {
     throw new Error('bounty review evidence is incomplete');
   }
@@ -1643,12 +1648,36 @@ function releaseEvidence(
   };
 }
 
-function assertReleaseEvidenceAvailable(bounty: RescueBounty, pullRequestUrl: string): void {
+/**
+ * Whether anything authorizes paying this claim out.
+ *
+ * Normally the independent review. It can be wrong, and when it is, the
+ * contributor's only recourse is a dispute. A dispute that demanded an
+ * approving review to succeed could never overturn a rejection, which is the
+ * one thing anybody opens a dispute about. So a resolution deciding release
+ * stands in for the verdict.
+ *
+ * The receipt itself is left alone. It is the record of what the reviewer
+ * actually said, and a payout that went the other way does not change that.
+ */
+function payoutAuthorized(bounty: RescueBounty, resolutionPending: boolean): boolean {
+  if (bounty.validationReceipt?.approved) return true;
+  // Set only while the resolution is being recorded, since it is not on the
+  // bounty yet at the point the release is checked for the first time.
+  if (resolutionPending) return true;
+  return bounty.dispute?.resolution?.settlementDecision === 'release';
+}
+
+function assertReleaseEvidenceAvailable(
+  bounty: RescueBounty,
+  pullRequestUrl: string,
+  resolutionPending = false,
+): void {
   const receipt = bounty.validationReceipt;
   pullRequestNumber(pullRequestUrl, bounty.repository);
   if (
-    !receipt?.approved ||
-    !receipt.headSha ||
+    !payoutAuthorized(bounty, resolutionPending) ||
+    !receipt?.headSha ||
     !receipt.baseSha ||
     !receipt.baseRef ||
     !receipt.diffHash ||
@@ -1661,11 +1690,12 @@ function assertReleaseEvidenceAvailable(bounty: RescueBounty, pullRequestUrl: st
 function assertReviewedMerge(
   bounty: RescueBounty,
   evidence: { headSha: string; baseSha: string; baseRef: string; diffHash: string },
+  resolutionPending = false,
 ): void {
   const receipt = bounty.validationReceipt;
   if (
-    !receipt?.approved ||
-    !receipt.headSha ||
+    !payoutAuthorized(bounty, resolutionPending) ||
+    !receipt?.headSha ||
     !receipt.baseSha ||
     !receipt.baseRef ||
     !receipt.diffHash

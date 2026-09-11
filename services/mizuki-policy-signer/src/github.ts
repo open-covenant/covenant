@@ -427,6 +427,12 @@ const pullRequestFilesSchema = z.array(
     .passthrough(),
 );
 
+const compareSchema = z
+  .object({
+    status: z.enum(['diverged', 'ahead', 'behind', 'identical']),
+  })
+  .passthrough();
+
 export class GitHubMergeVerifier implements MergeVerifier {
   private readonly appId: string;
   private readonly privateKey: KeyObject;
@@ -718,10 +724,12 @@ export class GitHubMergeVerifier implements MergeVerifier {
         422,
       );
     }
-    const baseCommitOid = verifiedMergeBase(
+    const baseCommitOid = await verifiedMergeBase(
       pullRequest.mergeCommit,
       request.reviewedBaseSha,
       request.reviewedHeadSha,
+      (mergeParentSha) =>
+        this.descendsFrom(request.repository, owner, name, request.reviewedBaseSha, mergeParentSha),
     );
     if (pullRequest.changedFiles < 1 || pullRequest.changedFiles > request.maxFiles) {
       throw new PolicyError(
@@ -971,10 +979,12 @@ export class GitHubMergeVerifier implements MergeVerifier {
         422,
       );
     }
-    const baseCommitOid = verifiedMergeBase(
+    const baseCommitOid = await verifiedMergeBase(
       pullRequest.mergeCommit,
       request.reviewedBaseSha,
       request.reviewedHeadSha,
+      (mergeParentSha) =>
+        this.descendsFrom(request.repository, owner, name, request.reviewedBaseSha, mergeParentSha),
     );
 
     const diffBytes = await this.pullRequestDiff(
@@ -1179,6 +1189,56 @@ export class GitHubMergeVerifier implements MergeVerifier {
       throw new PolicyError('github_diff_too_large', 'GitHub review artifact is too large', 422);
     }
     return readLimitedBody(response, DIFF_LIMIT, 'GitHub review artifact');
+  }
+
+  /**
+   * Whether `head` has the reviewed base somewhere behind it.
+   *
+   * GitHub reports `ahead` when every commit reachable from base is also
+   * reachable from head, which is exactly the question. `identical` cannot
+   * appear here because the caller only asks once the two differ. Anything
+   * else, including `diverged` and `behind`, means the merge was not built on
+   * the revision the review looked at.
+   */
+  private async descendsFrom(
+    repository: string,
+    owner: string,
+    name: string,
+    base: string,
+    head: string,
+  ): Promise<boolean> {
+    const response = await this.repositoryRequest(
+      repository,
+      `${GITHUB_API_URL}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}`,
+      {
+        headers: {
+          accept: 'application/vnd.github+json',
+          'user-agent': 'mizuki-policy-signer/0.1',
+          'x-github-api-version': GITHUB_API_VERSION,
+        },
+      },
+      'GitHub commit comparison is unavailable',
+    );
+    // A revision GitHub cannot place is not one we can pay against, so an
+    // unreadable comparison fails the release rather than passing it.
+    if (!response.ok) {
+      throw new PolicyError(
+        'github_compare_unavailable',
+        'GitHub could not compare the merged commit with the reviewed base',
+        503,
+        true,
+      );
+    }
+    const body = compareSchema.safeParse(await response.json());
+    if (!body.success) {
+      throw new PolicyError(
+        'github_invalid_response',
+        'GitHub returned an invalid commit comparison',
+        503,
+        true,
+      );
+    }
+    return body.data.status === 'ahead';
   }
 
   private async graphql(repository: string, body: Record<string, unknown>): Promise<unknown> {
@@ -1453,15 +1513,33 @@ function mergeParentOids(commit: MergeCommit | null | undefined): string[] {
   return commit?.parents.nodes.map(({ oid }) => oid) ?? [];
 }
 
-function verifiedMergeBase(
+/**
+ * The commit the merge was built on, once it is shown to descend from the
+ * reviewed base.
+ *
+ * This used to demand that the merge landed directly on the reviewed base. On a
+ * repository where anything else merges between the review and the payout, that
+ * is never true, so a correct contribution could be reviewed, approved, merged,
+ * and still fail to release. It happened, and the base it insisted on was two
+ * commits stale by the time the payout ran.
+ *
+ * What the release actually has to prove is that the merged change is the change
+ * that was reviewed. The diff hash comparison in the caller does that, byte for
+ * byte. Requiring the branch point on top of it bought a guarantee about the
+ * surrounding tree that no active repository can offer.
+ *
+ * So the merge parent has to descend from the reviewed base rather than equal
+ * it. A parent that is unrelated, or behind, still fails.
+ */
+async function verifiedMergeBase(
   commit: MergeCommit,
   reviewedBaseSha: string,
   reviewedHeadSha: string,
-): string {
+  descendsFromReviewedBase: (mergeParentSha: string) => Promise<boolean>,
+): Promise<string> {
   const parents = mergeParentOids(commit);
-  const squashOrSingleCommitRebase = parents.length === 1 && parents[0] === reviewedBaseSha;
-  const mergeCommit =
-    parents.length === 2 && parents[0] === reviewedBaseSha && parents[1] === reviewedHeadSha;
+  const squashOrSingleCommitRebase = parents.length === 1;
+  const mergeCommit = parents.length === 2 && parents[1] === reviewedHeadSha;
   if (!squashOrSingleCommitRebase && !mergeCommit) {
     throw new PolicyError(
       'github_merge_lineage_mismatch',
@@ -1469,7 +1547,15 @@ function verifiedMergeBase(
       422,
     );
   }
-  return reviewedBaseSha;
+  const mergeParent = parents[0];
+  if (mergeParent !== reviewedBaseSha && !(await descendsFromReviewedBase(mergeParent))) {
+    throw new PolicyError(
+      'github_merge_lineage_mismatch',
+      'Merged commit does not descend from the reviewed base revision',
+      422,
+    );
+  }
+  return mergeParent;
 }
 
 function approvedReview(

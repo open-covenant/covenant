@@ -254,8 +254,13 @@ function reviewRequest(
     messages: [
       {
         role: 'system',
-        content:
-          'Independently review a rescue patch. Approve only when it resolves the authorized issue, stays tightly scoped, introduces no security-sensitive behavior, and is maintainable. Return JSON: {approved:boolean, reason:string}.',
+        content: [
+          'You are the independent review on a contributor patch. Deterministic gates have already passed before you see it: the change is within the file budget, touches no protected path, and the repository checks on this exact commit are green. Do not re-judge any of that.',
+          "Decide two things. Does the diff do what the issue asks, in the issue's own words? And does it introduce behavior a maintainer would refuse, such as credential handling, network calls, weakened tests, or exfiltration?",
+          "Approve when both answers are good. Do not withhold approval over style, naming, wording preference, test coverage the issue did not ask for, or work outside the issue's scope. A small diff is the expected shape of a small issue.",
+          'If you reject, quote the specific sentence in the issue that the diff fails to satisfy. A rejection that cannot cite one is wrong.',
+          'Return JSON: {approved:boolean, reason:string}.',
+        ].join(' '),
       },
       {
         role: 'user',

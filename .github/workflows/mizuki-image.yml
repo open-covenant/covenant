@@ -764,8 +764,13 @@ jobs:
               "https://api.render.com/v1$path" "$@"
           }
 
-          previous=$(render GET "/services/$SERVICE_ID" | jq -er '.imagePath')
-          echo "rollback reference: $previous"
+          # What production serves is the newest deploy that reached live, not the
+          # service's imagePath. Render sets imagePath when a deploy is created, so
+          # a deploy that then fails leaves it advertising an image that never ran.
+          # Reading it here once reported success while the old build was still up.
+          previous=$(render GET "/services/$SERVICE_ID/deploys?limit=20" \
+            | jq -r 'map(.deploy) | map(select(.status == "live")) | first | .image.ref // ""')
+          echo "rollback reference: ${previous:-(no live deploy on record)}"
 
           if [ "$previous" = "$IMAGE_REFERENCE" ]; then
             echo "production already runs $IMAGE_REFERENCE"

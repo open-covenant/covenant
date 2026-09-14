@@ -184,11 +184,11 @@ $CVNT mint (Solana only)     2mNVZ6aEjrGwiUVCfz7XGWpiXuWzgBDoznwE579upump`}</cod
         <a href="/robinhood">Robinhood Chain</a> mainnet (chain 4663). A generic
         x402 payment has settled there in USDG (Global Dollar), using the same{" "}
         <code>covenant-x402</code> signer that settles USDC on Base. A
-        bounded-spend escrow is deployed and unpaused, its enforcement proven in
-        real USDG: it holds an agent&apos;s funds against an onchain grant with a
-        per-call ceiling, a provider allowlist, and an expiry, releases to the
-        provider only on a passing result, and refunds in full otherwise. A
-        charge over the ceiling reverts at the contract.
+        bounded-spend escrow holds an agent&apos;s funds against an onchain grant
+        with a per-call ceiling, a provider allowlist, and an expiry, releases to
+        the provider only on a passing result, and refunds in full otherwise, with
+        a charge over the ceiling reverting at the contract. That release-and-refund
+        enforcement is proven on Robinhood Chain testnet.
       </p>
       <p>
         The bond and reputation verifiers are deployed there against the same

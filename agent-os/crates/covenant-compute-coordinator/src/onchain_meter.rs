@@ -223,9 +223,14 @@ pub trait LeaseMeter: Send + Sync {
     /// Commits the meter back to L1 and settles the vault: the operator
     /// is paid what the meter says, the renter gets the rest. `Ok(None)`
     /// means this meter holds no open lease for the job.
+    ///
+    /// `payout_memo` is the job's payout memo. Given, the backend stamps it
+    /// on the transaction that pays the operator, so that payment verifies
+    /// like any payout the coordinator pushes itself.
     async fn undelegate_and_settle(
         &self,
         observation: &LeaseObservation,
+        payout_memo: Option<&str>,
     ) -> Result<Option<LeaseSettlement>, LeaseMeterError>;
 
     /// Voids the lease and returns the whole vault to the renter, paying
@@ -259,6 +264,9 @@ pub trait LeaseMeter: Send + Sync {
 #[derive(Default)]
 struct LeaseLedger {
     open: HashMap<Uuid, LeaseOpen>,
+    /// Opens whose transaction is still in flight: nothing to tick yet,
+    /// and a conclusion waits for them.
+    opening: HashSet<Uuid>,
     concluding: HashSet<Uuid>,
     settled: HashMap<Uuid, LeaseSettlement>,
 }
@@ -271,11 +279,18 @@ impl LeaseLedger {
             return false;
         }
         self.open.insert(open.job_id, open.clone());
+        self.opening.insert(open.job_id);
         true
     }
 
+    fn finish_open(&mut self, job_id: Uuid) {
+        self.opening.remove(&job_id);
+    }
+
     fn tickable(&self, job_id: Uuid) -> bool {
-        self.open.contains_key(&job_id) && !self.concluding.contains(&job_id)
+        self.open.contains_key(&job_id)
+            && !self.opening.contains(&job_id)
+            && !self.concluding.contains(&job_id)
     }
 
     /// Fences the job against further ticks and hands back its open
@@ -367,6 +382,7 @@ impl LeaseMeter for NoopLeaseMeter {
                 open.job_id
             )));
         }
+        self.ledger.lock().finish_open(open.job_id);
         self.opened.lock().push(open.clone());
         Ok(None)
     }
@@ -382,6 +398,7 @@ impl LeaseMeter for NoopLeaseMeter {
     async fn undelegate_and_settle(
         &self,
         observation: &LeaseObservation,
+        _payout_memo: Option<&str>,
     ) -> Result<Option<LeaseSettlement>, LeaseMeterError> {
         let job_id = observation.job_id;
         {
@@ -558,7 +575,9 @@ impl SidecarLeaseMeter {
                 if let Some(settled) = ledger.settled.get(&job_id) {
                     return Ok(Claim::Settled(settled.clone()));
                 }
-                if !wait || !ledger.concluding.contains(&job_id) {
+                let in_flight =
+                    ledger.concluding.contains(&job_id) || ledger.opening.contains(&job_id);
+                if !wait || !in_flight {
                     return Ok(match ledger.begin_conclude(job_id) {
                         Some(_) => Claim::Won,
                         None => Claim::Nothing,
@@ -764,7 +783,9 @@ impl LeaseMeter for SidecarLeaseMeter {
         request["max_duration_secs"] = open.max_duration_secs.into();
         request["accepted_at_ms"] = open.accepted_at_ms.into();
 
-        match run_signer(&self.config, "lease-open", job_id, request).await {
+        let opened = run_signer(&self.config, "lease-open", job_id, request).await;
+        self.ledger.lock().finish_open(job_id);
+        match opened {
             Ok(signature) => Ok(Some(signature)),
             Err(e) => {
                 // A definitively-refused open never minted a vault, so
@@ -794,6 +815,7 @@ impl LeaseMeter for SidecarLeaseMeter {
     async fn undelegate_and_settle(
         &self,
         observation: &LeaseObservation,
+        payout_memo: Option<&str>,
     ) -> Result<Option<LeaseSettlement>, LeaseMeterError> {
         let job_id = observation.job_id;
         match self.claim_terminal(job_id, true).await? {
@@ -804,6 +826,9 @@ impl LeaseMeter for SidecarLeaseMeter {
         let mut request = self.envelope(job_id);
         request["metered_ms"] = observation.elapsed_ms.into();
         request["receipt_hash_hex"] = hex_lower(&observation.receipt_hash()).into();
+        if let Some(memo) = payout_memo {
+            request["payout_memo"] = memo.into();
+        }
         self.run_terminal(
             "lease-conclude",
             job_id,
@@ -983,6 +1008,7 @@ pub async fn conclude_lease_onchain(
     record: &JobRecord,
     now_ms: u64,
     elapsed_ms: u64,
+    payout_memo: Option<&str>,
 ) -> LeaseConclusion {
     let Some(meter) = state.lease_meter() else {
         return LeaseConclusion::OffChain;
@@ -991,7 +1017,7 @@ pub async fn conclude_lease_onchain(
         return LeaseConclusion::OffChain;
     };
     let job_id = observation.job_id;
-    match meter.undelegate_and_settle(&observation).await {
+    match meter.undelegate_and_settle(&observation, payout_memo).await {
         Ok(Some(settlement)) => {
             tracing::info!(
                 %job_id,
@@ -1301,7 +1327,7 @@ mod tests {
         assert!(meter.tick(&observation).await.unwrap());
 
         let settlement = meter
-            .undelegate_and_settle(&observation)
+            .undelegate_and_settle(&observation, None)
             .await
             .unwrap()
             .expect("an open lease concludes");
@@ -1368,7 +1394,7 @@ mod tests {
         assert!(meter.tick(&observation).await.unwrap());
 
         let first = meter
-            .undelegate_and_settle(&observation)
+            .undelegate_and_settle(&observation, None)
             .await
             .unwrap()
             .unwrap();
@@ -1378,7 +1404,7 @@ mod tests {
              figure the record pinned"
         );
         let second = meter
-            .undelegate_and_settle(&observation)
+            .undelegate_and_settle(&observation, None)
             .await
             .unwrap()
             .unwrap();
@@ -1573,7 +1599,10 @@ mod tests {
             endpoint: String::new(),
             close_requested: false,
         };
-        meter.undelegate_and_settle(&observation).await.unwrap();
+        meter
+            .undelegate_and_settle(&observation, None)
+            .await
+            .unwrap();
         assert!(
             meter.open_and_delegate(&open).await.is_err(),
             "a settled lease must never reopen under the same job id"
@@ -1849,7 +1878,7 @@ mod tests {
         std::fs::write(
             &script,
             "#!/bin/sh\n\
-             /bin/cat > /dev/null\n\
+             /bin/cat > \"${0%/*}/request-$1.json\"\n\
              if [ \"$1\" = lease-conclude ]; then\n\
              \x20 echo x >> \"${0%/*}/concludes\"\n\
              \x20 /bin/sleep 1\n\
@@ -1915,8 +1944,8 @@ mod tests {
         let observation = observation_for(job_id);
 
         let (first, second) = tokio::join!(
-            meter.undelegate_and_settle(&observation),
-            meter.undelegate_and_settle(&observation)
+            meter.undelegate_and_settle(&observation, None),
+            meter.undelegate_and_settle(&observation, None)
         );
         let first = first.unwrap().expect("the first conclusion settles");
         let second = second
@@ -1943,13 +1972,13 @@ mod tests {
         // request times out.
         let dropped = tokio::time::timeout(
             Duration::from_millis(100),
-            meter.undelegate_and_settle(&observation),
+            meter.undelegate_and_settle(&observation, None),
         )
         .await;
         assert!(dropped.is_err());
 
         let settled = meter
-            .undelegate_and_settle(&observation)
+            .undelegate_and_settle(&observation, None)
             .await
             .unwrap()
             .expect("the retry reports the conclusion its dropped caller started");
@@ -1985,7 +2014,10 @@ mod tests {
 
         assert_eq!(adopt_live_leases(&state), 1);
         assert!(meter.tick(&observation).await.unwrap(), "ticks resume");
-        let settled = meter.undelegate_and_settle(&observation).await.unwrap();
+        let settled = meter
+            .undelegate_and_settle(&observation, None)
+            .await
+            .unwrap();
         assert!(settled.is_some(), "and the conclusion settles on-chain");
         assert!(
             meter.opened().is_empty(),
@@ -1997,5 +2029,47 @@ mod tests {
             !meter.tick(&observation).await.unwrap(),
             "adopting again never reopens a lease that already settled"
         );
+    }
+
+    #[test]
+    fn a_lease_whose_open_is_in_flight_takes_no_ticks() {
+        let mut ledger = LeaseLedger::default();
+        let open = LeaseOpen {
+            job_id: Uuid::from_u128(43),
+            renter_pubkey_b58: "buyer".into(),
+            operator_payout_address: "operator".into(),
+            rate_micro_usdc_per_sec: 1,
+            max_duration_secs: 10,
+            accepted_at_ms: 0,
+        };
+        assert!(ledger.claim_open(&open));
+        assert!(
+            !ledger.tickable(open.job_id),
+            "the vault may not exist yet; a tick now reads as no lease"
+        );
+        ledger.finish_open(open.job_id);
+        assert!(ledger.tickable(open.job_id));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_payout_memo_rides_the_conclusion_request() {
+        let dir = tempfile::tempdir().unwrap();
+        let meter = SidecarLeaseMeter::new(slow_signer(dir.path()));
+        let job_id = Uuid::from_u128(44);
+        meter
+            .open_and_delegate(&open_lease_for(job_id))
+            .await
+            .unwrap();
+        meter
+            .undelegate_and_settle(&observation_for(job_id), Some("compute-payout:v1:job:sig"))
+            .await
+            .unwrap();
+        let request: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join("request-lease-conclude.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(request["payout_memo"], "compute-payout:v1:job:sig");
+        assert_eq!(request["metered_ms"], 1_000);
     }
 }

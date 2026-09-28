@@ -159,6 +159,31 @@ impl Rpc {
         Ok(result[0]["signature"].as_str().map(str::to_string))
     }
 
+    /// The recent signature on `address` whose memo contains `memo`. The RPC
+    /// reports each transaction's memo prefixed with its length, so this
+    /// matches on containment.
+    pub async fn signature_with_memo(
+        &self,
+        address: &Pubkey,
+        memo: &str,
+    ) -> Result<Option<String>, String> {
+        let result = self
+            .call(
+                "getSignaturesForAddress",
+                json!([address.to_string(), {"limit": 25, "commitment": "confirmed"}]),
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(result
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|entry| entry["err"].is_null())
+            .find(|entry| entry["memo"].as_str().is_some_and(|m| m.contains(memo)))
+            .and_then(|entry| entry["signature"].as_str())
+            .map(str::to_string))
+    }
+
     /// Sends a signed transaction and waits for it to be confirmed.
     pub async fn send_and_confirm(
         &self,

@@ -244,9 +244,15 @@ await open(settleJob);
 const landed = await tickRun(settleJob, [1000, 2000, 3000, 4000, 5000]);
 const billedMs = 6000;
 const finalReceipt = sha256(Buffer.from(settleJob, "hex"), Buffer.from("final"));
+const payoutMemo = `compute-payout:v1:${settleJob}:e2e`;
 const concluded = await runSigner(
   "lease-conclude",
-  { ...envelope(settleJob), metered_ms: billedMs, receipt_hash_hex: finalReceipt.toString("hex") },
+  {
+    ...envelope(settleJob),
+    metered_ms: billedMs,
+    receipt_hash_hex: finalReceipt.toString("hex"),
+    payout_memo: payoutMemo,
+  },
   renter,
   coordinator,
 );
@@ -266,13 +272,34 @@ console.log(`  settle tx  ${concluded.body.signature}`);
   assertEq("meter closed", committed.concluded, true);
   const root = [...landed, finalReceipt].reduce((acc, r) => sha256(acc, r), Buffer.alloc(32));
   assertEq("provenance root is the chain of landed ticks", committed.root.toString("hex"), root.toString("hex"));
+  // The payment the signer reports reads as one payout: the memo, and one
+  // wallet credited. The renter's remainder moved in a transaction of its own.
+  const paid = await l1.getParsedTransaction(concluded.body.signature, {
+    commitment: "confirmed",
+    maxSupportedTransactionVersion: 0,
+  });
+  const memos = paid.transaction.message.instructions
+    .filter((ix) => ix.program === "spl-memo")
+    .map((ix) => ix.parsed);
+  assertEq("the payment carries the payout memo", JSON.stringify(memos), JSON.stringify([payoutMemo]));
+  const grew = (paid.meta.postTokenBalances || []).filter((post) => {
+    const pre = (paid.meta.preTokenBalances || []).find((b) => b.accountIndex === post.accountIndex);
+    return BigInt(post.uiTokenAmount.amount) > BigInt(pre ? pre.uiTokenAmount.amount : "0");
+  });
+  assertEq("one wallet credited by the payment", grew.map((g) => g.owner).join(","), operator.keypair.publicKey.toBase58());
   const again = await runSigner(
     "lease-conclude",
-    { ...envelope(settleJob), metered_ms: billedMs, receipt_hash_hex: finalReceipt.toString("hex") },
+    {
+      ...envelope(settleJob),
+      metered_ms: billedMs,
+      receipt_hash_hex: finalReceipt.toString("hex"),
+      payout_memo: payoutMemo,
+    },
     renter,
     coordinator,
   );
   assertEq("a repeated conclude succeeds without paying twice", again.code, 0);
+  assertEq("and answers with the same payment", again.body.signature, concluded.body.signature);
   assertEq("operator balance unchanged by the repeat", await balance(operatorAta), charged);
 }
 

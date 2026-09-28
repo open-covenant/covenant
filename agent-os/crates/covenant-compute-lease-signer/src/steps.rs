@@ -88,6 +88,10 @@ pub struct Request {
     pub metered_ms: Option<u64>,
     #[serde(default)]
     pub receipt_hash_hex: Option<String>,
+    /// The coordinator's payout memo for the job. Given, the operator is paid
+    /// in a transaction of its own that carries it.
+    #[serde(default)]
+    pub payout_memo: Option<String>,
 }
 
 enum MeterHome {
@@ -289,20 +293,30 @@ impl Session {
             .terms()
             .await?
             .ok_or_else(|| refused("no lease is open for this job"))?;
-        if terms.settled() {
-            return self.already_settled(&terms, metered_ms).await;
-        }
+        let payout_memo = request.payout_memo.as_deref();
         if terms.voided {
             self.refund_voided(&terms, token_program).await;
             return Err(refused("the lease was voided; nothing was paid on chain"));
         }
+        if terms.paid_operator {
+            return self
+                .already_paid(&terms, metered_ms, payout_memo, token_program)
+                .await;
+        }
         match self
-            .settle_on_chain(dialect, &terms, token_program, metered_ms, receipt_hash)
+            .settle_on_chain(
+                dialect,
+                &terms,
+                token_program,
+                metered_ms,
+                receipt_hash,
+                payout_memo,
+            )
             .await
         {
             Ok(signature) => Ok(signature),
             Err(failure) => {
-                self.fall_back_to_void(failure, token_program, metered_ms)
+                self.fall_back_to_void(failure, token_program, metered_ms, payout_memo)
                     .await
             }
         }
@@ -375,6 +389,7 @@ impl Session {
         token_program: Pubkey,
         metered_ms: u64,
         receipt_hash: [u8; 32],
+        payout_memo: Option<&str>,
     ) -> Result<String, Failure> {
         let committed = match self.meter_home().await? {
             MeterHome::OnL1(meter) if meter.concluded => meter,
@@ -416,6 +431,9 @@ impl Session {
                 committed.metered_ms
             )));
         }
+        if let Some(memo) = payout_memo {
+            return self.pay_operator(terms, token_program, memo).await;
+        }
         let operator_tokens = self.token_account(&terms.operator, &token_program);
         let renter_tokens = self.token_account(&self.lease.renter, &token_program);
         let create = create_associated_token_account_idempotent(
@@ -444,6 +462,134 @@ impl Session {
         }
     }
 
+    /// Pays the operator's share in a transaction of its own that carries
+    /// the coordinator's payout memo, then returns the renter's remainder.
+    ///
+    /// Split because a verifier reads a payout as one memo and one wallet
+    /// credited; `settle_lease` credits both sides at once. The signature
+    /// returned is the operator's payment.
+    async fn pay_operator(
+        &self,
+        terms: &Terms,
+        token_program: Pubkey,
+        memo: &str,
+    ) -> Result<String, Failure> {
+        if memo.len() > lease::MEMO_MAX_BYTES {
+            return Err(refused(format!(
+                "payout memo is {} bytes; the memo program takes {}",
+                memo.len(),
+                lease::MEMO_MAX_BYTES
+            )));
+        }
+        let operator_tokens = self.token_account(&terms.operator, &token_program);
+        let create = create_associated_token_account_idempotent(
+            &self.renter.pubkey(),
+            &terms.operator,
+            &self.mint,
+            &token_program,
+        );
+        let claim = self.lease.claim_operator_share(
+            self.renter.pubkey(),
+            self.mint,
+            operator_tokens,
+            token_program,
+        );
+        let paid = match self
+            .send_l1(&[lease::memo(memo), create, claim], 200_000, false)
+            .await
+        {
+            Ok(signature) => signature,
+            Err(SendError::Refused(m)) => {
+                return Err(refused(format!("claim_operator_share: {m}")))
+            }
+            Err(SendError::Unknown { signature, message }) => match self.terms().await {
+                Ok(Some(t)) if t.paid_operator && !t.voided => signature,
+                _ => {
+                    return Err(unresolved(
+                        format!("claim_operator_share: {message}"),
+                        Some(signature),
+                    ))
+                }
+            },
+        };
+        self.return_remainder(terms, token_program).await;
+        Ok(paid)
+    }
+
+    /// Settles what is left once the operator's share is out: the program
+    /// charges nothing more, sends the rest to the renter and closes the
+    /// vault. Best effort, since the remainder stays claimable by anyone.
+    async fn return_remainder(&self, terms: &Terms, token_program: Pubkey) {
+        let settle = self.lease.settle(
+            self.renter.pubkey(),
+            self.mint,
+            self.token_account(&terms.operator, &token_program),
+            self.token_account(&self.lease.renter, &token_program),
+            token_program,
+        );
+        for attempt in 1..=2 {
+            match self
+                .send_l1(std::slice::from_ref(&settle), 150_000, false)
+                .await
+            {
+                Ok(signature) => {
+                    eprintln!("remainder returned to the renter in {signature}");
+                    return;
+                }
+                Err(e) if attempt == 2 => {
+                    eprintln!("remainder not returned ({e}); it stays claimable by the renter")
+                }
+                Err(_) => sleep(Duration::from_secs(2)).await,
+            }
+        }
+    }
+
+    /// The operator's share went out before this call. Finish returning the
+    /// remainder and report that payment, if it was for the billed elapsed.
+    async fn already_paid(
+        &self,
+        terms: &Terms,
+        metered_ms: u64,
+        payout_memo: Option<&str>,
+        token_program: Pubkey,
+    ) -> Result<String, Failure> {
+        if !terms.paid_renter {
+            self.return_remainder(terms, token_program).await;
+        }
+        let committed = match self.meter_home().await? {
+            MeterHome::OnL1(meter) => meter.metered_ms,
+            _ => 0,
+        };
+        let signature = match payout_memo {
+            Some(memo) => self
+                .l1
+                .signature_with_memo(&self.lease.terms, memo)
+                .await
+                .ok()
+                .flatten(),
+            None => None,
+        };
+        let signature = match signature {
+            Some(signature) => Some(signature),
+            None => self
+                .l1
+                .latest_signature(&self.lease.terms)
+                .await
+                .ok()
+                .flatten(),
+        };
+        if committed == metered_ms {
+            return Ok(signature.unwrap_or_default());
+        }
+        Err(unresolved(
+            format!(
+                "the lease paid the operator on chain for {committed} ms ({}) but the coordinator bills {metered_ms} ms",
+                terms.charge(committed)
+            ),
+            signature,
+        ))
+    }
+
     /// Voids a lease whose on-chain settlement did not complete, then reports
     /// what the operator can still be paid on chain: nothing, if the void
     /// landed before any payout.
@@ -452,6 +598,7 @@ impl Session {
         failure: Failure,
         token_program: Pubkey,
         metered_ms: u64,
+        payout_memo: Option<&str>,
     ) -> Result<String, Failure> {
         eprintln!(
             "on-chain settlement did not complete ({}); voiding the lease",
@@ -478,8 +625,10 @@ impl Session {
             }
         };
         if !terms.voided {
-            if terms.settled() {
-                return self.already_settled(&terms, metered_ms).await;
+            if terms.paid_operator {
+                return self
+                    .already_paid(&terms, metered_ms, payout_memo, token_program)
+                    .await;
             }
             return Err(unresolved(
                 format!("{}; the void did not land", failure.error),
@@ -501,34 +650,6 @@ impl Session {
             failure.error,
             voided.map(|s| format!(" in {s}")).unwrap_or_default()
         )))
-    }
-
-    /// A lease settled before this call, by an earlier attempt or by anyone
-    /// once the meter came home. Success only if it paid the billed elapsed.
-    async fn already_settled(&self, terms: &Terms, metered_ms: u64) -> Result<String, Failure> {
-        let signature = self
-            .l1
-            .latest_signature(&self.lease.terms)
-            .await
-            .ok()
-            .flatten();
-        if terms.voided {
-            return Err(refused("the lease was voided; nothing was paid on chain"));
-        }
-        let committed = match self.meter_home().await? {
-            MeterHome::OnL1(meter) => meter.metered_ms,
-            _ => 0,
-        };
-        if committed == metered_ms {
-            return Ok(signature.unwrap_or_default());
-        }
-        Err(unresolved(
-            format!(
-                "the lease settled on chain for {committed} ms ({} paid) but the coordinator bills {metered_ms} ms",
-                terms.charge(committed)
-            ),
-            signature,
-        ))
     }
 
     /// Sends the vault back to the renter once the charge is zero. Best
@@ -870,6 +991,7 @@ mod tests {
             max_duration_secs: None,
             metered_ms: None,
             receipt_hash_hex: None,
+            payout_memo: None,
         };
         let refused = Session::new(
             key,

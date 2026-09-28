@@ -1520,7 +1520,7 @@ async fn submit_result(
         // Nothing ran, so nothing is owed on either book: the on-chain
         // settle returns the whole vault to the renter, exactly what
         // `NoMeteredUsage` means off-chain.
-        crate::onchain_meter::conclude_lease_onchain(&state, &record, now_ms, 0).await;
+        crate::onchain_meter::conclude_lease_onchain(&state, &record, now_ms, 0, None).await;
         // Conclude the record before refunding the hold, the record-first order
         // `cancel_job` uses for the other no-fault refund. A crash between the
         // two then lands in the boot-reconcile branch that reads the record's
@@ -1626,7 +1626,14 @@ async fn submit_result(
     // disagree about what was billed.
     let onchain = match metered_elapsed_ms {
         Some(elapsed) => {
-            crate::onchain_meter::conclude_lease_onchain(&state, &record, now_ms, elapsed).await
+            crate::onchain_meter::conclude_lease_onchain(
+                &state,
+                &record,
+                now_ms,
+                elapsed,
+                Some(&msg.receipt.payout_memo()),
+            )
+            .await
         }
         None => crate::onchain_meter::LeaseConclusion::OffChain,
     };

@@ -24,6 +24,20 @@ pub const MAGIC_PROGRAM: Pubkey =
     Pubkey::from_str_const("Magic11111111111111111111111111111111111111");
 pub const MAGIC_CONTEXT: Pubkey =
     Pubkey::from_str_const("MagicContext1111111111111111111111111111111");
+pub const MEMO_PROGRAM: Pubkey =
+    Pubkey::from_str_const("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
+/// The memo program refuses an unsigned memo past this many bytes.
+pub const MEMO_MAX_BYTES: usize = 566;
+
+/// The coordinator's payout memo, written beside the operator's share so the
+/// chain record of that transaction names the job and receipt it pays for.
+pub fn memo(text: &str) -> Instruction {
+    Instruction {
+        program_id: MEMO_PROGRAM,
+        accounts: vec![],
+        data: text.as_bytes().to_vec(),
+    }
+}
 
 /// The protocol's own cap on a lease window.
 pub const MAX_DURATION_SECS: u64 = 86_400;
@@ -211,6 +225,29 @@ impl Lease {
                 AccountMeta::new_readonly(token_program, false),
             ],
             discriminator("global", "settle_lease").to_vec(),
+        )
+    }
+
+    /// Pays the operator's share on its own, so that transaction moves
+    /// money to exactly one wallet.
+    pub fn claim_operator_share(
+        &self,
+        payer: Pubkey,
+        mint: Pubkey,
+        operator_tokens: Pubkey,
+        token_program: Pubkey,
+    ) -> Instruction {
+        self.instruction(
+            vec![
+                AccountMeta::new(payer, true),
+                AccountMeta::new(self.terms, false),
+                AccountMeta::new_readonly(self.meter, false),
+                AccountMeta::new_readonly(mint, false),
+                AccountMeta::new(self.vault, false),
+                AccountMeta::new(operator_tokens, false),
+                AccountMeta::new_readonly(token_program, false),
+            ],
+            discriminator("global", "claim_operator_share").to_vec(),
         )
     }
 
@@ -419,6 +456,10 @@ mod tests {
             [127, 108, 137, 251, 222, 91, 39, 29]
         );
         assert_eq!(
+            discriminator("global", "claim_operator_share"),
+            [48, 94, 26, 230, 17, 207, 37, 172]
+        );
+        assert_eq!(
             discriminator("global", "void_lease"),
             [62, 166, 226, 18, 70, 55, 61, 3]
         );
@@ -551,6 +592,34 @@ mod tests {
         let voided =
             Terms::decode(&terms_bytes(100, 600, 60_000, [false, false, true, false])).unwrap();
         assert_eq!(voided.charge(10_000), 0);
+    }
+
+    #[test]
+    fn the_operator_share_touches_no_renter_account() {
+        let lease = Lease::derive(key(9), key(1), [7u8; 16]);
+        let ix = lease.claim_operator_share(key(1), key(5), key(2), TOKEN_PROGRAM);
+        let keys: Vec<Pubkey> = ix.accounts.iter().map(|a| a.pubkey).collect();
+        assert_eq!(
+            keys,
+            vec![
+                key(1),
+                lease.terms,
+                lease.meter,
+                key(5),
+                lease.vault,
+                key(2),
+                TOKEN_PROGRAM
+            ]
+        );
+        assert!(ix.accounts[5].is_writable && !ix.accounts[5].is_signer);
+    }
+
+    #[test]
+    fn a_memo_carries_its_text_and_needs_no_signer() {
+        let ix = memo("compute-payout:v1:job:sig");
+        assert_eq!(ix.program_id, MEMO_PROGRAM);
+        assert!(ix.accounts.is_empty());
+        assert_eq!(ix.data, b"compute-payout:v1:job:sig");
     }
 
     #[test]

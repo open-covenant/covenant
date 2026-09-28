@@ -13097,6 +13097,7 @@ async fn a_lease_settle_of_unknown_outcome_holds_the_payout() {
         async fn undelegate_and_settle(
             &self,
             _observation: &LeaseObservation,
+            _payout_memo: Option<&str>,
         ) -> Result<Option<LeaseSettlement>, LeaseMeterError> {
             Err(LeaseMeterError::Unresolved {
                 message: "settle_lease: not confirmed within 60s".into(),
@@ -13399,8 +13400,35 @@ async fn a_lease_settles_on_devnet_through_the_signer() {
         payout.records().is_empty(),
         "an operator paid from the vault is not paid again"
     );
+
+    // The buyer's `verify` and the operator's `earnings verify` read a
+    // payout off the chain the same way; the vault's payment has to pass it.
+    let receipt = record.receipt.as_ref().expect("the verified receipt");
+    let request = covenant_compute_protocol::payout_transaction_rpc_request(&settle_tx);
+    let mut tx = serde_json::Value::Null;
+    for _ in 0..10 {
+        let body: serde_json::Value = reqwest::Client::new()
+            .post(var("LEASE_E2E_RPC"))
+            .json(&request)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        tx = body["result"].clone();
+        if !tx.is_null() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    let proof = covenant_compute_protocol::verify_payout_transaction(&receipt.payout_memo(), &tx)
+        .expect("the vault's payment verifies like any payout");
+    assert_eq!(proof.amount_micro_usdc, settled.charged_micro_usdc);
+    assert_eq!(proof.recipient_owner_b58, payout_addr(24));
+    assert_eq!(proof.mint_b58, var("LEASE_E2E_MINT"));
     eprintln!(
-        "job {job_id} settled on-chain in {settle_tx}: {} ms, {} micro-units",
+        "job {job_id} paid from the vault in {settle_tx}: {} ms, {} micro-units, verified",
         settled.metered_ms, settled.charged_micro_usdc
     );
 }

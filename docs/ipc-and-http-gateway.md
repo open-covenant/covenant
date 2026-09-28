@@ -362,7 +362,7 @@ The inner `AuditEvent` shape, defined at `agent-os/crates/covenant-audit/src/lib
 - `id` (string) — event UUID.
 - `timestamp_ms` (u64) — Unix-epoch milliseconds when the event was recorded.
 - `issuer` (object) — `{display: string, pubkey: string (base58)}` per the `AgentId` Serialize impl at `covenant-types/src/lib.rs:177`.
-- `kind` (object) — tagged-enum `AuditKind` (defined at `covenant-audit/src/lib.rs:71` onwards) with a `type` discriminator (e.g., `"capability_granted"`, `"intent_dispatched"`, `"hermes_tool_invoked"`) and variant-specific extra fields. Consumers must route on `kind.type` before reading variant-specific fields.
+- `kind` (object) — tagged-enum `AuditKind` (defined at `covenant-audit/src/lib.rs:117` onwards) with a `type` discriminator (e.g., `"capability_granted"`, `"intent_dispatched"`, `"hermes_tool_invoked"`) and variant-specific extra fields. Consumers must route on `kind.type` before reading variant-specific fields.
 
 Top-level keys are pinned to exactly these four by the test at `agent-os/crates/covenant/src/main.rs:7372` (`audit_recent_json_pins_top_level_schema`), exercised against three cases: populated with `since_ms`, empty with `since_ms`, and empty without `since_ms`.
 

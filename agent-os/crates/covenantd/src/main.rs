@@ -385,6 +385,43 @@ async fn main() -> Result<()> {
         None => server,
     };
 
+    let server = match compute_config_from_env() {
+        Some(mut cfg) => {
+            // Synthesized clips land under the daemon home so a caller
+            // can play or attach the file the result names; the base64
+            // audio never rides back into the calling agent's context.
+            cfg.clips_dir = home.join("compute-clips");
+            // The purchase book is what keeps an agent's idempotency
+            // key meaningful across daemon restarts; a profile that
+            // cannot remember its purchases must not sell the
+            // guarantee, so it stays disabled — loudly — instead.
+            let purchases_path = home.join("compute-purchases.jsonl");
+            match covenantd::compute::PurchaseBook::open(&purchases_path) {
+                Ok(book) => {
+                    info!(
+                        coordinator_url = %cfg.coordinator_url,
+                        max_price_micro_usdc = cfg.max_price_micro_usdc,
+                        purchases = %purchases_path.display(),
+                        "compute network buyer profile enabled"
+                    );
+                    server.with_compute(
+                        covenantd::compute::ComputeState::new(cfg)
+                            .with_purchase_book(Arc::new(book)),
+                    )
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        path = %purchases_path.display(),
+                        "compute purchase book unavailable; compute buyer profile disabled"
+                    );
+                    server
+                }
+            }
+        }
+        None => server,
+    };
+
     let server = {
         let cfg = covenant_metaplex::MetaplexConfig::from_env();
         if !cfg.enabled {
@@ -970,6 +1007,101 @@ fn hyre_config_from_env() -> Option<covenant_hyre::HyreConfig> {
     Some(cfg)
 }
 
+/// Build the compute-network buyer config from env, or None when the
+/// operator hasn't opted in.
+///
+/// - `COVENANT_COMPUTE_ENABLED` truthy (`1`, `true`, `yes`)
+/// - `COVENANT_COMPUTE_COORDINATOR_URL` — required; the compute
+///   coordinator this daemon buys from
+/// - `COVENANT_COMPUTE_MAX_PRICE_MICRO_USDC` — per-call price ceiling
+///   (optional, default 1000000 = $1)
+/// - `COVENANT_COMPUTE_DEADLINE_MS` — default job deadline (optional)
+/// - `COVENANT_COMPUTE_REFERRAL_CODE` — demand-side partner
+///   attribution, signed into every dispatched job (optional)
+/// - `COVENANT_COMPUTE_RPC_URL` — this daemon's own Solana RPC
+///   endpoint for `compute.verify`'s on-chain read-back (optional;
+///   without it every off-chain verdict still works)
+/// - `COVENANT_COMPUTE_MAX_ACTIVE_STREAMS` — how many
+///   `compute.stream_start` jobs one payer may have running at once
+///   (optional, default 4)
+fn compute_config_from_env() -> Option<covenantd::compute::ComputeConfig> {
+    let enabled = std::env::var("COVENANT_COMPUTE_ENABLED")
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+    if !enabled {
+        return None;
+    }
+    let coordinator_url =
+        match validated_coordinator_url(std::env::var("COVENANT_COMPUTE_COORDINATOR_URL").ok()) {
+            Ok(url) => url,
+            Err(reason) => {
+                tracing::warn!(
+                    "COVENANT_COMPUTE_ENABLED set but {reason}; compute buyer profile disabled"
+                );
+                return None;
+            }
+        };
+    let mut cfg = covenantd::compute::ComputeConfig {
+        coordinator_url,
+        ..Default::default()
+    };
+    if let Ok(cap) = std::env::var("COVENANT_COMPUTE_MAX_PRICE_MICRO_USDC") {
+        match cap.trim().parse() {
+            Ok(n) => cfg.max_price_micro_usdc = n,
+            Err(_) => tracing::warn!(
+                value = %cap,
+                "ignoring non-numeric COVENANT_COMPUTE_MAX_PRICE_MICRO_USDC"
+            ),
+        }
+    }
+    if let Ok(ms) = std::env::var("COVENANT_COMPUTE_DEADLINE_MS") {
+        match ms.trim().parse() {
+            Ok(n) => cfg.default_deadline_ms = n,
+            Err(_) => {
+                tracing::warn!(value = %ms, "ignoring non-numeric COVENANT_COMPUTE_DEADLINE_MS")
+            }
+        }
+    }
+    if let Ok(n) = std::env::var("COVENANT_COMPUTE_MAX_ACTIVE_STREAMS") {
+        match n.trim().parse() {
+            Ok(n) => cfg.max_active_streams_per_payer = n,
+            Err(_) => tracing::warn!(
+                value = %n,
+                "ignoring non-numeric COVENANT_COMPUTE_MAX_ACTIVE_STREAMS"
+            ),
+        }
+    }
+    cfg.referral_code = std::env::var("COVENANT_COMPUTE_REFERRAL_CODE")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    cfg.rpc_url = std::env::var("COVENANT_COMPUTE_RPC_URL")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    Some(cfg)
+}
+
+/// Validate and normalize the compute coordinator URL from its raw env
+/// value: trimmed, non-empty, and http(s)-schemed, the same shape the
+/// `covenant-compute` binaries require. Checked here so a blank or
+/// schemeless value disables the buyer profile with a clear reason,
+/// rather than booting a profile that fails deep in reqwest on the first
+/// `compute.infer`.
+fn validated_coordinator_url(raw: Option<String>) -> Result<String, String> {
+    let url = raw.unwrap_or_default();
+    let url = url.trim();
+    if url.is_empty() {
+        return Err("COVENANT_COMPUTE_COORDINATOR_URL is unset or blank".into());
+    }
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err(format!(
+            "COVENANT_COMPUTE_COORDINATOR_URL must start with http:// or https:// (got {url:?})"
+        ));
+    }
+    Ok(url.to_string())
+}
+
 /// Mask secret query params (api keys, tokens) in a URL before logging it,
 /// so a keyed RPC endpoint in `sap.env` never lands in stdout/journald.
 fn redact_url(url: &str) -> String {
@@ -1020,6 +1152,28 @@ fn default_ignorefile() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compute_coordinator_url_requires_a_scheme() {
+        // A well-formed URL passes through, trimmed.
+        assert_eq!(
+            validated_coordinator_url(Some("http://coord:8080".into())).unwrap(),
+            "http://coord:8080"
+        );
+        assert_eq!(
+            validated_coordinator_url(Some("  https://coord.example  ".into())).unwrap(),
+            "https://coord.example"
+        );
+        // Unset, blank, and whitespace-only all disable the profile.
+        assert!(validated_coordinator_url(None).is_err());
+        assert!(validated_coordinator_url(Some(String::new())).is_err());
+        assert!(validated_coordinator_url(Some("   ".into())).is_err());
+        // A schemeless URL is the real footgun: reqwest fails deep on the
+        // first call, so it must be caught at config time with a message
+        // that names the fix.
+        let err = validated_coordinator_url(Some("localhost:8080".into())).unwrap_err();
+        assert!(err.contains("http://"), "must name the fix: {err}");
+    }
 
     #[test]
     fn default_ignorefile_pins_each_credential_path_pattern_and_operator_comment_header() {

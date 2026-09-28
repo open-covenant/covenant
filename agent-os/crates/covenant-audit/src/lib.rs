@@ -421,6 +421,23 @@ pub enum AuditKind {
         peer_display: String,
         peer_pubkey_b58: String,
     },
+    /// The operator stamped an hourly budget capacity onto an enrolled
+    /// peer's bucket via `SetPeerBudget` — the funding half of external
+    /// access (enrollment grants capabilities; this grants spend). The
+    /// capacity is absolute, so a row with `credits_per_hour: 0` is the
+    /// spend kill-switch being thrown.
+    PeerBudgetSet {
+        display: String,
+        pubkey_b58: String,
+        credits_per_hour: u64,
+    },
+    /// Logged when `SetPeerBudget` is rejected because the authenticated
+    /// peer is not the operator. Mirrors
+    /// [`AuditKind::PeerEnrollmentRejected`].
+    PeerBudgetSetRejected {
+        peer_display: String,
+        peer_pubkey_b58: String,
+    },
     /// Logged when `ListPeers` is rejected because the authenticated
     /// peer is not the operator (`peer.pubkey != self.identity.pubkey`).
     /// Mirrors [`AuditKind::OperatorTokenRotationRejected`]'s daemon-as-issuer
@@ -628,6 +645,336 @@ pub enum AuditKind {
         rollback_path: Option<String>,
         dry_run: bool,
     },
+    /// The operator node's fail-closed admission gate ran for a
+    /// federation compute job (`covenant-compute-node::admission::admit_job`).
+    /// `passed = false` covers every rejection reason (bad envelope
+    /// signature, stale envelope, bad/mismatched/underfunded escrow
+    /// hold, capability mismatch, capacity exhausted) — `reason` carries
+    /// the specific `AdmissionError` message. Replaces the Phase 1
+    /// foundation slice's borrowed `CapabilityCheck` reuse (flagged in
+    /// build-notes-phase1-foundation.md §4): admission has its own
+    /// load-bearing fields (job id, operator, pass/fail reason) that
+    /// don't fit CapabilityCheck's permission-scope shape.
+    ComputeJobAdmitted {
+        job_id: Uuid,
+        operator_pubkey_b58: String,
+        passed: bool,
+        reason: String,
+    },
+    /// The operator node finished executing an admitted federation
+    /// compute job and signed a `WorkReceipt`
+    /// (`covenant-compute-node::node::Node::run_once`). `status` is the
+    /// receipt's `A2ATaskStatus` (`ok`/`error`/`partial`) as a string;
+    /// `result_hash_hex` is the receipt's own output hash. Replaces the
+    /// Phase 1 foundation slice's borrowed `IntentDispatched` reuse.
+    ComputeJobCompleted {
+        job_id: Uuid,
+        operator_pubkey_b58: String,
+        status: String,
+        result_hash_hex: String,
+        price_micro_usdc: u64,
+    },
+    /// The coordinator matched a federation compute job to an operator
+    /// and delivered a `JobOffer` over that operator's long-poll
+    /// (`covenant-compute-coordinator`). `funding_source` is
+    /// `"bootstrap"` or `"organic"` — the same tag carried on the
+    /// escrow hold, so a bootstrap-subsidy audit never needs to
+    /// cross-reference a separate ledger.
+    ComputeJobOffered {
+        job_id: Uuid,
+        operator_pubkey_b58: String,
+        price_micro_usdc: u64,
+        funding_source: String,
+    },
+    /// The coordinator verified an operator's `WorkReceipt` and released
+    /// the custodial escrow hold for a federation compute job
+    /// (`covenant-compute-coordinator`). Mechanical, never
+    /// discretionary: this row only exists because a verified receipt
+    /// authorized it (design-02-federation.md §3.3) — the deliberate
+    /// inverse of the unilateral `has_one = client` release at
+    /// `programs/settlement/src/lib.rs:931`.
+    ComputeJobReleased {
+        job_id: Uuid,
+        operator_pubkey_b58: String,
+        amount_micro_usdc: u64,
+        funding_source: String,
+    },
+    /// The coordinator's payout backend accepted the post-release
+    /// transfer for a federation compute job
+    /// (`covenant-compute-coordinator`). Sits after the job's
+    /// `ComputeJobReleased`/`ComputeFeeCaptured` rows: released is the
+    /// promise, this row is the push that honored it, and a released
+    /// job with no pushed row is exactly the operational incident the
+    /// operator-facing books surface. `amount_micro_usdc` is the
+    /// operator's net (gross minus fee); `tx_signature` is the on-chain
+    /// transaction when the backend submitted one, `None` when the
+    /// backend records intent without touching a chain.
+    ComputePayoutPushed {
+        job_id: Uuid,
+        operator_pubkey_b58: String,
+        amount_micro_usdc: u64,
+        tx_signature: Option<String>,
+    },
+    /// The coordinator refunded a federation compute job's escrow hold
+    /// without ever releasing it. `reason` is `"deadline_expired"`,
+    /// `"admission_failed"` (coordinator found no capable operator), or
+    /// `"operator_rejected"` — the same three
+    /// `covenant_compute_protocol::RefundReason` variants, carried as a
+    /// string so this crate takes no dependency on the compute
+    /// protocol crate.
+    ComputeJobRefunded {
+        job_id: Uuid,
+        reason: String,
+        /// The operator the job was assigned to when the refund fired,
+        /// `None` for pre-assignment refunds (`admission_failed`).
+        /// Attribution is what lets reputation count an
+        /// `execution_failed`/`operator_rejected`/`deadline_expired`
+        /// refund as that operator's own concluded outcome instead of
+        /// an anonymous event. Serde-default so pre-attribution rows
+        /// decode.
+        #[serde(default)]
+        operator_pubkey_b58: Option<String>,
+    },
+    /// The buyer-side daemon dispatched a federation compute job via the
+    /// `compute.infer` capability, verified the operator's signed
+    /// receipt against its own envelope (job hash, output hash, price),
+    /// and settled the caller's internal accounting (`covenantd::compute`).
+    /// `receipt_id` joins this row to the settlement receipt and budget
+    /// debit it landed with — the same 1:1 join `ExternalPaymentSettled`
+    /// carries for x402 paid calls.
+    ComputeJobDispatched {
+        job_id: Uuid,
+        operator_pubkey_b58: String,
+        status: String,
+        result_hash_hex: String,
+        price_micro_usdc: u64,
+        receipt_id: Uuid,
+    },
+    /// The coordinator verified an inbound buyer deposit on its payment
+    /// rail and credited the buyer's pre-funded balance
+    /// (`covenant-compute-coordinator`). `deposit_id` is the rail's
+    /// canonical identifier for the payment (a transaction signature on
+    /// an on-chain rail) — the idempotency key that makes a replayed
+    /// claim credit nothing.
+    ComputeBuyerDeposited {
+        buyer_pubkey_b58: String,
+        amount_micro_usdc: u64,
+        deposit_id: String,
+    },
+    /// The coordinator debited a buyer's signed withdrawal from the
+    /// deposit books (`covenant-compute-coordinator`, A3's money-out
+    /// verb). The debit is the fund event — the amount stops being
+    /// available the moment this row's journal line commits;
+    /// `withdrawal_id` is the buyer-chosen idempotency key, echoed in
+    /// the eventual transfer's on-chain memo.
+    ComputeBuyerWithdrawal {
+        buyer_pubkey_b58: String,
+        amount_micro_usdc: u64,
+        withdrawal_id: Uuid,
+        recipient_address_b58: String,
+    },
+    /// The payout backend honored a buyer withdrawal's debit with an
+    /// actual transfer (`covenant-compute-coordinator`). Sits next to
+    /// the withdrawal's `ComputeBuyerWithdrawal` row the way
+    /// `ComputePayoutPushed` sits next to `ComputeJobReleased`;
+    /// `tx_signature` is `None` when the backend records intent
+    /// without touching a chain.
+    ComputeWithdrawalPushed {
+        withdrawal_id: Uuid,
+        buyer_pubkey_b58: String,
+        amount_micro_usdc: u64,
+        tx_signature: Option<String>,
+    },
+    /// The coordinator withheld its marketplace fee from a released
+    /// federation compute job's payout (`covenant-compute-coordinator`).
+    /// Sits next to the job's `ComputeJobReleased` row, whose
+    /// `amount_micro_usdc` stays the gross hold: gross = fee +
+    /// operator_net, checkable per job with no other ledger. `fee_bps`
+    /// is the rate in force at release — the same rate the coordinator
+    /// disclosed to the operator at registration.
+    ComputeFeeCaptured {
+        job_id: Uuid,
+        operator_pubkey_b58: String,
+        fee_bps: u32,
+        fee_micro_usdc: u64,
+        operator_net_micro_usdc: u64,
+    },
+    /// The coordinator accrued a referral partner's rev-share out of a
+    /// released job's captured marketplace fee
+    /// (`covenant-compute-coordinator`, C8). Carved from the fee the
+    /// job's `ComputeFeeCaptured` row records — never from operator
+    /// pay or the buyer's charge — so `share_micro_usdc <=
+    /// fee_micro_usdc` always. Accrual bookkeeping, not a transfer:
+    /// paying the partner out is an operator-run money movement.
+    ComputePartnerShareAccrued {
+        job_id: Uuid,
+        referral_code: String,
+        partner_payout_address: String,
+        share_micro_usdc: u64,
+        fee_micro_usdc: u64,
+    },
+    /// An operator recorded an out-of-band partner payout against the
+    /// rev-share books (`covenant-compute-coordinator`, C8). The
+    /// coordinator moves no money here — the operator paid the partner
+    /// with their own wallet tooling and records it, `reference`
+    /// carrying the transaction signature or note. Idempotent by
+    /// reference; the books refuse a payout that would exceed what the
+    /// per-job accrual rows sum to.
+    ComputePartnerSharePaid {
+        referral_code: String,
+        amount_micro_usdc: u64,
+        reference: String,
+    },
+    /// The demand-side counterpart of `ComputePartnerShareAccrued`:
+    /// the partner who brought the BUYER whose job this was, per the
+    /// referral code signed inside the buyer's own job envelope. Also
+    /// carved from the captured fee — after the supply-side share, so
+    /// the two together can never exceed the fee.
+    ComputeBuyerPartnerShareAccrued {
+        job_id: Uuid,
+        referral_code: String,
+        partner_payout_address: String,
+        share_micro_usdc: u64,
+        fee_micro_usdc: u64,
+    },
+    /// The operator node drove one claim of its declared
+    /// `CapabilityProfile` through its real executor before
+    /// registering it (`covenant-compute-node::benchmark`, B5).
+    /// `model_id` is the declared model the probe pinned (`None` for
+    /// the single unpinned probe of a deterministic backend); `reason`
+    /// is `"ok"` on a pass, the actionable failure otherwise — same
+    /// shape as `ComputeJobAdmitted`. A failed probe stops the node
+    /// from registering, so a chain holding only `passed: true` rows
+    /// before a registration is the operator's own record that every
+    /// claim was demonstrated, not just signed.
+    ComputeCapabilityBenchmarked {
+        operator_pubkey_b58: String,
+        model_id: Option<String>,
+        passed: bool,
+        wall_ms: u64,
+        tokens_out: Option<u64>,
+        reason: String,
+    },
+    /// The coordinator's verdict on a canary probe it dispatched to
+    /// this operator through the ordinary paid pipeline
+    /// (`covenant-compute-coordinator::canary`, C5): a known-answer
+    /// job, indistinguishable from organic work at dispatch, whose
+    /// completed output was checked against the expected answer.
+    /// `passed = false` is the one fault the refund machinery cannot
+    /// see — a hash-verified receipt over content-garbage output — and
+    /// reputation counts it accordingly. Probes that never complete
+    /// are already attributed faults via `ComputeJobRefunded`, so only
+    /// completed probes get a row here.
+    ComputeCanaryResult {
+        job_id: Uuid,
+        operator_pubkey_b58: String,
+        passed: bool,
+        /// `"ok"` on a pass, otherwise what the check saw — same
+        /// posture as `ComputeJobAdmitted`'s `reason`.
+        detail: String,
+    },
+    /// The coordinator dispatched a canary probe
+    /// (`covenant-compute-coordinator::canary`, C5). The prober's own
+    /// durable marker: probe buyer identities rotate per probe so a
+    /// freeloader can't allowlist a stable canary pubkey, which means
+    /// the job book alone can no longer say which jobs are probes — a
+    /// restarted prober replays these rows (minus the
+    /// `ComputeCanaryResult` ones) to find the probes it still owes a
+    /// verdict.
+    ComputeCanaryDispatched {
+        job_id: Uuid,
+        operator_pubkey_b58: String,
+    },
+    /// The coordinator re-dispatched a released batch job's exact input
+    /// to another operator to cross-check the results
+    /// (`covenant-compute-coordinator::redundancy`, C5). One row per
+    /// mirror, written before the mirror offer goes out — the sampler's
+    /// durable marker, same restart contract as
+    /// `ComputeCanaryDispatched`: mirror buyers rotate per dispatch, so
+    /// only these rows can say which jobs are mirrors and which source
+    /// jobs were already sampled.
+    ComputeRedundancyDispatched {
+        source_job_id: Uuid,
+        mirror_job_id: Uuid,
+        operator_pubkey_b58: String,
+    },
+    /// The coordinator's cross-operator agreement verdict on one
+    /// redundancy sample participant (C5): the source operator and
+    /// every mirror operator whose receipt produced a comparable
+    /// `result_hash_hex` each get a row. `agreed: Some(false)` — this
+    /// operator's output hash sat outside the strict majority — is a
+    /// reputation fault; `Some(true)` is the informational counterpart;
+    /// `None` marks a sample that could not produce a verdict (too few
+    /// participating receipts, or no strict majority) and lands on the
+    /// source operator only, as the durable "sampled, inconclusive"
+    /// marker. Hash comparison is only meaningful for deterministic
+    /// workloads, which is why the sampler is opt-in per deployment.
+    ComputeRedundancyResult {
+        source_job_id: Uuid,
+        operator_pubkey_b58: String,
+        agreed: Option<bool>,
+        detail: String,
+    },
+    /// The buyer who paid for a completed federation compute job signed
+    /// a dispute of its output (`covenant-compute-coordinator`, C4).
+    /// No money moves — the escrow released against a verified receipt,
+    /// and clawback on a content judgment would make instant-dispute a
+    /// free-work strategy. The row is the durable reputation fault:
+    /// buyer-attested (unlike the coordinator-attested refund and
+    /// canary faults), which reputation surfaces as its own counter,
+    /// and it costs the disputer the job price they already paid.
+    ComputeJobDisputed {
+        job_id: Uuid,
+        operator_pubkey_b58: String,
+        buyer_pubkey_b58: String,
+        reason: String,
+    },
+    /// The buyer of a running lease session asked to end it
+    /// (`covenant-compute-coordinator`). The row is the durable record
+    /// of when the meter was told to stop, independent of when the
+    /// serving node got around to stopping it — the two differing is
+    /// exactly the kind of thing a buyer disputing a charge needs to be
+    /// able to show.
+    ComputeLeaseCloseRequested {
+        job_id: Uuid,
+        buyer_pubkey_b58: String,
+        operator_pubkey_b58: String,
+    },
+    /// A rail-verified bond post credited an operator's stake books
+    /// (`covenant-compute-coordinator`, C5 phase 2). `bond_id` is the
+    /// rail's canonical identifier for the payment — the idempotency
+    /// key that makes a replayed claim credit nothing.
+    ComputeBondPosted {
+        operator_pubkey_b58: String,
+        amount_micro_usdc: u64,
+        bond_id: String,
+    },
+    /// A coordinator-proven fault took stake from an operator's bond
+    /// (`covenant-compute-coordinator`). Only faults the coordinator
+    /// itself proved reach this — a canary wrong-answer or a redundancy
+    /// strict-majority minority; a buyer dispute never moves stake.
+    /// `amount_micro_usdc` is the actual take, the job price clamped by
+    /// the stake that was standing; the evidence is the fault's own
+    /// audit row, findable by `job_id`.
+    ComputeBondSlashed {
+        operator_pubkey_b58: String,
+        amount_micro_usdc: u64,
+        job_id: Uuid,
+        reason: String,
+    },
+    /// A matured unbond's refund left the stake books
+    /// (`covenant-compute-coordinator`). `paid_micro_usdc` is what the
+    /// transfer actually moved — a slash landing during maturation
+    /// shrinks it below the requested amount, down to a zero-payment
+    /// close; `tx_signature` is `None` when the backend records intent
+    /// without touching a chain.
+    ComputeBondRefunded {
+        operator_pubkey_b58: String,
+        unbond_id: Uuid,
+        requested_micro_usdc: u64,
+        paid_micro_usdc: u64,
+        tx_signature: Option<String>,
+    },
     /// Logged when the operator runs the memory-record receipt-correlation
     /// backfill. Both a dry run and an apply record `savepoint_name =
     /// Some("backfill_receipt_correlation")` — covenant-memory's fixed
@@ -658,6 +1005,32 @@ pub enum AuditKind {
         savepoint_name: Option<String>,
         dry_run: bool,
     },
+    /// The coordinator re-matched a still-offered federation compute
+    /// job to a new operator because its assignee never accepted
+    /// within the deployment's re-offer window
+    /// (`covenant-compute-coordinator::sweep`) — the routing heal for
+    /// an assignee that died holding an offer, and for a coordinator
+    /// restart that lost the in-memory delivery queues. Deliberately
+    /// not a reputation fault: an unaccepted offer can be the
+    /// coordinator's own doing (a restart drops every queue), so
+    /// nothing attaches to the operator the job moved away from — the
+    /// deadline sweep still faults whoever holds a job that dies
+    /// unserved. Sits between the job's `ComputeJobOffered` row and
+    /// whatever concludes it.
+    ComputeJobReoffered {
+        job_id: Uuid,
+        from_operator_pubkey_b58: String,
+        to_operator_pubkey_b58: String,
+    },
+    /// An admin closed the coordinator's bootstrap-subsidy kill-switch
+    /// at runtime (`covenant-compute-coordinator`, C6): from this row
+    /// on, every bootstrap-tagged hold is refused. The close is
+    /// journaled before it latches and replays on every boot, so a
+    /// restart whose environment still carries a subsidy policy cannot
+    /// silently re-arm it. `bootstrap_committed_micro_usdc` is the
+    /// subsidy spend outstanding at the moment the switch closed — the
+    /// number the operator was looking at when they pulled it.
+    ComputeSubsidyClosed { bootstrap_committed_micro_usdc: u64 },
 }
 
 #[async_trait]

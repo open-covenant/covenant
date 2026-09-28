@@ -1,0 +1,38 @@
+[package]
+name = "covenant-compute-buyer"
+version = "0.1.0"
+description = "Buyer-side client for the Covenant compute network: sign a job envelope, dispatch it to a coordinator, poll the receipt, and re-verify every operator commitment locally. Ships the covenant-compute-mcp stdio server so any MCP client can buy compute."
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+covenant-compute-protocol = { path = "../covenant-compute-protocol" }
+covenant-a2a = { path = "../covenant-a2a" }
+covenant-identity = { path = "../covenant-identity" }
+covenant-mcp = { path = "../covenant-mcp" }
+anyhow = { workspace = true }
+axum = { workspace = true, features = ["multipart"] }
+base64 = "0.22"
+bs58 = { workspace = true }
+futures = { workspace = true }
+subtle = { workspace = true }
+libc = { workspace = true }
+parking_lot = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+async-trait = { workspace = true }
+covenant-audit = { path = "../covenant-audit" }
+covenant-compute-coordinator = { path = "../covenant-compute-coordinator" }
+covenant-compute-node = { path = "../covenant-compute-node" }
+tempfile = { workspace = true }

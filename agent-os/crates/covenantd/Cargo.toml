@@ -33,6 +33,10 @@ covenant-settlement = { path = "../covenant-settlement" }
 # feature in a separate change.
 covenant-x402 = { path = "../covenant-x402" }
 covenant-hyre = { path = "../covenant-hyre" }
+# Buyer-side compute network client only — the node and coordinator
+# crates never enter the daemon build (solana-free either way, but the
+# daemon is a buyer, not an operator).
+covenant-compute-buyer = { path = "../covenant-compute-buyer" }
 covenant-metaplex = { path = "../covenant-metaplex" }
 covenant-sns = { path = "../covenant-sns" }
 covenant-acedata = { path = "../covenant-acedata" }
@@ -57,6 +61,10 @@ uuid = { workspace = true }
 covenant-audit = { path = "../covenant-audit" }
 covenant-hyre = { path = "../covenant-hyre" }
 covenant-identity = { path = "../covenant-identity" }
+# The compute.infer e2e test runs a real in-process coordinator + node.
+covenant-compute-coordinator = { path = "../covenant-compute-coordinator" }
+covenant-compute-node = { path = "../covenant-compute-node" }
+covenant-compute-protocol = { path = "../covenant-compute-protocol" }
 covenant-llm = { path = "../covenant-llm" }
 covenant-manifest = { path = "../covenant-manifest" }
 covenant-peer-auth = { path = "../covenant-peer-auth" }

@@ -1,5 +1,6 @@
 node_modules/
 .pnpm-store/
+.eyebrow/
 .next/
 .turbo/
 dist/
@@ -153,3 +154,5 @@ test-results/
 !.vscode/settings.json
 
 *.tsbuildinfo
+scratchpad/
+programs/*/target/

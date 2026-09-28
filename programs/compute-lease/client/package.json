@@ -1,0 +1,17 @@
+{
+  "name": "covenant-compute-lease-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Clients for the Covenant Compute lease meter: a devnet run through a MagicBlock Ephemeral Rollup, a local-validator run over the settlement paths, a devnet regression test that attacks the meter without the coordinator's key, and an independent re-read of a finished run from chain state.",
+  "scripts": {
+    "lease:er": "node lease-er.mjs",
+    "lease:local": "node lease-local.mjs",
+    "attack:tick": "node attack-unauthorized-tick.mjs",
+    "verify:run": "node verify-run.mjs"
+  },
+  "dependencies": {
+    "@solana/spl-token": "^0.4.9",
+    "@solana/web3.js": "^1.98.0"
+  }
+}

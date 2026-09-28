@@ -1,0 +1,69 @@
+## Example Render blueprint for the Compute coordinator.
+##
+## Deliberately NOT merged into the live render.yaml: standing up the
+## coordinator as a public service is an operator decision. When that
+## call is made, merge the service below (and the disk) into render.yaml
+## or apply this file as its own blueprint.
+##
+## The service needs a public URL (nodes and buyers connect from
+## anywhere) and a persistent disk for the journal + audit chain.
+## Secrets (admin token, payout funding keypair) are set in the Render
+## dashboard, never committed.
+
+services:
+  - type: web
+    name: compute-coordinator
+    runtime: docker
+    plan: starter
+    region: frankfurt
+    autoDeploy: false
+    rootDir: .
+    dockerfilePath: ./deploy/Dockerfile.compute-coordinator
+    dockerContext: .
+    buildFilter:
+      paths:
+        - agent-os/**
+        - deploy/**
+    healthCheckPath: /health
+    disk:
+      name: compute-coordinator-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      # Render routes public traffic to the port named here.
+      - key: PORT
+        value: "8720"
+      # Open mode admits unpaid organic jobs; a coordinator standing in
+      # the open should make spam cost money.
+      - key: COVENANT_COMPUTE_REQUIRE_PREFUNDED
+        value: "1"
+      # Volumetric backstops (per-IP limits belong to a fronting proxy).
+      - key: COVENANT_COMPUTE_MAX_OPERATORS
+        value: "500"
+      - key: COVENANT_COMPUTE_MAX_INFLIGHT_PER_BUYER
+        value: "16"
+      # Admin surface stays fail-closed until a token is set by hand.
+      - key: COVENANT_COMPUTE_ADMIN_TOKEN
+        sync: false
+      ## Inbound rail (devnet example; buyers' deposits are verified
+      ## against this endpoint):
+      # - key: COVENANT_COMPUTE_RAIL_RPC_URL
+      #   value: https://api.devnet.solana.com
+      # - key: COVENANT_COMPUTE_RAIL_DEPOSIT_OWNER
+      #   sync: false
+      # - key: COVENANT_COMPUTE_RAIL_MINT
+      #   sync: false
+      ## Sidecar payout backend (operator supplies the funding keypair
+      ## as a secret file; never bake keys into the image):
+      # - key: COVENANT_COMPUTE_PAYOUT_BACKEND
+      #   value: sidecar
+      # - key: COVENANT_COMPUTE_PAYOUT_SIGNER_BINARY
+      #   value: /usr/local/bin/covenant-x402-signer
+      # - key: COVENANT_X402_RPC_URL
+      #   value: https://api.devnet.solana.com
+      # - key: COVENANT_X402_FUNDING_KEYPAIR
+      #   sync: false
+      # - key: COVENANT_COMPUTE_PAYOUT_MINT
+      #   sync: false
+      # - key: COVENANT_COMPUTE_PAYOUT_CAP_MICRO_USDC
+      #   sync: false

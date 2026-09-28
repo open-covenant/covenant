@@ -1,0 +1,37 @@
+[package]
+name = "covenant-compute-lease"
+version = "0.1.0"
+description = "Per-second GPU lease metering on a MagicBlock Ephemeral Rollup, escrowed and settled in USDC on Solana."
+edition = "2021"
+license = "Apache-2.0"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "covenant_compute_lease"
+
+[features]
+default = ["ephemeral"]
+# The ER build: adds the delegate/commit/undelegate lifecycle. Off for a
+# plain L1 build.
+ephemeral = []
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+
+[dependencies]
+anchor-lang = "0.31.1"
+anchor-spl = "0.31.1"
+ephemeral-rollups-sdk = { version = "0.15.5", features = ["anchor-compat"] }
+
+[lints.rust]
+deprecated = "allow"
+unexpected_cfgs = "allow"
+
+[profile.release]
+overflow-checks = true
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true

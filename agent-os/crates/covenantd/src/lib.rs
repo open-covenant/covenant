@@ -8,6 +8,7 @@
 
 #![deny(unsafe_code)]
 
+pub mod compute;
 pub mod escrow;
 pub mod http;
 pub mod hyre;
@@ -257,11 +258,13 @@ pub fn sap_attest_config_from_values(
     enabled: Option<&str>,
     interval_secs: Option<&str>,
 ) -> SapAttestConfig {
-    let mut config = SapAttestConfig::default();
-    config.enabled = matches!(
-        enabled.map(str::trim),
-        Some("1") | Some("true") | Some("yes")
-    );
+    let mut config = SapAttestConfig {
+        enabled: matches!(
+            enabled.map(str::trim),
+            Some("1") | Some("true") | Some("yes")
+        ),
+        ..Default::default()
+    };
     if let Some(secs) = interval_secs
         .and_then(|s| s.trim().parse::<u64>().ok())
         .filter(|s| *s > 0)
@@ -1219,6 +1222,10 @@ pub struct Server {
     /// None when the operator has not enabled Hyre; in that state no
     /// `hyre.*` tool is advertised or callable.
     hyre: Option<Arc<hyre::HyreState>>,
+    /// Opt-in compute compute-network buyer profile: coordinator
+    /// endpoint + spend policy. None when the operator has not enabled
+    /// it; in that state no `compute.*` tool is advertised or callable.
+    compute: Option<Arc<compute::ComputeState>>,
     /// Opt-in Metaplex profile: config + a DAS read client. None when
     /// the operator has not enabled Metaplex; in that state no
     /// `metaplex.*` tool is advertised or callable.
@@ -1287,6 +1294,7 @@ impl Server {
             spend_authz: None,
             escrow: None,
             hyre: None,
+            compute: None,
             metaplex: None,
             sns: None,
             acedata: None,
@@ -1393,6 +1401,17 @@ impl Server {
     /// "not configured" error.
     pub fn with_hyre(mut self, state: hyre::HyreState) -> Self {
         self.hyre = Some(Arc::new(state));
+        self
+    }
+
+    /// Enable the compute compute-network buyer profile. Advertises
+    /// the `compute.infer`/`compute.run` dispatch tools and the
+    /// `compute.stream_start`/`compute.stream_poll` streaming pair; a
+    /// call dispatches a signed, budget-capped job to the configured
+    /// coordinator and returns the hash-verified output. Off by
+    /// default, mirroring [`Self::with_hyre`].
+    pub fn with_compute(mut self, state: compute::ComputeState) -> Self {
+        self.compute = Some(Arc::new(state));
         self
     }
 
@@ -2617,6 +2636,13 @@ impl Server {
                 self.revoke_peer(token_prefix, force, match_limit, peer)
                     .await
             }
+            Request::SetPeerBudget {
+                pubkey_b58,
+                credits_per_hour,
+            } => {
+                self.set_peer_budget(pubkey_b58, credits_per_hour, peer)
+                    .await
+            }
         }
     }
 
@@ -3608,6 +3634,114 @@ impl Server {
         }
     }
 
+    /// Stamp an hourly budget capacity onto one enrolled peer — the funding
+    /// half of partner onboarding ([`Self::enroll_peer`] grants capabilities
+    /// but seeds no budget, so an enrolled peer holding
+    /// `tool.call.compute.infer` can't spend until the operator funds it).
+    /// Gated to the operator identity like enrollment itself: this verb
+    /// moves spend authority, so no capability grant substitutes.
+    ///
+    /// The subject must be named by its **full** base58 pubkey and must be a
+    /// live registry entry. Prefix funding would let a short paste land
+    /// money on whichever peer happens to match, and funding an unknown or
+    /// revoked key would leave capacity floating on an identity nobody
+    /// holds a token for — both are refused. The capacity is absolute
+    /// ([`covenant_budget::BudgetLedger::set_capacity`] re-stamps the
+    /// bucket), so the same verb tops a pilot up mid-run or shrinks it to 0
+    /// as a spend kill-switch without revoking the token.
+    async fn set_peer_budget(
+        &self,
+        pubkey_b58: String,
+        credits_per_hour: u64,
+        peer: &AgentId,
+    ) -> Response {
+        let operator = self.identity.agent_id();
+        if peer.pubkey != operator.pubkey {
+            let event = AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: operator.clone(),
+                kind: AuditKind::PeerBudgetSetRejected {
+                    peer_display: peer.display.clone(),
+                    peer_pubkey_b58: bs58::encode(peer.pubkey).into_string(),
+                },
+            };
+            if let Err(e) = self.record_daemon_event_required(event).await {
+                return audit_failure_response(e);
+            }
+            return Response::Error {
+                message: "setting a peer budget requires the operator identity".into(),
+            };
+        }
+
+        let decoded = match bs58::decode(pubkey_b58.trim()).into_vec() {
+            Ok(bytes) if bytes.len() == 32 => {
+                let mut pubkey = [0u8; 32];
+                pubkey.copy_from_slice(&bytes);
+                pubkey
+            }
+            _ => {
+                return Response::Error {
+                    message: "peer budget: pubkey_b58 must be the full base58 subject key \
+                         from `peers enroll` / `peers list`"
+                        .into(),
+                };
+            }
+        };
+
+        let canonical_b58 = bs58::encode(decoded).into_string();
+        let subject = match self
+            .peers
+            .list_summaries(
+                2,
+                Some(&canonical_b58),
+                Some(covenant_peer_auth::PeerStatusFilter::Live),
+            )
+            .await
+        {
+            Ok((rows, _)) => rows
+                .into_iter()
+                .map(|s| s.agent_id)
+                .find(|id| id.pubkey == decoded),
+            Err(e) => {
+                return Response::Error {
+                    message: format!("peer budget: registry read: {e}"),
+                };
+            }
+        };
+        let Some(subject) = subject else {
+            return Response::Error {
+                message: format!(
+                    "peer budget: no live enrolled peer with subject key {canonical_b58}"
+                ),
+            };
+        };
+
+        if let Err(e) = self.budget.set_capacity(&subject, credits_per_hour).await {
+            return Response::Error {
+                message: format!("peer budget: set capacity: {e}"),
+            };
+        }
+
+        let event = AuditEvent {
+            id: Uuid::new_v4(),
+            timestamp_ms: epoch_ms(),
+            issuer: peer.clone(),
+            kind: AuditKind::PeerBudgetSet {
+                display: subject.display.clone(),
+                pubkey_b58: canonical_b58.clone(),
+                credits_per_hour,
+            },
+        };
+        self.record_peer_event(peer, event).await;
+
+        Response::PeerBudgetSet {
+            display: subject.display,
+            pubkey_b58: canonical_b58,
+            credits_per_hour,
+        }
+    }
+
     async fn purge_peers(&self, before_ms: u64, peer: &AgentId) -> Response {
         let required = vec!["peers.purge".to_string()];
         let check = self
@@ -4230,6 +4364,9 @@ impl Server {
         if let Some(state) = &self.hyre {
             tools.extend(covenant_hyre::hyre_specs(&state.catalog, &state.config));
         }
+        if let Some(state) = &self.compute {
+            tools.extend(compute::compute_specs(&state.config));
+        }
         if let Some(state) = &self.metaplex {
             tools.extend(covenant_metaplex::metaplex_specs(&state.config));
         }
@@ -4300,6 +4437,9 @@ impl Server {
         }
         if name.starts_with("hyre.") {
             return self.hyre_tool_call(name, arguments, peer).await;
+        }
+        if name.starts_with("compute.") {
+            return self.compute_tool_call(name, arguments, peer).await;
         }
         if name.starts_with("metaplex.") {
             return self.metaplex_tool_call(name, arguments).await;
@@ -4524,6 +4664,116 @@ impl Server {
             };
         };
         match tool.call(arguments).await {
+            Ok(r) => Response::ToolResult {
+                content: r.content,
+                is_error: r.is_error,
+            },
+            Err(e) => Response::Error {
+                message: format!("tool: {e}"),
+            },
+        }
+    }
+
+    /// Execute a compute-network tool on the caller's behalf. The
+    /// `tool.call.<name>` capability and scope are already enforced by
+    /// [`Self::call_tool`]. `compute.infer`, `compute.embed`,
+    /// `compute.run`, and the `compute.stream_start`/`compute.stream_poll`
+    /// pair bind the caller as payer, dispatch the signed job to the
+    /// configured coordinator, re-verify the operator's receipt locally, and land
+    /// the budget debit, settlement receipt, and audit row against the
+    /// agent that invoked the tool (for the streaming pair, inside the
+    /// drain task at completion). The rest of the surface acts for
+    /// the daemon's own buyer identity and spends nothing: receipts
+    /// and balance are reads, a deposit claim credits a payment that
+    /// already happened on-chain.
+    async fn compute_tool_call(
+        &self,
+        name: String,
+        arguments: serde_json::Value,
+        peer: &AgentId,
+    ) -> Response {
+        let Some(state) = self.compute.clone() else {
+            return Response::Error {
+                message: "compute provider is not enabled on this daemon.".into(),
+            };
+        };
+        let issuer = self.identity.agent_id();
+        let ctx = crate::x402::SettlementContext {
+            settlement: self.settlement.as_ref(),
+            audit: self.audit.as_ref(),
+            budget: self.budget.as_ref(),
+            issuer: &issuer,
+        };
+        let result = match name.as_str() {
+            compute::INFER_TOOL => {
+                compute::run_infer_call(&state, &ctx, &self.identity, peer, arguments).await
+            }
+            compute::EMBED_TOOL => {
+                compute::run_embed_call(&state, &ctx, &self.identity, peer, arguments).await
+            }
+            compute::TRANSCRIBE_TOOL => {
+                compute::run_transcribe_call(&state, &ctx, &self.identity, peer, arguments).await
+            }
+            compute::SPEAK_TOOL => {
+                compute::run_speak_call(&state, &ctx, &self.identity, peer, arguments).await
+            }
+            compute::RUN_TOOL => {
+                compute::run_batch_call(&state, &ctx, &self.identity, peer, arguments).await
+            }
+            compute::STREAM_START_TOOL => {
+                // The drain task outlives this call, so it gets owned
+                // handles instead of the borrowed context above.
+                let accounting = compute::StreamAccounting {
+                    settlement: self.settlement.clone(),
+                    audit: self.audit.clone(),
+                    budget: self.budget.clone(),
+                    issuer: issuer.clone(),
+                };
+                compute::run_stream_start_call(
+                    &state,
+                    accounting,
+                    self.identity.clone(),
+                    peer,
+                    arguments,
+                )
+                .await
+            }
+            compute::STREAM_POLL_TOOL => {
+                compute::run_stream_poll_call(&state, peer, arguments).await
+            }
+            compute::RECEIPTS_TOOL => {
+                compute::run_receipts_call(&state, &self.identity, arguments).await
+            }
+            compute::DEPOSIT_TOOL => {
+                compute::run_deposit_call(&state, &self.identity, arguments).await
+            }
+            compute::BALANCE_TOOL => compute::run_balance_call(&state, &self.identity).await,
+            compute::CAPACITY_TOOL => compute::run_capacity_call(&state).await,
+            compute::WITHDRAW_TOOL => {
+                compute::run_withdraw_call(&state, &self.identity, arguments).await
+            }
+            compute::WITHDRAWALS_TOOL => {
+                compute::run_withdrawals_call(&state, &self.identity).await
+            }
+            compute::DISPUTE_TOOL => {
+                compute::run_dispute_call(&state, &self.identity, arguments).await
+            }
+            compute::CANCEL_TOOL => {
+                compute::run_cancel_call(&state, &self.identity, arguments).await
+            }
+            compute::VERIFY_TOOL => {
+                compute::run_verify_call(&state, &self.identity, arguments).await
+            }
+            compute::OUTPUT_TOOL => {
+                compute::run_output_call(&state, &self.identity, arguments).await
+            }
+            _ => {
+                return Response::Error {
+                    message: format!("unknown compute tool: {name}"),
+                }
+            }
+        };
+        match result {
             Ok(r) => Response::ToolResult {
                 content: r.content,
                 is_error: r.is_error,
@@ -47136,6 +47386,3616 @@ required = {caps:?}
         );
     }
 
+    /// A payable operator payout address for compute fixtures — the
+    /// coordinator refuses a registration whose payout address doesn't
+    /// decode to a 32-byte key.
+    fn compute_payout_addr(seed: u8) -> String {
+        bs58::encode([seed; 32]).into_string()
+    }
+
+    /// The full buyer path against a REAL coordinator and node: the
+    /// daemon's compute.infer tool signs a job envelope, the in-process
+    /// coordinator (journal-durable, mock deposit rail) escrows +
+    /// matches it, a real covenant-compute-node::Node (echo executor)
+    /// admits, executes, and signs the receipt, and the daemon
+    /// re-verifies everything before debiting the caller — the same
+    /// loop a production buyer runs, minus real funds. compute.run
+    /// buys a batch job through the identical spend path. Then the
+    /// rest of the daemon's buyer surface runs against the same books:
+    /// compute.receipts (signed history read, re-verified locally),
+    /// compute.deposit (idempotent rail claim), compute.balance
+    /// (signed funds read + the deployment's top-up instructions).
+    #[tokio::test]
+    async fn compute_infer_dispatches_verifies_and_records_end_to_end() {
+        use covenant_compute_coordinator::{
+            router as compute_router, CoordinatorConfig, CoordinatorState, MockPayout, MockRail,
+            NoReputation, VerifiedDeposit,
+        };
+        use covenant_compute_node::{
+            Coordinator as _, EchoExecutor, HttpCoordinatorClient, InMemoryEarningsLedger, Node,
+            NodeConfig,
+        };
+        use covenant_compute_protocol::{
+            CapabilityProfile, FundingSource, HardwareClass, JobKind, PriceAsk, PriceUnit,
+            RegisterRequest,
+        };
+
+        let coordinator_home = tempfile::tempdir().unwrap();
+        let rail = Arc::new(MockRail::new());
+        let coordinator_state = CoordinatorState::with_journal(
+            LocalIdentity::generate("coordinator@test"),
+            CoordinatorConfig {
+                long_poll_timeout: std::time::Duration::from_secs(5),
+                default_funding_source: FundingSource::Organic,
+                ..CoordinatorConfig::default()
+            },
+            Arc::new(NoReputation),
+            Arc::new(MockPayout::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            &coordinator_home.path().join("journal.jsonl"),
+            Some(rail.clone()),
+        )
+        .await
+        .unwrap();
+        let coordinator_pubkey = coordinator_state.coordinator_pubkey_b58();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            axum::serve(listener, compute_router(coordinator_state))
+                .await
+                .unwrap();
+        });
+
+        let operator_identity = LocalIdentity::generate("operator@test");
+        let profile = CapabilityProfile {
+            operator: operator_identity.agent_id(),
+            hardware: HardwareClass::CpuOnly,
+            vram_gb: 0,
+            models_served: vec!["any".into()],
+            job_kinds: vec![JobKind::InferenceCall, JobKind::BatchJob],
+            price: PriceAsk {
+                unit: PriceUnit::PerJob,
+                micro_usdc: 10_000,
+            },
+            tee_capable: false,
+        };
+        let coordinator_client = Arc::new(HttpCoordinatorClient::with_config(
+            base_url.clone(),
+            std::time::Duration::from_secs(5),
+            2,
+        ));
+        let register =
+            RegisterRequest::sign(profile.clone(), compute_payout_addr(2), &operator_identity)
+                .unwrap();
+        coordinator_client.register(register).await.unwrap();
+
+        let node = Node::new(
+            operator_identity,
+            profile,
+            coordinator_client,
+            Arc::new(EchoExecutor),
+            Arc::new(InMemoryEarningsLedger::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            NodeConfig {
+                coordinator_pubkey_b58: coordinator_pubkey,
+                max_in_flight: 4,
+                preempt_grace: std::time::Duration::from_secs(1),
+                fee_bps: 0,
+            },
+        );
+        // Serve exactly two jobs (one inference, one batch), whenever
+        // they arrive on the long-poll.
+        let node_task = tokio::spawn(async move {
+            let mut outcomes = Vec::new();
+            while outcomes.len() < 2 {
+                match node.run_once().await {
+                    Ok(Some(outcome)) => outcomes.push(outcome),
+                    _ => tokio::time::sleep(std::time::Duration::from_millis(20)).await,
+                }
+            }
+            outcomes
+        });
+
+        let settlement = Arc::new(InMemorySettlement::new());
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let identity = Arc::new(LocalIdentity::generate("user@local"));
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            settlement.clone(),
+            audit.clone(),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            identity.clone(),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            budget.clone(),
+        )
+        .with_compute(compute::ComputeState::new(compute::ComputeConfig {
+            coordinator_url: base_url,
+            max_price_micro_usdc: 50_000,
+            default_deadline_ms: 30_000,
+            poll_interval: std::time::Duration::from_millis(50),
+            referral_code: None,
+            rpc_url: None,
+            max_active_streams_per_payer: 4,
+            clips_dir: std::env::temp_dir().join("covenant-compute-test-clips"),
+        }));
+
+        let peer = identity.agent_id();
+        budget.set_capacity(&peer, 1_000).await.unwrap();
+        for action in ["tool.call.compute.infer", "tool.call.compute.run"] {
+            s.op_respond(Request::GrantCapability {
+                action: action.into(),
+                scope: None,
+                expires_at: None,
+            })
+            .await;
+        }
+
+        // Both dispatch tools are advertised alongside the built-ins.
+        match s.op_respond(Request::ListTools).await {
+            Response::ToolList { tools } => {
+                assert!(tools.iter().any(|t| t.name == "compute.infer"));
+                assert!(tools.iter().any(|t| t.name == "compute.run"));
+            }
+            other => panic!("expected ToolList, got {other:?}"),
+        }
+
+        let resp = s
+            .op_respond(Request::CallTool {
+                name: "compute.infer".into(),
+                arguments: serde_json::json!({
+                    "prompt": "echo me back",
+                    "price_micro_usdc": 25_000
+                }),
+            })
+            .await;
+
+        let content = match resp {
+            Response::ToolResult { content, is_error } => {
+                assert!(!is_error, "expected success, got {content:?}");
+                content
+            }
+            other => panic!("expected ToolResult, got {other:?}"),
+        };
+        // Echo executor returns the job input verbatim, then the
+        // metadata block carries the receipt join keys.
+        assert_eq!(content[0], covenant_mcp::Content::text("echo me back"));
+        let meta = content
+            .iter()
+            .find_map(|c| match c {
+                covenant_mcp::Content::Json { value } => Some(value.clone()),
+                _ => None,
+            })
+            .expect("metadata block");
+        assert_eq!(meta["price_micro_usdc"], 25_000);
+        assert_eq!(meta["credits"], 3, "25000 micro-USDC ceils to 3 cents");
+
+        // compute.run: a command bought as a batch job on the same
+        // spend path. The echo executor reflects the command text back.
+        let resp = s
+            .op_respond(Request::CallTool {
+                name: "compute.run".into(),
+                arguments: serde_json::json!({
+                    "command": "wc -l corpus.txt",
+                    "price_micro_usdc": 10_000
+                }),
+            })
+            .await;
+        let run_content = match resp {
+            Response::ToolResult { content, is_error } => {
+                assert!(!is_error, "expected success, got {content:?}");
+                content
+            }
+            other => panic!("expected ToolResult, got {other:?}"),
+        };
+        assert_eq!(
+            run_content[0],
+            covenant_mcp::Content::text("wc -l corpus.txt")
+        );
+        let run_meta = run_content
+            .iter()
+            .find_map(|c| match c {
+                covenant_mcp::Content::Json { value } => Some(value.clone()),
+                _ => None,
+            })
+            .expect("metadata block");
+        assert_eq!(run_meta["price_micro_usdc"], 10_000);
+        assert_eq!(run_meta["credits"], 1, "10000 micro-USDC is 1 cent");
+
+        let node_outcomes = node_task.await.unwrap();
+        let served: std::collections::HashSet<String> =
+            node_outcomes.iter().map(|o| o.job_id.to_string()).collect();
+        for m in [&meta, &run_meta] {
+            assert!(
+                served.contains(m["job_id"].as_str().unwrap()),
+                "the node served exactly the daemon's jobs"
+            );
+        }
+
+        let receipts = settlement.recent(10).await.unwrap();
+        assert_eq!(receipts.len(), 2, "one settlement receipt per job");
+        for receipt in &receipts {
+            assert_eq!(receipt.resource, covenant_types::ResourceKind::Compute);
+            assert_eq!(receipt.payer, peer);
+        }
+        let credits: std::collections::HashSet<u64> =
+            receipts.iter().map(|r| r.credits_consumed).collect();
+        assert_eq!(credits, std::collections::HashSet::from([3, 1]));
+
+        let events = audit.recent(20).await.unwrap();
+        let dispatched: Vec<(Uuid, String, u64, Uuid)> = events
+            .iter()
+            .filter_map(|e| match &e.kind {
+                AuditKind::ComputeJobDispatched {
+                    job_id,
+                    status,
+                    price_micro_usdc,
+                    receipt_id,
+                    ..
+                } => Some((*job_id, status.clone(), *price_micro_usdc, *receipt_id)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(dispatched.len(), 2, "one audit row per job");
+        for (m, price) in [(&meta, 25_000u64), (&run_meta, 10_000u64)] {
+            let row = dispatched
+                .iter()
+                .find(|(job_id, ..)| job_id.to_string() == m["job_id"].as_str().unwrap())
+                .expect("ComputeJobDispatched audit event");
+            assert_eq!(row.1, "ok");
+            assert_eq!(row.2, price);
+            assert_eq!(row.3.to_string(), m["receipt_id"].as_str().unwrap());
+        }
+
+        assert_eq!(
+            budget.tokens_remaining(&peer).await.unwrap(),
+            996,
+            "3 + 1 credits debited from the caller"
+        );
+
+        // The rest of the buyer surface, against the same coordinator.
+        for action in [
+            "tool.call.compute.receipts",
+            "tool.call.compute.deposit",
+            "tool.call.compute.balance",
+            "tool.call.compute.capacity",
+            "tool.call.compute.dispute",
+        ] {
+            s.op_respond(Request::GrantCapability {
+                action: action.into(),
+                scope: None,
+                expires_at: None,
+            })
+            .await;
+        }
+        let call = |name: &str, arguments: serde_json::Value| {
+            let name = name.to_string();
+            let s = &s;
+            async move {
+                match s.op_respond(Request::CallTool { name, arguments }).await {
+                    Response::ToolResult { content, is_error } => {
+                        assert!(!is_error, "expected success, got {content:?}");
+                        content
+                            .iter()
+                            .find_map(|c| match c {
+                                covenant_mcp::Content::Json { value } => Some(value.clone()),
+                                _ => None,
+                            })
+                            .expect("json content")
+                    }
+                    other => panic!("expected ToolResult, got {other:?}"),
+                }
+            }
+        };
+
+        // compute.receipts: both jobs just bought, re-verified locally.
+        let history = call("compute.receipts", serde_json::json!({})).await;
+        assert_eq!(history["count"], 2);
+        assert_eq!(history["receipts_failing_verification"], 0);
+        let infer_row = history["jobs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["job_id"] == meta["job_id"])
+            .expect("the inference job's history row");
+        assert_eq!(infer_row["receipt_verified"], true);
+        assert_eq!(infer_row["price_micro_usdc"], 25_000);
+
+        // compute.deposit: claim a rail-confirmed payment, idempotently.
+        rail.preload(VerifiedDeposit {
+            deposit_id: "dep-sig-1".into(),
+            buyer_pubkey_b58: identity.agent_id().pubkey_base58(),
+            amount_micro_usdc: 90_000,
+        });
+        let claimed = call(
+            "compute.deposit",
+            serde_json::json!({"deposit_id": "dep-sig-1"}),
+        )
+        .await;
+        assert_eq!(claimed["credited"], true);
+        assert_eq!(claimed["amount_micro_usdc"], 90_000);
+        let reclaimed = call(
+            "compute.deposit",
+            serde_json::json!({"deposit_id": "dep-sig-1"}),
+        )
+        .await;
+        assert_eq!(
+            reclaimed["credited"], false,
+            "re-claim never double-credits"
+        );
+
+        // compute.balance: the signed funds read plus top-up info —
+        // deposited minus both jobs' organic holds.
+        let funds = call("compute.balance", serde_json::json!({})).await;
+        assert_eq!(funds["balance"]["deposited_micro_usdc"], 90_000);
+        assert_eq!(funds["balance"]["charged_micro_usdc"], 35_000);
+        assert_eq!(funds["balance"]["available_micro_usdc"], 55_000);
+        assert_eq!(funds["deposit_info"]["configured"], true);
+
+        // compute.capacity: the live directory the daemon's agents
+        // check before spending — the node this test bought from is
+        // its one advertised row per served kind, ask range included.
+        let market = call("compute.capacity", serde_json::json!({})).await;
+        assert_eq!(market["registered_operators"], 1);
+        assert_eq!(market["matchable_operators"], 1);
+        assert_eq!(market["entries"][0]["kind"], "inference_call");
+        assert_eq!(market["entries"][0]["model"], "any");
+        assert_eq!(market["entries"][0]["min_ask_micro_usdc"], 10_000);
+        assert_eq!(market["entries"][1]["kind"], "batch_job");
+
+        // compute.dispute: the daemon's signed complaint about the job
+        // it just bought lands exactly once; the money stays released.
+        let disputed = call(
+            "compute.dispute",
+            serde_json::json!({
+                "job_id": meta["job_id"],
+                "reason": "echoed the prompt instead of answering it"
+            }),
+        )
+        .await;
+        assert_eq!(disputed["disputed"], true);
+        assert_eq!(disputed["job_id"], meta["job_id"]);
+        match s
+            .op_respond(Request::CallTool {
+                name: "compute.dispute".into(),
+                arguments: serde_json::json!({
+                    "job_id": meta["job_id"],
+                    "reason": "second complaint"
+                }),
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(message.contains("already disputed"), "got: {message}");
+            }
+            other => panic!("expected Error for a re-dispute, got {other:?}"),
+        }
+        let history = call("compute.receipts", serde_json::json!({})).await;
+        assert!(
+            history["jobs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|row| row["receipt_verified"] == true),
+            "the dispute annotates the books without unwinding any receipt"
+        );
+    }
+
+    /// The agent-native proof for text-to-speech: a `covenantd` agent
+    /// calls `compute.speak`, the job matches a speech operator, executes,
+    /// and the verified receipt settles on the same spend path every other
+    /// buy uses — and the daemon hands back the clip written to disk, never
+    /// the base64 audio. The synthesis backend is mocked (the real
+    /// `SayExecutor` is proven in the node crate); everything from the
+    /// dispatch to the receipt to the clip render is real.
+    #[tokio::test]
+    async fn compute_speak_writes_a_clip_and_settles_end_to_end() {
+        use covenant_compute_coordinator::{
+            router as compute_router, CoordinatorConfig, CoordinatorState, MockPayout, MockRail,
+            NoReputation,
+        };
+        use covenant_compute_node::{
+            ChunkSink, Coordinator as _, ExecutionOutcome, ExecutorError, HttpCoordinatorClient,
+            InMemoryEarningsLedger, JobExecutor, Node, NodeConfig,
+        };
+        use covenant_compute_protocol::{
+            CapabilityProfile, FundingSource, HardwareClass, JobEnvelopePayload, JobKind, PriceAsk,
+            PriceUnit, RegisterRequest,
+        };
+
+        // A speech operator with no real synthesis backend: it returns a
+        // fixed WAV stub so the whole buy/verify/settle/render path runs
+        // hermetically, off any audio toolchain.
+        struct MockSpeechExecutor;
+        #[async_trait::async_trait]
+        impl JobExecutor for MockSpeechExecutor {
+            async fn execute(
+                &self,
+                _job: &JobEnvelopePayload,
+                _deadline: std::time::Duration,
+            ) -> Result<ExecutionOutcome, ExecutorError> {
+                Ok(ExecutionOutcome {
+                    output: vec![covenant_compute_protocol::speech_output(
+                        "say-1",
+                        "UklGRiQAAABXQVZF",
+                        "wav",
+                        Some(22_050),
+                    )],
+                    wall_ms: 3,
+                    tokens_in: None,
+                    tokens_out: None,
+                    finish_reason: None,
+                })
+            }
+            async fn execute_streaming(
+                &self,
+                job: &JobEnvelopePayload,
+                deadline: std::time::Duration,
+                _sink: ChunkSink,
+            ) -> Result<ExecutionOutcome, ExecutorError> {
+                self.execute(job, deadline).await
+            }
+        }
+
+        let coordinator_home = tempfile::tempdir().unwrap();
+        let rail = Arc::new(MockRail::new());
+        let coordinator_state = CoordinatorState::with_journal(
+            LocalIdentity::generate("coordinator@test"),
+            CoordinatorConfig {
+                long_poll_timeout: std::time::Duration::from_secs(5),
+                default_funding_source: FundingSource::Organic,
+                ..CoordinatorConfig::default()
+            },
+            Arc::new(NoReputation),
+            Arc::new(MockPayout::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            &coordinator_home.path().join("journal.jsonl"),
+            Some(rail.clone()),
+        )
+        .await
+        .unwrap();
+        let coordinator_pubkey = coordinator_state.coordinator_pubkey_b58();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            axum::serve(listener, compute_router(coordinator_state))
+                .await
+                .unwrap();
+        });
+
+        let operator_identity = LocalIdentity::generate("operator@test");
+        let profile = CapabilityProfile {
+            operator: operator_identity.agent_id(),
+            hardware: HardwareClass::CpuOnly,
+            vram_gb: 0,
+            models_served: vec!["say-1".into()],
+            job_kinds: vec![JobKind::SpeechSynthesis],
+            price: PriceAsk {
+                unit: PriceUnit::PerJob,
+                micro_usdc: 10_000,
+            },
+            tee_capable: false,
+        };
+        let coordinator_client = Arc::new(HttpCoordinatorClient::with_config(
+            base_url.clone(),
+            std::time::Duration::from_secs(5),
+            2,
+        ));
+        let register =
+            RegisterRequest::sign(profile.clone(), compute_payout_addr(3), &operator_identity)
+                .unwrap();
+        coordinator_client.register(register).await.unwrap();
+
+        let node = Node::new(
+            operator_identity,
+            profile,
+            coordinator_client,
+            Arc::new(MockSpeechExecutor),
+            Arc::new(InMemoryEarningsLedger::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            NodeConfig {
+                coordinator_pubkey_b58: coordinator_pubkey,
+                max_in_flight: 4,
+                preempt_grace: std::time::Duration::from_secs(1),
+                fee_bps: 0,
+            },
+        );
+        let node_task = tokio::spawn(async move {
+            loop {
+                match node.run_once().await {
+                    Ok(Some(outcome)) => break outcome,
+                    _ => tokio::time::sleep(std::time::Duration::from_millis(20)).await,
+                }
+            }
+        });
+
+        let clips_dir = tempfile::tempdir().unwrap();
+        let settlement = Arc::new(InMemorySettlement::new());
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let identity = Arc::new(LocalIdentity::generate("user@local"));
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            settlement.clone(),
+            audit.clone(),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            identity.clone(),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            budget.clone(),
+        )
+        .with_compute(compute::ComputeState::new(compute::ComputeConfig {
+            coordinator_url: base_url,
+            max_price_micro_usdc: 50_000,
+            default_deadline_ms: 30_000,
+            poll_interval: std::time::Duration::from_millis(50),
+            referral_code: None,
+            rpc_url: None,
+            max_active_streams_per_payer: 4,
+            clips_dir: clips_dir.path().to_path_buf(),
+        }));
+
+        let peer = identity.agent_id();
+        budget.set_capacity(&peer, 1_000).await.unwrap();
+        s.op_respond(Request::GrantCapability {
+            action: "tool.call.compute.speak".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        let resp = s
+            .op_respond(Request::CallTool {
+                name: "compute.speak".into(),
+                arguments: serde_json::json!({
+                    "text": "covenant compute speaks",
+                    "price_micro_usdc": 25_000
+                }),
+            })
+            .await;
+        let content = match resp {
+            Response::ToolResult { content, is_error } => {
+                assert!(!is_error, "expected success, got {content:?}");
+                content
+            }
+            other => panic!("expected ToolResult, got {other:?}"),
+        };
+
+        // The clip is on disk and the result names it — never the base64.
+        let clip = content
+            .iter()
+            .find_map(|c| match c {
+                covenant_mcp::Content::Json { value } if value.get("saved").is_some() => {
+                    Some(value.clone())
+                }
+                _ => None,
+            })
+            .expect("a saved-clip block");
+        assert_eq!(clip["saved"], true);
+        assert_eq!(clip["format"], "wav");
+        for c in &content {
+            if let covenant_mcp::Content::Json { value } = c {
+                assert!(
+                    value.get("audio_base64").is_none(),
+                    "base64 audio must never ride back to the agent"
+                );
+            }
+        }
+        let path = clip["path"].as_str().expect("a clip path");
+        let bytes = std::fs::read(path).expect("the clip was written to disk");
+        assert!(!bytes.is_empty(), "the clip carries the operator's audio");
+
+        // The receipt settled on the compute resource, exactly once.
+        let meta = content
+            .iter()
+            .find_map(|c| match c {
+                covenant_mcp::Content::Json { value } if value.get("receipt_id").is_some() => {
+                    Some(value.clone())
+                }
+                _ => None,
+            })
+            .expect("the receipt metadata block");
+        assert_eq!(meta["price_micro_usdc"], 25_000);
+        let outcome = node_task.await.unwrap();
+        assert_eq!(
+            outcome.job_id.to_string(),
+            meta["job_id"].as_str().unwrap(),
+            "the node served exactly the daemon's speak job"
+        );
+        let receipts = settlement.recent(10).await.unwrap();
+        assert_eq!(
+            receipts.len(),
+            1,
+            "one settlement receipt for the speak job"
+        );
+        assert_eq!(receipts[0].resource, covenant_types::ResourceKind::Compute);
+
+        // Re-reading the same job through compute.output hands back the clip
+        // on disk, never the base64 — the buy and the re-read stay
+        // consistent, so an agent that lost the first answer recovers it
+        // without a wall of audio landing in its context.
+        s.op_respond(Request::GrantCapability {
+            action: "tool.call.compute.output".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        let reread = s
+            .op_respond(Request::CallTool {
+                name: "compute.output".into(),
+                arguments: serde_json::json!({ "job_id": outcome.job_id }),
+            })
+            .await;
+        let view = match reread {
+            Response::ToolResult { content, is_error } => {
+                assert!(!is_error, "re-read failed: {content:?}");
+                match &content[0] {
+                    covenant_mcp::Content::Json { value } => value.clone(),
+                    other => panic!("expected a json view, got {other:?}"),
+                }
+            }
+            other => panic!("expected ToolResult, got {other:?}"),
+        };
+        let dump = view.to_string();
+        assert!(
+            dump.contains("\"saved\":true"),
+            "the re-read output should name a saved clip on disk: {dump}"
+        );
+        assert!(
+            !dump.contains("audio_base64"),
+            "a re-read must not inline the operator's base64 audio into the agent's context"
+        );
+        assert!(
+            !dump.contains("UklGRiQAAABXQVZF"),
+            "the operator's base64 payload must not ride back on a re-read"
+        );
+    }
+
+    /// An idempotency-keyed purchase is exactly-once across every
+    /// retry shape an agent produces: a same-life repeat, a repeat
+    /// after a daemon restart (fresh Server, same durable purchase
+    /// book), and a crash mid-purchase (an envelope journaled but
+    /// never concluded, driven to conclusion by the retry). One key,
+    /// one job, one debit — however many times it is asked.
+    #[tokio::test]
+    async fn compute_infer_with_an_idempotency_key_buys_once_across_restart() {
+        use covenant_compute_buyer::{
+            sign_envelope, BuyerConfig, JobRequest, PurchaseBook, PurchaseEntry,
+        };
+        use covenant_compute_coordinator::{
+            router as compute_router, CoordinatorConfig, CoordinatorState, MockPayout, MockRail,
+            NoReputation,
+        };
+        use covenant_compute_node::{
+            Coordinator as _, EchoExecutor, HttpCoordinatorClient, InMemoryEarningsLedger, Node,
+            NodeConfig,
+        };
+        use covenant_compute_protocol::{
+            CapabilityProfile, FundingSource, HardwareClass, JobKind, PriceAsk, PriceUnit,
+            RegisterRequest,
+        };
+
+        let coordinator_home = tempfile::tempdir().unwrap();
+        let coordinator_state = CoordinatorState::with_journal(
+            LocalIdentity::generate("coordinator@test"),
+            CoordinatorConfig {
+                long_poll_timeout: std::time::Duration::from_secs(5),
+                default_funding_source: FundingSource::Organic,
+                ..CoordinatorConfig::default()
+            },
+            Arc::new(NoReputation),
+            Arc::new(MockPayout::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            &coordinator_home.path().join("journal.jsonl"),
+            Some(Arc::new(MockRail::new())),
+        )
+        .await
+        .unwrap();
+        let coordinator_pubkey = coordinator_state.coordinator_pubkey_b58();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            axum::serve(listener, compute_router(coordinator_state))
+                .await
+                .unwrap();
+        });
+
+        let operator_identity = LocalIdentity::generate("operator@test");
+        let profile = CapabilityProfile {
+            operator: operator_identity.agent_id(),
+            hardware: HardwareClass::CpuOnly,
+            vram_gb: 0,
+            models_served: vec!["any".into()],
+            job_kinds: vec![JobKind::InferenceCall],
+            price: PriceAsk {
+                unit: PriceUnit::PerJob,
+                micro_usdc: 10_000,
+            },
+            tee_capable: false,
+        };
+        let coordinator_client = Arc::new(HttpCoordinatorClient::with_config(
+            base_url.clone(),
+            std::time::Duration::from_secs(5),
+            2,
+        ));
+        coordinator_client
+            .register(
+                RegisterRequest::sign(profile.clone(), compute_payout_addr(2), &operator_identity)
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let node = Node::new(
+            operator_identity,
+            profile,
+            coordinator_client,
+            Arc::new(EchoExecutor),
+            Arc::new(InMemoryEarningsLedger::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            NodeConfig {
+                coordinator_pubkey_b58: coordinator_pubkey,
+                max_in_flight: 4,
+                preempt_grace: std::time::Duration::from_secs(1),
+                fee_bps: 0,
+            },
+        );
+        // Two distinct purchases cross this coordinator (the keyed one
+        // and the crash-recovered one); every other call is a replay
+        // and must produce no third job for the node to serve.
+        let node_task = tokio::spawn(async move {
+            let mut outcomes = Vec::new();
+            while outcomes.len() < 2 {
+                match node.run_once().await {
+                    Ok(Some(outcome)) => outcomes.push(outcome),
+                    _ => tokio::time::sleep(std::time::Duration::from_millis(20)).await,
+                }
+            }
+            outcomes
+        });
+
+        // The daemon's persistent pieces: identity and the purchase
+        // book survive the "restart"; the accounting stores are shared
+        // arcs so the debit trail is visible across both lives.
+        let daemon_home = tempfile::tempdir().unwrap();
+        let purchases_path = daemon_home.path().join("compute-purchases.jsonl");
+        let settlement = Arc::new(InMemorySettlement::new());
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let identity = Arc::new(LocalIdentity::generate("user@local"));
+        let compute_config = || compute::ComputeConfig {
+            coordinator_url: base_url.clone(),
+            max_price_micro_usdc: 50_000,
+            default_deadline_ms: 30_000,
+            poll_interval: std::time::Duration::from_millis(50),
+            referral_code: None,
+            rpc_url: None,
+            max_active_streams_per_payer: 4,
+            clips_dir: std::env::temp_dir().join("covenant-compute-test-clips"),
+        };
+        let boot_server = |compute_state: compute::ComputeState| {
+            Server::new(
+                Arc::new(Router::from_cards(vec![])),
+                Arc::new(MockRunner::new("")),
+                Arc::new(InMemoryStore::new()),
+                settlement.clone(),
+                audit.clone(),
+                Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+                Arc::new(covenant_llm::MockEmbedder::new(64)),
+                identity.clone(),
+                Arc::new(IgnoreSet::default()),
+                Arc::new(ToolRegistry::default()),
+                Arc::new(covenant_a2a::InMemoryMailbox::new()),
+                Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+                budget.clone(),
+            )
+            .with_compute(compute_state)
+        };
+        let peer = identity.agent_id();
+        budget.set_capacity(&peer, 1_000).await.unwrap();
+
+        let infer = |s: &Server, key: &str| {
+            let arguments = serde_json::json!({
+                "prompt": "buy once",
+                "price_micro_usdc": 25_000,
+                "idempotency_key": key,
+            });
+            let s = s.clone();
+            async move {
+                match s
+                    .op_respond(Request::CallTool {
+                        name: "compute.infer".into(),
+                        arguments,
+                    })
+                    .await
+                {
+                    Response::ToolResult { content, is_error } => {
+                        assert!(!is_error, "expected success, got {content:?}");
+                        content
+                            .iter()
+                            .find_map(|c| match c {
+                                covenant_mcp::Content::Json { value } => Some(value.clone()),
+                                _ => None,
+                            })
+                            .expect("metadata block")
+                    }
+                    other => panic!("expected ToolResult, got {other:?}"),
+                }
+            }
+        };
+
+        // Life 1: the purchase, then a same-life retry of it.
+        let s1 = boot_server(
+            compute::ComputeState::new(compute_config())
+                .with_purchase_book(Arc::new(PurchaseBook::open(&purchases_path).unwrap())),
+        );
+        s1.op_respond(Request::GrantCapability {
+            action: "tool.call.compute.infer".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        let first = infer(&s1, "pilot-batch-7").await;
+        let retry = infer(&s1, "pilot-batch-7").await;
+        assert_eq!(first["job_id"], retry["job_id"], "one key, one job");
+        assert_eq!(
+            first["receipt_id"], retry["receipt_id"],
+            "the replay serves the recorded purchase"
+        );
+
+        // Life 2: a fresh daemon on the same home retries the key —
+        // and also finds a purchase an earlier life journaled but
+        // never concluded, which the retry drives to a real job.
+        let crashed_key = format!("{}:crashed-mid-purchase", peer.pubkey_base58());
+        let crashed_envelope = sign_envelope(
+            &BuyerConfig {
+                coordinator_url: base_url.clone(),
+                poll_interval: std::time::Duration::from_millis(50),
+                referral_code: None,
+                rpc_url: None,
+            },
+            &identity,
+            JobRequest {
+                kind: JobKind::InferenceCall,
+                model: None,
+                gpu_class: None,
+                min_vram_gb: None,
+                min_reputation_bps: None,
+                input: vec![covenant_mcp::Content::text("buy once")],
+                price_micro_usdc: 25_000,
+                deadline_ms: 30_000,
+            },
+        )
+        .unwrap();
+        {
+            let book = PurchaseBook::open(&purchases_path).unwrap();
+            book.record(PurchaseEntry {
+                key: crashed_key.clone(),
+                envelope: crashed_envelope,
+                opened_at_ms: 1,
+                receipt_id: None,
+                voided: false,
+            })
+            .unwrap();
+        }
+        let s2 = boot_server(
+            compute::ComputeState::new(compute_config())
+                .with_purchase_book(Arc::new(PurchaseBook::open(&purchases_path).unwrap())),
+        );
+        s2.op_respond(Request::GrantCapability {
+            action: "tool.call.compute.infer".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        let after_restart = infer(&s2, "pilot-batch-7").await;
+        assert_eq!(
+            first["job_id"], after_restart["job_id"],
+            "the restart kept the key bound to the same job"
+        );
+        assert_eq!(first["receipt_id"], after_restart["receipt_id"]);
+
+        // A reused key names one purchase: an explicit argument that
+        // contradicts it refuses loudly — naming the argument — instead
+        // of silently answering the old job. The entry survives the
+        // refusal untouched.
+        let conflicted = |arguments: serde_json::Value| {
+            let s = s2.clone();
+            async move {
+                match s
+                    .op_respond(Request::CallTool {
+                        name: "compute.infer".into(),
+                        arguments,
+                    })
+                    .await
+                {
+                    Response::Error { message } => message,
+                    other => panic!("expected the conflict refusal, got {other:?}"),
+                }
+            }
+        };
+        let message = conflicted(serde_json::json!({
+            "prompt": "a NEW question under an old key",
+            "price_micro_usdc": 25_000,
+            "idempotency_key": "pilot-batch-7",
+        }))
+        .await;
+        assert!(message.contains("different input"), "got: {message}");
+        assert!(message.contains("pilot-batch-7"), "got: {message}");
+        let message = conflicted(serde_json::json!({
+            "prompt": "buy once",
+            "price_micro_usdc": 26_000,
+            "idempotency_key": "pilot-batch-7",
+        }))
+        .await;
+        assert!(
+            message.contains("different price_micro_usdc"),
+            "got: {message}"
+        );
+        let message = conflicted(serde_json::json!({
+            "prompt": "buy once",
+            "idempotency_key": "",
+        }))
+        .await;
+        assert!(message.contains("1..=128 bytes"), "got: {message}");
+        // Omitted arguments inherit the purchase of record — still the
+        // same replay, no conflict.
+        let inherited = {
+            let s = s2.clone();
+            match s
+                .op_respond(Request::CallTool {
+                    name: "compute.infer".into(),
+                    arguments: serde_json::json!({
+                        "prompt": "buy once",
+                        "idempotency_key": "pilot-batch-7",
+                    }),
+                })
+                .await
+            {
+                Response::ToolResult { content, is_error } => {
+                    assert!(!is_error, "expected the replay, got {content:?}");
+                    content
+                        .iter()
+                        .find_map(|c| match c {
+                            covenant_mcp::Content::Json { value } => Some(value.clone()),
+                            _ => None,
+                        })
+                        .expect("metadata block")
+                }
+                other => panic!("expected ToolResult, got {other:?}"),
+            }
+        };
+        assert_eq!(first["job_id"], inherited["job_id"]);
+
+        let recovered = infer(&s2, "crashed-mid-purchase").await;
+        assert_ne!(
+            recovered["job_id"], first["job_id"],
+            "the crashed purchase is its own job, driven to conclusion"
+        );
+
+        // Money moved exactly once per purchase: two settlement rows,
+        // two debits, and the node served exactly two jobs.
+        let receipts = settlement.recent(10).await.unwrap();
+        assert_eq!(receipts.len(), 2, "one settlement receipt per purchase");
+        assert_eq!(
+            budget.tokens_remaining(&peer).await.unwrap(),
+            1_000 - 3 - 3,
+            "3 credits per 25000 micro-USDC purchase, nothing for the replays"
+        );
+        let served: std::collections::HashSet<String> = node_task
+            .await
+            .unwrap()
+            .iter()
+            .map(|o| o.job_id.to_string())
+            .collect();
+        assert_eq!(served.len(), 2);
+        for m in [&first, &recovered] {
+            assert!(served.contains(m["job_id"].as_str().unwrap()));
+        }
+    }
+
+    /// The demand-side escape hatch through the daemon: a keyed
+    /// purchase polls to its own deadline against a market with
+    /// capacity but no service — the one operator registered and never
+    /// polls — so nothing concludes and the key stays bound.
+    /// `compute.cancel` then withdraws the job: refunded on the
+    /// coordinator's books, the purchase entry voided so the key may
+    /// honestly buy again, and a retry of the cancel answers the same
+    /// fact. A daemon pointed at an unreachable coordinator refuses
+    /// the cancel loudly instead of pretending.
+    #[tokio::test]
+    async fn compute_cancel_withdraws_an_unserved_purchase_and_frees_its_key() {
+        use covenant_compute_buyer::PurchaseBook;
+        use covenant_compute_coordinator::{
+            router as compute_router, CoordinatorConfig, CoordinatorState, MockPayout, MockRail,
+            NoReputation,
+        };
+        use covenant_compute_node::{Coordinator as _, HttpCoordinatorClient};
+        use covenant_compute_protocol::{
+            CapabilityProfile, EscrowStatus, FederationEscrow as _, FundingSource, HardwareClass,
+            JobKind, PriceAsk, PriceUnit, RegisterRequest,
+        };
+
+        let coordinator_home = tempfile::tempdir().unwrap();
+        let coordinator_state = CoordinatorState::with_journal(
+            LocalIdentity::generate("coordinator@test"),
+            CoordinatorConfig {
+                long_poll_timeout: std::time::Duration::from_secs(5),
+                default_funding_source: FundingSource::Organic,
+                ..CoordinatorConfig::default()
+            },
+            Arc::new(NoReputation),
+            Arc::new(MockPayout::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            &coordinator_home.path().join("journal.jsonl"),
+            Some(Arc::new(MockRail::new())),
+        )
+        .await
+        .unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let serve_state = coordinator_state.clone();
+        tokio::spawn(async move {
+            axum::serve(listener, compute_router(serve_state))
+                .await
+                .unwrap();
+        });
+
+        // Capacity without service: the cheapest (only) operator wins
+        // the match and never polls its queue.
+        let idle_operator = LocalIdentity::generate("idle-operator@test");
+        let profile = CapabilityProfile {
+            operator: idle_operator.agent_id(),
+            hardware: HardwareClass::CpuOnly,
+            vram_gb: 0,
+            models_served: vec!["any".into()],
+            job_kinds: vec![JobKind::InferenceCall],
+            price: PriceAsk {
+                unit: PriceUnit::PerJob,
+                micro_usdc: 10_000,
+            },
+            tee_capable: false,
+        };
+        HttpCoordinatorClient::with_config(base_url.clone(), std::time::Duration::from_secs(5), 2)
+            .register(
+                RegisterRequest::sign(profile, compute_payout_addr(8), &idle_operator).unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let daemon_home = tempfile::tempdir().unwrap();
+        let purchases_path = daemon_home.path().join("compute-purchases.jsonl");
+        let settlement = Arc::new(InMemorySettlement::new());
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let identity = Arc::new(LocalIdentity::generate("user@local"));
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            settlement.clone(),
+            audit.clone(),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            identity.clone(),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            budget.clone(),
+        )
+        .with_compute(
+            compute::ComputeState::new(compute::ComputeConfig {
+                coordinator_url: base_url.clone(),
+                max_price_micro_usdc: 50_000,
+                default_deadline_ms: 30_000,
+                poll_interval: std::time::Duration::from_millis(50),
+                referral_code: None,
+                rpc_url: None,
+                max_active_streams_per_payer: 4,
+                clips_dir: std::env::temp_dir().join("covenant-compute-test-clips"),
+            })
+            .with_purchase_book(Arc::new(PurchaseBook::open(&purchases_path).unwrap())),
+        );
+        let peer = identity.agent_id();
+        budget.set_capacity(&peer, 1_000).await.unwrap();
+        for action in ["tool.call.compute.infer", "tool.call.compute.cancel"] {
+            s.op_respond(Request::GrantCapability {
+                action: action.into(),
+                scope: None,
+                expires_at: None,
+            })
+            .await;
+        }
+
+        // The purchase that will never be served: the receipt poll
+        // gives up at the job's own deadline and the key stays bound —
+        // nothing concluded, so nothing may free it yet.
+        match s
+            .op_respond(Request::CallTool {
+                name: "compute.infer".into(),
+                arguments: serde_json::json!({
+                    "prompt": "work nobody will do",
+                    "price_micro_usdc": 25_000,
+                    "deadline_ms": 1_000,
+                    "idempotency_key": "stuck-batch",
+                }),
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(message.contains("before its deadline"), "got: {message}");
+            }
+            other => panic!("expected the unserved purchase to error, got {other:?}"),
+        }
+        let scoped_key = format!("{}:stuck-batch", peer.pubkey_base58());
+        assert!(
+            PurchaseBook::open(&purchases_path)
+                .unwrap()
+                .lookup(&scoped_key)
+                .is_some(),
+            "an unconcluded purchase stays bound to its key"
+        );
+        let (job_id, record) = coordinator_state
+            .jobs()
+            .by_buyer(&peer.pubkey_base58())
+            .into_iter()
+            .next()
+            .expect("the purchase reached the coordinator");
+        assert_eq!(
+            record.phase,
+            covenant_compute_coordinator::JobPhase::Offered
+        );
+
+        // The cancel: refund on the books, key freed in the home.
+        let cancelled = match s
+            .op_respond(Request::CallTool {
+                name: "compute.cancel".into(),
+                arguments: serde_json::json!({ "job_id": job_id }),
+            })
+            .await
+        {
+            Response::ToolResult { content, is_error } => {
+                assert!(!is_error, "expected success, got {content:?}");
+                content
+                    .iter()
+                    .find_map(|c| match c {
+                        covenant_mcp::Content::Json { value } => Some(value.clone()),
+                        _ => None,
+                    })
+                    .expect("json content")
+            }
+            other => panic!("expected ToolResult, got {other:?}"),
+        };
+        assert_eq!(cancelled["status"], "refunded");
+        assert_eq!(cancelled["refunded_micro_usdc"], 25_000);
+        assert_eq!(cancelled["purchase_key_freed"], true);
+        assert_eq!(
+            coordinator_state.escrow().status(job_id).await.unwrap(),
+            EscrowStatus::Refunded
+        );
+        assert!(
+            PurchaseBook::open(&purchases_path)
+                .unwrap()
+                .lookup(&scoped_key)
+                .is_none(),
+            "the freed key may honestly buy again"
+        );
+
+        // An honest retry answers the fact; there is no key left to
+        // free.
+        match s
+            .op_respond(Request::CallTool {
+                name: "compute.cancel".into(),
+                arguments: serde_json::json!({ "job_id": job_id }),
+            })
+            .await
+        {
+            Response::ToolResult { content, is_error } => {
+                assert!(!is_error);
+                let meta = content
+                    .iter()
+                    .find_map(|c| match c {
+                        covenant_mcp::Content::Json { value } => Some(value.clone()),
+                        _ => None,
+                    })
+                    .unwrap();
+                assert_eq!(meta["status"], "refunded");
+                assert_eq!(meta["purchase_key_freed"], false);
+            }
+            other => panic!("expected ToolResult, got {other:?}"),
+        }
+
+        // The daemon's own history read names why the money came back:
+        // this cancel, not a market that timed out on the job.
+        s.op_respond(Request::GrantCapability {
+            action: "tool.call.compute.receipts".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        match s
+            .op_respond(Request::CallTool {
+                name: "compute.receipts".into(),
+                arguments: serde_json::json!({}),
+            })
+            .await
+        {
+            Response::ToolResult { content, is_error } => {
+                assert!(!is_error, "expected receipts to list, got {content:?}");
+                let listing = content
+                    .iter()
+                    .find_map(|c| match c {
+                        covenant_mcp::Content::Json { value } => Some(value.clone()),
+                        _ => None,
+                    })
+                    .expect("json content");
+                let row = listing["jobs"]
+                    .as_array()
+                    .expect("a jobs array")
+                    .iter()
+                    .find(|r| r["job_id"] == job_id.to_string())
+                    .expect("the cancelled job is in the history")
+                    .clone();
+                assert_eq!(row["status"], "refunded");
+                assert_eq!(row["refund_reason"], "buyer_cancelled");
+            }
+            other => panic!("expected ToolResult, got {other:?}"),
+        }
+
+        // The unreachable-coordinator sibling: the refusal is loud and
+        // names the operation.
+        let dead = Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            settlement.clone(),
+            audit.clone(),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            identity.clone(),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            budget.clone(),
+        )
+        .with_compute(compute::ComputeState::new(compute::ComputeConfig {
+            coordinator_url: "http://127.0.0.1:1".into(),
+            max_price_micro_usdc: 50_000,
+            default_deadline_ms: 30_000,
+            poll_interval: std::time::Duration::from_millis(50),
+            referral_code: None,
+            rpc_url: None,
+            max_active_streams_per_payer: 4,
+            clips_dir: std::env::temp_dir().join("covenant-compute-test-clips"),
+        }));
+        dead.op_respond(Request::GrantCapability {
+            action: "tool.call.compute.cancel".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        match dead
+            .op_respond(Request::CallTool {
+                name: "compute.cancel".into(),
+                arguments: serde_json::json!({ "job_id": Uuid::new_v4() }),
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(message.contains("cancel"), "got: {message}");
+            }
+            other => panic!("expected Error from a dead coordinator, got {other:?}"),
+        }
+    }
+
+    /// A journaled envelope the coordinator will never admit — here,
+    /// one already past its own deadline, the natural fate of a
+    /// purchase journaled by a life that died before submitting and
+    /// retried late — must not wedge its idempotency key forever. The
+    /// coordinator's answered 400 proves the job never landed (a known
+    /// job is echoed 200 before any admission gate), so the retry
+    /// frees the key and the next call may honestly buy afresh.
+    #[tokio::test]
+    async fn a_keyed_compute_purchase_whose_envelope_can_never_land_frees_its_key() {
+        use covenant_compute_buyer::{
+            sign_envelope, BuyerConfig, JobRequest, PurchaseBook, PurchaseEntry, MIN_DEADLINE_MS,
+        };
+        use covenant_compute_coordinator::{
+            router as compute_router, CoordinatorConfig, CoordinatorState, MockPayout, MockRail,
+            NoReputation,
+        };
+        use covenant_compute_node::{
+            Coordinator as _, EchoExecutor, HttpCoordinatorClient, InMemoryEarningsLedger, Node,
+            NodeConfig,
+        };
+        use covenant_compute_protocol::{
+            CapabilityProfile, FundingSource, HardwareClass, JobKind, PriceAsk, PriceUnit,
+            RegisterRequest,
+        };
+
+        let coordinator_home = tempfile::tempdir().unwrap();
+        let coordinator_state = CoordinatorState::with_journal(
+            LocalIdentity::generate("coordinator@test"),
+            CoordinatorConfig {
+                long_poll_timeout: std::time::Duration::from_secs(5),
+                default_funding_source: FundingSource::Organic,
+                ..CoordinatorConfig::default()
+            },
+            Arc::new(NoReputation),
+            Arc::new(MockPayout::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            &coordinator_home.path().join("journal.jsonl"),
+            Some(Arc::new(MockRail::new())),
+        )
+        .await
+        .unwrap();
+        let coordinator_pubkey = coordinator_state.coordinator_pubkey_b58();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            axum::serve(listener, compute_router(coordinator_state))
+                .await
+                .unwrap();
+        });
+
+        let operator_identity = LocalIdentity::generate("operator@test");
+        let profile = CapabilityProfile {
+            operator: operator_identity.agent_id(),
+            hardware: HardwareClass::CpuOnly,
+            vram_gb: 0,
+            models_served: vec!["any".into()],
+            job_kinds: vec![JobKind::InferenceCall],
+            price: PriceAsk {
+                unit: PriceUnit::PerJob,
+                micro_usdc: 10_000,
+            },
+            tee_capable: false,
+        };
+        let coordinator_client = Arc::new(HttpCoordinatorClient::with_config(
+            base_url.clone(),
+            std::time::Duration::from_secs(5),
+            2,
+        ));
+        coordinator_client
+            .register(
+                RegisterRequest::sign(profile.clone(), compute_payout_addr(2), &operator_identity)
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let node = Node::new(
+            operator_identity,
+            profile,
+            coordinator_client,
+            Arc::new(EchoExecutor),
+            Arc::new(InMemoryEarningsLedger::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            NodeConfig {
+                coordinator_pubkey_b58: coordinator_pubkey,
+                max_in_flight: 4,
+                preempt_grace: std::time::Duration::from_secs(1),
+                fee_bps: 0,
+            },
+        );
+        // Only the honest re-buy reaches an operator; the expired
+        // envelope is refused at admission and matches no one.
+        let node_task = tokio::spawn(async move {
+            loop {
+                match node.run_once().await {
+                    Ok(Some(outcome)) => return outcome,
+                    _ => tokio::time::sleep(std::time::Duration::from_millis(20)).await,
+                }
+            }
+        });
+
+        let daemon_home = tempfile::tempdir().unwrap();
+        let purchases_path = daemon_home.path().join("compute-purchases.jsonl");
+        let settlement = Arc::new(InMemorySettlement::new());
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let identity = Arc::new(LocalIdentity::generate("user@local"));
+        let peer = identity.agent_id();
+        budget.set_capacity(&peer, 1_000).await.unwrap();
+
+        // The stranded purchase: journaled with the shortest signable
+        // deadline, then left to lapse (below) so it is already expired by
+        // the time any retry could submit it.
+        let wedged_key = format!("{}:doomed-envelope", peer.pubkey_base58());
+        let doomed = sign_envelope(
+            &BuyerConfig {
+                coordinator_url: base_url.clone(),
+                poll_interval: std::time::Duration::from_millis(50),
+                referral_code: None,
+                rpc_url: None,
+            },
+            &identity,
+            JobRequest {
+                kind: JobKind::InferenceCall,
+                model: None,
+                gpu_class: None,
+                min_vram_gb: None,
+                min_reputation_bps: None,
+                input: vec![covenant_mcp::Content::text("buy once")],
+                price_micro_usdc: 25_000,
+                deadline_ms: MIN_DEADLINE_MS,
+            },
+        )
+        .unwrap();
+        {
+            let book = PurchaseBook::open(&purchases_path).unwrap();
+            book.record(PurchaseEntry {
+                key: wedged_key.clone(),
+                envelope: doomed,
+                opened_at_ms: 1,
+                receipt_id: None,
+                voided: false,
+            })
+            .unwrap();
+        }
+        // Past the floor-length deadline: the journaled envelope is now
+        // expired, so the retry re-drives it into an admission refusal
+        // rather than a match.
+        tokio::time::sleep(std::time::Duration::from_millis(MIN_DEADLINE_MS + 200)).await;
+
+        let purchases = Arc::new(PurchaseBook::open(&purchases_path).unwrap());
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            settlement.clone(),
+            audit.clone(),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            identity.clone(),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            budget.clone(),
+        )
+        .with_compute(
+            compute::ComputeState::new(compute::ComputeConfig {
+                coordinator_url: base_url.clone(),
+                max_price_micro_usdc: 50_000,
+                default_deadline_ms: 30_000,
+                poll_interval: std::time::Duration::from_millis(50),
+                referral_code: None,
+                rpc_url: None,
+                max_active_streams_per_payer: 4,
+                clips_dir: std::env::temp_dir().join("covenant-compute-test-clips"),
+            })
+            .with_purchase_book(purchases.clone()),
+        );
+        s.op_respond(Request::GrantCapability {
+            action: "tool.call.compute.infer".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        let infer = |arguments: serde_json::Value| {
+            let s = s.clone();
+            async move {
+                s.op_respond(Request::CallTool {
+                    name: "compute.infer".into(),
+                    arguments,
+                })
+                .await
+            }
+        };
+
+        // The retry re-drives the journaled envelope into the
+        // coordinator's admission verdict and surfaces it.
+        let refused = infer(serde_json::json!({
+            "prompt": "buy once",
+            "price_micro_usdc": 25_000,
+            "idempotency_key": "doomed-envelope",
+        }))
+        .await;
+        match refused {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("refused the submission (400)"),
+                    "got: {message}"
+                );
+                assert!(message.contains("past its deadline"), "got: {message}");
+            }
+            other => panic!("expected the admission refusal, got {other:?}"),
+        }
+        let entry = purchases.lookup(&wedged_key);
+        assert!(entry.is_none(), "the refusal voided the key, got {entry:?}");
+
+        // Same key, honest re-buy: a fresh envelope with a live
+        // deadline, served and debited exactly once.
+        let bought = infer(serde_json::json!({
+            "prompt": "buy once",
+            "price_micro_usdc": 25_000,
+            "idempotency_key": "doomed-envelope",
+        }))
+        .await;
+        let meta = match bought {
+            Response::ToolResult { content, is_error } => {
+                assert!(!is_error, "expected success, got {content:?}");
+                content
+                    .iter()
+                    .find_map(|c| match c {
+                        covenant_mcp::Content::Json { value } => Some(value.clone()),
+                        _ => None,
+                    })
+                    .expect("metadata block")
+            }
+            other => panic!("expected ToolResult, got {other:?}"),
+        };
+        let served = node_task.await.unwrap();
+        assert_eq!(served.job_id.to_string(), meta["job_id"].as_str().unwrap());
+        assert_eq!(settlement.recent(10).await.unwrap().len(), 1);
+        assert_eq!(
+            budget.tokens_remaining(&peer).await.unwrap(),
+            997,
+            "one 3-credit debit; the refused envelope cost nothing"
+        );
+        let entry = purchases
+            .lookup(&wedged_key)
+            .expect("the re-buy re-bound the key");
+        assert!(entry.settled(), "and settled it to the served job");
+    }
+
+    /// Two calls retrying the SAME crashed keyed purchase at the same
+    /// moment — the natural shape of an agent runtime that fires a
+    /// retry from two places after a restart — must still pay once.
+    /// The purchase book already collapses them to one signed envelope
+    /// and the coordinator to one job; the exposure is daemon-side:
+    /// both retries drive the same envelope to its conclusion, and
+    /// each would book its own debit and settlement row for the one
+    /// purchase. The key's drive is serialized, so the loser waits and
+    /// then serves the recorded purchase — both callers get the
+    /// result, the books move once.
+    #[tokio::test]
+    async fn racing_retries_of_one_keyed_purchase_debit_once_and_both_answer() {
+        use covenant_compute_buyer::{
+            sign_envelope, BuyerConfig, JobRequest, PurchaseBook, PurchaseEntry,
+        };
+        use covenant_compute_coordinator::{
+            router as compute_router, CoordinatorConfig, CoordinatorState, MockPayout, MockRail,
+            NoReputation,
+        };
+        use covenant_compute_node::{
+            Coordinator as _, EchoExecutor, HttpCoordinatorClient, InMemoryEarningsLedger, Node,
+            NodeConfig,
+        };
+        use covenant_compute_protocol::{
+            CapabilityProfile, FundingSource, HardwareClass, JobKind, PriceAsk, PriceUnit,
+            RegisterRequest,
+        };
+
+        let coordinator_home = tempfile::tempdir().unwrap();
+        let coordinator_state = CoordinatorState::with_journal(
+            LocalIdentity::generate("coordinator@test"),
+            CoordinatorConfig {
+                long_poll_timeout: std::time::Duration::from_secs(5),
+                default_funding_source: FundingSource::Organic,
+                ..CoordinatorConfig::default()
+            },
+            Arc::new(NoReputation),
+            Arc::new(MockPayout::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            &coordinator_home.path().join("journal.jsonl"),
+            Some(Arc::new(MockRail::new())),
+        )
+        .await
+        .unwrap();
+        let coordinator_pubkey = coordinator_state.coordinator_pubkey_b58();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            axum::serve(listener, compute_router(coordinator_state))
+                .await
+                .unwrap();
+        });
+
+        let operator_identity = LocalIdentity::generate("operator@test");
+        let profile = CapabilityProfile {
+            operator: operator_identity.agent_id(),
+            hardware: HardwareClass::CpuOnly,
+            vram_gb: 0,
+            models_served: vec!["any".into()],
+            job_kinds: vec![JobKind::InferenceCall],
+            price: PriceAsk {
+                unit: PriceUnit::PerJob,
+                micro_usdc: 10_000,
+            },
+            tee_capable: false,
+        };
+        let coordinator_client = Arc::new(HttpCoordinatorClient::with_config(
+            base_url.clone(),
+            std::time::Duration::from_secs(5),
+            2,
+        ));
+        coordinator_client
+            .register(
+                RegisterRequest::sign(profile.clone(), compute_payout_addr(2), &operator_identity)
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let node = Node::new(
+            operator_identity,
+            profile,
+            coordinator_client,
+            Arc::new(EchoExecutor),
+            Arc::new(InMemoryEarningsLedger::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            NodeConfig {
+                coordinator_pubkey_b58: coordinator_pubkey,
+                max_in_flight: 4,
+                preempt_grace: std::time::Duration::from_secs(1),
+                fee_bps: 0,
+            },
+        );
+        let node_task = tokio::spawn(async move {
+            loop {
+                match node.run_once().await {
+                    Ok(Some(outcome)) => return outcome,
+                    _ => tokio::time::sleep(std::time::Duration::from_millis(20)).await,
+                }
+            }
+        });
+
+        let daemon_home = tempfile::tempdir().unwrap();
+        let purchases_path = daemon_home.path().join("compute-purchases.jsonl");
+        let settlement = Arc::new(InMemorySettlement::new());
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let identity = Arc::new(LocalIdentity::generate("user@local"));
+        let peer = identity.agent_id();
+        budget.set_capacity(&peer, 1_000).await.unwrap();
+
+        // The crash artifact: an envelope journaled by a life that
+        // died before concluding it. Both racers will find it with no
+        // receipt and re-drive it.
+        let key = format!("{}:raced-retry", peer.pubkey_base58());
+        let envelope = sign_envelope(
+            &BuyerConfig {
+                coordinator_url: base_url.clone(),
+                poll_interval: std::time::Duration::from_millis(50),
+                referral_code: None,
+                rpc_url: None,
+            },
+            &identity,
+            JobRequest {
+                kind: JobKind::InferenceCall,
+                model: None,
+                gpu_class: None,
+                min_vram_gb: None,
+                min_reputation_bps: None,
+                input: vec![covenant_mcp::Content::text("pay once")],
+                price_micro_usdc: 25_000,
+                deadline_ms: 30_000,
+            },
+        )
+        .unwrap();
+        {
+            let book = PurchaseBook::open(&purchases_path).unwrap();
+            book.record(PurchaseEntry {
+                key: key.clone(),
+                envelope,
+                opened_at_ms: 1,
+                receipt_id: None,
+                voided: false,
+            })
+            .unwrap();
+        }
+
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            settlement.clone(),
+            audit.clone(),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            identity.clone(),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            budget.clone(),
+        )
+        .with_compute(
+            compute::ComputeState::new(compute::ComputeConfig {
+                coordinator_url: base_url.clone(),
+                max_price_micro_usdc: 50_000,
+                default_deadline_ms: 30_000,
+                poll_interval: std::time::Duration::from_millis(50),
+                referral_code: None,
+                rpc_url: None,
+                max_active_streams_per_payer: 4,
+                clips_dir: std::env::temp_dir().join("covenant-compute-test-clips"),
+            })
+            .with_purchase_book(Arc::new(PurchaseBook::open(&purchases_path).unwrap())),
+        );
+        s.op_respond(Request::GrantCapability {
+            action: "tool.call.compute.infer".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        let infer = |s: Server| async move {
+            match s
+                .op_respond(Request::CallTool {
+                    name: "compute.infer".into(),
+                    arguments: serde_json::json!({
+                        "prompt": "pay once",
+                        "price_micro_usdc": 25_000,
+                        "idempotency_key": "raced-retry",
+                    }),
+                })
+                .await
+            {
+                Response::ToolResult { content, is_error } => {
+                    assert!(!is_error, "expected success, got {content:?}");
+                    content
+                        .iter()
+                        .find_map(|c| match c {
+                            covenant_mcp::Content::Json { value } => Some(value.clone()),
+                            _ => None,
+                        })
+                        .expect("metadata block")
+                }
+                other => panic!("expected ToolResult, got {other:?}"),
+            }
+        };
+        let (first, second) = tokio::join!(infer(s.clone()), infer(s.clone()));
+
+        assert_eq!(first["job_id"], second["job_id"], "one key, one job");
+        assert_eq!(
+            first["receipt_id"], second["receipt_id"],
+            "the loser serves the winner's recorded purchase"
+        );
+        let receipts = settlement.recent(10).await.unwrap();
+        assert_eq!(
+            receipts.len(),
+            1,
+            "one purchase, one settlement row — however many retries raced"
+        );
+        assert_eq!(
+            budget.tokens_remaining(&peer).await.unwrap(),
+            997,
+            "one 3-credit debit for the one purchase"
+        );
+        let served = node_task.await.unwrap();
+        assert_eq!(served.job_id.to_string(), first["job_id"].as_str().unwrap());
+    }
+
+    /// The demand side's cross-book law, each ledger checked against a
+    /// DIFFERENT party's book over the real wire: the daemon's durable
+    /// purchase book, its settlement receipts and budget debits, the
+    /// coordinator's signed buyer feed, and the balance view must be
+    /// one account of the same four purchases — one paid, one that ran
+    /// and failed (hold refunded), one whose envelope could never land
+    /// (key freed, no job anywhere), and one recovered from a crash
+    /// artifact. Then BOTH parties restart — the daemon as a fresh
+    /// Server over the same book file, the coordinator by journal
+    /// replay behind a fresh payout backend on a fresh port — and the
+    /// same account must hold verbatim, payout blocks included (they
+    /// can only come from the journal), before and after a replay of
+    /// the paid key that must move no book at all.
+    #[tokio::test]
+    async fn the_purchase_book_settlement_trail_and_signed_buyer_feed_stay_one_account() {
+        use covenant_a2a::A2ATaskStatus;
+        use covenant_compute_buyer::{
+            sign_envelope, BuyerConfig, JobRequest, PurchaseBook, PurchaseEntry, MIN_DEADLINE_MS,
+        };
+        use covenant_compute_coordinator::{
+            router as compute_router, CoordinatorConfig, CoordinatorState, MockPayout, MockRail,
+            NoReputation, VerifiedDeposit,
+        };
+        use covenant_compute_node::{
+            Coordinator as _, ExecutionOutcome, ExecutorError, HttpCoordinatorClient,
+            InMemoryEarningsLedger, JobExecutor, Node, NodeConfig,
+        };
+        use covenant_compute_protocol::{
+            CapabilityProfile, FundingSource, HardwareClass, JobEnvelopePayload, JobKind, PriceAsk,
+            PriceUnit, RegisterRequest,
+        };
+
+        // Fails any prompt that opens with "doom", echoes the rest —
+        // the one lever this workload needs to put a refunded job on
+        // the books next to paid ones.
+        struct ScriptedExecutor;
+        #[async_trait::async_trait]
+        impl JobExecutor for ScriptedExecutor {
+            async fn execute(
+                &self,
+                job: &JobEnvelopePayload,
+                _deadline: std::time::Duration,
+            ) -> Result<ExecutionOutcome, ExecutorError> {
+                let doomed = job.input.iter().any(|c| match c {
+                    covenant_mcp::Content::Text { text } => text.starts_with("doom"),
+                    _ => false,
+                });
+                if doomed {
+                    return Err(ExecutorError::Failed("scripted failure".into()));
+                }
+                Ok(ExecutionOutcome {
+                    output: job.input.clone(),
+                    wall_ms: 1,
+                    tokens_in: None,
+                    tokens_out: None,
+                    finish_reason: None,
+                })
+            }
+        }
+
+        let coordinator_home = tempfile::tempdir().unwrap();
+        let identity_path = coordinator_home.path().join("identity.json");
+        let journal_path = coordinator_home.path().join("journal.jsonl");
+        let boot_coordinator = |rail: Arc<MockRail>| {
+            let identity_path = identity_path.clone();
+            let journal_path = journal_path.clone();
+            async move {
+                let payout = Arc::new(MockPayout::new());
+                let state = CoordinatorState::with_journal(
+                    LocalIdentity::load_or_create(&identity_path, "coordinator@test").unwrap(),
+                    CoordinatorConfig {
+                        long_poll_timeout: std::time::Duration::from_secs(5),
+                        default_funding_source: FundingSource::Organic,
+                        ..CoordinatorConfig::default()
+                    },
+                    Arc::new(NoReputation),
+                    payout.clone(),
+                    Arc::new(covenant_audit::InMemoryAuditLog::new()),
+                    &journal_path,
+                    Some(rail),
+                )
+                .await
+                .unwrap();
+                let pubkey = state.coordinator_pubkey_b58();
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let url = format!("http://{}", listener.local_addr().unwrap());
+                let server = tokio::spawn(async move {
+                    axum::serve(listener, compute_router(state)).await.unwrap();
+                });
+                (url, pubkey, server, payout)
+            }
+        };
+        let rail = Arc::new(MockRail::new());
+        let (url1, coordinator_pubkey, server1, _payout1) = boot_coordinator(rail.clone()).await;
+
+        let operator_identity = LocalIdentity::generate("operator@test");
+        let profile = CapabilityProfile {
+            operator: operator_identity.agent_id(),
+            hardware: HardwareClass::CpuOnly,
+            vram_gb: 0,
+            models_served: vec!["any".into()],
+            job_kinds: vec![JobKind::InferenceCall],
+            price: PriceAsk {
+                unit: PriceUnit::PerJob,
+                micro_usdc: 10_000,
+            },
+            tee_capable: false,
+        };
+        let coordinator_client = Arc::new(HttpCoordinatorClient::with_config(
+            url1.clone(),
+            std::time::Duration::from_secs(5),
+            2,
+        ));
+        coordinator_client
+            .register(
+                RegisterRequest::sign(profile.clone(), compute_payout_addr(2), &operator_identity)
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let node = Node::new(
+            operator_identity,
+            profile,
+            coordinator_client,
+            Arc::new(ScriptedExecutor),
+            Arc::new(InMemoryEarningsLedger::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            NodeConfig {
+                coordinator_pubkey_b58: coordinator_pubkey.clone(),
+                max_in_flight: 4,
+                preempt_grace: std::time::Duration::from_secs(1),
+                fee_bps: 0,
+            },
+        );
+        // Three envelopes ever reach an operator: the paid one, the
+        // doomed one, the recovered one. The unlandable envelope is
+        // refused at admission and matches no one.
+        let node_task = tokio::spawn(async move {
+            let mut outcomes = Vec::new();
+            while outcomes.len() < 3 {
+                match node.run_once().await {
+                    Ok(Some(outcome)) => outcomes.push(outcome),
+                    _ => tokio::time::sleep(std::time::Duration::from_millis(20)).await,
+                }
+            }
+            outcomes
+        });
+
+        let daemon_home = tempfile::tempdir().unwrap();
+        let purchases_path = daemon_home.path().join("compute-purchases.jsonl");
+        let settlement = Arc::new(InMemorySettlement::new());
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let identity = Arc::new(LocalIdentity::generate("user@local"));
+        let peer = identity.agent_id();
+        budget.set_capacity(&peer, 1_000).await.unwrap();
+        let scoped = |key: &str| format!("{}:{key}", peer.pubkey_base58());
+
+        // The crash artifacts an earlier life left in the book: an
+        // envelope signed at the floor deadline and left to lapse (below)
+        // so it is already expired before any retry could submit it, and
+        // a live one journaled but never concluded.
+        let buyer_config = |url: &str| BuyerConfig {
+            coordinator_url: url.to_string(),
+            poll_interval: std::time::Duration::from_millis(50),
+            referral_code: None,
+            rpc_url: None,
+        };
+        let unlandable = sign_envelope(
+            &buyer_config(&url1),
+            &identity,
+            JobRequest {
+                kind: JobKind::InferenceCall,
+                model: None,
+                gpu_class: None,
+                min_vram_gb: None,
+                min_reputation_bps: None,
+                input: vec![covenant_mcp::Content::text("the unlandable question")],
+                price_micro_usdc: 25_000,
+                deadline_ms: MIN_DEADLINE_MS,
+            },
+        )
+        .unwrap();
+        let unlandable_job = unlandable.payload.job_id.to_string();
+        let recovered_envelope = sign_envelope(
+            &buyer_config(&url1),
+            &identity,
+            JobRequest {
+                kind: JobKind::InferenceCall,
+                model: None,
+                gpu_class: None,
+                min_vram_gb: None,
+                min_reputation_bps: None,
+                input: vec![covenant_mcp::Content::text("the recovered question")],
+                price_micro_usdc: 25_000,
+                deadline_ms: 30_000,
+            },
+        )
+        .unwrap();
+        {
+            let book = PurchaseBook::open(&purchases_path).unwrap();
+            for (key, envelope) in [
+                ("law-unlandable", unlandable),
+                ("law-recovered", recovered_envelope),
+            ] {
+                book.record(PurchaseEntry {
+                    key: scoped(key),
+                    envelope,
+                    opened_at_ms: 1,
+                    receipt_id: None,
+                    voided: false,
+                })
+                .unwrap();
+            }
+        }
+        // Past the floor-length deadline: the unlandable envelope is now
+        // expired, so when the daemon re-drives it below the coordinator
+        // refuses it at admission. The recovered envelope's 30s deadline is
+        // untouched.
+        tokio::time::sleep(std::time::Duration::from_millis(MIN_DEADLINE_MS + 200)).await;
+
+        let boot_daemon = |url: String| {
+            let settlement = settlement.clone();
+            let audit = audit.clone();
+            let budget = budget.clone();
+            let identity = identity.clone();
+            let purchases_path = purchases_path.clone();
+            async move {
+                let s = Server::new(
+                    Arc::new(Router::from_cards(vec![])),
+                    Arc::new(MockRunner::new("")),
+                    Arc::new(InMemoryStore::new()),
+                    settlement,
+                    audit,
+                    Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+                    Arc::new(covenant_llm::MockEmbedder::new(64)),
+                    identity,
+                    Arc::new(IgnoreSet::default()),
+                    Arc::new(ToolRegistry::default()),
+                    Arc::new(covenant_a2a::InMemoryMailbox::new()),
+                    Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+                    budget,
+                )
+                .with_compute(
+                    compute::ComputeState::new(compute::ComputeConfig {
+                        coordinator_url: url,
+                        max_price_micro_usdc: 50_000,
+                        default_deadline_ms: 30_000,
+                        poll_interval: std::time::Duration::from_millis(50),
+                        referral_code: None,
+                        rpc_url: None,
+                        max_active_streams_per_payer: 4,
+                        clips_dir: std::env::temp_dir()
+                            .join("covenant-compute-test-clips"),
+                    })
+                    .with_purchase_book(Arc::new(PurchaseBook::open(&purchases_path).unwrap())),
+                );
+                for action in [
+                    "tool.call.compute.infer",
+                    "tool.call.compute.deposit",
+                    "tool.call.compute.receipts",
+                    "tool.call.compute.balance",
+                ] {
+                    s.op_respond(Request::GrantCapability {
+                        action: action.into(),
+                        scope: None,
+                        expires_at: None,
+                    })
+                    .await;
+                }
+                s
+            }
+        };
+        let call_ok = |s: Server, name: &'static str, arguments: serde_json::Value| async move {
+            match s
+                .op_respond(Request::CallTool {
+                    name: name.into(),
+                    arguments,
+                })
+                .await
+            {
+                Response::ToolResult { content, is_error } => {
+                    assert!(!is_error, "{name}: expected success, got {content:?}");
+                    content
+                        .iter()
+                        .find_map(|c| match c {
+                            covenant_mcp::Content::Json { value } => Some(value.clone()),
+                            _ => None,
+                        })
+                        .expect("metadata block")
+                }
+                other => panic!("{name}: expected ToolResult, got {other:?}"),
+            }
+        };
+        let call_err = |s: Server, arguments: serde_json::Value| async move {
+            match s
+                .op_respond(Request::CallTool {
+                    name: "compute.infer".into(),
+                    arguments,
+                })
+                .await
+            {
+                Response::Error { message } => message,
+                other => panic!("expected an error, got {other:?}"),
+            }
+        };
+
+        // Life 1: fund once, then the four purchases.
+        let s1 = boot_daemon(url1.clone()).await;
+        rail.preload(VerifiedDeposit {
+            deposit_id: "law-deposit".into(),
+            buyer_pubkey_b58: peer.pubkey_base58(),
+            amount_micro_usdc: 100_000,
+        });
+        let claimed = call_ok(
+            s1.clone(),
+            "compute.deposit",
+            serde_json::json!({"deposit_id": "law-deposit"}),
+        )
+        .await;
+        assert_eq!(claimed["credited"], true);
+
+        let paid = call_ok(
+            s1.clone(),
+            "compute.infer",
+            serde_json::json!({
+                "prompt": "the paid question",
+                "price_micro_usdc": 25_000,
+                "idempotency_key": "law-paid",
+            }),
+        )
+        .await;
+        let replayed = call_ok(
+            s1.clone(),
+            "compute.infer",
+            serde_json::json!({
+                "prompt": "the paid question",
+                "price_micro_usdc": 25_000,
+                "idempotency_key": "law-paid",
+            }),
+        )
+        .await;
+        assert_eq!(paid["job_id"], replayed["job_id"], "one key, one job");
+        assert_eq!(paid["receipt_id"], replayed["receipt_id"]);
+
+        let failed = call_err(
+            s1.clone(),
+            serde_json::json!({
+                "prompt": "doom this job",
+                "price_micro_usdc": 10_000,
+                "idempotency_key": "law-doomed",
+            }),
+        )
+        .await;
+        assert!(failed.contains("was not served"), "got: {failed}");
+        let refused = call_err(
+            s1.clone(),
+            serde_json::json!({
+                "prompt": "the unlandable question",
+                "price_micro_usdc": 25_000,
+                "idempotency_key": "law-unlandable",
+            }),
+        )
+        .await;
+        assert!(refused.contains("past its deadline"), "got: {refused}");
+        let recovered = call_ok(
+            s1.clone(),
+            "compute.infer",
+            serde_json::json!({
+                "prompt": "the recovered question",
+                "price_micro_usdc": 25_000,
+                "idempotency_key": "law-recovered",
+            }),
+        )
+        .await;
+        assert_ne!(recovered["job_id"], paid["job_id"]);
+
+        let paid_job = paid["job_id"].as_str().unwrap().to_string();
+        let paid_receipt = paid["receipt_id"].as_str().unwrap().to_string();
+        let recovered_job = recovered["job_id"].as_str().unwrap().to_string();
+        let recovered_receipt = recovered["receipt_id"].as_str().unwrap().to_string();
+
+        // The doomed job's id comes from the node's own signed Error
+        // receipt — the third book that names it.
+        let outcomes = node_task.await.unwrap();
+        let doomed_job = outcomes
+            .iter()
+            .find(|o| o.receipt.receipt.status == A2ATaskStatus::Error)
+            .expect("the doomed job's outcome")
+            .job_id
+            .to_string();
+        let served: std::collections::HashSet<String> =
+            outcomes.iter().map(|o| o.job_id.to_string()).collect();
+        assert_eq!(
+            served,
+            [paid_job.clone(), doomed_job.clone(), recovered_job.clone()]
+                .into_iter()
+                .collect::<std::collections::HashSet<_>>(),
+            "the node served exactly the three envelopes that landed"
+        );
+
+        // THE LAW. Every book against a different party's book:
+        // the purchase book's live view against the returns the agent
+        // saw; the settlement trail and budget against the book;
+        // the coordinator's signed feed (re-verified locally) against
+        // all of them; the balance view's money identity with the
+        // refunded hold excluded. Returns the feed rows so the two
+        // lives can be compared block-for-block.
+        let law = {
+            let purchases_path = purchases_path.clone();
+            let settlement = settlement.clone();
+            let key_paid = scoped("law-paid");
+            let key_doomed = scoped("law-doomed");
+            let key_unlandable = scoped("law-unlandable");
+            let key_recovered = scoped("law-recovered");
+            let paid_job = paid_job.clone();
+            let paid_receipt = paid_receipt.clone();
+            let recovered_job = recovered_job.clone();
+            let recovered_receipt = recovered_receipt.clone();
+            let doomed_job = doomed_job.clone();
+            let unlandable_job = unlandable_job.clone();
+            move |s: Server| {
+                let purchases_path = purchases_path.clone();
+                let settlement = settlement.clone();
+                let key_paid = key_paid.clone();
+                let key_doomed = key_doomed.clone();
+                let key_unlandable = key_unlandable.clone();
+                let key_recovered = key_recovered.clone();
+                let paid_job = paid_job.clone();
+                let paid_receipt = paid_receipt.clone();
+                let recovered_job = recovered_job.clone();
+                let recovered_receipt = recovered_receipt.clone();
+                let doomed_job = doomed_job.clone();
+                let unlandable_job = unlandable_job.clone();
+                async move {
+                    // The book's live view: both concluded-paid keys
+                    // settled to exactly the receipts the agent was
+                    // handed; both unpaid keys freed.
+                    let book = PurchaseBook::open(&purchases_path).unwrap();
+                    let entry = book.lookup(&key_paid).expect("paid key stays booked");
+                    assert_eq!(entry.envelope.payload.job_id.to_string(), paid_job);
+                    assert_eq!(entry.receipt_id.unwrap().to_string(), paid_receipt);
+                    assert_eq!(entry.envelope.payload.price_micro_usdc, 25_000);
+                    let entry = book
+                        .lookup(&key_recovered)
+                        .expect("recovered key stays booked");
+                    assert_eq!(entry.envelope.payload.job_id.to_string(), recovered_job);
+                    assert_eq!(entry.receipt_id.unwrap().to_string(), recovered_receipt);
+                    assert!(
+                        book.lookup(&key_doomed).is_none(),
+                        "the failed job freed its key"
+                    );
+                    assert!(
+                        book.lookup(&key_unlandable).is_none(),
+                        "the unlandable envelope freed its key"
+                    );
+
+                    // The settlement trail: one row per settled book
+                    // entry, none for the freed keys, and the budget
+                    // debited for exactly those rows.
+                    let rows = settlement.recent(10).await.unwrap();
+                    assert_eq!(rows.len(), 2, "one settlement receipt per settled purchase");
+                    let ids: std::collections::HashSet<String> =
+                        rows.iter().map(|r| r.id.to_string()).collect();
+                    assert_eq!(
+                        ids,
+                        [paid_receipt.clone(), recovered_receipt.clone()]
+                            .into_iter()
+                            .collect::<std::collections::HashSet<_>>(),
+                        "settlement rows are the settled book entries, bijectively"
+                    );
+                    // The budget's debit trail rides those same rows
+                    // (each records what its debit consumed at that
+                    // instant). The bucket's live remainder refills by
+                    // wall time, so the exact number belongs to
+                    // covenant-budget's own tests, not this law.
+                    let debited: u64 = rows.iter().map(|r| r.credits_consumed).sum();
+                    assert_eq!(
+                        debited,
+                        3 + 3,
+                        "3 credits per settled 25k purchase; failed and unlandable cost nothing"
+                    );
+
+                    // The coordinator's signed feed, re-verified
+                    // locally by the buyer library on the way in.
+                    let history = match s
+                        .op_respond(Request::CallTool {
+                            name: "compute.receipts".into(),
+                            arguments: serde_json::json!({}),
+                        })
+                        .await
+                    {
+                        Response::ToolResult { content, is_error } => {
+                            assert!(!is_error, "compute.receipts failed: {content:?}");
+                            content
+                                .iter()
+                                .find_map(|c| match c {
+                                    covenant_mcp::Content::Json { value } => Some(value.clone()),
+                                    _ => None,
+                                })
+                                .expect("metadata block")
+                        }
+                        other => panic!("compute.receipts: {other:?}"),
+                    };
+                    assert_eq!(history["count"], 3, "three jobs ever landed");
+                    assert_eq!(history["receipts_failing_verification"], 0);
+                    let jobs = history["jobs"].as_array().unwrap().clone();
+                    let row = |job: &str| {
+                        jobs.iter()
+                            .find(|r| r["job_id"] == *job)
+                            .unwrap_or_else(|| panic!("feed row for {job}"))
+                    };
+                    for (job, price) in [(&paid_job, 25_000), (&recovered_job, 25_000)] {
+                        let r = row(job);
+                        assert_eq!(r["status"], "completed");
+                        assert_eq!(r["price_micro_usdc"], price);
+                        assert_eq!(r["funding_source"], "organic");
+                        assert_eq!(r["receipt_verified"], true);
+                        assert_eq!(
+                            r["payout"]["amount_micro_usdc"], price,
+                            "zero-fee deployment pays out the gross hold"
+                        );
+                        assert!(
+                            r["payout"]["memo"].as_str().is_some_and(|m| !m.is_empty()),
+                            "the payout block names its memo"
+                        );
+                    }
+                    let r = row(&doomed_job);
+                    assert_eq!(r["status"], "failed");
+                    assert_eq!(r["price_micro_usdc"], 10_000);
+                    assert_eq!(
+                        r["receipt_verified"], true,
+                        "the failure is the operator's own signed statement"
+                    );
+                    assert_eq!(r["payout"], serde_json::Value::Null);
+                    assert!(
+                        !jobs.iter().any(|r| r["job_id"] == *unlandable_job),
+                        "the envelope that never landed is on nobody's books"
+                    );
+
+                    // The balance view: deposits minus the two holds
+                    // that stayed charged — the refunded hold is money
+                    // back, not spend.
+                    let funds = match s
+                        .op_respond(Request::CallTool {
+                            name: "compute.balance".into(),
+                            arguments: serde_json::json!({}),
+                        })
+                        .await
+                    {
+                        Response::ToolResult { content, is_error } => {
+                            assert!(!is_error, "compute.balance failed: {content:?}");
+                            content
+                                .iter()
+                                .find_map(|c| match c {
+                                    covenant_mcp::Content::Json { value } => Some(value.clone()),
+                                    _ => None,
+                                })
+                                .expect("metadata block")
+                        }
+                        other => panic!("compute.balance: {other:?}"),
+                    };
+                    assert_eq!(funds["balance"]["deposited_micro_usdc"], 100_000);
+                    assert_eq!(
+                        funds["balance"]["charged_micro_usdc"], 50_000,
+                        "charged is the two settled purchases; the refund is excluded"
+                    );
+                    assert_eq!(funds["balance"]["withdrawn_micro_usdc"], 0);
+                    assert_eq!(funds["balance"]["available_micro_usdc"], 50_000);
+
+                    jobs
+                }
+            }
+        };
+        let feed1 = law(s1.clone()).await;
+
+        // Both parties restart. The coordinator rebuilds from the
+        // journal alone behind a fresh payout backend; the daemon is a
+        // fresh Server over the same book file, pointed at the new
+        // port. Same identity, same law.
+        server1.abort();
+        let _ = server1.await;
+        let (url2, pubkey2, _server2, payout2) = boot_coordinator(Arc::new(MockRail::new())).await;
+        assert_eq!(
+            pubkey2, coordinator_pubkey,
+            "one durable coordinator identity"
+        );
+        let s2 = boot_daemon(url2.clone()).await;
+
+        let feed2 = law(s2.clone()).await;
+        let payout_blocks = |jobs: &[serde_json::Value]| {
+            let mut blocks: Vec<(String, serde_json::Value)> = jobs
+                .iter()
+                .map(|r| {
+                    (
+                        r["job_id"].as_str().unwrap().to_string(),
+                        r["payout"].clone(),
+                    )
+                })
+                .collect();
+            blocks.sort_by(|a, b| a.0.cmp(&b.0));
+            blocks
+        };
+        assert_eq!(
+            payout_blocks(&feed1),
+            payout_blocks(&feed2),
+            "the replayed feed serves the journaled payout blocks verbatim"
+        );
+        assert!(
+            payout2.records().is_empty(),
+            "nothing was re-paid to rebuild them"
+        );
+
+        // A replay of the paid key across both restarts: the recorded
+        // purchase answers over the new wire, and afterwards every
+        // book stands exactly where it stood.
+        let replayed = call_ok(
+            s2.clone(),
+            "compute.infer",
+            serde_json::json!({
+                "prompt": "the paid question",
+                "price_micro_usdc": 25_000,
+                "idempotency_key": "law-paid",
+            }),
+        )
+        .await;
+        assert_eq!(replayed["job_id"].as_str().unwrap(), paid_job);
+        assert_eq!(replayed["receipt_id"].as_str().unwrap(), paid_receipt);
+        law(s2).await;
+    }
+
+    /// The same cross-book law under a RACED workload: ten concurrent
+    /// calls through one daemon — two lone keyed purchases, a fresh
+    /// key raced by two identical calls, two retries racing over a
+    /// crash artifact, a job that runs and fails, a call refused at
+    /// the price ceiling, and two identical unkeyed calls that are
+    /// honestly two separate purchases. However the calls interleave,
+    /// the dust must settle to one account: four settled keys, two
+    /// freed, six settlement rows, seven feed rows, and a balance
+    /// that charged exactly the six paid holds. Then both parties
+    /// restart, and the account must replay verbatim — including
+    /// under a raced replay of a settled key over the new wire, which
+    /// may move nothing.
+    #[tokio::test]
+    async fn a_raced_mixed_purchase_workload_keeps_every_book_one_account() {
+        use covenant_a2a::A2ATaskStatus;
+        use covenant_compute_buyer::{
+            sign_envelope, BuyerConfig, JobRequest, PurchaseBook, PurchaseEntry,
+        };
+        use covenant_compute_coordinator::{
+            router as compute_router, CoordinatorConfig, CoordinatorState, MockPayout, MockRail,
+            NoReputation, VerifiedDeposit,
+        };
+        use covenant_compute_node::{
+            Coordinator as _, ExecutionOutcome, ExecutorError, HttpCoordinatorClient,
+            InMemoryEarningsLedger, JobExecutor, Node, NodeConfig,
+        };
+        use covenant_compute_protocol::{
+            CapabilityProfile, FundingSource, HardwareClass, JobEnvelopePayload, JobKind, PriceAsk,
+            PriceUnit, RegisterRequest,
+        };
+        use std::collections::HashSet;
+
+        struct ScriptedExecutor;
+        #[async_trait::async_trait]
+        impl JobExecutor for ScriptedExecutor {
+            async fn execute(
+                &self,
+                job: &JobEnvelopePayload,
+                _deadline: std::time::Duration,
+            ) -> Result<ExecutionOutcome, ExecutorError> {
+                let doomed = job.input.iter().any(|c| match c {
+                    covenant_mcp::Content::Text { text } => text.starts_with("doom"),
+                    _ => false,
+                });
+                if doomed {
+                    return Err(ExecutorError::Failed("scripted failure".into()));
+                }
+                Ok(ExecutionOutcome {
+                    output: job.input.clone(),
+                    wall_ms: 1,
+                    tokens_in: None,
+                    tokens_out: None,
+                    finish_reason: None,
+                })
+            }
+        }
+
+        let coordinator_home = tempfile::tempdir().unwrap();
+        let identity_path = coordinator_home.path().join("identity.json");
+        let journal_path = coordinator_home.path().join("journal.jsonl");
+        let boot_coordinator = |rail: Arc<MockRail>| {
+            let identity_path = identity_path.clone();
+            let journal_path = journal_path.clone();
+            async move {
+                let payout = Arc::new(MockPayout::new());
+                let state = CoordinatorState::with_journal(
+                    LocalIdentity::load_or_create(&identity_path, "coordinator@test").unwrap(),
+                    CoordinatorConfig {
+                        long_poll_timeout: std::time::Duration::from_secs(5),
+                        default_funding_source: FundingSource::Organic,
+                        ..CoordinatorConfig::default()
+                    },
+                    Arc::new(NoReputation),
+                    payout.clone(),
+                    Arc::new(covenant_audit::InMemoryAuditLog::new()),
+                    &journal_path,
+                    Some(rail),
+                )
+                .await
+                .unwrap();
+                let pubkey = state.coordinator_pubkey_b58();
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let url = format!("http://{}", listener.local_addr().unwrap());
+                let server = tokio::spawn(async move {
+                    axum::serve(listener, compute_router(state)).await.unwrap();
+                });
+                (url, pubkey, server, payout)
+            }
+        };
+        let rail = Arc::new(MockRail::new());
+        let (url1, coordinator_pubkey, server1, _payout1) = boot_coordinator(rail.clone()).await;
+
+        let operator_identity = LocalIdentity::generate("operator@test");
+        let profile = CapabilityProfile {
+            operator: operator_identity.agent_id(),
+            hardware: HardwareClass::CpuOnly,
+            vram_gb: 0,
+            models_served: vec!["any".into()],
+            job_kinds: vec![JobKind::InferenceCall],
+            price: PriceAsk {
+                unit: PriceUnit::PerJob,
+                micro_usdc: 10_000,
+            },
+            tee_capable: false,
+        };
+        let coordinator_client = Arc::new(HttpCoordinatorClient::with_config(
+            url1.clone(),
+            std::time::Duration::from_secs(5),
+            2,
+        ));
+        coordinator_client
+            .register(
+                RegisterRequest::sign(profile.clone(), compute_payout_addr(2), &operator_identity)
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let node = Node::new(
+            operator_identity,
+            profile,
+            coordinator_client,
+            Arc::new(ScriptedExecutor),
+            Arc::new(InMemoryEarningsLedger::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            NodeConfig {
+                coordinator_pubkey_b58: coordinator_pubkey.clone(),
+                max_in_flight: 4,
+                preempt_grace: std::time::Duration::from_secs(1),
+                fee_bps: 0,
+            },
+        );
+        // Seven envelopes ever reach the operator: the two lone keyed
+        // purchases, one per raced key pair, the doomed one, and both
+        // unkeyed twins. The refused call never signs an envelope.
+        let node_task = tokio::spawn(async move {
+            let mut outcomes = Vec::new();
+            while outcomes.len() < 7 {
+                match node.run_once().await {
+                    Ok(Some(outcome)) => outcomes.push(outcome),
+                    _ => tokio::time::sleep(std::time::Duration::from_millis(20)).await,
+                }
+            }
+            outcomes
+        });
+
+        let daemon_home = tempfile::tempdir().unwrap();
+        let purchases_path = daemon_home.path().join("compute-purchases.jsonl");
+        let settlement = Arc::new(InMemorySettlement::new());
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let identity = Arc::new(LocalIdentity::generate("user@local"));
+        let peer = identity.agent_id();
+        budget.set_capacity(&peer, 1_000).await.unwrap();
+        let scoped = |key: &str| format!("{}:{key}", peer.pubkey_base58());
+
+        // The crash artifact: a valid envelope journaled by a life that
+        // died before concluding it. Two of the ten calls race to
+        // retry it.
+        let crashed_envelope = sign_envelope(
+            &BuyerConfig {
+                coordinator_url: url1.clone(),
+                poll_interval: std::time::Duration::from_millis(50),
+                referral_code: None,
+                rpc_url: None,
+            },
+            &identity,
+            JobRequest {
+                kind: JobKind::InferenceCall,
+                model: None,
+                gpu_class: None,
+                min_vram_gb: None,
+                min_reputation_bps: None,
+                input: vec![covenant_mcp::Content::text("the crashed question")],
+                price_micro_usdc: 25_000,
+                deadline_ms: 30_000,
+            },
+        )
+        .unwrap();
+        let crashed_job = crashed_envelope.payload.job_id.to_string();
+        {
+            let book = PurchaseBook::open(&purchases_path).unwrap();
+            book.record(PurchaseEntry {
+                key: scoped("raced-crashed"),
+                envelope: crashed_envelope,
+                opened_at_ms: 1,
+                receipt_id: None,
+                voided: false,
+            })
+            .unwrap();
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+
+        let boot_daemon = |url: String| {
+            let settlement = settlement.clone();
+            let audit = audit.clone();
+            let budget = budget.clone();
+            let identity = identity.clone();
+            let purchases_path = purchases_path.clone();
+            async move {
+                let s = Server::new(
+                    Arc::new(Router::from_cards(vec![])),
+                    Arc::new(MockRunner::new("")),
+                    Arc::new(InMemoryStore::new()),
+                    settlement,
+                    audit,
+                    Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+                    Arc::new(covenant_llm::MockEmbedder::new(64)),
+                    identity,
+                    Arc::new(IgnoreSet::default()),
+                    Arc::new(ToolRegistry::default()),
+                    Arc::new(covenant_a2a::InMemoryMailbox::new()),
+                    Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+                    budget,
+                )
+                .with_compute(
+                    compute::ComputeState::new(compute::ComputeConfig {
+                        coordinator_url: url,
+                        max_price_micro_usdc: 50_000,
+                        default_deadline_ms: 30_000,
+                        poll_interval: std::time::Duration::from_millis(50),
+                        referral_code: None,
+                        rpc_url: None,
+                        max_active_streams_per_payer: 4,
+                        clips_dir: std::env::temp_dir()
+                            .join("covenant-compute-test-clips"),
+                    })
+                    .with_purchase_book(Arc::new(PurchaseBook::open(&purchases_path).unwrap())),
+                );
+                for action in [
+                    "tool.call.compute.infer",
+                    "tool.call.compute.deposit",
+                    "tool.call.compute.receipts",
+                    "tool.call.compute.balance",
+                ] {
+                    s.op_respond(Request::GrantCapability {
+                        action: action.into(),
+                        scope: None,
+                        expires_at: None,
+                    })
+                    .await;
+                }
+                s
+            }
+        };
+        let call_ok = |s: Server, name: &'static str, arguments: serde_json::Value| async move {
+            match s
+                .op_respond(Request::CallTool {
+                    name: name.into(),
+                    arguments,
+                })
+                .await
+            {
+                Response::ToolResult { content, is_error } => {
+                    assert!(!is_error, "{name}: expected success, got {content:?}");
+                    content
+                        .iter()
+                        .find_map(|c| match c {
+                            covenant_mcp::Content::Json { value } => Some(value.clone()),
+                            _ => None,
+                        })
+                        .expect("metadata block")
+                }
+                other => panic!("{name}: expected ToolResult, got {other:?}"),
+            }
+        };
+        let call_err = |s: Server, arguments: serde_json::Value| async move {
+            match s
+                .op_respond(Request::CallTool {
+                    name: "compute.infer".into(),
+                    arguments,
+                })
+                .await
+            {
+                Response::Error { message } => message,
+                other => panic!("expected an error, got {other:?}"),
+            }
+        };
+
+        let s1 = boot_daemon(url1.clone()).await;
+        rail.preload(VerifiedDeposit {
+            deposit_id: "raced-deposit".into(),
+            buyer_pubkey_b58: peer.pubkey_base58(),
+            amount_micro_usdc: 200_000,
+        });
+        let claimed = call_ok(
+            s1.clone(),
+            "compute.deposit",
+            serde_json::json!({"deposit_id": "raced-deposit"}),
+        )
+        .await;
+        assert_eq!(claimed["credited"], true);
+
+        // The whole workload at once. Every branch concludes before
+        // join returns, so the law below reads a settled system.
+        let (
+            alpha,
+            beta,
+            gamma_first,
+            gamma_second,
+            crashed_first,
+            crashed_second,
+            doomed_err,
+            overpriced_err,
+            unkeyed_first,
+            unkeyed_second,
+        ) = tokio::join!(
+            call_ok(
+                s1.clone(),
+                "compute.infer",
+                serde_json::json!({
+                    "prompt": "the alpha question",
+                    "price_micro_usdc": 25_000,
+                    "idempotency_key": "raced-alpha",
+                }),
+            ),
+            call_ok(
+                s1.clone(),
+                "compute.infer",
+                serde_json::json!({
+                    "prompt": "the beta question",
+                    "price_micro_usdc": 25_000,
+                    "idempotency_key": "raced-beta",
+                }),
+            ),
+            call_ok(
+                s1.clone(),
+                "compute.infer",
+                serde_json::json!({
+                    "prompt": "the gamma question",
+                    "price_micro_usdc": 25_000,
+                    "idempotency_key": "raced-gamma",
+                }),
+            ),
+            call_ok(
+                s1.clone(),
+                "compute.infer",
+                serde_json::json!({
+                    "prompt": "the gamma question",
+                    "price_micro_usdc": 25_000,
+                    "idempotency_key": "raced-gamma",
+                }),
+            ),
+            call_ok(
+                s1.clone(),
+                "compute.infer",
+                serde_json::json!({
+                    "prompt": "the crashed question",
+                    "price_micro_usdc": 25_000,
+                    "idempotency_key": "raced-crashed",
+                }),
+            ),
+            call_ok(
+                s1.clone(),
+                "compute.infer",
+                serde_json::json!({
+                    "prompt": "the crashed question",
+                    "price_micro_usdc": 25_000,
+                    "idempotency_key": "raced-crashed",
+                }),
+            ),
+            call_err(
+                s1.clone(),
+                serde_json::json!({
+                    "prompt": "doom the delta question",
+                    "price_micro_usdc": 10_000,
+                    "idempotency_key": "raced-doomed",
+                }),
+            ),
+            call_err(
+                s1.clone(),
+                serde_json::json!({
+                    "prompt": "the overpriced question",
+                    "price_micro_usdc": 60_000,
+                    "idempotency_key": "raced-overpriced",
+                }),
+            ),
+            call_ok(
+                s1.clone(),
+                "compute.infer",
+                serde_json::json!({
+                    "prompt": "the unkeyed question",
+                    "price_micro_usdc": 25_000,
+                }),
+            ),
+            call_ok(
+                s1.clone(),
+                "compute.infer",
+                serde_json::json!({
+                    "prompt": "the unkeyed question",
+                    "price_micro_usdc": 25_000,
+                }),
+            ),
+        );
+
+        // The raced pairs collapsed; the unkeyed twins did not.
+        assert_eq!(
+            gamma_first["job_id"], gamma_second["job_id"],
+            "one fresh key raced twice buys one job"
+        );
+        assert_eq!(gamma_first["receipt_id"], gamma_second["receipt_id"]);
+        assert_eq!(
+            crashed_first["job_id"].as_str().unwrap(),
+            crashed_job,
+            "the raced retries drove the journaled envelope, not a new one"
+        );
+        assert_eq!(crashed_first["job_id"], crashed_second["job_id"]);
+        assert_eq!(crashed_first["receipt_id"], crashed_second["receipt_id"]);
+        assert_ne!(
+            unkeyed_first["job_id"], unkeyed_second["job_id"],
+            "no key, two honest purchases"
+        );
+        assert_ne!(unkeyed_first["receipt_id"], unkeyed_second["receipt_id"]);
+        assert!(doomed_err.contains("was not served"), "got: {doomed_err}");
+        assert!(
+            overpriced_err.contains("exceeds the per-call ceiling"),
+            "got: {overpriced_err}"
+        );
+
+        // The node's own book of what it served, and the doomed job's
+        // id from its signed Error receipt.
+        let outcomes = node_task.await.unwrap();
+        let failures: Vec<_> = outcomes
+            .iter()
+            .filter(|o| o.receipt.receipt.status == A2ATaskStatus::Error)
+            .collect();
+        assert_eq!(failures.len(), 1, "exactly one job concluded failed");
+        let doomed_job = failures[0].job_id.to_string();
+        let jr = |v: &serde_json::Value| {
+            (
+                v["job_id"].as_str().unwrap().to_string(),
+                v["receipt_id"].as_str().unwrap().to_string(),
+            )
+        };
+        let paid = vec![
+            jr(&alpha),
+            jr(&beta),
+            jr(&gamma_first),
+            jr(&crashed_first),
+            jr(&unkeyed_first),
+            jr(&unkeyed_second),
+        ];
+        let served: HashSet<String> = outcomes.iter().map(|o| o.job_id.to_string()).collect();
+        let landed: HashSet<String> = paid
+            .iter()
+            .map(|(job, _)| job.clone())
+            .chain([doomed_job.clone()])
+            .collect();
+        assert_eq!(
+            served, landed,
+            "the node served exactly the seven envelopes that landed"
+        );
+
+        let keyed_settled = vec![
+            (scoped("raced-alpha"), jr(&alpha)),
+            (scoped("raced-beta"), jr(&beta)),
+            (scoped("raced-gamma"), jr(&gamma_first)),
+            (scoped("raced-crashed"), jr(&crashed_first)),
+        ];
+        let freed = vec![scoped("raced-doomed"), scoped("raced-overpriced")];
+
+        // THE LAW, same shape as the sequential test: every book
+        // against a different party's book, whatever order the races
+        // resolved in. Returns the feed rows so the two lives can be
+        // compared block-for-block.
+        let law = {
+            let purchases_path = purchases_path.clone();
+            let settlement = settlement.clone();
+            let keyed_settled = keyed_settled.clone();
+            let freed = freed.clone();
+            let paid = paid.clone();
+            let doomed_job = doomed_job.clone();
+            move |s: Server| {
+                let purchases_path = purchases_path.clone();
+                let settlement = settlement.clone();
+                let keyed_settled = keyed_settled.clone();
+                let freed = freed.clone();
+                let paid = paid.clone();
+                let doomed_job = doomed_job.clone();
+                async move {
+                    // The book's live view: every raced key settled to
+                    // exactly the job and receipt its callers were
+                    // handed; the doomed and refused keys freed.
+                    let book = PurchaseBook::open(&purchases_path).unwrap();
+                    for (key, (job, receipt)) in &keyed_settled {
+                        let entry = book
+                            .lookup(key)
+                            .unwrap_or_else(|| panic!("{key} stays booked"));
+                        assert_eq!(entry.envelope.payload.job_id.to_string(), *job);
+                        assert_eq!(entry.receipt_id.unwrap().to_string(), *receipt);
+                        assert_eq!(entry.envelope.payload.price_micro_usdc, 25_000);
+                    }
+                    for key in &freed {
+                        assert!(book.lookup(key).is_none(), "{key} must be freed");
+                    }
+
+                    // The settlement trail: one row per paid purchase,
+                    // bijectively, and the debit trail rides the rows.
+                    let rows = settlement.recent(20).await.unwrap();
+                    assert_eq!(rows.len(), 6, "one settlement row per paid purchase");
+                    let ids: HashSet<String> = rows.iter().map(|r| r.id.to_string()).collect();
+                    let paid_receipts: HashSet<String> =
+                        paid.iter().map(|(_, receipt)| receipt.clone()).collect();
+                    assert_eq!(paid_receipts.len(), 6, "six distinct paid receipts");
+                    assert_eq!(
+                        ids, paid_receipts,
+                        "settlement rows are the paid purchases, bijectively"
+                    );
+                    let debited: u64 = rows.iter().map(|r| r.credits_consumed).sum();
+                    assert_eq!(
+                        debited,
+                        6 * 3,
+                        "3 credits per paid 25k purchase; the raced losers, the refund and the refusal cost nothing"
+                    );
+
+                    // The coordinator's signed feed, re-verified
+                    // locally by the buyer library on the way in.
+                    let history =
+                        call_ok(s.clone(), "compute.receipts", serde_json::json!({})).await;
+                    assert_eq!(history["count"], 7, "seven jobs ever landed");
+                    assert_eq!(history["receipts_failing_verification"], 0);
+                    let jobs = history["jobs"].as_array().unwrap().clone();
+                    let row = |job: &str| {
+                        jobs.iter()
+                            .find(|r| r["job_id"] == *job)
+                            .unwrap_or_else(|| panic!("feed row for {job}"))
+                    };
+                    for (job, _) in &paid {
+                        let r = row(job);
+                        assert_eq!(r["status"], "completed");
+                        assert_eq!(r["price_micro_usdc"], 25_000);
+                        assert_eq!(r["funding_source"], "organic");
+                        assert_eq!(r["receipt_verified"], true);
+                        assert_eq!(
+                            r["payout"]["amount_micro_usdc"], 25_000,
+                            "zero-fee deployment pays out the gross hold"
+                        );
+                        assert!(
+                            r["payout"]["memo"].as_str().is_some_and(|m| !m.is_empty()),
+                            "the payout block names its memo"
+                        );
+                    }
+                    let r = row(&doomed_job);
+                    assert_eq!(r["status"], "failed");
+                    assert_eq!(r["price_micro_usdc"], 10_000);
+                    assert_eq!(
+                        r["receipt_verified"], true,
+                        "the failure is the operator's own signed statement"
+                    );
+                    assert_eq!(r["payout"], serde_json::Value::Null);
+
+                    // The balance view's money identity: six paid
+                    // holds charged, the refunded hold is money back.
+                    let funds = call_ok(s, "compute.balance", serde_json::json!({})).await;
+                    assert_eq!(funds["balance"]["deposited_micro_usdc"], 200_000);
+                    assert_eq!(
+                        funds["balance"]["charged_micro_usdc"], 150_000,
+                        "charged is the six paid purchases; the refund is excluded"
+                    );
+                    assert_eq!(funds["balance"]["withdrawn_micro_usdc"], 0);
+                    assert_eq!(funds["balance"]["available_micro_usdc"], 50_000);
+
+                    jobs
+                }
+            }
+        };
+        let feed1 = law(s1.clone()).await;
+
+        // Both parties restart: the coordinator from the journal alone
+        // behind a fresh payout backend, the daemon as a fresh Server
+        // over the same book file. The raced workload must have
+        // journaled cleanly enough to rebuild verbatim.
+        server1.abort();
+        let _ = server1.await;
+        let (url2, pubkey2, _server2, payout2) = boot_coordinator(Arc::new(MockRail::new())).await;
+        assert_eq!(
+            pubkey2, coordinator_pubkey,
+            "one durable coordinator identity"
+        );
+        let s2 = boot_daemon(url2.clone()).await;
+
+        let feed2 = law(s2.clone()).await;
+        let payout_blocks = |jobs: &[serde_json::Value]| {
+            let mut blocks: Vec<(String, serde_json::Value)> = jobs
+                .iter()
+                .map(|r| {
+                    (
+                        r["job_id"].as_str().unwrap().to_string(),
+                        r["payout"].clone(),
+                    )
+                })
+                .collect();
+            blocks.sort_by(|a, b| a.0.cmp(&b.0));
+            blocks
+        };
+        assert_eq!(
+            payout_blocks(&feed1),
+            payout_blocks(&feed2),
+            "the replayed feed serves the journaled payout blocks verbatim"
+        );
+        assert!(
+            payout2.records().is_empty(),
+            "nothing was re-paid to rebuild them"
+        );
+
+        // A raced replay of a settled key over the new wire: both
+        // callers get the recorded purchase, and the law holds
+        // afterwards exactly as it did before — nothing moved.
+        let replay = |s: Server| {
+            call_ok(
+                s,
+                "compute.infer",
+                serde_json::json!({
+                    "prompt": "the alpha question",
+                    "price_micro_usdc": 25_000,
+                    "idempotency_key": "raced-alpha",
+                }),
+            )
+        };
+        let (replay_first, replay_second) = tokio::join!(replay(s2.clone()), replay(s2.clone()));
+        let (alpha_job, alpha_receipt) = jr(&alpha);
+        for replayed in [&replay_first, &replay_second] {
+            assert_eq!(replayed["job_id"].as_str().unwrap(), alpha_job);
+            assert_eq!(replayed["receipt_id"].as_str().unwrap(), alpha_receipt);
+        }
+        law(s2).await;
+    }
+
+    /// The streaming pair against a REAL coordinator and node:
+    /// compute.stream_start returns the job id while the echo node is
+    /// still serving, compute.stream_poll drains the relayed chunks by
+    /// cursor, and the concluding poll carries the verified output and
+    /// receipt block — with the debit, settlement receipt, and audit
+    /// row landed by the drain task exactly as compute.infer records
+    /// them, never at poll time.
+    #[tokio::test]
+    async fn compute_stream_pair_relays_chunks_and_settles_end_to_end() {
+        use covenant_compute_coordinator::{
+            router as compute_router, CoordinatorConfig, CoordinatorState, MockPayout, MockRail,
+            NoReputation,
+        };
+        use covenant_compute_node::{
+            Coordinator as _, EchoExecutor, HttpCoordinatorClient, InMemoryEarningsLedger, Node,
+            NodeConfig,
+        };
+        use covenant_compute_protocol::{
+            CapabilityProfile, FundingSource, HardwareClass, JobKind, PriceAsk, PriceUnit,
+            RegisterRequest,
+        };
+
+        let coordinator_home = tempfile::tempdir().unwrap();
+        let coordinator_state = CoordinatorState::with_journal(
+            LocalIdentity::generate("coordinator@test"),
+            CoordinatorConfig {
+                long_poll_timeout: std::time::Duration::from_secs(5),
+                default_funding_source: FundingSource::Organic,
+                ..CoordinatorConfig::default()
+            },
+            Arc::new(NoReputation),
+            Arc::new(MockPayout::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            &coordinator_home.path().join("journal.jsonl"),
+            Some(Arc::new(MockRail::new())),
+        )
+        .await
+        .unwrap();
+        let coordinator_pubkey = coordinator_state.coordinator_pubkey_b58();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            axum::serve(listener, compute_router(coordinator_state))
+                .await
+                .unwrap();
+        });
+
+        let operator_identity = LocalIdentity::generate("operator@test");
+        let profile = CapabilityProfile {
+            operator: operator_identity.agent_id(),
+            hardware: HardwareClass::CpuOnly,
+            vram_gb: 0,
+            models_served: vec!["any".into()],
+            job_kinds: vec![JobKind::InferenceCall],
+            price: PriceAsk {
+                unit: PriceUnit::PerJob,
+                micro_usdc: 10_000,
+            },
+            tee_capable: false,
+        };
+        let coordinator_client = Arc::new(HttpCoordinatorClient::with_config(
+            base_url.clone(),
+            std::time::Duration::from_secs(5),
+            2,
+        ));
+        let register =
+            RegisterRequest::sign(profile.clone(), compute_payout_addr(2), &operator_identity)
+                .unwrap();
+        coordinator_client.register(register).await.unwrap();
+
+        let node = Node::new(
+            operator_identity,
+            profile,
+            coordinator_client,
+            Arc::new(EchoExecutor),
+            Arc::new(InMemoryEarningsLedger::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            NodeConfig {
+                coordinator_pubkey_b58: coordinator_pubkey,
+                max_in_flight: 4,
+                preempt_grace: std::time::Duration::from_secs(1),
+                fee_bps: 0,
+            },
+        );
+        let node_task = tokio::spawn(async move {
+            loop {
+                if let Ok(Some(outcome)) = node.run_once().await {
+                    return outcome;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        });
+
+        let settlement = Arc::new(InMemorySettlement::new());
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let identity = Arc::new(LocalIdentity::generate("user@local"));
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            settlement.clone(),
+            audit.clone(),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            identity.clone(),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            budget.clone(),
+        )
+        .with_compute(compute::ComputeState::new(compute::ComputeConfig {
+            coordinator_url: base_url,
+            max_price_micro_usdc: 50_000,
+            default_deadline_ms: 30_000,
+            poll_interval: std::time::Duration::from_millis(50),
+            referral_code: None,
+            rpc_url: None,
+            max_active_streams_per_payer: 4,
+            clips_dir: std::env::temp_dir().join("covenant-compute-test-clips"),
+        }));
+
+        let peer = identity.agent_id();
+        budget.set_capacity(&peer, 1_000).await.unwrap();
+        for action in [
+            "tool.call.compute.stream_start",
+            "tool.call.compute.stream_poll",
+        ] {
+            s.op_respond(Request::GrantCapability {
+                action: action.into(),
+                scope: None,
+                expires_at: None,
+            })
+            .await;
+        }
+
+        let started = match s
+            .op_respond(Request::CallTool {
+                name: "compute.stream_start".into(),
+                arguments: serde_json::json!({
+                    "prompt": "stream me back",
+                    "price_micro_usdc": 25_000
+                }),
+            })
+            .await
+        {
+            Response::ToolResult { content, is_error } => {
+                assert!(!is_error, "expected success, got {content:?}");
+                match &content[0] {
+                    covenant_mcp::Content::Json { value } => value.clone(),
+                    other => panic!("expected json block, got {other:?}"),
+                }
+            }
+            other => panic!("expected ToolResult, got {other:?}"),
+        };
+        assert_eq!(started["status"], "streaming");
+        assert_eq!(started["credits"], 3, "25000 micro-USDC ceils to 3 cents");
+        let job_id = started["job_id"].as_str().unwrap().to_string();
+
+        // Nothing has been charged at start: the debit belongs to the
+        // drain task's completion.
+        assert!(settlement.recent(10).await.unwrap().is_empty());
+
+        // Drain by cursor until the concluding poll.
+        let mut assembled = String::new();
+        let mut since = 0u64;
+        let mut final_blocks = Vec::new();
+        for _ in 0..200 {
+            let content = match s
+                .op_respond(Request::CallTool {
+                    name: "compute.stream_poll".into(),
+                    arguments: serde_json::json!({"job_id": job_id, "since": since}),
+                })
+                .await
+            {
+                Response::ToolResult { content, is_error } => {
+                    assert!(!is_error, "expected success, got {content:?}");
+                    content
+                }
+                other => panic!("expected ToolResult, got {other:?}"),
+            };
+            let covenant_mcp::Content::Json { value } = &content[0] else {
+                panic!("poll leads with a json block");
+            };
+            for chunk in value["chunks"].as_array().unwrap() {
+                assembled.push_str(chunk.as_str().unwrap());
+            }
+            since = value["next_seq"].as_u64().unwrap();
+            if value["status"] == "completed" {
+                final_blocks = content[1..].to_vec();
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+
+        assert_eq!(assembled, "stream me back", "the feed relayed the echo");
+        assert_eq!(
+            final_blocks[0],
+            covenant_mcp::Content::text("stream me back"),
+            "the concluding poll carries the verified output"
+        );
+        let meta = final_blocks
+            .iter()
+            .find_map(|c| match c {
+                covenant_mcp::Content::Json { value } => Some(value.clone()),
+                _ => None,
+            })
+            .expect("metadata block");
+        assert_eq!(meta["job_id"].as_str().unwrap(), job_id);
+        assert_eq!(meta["price_micro_usdc"], 25_000);
+        assert_eq!(meta["stream_matched_output"], true);
+
+        let node_outcome = node_task.await.unwrap();
+        assert_eq!(node_outcome.job_id.to_string(), job_id);
+
+        // The drain task landed exactly compute.infer's books.
+        let receipts = settlement.recent(10).await.unwrap();
+        assert_eq!(receipts.len(), 1, "one settlement receipt");
+        assert_eq!(receipts[0].resource, covenant_types::ResourceKind::Compute);
+        assert_eq!(receipts[0].payer, peer);
+        assert_eq!(receipts[0].credits_consumed, 3);
+        assert_eq!(
+            receipts[0].id.to_string(),
+            meta["receipt_id"].as_str().unwrap()
+        );
+        let events = audit.recent(20).await.unwrap();
+        let row = events
+            .iter()
+            .find_map(|e| match &e.kind {
+                AuditKind::ComputeJobDispatched {
+                    job_id: id, status, ..
+                } if id.to_string() == job_id => Some(status.clone()),
+                _ => None,
+            })
+            .expect("ComputeJobDispatched audit event");
+        assert_eq!(row, "ok");
+        assert_eq!(
+            budget.tokens_remaining(&peer).await.unwrap(),
+            997,
+            "3 credits debited by the drain task"
+        );
+
+        // A concluded feed stays readable; a bogus id reads as not
+        // this caller's job.
+        match s
+            .op_respond(Request::CallTool {
+                name: "compute.stream_poll".into(),
+                arguments: serde_json::json!({"job_id": Uuid::new_v4()}),
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(message.contains("no streaming job"), "got: {message}");
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    /// The connector shape end to end: an EXTERNAL agent — enrolled as a
+    /// scoped peer, never holding the operator token — buys real compute
+    /// through the daemon against a real coordinator and node. This is
+    /// the partner-pilot path: `EnrollPeer` grants exactly
+    /// `tool.call.compute.infer`, `SetPeerBudget` funds it, the peer's
+    /// own identity dispatches, and every book (settlement payer, audit
+    /// row, budget debit) lands on the PEER while the operator spends
+    /// nothing. Refusals bracket the happy path: no budget before
+    /// funding, no ungranted tool ever, no spend after the kill-switch.
+    #[tokio::test]
+    async fn enrolled_peer_buys_compute_on_its_own_budget_end_to_end() {
+        use covenant_compute_coordinator::{
+            router as compute_router, CoordinatorConfig, CoordinatorState, MockPayout, MockRail,
+            NoReputation,
+        };
+        use covenant_compute_node::{
+            Coordinator as _, EchoExecutor, HttpCoordinatorClient, InMemoryEarningsLedger, Node,
+            NodeConfig,
+        };
+        use covenant_compute_protocol::{
+            CapabilityProfile, FundingSource, HardwareClass, JobKind, PriceAsk, PriceUnit,
+            RegisterRequest,
+        };
+
+        let coordinator_home = tempfile::tempdir().unwrap();
+        let coordinator_state = CoordinatorState::with_journal(
+            LocalIdentity::generate("coordinator@test"),
+            CoordinatorConfig {
+                long_poll_timeout: std::time::Duration::from_secs(5),
+                default_funding_source: FundingSource::Organic,
+                ..CoordinatorConfig::default()
+            },
+            Arc::new(NoReputation),
+            Arc::new(MockPayout::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            &coordinator_home.path().join("journal.jsonl"),
+            Some(Arc::new(MockRail::new())),
+        )
+        .await
+        .unwrap();
+        let coordinator_pubkey = coordinator_state.coordinator_pubkey_b58();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            axum::serve(listener, compute_router(coordinator_state))
+                .await
+                .unwrap();
+        });
+
+        let operator_identity = LocalIdentity::generate("operator@test");
+        let profile = CapabilityProfile {
+            operator: operator_identity.agent_id(),
+            hardware: HardwareClass::CpuOnly,
+            vram_gb: 0,
+            models_served: vec!["any".into()],
+            job_kinds: vec![JobKind::InferenceCall],
+            price: PriceAsk {
+                unit: PriceUnit::PerJob,
+                micro_usdc: 10_000,
+            },
+            tee_capable: false,
+        };
+        let coordinator_client = Arc::new(HttpCoordinatorClient::with_config(
+            base_url.clone(),
+            std::time::Duration::from_secs(5),
+            2,
+        ));
+        let register =
+            RegisterRequest::sign(profile.clone(), compute_payout_addr(2), &operator_identity)
+                .unwrap();
+        coordinator_client.register(register).await.unwrap();
+
+        let node = Node::new(
+            operator_identity,
+            profile,
+            coordinator_client,
+            Arc::new(EchoExecutor),
+            Arc::new(InMemoryEarningsLedger::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            NodeConfig {
+                coordinator_pubkey_b58: coordinator_pubkey,
+                max_in_flight: 4,
+                preempt_grace: std::time::Duration::from_secs(1),
+                fee_bps: 0,
+            },
+        );
+        let node_task = tokio::spawn(async move {
+            loop {
+                if let Ok(Some(outcome)) = node.run_once().await {
+                    return outcome;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        });
+
+        let settlement = Arc::new(InMemorySettlement::new());
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let identity = Arc::new(LocalIdentity::generate("daemon@local"));
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            settlement.clone(),
+            audit.clone(),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            identity.clone(),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            budget.clone(),
+        )
+        .with_compute(compute::ComputeState::new(compute::ComputeConfig {
+            coordinator_url: base_url,
+            max_price_micro_usdc: 50_000,
+            default_deadline_ms: 30_000,
+            poll_interval: std::time::Duration::from_millis(50),
+            referral_code: None,
+            rpc_url: None,
+            max_active_streams_per_payer: 4,
+            clips_dir: std::env::temp_dir().join("covenant-compute-test-clips"),
+        }));
+
+        // Operator enrolls the external agent with exactly the dispatch
+        // capability — the connector never sees the operator token.
+        let (pubkey_b58, subject) = match s
+            .op_respond(Request::EnrollPeer {
+                display: "pilot-agent".into(),
+                actions: vec!["tool.call.compute.infer".into()],
+            })
+            .await
+        {
+            Response::PeerEnrolled {
+                token_b58,
+                pubkey_b58,
+                ..
+            } => {
+                let token = covenant_peer_auth::PeerToken::from_b58(&token_b58).unwrap();
+                let subject = s.peers.resolve(&token).await.unwrap().expect("resolves");
+                (pubkey_b58, subject)
+            }
+            other => panic!("expected PeerEnrolled, got: {other:?}"),
+        };
+
+        let infer_args = serde_json::json!({
+            "prompt": "review this diff",
+            "price_micro_usdc": 25_000
+        });
+
+        // Enrolled but unfunded: refused before any network dispatch.
+        match s
+            .respond(
+                Request::CallTool {
+                    name: "compute.infer".into(),
+                    arguments: infer_args.clone(),
+                },
+                &subject,
+            )
+            .await
+        {
+            Response::Error { message } => {
+                assert!(message.contains("no budget capacity"), "got: {message}")
+            }
+            other => panic!("expected Error before funding, got {other:?}"),
+        }
+
+        match s
+            .op_respond(Request::SetPeerBudget {
+                pubkey_b58: pubkey_b58.clone(),
+                credits_per_hour: 500,
+            })
+            .await
+        {
+            Response::PeerBudgetSet { .. } => {}
+            other => panic!("expected PeerBudgetSet, got {other:?}"),
+        }
+
+        // Funded: the peer's own identity buys a real job.
+        let content = match s
+            .respond(
+                Request::CallTool {
+                    name: "compute.infer".into(),
+                    arguments: infer_args,
+                },
+                &subject,
+            )
+            .await
+        {
+            Response::ToolResult { content, is_error } => {
+                assert!(!is_error, "expected success, got {content:?}");
+                content
+            }
+            other => panic!("expected ToolResult, got {other:?}"),
+        };
+        assert_eq!(content[0], covenant_mcp::Content::text("review this diff"));
+        let meta = content
+            .iter()
+            .find_map(|c| match c {
+                covenant_mcp::Content::Json { value } => Some(value.clone()),
+                _ => None,
+            })
+            .expect("metadata block");
+        let outcome = node_task.await.unwrap();
+        assert_eq!(
+            outcome.job_id.to_string(),
+            meta["job_id"].as_str().unwrap(),
+            "the node served the peer's job"
+        );
+
+        // Every book names the peer, and the operator spent nothing.
+        let receipts = settlement.recent(10).await.unwrap();
+        assert_eq!(receipts.len(), 1);
+        assert_eq!(receipts[0].payer, subject);
+        assert_eq!(receipts[0].credits_consumed, 3, "25000 micro-USDC → 3¢");
+        assert!(audit.recent(20).await.unwrap().iter().any(
+            |e| matches!(&e.kind, AuditKind::ComputeJobDispatched { job_id, .. }
+                    if job_id.to_string() == meta["job_id"].as_str().unwrap())
+        ));
+        assert_eq!(budget.tokens_remaining(&subject).await.unwrap(), 497);
+        assert!(matches!(
+            budget.would_exceed(&identity.agent_id(), 1).await,
+            Err(covenant_budget::BudgetError::NoCapacity(_)),
+        ));
+
+        // The grant is exact: compute.run was never granted.
+        match s
+            .respond(
+                Request::CallTool {
+                    name: "compute.run".into(),
+                    arguments: serde_json::json!({"command": "true"}),
+                },
+                &subject,
+            )
+            .await
+        {
+            Response::Error { message } => {
+                assert!(message.contains("capabilit"), "got: {message}")
+            }
+            other => panic!("expected capability refusal, got {other:?}"),
+        }
+
+        // Kill-switch: capacity 0 stops further spend, token untouched.
+        s.op_respond(Request::SetPeerBudget {
+            pubkey_b58,
+            credits_per_hour: 0,
+        })
+        .await;
+        match s
+            .respond(
+                Request::CallTool {
+                    name: "compute.infer".into(),
+                    arguments: serde_json::json!({
+                        "prompt": "one more",
+                        "price_micro_usdc": 25_000
+                    }),
+                },
+                &subject,
+            )
+            .await
+        {
+            Response::Error { message } => {
+                assert!(message.contains("budget"), "got: {message}")
+            }
+            other => panic!("expected Error after kill-switch, got {other:?}"),
+        }
+    }
+
+    /// Without with_compute the tool is neither advertised nor callable.
+    #[tokio::test]
+    async fn compute_infer_requires_the_profile_to_be_enabled() {
+        let s = server_with(vec![], "");
+        s.op_respond(Request::GrantCapability {
+            action: "tool.call.compute.infer".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        match s.op_respond(Request::ListTools).await {
+            Response::ToolList { tools } => {
+                assert!(tools.iter().all(|t| t.name != "compute.infer"));
+            }
+            other => panic!("expected ToolList, got {other:?}"),
+        }
+        match s
+            .op_respond(Request::CallTool {
+                name: "compute.infer".into(),
+                arguments: serde_json::json!({"prompt": "hi"}),
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(message.contains("not enabled"), "got: {message}")
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn call_tool_accepts_matching_scope_arguments() {
         let s = server_with(vec![], "");
@@ -53742,6 +57602,169 @@ budget_credits_per_hour = {credits}
         {
             Response::Error { message } => {
                 assert!(message.contains("operator identity"), "got: {message}")
+            }
+            other => panic!("expected Error, got: {other:?}"),
+        }
+    }
+
+    /// The funding half of enrollment: an enrolled peer has no budget
+    /// bucket (spend refused as `NoCapacity`) until `SetPeerBudget`
+    /// stamps one; re-stamping shrinks it, and 0 is the kill-switch.
+    #[tokio::test]
+    async fn set_peer_budget_funds_an_enrolled_peer_and_restamps() {
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()));
+        let (pubkey_b58, subject) = match s
+            .op_respond(Request::EnrollPeer {
+                display: "pilot-agent".into(),
+                actions: vec!["tool.call.compute.infer".into()],
+            })
+            .await
+        {
+            Response::PeerEnrolled {
+                token_b58,
+                pubkey_b58,
+                ..
+            } => {
+                let token = covenant_peer_auth::PeerToken::from_b58(&token_b58).unwrap();
+                let subject = s.peers.resolve(&token).await.unwrap().expect("resolves");
+                (pubkey_b58, subject)
+            }
+            other => panic!("expected PeerEnrolled, got: {other:?}"),
+        };
+
+        // Before funding: the exact refusal compute.infer maps to a 4xx.
+        assert!(matches!(
+            s.budget.would_exceed(&subject, 1).await,
+            Err(covenant_budget::BudgetError::NoCapacity(_))
+        ));
+
+        match s
+            .op_respond(Request::SetPeerBudget {
+                pubkey_b58: pubkey_b58.clone(),
+                credits_per_hour: 500,
+            })
+            .await
+        {
+            Response::PeerBudgetSet {
+                display,
+                pubkey_b58: echoed,
+                credits_per_hour,
+            } => {
+                assert_eq!(display, "pilot-agent@peer");
+                assert_eq!(echoed, pubkey_b58);
+                assert_eq!(credits_per_hour, 500);
+            }
+            other => panic!("expected PeerBudgetSet, got: {other:?}"),
+        }
+        assert!(!s.budget.would_exceed(&subject, 500).await.unwrap());
+        assert!(s.budget.would_exceed(&subject, 501).await.unwrap());
+
+        // Absolute re-stamp: shrink to 0 revokes spend without revoking
+        // the token.
+        match s
+            .op_respond(Request::SetPeerBudget {
+                pubkey_b58: pubkey_b58.clone(),
+                credits_per_hour: 0,
+            })
+            .await
+        {
+            Response::PeerBudgetSet {
+                credits_per_hour, ..
+            } => assert_eq!(credits_per_hour, 0),
+            other => panic!("expected PeerBudgetSet, got: {other:?}"),
+        }
+        assert!(s.budget.would_exceed(&subject, 1).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn set_peer_budget_rejects_non_operator() {
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let s = server_with_audit(audit.clone());
+        let foreign = AgentId::new("foreign@host", [42u8; 32]);
+        match s
+            .respond(
+                Request::SetPeerBudget {
+                    pubkey_b58: bs58::encode([7u8; 32]).into_string(),
+                    credits_per_hour: 500,
+                },
+                &foreign,
+            )
+            .await
+        {
+            Response::Error { message } => {
+                assert!(message.contains("operator identity"), "got: {message}")
+            }
+            other => panic!("expected Error, got: {other:?}"),
+        }
+        let rows = audit.recent(10).await.unwrap();
+        assert!(
+            rows.iter().any(
+                |e| matches!(&e.kind, AuditKind::PeerBudgetSetRejected { peer_pubkey_b58, .. }
+                    if *peer_pubkey_b58 == bs58::encode([42u8; 32]).into_string())
+            ),
+            "rejection must land in the audit chain"
+        );
+    }
+
+    /// Money lands only on a full, live subject key: a prefix (however
+    /// unambiguous), an unknown key, and a revoked peer are all refused.
+    #[tokio::test]
+    async fn set_peer_budget_refuses_prefix_unknown_and_revoked_subjects() {
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()));
+        let (token_b58, pubkey_b58) = match s
+            .op_respond(Request::EnrollPeer {
+                display: "pilot-agent".into(),
+                actions: vec![],
+            })
+            .await
+        {
+            Response::PeerEnrolled {
+                token_b58,
+                pubkey_b58,
+                ..
+            } => (token_b58, pubkey_b58),
+            other => panic!("expected PeerEnrolled, got: {other:?}"),
+        };
+
+        let prefix = pubkey_b58[..8].to_string();
+        match s
+            .op_respond(Request::SetPeerBudget {
+                pubkey_b58: prefix,
+                credits_per_hour: 500,
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(message.contains("full base58"), "got: {message}")
+            }
+            other => panic!("expected Error, got: {other:?}"),
+        }
+
+        let unknown = bs58::encode([9u8; 32]).into_string();
+        match s
+            .op_respond(Request::SetPeerBudget {
+                pubkey_b58: unknown,
+                credits_per_hour: 500,
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(message.contains("no live enrolled peer"), "got: {message}")
+            }
+            other => panic!("expected Error, got: {other:?}"),
+        }
+
+        let token = covenant_peer_auth::PeerToken::from_b58(&token_b58).unwrap();
+        assert!(s.peers.revoke(&token).await.unwrap());
+        match s
+            .op_respond(Request::SetPeerBudget {
+                pubkey_b58,
+                credits_per_hour: 500,
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(message.contains("no live enrolled peer"), "got: {message}")
             }
             other => panic!("expected Error, got: {other:?}"),
         }

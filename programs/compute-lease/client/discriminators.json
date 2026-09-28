@@ -1,0 +1,194 @@
+{
+  "programId": "CLSeVNrRi4TpXsXAkAuLh58kGCCAd1w1bj2CcEhTEESd",
+  "cluster": "devnet",
+  "note": "Anchor 8-byte discriminators: sha256(\"global:<ix>\")[..8], sha256(\"account:<Name>\")[..8], sha256(\"event:<Name>\")[..8]. process_undelegation is injected by the ephemeral-rollups-sdk macros and is not visible in lib.rs.",
+  "instructions": {
+    "claim_operator_share": [
+      48,
+      94,
+      26,
+      230,
+      17,
+      207,
+      37,
+      172
+    ],
+    "claim_renter_refund": [
+      127,
+      108,
+      137,
+      251,
+      222,
+      91,
+      39,
+      29
+    ],
+    "delegate_lease": [
+      208,
+      75,
+      250,
+      115,
+      2,
+      133,
+      112,
+      51
+    ],
+    "open_lease": [
+      187,
+      79,
+      139,
+      164,
+      14,
+      110,
+      255,
+      127
+    ],
+    "process_undelegation": [
+      196,
+      28,
+      41,
+      206,
+      48,
+      37,
+      51,
+      167
+    ],
+    "settle_lease": [
+      80,
+      14,
+      40,
+      219,
+      201,
+      133,
+      236,
+      90
+    ],
+    "tick": [
+      92,
+      79,
+      44,
+      8,
+      101,
+      80,
+      63,
+      15
+    ],
+    "undelegate_lease": [
+      161,
+      95,
+      240,
+      230,
+      35,
+      21,
+      136,
+      242
+    ],
+    "void_lease": [
+      62,
+      166,
+      226,
+      18,
+      70,
+      55,
+      61,
+      3
+    ]
+  },
+  "accounts": {
+    "LeaseMeter": [
+      254,
+      152,
+      135,
+      84,
+      146,
+      89,
+      109,
+      232
+    ],
+    "LeaseTerms": [
+      120,
+      89,
+      222,
+      140,
+      162,
+      246,
+      170,
+      179
+    ]
+  },
+  "events": {
+    "LeaseOpened": [
+      55,
+      230,
+      185,
+      195,
+      231,
+      104,
+      170,
+      89
+    ],
+    "LeaseOperatorPaid": [
+      240,
+      34,
+      101,
+      137,
+      240,
+      203,
+      50,
+      155
+    ],
+    "LeaseRenterRefunded": [
+      101,
+      10,
+      76,
+      216,
+      184,
+      182,
+      121,
+      251
+    ],
+    "LeaseSettled": [
+      229,
+      233,
+      206,
+      105,
+      201,
+      233,
+      216,
+      110
+    ],
+    "LeaseTicked": [
+      128,
+      134,
+      146,
+      254,
+      64,
+      38,
+      131,
+      227
+    ],
+    "LeaseVoided": [
+      249,
+      33,
+      37,
+      207,
+      180,
+      224,
+      216,
+      153
+    ]
+  },
+  "errors": {
+    "6000": "ZeroRate",
+    "6001": "BadDuration",
+    "6002": "Overflow",
+    "6003": "EmptyDeposit",
+    "6004": "AlreadySettled",
+    "6005": "AlreadyPaid",
+    "6006": "AlreadyVoided",
+    "6007": "LeaseVoided",
+    "6008": "MeterWentBackwards",
+    "6009": "MeterClosed",
+    "6010": "LeaseStillRunning"
+  }
+}

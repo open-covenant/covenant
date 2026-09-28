@@ -1,0 +1,29 @@
+{
+  "product": "Covenant Compute",
+  "program": "covenant-compute-lease",
+  "cluster": "devnet",
+  "programId": "CLSeVNrRi4TpXsXAkAuLh58kGCCAd1w1bj2CcEhTEESd",
+  "programDataAddress": "G5TrQmMfopN3PETwrskPgz3rzWyBoKu51x4UMTpa6ZeD",
+  "upgradeAuthority": "B3WP5sNb9ZAPMnjeCy3DyZLJJCJpY9Y8QwrSp2yGHdYM",
+  "deploySignature": "zBRSNNDc9StxfFoNNf3s1d1EKgCxYfYx49HDptsg11ycRZYGJQDB6e8xyUa1Shq8gH6sbYQPnMU2JBq7xUfU1Sc",
+  "deployedInSlot": 493623223,
+  "deployedAt": "2026-09-05T16:16:16Z",
+  "loader": "BPFLoaderUpgradeab1e11111111111111111111111",
+  "dataLength": 455760,
+  "rentLamports": 2316139640,
+  "artifact": {
+    "file": "covenant_compute_lease.so",
+    "bytes": 447632,
+    "sha256": "1baa4be66acad21358e194d33c65a4775ec2befcc31a186ff21e79aef74073bd",
+    "build": "cargo build-sbf --sbf-out-dir target/deploy",
+    "toolchain": "cargo-build-sbf 3.1.13, platform-tools v1.52, rustc 1.89.0"
+  },
+  "verify": "solana program show CLSeVNrRi4TpXsXAkAuLh58kGCCAd1w1bj2CcEhTEESd -u devnet",
+  "verified": "solana program dump returns 455760 bytes; the first 447632 hash to the sha256 above and compare byte for byte against the local .so, the remaining 8128 are zero padding left by the extend (the loader's extend has a 10240-byte minimum).",
+  "notes": [
+    "The metering-authority fix is live at this address as of the signature above.",
+    "The rollup keeps its own clone of the program. The first run after an upgrade can still meet the previous binary; wait for the clone to refresh.",
+    "An upgrade needs the extend cost plus a buffer rent-exempt for the new size. The buffer's lamports come back to the deployer when the upgrade lands.",
+    "The public devnet faucet is exhausted for these addresses. The Helius devnet endpoint still gives 1 SOL at a time, heavily rate-limited."
+  ]
+}

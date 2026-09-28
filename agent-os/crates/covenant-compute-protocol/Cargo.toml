@@ -1,0 +1,32 @@
+[package]
+name = "covenant-compute-protocol"
+version = "0.1.0"
+description = "Wire protocol for the Covenant compute network: the signed job envelope, GPU capability-profile schema, WorkReceipt, coordinator<->operator long-poll messages, and the FederationEscrow trait. Pure types and signing helpers, no I/O."
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+covenant-types = { path = "../covenant-types" }
+covenant-identity = { path = "../covenant-identity" }
+covenant-mcp = { path = "../covenant-mcp" }
+covenant-a2a = { path = "../covenant-a2a" }
+async-trait = { workspace = true }
+bs58 = { workspace = true }
+chacha20poly1305 = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+# float_roundtrip: parse JSON floats to the nearest f64 so a number
+# serialized then parsed back is bit-identical. WorkReceipt binds the job
+# output by hash (`result_hash_hex`), and an embedding output is a block of
+# floats that crosses the wire as JSON between the operator that signs the
+# hash and the coordinator that re-checks it; without this, the default
+# parser lands a low bit off and the re-hash rejects the receipt, so no
+# embedding job ever settles. Enabled here (feature-unified across the
+# workspace) because this crate owns that hashing convention.
+serde_json = { workspace = true, features = ["float_roundtrip"] }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+zeroize = { workspace = true, features = ["zeroize_derive"] }

@@ -55,8 +55,9 @@ run node ./scripts/provenance.mjs verify-all
 run node ./scripts/metrics.mjs
 run node ./scripts/validate-cli-envelope-docs.mjs
 run node ./scripts/validate-chain-cli-envelope-fields.mjs
-run node ./scripts/validate-sdk-compatibility.mjs
 run node ./scripts/validate-crate-groups-coverage.mjs
+run node ./scripts/validate-compute-readme-env-knobs.mjs
+run node ./scripts/validate-compute-network-doc.mjs
 run node ./scripts/validate-chain-tx-test-line-refs.mjs
 run node ./scripts/validate-receipt-list-line-refs.mjs
 run node ./scripts/validate-receipt-onchain-fallback-line-refs.mjs

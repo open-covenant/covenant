@@ -44,7 +44,7 @@ pub mod payai;
 #[cfg(feature = "solana")]
 pub use payai::PayaiSolanaSigner;
 #[cfg(feature = "solana")]
-pub use solana::SolanaSigner;
+pub use solana::{SolanaSigner, StagedTransferError, TransferStage};
 
 /// Errors surfaced by the x402 client.
 ///

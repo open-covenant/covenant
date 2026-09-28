@@ -830,6 +830,21 @@ pub enum Request {
         #[serde(default)]
         match_limit: Option<usize>,
     },
+    /// Set the hourly budget capacity for one enrolled peer — the funding
+    /// half of partner onboarding ([`Request::EnrollPeer`] grants
+    /// capabilities but seeds no budget, so a peer holding
+    /// `tool.call.compute.infer` still can't spend until the operator
+    /// funds it). `pubkey_b58` is the subject key from
+    /// [`Response::PeerEnrolled`] / `peers list`; the peer must be live —
+    /// funding an unknown or revoked key is refused rather than left
+    /// floating on an identity nobody holds a token for. The capacity is
+    /// absolute, not additive: calling again re-stamps the bucket, so the
+    /// same verb tops a pilot up mid-run or shrinks it to 0 as a spend
+    /// kill-switch without revoking the token. Operator-only.
+    SetPeerBudget {
+        pubkey_b58: String,
+        credits_per_hour: u64,
+    },
     /// Resolved Synapse Agent Protocol bridge status. Read-only; no
     /// signer or RPC needed. When the daemon was started without the
     /// bridge wired in, [`Response::SapStatus`] is returned with
@@ -1055,6 +1070,13 @@ pub enum Response {
         pubkey_b58: String,
         display: String,
         granted: Vec<String>,
+    },
+    /// Successful response to [`Request::SetPeerBudget`]. Echoes the
+    /// resolved peer and the capacity now stamped on its bucket.
+    PeerBudgetSet {
+        display: String,
+        pubkey_b58: String,
+        credits_per_hour: u64,
     },
     /// Successful response to [`Request::ListPeers`]. Token bytes are
     /// **never** carried — only the 6-char `token_prefix`.

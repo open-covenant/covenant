@@ -304,6 +304,7 @@ name = "covenant-x402-signer"
 version = "0.0.0"
 dependencies = [
  "covenant-x402",
+ "serde",
  "serde_json",
  "solana-zero-copy",
  "tokio",

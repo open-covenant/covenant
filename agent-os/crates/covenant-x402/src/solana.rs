@@ -38,13 +38,26 @@
 //! The signer needs a fresh blockhash. It hits the configured RPC
 //! URL with a minimal `getLatestBlockhash` JSON-RPC call (no
 //! `solana-client` dep — just `reqwest`).
+//!
+//! ## Direct transfers (no facilitator)
+//!
+//! [`SolanaSigner::submit_transfer`] is the payout primitive: unlike
+//! [`build_payment`]/[`Signer::build_payment`] (which hands back an
+//! unsubmitted, x402-enveloped transaction for a facilitator to settle
+//! later), `submit_transfer` submits and confirms the transfer itself
+//! — the signer IS the payer and there is no facilitator in that flow.
+//! Used by the payout sidecar (`covenant-x402-signer`'s `payout` mode)
+//! to push a coordinator-side compute payout straight to an operator's
+//! ATA.
 
 use std::path::Path;
 use std::str::FromStr;
+use std::time::Duration;
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use solana_sdk::{
     hash::Hash,
+    instruction::Instruction,
     pubkey::Pubkey,
     signer::{
         keypair::{read_keypair_file, Keypair},
@@ -63,6 +76,12 @@ use crate::{PaymentRequirements, Result, Signer, X402Error};
 pub const USDC_MAINNET_MINT: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 /// USDC mint on Solana devnet (Circle's official devnet mint).
 pub const USDC_DEVNET_MINT: &str = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
+/// The SPL Memo v2 program (same id on every cluster).
+pub const MEMO_PROGRAM_ID: &str = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr";
+/// The memo program rejects instruction data past this length (its
+/// unsigned-memo cap); checked client-side so an oversized memo fails
+/// before a transaction is built, not on-chain.
+pub const MEMO_MAX_BYTES: usize = 566;
 
 /// Real Solana payment signer.
 pub struct SolanaSigner {
@@ -176,6 +195,246 @@ impl SolanaSigner {
             .ok_or_else(|| X402Error::Sign(format!("rpc: no blockhash in response: {}", parsed)))?;
         Hash::from_str(blockhash_str).map_err(|e| X402Error::Sign(format!("parse blockhash: {e}")))
     }
+
+    /// Submits an already-signed transaction via `sendTransaction` and
+    /// returns its signature. Does not wait for confirmation — pair
+    /// with [`Self::confirm_transaction`].
+    async fn submit_transaction(&self, tx: &Transaction) -> Result<String> {
+        let raw =
+            bincode::serialize(tx).map_err(|e| X402Error::Sign(format!("serialize tx: {e}")))?;
+        let encoded = BASE64.encode(raw);
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "sendTransaction",
+            "params": [encoded, {"encoding": "base64", "preflightCommitment": "confirmed"}]
+        });
+        let resp = self.http.post(&self.rpc_url).json(&body).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(X402Error::Sign(format!(
+                "rpc sendTransaction status {}: {}",
+                status,
+                resp.text().await.unwrap_or_default()
+            )));
+        }
+        let parsed: serde_json::Value = resp.json().await?;
+        if let Some(err) = parsed.get("error").filter(|e| !e.is_null()) {
+            return Err(X402Error::Sign(format!("rpc sendTransaction error: {err}")));
+        }
+        parsed
+            .get("result")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| {
+                X402Error::Sign(format!(
+                    "sendTransaction: no signature in response: {parsed}"
+                ))
+            })
+    }
+
+    /// Polls `getSignatureStatuses` until `signature` is confirmed or
+    /// finalized, fails with the on-chain error, or `max_polls`
+    /// elapses. Parameterised so tests can shrink the wait;
+    /// [`Self::submit_transfer`] always calls this with a fixed 40
+    /// polls / 750ms (~30s, bounded by how long a blockhash stays
+    /// valid).
+    async fn confirm_transaction(
+        &self,
+        signature: &str,
+        max_polls: u32,
+        interval: Duration,
+    ) -> Result<()> {
+        for _ in 0..max_polls {
+            tokio::time::sleep(interval).await;
+            let body = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "getSignatureStatuses",
+                "params": [[signature], {"searchTransactionHistory": true}]
+            });
+            let resp = self.http.post(&self.rpc_url).json(&body).send().await?;
+            let status = resp.status();
+            if !status.is_success() {
+                return Err(X402Error::Sign(format!(
+                    "rpc getSignatureStatuses status {}: {}",
+                    status,
+                    resp.text().await.unwrap_or_default()
+                )));
+            }
+            let parsed: serde_json::Value = resp.json().await?;
+            let entry = parsed.pointer("/result/value/0");
+            let Some(entry) = entry.filter(|s| !s.is_null()) else {
+                continue; // not yet seen by the cluster
+            };
+            if let Some(err) = entry.get("err").filter(|e| !e.is_null()) {
+                return Err(X402Error::Sign(format!(
+                    "transaction {signature} failed on-chain: {err}"
+                )));
+            }
+            let confirmed = entry
+                .get("confirmationStatus")
+                .and_then(|c| c.as_str())
+                .map(|c| c == "confirmed" || c == "finalized")
+                .unwrap_or(false);
+            if confirmed {
+                return Ok(());
+            }
+        }
+        Err(X402Error::Sign(format!(
+            "transaction {signature} not confirmed within timeout; check it on-chain"
+        )))
+    }
+
+    /// Builds, signs, submits, and confirms a plain SPL `TransferChecked`
+    /// paying `recipient` in `mint` — the payout primitive described in
+    /// the module docs. `mint`/`recipient` are base58 pubkey strings,
+    /// parsed here so callers (e.g. a payout sidecar reading a JSON
+    /// request off stdin) never need their own solana-sdk dependency
+    /// just to hand this signer an address. A `memo` rides in the same
+    /// transaction, binding the transfer to whatever the caller is
+    /// paying for — anyone holding the memo's referent can later fetch
+    /// the transaction and check the linkage.
+    ///
+    /// Returns the confirmed transaction signature.
+    pub async fn submit_transfer(
+        &self,
+        mint: &str,
+        recipient: &str,
+        amount: u64,
+        memo: Option<&str>,
+    ) -> Result<String> {
+        self.submit_transfer_staged(mint, recipient, amount, memo)
+            .await
+            .map_err(|e| X402Error::Sign(e.message))
+    }
+
+    /// [`Self::submit_transfer`] with the failure's blast radius made
+    /// explicit: an error tells the caller whether the transaction can
+    /// possibly be live on-chain. A payer that retries a
+    /// [`TransferStage::MaybeSubmitted`] failure with a fresh blockhash
+    /// risks paying twice — the first transaction is not network-deduped
+    /// against the second. The signature is computed at signing time, so
+    /// even a lost-response failure carries it for reconciliation.
+    pub async fn submit_transfer_staged(
+        &self,
+        mint: &str,
+        recipient: &str,
+        amount: u64,
+        memo: Option<&str>,
+    ) -> std::result::Result<String, StagedTransferError> {
+        let not_submitted = |message: String| StagedTransferError {
+            stage: TransferStage::NotSubmitted,
+            signature: None,
+            message,
+        };
+        let mint_pk = Pubkey::from_str(mint)
+            .map_err(|e| not_submitted(format!("parse mint {mint:?}: {e}")))?;
+        let recipient_pk = Pubkey::from_str(recipient)
+            .map_err(|e| not_submitted(format!("parse recipient {recipient:?}: {e}")))?;
+        let decimals = self
+            .resolve_decimals(&mint_pk)
+            .await
+            .map_err(|e| not_submitted(e.to_string()))?;
+        let blockhash = self
+            .latest_blockhash()
+            .await
+            .map_err(|e| not_submitted(e.to_string()))?;
+        let tx = build_transfer_transaction(
+            &self.keypair,
+            mint_pk,
+            recipient_pk,
+            amount,
+            decimals,
+            blockhash,
+            memo,
+        )
+        .map_err(|e| not_submitted(e.to_string()))?;
+        // The signature exists the moment the transaction is signed —
+        // carry it on every post-signing failure so an ambiguous outcome
+        // can be reconciled against the chain by signature, not just by
+        // memo.
+        let signature = tx
+            .signatures
+            .first()
+            .map(|s| s.to_string())
+            .ok_or_else(|| not_submitted("signed transaction has no signature".into()))?;
+
+        match self.submit_transaction(&tx).await {
+            Ok(submitted) => {
+                if let Err(e) = self
+                    .confirm_transaction(&submitted, 40, Duration::from_millis(750))
+                    .await
+                {
+                    let message = e.to_string();
+                    // An explicit on-chain `err` means the transaction
+                    // landed and FAILED — no funds moved, a retry builds
+                    // a fresh transaction against the same books. Every
+                    // other confirm failure (transport, timeout) leaves
+                    // the submitted transaction possibly still landing.
+                    let stage = if message.contains("failed on-chain") {
+                        TransferStage::NotSubmitted
+                    } else {
+                        TransferStage::MaybeSubmitted
+                    };
+                    return Err(StagedTransferError {
+                        stage,
+                        signature: Some(submitted),
+                        message,
+                    });
+                }
+                Ok(submitted)
+            }
+            Err(e) => {
+                let message = e.to_string();
+                // A JSON-RPC `error` object is the node parsing and
+                // refusing the transaction — not submitted. Anything
+                // else (transport failure, gateway status, lost
+                // response) may have reached the cluster anyway.
+                let stage = if message.contains("rpc sendTransaction error")
+                    || message.contains("serialize tx")
+                {
+                    TransferStage::NotSubmitted
+                } else {
+                    TransferStage::MaybeSubmitted
+                };
+                Err(StagedTransferError {
+                    stage,
+                    signature: Some(signature),
+                    message,
+                })
+            }
+        }
+    }
+}
+
+/// Whether a failed [`SolanaSigner::submit_transfer_staged`] could have
+/// left a live transaction on-chain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferStage {
+    /// The transaction never reached the cluster; a retry is safe.
+    NotSubmitted,
+    /// The transaction may land; a blind retry risks a double-pay.
+    MaybeSubmitted,
+}
+
+impl TransferStage {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TransferStage::NotSubmitted => "not_submitted",
+            TransferStage::MaybeSubmitted => "maybe_submitted",
+        }
+    }
+}
+
+/// A transfer failure that names its stage — see [`TransferStage`].
+#[derive(Debug)]
+pub struct StagedTransferError {
+    pub stage: TransferStage,
+    /// The signed transaction's signature, known from the moment of
+    /// signing; `None` only when the failure predates signing.
+    pub signature: Option<String>,
+    pub message: String,
 }
 
 #[async_trait::async_trait]
@@ -207,8 +466,17 @@ impl Signer for SolanaSigner {
             "SolanaSigner building transfer"
         );
 
-        let tx =
-            build_transfer_transaction(&self.keypair, mint, pay_to, amount, decimals, blockhash)?;
+        // No memo in the x402 payment flow: the facilitator settles
+        // this transaction and validates its exact instruction shape.
+        let tx = build_transfer_transaction(
+            &self.keypair,
+            mint,
+            pay_to,
+            amount,
+            decimals,
+            blockhash,
+            None,
+        )?;
 
         let serialized =
             bincode::serialize(&tx).map_err(|e| X402Error::Sign(format!("serialize tx: {e}")))?;
@@ -238,7 +506,7 @@ pub fn decimals_for_mint(mint: &Pubkey) -> Option<u8> {
 
 /// Builds a signed transaction that pays `recipient` in `mint`.
 ///
-/// Emits two instructions:
+/// Emits two instructions (plus an optional third):
 /// 1. An idempotent `CreateAssociatedTokenAccount` for the
 ///    recipient's ATA. It is a no-op when the ATA already exists
 ///    (the common case for established payTo addresses) and creates
@@ -246,6 +514,9 @@ pub fn decimals_for_mint(mint: &Pubkey) -> Option<u8> {
 ///    "recipient has no ATA → SPL rejects the transfer" failure mode
 ///    without an extra pre-flight RPC.
 /// 2. The `TransferChecked` from the payer's ATA to the recipient's.
+/// 3. With `memo`, an SPL Memo carrying it verbatim. Unsigned memo —
+///    the transaction's fee-payer signature already authenticates who
+///    wrote it.
 ///
 /// The payer's own ATA is assumed to exist — if it does not, the
 /// payer holds no balance of `mint` to spend and the call could not
@@ -257,6 +528,7 @@ pub fn build_transfer_transaction(
     amount: u64,
     decimals: u8,
     recent_blockhash: Hash,
+    memo: Option<&str>,
 ) -> Result<Transaction> {
     let payer_pubkey = payer.pubkey();
     let source_ata = get_associated_token_address(&payer_pubkey, &mint);
@@ -281,16 +553,40 @@ pub fn build_transfer_transaction(
     )
     .map_err(|e| X402Error::Sign(format!("build transfer_checked: {e}")))?;
 
-    let mut tx = Transaction::new_with_payer(&[create_dest_ata, transfer], Some(&payer_pubkey));
+    let mut instructions = vec![create_dest_ata, transfer];
+    if let Some(memo) = memo {
+        instructions.push(memo_instruction(memo)?);
+    }
+
+    let mut tx = Transaction::new_with_payer(&instructions, Some(&payer_pubkey));
     tx.try_sign(&[payer], recent_blockhash)
         .map_err(|e| X402Error::Sign(format!("sign tx: {e}")))?;
     Ok(tx)
 }
 
+fn memo_instruction(memo: &str) -> Result<Instruction> {
+    if memo.len() > MEMO_MAX_BYTES {
+        return Err(X402Error::Sign(format!(
+            "memo is {} bytes; the memo program caps unsigned memos at {MEMO_MAX_BYTES}",
+            memo.len()
+        )));
+    }
+    let program_id = Pubkey::from_str(MEMO_PROGRAM_ID)
+        .map_err(|e| X402Error::Sign(format!("parse memo program id: {e}")))?;
+    Ok(Instruction {
+        program_id,
+        accounts: vec![],
+        data: memo.as_bytes().to_vec(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
+    use wiremock::{
+        matchers::{body_string_contains, method},
+        Mock, MockServer, ResponseTemplate,
+    };
 
     fn xona_requirements(network: &str, asset: &str, amount: &str) -> PaymentRequirements {
         PaymentRequirements {
@@ -359,7 +655,7 @@ mod tests {
         let recipient = Pubkey::from_str("9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA").unwrap();
         let blockhash = Hash::new_from_array([7u8; 32]);
 
-        let tx = build_transfer_transaction(&payer, mint, recipient, 80_000, 6, blockhash)
+        let tx = build_transfer_transaction(&payer, mint, recipient, 80_000, 6, blockhash, None)
             .expect("build tx");
 
         assert_eq!(tx.signatures.len(), 1, "payer is the only signer");
@@ -375,13 +671,61 @@ mod tests {
     }
 
     #[test]
+    fn memo_rides_the_transfer_as_a_third_instruction() {
+        let payer = Keypair::new();
+        let mint = Pubkey::from_str(USDC_MAINNET_MINT).unwrap();
+        let recipient = Pubkey::from_str("9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA").unwrap();
+        let blockhash = Hash::new_from_array([7u8; 32]);
+
+        let tx = build_transfer_transaction(
+            &payer,
+            mint,
+            recipient,
+            80_000,
+            6,
+            blockhash,
+            Some("compute-payout:v1:example"),
+        )
+        .expect("build tx");
+
+        assert_eq!(tx.signatures.len(), 1, "memo adds no signer");
+        assert_eq!(tx.message.instructions.len(), 3);
+        let memo_ix = &tx.message.instructions[2];
+        let program = tx.message.account_keys[memo_ix.program_id_index as usize];
+        assert_eq!(program.to_string(), MEMO_PROGRAM_ID);
+        assert!(
+            memo_ix.accounts.is_empty(),
+            "unsigned memo touches no accounts"
+        );
+        assert_eq!(memo_ix.data, b"compute-payout:v1:example");
+    }
+
+    #[test]
+    fn oversized_memo_fails_before_a_transaction_is_built() {
+        let payer = Keypair::new();
+        let mint = Pubkey::from_str(USDC_MAINNET_MINT).unwrap();
+        let recipient = Pubkey::from_str("9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA").unwrap();
+        let err = build_transfer_transaction(
+            &payer,
+            mint,
+            recipient,
+            1,
+            6,
+            Hash::new_from_array([7u8; 32]),
+            Some(&"x".repeat(MEMO_MAX_BYTES + 1)),
+        )
+        .expect_err("567-byte memo");
+        assert!(matches!(err, X402Error::Sign(msg) if msg.contains("caps unsigned memos")));
+    }
+
+    #[test]
     fn build_transaction_targets_correct_atas() {
         let payer = Keypair::new();
         let mint = Pubkey::from_str(USDC_MAINNET_MINT).unwrap();
         let recipient = Pubkey::from_str("9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA").unwrap();
         let blockhash = Hash::new_from_array([7u8; 32]);
 
-        let tx = build_transfer_transaction(&payer, mint, recipient, 80_000, 6, blockhash)
+        let tx = build_transfer_transaction(&payer, mint, recipient, 80_000, 6, blockhash, None)
             .expect("build tx");
 
         let expected_source = get_associated_token_address(&payer.pubkey(), &mint);
@@ -683,5 +1027,192 @@ mod tests {
             .await
             .expect_err("unparseable blockhash");
         assert!(matches!(err, X402Error::Sign(msg) if msg.contains("parse blockhash")));
+    }
+
+    fn dummy_tx(payer: &Keypair) -> Transaction {
+        let mint = Pubkey::from_str(USDC_MAINNET_MINT).unwrap();
+        let recipient = Pubkey::from_str("9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA").unwrap();
+        build_transfer_transaction(
+            payer,
+            mint,
+            recipient,
+            1,
+            6,
+            Hash::new_from_array([7u8; 32]),
+            None,
+        )
+        .expect("build dummy tx")
+    }
+
+    #[tokio::test]
+    async fn submit_transaction_returns_the_signature() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_string_contains("sendTransaction"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "result": "5sigxyz"
+            })))
+            .mount(&server)
+            .await;
+        let signer = SolanaSigner::new(Keypair::new(), server.uri());
+        let tx = dummy_tx(&Keypair::new());
+        let sig = signer.submit_transaction(&tx).await.expect("submit");
+        assert_eq!(sig, "5sigxyz");
+    }
+
+    #[tokio::test]
+    async fn submit_transaction_surfaces_an_rpc_error_field() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_string_contains("sendTransaction"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0", "id": 1,
+                "error": {"code": -32002, "message": "insufficient funds"}
+            })))
+            .mount(&server)
+            .await;
+        let signer = SolanaSigner::new(Keypair::new(), server.uri());
+        let tx = dummy_tx(&Keypair::new());
+        let err = signer.submit_transaction(&tx).await.expect_err("rpc error");
+        assert!(matches!(err, X402Error::Sign(msg) if msg.contains("insufficient funds")));
+    }
+
+    #[tokio::test]
+    async fn submit_transaction_surfaces_non_success_status() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("boom"))
+            .mount(&server)
+            .await;
+        let signer = SolanaSigner::new(Keypair::new(), server.uri());
+        let tx = dummy_tx(&Keypair::new());
+        let err = signer.submit_transaction(&tx).await.expect_err("500");
+        assert!(matches!(err, X402Error::Sign(msg) if msg.contains("sendTransaction status")));
+    }
+
+    #[tokio::test]
+    async fn confirm_transaction_returns_ok_once_confirmed() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0", "id": 1,
+                "result": {
+                    "context": {"slot": 1},
+                    "value": [{"confirmationStatus": "confirmed", "err": null}]
+                }
+            })))
+            .mount(&server)
+            .await;
+        let signer = SolanaSigner::new(Keypair::new(), server.uri());
+        signer
+            .confirm_transaction("sig123", 2, Duration::from_millis(1))
+            .await
+            .expect("confirmed");
+    }
+
+    #[tokio::test]
+    async fn confirm_transaction_fails_on_an_on_chain_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0", "id": 1,
+                "result": {
+                    "context": {"slot": 1},
+                    "value": [{"confirmationStatus": null, "err": {"InstructionError": [0, "Custom"]}}]
+                }
+            })))
+            .mount(&server)
+            .await;
+        let signer = SolanaSigner::new(Keypair::new(), server.uri());
+        let err = signer
+            .confirm_transaction("sig123", 2, Duration::from_millis(1))
+            .await
+            .expect_err("on-chain failure");
+        assert!(matches!(err, X402Error::Sign(msg) if msg.contains("failed on-chain")));
+    }
+
+    #[tokio::test]
+    async fn confirm_transaction_times_out_when_never_seen() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0", "id": 1,
+                "result": {"context": {"slot": 1}, "value": [null]}
+            })))
+            .mount(&server)
+            .await;
+        let signer = SolanaSigner::new(Keypair::new(), server.uri());
+        let err = signer
+            .confirm_transaction("sig123", 2, Duration::from_millis(1))
+            .await
+            .expect_err("timeout");
+        assert!(
+            matches!(err, X402Error::Sign(msg) if msg.contains("not confirmed within timeout"))
+        );
+    }
+
+    #[tokio::test]
+    async fn submit_transfer_happy_path_returns_the_confirmed_signature() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_string_contains("getLatestBlockhash"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0", "id": 1,
+                "result": {
+                    "context": {"slot": 1},
+                    "value": {"blockhash": "11111111111111111111111111111112", "lastValidBlockHeight": 1}
+                }
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(body_string_contains("sendTransaction"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "result": "devnet-sig-abc"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(body_string_contains("getSignatureStatuses"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0", "id": 1,
+                "result": {
+                    "context": {"slot": 1},
+                    "value": [{"confirmationStatus": "finalized", "err": null}]
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let signer = SolanaSigner::new(Keypair::new(), server.uri());
+        let recipient = "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA";
+        let sig = signer
+            .submit_transfer(
+                USDC_MAINNET_MINT,
+                recipient,
+                80_000,
+                Some("compute-payout:v1:example"),
+            )
+            .await
+            .expect("submit_transfer");
+        assert_eq!(sig, "devnet-sig-abc");
+    }
+
+    #[tokio::test]
+    async fn submit_transfer_rejects_a_malformed_mint_or_recipient() {
+        let signer = SolanaSigner::new(Keypair::new(), "https://unused");
+        let recipient = "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA";
+
+        let err = signer
+            .submit_transfer("not-a-pubkey", recipient, 1, None)
+            .await
+            .expect_err("bad mint");
+        assert!(matches!(err, X402Error::Sign(msg) if msg.contains("parse mint")));
+
+        let err = signer
+            .submit_transfer(USDC_MAINNET_MINT, "not-a-pubkey", 1, None)
+            .await
+            .expect_err("bad recipient");
+        assert!(matches!(err, X402Error::Sign(msg) if msg.contains("parse recipient")));
     }
 }

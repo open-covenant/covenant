@@ -1,0 +1,17 @@
+{
+  "name": "covenant-settlement-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Devnet client for the Covenant settlement program: builds pre-existing protocol state, snapshots it from raw account bytes, compares two snapshots byte for byte across a program upgrade, and re-exercises the pre-existing instructions afterwards.",
+  "scripts": {
+    "state:create": "node state.mjs create",
+    "state:snapshot": "node state.mjs snapshot",
+    "state:compare": "node state.mjs compare",
+    "state:exercise": "node state.mjs exercise"
+  },
+  "dependencies": {
+    "@solana/spl-token": "^0.4.9",
+    "@solana/web3.js": "^1.98.0"
+  }
+}

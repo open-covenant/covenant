@@ -1,0 +1,5 @@
+# Lockfiles carry absolute paths from the machine that was scanned. Keep them
+# on the machine that produced them; anchor the digest, not the inventory.
+.scans/
+eyebrowlock.json
+package-lock.json

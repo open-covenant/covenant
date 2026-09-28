@@ -1,0 +1,36 @@
+[package]
+name = "covenant-compute-control"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Beta control plane for Covenant Compute: the bearer-token GPU-workspace API served in front of the coordinator's lease engine."
+
+[dependencies]
+async-trait = { workspace = true }
+axum = { workspace = true }
+covenant-compute-buyer = { path = "../covenant-compute-buyer" }
+covenant-compute-protocol = { path = "../covenant-compute-protocol" }
+covenant-identity = { path = "../covenant-identity" }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+subtle = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tower = { version = "0.5", features = ["limit"] }
+tower-http = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+covenant-audit = { path = "../covenant-audit" }
+covenant-compute-coordinator = { path = "../covenant-compute-coordinator" }
+covenant-compute-node = { path = "../covenant-compute-node" }
+bs58 = { workspace = true }
+tempfile = { workspace = true }

@@ -1,0 +1,43 @@
+[package]
+name = "covenant-compute-node"
+version = "0.1.0"
+description = "Operator node core for the Covenant compute network: registration/heartbeat against a coordinator, fail-closed job admission, sandboxed metered execution, WorkReceipt signing, and the EarningsLedger."
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+covenant-compute-protocol = { path = "../covenant-compute-protocol" }
+covenant-compute-vast = { path = "../covenant-compute-vast" }
+covenant-a2a = { path = "../covenant-a2a" }
+covenant-audit = { path = "../covenant-audit" }
+covenant-identity = { path = "../covenant-identity" }
+covenant-mcp = { path = "../covenant-mcp" }
+covenant-runtime = { path = "../covenant-runtime" }
+covenant-types = { path = "../covenant-types" }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+base64 = "0.22"
+bs58 = { workspace = true }
+parking_lot = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-appender = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+wiremock = "0.6"
+url = "2"
+axum = { workspace = true }
+base64 = "0.22"
+covenant-compute-buyer = { path = "../covenant-compute-buyer" }
+covenant-compute-coordinator = { path = "../covenant-compute-coordinator" }
+tempfile = { workspace = true }

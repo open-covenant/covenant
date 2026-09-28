@@ -148,11 +148,10 @@ async fn live_ipc_recent_a2a_tasks_lists_without_draining() {
         deadline_ms: None,
         idempotency: None,
     };
-    match req(&mut stream, Request::SendA2ATask { task: task.clone() }).await {
-        Response::Error { message } => {
-            panic!("SendA2ATask must accept a self-addressed task: {message}")
-        }
-        _ => {}
+    if let Response::Error { message } =
+        req(&mut stream, Request::SendA2ATask { task: task.clone() }).await
+    {
+        panic!("SendA2ATask must accept a self-addressed task: {message}")
     }
 
     // Populated read: the sent task surfaces exactly once, keyed by its id.

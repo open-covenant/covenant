@@ -1,0 +1,42 @@
+[package]
+name = "covenant-compute-coordinator"
+version = "0.1.0"
+description = "Coordinator service for the Covenant compute network: operator registry, capability/price/reputation matchmaker, coordinator-custodial FederationEscrow v1, and the axum long-poll wire server both sides of covenant-compute-protocol dial into."
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "covenant-compute-coordinator"
+path = "src/main.rs"
+
+[dependencies]
+covenant-compute-protocol = { path = "../covenant-compute-protocol" }
+covenant-a2a = { path = "../covenant-a2a" }
+covenant-audit = { path = "../covenant-audit" }
+covenant-identity = { path = "../covenant-identity" }
+covenant-mcp = { path = "../covenant-mcp" }
+covenant-types = { path = "../covenant-types" }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+axum = { workspace = true }
+bs58 = { workspace = true }
+parking_lot = { workspace = true }
+reqwest = { workspace = true }
+subtle = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+covenant-compute-node = { path = "../covenant-compute-node" }
+covenant-compute-buyer = { path = "../covenant-compute-buyer" }
+reqwest = { workspace = true }
+sha2 = { workspace = true }
+tempfile = { workspace = true }

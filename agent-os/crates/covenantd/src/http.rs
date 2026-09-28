@@ -159,6 +159,7 @@ pub fn router_with_origins(state: HttpState, origins: Vec<HeaderValue>) -> Route
         .route("/peers/rotate", post(peers_rotate))
         .route("/peers/list", get(peers_list))
         .route("/peers/revoke", post(peers_revoke))
+        .route("/peers/budget", post(peers_budget))
         .route("/intents/resume", post(intents_resume))
         .route("/intents/:id/result", get(intent_result))
         .route("/intents/:id/events", get(intent_events))
@@ -1003,6 +1004,33 @@ async fn peers_enroll(
                 Request::EnrollPeer {
                     display: b.display,
                     actions: b.actions,
+                },
+                &peer,
+            )
+            .await,
+    ))
+}
+
+/// HTTP body for `POST /peers/budget`. Operator-only; stamps an hourly
+/// budget capacity onto a live enrolled peer (full subject key, never a
+/// prefix) so it can actually spend the capabilities enrollment granted.
+#[derive(Deserialize)]
+struct PeersBudgetBody {
+    pubkey_b58: String,
+    credits_per_hour: u64,
+}
+
+async fn peers_budget(
+    State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
+    Json(b): Json<PeersBudgetBody>,
+) -> Result<Json<Response>, ApiError> {
+    Ok(Json(
+        s.server
+            .respond(
+                Request::SetPeerBudget {
+                    pubkey_b58: b.pubkey_b58,
+                    credits_per_hour: b.credits_per_hour,
                 },
                 &peer,
             )

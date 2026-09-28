@@ -1,0 +1,682 @@
+{
+  "schema": "covenant-compute/demo-recording@2",
+  "product": "Covenant Compute",
+  "recordedOn": "2026-09-05",
+  "note": "Public onchain artifacts from three real runs on 2026-09-05: a mainnet GPU rental and payout, a devnet metering lifecycle inside a MagicBlock Ephemeral Rollup, and an attack regression against the meter. No key material. Every figure was re-fetched from a chain RPC after the runs finished. Replayed by demo/run-demo.sh --dry-run.",
+  "gpuLeg": {
+    "label": "real GPU rented on a live market, operator paid in USDC on Solana mainnet",
+    "network": "solana mainnet-beta",
+    "ranAt": "2026-09-05T16:47:47Z",
+    "jobId": "a8a0346f-2022-4e05-8143-89444ade3774",
+    "gpu": "L40S",
+    "vramMiB": 46068,
+    "endpoint": "ssh -p 19608 root@ssh8.vast.ai",
+    "reachableAfterMs": 24021,
+    "sessionRanMs": 44638,
+    "rateMicroUsdcPerSec": 100,
+    "windowSecs": 600,
+    "ledgerHoldMicroUsdc": 60000,
+    "custodyFundedMicroUsdc": 50000,
+    "chargedMicroUsdc": 4464,
+    "sweptBackMicroUsdc": 45536,
+    "escrowNote": "The 60000 hold is a line in the coordinator's own ledger. On chain custody held 50000 micro-USDC, less than the hold. A session that ran the full 600s window could not have settled from it.",
+    "settlement": {
+      "signature": "vb2aRkWGhZeFY2ri5fhxaJTJUNqTMYwzDksf12GisBcqpSt9TMZBmRNubXo8KaQv51dw6DGhidFm2Dyb9h8ChKi",
+      "slot": 444568676,
+      "blockTime": "2026-09-05T16:47:47Z",
+      "feeLamports": 5000,
+      "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "mintName": "USDC",
+      "custody": "D58JAH6ozkfjJGrYhuDhdyFzzCSpT4YTSMmGwxxsdfxP",
+      "custodyBefore": "0.050000",
+      "custodyAfter": "0.045536",
+      "operator": "FkRMPhv99WhDTbppXnW4hUagurCnr9szAnELGMfFJu1S",
+      "operatorBefore": "0.000000",
+      "operatorAfter": "0.004464",
+      "memo": "compute-payout:v1:a8a0346f-2022-4e05-8143-89444ade3774:5TuGkhJBknkLU5KiV1ZefxnfRTogLWEUXV22TdRK7uZbh2r49wvAQPfYgmEZU21qTiDBp24ZAPFxoJEX9pfsjNq6"
+    },
+    "teardown": {
+      "instancesLeftRunning": 0,
+      "marketContractId": 49979609,
+      "rentedAt": "2026-09-05T16:47:04Z",
+      "destroyedAt": "2026-09-05T16:47:47Z",
+      "auditLogNote": "The market's own audit log records ask_PUT at 16:47:04Z and instance_DELETE at 16:47:47Z, 43s apart, against a metered 44638 ms. No rental line has posted to the invoice endpoint yet, so the dollar cost is not final."
+    }
+  },
+  "meterLeg": {
+    "label": "the same lease arithmetic as an onchain meter, one tick per second inside a MagicBlock Ephemeral Rollup",
+    "network": "solana devnet",
+    "ranAt": "2026-09-05T16:53:18.887Z",
+    "program": "CLSeVNrRi4TpXsXAkAuLh58kGCCAd1w1bj2CcEhTEESd",
+    "l1Rpc": "https://api.devnet.solana.com",
+    "erRpc": "https://devnet-eu.magicblock.app",
+    "validator": "MEUGGrYPxKk17hCr7wpT6s8dtNokZj5U2L57vjYMS8e",
+    "escrowMint": {
+      "address": "DNgs67WjQufxtZS3pr1kkgVJfkU7FasB6yjyF19cvpHX",
+      "decimals": 6,
+      "note": "throwaway stand-in for USDC; devnet USDC is not freely mintable"
+    },
+    "jobId": "78de866e5c8f5dac73b74bb01b3d5292",
+    "lease": "5Uh4DrNda9C6iUGFSDoV78EJxEpS23mrENyBPZA257mp",
+    "meterAccount": "GBerDYJVjY3czQdRYv1ikcBmykY3sgj4vporgW6ZMS5y",
+    "vault": "BMCAtXMhEeEEmK9PuvyrPBhWNNr25DuUTs5hTTb3Tu5b",
+    "renter": "AeH9EgkbqBCQfuVZJoejXtqZF75RpCCdzc215ggNSjRS",
+    "operator": "EHEaX72ZEjxk7tQ1Bfz9k82st9JAi87T52dqeJKCL8nR",
+    "coordinator": "7ai9bY2tbYrWpjZCdNsJrjE4UDhD8jeJJw6czemDuZrj",
+    "meter": {
+      "rateMicroPerSec": "100",
+      "maxDurationSecs": "600",
+      "ticks": 60,
+      "meteredMs": "60000",
+      "fundedMicro": "60000",
+      "chargedMicro": "6000",
+      "refundedMicro": "54000",
+      "provenanceRoot": "5c1d9b6f949bf90bf7bca41baf0f8d5293b614c82f1cb217e6cbb520e4278471"
+    },
+    "tickPhaseWallClockMs": 59143,
+    "erPickupMs": 1000,
+    "commitLandedMs": 1000,
+    "latencyMs": {
+      "min": 136,
+      "p50": 143,
+      "p95": 178,
+      "max": 273,
+      "avg": 146.9
+    },
+    "lamports": {
+      "renterL1BeforeTicks": 109048160,
+      "renterL1AfterTicks": 109048160,
+      "l1SpentOnTicks": 0,
+      "erFeesOnTicks": 0,
+      "erValidatorCommitLamports": 33800,
+      "commitTxSignature": "2G4LdBDG6cz74CfAnSVwKvX2y5QHLSkR5Kptm4ZBamUf3d69PjgB16W9nNMcTQxWUdWfEQPqqtrMVLJewb9C6P5D"
+    },
+    "signatures": {
+      "openLease": "cDGAgwwJPUa8sLNzNqg2XVGiWh1z2uRKyD16vB4za2WRYGx1fHtnNJzawHnkVWvp7Da3Bm2xqLgVx3CJkzts1vX",
+      "delegateLease": "2wtjNVT9RZwPT1WpEjMsma5NvwLxDFByNjoJJgik3a4ie45yWVmN4xeD5B2NSktbFEqLNBoNGg4ajtdoDCf4QpPd",
+      "firstTick": "3jYt8ujWNuEbczwuZ7ft5Ng595En2F8TM1oxbWLfe9FrjJmzG1hyn7FuS5f7MAN2gEPQ2nodPvFAiTT8gh8gfcDb",
+      "lastTick": "65xgNfugh2etGkoyCnhvsynx6JkPdpmtDKpyoKGgjyS9hcy5YJzhmaoure5c4hvV85ZdbUyWpvWVRf34NzZWGkhC",
+      "undelegateLease": "3PiZ8MdhXYRWo5EP6cYJJPNftx68XswUULoTXKC2NFc3F6gy82fK6gTFKpJXTWYjHrmACpJPnzj1ndb4VUxPe18g",
+      "settleLease": "53WKxnGm13WK1Xqrm6r3EVdNhQumcsS7djJmRzFMoN8TD7XZa2fysqaK5jRgk9hJ2VsZ82Ah3jGskJU4d7DMWBNK"
+    },
+    "receipts": [
+      {
+        "seq": 0,
+        "meteredMs": "1000",
+        "receiptHash": "93548e8dbe6ff6031564bcdcf0c138959d760736537a108d054038a2956e96c7",
+        "sig": "3jYt8ujWNuEbczwuZ7ft5Ng595En2F8TM1oxbWLfe9FrjJmzG1hyn7FuS5f7MAN2gEPQ2nodPvFAiTT8gh8gfcDb",
+        "fee": 0,
+        "slot": 563251083
+      },
+      {
+        "seq": 1,
+        "meteredMs": "2000",
+        "receiptHash": "a24df94509c90a804b4eaef36e861dd496055ffbc9fd35fc86bee682ad3d9c35",
+        "sig": "ce2zck2qtSLcXxrpKxiAGK71YjrXDrGbdUNNckoGhpMmPAVEfT2bcJW4uPHPGugqnEpXkMMcFxtjwgpzkszdXPb",
+        "fee": 0,
+        "slot": 563251103
+      },
+      {
+        "seq": 2,
+        "meteredMs": "3000",
+        "receiptHash": "587fd7b669a9a609000aa5f27ef4c8a63ab0bb6c49a74a527579284a0e90afe4",
+        "sig": "3oJeg3MabamhGjPwiLyLAWTVPogSGiVDBcXSmJ67ZUUCZ9dshUvtxCMLJivSZexZqddFdukTbngDsrDNpTqszoGi",
+        "fee": 0,
+        "slot": 563251123
+      },
+      {
+        "seq": 3,
+        "meteredMs": "4000",
+        "receiptHash": "cf147fe563f64dee388feaaf3d21ea4f9a054d9e559d24befd880da76f10d2ec",
+        "sig": "4yhNy84qoVucHrSC7HQmJuR9ZW3Hy2Hb1DJNy8KaCD2huVNf5GqyAxF2kyNumjT5YA2mbyFBvHhFebTCPiPmorhW",
+        "fee": 0,
+        "slot": 563251143
+      },
+      {
+        "seq": 4,
+        "meteredMs": "5000",
+        "receiptHash": "f2e8e1ae9f4a1364afd663556b20a9f89a5b4c7a6a6f3a3e0c543602b0926b07",
+        "sig": "4xpaBmS5qQjjeP36JvTx24SBLuea7deEKsvZoZzBoSat8tpFy4yqfNuALHP6bgRSPER3rneiVTTAkYDAd3RbgeYT",
+        "fee": 0,
+        "slot": 563251163
+      },
+      {
+        "seq": 5,
+        "meteredMs": "6000",
+        "receiptHash": "4f6a3b9b52df6f887cee39d90ebca2daa07536b4aa91b0e48da7269f715225c9",
+        "sig": "29eh6x3TCKuyAxXjtGCo8fLedVjqSQJ9fiF8NHacsvJFwutHjYtazvTvkpPYtr2ArwNue1Us6i6xueRvjwcXpouw",
+        "fee": 0,
+        "slot": 563251183
+      },
+      {
+        "seq": 6,
+        "meteredMs": "7000",
+        "receiptHash": "3a3a965d554345663a9f0ee2dce163c03eae42d704c2a896d08624bf4c2eb2ac",
+        "sig": "4rVDJYJwBFgSUPRFfpe7XDq7NEWESYGcnCSnoTKtcpC7XhEeva26ERYsEYgSzXzQdztrRNemApPGY9qWJo8QcphM",
+        "fee": 0,
+        "slot": 563251203
+      },
+      {
+        "seq": 7,
+        "meteredMs": "8000",
+        "receiptHash": "080f8b18a828761c59d6301b03308b12a1c400b9c1c462dc2deb58e670bf3445",
+        "sig": "5YDVy49HLTwUFDctPEWSzmWrL3z1ravjLXbLkUsZyvq3bY4B9TnCNgpHUmsdAmfggVe4LPbERuigqh6hoB6J75g5",
+        "fee": 0,
+        "slot": 563251223
+      },
+      {
+        "seq": 8,
+        "meteredMs": "9000",
+        "receiptHash": "558ba874537bedd814f50a41a81ef2fa9dd3a4517069863f7e3660302e038dd3",
+        "sig": "3htpNM2GjiUyZefNweJViL15XCGuTuKZEr1ZB6AMMXQTz8DQj6s93gfoRFUJvCApMf4fnXdxmiLN6vwXcmy7MRxs",
+        "fee": 0,
+        "slot": 563251243
+      },
+      {
+        "seq": 9,
+        "meteredMs": "10000",
+        "receiptHash": "f50c19243c8bf904650645ac741e7c80730e21c9f27b6e229db2d00df7df3bae",
+        "sig": "ZK9qGYTuacYao7SqVW5Pw9Wf3MS1US8iu3qTaZsoGFM9kjjx5DPPNaYrKbJoWKscB351KZkFsvoqjnjQpqJiAvJ",
+        "fee": 0,
+        "slot": 563251263
+      },
+      {
+        "seq": 10,
+        "meteredMs": "11000",
+        "receiptHash": "57ab88bf378bd03e312496b9cdbf743be6967ec45f855536a3363d35364ae988",
+        "sig": "6ujo2n9TPiiJ5N9bPkTiUwYuvgUn3ctWCRz5H6jBLQSRgvEm9LWo7Gd7FN2dUQ3adrdnJ8x3txLV3qffeycPCRt",
+        "fee": 0,
+        "slot": 563251283
+      },
+      {
+        "seq": 11,
+        "meteredMs": "12000",
+        "receiptHash": "fad28547a6fb9c07b27b4abe77463895157ad66166970e1723402cf0a7b38d91",
+        "sig": "4TtDbZqAbiC6McHhw7tueCj9H7kfTdjc9zQox4UrfyVxpDmbiW6ziiu3HH78RxJ6ViBUNHbnqoXZZX3h9JbpKyNi",
+        "fee": 0,
+        "slot": 563251303
+      },
+      {
+        "seq": 12,
+        "meteredMs": "13000",
+        "receiptHash": "eb096aeb58b4dee8197d5f6b0dc454d91d93f2fa55fcd342a1ed7e0e88caf782",
+        "sig": "3azKz4tpwcmtAfYKK1axbbHWG2yyaU3KBxW1FnDFmvFG1XaDVzQwQUy6h6kWkx1zUTjiwBQVfdXL8RFieVVt37xu",
+        "fee": 0,
+        "slot": 563251323
+      },
+      {
+        "seq": 13,
+        "meteredMs": "14000",
+        "receiptHash": "d266e3a5b83bceb8dc3aee80b9172b7c2743ad22d3d8445fc9234f26401789a4",
+        "sig": "xzvuBXALcyiQnv8TQZnn6pLztJJ9vHbWLEFLrGfrTzZ1o6h9Qn1xr3gFvt2Ferc62bn3tLZWpx3nq47rXMBsojb",
+        "fee": 0,
+        "slot": 563251343
+      },
+      {
+        "seq": 14,
+        "meteredMs": "15000",
+        "receiptHash": "2396131e221693b365c0c93d109ab1304a38031f84eb7bd014eff2892fdd5abb",
+        "sig": "3CGBFkGZMzEKdagRiMz9dauvQEtEMnPx573CC2AagodEqtFRbtyeKSWVaAHFFGkpStX6xwxGjzN2f52TjkukHfdW",
+        "fee": 0,
+        "slot": 563251363
+      },
+      {
+        "seq": 15,
+        "meteredMs": "16000",
+        "receiptHash": "331088086462e3ebd8bc95fcc0c2875ddbb9ba2b7259ae5536b13b466d43ac41",
+        "sig": "5BF4TU9DvHLUSpxaTfAHacgrsvugnLWS5JvTAfVpzuagLzr5oF9Eu21DSjwahEwJYeZJdsyUGq3M6djvBufqEcng",
+        "fee": 0,
+        "slot": 563251383
+      },
+      {
+        "seq": 16,
+        "meteredMs": "17000",
+        "receiptHash": "b0566a9cb3a9c8231888e1da941befdaefb576db00e91fbc2eaa04713ae333a5",
+        "sig": "2Ak9tAsFV2wyhT7ZW97wsDLxLs61TWQSEX9FG5F8HdBUGs7PFrJLTEDdurnW3UXSNjgcCGt6ukr1A6as1U6EcQCb",
+        "fee": 0,
+        "slot": 563251403
+      },
+      {
+        "seq": 17,
+        "meteredMs": "18000",
+        "receiptHash": "3d0418186896dcf614169427a48fdd1c3c9cb7c563e986dad5b5d3f15d579f3a",
+        "sig": "3A1xP3rE4qDfgExUmykY2aba5uxJCMNgFp3dQtUhjE3Yt686xHAkpHmvxtJWKYgmnXEjsE8NEJ6VddW9eNSk13HB",
+        "fee": 0,
+        "slot": 563251424
+      },
+      {
+        "seq": 18,
+        "meteredMs": "19000",
+        "receiptHash": "0fb45d468c58182a63d642bd2929789762daed94a9781994346dcbfd6fb4ceab",
+        "sig": "ctgV7FtPgCwB6k7P9GKemq9yACQb7voihb2M1f7i2RnSDjDVcZh2wxiWWt99NjZ78xiRTj8UNWVfY9CbB12XneK",
+        "fee": 0,
+        "slot": 563251443
+      },
+      {
+        "seq": 19,
+        "meteredMs": "20000",
+        "receiptHash": "0a6efcc048a0b4f9746d226aaaa0d1868c79175955fc8aa79d40443ac05790fc",
+        "sig": "3mzzMmDVwJV3Goa5JhsJFBqZvZBXKhs9txgwfnAWmx8a2NzdmuFCEgLKnFCnkDRmFbXg9C42TJDQyAoVY27TkqoA",
+        "fee": 0,
+        "slot": 563251463
+      },
+      {
+        "seq": 20,
+        "meteredMs": "21000",
+        "receiptHash": "0c52fc09b41114e54fa4f38b8ec9f593390d983b1593c21319888cdeba12efba",
+        "sig": "23SjVgTzTRFuzFfWvhvH7eSWpMCCwRicNQP7vw2yGVatY9fX7qwUFhF95M4QidHHNTgesTa5Rtxs6BaGdvhxP4eV",
+        "fee": 0,
+        "slot": 563251483
+      },
+      {
+        "seq": 21,
+        "meteredMs": "22000",
+        "receiptHash": "2503c1a369e618b9ee824589ef50893fb6a075f25238eb08d59db7fb87463778",
+        "sig": "oXgZxCxEX65cpKCnVo3suFUnMqn2EgZaLbKEfy9vFk85wiu17vSdfRcoejEoZfopkTo2HSkobrPt1TFNG2e6Z3a",
+        "fee": 0,
+        "slot": 563251504
+      },
+      {
+        "seq": 22,
+        "meteredMs": "23000",
+        "receiptHash": "3ad45dcf68d225c4a5335b22453ee420a467cfc688e7959410c4d285501bfbde",
+        "sig": "7gitppeWxBUxuf2VwAyViCUjTQuj3p7UGUNyUBypZFN21n4kGNebUQuvXn3fmuAsTnUND75GgdJ92nMZnu63Gj9",
+        "fee": 0,
+        "slot": 563251523
+      },
+      {
+        "seq": 23,
+        "meteredMs": "24000",
+        "receiptHash": "179510b7fb151ee3ac4a7ee4d8c4acea3d9f9cf7a748ac82232055b0150bdb5f",
+        "sig": "2MRsvvWoK4Y3ewetskXn34uDg4Akm5ZtWcGCGVrBedkHctui6Max1dmD5wiYgKAzA3cEoq9xJH2BMXtWS1u1o7zW",
+        "fee": 0,
+        "slot": 563251543
+      },
+      {
+        "seq": 24,
+        "meteredMs": "25000",
+        "receiptHash": "b09211a8051f9a50b3cc66ecd41440a471efe234dfd6022b8e8ce4ff60d327a2",
+        "sig": "65ZGjNv6WFYT1hY7cPu9f7Q7UFJZwE1nPF4bguXer7yc3odzVWTYSzv939fDMzaqzsdXoaxo1BvRgJcAsprVwBcg",
+        "fee": 0,
+        "slot": 563251563
+      },
+      {
+        "seq": 25,
+        "meteredMs": "26000",
+        "receiptHash": "ddd65688bfbdd8d3fd6129daec715aece20c312cf6ba19ace61a630a1ef69fbf",
+        "sig": "5sxJvbKGfrUjhJsbe3f5ApjU3hpoKxHpGBV1ewcWpfVRQQxrG75vUx7GgeqWZj8uyF4PAPnY7hUqgWp2YR9XeGpa",
+        "fee": 0,
+        "slot": 563251583
+      },
+      {
+        "seq": 26,
+        "meteredMs": "27000",
+        "receiptHash": "4b3a9fb189487dea8687c3ae8ee8086c42ba7a4ea4628f4671bad4ca4864c93d",
+        "sig": "voCtHi8wB37apjxA5JzWucrqCy8xeuQwcvJKwJ6uZ4kQrpemi5HT5yapSrFF2oyQe5CULLwA7jiaLAQFbLoMDP2",
+        "fee": 0,
+        "slot": 563251603
+      },
+      {
+        "seq": 27,
+        "meteredMs": "28000",
+        "receiptHash": "c3b80ab706b339c1f6d817052e8c3da80a4f7d791b5709b0abab0f36fca53908",
+        "sig": "4noH2QRne5qtokuTEakrpZyUQjfNsrKVnZs7XYPkMm7bzdNQVZBokALhhppqn6mxSEh5riJXmHf6LGn89AcqZK75",
+        "fee": 0,
+        "slot": 563251623
+      },
+      {
+        "seq": 28,
+        "meteredMs": "29000",
+        "receiptHash": "08f2ad2ca723bea26b529cd593da57f66a9d23d0b65dfd21a2be4f0512859317",
+        "sig": "mKnrdM9wUdFSbCzmNQC2bfRnKuDFiDwNXGPpFsu1H3CR72LUuBbR7wg5f3ArRGHKaXxpqb5JypzVN7sb6fRMpu8",
+        "fee": 0,
+        "slot": 563251643
+      },
+      {
+        "seq": 29,
+        "meteredMs": "30000",
+        "receiptHash": "81c740d306370b9cd8c6c7d30f80bb1c4503f4abd3bcb3c92b59ab18f69610a1",
+        "sig": "5XD13CjUukeFNJ22NKzVsNj17aAhym9asvZmpj9JKcmGPiouh2ybxex1VHr1YWUfcn2LNc6M2bY27Y7mhEhYrWZ",
+        "fee": 0,
+        "slot": 563251663
+      },
+      {
+        "seq": 30,
+        "meteredMs": "31000",
+        "receiptHash": "bdfbf7b654a2e74345f137bb03783183721d9b1adfeb1cf0f6d1d55799b77716",
+        "sig": "3Z35ziC3BTuPTc71CTS2FzueDN9BPxA6bTfKpacUREZEMohynFiycehX2pstts2v6jYt6b8uUoXCqPzjrEAyuHNA",
+        "fee": 0,
+        "slot": 563251684
+      },
+      {
+        "seq": 31,
+        "meteredMs": "32000",
+        "receiptHash": "7615d02b7512838023d06a77bcb5d97fed8d00f428e9a6aa5abf8ab4135969aa",
+        "sig": "5zuCBiw1anWEi24tL9BQUFz7PDt8n3uGajt6G7GDEa42RNWj4zm3YphXz7fgHuCSpHDZqkisDC9cytZnQSoC7ETx",
+        "fee": 0,
+        "slot": 563251703
+      },
+      {
+        "seq": 32,
+        "meteredMs": "33000",
+        "receiptHash": "333136a9802c5dbfd6f0e912c77c316a3205191bdb73038b72a8c1250b2c6ef1",
+        "sig": "cYfGTM2Dg4jxpbxjtDegKhSwGfC1Z8R3PJxrHCDAAcVDsb6fyz1fRKoSHusjaM63DfCahgjrtqtAVCGq8LfbYiC",
+        "fee": 0,
+        "slot": 563251724
+      },
+      {
+        "seq": 33,
+        "meteredMs": "34000",
+        "receiptHash": "f1cb9ecab7b2b25a907d695b525cd9d465e4dced1418b45856438f4fb28ce448",
+        "sig": "4HhDyAFoR1ASEFaQkrNUSBBeNvvzs4rAES7CStFytccnDBVaAEwu3sWZBLq3qH69nYAbjXYW2USCPbrMNve5StuC",
+        "fee": 0,
+        "slot": 563251743
+      },
+      {
+        "seq": 34,
+        "meteredMs": "35000",
+        "receiptHash": "4c791adb20d4e1f64f134ce364db86b65f5976c99bc0ea9a6f8e67c21017d622",
+        "sig": "51awdgk27QEDtc9fRw9MKPsuZ3x3Ssud3pxD4Q1fFancDi3PfXptfKiAa6ZUD8s5LDnt3gWWTM1Kmk1LhrbsHJoS",
+        "fee": 0,
+        "slot": 563251763
+      },
+      {
+        "seq": 35,
+        "meteredMs": "36000",
+        "receiptHash": "20e95722d146adcc8865fe0fb00823693c65fa5c3905897bf319c7c42dd87a62",
+        "sig": "5tXnUZVCYiALGqZbSKZ26ZVPgAkxcE8TYs11r6MuPyNaYsDnPtExBiqamKfX4whnXtFE9huxrh4AeDKEf2LEG61C",
+        "fee": 0,
+        "slot": 563251783
+      },
+      {
+        "seq": 36,
+        "meteredMs": "37000",
+        "receiptHash": "51129d8fc6616906e643dfc69025b633e12ab2a868044b92d24a8ede14e7ec8f",
+        "sig": "nbkBDEFtV1KM5VNJWKnRiK97qauSzjKRy5Ka2X48xWk8koWJb8Cw8cdwspmb6YZeU3yP5TgLQvtNSBxenzh6Ar2",
+        "fee": 0,
+        "slot": 563251803
+      },
+      {
+        "seq": 37,
+        "meteredMs": "38000",
+        "receiptHash": "fce4beb991f8d107874b6df9b1ff3056c7998df7da17a864faf2b45e6b1de126",
+        "sig": "3XCxLMNW9D712FYbwi6PS8dFKYuGZJt4AwSMgpYkTqCbvhRXShhSunE7wzbiZffEkD8GUMdcMmp13PmoEqCp7cg8",
+        "fee": 0,
+        "slot": 563251823
+      },
+      {
+        "seq": 38,
+        "meteredMs": "39000",
+        "receiptHash": "f058723191f8172c1a226bb71490a04ff273b80c04a300e2da9b92d91b7d6eea",
+        "sig": "4Ktou33NYyviT51XgREpvmsAetFE1FJfGjBSrBh2fVkYgfsTFz6AeK8ThcbeSUjjaoYXUEkAbR7yBDLmW5iP6pr9",
+        "fee": 0,
+        "slot": 563251844
+      },
+      {
+        "seq": 39,
+        "meteredMs": "40000",
+        "receiptHash": "4674428901ba6f9f58087373e5733a84ba10647d0964d39eea4eb5211870debd",
+        "sig": "4uiChPG4K4txPpN4rJKJL1Di32Q2fj92wZQhZESoaHLHKNv18c9rWczUR4c6JBcpJqRjYjG4pfmJhzj8MkyDHHpa",
+        "fee": 0,
+        "slot": 563251863
+      },
+      {
+        "seq": 40,
+        "meteredMs": "41000",
+        "receiptHash": "0190dfe88e35bd711f578da600eaf586350d393af6349b037316b8a55b9a8fef",
+        "sig": "2TpSQZzxyMRXAADuW2qMs4E1dJJtHvvT45wc5PN6qbNimEKpXk7LAjCQ5QS3hK8gaYDbYvhb9Z6u7iCPK1egBRjB",
+        "fee": 0,
+        "slot": 563251883
+      },
+      {
+        "seq": 41,
+        "meteredMs": "42000",
+        "receiptHash": "31ec3bab00461989eb49091e4fccbb272283322f5df320e43831fc4db49d3ad0",
+        "sig": "4BkvuhgthkVEjCa27teP4MX2zG5pu9EmQsQUZ3x3YFHwLAo51aFt9RWaufkDQfBiPE3Pe4K9e1hUu8EXRG8uhTMu",
+        "fee": 0,
+        "slot": 563251903
+      },
+      {
+        "seq": 42,
+        "meteredMs": "43000",
+        "receiptHash": "ddf7aecb00652676bc137cb30b4d166996e962ee14171991359857c97e343dd5",
+        "sig": "4pYNcUGFVqY5DYxZmmsqTd4LtZ9Enf94obDTDhgJ2xjyL8vyrf668T68aSWguqSpsQC6EoQH6UyjQpZkDu76uGCw",
+        "fee": 0,
+        "slot": 563251923
+      },
+      {
+        "seq": 43,
+        "meteredMs": "44000",
+        "receiptHash": "9a40e10934532719cd1c0ddd9ef12ec0d68be22324ddf00c8abe96b795e69f4f",
+        "sig": "S6Cf2PBeQmEGnRvzSj1jHGh4wAgDw4H7aEAGwx8YV7aU9fULXgzUZZ6cDiD4xKGT3sz6WQZqBJPSat6QcscCvrE",
+        "fee": 0,
+        "slot": 563251943
+      },
+      {
+        "seq": 44,
+        "meteredMs": "45000",
+        "receiptHash": "842ffe5f250907e21a7014945c7a701115859473b80db60064818d76b86ec014",
+        "sig": "3hJCdKgGyGb7FyayMwAr2RbQ6FKBhDLvn2SRn6H89rwjxGLzsaRRxWHk1MzsUPjYLnLvCKDmJjNPDcwhDZKYmcPK",
+        "fee": 0,
+        "slot": 563251963
+      },
+      {
+        "seq": 45,
+        "meteredMs": "46000",
+        "receiptHash": "232569ada8444a0ef3c43c842b12313328dce04ea7889efaf46929c28203a2cd",
+        "sig": "5mmWZh2eEsHusroXtVJY7CaHm3iDLAqTaQDqstD2jXqpcznn1b27X94UVeHmiEJGCksdhSGWfioEwF1PHpJLMY5R",
+        "fee": 0,
+        "slot": 563251983
+      },
+      {
+        "seq": 46,
+        "meteredMs": "47000",
+        "receiptHash": "8cfe52e2d2804922c0362412fe527c22b6058895d921afedec536c835f9792e2",
+        "sig": "5TxRjNF5ofRvy5ViaYUMzZmiRhEd7CjbJEX6Hd1XLa9dWT3wrZw1j8fQde9w2k3yTudgFvkUAF8Q2ht5vmrfp6oK",
+        "fee": 0,
+        "slot": 563252003
+      },
+      {
+        "seq": 47,
+        "meteredMs": "48000",
+        "receiptHash": "b447720f66f542493fe38de47ff5b2a2a02373fab4781c42aa5e075168730efa",
+        "sig": "584D8TdFEG9BQR9ezAP7oZ8hLqxW6irTc3LhaSsqFDzJZUMNWNk8Frx2rCS7PR7C42svtRgTbYwTcM9qYMwZJ48c",
+        "fee": 0,
+        "slot": 563252023
+      },
+      {
+        "seq": 48,
+        "meteredMs": "49000",
+        "receiptHash": "7b856b7798ed2e3ed37a3892532d07f7d171e975f6bf00b238a4c9b427ffa28d",
+        "sig": "2Dzy2bL4W9voG4oDK9A5RUtX6NbnfzMLyLgJHruG3THBNHrtS46FMQZZLhC7njH67qpiT6yrqjmCW16MRcGCAMcD",
+        "fee": 0,
+        "slot": 563252043
+      },
+      {
+        "seq": 49,
+        "meteredMs": "50000",
+        "receiptHash": "0f1a2ac6e188f353070cce01f4be8612fe5bc1b745f21466fcaf1621dde80485",
+        "sig": "5CCWzDCWDbTzo6fD2hS6nam1DxPyB6Qnu6TM4pHoGA7RSv9G6So5zDwRu341XWBzLgZ8W2cScjtvS7xnyu81DJVC",
+        "fee": 0,
+        "slot": 563252063
+      },
+      {
+        "seq": 50,
+        "meteredMs": "51000",
+        "receiptHash": "06eda2eb41ba29e0ff8960c2e1c6a1ba581c1f678e5c9fed3abc95f0be25c15a",
+        "sig": "25XPC7FDcdi3wQX1KPbZKs9J3Wegax43BChfJkLaFjz8sGCFLpQetKpb4rfjv9tkt4D5etca8BdNipJHgE1EmMDA",
+        "fee": 0,
+        "slot": 563252083
+      },
+      {
+        "seq": 51,
+        "meteredMs": "52000",
+        "receiptHash": "d510c1cb800446fb34a69ecb290bc3ced2f66c8b50ba977570f7bb0af040b893",
+        "sig": "3SuGjuXGPHEoB4RZeCC5hEHd2Zennc8W2gmahQ6UFkCWUzLhW3aoJXzykxZBZbMbkn6VW98K71UZnachoQyVk3Lx",
+        "fee": 0,
+        "slot": 563252103
+      },
+      {
+        "seq": 52,
+        "meteredMs": "53000",
+        "receiptHash": "62b0482bff65aed915afdbc4c4d3b5a49318926f3d584e762e3eb5b8e5efd904",
+        "sig": "gyHwbDAf5Wh8hWdnNRBb6tnPQW6hkgdpyvJ2hceRLRRZGaXry1km31GmRh5FoSzXf5LPoTfpAH66St6iTYs78Rg",
+        "fee": 0,
+        "slot": 563252123
+      },
+      {
+        "seq": 53,
+        "meteredMs": "54000",
+        "receiptHash": "51ab34983c73a0d852ec4a814e62fc52dd0dfcc64bb27908a73112d07c202978",
+        "sig": "4XB8ztE6GiGCPjwfimZtN6z287aRMXc6HefRSkv3KZ1nog4yKgerEV3SPMmNKENrnCV4vC31gSJdU2cYpMRhyjs8",
+        "fee": 0,
+        "slot": 563252143
+      },
+      {
+        "seq": 54,
+        "meteredMs": "55000",
+        "receiptHash": "1f5b2dbcde60b8f2599ff67de2d984f533840b7cfc8eb824e570f912e648c4f1",
+        "sig": "3nfW1K7zDPn6V8s1vH1b3NHZgWSyPDPC35FfZvrVhfdGVsmUaxTro4YKossh1hvT3Zq2kf8g3UrRB66xr7mrAebo",
+        "fee": 0,
+        "slot": 563252164
+      },
+      {
+        "seq": 55,
+        "meteredMs": "56000",
+        "receiptHash": "fef1aabb02eb32ee8c98da7d9461db0b18274071e59f6dcb4461dbe99b569c33",
+        "sig": "SuZatF5vWfTbPG1KmksTtLs3RFn7qe5fytEgaGY5xK13ttK5VX8BLizXP2Git8r1G6Q8UYnGu79m8AidCAXBwxc",
+        "fee": 0,
+        "slot": 563252183
+      },
+      {
+        "seq": 56,
+        "meteredMs": "57000",
+        "receiptHash": "cb698d533ff752d435fa92321ae77be732e5ed0449db38bdc07e08c90a345852",
+        "sig": "5Matm9w6dYUDggUWU9h8hPrLmTiDRoRHMzWFonK6gyisimFhsCgV4LSGsg7Zhy1iDMh4G5warZkj17QwGqsYviFb",
+        "fee": 0,
+        "slot": 563252203
+      },
+      {
+        "seq": 57,
+        "meteredMs": "58000",
+        "receiptHash": "32ec84a9166fec049331c7f6f519419a934b459fb8239b7b0af1a286bdcc6942",
+        "sig": "UHq6S1AYjGJZxcVPNXsPkhYyeRrRcwoWKpdH7EqC9gsyKCgi2CdVLtB8v3ZZQk9JpwmWidxvfDqSoMSCrfZqErQ",
+        "fee": 0,
+        "slot": 563252223
+      },
+      {
+        "seq": 58,
+        "meteredMs": "59000",
+        "receiptHash": "3866217b7929cd3f6c0c3b14263363033de33364e671062c3d2f2127247a387a",
+        "sig": "39as5AurDXFjBt1Zhhox4QTgdpkmxpqobGyecdGWDRLguuWvEwAvyh1zsWKsxqRumGMAWr38phr8roD2bjRSdKHp",
+        "fee": 0,
+        "slot": 563252243
+      },
+      {
+        "seq": 59,
+        "meteredMs": "60000",
+        "receiptHash": "d41ea9bf1f6d1db618f9ca86bafd00fd7f62483b23b9eb7f0c3014ad4a28338e",
+        "sig": "65xgNfugh2etGkoyCnhvsynx6JkPdpmtDKpyoKGgjyS9hcy5YJzhmaoure5c4hvV85ZdbUyWpvWVRf34NzZWGkhC",
+        "fee": 0,
+        "slot": 563252263
+      }
+    ]
+  },
+  "attackLeg": {
+    "label": "attack regression: only the coordinator the renter named at open can drive the meter",
+    "source": "programs/compute-lease/client/attack-unauthorized-tick.mjs",
+    "network": "solana devnet + MagicBlock Ephemeral Rollup",
+    "ranAt": "2026-09-05T16:53:47.859Z",
+    "program": "CLSeVNrRi4TpXsXAkAuLh58kGCCAd1w1bj2CcEhTEESd",
+    "jobId": "cfbe4c0fa59671714bdeefb0c2ca3ec5",
+    "lease": "EZtAGLc9w23bWn2Go7rbfv6oi6nyPo2eY9pzGsdc5Kna",
+    "meterAccount": "G4KyhiRLAoDDJL1YtbhKtrBMmqWCp5dKXGNuWmrNJBfC",
+    "coordinator": "7ai9bY2tbYrWpjZCdNsJrjE4UDhD8jeJJw6czemDuZrj",
+    "attacker": "GfnDHPxr5U7KsEN4e8vYxWRKSNzyUQg9rmnwJimbCHWR",
+    "escrowAtRiskMicro": "60000",
+    "askedFor": {
+      "ceilingMs": "600000",
+      "absurdMs": "18446744073709551615"
+    },
+    "refusals": [
+      {
+        "cluster": "devnet L1",
+        "slot": 493636763,
+        "label": "tick to the top of the window with no coordinator account at all",
+        "code": 3005,
+        "codeMeans": "AccountNotEnoughKeys: no coordinator account was supplied at all",
+        "signature": "3aUYqbsrXJLGPKCp1CBaq1VXFhNn9vZfbneyxN2u7yuYwxs2KwWVwxiH4ezASZWwaphceGznJZoRDyLcDD4nUD7N"
+      },
+      {
+        "cluster": "devnet L1",
+        "slot": 493636767,
+        "label": "tick signed by the attacker, standing in for the coordinator",
+        "code": 2001,
+        "codeMeans": "ConstraintHasOne: the meter's pinned coordinator is not this signer",
+        "signature": "yDkvbni6xhRXCM6m3w7M4KXohEzhK3CZUUwYhvgfEJcw6iM9tjLrNrXYJdLUjPh6LPXRdkh9hVo2cBBxuBtBF3M"
+      },
+      {
+        "cluster": "devnet L1",
+        "slot": 493636770,
+        "label": "tick to u64::MAX, signed by the attacker",
+        "code": 2001,
+        "codeMeans": "ConstraintHasOne: the meter's pinned coordinator is not this signer",
+        "signature": "KEsgN2JENjrBvfJ4DHYCNCL9jbiJnA5vLr9SfbM7jVfYmZSV1esrmBydJYVb5eXbBzVRKhKwzrhZMpA1c444T5w"
+      },
+      {
+        "cluster": "devnet L1",
+        "slot": 493636773,
+        "label": "tick naming the real coordinator, passed unsigned",
+        "code": 3010,
+        "codeMeans": "AccountNotSigner: the real coordinator was named but did not sign",
+        "signature": "2qowAd6T1ibz7K7J8a5DZsAiVLLSUTgzpzTN7qfFEkkhqMekK6K8GuqsZ8Sw2ny3dwTkYwNr8B5rvXm6FE7MpnvT"
+      },
+      {
+        "cluster": "rollup",
+        "slot": 563252808,
+        "label": "rollup tick to the top of the window with no coordinator account",
+        "code": 3005,
+        "codeMeans": "AccountNotEnoughKeys: no coordinator account was supplied at all",
+        "signature": "RnQVuC25v7XwHaXGwxNirBnPsL3JZubknxcf6pG9WSftD95R1uKqhWS9rE5aA4pHkgnDFbotk3bibKLQbaKBdMU"
+      },
+      {
+        "cluster": "rollup",
+        "slot": 563252819,
+        "label": "rollup tick signed by the attacker",
+        "code": 2001,
+        "codeMeans": "ConstraintHasOne: the meter's pinned coordinator is not this signer",
+        "signature": "5ZsmJADwzZooDqzAWA6tNk7kc1daT9FdGQj31juF1vSNFbYRFC2oxhwZ1712vdCSRvCn6cK2Rvk3VhipheaVicze"
+      },
+      {
+        "cluster": "rollup",
+        "slot": 563252831,
+        "label": "rollup tick to u64::MAX, signed by the attacker",
+        "code": 2001,
+        "codeMeans": "ConstraintHasOne: the meter's pinned coordinator is not this signer",
+        "signature": "2gAJEJ9rXsXq2iDSLX7Pipdhi14GwkSMsi29W7ZsPACMViYqHJVXVveqeZrjC3Hf7wueBEWZE6AQceh5FQcHqaFW"
+      },
+      {
+        "cluster": "rollup",
+        "slot": 563252842,
+        "label": "rollup undelegate signed by the attacker",
+        "code": 2001,
+        "codeMeans": "ConstraintHasOne: the meter's pinned coordinator is not this signer",
+        "signature": "3edSvo9mGRxPk6Ev1Kmnu28G4cqccWBHM475t8bCYeqm7jWPuxZFvUWXNWZiGEgK6q8uXZuSi6ev3kGJJYyzUD2P"
+      }
+    ],
+    "honestSettlement": {
+      "meteredMs": "5000",
+      "chargedMicro": "500",
+      "refundedMicro": "59500",
+      "settleSignature": "31T6MGHspSFBkFqKt5DomLJmEVZXnqtcqKK6TEj6Y2EhTdMoUvCFzv4w6dzPvttZpiHcb2fjUuXRPhtxRjiD9ujT",
+      "settleSlot": 493636817,
+      "operatorPaidMicro": 500
+    },
+    "note": "Every refusal below is a landed transaction, sent with preflight off so the chain itself rejected it. The attacker asked for the full 600000 ms window and then for u64::MAX. Neither reached the books: the lease settled for the five seconds it honestly ran."
+  },
+  "gates": {
+    "suite": "programs/compute-lease",
+    "tests": 9,
+    "note": "cargo build, cargo test, cargo clippy --all-targets -D warnings and cargo fmt --check all exit 0."
+  }
+}

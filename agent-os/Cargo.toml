@@ -25,6 +25,12 @@ members = [
     "crates/covenant-acedata",
     "crates/covenant-sap-bridge",
     "crates/covenant-stake-keeper",
+    "crates/covenant-compute-protocol",
+    "crates/covenant-compute-node",
+    "crates/covenant-compute-coordinator",
+    "crates/covenant-compute-buyer",
+    "crates/covenant-compute-vast",
+    "crates/covenant-compute-control",
     "crates/covenantd",
     "crates/covenant",
     "crates/covenant-tui",
@@ -56,9 +62,10 @@ anyhow = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
 bs58 = "0.5"
 tempfile = "3"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "fs", "signal", "time", "process", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "fs", "signal", "time", "process", "sync"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
 async-trait = "0.1"
 parking_lot = "0.12"
 rusqlite = { version = "0.31", features = ["bundled"] }
@@ -66,8 +73,10 @@ subtle = "2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 ed25519-dalek = "2"
 rand = "0.9"
+chacha20poly1305 = "0.10"
+zeroize = "1"
 axum = "0.7"
-tower-http = { version = "0.6", features = ["cors", "trace"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "timeout"] }
 solana-sdk = "2"
 solana-client = "2"
 sha2 = "0.11"

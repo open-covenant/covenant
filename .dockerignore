@@ -1,0 +1,5 @@
+.git
+**/target
+**/node_modules
+agent-os/autonomy
+docs/internal

@@ -1,0 +1,58 @@
+## Multi-stage Dockerfile for the Compute compute-network coordinator.
+## Build context expected: repository root (so agent-os/ is visible).
+##
+## The coordinator is stateless except for $COVENANT_COMPUTE_COORDINATOR_HOME:
+## its journal (escrow holds, in-flight jobs, buyer deposits) and audit chain
+## live there. Mount a persistent volume at /data or every restart starts
+## from an empty book.
+##
+##   docker build -f deploy/Dockerfile.compute-coordinator -t compute-coordinator .
+##   docker run -p 8720:8720 -v compute-data:/data compute-coordinator
+##
+## Configuration is env-only (fees, subsidy policy, trust floor, payout
+## backend, inbound rail). Two signing sidecars are bundled: the
+## covenant-x402-signer at /usr/local/bin/covenant-x402-signer for the
+## sidecar payout backend, and the covenant-compute-lease-signer at
+## /usr/local/bin/covenant-compute-lease-signer for the on-chain lease meter
+## (COVENANT_COMPUTE_LEASE_METER=sidecar). Keys are never baked into the
+## image — hand the keypairs to the container at deploy time, as files or
+## as JSON in the `*_KEYPAIR_JSON` variable beside each path variable.
+
+FROM rust:1.90-slim-bookworm AS builder
+ENV CARGO_TERM_COLOR=always
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      pkg-config libssl-dev ca-certificates git \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY agent-os/ ./agent-os/
+WORKDIR /src/agent-os
+RUN cargo build --release --bin covenant-compute-coordinator
+# The payout signer is its own workspace on purpose (it carries the
+# heavyweight Solana dependency tree the coordinator stays free of).
+RUN cargo build --release \
+      --manifest-path crates/covenant-x402-signer/Cargo.toml
+RUN cargo build --release \
+      --manifest-path crates/covenant-compute-lease-signer/Cargo.toml
+
+FROM debian:bookworm-slim AS runtime
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates curl \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN useradd --create-home --shell /bin/bash covenant
+COPY --from=builder /src/agent-os/target/release/covenant-compute-coordinator /usr/local/bin/covenant-compute-coordinator
+COPY --from=builder /src/agent-os/crates/covenant-x402-signer/target/release/covenant-x402-signer /usr/local/bin/covenant-x402-signer
+COPY --from=builder /src/agent-os/crates/covenant-compute-lease-signer/target/release/covenant-compute-lease-signer /usr/local/bin/covenant-compute-lease-signer
+COPY deploy/compute-coordinator-entrypoint.sh /usr/local/bin/compute-coordinator-entrypoint
+
+ENV COVENANT_COMPUTE_COORDINATOR_HOME=/data
+ENV COVENANT_COMPUTE_COORDINATOR_BIND_ADDR=0.0.0.0
+ENV COVENANT_COMPUTE_COORDINATOR_PORT=8720
+RUN mkdir -p /data && chown covenant:covenant /data
+# No USER: the entrypoint starts as root to take ownership of a mounted disk
+# and write the keys, then drops to `covenant` before the coordinator runs.
+EXPOSE 8720
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s \
+  CMD curl -fsS http://127.0.0.1:8720/health || exit 1
+ENTRYPOINT ["compute-coordinator-entrypoint"]

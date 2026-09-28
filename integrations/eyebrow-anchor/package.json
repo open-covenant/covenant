@@ -1,0 +1,17 @@
+{
+  "name": "covenant-eyebrow-anchor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Anchor an eyebrow AI-tooling supply-chain scan through the Covenant settlement program, and verify one from the chain.",
+  "license": "Apache-2.0",
+  "scripts": {
+    "anchor": "node anchor-scan.mjs",
+    "anchor:dry": "node anchor-scan.mjs --dry-run",
+    "verify": "node verify-anchor.mjs",
+    "test": "node derive.test.mjs"
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.98.0"
+  }
+}

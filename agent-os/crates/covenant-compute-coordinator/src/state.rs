@@ -200,6 +200,9 @@ pub struct CoordinatorConfig {
     /// `new`'s signature so a deployment that wants no chain touches
     /// nothing.
     pub lease_meter: Option<Arc<dyn crate::onchain_meter::LeaseMeter>>,
+    /// The CVNT stake an operator must hold for its node identity to win
+    /// work (`crate::stake`). `None` (the default) requires none.
+    pub stake: Option<crate::stake::StakeRequirement>,
 }
 
 impl Default for CoordinatorConfig {
@@ -226,6 +229,7 @@ impl Default for CoordinatorConfig {
             vault_enabled: false,
             vault_max_owners: None,
             lease_meter: None,
+            stake: None,
         }
     }
 }

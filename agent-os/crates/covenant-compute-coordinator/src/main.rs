@@ -168,6 +168,43 @@ fn build_payout() -> anyhow::Result<Arc<dyn Payout>> {
     })))
 }
 
+/// The operator stake gate (`covenant_compute_coordinator::stake`). Off unless
+/// `COVENANT_COMPUTE_MIN_STAKE` names an amount in the stake mint's base
+/// units. A stake counts only while it stays locked past a lease's longest
+/// window and the dispute window, so it is still there to slash.
+fn build_stake_requirement(
+    dispute_window_secs: u64,
+) -> anyhow::Result<Option<covenant_compute_coordinator::StakeRequirement>> {
+    let min_amount: u64 = env_parse(
+        "COVENANT_COMPUTE_MIN_STAKE",
+        0,
+        "must be a u64 (base units)",
+    )?;
+    if min_amount == 0 {
+        tracing::info!(
+            "operator stake not required (set COVENANT_COMPUTE_MIN_STAKE to require one)"
+        );
+        return Ok(None);
+    }
+    let require = |key: &str| -> anyhow::Result<String> {
+        std::env::var(key)
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .ok_or_else(|| anyhow::anyhow!("{key} must be set when COVENANT_COMPUTE_MIN_STAKE is"))
+    };
+    let default_lock = covenant_compute_protocol::MAX_LEASE_DURATION_SECS + dispute_window_secs;
+    Ok(Some(covenant_compute_coordinator::StakeRequirement {
+        program_id: require("COVENANT_COMPUTE_STAKE_PROGRAM_ID")?,
+        rpc_url: require("COVENANT_COMPUTE_STAKE_RPC_URL")?,
+        min_amount,
+        min_lock_remaining_secs: env_parse(
+            "COVENANT_COMPUTE_MIN_STAKE_LOCK_SECS",
+            default_lock,
+            "must be a u64 (seconds)",
+        )?,
+    }))
+}
+
 /// On-chain lease meter selection (`covenant_compute_coordinator::onchain_meter`).
 /// Off by default: unset — or `off` — leaves lease settlement exactly
 /// as it is today, the coordinator's clock metering and the custodial
@@ -601,6 +638,7 @@ async fn main() -> anyhow::Result<()> {
     // booked and never collected. Refuse the combination rather than
     // publish a revenue number nobody received.
     let lease_meter = build_lease_meter()?;
+    let stake = build_stake_requirement(dispute_window_secs)?;
     match &lease_meter {
         Some(meter) => {
             anyhow::ensure!(
@@ -643,6 +681,7 @@ async fn main() -> anyhow::Result<()> {
     let config = CoordinatorConfig {
         long_poll_timeout: Duration::from_secs(long_poll_secs.max(1)),
         lease_meter,
+        stake,
         require_prefunded_buyers,
         default_funding_source,
         subsidy_policy,
@@ -676,6 +715,25 @@ async fn main() -> anyhow::Result<()> {
     .context("replay coordinator journal")?;
     // The meter's ledger is in memory; hand it back every lease the
     // replayed job book still shows running.
+    let stake_refresh_secs: u64 = env_parse(
+        "COVENANT_COMPUTE_STAKE_REFRESH_SECS",
+        120,
+        "must be a u64 (seconds)",
+    )?;
+    let _stake_refresh_handle = state.config().stake.as_ref().map(|requirement| {
+        let interval = stake_refresh_secs.max(10);
+        tracing::info!(
+            min_amount = requirement.min_amount,
+            min_lock_remaining_secs = requirement.min_lock_remaining_secs,
+            program = %requirement.program_id,
+            refresh_secs = interval,
+            "operator stake REQUIRED: operators win work only while it is staked and locked"
+        );
+        covenant_compute_coordinator::spawn_periodic_stake_refresh(
+            state.clone(),
+            Duration::from_secs(interval),
+        )
+    });
     let adopted = covenant_compute_coordinator::adopt_live_leases(&state);
     if adopted > 0 {
         tracing::info!(adopted, "on-chain lease meter resumed leases still running");

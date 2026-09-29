@@ -320,7 +320,7 @@ fn register(registry: &OperatorRegistry, display: &str, micro_usdc: u64) -> Stri
         tee_capable: false,
     };
     let req = RegisterRequest::sign(profile, payout_for(display), &identity).unwrap();
-    registry.register(&req, 0, None).unwrap();
+    registry.register(&req, 0, None, false).unwrap();
     identity.agent_id().pubkey_base58()
 }
 

@@ -31,16 +31,11 @@
 //! or the lease meter inside the settlement program; which one is read off
 //! the chain.
 
-mod lease;
-mod rpc;
-mod steps;
-
 use std::process::ExitCode;
 
+use covenant_compute_lease_signer::steps::{refused, Failure, Request, Session};
 use solana_sdk::signer::keypair::{read_keypair_file, Keypair};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-use steps::{refused, Failure, Request, Session};
 
 const STEPS: [&str; 4] = ["lease-open", "lease-tick", "lease-conclude", "lease-void"];
 

@@ -769,14 +769,14 @@ mod tests {
         let probed = LocalIdentity::generate("probed@op");
         let probed_key = probed.agent_id().pubkey_base58();
         let req = RegisterRequest::sign(cpu_profile(&probed, 100), payout(1), &probed).unwrap();
-        state.registry().register(&req, 1_000, None).unwrap();
+        state.registry().register(&req, 1_000, None, false).unwrap();
 
         // A strictly cheaper operator the matcher would prefer if the
         // sweep ever tried to re-point the probe.
         let cheaper = LocalIdentity::generate("cheaper@op");
         let cheaper_key = cheaper.agent_id().pubkey_base58();
         let req = RegisterRequest::sign(cpu_profile(&cheaper, 1), payout(2), &cheaper).unwrap();
-        state.registry().register(&req, 1_000, None).unwrap();
+        state.registry().register(&req, 1_000, None, false).unwrap();
 
         let job_id = Uuid::new_v4();
         let hold = state.escrow().hold(job_id, &buyer, 100).await.unwrap();
@@ -1689,7 +1689,10 @@ mod tests {
             tee_capable: false,
         };
         let req = RegisterRequest::sign(profile, payout_for(display), &identity).unwrap();
-        state.registry().register(&req, seen_ms, None).unwrap();
+        state
+            .registry()
+            .register(&req, seen_ms, None, false)
+            .unwrap();
         identity.agent_id().pubkey_base58()
     }
 

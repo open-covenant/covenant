@@ -184,6 +184,39 @@ impl Rpc {
             .map(str::to_string))
     }
 
+    /// Accounts owned by `program` that pass `filters`, as (address, data).
+    pub async fn program_accounts(
+        &self,
+        program: &Pubkey,
+        filters: Value,
+    ) -> Result<Vec<(Pubkey, Vec<u8>)>, String> {
+        let result = self
+            .call(
+                "getProgramAccounts",
+                json!([program.to_string(), {"encoding": "base64", "commitment": "confirmed", "filters": filters}]),
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+        result
+            .as_array()
+            .ok_or_else(|| format!("getProgramAccounts: no result in {result}"))?
+            .iter()
+            .map(|entry| {
+                let address = entry["pubkey"]
+                    .as_str()
+                    .and_then(|s| Pubkey::from_str(s).ok())
+                    .ok_or("getProgramAccounts: entry without an address")?;
+                let data = entry["account"]["data"][0]
+                    .as_str()
+                    .map(|b64| BASE64.decode(b64))
+                    .transpose()
+                    .map_err(|e| format!("getProgramAccounts: bad base64: {e}"))?
+                    .unwrap_or_default();
+                Ok((address, data))
+            })
+            .collect()
+    }
+
     /// Sends a signed transaction and waits for it to be confirmed.
     pub async fn send_and_confirm(
         &self,

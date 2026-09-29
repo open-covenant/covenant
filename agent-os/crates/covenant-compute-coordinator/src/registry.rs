@@ -55,6 +55,10 @@ pub struct OperatorRecord {
     pub queue_depth: u32,
     pub last_seen_ms: u64,
     pub session_token: String,
+    /// Whether the operator holds the CVNT stake this deployment requires
+    /// for its node identity. Always true where no stake is required;
+    /// where one is, false until the chain has been read and says so.
+    pub staked: bool,
 }
 
 struct OperatorSlot {
@@ -98,6 +102,7 @@ impl OperatorRegistry {
         req: &RegisterRequest,
         now_ms: u64,
         max_operators: Option<usize>,
+        stake_required: bool,
     ) -> Result<String, RegistryError> {
         req.verify()
             .map_err(|e| RegistryError::BadSignature(e.to_string()))?;
@@ -145,6 +150,7 @@ impl OperatorRegistry {
                 queue_depth: 0,
                 last_seen_ms: now_ms,
                 session_token: session_token.clone(),
+                staked: !stake_required,
             },
             pending: VecDeque::new(),
             notify: Arc::new(Notify::new()),
@@ -162,6 +168,15 @@ impl OperatorRegistry {
         // busier than it is.
         slot.record.queue_depth = 0;
         Ok(session_token)
+    }
+
+    /// Records what the chain says about an operator's stake. A re-register
+    /// keeps the last reading, so a restarting node is not dropped from
+    /// matching while its stake is re-read.
+    pub fn set_staked(&self, operator_pubkey_b58: &str, staked: bool) {
+        if let Some(slot) = self.operators.lock().get_mut(operator_pubkey_b58) {
+            slot.record.staked = staked;
+        }
     }
 
     /// Returns the status the operator held before this beat, so the
@@ -350,6 +365,28 @@ mod tests {
     use covenant_identity::LocalIdentity;
     use covenant_mcp::Content;
 
+    #[test]
+    fn a_newcomer_is_unstaked_until_read_and_a_reregister_keeps_the_verdict() {
+        let registry = OperatorRegistry::new();
+        let operator = LocalIdentity::generate("operator@stake");
+        let key = operator.agent_id().pubkey_base58();
+        let req = RegisterRequest::sign(profile(&operator), payout(1), &operator).unwrap();
+        registry.register(&req, 1_000, None, true).unwrap();
+        assert!(!registry.record(&key).unwrap().staked);
+        registry.set_staked(&key, true);
+        registry.register(&req, 2_000, None, true).unwrap();
+        assert!(
+            registry.record(&key).unwrap().staked,
+            "a restarting node keeps its standing while the stake is re-read"
+        );
+        let open = OperatorRegistry::new();
+        open.register(&req, 1_000, None, false).unwrap();
+        assert!(
+            open.record(&key).unwrap().staked,
+            "no requirement, nothing to hold"
+        );
+    }
+
     fn profile(identity: &LocalIdentity) -> CapabilityProfile {
         CapabilityProfile {
             operator: identity.agent_id(),
@@ -405,7 +442,7 @@ mod tests {
         let registry = OperatorRegistry::new();
         let operator = LocalIdentity::generate("operator@local");
         let req = RegisterRequest::sign(profile(&operator), payout(1), &operator).unwrap();
-        registry.register(&req, 1_000, None).unwrap();
+        registry.register(&req, 1_000, None, false).unwrap();
 
         let hb = HeartbeatRequest::sign(
             operator.agent_id(),
@@ -448,7 +485,7 @@ mod tests {
         let operator = LocalIdentity::generate("operator@local");
         let key = operator.agent_id().pubkey_base58();
         let req = RegisterRequest::sign(profile(&operator), payout(1), &operator).unwrap();
-        registry.register(&req, 1_000, None).unwrap();
+        registry.register(&req, 1_000, None, false).unwrap();
 
         let hb = HeartbeatRequest::sign(
             operator.agent_id(),
@@ -464,7 +501,7 @@ mod tests {
         // A re-register (the node rebooted) must not keep the pre-crash
         // depth — the next heartbeat carries the real one.
         let req = RegisterRequest::sign(profile(&operator), payout(1), &operator).unwrap();
-        registry.register(&req, 3_000, None).unwrap();
+        registry.register(&req, 3_000, None, false).unwrap();
         assert_eq!(
             registry.record(&key).unwrap().queue_depth,
             0,
@@ -482,7 +519,7 @@ mod tests {
         // request never reaches address validation.
         req.payout_address = "tampered".into();
         assert!(matches!(
-            registry.register(&req, 1_000, None),
+            registry.register(&req, 1_000, None, false),
             Err(RegistryError::BadSignature(_))
         ));
     }
@@ -496,7 +533,7 @@ mod tests {
         for bad in ["not-an-address", &bs58::encode([7u8; 8]).into_string()] {
             let req =
                 RegisterRequest::sign(profile(&operator), bad.to_string(), &operator).unwrap();
-            match registry.register(&req, 1_000, None) {
+            match registry.register(&req, 1_000, None, false) {
                 Err(RegistryError::UnpayablePayout(m)) => {
                     assert!(m.contains("payout address"), "names the defect: {m}")
                 }
@@ -532,7 +569,7 @@ mod tests {
         prof.models_served = vec!["gpt-4\x1b[2Kfree".into()];
         let payout = bs58::encode([7u8; 32]).into_string();
         let req = RegisterRequest::sign(prof, payout, &operator).unwrap();
-        match registry.register(&req, 1_000, None) {
+        match registry.register(&req, 1_000, None, false) {
             Err(RegistryError::InvalidProfile(m)) => {
                 assert!(m.contains("control character"), "names the defect: {m}")
             }
@@ -570,7 +607,7 @@ mod tests {
         };
         let payout = bs58::encode([7u8; 32]).into_string();
         let req = RegisterRequest::sign(prof, payout, &operator).unwrap();
-        match registry.register(&req, 1_000, None) {
+        match registry.register(&req, 1_000, None, false) {
             Err(RegistryError::InvalidProfile(m)) => {
                 assert!(m.contains("lease-serving operator must price"), "{m}")
             }
@@ -586,7 +623,7 @@ mod tests {
         };
         let payout = bs58::encode([7u8; 32]).into_string();
         let req = RegisterRequest::sign(ok, payout, &operator).unwrap();
-        assert!(registry.register(&req, 1_000, None).is_ok());
+        assert!(registry.register(&req, 1_000, None, false).is_ok());
     }
 
     #[test]
@@ -594,25 +631,27 @@ mod tests {
         let registry = OperatorRegistry::new();
         let resident = LocalIdentity::generate("resident@local");
         let resident_req = RegisterRequest::sign(profile(&resident), payout(1), &resident).unwrap();
-        registry.register(&resident_req, 1_000, Some(1)).unwrap();
+        registry
+            .register(&resident_req, 1_000, Some(1), false)
+            .unwrap();
 
         // The registry is at its cap: a NEW operator bounces...
         let newcomer = LocalIdentity::generate("newcomer@local");
         let newcomer_req = RegisterRequest::sign(profile(&newcomer), payout(2), &newcomer).unwrap();
         assert!(matches!(
-            registry.register(&newcomer_req, 2_000, Some(1)),
+            registry.register(&newcomer_req, 2_000, Some(1), false),
             Err(RegistryError::RegistryFull(1))
         ));
 
         // ...but the resident re-registering (a node restart) is growth
         // of nothing and always lands.
         registry
-            .register(&resident_req, 3_000, Some(1))
+            .register(&resident_req, 3_000, Some(1), false)
             .expect("re-register at cap");
 
         // And no cap means no ceiling.
         registry
-            .register(&newcomer_req, 4_000, None)
+            .register(&newcomer_req, 4_000, None, false)
             .expect("uncapped registration");
     }
 
@@ -621,7 +660,7 @@ mod tests {
         let registry = OperatorRegistry::new();
         let operator = LocalIdentity::generate("operator@local");
         let req = RegisterRequest::sign(profile(&operator), payout(1), &operator).unwrap();
-        registry.register(&req, 1_000, None).unwrap();
+        registry.register(&req, 1_000, None, false).unwrap();
         let key = operator.agent_id().pubkey_base58();
 
         // A heartbeat the operator signed once, captured and replayed
@@ -676,7 +715,7 @@ mod tests {
         let registry = OperatorRegistry::new();
         let operator = LocalIdentity::generate("operator@local");
         let req = RegisterRequest::sign(profile(&operator), payout(1), &operator).unwrap();
-        let session = registry.register(&req, 1_000, None).unwrap();
+        let session = registry.register(&req, 1_000, None, false).unwrap();
         let key = operator.agent_id().pubkey_base58();
 
         assert!(registry.check_session(&key, Some(&session)).is_ok());
@@ -697,7 +736,7 @@ mod tests {
         let buyer = LocalIdentity::generate("buyer@local");
         let coordinator = LocalIdentity::generate("coordinator@local");
         let req = RegisterRequest::sign(profile(&operator), payout(1), &operator).unwrap();
-        registry.register(&req, 0, None).unwrap();
+        registry.register(&req, 0, None, false).unwrap();
 
         let key = operator.agent_id().pubkey_base58();
         let job_id = Uuid::new_v4();
@@ -718,7 +757,7 @@ mod tests {
         let buyer = LocalIdentity::generate("buyer@local");
         let coordinator = LocalIdentity::generate("coordinator@local");
         let req = RegisterRequest::sign(profile(&operator), payout(1), &operator).unwrap();
-        registry.register(&req, 0, None).unwrap();
+        registry.register(&req, 0, None, false).unwrap();
         let key = operator.agent_id().pubkey_base58();
 
         let job_id = Uuid::new_v4();
@@ -751,7 +790,7 @@ mod tests {
         let buyer = LocalIdentity::generate("buyer@local");
         let coordinator = LocalIdentity::generate("coordinator@local");
         let req = RegisterRequest::sign(profile(&operator), payout(1), &operator).unwrap();
-        registry.register(&req, 0, None).unwrap();
+        registry.register(&req, 0, None, false).unwrap();
         let key = operator.agent_id().pubkey_base58();
 
         let moved = Uuid::new_v4();
@@ -783,7 +822,7 @@ mod tests {
         let buyer = LocalIdentity::generate("buyer@local");
         let coordinator = LocalIdentity::generate("coordinator@local");
         let req = RegisterRequest::sign(profile(&operator), payout(1), &operator).unwrap();
-        registry.register(&req, 0, None).unwrap();
+        registry.register(&req, 0, None, false).unwrap();
         let key = operator.agent_id().pubkey_base58();
 
         let poller = {
@@ -810,7 +849,7 @@ mod tests {
         let registry = OperatorRegistry::new();
         let operator = LocalIdentity::generate("operator@local");
         let req = RegisterRequest::sign(profile(&operator), payout(1), &operator).unwrap();
-        registry.register(&req, 0, None).unwrap();
+        registry.register(&req, 0, None, false).unwrap();
         let key = operator.agent_id().pubkey_base58();
 
         registry
@@ -837,7 +876,7 @@ mod tests {
         let registry = OperatorRegistry::new();
         let operator = LocalIdentity::generate("operator@local");
         let req = RegisterRequest::sign(profile(&operator), payout(1), &operator).unwrap();
-        registry.register(&req, 0, None).unwrap();
+        registry.register(&req, 0, None, false).unwrap();
         let key = operator.agent_id().pubkey_base58();
 
         let got = registry

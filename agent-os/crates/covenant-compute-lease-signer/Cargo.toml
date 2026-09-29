@@ -12,9 +12,17 @@ description = "Signing sidecar for the Covenant Compute lease meter. Opens, tick
 # agent-os workspace, and the keys stay in a separate process.
 [workspace]
 
+[lib]
+name = "covenant_compute_lease_signer"
+path = "src/lib.rs"
+
 [[bin]]
 name = "covenant-compute-lease-signer"
 path = "src/main.rs"
+
+[[bin]]
+name = "covenant-compute-stake"
+path = "src/bin/covenant-compute-stake.rs"
 
 [dependencies]
 base64 = "0.22"

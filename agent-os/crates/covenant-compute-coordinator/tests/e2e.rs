@@ -4923,7 +4923,7 @@ async fn canary_probes_stop_dead_without_a_subsidy_policy() {
     let register_req = RegisterRequest::sign(profile, payout_addr(1), &operator_identity).unwrap();
     state
         .registry()
-        .register(&register_req, epoch_ms(), None)
+        .register(&register_req, epoch_ms(), None, false)
         .unwrap();
 
     let operator_key = operator_identity.agent_id().pubkey_base58();
@@ -5624,7 +5624,7 @@ async fn redundancy_mirrors_respect_the_matchers_trust_floor() {
     .unwrap();
     state
         .registry()
-        .register(&register_req, epoch_ms(), None)
+        .register(&register_req, epoch_ms(), None, false)
         .unwrap();
     // The floored operator asks CHEAPER than the clean one — price
     // must not buy its way past the floor.
@@ -5636,7 +5636,7 @@ async fn redundancy_mirrors_respect_the_matchers_trust_floor() {
                 .unwrap();
         state
             .registry()
-            .register(&register_req, epoch_ms(), None)
+            .register(&register_req, epoch_ms(), None, false)
             .unwrap();
         mirrors.push(identity.agent_id().pubkey_base58());
     }
@@ -5727,7 +5727,7 @@ async fn redundancy_mirrors_stop_dead_without_a_subsidy_policy() {
     .unwrap();
     state
         .registry()
-        .register(&register_req, epoch_ms(), None)
+        .register(&register_req, epoch_ms(), None, false)
         .unwrap();
     let mirror_identity = LocalIdentity::generate("mirror@e2e");
     let register_req = RegisterRequest::sign(
@@ -5738,7 +5738,7 @@ async fn redundancy_mirrors_stop_dead_without_a_subsidy_policy() {
     .unwrap();
     state
         .registry()
-        .register(&register_req, epoch_ms(), None)
+        .register(&register_req, epoch_ms(), None, false)
         .unwrap();
 
     // One released batch job on the books (receipt fabricated through
@@ -5851,6 +5851,7 @@ async fn a_divergent_deterministic_inference_operator_is_faulted() {
             &RegisterRequest::sign(source_profile, payout_for("source@e2e"), &source).unwrap(),
             epoch_ms(),
             None,
+            false,
         )
         .unwrap();
 
@@ -5889,6 +5890,7 @@ async fn a_divergent_deterministic_inference_operator_is_faulted() {
                 &RegisterRequest::sign(profile, payout_for(display), &op).unwrap(),
                 epoch_ms(),
                 None,
+                false,
             )
             .unwrap();
         mirrors.insert(op.agent_id().pubkey_base58(), op);

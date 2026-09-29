@@ -670,8 +670,22 @@ async fn register(
 ) -> Result<Json<RegisterResponse>, ApiError> {
     let session = state
         .registry()
-        .register(&req, crate::epoch_ms(), state.config().max_operators)
+        .register(
+            &req,
+            crate::epoch_ms(),
+            state.config().max_operators,
+            state.config().stake.is_some(),
+        )
         .map_err(ApiError::from)?;
+    // Read the new operator's stake now rather than at the next refresh, so a
+    // node that staked before registering is matchable within seconds.
+    if state.config().stake.is_some() {
+        let state = state.clone();
+        let operator = req.profile.operator.pubkey_base58();
+        tokio::spawn(async move {
+            crate::stake::refresh_operator(&state, &crate::stake::stake_client(), &operator).await;
+        });
+    }
     Ok(Json(RegisterResponse {
         accepted: true,
         operator_session: Some(session),
@@ -746,6 +760,11 @@ struct ReputationView {
     /// for everyone else and while the lease scaling is off.
     required_bond_micro_usdc: u64,
     committed_bond_micro_usdc: u64,
+    /// The CVNT stake this deployment requires for a node identity, in
+    /// base units (`0` when none), and whether the last chain read found
+    /// this operator holding it.
+    stake_required: u64,
+    staked: bool,
     /// Directory standing, the matcher's remaining per-operator gates:
     /// known at all, declared status, and how long since it was seen
     /// (`None` for an operator this coordinator has never met).
@@ -794,10 +813,14 @@ async fn operator_reputation(
         .as_ref()
         .map(|r| config.bond_floor().required_micro_usdc(&r.profile))
         .unwrap_or(config.min_bond_micro_usdc);
+    let staked = record.as_ref().is_some_and(|r| r.staked);
     Json(ReputationView {
         matchable: live
+            && staked
             && stats.score_bps >= config.min_operator_score_bps
             && committed >= required_bond,
+        stake_required: config.stake.as_ref().map_or(0, |s| s.min_amount),
+        staked,
         live,
         registered: record.is_some(),
         status: record.as_ref().map(|r| r.status),
@@ -4385,6 +4408,7 @@ mod tests {
                 .unwrap(),
                 crate::epoch_ms(),
                 None,
+                false,
             )
             .unwrap();
 

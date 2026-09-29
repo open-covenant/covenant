@@ -185,7 +185,7 @@ pub async fn select_operator(
                 && record.profile.satisfies(requirement)
         })
         .filter(|(key, record)| {
-            bond.admits(&record.profile, bonds.status(key).committed_micro_usdc)
+            record.staked && bond.admits(&record.profile, bonds.status(key).committed_micro_usdc)
         })
         .collect();
     if candidates.is_empty() {
@@ -260,7 +260,8 @@ pub async fn cheapest_capable_ask_above_offer(
         if ask <= offered_micro_usdc {
             continue;
         }
-        if !bond.admits(&record.profile, bonds.status(&key).committed_micro_usdc) {
+        if !record.staked || !bond.admits(&record.profile, bonds.status(&key).committed_micro_usdc)
+        {
             continue;
         }
         above.push((key, ask));
@@ -340,6 +341,7 @@ pub async fn capacity_view(
             .iter()
             .filter(|(key, record)| {
                 in_standing(record, now_ms, cutoff_ms)
+                    && record.staked
                     && bond.admits(&record.profile, bonds.status(key).committed_micro_usdc)
             })
             .map(|(key, _)| key.as_str())
@@ -352,7 +354,7 @@ pub async fn capacity_view(
     let mut matchable_operators = 0usize;
     let mut rows: BTreeMap<(JobKind, String), Row> = BTreeMap::new();
     for (key, record) in snapshot {
-        if !in_standing(&record, now_ms, cutoff_ms) {
+        if !in_standing(&record, now_ms, cutoff_ms) || !record.staked {
             continue;
         }
         if !bond.admits(&record.profile, bonds.status(&key).committed_micro_usdc) {
@@ -514,8 +516,42 @@ mod tests {
             tee_capable: false,
         };
         let req = RegisterRequest::sign(profile, payout_for(display), &identity).unwrap();
-        registry.register(&req, 0, None).unwrap();
+        registry.register(&req, 0, None, false).unwrap();
         identity.agent_id().pubkey_base58()
+    }
+
+    #[tokio::test]
+    async fn an_operator_without_the_stake_wins_nothing_even_when_cheapest() {
+        let registry = OperatorRegistry::new();
+        let cheap = register(&registry, "cheap-unstaked@local", 100);
+        let staked = register(&registry, "staked@local", 500);
+        registry.set_staked(&cheap, false);
+
+        let winner = select(
+            &registry,
+            &NoReputation,
+            &requirement(),
+            1_000,
+            0,
+            Duration::from_secs(45),
+            0,
+        )
+        .await
+        .unwrap();
+        assert_eq!(winner, staked, "price never buys past the stake gate");
+
+        registry.set_staked(&staked, false);
+        assert!(select(
+            &registry,
+            &NoReputation,
+            &requirement(),
+            1_000,
+            0,
+            Duration::from_secs(45),
+            0,
+        )
+        .await
+        .is_none());
     }
 
     #[tokio::test]
@@ -659,7 +695,7 @@ mod tests {
                     tee_capable: false,
                 };
                 let req = RegisterRequest::sign(profile, payout_for("payout"), id).unwrap();
-                registry.register(&req, 0, None).unwrap();
+                registry.register(&req, 0, None, false).unwrap();
             }
             registry
         };
@@ -774,7 +810,7 @@ mod tests {
             tee_capable: false,
         };
         let req = RegisterRequest::sign(profile, payout_for("payout"), &identity).unwrap();
-        registry.register(&req, 0, None).unwrap();
+        registry.register(&req, 0, None, false).unwrap();
         let hb = HeartbeatRequest::sign(
             identity.agent_id(),
             OperatorStatus::Offline,
@@ -1043,7 +1079,7 @@ mod tests {
         };
         let profile = build(base);
         let req = RegisterRequest::sign(profile, payout_for(display), &identity).unwrap();
-        registry.register(&req, now_ms, None).unwrap();
+        registry.register(&req, now_ms, None, false).unwrap();
         identity.agent_id().pubkey_base58()
     }
 
@@ -1095,7 +1131,7 @@ mod tests {
             tee_capable: false,
         };
         let req = RegisterRequest::sign(profile, payout_for("payout-offline"), &offline).unwrap();
-        registry.register(&req, now_ms, None).unwrap();
+        registry.register(&req, now_ms, None, false).unwrap();
         let hb = HeartbeatRequest::sign(
             offline.agent_id(),
             OperatorStatus::Offline,
@@ -1615,7 +1651,7 @@ mod tests {
         };
         let req = RegisterRequest::sign(profile, payout_for("flat@local"), &identity).unwrap();
         let err = registry
-            .register(&req, 0, None)
+            .register(&req, 0, None, false)
             .expect_err("a per-job lease ask is refused at registration");
         assert!(
             err.to_string()

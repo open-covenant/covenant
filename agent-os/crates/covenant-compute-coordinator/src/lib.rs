@@ -46,6 +46,7 @@ pub mod recover;
 pub mod redundancy;
 pub mod registry;
 pub mod reputation;
+pub mod stake;
 pub mod state;
 pub mod stream;
 pub mod sweep;
@@ -86,6 +87,7 @@ pub use registry::{OperatorRecord, OperatorRegistry, RegistryError};
 pub use reputation::{
     smoothed_score_bps, AuditReputationSource, NoReputation, ReputationSource, ReputationStats,
 };
+pub use stake::{spawn_periodic_stake_refresh, StakeRequirement};
 pub use state::{BuyerFunds, CoordinatorConfig, CoordinatorState, PartnerConfig};
 pub use stream::{StreamBook, StreamError, StreamReadout, STREAM_LINGER_MS};
 pub use sweep::{

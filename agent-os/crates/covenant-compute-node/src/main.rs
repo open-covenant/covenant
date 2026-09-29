@@ -1386,6 +1386,12 @@ async fn print_status(home: &std::path::Path) -> anyhow::Result<()> {
             "bond floor:    {bond_floor} micro-USDC committed — {verdict} ({committed} committed)"
         );
     }
+    let stake_required = standing["stake_required"].as_u64().unwrap_or(0);
+    let staked = standing["staked"].as_bool() == Some(true);
+    if stake_required > 0 {
+        let verdict = if staked { "met" } else { "NOT met" };
+        println!("CVNT stake:    {stake_required} base units, locked — {verdict}");
+    }
 
     let matchable = standing["matchable"].as_bool() == Some(true);
     if matchable {
@@ -1443,6 +1449,14 @@ async fn print_status(home: &std::path::Path) -> anyhow::Result<()> {
         println!(
             "  - committed stake {committed} micro-USDC sits under the deployment's \
              {bond_floor} floor: see `bond` for posting instructions"
+        );
+    }
+    if stake_required > 0 && !staked {
+        println!(
+            "  - no CVNT stake for this node counts toward the deployment's {stake_required} \
+             base-unit minimum; it must stay locked past the longest lease and the dispute \
+             window: `covenant-compute-stake stake {operator_key} <cvnt> --lock-days <days> \
+             --keypair <wallet>`, then `covenant-compute-stake status {operator_key}`"
         );
     }
     print_market(&http, &coordinator_url, false).await

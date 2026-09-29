@@ -201,6 +201,27 @@ window, stays slashable until the refund actually leaves, and stops
 this node winning organic work immediately — the floor gates on
 committed stake, not posted.
 
+A deployment can also require CVNT staked on chain for this node's
+identity. The reputation endpoint reports the minimum as
+`stake_required`, in CVNT base units (CVNT has 6 decimals), and whether
+this node meets it as `staked`. Stake from any wallet you control with
+`covenant-compute-stake`, built from
+`agent-os/crates/covenant-compute-lease-signer`:
+
+```bash
+covenant-compute-stake stake <node-pubkey> 1000000 --lock-days 30 --keypair <wallet.json>
+covenant-compute-stake status <node-pubkey>
+covenant-compute-stake unstake <node-pubkey> --keypair <wallet.json>  # after the lock ends
+```
+
+The tokens sit in a vault the settlement program controls. Only the
+staking wallet can withdraw them, and only once the lock ends. Until
+then the protocol's slash authority can send them to the treasury. A
+stake counts while it stays locked past the longest lease (one day)
+plus the deployment's dispute window, so it stops counting shortly
+before it unlocks. To keep winning work, stake again from a second
+wallet before that point.
+
 `service install` pins the current binary, the node home and PATH into
 a launchd agent (macOS) or systemd user unit (Linux): crashed nodes
 restart, deliberate exits stand, and `service uninstall` removes the

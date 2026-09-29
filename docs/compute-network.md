@@ -253,6 +253,12 @@ proven with a real vector, an inference claim with a live completion.
   canaries, disputes, redundancy verdicts) and gates matching via a
   score floor; deployments can additionally require a posted bond,
   slashed only on coordinator-proven faults.
+- A deployment can require each node to hold CVNT staked on chain for
+  its identity. The stake stays locked in a program-controlled vault,
+  counts only while its lock outlasts a lease and the dispute window,
+  and the protocol's slash authority can send it to the treasury. The
+  public deployment requires 1,000,000 CVNT per node; each operator's
+  reputation endpoint reports the live minimum as `stake_required`.
 - Public reads are anonymous aggregates: `/metrics`,
   `/federation/capacity`, `/federation/fees`, `/federation/subsidy`
   expose counts, asks, and money totals — never operator identities.

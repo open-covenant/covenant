@@ -22,6 +22,7 @@ export const DOCS_PUBLISHED_DATE = "2026-05-13";
 // Everything else (about, blog, roadmap, partners, stake, ...) lives in the
 // footer so the header stays focused.
 export const NAV_LINKS = [
+  { label: "compute", href: "/compute", external: false as const },
   { label: "guard", href: "/guard", external: false as const },
   { label: "trading", href: "/trading", external: false as const },
   { label: "docs", href: "https://docs.opencovenant.org", external: true as const },

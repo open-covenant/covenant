@@ -10,11 +10,13 @@
 ##   docker run -p 8720:8720 -v compute-data:/data compute-coordinator
 ##
 ## Configuration is env-only (fees, subsidy policy, trust floor, payout
-## backend, inbound rail). Two signing sidecars are bundled: the
+## backend, inbound rail). Three signing sidecars are bundled: the
 ## covenant-x402-signer at /usr/local/bin/covenant-x402-signer for the
-## sidecar payout backend, and the covenant-compute-lease-signer at
+## sidecar payout backend, the covenant-compute-lease-signer at
 ## /usr/local/bin/covenant-compute-lease-signer for the on-chain lease meter
-## (COVENANT_COMPUTE_LEASE_METER=sidecar). Keys are never baked into the
+## (COVENANT_COMPUTE_LEASE_METER=sidecar), and covenant-compute-stake at
+## /usr/local/bin/covenant-compute-stake for stake slashes
+## (COVENANT_COMPUTE_STAKE_SLASH_PER_FAULT). Keys are never baked into the
 ## image — hand the keypairs to the container at deploy time, as files or
 ## as JSON in the `*_KEYPAIR_JSON` variable beside each path variable.
 
@@ -44,6 +46,7 @@ RUN useradd --create-home --shell /bin/bash covenant
 COPY --from=builder /src/agent-os/target/release/covenant-compute-coordinator /usr/local/bin/covenant-compute-coordinator
 COPY --from=builder /src/agent-os/crates/covenant-x402-signer/target/release/covenant-x402-signer /usr/local/bin/covenant-x402-signer
 COPY --from=builder /src/agent-os/crates/covenant-compute-lease-signer/target/release/covenant-compute-lease-signer /usr/local/bin/covenant-compute-lease-signer
+COPY --from=builder /src/agent-os/crates/covenant-compute-lease-signer/target/release/covenant-compute-stake /usr/local/bin/covenant-compute-stake
 COPY deploy/compute-coordinator-entrypoint.sh /usr/local/bin/compute-coordinator-entrypoint
 
 ENV COVENANT_COMPUTE_COORDINATOR_HOME=/data

@@ -3,28 +3,39 @@
 //! ```text
 //! covenant-compute-stake status  <node>
 //! covenant-compute-stake stake   <node> <cvnt> --lock-days <days> --keypair <wallet>
+//! covenant-compute-stake extend  <node> [--add <cvnt>] [--lock-days <days>] --keypair <wallet>
 //! covenant-compute-stake unstake <node> --keypair <wallet>
+//! covenant-compute-stake slash   <node> <base units> --reason <sha256 hex> --keypair <slash authority>
 //! ```
 //!
 //! `<node>` is the operator identity the node registers with. The stake
 //! belongs to the wallet that signs: only it can withdraw, and only once the
 //! lock ends. Until then the protocol's slash authority can send it to the
 //! treasury. A coordinator that requires stake counts a position until a day
-//! plus its dispute window before the lock ends, so stake again from a second
-//! wallet before then to stay matched.
+//! plus its dispute window before the lock ends, so `extend` the lock before
+//! then to stay matched.
 //!
-//! `--rpc` picks the cluster (mainnet-beta by default), `--program` the
-//! settlement program.
+//! `slash` is the coordinator's: it prints one JSON line, `{"signature": ..}`
+//! on success or `{"error": .., "stage": "not_submitted" | "maybe_submitted"}`
+//! on failure, like the lease signer. Each slash carries a memo naming its
+//! reason, and a slash whose reason already landed answers with that
+//! transaction instead of taking the stake twice.
+//!
+//! `--rpc` (or `COVENANT_COMPUTE_STAKE_RPC_URL`) picks the cluster,
+//! mainnet-beta by default; `--keypair` falls back to
+//! `COVENANT_COMPUTE_STAKE_KEYPAIR`; `--program` names the settlement
+//! program.
 
 use std::process::ExitCode;
 use std::str::FromStr;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use covenant_compute_lease_signer::lease::discriminator;
+use covenant_compute_lease_signer::lease::{discriminator, memo};
 use covenant_compute_lease_signer::rpc::{Rpc, SendError};
 use covenant_compute_lease_signer::stake::{
-    config_mint_and_min_lock, mint_decimals, Position, StakeAccounts, DEFAULT_PROGRAM, POSITION_LEN,
+    mint_decimals, parse_hash, slash_memo, Position, ProtocolConfig, StakeAccounts,
+    DEFAULT_PROGRAM, POSITION_LEN,
 };
 use serde_json::json;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
@@ -38,7 +49,9 @@ use spl_associated_token_account::instruction::create_associated_token_account_i
 const USAGE: &str = "usage:
   covenant-compute-stake status  <node>
   covenant-compute-stake stake   <node> <cvnt> --lock-days <days> --keypair <wallet>
+  covenant-compute-stake extend  <node> [--add <cvnt>] [--lock-days <days>] --keypair <wallet>
   covenant-compute-stake unstake <node> --keypair <wallet>
+  covenant-compute-stake slash   <node> <base units> --reason <sha256 hex> --keypair <slash authority>
 options: --rpc <url>  --program <settlement program id>";
 const DEFAULT_RPC: &str = "https://api.mainnet-beta.solana.com";
 const PRIORITY_MICRO_LAMPORTS: u64 = 100_000;
@@ -53,12 +66,42 @@ const AGENT_ACTIVE_OFFSET: usize = 8 + 32 * 4 + 8 + 8;
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    match run(std::env::args().skip(1).collect()).await {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    let answers_in_json = argv.first().map(String::as_str) == Some("slash");
+    match run(argv).await {
         Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
-            eprintln!("covenant-compute-stake: {error}");
+        Err(failure) => {
+            if answers_in_json {
+                println!(
+                    "{}",
+                    json!({"error": failure.error, "stage": failure.stage})
+                );
+            }
+            eprintln!("covenant-compute-stake: {}", failure.error);
             ExitCode::FAILURE
         }
+    }
+}
+
+/// Why a command stopped. `stage` matters only to `slash`: whether a
+/// transaction that moves stake may have landed.
+struct Failure {
+    error: String,
+    stage: &'static str,
+}
+
+impl From<String> for Failure {
+    fn from(error: String) -> Self {
+        Self {
+            error,
+            stage: "not_submitted",
+        }
+    }
+}
+
+impl From<&str> for Failure {
+    fn from(error: &str) -> Self {
+        error.to_string().into()
     }
 }
 
@@ -69,6 +112,8 @@ struct Args {
     rpc: Option<String>,
     program: Option<String>,
     lock_days: Option<String>,
+    add: Option<String>,
+    reason: Option<String>,
 }
 
 fn parse(argv: Vec<String>) -> Result<Args, String> {
@@ -80,6 +125,8 @@ fn parse(argv: Vec<String>) -> Result<Args, String> {
             "--rpc" => &mut args.rpc,
             "--program" => &mut args.program,
             "--lock-days" => &mut args.lock_days,
+            "--add" => &mut args.add,
+            "--reason" => &mut args.reason,
             "-h" | "--help" => return Err(USAGE.into()),
             flag if flag.starts_with("--") => {
                 return Err(format!("unknown option {flag}\n{USAGE}"))
@@ -102,9 +149,21 @@ enum Command {
         lock_days: u64,
         owner: Keypair,
     },
+    Extend {
+        node: Pubkey,
+        add: Option<String>,
+        lock_days: Option<u64>,
+        owner: Keypair,
+    },
     Unstake {
         node: Pubkey,
         owner: Keypair,
+    },
+    Slash {
+        node: Pubkey,
+        amount: u64,
+        reason: [u8; 32],
+        authority: Keypair,
     },
 }
 
@@ -112,14 +171,21 @@ fn command(args: &Args) -> Result<Command, String> {
     let positional: Vec<&str> = args.positional.iter().map(String::as_str).collect();
     Ok(match positional.as_slice() {
         ["status", node] => Command::Status(parse_node(node)?),
-        ["stake", node, amount] => {
-            let days = args.lock_days.as_deref().ok_or("stake needs --lock-days")?;
-            Command::Stake {
+        ["stake", node, amount] => Command::Stake {
+            node: parse_node(node)?,
+            amount: amount.to_string(),
+            lock_days: lock_days(args)?.ok_or("stake needs --lock-days")?,
+            owner: wallet(args)?,
+        },
+        ["extend", node] => {
+            let lock_days = lock_days(args)?;
+            if args.add.is_none() && lock_days.is_none() {
+                return Err("extend needs --add, --lock-days or both".into());
+            }
+            Command::Extend {
                 node: parse_node(node)?,
-                amount: amount.to_string(),
-                lock_days: days
-                    .parse()
-                    .map_err(|_| format!("--lock-days {days} is not a whole number of days"))?,
+                add: args.add.clone(),
+                lock_days,
                 owner: wallet(args)?,
             }
         }
@@ -127,18 +193,37 @@ fn command(args: &Args) -> Result<Command, String> {
             node: parse_node(node)?,
             owner: wallet(args)?,
         },
+        ["slash", node, amount] => Command::Slash {
+            node: parse_node(node)?,
+            amount: amount
+                .parse()
+                .ok()
+                .filter(|&units: &u64| units > 0)
+                .ok_or_else(|| format!("{amount} is not a positive number of base units"))?,
+            reason: args
+                .reason
+                .as_deref()
+                .and_then(parse_hash)
+                .ok_or("slash needs --reason, 64 hex characters")?,
+            authority: wallet(args)?,
+        },
         _ => return Err(USAGE.into()),
     })
 }
 
-async fn run(argv: Vec<String>) -> Result<(), String> {
+async fn run(argv: Vec<String>) -> Result<(), Failure> {
     let args = parse(argv)?;
     let command = command(&args)?;
     let program = match &args.program {
         Some(id) => Pubkey::from_str(id).map_err(|e| format!("--program {id}: {e}"))?,
         None => DEFAULT_PROGRAM,
     };
-    let chain = Chain::read(args.rpc.as_deref().unwrap_or(DEFAULT_RPC), program).await?;
+    let rpc = args
+        .rpc
+        .clone()
+        .or_else(|| std::env::var("COVENANT_COMPUTE_STAKE_RPC_URL").ok())
+        .unwrap_or_else(|| DEFAULT_RPC.to_string());
+    let chain = Chain::read(&rpc, program).await?;
     match command {
         Command::Status(node) => chain.status(node).await,
         Command::Stake {
@@ -147,7 +232,19 @@ async fn run(argv: Vec<String>) -> Result<(), String> {
             lock_days,
             owner,
         } => chain.stake(node, &owner, &amount, lock_days).await,
+        Command::Extend {
+            node,
+            add,
+            lock_days,
+            owner,
+        } => chain.extend(node, &owner, add.as_deref(), lock_days).await,
         Command::Unstake { node, owner } => chain.unstake(node, &owner).await,
+        Command::Slash {
+            node,
+            amount,
+            reason,
+            authority,
+        } => chain.slash(node, &authority, amount, reason).await,
     }
 }
 
@@ -155,47 +252,56 @@ fn parse_node(node: &str) -> Result<Pubkey, String> {
     Pubkey::from_str(node).map_err(|e| format!("node {node}: {e}"))
 }
 
+fn lock_days(args: &Args) -> Result<Option<u64>, String> {
+    args.lock_days
+        .as_deref()
+        .map(|days| {
+            days.parse()
+                .map_err(|_| format!("--lock-days {days} is not a whole number of days"))
+        })
+        .transpose()
+}
+
 fn wallet(args: &Args) -> Result<Keypair, String> {
     let path = args
         .keypair
-        .as_deref()
+        .clone()
+        .or_else(|| std::env::var("COVENANT_COMPUTE_STAKE_KEYPAIR").ok())
         .ok_or("this moves CVNT; name the wallet with --keypair")?;
-    read_keypair_file(path).map_err(|e| format!("read {path}: {e}"))
+    read_keypair_file(&path).map_err(|e| format!("read {path}: {e}"))
 }
 
 struct Chain {
     rpc: Rpc,
     program: Pubkey,
-    mint: Pubkey,
+    config: ProtocolConfig,
     token_program: Pubkey,
     decimals: u8,
-    min_lock_secs: u64,
 }
 
 impl Chain {
     async fn read(url: &str, program: Pubkey) -> Result<Self, String> {
         let rpc = Rpc::new(url);
-        let config = Pubkey::find_program_address(&[b"config"], &program).0;
+        let address = Pubkey::find_program_address(&[b"config"], &program).0;
         let account = rpc
-            .account(&config)
+            .account(&address)
             .await?
             .filter(|account| account.owner == program)
             .ok_or_else(|| format!("{program} has no settlement config on this cluster"))?;
-        let (mint, min_lock_secs) = config_mint_and_min_lock(&account.data)
-            .ok_or_else(|| format!("config {config} is not a settlement config"))?;
+        let config = ProtocolConfig::decode(&account.data)
+            .ok_or_else(|| format!("config {address} is not a settlement config"))?;
         let mint_account = rpc
-            .account(&mint)
+            .account(&config.mint)
             .await?
-            .ok_or_else(|| format!("stake mint {mint} not found"))?;
+            .ok_or_else(|| format!("stake mint {} not found", config.mint))?;
         let decimals = mint_decimals(&mint_account.data)
-            .ok_or_else(|| format!("stake mint {mint} is not a mint"))?;
+            .ok_or_else(|| format!("stake mint {} is not a mint", config.mint))?;
         Ok(Self {
             rpc,
             program,
-            mint,
+            config,
             token_program: mint_account.owner,
             decimals,
-            min_lock_secs,
         })
     }
 
@@ -204,13 +310,14 @@ impl Chain {
             self.program,
             node.to_bytes(),
             owner,
-            self.mint,
+            self.config.mint,
             self.token_program,
         )
     }
 
-    async fn status(&self, node: Pubkey) -> Result<(), String> {
-        let positions = self
+    /// Every stake position naming `node`, from any owner.
+    async fn positions(&self, node: Pubkey) -> Result<Vec<(Pubkey, Position)>, String> {
+        let accounts = self
             .rpc
             .program_accounts(
                 &self.program,
@@ -225,13 +332,18 @@ impl Chain {
                 ]),
             )
             .await?;
+        Ok(accounts
+            .into_iter()
+            .filter_map(|(address, data)| Some((address, Position::decode(&data)?)))
+            .collect())
+    }
+
+    async fn status(&self, node: Pubkey) -> Result<(), Failure> {
+        let positions = self.positions(node).await?;
         let now = unix_now();
         let mut locked = 0u64;
         println!("node {node}");
-        for (address, data) in &positions {
-            let Some(position) = Position::decode(data) else {
-                continue;
-            };
+        for (address, position) in &positions {
             let state = if !position.active {
                 "inactive"
             } else if position.lock_until > now {
@@ -260,48 +372,34 @@ impl Chain {
         owner: &Keypair,
         amount: &str,
         lock_days: u64,
-    ) -> Result<(), String> {
+    ) -> Result<(), Failure> {
         let amount = base_units(amount, self.decimals)?;
-        let lock_secs = lock_days.saturating_mul(86_400);
-        if lock_secs < self.min_lock_secs {
-            return Err(format!(
-                "the program locks a stake for at least {} days",
-                self.min_lock_secs.div_ceil(86_400)
-            ));
-        }
-        let lock_until = unix_now() + lock_secs + LOCK_SLACK_SECS;
+        let lock_until = self.lock_until(lock_days)?;
         let accounts = self.accounts(node, owner.pubkey());
 
         if let Some(existing) = self.position(&accounts).await? {
             return Err(format!(
-                "{} already stakes {} CVNT for this node until {}; stake more from another wallet",
+                "{} already stakes {} CVNT for this node until {}; use extend to add to it",
                 owner.pubkey(),
                 cvnt(existing.amount, self.decimals),
                 utc(existing.lock_until),
-            ));
+            )
+            .into());
         }
-        let balance = self.token_balance(&accounts.owner_tokens).await?;
-        if balance < amount {
-            return Err(format!(
-                "{} holds {} CVNT, short of {}",
-                owner.pubkey(),
-                cvnt(balance, self.decimals),
-                cvnt(amount, self.decimals),
-            ));
-        }
+        self.require_balance(owner, &accounts, amount).await?;
 
         let mut instructions = Vec::new();
         match self.rpc.account(&accounts.agent).await? {
             None => instructions.push(accounts.register_agent()),
             Some(agent) if agent.data.get(AGENT_ACTIVE_OFFSET) != Some(&1) => {
-                return Err(format!("node {node} is deactivated in the protocol"));
+                return Err(format!("node {node} is deactivated in the protocol").into());
             }
             Some(_) => {}
         }
         instructions.push(create_associated_token_account_idempotent(
             &owner.pubkey(),
             &accounts.position,
-            &self.mint,
+            &self.config.mint,
             &self.token_program,
         ));
         instructions.push(accounts.stake(amount, lock_until));
@@ -315,20 +413,65 @@ impl Chain {
         Ok(())
     }
 
-    async fn unstake(&self, node: Pubkey, owner: &Keypair) -> Result<(), String> {
+    async fn extend(
+        &self,
+        node: Pubkey,
+        owner: &Keypair,
+        add: Option<&str>,
+        lock_days: Option<u64>,
+    ) -> Result<(), Failure> {
+        let accounts = self.accounts(node, owner.pubkey());
+        let position = self
+            .position(&accounts)
+            .await?
+            .ok_or_else(|| format!("{} has no stake for {node}", owner.pubkey()))?;
+        if !position.active {
+            return Err("this position was slashed to zero; unstake it and stake again".into());
+        }
+        let add = add
+            .map(|text| base_units(text, self.decimals))
+            .transpose()?
+            .unwrap_or(0);
+        let lock_until = match lock_days {
+            Some(days) => self.lock_until(days)?,
+            None => position.lock_until,
+        };
+        if lock_until < position.lock_until {
+            return Err(format!(
+                "already locked until {}; a lock only moves forward",
+                utc(position.lock_until)
+            )
+            .into());
+        }
+        if add > 0 {
+            self.require_balance(owner, &accounts, add).await?;
+        }
+
+        let signature = self
+            .send(owner, vec![accounts.extend(add, lock_until)])
+            .await?;
+        println!(
+            "{} CVNT staked for {node} until {}: {signature}",
+            cvnt(position.amount.saturating_add(add), self.decimals),
+            utc(lock_until),
+        );
+        Ok(())
+    }
+
+    async fn unstake(&self, node: Pubkey, owner: &Keypair) -> Result<(), Failure> {
         let accounts = self.accounts(node, owner.pubkey());
         let position = self
             .position(&accounts)
             .await?
             .ok_or_else(|| format!("{} has no stake for {node}", owner.pubkey()))?;
         if position.lock_until > unix_now() {
-            return Err(format!("locked until {}", utc(position.lock_until)));
+            return Err(format!("locked until {}", utc(position.lock_until)).into());
         }
         let instructions = vec![
             create_associated_token_account_idempotent(
                 &owner.pubkey(),
                 &owner.pubkey(),
-                &self.mint,
+                &self.config.mint,
                 &self.token_program,
             ),
             accounts.unstake(),
@@ -338,6 +481,81 @@ impl Chain {
             "withdrew {} CVNT: {signature}",
             cvnt(position.amount, self.decimals)
         );
+        Ok(())
+    }
+
+    /// Takes up to `amount` from the node's largest live position. A slash
+    /// with this `reason` already on chain is answered, not repeated.
+    async fn slash(
+        &self,
+        node: Pubkey,
+        authority: &Keypair,
+        amount: u64,
+        reason: [u8; 32],
+    ) -> Result<(), Failure> {
+        if authority.pubkey() != self.config.slash_authority {
+            return Err(format!(
+                "{} is not the protocol's slash authority",
+                authority.pubkey()
+            )
+            .into());
+        }
+        let positions = self.positions(node).await?;
+        let memo_text = slash_memo(&reason);
+        for (address, _) in &positions {
+            if let Some(signature) = self.rpc.signature_with_memo(address, &memo_text).await? {
+                println!(
+                    "{}",
+                    json!({"signature": signature, "position": address.to_string(), "already": true})
+                );
+                return Ok(());
+            }
+        }
+        let (address, position) = positions
+            .into_iter()
+            .filter(|(_, position)| position.active && position.amount > 0)
+            .max_by_key(|(_, position)| position.amount)
+            .ok_or_else(|| format!("node {node} has no live stake to slash"))?;
+        let take = amount.min(position.amount);
+        let accounts = self.accounts(node, position.owner);
+        let instructions = vec![
+            memo(&memo_text),
+            accounts.slash(authority.pubkey(), self.config.treasury, take, reason),
+        ];
+        let signature = self.send(authority, instructions).await?;
+        println!(
+            "{}",
+            json!({"signature": signature, "position": address.to_string(), "amount": take})
+        );
+        Ok(())
+    }
+
+    fn lock_until(&self, lock_days: u64) -> Result<u64, String> {
+        let lock_secs = lock_days.saturating_mul(86_400);
+        if lock_secs < self.config.min_stake_lock {
+            return Err(format!(
+                "the program locks a stake for at least {} days",
+                self.config.min_stake_lock.div_ceil(86_400)
+            ));
+        }
+        Ok(unix_now() + lock_secs + LOCK_SLACK_SECS)
+    }
+
+    async fn require_balance(
+        &self,
+        owner: &Keypair,
+        accounts: &StakeAccounts,
+        amount: u64,
+    ) -> Result<(), String> {
+        let balance = self.token_balance(&accounts.owner_tokens).await?;
+        if balance < amount {
+            return Err(format!(
+                "{} holds {} CVNT, short of {}",
+                owner.pubkey(),
+                cvnt(balance, self.decimals),
+                cvnt(amount, self.decimals),
+            ));
+        }
         Ok(())
     }
 
@@ -365,7 +583,7 @@ impl Chain {
         &self,
         payer: &Keypair,
         instructions: Vec<Instruction>,
-    ) -> Result<String, String> {
+    ) -> Result<String, Failure> {
         let mut all = vec![
             ComputeBudgetInstruction::set_compute_unit_limit(COMPUTE_UNITS),
             ComputeBudgetInstruction::set_compute_unit_price(PRIORITY_MICRO_LAMPORTS),
@@ -379,10 +597,13 @@ impl Chain {
             .send_and_confirm(&tx, CONFIRM)
             .await
             .map_err(|error| match error {
-                SendError::Refused(message) => message,
-                SendError::Unknown { signature, message } => format!(
-                    "{message}; transaction {signature} may still land, run status before trying again"
-                ),
+                SendError::Refused(message) => message.into(),
+                SendError::Unknown { signature, message } => Failure {
+                    error: format!(
+                        "{message}; transaction {signature} may still land, run status before trying again"
+                    ),
+                    stage: "maybe_submitted",
+                },
             })
     }
 }
@@ -496,5 +717,23 @@ mod tests {
         assert_eq!(args.keypair.as_deref(), Some("w.json"));
         assert!(parse(vec!["--rpc".into()]).is_err());
         assert!(parse(vec!["--lock".into(), "3".into()]).is_err());
+    }
+
+    #[test]
+    fn a_slash_names_its_reason_and_an_extend_names_a_change() {
+        let node = Pubkey::new_unique().to_string();
+        let slash = |extra: &[&str]| {
+            let mut argv = vec!["slash".to_string(), node.clone(), "50".into()];
+            argv.extend(extra.iter().map(|s| s.to_string()));
+            command(&parse(argv).unwrap()).err()
+        };
+        assert!(slash(&[]).unwrap().contains("--reason"));
+        assert!(slash(&["--reason", "abc"]).unwrap().contains("--reason"));
+
+        let extend = parse(vec!["extend".into(), node]).unwrap();
+        assert!(command(&extend)
+            .err()
+            .unwrap()
+            .contains("--add, --lock-days"));
     }
 }

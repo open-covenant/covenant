@@ -699,6 +699,44 @@ pub fn unstake(
     )
 }
 
+/// `extend_stake` signed by `owner`, from `owner_covnt` into the position's
+/// vault.
+#[allow(clippy::too_many_arguments)]
+pub fn extend_stake(
+    env: &mut Env,
+    owner: &Keypair,
+    agent_key: &[u8; 32],
+    position: &Pubkey,
+    stake_vault: &Pubkey,
+    owner_covnt: &Pubkey,
+    amount: u64,
+    lock_until: u64,
+) -> Result<(), TransactionError> {
+    let data = ix::ExtendStake { amount, lock_until }.data();
+    let metas = vec![
+        AccountMeta::new_readonly(env.config, false),
+        AccountMeta::new(agent_pda(agent_key), false),
+        AccountMeta::new(*position, false),
+        AccountMeta::new_readonly(owner.pubkey(), true),
+        AccountMeta::new(*owner_covnt, false),
+        AccountMeta::new(*stake_vault, false),
+        AccountMeta::new_readonly(env.mint, false),
+        AccountMeta::new_readonly(spl_token::ID, false),
+    ];
+    let payer = env.payer.insecure_clone();
+    let signer = owner.insecure_clone();
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[&signer],
+    )
+}
+
 pub fn close_position(env: &mut Env, position: &Pubkey) -> Result<(), TransactionError> {
     let owner = env.payer.pubkey();
     let data = ix::ClosePosition {}.data();

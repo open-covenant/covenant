@@ -224,6 +224,60 @@ pub mod settlement {
         Ok(())
     }
 
+    /// Owner-signed top-up and lock extension of a live position, so an
+    /// operator can keep its stake counting past the current lock without
+    /// unstaking. Adds `amount` (may be 0) to the vault and moves
+    /// `lock_until` forward, never back. A moved lock must clear the same
+    /// `min_stake_lock` floor as a fresh `stake`.
+    pub fn extend_stake(ctx: Context<ExtendStake>, amount: u64, lock_until: u64) -> Result<()> {
+        require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
+        require!(ctx.accounts.agent.active, CovenantError::AgentInactive);
+        require!(ctx.accounts.position.active, CovenantError::StakeInactive);
+        let current_lock = ctx.accounts.position.lock_until;
+        require!(lock_until >= current_lock, CovenantError::LockTooShort);
+        require!(
+            amount > 0 || lock_until > current_lock,
+            CovenantError::ZeroAmount
+        );
+
+        let min_lock = ctx.accounts.config.min_stake_lock;
+        if lock_until > current_lock && min_lock > 0 {
+            let now = Clock::get()?.unix_timestamp.max(0) as u64;
+            let min_unlock = now.checked_add(min_lock).ok_or(CovenantError::Overflow)?;
+            require!(lock_until >= min_unlock, CovenantError::LockTooShort);
+        }
+
+        if amount > 0 {
+            token_interface::transfer_checked(
+                ctx.accounts.extend_transfer_ctx(),
+                amount,
+                ctx.accounts.covnt_mint.decimals,
+            )?;
+        }
+
+        let position = &mut ctx.accounts.position;
+        position.amount = position
+            .amount
+            .checked_add(amount)
+            .ok_or(CovenantError::Overflow)?;
+        position.lock_until = lock_until;
+        ctx.accounts.agent.stake = ctx
+            .accounts
+            .agent
+            .stake
+            .checked_add(amount)
+            .ok_or(CovenantError::Overflow)?;
+
+        emit!(StakeExtended {
+            agent_key: position.agent_key,
+            owner: position.owner,
+            added: amount,
+            amount: position.amount,
+            lock_until,
+        });
+        Ok(())
+    }
+
     /// Owner-signed withdrawal of a staked position once `lock_until`
     /// has passed. Transfers the full position balance back to the
     /// owner's COVNT account, decrements `agent.stake`, and closes the
@@ -1412,6 +1466,59 @@ impl<'info> Unstake<'info> {
 }
 
 #[derive(Accounts)]
+pub struct ExtendStake<'info> {
+    #[account(
+        seeds = [b"config"],
+        bump = config.bump,
+    )]
+    pub config: Account<'info, Config>,
+    #[account(
+        mut,
+        seeds = [b"agent", position.agent_key.as_ref()],
+        bump = agent.bump,
+        constraint = agent.agent_key == position.agent_key @ CovenantError::AgentMismatch,
+    )]
+    pub agent: Account<'info, Agent>,
+    #[account(
+        mut,
+        seeds = [b"stake", position.agent_key.as_ref(), position.owner.as_ref()],
+        bump = position.bump,
+        constraint = position.owner == owner.key() @ CovenantError::Unauthorized,
+    )]
+    pub position: Account<'info, StakePosition>,
+    pub owner: Signer<'info>,
+    #[account(
+        mut,
+        constraint = owner_covnt.owner == owner.key() @ CovenantError::Unauthorized,
+        constraint = owner_covnt.mint == config.covnt_mint @ CovenantError::WrongMint,
+    )]
+    pub owner_covnt: InterfaceAccount<'info, TokenAccount>,
+    #[account(
+        mut,
+        constraint = stake_vault.key() == position.vault @ CovenantError::Unauthorized,
+        constraint = stake_vault.mint == config.covnt_mint @ CovenantError::WrongMint,
+    )]
+    pub stake_vault: InterfaceAccount<'info, TokenAccount>,
+    #[account(constraint = covnt_mint.key() == config.covnt_mint @ CovenantError::WrongMint)]
+    pub covnt_mint: InterfaceAccount<'info, Mint>,
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+impl<'info> ExtendStake<'info> {
+    fn extend_transfer_ctx(&self) -> CpiContext<'_, '_, '_, 'info, TransferChecked<'info>> {
+        CpiContext::new(
+            self.token_program.to_account_info(),
+            TransferChecked {
+                mint: self.covnt_mint.to_account_info(),
+                from: self.owner_covnt.to_account_info(),
+                to: self.stake_vault.to_account_info(),
+                authority: self.owner.to_account_info(),
+            },
+        )
+    }
+}
+
+#[derive(Accounts)]
 pub struct SlashStake<'info> {
     #[account(
         seeds = [b"config"],
@@ -2375,6 +2482,16 @@ pub struct StakeOpened {
     pub amount: u64,
     pub lock_until: u64,
     pub position: Pubkey,
+}
+
+#[event]
+pub struct StakeExtended {
+    pub agent_key: [u8; 32],
+    pub owner: Pubkey,
+    pub added: u64,
+    /// The position's total after the top-up.
+    pub amount: u64,
+    pub lock_until: u64,
 }
 
 #[event]

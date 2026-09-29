@@ -962,6 +962,19 @@ pub enum AuditKind {
         job_id: Uuid,
         reason: String,
     },
+    /// The same coordinator-proven fault took CVNT from the operator's
+    /// on-chain stake (`covenant-compute-coordinator`): `amount` in the
+    /// stake mint's base units, sent to the protocol treasury by
+    /// `tx_signature`, whose memo names the fault's `slash_id` hash.
+    /// `amount` is `None` when a retry found the transaction an earlier
+    /// run had already landed.
+    ComputeStakeSlashed {
+        operator_pubkey_b58: String,
+        amount: Option<u64>,
+        job_id: Uuid,
+        reason: String,
+        tx_signature: String,
+    },
     /// A matured unbond's refund left the stake books
     /// (`covenant-compute-coordinator`). `paid_micro_usdc` is what the
     /// transfer actually moved — a slash landing during maturation

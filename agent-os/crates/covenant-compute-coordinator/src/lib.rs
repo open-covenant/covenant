@@ -87,7 +87,9 @@ pub use registry::{OperatorRecord, OperatorRegistry, RegistryError};
 pub use reputation::{
     smoothed_score_bps, AuditReputationSource, NoReputation, ReputationSource, ReputationStats,
 };
-pub use stake::{spawn_periodic_stake_refresh, StakeRequirement};
+pub use stake::{
+    resume_stake_slashes, spawn_periodic_stake_refresh, StakeRequirement, StakeSlashing,
+};
 pub use state::{BuyerFunds, CoordinatorConfig, CoordinatorState, PartnerConfig};
 pub use stream::{StreamBook, StreamError, StreamReadout, STREAM_LINGER_MS};
 pub use sweep::{

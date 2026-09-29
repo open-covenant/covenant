@@ -193,6 +193,29 @@ fn build_stake_requirement(
             .ok_or_else(|| anyhow::anyhow!("{key} must be set when COVENANT_COMPUTE_MIN_STAKE is"))
     };
     let default_lock = covenant_compute_protocol::MAX_LEASE_DURATION_SECS + dispute_window_secs;
+    // A proven fault costs stake only when a per-fault amount is set, and
+    // then the slash authority's key is required rather than defaulted.
+    let per_fault: u64 = env_parse(
+        "COVENANT_COMPUTE_STAKE_SLASH_PER_FAULT",
+        0,
+        "must be a u64 (base units)",
+    )?;
+    let slashing = if per_fault == 0 {
+        None
+    } else {
+        Some(covenant_compute_coordinator::StakeSlashing {
+            per_fault,
+            signer_binary: std::env::var("COVENANT_COMPUTE_STAKE_SIGNER_BIN")
+                .unwrap_or_else(|_| "/usr/local/bin/covenant-compute-stake".into())
+                .into(),
+            keypair_path: std::env::var("COVENANT_COMPUTE_STAKE_SLASH_KEYPAIR").map_err(|_| {
+                anyhow::anyhow!(
+                    "COVENANT_COMPUTE_STAKE_SLASH_KEYPAIR must be set when \
+                     COVENANT_COMPUTE_STAKE_SLASH_PER_FAULT is"
+                )
+            })?,
+        })
+    };
     Ok(Some(covenant_compute_coordinator::StakeRequirement {
         program_id: require("COVENANT_COMPUTE_STAKE_PROGRAM_ID")?,
         rpc_url: require("COVENANT_COMPUTE_STAKE_RPC_URL")?,
@@ -202,6 +225,7 @@ fn build_stake_requirement(
             default_lock,
             "must be a u64 (seconds)",
         )?,
+        slashing,
     }))
 }
 
@@ -713,8 +737,6 @@ async fn main() -> anyhow::Result<()> {
     )
     .await
     .context("replay coordinator journal")?;
-    // The meter's ledger is in memory; hand it back every lease the
-    // replayed job book still shows running.
     let stake_refresh_secs: u64 = env_parse(
         "COVENANT_COMPUTE_STAKE_REFRESH_SECS",
         120,
@@ -729,11 +751,22 @@ async fn main() -> anyhow::Result<()> {
             refresh_secs = interval,
             "operator stake REQUIRED: operators win work only while it is staked and locked"
         );
+        if let Some(slashing) = &requirement.slashing {
+            tracing::info!(
+                per_fault = slashing.per_fault,
+                "proven faults take operator stake to the treasury"
+            );
+            // Two minutes outlasts the blockhash of any slash the last
+            // run sent, so a resumed slash either finds it or sends alone.
+            covenant_compute_coordinator::resume_stake_slashes(&state, Duration::from_secs(120));
+        }
         covenant_compute_coordinator::spawn_periodic_stake_refresh(
             state.clone(),
             Duration::from_secs(interval),
         )
     });
+    // The meter's ledger is in memory; hand it back every lease the
+    // replayed job book still shows running.
     let adopted = covenant_compute_coordinator::adopt_live_leases(&state);
     if adopted > 0 {
         tracing::info!(adopted, "on-chain lease meter resumed leases still running");

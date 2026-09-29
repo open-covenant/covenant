@@ -254,3 +254,191 @@ fn update_slash_authority_and_treasury() {
     update_treasury(&mut env, &new_treasury).expect("rotate treasury");
     assert_eq!(config_account(&env).treasury, new_treasury);
 }
+
+#[test]
+fn extend_stake_tops_up_and_moves_the_lock_forward() {
+    let mut env = boot();
+    register_agent(&mut env, &AGENT);
+    let (position, stake_vault, owner_covnt) = stake_locked(&mut env, &AGENT, 500, 1_000);
+    let owner = env.payer.insecure_clone();
+    let payer = env.payer.insecure_clone();
+    mint_to(&mut env.svm, &payer, &env.mint, &owner_covnt, 300);
+
+    extend_stake(
+        &mut env,
+        &owner,
+        &AGENT,
+        &position,
+        &stake_vault,
+        &owner_covnt,
+        300,
+        5_000,
+    )
+    .expect("top up and extend");
+    let staked = stake_position(&env, &position);
+    assert_eq!((staked.amount, staked.lock_until), (800, 5_000));
+    assert_eq!(token_balance(&env, &stake_vault), 800);
+    assert_eq!(agent_stake(&env, &AGENT), 800);
+
+    bump_blockhash(&mut env);
+    extend_stake(
+        &mut env,
+        &owner,
+        &AGENT,
+        &position,
+        &stake_vault,
+        &owner_covnt,
+        0,
+        6_000,
+    )
+    .expect("extend the lock alone");
+    assert_eq!(stake_position(&env, &position).lock_until, 6_000);
+
+    warp_unix(&mut env, 5_999);
+    let err = unstake(&mut env, &AGENT, &position, &stake_vault, &owner_covnt)
+        .expect_err("the extended lock holds");
+    assert_eq!(custom_error(&err), Some(E_STAKE_LOCKED));
+    warp_unix(&mut env, 6_000);
+    bump_blockhash(&mut env);
+    unstake(&mut env, &AGENT, &position, &stake_vault, &owner_covnt).expect("unstake");
+    assert_eq!(token_balance(&env, &owner_covnt), 800);
+}
+
+#[test]
+fn extend_stake_never_moves_the_lock_back_and_refuses_a_no_op() {
+    let mut env = boot();
+    register_agent(&mut env, &AGENT);
+    let (position, stake_vault, owner_covnt) = stake_locked(&mut env, &AGENT, 500, 1_000);
+    let owner = env.payer.insecure_clone();
+    let payer = env.payer.insecure_clone();
+    mint_to(&mut env.svm, &payer, &env.mint, &owner_covnt, 10);
+
+    let err = extend_stake(
+        &mut env,
+        &owner,
+        &AGENT,
+        &position,
+        &stake_vault,
+        &owner_covnt,
+        10,
+        999,
+    )
+    .expect_err("an earlier lock");
+    assert_eq!(custom_error(&err), Some(E_LOCK_TOO_SHORT));
+    let err = extend_stake(
+        &mut env,
+        &owner,
+        &AGENT,
+        &position,
+        &stake_vault,
+        &owner_covnt,
+        0,
+        1_000,
+    )
+    .expect_err("nothing added, lock unchanged");
+    assert_eq!(custom_error(&err), Some(E_ZERO_AMOUNT));
+
+    extend_stake(
+        &mut env,
+        &owner,
+        &AGENT,
+        &position,
+        &stake_vault,
+        &owner_covnt,
+        10,
+        1_000,
+    )
+    .expect("a top-up alone keeps the lock");
+    assert_eq!(stake_position(&env, &position).amount, 510);
+}
+
+#[test]
+fn a_moved_lock_clears_the_min_stake_lock_floor() {
+    let mut env = boot();
+    register_agent(&mut env, &AGENT);
+    set_min_stake_lock(&mut env, 3_600).expect("set min lock");
+    let (position, stake_vault, owner_covnt) = stake_locked(&mut env, &AGENT, 500, 3_600);
+    let owner = env.payer.insecure_clone();
+    let payer = env.payer.insecure_clone();
+    mint_to(&mut env.svm, &payer, &env.mint, &owner_covnt, 5);
+
+    warp_unix(&mut env, 1_000);
+    let err = extend_stake(
+        &mut env,
+        &owner,
+        &AGENT,
+        &position,
+        &stake_vault,
+        &owner_covnt,
+        0,
+        4_599,
+    )
+    .expect_err("under now + min lock");
+    assert_eq!(custom_error(&err), Some(E_LOCK_TOO_SHORT));
+    extend_stake(
+        &mut env,
+        &owner,
+        &AGENT,
+        &position,
+        &stake_vault,
+        &owner_covnt,
+        0,
+        4_600,
+    )
+    .expect("at now + min lock");
+
+    warp_unix(&mut env, 2_000);
+    extend_stake(
+        &mut env,
+        &owner,
+        &AGENT,
+        &position,
+        &stake_vault,
+        &owner_covnt,
+        5,
+        4_600,
+    )
+    .expect("a top-up that leaves the lock alone skips the floor");
+    assert_eq!(stake_position(&env, &position).amount, 505);
+}
+
+#[test]
+fn only_the_owner_extends_a_live_position() {
+    let mut env = boot();
+    register_agent(&mut env, &AGENT);
+    let (position, stake_vault, owner_covnt) = stake_locked(&mut env, &AGENT, 500, 1_000);
+    let stranger = Keypair::new();
+    let payer = env.payer.insecure_clone();
+    let stranger_covnt = create_token_account(&mut env.svm, &payer, &env.mint, &stranger.pubkey());
+    mint_to(&mut env.svm, &payer, &env.mint, &stranger_covnt, 50);
+
+    let err = extend_stake(
+        &mut env,
+        &stranger,
+        &AGENT,
+        &position,
+        &stake_vault,
+        &stranger_covnt,
+        50,
+        9_000,
+    )
+    .expect_err("a stranger cannot move the owner's lock");
+    assert_eq!(custom_error(&err), Some(E_UNAUTHORIZED));
+
+    let slash_vault = env.treasury;
+    slash_stake(&mut env, &AGENT, &position, &stake_vault, &slash_vault, 500).expect("full slash");
+    let owner = env.payer.insecure_clone();
+    mint_to(&mut env.svm, &payer, &env.mint, &owner_covnt, 100);
+    let err = extend_stake(
+        &mut env,
+        &owner,
+        &AGENT,
+        &position,
+        &stake_vault,
+        &owner_covnt,
+        100,
+        9_000,
+    )
+    .expect_err("a spent position is closed and staked afresh");
+    assert_eq!(custom_error(&err), Some(E_STAKE_INACTIVE));
+}

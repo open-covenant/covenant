@@ -2,6 +2,7 @@
 //! once at startup and cloned (cheaply, via the inner `Arc`) into every
 //! axum handler through `State<CoordinatorState>`.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -16,7 +17,7 @@ use crate::bond::OperatorBonds;
 use crate::deposit::InboundRail;
 use crate::escrow::CustodialEscrow;
 use crate::jobs::JobBook;
-use crate::journal::{Journal, JournalError};
+use crate::journal::{Journal, JournalError, StakeSlashState, StakeSlashStatus};
 use crate::payout::Payout;
 use crate::registry::OperatorRegistry;
 use crate::reputation::ReputationSource;
@@ -276,6 +277,8 @@ struct Inner {
     /// opts in (`config.vault_enabled`). Durable when the coordinator
     /// runs with a journal, in-memory otherwise.
     vault: Option<Arc<crate::vault::VaultStore>>,
+    /// Latest state per on-chain stake slash, keyed by `slash_id`.
+    stake_slashes: parking_lot::Mutex<HashMap<String, StakeSlashState>>,
 }
 
 #[derive(Clone)]
@@ -317,6 +320,7 @@ impl CoordinatorState {
             payout,
             audit,
             journal: None,
+            stake_slashes: Default::default(),
             streams: StreamBook::new(),
             vault,
         }))
@@ -444,6 +448,7 @@ impl CoordinatorState {
             payout,
             audit,
             journal: Some(journal),
+            stake_slashes: parking_lot::Mutex::new(restored.stake_slashes),
             streams: StreamBook::new(),
             vault,
         }));
@@ -614,6 +619,35 @@ impl CoordinatorState {
         self.0.journal.clone()
     }
 
+    /// The latest state of one on-chain stake slash.
+    pub fn stake_slash(&self, slash_id: &str) -> Option<StakeSlashState> {
+        self.0.stake_slashes.lock().get(slash_id).cloned()
+    }
+
+    /// Slashes whose outcome never became durable, for boot to drive
+    /// again.
+    pub fn attempted_stake_slashes(&self) -> Vec<StakeSlashState> {
+        self.0
+            .stake_slashes
+            .lock()
+            .values()
+            .filter(|s| s.status == StakeSlashStatus::Attempted)
+            .cloned()
+            .collect()
+    }
+
+    /// Journal-then-commit, like every other money transition.
+    pub fn record_stake_slash(&self, state: StakeSlashState) -> Result<(), JournalError> {
+        if let Some(journal) = &self.0.journal {
+            journal.record_stake_slash(&state)?;
+        }
+        self.0
+            .stake_slashes
+            .lock()
+            .insert(state.slash_id.clone(), state);
+        Ok(())
+    }
+
     pub fn buyer_funds(&self, buyer_pubkey_b58: &str) -> BuyerFunds {
         let deposited = self.0.accounts.deposited(buyer_pubkey_b58);
         let charged = self.0.escrow.organic_charged(buyer_pubkey_b58);
@@ -764,6 +798,7 @@ impl CoordinatorState {
                 );
             }
         }
+        crate::stake::slash_for_fault(self, &slash_id, job_id, operator_pubkey_b58, reason);
     }
 
     /// Pins an accepted bond-refund transfer onto the journaled unbond

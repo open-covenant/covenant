@@ -119,6 +119,77 @@ impl StakeAccounts {
             data: discriminator("global", "unstake").to_vec(),
         }
     }
+
+    /// Adds `amount` (may be 0) and moves the lock to `lock_until`, which
+    /// may not be earlier than the current one.
+    pub fn extend(&self, amount: u64, lock_until: u64) -> Instruction {
+        let mut data = discriminator("global", "extend_stake").to_vec();
+        data.extend_from_slice(&amount.to_le_bytes());
+        data.extend_from_slice(&lock_until.to_le_bytes());
+        Instruction {
+            program_id: self.program,
+            accounts: vec![
+                AccountMeta::new_readonly(self.config, false),
+                AccountMeta::new(self.agent, false),
+                AccountMeta::new(self.position, false),
+                AccountMeta::new_readonly(self.owner, true),
+                AccountMeta::new(self.owner_tokens, false),
+                AccountMeta::new(self.vault, false),
+                AccountMeta::new_readonly(self.mint, false),
+                AccountMeta::new_readonly(self.token_program, false),
+            ],
+            data,
+        }
+    }
+
+    /// Sends `amount` of this position to the treasury. Only the protocol's
+    /// slash authority can sign it.
+    pub fn slash(
+        &self,
+        authority: Pubkey,
+        treasury: Pubkey,
+        amount: u64,
+        reason_hash: [u8; 32],
+    ) -> Instruction {
+        let mut data = discriminator("global", "slash_stake").to_vec();
+        data.extend_from_slice(&amount.to_le_bytes());
+        data.extend_from_slice(&reason_hash);
+        Instruction {
+            program_id: self.program,
+            accounts: vec![
+                AccountMeta::new_readonly(self.config, false),
+                AccountMeta::new_readonly(authority, true),
+                AccountMeta::new(self.agent, false),
+                AccountMeta::new(self.position, false),
+                AccountMeta::new(self.vault, false),
+                AccountMeta::new(treasury, false),
+                AccountMeta::new_readonly(self.mint, false),
+                AccountMeta::new_readonly(self.token_program, false),
+            ],
+            data,
+        }
+    }
+}
+
+/// The memo a slash carries, so a retried slash finds the one that
+/// already landed instead of taking the stake twice.
+pub fn slash_memo(reason_hash: &[u8; 32]) -> String {
+    format!("compute-stake-slash:v1:{}", hex(reason_hash))
+}
+
+pub fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+pub fn parse_hash(text: &str) -> Option<[u8; 32]> {
+    if text.len() != 64 || !text.is_ascii() {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for (i, byte) in out.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&text[2 * i..2 * i + 2], 16).ok()?;
+    }
+    Some(out)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -150,16 +221,35 @@ impl Position {
     }
 }
 
-/// The stake mint the protocol config names, and its minimum lock.
-pub fn config_mint_and_min_lock(config_data: &[u8]) -> Option<(Pubkey, u64)> {
-    if config_data.len() < 154 || config_data[..8] != discriminator("account", "Config") {
-        return None;
+/// What staking reads from the protocol's `Config` account.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProtocolConfig {
+    pub slash_authority: Pubkey,
+    pub mint: Pubkey,
+    /// The token account slashed stake is sent to.
+    pub treasury: Pubkey,
+    pub min_stake_lock: u64,
+}
+
+impl ProtocolConfig {
+    pub fn decode(data: &[u8]) -> Option<Self> {
+        if data.len() < 154 || data[..8] != discriminator("account", "Config") {
+            return None;
+        }
+        let key_at = |offset: usize| {
+            let mut bytes = [0u8; 32];
+            bytes.copy_from_slice(&data[offset..offset + 32]);
+            Pubkey::new_from_array(bytes)
+        };
+        let mut lock = [0u8; 8];
+        lock.copy_from_slice(&data[146..154]);
+        Some(Self {
+            slash_authority: key_at(40),
+            mint: key_at(72),
+            treasury: key_at(104),
+            min_stake_lock: u64::from_le_bytes(lock),
+        })
     }
-    let mut mint = [0u8; 32];
-    mint.copy_from_slice(&config_data[72..104]);
-    let mut lock = [0u8; 8];
-    lock.copy_from_slice(&config_data[146..154]);
-    Some((Pubkey::new_from_array(mint), u64::from_le_bytes(lock)))
 }
 
 /// An SPL mint's decimals, the same byte under both token programs.
@@ -223,5 +313,58 @@ mod tests {
         assert_eq!(position.amount, 1_000_000_000_000);
         assert_eq!(position.lock_until, 1_900_000_000);
         assert!(position.active);
+    }
+
+    #[test]
+    fn a_slash_reaches_the_treasury_under_the_authority_alone() {
+        let accounts = StakeAccounts::derive(DEFAULT_PROGRAM, [7u8; 32], key(1), key(2), key(3));
+        let ix = accounts.slash(key(8), key(9), 50, [4u8; 32]);
+        let signers: Vec<Pubkey> = ix
+            .accounts
+            .iter()
+            .filter(|a| a.is_signer)
+            .map(|a| a.pubkey)
+            .collect();
+        assert_eq!(signers, vec![key(8)]);
+        assert_eq!(ix.accounts[4].pubkey, accounts.vault);
+        assert_eq!(ix.accounts[5].pubkey, key(9));
+        assert_eq!(ix.data[..8], discriminator("global", "slash_stake"));
+        assert_eq!(&ix.data[8..16], &50u64.to_le_bytes());
+        assert_eq!(&ix.data[16..48], &[4u8; 32]);
+
+        let ix = accounts.extend(0, 77);
+        assert_eq!(ix.data[..8], discriminator("global", "extend_stake"));
+        assert!(ix.accounts[3].is_signer && !ix.accounts[3].is_writable);
+    }
+
+    #[test]
+    fn a_reason_round_trips_through_its_memo() {
+        let reason = [0xab; 32];
+        let memo = slash_memo(&reason);
+        assert_eq!(memo, format!("compute-stake-slash:v1:{}", "ab".repeat(32)));
+        assert_eq!(parse_hash(&"ab".repeat(32)), Some(reason));
+        assert_eq!(parse_hash("ab"), None);
+        assert_eq!(parse_hash(&"zz".repeat(32)), None);
+    }
+
+    #[test]
+    fn the_config_decodes_at_the_program_offsets() {
+        let mut data = discriminator("account", "Config").to_vec();
+        for n in [1u8, 2, 3, 4] {
+            data.extend_from_slice(key(n).as_ref());
+        }
+        data.extend_from_slice(&1000u64.to_le_bytes());
+        data.extend_from_slice(&[0, 255]);
+        data.extend_from_slice(&604_800u64.to_le_bytes());
+        let config = ProtocolConfig::decode(&data).unwrap();
+        assert_eq!(
+            (
+                config.slash_authority,
+                config.mint,
+                config.treasury,
+                config.min_stake_lock
+            ),
+            (key(2), key(3), key(4), 604_800)
+        );
     }
 }

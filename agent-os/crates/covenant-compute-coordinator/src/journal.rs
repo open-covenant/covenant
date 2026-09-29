@@ -136,6 +136,15 @@ enum JournalEntry {
         #[serde(flatten)]
         state: TransferAttemptState,
     },
+    /// An upsert keyed by `slash_id`: one proven fault's take from the
+    /// operator's on-chain CVNT stake. `Attempted` is written before the
+    /// stake signer is spawned, then `Slashed` or `Refused`. The latest
+    /// state per id is the dedup record, so a replayed verdict never
+    /// slashes twice.
+    StakeSlash {
+        #[serde(flatten)]
+        state: StakeSlashState,
+    },
 }
 
 /// The obligation class behind a transfer attempt — which book the
@@ -201,6 +210,35 @@ pub struct TransferAttemptState {
     pub detail: String,
 }
 
+/// Where one on-chain stake slash stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StakeSlashStatus {
+    /// The signer may have been spawned and the outcome is not durable.
+    /// Boot drives it again; the slash's memo makes that idempotent.
+    Attempted,
+    Slashed,
+    /// The signer submitted nothing: no live stake, or the chain refused.
+    Refused,
+}
+
+/// One stake slash's durable state — see [`JournalEntry::StakeSlash`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StakeSlashState {
+    pub slash_id: String,
+    pub operator_pubkey_b58: String,
+    pub job_id: Uuid,
+    /// Requested take, in the stake mint's base units. What landed is
+    /// in the audit row.
+    pub amount: u64,
+    pub reason: String,
+    pub status: StakeSlashStatus,
+    #[serde(default)]
+    pub tx_signature: Option<String>,
+    #[serde(default)]
+    pub detail: String,
+}
+
 /// Everything `Journal::load` recovered, ready to seed the in-memory
 /// maps.
 #[derive(Default)]
@@ -222,6 +260,8 @@ pub struct RestoredState {
     /// Latest state per transfer attempt. Ones still `Attempted` are
     /// crash windows for boot to suspend or auto-resolve.
     pub transfer_attempts: HashMap<Uuid, TransferAttemptState>,
+    /// Latest state per stake slash.
+    pub stake_slashes: HashMap<String, StakeSlashState>,
 }
 
 /// Append-side handle, shared by the job book and the escrow. Writes
@@ -419,6 +459,9 @@ impl Journal {
                 JournalEntry::TransferAttempt { state } => {
                     restored.transfer_attempts.insert(state.attempt_id, state);
                 }
+                JournalEntry::StakeSlash { state } => {
+                    restored.stake_slashes.insert(state.slash_id.clone(), state);
+                }
             }
         }
         Ok(restored)
@@ -508,6 +551,12 @@ impl Journal {
         })
     }
 
+    pub fn record_stake_slash(&self, state: &StakeSlashState) -> Result<(), JournalError> {
+        self.append(&JournalEntry::StakeSlash {
+            state: state.clone(),
+        })
+    }
+
     fn append(&self, entry: &JournalEntry) -> Result<(), JournalError> {
         let mut line = serde_json::to_vec(entry).map_err(JournalError::Encode)?;
         line.push(b'\n');
@@ -556,6 +605,7 @@ impl Journal {
         let mut unbonds: BTreeMap<Uuid, UnbondState> = BTreeMap::new();
         let mut subsidy_closed_at_ms: Option<u64> = None;
         let mut transfer_attempts: BTreeMap<Uuid, TransferAttemptState> = BTreeMap::new();
+        let mut stake_slashes: BTreeMap<String, StakeSlashState> = BTreeMap::new();
         let mut entries_before = 0usize;
         for entry in parse_lines(valid) {
             entries_before += 1;
@@ -609,6 +659,9 @@ impl Journal {
                 }
                 JournalEntry::TransferAttempt { state } => {
                     transfer_attempts.insert(state.attempt_id, state);
+                }
+                JournalEntry::StakeSlash { state } => {
+                    stake_slashes.insert(state.slash_id.clone(), state);
                 }
             }
         }
@@ -668,6 +721,11 @@ impl Journal {
             if state.status == TransferAttemptStatus::Attempted {
                 push(&JournalEntry::TransferAttempt { state })?;
             }
+        }
+        // Every slash survives, settled or not: its id is what keeps a
+        // replayed verdict from taking the stake twice.
+        for (_, state) in stake_slashes {
+            push(&JournalEntry::StakeSlash { state })?;
         }
 
         let tmp_path = self.path.with_extension("jsonl.compacting");
@@ -814,6 +872,44 @@ mod tests {
             status: EscrowStatus::Held,
             buyer_pubkey_b58: "buyer-pubkey".into(),
         }
+    }
+
+    #[test]
+    fn a_stake_slash_keeps_its_latest_state_through_compaction() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("journal.jsonl");
+        let journal = Journal::open(&path).unwrap();
+        let attempted = StakeSlashState {
+            slash_id: "canary:j1:op".into(),
+            operator_pubkey_b58: "op".into(),
+            job_id: Uuid::new_v4(),
+            amount: 50,
+            reason: "wrong answer".into(),
+            status: StakeSlashStatus::Attempted,
+            tx_signature: None,
+            detail: String::new(),
+        };
+        let slashed = StakeSlashState {
+            status: StakeSlashStatus::Slashed,
+            tx_signature: Some("sig".into()),
+            ..attempted.clone()
+        };
+        let pending = StakeSlashState {
+            slash_id: "redundancy:j2:op".into(),
+            ..attempted.clone()
+        };
+        journal.record_stake_slash(&attempted).unwrap();
+        journal.record_stake_slash(&slashed).unwrap();
+        journal.record_stake_slash(&pending).unwrap();
+
+        let expect = |restored: RestoredState| {
+            assert_eq!(restored.stake_slashes.len(), 2);
+            assert_eq!(restored.stake_slashes["canary:j1:op"], slashed);
+            assert_eq!(restored.stake_slashes["redundancy:j2:op"], pending);
+        };
+        expect(Journal::load(&path).unwrap());
+        journal.compact().unwrap();
+        expect(Journal::load(&path).unwrap());
     }
 
     #[test]

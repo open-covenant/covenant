@@ -43,6 +43,7 @@ export const DOCS_NAV: DocsSection[] = [
       { href: "/audit-integrity", label: "Audit integrity" },
       { href: "/conformance", label: "Conformance" },
       { href: "/settlement", label: "Settlement" },
+      { href: "/compute", label: "Compute" },
     ],
   },
   {

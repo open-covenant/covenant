@@ -1,0 +1,36 @@
+## The Covenant Compute node as a service. Build context: repository root.
+##
+## Configuration is env-only; the knob table is in the node crate's README.
+## A broker node (COVENANT_COMPUTE_NODE_EXECUTOR=broker) owns no hardware:
+## it rents a GPU machine per lease and destroys it when the lease closes, so
+## this image needs no GPU. Mount a persistent disk at /data: the node's
+## identity, earnings ledger and result outbox live there, and an operator
+## whose identity changes starts over with no reputation.
+##
+##   docker build -f deploy/Dockerfile.compute-node -t compute-node .
+
+FROM rust:1.90-slim-bookworm AS builder
+ENV CARGO_TERM_COLOR=always
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      pkg-config libssl-dev ca-certificates git \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY agent-os/ ./agent-os/
+WORKDIR /src/agent-os
+RUN cargo build --release --bin covenant-compute-node
+
+FROM debian:bookworm-slim AS runtime
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN useradd --create-home --shell /bin/bash covenant
+COPY --from=builder /src/agent-os/target/release/covenant-compute-node /usr/local/bin/covenant-compute-node
+COPY deploy/compute-node-entrypoint.sh /usr/local/bin/compute-node-entrypoint
+
+ENV COVENANT_COMPUTE_NODE_HOME=/data
+RUN mkdir -p /data && chown covenant:covenant /data
+# No USER: the entrypoint starts as root to take ownership of a mounted disk,
+# then drops to `covenant` before the node runs.
+ENTRYPOINT ["compute-node-entrypoint"]

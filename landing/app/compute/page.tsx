@@ -84,7 +84,7 @@ export default function ComputePage() {
 
         <video
           className="mt-10 w-full max-w-4xl rounded border border-neutral-800"
-          src="/compute/covenant-compute.mp4"
+          src="/compute/covenant-compute-film.mp4"
           poster="/compute/poster.jpg"
           controls
           playsInline

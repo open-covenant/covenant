@@ -41,7 +41,7 @@
       "@solana/spl-token": "0.4.15",
       "@tanstack/react-query": "5.62.0",
       "axios": "1.18.0",
-      "brace-expansion": "5.0.9",
+      "brace-expansion": "5.0.12",
       "browserslist": "4.28.7",
       "fast-uri": "3.1.4",
       "find-my-way": "9.7.0",

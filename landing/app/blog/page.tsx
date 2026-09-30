@@ -28,11 +28,17 @@ type Post = { slug: string; date: string; title: string; dek: string; href?: str
 
 const POSTS: Post[] = [
   {
-    slug: "compute",
+    slug: "compute-mainnet",
     href: "/compute",
     date: "29 September 2026",
     title: "Covenant Compute is live on Solana mainnet",
     dek: "Rent a GPU by the second and pay in USDC. The meter runs onchain in a MagicBlock ephemeral rollup, and every node stakes CVNT to take work.",
+  },
+  {
+    slug: "compute",
+    date: "12 August 2026",
+    title: "The model you paid for is not always the model that ran",
+    dek: "Every request on the inference network returns a signed receipt naming the model that served it, with hashes of the input and output. The prompt itself is never stored.",
   },
   {
     slug: "covenant-is-now-multichain",

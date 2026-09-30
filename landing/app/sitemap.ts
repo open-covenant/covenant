@@ -13,6 +13,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
     { url: `${SITE}/about`, lastModified, changeFrequency: "monthly", priority: 0.8 },
     { url: `${SITE}/blog`, lastModified, changeFrequency: "weekly", priority: 0.6 },
     { url: `${SITE}/compute`, lastModified, changeFrequency: "weekly", priority: 0.9 },
+    { url: `${SITE}/blog/compute`, lastModified, changeFrequency: "monthly", priority: 0.6 },
     { url: `${SITE}/blog/covenant-payai`, lastModified, changeFrequency: "monthly", priority: 0.6 },
     { url: `${SITE}/faq`, lastModified, changeFrequency: "monthly", priority: 0.7 },
     { url: `${SITE}/changelog`, lastModified, changeFrequency: "weekly", priority: 0.6 },

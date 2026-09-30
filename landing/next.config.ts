@@ -40,12 +40,11 @@ const securityHeaders = [
 const config: NextConfig = {
   reactStrictMode: true,
   async redirects() {
-    // Covenant Compute started as a post at /blog/inference-receipts, then
-    // lived at /covenant-compute before it became the product page at
-    // /compute. Keep both old links alive.
+    // The compute post was published at /blog/inference-receipts, then lived at
+    // /covenant-compute, before settling at /blog/compute. Keep the old links alive.
     return [
-      { source: "/blog/inference-receipts", destination: "/compute", permanent: true },
-      { source: "/covenant-compute", destination: "/compute", permanent: true },
+      { source: "/blog/inference-receipts", destination: "/blog/compute", permanent: true },
+      { source: "/covenant-compute", destination: "/blog/compute", permanent: true },
     ];
   },
   productionBrowserSourceMaps: false,

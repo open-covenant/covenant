@@ -880,6 +880,34 @@ async fn submit_job(
         .validate_input()
         .map_err(|e| ApiError::BadRequest(format!("job input malformed: {e}")))?;
 
+    // Agent work is opened to buyers by deployment policy, and a check is
+    // only ever ordered by the coordinator itself: a buyer-posted check
+    // would be a verdict nobody's settlement waits on.
+    match envelope.payload.kind {
+        JobKind::AgentTask => {
+            let buyer = envelope.payload.buyer.pubkey_base58();
+            match &state.config().agent {
+                Some(policy) if policy.admits(&buyer) => {}
+                Some(_) => {
+                    return Err(ApiError::Unauthorized(format!(
+                        "agent tasks are open to approved buyers only; {buyer} is not one"
+                    )))
+                }
+                None => {
+                    return Err(ApiError::BadRequest(
+                        "this coordinator does not take agent tasks".into(),
+                    ))
+                }
+            }
+        }
+        JobKind::AgentCheck => {
+            return Err(ApiError::BadRequest(
+                "agent checks are ordered by the coordinator, not bought".into(),
+            ))
+        }
+        _ => {}
+    }
+
     // A job this coordinator already knows is answered with the truth
     // before any admission gate can refuse it — in particular before
     // the deadline gate below, because a replayed envelope naturally
@@ -1068,6 +1096,8 @@ async fn submit_job(
                 metered_elapsed_ms: None,
                 close_requested_at_ms: None,
                 lease_access: None,
+                check_jobs: Vec::new(),
+                checks_task: None,
             },
         ) {
             tracing::error!(%job_id, error = %e, "failed to record refunded job");
@@ -1123,6 +1153,8 @@ async fn submit_job(
             metered_elapsed_ms: None,
             close_requested_at_ms: None,
             lease_access: None,
+            check_jobs: Vec::new(),
+            checks_task: None,
         },
     ) {
         if let Err(refund_err) = state
@@ -1330,6 +1362,14 @@ async fn submit_result(
                     released_gross_micro_usdc: 0,
                 }));
             }
+            // Already parked: a redelivery must not order a second check.
+            JobPhase::AwaitingCheck => {
+                return Ok(Json(JobResultAck {
+                    job_id,
+                    settled: ResultSettlement::AwaitingCheck,
+                    released_gross_micro_usdc: 0,
+                }));
+            }
             JobPhase::Offered | JobPhase::Accepted | JobPhase::Rejected => {}
         }
     }
@@ -1419,6 +1459,21 @@ async fn submit_result(
                 released_gross_micro_usdc: 0,
             }));
         }
+    }
+
+    // An agent task's verified result is held for another operator's check
+    // rather than released on its own receipt.
+    if record.envelope.payload.kind == JobKind::AgentTask
+        && msg.receipt.receipt.status == A2ATaskStatus::Ok
+    {
+        let settled = crate::agent::park_result(&state, job_id, &record, msg.receipt, msg.output)
+            .await
+            .map_err(ApiError::Conflict)?;
+        return Ok(Json(JobResultAck {
+            job_id,
+            settled,
+            released_gross_micro_usdc: 0,
+        }));
     }
 
     // A lease's signed terms drive its metered settlement below. Read
@@ -1660,6 +1715,38 @@ async fn submit_result(
         }
         None => crate::onchain_meter::LeaseConclusion::OffChain,
     };
+    let ack = finish_release(
+        &state,
+        job_id,
+        &record,
+        msg.receipt,
+        msg.output,
+        amount,
+        funding_source,
+        metered_elapsed_ms,
+        onchain,
+    )
+    .await?;
+    crate::agent::nudge(&state, &record);
+    Ok(ack)
+}
+
+/// Concludes a released job: the fee and partner shares, the `Completed`
+/// record, its audit rows, and the operator's payout — on-chain when a
+/// lease's vault already paid it, pushed otherwise. Shared by a result that
+/// releases on its own receipt and an agent task released by its check.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn finish_release(
+    state: &CoordinatorState,
+    job_id: Uuid,
+    record: &JobRecord,
+    receipt: covenant_compute_protocol::SignedWorkReceipt,
+    output: Vec<covenant_mcp::Content>,
+    amount: u64,
+    funding_source: FundingSource,
+    metered_elapsed_ms: Option<u64>,
+    onchain: crate::onchain_meter::LeaseConclusion,
+) -> Result<Json<JobResultAck>, ApiError> {
     // The marketplace take (C7): the hold releases gross — the buyer
     // paid the envelope price and the subsidy/revenue books stay in
     // gross terms — and the split happens here, on the payout push.
@@ -1707,8 +1794,8 @@ async fn submit_result(
         .jobs()
         .set_receipt_and_phase(
             job_id,
-            msg.receipt.clone(),
-            msg.output,
+            receipt.clone(),
+            output,
             ReleaseCharges {
                 fee_micro_usdc: fee,
                 partner_share_micro_usdc: partner_share,
@@ -1809,11 +1896,11 @@ async fn submit_result(
             tx_signature,
         } => {
             crate::onchain_meter::hold_payout_for_chain(
-                &state,
+                state,
                 job_id,
                 &record.payout_address,
                 operator_net,
-                &msg.receipt,
+                &receipt,
                 &message,
                 tx_signature.as_deref(),
             );
@@ -1835,7 +1922,7 @@ async fn submit_result(
             &record.operator_pubkey_b58,
             &record.payout_address,
             operator_net,
-            &msg.receipt,
+            &receipt,
         )
         .await
     {
@@ -1856,7 +1943,6 @@ async fn submit_result(
         released_gross_micro_usdc: amount,
     }))
 }
-
 /// The assigned operator's chunk relay for a streaming job. Session-
 /// authed like `accept_job`: chunks predate the receipt, so the bearer
 /// session is what ties the push to the operator the job was matched
@@ -2003,6 +2089,9 @@ struct JobStatusView {
     /// authority, so a lease reports the seconds it ran rather than the window
     /// ceiling the receipt's `price_micro_usdc` names.
     charged_micro_usdc: Option<u64>,
+    /// An agent task's latest check verdict, once a check has returned one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    check: Option<covenant_compute_protocol::AgentCheckVerdict>,
 }
 
 #[derive(Serialize)]
@@ -2054,15 +2143,28 @@ async fn job_status(
     )?;
     let payout = JobPayoutView::for_record(&record);
     let charged_micro_usdc = state.escrow().settled_charge_micro_usdc(job_id);
+    // An agent task's patch is the work itself: the buyer receives it once
+    // it is paid for, never while it is being checked or after it failed.
+    // The check's verdict is shown either way, so a failure says why.
+    let agent_task = record.envelope.payload.kind == JobKind::AgentTask;
+    let check = agent_task
+        .then(|| crate::agent::latest_verdict(&state, &record))
+        .flatten();
+    let output = if agent_task && record.phase != JobPhase::Completed {
+        None
+    } else {
+        record.output
+    };
     Ok(Json(JobStatusView {
         job_id,
         status: record.phase.as_str(),
         disputed: record.dispute.is_some(),
         refund_reason: record.refund_reason,
         receipt: record.receipt,
-        output: record.output,
+        output,
         payout,
         charged_micro_usdc,
+        check,
     }))
 }
 
@@ -2113,7 +2215,7 @@ async fn dispute_job(
     }
     match record.phase {
         JobPhase::Completed => {}
-        JobPhase::Offered | JobPhase::Accepted => {
+        JobPhase::Offered | JobPhase::Accepted | JobPhase::AwaitingCheck => {
             return Err(ApiError::Conflict(format!(
                 "job {job_id} has not concluded yet — dispute what you were charged for"
             )));
@@ -2241,6 +2343,10 @@ async fn cancel_job(
             JobPhase::Completed => Err(ApiError::Conflict(format!(
                 "job {job_id} already completed and was paid for — dispute what you were \
                  charged for instead"
+            ))),
+            JobPhase::AwaitingCheck => Err(ApiError::Conflict(format!(
+                "the work for job {job_id} is delivered and being checked — it is paid only if \
+                 the check passes, and refunded otherwise"
             ))),
             JobPhase::Rejected | JobPhase::Failed => Err(ApiError::Conflict(format!(
                 "job {job_id} already concluded ({}) and its hold was already refunded — \
@@ -3813,7 +3919,7 @@ async fn close_lease(
         // its money comes back through the deadline sweep untouched.
         match record.phase {
             JobPhase::Accepted | JobPhase::Completed | JobPhase::Failed | JobPhase::Refunded => {}
-            JobPhase::Offered | JobPhase::Rejected => {
+            JobPhase::Offered | JobPhase::Rejected | JobPhase::AwaitingCheck => {
                 return Err(ApiError::Conflict(format!(
                     "lease {job_id} is {} — no session is running to close",
                     record.phase.as_str()
@@ -3956,6 +4062,8 @@ mod tests {
             metered_elapsed_ms: None,
             close_requested_at_ms: None,
             lease_access: None,
+            check_jobs: Vec::new(),
+            checks_task: None,
         };
         state.jobs().insert(job_id, record).unwrap();
         crate::onchain_meter::open_lease_onchain(&state, job_id).await;
@@ -4137,6 +4245,8 @@ mod tests {
             metered_elapsed_ms: None,
             close_requested_at_ms: None,
             lease_access: None,
+            check_jobs: Vec::new(),
+            checks_task: None,
         };
         state.jobs().insert(job_id, record).unwrap();
 
@@ -4274,6 +4384,8 @@ mod tests {
             metered_elapsed_ms: None,
             close_requested_at_ms: None,
             lease_access: None,
+            check_jobs: Vec::new(),
+            checks_task: None,
         };
         state.jobs().insert(job_id, record).unwrap();
 
@@ -4470,6 +4582,8 @@ mod tests {
             metered_elapsed_ms: None,
             close_requested_at_ms: None,
             lease_access: None,
+            check_jobs: Vec::new(),
+            checks_task: None,
         };
         state.jobs().insert(job_id, record).unwrap();
         crate::onchain_meter::open_lease_onchain(&state, job_id).await;

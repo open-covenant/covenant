@@ -59,6 +59,10 @@ pub struct OperatorRecord {
     /// for its node identity. Always true where no stake is required;
     /// where one is, false until the chain has been read and says so.
     pub staked: bool,
+    /// The wallets behind the stake that counts, base58. Two operators
+    /// sharing one are one party, so a check never pairs them with each
+    /// other. Empty where no stake is required.
+    pub stake_owners: Vec<String>,
 }
 
 struct OperatorSlot {
@@ -151,6 +155,7 @@ impl OperatorRegistry {
                 last_seen_ms: now_ms,
                 session_token: session_token.clone(),
                 staked: !stake_required,
+                stake_owners: Vec::new(),
             },
             pending: VecDeque::new(),
             notify: Arc::new(Notify::new()),
@@ -176,6 +181,12 @@ impl OperatorRegistry {
     pub fn set_staked(&self, operator_pubkey_b58: &str, staked: bool) {
         if let Some(slot) = self.operators.lock().get_mut(operator_pubkey_b58) {
             slot.record.staked = staked;
+        }
+    }
+
+    pub fn set_stake_owners(&self, operator_pubkey_b58: &str, owners: Vec<String>) {
+        if let Some(slot) = self.operators.lock().get_mut(operator_pubkey_b58) {
+            slot.record.stake_owners = owners;
         }
     }
 

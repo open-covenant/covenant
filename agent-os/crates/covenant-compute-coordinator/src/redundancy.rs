@@ -236,7 +236,7 @@ impl RedundancySampler {
                     continue;
                 };
                 match record.phase {
-                    JobPhase::Offered | JobPhase::Accepted => {
+                    JobPhase::Offered | JobPhase::Accepted | JobPhase::AwaitingCheck => {
                         in_flight = true;
                         break;
                     }
@@ -569,6 +569,8 @@ impl RedundancySampler {
                 metered_elapsed_ms: None,
                 close_requested_at_ms: None,
                 lease_access: None,
+                check_jobs: Vec::new(),
+                checks_task: None,
             },
         ) {
             let _ = self
@@ -697,6 +699,9 @@ fn is_sampleable(kind: JobKind, input: &[Content], sample_inference: bool) -> bo
         // the same text, so a hash cross-check would fault every honest
         // operator. Unsampled like a transcript, for the same reason.
         JobKind::SpeechSynthesis => false,
+        // An agent's patch is never reproducible, and every agent task is
+        // already cross-checked by the check job settlement waits on.
+        JobKind::AgentTask | JobKind::AgentCheck => false,
     }
 }
 
@@ -1054,6 +1059,8 @@ mod tests {
             metered_elapsed_ms: None,
             close_requested_at_ms: None,
             lease_access: None,
+            check_jobs: Vec::new(),
+            checks_task: None,
         };
         (job_id, record)
     }

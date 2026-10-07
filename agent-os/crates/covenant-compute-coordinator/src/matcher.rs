@@ -174,11 +174,64 @@ pub async fn select_operator(
     bond: BondFloor,
     exclude_operator: Option<&str>,
 ) -> Option<String> {
+    let exclusions = Exclusions {
+        operators: exclude_operator.map(str::to_string).into_iter().collect(),
+        stake_owners: Vec::new(),
+    };
+    select_operator_excluding(
+        registry,
+        reputation,
+        bonds,
+        requirement,
+        offered_micro_usdc,
+        now_ms,
+        liveness_cutoff,
+        min_score_bps,
+        bond,
+        &exclusions,
+    )
+    .await
+}
+
+/// Who a match must pass over: the named operators, and any operator whose
+/// counted stake shares an owner with `stake_owners`. A check is
+/// independent of the work it checks only if the wallet behind its stake is
+/// not the builder's.
+#[derive(Debug, Clone, Default)]
+pub struct Exclusions {
+    pub operators: Vec<String>,
+    pub stake_owners: Vec<String>,
+}
+
+impl Exclusions {
+    fn excludes(&self, key: &str, record: &crate::registry::OperatorRecord) -> bool {
+        self.operators.iter().any(|o| o == key)
+            || record
+                .stake_owners
+                .iter()
+                .any(|owner| self.stake_owners.contains(owner))
+    }
+}
+
+/// [`select_operator`] passing over everyone `exclusions` names.
+#[allow(clippy::too_many_arguments)]
+pub async fn select_operator_excluding(
+    registry: &OperatorRegistry,
+    reputation: &dyn ReputationSource,
+    bonds: &OperatorBonds,
+    requirement: &CapabilityRequirement,
+    offered_micro_usdc: u64,
+    now_ms: u64,
+    liveness_cutoff: Duration,
+    min_score_bps: u32,
+    bond: BondFloor,
+    exclusions: &Exclusions,
+) -> Option<String> {
     let cutoff_ms = liveness_cutoff.as_millis() as u64;
     let candidates: Vec<_> = registry
         .snapshot()
         .into_iter()
-        .filter(|(key, _)| exclude_operator != Some(key.as_str()))
+        .filter(|(key, record)| !exclusions.excludes(key, record))
         .filter(|(_, record)| {
             in_standing(record, now_ms, cutoff_ms)
                 && operator_job_floor(&record.profile, requirement) <= offered_micro_usdc

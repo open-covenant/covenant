@@ -169,6 +169,44 @@ impl JobEnvelopePayload {
             // Batch input stays advisory: its executor reads a command
             // from the first text block and ignores the rest.
             JobKind::BatchJob => {}
+            // A task routes by its harness, so the required model must name
+            // it: an unpinned task would match any agent node, including
+            // one running a harness the buyer never asked for. Its deadline
+            // must hold the build window, the checks and the slack between
+            // them, or a builder that used its window is refunded unpaid.
+            JobKind::AgentTask => {
+                let spec = crate::agent::parse_agent_task(&self.input)?;
+                let label = spec.runtime.label();
+                if self.capability_requirement.model_id.as_deref() != Some(label) {
+                    return Err(ProtocolError::Invalid(format!(
+                        "an agent task for {label} must require model {label:?}, got {:?}",
+                        self.capability_requirement.model_id
+                    )));
+                }
+                let build_ms = u64::from(self.capability_requirement.max_duration_secs) * 1_000;
+                let check_ms = u64::from(spec.acceptance.timeout_secs) * 1_000;
+                let needed_ms = build_ms + check_ms + crate::agent::AGENT_CHECK_SLACK_MS;
+                if self.deadline_ms < needed_ms {
+                    return Err(ProtocolError::Invalid(format!(
+                        "agent task deadline_ms {} cannot cover the {build_ms}ms build window, \
+                         the {check_ms}ms checks and the {}ms slack (need at least {needed_ms})",
+                        self.deadline_ms,
+                        crate::agent::AGENT_CHECK_SLACK_MS
+                    )));
+                }
+            }
+            // A check routes by the image it runs in, for the same reason.
+            JobKind::AgentCheck => {
+                let spec = crate::agent::parse_agent_check(&self.input)?;
+                if self.capability_requirement.model_id.as_deref()
+                    != Some(spec.acceptance.image.as_str())
+                {
+                    return Err(ProtocolError::Invalid(format!(
+                        "an agent check in {} must require that image as its model, got {:?}",
+                        spec.acceptance.image, self.capability_requirement.model_id
+                    )));
+                }
+            }
         }
         Ok(())
     }

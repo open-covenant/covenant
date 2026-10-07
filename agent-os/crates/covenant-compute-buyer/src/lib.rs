@@ -2346,6 +2346,8 @@ fn kind_label(kind: JobKind) -> &'static str {
         JobKind::Embedding => "embedding",
         JobKind::Transcription => "transcription",
         JobKind::SpeechSynthesis => "speech_synthesis",
+        JobKind::AgentTask => "agent_task",
+        JobKind::AgentCheck => "agent_check",
     }
 }
 
@@ -2624,25 +2626,7 @@ pub async fn fetch_job_output(
     buyer_identity: &LocalIdentity,
     job_id: Uuid,
 ) -> Result<JobOutputView, BuyerError> {
-    let base = config.coordinator_url.trim_end_matches('/');
-    let path = format!("/federation/jobs/{job_id}/receipt");
-    let url = format!("{base}{path}");
-    let signed_at_ms = epoch_ms();
-    let signature = covenant_compute_protocol::sign_read(buyer_identity, &path, signed_at_ms)
-        .map_err(|e| BuyerError::Protocol(e.to_string()))?;
-    let resp = http
-        .get(&url)
-        .header(
-            covenant_compute_protocol::READ_SIGNED_AT_HEADER,
-            signed_at_ms.to_string(),
-        )
-        .header(covenant_compute_protocol::READ_SIGNATURE_HEADER, signature)
-        .send()
-        .await
-        .map_err(|e| {
-            BuyerError::unreachable(&config.coordinator_url, "read this job's output", &e)
-        })?;
-    let value = json_or_error("job output", resp).await?;
+    let value = read_job_status(http, config, buyer_identity, job_id).await?;
     let job: JobStatusResponse = serde_json::from_value(value)
         .map_err(|e| BuyerError::Coordinator(format!("job output decode: {e}")))?;
 
@@ -2665,6 +2649,51 @@ pub async fn fetch_job_output(
         payout: job.payout,
         charged_micro_usdc: job.charged_micro_usdc,
     })
+}
+
+/// The latest check verdict on one of this buyer's agent tasks: why it
+/// failed, or the evidence it passed. `None` until a check has returned.
+pub async fn fetch_check_verdict(
+    http: &reqwest::Client,
+    config: &BuyerConfig,
+    buyer_identity: &LocalIdentity,
+    job_id: Uuid,
+) -> Result<Option<covenant_compute_protocol::AgentCheckVerdict>, BuyerError> {
+    let value = read_job_status(http, config, buyer_identity, job_id).await?;
+    match value.get("check") {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(check) => serde_json::from_value(check.clone())
+            .map(Some)
+            .map_err(|e| BuyerError::Coordinator(format!("check verdict decode: {e}"))),
+    }
+}
+
+/// The buyer-signed read of one job's status, as the coordinator serves it.
+async fn read_job_status(
+    http: &reqwest::Client,
+    config: &BuyerConfig,
+    buyer_identity: &LocalIdentity,
+    job_id: Uuid,
+) -> Result<serde_json::Value, BuyerError> {
+    let base = config.coordinator_url.trim_end_matches('/');
+    let path = format!("/federation/jobs/{job_id}/receipt");
+    let url = format!("{base}{path}");
+    let signed_at_ms = epoch_ms();
+    let signature = covenant_compute_protocol::sign_read(buyer_identity, &path, signed_at_ms)
+        .map_err(|e| BuyerError::Protocol(e.to_string()))?;
+    let resp = http
+        .get(&url)
+        .header(
+            covenant_compute_protocol::READ_SIGNED_AT_HEADER,
+            signed_at_ms.to_string(),
+        )
+        .header(covenant_compute_protocol::READ_SIGNATURE_HEADER, signature)
+        .send()
+        .await
+        .map_err(|e| {
+            BuyerError::unreachable(&config.coordinator_url, "read this job's output", &e)
+        })?;
+    json_or_error("job output", resp).await
 }
 
 /// The subset of [`verify_receipt`]'s checks provable from the receipt
@@ -3347,6 +3376,21 @@ fn lease_window_secs(kind: JobKind, input: &[Content]) -> Option<u32> {
     Some(terms.max_duration_secs.clamp(1, u64::from(u32::MAX)) as u32)
 }
 
+/// The build window of an agent task: what is left of the deadline once
+/// the check and the slack between build and check are set aside. `None`
+/// for any other kind, or for a deadline too short to hold both, which the
+/// envelope's own validation then refuses by name.
+fn agent_build_window_secs(kind: JobKind, input: &[Content], deadline_ms: u64) -> Option<u32> {
+    if kind != JobKind::AgentTask {
+        return None;
+    }
+    let spec = covenant_compute_protocol::parse_agent_task(input).ok()?;
+    let reserved = u64::from(spec.acceptance.timeout_secs) * 1_000
+        + covenant_compute_protocol::AGENT_CHECK_SLACK_MS;
+    let build_secs = deadline_ms.checked_sub(reserved)? / 1_000;
+    (build_secs > 0).then(|| build_secs.min(u64::from(u32::MAX)) as u32)
+}
+
 fn build_envelope(
     config: &BuyerConfig,
     buyer_identity: &LocalIdentity,
@@ -3414,6 +3458,7 @@ fn build_envelope(
     // escrow could ever pay it. Every other kind floors on the whole job,
     // whose window is the deadline.
     let max_duration_secs = lease_window_secs(request.kind, &request.input)
+        .or_else(|| agent_build_window_secs(request.kind, &request.input, request.deadline_ms))
         .unwrap_or_else(|| (request.deadline_ms / 1_000).max(1) as u32);
     let payload = JobEnvelopePayload {
         job_id,

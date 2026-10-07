@@ -93,8 +93,9 @@ pub async fn reconcile_books(state: &CoordinatorState) -> ReconcileReport {
             }
             (EscrowStatus::Held, Some(record)) => match record.phase {
                 // A live in-flight job — the normal restored case; the
-                // sweep and the node own it from here.
-                JobPhase::Offered | JobPhase::Accepted => {}
+                // sweep and the node own it from here. A parked agent task
+                // belongs to the check-settle tick the same way.
+                JobPhase::Offered | JobPhase::Accepted | JobPhase::AwaitingCheck => {}
                 JobPhase::Completed => {
                     if settle_completed_hold(state, job_id, &hold, &record).await {
                         report.stale_holds_settled += 1;
@@ -119,7 +120,9 @@ pub async fn reconcile_books(state: &CoordinatorState) -> ReconcileReport {
                         continue;
                     }
                     let operator_pubkey_b58 = match reason {
-                        RefundReason::BuyerCancelled | RefundReason::NoMeteredUsage => None,
+                        RefundReason::BuyerCancelled
+                        | RefundReason::NoMeteredUsage
+                        | RefundReason::CheckUnavailable => None,
                         _ => assignee(&record),
                     };
                     state
@@ -133,7 +136,10 @@ pub async fn reconcile_books(state: &CoordinatorState) -> ReconcileReport {
                 }
             },
             (settled, Some(record))
-                if matches!(record.phase, JobPhase::Offered | JobPhase::Accepted) =>
+                if matches!(
+                    record.phase,
+                    JobPhase::Offered | JobPhase::Accepted | JobPhase::AwaitingCheck
+                ) =>
             {
                 // Died between the fund flip and the record's
                 // conclusion. The settle is one-way and final, so the
@@ -151,7 +157,18 @@ pub async fn reconcile_books(state: &CoordinatorState) -> ReconcileReport {
                     EscrowStatus::Released => JobPhase::Completed,
                     _ => JobPhase::Refunded,
                 };
-                if let Err(e) = state.jobs().set_phase(job_id, phase) {
+                // A parked agent task carries its receipt already, so once
+                // completed the payout sweep pays it straight away: pin the
+                // fee the release would have, or the sweep pays the gross.
+                let concluded = if record.phase == JobPhase::AwaitingCheck
+                    && settled == EscrowStatus::Released
+                {
+                    let fee = state.config().fee.take_of(hold.amount_micro_usdc);
+                    state.jobs().conclude_parked_released(job_id, fee)
+                } else {
+                    state.jobs().set_phase(job_id, phase)
+                };
+                if let Err(e) = concluded {
                     tracing::error!(%job_id, error = %e, "boot reconcile: concluding the record failed");
                     continue;
                 }
@@ -308,6 +325,8 @@ mod tests {
             metered_elapsed_ms: None,
             close_requested_at_ms: None,
             lease_access: None,
+            check_jobs: Vec::new(),
+            checks_task: None,
         }
     }
 

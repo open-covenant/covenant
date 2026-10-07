@@ -31,6 +31,7 @@
 #![deny(unsafe_code)]
 
 pub mod accounts;
+pub mod agent;
 pub mod attempts;
 pub mod bond;
 pub mod canary;
@@ -53,6 +54,7 @@ pub mod sweep;
 pub mod vault;
 
 pub use accounts::{BuyerAccounts, DepositOutcome, PartnerPayoutOutcome, PartnerPayouts};
+pub use agent::{spawn_periodic_settle, AgentPolicy};
 pub use bond::{
     BondPostOutcome, BondRefundPush, BondStatus, OperatorBonds, SlashOutcome, SlashRecord,
     UnbondOutcome, UnbondState,
@@ -68,7 +70,7 @@ pub use jobs::{JobBook, JobPhase, JobRecord, JobStats, PayoutOutcome, ReleaseCha
 pub use journal::{
     spawn_periodic_compaction, CompactStats, EscrowHoldState, Journal, JournalError, RestoredState,
 };
-pub use matcher::{select_operator, BondFloor};
+pub use matcher::{select_operator, select_operator_excluding, BondFloor, Exclusions};
 pub use onchain_meter::{
     adopt_live_leases, conclude_lease_onchain, hold_payout_for_chain, observe_lease,
     observed_elapsed_ms, open_lease_onchain, spawn_periodic_lease_meter, tick_live_leases,

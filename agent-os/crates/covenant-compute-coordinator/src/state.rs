@@ -204,6 +204,9 @@ pub struct CoordinatorConfig {
     /// The CVNT stake an operator must hold for its node identity to win
     /// work (`crate::stake`). `None` (the default) requires none.
     pub stake: Option<crate::stake::StakeRequirement>,
+    /// Agent work (`crate::agent`). `None` (the default) refuses every
+    /// agent task.
+    pub agent: Option<crate::agent::AgentPolicy>,
 }
 
 impl Default for CoordinatorConfig {
@@ -231,6 +234,7 @@ impl Default for CoordinatorConfig {
             vault_max_owners: None,
             lease_meter: None,
             stake: None,
+            agent: None,
         }
     }
 }

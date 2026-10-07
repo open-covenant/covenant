@@ -1698,6 +1698,8 @@ mod tests {
                 ready_at_ms: issued_at_ms,
                 note: None,
             }),
+            check_jobs: Vec::new(),
+            checks_task: None,
         }
     }
 

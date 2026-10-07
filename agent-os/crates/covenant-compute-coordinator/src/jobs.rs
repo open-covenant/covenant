@@ -32,6 +32,10 @@ pub enum JobPhase {
     /// the operator's own signed evidence of the failure.
     Failed,
     Refunded,
+    /// An agent task's verified result, held while another operator
+    /// checks it. The buyer's hold stays held: the task pays only once a
+    /// check passes, and goes back if it fails or none can be completed.
+    AwaitingCheck,
 }
 
 impl JobPhase {
@@ -43,6 +47,7 @@ impl JobPhase {
             JobPhase::Completed => "completed",
             JobPhase::Failed => "failed",
             JobPhase::Refunded => "refunded",
+            JobPhase::AwaitingCheck => "awaiting_check",
         }
     }
 }
@@ -58,6 +63,7 @@ pub struct JobStats {
     pub completed: usize,
     pub failed: usize,
     pub refunded: usize,
+    pub awaiting_check: usize,
     pub disputed: usize,
 }
 
@@ -193,6 +199,13 @@ pub struct JobRecord {
     /// they are paying for.
     #[serde(default)]
     pub lease_access: Option<covenant_compute_protocol::LeaseAccess>,
+    /// On an agent task: the check jobs ordered for its result, latest
+    /// last. Only the latest is live; earlier ones ran without a verdict.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub check_jobs: Vec<Uuid>,
+    /// On a check job: the agent task whose result it checks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checks_task: Option<Uuid>,
 }
 
 impl JobRecord {
@@ -627,6 +640,82 @@ impl JobBook {
         })
     }
 
+    /// Holds an agent task's verified result for a check: the receipt and
+    /// output are kept, the phase becomes `AwaitingCheck`, and the escrow
+    /// is not touched. Guarded on the job still being live and assigned to
+    /// the operator the receipt verified against, so a racing reassign or
+    /// sweep cannot have a stranger's result parked over it. `Ok(false)`
+    /// when the guard refuses.
+    pub fn park_for_check(
+        &self,
+        job_id: Uuid,
+        receipt: SignedWorkReceipt,
+        output: Vec<Content>,
+        operator_pubkey_b58: &str,
+    ) -> Result<bool, JobError> {
+        self.update_if(
+            job_id,
+            |r| {
+                matches!(r.phase, JobPhase::Offered | JobPhase::Accepted)
+                    && r.operator_pubkey_b58 == operator_pubkey_b58
+            },
+            |r| {
+                r.receipt = Some(receipt);
+                r.output = Some(output);
+                r.phase = JobPhase::AwaitingCheck;
+            },
+        )
+    }
+
+    /// Links a check job to the task it checks.
+    pub fn add_check_job(&self, task_id: Uuid, check_id: Uuid) -> Result<(), JobError> {
+        self.update(task_id, |r| r.check_jobs.push(check_id))
+    }
+
+    /// Agent tasks whose results wait on a check: the settle tick's
+    /// worklist.
+    pub fn awaiting_check(&self) -> Vec<(Uuid, JobRecord)> {
+        self.jobs
+            .lock()
+            .iter()
+            .filter(|(_, r)| r.phase == JobPhase::AwaitingCheck)
+            .map(|(id, r)| (*id, r.clone()))
+            .collect()
+    }
+
+    /// Concludes a parked task unpaid, if it is still parked: `Ok(false)`
+    /// means another path already concluded it.
+    pub fn conclude_parked_unpaid(
+        &self,
+        job_id: Uuid,
+        reason: RefundReason,
+    ) -> Result<bool, JobError> {
+        self.update_if(
+            job_id,
+            |r| r.phase == JobPhase::AwaitingCheck,
+            |r| {
+                r.phase = JobPhase::Refunded;
+                r.refund_reason = Some(reason);
+                r.concluded_at_ms = Some(crate::epoch_ms());
+            },
+        )
+    }
+
+    /// Completes a parked task whose release the books already show, pinning
+    /// the fee the release took. Boot recovery's path for a crash between
+    /// the release and the record write.
+    pub fn conclude_parked_released(
+        &self,
+        job_id: Uuid,
+        fee_micro_usdc: u64,
+    ) -> Result<(), JobError> {
+        self.update(job_id, |r| {
+            r.phase = JobPhase::Completed;
+            r.fee_micro_usdc = fee_micro_usdc;
+            r.concluded_at_ms = Some(crate::epoch_ms());
+        })
+    }
+
     /// Records the buyer's close request against a running lease and
     /// returns whether this call set it. `Ok(false)` means the session
     /// was not `Accepted` (never started, or already concluded) or a
@@ -839,6 +928,7 @@ impl JobBook {
                 JobPhase::Completed => stats.completed += 1,
                 JobPhase::Failed => stats.failed += 1,
                 JobPhase::Refunded => stats.refunded += 1,
+                JobPhase::AwaitingCheck => stats.awaiting_check += 1,
             }
             if record.dispute.is_some() {
                 stats.disputed += 1;
@@ -1049,6 +1139,8 @@ mod tests {
             metered_elapsed_ms: None,
             close_requested_at_ms: None,
             lease_access: None,
+            check_jobs: Vec::new(),
+            checks_task: None,
         }
     }
 
@@ -1294,6 +1386,8 @@ mod tests {
             metered_elapsed_ms,
             close_requested_at_ms: None,
             lease_access: None,
+            check_jobs: Vec::new(),
+            checks_task: None,
         }
     }
 

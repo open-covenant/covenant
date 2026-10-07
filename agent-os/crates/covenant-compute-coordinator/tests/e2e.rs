@@ -6027,6 +6027,8 @@ async fn partner_payout_records_are_gated_idempotent_and_bounded_by_accruals() {
                     metered_elapsed_ms: None,
                     close_requested_at_ms: None,
                     lease_access: None,
+                    check_jobs: Vec::new(),
+                    checks_task: None,
                 },
             )
             .unwrap();

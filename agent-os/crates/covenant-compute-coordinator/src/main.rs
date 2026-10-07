@@ -702,10 +702,49 @@ async fn main() -> anyhow::Result<()> {
     )?;
     require_positive_cap("COVENANT_COMPUTE_VAULT_MAX_OWNERS", vault_max_owners)?;
 
+    // Agent work. Off unless a deployment names who may buy it: a task's
+    // check is paid from the bootstrap subsidy, so opening agent work is
+    // a spend decision as much as a product one.
+    let agent = match std::env::var("COVENANT_COMPUTE_AGENT_BUYERS") {
+        Ok(list) => {
+            let buyers: Vec<String> = list
+                .split(',')
+                .map(|b| b.trim().to_string())
+                .filter(|b| !b.is_empty())
+                .collect();
+            anyhow::ensure!(
+                !buyers.is_empty(),
+                "COVENANT_COMPUTE_AGENT_BUYERS is set but names no buyer (use * for anyone)"
+            );
+            let policy = covenant_compute_coordinator::AgentPolicy {
+                buyers,
+                check_price_micro_usdc: env_parse(
+                    "COVENANT_COMPUTE_AGENT_CHECK_PRICE_MICRO_USDC",
+                    10_000,
+                    "must be a u64 (micro-USDC)",
+                )?,
+                max_check_attempts: env_parse(
+                    "COVENANT_COMPUTE_AGENT_CHECK_ATTEMPTS",
+                    3,
+                    "must be a u32",
+                )?,
+            };
+            tracing::info!(
+                buyers = ?policy.buyers,
+                check_price_micro_usdc = policy.check_price_micro_usdc,
+                max_check_attempts = policy.max_check_attempts,
+                "agent work ENABLED: tasks pay only once another operator's check passes"
+            );
+            Some(policy)
+        }
+        Err(_) => None,
+    };
+
     let config = CoordinatorConfig {
         long_poll_timeout: Duration::from_secs(long_poll_secs.max(1)),
         lease_meter,
         stake,
+        agent,
         require_prefunded_buyers,
         default_funding_source,
         subsidy_policy,
@@ -772,6 +811,17 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!(adopted, "on-chain lease meter resumed leases still running");
     }
     let _sweep_handle = spawn_periodic_sweep(state.clone(), Duration::from_secs(10));
+    if state.config().agent.is_some() {
+        let settle_secs: u64 = env_parse(
+            "COVENANT_COMPUTE_AGENT_SETTLE_SECS",
+            10,
+            "must be a u64 (seconds)",
+        )?;
+        covenant_compute_coordinator::spawn_periodic_settle(
+            state.clone(),
+            Duration::from_secs(settle_secs.max(1)),
+        );
+    }
 
     // Payout-retry sweep: re-pushes released-but-unpaid jobs (a push
     // that failed, or a crash between release and push) until the

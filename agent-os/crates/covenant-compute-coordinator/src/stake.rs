@@ -108,6 +108,23 @@ pub fn counted_stake(positions: &[Position], now_secs: u64, min_lock_remaining_s
         .fold(0u64, |total, p| total.saturating_add(p.amount))
 }
 
+/// The owners of the positions [`counted_stake`] counts, base58, deduplicated.
+pub fn counted_owners(
+    positions: &[Position],
+    now_secs: u64,
+    min_lock_remaining_secs: u64,
+) -> Vec<String> {
+    let horizon = now_secs.saturating_add(min_lock_remaining_secs);
+    let mut owners: Vec<String> = positions
+        .iter()
+        .filter(|p| p.active && p.lock_until >= horizon)
+        .map(|p| bs58::encode(p.owner).into_string())
+        .collect();
+    owners.sort();
+    owners.dedup();
+    owners
+}
+
 impl StakeRequirement {
     /// Every stake position naming this operator's node identity.
     pub async fn positions(
@@ -181,6 +198,10 @@ pub async fn refresh_operator(
             let counted = counted_stake(&positions, now_secs, requirement.min_lock_remaining_secs);
             let staked = counted >= requirement.min_amount;
             state.registry().set_staked(operator_pubkey_b58, staked);
+            state.registry().set_stake_owners(
+                operator_pubkey_b58,
+                counted_owners(&positions, now_secs, requirement.min_lock_remaining_secs),
+            );
             if !staked {
                 tracing::info!(
                     operator = %operator_pubkey_b58,

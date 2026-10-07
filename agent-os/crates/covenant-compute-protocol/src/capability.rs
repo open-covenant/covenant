@@ -61,6 +61,15 @@ pub enum JobKind {
     /// transcription probe alike and needs its own serving path (a local
     /// TTS engine, OpenAI's `/v1/audio/speech`).
     SpeechSynthesis,
+    /// A coding agent works a task against a repository and answers with
+    /// a patch ([`crate::agent`]); billed per job. Settlement waits on an
+    /// [`JobKind::AgentCheck`] the coordinator orders from another
+    /// operator, so a signed receipt alone never pays for it.
+    AgentTask,
+    /// Apply one builder's patch to a fresh copy of the repository, run the
+    /// task's acceptance commands with no network, and answer with a
+    /// verdict. Ordered by the coordinator; billed per job.
+    AgentCheck,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

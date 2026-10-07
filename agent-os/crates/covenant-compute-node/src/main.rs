@@ -31,13 +31,13 @@ use async_trait::async_trait;
 use base64::Engine as _;
 use covenant_audit::{AuditEvent, AuditKind, AuditLog, JsonlAuditLog};
 use covenant_compute_node::{
-    audit_paid_entry, ollama, openai_compat, reconcile_paid_rows, run_benchmark, BenchmarkSpec,
-    BrokerConfig, BrokerSessionBackend, ChunkSink, ContainerConfig, ContainerJobExecutor,
-    Coordinator, EarningsLedger, EarningsStatus, EchoExecutor, ExecutionOutcome, ExecutorError,
-    HttpCoordinatorClient, JobExecutor, JsonlEarningsLedger, LeaseControl, LeaseExecutor, Node,
-    NodeConfig, NodeError, OllamaExecutor, OpenAiCompatExecutor, SayExecutor, StubSessionBackend,
-    SubprocessJobExecutor, WhisperExecutor, DEFAULT_SAY_BIN, DEFAULT_WHISPER_BIN,
-    READY_POLL_INTERVAL, READY_TIMEOUT, SERVICE_USAGE, SETUP_USAGE,
+    audit_paid_entry, ollama, openai_compat, reconcile_paid_rows, run_benchmark, AgentConfig,
+    AgentExecutor, BenchmarkSpec, BrokerConfig, BrokerSessionBackend, ChunkSink, ContainerConfig,
+    ContainerJobExecutor, Coordinator, EarningsLedger, EarningsStatus, EchoExecutor,
+    ExecutionOutcome, ExecutorError, HttpCoordinatorClient, JobExecutor, JsonlEarningsLedger,
+    LeaseControl, LeaseExecutor, Node, NodeConfig, NodeError, OllamaExecutor, OpenAiCompatExecutor,
+    SayExecutor, StubSessionBackend, SubprocessJobExecutor, WhisperExecutor, DEFAULT_SAY_BIN,
+    DEFAULT_WHISPER_BIN, READY_POLL_INTERVAL, READY_TIMEOUT, SERVICE_USAGE, SETUP_USAGE,
 };
 use covenant_compute_protocol::{
     canonical_model, coordinator_reason, payout_transaction_rpc_request, speech_input,
@@ -82,6 +82,18 @@ fn node_home() -> anyhow::Result<PathBuf> {
     }
     let home = std::env::var("HOME").context("HOME not set")?;
     Ok(PathBuf::from(home).join(".covenant-compute-node"))
+}
+
+/// The images an agent node runs checks in, from
+/// `COVENANT_COMPUTE_AGENT_CHECK_IMAGES` (comma-separated). Pin by digest
+/// where the image matters: a tag can move under a buyer's checks.
+fn agent_check_images() -> Vec<String> {
+    std::env::var("COVENANT_COMPUTE_AGENT_CHECK_IMAGES")
+        .unwrap_or_else(|_| "python:3.12-slim".into())
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 fn env_or<T: std::str::FromStr>(key: &str, default: T) -> T {
@@ -209,6 +221,8 @@ fn parse_job_kinds(raw: &str) -> Vec<JobKind> {
             "embedding" => Some(JobKind::Embedding),
             "transcription" => Some(JobKind::Transcription),
             "speech_synthesis" => Some(JobKind::SpeechSynthesis),
+            "agent_task" => Some(JobKind::AgentTask),
+            "agent_check" => Some(JobKind::AgentCheck),
             other => {
                 if !other.is_empty() {
                     tracing::warn!(kind = other, "unknown job kind; skipping");
@@ -249,6 +263,8 @@ fn kind_label(kind: JobKind) -> &'static str {
         JobKind::Embedding => "embedding",
         JobKind::Transcription => "transcription",
         JobKind::SpeechSynthesis => "speech_synthesis",
+        JobKind::AgentTask => "agent_task",
+        JobKind::AgentCheck => "agent_check",
     }
 }
 
@@ -269,6 +285,7 @@ fn servable_kinds(executor_kind: &str) -> Option<&'static [JobKind]> {
         "whisper" => Some(&[JobKind::Transcription]),
         "say" => Some(&[JobKind::SpeechSynthesis]),
         "broker" | "lease-stub" => Some(&[JobKind::LeaseSession]),
+        "agent" => Some(&[JobKind::AgentTask, JobKind::AgentCheck]),
         _ => None,
     }
 }
@@ -295,6 +312,7 @@ fn default_kinds(executor_kind: &str) -> &'static str {
         "whisper" => "transcription",
         "say" => "speech_synthesis",
         "broker" | "lease-stub" => "lease_session",
+        "agent" => "agent_task,agent_check",
         _ => "batch_job",
     }
 }
@@ -478,6 +496,15 @@ async fn resolve_models_served(executor_kind: &str) -> anyhow::Result<Vec<String
         // A say node serves one local synthesizer and advertises a stable
         // id decoupled from the OS tool, exactly as a whisper node does.
         Err(_) if executor_kind == "say" => Ok(vec!["say-1".into()]),
+        // An agent node routes builds by the harness it runs and checks by
+        // the images it runs them in, so it advertises exactly those.
+        Err(_) if executor_kind == "agent" => {
+            let mut models = vec![covenant_compute_protocol::AgentRuntime::ClaudeCode
+                .label()
+                .to_string()];
+            models.extend(agent_check_images());
+            Ok(models)
+        }
         Err(_) => Ok(vec!["any".into()]),
     }
 }
@@ -504,6 +531,7 @@ enum NodeExecutor {
     Whisper(WhisperExecutor),
     Say(SayExecutor),
     Lease(LeaseExecutor),
+    Agent(AgentExecutor),
 }
 
 #[async_trait]
@@ -522,6 +550,7 @@ impl JobExecutor for NodeExecutor {
             NodeExecutor::Whisper(e) => e.execute(job, deadline).await,
             NodeExecutor::Say(e) => e.execute(job, deadline).await,
             NodeExecutor::Lease(e) => e.execute(job, deadline).await,
+            NodeExecutor::Agent(e) => e.execute(job, deadline).await,
         }
     }
 
@@ -544,6 +573,7 @@ impl JobExecutor for NodeExecutor {
             NodeExecutor::Whisper(e) => e.execute_streaming(job, deadline, sink).await,
             NodeExecutor::Say(e) => e.execute_streaming(job, deadline, sink).await,
             NodeExecutor::Lease(e) => e.execute_streaming(job, deadline, sink).await,
+            NodeExecutor::Agent(e) => e.execute_streaming(job, deadline, sink).await,
         }
     }
 
@@ -559,6 +589,7 @@ impl JobExecutor for NodeExecutor {
             NodeExecutor::Whisper(e) => e.health().await,
             NodeExecutor::Say(e) => e.health().await,
             NodeExecutor::Lease(e) => e.health().await,
+            NodeExecutor::Agent(e) => e.health().await,
         }
     }
 }
@@ -2673,11 +2704,81 @@ async fn main() -> anyhow::Result<()> {
                 LeaseExecutor::new(backend, LeaseControl::new()).watching(client.clone()),
             )
         }
+        "agent" => {
+            // A model credential, when the operator gives one, is read from
+            // a file and handed to covguard's proxy, never to the agent. With
+            // none, the agent uses the machine's own Claude login.
+            let auth_token = match std::env::var("COVENANT_COMPUTE_AGENT_AUTH_TOKEN_FILE") {
+                Ok(path) => Some(
+                    std::fs::read_to_string(path.trim())
+                        .with_context(|| format!("read the agent auth token from {path}"))?
+                        .trim()
+                        .to_string(),
+                )
+                .filter(|t| !t.is_empty()),
+                Err(_) => None,
+            };
+            let work_dir = std::env::var("COVENANT_COMPUTE_AGENT_WORK_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| home.join("agent-work"));
+            let check_images = agent_check_images();
+            anyhow::ensure!(
+                !check_images.is_empty(),
+                "COVENANT_COMPUTE_AGENT_CHECK_IMAGES names no image; an agent node needs at \
+                 least one image to run checks in"
+            );
+            let config = AgentConfig {
+                covguard_bin: std::env::var("COVENANT_COMPUTE_AGENT_COVGUARD_BIN")
+                    .unwrap_or_else(|_| "covguard".into()),
+                claude_bin: std::env::var("COVENANT_COMPUTE_AGENT_CLAUDE_BIN")
+                    .unwrap_or_else(|_| "claude".into()),
+                git_bin: std::env::var("COVENANT_COMPUTE_AGENT_GIT_BIN")
+                    .unwrap_or_else(|_| "git".into()),
+                container_runtime: std::env::var("COVENANT_COMPUTE_NODE_CONTAINER_RUNTIME")
+                    .unwrap_or_else(|_| "docker".into()),
+                default_model: std::env::var("COVENANT_COMPUTE_AGENT_MODEL")
+                    .ok()
+                    .map(|v| v.trim().to_string())
+                    .filter(|v| !v.is_empty()),
+                budget_usd: std::env::var("COVENANT_COMPUTE_AGENT_BUDGET_USD")
+                    .unwrap_or_else(|_| "2.00".into()),
+                auth_token,
+                work_dir,
+                check_images,
+                check_memory: std::env::var("COVENANT_COMPUTE_AGENT_CHECK_MEMORY")
+                    .unwrap_or_else(|_| "1g".into()),
+                check_cpus: std::env::var("COVENANT_COMPUTE_AGENT_CHECK_CPUS")
+                    .unwrap_or_else(|_| "2".into()),
+                check_pids: env_or("COVENANT_COMPUTE_AGENT_CHECK_PIDS", 512u32),
+                instance_tag: identity
+                    .agent_id()
+                    .pubkey_base58()
+                    .chars()
+                    .take(8)
+                    .collect(),
+            };
+            tracing::info!(
+                work_dir = %config.work_dir.display(),
+                check_images = ?config.check_images,
+                model = ?config.default_model,
+                budget_usd = %config.budget_usd,
+                proxy_holds_credential = config.auth_token.is_some(),
+                "executor: agent (Claude Code under covguard for builds, sandboxed containers \
+                 for checks)"
+            );
+            let executor = AgentExecutor::new(
+                config,
+                Arc::new(SubprocessTracker::new()),
+                Duration::from_secs(5),
+            );
+            executor.ensure_images_present().await;
+            NodeExecutor::Agent(executor)
+        }
         // A typo must not silently run strangers' code with LESS
         // isolation than the operator configured.
         other => anyhow::bail!(
             "COVENANT_COMPUTE_NODE_EXECUTOR must be one of \
-             echo|subprocess|container|ollama|openai-compat|whisper|say|broker|lease-stub, \
+             echo|subprocess|container|ollama|openai-compat|whisper|say|broker|lease-stub|agent, \
              got {other:?}"
         ),
     };
@@ -2709,6 +2810,14 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!(
             "broker executor: no capability benchmark — a lease is proven per rental, not \
              by renting a machine at boot"
+        );
+    } else if executor_kind == "agent" {
+        // A build's only real self-test is a paid model run, and a check's
+        // is a container the health probe already reached. Both halves are
+        // proven per job, by the check one operator runs on another's work.
+        tracing::info!(
+            "agent executor: no capability benchmark — builds are proven by the check another \
+             operator runs on them"
         );
     } else if executor_kind == "lease-stub" {
         // Nothing to benchmark: the stub rents no machine, so there is no

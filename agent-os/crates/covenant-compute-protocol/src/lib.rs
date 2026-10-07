@@ -11,6 +11,7 @@
 #![deny(unsafe_code)]
 
 mod address;
+mod agent;
 mod bond;
 mod cancel;
 mod capability;
@@ -40,6 +41,14 @@ mod wire;
 mod withdrawal;
 
 pub use address::validate_address_b58;
+pub use agent::{
+    agent_check_input, agent_check_output, agent_task_input, agent_task_output, parse_agent_check,
+    parse_agent_check_verdict, parse_agent_task, parse_agent_task_output, sha256_hex,
+    AcceptanceSpec, AgentCheckSpec, AgentCheckVerdict, AgentRuntime, AgentTaskOutput,
+    AgentTaskSpec, CommandOutcome, RepoSource, AGENT_CHECK_SLACK_MS, MAX_ACCEPTANCE_COMMANDS,
+    MAX_ACCEPTANCE_TIMEOUT_SECS, MAX_BUNDLE_B64_BYTES, MAX_OUTPUT_TAIL_BYTES, MAX_PATCH_BYTES,
+    MAX_SUMMARY_BYTES, MAX_TASK_BYTES,
+};
 pub use bond::{
     bond_memo_for, bond_refund_memo_for, parse_bond_refund_memo, UnbondRequest, BOND_MEMO_PREFIX,
     BOND_REFUND_MEMO_PREFIX, UNBOND_MAX_SKEW_MS,

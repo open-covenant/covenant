@@ -257,12 +257,16 @@ pub struct JobResultMessage {
 /// `Refunded` means the hold went back to the buyer — the deadline
 /// passed first, or the receipt itself reported a failure — so the
 /// operator must not book earnings for the job, however cleanly the
-/// result landed.
+/// result landed. `AwaitingCheck` is an agent task's answer: the result
+/// is held while another operator checks it, and pays only if the check
+/// passes, so nothing is booked yet; a payout that follows reaches the
+/// operator's books through the payout feed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ResultSettlement {
     Released,
     Refunded,
+    AwaitingCheck,
 }
 
 /// `submit_result`'s acknowledgment: the job the result concluded, what

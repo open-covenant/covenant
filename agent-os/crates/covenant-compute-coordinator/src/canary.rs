@@ -242,7 +242,7 @@ impl CanaryProber {
                     self.mark_resolved(*job_id);
                     continue;
                 }
-                JobPhase::Offered | JobPhase::Accepted => continue,
+                JobPhase::Offered | JobPhase::Accepted | JobPhase::AwaitingCheck => continue,
             }
             let (passed, detail) = judge_output(&record);
             self.state
@@ -475,6 +475,8 @@ impl CanaryProber {
                 metered_elapsed_ms: None,
                 close_requested_at_ms: None,
                 lease_access: None,
+                check_jobs: Vec::new(),
+                checks_task: None,
             },
         ) {
             let _ = self
@@ -676,6 +678,8 @@ mod tests {
             metered_elapsed_ms: None,
             close_requested_at_ms: None,
             lease_access: None,
+            check_jobs: Vec::new(),
+            checks_task: None,
         }
     }
 

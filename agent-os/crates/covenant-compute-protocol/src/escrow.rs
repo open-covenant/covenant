@@ -139,6 +139,15 @@ pub enum RefundReason {
     /// operator's own timestamps never fill that gap — an unobserved
     /// session is worth zero, however the receipt reads.
     NoMeteredUsage,
+    /// An agent task whose result another operator checked and failed:
+    /// the patch did not apply, touched a path the buyer protected, or
+    /// failed an acceptance command. The builder's work did not pass, so
+    /// it earns nothing.
+    CheckFailed,
+    /// An agent task whose result no operator could check before its
+    /// deadline. The work is unverified, so it is not paid, but the
+    /// failure is not the builder's.
+    CheckUnavailable,
 }
 
 impl RefundReason {
@@ -152,6 +161,8 @@ impl RefundReason {
             RefundReason::ExecutionFailed => "execution_failed",
             RefundReason::BuyerCancelled => "buyer_cancelled",
             RefundReason::NoMeteredUsage => "no_metered_usage",
+            RefundReason::CheckFailed => "check_failed",
+            RefundReason::CheckUnavailable => "check_unavailable",
         }
     }
 }

@@ -660,6 +660,12 @@ where
                              first); no earnings booked"
                         );
                     }
+                    (A2ATaskStatus::Ok, ResultSettlement::AwaitingCheck) => {
+                        tracing::info!(
+                            %job_id,
+                            "result delivered; payment waits on another operator's check"
+                        );
+                    }
                     _ => {}
                 }
                 // Credit before tombstone: a crash between the two

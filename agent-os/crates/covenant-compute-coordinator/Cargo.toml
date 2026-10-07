@@ -12,6 +12,7 @@ name = "covenant-compute-coordinator"
 path = "src/main.rs"
 
 [dependencies]
+base64 = "0.22"
 covenant-compute-protocol = { path = "../covenant-compute-protocol" }
 covenant-a2a = { path = "../covenant-a2a" }
 covenant-audit = { path = "../covenant-audit" }

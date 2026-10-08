@@ -15,7 +15,7 @@ use covenant_a2a::{A2ADuplicateSafety, A2AIdempotency, A2ATaskStatus};
 use covenant_audit::{AuditKind, AuditLog, InMemoryAuditLog};
 use covenant_compute_coordinator::{
     router, AgentPolicy, AuditReputationSource, CoordinatorConfig, CoordinatorState, JobPhase,
-    MockPayout, SubsidyPolicy,
+    MockPayout, NoopVoteRounds, RoundResult, SubsidyPolicy, VoteRounds,
 };
 use covenant_compute_protocol::{
     agent_check_output, agent_task_input, agent_task_output, parse_agent_check, sha256_hex,
@@ -56,6 +56,18 @@ async fn rig_with(accept_timeout_ms: u64) -> Rig {
 }
 
 async fn rig_sampling(accept_timeout_ms: u64, pass_sample_bps: u32) -> Rig {
+    rig_full(accept_timeout_ms, pass_sample_bps, None).await
+}
+
+async fn rig_rounds(rounds: Arc<NoopVoteRounds>) -> Rig {
+    rig_full(120_000, 0, Some(rounds)).await
+}
+
+async fn rig_full(
+    accept_timeout_ms: u64,
+    pass_sample_bps: u32,
+    rounds: Option<Arc<NoopVoteRounds>>,
+) -> Rig {
     let audit: Arc<dyn AuditLog> = Arc::new(InMemoryAuditLog::new());
     let reputation = Arc::new(AuditReputationSource::new(audit.clone()));
     let payout = Arc::new(MockPayout::new());
@@ -71,6 +83,7 @@ async fn rig_sampling(accept_timeout_ms: u64, pass_sample_bps: u32) -> Rig {
             confirm_failures: true,
             pass_sample_bps,
         }),
+        vote_rounds: rounds.map(|r| r as Arc<dyn VoteRounds>),
         ..CoordinatorConfig::default()
     };
     let state = CoordinatorState::new(
@@ -284,6 +297,25 @@ fn verdict_over(task_id: Uuid, sha: &str, commands: &[&str], exit_code: i32) -> 
             .collect(),
     ))
     .unwrap()
+}
+
+/// A passing or failing verdict whose vote `checker` signed.
+fn signed_verdict(task_id: Uuid, checker: &LocalIdentity, pass: bool) -> Vec<Content> {
+    let exit_code = if pass { 0 } else { 1 };
+    let verdict = AgentCheckVerdict::new(
+        task_id,
+        patch().patch_sha256,
+        true,
+        Vec::new(),
+        vec![CommandOutcome {
+            command: COMMAND.into(),
+            exit_code,
+            duration_ms: 200,
+            timed_out: false,
+            output_tail: String::new(),
+        }],
+    );
+    agent_check_output(verdict.sign_vote(checker)).unwrap()
 }
 
 /// The check job ordered for `task_id`, with the operator it went to.
@@ -814,4 +846,97 @@ async fn a_sampled_pass_is_confirmed_before_payment() {
     assert_eq!(rig.state.jobs().get(task_id).unwrap().check_jobs.len(), 2);
     answer_latest(&rig, task_id, &[&a, &b], true).await;
     assert_eq!(settled(&rig, task_id).await, JobPhase::Completed);
+}
+
+/// Builds a task, has it checked once with `output` from the checker, and
+/// returns the task id once it settles.
+async fn checked_once(
+    rig: &Rig,
+    output: impl FnOnce(Uuid, &LocalIdentity) -> Vec<Content>,
+) -> (Uuid, LocalIdentity) {
+    let builder = register(rig, "builder@agent", 1);
+    let task_id = post_task(rig).await;
+    let checker = register(rig, "checker@agent", 2);
+    submit(rig, task_id, &builder, agent_task_output(patch()).unwrap()).await;
+    let (check_id, _) = latest_check(rig, task_id);
+    submit(rig, check_id, &checker, output(task_id, &checker)).await;
+    settled(rig, task_id).await;
+    (task_id, checker)
+}
+
+fn paid(rig: &Rig, task_id: Uuid) -> bool {
+    rig.payout.records().iter().any(|r| r.job_id == task_id)
+}
+
+#[tokio::test]
+async fn the_chain_counts_the_signed_votes_before_the_builder_is_paid() {
+    let rounds = Arc::new(NoopVoteRounds::new());
+    let rig = rig_rounds(rounds.clone()).await;
+    let (task_id, checker) = checked_once(&rig, |t, c| signed_verdict(t, c, true)).await;
+
+    assert_eq!(
+        rig.state.jobs().get(task_id).unwrap().phase,
+        JobPhase::Completed
+    );
+    assert!(paid(&rig, task_id));
+    let asked = rounds.asked();
+    assert_eq!(asked.len(), 1);
+    let (round_task, patch_sha, votes) = &asked[0];
+    assert_eq!(
+        (*round_task, patch_sha.as_str()),
+        (task_id, patch().patch_sha256.as_str())
+    );
+    assert_eq!(votes.len(), 1);
+    assert_eq!(votes[0].voter, checker.agent_id().pubkey_base58());
+    assert!(votes[0].passed);
+    let round = rig.state.jobs().get(task_id).unwrap().vote_round.unwrap();
+    assert_eq!(round.result, RoundResult::Passed);
+}
+
+#[tokio::test]
+async fn a_round_that_counts_otherwise_stops_the_payment() {
+    let rounds = Arc::new(NoopVoteRounds::new());
+    rounds.answer(RoundResult::Failed);
+    let rig = rig_rounds(rounds.clone()).await;
+    let (task_id, _) = checked_once(&rig, |t, c| signed_verdict(t, c, true)).await;
+
+    let task = rig.state.jobs().get(task_id).unwrap();
+    assert_eq!(task.phase, JobPhase::Refunded);
+    assert_eq!(
+        task.refund_reason,
+        Some(covenant_compute_protocol::RefundReason::CheckUnavailable),
+        "a disagreement faults nobody"
+    );
+    assert!(!paid(&rig, task_id));
+}
+
+#[tokio::test]
+async fn an_unavailable_round_leaves_the_coordinators_decision() {
+    let rounds = Arc::new(NoopVoteRounds::new());
+    rounds.fail("the rollup is down");
+    let rig = rig_rounds(rounds.clone()).await;
+    let (task_id, _) = checked_once(&rig, |t, c| signed_verdict(t, c, true)).await;
+
+    let task = rig.state.jobs().get(task_id).unwrap();
+    assert_eq!(task.phase, JobPhase::Completed);
+    assert!(task.vote_round.is_none());
+    assert!(paid(&rig, task_id));
+}
+
+#[tokio::test]
+async fn only_votes_signed_by_their_own_checker_go_to_a_round() {
+    let rounds = Arc::new(NoopVoteRounds::new());
+    let rig = rig_rounds(rounds.clone()).await;
+    let (unsigned, _) = checked_once(&rig, |t, _| verdict(t, &patch().patch_sha256, 0)).await;
+    assert!(paid(&rig, unsigned));
+
+    let rig = rig_rounds(rounds.clone()).await;
+    let stranger = LocalIdentity::generate("stranger@agent");
+    let (forged, _) = checked_once(&rig, |t, _| signed_verdict(t, &stranger, true)).await;
+    assert!(paid(&rig, forged));
+
+    assert!(
+        rounds.asked().is_empty(),
+        "neither an unsigned vote nor one signed by another key reaches the chain"
+    );
 }

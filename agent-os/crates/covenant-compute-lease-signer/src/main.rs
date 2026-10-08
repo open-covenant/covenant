@@ -5,7 +5,9 @@
 //! reads a key; everything that signs happens in this process.
 //!
 //! Protocol:
-//! - argv[1]: `lease-open`, `lease-tick`, `lease-conclude` or `lease-void`.
+//! - argv[1]: `lease-open`, `lease-tick`, `lease-conclude`, `lease-void`, or
+//!   `round` for an agent task's check-vote round (see `round.rs`), which
+//!   answers with what the chain counted rather than a bare signature.
 //! - stdin: one JSON object naming `program_id`, `mint`, `er_validator` and
 //!   `job_id` (the uuid as 32 hex characters), plus the step's own fields:
 //!   `operator`, `rate_micro_usdc_per_sec` and `max_duration_secs` to open,
@@ -33,17 +35,24 @@
 
 use std::process::ExitCode;
 
+use covenant_compute_lease_signer::round::{RoundRequest, RoundSession};
 use covenant_compute_lease_signer::steps::{refused, Failure, Request, Session};
 use solana_sdk::signer::keypair::{read_keypair_file, Keypair};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-const STEPS: [&str; 4] = ["lease-open", "lease-tick", "lease-conclude", "lease-void"];
+const STEPS: [&str; 5] = [
+    "lease-open",
+    "lease-tick",
+    "lease-conclude",
+    "lease-void",
+    "round",
+];
 
 #[tokio::main]
 async fn main() -> ExitCode {
     let step = std::env::args().nth(1).unwrap_or_default();
     match run(&step).await {
-        Ok(signature) => write_line(&serde_json::json!({ "signature": signature })).await,
+        Ok(answer) => write_line(&answer).await,
         Err(failure) => {
             eprintln!("covenant-compute-lease-signer {step}: {}", failure.error);
             write_line(&failure).await;
@@ -52,7 +61,7 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn run(step: &str) -> Result<String, Failure> {
+async fn run(step: &str) -> Result<serde_json::Value, Failure> {
     if !STEPS.contains(&step) {
         return Err(refused(format!(
             "unknown step {step:?}; expected one of {}",
@@ -69,16 +78,24 @@ async fn run(step: &str) -> Result<String, Failure> {
         .read_to_string(&mut input)
         .await
         .map_err(|e| refused(format!("read stdin: {e}")))?;
-    let request: Request =
-        serde_json::from_str(input.trim()).map_err(|e| refused(format!("decode request: {e}")))?;
+    let decode = |e: serde_json::Error| refused(format!("decode request: {e}"));
 
+    if step == "round" {
+        let request: RoundRequest = serde_json::from_str(input.trim()).map_err(decode)?;
+        let outcome = RoundSession::new(renter, coordinator, &l1, &rollup, &request)?
+            .run()
+            .await?;
+        return serde_json::to_value(outcome).map_err(|e| refused(format!("encode outcome: {e}")));
+    }
+    let request: Request = serde_json::from_str(input.trim()).map_err(decode)?;
     let session = Session::new(renter, coordinator, &l1, &rollup, &request)?;
-    match step {
+    let signature = match step {
         "lease-open" => session.open(&request).await,
         "lease-tick" => session.tick(&request).await,
         "lease-conclude" => session.conclude(&request).await,
         _ => session.void().await,
-    }
+    }?;
+    Ok(serde_json::json!({ "signature": signature }))
 }
 
 fn env(name: &str) -> Result<String, Failure> {

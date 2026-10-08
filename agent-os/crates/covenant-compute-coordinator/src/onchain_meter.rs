@@ -651,6 +651,18 @@ async fn run_signer(
     job_id: Uuid,
     request: serde_json::Value,
 ) -> Result<String, LeaseMeterError> {
+    call_signer::<SidecarResponse>(config, step, job_id, request)
+        .await
+        .map(|response| response.signature)
+}
+
+/// [`run_signer`] for a step whose answer is more than a signature.
+pub(crate) async fn call_signer<T: serde::de::DeserializeOwned>(
+    config: &SidecarLeaseMeterConfig,
+    step: &str,
+    job_id: Uuid,
+    request: serde_json::Value,
+) -> Result<T, LeaseMeterError> {
     let label = format!("{step} job {job_id}");
     let payload = serde_json::to_vec(&request)
         .map_err(|e| LeaseMeterError::Backend(format!("{label}: encode request: {e}")))?;
@@ -724,12 +736,10 @@ async fn run_signer(
         });
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let response: SidecarResponse =
-        serde_json::from_str(stdout.trim()).map_err(|e| LeaseMeterError::Unresolved {
-            message: format!("{label}: decode lease signer response: {e}"),
-            tx_signature: None,
-        })?;
-    Ok(response.signature)
+    serde_json::from_str(stdout.trim()).map_err(|e| LeaseMeterError::Unresolved {
+        message: format!("{label}: decode lease signer response: {e}"),
+        tx_signature: None,
+    })
 }
 
 #[async_trait]
@@ -1701,6 +1711,7 @@ mod tests {
             check_jobs: Vec::new(),
             checks_task: None,
             hidden_checks: None,
+            vote_round: None,
         }
     }
 

@@ -57,7 +57,7 @@ pub fn refused(error: impl std::fmt::Display) -> Failure {
     }
 }
 
-fn unresolved(error: impl std::fmt::Display, signature: Option<String>) -> Failure {
+pub(crate) fn unresolved(error: impl std::fmt::Display, signature: Option<String>) -> Failure {
     Failure {
         error: error.to_string(),
         stage: Stage::MaybeSubmitted,
@@ -935,12 +935,12 @@ fn observation(request: &Request) -> Result<(u64, [u8; 32]), Failure> {
     Ok((metered_ms, hash))
 }
 
-fn parse_pubkey(field: &str, value: &str) -> Result<Pubkey, Failure> {
+pub(crate) fn parse_pubkey(field: &str, value: &str) -> Result<Pubkey, Failure> {
     Pubkey::from_str(value)
         .map_err(|e| refused(format!("{field} {value:?} is not a public key: {e}")))
 }
 
-fn parse_hex<const N: usize>(field: &str, value: &str) -> Result<[u8; N], Failure> {
+pub(crate) fn parse_hex<const N: usize>(field: &str, value: &str) -> Result<[u8; N], Failure> {
     let bad = || refused(format!("{field} must be {} hex characters", N * 2));
     if value.len() != N * 2 {
         return Err(bad());

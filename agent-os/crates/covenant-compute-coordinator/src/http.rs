@@ -1101,6 +1101,7 @@ async fn submit_job(
                 check_jobs: Vec::new(),
                 checks_task: None,
                 hidden_checks: None,
+                vote_round: None,
             },
         ) {
             tracing::error!(%job_id, error = %e, "failed to record refunded job");
@@ -1159,6 +1160,7 @@ async fn submit_job(
             check_jobs: Vec::new(),
             checks_task: None,
             hidden_checks: None,
+            vote_round: None,
         },
     ) {
         if let Err(refund_err) = state
@@ -2096,6 +2098,9 @@ struct JobStatusView {
     /// An agent task's latest check verdict, once a check has returned one.
     #[serde(skip_serializing_if = "Option::is_none")]
     check: Option<covenant_compute_protocol::AgentCheckVerdict>,
+    /// What the chain counted when the task's votes went through a round.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    round: Option<crate::rounds::RoundRecord>,
 }
 
 #[derive(Serialize)]
@@ -2184,6 +2189,7 @@ async fn job_status(
         payout,
         charged_micro_usdc,
         check,
+        round: record.vote_round,
     }))
 }
 
@@ -4084,6 +4090,7 @@ mod tests {
             check_jobs: Vec::new(),
             checks_task: None,
             hidden_checks: None,
+            vote_round: None,
         };
         state.jobs().insert(job_id, record).unwrap();
         crate::onchain_meter::open_lease_onchain(&state, job_id).await;
@@ -4268,6 +4275,7 @@ mod tests {
             check_jobs: Vec::new(),
             checks_task: None,
             hidden_checks: None,
+            vote_round: None,
         };
         state.jobs().insert(job_id, record).unwrap();
 
@@ -4408,6 +4416,7 @@ mod tests {
             check_jobs: Vec::new(),
             checks_task: None,
             hidden_checks: None,
+            vote_round: None,
         };
         state.jobs().insert(job_id, record).unwrap();
 
@@ -4609,6 +4618,7 @@ mod tests {
             check_jobs: Vec::new(),
             checks_task: None,
             hidden_checks: None,
+            vote_round: None,
         };
         state.jobs().insert(job_id, record).unwrap();
         crate::onchain_meter::open_lease_onchain(&state, job_id).await;

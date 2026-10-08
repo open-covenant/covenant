@@ -34,17 +34,17 @@ use std::time::Duration;
 use anyhow::Context;
 use covenant_compute_buyer::{
     agent_tool_spec, apply_patch, balance_tool_spec, cancel_job, cancel_tool_spec, capacity,
-    capacity_tool_spec, cheapest_matching_ask, claim_deposit, deposit_tool_spec, describe_verdict,
-    dispatch_and_verify, dispatch_signed, dispute_job, dispute_tool_spec, embed_tool_spec,
-    fetch_job_output, funds_with_deposit_info, hire_agent, infer_tool_spec, list_verified_jobs,
-    list_withdrawals, output_tool_spec, prepare_agent_task, preview_value, quote_price,
-    receipts_tool_spec, run_tool_spec, save_speech_clip, sign_envelope, speak_tool_spec,
-    stream_and_verify, stream_poll_tool_spec, stream_start_tool_spec, submit_streaming,
-    transcribe_tool_spec, verify_payout, verify_tool_spec, withdraw, withdraw_tool_spec,
-    withdrawals_tool_spec, AgentArgs, AgentOutcome, BuyerConfig, BuyerError, CancelArgs,
-    DisputeArgs, EmbedArgs, InferArgs, JobOutputView, JobRequest, OutputArgs, PurchaseBook,
-    PurchaseEntry, RunArgs, SpeakArgs, SpendCaps, StreamJobs, StreamPollArgs, TranscribeArgs,
-    VerifyArgs, WithdrawArgs, AGENT_TOOL, BALANCE_TOOL, CANCEL_TOOL, CAPACITY_TOOL,
+    capacity_tool_spec, cheapest_matching_ask, claim_deposit, deposit_tool_spec, describe_round,
+    describe_verdict, dispatch_and_verify, dispatch_signed, dispute_job, dispute_tool_spec,
+    embed_tool_spec, fetch_job_output, funds_with_deposit_info, hire_agent, infer_tool_spec,
+    list_verified_jobs, list_withdrawals, output_tool_spec, prepare_agent_task, preview_value,
+    quote_price, receipts_tool_spec, run_tool_spec, save_speech_clip, sign_envelope,
+    speak_tool_spec, stream_and_verify, stream_poll_tool_spec, stream_start_tool_spec,
+    submit_streaming, transcribe_tool_spec, verify_payout, verify_tool_spec, withdraw,
+    withdraw_tool_spec, withdrawals_tool_spec, AgentArgs, AgentOutcome, BuyerConfig, BuyerError,
+    CancelArgs, DisputeArgs, EmbedArgs, InferArgs, JobOutputView, JobRequest, OutputArgs,
+    PurchaseBook, PurchaseEntry, RunArgs, SpeakArgs, SpendCaps, StreamJobs, StreamPollArgs,
+    TranscribeArgs, VerifyArgs, WithdrawArgs, AGENT_TOOL, BALANCE_TOOL, CANCEL_TOOL, CAPACITY_TOOL,
     DEFAULT_AGENT_DEADLINE_MS, DEPOSIT_TOOL, DISPUTE_TOOL, EMBED_TOOL, INFER_TOOL, OUTPUT_TOOL,
     RECEIPTS_TOOL, RUN_TOOL, SPEAK_TOOL, STREAM_POLL_TOOL, STREAM_START_TOOL, TRANSCRIBE_TOOL,
     VERIFY_TOOL, WITHDRAWALS_TOOL, WITHDRAW_TOOL,
@@ -284,6 +284,7 @@ async fn call_agent(state: &ServerState, id: Value, arguments: Value) -> Value {
             status,
             reason,
             verdict,
+            round,
         } => {
             let mut text = format!(
                 "Not paid: job {job_id} ended {status} ({}). Nothing was charged.",
@@ -293,6 +294,10 @@ async fn call_agent(state: &ServerState, id: Value, arguments: Value) -> Value {
                 text.push_str("\n\n");
                 text.push_str(&describe_verdict(&verdict));
             }
+            if let Some(round) = round {
+                text.push('\n');
+                text.push_str(&describe_round(&round));
+            }
             text
         }
         AgentOutcome::Accepted {
@@ -300,6 +305,7 @@ async fn call_agent(state: &ServerState, id: Value, arguments: Value) -> Value {
             built,
             patch,
             verdict,
+            round,
         } => {
             state
                 .caps
@@ -331,6 +337,10 @@ async fn call_agent(state: &ServerState, id: Value, arguments: Value) -> Value {
             if let Some(verdict) = verdict {
                 text.push_str("\n\n");
                 text.push_str(&describe_verdict(&verdict));
+            }
+            if let Some(round) = round {
+                text.push('\n');
+                text.push_str(&describe_round(&round));
             }
             if patch.len() <= INLINE_PATCH_BYTES {
                 text.push_str("\n\n```diff\n");

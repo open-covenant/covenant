@@ -600,6 +600,7 @@ impl RedundancySampler {
                 check_jobs: Vec::new(),
                 checks_task: None,
                 hidden_checks: None,
+                vote_round: None,
             },
         ) {
             let _ = self
@@ -1216,6 +1217,7 @@ mod tests {
             check_jobs: Vec::new(),
             checks_task: None,
             hidden_checks: None,
+            vote_round: None,
         };
         (job_id, record)
     }

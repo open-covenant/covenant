@@ -24,8 +24,8 @@ use anyhow::Context;
 use base64::Engine as _;
 use covenant_compute_buyer::{
     apply_patch, cancel_job, capacity, cheapest_matching_ask, claim_deposit, close_lease,
-    describe_verdict, dispatch_and_verify, dispatch_signed, dispatch_streaming, dispute_job,
-    fetch_job_output, funds_with_deposit_info, hire_agent, http_client, lease_view,
+    describe_round, describe_verdict, dispatch_and_verify, dispatch_signed, dispatch_streaming,
+    dispute_job, fetch_job_output, funds_with_deposit_info, hire_agent, http_client, lease_view,
     list_verified_jobs, list_withdrawals, prepare_agent_task, preview_value, sign_envelope,
     submit_streaming, vault_delete, vault_fetch, vault_list, vault_store, verify_payout, withdraw,
     AgentArgs, AgentOutcome, BuyerConfig, DispatchOutcome, JobRequest, PriceQuote, PurchaseBook,
@@ -1300,6 +1300,7 @@ async fn cmd_agent(ctx: &Ctx, args: &mut Vec<String>, json_out: bool) -> anyhow:
             status,
             reason,
             verdict,
+            round,
         } => {
             if json_out {
                 let doc = serde_json::json!({
@@ -1307,6 +1308,7 @@ async fn cmd_agent(ctx: &Ctx, args: &mut Vec<String>, json_out: bool) -> anyhow:
                     "status": status,
                     "refund_reason": reason,
                     "check": verdict,
+                    "round": round,
                 });
                 println!("{}", serde_json::to_string_pretty(&doc)?);
             } else {
@@ -1317,6 +1319,9 @@ async fn cmd_agent(ctx: &Ctx, args: &mut Vec<String>, json_out: bool) -> anyhow:
                 if let Some(verdict) = &verdict {
                     println!("{}", describe_verdict(verdict));
                 }
+                if let Some(round) = &round {
+                    println!("{}", describe_round(round));
+                }
             }
         }
         AgentOutcome::Accepted {
@@ -1324,6 +1329,7 @@ async fn cmd_agent(ctx: &Ctx, args: &mut Vec<String>, json_out: bool) -> anyhow:
             built,
             patch,
             verdict,
+            round,
         } => {
             let job_id = outcome.receipt.receipt.job_id;
             let path = PathBuf::from(out.unwrap_or_else(|| format!("agent-{job_id}.patch")));
@@ -1343,6 +1349,7 @@ async fn cmd_agent(ctx: &Ctx, args: &mut Vec<String>, json_out: bool) -> anyhow:
                     "model": built.model,
                     "price_micro_usdc": outcome.envelope.payload.price_micro_usdc,
                     "check": verdict,
+                    "round": round,
                     "payout": outcome.payout,
                 });
                 println!("{}", serde_json::to_string_pretty(&doc)?);
@@ -1365,6 +1372,9 @@ async fn cmd_agent(ctx: &Ctx, args: &mut Vec<String>, json_out: bool) -> anyhow:
             if let Some(verdict) = &verdict {
                 println!();
                 println!("{}", describe_verdict(verdict));
+            }
+            if let Some(round) = &round {
+                println!("{}", describe_round(round));
             }
             println!();
             print_receipt_block(&outcome);

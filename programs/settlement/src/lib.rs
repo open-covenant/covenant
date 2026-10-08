@@ -1206,6 +1206,238 @@ pub mod settlement {
         .build_and_invoke()?;
         Ok(())
     }
+
+    /// Open the vote round for one agent task's check.
+    ///
+    /// A round holds the checkers' own signed verdicts on one patch, so a
+    /// payout can be traced to the votes that allowed it rather than to the
+    /// coordinator's word. The coordinator is part of the address and signs
+    /// the open: task ids are public, and a round a stranger could open first
+    /// would block the real one for good.
+    ///
+    /// Outside the pause gate: a round moves no money, and the coordinator
+    /// switches its own vote path off without one.
+    ///
+    /// Created by hand as top-up, allocate and assign, which also opens an
+    /// address someone funded first; allocate refuses an address that already
+    /// holds a round.
+    pub fn open_round(
+        ctx: Context<OpenRound>,
+        task_id: [u8; 16],
+        patch_sha256: [u8; 32],
+    ) -> Result<()> {
+        let coordinator = ctx.accounts.coordinator.key();
+        let (address, bump) = Pubkey::find_program_address(
+            &[b"round", coordinator.as_ref(), task_id.as_ref()],
+            &crate::ID,
+        );
+        require!(
+            address == ctx.accounts.round.key(),
+            CovenantError::Unauthorized
+        );
+        let signer: &[&[&[u8]]] = &[&[b"round", coordinator.as_ref(), task_id.as_ref(), &[bump]]];
+        let round_info = ctx.accounts.round.to_account_info();
+        let system = ctx.accounts.system_program.to_account_info();
+        let space = 8 + std::mem::size_of::<VoteRound>();
+        let short = Rent::get()?
+            .minimum_balance(space)
+            .saturating_sub(round_info.lamports());
+        if short > 0 {
+            anchor_lang::system_program::transfer(
+                CpiContext::new(
+                    system.clone(),
+                    anchor_lang::system_program::Transfer {
+                        from: ctx.accounts.payer.to_account_info(),
+                        to: round_info.clone(),
+                    },
+                ),
+                short,
+            )?;
+        }
+        anchor_lang::system_program::allocate(
+            CpiContext::new_with_signer(
+                system.clone(),
+                anchor_lang::system_program::Allocate {
+                    account_to_allocate: round_info.clone(),
+                },
+                signer,
+            ),
+            space as u64,
+        )?;
+        anchor_lang::system_program::assign(
+            CpiContext::new_with_signer(
+                system,
+                anchor_lang::system_program::Assign {
+                    account_to_assign: round_info.clone(),
+                },
+                signer,
+            ),
+            &crate::ID,
+        )?;
+
+        let mut data = round_info.try_borrow_mut_data()?;
+        data[..8].copy_from_slice(VoteRound::DISCRIMINATOR);
+        let round = vote_round(&mut data)?;
+        round.coordinator = coordinator;
+        round.er_validator = ctx.accounts.er_validator.key();
+        round.payer = ctx.accounts.payer.key();
+        round.task_id = task_id;
+        round.patch_sha256 = patch_sha256;
+        round.bump = bump;
+        Ok(())
+    }
+
+    /// Record one checker's verdict, as that checker signed it.
+    ///
+    /// The coordinator relays the vote but cannot write it: the instruction
+    /// before this one must be the Ed25519 program verifying the voter's
+    /// signature over this round's task, this round's patch and this verdict,
+    /// and the voter recorded is the key that signed. A vote on another patch,
+    /// or the opposite verdict, does not verify, and no key counts twice. The
+    /// signature is stored with the vote, so the tally that reaches L1 can be
+    /// recounted against the voters' keys without trusting the rollup that
+    /// counted it.
+    ///
+    /// Coordinator-signed: choosing the panel is the coordinator's job, and a
+    /// stranger's signed opinion is not a checker's vote.
+    pub fn record_vote(ctx: Context<RecordVote>, passed: bool) -> Result<()> {
+        let mut data = ctx.accounts.round.try_borrow_mut_data()?;
+        let round = vote_round(&mut data)?;
+        require!(
+            round.coordinator == ctx.accounts.coordinator.key(),
+            CovenantError::Unauthorized
+        );
+        require!(round.result == ROUND_OPEN, CovenantError::RoundClosed);
+        let n = usize::from(round.count);
+        require!(n < MAX_ROUND_VOTES, CovenantError::RoundFull);
+        let (voter, signature) = {
+            let sysvar = ctx.accounts.instructions.try_borrow_data()?;
+            let vote = vote_message(&round.task_id, &round.patch_sha256, passed);
+            ed25519_signer(&sysvar, &vote).ok_or(CovenantError::VoteNotSigned)?
+        };
+        require!(
+            !round.voters[..n].contains(&voter),
+            CovenantError::AlreadyVoted
+        );
+        round.voters[n] = voter;
+        round.signatures[n] = signature;
+        round.votes[n] = if passed { VOTE_PASS } else { VOTE_FAIL };
+        round.count += 1;
+        Ok(())
+    }
+
+    /// Write the round into L1 history and return its rent.
+    ///
+    /// The event carries every vote with its signature, so the record outlives
+    /// the account. A round that never closed settles as it stands, with
+    /// `ROUND_OPEN` as its result: when the rollup path fails the coordinator
+    /// tallies on its own, and the rent of the round it abandoned should not be
+    /// stranded.
+    pub fn settle_round(ctx: Context<SettleRound>) -> Result<()> {
+        let round_info = ctx.accounts.round.to_account_info();
+        let payer = ctx.accounts.payer.to_account_info();
+        {
+            let mut data = round_info.try_borrow_mut_data()?;
+            let round = vote_round(&mut data)?;
+            require!(
+                round.coordinator == ctx.accounts.coordinator.key(),
+                CovenantError::Unauthorized
+            );
+            require!(round.payer == payer.key(), CovenantError::Unauthorized);
+            emit!(RoundSettled {
+                task_id: round.task_id,
+                coordinator: round.coordinator,
+                patch_sha256: round.patch_sha256,
+                result: round.result,
+                count: round.count,
+                voters: round.voters,
+                votes: round.votes,
+                signatures: round.signatures,
+            });
+        }
+        let rent = round_info.lamports();
+        **payer.lamports.borrow_mut() = payer
+            .lamports()
+            .checked_add(rent)
+            .ok_or(CovenantError::Overflow)?;
+        **round_info.lamports.borrow_mut() = 0;
+        round_info.assign(&anchor_lang::system_program::ID);
+        round_info.realloc(0, false)?;
+        Ok(())
+    }
+
+    /// Hand the round to the rollup validator named at open, where a vote
+    /// costs nothing to record.
+    ///
+    /// Coordinator-signed and validator-checked, for the reason
+    /// `delegate_lease` is: delegation gives the account to a host that writes
+    /// it back.
+    #[cfg(feature = "ephemeral")]
+    pub fn delegate_round(ctx: Context<DelegateRound>) -> Result<()> {
+        let round = *vote_round(&mut ctx.accounts.round.try_borrow_mut_data()?)?;
+        require!(
+            round.coordinator == ctx.accounts.coordinator.key()
+                && round.er_validator == ctx.accounts.er_validator.key(),
+            CovenantError::Unauthorized
+        );
+        require!(round.result == ROUND_OPEN, CovenantError::RoundClosed);
+        let a = &ctx.accounts;
+        ephemeral_rollups_sdk::cpi::delegate_account(
+            ephemeral_rollups_sdk::cpi::DelegateAccounts {
+                payer: &a.payer,
+                pda: &a.round,
+                owner_program: &a.owner_program,
+                buffer: &a.buffer,
+                delegation_record: &a.delegation_record,
+                delegation_metadata: &a.delegation_metadata,
+                delegation_program: &a.delegation_program,
+                system_program: &a.system_program,
+            },
+            &[
+                b"round".as_ref(),
+                round.coordinator.as_ref(),
+                round.task_id.as_ref(),
+            ],
+            DelegateConfig {
+                validator: Some(round.er_validator),
+                ..Default::default()
+            },
+        )?;
+        Ok(())
+    }
+
+    /// Count the votes and send the round home to L1 with its result.
+    ///
+    /// A majority passes or fails the patch; a tie, or no vote at all, is a
+    /// split that pays nobody. The result also closes the round to further
+    /// votes, which matters once it is back on L1 and writable there.
+    ///
+    /// Coordinator-signed, since closing early is worth as much as dropping
+    /// the votes still to come. Written in place before the commit, for the
+    /// reason `undelegate_lease` serializes the meter first.
+    #[cfg(feature = "ephemeral")]
+    pub fn close_round(ctx: Context<CloseRound>) -> Result<()> {
+        let round_info = ctx.accounts.round.to_account_info();
+        {
+            let mut data = round_info.try_borrow_mut_data()?;
+            let round = vote_round(&mut data)?;
+            require!(
+                round.coordinator == ctx.accounts.coordinator.key(),
+                CovenantError::Unauthorized
+            );
+            require!(round.result == ROUND_OPEN, CovenantError::RoundClosed);
+            round.result = tally(&round.votes[..usize::from(round.count)]);
+        }
+
+        MagicIntentBundleBuilder::new(
+            ctx.accounts.payer.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+        )
+        .commit_and_undelegate(&[round_info])
+        .build_and_invoke()?;
+        Ok(())
+    }
 }
 
 #[derive(Accounts)]
@@ -2229,6 +2461,98 @@ pub struct UndelegateLease<'info> {
     pub coordinator: Signer<'info>,
 }
 
+#[derive(Accounts)]
+pub struct OpenRound<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub coordinator: Signer<'info>,
+    /// CHECK: recorded as the only rollup identity the round may be delegated
+    /// to.
+    pub er_validator: UncheckedAccount<'info>,
+    /// CHECK: the round's address, derived and created by the handler.
+    #[account(mut)]
+    pub round: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct RecordVote<'info> {
+    /// CHECK: owned by this program; typed in place by the handler, which also
+    /// checks the coordinator.
+    #[account(mut, owner = crate::ID)]
+    pub round: UncheckedAccount<'info>,
+    pub coordinator: Signer<'info>,
+    /// CHECK: the instructions sysvar, pinned by address; read for the Ed25519
+    /// check that carries the voter's signature.
+    #[account(address = anchor_lang::solana_program::sysvar::instructions::ID)]
+    pub instructions: UncheckedAccount<'info>,
+}
+
+#[derive(Accounts)]
+pub struct SettleRound<'info> {
+    /// CHECK: owned by this program; typed in place and closed by the handler,
+    /// which checks the coordinator and the payer.
+    #[account(mut, owner = crate::ID)]
+    pub round: UncheckedAccount<'info>,
+    pub coordinator: Signer<'info>,
+    /// CHECK: funded the open; matched in the handler and repaid the rent.
+    #[account(mut)]
+    pub payer: UncheckedAccount<'info>,
+}
+
+/// Delegate a vote round to the ER. The round is its own record, so unlike a
+/// lease there is no L1 twin to check against: the handler reads the round
+/// before it moves.
+///
+/// Written out rather than generated by `#[delegate]`, which would re-derive
+/// every address here. The SDK signs for the round and its buffer with this
+/// program's seeds and the delegation program derives the record and metadata
+/// itself, so a wrong address fails there either way, and the checks would only
+/// add program size.
+#[cfg(feature = "ephemeral")]
+#[derive(Accounts)]
+pub struct DelegateRound<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub coordinator: Signer<'info>,
+    /// CHECK: matched in the handler against the validator named at open.
+    pub er_validator: UncheckedAccount<'info>,
+    /// CHECK: typed in place by the handler. The SDK signs for it with the
+    /// round's own seeds, so an account at any other address fails the
+    /// delegation. Raw for the reason the lease meter is.
+    #[account(mut)]
+    pub round: UncheckedAccount<'info>,
+    /// CHECK: created by the SDK under this program's buffer seeds.
+    #[account(mut)]
+    pub buffer: UncheckedAccount<'info>,
+    /// CHECK: derived and created by the delegation program.
+    #[account(mut)]
+    pub delegation_record: UncheckedAccount<'info>,
+    /// CHECK: derived and created by the delegation program.
+    #[account(mut)]
+    pub delegation_metadata: UncheckedAccount<'info>,
+    /// CHECK: this program, as the delegated account's owner.
+    #[account(address = crate::ID)]
+    pub owner_program: UncheckedAccount<'info>,
+    /// CHECK: the delegation program.
+    #[account(address = ephemeral_rollups_sdk::id())]
+    pub delegation_program: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[cfg(feature = "ephemeral")]
+#[commit]
+#[derive(Accounts)]
+pub struct CloseRound<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    /// CHECK: owned by this program and typed by hand in the handler, which
+    /// also checks the coordinator, for the reason `UndelegateLease` does.
+    #[account(mut, owner = crate::ID)]
+    pub round: UncheckedAccount<'info>,
+    pub coordinator: Signer<'info>,
+}
+
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct InitializeArgs {
     pub slash_authority: Pubkey,
@@ -2268,6 +2592,25 @@ pub const TASK_REFUNDED: u8 = 3;
 /// balance one signature can lock, and keeps the meter's arithmetic far from
 /// overflow.
 pub const MAX_LEASE_DURATION_SECS: u64 = 86_400;
+
+/// The most verdicts one round holds: the first check plus the confirmations,
+/// sampled rechecks and tie-breakers the coordinator may order after it. Equal
+/// to the coordinator's default cap on checks per task.
+pub const MAX_ROUND_VOTES: usize = 5;
+
+/// What a checker signs: this prefix, the task id, the patch hash and one byte
+/// for the verdict. The prefix keeps a vote from verifying as anything else the
+/// same node key signs.
+pub const VOTE_DOMAIN: &[u8; 31] = b"covenant.compute.agent-vote.v1\n";
+pub const VOTE_MESSAGE_LEN: usize = 31 + 16 + 32 + 1;
+
+pub const VOTE_PASS: u8 = 1;
+pub const VOTE_FAIL: u8 = 2;
+
+pub const ROUND_OPEN: u8 = 0;
+pub const ROUND_PASSED: u8 = 1;
+pub const ROUND_FAILED: u8 = 2;
+pub const ROUND_SPLIT: u8 = 3;
 
 #[account]
 #[derive(InitSpace)]
@@ -2415,6 +2758,33 @@ pub struct LeaseMeter {
     /// takes no further ticks, so the figure a renter reconciles at commit time
     /// is the figure that settles.
     pub concluded: bool,
+    pub bump: u8,
+}
+
+/// One agent task's check, as the checkers voted it.
+///
+/// Opened on L1, voted on the rollup, closed there with its result fixed and
+/// committed home, then settled into an L1 event. Each vote keeps its
+/// signature: a rollup host can rewrite this account when it commits, but it
+/// cannot sign for a checker, so a recount against the stored signatures is the
+/// check on the host.
+#[account(zero_copy)]
+pub struct VoteRound {
+    pub coordinator: Pubkey,
+    pub er_validator: Pubkey,
+    /// Funded the open and is repaid the rent at settlement.
+    pub payer: Pubkey,
+    pub task_id: [u8; 16],
+    /// The patch the checkers judged. Every vote signs it, so a vote cast on one
+    /// patch cannot be counted for another.
+    pub patch_sha256: [u8; 32],
+    pub voters: [Pubkey; MAX_ROUND_VOTES],
+    pub signatures: [[u8; 64]; MAX_ROUND_VOTES],
+    /// `VOTE_PASS` or `VOTE_FAIL`, in the order the votes were recorded.
+    pub votes: [u8; MAX_ROUND_VOTES],
+    pub count: u8,
+    /// `ROUND_OPEN` until `close_round` fixes it.
+    pub result: u8,
     pub bump: u8,
 }
 
@@ -2642,6 +3012,18 @@ pub struct LeaseVoided {
     pub coordinator: Pubkey,
 }
 
+#[event]
+pub struct RoundSettled {
+    pub task_id: [u8; 16],
+    pub coordinator: Pubkey,
+    pub patch_sha256: [u8; 32],
+    pub result: u8,
+    pub count: u8,
+    pub voters: [Pubkey; MAX_ROUND_VOTES],
+    pub votes: [u8; MAX_ROUND_VOTES],
+    pub signatures: [[u8; 64]; MAX_ROUND_VOTES],
+}
+
 #[error_code]
 pub enum CovenantError {
     #[msg("amount must be greater than zero")]
@@ -2705,6 +3087,14 @@ pub enum CovenantError {
     MeterClosed,
     #[msg("this lease cannot be settled until its meter is concluded or its window has elapsed")]
     LeaseStillRunning,
+    #[msg("this round is closed")]
+    RoundClosed,
+    #[msg("this round holds all the votes it can")]
+    RoundFull,
+    #[msg("this voter has already voted in this round")]
+    AlreadyVoted,
+    #[msg("a vote must follow an Ed25519 check of the voter's signature on it")]
+    VoteNotSigned,
 }
 
 struct LeaseSettlement {
@@ -2771,6 +3161,90 @@ fn lease_charge(terms: &LeaseTerms, metered_ms: u64) -> u64 {
     ((rate * u128::from(metered_ms)).div_ceil(1_000))
         .min(window)
         .min(u128::from(terms.funded_amount)) as u64
+}
+
+/// The bytes a checker signs for one verdict.
+pub fn vote_message(
+    task_id: &[u8; 16],
+    patch_sha256: &[u8; 32],
+    passed: bool,
+) -> [u8; VOTE_MESSAGE_LEN] {
+    let mut message = [0u8; VOTE_MESSAGE_LEN];
+    message[..31].copy_from_slice(VOTE_DOMAIN);
+    message[31..47].copy_from_slice(task_id);
+    message[47..79].copy_from_slice(patch_sha256);
+    message[79] = u8::from(passed);
+    message
+}
+
+/// A majority of the votes cast. A tie, no votes included, is a split: the
+/// evidence settles nothing, so nobody is paid and nobody is faulted.
+pub fn tally(votes: &[u8]) -> u8 {
+    let passes = votes.iter().filter(|v| **v == VOTE_PASS).count();
+    match passes.cmp(&(votes.len() - passes)) {
+        std::cmp::Ordering::Greater => ROUND_PASSED,
+        std::cmp::Ordering::Less => ROUND_FAILED,
+        std::cmp::Ordering::Equal => ROUND_SPLIT,
+    }
+}
+
+/// The signer of `message`, and the signature, from the Ed25519 check that ran
+/// directly before the current instruction.
+///
+/// Read straight from the instructions sysvar: `[count u16][offset u16; count]`,
+/// each instruction `[accounts u16][(flags u8, key); accounts][program]
+/// [len u16][data]`, and the current index in the last two bytes. By the time
+/// this runs the precompile has verified the signature, or the transaction
+/// would have failed, but only over the bytes its offsets point at. So there
+/// must be exactly one signature, every offset must point into the check's own
+/// data (instruction index `u16::MAX`), and the signed bytes must be `message`
+/// exactly. Short of that, any signature the voter ever produced could be
+/// passed off as a vote.
+fn ed25519_signer(sysvar: &[u8], message: &[u8]) -> Option<(Pubkey, [u8; 64])> {
+    let u16_at = |data: &[u8], at: usize| {
+        data.get(at..at + 2)
+            .map(|b| usize::from(u16::from_le_bytes([b[0], b[1]])))
+    };
+    let current = u16_at(sysvar, sysvar.len().checked_sub(2)?)?;
+    let start = u16_at(sysvar, 2 + 2 * current.checked_sub(1)?)?;
+    let program_at = start + 2 + 33 * u16_at(sysvar, start)?;
+    if sysvar.get(program_at..program_at + 32)?
+        != anchor_lang::solana_program::ed25519_program::ID.as_ref()
+    {
+        return None;
+    }
+    let len = u16_at(sysvar, program_at + 32)?;
+    let check = sysvar.get(program_at + 34..program_at + 34 + len)?;
+
+    let here = usize::from(u16::MAX);
+    if check.first() != Some(&1) || [4, 8, 14].iter().any(|at| u16_at(check, *at) != Some(here)) {
+        return None;
+    }
+    let bytes = |offset_at: usize, len: usize| {
+        let at = u16_at(check, offset_at)?;
+        check.get(at..at + len)
+    };
+    if bytes(10, u16_at(check, 12)?)? != message {
+        return None;
+    }
+    Some((
+        Pubkey::new_from_array(bytes(6, 32)?.try_into().ok()?),
+        bytes(2, 64)?.try_into().ok()?,
+    ))
+}
+
+/// A round viewed in place in its raw account.
+///
+/// Rounds are handled raw throughout. Delegation and the commit home force it on
+/// two of their instructions, and on the rest a typed loader would only repeat
+/// the checks the handlers make, at a cost in program size that every upgrade
+/// pays rent on.
+fn vote_round(data: &mut [u8]) -> Result<&mut VoteRound> {
+    let body = data
+        .get_mut(..8 + std::mem::size_of::<VoteRound>())
+        .filter(|d| d[..8] == *VoteRound::DISCRIMINATOR)
+        .ok_or(ErrorCode::AccountDiscriminatorMismatch)?;
+    Ok(bytemuck::from_bytes_mut(&mut body[8..]))
 }
 
 #[cfg(test)]
@@ -2930,6 +3404,7 @@ mod tests {
             ReceiptBatch::DISCRIMINATOR,
             LeaseTerms::DISCRIMINATOR,
             LeaseMeter::DISCRIMINATOR,
+            VoteRound::DISCRIMINATOR,
         ];
         for (i, a) in all.iter().enumerate() {
             for b in all.iter().skip(i + 1) {
@@ -2953,7 +3428,7 @@ mod tests {
             b"task",
             b"receipt_batch",
         ];
-        let leased: [&[u8]; 3] = [b"lease", b"meter", b"vault"];
+        let leased: [&[u8]; 4] = [b"lease", b"meter", b"vault", b"round"];
         for l in leased {
             for e in live {
                 assert_ne!(l, e);
@@ -2971,6 +3446,8 @@ mod tests {
             Pubkey::find_program_address(&[b"lease", owner.as_ref(), job_id.as_ref()], &crate::ID);
         let (meter, _) = Pubkey::find_program_address(&[b"meter", lease.as_ref()], &crate::ID);
         let (vault, _) = Pubkey::find_program_address(&[b"vault", lease.as_ref()], &crate::ID);
+        let (round, _) =
+            Pubkey::find_program_address(&[b"round", owner.as_ref(), job_id.as_ref()], &crate::ID);
         let derived = [
             Pubkey::find_program_address(&[b"config"], &crate::ID).0,
             Pubkey::find_program_address(&[b"agent", &key32], &crate::ID).0,
@@ -2981,6 +3458,7 @@ mod tests {
             lease,
             meter,
             vault,
+            round,
         ];
         for (i, a) in derived.iter().enumerate() {
             for b in derived.iter().skip(i + 1) {
@@ -2997,5 +3475,42 @@ mod tests {
         assert_eq!(u32::from(CovenantError::NoRecordedActions), 6018);
         assert_eq!(u32::from(CovenantError::ZeroRate), 6019);
         assert_eq!(u32::from(CovenantError::LeaseStillRunning), 6028);
+        assert_eq!(u32::from(CovenantError::RoundClosed), 6029);
+        assert_eq!(u32::from(CovenantError::VoteNotSigned), 6032);
+    }
+
+    #[test]
+    fn a_vote_message_binds_task_patch_and_verdict() {
+        let task = [7u8; 16];
+        let patch = [9u8; 32];
+        let pass = vote_message(&task, &patch, true);
+        assert_eq!(pass.len(), 80);
+        assert_eq!(&pass[..31], b"covenant.compute.agent-vote.v1\n");
+        assert_eq!(&pass[31..47], &task);
+        assert_eq!(&pass[47..79], &patch);
+        assert_eq!(pass[79], 1);
+        assert_eq!(vote_message(&task, &patch, false)[79], 0);
+        assert_ne!(pass, vote_message(&[8u8; 16], &patch, true));
+        assert_ne!(pass, vote_message(&task, &[8u8; 32], true));
+    }
+
+    #[test]
+    fn a_round_is_decided_by_majority_and_a_tie_decides_nothing() {
+        let (p, f) = (VOTE_PASS, VOTE_FAIL);
+        assert_eq!(tally(&[]), ROUND_SPLIT);
+        assert_eq!(tally(&[p]), ROUND_PASSED);
+        assert_eq!(tally(&[f]), ROUND_FAILED);
+        assert_eq!(tally(&[p, f]), ROUND_SPLIT);
+        assert_eq!(tally(&[f, p, p]), ROUND_PASSED);
+        assert_eq!(tally(&[p, f, f]), ROUND_FAILED);
+        assert_eq!(tally(&[p, f, p, f, p]), ROUND_PASSED);
+    }
+
+    #[test]
+    fn a_full_round_fits_its_account() {
+        assert_eq!(
+            std::mem::size_of::<VoteRound>(),
+            32 * 3 + 16 + 32 + (32 + 64 + 1) * MAX_ROUND_VOTES + 3
+        );
     }
 }

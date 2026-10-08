@@ -210,6 +210,10 @@ pub struct JobRecord {
     /// matched against the task's commitment. Only ever relayed to checkers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hidden_checks: Option<covenant_compute_protocol::HiddenChecks>,
+    /// On an agent task: what the chain counted when its checkers' votes
+    /// went through a round.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vote_round: Option<crate::rounds::RoundRecord>,
 }
 
 impl JobRecord {
@@ -692,6 +696,15 @@ impl JobBook {
         )
     }
 
+    /// Pins what the chain counted for a task's round.
+    pub fn set_vote_round(
+        &self,
+        task_id: Uuid,
+        round: crate::rounds::RoundRecord,
+    ) -> Result<bool, JobError> {
+        self.update_if(task_id, |_| true, |r| r.vote_round = Some(round))
+    }
+
     /// Agent tasks whose results wait on a check: the settle tick's
     /// worklist.
     pub fn awaiting_check(&self) -> Vec<(Uuid, JobRecord)> {
@@ -1162,6 +1175,7 @@ mod tests {
             check_jobs: Vec::new(),
             checks_task: None,
             hidden_checks: None,
+            vote_round: None,
         }
     }
 
@@ -1410,6 +1424,7 @@ mod tests {
             check_jobs: Vec::new(),
             checks_task: None,
             hidden_checks: None,
+            vote_round: None,
         }
     }
 

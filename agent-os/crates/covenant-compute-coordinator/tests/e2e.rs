@@ -6038,6 +6038,7 @@ async fn partner_payout_records_are_gated_idempotent_and_bounded_by_accruals() {
                     check_jobs: Vec::new(),
                     checks_task: None,
                     hidden_checks: None,
+                    vote_round: None,
                 },
             )
             .unwrap();

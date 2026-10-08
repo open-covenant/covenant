@@ -47,6 +47,7 @@ pub mod recover;
 pub mod redundancy;
 pub mod registry;
 pub mod reputation;
+pub mod rounds;
 pub mod stake;
 pub mod state;
 pub mod stream;
@@ -88,6 +89,9 @@ pub use redundancy::{
 pub use registry::{OperatorRecord, OperatorRegistry, RegistryError};
 pub use reputation::{
     smoothed_score_bps, AuditReputationSource, NoReputation, ReputationSource, ReputationStats,
+};
+pub use rounds::{
+    NoopVoteRounds, RoundRecord, RoundResult, RoundVote, SidecarVoteRounds, VoteRounds,
 };
 pub use stake::{
     resume_stake_slashes, spawn_periodic_stake_refresh, StakeRequirement, StakeSlashing,

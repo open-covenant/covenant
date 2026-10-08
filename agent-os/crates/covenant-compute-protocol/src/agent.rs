@@ -21,6 +21,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::sign::ProtocolError;
+use covenant_identity::{verify_b58, LocalIdentity};
 
 /// Cap on the task prose. A task is instructions, not a payload; anything
 /// the agent needs to read belongs in the repository.
@@ -405,6 +406,11 @@ pub struct AgentCheckVerdict {
     pub protected_violations: Vec<String>,
     pub passed: bool,
     pub commands: Vec<CommandOutcome>,
+    /// The checker's signature on [`agent_vote_message`] for this verdict, so
+    /// the coordinator can put the vote on chain as the checker cast it.
+    /// Absent from nodes that predate vote rounds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vote_signature_b58: Option<String>,
 }
 
 impl AgentCheckVerdict {
@@ -423,9 +429,32 @@ impl AgentCheckVerdict {
             protected_violations,
             passed: false,
             commands,
+            vote_signature_b58: None,
         };
         verdict.passed = verdict.earned();
         verdict
+    }
+
+    /// Signs this verdict's vote with the checker's node key.
+    pub fn sign_vote(mut self, checker: &LocalIdentity) -> Self {
+        if let Some(message) = agent_vote_message(self.task_job_id, &self.patch_sha256, self.passed)
+        {
+            let signature = checker.sign(&message).to_bytes();
+            self.vote_signature_b58 = Some(bs58::encode(signature).into_string());
+        }
+        self
+    }
+
+    /// Whether the vote carries `checker_b58`'s signature on exactly this
+    /// task, patch and verdict.
+    pub fn vote_signed_by(&self, checker_b58: &str) -> bool {
+        let (Some(signature), Some(message)) = (
+            self.vote_signature_b58.as_deref(),
+            agent_vote_message(self.task_job_id, &self.patch_sha256, self.passed),
+        ) else {
+            return false;
+        };
+        verify_b58(checker_b58, &message, signature).is_ok()
     }
 
     fn earned(&self) -> bool {
@@ -456,6 +485,15 @@ impl AgentCheckVerdict {
                 "a verdict lists more protected-path violations than it can carry".into(),
             ));
         }
+        if self
+            .vote_signature_b58
+            .as_ref()
+            .is_some_and(|s| s.len() > MAX_VOTE_SIGNATURE_B58)
+        {
+            return Err(ProtocolError::Invalid(
+                "a vote signature is longer than an ed25519 signature can encode to".into(),
+            ));
+        }
         let earned = self.earned();
         if self.passed != earned {
             return Err(ProtocolError::Invalid(format!(
@@ -465,6 +503,35 @@ impl AgentCheckVerdict {
         }
         Ok(())
     }
+}
+
+/// What a checker signs for one verdict: this domain, the task id, the patch
+/// digest and one byte for the verdict. Byte for byte what the settlement
+/// program's `record_vote` checks, and signed raw rather than as JSON so the
+/// Ed25519 program can verify it on chain.
+pub const AGENT_VOTE_DOMAIN: &[u8; 31] = b"covenant.compute.agent-vote.v1\n";
+pub const AGENT_VOTE_MESSAGE_LEN: usize = 31 + 16 + 32 + 1;
+const MAX_VOTE_SIGNATURE_B58: usize = 96;
+
+/// The vote bytes for a verdict, or `None` when the patch digest is not 64
+/// hex characters.
+pub fn agent_vote_message(
+    task_job_id: Uuid,
+    patch_sha256: &str,
+    passed: bool,
+) -> Option<[u8; AGENT_VOTE_MESSAGE_LEN]> {
+    if patch_sha256.len() != 64 {
+        return None;
+    }
+    let mut message = [0u8; AGENT_VOTE_MESSAGE_LEN];
+    message[..31].copy_from_slice(AGENT_VOTE_DOMAIN);
+    message[31..47].copy_from_slice(task_job_id.as_bytes());
+    for (i, pair) in patch_sha256.as_bytes().chunks(2).enumerate() {
+        let pair = std::str::from_utf8(pair).ok()?;
+        message[47 + i] = u8::from_str_radix(pair, 16).ok()?;
+    }
+    message[79] = u8::from(passed);
+    Some(message)
 }
 
 /// Lowercase hex sha256 of `bytes`, the digest a patch is named by.
@@ -937,6 +1004,43 @@ mod tests {
         .unwrap();
         let err = parse_agent_check_verdict(&[Content::json(packed)]).unwrap_err();
         assert!(err.to_string().contains("evidence"), "{err}");
+    }
+
+    #[test]
+    fn a_vote_message_is_the_bytes_the_settlement_program_checks() {
+        let task = Uuid::from_bytes([7u8; 16]);
+        let patch = "09".repeat(32);
+        let message = agent_vote_message(task, &patch, true).unwrap();
+        assert_eq!(&message[..31], b"covenant.compute.agent-vote.v1\n");
+        assert_eq!(&message[31..47], &[7u8; 16]);
+        assert_eq!(&message[47..79], &[9u8; 32]);
+        assert_eq!(message[79], 1);
+        assert_eq!(agent_vote_message(task, &patch, false).unwrap()[79], 0);
+        assert!(agent_vote_message(task, "09", true).is_none());
+        assert!(agent_vote_message(task, &"zz".repeat(32), true).is_none());
+    }
+
+    #[test]
+    fn a_signed_vote_verifies_only_for_its_checker_and_its_verdict() {
+        let checker = LocalIdentity::generate("checker");
+        let checker_b58 = bs58::encode(checker.pubkey_bytes()).into_string();
+        let other = bs58::encode(LocalIdentity::generate("other").pubkey_bytes()).into_string();
+        let verdict = AgentCheckVerdict::new(Uuid::new_v4(), SHA.into(), true, vec![], vec![
+            passing("t"),
+        ])
+        .sign_vote(&checker);
+        assert!(verdict.vote_signed_by(&checker_b58));
+        assert!(!verdict.vote_signed_by(&other));
+
+        let mut flipped = verdict.clone();
+        flipped.commands.clear();
+        flipped.passed = false;
+        assert!(!flipped.vote_signed_by(&checker_b58));
+
+        let unsigned = AgentCheckVerdict::new(Uuid::new_v4(), SHA.into(), true, vec![], vec![]);
+        assert!(!unsigned.vote_signed_by(&checker_b58));
+        let packed = agent_check_output(verdict.clone()).unwrap();
+        assert_eq!(parse_agent_check_verdict(&packed).unwrap(), verdict);
     }
 
     #[test]

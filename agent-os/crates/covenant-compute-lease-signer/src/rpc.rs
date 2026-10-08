@@ -159,6 +159,50 @@ impl Rpc {
         Ok(result[0]["signature"].as_str().map(str::to_string))
     }
 
+    /// The recent successful transactions on `address`, newest first, each
+    /// with its log lines.
+    pub async fn recent_logs(
+        &self,
+        address: &Pubkey,
+        limit: usize,
+    ) -> Result<Vec<(String, Vec<String>)>, String> {
+        let result = self
+            .call(
+                "getSignaturesForAddress",
+                json!([address.to_string(), {"limit": limit, "commitment": "confirmed"}]),
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+        let signatures: Vec<String> = result
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|entry| entry["err"].is_null())
+            .filter_map(|entry| entry["signature"].as_str().map(str::to_string))
+            .collect();
+        let mut out = Vec::with_capacity(signatures.len());
+        for signature in signatures {
+            let tx = self
+                .call(
+                    "getTransaction",
+                    json!([signature, {"encoding": "json", "commitment": "confirmed", "maxSupportedTransactionVersion": 0}]),
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+            let logs = tx["meta"]["logMessages"]
+                .as_array()
+                .map(|logs| {
+                    logs.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default();
+            out.push((signature, logs));
+        }
+        Ok(out)
+    }
+
     /// The recent signature on `address` whose memo contains `memo`. The RPC
     /// reports each transaction's memo prefixed with its length, so this
     /// matches on containment.

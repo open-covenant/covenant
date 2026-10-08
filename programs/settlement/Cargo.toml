@@ -24,6 +24,8 @@ task-escrow = []
 anchor-lang = "0.31.1"
 anchor-spl = { version = "0.31.1", features = ["token_2022"] }
 solana-security-txt = "1.1"
+# Zero-copy vote rounds; already in the tree through anchor-lang.
+bytemuck = { version = "1", features = ["derive", "min_const_generics"] }
 
 [dev-dependencies]
 litesvm = "0.6"

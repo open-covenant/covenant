@@ -207,6 +207,9 @@ pub struct CoordinatorConfig {
     /// Agent work (`crate::agent`). `None` (the default) refuses every
     /// agent task.
     pub agent: Option<crate::agent::AgentPolicy>,
+    /// Check-vote rounds (`crate::rounds`). `None` (the default) settles
+    /// agent tasks on the coordinator's own count, as before rounds existed.
+    pub vote_rounds: Option<Arc<dyn crate::rounds::VoteRounds>>,
 }
 
 impl Default for CoordinatorConfig {
@@ -235,6 +238,7 @@ impl Default for CoordinatorConfig {
             lease_meter: None,
             stake: None,
             agent: None,
+            vote_rounds: None,
         }
     }
 }
@@ -609,6 +613,11 @@ impl CoordinatorState {
 
     pub fn rail(&self) -> Option<&dyn InboundRail> {
         self.0.rail.as_deref()
+    }
+
+    /// Check-vote rounds, when a deployment runs them.
+    pub fn vote_rounds(&self) -> Option<&dyn crate::rounds::VoteRounds> {
+        self.0.config.vote_rounds.as_deref()
     }
 
     /// The on-chain lease meter, when a deployment configured one.

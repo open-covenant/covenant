@@ -17,8 +17,8 @@ use anyhow::Context;
 use covenant_audit::JsonlAuditLog;
 use covenant_compute_coordinator::{
     router, spawn_periodic_sweep, AuditReputationSource, CoordinatorConfig, CoordinatorState,
-    LeaseMeter, MockPayout, NoopLeaseMeter, Payout, SidecarLeaseMeter, SidecarLeaseMeterConfig,
-    SidecarPayout, SidecarPayoutConfig,
+    LeaseMeter, MockPayout, NoopLeaseMeter, NoopVoteRounds, Payout, SidecarLeaseMeter,
+    SidecarLeaseMeterConfig, SidecarPayout, SidecarPayoutConfig, SidecarVoteRounds, VoteRounds,
 };
 use covenant_identity::LocalIdentity;
 use tracing_subscriber::EnvFilter;
@@ -244,41 +244,62 @@ fn build_lease_meter() -> anyhow::Result<Option<Arc<dyn LeaseMeter>>> {
     match selection.trim() {
         "" | "off" => Ok(None),
         "noop" => Ok(Some(Arc::new(NoopLeaseMeter::new()))),
-        "sidecar" => {
-            let require = |key: &str| -> anyhow::Result<String> {
-                std::env::var(key).map_err(|_| {
-                    anyhow::anyhow!("{key} must be set when COVENANT_COMPUTE_LEASE_METER=sidecar")
-                })
-            };
-            let renter_keypair_path = require("COVENANT_COMPUTE_LEASE_KEYPAIR")?;
-            let coordinator_keypair_path = require("COVENANT_COMPUTE_LEASE_COORDINATOR_KEYPAIR")?;
-            // The program will not let the renter meter their own lease.
-            // One file for both keys hands that back, so refuse it here
-            // rather than discover it in a settlement.
-            anyhow::ensure!(
-                renter_keypair_path != coordinator_keypair_path,
-                "COVENANT_COMPUTE_LEASE_KEYPAIR and \
-                 COVENANT_COMPUTE_LEASE_COORDINATOR_KEYPAIR must be different keys: the renter \
-                 escrows and the coordinator meters, and one key doing both is a meter its own \
-                 payer can under-report"
-            );
-            Ok(Some(Arc::new(SidecarLeaseMeter::new(
-                SidecarLeaseMeterConfig {
-                    signer_binary: PathBuf::from(require("COVENANT_COMPUTE_LEASE_SIGNER_BINARY")?),
-                    program_id: require("COVENANT_COMPUTE_LEASE_PROGRAM_ID")?,
-                    mint: require("COVENANT_COMPUTE_LEASE_MINT")?,
-                    rpc_url: require("COVENANT_COMPUTE_LEASE_RPC_URL")?,
-                    er_rpc_url: require("COVENANT_COMPUTE_LEASE_ER_RPC_URL")?,
-                    er_validator: require("COVENANT_COMPUTE_LEASE_ER_VALIDATOR")?,
-                    renter_keypair_path,
-                    coordinator_keypair_path,
-                },
-            ))))
-        }
+        "sidecar" => Ok(Some(Arc::new(SidecarLeaseMeter::new(sidecar_config(
+            "COVENANT_COMPUTE_LEASE_METER",
+        )?)))),
         other => anyhow::bail!(
             "COVENANT_COMPUTE_LEASE_METER must be off, noop or sidecar (got {other:?})"
         ),
     }
+}
+
+/// Check-vote rounds (`covenant_compute_coordinator::rounds`). Off by
+/// default. `sidecar` runs them through the lease signer, on the same
+/// program, rollup and keys as the lease meter, and needs every one of
+/// those values set.
+fn build_vote_rounds() -> anyhow::Result<Option<Arc<dyn VoteRounds>>> {
+    let selection = std::env::var("COVENANT_COMPUTE_AGENT_ROUNDS").unwrap_or_default();
+    match selection.trim() {
+        "" | "off" => Ok(None),
+        "noop" => Ok(Some(Arc::new(NoopVoteRounds::new()))),
+        "sidecar" => Ok(Some(Arc::new(SidecarVoteRounds::new(sidecar_config(
+            "COVENANT_COMPUTE_AGENT_ROUNDS",
+        )?)))),
+        other => anyhow::bail!(
+            "COVENANT_COMPUTE_AGENT_ROUNDS must be off, noop or sidecar (got {other:?})"
+        ),
+    }
+}
+
+/// The signing sidecar's settings, every one required: a half-configured
+/// chain path should refuse to start rather than default onto the wrong
+/// network.
+fn sidecar_config(switch: &str) -> anyhow::Result<SidecarLeaseMeterConfig> {
+    let require = |key: &str| -> anyhow::Result<String> {
+        std::env::var(key).map_err(|_| anyhow::anyhow!("{key} must be set when {switch}=sidecar"))
+    };
+    let renter_keypair_path = require("COVENANT_COMPUTE_LEASE_KEYPAIR")?;
+    let coordinator_keypair_path = require("COVENANT_COMPUTE_LEASE_COORDINATOR_KEYPAIR")?;
+    // The program will not let the renter meter their own lease.
+    // One file for both keys hands that back, so refuse it here
+    // rather than discover it in a settlement.
+    anyhow::ensure!(
+        renter_keypair_path != coordinator_keypair_path,
+        "COVENANT_COMPUTE_LEASE_KEYPAIR and \
+         COVENANT_COMPUTE_LEASE_COORDINATOR_KEYPAIR must be different keys: the renter \
+         escrows and the coordinator meters, and one key doing both is a meter its own \
+         payer can under-report"
+    );
+    Ok(SidecarLeaseMeterConfig {
+        signer_binary: PathBuf::from(require("COVENANT_COMPUTE_LEASE_SIGNER_BINARY")?),
+        program_id: require("COVENANT_COMPUTE_LEASE_PROGRAM_ID")?,
+        mint: require("COVENANT_COMPUTE_LEASE_MINT")?,
+        rpc_url: require("COVENANT_COMPUTE_LEASE_RPC_URL")?,
+        er_rpc_url: require("COVENANT_COMPUTE_LEASE_ER_RPC_URL")?,
+        er_validator: require("COVENANT_COMPUTE_LEASE_ER_VALIDATOR")?,
+        renter_keypair_path,
+        coordinator_keypair_path,
+    })
 }
 
 /// Funding-source selection (C6). `organic` (the default) needs no
@@ -750,12 +771,24 @@ async fn main() -> anyhow::Result<()> {
         }
         Err(_) => None,
     };
+    let vote_rounds = build_vote_rounds()?;
+    match &vote_rounds {
+        Some(rounds) if agent.is_some() => {
+            tracing::info!(rounds = %rounds.describe(), "check-vote rounds ENABLED: agent payouts need the chain's count to agree")
+        }
+        Some(_) => anyhow::bail!(
+            "COVENANT_COMPUTE_AGENT_ROUNDS is set but agent work is off \
+             (COVENANT_COMPUTE_AGENT_BUYERS)"
+        ),
+        None => {}
+    }
 
     let config = CoordinatorConfig {
         long_poll_timeout: Duration::from_secs(long_poll_secs.max(1)),
         lease_meter,
         stake,
         agent,
+        vote_rounds,
         require_prefunded_buyers,
         default_funding_source,
         subsidy_policy,

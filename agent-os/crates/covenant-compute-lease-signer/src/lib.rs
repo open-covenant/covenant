@@ -2,6 +2,7 @@
 //! coordinator runs as a sidecar, and the operator stake tool.
 
 pub mod lease;
+pub mod round;
 pub mod rpc;
 pub mod stake;
 pub mod steps;

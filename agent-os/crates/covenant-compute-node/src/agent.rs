@@ -34,6 +34,7 @@ use covenant_compute_protocol::{
     HiddenChecks, JobEnvelopePayload, JobKind, RepoSource, MAX_OUTPUT_TAIL_BYTES, MAX_PATCH_BYTES,
     MAX_SUMMARY_BYTES,
 };
+use covenant_identity::LocalIdentity;
 use covenant_mcp::Content;
 use covenant_runtime::{preempt_subprocess_pg, SubprocessTracker, TrackedSubprocess};
 use tokio::io::AsyncReadExt;
@@ -49,7 +50,7 @@ const BUILD_TAIL: Duration = Duration::from_secs(45);
 /// error rather than evidence in a verdict.
 const DOCKER_ENGINE_FAILURE: i32 = 125;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AgentConfig {
     pub covguard_bin: String,
     pub claude_bin: String,
@@ -73,6 +74,9 @@ pub struct AgentConfig {
     pub check_pids: u32,
     /// Distinguishes this node's containers on a shared engine.
     pub instance_tag: String,
+    /// The node key, which signs each check's vote so the coordinator can
+    /// put it on chain as cast.
+    pub voter: Arc<LocalIdentity>,
 }
 
 pub struct AgentExecutor {
@@ -268,6 +272,7 @@ impl AgentExecutor {
                 violations,
                 commands,
             )
+            .sign_vote(&self.config.voter)
         };
         let applied = self
             .git(

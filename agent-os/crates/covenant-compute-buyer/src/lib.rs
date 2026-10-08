@@ -45,8 +45,8 @@ pub use covenant_compute_protocol::{
 
 mod agent;
 pub use agent::{
-    agent_tool_spec, apply_patch, describe_verdict, hire_agent, local_bundle, prepare_agent_task,
-    read_hidden_checks, AgentArgs, AgentOutcome, PreparedTask, AGENT_TOOL,
+    agent_tool_spec, apply_patch, describe_round, describe_verdict, hire_agent, local_bundle,
+    prepare_agent_task, read_hidden_checks, AgentArgs, AgentOutcome, PreparedTask, AGENT_TOOL,
     DEFAULT_AGENT_DEADLINE_MS,
 };
 mod purchases;
@@ -2659,19 +2659,53 @@ pub async fn fetch_job_output(
 
 /// The latest check verdict on one of this buyer's agent tasks: why it
 /// failed, or the evidence it passed. `None` until a check has returned.
-pub async fn fetch_check_verdict(
+pub async fn fetch_check_report(
     http: &reqwest::Client,
     config: &BuyerConfig,
     buyer_identity: &LocalIdentity,
     job_id: Uuid,
-) -> Result<Option<covenant_compute_protocol::AgentCheckVerdict>, BuyerError> {
+) -> Result<CheckReport, BuyerError> {
     let value = read_job_status(http, config, buyer_identity, job_id).await?;
-    match value.get("check") {
-        None | Some(serde_json::Value::Null) => Ok(None),
-        Some(check) => serde_json::from_value(check.clone())
-            .map(Some)
-            .map_err(|e| BuyerError::Coordinator(format!("check verdict decode: {e}"))),
+    fn field<T: serde::de::DeserializeOwned>(
+        value: &serde_json::Value,
+        name: &str,
+    ) -> Result<Option<T>, BuyerError> {
+        match value.get(name) {
+            None | Some(serde_json::Value::Null) => Ok(None),
+            Some(v) => serde_json::from_value(v.clone())
+                .map(Some)
+                .map_err(|e| BuyerError::Coordinator(format!("{name} decode: {e}"))),
+        }
     }
+    Ok(CheckReport {
+        verdict: field(&value, "check")?,
+        round: field(&value, "round")?,
+    })
+}
+
+/// An agent task's latest check verdict and, when the coordinator runs
+/// vote rounds, what the chain counted.
+#[derive(Debug, Clone, Default)]
+pub struct CheckReport {
+    pub verdict: Option<covenant_compute_protocol::AgentCheckVerdict>,
+    pub round: Option<VoteRoundView>,
+}
+
+/// The checkers' votes as the settlement program counted them. `signature`
+/// is the L1 transaction that settled the round; its log carries every vote
+/// with the checker's own signature.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct VoteRoundView {
+    pub result: String,
+    pub round: String,
+    pub signature: String,
+    pub votes: Vec<CountedVoteView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CountedVoteView {
+    pub voter: String,
+    pub passed: bool,
 }
 
 /// Signs and submits an agent task, hands the coordinator its hidden checks

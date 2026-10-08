@@ -37,6 +37,7 @@ use uuid::Uuid;
 
 use crate::jobs::{JobPhase, JobRecord, ReceiptAssignment, ReleaseCharges};
 use crate::matcher::{select_operator_excluding, Exclusions};
+use crate::rounds::{agreed, RoundVote, VoteRounds, MAX_ROUND_VOTES};
 use crate::state::CoordinatorState;
 
 /// The synthetic buyer name a check envelope is signed under.
@@ -317,6 +318,7 @@ pub async fn order_check(state: &CoordinatorState, task_id: Uuid) -> Result<Uuid
             check_jobs: Vec::new(),
             checks_task: Some(task_id),
             hidden_checks: None,
+            vote_round: None,
         },
     );
     if let Err(e) = inserted {
@@ -403,16 +405,20 @@ async fn settle_once(state: &CoordinatorState, task_id: Uuid) {
         }
     }
 
-    let verdicts: Vec<(String, bool)> = checks
+    let judged: Vec<(String, AgentCheckVerdict)> = checks
         .iter()
         .filter(|c| c.phase == JobPhase::Completed)
         .filter_map(|c| match judge(&task, c) {
-            Ok(verdict) => Some((c.operator_pubkey_b58.clone(), verdict.passed)),
+            Ok(verdict) => Some((c.operator_pubkey_b58.clone(), verdict)),
             Err(defect) => {
                 tracing::warn!(%task_id, check_id = %c.envelope.payload.job_id, %defect, "check returned no usable verdict");
                 None
             }
         })
+        .collect();
+    let verdicts: Vec<(String, bool)> = judged
+        .iter()
+        .map(|(checker, verdict)| (checker.clone(), verdict.passed))
         .collect();
 
     let outcome = match decide(task_id, &verdicts, &policy) {
@@ -438,6 +444,12 @@ async fn settle_once(state: &CoordinatorState, task_id: Uuid) {
             }
         },
     };
+    let outcome = match state.vote_rounds() {
+        Some(rounds) if !judged.is_empty() => {
+            counted(state, rounds, task_id, &task, &judged, outcome).await
+        }
+        _ => outcome,
+    };
     match outcome {
         Some(true) => {
             if release(state, task_id, &task).await {
@@ -455,6 +467,70 @@ async fn settle_once(state: &CoordinatorState, task_id: Uuid) {
             refund_task(state, task_id, &task, RefundReason::CheckUnavailable).await;
         }
     }
+}
+
+/// Lets the chain count the checkers' votes before anything moves, and
+/// settles on what the chain and the coordinator agree on. A round that
+/// cannot run leaves the coordinator's decision standing. A round that
+/// already ran for this task is read back from the record, not run again.
+async fn counted(
+    state: &CoordinatorState,
+    rounds: &dyn VoteRounds,
+    task_id: Uuid,
+    task: &JobRecord,
+    judged: &[(String, AgentCheckVerdict)],
+    decided: Option<bool>,
+) -> Option<bool> {
+    let record = match task.vote_round.clone() {
+        Some(record) => record,
+        None => {
+            let Some(votes) = signed_votes(judged) else {
+                tracing::info!(%task_id, "not every vote carries its checker's signature; settling on the coordinator's count");
+                return decided;
+            };
+            match rounds.run(task_id, &judged[0].1.patch_sha256, &votes).await {
+                Ok(record) => {
+                    if let Err(e) = state.jobs().set_vote_round(task_id, record.clone()) {
+                        tracing::warn!(%task_id, error = %e, "could not pin the round on the task");
+                    }
+                    record
+                }
+                Err(e) => {
+                    tracing::warn!(%task_id, error = %e, "vote round unavailable; settling on the coordinator's count");
+                    return decided;
+                }
+            }
+        }
+    };
+    let settled = agreed(decided, record.result);
+    if settled == decided {
+        tracing::info!(%task_id, counted = ?record.result, round = %record.round, settle = %record.signature, "votes counted on chain");
+    } else {
+        tracing::error!(%task_id, ?decided, counted = ?record.result, round = %record.round, "the chain's count and the coordinator's decision disagree; nobody is paid");
+    }
+    settled
+}
+
+/// Every verdict as a vote its checker signed, or `None` if any is unsigned
+/// or there are more than a round holds.
+fn signed_votes(judged: &[(String, AgentCheckVerdict)]) -> Option<Vec<RoundVote>> {
+    if judged.len() > MAX_ROUND_VOTES {
+        return None;
+    }
+    judged
+        .iter()
+        .map(|(checker, verdict)| {
+            let signature = verdict
+                .vote_signature_b58
+                .clone()
+                .filter(|_| verdict.vote_signed_by(checker))?;
+            Some(RoundVote {
+                voter: checker.clone(),
+                passed: verdict.passed,
+                signature,
+            })
+        })
+        .collect()
 }
 
 /// What the verdicts so far settle a task as.
@@ -718,8 +794,10 @@ pub fn spawn_periodic_settle(state: CoordinatorState, interval: Duration) {
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(interval).await;
+            // Each settle may wait on a vote round, so none waits on another.
             for (task_id, _) in state.jobs().awaiting_check() {
-                settle(&state, task_id).await;
+                let state = state.clone();
+                tokio::spawn(async move { settle(&state, task_id).await });
             }
         }
     });

@@ -25,8 +25,16 @@ feature on, which adds the credit-account delegation lifecycle:
   never leave L1.
 - `undelegate_lease` — mark the meter concluded and commit it back to L1, which
   is what opens settlement. Coordinator-signed.
+- `delegate_round` — hand an agent task's check-vote round, `[b"round",
+  coordinator, task_id]`, to the validator named at `open_round`.
+  Coordinator-signed. Written without `#[delegate]`: the SDK signs for the round
+  and its buffer, and the delegation program derives its own record and metadata.
+- `close_round` — tally the votes (`record_vote`, each verified against the
+  checker's Ed25519 signature in the instruction before it) and commit the round
+  home. `settle_round` then logs every vote with its signature on L1 and returns
+  the rent. Coordinator-signed.
 - `#[ephemeral]` injects the L1 `process_undelegation` callback, which serves
-  both delegated account types.
+  every delegated account type.
 
 Everything else (token custody, staking, slashing, governance) is unchanged and
 stays on L1. Only the program-owned `u64` credit balance and the lease meter's
@@ -82,8 +90,9 @@ pinned by unit tests that fail loudly rather than quietly corrupting an account:
   sees. Append only.
 
 Seeds are the fourth: `b"config"`, `b"agent"`, `b"credits"`, `b"stake"`, `b"task"`,
-`b"receipt_batch"` for the COVNT subsystem and `b"lease"`, `b"meter"`, `b"vault"`
-for the lease meter. They are disjoint and a test keeps them that way.
+`b"receipt_batch"` for the COVNT subsystem, `b"lease"`, `b"meter"`, `b"vault"`
+for the lease meter and `b"round"` for vote rounds. They are disjoint and a test
+keeps them that way.
 
 ## Endpoints (MagicBlock devnet, perpetual public infra)
 

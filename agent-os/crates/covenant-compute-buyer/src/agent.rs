@@ -16,7 +16,8 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::{
-    dispatch_agent_task, fetch_check_verdict, BuyerConfig, BuyerError, DispatchOutcome, JobRequest,
+    dispatch_agent_task, fetch_check_report, BuyerConfig, BuyerError, DispatchOutcome, JobRequest,
+    VoteRoundView,
 };
 
 pub const AGENT_TOOL: &str = "compute.agent";
@@ -81,6 +82,7 @@ pub enum AgentOutcome {
         built: AgentTaskOutput,
         patch: Vec<u8>,
         verdict: Option<AgentCheckVerdict>,
+        round: Option<VoteRoundView>,
     },
     /// Nothing was paid: the work failed its check, or no check could be
     /// completed, or the task never ran. The verdict says why when there
@@ -90,6 +92,7 @@ pub enum AgentOutcome {
         status: String,
         reason: Option<String>,
         verdict: Option<AgentCheckVerdict>,
+        round: Option<VoteRoundView>,
     },
 }
 
@@ -186,12 +189,13 @@ pub async fn hire_agent(
             reason,
             ..
         }) => {
-            let verdict = fetch_check_verdict(http, config, buyer_identity, job_id).await?;
+            let check = fetch_check_report(http, config, buyer_identity, job_id).await?;
             return Ok(AgentOutcome::NotPaid {
                 job_id,
                 status,
                 reason,
-                verdict,
+                verdict: check.verdict,
+                round: check.round,
             });
         }
         Err(e) => return Err(e),
@@ -206,13 +210,14 @@ pub async fn hire_agent(
             "the patch does not match the digest the checker vouched for".into(),
         ));
     }
-    let verdict =
-        fetch_check_verdict(http, config, buyer_identity, outcome.receipt.receipt.job_id).await?;
+    let check =
+        fetch_check_report(http, config, buyer_identity, outcome.receipt.receipt.job_id).await?;
     Ok(AgentOutcome::Accepted {
         outcome: Box::new(outcome),
         built,
         patch,
-        verdict,
+        verdict: check.verdict,
+        round: check.round,
     })
 }
 
@@ -325,6 +330,17 @@ pub fn read_hidden_checks(
 
 /// A verdict as a short human-readable account: what ran and how it went,
 /// with the tail of whatever failed.
+/// The chain's count in one line, with the transaction that records it.
+pub fn describe_round(round: &VoteRoundView) -> String {
+    let passes = round.votes.iter().filter(|v| v.passed).count();
+    format!(
+        "votes counted on chain: {} ({passes} pass, {} fail), settled in transaction {}",
+        round.result,
+        round.votes.len() - passes,
+        round.signature
+    )
+}
+
 pub fn describe_verdict(verdict: &AgentCheckVerdict) -> String {
     if !verdict.applied {
         return "check: the patch did not apply to the commit".into();

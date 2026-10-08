@@ -2822,6 +2822,11 @@ async fn main() -> anyhow::Result<()> {
                     .chars()
                     .take(8)
                     .collect(),
+                // Another handle on the persisted key, as for the heartbeat.
+                voter: Arc::new(
+                    LocalIdentity::load_or_create(&home.join("identity.json"), "operator@compute")
+                        .context("reload operator identity for check votes")?,
+                ),
             };
             tracing::info!(
                 work_dir = %config.work_dir.display(),

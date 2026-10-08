@@ -42,8 +42,8 @@ use covenant_compute_node::{
 use covenant_compute_protocol::{
     canonical_model, coordinator_reason, payout_transaction_rpc_request, speech_input,
     transcription_input, CapabilityProfile, CapacityView, HardwareClass, HeartbeatRequest,
-    JobEnvelopePayload, JobKind, PriceAsk, PriceUnit, RegisterRequest, SpeechInput,
-    TranscriptionInput,
+    JobEnvelopePayload, JobKind, KindAsk, KindModels, PriceAsk, PriceUnit, RegisterRequest,
+    SpeechInput, TranscriptionInput,
 };
 use covenant_identity::LocalIdentity;
 use covenant_mcp::Content;
@@ -82,6 +82,28 @@ fn node_home() -> anyhow::Result<PathBuf> {
     }
     let home = std::env::var("HOME").context("HOME not set")?;
     Ok(PathBuf::from(home).join(".covenant-compute-node"))
+}
+
+/// An agent node builds with a harness and checks in images, so each kind
+/// routes only by its own labels. Every other executor serves one model set
+/// for all its kinds. An explicit `COVENANT_COMPUTE_NODE_MODELS` keeps the
+/// single set.
+fn agent_kind_models(executor_kind: &str) -> Vec<KindModels> {
+    if executor_kind != "agent" || std::env::var("COVENANT_COMPUTE_NODE_MODELS").is_ok() {
+        return Vec::new();
+    }
+    vec![
+        KindModels {
+            kind: JobKind::AgentTask,
+            models: vec![covenant_compute_protocol::AgentRuntime::ClaudeCode
+                .label()
+                .to_string()],
+        },
+        KindModels {
+            kind: JobKind::AgentCheck,
+            models: agent_check_images(),
+        },
+    ]
 }
 
 /// The images an agent node runs checks in, from
@@ -211,24 +233,30 @@ fn gpu_advertised_but_not_passed(hardware: &HardwareClass, container_gpus: Optio
         )
 }
 
+fn kind_from_label(label: &str) -> Option<JobKind> {
+    match label {
+        "inference_call" => Some(JobKind::InferenceCall),
+        "batch_job" => Some(JobKind::BatchJob),
+        "lease_session" => Some(JobKind::LeaseSession),
+        "embedding" => Some(JobKind::Embedding),
+        "transcription" => Some(JobKind::Transcription),
+        "speech_synthesis" => Some(JobKind::SpeechSynthesis),
+        "agent_task" => Some(JobKind::AgentTask),
+        "agent_check" => Some(JobKind::AgentCheck),
+        _ => None,
+    }
+}
+
 fn parse_job_kinds(raw: &str) -> Vec<JobKind> {
     let kinds: Vec<JobKind> = raw
         .split(',')
-        .filter_map(|k| match k.trim() {
-            "inference_call" => Some(JobKind::InferenceCall),
-            "batch_job" => Some(JobKind::BatchJob),
-            "lease_session" => Some(JobKind::LeaseSession),
-            "embedding" => Some(JobKind::Embedding),
-            "transcription" => Some(JobKind::Transcription),
-            "speech_synthesis" => Some(JobKind::SpeechSynthesis),
-            "agent_task" => Some(JobKind::AgentTask),
-            "agent_check" => Some(JobKind::AgentCheck),
-            other => {
-                if !other.is_empty() {
-                    tracing::warn!(kind = other, "unknown job kind; skipping");
-                }
-                None
+        .filter_map(|k| {
+            let k = k.trim();
+            let kind = kind_from_label(k);
+            if kind.is_none() && !k.is_empty() {
+                tracing::warn!(kind = k, "unknown job kind; skipping");
             }
+            kind
         })
         .collect();
     if kinds.is_empty() {
@@ -236,6 +264,40 @@ fn parse_job_kinds(raw: &str) -> Vec<JobKind> {
     } else {
         kinds
     }
+}
+
+/// Per-kind asks from `COVENANT_COMPUTE_NODE_KIND_PRICES`, written
+/// `kind=micro_usdc[:unit]` and comma-separated
+/// (`agent_task=50000,agent_check=5000`). A malformed entry fails the boot:
+/// a price the operator typed and the node silently dropped would serve
+/// that kind at the base ask instead.
+fn parse_kind_prices(raw: &str) -> anyhow::Result<Vec<KindAsk>> {
+    let mut asks: Vec<KindAsk> = Vec::new();
+    for entry in raw.split(',').map(str::trim).filter(|e| !e.is_empty()) {
+        let (label, value) = entry.split_once('=').with_context(|| {
+            format!("COVENANT_COMPUTE_NODE_KIND_PRICES entry {entry:?} is not kind=price")
+        })?;
+        let kind = kind_from_label(label.trim()).with_context(|| {
+            format!("COVENANT_COMPUTE_NODE_KIND_PRICES names an unknown kind {label:?}")
+        })?;
+        let (amount, unit) = match value.split_once(':') {
+            Some((amount, unit)) => (amount, parse_price_unit(unit)),
+            None => (value, PriceUnit::PerJob),
+        };
+        let micro_usdc: u64 = amount
+            .trim()
+            .parse()
+            .with_context(|| format!("COVENANT_COMPUTE_NODE_KIND_PRICES price {amount:?} is not a whole number of micro-USDC"))?;
+        anyhow::ensure!(
+            !asks.iter().any(|a| a.kind == kind),
+            "COVENANT_COMPUTE_NODE_KIND_PRICES prices {label} twice"
+        );
+        asks.push(KindAsk {
+            kind,
+            price: PriceAsk { unit, micro_usdc },
+        });
+    }
+    Ok(asks)
 }
 
 fn parse_price_unit(raw: &str) -> PriceUnit {
@@ -2400,6 +2462,10 @@ async fn main() -> anyhow::Result<()> {
             micro_usdc: price_micro_usdc,
         },
         tee_capable: false,
+        kind_prices: parse_kind_prices(
+            &std::env::var("COVENANT_COMPUTE_NODE_KIND_PRICES").unwrap_or_default(),
+        )?,
+        kind_models: agent_kind_models(&executor_kind),
     };
     // A lease settles by meter over its window, and only a per-hour ask is
     // scaled to that window (a per-job ask floors flat on it). A lease node
@@ -3777,6 +3843,8 @@ mod tests {
                 micro_usdc: 100,
             },
             tee_capable: false,
+            kind_prices: Vec::new(),
+            kind_models: Vec::new(),
         }
     }
 

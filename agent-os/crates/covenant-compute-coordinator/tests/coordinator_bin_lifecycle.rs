@@ -139,6 +139,8 @@ async fn serve_echo_node(url: &str, coordinator_pubkey: &str) -> tokio::task::Jo
             micro_usdc: 10_000,
         },
         tee_capable: false,
+        kind_prices: Vec::new(),
+        kind_models: Vec::new(),
     };
     let client = Arc::new(HttpCoordinatorClient::with_config(
         url.to_string(),
@@ -508,6 +510,8 @@ async fn the_volumetric_cap_env_knobs_bound_registrations_and_in_flight_holds() 
             micro_usdc: 10_000,
         },
         tee_capable: false,
+        kind_prices: Vec::new(),
+        kind_models: Vec::new(),
     };
     let admitted = http
         .post(&register_url)

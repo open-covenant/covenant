@@ -1700,6 +1700,7 @@ mod tests {
             }),
             check_jobs: Vec::new(),
             checks_task: None,
+            hidden_checks: None,
         }
     }
 

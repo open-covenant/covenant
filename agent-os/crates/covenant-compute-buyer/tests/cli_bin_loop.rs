@@ -132,6 +132,8 @@ impl Rig {
                 micro_usdc: 10_000,
             },
             tee_capable: false,
+            kind_prices: Vec::new(),
+            kind_models: Vec::new(),
         };
         let client = Arc::new(HttpCoordinatorClient::with_config(
             url.clone(),

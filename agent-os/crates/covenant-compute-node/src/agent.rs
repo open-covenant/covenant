@@ -29,9 +29,9 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use base64::Engine as _;
 use covenant_compute_protocol::{
-    agent_check_output, agent_task_output, parse_agent_check, parse_agent_task, sha256_hex,
-    AcceptanceSpec, AgentCheckVerdict, AgentTaskOutput, AgentTaskSpec, CommandOutcome,
-    JobEnvelopePayload, JobKind, RepoSource, MAX_OUTPUT_TAIL_BYTES, MAX_PATCH_BYTES,
+    agent_check_output, agent_task_output, check_commands, parse_agent_check, parse_agent_task,
+    sha256_hex, AcceptanceSpec, AgentCheckVerdict, AgentTaskOutput, AgentTaskSpec, CommandOutcome,
+    HiddenChecks, JobEnvelopePayload, JobKind, RepoSource, MAX_OUTPUT_TAIL_BYTES, MAX_PATCH_BYTES,
     MAX_SUMMARY_BYTES,
 };
 use covenant_mcp::Content;
@@ -291,10 +291,18 @@ impl AgentExecutor {
             return finish(verdict(true, violations, Vec::new()));
         }
 
+        if let Some(hidden) = &spec.hidden {
+            if let Err(e) = place_hidden_files(&tree, hidden) {
+                tracing::info!(job_id = %job.job_id, error = %e, "hidden checks could not be placed");
+                return finish(verdict(false, Vec::new(), Vec::new()));
+            }
+        }
+
         let budget_end =
             (Instant::now() + Duration::from_secs(u64::from(acceptance.timeout_secs))).min(until);
-        let mut outcomes = Vec::with_capacity(acceptance.commands.len());
-        for (index, command) in acceptance.commands.iter().enumerate() {
+        let commands = check_commands(acceptance, spec.hidden.as_ref());
+        let mut outcomes = Vec::with_capacity(commands.len());
+        for (index, command) in commands.into_iter().enumerate() {
             let outcome = self
                 .run_check_command(job, index, acceptance, &tree, command, budget_end)
                 .await?;
@@ -789,6 +797,12 @@ fn task_prompt(spec: &AgentTaskSpec) -> String {
     for command in &acceptance.commands {
         prompt.push_str(&format!("  $ {command}\n"));
     }
+    if acceptance.hidden_sha256.is_some() {
+        prompt.push_str(
+            "\nFurther tests you cannot see will also run against your change, so make it \
+             correct in general rather than only for the visible tests.\n",
+        );
+    }
     if !acceptance.protected_paths.is_empty() {
         prompt.push_str(&format!(
             "\nDo not modify these paths; edits to them are discarded: {}\n",
@@ -800,6 +814,40 @@ fn task_prompt(spec: &AgentTaskSpec) -> String {
          with a short summary of what you changed.",
     );
     prompt
+}
+
+/// Writes the buyer's hidden files into the patched checkout. The builder's
+/// patch can plant a symlink where a hidden file goes, and following it
+/// would write outside the checkout on the operator's own disk, so every
+/// directory on the way must be a plain directory and the file itself must
+/// not be a link.
+fn place_hidden_files(tree: &Path, hidden: &HiddenChecks) -> Result<(), String> {
+    for file in &hidden.files {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&file.content_b64)
+            .map_err(|e| format!("{} is not base64: {e}", file.path))?;
+        let relative = Path::new(&file.path);
+        let mut dir = tree.to_path_buf();
+        if let Some(parent) = relative.parent() {
+            for part in parent.components() {
+                dir.push(part);
+                match std::fs::symlink_metadata(&dir) {
+                    Ok(meta) if meta.is_dir() => {}
+                    Ok(_) => return Err(format!("{} is not a plain directory", dir.display())),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        std::fs::create_dir(&dir).map_err(|e| e.to_string())?
+                    }
+                    Err(e) => return Err(e.to_string()),
+                }
+            }
+        }
+        let target = tree.join(relative);
+        if std::fs::symlink_metadata(&target).is_ok_and(|m| !m.is_file()) {
+            return Err(format!("{} exists and is not a plain file", file.path));
+        }
+        std::fs::write(&target, bytes).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// Reads the build's stdout: Claude Code's one-line JSON result and, as the
@@ -970,6 +1018,7 @@ mod tests {
                 commands: vec!["python -m unittest".into()],
                 timeout_secs: 60,
                 protected_paths: vec!["tests/".into()],
+                hidden_sha256: None,
             },
             runtime: covenant_compute_protocol::AgentRuntime::ClaudeCode,
             model: None,
@@ -985,5 +1034,34 @@ mod tests {
     fn tails_cut_on_character_boundaries() {
         assert_eq!(tail_str("héllo", 4), "llo");
         assert_eq!(truncate_utf8("héllo", 2), "h");
+    }
+
+    #[test]
+    fn hidden_files_land_inside_the_checkout_and_never_through_a_link() {
+        let root = tempfile::tempdir().unwrap();
+        let tree = root.path().join("repo");
+        std::fs::create_dir_all(tree.join("tests")).unwrap();
+        let hidden = |path: &str| HiddenChecks {
+            files: vec![covenant_compute_protocol::HiddenFile {
+                path: path.into(),
+                content_b64: base64::engine::general_purpose::STANDARD.encode("x = 1\n"),
+            }],
+            commands: vec![],
+        };
+        place_hidden_files(&tree, &hidden("tests/hidden/test_x.py")).unwrap();
+        assert!(tree.join("tests/hidden/test_x.py").is_file());
+
+        let outside = root.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, tree.join("planted")).unwrap();
+        assert!(place_hidden_files(&tree, &hidden("planted/test_y.py")).is_err());
+        assert!(
+            !outside.join("test_y.py").exists(),
+            "nothing written through the link"
+        );
+
+        std::os::unix::fs::symlink(outside.join("target.py"), tree.join("tests/link.py")).unwrap();
+        assert!(place_hidden_files(&tree, &hidden("tests/link.py")).is_err());
+        assert!(!outside.join("target.py").exists());
     }
 }

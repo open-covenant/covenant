@@ -358,6 +358,8 @@ async fn main() {
             micro_usdc: JOB_PRICE_MICRO_USDC,
         },
         tee_capable: false,
+        kind_prices: Vec::new(),
+        kind_models: Vec::new(),
     };
     let coordinator_client = Arc::new(HttpCoordinatorClient::with_config(
         base_url.clone(),

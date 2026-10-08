@@ -285,9 +285,24 @@ impl RedundancySampler {
                 .as_ref()
                 .map(|r| r.envelope.payload.price_micro_usdc)
                 .unwrap_or(0);
-            let verdicts = verdicts(*source_job_id, &source_operator, &participants);
+            let parties: HashMap<String, Vec<String>> = participants
+                .iter()
+                .map(|(operator, _)| (operator.clone(), self.party_of(operator)))
+                .collect();
+            let verdicts = verdicts(*source_job_id, &source_operator, &participants, &parties);
             self.write_verdicts(report, verdicts, source_price).await;
         }
+    }
+
+    /// The identities that make an operator one party: its own key, and the
+    /// wallets behind the stake that counts for it. Two operators sharing
+    /// any of them are one party, whatever their node keys.
+    fn party_of(&self, operator: &str) -> Vec<String> {
+        let mut party = vec![operator.to_string()];
+        if let Some(record) = self.state.registry().record(operator) {
+            party.extend(record.stake_owners.iter().map(|o| format!("owner:{o}")));
+        }
+        party
     }
 
     /// `source_price_micro_usdc` sizes any slash a `Some(false)`
@@ -390,6 +405,7 @@ impl RedundancySampler {
         let now_ms = crate::epoch_ms();
         let cutoff_ms = self.state.config().operator_liveness_timeout.as_millis() as u64;
         let model_id = &source.envelope.payload.capability_requirement.model_id;
+        let kind = source.envelope.payload.kind;
         let mut candidates: Vec<(String, u64)> = self
             .state
             .registry()
@@ -403,16 +419,16 @@ impl RedundancySampler {
                         .profile
                         .job_kinds
                         .contains(&source.envelope.payload.kind)
-                    && record.profile.price.micro_usdc <= self.config.max_price_micro_usdc
+                    && record.profile.ask_for(kind).micro_usdc <= self.config.max_price_micro_usdc
                     && model_id.as_ref().is_none_or(|m| {
                         record
                             .profile
-                            .models_served
+                            .models_for(kind)
                             .iter()
                             .any(|served| served == m || served == "any")
                     })
             })
-            .map(|(key, record)| (key, record.profile.price.micro_usdc))
+            .map(|(key, record)| (key, record.profile.ask_for(kind).micro_usdc))
             .collect();
         // The matcher's trust floor applies to mirrors too: a mirror is
         // a measuring instrument, and letting a proven-bad operator
@@ -435,8 +451,20 @@ impl RedundancySampler {
             return;
         }
         // Cheapest asks first — the sample's information is the same
-        // whoever serves it, so buy it at the best price.
+        // whoever serves it, so buy it at the best price. A mirror only
+        // measures anything if it is a different party from the source and
+        // from every other mirror, so operators staked by a wallet already
+        // in the sample are passed over.
         candidates.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+        let mut parties: Vec<String> = self.party_of(&source.operator_pubkey_b58);
+        candidates.retain(|(key, _)| {
+            let party = self.party_of(key);
+            if party.iter().any(|p| parties.contains(p)) {
+                return false;
+            }
+            parties.extend(party);
+            true
+        });
         candidates.truncate(self.config.mirrors);
 
         let mut dispatched: Vec<(Uuid, String)> = Vec::new();
@@ -571,6 +599,7 @@ impl RedundancySampler {
                 lease_access: None,
                 check_jobs: Vec::new(),
                 checks_task: None,
+                hidden_checks: None,
             },
         ) {
             let _ = self
@@ -736,42 +765,50 @@ fn is_deterministic_inference(input: &[Content]) -> bool {
 }
 
 /// The pure comparison: participants are `(operator, result_hash_hex)`
-/// pairs, one per receipt (source included). A strict majority on one
-/// hash produces a row per participant; anything else produces the
-/// single inconclusive row on the source operator.
+/// pairs, one per receipt (source included), and `parties` names the
+/// identities each operator answers for. Votes are counted per party, not
+/// per receipt: operators sharing a key or a stake wallet are merged into
+/// one vote, so a party running several nodes cannot outvote an honest
+/// operator, and a party whose own receipts disagree casts no vote. A
+/// strict majority of parties on one hash produces a row per participant;
+/// anything else produces the single inconclusive row on the source
+/// operator.
 fn verdicts(
     source_job_id: Uuid,
     source_operator: &str,
     participants: &[(String, String)],
+    parties: &HashMap<String, Vec<String>>,
 ) -> Vec<SampleVerdict> {
-    if participants.len() < 2 {
+    let votes = party_votes(participants, parties);
+    if votes.len() < 2 {
         return vec![SampleVerdict {
             source_job_id,
             operator_pubkey_b58: source_operator.to_string(),
             agreed: None,
             detail: format!(
-                "inconclusive: only {} participating receipt(s)",
-                participants.len()
+                "inconclusive: only {} independent participant(s)",
+                votes.len()
             ),
         }];
     }
     let mut groups: HashMap<&str, usize> = HashMap::new();
-    for (_, hash) in participants {
+    for hash in &votes {
         *groups.entry(hash.as_str()).or_default() += 1;
     }
     let (majority_hash, majority_count) = groups
         .iter()
         .max_by_key(|(_, count)| **count)
         .map(|(hash, count)| (*hash, *count))
-        .expect("participants is non-empty");
-    if majority_count * 2 <= participants.len() {
+        .expect("votes is non-empty");
+    if majority_count * 2 <= votes.len() {
         return vec![SampleVerdict {
             source_job_id,
             operator_pubkey_b58: source_operator.to_string(),
             agreed: None,
             detail: format!(
-                "inconclusive: no strict majority across {} receipts ({} hash groups)",
-                participants.len(),
+                "inconclusive: no strict majority across {} independent participants ({} hash \
+                 groups)",
+                votes.len(),
                 groups.len()
             ),
         }];
@@ -786,17 +823,56 @@ fn verdicts(
                 agreed: Some(agreed),
                 detail: if agreed {
                     format!(
-                        "hash agreed with {majority_count}/{} receipts",
-                        participants.len()
+                        "hash agreed with {majority_count}/{} independent participants",
+                        votes.len()
                     )
                 } else {
                     format!(
                         "hash disagreed with the majority ({majority_count}/{} on {})",
-                        participants.len(),
+                        votes.len(),
                         &majority_hash[..majority_hash.len().min(16)]
                     )
                 },
             }
+        })
+        .collect()
+}
+
+/// One hash per independent party. Operators are merged into a party when
+/// they share any identity; a party whose receipts disagree among
+/// themselves casts nothing.
+fn party_votes(
+    participants: &[(String, String)],
+    parties: &HashMap<String, Vec<String>>,
+) -> Vec<String> {
+    let mut merged: Vec<(Vec<String>, Vec<&str>)> = Vec::new();
+    for (operator, hash) in participants {
+        let ids = parties
+            .get(operator)
+            .cloned()
+            .unwrap_or_else(|| vec![operator.clone()]);
+        let mut joined: Vec<usize> = merged
+            .iter()
+            .enumerate()
+            .filter(|(_, (known, _))| known.iter().any(|k| ids.contains(k)))
+            .map(|(i, _)| i)
+            .collect();
+        let mut entry = (ids, vec![hash.as_str()]);
+        while let Some(i) = joined.pop() {
+            let (known, hashes) = merged.remove(i);
+            entry.0.extend(known);
+            entry.1.extend(hashes);
+        }
+        merged.push(entry);
+    }
+    merged
+        .into_iter()
+        .filter_map(|(_, hashes)| {
+            let first = *hashes.first()?;
+            hashes
+                .iter()
+                .all(|h| *h == first)
+                .then(|| first.to_string())
         })
         .collect()
 }
@@ -835,6 +911,7 @@ mod tests {
             source,
             "alice",
             &hashes(&[("bob", "aa"), ("carol", "aa"), ("alice", "ff")]),
+            &HashMap::new(),
         );
         assert_eq!(rows.len(), 3);
         for row in &rows {
@@ -851,11 +928,21 @@ mod tests {
     #[test]
     fn two_way_agreement_is_recorded_but_two_way_disagreement_faults_nobody() {
         let source = Uuid::new_v4();
-        let agree = verdicts(source, "alice", &hashes(&[("alice", "aa"), ("bob", "aa")]));
+        let agree = verdicts(
+            source,
+            "alice",
+            &hashes(&[("alice", "aa"), ("bob", "aa")]),
+            &HashMap::new(),
+        );
         assert_eq!(agree.len(), 2);
         assert!(agree.iter().all(|row| row.agreed == Some(true)));
 
-        let split = verdicts(source, "alice", &hashes(&[("alice", "aa"), ("bob", "ff")]));
+        let split = verdicts(
+            source,
+            "alice",
+            &hashes(&[("alice", "aa"), ("bob", "ff")]),
+            &HashMap::new(),
+        );
         assert_eq!(split.len(), 1, "a 1-v-1 has no majority to trust");
         assert_eq!(split[0].agreed, None);
         assert_eq!(split[0].operator_pubkey_b58, "alice");
@@ -873,6 +960,7 @@ mod tests {
                 ("carol", "ff"),
                 ("dave", "ff"),
             ]),
+            &HashMap::new(),
         );
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].agreed, None);
@@ -880,10 +968,76 @@ mod tests {
 
     #[test]
     fn a_lone_receipt_is_insufficient() {
-        let rows = verdicts(Uuid::new_v4(), "alice", &hashes(&[("alice", "aa")]));
+        let rows = verdicts(
+            Uuid::new_v4(),
+            "alice",
+            &hashes(&[("alice", "aa")]),
+            &HashMap::new(),
+        );
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].agreed, None);
         assert!(rows[0].detail.contains("only 1"), "got: {}", rows[0].detail);
+    }
+
+    #[test]
+    fn mirrors_staked_by_one_wallet_vote_once_and_cannot_outvote_the_source() {
+        let source = Uuid::new_v4();
+        let parties: HashMap<String, Vec<String>> = [
+            ("alice", vec!["alice".to_string(), "owner:honest".into()]),
+            ("bob", vec!["bob".to_string(), "owner:sybil".into()]),
+            ("carol", vec!["carol".to_string(), "owner:sybil".into()]),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        let rows = verdicts(
+            source,
+            "alice",
+            &hashes(&[("alice", "aa"), ("bob", "ff"), ("carol", "ff")]),
+            &parties,
+        );
+        assert_eq!(rows.len(), 1, "one party against one is no majority");
+        assert_eq!(rows[0].agreed, None);
+        assert!(
+            !rows.iter().any(|r| r.agreed == Some(false)),
+            "nobody is faulted on a sybil's say-so"
+        );
+    }
+
+    #[test]
+    fn one_operator_counted_twice_is_one_vote() {
+        let rows = verdicts(
+            Uuid::new_v4(),
+            "alice",
+            &hashes(&[("alice", "aa"), ("bob", "ff"), ("bob", "ff")]),
+            &HashMap::new(),
+        );
+        assert_eq!(rows[0].agreed, None, "bob's two receipts are one voice");
+    }
+
+    #[test]
+    fn a_party_that_disagrees_with_itself_casts_nothing() {
+        let parties: HashMap<String, Vec<String>> = [
+            ("bob", vec!["bob".to_string(), "owner:x".into()]),
+            ("carol", vec!["carol".to_string(), "owner:x".into()]),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        let votes = party_votes(
+            &hashes(&[
+                ("alice", "aa"),
+                ("bob", "aa"),
+                ("carol", "ff"),
+                ("dave", "aa"),
+            ]),
+            &parties,
+        );
+        assert_eq!(
+            votes.len(),
+            2,
+            "alice and dave vote; the split bob/carol party does not"
+        );
     }
 
     fn gen_input(temperature: Option<f64>, seed: Option<i64>) -> Vec<Content> {
@@ -1061,6 +1215,7 @@ mod tests {
             lease_access: None,
             check_jobs: Vec::new(),
             checks_task: None,
+            hidden_checks: None,
         };
         (job_id, record)
     }

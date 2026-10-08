@@ -2476,6 +2476,8 @@ async fn status_names_the_refund_reasons_behind_the_faults_count() {
             micro_usdc: 1_000,
         },
         tee_capable: false,
+        kind_prices: Vec::new(),
+        kind_models: Vec::new(),
     };
     let session = http
         .post(format!("{url}/federation/operators/register"))

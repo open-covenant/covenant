@@ -47458,6 +47458,8 @@ required = {caps:?}
                 micro_usdc: 10_000,
             },
             tee_capable: false,
+            kind_prices: Vec::new(),
+            kind_models: Vec::new(),
         };
         let coordinator_client = Arc::new(HttpCoordinatorClient::with_config(
             base_url.clone(),
@@ -47881,6 +47883,8 @@ required = {caps:?}
                 micro_usdc: 10_000,
             },
             tee_capable: false,
+            kind_prices: Vec::new(),
+            kind_models: Vec::new(),
         };
         let coordinator_client = Arc::new(HttpCoordinatorClient::with_config(
             base_url.clone(),
@@ -48123,6 +48127,8 @@ required = {caps:?}
                 micro_usdc: 10_000,
             },
             tee_capable: false,
+            kind_prices: Vec::new(),
+            kind_models: Vec::new(),
         };
         let coordinator_client = Arc::new(HttpCoordinatorClient::with_config(
             base_url.clone(),
@@ -48465,6 +48471,8 @@ required = {caps:?}
                 micro_usdc: 10_000,
             },
             tee_capable: false,
+            kind_prices: Vec::new(),
+            kind_models: Vec::new(),
         };
         HttpCoordinatorClient::with_config(base_url.clone(), std::time::Duration::from_secs(5), 2)
             .register(
@@ -48762,6 +48770,8 @@ required = {caps:?}
                 micro_usdc: 10_000,
             },
             tee_capable: false,
+            kind_prices: Vec::new(),
+            kind_models: Vec::new(),
         };
         let coordinator_client = Arc::new(HttpCoordinatorClient::with_config(
             base_url.clone(),
@@ -49017,6 +49027,8 @@ required = {caps:?}
                 micro_usdc: 10_000,
             },
             tee_capable: false,
+            kind_prices: Vec::new(),
+            kind_models: Vec::new(),
         };
         let coordinator_client = Arc::new(HttpCoordinatorClient::with_config(
             base_url.clone(),
@@ -49287,6 +49299,8 @@ required = {caps:?}
                 micro_usdc: 10_000,
             },
             tee_capable: false,
+            kind_prices: Vec::new(),
+            kind_models: Vec::new(),
         };
         let coordinator_client = Arc::new(HttpCoordinatorClient::with_config(
             url1.clone(),
@@ -49915,6 +49929,8 @@ required = {caps:?}
                 micro_usdc: 10_000,
             },
             tee_capable: false,
+            kind_prices: Vec::new(),
+            kind_models: Vec::new(),
         };
         let coordinator_client = Arc::new(HttpCoordinatorClient::with_config(
             url1.clone(),
@@ -50497,6 +50513,8 @@ required = {caps:?}
                 micro_usdc: 10_000,
             },
             tee_capable: false,
+            kind_prices: Vec::new(),
+            kind_models: Vec::new(),
         };
         let coordinator_client = Arc::new(HttpCoordinatorClient::with_config(
             base_url.clone(),
@@ -50758,6 +50776,8 @@ required = {caps:?}
                 micro_usdc: 10_000,
             },
             tee_capable: false,
+            kind_prices: Vec::new(),
+            kind_models: Vec::new(),
         };
         let coordinator_client = Arc::new(HttpCoordinatorClient::with_config(
             base_url.clone(),

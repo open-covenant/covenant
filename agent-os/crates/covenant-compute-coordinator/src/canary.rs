@@ -350,13 +350,13 @@ impl CanaryProber {
             {
                 continue;
             }
-            let ask = record.profile.price.micro_usdc;
-            if ask > self.config.max_price_micro_usdc {
-                continue;
-            }
             let Some(plan) = probe_plan(&record.profile) else {
                 continue;
             };
+            let ask = record.profile.ask_for(plan.0).micro_usdc;
+            if ask > self.config.max_price_micro_usdc {
+                continue;
+            }
             plans.insert(key.clone(), (plan.0, plan.1, ask));
             let last = self.last_probed.lock().get(&key).copied().unwrap_or(0);
             candidates.push((key, last));
@@ -477,6 +477,7 @@ impl CanaryProber {
                 lease_access: None,
                 check_jobs: Vec::new(),
                 checks_task: None,
+                hidden_checks: None,
             },
         ) {
             let _ = self
@@ -680,6 +681,7 @@ mod tests {
             lease_access: None,
             check_jobs: Vec::new(),
             checks_task: None,
+            hidden_checks: None,
         }
     }
 
@@ -773,6 +775,8 @@ mod tests {
                 micro_usdc: 100,
             },
             tee_capable: false,
+            kind_prices: Vec::new(),
+            kind_models: Vec::new(),
         };
         assert_eq!(
             probe_plan(&profile),

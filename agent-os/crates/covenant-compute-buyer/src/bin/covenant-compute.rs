@@ -23,21 +23,21 @@ use std::time::Duration;
 use anyhow::Context;
 use base64::Engine as _;
 use covenant_compute_buyer::{
-    cancel_job, capacity, cheapest_matching_ask, claim_deposit, close_lease, dispatch_and_verify,
-    dispatch_signed, dispatch_streaming, dispute_job, fetch_check_verdict, fetch_job_output,
-    funds_with_deposit_info, http_client, lease_view, list_verified_jobs, list_withdrawals,
-    preview_value, sign_envelope, submit_streaming, vault_delete, vault_fetch, vault_list,
-    vault_store, verify_payout, withdraw, BuyerConfig, DispatchOutcome, JobRequest, PriceQuote,
-    PurchaseBook, PurchaseEntry, VaultKeyring,
+    apply_patch, cancel_job, capacity, cheapest_matching_ask, claim_deposit, close_lease,
+    describe_verdict, dispatch_and_verify, dispatch_signed, dispatch_streaming, dispute_job,
+    fetch_job_output, funds_with_deposit_info, hire_agent, http_client, lease_view,
+    list_verified_jobs, list_withdrawals, prepare_agent_task, preview_value, sign_envelope,
+    submit_streaming, vault_delete, vault_fetch, vault_list, vault_store, verify_payout, withdraw,
+    AgentArgs, AgentOutcome, BuyerConfig, DispatchOutcome, JobRequest, PriceQuote, PurchaseBook,
+    PurchaseEntry, VaultKeyring, DEFAULT_AGENT_DEADLINE_MS,
 };
 use covenant_compute_protocol::{
-    agent_task_input, chat_input, generation_input, lease_input, parse_agent_task_output,
-    parse_assistant_output, parse_embedding_output, parse_speech_output,
-    parse_transcription_output, speech_input, tools_input, transcription_input, AcceptanceSpec,
-    AgentCheckVerdict, AgentRuntime, AgentTaskSpec, AssistantReply, ChatMessage, FinishReason,
-    GenerationParams, JobKind, LeaseTerms, LeaseView, NamedFunction, NamedToolChoice, PriceUnit,
-    RepoSource, ResponseFormat, SpeechInput, SpeechResult, ToolChoice, ToolChoiceMode,
-    ToolDefinition, ToolKind, TranscriptionInput, VaultKey, LEASE_DEADLINE_SLACK_MS,
+    chat_input, generation_input, lease_input, parse_assistant_output, parse_embedding_output,
+    parse_speech_output, parse_transcription_output, speech_input, tools_input,
+    transcription_input, AgentRuntime, AssistantReply, ChatMessage, FinishReason, GenerationParams,
+    JobKind, LeaseTerms, LeaseView, NamedFunction, NamedToolChoice, PriceUnit, ResponseFormat,
+    SpeechInput, SpeechResult, ToolChoice, ToolChoiceMode, ToolDefinition, ToolKind,
+    TranscriptionInput, VaultKey, LEASE_DEADLINE_SLACK_MS,
 };
 use covenant_identity::LocalIdentity;
 use covenant_mcp::Content;
@@ -127,6 +127,10 @@ Agent flags (agent):
   --check-image <ref>   the container image the commands run in (default python:3.12-slim)
   --check-timeout <s>   how long the commands may take, all together (default 300)
   --protect <path>      a path the work may not change (tests/, Cargo.lock); repeatable
+  --apply               apply an accepted patch to the local repository's working tree
+  --hidden <path>       a test file the builder never sees, read from the repository's working
+                        tree (it must not be committed) and added only for the check; repeatable
+  --hidden-accept <cmd> a command run after the visible ones, also kept from the builder
   --model <id>          the model the agent should drive; the operator's default otherwise
   --out <path>          where to write the accepted patch (default agent-<job-id>.patch)
   --price, --deadline-ms   as for a buy; the deadline defaults to 30 minutes
@@ -1240,44 +1244,27 @@ async fn preview_buy(
 /// costs nothing. On success the patch is written to a file; either way
 /// the check's verdict is shown.
 async fn cmd_agent(ctx: &Ctx, args: &mut Vec<String>, json_out: bool) -> anyhow::Result<()> {
-    let repo = take_flag_value(args, "--repo").context("--repo is required")?;
-    let commit = take_flag_value(args, "--commit");
-    let commands = take_flag_values(args, "--accept");
-    anyhow::ensure!(
-        !commands.is_empty(),
-        "name at least one --accept command: work with nothing to pass is accepted unseen"
-    );
-    let image = take_flag_value(args, "--check-image").unwrap_or_else(|| "python:3.12-slim".into());
-    let timeout_secs: u32 =
-        take_number(args, "--check-timeout", "a whole number of seconds")?.unwrap_or(300);
-    let protected_paths = take_flag_values(args, "--protect");
-    let model = take_flag_value(args, "--model");
-    let out = take_flag_value(args, "--out");
-    let price = take_price(args)?;
-    let deadline_ms: u64 =
-        take_number(args, "--deadline-ms", "a whole number of milliseconds")?.unwrap_or(1_800_000);
-    let task = resolve_text(rest_joined(args, "task")?)?;
-
-    let repo = if repo.starts_with("https://") {
-        RepoSource::Git {
-            url: repo,
-            commit: commit.context("--commit is required with a repository URL")?,
-        }
-    } else {
-        local_bundle(Path::new(&repo), commit.as_deref())?
+    let agent_args = AgentArgs {
+        repo: take_flag_value(args, "--repo").context("--repo is required")?,
+        commit: take_flag_value(args, "--commit"),
+        accept: take_flag_values(args, "--accept"),
+        check_image: take_flag_value(args, "--check-image"),
+        check_timeout_secs: take_number(args, "--check-timeout", "a whole number of seconds")?,
+        protect: take_flag_values(args, "--protect"),
+        hidden: take_flag_values(args, "--hidden"),
+        hidden_accept: take_flag_values(args, "--hidden-accept"),
+        model: take_flag_value(args, "--model"),
+        price_micro_usdc: take_price(args)?,
+        deadline_ms: take_number(args, "--deadline-ms", "a whole number of milliseconds")?,
+        apply: take_flag(args, "--apply"),
+        task: String::new(),
     };
-    let input = agent_task_input(AgentTaskSpec {
-        task,
-        repo,
-        acceptance: AcceptanceSpec {
-            image,
-            commands,
-            timeout_secs,
-            protected_paths,
-        },
-        runtime: AgentRuntime::ClaudeCode,
-        model,
-    })?;
+    let out = take_flag_value(args, "--out");
+    let agent_args = AgentArgs {
+        task: resolve_text(rest_joined(args, "task")?)?,
+        ..agent_args
+    };
+    let task = prepare_agent_task(&agent_args)?;
     let runtime = AgentRuntime::ClaudeCode.label().to_string();
     let price = resolve_price(
         ctx,
@@ -1286,19 +1273,10 @@ async fn cmd_agent(ctx: &Ctx, args: &mut Vec<String>, json_out: bool) -> anyhow:
         None,
         None,
         None,
-        price,
+        agent_args.price_micro_usdc,
     )
     .await?;
-    let request = JobRequest {
-        kind: JobKind::AgentTask,
-        input: vec![input],
-        model: Some(runtime),
-        gpu_class: None,
-        min_vram_gb: None,
-        min_reputation_bps: None,
-        price_micro_usdc: price,
-        deadline_ms,
-    };
+    let deadline_ms = agent_args.deadline_ms.unwrap_or(DEFAULT_AGENT_DEADLINE_MS);
     if !json_out {
         eprintln!(
             "posted for {price} micro-USDC; an agent is working on it and another operator will \
@@ -1306,17 +1284,23 @@ async fn cmd_agent(ctx: &Ctx, args: &mut Vec<String>, json_out: bool) -> anyhow:
             deadline_ms / 60_000
         );
     }
-    let outcome = dispatch_and_verify(&ctx.http, &ctx.config, &ctx.identity, request).await;
-    let outcome = match outcome {
-        Ok(outcome) => outcome,
-        Err(covenant_compute_buyer::BuyerError::NotServed {
+    let outcome = hire_agent(
+        &ctx.http,
+        &ctx.config,
+        &ctx.identity,
+        task,
+        price,
+        deadline_ms,
+    )
+    .await
+    .map_err(with_funding_hint)?;
+    match outcome {
+        AgentOutcome::NotPaid {
             job_id,
             status,
             reason,
-            ..
-        }) => {
-            let verdict =
-                fetch_check_verdict(&ctx.http, &ctx.config, &ctx.identity, job_id).await?;
+            verdict,
+        } => {
             if json_out {
                 let doc = serde_json::json!({
                     "job_id": job_id,
@@ -1331,136 +1315,62 @@ async fn cmd_agent(ctx: &Ctx, args: &mut Vec<String>, json_out: bool) -> anyhow:
                     reason.as_deref().unwrap_or("no reason given")
                 );
                 if let Some(verdict) = &verdict {
-                    print_verdict(verdict);
+                    println!("{}", describe_verdict(verdict));
                 }
             }
-            return Ok(());
         }
-        Err(e) => return Err(with_funding_hint(e)),
-    };
-
-    let job_id = outcome.receipt.receipt.job_id;
-    let built = parse_agent_task_output(&outcome.output)?;
-    let patch = base64::engine::general_purpose::STANDARD.decode(&built.patch_b64)?;
-    let path = PathBuf::from(out.unwrap_or_else(|| format!("agent-{job_id}.patch")));
-    std::fs::write(&path, &patch).with_context(|| format!("write {}", path.display()))?;
-    let verdict = fetch_check_verdict(&ctx.http, &ctx.config, &ctx.identity, job_id).await?;
-    if json_out {
-        let doc = serde_json::json!({
-            "job_id": job_id,
-            "patch_path": path,
-            "patch_sha256": built.patch_sha256,
-            "files_changed": built.files_changed,
-            "summary": built.summary,
-            "model": built.model,
-            "price_micro_usdc": outcome.envelope.payload.price_micro_usdc,
-            "check": verdict,
-            "payout": outcome.payout,
-        });
-        println!("{}", serde_json::to_string_pretty(&doc)?);
-        return Ok(());
-    }
-    println!(
-        "accepted: {} file(s) changed, patch written to {} (apply with `git apply {}`)",
-        built.files_changed,
-        path.display(),
-        path.display()
-    );
-    if !built.summary.is_empty() {
-        println!();
-        println!("{}", built.summary);
-    }
-    if let Some(verdict) = &verdict {
-        println!();
-        print_verdict(verdict);
-    }
-    println!();
-    print_receipt_block(&outcome);
-    Ok(())
-}
-
-/// Bundles a local repository's history up to HEAD, so the agent works
-/// from the exact commit without the repository needing to be public.
-fn local_bundle(path: &Path, commit: Option<&str>) -> anyhow::Result<RepoSource> {
-    let git = |args: &[&str]| -> anyhow::Result<Vec<u8>> {
-        let out = std::process::Command::new("git")
-            .arg("-C")
-            .arg(path)
-            .args(args)
-            .output()
-            .context("run git")?;
-        anyhow::ensure!(
-            out.status.success(),
-            "git {} failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-        Ok(out.stdout)
-    };
-    let head = String::from_utf8(git(&["rev-parse", "HEAD"])?)?
-        .trim()
-        .to_string();
-    let commit = match commit {
-        Some(c) => {
-            let full =
-                String::from_utf8(git(&["rev-parse", "--verify", &format!("{c}^{{commit}}")])?)?
-                    .trim()
-                    .to_string();
-            git(&["merge-base", "--is-ancestor", &full, "HEAD"])
-                .context("--commit must be HEAD or one of its ancestors")?;
-            full
-        }
-        None => head,
-    };
-    let bytes = git(&["bundle", "create", "-q", "-", "HEAD"])?;
-    Ok(RepoSource::Bundle {
-        bundle_b64: base64::engine::general_purpose::STANDARD.encode(bytes),
-        commit,
-    })
-}
-
-fn print_verdict(verdict: &AgentCheckVerdict) {
-    if !verdict.applied {
-        println!("check: the patch did not apply to the commit");
-        return;
-    }
-    if !verdict.protected_violations.is_empty() {
-        println!(
-            "check: the patch changed protected paths: {}",
-            verdict.protected_violations.join(", ")
-        );
-        return;
-    }
-    println!(
-        "check: {}",
-        if verdict.passed { "passed" } else { "failed" }
-    );
-    for outcome in &verdict.commands {
-        let result = if outcome.timed_out {
-            "timed out".to_string()
-        } else {
-            format!("exit {}", outcome.exit_code)
-        };
-        println!(
-            "  $ {}  ({result}, {:.1}s)",
-            outcome.command,
-            outcome.duration_ms as f64 / 1000.0
-        );
-        if !outcome.passed() && !outcome.output_tail.trim().is_empty() {
-            for line in outcome
-                .output_tail
-                .trim_end()
-                .lines()
-                .rev()
-                .take(20)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-            {
-                println!("    {line}");
+        AgentOutcome::Accepted {
+            outcome,
+            built,
+            patch,
+            verdict,
+        } => {
+            let job_id = outcome.receipt.receipt.job_id;
+            let path = PathBuf::from(out.unwrap_or_else(|| format!("agent-{job_id}.patch")));
+            std::fs::write(&path, &patch).with_context(|| format!("write {}", path.display()))?;
+            let applied = agent_args.apply && !agent_args.repo.starts_with("https://");
+            if applied {
+                apply_patch(Path::new(&agent_args.repo), &patch)?;
             }
+            if json_out {
+                let doc = serde_json::json!({
+                    "job_id": job_id,
+                    "patch_path": path,
+                    "applied": applied,
+                    "patch_sha256": built.patch_sha256,
+                    "files_changed": built.files_changed,
+                    "summary": built.summary,
+                    "model": built.model,
+                    "price_micro_usdc": outcome.envelope.payload.price_micro_usdc,
+                    "check": verdict,
+                    "payout": outcome.payout,
+                });
+                println!("{}", serde_json::to_string_pretty(&doc)?);
+                return Ok(());
+            }
+            println!(
+                "accepted: {} file(s) changed, patch written to {}{}",
+                built.files_changed,
+                path.display(),
+                if applied {
+                    " and applied to the working tree".to_string()
+                } else {
+                    format!(" (apply with `git apply {}`)", path.display())
+                }
+            );
+            if !built.summary.is_empty() {
+                println!();
+                println!("{}", built.summary);
+            }
+            if let Some(verdict) = &verdict {
+                println!();
+                println!("{}", describe_verdict(verdict));
+            }
+            println!();
+            print_receipt_block(&outcome);
         }
     }
+    Ok(())
 }
 
 fn with_funding_hint(e: covenant_compute_buyer::BuyerError) -> anyhow::Error {

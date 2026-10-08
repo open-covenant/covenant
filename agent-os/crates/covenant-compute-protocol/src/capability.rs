@@ -148,6 +148,30 @@ pub struct CapabilityProfile {
     pub job_kinds: Vec<JobKind>,
     pub price: PriceAsk,
     pub tee_capable: bool,
+    /// Asks that differ by kind. A node that builds agent work and checks
+    /// other operators' work prices the two differently; a kind absent here
+    /// uses `price`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kind_prices: Vec<KindAsk>,
+    /// Models that differ by kind: an agent node builds with a harness and
+    /// checks in container images, and a build must never route by an image
+    /// name. A kind absent here serves `models_served`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kind_models: Vec<KindModels>,
+}
+
+/// One kind's ask, where it differs from the profile's own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KindAsk {
+    pub kind: JobKind,
+    pub price: PriceAsk,
+}
+
+/// One kind's models, where they differ from the profile's own.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KindModels {
+    pub kind: JobKind,
+    pub models: Vec<String>,
 }
 
 /// What a buyer's job envelope asks for. The hardware/model fields are
@@ -176,6 +200,24 @@ pub struct CapabilityRequirement {
 }
 
 impl CapabilityProfile {
+    /// The ask this profile prices `kind` at.
+    pub fn ask_for(&self, kind: JobKind) -> PriceAsk {
+        self.kind_prices
+            .iter()
+            .find(|k| k.kind == kind)
+            .map(|k| k.price)
+            .unwrap_or(self.price)
+    }
+
+    /// The models this profile serves `kind` with.
+    pub fn models_for(&self, kind: JobKind) -> &[String] {
+        self.kind_models
+            .iter()
+            .find(|k| k.kind == kind)
+            .map(|k| k.models.as_slice())
+            .unwrap_or(&self.models_served)
+    }
+
     /// Fail-closed capability match: every constraint the requirement
     /// states must hold against this profile. An absent constraint
     /// (`None`) is satisfied by any profile.
@@ -190,7 +232,7 @@ impl CapabilityProfile {
         }
         if let Some(model_id) = &req.model_id {
             if !self
-                .models_served
+                .models_for(req.kind)
                 .iter()
                 .any(|m| m == "any" || canonical_model(m) == canonical_model(model_id))
             {
@@ -260,6 +302,34 @@ impl CapabilityProfile {
         for model in &self.models_served {
             validate_label("a served model name", model)?;
         }
+        if self.kind_prices.len() > MAX_JOB_KINDS || self.kind_models.len() > MAX_JOB_KINDS {
+            return Err(ProtocolError::Invalid(format!(
+                "a profile declares more than {MAX_JOB_KINDS} per-kind asks or model sets"
+            )));
+        }
+        for kind in self
+            .kind_prices
+            .iter()
+            .map(|k| k.kind)
+            .chain(self.kind_models.iter().map(|k| k.kind))
+        {
+            if !self.job_kinds.contains(&kind) {
+                return Err(ProtocolError::Invalid(format!(
+                    "a per-kind ask or model set names {kind:?}, a kind the profile does not serve"
+                )));
+            }
+        }
+        for set in &self.kind_models {
+            if set.models.is_empty() || set.models.len() > MAX_MODELS_SERVED {
+                return Err(ProtocolError::Invalid(format!(
+                    "the model set for {:?} must name 1..={MAX_MODELS_SERVED} models",
+                    set.kind
+                )));
+            }
+            for model in &set.models {
+                validate_label("a served model name", model)?;
+            }
+        }
         match &self.hardware {
             HardwareClass::ConsumerGpu { model } | HardwareClass::DatacenterGpu { model } => {
                 validate_label("the hardware model", model)?;
@@ -290,17 +360,16 @@ impl CapabilityProfile {
     /// node's boot, the way the payout-address invariant is gated on both
     /// sides.
     pub fn validate_lease_pricing(&self) -> Result<(), ProtocolError> {
-        if self.job_kinds.contains(&JobKind::LeaseSession)
-            && self.price.unit != PriceUnit::PerLeaseHour
-        {
+        let unit = self.ask_for(JobKind::LeaseSession).unit;
+        if self.job_kinds.contains(&JobKind::LeaseSession) && unit != PriceUnit::PerLeaseHour {
             return Err(ProtocolError::Invalid(format!(
                 "a lease-serving operator must price by {:?}, not {:?}: a lease settles by meter \
                  over the seconds it serves and only a per-hour ask floors that per-second rate, \
                  so a {:?} floor would clear a buyer's offer above the advertised rate yet meter \
                  a fraction of the window on an early close, underpaying the session",
                 PriceUnit::PerLeaseHour,
-                self.price.unit,
-                self.price.unit,
+                unit,
+                unit,
             )));
         }
         Ok(())
@@ -400,6 +469,8 @@ mod tests {
                 micro_usdc: 500_000,
             },
             tee_capable: false,
+            kind_prices: Vec::new(),
+            kind_models: Vec::new(),
         }
     }
 
@@ -481,6 +552,63 @@ mod tests {
         ] {
             assert!(json.contains(field), "missing {field} in {json}");
         }
+    }
+
+    #[test]
+    fn per_kind_asks_and_models_override_the_profile() {
+        let mut p = profile();
+        p.job_kinds = vec![JobKind::AgentTask, JobKind::AgentCheck];
+        p.models_served = vec!["claude-code".into(), "python:3.12-slim".into()];
+        p.kind_prices = vec![KindAsk {
+            kind: JobKind::AgentCheck,
+            price: PriceAsk {
+                unit: PriceUnit::PerJob,
+                micro_usdc: 5_000,
+            },
+        }];
+        p.kind_models = vec![
+            KindModels {
+                kind: JobKind::AgentTask,
+                models: vec!["claude-code".into()],
+            },
+            KindModels {
+                kind: JobKind::AgentCheck,
+                models: vec!["python:3.12-slim".into()],
+            },
+        ];
+        assert_eq!(p.ask_for(JobKind::AgentCheck).micro_usdc, 5_000);
+        assert_eq!(p.ask_for(JobKind::AgentTask), p.price);
+        let ask = |kind, model: &str| CapabilityRequirement {
+            gpu_class: None,
+            min_vram_gb: None,
+            model_id: Some(model.into()),
+            kind,
+            max_duration_secs: 60,
+            min_reputation_bps: None,
+        };
+        assert!(p.satisfies(&ask(JobKind::AgentTask, "claude-code")));
+        assert!(p.satisfies(&ask(JobKind::AgentCheck, "python:3.12-slim")));
+        assert!(
+            !p.satisfies(&ask(JobKind::AgentTask, "python:3.12-slim")),
+            "a build never routes by a check image"
+        );
+        assert!(p.validate_labels().is_ok());
+
+        let mut stray = p.clone();
+        stray.kind_prices[0].kind = JobKind::Embedding;
+        assert!(
+            stray.validate_labels().is_err(),
+            "an ask for a kind the node does not serve"
+        );
+        let mut empty = p.clone();
+        empty.kind_models[0].models.clear();
+        assert!(empty.validate_labels().is_err());
+    }
+
+    #[test]
+    fn a_profile_without_per_kind_fields_keeps_its_wire_bytes() {
+        let json = serde_json::to_string(&profile()).unwrap();
+        assert!(!json.contains("kind_prices") && !json.contains("kind_models"));
     }
 
     #[test]
@@ -637,6 +765,8 @@ mod tests {
                 micro_usdc: 1_000,
             },
             tee_capable: false,
+            kind_prices: Vec::new(),
+            kind_models: Vec::new(),
         };
         let demand = |class: &str, kind: JobKind| CapabilityRequirement {
             gpu_class: Some(class.into()),

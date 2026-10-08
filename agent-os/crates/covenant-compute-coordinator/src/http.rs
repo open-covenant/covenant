@@ -165,6 +165,7 @@ pub fn router(state: CoordinatorState) -> Router {
         )
         .route("/federation/fees", get(fees))
         .route("/federation/capacity", get(capacity))
+        .route("/federation/jobs/:job_id/hidden", post(hidden_checks))
         .route("/federation/partners", get(partners))
         .route(
             "/federation/partners/:code/payouts",
@@ -350,6 +351,7 @@ async fn metrics(State(state): State<CoordinatorState>) -> impl IntoResponse {
         ("completed", stats.completed),
         ("failed", stats.failed),
         ("refunded", stats.refunded),
+        ("awaiting_check", stats.awaiting_check),
     ] {
         let _ = writeln!(out, "compute_jobs{{phase=\"{phase}\"}} {count}");
     }
@@ -1098,6 +1100,7 @@ async fn submit_job(
                 lease_access: None,
                 check_jobs: Vec::new(),
                 checks_task: None,
+                hidden_checks: None,
             },
         ) {
             tracing::error!(%job_id, error = %e, "failed to record refunded job");
@@ -1155,6 +1158,7 @@ async fn submit_job(
             lease_access: None,
             check_jobs: Vec::new(),
             checks_task: None,
+            hidden_checks: None,
         },
     ) {
         if let Err(refund_err) = state
@@ -2127,6 +2131,21 @@ impl JobPayoutView {
 /// envelope gets the read; the 404 for an unknown id stays ahead of
 /// auth because there is no record to verify against (and the sweep
 /// semantics depend on it).
+/// A buyer hands over the hidden checks its agent task committed to. The
+/// digest is the credential; see [`crate::agent::accept_hidden_checks`].
+async fn hidden_checks(
+    State(state): State<CoordinatorState>,
+    Path(job_id): Path<Uuid>,
+    Json(hidden): Json<covenant_compute_protocol::HiddenChecks>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    crate::agent::accept_hidden_checks(&state, job_id, hidden)
+        .await
+        .map_err(ApiError::BadRequest)?;
+    Ok(Json(
+        serde_json::json!({ "job_id": job_id, "accepted": true }),
+    ))
+}
+
 async fn job_status(
     State(state): State<CoordinatorState>,
     Path(job_id): Path<Uuid>,
@@ -4064,6 +4083,7 @@ mod tests {
             lease_access: None,
             check_jobs: Vec::new(),
             checks_task: None,
+            hidden_checks: None,
         };
         state.jobs().insert(job_id, record).unwrap();
         crate::onchain_meter::open_lease_onchain(&state, job_id).await;
@@ -4247,6 +4267,7 @@ mod tests {
             lease_access: None,
             check_jobs: Vec::new(),
             checks_task: None,
+            hidden_checks: None,
         };
         state.jobs().insert(job_id, record).unwrap();
 
@@ -4386,6 +4407,7 @@ mod tests {
             lease_access: None,
             check_jobs: Vec::new(),
             checks_task: None,
+            hidden_checks: None,
         };
         state.jobs().insert(job_id, record).unwrap();
 
@@ -4513,6 +4535,8 @@ mod tests {
                             micro_usdc: 360_000,
                         },
                         tee_capable: false,
+                        kind_prices: Vec::new(),
+                        kind_models: Vec::new(),
                     },
                     payout_address.clone(),
                     &operator,
@@ -4584,6 +4608,7 @@ mod tests {
             lease_access: None,
             check_jobs: Vec::new(),
             checks_task: None,
+            hidden_checks: None,
         };
         state.jobs().insert(job_id, record).unwrap();
         crate::onchain_meter::open_lease_onchain(&state, job_id).await;

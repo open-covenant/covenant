@@ -188,6 +188,8 @@ impl Rig {
                 micro_usdc: 10_000,
             },
             tee_capable: false,
+            kind_prices: Vec::new(),
+            kind_models: Vec::new(),
         };
         let client = Arc::new(HttpCoordinatorClient::with_config(
             url.clone(),
@@ -389,8 +391,9 @@ async fn the_stdio_binary_buys_replays_and_survives_restart_against_a_real_coord
         .await
         .unwrap();
     let tools = listed["result"]["tools"].as_array().unwrap().clone();
-    assert_eq!(tools.len(), 17, "the whole buyer surface is advertised");
+    assert_eq!(tools.len(), 18, "the whole buyer surface is advertised");
     assert!(tools.iter().any(|t| t["name"] == "compute.infer"));
+    assert!(tools.iter().any(|t| t["name"] == "compute.agent"));
     assert!(tools.iter().any(|t| t["name"] == "compute.embed"));
     assert!(tools.iter().any(|t| t["name"] == "compute.transcribe"));
     assert!(tools.iter().any(|t| t["name"] == "compute.speak"));
@@ -1125,6 +1128,8 @@ async fn a_crashed_keyed_purchase_is_cancelled_and_its_key_freed_on_restart() {
             micro_usdc: 500,
         },
         tee_capable: false,
+        kind_prices: Vec::new(),
+        kind_models: Vec::new(),
     };
     HttpCoordinatorClient::with_config(url.clone(), Duration::from_secs(5), 2)
         .register(RegisterRequest::sign(profile, payout_addr(8), &idle_operator).unwrap())

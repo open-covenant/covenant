@@ -538,6 +538,8 @@ mod tests {
                 micro_usdc: ask_micro_usdc,
             },
             tee_capable: false,
+            kind_prices: Vec::new(),
+            kind_models: Vec::new(),
         }
     }
 
@@ -716,6 +718,7 @@ mod tests {
             lease_access: None,
             check_jobs: Vec::new(),
             checks_task: None,
+            hidden_checks: None,
         }
     }
 
@@ -1689,6 +1692,8 @@ mod tests {
                 micro_usdc: 100,
             },
             tee_capable: false,
+            kind_prices: Vec::new(),
+            kind_models: Vec::new(),
         };
         let req = RegisterRequest::sign(profile, payout_for(display), &identity).unwrap();
         state

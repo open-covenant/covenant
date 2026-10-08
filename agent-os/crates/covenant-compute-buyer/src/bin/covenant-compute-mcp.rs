@@ -33,21 +33,23 @@ use std::time::Duration;
 
 use anyhow::Context;
 use covenant_compute_buyer::{
-    balance_tool_spec, cancel_job, cancel_tool_spec, capacity, capacity_tool_spec,
-    cheapest_matching_ask, claim_deposit, deposit_tool_spec, dispatch_and_verify, dispatch_signed,
-    dispute_job, dispute_tool_spec, embed_tool_spec, fetch_job_output, funds_with_deposit_info,
-    infer_tool_spec, list_verified_jobs, list_withdrawals, output_tool_spec, preview_value,
-    quote_price, receipts_tool_spec, run_tool_spec, save_speech_clip, sign_envelope,
-    speak_tool_spec, stream_and_verify, stream_poll_tool_spec, stream_start_tool_spec,
-    submit_streaming, transcribe_tool_spec, verify_payout, verify_tool_spec, withdraw,
-    withdraw_tool_spec, withdrawals_tool_spec, BuyerConfig, BuyerError, CancelArgs, DisputeArgs,
-    EmbedArgs, InferArgs, JobOutputView, JobRequest, OutputArgs, PurchaseBook, PurchaseEntry,
-    RunArgs, SpeakArgs, SpendCaps, StreamJobs, StreamPollArgs, TranscribeArgs, VerifyArgs,
-    WithdrawArgs, BALANCE_TOOL, CANCEL_TOOL, CAPACITY_TOOL, DEPOSIT_TOOL, DISPUTE_TOOL, EMBED_TOOL,
-    INFER_TOOL, OUTPUT_TOOL, RECEIPTS_TOOL, RUN_TOOL, SPEAK_TOOL, STREAM_POLL_TOOL,
-    STREAM_START_TOOL, TRANSCRIBE_TOOL, VERIFY_TOOL, WITHDRAWALS_TOOL, WITHDRAW_TOOL,
+    agent_tool_spec, apply_patch, balance_tool_spec, cancel_job, cancel_tool_spec, capacity,
+    capacity_tool_spec, cheapest_matching_ask, claim_deposit, deposit_tool_spec, describe_verdict,
+    dispatch_and_verify, dispatch_signed, dispute_job, dispute_tool_spec, embed_tool_spec,
+    fetch_job_output, funds_with_deposit_info, hire_agent, infer_tool_spec, list_verified_jobs,
+    list_withdrawals, output_tool_spec, prepare_agent_task, preview_value, quote_price,
+    receipts_tool_spec, run_tool_spec, save_speech_clip, sign_envelope, speak_tool_spec,
+    stream_and_verify, stream_poll_tool_spec, stream_start_tool_spec, submit_streaming,
+    transcribe_tool_spec, verify_payout, verify_tool_spec, withdraw, withdraw_tool_spec,
+    withdrawals_tool_spec, AgentArgs, AgentOutcome, BuyerConfig, BuyerError, CancelArgs,
+    DisputeArgs, EmbedArgs, InferArgs, JobOutputView, JobRequest, OutputArgs, PurchaseBook,
+    PurchaseEntry, RunArgs, SpeakArgs, SpendCaps, StreamJobs, StreamPollArgs, TranscribeArgs,
+    VerifyArgs, WithdrawArgs, AGENT_TOOL, BALANCE_TOOL, CANCEL_TOOL, CAPACITY_TOOL,
+    DEFAULT_AGENT_DEADLINE_MS, DEPOSIT_TOOL, DISPUTE_TOOL, EMBED_TOOL, INFER_TOOL, OUTPUT_TOOL,
+    RECEIPTS_TOOL, RUN_TOOL, SPEAK_TOOL, STREAM_POLL_TOOL, STREAM_START_TOOL, TRANSCRIBE_TOOL,
+    VERIFY_TOOL, WITHDRAWALS_TOOL, WITHDRAW_TOOL,
 };
-use covenant_compute_protocol::{parse_speech_output, JobKind};
+use covenant_compute_protocol::{parse_speech_output, AgentRuntime, JobKind};
 use covenant_identity::LocalIdentity;
 use covenant_mcp::Content;
 use serde::Deserialize;
@@ -220,6 +222,130 @@ async fn call_infer(state: &ServerState, id: Value, arguments: Value) -> Value {
 
 /// `compute.run`: one command bought as a batch job, behind the same
 /// per-call and session spend caps as `compute.infer`.
+/// Most of a patch an agent's context should carry inline; a larger one is
+/// named by its file only.
+const INLINE_PATCH_BYTES: usize = 60 * 1024;
+
+/// Hires a coding agent and answers with the checked result. A patch that
+/// passed rides back as a diff the calling agent can read and apply (and is
+/// saved beside the server's other outputs); one that did not comes back as
+/// the check's verdict, with nothing charged. The same price ceiling and
+/// session cap as every other purchase apply.
+async fn call_agent(state: &ServerState, id: Value, arguments: Value) -> Value {
+    let args: AgentArgs = match serde_json::from_value(arguments) {
+        Ok(args) => args,
+        Err(e) => return error(id, -32602, format!("invalid arguments: {e}")),
+    };
+    let task = match prepare_agent_task(&args) {
+        Ok(task) => task,
+        Err(e) => return tool_error(id, e.to_string()),
+    };
+    let cap = state.caps.max_price_micro_usdc();
+    let price = match args.price_micro_usdc {
+        Some(price) => price,
+        None => cheapest_matching_ask(
+            &state.http,
+            &state.buyer,
+            JobKind::AgentTask,
+            Some(AgentRuntime::ClaudeCode.label()),
+            None,
+            None,
+            None,
+        )
+        .await
+        .ok()
+        .flatten()
+        .map(|floor| floor.min(cap))
+        .unwrap_or(cap),
+    };
+    if let Some(refusal) = state.caps.per_call_refusal(price) {
+        return tool_error(id, refusal);
+    }
+    if let Some(refusal) = session_cap_refusal(state, price) {
+        return tool_error(id, refusal);
+    }
+    let deadline_ms = args.deadline_ms.unwrap_or(DEFAULT_AGENT_DEADLINE_MS);
+    let outcome = match hire_agent(
+        &state.http,
+        &state.buyer,
+        &state.identity,
+        task,
+        price,
+        deadline_ms,
+    )
+    .await
+    {
+        Ok(outcome) => outcome,
+        Err(e) => return dispatch_failed(id, e),
+    };
+    let text = match outcome {
+        AgentOutcome::NotPaid {
+            job_id,
+            status,
+            reason,
+            verdict,
+        } => {
+            let mut text = format!(
+                "Not paid: job {job_id} ended {status} ({}). Nothing was charged.",
+                reason.as_deref().unwrap_or("no reason given")
+            );
+            if let Some(verdict) = verdict {
+                text.push_str("\n\n");
+                text.push_str(&describe_verdict(&verdict));
+            }
+            text
+        }
+        AgentOutcome::Accepted {
+            outcome,
+            built,
+            patch,
+            verdict,
+        } => {
+            state
+                .caps
+                .record_spend(outcome.envelope.payload.price_micro_usdc);
+            let job_id = outcome.receipt.receipt.job_id;
+            let dir = state.clips_dir.with_file_name("agent-patches");
+            let path = dir.join(format!("{job_id}.patch"));
+            let saved = std::fs::create_dir_all(&dir)
+                .and_then(|()| std::fs::write(&path, &patch))
+                .is_ok();
+            let mut text = format!(
+                "Accepted: job {job_id} passed another operator's check and was paid {} \
+                 micro-USDC. {} file(s) changed.",
+                outcome.envelope.payload.price_micro_usdc, built.files_changed
+            );
+            if args.apply && !args.repo.starts_with("https://") {
+                match apply_patch(std::path::Path::new(&args.repo), &patch) {
+                    Ok(()) => text.push_str(" The patch is applied to the working tree."),
+                    Err(e) => text.push_str(&format!(" The patch was not applied: {e}.")),
+                }
+            }
+            if saved {
+                text.push_str(&format!(" Saved at {}.", path.display()));
+            }
+            if !built.summary.is_empty() {
+                text.push_str("\n\nThe agent's summary:\n");
+                text.push_str(&built.summary);
+            }
+            if let Some(verdict) = verdict {
+                text.push_str("\n\n");
+                text.push_str(&describe_verdict(&verdict));
+            }
+            if patch.len() <= INLINE_PATCH_BYTES {
+                text.push_str("\n\n```diff\n");
+                text.push_str(&String::from_utf8_lossy(&patch));
+                text.push_str("\n```");
+            }
+            text
+        }
+    };
+    response(
+        id,
+        json!({ "content": [{ "type": "text", "text": text }], "isError": false }),
+    )
+}
+
 async fn call_run(state: &ServerState, id: Value, arguments: Value) -> Value {
     let args: RunArgs = match serde_json::from_value(arguments) {
         Ok(args) => args,
@@ -1198,6 +1324,7 @@ async fn handle_line(state: &Arc<ServerState>, line: &str) -> Option<Value> {
                 cancel_tool_spec(),
                 verify_tool_spec(),
                 output_tool_spec(),
+                agent_tool_spec(state.caps.max_price_micro_usdc()),
             ] }),
         )),
         "tools/call" => {
@@ -1221,6 +1348,7 @@ async fn handle_line(state: &Arc<ServerState>, line: &str) -> Option<Value> {
                 CANCEL_TOOL => Some(call_cancel(state, id, arguments).await),
                 VERIFY_TOOL => Some(call_verify(state, id, arguments).await),
                 OUTPUT_TOOL => Some(call_output(state, id, arguments).await),
+                AGENT_TOOL => Some(call_agent(state, id, arguments).await),
                 _ => Some(error(id, -32602, format!("unknown tool: {name}"))),
             }
         }
@@ -1634,7 +1762,8 @@ mod tests {
                 DISPUTE_TOOL,
                 CANCEL_TOOL,
                 VERIFY_TOOL,
-                OUTPUT_TOOL
+                OUTPUT_TOOL,
+                AGENT_TOOL
             ]
         );
     }

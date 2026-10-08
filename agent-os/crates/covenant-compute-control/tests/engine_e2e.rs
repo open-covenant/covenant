@@ -183,6 +183,8 @@ async fn register_lease_node(url: &str, coordinator_pubkey: String, accepting: b
             micro_usdc: HOURLY_ASK_MICRO_USDC,
         },
         tee_capable: false,
+        kind_prices: Vec::new(),
+        kind_models: Vec::new(),
     };
     let client = Arc::new(HttpCoordinatorClient::with_config(
         url.to_owned(),

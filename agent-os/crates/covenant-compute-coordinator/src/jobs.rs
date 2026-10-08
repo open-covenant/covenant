@@ -206,6 +206,10 @@ pub struct JobRecord {
     /// On a check job: the agent task whose result it checks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checks_task: Option<Uuid>,
+    /// On an agent task: the buyer's hidden checks, once handed over and
+    /// matched against the task's commitment. Only ever relayed to checkers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hidden_checks: Option<covenant_compute_protocol::HiddenChecks>,
 }
 
 impl JobRecord {
@@ -670,6 +674,22 @@ impl JobBook {
     /// Links a check job to the task it checks.
     pub fn add_check_job(&self, task_id: Uuid, check_id: Uuid) -> Result<(), JobError> {
         self.update(task_id, |r| r.check_jobs.push(check_id))
+    }
+
+    /// Stores a task's hidden checks. `Ok(false)` when the task already holds
+    /// a different set: a commitment names one set, and the first that
+    /// matched it stands.
+    pub fn set_hidden_checks(
+        &self,
+        job_id: Uuid,
+        hidden: covenant_compute_protocol::HiddenChecks,
+    ) -> Result<bool, JobError> {
+        let same = hidden.clone();
+        self.update_if(
+            job_id,
+            |r| r.hidden_checks.as_ref().is_none_or(|held| *held == same),
+            |r| r.hidden_checks = Some(hidden),
+        )
     }
 
     /// Agent tasks whose results wait on a check: the settle tick's
@@ -1141,6 +1161,7 @@ mod tests {
             lease_access: None,
             check_jobs: Vec::new(),
             checks_task: None,
+            hidden_checks: None,
         }
     }
 
@@ -1388,6 +1409,7 @@ mod tests {
             lease_access: None,
             check_jobs: Vec::new(),
             checks_task: None,
+            hidden_checks: None,
         }
     }
 

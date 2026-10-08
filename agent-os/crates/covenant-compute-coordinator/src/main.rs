@@ -725,8 +725,19 @@ async fn main() -> anyhow::Result<()> {
                 )?,
                 max_check_attempts: env_parse(
                     "COVENANT_COMPUTE_AGENT_CHECK_ATTEMPTS",
-                    3,
+                    5,
                     "must be a u32",
+                )?,
+                check_accept_timeout_ms: env_parse(
+                    "COVENANT_COMPUTE_AGENT_CHECK_ACCEPT_TIMEOUT_MS",
+                    120_000,
+                    "must be a u64 (milliseconds)",
+                )?,
+                confirm_failures: env_bool("COVENANT_COMPUTE_AGENT_CONFIRM_FAILURES", true)?,
+                pass_sample_bps: env_parse(
+                    "COVENANT_COMPUTE_AGENT_PASS_SAMPLE_BPS",
+                    1_000,
+                    "must be a u32 (basis points)",
                 )?,
             };
             tracing::info!(

@@ -43,6 +43,12 @@ pub use covenant_compute_protocol::{
     SignedJobEnvelope, SpeechResult, ToolChoice, ToolDefinition,
 };
 
+mod agent;
+pub use agent::{
+    agent_tool_spec, apply_patch, describe_verdict, hire_agent, local_bundle, prepare_agent_task,
+    read_hidden_checks, AgentArgs, AgentOutcome, PreparedTask, AGENT_TOOL,
+    DEFAULT_AGENT_DEADLINE_MS,
+};
 mod purchases;
 pub use purchases::{PurchaseBook, PurchaseEntry, PurchaseError};
 
@@ -2665,6 +2671,58 @@ pub async fn fetch_check_verdict(
         Some(check) => serde_json::from_value(check.clone())
             .map(Some)
             .map_err(|e| BuyerError::Coordinator(format!("check verdict decode: {e}"))),
+    }
+}
+
+/// Signs and submits an agent task, hands the coordinator its hidden checks
+/// (when the task committed to some), then waits for the checked result.
+/// The checks travel apart from the envelope, which goes to the builder;
+/// the coordinator takes them only if they match the signed commitment.
+pub async fn dispatch_agent_task(
+    http: &reqwest::Client,
+    config: &BuyerConfig,
+    buyer_identity: &LocalIdentity,
+    request: JobRequest,
+    hidden: Option<&covenant_compute_protocol::HiddenChecks>,
+) -> Result<DispatchOutcome, BuyerError> {
+    let envelope =
+        sign_and_submit(http, config, buyer_identity, request, false, Uuid::new_v4()).await?;
+    if let Some(hidden) = hidden {
+        post_hidden_checks(http, config, envelope.payload.job_id, hidden).await?;
+    }
+    poll_receipt_and_verify(http, config, buyer_identity, envelope).await
+}
+
+async fn post_hidden_checks(
+    http: &reqwest::Client,
+    config: &BuyerConfig,
+    job_id: Uuid,
+    hidden: &covenant_compute_protocol::HiddenChecks,
+) -> Result<(), BuyerError> {
+    let base = config.coordinator_url.trim_end_matches('/');
+    let url = format!("{base}/federation/jobs/{job_id}/hidden");
+    let mut attempt = 0u32;
+    loop {
+        attempt += 1;
+        match http.post(&url).json(hidden).send().await {
+            Ok(resp) if resp.status().is_success() => return Ok(()),
+            Ok(resp) if !resp.status().is_server_error() || attempt >= 5 => {
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                return Err(BuyerError::Coordinator(format!(
+                    "hidden checks refused ({status}): {}",
+                    coordinator_reason(&body)
+                )));
+            }
+            Err(e) if attempt >= 5 => {
+                return Err(BuyerError::unreachable(
+                    &config.coordinator_url,
+                    "hand over the hidden checks",
+                    &e,
+                ))
+            }
+            _ => tokio::time::sleep(Duration::from_millis(500 * u64::from(attempt))).await,
+        }
     }
 }
 

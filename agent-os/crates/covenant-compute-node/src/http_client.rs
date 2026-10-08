@@ -485,6 +485,8 @@ mod tests {
                 micro_usdc: 1,
             },
             tee_capable: false,
+            kind_prices: Vec::new(),
+            kind_models: Vec::new(),
         }
     }
 

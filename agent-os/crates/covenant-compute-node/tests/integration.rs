@@ -44,6 +44,8 @@ async fn full_local_loop_admits_executes_signs_and_credits() {
             micro_usdc: 5_000,
         },
         tee_capable: false,
+        kind_prices: Vec::new(),
+        kind_models: Vec::new(),
     };
 
     let job_id = Uuid::new_v4();
@@ -188,6 +190,8 @@ async fn a_job_the_local_profile_cannot_satisfy_is_rejected_before_execution() {
             micro_usdc: 5_000,
         },
         tee_capable: false,
+        kind_prices: Vec::new(),
+        kind_models: Vec::new(),
     };
 
     let job_id = Uuid::new_v4();
@@ -280,6 +284,8 @@ async fn a_streaming_job_relays_chunks_and_still_settles_by_receipt() {
             micro_usdc: 5_000,
         },
         tee_capable: false,
+        kind_prices: Vec::new(),
+        kind_models: Vec::new(),
     };
 
     let job_id = Uuid::new_v4();
@@ -438,6 +444,8 @@ async fn a_dead_chunk_relay_never_fails_the_job_itself() {
             micro_usdc: 5_000,
         },
         tee_capable: false,
+        kind_prices: Vec::new(),
+        kind_models: Vec::new(),
     };
 
     let job_id = Uuid::new_v4();
@@ -632,6 +640,8 @@ async fn a_result_settled_as_a_refund_books_no_earnings() {
             micro_usdc: 5_000,
         },
         tee_capable: false,
+        kind_prices: Vec::new(),
+        kind_models: Vec::new(),
     };
 
     let job_id = Uuid::new_v4();
@@ -728,6 +738,8 @@ async fn a_metered_release_credits_the_coordinators_gross_not_the_receipt_price(
             micro_usdc: 5_000,
         },
         tee_capable: false,
+        kind_prices: Vec::new(),
+        kind_models: Vec::new(),
     };
 
     let job_id = Uuid::new_v4();
@@ -885,6 +897,8 @@ fn cpu_profile_for(operator_identity: &LocalIdentity) -> CapabilityProfile {
             micro_usdc: 5_000,
         },
         tee_capable: false,
+        kind_prices: Vec::new(),
+        kind_models: Vec::new(),
     }
 }
 

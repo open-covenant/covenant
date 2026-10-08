@@ -266,6 +266,8 @@ async fn main() {
             micro_usdc: JOB_PRICE_MICRO_USDC,
         },
         tee_capable: false,
+        kind_prices: Vec::new(),
+        kind_models: Vec::new(),
     };
     // A generous single-call timeout: the node's HTTP client caps every
     // call (including /result) at a fixed 10s regardless of this

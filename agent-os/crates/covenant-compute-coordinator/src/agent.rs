@@ -24,11 +24,11 @@ use base64::Engine as _;
 use covenant_a2a::{A2ADuplicateSafety, A2AIdempotency};
 use covenant_audit::AuditKind;
 use covenant_compute_protocol::{
-    agent_check_input, parse_agent_check_verdict, parse_agent_task, parse_agent_task_output,
-    sha256_hex, AgentCheckSpec, AgentCheckVerdict, AgentTaskOutput, AgentTaskSpec,
-    CapabilityRequirement, EscrowError, EscrowStatus, FederationEscrow, FundingSource,
-    JobEnvelopePayload, JobKind, JobOffer, RefundReason, ResultSettlement, SignedJobEnvelope,
-    SignedWorkReceipt,
+    agent_check_input, check_commands, parse_agent_check_verdict, parse_agent_task,
+    parse_agent_task_output, sha256_hex, AgentCheckSpec, AgentCheckVerdict, AgentTaskOutput,
+    AgentTaskSpec, CapabilityRequirement, EscrowError, EscrowStatus, FederationEscrow,
+    FundingSource, JobEnvelopePayload, JobKind, JobOffer, RefundReason, ResultSettlement,
+    SignedJobEnvelope, SignedWorkReceipt,
 };
 use covenant_identity::LocalIdentity;
 use covenant_mcp::Content;
@@ -61,6 +61,15 @@ pub struct AgentPolicy {
     /// uncheckable. A check that ends without a verdict (refused, failed
     /// to run, timed out) is retried with another operator up to this.
     pub max_check_attempts: u32,
+    /// How long an ordered check may wait for its operator to pick it up
+    /// before it is withdrawn and ordered from someone else.
+    pub check_accept_timeout_ms: u64,
+    /// A failed verdict is confirmed by a second independent check before
+    /// the builder is refused, so one checker cannot deny a builder its pay.
+    pub confirm_failures: bool,
+    /// The share of passing verdicts, in basis points, double-checked before
+    /// payment, so a checker passing junk is caught at that rate.
+    pub pass_sample_bps: u32,
 }
 
 impl AgentPolicy {
@@ -176,6 +185,9 @@ pub async fn order_check(state: &CoordinatorState, task_id: Uuid) -> Result<Uuid
     }
     let spec = parse_agent_task(&task.envelope.payload.input).map_err(|e| e.to_string())?;
     let built = built_patch(&spec, task.output.as_deref().unwrap_or_default())?;
+    if spec.acceptance.hidden_sha256.is_some() && task.hidden_checks.is_none() {
+        return Err("waiting for the buyer's hidden checks".into());
+    }
 
     let now_ms = crate::epoch_ms();
     let task_deadline_ms = task
@@ -236,6 +248,7 @@ pub async fn order_check(state: &CoordinatorState, task_id: Uuid) -> Result<Uuid
         acceptance: spec.acceptance.clone(),
         patch_b64: built.patch_b64.clone(),
         patch_sha256: built.patch_sha256.clone(),
+        hidden: task.hidden_checks.clone(),
     })
     .map_err(|e| format!("check input: {e}"))?;
     let payload = JobEnvelopePayload {
@@ -245,7 +258,9 @@ pub async fn order_check(state: &CoordinatorState, task_id: Uuid) -> Result<Uuid
         capability_requirement: requirement,
         input: vec![input],
         price_micro_usdc: policy.check_price_micro_usdc,
-        deadline_ms: left_ms - CHECK_MARGIN_MS,
+        // The check's own window, not the task's remainder: a checker that
+        // stalls times out while there is still room to order another.
+        deadline_ms: window_ms.min(left_ms - CHECK_MARGIN_MS),
         idempotency: A2AIdempotency::new(A2ADuplicateSafety::Idempotent, check_id.to_string()),
         issued_at_ms: now_ms,
         referral_code: None,
@@ -301,6 +316,7 @@ pub async fn order_check(state: &CoordinatorState, task_id: Uuid) -> Result<Uuid
             lease_access: None,
             check_jobs: Vec::new(),
             checks_task: Some(task_id),
+            hidden_checks: None,
         },
     );
     if let Err(e) = inserted {
@@ -360,6 +376,9 @@ async fn settle_once(state: &CoordinatorState, task_id: Uuid) {
     if task.phase != JobPhase::AwaitingCheck {
         return;
     }
+    let Some(policy) = state.config().agent.clone() else {
+        return;
+    };
     let now_ms = crate::epoch_ms();
     let past_deadline = task
         .envelope
@@ -367,56 +386,183 @@ async fn settle_once(state: &CoordinatorState, task_id: Uuid) {
         .issued_at_ms
         .saturating_add(task.envelope.payload.deadline_ms)
         < now_ms;
-    let latest = task.check_jobs.last().and_then(|id| state.jobs().get(*id));
-    match latest {
-        Some(check) if check.phase == JobPhase::Completed => match judge(&task, &check) {
-            Ok(verdict) if verdict.passed => release(state, task_id, &task).await,
-            Ok(verdict) => {
-                tracing::info!(
-                    %task_id,
-                    applied = verdict.applied,
-                    protected = ?verdict.protected_violations,
-                    "agent work failed its check"
-                );
-                refund_task(state, task_id, &task, RefundReason::CheckFailed).await;
+    let checks: Vec<JobRecord> = task
+        .check_jobs
+        .iter()
+        .filter_map(|id| state.jobs().get(*id))
+        .collect();
+
+    if let Some(latest) = checks.last() {
+        let out = matches!(latest.phase, JobPhase::Offered | JobPhase::Accepted);
+        if latest.phase == JobPhase::Offered && unclaimed(state, latest, now_ms) {
+            if !withdraw(state, task_id, latest).await {
+                return;
             }
+        } else if out && !past_deadline {
+            return;
+        }
+    }
+
+    let verdicts: Vec<(String, bool)> = checks
+        .iter()
+        .filter(|c| c.phase == JobPhase::Completed)
+        .filter_map(|c| match judge(&task, c) {
+            Ok(verdict) => Some((c.operator_pubkey_b58.clone(), verdict.passed)),
             Err(defect) => {
-                tracing::warn!(%task_id, check_id = ?task.check_jobs.last(), %defect, "check returned no usable verdict; ordering another");
-                reorder_or_give_up(state, task_id, &task, past_deadline).await;
+                tracing::warn!(%task_id, check_id = %c.envelope.payload.job_id, %defect, "check returned no usable verdict");
+                None
+            }
+        })
+        .collect();
+
+    let outcome = match decide(task_id, &verdicts, &policy) {
+        Decision::Pay => Some(true),
+        Decision::Refund => Some(false),
+        Decision::Another { fallback } if past_deadline => fallback,
+        Decision::Another { fallback } => match order_check(state, task_id).await {
+            Ok(_) => return,
+            Err(e) => {
+                let exhausted = task.check_jobs.len() >= policy.max_check_attempts as usize
+                    || e.contains("window is left");
+                match fallback {
+                    Some(settled) => {
+                        tracing::info!(%task_id, error = %e, "no confirming check available; settling on the one verdict");
+                        Some(settled)
+                    }
+                    None if exhausted => None,
+                    None => {
+                        tracing::info!(%task_id, error = %e, "check not ordered yet; will retry");
+                        return;
+                    }
+                }
             }
         },
-        Some(check) if matches!(check.phase, JobPhase::Offered | JobPhase::Accepted) => {
-            if past_deadline {
-                refund_task(state, task_id, &task, RefundReason::CheckUnavailable).await;
+    };
+    match outcome {
+        Some(true) => {
+            if release(state, task_id, &task).await {
+                record_agreement(state, task_id, &verdicts, true).await;
             }
         }
-        _ => reorder_or_give_up(state, task_id, &task, past_deadline).await,
+        Some(false) => {
+            tracing::info!(%task_id, verdicts = ?verdicts, "agent work failed its check");
+            if refund_task(state, task_id, &task, RefundReason::CheckFailed).await {
+                record_agreement(state, task_id, &verdicts, false).await;
+            }
+        }
+        None => {
+            tracing::warn!(%task_id, verdicts = ?verdicts, "no check could be completed; refunding");
+            refund_task(state, task_id, &task, RefundReason::CheckUnavailable).await;
+        }
     }
 }
 
-async fn reorder_or_give_up(
-    state: &CoordinatorState,
-    task_id: Uuid,
-    task: &JobRecord,
-    past_deadline: bool,
-) {
-    if past_deadline {
-        refund_task(state, task_id, task, RefundReason::CheckUnavailable).await;
-        return;
+/// What the verdicts so far settle a task as.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Decision {
+    Pay,
+    Refund,
+    /// Another check is wanted. If none can be had, `fallback` settles it:
+    /// the one verdict there is, or with split or absent evidence, nobody
+    /// paid and nobody faulted.
+    Another {
+        fallback: Option<bool>,
+    },
+}
+
+/// One verdict decides unless it is a fail the policy confirms, or a pass
+/// the policy samples. Two or more decide by majority; a tie asks for one
+/// more.
+fn decide(task_id: Uuid, verdicts: &[(String, bool)], policy: &AgentPolicy) -> Decision {
+    let passes = verdicts.iter().filter(|(_, passed)| *passed).count();
+    let fails = verdicts.len() - passes;
+    match verdicts.len() {
+        0 => Decision::Another { fallback: None },
+        1 if passes == 1 && sampled(task_id, policy.pass_sample_bps) => Decision::Another {
+            fallback: Some(true),
+        },
+        1 if passes == 1 => Decision::Pay,
+        1 if policy.confirm_failures => Decision::Another {
+            fallback: Some(false),
+        },
+        1 => Decision::Refund,
+        _ if passes > fails => Decision::Pay,
+        _ if fails > passes => Decision::Refund,
+        _ => Decision::Another { fallback: None },
     }
-    if let Err(e) = order_check(state, task_id).await {
-        let exhausted = state
-            .config()
-            .agent
-            .as_ref()
-            .is_none_or(|p| task.check_jobs.len() >= p.max_check_attempts as usize);
-        if exhausted || e.contains("window is left") {
-            tracing::warn!(%task_id, error = %e, "no check can be completed; refunding");
-            refund_task(state, task_id, task, RefundReason::CheckUnavailable).await;
-        } else {
-            tracing::info!(%task_id, error = %e, "check not ordered yet; will retry");
+}
+
+/// Whether this task's single pass is one the policy double-checks.
+/// Derived from the task id, so a retry of the decision never flips it.
+fn sampled(task_id: Uuid, bps: u32) -> bool {
+    task_id.as_u128() % 10_000 < u128::from(bps)
+}
+
+/// Withdraws a check its operator never picked up: the coordinator is its
+/// buyer, so this is a cancel and nobody's fault.
+async fn withdraw(state: &CoordinatorState, task_id: Uuid, check: &JobRecord) -> bool {
+    let check_id = check.envelope.payload.job_id;
+    match state.jobs().cancel_if_offered(check_id) {
+        Ok(true) => {
+            refund_hold(state, check_id, RefundReason::BuyerCancelled).await;
+            state
+                .record_audit(AuditKind::ComputeJobRefunded {
+                    job_id: check_id,
+                    reason: RefundReason::BuyerCancelled.as_str().into(),
+                    operator_pubkey_b58: None,
+                })
+                .await;
+            tracing::info!(%task_id, %check_id, checker = %check.operator_pubkey_b58, "check not picked up; withdrawn");
+            true
+        }
+        Ok(false) => false,
+        Err(e) => {
+            tracing::warn!(%task_id, %check_id, error = %e, "withdrawing an unclaimed check failed");
+            false
         }
     }
+}
+
+/// With more than one verdict, each checker's agreement with the outcome is
+/// a reputation row: the checker in the minority took a position the other
+/// independent checks contradicted.
+async fn record_agreement(
+    state: &CoordinatorState,
+    task_id: Uuid,
+    verdicts: &[(String, bool)],
+    paid: bool,
+) {
+    if verdicts.len() < 2 {
+        return;
+    }
+    for (checker, passed) in verdicts {
+        let agreed = *passed == paid;
+        state
+            .record_audit(AuditKind::ComputeRedundancyResult {
+                source_job_id: task_id,
+                operator_pubkey_b58: checker.clone(),
+                agreed: Some(agreed),
+                detail: if agreed {
+                    "agent check agreed with the independent checks".into()
+                } else {
+                    "agent check contradicted by the independent checks".into()
+                },
+            })
+            .await;
+    }
+}
+
+/// Whether an offered check has waited past the policy's pickup window,
+/// measured from when it was ordered: redelivery re-stamps the offer time,
+/// the order time never moves.
+fn unclaimed(state: &CoordinatorState, check: &JobRecord, now_ms: u64) -> bool {
+    let timeout = state
+        .config()
+        .agent
+        .as_ref()
+        .map(|p| p.check_accept_timeout_ms)
+        .unwrap_or(u64::MAX);
+    now_ms.saturating_sub(check.envelope.payload.issued_at_ms) > timeout
 }
 
 /// The verdict a completed check returned, if it is a verdict on exactly
@@ -439,12 +585,7 @@ fn judge(task: &JobRecord, check: &JobRecord) -> Result<AgentCheckVerdict, Strin
             .iter()
             .map(|c| c.command.as_str())
             .collect();
-        let asked: Vec<&str> = spec
-            .acceptance
-            .commands
-            .iter()
-            .map(String::as_str)
-            .collect();
+        let asked = check_commands(&spec.acceptance, task.hidden_checks.as_ref());
         if ran != asked {
             return Err("a passing verdict did not run the task's commands".into());
         }
@@ -452,10 +593,10 @@ fn judge(task: &JobRecord, check: &JobRecord) -> Result<AgentCheckVerdict, Strin
     Ok(verdict)
 }
 
-async fn release(state: &CoordinatorState, task_id: Uuid, task: &JobRecord) {
+async fn release(state: &CoordinatorState, task_id: Uuid, task: &JobRecord) -> bool {
     let (Some(receipt), Some(output)) = (task.receipt.clone(), task.output.clone()) else {
         tracing::error!(%task_id, "parked task has no receipt to release on");
-        return;
+        return false;
     };
     if let Err(e) = state.escrow().release(task_id, &receipt).await {
         let released = matches!(e, EscrowError::AlreadySettled(_))
@@ -465,7 +606,7 @@ async fn release(state: &CoordinatorState, task_id: Uuid, task: &JobRecord) {
             );
         if !released {
             tracing::error!(%task_id, error = %e, "passing check, but the hold would not release");
-            return;
+            return false;
         }
     }
     let (amount, funding_source) = state.escrow().hold_info(task_id).unwrap_or((
@@ -486,9 +627,10 @@ async fn release(state: &CoordinatorState, task_id: Uuid, task: &JobRecord) {
     .await
     {
         tracing::error!(%task_id, error = ?e, "check passed and the hold released, but concluding the task failed");
-        return;
+        return false;
     }
     tracing::info!(%task_id, amount_micro_usdc = amount, "agent work passed its check; paid");
+    true
 }
 
 /// Concludes a parked task unpaid: the record first, so a crash before the
@@ -499,13 +641,13 @@ async fn refund_task(
     task_id: Uuid,
     task: &JobRecord,
     reason: RefundReason,
-) {
+) -> bool {
     match state.jobs().conclude_parked_unpaid(task_id, reason) {
         Ok(true) => {}
-        Ok(false) => return,
+        Ok(false) => return false,
         Err(e) => {
             tracing::error!(%task_id, error = %e, "concluding a parked task failed");
-            return;
+            return false;
         }
     }
     refund_hold(state, task_id, reason).await;
@@ -518,6 +660,7 @@ async fn refund_task(
             operator_pubkey_b58,
         })
         .await;
+    true
 }
 
 async fn refund_hold(state: &CoordinatorState, job_id: Uuid, reason: RefundReason) {
@@ -526,6 +669,41 @@ async fn refund_hold(state: &CoordinatorState, job_id: Uuid, reason: RefundReaso
             tracing::warn!(%job_id, error = %e, "refund deferred to boot reconcile");
         }
     }
+}
+
+/// Takes a task's hidden checks from whoever holds them. Knowing a set whose
+/// digest matches the buyer-signed commitment is the credential, so this
+/// needs no signature of its own; a set that does not match is refused.
+pub async fn accept_hidden_checks(
+    state: &CoordinatorState,
+    task_id: Uuid,
+    hidden: covenant_compute_protocol::HiddenChecks,
+) -> Result<(), String> {
+    let task = state.jobs().get(task_id).ok_or("no such task")?;
+    if task.envelope.payload.kind != JobKind::AgentTask {
+        return Err("only an agent task takes hidden checks".into());
+    }
+    let spec = parse_agent_task(&task.envelope.payload.input).map_err(|e| e.to_string())?;
+    let commitment = spec
+        .acceptance
+        .hidden_sha256
+        .ok_or("this task committed to no hidden checks")?;
+    hidden.validate().map_err(|e| e.to_string())?;
+    if hidden.digest() != commitment {
+        return Err("these checks do not match the task's commitment".into());
+    }
+    if !state
+        .jobs()
+        .set_hidden_checks(task_id, hidden)
+        .map_err(|e| e.to_string())?
+    {
+        return Err("the task already holds different hidden checks".into());
+    }
+    if task.phase == JobPhase::AwaitingCheck {
+        let state = state.clone();
+        tokio::spawn(async move { settle(&state, task_id).await });
+    }
+    Ok(())
 }
 
 /// The latest check's verdict on a task, for the buyer's status view.

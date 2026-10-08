@@ -240,6 +240,8 @@ mod tests {
                 micro_usdc: 1,
             },
             tee_capable: false,
+            kind_prices: Vec::new(),
+            kind_models: Vec::new(),
         };
         let mut req = RegisterRequest::sign(profile, "payout".into(), &identity).unwrap();
         req.payout_address = "tampered".into();

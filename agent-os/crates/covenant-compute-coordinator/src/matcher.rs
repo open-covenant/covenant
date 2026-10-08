@@ -44,7 +44,7 @@ pub(crate) fn in_standing(record: &OperatorRecord, now_ms: u64, cutoff_ms: u64) 
 /// floors on the whole window, unchanged.
 fn operator_job_floor(profile: &CapabilityProfile, requirement: &CapabilityRequirement) -> u64 {
     profile
-        .price
+        .ask_for(requirement.kind)
         .job_floor_micro_usdc(requirement.kind, requirement.max_duration_secs)
 }
 
@@ -97,8 +97,9 @@ impl BondFloor {
     /// whose scaled floor exceeds `u64` simply cannot be met, which
     /// fails it closed.
     pub fn required_micro_usdc(&self, profile: &CapabilityProfile) -> u64 {
-        let scaled = if profile.price.unit == PriceUnit::PerLeaseHour {
-            profile.price.micro_usdc.saturating_mul(self.lease_hours)
+        let lease = profile.ask_for(JobKind::LeaseSession);
+        let scaled = if lease.unit == PriceUnit::PerLeaseHour {
+            lease.micro_usdc.saturating_mul(self.lease_hours)
         } else {
             0
         };
@@ -427,13 +428,6 @@ pub async fn capacity_view(
             // hardware's requestable `gpu_class`.
             HardwareClass::CpuOnly => "cpu".into(),
         };
-        let mut models: Vec<&str> = profile
-            .models_served
-            .iter()
-            .map(|m| canonical_model(m))
-            .collect();
-        models.sort_unstable();
-        models.dedup();
         // Dedup the kinds too — a profile that names a kind twice must
         // not count its one operator into the same (kind, model) row
         // twice and advertise false redundancy for that pairing.
@@ -442,24 +436,32 @@ pub async fn capacity_view(
         kinds.dedup();
 
         for kind in &kinds {
+            let ask = profile.ask_for(*kind);
+            let mut models: Vec<&str> = profile
+                .models_for(*kind)
+                .iter()
+                .map(|m| canonical_model(m))
+                .collect();
+            models.sort_unstable();
+            models.dedup();
             for model in &models {
                 let row = rows
                     .entry((*kind, (*model).to_string()))
                     .or_insert_with(|| Row {
                         operators: 0,
-                        min_ask_micro_usdc: profile.price.micro_usdc,
-                        min_ask_unit: profile.price.unit,
-                        max_ask_micro_usdc: profile.price.micro_usdc,
+                        min_ask_micro_usdc: ask.micro_usdc,
+                        min_ask_unit: ask.unit,
+                        max_ask_micro_usdc: ask.micro_usdc,
                         max_vram_gb: profile.vram_gb,
                         gpu_classes: Vec::new(),
                         tee_capable: false,
                     });
                 row.operators += 1;
-                if profile.price.micro_usdc < row.min_ask_micro_usdc {
-                    row.min_ask_micro_usdc = profile.price.micro_usdc;
-                    row.min_ask_unit = profile.price.unit;
+                if ask.micro_usdc < row.min_ask_micro_usdc {
+                    row.min_ask_micro_usdc = ask.micro_usdc;
+                    row.min_ask_unit = ask.unit;
                 }
-                row.max_ask_micro_usdc = row.max_ask_micro_usdc.max(profile.price.micro_usdc);
+                row.max_ask_micro_usdc = row.max_ask_micro_usdc.max(ask.micro_usdc);
                 row.max_vram_gb = row.max_vram_gb.max(profile.vram_gb);
                 if !row.gpu_classes.contains(&gpu_class) {
                     row.gpu_classes.push(gpu_class.clone());
@@ -567,6 +569,8 @@ mod tests {
                 micro_usdc,
             },
             tee_capable: false,
+            kind_prices: Vec::new(),
+            kind_models: Vec::new(),
         };
         let req = RegisterRequest::sign(profile, payout_for(display), &identity).unwrap();
         registry.register(&req, 0, None, false).unwrap();
@@ -746,6 +750,8 @@ mod tests {
                         micro_usdc: 100,
                     },
                     tee_capable: false,
+                    kind_prices: Vec::new(),
+                    kind_models: Vec::new(),
                 };
                 let req = RegisterRequest::sign(profile, payout_for("payout"), id).unwrap();
                 registry.register(&req, 0, None, false).unwrap();
@@ -861,6 +867,8 @@ mod tests {
                 micro_usdc: 1,
             },
             tee_capable: false,
+            kind_prices: Vec::new(),
+            kind_models: Vec::new(),
         };
         let req = RegisterRequest::sign(profile, payout_for("payout"), &identity).unwrap();
         registry.register(&req, 0, None, false).unwrap();
@@ -1129,6 +1137,8 @@ mod tests {
                 micro_usdc: 100,
             },
             tee_capable: false,
+            kind_prices: Vec::new(),
+            kind_models: Vec::new(),
         };
         let profile = build(base);
         let req = RegisterRequest::sign(profile, payout_for(display), &identity).unwrap();
@@ -1182,6 +1192,8 @@ mod tests {
                 micro_usdc: 1,
             },
             tee_capable: false,
+            kind_prices: Vec::new(),
+            kind_models: Vec::new(),
         };
         let req = RegisterRequest::sign(profile, payout_for("payout-offline"), &offline).unwrap();
         registry.register(&req, now_ms, None, false).unwrap();
@@ -1701,6 +1713,8 @@ mod tests {
                 micro_usdc: 60_000,
             },
             tee_capable: false,
+            kind_prices: Vec::new(),
+            kind_models: Vec::new(),
         };
         let req = RegisterRequest::sign(profile, payout_for("flat@local"), &identity).unwrap();
         let err = registry
@@ -1757,6 +1771,8 @@ mod tests {
             job_kinds: vec![JobKind::LeaseSession],
             price: PriceAsk { unit, micro_usdc },
             tee_capable: false,
+            kind_prices: Vec::new(),
+            kind_models: Vec::new(),
         }
     }
 

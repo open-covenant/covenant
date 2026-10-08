@@ -164,6 +164,8 @@ async fn main() {
             micro_usdc: RATE_MICRO_USDC_PER_SEC * 3_600,
         },
         tee_capable: false,
+        kind_prices: Vec::new(),
+        kind_models: Vec::new(),
     };
     let client = Arc::new(HttpCoordinatorClient::with_config(
         base_url.clone(),

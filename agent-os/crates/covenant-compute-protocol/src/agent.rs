@@ -36,6 +36,10 @@ pub const MAX_PATCH_B64_BYTES: usize = MAX_PATCH_BYTES.div_ceil(3) * 4;
 pub const MAX_ACCEPTANCE_COMMANDS: usize = 8;
 pub const MAX_COMMAND_BYTES: usize = 2048;
 pub const MAX_PROTECTED_PATHS: usize = 32;
+pub const MAX_HIDDEN_FILES: usize = 32;
+/// Cap on the hidden files' base64 text, all files together (~512 KiB
+/// decoded): tests, not fixtures.
+pub const MAX_HIDDEN_B64_BYTES: usize = 700 * 1024;
 const MAX_PATH_BYTES: usize = 256;
 /// The longest the acceptance checks may run, all commands together.
 pub const MAX_ACCEPTANCE_TIMEOUT_SECS: u32 = 1800;
@@ -111,6 +115,82 @@ pub struct AcceptanceSpec {
     /// so a patch touching any of these fails its check unrun.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub protected_paths: Vec<String>,
+    /// Commitment (lowercase hex sha256, [`HiddenChecks::digest`]) to checks
+    /// the buyer hands the coordinator apart from the task. Builders see
+    /// only that they exist; checkers run them after the visible commands,
+    /// and the commitment keeps anyone from swapping them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hidden_sha256: Option<String>,
+}
+
+/// One file the hidden checks add to the checkout.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HiddenFile {
+    pub path: String,
+    pub content_b64: String,
+}
+
+/// Checks a buyer keeps from the builder: files written into the checkout
+/// after the builder's patch (tests it never saw), and commands run after
+/// the visible ones.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HiddenChecks {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<HiddenFile>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commands: Vec<String>,
+}
+
+impl HiddenChecks {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.files.is_empty() && self.commands.is_empty() {
+            return Err(ProtocolError::Invalid(
+                "hidden checks need at least one file or command".into(),
+            ));
+        }
+        if self.files.len() > MAX_HIDDEN_FILES {
+            return Err(ProtocolError::Invalid(format!(
+                "hidden checks carry {} files, past the {MAX_HIDDEN_FILES} limit",
+                self.files.len()
+            )));
+        }
+        let mut total = 0usize;
+        for file in &self.files {
+            validate_repo_path(&file.path)?;
+            total += file.content_b64.len();
+            if file.content_b64.is_empty() {
+                continue;
+            }
+            validate_b64("hidden file", &file.content_b64, MAX_HIDDEN_B64_BYTES)?;
+        }
+        if total > MAX_HIDDEN_B64_BYTES {
+            return Err(ProtocolError::Invalid(format!(
+                "hidden files are {total} base64 bytes together, over the \
+                 {MAX_HIDDEN_B64_BYTES} cap"
+            )));
+        }
+        validate_commands("hidden", &self.commands, true)
+    }
+
+    /// The commitment a task carries for these checks.
+    pub fn digest(&self) -> String {
+        sha256_hex(&serde_json::to_vec(self).unwrap_or_default())
+    }
+}
+
+/// The commands a check runs, in order: the visible ones, then the hidden.
+pub fn check_commands<'a>(
+    acceptance: &'a AcceptanceSpec,
+    hidden: Option<&'a HiddenChecks>,
+) -> Vec<&'a str> {
+    acceptance
+        .commands
+        .iter()
+        .chain(hidden.into_iter().flat_map(|h| h.commands.iter()))
+        .map(String::as_str)
+        .collect()
 }
 
 impl AcceptanceSpec {
@@ -123,29 +203,9 @@ impl AcceptanceSpec {
                     .into(),
             ));
         }
-        if self.commands.len() > MAX_ACCEPTANCE_COMMANDS {
-            return Err(ProtocolError::Invalid(format!(
-                "acceptance lists {} commands, past the {MAX_ACCEPTANCE_COMMANDS} limit",
-                self.commands.len()
-            )));
-        }
-        for command in &self.commands {
-            if command.trim().is_empty() {
-                return Err(ProtocolError::Invalid(
-                    "an acceptance command is empty".into(),
-                ));
-            }
-            if command.len() > MAX_COMMAND_BYTES {
-                return Err(ProtocolError::Invalid(format!(
-                    "an acceptance command of {} bytes exceeds the {MAX_COMMAND_BYTES}-byte cap",
-                    command.len()
-                )));
-            }
-            if command.contains('\0') {
-                return Err(ProtocolError::Invalid(
-                    "an acceptance command contains a NUL byte".into(),
-                ));
-            }
+        validate_commands("acceptance", &self.commands, false)?;
+        if let Some(digest) = &self.hidden_sha256 {
+            validate_sha256_hex("hidden_sha256", digest)?;
         }
         if self.timeout_secs == 0 || self.timeout_secs > MAX_ACCEPTANCE_TIMEOUT_SECS {
             return Err(ProtocolError::Invalid(format!(
@@ -278,6 +338,10 @@ pub struct AgentCheckSpec {
     pub acceptance: AcceptanceSpec,
     pub patch_b64: String,
     pub patch_sha256: String,
+    /// The buyer's hidden checks, when the task committed to some. Present
+    /// exactly when `acceptance.hidden_sha256` is, and matching it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hidden: Option<HiddenChecks>,
 }
 
 impl AgentCheckSpec {
@@ -285,7 +349,25 @@ impl AgentCheckSpec {
         self.repo.validate()?;
         self.acceptance.validate()?;
         validate_b64("patch", &self.patch_b64, MAX_PATCH_B64_BYTES)?;
-        validate_sha256_hex("patch_sha256", &self.patch_sha256)
+        validate_sha256_hex("patch_sha256", &self.patch_sha256)?;
+        match (&self.acceptance.hidden_sha256, &self.hidden) {
+            (None, None) => Ok(()),
+            (Some(commitment), Some(hidden)) => {
+                hidden.validate()?;
+                if hidden.digest() != *commitment {
+                    return Err(ProtocolError::Invalid(
+                        "hidden checks do not match the task's commitment".into(),
+                    ));
+                }
+                Ok(())
+            }
+            (Some(_), None) => Err(ProtocolError::Invalid(
+                "the task committed to hidden checks the check does not carry".into(),
+            )),
+            (None, Some(_)) => Err(ProtocolError::Invalid(
+                "hidden checks arrived for a task that committed to none".into(),
+            )),
+        }
     }
 }
 
@@ -355,9 +437,9 @@ impl AgentCheckVerdict {
 
     pub fn validate(&self) -> Result<(), ProtocolError> {
         validate_sha256_hex("patch_sha256", &self.patch_sha256)?;
-        if self.commands.len() > MAX_ACCEPTANCE_COMMANDS {
+        if self.commands.len() > 2 * MAX_ACCEPTANCE_COMMANDS {
             return Err(ProtocolError::Invalid(format!(
-                "a verdict reports {} commands, past the {MAX_ACCEPTANCE_COMMANDS} limit",
+                "a verdict reports {} commands, more than a check can run",
                 self.commands.len()
             )));
         }
@@ -498,6 +580,35 @@ fn validate_commit(what: &str, commit: &str) -> Result<(), ProtocolError> {
     Ok(())
 }
 
+fn validate_commands(what: &str, commands: &[String], may_be_empty: bool) -> Result<(), ProtocolError> {
+    if commands.is_empty() && !may_be_empty {
+        return Err(ProtocolError::Invalid(format!("{what} needs at least one command")));
+    }
+    if commands.len() > MAX_ACCEPTANCE_COMMANDS {
+        return Err(ProtocolError::Invalid(format!(
+            "{what} lists {} commands, past the {MAX_ACCEPTANCE_COMMANDS} limit",
+            commands.len()
+        )));
+    }
+    for command in commands {
+        if command.trim().is_empty() {
+            return Err(ProtocolError::Invalid(format!("an {what} command is empty")));
+        }
+        if command.len() > MAX_COMMAND_BYTES {
+            return Err(ProtocolError::Invalid(format!(
+                "an {what} command of {} bytes exceeds the {MAX_COMMAND_BYTES}-byte cap",
+                command.len()
+            )));
+        }
+        if command.contains('\0') {
+            return Err(ProtocolError::Invalid(format!(
+                "an {what} command contains a NUL byte"
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn validate_repo_path(path: &str) -> Result<(), ProtocolError> {
     let bad = path.trim().is_empty()
         || path.len() > MAX_PATH_BYTES
@@ -617,6 +728,7 @@ mod tests {
             commands: vec!["python -m unittest -v".into()],
             timeout_secs: 120,
             protected_paths: vec!["tests/".into()],
+            hidden_sha256: None,
         }
     }
 
@@ -835,6 +947,7 @@ mod tests {
             acceptance: acceptance(),
             patch_b64: "ZGlmZg==".into(),
             patch_sha256: SHA.into(),
+            hidden: None,
         };
         let packed = agent_check_input(spec.clone()).unwrap();
         assert_eq!(parse_agent_check(&[packed]).unwrap(), spec);
@@ -851,5 +964,64 @@ mod tests {
     #[test]
     fn the_patch_cap_matches_its_encoding() {
         assert_eq!(MAX_PATCH_B64_BYTES, 1_398_104);
+    }
+
+    fn hidden() -> HiddenChecks {
+        HiddenChecks {
+            files: vec![HiddenFile {
+                path: "tests/hidden/test_edges.py".into(),
+                content_b64: "aW1wb3J0IHVuaXR0ZXN0Cg==".into(),
+            }],
+            commands: vec!["python -m unittest tests.hidden.test_edges".into()],
+        }
+    }
+
+    #[test]
+    fn a_check_carries_exactly_the_hidden_checks_the_task_committed_to() {
+        let mut acceptance = acceptance();
+        acceptance.hidden_sha256 = Some(hidden().digest());
+        let spec = |hidden: Option<HiddenChecks>| AgentCheckSpec {
+            task_job_id: Uuid::nil(),
+            repo: task().repo,
+            acceptance: acceptance.clone(),
+            patch_b64: "ZGlmZg==".into(),
+            patch_sha256: SHA.into(),
+            hidden,
+        };
+        assert!(spec(Some(hidden())).validate().is_ok());
+        assert!(spec(None).validate().is_err(), "committed but missing");
+        let mut swapped = hidden();
+        swapped.commands = vec!["true".into()];
+        assert!(spec(Some(swapped)).validate().is_err(), "swapped after the commitment");
+
+        let uncommitted = AgentCheckSpec {
+            acceptance: self::acceptance(),
+            ..spec(Some(hidden()))
+        };
+        assert!(uncommitted.validate().is_err(), "hidden checks with no commitment");
+    }
+
+    #[test]
+    fn hidden_checks_are_bounded_and_need_something_to_run() {
+        assert!(hidden().validate().is_ok());
+        assert!(HiddenChecks { files: vec![], commands: vec![] }.validate().is_err());
+        let mut escape = hidden();
+        escape.files[0].path = "../outside.py".into();
+        assert!(escape.validate().is_err());
+        let files_only = HiddenChecks {
+            files: hidden().files,
+            commands: vec![],
+        };
+        assert!(files_only.validate().is_ok(), "visible commands can pick hidden files up");
+    }
+
+    #[test]
+    fn a_check_runs_the_visible_commands_then_the_hidden_ones() {
+        let h = hidden();
+        assert_eq!(
+            check_commands(&acceptance(), Some(&h)),
+            vec!["python -m unittest -v", "python -m unittest tests.hidden.test_edges"]
+        );
+        assert_eq!(check_commands(&acceptance(), None), vec!["python -m unittest -v"]);
     }
 }

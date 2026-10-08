@@ -120,10 +120,13 @@ pub fn admit_job(
     // window, the same figure the matcher cleared it against; comparing
     // the raw per-hour number here would reject every lease the
     // coordinator legitimately routed.
-    let ask = ctx.local_profile.price.job_floor_micro_usdc(
-        envelope.payload.kind,
-        envelope.payload.capability_requirement.max_duration_secs,
-    );
+    let ask = ctx
+        .local_profile
+        .ask_for(envelope.payload.kind)
+        .job_floor_micro_usdc(
+            envelope.payload.kind,
+            envelope.payload.capability_requirement.max_duration_secs,
+        );
     if envelope.payload.price_micro_usdc < ask {
         return Err(AdmissionError::OfferBelowAsk {
             offered: envelope.payload.price_micro_usdc,
@@ -171,6 +174,8 @@ mod tests {
                 micro_usdc: 100,
             },
             tee_capable: false,
+            kind_prices: Vec::new(),
+            kind_models: Vec::new(),
         }
     }
 

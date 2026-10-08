@@ -318,6 +318,8 @@ fn register(registry: &OperatorRegistry, display: &str, micro_usdc: u64) -> Stri
             micro_usdc,
         },
         tee_capable: false,
+        kind_prices: Vec::new(),
+        kind_models: Vec::new(),
     };
     let req = RegisterRequest::sign(profile, payout_for(display), &identity).unwrap();
     registry.register(&req, 0, None, false).unwrap();

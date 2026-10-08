@@ -148,6 +148,8 @@ fn cpu_profile(identity: &LocalIdentity, micro_usdc: u64) -> CapabilityProfile {
             micro_usdc,
         },
         tee_capable: false,
+        kind_prices: Vec::new(),
+        kind_models: Vec::new(),
     }
 }
 
@@ -228,6 +230,8 @@ fn embedding_profile(identity: &LocalIdentity, micro_usdc: u64) -> CapabilityPro
             micro_usdc,
         },
         tee_capable: false,
+        kind_prices: Vec::new(),
+        kind_models: Vec::new(),
     }
 }
 
@@ -3965,6 +3969,8 @@ async fn a_demanded_hardware_ask_the_only_operator_cannot_meet_refuses_at_admiss
             micro_usdc: 1_000,
         },
         tee_capable: false,
+        kind_prices: Vec::new(),
+        kind_models: Vec::new(),
     };
     let client = Arc::new(HttpCoordinatorClient::with_config(
         base_url.clone(),
@@ -4235,6 +4241,8 @@ async fn capacity_directory_tracks_registrations_and_standing_over_the_wire() {
             micro_usdc: 400,
         },
         tee_capable: false,
+        kind_prices: Vec::new(),
+        kind_models: Vec::new(),
     };
     let register = RegisterRequest::sign(gpu_profile, payout_addr(7), &gpu_identity).unwrap();
     let resp = http
@@ -6029,6 +6037,7 @@ async fn partner_payout_records_are_gated_idempotent_and_bounded_by_accruals() {
                     lease_access: None,
                     check_jobs: Vec::new(),
                     checks_task: None,
+                    hidden_checks: None,
                 },
             )
             .unwrap();
@@ -11199,7 +11208,7 @@ async fn hostile_wire_garbage_gets_4xx_moves_no_money_and_the_service_keeps_serv
         std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/http.rs")).unwrap();
     assert_eq!(
         router_source.matches(".route(").count(),
-        40,
+        41,
         "the route table changed — teach the hostile-wire barrage the new route first"
     );
 
@@ -11360,7 +11369,9 @@ async fn hostile_wire_garbage_gets_4xx_moves_no_money_and_the_service_keeps_serv
         format!("/federation/jobs/{unknown_job}/dispute"),
         format!("/federation/jobs/{unknown_job}/cancel"),
         format!("/federation/jobs/{unknown_job}/close"),
+        format!("/federation/jobs/{unknown_job}/hidden"),
         format!("/federation/jobs/{}/close", hostile_params[1]),
+        format!("/federation/jobs/{}/hidden", hostile_params[1]),
         format!("/federation/jobs/{}/accept", hostile_params[1]),
         "/federation/buyers/deposit".to_string(),
         "/federation/buyers/withdraw".to_string(),

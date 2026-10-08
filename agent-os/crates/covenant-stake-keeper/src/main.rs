@@ -8,7 +8,8 @@ use tracing_subscriber::EnvFilter;
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| "covenant_stake_keeper=info".into()),
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "covenant_stake_keeper=info".into()),
         )
         .init();
 
@@ -21,7 +22,9 @@ async fn main() -> Result<()> {
         Some("accrue") => keeper.accrue_once().await,
         Some("run") | None => keeper.run().await,
         Some(other) => {
-            eprintln!("unknown subcommand: {other}. usage: covenant-stake-keeper [run|sweep|accrue]");
+            eprintln!(
+                "unknown subcommand: {other}. usage: covenant-stake-keeper [run|sweep|accrue]"
+            );
             std::process::exit(2);
         }
     }

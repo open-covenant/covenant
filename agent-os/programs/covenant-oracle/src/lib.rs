@@ -193,12 +193,18 @@ mod tests {
     // are a hard contract with mpl-core 0.12. Assert them, don't trust them.
     #[test]
     fn valid_is_all_pass() {
-        assert_eq!(OracleValidation::valid().try_to_vec().unwrap(), vec![1, 2, 2, 2, 2]);
+        assert_eq!(
+            OracleValidation::valid().try_to_vec().unwrap(),
+            vec![1, 2, 2, 2, 2]
+        );
     }
 
     #[test]
     fn rejected_vetoes_transfer_only() {
-        assert_eq!(OracleValidation::rejected().try_to_vec().unwrap(), vec![1, 2, 1, 2, 2]);
+        assert_eq!(
+            OracleValidation::rejected().try_to_vec().unwrap(),
+            vec![1, 2, 1, 2, 2]
+        );
     }
 
     // With `validation` first, MPL Core's ValidationResultsOffset::Anchor (byte 8,

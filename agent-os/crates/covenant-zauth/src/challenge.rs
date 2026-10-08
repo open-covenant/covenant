@@ -321,7 +321,10 @@ mod tests {
             50_000,
         )
         .expect_err("unpinned");
-        assert!(matches!(err, ZauthError::UnpinnedPayTo { .. }), "got {err:?}");
+        assert!(
+            matches!(err, ZauthError::UnpinnedPayTo { .. }),
+            "got {err:?}"
+        );
     }
 
     #[test]

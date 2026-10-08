@@ -36,7 +36,9 @@ const TOKEN_2022_PROGRAM_ID: &str = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().skip(1).collect();
     if args.is_empty() {
-        bail!("usage: mainnet_stake_e2e <keypair> <amount> <days>  |  claim <keypair> <position_pda>");
+        bail!(
+            "usage: mainnet_stake_e2e <keypair> <amount> <days>  |  claim <keypair> <position_pda>"
+        );
     }
     if args[0] == "claim" {
         return run_claim(&args[1..]);
@@ -58,8 +60,8 @@ fn main() -> Result<()> {
         .checked_mul(1_000_000)
         .ok_or_else(|| anyhow!("amount overflow"))?;
 
-    let user = read_keypair_file(keypair_path)
-        .map_err(|e| anyhow!("read {}: {}", keypair_path, e))?;
+    let user =
+        read_keypair_file(keypair_path).map_err(|e| anyhow!("read {}: {}", keypair_path, e))?;
     let user_key = user.pubkey();
     let program_id = Pubkey::from_str(COVENANT_STAKE_PROGRAM_ID_STR)?;
     let mint = Pubkey::from_str(CVNT_MINT)?;
@@ -68,7 +70,8 @@ fn main() -> Result<()> {
     let (config_pda, _) = Pubkey::find_program_address(&[b"stake_config"], &program_id);
     let (locked_auth_pda, _) = Pubkey::find_program_address(&[b"vault_auth"], &program_id);
 
-    let rpc = RpcClient::new_with_commitment(MAINNET_RPC.to_string(), CommitmentConfig::confirmed());
+    let rpc =
+        RpcClient::new_with_commitment(MAINNET_RPC.to_string(), CommitmentConfig::confirmed());
 
     println!("user            = {user_key}");
     println!("program         = {program_id}");
@@ -104,7 +107,10 @@ fn main() -> Result<()> {
             cvnt_accounts.push((pubkey, amount));
         }
     }
-    println!("discovered {} CVNT account(s) on Token-2022:", cvnt_accounts.len());
+    println!(
+        "discovered {} CVNT account(s) on Token-2022:",
+        cvnt_accounts.len()
+    );
     for (pk, amt) in &cvnt_accounts {
         println!("  {pk}  amount={} ({} CVNT)", amt, amt / 1_000_000);
     }
@@ -119,7 +125,10 @@ fn main() -> Result<()> {
             amount_cvnt
         );
     }
-    println!("\nstaking source: {source_ata} ({} CVNT)", source_amt / 1_000_000);
+    println!(
+        "\nstaking source: {source_ata} ({} CVNT)",
+        source_amt / 1_000_000
+    );
 
     // Step 2: derive locked vault ATA.
     let locked_vault = spl_associated_token_account::get_associated_token_address_with_program_id(
@@ -130,9 +139,7 @@ fn main() -> Result<()> {
 
     // Step 3: choose nonce + derive position PDA.
     use std::time::{SystemTime, UNIX_EPOCH};
-    let nonce: u64 = SystemTime::now()
-        .duration_since(UNIX_EPOCH)?
-        .as_millis() as u64;
+    let nonce: u64 = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as u64;
     let (position_pda, _) = Pubkey::find_program_address(
         &[b"stake_v2", user_key.as_ref(), &nonce.to_le_bytes()],
         &program_id,
@@ -204,14 +211,15 @@ fn run_claim(args: &[String]) -> Result<()> {
     let keypair_path = &args[0];
     let position_pda = Pubkey::from_str(&args[1]).context("position pda")?;
 
-    let user = read_keypair_file(keypair_path)
-        .map_err(|e| anyhow!("read {}: {}", keypair_path, e))?;
+    let user =
+        read_keypair_file(keypair_path).map_err(|e| anyhow!("read {}: {}", keypair_path, e))?;
     let user_key = user.pubkey();
     let program_id = Pubkey::from_str(COVENANT_STAKE_PROGRAM_ID_STR)?;
     let (config_pda, _) = Pubkey::find_program_address(&[b"stake_config"], &program_id);
     let (reward_vault_pda, _) = Pubkey::find_program_address(&[b"reward_vault"], &program_id);
 
-    let rpc = RpcClient::new_with_commitment(MAINNET_RPC.to_string(), CommitmentConfig::confirmed());
+    let rpc =
+        RpcClient::new_with_commitment(MAINNET_RPC.to_string(), CommitmentConfig::confirmed());
 
     println!("user         = {user_key}");
     println!("position     = {position_pda}");
@@ -226,7 +234,11 @@ fn run_claim(args: &[String]) -> Result<()> {
         AccountMeta::new(reward_vault_pda, false),
         AccountMeta::new(user_key, true),
     ];
-    let ix = Instruction { program_id, accounts: metas, data };
+    let ix = Instruction {
+        program_id,
+        accounts: metas,
+        data,
+    };
 
     let lamports_before = rpc.get_balance(&user_key)?;
     let blockhash = rpc.get_latest_blockhash().context("blockhash")?;

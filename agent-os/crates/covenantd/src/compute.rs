@@ -43,7 +43,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use covenant_a2a::A2ATaskStatus;
 use covenant_audit::{AuditEvent, AuditKind, AuditLog};
 use covenant_budget::{BudgetError, BudgetLedger};
-use covenant_identity::LocalIdentity;
 use covenant_compute_buyer::{
     balance_tool_spec, cancel_job, cancel_tool_spec, capacity, capacity_tool_spec,
     cheapest_matching_ask, claim_deposit, deposit_tool_spec, dispatch_and_verify, dispatch_signed,
@@ -57,6 +56,7 @@ use covenant_compute_buyer::{
     PurchaseEntry, QuoteError, RunArgs, SignedJobEnvelope, SpeakArgs, SpeechResult, StreamJobs,
     StreamJobsError, StreamPollArgs, TranscribeArgs, VerifyArgs, WithdrawArgs,
 };
+use covenant_identity::LocalIdentity;
 use covenant_mcp::{Content, ToolCallResult, ToolSpec};
 use covenant_settlement::Settlement;
 use covenant_types::{AgentId, ResourceKind, SettlementReceipt};

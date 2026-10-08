@@ -53,9 +53,12 @@ impl JupiterQuote {
     }
 
     pub fn other_amount_threshold_u64(&self) -> Result<u64> {
-        self.other_amount_threshold
-            .parse()
-            .with_context(|| format!("parse otherAmountThreshold: {}", self.other_amount_threshold))
+        self.other_amount_threshold.parse().with_context(|| {
+            format!(
+                "parse otherAmountThreshold: {}",
+                self.other_amount_threshold
+            )
+        })
     }
 }
 

@@ -49446,8 +49446,7 @@ required = {caps:?}
                         referral_code: None,
                         rpc_url: None,
                         max_active_streams_per_payer: 4,
-                        clips_dir: std::env::temp_dir()
-                            .join("covenant-compute-test-clips"),
+                        clips_dir: std::env::temp_dir().join("covenant-compute-test-clips"),
                     })
                     .with_purchase_book(Arc::new(PurchaseBook::open(&purchases_path).unwrap())),
                 );
@@ -50050,8 +50049,7 @@ required = {caps:?}
                         referral_code: None,
                         rpc_url: None,
                         max_active_streams_per_payer: 4,
-                        clips_dir: std::env::temp_dir()
-                            .join("covenant-compute-test-clips"),
+                        clips_dir: std::env::temp_dir().join("covenant-compute-test-clips"),
                     })
                     .with_purchase_book(Arc::new(PurchaseBook::open(&purchases_path).unwrap())),
                 );

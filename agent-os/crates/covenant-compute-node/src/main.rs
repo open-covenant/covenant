@@ -30,14 +30,16 @@ use anyhow::Context;
 use async_trait::async_trait;
 use base64::Engine as _;
 use covenant_audit::{AuditEvent, AuditKind, AuditLog, JsonlAuditLog};
+use covenant_compute_node::build_container::{self, Builder, ContainerBuilds};
 use covenant_compute_node::{
     audit_paid_entry, ollama, openai_compat, reconcile_paid_rows, run_benchmark, AgentConfig,
-    AgentExecutor, BenchmarkSpec, BrokerConfig, BrokerSessionBackend, ChunkSink, ContainerConfig,
-    ContainerJobExecutor, Coordinator, EarningsLedger, EarningsStatus, EchoExecutor,
-    ExecutionOutcome, ExecutorError, HttpCoordinatorClient, JobExecutor, JsonlEarningsLedger,
-    LeaseControl, LeaseExecutor, Node, NodeConfig, NodeError, OllamaExecutor, OpenAiCompatExecutor,
-    SayExecutor, StubSessionBackend, SubprocessJobExecutor, WhisperExecutor, DEFAULT_SAY_BIN,
-    DEFAULT_WHISPER_BIN, READY_POLL_INTERVAL, READY_TIMEOUT, SERVICE_USAGE, SETUP_USAGE,
+    AgentCredential, AgentExecutor, BenchmarkSpec, BrokerConfig, BrokerSessionBackend, ChunkSink,
+    ContainerConfig, ContainerJobExecutor, Coordinator, EarningsLedger, EarningsStatus,
+    EchoExecutor, ExecutionOutcome, ExecutorError, HttpCoordinatorClient, JobExecutor,
+    JsonlEarningsLedger, LeaseControl, LeaseExecutor, Node, NodeConfig, NodeError, OllamaExecutor,
+    OpenAiCompatExecutor, SayExecutor, StubSessionBackend, SubprocessJobExecutor, WhisperExecutor,
+    DEFAULT_SAY_BIN, DEFAULT_WHISPER_BIN, READY_POLL_INTERVAL, READY_TIMEOUT, SERVICE_USAGE,
+    SETUP_USAGE,
 };
 use covenant_compute_protocol::{
     canonical_model, coordinator_reason, payout_transaction_rpc_request, speech_input,
@@ -126,6 +128,74 @@ fn env_or<T: std::str::FromStr>(key: &str, default: T) -> T {
         }),
         Err(_) => default,
     }
+}
+
+/// A set, non-blank environment value, trimmed.
+fn env_value(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+/// Where an agent node runs its builds. `container` keeps the agent off this
+/// machine's filesystem and network, and so needs a model key the proxy can
+/// hold: a container cannot use this machine's Claude sign-in.
+async fn agent_builder(credential: Option<&AgentCredential>) -> anyhow::Result<Builder> {
+    let choice = std::env::var("COVENANT_COMPUTE_AGENT_BUILDER").unwrap_or_default();
+    match choice.trim() {
+        "" | "host" => Ok(Builder::Host),
+        "container" => {
+            anyhow::ensure!(
+                credential.is_some_and(|c| c.api_key),
+                "COVENANT_COMPUTE_AGENT_BUILDER=container needs an API key in \
+                 COVENANT_COMPUTE_AGENT_AUTH_TOKEN_FILE: a container cannot use this machine's \
+                 Claude sign-in"
+            );
+            let runtime = env_value("COVENANT_COMPUTE_NODE_CONTAINER_RUNTIME")
+                .unwrap_or_else(|| "docker".into());
+            Ok(Builder::Container(ContainerBuilds {
+                docker_host: docker_host(&runtime).await?,
+                network: env_value("COVENANT_COMPUTE_AGENT_BUILD_NETWORK")
+                    .unwrap_or_else(|| "covenant-compute-build".into()),
+                forwarder_image: env_value("COVENANT_COMPUTE_AGENT_BUILD_FORWARDER")
+                    .unwrap_or_else(|| "alpine/socat".into()),
+                proxy_host: env_value("COVENANT_COMPUTE_AGENT_BUILD_PROXY_HOST")
+                    .unwrap_or_else(|| "host.lima.internal".into()),
+                memory: env_value("COVENANT_COMPUTE_AGENT_BUILD_MEMORY")
+                    .unwrap_or_else(|| "2g".into()),
+                cpus: env_value("COVENANT_COMPUTE_AGENT_BUILD_CPUS").unwrap_or_else(|| "2".into()),
+                pids: env_or("COVENANT_COMPUTE_AGENT_BUILD_PIDS", 512u32),
+            }))
+        }
+        other => {
+            anyhow::bail!("COVENANT_COMPUTE_AGENT_BUILDER must be host or container, got {other:?}")
+        }
+    }
+}
+
+/// The daemon address the build wrapper hands its docker CLI, read once here
+/// where `~/.docker` is visible.
+async fn docker_host(runtime: &str) -> anyhow::Result<String> {
+    if let Some(host) = env_value("DOCKER_HOST") {
+        return Ok(host);
+    }
+    let out = tokio::process::Command::new(runtime)
+        .args([
+            "context",
+            "inspect",
+            "--format",
+            "{{.Endpoints.docker.Host}}",
+        ])
+        .output()
+        .await
+        .with_context(|| format!("ask {runtime} for its daemon address"))?;
+    let host = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    anyhow::ensure!(
+        out.status.success() && !host.is_empty(),
+        "{runtime} reports no daemon address; set DOCKER_HOST"
+    );
+    Ok(host)
 }
 
 /// `--flag` present anywhere in the args, removed in place.
@@ -593,7 +663,7 @@ enum NodeExecutor {
     Whisper(WhisperExecutor),
     Say(SayExecutor),
     Lease(LeaseExecutor),
-    Agent(AgentExecutor),
+    Agent(Box<AgentExecutor>),
 }
 
 #[async_trait]
@@ -2225,6 +2295,11 @@ fn init_logging(serve_mode: bool) -> anyhow::Result<()> {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
+    // covguard's agent for a containerized build: no home, no identity, and
+    // every argument after the subcommand belongs to it.
+    if args.first().map(String::as_str) == Some(build_container::BUILD_CONTAINER) {
+        std::process::exit(build_container::run(&args[1..]).await);
+    }
     // Help and version answer before any filesystem or config touch —
     // asking a question must not mint an identity or create a home.
     match args.first().map(String::as_str) {
@@ -2774,16 +2849,20 @@ async fn main() -> anyhow::Result<()> {
             // A model credential, when the operator gives one, is read from
             // a file and handed to covguard's proxy, never to the agent. With
             // none, the agent uses the machine's own Claude login.
-            let auth_token = match std::env::var("COVENANT_COMPUTE_AGENT_AUTH_TOKEN_FILE") {
+            let credential = match std::env::var("COVENANT_COMPUTE_AGENT_AUTH_TOKEN_FILE") {
                 Ok(path) => Some(
-                    std::fs::read_to_string(path.trim())
-                        .with_context(|| format!("read the agent auth token from {path}"))?
-                        .trim()
-                        .to_string(),
-                )
-                .filter(|t| !t.is_empty()),
+                    AgentCredential::load(
+                        PathBuf::from(path.trim()),
+                        std::env::var("COVENANT_COMPUTE_AGENT_ANTHROPIC_WORKSPACE_ID")
+                            .ok()
+                            .map(|w| w.trim().to_string())
+                            .filter(|w| !w.is_empty()),
+                    )
+                    .map_err(anyhow::Error::msg)?,
+                ),
                 Err(_) => None,
             };
+            let builder = agent_builder(credential.as_ref()).await?;
             let work_dir = std::env::var("COVENANT_COMPUTE_AGENT_WORK_DIR")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| home.join("agent-work"));
@@ -2808,7 +2887,7 @@ async fn main() -> anyhow::Result<()> {
                     .filter(|v| !v.is_empty()),
                 budget_usd: std::env::var("COVENANT_COMPUTE_AGENT_BUDGET_USD")
                     .unwrap_or_else(|_| "2.00".into()),
-                auth_token,
+                credential,
                 work_dir,
                 check_images,
                 check_memory: std::env::var("COVENANT_COMPUTE_AGENT_CHECK_MEMORY")
@@ -2827,13 +2906,15 @@ async fn main() -> anyhow::Result<()> {
                     LocalIdentity::load_or_create(&home.join("identity.json"), "operator@compute")
                         .context("reload operator identity for check votes")?,
                 ),
+                builder,
             };
             tracing::info!(
                 work_dir = %config.work_dir.display(),
                 check_images = ?config.check_images,
                 model = ?config.default_model,
                 budget_usd = %config.budget_usd,
-                proxy_holds_credential = config.auth_token.is_some(),
+                proxy_holds_credential = config.credential.is_some(),
+                builds_in_container = matches!(config.builder, Builder::Container(_)),
                 "executor: agent (Claude Code under covguard for builds, sandboxed containers \
                  for checks)"
             );
@@ -2843,7 +2924,7 @@ async fn main() -> anyhow::Result<()> {
                 Duration::from_secs(5),
             );
             executor.ensure_images_present().await;
-            NodeExecutor::Agent(executor)
+            NodeExecutor::Agent(Box::new(executor))
         }
         // A typo must not silently run strangers' code with LESS
         // isolation than the operator configured.

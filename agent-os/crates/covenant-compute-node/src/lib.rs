@@ -32,6 +32,7 @@ pub mod admission;
 pub mod agent;
 pub mod benchmark;
 pub mod broker;
+pub mod build_container;
 pub mod container;
 pub mod coordinator;
 pub mod earnings;
@@ -50,7 +51,7 @@ pub mod whisper;
 
 pub use accepted::{AcceptedBook, AcceptedEntry, AcceptedError};
 pub use admission::{AdmissionContext, AdmissionError};
-pub use agent::{AgentConfig, AgentExecutor};
+pub use agent::{AgentConfig, AgentCredential, AgentExecutor};
 pub use benchmark::{run_benchmark, BenchmarkProbe, BenchmarkSpec, ProbeStats};
 pub use broker::{BrokerConfig, BrokerSessionBackend, READY_POLL_INTERVAL, READY_TIMEOUT};
 pub use container::{ContainerConfig, ContainerJobExecutor};

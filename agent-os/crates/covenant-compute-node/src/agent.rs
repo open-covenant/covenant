@@ -40,6 +40,9 @@ use covenant_runtime::{preempt_subprocess_pg, SubprocessTracker, TrackedSubproce
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
+use crate::build_container::{
+    builder_dockerfile, builder_image, container_names, wrapper_argv, Builder, ContainerBuilds,
+};
 use crate::executor::{configure_process_group, ExecutionOutcome, ExecutorError, JobExecutor};
 
 /// Time kept back from a build's deadline for producing the patch and
@@ -60,9 +63,11 @@ pub struct AgentConfig {
     pub default_model: Option<String>,
     /// covguard's hard spend cap per build, in USD, as its CLI takes it.
     pub budget_usd: String,
-    /// A model credential for covguard's proxy to hold and inject. `None`
-    /// forwards the agent's own login (a Claude subscription).
-    pub auth_token: Option<String>,
+    /// A model credential for covguard's proxy to hold and inject, read by
+    /// covguard from this file so it never appears in a process list the
+    /// agent can see. `None` forwards the agent's own login (a Claude
+    /// subscription).
+    pub credential: Option<AgentCredential>,
     /// Where per-job checkouts live. Must be visible to the container
     /// engine: on a VM-backed engine that means a shared path under the
     /// user's home, not the system temp dir.
@@ -77,6 +82,40 @@ pub struct AgentConfig {
     /// The node key, which signs each check's vote so the coordinator can
     /// put it on chain as cast.
     pub voter: Arc<LocalIdentity>,
+    /// Where builds run: on this machine under covguard's sandbox, or in a
+    /// container that sees only the checkout.
+    pub builder: Builder,
+}
+
+/// Where the builds' model credential lives, and what it needs alongside.
+#[derive(Clone)]
+pub struct AgentCredential {
+    pub file: PathBuf,
+    /// An API key rather than a subscription sign-in token.
+    pub api_key: bool,
+    /// The workspace a key that is not scoped to one bills to.
+    pub workspace: Option<String>,
+}
+
+impl AgentCredential {
+    /// Checks the file holds a token without keeping it: covguard reads it
+    /// again for each build.
+    pub fn load(file: PathBuf, workspace: Option<String>) -> Result<Self, String> {
+        let token = std::fs::read_to_string(&file)
+            .map_err(|e| format!("read the agent credential at {}: {e}", file.display()))?;
+        let token = token.trim();
+        if token.is_empty() {
+            return Err(format!(
+                "the agent credential at {} is empty",
+                file.display()
+            ));
+        }
+        Ok(Self {
+            file,
+            api_key: !token.starts_with("sk-ant-oat"),
+            workspace,
+        })
+    }
 }
 
 pub struct AgentExecutor {
@@ -109,6 +148,106 @@ impl AgentExecutor {
     /// Pulls every allowed check image that is not already present, so the
     /// first check a buyer pays for does not spend its window downloading.
     pub async fn ensure_images_present(&self) {
+        self.pull_check_images().await;
+        if let Builder::Container(builds) = &self.config.builder {
+            self.prepare_container_builds(builds).await;
+        }
+    }
+
+    /// The internal network, the forwarder image and a builder image per
+    /// check image. Each step logs and carries on: a build that needs a
+    /// missing piece fails on its own, with a reason.
+    async fn prepare_container_builds(&self, builds: &ContainerBuilds) {
+        let runtime = &self.config.container_runtime;
+        let quiet = |args: &[&str]| {
+            let mut cmd = Command::new(runtime);
+            cmd.args(args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            cmd
+        };
+        let exists = quiet(&["network", "inspect", &builds.network])
+            .status()
+            .await
+            .is_ok_and(|s| s.success());
+        if !exists
+            && !quiet(&["network", "create", "--internal", &builds.network])
+                .status()
+                .await
+                .is_ok_and(|s| s.success())
+        {
+            tracing::warn!(network = %builds.network, "could not create the build network");
+        }
+        let have_forwarder = quiet(&["image", "inspect", &builds.forwarder_image])
+            .status()
+            .await
+            .is_ok_and(|s| s.success());
+        if !have_forwarder
+            && !quiet(&["pull", "--quiet", &builds.forwarder_image])
+                .status()
+                .await
+                .is_ok_and(|s| s.success())
+        {
+            tracing::warn!(image = %builds.forwarder_image, "could not pull the proxy forwarder");
+        }
+        for check_image in &self.config.check_images {
+            let image = builder_image(check_image);
+            if quiet(&["image", "inspect", &image])
+                .status()
+                .await
+                .is_ok_and(|s| s.success())
+            {
+                continue;
+            }
+            tracing::info!(%image, "building the builder image");
+            let child = Command::new(runtime)
+                .args(["build", "--quiet", "-t", &image, "-"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .spawn();
+            let built = match child {
+                Ok(mut child) => {
+                    if let Some(mut stdin) = child.stdin.take() {
+                        use tokio::io::AsyncWriteExt;
+                        let _ = stdin
+                            .write_all(builder_dockerfile(check_image).as_bytes())
+                            .await;
+                    }
+                    child.wait_with_output().await
+                }
+                Err(e) => Err(e),
+            };
+            match built {
+                Ok(out) if out.status.success() => {}
+                Ok(out) => tracing::warn!(
+                    %image,
+                    stderr = %String::from_utf8_lossy(&out.stderr).trim(),
+                    "builder image build failed; builds in it will fail until it exists"
+                ),
+                Err(e) => tracing::warn!(%image, error = %e, "builder image build did not start"),
+            }
+        }
+    }
+
+    fn build_container_name(&self, job: &JobEnvelopePayload) -> String {
+        format!("compute-build-{}-{}", self.config.instance_tag, job.job_id)
+    }
+
+    /// Whatever state a containerized build ended in, its containers go.
+    async fn remove_build_containers(&self, job: &JobEnvelopePayload) {
+        let names = container_names(&self.build_container_name(job));
+        let _ = Command::new(&self.config.container_runtime)
+            .args(["rm", "-f", &names[0], &names[1]])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await;
+    }
+
+    async fn pull_check_images(&self) {
         for image in &self.config.check_images {
             let present = Command::new(&self.config.container_runtime)
                 .args(["image", "inspect", image])
@@ -158,6 +297,14 @@ impl AgentExecutor {
                 "too little of the job's window is left to run the agent".into(),
             ));
         }
+        if matches!(self.config.builder, Builder::Container(_))
+            && !self.config.check_images.contains(&spec.acceptance.image)
+        {
+            return Err(ExecutorError::Failed(format!(
+                "this node builds only in its check images, and {} is not one",
+                spec.acceptance.image
+            )));
+        }
         let model = spec
             .model
             .clone()
@@ -166,12 +313,17 @@ impl AgentExecutor {
             .run_agent(
                 job,
                 &tree,
+                &spec.acceptance.image,
                 &task_prompt(&spec),
                 model.as_deref(),
                 wall,
                 until,
             )
-            .await?;
+            .await;
+        if matches!(self.config.builder, Builder::Container(_)) {
+            self.remove_build_containers(job).await;
+        }
+        let run = run?;
 
         let commit = spec.repo.commit();
         self.git(&git_dir, Some(&tree), &["add", "-A"], until)
@@ -598,10 +750,12 @@ impl AgentExecutor {
         Ok(out.stdout)
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn run_agent(
         &self,
         job: &JobEnvelopePayload,
         tree: &Path,
+        image: &str,
         prompt: &str,
         model: Option<&str>,
         wall: Duration,
@@ -618,20 +772,40 @@ impl AgentExecutor {
             "--workspace",
             &tree.to_string_lossy(),
         ]);
-        if let Some(token) = &self.config.auth_token {
-            cmd.args(["--auth-token", token]);
+        if let Some(credential) = &self.config.credential {
+            cmd.arg("--auth-token-file").arg(&credential.file);
         }
-        cmd.args([
-            "--",
-            &self.config.claude_bin,
-            "-p",
-            prompt,
-            "--dangerously-skip-permissions",
-            "--output-format",
-            "json",
-        ]);
+        let mut agent: Vec<String> = vec![
+            match self.config.builder {
+                Builder::Host => self.config.claude_bin.clone(),
+                Builder::Container(_) => "claude".into(),
+            },
+            "-p".into(),
+            prompt.into(),
+            "--dangerously-skip-permissions".into(),
+            "--output-format".into(),
+            "json".into(),
+        ];
         if let Some(model) = model {
-            cmd.args(["--model", model]);
+            agent.extend(["--model".into(), model.into()]);
+        }
+        cmd.arg("--");
+        match &self.config.builder {
+            Builder::Host => {
+                cmd.args(&agent);
+            }
+            Builder::Container(builds) => {
+                let node = std::env::current_exe()
+                    .map_err(|e| ExecutorError::Failed(format!("locate this binary: {e}")))?;
+                cmd.args(wrapper_argv(
+                    &node,
+                    builds,
+                    &self.build_container_name(job),
+                    tree,
+                    image,
+                    &agent,
+                ));
+            }
         }
         // The node's own configuration stays out of the agent's reach, and
         // the agent makes no calls the guard's egress pin would refuse.
@@ -640,11 +814,26 @@ impl AgentExecutor {
                 cmd.env_remove(key);
             }
         }
+        if let Some(credential) = &self.config.credential {
+            // An API key puts the agent in API-key mode: the placeholder is
+            // all it holds, and the proxy swaps in the real key. A
+            // subscription token keeps the agent's own sign-in mode.
+            if credential.api_key {
+                cmd.env("ANTHROPIC_API_KEY", "covguard-proxy-injected");
+            }
+            if let Some(workspace) = &credential.workspace {
+                cmd.env(
+                    "ANTHROPIC_CUSTOM_HEADERS",
+                    format!("anthropic-workspace-id: {workspace}"),
+                );
+            }
+        }
         cmd.current_dir(tree)
             .env("DISABLE_AUTOUPDATER", "1")
             .env("DISABLE_TELEMETRY", "1")
             .env("DISABLE_ERROR_REPORTING", "1")
             .env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
+            .env("PYTHONDONTWRITEBYTECODE", "1")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -849,7 +1038,9 @@ impl JobExecutor for AgentExecutor {
     async fn health(&self) -> Result<(), ExecutorError> {
         self.probe(&self.config.git_bin, &["--version"]).await?;
         self.probe(&self.config.covguard_bin, &["version"]).await?;
-        self.probe(&self.config.claude_bin, &["--version"]).await?;
+        if matches!(self.config.builder, Builder::Host) {
+            self.probe(&self.config.claude_bin, &["--version"]).await?;
+        }
         self.probe(&self.config.container_runtime, &["version"])
             .await
     }

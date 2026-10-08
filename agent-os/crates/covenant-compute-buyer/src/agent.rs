@@ -8,7 +8,8 @@ use std::path::{Path, PathBuf};
 use base64::Engine as _;
 use covenant_compute_protocol::{
     agent_task_input, parse_agent_task_output, AcceptanceSpec, AgentCheckVerdict, AgentRuntime,
-    AgentTaskOutput, AgentTaskSpec, HiddenChecks, HiddenFile, JobKind, RepoSource,
+    AgentSkill, AgentTaskOutput, AgentTaskSpec, CommandOutcome, HiddenChecks, HiddenFile, JobKind,
+    RepoSource,
 };
 use covenant_identity::LocalIdentity;
 use covenant_mcp::ToolSpec;
@@ -53,6 +54,13 @@ pub struct AgentArgs {
     /// Commands run after the visible ones, also kept from the builder.
     #[serde(default)]
     pub hidden_accept: Vec<String>,
+    /// `code.change` (the default) or `code.tests`.
+    #[serde(default)]
+    pub skill: Option<String>,
+    /// For `code.tests`: files whose working-tree versions fix the bug the
+    /// tests must catch. Only checkers see them.
+    #[serde(default)]
+    pub fix: Vec<String>,
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
@@ -116,7 +124,29 @@ pub fn prepare_agent_task(args: &AgentArgs) -> Result<PreparedTask, BuyerError> 
     } else {
         local_bundle(Path::new(&args.repo), args.commit.as_deref())?
     };
-    let hidden = if args.hidden.is_empty() && args.hidden_accept.is_empty() {
+    let skill = match args.skill.as_deref() {
+        None | Some("code.change") => AgentSkill::CodeChange,
+        Some("code.tests") => AgentSkill::CodeTests,
+        Some(other) => {
+            return Err(invalid(format!(
+                "unknown skill {other:?}; this network takes code.change and code.tests"
+            )))
+        }
+    };
+    match (skill, args.fix.is_empty()) {
+        (AgentSkill::CodeTests, true) => {
+            return Err(invalid(
+                "code.tests needs --fix: the file versions that fix the bug, which the tests \
+                 must pass once applied"
+                    .into(),
+            ))
+        }
+        (AgentSkill::CodeChange, false) => {
+            return Err(invalid("--fix belongs to code.tests".into()))
+        }
+        _ => {}
+    }
+    let hidden = if args.hidden.is_empty() && args.hidden_accept.is_empty() && args.fix.is_empty() {
         None
     } else {
         let root = if remote {
@@ -128,6 +158,7 @@ pub fn prepare_agent_task(args: &AgentArgs) -> Result<PreparedTask, BuyerError> 
             &root,
             &repo,
             &args.hidden,
+            &args.fix,
             args.hidden_accept.clone(),
         )?)
     };
@@ -135,6 +166,7 @@ pub fn prepare_agent_task(args: &AgentArgs) -> Result<PreparedTask, BuyerError> 
         task: args.task.clone(),
         repo,
         acceptance: AcceptanceSpec {
+            skill,
             image: args
                 .check_image
                 .clone()
@@ -288,16 +320,18 @@ pub fn local_bundle(path: &Path, commit: Option<&str>) -> Result<RepoSource, Buy
     })
 }
 
-/// Reads hidden test files from the buyer's working tree. A file committed
-/// at the task's commit is refused: the builder checks the commit out, so a
-/// committed "hidden" test is one it can read.
+/// Reads hidden test files and, for `code.tests`, the fix from the buyer's
+/// working tree. A hidden test committed at the task's commit is refused:
+/// the builder checks the commit out, so a committed "hidden" test is one it
+/// can read.
 pub fn read_hidden_checks(
     root: &Path,
     repo: &RepoSource,
     paths: &[String],
+    fix: &[String],
     commands: Vec<String>,
 ) -> Result<HiddenChecks, BuyerError> {
-    let mut files = Vec::with_capacity(paths.len());
+    let mut files = Vec::with_capacity(paths.len() + fix.len());
     for path in paths {
         if let RepoSource::Bundle { commit, .. } = repo {
             let committed = std::process::Command::new("git")
@@ -321,6 +355,7 @@ pub fn read_hidden_checks(
             content_b64: base64::engine::general_purpose::STANDARD.encode(bytes),
         });
     }
+    files.extend(read_fix(root, repo, fix)?);
     let hidden = HiddenChecks { files, commands };
     hidden
         .validate()
@@ -328,8 +363,43 @@ pub fn read_hidden_checks(
     Ok(hidden)
 }
 
-/// A verdict as a short human-readable account: what ran and how it went,
-/// with the tail of whatever failed.
+/// The fix a `code.tests` task is judged against: each file as it stands in
+/// the working tree, which must differ from the commit, or there is no bug
+/// for the tests to catch.
+fn read_fix(
+    root: &Path,
+    repo: &RepoSource,
+    paths: &[String],
+) -> Result<Vec<HiddenFile>, BuyerError> {
+    let mut files = Vec::with_capacity(paths.len());
+    for path in paths {
+        let bytes = std::fs::read(root.join(path))
+            .map_err(|e| BuyerError::Protocol(format!("read fix {path}: {e}")))?;
+        if let RepoSource::Bundle { commit, .. } = repo {
+            let committed = std::process::Command::new("git")
+                .arg("-C")
+                .arg(root)
+                .args(["show", &format!("{commit}:{path}")])
+                .stderr(std::process::Stdio::null())
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| o.stdout);
+            if committed.as_deref() == Some(bytes.as_slice()) {
+                return Err(BuyerError::Protocol(format!(
+                    "fix {path} is the same as at the commit; edit it to the fixed version \
+                     without committing"
+                )));
+            }
+        }
+        files.push(HiddenFile {
+            path: path.clone(),
+            content_b64: base64::engine::general_purpose::STANDARD.encode(bytes),
+        });
+    }
+    Ok(files)
+}
+
 /// The chain's count in one line, with the transaction that records it.
 pub fn describe_round(round: &VoteRoundView) -> String {
     let passes = round.votes.iter().filter(|v| v.passed).count();
@@ -341,6 +411,8 @@ pub fn describe_round(round: &VoteRoundView) -> String {
     )
 }
 
+/// A verdict as a short human-readable account: what ran and how it went,
+/// with the tail of whatever failed.
 pub fn describe_verdict(verdict: &AgentCheckVerdict) -> String {
     if !verdict.applied {
         return "check: the patch did not apply to the commit".into();
@@ -355,25 +427,50 @@ pub fn describe_verdict(verdict: &AgentCheckVerdict) -> String {
         "check: {}",
         if verdict.passed { "passed" } else { "failed" }
     );
-    for outcome in &verdict.commands {
+    if verdict.skill == AgentSkill::CodeChange {
+        describe_runs(&mut out, &verdict.commands, "  ");
+        return out;
+    }
+    for (heading, runs) in [
+        ("on the commit as it is (must pass):", &verdict.baseline),
+        (
+            "with the new tests (must fail, catching the bug):",
+            &verdict.commands,
+        ),
+        (
+            "with the new tests and your fix (must pass):",
+            &verdict.fixed,
+        ),
+    ] {
+        if runs.is_empty() {
+            continue;
+        }
+        out.push_str(&format!("\n  {heading}"));
+        describe_runs(&mut out, runs, "    ");
+    }
+    out
+}
+
+/// Each command with its result, and the tail of any that did not pass.
+fn describe_runs(out: &mut String, outcomes: &[CommandOutcome], indent: &str) {
+    for outcome in outcomes {
         let result = if outcome.timed_out {
             "timed out".to_string()
         } else {
             format!("exit {}", outcome.exit_code)
         };
         out.push_str(&format!(
-            "\n  $ {}  ({result}, {:.1}s)",
+            "\n{indent}$ {}  ({result}, {:.1}s)",
             outcome.command,
             outcome.duration_ms as f64 / 1000.0
         ));
         if !outcome.passed() {
             let tail: Vec<&str> = outcome.output_tail.trim_end().lines().collect();
             for line in &tail[tail.len().saturating_sub(20)..] {
-                out.push_str(&format!("\n    {line}"));
+                out.push_str(&format!("\n{indent}  {line}"));
             }
         }
     }
-    out
 }
 
 pub fn agent_tool_spec(max_price_micro_usdc: u64) -> ToolSpec {
@@ -431,6 +528,16 @@ pub fn agent_tool_spec(max_price_micro_usdc: u64) -> ToolSpec {
                     "items": { "type": "string" },
                     "description": "Commands run after the visible ones, also kept from the agent"
                 },
+                "skill": {
+                    "type": "string",
+                    "enum": ["code.change", "code.tests"],
+                    "description": "code.change (default): change the code until the commands pass. code.tests: write tests that catch a bug; they must fail on the commit and pass with your fix"
+                },
+                "fix": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "code.tests only: files in the local working tree (edited, not committed) that fix the bug. Only the checker sees them"
+                },
                 "model": {
                     "type": "string",
                     "description": "Model for the agent to drive. The operator's default otherwise"
@@ -450,5 +557,100 @@ pub fn agent_tool_spec(max_price_micro_usdc: u64) -> ToolSpec {
             },
             "required": ["repo", "task", "accept"]
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn repo_with_bug() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir.path())
+                .args(args)
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        std::fs::write(
+            dir.path().join("slugify.py"),
+            "def slugify(t):\n    return t\n",
+        )
+        .unwrap();
+        git(&["add", "."]);
+        git(&[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "-m",
+            "bug",
+        ]);
+        dir
+    }
+
+    fn tests_args(repo: &Path) -> AgentArgs {
+        AgentArgs {
+            repo: repo.display().to_string(),
+            commit: None,
+            task: "write a regression test for the lowercase bug".into(),
+            accept: vec!["python -m unittest".into()],
+            check_image: None,
+            check_timeout_secs: None,
+            protect: vec!["slugify.py".into()],
+            hidden: vec![],
+            hidden_accept: vec![],
+            skill: Some("code.tests".into()),
+            fix: vec![],
+            model: None,
+            price_micro_usdc: None,
+            deadline_ms: None,
+            apply: false,
+        }
+    }
+
+    #[test]
+    fn code_tests_sends_the_working_tree_fix_to_checkers_only() {
+        let repo = repo_with_bug();
+        let mut args = tests_args(repo.path());
+        assert!(prepare_agent_task(&args).is_err(), "code.tests needs a fix");
+
+        args.fix = vec!["slugify.py".into()];
+        assert!(
+            prepare_agent_task(&args).is_err(),
+            "a fix identical to the commit fixes nothing"
+        );
+
+        let fixed = "def slugify(t):\n    return t.lower()\n";
+        std::fs::write(repo.path().join("slugify.py"), fixed).unwrap();
+        let task = prepare_agent_task(&args).unwrap();
+        assert_eq!(task.spec.acceptance.skill, AgentSkill::CodeTests);
+        let hidden = task.hidden.expect("the fix travels as hidden checks");
+        assert_eq!(hidden.files.len(), 1);
+        assert_eq!(hidden.files[0].path, "slugify.py");
+        assert_eq!(
+            hidden.files[0].content_b64,
+            base64::engine::general_purpose::STANDARD.encode(fixed)
+        );
+        assert_eq!(task.spec.acceptance.hidden_sha256, Some(hidden.digest()));
+
+        args.skill = None;
+        assert!(
+            prepare_agent_task(&args).is_err(),
+            "--fix belongs to code.tests"
+        );
+        args.skill = Some("code.audit".into());
+        args.fix.clear();
+        assert!(
+            prepare_agent_task(&args).is_err(),
+            "an unknown skill is refused"
+        );
     }
 }

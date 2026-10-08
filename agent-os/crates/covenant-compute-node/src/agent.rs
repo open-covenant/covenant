@@ -30,9 +30,9 @@ use async_trait::async_trait;
 use base64::Engine as _;
 use covenant_compute_protocol::{
     agent_check_output, agent_task_output, check_commands, parse_agent_check, parse_agent_task,
-    sha256_hex, AcceptanceSpec, AgentCheckVerdict, AgentTaskOutput, AgentTaskSpec, CommandOutcome,
-    HiddenChecks, JobEnvelopePayload, JobKind, RepoSource, MAX_OUTPUT_TAIL_BYTES, MAX_PATCH_BYTES,
-    MAX_SUMMARY_BYTES,
+    sha256_hex, AcceptanceSpec, AgentCheckVerdict, AgentSkill, AgentTaskOutput, AgentTaskSpec,
+    CommandOutcome, HiddenChecks, JobEnvelopePayload, JobKind, RepoSource, MAX_OUTPUT_TAIL_BYTES,
+    MAX_PATCH_BYTES, MAX_SUMMARY_BYTES,
 };
 use covenant_identity::LocalIdentity;
 use covenant_mcp::Content;
@@ -263,17 +263,60 @@ impl AgentExecutor {
         std::fs::write(&patch_file, &patch)
             .map_err(|e| ExecutorError::Failed(format!("write patch: {e}")))?;
         let patch_arg = patch_file.to_string_lossy().into_owned();
+        let budget_end =
+            (Instant::now() + Duration::from_secs(u64::from(acceptance.timeout_secs))).min(until);
+        let tests = acceptance.skill == AgentSkill::CodeTests;
 
-        let verdict = |applied, violations, commands| {
-            AgentCheckVerdict::new(
-                spec.task_job_id,
-                spec.patch_sha256.clone(),
-                applied,
-                violations,
-                commands,
+        // code.tests first runs the suite on the commit as it is: tests that
+        // only fail because the suite was already red have caught nothing.
+        // The tree is then put back exactly as checked out, so nothing the
+        // run left behind reaches the patched runs.
+        let baseline = if tests {
+            let visible: Vec<&str> = acceptance.commands.iter().map(String::as_str).collect();
+            let outcomes = self
+                .run_phase(job, 0, acceptance, &tree, &visible, budget_end)
+                .await?;
+            let commit = spec.repo.commit();
+            self.git(
+                &git_dir,
+                Some(&tree),
+                &["reset", "-q", "--hard", commit],
+                until,
             )
-            .sign_vote(&self.config.voter)
+            .await?;
+            self.git(&git_dir, Some(&tree), &["clean", "-q", "-fdx"], until)
+                .await?;
+            outcomes
+        } else {
+            Vec::new()
         };
+
+        let verdict = |applied, violations, commands, fixed| {
+            let verdict = if tests {
+                AgentCheckVerdict::catching(
+                    spec.task_job_id,
+                    spec.patch_sha256.clone(),
+                    applied,
+                    violations,
+                    baseline.clone(),
+                    commands,
+                    fixed,
+                )
+            } else {
+                AgentCheckVerdict::new(
+                    spec.task_job_id,
+                    spec.patch_sha256.clone(),
+                    applied,
+                    violations,
+                    commands,
+                )
+            };
+            verdict.sign_vote(&self.config.voter)
+        };
+        if tests && !baseline.iter().all(CommandOutcome::passed) {
+            tracing::info!(job_id = %job.job_id, "the suite fails before the new tests; nothing to catch");
+            return finish(verdict(true, Vec::new(), Vec::new(), Vec::new()));
+        }
         let applied = self
             .git(
                 &git_dir,
@@ -284,7 +327,7 @@ impl AgentExecutor {
             .await;
         if let Err(e) = applied {
             tracing::info!(job_id = %job.job_id, error = %e, "patch does not apply");
-            return finish(verdict(false, Vec::new(), Vec::new()));
+            return finish(verdict(false, Vec::new(), Vec::new(), Vec::new()));
         }
         let violations: Vec<String> = self
             .changed_paths(&git_dir, &tree, spec.repo.commit(), until)
@@ -293,23 +336,57 @@ impl AgentExecutor {
             .filter(|p| acceptance.protects(p))
             .collect();
         if !violations.is_empty() {
-            return finish(verdict(true, violations, Vec::new()));
+            return finish(verdict(true, violations, Vec::new(), Vec::new()));
         }
+
+        // code.tests: the new tests must fail on the commit's bug before the
+        // fix goes in. code.change goes straight to every command.
+        let caught = if tests {
+            let visible: Vec<&str> = acceptance.commands.iter().map(String::as_str).collect();
+            let outcomes = self
+                .run_phase(job, 100, acceptance, &tree, &visible, budget_end)
+                .await?;
+            if outcomes.last().is_none_or(|o| !o.caught()) {
+                return finish(verdict(true, Vec::new(), outcomes, Vec::new()));
+            }
+            outcomes
+        } else {
+            Vec::new()
+        };
 
         if let Some(hidden) = &spec.hidden {
             if let Err(e) = place_hidden_files(&tree, hidden) {
                 tracing::info!(job_id = %job.job_id, error = %e, "hidden checks could not be placed");
-                return finish(verdict(false, Vec::new(), Vec::new()));
+                return finish(verdict(false, Vec::new(), caught, Vec::new()));
             }
         }
 
-        let budget_end =
-            (Instant::now() + Duration::from_secs(u64::from(acceptance.timeout_secs))).min(until);
         let commands = check_commands(acceptance, spec.hidden.as_ref());
+        let outcomes = self
+            .run_phase(job, 200, acceptance, &tree, &commands, budget_end)
+            .await?;
+        if tests {
+            finish(verdict(true, Vec::new(), caught, outcomes))
+        } else {
+            finish(verdict(true, Vec::new(), outcomes, Vec::new()))
+        }
+    }
+
+    /// Runs `commands` in order, stopping at the first that does not pass.
+    /// `first` numbers the containers so phases never reuse a name.
+    async fn run_phase(
+        &self,
+        job: &JobEnvelopePayload,
+        first: usize,
+        acceptance: &AcceptanceSpec,
+        tree: &Path,
+        commands: &[&str],
+        budget_end: Instant,
+    ) -> Result<Vec<CommandOutcome>, ExecutorError> {
         let mut outcomes = Vec::with_capacity(commands.len());
-        for (index, command) in commands.into_iter().enumerate() {
+        for (index, command) in commands.iter().enumerate() {
             let outcome = self
-                .run_check_command(job, index, acceptance, &tree, command, budget_end)
+                .run_check_command(job, first + index, acceptance, tree, command, budget_end)
                 .await?;
             let passed = outcome.passed();
             outcomes.push(outcome);
@@ -317,7 +394,7 @@ impl AgentExecutor {
                 break;
             }
         }
-        finish(verdict(true, Vec::new(), outcomes))
+        Ok(outcomes)
     }
 
     /// A fresh per-job directory under the work dir, removed when dropped.
@@ -790,19 +867,30 @@ fn finish(verdict: AgentCheckVerdict) -> Result<Vec<Content>, ExecutorError> {
 /// the work will be judged by, so the agent can run the same checks itself.
 fn task_prompt(spec: &AgentTaskSpec) -> String {
     let acceptance = &spec.acceptance;
+    let tests = acceptance.skill == AgentSkill::CodeTests;
     let mut prompt = format!(
         "You are working in a checkout of a git repository at commit {}. Complete the task \
-         below by editing files in this directory.\n\nTask:\n{}\n\nThe work is accepted only \
-         if these commands pass, run from the repository root in the `{}` container image \
-         with no network access:\n",
+         below by editing files in this directory.\n\nTask:\n{}\n\nThe work is judged by \
+         {}these commands, run from the repository root in the `{}` container image with no \
+         network access:\n",
         spec.repo.commit(),
         spec.task.trim(),
+        if tests { "" } else { "whether it passes " },
         acceptance.image
     );
     for command in &acceptance.commands {
         prompt.push_str(&format!("  $ {command}\n"));
     }
-    if acceptance.hidden_sha256.is_some() {
+    if tests {
+        prompt.push_str(
+            "\nThis is a testing task. Write tests that catch the bug the task describes: with \
+             your tests added, the commands above must fail on this commit because of that bug, \
+             and pass once the bug is fixed. They pass today without your tests, and a fix you \
+             cannot see is applied afterwards to check that your tests pass with it. Add or \
+             change test files only: do not fix the bug, and do not weaken or remove existing \
+             tests.\n",
+        );
+    } else if acceptance.hidden_sha256.is_some() {
         prompt.push_str(
             "\nFurther tests you cannot see will also run against your change, so make it \
              correct in general rather than only for the visible tests.\n",
@@ -814,10 +902,13 @@ fn task_prompt(spec: &AgentTaskSpec) -> String {
             acceptance.protected_paths.join(", ")
         ));
     }
-    prompt.push_str(
+    prompt.push_str(if tests {
         "\nDo not commit. Leave your changes in the working tree. When you are done, reply \
-         with a short summary of what you changed.",
-    );
+         with a short summary of the tests you added and why they fail on this commit."
+    } else {
+        "\nDo not commit. Leave your changes in the working tree. When you are done, reply \
+         with a short summary of what you changed."
+    });
     prompt
 }
 
@@ -1019,6 +1110,7 @@ mod tests {
                 commit: "0123456789abcdef0123456789abcdef01234567".into(),
             },
             acceptance: AcceptanceSpec {
+                skill: AgentSkill::CodeChange,
                 image: "python:3.12-slim".into(),
                 commands: vec!["python -m unittest".into()],
                 timeout_secs: 60,

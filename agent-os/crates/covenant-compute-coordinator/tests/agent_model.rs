@@ -19,7 +19,7 @@ use covenant_compute_coordinator::{
 };
 use covenant_compute_protocol::{
     agent_check_output, agent_task_input, agent_task_output, parse_agent_check, sha256_hex,
-    AcceptanceSpec, AgentCheckVerdict, AgentRuntime, AgentTaskOutput, AgentTaskSpec,
+    AcceptanceSpec, AgentCheckVerdict, AgentRuntime, AgentSkill, AgentTaskOutput, AgentTaskSpec,
     CapabilityProfile, CapabilityRequirement, CommandOutcome, EscrowStatus, FederationEscrow,
     FundingSource, HardwareClass, JobEnvelopePayload, JobKind, JobMeter, JobResultAck,
     JobResultMessage, KindAsk, KindModels, PriceAsk, PriceUnit, RegisterRequest, RepoSource,
@@ -159,6 +159,7 @@ fn spec() -> AgentTaskSpec {
             commit: COMMIT.into(),
         },
         acceptance: AcceptanceSpec {
+            skill: AgentSkill::CodeChange,
             image: "python:3.12-slim".into(),
             commands: vec![COMMAND.into()],
             timeout_secs: 120,
@@ -938,5 +939,114 @@ async fn only_votes_signed_by_their_own_checker_go_to_a_round() {
     assert!(
         rounds.asked().is_empty(),
         "neither an unsigned vote nor one signed by another key reaches the chain"
+    );
+}
+
+fn run(command: &str, exit_code: i32) -> CommandOutcome {
+    CommandOutcome {
+        command: command.into(),
+        exit_code,
+        duration_ms: 200,
+        timed_out: false,
+        output_tail: String::new(),
+    }
+}
+
+/// A `code.tests` task whose hidden checks are the fix, handed over, built
+/// and checked once with `verdict`.
+async fn tests_task_checked_with(
+    rig: &Rig,
+    verdict: impl FnOnce(Uuid) -> AgentCheckVerdict,
+) -> Uuid {
+    let fix = covenant_compute_protocol::HiddenChecks {
+        files: vec![covenant_compute_protocol::HiddenFile {
+            path: "slugify.py".into(),
+            content_b64: base64::engine::general_purpose::STANDARD.encode("def slugify(t): ...\n"),
+        }],
+        commands: vec![],
+    };
+    let mut tests = spec();
+    tests.acceptance.skill = AgentSkill::CodeTests;
+    tests.acceptance.protected_paths = vec!["slugify.py".into()];
+    tests.acceptance.hidden_sha256 = Some(fix.digest());
+
+    let builder = register(rig, "builder@agent", 1);
+    let task_id = post_task_with(rig, tests).await;
+    let checker = register(rig, "checker@agent", 2);
+    submit(rig, task_id, &builder, agent_task_output(patch()).unwrap()).await;
+
+    let url = format!("{}/federation/jobs/{task_id}/hidden", rig.url);
+    let no_fix = covenant_compute_protocol::HiddenChecks {
+        files: vec![],
+        commands: vec![COMMAND.into()],
+    };
+    let refused = rig.http.post(&url).json(&no_fix).send().await.unwrap();
+    assert_eq!(
+        refused.status(),
+        reqwest::StatusCode::BAD_REQUEST,
+        "code.tests is judged against a fix, so checks without one are refused"
+    );
+    let taken = rig.http.post(&url).json(&fix).send().await.unwrap();
+    assert_eq!(taken.status(), reqwest::StatusCode::OK);
+
+    let mut ordered = None;
+    for _ in 0..100 {
+        if let Some(id) = rig.state.jobs().get(task_id).unwrap().check_jobs.last() {
+            ordered = Some(*id);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let check_id = ordered.expect("the fix orders the check");
+    let check = rig.state.jobs().get(check_id).unwrap();
+    let ordered_spec = parse_agent_check(&check.envelope.payload.input).unwrap();
+    assert_eq!(ordered_spec.acceptance.skill, AgentSkill::CodeTests);
+    assert_eq!(ordered_spec.hidden, Some(fix));
+
+    let output = agent_check_output(verdict(task_id).sign_vote(&checker)).unwrap();
+    submit(rig, check_id, &checker, output).await;
+    covenant_compute_coordinator::agent::settle(&rig.state, task_id).await;
+    task_id
+}
+
+#[tokio::test]
+async fn tests_that_catch_the_bug_are_paid() {
+    let rig = rig().await;
+    let task_id = tests_task_checked_with(&rig, |task_id| {
+        AgentCheckVerdict::catching(
+            task_id,
+            patch().patch_sha256,
+            true,
+            vec![],
+            vec![run(COMMAND, 0)],
+            vec![run(COMMAND, 1)],
+            vec![run(COMMAND, 0)],
+        )
+    })
+    .await;
+    assert_eq!(settled(&rig, task_id).await, JobPhase::Completed);
+    assert!(rig.payout.records().iter().any(|r| r.job_id == task_id));
+}
+
+#[tokio::test]
+async fn a_tests_task_is_not_paid_on_a_change_verdict() {
+    let rig = rig().await;
+    // Every command passing is what code.change asks for; for code.tests it
+    // means the new tests caught nothing.
+    let task_id = tests_task_checked_with(&rig, |task_id| {
+        AgentCheckVerdict::new(
+            task_id,
+            patch().patch_sha256,
+            true,
+            vec![],
+            vec![run(COMMAND, 0)],
+        )
+    })
+    .await;
+    assert!(rig.payout.records().iter().all(|r| r.job_id != task_id));
+    assert_eq!(
+        rig.state.jobs().get(task_id).unwrap().phase,
+        JobPhase::AwaitingCheck,
+        "a verdict on the wrong skill is no verdict"
     );
 }

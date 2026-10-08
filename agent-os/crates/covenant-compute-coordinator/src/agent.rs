@@ -25,10 +25,10 @@ use covenant_a2a::{A2ADuplicateSafety, A2AIdempotency};
 use covenant_audit::AuditKind;
 use covenant_compute_protocol::{
     agent_check_input, check_commands, parse_agent_check_verdict, parse_agent_task,
-    parse_agent_task_output, sha256_hex, AgentCheckSpec, AgentCheckVerdict, AgentTaskOutput,
-    AgentTaskSpec, CapabilityRequirement, EscrowError, EscrowStatus, FederationEscrow,
-    FundingSource, JobEnvelopePayload, JobKind, JobOffer, RefundReason, ResultSettlement,
-    SignedJobEnvelope, SignedWorkReceipt,
+    parse_agent_task_output, sha256_hex, AgentCheckSpec, AgentCheckVerdict, AgentSkill,
+    AgentTaskOutput, AgentTaskSpec, CapabilityRequirement, EscrowError, EscrowStatus,
+    FederationEscrow, FundingSource, JobEnvelopePayload, JobKind, JobOffer, RefundReason,
+    ResultSettlement, SignedJobEnvelope, SignedWorkReceipt,
 };
 use covenant_identity::LocalIdentity;
 use covenant_mcp::Content;
@@ -655,14 +655,29 @@ fn judge(task: &JobRecord, check: &JobRecord) -> Result<AgentCheckVerdict, Strin
     if verdict.patch_sha256 != built.patch_sha256 {
         return Err("verdict is on another patch".into());
     }
+    if verdict.skill != spec.acceptance.skill {
+        return Err("verdict judges another skill than the task asked for".into());
+    }
     if verdict.passed {
-        let ran: Vec<&str> = verdict
-            .commands
-            .iter()
-            .map(|c| c.command.as_str())
+        let ran = |outcomes: &[covenant_compute_protocol::CommandOutcome]| -> Vec<String> {
+            outcomes.iter().map(|c| c.command.clone()).collect()
+        };
+        let visible = spec.acceptance.commands.clone();
+        let every: Vec<String> = check_commands(&spec.acceptance, task.hidden_checks.as_ref())
+            .into_iter()
+            .map(str::to_string)
             .collect();
-        let asked = check_commands(&spec.acceptance, task.hidden_checks.as_ref());
-        if ran != asked {
+        let honest = match spec.acceptance.skill {
+            AgentSkill::CodeChange => ran(&verdict.commands) == every,
+            // The tests' run stops at the failure that caught the bug, so
+            // it is a prefix of the visible commands rather than all of them.
+            AgentSkill::CodeTests => {
+                ran(&verdict.baseline) == visible
+                    && visible.starts_with(&ran(&verdict.commands))
+                    && ran(&verdict.fixed) == every
+            }
+        };
+        if !honest {
             return Err("a passing verdict did not run the task's commands".into());
         }
     }
@@ -763,8 +778,12 @@ pub async fn accept_hidden_checks(
     let commitment = spec
         .acceptance
         .hidden_sha256
+        .clone()
         .ok_or("this task committed to no hidden checks")?;
     hidden.validate().map_err(|e| e.to_string())?;
+    spec.acceptance
+        .admits_hidden(&hidden)
+        .map_err(|e| e.to_string())?;
     if hidden.digest() != commitment {
         return Err("these checks do not match the task's commitment".into());
     }

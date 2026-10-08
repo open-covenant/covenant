@@ -108,6 +108,11 @@ impl RepoSource {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AcceptanceSpec {
+    /// What the work is, which decides how a check reads the commands.
+    /// Omitted for `code.change`, so nodes that predate skills still read
+    /// those tasks.
+    #[serde(default, skip_serializing_if = "AgentSkill::is_change")]
+    pub skill: AgentSkill,
     pub image: String,
     pub commands: Vec<String>,
     pub timeout_secs: u32,
@@ -122,6 +127,34 @@ pub struct AcceptanceSpec {
     /// and the commitment keeps anyone from swapping them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hidden_sha256: Option<String>,
+}
+
+/// The kinds of agent work a task can ask for.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum AgentSkill {
+    /// Change the code so every command passes.
+    #[default]
+    #[serde(rename = "code.change")]
+    CodeChange,
+    /// Write tests that catch a described bug. Accepted when the commands
+    /// pass on the commit as it is, fail once the new tests are in, and pass
+    /// again with the buyer's fix, which travels as hidden files the builder
+    /// never sees.
+    #[serde(rename = "code.tests")]
+    CodeTests,
+}
+
+impl AgentSkill {
+    pub fn label(self) -> &'static str {
+        match self {
+            AgentSkill::CodeChange => "code.change",
+            AgentSkill::CodeTests => "code.tests",
+        }
+    }
+
+    fn is_change(&self) -> bool {
+        *self == AgentSkill::CodeChange
+    }
 }
 
 /// One file the hidden checks add to the checkout.
@@ -208,6 +241,13 @@ impl AcceptanceSpec {
         if let Some(digest) = &self.hidden_sha256 {
             validate_sha256_hex("hidden_sha256", digest)?;
         }
+        if self.skill == AgentSkill::CodeTests && self.hidden_sha256.is_none() {
+            return Err(ProtocolError::Invalid(
+                "code.tests needs the fix as hidden files: tests that catch the bug are the \
+                 ones that pass once it is fixed"
+                    .into(),
+            ));
+        }
         if self.timeout_secs == 0 || self.timeout_secs > MAX_ACCEPTANCE_TIMEOUT_SECS {
             return Err(ProtocolError::Invalid(format!(
                 "acceptance timeout_secs {} is outside 1..={MAX_ACCEPTANCE_TIMEOUT_SECS}",
@@ -222,6 +262,17 @@ impl AcceptanceSpec {
         }
         for path in &self.protected_paths {
             validate_repo_path(path)?;
+        }
+        Ok(())
+    }
+
+    /// Whether these hidden checks can serve this acceptance: `code.tests`
+    /// needs the fix among them as files.
+    pub fn admits_hidden(&self, hidden: &HiddenChecks) -> Result<(), ProtocolError> {
+        if self.skill == AgentSkill::CodeTests && hidden.files.is_empty() {
+            return Err(ProtocolError::Invalid(
+                "code.tests needs the fix among the hidden checks as files".into(),
+            ));
         }
         Ok(())
     }
@@ -355,6 +406,7 @@ impl AgentCheckSpec {
             (None, None) => Ok(()),
             (Some(commitment), Some(hidden)) => {
                 hidden.validate()?;
+                self.acceptance.admits_hidden(hidden)?;
                 if hidden.digest() != *commitment {
                     return Err(ProtocolError::Invalid(
                         "hidden checks do not match the task's commitment".into(),
@@ -389,15 +441,24 @@ impl CommandOutcome {
     pub fn passed(&self) -> bool {
         self.exit_code == 0 && !self.timed_out
     }
+
+    /// A real failure: the command ran to the end and said no. A timeout
+    /// proves nothing about the code under test.
+    pub fn caught(&self) -> bool {
+        self.exit_code != 0 && !self.timed_out
+    }
 }
 
-/// A checker's answer. `passed` is derived, not claimed: it must equal the
-/// patch having applied without touching a protected path and every command
-/// having passed, and a verdict whose flag disagrees with its own evidence
-/// is refused on parse.
+/// A checker's answer. `passed` is derived, not claimed: it must equal what
+/// the evidence shows for the task's skill (for `code.change`, the patch
+/// applied without touching a protected path and every command passed),
+/// and a verdict whose flag disagrees with its own evidence is refused on
+/// parse.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentCheckVerdict {
+    #[serde(default, skip_serializing_if = "AgentSkill::is_change")]
+    pub skill: AgentSkill,
     pub task_job_id: Uuid,
     pub patch_sha256: String,
     pub applied: bool,
@@ -405,7 +466,17 @@ pub struct AgentCheckVerdict {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub protected_violations: Vec<String>,
     pub passed: bool,
+    /// The commands with the patch applied. For `code.tests` these must end
+    /// in a real failure: the new tests catching the bug.
     pub commands: Vec<CommandOutcome>,
+    /// `code.tests`: the visible commands on the commit before the patch,
+    /// which must all pass, so a suite that was already red proves nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub baseline: Vec<CommandOutcome>,
+    /// `code.tests`: every command with the patch and the buyer's fix, which
+    /// must all pass, so the new tests fail on the bug and nothing else.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fixed: Vec<CommandOutcome>,
     /// The checker's signature on [`agent_vote_message`] for this verdict, so
     /// the coordinator can put the vote on chain as the checker cast it.
     /// Absent from nodes that predate vote rounds.
@@ -423,14 +494,43 @@ impl AgentCheckVerdict {
         commands: Vec<CommandOutcome>,
     ) -> Self {
         let mut verdict = Self {
+            skill: AgentSkill::CodeChange,
             task_job_id,
             patch_sha256,
             applied,
             protected_violations,
             passed: false,
             commands,
+            baseline: Vec::new(),
+            fixed: Vec::new(),
             vote_signature_b58: None,
         };
+        verdict.passed = verdict.earned();
+        verdict
+    }
+
+    /// A `code.tests` verdict: the commands before the patch, with it, and
+    /// with it and the fix.
+    #[allow(clippy::too_many_arguments)]
+    pub fn catching(
+        task_job_id: Uuid,
+        patch_sha256: String,
+        applied: bool,
+        protected_violations: Vec<String>,
+        baseline: Vec<CommandOutcome>,
+        commands: Vec<CommandOutcome>,
+        fixed: Vec<CommandOutcome>,
+    ) -> Self {
+        let mut verdict = Self::new(
+            task_job_id,
+            patch_sha256,
+            applied,
+            protected_violations,
+            commands,
+        );
+        verdict.skill = AgentSkill::CodeTests;
+        verdict.baseline = baseline;
+        verdict.fixed = fixed;
         verdict.passed = verdict.earned();
         verdict
     }
@@ -458,21 +558,47 @@ impl AgentCheckVerdict {
     }
 
     fn earned(&self) -> bool {
-        self.applied
-            && self.protected_violations.is_empty()
-            && !self.commands.is_empty()
-            && self.commands.iter().all(CommandOutcome::passed)
+        let clean = self.applied && self.protected_violations.is_empty();
+        let all_pass = |outcomes: &[CommandOutcome]| {
+            !outcomes.is_empty() && outcomes.iter().all(CommandOutcome::passed)
+        };
+        match self.skill {
+            AgentSkill::CodeChange => clean && all_pass(&self.commands),
+            AgentSkill::CodeTests => {
+                let caught = match self.commands.split_last() {
+                    Some((last, before)) => {
+                        last.caught() && before.iter().all(CommandOutcome::passed)
+                    }
+                    None => false,
+                };
+                clean && all_pass(&self.baseline) && caught && all_pass(&self.fixed)
+            }
+        }
     }
 
     pub fn validate(&self) -> Result<(), ProtocolError> {
         validate_sha256_hex("patch_sha256", &self.patch_sha256)?;
-        if self.commands.len() > 2 * MAX_ACCEPTANCE_COMMANDS {
-            return Err(ProtocolError::Invalid(format!(
-                "a verdict reports {} commands, more than a check can run",
-                self.commands.len()
-            )));
+        for phase in [&self.commands, &self.baseline, &self.fixed] {
+            if phase.len() > 2 * MAX_ACCEPTANCE_COMMANDS {
+                return Err(ProtocolError::Invalid(format!(
+                    "a verdict reports {} commands in one run, more than a check can run",
+                    phase.len()
+                )));
+            }
         }
-        for outcome in &self.commands {
+        if self.skill == AgentSkill::CodeChange
+            && !(self.baseline.is_empty() && self.fixed.is_empty())
+        {
+            return Err(ProtocolError::Invalid(
+                "a code.change verdict reports runs only code.tests makes".into(),
+            ));
+        }
+        for outcome in self
+            .commands
+            .iter()
+            .chain(&self.baseline)
+            .chain(&self.fixed)
+        {
             if outcome.output_tail.len() > MAX_OUTPUT_TAIL_BYTES {
                 return Err(ProtocolError::Invalid(format!(
                     "a command's output tail is {} bytes, over the {MAX_OUTPUT_TAIL_BYTES}-byte cap",
@@ -647,9 +773,15 @@ fn validate_commit(what: &str, commit: &str) -> Result<(), ProtocolError> {
     Ok(())
 }
 
-fn validate_commands(what: &str, commands: &[String], may_be_empty: bool) -> Result<(), ProtocolError> {
+fn validate_commands(
+    what: &str,
+    commands: &[String],
+    may_be_empty: bool,
+) -> Result<(), ProtocolError> {
     if commands.is_empty() && !may_be_empty {
-        return Err(ProtocolError::Invalid(format!("{what} needs at least one command")));
+        return Err(ProtocolError::Invalid(format!(
+            "{what} needs at least one command"
+        )));
     }
     if commands.len() > MAX_ACCEPTANCE_COMMANDS {
         return Err(ProtocolError::Invalid(format!(
@@ -659,7 +791,9 @@ fn validate_commands(what: &str, commands: &[String], may_be_empty: bool) -> Res
     }
     for command in commands {
         if command.trim().is_empty() {
-            return Err(ProtocolError::Invalid(format!("an {what} command is empty")));
+            return Err(ProtocolError::Invalid(format!(
+                "an {what} command is empty"
+            )));
         }
         if command.len() > MAX_COMMAND_BYTES {
             return Err(ProtocolError::Invalid(format!(
@@ -791,6 +925,7 @@ mod tests {
 
     fn acceptance() -> AcceptanceSpec {
         AcceptanceSpec {
+            skill: AgentSkill::CodeChange,
             image: "python:3.12-slim".into(),
             commands: vec!["python -m unittest -v".into()],
             timeout_secs: 120,
@@ -1006,6 +1141,112 @@ mod tests {
         assert!(err.to_string().contains("evidence"), "{err}");
     }
 
+    fn failing(command: &str) -> CommandOutcome {
+        let mut outcome = passing(command);
+        outcome.exit_code = 1;
+        outcome
+    }
+
+    #[test]
+    fn tests_are_accepted_only_when_they_catch_the_bug_and_nothing_else() {
+        let id = Uuid::nil();
+        let verdict = |baseline, commands, fixed| {
+            AgentCheckVerdict::catching(id, SHA.into(), true, vec![], baseline, commands, fixed)
+        };
+        let ok = verdict(vec![passing("t")], vec![failing("t")], vec![passing("t")]);
+        assert!(ok.passed);
+        assert!(ok.validate().is_ok());
+
+        // Already red before the new tests: proves nothing.
+        assert!(!verdict(vec![failing("t")], vec![failing("t")], vec![passing("t")]).passed);
+        // The new tests do not fail on the bug.
+        assert!(!verdict(vec![passing("t")], vec![passing("t")], vec![passing("t")]).passed);
+        // They fail, but still fail with the fix: they catch something else.
+        assert!(!verdict(vec![passing("t")], vec![failing("t")], vec![failing("t")]).passed);
+        // A timeout is not a caught bug.
+        let mut slow = failing("t");
+        slow.timed_out = true;
+        assert!(!verdict(vec![passing("t")], vec![slow], vec![passing("t")]).passed);
+        // Nothing run in a phase.
+        assert!(!verdict(vec![], vec![failing("t")], vec![passing("t")]).passed);
+        assert!(!verdict(vec![passing("t")], vec![failing("t")], vec![]).passed);
+        // Touching a protected path still fails it.
+        let touched = AgentCheckVerdict::catching(
+            id,
+            SHA.into(),
+            true,
+            vec!["slugify.py".into()],
+            vec![passing("t")],
+            vec![failing("t")],
+            vec![passing("t")],
+        );
+        assert!(!touched.passed);
+    }
+
+    #[test]
+    fn a_change_verdict_carries_no_test_runs_and_skills_round_trip() {
+        let mut change =
+            AgentCheckVerdict::new(Uuid::nil(), SHA.into(), true, vec![], vec![passing("t")]);
+        assert!(change.validate().is_ok());
+        change.baseline = vec![passing("t")];
+        assert!(change.validate().is_err());
+
+        let json = serde_json::to_value(AgentCheckVerdict::new(
+            Uuid::nil(),
+            SHA.into(),
+            true,
+            vec![],
+            vec![passing("t")],
+        ))
+        .unwrap();
+        assert!(
+            json.get("skill").is_none(),
+            "code.change stays readable by older nodes"
+        );
+
+        let tests = AgentCheckVerdict::catching(
+            Uuid::nil(),
+            SHA.into(),
+            true,
+            vec![],
+            vec![passing("t")],
+            vec![failing("t")],
+            vec![passing("t")],
+        );
+        let json = serde_json::to_value(&tests).unwrap();
+        assert_eq!(json["skill"], "code.tests");
+        let back: AgentCheckVerdict = serde_json::from_value(json).unwrap();
+        assert_eq!(back, tests);
+    }
+
+    #[test]
+    fn code_tests_needs_the_fix_as_hidden_files() {
+        let mut acceptance = AcceptanceSpec {
+            skill: AgentSkill::CodeTests,
+            image: "python:3.12-slim".into(),
+            commands: vec!["python -m unittest".into()],
+            timeout_secs: 60,
+            protected_paths: vec![],
+            hidden_sha256: None,
+        };
+        assert!(acceptance.validate().is_err());
+        acceptance.hidden_sha256 = Some("ab".repeat(32));
+        assert!(acceptance.validate().is_ok());
+        let commands_only = HiddenChecks {
+            files: vec![],
+            commands: vec!["python -m unittest".into()],
+        };
+        assert!(acceptance.admits_hidden(&commands_only).is_err());
+        let fix = HiddenChecks {
+            files: vec![HiddenFile {
+                path: "slugify.py".into(),
+                content_b64: "eA==".into(),
+            }],
+            commands: vec![],
+        };
+        assert!(acceptance.admits_hidden(&fix).is_ok());
+    }
+
     #[test]
     fn a_vote_message_is_the_bytes_the_settlement_program_checks() {
         let task = Uuid::from_bytes([7u8; 16]);
@@ -1025,10 +1266,9 @@ mod tests {
         let checker = LocalIdentity::generate("checker");
         let checker_b58 = bs58::encode(checker.pubkey_bytes()).into_string();
         let other = bs58::encode(LocalIdentity::generate("other").pubkey_bytes()).into_string();
-        let verdict = AgentCheckVerdict::new(Uuid::new_v4(), SHA.into(), true, vec![], vec![
-            passing("t"),
-        ])
-        .sign_vote(&checker);
+        let verdict =
+            AgentCheckVerdict::new(Uuid::new_v4(), SHA.into(), true, vec![], vec![passing("t")])
+                .sign_vote(&checker);
         assert!(verdict.vote_signed_by(&checker_b58));
         assert!(!verdict.vote_signed_by(&other));
 
@@ -1096,19 +1336,30 @@ mod tests {
         assert!(spec(None).validate().is_err(), "committed but missing");
         let mut swapped = hidden();
         swapped.commands = vec!["true".into()];
-        assert!(spec(Some(swapped)).validate().is_err(), "swapped after the commitment");
+        assert!(
+            spec(Some(swapped)).validate().is_err(),
+            "swapped after the commitment"
+        );
 
         let uncommitted = AgentCheckSpec {
             acceptance: self::acceptance(),
             ..spec(Some(hidden()))
         };
-        assert!(uncommitted.validate().is_err(), "hidden checks with no commitment");
+        assert!(
+            uncommitted.validate().is_err(),
+            "hidden checks with no commitment"
+        );
     }
 
     #[test]
     fn hidden_checks_are_bounded_and_need_something_to_run() {
         assert!(hidden().validate().is_ok());
-        assert!(HiddenChecks { files: vec![], commands: vec![] }.validate().is_err());
+        assert!(HiddenChecks {
+            files: vec![],
+            commands: vec![]
+        }
+        .validate()
+        .is_err());
         let mut escape = hidden();
         escape.files[0].path = "../outside.py".into();
         assert!(escape.validate().is_err());
@@ -1116,7 +1367,10 @@ mod tests {
             files: hidden().files,
             commands: vec![],
         };
-        assert!(files_only.validate().is_ok(), "visible commands can pick hidden files up");
+        assert!(
+            files_only.validate().is_ok(),
+            "visible commands can pick hidden files up"
+        );
     }
 
     #[test]
@@ -1124,8 +1378,14 @@ mod tests {
         let h = hidden();
         assert_eq!(
             check_commands(&acceptance(), Some(&h)),
-            vec!["python -m unittest -v", "python -m unittest tests.hidden.test_edges"]
+            vec![
+                "python -m unittest -v",
+                "python -m unittest tests.hidden.test_edges"
+            ]
         );
-        assert_eq!(check_commands(&acceptance(), None), vec!["python -m unittest -v"]);
+        assert_eq!(
+            check_commands(&acceptance(), None),
+            vec!["python -m unittest -v"]
+        );
     }
 }

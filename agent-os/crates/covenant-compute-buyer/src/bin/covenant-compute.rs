@@ -131,6 +131,9 @@ Agent flags (agent):
   --hidden <path>       a test file the builder never sees, read from the repository's working
                         tree (it must not be committed) and added only for the check; repeatable
   --hidden-accept <cmd> a command run after the visible ones, also kept from the builder
+  --skill <name>        code.change (default) or code.tests: write tests that catch a bug
+  --fix <path>          code.tests: a file whose working-tree version fixes the bug at the
+                        commit; only checkers see it; repeatable
   --model <id>          the model the agent should drive; the operator's default otherwise
   --out <path>          where to write the accepted patch (default agent-<job-id>.patch)
   --price, --deadline-ms   as for a buy; the deadline defaults to 30 minutes
@@ -1233,11 +1236,6 @@ async fn preview_buy(
     Ok(())
 }
 
-/// A dispatch refused for want of funds is the most common first
-/// purchase on a prefunded coordinator, before the buyer has deposited.
-/// Name the top-up path the rest of the CLI already documents, so this
-/// refusal ends with its fix the way every other one does. Any other
-/// failure passes through unchanged.
 /// Hires a coding agent for a task against a repository. The task pays
 /// only once a second operator applies the agent's patch to a fresh copy
 /// of the commit and every acceptance command passes, so a failed run
@@ -1253,6 +1251,8 @@ async fn cmd_agent(ctx: &Ctx, args: &mut Vec<String>, json_out: bool) -> anyhow:
         protect: take_flag_values(args, "--protect"),
         hidden: take_flag_values(args, "--hidden"),
         hidden_accept: take_flag_values(args, "--hidden-accept"),
+        skill: take_flag_value(args, "--skill"),
+        fix: take_flag_values(args, "--fix"),
         model: take_flag_value(args, "--model"),
         price_micro_usdc: take_price(args)?,
         deadline_ms: take_number(args, "--deadline-ms", "a whole number of milliseconds")?,
@@ -1383,6 +1383,11 @@ async fn cmd_agent(ctx: &Ctx, args: &mut Vec<String>, json_out: bool) -> anyhow:
     Ok(())
 }
 
+/// A dispatch refused for want of funds is the most common first
+/// purchase on a prefunded coordinator, before the buyer has deposited.
+/// Name the top-up path the rest of the CLI already documents, so this
+/// refusal ends with its fix the way every other one does. Any other
+/// failure passes through unchanged.
 fn with_funding_hint(e: covenant_compute_buyer::BuyerError) -> anyhow::Error {
     if e.is_underfunded() {
         anyhow::anyhow!(

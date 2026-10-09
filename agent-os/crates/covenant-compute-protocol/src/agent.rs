@@ -34,6 +34,13 @@ pub const MAX_BUNDLE_B64_BYTES: usize = 3 * 1024 * 1024;
 pub const MAX_PATCH_BYTES: usize = 1024 * 1024;
 /// Cap on the base64 text of that patch: the encoding of [`MAX_PATCH_BYTES`].
 pub const MAX_PATCH_B64_BYTES: usize = MAX_PATCH_BYTES.div_ceil(3) * 4;
+/// The least model spend a build is started with. Below it the agent cannot
+/// read a repository and reply, so a seat refuses the job rather than run it
+/// to a certain failure.
+pub const MIN_BUILD_BUDGET_MICRO_USD: u64 = 50_000;
+/// The smallest offer whose [`build_spend_cap`] reaches
+/// [`MIN_BUILD_BUDGET_MICRO_USD`], so the least offer a seat builds for.
+pub const LEAST_AGENT_OFFER_MICRO_USDC: u64 = MIN_BUILD_BUDGET_MICRO_USD * 8 / 5;
 pub const MAX_ACCEPTANCE_COMMANDS: usize = 8;
 pub const MAX_COMMAND_BYTES: usize = 2048;
 pub const MAX_PROTECTED_PATHS: usize = 32;
@@ -660,6 +667,12 @@ pub fn agent_vote_message(
     Some(message)
 }
 
+/// The most of an offer a build may spend: five-eighths, so the spend with
+/// its fifth on top still leaves a quarter of the offer for the checks.
+pub fn build_spend_cap(offer_micro_usdc: u64) -> u64 {
+    offer_micro_usdc.saturating_mul(5) / 8
+}
+
 /// Lowercase hex sha256 of `bytes`, the digest a patch is named by.
 pub fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
@@ -1245,6 +1258,12 @@ mod tests {
             commands: vec![],
         };
         assert!(acceptance.admits_hidden(&fix).is_ok());
+    }
+
+    #[test]
+    fn the_least_offer_is_the_first_a_seat_builds_for() {
+        assert!(build_spend_cap(LEAST_AGENT_OFFER_MICRO_USDC) >= MIN_BUILD_BUDGET_MICRO_USD);
+        assert!(build_spend_cap(LEAST_AGENT_OFFER_MICRO_USDC - 1) < MIN_BUILD_BUDGET_MICRO_USD);
     }
 
     #[test]

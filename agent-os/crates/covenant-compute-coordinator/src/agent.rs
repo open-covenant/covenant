@@ -28,7 +28,7 @@ use covenant_compute_protocol::{
     parse_agent_task_output, sha256_hex, AgentCheckSpec, AgentCheckVerdict, AgentSkill,
     AgentTaskOutput, AgentTaskSpec, CapabilityRequirement, EscrowError, EscrowStatus,
     FederationEscrow, FundingSource, JobEnvelopePayload, JobKind, JobOffer, RefundReason,
-    ResultSettlement, SignedJobEnvelope, SignedWorkReceipt,
+    ResultSettlement, SignedJobEnvelope, SignedWorkReceipt, LEAST_AGENT_OFFER_MICRO_USDC,
 };
 use covenant_identity::LocalIdentity;
 use covenant_mcp::Content;
@@ -83,10 +83,12 @@ impl AgentPolicy {
         self.buyers.iter().any(|b| b == "*" || b == buyer_b58)
     }
 
-    /// The smallest offer that pays a build and its first check.
+    /// The smallest offer that pays a build and its first check, and that a
+    /// seat starts a build for.
     pub fn least_offer_micro_usdc(&self) -> u64 {
         self.build_floor_micro_usdc
             .saturating_add(self.check_price_micro_usdc)
+            .max(LEAST_AGENT_OFFER_MICRO_USDC)
     }
 
     /// What the builder of a passing task is paid: its metered spend with
@@ -920,7 +922,7 @@ mod pricing_tests {
     #[test]
     fn a_build_is_paid_its_spend_with_the_markup_inside_the_offer() {
         let p = policy();
-        assert_eq!(p.least_offer_micro_usdc(), 15_000);
+        assert_eq!(p.least_offer_micro_usdc(), 80_000, "what a seat builds for");
         assert_eq!(p.build_pay(0, 500_000, 5_000), 10_000, "the floor");
         assert_eq!(p.build_pay(60_001, 500_000, 5_000), 72_002, "rounded up");
         assert_eq!(

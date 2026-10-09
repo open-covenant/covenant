@@ -29,10 +29,10 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use base64::Engine as _;
 use covenant_compute_protocol::{
-    agent_check_output, agent_task_output, check_commands, parse_agent_check, parse_agent_task,
-    sha256_hex, AcceptanceSpec, AgentCheckVerdict, AgentSkill, AgentTaskOutput, AgentTaskSpec,
-    CommandOutcome, HiddenChecks, JobEnvelopePayload, JobKind, RepoSource, MAX_OUTPUT_TAIL_BYTES,
-    MAX_PATCH_BYTES, MAX_SUMMARY_BYTES,
+    agent_check_output, agent_task_output, build_spend_cap, check_commands, parse_agent_check,
+    parse_agent_task, sha256_hex, AcceptanceSpec, AgentCheckVerdict, AgentSkill, AgentTaskOutput,
+    AgentTaskSpec, CommandOutcome, HiddenChecks, JobEnvelopePayload, JobKind, RepoSource,
+    MAX_OUTPUT_TAIL_BYTES, MAX_PATCH_BYTES, MAX_SUMMARY_BYTES, MIN_BUILD_BUDGET_MICRO_USD,
 };
 use covenant_identity::LocalIdentity;
 use covenant_mcp::Content;
@@ -1058,11 +1058,6 @@ fn finish(verdict: AgentCheckVerdict) -> Result<Vec<Content>, ExecutorError> {
     agent_check_output(verdict).map_err(|e| ExecutorError::Failed(format!("verdict: {e}")))
 }
 
-/// The least model spend a build is started with. Below it the agent cannot
-/// read a repository and reply, so the job is refused rather than run to a
-/// certain failure.
-const MIN_BUILD_BUDGET_MICRO_USD: u64 = 50_000;
-
 /// The build's spend cap: the operator's own cap, or five-eighths of the
 /// buyer's offer if that is less. A passing build is charged its spend with
 /// a fifth on top, plus its checks, and never more than the offer, so the
@@ -1075,7 +1070,7 @@ fn build_budget(configured_usd: &str, offer_micro_usdc: u64) -> Result<String, S
         .filter(|usd| usd.is_finite() && *usd > 0.0)
         .map(|usd| (usd * 1_000_000.0) as u64)
         .ok_or_else(|| format!("the build budget {configured_usd:?} is not a dollar amount"))?;
-    let budget = cap.min(offer_micro_usdc.saturating_mul(5) / 8);
+    let budget = cap.min(build_spend_cap(offer_micro_usdc));
     if budget < MIN_BUILD_BUDGET_MICRO_USD {
         return Err(format!(
             "an offer of {offer_micro_usdc} micro-USDC leaves {budget} micro-USD for the build, \

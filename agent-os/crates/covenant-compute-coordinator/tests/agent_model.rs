@@ -31,7 +31,7 @@ use uuid::Uuid;
 
 const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 const COMMAND: &str = "python -m unittest discover -s tests -t .";
-const TASK_PRICE: u64 = 50_000;
+const TASK_PRICE: u64 = 100_000;
 
 fn epoch_ms() -> u64 {
     std::time::SystemTime::now()
@@ -1146,7 +1146,7 @@ async fn a_build_never_costs_more_than_the_offer() {
 }
 
 #[tokio::test]
-async fn an_offer_too_small_for_a_build_and_a_check_is_refused() {
+async fn an_offer_too_small_for_a_build_is_refused() {
     let rig = rig().await;
     register(&rig, "builder@agent", 1);
     let buyer = LocalIdentity::generate("buyer@agent");
@@ -1164,7 +1164,7 @@ async fn an_offer_too_small_for_a_build_and_a_check_is_refused() {
             min_reputation_bps: None,
         },
         input: vec![agent_task_input(spec()).unwrap()],
-        price_micro_usdc: 10_999,
+        price_micro_usdc: 79_999,
         deadline_ms: 1_200_000,
         idempotency: A2AIdempotency::new(A2ADuplicateSafety::Idempotent, job_id.to_string()),
         issued_at_ms: epoch_ms(),
@@ -1180,5 +1180,5 @@ async fn an_offer_too_small_for_a_build_and_a_check_is_refused() {
         .await
         .unwrap();
     assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
-    assert!(resp.text().await.unwrap().contains("at least 11000"));
+    assert!(resp.text().await.unwrap().contains("at least 80000"));
 }

@@ -770,11 +770,13 @@ async fn main() -> anyhow::Result<()> {
                     10_000,
                     "must be a u64 (micro-USDC)",
                 )?,
+                max_reworks: env_parse("COVENANT_COMPUTE_AGENT_MAX_REWORKS", 1, "must be a u32")?,
             };
             tracing::info!(
                 buyers = ?policy.buyers,
                 check_price_micro_usdc = policy.check_price_micro_usdc,
                 max_check_attempts = policy.max_check_attempts,
+                max_reworks = policy.max_reworks,
                 "agent work ENABLED: tasks pay only once another operator's check passes"
             );
             Some(policy)

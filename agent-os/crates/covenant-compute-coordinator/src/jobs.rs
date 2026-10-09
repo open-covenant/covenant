@@ -11,7 +11,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use covenant_compute_protocol::{
-    DisputeRequest, EscrowHoldAttestation, RefundReason, SignedJobEnvelope, SignedWorkReceipt,
+    AgentRework, DisputeRequest, EscrowHoldAttestation, RefundReason, SignedJobEnvelope,
+    SignedWorkReceipt,
 };
 use covenant_mcp::Content;
 use parking_lot::Mutex;
@@ -214,9 +215,28 @@ pub struct JobRecord {
     /// went through a round.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vote_round: Option<crate::rounds::RoundRecord>,
+    /// On an agent task a failed check handed back to its builder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rework: Option<TaskRework>,
+}
+
+/// How an agent task came back to its builder: how many times, what the
+/// earlier builds spent (charged with the last one if it passes), and the
+/// note the builder works from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskRework {
+    pub count: u32,
+    pub prior_spend_micro_usd: u64,
+    pub note: AgentRework,
 }
 
 impl JobRecord {
+    /// The note an agent task's builder reworks from, sent with every
+    /// delivery of its offer.
+    pub fn rework_note(&self) -> Option<AgentRework> {
+        self.rework.as_ref().map(|r| r.note.clone())
+    }
+
     /// What escrow released for this job — the gross the operator's net
     /// and the marketplace fee are carved from.
     ///
@@ -671,6 +691,29 @@ impl JobBook {
                 r.receipt = Some(receipt);
                 r.output = Some(output);
                 r.phase = JobPhase::AwaitingCheck;
+            },
+        )
+    }
+
+    /// Hands a task whose check failed back to its builder: offered again to
+    /// the same operator, pinned so no sweep points it at anyone else. The
+    /// failed build's receipt and output stay until the rework's replace
+    /// them. `Ok(false)` unless the task was awaiting its check.
+    pub fn reopen_for_rework(
+        &self,
+        job_id: Uuid,
+        rework: TaskRework,
+        now_ms: u64,
+    ) -> Result<bool, JobError> {
+        self.update_if(
+            job_id,
+            |r| r.phase == JobPhase::AwaitingCheck,
+            |r| {
+                r.phase = JobPhase::Offered;
+                r.pinned = true;
+                r.offered_at_ms = now_ms;
+                r.accepted_at_ms = None;
+                r.rework = Some(rework);
             },
         )
     }
@@ -1176,6 +1219,7 @@ mod tests {
             checks_task: None,
             hidden_checks: None,
             vote_round: None,
+            rework: None,
         }
     }
 
@@ -1425,6 +1469,7 @@ mod tests {
             checks_task: None,
             hidden_checks: None,
             vote_round: None,
+            rework: None,
         }
     }
 

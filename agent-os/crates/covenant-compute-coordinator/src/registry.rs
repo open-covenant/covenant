@@ -447,6 +447,7 @@ mod tests {
         JobOffer {
             envelope,
             escrow_hold,
+            rework: None,
         }
     }
 

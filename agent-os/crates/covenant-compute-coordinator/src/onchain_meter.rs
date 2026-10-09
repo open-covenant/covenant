@@ -1712,6 +1712,7 @@ mod tests {
             checks_task: None,
             hidden_checks: None,
             vote_round: None,
+            rework: None,
         }
     }
 

@@ -22,6 +22,7 @@ use uuid::Uuid;
 
 use crate::accepted::{AcceptedBook, AcceptedEntry};
 use crate::admission::{admit_job, AdmissionContext, AdmissionError};
+use crate::agent::ReworkInbox;
 use crate::coordinator::{Coordinator, CoordinatorError};
 use crate::earnings::{EarningsEntry, EarningsError, EarningsLedger, EarningsStatus};
 use crate::executor::{ExecutorError, JobExecutor};
@@ -179,6 +180,7 @@ pub struct Node<C, X, L> {
     pub config: NodeConfig,
     outbox: Arc<ResultOutbox>,
     accepted: Arc<AcceptedBook>,
+    reworks: ReworkInbox,
     in_flight: AtomicUsize,
     backend_up: AtomicBool,
     draining: AtomicBool,
@@ -218,11 +220,18 @@ where
             config,
             outbox: Arc::new(ResultOutbox::in_memory()),
             accepted: Arc::new(AcceptedBook::in_memory()),
+            reworks: ReworkInbox::default(),
             in_flight: AtomicUsize::new(0),
             backend_up: AtomicBool::new(true),
             draining: AtomicBool::new(false),
             drain_notify: tokio::sync::Notify::new(),
         }
+    }
+
+    /// Where an offer's rework note goes for the executor that builds it.
+    pub fn with_reworks(mut self, reworks: ReworkInbox) -> Self {
+        self.reworks = reworks;
+        self
     }
 
     /// Swaps in a durable outbox — the real binary's form, so queued
@@ -450,6 +459,9 @@ where
             return Err(NodeError::Admission(e));
         }
         self.record_admission(&operator, job_id, true, "ok").await?;
+        if let Some(note) = &offer.rework {
+            self.reworks.put(job_id, note.clone());
+        }
 
         // Remember the job durably BEFORE telling the coordinator
         // "accepted". The accept ack is what binds the coordinator to

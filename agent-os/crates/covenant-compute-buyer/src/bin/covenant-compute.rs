@@ -24,12 +24,13 @@ use anyhow::Context;
 use base64::Engine as _;
 use covenant_compute_buyer::{
     apply_patch, cancel_job, capacity, cheapest_matching_ask, claim_deposit, close_lease,
-    describe_round, describe_verdict, dispatch_and_verify, dispatch_signed, dispatch_streaming,
-    dispute_job, fetch_job_output, funds_with_deposit_info, hire_agent, http_client, lease_view,
-    list_verified_jobs, list_withdrawals, prepare_agent_task, preview_value, sign_envelope,
-    submit_streaming, vault_delete, vault_fetch, vault_list, vault_store, verify_payout, withdraw,
-    AgentArgs, AgentOutcome, BuyerConfig, DispatchOutcome, JobRequest, PriceQuote, PurchaseBook,
-    PurchaseEntry, VaultKeyring, DEFAULT_AGENT_DEADLINE_MS, DEFAULT_AGENT_OFFER_MICRO_USDC,
+    describe_reworks, describe_round, describe_verdict, dispatch_and_verify, dispatch_signed,
+    dispatch_streaming, dispute_job, fetch_job_output, funds_with_deposit_info, hire_agent,
+    http_client, lease_view, list_verified_jobs, list_withdrawals, prepare_agent_task,
+    preview_value, sign_envelope, submit_streaming, vault_delete, vault_fetch, vault_list,
+    vault_store, verify_payout, withdraw, AgentArgs, AgentOutcome, BuyerConfig, DispatchOutcome,
+    JobRequest, PriceQuote, PurchaseBook, PurchaseEntry, VaultKeyring, DEFAULT_AGENT_DEADLINE_MS,
+    DEFAULT_AGENT_OFFER_MICRO_USDC,
 };
 use covenant_compute_protocol::{
     chat_input, generation_input, lease_input, parse_assistant_output, parse_embedding_output,
@@ -1283,9 +1284,9 @@ async fn cmd_agent(ctx: &Ctx, args: &mut Vec<String>, json_out: bool) -> anyhow:
     let deadline_ms = agent_args.deadline_ms.unwrap_or(DEFAULT_AGENT_DEADLINE_MS);
     if !json_out {
         eprintln!(
-            "posted with a ceiling of {}: if the work passes you pay what the build spent plus \
-             its checks, and nothing if it fails. An agent is working on it and another \
-             operator will check the result (up to {} min)",
+            "offering up to {}: if the work passes you pay what the build spent plus its \
+             checks, and nothing if it fails. An agent builds it and another operator checks \
+             the result (up to {} min)",
             usdc(price),
             deadline_ms / 60_000
         );
@@ -1307,6 +1308,7 @@ async fn cmd_agent(ctx: &Ctx, args: &mut Vec<String>, json_out: bool) -> anyhow:
             reason,
             verdict,
             round,
+            reworks,
         } => {
             if json_out {
                 let doc = serde_json::json!({
@@ -1315,6 +1317,7 @@ async fn cmd_agent(ctx: &Ctx, args: &mut Vec<String>, json_out: bool) -> anyhow:
                     "refund_reason": reason,
                     "check": verdict,
                     "round": round,
+                    "reworks": reworks,
                 });
                 println!("{}", serde_json::to_string_pretty(&doc)?);
             } else {
@@ -1324,6 +1327,9 @@ async fn cmd_agent(ctx: &Ctx, args: &mut Vec<String>, json_out: bool) -> anyhow:
                 );
                 if let Some(verdict) = &verdict {
                     println!("{}", describe_verdict(verdict));
+                }
+                if let Some(line) = describe_reworks(reworks, false) {
+                    println!("{line}");
                 }
                 if let Some(round) = &round {
                     println!("{}", describe_round(round));
@@ -1337,6 +1343,7 @@ async fn cmd_agent(ctx: &Ctx, args: &mut Vec<String>, json_out: bool) -> anyhow:
             verdict,
             round,
             charged_micro_usdc,
+            reworks,
         } => {
             let job_id = outcome.receipt.receipt.job_id;
             let path = PathBuf::from(out.unwrap_or_else(|| format!("agent-{job_id}.patch")));
@@ -1358,6 +1365,7 @@ async fn cmd_agent(ctx: &Ctx, args: &mut Vec<String>, json_out: bool) -> anyhow:
                     "check": verdict,
                     "round": round,
                     "charged_micro_usdc": charged_micro_usdc,
+                    "reworks": reworks,
                     "payout": outcome.payout,
                 });
                 println!("{}", serde_json::to_string_pretty(&doc)?);
@@ -1380,6 +1388,9 @@ async fn cmd_agent(ctx: &Ctx, args: &mut Vec<String>, json_out: bool) -> anyhow:
             if let Some(verdict) = &verdict {
                 println!();
                 println!("{}", describe_verdict(verdict));
+            }
+            if let Some(line) = describe_reworks(reworks, true) {
+                println!("{line}");
             }
             if let Some(round) = &round {
                 println!("{}", describe_round(round));

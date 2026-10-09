@@ -6039,6 +6039,7 @@ async fn partner_payout_records_are_gated_idempotent_and_bounded_by_accruals() {
                     checks_task: None,
                     hidden_checks: None,
                     vote_round: None,
+                    rework: None,
                 },
             )
             .unwrap();

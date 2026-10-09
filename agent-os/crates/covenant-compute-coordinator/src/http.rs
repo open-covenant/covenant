@@ -1111,6 +1111,7 @@ async fn submit_job(
                 checks_task: None,
                 hidden_checks: None,
                 vote_round: None,
+                rework: None,
             },
         ) {
             tracing::error!(%job_id, error = %e, "failed to record refunded job");
@@ -1128,6 +1129,7 @@ async fn submit_job(
     let offer = JobOffer {
         envelope: envelope.clone(),
         escrow_hold: escrow_hold.clone(),
+        rework: None,
     };
     // Captured into the durable record because the registry restarts
     // empty: the address the operator declared when it won this match
@@ -1170,6 +1172,7 @@ async fn submit_job(
             checks_task: None,
             hidden_checks: None,
             vote_round: None,
+            rework: None,
         },
     ) {
         if let Err(refund_err) = state
@@ -1379,6 +1382,19 @@ async fn submit_result(
             }
             // Already parked: a redelivery must not order a second check.
             JobPhase::AwaitingCheck => {
+                return Ok(Json(JobResultAck {
+                    job_id,
+                    settled: ResultSettlement::AwaitingCheck,
+                    released_gross_micro_usdc: 0,
+                }));
+            }
+            // Handed back for a rework: a late redelivery of the build that
+            // failed is not the rework's result.
+            JobPhase::Offered | JobPhase::Accepted
+                if record.rework.is_some()
+                    && record.receipt.as_ref().map(|r| &r.receipt.result_hash_hex)
+                        == Some(&msg.receipt.receipt.result_hash_hex) =>
+            {
                 return Ok(Json(JobResultAck {
                     job_id,
                     settled: ResultSettlement::AwaitingCheck,
@@ -2119,6 +2135,10 @@ struct JobStatusView {
     /// What the chain counted when the task's votes went through a round.
     #[serde(skip_serializing_if = "Option::is_none")]
     round: Option<crate::rounds::RoundRecord>,
+    /// How many times a failed check handed an agent task back to its
+    /// builder.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reworks: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -2208,6 +2228,7 @@ async fn job_status(
         charged_micro_usdc,
         check,
         round: record.vote_round,
+        reworks: record.rework.map(|r| r.count),
     }))
 }
 
@@ -4109,6 +4130,7 @@ mod tests {
             checks_task: None,
             hidden_checks: None,
             vote_round: None,
+            rework: None,
         };
         state.jobs().insert(job_id, record).unwrap();
         crate::onchain_meter::open_lease_onchain(&state, job_id).await;
@@ -4294,6 +4316,7 @@ mod tests {
             checks_task: None,
             hidden_checks: None,
             vote_round: None,
+            rework: None,
         };
         state.jobs().insert(job_id, record).unwrap();
 
@@ -4435,6 +4458,7 @@ mod tests {
             checks_task: None,
             hidden_checks: None,
             vote_round: None,
+            rework: None,
         };
         state.jobs().insert(job_id, record).unwrap();
 
@@ -4637,6 +4661,7 @@ mod tests {
             checks_task: None,
             hidden_checks: None,
             vote_round: None,
+            rework: None,
         };
         state.jobs().insert(job_id, record).unwrap();
         crate::onchain_meter::open_lease_onchain(&state, job_id).await;

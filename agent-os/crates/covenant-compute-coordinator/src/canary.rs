@@ -479,6 +479,7 @@ impl CanaryProber {
                 checks_task: None,
                 hidden_checks: None,
                 vote_round: None,
+                rework: None,
             },
         ) {
             let _ = self
@@ -507,6 +508,7 @@ impl CanaryProber {
             JobOffer {
                 envelope,
                 escrow_hold,
+                rework: None,
             },
         ) {
             let _ = self
@@ -684,6 +686,7 @@ mod tests {
             checks_task: None,
             hidden_checks: None,
             vote_round: None,
+            rework: None,
         }
     }
 

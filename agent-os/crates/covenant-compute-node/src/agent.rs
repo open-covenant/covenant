@@ -20,6 +20,7 @@
 //! a filter driver in a `.git` of its own has planted it nowhere the node
 //! looks.
 
+use std::collections::HashMap;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -30,15 +31,17 @@ use async_trait::async_trait;
 use base64::Engine as _;
 use covenant_compute_protocol::{
     agent_check_output, agent_task_output, build_spend_cap, check_commands, parse_agent_check,
-    parse_agent_task, sha256_hex, AcceptanceSpec, AgentCheckVerdict, AgentSkill, AgentTaskOutput,
-    AgentTaskSpec, CommandOutcome, HiddenChecks, JobEnvelopePayload, JobKind, RepoSource,
-    MAX_OUTPUT_TAIL_BYTES, MAX_PATCH_BYTES, MAX_SUMMARY_BYTES, MIN_BUILD_BUDGET_MICRO_USD,
+    parse_agent_task, sha256_hex, AcceptanceSpec, AgentCheckVerdict, AgentRework, AgentSkill,
+    AgentTaskOutput, AgentTaskSpec, CommandOutcome, HiddenChecks, JobEnvelopePayload, JobKind,
+    RepoSource, MAX_OUTPUT_TAIL_BYTES, MAX_PATCH_BYTES, MAX_SUMMARY_BYTES,
+    MIN_BUILD_BUDGET_MICRO_USD,
 };
 use covenant_identity::LocalIdentity;
 use covenant_mcp::Content;
 use covenant_runtime::{preempt_subprocess_pg, SubprocessTracker, TrackedSubprocess};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
+use uuid::Uuid;
 
 use crate::build_container::{
     builder_dockerfile, builder_image, container_names, wrapper_argv, Builder, ContainerBuilds,
@@ -85,6 +88,24 @@ pub struct AgentConfig {
     /// Where builds run: on this machine under covguard's sandbox, or in a
     /// container that sees only the checkout.
     pub builder: Builder,
+    /// Notes for builds handed back after a failed check, left by the serve
+    /// loop with their offers.
+    pub reworks: ReworkInbox,
+}
+
+/// Rework notes that came with their offers, held until the build of the
+/// same job takes them: the executor is handed only the buyer's envelope.
+#[derive(Clone, Default)]
+pub struct ReworkInbox(Arc<parking_lot::Mutex<HashMap<Uuid, AgentRework>>>);
+
+impl ReworkInbox {
+    pub fn put(&self, job_id: Uuid, note: AgentRework) {
+        self.0.lock().insert(job_id, note);
+    }
+
+    fn take(&self, job_id: Uuid) -> Option<AgentRework> {
+        self.0.lock().remove(&job_id)
+    }
 }
 
 /// Where the builds' model credential lives, and what it needs alongside.
@@ -143,6 +164,11 @@ impl AgentExecutor {
             tracker,
             preempt_grace,
         }
+    }
+
+    /// Where the serve loop leaves a rework's note for this executor.
+    pub fn reworks(&self) -> ReworkInbox {
+        self.config.reworks.clone()
     }
 
     /// Pulls every allowed check image that is not already present, so the
@@ -286,6 +312,13 @@ impl AgentExecutor {
         until: Instant,
     ) -> Result<Vec<Content>, ExecutorError> {
         let spec = parse_agent_task(&job.input).map_err(invalid)?;
+        let rework = self.config.reworks.take(job.job_id).filter(|note| {
+            let valid = note.validate();
+            if let Err(e) = &valid {
+                tracing::warn!(job_id = %job.job_id, error = %e, "rework note refused; building afresh");
+            }
+            valid.is_ok()
+        });
         let dir = self.job_dir(job, "build")?;
         let (git_dir, tree) = self.checkout(&spec.repo, dir.path(), until).await?;
 
@@ -305,8 +338,19 @@ impl AgentExecutor {
                 spec.acceptance.image
             )));
         }
-        let budget = build_budget(&self.config.budget_usd, job.price_micro_usdc)
-            .map_err(ExecutorError::Failed)?;
+        let budget = build_budget(
+            &self.config.budget_usd,
+            job.price_micro_usdc,
+            rework.as_ref().map(|r| r.budget_micro_usd),
+        )
+        .map_err(ExecutorError::Failed)?;
+        let restored = match &rework {
+            Some(note) => {
+                self.restore(job, note, &git_dir, &tree, dir.path(), until)
+                    .await
+            }
+            None => false,
+        };
         let model = spec
             .model
             .clone()
@@ -316,7 +360,7 @@ impl AgentExecutor {
                 job,
                 &tree,
                 &spec.acceptance.image,
-                &task_prompt(&spec),
+                &task_prompt(&spec, rework.as_ref().map(|note| (note, restored))),
                 model.as_deref(),
                 &budget,
                 wall,
@@ -388,6 +432,48 @@ impl AgentExecutor {
             guard_run_id: run.guard_run_id,
         })
         .map_err(|e| ExecutorError::Failed(format!("build result: {e}")))
+    }
+
+    /// Puts the build that failed its check back in the tree, so the rework
+    /// starts from it. One that does not apply leaves the clean checkout,
+    /// and the agent works from the feedback alone.
+    async fn restore(
+        &self,
+        job: &JobEnvelopePayload,
+        note: &AgentRework,
+        git_dir: &Path,
+        tree: &Path,
+        dir: &Path,
+        until: Instant,
+    ) -> bool {
+        let patch = match base64::engine::general_purpose::STANDARD.decode(&note.patch_b64) {
+            Ok(patch) if sha256_hex(&patch) == note.patch_sha256 => patch,
+            _ => {
+                tracing::warn!(job_id = %job.job_id, "the earlier build does not match its digest; reworking from the commit");
+                return false;
+            }
+        };
+        let file = dir.join("earlier.patch");
+        if let Err(e) = std::fs::write(&file, &patch) {
+            tracing::warn!(job_id = %job.job_id, error = %e, "could not stage the earlier build; reworking from the commit");
+            return false;
+        }
+        let file = file.to_string_lossy().into_owned();
+        match self
+            .git(
+                git_dir,
+                Some(tree),
+                &["apply", "--whitespace=nowarn", &file],
+                until,
+            )
+            .await
+        {
+            Ok(_) => true,
+            Err(e) => {
+                tracing::warn!(job_id = %job.job_id, error = %e, "the earlier build does not apply; reworking from the commit");
+                false
+            }
+        }
     }
 
     async fn check(
@@ -1059,10 +1145,15 @@ fn finish(verdict: AgentCheckVerdict) -> Result<Vec<Content>, ExecutorError> {
 }
 
 /// The build's spend cap: the operator's own cap, or five-eighths of the
-/// buyer's offer if that is less. A passing build is charged its spend with
-/// a fifth on top, plus its checks, and never more than the offer, so the
+/// buyer's offer if that is less, or for a rework what the earlier builds
+/// left of those five-eighths. A passing build is charged its spend with a
+/// fifth on top, plus its checks, and never more than the offer, so the
 /// agent must not spend what the offer cannot pay back.
-fn build_budget(configured_usd: &str, offer_micro_usdc: u64) -> Result<String, String> {
+fn build_budget(
+    configured_usd: &str,
+    offer_micro_usdc: u64,
+    rework_left: Option<u64>,
+) -> Result<String, String> {
     let cap = configured_usd
         .trim()
         .parse::<f64>()
@@ -1070,19 +1161,29 @@ fn build_budget(configured_usd: &str, offer_micro_usdc: u64) -> Result<String, S
         .filter(|usd| usd.is_finite() && *usd > 0.0)
         .map(|usd| (usd * 1_000_000.0) as u64)
         .ok_or_else(|| format!("the build budget {configured_usd:?} is not a dollar amount"))?;
-    let budget = cap.min(build_spend_cap(offer_micro_usdc));
+    let budget = cap
+        .min(build_spend_cap(offer_micro_usdc))
+        .min(rework_left.unwrap_or(u64::MAX));
     if budget < MIN_BUILD_BUDGET_MICRO_USD {
-        return Err(format!(
-            "an offer of {offer_micro_usdc} micro-USDC leaves {budget} micro-USD for the build, \
-             under the {MIN_BUILD_BUDGET_MICRO_USD} a build needs"
-        ));
+        return Err(match rework_left {
+            Some(left) => format!(
+                "the earlier build left {left} micro-USD of the offer for a rework, under the \
+                 {MIN_BUILD_BUDGET_MICRO_USD} a build needs"
+            ),
+            None => format!(
+                "an offer of {offer_micro_usdc} micro-USDC leaves {budget} micro-USD for the \
+                 build, under the {MIN_BUILD_BUDGET_MICRO_USD} a build needs"
+            ),
+        });
     }
     Ok(format!("{}.{:06}", budget / 1_000_000, budget % 1_000_000))
 }
 
 /// The instructions a build hands the agent: the buyer's task, then what
 /// the work will be judged by, so the agent can run the same checks itself.
-fn task_prompt(spec: &AgentTaskSpec) -> String {
+/// `rework` names the note of a build handed back after a failed check, and
+/// whether its earlier changes are back in the tree.
+fn task_prompt(spec: &AgentTaskSpec, rework: Option<(&AgentRework, bool)>) -> String {
     let acceptance = &spec.acceptance;
     let tests = acceptance.skill == AgentSkill::CodeTests;
     let mut prompt = format!(
@@ -1117,6 +1218,18 @@ fn task_prompt(spec: &AgentTaskSpec) -> String {
         prompt.push_str(&format!(
             "\nDo not modify these paths; edits to them are discarded: {}\n",
             acceptance.protected_paths.join(", ")
+        ));
+    }
+    if let Some((note, restored)) = rework {
+        prompt.push_str(&format!(
+            "\nAn earlier attempt at this task failed its check. {} The check reported:\n\n{}\n\n\
+             Fix what failed and keep what already works.\n",
+            if restored {
+                "Its changes are already in the working tree."
+            } else {
+                "Its changes could not be restored, so start from the commit."
+            },
+            note.feedback.trim_end()
         ));
     }
     prompt.push_str(if tests {
@@ -1284,13 +1397,23 @@ fn truncate_utf8(s: &str, max: usize) -> String {
 mod tests {
     #[test]
     fn a_build_spends_inside_the_offer() {
-        assert_eq!(build_budget("0.50", 700_000).unwrap(), "0.437500");
-        assert_eq!(build_budget("0.50", 10_000_000).unwrap(), "0.500000");
+        assert_eq!(build_budget("0.50", 700_000, None).unwrap(), "0.437500");
+        assert_eq!(build_budget("0.50", 10_000_000, None).unwrap(), "0.500000");
         assert!(
-            build_budget("0.50", 20_000).is_err(),
+            build_budget("0.50", 20_000, None).is_err(),
             "too little to start a build"
         );
-        assert!(build_budget("nonsense", 700_000).is_err());
+        assert!(build_budget("nonsense", 700_000, None).is_err());
+    }
+
+    #[test]
+    fn a_rework_spends_only_what_the_earlier_build_left() {
+        assert_eq!(
+            build_budget("0.50", 700_000, Some(60_000)).unwrap(),
+            "0.060000"
+        );
+        let refused = build_budget("0.50", 700_000, Some(40_000)).unwrap_err();
+        assert!(refused.contains("rework"), "{refused}");
     }
 
     use super::*;
@@ -1348,11 +1471,24 @@ mod tests {
             runtime: covenant_compute_protocol::AgentRuntime::ClaudeCode,
             model: None,
         };
-        let prompt = task_prompt(&spec);
+        let prompt = task_prompt(&spec, None);
         assert!(prompt.contains("implement slugify"));
         assert!(prompt.contains("$ python -m unittest"));
         assert!(prompt.contains("python:3.12-slim"));
         assert!(prompt.contains("tests/"));
+        assert!(!prompt.contains("earlier attempt"));
+
+        let note = AgentRework {
+            patch_b64: "QUJD".into(),
+            patch_sha256: sha256_hex(b"ABC"),
+            feedback: "$ python -m unittest  (exited 1)\nAssertionError: 'a-b' != 'a--b'\n".into(),
+            budget_micro_usd: 60_000,
+        };
+        let reworked = task_prompt(&spec, Some((&note, true)));
+        assert!(reworked.contains("already in the working tree"));
+        assert!(reworked.contains("AssertionError: 'a-b' != 'a--b'"));
+        let fresh = task_prompt(&spec, Some((&note, false)));
+        assert!(fresh.contains("start from the commit"));
     }
 
     #[test]

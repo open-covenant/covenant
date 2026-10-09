@@ -45,9 +45,9 @@ pub use covenant_compute_protocol::{
 
 mod agent;
 pub use agent::{
-    agent_tool_spec, apply_patch, describe_round, describe_verdict, hire_agent, local_bundle,
-    prepare_agent_task, read_hidden_checks, AgentArgs, AgentOutcome, PreparedTask, AGENT_TOOL,
-    DEFAULT_AGENT_DEADLINE_MS, DEFAULT_AGENT_OFFER_MICRO_USDC,
+    agent_tool_spec, apply_patch, describe_reworks, describe_round, describe_verdict, hire_agent,
+    local_bundle, prepare_agent_task, read_hidden_checks, AgentArgs, AgentOutcome, PreparedTask,
+    AGENT_TOOL, DEFAULT_AGENT_DEADLINE_MS, DEFAULT_AGENT_OFFER_MICRO_USDC,
 };
 mod purchases;
 pub use purchases::{PurchaseBook, PurchaseEntry, PurchaseError};
@@ -2681,6 +2681,7 @@ pub async fn fetch_check_report(
         verdict: field(&value, "check")?,
         round: field(&value, "round")?,
         charged_micro_usdc: field(&value, "charged_micro_usdc")?,
+        reworks: field(&value, "reworks")?.unwrap_or(0),
     })
 }
 
@@ -2691,8 +2692,10 @@ pub struct CheckReport {
     pub verdict: Option<covenant_compute_protocol::AgentCheckVerdict>,
     pub round: Option<VoteRoundView>,
     /// What the settled task actually charged: a passing task pays its
-    /// build's spend and its checks, up to the offer.
+    /// builds' spend and its checks, up to the offer.
     pub charged_micro_usdc: Option<u64>,
+    /// How many times a failed check handed the task back to its builder.
+    pub reworks: u32,
 }
 
 /// The checkers' votes as the settlement program counted them. `signature`

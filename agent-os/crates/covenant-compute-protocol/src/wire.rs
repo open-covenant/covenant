@@ -228,6 +228,10 @@ pub struct HeartbeatResponse {
 pub struct JobOffer {
     pub envelope: SignedJobEnvelope,
     pub escrow_hold: EscrowHoldAttestation,
+    /// An agent task handed back to its builder after a failed check.
+    /// Outside the envelope because the buyer signed the task, not this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rework: Option<crate::agent::AgentRework>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

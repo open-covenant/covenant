@@ -45,10 +45,10 @@ pub use agent::{
     agent_check_input, agent_check_output, agent_task_input, agent_task_output, build_spend_cap,
     check_commands, parse_agent_check, parse_agent_check_verdict, parse_agent_task,
     parse_agent_task_output, sha256_hex, AcceptanceSpec, AgentCheckSpec, AgentCheckVerdict,
-    AgentRuntime, AgentSkill, AgentTaskOutput, AgentTaskSpec, CommandOutcome, HiddenChecks,
+    AgentRework, AgentRuntime, AgentSkill, AgentTaskOutput, AgentTaskSpec, CommandOutcome, HiddenChecks,
     HiddenFile, RepoSource, AGENT_CHECK_SLACK_MS, LEAST_AGENT_OFFER_MICRO_USDC,
     MAX_ACCEPTANCE_COMMANDS, MAX_ACCEPTANCE_TIMEOUT_SECS, MAX_BUNDLE_B64_BYTES, MAX_HIDDEN_FILES,
-    MAX_OUTPUT_TAIL_BYTES, MAX_PATCH_BYTES, MAX_SUMMARY_BYTES, MAX_TASK_BYTES,
+    MAX_OUTPUT_TAIL_BYTES, MAX_PATCH_BYTES, MAX_REWORK_FEEDBACK_BYTES, MAX_SUMMARY_BYTES, MAX_TASK_BYTES,
     MIN_BUILD_BUDGET_MICRO_USD,
 };
 pub use bond::{

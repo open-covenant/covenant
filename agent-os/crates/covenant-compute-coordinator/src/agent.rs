@@ -24,18 +24,20 @@ use base64::Engine as _;
 use covenant_a2a::{A2ADuplicateSafety, A2AIdempotency};
 use covenant_audit::AuditKind;
 use covenant_compute_protocol::{
-    agent_check_input, check_commands, parse_agent_check_verdict, parse_agent_task,
-    parse_agent_task_output, sha256_hex, AgentCheckSpec, AgentCheckVerdict, AgentSkill,
-    AgentTaskOutput, AgentTaskSpec, CapabilityRequirement, EscrowError, EscrowStatus,
-    FederationEscrow, FundingSource, JobEnvelopePayload, JobKind, JobOffer, RefundReason,
-    ResultSettlement, SignedJobEnvelope, SignedWorkReceipt, LEAST_AGENT_OFFER_MICRO_USDC,
+    agent_check_input, build_spend_cap, check_commands, parse_agent_check,
+    parse_agent_check_verdict, parse_agent_task, parse_agent_task_output, sha256_hex,
+    AgentCheckSpec, AgentCheckVerdict, AgentRework, AgentSkill, AgentTaskOutput, AgentTaskSpec,
+    CapabilityRequirement, CommandOutcome, EscrowError, EscrowStatus, FederationEscrow,
+    FundingSource, JobEnvelopePayload, JobKind, JobOffer, RefundReason, ResultSettlement,
+    SignedJobEnvelope, SignedWorkReceipt, LEAST_AGENT_OFFER_MICRO_USDC, MAX_REWORK_FEEDBACK_BYTES,
+    MIN_BUILD_BUDGET_MICRO_USD,
 };
 use covenant_identity::LocalIdentity;
 use covenant_mcp::Content;
 use parking_lot::Mutex;
 use uuid::Uuid;
 
-use crate::jobs::{JobPhase, JobRecord, ReceiptAssignment, ReleaseCharges};
+use crate::jobs::{JobPhase, JobRecord, ReceiptAssignment, ReleaseCharges, TaskRework};
 use crate::matcher::{select_operator_excluding, Exclusions};
 use crate::rounds::{agreed, RoundVote, VoteRounds, MAX_ROUND_VOTES};
 use crate::state::CoordinatorState;
@@ -48,6 +50,9 @@ const CHECK_SETUP_MS: u64 = 300_000;
 /// A check must conclude this long before the task's own deadline, so the
 /// task can still settle on it.
 const CHECK_MARGIN_MS: u64 = 30_000;
+/// What a rework's build is given before its check: a task with less of
+/// its window left is refunded instead.
+const REWORK_BUILD_MS: u64 = 300_000;
 
 /// Who may buy agent work, and what checking it costs. Absent from the
 /// config, every agent task is refused: opening agent work to buyers, and
@@ -76,6 +81,9 @@ pub struct AgentPolicy {
     pub build_markup_bps: u32,
     /// The least a passing build is paid, however little it spent.
     pub build_floor_micro_usdc: u64,
+    /// How many times a task whose check failed goes back to its builder,
+    /// told what failed, before the buyer is refunded.
+    pub max_reworks: u32,
 }
 
 impl AgentPolicy {
@@ -202,14 +210,15 @@ pub async fn order_check(state: &CoordinatorState, task_id: Uuid) -> Result<Uuid
             task.phase.as_str()
         ));
     }
-    if task.check_jobs.len() >= policy.max_check_attempts as usize {
-        return Err(format!(
-            "{} checks ordered already, the most this task may have",
-            task.check_jobs.len()
-        ));
-    }
     let spec = parse_agent_task(&task.envelope.payload.input).map_err(|e| e.to_string())?;
     let built = built_patch(&spec, task.output.as_deref().unwrap_or_default())?;
+    let earlier = attempt_checks(state, &task, &built.patch_sha256);
+    if earlier.len() >= policy.max_check_attempts as usize {
+        return Err(format!(
+            "{} checks ordered already, the most this patch may have",
+            earlier.len()
+        ));
+    }
     if spec.acceptance.hidden_sha256.is_some() && task.hidden_checks.is_none() {
         return Err("waiting for the buyer's hidden checks".into());
     }
@@ -236,10 +245,8 @@ pub async fn order_check(state: &CoordinatorState, task_id: Uuid) -> Result<Uuid
             .map(|r| r.stake_owners)
             .unwrap_or_default(),
     };
-    for earlier in &task.check_jobs {
-        if let Some(check) = state.jobs().get(*earlier) {
-            exclusions.operators.push(check.operator_pubkey_b58);
-        }
+    for check in earlier {
+        exclusions.operators.push(check.operator_pubkey_b58);
     }
     let requirement = CapabilityRequirement {
         gpu_class: None,
@@ -343,6 +350,7 @@ pub async fn order_check(state: &CoordinatorState, task_id: Uuid) -> Result<Uuid
             checks_task: Some(task_id),
             hidden_checks: None,
             vote_round: None,
+            rework: None,
         },
     );
     if let Err(e) = inserted {
@@ -363,6 +371,7 @@ pub async fn order_check(state: &CoordinatorState, task_id: Uuid) -> Result<Uuid
         JobOffer {
             envelope,
             escrow_hold,
+            rework: None,
         },
     ) {
         refund_hold(state, check_id, RefundReason::AdmissionFailed).await;
@@ -412,11 +421,10 @@ async fn settle_once(state: &CoordinatorState, task_id: Uuid) {
         .issued_at_ms
         .saturating_add(task.envelope.payload.deadline_ms)
         < now_ms;
-    let checks: Vec<JobRecord> = task
-        .check_jobs
-        .iter()
-        .filter_map(|id| state.jobs().get(*id))
-        .collect();
+    let checks = match parse_agent_task_output(task.output.as_deref().unwrap_or_default()) {
+        Ok(built) => attempt_checks(state, &task, &built.patch_sha256),
+        Err(_) => Vec::new(),
+    };
 
     if let Some(latest) = checks.last() {
         let out = matches!(latest.phase, JobPhase::Offered | JobPhase::Accepted);
@@ -452,7 +460,7 @@ async fn settle_once(state: &CoordinatorState, task_id: Uuid) {
         Decision::Another { fallback } => match order_check(state, task_id).await {
             Ok(_) => return,
             Err(e) => {
-                let exhausted = task.check_jobs.len() >= policy.max_check_attempts as usize
+                let exhausted = checks.len() >= policy.max_check_attempts as usize
                     || e.contains("window is left");
                 match fallback {
                     Some(settled) => {
@@ -468,6 +476,10 @@ async fn settle_once(state: &CoordinatorState, task_id: Uuid) {
             }
         },
     };
+    if outcome == Some(false) && rework(state, &policy, task_id, &task, &judged).await {
+        record_agreement(state, task_id, &verdicts, false).await;
+        return;
+    }
     let outcome = match state.vote_rounds() {
         Some(rounds) if !judged.is_empty() => {
             counted(state, rounds, task_id, &task, &judged, outcome).await
@@ -598,6 +610,205 @@ fn sampled(task_id: Uuid, bps: u32) -> bool {
     task_id.as_u128() % 10_000 < u128::from(bps)
 }
 
+/// The checks ordered for one of a task's patches. A rework's patch starts
+/// its checks afresh, and an operator who checked the patch it replaced may
+/// check it too.
+fn attempt_checks(
+    state: &CoordinatorState,
+    task: &JobRecord,
+    patch_sha256: &str,
+) -> Vec<JobRecord> {
+    task.check_jobs
+        .iter()
+        .filter_map(|id| state.jobs().get(*id))
+        .filter(|check| {
+            parse_agent_check(&check.envelope.payload.input)
+                .is_ok_and(|spec| spec.patch_sha256 == patch_sha256)
+        })
+        .collect()
+}
+
+/// Hands a task whose check failed back to its builder, when the policy
+/// allows another try, the offer can still pay for a build, the task's
+/// window has room for one and its check, and the builder is online. The
+/// builder gets its own patch and what failed; the failure stays the
+/// buyer's to be refunded for if this returns false.
+async fn rework(
+    state: &CoordinatorState,
+    policy: &AgentPolicy,
+    task_id: Uuid,
+    task: &JobRecord,
+    judged: &[(String, AgentCheckVerdict)],
+) -> bool {
+    let done = task.rework.as_ref().map_or(0, |r| r.count);
+    if done >= policy.max_reworks {
+        return false;
+    }
+    let Some(failed) = judged.iter().rev().map(|(_, v)| v).find(|v| !v.passed) else {
+        return false;
+    };
+    let (Ok(spec), Ok(built)) = (
+        parse_agent_task(&task.envelope.payload.input),
+        parse_agent_task_output(task.output.as_deref().unwrap_or_default()),
+    ) else {
+        return false;
+    };
+    let spent = task
+        .rework
+        .as_ref()
+        .map_or(0, |r| r.prior_spend_micro_usd)
+        .saturating_add(built.spend_micro_usd);
+    let budget = build_spend_cap(task.envelope.payload.price_micro_usdc).saturating_sub(spent);
+    if budget < MIN_BUILD_BUDGET_MICRO_USD {
+        tracing::info!(%task_id, spent_micro_usd = spent, "the offer has too little left for a rework");
+        return false;
+    }
+    let now_ms = crate::epoch_ms();
+    let left_ms = task
+        .envelope
+        .payload
+        .issued_at_ms
+        .saturating_add(task.envelope.payload.deadline_ms)
+        .saturating_sub(now_ms);
+    let needed_ms = REWORK_BUILD_MS
+        + u64::from(spec.acceptance.timeout_secs) * 1_000
+        + CHECK_SETUP_MS
+        + CHECK_MARGIN_MS;
+    if left_ms < needed_ms {
+        tracing::info!(%task_id, left_ms, needed_ms, "too little of the task's window is left for a rework");
+        return false;
+    }
+    let cutoff_ms = state.config().operator_liveness_timeout.as_millis() as u64;
+    let online = state
+        .registry()
+        .record(&task.operator_pubkey_b58)
+        .is_some_and(|r| crate::matcher::in_standing(&r, now_ms, cutoff_ms));
+    if !online {
+        tracing::info!(%task_id, builder = %task.operator_pubkey_b58, "the builder is offline; no rework");
+        return false;
+    }
+
+    let note = AgentRework {
+        patch_b64: built.patch_b64,
+        patch_sha256: built.patch_sha256,
+        feedback: feedback(&spec, task.hidden_checks.is_some(), failed),
+        budget_micro_usd: budget,
+    };
+    let rework = TaskRework {
+        count: done + 1,
+        prior_spend_micro_usd: spent,
+        note: note.clone(),
+    };
+    match state.jobs().reopen_for_rework(task_id, rework, now_ms) {
+        Ok(true) => {}
+        Ok(false) => return false,
+        Err(e) => {
+            tracing::error!(%task_id, error = %e, "handing the task back to its builder failed");
+            return false;
+        }
+    }
+    // Delivery is idempotent per job, so a copy of the first offer still
+    // queued would keep this one out. A builder that drops off now leaves a
+    // pinned offer: the stale-offer sweep redelivers it, and the deadline
+    // refunds the buyer.
+    state.registry().revoke(&task.operator_pubkey_b58, task_id);
+    state.registry().deliver(
+        &task.operator_pubkey_b58,
+        JobOffer {
+            envelope: task.envelope.clone(),
+            escrow_hold: task.escrow_hold.clone(),
+            rework: Some(note),
+        },
+    );
+    tracing::info!(%task_id, builder = %task.operator_pubkey_b58, rework = done + 1, budget_micro_usd = budget, "agent work failed its check; handed back to its builder");
+    true
+}
+
+/// What a builder is told about the check its patch failed. A hidden check
+/// is reported only as failing. In a `code.change` check the hidden files
+/// sit in the tree while every command runs, so any command's output may
+/// quote them: with hidden checks the builder learns which commands failed,
+/// not what they printed. `code.tests` adds the buyer's fix only for its
+/// last run, so its first two runs print freely.
+fn feedback(spec: &AgentTaskSpec, hidden: bool, verdict: &AgentCheckVerdict) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    if !verdict.applied {
+        out.push_str("Your patch did not apply to the task's commit.\n");
+    }
+    if !verdict.protected_violations.is_empty() {
+        let _ = writeln!(
+            out,
+            "Your patch changed paths the task protects: {}. Leave them exactly as they are.",
+            verdict.protected_violations.join(", ")
+        );
+    }
+    let visible = spec.acceptance.commands.len();
+    match spec.acceptance.skill {
+        AgentSkill::CodeChange => {
+            for outcome in verdict.commands.iter().take(visible) {
+                describe(&mut out, outcome, !hidden);
+            }
+            if verdict.commands.iter().skip(visible).any(|c| !c.passed()) {
+                out.push_str(
+                    "A check the buyer kept hidden from you failed. Re-read the task and handle \
+                     every case it describes.\n",
+                );
+            }
+        }
+        AgentSkill::CodeTests => {
+            if !verdict.baseline.iter().all(CommandOutcome::passed) {
+                out.push_str(
+                    "The commands already fail on the task's commit, before your tests:\n",
+                );
+                for outcome in &verdict.baseline {
+                    describe(&mut out, outcome, true);
+                }
+            } else if !verdict.commands.last().is_some_and(CommandOutcome::caught) {
+                out.push_str(
+                    "Your tests did not catch the bug: on the task's commit they must end in a \
+                     failure, not pass or time out.\n",
+                );
+                for outcome in &verdict.commands {
+                    describe(&mut out, outcome, true);
+                }
+            } else if !verdict.fixed.iter().all(CommandOutcome::passed) {
+                out.push_str(
+                    "Your tests still fail with the buyer's fix applied, so they fail for a \
+                     reason other than the bug. Test the behaviour the task describes.\n",
+                );
+                for outcome in verdict.fixed.iter().take(visible) {
+                    describe(&mut out, outcome, false);
+                }
+            }
+        }
+    }
+    if out.len() > MAX_REWORK_FEEDBACK_BYTES {
+        let mut end = MAX_REWORK_FEEDBACK_BYTES - 32;
+        while !out.is_char_boundary(end) {
+            end -= 1;
+        }
+        out.truncate(end);
+        out.push_str("\n[the rest is cut]\n");
+    }
+    out
+}
+
+fn describe(out: &mut String, outcome: &CommandOutcome, with_output: bool) {
+    use std::fmt::Write as _;
+    let how = if outcome.timed_out {
+        "timed out".to_string()
+    } else if outcome.passed() {
+        "passed".to_string()
+    } else {
+        format!("exited {}", outcome.exit_code)
+    };
+    let _ = writeln!(out, "$ {}  ({how})", outcome.command);
+    if with_output && !outcome.passed() && !outcome.output_tail.trim().is_empty() {
+        let _ = writeln!(out, "{}", outcome.output_tail.trim_end());
+    }
+}
+
 /// Withdraws a check its operator never picked up: the coordinator is its
 /// buyer, so this is a cancel and nobody's fault.
 async fn withdraw(state: &CoordinatorState, task_id: Uuid, check: &JobRecord) -> bool {
@@ -708,9 +919,9 @@ fn judge(task: &JobRecord, check: &JobRecord) -> Result<AgentCheckVerdict, Strin
     Ok(verdict)
 }
 
-/// Pays a passing task: the buyer is charged what the build spent (with
-/// the markup, at least the floor) plus the checks it took, never more than
-/// they offered, and the rest of the hold goes back to them. The checks'
+/// Pays a passing task: the buyer is charged what its builds spent (with
+/// the markup, at least the floor) plus the checks they took, never more
+/// than they offered, and the rest of the hold goes back to them. The checks'
 /// part stays with the protocol, which paid the checkers when they finished.
 async fn release(state: &CoordinatorState, task_id: Uuid, task: &JobRecord) -> bool {
     let (Some(receipt), Some(output)) = (task.receipt.clone(), task.output.clone()) else {
@@ -735,7 +946,8 @@ async fn release(state: &CoordinatorState, task_id: Uuid, task: &JobRecord) -> b
         .min(offer);
     let spend = parse_agent_task_output(&output)
         .map(|built| built.spend_micro_usd)
-        .unwrap_or(0);
+        .unwrap_or(0)
+        .saturating_add(task.rework.as_ref().map_or(0, |r| r.prior_spend_micro_usd));
     let build = policy.build_pay(spend, offer, checks);
     let charge = build.saturating_add(checks).min(offer);
     if let Err(e) = state
@@ -911,6 +1123,7 @@ mod pricing_tests {
             buyers: vec!["*".into()],
             check_price_micro_usdc: 5_000,
             max_check_attempts: 5,
+            max_reworks: 0,
             check_accept_timeout_ms: 120_000,
             confirm_failures: true,
             pass_sample_bps: 0,

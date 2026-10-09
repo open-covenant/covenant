@@ -97,6 +97,8 @@ pub enum AgentOutcome {
         round: Option<VoteRoundView>,
         /// What the task was charged, which is at most the offer.
         charged_micro_usdc: Option<u64>,
+        /// How many times a failed check sent the work back to its builder.
+        reworks: u32,
     },
     /// Nothing was paid: the work failed its check, or no check could be
     /// completed, or the task never ran. The verdict says why when there
@@ -107,6 +109,7 @@ pub enum AgentOutcome {
         reason: Option<String>,
         verdict: Option<AgentCheckVerdict>,
         round: Option<VoteRoundView>,
+        reworks: u32,
     },
 }
 
@@ -234,6 +237,7 @@ pub async fn hire_agent(
                 reason,
                 verdict: check.verdict,
                 round: check.round,
+                reworks: check.reworks,
             });
         }
         Err(e) => return Err(e),
@@ -257,6 +261,7 @@ pub async fn hire_agent(
         verdict: check.verdict,
         round: check.round,
         charged_micro_usdc: check.charged_micro_usdc,
+        reworks: check.reworks,
     })
 }
 
@@ -405,6 +410,20 @@ fn read_fix(
         });
     }
     Ok(files)
+}
+
+/// What the reworks came to, in one line, when there were any.
+pub fn describe_reworks(reworks: u32, passed: bool) -> Option<String> {
+    let times = match reworks {
+        0 => return None,
+        1 => "once".to_string(),
+        n => format!("{n} times"),
+    };
+    Some(if passed {
+        format!("reworked {times}: a build failed its check, and the builder fixed what failed")
+    } else {
+        format!("reworked {times} with what failed, and the work still did not pass")
+    })
 }
 
 /// The chain's count in one line, with the transaction that records it.
@@ -570,6 +589,15 @@ pub fn agent_tool_spec(max_price_micro_usdc: u64) -> ToolSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reworks_are_told_only_when_there_were_some() {
+        assert_eq!(describe_reworks(0, true), None);
+        assert!(describe_reworks(1, true).unwrap().contains("reworked once"));
+        assert!(describe_reworks(2, false)
+            .unwrap()
+            .contains("2 times with what failed"));
+    }
 
     fn repo_with_bug() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();

@@ -88,6 +88,7 @@ async fn full_local_loop_admits_executes_signs_and_credits() {
     coordinator.push_offer(JobOffer {
         envelope: signed_envelope,
         escrow_hold,
+        rework: None,
     });
 
     let audit = Arc::new(InMemoryAuditLog::new());
@@ -231,6 +232,7 @@ async fn a_job_the_local_profile_cannot_satisfy_is_rejected_before_execution() {
     coordinator.push_offer(JobOffer {
         envelope: signed_envelope,
         escrow_hold,
+        rework: None,
     });
 
     let audit = Arc::new(InMemoryAuditLog::new());
@@ -325,6 +327,7 @@ async fn a_streaming_job_relays_chunks_and_still_settles_by_receipt() {
     coordinator.push_offer(JobOffer {
         envelope: signed_envelope,
         escrow_hold,
+        rework: None,
     });
 
     let node = Node::new(
@@ -485,6 +488,7 @@ async fn a_dead_chunk_relay_never_fails_the_job_itself() {
     coordinator.0.push_offer(JobOffer {
         envelope: signed_envelope,
         escrow_hold,
+        rework: None,
     });
 
     let earnings = Arc::new(InMemoryEarningsLedger::new());
@@ -681,6 +685,7 @@ async fn a_result_settled_as_a_refund_books_no_earnings() {
     coordinator.0.push_offer(JobOffer {
         envelope: signed_envelope,
         escrow_hold,
+        rework: None,
     });
 
     let earnings = Arc::new(InMemoryEarningsLedger::new());
@@ -784,6 +789,7 @@ async fn a_metered_release_credits_the_coordinators_gross_not_the_receipt_price(
     coordinator.inner.push_offer(JobOffer {
         envelope: signed_envelope,
         escrow_hold,
+        rework: None,
     });
 
     let earnings = Arc::new(InMemoryEarningsLedger::new());
@@ -882,6 +888,7 @@ fn offer_for_at(
     JobOffer {
         envelope,
         escrow_hold,
+        rework: None,
     }
 }
 

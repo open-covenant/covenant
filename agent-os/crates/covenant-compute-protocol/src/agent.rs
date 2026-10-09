@@ -56,6 +56,8 @@ pub const MAX_ACCEPTANCE_TIMEOUT_SECS: u32 = 1800;
 pub const MAX_OUTPUT_TAIL_BYTES: usize = 4096;
 /// Cap on the builder's closing summary.
 pub const MAX_SUMMARY_BYTES: usize = 4096;
+/// Cap on what a rework tells its builder about the failed check.
+pub const MAX_REWORK_FEEDBACK_BYTES: usize = 8 * 1024;
 const MAX_REPO_URL_BYTES: usize = 512;
 const MAX_LABEL_BYTES: usize = 128;
 /// Room a task's deadline must leave beyond the build window and the checks
@@ -382,6 +384,33 @@ impl AgentTaskOutput {
         }
         if let Some(run) = &self.guard_run_id {
             validate_label("the guard run id", run)?;
+        }
+        Ok(())
+    }
+}
+
+/// A builder's second try at a task whose patch failed its check, sent with
+/// the offer: the patch that failed, why it failed in terms the builder may
+/// see (a hidden check is reported only as failing), and what the rework may
+/// spend of the offer the first build left.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentRework {
+    pub patch_b64: String,
+    pub patch_sha256: String,
+    pub feedback: String,
+    pub budget_micro_usd: u64,
+}
+
+impl AgentRework {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_b64("patch", &self.patch_b64, MAX_PATCH_B64_BYTES)?;
+        validate_sha256_hex("patch_sha256", &self.patch_sha256)?;
+        if self.feedback.len() > MAX_REWORK_FEEDBACK_BYTES {
+            return Err(ProtocolError::Invalid(format!(
+                "the rework feedback is {} bytes, over the {MAX_REWORK_FEEDBACK_BYTES}-byte cap",
+                self.feedback.len()
+            )));
         }
         Ok(())
     }

@@ -56,17 +56,22 @@ async fn rig_with(accept_timeout_ms: u64) -> Rig {
 }
 
 async fn rig_sampling(accept_timeout_ms: u64, pass_sample_bps: u32) -> Rig {
-    rig_full(accept_timeout_ms, pass_sample_bps, None).await
+    rig_full(accept_timeout_ms, pass_sample_bps, None, 0).await
 }
 
 async fn rig_rounds(rounds: Arc<NoopVoteRounds>) -> Rig {
-    rig_full(120_000, 0, Some(rounds)).await
+    rig_full(120_000, 0, Some(rounds), 0).await
+}
+
+async fn rig_reworking() -> Rig {
+    rig_full(120_000, 0, None, 1).await
 }
 
 async fn rig_full(
     accept_timeout_ms: u64,
     pass_sample_bps: u32,
     rounds: Option<Arc<NoopVoteRounds>>,
+    max_reworks: u32,
 ) -> Rig {
     let audit: Arc<dyn AuditLog> = Arc::new(InMemoryAuditLog::new());
     let reputation = Arc::new(AuditReputationSource::new(audit.clone()));
@@ -79,6 +84,7 @@ async fn rig_full(
             buyers: vec!["*".into()],
             check_price_micro_usdc: 1_000,
             max_check_attempts: 5,
+            max_reworks,
             check_accept_timeout_ms: accept_timeout_ms,
             confirm_failures: true,
             pass_sample_bps,
@@ -524,6 +530,7 @@ async fn agent_work_is_closed_to_unlisted_buyers_and_checks_cannot_be_bought() {
                 buyers: vec!["someone-else".into()],
                 check_price_micro_usdc: 1_000,
                 max_check_attempts: 5,
+                max_reworks: 0,
                 check_accept_timeout_ms: 120_000,
                 confirm_failures: true,
                 pass_sample_bps: 0,
@@ -1181,4 +1188,311 @@ async fn an_offer_too_small_for_a_build_is_refused() {
         .unwrap();
     assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
     assert!(resp.text().await.unwrap().contains("at least 80000"));
+}
+
+fn reworked_patch(spend_micro_usd: u64) -> AgentTaskOutput {
+    let bytes = b"diff --git a/slugify.py b/slugify.py\n+# every case the task names\n";
+    AgentTaskOutput {
+        patch_b64: base64::engine::general_purpose::STANDARD.encode(bytes),
+        patch_sha256: sha256_hex(bytes),
+        summary: "handled the cases the check named".into(),
+        spend_micro_usd,
+        ..patch()
+    }
+}
+
+/// The task's `n`th check once it is ordered, with the operator it went to.
+async fn nth_check(rig: &Rig, task_id: Uuid, n: usize) -> (Uuid, String) {
+    for _ in 0..100 {
+        let task = rig.state.jobs().get(task_id).unwrap();
+        if let Some(check_id) = task.check_jobs.get(n - 1) {
+            let check = rig.state.jobs().get(*check_id).unwrap();
+            return (*check_id, check.operator_pubkey_b58);
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("check {n} was never ordered");
+}
+
+fn by_key<'a>(operators: &[&'a LocalIdentity], key: &str) -> &'a LocalIdentity {
+    operators
+        .iter()
+        .find(|o| o.agent_id().pubkey_base58() == key)
+        .copied()
+        .expect("a registered checker")
+}
+
+/// Answers checks `from..=to` with `output`, each from the checker it went to.
+async fn answer_checks(
+    rig: &Rig,
+    task_id: Uuid,
+    checkers: &[&LocalIdentity],
+    from: usize,
+    to: usize,
+    output: &[Content],
+) {
+    for n in from..=to {
+        let (check_id, assignee) = nth_check(rig, task_id, n).await;
+        submit(rig, check_id, by_key(checkers, &assignee), output.to_vec()).await;
+    }
+}
+
+async fn handed_back(rig: &Rig, task_id: Uuid) -> JobPhase {
+    for _ in 0..100 {
+        let phase = rig.state.jobs().get(task_id).unwrap().phase;
+        if phase != JobPhase::AwaitingCheck {
+            return phase;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    JobPhase::AwaitingCheck
+}
+
+#[tokio::test]
+async fn a_failed_check_hands_the_task_back_to_its_builder_with_what_failed() {
+    let rig = rig_reworking().await;
+    let builder = register(&rig, "builder@agent", 1);
+    let task_id = post_task(&rig).await;
+    let a = register(&rig, "checker-a@agent", 2);
+    let b = register(&rig, "checker-b@agent", 3);
+    let checkers = [&a, &b];
+
+    let first = agent_task_output(patch_spending(10_000)).unwrap();
+    submit(&rig, task_id, &builder, first.clone()).await;
+    let failed = verdict(task_id, &patch().patch_sha256, 1);
+    answer_checks(&rig, task_id, &checkers, 1, 2, &failed).await;
+    assert_eq!(handed_back(&rig, task_id).await, JobPhase::Offered);
+
+    let task = rig.state.jobs().get(task_id).unwrap();
+    assert_eq!(task.operator_pubkey_b58, builder.agent_id().pubkey_base58());
+    assert!(task.pinned, "the rework is its builder's alone");
+    let rework = task.rework.clone().unwrap();
+    assert_eq!(rework.count, 1);
+    assert_eq!(rework.prior_spend_micro_usd, 10_000);
+    assert_eq!(rework.note.patch_sha256, patch().patch_sha256);
+    assert_eq!(
+        rework.note.budget_micro_usd,
+        TASK_PRICE * 5 / 8 - 10_000,
+        "what the offer leaves after the first build"
+    );
+    assert!(
+        rework.note.feedback.contains(COMMAND) && rework.note.feedback.contains("FAILED"),
+        "{}",
+        rework.note.feedback
+    );
+    assert_eq!(
+        rig.state.escrow().status(task_id).await.unwrap(),
+        EscrowStatus::Held
+    );
+    assert!(
+        rig.payout.records().iter().all(|r| r.job_id != task_id),
+        "checkers are paid, the builder is not"
+    );
+
+    // The queue still holds the first offer, which this test never polled.
+    let builder_key = builder.agent_id().pubkey_base58();
+    let mut newest = None;
+    while let Some(offer) = rig
+        .state
+        .registry()
+        .poll_next_job(&builder_key, Duration::ZERO, epoch_ms())
+        .await
+        .unwrap()
+    {
+        newest = Some(offer);
+    }
+    let offer = newest.expect("the builder is offered the task again");
+    assert_eq!(offer.envelope.payload.job_id, task_id);
+    assert_eq!(offer.rework, Some(rework.note));
+
+    let stale = submit(&rig, task_id, &builder, first).await;
+    assert_eq!(stale.settled, ResultSettlement::AwaitingCheck);
+    assert_eq!(
+        rig.state.jobs().get(task_id).unwrap().phase,
+        JobPhase::Offered,
+        "a late copy of the failed build is not the rework"
+    );
+
+    let second = reworked_patch(20_000);
+    submit(
+        &rig,
+        task_id,
+        &builder,
+        agent_task_output(second.clone()).unwrap(),
+    )
+    .await;
+    answer_checks(
+        &rig,
+        task_id,
+        &checkers,
+        3,
+        3,
+        &verdict(task_id, &second.patch_sha256, 0),
+    )
+    .await;
+    assert_eq!(settled(&rig, task_id).await, JobPhase::Completed);
+    // Both builds' spend with the markup, and all three checks.
+    assert_eq!(
+        rig.state.escrow().settled_charge_micro_usdc(task_id),
+        Some(36_000 + 3_000)
+    );
+    let paid: Vec<_> = rig
+        .payout
+        .records()
+        .into_iter()
+        .filter(|r| r.job_id == task_id)
+        .collect();
+    assert_eq!(paid.len(), 1);
+    assert_eq!(paid[0].amount_micro_usdc, 36_000);
+}
+
+#[tokio::test]
+async fn a_rework_that_fails_again_refunds_the_buyer() {
+    let rig = rig_reworking().await;
+    let builder = register(&rig, "builder@agent", 1);
+    let task_id = post_task(&rig).await;
+    let a = register(&rig, "checker-a@agent", 2);
+    let b = register(&rig, "checker-b@agent", 3);
+    let checkers = [&a, &b];
+
+    submit(
+        &rig,
+        task_id,
+        &builder,
+        agent_task_output(patch_spending(10_000)).unwrap(),
+    )
+    .await;
+    answer_checks(
+        &rig,
+        task_id,
+        &checkers,
+        1,
+        2,
+        &verdict(task_id, &patch().patch_sha256, 1),
+    )
+    .await;
+    assert_eq!(handed_back(&rig, task_id).await, JobPhase::Offered);
+
+    let second = reworked_patch(20_000);
+    submit(
+        &rig,
+        task_id,
+        &builder,
+        agent_task_output(second.clone()).unwrap(),
+    )
+    .await;
+    answer_checks(
+        &rig,
+        task_id,
+        &checkers,
+        3,
+        4,
+        &verdict(task_id, &second.patch_sha256, 1),
+    )
+    .await;
+    assert_eq!(settled(&rig, task_id).await, JobPhase::Refunded);
+    let task = rig.state.jobs().get(task_id).unwrap();
+    assert_eq!(
+        task.refund_reason,
+        Some(covenant_compute_protocol::RefundReason::CheckFailed)
+    );
+    assert!(
+        rig.payout.records().iter().all(|r| r.job_id != task_id),
+        "checkers are paid, the builder is not"
+    );
+}
+
+#[tokio::test]
+async fn no_rework_once_the_offer_cannot_pay_for_another_build() {
+    let rig = rig_reworking().await;
+    let builder = register(&rig, "builder@agent", 1);
+    let task_id = post_task(&rig).await;
+    let a = register(&rig, "checker-a@agent", 2);
+    let b = register(&rig, "checker-b@agent", 3);
+
+    submit(
+        &rig,
+        task_id,
+        &builder,
+        agent_task_output(patch_spending(40_000)).unwrap(),
+    )
+    .await;
+    answer_checks(
+        &rig,
+        task_id,
+        &[&a, &b],
+        1,
+        2,
+        &verdict(task_id, &patch().patch_sha256, 1),
+    )
+    .await;
+    assert_eq!(settled(&rig, task_id).await, JobPhase::Refunded);
+    assert!(rig.state.jobs().get(task_id).unwrap().rework.is_none());
+}
+
+#[tokio::test]
+async fn a_rework_never_shows_the_builder_what_a_hidden_check_printed() {
+    let hidden = covenant_compute_protocol::HiddenChecks {
+        files: vec![covenant_compute_protocol::HiddenFile {
+            path: "tests/hidden/test_edges.py".into(),
+            content_b64: base64::engine::general_purpose::STANDARD.encode("import unittest\n"),
+        }],
+        commands: vec!["python -m unittest tests.hidden.test_edges".into()],
+    };
+    let mut committed = spec();
+    committed.acceptance.hidden_sha256 = Some(hidden.digest());
+
+    let rig = rig_reworking().await;
+    let builder = register(&rig, "builder@agent", 1);
+    let task_id = post_task_with(&rig, committed).await;
+    let a = register(&rig, "checker-a@agent", 2);
+    let b = register(&rig, "checker-b@agent", 3);
+    submit(
+        &rig,
+        task_id,
+        &builder,
+        agent_task_output(patch_spending(10_000)).unwrap(),
+    )
+    .await;
+    let taken = rig
+        .http
+        .post(format!("{}/federation/jobs/{task_id}/hidden", rig.url))
+        .json(&hidden)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(taken.status(), reqwest::StatusCode::OK);
+
+    // The visible command discovers the hidden test and quotes it.
+    let quoted = agent_check_output(AgentCheckVerdict::new(
+        task_id,
+        patch().patch_sha256,
+        true,
+        Vec::new(),
+        vec![CommandOutcome {
+            command: COMMAND.into(),
+            exit_code: 1,
+            duration_ms: 200,
+            timed_out: false,
+            output_tail: "FAIL: test_edges (tests.hidden.test_edges.Edges)".into(),
+        }],
+    ))
+    .unwrap();
+    answer_checks(&rig, task_id, &[&a, &b], 1, 2, &quoted).await;
+    assert_eq!(handed_back(&rig, task_id).await, JobPhase::Offered);
+
+    let feedback = rig
+        .state
+        .jobs()
+        .get(task_id)
+        .unwrap()
+        .rework
+        .unwrap()
+        .note
+        .feedback;
+    assert!(
+        feedback.contains(COMMAND) && feedback.contains("exited 1"),
+        "{feedback}"
+    );
+    assert!(!feedback.contains("test_edges"), "{feedback}");
 }

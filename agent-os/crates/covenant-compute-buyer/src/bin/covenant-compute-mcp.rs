@@ -34,11 +34,11 @@ use std::time::Duration;
 use anyhow::Context;
 use covenant_compute_buyer::{
     agent_tool_spec, apply_patch, balance_tool_spec, cancel_job, cancel_tool_spec, capacity,
-    capacity_tool_spec, cheapest_matching_ask, claim_deposit, deposit_tool_spec, describe_round,
-    describe_verdict, dispatch_and_verify, dispatch_signed, dispute_job, dispute_tool_spec,
-    embed_tool_spec, fetch_job_output, funds_with_deposit_info, hire_agent, infer_tool_spec,
-    list_verified_jobs, list_withdrawals, output_tool_spec, prepare_agent_task, preview_value,
-    quote_price, receipts_tool_spec, run_tool_spec, save_speech_clip, sign_envelope,
+    capacity_tool_spec, cheapest_matching_ask, claim_deposit, deposit_tool_spec, describe_reworks,
+    describe_round, describe_verdict, dispatch_and_verify, dispatch_signed, dispute_job,
+    dispute_tool_spec, embed_tool_spec, fetch_job_output, funds_with_deposit_info, hire_agent,
+    infer_tool_spec, list_verified_jobs, list_withdrawals, output_tool_spec, prepare_agent_task,
+    preview_value, quote_price, receipts_tool_spec, run_tool_spec, save_speech_clip, sign_envelope,
     speak_tool_spec, stream_and_verify, stream_poll_tool_spec, stream_start_tool_spec,
     submit_streaming, transcribe_tool_spec, verify_payout, verify_tool_spec, withdraw,
     withdraw_tool_spec, withdrawals_tool_spec, AgentArgs, AgentOutcome, BuyerConfig, BuyerError,
@@ -274,6 +274,7 @@ async fn call_agent(state: &ServerState, id: Value, arguments: Value) -> Value {
             reason,
             verdict,
             round,
+            reworks,
         } => {
             let mut text = format!(
                 "Not paid: job {job_id} ended {status} ({}). Nothing was charged.",
@@ -282,6 +283,10 @@ async fn call_agent(state: &ServerState, id: Value, arguments: Value) -> Value {
             if let Some(verdict) = verdict {
                 text.push_str("\n\n");
                 text.push_str(&describe_verdict(&verdict));
+            }
+            if let Some(line) = describe_reworks(reworks, false) {
+                text.push('\n');
+                text.push_str(&line);
             }
             if let Some(round) = round {
                 text.push('\n');
@@ -296,6 +301,7 @@ async fn call_agent(state: &ServerState, id: Value, arguments: Value) -> Value {
             verdict,
             round,
             charged_micro_usdc,
+            reworks,
         } => {
             let charged = charged_micro_usdc.unwrap_or(outcome.envelope.payload.price_micro_usdc);
             state.caps.record_spend(charged);
@@ -326,6 +332,10 @@ async fn call_agent(state: &ServerState, id: Value, arguments: Value) -> Value {
             if let Some(verdict) = verdict {
                 text.push_str("\n\n");
                 text.push_str(&describe_verdict(&verdict));
+            }
+            if let Some(line) = describe_reworks(reworks, true) {
+                text.push('\n');
+                text.push_str(&line);
             }
             if let Some(round) = round {
                 text.push('\n');

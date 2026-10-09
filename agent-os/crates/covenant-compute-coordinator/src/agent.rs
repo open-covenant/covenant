@@ -71,11 +71,33 @@ pub struct AgentPolicy {
     /// The share of passing verdicts, in basis points, double-checked before
     /// payment, so a checker passing junk is caught at that rate.
     pub pass_sample_bps: u32,
+    /// What a passing build costs its buyer, in basis points of the model
+    /// spend the builder's guard metered: 12,000 is spend plus a fifth.
+    pub build_markup_bps: u32,
+    /// The least a passing build is paid, however little it spent.
+    pub build_floor_micro_usdc: u64,
 }
 
 impl AgentPolicy {
     pub fn admits(&self, buyer_b58: &str) -> bool {
         self.buyers.iter().any(|b| b == "*" || b == buyer_b58)
+    }
+
+    /// The smallest offer that pays a build and its first check.
+    pub fn least_offer_micro_usdc(&self) -> u64 {
+        self.build_floor_micro_usdc
+            .saturating_add(self.check_price_micro_usdc)
+    }
+
+    /// What the builder of a passing task is paid: its metered spend with
+    /// the markup, at least the floor, and never more than the offer leaves
+    /// once the checks are paid.
+    pub fn build_pay(&self, spend_micro_usd: u64, offer: u64, checks: u64) -> u64 {
+        let marked = u128::from(spend_micro_usd) * u128::from(self.build_markup_bps);
+        let marked = u64::try_from(marked.div_ceil(10_000)).unwrap_or(u64::MAX);
+        marked
+            .max(self.build_floor_micro_usdc)
+            .min(offer.saturating_sub(checks))
     }
 }
 
@@ -684,12 +706,41 @@ fn judge(task: &JobRecord, check: &JobRecord) -> Result<AgentCheckVerdict, Strin
     Ok(verdict)
 }
 
+/// Pays a passing task: the buyer is charged what the build spent (with
+/// the markup, at least the floor) plus the checks it took, never more than
+/// they offered, and the rest of the hold goes back to them. The checks'
+/// part stays with the protocol, which paid the checkers when they finished.
 async fn release(state: &CoordinatorState, task_id: Uuid, task: &JobRecord) -> bool {
     let (Some(receipt), Some(output)) = (task.receipt.clone(), task.output.clone()) else {
         tracing::error!(%task_id, "parked task has no receipt to release on");
         return false;
     };
-    if let Err(e) = state.escrow().release(task_id, &receipt).await {
+    let Some(policy) = state.config().agent.clone() else {
+        return false;
+    };
+    let offer = task.envelope.payload.price_micro_usdc;
+    let checks: u64 = task
+        .check_jobs
+        .iter()
+        .filter(|id| {
+            state
+                .jobs()
+                .get(**id)
+                .is_some_and(|c| c.phase == JobPhase::Completed)
+        })
+        .filter_map(|id| state.escrow().hold_info(*id).map(|(amount, _)| amount))
+        .sum::<u64>()
+        .min(offer);
+    let spend = parse_agent_task_output(&output)
+        .map(|built| built.spend_micro_usd)
+        .unwrap_or(0);
+    let build = policy.build_pay(spend, offer, checks);
+    let charge = build.saturating_add(checks).min(offer);
+    if let Err(e) = state
+        .escrow()
+        .release_metered(task_id, &receipt, charge)
+        .await
+    {
         let released = matches!(e, EscrowError::AlreadySettled(_))
             && matches!(
                 state.escrow().status(task_id).await,
@@ -700,17 +751,23 @@ async fn release(state: &CoordinatorState, task_id: Uuid, task: &JobRecord) -> b
             return false;
         }
     }
-    let (amount, funding_source) = state.escrow().hold_info(task_id).unwrap_or((
-        receipt.receipt.price_micro_usdc,
-        state.config().default_funding_source,
-    ));
+    let funding_source = state
+        .escrow()
+        .hold_info(task_id)
+        .map(|(_, source)| source)
+        .unwrap_or(state.config().default_funding_source);
+    let charged = state
+        .escrow()
+        .settled_charge_micro_usdc(task_id)
+        .unwrap_or(charge);
     if let Err(e) = crate::http::finish_release(
         state,
         task_id,
         task,
         receipt,
         output,
-        amount,
+        charged,
+        checks,
         funding_source,
         None,
         crate::onchain_meter::LeaseConclusion::OffChain,
@@ -720,7 +777,15 @@ async fn release(state: &CoordinatorState, task_id: Uuid, task: &JobRecord) -> b
         tracing::error!(%task_id, error = ?e, "check passed and the hold released, but concluding the task failed");
         return false;
     }
-    tracing::info!(%task_id, amount_micro_usdc = amount, "agent work passed its check; paid");
+    tracing::info!(
+        %task_id,
+        offer_micro_usdc = offer,
+        charged_micro_usdc = charged,
+        spend_micro_usd = spend,
+        builder_micro_usdc = charged.saturating_sub(checks),
+        checks_micro_usdc = checks,
+        "agent work passed its check; paid"
+    );
     true
 }
 
@@ -833,4 +898,37 @@ pub fn nudge(state: &CoordinatorState, check: &JobRecord) {
     };
     let state = state.clone();
     tokio::spawn(async move { settle(&state, task_id).await });
+}
+
+#[cfg(test)]
+mod pricing_tests {
+    use super::*;
+
+    fn policy() -> AgentPolicy {
+        AgentPolicy {
+            buyers: vec!["*".into()],
+            check_price_micro_usdc: 5_000,
+            max_check_attempts: 5,
+            check_accept_timeout_ms: 120_000,
+            confirm_failures: true,
+            pass_sample_bps: 0,
+            build_markup_bps: 12_000,
+            build_floor_micro_usdc: 10_000,
+        }
+    }
+
+    #[test]
+    fn a_build_is_paid_its_spend_with_the_markup_inside_the_offer() {
+        let p = policy();
+        assert_eq!(p.least_offer_micro_usdc(), 15_000);
+        assert_eq!(p.build_pay(0, 500_000, 5_000), 10_000, "the floor");
+        assert_eq!(p.build_pay(60_001, 500_000, 5_000), 72_002, "rounded up");
+        assert_eq!(
+            p.build_pay(1_000_000, 500_000, 10_000),
+            490_000,
+            "the offer caps it"
+        );
+        assert_eq!(p.build_pay(u64::MAX, 500_000, 0), 500_000);
+        assert_eq!(p.build_pay(10, 8_000, 9_000), 0, "checks first");
+    }
 }

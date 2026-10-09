@@ -29,7 +29,7 @@ use covenant_compute_buyer::{
     list_verified_jobs, list_withdrawals, prepare_agent_task, preview_value, sign_envelope,
     submit_streaming, vault_delete, vault_fetch, vault_list, vault_store, verify_payout, withdraw,
     AgentArgs, AgentOutcome, BuyerConfig, DispatchOutcome, JobRequest, PriceQuote, PurchaseBook,
-    PurchaseEntry, VaultKeyring, DEFAULT_AGENT_DEADLINE_MS,
+    PurchaseEntry, VaultKeyring, DEFAULT_AGENT_DEADLINE_MS, DEFAULT_AGENT_OFFER_MICRO_USDC,
 };
 use covenant_compute_protocol::{
     chat_input, generation_input, lease_input, parse_assistant_output, parse_embedding_output,
@@ -1273,14 +1273,20 @@ async fn cmd_agent(ctx: &Ctx, args: &mut Vec<String>, json_out: bool) -> anyhow:
         None,
         None,
         None,
-        agent_args.price_micro_usdc,
+        Some(
+            agent_args
+                .price_micro_usdc
+                .unwrap_or(DEFAULT_AGENT_OFFER_MICRO_USDC),
+        ),
     )
     .await?;
     let deadline_ms = agent_args.deadline_ms.unwrap_or(DEFAULT_AGENT_DEADLINE_MS);
     if !json_out {
         eprintln!(
-            "posted for {price} micro-USDC; an agent is working on it and another operator will \
-             check the result (up to {} min)",
+            "posted with a ceiling of {}: if the work passes you pay what the build spent plus \
+             its checks, and nothing if it fails. An agent is working on it and another \
+             operator will check the result (up to {} min)",
+            usdc(price),
             deadline_ms / 60_000
         );
     }
@@ -1330,6 +1336,7 @@ async fn cmd_agent(ctx: &Ctx, args: &mut Vec<String>, json_out: bool) -> anyhow:
             patch,
             verdict,
             round,
+            charged_micro_usdc,
         } => {
             let job_id = outcome.receipt.receipt.job_id;
             let path = PathBuf::from(out.unwrap_or_else(|| format!("agent-{job_id}.patch")));
@@ -1350,6 +1357,7 @@ async fn cmd_agent(ctx: &Ctx, args: &mut Vec<String>, json_out: bool) -> anyhow:
                     "price_micro_usdc": outcome.envelope.payload.price_micro_usdc,
                     "check": verdict,
                     "round": round,
+                    "charged_micro_usdc": charged_micro_usdc,
                     "payout": outcome.payout,
                 });
                 println!("{}", serde_json::to_string_pretty(&doc)?);
@@ -1375,6 +1383,13 @@ async fn cmd_agent(ctx: &Ctx, args: &mut Vec<String>, json_out: bool) -> anyhow:
             }
             if let Some(round) = &round {
                 println!("{}", describe_round(round));
+            }
+            if let Some(charged) = charged_micro_usdc {
+                println!(
+                    "charged: {} of your {} ceiling",
+                    usdc(charged),
+                    usdc(outcome.envelope.payload.price_micro_usdc)
+                );
             }
             println!();
             print_receipt_block(&outcome);

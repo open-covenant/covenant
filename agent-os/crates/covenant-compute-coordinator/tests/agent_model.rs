@@ -82,6 +82,8 @@ async fn rig_full(
             check_accept_timeout_ms: accept_timeout_ms,
             confirm_failures: true,
             pass_sample_bps,
+            build_markup_bps: 12_000,
+            build_floor_micro_usdc: 10_000,
         }),
         vote_rounds: rounds.map(|r| r as Arc<dyn VoteRounds>),
         ..CoordinatorConfig::default()
@@ -258,6 +260,13 @@ async fn submit(
     resp.json().await.unwrap()
 }
 
+fn patch_spending(spend_micro_usd: u64) -> AgentTaskOutput {
+    AgentTaskOutput {
+        spend_micro_usd,
+        ..patch()
+    }
+}
+
 fn patch() -> AgentTaskOutput {
     let bytes = b"diff --git a/slugify.py b/slugify.py\n";
     AgentTaskOutput {
@@ -392,7 +401,13 @@ async fn an_agent_task_pays_only_after_another_operators_check_passes() {
         .collect();
     assert_eq!(paid.len(), 1, "the builder is paid exactly once");
     assert_eq!(paid[0].operator_pubkey_b58, builder_key);
-    assert_eq!(paid[0].amount_micro_usdc, TASK_PRICE);
+    // The build reported no spend, so it is paid the floor; the buyer pays
+    // that and the one check, and the rest of the offer stays theirs.
+    assert_eq!(paid[0].amount_micro_usdc, 10_000);
+    assert_eq!(
+        rig.state.escrow().settled_charge_micro_usdc(task_id),
+        Some(11_000)
+    );
 
     // A late redelivery of the builder's result echoes the settlement and
     // orders nothing new.
@@ -512,6 +527,8 @@ async fn agent_work_is_closed_to_unlisted_buyers_and_checks_cannot_be_bought() {
                 check_accept_timeout_ms: 120_000,
                 confirm_failures: true,
                 pass_sample_bps: 0,
+                build_markup_bps: 12_000,
+                build_floor_micro_usdc: 10_000,
             }),
             ..CoordinatorConfig::default()
         };
@@ -1049,4 +1066,119 @@ async fn a_tests_task_is_not_paid_on_a_change_verdict() {
         JobPhase::AwaitingCheck,
         "a verdict on the wrong skill is no verdict"
     );
+}
+
+#[tokio::test]
+async fn a_passing_build_is_charged_what_it_spent_and_the_checks() {
+    let rig = rig().await;
+    let builder = register(&rig, "builder@agent", 1);
+    let task_id = post_task(&rig).await;
+    let checker = register(&rig, "checker@agent", 2);
+    submit(
+        &rig,
+        task_id,
+        &builder,
+        agent_task_output(patch_spending(30_000)).unwrap(),
+    )
+    .await;
+    let (check_id, _) = latest_check(&rig, task_id);
+    submit(
+        &rig,
+        check_id,
+        &checker,
+        verdict(task_id, &patch().patch_sha256, 0),
+    )
+    .await;
+    assert_eq!(settled(&rig, task_id).await, JobPhase::Completed);
+
+    // 30,000 of model spend with a fifth on top, plus the 1,000 check.
+    let paid: Vec<_> = rig
+        .payout
+        .records()
+        .into_iter()
+        .filter(|r| r.job_id == task_id)
+        .collect();
+    assert_eq!(paid[0].amount_micro_usdc, 36_000);
+    assert_eq!(
+        rig.state.escrow().settled_charge_micro_usdc(task_id),
+        Some(37_000)
+    );
+    let task = rig.state.jobs().get(task_id).unwrap();
+    assert_eq!(
+        task.fee_micro_usdc, 1_000,
+        "the check's part stays with the protocol"
+    );
+}
+
+#[tokio::test]
+async fn a_build_never_costs_more_than_the_offer() {
+    let rig = rig().await;
+    let builder = register(&rig, "builder@agent", 1);
+    let task_id = post_task(&rig).await;
+    let checker = register(&rig, "checker@agent", 2);
+    submit(
+        &rig,
+        task_id,
+        &builder,
+        agent_task_output(patch_spending(1_000_000)).unwrap(),
+    )
+    .await;
+    let (check_id, _) = latest_check(&rig, task_id);
+    submit(
+        &rig,
+        check_id,
+        &checker,
+        verdict(task_id, &patch().patch_sha256, 0),
+    )
+    .await;
+    assert_eq!(settled(&rig, task_id).await, JobPhase::Completed);
+    assert_eq!(
+        rig.state.escrow().settled_charge_micro_usdc(task_id),
+        Some(TASK_PRICE)
+    );
+    let paid: Vec<_> = rig
+        .payout
+        .records()
+        .into_iter()
+        .filter(|r| r.job_id == task_id)
+        .collect();
+    assert_eq!(paid[0].amount_micro_usdc, TASK_PRICE - 1_000);
+}
+
+#[tokio::test]
+async fn an_offer_too_small_for_a_build_and_a_check_is_refused() {
+    let rig = rig().await;
+    register(&rig, "builder@agent", 1);
+    let buyer = LocalIdentity::generate("buyer@agent");
+    let job_id = Uuid::new_v4();
+    let payload = JobEnvelopePayload {
+        job_id,
+        buyer: buyer.agent_id(),
+        kind: JobKind::AgentTask,
+        capability_requirement: CapabilityRequirement {
+            gpu_class: None,
+            min_vram_gb: None,
+            model_id: Some("claude-code".into()),
+            kind: JobKind::AgentTask,
+            max_duration_secs: 600,
+            min_reputation_bps: None,
+        },
+        input: vec![agent_task_input(spec()).unwrap()],
+        price_micro_usdc: 10_999,
+        deadline_ms: 1_200_000,
+        idempotency: A2AIdempotency::new(A2ADuplicateSafety::Idempotent, job_id.to_string()),
+        issued_at_ms: epoch_ms(),
+        referral_code: None,
+        stream: false,
+    };
+    let envelope = SignedJobEnvelope::sign(payload, &buyer).unwrap();
+    let resp = rig
+        .http
+        .post(format!("{}/federation/jobs", rig.url))
+        .json(&envelope)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert!(resp.text().await.unwrap().contains("at least 11000"));
 }

@@ -45,11 +45,11 @@ use covenant_compute_buyer::{
     CancelArgs, DisputeArgs, EmbedArgs, InferArgs, JobOutputView, JobRequest, OutputArgs,
     PurchaseBook, PurchaseEntry, RunArgs, SpeakArgs, SpendCaps, StreamJobs, StreamPollArgs,
     TranscribeArgs, VerifyArgs, WithdrawArgs, AGENT_TOOL, BALANCE_TOOL, CANCEL_TOOL, CAPACITY_TOOL,
-    DEFAULT_AGENT_DEADLINE_MS, DEPOSIT_TOOL, DISPUTE_TOOL, EMBED_TOOL, INFER_TOOL, OUTPUT_TOOL,
-    RECEIPTS_TOOL, RUN_TOOL, SPEAK_TOOL, STREAM_POLL_TOOL, STREAM_START_TOOL, TRANSCRIBE_TOOL,
-    VERIFY_TOOL, WITHDRAWALS_TOOL, WITHDRAW_TOOL,
+    DEFAULT_AGENT_DEADLINE_MS, DEFAULT_AGENT_OFFER_MICRO_USDC, DEPOSIT_TOOL, DISPUTE_TOOL,
+    EMBED_TOOL, INFER_TOOL, OUTPUT_TOOL, RECEIPTS_TOOL, RUN_TOOL, SPEAK_TOOL, STREAM_POLL_TOOL,
+    STREAM_START_TOOL, TRANSCRIBE_TOOL, VERIFY_TOOL, WITHDRAWALS_TOOL, WITHDRAW_TOOL,
 };
-use covenant_compute_protocol::{parse_speech_output, AgentRuntime, JobKind};
+use covenant_compute_protocol::{parse_speech_output, JobKind};
 use covenant_identity::LocalIdentity;
 use covenant_mcp::Content;
 use serde::Deserialize;
@@ -241,23 +241,12 @@ async fn call_agent(state: &ServerState, id: Value, arguments: Value) -> Value {
         Err(e) => return tool_error(id, e.to_string()),
     };
     let cap = state.caps.max_price_micro_usdc();
-    let price = match args.price_micro_usdc {
-        Some(price) => price,
-        None => cheapest_matching_ask(
-            &state.http,
-            &state.buyer,
-            JobKind::AgentTask,
-            Some(AgentRuntime::ClaudeCode.label()),
-            None,
-            None,
-            None,
-        )
-        .await
-        .ok()
-        .flatten()
-        .map(|floor| floor.min(cap))
-        .unwrap_or(cap),
-    };
+    // An offer is a ceiling: a passing task is charged what its build spent
+    // plus its checks, so the default is room for a build, capped by the
+    // session's own per-call limit.
+    let price = args
+        .price_micro_usdc
+        .unwrap_or(DEFAULT_AGENT_OFFER_MICRO_USDC.min(cap));
     if let Some(refusal) = state.caps.per_call_refusal(price) {
         return tool_error(id, refusal);
     }
@@ -306,10 +295,10 @@ async fn call_agent(state: &ServerState, id: Value, arguments: Value) -> Value {
             patch,
             verdict,
             round,
+            charged_micro_usdc,
         } => {
-            state
-                .caps
-                .record_spend(outcome.envelope.payload.price_micro_usdc);
+            let charged = charged_micro_usdc.unwrap_or(outcome.envelope.payload.price_micro_usdc);
+            state.caps.record_spend(charged);
             let job_id = outcome.receipt.receipt.job_id;
             let dir = state.clips_dir.with_file_name("agent-patches");
             let path = dir.join(format!("{job_id}.patch"));
@@ -317,8 +306,8 @@ async fn call_agent(state: &ServerState, id: Value, arguments: Value) -> Value {
                 .and_then(|()| std::fs::write(&path, &patch))
                 .is_ok();
             let mut text = format!(
-                "Accepted: job {job_id} passed another operator's check and was paid {} \
-                 micro-USDC. {} file(s) changed.",
+                "Accepted: job {job_id} passed another operator's check. Charged {charged} \
+                 micro-USDC of a {} ceiling. {} file(s) changed.",
                 outcome.envelope.payload.price_micro_usdc, built.files_changed
             );
             if args.apply && !args.repo.starts_with("https://") {

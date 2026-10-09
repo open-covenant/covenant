@@ -760,6 +760,16 @@ async fn main() -> anyhow::Result<()> {
                     1_000,
                     "must be a u32 (basis points)",
                 )?,
+                build_markup_bps: env_parse(
+                    "COVENANT_COMPUTE_AGENT_BUILD_MARKUP_BPS",
+                    12_000,
+                    "must be a u32 (basis points of the build's model spend)",
+                )?,
+                build_floor_micro_usdc: env_parse(
+                    "COVENANT_COMPUTE_AGENT_BUILD_FLOOR_MICRO_USDC",
+                    10_000,
+                    "must be a u64 (micro-USDC)",
+                )?,
             };
             tracing::info!(
                 buyers = ?policy.buyers,

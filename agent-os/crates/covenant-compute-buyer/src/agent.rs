@@ -25,6 +25,10 @@ pub const AGENT_TOOL: &str = "compute.agent";
 const DEFAULT_CHECK_IMAGE: &str = "python:3.12-slim";
 const DEFAULT_CHECK_TIMEOUT_SECS: u32 = 300;
 pub const DEFAULT_AGENT_DEADLINE_MS: u64 = 1_800_000;
+/// The offer a task is posted with when the caller names none. A ceiling,
+/// not a price: a passing task is charged what its build spent plus its
+/// checks, and a failing one nothing.
+pub const DEFAULT_AGENT_OFFER_MICRO_USDC: u64 = 700_000;
 
 /// A task as a caller states it: where the code is, what to do, and what
 /// the work must pass.
@@ -91,6 +95,8 @@ pub enum AgentOutcome {
         patch: Vec<u8>,
         verdict: Option<AgentCheckVerdict>,
         round: Option<VoteRoundView>,
+        /// What the task was charged, which is at most the offer.
+        charged_micro_usdc: Option<u64>,
     },
     /// Nothing was paid: the work failed its check, or no check could be
     /// completed, or the task never ran. The verdict says why when there
@@ -250,6 +256,7 @@ pub async fn hire_agent(
         patch,
         verdict: check.verdict,
         round: check.round,
+        charged_micro_usdc: check.charged_micro_usdc,
     })
 }
 

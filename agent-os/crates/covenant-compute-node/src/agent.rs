@@ -305,6 +305,8 @@ impl AgentExecutor {
                 spec.acceptance.image
             )));
         }
+        let budget = build_budget(&self.config.budget_usd, job.price_micro_usdc)
+            .map_err(ExecutorError::Failed)?;
         let model = spec
             .model
             .clone()
@@ -316,6 +318,7 @@ impl AgentExecutor {
                 &spec.acceptance.image,
                 &task_prompt(&spec),
                 model.as_deref(),
+                &budget,
                 wall,
                 until,
             )
@@ -758,6 +761,7 @@ impl AgentExecutor {
         image: &str,
         prompt: &str,
         model: Option<&str>,
+        budget_usd: &str,
         wall: Duration,
         until: Instant,
     ) -> Result<AgentRun, ExecutorError> {
@@ -766,7 +770,7 @@ impl AgentExecutor {
             "run",
             "--json",
             "--budget",
-            &self.config.budget_usd,
+            budget_usd,
             "--wall",
             &format!("{}s", wall.as_secs()),
             "--workspace",
@@ -1054,6 +1058,33 @@ fn finish(verdict: AgentCheckVerdict) -> Result<Vec<Content>, ExecutorError> {
     agent_check_output(verdict).map_err(|e| ExecutorError::Failed(format!("verdict: {e}")))
 }
 
+/// The least model spend a build is started with. Below it the agent cannot
+/// read a repository and reply, so the job is refused rather than run to a
+/// certain failure.
+const MIN_BUILD_BUDGET_MICRO_USD: u64 = 50_000;
+
+/// The build's spend cap: the operator's own cap, or five-eighths of the
+/// buyer's offer if that is less. A passing build is charged its spend with
+/// a fifth on top, plus its checks, and never more than the offer, so the
+/// agent must not spend what the offer cannot pay back.
+fn build_budget(configured_usd: &str, offer_micro_usdc: u64) -> Result<String, String> {
+    let cap = configured_usd
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|usd| usd.is_finite() && *usd > 0.0)
+        .map(|usd| (usd * 1_000_000.0) as u64)
+        .ok_or_else(|| format!("the build budget {configured_usd:?} is not a dollar amount"))?;
+    let budget = cap.min(offer_micro_usdc.saturating_mul(5) / 8);
+    if budget < MIN_BUILD_BUDGET_MICRO_USD {
+        return Err(format!(
+            "an offer of {offer_micro_usdc} micro-USDC leaves {budget} micro-USD for the build, \
+             under the {MIN_BUILD_BUDGET_MICRO_USD} a build needs"
+        ));
+    }
+    Ok(format!("{}.{:06}", budget / 1_000_000, budget % 1_000_000))
+}
+
 /// The instructions a build hands the agent: the buyer's task, then what
 /// the work will be judged by, so the agent can run the same checks itself.
 fn task_prompt(spec: &AgentTaskSpec) -> String {
@@ -1256,6 +1287,17 @@ fn truncate_utf8(s: &str, max: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_build_spends_inside_the_offer() {
+        assert_eq!(build_budget("0.50", 700_000).unwrap(), "0.437500");
+        assert_eq!(build_budget("0.50", 10_000_000).unwrap(), "0.500000");
+        assert!(
+            build_budget("0.50", 20_000).is_err(),
+            "too little to start a build"
+        );
+        assert!(build_budget("nonsense", 700_000).is_err());
+    }
+
     use super::*;
 
     #[test]

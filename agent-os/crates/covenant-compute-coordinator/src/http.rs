@@ -889,7 +889,16 @@ async fn submit_job(
         JobKind::AgentTask => {
             let buyer = envelope.payload.buyer.pubkey_base58();
             match &state.config().agent {
-                Some(policy) if policy.admits(&buyer) => {}
+                Some(policy) if policy.admits(&buyer) => {
+                    let least = policy.least_offer_micro_usdc();
+                    if envelope.payload.price_micro_usdc < least {
+                        return Err(ApiError::BadRequest(format!(
+                            "an agent task pays the build and at least one check, so offer \
+                             at least {least} micro-USDC; you are charged what the build \
+                             spends, up to your offer, and only if it passes"
+                        )));
+                    }
+                }
                 Some(_) => {
                     return Err(ApiError::Unauthorized(format!(
                         "agent tasks are open to approved buyers only; {buyer} is not one"
@@ -1728,6 +1737,7 @@ async fn submit_result(
         msg.receipt,
         msg.output,
         amount,
+        0,
         funding_source,
         metered_elapsed_ms,
         onchain,
@@ -1741,6 +1751,12 @@ async fn submit_result(
 /// record, its audit rows, and the operator's payout — on-chain when a
 /// lease's vault already paid it, pushed otherwise. Shared by a result that
 /// releases on its own receipt and an agent task released by its check.
+///
+/// `retained_micro_usdc` is a part of the release the protocol keeps
+/// before the marketplace fee is taken: what an agent task's buyer paid for
+/// the checks the protocol had already paid its checkers for. It is booked
+/// with the fee, so the operator's net and the books both leave it out,
+/// and no partner earns a share of it.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn finish_release(
     state: &CoordinatorState,
@@ -1749,6 +1765,7 @@ pub(crate) async fn finish_release(
     receipt: covenant_compute_protocol::SignedWorkReceipt,
     output: Vec<covenant_mcp::Content>,
     amount: u64,
+    retained_micro_usdc: u64,
     funding_source: FundingSource,
     metered_elapsed_ms: Option<u64>,
     onchain: crate::onchain_meter::LeaseConclusion,
@@ -1759,8 +1776,9 @@ pub(crate) async fn finish_release(
     // The fee floors (protocol-shared math), so the operator's net is
     // the ceiling; the rate was disclosed to the operator at
     // registration, never sprung at settlement.
-    let fee = state.config().fee.take_of(amount);
-    let operator_net = amount - fee;
+    let retained = retained_micro_usdc.min(amount);
+    let fee = state.config().fee.take_of(amount - retained);
+    let operator_net = amount - retained - fee;
     // Partner rev-share (C8): carved out of the fee just computed —
     // the operator's net and the buyer's charge are untouched. A code
     // with no configured partner accrues nothing. The supply side's
@@ -1803,7 +1821,7 @@ pub(crate) async fn finish_release(
             receipt.clone(),
             output,
             ReleaseCharges {
-                fee_micro_usdc: fee,
+                fee_micro_usdc: fee + retained,
                 partner_share_micro_usdc: partner_share,
                 buyer_partner_share_micro_usdc: buyer_partner_share,
             },

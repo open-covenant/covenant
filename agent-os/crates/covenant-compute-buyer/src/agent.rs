@@ -506,10 +506,13 @@ pub fn agent_tool_spec(max_price_micro_usdc: u64) -> ToolSpec {
             "Hire a coding agent on the Covenant compute network to do one task in a git \
              repository. The agent works on another operator's machine and returns a patch. \
              A different operator then applies it to a clean copy of the commit and runs your \
-             acceptance commands with no network. You pay only if they pass; otherwise \
-             nothing is charged and the failing output is returned. The repository is sent as \
-             its committed history, so commit what the agent should see and keep secrets out. \
-             Price per call is capped at {max_price_micro_usdc} micro-USDC."
+             acceptance commands with no network. If they fail and your offer can cover \
+             another build, the agent gets the failing output and one more try. Work that \
+             passes is charged what its builds spent plus its checks, never more than your \
+             offer; anything else costs nothing, and the failing output is returned. The \
+             repository is sent as its committed history, so commit what the agent should see \
+             and keep secrets out. Price per call is capped at {max_price_micro_usdc} \
+             micro-USDC."
         ),
         input_schema: serde_json::json!({
             "type": "object",
@@ -570,7 +573,7 @@ pub fn agent_tool_spec(max_price_micro_usdc: u64) -> ToolSpec {
                 },
                 "price_micro_usdc": {
                     "type": "integer",
-                    "description": "Offered price in micro-USDC; defaults to the cheapest matching operator's ask"
+                    "description": "The most you will pay, in micro-USDC (at least 80000). Default 700000, or the per-call cap if lower"
                 },
                 "deadline_ms": {
                     "type": "integer",

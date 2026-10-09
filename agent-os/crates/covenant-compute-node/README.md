@@ -108,6 +108,23 @@ OpenAI-compatible backend as `image_url` content parts.
   (`COVENANT_COMPUTE_BROKER_IMAGE`); the account bounds its own spend.
   Provisioning and teardown are the operator's cost, never the buyer's:
   billing runs from the coordinator's accept, not from boot.
+- **`agent`**: builds and checks paid coding tasks. A build runs Claude
+  Code under covguard, which holds the model key, meters the spend and
+  stops the run at its cap (`COVENANT_COMPUTE_AGENT_BUDGET_USD`, lowered
+  to fit the buyer's offer). The key is read from the file named by
+  `COVENANT_COMPUTE_AGENT_AUTH_TOKEN_FILE` and never reaches the agent.
+  With `COVENANT_COMPUTE_AGENT_BUILDER=container` the agent runs in a
+  container built from the task's check image: it sees only the checkout,
+  and its one way out is the proxy. A check applies another seat's patch
+  to a clean checkout, runs the buyer's commands in a container with no
+  network, and signs its vote with the node key. Checks run only in the
+  images `COVENANT_COMPUTE_AGENT_CHECK_IMAGES` allows.
+  `COVENANT_COMPUTE_AGENT_MODEL` sets the model a task gets when it names
+  none. The node needs docker, git, Claude Code and covguard; container
+  builds run on macOS with Colima. A seat is paid its build's metered
+  spend plus the coordinator's markup when the work passes, and the check
+  price for every check it completes. Seats on one task never share a
+  stake owner.
 - **`echo`** — a loopback for wiring tests.
 - **`lease-stub`** — serves `lease_session` jobs like `broker` but rents
   no machine. It hands back a placeholder address and holds the lease

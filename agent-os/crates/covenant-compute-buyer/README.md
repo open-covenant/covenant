@@ -23,7 +23,7 @@ The network-level map lives at
 }
 ```
 
-Seventeen tools:
+Eighteen tools:
 
 | Tool | What it buys or shows |
 | --- | --- |
@@ -32,6 +32,7 @@ Seventeen tools:
 | `compute.transcribe` | one speech-to-text transcription of a base64 `audio_base64` clip; set `language` to skip detection, `translate` to return English, or `timestamps` for per-segment start/end times |
 | `compute.speak` | one text-to-speech clip from `text`; set `voice`, `format` (wav or aiff), or `speed`. The clip saves under the server's `clips/` and the result names the file, so the base64 audio never lands in the agent's context |
 | `compute.run` | one batch command — it executes on a stranger's machine, and the tool description says so |
+| `compute.agent` | hire a coding agent for one task in a git repository; another operator runs your acceptance commands on its patch, and only work that passes is charged (see `agent` under the CLI) |
 | `compute.stream_start` | `compute.infer`, returning the job id immediately so the output can be read as it generates |
 | `compute.stream_poll` | cursor-read a streaming job's live chunks; the concluding poll carries the verified output and receipt |
 | `compute.receipts` | your verified job history; unpaid rows name their `refund_reason` |
@@ -466,6 +467,7 @@ covenant-compute withdraw <micro-usdc> <wallet>  # move unspent balance out
 covenant-compute withdrawals                     # your withdrawal history
 covenant-compute dispute <job-id> "reason"       # file a signed dispute
 covenant-compute cancel <job-id>                 # refund a job no operator took
+covenant-compute agent --repo . --accept "python -m unittest" "fix the slug bug"  # hire a coding agent
 covenant-compute lease open --minutes 30 --rate 200 --ssh-key ~/.ssh/id_ed25519.pub  # rent a GPU
 covenant-compute lease view <job-id>             # a live lease's endpoint, meter and cost
 covenant-compute lease close <job-id>            # end a running lease and settle the meter
@@ -564,6 +566,31 @@ machine with `vault key import <label> <key>`, carrying your identity file
 across too so the coordinator recognizes you as the owner. Replacing a
 different key already held for a label needs `--force`. The vault is
 available only against a coordinator that serves it.
+
+`agent` hires a coding agent for one task in a git repository. `--repo`
+is a local repository, sent as its committed history (commit what the
+agent should see and keep secrets out), or a public https URL with
+`--commit`. Each `--accept <cmd>` is a command the work must pass, run
+from the repository root in the `--check-image` container (default
+`python:3.12-slim`) with no network. One operator's agent builds the
+change; a different operator applies the patch to a clean checkout and
+runs the commands, and the task settles on that check. `--protect <path>`
+keeps the agent's edits off files such as the tests, and `--hidden <path>`
+adds a test file from your working tree that only the checkers see, so
+the work has to hold beyond the tests the agent can read.
+
+`--price` is the most you will pay, at least 0.08 USDC and 0.70 by
+default. Work that passes is charged its builds' model spend plus the
+coordinator's markup (20% on the public network), plus its checks, and
+never more than the offer. If the check fails and the offer can cover
+another build, the agent gets the failing output and one more try; it
+never sees what a hidden check printed. Work that still fails costs
+nothing. The accepted patch is written to `agent-<job-id>.patch` (or
+`--out <path>`), and `--apply` applies it to a local repository.
+`--skill code.tests --fix <path>` asks for tests instead: they must fail
+on the commit and pass with your fix, which only the checkers see. Agent
+work is in closed alpha, and the coordinator takes tasks from approved
+buyers only.
 
 ## As a library
 

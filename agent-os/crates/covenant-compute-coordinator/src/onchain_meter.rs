@@ -1713,6 +1713,7 @@ mod tests {
             hidden_checks: None,
             vote_round: None,
             rework: None,
+            order: None,
         }
     }
 

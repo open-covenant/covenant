@@ -122,7 +122,8 @@ pub async fn reconcile_books(state: &CoordinatorState) -> ReconcileReport {
                     let operator_pubkey_b58 = match reason {
                         RefundReason::BuyerCancelled
                         | RefundReason::NoMeteredUsage
-                        | RefundReason::CheckUnavailable => None,
+                        | RefundReason::CheckUnavailable
+                        | RefundReason::FixFailed => None,
                         _ => assignee(&record),
                     };
                     state
@@ -330,6 +331,7 @@ mod tests {
             hidden_checks: None,
             vote_round: None,
             rework: None,
+            order: None,
         }
     }
 

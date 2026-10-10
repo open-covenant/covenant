@@ -31,9 +31,9 @@ use async_trait::async_trait;
 use base64::Engine as _;
 use covenant_compute_protocol::{
     agent_check_output, agent_task_output, build_spend_cap, check_commands, parse_agent_check,
-    parse_agent_task, sha256_hex, AcceptanceSpec, AgentCheckVerdict, AgentRework, AgentSkill,
-    AgentTaskOutput, AgentTaskSpec, CommandOutcome, HiddenChecks, JobEnvelopePayload, JobKind,
-    RepoSource, MAX_OUTPUT_TAIL_BYTES, MAX_PATCH_BYTES, MAX_SUMMARY_BYTES,
+    parse_agent_task, sha256_hex, AcceptanceSpec, AgentCheckVerdict, AgentPatch, AgentRework,
+    AgentSkill, AgentTaskOutput, AgentTaskSpec, CommandOutcome, HiddenChecks, JobEnvelopePayload,
+    JobKind, RepoSource, MAX_OUTPUT_TAIL_BYTES, MAX_PATCH_BYTES, MAX_SUMMARY_BYTES,
     MIN_BUILD_BUDGET_MICRO_USD,
 };
 use covenant_identity::LocalIdentity;
@@ -88,23 +88,30 @@ pub struct AgentConfig {
     /// Where builds run: on this machine under covguard's sandbox, or in a
     /// container that sees only the checkout.
     pub builder: Builder,
-    /// Notes for builds handed back after a failed check, left by the serve
-    /// loop with their offers.
-    pub reworks: ReworkInbox,
+    /// What offers carried beside their envelopes, left by the serve loop.
+    pub notes: OfferNotes,
 }
 
-/// Rework notes that came with their offers, held until the build of the
-/// same job takes them: the executor is handed only the buyer's envelope.
-#[derive(Clone, Default)]
-pub struct ReworkInbox(Arc<parking_lot::Mutex<HashMap<Uuid, AgentRework>>>);
+/// What an offer carried beside the buyer's envelope: a rework's note, or a
+/// fix's reproduction.
+#[derive(Debug, Clone, Default)]
+pub struct OfferNote {
+    pub rework: Option<AgentRework>,
+    pub reproduction: Option<AgentPatch>,
+}
 
-impl ReworkInbox {
-    pub fn put(&self, job_id: Uuid, note: AgentRework) {
+/// Offer notes held until the build of the same job takes them: the
+/// executor is handed only the buyer's envelope.
+#[derive(Clone, Default)]
+pub struct OfferNotes(Arc<parking_lot::Mutex<HashMap<Uuid, OfferNote>>>);
+
+impl OfferNotes {
+    pub fn put(&self, job_id: Uuid, note: OfferNote) {
         self.0.lock().insert(job_id, note);
     }
 
-    fn take(&self, job_id: Uuid) -> Option<AgentRework> {
-        self.0.lock().remove(&job_id)
+    fn take(&self, job_id: Uuid) -> OfferNote {
+        self.0.lock().remove(&job_id).unwrap_or_default()
     }
 }
 
@@ -166,9 +173,9 @@ impl AgentExecutor {
         }
     }
 
-    /// Where the serve loop leaves a rework's note for this executor.
-    pub fn reworks(&self) -> ReworkInbox {
-        self.config.reworks.clone()
+    /// Where the serve loop leaves what an offer carried for this executor.
+    pub fn notes(&self) -> OfferNotes {
+        self.config.notes.clone()
     }
 
     /// Pulls every allowed check image that is not already present, so the
@@ -312,15 +319,40 @@ impl AgentExecutor {
         until: Instant,
     ) -> Result<Vec<Content>, ExecutorError> {
         let spec = parse_agent_task(&job.input).map_err(invalid)?;
-        let rework = self.config.reworks.take(job.job_id).filter(|note| {
+        let note = self.config.notes.take(job.job_id);
+        let rework = note.rework.filter(|note| {
             let valid = note.validate();
             if let Err(e) = &valid {
                 tracing::warn!(job_id = %job.job_id, error = %e, "rework note refused; building afresh");
             }
             valid.is_ok()
         });
+        // A fix builds on its reproduction: the buyer's task names it by
+        // digest and the offer carries its bytes.
+        let reproduction = match &spec.reproduction {
+            Some(named) => {
+                let patch = note
+                    .reproduction
+                    .filter(|p| p.patch_sha256 == named.patch_sha256)
+                    .ok_or_else(|| {
+                        ExecutorError::Failed(
+                            "a fix arrived without the reproduction its task names".into(),
+                        )
+                    })?;
+                Some(decode_patch(&patch)?)
+            }
+            None => None,
+        };
         let dir = self.job_dir(job, "build")?;
         let (git_dir, tree) = self.checkout(&spec.repo, dir.path(), until).await?;
+        let commit = spec.repo.commit();
+        let (base, reproduced) = match &reproduction {
+            Some(patch) => {
+                self.commit_reproduction(&git_dir, &tree, dir.path(), commit, patch, until)
+                    .await?
+            }
+            None => (commit.to_string(), Vec::new()),
+        };
 
         let wall = until
             .saturating_duration_since(Instant::now())
@@ -360,7 +392,11 @@ impl AgentExecutor {
                 job,
                 &tree,
                 &spec.acceptance.image,
-                &task_prompt(&spec, rework.as_ref().map(|note| (note, restored))),
+                &task_prompt(
+                    &spec,
+                    rework.as_ref().map(|note| (note, restored)),
+                    &reproduced,
+                ),
                 model.as_deref(),
                 &budget,
                 wall,
@@ -372,25 +408,25 @@ impl AgentExecutor {
         }
         let run = run?;
 
-        let commit = spec.repo.commit();
         self.git(&git_dir, Some(&tree), &["add", "-A"], until)
             .await?;
-        // An honest build never ships edits to the paths it is judged by;
-        // whatever the agent did there is put back before the diff, so only
-        // a node that skips this step can be caught by the checker for it.
-        let touched = self.changed_paths(&git_dir, &tree, commit, until).await?;
+        // An honest build never ships edits to the paths it is judged by,
+        // a fix's reproduction among them; whatever the agent did there is
+        // put back before the diff, so only a node that skips this step can
+        // be caught by the checker for it.
+        let touched = self.changed_paths(&git_dir, &tree, &base, until).await?;
         let reverted: Vec<&String> = touched
             .iter()
-            .filter(|p| spec.acceptance.protects(p))
+            .filter(|p| spec.acceptance.protects(p) || reproduced.contains(p))
             .collect();
         if !reverted.is_empty() {
             tracing::warn!(job_id = %job.job_id, paths = ?reverted, "reverting the agent's edits to protected paths");
-            let mut args = vec!["reset", "-q", commit, "--"];
+            let mut args = vec!["reset", "-q", base.as_str(), "--"];
             args.extend(reverted.iter().map(|p| p.as_str()));
             self.git(&git_dir, Some(&tree), &args, until).await?;
         }
         let files_changed = self
-            .changed_paths(&git_dir, &tree, commit, until)
+            .changed_paths(&git_dir, &tree, &base, until)
             .await?
             .len();
         let patch = self
@@ -404,7 +440,7 @@ impl AgentExecutor {
                     "--no-color",
                     "--no-ext-diff",
                     "--no-textconv",
-                    commit,
+                    &base,
                 ],
                 until,
             )
@@ -432,6 +468,56 @@ impl AgentExecutor {
             guard_run_id: run.guard_run_id,
         })
         .map_err(|e| ExecutorError::Failed(format!("build result: {e}")))
+    }
+
+    /// Commits a fix's reproduction on top of the checkout, so the agent
+    /// starts from tests that fail and the fix's patch holds only the fix.
+    /// Returns that commit and the paths the reproduction touched.
+    async fn commit_reproduction(
+        &self,
+        git_dir: &Path,
+        tree: &Path,
+        dir: &Path,
+        commit: &str,
+        patch: &[u8],
+        until: Instant,
+    ) -> Result<(String, Vec<String>), ExecutorError> {
+        let file = dir.join("reproduction.patch");
+        std::fs::write(&file, patch)
+            .map_err(|e| ExecutorError::Failed(format!("write the reproduction: {e}")))?;
+        let file = file.to_string_lossy().into_owned();
+        self.git(
+            git_dir,
+            Some(tree),
+            &["apply", "--index", "--whitespace=nowarn", &file],
+            until,
+        )
+        .await
+        .map_err(|e| ExecutorError::Failed(format!("the reproduction does not apply: {e}")))?;
+        let touched = self.changed_paths(git_dir, tree, commit, until).await?;
+        self.git(
+            git_dir,
+            Some(tree),
+            &[
+                "-c",
+                "user.name=covenant",
+                "-c",
+                "user.email=compute@covenant.invalid",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-q",
+                "--no-verify",
+                "-m",
+                "reproduction",
+            ],
+            until,
+        )
+        .await?;
+        let head = self
+            .git(git_dir, Some(tree), &["rev-parse", "HEAD"], until)
+            .await?;
+        Ok((String::from_utf8_lossy(&head).trim().to_string(), touched))
     }
 
     /// Puts the build that failed its check back in the tree, so the rework
@@ -506,34 +592,34 @@ impl AgentExecutor {
         let patch_arg = patch_file.to_string_lossy().into_owned();
         let budget_end =
             (Instant::now() + Duration::from_secs(u64::from(acceptance.timeout_secs))).min(until);
-        let tests = acceptance.skill == AgentSkill::CodeTests;
+        let skill = acceptance.skill;
+        let visible: Vec<&str> = acceptance.commands.iter().map(String::as_str).collect();
+        let commit = spec.repo.commit();
 
-        // code.tests first runs the suite on the commit as it is: tests that
-        // only fail because the suite was already red have caught nothing.
-        // The tree is then put back exactly as checked out, so nothing the
-        // run left behind reaches the patched runs.
-        let baseline = if tests {
-            let visible: Vec<&str> = acceptance.commands.iter().map(String::as_str).collect();
+        // Every skill but code.change first runs the suite on the commit as
+        // it is: tests that only fail because the suite was already red have
+        // caught nothing. The tree is then put back exactly as checked out,
+        // so nothing the run left behind reaches the patched runs.
+        let baseline = if skill == AgentSkill::CodeChange {
+            Vec::new()
+        } else {
             let outcomes = self
                 .run_phase(job, 0, acceptance, &tree, &visible, budget_end)
                 .await?;
-            let commit = spec.repo.commit();
-            self.git(
-                &git_dir,
-                Some(&tree),
-                &["reset", "-q", "--hard", commit],
-                until,
-            )
-            .await?;
-            self.git(&git_dir, Some(&tree), &["clean", "-q", "-fdx"], until)
-                .await?;
+            self.reset(&git_dir, &tree, commit, until).await?;
             outcomes
-        } else {
-            Vec::new()
         };
 
         let verdict = |applied, violations, commands, fixed| {
-            let verdict = if tests {
+            let verdict = if skill == AgentSkill::CodeChange {
+                AgentCheckVerdict::new(
+                    spec.task_job_id,
+                    spec.patch_sha256.clone(),
+                    applied,
+                    violations,
+                    commands,
+                )
+            } else {
                 AgentCheckVerdict::catching(
                     spec.task_job_id,
                     spec.patch_sha256.clone(),
@@ -543,21 +629,42 @@ impl AgentExecutor {
                     commands,
                     fixed,
                 )
-            } else {
-                AgentCheckVerdict::new(
-                    spec.task_job_id,
-                    spec.patch_sha256.clone(),
-                    applied,
-                    violations,
-                    commands,
-                )
+                .for_skill(skill)
             };
             verdict.sign_vote(&self.config.voter)
         };
-        if tests && !baseline.iter().all(CommandOutcome::passed) {
+        if !baseline.iter().all(CommandOutcome::passed) {
             tracing::info!(job_id = %job.job_id, "the suite fails before the new tests; nothing to catch");
             return finish(verdict(true, Vec::new(), Vec::new(), Vec::new()));
         }
+
+        // code.fix: the reproduction goes in first and must catch the bug on
+        // its own, then is committed so the fix is judged as a change to it.
+        let (base, reproduced, caught_first) = match &spec.reproduction {
+            Some(reproduction) => {
+                let bytes = decode_patch(reproduction)?;
+                let (base, reproduced) = match self
+                    .commit_reproduction(&git_dir, &tree, dir.path(), commit, &bytes, until)
+                    .await
+                {
+                    Ok(committed) => committed,
+                    Err(e) => {
+                        tracing::info!(job_id = %job.job_id, error = %e, "the reproduction does not apply");
+                        return finish(verdict(false, Vec::new(), Vec::new(), Vec::new()));
+                    }
+                };
+                let outcomes = self
+                    .run_phase(job, 100, acceptance, &tree, &visible, budget_end)
+                    .await?;
+                if outcomes.last().is_none_or(|o| !o.caught()) {
+                    return finish(verdict(true, Vec::new(), outcomes, Vec::new()));
+                }
+                self.reset(&git_dir, &tree, &base, until).await?;
+                (base, reproduced, outcomes)
+            }
+            None => (commit.to_string(), Vec::new(), Vec::new()),
+        };
+
         let applied = self
             .git(
                 &git_dir,
@@ -568,31 +675,30 @@ impl AgentExecutor {
             .await;
         if let Err(e) = applied {
             tracing::info!(job_id = %job.job_id, error = %e, "patch does not apply");
-            return finish(verdict(false, Vec::new(), Vec::new(), Vec::new()));
+            return finish(verdict(false, Vec::new(), caught_first, Vec::new()));
         }
         let violations: Vec<String> = self
-            .changed_paths(&git_dir, &tree, spec.repo.commit(), until)
+            .changed_paths(&git_dir, &tree, &base, until)
             .await?
             .into_iter()
-            .filter(|p| acceptance.protects(p))
+            .filter(|p| acceptance.protects(p) || reproduced.contains(p))
             .collect();
         if !violations.is_empty() {
-            return finish(verdict(true, violations, Vec::new(), Vec::new()));
+            return finish(verdict(true, violations, caught_first, Vec::new()));
         }
 
-        // code.tests: the new tests must fail on the commit's bug before the
-        // fix goes in. code.change goes straight to every command.
-        let caught = if tests {
-            let visible: Vec<&str> = acceptance.commands.iter().map(String::as_str).collect();
+        // code.tests and code.repro: the new tests must fail on the commit's
+        // bug. A reproduction is done there; code.tests then adds the fix.
+        let caught = if matches!(skill, AgentSkill::CodeTests | AgentSkill::CodeRepro) {
             let outcomes = self
                 .run_phase(job, 100, acceptance, &tree, &visible, budget_end)
                 .await?;
-            if outcomes.last().is_none_or(|o| !o.caught()) {
+            if outcomes.last().is_none_or(|o| !o.caught()) || skill == AgentSkill::CodeRepro {
                 return finish(verdict(true, Vec::new(), outcomes, Vec::new()));
             }
             outcomes
         } else {
-            Vec::new()
+            caught_first
         };
 
         if let Some(hidden) = &spec.hidden {
@@ -606,11 +712,32 @@ impl AgentExecutor {
         let outcomes = self
             .run_phase(job, 200, acceptance, &tree, &commands, budget_end)
             .await?;
-        if tests {
-            finish(verdict(true, Vec::new(), caught, outcomes))
-        } else {
+        if skill == AgentSkill::CodeChange {
             finish(verdict(true, Vec::new(), outcomes, Vec::new()))
+        } else {
+            finish(verdict(true, Vec::new(), caught, outcomes))
         }
+    }
+
+    /// Puts the tree back exactly as `commit` has it, dropping whatever a run
+    /// left behind.
+    async fn reset(
+        &self,
+        git_dir: &Path,
+        tree: &Path,
+        commit: &str,
+        until: Instant,
+    ) -> Result<(), ExecutorError> {
+        self.git(
+            git_dir,
+            Some(tree),
+            &["reset", "-q", "--hard", commit],
+            until,
+        )
+        .await?;
+        self.git(git_dir, Some(tree), &["clean", "-q", "-fdx"], until)
+            .await?;
+        Ok(())
     }
 
     /// Runs `commands` in order, stopping at the first that does not pass.
@@ -1140,6 +1267,19 @@ fn invalid(e: covenant_compute_protocol::ProtocolError) -> ExecutorError {
     ExecutorError::Failed(format!("job input: {e}"))
 }
 
+/// A patch's bytes, once they hash to the digest naming them.
+fn decode_patch(patch: &AgentPatch) -> Result<Vec<u8>, ExecutorError> {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&patch.patch_b64)
+        .map_err(|e| ExecutorError::Failed(format!("patch is not base64: {e}")))?;
+    if sha256_hex(&bytes) != patch.patch_sha256 {
+        return Err(ExecutorError::Failed(
+            "the patch does not match the digest it was sent under".into(),
+        ));
+    }
+    Ok(bytes)
+}
+
 fn finish(verdict: AgentCheckVerdict) -> Result<Vec<Content>, ExecutorError> {
     agent_check_output(verdict).map_err(|e| ExecutorError::Failed(format!("verdict: {e}")))
 }
@@ -1182,10 +1322,18 @@ fn build_budget(
 /// The instructions a build hands the agent: the buyer's task, then what
 /// the work will be judged by, so the agent can run the same checks itself.
 /// `rework` names the note of a build handed back after a failed check, and
-/// whether its earlier changes are back in the tree.
-fn task_prompt(spec: &AgentTaskSpec, rework: Option<(&AgentRework, bool)>) -> String {
+/// whether its earlier changes are back in the tree; `reproduced` names the
+/// files a fix's reproduction committed.
+fn task_prompt(
+    spec: &AgentTaskSpec,
+    rework: Option<(&AgentRework, bool)>,
+    reproduced: &[String],
+) -> String {
     let acceptance = &spec.acceptance;
-    let tests = acceptance.skill == AgentSkill::CodeTests;
+    let tests = matches!(
+        acceptance.skill,
+        AgentSkill::CodeTests | AgentSkill::CodeRepro
+    );
     let mut prompt = format!(
         "You are working in a checkout of a git repository at commit {}. Complete the task \
          below by editing files in this directory.\n\nTask:\n{}\n\nThe work is judged by \
@@ -1199,16 +1347,31 @@ fn task_prompt(spec: &AgentTaskSpec, rework: Option<(&AgentRework, bool)>) -> St
     for command in &acceptance.commands {
         prompt.push_str(&format!("  $ {command}\n"));
     }
-    if tests {
-        prompt.push_str(
+    match acceptance.skill {
+        AgentSkill::CodeTests => prompt.push_str(
             "\nThis is a testing task. Write tests that catch the bug the task describes: with \
              your tests added, the commands above must fail on this commit because of that bug, \
              and pass once the bug is fixed. They pass today without your tests, and a fix you \
              cannot see is applied afterwards to check that your tests pass with it. Add or \
              change test files only: do not fix the bug, and do not weaken or remove existing \
              tests.\n",
-        );
-    } else if acceptance.hidden_sha256.is_some() {
+        ),
+        AgentSkill::CodeRepro => prompt.push_str(
+            "\nThis is a reproduction task. Write tests that reproduce the bug the task \
+             describes: with your tests added, the commands above must fail on this commit \
+             because of that bug. They pass today without your tests, and another agent will \
+             fix the bug against them. Add or change test files only: do not fix the bug, and \
+             do not weaken or remove existing tests.\n",
+        ),
+        AgentSkill::CodeFix => prompt.push_str(&format!(
+            "\nAnother agent reproduced this bug: its tests are committed in this checkout ({}) \
+             and fail because of it. Fix the bug so every command passes. Do not change those \
+             tests; edits to them are discarded.\n",
+            reproduced.join(", ")
+        )),
+        AgentSkill::CodeChange => {}
+    }
+    if !tests && acceptance.hidden_sha256.is_some() {
         prompt.push_str(
             "\nFurther tests you cannot see will also run against your change, so make it \
              correct in general rather than only for the visible tests.\n",
@@ -1470,8 +1633,9 @@ mod tests {
             },
             runtime: covenant_compute_protocol::AgentRuntime::ClaudeCode,
             model: None,
+            reproduction: None,
         };
-        let prompt = task_prompt(&spec, None);
+        let prompt = task_prompt(&spec, None, &[]);
         assert!(prompt.contains("implement slugify"));
         assert!(prompt.contains("$ python -m unittest"));
         assert!(prompt.contains("python:3.12-slim"));
@@ -1484,11 +1648,22 @@ mod tests {
             feedback: "$ python -m unittest  (exited 1)\nAssertionError: 'a-b' != 'a--b'\n".into(),
             budget_micro_usd: 60_000,
         };
-        let reworked = task_prompt(&spec, Some((&note, true)));
+        let reworked = task_prompt(&spec, Some((&note, true)), &[]);
         assert!(reworked.contains("already in the working tree"));
         assert!(reworked.contains("AssertionError: 'a-b' != 'a--b'"));
-        let fresh = task_prompt(&spec, Some((&note, false)));
+        let fresh = task_prompt(&spec, Some((&note, false)), &[]);
         assert!(fresh.contains("start from the commit"));
+
+        let mut repro = spec.clone();
+        repro.acceptance.skill = AgentSkill::CodeRepro;
+        let prompt = task_prompt(&repro, None, &[]);
+        assert!(prompt.contains("reproduction task") && prompt.contains("do not fix the bug"));
+
+        let mut fix = spec;
+        fix.acceptance.skill = AgentSkill::CodeFix;
+        let prompt = task_prompt(&fix, None, &["tests/test_accents.py".into()]);
+        assert!(prompt.contains("tests/test_accents.py"));
+        assert!(prompt.contains("Fix the bug so every command passes"));
     }
 
     #[test]

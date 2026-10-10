@@ -36,18 +36,20 @@ use covenant_compute_buyer::{
     agent_tool_spec, apply_patch, balance_tool_spec, cancel_job, cancel_tool_spec, capacity,
     capacity_tool_spec, cheapest_matching_ask, claim_deposit, deposit_tool_spec, describe_reworks,
     describe_round, describe_verdict, dispatch_and_verify, dispatch_signed, dispute_job,
-    dispute_tool_spec, embed_tool_spec, fetch_job_output, funds_with_deposit_info, hire_agent,
-    infer_tool_spec, list_verified_jobs, list_withdrawals, output_tool_spec, prepare_agent_task,
-    preview_value, quote_price, receipts_tool_spec, run_tool_spec, save_speech_clip, sign_envelope,
-    speak_tool_spec, stream_and_verify, stream_poll_tool_spec, stream_start_tool_spec,
-    submit_streaming, transcribe_tool_spec, verify_payout, verify_tool_spec, withdraw,
-    withdraw_tool_spec, withdrawals_tool_spec, AgentArgs, AgentOutcome, BuyerConfig, BuyerError,
-    CancelArgs, DisputeArgs, EmbedArgs, InferArgs, JobOutputView, JobRequest, OutputArgs,
-    PurchaseBook, PurchaseEntry, RunArgs, SpeakArgs, SpendCaps, StreamJobs, StreamPollArgs,
-    TranscribeArgs, VerifyArgs, WithdrawArgs, AGENT_TOOL, BALANCE_TOOL, CANCEL_TOOL, CAPACITY_TOOL,
-    DEFAULT_AGENT_DEADLINE_MS, DEFAULT_AGENT_OFFER_MICRO_USDC, DEPOSIT_TOOL, DISPUTE_TOOL,
-    EMBED_TOOL, INFER_TOOL, OUTPUT_TOOL, RECEIPTS_TOOL, RUN_TOOL, SPEAK_TOOL, STREAM_POLL_TOOL,
-    STREAM_START_TOOL, TRANSCRIBE_TOOL, VERIFY_TOOL, WITHDRAWALS_TOOL, WITHDRAW_TOOL,
+    dispute_tool_spec, embed_tool_spec, fetch_job_output, fix_tool_spec, funds_with_deposit_info,
+    hire_agent, hire_fix, infer_tool_spec, list_verified_jobs, list_withdrawals, output_tool_spec,
+    prepare_agent_task, prepare_fix_order, preview_value, quote_price, receipts_tool_spec,
+    run_tool_spec, save_speech_clip, sign_envelope, speak_tool_spec, stream_and_verify,
+    stream_poll_tool_spec, stream_start_tool_spec, submit_streaming, transcribe_tool_spec,
+    verify_payout, verify_tool_spec, withdraw, withdraw_tool_spec, withdrawals_tool_spec,
+    AgentArgs, AgentOutcome, BuyerConfig, BuyerError, CancelArgs, DisputeArgs, EmbedArgs,
+    FixOutcome, InferArgs, JobOutputView, JobRequest, OutputArgs, PurchaseBook, PurchaseEntry,
+    RunArgs, SpeakArgs, SpendCaps, StreamJobs, StreamPollArgs, TranscribeArgs, VerifyArgs,
+    WithdrawArgs, AGENT_TOOL, BALANCE_TOOL, CANCEL_TOOL, CAPACITY_TOOL, DEFAULT_AGENT_DEADLINE_MS,
+    DEFAULT_AGENT_OFFER_MICRO_USDC, DEFAULT_FIX_DEADLINE_MS, DEFAULT_FIX_OFFER_MICRO_USDC,
+    DEPOSIT_TOOL, DISPUTE_TOOL, EMBED_TOOL, FIX_TOOL, INFER_TOOL, OUTPUT_TOOL, RECEIPTS_TOOL,
+    RUN_TOOL, SPEAK_TOOL, STREAM_POLL_TOOL, STREAM_START_TOOL, TRANSCRIBE_TOOL, VERIFY_TOOL,
+    WITHDRAWALS_TOOL, WITHDRAW_TOOL,
 };
 use covenant_compute_protocol::{parse_speech_output, JobKind};
 use covenant_identity::LocalIdentity;
@@ -231,6 +233,136 @@ const INLINE_PATCH_BYTES: usize = 60 * 1024;
 /// saved beside the server's other outputs); one that did not comes back as
 /// the check's verdict, with nothing charged. The same price ceiling and
 /// session cap as every other purchase apply.
+async fn call_fix(state: &ServerState, id: Value, arguments: Value) -> Value {
+    let args: AgentArgs = match serde_json::from_value(arguments) {
+        Ok(args) => args,
+        Err(e) => return error(id, -32602, format!("invalid arguments: {e}")),
+    };
+    let order = match prepare_fix_order(&args) {
+        Ok(order) => order,
+        Err(e) => return tool_error(id, e.to_string()),
+    };
+    let cap = state.caps.max_price_micro_usdc();
+    let price = args
+        .price_micro_usdc
+        .unwrap_or(DEFAULT_FIX_OFFER_MICRO_USDC.min(cap));
+    if let Some(refusal) = state.caps.per_call_refusal(price) {
+        return tool_error(id, refusal);
+    }
+    if let Some(refusal) = session_cap_refusal(state, price) {
+        return tool_error(id, refusal);
+    }
+    let deadline_ms = args.deadline_ms.unwrap_or(DEFAULT_FIX_DEADLINE_MS);
+    let outcome = match hire_fix(
+        &state.http,
+        &state.buyer,
+        &state.identity,
+        order,
+        price,
+        deadline_ms,
+        &|_| {},
+    )
+    .await
+    {
+        Ok(outcome) => outcome,
+        Err(e) => return dispatch_failed(id, e),
+    };
+    let text = match outcome {
+        FixOutcome::NotFixed {
+            stage,
+            job_id,
+            status,
+            reason,
+            verdict,
+            round,
+            reworks,
+        } => {
+            let mut text = format!(
+                "Not fixed: the {} (job {job_id}) ended {status} ({}). Nothing was charged.",
+                if stage == "reproduce" {
+                    "reproduction"
+                } else {
+                    "fix"
+                },
+                reason.as_deref().unwrap_or("no reason given")
+            );
+            if let Some(verdict) = verdict {
+                text.push_str("\n\n");
+                text.push_str(&describe_verdict(&verdict));
+            }
+            if let Some(line) = describe_reworks(reworks, false) {
+                text.push('\n');
+                text.push_str(&line);
+            }
+            if let Some(round) = round {
+                text.push('\n');
+                text.push_str(&describe_round(&round));
+            }
+            text
+        }
+        FixOutcome::Fixed {
+            fix,
+            reproduction,
+            tests,
+            fixed,
+            patch,
+            verdict,
+            round,
+            charged_micro_usdc,
+            reworks,
+        } => {
+            state.caps.record_spend(charged_micro_usdc);
+            let job_id = fix.receipt.receipt.job_id;
+            let dir = state.clips_dir.with_file_name("agent-patches");
+            let path = dir.join(format!("fix-{job_id}.patch"));
+            let saved = std::fs::create_dir_all(&dir)
+                .and_then(|()| std::fs::write(&path, &patch))
+                .is_ok();
+            let mut text = format!(
+                "Fixed: job {job_id} passed another operator's check, against tests from job \
+                 {reproduction} that reproduce the bug. Charged {charged_micro_usdc} micro-USDC \
+                 of a {price} ceiling. {} test file(s) and {} fixed file(s).",
+                tests.files_changed, fixed.files_changed
+            );
+            if args.apply && !args.repo.starts_with("https://") {
+                match apply_patch(std::path::Path::new(&args.repo), &patch) {
+                    Ok(()) => text.push_str(" The patch is applied to the working tree."),
+                    Err(e) => text.push_str(&format!(" The patch was not applied: {e}.")),
+                }
+            }
+            if saved {
+                text.push_str(&format!(" Saved at {}.", path.display()));
+            }
+            text.push_str("\n\nThe reproduction:\n");
+            text.push_str(&tests.summary);
+            text.push_str("\n\nThe fix:\n");
+            text.push_str(&fixed.summary);
+            if let Some(verdict) = verdict {
+                text.push_str("\n\n");
+                text.push_str(&describe_verdict(&verdict));
+            }
+            if let Some(line) = describe_reworks(reworks, true) {
+                text.push('\n');
+                text.push_str(&line);
+            }
+            if let Some(round) = round {
+                text.push('\n');
+                text.push_str(&describe_round(&round));
+            }
+            if patch.len() <= INLINE_PATCH_BYTES {
+                text.push_str("\n\n```diff\n");
+                text.push_str(&String::from_utf8_lossy(&patch));
+                text.push_str("\n```");
+            }
+            text
+        }
+    };
+    response(
+        id,
+        json!({ "content": [{ "type": "text", "text": text }], "isError": false }),
+    )
+}
+
 async fn call_agent(state: &ServerState, id: Value, arguments: Value) -> Value {
     let args: AgentArgs = match serde_json::from_value(arguments) {
         Ok(args) => args,
@@ -1334,6 +1466,7 @@ async fn handle_line(state: &Arc<ServerState>, line: &str) -> Option<Value> {
                 verify_tool_spec(),
                 output_tool_spec(),
                 agent_tool_spec(state.caps.max_price_micro_usdc()),
+                fix_tool_spec(state.caps.max_price_micro_usdc()),
             ] }),
         )),
         "tools/call" => {
@@ -1358,6 +1491,7 @@ async fn handle_line(state: &Arc<ServerState>, line: &str) -> Option<Value> {
                 VERIFY_TOOL => Some(call_verify(state, id, arguments).await),
                 OUTPUT_TOOL => Some(call_output(state, id, arguments).await),
                 AGENT_TOOL => Some(call_agent(state, id, arguments).await),
+                FIX_TOOL => Some(call_fix(state, id, arguments).await),
                 _ => Some(error(id, -32602, format!("unknown tool: {name}"))),
             }
         }
@@ -1772,7 +1906,8 @@ mod tests {
                 CANCEL_TOOL,
                 VERIFY_TOOL,
                 OUTPUT_TOOL,
-                AGENT_TOOL
+                AGENT_TOOL,
+                FIX_TOOL
             ]
         );
     }

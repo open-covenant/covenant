@@ -176,6 +176,7 @@ fn spec() -> AgentTaskSpec {
         },
         runtime: AgentRuntime::ClaudeCode,
         model: None,
+        reproduction: None,
     }
 }
 
@@ -591,6 +592,7 @@ async fn agent_work_is_closed_to_unlisted_buyers_and_checks_cannot_be_bought() {
             patch_b64: patch().patch_b64,
             patch_sha256: patch().patch_sha256,
             hidden: None,
+            reproduction: None,
         })
         .unwrap();
     let check_id = Uuid::new_v4();
@@ -1495,4 +1497,310 @@ async fn a_rework_never_shows_the_builder_what_a_hidden_check_printed() {
         "{feedback}"
     );
     assert!(!feedback.contains("test_edges"), "{feedback}");
+}
+
+/// Posts `spec` as `buyer`'s task with its own deadline, returning the
+/// coordinator's answer.
+async fn post_as(
+    rig: &Rig,
+    buyer: &LocalIdentity,
+    spec: AgentTaskSpec,
+    deadline_ms: u64,
+) -> (Uuid, reqwest::StatusCode, String) {
+    let job_id = Uuid::new_v4();
+    let payload = JobEnvelopePayload {
+        job_id,
+        buyer: buyer.agent_id(),
+        kind: JobKind::AgentTask,
+        capability_requirement: CapabilityRequirement {
+            gpu_class: None,
+            min_vram_gb: None,
+            model_id: Some("claude-code".into()),
+            kind: JobKind::AgentTask,
+            max_duration_secs: 600,
+            min_reputation_bps: None,
+        },
+        input: vec![agent_task_input(spec).unwrap()],
+        price_micro_usdc: TASK_PRICE,
+        deadline_ms,
+        idempotency: A2AIdempotency::new(A2ADuplicateSafety::Idempotent, job_id.to_string()),
+        issued_at_ms: epoch_ms(),
+        referral_code: None,
+        stream: false,
+    };
+    let envelope = SignedJobEnvelope::sign(payload, buyer).unwrap();
+    let resp = rig
+        .http
+        .post(format!("{}/federation/jobs", rig.url))
+        .json(&envelope)
+        .send()
+        .await
+        .unwrap();
+    let status = resp.status();
+    (job_id, status, resp.text().await.unwrap())
+}
+
+fn repro_spec() -> AgentTaskSpec {
+    let mut spec = spec();
+    spec.task = "slugify drops accented letters".into();
+    spec.acceptance.skill = AgentSkill::CodeRepro;
+    spec.acceptance.protected_paths = Vec::new();
+    spec
+}
+
+fn fix_spec(reproduction: Uuid, patch_sha256: &str) -> AgentTaskSpec {
+    let mut spec = spec();
+    spec.task = "slugify drops accented letters".into();
+    spec.acceptance.skill = AgentSkill::CodeFix;
+    spec.reproduction = Some(covenant_compute_protocol::ReproductionRef {
+        task_job_id: reproduction,
+        patch_sha256: patch_sha256.into(),
+    });
+    spec
+}
+
+fn repro_patch(spend_micro_usd: u64) -> AgentTaskOutput {
+    let bytes = b"diff --git a/tests/test_accents.py b/tests/test_accents.py\n";
+    AgentTaskOutput {
+        patch_b64: base64::engine::general_purpose::STANDARD.encode(bytes),
+        patch_sha256: sha256_hex(bytes),
+        summary: "a test with accented input".into(),
+        spend_micro_usd,
+        ..patch()
+    }
+}
+
+fn outcome(exit_code: i32) -> CommandOutcome {
+    CommandOutcome {
+        command: COMMAND.into(),
+        exit_code,
+        duration_ms: 200,
+        timed_out: false,
+        output_tail: String::new(),
+    }
+}
+
+/// A check of a reproduction or a fix: the commands pass on the commit, fail
+/// once the reproduction is in, and for a fix, `fixed` with it.
+fn phased_verdict(task_id: Uuid, sha: &str, skill: AgentSkill, fixed: Option<i32>) -> Vec<Content> {
+    agent_check_output(
+        AgentCheckVerdict::catching(
+            task_id,
+            sha.into(),
+            true,
+            Vec::new(),
+            vec![outcome(0)],
+            vec![outcome(1)],
+            fixed.map(|code| vec![outcome(code)]).unwrap_or_default(),
+        )
+        .for_skill(skill),
+    )
+    .unwrap()
+}
+
+/// A reproduction held after its check, ready for a fix, with the seat that
+/// built it: the matcher picks the builder and the checker from `seats`.
+async fn held_reproduction(
+    rig: &Rig,
+    buyer: &LocalIdentity,
+    seats: &[&LocalIdentity],
+) -> (Uuid, String) {
+    let (repro_id, status, body) = post_as(rig, buyer, repro_spec(), 1_800_000).await;
+    assert_eq!(status, reqwest::StatusCode::ACCEPTED, "{body}");
+    let reproducer = rig.state.jobs().get(repro_id).unwrap().operator_pubkey_b58;
+    submit(
+        rig,
+        repro_id,
+        by_key(seats, &reproducer),
+        agent_task_output(repro_patch(10_000)).unwrap(),
+    )
+    .await;
+    let sha = repro_patch(0).patch_sha256;
+    let (check_id, checker) = nth_check(rig, repro_id, 1).await;
+    submit(
+        rig,
+        check_id,
+        by_key(seats, &checker),
+        phased_verdict(repro_id, &sha, AgentSkill::CodeRepro, None),
+    )
+    .await;
+    for _ in 0..100 {
+        if rig.state.jobs().get(repro_id).unwrap().order.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    (repro_id, reproducer)
+}
+
+#[tokio::test]
+async fn a_fix_order_pays_both_builders_once_the_fix_passes() {
+    let rig = rig().await;
+    let buyer = LocalIdentity::generate("buyer@agent");
+    let a = register(&rig, "seat-a@agent", 1);
+    let b = register(&rig, "seat-b@agent", 2);
+    let c = register(&rig, "seat-c@agent", 3);
+    let crew = [&a, &b, &c];
+
+    let (repro_id, reproducer) = held_reproduction(&rig, &buyer, &crew).await;
+    let held = rig.state.jobs().get(repro_id).unwrap();
+    assert_eq!(
+        held.phase,
+        JobPhase::AwaitingCheck,
+        "a passing reproduction is held"
+    );
+    assert_eq!(
+        rig.state.escrow().status(repro_id).await.unwrap(),
+        EscrowStatus::Held
+    );
+    assert!(rig.payout.records().iter().all(|r| r.job_id != repro_id));
+
+    let sha = repro_patch(0).patch_sha256;
+    let (fix_id, status, body) = post_as(&rig, &buyer, fix_spec(repro_id, &sha), 1_200_000).await;
+    assert_eq!(status, reqwest::StatusCode::ACCEPTED, "{body}");
+    let fix = rig.state.jobs().get(fix_id).unwrap();
+    assert_ne!(
+        fix.operator_pubkey_b58, reproducer,
+        "another seat builds the fix"
+    );
+    let fixer = by_key(&crew, &fix.operator_pubkey_b58);
+    assert!(fix.pinned);
+    let mut newest = None;
+    while let Some(offer) = rig
+        .state
+        .registry()
+        .poll_next_job(&fix.operator_pubkey_b58, Duration::ZERO, epoch_ms())
+        .await
+        .unwrap()
+    {
+        newest = Some(offer);
+    }
+    let offer = newest.expect("the fixer is offered the fix");
+    assert_eq!(offer.envelope.payload.job_id, fix_id);
+    assert_eq!(
+        offer.reproduction.map(|p| p.patch_sha256),
+        Some(sha.clone()),
+        "the fix starts from the reproduction"
+    );
+
+    let fixed = reworked_patch(20_000);
+    submit(
+        &rig,
+        fix_id,
+        fixer,
+        agent_task_output(fixed.clone()).unwrap(),
+    )
+    .await;
+    let (check_id, checker) = nth_check(&rig, fix_id, 1).await;
+    assert_ne!(checker, reproducer, "the reproducer never checks the fix");
+    assert_ne!(checker, fix.operator_pubkey_b58);
+    let check = rig.state.jobs().get(check_id).unwrap();
+    let ordered = parse_agent_check(&check.envelope.payload.input).unwrap();
+    assert_eq!(ordered.reproduction.map(|p| p.patch_sha256), Some(sha));
+    submit(
+        &rig,
+        check_id,
+        by_key(&crew, &checker),
+        phased_verdict(fix_id, &fixed.patch_sha256, AgentSkill::CodeFix, Some(0)),
+    )
+    .await;
+    assert_eq!(settled(&rig, fix_id).await, JobPhase::Completed);
+    assert_eq!(settled(&rig, repro_id).await, JobPhase::Completed);
+
+    let paid = |job: Uuid| {
+        rig.payout
+            .records()
+            .into_iter()
+            .filter(|r| r.job_id == job)
+            .map(|r| (r.operator_pubkey_b58, r.amount_micro_usdc))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        paid(fix_id),
+        vec![(fix.operator_pubkey_b58.clone(), 24_000)]
+    );
+    assert_eq!(paid(repro_id), vec![(reproducer, 12_000)]);
+    assert_eq!(
+        rig.state.escrow().settled_charge_micro_usdc(repro_id),
+        Some(13_000),
+        "the reproduction's build and its check"
+    );
+}
+
+#[tokio::test]
+async fn a_failed_fix_leaves_its_reproduction_unpaid_too() {
+    let rig = rig().await;
+    let buyer = LocalIdentity::generate("buyer@agent");
+    let a = register(&rig, "seat-a@agent", 1);
+    let b = register(&rig, "seat-b@agent", 2);
+    let c = register(&rig, "seat-c@agent", 3);
+    let crew = [&a, &b, &c];
+
+    let (repro_id, _) = held_reproduction(&rig, &buyer, &crew).await;
+    let sha = repro_patch(0).patch_sha256;
+    let (fix_id, status, body) = post_as(&rig, &buyer, fix_spec(repro_id, &sha), 1_200_000).await;
+    assert_eq!(status, reqwest::StatusCode::ACCEPTED, "{body}");
+    let fix = rig.state.jobs().get(fix_id).unwrap();
+    let fixed = reworked_patch(20_000);
+    submit(
+        &rig,
+        fix_id,
+        by_key(&crew, &fix.operator_pubkey_b58),
+        agent_task_output(fixed.clone()).unwrap(),
+    )
+    .await;
+    let (check_id, checker) = nth_check(&rig, fix_id, 1).await;
+    submit(
+        &rig,
+        check_id,
+        by_key(&crew, &checker),
+        phased_verdict(fix_id, &fixed.patch_sha256, AgentSkill::CodeFix, Some(1)),
+    )
+    .await;
+    assert_eq!(settled(&rig, fix_id).await, JobPhase::Refunded);
+    assert_eq!(settled(&rig, repro_id).await, JobPhase::Refunded);
+    assert_eq!(
+        rig.state.jobs().get(repro_id).unwrap().refund_reason,
+        Some(covenant_compute_protocol::RefundReason::FixFailed)
+    );
+    assert!(rig
+        .payout
+        .records()
+        .iter()
+        .all(|r| r.job_id != fix_id && r.job_id != repro_id));
+}
+
+#[tokio::test]
+async fn a_fix_must_name_its_buyers_own_held_reproduction() {
+    let rig = rig().await;
+    let buyer = LocalIdentity::generate("buyer@agent");
+    let a = register(&rig, "seat-a@agent", 1);
+    let b = register(&rig, "seat-b@agent", 2);
+    let c = register(&rig, "seat-c@agent", 3);
+
+    let (unchecked, _, _) = post_as(&rig, &buyer, repro_spec(), 1_800_000).await;
+    let sha = repro_patch(0).patch_sha256;
+    let (_, status, body) = post_as(&rig, &buyer, fix_spec(unchecked, &sha), 1_200_000).await;
+    assert_eq!(status, reqwest::StatusCode::BAD_REQUEST, "{body}");
+    assert!(body.contains("not passed its check"), "{body}");
+
+    let (repro_id, _) = held_reproduction(&rig, &buyer, &[&a, &b, &c]).await;
+    let stranger = LocalIdentity::generate("stranger@agent");
+    let (_, status, body) = post_as(&rig, &stranger, fix_spec(repro_id, &sha), 1_200_000).await;
+    assert_eq!(status, reqwest::StatusCode::BAD_REQUEST, "{body}");
+    let (_, status, body) =
+        post_as(&rig, &buyer, fix_spec(repro_id, &"0".repeat(64)), 1_200_000).await;
+    assert_eq!(status, reqwest::StatusCode::BAD_REQUEST, "{body}");
+    let (_, status, body) = post_as(&rig, &buyer, fix_spec(repro_id, &sha), 3_600_000).await;
+    assert_eq!(status, reqwest::StatusCode::BAD_REQUEST, "{body}");
+    assert!(body.contains("window"), "{body}");
+
+    let (_, status, body) = post_as(&rig, &buyer, fix_spec(repro_id, &sha), 1_200_000).await;
+    assert_eq!(status, reqwest::StatusCode::ACCEPTED, "{body}");
+    let (_, status, body) = post_as(&rig, &buyer, fix_spec(repro_id, &sha), 1_200_000).await;
+    assert_eq!(
+        status,
+        reqwest::StatusCode::BAD_REQUEST,
+        "one fix per reproduction: {body}"
+    );
 }

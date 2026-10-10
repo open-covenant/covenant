@@ -45,9 +45,11 @@ pub use covenant_compute_protocol::{
 
 mod agent;
 pub use agent::{
-    agent_tool_spec, apply_patch, describe_reworks, describe_round, describe_verdict, hire_agent,
-    local_bundle, prepare_agent_task, read_hidden_checks, AgentArgs, AgentOutcome, PreparedTask,
-    AGENT_TOOL, DEFAULT_AGENT_DEADLINE_MS, DEFAULT_AGENT_OFFER_MICRO_USDC,
+    agent_tool_spec, apply_patch, describe_reworks, describe_round, describe_verdict,
+    fix_tool_spec, hire_agent, hire_fix, local_bundle, prepare_agent_task, prepare_fix_order,
+    read_hidden_checks, AgentArgs, AgentOutcome, FixOrder, FixOutcome, PreparedTask, AGENT_TOOL,
+    DEFAULT_AGENT_DEADLINE_MS, DEFAULT_AGENT_OFFER_MICRO_USDC, DEFAULT_FIX_DEADLINE_MS,
+    DEFAULT_FIX_OFFER_MICRO_USDC, FIX_TOOL,
 };
 mod purchases;
 pub use purchases::{PurchaseBook, PurchaseEntry, PurchaseError};

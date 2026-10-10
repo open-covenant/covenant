@@ -26,18 +26,18 @@ use covenant_audit::AuditKind;
 use covenant_compute_protocol::{
     agent_check_input, build_spend_cap, check_commands, parse_agent_check,
     parse_agent_check_verdict, parse_agent_task, parse_agent_task_output, sha256_hex,
-    AgentCheckSpec, AgentCheckVerdict, AgentRework, AgentSkill, AgentTaskOutput, AgentTaskSpec,
-    CapabilityRequirement, CommandOutcome, EscrowError, EscrowStatus, FederationEscrow,
-    FundingSource, JobEnvelopePayload, JobKind, JobOffer, RefundReason, ResultSettlement,
-    SignedJobEnvelope, SignedWorkReceipt, LEAST_AGENT_OFFER_MICRO_USDC, MAX_REWORK_FEEDBACK_BYTES,
-    MIN_BUILD_BUDGET_MICRO_USD,
+    AgentCheckSpec, AgentCheckVerdict, AgentPatch, AgentRework, AgentSkill, AgentTaskOutput,
+    AgentTaskSpec, CapabilityRequirement, CommandOutcome, EscrowError, EscrowStatus,
+    FederationEscrow, FundingSource, JobEnvelopePayload, JobKind, JobOffer, RefundReason,
+    ResultSettlement, SignedJobEnvelope, SignedWorkReceipt, LEAST_AGENT_OFFER_MICRO_USDC,
+    MAX_REWORK_FEEDBACK_BYTES, MIN_BUILD_BUDGET_MICRO_USD,
 };
 use covenant_identity::LocalIdentity;
 use covenant_mcp::Content;
 use parking_lot::Mutex;
 use uuid::Uuid;
 
-use crate::jobs::{JobPhase, JobRecord, ReceiptAssignment, ReleaseCharges, TaskRework};
+use crate::jobs::{JobPhase, JobRecord, ReceiptAssignment, ReleaseCharges, TaskOrder, TaskRework};
 use crate::matcher::{select_operator_excluding, Exclusions};
 use crate::rounds::{agreed, RoundVote, VoteRounds, MAX_ROUND_VOTES};
 use crate::state::CoordinatorState;
@@ -248,6 +248,14 @@ pub async fn order_check(state: &CoordinatorState, task_id: Uuid) -> Result<Uuid
     for check in earlier {
         exclusions.operators.push(check.operator_pubkey_b58);
     }
+    // The reproduction's builder is paid only if this fix passes, so it
+    // never checks it.
+    if let Some(TaskOrder::Fix { reproducer, .. }) = &task.order {
+        exclusions.operators.push(reproducer.clone());
+        if let Some(record) = state.registry().record(reproducer) {
+            exclusions.stake_owners.extend(record.stake_owners);
+        }
+    }
     let requirement = CapabilityRequirement {
         gpu_class: None,
         min_vram_gb: None,
@@ -281,6 +289,7 @@ pub async fn order_check(state: &CoordinatorState, task_id: Uuid) -> Result<Uuid
         patch_b64: built.patch_b64.clone(),
         patch_sha256: built.patch_sha256.clone(),
         hidden: task.hidden_checks.clone(),
+        reproduction: task.reproduction_patch(),
     })
     .map_err(|e| format!("check input: {e}"))?;
     let payload = JobEnvelopePayload {
@@ -351,6 +360,7 @@ pub async fn order_check(state: &CoordinatorState, task_id: Uuid) -> Result<Uuid
             hidden_checks: None,
             vote_round: None,
             rework: None,
+            order: None,
         },
     );
     if let Err(e) = inserted {
@@ -372,6 +382,7 @@ pub async fn order_check(state: &CoordinatorState, task_id: Uuid) -> Result<Uuid
             envelope,
             escrow_hold,
             rework: None,
+            reproduction: None,
         },
     ) {
         refund_hold(state, check_id, RefundReason::AdmissionFailed).await;
@@ -421,6 +432,10 @@ async fn settle_once(state: &CoordinatorState, task_id: Uuid) {
         .issued_at_ms
         .saturating_add(task.envelope.payload.deadline_ms)
         < now_ms;
+    if let Some(TaskOrder::Reproduced { fix }) = task.order.clone() {
+        settle_reproduction(state, task_id, &task, fix, past_deadline).await;
+        return;
+    }
     let checks = match parse_agent_task_output(task.output.as_deref().unwrap_or_default()) {
         Ok(built) => attempt_checks(state, &task, &built.patch_sha256),
         Err(_) => Vec::new(),
@@ -486,7 +501,17 @@ async fn settle_once(state: &CoordinatorState, task_id: Uuid) {
         }
         _ => outcome,
     };
+    let reproduction = parse_agent_task(&task.envelope.payload.input)
+        .is_ok_and(|spec| spec.acceptance.skill == AgentSkill::CodeRepro);
     match outcome {
+        Some(true) if reproduction => match state.jobs().mark_reproduced(task_id) {
+            Ok(true) => {
+                tracing::info!(%task_id, "bug reproduced; its pay waits on the fix built on it");
+                record_agreement(state, task_id, &verdicts, true).await;
+            }
+            Ok(false) => {}
+            Err(e) => tracing::error!(%task_id, error = %e, "holding the reproduction failed"),
+        },
         Some(true) => {
             if release(state, task_id, &task).await {
                 record_agreement(state, task_id, &verdicts, true).await;
@@ -502,6 +527,135 @@ async fn settle_once(state: &CoordinatorState, task_id: Uuid) {
             tracing::warn!(%task_id, verdicts = ?verdicts, "no check could be completed; refunding");
             refund_task(state, task_id, &task, RefundReason::CheckUnavailable).await;
         }
+    }
+    if let Some(TaskOrder::Fix { reproduction, .. }) = &task.order {
+        follow_fix(state, *reproduction).await;
+    }
+}
+
+/// What admitting a fix decided: the reproduction it builds on, the seat
+/// that built it, its patch, and so who may not build the fix.
+pub struct FixAdmission {
+    pub reproduction: Uuid,
+    pub reproducer: String,
+    pub patch: AgentPatch,
+    pub exclusions: Exclusions,
+}
+
+/// Checks a `code.fix` task against the reproduction it names: the same
+/// buyer's, on the same commit, held after its check passed, without a fix
+/// yet, and returning the very patch the buyer saw vouched for. The fix must
+/// end inside the reproduction's window, which waits on it. `Ok(None)` for
+/// any other task.
+pub fn admit_fix(
+    state: &CoordinatorState,
+    envelope: &SignedJobEnvelope,
+) -> Result<Option<FixAdmission>, String> {
+    if envelope.payload.kind != JobKind::AgentTask {
+        return Ok(None);
+    }
+    let spec = parse_agent_task(&envelope.payload.input).map_err(|e| e.to_string())?;
+    let Some(named) = spec.reproduction else {
+        return Ok(None);
+    };
+    let record = state
+        .jobs()
+        .get(named.task_job_id)
+        .ok_or("no such reproduction")?;
+    let reproduced = parse_agent_task(&record.envelope.payload.input)
+        .map_err(|_| "the named task is not an agent task".to_string())?;
+    if reproduced.acceptance.skill != AgentSkill::CodeRepro {
+        return Err("the named task is not a reproduction".into());
+    }
+    if record.envelope.payload.buyer.pubkey_base58() != envelope.payload.buyer.pubkey_base58() {
+        return Err("a fix builds only on its own buyer's reproduction".into());
+    }
+    if reproduced.repo.commit() != spec.repo.commit() {
+        return Err("the fix and its reproduction name different commits".into());
+    }
+    if record.phase != JobPhase::AwaitingCheck
+        || record.order != Some(TaskOrder::Reproduced { fix: None })
+    {
+        return Err("the reproduction has not passed its check, or already has a fix".into());
+    }
+    let built = parse_agent_task_output(record.output.as_deref().unwrap_or_default())
+        .map_err(|e| e.to_string())?;
+    if built.patch_sha256 != named.patch_sha256 {
+        return Err("the reproduction returned another patch than the one named".into());
+    }
+    let ends = |p: &JobEnvelopePayload| p.issued_at_ms.saturating_add(p.deadline_ms);
+    if ends(&envelope.payload) > ends(&record.envelope.payload) {
+        return Err(format!(
+            "the fix must end by {}, when its reproduction's window closes",
+            ends(&record.envelope.payload)
+        ));
+    }
+    let stake_owners = state
+        .registry()
+        .record(&record.operator_pubkey_b58)
+        .map(|r| r.stake_owners)
+        .unwrap_or_default();
+    Ok(Some(FixAdmission {
+        reproduction: named.task_job_id,
+        exclusions: Exclusions {
+            operators: vec![record.operator_pubkey_b58.clone()],
+            stake_owners,
+        },
+        reproducer: record.operator_pubkey_b58,
+        patch: AgentPatch {
+            patch_b64: built.patch_b64,
+            patch_sha256: built.patch_sha256,
+        },
+    }))
+}
+
+/// Settles a reproduction right after its fix concluded, under the guard
+/// `settle` holds, rather than on the next tick.
+async fn follow_fix(state: &CoordinatorState, reproduction: Uuid) {
+    if !settling().lock().insert(reproduction) {
+        return;
+    }
+    if let Some(task) = state.jobs().get(reproduction) {
+        if let (JobPhase::AwaitingCheck, Some(TaskOrder::Reproduced { fix })) =
+            (task.phase, task.order.clone())
+        {
+            let past_deadline = task
+                .envelope
+                .payload
+                .issued_at_ms
+                .saturating_add(task.envelope.payload.deadline_ms)
+                < crate::epoch_ms();
+            settle_reproduction(state, reproduction, &task, fix, past_deadline).await;
+        }
+    }
+    settling().lock().remove(&reproduction);
+}
+
+/// A reproduction's pay follows the fix built on it: released once the fix
+/// is paid, refunded once the fix ends unpaid, and refunded at its own
+/// deadline when the buyer never posted a fix. A fix still running is
+/// waited for, past that deadline too: it was admitted to end inside it.
+async fn settle_reproduction(
+    state: &CoordinatorState,
+    task_id: Uuid,
+    task: &JobRecord,
+    fix: Option<Uuid>,
+    past_deadline: bool,
+) {
+    match fix.and_then(|id| state.jobs().get(id)).map(|fix| fix.phase) {
+        Some(JobPhase::Completed) => {
+            release(state, task_id, task).await;
+        }
+        Some(JobPhase::Refunded | JobPhase::Failed | JobPhase::Rejected) => {
+            tracing::info!(%task_id, "the fix built on this reproduction did not pass; refunding it");
+            refund_task(state, task_id, task, RefundReason::FixFailed).await;
+        }
+        Some(_) => {}
+        None if past_deadline => {
+            tracing::info!(%task_id, "no fix was posted on this reproduction; refunding it");
+            refund_task(state, task_id, task, RefundReason::DeadlineExpired).await;
+        }
+        None => {}
     }
 }
 
@@ -718,6 +872,7 @@ async fn rework(
             envelope: task.envelope.clone(),
             escrow_hold: task.escrow_hold.clone(),
             rework: Some(note),
+            reproduction: task.reproduction_patch(),
         },
     );
     tracing::info!(%task_id, builder = %task.operator_pubkey_b58, rework = done + 1, budget_micro_usd = budget, "agent work failed its check; handed back to its builder");
@@ -725,11 +880,11 @@ async fn rework(
 }
 
 /// What a builder is told about the check its patch failed. A hidden check
-/// is reported only as failing. In a `code.change` check the hidden files
-/// sit in the tree while every command runs, so any command's output may
-/// quote them: with hidden checks the builder learns which commands failed,
-/// not what they printed. `code.tests` adds the buyer's fix only for its
-/// last run, so its first two runs print freely.
+/// is reported only as failing, and the hidden files sit in the tree for
+/// every run after the patch goes in, so any of those runs may quote them:
+/// with hidden checks the builder learns which commands failed there, not
+/// what they printed. The runs before the patch, and a test-writing skill's
+/// run with its own tests, print freely.
 fn feedback(spec: &AgentTaskSpec, hidden: bool, verdict: &AgentCheckVerdict) -> String {
     use std::fmt::Write as _;
     let mut out = String::new();
@@ -744,42 +899,49 @@ fn feedback(spec: &AgentTaskSpec, hidden: bool, verdict: &AgentCheckVerdict) -> 
         );
     }
     let visible = spec.acceptance.commands.len();
-    match spec.acceptance.skill {
-        AgentSkill::CodeChange => {
-            for outcome in verdict.commands.iter().take(visible) {
+    let hidden_failed = |outcomes: &[CommandOutcome], out: &mut String| {
+        if outcomes.iter().skip(visible).any(|c| !c.passed()) {
+            out.push_str(
+                "A check the buyer kept hidden from you failed. Re-read the task and handle \
+                 every case it describes.\n",
+            );
+        }
+    };
+    let skill = spec.acceptance.skill;
+    if skill == AgentSkill::CodeChange {
+        for outcome in verdict.commands.iter().take(visible) {
+            describe(&mut out, outcome, !hidden);
+        }
+        hidden_failed(&verdict.commands, &mut out);
+    } else if !verdict.baseline.iter().all(CommandOutcome::passed) {
+        out.push_str("The commands already fail on the task's commit:\n");
+        for outcome in &verdict.baseline {
+            describe(&mut out, outcome, true);
+        }
+    } else if !verdict.commands.last().is_some_and(CommandOutcome::caught) {
+        out.push_str(if skill == AgentSkill::CodeFix {
+            "The reproduction no longer fails on the task's commit:\n"
+        } else {
+            "Your tests did not catch the bug: on the task's commit they must end in a \
+             failure, not pass or time out.\n"
+        });
+        for outcome in &verdict.commands {
+            describe(&mut out, outcome, true);
+        }
+    } else if !verdict.fixed.iter().all(CommandOutcome::passed) {
+        if skill == AgentSkill::CodeFix {
+            out.push_str("With your fix the commands still fail:\n");
+            for outcome in verdict.fixed.iter().take(visible) {
                 describe(&mut out, outcome, !hidden);
             }
-            if verdict.commands.iter().skip(visible).any(|c| !c.passed()) {
-                out.push_str(
-                    "A check the buyer kept hidden from you failed. Re-read the task and handle \
-                     every case it describes.\n",
-                );
-            }
-        }
-        AgentSkill::CodeTests => {
-            if !verdict.baseline.iter().all(CommandOutcome::passed) {
-                out.push_str(
-                    "The commands already fail on the task's commit, before your tests:\n",
-                );
-                for outcome in &verdict.baseline {
-                    describe(&mut out, outcome, true);
-                }
-            } else if !verdict.commands.last().is_some_and(CommandOutcome::caught) {
-                out.push_str(
-                    "Your tests did not catch the bug: on the task's commit they must end in a \
-                     failure, not pass or time out.\n",
-                );
-                for outcome in &verdict.commands {
-                    describe(&mut out, outcome, true);
-                }
-            } else if !verdict.fixed.iter().all(CommandOutcome::passed) {
-                out.push_str(
-                    "Your tests still fail with the buyer's fix applied, so they fail for a \
-                     reason other than the bug. Test the behaviour the task describes.\n",
-                );
-                for outcome in verdict.fixed.iter().take(visible) {
-                    describe(&mut out, outcome, false);
-                }
+            hidden_failed(&verdict.fixed, &mut out);
+        } else {
+            out.push_str(
+                "Your tests still fail with the buyer's fix applied, so they fail for a \
+                 reason other than the bug. Test the behaviour the task describes.\n",
+            );
+            for outcome in verdict.fixed.iter().take(visible) {
+                describe(&mut out, outcome, false);
             }
         }
     }
@@ -902,15 +1064,14 @@ fn judge(task: &JobRecord, check: &JobRecord) -> Result<AgentCheckVerdict, Strin
             .into_iter()
             .map(str::to_string)
             .collect();
+        // A run that catches the bug stops at the failure, so it is a prefix
+        // of the visible commands rather than all of them.
+        let caught =
+            ran(&verdict.baseline) == visible && visible.starts_with(&ran(&verdict.commands));
         let honest = match spec.acceptance.skill {
             AgentSkill::CodeChange => ran(&verdict.commands) == every,
-            // The tests' run stops at the failure that caught the bug, so
-            // it is a prefix of the visible commands rather than all of them.
-            AgentSkill::CodeTests => {
-                ran(&verdict.baseline) == visible
-                    && visible.starts_with(&ran(&verdict.commands))
-                    && ran(&verdict.fixed) == every
-            }
+            AgentSkill::CodeTests | AgentSkill::CodeFix => caught && ran(&verdict.fixed) == every,
+            AgentSkill::CodeRepro => caught,
         };
         if !honest {
             return Err("a passing verdict did not run the task's commands".into());

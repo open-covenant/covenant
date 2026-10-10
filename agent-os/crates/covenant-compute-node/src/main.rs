@@ -36,8 +36,8 @@ use covenant_compute_node::{
     AgentCredential, AgentExecutor, BenchmarkSpec, BrokerConfig, BrokerSessionBackend, ChunkSink,
     ContainerConfig, ContainerJobExecutor, Coordinator, EarningsLedger, EarningsStatus,
     EchoExecutor, ExecutionOutcome, ExecutorError, HttpCoordinatorClient, JobExecutor,
-    JsonlEarningsLedger, LeaseControl, LeaseExecutor, Node, NodeConfig, NodeError, OllamaExecutor,
-    OpenAiCompatExecutor, ReworkInbox, SayExecutor, StubSessionBackend, SubprocessJobExecutor,
+    JsonlEarningsLedger, LeaseControl, LeaseExecutor, Node, NodeConfig, NodeError, OfferNotes,
+    OllamaExecutor, OpenAiCompatExecutor, SayExecutor, StubSessionBackend, SubprocessJobExecutor,
     WhisperExecutor, DEFAULT_SAY_BIN, DEFAULT_WHISPER_BIN, READY_POLL_INTERVAL, READY_TIMEOUT,
     SERVICE_USAGE, SETUP_USAGE,
 };
@@ -2907,7 +2907,7 @@ async fn main() -> anyhow::Result<()> {
                         .context("reload operator identity for check votes")?,
                 ),
                 builder,
-                reworks: ReworkInbox::default(),
+                notes: OfferNotes::default(),
             };
             tracing::info!(
                 work_dir = %config.work_dir.display(),
@@ -3139,9 +3139,9 @@ async fn main() -> anyhow::Result<()> {
             "accepted jobs from a previous run restored; recovery runs before the serve loop"
         );
     }
-    let reworks = match &executor {
-        NodeExecutor::Agent(agent) => agent.reworks(),
-        _ => ReworkInbox::default(),
+    let notes = match &executor {
+        NodeExecutor::Agent(agent) => agent.notes(),
+        _ => OfferNotes::default(),
     };
     let node = Arc::new(
         Node::new(
@@ -3160,7 +3160,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .with_outbox(outbox)
         .with_accepted_book(accepted)
-        .with_reworks(reworks),
+        .with_notes(notes),
     );
 
     // Heartbeat: liveness + honest queue depth + backend health (a

@@ -119,6 +119,7 @@ pub async fn sweep_stale_offers(state: &CoordinatorState, now_ms: u64) -> Vec<Uu
                     envelope: record.envelope.clone(),
                     escrow_hold: record.escrow_hold.clone(),
                     rework: record.rework_note(),
+                    reproduction: record.reproduction_patch(),
                 };
                 match state
                     .jobs()
@@ -167,6 +168,7 @@ pub async fn sweep_stale_offers(state: &CoordinatorState, now_ms: u64) -> Vec<Uu
             envelope: record.envelope.clone(),
             escrow_hold: record.escrow_hold.clone(),
             rework: record.rework_note(),
+            reproduction: record.reproduction_patch(),
         };
         if winner == record.operator_pubkey_b58 {
             match state.jobs().touch_offered(job_id, &winner, now_ms) {
@@ -293,6 +295,7 @@ pub async fn reoffer_offline(
             envelope: record.envelope.clone(),
             escrow_hold: record.escrow_hold.clone(),
             rework: record.rework_note(),
+            reproduction: record.reproduction_patch(),
         };
         if move_offer(state, job_id, &record, offer, &winner, now_ms).await {
             reoffered.push(job_id);
@@ -724,6 +727,7 @@ mod tests {
             hidden_checks: None,
             vote_round: None,
             rework: None,
+            order: None,
         }
     }
 
@@ -1886,6 +1890,7 @@ mod tests {
                     envelope: record.envelope.clone(),
                     escrow_hold: record.escrow_hold.clone(),
                     rework: None,
+                    reproduction: None,
                 },
             )
             .then_some(())
@@ -1921,6 +1926,7 @@ mod tests {
                 envelope: record.envelope.clone(),
                 escrow_hold: record.escrow_hold.clone(),
                 rework: None,
+                reproduction: None,
             },
         );
         state.jobs().insert(job_id, record).unwrap();
@@ -1983,6 +1989,7 @@ mod tests {
                 envelope: record.envelope.clone(),
                 escrow_hold: record.escrow_hold.clone(),
                 rework: None,
+                reproduction: None,
             },
         );
         state.jobs().insert(job_id, record).unwrap();
@@ -2085,6 +2092,7 @@ mod tests {
                 envelope: record.envelope.clone(),
                 escrow_hold: record.escrow_hold.clone(),
                 rework: None,
+                reproduction: None,
             },
         );
         state.jobs().insert(job_id, record).unwrap();

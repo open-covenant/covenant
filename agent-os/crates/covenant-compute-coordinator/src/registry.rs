@@ -448,6 +448,7 @@ mod tests {
             envelope,
             escrow_hold,
             rework: None,
+            reproduction: None,
         }
     }
 

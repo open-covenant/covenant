@@ -480,6 +480,7 @@ impl CanaryProber {
                 hidden_checks: None,
                 vote_round: None,
                 rework: None,
+                order: None,
             },
         ) {
             let _ = self
@@ -509,6 +510,7 @@ impl CanaryProber {
                 envelope,
                 escrow_hold,
                 rework: None,
+                reproduction: None,
             },
         ) {
             let _ = self
@@ -687,6 +689,7 @@ mod tests {
             hidden_checks: None,
             vote_round: None,
             rework: None,
+            order: None,
         }
     }
 

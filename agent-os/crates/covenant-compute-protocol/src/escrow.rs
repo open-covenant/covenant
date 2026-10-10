@@ -148,6 +148,10 @@ pub enum RefundReason {
     /// deadline. The work is unverified, so it is not paid, but the
     /// failure is not the builder's.
     CheckUnavailable,
+    /// A reproduction whose tests caught the bug, in an order whose fix did
+    /// not pass. The order pays only for a fix that passes, so the
+    /// reproduction is not paid, and the failure is not its builder's.
+    FixFailed,
 }
 
 impl RefundReason {
@@ -163,6 +167,7 @@ impl RefundReason {
             RefundReason::NoMeteredUsage => "no_metered_usage",
             RefundReason::CheckFailed => "check_failed",
             RefundReason::CheckUnavailable => "check_unavailable",
+            RefundReason::FixFailed => "fix_failed",
         }
     }
 }

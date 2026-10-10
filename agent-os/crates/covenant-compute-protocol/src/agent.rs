@@ -151,6 +151,16 @@ pub enum AgentSkill {
     /// never sees.
     #[serde(rename = "code.tests")]
     CodeTests,
+    /// Write tests that reproduce a described bug: the commands pass on the
+    /// commit as it is and fail once the new tests are in. The first step of
+    /// a fix order, paid only once the fix built on it passes.
+    #[serde(rename = "code.repro")]
+    CodeRepro,
+    /// Fix a bug a reproduction in the same order caught. Accepted when the
+    /// commands pass on the commit, fail with the reproduction, and pass with
+    /// the reproduction and the fix.
+    #[serde(rename = "code.fix")]
+    CodeFix,
 }
 
 impl AgentSkill {
@@ -158,6 +168,8 @@ impl AgentSkill {
         match self {
             AgentSkill::CodeChange => "code.change",
             AgentSkill::CodeTests => "code.tests",
+            AgentSkill::CodeRepro => "code.repro",
+            AgentSkill::CodeFix => "code.fix",
         }
     }
 
@@ -257,6 +269,12 @@ impl AcceptanceSpec {
                     .into(),
             ));
         }
+        if self.skill == AgentSkill::CodeRepro && self.hidden_sha256.is_some() {
+            return Err(ProtocolError::Invalid(
+                "a reproduction has no fix to run hidden checks against; give them to the fix"
+                    .into(),
+            ));
+        }
         if self.timeout_secs == 0 || self.timeout_secs > MAX_ACCEPTANCE_TIMEOUT_SECS {
             return Err(ProtocolError::Invalid(format!(
                 "acceptance timeout_secs {} is outside 1..={MAX_ACCEPTANCE_TIMEOUT_SECS}",
@@ -312,6 +330,33 @@ pub struct AgentTaskSpec {
     /// default when absent, and the output reports what actually ran.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// On a `code.fix` task: the reproduction it must make pass.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reproduction: Option<ReproductionRef>,
+}
+
+/// The reproduction a fix builds on: its task, and the patch a check
+/// vouched for, as the buyer saw it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReproductionRef {
+    pub task_job_id: Uuid,
+    pub patch_sha256: String,
+}
+
+/// A patch that travels with a job, named by the digest of its bytes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentPatch {
+    pub patch_b64: String,
+    pub patch_sha256: String,
+}
+
+impl AgentPatch {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_b64("patch", &self.patch_b64, MAX_PATCH_B64_BYTES)?;
+        validate_sha256_hex("patch_sha256", &self.patch_sha256)
+    }
 }
 
 impl AgentTaskSpec {
@@ -335,7 +380,18 @@ impl AgentTaskSpec {
         if let Some(model) = &self.model {
             validate_label("the agent model", model)?;
         }
-        Ok(())
+        match (self.acceptance.skill, &self.reproduction) {
+            (AgentSkill::CodeFix, Some(reproduction)) => {
+                validate_sha256_hex("reproduction patch_sha256", &reproduction.patch_sha256)
+            }
+            (AgentSkill::CodeFix, None) => Err(ProtocolError::Invalid(
+                "a code.fix task names the reproduction it builds on".into(),
+            )),
+            (_, Some(_)) => Err(ProtocolError::Invalid(
+                "only a code.fix task builds on a reproduction".into(),
+            )),
+            (_, None) => Ok(()),
+        }
     }
 }
 
@@ -430,6 +486,10 @@ pub struct AgentCheckSpec {
     /// exactly when `acceptance.hidden_sha256` is, and matching it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hidden: Option<HiddenChecks>,
+    /// On a `code.fix` check: the reproduction the fix builds on, applied
+    /// before the patch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reproduction: Option<AgentPatch>,
 }
 
 impl AgentCheckSpec {
@@ -438,6 +498,20 @@ impl AgentCheckSpec {
         self.acceptance.validate()?;
         validate_b64("patch", &self.patch_b64, MAX_PATCH_B64_BYTES)?;
         validate_sha256_hex("patch_sha256", &self.patch_sha256)?;
+        match (self.acceptance.skill, &self.reproduction) {
+            (AgentSkill::CodeFix, Some(reproduction)) => reproduction.validate()?,
+            (AgentSkill::CodeFix, None) => {
+                return Err(ProtocolError::Invalid(
+                    "a code.fix check carries the reproduction it applies first".into(),
+                ))
+            }
+            (_, Some(_)) => {
+                return Err(ProtocolError::Invalid(
+                    "only a code.fix check applies a reproduction".into(),
+                ))
+            }
+            (_, None) => {}
+        }
         match (&self.acceptance.hidden_sha256, &self.hidden) {
             (None, None) => Ok(()),
             (Some(commitment), Some(hidden)) => {
@@ -571,6 +645,14 @@ impl AgentCheckVerdict {
         verdict
     }
 
+    /// The same evidence judged for another skill: `code.repro` and
+    /// `code.fix` checks run the phases `code.tests` does.
+    pub fn for_skill(mut self, skill: AgentSkill) -> Self {
+        self.skill = skill;
+        self.passed = self.earned();
+        self
+    }
+
     /// Signs this verdict's vote with the checker's node key.
     pub fn sign_vote(mut self, checker: &LocalIdentity) -> Self {
         if let Some(message) = agent_vote_message(self.task_job_id, &self.patch_sha256, self.passed)
@@ -598,16 +680,17 @@ impl AgentCheckVerdict {
         let all_pass = |outcomes: &[CommandOutcome]| {
             !outcomes.is_empty() && outcomes.iter().all(CommandOutcome::passed)
         };
+        let caught = match self.commands.split_last() {
+            Some((last, before)) => last.caught() && before.iter().all(CommandOutcome::passed),
+            None => false,
+        };
         match self.skill {
             AgentSkill::CodeChange => clean && all_pass(&self.commands),
-            AgentSkill::CodeTests => {
-                let caught = match self.commands.split_last() {
-                    Some((last, before)) => {
-                        last.caught() && before.iter().all(CommandOutcome::passed)
-                    }
-                    None => false,
-                };
+            AgentSkill::CodeTests | AgentSkill::CodeFix => {
                 clean && all_pass(&self.baseline) && caught && all_pass(&self.fixed)
+            }
+            AgentSkill::CodeRepro => {
+                clean && all_pass(&self.baseline) && caught && self.fixed.is_empty()
             }
         }
     }
@@ -627,6 +710,11 @@ impl AgentCheckVerdict {
         {
             return Err(ProtocolError::Invalid(
                 "a code.change verdict reports runs only code.tests makes".into(),
+            ));
+        }
+        if self.skill == AgentSkill::CodeRepro && !self.fixed.is_empty() {
+            return Err(ProtocolError::Invalid(
+                "a code.repro verdict reports a run with a fix it never has".into(),
             ));
         }
         for outcome in self
@@ -986,6 +1074,7 @@ mod tests {
             acceptance: acceptance(),
             runtime: AgentRuntime::ClaudeCode,
             model: Some("claude-sonnet-5-5".into()),
+            reproduction: None,
         }
     }
 
@@ -1290,6 +1379,58 @@ mod tests {
     }
 
     #[test]
+    fn a_fix_names_its_reproduction_and_only_a_fix_does() {
+        let mut fix = task();
+        fix.acceptance.skill = AgentSkill::CodeFix;
+        assert!(fix.validate().is_err(), "a fix with no reproduction");
+        fix.reproduction = Some(ReproductionRef {
+            task_job_id: Uuid::nil(),
+            patch_sha256: SHA.into(),
+        });
+        assert!(fix.validate().is_ok());
+
+        let mut change = task();
+        change.reproduction = fix.reproduction.clone();
+        assert!(change.validate().is_err(), "a change built on a reproduction");
+
+        let mut repro = task();
+        repro.acceptance.skill = AgentSkill::CodeRepro;
+        assert!(repro.validate().is_ok());
+        repro.acceptance.hidden_sha256 = Some(SHA.into());
+        assert!(repro.validate().is_err(), "hidden checks with no fix to run them on");
+    }
+
+    #[test]
+    fn a_reproduction_passes_when_its_tests_catch_the_bug_and_a_fix_when_it_mends_it() {
+        let failing = CommandOutcome {
+            exit_code: 1,
+            ..passing("python -m unittest -v")
+        };
+        let ok = passing("python -m unittest -v");
+        let verdict = |skill, fixed: Vec<CommandOutcome>| {
+            AgentCheckVerdict::catching(
+                Uuid::nil(),
+                SHA.into(),
+                true,
+                Vec::new(),
+                vec![ok.clone()],
+                vec![failing.clone()],
+                fixed,
+            )
+            .for_skill(skill)
+        };
+        let reproduced = verdict(AgentSkill::CodeRepro, Vec::new());
+        assert!(reproduced.passed && reproduced.validate().is_ok());
+        assert!(
+            verdict(AgentSkill::CodeRepro, vec![ok.clone()]).validate().is_err(),
+            "a reproduction never runs with a fix"
+        );
+        assert!(verdict(AgentSkill::CodeFix, vec![ok.clone()]).passed);
+        assert!(!verdict(AgentSkill::CodeFix, vec![failing.clone()]).passed);
+        assert!(!verdict(AgentSkill::CodeFix, Vec::new()).passed);
+    }
+
+    #[test]
     fn the_least_offer_is_the_first_a_seat_builds_for() {
         assert!(build_spend_cap(LEAST_AGENT_OFFER_MICRO_USDC) >= MIN_BUILD_BUDGET_MICRO_USD);
         assert!(build_spend_cap(LEAST_AGENT_OFFER_MICRO_USDC - 1) < MIN_BUILD_BUDGET_MICRO_USD);
@@ -1340,6 +1481,7 @@ mod tests {
             patch_b64: "ZGlmZg==".into(),
             patch_sha256: SHA.into(),
             hidden: None,
+            reproduction: None,
         };
         let packed = agent_check_input(spec.clone()).unwrap();
         assert_eq!(parse_agent_check(&[packed]).unwrap(), spec);
@@ -1379,6 +1521,7 @@ mod tests {
             patch_b64: "ZGlmZg==".into(),
             patch_sha256: SHA.into(),
             hidden,
+            reproduction: None,
         };
         assert!(spec(Some(hidden())).validate().is_ok());
         assert!(spec(None).validate().is_err(), "committed but missing");

@@ -26,11 +26,12 @@ use covenant_compute_buyer::{
     apply_patch, cancel_job, capacity, cheapest_matching_ask, claim_deposit, close_lease,
     describe_reworks, describe_round, describe_verdict, dispatch_and_verify, dispatch_signed,
     dispatch_streaming, dispute_job, fetch_job_output, funds_with_deposit_info, hire_agent,
-    http_client, lease_view, list_verified_jobs, list_withdrawals, prepare_agent_task,
-    preview_value, sign_envelope, submit_streaming, vault_delete, vault_fetch, vault_list,
-    vault_store, verify_payout, withdraw, AgentArgs, AgentOutcome, BuyerConfig, DispatchOutcome,
-    JobRequest, PriceQuote, PurchaseBook, PurchaseEntry, VaultKeyring, DEFAULT_AGENT_DEADLINE_MS,
-    DEFAULT_AGENT_OFFER_MICRO_USDC,
+    hire_fix, http_client, lease_view, list_verified_jobs, list_withdrawals, prepare_agent_task,
+    prepare_fix_order, preview_value, sign_envelope, submit_streaming, vault_delete, vault_fetch,
+    vault_list, vault_store, verify_payout, withdraw, AgentArgs, AgentOutcome, BuyerConfig,
+    DispatchOutcome, FixOutcome, JobRequest, PriceQuote, PurchaseBook, PurchaseEntry, VaultKeyring,
+    DEFAULT_AGENT_DEADLINE_MS, DEFAULT_AGENT_OFFER_MICRO_USDC, DEFAULT_FIX_DEADLINE_MS,
+    DEFAULT_FIX_OFFER_MICRO_USDC,
 };
 use covenant_compute_protocol::{
     chat_input, generation_input, lease_input, parse_assistant_output, parse_embedding_output,
@@ -67,6 +68,7 @@ Usage:
   covenant-compute dispute <job-id> <reason>    file a signed dispute of a job
   covenant-compute cancel <job-id>              refund a job no operator took yet
   covenant-compute agent --repo <path|url> --accept <cmd> <task>   hire a coding agent; pay only if its work passes
+  covenant-compute fix --repo <path|url> --accept <cmd> <bug>      hire a crew to reproduce and fix a bug; pay only if the fix passes
   covenant-compute lease open --minutes N --rate R    rent a whole GPU for a window
   covenant-compute lease view <job-id>          a live lease's endpoint, meter and cost
   covenant-compute lease close <job-id>         end a running lease and settle the meter
@@ -120,7 +122,7 @@ Lease flags (lease open):
   --wait-secs <n>       how long to wait for the machine to come up (default 240)
   --no-wait             return as soon as the lease is placed, before the machine answers
   --gpu-class, --min-vram-gb, --min-reputation-bps   constrain supply as for a buy
-Agent flags (agent):
+Agent flags (agent, fix):
   --repo <path|url>     a local git repository (sent as a bundle) or a public https URL
   --commit <sha>        the commit to work from; defaults to the local repository's HEAD
   --accept <cmd>        a command the work must pass, run from the repository root with no
@@ -138,6 +140,9 @@ Agent flags (agent):
   --model <id>          the model the agent should drive; the operator's default otherwise
   --out <path>          where to write the accepted patch (default agent-<job-id>.patch)
   --price, --deadline-ms   as for a buy; the deadline defaults to 30 minutes
+  fix takes the same flags but --skill and --fix: one agent writes tests that reproduce the
+  bug, another fixes it against them, and the order's --price (default 1.00 USDC) and
+  --deadline-ms (default 60 minutes) cover both
 Vault flags:
   --file <path>         put: seal the bytes of this file instead of an inline value ('-' reads stdin)
   --force               key import: replace a different key already held for the label
@@ -484,6 +489,7 @@ async fn main() -> anyhow::Result<()> {
             cmd_cancel(&load_ctx()?, job_id, json_out).await
         }
         "agent" => cmd_agent(&load_ctx()?, &mut args, json_out).await,
+        "fix" => cmd_fix(&load_ctx()?, &mut args, json_out).await,
         "lease" => {
             // A lease needs an explicit action: `open` spends money, so a
             // bare `lease` with a stray flag must never fall through into
@@ -1648,6 +1654,172 @@ fn clock(ms: u64) -> String {
 /// The verified-receipt lines under a bought job's output: job id,
 /// operator, price, metering, the verification verdict and payout state.
 /// Shared by the synchronous and streaming buy paths.
+async fn cmd_fix(ctx: &Ctx, args: &mut Vec<String>, json_out: bool) -> anyhow::Result<()> {
+    let fix_args = AgentArgs {
+        repo: take_flag_value(args, "--repo").context("--repo is required")?,
+        commit: take_flag_value(args, "--commit"),
+        accept: take_flag_values(args, "--accept"),
+        check_image: take_flag_value(args, "--check-image"),
+        check_timeout_secs: take_number(args, "--check-timeout", "a whole number of seconds")?,
+        protect: take_flag_values(args, "--protect"),
+        hidden: take_flag_values(args, "--hidden"),
+        hidden_accept: take_flag_values(args, "--hidden-accept"),
+        skill: take_flag_value(args, "--skill"),
+        fix: take_flag_values(args, "--fix"),
+        model: take_flag_value(args, "--model"),
+        price_micro_usdc: take_price(args)?,
+        deadline_ms: take_number(args, "--deadline-ms", "a whole number of milliseconds")?,
+        apply: take_flag(args, "--apply"),
+        task: String::new(),
+    };
+    let out = take_flag_value(args, "--out");
+    let fix_args = AgentArgs {
+        task: resolve_text(rest_joined(args, "bug")?)?,
+        ..fix_args
+    };
+    let order = prepare_fix_order(&fix_args)?;
+    let price = fix_args
+        .price_micro_usdc
+        .unwrap_or(DEFAULT_FIX_OFFER_MICRO_USDC);
+    let deadline_ms = fix_args.deadline_ms.unwrap_or(DEFAULT_FIX_DEADLINE_MS);
+    if !json_out {
+        eprintln!(
+            "offering up to {} for the fix: one agent reproduces the bug as a failing test, \
+             another fixes it, and other operators check both. You pay what the builds spent \
+             plus the checks, and nothing unless the fix passes (up to {} min)",
+            usdc(price),
+            deadline_ms / 60_000
+        );
+    }
+    let progress = |step: &str| {
+        if !json_out {
+            eprintln!("{step}");
+        }
+    };
+    let outcome = hire_fix(
+        &ctx.http,
+        &ctx.config,
+        &ctx.identity,
+        order,
+        price,
+        deadline_ms,
+        &progress,
+    )
+    .await
+    .map_err(with_funding_hint)?;
+    match outcome {
+        FixOutcome::NotFixed {
+            stage,
+            job_id,
+            status,
+            reason,
+            verdict,
+            round,
+            reworks,
+        } => {
+            if json_out {
+                let doc = serde_json::json!({
+                    "stage": stage,
+                    "job_id": job_id,
+                    "status": status,
+                    "refund_reason": reason,
+                    "check": verdict,
+                    "round": round,
+                    "reworks": reworks,
+                });
+                println!("{}", serde_json::to_string_pretty(&doc)?);
+                return Ok(());
+            }
+            println!(
+                "not fixed: the {} ended {status} ({}), your balance is untouched",
+                if stage == "reproduce" {
+                    "reproduction"
+                } else {
+                    "fix"
+                },
+                reason.as_deref().unwrap_or("no reason given")
+            );
+            if let Some(verdict) = &verdict {
+                println!("{}", describe_verdict(verdict));
+            }
+            if let Some(line) = describe_reworks(reworks, false) {
+                println!("{line}");
+            }
+            if let Some(round) = &round {
+                println!("{}", describe_round(round));
+            }
+        }
+        FixOutcome::Fixed {
+            fix,
+            reproduction,
+            tests,
+            fixed,
+            patch,
+            verdict,
+            round,
+            charged_micro_usdc,
+            reworks,
+        } => {
+            let job_id = fix.receipt.receipt.job_id;
+            let path = PathBuf::from(out.unwrap_or_else(|| format!("fix-{job_id}.patch")));
+            std::fs::write(&path, &patch).with_context(|| format!("write {}", path.display()))?;
+            let applied = fix_args.apply && !fix_args.repo.starts_with("https://");
+            if applied {
+                apply_patch(Path::new(&fix_args.repo), &patch)?;
+            }
+            if json_out {
+                let doc = serde_json::json!({
+                    "job_id": job_id,
+                    "reproduction_job_id": reproduction,
+                    "patch_path": path,
+                    "applied": applied,
+                    "tests": { "files_changed": tests.files_changed, "summary": tests.summary },
+                    "fix": { "files_changed": fixed.files_changed, "summary": fixed.summary },
+                    "check": verdict,
+                    "round": round,
+                    "charged_micro_usdc": charged_micro_usdc,
+                    "reworks": reworks,
+                    "payout": fix.payout,
+                });
+                println!("{}", serde_json::to_string_pretty(&doc)?);
+                return Ok(());
+            }
+            println!(
+                "fixed: {} file(s) of tests reproduce the bug and {} file(s) fix it, patch \
+                 written to {}{}",
+                tests.files_changed,
+                fixed.files_changed,
+                path.display(),
+                if applied {
+                    " and applied to the working tree".to_string()
+                } else {
+                    format!(" (apply with `git apply {}`)", path.display())
+                }
+            );
+            println!("\nthe reproduction:\n{}", tests.summary);
+            println!("\nthe fix:\n{}", fixed.summary);
+            if let Some(verdict) = &verdict {
+                println!();
+                println!("{}", describe_verdict(verdict));
+            }
+            if let Some(line) = describe_reworks(reworks, true) {
+                println!("{line}");
+            }
+            if let Some(round) = &round {
+                println!("{}", describe_round(round));
+            }
+            println!(
+                "charged: {} of your {} ceiling, both steps together",
+                usdc(charged_micro_usdc),
+                usdc(price)
+            );
+            println!();
+            print_receipt_block(&fix);
+        }
+    }
+    Ok(())
+}
+
 fn print_receipt_block(outcome: &DispatchOutcome) {
     let _ = write_receipt_block(&mut std::io::stdout().lock(), outcome);
 }

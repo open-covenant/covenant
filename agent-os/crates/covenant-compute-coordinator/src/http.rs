@@ -1005,6 +1005,8 @@ async fn submit_job(
         }
     }
 
+    let fix = crate::agent::admit_fix(&state, &envelope).map_err(ApiError::BadRequest)?;
+
     let escrow_hold = match state
         .escrow()
         .hold(job_id, &envelope.payload.buyer, amount)
@@ -1031,20 +1033,41 @@ async fn submit_job(
         Err(e) => return Err(ApiError::Internal(e.to_string())),
     };
 
-    let Some(operator_pubkey_b58) = select_operator(
-        state.registry(),
-        state.reputation(),
-        state.bonds(),
-        &envelope.payload.capability_requirement,
-        envelope.payload.price_micro_usdc,
-        now_ms,
-        state.config().operator_liveness_timeout,
-        state.config().min_operator_score_bps,
-        state.config().bond_floor(),
-        None,
-    )
-    .await
-    else {
+    // A fix goes to a seat whose stake owners did not build its
+    // reproduction: that seat is paid only if the fix passes.
+    let winner = match &fix {
+        Some(fix) => {
+            crate::matcher::select_operator_excluding(
+                state.registry(),
+                state.reputation(),
+                state.bonds(),
+                &envelope.payload.capability_requirement,
+                envelope.payload.price_micro_usdc,
+                now_ms,
+                state.config().operator_liveness_timeout,
+                state.config().min_operator_score_bps,
+                state.config().bond_floor(),
+                &fix.exclusions,
+            )
+            .await
+        }
+        None => {
+            select_operator(
+                state.registry(),
+                state.reputation(),
+                state.bonds(),
+                &envelope.payload.capability_requirement,
+                envelope.payload.price_micro_usdc,
+                now_ms,
+                state.config().operator_liveness_timeout,
+                state.config().min_operator_score_bps,
+                state.config().bond_floor(),
+                None,
+            )
+            .await
+        }
+    };
+    let Some(operator_pubkey_b58) = winner else {
         // Name the refusal in the one term the buyer can act on before
         // the envelope moves into its terminal record. "No operator" is
         // wrong when supply is online but asking more than the offer: a
@@ -1112,6 +1135,7 @@ async fn submit_job(
                 hidden_checks: None,
                 vote_round: None,
                 rework: None,
+                order: None,
             },
         ) {
             tracing::error!(%job_id, error = %e, "failed to record refunded job");
@@ -1130,6 +1154,7 @@ async fn submit_job(
         envelope: envelope.clone(),
         escrow_hold: escrow_hold.clone(),
         rework: None,
+        reproduction: fix.as_ref().map(|f| f.patch.clone()),
     };
     // Captured into the durable record because the registry restarts
     // empty: the address the operator declared when it won this match
@@ -1163,7 +1188,8 @@ async fn submit_job(
             refund_reason: None,
             dispute: None,
             offered_at_ms: crate::epoch_ms(),
-            pinned: false,
+            // A fix may go only to a seat outside its reproduction's.
+            pinned: fix.is_some(),
             accepted_at_ms: None,
             metered_elapsed_ms: None,
             close_requested_at_ms: None,
@@ -1173,6 +1199,11 @@ async fn submit_job(
             hidden_checks: None,
             vote_round: None,
             rework: None,
+            order: fix.as_ref().map(|f| crate::jobs::TaskOrder::Fix {
+                reproduction: f.reproduction,
+                reproducer: f.reproducer.clone(),
+                patch: f.patch.clone(),
+            }),
         },
     ) {
         if let Err(refund_err) = state
@@ -1183,6 +1214,27 @@ async fn submit_job(
             tracing::error!(%job_id, error = %refund_err, "refund after journal failure also failed");
         }
         return Err(ApiError::Internal(e.to_string()));
+    }
+    // One fix per reproduction: two posted at once both pass admission, and
+    // the second to link here is refunded before any seat sees it.
+    if let Some(fix) = &fix {
+        let linked = state
+            .jobs()
+            .link_fix(fix.reproduction, job_id)
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+        if !linked {
+            let _ = state
+                .escrow()
+                .refund(job_id, RefundReason::AdmissionFailed)
+                .await;
+            state
+                .jobs()
+                .conclude_unpaid(job_id, JobPhase::Refunded, RefundReason::AdmissionFailed)
+                .map_err(|e| ApiError::Internal(e.to_string()))?;
+            return Err(ApiError::Conflict(
+                "the reproduction already has a fix".into(),
+            ));
+        }
     }
     // The winner came from a live snapshot taken under the registry
     // lock a moment ago; a concurrent deregistration between the
@@ -2139,6 +2191,18 @@ struct JobStatusView {
     /// builder.
     #[serde(skip_serializing_if = "Option::is_none")]
     reworks: Option<u32>,
+    /// An agent task's part in a fix order.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    order: Option<OrderView>,
+}
+
+/// A fix order as its buyer follows it: the reproduction names its fix once
+/// one is posted, the fix names its reproduction.
+#[derive(Serialize)]
+#[serde(tag = "role", rename_all = "snake_case")]
+enum OrderView {
+    Reproduced { fix: Option<Uuid> },
+    Fix { reproduction: Uuid },
 }
 
 #[derive(Serialize)]
@@ -2229,6 +2293,10 @@ async fn job_status(
         check,
         round: record.vote_round,
         reworks: record.rework.map(|r| r.count),
+        order: record.order.map(|order| match order {
+            crate::jobs::TaskOrder::Reproduced { fix } => OrderView::Reproduced { fix },
+            crate::jobs::TaskOrder::Fix { reproduction, .. } => OrderView::Fix { reproduction },
+        }),
     }))
 }
 
@@ -4131,6 +4199,7 @@ mod tests {
             hidden_checks: None,
             vote_round: None,
             rework: None,
+            order: None,
         };
         state.jobs().insert(job_id, record).unwrap();
         crate::onchain_meter::open_lease_onchain(&state, job_id).await;
@@ -4317,6 +4386,7 @@ mod tests {
             hidden_checks: None,
             vote_round: None,
             rework: None,
+            order: None,
         };
         state.jobs().insert(job_id, record).unwrap();
 
@@ -4459,6 +4529,7 @@ mod tests {
             hidden_checks: None,
             vote_round: None,
             rework: None,
+            order: None,
         };
         state.jobs().insert(job_id, record).unwrap();
 
@@ -4662,6 +4733,7 @@ mod tests {
             hidden_checks: None,
             vote_round: None,
             rework: None,
+            order: None,
         };
         state.jobs().insert(job_id, record).unwrap();
         crate::onchain_meter::open_lease_onchain(&state, job_id).await;

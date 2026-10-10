@@ -11,8 +11,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use covenant_compute_protocol::{
-    AgentRework, DisputeRequest, EscrowHoldAttestation, RefundReason, SignedJobEnvelope,
-    SignedWorkReceipt,
+    AgentPatch, AgentRework, DisputeRequest, EscrowHoldAttestation, RefundReason,
+    SignedJobEnvelope, SignedWorkReceipt,
 };
 use covenant_mcp::Content;
 use parking_lot::Mutex;
@@ -218,6 +218,24 @@ pub struct JobRecord {
     /// On an agent task a failed check handed back to its builder.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rework: Option<TaskRework>,
+    /// On an agent task that is part of a fix order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order: Option<TaskOrder>,
+}
+
+/// An agent task's part in a fix order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "role", rename_all = "snake_case")]
+pub enum TaskOrder {
+    /// A reproduction whose check passed. Its pay waits on the fix built on
+    /// it, once the buyer posts one.
+    Reproduced { fix: Option<Uuid> },
+    /// A fix built on another seat's reproduction.
+    Fix {
+        reproduction: Uuid,
+        reproducer: String,
+        patch: AgentPatch,
+    },
 }
 
 /// How an agent task came back to its builder: how many times, what the
@@ -235,6 +253,14 @@ impl JobRecord {
     /// delivery of its offer.
     pub fn rework_note(&self) -> Option<AgentRework> {
         self.rework.as_ref().map(|r| r.note.clone())
+    }
+
+    /// A fix's reproduction patch, sent with every delivery of its offer.
+    pub fn reproduction_patch(&self) -> Option<AgentPatch> {
+        match &self.order {
+            Some(TaskOrder::Fix { patch, .. }) => Some(patch.clone()),
+            _ => None,
+        }
     }
 
     /// What escrow released for this job — the gross the operator's net
@@ -715,6 +741,29 @@ impl JobBook {
                 r.accepted_at_ms = None;
                 r.rework = Some(rework);
             },
+        )
+    }
+
+    /// Holds a reproduction whose check passed for the fix its order will
+    /// post. `Ok(false)` unless it was awaiting its check outside an order.
+    pub fn mark_reproduced(&self, job_id: Uuid) -> Result<bool, JobError> {
+        self.update_if(
+            job_id,
+            |r| r.phase == JobPhase::AwaitingCheck && r.order.is_none(),
+            |r| r.order = Some(TaskOrder::Reproduced { fix: None }),
+        )
+    }
+
+    /// Ties a reproduction to the one fix built on it. `Ok(false)` when it is
+    /// not a held reproduction or already has its fix.
+    pub fn link_fix(&self, reproduction: Uuid, fix: Uuid) -> Result<bool, JobError> {
+        self.update_if(
+            reproduction,
+            |r| {
+                r.phase == JobPhase::AwaitingCheck
+                    && r.order == Some(TaskOrder::Reproduced { fix: None })
+            },
+            |r| r.order = Some(TaskOrder::Reproduced { fix: Some(fix) }),
         )
     }
 
@@ -1220,6 +1269,7 @@ mod tests {
             hidden_checks: None,
             vote_round: None,
             rework: None,
+            order: None,
         }
     }
 
@@ -1470,6 +1520,7 @@ mod tests {
             hidden_checks: None,
             vote_round: None,
             rework: None,
+            order: None,
         }
     }
 

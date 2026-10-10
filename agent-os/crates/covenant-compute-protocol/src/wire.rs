@@ -232,6 +232,10 @@ pub struct JobOffer {
     /// Outside the envelope because the buyer signed the task, not this.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rework: Option<crate::agent::AgentRework>,
+    /// A `code.fix` task's reproduction, which the build starts from. The
+    /// buyer's task names it by digest; these are its bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reproduction: Option<crate::agent::AgentPatch>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -22,7 +22,7 @@ use uuid::Uuid;
 
 use crate::accepted::{AcceptedBook, AcceptedEntry};
 use crate::admission::{admit_job, AdmissionContext, AdmissionError};
-use crate::agent::ReworkInbox;
+use crate::agent::{OfferNote, OfferNotes};
 use crate::coordinator::{Coordinator, CoordinatorError};
 use crate::earnings::{EarningsEntry, EarningsError, EarningsLedger, EarningsStatus};
 use crate::executor::{ExecutorError, JobExecutor};
@@ -180,7 +180,7 @@ pub struct Node<C, X, L> {
     pub config: NodeConfig,
     outbox: Arc<ResultOutbox>,
     accepted: Arc<AcceptedBook>,
-    reworks: ReworkInbox,
+    notes: OfferNotes,
     in_flight: AtomicUsize,
     backend_up: AtomicBool,
     draining: AtomicBool,
@@ -220,7 +220,7 @@ where
             config,
             outbox: Arc::new(ResultOutbox::in_memory()),
             accepted: Arc::new(AcceptedBook::in_memory()),
-            reworks: ReworkInbox::default(),
+            notes: OfferNotes::default(),
             in_flight: AtomicUsize::new(0),
             backend_up: AtomicBool::new(true),
             draining: AtomicBool::new(false),
@@ -228,9 +228,9 @@ where
         }
     }
 
-    /// Where an offer's rework note goes for the executor that builds it.
-    pub fn with_reworks(mut self, reworks: ReworkInbox) -> Self {
-        self.reworks = reworks;
+    /// Where what an offer carried goes, for the executor that builds it.
+    pub fn with_notes(mut self, notes: OfferNotes) -> Self {
+        self.notes = notes;
         self
     }
 
@@ -459,8 +459,14 @@ where
             return Err(NodeError::Admission(e));
         }
         self.record_admission(&operator, job_id, true, "ok").await?;
-        if let Some(note) = &offer.rework {
-            self.reworks.put(job_id, note.clone());
+        if offer.rework.is_some() || offer.reproduction.is_some() {
+            self.notes.put(
+                job_id,
+                OfferNote {
+                    rework: offer.rework.clone(),
+                    reproduction: offer.reproduction.clone(),
+                },
+            );
         }
 
         // Remember the job durably BEFORE telling the coordinator

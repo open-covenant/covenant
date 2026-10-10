@@ -602,6 +602,7 @@ impl RedundancySampler {
                 hidden_checks: None,
                 vote_round: None,
                 rework: None,
+                order: None,
             },
         ) {
             let _ = self
@@ -632,6 +633,7 @@ impl RedundancySampler {
                 envelope,
                 escrow_hold,
                 rework: None,
+                reproduction: None,
             },
         ) {
             let _ = self
@@ -1221,6 +1223,7 @@ mod tests {
             hidden_checks: None,
             vote_round: None,
             rework: None,
+            order: None,
         };
         (job_id, record)
     }

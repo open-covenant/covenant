@@ -9,7 +9,7 @@ use base64::Engine as _;
 use covenant_compute_protocol::{
     agent_task_input, parse_agent_task_output, AcceptanceSpec, AgentCheckVerdict, AgentRuntime,
     AgentSkill, AgentTaskOutput, AgentTaskSpec, CommandOutcome, HiddenChecks, HiddenFile, JobKind,
-    RepoSource,
+    RepoSource, ReproductionRef,
 };
 use covenant_identity::LocalIdentity;
 use covenant_mcp::ToolSpec;
@@ -17,11 +17,12 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::{
-    dispatch_agent_task, fetch_check_report, BuyerConfig, BuyerError, DispatchOutcome, JobRequest,
-    VoteRoundView,
+    dispatch_agent_task, fetch_check_report, fetch_job_output, BuyerConfig, BuyerError,
+    DispatchOutcome, JobRequest, VoteRoundView,
 };
 
 pub const AGENT_TOOL: &str = "compute.agent";
+pub const FIX_TOOL: &str = "compute.fix";
 const DEFAULT_CHECK_IMAGE: &str = "python:3.12-slim";
 const DEFAULT_CHECK_TIMEOUT_SECS: u32 = 300;
 pub const DEFAULT_AGENT_DEADLINE_MS: u64 = 1_800_000;
@@ -189,6 +190,7 @@ pub fn prepare_agent_task(args: &AgentArgs) -> Result<PreparedTask, BuyerError> 
         },
         runtime: AgentRuntime::ClaudeCode,
         model: args.model.clone(),
+        reproduction: None,
     };
     spec.validate().map_err(|e| invalid(e.to_string()))?;
     Ok(PreparedTask { spec, hidden })
@@ -263,6 +265,290 @@ pub async fn hire_agent(
         charged_micro_usdc: check.charged_micro_usdc,
         reworks: check.reworks,
     })
+}
+
+/// The MCP tool for a fix order: the agent tool's fields, less the skill
+/// and the buyer's fix, which an order supplies itself.
+pub fn fix_tool_spec(max_price_micro_usdc: u64) -> ToolSpec {
+    let mut schema = agent_tool_spec(max_price_micro_usdc).input_schema;
+    if let Some(properties) = schema["properties"].as_object_mut() {
+        properties.remove("skill");
+        properties.remove("fix");
+        properties["task"] = serde_json::json!({
+            "type": "string",
+            "description": "The bug: what goes wrong, and what should happen instead"
+        });
+        properties["price_micro_usdc"] = serde_json::json!({
+            "type": "integer",
+            "description": "The most you will pay for the whole order, in micro-USDC (at least 200000). Default 1000000, or the per-call cap if lower"
+        });
+        properties["deadline_ms"] = serde_json::json!({
+            "type": "integer",
+            "description": "Window for the reproduction, the fix and their checks together. Default 3600000 (60 minutes)"
+        });
+    }
+    ToolSpec {
+        name: FIX_TOOL.into(),
+        description: format!(
+            "Hire a crew on the Covenant compute network to fix a bug in a git repository. \
+             One agent writes tests that reproduce the bug and fail on the commit; another \
+             agent, on another operator's machine, fixes the bug against those tests; other \
+             operators check both with no network. Work that passes is charged what the \
+             builds spent plus the checks, never more than your offer. If the fix does not \
+             pass, nothing is charged. You get the tests and the fix as one patch. The \
+             repository is sent as its committed history, so commit what the agents should \
+             see and keep secrets out. Price per call is capped at {max_price_micro_usdc} \
+             micro-USDC."
+        ),
+        input_schema: schema,
+    }
+}
+
+/// The default ceiling for a whole fix order: the reproduction gets two
+/// fifths of it, the fix the rest.
+pub const DEFAULT_FIX_OFFER_MICRO_USDC: u64 = 1_000_000;
+/// The default window for a fix order, both steps together.
+pub const DEFAULT_FIX_DEADLINE_MS: u64 = 3_600_000;
+/// How long before the order's window closes the fix must end, so its
+/// reproduction can still settle on it.
+const FIX_MARGIN_MS: u64 = 10_000;
+const ORDER_POLL: std::time::Duration = std::time::Duration::from_secs(4);
+
+/// A fix order's two tasks, ready to post: the reproduction, and the fix
+/// that will name it once it passes its check.
+pub struct FixOrder {
+    pub reproduction: PreparedTask,
+    pub fix: PreparedTask,
+}
+
+/// What a fix order came to.
+pub enum FixOutcome {
+    /// The fix passed its check: both builders were paid, and `patch` holds
+    /// the reproduction's tests then the fix, ready for `git apply`.
+    Fixed {
+        fix: Box<DispatchOutcome>,
+        reproduction: Uuid,
+        tests: Box<AgentTaskOutput>,
+        fixed: Box<AgentTaskOutput>,
+        patch: Vec<u8>,
+        verdict: Option<AgentCheckVerdict>,
+        round: Option<VoteRoundView>,
+        /// Both tasks' charges together, each at most its own offer.
+        charged_micro_usdc: u64,
+        reworks: u32,
+    },
+    /// Nothing was paid. `stage` says which step stopped the order.
+    NotFixed {
+        stage: &'static str,
+        job_id: Uuid,
+        status: String,
+        reason: Option<String>,
+        verdict: Option<AgentCheckVerdict>,
+        round: Option<VoteRoundView>,
+        reworks: u32,
+    },
+}
+
+/// Prepares a fix order from one set of arguments: the task describes the
+/// bug, and the commands are what the reproduction must fail and the fix
+/// pass. Protected paths and hidden checks bind the fix; the reproduction
+/// only adds tests, and its check is that they fail on the commit.
+pub fn prepare_fix_order(args: &AgentArgs) -> Result<FixOrder, BuyerError> {
+    if args.skill.is_some() || !args.fix.is_empty() {
+        return Err(BuyerError::Protocol(
+            "a fix order sets its own skills: drop --skill and --fix".into(),
+        ));
+    }
+    let base = prepare_agent_task(args)?;
+    let mut reproduction = base.spec.clone();
+    reproduction.acceptance.skill = AgentSkill::CodeRepro;
+    reproduction.acceptance.hidden_sha256 = None;
+    reproduction.acceptance.protected_paths = Vec::new();
+    reproduction
+        .validate()
+        .map_err(|e| BuyerError::Protocol(e.to_string()))?;
+    let mut fix = base.spec;
+    fix.acceptance.skill = AgentSkill::CodeFix;
+    Ok(FixOrder {
+        reproduction: PreparedTask {
+            spec: reproduction,
+            hidden: None,
+        },
+        fix: PreparedTask {
+            spec: fix,
+            hidden: base.hidden,
+        },
+    })
+}
+
+/// Runs a fix order: posts the reproduction, waits for its check, posts the
+/// fix on it, and waits for that check. `progress` hears each step as it
+/// starts.
+pub async fn hire_fix(
+    http: &reqwest::Client,
+    config: &BuyerConfig,
+    buyer_identity: &LocalIdentity,
+    order: FixOrder,
+    price_micro_usdc: u64,
+    deadline_ms: u64,
+    progress: &(dyn Fn(&str) + Send + Sync),
+) -> Result<FixOutcome, BuyerError> {
+    let protocol =
+        |e: covenant_compute_protocol::ProtocolError| BuyerError::Protocol(e.to_string());
+    let repro_price = price_micro_usdc * 2 / 5;
+    let request = |spec: AgentTaskSpec, price, deadline_ms| -> Result<JobRequest, BuyerError> {
+        Ok(JobRequest {
+            kind: JobKind::AgentTask,
+            input: vec![agent_task_input(spec).map_err(protocol)?],
+            model: Some(AgentRuntime::ClaudeCode.label().into()),
+            gpu_class: None,
+            min_vram_gb: None,
+            min_reputation_bps: None,
+            price_micro_usdc: price,
+            deadline_ms,
+        })
+    };
+    let envelope = crate::sign_and_submit(
+        http,
+        config,
+        buyer_identity,
+        request(order.reproduction.spec, repro_price, deadline_ms)?,
+        false,
+        Uuid::new_v4(),
+    )
+    .await?;
+    let reproduction = envelope.payload.job_id;
+    let window_ends = envelope
+        .payload
+        .issued_at_ms
+        .saturating_add(envelope.payload.deadline_ms);
+    progress("reproducing the bug");
+
+    let tests_sha = loop {
+        let status = crate::read_job_status(http, config, buyer_identity, reproduction).await?;
+        if status["order"]["role"] == "reproduced" {
+            break status["check"]["patch_sha256"]
+                .as_str()
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    BuyerError::Coordinator("a reproduction held without its check".into())
+                })?;
+        }
+        let phase = status["status"].as_str().unwrap_or_default().to_string();
+        if matches!(phase.as_str(), "refunded" | "failed" | "rejected") {
+            let check = fetch_check_report(http, config, buyer_identity, reproduction).await?;
+            return Ok(FixOutcome::NotFixed {
+                stage: "reproduce",
+                job_id: reproduction,
+                status: phase,
+                reason: status["refund_reason"].as_str().map(str::to_string),
+                verdict: check.verdict,
+                round: check.round,
+                reworks: check.reworks,
+            });
+        }
+        if crate::epoch_ms() > window_ends {
+            return Err(BuyerError::Coordinator(
+                "the reproduction's window closed before its check settled".into(),
+            ));
+        }
+        tokio::time::sleep(ORDER_POLL).await;
+    };
+    progress("reproduced; another agent is fixing it");
+
+    let mut fix = order.fix.spec;
+    fix.reproduction = Some(ReproductionRef {
+        task_job_id: reproduction,
+        patch_sha256: tests_sha,
+    });
+    fix.validate().map_err(protocol)?;
+    let fix_deadline = window_ends
+        .saturating_sub(crate::epoch_ms())
+        .saturating_sub(FIX_MARGIN_MS);
+    let fixed = match dispatch_agent_task(
+        http,
+        config,
+        buyer_identity,
+        request(fix, price_micro_usdc - repro_price, fix_deadline)?,
+        order.fix.hidden.as_ref(),
+    )
+    .await
+    {
+        Ok(outcome) => outcome,
+        Err(BuyerError::NotServed {
+            job_id,
+            status,
+            reason,
+            ..
+        }) => {
+            let check = fetch_check_report(http, config, buyer_identity, job_id).await?;
+            return Ok(FixOutcome::NotFixed {
+                stage: "fix",
+                job_id,
+                status,
+                reason,
+                verdict: check.verdict,
+                round: check.round,
+                reworks: check.reworks,
+            });
+        }
+        Err(e) => return Err(e),
+    };
+    let fix_built = parse_agent_task_output(&fixed.output)
+        .map_err(|e| BuyerError::Verification(format!("fix result: {e}")))?;
+    let fix_patch = verified_patch(&fix_built)?;
+
+    // The reproduction is released right after its fix; read it once it is.
+    let settle_by = crate::epoch_ms() + 120_000;
+    let tests = loop {
+        let view = fetch_job_output(http, config, buyer_identity, reproduction).await?;
+        if view.status == "completed" {
+            break view;
+        }
+        if crate::epoch_ms() > settle_by {
+            return Err(BuyerError::Coordinator(format!(
+                "the fix passed but its reproduction is still {}",
+                view.status
+            )));
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    };
+    if tests.receipt_verified != Some(true) {
+        return Err(BuyerError::Verification(format!(
+            "the reproduction's receipt does not verify: {}",
+            tests.verification_error.unwrap_or_default()
+        )));
+    }
+    let tests_built = parse_agent_task_output(&tests.output)
+        .map_err(|e| BuyerError::Verification(format!("reproduction result: {e}")))?;
+    let mut patch = verified_patch(&tests_built)?;
+    patch.extend(fix_patch);
+    let check =
+        fetch_check_report(http, config, buyer_identity, fixed.receipt.receipt.job_id).await?;
+    Ok(FixOutcome::Fixed {
+        reproduction,
+        charged_micro_usdc: check.charged_micro_usdc.unwrap_or(0)
+            + tests.charged_micro_usdc.unwrap_or(0),
+        fix: Box::new(fixed),
+        tests: Box::new(tests_built),
+        fixed: Box::new(fix_built),
+        patch,
+        verdict: check.verdict,
+        round: check.round,
+        reworks: check.reworks,
+    })
+}
+
+fn verified_patch(built: &AgentTaskOutput) -> Result<Vec<u8>, BuyerError> {
+    let patch = base64::engine::general_purpose::STANDARD
+        .decode(&built.patch_b64)
+        .map_err(|e| BuyerError::Verification(format!("agent patch: {e}")))?;
+    if covenant_compute_protocol::sha256_hex(&patch) != built.patch_sha256 {
+        return Err(BuyerError::Verification(
+            "the patch does not match the digest the checker vouched for".into(),
+        ));
+    }
+    Ok(patch)
 }
 
 /// Applies an accepted patch to a local repository's working tree.

@@ -2908,6 +2908,7 @@ async fn main() -> anyhow::Result<()> {
                 ),
                 builder,
                 notes: OfferNotes::default(),
+                coordinator_url: coordinator_url_from_env()?,
             };
             tracing::info!(
                 work_dir = %config.work_dir.display(),

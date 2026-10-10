@@ -9,7 +9,7 @@ use base64::Engine as _;
 use covenant_compute_protocol::{
     agent_task_input, parse_agent_task_output, AcceptanceSpec, AgentCheckVerdict, AgentRuntime,
     AgentSkill, AgentTaskOutput, AgentTaskSpec, CommandOutcome, HiddenChecks, HiddenFile, JobKind,
-    RepoSource, ReproductionRef,
+    RepoSource, ReproductionRef, MAX_BUNDLE_B64_BYTES, MAX_STORED_BUNDLE_BYTES,
 };
 use covenant_identity::LocalIdentity;
 use covenant_mcp::ToolSpec;
@@ -113,6 +113,9 @@ pub struct AgentArgs {
 pub struct PreparedTask {
     pub spec: AgentTaskSpec,
     pub hidden: Option<HiddenChecks>,
+    /// A repository bundle too large to travel inline, stored with the
+    /// coordinator before the task that names it is posted.
+    pub bundle: Option<Vec<u8>>,
 }
 
 /// How a hire ended.
@@ -153,14 +156,15 @@ pub fn prepare_agent_task(args: &AgentArgs) -> Result<PreparedTask, BuyerError> 
         ));
     }
     let remote = args.repo.starts_with("https://");
-    let repo = if remote {
-        RepoSource::Git {
+    let (repo, bundle) = if remote {
+        let repo = RepoSource::Git {
             url: args.repo.clone(),
             commit: args
                 .commit
                 .clone()
                 .ok_or_else(|| invalid("a repository URL needs the commit to work from".into()))?,
-        }
+        };
+        (repo, None)
     } else {
         local_bundle(Path::new(&args.repo), args.commit.as_deref())?
     };
@@ -235,7 +239,11 @@ pub fn prepare_agent_task(args: &AgentArgs) -> Result<PreparedTask, BuyerError> 
         reproduction: None,
     };
     spec.validate().map_err(|e| invalid(e.to_string()))?;
-    Ok(PreparedTask { spec, hidden })
+    Ok(PreparedTask {
+        spec,
+        hidden,
+        bundle,
+    })
 }
 
 /// Posts the task and waits for its checked result.
@@ -247,6 +255,9 @@ pub async fn hire_agent(
     price_micro_usdc: u64,
     deadline_ms: u64,
 ) -> Result<AgentOutcome, BuyerError> {
+    if let Some(bundle) = &task.bundle {
+        store_bundle(http, config, buyer_identity, bundle).await?;
+    }
     let input = agent_task_input(task.spec).map_err(|e| BuyerError::Protocol(e.to_string()))?;
     let request = JobRequest {
         kind: JobKind::AgentTask,
@@ -415,10 +426,12 @@ pub fn prepare_fix_order(args: &AgentArgs) -> Result<FixOrder, BuyerError> {
         reproduction: PreparedTask {
             spec: reproduction,
             hidden: None,
+            bundle: base.bundle,
         },
         fix: PreparedTask {
             spec: fix,
             hidden: base.hidden,
+            bundle: None,
         },
     })
 }
@@ -450,6 +463,9 @@ pub async fn hire_fix(
             deadline_ms,
         })
     };
+    if let Some(bundle) = &order.reproduction.bundle {
+        store_bundle(http, config, buyer_identity, bundle).await?;
+    }
     let envelope = crate::sign_and_submit(
         http,
         config,
@@ -624,7 +640,12 @@ pub fn apply_patch(repo: &Path, patch: &[u8]) -> Result<(), BuyerError> {
 
 /// Bundles a local repository's history up to HEAD, so the agent works
 /// from the exact commit without the repository needing to be public.
-pub fn local_bundle(path: &Path, commit: Option<&str>) -> Result<RepoSource, BuyerError> {
+/// A local repository as a task's source: its snapshot inline when it fits
+/// a job, otherwise named by digest, with the bytes to store first.
+pub fn local_bundle(
+    path: &Path,
+    commit: Option<&str>,
+) -> Result<(RepoSource, Option<Vec<u8>>), BuyerError> {
     let git = |args: &[&str]| -> Result<Vec<u8>, BuyerError> {
         let out = std::process::Command::new("git")
             .arg("-C")
@@ -653,11 +674,119 @@ pub fn local_bundle(path: &Path, commit: Option<&str>) -> Result<RepoSource, Buy
         }
         None => head,
     };
-    let bytes = git(&["bundle", "create", "-q", "-", "HEAD"])?;
-    Ok(RepoSource::Bundle {
-        bundle_b64: base64::engine::general_purpose::STANDARD.encode(bytes),
-        commit,
-    })
+    let snapshot = snapshot_commit(path, &commit)?;
+    let bytes = git(&["bundle", "create", "-q", "-", SNAPSHOT_REF]);
+    let _ = git(&["update-ref", "-d", SNAPSHOT_REF]);
+    let bytes = bytes?;
+    if bytes.len().div_ceil(3) * 4 <= MAX_BUNDLE_B64_BYTES {
+        let repo = RepoSource::Bundle {
+            bundle_b64: base64::engine::general_purpose::STANDARD.encode(bytes),
+            commit: snapshot,
+        };
+        return Ok((repo, None));
+    }
+    let size = bytes.len() as u64;
+    if size > MAX_STORED_BUNDLE_BYTES {
+        return Err(BuyerError::Protocol(format!(
+            "the repository's files come to {} MB packed, over the {} MB the network takes; \
+             push it to a public https URL and pass that instead",
+            size / 1_000_000,
+            MAX_STORED_BUNDLE_BYTES / 1_000_000
+        )));
+    }
+    let repo = RepoSource::Stored {
+        bundle_sha256: covenant_compute_protocol::sha256_hex(&bytes),
+        bytes: size,
+        commit: snapshot,
+    };
+    Ok((repo, Some(bytes)))
+}
+
+/// Stores a repository bundle with the coordinator under its digest, signed
+/// by the buyer, so a task can name it.
+pub async fn store_bundle(
+    http: &reqwest::Client,
+    config: &BuyerConfig,
+    buyer_identity: &LocalIdentity,
+    bytes: &[u8],
+) -> Result<(), BuyerError> {
+    let path =
+        covenant_compute_protocol::bundle_path(&covenant_compute_protocol::sha256_hex(bytes));
+    let signed_at_ms = crate::epoch_ms();
+    let signature = covenant_compute_protocol::sign_read(buyer_identity, &path, signed_at_ms)
+        .map_err(|e| BuyerError::Protocol(e.to_string()))?;
+    let resp = http
+        .put(format!(
+            "{}{path}",
+            config.coordinator_url.trim_end_matches('/')
+        ))
+        .header(
+            covenant_compute_protocol::BUNDLE_UPLOADER_HEADER,
+            buyer_identity.agent_id().pubkey_base58(),
+        )
+        .header(
+            covenant_compute_protocol::READ_SIGNED_AT_HEADER,
+            signed_at_ms.to_string(),
+        )
+        .header(covenant_compute_protocol::READ_SIGNATURE_HEADER, signature)
+        .body(bytes.to_vec())
+        .send()
+        .await
+        .map_err(|e| {
+            BuyerError::unreachable(&config.coordinator_url, "store the repository", &e)
+        })?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(BuyerError::Coordinator(format!(
+            "the repository was not stored ({status}): {}",
+            covenant_compute_protocol::coordinator_reason(&body)
+        )));
+    }
+    Ok(())
+}
+
+/// The ref a snapshot is bundled under, removed once the bundle is made.
+const SNAPSHOT_REF: &str = "refs/covenant/snapshot";
+
+/// A commit with `commit`'s tree and no history, under [`SNAPSHOT_REF`]: the
+/// work needs the files, not how they came to be, and history can hold what
+/// the buyer has since removed. Its author, committer and dates are fixed,
+/// so a tree always snapshots to the same id.
+fn snapshot_commit(path: &Path, commit: &str) -> Result<String, BuyerError> {
+    let run = |args: &[&str]| -> Result<String, BuyerError> {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "covenant")
+            .env("GIT_AUTHOR_EMAIL", "snapshot@covenant.invalid")
+            .env("GIT_AUTHOR_DATE", "1970-01-01T00:00:00Z")
+            .env("GIT_COMMITTER_NAME", "covenant")
+            .env("GIT_COMMITTER_EMAIL", "snapshot@covenant.invalid")
+            .env("GIT_COMMITTER_DATE", "1970-01-01T00:00:00Z")
+            .output()
+            .map_err(|e| BuyerError::Protocol(format!("run git: {e}")))?;
+        if !out.status.success() {
+            return Err(BuyerError::Protocol(format!(
+                "git {} failed: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&out.stderr).trim()
+            )));
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    };
+    let tree = run(&["rev-parse", &format!("{commit}^{{tree}}")])?;
+    let snapshot = run(&[
+        "-c",
+        "commit.gpgsign=false",
+        "commit-tree",
+        &tree,
+        "-m",
+        &format!("snapshot of {commit}"),
+    ])?;
+    run(&["update-ref", SNAPSHOT_REF, &snapshot])?;
+    Ok(snapshot)
 }
 
 /// Reads hidden test files and, for `code.tests`, the fix from the buyer's

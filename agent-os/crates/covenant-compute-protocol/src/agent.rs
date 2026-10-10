@@ -30,6 +30,15 @@ pub const MAX_TASK_BYTES: usize = 32 * 1024;
 /// job carries the bundle and the builder's patch together, and both must
 /// fit the 8 MiB frame with room to spare.
 pub const MAX_BUNDLE_B64_BYTES: usize = 3 * 1024 * 1024;
+/// Cap on a bundle stored with the coordinator, in raw bytes.
+pub const MAX_STORED_BUNDLE_BYTES: u64 = 64 * 1024 * 1024;
+/// The header naming the buyer who signed a bundle upload.
+pub const BUNDLE_UPLOADER_HEADER: &str = "x-compute-buyer";
+
+/// Where a stored bundle is put and fetched, relative to the coordinator.
+pub fn bundle_path(sha256: &str) -> String {
+    format!("/federation/bundles/{sha256}")
+}
 /// Cap on the raw bytes of the patch a builder returns.
 pub const MAX_PATCH_BYTES: usize = 1024 * 1024;
 /// Cap on the base64 text of that patch: the encoding of [`MAX_PATCH_BYTES`].
@@ -85,18 +94,33 @@ impl AgentRuntime {
 
 /// Where the code comes from. A public git URL is fetched by the operator;
 /// a bundle travels inline, which is how a buyer hands over a private
-/// repository without handing over a credential.
+/// repository without handing over a credential. A bundle too large to
+/// travel inline is stored with the coordinator first and named here by
+/// the digest of its bytes, which the operator checks when it fetches it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "source", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RepoSource {
-    Git { url: String, commit: String },
-    Bundle { bundle_b64: String, commit: String },
+    Git {
+        url: String,
+        commit: String,
+    },
+    Bundle {
+        bundle_b64: String,
+        commit: String,
+    },
+    Stored {
+        bundle_sha256: String,
+        bytes: u64,
+        commit: String,
+    },
 }
 
 impl RepoSource {
     pub fn commit(&self) -> &str {
         match self {
-            RepoSource::Git { commit, .. } | RepoSource::Bundle { commit, .. } => commit,
+            RepoSource::Git { commit, .. }
+            | RepoSource::Bundle { commit, .. }
+            | RepoSource::Stored { commit, .. } => commit,
         }
     }
 
@@ -106,6 +130,19 @@ impl RepoSource {
             RepoSource::Git { url, .. } => validate_repo_url(url),
             RepoSource::Bundle { bundle_b64, .. } => {
                 validate_b64("repo bundle", bundle_b64, MAX_BUNDLE_B64_BYTES)
+            }
+            RepoSource::Stored {
+                bundle_sha256,
+                bytes,
+                ..
+            } => {
+                validate_sha256_hex("bundle_sha256", bundle_sha256)?;
+                if *bytes == 0 || *bytes > MAX_STORED_BUNDLE_BYTES {
+                    return Err(ProtocolError::Invalid(format!(
+                        "a stored bundle of {bytes} bytes is outside 1..={MAX_STORED_BUNDLE_BYTES}"
+                    )));
+                }
+                Ok(())
             }
         }
     }

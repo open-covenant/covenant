@@ -1850,3 +1850,64 @@ async fn a_check_that_fails_on_the_commit_itself_refunds_without_fault() {
         "no rework mends the buyer's own commit"
     );
 }
+
+#[tokio::test]
+async fn a_large_repository_is_stored_by_digest_for_a_signed_buyer() {
+    let audit: Arc<dyn AuditLog> = Arc::new(InMemoryAuditLog::new());
+    let dir = tempfile::tempdir().unwrap();
+    let store = covenant_compute_coordinator::bundles::BundleStore::open(
+        dir.path().join("bundles"),
+        1 << 20,
+    )
+    .unwrap();
+    let config = CoordinatorConfig {
+        bundles: Some(Arc::new(store)),
+        ..CoordinatorConfig::default()
+    };
+    let state = CoordinatorState::new(
+        LocalIdentity::generate("coordinator@agent"),
+        config,
+        Arc::new(AuditReputationSource::new(audit.clone())),
+        Arc::new(MockPayout::new()),
+        audit,
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, router(state)).await.unwrap() });
+
+    let buyer = LocalIdentity::generate("buyer@agent");
+    let bytes = b"PACK of a repository too large to travel inline".to_vec();
+    let sha = sha256_hex(&bytes);
+    let path = covenant_compute_protocol::bundle_path(&sha);
+    let http = reqwest::Client::new();
+    let put = |signed: bool, path: String, body: Vec<u8>| {
+        let signed_at = epoch_ms();
+        let mut req = http.put(format!("{url}{path}")).body(body);
+        if signed {
+            req = req
+                .header(
+                    covenant_compute_protocol::BUNDLE_UPLOADER_HEADER,
+                    buyer.agent_id().pubkey_base58(),
+                )
+                .header(
+                    covenant_compute_protocol::READ_SIGNED_AT_HEADER,
+                    signed_at.to_string(),
+                )
+                .header(
+                    covenant_compute_protocol::READ_SIGNATURE_HEADER,
+                    covenant_compute_protocol::sign_read(&buyer, &path, signed_at).unwrap(),
+                );
+        }
+        req.send()
+    };
+    let unsigned = put(false, path.clone(), bytes.clone()).await.unwrap();
+    assert_eq!(unsigned.status(), reqwest::StatusCode::UNAUTHORIZED);
+    let stored = put(true, path.clone(), bytes.clone()).await.unwrap();
+    assert_eq!(stored.status(), reqwest::StatusCode::CREATED);
+    let fetched = http.get(format!("{url}{path}")).send().await.unwrap();
+    assert_eq!(fetched.bytes().await.unwrap().to_vec(), bytes);
+
+    let other = covenant_compute_protocol::bundle_path(&"0".repeat(64));
+    let mismatched = put(true, other, bytes).await.unwrap();
+    assert_eq!(mismatched.status(), reqwest::StatusCode::BAD_REQUEST);
+}

@@ -795,12 +795,33 @@ async fn main() -> anyhow::Result<()> {
         None => {}
     }
 
+    // Large repositories for agent work, stored on the coordinator's disk
+    // under a cap that leaves the journals room.
+    let bundles = match &agent {
+        Some(_) => {
+            let max_bytes = env_parse(
+                "COVENANT_COMPUTE_BUNDLE_STORE_MAX_BYTES",
+                512 * 1024 * 1024,
+                "must be a u64 (bytes)",
+            )?;
+            let store = covenant_compute_coordinator::bundles::BundleStore::open(
+                home.join("bundles"),
+                max_bytes,
+            )
+            .context("open the bundle store")?;
+            tracing::info!(max_bytes, "bundle store open for large repositories");
+            Some(Arc::new(store))
+        }
+        None => None,
+    };
+
     let config = CoordinatorConfig {
         long_poll_timeout: Duration::from_secs(long_poll_secs.max(1)),
         lease_meter,
         stake,
         agent,
         vote_rounds,
+        bundles: bundles.clone(),
         require_prefunded_buyers,
         default_funding_source,
         subsidy_policy,
@@ -877,6 +898,22 @@ async fn main() -> anyhow::Result<()> {
             state.clone(),
             Duration::from_secs(settle_secs.max(1)),
         );
+    }
+    if let Some(store) = bundles {
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(60 * 60)).await;
+                let store = store.clone();
+                let removed = tokio::task::spawn_blocking(move || {
+                    store.sweep(covenant_compute_coordinator::bundles::BUNDLE_MAX_AGE)
+                })
+                .await
+                .unwrap_or(0);
+                if removed > 0 {
+                    tracing::info!(removed, "expired repository bundles removed");
+                }
+            }
+        });
     }
 
     // Payout-retry sweep: re-pushes released-but-unpaid jobs (a push

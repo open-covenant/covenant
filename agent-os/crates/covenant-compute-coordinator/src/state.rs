@@ -210,6 +210,9 @@ pub struct CoordinatorConfig {
     /// Check-vote rounds (`crate::rounds`). `None` (the default) settles
     /// agent tasks on the coordinator's own count, as before rounds existed.
     pub vote_rounds: Option<Arc<dyn crate::rounds::VoteRounds>>,
+    /// Where repositories too large to travel inside a job are stored for
+    /// the operators to fetch (`crate::bundles`). `None` takes no uploads.
+    pub bundles: Option<Arc<crate::bundles::BundleStore>>,
 }
 
 impl Default for CoordinatorConfig {
@@ -239,6 +242,7 @@ impl Default for CoordinatorConfig {
             stake: None,
             agent: None,
             vote_rounds: None,
+            bundles: None,
         }
     }
 }

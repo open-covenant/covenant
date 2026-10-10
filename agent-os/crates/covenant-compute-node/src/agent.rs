@@ -107,6 +107,8 @@ pub struct AgentConfig {
     pub builder: Builder,
     /// What offers carried beside their envelopes, left by the serve loop.
     pub notes: OfferNotes,
+    /// Where a repository stored with the coordinator is fetched from.
+    pub coordinator_url: String,
 }
 
 /// What an offer carried beside the buyer's envelope: a rework's note, or a
@@ -990,6 +992,19 @@ impl AgentExecutor {
                 self.git(&git_dir, None, &["bundle", "unbundle", &path], until)
                     .await?;
             }
+            RepoSource::Stored {
+                bundle_sha256,
+                bytes,
+                ..
+            } => {
+                let bundle = self.fetch_bundle(bundle_sha256, *bytes, until).await?;
+                let path = root.join("repo.bundle");
+                std::fs::write(&path, bundle)
+                    .map_err(|e| ExecutorError::Failed(format!("write bundle: {e}")))?;
+                let path = path.to_string_lossy().into_owned();
+                self.git(&git_dir, None, &["bundle", "unbundle", &path], until)
+                    .await?;
+            }
         }
         self.git(
             &git_dir,
@@ -1011,6 +1026,39 @@ impl AgentExecutor {
             )));
         }
         Ok((git_dir, tree))
+    }
+
+    /// A repository bundle the buyer stored with the coordinator, once its
+    /// bytes hash to the digest the task names.
+    async fn fetch_bundle(
+        &self,
+        sha256: &str,
+        bytes: u64,
+        until: Instant,
+    ) -> Result<Vec<u8>, ExecutorError> {
+        let url = format!(
+            "{}{}",
+            self.config.coordinator_url.trim_end_matches('/'),
+            covenant_compute_protocol::bundle_path(sha256)
+        );
+        let failed = |e: String| ExecutorError::Failed(format!("fetch the stored repository: {e}"));
+        let left = until.saturating_duration_since(Instant::now());
+        let resp = reqwest::Client::new()
+            .get(&url)
+            .timeout(left.min(Duration::from_secs(300)))
+            .send()
+            .await
+            .map_err(|e| failed(e.to_string()))?;
+        if !resp.status().is_success() {
+            return Err(failed(format!("the coordinator answered {}", resp.status())));
+        }
+        let body = resp.bytes().await.map_err(|e| failed(e.to_string()))?;
+        if body.len() as u64 != bytes || sha256_hex(&body) != sha256 {
+            return Err(failed(
+                "the bytes do not match the digest the task names".into(),
+            ));
+        }
+        Ok(body.to_vec())
     }
 
     /// Paths the index differs from `commit` in, as git prints them.

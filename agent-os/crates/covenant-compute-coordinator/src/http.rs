@@ -21,7 +21,7 @@ use axum::http::{
     HeaderMap, StatusCode,
 };
 use axum::response::{IntoResponse, Response as AxumResponse};
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use covenant_a2a::A2ATaskStatus;
 use covenant_audit::AuditKind;
@@ -128,6 +128,12 @@ pub fn router(state: CoordinatorState) -> Router {
         .route(
             "/federation/jobs",
             post(submit_job).layer(DefaultBodyLimit::max(MAX_INLINE_BODY_BYTES)),
+        )
+        .route(
+            "/federation/bundles/:sha256",
+            put(put_bundle).get(get_bundle).layer(DefaultBodyLimit::max(
+                covenant_compute_protocol::MAX_STORED_BUNDLE_BYTES as usize + 4096,
+            )),
         )
         .route("/federation/jobs/:job_id/accept", post(accept_job))
         .route(
@@ -664,6 +670,69 @@ fn verify_signed_read(
         crate::epoch_ms(),
     )
     .map_err(|e| ApiError::Unauthorized(format!("read signature rejected: {e}")))
+}
+
+/// Stores a repository bundle under its digest, for a task to name. The
+/// buyer signs the upload as it signs a read, and where buyers prefund,
+/// only a buyer who has deposited can store anything.
+async fn put_bundle(
+    State(state): State<CoordinatorState>,
+    Path(sha256): Path<String>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<StatusCode, ApiError> {
+    let store = state
+        .config()
+        .bundles
+        .clone()
+        .ok_or_else(|| ApiError::NotFound("this coordinator stores no bundles".into()))?;
+    let buyer = headers
+        .get(covenant_compute_protocol::BUNDLE_UPLOADER_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| {
+            ApiError::Unauthorized(format!(
+                "missing {} header",
+                covenant_compute_protocol::BUNDLE_UPLOADER_HEADER
+            ))
+        })?
+        .to_string();
+    verify_signed_read(
+        &headers,
+        &buyer,
+        &covenant_compute_protocol::bundle_path(&sha256),
+    )?;
+    if state.config().require_prefunded_buyers && state.accounts().deposited(&buyer) == 0 {
+        return Err(ApiError::PaymentRequired(
+            "deposit first: the coordinator stores repositories for funded buyers".into(),
+        ));
+    }
+    tokio::task::spawn_blocking(move || store.put(&sha256, &body))
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .map_err(|e| match e {
+            crate::bundles::PutError::Full => ApiError::Conflict(e.to_string()),
+            crate::bundles::PutError::Io(_) => ApiError::Internal(e.to_string()),
+            _ => ApiError::BadRequest(e.to_string()),
+        })?;
+    Ok(StatusCode::CREATED)
+}
+
+/// A stored bundle's bytes. Its digest is the only name it has, and a task
+/// is the only place that name travels.
+async fn get_bundle(
+    State(state): State<CoordinatorState>,
+    Path(sha256): Path<String>,
+) -> Result<AxumResponse, ApiError> {
+    let path = state
+        .config()
+        .bundles
+        .as_ref()
+        .and_then(|store| store.path(&sha256))
+        .ok_or_else(|| ApiError::NotFound(format!("no bundle {sha256}")))?;
+    let bytes = tokio::fs::read(&path)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(([(CONTENT_TYPE, "application/octet-stream")], bytes).into_response())
 }
 
 async fn register(

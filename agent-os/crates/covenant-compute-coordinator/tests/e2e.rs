@@ -11211,7 +11211,7 @@ async fn hostile_wire_garbage_gets_4xx_moves_no_money_and_the_service_keeps_serv
         std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/http.rs")).unwrap();
     assert_eq!(
         router_source.matches(".route(").count(),
-        41,
+        42,
         "the route table changed — teach the hostile-wire barrage the new route first"
     );
 
@@ -11348,6 +11348,9 @@ async fn hostile_wire_garbage_gets_4xx_moves_no_money_and_the_service_keeps_serv
             // 404; an enabled vault would 401 an unsigned read. Never 2xx.
             (format!("/vault/{hp}/secrets"), false),
             (format!("/vault/{hp}/secret/{hp}"), false),
+            // Bundles: none is stored unless agent work runs, and a
+            // garbage digest never names one.
+            (format!("/federation/bundles/{hp}"), false),
         ] {
             assert_wire_answer(
                 http.get(format!("{base_url}{path}")),
@@ -11408,6 +11411,19 @@ async fn hostile_wire_garbage_gets_4xx_moves_no_money_and_the_service_keeps_serv
             )
             .await;
         }
+    }
+
+    // A bundle upload with no signature, or to a coordinator storing none,
+    // is a 4xx and stores nothing.
+    for hp in hostile_params {
+        assert_wire_answer(
+            http.put(format!("{base_url}/federation/bundles/{hp}"))
+                .body(b"\xff\xfe not a bundle".to_vec()),
+            false,
+            format!("PUT /federation/bundles/{hp}"),
+            &mut violations,
+        )
+        .await;
     }
 
     // DELETE shares the vault secret path with GET and POST; an unsigned

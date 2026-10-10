@@ -34,6 +34,7 @@ pub mod accounts;
 pub mod agent;
 pub mod attempts;
 pub mod bond;
+pub mod bundles;
 pub mod canary;
 pub mod deposit;
 pub mod escrow;

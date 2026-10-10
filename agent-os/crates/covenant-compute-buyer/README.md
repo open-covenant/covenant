@@ -23,7 +23,7 @@ The network-level map lives at
 }
 ```
 
-Eighteen tools:
+Nineteen tools:
 
 | Tool | What it buys or shows |
 | --- | --- |
@@ -33,6 +33,7 @@ Eighteen tools:
 | `compute.speak` | one text-to-speech clip from `text`; set `voice`, `format` (wav or aiff), or `speed`. The clip saves under the server's `clips/` and the result names the file, so the base64 audio never lands in the agent's context |
 | `compute.run` | one batch command — it executes on a stranger's machine, and the tool description says so |
 | `compute.agent` | hire a coding agent for one task in a git repository; another operator runs your acceptance commands on its patch, and only work that passes is charged (see `agent` under the CLI) |
+| `compute.fix` | hire a crew to fix a bug: one agent writes tests that reproduce it, another fixes it against them, and only a fix that passes is charged (see `fix` under the CLI) |
 | `compute.stream_start` | `compute.infer`, returning the job id immediately so the output can be read as it generates |
 | `compute.stream_poll` | cursor-read a streaming job's live chunks; the concluding poll carries the verified output and receipt |
 | `compute.receipts` | your verified job history; unpaid rows name their `refund_reason` |
@@ -468,6 +469,7 @@ covenant-compute withdrawals                     # your withdrawal history
 covenant-compute dispute <job-id> "reason"       # file a signed dispute
 covenant-compute cancel <job-id>                 # refund a job no operator took
 covenant-compute agent --repo . --accept "python -m unittest" "fix the slug bug"  # hire a coding agent
+covenant-compute fix --repo . --accept "python -m unittest" "slugify drops accents"  # hire a crew to fix a bug
 covenant-compute lease open --minutes 30 --rate 200 --ssh-key ~/.ssh/id_ed25519.pub  # rent a GPU
 covenant-compute lease view <job-id>             # a live lease's endpoint, meter and cost
 covenant-compute lease close <job-id>            # end a running lease and settle the meter
@@ -591,6 +593,18 @@ nothing. The accepted patch is written to `agent-<job-id>.patch` (or
 on the commit and pass with your fix, which only the checkers see. Agent
 work is in closed alpha, and the coordinator takes tasks from approved
 buyers only.
+
+`fix` runs a two-step order for a bug. One agent writes tests that
+reproduce it: the `--accept` commands pass on the commit and fail once the
+tests are in, which another operator checks. A second agent, on a seat
+with different owners, fixes the bug against those tests, and a third
+operator checks the result: the commands pass on the commit, fail with the
+tests, and pass with the tests and the fix. You receive the tests and the
+fix as one patch. `--protect` and `--hidden` bind the fix, while the
+reproduction only adds tests. `--price` covers the whole order (1.00 USDC
+by default, at least 0.20), two fifths for the reproduction and three for
+the fix, and each step is charged its builds' spend plus the markup and
+its checks. Nothing is charged unless the fix passes.
 
 ## As a library
 

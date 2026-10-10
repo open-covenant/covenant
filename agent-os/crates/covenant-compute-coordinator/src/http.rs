@@ -2276,7 +2276,13 @@ async fn job_status(
     let check = agent_task
         .then(|| crate::agent::latest_verdict(&state, &record))
         .flatten();
-    let output = if agent_task && record.phase != JobPhase::Completed {
+    // An agent task's output is the work, shown once it is paid for. A build
+    // that failed to run left only its cause, which the buyer needs to see.
+    let failed_to_run = record
+        .receipt
+        .as_ref()
+        .is_some_and(|r| r.receipt.status != A2ATaskStatus::Ok);
+    let output = if agent_task && record.phase != JobPhase::Completed && !failed_to_run {
         None
     } else {
         record.output

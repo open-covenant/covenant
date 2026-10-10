@@ -117,8 +117,14 @@ OpenAI-compatible backend as `image_url` content parts.
   container built from the task's check image: it sees only the checkout,
   and its one way out is the proxy. A check applies another seat's patch
   to a clean checkout, runs the buyer's commands in a container with no
-  network, and signs its vote with the node key. Checks run only in the
-  images `COVENANT_COMPUTE_AGENT_CHECK_IMAGES` allows.
+  network, and signs its vote with the node key. A task's setup commands
+  run first, on an internal network whose one exit is a proxy to the
+  package registries, and what they install stays in a per-job volume the
+  later commands read offline. Builds reach the registries the same way.
+  Checks run only in the images `COVENANT_COMPUTE_AGENT_CHECK_IMAGES`
+  allows: the network's seats take `python:3.12-slim`, `python:3.12`,
+  `node:22`, `golang:1.23` and `covenant-compute-check:rust`, which is
+  `rust:1` with the stable toolchain, rustfmt and clippy, built locally.
   `COVENANT_COMPUTE_AGENT_MODEL` sets the model a task gets when it names
   none. The node needs docker, git, Claude Code and covguard; container
   builds run on macOS with Colima. A seat is paid its build's metered

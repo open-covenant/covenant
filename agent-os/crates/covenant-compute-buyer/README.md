@@ -573,8 +573,16 @@ available only against a coordinator that serves it.
 is a local repository, sent as its committed history (commit what the
 agent should see and keep secrets out), or a public https URL with
 `--commit`. Each `--accept <cmd>` is a command the work must pass, run
-from the repository root in the `--check-image` container (default
-`python:3.12-slim`) with no network. One operator's agent builds the
+from the repository root with no network. `--setup <cmd>` installs what
+those commands need first, with the package registries reachable (PyPI,
+npm, crates.io and the Go module proxy) and nothing else. Give neither
+`--setup` nor `--check-image` and a local repository's lockfile or
+manifest picks both: `package-lock.json` runs `npm ci` in `node:22`,
+`requirements.txt` runs `pip install -r requirements.txt` in
+`python:3.12`, `pyproject.toml` runs `pip install -e .`, `Cargo.toml` runs
+`cargo fetch` in `covenant-compute-check:rust`, and `go.mod` runs
+`go mod download` in `golang:1.23`. A repository with none of them runs
+in `python:3.12-slim`. One operator's agent builds the
 change; a different operator applies the patch to a clean checkout and
 runs the commands, and the task settles on that check. `--protect <path>`
 keeps the agent's edits off files such as the tests, and `--hidden <path>`
@@ -590,9 +598,9 @@ never sees what a hidden check printed. Work that still fails costs
 nothing. The accepted patch is written to `agent-<job-id>.patch` (or
 `--out <path>`), and `--apply` applies it to a local repository.
 `--skill code.tests --fix <path>` asks for tests instead: they must fail
-on the commit and pass with your fix, which only the checkers see. Agent
-work is in closed alpha, and the coordinator takes tasks from approved
-buyers only.
+on the commit and pass with your fix, which only the checkers see. A check
+whose commands already fail on your commit, before any work is applied,
+refunds you without faulting the builder.
 
 `fix` runs a two-step order for a bug. One agent writes tests that
 reproduce it: the `--accept` commands pass on the commit and fail once the

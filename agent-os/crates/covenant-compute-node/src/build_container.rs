@@ -21,6 +21,137 @@ pub const BUILD_CONTAINER: &str = "__build-container";
 /// The port the forwarder listens on inside the internal network.
 const FORWARDER_PORT: u16 = 8080;
 
+/// The proxy that setups and builds reach the package registries through,
+/// and nothing else.
+pub const EGRESS_IMAGE: &str = "covenant-compute-egress:1";
+const EGRESS_PORT: u16 = 8888;
+/// The registries an install may reach: Python, Node, Rust and Go.
+const REGISTRIES: &[&str] = &[
+    "pypi.org",
+    "files.pythonhosted.org",
+    "registry.npmjs.org",
+    "registry.yarnpkg.com",
+    "crates.io",
+    "index.crates.io",
+    "static.crates.io",
+    "proxy.golang.org",
+    "sum.golang.org",
+];
+
+/// The egress proxy's image: tinyproxy, refusing every host but the
+/// registries.
+pub fn egress_dockerfile() -> String {
+    let filter: Vec<String> = REGISTRIES
+        .iter()
+        .map(|host| format!("'^{}$'", host.replace('.', "\\.")))
+        .collect();
+    format!(
+        "FROM alpine:3.20\n\
+         RUN apk add --no-cache tinyproxy \\\n \
+         && printf '%s\\n' 'Port {EGRESS_PORT}' 'Listen 0.0.0.0' 'Timeout 300' 'MaxClients 64' \
+         'Allow 10.0.0.0/8' 'Allow 172.16.0.0/12' 'Allow 192.168.0.0/16' 'FilterDefaultDeny Yes' \
+         'Filter \"/etc/tinyproxy/filter\"' 'FilterType ere' 'ConnectPort 443' \
+         'DisableViaHeader Yes' 'LogLevel Warning' > /etc/tinyproxy/tinyproxy.conf \\\n \
+         && printf '%s\\n' {} > /etc/tinyproxy/filter\n\
+         USER nobody\n\
+         ENTRYPOINT [\"tinyproxy\", \"-d\", \"-c\", \"/etc/tinyproxy/tinyproxy.conf\"]\n",
+        filter.join(" ")
+    )
+}
+
+/// Where a job's dependencies live: a volume at `/deps`, so what the setup
+/// installs is still there in the containers that run the commands, and the
+/// tools pointed at it. `offline` keeps those tools off the network.
+pub fn deps_env(offline: bool) -> Vec<String> {
+    let mut env = vec![
+        "PIP_USER=1",
+        "PYTHONUSERBASE=/deps/python",
+        "PIP_CACHE_DIR=/deps/cache/pip",
+        "PIP_DISABLE_PIP_VERSION_CHECK=1",
+        "npm_config_cache=/deps/cache/npm",
+        "npm_config_update_notifier=false",
+        "npm_config_fund=false",
+        "npm_config_audit=false",
+        "CARGO_HOME=/deps/cargo",
+        "CARGO_TARGET_DIR=/deps/target",
+        "GOPATH=/deps/go",
+        "GOMODCACHE=/deps/go/pkg/mod",
+        "GOCACHE=/deps/go/cache",
+        "GOFLAGS=-modcacherw",
+        "TMPDIR=/deps/tmp",
+    ];
+    if offline {
+        env.extend([
+            "CARGO_NET_OFFLINE=true",
+            "GOPROXY=off",
+            "PIP_NO_INDEX=1",
+            "npm_config_offline=true",
+        ]);
+    }
+    env.into_iter().map(String::from).collect()
+}
+
+/// The directories the installed tools' commands land in, ahead of the
+/// image's own: `/deps/bin` holds the build's `go` shim.
+pub const DEPS_PATH: &str = "/deps/bin:/deps/python/bin:/deps/go/bin";
+
+/// Sends the package managers' registry traffic through the proxy. Each
+/// tool gets its own setting; `everywhere` adds the generic variable too,
+/// which a check's setup can take but a build cannot: the agent would send
+/// its model traffic to the proxy as well, and the proxy refuses it.
+pub fn proxy_env(proxy: &str, everywhere: bool) -> Vec<String> {
+    let url = egress_url(proxy);
+    let mut keys = vec![
+        "PIP_PROXY",
+        "npm_config_proxy",
+        "npm_config_https_proxy",
+        "CARGO_HTTP_PROXY",
+    ];
+    if everywhere {
+        keys.extend(["https_proxy", "HTTPS_PROXY"]);
+    }
+    keys.iter().map(|key| format!("{key}={url}")).collect()
+}
+
+fn egress_url(proxy: &str) -> String {
+    format!("http://{proxy}:{EGRESS_PORT}")
+}
+
+/// Readies a fresh `/deps` volume for the user a job's containers run as.
+/// For a build, `go_proxy` adds a `go` that reaches the registries through
+/// that proxy: go reads only the generic variable a build cannot set.
+pub fn deps_init_args(volume: &str, owner: (u32, u32), go_proxy: Option<&str>) -> Vec<String> {
+    let mut script = String::from("mkdir -p /deps/tmp /deps/bin");
+    if let Some(proxy) = go_proxy {
+        script.push_str(&format!(
+            " && printf '#!/bin/sh\\nHTTPS_PROXY={} exec /usr/local/go/bin/go \"$@\"\\n' > /deps/bin/go \
+             && chmod 755 /deps/bin/go",
+            egress_url(proxy)
+        ));
+    }
+    script.push_str(&format!(" && chown -R {}:{} /deps", owner.0, owner.1));
+    vec![
+        "run".into(),
+        "--rm".into(),
+        "--user".into(),
+        "0".into(),
+        "--network".into(),
+        "none".into(),
+        "--entrypoint".into(),
+        "sh".into(),
+        "-v".into(),
+        format!("{volume}:/deps"),
+        EGRESS_IMAGE.into(),
+        "-c".into(),
+        script,
+    ]
+}
+
+/// The volume a build's or a check's dependencies go to.
+pub fn deps_volume(name: &str) -> String {
+    format!("{name}-deps")
+}
+
 /// How builds run.
 #[derive(Clone, Debug)]
 pub enum Builder {
@@ -76,12 +207,19 @@ pub fn builder_dockerfile(check_image: &str) -> String {
 
 /// The container names one build uses, so the node can remove them whatever
 /// state the run ended in.
-pub fn container_names(name: &str) -> [String; 2] {
-    [name.to_string(), forwarder_name(name)]
+pub fn container_names(name: &str) -> [String; 3] {
+    [name.to_string(), forwarder_name(name), egress_name(name)]
 }
 
 fn forwarder_name(name: &str) -> String {
     format!("{name}-fwd")
+}
+
+/// The proxy container's name, which is also its hostname on the internal
+/// network: short, since a DNS label holds at most 63 bytes.
+pub fn egress_name(name: &str) -> String {
+    let digest = covenant_compute_protocol::sha256_hex(name.as_bytes());
+    format!("egress-{}", &digest[..16])
 }
 
 /// covguard's agent argv for a containerized build: this binary's wrapper,
@@ -183,10 +321,14 @@ fn parse_wrapper(args: &[String]) -> Result<WrapperArgs, String> {
 /// The `docker run` arguments for the agent's container. Root-owned files
 /// are never created in the checkout: the agent runs as the checkout's
 /// owner, on a read-only image with its home and temp in memory.
+/// `deps` names the dependency volume and the PATH that finds what is
+/// installed there; `egress`, the proxy to the registries.
 fn agent_run_args(
     wrapper: &WrapperArgs,
     owner: (u32, u32),
     custom_headers: Option<&str>,
+    deps: Option<(&str, &str)>,
+    egress: Option<&str>,
 ) -> Vec<String> {
     let (uid, gid) = owner;
     let b = &wrapper.builds;
@@ -248,9 +390,47 @@ fn agent_run_args(
         args.push("-e".into());
         args.push(format!("ANTHROPIC_CUSTOM_HEADERS={headers}"));
     }
+    if let Some((volume, path)) = deps {
+        args.push("-v".into());
+        args.push(format!("{volume}:/deps:rw"));
+        for var in deps_env(false).into_iter().chain([format!("PATH={path}")]) {
+            args.push("-e".into());
+            args.push(var);
+        }
+    }
+    for var in egress
+        .map(|egress| proxy_env(egress, false))
+        .unwrap_or_default()
+    {
+        args.push("-e".into());
+        args.push(var);
+    }
     args.push(builder_image(&wrapper.image));
     args.extend(wrapper.agent.iter().cloned());
     args
+}
+
+/// The image's PATH with the dependency volume's tool directories ahead of
+/// it.
+async fn image_path(docker: &impl Fn(&[&str]) -> Command, image: &str) -> Option<String> {
+    let out = docker(&[
+        "image",
+        "inspect",
+        "--format",
+        "{{range .Config.Env}}{{println .}}{{end}}",
+        image,
+    ])
+    .stderr(Stdio::null())
+    .output()
+    .await
+    .ok()
+    .filter(|o| o.status.success())?;
+    let env = String::from_utf8_lossy(&out.stdout);
+    let base = env
+        .lines()
+        .find_map(|line| line.strip_prefix("PATH="))
+        .unwrap_or("/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
+    Some(format!("{DEPS_PATH}:{base}"))
 }
 
 /// The wrapper's body. Returns the exit code to leave with: the agent's own,
@@ -324,8 +504,48 @@ pub async fn run(args: &[String]) -> i32 {
         return 1;
     }
 
+    // The registries and a dependency volume let the agent install what the
+    // work needs and run the tests as the checker will. Either missing, it
+    // still builds, offline.
+    let egress = egress_name(&wrapper.name);
+    let egress_up = docker(&["run", "-d", "--rm", "--name", &egress, EGRESS_IMAGE])
+        .stdout(Stdio::null())
+        .status()
+        .await
+        .is_ok_and(|s| s.success())
+        && docker(&["network", "connect", &wrapper.builds.network, &egress])
+            .status()
+            .await
+            .is_ok_and(|s| s.success());
+    if !egress_up {
+        eprintln!("{BUILD_CONTAINER}: the registry proxy did not start; building offline");
+    }
+    let volume = deps_volume(&wrapper.name);
+    let init = deps_init_args(&volume, owner, egress_up.then_some(egress.as_str()));
+    let init_refs: Vec<&str> = init.iter().map(String::as_str).collect();
+    let deps_up = docker(&["volume", "create", &volume])
+        .stdout(Stdio::null())
+        .status()
+        .await
+        .is_ok_and(|s| s.success())
+        && docker(&init_refs)
+            .stdout(Stdio::null())
+            .status()
+            .await
+            .is_ok_and(|s| s.success());
+    let path = match deps_up {
+        true => image_path(&docker, &builder_image(&wrapper.image)).await,
+        false => None,
+    };
+
     let headers = std::env::var("ANTHROPIC_CUSTOM_HEADERS").ok();
-    let run_args = agent_run_args(&wrapper, owner, headers.as_deref());
+    let run_args = agent_run_args(
+        &wrapper,
+        owner,
+        headers.as_deref(),
+        path.as_deref().map(|path| (volume.as_str(), path)),
+        egress_up.then_some(egress.as_str()),
+    );
     let run_refs: Vec<&str> = run_args.iter().map(String::as_str).collect();
     let code = match docker(&run_refs).status().await {
         Ok(status) => status.code().unwrap_or(1),
@@ -334,7 +554,12 @@ pub async fn run(args: &[String]) -> i32 {
             1
         }
     };
-    let _ = docker(&["rm", "-f", &forwarder])
+    let _ = docker(&["rm", "-f", &forwarder, &egress])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await;
+    let _ = docker(&["volume", "rm", "-f", &volume])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
@@ -391,7 +616,13 @@ mod tests {
         );
         assert_eq!(parsed.builds.pids, 512);
 
-        let run = agent_run_args(&parsed, (501, 20), Some("anthropic-workspace-id: w"));
+        let run = agent_run_args(
+            &parsed,
+            (501, 20),
+            Some("anthropic-workspace-id: w"),
+            Some(("compute-build-ab-1-deps", "/deps/python/bin:/usr/bin")),
+            Some("compute-build-ab-1-egress"),
+        );
         let joined = run.join(" ");
         for needle in [
             "--network covenant-compute-build",
@@ -403,6 +634,11 @@ mod tests {
             "ANTHROPIC_BASE_URL=http://compute-build-ab-1-fwd:8080",
             "ANTHROPIC_API_KEY=covguard-proxy-injected",
             "ANTHROPIC_CUSTOM_HEADERS=anthropic-workspace-id: w",
+            "-v compute-build-ab-1-deps:/deps:rw",
+            "PIP_USER=1",
+            "PATH=/deps/python/bin:/usr/bin",
+            "PIP_PROXY=http://compute-build-ab-1-egress:8888",
+            "CARGO_HTTP_PROXY=http://compute-build-ab-1-egress:8888",
         ] {
             assert!(joined.contains(needle), "missing {needle}");
         }
@@ -415,6 +651,22 @@ mod tests {
             !joined.contains(" -v /home/u:"),
             "only the checkout is mounted"
         );
+        assert!(
+            !run.iter()
+                .any(|a| a.to_ascii_lowercase().starts_with("http_proxy=")
+                    || a.to_ascii_lowercase().starts_with("https_proxy=")),
+            "the agent's own traffic is never sent to the proxy"
+        );
+    }
+
+    #[test]
+    fn the_egress_proxy_admits_only_the_registries() {
+        let dockerfile = egress_dockerfile();
+        assert!(dockerfile.contains("'^pypi\\.org$'"), "{dockerfile}");
+        assert!(dockerfile.contains("FilterDefaultDeny Yes"));
+        assert!(!dockerfile.contains("github"));
+        assert!(deps_env(true).contains(&"GOPROXY=off".to_string()));
+        assert!(!deps_env(false).contains(&"GOPROXY=off".to_string()));
     }
 
     #[test]

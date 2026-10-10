@@ -173,6 +173,7 @@ fn spec() -> AgentTaskSpec {
             timeout_secs: 120,
             protected_paths: vec!["tests/".into()],
             hidden_sha256: None,
+            setup: Vec::new(),
         },
         runtime: AgentRuntime::ClaudeCode,
         model: None,
@@ -1802,5 +1803,50 @@ async fn a_fix_must_name_its_buyers_own_held_reproduction() {
         status,
         reqwest::StatusCode::BAD_REQUEST,
         "one fix per reproduction: {body}"
+    );
+}
+
+#[tokio::test]
+async fn a_check_that_fails_on_the_commit_itself_refunds_without_fault() {
+    let rig = rig_reworking().await;
+    let buyer = LocalIdentity::generate("buyer@agent");
+    let a = register(&rig, "seat-a@agent", 1);
+    let b = register(&rig, "seat-b@agent", 2);
+    let c = register(&rig, "seat-c@agent", 3);
+    let seats = [&a, &b, &c];
+
+    let (repro_id, status, body) = post_as(&rig, &buyer, repro_spec(), 1_800_000).await;
+    assert_eq!(status, reqwest::StatusCode::ACCEPTED, "{body}");
+    let builder = rig.state.jobs().get(repro_id).unwrap().operator_pubkey_b58;
+    submit(
+        &rig,
+        repro_id,
+        by_key(&seats, &builder),
+        agent_task_output(repro_patch(10_000)).unwrap(),
+    )
+    .await;
+    let broken = agent_check_output(
+        AgentCheckVerdict::catching(
+            repro_id,
+            repro_patch(0).patch_sha256,
+            true,
+            Vec::new(),
+            vec![outcome(1)],
+            Vec::new(),
+            Vec::new(),
+        )
+        .for_skill(AgentSkill::CodeRepro),
+    )
+    .unwrap();
+    answer_checks(&rig, repro_id, &seats, 1, 2, &broken).await;
+    assert_eq!(settled(&rig, repro_id).await, JobPhase::Refunded);
+    let task = rig.state.jobs().get(repro_id).unwrap();
+    assert_eq!(
+        task.refund_reason,
+        Some(covenant_compute_protocol::RefundReason::BaselineFailed)
+    );
+    assert!(
+        task.rework.is_none(),
+        "no rework mends the buyer's own commit"
     );
 }

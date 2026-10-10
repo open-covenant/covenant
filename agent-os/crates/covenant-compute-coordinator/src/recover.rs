@@ -123,7 +123,8 @@ pub async fn reconcile_books(state: &CoordinatorState) -> ReconcileReport {
                         RefundReason::BuyerCancelled
                         | RefundReason::NoMeteredUsage
                         | RefundReason::CheckUnavailable
-                        | RefundReason::FixFailed => None,
+                        | RefundReason::FixFailed
+                        | RefundReason::BaselineFailed => None,
                         _ => assignee(&record),
                     };
                     state

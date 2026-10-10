@@ -25,6 +25,31 @@ pub const AGENT_TOOL: &str = "compute.agent";
 pub const FIX_TOOL: &str = "compute.fix";
 const DEFAULT_CHECK_IMAGE: &str = "python:3.12-slim";
 const DEFAULT_CHECK_TIMEOUT_SECS: u32 = 300;
+/// The default for a task whose checks install dependencies first.
+const DEFAULT_SETUP_TIMEOUT_SECS: u32 = 900;
+
+/// The image and setup a repository's own files call for: a lockfile or
+/// manifest at its root names the toolchain and how to install from it.
+/// `None` for a repository with none of them, which runs in the default
+/// image with nothing installed.
+pub fn detect_toolchain(root: &Path) -> Option<(&'static str, &'static str)> {
+    let has = |file: &str| root.join(file).is_file();
+    if has("package-lock.json") {
+        Some(("node:22", "npm ci"))
+    } else if has("package.json") {
+        Some(("node:22", "npm install"))
+    } else if has("requirements.txt") {
+        Some(("python:3.12", "pip install -r requirements.txt"))
+    } else if has("pyproject.toml") || has("setup.py") {
+        Some(("python:3.12", "pip install -e ."))
+    } else if has("Cargo.toml") {
+        Some(("covenant-compute-check:rust", "cargo fetch"))
+    } else if has("go.mod") {
+        Some(("golang:1.23", "go mod download"))
+    } else {
+        None
+    }
+}
 pub const DEFAULT_AGENT_DEADLINE_MS: u64 = 1_800_000;
 /// The offer a task is posted with when the caller names none. A ceiling,
 /// not a price: a passing task is charged what its build spent plus its
@@ -59,6 +84,11 @@ pub struct AgentArgs {
     /// Commands run after the visible ones, also kept from the builder.
     #[serde(default)]
     pub hidden_accept: Vec<String>,
+    /// Commands that install dependencies, run before the others with the
+    /// package registries reachable. Detected from a local repository when
+    /// neither this nor the image is given.
+    #[serde(default)]
+    pub setup: Vec<String>,
     /// `code.change` (the default) or `code.tests`.
     #[serde(default)]
     pub skill: Option<String>,
@@ -172,6 +202,14 @@ pub fn prepare_agent_task(args: &AgentArgs) -> Result<PreparedTask, BuyerError> 
             args.hidden_accept.clone(),
         )?)
     };
+    let detected = match (&args.check_image, args.setup.is_empty(), remote) {
+        (None, true, false) => detect_toolchain(Path::new(&args.repo)),
+        _ => None,
+    };
+    let setup = match detected {
+        Some((_, setup)) => vec![setup.to_string()],
+        None => args.setup.clone(),
+    };
     let spec = AgentTaskSpec {
         task: args.task.clone(),
         repo,
@@ -180,13 +218,17 @@ pub fn prepare_agent_task(args: &AgentArgs) -> Result<PreparedTask, BuyerError> 
             image: args
                 .check_image
                 .clone()
+                .or_else(|| detected.map(|(image, _)| image.to_string()))
                 .unwrap_or_else(|| DEFAULT_CHECK_IMAGE.into()),
             commands: args.accept.clone(),
-            timeout_secs: args
-                .check_timeout_secs
-                .unwrap_or(DEFAULT_CHECK_TIMEOUT_SECS),
+            timeout_secs: args.check_timeout_secs.unwrap_or(if setup.is_empty() {
+                DEFAULT_CHECK_TIMEOUT_SECS
+            } else {
+                DEFAULT_SETUP_TIMEOUT_SECS
+            }),
             protected_paths: args.protect.clone(),
             hidden_sha256: hidden.as_ref().map(HiddenChecks::digest),
+            setup,
         },
         runtime: AgentRuntime::ClaudeCode,
         model: args.model.clone(),
@@ -822,7 +864,12 @@ pub fn agent_tool_spec(max_price_micro_usdc: u64) -> ToolSpec {
                 },
                 "check_image": {
                     "type": "string",
-                    "description": "Container image the commands run in. Default python:3.12-slim"
+                    "description": "Container image the commands run in: python:3.12-slim, python:3.12, node:22, golang:1.23 or covenant-compute-check:rust. Detected from a local repository's lockfile or manifest when neither this nor setup is given, else python:3.12-slim"
+                },
+                "setup": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Commands that install dependencies (e.g. \"npm ci\", \"pip install -r requirements.txt\"), run before the others with the package registries reachable and nothing else. The other commands run with no network"
                 },
                 "check_timeout_secs": {
                     "type": "integer",
@@ -880,6 +927,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_repository_names_its_toolchain_by_its_lockfile_or_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(detect_toolchain(dir.path()), None);
+        std::fs::write(dir.path().join("pyproject.toml"), "").unwrap();
+        assert_eq!(
+            detect_toolchain(dir.path()),
+            Some(("python:3.12", "pip install -e ."))
+        );
+        std::fs::write(dir.path().join("requirements.txt"), "").unwrap();
+        assert_eq!(
+            detect_toolchain(dir.path()),
+            Some(("python:3.12", "pip install -r requirements.txt"))
+        );
+        std::fs::write(dir.path().join("package.json"), "{}").unwrap();
+        std::fs::write(dir.path().join("package-lock.json"), "{}").unwrap();
+        assert_eq!(detect_toolchain(dir.path()), Some(("node:22", "npm ci")));
+    }
+
+    #[test]
     fn reworks_are_told_only_when_there_were_some() {
         assert_eq!(describe_reworks(0, true), None);
         assert!(describe_reworks(1, true).unwrap().contains("reworked once"));
@@ -931,6 +997,7 @@ mod tests {
             protect: vec!["slugify.py".into()],
             hidden: vec![],
             hidden_accept: vec![],
+            setup: Vec::new(),
             skill: Some("code.tests".into()),
             fix: vec![],
             model: None,

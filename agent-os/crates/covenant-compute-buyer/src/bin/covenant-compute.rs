@@ -127,7 +127,11 @@ Agent flags (agent, fix):
   --commit <sha>        the commit to work from; defaults to the local repository's HEAD
   --accept <cmd>        a command the work must pass, run from the repository root with no
                         network; repeatable, in order
-  --check-image <ref>   the container image the commands run in (default python:3.12-slim)
+  --check-image <ref>   the container image the commands run in: python:3.12-slim, python:3.12,
+                        node:22, golang:1.23 or covenant-compute-check:rust
+  --setup <cmd>         a command that installs dependencies, run first with the package
+                        registries reachable and nothing else; repeatable. With neither this nor
+                        --check-image, both come from a local repository's lockfile or manifest
   --check-timeout <s>   how long the commands may take, all together (default 300)
   --protect <path>      a path the work may not change (tests/, Cargo.lock); repeatable
   --apply               apply an accepted patch to the local repository's working tree
@@ -1258,6 +1262,7 @@ async fn cmd_agent(ctx: &Ctx, args: &mut Vec<String>, json_out: bool) -> anyhow:
         protect: take_flag_values(args, "--protect"),
         hidden: take_flag_values(args, "--hidden"),
         hidden_accept: take_flag_values(args, "--hidden-accept"),
+        setup: take_flag_values(args, "--setup"),
         skill: take_flag_value(args, "--skill"),
         fix: take_flag_values(args, "--fix"),
         model: take_flag_value(args, "--model"),
@@ -1272,6 +1277,9 @@ async fn cmd_agent(ctx: &Ctx, args: &mut Vec<String>, json_out: bool) -> anyhow:
         ..agent_args
     };
     let task = prepare_agent_task(&agent_args)?;
+    if !json_out {
+        announce_toolchain(&task.spec.acceptance);
+    }
     let runtime = AgentRuntime::ClaudeCode.label().to_string();
     let price = resolve_price(
         ctx,
@@ -1664,6 +1672,7 @@ async fn cmd_fix(ctx: &Ctx, args: &mut Vec<String>, json_out: bool) -> anyhow::R
         protect: take_flag_values(args, "--protect"),
         hidden: take_flag_values(args, "--hidden"),
         hidden_accept: take_flag_values(args, "--hidden-accept"),
+        setup: take_flag_values(args, "--setup"),
         skill: take_flag_value(args, "--skill"),
         fix: take_flag_values(args, "--fix"),
         model: take_flag_value(args, "--model"),
@@ -1678,6 +1687,9 @@ async fn cmd_fix(ctx: &Ctx, args: &mut Vec<String>, json_out: bool) -> anyhow::R
         ..fix_args
     };
     let order = prepare_fix_order(&fix_args)?;
+    if !json_out {
+        announce_toolchain(&order.fix.spec.acceptance);
+    }
     let price = fix_args
         .price_micro_usdc
         .unwrap_or(DEFAULT_FIX_OFFER_MICRO_USDC);
@@ -1818,6 +1830,17 @@ async fn cmd_fix(ctx: &Ctx, args: &mut Vec<String>, json_out: bool) -> anyhow::R
         }
     }
     Ok(())
+}
+
+/// Says where the checks run, when dependencies are installed first.
+fn announce_toolchain(acceptance: &covenant_compute_protocol::AcceptanceSpec) {
+    if !acceptance.setup.is_empty() {
+        eprintln!(
+            "checks run in {} after `{}`",
+            acceptance.image,
+            acceptance.setup.join(" && ")
+        );
+    }
 }
 
 fn print_receipt_block(outcome: &DispatchOutcome) {

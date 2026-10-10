@@ -152,6 +152,10 @@ pub enum RefundReason {
     /// not pass. The order pays only for a fix that passes, so the
     /// reproduction is not paid, and the failure is not its builder's.
     FixFailed,
+    /// An agent task whose commands already failed on its own commit, before
+    /// any work was applied: the check could not judge the work, so it is
+    /// not paid, and the failure is not its builder's.
+    BaselineFailed,
 }
 
 impl RefundReason {
@@ -168,6 +172,7 @@ impl RefundReason {
             RefundReason::CheckFailed => "check_failed",
             RefundReason::CheckUnavailable => "check_unavailable",
             RefundReason::FixFailed => "fix_failed",
+            RefundReason::BaselineFailed => "baseline_failed",
         }
     }
 }

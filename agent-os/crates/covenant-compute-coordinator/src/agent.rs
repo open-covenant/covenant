@@ -26,11 +26,11 @@ use covenant_audit::AuditKind;
 use covenant_compute_protocol::{
     agent_check_input, build_spend_cap, check_commands, parse_agent_check,
     parse_agent_check_verdict, parse_agent_task, parse_agent_task_output, sha256_hex,
-    AgentCheckSpec, AgentCheckVerdict, AgentPatch, AgentRework, AgentSkill, AgentTaskOutput,
-    AgentTaskSpec, CapabilityRequirement, CommandOutcome, EscrowError, EscrowStatus,
-    FederationEscrow, FundingSource, JobEnvelopePayload, JobKind, JobOffer, RefundReason,
-    ResultSettlement, SignedJobEnvelope, SignedWorkReceipt, LEAST_AGENT_OFFER_MICRO_USDC,
-    MAX_REWORK_FEEDBACK_BYTES, MIN_BUILD_BUDGET_MICRO_USD,
+    visible_commands, AgentCheckSpec, AgentCheckVerdict, AgentPatch, AgentRework, AgentSkill,
+    AgentTaskOutput, AgentTaskSpec, CapabilityRequirement, CommandOutcome, EscrowError,
+    EscrowStatus, FederationEscrow, FundingSource, JobEnvelopePayload, JobKind, JobOffer,
+    RefundReason, ResultSettlement, SignedJobEnvelope, SignedWorkReceipt,
+    LEAST_AGENT_OFFER_MICRO_USDC, MAX_REWORK_FEEDBACK_BYTES, MIN_BUILD_BUDGET_MICRO_USD,
 };
 use covenant_identity::LocalIdentity;
 use covenant_mcp::Content;
@@ -491,6 +491,26 @@ async fn settle_once(state: &CoordinatorState, task_id: Uuid) {
             }
         },
     };
+    // A check that fails on the commit itself judged nothing the builder
+    // did: no rework can mend the buyer's repository, and nobody is at fault.
+    let failing: Vec<&AgentCheckVerdict> = judged
+        .iter()
+        .map(|(_, v)| v)
+        .filter(|v| !v.passed)
+        .collect();
+    if outcome == Some(false)
+        && !failing.is_empty()
+        && failing
+            .iter()
+            .all(|v| !v.baseline.iter().all(CommandOutcome::passed))
+    {
+        tracing::info!(%task_id, "the commands fail on the task's own commit; refunding without fault");
+        refund_task(state, task_id, &task, RefundReason::BaselineFailed).await;
+        if let Some(TaskOrder::Fix { reproduction, .. }) = &task.order {
+            follow_fix(state, *reproduction).await;
+        }
+        return;
+    }
     if outcome == Some(false) && rework(state, &policy, task_id, &task, &judged).await {
         record_agreement(state, task_id, &verdicts, false).await;
         return;
@@ -898,7 +918,7 @@ fn feedback(spec: &AgentTaskSpec, hidden: bool, verdict: &AgentCheckVerdict) -> 
             verdict.protected_violations.join(", ")
         );
     }
-    let visible = spec.acceptance.commands.len();
+    let visible = spec.acceptance.setup.len() + spec.acceptance.commands.len();
     let hidden_failed = |outcomes: &[CommandOutcome], out: &mut String| {
         if outcomes.iter().skip(visible).any(|c| !c.passed()) {
             out.push_str(
@@ -1059,7 +1079,10 @@ fn judge(task: &JobRecord, check: &JobRecord) -> Result<AgentCheckVerdict, Strin
         let ran = |outcomes: &[covenant_compute_protocol::CommandOutcome]| -> Vec<String> {
             outcomes.iter().map(|c| c.command.clone()).collect()
         };
-        let visible = spec.acceptance.commands.clone();
+        let visible: Vec<String> = visible_commands(&spec.acceptance)
+            .into_iter()
+            .map(str::to_string)
+            .collect();
         let every: Vec<String> = check_commands(&spec.acceptance, task.hidden_checks.as_ref())
             .into_iter()
             .map(str::to_string)

@@ -31,10 +31,10 @@ use async_trait::async_trait;
 use base64::Engine as _;
 use covenant_compute_protocol::{
     agent_check_output, agent_task_output, build_spend_cap, check_commands, parse_agent_check,
-    parse_agent_task, sha256_hex, AcceptanceSpec, AgentCheckVerdict, AgentPatch, AgentRework,
-    AgentSkill, AgentTaskOutput, AgentTaskSpec, CommandOutcome, HiddenChecks, JobEnvelopePayload,
-    JobKind, RepoSource, MAX_OUTPUT_TAIL_BYTES, MAX_PATCH_BYTES, MAX_SUMMARY_BYTES,
-    MIN_BUILD_BUDGET_MICRO_USD,
+    parse_agent_task, sha256_hex, visible_commands, AcceptanceSpec, AgentCheckVerdict, AgentPatch,
+    AgentRework, AgentSkill, AgentTaskOutput, AgentTaskSpec, CommandOutcome, HiddenChecks,
+    JobEnvelopePayload, JobKind, RepoSource, MAX_OUTPUT_TAIL_BYTES, MAX_PATCH_BYTES,
+    MAX_SUMMARY_BYTES, MIN_BUILD_BUDGET_MICRO_USD,
 };
 use covenant_identity::LocalIdentity;
 use covenant_mcp::Content;
@@ -44,8 +44,25 @@ use tokio::process::Command;
 use uuid::Uuid;
 
 use crate::build_container::{
-    builder_dockerfile, builder_image, container_names, wrapper_argv, Builder, ContainerBuilds,
+    builder_dockerfile, builder_image, container_names, deps_env, deps_init_args, deps_volume,
+    egress_dockerfile, egress_name, proxy_env, wrapper_argv, Builder, ContainerBuilds, DEPS_PATH,
+    EGRESS_IMAGE,
 };
+
+/// The internal network a check's setup runs on: its one way out is the
+/// registry proxy.
+const DEPS_NETWORK: &str = "covenant-compute-deps";
+
+/// Dependency directories kept out of a build's patch: what a setup
+/// installs into the checkout is the buyer's to install, not the work.
+const DEPENDENCY_DIRS: &str = "node_modules/\n.venv/\nvenv/\n__pycache__/\n*.egg-info/\n\
+                                .pytest_cache/\n.mypy_cache/\n.ruff_cache/\n.tox/\n";
+
+/// A check's dependency volume and the proxy its setup installs through.
+struct Deps {
+    volume: String,
+    egress: String,
+}
 use crate::executor::{configure_process_group, ExecutionOutcome, ExecutorError, JobExecutor};
 
 /// Time kept back from a build's deadline for producing the patch and
@@ -182,6 +199,7 @@ impl AgentExecutor {
     /// first check a buyer pays for does not spend its window downloading.
     pub async fn ensure_images_present(&self) {
         self.pull_check_images().await;
+        self.prepare_deps().await;
         if let Builder::Container(builds) = &self.config.builder {
             self.prepare_container_builds(builds).await;
         }
@@ -234,33 +252,128 @@ impl AgentExecutor {
                 continue;
             }
             tracing::info!(%image, "building the builder image");
-            let child = Command::new(runtime)
-                .args(["build", "--quiet", "-t", &image, "-"])
-                .stdin(Stdio::piped())
-                .stdout(Stdio::null())
-                .stderr(Stdio::piped())
-                .spawn();
-            let built = match child {
-                Ok(mut child) => {
-                    if let Some(mut stdin) = child.stdin.take() {
-                        use tokio::io::AsyncWriteExt;
-                        let _ = stdin
-                            .write_all(builder_dockerfile(check_image).as_bytes())
-                            .await;
-                    }
-                    child.wait_with_output().await
-                }
-                Err(e) => Err(e),
-            };
-            match built {
-                Ok(out) if out.status.success() => {}
-                Ok(out) => tracing::warn!(
-                    %image,
-                    stderr = %String::from_utf8_lossy(&out.stderr).trim(),
-                    "builder image build failed; builds in it will fail until it exists"
-                ),
-                Err(e) => tracing::warn!(%image, error = %e, "builder image build did not start"),
+            if let Err(e) = self
+                .build_image(&image, &builder_dockerfile(check_image))
+                .await
+            {
+                tracing::warn!(%image, error = %e, "builder image build failed; builds in it will fail until it exists");
             }
+        }
+    }
+
+    /// The registry proxy's image and the internal network checks install
+    /// dependencies on, whose only way out is that proxy.
+    async fn prepare_deps(&self) {
+        let runtime = &self.config.container_runtime;
+        let succeeds = |args: &[&str]| {
+            let mut cmd = Command::new(runtime);
+            cmd.args(args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            cmd
+        };
+        let network = succeeds(&["network", "inspect", DEPS_NETWORK])
+            .status()
+            .await
+            .is_ok_and(|s| s.success())
+            || succeeds(&["network", "create", "--internal", DEPS_NETWORK])
+                .status()
+                .await
+                .is_ok_and(|s| s.success());
+        if !network {
+            tracing::warn!(
+                network = DEPS_NETWORK,
+                "could not create the dependency network"
+            );
+        }
+        let present = succeeds(&["image", "inspect", EGRESS_IMAGE])
+            .status()
+            .await
+            .is_ok_and(|s| s.success());
+        if !present {
+            tracing::info!(image = EGRESS_IMAGE, "building the registry proxy");
+            if let Err(e) = self.build_image(EGRESS_IMAGE, &egress_dockerfile()).await {
+                tracing::warn!(image = EGRESS_IMAGE, error = %e, "registry proxy build failed; setups will fail until it exists");
+            }
+        }
+    }
+
+    async fn build_image(&self, tag: &str, dockerfile: &str) -> Result<(), String> {
+        use tokio::io::AsyncWriteExt;
+        let mut child = Command::new(&self.config.container_runtime)
+            .args(["build", "--quiet", "-t", tag, "-"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("did not start: {e}"))?;
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(dockerfile.as_bytes()).await;
+        }
+        let out = child.wait_with_output().await.map_err(|e| e.to_string())?;
+        if !out.status.success() {
+            return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+        }
+        Ok(())
+    }
+
+    /// A volume for what a check's setup installs, readied for the
+    /// checkout's owner, and the proxy the setup installs through.
+    async fn open_deps(&self, name: &str, tree: &Path) -> Result<Deps, ExecutorError> {
+        let owner = std::fs::metadata(tree)
+            .map(|m| (m.uid(), m.gid()))
+            .map_err(|e| ExecutorError::Failed(format!("stat checkout: {e}")))?;
+        let deps = Deps {
+            volume: deps_volume(name),
+            egress: egress_name(name),
+        };
+        let runtime = &self.config.container_runtime;
+        let run = |args: Vec<String>| async move {
+            Command::new(runtime)
+                .args(&args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .await
+                .is_ok_and(|s| s.success())
+        };
+        let strings = |args: &[&str]| args.iter().map(|a| a.to_string()).collect::<Vec<_>>();
+        let ready = run(strings(&["volume", "create", &deps.volume])).await
+            && run(deps_init_args(&deps.volume, owner, None)).await
+            && run(strings(&[
+                "run",
+                "-d",
+                "--rm",
+                "--name",
+                &deps.egress,
+                EGRESS_IMAGE,
+            ]))
+            .await
+            && run(strings(&["network", "connect", DEPS_NETWORK, &deps.egress])).await;
+        if !ready {
+            return Err(ExecutorError::Failed(
+                "the dependency volume or the registry proxy did not start".into(),
+            ));
+        }
+        Ok(deps)
+    }
+
+    /// Removes a job's registry proxy and dependency volume, whatever state
+    /// the job ended in.
+    async fn close_deps(&self, name: &str) {
+        for args in [
+            vec!["rm", "-f", &egress_name(name)],
+            vec!["volume", "rm", "-f", &deps_volume(name)],
+        ] {
+            let _ = Command::new(&self.config.container_runtime)
+                .args(&args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .await;
         }
     }
 
@@ -270,9 +383,17 @@ impl AgentExecutor {
 
     /// Whatever state a containerized build ended in, its containers go.
     async fn remove_build_containers(&self, job: &JobEnvelopePayload) {
-        let names = container_names(&self.build_container_name(job));
+        let name = self.build_container_name(job);
+        let names = container_names(&name);
         let _ = Command::new(&self.config.container_runtime)
-            .args(["rm", "-f", &names[0], &names[1]])
+            .args(["rm", "-f", &names[0], &names[1], &names[2]])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await;
+        let _ = Command::new(&self.config.container_runtime)
+            .args(["volume", "rm", "-f", &deps_volume(&name)])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -353,6 +474,7 @@ impl AgentExecutor {
             }
             None => (commit.to_string(), Vec::new()),
         };
+        exclude_dependencies(&git_dir)?;
 
         let wall = until
             .saturating_duration_since(Instant::now())
@@ -567,6 +689,18 @@ impl AgentExecutor {
         job: &JobEnvelopePayload,
         until: Instant,
     ) -> Result<Vec<Content>, ExecutorError> {
+        let name = format!("compute-check-{}-{}", self.config.instance_tag, job.job_id);
+        let verdict = self.run_check(job, until, &name).await;
+        self.close_deps(&name).await;
+        verdict
+    }
+
+    async fn run_check(
+        &self,
+        job: &JobEnvelopePayload,
+        until: Instant,
+        name: &str,
+    ) -> Result<Vec<Content>, ExecutorError> {
         let spec = parse_agent_check(&job.input).map_err(invalid)?;
         let acceptance = &spec.acceptance;
         if !self.config.check_images.contains(&acceptance.image) {
@@ -593,8 +727,13 @@ impl AgentExecutor {
         let budget_end =
             (Instant::now() + Duration::from_secs(u64::from(acceptance.timeout_secs))).min(until);
         let skill = acceptance.skill;
-        let visible: Vec<&str> = acceptance.commands.iter().map(String::as_str).collect();
+        let visible = visible_commands(acceptance);
         let commit = spec.repo.commit();
+        let deps = match acceptance.setup.is_empty() {
+            true => None,
+            false => Some(self.open_deps(name, &tree).await?),
+        };
+        let deps = deps.as_ref();
 
         // Every skill but code.change first runs the suite on the commit as
         // it is: tests that only fail because the suite was already red have
@@ -604,7 +743,7 @@ impl AgentExecutor {
             Vec::new()
         } else {
             let outcomes = self
-                .run_phase(job, 0, acceptance, &tree, &visible, budget_end)
+                .run_phase(job, 0, acceptance, &tree, &visible, deps, budget_end)
                 .await?;
             self.reset(&git_dir, &tree, commit, until).await?;
             outcomes
@@ -654,7 +793,7 @@ impl AgentExecutor {
                     }
                 };
                 let outcomes = self
-                    .run_phase(job, 100, acceptance, &tree, &visible, budget_end)
+                    .run_phase(job, 100, acceptance, &tree, &visible, deps, budget_end)
                     .await?;
                 if outcomes.last().is_none_or(|o| !o.caught()) {
                     return finish(verdict(true, Vec::new(), outcomes, Vec::new()));
@@ -691,7 +830,7 @@ impl AgentExecutor {
         // bug. A reproduction is done there; code.tests then adds the fix.
         let caught = if matches!(skill, AgentSkill::CodeTests | AgentSkill::CodeRepro) {
             let outcomes = self
-                .run_phase(job, 100, acceptance, &tree, &visible, budget_end)
+                .run_phase(job, 100, acceptance, &tree, &visible, deps, budget_end)
                 .await?;
             if outcomes.last().is_none_or(|o| !o.caught()) || skill == AgentSkill::CodeRepro {
                 return finish(verdict(true, Vec::new(), outcomes, Vec::new()));
@@ -710,7 +849,7 @@ impl AgentExecutor {
 
         let commands = check_commands(acceptance, spec.hidden.as_ref());
         let outcomes = self
-            .run_phase(job, 200, acceptance, &tree, &commands, budget_end)
+            .run_phase(job, 200, acceptance, &tree, &commands, deps, budget_end)
             .await?;
         if skill == AgentSkill::CodeChange {
             finish(verdict(true, Vec::new(), outcomes, Vec::new()))
@@ -741,7 +880,10 @@ impl AgentExecutor {
     }
 
     /// Runs `commands` in order, stopping at the first that does not pass.
-    /// `first` numbers the containers so phases never reuse a name.
+    /// They open with the acceptance's setup, which alone reaches the
+    /// package registries. `first` numbers the containers so phases never
+    /// reuse a name.
+    #[allow(clippy::too_many_arguments)]
     async fn run_phase(
         &self,
         job: &JobEnvelopePayload,
@@ -749,12 +891,22 @@ impl AgentExecutor {
         acceptance: &AcceptanceSpec,
         tree: &Path,
         commands: &[&str],
+        deps: Option<&Deps>,
         budget_end: Instant,
     ) -> Result<Vec<CommandOutcome>, ExecutorError> {
         let mut outcomes = Vec::with_capacity(commands.len());
         for (index, command) in commands.iter().enumerate() {
+            let setup = index < acceptance.setup.len();
             let outcome = self
-                .run_check_command(job, first + index, acceptance, tree, command, budget_end)
+                .run_check_command(
+                    job,
+                    first + index,
+                    acceptance,
+                    tree,
+                    command,
+                    (deps, setup),
+                    budget_end,
+                )
                 .await?;
             let passed = outcome.passed();
             outcomes.push(outcome);
@@ -1098,6 +1250,9 @@ impl AgentExecutor {
         parse_agent_run(&stdout)
     }
 
+    /// `deps` is the job's dependency volume, if it has a setup, and whether
+    /// this command is part of that setup.
+    #[allow(clippy::too_many_arguments)]
     async fn run_check_command(
         &self,
         job: &JobEnvelopePayload,
@@ -1105,6 +1260,7 @@ impl AgentExecutor {
         acceptance: &AcceptanceSpec,
         tree: &Path,
         command: &str,
+        (deps, setup): (Option<&Deps>, bool),
         budget_end: Instant,
     ) -> Result<CommandOutcome, ExecutorError> {
         let name = format!(
@@ -1114,8 +1270,12 @@ impl AgentExecutor {
         let owner = std::fs::metadata(tree)
             .map(|m| format!("{}:{}", m.uid(), m.gid()))
             .map_err(|e| ExecutorError::Failed(format!("stat checkout: {e}")))?;
+        let network = match (deps, setup) {
+            (Some(_), true) => DEPS_NETWORK,
+            _ => "none",
+        };
         let mut cmd = Command::new(&self.config.container_runtime);
-        cmd.args(["run", "--rm", "--name", &name, "--network", "none"])
+        cmd.args(["run", "--rm", "--name", &name, "--network", network])
             .args(["--memory", &self.config.check_memory])
             .args(["--cpus", &self.config.check_cpus])
             .args(["--pids-limit", &self.config.check_pids.max(1).to_string()])
@@ -1131,9 +1291,23 @@ impl AgentExecutor {
                 "HOME=/tmp",
                 "-e",
                 "PYTHONDONTWRITEBYTECODE=1",
-            ])
-            .arg(&acceptance.image)
-            .args(["sh", "-c", &format!("exec 2>&1\n{command}")])
+            ]);
+        let mut script = String::from("exec 2>&1\n");
+        if let Some(deps) = deps {
+            cmd.args(["-v", &format!("{}:/deps:rw", deps.volume)]);
+            for var in deps_env(!setup) {
+                cmd.args(["-e", &var]);
+            }
+            if setup {
+                for var in proxy_env(&deps.egress, true) {
+                    cmd.args(["-e", &var]);
+                }
+            }
+            script.push_str(&format!("export PATH=\"{DEPS_PATH}:$PATH\"\n"));
+        }
+        script.push_str(command);
+        cmd.arg(&acceptance.image)
+            .args(["sh", "-c", &script])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -1267,6 +1441,23 @@ fn invalid(e: covenant_compute_protocol::ProtocolError) -> ExecutorError {
     ExecutorError::Failed(format!("job input: {e}"))
 }
 
+/// Keeps what a setup installs in the checkout out of the build's patch,
+/// through the checkout's own exclude file, which is never part of a diff.
+fn exclude_dependencies(git_dir: &Path) -> Result<(), ExecutorError> {
+    use std::io::Write as _;
+    let path = git_dir.join("info").join("exclude");
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| ExecutorError::Failed(format!("exclude dir: {e}")))?;
+    }
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .and_then(|mut file| file.write_all(DEPENDENCY_DIRS.as_bytes()))
+        .map_err(|e| ExecutorError::Failed(format!("exclude dependencies: {e}")))
+}
+
 /// A patch's bytes, once they hash to the digest naming them.
 fn decode_patch(patch: &AgentPatch) -> Result<Vec<u8>, ExecutorError> {
     let bytes = base64::engine::general_purpose::STANDARD
@@ -1346,6 +1537,15 @@ fn task_prompt(
     );
     for command in &acceptance.commands {
         prompt.push_str(&format!("  $ {command}\n"));
+    }
+    if !acceptance.setup.is_empty() {
+        prompt.push_str(
+            "\nThey run after these, which install what the work needs. Run them first; your \
+             network reaches the package registries and nothing else:\n",
+        );
+        for command in &acceptance.setup {
+            prompt.push_str(&format!("  $ {command}\n"));
+        }
     }
     match acceptance.skill {
         AgentSkill::CodeTests => prompt.push_str(
@@ -1630,6 +1830,7 @@ mod tests {
                 timeout_secs: 60,
                 protected_paths: vec!["tests/".into()],
                 hidden_sha256: None,
+                setup: Vec::new(),
             },
             runtime: covenant_compute_protocol::AgentRuntime::ClaudeCode,
             model: None,

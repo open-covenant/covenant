@@ -123,6 +123,11 @@ pub struct AcceptanceSpec {
     #[serde(default, skip_serializing_if = "AgentSkill::is_change")]
     pub skill: AgentSkill,
     pub image: String,
+    /// Commands that install what the work needs, run before the others on
+    /// a network that reaches package registries and nothing else. The
+    /// commands after them run with no network at all.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub setup: Vec<String>,
     pub commands: Vec<String>,
     pub timeout_secs: u32,
     /// Repo-relative paths the work may not touch (`tests/`, `Cargo.lock`).
@@ -235,14 +240,27 @@ impl HiddenChecks {
     }
 }
 
-/// The commands a check runs, in order: the visible ones, then the hidden.
+/// The commands every run of a check starts with: the setup, then the
+/// visible commands.
+pub fn visible_commands(acceptance: &AcceptanceSpec) -> Vec<&str> {
+    acceptance
+        .setup
+        .iter()
+        .chain(&acceptance.commands)
+        .map(String::as_str)
+        .collect()
+}
+
+/// The commands a check runs, in order: the setup, the visible ones, then
+/// the hidden.
 pub fn check_commands<'a>(
     acceptance: &'a AcceptanceSpec,
     hidden: Option<&'a HiddenChecks>,
 ) -> Vec<&'a str> {
     acceptance
-        .commands
+        .setup
         .iter()
+        .chain(&acceptance.commands)
         .chain(hidden.into_iter().flat_map(|h| h.commands.iter()))
         .map(String::as_str)
         .collect()
@@ -259,6 +277,7 @@ impl AcceptanceSpec {
             ));
         }
         validate_commands("acceptance", &self.commands, false)?;
+        validate_commands("setup", &self.setup, true)?;
         if let Some(digest) = &self.hidden_sha256 {
             validate_sha256_hex("hidden_sha256", digest)?;
         }
@@ -1061,6 +1080,7 @@ mod tests {
             timeout_secs: 120,
             protected_paths: vec!["tests/".into()],
             hidden_sha256: None,
+            setup: Vec::new(),
         }
     }
 
@@ -1359,6 +1379,7 @@ mod tests {
             timeout_secs: 60,
             protected_paths: vec![],
             hidden_sha256: None,
+            setup: Vec::new(),
         };
         assert!(acceptance.validate().is_err());
         acceptance.hidden_sha256 = Some("ab".repeat(32));
@@ -1391,13 +1412,19 @@ mod tests {
 
         let mut change = task();
         change.reproduction = fix.reproduction.clone();
-        assert!(change.validate().is_err(), "a change built on a reproduction");
+        assert!(
+            change.validate().is_err(),
+            "a change built on a reproduction"
+        );
 
         let mut repro = task();
         repro.acceptance.skill = AgentSkill::CodeRepro;
         assert!(repro.validate().is_ok());
         repro.acceptance.hidden_sha256 = Some(SHA.into());
-        assert!(repro.validate().is_err(), "hidden checks with no fix to run them on");
+        assert!(
+            repro.validate().is_err(),
+            "hidden checks with no fix to run them on"
+        );
     }
 
     #[test]
@@ -1422,7 +1449,9 @@ mod tests {
         let reproduced = verdict(AgentSkill::CodeRepro, Vec::new());
         assert!(reproduced.passed && reproduced.validate().is_ok());
         assert!(
-            verdict(AgentSkill::CodeRepro, vec![ok.clone()]).validate().is_err(),
+            verdict(AgentSkill::CodeRepro, vec![ok.clone()])
+                .validate()
+                .is_err(),
             "a reproduction never runs with a fix"
         );
         assert!(verdict(AgentSkill::CodeFix, vec![ok.clone()]).passed);

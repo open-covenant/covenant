@@ -4,10 +4,12 @@
 //!
 //! covguard still starts the proxy and supervises the run, but the "agent" it
 //! launches is this node binary's hidden `__build-container` subcommand. That
-//! wrapper reads the proxy's port from `ANTHROPIC_BASE_URL`, starts a small
-//! forwarder container that can reach the proxy, attaches it to an internal
-//! network with no other way out, and runs the agent in the builder image on
-//! that network. A builder image is the task's check image with Claude Code
+//! wrapper starts a small forwarder container that can reach the proxy,
+//! attaches it to an internal network with no other way out, and runs the
+//! agent in the builder image on that network. On Linux the forwarder mounts
+//! the unix socket covguard's sandbox bridges to the proxy through
+//! (`COVGUARD_BRIDGE_SOCKET`); on macOS the container VM reaches the proxy's
+//! loopback port, read from `ANTHROPIC_BASE_URL`. A builder image is the task's check image with Claude Code
 //! added, so the agent runs its tests where the checker will.
 
 use std::path::{Path, PathBuf};
@@ -478,26 +480,55 @@ pub async fn run(args: &[String]) -> i32 {
     };
 
     let forwarder = forwarder_name(&wrapper.name);
-    let upstream = format!("TCP:{}:{port}", wrapper.builds.proxy_host);
     let listen = format!("TCP-LISTEN:{FORWARDER_PORT},fork,reuseaddr");
-    let started = docker(&[
-        "run",
-        "-d",
-        "--rm",
-        "--name",
-        &forwarder,
-        &wrapper.builds.forwarder,
-        &listen,
-        &upstream,
-    ])
-    .stdout(Stdio::null())
-    .status()
-    .await
-    .is_ok_and(|s| s.success())
-        && docker(&["network", "connect", &wrapper.builds.network, &forwarder])
+    let bridge = std::env::var("COVGUARD_BRIDGE_SOCKET")
+        .ok()
+        .filter(|sock| !sock.is_empty());
+    let started = match &bridge {
+        // Only the internal network: the socket is the forwarder's one exit.
+        Some(sock) => {
+            let mount = format!("{sock}:/covguard.sock");
+            docker(&[
+                "run",
+                "-d",
+                "--rm",
+                "--name",
+                &forwarder,
+                "--network",
+                &wrapper.builds.network,
+                "-v",
+                &mount,
+                &wrapper.builds.forwarder,
+                &listen,
+                "UNIX-CONNECT:/covguard.sock",
+            ])
+            .stdout(Stdio::null())
             .status()
             .await
-            .is_ok_and(|s| s.success());
+            .is_ok_and(|s| s.success())
+        }
+        None => {
+            let upstream = format!("TCP:{}:{port}", wrapper.builds.proxy_host);
+            docker(&[
+                "run",
+                "-d",
+                "--rm",
+                "--name",
+                &forwarder,
+                &wrapper.builds.forwarder,
+                &listen,
+                &upstream,
+            ])
+            .stdout(Stdio::null())
+            .status()
+            .await
+            .is_ok_and(|s| s.success())
+                && docker(&["network", "connect", &wrapper.builds.network, &forwarder])
+                    .status()
+                    .await
+                    .is_ok_and(|s| s.success())
+        }
+    };
     if !started {
         eprintln!("{BUILD_CONTAINER}: the proxy forwarder did not start");
         let _ = docker(&["rm", "-f", &forwarder]).status().await;

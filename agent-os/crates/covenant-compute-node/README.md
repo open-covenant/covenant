@@ -126,8 +126,12 @@ OpenAI-compatible backend as `image_url` content parts.
   `node:22`, `golang:1.23` and `covenant-compute-check:rust`, which is
   `rust:1` with the stable toolchain, rustfmt and clippy, built locally.
   `COVENANT_COMPUTE_AGENT_MODEL` sets the model a task gets when it names
-  none. The node needs docker, git, Claude Code and covguard; container
-  builds run on macOS with Colima. A seat is paid its build's metered
+  none. The node needs docker, git and covguard, and Claude Code for builds
+  on the host. Container builds run on macOS with Colima and on Linux with
+  Docker, where covguard's sandbox needs bubblewrap: on Ubuntu 24.04 and
+  later, allow it user namespaces with an AppArmor profile
+  (`profile bwrap /usr/bin/bwrap flags=(unconfined) { userns, }` in
+  `/etc/apparmor.d/bwrap`), and put the node's user in the `docker` group. A seat is paid its build's metered
   spend plus the coordinator's markup when the work passes, and the check
   price for every check it completes. Seats on one task never share a
   stake owner.

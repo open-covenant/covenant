@@ -23,6 +23,10 @@ export default function sitemap(): MetadataRoute.Sitemap {
     { url: `${SITE}/treasury`, lastModified, changeFrequency: "daily", priority: 0.7 },
     { url: `${SITE}/roadmap`, lastModified, changeFrequency: "weekly", priority: 0.8 },
     { url: `${SITE}/contact`, lastModified, changeFrequency: "monthly", priority: 0.5 },
+    { url: `${SITE}/brand`, lastModified, changeFrequency: "monthly", priority: 0.5 },
+    ...["messaging", "logo", "color", "typography", "imagery", "sub-brands", "motion", "partnerships", "in-use"].map(
+      (slug) => ({ url: `${SITE}/brand/${slug}`, lastModified, changeFrequency: "monthly" as const, priority: 0.4 }),
+    ),
     { url: `${SITE}/privacy`, lastModified, changeFrequency: "monthly", priority: 0.3 },
     { url: `${SITE}/terms`, lastModified, changeFrequency: "monthly", priority: 0.3 },
   ];

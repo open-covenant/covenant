@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="./assets/brand/covenant-banner.png" alt="Covenant: an operating system that builds itself" width="100%" />
+</p>
+
 # Covenant
 
 [![CI](https://github.com/open-covenant/covenant/actions/workflows/ci.yml/badge.svg)](https://github.com/open-covenant/covenant/actions/workflows/ci.yml)

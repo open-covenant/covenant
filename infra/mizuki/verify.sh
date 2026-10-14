@@ -673,6 +673,7 @@ prefixes = %w[
 # again, which is what forces the bump rather than letting the exception rot.
 unfixed_allowed = {
   'bigint-buffer' => 'native fast path under @solana/spl-token; the pure-JS fallback is what runs, and no patched release exists',
+  'braces' => 'react-native CLI tooling (metro) reached through @walletconnect/keyvaluestorage; never loaded by the web bundle, and no patched release exists',
   'image-size' => 'react-native CLI tooling reached through @walletconnect/keyvaluestorage; never loaded by the web bundle, and no patched release exists'
 }
 

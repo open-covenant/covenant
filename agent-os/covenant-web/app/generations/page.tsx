@@ -28,7 +28,9 @@ type Generation = {
   kind: AceDataGenerationKind;
 };
 
-function isGeneration(event: AuditEvent): event is Generation {
+// Generation's kind sits outside the AuditKind union, so it cannot be a type
+// predicate over AuditEvent; the filter below narrows through unknown instead.
+function isGeneration(event: AuditEvent): boolean {
   return (event.kind as { type: string }).type === "ace_data_generation";
 }
 
@@ -51,7 +53,7 @@ export default function GenerationsPage() {
   const [selected, setSelected] = useState<string | null>(null);
 
   const events = data?.events ?? [];
-  const generations = events.filter(isGeneration).reverse();
+  const generations = (events.filter(isGeneration) as unknown as Generation[]).reverse();
   const selectedGen = selected
     ? generations.find((g) => g.id === selected) ?? null
     : null;

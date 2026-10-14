@@ -266,11 +266,11 @@ export default function PermissionsPage() {
         }
 
         .risk-med {
-          color: #d4d4d4;
+          color: var(--fg-soft);
         }
 
         .risk-high {
-          color: #fafafa;
+          color: var(--fg);
           border-color: var(--faint);
         }
 

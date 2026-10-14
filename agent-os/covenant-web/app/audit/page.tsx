@@ -224,14 +224,14 @@ export default function ActivityLogPage() {
           padding: 4px 12px;
           border: 1px solid var(--border);
           border-radius: 999px;
-          color: #fafafa;
+          color: var(--fg);
           font-family: var(--font-mono);
           font-size: 10px;
           letter-spacing: 0.32em;
         }
 
         .verify-card.ok .badge {
-          background: rgba(255, 255, 255, 0.04);
+          background: rgba(243, 241, 250, 0.04);
         }
 
         .verify-card p {

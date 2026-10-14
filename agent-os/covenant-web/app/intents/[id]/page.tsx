@@ -382,7 +382,7 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
 
         .meta-cell strong {
           display: block;
-          color: #fafafa;
+          color: var(--fg);
           font-family: var(--font-mono);
           font-size: 22px;
           font-weight: 400;
@@ -410,7 +410,7 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
           gap: 12px;
           padding: 10px 16px;
           border-bottom: 1px solid var(--border);
-          background: #0a0a0a;
+          background: var(--sunken);
         }
 
         .reply-panel .reply-head .eyebrow {
@@ -485,15 +485,15 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
         }
 
         .tone-ok .rail .dot {
-          background: #d4d4d4;
+          background: var(--tone-ok);
         }
 
         .tone-warn .rail .dot {
-          background: #737373;
+          background: var(--tone-warn);
         }
 
         .tone-danger .rail .dot {
-          background: #fafafa;
+          background: var(--tone-danger);
         }
 
         .rail .line {
@@ -525,7 +525,7 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
           padding: 10px 14px;
           border: 1px dashed var(--border);
           border-radius: 6px;
-          background: #0a0a0a;
+          background: var(--sunken);
         }
 
         .trace-overflow p {
@@ -555,12 +555,12 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
         }
 
         .step-head .live {
-          color: #fafafa;
+          color: var(--mint);
           font-family: var(--font-mono);
           font-size: 10px;
           letter-spacing: 0.1em;
           text-transform: uppercase;
-          border: 1px solid #fafafa;
+          border: 1px solid rgb(29 227 174 / 0.5);
           border-radius: 3px;
           padding: 1px 6px;
           display: inline-flex;
@@ -573,7 +573,7 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
           width: 5px;
           height: 5px;
           border-radius: 999px;
-          background: #fafafa;
+          background: var(--mint);
           animation: cov-live-pulse 1.4s ease-in-out infinite;
         }
 
@@ -595,7 +595,7 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
           padding: 8px 12px;
           border: 1px solid var(--border-soft);
           border-radius: 6px;
-          background: #0a0a0a;
+          background: var(--sunken);
           color: var(--fg);
           font-family: var(--font-mono);
           font-size: 11px;
@@ -608,28 +608,28 @@ export default function TaskTracePage(props: { params: Promise<{ id: string }> }
           width: 8px;
           height: 8px;
           border-radius: 999px;
-          background: #fafafa;
-          box-shadow: 0 0 0 0 rgba(250, 250, 250, 0.55);
+          background: var(--mint);
+          box-shadow: 0 0 0 0 rgba(29, 227, 174, 0.55);
           animation: cov-live-pulse 1.6s ease-in-out infinite;
         }
 
         .trace-live .trace-step:last-child .rail .dot {
-          background: #fafafa;
-          box-shadow: 0 0 0 0 rgba(250, 250, 250, 0.5);
+          background: var(--mint);
+          box-shadow: 0 0 0 0 rgba(29, 227, 174, 0.5);
           animation: cov-live-pulse 1.6s ease-in-out infinite;
         }
 
         @keyframes cov-live-pulse {
           0% {
-            box-shadow: 0 0 0 0 rgba(250, 250, 250, 0.55);
+            box-shadow: 0 0 0 0 rgba(29, 227, 174, 0.55);
             opacity: 1;
           }
           70% {
-            box-shadow: 0 0 0 9px rgba(250, 250, 250, 0);
+            box-shadow: 0 0 0 9px rgba(29, 227, 174, 0);
             opacity: 0.55;
           }
           100% {
-            box-shadow: 0 0 0 0 rgba(250, 250, 250, 0);
+            box-shadow: 0 0 0 0 rgba(29, 227, 174, 0);
             opacity: 1;
           }
         }

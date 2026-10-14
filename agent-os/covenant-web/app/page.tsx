@@ -25,25 +25,26 @@ const DEMO_SAMPLES: { label: string; intent: string }[] = [
     intent:
       process.env.NEXT_PUBLIC_DEMO_SAMPLE_INTENT?.trim() ||
       // Brand-matched Snake. The visual spec mirrors opencovenant.org --
-      // near-black canvas, off-white grid + snake, thin monochrome
-      // chrome, monospace HUD, no chromatic accents. The agent gets a
-      // concrete recipe so visitors see a consistent look across runs.
+      // dark canvas, a snake of rounded squares in the brand gradient, mint
+      // food, monospace HUD. The agent gets a concrete recipe so visitors see a
+      // consistent look across runs.
       [
         "Build a classic Snake game as a single self-contained index.html that visually matches the Covenant brand (opencovenant.org).",
         "",
         "Visual spec (match exactly):",
-        "- Background: #030303 (near black) across the whole page.",
-        "- Foreground, snake, and score: #f5f5f5.",
-        "- Subdued text and grid lines: #262626 to #525252 (no other hues).",
-        "- Strictly monochrome. No green, red, or other accent colors -- even for the food, use #f5f5f5 with a thin border.",
-        "- Fonts: ui-sans-serif system stack for labels; ui-monospace for the score and HUD, uppercase, letter-spacing about 0.2em.",
-        "- Tone: minimal, technical, agent-native. Borders are 1px solid #262626. No shadows, no gradients, no rounded corners over 4px.",
-        "- Header strip above the canvas: a small wordmark COVENANT in mono uppercase at 11px, letter-spacing 0.32em, color #8a8a8a.",
+        "- Background: #0D0B16 across the whole page. Never white or light.",
+        "- Grid lines and borders: #2A2640, 1px.",
+        "- Snake: rounded squares (corner radius about 20% of a cell), colored along a gradient from #A03BF0 at the head through #4C7FDE to #1DE3AE at the tail.",
+        "- Food: one rounded square in #1DE3AE.",
+        "- Text: #F3F1FA for the score and headings, #8079A0 for labels.",
+        "- Fonts: a ui-monospace system stack for everything; labels uppercase with letter-spacing about 0.2em.",
+        "- Tone: minimal, technical, agent-native. No shadows, no glows.",
+        "- Header strip above the canvas: the wordmark COVENANT in monospace uppercase at 11px, letter-spacing 0.24em, color #F3F1FA.",
         "",
         "Gameplay:",
         "- HTML canvas, arrow-key controls (and WASD), grid-based movement, growing snake.",
         "- Visible score in the top-right of the header strip.",
-        "- Game-over overlay centered on the canvas with two lines: a thin GAME OVER eyebrow in mono uppercase, then press space to restart beneath it, both #f5f5f5 on an 80% opaque #030303 backdrop.",
+        "- Game-over overlay centered on the canvas with two lines: a thin GAME OVER eyebrow in mono uppercase, then press space to restart beneath it, both #F3F1FA on an 80% opaque #0D0B16 backdrop.",
         "- The canvas auto-focuses on load so arrow keys work immediately.",
         "",
         "Deliver a single index.html with inline style and script tags; no external assets, no emoji, no icons.",
@@ -577,12 +578,12 @@ export default function OverviewPage() {
           margin-top: 16px;
           border: 1px solid var(--border);
           border-radius: 6px;
-          background: #060606;
+          background: var(--sunken);
           overflow: hidden;
         }
 
         .reply.error {
-          border-color: #5a1f1f;
+          border-color: rgb(225 131 131 / 0.4);
         }
 
         .reply-head {
@@ -592,7 +593,7 @@ export default function OverviewPage() {
           gap: 12px;
           padding: 10px 14px;
           border-bottom: 1px solid var(--border);
-          background: #0a0a0a;
+          background: var(--panel);
         }
 
         .reply-head-actions {
@@ -631,7 +632,7 @@ export default function OverviewPage() {
         }
 
         .reply.error .reply-body pre {
-          color: #f6c2c2;
+          color: var(--tone-danger);
           font-family: var(--font-mono);
           font-size: 12.5px;
         }

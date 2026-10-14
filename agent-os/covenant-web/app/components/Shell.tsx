@@ -1,12 +1,12 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, type ReactNode } from "react";
 import { useDeveloperMode } from "@/lib/developerMode";
 import { useRightRailContent } from "@/lib/rightRail";
 import { CommandPalette } from "./CommandPalette";
+import { CovenantMark } from "./Mark";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "1";
 
@@ -96,7 +96,7 @@ export function Shell({ children }: { children: ReactNode }) {
       <aside className="sidebar" aria-label="navigation">
         <Link href="/" className="brand">
           <span className="mark" aria-hidden>
-            <Image src="/logo.png" alt="" width={32} height={32} priority />
+            <CovenantMark height={30} />
           </span>
           <span>
             <strong>COVENANT</strong>
@@ -218,27 +218,17 @@ export function Shell({ children }: { children: ReactNode }) {
         }
 
         .brand .mark {
-          display: grid;
-          place-items: center;
-          width: 32px;
-          height: 32px;
-          border-radius: 6px;
-          overflow: hidden;
-          background: #000;
-        }
-
-        .brand .mark :global(img) {
-          display: block;
-          width: 32px;
-          height: 32px;
+          display: flex;
+          flex: 0 0 auto;
         }
 
         .brand strong {
           display: block;
           color: var(--fg);
+          font-family: var(--font-mono);
           font-size: 11px;
           font-weight: 500;
-          letter-spacing: 0.32em;
+          letter-spacing: 0.24em;
           line-height: 1.1;
         }
 
@@ -259,23 +249,40 @@ export function Shell({ children }: { children: ReactNode }) {
         .nav-link {
           position: relative;
           display: block;
-          padding: 6px 0 6px 12px;
+          padding: 6px 0 6px 14px;
           color: var(--dim);
-          font-size: 13px;
-          letter-spacing: 0.02em;
-          border-left: 2px solid transparent;
+          font-size: 12px;
+          letter-spacing: 0.04em;
           text-decoration: none;
-          transition: color 120ms ease, border-color 120ms ease;
+          transition: color 120ms ease;
+        }
+
+        .nav-link::before {
+          content: "";
+          position: absolute;
+          left: 0;
+          top: 7px;
+          bottom: 7px;
+          width: 2px;
+          border-radius: 2px;
+          background: transparent;
+          transition: background 120ms ease;
         }
 
         .nav-link:hover {
           color: var(--fg);
-          border-left-color: var(--faint);
+        }
+
+        .nav-link:hover::before {
+          background: var(--border-strong);
         }
 
         .nav-link.active {
           color: var(--fg);
-          border-left-color: var(--fg);
+        }
+
+        .nav-link.active::before {
+          background: var(--ramp);
         }
 
         .sidebar-foot {
@@ -361,8 +368,8 @@ export function Shell({ children }: { children: ReactNode }) {
         }
 
         .dev-toggle.on .dev-dot {
-          background: var(--fg);
-          border-color: var(--fg);
+          background: var(--mint);
+          border-color: var(--mint);
         }
 
         .dev-toggle.on {

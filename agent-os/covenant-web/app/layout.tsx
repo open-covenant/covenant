@@ -1,10 +1,33 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
+import { Archivo, JetBrains_Mono } from "next/font/google";
 import { RightRailProvider } from "@/lib/rightRail";
 import { DemoBanner } from "./components/DemoBanner";
 import { Shell } from "./components/Shell";
 import "./globals.css";
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "1";
+
+// The Covenant faces: Archivo on its width axis for display, JetBrains Mono
+// for everything else.
+const archivo = Archivo({
+  subsets: ["latin"],
+  axes: ["wdth"],
+  weight: "variable",
+  display: "swap",
+  variable: "--font-archivo",
+});
+
+const jetbrains = JetBrains_Mono({
+  subsets: ["latin"],
+  weight: ["300", "400", "500", "600"],
+  display: "swap",
+  variable: "--font-jetbrains",
+});
+
+export const viewport: Viewport = {
+  themeColor: "#0d0b16",
+  colorScheme: "dark",
+};
 
 export const metadata: Metadata = DEMO_MODE
   ? {
@@ -24,7 +47,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
+    <html lang="en" className={`${archivo.variable} ${jetbrains.variable}`}>
       <body>
         <RightRailProvider>
           <DemoBanner />

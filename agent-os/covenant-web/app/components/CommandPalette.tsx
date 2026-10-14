@@ -263,7 +263,7 @@ export function CommandPalette() {
         .palette-scrim {
           position: absolute;
           inset: 0;
-          background: rgba(3, 3, 3, 0.7);
+          background: rgba(8, 7, 14, 0.72);
           backdrop-filter: blur(6px);
           border: 0;
           padding: 0;
@@ -275,7 +275,7 @@ export function CommandPalette() {
           width: min(620px, 100%);
           border: 1px solid var(--border);
           border-radius: 10px;
-          background: #050505;
+          background: var(--panel);
           box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
           overflow: hidden;
         }
@@ -310,7 +310,7 @@ export function CommandPalette() {
           margin: 0;
           padding: 10px 18px;
           border-bottom: 1px solid var(--border);
-          background: #070707;
+          background: var(--sunken);
           color: var(--dim);
           font-family: var(--font-mono);
           font-size: 12px;
@@ -356,7 +356,7 @@ export function CommandPalette() {
 
         .palette-item.active button,
         .palette-item button:hover {
-          background: rgba(245, 245, 245, 0.04);
+          background: rgba(243, 241, 250, 0.05);
         }
 
         .palette-foot {
@@ -364,7 +364,7 @@ export function CommandPalette() {
           gap: 18px;
           padding: 10px 18px;
           border-top: 1px solid var(--border);
-          background: #070707;
+          background: var(--sunken);
           color: var(--muted);
           font-family: var(--font-mono);
           font-size: 10px;

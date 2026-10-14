@@ -199,7 +199,7 @@ export function BuildOutput({ files }: { files: BuildFile[] }) {
           gap: 12px;
           padding: 10px 14px;
           border-bottom: 1px solid var(--border);
-          background: #0a0a0a;
+          background: var(--panel);
         }
         .bo-head .eyebrow {
           margin: 0;
@@ -219,7 +219,8 @@ export function BuildOutput({ files }: { files: BuildFile[] }) {
         }
         .bo-tabs button.on {
           color: var(--fg);
-          border-color: var(--fg);
+          border-color: var(--muted);
+          background: var(--panel-hover);
         }
         .bo-sep {
           align-self: stretch;
@@ -242,7 +243,7 @@ export function BuildOutput({ files }: { files: BuildFile[] }) {
           width: 100%;
           height: 460px;
           border: 0;
-          background: #fff;
+          background: var(--bg);
         }
         /* When the iframe enters browser fullscreen, fill the viewport
            instead of inheriting its 460px panel height. */
@@ -262,7 +263,7 @@ export function BuildOutput({ files }: { files: BuildFile[] }) {
           list-style: none;
           border-right: 1px solid var(--border);
           overflow: auto;
-          background: #070707;
+          background: var(--sunken);
         }
         .bo-tree button {
           display: block;
@@ -304,7 +305,7 @@ export function BuildOutput({ files }: { files: BuildFile[] }) {
           font-size: 11px;
         }
         .bo-file-head .trunc {
-          color: #d4a017;
+          color: var(--tone-warn);
           letter-spacing: 0.04em;
         }
         .bo-file pre {
@@ -330,14 +331,14 @@ export function BuildOutput({ files }: { files: BuildFile[] }) {
       <style jsx global>{`
         .bo-file .hljs-comment,
         .bo-file .hljs-quote {
-          color: #6b6b6b;
+          color: var(--muted);
           font-style: italic;
         }
         .bo-file .hljs-keyword,
         .bo-file .hljs-selector-tag,
         .bo-file .hljs-meta-keyword,
         .bo-file .hljs-doctag {
-          color: #e0e0e0;
+          color: var(--fg-2);
           font-weight: 600;
         }
         .bo-file .hljs-string,
@@ -345,31 +346,31 @@ export function BuildOutput({ files }: { files: BuildFile[] }) {
         .bo-file .hljs-symbol,
         .bo-file .hljs-bullet,
         .bo-file .hljs-addition {
-          color: #c9c9c9;
+          color: var(--fg-soft);
         }
         .bo-file .hljs-number,
         .bo-file .hljs-literal,
         .bo-file .hljs-meta {
-          color: #b8b8b8;
+          color: var(--dim);
         }
         .bo-file .hljs-title,
         .bo-file .hljs-section,
         .bo-file .hljs-name,
         .bo-file .hljs-built_in,
         .bo-file .hljs-class .hljs-title {
-          color: #fafafa;
+          color: var(--fg);
         }
         .bo-file .hljs-variable,
         .bo-file .hljs-template-variable {
-          color: #d4d4d4;
+          color: var(--fg-soft);
         }
         .bo-file .hljs-type,
         .bo-file .hljs-params {
-          color: #d4d4d4;
+          color: var(--fg-soft);
         }
         .bo-file .hljs-tag,
         .bo-file .hljs-deletion {
-          color: #a3a3a3;
+          color: var(--dim);
         }
         .bo-file .hljs-emphasis {
           font-style: italic;

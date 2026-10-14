@@ -103,7 +103,7 @@ export function SiteFooter({ className, style, variant = "full" }: SiteFooterPro
           <CopyAddress address={CVNT_MINT} label="Copy the $CVNT contract address" />
         </div>
 
-        <div className="mt-6 flex flex-wrap justify-between gap-x-6 gap-y-2 border-t border-line py-6 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-2">
+        <div className="mt-6 flex flex-wrap justify-between gap-x-6 gap-y-2 py-6 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-2">
           <span>© 2026 Covenant</span>
           <a
             href="https://github.com/open-covenant/covenant/blob/main/LICENSE"

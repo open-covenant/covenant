@@ -1,11 +1,12 @@
 import type { Metadata } from "next";
+import { CovenantMark } from "../_brand";
 
 const DESCRIPTION =
   "Covenant: verifiable trust and safe execution for AI agents on Solana. One-pager.";
 
 // Unlinked by design — not in any nav/footer, and noindex so it is only reached
 // by people given the direct link. Also the print/PDF source: the @media print
-// block renders a full-bleed A4 page.
+// block renders a full-bleed A4 page, on night like the site.
 export const metadata: Metadata = {
   title: "Covenant — one pager",
   description: DESCRIPTION,
@@ -26,43 +27,46 @@ const CSS = `
    11px tracked labels, 15px lede). The @media print block at the bottom compacts
    everything back down so the PDF still fits one A4 page. */
 #op {
-  --fg: #ededed; --muted: #9a9a9a; --faint: #6f6f6f; --line: #262626; --accent: #3a3a3a;
-  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  background: #030303; color: var(--fg); min-height: 100dvh;
+  --fg: #f3f1fa; --body: #c4bfd8; --muted: #a49ec0; --faint: #8079a0; --line: #2a2640;
+  --ramp: linear-gradient(115deg, #a03bf0, #4c7fde, #1de3ae);
+  --mono: var(--font-jetbrains), ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  background: #0d0b16; color: var(--fg); min-height: 100dvh; font-family: var(--mono);
   -webkit-print-color-adjust: exact; print-color-adjust: exact;
 }
-#op .page { max-width: 920px; margin: 0 auto; padding: clamp(32px, 6vw, 72px); background: #030303; }
-#op .mast { text-align: center; padding-bottom: 12px; }
-#op .logo { display: block; width: 360px; max-width: 72%; height: auto; margin: 0 auto; }
+#op .page { max-width: 920px; margin: 0 auto; padding: clamp(32px, 6vw, 72px); background: #0d0b16; }
+#op .mast { display: flex; align-items: center; justify-content: center; gap: 18px; padding-bottom: 12px; }
+#op .mark { display: block; width: auto; height: 54px; }
+#op .wordmark { margin: 0; font-family: var(--mono); font-weight: 500; font-size: 22px; line-height: 1; letter-spacing: 0.32em; text-transform: uppercase; color: var(--fg); }
 #op hr { border: 0; border-top: 1px solid var(--line); margin: 16px 0 20px; }
-#op .deck { text-align: center; font-family: var(--mono); font-size: 12px; letter-spacing: 0.24em; text-indent: 0.24em; color: #d4d4d4; text-transform: uppercase; margin: 0 0 22px; }
-#op .lede { font-size: 15px; line-height: 1.72; color: #d0d0d0; margin: 0 0 30px; }
+#op .deck { text-align: center; font-family: var(--mono); font-size: 12px; letter-spacing: 0.24em; text-indent: 0.24em; color: var(--body); text-transform: uppercase; margin: 0 0 22px; }
+#op .lede { font-size: 15px; line-height: 1.72; color: var(--body); margin: 0 0 30px; }
 #op .lede strong { color: var(--fg); font-weight: 600; }
 #op .cols { display: flex; gap: 44px; }
 #op .col { flex: 1; min-width: 0; }
 #op .seclabel { font-family: var(--mono); font-size: 11px; letter-spacing: 0.32em; text-transform: uppercase; color: var(--muted); margin: 0 0 15px; }
 #op .seclabel .n { color: var(--faint); margin-right: 10px; }
 #op .intro { color: var(--muted); font-size: 14px; line-height: 1.65; margin: 0 0 18px; }
-#op .guarantee { border-left: 1px solid var(--accent); padding: 0 0 0 14px; margin: 0 0 17px; }
+#op .guarantee { border-left: 2px solid transparent; border-image: var(--ramp) 1; padding: 0 0 0 14px; margin: 0 0 17px; }
 #op .guarantee p { margin: 0; font-size: 14px; line-height: 1.6; color: var(--muted); }
 #op .guarantee b { color: var(--fg); font-weight: 600; }
 #op ul.live { list-style: none; margin: 0; padding: 0; }
 #op ul.live li { position: relative; padding-left: 18px; margin: 0 0 17px; font-size: 14px; line-height: 1.6; color: var(--muted); }
-#op ul.live li::before { content: ""; position: absolute; left: 0; top: 8px; width: 6px; height: 6px; background: #cfcfcf; }
+#op ul.live li::before { content: ""; position: absolute; left: 0; top: 8px; width: 6px; height: 6px; border-radius: 1.5px; background: var(--ramp); }
 #op ul.live b { color: var(--fg); font-weight: 600; }
 #op .block { margin-top: 30px; }
 #op .block p { font-size: 14px; line-height: 1.7; color: var(--muted); margin: 0; }
 #op .block p b { color: var(--fg); font-weight: 600; }
-#op .block p .lit { color: #d0d0d0; }
+#op .block p .lit { color: var(--body); }
 #op .foot { display: flex; justify-content: space-between; align-items: center; margin-top: 36px; padding-top: 16px; border-top: 1px solid var(--line); font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em; color: var(--faint); text-transform: uppercase; }
 #op .foot .site { color: var(--muted); }
-#op .foot .tag { font-family: var(--mono); color: #bdbdbd; margin-right: 6px; }
+#op .foot .tag { font-family: var(--mono); color: var(--body); margin-right: 6px; }
 @media (max-width: 640px) { #op .cols { flex-direction: column; gap: 28px; } }
 @media print {
-  #op { min-height: 0; }
-  #op .page { width: 210mm; height: 297mm; max-width: none; overflow: hidden; padding: 15mm 16mm 12mm; }
-  #op .mast { padding-bottom: 9px; }
-  #op .logo { width: 232px; }
+  #op { min-height: 0; background: #0d0b16; }
+  #op .page { width: 210mm; height: 297mm; max-width: none; overflow: hidden; padding: 15mm 16mm 12mm; background: #0d0b16; }
+  #op .mast { gap: 12px; padding-bottom: 9px; }
+  #op .mark { height: 34px; }
+  #op .wordmark { font-size: 15px; }
   #op hr { margin: 13px 0 16px; }
   #op .deck { font-size: 9.5px; letter-spacing: 0.26em; text-indent: 0.26em; margin-bottom: 16px; }
   #op .lede { font-size: 12px; line-height: 1.62; margin-bottom: 22px; }
@@ -85,8 +89,8 @@ export default function OnePagerPage() {
       <style dangerouslySetInnerHTML={{ __html: CSS }} />
       <div className="page" id="main-content">
         <div className="mast">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/logo.svg" alt="Covenant — human intent / agent protocol" className="logo" />
+          <CovenantMark className="mark" />
+          <p className="wordmark">Covenant</p>
         </div>
         <hr />
         <p className="deck">Verifiable trust &amp; safe execution for AI agents on Solana</p>

@@ -5,12 +5,12 @@ export default function manifest(): MetadataRoute.Manifest {
     name: "Covenant: open agent-native operating layer",
     short_name: "Covenant",
     description:
-      "Covenant is the coordination layer for agentic software. Host-level primitives for humans and agents.",
+      "Covenant is the open operating layer for people and AI agents, with runtime, memory, identity, permissions, intent, communication and settlement built in.",
     start_url: "/",
     scope: "/",
     display: "standalone",
-    background_color: "#030303",
-    theme_color: "#030303",
+    background_color: "#0d0b16",
+    theme_color: "#0d0b16",
     icons: [
       { src: "/icon.png", sizes: "512x512", type: "image/png", purpose: "any" },
       { src: "/icon-maskable.png", sizes: "512x512", type: "image/png", purpose: "maskable" },

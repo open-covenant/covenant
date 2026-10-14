@@ -151,7 +151,7 @@ export function PositionsClient() {
             {!publicKey ? (
               <div className="mt-8 text-center">
                 <ConnectButton />
-                <p className="mt-4 text-[11px] text-neutral-400">Connect to view your positions.</p>
+                <p className="mt-4 text-[11px] text-muted">Connect to view your positions.</p>
               </div>
             ) : (
               <div className="mt-6 grid grid-cols-1 gap-4">
@@ -175,8 +175,8 @@ export function PositionsClient() {
             )}
 
             {publicKey && (
-              <div className="mt-6 border-t border-neutral-900 pt-4 text-[10px] uppercase tracking-[0.22em] text-neutral-400">
-                <Link href="/stake" className="transition-colors hover:text-neutral-300">
+              <div className="mt-6 border-t border-line-soft pt-4 text-[10px] uppercase tracking-[0.22em] text-muted">
+                <Link href="/stake" className="transition-colors hover:text-fg-soft">
                   Open another position →
                 </Link>
               </div>
@@ -185,7 +185,7 @@ export function PositionsClient() {
 
           <Panel>
             <PanelEyebrow>Position lifecycle</PanelEyebrow>
-            <ol className="mt-6 space-y-5 text-[13px] leading-relaxed text-neutral-400">
+            <ol className="mt-6 space-y-5 text-[13px] leading-relaxed text-muted">
               <Step
                 index="01"
                 title="Claim accrued rewards"
@@ -209,7 +209,7 @@ export function PositionsClient() {
           <PanelEyebrow>Open positions</PanelEyebrow>
 
           {!publicKey && (
-            <p className="mt-10 text-center text-[12px] text-neutral-400">
+            <p className="mt-10 text-center text-[12px] text-muted">
               Connect a wallet to view your positions.
             </p>
           )}
@@ -220,10 +220,10 @@ export function PositionsClient() {
 
           {publicKey && positions !== null && positions.length === 0 && !loading && (
             <div className="mt-12 text-center">
-              <p className="text-[12px] text-neutral-400">No open positions in this wallet.</p>
+              <p className="text-[12px] text-muted">No open positions in this wallet.</p>
               <Link
                 href="/stake"
-                className="mt-6 inline-block rounded-sm bg-neutral-50 px-6 py-2.5 text-[11px] uppercase tracking-[0.28em] text-neutral-950 transition-colors hover:bg-white"
+                className="btn btn-primary mt-6"
               >
                 Open position
               </Link>
@@ -258,7 +258,7 @@ export function PositionsClient() {
 
           <div className="mt-6 min-h-[1.25rem] text-center text-[11px]">
             {tx.kind === "ok" && (
-              <span className="text-emerald-300">
+              <span className="text-ok">
                 Done.{" "}
                 <a href={explorerTxUrl(tx.sig)} target="_blank" rel="noopener noreferrer" className="underline">
                   View transaction
@@ -266,7 +266,7 @@ export function PositionsClient() {
               </span>
             )}
             {tx.kind === "error" && (
-              <span className="break-all text-rose-300">{tx.message}</span>
+              <span className="break-all text-bad">{tx.message}</span>
             )}
           </div>
         </Panel>
@@ -277,13 +277,13 @@ export function PositionsClient() {
 
 function PageHeader({ title, subtitle }: { title: string; subtitle: string }) {
   return (
-    <div className="mb-10 flex flex-col items-start gap-4 border-b border-neutral-900 pb-6 sm:flex-row sm:items-end sm:justify-between sm:gap-6">
+    <div className="mb-10 flex flex-col items-start gap-4 border-b border-line-soft pb-6 sm:flex-row sm:items-end sm:justify-between sm:gap-6">
       <div>
-        <div className="text-[10px] uppercase tracking-[0.3em] text-neutral-400">Covenant Stake</div>
-        <h1 className="mt-3 text-3xl font-extralight tracking-tight text-neutral-50 sm:text-4xl">
+        <div className="text-[10px] uppercase tracking-[0.3em] text-muted">Covenant Stake</div>
+        <h1 className="page-title mt-3 text-fg">
           {title}
         </h1>
-        <p className="mt-3 max-w-xl text-sm leading-relaxed text-neutral-400">{subtitle}</p>
+        <p className="mt-3 max-w-xl text-sm leading-relaxed text-muted">{subtitle}</p>
       </div>
       <div className="block">
         <ConnectButton />
@@ -294,7 +294,7 @@ function PageHeader({ title, subtitle }: { title: string; subtitle: string }) {
 
 function Panel({ children }: { children: React.ReactNode }) {
   return (
-    <section className="rounded-md border border-neutral-900 bg-neutral-950/50 p-6 backdrop-blur-sm sm:p-8">
+    <section className="rounded-md border border-line-soft bg-raised/50 p-6 backdrop-blur-sm sm:p-8">
       {children}
     </section>
   );
@@ -302,15 +302,15 @@ function Panel({ children }: { children: React.ReactNode }) {
 
 function PanelEyebrow({ children }: { children: React.ReactNode }) {
   return (
-    <div className="text-[10px] uppercase tracking-[0.28em] text-neutral-400">{children}</div>
+    <div className="text-[10px] uppercase tracking-[0.28em] text-muted">{children}</div>
   );
 }
 
 function StatRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-baseline justify-between border-b border-neutral-900 pb-3 last:border-0 last:pb-0">
-      <div className="text-[11px] uppercase tracking-[0.2em] text-neutral-400">{label}</div>
-      <div className="font-mono text-base text-neutral-100">{value}</div>
+    <div className="flex items-baseline justify-between border-b border-line-soft pb-3 last:border-0 last:pb-0">
+      <div className="text-[11px] uppercase tracking-[0.2em] text-muted">{label}</div>
+      <div className="font-mono text-base text-fg">{value}</div>
     </div>
   );
 }
@@ -318,10 +318,10 @@ function StatRow({ label, value }: { label: string; value: string }) {
 function Step({ index, title, body }: { index: string; title: string; body: string }) {
   return (
     <li className="grid grid-cols-[2rem_1fr] gap-4">
-      <span className="pt-1 font-mono text-[11px] text-neutral-400">{index}</span>
+      <span className="pt-1 font-mono text-[11px] text-muted">{index}</span>
       <div>
-        <div className="text-[13px] font-medium text-neutral-100">{title}</div>
-        <div className="mt-1 text-[12px] leading-relaxed text-neutral-400">{body}</div>
+        <div className="text-[13px] font-medium text-fg">{title}</div>
+        <div className="mt-1 text-[12px] leading-relaxed text-muted">{body}</div>
       </div>
     </li>
   );
@@ -345,28 +345,28 @@ function PositionCard({
   onClose: () => void;
 }) {
   return (
-    <div className="rounded-md border border-neutral-900 bg-neutral-950/60 p-5 transition-colors hover:border-neutral-800 sm:p-6">
+    <div className="rounded-md border border-line-soft bg-raised/60 p-5 transition-colors hover:border-line sm:p-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <div className="font-mono text-2xl font-light tracking-tight text-neutral-50 sm:text-3xl">
+          <div className="type-display font-mono text-2xl text-fg sm:text-3xl">
             {formatCvnt(position.amount, { maxFrac: 2 })}
-            <span className="ml-2 text-[10px] uppercase tracking-[0.22em] text-neutral-400">CVNT</span>
+            <span className="ml-2 text-[10px] uppercase tracking-[0.22em] text-muted">CVNT</span>
           </div>
-          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] uppercase tracking-[0.2em] text-neutral-400">
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] uppercase tracking-[0.2em] text-muted">
             <span>{tierLabel(position.multiplierBps)}</span>
-            <span className="text-neutral-700">·</span>
+            <span className="text-faint">·</span>
             <span>Weight {formatCvnt(position.weight, { maxFrac: 0 })} CVNT-weighted</span>
           </div>
         </div>
         <div className="text-right">
-          <div className="text-[10px] uppercase tracking-[0.22em] text-neutral-400">Claimable</div>
-          <div className="mt-1 font-mono text-base text-emerald-300">
+          <div className="text-[10px] uppercase tracking-[0.22em] text-muted">Claimable</div>
+          <div className="mt-1 font-mono text-base text-ok">
             {formatSol(pending, { maxFrac: 6 })} SOL
           </div>
         </div>
       </div>
 
-      <div className="mt-4 grid grid-cols-2 gap-4 border-t border-neutral-900 pt-4 text-[11px] sm:grid-cols-4">
+      <div className="mt-4 grid grid-cols-2 gap-4 border-t border-line-soft pt-4 text-[11px] sm:grid-cols-4">
         <Metric label="Unlock date" value={lockEndDate(position.lockEnd)} />
         <Metric label="Status" value={expired ? "Unlocked" : "Withdrawable"} highlight="ok" />
         <Metric label="Multiplier" value={tierMultiplier(position.multiplierBps)} />
@@ -382,7 +382,7 @@ function PositionCard({
           type="button"
           onClick={onClaim}
           disabled={busy || pending === 0n}
-          className="flex-1 rounded-sm border border-neutral-700 px-4 py-2.5 text-[11px] uppercase tracking-[0.22em] text-neutral-100 transition-colors hover:border-neutral-300 hover:text-neutral-50 disabled:cursor-not-allowed disabled:border-neutral-900 disabled:text-neutral-700 sm:flex-none sm:px-6"
+          className="btn btn-secondary flex-1 disabled:cursor-not-allowed disabled:border-line-soft disabled:text-faint sm:flex-none sm:px-6"
         >
           {busy && busyAction === "claim" ? "Claiming…" : "Claim rewards"}
         </button>
@@ -391,7 +391,7 @@ function PositionCard({
           onClick={onClose}
           disabled={busy}
           title="Withdraw principal and any pending rewards (lock waived — program sunsetting)"
-          className="flex-1 rounded-sm border border-neutral-700 px-4 py-2.5 text-[11px] uppercase tracking-[0.22em] text-neutral-100 transition-colors hover:border-neutral-300 hover:text-neutral-50 disabled:cursor-not-allowed disabled:border-neutral-900 disabled:text-neutral-700 sm:flex-none sm:px-6"
+          className="btn btn-secondary flex-1 disabled:cursor-not-allowed disabled:border-line-soft disabled:text-faint sm:flex-none sm:px-6"
         >
           {busy && busyAction === "close" ? "Closing…" : "Withdraw principal"}
         </button>
@@ -412,10 +412,10 @@ function Metric({
   highlight?: "ok" | "warn";
 }) {
   const tone =
-    highlight === "ok" ? "text-emerald-300" : highlight === "warn" ? "text-amber-300" : "text-neutral-100";
+    highlight === "ok" ? "text-ok" : highlight === "warn" ? "text-warn" : "text-fg";
   const inner = (
     <>
-      <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-400">{label}</div>
+      <div className="text-[10px] uppercase tracking-[0.2em] text-muted">{label}</div>
       <div className={`mt-1 font-mono text-[12px] ${tone}`}>{value}</div>
     </>
   );
@@ -435,7 +435,7 @@ function PositionSkeleton() {
       {[0, 1].map((i) => (
         <div
           key={i}
-          className="h-32 animate-pulse rounded-md border border-neutral-900 bg-neutral-950/40"
+          className="h-32 animate-pulse rounded-md border border-line-soft bg-raised/40"
         />
       ))}
     </div>

@@ -33,11 +33,11 @@ export const metadata: Metadata = {
 };
 
 const backLink =
-  "font-mono text-[12px] uppercase tracking-[0.2em] text-neutral-400 transition-colors hover:text-neutral-100";
+  "font-mono text-[12px] uppercase tracking-[0.2em] text-muted transition-colors hover:text-fg";
 
 export default function MultichainLaunchPost() {
   return (
-    <main id="main-content" className="relative min-h-screen overflow-x-hidden bg-[#030303]">
+    <main id="main-content" className="relative min-h-screen overflow-x-hidden bg-ground">
       <SiteHeader />
 
       <div className="page-container">
@@ -45,15 +45,15 @@ export default function MultichainLaunchPost() {
           ← Blog
         </a>
 
-        <p className="mt-10 font-mono text-[11px] uppercase tracking-[0.3em] text-neutral-400">
+        <p className="mt-10 font-mono text-[11px] uppercase tracking-[0.3em] text-muted">
           Protocol · 7 July 2026
         </p>
 
-        <h1 className="mt-5 max-w-3xl text-balance text-[2.2rem] font-extralight uppercase leading-[1.1] tracking-[2px] text-white sm:text-[2.6rem]">
+        <h1 className="page-title mt-5 max-w-3xl text-fg">
           Covenant is now multi-chain. The token isn&apos;t.
         </h1>
 
-        <p className="mt-6 max-w-2xl text-pretty text-lg font-light leading-relaxed text-neutral-300 sm:text-xl">
+        <p className="mt-6 max-w-2xl text-pretty text-[15px] leading-[1.7] text-fg-soft sm:text-base">
           Trust crosses to Base. The token stays on Solana.
         </p>
 
@@ -137,10 +137,10 @@ export default function MultichainLaunchPost() {
           </p>
         </article>
 
-        <div className="mt-16 flex flex-wrap gap-x-6 gap-y-3 border-t border-neutral-800/80 pt-8">
+        <div className="mt-16 flex flex-wrap gap-x-6 gap-y-3 border-t border-line/80 pt-8">
           <a
             href="/docs/multichain"
-            className="text-[12px] uppercase tracking-[0.2em] text-neutral-400 transition-colors hover:text-neutral-50"
+            className="text-[12px] uppercase tracking-[0.2em] text-muted transition-colors hover:text-fg"
           >
             Address sheet →
           </a>
@@ -148,7 +148,7 @@ export default function MultichainLaunchPost() {
             href="https://github.com/open-covenant"
             target="_blank"
             rel="noopener noreferrer"
-            className="text-[12px] uppercase tracking-[0.2em] text-neutral-400 transition-colors hover:text-neutral-50"
+            className="text-[12px] uppercase tracking-[0.2em] text-muted transition-colors hover:text-fg"
           >
             Source →
           </a>

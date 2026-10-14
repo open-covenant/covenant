@@ -53,11 +53,10 @@ function ensureAppKit() {
     features: { analytics: true },
     themeMode: "dark",
     themeVariables: {
-      "--w3m-color-mix": "#030303",
+      "--w3m-color-mix": "#0d0b16",
       "--w3m-color-mix-strength": 40,
-      "--w3m-accent": "#f5f5f5",
-      "--w3m-font-family":
-        'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
+      "--w3m-accent": "#a03bf0",
+      "--w3m-font-family": 'var(--font-jetbrains), ui-monospace, "SF Mono", Menlo, monospace',
       "--w3m-border-radius-master": "2px",
     },
   });

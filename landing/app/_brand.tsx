@@ -2,6 +2,69 @@
 // (and any future top-level page) share the same nav, X handle, GitHub
 // repo, release status, and tagline without copy-paste drift.
 
+import { useId } from "react";
+
+// The mark: a C built from the 210-unit module (a top bar, a stem and a bottom
+// bar meeting at filleted corners) around a detached core. 840 × 1050, 4:5.
+export const MARK_PATHS = [
+  "M248 0h554a38 38 0 0 1 38 38v134a38 38 0 0 1-38 38H248a38 38 0 0 0-38 38v554a38 38 0 0 0 38 38h554a38 38 0 0 1 38 38v134a38 38 0 0 1-38 38H248a38 38 0 0 1-38-38V878a38 38 0 0 0-38-38H38a38 38 0 0 1-38-38V248a38 38 0 0 1 38-38h134a38 38 0 0 0 38-38V38a38 38 0 0 1 38-38Z",
+  "M432 385h186a47 47 0 0 1 47 47v186a47 47 0 0 1-47 47H432a47 47 0 0 1-47-47V432a47 47 0 0 1 47-47Z",
+];
+
+// The ramp, violet through blue to mint, in the order the mark carries it.
+export const RAMP = ["#A03BF0", "#4C7FDE", "#1DE3AE"] as const;
+
+/**
+ * The Covenant mark, inline so it can take the ramp or the current text colour.
+ * Size it by height; the width follows the 4:5 viewBox.
+ */
+export function CovenantMark({
+  tone = "ramp",
+  className,
+  title,
+}: {
+  tone?: "ramp" | "mono";
+  className?: string;
+  title?: string;
+}) {
+  const gradientId = `covenant-ramp-${useId().replace(/[^\w-]/g, "")}`;
+  return (
+    <svg
+      viewBox="0 0 840 1050"
+      className={className}
+      role={title ? "img" : undefined}
+      aria-label={title}
+      aria-hidden={title ? undefined : true}
+      focusable="false"
+    >
+      {tone === "ramp" && (
+        <defs>
+          <linearGradient id={gradientId} x1="0" y1="0" x2="840" y2="1050" gradientUnits="userSpaceOnUse">
+            <stop offset="0" stopColor={RAMP[0]} />
+            <stop offset="0.5" stopColor={RAMP[1]} />
+            <stop offset="1" stopColor={RAMP[2]} />
+          </linearGradient>
+        </defs>
+      )}
+      <g fill={tone === "ramp" ? `url(#${gradientId})` : "currentColor"}>
+        {MARK_PATHS.map((d) => (
+          <path key={d} d={d} />
+        ))}
+      </g>
+    </svg>
+  );
+}
+
+/** The lockup: the mark beside the name, set in the mono. */
+export function CovenantLockup({ className, markClassName }: { className?: string; markClassName?: string }) {
+  return (
+    <span className={["inline-flex items-center gap-2.5", className ?? ""].join(" ")}>
+      <CovenantMark className={markClassName ?? "h-6 w-auto"} />
+      <span className="font-mono text-[11px] font-medium uppercase leading-none tracking-[0.24em]">Covenant</span>
+    </span>
+  );
+}
+
 export const X_URL = "https://x.com/OpenCovenant";
 export const GITHUB_URL = "https://github.com/open-covenant";
 // Deep links (files, commits, releases) resolve against the repo, not the org.
@@ -18,9 +81,9 @@ export const SITE_BUILD_DATE = "2026-05-31";
 // dateModified tracks SITE_BUILD_DATE — only bump that on real content change.
 export const DOCS_PUBLISHED_DATE = "2026-05-13";
 
-// Header nav: the most relevant surfaces only (products, try, learn, buy).
-// Everything else (about, blog, roadmap, partners, stake, ...) lives in the
-// footer so the header stays focused.
+// The side menu's primary nav: the most relevant surfaces only (products,
+// learn, buy), set large. The rest of the site follows as MENU_LINKS, and
+// everything is also in the footer.
 export const NAV_LINKS = [
   { label: "compute", href: "/compute", external: false as const },
   { label: "guard", href: "/guard", external: false as const },
@@ -107,9 +170,19 @@ export const FOOTER_COLUMNS: { title: string; links: FooterColumnLink[] }[] = [
   },
 ];
 
-// Socials live in the right side of the header on sm+ and fold into the
-// mobile menu drawer (alongside nav links) on small viewports so the
-// header doesn't collide with the centered logo.
+// The side menu's second tier: the rest of the site, beneath the primary nav.
+export const MENU_LINKS = [
+  { label: "About", href: "/about", external: false as const },
+  { label: "Blog", href: "/blog", external: false as const },
+  { label: "Roadmap", href: "/roadmap", external: false as const },
+  { label: "Partners", href: "/partners", external: false as const },
+  { label: "Agents", href: "/agents", external: false as const },
+  { label: "Arena", href: "/arena", external: false as const },
+  { label: "Brand", href: "/brand", external: false as const },
+  { label: "Contact", href: "/contact", external: false as const },
+];
+
+// Socials sit at the foot of the side menu.
 export const SOCIAL_LINKS = [
   { label: "X", href: "https://x.com/OpenCovenant", external: true as const },
   { label: "Telegram", href: TELEGRAM_URL, external: true as const },

@@ -57,10 +57,6 @@ const config: NextConfig = {
   async headers() {
     return [
       {
-        source: "/hero-bg.(jpg|webp|avif)",
-        headers: [{ key: "Cache-Control", value: "public, max-age=31536000, immutable" }],
-      },
-      {
         source: "/(logo|logomark).svg",
         headers: [{ key: "Cache-Control", value: "public, max-age=31536000, immutable" }],
       },

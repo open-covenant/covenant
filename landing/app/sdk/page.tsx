@@ -15,12 +15,12 @@ export const metadata: Metadata = {
   twitter: { card: "summary_large_image", site: "@OpenCovenant", creator: "@OpenCovenant", title: TITLE, description: DESCRIPTION },
 };
 
-const eyebrow = "font-mono text-[11px] uppercase tracking-[0.3em] text-neutral-400";
-const paragraph = "text-[13px] leading-relaxed text-neutral-300 sm:text-[14px]";
+const eyebrow = "font-mono text-[11px] uppercase tracking-[0.3em] text-muted";
+const paragraph = "text-[13px] leading-relaxed text-fg-soft sm:text-[14px]";
 const cmdBlock =
-  "block overflow-x-auto whitespace-pre rounded border border-neutral-800 bg-neutral-950 px-4 py-3 font-mono text-[12.5px] leading-relaxed text-neutral-100 sm:text-[13px]";
+  "block overflow-x-auto whitespace-pre rounded border border-line bg-raised px-4 py-3 font-mono text-[12.5px] leading-relaxed text-fg sm:text-[13px]";
 const link =
-  "underline decoration-neutral-700 underline-offset-4 transition-colors hover:text-neutral-50 hover:decoration-neutral-300";
+  "underline decoration-line-strong underline-offset-4 transition-colors hover:text-fg hover:decoration-fg-soft";
 
 const DOES: { title: string; body: string }[] = [
   {
@@ -43,9 +43,9 @@ export default function SdkPage() {
       <SiteHeader />
       <main className="mx-auto w-full max-w-7xl px-5 pb-24 pt-[88px] sm:px-8 sm:pt-[120px]">
         <p className={eyebrow}>typescript &middot; solana &middot; x402</p>
-        <h1 className="mt-4 text-2xl font-extralight tracking-[0.18em] text-neutral-50 sm:text-3xl">SDK</h1>
+        <h1 className="page-title mt-4 text-fg">SDK</h1>
         <p className={`${paragraph} mt-5 max-w-2xl`}>
-          <span className="font-mono text-[12.5px] text-neutral-200">@covenant-org/sdk</span> is the TypeScript
+          <span className="font-mono text-[12.5px] text-fg-2">@covenant-org/sdk</span> is the TypeScript
           SDK for Covenant&apos;s Solana-native protocol surface. It prepares the on-chain instructions,
           exposes them as agent tools, and settles over x402, so you build on the protocol without wiring
           the low-level calls by hand.
@@ -58,9 +58,9 @@ export default function SdkPage() {
 
         <section className="mt-12 grid gap-4 sm:grid-cols-3">
           {DOES.map((d) => (
-            <div key={d.title} className="rounded border border-neutral-800 bg-neutral-950/60 p-5">
-              <h2 className="text-[13px] uppercase tracking-[0.22em] text-neutral-100">{d.title}</h2>
-              <p className={`${paragraph} mt-3 text-neutral-400`}>{d.body}</p>
+            <div key={d.title} className="rounded border border-line bg-raised/60 p-5">
+              <h2 className="text-[13px] uppercase tracking-[0.22em] text-fg">{d.title}</h2>
+              <p className={`${paragraph} mt-3 text-muted`}>{d.body}</p>
             </div>
           ))}
         </section>

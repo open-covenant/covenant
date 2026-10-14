@@ -119,12 +119,12 @@ export default function DocsIndexPage() {
           <Link
             key={t.href}
             href={t.href}
-            className="group block rounded-md border border-neutral-800/80 bg-[#0a0a0a] p-5 transition-colors hover:border-neutral-700 hover:bg-[#0f0f0f]"
+            className="group block rounded-md border border-line/80 bg-raised p-5 transition-colors hover:border-line-strong hover:bg-raised"
           >
-            <div className="text-[15px] font-medium text-neutral-50 group-hover:text-white">
+            <div className="text-[15px] font-medium text-fg group-hover:text-fg">
               {t.title}
             </div>
-            <div className="mt-2 text-[13px] leading-relaxed text-neutral-400">
+            <div className="mt-2 text-[13px] leading-relaxed text-muted">
               {t.body}
             </div>
           </Link>

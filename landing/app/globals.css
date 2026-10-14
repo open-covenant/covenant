@@ -1,41 +1,140 @@
 @import "tailwindcss";
 
+/* Covenant identity: a dark background, light text, the violet → blue → mint
+   gradient, an extended grotesque for display and a monospace for everything
+   else. The site is dark everywhere: there is no light theme and no light
+   surface, so no token here is a light background. `fg` is a text color only. */
 @theme {
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono",
+  --font-sans: var(--font-jetbrains), ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --font-mono: var(--font-jetbrains), ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono",
     monospace;
+  --font-display: var(--font-archivo), "Arial Black", ui-sans-serif, sans-serif;
 
-  --color-bg: #030303;
-  --color-fg: #f5f5f5;
-  --color-muted: #8a8a8a;
-  --color-accent: #d4d4d4;
+  --color-ground: #0d0b16;
+  --color-sunken: #08070e;
+  --color-raised: #14111f;
+  --color-fg: #f3f1fa;
+  --color-fg-2: #dedaee;
+  --color-fg-soft: #c4bfd8;
+  --color-muted: #a49ec0;
+  --color-muted-2: #8079a0;
+  --color-faint: #5c5675;
+  --color-line-strong: #3d3757;
+  --color-line: #2a2640;
+  --color-line-soft: #1d1a2b;
+
+  --color-violet: #a03bf0;
+  --color-blue: #4c7fde;
+  --color-mint: #1de3ae;
+
+  --color-ok: #1de3ae;
+  --color-warn: #e0b968;
+  --color-bad: #e18383;
 }
 
-html,
-body {
-  background: var(--color-bg);
-  color: var(--color-fg);
-  font-family: var(--font-sans);
-  -webkit-font-smoothing: antialiased;
-  overflow-x: hidden;
+:root {
+  --header-h: 64px;
+  color-scheme: dark;
 }
 
-/* All h1s render uppercase site-wide (text content is unchanged, so screen
-   readers still read the original casing). */
-h1 {
+@media (min-width: 640px) {
+  :root {
+    --header-h: 80px;
+  }
+}
+
+@layer base {
+  html {
+    background: var(--color-ground);
+    color: var(--color-fg);
+    scroll-behavior: smooth;
+  }
+
+  body {
+    font-size: 13px;
+    line-height: 1.5;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+
+  /* Every h1 renders uppercase; the text content keeps its casing, so screen
+     readers still read the original. */
+  h1 {
+    text-transform: uppercase;
+  }
+
+  ::selection {
+    background: var(--color-blue);
+    color: var(--color-fg);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-mint);
+    outline-offset: 3px;
+  }
+
+  button:not(:disabled),
+  [role="button"]:not(:disabled),
+  label[for] {
+    cursor: pointer;
+  }
+
+  /* Autofill paints its own light fill over inputs; keep them on night. */
+  input:-webkit-autofill,
+  textarea:-webkit-autofill,
+  select:-webkit-autofill {
+    -webkit-text-fill-color: var(--color-fg);
+    -webkit-box-shadow: 0 0 0 1000px var(--color-raised) inset;
+    caret-color: var(--color-fg);
+  }
+}
+
+/* Display type: the extended grotesque, heavy and tight, always uppercase.
+   It sets --tw-leading so a size utility on the same element (text-2xl and
+   friends read their line height through that variable) keeps the tight
+   display leading instead of the size's own. */
+@utility type-display {
+  font-family: var(--font-display);
+  font-variation-settings: "wdth" 125;
+  font-weight: 600;
+  letter-spacing: -0.05em;
+  --tw-leading: 0.92;
+  line-height: 0.92;
   text-transform: uppercase;
+  text-wrap: balance;
 }
 
-::selection {
-  background: var(--color-fg);
-  color: var(--color-bg);
+/* A subpage's title: display type at a size of its own. */
+@utility page-title {
+  font-family: var(--font-display);
+  font-variation-settings: "wdth" 125;
+  font-weight: 600;
+  font-size: clamp(2.3rem, 5.4vw, 4.2rem);
+  letter-spacing: -0.05em;
+  --tw-leading: 0.88;
+  line-height: 0.88;
+  text-transform: uppercase;
+  text-wrap: balance;
 }
 
-button:not(:disabled),
-[role="button"]:not(:disabled),
-label[for] {
-  cursor: pointer;
+@utility bg-ramp {
+  background-image: linear-gradient(115deg, var(--color-violet), var(--color-blue), var(--color-mint));
+}
+
+@utility text-ramp {
+  background-image: linear-gradient(115deg, var(--color-violet), var(--color-blue), var(--color-mint));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Scrollable without a visible scrollbar — used by the build terminal. */
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
 }
 
 @keyframes term-blink {
@@ -53,20 +152,6 @@ label[for] {
   animation: term-blink 1s steps(1) infinite;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .term-cursor {
-    animation: none;
-  }
-}
-
-/* Scrollable without a visible scrollbar — used by the build terminal. */
-@utility no-scrollbar {
-  scrollbar-width: none;
-  &::-webkit-scrollbar {
-    display: none;
-  }
-}
-
 /* Shared content width for top-level subpages (contact, roadmap, …).
    Single source of truth — change the width here, every subpage follows. */
 .page-container {
@@ -74,62 +159,610 @@ label[for] {
   width: 100%;
   max-width: 80rem;
   padding-inline: 1.25rem;
-  padding-top: calc(88px + env(safe-area-inset-top));
+  padding-top: calc(var(--header-h) + 24px + env(safe-area-inset-top));
   padding-bottom: 8rem;
 }
 
 @media (min-width: 640px) {
   .page-container {
     padding-inline: 2rem;
-    padding-top: 120px;
+    padding-top: calc(var(--header-h) + 40px);
   }
 }
 
-/* Documentation prose styles. Scoped via .prose-docs to avoid bleeding
-   into the landing page. */
+/* ── Header ─────────────────────────────────────────────────────────────────
+   A near-opaque night bar with a blur behind it, so nothing reads through it;
+   the hairline under it appears once the page scrolls. */
+
+.site-header {
+  background: rgb(13 11 22 / 0.95);
+  border-bottom: 1px solid transparent;
+  color: var(--color-fg);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  transition: border-color 200ms ease;
+}
+
+.site-header[data-scrolled="true"] {
+  border-bottom-color: var(--color-line-soft);
+}
+
+/* ── Buttons ────────────────────────────────────────────────────────────────
+   Pills set in the mono: the ramp for the primary action, a hairline for the
+   rest. */
+@layer components {
+  .btn {
+    display: inline-flex;
+    min-height: 42px;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 0 24px;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 500;
+    line-height: 1;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    transition:
+      border-color 150ms ease,
+      background-color 150ms ease,
+      color 150ms ease,
+      filter 150ms ease,
+      transform 150ms ease;
+  }
+
+  .btn:hover:not(:disabled) {
+    transform: translateY(-2px);
+  }
+
+  /* A transparent border over a gradient leaves a composite seam on the curve,
+     so the ramp pill carries no border at all. */
+  .btn-primary {
+    border: 0;
+    padding: 0 25px;
+    background-image: linear-gradient(115deg, var(--color-violet), var(--color-blue), var(--color-mint));
+    color: #ffffff;
+    font-weight: 600;
+  }
+
+  .btn-primary:hover:not(:disabled) {
+    filter: brightness(1.12);
+  }
+
+  .btn-secondary {
+    border-color: var(--color-line-strong);
+    background: transparent;
+    color: var(--color-fg);
+  }
+
+  .btn-secondary:hover:not(:disabled) {
+    border-color: var(--color-muted-2);
+    background: rgb(243 241 250 / 0.05);
+  }
+}
+
+/* ── Hero ───────────────────────────────────────────────────────────────────
+   A sticky canvas stage: the module field drifts as ribbons and, as the stage
+   scrolls, resolves into the mark. The display pair is split across it. */
+
+.hero-stage {
+  position: relative;
+  min-height: 165vh;
+}
+
+.hero-canvas-wrap {
+  position: absolute;
+  inset: 0;
+  height: 165vh;
+}
+
+.hero-canvas-track {
+  position: relative;
+  height: 165vh;
+}
+
+.hero-sticky {
+  position: sticky;
+  top: 0;
+  height: 100dvh;
+  overflow: clip;
+  background: var(--color-ground);
+}
+
+.hero-scene {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+}
+
+.hero-scene canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.hero-veil {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  background:
+    linear-gradient(to bottom, rgb(13 11 22 / 0.86) 0%, rgb(13 11 22 / 0) 28%),
+    linear-gradient(to top, rgb(13 11 22 / 0.92) 0%, rgb(13 11 22 / 0) 44%);
+}
+
+.hero-overlay {
+  position: relative;
+  z-index: 4;
+  min-height: 165vh;
+  padding-top: var(--header-h);
+  pointer-events: none;
+}
+
+.hero-title-stack {
+  display: flex;
+  min-height: calc(100dvh - var(--header-h));
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 44px clamp(20px, 3.4vw, 50px) 52px;
+}
+
+.hero-display {
+  margin: 0;
+  padding-block-end: 0.12em;
+  font-family: var(--font-display);
+  font-variation-settings: "wdth" 125;
+  font-weight: 600;
+  font-size: clamp(2.6rem, 7.4vw, 112px);
+  line-height: 0.8;
+  letter-spacing: -0.06em;
+  text-transform: uppercase;
+  color: var(--color-fg);
+}
+
+.hero-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgb(243 241 250 / 0.82);
+}
+
+.hero-meta-dim {
+  color: var(--color-muted-2);
+}
+
+/* The meta row crosses the brightest part of the field, so it carries its own
+   contrast rather than relying on the veil. */
+.hero-meta-row .hero-meta {
+  text-shadow: 0 1px 10px rgb(13 11 22 / 0.95);
+}
+
+.hero-meta-row .hero-meta-dim {
+  color: rgb(243 241 250 / 0.56);
+}
+
+.hero-copy-col,
+.hero-title-group a {
+  pointer-events: auto;
+}
+
+.hero-lede {
+  max-width: 32rem;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--color-muted);
+  text-wrap: pretty;
+}
+
+.hero-lede strong {
+  font-weight: 500;
+  color: var(--color-fg);
+}
+
+@media (max-width: 900px) {
+  /* The field sits behind the whole hero on one column rather than beside it,
+     so it gives way to the copy. */
+  .hero-scene {
+    opacity: 0.85;
+  }
+
+  .hero-veil {
+    background:
+      linear-gradient(to bottom, rgb(13 11 22 / 0.88) 0%, rgb(13 11 22 / 0.3) 34%),
+      linear-gradient(to top, rgb(13 11 22 / 0.92) 0%, rgb(13 11 22 / 0.35) 46%);
+  }
+
+  .hero-title-stack {
+    padding: 36px 20px 60px;
+  }
+
+  .hero-lede {
+    font-size: 12px;
+  }
+}
+
+/* Hero cursor: a difference-blended crosshair with readouts, alive only while
+   the pointer is over the stage. */
+.hero-cursor {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease;
+  will-change: transform, opacity;
+}
+
+.hero-cursor.is-visible {
+  opacity: 1;
+}
+
+.hero-cursor-cross-h,
+.hero-cursor-cross-v {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  color: #ffffff;
+  opacity: 0.4;
+  mix-blend-mode: difference;
+}
+
+.hero-cursor-cross-h {
+  width: 260px;
+  height: 1px;
+  transform: translate(-50%, -50%);
+  background: linear-gradient(to right, currentColor 0 45%, transparent 45% 55%, currentColor 55% 100%);
+}
+
+.hero-cursor-cross-v {
+  width: 1px;
+  height: 150px;
+  transform: translate(-50%, -50%);
+  background: linear-gradient(to bottom, currentColor 0 42%, transparent 42% 58%, currentColor 58% 100%);
+}
+
+/* The readouts cross every value in the field, so they invert against
+   whatever is under them rather than picking one fixed tone. */
+.hero-cursor-readout {
+  position: absolute;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: #ffffff;
+  opacity: 0.9;
+  mix-blend-mode: difference;
+}
+
+.hero-cursor-readout b {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.hero-cursor-readout.is-tl {
+  right: 22px;
+  bottom: 26px;
+}
+
+.hero-cursor-readout.is-tr {
+  left: 22px;
+  bottom: 26px;
+}
+
+.hero-cursor-readout.is-bl {
+  right: 22px;
+  top: 26px;
+}
+
+.hero-cursor-readout.is-br {
+  left: 22px;
+  top: 26px;
+}
+
+/* ── Entry curtain ──────────────────────────────────────────────────────────
+   A grid of the mark's own module that clears diagonally along the ramp. */
+
+.is-loading,
+.is-loading body {
+  overflow: hidden;
+}
+
+.curtain {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+}
+
+.curtain-grid {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: repeat(var(--curtain-cols), 1fr);
+  grid-auto-rows: calc(100vw / var(--curtain-cols));
+  align-content: start;
+  overflow: hidden;
+}
+
+.curtain-cell {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--color-raised);
+  transition:
+    transform 0.62s cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 0.62s cubic-bezier(0.16, 1, 0.3, 1),
+    border-radius 0.62s cubic-bezier(0.16, 1, 0.3, 1);
+  transition-delay: var(--cell-delay, 0s);
+}
+
+/* Cells shrink into the mark's module before they clear. */
+.curtain.is-clearing .curtain-cell {
+  transform: scale(0.24);
+  border-radius: 22%;
+  opacity: 0;
+}
+
+.curtain-brand {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+
+.curtain-brand svg {
+  width: min(88px, 16vw);
+  height: auto;
+  transition:
+    opacity 0.4s ease,
+    transform 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.curtain.is-clearing .curtain-brand svg {
+  opacity: 0;
+  transform: scale(0.82);
+}
+
+/* ── Reveal ─────────────────────────────────────────────────────────────────
+   Hidden only once the motion script is running, so the page never stays
+   blank for anyone whose JS does not execute. */
+
+.word-mask {
+  display: inline-block;
+  overflow: hidden;
+  vertical-align: bottom;
+}
+
+.word {
+  display: inline-block;
+  transform: translateY(102%);
+  transition: transform 0.78s cubic-bezier(0.16, 1, 0.3, 1);
+  transition-delay: var(--word-delay, 0s);
+}
+
+.is-in .word {
+  transform: translateY(0);
+}
+
+.site-motion .reveal {
+  opacity: 0;
+  transform: translateY(18px);
+  transition:
+    opacity 0.7s cubic-bezier(0.16, 1, 0.3, 1),
+    transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.site-motion .reveal.is-in {
+  opacity: 1;
+  transform: none;
+}
+
+/* ── Seams ──────────────────────────────────────────────────────────────────
+   Sections meet across a strip of the hero's field instead of a rule: the same
+   modules, drifting in the ramp, thinning out to nothing at both edges. */
+
+.field-seam {
+  position: relative;
+  height: clamp(104px, 11vw, 168px);
+}
+
+.field-seam canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* ── Brand guidelines ───────────────────────────────────────────────────────
+   Demonstrations of the motion values, on the /brand pages only. */
+
+@keyframes brand-run {
+  from {
+    left: 0;
+  }
+  to {
+    left: calc(100% - 18px);
+  }
+}
+
+.brand-run {
+  position: absolute;
+  top: 50%;
+  width: 18px;
+  height: 18px;
+  margin-top: -9px;
+  border-radius: 4px;
+  animation: brand-run 1.6s cubic-bezier(0.16, 1, 0.3, 1) infinite alternate;
+}
+
+.brand-run.is-linear {
+  animation-timing-function: linear;
+}
+
+@keyframes brand-module {
+  0%,
+  12% {
+    transform: scale(0.24);
+    border-radius: 46%;
+  }
+  50%,
+  62% {
+    transform: scale(1);
+    border-radius: 14%;
+  }
+  100% {
+    transform: scale(0.24);
+    border-radius: 46%;
+  }
+}
+
+.brand-module {
+  animation: brand-module 2.6s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+}
+
+/* Sliders on night: a hairline track and a ramp thumb, no platform chrome. */
+.brand-range {
+  height: 18px;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.brand-range::-webkit-slider-runnable-track {
+  height: 2px;
+  border-radius: 2px;
+  background: var(--color-line-strong);
+}
+
+.brand-range::-moz-range-track {
+  height: 2px;
+  border-radius: 2px;
+  background: var(--color-line-strong);
+}
+
+.brand-range::-webkit-slider-thumb {
+  width: 14px;
+  height: 14px;
+  margin-top: -6px;
+  border: 0;
+  border-radius: 4px;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: linear-gradient(115deg, var(--color-violet), var(--color-blue), var(--color-mint));
+}
+
+.brand-range::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: 0;
+  border-radius: 4px;
+  background-image: linear-gradient(115deg, var(--color-violet), var(--color-blue), var(--color-mint));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  .term-cursor {
+    animation: none;
+  }
+
+  .word {
+    transform: none;
+    transition: none;
+  }
+
+  .site-motion .reveal {
+    opacity: 1;
+    transform: none;
+  }
+
+  .hero-cursor {
+    display: none;
+  }
+
+  .brand-run,
+  .brand-module {
+    animation: none;
+  }
+}
+
+/* ── Documentation prose ────────────────────────────────────────────────────
+   Scoped via .prose-docs so it never bleeds into the marketing pages. Code
+   sits a step below the ground, like every other block of machine text. */
+
 .prose-docs {
-  font-size: 15px;
-  line-height: 1.7;
-  color: #d4d4d4;
+  font-size: 13.5px;
+  line-height: 1.75;
+  color: var(--color-fg-soft);
 }
 
 .prose-docs h1 {
-  font-size: 2.25rem;
-  font-weight: 300;
-  letter-spacing: -0.02em;
-  color: #fafafa;
-  margin: 0 0 0.5rem;
+  margin: 0 0 0.9rem;
+  font-family: var(--font-display);
+  font-variation-settings: "wdth" 125;
+  font-size: clamp(2rem, 4vw, 2.9rem);
+  font-weight: 600;
+  line-height: 0.92;
+  letter-spacing: -0.05em;
+  color: var(--color-fg);
+  text-wrap: balance;
 }
 
 .prose-docs > p:first-of-type {
-  color: #a3a3a3;
-  font-size: 17px;
-  line-height: 1.6;
   margin: 0 0 2.5rem;
+  font-size: 15px;
+  line-height: 1.65;
+  color: var(--color-muted);
 }
 
 .prose-docs h2 {
-  font-size: 1.4rem;
-  font-weight: 400;
-  color: #fafafa;
-  margin: 3rem 0 1rem;
-  padding-bottom: 0.5rem;
-  border-bottom: 1px solid #262626;
-  letter-spacing: -0.01em;
+  margin: 3.25rem 0 1.1rem;
+  padding-bottom: 0.7rem;
+  border-bottom: 1px solid var(--color-line);
+  font-family: var(--font-display);
+  font-variation-settings: "wdth" 125;
+  font-size: 1.35rem;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.04em;
+  text-transform: uppercase;
+  color: var(--color-fg);
 }
 
 .prose-docs h3 {
-  font-size: 1.05rem;
-  font-weight: 500;
-  color: #fafafa;
-  margin: 2rem 0 0.75rem;
+  margin: 2.2rem 0 0.75rem;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--color-fg);
 }
 
 .prose-docs h4 {
-  font-size: 0.95rem;
-  font-weight: 500;
-  color: #e5e5e5;
-  margin: 1.5rem 0 0.5rem;
+  margin: 1.6rem 0 0.5rem;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--color-fg-2);
 }
 
 .prose-docs p {
@@ -137,19 +770,19 @@ label[for] {
 }
 
 .prose-docs a {
-  color: #f5f5f5;
+  color: var(--color-fg);
   text-decoration: underline;
-  text-decoration-color: #525252;
+  text-decoration-color: var(--color-line-strong);
   text-underline-offset: 3px;
 }
 
 .prose-docs a:hover {
-  text-decoration-color: #a3a3a3;
+  text-decoration-color: var(--color-blue);
 }
 
 .prose-docs strong {
-  color: #fafafa;
-  font-weight: 500;
+  font-weight: 600;
+  color: var(--color-fg);
 }
 
 .prose-docs ul,
@@ -159,7 +792,7 @@ label[for] {
 }
 
 .prose-docs ul {
-  list-style-type: disc;
+  list-style-type: square;
 }
 
 .prose-docs ol {
@@ -170,87 +803,90 @@ label[for] {
   margin: 0.4rem 0;
 }
 
+.prose-docs li::marker {
+  color: var(--color-faint);
+}
+
 .prose-docs li > ul,
 .prose-docs li > ol {
   margin: 0.4rem 0;
 }
 
 .prose-docs code {
-  font-family: var(--font-mono);
-  font-size: 0.86em;
-  background: #171717;
-  border: 1px solid #262626;
+  padding: 0.12em 0.4em;
+  border: 1px solid var(--color-line);
   border-radius: 4px;
-  padding: 0.1em 0.4em;
-  color: #f5f5f5;
+  background: var(--color-raised);
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  color: var(--color-fg);
 }
 
 .prose-docs pre {
-  font-family: var(--font-mono);
-  font-size: 13px;
-  line-height: 1.65;
-  background: #0a0a0a;
-  border: 1px solid #1f1f1f;
-  border-radius: 6px;
-  padding: 1rem 1.25rem;
   margin: 1.25rem 0 1.75rem;
+  padding: 1.1rem 1.25rem;
   overflow-x: auto;
-  color: #e5e5e5;
+  border: 1px solid var(--color-line);
+  border-radius: 6px;
+  background: var(--color-sunken);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--color-fg);
 }
 
 .prose-docs pre code {
-  background: transparent;
-  border: none;
   padding: 0;
+  border: 0;
+  background: transparent;
   font-size: inherit;
   color: inherit;
 }
 
 .prose-docs blockquote {
   margin: 1.25rem 0;
-  padding: 0.75rem 1.25rem;
-  border-left: 2px solid #525252;
-  color: #a3a3a3;
-  background: #0a0a0a;
+  padding: 0.8rem 1.25rem;
+  border-left: 2px solid var(--color-blue);
+  background: var(--color-raised);
+  color: var(--color-muted);
 }
 
 .prose-docs hr {
   margin: 3rem 0;
   border: 0;
-  border-top: 1px solid #262626;
+  border-top: 1px solid var(--color-line);
 }
 
 .prose-docs table {
   width: 100%;
-  border-collapse: collapse;
   margin: 1.5rem 0;
-  font-size: 14px;
+  border-collapse: collapse;
+  font-size: 12.5px;
 }
 
 .prose-docs th,
 .prose-docs td {
-  text-align: left;
   padding: 0.7rem 1rem;
-  border-bottom: 1px solid #1f1f1f;
+  border-bottom: 1px solid var(--color-line);
+  text-align: left;
 }
 
 .prose-docs th {
-  font-weight: 500;
-  color: #fafafa;
-  font-size: 12px;
+  border-bottom-color: var(--color-line-strong);
+  background: var(--color-raised);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  background: #0a0a0a;
-  border-bottom-color: #262626;
+  color: var(--color-fg);
 }
 
 .prose-docs td {
-  color: #d4d4d4;
   vertical-align: top;
+  color: var(--color-fg-soft);
 }
 
 .prose-docs td code,
 .prose-docs th code {
-  background: #1a1a1a;
-  border: 1px solid #2a2a2a;
+  background: var(--color-ground);
 }

@@ -73,12 +73,12 @@ async function fetchWitness(sha: string): Promise<VerifyPayload | null> {
 function StateDot({ state }: { state: WitnessState }) {
   const tone =
     state === "green"
-      ? "bg-emerald-400"
+      ? "bg-ok"
       : state === "yellow"
-        ? "bg-amber-400"
+        ? "bg-warn"
         : state === "red"
-          ? "bg-rose-500"
-          : "bg-neutral-600";
+          ? "bg-bad"
+          : "bg-faint";
   return (
     <span
       aria-hidden="true"
@@ -89,22 +89,22 @@ function StateDot({ state }: { state: WitnessState }) {
 
 function WitnessCard({ w }: { w: Witness }) {
   return (
-    <div className="flex flex-col gap-3 border border-neutral-800 bg-neutral-950/60 p-5">
+    <div className="flex flex-col gap-3 border border-line bg-raised/60 p-5">
       <div className="flex items-center gap-2.5">
         <StateDot state={w.state} />
-        <span className="text-[11px] font-light uppercase tracking-[2px] text-neutral-300">
+        <span className="text-[11px] uppercase tracking-[2px] text-fg-soft">
           {w.label}
         </span>
       </div>
-      <p className="text-[13px] font-light leading-relaxed text-neutral-400">
+      <p className="text-[13px] leading-relaxed text-muted">
         {w.detail}
       </p>
       {w.badge && (
         <div
           className={`inline-flex w-fit items-center gap-2 border px-2 py-1 text-[10px] uppercase tracking-[1.5px] ${
             w.badge.tone === "yellow"
-              ? "border-amber-800/60 bg-amber-950/30 text-amber-300"
-              : "border-rose-800/60 bg-rose-950/30 text-rose-300"
+              ? "border-warn/40 bg-warn/5 text-warn"
+              : "border-bad/40 bg-bad/5 text-bad"
           }`}
         >
           {w.badge.text}
@@ -115,7 +115,7 @@ function WitnessCard({ w }: { w: Witness }) {
           href={w.drillHref}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-[11px] uppercase tracking-[1.5px] text-neutral-500 underline-offset-4 hover:text-neutral-300 hover:underline"
+          className="text-[11px] uppercase tracking-[1.5px] text-muted-2 underline-offset-4 hover:text-fg-soft hover:underline"
         >
           Open evidence →
         </a>
@@ -129,24 +129,24 @@ function SkillRunPanel({ run }: { run: SkillRun }) {
     ? `https://solscan.io/tx/${run.tx.sig}${run.tx.cluster === "devnet" ? "?cluster=devnet" : ""}`
     : null;
   return (
-    <div className="mb-6 border border-neutral-800 bg-neutral-950/60 p-5">
+    <div className="mb-6 border border-line bg-raised/60 p-5">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="text-[11px] font-light uppercase tracking-[2px] text-neutral-300">
+        <h2 className="type-display text-[11px] text-fg-soft">
           Skill run
         </h2>
-        <span className="font-mono text-[13px] text-white">{run.skill.name}</span>
+        <span className="font-mono text-[13px] text-fg">{run.skill.name}</span>
       </div>
 
       <dl className="mt-4 grid gap-4 sm:grid-cols-2">
         <div className="sm:col-span-2">
-          <dt className="text-[10px] uppercase tracking-[2px] text-neutral-500">Skill digest</dt>
-          <dd className="mt-1.5 break-all font-mono text-[12px] text-emerald-300">
+          <dt className="text-[10px] uppercase tracking-[2px] text-muted-2">Skill digest</dt>
+          <dd className="mt-1.5 break-all font-mono text-[12px] text-ok">
             {run.skill.digest}
           </dd>
         </div>
 
         <div className="sm:col-span-2">
-          <dt className="text-[10px] uppercase tracking-[2px] text-neutral-500">
+          <dt className="text-[10px] uppercase tracking-[2px] text-muted-2">
             Capabilities exercised
           </dt>
           <dd className="mt-1.5">
@@ -155,20 +155,20 @@ function SkillRunPanel({ run }: { run: SkillRun }) {
                 {run.capabilities.map((c) => (
                   <span
                     key={c}
-                    className="border border-neutral-800 bg-neutral-900/60 px-2 py-0.5 font-mono text-[11px] text-neutral-300"
+                    className="border border-line bg-sunken/60 px-2 py-0.5 font-mono text-[11px] text-fg-soft"
                   >
                     {c}
                   </span>
                 ))}
               </div>
             ) : (
-              <span className="text-[12px] text-neutral-600">none recorded</span>
+              <span className="text-[12px] text-faint">none recorded</span>
             )}
           </dd>
         </div>
 
         <div className="sm:col-span-2">
-          <dt className="text-[10px] uppercase tracking-[2px] text-neutral-500">
+          <dt className="text-[10px] uppercase tracking-[2px] text-muted-2">
             On-chain transaction
           </dt>
           <dd className="mt-1.5 text-[12px]">
@@ -177,12 +177,12 @@ function SkillRunPanel({ run }: { run: SkillRun }) {
                 href={solscan}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="font-mono text-neutral-300 underline-offset-4 hover:text-neutral-100 hover:underline"
+                className="font-mono text-fg-soft underline-offset-4 hover:text-fg hover:underline"
               >
                 {run.tx.sig.slice(0, 16)}… ({run.tx.cluster})
               </a>
             ) : (
-              <span className="text-neutral-600">
+              <span className="text-faint">
                 pending — no on-chain transaction anchored for this run
               </span>
             )}
@@ -190,7 +190,7 @@ function SkillRunPanel({ run }: { run: SkillRun }) {
         </div>
       </dl>
 
-      <p className="mt-4 text-[12px] font-light leading-relaxed text-neutral-500">
+      <p className="mt-4 text-[12px] leading-relaxed text-muted-2">
         When the anchors below land, the same witnesses that attest the commit also bind this
         skill&apos;s content digest and signed actions — not a separate trust path.
       </p>
@@ -214,32 +214,32 @@ export default async function VerifyPage({ params }: { params: Promise<{ sha: st
   const author = redactAuthor(commit.authorDisplay, commit.authorEmail);
 
   return (
-    <main id="main-content" className="min-h-[100dvh] bg-[#030303] text-neutral-200">
+    <main id="main-content" className="min-h-[100dvh] bg-ground text-fg-2">
       <SiteHeader />
 
       <div className="mx-auto max-w-5xl px-6 pb-24 pt-28">
         <div className="mb-10 flex flex-col gap-2">
-          <p className="text-[11px] uppercase tracking-[3px] text-neutral-500">
+          <p className="text-[11px] uppercase tracking-[3px] text-muted-2">
             /verify/{commit.shortSha}
           </p>
-          <h1 className="text-balance text-[2.2rem] font-extralight uppercase leading-[1.1] tracking-[2px] text-white">
+          <h1 className="page-title text-fg">
             Four Witnesses Present
           </h1>
           {commit.predatesWitnessLoop && (
-            <p className="mt-2 max-w-2xl border border-neutral-800 bg-neutral-950/60 px-4 py-3 text-[13px] font-light leading-relaxed text-amber-300">
+            <p className="mt-2 max-w-2xl border border-line bg-raised/60 px-4 py-3 text-[13px] leading-relaxed text-warn">
               This commit predates the witness loop. Anchors below are gray because the commit-memo + audit-chain + on-chain + verifier-signature pipeline was not yet active when this commit landed. Treat as historical record only.
             </p>
           )}
-          <p className="mt-2 text-[13px] font-light leading-relaxed text-neutral-400">
-            <span className="text-neutral-200">{author.display}</span>{" "}
-            <span className="text-neutral-500">&lt;{author.email}&gt;</span> &middot;{" "}
-            <span className="text-neutral-500">{commit.isoDate}</span>
+          <p className="mt-2 text-[13px] leading-relaxed text-muted">
+            <span className="text-fg-2">{author.display}</span>{" "}
+            <span className="text-muted-2">&lt;{author.email}&gt;</span> &middot;{" "}
+            <span className="text-muted-2">{commit.isoDate}</span>
           </p>
-          <p className="mt-1 text-[15px] font-light leading-relaxed text-neutral-100">
+          <p className="mt-1 text-[15px] leading-relaxed text-fg">
             {commit.subject}
           </p>
           {commit.bodyText && (
-            <pre className="mt-3 max-w-3xl whitespace-pre-wrap border border-neutral-800 bg-neutral-950/40 p-4 text-[12px] font-light leading-relaxed text-neutral-400">
+            <pre className="mt-3 max-w-3xl whitespace-pre-wrap border border-line bg-raised/40 p-4 text-[12px] leading-relaxed text-muted">
               {commit.bodyText}
             </pre>
           )}
@@ -253,30 +253,30 @@ export default async function VerifyPage({ params }: { params: Promise<{ sha: st
           ))}
         </div>
 
-        <div className="mt-6 border border-amber-800/60 bg-amber-950/20 p-5">
+        <div className="mt-6 border border-warn/40 bg-warn/5 p-5">
           <div className="flex items-center gap-2.5">
             <StateDot state="yellow" />
-            <span className="text-[11px] font-light uppercase tracking-[2px] text-amber-300">
+            <span className="text-[11px] uppercase tracking-[2px] text-warn">
               {fifth.label}
             </span>
           </div>
-          <p className="mt-3 text-[13px] font-light leading-relaxed text-amber-200/80">
+          <p className="mt-3 text-[13px] leading-relaxed text-warn/80">
             {fifth.detail}
           </p>
           <Link
             href={fifth.href}
-            className="mt-3 inline-block text-[11px] uppercase tracking-[1.5px] text-amber-300 underline-offset-4 hover:underline"
+            className="mt-3 inline-block text-[11px] uppercase tracking-[1.5px] text-warn underline-offset-4 hover:underline"
           >
             See mutation-quality trend →
           </Link>
         </div>
 
         {!commit.predatesWitnessLoop && (
-          <div className="mt-10 border border-neutral-800 bg-neutral-950/60 p-5">
-            <h2 className="text-[11px] font-light uppercase tracking-[2px] text-neutral-300">
+          <div className="mt-10 border border-line bg-raised/60 p-5">
+            <h2 className="type-display text-[11px] text-fg-soft">
               Witness independence
             </h2>
-            <p className="mt-3 max-w-2xl text-[13px] font-light leading-relaxed text-neutral-400">
+            <p className="mt-3 max-w-2xl text-[13px] leading-relaxed text-muted">
               The audit hash chain is the only witness Covenant operates locally. The other three
               are external — a Solana commit memo, the on-chain settlement anchor, and a
               separately-keyed verifier — so tampering with the local chain cannot forge them.
@@ -285,9 +285,9 @@ export default async function VerifyPage({ params }: { params: Promise<{ sha: st
           </div>
         )}
 
-        <div className="mt-10 border-t border-neutral-900 pt-6 text-[11px] uppercase tracking-[1.5px] text-neutral-500">
+        <div className="mt-10 border-t border-line-soft pt-6 text-[11px] uppercase tracking-[1.5px] text-muted-2">
           v0.2 Witness Loop &middot;{" "}
-          <Link href="/lineage" className="hover:text-neutral-300">
+          <Link href="/lineage" className="hover:text-fg-soft">
             See evolutionary lineage
           </Link>{" "}
           &middot;{" "}
@@ -295,7 +295,7 @@ export default async function VerifyPage({ params }: { params: Promise<{ sha: st
             href="https://github.com/open-covenant/covenant/blob/main/docs/provenance/witness-loop-overview.md"
             target="_blank"
             rel="noopener noreferrer"
-            className="hover:text-neutral-300"
+            className="hover:text-fg-soft"
           >
             Architecture
           </a>

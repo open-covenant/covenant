@@ -40,16 +40,16 @@ const MOVES = [
 
 export default function AgentsPage() {
   return (
-    <main id="main-content" className="min-h-[100dvh] bg-[#030303] text-neutral-200">
+    <main id="main-content" className="min-h-[100dvh] bg-ground text-fg-2">
       <SiteHeader />
 
       <div className="mx-auto w-full max-w-7xl px-5 pb-24 pt-[88px] sm:px-8 sm:pt-[120px]">
         <div className="mb-12 flex flex-col gap-3">
-          <p className="text-[11px] uppercase tracking-[3px] text-neutral-500">Agent registry</p>
-          <h1 className="text-3xl font-light tracking-tight text-white sm:text-4xl">
+          <p className="text-[11px] uppercase tracking-[3px] text-muted-2">Agent registry</p>
+          <h1 className="page-title text-fg">
             Proof of agent
           </h1>
-          <p className="max-w-3xl text-[14px] font-light leading-relaxed text-neutral-400">
+          <p className="max-w-3xl text-[14px] leading-relaxed text-muted">
             Covenant agents register on Metaplex&apos;s 014 Registry and anchor their
             audit roots as MPL Core attestations, indexed by DAS and checkable by anyone.
             A registry tells you an agent exists. Proof tells you what it did. This page
@@ -59,14 +59,14 @@ export default function AgentsPage() {
 
         <div className="mb-12 grid gap-4 sm:grid-cols-3">
           {MOVES.map((m, i) => (
-            <div key={m.term} className="border border-neutral-800 bg-neutral-950/60 p-5">
+            <div key={m.term} className="border border-line bg-raised/60 p-5">
               <div className="flex items-baseline gap-3">
-                <span className="font-mono text-[11px] text-neutral-600">0{i + 1}</span>
-                <h2 className="text-[11px] font-light uppercase tracking-[2px] text-neutral-300">
+                <span className="font-mono text-[11px] text-faint">0{i + 1}</span>
+                <h2 className="type-display text-[11px] text-fg-soft">
                   {m.term}
                 </h2>
               </div>
-              <p className="mt-3 text-[13px] font-light leading-relaxed text-neutral-400">
+              <p className="mt-3 text-[13px] leading-relaxed text-muted">
                 {m.gloss}
               </p>
             </div>
@@ -74,18 +74,18 @@ export default function AgentsPage() {
         </div>
 
         <div className="mb-12 grid gap-4 sm:grid-cols-2">
-          <div className="flex flex-col gap-3 border border-neutral-800 bg-neutral-950/60 p-5">
-            <p className="text-[10px] uppercase tracking-[2px] text-neutral-500">
+          <div className="flex flex-col gap-3 border border-line bg-raised/60 p-5">
+            <p className="text-[10px] uppercase tracking-[2px] text-muted-2">
               Registered production agent
             </p>
-            <p className="text-[15px] font-light text-white">Covenant Foundation Agent</p>
-            <p className="break-all font-mono text-[12px] text-neutral-400">
+            <p className="text-[15px] text-fg">Covenant Foundation Agent</p>
+            <p className="break-all font-mono text-[12px] text-muted">
               {FEATURED_AGENT_ASSET}
             </p>
             <div className="mt-auto flex flex-wrap gap-x-5 gap-y-1.5 pt-2">
               <Link
                 href={`/agents/${FEATURED_AGENT_ASSET}`}
-                className="text-[11px] uppercase tracking-[1.5px] text-neutral-300 underline-offset-4 hover:text-white hover:underline"
+                className="text-[11px] uppercase tracking-[1.5px] text-fg-soft underline-offset-4 hover:text-fg hover:underline"
               >
                 Open passport →
               </Link>
@@ -93,24 +93,24 @@ export default function AgentsPage() {
                 href={metaplexAgentUrl(FEATURED_AGENT_ASSET)}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-[11px] uppercase tracking-[1.5px] text-neutral-500 underline-offset-4 hover:text-neutral-300 hover:underline"
+                className="text-[11px] uppercase tracking-[1.5px] text-muted-2 underline-offset-4 hover:text-fg-soft hover:underline"
               >
                 Metaplex directory →
               </a>
             </div>
           </div>
-          <div className="flex flex-col gap-3 border border-neutral-800 bg-neutral-950/60 p-5">
-            <p className="text-[10px] uppercase tracking-[2px] text-neutral-500">
+          <div className="flex flex-col gap-3 border border-line bg-raised/60 p-5">
+            <p className="text-[10px] uppercase tracking-[2px] text-muted-2">
               Latest anchored audit root
             </p>
-            <p className="text-[15px] font-light text-white">Witness-loop attestation</p>
-            <p className="break-all font-mono text-[12px] text-neutral-400">
+            <p className="text-[15px] text-fg">Witness-loop attestation</p>
+            <p className="break-all font-mono text-[12px] text-muted">
               {FEATURED_ATTESTATION_ASSET}
             </p>
             <div className="mt-auto pt-2">
               <Link
                 href={`/agents/${FEATURED_ATTESTATION_ASSET}`}
-                className="text-[11px] uppercase tracking-[1.5px] text-neutral-300 underline-offset-4 hover:text-white hover:underline"
+                className="text-[11px] uppercase tracking-[1.5px] text-fg-soft underline-offset-4 hover:text-fg hover:underline"
               >
                 Verify it in your browser →
               </Link>
@@ -119,22 +119,22 @@ export default function AgentsPage() {
         </div>
 
         <div className="mb-4 flex flex-col gap-2">
-          <h2 className="text-[11px] font-light uppercase tracking-[2px] text-neutral-300">
+          <h2 className="type-display text-[11px] text-fg-soft">
             Verify any agent
           </h2>
-          <p className="text-[13px] font-light text-neutral-500">
+          <p className="text-[13px] text-muted-2">
             Works for every asset bound to the 014 Registry, not just ours.
           </p>
         </div>
         <LookupForm />
 
-        <p className="mt-10 max-w-3xl text-[12px] font-light leading-relaxed text-neutral-500">
+        <p className="mt-10 max-w-3xl text-[12px] leading-relaxed text-muted-2">
           Built on{" "}
           <a
             href="https://www.metaplex.com/docs/smart-contracts/mpl-agent"
             target="_blank"
             rel="noopener noreferrer"
-            className="underline-offset-4 hover:text-neutral-300 hover:underline"
+            className="underline-offset-4 hover:text-fg-soft hover:underline"
           >
             MPL Agent
           </a>{" "}
@@ -143,7 +143,7 @@ export default function AgentsPage() {
             href="https://github.com/open-covenant/covenant/blob/main/docs/metaplex-integration.md"
             target="_blank"
             rel="noopener noreferrer"
-            className="underline-offset-4 hover:text-neutral-300 hover:underline"
+            className="underline-offset-4 hover:text-fg-soft hover:underline"
           >
             integration docs
           </a>

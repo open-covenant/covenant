@@ -56,19 +56,19 @@ const POSTS: Post[] = [
 
 export default function BlogIndex() {
   return (
-    <main id="main-content" className="relative min-h-screen overflow-x-hidden bg-[#030303]">
+    <main id="main-content" className="relative min-h-screen overflow-x-hidden bg-ground">
       <SiteHeader />
 
       <div className="page-container">
-        <h1 className="mb-10 text-[11px] uppercase tracking-[0.4em] text-neutral-400 sm:mb-14">
+        <h1 className="mb-10 text-[11px] uppercase tracking-[0.4em] text-muted sm:mb-14">
           Blog
         </h1>
 
-        <h2 className="max-w-3xl text-balance text-[2.2rem] font-extralight uppercase leading-[1.1] tracking-[2px] text-white sm:text-[2.6rem]">
+        <h2 className="type-display max-w-3xl text-balance text-[2.2rem] text-fg sm:text-[2.6rem]">
           Notes from the build
         </h2>
 
-        <p className="mt-6 max-w-2xl text-pretty text-lg font-light leading-relaxed text-neutral-300 sm:text-xl">
+        <p className="mt-6 max-w-2xl text-pretty text-[15px] leading-[1.7] text-fg-soft sm:text-base">
           What we ship, how the primitives work, and the integrations we are wiring up.
         </p>
 
@@ -76,19 +76,19 @@ export default function BlogIndex() {
           {POSTS.map((p) => (
             <li
               key={p.slug}
-              className="border-t border-neutral-800/80 py-8 first:border-t-0 first:pt-0"
+              className="border-t border-line/80 py-8 first:border-t-0 first:pt-0"
             >
               <a href={p.href ?? `/blog/${p.slug}`} className="group block">
-                <span className="font-mono text-[11px] uppercase tracking-[0.3em] text-neutral-500">
+                <span className="font-mono text-[11px] uppercase tracking-[0.3em] text-muted-2">
                   {p.date}
                 </span>
-                <h3 className="mt-3 text-[1.4rem] font-light leading-snug text-neutral-100 transition-colors group-hover:text-white sm:text-[1.6rem]">
+                <h3 className="type-display mt-3 text-[1.4rem] text-fg transition-colors group-hover:text-fg sm:text-[1.6rem]">
                   {p.title}
                 </h3>
-                <p className="mt-3 max-w-2xl text-[14px] leading-relaxed text-neutral-400 sm:text-[15px]">
+                <p className="mt-3 max-w-2xl text-[14px] leading-relaxed text-muted sm:text-[15px]">
                   {p.dek}
                 </p>
-                <span className="mt-4 inline-block text-[12px] uppercase tracking-[0.2em] text-neutral-500 transition-colors group-hover:text-neutral-200">
+                <span className="mt-4 inline-block text-[12px] uppercase tracking-[0.2em] text-muted-2 transition-colors group-hover:text-fg-2">
                   Read →
                 </span>
               </a>

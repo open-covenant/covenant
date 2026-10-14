@@ -127,11 +127,11 @@ const MILESTONES: Milestone[] = [
 
 export default function RoadmapPage() {
   return (
-    <main id="main-content" className="relative min-h-screen overflow-x-hidden bg-[#030303]">
+    <main id="main-content" className="relative min-h-screen overflow-x-hidden bg-ground">
       <SiteHeader />
 
       <div className="page-container">
-        <h1 className="mb-16 text-[11px] uppercase tracking-[0.4em] text-neutral-400 sm:mb-24">
+        <h1 className="mb-16 text-[11px] uppercase tracking-[0.4em] text-muted sm:mb-24">
           Roadmap
         </h1>
 
@@ -141,43 +141,43 @@ export default function RoadmapPage() {
             return (
               <li
                 key={m.code}
-                className={`relative border-l border-neutral-800/80 pl-8 sm:pl-12 ${isLast ? "" : "pb-14 sm:pb-16"}`}
+                className={`relative border-l border-line/80 pl-8 sm:pl-12 ${isLast ? "" : "pb-14 sm:pb-16"}`}
               >
                 <span
                   aria-hidden="true"
                   className={
                     m.live
-                      ? "absolute -left-[5px] top-[7px] h-[9px] w-[9px] rounded-full bg-neutral-100"
-                      : "absolute -left-[5px] top-[7px] h-[9px] w-[9px] rounded-full border border-neutral-700 bg-[#030303]"
+                      ? "absolute -left-[5px] top-[7px] h-[9px] w-[9px] rounded-full bg-mint"
+                      : "absolute -left-[5px] top-[7px] h-[9px] w-[9px] rounded-full border border-line-strong bg-ground"
                   }
                 />
                 <div className="mb-3 flex flex-wrap items-baseline gap-x-4 gap-y-1">
-                  <span className="font-mono text-[11px] uppercase tracking-[0.3em] text-neutral-400">
+                  <span className="font-mono text-[11px] uppercase tracking-[0.3em] text-muted">
                     {m.code}
                   </span>
-                  <h2 className="text-[13px] uppercase tracking-[0.25em] text-neutral-100 sm:text-[14px]">
+                  <h2 className="text-[13px] uppercase tracking-[0.25em] text-fg sm:text-[14px]">
                     {m.title}
                   </h2>
                   <span
                     className={
                       m.live
-                        ? "ml-auto text-[10px] uppercase tracking-[0.25em] text-neutral-200"
-                        : "ml-auto text-[10px] uppercase tracking-[0.25em] text-neutral-400"
+                        ? "ml-auto text-[10px] uppercase tracking-[0.25em] text-fg-2"
+                        : "ml-auto text-[10px] uppercase tracking-[0.25em] text-muted"
                     }
                   >
                     {m.status}
                   </span>
                 </div>
-                <p className="mb-4 text-[13px] leading-relaxed text-neutral-400 sm:text-[14px]">
+                <p className="mb-4 text-[13px] leading-relaxed text-muted sm:text-[14px]">
                   {m.intro}
                 </p>
                 <ul className="space-y-2">
                   {m.bullets.map((b) => (
                     <li
                       key={b}
-                      className="flex gap-3 text-[13px] leading-relaxed text-neutral-300 sm:text-[14px]"
+                      className="flex gap-3 text-[13px] leading-relaxed text-fg-soft sm:text-[14px]"
                     >
-                      <span aria-hidden="true" className="select-none text-neutral-600">
+                      <span aria-hidden="true" className="select-none text-faint">
                         ·
                       </span>
                       <span>{b}</span>

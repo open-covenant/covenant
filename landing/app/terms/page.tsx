@@ -37,14 +37,14 @@ type Section = {
 };
 
 const headingEyebrow =
-  "font-mono text-[11px] uppercase tracking-[0.3em] text-neutral-400";
+  "font-mono text-[11px] uppercase tracking-[0.3em] text-muted";
 const headingTitle =
-  "text-[13px] uppercase tracking-[0.25em] text-neutral-100 sm:text-[14px]";
+  "text-[13px] uppercase tracking-[0.25em] text-fg sm:text-[14px]";
 const paragraph =
-  "text-[13px] leading-relaxed text-neutral-300 sm:text-[14px]";
-const subtle = "text-neutral-400";
+  "text-[13px] leading-relaxed text-fg-soft sm:text-[14px]";
+const subtle = "text-muted";
 const linkClass =
-  "underline decoration-neutral-700 underline-offset-4 transition-colors hover:decoration-neutral-300 hover:text-neutral-50";
+  "underline decoration-line-strong underline-offset-4 transition-colors hover:decoration-fg-soft hover:text-fg";
 
 const SECTIONS: Section[] = [
   {
@@ -56,15 +56,15 @@ const SECTIONS: Section[] = [
         <p className={paragraph}>
           These Terms of Service (the &ldquo;Terms&rdquo;) govern your use of the public services
           operated under the Covenant brand, including{" "}
-          <strong className="text-neutral-100">opencovenant.org</strong>,{" "}
-          <strong className="text-neutral-100">docs.opencovenant.org</strong>,{" "}
-          <strong className="text-neutral-100">sandbox.opencovenant.org</strong>, and the on-chain
+          <strong className="text-fg">opencovenant.org</strong>,{" "}
+          <strong className="text-fg">docs.opencovenant.org</strong>,{" "}
+          <strong className="text-fg">sandbox.opencovenant.org</strong>, and the on-chain
           staking program at{" "}
-          <span className="font-mono text-neutral-100">CstkpU2q9RngbHh21WVAYeQjbN9UWgcH9pAiQcMaEcED</span>{" "}
+          <span className="font-mono text-fg">CstkpU2q9RngbHh21WVAYeQjbN9UWgcH9pAiQcMaEcED</span>{" "}
           on Solana mainnet (together, the &ldquo;Services&rdquo;).
         </p>
         <p className={paragraph}>
-          The Covenant <strong className="text-neutral-100">source code</strong> is published
+          The Covenant <strong className="text-fg">source code</strong> is published
           under the Apache License 2.0 at{" "}
           <a
             href="https://github.com/open-covenant/covenant"
@@ -127,9 +127,9 @@ const SECTIONS: Section[] = [
           ].map((point) => (
             <li
               key={point}
-              className="flex gap-3 text-[13px] leading-relaxed text-neutral-300 sm:text-[14px]"
+              className="flex gap-3 text-[13px] leading-relaxed text-fg-soft sm:text-[14px]"
             >
-              <span aria-hidden="true" className="select-none text-neutral-600">
+              <span aria-hidden="true" className="select-none text-faint">
                 ·
               </span>
               <span>{point}</span>
@@ -319,15 +319,15 @@ const SECTIONS: Section[] = [
 
 export default function TermsPage() {
   return (
-    <main id="main-content" className="relative min-h-screen overflow-x-hidden bg-[#030303]">
+    <main id="main-content" className="relative min-h-screen overflow-x-hidden bg-ground">
       <SiteHeader />
 
       <div className="page-container">
         <div className="mb-16 sm:mb-24">
-          <h1 className="mb-3 text-[11px] uppercase tracking-[0.4em] text-neutral-400">
+          <h1 className="mb-3 text-[11px] uppercase tracking-[0.4em] text-muted">
             Terms of Service
           </h1>
-          <p className="text-[11px] uppercase tracking-[0.3em] text-neutral-400">
+          <p className="text-[11px] uppercase tracking-[0.3em] text-muted">
             Last updated · {LAST_UPDATED}
           </p>
         </div>
@@ -339,11 +339,11 @@ export default function TermsPage() {
               <li
                 key={s.id}
                 id={s.id}
-                className={`relative border-l border-neutral-800/80 pl-8 sm:pl-12 ${isLast ? "" : "pb-14 sm:pb-16"}`}
+                className={`relative border-l border-line/80 pl-8 sm:pl-12 ${isLast ? "" : "pb-14 sm:pb-16"}`}
               >
                 <span
                   aria-hidden="true"
-                  className="absolute -left-[5px] top-[7px] h-[9px] w-[9px] rounded-full border border-neutral-700 bg-[#030303]"
+                  className="absolute -left-[5px] top-[7px] h-[9px] w-[9px] rounded-full border border-line-strong bg-ground"
                 />
                 <div className="mb-4 flex flex-wrap items-baseline gap-x-4 gap-y-1">
                   <span className={headingEyebrow}>{s.label}</span>

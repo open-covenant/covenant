@@ -37,14 +37,14 @@ type Section = {
 };
 
 const headingEyebrow =
-  "font-mono text-[11px] uppercase tracking-[0.3em] text-neutral-400";
+  "font-mono text-[11px] uppercase tracking-[0.3em] text-muted";
 const headingTitle =
-  "text-[13px] uppercase tracking-[0.25em] text-neutral-100 sm:text-[14px]";
+  "text-[13px] uppercase tracking-[0.25em] text-fg sm:text-[14px]";
 const paragraph =
-  "text-[13px] leading-relaxed text-neutral-300 sm:text-[14px]";
-const subtle = "text-neutral-400";
+  "text-[13px] leading-relaxed text-fg-soft sm:text-[14px]";
+const subtle = "text-muted";
 const linkClass =
-  "underline decoration-neutral-700 underline-offset-4 transition-colors hover:decoration-neutral-300 hover:text-neutral-50";
+  "underline decoration-line-strong underline-offset-4 transition-colors hover:decoration-fg-soft hover:text-fg";
 
 const SECTIONS: Section[] = [
   {
@@ -53,13 +53,13 @@ const SECTIONS: Section[] = [
     title: "Scope",
     body: (
       <p className={paragraph}>
-        This policy covers <strong className="text-neutral-100">opencovenant.org</strong> (this
-        site), <strong className="text-neutral-100">docs.opencovenant.org</strong> (the
+        This policy covers <strong className="text-fg">opencovenant.org</strong> (this
+        site), <strong className="text-fg">docs.opencovenant.org</strong> (the
         documentation), and{" "}
-        <strong className="text-neutral-100">sandbox.opencovenant.org</strong> (the public
+        <strong className="text-fg">sandbox.opencovenant.org</strong> (the public
         sandbox). The marketing and docs sites are static informational pages. The sandbox runs
         anonymous coding tasks inside ephemeral, single-use microVMs that are torn down when the
-        run finishes. None of these sites ask you to sign up. This policy also covers <strong className="text-neutral-100">Covenant Guard</strong> (the <code>covguard</code> binary, its Claude Code plugin, and its MCP server), which runs entirely on your machine; see the Covenant Guard section below.
+        run finishes. None of these sites ask you to sign up. This policy also covers <strong className="text-fg">Covenant Guard</strong> (the <code>covguard</code> binary, its Claude Code plugin, and its MCP server), which runs entirely on your machine; see the Covenant Guard section below.
       </p>
     ),
   },
@@ -80,16 +80,16 @@ const SECTIONS: Section[] = [
             <span className={subtle}>Sandbox (sandbox.opencovenant.org).</span>
           </p>
           <ul className="space-y-2">
-            <li className="flex gap-3 text-[13px] leading-relaxed text-neutral-300 sm:text-[14px]">
-              <span aria-hidden="true" className="select-none text-neutral-600">
+            <li className="flex gap-3 text-[13px] leading-relaxed text-fg-soft sm:text-[14px]">
+              <span aria-hidden="true" className="select-none text-faint">
                 ·
               </span>
               <span>
                 The text of the build request you submit (the &ldquo;intent&rdquo;).
               </span>
             </li>
-            <li className="flex gap-3 text-[13px] leading-relaxed text-neutral-300 sm:text-[14px]">
-              <span aria-hidden="true" className="select-none text-neutral-600">
+            <li className="flex gap-3 text-[13px] leading-relaxed text-fg-soft sm:text-[14px]">
+              <span aria-hidden="true" className="select-none text-faint">
                 ·
               </span>
               <span>
@@ -97,8 +97,8 @@ const SECTIONS: Section[] = [
                 output, and the response, held only long enough to render it back in your browser.
               </span>
             </li>
-            <li className="flex gap-3 text-[13px] leading-relaxed text-neutral-300 sm:text-[14px]">
-              <span aria-hidden="true" className="select-none text-neutral-600">
+            <li className="flex gap-3 text-[13px] leading-relaxed text-fg-soft sm:text-[14px]">
+              <span aria-hidden="true" className="select-none text-faint">
                 ·
               </span>
               <span>
@@ -107,8 +107,8 @@ const SECTIONS: Section[] = [
                 client can&apos;t drain the daily budget. It is not written to disk.
               </span>
             </li>
-            <li className="flex gap-3 text-[13px] leading-relaxed text-neutral-300 sm:text-[14px]">
-              <span aria-hidden="true" className="select-none text-neutral-600">
+            <li className="flex gap-3 text-[13px] leading-relaxed text-fg-soft sm:text-[14px]">
+              <span aria-hidden="true" className="select-none text-faint">
                 ·
               </span>
               <span>
@@ -122,10 +122,10 @@ const SECTIONS: Section[] = [
         <div>
           <p className={paragraph}>
             <span className={subtle}>Bot detection.</span> The sandbox uses{" "}
-            <strong className="text-neutral-100">Cloudflare Turnstile</strong> in
+            <strong className="text-fg">Cloudflare Turnstile</strong> in
             interaction-only mode to refuse automated traffic. Cloudflare receives the device
             and network signals it needs to score the request. We reference{" "}
-            <strong className="text-neutral-100">Cloudflare&apos;s Turnstile Privacy Addendum</strong>{" "}
+            <strong className="text-fg">Cloudflare&apos;s Turnstile Privacy Addendum</strong>{" "}
             (published as part of Cloudflare&apos;s privacy policy at{" "}
             <a
               href="https://www.cloudflare.com/privacypolicy/"
@@ -212,16 +212,16 @@ const SECTIONS: Section[] = [
         ].map((line) => (
           <li
             key={line}
-            className="flex gap-3 text-[13px] leading-relaxed text-neutral-300 sm:text-[14px]"
+            className="flex gap-3 text-[13px] leading-relaxed text-fg-soft sm:text-[14px]"
           >
-            <span aria-hidden="true" className="select-none text-neutral-600">
+            <span aria-hidden="true" className="select-none text-faint">
               ·
             </span>
             <span>{line}</span>
           </li>
         ))}
-        <li className="flex gap-3 pt-3 text-[13px] leading-relaxed text-neutral-400 sm:text-[14px]">
-          <span aria-hidden="true" className="select-none text-neutral-600">
+        <li className="flex gap-3 pt-3 text-[13px] leading-relaxed text-muted sm:text-[14px]">
+          <span aria-hidden="true" className="select-none text-faint">
             ·
           </span>
           <span>
@@ -238,8 +238,8 @@ const SECTIONS: Section[] = [
     title: "Third parties",
     body: (
       <ul className="space-y-3">
-        <li className="text-[13px] leading-relaxed text-neutral-300 sm:text-[14px]">
-          <strong className="text-neutral-100">Cloudflare</strong>. Bot detection on the
+        <li className="text-[13px] leading-relaxed text-fg-soft sm:text-[14px]">
+          <strong className="text-fg">Cloudflare</strong>. Bot detection on the
           sandbox via Turnstile, in interaction-only mode. See{" "}
           <a
             href="https://www.cloudflare.com/privacypolicy/"
@@ -251,8 +251,8 @@ const SECTIONS: Section[] = [
           </a>{" "}
           and the Turnstile Privacy Addendum referenced there.
         </li>
-        <li className="text-[13px] leading-relaxed text-neutral-300 sm:text-[14px]">
-          <strong className="text-neutral-100">Resend</strong>. Delivers the contact form
+        <li className="text-[13px] leading-relaxed text-fg-soft sm:text-[14px]">
+          <strong className="text-fg">Resend</strong>. Delivers the contact form
           emails to our inbox. See{" "}
           <a
             href="https://resend.com/legal/privacy-policy"
@@ -264,8 +264,8 @@ const SECTIONS: Section[] = [
           </a>
           .
         </li>
-        <li className="text-[13px] leading-relaxed text-neutral-300 sm:text-[14px]">
-          <strong className="text-neutral-100">Anthropic</strong>. Runs the underlying coding
+        <li className="text-[13px] leading-relaxed text-fg-soft sm:text-[14px]">
+          <strong className="text-fg">Anthropic</strong>. Runs the underlying coding
           model that powers sandbox runs. Your intent text and any context the model needs to
           do its job are sent to Anthropic. See{" "}
           <a
@@ -278,8 +278,8 @@ const SECTIONS: Section[] = [
           </a>
           .
         </li>
-        <li className="text-[13px] leading-relaxed text-neutral-300 sm:text-[14px]">
-          <strong className="text-neutral-100">E2B</strong>. Provisions the ephemeral microVM
+        <li className="text-[13px] leading-relaxed text-fg-soft sm:text-[14px]">
+          <strong className="text-fg">E2B</strong>. Provisions the ephemeral microVM
           your sandbox run executes in. See{" "}
           <a
             href="https://e2b.dev/privacy"
@@ -300,8 +300,8 @@ const SECTIONS: Section[] = [
     title: "Retention",
     body: (
       <ul className="space-y-2">
-        <li className="flex gap-3 text-[13px] leading-relaxed text-neutral-300 sm:text-[14px]">
-          <span aria-hidden="true" className="select-none text-neutral-600">
+        <li className="flex gap-3 text-[13px] leading-relaxed text-fg-soft sm:text-[14px]">
+          <span aria-hidden="true" className="select-none text-faint">
             ·
           </span>
           <span>
@@ -309,8 +309,8 @@ const SECTIONS: Section[] = [
             inbox. No automated deletion schedule.
           </span>
         </li>
-        <li className="flex gap-3 text-[13px] leading-relaxed text-neutral-300 sm:text-[14px]">
-          <span aria-hidden="true" className="select-none text-neutral-600">
+        <li className="flex gap-3 text-[13px] leading-relaxed text-fg-soft sm:text-[14px]">
+          <span aria-hidden="true" className="select-none text-faint">
             ·
           </span>
           <span>
@@ -319,8 +319,8 @@ const SECTIONS: Section[] = [
             retention, not aggressive deletion.
           </span>
         </li>
-        <li className="flex gap-3 text-[13px] leading-relaxed text-neutral-300 sm:text-[14px]">
-          <span aria-hidden="true" className="select-none text-neutral-600">
+        <li className="flex gap-3 text-[13px] leading-relaxed text-fg-soft sm:text-[14px]">
+          <span aria-hidden="true" className="select-none text-faint">
             ·
           </span>
           <span>
@@ -337,8 +337,8 @@ const SECTIONS: Section[] = [
     title: "Your choices",
     body: (
       <ul className="space-y-2">
-        <li className="flex gap-3 text-[13px] leading-relaxed text-neutral-300 sm:text-[14px]">
-          <span aria-hidden="true" className="select-none text-neutral-600">
+        <li className="flex gap-3 text-[13px] leading-relaxed text-fg-soft sm:text-[14px]">
+          <span aria-hidden="true" className="select-none text-faint">
             ·
           </span>
           <span>
@@ -346,8 +346,8 @@ const SECTIONS: Section[] = [
             don&apos;t submit it.
           </span>
         </li>
-        <li className="flex gap-3 text-[13px] leading-relaxed text-neutral-300 sm:text-[14px]">
-          <span aria-hidden="true" className="select-none text-neutral-600">
+        <li className="flex gap-3 text-[13px] leading-relaxed text-fg-soft sm:text-[14px]">
+          <span aria-hidden="true" className="select-none text-faint">
             ·
           </span>
           <span>
@@ -358,8 +358,8 @@ const SECTIONS: Section[] = [
             .
           </span>
         </li>
-        <li className="flex gap-3 text-[13px] leading-relaxed text-neutral-300 sm:text-[14px]">
-          <span aria-hidden="true" className="select-none text-neutral-600">
+        <li className="flex gap-3 text-[13px] leading-relaxed text-fg-soft sm:text-[14px]">
+          <span aria-hidden="true" className="select-none text-faint">
             ·
           </span>
           <span>
@@ -422,15 +422,15 @@ const SECTIONS: Section[] = [
 
 export default function PrivacyPage() {
   return (
-    <main id="main-content" className="relative min-h-screen overflow-x-hidden bg-[#030303]">
+    <main id="main-content" className="relative min-h-screen overflow-x-hidden bg-ground">
       <SiteHeader />
 
       <div className="page-container">
         <div className="mb-16 sm:mb-24">
-          <h1 className="mb-3 text-[11px] uppercase tracking-[0.4em] text-neutral-400">
+          <h1 className="mb-3 text-[11px] uppercase tracking-[0.4em] text-muted">
             Privacy
           </h1>
-          <p className="text-[11px] uppercase tracking-[0.3em] text-neutral-400">
+          <p className="text-[11px] uppercase tracking-[0.3em] text-muted">
             Last updated · {LAST_UPDATED}
           </p>
         </div>
@@ -442,11 +442,11 @@ export default function PrivacyPage() {
               <li
                 key={s.id}
                 id={s.id}
-                className={`relative border-l border-neutral-800/80 pl-8 sm:pl-12 ${isLast ? "" : "pb-14 sm:pb-16"}`}
+                className={`relative border-l border-line/80 pl-8 sm:pl-12 ${isLast ? "" : "pb-14 sm:pb-16"}`}
               >
                 <span
                   aria-hidden="true"
-                  className="absolute -left-[5px] top-[7px] h-[9px] w-[9px] rounded-full border border-neutral-700 bg-[#030303]"
+                  className="absolute -left-[5px] top-[7px] h-[9px] w-[9px] rounded-full border border-line-strong bg-ground"
                 />
                 <div className="mb-4 flex flex-wrap items-baseline gap-x-4 gap-y-1">
                   <span className={headingEyebrow}>{s.label}</span>

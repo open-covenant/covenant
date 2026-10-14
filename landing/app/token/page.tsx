@@ -28,11 +28,11 @@ export const metadata: Metadata = {
   },
 };
 
-const eyebrow = "font-mono text-[11px] uppercase tracking-[0.3em] text-neutral-500";
-const headingTitle = "text-[13px] uppercase tracking-[0.25em] text-neutral-100 sm:text-[14px]";
-const paragraph = "text-[13px] leading-relaxed text-neutral-300 sm:text-[14px]";
+const eyebrow = "font-mono text-[11px] uppercase tracking-[0.3em] text-muted-2";
+const headingTitle = "text-[13px] uppercase tracking-[0.25em] text-fg sm:text-[14px]";
+const paragraph = "text-[13px] leading-relaxed text-fg-soft sm:text-[14px]";
 const linkClass =
-  "underline decoration-neutral-700 underline-offset-4 transition-colors hover:decoration-neutral-300 hover:text-neutral-50";
+  "underline decoration-line-strong underline-offset-4 transition-colors hover:decoration-fg-soft hover:text-fg";
 
 const CTA = [
   { label: "Stake $CVNT", href: "/stake" },
@@ -43,28 +43,28 @@ const CTA = [
 
 export default function TokenPage() {
   return (
-    <main id="main-content" className="relative flex min-h-screen flex-col overflow-x-hidden bg-[#030303]">
+    <main id="main-content" className="relative flex min-h-screen flex-col overflow-x-hidden bg-ground">
       <SiteHeader />
 
       <div className="page-container flex-1">
-        <h1 className="mb-10 text-[11px] uppercase tracking-[0.4em] text-neutral-400 sm:mb-14">
+        <h1 className="mb-10 text-[11px] uppercase tracking-[0.4em] text-muted sm:mb-14">
           Token
         </h1>
 
         <div className="grid grid-cols-1 gap-12 lg:grid-cols-[1.3fr_1fr] lg:gap-16">
           {/* Left column — the narrative */}
           <div>
-            <h2 className="max-w-2xl text-balance text-[2.2rem] font-extralight uppercase leading-[1.1] tracking-[2px] text-white sm:text-[2.6rem]">
+            <h2 className="type-display max-w-2xl text-balance text-[2.2rem] text-fg sm:text-[2.6rem]">
               Buy $CVNT
             </h2>
 
-            <p className="mt-6 max-w-xl text-pretty text-lg font-light leading-relaxed text-neutral-300 sm:text-xl">
+            <p className="mt-6 max-w-xl text-pretty text-[15px] leading-[1.7] text-fg-soft sm:text-base">
               $CVNT is Covenant&apos;s token on Solana, with a fixed supply and a renounced mint
               authority. Buy it with a card or with crypto. No seed phrase, no bridging, no juggling
               apps. A wallet is created for you the first time you need one.
             </p>
 
-            <div className="mt-12 border-t border-neutral-800/80 pt-8">
+            <div className="mt-12 border-t border-line/80 pt-8">
               <div className="mb-4 flex flex-wrap items-baseline gap-x-4 gap-y-1">
                 <span className={eyebrow}>$CVNT</span>
                 <h3 className={headingTitle}>How the token works</h3>
@@ -81,7 +81,7 @@ export default function TokenPage() {
               </p>
             </div>
 
-            <div className="mt-10 flex flex-wrap gap-x-6 gap-y-3 border-t border-neutral-800/80 pt-8">
+            <div className="mt-10 flex flex-wrap gap-x-6 gap-y-3 border-t border-line/80 pt-8">
               {CTA.map((c) => {
                 const external = c.href.startsWith("http");
                 return (
@@ -89,7 +89,7 @@ export default function TokenPage() {
                     key={c.href}
                     href={c.href}
                     {...(external ? { target: "_blank", rel: "noopener noreferrer" } : {})}
-                    className="text-[12px] uppercase tracking-[0.2em] text-neutral-400 transition-colors hover:text-neutral-50"
+                    className="text-[12px] uppercase tracking-[0.2em] text-muted transition-colors hover:text-fg"
                   >
                     {c.label} →
                   </a>
@@ -100,7 +100,7 @@ export default function TokenPage() {
 
           {/* Right column — the buy panel */}
           <aside className="lg:sticky lg:top-28 lg:self-start">
-            <div className="rounded-lg border border-neutral-800/80 bg-[#070707] p-6 sm:p-8">
+            <div className="rounded-lg border border-line/80 bg-raised p-6 sm:p-8">
               <div className="mb-5 flex flex-wrap items-baseline gap-x-4 gap-y-1">
                 <span className={eyebrow}>Buy</span>
                 <h3 className={headingTitle}>Card or crypto</h3>
@@ -111,19 +111,19 @@ export default function TokenPage() {
                 path; the swap settles on Solana.
               </p>
 
-              <BuyButton className="block w-full rounded-md bg-white px-5 py-3 text-center text-[12px] font-medium uppercase tracking-[0.2em] text-black transition-colors hover:bg-neutral-200" />
+              <BuyButton className="btn btn-primary w-full" />
 
-              <p className="mt-3 text-center text-[11px] text-neutral-500">
+              <p className="mt-3 text-center text-[11px] text-muted-2">
                 Opens the secure Qwerti checkout. No seed phrase required.
               </p>
 
-              <div className="mt-7 border-t border-neutral-800/80 pt-6">
+              <div className="mt-7 border-t border-line/80 pt-6">
                 <span className={`${eyebrow} mb-2 block`}>Contract address</span>
                 <CopyAddress
                   address="2mNVZ6aEjrGwiUVCfz7XGWpiXuWzgBDoznwE579upump"
                   label="Copy $CVNT contract address"
                 />
-                <p className="mt-4 text-[11px] leading-relaxed text-neutral-500">
+                <p className="mt-4 text-[11px] leading-relaxed text-muted-2">
                   Prefer to do it yourself? Buy directly on{" "}
                   <a
                     href="https://pump.fun/coin/2mNVZ6aEjrGwiUVCfz7XGWpiXuWzgBDoznwE579upump"

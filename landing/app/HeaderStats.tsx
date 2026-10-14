@@ -26,21 +26,18 @@ function Cell({
 }) {
   return (
     <div className="flex flex-col items-end leading-none">
-      <span className="text-[9px] uppercase tracking-[0.18em] text-neutral-400">{label}</span>
+      <span className="font-mono text-[9px] uppercase tracking-[0.18em] text-muted-2">{label}</span>
       {href ? (
         <a
           href={href}
           target="_blank"
           rel="noopener noreferrer"
-          className="mt-1 text-[12px] tabular-nums text-[#7f9f78] no-underline hover:text-white hover:no-underline"
+          className="mt-1 font-mono text-[12px] tabular-nums text-mint no-underline hover:text-fg hover:no-underline"
         >
           {value}
         </a>
       ) : (
-        <span
-          className="mt-1 text-[12px] tabular-nums"
-          style={{ color: accent ? "#7f9f78" : "#e0e0e0" }}
-        >
+        <span className={`mt-1 font-mono text-[12px] tabular-nums ${accent ? "text-mint" : "text-fg"}`}>
           {value}
         </span>
       )}

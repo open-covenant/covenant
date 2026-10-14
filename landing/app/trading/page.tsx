@@ -25,12 +25,12 @@ export const metadata: Metadata = {
   },
 };
 
-const eyebrow = "font-mono text-[11px] uppercase tracking-[0.3em] text-neutral-400";
-const paragraph = "text-[13px] leading-relaxed text-neutral-300 sm:text-[14px]";
+const eyebrow = "font-mono text-[11px] uppercase tracking-[0.3em] text-muted";
+const paragraph = "text-[13px] leading-relaxed text-fg-soft sm:text-[14px]";
 const cmdBlock =
-  "block overflow-x-auto whitespace-pre rounded border border-neutral-800 bg-neutral-950 px-4 py-3 font-mono text-[12.5px] leading-relaxed text-neutral-100 sm:text-[13px]";
+  "block overflow-x-auto whitespace-pre rounded border border-line bg-raised px-4 py-3 font-mono text-[12.5px] leading-relaxed text-fg sm:text-[13px]";
 const link =
-  "underline decoration-neutral-700 underline-offset-4 transition-colors hover:text-neutral-50 hover:decoration-neutral-300";
+  "underline decoration-line-strong underline-offset-4 transition-colors hover:text-fg hover:decoration-fg-soft";
 
 const DECISIONS: {
   case_: string;
@@ -77,7 +77,7 @@ export default function TradingPage() {
       <SiteHeader />
       <main className="mx-auto w-full max-w-7xl px-5 pb-24 pt-[88px] sm:px-8 sm:pt-[120px]">
         <p className={eyebrow}>policy &middot; receipts &middot; track record</p>
-        <h1 className="mt-4 text-2xl font-extralight tracking-[0.18em] text-neutral-50 sm:text-3xl">
+        <h1 className="page-title mt-4 text-fg">
           Governed agentic trading
         </h1>
         <p className={`${paragraph} mt-5 max-w-2xl`}>
@@ -108,9 +108,9 @@ export default function TradingPage() {
               body: "Receipts roll up into mandate adherence and activity: how often the gate had to refuse the agent, and what it actually did. A track record that travels between venues and can't be self-asserted.",
             },
           ].map((c) => (
-            <div key={c.title} className="rounded border border-neutral-800 bg-neutral-950/60 p-5">
-              <h2 className="text-[13px] uppercase tracking-[0.22em] text-neutral-100">{c.title}</h2>
-              <p className={`${paragraph} mt-3 text-neutral-400`}>{c.body}</p>
+            <div key={c.title} className="rounded border border-line bg-raised/60 p-5">
+              <h2 className="text-[13px] uppercase tracking-[0.22em] text-fg">{c.title}</h2>
+              <p className={`${paragraph} mt-3 text-muted`}>{c.body}</p>
             </div>
           ))}
         </section>
@@ -141,19 +141,19 @@ export default function TradingPage() {
           </p>
           <div className="mt-4 space-y-3">
             {DECISIONS.map((d) => (
-              <div key={d.asset} className="rounded border border-neutral-800 bg-neutral-950/60 p-4">
+              <div key={d.asset} className="rounded border border-line bg-raised/60 p-4">
                 <div className="flex flex-wrap items-baseline justify-between gap-2">
-                  <p className="text-[13px] text-neutral-100">{d.case_}</p>
+                  <p className="text-[13px] text-fg">{d.case_}</p>
                   <p
                     className={`font-mono text-[11px] uppercase tracking-[0.22em] ${
-                      d.decision === "executed" ? "text-emerald-400" : "text-red-400"
+                      d.decision === "executed" ? "text-ok" : "text-bad"
                     }`}
                   >
                     {d.decision}
                   </p>
                 </div>
-                <p className={`${paragraph} mt-1 text-neutral-500`}>{d.reason}</p>
-                <p className="mt-2 font-mono text-[11.5px] text-neutral-500">
+                <p className={`${paragraph} mt-1 text-muted-2`}>{d.reason}</p>
+                <p className="mt-2 font-mono text-[11.5px] text-muted-2">
                   <a className={link} href={`https://solscan.io/tx/${d.tx}`}>
                     tx {short(d.tx)}
                   </a>
@@ -177,7 +177,7 @@ export default function TradingPage() {
 cd covenant/agent-os
 cargo run -p covenant-robinhood --example governed_demo`}
           </code>
-          <p className={`${paragraph} mt-2 text-neutral-500`}>
+          <p className={`${paragraph} mt-2 text-muted-2`}>
             Live execution attaches your own API key on your own account, held in a signing sidecar
             the daemon never reads. Covenant is infrastructure you run, not a broker, adviser, or
             custodian, and it never holds funds.
@@ -201,7 +201,7 @@ cargo run -p covenant-robinhood --example governed_demo`}
           </p>
         </section>
 
-        <p className={`${paragraph} mt-14 text-[11.5px] text-neutral-600`}>
+        <p className={`${paragraph} mt-14 text-[11.5px] text-faint`}>
           Covenant is not affiliated with, endorsed by, or sponsored by Robinhood Markets, Inc.
           Nothing here is investment advice. Agentic trading involves significant risk.
         </p>

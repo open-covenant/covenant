@@ -1,7 +1,7 @@
 {
   "name": "Covenant",
   "description": "Open, local-first OS for autonomous agents on Solana. Scoped capabilities, audit-rooted actions, x402 settlement, on-chain identity.",
-  "image": "https://opencovenant.org/wordmark.png",
+  "image": "https://opencovenant.org/covenant-mark.png",
   "wallet": "AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb",
   "website": "https://opencovenant.org",
   "twitter": "@OpenCovenant",

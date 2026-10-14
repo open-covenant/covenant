@@ -1,109 +1,30 @@
-import Image from "next/image";
 import Link from "next/link";
+import { HeaderShell } from "./HeaderShell";
 import { HeaderStats } from "./HeaderStats";
-import { MobileMenu } from "./MobileMenu";
-import {
-  GithubIcon,
-  GITHUB_URL,
-  NAV_LINKS,
-  SOCIAL_LINKS,
-  TelegramIcon,
-  TELEGRAM_URL,
-  XIcon,
-  X_URL,
-} from "./_brand";
+import { SiteMenu } from "./SiteMenu";
+import { CovenantLockup } from "./_brand";
 
 /**
- * Site-wide header bar: left-aligned logo followed by the nav, with the live
- * stats and socials on the right, and a bottom border separating it from page
- * content (the home terminal docks directly beneath it). Single source of
- * truth — home and every top-level subpage mount this. Below xl the nav and
- * socials fold into the mobile drawer.
+ * Site-wide header bar: the lockup on the left; live stats (from xl) and the
+ * menu button on the right. Navigation lives in the side menu at every width.
+ * Single source of truth: home and every top-level subpage mount this.
  */
 export function SiteHeader() {
   return (
-    <header
-      className="absolute inset-x-0 top-0 z-20 border-b border-neutral-800/70 bg-[#030303]/72 backdrop-blur-md"
-      style={{ paddingTop: "env(safe-area-inset-top)" }}
-    >
-      <div className="mx-auto flex h-16 w-full max-w-7xl items-center justify-between gap-4 px-5 sm:h-20 sm:px-8">
-        <div className="flex min-w-0 items-center gap-3 sm:gap-6">
-          <Link href="/" aria-label="Covenant home" className="shrink-0">
-            <Image
-              src="/logo.svg"
-              alt="Covenant"
-              width={255}
-              height={54}
-              priority
-              className="h-[30px] w-auto opacity-95 sm:h-[42px]"
-            />
-          </Link>
+    <HeaderShell>
+      <div className="flex h-(--header-h) w-full items-center justify-between gap-4 px-[clamp(20px,3.4vw,50px)]">
+        <Link href="/" aria-label="Covenant home" className="shrink-0 text-fg">
+          <CovenantLockup markClassName="h-[26px] w-auto sm:h-[30px]" />
+        </Link>
 
-          <nav aria-label="Primary" className="hidden items-center gap-2 xl:flex">
-            {NAV_LINKS.map((item) =>
-              item.external ? (
-                <a
-                  key={item.href}
-                  href={item.href}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="px-3 py-3 text-[12px] uppercase tracking-[0.2em] text-neutral-400 transition-colors hover:text-neutral-50"
-                >
-                  {item.label}
-                </a>
-              ) : (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className="px-3 py-3 text-[12px] uppercase tracking-[0.2em] text-neutral-400 transition-colors hover:text-neutral-50"
-                >
-                  {item.label}
-                </Link>
-              ),
-            )}
-          </nav>
-        </div>
-
-        <div className="flex shrink-0 items-center gap-4">
-          <div className="hidden items-center gap-4 xl:flex">
+        <div className="flex shrink-0 items-center gap-6">
+          <div className="hidden items-center gap-6 xl:flex">
             <HeaderStats />
-            <span aria-hidden className="h-4 w-px bg-neutral-700/50" />
-            <div className="flex items-center gap-0.5">
-              <a
-                href={X_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                aria-label="Covenant on X"
-                className="p-2 text-neutral-400 transition-colors hover:text-neutral-50"
-              >
-                <XIcon className="h-4 w-4" />
-              </a>
-              <a
-                href={TELEGRAM_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                aria-label="Covenant on Telegram"
-                className="p-2 text-neutral-400 transition-colors hover:text-neutral-50"
-              >
-                <TelegramIcon className="h-4 w-4" />
-              </a>
-              <a
-                href={GITHUB_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                aria-label="Covenant on GitHub"
-                className="p-2 text-neutral-400 transition-colors hover:text-neutral-50"
-              >
-                <GithubIcon className="h-4 w-4" />
-              </a>
-            </div>
+            <span aria-hidden className="h-4 w-px bg-line" />
           </div>
-
-          <div className="xl:hidden">
-            <MobileMenu items={NAV_LINKS} socials={SOCIAL_LINKS} />
-          </div>
+          <SiteMenu />
         </div>
       </div>
-    </header>
+    </HeaderShell>
   );
 }

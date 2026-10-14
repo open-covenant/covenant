@@ -255,3 +255,20 @@ const LOGO_SLUGS = new Set<string>([
 export function logoFor(slug: string): string | undefined {
   return LOGO_SLUGS.has(slug) ? `/partners/${slug}.jpg` : undefined;
 }
+
+// Avatars drawn on a white tile. The site never shows a white ground, so these
+// render inverted (a light mark on black) until the partner supplies a
+// light-on-dark mark (see public/partners/README.md).
+const LIGHT_TILE_SLUGS = new Set<string>([
+  "metaplex",
+  "fairscale",
+  "hermes",
+  "wurk",
+  "acedata",
+  "orbserv",
+  "percolator",
+]);
+
+export function logoOnLightTile(slug: string): boolean {
+  return LIGHT_TILE_SLUGS.has(slug);
+}

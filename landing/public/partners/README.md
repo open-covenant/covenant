@@ -6,8 +6,8 @@ to a clean monospace wordmark, so the page is complete without any assets.
 ## How to add a logo
 
 1. Drop the file here named exactly `<slug>.svg` (SVG preferred; transparent
-   PNG also works). The site renders on a near-black background (`#030303`), so
-   provide a **light / monochrome-on-dark** version of the mark.
+   PNG also works). The site is always dark (night, `#0d0b16`) and never shows a
+   white ground, so provide a **light / monochrome-on-dark** version of the mark.
 2. In `app/_partners.ts`, set `logo: "/partners/<slug>.svg"` on that entry.
 
 Marks are displayed at ~28px tall, `object-contain`, max width 160px — a

@@ -78,7 +78,7 @@ const ACCENT: Record<string, string> = {
   Codex: "#7ee0a8",
   GLM: "#d8a8f0",
 };
-const NEUTRAL = "#737373";
+const NEUTRAL = "#8079a0";
 
 async function loadArena(): Promise<Arena> {
   try {
@@ -122,10 +122,17 @@ function Curve({ points }: { points: Arena["curve"] }) {
       className="mt-6 w-full"
       aria-label="Efficiency multiple per promoted round"
     >
+      <defs>
+        <linearGradient id="arena-efficiency-ramp" x1="0" y1="0" x2={w} y2="0" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stopColor="#a03bf0" />
+          <stop offset="0.5" stopColor="#4c7fde" />
+          <stop offset="1" stopColor="#1de3ae" />
+        </linearGradient>
+      </defs>
       <path
         d={path}
         fill="none"
-        stroke="#d4d4d4"
+        stroke="url(#arena-efficiency-ramp)"
         strokeWidth="1.5"
         pathLength={1}
         className="arena-draw"
@@ -136,7 +143,7 @@ function Curve({ points }: { points: Arena["curve"] }) {
           cx={x}
           cy={y}
           r="3.5"
-          fill="#030303"
+          fill="#0d0b16"
           stroke={ACCENT[points[i].proposer ?? ""] ?? NEUTRAL}
           strokeWidth="2"
           className="arena-pop"
@@ -156,7 +163,7 @@ function DailyBars({ data }: { data: { date: string; count: number }[] }) {
       {data.map((d, i) => (
         <div key={i} className="group relative flex h-full w-[3px] items-end">
           <div
-            className="arena-grow-y w-full bg-neutral-600 transition-colors group-hover:bg-neutral-300"
+            className="arena-grow-y w-full bg-faint transition-colors group-hover:bg-blue"
             style={{ height: `${Math.max(3, (d.count / max) * 100)}%`, animationDelay: `${0.3 + i * 0.04}s` }}
           >
             <title>{`${d.date}: ${d.count} integrated`}</title>
@@ -179,8 +186,8 @@ function CumulativeLine({ data }: { data: { date: string; total: number }[] }) {
   const area = `${path} L${w},${h} L0,${h} Z`;
   return (
     <svg viewBox={`0 0 ${w} ${h}`} className="mt-4 w-full" preserveAspectRatio="none" aria-label="Cumulative tasks integrated">
-      <path className="arena-fade" d={area} fill="#ffffff10" />
-      <path className="arena-draw" d={path} fill="none" stroke="#f5f5f5" strokeWidth="1.5" pathLength={1} vectorEffect="non-scaling-stroke" />
+      <path className="arena-fade" d={area} fill="rgb(76 127 222 / 0.1)" />
+      <path className="arena-draw" d={path} fill="none" stroke="#4c7fde" strokeWidth="1.5" pathLength={1} vectorEffect="non-scaling-stroke" />
     </svg>
   );
 }
@@ -188,12 +195,12 @@ function CumulativeLine({ data }: { data: { date: string; total: number }[] }) {
 export default async function ArenaPage() {
   const [arena, loop] = await Promise.all([loadArena(), loadLoop()]);
   const stat =
-    "border border-neutral-800/80 px-5 py-5 text-center transition-colors duration-300 hover:border-neutral-600";
-  const statLabel = "text-[10px] uppercase tracking-[0.3em] text-neutral-500";
-  const statValue = "mt-2 text-3xl font-extralight tabular-nums";
+    "border border-line/80 px-5 py-5 text-center transition-colors duration-300 hover:border-faint";
+  const statLabel = "text-[10px] uppercase tracking-[0.3em] text-muted-2";
+  const statValue = "type-display mt-2 text-[2rem] tabular-nums";
 
   return (
-    <main id="main-content" className="relative min-h-screen overflow-x-hidden bg-[#030303]">
+    <main id="main-content" className="relative min-h-screen overflow-x-hidden bg-ground">
       <style>{`
         @keyframes arenaDraw { to { stroke-dashoffset: 0; } }
         @keyframes arenaPop { from { opacity: 0; transform: scale(0.2); } to { opacity: 1; transform: scale(1); } }
@@ -207,9 +214,9 @@ export default async function ArenaPage() {
         .arena-grow-y { transform: scaleY(0); transform-origin: bottom; animation: arenaGrowY 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
         .arena-grow-x { transform: scaleX(0); transform-origin: left; animation: arenaGrowX 0.9s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
         .arena-fade { opacity: 0; animation: arenaFade 1s ease-out 1.6s forwards; }
-        .arena-scroll { scrollbar-width: thin; scrollbar-color: #404040 transparent; }
+        .arena-scroll { scrollbar-width: thin; scrollbar-color: #3d3757 transparent; }
         .arena-scroll::-webkit-scrollbar { width: 4px; }
-        .arena-scroll::-webkit-scrollbar-thumb { background: #404040; border-radius: 2px; }
+        .arena-scroll::-webkit-scrollbar-thumb { background: #3d3757; border-radius: 2px; }
         .arena-scroll::-webkit-scrollbar-track { background: transparent; }
         @media (prefers-reduced-motion: reduce) {
           .arena-draw, .arena-pop, .arena-rise, .arena-grow-y, .arena-grow-x, .arena-fade {
@@ -221,13 +228,13 @@ export default async function ArenaPage() {
 
       <div className="page-container">
         <div className="mb-10 flex items-center gap-4 sm:mb-14">
-          <h1 className="text-[11px] uppercase tracking-[0.4em] text-white">
+          <h1 className="text-[11px] uppercase tracking-[0.4em] text-fg">
             Arena
           </h1>
-          <span className="flex items-center gap-2 text-[10px] uppercase tracking-[0.3em] text-emerald-300/90">
+          <span className="flex items-center gap-2 text-[10px] uppercase tracking-[0.3em] text-ok/90">
             <span className="relative flex h-[7px] w-[7px]">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
-              <span className="relative inline-flex h-[7px] w-[7px] rounded-full bg-emerald-400" />
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-ok opacity-60" />
+              <span className="relative inline-flex h-[7px] w-[7px] rounded-full bg-ok" />
             </span>
             Live
           </span>
@@ -236,13 +243,13 @@ export default async function ArenaPage() {
         <div className="lg:grid lg:grid-cols-2 lg:gap-14">
           <div>
             <div className="arena-scroll lg:sticky lg:top-24 lg:max-h-[calc(100vh-8rem)] lg:overflow-y-auto lg:pr-4">
-              <h2 className="text-balance text-[2.6rem] font-extralight uppercase leading-[1.1] tracking-[2px] text-white sm:text-[3rem]">
-                Claude <span className="text-neutral-500">·</span> Grok{" "}
-                <span className="text-neutral-500">·</span> Codex{" "}
-                <span className="text-neutral-500">·</span> GLM
+              <h2 className="type-display text-balance text-[2.6rem] text-fg sm:text-[3rem]">
+                Claude <span className="text-muted-2">·</span> Grok{" "}
+                <span className="text-muted-2">·</span> Codex{" "}
+                <span className="text-muted-2">·</span> GLM
               </h2>
 
-              <p className="mt-6 text-pretty text-lg font-light leading-relaxed text-neutral-300">
+              <p className="mt-6 text-pretty text-[15px] leading-[1.7] text-fg-soft sm:text-base">
                 Covenant is built by a recursive, self-improving loop: an
                 autonomous agent that ships this codebase and then rewrites its
                 own components to make them measurably better. The arena is
@@ -284,13 +291,13 @@ export default async function ArenaPage() {
               <div className="mt-3 grid grid-cols-2 gap-3">
                 <div className={`${stat} arena-rise`} style={{ animationDelay: "0.2s" }}>
                   <div className={statLabel}>Rejected rounds</div>
-                  <div className={`${statValue} text-neutral-400`}>
+                  <div className={`${statValue} text-muted`}>
                     {arena.tally.rejectedRounds}
                   </div>
                 </div>
                 <div className={`${stat} arena-rise`} style={{ animationDelay: "0.26s" }}>
                   <div className={statLabel}>Compute cut</div>
-                  <div className={`${statValue} text-emerald-300`}>
+                  <div className={`${statValue} text-ok`}>
                     {arena.incumbent.fuelCutPct}%
                   </div>
                 </div>
@@ -300,9 +307,9 @@ export default async function ArenaPage() {
                 >
                   <div className={statLabel}>Community challenge ships</div>
                   <div className="mt-2 flex items-baseline justify-center gap-3">
-                    <span className={`${statValue} mt-0 text-white`}>{arena.community.ships}</span>
+                    <span className={`${statValue} mt-0 text-fg`}>{arena.community.ships}</span>
                     {arena.rounds.find((r) => r.era === "challenge")?.entries[0]?.proposer && (
-                      <span className="text-sm font-light" style={{ color: ACCENT.Grok }}>
+                      <span className="text-sm" style={{ color: ACCENT.Grok }}>
                         latest: {arena.rounds.find((r) => r.era === "challenge")?.entries[0]?.proposer}
                       </span>
                     )}
@@ -310,13 +317,13 @@ export default async function ArenaPage() {
                 </div>
               </div>
 
-              <p className="mt-10 text-[11px] uppercase tracking-[0.25em] text-neutral-500">
+              <p className="mt-10 text-[11px] uppercase tracking-[0.25em] text-muted-2">
                 Same work, less compute: efficiency multiple (now{" "}
-                <span className="text-neutral-200">{arena.incumbent.scalar}x</span>)
+                <span className="text-fg-2">{arena.incumbent.scalar}x</span>)
               </p>
               <Curve points={arena.curve} />
 
-              <p className="mt-8 text-[12px] leading-relaxed text-neutral-300">
+              <p className="mt-8 text-[12px] leading-relaxed text-fg-soft">
                 Open challenge: beat the kernel, any function or the whole
                 block. Humans, models, agents. Clear the margin and your code
                 ships, attributed.{" "}
@@ -324,26 +331,26 @@ export default async function ArenaPage() {
                   href={`${GITHUB_REPO_URL}/blob/feat/self-improvement/docs/arena-challenge.md`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-emerald-300 underline underline-offset-4 transition-colors hover:text-emerald-200"
+                  className="text-ok underline underline-offset-4 transition-colors hover:text-ok"
                 >
                   Enter
                 </a>
               </p>
 
-              <p className="mt-4 text-[11px] leading-relaxed tracking-[0.15em] text-neutral-600">
+              <p className="mt-4 text-[11px] leading-relaxed tracking-[0.15em] text-faint">
                 Promotion margin +0.005 scalar since round 4 (was +0.02; the
                 metric is deterministic, so any measured gain is real).{" "}
                 <a
                   href={`${GITHUB_REPO_URL}/blob/feat/self-improvement/docs/arena-challenge.md`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="underline underline-offset-4 transition-colors hover:text-neutral-300"
+                  className="underline underline-offset-4 transition-colors hover:text-fg-soft"
                 >
                   Rules and open challenge
                 </a>
               </p>
 
-              <p className="mt-4 hidden text-[11px] uppercase tracking-[0.25em] text-neutral-600 lg:block">
+              <p className="mt-4 hidden text-[11px] uppercase tracking-[0.25em] text-faint lg:block">
                 Updated {new Date(arena.updatedAt).toUTCString()}
               </p>
             </div>
@@ -355,16 +362,16 @@ export default async function ArenaPage() {
               {arena.rounds.map((r, i) => {
                 const isLast = i === arena.rounds.length - 1;
                 const winner = r.entries.find((e) => e.promoted);
-                const winColor = winner ? (ACCENT[winner.proposer] ?? NEUTRAL) : "#404040";
+                const winColor = winner ? (ACCENT[winner.proposer] ?? NEUTRAL) : "#3d3757";
                 const eraBreak = r.era === "solo" && (i === 0 || arena.rounds[i - 1].era === "tournament");
                 return (
                   <li
                     key={r.round}
-                    className={`arena-rise relative border-l border-neutral-800/80 pl-8 sm:pl-10 ${isLast ? "" : "pb-10 sm:pb-12"}`}
+                    className={`arena-rise relative border-l border-line/80 pl-8 sm:pl-10 ${isLast ? "" : "pb-10 sm:pb-12"}`}
                     style={{ animationDelay: `${0.1 + i * 0.07}s` }}
                   >
                     {eraBreak && (
-                      <div className="mb-8 -ml-8 border-y border-neutral-800/60 py-4 pl-8 text-[11px] uppercase tracking-[0.25em] text-neutral-500 sm:-ml-10 sm:pl-10">
+                      <div className="mb-8 -ml-8 border-y border-line/60 py-4 pl-8 text-[11px] uppercase tracking-[0.25em] text-muted-2 sm:-ml-10 sm:pl-10">
                         Before the tournament: the loop ran solo, Claude Fable 5
                         proposing alone. {arena.solo.promotions} promotions,{" "}
                         {arena.solo.rejected} rejected, {arena.solo.finalScalar}x.
@@ -376,10 +383,10 @@ export default async function ArenaPage() {
                       style={{ backgroundColor: winColor }}
                     />
                     <div className="mb-3 flex flex-wrap items-baseline gap-x-4 gap-y-1">
-                      <span className="text-[11px] uppercase tracking-[0.3em] text-neutral-300">
+                      <span className="text-[11px] uppercase tracking-[0.3em] text-fg-soft">
                         {r.display}
                       </span>
-                      <span className="text-[11px] uppercase tracking-[0.25em] text-neutral-500">
+                      <span className="text-[11px] uppercase tracking-[0.25em] text-muted-2">
                         {winner ? (
                           <>
                             <span style={{ color: winColor }}>{winner.proposer}</span>{" "}
@@ -394,7 +401,7 @@ export default async function ArenaPage() {
                           href={`${GITHUB_REPO_URL}/commit/${winner.commit}`}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-[11px] uppercase tracking-[0.2em] text-neutral-400 underline-offset-4 transition-colors hover:text-neutral-50 hover:underline"
+                          className="text-[11px] uppercase tracking-[0.2em] text-muted underline-offset-4 transition-colors hover:text-fg hover:underline"
                         >
                           shipped {winner.commit.slice(0, 8)}
                         </a>
@@ -404,15 +411,15 @@ export default async function ArenaPage() {
                       {r.entries.map((e, j) => (
                         <li
                           key={j}
-                          className="group flex flex-wrap items-baseline gap-x-3 text-sm font-light text-neutral-300"
+                          className="group flex flex-wrap items-baseline gap-x-3 text-sm text-fg-soft"
                         >
                           <span
                             className="min-w-14"
-                            style={{ color: ACCENT[e.proposer] ?? "#d4d4d4" }}
+                            style={{ color: ACCENT[e.proposer] ?? "#c4bfd8" }}
                           >
                             {e.proposer}
                           </span>
-                          <span className="tabular-nums text-neutral-200">
+                          <span className="tabular-nums text-fg-2">
                             {e.scalar > 0 ? `${e.scalar}x` : "—"}
                           </span>
                           {e.promoted && e.commit ? (
@@ -420,12 +427,12 @@ export default async function ArenaPage() {
                               href={`${GITHUB_REPO_URL}/commit/${e.commit}`}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="text-[11px] uppercase tracking-[0.2em] text-neutral-400 underline-offset-4 transition-colors hover:text-neutral-50 hover:underline"
+                              className="text-[11px] uppercase tracking-[0.2em] text-muted underline-offset-4 transition-colors hover:text-fg hover:underline"
                             >
                               shipped {e.commit.slice(0, 8)}
                             </a>
                           ) : (
-                            <span className="text-[12px] text-neutral-500">
+                            <span className="text-[12px] text-muted-2">
                               {e.reason}
                             </span>
                           )}
@@ -437,18 +444,18 @@ export default async function ArenaPage() {
               })}
             </ol>
 
-            <p className="mt-12 text-[11px] uppercase tracking-[0.25em] text-neutral-600 lg:hidden">
+            <p className="mt-12 text-[11px] uppercase tracking-[0.25em] text-faint lg:hidden">
               Updated {new Date(arena.updatedAt).toUTCString()}
             </p>
             </div>
           </div>
         </div>
         {loop && (
-          <div className="mt-24 border-t border-neutral-800/80 pt-14 sm:mt-28">
-            <h2 className="text-balance text-[1.8rem] font-extralight uppercase leading-[1.1] tracking-[2px] text-white sm:text-[2rem]">
+          <div className="mt-24 border-t border-line/80 pt-14 sm:mt-28">
+            <h2 className="type-display text-balance text-[1.8rem] text-fg sm:text-[2rem]">
               The loop
             </h2>
-            <p className="mt-5 max-w-2xl text-pretty text-lg font-light leading-relaxed text-neutral-300">
+            <p className="mt-5 max-w-2xl text-pretty text-[15px] leading-[1.7] text-fg-soft sm:text-base">
               The arena optimizes one kernel. This is the loop that builds the
               rest of Covenant: an autonomous agent working a task ledger
               through plan, review, validation and integration, around the
@@ -458,31 +465,31 @@ export default async function ArenaPage() {
             <div className="mt-12 lg:grid lg:grid-cols-2 lg:gap-14">
               <div>
                 <div className="grid grid-cols-3 gap-3">
-                  <div className="border border-neutral-800/80 px-4 py-4 text-center">
-                    <div className="text-[10px] uppercase tracking-[0.25em] text-neutral-500">Integrated</div>
-                    <div className="mt-2 text-2xl font-extralight tabular-nums text-white">{loop.totals.integrated}</div>
+                  <div className="border border-line/80 px-4 py-4 text-center">
+                    <div className="text-[10px] uppercase tracking-[0.25em] text-muted-2">Integrated</div>
+                    <div className="type-display mt-2 text-2xl tabular-nums text-fg">{loop.totals.integrated}</div>
                   </div>
-                  <div className="border border-neutral-800/80 px-4 py-4 text-center">
-                    <div className="text-[10px] uppercase tracking-[0.25em] text-neutral-500">Per active day</div>
-                    <div className="mt-2 text-2xl font-extralight tabular-nums text-white">{loop.throughput.velocity}</div>
+                  <div className="border border-line/80 px-4 py-4 text-center">
+                    <div className="text-[10px] uppercase tracking-[0.25em] text-muted-2">Per active day</div>
+                    <div className="type-display mt-2 text-2xl tabular-nums text-fg">{loop.throughput.velocity}</div>
                   </div>
-                  <div className="border border-neutral-800/80 px-4 py-4 text-center">
-                    <div className="text-[10px] uppercase tracking-[0.25em] text-neutral-500">Ledger events</div>
-                    <div className="mt-2 text-2xl font-extralight tabular-nums text-white">{loop.totals.events}</div>
+                  <div className="border border-line/80 px-4 py-4 text-center">
+                    <div className="text-[10px] uppercase tracking-[0.25em] text-muted-2">Ledger events</div>
+                    <div className="type-display mt-2 text-2xl tabular-nums text-fg">{loop.totals.events}</div>
                   </div>
                 </div>
 
-                <div className="mt-6 border border-neutral-800/80 px-5 py-4">
-                  <div className="text-[10px] uppercase tracking-[0.25em] text-neutral-500">
+                <div className="mt-6 border border-line/80 px-5 py-4">
+                  <div className="text-[10px] uppercase tracking-[0.25em] text-muted-2">
                     {loop.inFlight ? "In flight" : "Last shipped"}
                   </div>
                   <div
-                    className="mt-2 truncate font-light text-emerald-300"
+                    className="mt-2 truncate text-ok"
                     title={loop.inFlight?.task ?? loop.recent[0]?.task ?? "idle"}
                   >
                     {loop.inFlight ? loop.inFlight.task : loop.recent[0]?.task ?? "idle"}
                   </div>
-                  <div className="mt-1 text-[10px] uppercase tracking-[0.2em] text-neutral-500">
+                  <div className="mt-1 text-[10px] uppercase tracking-[0.2em] text-muted-2">
                     {loop.inFlight
                       ? `${loop.inFlight.state.replace("_", " ")} · since ${new Date(loop.inFlight.since).toUTCString().slice(5, 22)}`
                       : loop.recent[0]
@@ -491,32 +498,32 @@ export default async function ArenaPage() {
                   </div>
                 </div>
 
-                <p className="mt-8 text-[11px] uppercase tracking-[0.25em] text-neutral-500">
+                <p className="mt-8 text-[11px] uppercase tracking-[0.25em] text-muted-2">
                   Integrations per day, last 21 days
                 </p>
                 <DailyBars data={loop.daily} />
 
-                <p className="mt-8 text-[11px] uppercase tracking-[0.25em] text-neutral-500">
+                <p className="mt-8 text-[11px] uppercase tracking-[0.25em] text-muted-2">
                   Cumulative shipped
                 </p>
                 <CumulativeLine data={loop.cumulative} />
 
-                <p className="mt-8 text-[11px] uppercase tracking-[0.25em] text-neutral-500">
+                <p className="mt-8 text-[11px] uppercase tracking-[0.25em] text-muted-2">
                   Where it has been working
                 </p>
                 <div className="mt-4 space-y-2">
                   {loop.areas.map((a, i) => {
                     const max = loop.areas[0].count;
                     return (
-                      <div key={a.name} className="flex items-center gap-3 text-sm font-light">
-                        <span className="w-28 shrink-0 truncate text-neutral-300">{a.name}</span>
-                        <div className="h-2 flex-1 bg-neutral-900">
+                      <div key={a.name} className="flex items-center gap-3 text-sm">
+                        <span className="w-28 shrink-0 truncate text-fg-soft">{a.name}</span>
+                        <div className="h-2 flex-1 bg-sunken">
                           <div
-                            className="arena-grow-x h-2 bg-neutral-600"
+                            className="arena-grow-x h-2 bg-faint"
                             style={{ width: `${(a.count / max) * 100}%`, animationDelay: `${0.4 + i * 0.08}s` }}
                           />
                         </div>
-                        <span className="w-8 shrink-0 text-right tabular-nums text-neutral-500">{a.count}</span>
+                        <span className="w-8 shrink-0 text-right tabular-nums text-muted-2">{a.count}</span>
                       </div>
                     );
                   })}
@@ -524,26 +531,26 @@ export default async function ArenaPage() {
               </div>
 
               <div className="mt-12 lg:mt-0">
-                <p className="text-[11px] uppercase tracking-[0.25em] text-neutral-500">
+                <p className="text-[11px] uppercase tracking-[0.25em] text-muted-2">
                   Recent integrations
                 </p>
                 <ul className="arena-scroll mt-4 space-y-4 lg:max-h-[36rem] lg:overflow-y-auto lg:pr-4">
                   {loop.recent.map((r, i) => (
-                    <li key={i} className="border-l border-neutral-800/80 pl-5">
+                    <li key={i} className="border-l border-line/80 pl-5">
                       <div className="flex flex-wrap items-baseline gap-x-3">
-                        <span className="text-sm text-neutral-100">{r.task}</span>
-                        <span className="text-[10px] uppercase tracking-[0.2em] text-neutral-500">
+                        <span className="text-sm text-fg">{r.task}</span>
+                        <span className="text-[10px] uppercase tracking-[0.2em] text-muted-2">
                           {new Date(r.at).toUTCString().slice(5, 16)}
                         </span>
                       </div>
-                      <p className="mt-1 text-[13px] leading-relaxed text-neutral-500">{r.note}…</p>
+                      <p className="mt-1 text-[13px] leading-relaxed text-muted-2">{r.note}…</p>
                     </li>
                   ))}
                 </ul>
               </div>
             </div>
 
-            <p className="mt-10 text-[11px] uppercase tracking-[0.25em] text-neutral-600">
+            <p className="mt-10 text-[11px] uppercase tracking-[0.25em] text-faint">
               Snapshot {new Date(loop.updatedAt).toUTCString()} · sanitized
               aggregates from the loop&apos;s task ledger
             </p>

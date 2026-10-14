@@ -15,8 +15,8 @@ export const metadata: Metadata = {
   twitter: { card: "summary_large_image", site: "@OpenCovenant", creator: "@OpenCovenant", title: TITLE, description: DESCRIPTION },
 };
 
-const eyebrow = "font-mono text-[11px] uppercase tracking-[0.3em] text-neutral-400";
-const paragraph = "text-[13px] leading-relaxed text-neutral-300 sm:text-[14px]";
+const eyebrow = "font-mono text-[11px] uppercase tracking-[0.3em] text-muted";
+const paragraph = "text-[13px] leading-relaxed text-fg-soft sm:text-[14px]";
 
 export default function LivePage() {
   return (
@@ -24,7 +24,7 @@ export default function LivePage() {
       <SiteHeader />
       <main className="mx-auto w-full max-w-7xl px-5 pb-24 pt-24 sm:px-8 sm:pt-28">
         <p className={eyebrow}>autonomous &middot; live</p>
-        <h1 className="mt-4 text-2xl font-extralight tracking-[0.18em] text-neutral-50 sm:text-3xl">
+        <h1 className="page-title mt-4 text-fg">
           Covenant builds itself
         </h1>
         <p className={`${paragraph} mt-5 max-w-2xl`}>
@@ -33,14 +33,14 @@ export default function LivePage() {
           the work the autonomous loop is doing right now, streaming as it happens.
         </p>
 
-        <div className="mt-8 h-[68vh] min-h-[420px] overflow-hidden rounded-md border border-neutral-800/70 bg-[#050505]">
+        <div className="mt-8 h-[68vh] min-h-[420px] overflow-hidden rounded-[6px] border border-line bg-sunken">
           <AgentTerminal className="h-full w-full" />
         </div>
 
-        <p className={`${paragraph} mt-4 text-neutral-500`}>
-          Every change lands the same way a user&apos;s agent would act through Covenant: scoped by a
-          capability, gated before it runs, and recorded in a hash-chained audit. The system holds
-          itself to the rules it sells.
+        <p className={`${paragraph} mt-4 text-muted-2`}>
+          Every change goes through Covenant: it is limited to the permissions its agent was granted,
+          checked before it takes effect and recorded in a hash-chained audit log. Covenant runs under the
+          same rules it gives your agents.
         </p>
       </main>
       <SiteFooter className="pb-8" />

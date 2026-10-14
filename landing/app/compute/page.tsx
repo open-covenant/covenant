@@ -39,12 +39,12 @@ const PROGRAM = "3dTtXH7rah8YyWTsAfSg6qC3iqrJXWGEhAx57uUHXZff";
 const FIRST_PAYOUT =
   "35Wdz2k2U1QatsiSVsty3edFnmqUESe9C3Dy6xVpNaKByBi9knFieApuyvrZJgQN9DLmQ4LPqH4xJfm4zw2ou7xR";
 
-const eyebrow = "font-mono text-[11px] uppercase tracking-[0.3em] text-neutral-400";
-const paragraph = "text-[13px] leading-relaxed text-neutral-300 sm:text-[14px]";
+const eyebrow = "font-mono text-[11px] uppercase tracking-[0.3em] text-muted";
+const paragraph = "text-[13px] leading-relaxed text-fg-soft sm:text-[14px]";
 const cmdBlock =
-  "block overflow-x-auto whitespace-pre rounded border border-neutral-800 bg-neutral-950 px-4 py-3 font-mono text-[12.5px] leading-relaxed text-neutral-100 sm:text-[13px]";
+  "block overflow-x-auto whitespace-pre rounded border border-line bg-raised px-4 py-3 font-mono text-[12.5px] leading-relaxed text-fg sm:text-[13px]";
 const link =
-  "underline decoration-neutral-700 underline-offset-4 transition-colors hover:text-neutral-50 hover:decoration-neutral-300";
+  "underline decoration-line-strong underline-offset-4 transition-colors hover:text-fg hover:decoration-fg-soft";
 
 const HOW: { title: string; body: string }[] = [
   {
@@ -74,7 +74,7 @@ export default function ComputePage() {
       <SiteHeader />
       <main className="mx-auto w-full max-w-7xl px-5 pb-24 pt-[88px] sm:px-8 sm:pt-[120px]">
         <p className={eyebrow}>gpu leases &middot; paid in usdc &middot; solana mainnet</p>
-        <h1 className="mt-4 text-2xl font-extralight tracking-[0.18em] text-neutral-50 sm:text-3xl">
+        <h1 className="page-title mt-4 text-fg">
           Covenant Compute
         </h1>
         <p className={`${paragraph} mt-5 max-w-2xl`}>
@@ -83,7 +83,7 @@ export default function ComputePage() {
         </p>
 
         <video
-          className="mt-10 w-full max-w-4xl rounded border border-neutral-800"
+          className="mt-10 w-full max-w-4xl rounded border border-line"
           src="/compute/covenant-compute-film.mp4"
           poster="/compute/poster.jpg"
           controls
@@ -96,9 +96,9 @@ export default function ComputePage() {
           <code className={`${cmdBlock} mt-3`}>
             {`covenant-compute lease open --minutes 10 --rate 334 --ssh-key ~/.ssh/id_ed25519.pub`}
           </code>
-          <p className={`${paragraph} mt-3 text-neutral-500`}>
+          <p className={`${paragraph} mt-3 text-muted-2`}>
             The lease waits for the machine, then prints its SSH address.{" "}
-            <span className="font-mono text-[12px] text-neutral-400">lease close</span> ends the session
+            <span className="font-mono text-[12px] text-muted">lease close</span> ends the session
             and settles it to the second. The{" "}
             <a className={link} href={DOCS}>
               docs
@@ -109,9 +109,9 @@ export default function ComputePage() {
 
         <section className="mt-12 grid gap-4 sm:grid-cols-3">
           {HOW.map((item) => (
-            <div key={item.title} className="rounded border border-neutral-800 bg-neutral-950/60 p-5">
-              <h2 className="text-[13px] uppercase tracking-[0.22em] text-neutral-100">{item.title}</h2>
-              <p className={`${paragraph} mt-3 text-neutral-400`}>{item.body}</p>
+            <div key={item.title} className="rounded border border-line bg-raised/60 p-5">
+              <h2 className="text-[13px] uppercase tracking-[0.22em] text-fg">{item.title}</h2>
+              <p className={`${paragraph} mt-3 text-muted`}>{item.body}</p>
             </div>
           ))}
         </section>
@@ -126,7 +126,7 @@ export default function ComputePage() {
           <code className={`${cmdBlock} mt-3`}>
             {`covenant-compute-stake stake <node> 1000000 --lock-days 30 --keypair <wallet.json>`}
           </code>
-          <p className={`${paragraph} mt-3 text-neutral-500`}>
+          <p className={`${paragraph} mt-3 text-muted-2`}>
             The{" "}
             <a className={link} href={`${DOCS}#run-a-node`}>
               operator guide
@@ -139,15 +139,15 @@ export default function ComputePage() {
           <p className={eyebrow}>the first mainnet session</p>
           <dl className="mt-3 grid max-w-3xl grid-cols-2 gap-4 sm:grid-cols-4">
             {FIRST_SESSION.map((stat) => (
-              <div key={stat.label} className="rounded border border-neutral-800 bg-neutral-950/60 p-4">
-                <dt className="font-mono text-[10.5px] uppercase tracking-[0.22em] text-neutral-500">
+              <div key={stat.label} className="rounded border border-line bg-raised/60 p-4">
+                <dt className="font-mono text-[10.5px] uppercase tracking-[0.22em] text-muted-2">
                   {stat.label}
                 </dt>
-                <dd className="mt-2 font-mono text-[15px] text-neutral-100">{stat.value}</dd>
+                <dd className="mt-2 font-mono text-[15px] text-fg">{stat.value}</dd>
               </div>
             ))}
           </dl>
-          <p className={`${paragraph} mt-3 text-neutral-500`}>
+          <p className={`${paragraph} mt-3 text-muted-2`}>
             Paid from the escrow in{" "}
             <a className={link} href={`https://solscan.io/tx/${FIRST_PAYOUT}`}>
               one transaction

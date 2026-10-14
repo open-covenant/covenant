@@ -1,11 +1,28 @@
 import type { Metadata, Viewport } from "next";
+import { Archivo, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
+
+// Display: Archivo on its width axis, set extended. Everything else: the mono.
+const archivo = Archivo({
+  subsets: ["latin"],
+  axes: ["wdth"],
+  weight: "variable",
+  display: "swap",
+  variable: "--font-archivo",
+});
+
+const jetbrains = JetBrains_Mono({
+  subsets: ["latin"],
+  weight: ["300", "400", "500", "600"],
+  display: "swap",
+  variable: "--font-jetbrains",
+});
 
 const SITE_URL = "https://opencovenant.org";
 const SITE_NAME = "Covenant";
 const TITLE = "Covenant: open agent-native operating layer";
 const DESCRIPTION =
-  "Covenant is the coordination layer for agentic software. Intent, runtime, memory, identity, permissions, comms, and settlement are host-level primitives for humans and agents.";
+  "Covenant is the open operating layer for people and AI agents, with runtime, memory, identity, permissions, intent, communication and settlement built in.";
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
@@ -63,7 +80,7 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#030303",
+  themeColor: "#0d0b16",
   colorScheme: "dark",
   viewportFit: "cover",
 };
@@ -78,7 +95,7 @@ function SiteJsonLd() {
         name: SITE_NAME,
         alternateName: "The Covenant Project",
         url: SITE_URL,
-        logo: `${SITE_URL}/covenant-logomark.png`,
+        logo: `${SITE_URL}/covenant-mark.png`,
         description: DESCRIPTION,
         foundingDate: "2026",
         founder: {
@@ -157,14 +174,14 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className="dark">
+    <html lang="en" className={`${archivo.variable} ${jetbrains.variable}`}>
       <head>
         <SiteJsonLd />
       </head>
-      <body className="min-h-screen bg-[#030303] text-neutral-100 antialiased">
+      <body className="min-h-screen bg-ground text-fg antialiased">
         <a
           href="#main-content"
-          className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded focus:bg-neutral-50 focus:px-4 focus:py-2 focus:text-sm focus:text-black"
+          className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-full focus:border focus:border-line-strong focus:bg-raised focus:px-4 focus:py-2 focus:font-mono focus:text-[11px] focus:uppercase focus:tracking-[0.18em] focus:text-fg"
         >
           Skip to main content
         </a>

@@ -5,9 +5,9 @@ import { useState } from "react";
 type Status = "idle" | "sending" | "sent" | "error";
 
 const field =
-  "w-full border border-neutral-800 bg-neutral-950/50 px-3 py-3 text-[13px] text-neutral-100 placeholder:text-neutral-600 outline-none backdrop-blur-sm transition-colors focus:border-neutral-500 focus:bg-neutral-950/70 sm:text-[14px]";
+  "w-full border border-line bg-raised/50 px-3 py-3 text-[13px] text-fg placeholder:text-faint outline-none backdrop-blur-sm transition-colors focus:border-muted-2 focus:bg-raised/70 sm:text-[14px]";
 const label =
-  "mb-2 block text-[10px] uppercase tracking-[0.3em] text-neutral-400";
+  "mb-2 block text-[10px] uppercase tracking-[0.3em] text-muted";
 
 export function ContactForm() {
   const [status, setStatus] = useState<Status>("idle");
@@ -39,7 +39,7 @@ export function ContactForm() {
 
   if (status === "sent") {
     return (
-      <p className="text-[13px] leading-relaxed text-neutral-300 sm:text-[14px]">
+      <p className="text-[13px] leading-relaxed text-fg-soft sm:text-[14px]">
         Message received. We&apos;ll reply to the address you gave.
       </p>
     );
@@ -94,12 +94,12 @@ export function ContactForm() {
         <button
           type="submit"
           disabled={status === "sending"}
-          className="border border-neutral-700 bg-neutral-950/50 px-6 py-3 text-[11px] uppercase tracking-[0.25em] text-neutral-200 backdrop-blur-sm transition-colors hover:border-neutral-400 hover:bg-neutral-950/70 hover:text-neutral-50 disabled:cursor-not-allowed disabled:opacity-50"
+          className="btn btn-primary disabled:cursor-not-allowed disabled:opacity-50"
         >
           {status === "sending" ? "Sending" : "Send"}
         </button>
         {status === "error" && (
-          <span className="text-[12px] text-neutral-400">{error}</span>
+          <span className="text-[12px] text-muted">{error}</span>
         )}
       </div>
     </form>

@@ -83,9 +83,9 @@ const FAQ_JSONLD = {
   })),
 };
 
-const paragraph = "text-[13px] leading-relaxed text-neutral-300 sm:text-[14px]";
+const paragraph = "text-[13px] leading-relaxed text-fg-soft sm:text-[14px]";
 const linkClass =
-  "text-[12px] uppercase tracking-[0.2em] text-neutral-400 transition-colors hover:text-neutral-50";
+  "text-[12px] uppercase tracking-[0.2em] text-muted transition-colors hover:text-fg";
 
 const LINKS = [
   { label: "Glossary", href: "https://docs.opencovenant.org/glossary" },
@@ -96,7 +96,7 @@ const LINKS = [
 
 export default function FaqPage() {
   return (
-    <main id="main-content" className="relative min-h-screen overflow-x-hidden bg-[#030303]">
+    <main id="main-content" className="relative min-h-screen overflow-x-hidden bg-ground">
       <SiteHeader />
 
       <script
@@ -105,11 +105,11 @@ export default function FaqPage() {
       />
 
       <div className="page-container">
-        <h1 className="mb-10 text-[11px] uppercase tracking-[0.4em] text-neutral-400 sm:mb-14">
+        <h1 className="mb-10 text-[11px] uppercase tracking-[0.4em] text-muted sm:mb-14">
           FAQ
         </h1>
 
-        <h2 className="max-w-3xl text-balance text-[2.2rem] font-extralight uppercase leading-[1.1] tracking-[2px] text-white sm:text-[2.6rem]">
+        <h2 className="type-display max-w-3xl text-balance text-[2.2rem] text-fg sm:text-[2.6rem]">
           Frequently asked questions
         </h2>
 
@@ -118,9 +118,9 @@ export default function FaqPage() {
             <div
               key={f.id}
               id={f.id}
-              className={`border-neutral-800/80 py-7 ${i === 0 ? "border-t-0" : "border-t"}`}
+              className={`border-line/80 py-7 ${i === 0 ? "border-t-0" : "border-t"}`}
             >
-              <dt className="max-w-2xl text-[15px] font-light leading-snug text-neutral-100 sm:text-[16px]">
+              <dt className="max-w-2xl text-[15px] leading-snug text-fg sm:text-[16px]">
                 {f.q}
               </dt>
               <dd className={`mt-3 max-w-2xl ${paragraph}`}>{f.a}</dd>
@@ -128,7 +128,7 @@ export default function FaqPage() {
           ))}
         </dl>
 
-        <div className="mt-12 flex flex-wrap gap-x-6 gap-y-3 border-t border-neutral-800/80 pt-8 sm:mt-16">
+        <div className="mt-12 flex flex-wrap gap-x-6 gap-y-3 border-t border-line/80 pt-8 sm:mt-16">
           {LINKS.map((l) => (
             <a
               key={l.href}

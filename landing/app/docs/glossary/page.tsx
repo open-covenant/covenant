@@ -45,12 +45,12 @@ export default function GlossaryPage() {
       <dl className="not-prose mt-8 space-y-6">
         {PRIMITIVES.map((p) => (
           <div key={p.slug} id={p.slug}>
-            <dt className="text-[15px] font-medium text-neutral-100">
+            <dt className="text-[15px] font-medium text-fg">
               <a href={p.docHref} className="hover:underline">
                 {p.term}
               </a>
             </dt>
-            <dd className="mt-1 text-[14px] leading-relaxed text-neutral-400">
+            <dd className="mt-1 text-[14px] leading-relaxed text-muted">
               {p.definition}
             </dd>
           </div>

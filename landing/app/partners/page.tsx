@@ -4,6 +4,7 @@ import { SiteFooter } from "../SiteFooter";
 import { SiteHeader } from "../SiteHeader";
 import {
   logoFor,
+  logoOnLightTile,
   PARTNERS,
   PROTOCOLS,
   type Integration,
@@ -33,9 +34,9 @@ export const metadata: Metadata = {
   },
 };
 
-const eyebrow = "font-mono text-[11px] uppercase tracking-[0.3em] text-neutral-400";
-const headingTitle = "text-[13px] uppercase tracking-[0.25em] text-neutral-100 sm:text-[14px]";
-const paragraph = "text-[13px] leading-relaxed text-neutral-300 sm:text-[14px]";
+const eyebrow = "font-mono text-[11px] uppercase tracking-[0.3em] text-muted";
+const headingTitle = "text-[13px] uppercase tracking-[0.25em] text-fg sm:text-[14px]";
+const paragraph = "text-[13px] leading-relaxed text-fg-soft sm:text-[14px]";
 
 const CTA = [
   { label: "Get in touch", href: "/contact" },
@@ -46,10 +47,10 @@ const CTA = [
 function StatusBadge({ status }: { status: Integration["status"] }) {
   const live = status === "live";
   return (
-    <span className="inline-flex shrink-0 items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.2em] text-neutral-400">
+    <span className="inline-flex shrink-0 items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.2em] text-muted">
       <span
         aria-hidden="true"
-        className={`h-1.5 w-1.5 rounded-full ${live ? "bg-emerald-400" : "bg-amber-400/80"}`}
+        className={`h-1.5 w-1.5 rounded-full ${live ? "bg-ok" : "bg-warn/80"}`}
       />
       {live ? "Live" : "In development"}
     </span>
@@ -59,6 +60,7 @@ function StatusBadge({ status }: { status: Integration["status"] }) {
 /** Avatar (X profile image) beside the wordmark, or just the wordmark if none. */
 function Mark({ item }: { item: Integration }) {
   const logo = item.logo ?? logoFor(item.slug);
+  const invert = !item.logo && logoOnLightTile(item.slug);
   return (
     <span className="flex items-center gap-2.5">
       {logo ? (
@@ -67,10 +69,10 @@ function Mark({ item }: { item: Integration }) {
           alt=""
           width={28}
           height={28}
-          className="h-7 w-7 shrink-0 rounded-md object-cover ring-1 ring-neutral-700/50"
+          className={`h-7 w-7 shrink-0 rounded-md object-cover ring-1 ring-line-strong/50 ${invert ? "invert hue-rotate-180" : ""}`}
         />
       ) : null}
-      <span className="text-[15px] font-light tracking-tight text-neutral-100">
+      <span className="text-[15px] tracking-tight text-fg">
         {item.name}
       </span>
     </span>
@@ -87,7 +89,7 @@ function Card({ item, showStatus }: { item: Integration; showStatus: boolean }) 
       <p className={`mt-3 ${paragraph}`}>{item.blurb}</p>
       <div className="mt-auto flex items-end justify-between gap-3 pt-4">
         {item.by ? (
-          <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-neutral-500">
+          <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted-2">
             via {item.by}
           </span>
         ) : (
@@ -96,9 +98,9 @@ function Card({ item, showStatus }: { item: Integration; showStatus: boolean }) 
         {item.href ? (
           <span
             aria-hidden="true"
-            className="font-mono text-[12px] text-neutral-500 transition-colors group-hover:text-neutral-200"
+            className="font-mono text-[12px] text-muted-2 transition-colors group-hover:text-fg-2"
           >
-            ↗
+            →
           </span>
         ) : null}
       </div>
@@ -106,7 +108,7 @@ function Card({ item, showStatus }: { item: Integration; showStatus: boolean }) 
   );
 
   const className =
-    "group flex h-full min-h-[150px] flex-col border border-neutral-800/80 p-5 transition-colors hover:border-neutral-700 hover:bg-neutral-950/40";
+    "group flex h-full min-h-[150px] flex-col border border-line/80 p-5 transition-colors hover:border-line-strong hover:bg-raised/40";
 
   return item.href ? (
     <a
@@ -124,19 +126,19 @@ function Card({ item, showStatus }: { item: Integration; showStatus: boolean }) 
 
 export default function PartnersPage() {
   return (
-    <main id="main-content" className="relative min-h-screen overflow-x-hidden bg-[#030303]">
+    <main id="main-content" className="relative min-h-screen overflow-x-hidden bg-ground">
       <SiteHeader />
 
       <div className="page-container">
-        <h1 className="mb-10 text-[11px] uppercase tracking-[0.4em] text-neutral-400 sm:mb-14">
+        <h1 className="mb-10 text-[11px] uppercase tracking-[0.4em] text-muted sm:mb-14">
           Partners
         </h1>
 
-        <h2 className="max-w-3xl text-balance text-[2.2rem] font-extralight uppercase leading-[1.1] tracking-[2px] text-white sm:text-[2.6rem]">
+        <h2 className="type-display max-w-3xl text-balance text-[2.2rem] text-fg sm:text-[2.6rem]">
           Built to plug in
         </h2>
 
-        <p className="mt-6 max-w-2xl text-pretty text-lg font-light leading-relaxed text-neutral-300 sm:text-xl">
+        <p className="mt-6 max-w-2xl text-pretty text-[15px] leading-[1.7] text-fg-soft sm:text-base">
           Covenant is open infrastructure, not a walled garden. It speaks open protocols, so any
           compliant client or chain interoperates, and it carries first-class integrations with
           products across the agent ecosystem. Every integration runs under the same signed
@@ -145,7 +147,7 @@ export default function PartnersPage() {
 
         {/* Protocols & standards */}
         <section className="mt-16 sm:mt-24">
-          <div className="mb-6 flex flex-wrap items-baseline gap-x-4 gap-y-1 border-t border-neutral-800/80 pt-8">
+          <div className="mb-6 flex flex-wrap items-baseline gap-x-4 gap-y-1 border-t border-line/80 pt-8">
             <span className={eyebrow}>01</span>
             <h2 className={headingTitle}>Protocols &amp; standards</h2>
           </div>
@@ -162,14 +164,14 @@ export default function PartnersPage() {
 
         {/* Integrations & partners */}
         <section className="mt-16 sm:mt-24">
-          <div className="mb-6 flex flex-wrap items-baseline gap-x-4 gap-y-1 border-t border-neutral-800/80 pt-8">
+          <div className="mb-6 flex flex-wrap items-baseline gap-x-4 gap-y-1 border-t border-line/80 pt-8">
             <span className={eyebrow}>02</span>
             <h2 className={headingTitle}>Integrations &amp; partners</h2>
           </div>
           <p className={`mb-8 max-w-2xl ${paragraph}`}>
             Products that integrate with Covenant.{" "}
-            <span className="text-neutral-200">Live</span> integrations are shipped and running;{" "}
-            <span className="text-neutral-200">in development</span> integrations are in active
+            <span className="text-fg-2">Live</span> integrations are shipped and running;{" "}
+            <span className="text-fg-2">in development</span> integrations are in active
             build and not yet on the main line.
           </p>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-3">
@@ -180,7 +182,7 @@ export default function PartnersPage() {
         </section>
 
         {/* CTA */}
-        <div className="mt-16 border-t border-neutral-800/80 pt-8 sm:mt-24">
+        <div className="mt-16 border-t border-line/80 pt-8 sm:mt-24">
           <p className={`max-w-2xl ${paragraph}`}>
             Building something on Covenant, or want your product to integrate? The protocol surface
             is open and documented — reach out and we&apos;ll help you wire it in.
@@ -195,7 +197,7 @@ export default function PartnersPage() {
                   {...(external
                     ? { target: "_blank", rel: "noopener noreferrer" }
                     : {})}
-                  className="text-[12px] uppercase tracking-[0.2em] text-neutral-400 transition-colors hover:text-neutral-50"
+                  className="text-[12px] uppercase tracking-[0.2em] text-muted transition-colors hover:text-fg"
                 >
                   {c.label} →
                 </a>

@@ -201,24 +201,24 @@ export function StakeClient() {
 
           <div className="mt-6">
             <FieldLabel>Amount</FieldLabel>
-            <div className="mt-3 flex items-baseline gap-3 border-b border-neutral-800 pb-2 transition-colors focus-within:border-neutral-300">
+            <div className="mt-3 flex items-baseline gap-3 border-b border-line pb-2 transition-colors focus-within:border-fg-soft">
               <input
                 type="text"
                 inputMode="decimal"
                 placeholder="0"
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
-                className="min-w-0 flex-1 bg-transparent text-3xl font-light tracking-tight text-neutral-50 outline-none placeholder:text-neutral-700 sm:text-4xl"
+                className="type-display min-w-0 flex-1 bg-transparent text-3xl text-fg outline-none placeholder:text-faint sm:text-4xl"
               />
-              <span className="text-[11px] uppercase tracking-[0.22em] text-neutral-400">CVNT</span>
+              <span className="text-[11px] uppercase tracking-[0.22em] text-muted">CVNT</span>
             </div>
-            <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-[11px] text-neutral-400">
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-[11px] text-muted">
               <div className="flex items-center gap-4">
                 <span>
-                  Available <span className="font-mono text-neutral-300">{balanceDisplay}</span>
+                  Available <span className="font-mono text-fg-soft">{balanceDisplay}</span>
                 </span>
                 <span>
-                  Minimum <span className="font-mono text-neutral-300">{minLockDisplay}</span>
+                  Minimum <span className="font-mono text-fg-soft">{minLockDisplay}</span>
                 </span>
               </div>
               <div className="flex items-center gap-2">
@@ -242,7 +242,7 @@ export function StakeClient() {
                 />
               ))}
             </div>
-            <div className="mt-4 grid grid-cols-2 gap-3 border-t border-neutral-900 pt-4 text-[11px] sm:grid-cols-3">
+            <div className="mt-4 grid grid-cols-2 gap-3 border-t border-line-soft pt-4 text-[11px] sm:grid-cols-3">
               <Metric label="Multiplier" value={`${(tierBps / 10_000).toFixed(2)}×`} />
               <Metric
                 label="Position weight"
@@ -266,23 +266,23 @@ export function StakeClient() {
               type="button"
               onClick={handleStake}
               disabled={!canSubmit}
-              className="w-full rounded-sm bg-neutral-50 px-6 py-4 text-[11px] uppercase tracking-[0.28em] text-neutral-950 transition-colors hover:bg-white disabled:cursor-not-allowed disabled:bg-neutral-900 disabled:text-neutral-600"
+              className="btn btn-primary min-h-[52px] w-full disabled:cursor-not-allowed disabled:bg-none disabled:bg-raised disabled:text-faint"
             >
               {tx.phase === "submitting" ? "Submitting…" : "Lock position"}
             </button>
 
             <div className="mt-3 min-h-[1.25rem] text-center text-[11px]">
-              {!publicKey && <span className="text-neutral-400">Connect a wallet to open a position.</span>}
+              {!publicKey && <span className="text-muted">Connect a wallet to open a position.</span>}
               {publicKey && capReached && (
-                <span className="text-amber-300">
+                <span className="text-warn">
                   The protocol position cap has been reached. New positions can be opened after an existing position closes.
                 </span>
               )}
               {publicKey && !capReached && accounts !== null && accounts.length === 0 && (
-                <span className="text-amber-300">This wallet holds no CVNT.</span>
+                <span className="text-warn">This wallet holds no CVNT.</span>
               )}
               {publicKey && parsedAmount !== null && !meetsMin && (
-                <span className="text-amber-300">
+                <span className="text-warn">
                   Amount must be at least <span className="font-mono">{minLockDisplay}</span> CVNT.
                 </span>
               )}
@@ -291,12 +291,12 @@ export function StakeClient() {
                 meetsMin &&
                 !sufficientInSource &&
                 stakeSource && (
-                  <span className="text-amber-300">
+                  <span className="text-warn">
                     Largest CVNT account holds {formatCvnt(stakeSource.amount, { maxFrac: 2 })} CVNT.
                   </span>
                 )}
               {tx.phase === "ok" && (
-                <span className="text-emerald-300">
+                <span className="text-ok">
                   Position opened.{" "}
                   <a href={explorerTxUrl(tx.sig)} target="_blank" rel="noopener noreferrer" className="underline">
                     View transaction
@@ -304,14 +304,14 @@ export function StakeClient() {
                 </span>
               )}
               {tx.phase === "error" && (
-                <span className="break-all text-rose-300">{tx.message}</span>
+                <span className="break-all text-bad">{tx.message}</span>
               )}
             </div>
           </div>
 
           {publicKey && stakeSource && accounts && accounts.length > 0 && (
-            <div className="mt-8 border-t border-neutral-900 pt-4 text-[10px] uppercase tracking-[0.22em] text-neutral-400">
-              Source · <span className="font-mono normal-case tracking-normal text-neutral-400">{shortAddr(stakeSource.pubkey.toBase58(), 6, 6)}</span>
+            <div className="mt-8 border-t border-line-soft pt-4 text-[10px] uppercase tracking-[0.22em] text-muted">
+              Source · <span className="font-mono normal-case tracking-normal text-muted">{shortAddr(stakeSource.pubkey.toBase58(), 6, 6)}</span>
               {accounts.length > 1 && <span className="ml-2">({accounts.length} CVNT accounts found, largest selected)</span>}
             </div>
           )}
@@ -361,16 +361,16 @@ export function StakeClient() {
                 }
               />
             </div>
-            <div className="mt-6 flex items-center justify-between border-t border-neutral-900 pt-4 text-[10px] uppercase tracking-[0.22em] text-neutral-400">
-              <Link href="/treasury" className="transition-colors hover:text-neutral-300">
+            <div className="mt-6 flex items-center justify-between border-t border-line-soft pt-4 text-[10px] uppercase tracking-[0.22em] text-muted">
+              <Link href="/treasury" className="transition-colors hover:text-fg-soft">
                 Protocol treasury →
               </Link>
               <Link
                 href="/positions"
                 className={
                   hasPositions
-                    ? "rounded-sm bg-neutral-50 px-4 py-2 text-neutral-950 transition-colors hover:bg-white"
-                    : "transition-colors hover:text-neutral-300"
+                    ? "rounded-sm border border-line-strong bg-raised px-4 py-2 text-fg transition-colors hover:border-muted-2"
+                    : "transition-colors hover:text-fg-soft"
                 }
               >
                 Your positions →
@@ -380,7 +380,7 @@ export function StakeClient() {
 
           <Panel>
             <PanelEyebrow>How it works</PanelEyebrow>
-            <ol className="mt-6 space-y-5 text-[13px] leading-relaxed text-neutral-400">
+            <ol className="mt-6 space-y-5 text-[13px] leading-relaxed text-muted">
               <Step
                 index="01"
                 title="Lock CVNT for a fixed period"
@@ -401,7 +401,7 @@ export function StakeClient() {
 
           <Panel>
             <PanelEyebrow>Considerations</PanelEyebrow>
-            <ul className="mt-6 space-y-3 text-[12px] leading-relaxed text-neutral-400">
+            <ul className="mt-6 space-y-3 text-[12px] leading-relaxed text-muted">
               <li>The staking program is being sunset: principal can be withdrawn at any time, regardless of the original lock period.</li>
               <li>Distribution amounts depend on protocol revenue. Past distributions do not predict future amounts.</li>
               <li>The protocol may be paused by the operator in response to incidents. New positions and reward claims are paused with it; principal withdrawal is not.</li>
@@ -415,13 +415,13 @@ export function StakeClient() {
 
 function PageHeader({ title, subtitle }: { title: string; subtitle: string }) {
   return (
-    <div className="mb-10 flex flex-col items-start gap-4 border-b border-neutral-900 pb-6 sm:flex-row sm:items-end sm:justify-between sm:gap-6">
+    <div className="mb-10 flex flex-col items-start gap-4 border-b border-line-soft pb-6 sm:flex-row sm:items-end sm:justify-between sm:gap-6">
       <div>
-        <div className="text-[10px] uppercase tracking-[0.3em] text-neutral-400">Covenant Stake</div>
-        <h1 className="mt-3 text-3xl font-extralight tracking-tight text-neutral-50 sm:text-4xl">
+        <div className="text-[10px] uppercase tracking-[0.3em] text-muted">Covenant Stake</div>
+        <h1 className="page-title mt-3 text-fg">
           {title}
         </h1>
-        <p className="mt-3 max-w-xl text-sm leading-relaxed text-neutral-400">{subtitle}</p>
+        <p className="mt-3 max-w-xl text-sm leading-relaxed text-muted">{subtitle}</p>
       </div>
       <div className="block">
         <ConnectButton />
@@ -432,7 +432,7 @@ function PageHeader({ title, subtitle }: { title: string; subtitle: string }) {
 
 function Panel({ children }: { children: React.ReactNode }) {
   return (
-    <section className="rounded-md border border-neutral-900/80 p-6 sm:p-8">
+    <section className="rounded-md border border-line-soft/80 p-6 sm:p-8">
       {children}
     </section>
   );
@@ -440,13 +440,13 @@ function Panel({ children }: { children: React.ReactNode }) {
 
 function PanelEyebrow({ children }: { children: React.ReactNode }) {
   return (
-    <div className="text-[10px] uppercase tracking-[0.28em] text-neutral-400">{children}</div>
+    <div className="text-[10px] uppercase tracking-[0.28em] text-muted">{children}</div>
   );
 }
 
 function FieldLabel({ children }: { children: React.ReactNode }) {
   return (
-    <div className="text-[10px] uppercase tracking-[0.22em] text-neutral-400">{children}</div>
+    <div className="text-[10px] uppercase tracking-[0.22em] text-muted">{children}</div>
   );
 }
 
@@ -464,7 +464,7 @@ function PresetButton({
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className="rounded-sm border border-neutral-800 px-2.5 py-1 text-[10px] uppercase tracking-[0.18em] text-neutral-400 transition-colors hover:border-neutral-500 hover:text-neutral-200 disabled:cursor-not-allowed disabled:border-neutral-900 disabled:text-neutral-700"
+      className="rounded-full border border-line px-3 py-1 font-mono text-[10px] uppercase tracking-[0.18em] text-muted transition-colors hover:border-muted-2 hover:text-fg-2 disabled:cursor-not-allowed disabled:border-line-soft disabled:text-faint"
     >
       {children}
     </button>
@@ -488,8 +488,8 @@ function TierButton({
       onClick={onClick}
       className={`rounded-sm border px-3 py-4 text-left transition-all ${
         selected
-          ? "border-neutral-100 bg-neutral-100 text-neutral-950"
-          : "border-neutral-800 bg-neutral-950/30 text-neutral-300 hover:border-neutral-600 hover:bg-neutral-900/40"
+          ? "border-blue bg-blue/15 text-fg"
+          : "border-line bg-raised/30 text-fg-soft hover:border-faint hover:bg-sunken/40"
       }`}
     >
       <div className="font-mono text-lg leading-none">{days}</div>
@@ -501,20 +501,20 @@ function TierButton({
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-400">{label}</div>
-      <div className="mt-1 font-mono text-sm text-neutral-200">{value}</div>
+      <div className="text-[10px] uppercase tracking-[0.2em] text-muted">{label}</div>
+      <div className="mt-1 font-mono text-sm text-fg-2">{value}</div>
     </div>
   );
 }
 
 function StatRow({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
-    <div className="border-b border-neutral-900 pb-3 last:border-0 last:pb-0">
+    <div className="border-b border-line-soft pb-3 last:border-0 last:pb-0">
       <div className="flex items-baseline justify-between">
-        <div className="text-[11px] uppercase tracking-[0.2em] text-neutral-400">{label}</div>
-        <div className="font-mono text-base text-neutral-100">{value}</div>
+        <div className="text-[11px] uppercase tracking-[0.2em] text-muted">{label}</div>
+        <div className="font-mono text-base text-fg">{value}</div>
       </div>
-      {hint && <div className="mt-1 text-[10px] leading-relaxed text-neutral-400">{hint}</div>}
+      {hint && <div className="mt-1 text-[10px] leading-relaxed text-muted">{hint}</div>}
     </div>
   );
 }
@@ -522,10 +522,10 @@ function StatRow({ label, value, hint }: { label: string; value: string; hint?: 
 function Step({ index, title, body }: { index: string; title: string; body: string }) {
   return (
     <li className="grid grid-cols-[2rem_1fr] gap-4">
-      <span className="pt-1 font-mono text-[11px] text-neutral-400">{index}</span>
+      <span className="pt-1 font-mono text-[11px] text-muted">{index}</span>
       <div>
-        <div className="text-[13px] font-medium text-neutral-100">{title}</div>
-        <div className="mt-1 text-[12px] leading-relaxed text-neutral-400">{body}</div>
+        <div className="text-[13px] font-medium text-fg">{title}</div>
+        <div className="mt-1 text-[12px] leading-relaxed text-muted">{body}</div>
       </div>
     </li>
   );

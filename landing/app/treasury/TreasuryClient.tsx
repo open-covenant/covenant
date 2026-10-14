@@ -83,7 +83,7 @@ export function TreasuryClient() {
           {[0, 1, 2, 3].map((i) => (
             <div
               key={i}
-              className="h-32 animate-pulse rounded-md border border-neutral-900 bg-neutral-950/40"
+              className="h-32 animate-pulse rounded-md border border-line-soft bg-raised/40"
             />
           ))}
         </div>
@@ -138,10 +138,10 @@ function Dashboard({ state }: { state: TreasuryState }) {
       <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[1.1fr_0.9fr]">
         <Panel>
           <PanelEyebrow>Distribution mechanics</PanelEyebrow>
-          <h2 className="mt-4 text-xl font-extralight tracking-tight text-neutral-50 sm:text-2xl">
+          <h2 className="type-display mt-4 text-xl text-fg sm:text-2xl">
             Protocol revenue, allocated by position weight
           </h2>
-          <p className="mt-4 text-[13px] leading-relaxed text-neutral-400">
+          <p className="mt-4 text-[13px] leading-relaxed text-muted">
             Protocol revenue is split four ways as it comes in. The stakers&apos;
             share is allocated by position weight, so every open position earns
             its proportional cut of each distribution made since it was opened.
@@ -154,7 +154,7 @@ function Dashboard({ state }: { state: TreasuryState }) {
             <SplitCard label="Operator subsidy" value="20%" detail="Covers infrastructure and operational costs." />
           </div>
 
-          <div className="mt-8 border-t border-neutral-900 pt-6">
+          <div className="mt-8 border-t border-line-soft pt-6">
             <PanelEyebrow>Reward pool</PanelEyebrow>
             <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
               <DetailRow
@@ -181,12 +181,12 @@ function Dashboard({ state }: { state: TreasuryState }) {
           <Panel>
             <PanelEyebrow>Status</PanelEyebrow>
             <div className="mt-6 flex items-center justify-between">
-              <span className="text-[12px] uppercase tracking-[0.22em] text-neutral-400">
+              <span className="text-[12px] uppercase tracking-[0.22em] text-muted">
                 Protocol state
               </span>
               <StatusPill ok={!config.paused} label={config.paused ? "Paused" : "Active"} />
             </div>
-            <p className="mt-4 text-[12px] leading-relaxed text-neutral-400">
+            <p className="mt-4 text-[12px] leading-relaxed text-muted">
               If the protocol is paused, you cannot open new positions or claim
               rewards. You can still withdraw your principal once your lock
               period ends.
@@ -201,15 +201,15 @@ function Dashboard({ state }: { state: TreasuryState }) {
               <TierLine days={90} multiplier="1.5×" />
               <TierLine days={180} multiplier="2.0×" />
             </div>
-            <p className="mt-6 text-[11px] leading-relaxed text-neutral-400">
+            <p className="mt-6 text-[11px] leading-relaxed text-muted">
               A position&apos;s weight equals its principal multiplied by the
               tier coefficient. Distribution shares are computed from weight,
               not principal.
             </p>
-            <div className="mt-6 border-t border-neutral-900 pt-4">
+            <div className="mt-6 border-t border-line-soft pt-4">
               <Link
                 href="/stake"
-                className="block rounded-sm bg-neutral-50 px-6 py-2.5 text-center text-[11px] uppercase tracking-[0.28em] text-neutral-950 transition-colors hover:bg-white"
+                className="btn btn-primary w-full"
               >
                 Open a position
               </Link>
@@ -221,7 +221,7 @@ function Dashboard({ state }: { state: TreasuryState }) {
       <div className="mt-6">
         <Panel>
           <PanelEyebrow>Disclosures</PanelEyebrow>
-          <ul className="mt-6 grid grid-cols-1 gap-4 text-[12px] leading-relaxed text-neutral-400 sm:grid-cols-2">
+          <ul className="mt-6 grid grid-cols-1 gap-4 text-[12px] leading-relaxed text-muted sm:grid-cols-2">
             <li>All values on this page are read directly from the program&apos;s on-chain state at the most recent confirmed slot.</li>
             <li>Distribution amounts reflect actual protocol revenue and are not guaranteed. Past distributions do not predict future amounts.</li>
             <li>Locked principal is non-transferable. Positions cannot be withdrawn before their lock period elapses.</li>
@@ -235,13 +235,13 @@ function Dashboard({ state }: { state: TreasuryState }) {
 
 function PageHeader() {
   return (
-    <div className="mb-10 flex flex-col items-start gap-4 border-b border-neutral-900 pb-6 sm:flex-row sm:items-end sm:justify-between sm:gap-6">
+    <div className="mb-10 flex flex-col items-start gap-4 border-b border-line-soft pb-6 sm:flex-row sm:items-end sm:justify-between sm:gap-6">
       <div>
-        <div className="text-[10px] uppercase tracking-[0.3em] text-neutral-400">Covenant Stake</div>
-        <h1 className="mt-3 text-3xl font-extralight tracking-tight text-neutral-50 sm:text-4xl">
+        <div className="text-[10px] uppercase tracking-[0.3em] text-muted">Covenant Stake</div>
+        <h1 className="page-title mt-3 text-fg">
           Treasury
         </h1>
-        <p className="mt-3 max-w-xl text-sm leading-relaxed text-neutral-400">
+        <p className="mt-3 max-w-xl text-sm leading-relaxed text-muted">
           A public, real-time view of the staking program&apos;s on-chain state. All
           numbers sourced from chain at the latest confirmed slot.
         </p>
@@ -255,7 +255,7 @@ function PageHeader() {
 
 function Panel({ children }: { children: React.ReactNode }) {
   return (
-    <section className="rounded-md border border-neutral-900 bg-neutral-950/50 p-6 backdrop-blur-sm sm:p-8">
+    <section className="rounded-md border border-line-soft bg-raised/50 p-6 backdrop-blur-sm sm:p-8">
       {children}
     </section>
   );
@@ -263,17 +263,17 @@ function Panel({ children }: { children: React.ReactNode }) {
 
 function PanelEyebrow({ children }: { children: React.ReactNode }) {
   return (
-    <div className="text-[10px] uppercase tracking-[0.28em] text-neutral-400">{children}</div>
+    <div className="text-[10px] uppercase tracking-[0.28em] text-muted">{children}</div>
   );
 }
 
 function KpiCard({ label, value, unit }: { label: string; value: string; unit: string }) {
   return (
-    <div className="rounded-md border border-neutral-900 bg-neutral-950/50 p-6">
-      <div className="text-[10px] uppercase tracking-[0.22em] text-neutral-400">{label}</div>
+    <div className="rounded-md border border-line-soft bg-raised/50 p-6">
+      <div className="text-[10px] uppercase tracking-[0.22em] text-muted">{label}</div>
       <div className="mt-4 flex items-baseline gap-2">
-        <span className="font-mono text-2xl font-light tracking-tight text-neutral-50 sm:text-3xl">{value}</span>
-        <span className="text-[10px] uppercase tracking-[0.22em] text-neutral-400">{unit}</span>
+        <span className="type-display font-mono text-2xl text-fg sm:text-3xl">{value}</span>
+        <span className="text-[10px] uppercase tracking-[0.22em] text-muted">{unit}</span>
       </div>
     </div>
   );
@@ -281,12 +281,12 @@ function KpiCard({ label, value, unit }: { label: string; value: string; unit: s
 
 function SplitCard({ label, value, detail }: { label: string; value: string; detail: string }) {
   return (
-    <div className="rounded-sm border border-neutral-900 p-4">
+    <div className="rounded-sm border border-line-soft p-4">
       <div className="flex items-baseline justify-between">
-        <span className="text-[11px] uppercase tracking-[0.22em] text-neutral-400">{label}</span>
-        <span className="font-mono text-lg text-neutral-50">{value}</span>
+        <span className="text-[11px] uppercase tracking-[0.22em] text-muted">{label}</span>
+        <span className="font-mono text-lg text-fg">{value}</span>
       </div>
-      <p className="mt-2 text-[11px] leading-relaxed text-neutral-400">{detail}</p>
+      <p className="mt-2 text-[11px] leading-relaxed text-muted">{detail}</p>
     </div>
   );
 }
@@ -294,8 +294,8 @@ function SplitCard({ label, value, detail }: { label: string; value: string; det
 function DetailRow({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-400">{label}</div>
-      <div className="mt-1 font-mono text-sm text-neutral-100">{value}</div>
+      <div className="text-[10px] uppercase tracking-[0.2em] text-muted">{label}</div>
+      <div className="mt-1 font-mono text-sm text-fg">{value}</div>
     </div>
   );
 }
@@ -305,11 +305,11 @@ function StatusPill({ ok, label }: { ok: boolean; label: string }) {
     <span
       className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[10px] uppercase tracking-[0.22em] ${
         ok
-          ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
-          : "border-amber-500/40 bg-amber-500/10 text-amber-300"
+          ? "border-ok/40 bg-ok/10 text-ok"
+          : "border-warn/40 bg-warn/10 text-warn"
       }`}
     >
-      <span className={`h-1.5 w-1.5 rounded-full ${ok ? "bg-emerald-400" : "bg-amber-400"}`} />
+      <span className={`h-1.5 w-1.5 rounded-full ${ok ? "bg-ok" : "bg-warn"}`} />
       {label}
     </span>
   );
@@ -317,9 +317,9 @@ function StatusPill({ ok, label }: { ok: boolean; label: string }) {
 
 function TierLine({ days, multiplier }: { days: number; multiplier: string }) {
   return (
-    <div className="flex items-baseline justify-between border-b border-neutral-900 pb-2 last:border-0 last:pb-0">
-      <span className="text-[12px] text-neutral-300">{days} days</span>
-      <span className="font-mono text-[13px] text-neutral-50">{multiplier}</span>
+    <div className="flex items-baseline justify-between border-b border-line-soft pb-2 last:border-0 last:pb-0">
+      <span className="text-[12px] text-fg-soft">{days} days</span>
+      <span className="font-mono text-[13px] text-fg">{multiplier}</span>
     </div>
   );
 }

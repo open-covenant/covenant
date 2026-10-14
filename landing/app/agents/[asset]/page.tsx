@@ -48,12 +48,12 @@ type State = "green" | "yellow" | "red" | "gray";
 function StateDot({ state }: { state: State }) {
   const tone =
     state === "green"
-      ? "bg-emerald-400"
+      ? "bg-ok"
       : state === "yellow"
-        ? "bg-amber-400"
+        ? "bg-warn"
         : state === "red"
-          ? "bg-rose-400"
-          : "bg-neutral-600";
+          ? "bg-bad"
+          : "bg-faint";
   return (
     <span aria-hidden="true" className={`inline-block h-2.5 w-2.5 rounded-full ${tone} shrink-0`} />
   );
@@ -73,20 +73,20 @@ function Check({
   evidenceLabel?: string;
 }) {
   return (
-    <div className="flex flex-col gap-3 border border-neutral-800 bg-neutral-950/60 p-5">
+    <div className="flex flex-col gap-3 border border-line bg-raised/60 p-5">
       <div className="flex items-center gap-2.5">
         <StateDot state={state} />
-        <span className="text-[11px] font-light uppercase tracking-[2px] text-neutral-300">
+        <span className="text-[11px] uppercase tracking-[2px] text-fg-soft">
           {label}
         </span>
       </div>
-      <p className="text-[13px] font-light leading-relaxed text-neutral-400">{detail}</p>
+      <p className="text-[13px] leading-relaxed text-muted">{detail}</p>
       {evidenceHref && (
         <a
           href={evidenceHref}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-[11px] uppercase tracking-[1.5px] text-neutral-500 underline-offset-4 hover:text-neutral-300 hover:underline"
+          className="text-[11px] uppercase tracking-[1.5px] text-muted-2 underline-offset-4 hover:text-fg-soft hover:underline"
         >
           {evidenceLabel ?? "Open evidence"} →
         </a>
@@ -98,14 +98,14 @@ function Check({
 function Field({ label, value, href }: { label: string; value: string; href?: string }) {
   return (
     <div>
-      <dt className="text-[10px] uppercase tracking-[2px] text-neutral-500">{label}</dt>
-      <dd className="mt-1.5 break-all font-mono text-[12px] text-neutral-300">
+      <dt className="text-[10px] uppercase tracking-[2px] text-muted-2">{label}</dt>
+      <dd className="mt-1.5 break-all font-mono text-[12px] text-fg-soft">
         {href ? (
           <a
             href={href}
             target="_blank"
             rel="noopener noreferrer"
-            className="underline-offset-4 hover:text-neutral-100 hover:underline"
+            className="underline-offset-4 hover:text-fg hover:underline"
           >
             {value}
           </a>
@@ -153,25 +153,25 @@ export default async function AgentPassportPage({
       : "This asset carries no Covenant AppData of its own (an agent's record lives on a separate asset; see accountability).";
 
   return (
-    <main id="main-content" className="min-h-[100dvh] bg-[#030303] text-neutral-200">
+    <main id="main-content" className="min-h-[100dvh] bg-ground text-fg-2">
       <SiteHeader />
 
       <div className="mx-auto max-w-5xl px-6 pb-24 pt-28">
         <div className="mb-10 flex flex-col gap-2">
-          <p className="text-[11px] uppercase tracking-[3px] text-neutral-500">
-            <Link href="/agents" className="hover:text-neutral-300">
+          <p className="text-[11px] uppercase tracking-[3px] text-muted-2">
+            <Link href="/agents" className="hover:text-fg-soft">
               Agent passport
             </Link>
           </p>
-          <h1 className="text-2xl font-light tracking-tight text-white sm:text-3xl">{title}</h1>
+          <h1 className="page-title text-fg">{title}</h1>
           {p.doc?.description && (
-            <p className="max-w-3xl text-[13px] font-light leading-relaxed text-neutral-400">
+            <p className="max-w-3xl text-[13px] leading-relaxed text-muted">
               {p.doc.description}
             </p>
           )}
         </div>
 
-        <div className="mb-6 border border-neutral-800 bg-neutral-950/60 p-5">
+        <div className="mb-6 border border-line bg-raised/60 p-5">
           <dl className="grid gap-4 sm:grid-cols-2">
             <Field label="Core asset" value={p.asset.id} href={solscanAccountUrl(p.asset.id)} />
             <Field
@@ -207,7 +207,7 @@ export default async function AgentPassportPage({
                 href={metaplexAgentUrl(p.asset.id)}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-neutral-500 underline-offset-4 hover:text-neutral-300 hover:underline"
+                className="text-muted-2 underline-offset-4 hover:text-fg-soft hover:underline"
               >
                 View on the Metaplex agent directory →
               </a>
@@ -292,14 +292,14 @@ export default async function AgentPassportPage({
         </div>
 
         {p.attestation && (
-          <div className="mt-6 border border-neutral-800 bg-neutral-950/60 p-5">
+          <div className="mt-6 border border-line bg-raised/60 p-5">
             <div className="flex items-center gap-2.5">
               <StateDot state={p.attestation.verified ? "green" : "red"} />
-              <span className="text-[11px] font-light uppercase tracking-[2px] text-neutral-300">
+              <span className="text-[11px] uppercase tracking-[2px] text-fg-soft">
                 Validation record
               </span>
             </div>
-            <p className="mt-3 text-[13px] font-light leading-relaxed text-neutral-400">
+            <p className="mt-3 text-[13px] leading-relaxed text-muted">
               {p.attestation.verified
                 ? "This asset is a Covenant validation record. Its on-chain AppData authority is the Covenant validator (Core enforced it at write time), and it carries the ERC-8004 validation type, the expected schema, and a 64-hex response hash."
                 : `This asset carries AppData but does not verify as a Covenant validation record: ${p.attestation.reasons.join("; ")}.`}
@@ -332,7 +332,7 @@ export default async function AgentPassportPage({
           </div>
         )}
 
-        <p className="mt-10 max-w-3xl text-[12px] font-light leading-relaxed text-neutral-500">
+        <p className="mt-10 max-w-3xl text-[12px] leading-relaxed text-muted-2">
           Registered, accountable, and in policy are different states. Registration binds an asset
           to the 014 Registry; a validation record makes the agent accountable; the audit gate
           enforces the verdict on chain. This page never asks a server which one you are looking at.

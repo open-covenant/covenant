@@ -25,10 +25,10 @@ export const metadata: Metadata = {
   },
 };
 
-const eyebrow = 'font-mono text-[11px] uppercase tracking-[0.3em] text-neutral-400';
-const paragraph = 'text-[13px] leading-relaxed text-neutral-300 sm:text-[14px]';
+const eyebrow = 'font-mono text-[11px] uppercase tracking-[0.3em] text-muted';
+const paragraph = 'text-[13px] leading-relaxed text-fg-soft sm:text-[14px]';
 const link =
-  'underline decoration-neutral-700 underline-offset-4 transition-colors hover:text-neutral-50 hover:decoration-neutral-300';
+  'underline decoration-line-strong underline-offset-4 transition-colors hover:text-fg hover:decoration-fg-soft';
 
 const EXPLORER = 'https://robinhoodchain.blockscout.com';
 const ESCROW = '0x196b55CF36f5c5a0498A5C7ADE91B5E94dF4d309';
@@ -195,9 +195,9 @@ function Cards({ cards, columns }: { cards: Card[]; columns: string }) {
   return (
     <section className={`mt-10 grid gap-4 ${columns}`}>
       {cards.map((c) => (
-        <div key={c.title} className="rounded border border-neutral-800 bg-neutral-950/60 p-5">
-          <h3 className="text-[13px] uppercase tracking-[0.22em] text-neutral-100">{c.title}</h3>
-          <p className={`${paragraph} mt-3 text-neutral-400`}>{c.body}</p>
+        <div key={c.title} className="rounded border border-line bg-raised/60 p-5">
+          <h3 className="text-[13px] uppercase tracking-[0.22em] text-fg">{c.title}</h3>
+          <p className={`${paragraph} mt-3 text-muted`}>{c.body}</p>
         </div>
       ))}
     </section>
@@ -208,19 +208,19 @@ function Proofs({ proofs }: { proofs: Proof[] }) {
   return (
     <ul className="mt-6 space-y-3">
       {proofs.map((p) => (
-        <li key={p.tag} className="rounded border border-neutral-800 bg-neutral-950/60 p-5">
+        <li key={p.tag} className="rounded border border-line bg-raised/60 p-5">
           <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-            <span className="font-mono text-[11px] uppercase tracking-[0.24em] text-neutral-500">
+            <span className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted-2">
               {p.tag}
             </span>
-            <span className="font-mono text-[11px] uppercase tracking-[0.24em] text-neutral-200">
+            <span className="font-mono text-[11px] uppercase tracking-[0.24em] text-fg-2">
               {p.result}
             </span>
           </div>
           <p className={`${paragraph} mt-3`}>{p.attempt}</p>
-          <p className={`${paragraph} mt-1 text-neutral-500`}>{p.detail}</p>
+          <p className={`${paragraph} mt-1 text-muted-2`}>{p.detail}</p>
           <a
-            className={`mt-3 inline-block font-mono text-[12px] text-neutral-500 ${link}`}
+            className={`mt-3 inline-block font-mono text-[12px] text-muted-2 ${link}`}
             href={`${EXPLORER}/tx/${p.tx}`}
           >
             {short(p.tx)} &#8599;
@@ -234,7 +234,7 @@ function Proofs({ proofs }: { proofs: Proof[] }) {
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 py-3">
-      <dt className="font-mono text-[11px] uppercase tracking-[0.24em] text-neutral-500">
+      <dt className="font-mono text-[11px] uppercase tracking-[0.24em] text-muted-2">
         {label}
       </dt>
       <dd>{children}</dd>
@@ -248,7 +248,7 @@ export default function RobinhoodPage() {
       <SiteHeader />
       <main className="mx-auto w-full max-w-7xl px-5 pb-24 pt-[88px] sm:px-8 sm:pt-[120px]">
         <p className={eyebrow}>robinhood chain &middot; usdg &middot; live onchain</p>
-        <h1 className="mt-4 text-2xl font-extralight tracking-[0.18em] text-neutral-50 sm:text-3xl">
+        <h1 className="page-title mt-4 text-fg">
           Covenant Desk
         </h1>
         <p className={`${paragraph} mt-5 max-w-2xl`}>
@@ -267,48 +267,48 @@ export default function RobinhoodPage() {
             serves a local page, a local API and an MCP server that Claude Code, Codex, Hermes or
             any other agent can call.
           </p>
-          <pre className="mt-4 overflow-x-auto rounded border border-neutral-800 bg-neutral-950/60 p-4 font-mono text-[12px] leading-relaxed text-neutral-300">
+          <pre className="mt-4 overflow-x-auto rounded border border-line bg-raised/60 p-4 font-mono text-[12px] leading-relaxed text-fg-soft">
             {`npx @covenant-org/desk init --acknowledge-restrictions
 covenant-desk start
 
 # point your agent at it
 { "mcpServers": { "covenant-desk": { "command": "covenant-desk", "args": ["mcp"] } } }`}
           </pre>
-          <p className={`${paragraph} mt-3 text-neutral-500`}>
+          <p className={`${paragraph} mt-3 text-muted-2`}>
             Stock tokens are issued by Robinhood Assets (Jersey) Ltd and are not offered to
             residents of the United States, Canada, the United Kingdom or Switzerland. The desk
             starts in dry run and signs nothing until you turn live execution on.
           </p>
 
           <p className={`${eyebrow} mt-12`}>the weekend on chain</p>
-          <p className={`${paragraph} mt-3 max-w-2xl text-neutral-400`}>
+          <p className={`${paragraph} mt-3 max-w-2xl text-muted`}>
             From the desk&apos;s own recorder, every minute from Friday&apos;s close, on-chain price
             against the 24/7 reference, in basis points.
           </p>
-          <dl className="mt-6 divide-y divide-neutral-800/70 border-y border-neutral-800/70">
+          <dl className="mt-6 divide-y divide-line/70 border-y border-line/70">
             {WEEKEND.map((w) => (
               <Row key={w.symbol} label={w.symbol}>
-                <span className="font-mono text-[12px] text-neutral-300">
+                <span className="font-mono text-[12px] text-fg-soft">
                   {w.high} to {w.low}
                 </span>
-                <span className={`${paragraph} ml-3 text-neutral-500`}>{w.note}</span>
+                <span className={`${paragraph} ml-3 text-muted-2`}>{w.note}</span>
               </Row>
             ))}
           </dl>
 
           <p className={`${eyebrow} mt-12`}>fills, proven onchain</p>
           <Proofs proofs={DESK_PROOFS} />
-          <dl className="mt-8 divide-y divide-neutral-800/70 border-y border-neutral-800/70">
+          <dl className="mt-8 divide-y divide-line/70 border-y border-line/70">
             <Row label="Asset">
               <a
-                className={`font-mono text-[12px] text-neutral-300 ${link}`}
+                className={`font-mono text-[12px] text-fg-soft ${link}`}
                 href={`${EXPLORER}/address/${NVDA}`}
               >
                 NVDA {NVDA} &#8599;
               </a>
             </Row>
           </dl>
-          <p className={`${paragraph} mt-3 text-neutral-500`}>
+          <p className={`${paragraph} mt-3 text-muted-2`}>
             Tokens launched on LONG, PAIR and Bankr sit in Uniswap v4 pools the desk fills directly;
             a token that has no Uniswap route the desk can build is quoted and not filled, and the
             desk says so. Hedge execution needs a funded account on Lighter&apos;s Robinhood Chain
@@ -318,7 +318,7 @@ covenant-desk start
 
         <section className="mt-20">
           <p className={eyebrow}>what holds it in bounds</p>
-          <h2 className="mt-3 text-xl font-extralight tracking-[0.16em] text-neutral-50">
+          <h2 className="type-display mt-3 text-xl text-fg">
             Bounded agents
           </h2>
           <p className={`${paragraph} mt-4 max-w-2xl`}>
@@ -331,7 +331,7 @@ covenant-desk start
 
         <section className="mt-16">
           <p className={eyebrow}>what it may spend</p>
-          <h2 className="mt-3 text-xl font-extralight tracking-[0.16em] text-neutral-50">
+          <h2 className="type-display mt-3 text-xl text-fg">
             Bounded agent spend
           </h2>
           <p className={`${paragraph} mt-4 max-w-2xl`}>
@@ -341,15 +341,15 @@ covenant-desk start
           </p>
           <Cards cards={SPEND_GUARANTEES} columns="sm:grid-cols-2" />
           <p className={`${eyebrow} mt-12`}>proven onchain</p>
-          <p className={`${paragraph} mt-3 max-w-2xl text-neutral-400`}>
+          <p className={`${paragraph} mt-3 max-w-2xl text-muted`}>
             Three transactions in real USDG. Each one is the enforcement doing its job, not a
             description of it.
           </p>
           <Proofs proofs={SPEND_PROOFS} />
-          <dl className="mt-8 divide-y divide-neutral-800/70 border-y border-neutral-800/70">
+          <dl className="mt-8 divide-y divide-line/70 border-y border-line/70">
             <Row label="Escrow">
               <a
-                className={`font-mono text-[12px] text-neutral-300 ${link}`}
+                className={`font-mono text-[12px] text-fg-soft ${link}`}
                 href={`${EXPLORER}/address/${ESCROW}`}
               >
                 {ESCROW} &#8599;
@@ -357,7 +357,7 @@ covenant-desk start
             </Row>
             <Row label="Asset">
               <a
-                className={`font-mono text-[12px] text-neutral-300 ${link}`}
+                className={`font-mono text-[12px] text-fg-soft ${link}`}
                 href={`${EXPLORER}/address/${USDG}`}
               >
                 USDG {USDG} &#8599;
@@ -368,7 +368,7 @@ covenant-desk start
 
         <section className="mt-20">
           <p className={eyebrow}>what it may trade</p>
-          <h2 className="mt-3 text-xl font-extralight tracking-[0.16em] text-neutral-50">
+          <h2 className="type-display mt-3 text-xl text-fg">
             Bounded equity trading
           </h2>
           <p className={`${paragraph} mt-4 max-w-2xl`}>
@@ -379,16 +379,16 @@ covenant-desk start
           </p>
           <Cards cards={TRADE_GUARANTEES} columns="sm:grid-cols-3" />
           <p className={`${eyebrow} mt-12`}>one session, proven onchain</p>
-          <p className={`${paragraph} mt-3 max-w-2xl text-neutral-400`}>
+          <p className={`${paragraph} mt-3 max-w-2xl text-muted`}>
             Five transactions, one policy, one sitting against the live AAPL Stock Token. Two
             refusals, a round trip, and a refusal on the day&apos;s budget. The refusals moved
             nothing; the round trip cost the venue&apos;s spread.
           </p>
           <Proofs proofs={TRADE_PROOFS} />
-          <dl className="mt-8 divide-y divide-neutral-800/70 border-y border-neutral-800/70">
+          <dl className="mt-8 divide-y divide-line/70 border-y border-line/70">
             <Row label="Guard">
               <a
-                className={`font-mono text-[12px] text-neutral-300 ${link}`}
+                className={`font-mono text-[12px] text-fg-soft ${link}`}
                 href={`${EXPLORER}/address/${GUARD}`}
               >
                 {GUARD} &#8599;
@@ -396,7 +396,7 @@ covenant-desk start
             </Row>
             <Row label="Executor">
               <a
-                className={`font-mono text-[12px] text-neutral-300 ${link}`}
+                className={`font-mono text-[12px] text-fg-soft ${link}`}
                 href={`${EXPLORER}/address/${EXECUTOR}`}
               >
                 {EXECUTOR} &#8599;
@@ -404,14 +404,14 @@ covenant-desk start
             </Row>
             <Row label="Asset">
               <a
-                className={`font-mono text-[12px] text-neutral-300 ${link}`}
+                className={`font-mono text-[12px] text-fg-soft ${link}`}
                 href={`${EXPLORER}/address/${AAPL}`}
               >
                 AAPL {AAPL} &#8599;
               </a>
             </Row>
           </dl>
-          <p className={`${paragraph} mt-3 text-neutral-500`}>
+          <p className={`${paragraph} mt-3 text-muted-2`}>
             The pilot runs at small size against one asset; the caps, the band and the budget are
             configuration, and each asset is registered against one specific price feed, so a
             look-alike token with the right ticker is not tradeable.
@@ -427,7 +427,7 @@ covenant-desk start
             That is the difference between activity you can audit and activity you can walk away
             from.
           </p>
-          <p className={`${paragraph} mt-3 text-neutral-500`}>
+          <p className={`${paragraph} mt-3 text-muted-2`}>
             Contracts are deployed and source-verified on Robinhood Chain, chain 4663.
           </p>
           <p className={`${paragraph} mt-6`}>

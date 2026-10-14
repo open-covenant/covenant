@@ -27,11 +27,11 @@ export const metadata: Metadata = {
   },
 };
 
-const eyebrow = "font-mono text-[11px] uppercase tracking-[0.3em] text-neutral-400";
-const headingTitle = "text-[13px] uppercase tracking-[0.25em] text-neutral-100 sm:text-[14px]";
-const paragraph = "text-[13px] leading-relaxed text-neutral-300 sm:text-[14px]";
+const eyebrow = "font-mono text-[11px] uppercase tracking-[0.3em] text-muted";
+const headingTitle = "text-[13px] uppercase tracking-[0.25em] text-fg sm:text-[14px]";
+const paragraph = "text-[13px] leading-relaxed text-fg-soft sm:text-[14px]";
 const linkClass =
-  "underline decoration-neutral-700 underline-offset-4 transition-colors hover:decoration-neutral-300 hover:text-neutral-50";
+  "underline decoration-line-strong underline-offset-4 transition-colors hover:decoration-fg-soft hover:text-fg";
 
 type Section = { id: string; label: string; title: string; body: React.ReactNode };
 
@@ -153,19 +153,19 @@ const CTA = [
 
 export default function AboutPage() {
   return (
-    <main id="main-content" className="relative min-h-screen overflow-x-hidden bg-[#030303]">
+    <main id="main-content" className="relative min-h-screen overflow-x-hidden bg-ground">
       <SiteHeader />
 
       <div className="page-container">
-        <h1 className="mb-10 text-[11px] uppercase tracking-[0.4em] text-neutral-400 sm:mb-14">
+        <h1 className="mb-10 text-[11px] uppercase tracking-[0.4em] text-muted sm:mb-14">
           About
         </h1>
 
-        <h2 className="max-w-3xl text-balance text-[2.2rem] font-extralight uppercase leading-[1.1] tracking-[2px] text-white sm:text-[2.6rem]">
+        <h2 className="type-display max-w-3xl text-balance text-[2.2rem] text-fg sm:text-[2.6rem]">
           An operating system that builds itself
         </h2>
 
-        <p className="mt-6 max-w-2xl text-pretty text-lg font-light leading-relaxed text-neutral-300 sm:text-xl">
+        <p className="mt-6 max-w-2xl text-pretty text-[15px] leading-[1.7] text-fg-soft sm:text-base">
           AI agents are starting to act on your computer: running code, moving money, touching your
           files. Covenant is the layer that lets them do that safely. It gives people and agents a
           small set of host-level controls (intent, runtime, memory, identity, permissions, comms, a
@@ -180,11 +180,11 @@ export default function AboutPage() {
               <li
                 key={s.id}
                 id={s.id}
-                className={`relative border-l border-neutral-800/80 pl-8 sm:pl-12 ${isLast ? "" : "pb-14 sm:pb-16"}`}
+                className={`relative border-l border-line/80 pl-8 sm:pl-12 ${isLast ? "" : "pb-14 sm:pb-16"}`}
               >
                 <span
                   aria-hidden="true"
-                  className="absolute -left-[5px] top-[7px] h-[9px] w-[9px] rounded-full border border-neutral-700 bg-[#030303]"
+                  className="absolute -left-[5px] top-[7px] h-[9px] w-[9px] rounded-full border border-line-strong bg-ground"
                 />
                 <div className="mb-4 flex flex-wrap items-baseline gap-x-4 gap-y-1">
                   <span className={eyebrow}>{s.label}</span>
@@ -196,7 +196,7 @@ export default function AboutPage() {
           })}
         </ol>
 
-        <div className="mt-16 border-t border-neutral-800/80 pt-8 sm:mt-24">
+        <div className="mt-16 border-t border-line/80 pt-8 sm:mt-24">
           <div className="mb-4 flex flex-wrap items-baseline gap-x-4 gap-y-1">
             <span className={eyebrow}>$CVNT</span>
             <h2 className={headingTitle}>The token</h2>
@@ -226,14 +226,14 @@ export default function AboutPage() {
           </div>
         </div>
 
-        <div className="mt-16 flex flex-wrap gap-x-6 gap-y-3 border-t border-neutral-800/80 pt-8 sm:mt-24">
+        <div className="mt-16 flex flex-wrap gap-x-6 gap-y-3 border-t border-line/80 pt-8 sm:mt-24">
           {CTA.map((c) => (
             <a
               key={c.href}
               href={c.href}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-[12px] uppercase tracking-[0.2em] text-neutral-400 transition-colors hover:text-neutral-50"
+              className="text-[12px] uppercase tracking-[0.2em] text-muted transition-colors hover:text-fg"
             >
               {c.label} →
             </a>

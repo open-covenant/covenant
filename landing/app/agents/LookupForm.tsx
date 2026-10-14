@@ -28,16 +28,16 @@ export function LookupForm() {
           onChange={(e) => setValue(e.target.value)}
           placeholder="paste any 014 Registry asset address"
           spellCheck={false}
-          className="w-full border border-neutral-800 bg-neutral-950/60 px-3 py-2.5 font-mono text-[13px] text-neutral-200 placeholder:text-neutral-600 focus:border-neutral-600 focus:outline-none"
+          className="w-full border border-line bg-raised/60 px-3 py-2.5 font-mono text-[13px] text-fg-2 placeholder:text-faint focus:border-faint focus:outline-none"
         />
         <button
           type="submit"
-          className="shrink-0 border border-neutral-700 px-4 py-2.5 text-[11px] uppercase tracking-[2px] text-neutral-300 transition-colors hover:border-neutral-400 hover:text-white"
+          className="shrink-0 border border-line-strong px-4 py-2.5 text-[11px] uppercase tracking-[2px] text-fg-soft transition-colors hover:border-muted hover:text-fg"
         >
           Verify
         </button>
       </div>
-      {error && <p className="text-[12px] font-light text-rose-300">{error}</p>}
+      {error && <p className="text-[12px] text-bad">{error}</p>}
     </form>
   );
 }

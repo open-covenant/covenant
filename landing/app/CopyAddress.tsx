@@ -21,13 +21,13 @@ export function CopyAddress({ address, label }: { address: string; label?: strin
       onClick={copy}
       aria-label={label ?? "Copy contract address"}
       title={copied ? "Copied" : "Copy"}
-      className="group inline-flex max-w-full items-center gap-2 rounded-md border border-neutral-800/80 bg-[#0a0a0a]/60 px-3 py-2 font-mono text-[12px] text-neutral-300 transition-colors hover:border-neutral-700 hover:text-neutral-100"
+      className="group inline-flex max-w-full items-center gap-2 rounded-md border border-line bg-raised px-3 py-2 font-mono text-[12px] text-fg-soft transition-colors hover:border-line-strong hover:text-fg"
     >
       <span className="truncate">{address}</span>
       {copied ? (
-        <Check className="h-3.5 w-3.5 shrink-0 text-[#7f9f78]" />
+        <Check className="h-3.5 w-3.5 shrink-0 text-ok" />
       ) : (
-        <Copy className="h-3.5 w-3.5 shrink-0 text-neutral-400 transition-colors group-hover:text-neutral-300" />
+        <Copy className="h-3.5 w-3.5 shrink-0 text-muted-2 transition-colors group-hover:text-fg" />
       )}
     </button>
   );

@@ -1,7 +1,9 @@
-import Image from "next/image";
 import Link from "next/link";
 import { CopyAddress } from "./CopyAddress";
+import { FieldSeam } from "./FieldSeam";
 import {
+  CovenantLockup,
+  CovenantMark,
   CVNT_MINT,
   FOOTER_COLUMNS,
   FOOTER_LINKS,
@@ -16,7 +18,7 @@ type SiteFooterProps = {
   /** Inline styles for the outer <footer>. Useful for safe-area insets. */
   style?: React.CSSProperties;
   /**
-   * `full` (default) is the multi-column site footer. `minimal` is the single
+   * `full` (default) is the multi-column footer. `minimal` is the single
    * centered row, for the hero and full-screen dashboard views where a tall
    * footer doesn't fit.
    */
@@ -24,7 +26,7 @@ type SiteFooterProps = {
 };
 
 function FooterLink({ item, className }: { item: FooterColumnLink; className?: string }) {
-  const cls = ["transition-colors hover:text-neutral-200", className ?? ""].filter(Boolean).join(" ");
+  const cls = ["transition-colors", className ?? ""].filter(Boolean).join(" ");
   return item.external ? (
     <a href={item.href} target="_blank" rel="noopener noreferrer" className={cls}>
       {item.label}
@@ -39,24 +41,25 @@ function FooterLink({ item, className }: { item: FooterColumnLink; className?: s
 /**
  * Site-wide footer. The link columns, tagline, protocol chips, and $CVNT
  * contract come from `_brand.tsx`, so every page that mounts the footer stays
- * in sync. Pages control positioning via `className`.
+ * in sync. The full footer opens with a seam of the hero's field, like every
+ * section boundary on the home page; pages only own their padding.
  */
 export function SiteFooter({ className, style, variant = "full" }: SiteFooterProps) {
   if (variant === "minimal") {
     return (
       <footer
         className={[
-          "flex flex-wrap items-center justify-center gap-x-6 gap-y-2 px-4 text-center text-[12px] text-neutral-400 sm:text-[13px]",
+          "flex flex-wrap items-center justify-center gap-x-6 gap-y-2 px-4 text-center font-mono text-[11px] uppercase tracking-[0.14em] text-muted",
           className ?? "",
         ]
           .filter(Boolean)
           .join(" ")}
         style={style}
       >
-        <Image src="/covenant-logomark.png" alt="Covenant" width={28} height={28} className="h-7 w-7 object-contain opacity-70" />
+        <CovenantMark className="h-6 w-auto" title="Covenant" />
         <nav aria-label="Footer" className="contents">
           {FOOTER_LINKS.map((item) => (
-            <FooterLink key={item.href} item={item} />
+            <FooterLink key={item.href} item={item} className="hover:text-fg" />
           ))}
         </nav>
       </footer>
@@ -65,26 +68,29 @@ export function SiteFooter({ className, style, variant = "full" }: SiteFooterPro
 
   return (
     <footer
-      className={["w-full text-[13px] text-neutral-400", className ?? ""].filter(Boolean).join(" ")}
+      className={["w-full text-[12px] text-muted", className ?? ""].filter(Boolean).join(" ")}
       style={style}
     >
-      <div className="mx-auto w-full max-w-7xl px-5 sm:px-8">
-        <div className="grid gap-10 border-t border-neutral-800/80 pt-12 md:grid-cols-[1.5fr_repeat(5,1fr)]">
+      <FieldSeam seed={4.1} />
+      <div className="w-full px-[clamp(20px,3.4vw,50px)] pt-10">
+        <div className="grid gap-10 md:grid-cols-[minmax(250px,1.5fr)_repeat(5,minmax(0,1fr))] md:gap-[clamp(28px,4vw,64px)]">
           <div className="max-w-xs">
-            <Image src="/covenant-logomark.png" alt="Covenant" width={26} height={26} className="h-6 w-6 object-contain" />
-            <p className="mt-4 text-[12.5px] leading-relaxed text-neutral-500">{TAGLINE}.</p>
-            <p className="mt-4 font-mono text-[11px] tracking-wide text-neutral-600">
+            <CovenantLockup className="text-fg" markClassName="h-7 w-auto" />
+            <p className="mt-5 text-[12.5px] leading-relaxed text-muted">{TAGLINE}.</p>
+            <p className="mt-4 font-mono text-[9.5px] uppercase tracking-[0.16em] text-muted-2">
               {FOOTER_PROTOCOLS.join("  ·  ")}
             </p>
           </div>
 
           {FOOTER_COLUMNS.map((col) => (
             <div key={col.title}>
-              <h3 className="font-mono text-[11px] uppercase tracking-[0.25em] text-neutral-200">{col.title}</h3>
-              <ul className="mt-4 space-y-2.5 text-[13px] text-neutral-400">
+              <h3 className="font-mono text-[10px] font-semibold uppercase tracking-[0.24em] text-fg">
+                {col.title}
+              </h3>
+              <ul className="mt-5 space-y-3 text-[12px]">
                 {col.links.map((item) => (
                   <li key={item.href}>
-                    <FooterLink item={item} />
+                    <FooterLink item={item} className="text-muted hover:text-fg" />
                   </li>
                 ))}
               </ul>
@@ -92,13 +98,21 @@ export function SiteFooter({ className, style, variant = "full" }: SiteFooterPro
           ))}
         </div>
 
-        <div className="mt-12 flex flex-col items-center gap-3 border-t border-neutral-800/80 py-8 text-center">
-          <span className="font-mono text-[11px] uppercase tracking-[0.25em] text-neutral-500">$CVNT contract</span>
+        <div className="mt-12 flex flex-col items-start gap-3 border-t border-line pt-6 sm:flex-row sm:items-center sm:justify-between">
+          <span className="font-mono text-[10px] uppercase tracking-[0.24em] text-muted-2">$CVNT contract</span>
           <CopyAddress address={CVNT_MINT} label="Copy the $CVNT contract address" />
         </div>
 
-        <div className="pb-8 text-center font-mono text-[11px] text-neutral-600">
-          © 2026 Covenant · Apache-2.0
+        <div className="mt-6 flex flex-wrap justify-between gap-x-6 gap-y-2 border-t border-line py-6 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-2">
+          <span>© 2026 Covenant</span>
+          <a
+            href="https://github.com/open-covenant/covenant/blob/main/LICENSE"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="transition-colors hover:text-fg"
+          >
+            Source code license: Apache-2.0 <span aria-hidden="true">→</span>
+          </a>
         </div>
       </div>
     </footer>

@@ -1,8 +1,7 @@
 import type { Metadata } from "next";
-import Image from "next/image";
 import { SiteFooter } from "../SiteFooter";
 import { CopyAddress } from "../CopyAddress";
-import { GithubIcon, TelegramIcon, XIcon, X_URL, GITHUB_URL, TELEGRAM_URL } from "../_brand";
+import { CovenantMark, GithubIcon, TelegramIcon, XIcon, X_URL, GITHUB_URL, TELEGRAM_URL } from "../_brand";
 
 const CVNT_MINT = "2mNVZ6aEjrGwiUVCfz7XGWpiXuWzgBDoznwE579upump";
 
@@ -79,20 +78,20 @@ function LinkButton({ item, primary = false }: { item: LinkItem; primary?: boole
       rel={external ? "noopener noreferrer" : undefined}
       className={`group flex items-center justify-between gap-4 rounded-lg border px-5 transition-colors ${
         primary
-          ? "border-neutral-700 bg-[#0d0d0d] py-4 hover:border-neutral-500 hover:bg-[#121212]"
-          : "border-neutral-800/80 bg-[#0a0a0a]/60 py-3.5 hover:border-neutral-700 hover:bg-[#0f0f0f]"
+          ? "border-line-strong bg-raised py-4 hover:border-muted-2 hover:bg-raised"
+          : "border-line/80 bg-raised/60 py-3.5 hover:border-line-strong hover:bg-raised"
       }`}
     >
       <span className="flex min-w-0 flex-col">
-        <span className="truncate text-[13px] font-light tracking-wide text-neutral-100">
+        <span className="truncate text-[13px] tracking-wide text-fg">
           {item.label}
         </span>
         {item.note ? (
-          <span className="mt-0.5 truncate text-[11px] text-neutral-500">{item.note}</span>
+          <span className="mt-0.5 truncate text-[11px] text-muted-2">{item.note}</span>
         ) : null}
       </span>
-      <span className="shrink-0 text-neutral-600 transition-colors group-hover:text-neutral-300">
-        {external ? "↗" : "→"}
+      <span className="shrink-0 text-faint transition-colors group-hover:text-fg-soft">
+        →
       </span>
     </a>
   );
@@ -100,18 +99,12 @@ function LinkButton({ item, primary = false }: { item: LinkItem; primary?: boole
 
 export default function LinksPage() {
   return (
-    <main id="main-content" className="relative min-h-screen overflow-x-hidden bg-[#030303]">
+    <main id="main-content" className="relative min-h-screen overflow-x-hidden bg-ground">
       <div className="page-container" style={{ paddingTop: "calc(3.5rem + env(safe-area-inset-top))" }}>
         <div className="mx-auto flex w-full max-w-md flex-col items-center">
-          <h1>
-            <Image
-              src="/logo.svg"
-              alt="Covenant"
-              width={255}
-              height={54}
-              priority
-              className="h-auto w-60 opacity-95"
-            />
+          <h1 className="flex flex-col items-center gap-5 text-fg">
+            <CovenantMark className="h-16 w-auto" />
+            <span className="font-mono text-[15px] font-medium leading-none tracking-[0.32em]">Covenant</span>
           </h1>
 
           <div className="mt-6 flex items-center gap-2">
@@ -120,7 +113,7 @@ export default function LinksPage() {
               target="_blank"
               rel="noopener noreferrer"
               aria-label="Covenant on X"
-              className="p-2 text-neutral-400 transition-colors hover:text-neutral-50"
+              className="p-2 text-muted transition-colors hover:text-fg"
             >
               <XIcon className="h-5 w-5" />
             </a>
@@ -129,7 +122,7 @@ export default function LinksPage() {
               target="_blank"
               rel="noopener noreferrer"
               aria-label="Covenant on Telegram"
-              className="p-2 text-neutral-400 transition-colors hover:text-neutral-50"
+              className="p-2 text-muted transition-colors hover:text-fg"
             >
               <TelegramIcon className="h-5 w-5" />
             </a>
@@ -138,7 +131,7 @@ export default function LinksPage() {
               target="_blank"
               rel="noopener noreferrer"
               aria-label="Covenant on GitHub"
-              className="p-2 text-neutral-400 transition-colors hover:text-neutral-50"
+              className="p-2 text-muted transition-colors hover:text-fg"
             >
               <GithubIcon className="h-5 w-5" />
             </a>
@@ -152,7 +145,7 @@ export default function LinksPage() {
 
           {GROUPS.map((group) => (
             <div key={group.title} className="mt-9 w-full">
-              <h2 className="mb-3 text-[10px] uppercase tracking-[0.4em] text-neutral-500">
+              <h2 className="mb-3 text-[10px] uppercase tracking-[0.4em] text-muted-2">
                 {group.title}
               </h2>
               <div className="flex w-full flex-col gap-2.5">
@@ -164,7 +157,7 @@ export default function LinksPage() {
           ))}
 
           <div className="mt-9 w-full">
-            <h2 className="mb-3 text-[10px] uppercase tracking-[0.4em] text-neutral-500">
+            <h2 className="mb-3 text-[10px] uppercase tracking-[0.4em] text-muted-2">
               $CVNT mint
             </h2>
             <div className="flex flex-col gap-2.5">
@@ -173,9 +166,9 @@ export default function LinksPage() {
                 href={`https://solscan.io/token/${CVNT_MINT}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-[11px] uppercase tracking-[0.2em] text-neutral-500 transition-colors hover:text-neutral-200"
+                className="text-[11px] uppercase tracking-[0.2em] text-muted-2 transition-colors hover:text-fg-2"
               >
-                View on Solscan ↗
+                View on Solscan →
               </a>
             </div>
           </div>

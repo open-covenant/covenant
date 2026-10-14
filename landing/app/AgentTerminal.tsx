@@ -5,16 +5,18 @@ import { X } from "lucide-react";
 
 import { type AgentEvent, type Line, formatEvent } from "./_agentTerminal";
 
+// Night-ground tones: the brand's night greys, with the ramp's mint for
+// additions and a muted red for deletions.
 const COLOR: Record<string, string> = {
-  cmd: "#cacaca",
-  write: "#9a9a9a",
-  diff: "#868686",
-  meta: "#808080",
-  hunk: "#7c8a99",
-  add: "#7f9f78",
-  del: "#a8807f",
-  ctx: "#8c8c8c",
-  commit: "#b6b6b6",
+  cmd: "#f3f1fa",
+  write: "#a49ec0",
+  diff: "#8e88a8",
+  meta: "#8079a0",
+  hunk: "#7f9dde",
+  add: "#5fd9b4",
+  del: "#e18383",
+  ctx: "#8e88a8",
+  commit: "#d6d1ea",
   blank: "transparent",
 };
 
@@ -28,7 +30,7 @@ const BOOT: Line[] = [{ k: "cmd", t: "$ tail -f agent-os/autonomy/events.jsonl" 
 
 function Row({ line }: { line: Line }) {
   return (
-    <div className="whitespace-pre-wrap break-words" style={{ color: COLOR[line.k] ?? "#9a9a9a" }}>
+    <div className="whitespace-pre-wrap break-words" style={{ color: COLOR[line.k] ?? COLOR.write }}>
       {line.t.length ? line.t : " "}
     </div>
   );
@@ -186,21 +188,21 @@ export function AgentTerminal({
     <div
       aria-hidden="true"
       className={[
-        "flex flex-col overflow-hidden bg-[#050505]/85 font-mono text-[11px] leading-[1.55] backdrop-blur-md",
+        "flex flex-col overflow-hidden bg-sunken font-mono text-[11px] leading-[1.55] text-fg",
         className ?? "",
       ]
         .filter(Boolean)
         .join(" ")}
     >
-      <div className="flex items-center gap-2 border-b border-neutral-800/70 px-3 py-2">
-        <span className="text-[10px] uppercase tracking-[0.22em] text-neutral-400">
+      <div className="flex items-center gap-2 border-b border-line px-3 py-2">
+        <span className="text-[10px] uppercase tracking-[0.22em] text-muted-2">
           Covenant build
         </span>
         <span className="ml-auto flex items-center gap-1.5">
           <span
-            className={`h-1 w-1 rounded-full ${connected ? "animate-pulse bg-[#7f9f78]" : "bg-neutral-600"}`}
+            className={`h-1 w-1 rounded-full ${connected ? "animate-pulse bg-mint" : "bg-muted-2"}`}
           />
-          <span className="text-[10px] uppercase tracking-[0.22em] text-neutral-400">
+          <span className="text-[10px] uppercase tracking-[0.22em] text-muted-2">
             {connected ? "live" : "replay"}
           </span>
         </span>
@@ -209,7 +211,7 @@ export function AgentTerminal({
             type="button"
             onClick={onClose}
             aria-label="Hide agent log"
-            className="-mr-1 ml-1 rounded p-1 text-neutral-400 transition-colors hover:text-neutral-200 xl:hidden"
+            className="-mr-1 ml-1 rounded p-1 text-muted transition-colors hover:text-fg xl:hidden"
           >
             <X className="h-3.5 w-3.5" />
           </button>
@@ -225,7 +227,7 @@ export function AgentTerminal({
         ))}
         <div
           className="whitespace-pre-wrap break-words"
-          style={{ color: COLOR[partial?.k ?? "cmd"] ?? "#cacaca" }}
+          style={{ color: COLOR[partial?.k ?? "cmd"] ?? COLOR.cmd }}
         >
           {partial?.t ?? ""}
           <span className="term-cursor">▍</span>

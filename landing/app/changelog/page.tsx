@@ -73,27 +73,27 @@ const RELEASES: Release[] = [
   },
 ];
 
-const eyebrow = "font-mono text-[11px] uppercase tracking-[0.3em] text-neutral-400";
-const groupLabel = "text-[11px] uppercase tracking-[0.25em] text-neutral-400";
-const paragraph = "text-[13px] leading-relaxed text-neutral-300 sm:text-[14px]";
+const eyebrow = "font-mono text-[11px] uppercase tracking-[0.3em] text-muted";
+const groupLabel = "text-[11px] uppercase tracking-[0.25em] text-muted";
+const paragraph = "text-[13px] leading-relaxed text-fg-soft sm:text-[14px]";
 const linkClass =
-  "text-[12px] uppercase tracking-[0.2em] text-neutral-400 transition-colors hover:text-neutral-50";
+  "text-[12px] uppercase tracking-[0.2em] text-muted transition-colors hover:text-fg";
 
 export default function ChangelogPage() {
   return (
-    <main id="main-content" className="relative min-h-screen overflow-x-hidden bg-[#030303]">
+    <main id="main-content" className="relative min-h-screen overflow-x-hidden bg-ground">
       <SiteHeader />
 
       <div className="page-container">
-        <h1 className="mb-10 text-[11px] uppercase tracking-[0.4em] text-neutral-400 sm:mb-14">
+        <h1 className="mb-10 text-[11px] uppercase tracking-[0.4em] text-muted sm:mb-14">
           Changelog
         </h1>
 
-        <h2 className="max-w-3xl text-balance text-[2.2rem] font-extralight uppercase leading-[1.1] tracking-[2px] text-white sm:text-[2.6rem]">
+        <h2 className="type-display max-w-3xl text-balance text-[2.2rem] text-fg sm:text-[2.6rem]">
           What shipped, version by version
         </h2>
 
-        <p className="mt-6 max-w-2xl text-pretty text-lg font-light leading-relaxed text-neutral-300">
+        <p className="mt-6 max-w-2xl text-pretty text-[15px] leading-[1.7] text-fg-soft sm:text-base">
           Tagged releases with signed artifacts. The full, technical changelog
           and the live commit stream both live in the open.
         </p>
@@ -104,22 +104,22 @@ export default function ChangelogPage() {
             return (
               <li
                 key={r.version}
-                className={`relative border-l border-neutral-800/80 pl-8 sm:pl-12 ${isLast ? "" : "pb-14 sm:pb-16"}`}
+                className={`relative border-l border-line/80 pl-8 sm:pl-12 ${isLast ? "" : "pb-14 sm:pb-16"}`}
               >
                 <span
                   aria-hidden="true"
-                  className="absolute -left-[5px] top-[7px] h-[9px] w-[9px] rounded-full bg-neutral-100"
+                  className="absolute -left-[5px] top-[7px] h-[9px] w-[9px] rounded-full bg-blue"
                 />
                 <div className="mb-4 flex flex-wrap items-baseline gap-x-4 gap-y-1">
                   <span className={eyebrow}>{r.version}</span>
-                  <time dateTime={r.dateISO} className="text-[11px] uppercase tracking-[0.25em] text-neutral-400">
+                  <time dateTime={r.dateISO} className="text-[11px] uppercase tracking-[0.25em] text-muted">
                     {r.date}
                   </time>
                   <a
                     href={r.href}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="ml-auto text-[11px] uppercase tracking-[0.2em] text-neutral-400 transition-colors hover:text-neutral-50"
+                    className="ml-auto text-[11px] uppercase tracking-[0.2em] text-muted transition-colors hover:text-fg"
                   >
                     Signed release →
                   </a>
@@ -133,9 +133,9 @@ export default function ChangelogPage() {
                         {g.items.map((it) => (
                           <li
                             key={it}
-                            className="flex gap-3 text-[13px] leading-relaxed text-neutral-300 sm:text-[14px]"
+                            className="flex gap-3 text-[13px] leading-relaxed text-fg-soft sm:text-[14px]"
                           >
-                            <span aria-hidden="true" className="select-none text-neutral-600">
+                            <span aria-hidden="true" className="select-none text-faint">
                               ·
                             </span>
                             <span className="max-w-2xl">{it}</span>
@@ -150,7 +150,7 @@ export default function ChangelogPage() {
           })}
         </ol>
 
-        <div className="mt-16 flex flex-wrap gap-x-6 gap-y-3 border-t border-neutral-800/80 pt-8 sm:mt-24">
+        <div className="mt-16 flex flex-wrap gap-x-6 gap-y-3 border-t border-line/80 pt-8 sm:mt-24">
           <a
             href="https://github.com/open-covenant/covenant/blob/main/CHANGELOG.md"
             target="_blank"

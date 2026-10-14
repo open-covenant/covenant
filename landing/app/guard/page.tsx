@@ -25,10 +25,10 @@ export const metadata: Metadata = {
   },
 };
 
-const eyebrow = "font-mono text-[11px] uppercase tracking-[0.3em] text-neutral-400";
-const paragraph = "text-[13px] leading-relaxed text-neutral-300 sm:text-[14px]";
+const eyebrow = "font-mono text-[11px] uppercase tracking-[0.3em] text-muted";
+const paragraph = "text-[13px] leading-relaxed text-fg-soft sm:text-[14px]";
 const cmdBlock =
-  "block overflow-x-auto whitespace-pre rounded border border-neutral-800 bg-neutral-950 px-4 py-3 font-mono text-[12.5px] leading-relaxed text-neutral-100 sm:text-[13px]";
+  "block overflow-x-auto whitespace-pre rounded border border-line bg-raised px-4 py-3 font-mono text-[12.5px] leading-relaxed text-fg sm:text-[13px]";
 
 const CHECKS: { title: string; tool: string; body: string }[] = [
   {
@@ -54,7 +54,7 @@ export default function GuardPage() {
       <SiteHeader />
       <main className="mx-auto w-full max-w-7xl px-5 pb-24 pt-[88px] sm:px-8 sm:pt-[120px]">
         <p className={eyebrow}>reputation &middot; identity &middot; proof</p>
-        <h1 className="mt-4 text-2xl font-extralight tracking-[0.18em] text-neutral-50 sm:text-3xl">
+        <h1 className="page-title mt-4 text-fg">
           Covenant Guard
         </h1>
         <p className={`${paragraph} mt-5 max-w-2xl`}>
@@ -67,13 +67,13 @@ export default function GuardPage() {
         <section className="mt-10">
           <p className={eyebrow}>add it &middot; one line, no install</p>
           <code className={`${cmdBlock} mt-3`}>claude mcp add --transport http covenant https://mcp.opencovenant.org/mcp</code>
-          <p className={`${paragraph} mt-2 text-neutral-500`}>
-            For Codex, add it to <span className="font-mono text-[12px] text-neutral-400">config.toml</span>:
+          <p className={`${paragraph} mt-2 text-muted-2`}>
+            For Codex, add it to <span className="font-mono text-[12px] text-muted">config.toml</span>:
           </p>
           <code className={`${cmdBlock} mt-2`}>
             {`[mcp_servers.covenant]\nurl = "https://mcp.opencovenant.org/mcp"`}
           </code>
-          <p className={`${paragraph} mt-2 text-neutral-500`}>
+          <p className={`${paragraph} mt-2 text-muted-2`}>
             Hosted and remote. Nothing to download, no keys to manage. The tools are read-only and take
             no credentials.
           </p>
@@ -81,10 +81,10 @@ export default function GuardPage() {
 
         <section className="mt-12 grid gap-4 sm:grid-cols-3">
           {CHECKS.map((c) => (
-            <div key={c.title} className="rounded border border-neutral-800 bg-neutral-950/60 p-5">
-              <h2 className="text-[13px] uppercase tracking-[0.22em] text-neutral-100">{c.title}</h2>
-              <p className="mt-2 font-mono text-[11.5px] text-neutral-500">{c.tool}</p>
-              <p className={`${paragraph} mt-3 text-neutral-400`}>{c.body}</p>
+            <div key={c.title} className="rounded border border-line bg-raised/60 p-5">
+              <h2 className="text-[13px] uppercase tracking-[0.22em] text-fg">{c.title}</h2>
+              <p className="mt-2 font-mono text-[11.5px] text-muted-2">{c.tool}</p>
+              <p className={`${paragraph} mt-3 text-muted`}>{c.body}</p>
             </div>
           ))}
         </section>
@@ -94,7 +94,7 @@ export default function GuardPage() {
           <code className={`${cmdBlock} mt-3`}>
             {`> covenant_reputation  7Xk9…3fQ2\n  score 12 / 1000 · no track record · 0 settled jobs\n\n> covenant_agent_passport  4mNp…8vLd\n  not registered · no Covenant attestation\n\n> covenant_verify  "verified vendor" receipt\n  FAIL · signature does not match the contents\n\n  verdict · untrusted · payment held`}
           </code>
-          <p className={`${paragraph} mt-3 text-neutral-500`}>
+          <p className={`${paragraph} mt-3 text-muted-2`}>
             No history, no identity, and a forged receipt. Your agent holds the payment and flags it,
             instead of trusting a stranger.
           </p>
@@ -116,12 +116,12 @@ export default function GuardPage() {
             Apache-2.0, open source, so the thing you trust is auditable. The server is listed in the
             official{" "}
             <a
-              className="underline decoration-neutral-700 underline-offset-4 transition-colors hover:text-neutral-50 hover:decoration-neutral-300"
+              className="underline decoration-line-strong underline-offset-4 transition-colors hover:text-fg hover:decoration-fg-soft"
               href="https://registry.modelcontextprotocol.io/v0.1/servers?search=org.opencovenant/guard"
             >
               MCP Registry
             </a>{" "}
-            as <span className="font-mono text-[12px] text-neutral-400">org.opencovenant/guard</span>, published under a
+            as <span className="font-mono text-[12px] text-muted">org.opencovenant/guard</span>, published under a
             DNS-verified namespace on this domain.
           </p>
         </section>

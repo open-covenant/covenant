@@ -38,7 +38,7 @@ export default function DocsLayout({
   children: React.ReactNode;
 }) {
   return (
-    <div className="min-h-[100dvh] bg-[#030303] text-neutral-200">
+    <div className="min-h-[100dvh] bg-ground text-fg-2">
       <div className="mx-auto flex w-full max-w-[1400px]">
         <Sidebar />
 
@@ -47,7 +47,7 @@ export default function DocsLayout({
             {children}
           </article>
 
-          <SiteFooter variant="minimal" className="mx-auto mt-24 max-w-[760px] border-t border-neutral-800/80 pt-6" />
+          <SiteFooter variant="minimal" className="mx-auto mt-24 max-w-[760px] border-t border-line/80 pt-6" />
         </main>
       </div>
     </div>

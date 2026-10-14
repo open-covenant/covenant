@@ -12,7 +12,7 @@ export function ConnectButton() {
       <button
         type="button"
         onClick={() => open({ view: "Account" })}
-        className="font-mono text-[12px] text-neutral-300 transition-colors hover:text-neutral-50"
+        className="font-mono text-[12px] text-fg-soft transition-colors hover:text-fg"
       >
         {shortAddr(address)}
       </button>
@@ -23,7 +23,7 @@ export function ConnectButton() {
     <button
       type="button"
       onClick={() => open()}
-      className="rounded-sm border border-neutral-200 bg-neutral-100 px-5 py-2 text-[11px] uppercase tracking-[0.28em] text-neutral-950 transition-colors hover:bg-white"
+      className="btn btn-primary"
     >
       connect wallet
     </button>

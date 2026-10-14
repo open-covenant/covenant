@@ -33,7 +33,7 @@ export const metadata: Metadata = {
 export default function PositionsPage() {
   return (
     <WalletProvider>
-      <main id="main-content" className="relative min-h-[100dvh] bg-[#030303] pb-32">
+      <main id="main-content" className="relative min-h-[100dvh] bg-ground pb-32">
         <SiteHeader />
         <NetworkBanner />
         <div className="page-container">

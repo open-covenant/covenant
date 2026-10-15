@@ -1947,6 +1947,59 @@ mod tests {
         );
     }
 
+    /// One real job through the executor on the live chain and IMD's live
+    /// plane: check, pay 0.5 IMD, follow, relay. Configured exactly as a
+    /// node is (`COVENANT_COMPUTE_IMD_*`), plus COVENANT_COMPUTE_IMD_LIVE_HOME
+    /// for the order book, COVENANT_COMPUTE_IMD_LIVE_JOB_ID (reuse it to
+    /// resume the same order rather than pay again),
+    /// COVENANT_COMPUTE_IMD_LIVE_ORDER (a JSON file of `{action, input}`) and
+    /// COVENANT_COMPUTE_IMD_LIVE_OUT (where the relayed output is written).
+    /// Spends real IMD. Run with `cargo test -- --ignored live_job`.
+    #[tokio::test]
+    #[ignore = "pays 0.5 IMD on the live chain"]
+    async fn live_job_through_the_real_imd() {
+        let var = |key: &str| std::env::var(key).unwrap_or_else(|_| panic!("{key} is required"));
+        let home = PathBuf::from(var("COVENANT_COMPUTE_IMD_LIVE_HOME"));
+        let job_id = Uuid::parse_str(&var("COVENANT_COMPUTE_IMD_LIVE_JOB_ID")).unwrap();
+        let order: Value = serde_json::from_str(
+            &std::fs::read_to_string(var("COVENANT_COMPUTE_IMD_LIVE_ORDER")).unwrap(),
+        )
+        .unwrap();
+        let out = PathBuf::from(var("COVENANT_COMPUTE_IMD_LIVE_OUT"));
+
+        let config = ImdConfig::from_environment(&home).expect("the knobs parse");
+        let exec = ImdExecutor::new(config).expect("the executor opens");
+        exec.health().await.expect("the node would report online");
+
+        let order = SwarmOrder::new(order["action"].as_str().unwrap(), order["input"].clone());
+        let mut job = research_job(5_000_000);
+        job.job_id = job_id;
+        job.input = swarm_input(&order);
+        let deadline = Duration::from_secs(3 * 3_600);
+        exec.admit(&job, deadline).expect("the node admits the job");
+        println!(
+            "LIVE wallet={} job={job_id} least_offer={:?}",
+            exec.wallet(),
+            exec.least_offer_micro_usdc()
+        );
+
+        let outcome = exec
+            .execute(&job, deadline)
+            .await
+            .expect("the job completes");
+        let Content::Json { value } = &outcome.output[0] else {
+            panic!("a JSON block leads the output");
+        };
+        std::fs::write(&out, serde_json::to_vec_pretty(value).unwrap()).unwrap();
+        println!(
+            "LIVE OK wall_ms={} tx={} job={} -> {}",
+            outcome.wall_ms,
+            value["swarm"]["paidWith"]["txHash"],
+            value["swarm"]["jobId"],
+            out.display()
+        );
+    }
+
     #[test]
     fn the_order_book_replays_the_last_state_per_job() {
         let dir = tempfile::tempdir().unwrap();

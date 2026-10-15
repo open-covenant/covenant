@@ -182,11 +182,11 @@ export const MENU_LINKS = [
   { label: "Contact", href: "/contact", external: false as const },
 ];
 
-// Socials sit at the foot of the side menu.
+// Socials sit on the right of the header and at the foot of the side menu.
 export const SOCIAL_LINKS = [
-  { label: "X", href: "https://x.com/OpenCovenant", external: true as const },
-  { label: "Telegram", href: TELEGRAM_URL, external: true as const },
-  { label: "GitHub", href: GITHUB_URL, external: true as const },
+  { label: "X", href: X_URL, Icon: XIcon },
+  { label: "Telegram", href: TELEGRAM_URL, Icon: TelegramIcon },
+  { label: "GitHub", href: GITHUB_URL, Icon: GithubIcon },
 ];
 
 export function XIcon({ className }: { className?: string }) {

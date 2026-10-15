@@ -6,13 +6,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Menu, X } from "lucide-react";
 import { FieldSeam } from "./FieldSeam";
-import { CovenantLockup, GithubIcon, MENU_LINKS, NAV_LINKS, SOCIAL_LINKS, TelegramIcon, XIcon } from "./_brand";
-
-const SOCIAL_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
-  X: XIcon,
-  Telegram: TelegramIcon,
-  GitHub: GithubIcon,
-};
+import { CovenantLockup, MENU_LINKS, NAV_LINKS, SOCIAL_LINKS } from "./_brand";
 
 type MenuItem = { label: string; href: string; external?: boolean };
 
@@ -209,22 +203,19 @@ export function SiteMenu() {
                   Try the sandbox <span aria-hidden="true">→</span>
                 </a>
                 <div className="flex items-center gap-1">
-                  {SOCIAL_LINKS.map((item) => {
-                    const Icon = SOCIAL_ICONS[item.label];
-                    return (
-                      <a
-                        key={item.href}
-                        href={item.href}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        aria-label={`Covenant on ${item.label}`}
-                        onClick={dismiss}
-                        className="inline-flex h-10 w-10 items-center justify-center rounded-full text-muted transition-colors hover:bg-raised hover:text-fg"
-                      >
-                        {Icon ? <Icon className="h-4 w-4" /> : item.label}
-                      </a>
-                    );
-                  })}
+                  {SOCIAL_LINKS.map(({ label, href, Icon }) => (
+                    <a
+                      key={href}
+                      href={href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      aria-label={`Covenant on ${label}`}
+                      onClick={dismiss}
+                      className="inline-flex h-10 w-10 items-center justify-center rounded-full text-muted transition-colors hover:bg-raised hover:text-fg"
+                    >
+                      <Icon className="h-4 w-4" />
+                    </a>
+                  ))}
                 </div>
               </div>
 

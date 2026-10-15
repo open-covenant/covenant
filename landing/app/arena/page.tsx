@@ -143,7 +143,7 @@ function Curve({ points }: { points: Arena["curve"] }) {
           cx={x}
           cy={y}
           r="3.5"
-          fill="#0d0b16"
+          fill="#000000"
           stroke={ACCENT[points[i].proposer ?? ""] ?? NEUTRAL}
           strokeWidth="2"
           className="arena-pop"

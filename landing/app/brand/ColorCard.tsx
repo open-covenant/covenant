@@ -25,7 +25,7 @@ export function ColorCard({ color, kind = "fill" }: { color: PaletteColor; kind?
   ];
   // Whichever of the light text color or the background reads better over the fill.
   const L = luminance(color.rgb);
-  const onFill = 1.05 / (L + 0.05) >= (L + 0.05) / 0.0538 ? "#f3f1fa" : "#0d0b16";
+  const onFill = 1.05 / (L + 0.05) >= (L + 0.05) / 0.05 ? "#f3f1fa" : "#000000";
 
   return (
     <div className="flex min-w-0 flex-col overflow-hidden rounded-[6px] border border-line bg-raised">

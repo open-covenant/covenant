@@ -10,7 +10,7 @@
     monospace;
   --font-display: var(--font-archivo), "Arial Black", ui-sans-serif, sans-serif;
 
-  --color-ground: #0d0b16;
+  --color-ground: #000000;
   --color-sunken: #08070e;
   --color-raised: #14111f;
   --color-fg: #f3f1fa;
@@ -175,7 +175,7 @@
    the hairline under it appears once the page scrolls. */
 
 .site-header {
-  background: rgb(13 11 22 / 0.95);
+  background: rgb(0 0 0 / 0.95);
   border-bottom: 1px solid transparent;
   color: var(--color-fg);
   backdrop-filter: blur(14px);
@@ -291,8 +291,8 @@
   z-index: 3;
   pointer-events: none;
   background:
-    linear-gradient(to bottom, rgb(13 11 22 / 0.86) 0%, rgb(13 11 22 / 0) 28%),
-    linear-gradient(to top, rgb(13 11 22 / 0.92) 0%, rgb(13 11 22 / 0) 44%);
+    linear-gradient(to bottom, rgb(0 0 0 / 0.86) 0%, rgb(0 0 0 / 0) 28%),
+    linear-gradient(to top, rgb(0 0 0 / 0.92) 0%, rgb(0 0 0 / 0) 44%);
 }
 
 .hero-overlay {
@@ -345,7 +345,7 @@
 /* The meta row crosses the brightest part of the field, so it carries its own
    contrast rather than relying on the veil. */
 .hero-meta-row .hero-meta {
-  text-shadow: 0 1px 10px rgb(13 11 22 / 0.95);
+  text-shadow: 0 1px 10px rgb(0 0 0 / 0.95);
 }
 
 .hero-meta-row .hero-meta-dim {
@@ -380,8 +380,8 @@
 
   .hero-veil {
     background:
-      linear-gradient(to bottom, rgb(13 11 22 / 0.88) 0%, rgb(13 11 22 / 0.3) 34%),
-      linear-gradient(to top, rgb(13 11 22 / 0.92) 0%, rgb(13 11 22 / 0.35) 46%);
+      linear-gradient(to bottom, rgb(0 0 0 / 0.88) 0%, rgb(0 0 0 / 0.3) 34%),
+      linear-gradient(to top, rgb(0 0 0 / 0.92) 0%, rgb(0 0 0 / 0.35) 46%);
   }
 
   .hero-title-stack {

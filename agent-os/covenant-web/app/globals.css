@@ -1,7 +1,7 @@
 :root {
   /* Covenant identity: dark background, light text, the violet → blue → mint
      gradient as the accent. Dark theme only. */
-  --bg: #0d0b16;
+  --bg: #000000;
   --sunken: #08070e;
   --panel: #14111f;
   --panel-hover: #1b1729;

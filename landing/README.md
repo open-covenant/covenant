@@ -19,8 +19,8 @@ default for `next start`); bound to 127.0.0.1, the docs rewrite falls back to
 
 ## Identity
 
-The site has a dark theme only: light text on a near-black background
-(`#0d0b16`), with the Covenant gradient (violet → blue → mint) as the accent.
+The site has a dark theme only: light text on a black background
+(`#000000`), with the Covenant gradient (violet → blue → mint) as the accent.
 There is no light theme and no light surface anywhere — not a section, card,
 button, modal or printout. The tokens live in `app/globals.css`:
 

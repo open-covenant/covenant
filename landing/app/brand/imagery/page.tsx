@@ -162,7 +162,7 @@ export default function BrandImagery() {
           rows={[
             ["Shape", "The rounded square of the mark"],
             ["Color", "The Covenant gradient, violet to mint"],
-            ["Background", "Always the Covenant background, #0D0B16"],
+            ["Background", "Always the Covenant background, #000000"],
             ["Density", "Sparse; shapes never touch"],
             ["Motion", "A slow, continuous drift that responds to scroll and pointer"],
             ["Where", "Website, share cards, social headers, launches and announcements"],

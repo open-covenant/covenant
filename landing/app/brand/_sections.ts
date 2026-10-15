@@ -67,7 +67,7 @@ export const BRAND_SECTIONS: BrandSection[] = [
     href: "/brand/color",
     n: "04",
     title: "Color",
-    summary: "Violet, blue and mint against a deep, dark background.",
+    summary: "Violet, blue and mint against a black background.",
     parts: [
       { id: "dark-backgrounds", title: "Dark backgrounds" },
       { id: "neutrals", title: "Neutrals" },

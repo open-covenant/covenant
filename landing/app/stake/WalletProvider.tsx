@@ -53,7 +53,7 @@ function ensureAppKit() {
     features: { analytics: true },
     themeMode: "dark",
     themeVariables: {
-      "--w3m-color-mix": "#0d0b16",
+      "--w3m-color-mix": "#000000",
       "--w3m-color-mix-strength": 40,
       "--w3m-accent": "#a03bf0",
       "--w3m-font-family": 'var(--font-jetbrains), ui-monospace, "SF Mono", Menlo, monospace',

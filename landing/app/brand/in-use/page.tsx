@@ -280,7 +280,7 @@ export default function BrandInUse() {
           <div className="flex justify-center p-6 sm:p-10">
             <div className="relative aspect-[1/1.414] w-full max-w-[22rem] overflow-hidden rounded-[4px] border border-line bg-ground [container-type:inline-size]">
               <StaticField cols={30} rows={30} time={1.4} className="absolute inset-x-0 top-0 h-[58%] w-full" />
-              <div className="absolute inset-x-0 top-[38%] h-[24%] bg-[linear-gradient(to_bottom,transparent,#0d0b16)]" />
+              <div className="absolute inset-x-0 top-[38%] h-[24%] bg-[linear-gradient(to_bottom,transparent,#000000)]" />
               <div className="absolute inset-x-0 bottom-0 flex flex-col gap-[7cqw] p-[8cqw]">
                 <p className="type-display text-[9.6cqw] text-fg">Permission, not trust</p>
                 <div className="flex items-end justify-between">

@@ -5,7 +5,7 @@ import { CodeBlock, MoreSections, PageHead, Panel, Part, Points, Rule, RuleGrid 
 import { BRAND_COLORS, GRADIENT_CSS, NEUTRALS, STATUS, TEXT_COLORS } from "../_palette";
 
 const DESCRIPTION =
-  "Covenant's color palette: violet, blue and mint against a deep, dark background. Neutrals, text colors, the Covenant gradient and its four uses, status colors, proportion, contrast and tokens.";
+  "Covenant's color palette: violet, blue and mint against a black background. Neutrals, text colors, the Covenant gradient and its four uses, status colors, proportion, contrast and tokens.";
 
 export const metadata: Metadata = {
   title: "Color: Covenant brand guidelines",
@@ -30,7 +30,7 @@ const TOKENS = `/* Covenant color tokens · https://opencovenant.org/brand/color
   --covenant-gradient: linear-gradient(115deg, #a03bf0, #4c7fde, #1de3ae);
 
   /* Neutrals */
-  --covenant-background: #0d0b16; /* Background */
+  --covenant-background: #000000; /* Background */
   --covenant-inset: #08070e; /* Inset */
   --covenant-surface: #14111f; /* Surface */
   --covenant-border-subtle: #1d1a2b; /* Border subtle */
@@ -74,7 +74,7 @@ export default function BrandColor() {
         intro={
           <>
             <p>
-              Violet, blue and mint against a deep, dark background. Covenant is designed for dark
+              Violet, blue and mint against a black background. Covenant is designed for dark
               backgrounds only: there is no light theme, and nothing we make sits on white or light gray, on
               screen or in print.
             </p>
@@ -110,7 +110,7 @@ export default function BrandColor() {
             </p>
             <p>
               Where a platform defaults to light (email clients, document tools, operating systems), set the
-              background to #0D0B16.
+              background to #000000.
             </p>
           </>
         }
@@ -126,7 +126,7 @@ export default function BrandColor() {
               as fills.
             </>,
             <>
-              <strong>Depth through tone, not shadows.</strong> Inset, Background and Surface sit a few steps
+              <strong>Depth through tone, not shadows.</strong> Background, Inset and Surface sit a few steps
               apart, and borders separate one element from the next.
             </>,
             <>
@@ -144,8 +144,8 @@ export default function BrandColor() {
         wide
         text={
           <p>
-            Six violet-tinted neutrals. Background is the page color; the other five separate the elements
-            placed on it.
+            Six neutrals. Background is pure black and is the page color; the other five have a slight
+            violet tint and separate the elements placed on it.
           </p>
         }
       >
@@ -175,7 +175,7 @@ export default function BrandColor() {
         wide
         text={
           <p>
-            Six light tints, each leaning toward the violet of the background so text never glares.
+            Six light colors with a slight violet tint, so text never glares against the black background.
             Contrast ratios are measured against Background. Subtle text is the minimum for anything meant
             to be read.
           </p>
@@ -322,7 +322,7 @@ export default function BrandColor() {
         wide
         text={
           <p>
-            WCAG 2 contrast of each color against Background (#0D0B16). Body text needs AA (4.5:1); anything
+            WCAG 2 contrast of each color against Background (#000000). Body text needs AA (4.5:1); anything
             below 3:1 is decorative only.
           </p>
         }

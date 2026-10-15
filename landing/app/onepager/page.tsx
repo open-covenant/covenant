@@ -30,10 +30,10 @@ const CSS = `
   --fg: #f3f1fa; --body: #c4bfd8; --muted: #a49ec0; --faint: #8079a0; --line: #2a2640;
   --ramp: linear-gradient(115deg, #a03bf0, #4c7fde, #1de3ae);
   --mono: var(--font-jetbrains), ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  background: #0d0b16; color: var(--fg); min-height: 100dvh; font-family: var(--mono);
+  background: #000000; color: var(--fg); min-height: 100dvh; font-family: var(--mono);
   -webkit-print-color-adjust: exact; print-color-adjust: exact;
 }
-#op .page { max-width: 920px; margin: 0 auto; padding: clamp(32px, 6vw, 72px); background: #0d0b16; }
+#op .page { max-width: 920px; margin: 0 auto; padding: clamp(32px, 6vw, 72px); background: #000000; }
 #op .mast { display: flex; align-items: center; justify-content: center; gap: 18px; padding-bottom: 12px; }
 #op .mark { display: block; width: auto; height: 54px; }
 #op .wordmark { margin: 0; font-family: var(--mono); font-weight: 500; font-size: 22px; line-height: 1; letter-spacing: 0.32em; text-transform: uppercase; color: var(--fg); }
@@ -62,8 +62,8 @@ const CSS = `
 #op .foot .tag { font-family: var(--mono); color: var(--body); margin-right: 6px; }
 @media (max-width: 640px) { #op .cols { flex-direction: column; gap: 28px; } }
 @media print {
-  #op { min-height: 0; background: #0d0b16; }
-  #op .page { width: 210mm; height: 297mm; max-width: none; overflow: hidden; padding: 15mm 16mm 12mm; background: #0d0b16; }
+  #op { min-height: 0; background: #000000; }
+  #op .page { width: 210mm; height: 297mm; max-width: none; overflow: hidden; padding: 15mm 16mm 12mm; background: #000000; }
   #op .mast { gap: 12px; padding-bottom: 9px; }
   #op .mark { height: 34px; }
   #op .wordmark { font-size: 15px; }

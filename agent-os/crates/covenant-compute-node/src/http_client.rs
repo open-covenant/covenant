@@ -498,6 +498,7 @@ mod tests {
                 operator_session: Some("sess-123".into()),
                 reason: None,
                 fee_bps: 0,
+                fee_exempt_kinds: Vec::new(),
             })
         }
         let base =
@@ -747,6 +748,7 @@ mod tests {
                     operator_session: None,
                     reason: None,
                     fee_bps: 0,
+                    fee_exempt_kinds: Vec::new(),
                 }),
             )
         }

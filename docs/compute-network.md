@@ -325,9 +325,12 @@ requires above the cost of 0.5 IMD. Move the ask as the IMD price moves.
   requires a verified receipt, refund requires a passed deadline or an
   explicit rejection — there is no unilateral button on either side.
 - The coordinator's fee (`COVENANT_COMPUTE_FEE_BPS`, disclosed at
-  `/federation/fees`) comes out of the operator's side and funds
-  partner revenue shares; nodes refuse to register with a coordinator
-  whose disclosed fee exceeds their own ceiling.
+  `/federation/fees`) comes out of the operator's side on every kind
+  the coordinator pays out itself and funds partner revenue shares; a
+  lease session settled by the on-chain lease meter is fee-free, since
+  its vault pays the operator the whole metered charge, and the
+  disclosure names that exemption. Nodes refuse to register with a
+  coordinator whose disclosed fee exceeds their own ceiling.
 - Every escrow hold is tagged with its funding source (`organic` |
   `bootstrap`); subsidized deployments run under a hard subsidy-ratio
   ceiling. Bootstrap money is a bounded bridge, never a faucet.

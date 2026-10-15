@@ -10,7 +10,7 @@ use covenant_types::AgentId;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::capability::CapabilityProfile;
+use crate::capability::{CapabilityProfile, JobKind};
 use crate::envelope::SignedJobEnvelope;
 use crate::escrow::EscrowHoldAttestation;
 use crate::receipt::SignedWorkReceipt;
@@ -126,6 +126,15 @@ pub struct RegisterResponse {
     /// predating fee capture (they took nothing).
     #[serde(default)]
     pub fee_bps: u32,
+    /// The job kinds `fee_bps` does not apply to; it applies to every
+    /// kind not listed. A coordinator withholds its fee from the payouts
+    /// it pushes itself, and a kind whose money settles on chain instead
+    /// — a lease session under an on-chain meter, whose vault pays the
+    /// operator the whole metered charge — is exempt, so an operator
+    /// pricing that kind prices it fee-free. Serde-default for
+    /// coordinators predating the exemption: they charged every kind.
+    #[serde(default)]
+    pub fee_exempt_kinds: Vec<JobKind>,
 }
 
 /// How far a heartbeat's signed `ts_ms` may sit from the coordinator's
@@ -301,6 +310,19 @@ pub struct JobResultAck {
     /// current coordinator sets it on every branch, so a matched pair is
     /// unaffected.
     pub released_gross_micro_usdc: u64,
+    /// The marketplace fee the coordinator actually withheld from this
+    /// release, so the operator's net is `released_gross_micro_usdc`
+    /// minus this. Stated rather than re-derived because the disclosed
+    /// rate does not apply to every kind: a lease settled on chain pays
+    /// the operator the whole metered charge and withholds nothing, and
+    /// a node sizing its credit from the rate alone would under-book it
+    /// and later fail its own payout audit against the larger transfer.
+    /// `None` from a coordinator predating the field, which charged the
+    /// disclosed rate on every release; the node falls back to that
+    /// math. Serde-defaulted on purpose, unlike the gross: a missing fee
+    /// has an honest fallback, a missing gross does not.
+    #[serde(default)]
+    pub fee_micro_usdc: Option<u64>,
 }
 
 /// The human-facing reason inside a coordinator error response. The
@@ -509,10 +531,50 @@ mod tests {
             job_id: Uuid::new_v4(),
             settled: ResultSettlement::Released,
             released_gross_micro_usdc: 4_200,
+            fee_micro_usdc: Some(105),
         };
         let json = serde_json::to_string(&ack).unwrap();
         assert!(json.contains("released_gross_micro_usdc"));
         assert_eq!(serde_json::from_str::<JobResultAck>(&json).unwrap(), ack);
+    }
+
+    #[test]
+    fn a_result_ack_without_a_stated_fee_decodes_to_none_not_zero() {
+        // A coordinator predating the field charged its disclosed rate on
+        // every release; the node must fall back to that math, so the
+        // absence decodes as "not stated", never as "nothing withheld".
+        let body = format!(
+            r#"{{"job_id":"{}","settled":"released","released_gross_micro_usdc":4200}}"#,
+            Uuid::new_v4()
+        );
+        let ack: JobResultAck = serde_json::from_str(&body).unwrap();
+        assert_eq!(ack.fee_micro_usdc, None);
+        assert_eq!(ack.released_gross_micro_usdc, 4_200);
+    }
+
+    #[test]
+    fn a_register_response_discloses_the_kinds_its_fee_skips_and_old_bodies_skip_none() {
+        let resp = RegisterResponse {
+            accepted: true,
+            operator_session: Some("s".into()),
+            reason: None,
+            fee_bps: 1_000,
+            fee_exempt_kinds: vec![JobKind::LeaseSession],
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains(r#""fee_exempt_kinds":["lease_session"]"#));
+        assert_eq!(
+            serde_json::from_str::<RegisterResponse>(&json).unwrap(),
+            resp
+        );
+        // A coordinator predating the exemption charged every kind: its
+        // body names no exempt kinds, and the node reads it that way.
+        let old: RegisterResponse = serde_json::from_str(
+            r#"{"accepted":true,"operator_session":"s","reason":null,"fee_bps":250}"#,
+        )
+        .unwrap();
+        assert_eq!(old.fee_bps, 250);
+        assert!(old.fee_exempt_kinds.is_empty());
     }
 
     #[test]

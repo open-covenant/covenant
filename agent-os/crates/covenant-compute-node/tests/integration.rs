@@ -577,10 +577,12 @@ impl covenant_compute_node::Coordinator for RefundAckCoordinator {
 /// A coordinator that delivers and pays, but releases a gross smaller than
 /// the receipt's envelope price — what a node serving a lease sees when the
 /// session bills only its metered seconds and the escrowed window ceiling
-/// is refunded down to them.
+/// is refunded down to them. `fee_micro_usdc` is what its ack states was
+/// withheld: `None` is a coordinator predating the field.
 struct MeteredReleaseCoordinator {
     inner: MockCoordinator,
     released_gross_micro_usdc: u64,
+    fee_micro_usdc: Option<u64>,
 }
 
 #[async_trait::async_trait]
@@ -619,6 +621,7 @@ impl covenant_compute_node::Coordinator for MeteredReleaseCoordinator {
         let ack = self.inner.submit_result(result).await?;
         Ok(covenant_compute_protocol::JobResultAck {
             released_gross_micro_usdc: self.released_gross_micro_usdc,
+            fee_micro_usdc: self.fee_micro_usdc,
             ..ack
         })
     }
@@ -790,6 +793,7 @@ async fn a_metered_release_credits_the_coordinators_gross_not_the_receipt_price(
     let coordinator = Arc::new(MeteredReleaseCoordinator {
         inner: MockCoordinator::new(),
         released_gross_micro_usdc: 3_000,
+        fee_micro_usdc: None,
     });
     coordinator.inner.push_offer(JobOffer {
         envelope: signed_envelope,
@@ -835,6 +839,118 @@ async fn a_metered_release_credits_the_coordinators_gross_not_the_receipt_price(
     assert_eq!(recent[0].job_id, job_id);
     assert_eq!(recent[0].amount_micro_usdc, 2_700);
     assert_eq!(recent[0].fee_micro_usdc, 300);
+}
+
+#[tokio::test]
+async fn a_fee_the_ack_states_is_booked_over_the_disclosed_rate() {
+    // A lease the coordinator's on-chain meter settles pays the operator
+    // the whole metered charge: the ack states a fee of nothing, and the
+    // credit must follow that, not the 10% the registration disclosed —
+    // or the books under-report the lease and the operator's own payout
+    // audit trips against the larger transfer the vault actually made.
+    let operator_identity = LocalIdentity::generate("operator@local");
+    let buyer_identity = LocalIdentity::generate("buyer@local");
+    let coordinator_identity = LocalIdentity::generate("coordinator@local");
+    let coordinator_pubkey_b58 = bs58::encode(coordinator_identity.pubkey_bytes()).into_string();
+
+    let profile = CapabilityProfile {
+        operator: operator_identity.agent_id(),
+        hardware: HardwareClass::CpuOnly,
+        vram_gb: 0,
+        models_served: vec!["any".into()],
+        job_kinds: vec![JobKind::BatchJob],
+        price: PriceAsk {
+            unit: PriceUnit::PerJob,
+            micro_usdc: 5_000,
+        },
+        tee_capable: false,
+        kind_prices: Vec::new(),
+        kind_models: Vec::new(),
+    };
+
+    let job_id = Uuid::new_v4();
+    let now_ms = epoch_ms();
+    let envelope_payload = JobEnvelopePayload {
+        job_id,
+        buyer: buyer_identity.agent_id(),
+        kind: JobKind::BatchJob,
+        capability_requirement: CapabilityRequirement {
+            gpu_class: None,
+            min_vram_gb: None,
+            model_id: None,
+            kind: JobKind::BatchJob,
+            max_duration_secs: 30,
+            min_reputation_bps: None,
+        },
+        input: vec![Content::text("a lease the vault paid in full")],
+        price_micro_usdc: 5_000,
+        deadline_ms: 30_000,
+        idempotency: A2AIdempotency::new(
+            A2ADuplicateSafety::Idempotent,
+            "integration-stated-fee-1",
+        ),
+        issued_at_ms: now_ms,
+        referral_code: None,
+        stream: false,
+    };
+    let signed_envelope =
+        SignedJobEnvelope::sign(envelope_payload, &buyer_identity).expect("sign envelope");
+    let escrow_hold = EscrowHoldAttestation::sign(
+        job_id,
+        5_000,
+        FundingSource::Organic,
+        now_ms,
+        &coordinator_identity,
+    )
+    .expect("sign escrow hold");
+
+    // The coordinator releases 3_000 of the ceiling and says it withheld
+    // nothing of it.
+    let coordinator = Arc::new(MeteredReleaseCoordinator {
+        inner: MockCoordinator::new(),
+        released_gross_micro_usdc: 3_000,
+        fee_micro_usdc: Some(0),
+    });
+    coordinator.inner.push_offer(JobOffer {
+        envelope: signed_envelope,
+        escrow_hold,
+        rework: None,
+        reproduction: None,
+    });
+
+    let earnings = Arc::new(InMemoryEarningsLedger::new());
+    let node = Node::new(
+        operator_identity,
+        profile,
+        coordinator.clone(),
+        Arc::new(EchoExecutor),
+        earnings.clone(),
+        Arc::new(InMemoryAuditLog::new()),
+        NodeConfig {
+            coordinator_pubkey_b58,
+            max_in_flight: 4,
+            preempt_grace: Duration::from_secs(2),
+            // The disclosed 10% would take 300 of the 3_000; the ack's
+            // stated nothing wins.
+            fee_bps: 1_000,
+        },
+    );
+
+    node.run_once()
+        .await
+        .expect("run_once should succeed")
+        .expect("an outcome comes back");
+
+    assert_eq!(
+        earnings.unpaid_total_micro_usdc().await,
+        3_000,
+        "the credit is the whole released gross: the ack said no fee came off it"
+    );
+    let recent = earnings.recent(10).await;
+    assert_eq!(recent.len(), 1);
+    assert_eq!(recent[0].job_id, job_id);
+    assert_eq!(recent[0].amount_micro_usdc, 3_000);
+    assert_eq!(recent[0].fee_micro_usdc, 0);
 }
 
 fn offer_for(

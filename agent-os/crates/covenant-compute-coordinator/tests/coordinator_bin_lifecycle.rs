@@ -946,3 +946,87 @@ async fn a_runtime_subsidy_close_outlives_a_restart_that_still_carries_the_env_p
         .unwrap();
     assert!(metrics.contains("compute_subsidy_closed 1"), "{metrics}");
 }
+
+/// The deployed combination: an on-chain lease meter beside a non-zero
+/// fee. The binary boots, tells a registering operator which kind the
+/// fee skips, says so in its boot log, and the fee view opens honest
+/// with nothing captured.
+#[tokio::test]
+async fn the_lease_meter_boots_beside_a_fee_and_discloses_the_lease_exemption() {
+    let home = tempfile::tempdir().unwrap();
+    let (mut coordinator, url) = spawn_healthy(|port| {
+        Command::new(env!("CARGO_BIN_EXE_covenant-compute-coordinator"))
+            .env_clear()
+            .env("COVENANT_COMPUTE_COORDINATOR_HOME", home.path())
+            .env("COVENANT_COMPUTE_COORDINATOR_PORT", port.to_string())
+            .env("COVENANT_COMPUTE_LONG_POLL_SECS", "1")
+            .env("COVENANT_COMPUTE_LEASE_METER", "noop")
+            .env("COVENANT_COMPUTE_FEE_BPS", "1000")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn covenant-compute-coordinator")
+    })
+    .await;
+    // The boot log goes to stdout; drain it as it is written so the pipe
+    // never fills, and read it back once the process has exited.
+    let mut stdout = coordinator.stdout.take().expect("stdout is piped");
+    let log = tokio::spawn(async move {
+        use tokio::io::AsyncReadExt;
+        let mut buf = String::new();
+        stdout.read_to_string(&mut buf).await.unwrap();
+        buf
+    });
+
+    let operator = LocalIdentity::generate("operator@test");
+    let profile = CapabilityProfile {
+        operator: operator.agent_id(),
+        hardware: HardwareClass::CpuOnly,
+        vram_gb: 0,
+        models_served: vec!["any".into()],
+        job_kinds: vec![JobKind::InferenceCall],
+        price: PriceAsk {
+            unit: PriceUnit::PerJob,
+            micro_usdc: 10_000,
+        },
+        tee_capable: false,
+        kind_prices: Vec::new(),
+        kind_models: Vec::new(),
+    };
+    let client = HttpCoordinatorClient::with_config(url.clone(), Duration::from_secs(5), 2);
+    let response = client
+        .register(RegisterRequest::sign(profile, payout_addr(3), &operator).unwrap())
+        .await
+        .unwrap();
+    assert!(response.accepted);
+    assert_eq!(response.fee_bps, 1_000, "the rate is disclosed");
+    assert_eq!(
+        response.fee_exempt_kinds,
+        vec![JobKind::LeaseSession],
+        "registration names the kind the fee skips"
+    );
+
+    let fees: serde_json::Value = reqwest::get(format!("{url}/federation/fees"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(fees["fee_bps"], 1_000);
+    assert_eq!(
+        fees["fee_exempt_kinds"],
+        serde_json::json!(["lease_session"])
+    );
+    assert_eq!(fees["captured_micro_usdc"], 0);
+    assert_eq!(fees["jobs_charged"], 0);
+
+    sigterm_and_wait(&mut coordinator).await;
+    let log = log.await.unwrap();
+    assert!(log.contains("on-chain lease meter ENABLED"), "{log}");
+    assert!(
+        log.contains("lease sessions are fee-free while settled on chain"),
+        "the boot log states the exemption: {log}"
+    );
+}

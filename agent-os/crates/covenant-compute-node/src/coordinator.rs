@@ -141,6 +141,7 @@ impl Coordinator for MockCoordinator {
             operator_session: Some("mock-session".into()),
             reason: None,
             fee_bps: 0,
+            fee_exempt_kinds: Vec::new(),
         })
     }
 
@@ -191,15 +192,17 @@ impl Coordinator for MockCoordinator {
             .verify()
             .map_err(|e| CoordinatorError::Protocol(e.to_string()))?;
         let job_id = result.receipt.receipt.job_id;
-        // The mock always pays the whole receipt price; a test that needs a
-        // metered lease draw, a refund verdict, or a transport failure wraps
-        // its own `Coordinator`.
+        // The mock always pays the whole receipt price and states no fee,
+        // so the node books the disclosed rate; a test that needs a metered
+        // lease draw, a stated fee, a refund verdict, or a transport failure
+        // wraps its own `Coordinator`.
         let released_gross_micro_usdc = result.receipt.receipt.price_micro_usdc;
         self.results.lock().push(result);
         Ok(JobResultAck {
             job_id,
             settled: ResultSettlement::Released,
             released_gross_micro_usdc,
+            fee_micro_usdc: None,
         })
     }
 

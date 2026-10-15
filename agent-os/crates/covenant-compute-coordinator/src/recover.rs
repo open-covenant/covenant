@@ -165,7 +165,10 @@ pub async fn reconcile_books(state: &CoordinatorState) -> ReconcileReport {
                 let concluded = if record.phase == JobPhase::AwaitingCheck
                     && settled == EscrowStatus::Released
                 {
-                    let fee = state.config().fee.take_of(hold.amount_micro_usdc);
+                    let fee = state
+                        .config()
+                        .fee_for(record.envelope.payload.kind)
+                        .take_of(hold.amount_micro_usdc);
                     state.jobs().conclude_parked_released(job_id, fee)
                 } else {
                     state.jobs().set_phase(job_id, phase)

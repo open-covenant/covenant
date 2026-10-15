@@ -52,10 +52,12 @@ pub struct NodeConfig {
     /// SIGKILL when a job outlives its deadline.
     pub preempt_grace: Duration,
     /// The marketplace fee the coordinator disclosed at registration.
-    /// Earnings credit net of it (protocol-shared floor math), so the
-    /// operator's books match what the coordinator actually pays. If
-    /// the coordinator lowers its fee mid-session the estimate here is
-    /// conservative; a raise is refused at re-register (main.rs).
+    /// Earnings credit net of the fee each settlement ack states was
+    /// withheld; this rate (protocol-shared floor math) sizes the credit
+    /// only for an ack that states none, from a coordinator predating
+    /// that field. If the coordinator lowers its fee mid-session the
+    /// fallback here is conservative; a raise is refused at re-register
+    /// (main.rs).
     pub fee_bps: u32,
 }
 
@@ -663,6 +665,7 @@ where
                             .credit_released(
                                 &signed_receipt,
                                 ack.released_gross_micro_usdc,
+                                ack.fee_micro_usdc,
                                 escrow_hold.funding_source,
                             )
                             .await
@@ -743,16 +746,30 @@ where
     /// price would over-report the balance and later trip the operator's
     /// own on-chain payout audit against the smaller metered transfer. A
     /// non-lease job releases its whole price, so its credit is unchanged.
+    ///
+    /// The fee comes off the same way: the figure the ack states was
+    /// withheld, when it states one. The disclosed rate does not apply to
+    /// every kind — a lease the coordinator's on-chain meter settles pays
+    /// the operator the whole metered charge and withholds nothing — so
+    /// re-deriving it from the rate would under-book that lease and trip
+    /// the same audit against the larger transfer. An ack from a
+    /// coordinator predating the field charged the rate on every release,
+    /// and is booked that way.
     async fn credit_released(
         &self,
         receipt: &SignedWorkReceipt,
         released_gross_micro_usdc: u64,
+        fee_micro_usdc: Option<u64>,
         funding_source: covenant_compute_protocol::FundingSource,
     ) -> Result<(), EarningsError> {
-        let fee = covenant_compute_protocol::fee_take_micro_usdc(
-            released_gross_micro_usdc,
-            self.config.fee_bps,
-        );
+        let fee = fee_micro_usdc
+            .unwrap_or_else(|| {
+                covenant_compute_protocol::fee_take_micro_usdc(
+                    released_gross_micro_usdc,
+                    self.config.fee_bps,
+                )
+            })
+            .min(released_gross_micro_usdc);
         // Registration refuses a fee_bps at or above 100%, so fee <= gross
         // here; saturate anyway rather than risk an underflow panic or a
         // wrapped garbage amount fsynced into the durable ledger.
@@ -801,6 +818,7 @@ where
                                 .credit_released(
                                     &entry.message.receipt,
                                     ack.released_gross_micro_usdc,
+                                    ack.fee_micro_usdc,
                                     entry.funding_source,
                                 )
                                 .await

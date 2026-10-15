@@ -490,7 +490,8 @@ async fn main() -> anyhow::Result<()> {
     if fee.bps() > 0 {
         tracing::info!(
             fee_bps = fee.bps(),
-            "marketplace fee ENABLED — withheld from each payout, disclosed at registration"
+            "marketplace fee ENABLED — withheld from each payout this coordinator pushes, \
+             disclosed at registration"
         );
     }
     // Referral partners (C8): `code=payout_address:share_bps`,
@@ -676,24 +677,29 @@ async fn main() -> anyhow::Result<()> {
         30,
         "must be a u64 (seconds)",
     )?;
-    // On-chain lease meter. Off unless a deployment names one; a
+    // On-chain lease meter. Off unless a deployment names one. A
     // chain-settling meter pays the operator the whole metered charge
     // straight out of the vault, and `settle_lease` has no fee
-    // recipient in its account set, so a marketplace fee would be
-    // booked and never collected. Refuse the combination rather than
-    // publish a revenue number nobody received.
+    // recipient in its account set, so nothing of a lease's money ever
+    // passes through this process to withhold a fee from. The fee
+    // therefore applies to every kind the coordinator pays out itself
+    // and skips leases while the meter is on — `CoordinatorConfig::fee_for`
+    // is the one place that decides it, so no lease is ever booked as
+    // fee revenue nobody received, and registration tells operators
+    // which kinds the take comes off.
     let lease_meter = build_lease_meter()?;
     let stake = build_stake_requirement(dispute_window_secs)?;
     match &lease_meter {
         Some(meter) => {
-            anyhow::ensure!(
-                fee.bps() == 0,
-                "COVENANT_COMPUTE_LEASE_METER cannot run with COVENANT_COMPUTE_FEE_BPS={} — \
-                 an on-chain lease settle pays the operator the whole metered charge and \
-                 returns the rest to the buyer, so the fee would be booked but never collected",
-                fee.bps()
-            );
             tracing::info!(meter = %meter.describe(), "on-chain lease meter ENABLED");
+            if fee.bps() > 0 {
+                tracing::info!(
+                    fee_bps = fee.bps(),
+                    "lease sessions are fee-free while settled on chain — the vault pays the \
+                     operator the whole metered charge; the marketplace fee applies to every \
+                     other kind, which this coordinator pays out itself"
+                );
+            }
         }
         None => tracing::info!(
             "on-chain lease meter disabled (set COVENANT_COMPUTE_LEASE_METER=noop|sidecar to \

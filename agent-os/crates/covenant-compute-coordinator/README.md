@@ -109,7 +109,11 @@ holds are untouched (the latch stops new spend, it claws nothing back);
 `/federation/subsidy` and the `compute_subsidy_closed` gauge say
 which state you're in. The marketplace
 fee (`COVENANT_COMPUTE_FEE_BPS`, default 0) is disclosed to every
-registering operator and withheld at payout; referral partners earn
+registering operator and withheld at payout from every kind the
+coordinator pays out itself; a lease session settled by the on-chain
+lease meter is fee-free, since its vault pays the operator the whole
+metered charge, and registration names that exemption beside the rate.
+Referral partners earn
 their share out of that fee, never out of operator pay. Inbound deposits
 are verified against a Solana RPC rail (`COVENANT_COMPUTE_RAIL_RPC_URL`,
 `_RAIL_DEPOSIT_OWNER`, `_RAIL_MINT`); payouts go through the bundled
@@ -263,7 +267,7 @@ naming the variable rather than starting on the wrong setting.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `COVENANT_COMPUTE_FEE_BPS` | `0` | Marketplace fee in basis points, disclosed at registration and withheld at payout. |
+| `COVENANT_COMPUTE_FEE_BPS` | `0` | Marketplace fee in basis points, disclosed at registration and withheld at payout from every kind the coordinator pays out itself. Lease sessions settled by the on-chain lease meter are exempt — their vault pays the operator the whole metered charge — and the disclosure names them. |
 | `COVENANT_COMPUTE_FUNDING_SOURCE` | `organic` | `organic` or `bootstrap`. Bootstrap requires both subsidy knobs below. |
 | `COVENANT_COMPUTE_SUBSIDY_MAX_RATIO_BPS` | (unset) | Subsidy-to-organic ratio cap (≤ 10000). Required for bootstrap; opens the switch for bootstrap-tagged spend under organic. |
 | `COVENANT_COMPUTE_SUBSIDY_FLOOR_MICRO_USDC` | (unset) | Subsidy budget floor. Set together with the ratio; with neither set, every bootstrap hold is refused. |

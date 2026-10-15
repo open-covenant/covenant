@@ -101,7 +101,10 @@ pub struct CoordinatorConfig {
     /// prices its ask knowing it. Default is zero: fee capture is a
     /// deployment decision, never a silent default. The escrow and the
     /// buyer are untouched by it — the buyer pays the envelope price,
-    /// the hold releases gross, the split happens at payout.
+    /// the hold releases gross, the split happens at payout. It is the
+    /// rate for every kind the coordinator pays out itself; a kind whose
+    /// money settles on chain instead is exempt (see [`Self::fee_for`]),
+    /// so read the rate for a job through that, never from here.
     pub fee: covenant_compute_protocol::MarketplaceFee,
     /// Referral partners by code (C8). A registration carrying a code
     /// with no entry here is accepted and recorded, but accrues
@@ -253,6 +256,47 @@ impl CoordinatorConfig {
     /// capacity read shares.
     pub fn bond_floor(&self) -> crate::matcher::BondFloor {
         crate::matcher::BondFloor::new(self.min_bond_micro_usdc, self.min_bond_lease_hours)
+    }
+
+    /// Whether a job of `kind` is paid out on chain rather than by this
+    /// coordinator's own payout push. True only for a lease session while
+    /// an on-chain meter is configured: its vault pays the operator the
+    /// whole metered charge through `settle_lease`, whose account set has
+    /// no fee recipient, so nothing passes through the coordinator's hands
+    /// to withhold from. Every other kind — and a lease with no meter —
+    /// is pushed by the coordinator itself.
+    pub fn settles_on_chain(&self, kind: covenant_compute_protocol::JobKind) -> bool {
+        kind == covenant_compute_protocol::JobKind::LeaseSession && self.lease_meter.is_some()
+    }
+
+    /// The marketplace fee on a job of `kind`: the configured rate for
+    /// every kind the coordinator pays out itself, zero for a kind whose
+    /// money settles on chain. Every place that books, withholds or
+    /// discloses a fee for one job reads it from here, so a lease the
+    /// vault paid in full is never booked as fee revenue nobody received.
+    pub fn fee_for(
+        &self,
+        kind: covenant_compute_protocol::JobKind,
+    ) -> covenant_compute_protocol::MarketplaceFee {
+        if self.settles_on_chain(kind) {
+            covenant_compute_protocol::MarketplaceFee::zero()
+        } else {
+            self.fee
+        }
+    }
+
+    /// The kinds the configured fee does not apply to — what registration
+    /// discloses beside the rate, so an operator prices each kind knowing
+    /// which ones the take comes off. Empty when there is no exemption, a
+    /// zero rate included: a fee of nothing skips nothing.
+    pub fn fee_exempt_kinds(&self) -> Vec<covenant_compute_protocol::JobKind> {
+        if self.fee.bps() > 0
+            && self.settles_on_chain(covenant_compute_protocol::JobKind::LeaseSession)
+        {
+            vec![covenant_compute_protocol::JobKind::LeaseSession]
+        } else {
+            Vec::new()
+        }
     }
 }
 
@@ -1178,6 +1222,60 @@ mod tests {
             matures_at_ms: 100,
             pushed: None,
         }
+    }
+
+    /// The fee applies to every kind the coordinator pays out itself and
+    /// skips a lease only while an on-chain meter settles it — the one
+    /// kind whose money never passes through the coordinator's hands.
+    #[test]
+    fn the_fee_skips_leases_only_while_an_onchain_meter_settles_them() {
+        use covenant_compute_protocol::{JobKind, MarketplaceFee};
+
+        let fee = MarketplaceFee::new(1_000).unwrap();
+        // No meter: a lease is pushed by the coordinator like any other
+        // kind, so it pays the fee and nothing is exempt.
+        let off_chain = CoordinatorConfig {
+            fee,
+            ..CoordinatorConfig::default()
+        };
+        assert!(!off_chain.settles_on_chain(JobKind::LeaseSession));
+        assert_eq!(off_chain.fee_for(JobKind::LeaseSession), fee);
+        assert!(off_chain.fee_exempt_kinds().is_empty());
+
+        // Meter on: the lease's vault pays the operator in full, so its
+        // rate is zero and registration names it; every other kind keeps
+        // the configured rate.
+        let on_chain = CoordinatorConfig {
+            fee,
+            lease_meter: Some(Arc::new(crate::onchain_meter::NoopLeaseMeter::new())),
+            ..CoordinatorConfig::default()
+        };
+        assert!(on_chain.settles_on_chain(JobKind::LeaseSession));
+        assert_eq!(
+            on_chain.fee_for(JobKind::LeaseSession),
+            MarketplaceFee::zero()
+        );
+        assert_eq!(on_chain.fee_exempt_kinds(), vec![JobKind::LeaseSession]);
+        for kind in [
+            JobKind::InferenceCall,
+            JobKind::BatchJob,
+            JobKind::Embedding,
+            JobKind::Transcription,
+            JobKind::SpeechSynthesis,
+            JobKind::AgentTask,
+            JobKind::AgentCheck,
+        ] {
+            assert!(!on_chain.settles_on_chain(kind), "{kind:?} is pushed");
+            assert_eq!(on_chain.fee_for(kind), fee, "{kind:?} pays the fee");
+        }
+
+        // A fee of nothing skips nothing: the meter alone names no
+        // exemption, so a zero-fee disclosure stays empty.
+        let no_fee = CoordinatorConfig {
+            lease_meter: Some(Arc::new(crate::onchain_meter::NoopLeaseMeter::new())),
+            ..CoordinatorConfig::default()
+        };
+        assert!(no_fee.fee_exempt_kinds().is_empty());
     }
 
     /// A restart finds a refund transfer whose outcome is unknown: its

@@ -49,10 +49,12 @@
 //!
 //! - **Marketplace fees are not collected on-chain.** `settle_lease`
 //!   pays the operator the whole metered charge and returns the rest to
-//!   the renter; there is no fee recipient in its account set. A
-//!   deployment running a chain-settling meter with a non-zero fee
-//!   would book a fee it never received, so `main.rs` refuses that
-//!   combination at boot.
+//!   the renter; there is no fee recipient in its account set. So while
+//!   a meter is configured, lease sessions are fee-free: the fee applies
+//!   to every kind the coordinator pays out itself and skips leases
+//!   (`CoordinatorConfig::fee_for`), nothing is booked for them, and
+//!   registration names the exemption beside the rate. A deployment
+//!   that wants a take on leases needs a fee recipient in the program.
 //!
 //! # The keys this needs
 //!

@@ -783,6 +783,7 @@ async fn register(
         operator_session: Some(session),
         reason: None,
         fee_bps: state.config().fee.bps(),
+        fee_exempt_kinds: state.config().fee_exempt_kinds(),
     }))
 }
 
@@ -1101,10 +1102,13 @@ async fn submit_job(
     // the retry sweep can only spin on a job it can never settle. This is
     // the up-front refusal the obligation cap already earns a withdrawal
     // (payout.rs): no money is held for a push that can't land. The net
-    // is the gross price minus the marketplace fee, the exact figure
-    // `submit_result` later pushes to the operator.
+    // is the gross price minus the marketplace fee on this kind, the
+    // exact figure `submit_result` later pushes to the operator.
     if let Some(cap) = state.payout().per_job_cap_micro_usdc() {
-        let fee = state.config().fee.take_of(amount);
+        let fee = state
+            .config()
+            .fee_for(envelope.payload.kind)
+            .take_of(amount);
         let net = amount - fee;
         if net > cap {
             return Err(ApiError::BadRequest(format!(
@@ -1534,6 +1538,7 @@ async fn submit_result(
                     job_id,
                     settled: ResultSettlement::Released,
                     released_gross_micro_usdc: record.released_gross_micro_usdc(),
+                    fee_micro_usdc: Some(record.fee_micro_usdc),
                 }));
             }
             JobPhase::Failed | JobPhase::Refunded => {
@@ -1541,6 +1546,7 @@ async fn submit_result(
                     job_id,
                     settled: ResultSettlement::Refunded,
                     released_gross_micro_usdc: 0,
+                    fee_micro_usdc: None,
                 }));
             }
             // Already parked: a redelivery must not order a second check.
@@ -1549,6 +1555,7 @@ async fn submit_result(
                     job_id,
                     settled: ResultSettlement::AwaitingCheck,
                     released_gross_micro_usdc: 0,
+                    fee_micro_usdc: None,
                 }));
             }
             // Handed back for a rework: a late redelivery of the build that
@@ -1562,6 +1569,7 @@ async fn submit_result(
                     job_id,
                     settled: ResultSettlement::AwaitingCheck,
                     released_gross_micro_usdc: 0,
+                    fee_micro_usdc: None,
                 }));
             }
             JobPhase::Offered | JobPhase::Accepted | JobPhase::Rejected => {}
@@ -1651,6 +1659,7 @@ async fn submit_result(
                 job_id,
                 settled: ResultSettlement::Refunded,
                 released_gross_micro_usdc: 0,
+                fee_micro_usdc: None,
             }));
         }
     }
@@ -1667,6 +1676,7 @@ async fn submit_result(
             job_id,
             settled,
             released_gross_micro_usdc: 0,
+            fee_micro_usdc: None,
         }));
     }
 
@@ -1750,6 +1760,7 @@ async fn submit_result(
                 job_id,
                 settled: ResultSettlement::Refunded,
                 released_gross_micro_usdc: 0,
+                fee_micro_usdc: None,
             }));
         }
     }
@@ -1848,6 +1859,7 @@ async fn submit_result(
             job_id,
             settled: ResultSettlement::Refunded,
             released_gross_micro_usdc: 0,
+            fee_micro_usdc: None,
         }));
     }
     let settlement = match metered_used {
@@ -1954,9 +1966,14 @@ pub(crate) async fn finish_release(
     // gross terms — and the split happens here, on the payout push.
     // The fee floors (protocol-shared math), so the operator's net is
     // the ceiling; the rate was disclosed to the operator at
-    // registration, never sprung at settlement.
+    // registration, never sprung at settlement. The rate is the one for
+    // this job's kind: zero for a lease the on-chain meter settles, since
+    // its vault pays the operator the whole metered charge and there is
+    // nothing here to withhold from — so no fee is pinned, audited or
+    // counted for it, and the partner shares carved below are of zero.
     let retained = retained_micro_usdc.min(amount);
-    let fee = state.config().fee.take_of(amount - retained);
+    let fee_rate = state.config().fee_for(record.envelope.payload.kind);
+    let fee = fee_rate.take_of(amount - retained);
     let operator_net = amount - retained - fee;
     // Partner rev-share (C8): carved out of the fee just computed —
     // the operator's net and the buyer's charge are untouched. A code
@@ -2037,7 +2054,7 @@ pub(crate) async fn finish_release(
             .record_audit(AuditKind::ComputeFeeCaptured {
                 job_id,
                 operator_pubkey_b58: record.operator_pubkey_b58.clone(),
-                fee_bps: state.config().fee.bps(),
+                fee_bps: fee_rate.bps(),
                 fee_micro_usdc: fee,
                 operator_net_micro_usdc: operator_net,
             })
@@ -2092,6 +2109,7 @@ pub(crate) async fn finish_release(
                 job_id,
                 settled: ResultSettlement::Released,
                 released_gross_micro_usdc: amount,
+                fee_micro_usdc: Some(fee),
             }));
         }
         crate::onchain_meter::LeaseConclusion::Unresolved {
@@ -2111,6 +2129,7 @@ pub(crate) async fn finish_release(
                 job_id,
                 settled: ResultSettlement::Released,
                 released_gross_micro_usdc: amount,
+                fee_micro_usdc: Some(fee),
             }));
         }
         _ => {}
@@ -2144,6 +2163,7 @@ pub(crate) async fn finish_release(
         job_id,
         settled: ResultSettlement::Released,
         released_gross_micro_usdc: amount,
+        fee_micro_usdc: Some(fee),
     }))
 }
 /// The assigned operator's chunk relay for a streaming job. Session-
@@ -3540,8 +3560,13 @@ async fn resolve_transfer_attempt(
 #[derive(Serialize)]
 struct FeesView {
     /// The rate currently in force — what the next registration will
-    /// be told and the next release will pay.
+    /// be told and the next release of a fee-bearing kind will pay.
     fee_bps: u32,
+    /// The kinds the rate does not apply to; it applies to every kind
+    /// not listed. A lease session while an on-chain meter settles it:
+    /// the vault pays the operator the whole metered charge, so no fee
+    /// is withheld, booked or counted below for it.
+    fee_exempt_kinds: Vec<JobKind>,
     /// Sum of the per-job fees actually withheld, at whatever rate was
     /// in force when each job released.
     captured_micro_usdc: u64,
@@ -3556,6 +3581,7 @@ async fn fees(State(state): State<CoordinatorState>) -> Json<FeesView> {
     let (captured_micro_usdc, jobs_charged) = state.jobs().fees_captured();
     Json(FeesView {
         fee_bps: state.config().fee.bps(),
+        fee_exempt_kinds: state.config().fee_exempt_kinds(),
         captured_micro_usdc,
         jobs_charged,
     })
@@ -4883,5 +4909,287 @@ mod tests {
             vec![job_id],
             "the funded vault is voided even though the refund had already settled"
         );
+    }
+
+    /// A coordinator running a 10% fee beside the recording lease meter,
+    /// holding one accepted job of `kind` priced at `price` and the
+    /// operator's `Ok` receipt for it — what both fee-policy tests settle
+    /// through `submit_result`.
+    struct FeePolicyRig {
+        state: crate::state::CoordinatorState,
+        payout: std::sync::Arc<crate::payout::MockPayout>,
+        meter: std::sync::Arc<crate::onchain_meter::NoopLeaseMeter>,
+        job_id: Uuid,
+        receipt: covenant_compute_protocol::SignedWorkReceipt,
+        output: Vec<covenant_mcp::Content>,
+    }
+
+    async fn fee_policy_rig(
+        kind: JobKind,
+        input: Vec<covenant_mcp::Content>,
+        price: u64,
+        accepted_at_ms: u64,
+    ) -> FeePolicyRig {
+        use crate::jobs::{JobPhase, JobRecord};
+        use crate::onchain_meter::NoopLeaseMeter;
+        use crate::payout::MockPayout;
+        use crate::reputation::NoReputation;
+        use crate::state::{CoordinatorConfig, CoordinatorState};
+        use covenant_a2a::{A2ADuplicateSafety, A2AIdempotency, A2ATaskStatus};
+        use covenant_audit::InMemoryAuditLog;
+        use covenant_compute_protocol::{
+            CapabilityRequirement, JobEnvelopePayload, JobMeter, MarketplaceFee, SignedJobEnvelope,
+            SignedWorkReceipt, WorkReceiptPayload,
+        };
+        use covenant_identity::LocalIdentity;
+        use covenant_mcp::Content;
+        use std::sync::Arc;
+
+        let meter = Arc::new(NoopLeaseMeter::new());
+        let payout = Arc::new(MockPayout::new());
+        let config = CoordinatorConfig {
+            fee: MarketplaceFee::new(1_000).unwrap(),
+            lease_meter: Some(meter.clone()),
+            ..Default::default()
+        };
+        let state = CoordinatorState::new(
+            LocalIdentity::generate("coordinator@test"),
+            config,
+            Arc::new(NoReputation),
+            payout.clone(),
+            Arc::new(InMemoryAuditLog::new()) as Arc<dyn covenant_audit::AuditLog>,
+        );
+
+        let buyer = LocalIdentity::generate("buyer@test");
+        let operator = LocalIdentity::generate("operator@test");
+        let job_id = Uuid::new_v4();
+        let payload = JobEnvelopePayload {
+            job_id,
+            buyer: buyer.agent_id(),
+            kind,
+            capability_requirement: CapabilityRequirement {
+                gpu_class: None,
+                min_vram_gb: None,
+                model_id: None,
+                kind,
+                max_duration_secs: 600,
+                min_reputation_bps: None,
+            },
+            input,
+            price_micro_usdc: price,
+            deadline_ms: 3_600_000,
+            idempotency: A2AIdempotency::new(A2ADuplicateSafety::Idempotent, "fee-policy-test"),
+            issued_at_ms: accepted_at_ms,
+            referral_code: None,
+            stream: kind == JobKind::LeaseSession,
+        };
+        let envelope = SignedJobEnvelope::sign(payload, &buyer).unwrap();
+        let escrow_hold = state
+            .escrow()
+            .hold(job_id, &buyer.agent_id(), price)
+            .await
+            .unwrap();
+        let record = JobRecord {
+            operator_pubkey_b58: operator.agent_id().pubkey_base58(),
+            payout_address: "operator-payout".into(),
+            envelope,
+            escrow_hold,
+            phase: JobPhase::Accepted,
+            receipt: None,
+            output: None,
+            fee_micro_usdc: 0,
+            referral_code: None,
+            partner_share_micro_usdc: 0,
+            buyer_referral_code: None,
+            buyer_partner_share_micro_usdc: 0,
+            payout: None,
+            concluded_at_ms: None,
+            refund_reason: None,
+            dispute: None,
+            offered_at_ms: accepted_at_ms,
+            pinned: false,
+            accepted_at_ms: Some(accepted_at_ms),
+            metered_elapsed_ms: None,
+            close_requested_at_ms: None,
+            lease_access: None,
+            check_jobs: Vec::new(),
+            checks_task: None,
+            hidden_checks: None,
+            vote_round: None,
+            rework: None,
+            order: None,
+        };
+        state.jobs().insert(job_id, record).unwrap();
+        if kind == JobKind::LeaseSession {
+            crate::onchain_meter::open_lease_onchain(&state, job_id).await;
+            assert_eq!(meter.opened().len(), 1, "the lease opened on-chain");
+        }
+
+        let output = vec![Content::text("done")];
+        let receipt = SignedWorkReceipt::sign(
+            WorkReceiptPayload {
+                job_id,
+                operator: operator.agent_id(),
+                job_hash_hex: "aa".repeat(32),
+                result_hash_hex: output_hash_hex(&output),
+                meter: JobMeter {
+                    wall_ms: 5_000,
+                    tokens_in: None,
+                    tokens_out: None,
+                    gpu_seconds: None,
+                    finish_reason: None,
+                },
+                price_micro_usdc: price,
+                status: A2ATaskStatus::Ok,
+                executed_at_ms: accepted_at_ms,
+                node_audit_root_hex: "cc".repeat(32),
+            },
+            &operator,
+        )
+        .unwrap();
+        FeePolicyRig {
+            state,
+            payout,
+            meter,
+            job_id,
+            receipt,
+            output,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_job_the_coordinator_pays_out_itself_pays_the_fee_beside_the_lease_meter() {
+        use covenant_mcp::Content;
+
+        // The lease meter being on exempts leases, not the fee: a batch
+        // job is still pushed by the coordinator, so its 10% is withheld
+        // from the push, pinned on the record, audited, and counted.
+        let rig = fee_policy_rig(
+            JobKind::BatchJob,
+            vec![Content::text("a batch")],
+            1_000,
+            crate::epoch_ms(),
+        )
+        .await;
+        let ack = submit_result(
+            State(rig.state.clone()),
+            Path(rig.job_id),
+            Json(JobResultMessage {
+                receipt: rig.receipt,
+                output: rig.output,
+            }),
+        )
+        .await
+        .expect("the batch job settles");
+        assert!(matches!(ack.0.settled, ResultSettlement::Released));
+        assert_eq!(ack.0.released_gross_micro_usdc, 1_000);
+        assert_eq!(
+            ack.0.fee_micro_usdc,
+            Some(100),
+            "the ack states the fee withheld, so the node books the same net"
+        );
+
+        let records = rig.payout.records();
+        assert_eq!(records.len(), 1, "the coordinator pushed the payout itself");
+        assert_eq!(
+            records[0].amount_micro_usdc, 900,
+            "gross 1_000 minus the 10% fee"
+        );
+        let record = rig.state.jobs().get(rig.job_id).unwrap();
+        assert_eq!(record.fee_micro_usdc, 100);
+        assert_eq!(rig.state.jobs().fees_captured(), (100, 1));
+        let events = rig.state.audit().recent(10).await.unwrap();
+        assert!(events.iter().any(|e| matches!(
+            &e.kind,
+            AuditKind::ComputeFeeCaptured {
+                fee_bps: 1_000,
+                fee_micro_usdc: 100,
+                operator_net_micro_usdc: 900,
+                ..
+            }
+        )));
+        assert!(
+            rig.meter.concluded().is_empty(),
+            "not a lease: the meter saw nothing"
+        );
+        assert_eq!(rig.state.reconciliation_drift_micro_usdc(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_lease_the_onchain_meter_settles_pays_no_fee_and_books_none() {
+        use covenant_compute_protocol::{lease_input, LeaseTerms};
+
+        // The vault pays the operator the whole metered charge through
+        // `settle_lease`, which has no fee recipient, so the coordinator
+        // withholds nothing, pins no fee, audits none and counts none —
+        // the fee view and the metrics never claim money nobody received.
+        let terms = LeaseTerms {
+            max_duration_secs: 600,
+            rate_micro_usdc_per_sec: 100,
+            client_public_key: None,
+        };
+        let ceiling = terms.max_price_micro_usdc().unwrap();
+        // Accepted five seconds ago, so the meter bills ~500 of the 60_000 ceiling.
+        let rig = fee_policy_rig(
+            JobKind::LeaseSession,
+            vec![lease_input(terms).unwrap()],
+            ceiling,
+            crate::epoch_ms() - 5_000,
+        )
+        .await;
+        let ack = submit_result(
+            State(rig.state.clone()),
+            Path(rig.job_id),
+            Json(JobResultMessage {
+                receipt: rig.receipt,
+                output: rig.output,
+            }),
+        )
+        .await
+        .expect("the lease settles on its metered seconds");
+        assert!(matches!(ack.0.settled, ResultSettlement::Released));
+
+        let (charged, _) = rig.state.escrow().hold_info(rig.job_id).unwrap();
+        assert!(
+            (500..ceiling).contains(&charged),
+            "the metered charge is the seconds run, not the ceiling: {charged}"
+        );
+        assert_eq!(ack.0.released_gross_micro_usdc, charged);
+        assert_eq!(
+            ack.0.fee_micro_usdc,
+            Some(0),
+            "the ack tells the node nothing was withheld, so it books the whole charge"
+        );
+        let concluded = rig.meter.concluded();
+        assert_eq!(concluded.len(), 1, "the meter settled the lease");
+        assert_eq!(
+            concluded[0].charged_micro_usdc, charged,
+            "the vault pays the operator the whole metered charge"
+        );
+        // The recording meter moves no money, so the push stands in for the
+        // vault here — and carries the whole charge, with nothing withheld.
+        let records = rig.payout.records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0].amount_micro_usdc, charged,
+            "no fee came off the lease"
+        );
+
+        let record = rig.state.jobs().get(rig.job_id).unwrap();
+        assert_eq!(record.fee_micro_usdc, 0, "no fee is pinned on the lease");
+        assert_eq!(record.partner_share_micro_usdc, 0);
+        assert_eq!(
+            rig.state.jobs().fees_captured(),
+            (0, 0),
+            "nothing captured, no job charged: the fee view and metrics stay honest"
+        );
+        let events = rig.state.audit().recent(10).await.unwrap();
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(&e.kind, AuditKind::ComputeFeeCaptured { .. })),
+            "no fee row is audited for money that was never withheld"
+        );
+        assert_eq!(rig.state.reconciliation_drift_micro_usdc(), 0);
     }
 }

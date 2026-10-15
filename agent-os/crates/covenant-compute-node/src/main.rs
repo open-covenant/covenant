@@ -810,8 +810,10 @@ async fn register_until_accepted(
                 if resp.fee_bps > 0 {
                     tracing::warn!(
                         fee_bps = resp.fee_bps,
+                        exempt_kinds = ?resp.fee_exempt_kinds,
                         "coordinator discloses a marketplace fee — earnings credit net of it \
-                         (set COVENANT_COMPUTE_NODE_MAX_FEE_BPS to bound what you accept)"
+                         on every kind but the exempt ones (set \
+                         COVENANT_COMPUTE_NODE_MAX_FEE_BPS to bound what you accept)"
                     );
                 } else {
                     tracing::info!("registered with coordinator (no marketplace fee)");
@@ -3982,6 +3984,7 @@ mod tests {
                         operator_session: accept.then(|| "session".into()),
                         reason: (!accept).then(|| "policy: closed pool".into()),
                         fee_bps,
+                        fee_exempt_kinds: Vec::new(),
                     }))
                 }
             }),

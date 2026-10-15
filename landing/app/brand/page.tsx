@@ -110,7 +110,7 @@ export default function BrandIntroduction() {
         <Panel tone="ground">
           <ResolveDemo className="aspect-[16/10] w-full sm:aspect-[16/8]" />
         </Panel>
-        <p className="mt-12 max-w-[62rem] border-t border-line pt-10 text-[clamp(1.05rem,1.75vw,1.4rem)] leading-[1.6] text-fg">
+        <p className="mt-12 max-w-[46rem] border-t border-line pt-10 text-[16px] leading-[1.75] text-fg-soft">
           Covenant began with one idea: an agent should only do what it has been given permission to do. It
           has grown into an open operating layer whose own agents build it in public. These guidelines
           capture that shift. They are less a rulebook than a foundation: they set out the non-negotiables

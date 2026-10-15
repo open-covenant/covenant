@@ -6,6 +6,9 @@
 ## this image needs no GPU. Mount a persistent disk at /data: the node's
 ## identity, earnings ledger and result outbox live there, and an operator
 ## whose identity changes starts over with no reputation.
+## To move a node to a fresh disk, set COVENANT_COMPUTE_NODE_IDENTITY_B64 to
+## the base64 of its identity.json; the entrypoint writes it only when the
+## disk holds no identity yet.
 ##
 ##   docker build -f deploy/Dockerfile.compute-node -t compute-node .
 

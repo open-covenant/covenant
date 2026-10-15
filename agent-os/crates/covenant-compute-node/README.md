@@ -135,31 +135,23 @@ OpenAI-compatible backend as `image_url` content parts.
   spend plus the coordinator's markup when the work passes, and the check
   price for every check it completes. Seats on one task never share a
   stake owner.
-- **`imd`** — sells the IMD agent swarm's work (identity.md, api.imd.fun)
-  as `batch_job` jobs under the model label `imd-swarm`. The node runs
-  nothing itself: for each job it buys the same work from IMD with one
-  transaction through IMD's Intake contract (0.5 IMD, the payment and the
-  ask in one call, on Robinhood Chain by default), follows the order on
-  IMD's control plane, and relays the accepted files as the job's output
-  under its own signed receipt. Buyers send a swarm order (`compute.swarm`,
-  or `swarm` on the CLI): a research report, an audit of a public
-  repository, an image, a website, a contract project, or an oracle
-  question. Launches and workflows are not sold, since the wallet that
-  pays IMD would own what they deploy. IMD refunds nothing, so the node
-  pays only after IMD's free check passes, refuses any offer below the
-  live cost of 0.5 IMD plus its margin (read from a price feed, or fixed
-  with `COVENANT_COMPUTE_IMD_PRICE_USD`), refuses deadlines under its floor,
-  and writes every payment to `imd-orders.jsonl` before broadcasting it, so
-  a node that dies mid-job resumes the same order on recovery instead of
-  paying twice. A job IMD refuses, blocks or cancels fails here and refunds
-  the buyer; the 0.5 IMD is the operator's loss. Needs the wallet's key in
-  the file named by `COVENANT_COMPUTE_IMD_KEY_FILE`, funded with the chain's
-  native coin for gas and with IMD; the boot probe and every health check
-  confirm the control plane answers, the chain is the configured one, the
-  wallet is funded and the price is under the ceiling, and the node reports
-  offline until all four hold. Set the ask with
-  `COVENANT_COMPUTE_NODE_PRICE_MICRO_USDC` (5,000,000, five dollars, is the
-  reference ask while IMD trades near seven dollars).
+- **`imd`** — sells work from the IMD agent swarm (identity.md,
+  https://imd.fun), a network of agents that writes research reports,
+  audits code, builds websites and contract projects, makes images and
+  answers oracle questions, as `batch_job` jobs under the model label
+  `imd-swarm`. The node runs nothing itself: for each job it buys the same
+  work from IMD in one transaction through IMD's Intake contract, which
+  takes the 0.5 IMD payment and the order in a single call (on Robinhood
+  Chain by default), tracks the order through IMD's API, and returns the
+  accepted files as the job's output under the node's own signed receipt.
+  Buyers send a swarm order (`compute.swarm`, or `swarm` on the CLI): a
+  research report, an audit of a public repository, an image, a website, a
+  contract project, or an oracle question. IMD's launch and workflow
+  actions are not sold, and a body that asks for a deployment or a
+  cross-chain delivery is refused, since whatever they put on chain would
+  belong to the wallet that pays IMD, which is yours, not the buyer's. The
+  rest of the setup, the money rules and the knobs are under "IMD swarm
+  executor" in the configuration reference.
 - **`echo`** — a loopback for wiring tests.
 - **`lease-stub`** — serves `lease_session` jobs like `broker` but rents
   no machine. It hands back a placeholder address and holds the lease
@@ -325,23 +317,41 @@ rather than refusing to start, so check the boot log after changing one.
 
 **IMD swarm executor** (`COVENANT_COMPUTE_NODE_EXECUTOR=imd`)
 
+Put the private key of the wallet that pays IMD in the file named by
+`COVENANT_COMPUTE_IMD_KEY_FILE`, and fund that wallet with the chain's
+native coin for gas and with IMD. At start-up and on every health check the
+node confirms four things: IMD's API answers, the RPC endpoint is on the
+configured chain, the wallet is funded, and the IMD price is under
+`COVENANT_COMPUTE_IMD_MAX_COST_MICRO_USDC`. It reports offline until all
+four hold. IMD refunds nothing, so the node pays only after IMD's free
+pre-check of the order passes; refuses any offer below what 0.5 IMD costs
+at the live price (from a price feed, or fixed with
+`COVENANT_COMPUTE_IMD_PRICE_USD`) plus its margin; refuses deadlines shorter
+than `COVENANT_COMPUTE_IMD_MIN_DEADLINE_SECS`; and writes every payment to
+`imd-orders.jsonl` before broadcasting it, so a node that dies mid-job
+resumes the same order on recovery instead of paying twice. A job IMD
+refuses, blocks or cancels fails here and refunds the buyer; the 0.5 IMD is
+your loss. Set your ask with `COVENANT_COMPUTE_NODE_PRICE_MICRO_USDC`. The
+reference ask is 5,000,000 (five dollars) while IMD trades near seven
+dollars; move it as the price moves.
+
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `COVENANT_COMPUTE_IMD_RPC_URL` | (required) | JSON-RPC endpoint of the chain the node pays IMD on. |
-| `COVENANT_COMPUTE_IMD_KEY_FILE` | (required) | File holding the hex private key of the wallet that pays IMD. Owner-only permissions; never logged. Fund it with the chain's native coin for gas and with IMD. |
-| `COVENANT_COMPUTE_IMD_CHAIN_ID` | `4663` | The chain: Robinhood Chain `4663`, Ethereum `1`, or Sepolia `11155111` (oracle questions only there). |
-| `COVENANT_COMPUTE_IMD_INTAKE` | `0xa43e6f75ee006411f79ac1c84120606c2330de82` | IMD's Intake v2, the same address on every chain it serves. |
-| `COVENANT_COMPUTE_IMD_TOKEN` | the chain's IMD | The IMD token the Intake pulls. Known for the three chains above; required elsewhere. |
+| `COVENANT_COMPUTE_IMD_KEY_FILE` | (required) | File holding the hex private key of the wallet that pays IMD. Keep it readable by its owner only; the node never logs the key. Fund the wallet with the chain's native coin for gas and with IMD. |
+| `COVENANT_COMPUTE_IMD_CHAIN_ID` | `4663` | The chain the node pays IMD on: Robinhood Chain `4663`, Ethereum `1`, or Sepolia `11155111`, where IMD serves oracle questions only. |
+| `COVENANT_COMPUTE_IMD_INTAKE` | `0xa43e6f75ee006411f79ac1c84120606c2330de82` | The address of IMD's Intake contract (version 2). It is the same on every chain IMD serves. |
+| `COVENANT_COMPUTE_IMD_TOKEN` | the chain's IMD | The IMD token contract the Intake charges. Built in for the three chains above; required on any other chain. |
 | `COVENANT_COMPUTE_IMD_PRICE_WEI` | `500000000000000000` | What one action costs, in atomic IMD (0.5 IMD). |
-| `COVENANT_COMPUTE_IMD_PRICE_USD` | (feed) | A fixed IMD price in USD instead of the feed, for rigs and tests. |
-| `COVENANT_COMPUTE_IMD_PRICE_SOURCE_URL` | DexScreener, the token on this chain | Where the IMD price is read when it is not fixed; the deepest pool on the chain wins. Read every ten minutes. |
+| `COVENANT_COMPUTE_IMD_PRICE_USD` | (feed) | A fixed IMD price in USD, used instead of the price feed. For test setups. |
+| `COVENANT_COMPUTE_IMD_PRICE_SOURCE_URL` | DexScreener, for the IMD token on the configured chain | Where the IMD price is read when it is not fixed. The node takes the price of the deepest pool on the configured chain and re-reads it every ten minutes. |
 | `COVENANT_COMPUTE_IMD_MAX_COST_MICRO_USDC` | `4500000` | The most one action may cost at the live price. Above it the node reports offline rather than serve at a loss. |
-| `COVENANT_COMPUTE_IMD_MIN_MARGIN_MICRO_USDC` | `500000` | What an offer must carry above the live cost; a lower offer is refused at admission and re-matched elsewhere. |
+| `COVENANT_COMPUTE_IMD_MIN_MARGIN_MICRO_USDC` | `500000` | What an offer must carry above the live cost. A lower offer is refused and the network offers the job to another node. |
 | `COVENANT_COMPUTE_IMD_MIN_DEADLINE_SECS` | `1800` | The least time a job may have left. IMD answers in minutes to hours. |
-| `COVENANT_COMPUTE_IMD_ACTIONS` | `job.open,job.continue,oracle.request` | The actions this node sells. Launches and workflows cannot be named here. |
-| `COVENANT_COMPUTE_IMD_API_URL` | `https://api.imd.fun` | IMD's control plane. |
+| `COVENANT_COMPUTE_IMD_ACTIONS` | `job.open,job.continue,oracle.request` | The actions this node sells. Launch and workflow actions are not accepted in this list. |
+| `COVENANT_COMPUTE_IMD_API_URL` | `https://api.imd.fun` | IMD's API. |
 | `COVENANT_COMPUTE_IMD_EXPLORER_URL` | `https://explorer.imd.fun` | The explorer linked in every result. |
-| `COVENANT_COMPUTE_IMD_POLL_SECS` | `15` | How often the node asks the plane about an order. Public reads are capped at 120 a minute per address. |
+| `COVENANT_COMPUTE_IMD_POLL_SECS` | `15` | How often the node polls IMD's API for an order's status. IMD caps public reads at 120 a minute per address. |
 | `COVENANT_COMPUTE_IMD_TX_TIMEOUT_SECS` | `180` | How long a payment transaction may take to mine before the job fails. |
 | `COVENANT_COMPUTE_IMD_MAX_INLINE_BYTES` | `1048576` | Text artifacts up to this size ride back inline, hash-checked; larger or binary ones by URL and hash. |
 | `COVENANT_COMPUTE_IMD_MIN_GAS_WEI` | `100000000000000` | The least native balance the wallet must hold for gas before the node serves. |

@@ -58,7 +58,7 @@ are shared by the daemon capability and the MCP server, defined once in
 | `compute.infer` | Buy one inference call: model, chat messages or prompt, optional images for a vision model, generation knobs; pays, waits, returns output plus the verified receipt. |
 | `compute.embed` | Buy an embedding: one `text`, or a `texts` batch bought as a single paid job (one vector per input, in order). Returns the vectors plus the verified receipt. The retrieval and semantic-memory primitive; name the model so every vector in a store stays comparable. |
 | `compute.run` | Buy one batch job (a command an operator's executor runs to completion). |
-| `compute.swarm` | Buy work from the IMD agent swarm through a swarm operator: a research report, an audit of a public repository, an image, a website, a contract project, or an oracle question answered by a panel of agents. Pays in USDC, waits, returns the accepted files plus the verified receipt; refunds when IMD delivers nothing. |
+| `compute.swarm` | Buy work from the IMD agent swarm (see "Buying work from the IMD swarm" below) through a swarm operator: a research report, an audit of a public repository, an image, a website, a contract project, or an oracle question answered by a panel of agents. Pays in USDC, waits, and returns the accepted files with the operator's signed receipt; refunds if IMD delivers nothing. |
 | `compute.transcribe` | Buy one speech-to-text transcription: an audio clip in, the text out, optionally with per-segment timestamps for captions. Pays, waits, returns the transcript plus the verified receipt. |
 | `compute.speak` | Buy one text-to-speech synthesis: text in, an audio clip out. Pays, waits, saves the clip and returns its path plus the verified receipt. |
 | `compute.stream_start` / `compute.stream_poll` | The streaming pair: start a paid inference stream, then cursor-poll chunks as the operator relays them. |
@@ -242,37 +242,45 @@ proven with a real vector, an inference claim with a live completion.
 
 ## Buying work from the IMD swarm
 
-IMD (identity.md, api.imd.fun) is a network of about a thousand agents
-on NFT seats that writes research reports, audits code, builds sites and
-contract projects, makes images, and answers typed questions as an
-oracle, for a flat 0.5 IMD a job paid on Ethereum or Robinhood Chain. A
-swarm node (`COVENANT_COMPUTE_NODE_EXECUTOR=imd`) sells that work here:
-it serves `batch_job` under the model `imd-swarm`, and for each job it
-pays IMD through its Intake contract, follows the order, and relays the
-accepted files as the job's output under its signed receipt. A buyer
-pays USDC on Solana through `compute.swarm` (or `swarm` on the CLI) and
-never holds IMD, an Ethereum wallet or a Permit2 signature.
+IMD, the identity.md agent swarm (https://imd.fun), is a network of about a
+thousand agents, each holding its seat in the network as an NFT. It writes
+research reports, audits code, builds websites and contract projects, makes
+images, and answers questions with a declared answer type as an oracle.
+Every job costs a flat 0.5 IMD, its own token, paid on Ethereum or Robinhood
+Chain. A swarm node (`COVENANT_COMPUTE_NODE_EXECUTOR=imd`) resells that work
+on Covenant. It serves `batch_job` jobs under the model label `imd-swarm`.
+For each job it pays IMD through IMD's Intake contract, which takes the
+payment and the order in one call, tracks the order through IMD's API until
+IMD finishes it, and returns the files IMD accepted as the finished work as
+the job's output under the node's own signed receipt. A buyer pays USDC on
+Solana through `compute.swarm` (or `swarm` on the CLI) and never needs IMD
+tokens, an Ethereum-side wallet or a Permit2 signature; the node handles
+IMD's side of the payment.
 
-The order is the IMD action (`job.open`, `job.continue`,
-`oracle.request`) and the body IMD's own documentation gives it. Both
-sides check its shape before money moves: the buyer before signing, the
-node before paying. Launches, workflows and cross-chain deliveries are
-refused, because the wallet that pays IMD owns what a launch deploys,
-and that wallet is the operator's. IMD refunds nothing, so a swarm node
-pays only after IMD's free check passes, refuses any offer below the
-live cost of 0.5 IMD plus its margin, refuses deadlines under thirty
-minutes (IMD answers in minutes to hours), and writes every payment to
-its order book before broadcasting it, so a restart resumes the order
-rather than paying twice. A job IMD refuses, blocks or cancels fails and
-refunds the buyer in full; the payment is the operator's loss. The body
-is public: IMD workers read it and the Intake writes it to a chain.
+An order is an IMD action (`job.open`, `job.continue` or `oracle.request`)
+plus a body in the shape IMD's documentation (https://imd.fun/docs/)
+specifies for that action. Both sides check its shape before money moves:
+the buyer before signing, the node before paying. IMD's launch and workflow
+actions are not sold, and a body that asks for a deployment or a cross-chain
+delivery is refused, because what those put on chain belongs to the wallet
+that paid IMD, and that wallet is the operator's, not the buyer's. IMD
+refunds nothing, so a swarm node protects itself in four ways. It pays only
+after IMD's free pre-check of the order passes. It refuses any offer below
+what 0.5 IMD costs at the live price plus its margin. It refuses deadlines
+under thirty minutes, because IMD answers in minutes to hours. And it
+records every payment in its local order log before broadcasting the
+transaction, so a node that restarts resumes the order instead of paying
+twice. A job IMD refuses, blocks or cancels fails and refunds the buyer in
+full; the payment is the operator's loss. The body is public: IMD's agents
+read it, and the Intake contract records it on chain.
 
-The result carries the IMD job id and explorer link, the payment's
-transaction, the accepted files (text ones inline and hash-checked,
-others by URL and hash), an audit's report where there is one, or the
-signed oracle attestation. The operator's reference ask is five dollars
-a job while IMD trades near seven, which leaves the margin the node
-guards for; the ask is the operator's and tracks the IMD price.
+The result includes the IMD job id with an explorer link, the payment
+transaction, and the accepted files: text files inline and hash-checked,
+everything else by URL and hash. An audit also includes its report. An
+oracle question returns the signed attestation. Each operator sets their
+own ask. The reference ask is five dollars a job, which, with IMD trading
+near seven dollars at the time of writing, leaves the margin the node
+requires above the cost of 0.5 IMD. Move the ask as the IMD price moves.
 
 ## Trust model
 

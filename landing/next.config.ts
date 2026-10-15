@@ -39,6 +39,12 @@ const securityHeaders = [
 
 const config: NextConfig = {
   reactStrictMode: true,
+  experimental: {
+    // Turbopack's on-disk dev cache grew to 2.2 GB within a day, and dev
+    // servers started on it spawned PostCSS workers until the machine ran out
+    // of memory. A cold start costs well under a second per page.
+    turbopackFileSystemCacheForDev: false,
+  },
   async redirects() {
     // The compute post was published at /blog/inference-receipts, then lived at
     // /covenant-compute, before settling at /blog/compute. Keep the old links alive.

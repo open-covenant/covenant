@@ -15,7 +15,34 @@ default for `next start`); bound to 127.0.0.1, the docs rewrite falls back to
 ## Build
 
     pnpm build
+    pnpm check:cards  # every page has its own social card (CI runs this)
     pnpm start
+
+## Social cards
+
+Every page except the home page gets a generated share card at
+`/og/<page path>.png` (for example `/og/brand/color.png`,
+`/og/docs/concepts.png`). Pages export their metadata through `pageMetadata()`
+in `app/_metadata.ts`; docs pages do it through `buildDocsMetadata()`. That
+sets the canonical URL, the Open Graph and Twitter tags, the card image and its
+alt text, and the card's headline and section label:
+
+    export const metadata: Metadata = pageMetadata("/brand/color", { title: "Color", section: "Brand guidelines" }, {
+      title: "Color: Covenant brand guidelines",
+      description: "…",
+    });
+
+The headline defaults to the page title; pass the page's h1 when the title
+carries a suffix. `app/og/[...path]/route.ts` draws the card on request: it
+reads the page from this server (over the local port, with the Host header the
+page is served under), takes the headline and section the page declares, and
+sets them over a field background with the site's type (`app/og/_card.tsx`,
+fonts and backgrounds in `app/og/_assets`). Cards are cached in memory and by
+the CDN for a day.
+
+`pnpm check:cards` fails when a page doesn't use the helper or a built page's
+`og:image` doesn't point at its own card, so a new page can't ship without
+one. The home page keeps its rendered share card (`app/opengraph-image.jpg`).
 
 ## Identity
 
@@ -65,8 +92,12 @@ screenshots live in `public/brand/in-use/`.
 - `app/icon.png`, `app/apple-icon.png`, `app/favicon.ico`,
   `public/icon-maskable.png` — rendered from the mark, on the dark background
   where one is needed.
-- `app/opengraph-image.jpg` / `app/twitter-image.jpg` — rendered from the
-  `ModuleField` shader with the site's type.
+- `app/opengraph-image.jpg` / `app/twitter-image.jpg` — the home page's share
+  card, rendered from the `ModuleField` shader with the site's type.
+- `app/og/_assets/field-*.png` — the field alone on black, rendered from the
+  same shader, behind the generated page cards. Archivo Expanded SemiBold and
+  JetBrains Mono Medium sit beside them as static TTFs (SIL OFL) for the card
+  renderer.
 
 `public/logo.svg`, `logomark.svg`, `wordmark.png` and `covenant-logomark.png`
 are the previous identity, kept only so existing outside links keep resolving.

@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/app/_metadata";
 import { CopyAddress } from "../CopyAddress";
 import { SiteFooter } from "../SiteFooter";
 import { SiteHeader } from "../SiteHeader";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata("/about", { title: "About Covenant" }, {
   title: "About Covenant",
   description:
     "Covenant is an open, host-level operating layer for agentic software: every agent runs under a signed grant, every action leaves a receipt, and the system is built in the open by an autonomous loop.",
@@ -14,7 +15,6 @@ export const metadata: Metadata = {
     title: "About Covenant: the operating layer for agentic software",
     description:
       "Permission, not trust. A receipt for every decision. Built in the open by an autonomous loop that never stops.",
-    images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
   },
   twitter: {
     card: "summary_large_image",
@@ -23,9 +23,8 @@ export const metadata: Metadata = {
     title: "About Covenant: the operating layer for agentic software",
     description:
       "Permission, not trust. A receipt for every decision. Built in the open by an autonomous loop that never stops.",
-    images: "/twitter-image.jpg",
   },
-};
+});
 
 const eyebrow = "font-mono text-[11px] uppercase tracking-[0.3em] text-muted";
 const headingTitle = "text-[13px] uppercase tracking-[0.25em] text-fg sm:text-[14px]";

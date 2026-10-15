@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/app/_metadata";
 import { SiteFooter } from "../../SiteFooter";
 import { SiteHeader } from "../../SiteHeader";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata("/blog/covenant-payai", { section: "Blog" }, {
   title: "Proof of work on the payment rail",
   description:
     "PayAI moves the money. Covenant proves the work. A trust layer over PayAI's x402 rail: signed work-receipts and reputation built from real on-chain settlements, without ever touching payments.",
@@ -13,7 +14,6 @@ export const metadata: Metadata = {
     title: "Proof of work on the payment rail",
     description:
       "PayAI moves the money. Covenant proves the work. Signed work-receipts and settlement-grounded reputation over PayAI's x402 rail.",
-    images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
   },
   twitter: {
     card: "summary_large_image",
@@ -21,9 +21,8 @@ export const metadata: Metadata = {
     creator: "@OpenCovenant",
     title: "Proof of work on the payment rail",
     description: "PayAI moves the money. Covenant proves the work.",
-    images: "/twitter-image.jpg",
   },
-};
+});
 
 const backLink =
   "font-mono text-[12px] uppercase tracking-[0.2em] text-muted transition-colors hover:text-fg";

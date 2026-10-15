@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { pageMetadata } from '@/app/_metadata';
 import { SiteFooter } from '../SiteFooter';
 import { SiteHeader } from '../SiteHeader';
 
@@ -6,7 +7,7 @@ const TITLE = 'Covenant Desk on Robinhood Chain';
 const DESCRIPTION =
   "A local desk for Robinhood Chain stock tokens and the memecoins paired with them. It prices every token against a reference that stays awake when Wall Street is closed, fills conditional orders on Uniswap, and sizes the hedge on Lighter's Robinhood Chain venue. Runs on your machine; your agent connects over MCP. Underneath it, two onchain bounds the agent cannot break, proven live in real USDG.";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata('/robinhood', { title: 'Covenant Desk on Robinhood Chain' }, {
   title: TITLE,
   description: DESCRIPTION,
   alternates: { canonical: '/robinhood' },
@@ -23,7 +24,7 @@ export const metadata: Metadata = {
     title: TITLE,
     description: DESCRIPTION,
   },
-};
+});
 
 const eyebrow = 'font-mono text-[11px] uppercase tracking-[0.3em] text-muted';
 const paragraph = 'text-[13px] leading-relaxed text-fg-soft sm:text-[14px]';

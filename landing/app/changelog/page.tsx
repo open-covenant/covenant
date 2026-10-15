@@ -1,11 +1,12 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/app/_metadata";
 import { SiteFooter } from "../SiteFooter";
 import { SiteHeader } from "../SiteHeader";
 
 const DESCRIPTION =
   "Covenant release notes. What shipped in each tagged version, with signed artifacts and the full changelog on GitHub.";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata("/changelog", { title: "Changelog" }, {
   title: "Changelog: Covenant",
   description: DESCRIPTION,
   alternates: { canonical: "/changelog" },
@@ -14,7 +15,6 @@ export const metadata: Metadata = {
     url: "https://opencovenant.org/changelog",
     title: "Covenant changelog",
     description: DESCRIPTION,
-    images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
   },
   twitter: {
     card: "summary_large_image",
@@ -22,9 +22,8 @@ export const metadata: Metadata = {
     creator: "@OpenCovenant",
     title: "Covenant changelog",
     description: DESCRIPTION,
-    images: "/twitter-image.jpg",
   },
-};
+});
 
 type Release = {
   version: string;

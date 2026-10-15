@@ -1,11 +1,12 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/app/_metadata";
 import { ReactNode } from "react";
 import { SiteHeader } from "../SiteHeader";
 import { SiteFooter } from "../SiteFooter";
 import { WalletProvider } from "./WalletProvider";
 import { NetworkBanner } from "./NetworkBanner";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata("/stake", { title: "Covenant Stake" }, {
   title: "Covenant Stake: lock $CVNT for a share of protocol revenue",
   description:
     "Lock $CVNT for 7–180 days and earn a pro-rata share of protocol revenue in SOL. Distribution amounts reflect actual protocol revenue and are not guaranteed.",
@@ -16,7 +17,6 @@ export const metadata: Metadata = {
     title: "Covenant Stake: lock $CVNT for a share of protocol revenue",
     description:
       "Lock $CVNT for 7–180 days and earn a pro-rata share of protocol revenue distributed in SOL.",
-    images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
   },
   twitter: {
     card: "summary_large_image",
@@ -25,9 +25,8 @@ export const metadata: Metadata = {
     title: "Covenant Stake: lock $CVNT for a share of protocol revenue",
     description:
       "Lock $CVNT for 7–180 days and earn a pro-rata share of protocol revenue distributed in SOL.",
-    images: "/twitter-image.jpg",
   },
-};
+});
 
 export default function StakeLayout({ children }: { children: ReactNode }) {
   return (

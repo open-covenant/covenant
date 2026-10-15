@@ -6,6 +6,7 @@
 // whole argument.
 
 import type { Metadata } from "next";
+import { pageMetadata } from "@/app/_metadata";
 import Link from "next/link";
 import { headers } from "next/headers";
 import { notFound } from "next/navigation";
@@ -22,11 +23,14 @@ import type { AgentPassport } from "@/app/api/agents/[asset]/route";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = {
-  title: "Agent passport: Covenant",
-  description:
-    "Verify a 014 Registry agent: on-chain identity binding, Covenant attestation authority, and an audit root recomputed in your browser.",
-};
+export async function generateMetadata({ params }: { params: Promise<{ asset: string }> }): Promise<Metadata> {
+  const { asset } = await params;
+  return pageMetadata(`/agents/${encodeURIComponent(asset)}`, { title: "Agent passport" }, {
+    title: "Agent passport: Covenant",
+    description:
+      "Verify a 014 Registry agent: on-chain identity binding, Covenant attestation authority, and an audit root recomputed in your browser.",
+  });
+}
 
 async function fetchPassport(asset: string): Promise<AgentPassport | null> {
   const h = await headers();

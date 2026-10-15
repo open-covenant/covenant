@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/app/_metadata";
 import { SiteFooter } from "../SiteFooter";
 import { SiteHeader } from "../SiteHeader";
 import { GITHUB_REPO_URL } from "../_brand";
@@ -7,13 +8,13 @@ const TITLE = "SDK";
 const DESCRIPTION =
   "@covenant-org/sdk — the TypeScript SDK for Covenant's Solana-native protocol surface. Prepare on-chain instructions, expose tools over MCP, and settle over x402.";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata("/sdk", { title: "Covenant SDK" }, {
   title: TITLE,
   description: DESCRIPTION,
   alternates: { canonical: "/sdk" },
   openGraph: { type: "website", url: "https://opencovenant.org/sdk", title: TITLE, description: DESCRIPTION },
   twitter: { card: "summary_large_image", site: "@OpenCovenant", creator: "@OpenCovenant", title: TITLE, description: DESCRIPTION },
-};
+});
 
 const eyebrow = "font-mono text-[11px] uppercase tracking-[0.3em] text-muted";
 const paragraph = "text-[13px] leading-relaxed text-fg-soft sm:text-[14px]";

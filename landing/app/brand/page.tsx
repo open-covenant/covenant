@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/app/_metadata";
 import Image from "next/image";
 import Link from "next/link";
 import type { ReactNode } from "react";
@@ -11,7 +12,7 @@ import { PartnerLockup, StaticField, SubBrandLockup } from "./_visuals";
 const DESCRIPTION =
   "The Covenant brand guidelines: messaging, the logo, color, typography, imagery, sub-brands, motion, partnerships and the identity in use, with every asset to download.";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata("/brand", { title: "Brand guidelines" }, {
   title: "Brand guidelines: Covenant",
   description: DESCRIPTION,
   alternates: { canonical: "/brand" },
@@ -20,7 +21,6 @@ export const metadata: Metadata = {
     url: "https://opencovenant.org/brand",
     title: "Covenant brand guidelines",
     description: DESCRIPTION,
-    images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
   },
   twitter: {
     card: "summary_large_image",
@@ -28,9 +28,8 @@ export const metadata: Metadata = {
     creator: "@OpenCovenant",
     title: "Covenant brand guidelines",
     description: DESCRIPTION,
-    images: "/twitter-image.jpg",
   },
-};
+});
 
 // One live tile per section, so the index shows the system rather than names.
 const TILES: Record<string, ReactNode> = {

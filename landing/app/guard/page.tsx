@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/app/_metadata";
 import { SiteFooter } from "../SiteFooter";
 import { SiteHeader } from "../SiteHeader";
 
@@ -6,7 +7,7 @@ const TITLE = "Covenant Guard: the trust layer your agent plugs into";
 const DESCRIPTION =
   "A zero-install MCP for Claude Code and Codex. Before your agent trusts or pays another agent, it can check an on-chain track record, confirm a real identity, and verify a signed claim. No install, no keys.";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata("/guard", { title: "Covenant Guard" }, {
   title: TITLE,
   description: DESCRIPTION,
   alternates: { canonical: "/guard" },
@@ -23,7 +24,7 @@ export const metadata: Metadata = {
     title: TITLE,
     description: DESCRIPTION,
   },
-};
+});
 
 const eyebrow = "font-mono text-[11px] uppercase tracking-[0.3em] text-muted";
 const paragraph = "text-[13px] leading-relaxed text-fg-soft sm:text-[14px]";

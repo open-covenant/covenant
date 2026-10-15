@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/app/_metadata";
 import { SiteFooter } from "../SiteFooter";
 import { SiteHeader } from "../SiteHeader";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata("/roadmap", { title: "Roadmap" }, {
   title: "Development Roadmap: Covenant",
   description:
     "Covenant roadmap: foundation (M0), production & tools (M1), native integration (M2), distributed operation (M3), and 1.0 stability (M4).",
@@ -13,7 +14,6 @@ export const metadata: Metadata = {
     title: "Development Roadmap: From M0 Foundation to M4 Stability",
     description:
       "Development milestones for Covenant across the local control plane, distributed agent networks, and 1.0 stability commitment.",
-    images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
   },
   twitter: {
     card: "summary_large_image",
@@ -22,9 +22,8 @@ export const metadata: Metadata = {
     title: "Development Roadmap: From M0 Foundation to M4 Stability",
     description:
       "Development milestones for Covenant across the local control plane, distributed agent networks, and 1.0 stability commitment.",
-    images: "/twitter-image.jpg",
   },
-};
+});
 
 type Milestone = {
   code: string;

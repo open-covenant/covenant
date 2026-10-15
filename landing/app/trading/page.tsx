@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/app/_metadata";
 import { SiteFooter } from "../SiteFooter";
 import { SiteHeader } from "../SiteHeader";
 
@@ -6,7 +7,7 @@ const TITLE = "Governed agentic trading";
 const DESCRIPTION =
   "Brokerages are opening to AI agents with no real limits. Covenant is the policy gate in front of the order: caps enforced before anything is placed, every decision signed and anchored onchain, and a track record an agent can prove.";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata("/trading", { title: "Governed agentic trading" }, {
   title: TITLE,
   description: DESCRIPTION,
   alternates: { canonical: "/trading" },
@@ -23,7 +24,7 @@ export const metadata: Metadata = {
     title: TITLE,
     description: DESCRIPTION,
   },
-};
+});
 
 const eyebrow = "font-mono text-[11px] uppercase tracking-[0.3em] text-muted";
 const paragraph = "text-[13px] leading-relaxed text-fg-soft sm:text-[14px]";

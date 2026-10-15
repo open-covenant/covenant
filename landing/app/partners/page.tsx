@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/app/_metadata";
 import Image from "next/image";
 import { SiteFooter } from "../SiteFooter";
 import { SiteHeader } from "../SiteHeader";
@@ -10,7 +11,7 @@ import {
   type Integration,
 } from "../_partners";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata("/partners", { title: "Partners" }, {
   title: "Partners & integrations",
   description:
     "The protocols, chains, and products that plug into Covenant: open standards Covenant speaks (Solana, x402, MCP, A2A) and partner integrations across the agent ecosystem.",
@@ -21,7 +22,6 @@ export const metadata: Metadata = {
     title: "Covenant partners & integrations",
     description:
       "Open standards Covenant speaks, and the products that integrate with the operating layer for agentic software.",
-    images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
   },
   twitter: {
     card: "summary_large_image",
@@ -30,9 +30,8 @@ export const metadata: Metadata = {
     title: "Covenant partners & integrations",
     description:
       "Open standards Covenant speaks, and the products that integrate with the operating layer for agentic software.",
-    images: "/twitter-image.jpg",
   },
-};
+});
 
 const eyebrow = "font-mono text-[11px] uppercase tracking-[0.3em] text-muted";
 const headingTitle = "text-[13px] uppercase tracking-[0.25em] text-fg sm:text-[14px]";

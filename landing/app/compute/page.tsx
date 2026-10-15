@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/app/_metadata";
 import { SiteFooter } from "../SiteFooter";
 import { SiteHeader } from "../SiteHeader";
 
@@ -6,7 +7,7 @@ const TITLE = "Covenant Compute: rent a GPU by the second";
 const DESCRIPTION =
   "Rent a GPU and pay in USDC for the seconds you use. The meter runs onchain in a MagicBlock ephemeral rollup and settles on Solana mainnet. Operators earn by the second and stake CVNT to take work.";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata("/compute", { title: "Covenant Compute" }, {
   title: TITLE,
   description: DESCRIPTION,
   alternates: { canonical: "/compute" },
@@ -15,14 +16,6 @@ export const metadata: Metadata = {
     url: "https://opencovenant.org/compute",
     title: TITLE,
     description: DESCRIPTION,
-    images: [
-      {
-        url: "/og/compute.jpg",
-        width: 1280,
-        height: 720,
-        alt: "Covenant Compute, GPU time metered by the second, live on Solana mainnet",
-      },
-    ],
   },
   twitter: {
     card: "summary_large_image",
@@ -30,9 +23,8 @@ export const metadata: Metadata = {
     creator: "@OpenCovenant",
     title: TITLE,
     description: DESCRIPTION,
-    images: "/og/compute.jpg",
   },
-};
+});
 
 const DOCS = "https://docs.opencovenant.org/compute";
 const PROGRAM = "3dTtXH7rah8YyWTsAfSg6qC3iqrJXWGEhAx57uUHXZff";

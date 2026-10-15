@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/app/_metadata";
 import { CovenantMark } from "../../_brand";
 import { MoreSections, PageHead, Panel, Part, Points, Rule, RuleGrid } from "../_kit";
 import { Lockup, PartnerLockup, PartnerMark, StaticField } from "../_visuals";
@@ -6,7 +7,7 @@ import { Lockup, PartnerLockup, PartnerMark, StaticField } from "../_visuals";
 const DESCRIPTION =
   "Co-branding with Covenant: the partner lockup, its construction, who leads, announcement cards and what to avoid.";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata("/brand/partnerships", { title: "Partnerships", section: "Brand guidelines" }, {
   title: "Partnerships: Covenant brand guidelines",
   description: DESCRIPTION,
   alternates: { canonical: "/brand/partnerships" },
@@ -15,9 +16,8 @@ export const metadata: Metadata = {
     url: "https://opencovenant.org/brand/partnerships",
     title: "Partnerships · Covenant brand guidelines",
     description: DESCRIPTION,
-    images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
   },
-};
+});
 
 export default function BrandPartnerships() {
   return (

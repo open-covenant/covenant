@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/app/_metadata";
 import { CovenantMark } from "../../_brand";
 import { ColorCard } from "../ColorCard";
 import { CodeBlock, MoreSections, PageHead, Panel, Part, Points, Rule, RuleGrid } from "../_kit";
@@ -7,7 +8,7 @@ import { BRAND_COLORS, GRADIENT_CSS, NEUTRALS, STATUS, TEXT_COLORS } from "../_p
 const DESCRIPTION =
   "Covenant's color palette: violet, blue and mint against a black background. Neutrals, text colors, the Covenant gradient and its four uses, status colors, proportion, contrast and tokens.";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata("/brand/color", { title: "Color", section: "Brand guidelines" }, {
   title: "Color: Covenant brand guidelines",
   description: DESCRIPTION,
   alternates: { canonical: "/brand/color" },
@@ -16,9 +17,8 @@ export const metadata: Metadata = {
     url: "https://opencovenant.org/brand/color",
     title: "Color · Covenant brand guidelines",
     description: DESCRIPTION,
-    images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
   },
-};
+});
 
 const TOKENS = `/* Covenant color tokens · https://opencovenant.org/brand/color
    Designed for dark backgrounds. Text colors are for text only, never fills. */

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/app/_metadata";
 import { SiteFooter } from "../SiteFooter";
 import { CopyAddress } from "../CopyAddress";
 import { CovenantMark, GithubIcon, TelegramIcon, XIcon, X_URL, GITHUB_URL, TELEGRAM_URL } from "../_brand";
@@ -8,7 +9,7 @@ const CVNT_MINT = "2mNVZ6aEjrGwiUVCfz7XGWpiXuWzgBDoznwE579upump";
 const DESCRIPTION =
   "Every important Covenant link in one place: sandbox, docs, source, the $CVNT token, staking, the whitepaper, and where to reach us.";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata("/links", { title: "Links" }, {
   title: "Links: Covenant",
   description: DESCRIPTION,
   alternates: { canonical: "/links" },
@@ -17,7 +18,6 @@ export const metadata: Metadata = {
     url: "https://opencovenant.org/links",
     title: "Covenant — all links",
     description: DESCRIPTION,
-    images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
   },
   twitter: {
     card: "summary_large_image",
@@ -25,9 +25,8 @@ export const metadata: Metadata = {
     creator: "@OpenCovenant",
     title: "Covenant — all links",
     description: DESCRIPTION,
-    images: "/twitter-image.jpg",
   },
-};
+});
 
 type LinkItem = { label: string; href: string; note?: string };
 

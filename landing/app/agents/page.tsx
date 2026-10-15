@@ -4,6 +4,7 @@
 // by a check passing.
 
 import type { Metadata } from "next";
+import { pageMetadata } from "@/app/_metadata";
 import Link from "next/link";
 import { SiteFooter } from "@/app/SiteFooter";
 import { SiteHeader } from "@/app/SiteHeader";
@@ -14,11 +15,11 @@ import {
   metaplexAgentUrl,
 } from "@/app/agents/_registry";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata("/agents", { title: "Proof of agent" }, {
   title: "Proof of agent: Covenant",
   description:
     "Covenant agents register on Metaplex's 014 Registry and anchor their audit roots as MPL Core attestations. Verify any of it in your browser.",
-};
+});
 
 const MOVES = [
   {

@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/app/_metadata";
 import Link from "next/link";
 import { SiteFooter } from "../SiteFooter";
 import { SiteHeader } from "../SiteHeader";
 import { ContactForm } from "./ContactForm";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata("/contact", { title: "Contact" }, {
   title: "Contact: Covenant Partnerships & Security",
   description:
     "Get in touch with the Covenant team about partnerships, integrations, research collaboration, and security disclosures.",
@@ -15,7 +16,6 @@ export const metadata: Metadata = {
     title: "Contact: Covenant Partnerships & Security",
     description:
       "Get in touch with the Covenant team about partnerships, integrations, research collaboration, and security disclosures.",
-    images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
   },
   twitter: {
     card: "summary_large_image",
@@ -24,9 +24,8 @@ export const metadata: Metadata = {
     title: "Contact: Covenant Partnerships & Security",
     description:
       "Get in touch with the Covenant team about partnerships, integrations, research collaboration, and security disclosures.",
-    images: "/twitter-image.jpg",
   },
-};
+});
 
 export default function ContactPage() {
   return (

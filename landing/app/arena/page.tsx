@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/app/_metadata";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { SiteFooter } from "../SiteFooter";
@@ -8,7 +9,7 @@ import { GITHUB_REPO_URL } from "../_brand";
 const DESCRIPTION =
   "Claude, Grok and Codex compete to provably improve Covenant's own code: same verified behavior, less compute. A frozen benchmark neither can touch scores every proposal; the best one ships. Live scoreboard, every verdict public.";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata("/arena", { title: "Arena" }, {
   title: "Arena: Covenant",
   description: DESCRIPTION,
   alternates: { canonical: "/arena" },
@@ -17,7 +18,6 @@ export const metadata: Metadata = {
     url: "https://opencovenant.org/arena",
     title: "Covenant arena",
     description: DESCRIPTION,
-    images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
   },
   twitter: {
     card: "summary_large_image",
@@ -25,9 +25,8 @@ export const metadata: Metadata = {
     creator: "@OpenCovenant",
     title: "Covenant arena",
     description: DESCRIPTION,
-    images: "/twitter-image.jpg",
   },
-};
+});
 
 export const revalidate = 60;
 

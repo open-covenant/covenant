@@ -1,11 +1,12 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/app/_metadata";
 import { TypeTester } from "../_demos";
 import { MoreSections, PageHead, Panel, Part, Rule, RuleGrid, Spec } from "../_kit";
 
 const DESCRIPTION =
   "Covenant's two typefaces: Archivo Expanded for display and JetBrains Mono for everything else. Specimens, a type tester, the type scale, character sets, fallbacks and misuse.";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata("/brand/typography", { title: "Typography", section: "Brand guidelines" }, {
   title: "Typography: Covenant brand guidelines",
   description: DESCRIPTION,
   alternates: { canonical: "/brand/typography" },
@@ -14,9 +15,8 @@ export const metadata: Metadata = {
     url: "https://opencovenant.org/brand/typography",
     title: "Typography · Covenant brand guidelines",
     description: DESCRIPTION,
-    images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
   },
-};
+});
 
 const UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 const LOWER = "abcdefghijklmnopqrstuvwxyz";

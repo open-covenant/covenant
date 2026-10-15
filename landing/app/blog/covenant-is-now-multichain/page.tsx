@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/app/_metadata";
 import { SiteFooter } from "../../SiteFooter";
 import { SiteHeader } from "../../SiteHeader";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata("/blog/covenant-is-now-multichain", { section: "Blog" }, {
   title: "Covenant is now multi-chain. The token isn't.",
   description:
     "Covenant's trust layer is live on Base while $CVNT stays a single Solana mint. Only signed data crosses chains, verifiable with a plain ecrecover.",
@@ -13,14 +14,6 @@ export const metadata: Metadata = {
     title: "Covenant is now multi-chain. The token isn't.",
     description:
       "The trust layer is live on Base while $CVNT stays a single Solana mint. Only signed data crosses chains, verifiable with a plain ecrecover.",
-    images: [
-      {
-        url: "/og/covenant-is-now-multichain.png",
-        width: 1200,
-        height: 630,
-        alt: "Covenant is going multi-chain. The token isn't.",
-      },
-    ],
   },
   twitter: {
     card: "summary_large_image",
@@ -28,9 +21,8 @@ export const metadata: Metadata = {
     creator: "@OpenCovenant",
     title: "Covenant is now multi-chain. The token isn't.",
     description: "Trust crosses to Base. The token stays on Solana.",
-    images: "/og/covenant-is-now-multichain.png",
   },
-};
+});
 
 const backLink =
   "font-mono text-[12px] uppercase tracking-[0.2em] text-muted transition-colors hover:text-fg";

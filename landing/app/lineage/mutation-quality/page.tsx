@@ -10,13 +10,21 @@
 // the witness chain does not prove semantic correctness; this trend is
 // what visitors look at to gauge it.
 
+import type { Metadata } from "next";
 import Link from "next/link";
+import { pageMetadata } from "@/app/_metadata";
 import { SiteFooter } from "@/app/SiteFooter";
 import { SiteHeader } from "@/app/SiteHeader";
 import { readNightlyRecords } from "./_records";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = pageMetadata("/lineage/mutation-quality", { title: "Code quality" }, {
+  title: "Code quality: Covenant",
+  description:
+    "How many deliberately introduced bugs Covenant's test suite catches, measured every night with cargo-mutants.",
+});
 
 export default function MutationQualityPage() {
   const records = readNightlyRecords();

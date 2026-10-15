@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/app/_metadata";
 import Link from "next/link";
 import { SiteFooter } from "../SiteFooter";
 import { SiteHeader } from "../SiteHeader";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata("/terms", { title: "Terms of service" }, {
   title: "Terms of Service: Covenant Sandbox & Staking",
   description:
     "Legal terms for Covenant services, sandbox, and staking program. Covers acceptable use, alpha disclaimers, and operator responsibilities.",
@@ -14,7 +15,6 @@ export const metadata: Metadata = {
     title: "Terms of Service: Covenant Sandbox & Staking",
     description:
       "Acceptable use, alpha-software disclaimers, and operator responsibilities for the Covenant public services.",
-    images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
   },
   twitter: {
     card: "summary_large_image",
@@ -23,9 +23,8 @@ export const metadata: Metadata = {
     title: "Terms of Service: Covenant Sandbox & Staking",
     description:
       "Acceptable use, alpha-software disclaimers, and operator responsibilities for the Covenant public services.",
-    images: "/twitter-image.jpg",
   },
-};
+});
 
 const LAST_UPDATED = "2026-05-29";
 

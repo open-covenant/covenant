@@ -1,18 +1,15 @@
 import type { Metadata } from "next";
 import { SITE_BUILD_DATE, DOCS_PUBLISHED_DATE } from "../_brand";
+import { pageMetadata } from "../_metadata";
 
 const DOCS_HOST = "https://docs.opencovenant.org";
 const SITE_HOST = "https://opencovenant.org";
-// The docs host does not serve its own /opengraph-image.jpg (middleware skips
-// dotted paths, so there is no rewrite to the apex asset). Point docs OG/Twitter
-// cards at the apex image explicitly.
-const OG_IMAGE = `${SITE_HOST}/opengraph-image.jpg`;
 
 // Per-page docs metadata helper. Centralises the SEO surface so every
-// page gets a real canonical, openGraph, and twitter card instead of
-// inheriting the layout's `alternates: { canonical: "/" }`. Pass the
-// slug without a leading slash (`getting-started`, `concepts`, etc.).
-// The root docs page uses `""` for the index.
+// page gets a real canonical, openGraph, twitter card and its own generated
+// social card instead of inheriting the layout's. Pass the slug without a
+// leading slash (`getting-started`, `concepts`, etc.). The root docs page uses
+// `""` for the index.
 export function buildDocsMetadata(
   slug: string,
   title: string,
@@ -20,36 +17,18 @@ export function buildDocsMetadata(
 ): Metadata {
   const url = slug ? `${DOCS_HOST}/${slug}` : DOCS_HOST;
   const fullTitle = slug ? `${title}: Covenant docs` : "Documentation: Covenant";
-  return {
-    title,
-    description,
-    alternates: { canonical: url },
-    openGraph: {
-      type: "article",
-      url,
-      siteName: "Covenant docs",
-      title: fullTitle,
+  return pageMetadata(
+    slug ? `/docs/${slug}` : "/docs",
+    slug ? { title, section: "Documentation" } : { title: "Documentation" },
+    {
+      title,
       description,
-      images: [
-        {
-          url: OG_IMAGE,
-          width: 1200,
-          height: 630,
-          alt: "Covenant: open agent-native operating layer",
-        },
-      ],
+      alternates: { canonical: url },
+      openGraph: { type: "article", url, siteName: "Covenant docs", title: fullTitle, description },
+      twitter: { title: fullTitle, description },
     },
-    twitter: {
-      card: "summary_large_image",
-      site: "@OpenCovenant",
-      creator: "@OpenCovenant",
-      title: fullTitle,
-      description,
-      images: [
-        { url: OG_IMAGE, alt: "Covenant: open agent-native operating layer" },
-      ],
-    },
-  };
+    { url },
+  );
 }
 
 // Per-page docs JSON-LD: a TechArticle for the page plus a BreadcrumbList

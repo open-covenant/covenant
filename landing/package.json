@@ -9,6 +9,7 @@
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
+    "check:cards": "node scripts/check-cards.mjs",
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { CARD_SIZE, cardAlt, cardImageUrl } from "../_metadata";
 import { SiteFooter } from "../SiteFooter";
 import { Sidebar } from "./Sidebar";
 
@@ -15,20 +16,13 @@ export const metadata: Metadata = {
     type: "website",
     siteName: "Covenant docs",
     locale: "en_US",
-    images: [
-      {
-        url: "https://opencovenant.org/opengraph-image.jpg",
-        width: 1200,
-        height: 630,
-        alt: "Covenant: open agent-native operating layer",
-      },
-    ],
+    images: [{ url: cardImageUrl("/docs"), ...CARD_SIZE, alt: cardAlt("Documentation") }],
   },
   twitter: {
     card: "summary_large_image",
     site: "@OpenCovenant",
     creator: "@OpenCovenant",
-    images: "https://opencovenant.org/opengraph-image.jpg",
+    images: cardImageUrl("/docs"),
   },
 };
 

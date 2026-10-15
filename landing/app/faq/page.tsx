@@ -1,11 +1,12 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/app/_metadata";
 import { SiteFooter } from "../SiteFooter";
 import { SiteHeader } from "../SiteHeader";
 
 const DESCRIPTION =
   "Answers to common questions about Covenant: what it is, how it relates to MCP, whether it needs a blockchain, the eight primitives, and its pre-1.0 status.";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata("/faq", { title: "FAQ" }, {
   title: "FAQ: Covenant",
   description: DESCRIPTION,
   alternates: { canonical: "/faq" },
@@ -14,7 +15,6 @@ export const metadata: Metadata = {
     url: "https://opencovenant.org/faq",
     title: "Frequently asked questions about Covenant",
     description: DESCRIPTION,
-    images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
   },
   twitter: {
     card: "summary_large_image",
@@ -22,9 +22,8 @@ export const metadata: Metadata = {
     creator: "@OpenCovenant",
     title: "Frequently asked questions about Covenant",
     description: DESCRIPTION,
-    images: "/twitter-image.jpg",
   },
-};
+});
 
 // One source of truth: drives the visible Q&A and the FAQPage JSON-LD so the
 // markup text always matches what a reader sees. Answers are self-contained

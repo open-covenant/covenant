@@ -1,11 +1,12 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/app/_metadata";
 import { SiteHeader } from "../SiteHeader";
 import { SiteFooter } from "../SiteFooter";
 import { WalletProvider } from "../stake/WalletProvider";
 import { NetworkBanner } from "../stake/NetworkBanner";
 import { PositionsClient } from "./PositionsClient";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata("/positions", { title: "Staking positions", section: "Covenant Stake" }, {
   title: "Positions: Covenant Stake",
   description:
     "Manage your $CVNT positions, claim accrued SOL, and withdraw principal at any time as the program winds down.",
@@ -17,7 +18,6 @@ export const metadata: Metadata = {
     title: "Positions: Covenant Stake",
     description:
       "Manage your $CVNT positions, claim accrued SOL, and withdraw principal at any time as the program winds down.",
-    images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
   },
   twitter: {
     card: "summary_large_image",
@@ -26,9 +26,8 @@ export const metadata: Metadata = {
     title: "Positions: Covenant Stake",
     description:
       "Manage your $CVNT positions, claim accrued SOL, and withdraw principal at any time as the program winds down.",
-    images: "/twitter-image.jpg",
   },
-};
+});
 
 export default function PositionsPage() {
   return (

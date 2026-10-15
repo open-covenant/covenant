@@ -2,15 +2,27 @@
 // panel when the commit has an associated skill run. Verification runs in the
 // /api/verify/[sha] route handler this page reads.
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { SiteFooter } from "@/app/SiteFooter";
 import { SiteHeader } from "@/app/SiteHeader";
 import { redactAuthor } from "@/lib/verify/author";
+import { pageMetadata } from "@/app/_metadata";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+export async function generateMetadata({ params }: { params: Promise<{ sha: string }> }): Promise<Metadata> {
+  const { sha } = await params;
+  if (!/^[0-9a-f]{7,40}$/i.test(sha)) return {};
+  const short = sha.slice(0, 7).toLowerCase();
+  return pageMetadata(`/verify/${sha.toLowerCase()}`, { title: `Commit ${short}`, section: "Verification" }, {
+    title: `Commit ${short}: Covenant`,
+    description: `The verification record for Covenant commit ${short}: its transparency-log entry, audit chain, on-chain anchor and verifier signature.`,
+  });
+}
 
 type WitnessState = "green" | "yellow" | "red" | "gray";
 

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/app/_metadata";
 import { CovenantMark } from "../../_brand";
 import { MoreSections, PageHead, Panel, Part, Points, Rule, RuleGrid } from "../_kit";
 import { SubBrandLockup } from "../_visuals";
@@ -6,7 +7,7 @@ import { SubBrandLockup } from "../_visuals";
 const DESCRIPTION =
   "How Covenant names and locks up its products: Covenant plus one descriptor, the same mark, the same type, no new logos.";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata("/brand/sub-brands", { title: "Sub-brands", section: "Brand guidelines" }, {
   title: "Sub-brands: Covenant brand guidelines",
   description: DESCRIPTION,
   alternates: { canonical: "/brand/sub-brands" },
@@ -15,9 +16,8 @@ export const metadata: Metadata = {
     url: "https://opencovenant.org/brand/sub-brands",
     title: "Sub-brands · Covenant brand guidelines",
     description: DESCRIPTION,
-    images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
   },
-};
+});
 
 const FAMILY = [
   { name: "Guard", what: "A zero-install MCP server that checks another agent's track record, identity and signed claims before your agent trusts or pays it.", where: "opencovenant.org/guard" },

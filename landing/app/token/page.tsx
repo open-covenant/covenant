@@ -1,11 +1,12 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/app/_metadata";
 import Script from "next/script";
 import { BuyButton } from "./BuyButton";
 import { CopyAddress } from "../CopyAddress";
 import { SiteFooter } from "../SiteFooter";
 import { SiteHeader } from "../SiteHeader";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata("/token", { title: "The $CVNT token" }, {
   title: "Buy $CVNT",
   description:
     "Buy $CVNT with a card or crypto, no wallet setup required. The token that powers Covenant, the open operating layer for agentic software.",
@@ -16,7 +17,6 @@ export const metadata: Metadata = {
     title: "Buy $CVNT",
     description:
       "Card or crypto, no seed phrase. The token that powers Covenant, the open operating layer for agentic software.",
-    images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
   },
   twitter: {
     card: "summary_large_image",
@@ -24,9 +24,8 @@ export const metadata: Metadata = {
     creator: "@OpenCovenant",
     title: "Buy $CVNT",
     description: "Card or crypto, no seed phrase. The token that powers Covenant.",
-    images: "/twitter-image.jpg",
   },
-};
+});
 
 const eyebrow = "font-mono text-[11px] uppercase tracking-[0.3em] text-muted-2";
 const headingTitle = "text-[13px] uppercase tracking-[0.25em] text-fg sm:text-[14px]";

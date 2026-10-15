@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/app/_metadata";
 import { TAGLINE } from "../../_brand";
 import { CopyButton } from "../CopyButton";
 import { Chip, MoreSections, PageHead, Panel, Part, Spec } from "../_kit";
@@ -6,7 +7,7 @@ import { Chip, MoreSections, PageHead, Panel, Part, Spec } from "../_kit";
 const DESCRIPTION =
   "How Covenant speaks: positioning, voice, tone by audience, style conventions, taglines, boilerplate and vocabulary.";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata("/brand/messaging", { title: "Messaging", section: "Brand guidelines" }, {
   title: "Messaging: Covenant brand guidelines",
   description: DESCRIPTION,
   alternates: { canonical: "/brand/messaging" },
@@ -15,9 +16,8 @@ export const metadata: Metadata = {
     url: "https://opencovenant.org/brand/messaging",
     title: "Messaging · Covenant brand guidelines",
     description: DESCRIPTION,
-    images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
   },
-};
+});
 
 const VOICE = [
   {

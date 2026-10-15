@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/app/_metadata";
 import Image from "next/image";
 import { SiteFooter } from "../../SiteFooter";
 import { SiteHeader } from "../../SiteHeader";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata("/blog/compute", { section: "Blog" }, {
   title: "The model you paid for is not always the model that ran",
   description:
     "Covenant Compute rents GPU workspaces and inference under a spend limit set before the job starts. Every request returns a signed receipt naming the model that served it. The prompt itself is never stored.",
@@ -14,14 +15,6 @@ export const metadata: Metadata = {
     title: "The model you paid for is not always the model that ran",
     description:
       "A signed receipt for every request: which model served it, and hashes of the input and output. The prompt is never stored.",
-    images: [
-      {
-        url: "/og/covenant-compute.jpg",
-        width: 1280,
-        height: 720,
-        alt: "Covenant Compute, verifiable inference network",
-      },
-    ],
   },
   twitter: {
     card: "summary_large_image",
@@ -29,9 +22,8 @@ export const metadata: Metadata = {
     creator: "@OpenCovenant",
     title: "The model you paid for is not always the model that ran",
     description: "A signed receipt for every request. The prompt is never stored.",
-    images: "/og/covenant-compute.jpg",
   },
-};
+});
 
 const backLink =
   "font-mono text-[12px] uppercase tracking-[0.2em] text-muted transition-colors hover:text-fg";
@@ -60,7 +52,7 @@ export default function InferenceReceiptsPost() {
         </p>
 
         <Image
-          src="/og/covenant-compute.jpg"
+          src="/blog/compute/covenant-compute.jpg"
           alt="Covenant Compute, verifiable inference network"
           width={1280}
           height={720}

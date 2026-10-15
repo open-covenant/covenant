@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/app/_metadata";
 import { SiteFooter } from "../SiteFooter";
 import { SiteHeader } from "../SiteHeader";
 import { GITHUB_REPO_URL } from "../_brand";
@@ -7,13 +8,13 @@ const TITLE = "Security";
 const DESCRIPTION =
   "How to report a vulnerability in Covenant, what's in scope, and the security posture: Apache-2.0 source, hash-chained audit, and on-chain attestation anyone can verify.";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata("/security", { title: "Security" }, {
   title: TITLE,
   description: DESCRIPTION,
   alternates: { canonical: "/security" },
   openGraph: { type: "website", url: "https://opencovenant.org/security", title: TITLE, description: DESCRIPTION },
   twitter: { card: "summary_large_image", site: "@OpenCovenant", creator: "@OpenCovenant", title: TITLE, description: DESCRIPTION },
-};
+});
 
 const eyebrow = "font-mono text-[11px] uppercase tracking-[0.3em] text-muted";
 const paragraph = "text-[13px] leading-relaxed text-fg-soft sm:text-[14px]";

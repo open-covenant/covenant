@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/app/_metadata";
 import Image from "next/image";
 import Link from "next/link";
 import { Menu } from "lucide-react";
@@ -9,7 +10,7 @@ import { Lockup, StaticField } from "../_visuals";
 const DESCRIPTION =
   "The Covenant identity at work: the website, social cards, profiles, documentation, print, slides and a poster.";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata("/brand/in-use", { title: "In use", section: "Brand guidelines" }, {
   title: "In use: Covenant brand guidelines",
   description: DESCRIPTION,
   alternates: { canonical: "/brand/in-use" },
@@ -18,9 +19,8 @@ export const metadata: Metadata = {
     url: "https://opencovenant.org/brand/in-use",
     title: "In use · Covenant brand guidelines",
     description: DESCRIPTION,
-    images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
   },
-};
+});
 
 function Browser({ url, children }: { url: string; children: React.ReactNode }) {
   return (

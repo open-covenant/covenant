@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/app/_metadata";
 import { CovenantMark, MARK_PATHS, RAMP } from "../../_brand";
 import { FieldSeam } from "../../FieldSeam";
 import { ModuleField } from "../../ModuleField";
@@ -9,7 +10,7 @@ import { moduleShape, rampAt, StaticField } from "../_visuals";
 const DESCRIPTION =
   "Covenant's imagery: a moving field built from the shapes of the mark. It forms the logo, separates sections on the website and carries launches and announcements.";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata("/brand/imagery", { title: "Imagery", section: "Brand guidelines" }, {
   title: "Imagery: Covenant brand guidelines",
   description: DESCRIPTION,
   alternates: { canonical: "/brand/imagery" },
@@ -18,9 +19,8 @@ export const metadata: Metadata = {
     url: "https://opencovenant.org/brand/imagery",
     title: "Imagery · Covenant brand guidelines",
     description: DESCRIPTION,
-    images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
   },
-};
+});
 
 const canvasFill = "[&>canvas]:block [&>canvas]:h-full [&>canvas]:w-full";
 

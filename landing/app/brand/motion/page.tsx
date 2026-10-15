@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/app/_metadata";
 import { CovenantMark } from "../../_brand";
 import { CurtainDemo, ResolveDemo, WordRevealDemo } from "../_demos";
 import { CodeBlock, MoreSections, PageHead, Panel, Part, Points, Rule, RuleGrid } from "../_kit";
@@ -6,7 +7,7 @@ import { CodeBlock, MoreSections, PageHead, Panel, Part, Points, Rule, RuleGrid 
 const DESCRIPTION =
   "How Covenant moves: one easing curve, a short set of durations, the word reveal, the opening animation, the field forming the mark, and reduced motion.";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata("/brand/motion", { title: "Motion", section: "Brand guidelines" }, {
   title: "Motion: Covenant brand guidelines",
   description: DESCRIPTION,
   alternates: { canonical: "/brand/motion" },
@@ -15,9 +16,8 @@ export const metadata: Metadata = {
     url: "https://opencovenant.org/brand/motion",
     title: "Motion · Covenant brand guidelines",
     description: DESCRIPTION,
-    images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
   },
-};
+});
 
 const DURATIONS = [
   { what: "Hover", value: "150 ms", detail: "Buttons rise 2 px; the primary button brightens 12%." },

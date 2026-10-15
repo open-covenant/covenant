@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/app/_metadata";
 import Link from "next/link";
 import { SiteFooter } from "../SiteFooter";
 import { SiteHeader } from "../SiteHeader";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata("/privacy", { title: "Privacy policy" }, {
   title: "Privacy Policy: Covenant",
   description:
     "Privacy policy for opencovenant.org, docs.opencovenant.org, and sandbox.opencovenant.org: what we collect, how we use it, and the third parties involved.",
@@ -14,7 +15,6 @@ export const metadata: Metadata = {
     title: "Privacy Policy: Covenant",
     description:
       "What Covenant's public sites collect, why, and the third parties involved.",
-    images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
   },
   twitter: {
     card: "summary_large_image",
@@ -23,9 +23,8 @@ export const metadata: Metadata = {
     title: "Privacy Policy: Covenant",
     description:
       "What Covenant's public sites collect, why, and the third parties involved.",
-    images: "/twitter-image.jpg",
   },
-};
+});
 
 const LAST_UPDATED = "2026-07-03";
 

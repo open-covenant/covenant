@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/app/_metadata";
 import { SiteFooter } from "../SiteFooter";
 import { SiteHeader } from "../SiteHeader";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata("/blog", { title: "Blog" }, {
   title: "Blog",
   description:
     "Notes from the Covenant build: integrations, the primitives behind the trust layer, and what actually ships.",
@@ -12,7 +13,6 @@ export const metadata: Metadata = {
     url: "https://opencovenant.org/blog",
     title: "Covenant Blog",
     description: "Notes from the build: integrations, primitives, and what ships.",
-    images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
   },
   twitter: {
     card: "summary_large_image",
@@ -20,9 +20,8 @@ export const metadata: Metadata = {
     creator: "@OpenCovenant",
     title: "Covenant Blog",
     description: "Notes from the build: integrations, primitives, and what ships.",
-    images: "/twitter-image.jpg",
   },
-};
+});
 
 type Post = { slug: string; date: string; title: string; dek: string; href?: string };
 

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/app/_metadata";
 import { AgentTerminal } from "../AgentTerminal";
 import { SiteFooter } from "../SiteFooter";
 import { SiteHeader } from "../SiteHeader";
@@ -7,13 +8,13 @@ const TITLE = "Build log";
 const DESCRIPTION =
   "Covenant is built in the open by the autonomous infrastructure it provides. Every commit runs under a signed grant and leaves a receipt. This is the live build log.";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata("/live", { title: "Covenant builds itself" }, {
   title: TITLE,
   description: DESCRIPTION,
   alternates: { canonical: "/live" },
   openGraph: { type: "website", url: "https://opencovenant.org/live", title: TITLE, description: DESCRIPTION },
   twitter: { card: "summary_large_image", site: "@OpenCovenant", creator: "@OpenCovenant", title: TITLE, description: DESCRIPTION },
-};
+});
 
 const eyebrow = "font-mono text-[11px] uppercase tracking-[0.3em] text-muted";
 const paragraph = "text-[13px] leading-relaxed text-fg-soft sm:text-[14px]";

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/app/_metadata";
 import Image from "next/image";
 import { CovenantMark, MARK_PATHS, RAMP } from "../../_brand";
 import { CopyFileButton } from "../CopyButton";
@@ -8,7 +9,7 @@ import { AppIcon, BrowserTab, ClearSpace, CoreDiagram, Lockup, MarkConstruction 
 const DESCRIPTION =
   "The Covenant logo: the mark and the lockup, their construction, the core, color versions, clear space, minimum sizes, icons, misuse and files.";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata("/brand/logo", { title: "Logo", section: "Brand guidelines" }, {
   title: "Logo: Covenant brand guidelines",
   description: DESCRIPTION,
   alternates: { canonical: "/brand/logo" },
@@ -17,9 +18,8 @@ export const metadata: Metadata = {
     url: "https://opencovenant.org/brand/logo",
     title: "Logo · Covenant brand guidelines",
     description: DESCRIPTION,
-    images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
   },
-};
+});
 
 // The mark with a fill of the example's choosing, for the misuse tiles.
 function Mark({

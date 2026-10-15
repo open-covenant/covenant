@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/app/_metadata";
 import { CovenantMark } from "../_brand";
 
 const DESCRIPTION =
@@ -7,7 +8,7 @@ const DESCRIPTION =
 // Unlinked by design — not in any nav/footer, and noindex so it is only reached
 // by people given the direct link. Also the print/PDF source: the @media print
 // block renders a full-bleed A4 page, on night like the site.
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata("/onepager", { title: "Covenant one-pager" }, {
   title: "Covenant — one pager",
   description: DESCRIPTION,
   alternates: { canonical: "/onepager" },
@@ -17,9 +18,8 @@ export const metadata: Metadata = {
     url: "https://opencovenant.org/onepager",
     title: "Covenant — verifiable trust & safe execution for AI agents on Solana",
     description: DESCRIPTION,
-    images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
   },
-};
+});
 
 const CSS = `
 @page { size: A4; margin: 0; }

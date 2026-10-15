@@ -20,11 +20,13 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 base64 = "0.22"
 bs58 = { workspace = true }
+k256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
 parking_lot = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+sha3 = "0.10"
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

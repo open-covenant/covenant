@@ -33,6 +33,7 @@ mod receipt;
 mod sign;
 mod speech;
 mod stream;
+mod swarm;
 mod tool;
 mod transcription;
 mod vault;
@@ -106,6 +107,9 @@ pub use speech::{
     SpeechResult, MAX_SPEECH_SPEED, MAX_SPEECH_TEXT_CHARS, MIN_SPEECH_SPEED,
 };
 pub use stream::{StreamChunk, StreamPush};
+pub use swarm::{
+    parse_swarm_input, swarm_input, SwarmOrder, MAX_SWARM_BODY_BYTES, SWARM_ACTIONS, SWARM_MODEL,
+};
 pub use tool::{
     assistant_output, parse_assistant_output, parse_tools_input, tools_input, AssistantReply,
     FunctionDefinition, NamedFunction, NamedToolChoice, RequestTools, ToolChoice, ToolChoiceMode,

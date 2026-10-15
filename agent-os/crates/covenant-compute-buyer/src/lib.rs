@@ -26,9 +26,10 @@ use covenant_compute_protocol::{
     parse_speech_input, payout_transaction_rpc_request, speech_input, tools_input,
     transcription_input, verify_payout_transaction, CancelRequest, CapabilityRequirement,
     ChatMessage, DisputeRequest, GenerationParams, JobEnvelopePayload, LeaseCloseRequest,
-    LeaseView, SignedWorkReceipt, SpeechInput, ToolChoiceMode, TranscriptionInput,
-    DEPOSIT_MEMO_PREFIX, MAX_AUDIO_B64_BYTES, MAX_DISPUTE_REASON_BYTES,
+    LeaseView, SignedWorkReceipt, SpeechInput, SwarmOrder, ToolChoiceMode, TranscriptionInput,
+    DEPOSIT_MEMO_PREFIX, MAX_AUDIO_B64_BYTES, MAX_DISPUTE_REASON_BYTES, SWARM_ACTIONS,
 };
+pub use covenant_compute_protocol::{swarm_input, SWARM_MODEL};
 use covenant_identity::LocalIdentity;
 use covenant_mcp::{Content, ToolSpec};
 use serde::Deserialize;
@@ -75,6 +76,7 @@ pub const EMBED_TOOL: &str = "compute.embed";
 pub const TRANSCRIBE_TOOL: &str = "compute.transcribe";
 pub const SPEAK_TOOL: &str = "compute.speak";
 pub const RUN_TOOL: &str = "compute.run";
+pub const SWARM_TOOL: &str = "compute.swarm";
 pub const RECEIPTS_TOOL: &str = "compute.receipts";
 pub const DEPOSIT_TOOL: &str = "compute.deposit";
 pub const BALANCE_TOOL: &str = "compute.balance";
@@ -964,6 +966,120 @@ impl RunArgs {
             return Err("command must not be empty".into());
         }
         Ok(vec![Content::text(command.to_string())])
+    }
+}
+
+/// How long a swarm order may take by default: IMD answers a job in
+/// minutes to hours, so a buy that gave it a minute would refund every
+/// time and cost the operator the payment it made.
+pub const DEFAULT_SWARM_DEADLINE_MS: u64 = 7_200_000;
+
+/// Arguments of `compute.swarm`: an IMD action and its body, bought as a
+/// batch job from an operator that relays the IMD swarm's work. Shared by
+/// the MCP server and the CLI.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SwarmArgs {
+    pub action: String,
+    pub body: serde_json::Value,
+    #[serde(default)]
+    pub min_reputation_bps: Option<u32>,
+    #[serde(default)]
+    pub price_micro_usdc: Option<u64>,
+    #[serde(default)]
+    pub deadline_ms: Option<u64>,
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+impl SwarmArgs {
+    /// The job input these arguments describe: the order as one JSON
+    /// block, checked for shape here so a body IMD would refuse never
+    /// reaches a node that pays for it.
+    pub fn input(&self) -> Result<Vec<Content>, String> {
+        let order = SwarmOrder::new(self.action.trim(), self.body.clone());
+        order.validate().map_err(|e| e.to_string())?;
+        Ok(swarm_input(&order))
+    }
+
+    /// The deadline a swarm buy uses: the caller's, or the swarm default
+    /// rather than the short default a shell command gets.
+    pub fn deadline_ms(&self) -> u64 {
+        self.deadline_ms.unwrap_or(DEFAULT_SWARM_DEADLINE_MS)
+    }
+}
+
+/// The `compute.swarm` MCP tool spec: work bought from the IMD swarm
+/// through a Covenant operator, paid in USDC like any other job.
+pub fn swarm_tool_spec(max_price_micro_usdc: u64) -> ToolSpec {
+    let actions: Vec<&str> = SWARM_ACTIONS.iter().map(|(name, _)| *name).collect();
+    ToolSpec {
+        name: SWARM_TOOL.into(),
+        description: format!(
+            "Buy work from the IMD agent swarm (identity.md, api.imd.fun) through a Covenant \
+             operator: a research report, an audit of a public repository, an image, a \
+             website, a contract project, or an oracle question answered by a panel of \
+             agents. Pass the IMD action ({}) and the body IMD's docs describe for it; the \
+             operator pays IMD on chain, follows the job, and returns the accepted files \
+             (text ones inline, with hashes and URLs) under its signed receipt. The buyer \
+             is refunded if IMD delivers nothing. The body is public: IMD workers read it \
+             and it is written to a chain, so never put secrets in it. Results take minutes \
+             to hours; the default deadline is two hours. Price per call is capped at \
+             {max_price_micro_usdc} micro-USDC.",
+            actions.join(", ")
+        ),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": actions,
+                    "description": "The IMD action: job.open for a job, job.continue for the \
+                                    next version of a project this buyer opened here, \
+                                    oracle.request for a panel-answered question."
+                },
+                "body": {
+                    "type": "object",
+                    "description": "The action's body exactly as IMD's docs describe it \
+                                    (https://imd.fun/docs/): for a job an objective plus a \
+                                    skill, template, steps or contracts, optional repoUrl and \
+                                    baseCommit of a public repository, outputs; for an \
+                                    oracle question v, question, chainId, window, answerType, \
+                                    panelSize, quorum, validForSeconds. Launch, deployment \
+                                    and cross-chain delivery fields are refused."
+                },
+                "min_reputation_bps": {
+                    "type": "integer",
+                    "description": "Require operators rated at least this many basis points \
+                                    (8000 = 80%). Omit for no floor. 1..=10000."
+                },
+                "price_micro_usdc": {
+                    "type": "integer",
+                    "description": "Offered price in micro-USDC; defaults to the cheapest swarm \
+                                    operator's ask. A swarm operator refuses an offer below \
+                                    the live cost of 0.5 IMD plus its margin."
+                },
+                "deadline_ms": {
+                    "type": "integer",
+                    "description": "Job deadline in milliseconds; defaults to 7200000 (two \
+                                    hours). Operators refuse deadlines under their floor, \
+                                    thirty minutes by default."
+                },
+                "idempotency_key": {
+                    "type": "string",
+                    "description": "Makes the purchase exactly-once: calls repeating this key \
+                                    return the first call's result and never pay twice. \
+                                    1..=128 bytes."
+                },
+                "dry_run": {
+                    "type": "boolean",
+                    "description": "Preview only: resolve the price, routing and deadline and \
+                                    return them without buying."
+                }
+            },
+            "required": ["action", "body"]
+        }),
     }
 }
 

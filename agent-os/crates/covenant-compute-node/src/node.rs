@@ -977,13 +977,24 @@ where
         escrow_hold: &EscrowHoldAttestation,
         _operator: &AgentId,
     ) -> Result<(), AdmissionError> {
+        let now_ms = epoch_ms();
         let ctx = AdmissionContext {
             local_profile: &self.profile,
             coordinator_pubkey_b58: &self.config.coordinator_pubkey_b58,
             max_in_flight: self.config.max_in_flight,
             in_flight: self.in_flight.load(Ordering::SeqCst),
-            now_ms: epoch_ms(),
+            now_ms,
         };
-        admit_job(envelope, escrow_hold, &ctx)
+        admit_job(envelope, escrow_hold, &ctx)?;
+        // The executor's own look, with the time the buyer's absolute
+        // deadline still leaves (the same figure execution budgets by).
+        let remaining = envelope
+            .payload
+            .issued_at_ms
+            .saturating_add(envelope.payload.deadline_ms)
+            .saturating_sub(now_ms);
+        self.executor
+            .admit(&envelope.payload, Duration::from_millis(remaining))
+            .map_err(AdmissionError::ExecutorRefused)
     }
 }

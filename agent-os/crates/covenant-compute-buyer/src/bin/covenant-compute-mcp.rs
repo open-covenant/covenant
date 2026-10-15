@@ -40,16 +40,17 @@ use covenant_compute_buyer::{
     hire_agent, hire_fix, infer_tool_spec, list_verified_jobs, list_withdrawals, output_tool_spec,
     prepare_agent_task, prepare_fix_order, preview_value, quote_price, receipts_tool_spec,
     run_tool_spec, save_speech_clip, sign_envelope, speak_tool_spec, stream_and_verify,
-    stream_poll_tool_spec, stream_start_tool_spec, submit_streaming, transcribe_tool_spec,
-    verify_payout, verify_tool_spec, withdraw, withdraw_tool_spec, withdrawals_tool_spec,
-    AgentArgs, AgentOutcome, BuyerConfig, BuyerError, CancelArgs, DisputeArgs, EmbedArgs,
-    FixOutcome, InferArgs, JobOutputView, JobRequest, OutputArgs, PurchaseBook, PurchaseEntry,
-    RunArgs, SpeakArgs, SpendCaps, StreamJobs, StreamPollArgs, TranscribeArgs, VerifyArgs,
-    WithdrawArgs, AGENT_TOOL, BALANCE_TOOL, CANCEL_TOOL, CAPACITY_TOOL, DEFAULT_AGENT_DEADLINE_MS,
-    DEFAULT_AGENT_OFFER_MICRO_USDC, DEFAULT_FIX_DEADLINE_MS, DEFAULT_FIX_OFFER_MICRO_USDC,
-    DEPOSIT_TOOL, DISPUTE_TOOL, EMBED_TOOL, FIX_TOOL, INFER_TOOL, OUTPUT_TOOL, RECEIPTS_TOOL,
-    RUN_TOOL, SPEAK_TOOL, STREAM_POLL_TOOL, STREAM_START_TOOL, TRANSCRIBE_TOOL, VERIFY_TOOL,
-    WITHDRAWALS_TOOL, WITHDRAW_TOOL,
+    stream_poll_tool_spec, stream_start_tool_spec, submit_streaming, swarm_tool_spec,
+    transcribe_tool_spec, verify_payout, verify_tool_spec, withdraw, withdraw_tool_spec,
+    withdrawals_tool_spec, AgentArgs, AgentOutcome, BuyerConfig, BuyerError, CancelArgs,
+    DisputeArgs, EmbedArgs, FixOutcome, InferArgs, JobOutputView, JobRequest, OutputArgs,
+    PurchaseBook, PurchaseEntry, RunArgs, SpeakArgs, SpendCaps, StreamJobs, StreamPollArgs,
+    SwarmArgs, TranscribeArgs, VerifyArgs, WithdrawArgs, AGENT_TOOL, BALANCE_TOOL, CANCEL_TOOL,
+    CAPACITY_TOOL, DEFAULT_AGENT_DEADLINE_MS, DEFAULT_AGENT_OFFER_MICRO_USDC,
+    DEFAULT_FIX_DEADLINE_MS, DEFAULT_FIX_OFFER_MICRO_USDC, DEPOSIT_TOOL, DISPUTE_TOOL, EMBED_TOOL,
+    FIX_TOOL, INFER_TOOL, OUTPUT_TOOL, RECEIPTS_TOOL, RUN_TOOL, SPEAK_TOOL, STREAM_POLL_TOOL,
+    STREAM_START_TOOL, SWARM_MODEL, SWARM_TOOL, TRANSCRIBE_TOOL, VERIFY_TOOL, WITHDRAWALS_TOOL,
+    WITHDRAW_TOOL,
 };
 use covenant_compute_protocol::{parse_speech_output, JobKind};
 use covenant_identity::LocalIdentity;
@@ -507,6 +508,38 @@ async fn call_run(state: &ServerState, id: Value, arguments: Value) -> Value {
         args.min_reputation_bps,
         args.price_micro_usdc,
         args.deadline_ms,
+        args.idempotency_key,
+        args.dry_run,
+        OutputRender::Inline,
+    )
+    .await
+}
+
+/// `compute.swarm`: work bought from the IMD swarm through a swarm
+/// operator, routed by the model label every swarm node advertises and
+/// given the long deadline swarm work needs. Same spend caps as every
+/// other purchase; the price cap must be raised for it, since one order
+/// costs more than a shell command.
+async fn call_swarm(state: &ServerState, id: Value, arguments: Value) -> Value {
+    let args: SwarmArgs = match serde_json::from_value(arguments) {
+        Ok(args) => args,
+        Err(e) => return error(id, -32602, format!("invalid arguments: {e}")),
+    };
+    let input = match args.input() {
+        Ok(input) => input,
+        Err(e) => return error(id, -32602, format!("invalid arguments: {e}")),
+    };
+    dispatch_with_caps(
+        state,
+        id,
+        JobKind::BatchJob,
+        input,
+        Some(SWARM_MODEL.to_string()),
+        None,
+        None,
+        args.min_reputation_bps,
+        args.price_micro_usdc,
+        Some(args.deadline_ms()),
         args.idempotency_key,
         args.dry_run,
         OutputRender::Inline,
@@ -1467,6 +1500,7 @@ async fn handle_line(state: &Arc<ServerState>, line: &str) -> Option<Value> {
                 output_tool_spec(),
                 agent_tool_spec(state.caps.max_price_micro_usdc()),
                 fix_tool_spec(state.caps.max_price_micro_usdc()),
+                swarm_tool_spec(state.caps.max_price_micro_usdc()),
             ] }),
         )),
         "tools/call" => {
@@ -1492,6 +1526,7 @@ async fn handle_line(state: &Arc<ServerState>, line: &str) -> Option<Value> {
                 OUTPUT_TOOL => Some(call_output(state, id, arguments).await),
                 AGENT_TOOL => Some(call_agent(state, id, arguments).await),
                 FIX_TOOL => Some(call_fix(state, id, arguments).await),
+                SWARM_TOOL => Some(call_swarm(state, id, arguments).await),
                 _ => Some(error(id, -32602, format!("unknown tool: {name}"))),
             }
         }
@@ -1907,9 +1942,39 @@ mod tests {
                 VERIFY_TOOL,
                 OUTPUT_TOOL,
                 AGENT_TOOL,
-                FIX_TOOL
+                FIX_TOOL,
+                SWARM_TOOL
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn swarm_refuses_a_malformed_order_before_any_network() {
+        let state = test_state(1_000, None);
+        // A launch is not sold through a swarm node; the body never
+        // reaches a coordinator, let alone a node that would pay for it.
+        let reply = handle_line(
+            &state,
+            r#"{"jsonrpc":"2.0","id":41,"method":"tools/call","params":{"name":"compute.swarm","arguments":{"action":"launch.open","body":{"objective":"x","skill":"y"}}}}"#,
+        )
+        .await
+        .unwrap();
+        assert_eq!(reply["error"]["code"], -32602, "{reply}");
+        assert!(
+            reply["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("not sold"),
+            "{reply}"
+        );
+        // A job body missing its work is refused the same way.
+        let reply = handle_line(
+            &state,
+            r#"{"jsonrpc":"2.0","id":42,"method":"tools/call","params":{"name":"compute.swarm","arguments":{"action":"job.open","body":{"objective":"only words"}}}}"#,
+        )
+        .await
+        .unwrap();
+        assert_eq!(reply["error"]["code"], -32602, "{reply}");
     }
 
     #[tokio::test]

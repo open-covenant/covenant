@@ -230,6 +230,17 @@ pub trait JobExecutor: Send + Sync {
         self.execute(job, deadline).await
     }
 
+    /// A last look at an offer before the node accepts it, after the
+    /// envelope, escrow and capability checks passed. An executor that
+    /// sells something narrower than its job kind (a swarm node serves
+    /// `batch_job`, but only swarm orders it can afford) refuses here with
+    /// a reason the coordinator records; the job is re-matched elsewhere
+    /// and nobody is faulted. `remaining` is the time left until the
+    /// buyer's deadline. The default admits everything.
+    fn admit(&self, _job: &JobEnvelopePayload, _remaining: Duration) -> Result<(), String> {
+        Ok(())
+    }
+
     /// Whether the backend can serve a job right now. The serve loop
     /// asks between jobs; an `Err` pauses job intake and reports the
     /// node offline until a later call succeeds, so an operator whose

@@ -29,9 +29,9 @@ use covenant_compute_buyer::{
     hire_fix, http_client, lease_view, list_verified_jobs, list_withdrawals, prepare_agent_task,
     prepare_fix_order, preview_value, sign_envelope, submit_streaming, vault_delete, vault_fetch,
     vault_list, vault_store, verify_payout, withdraw, AgentArgs, AgentOutcome, BuyerConfig,
-    DispatchOutcome, FixOutcome, JobRequest, PriceQuote, PurchaseBook, PurchaseEntry, VaultKeyring,
-    DEFAULT_AGENT_DEADLINE_MS, DEFAULT_AGENT_OFFER_MICRO_USDC, DEFAULT_FIX_DEADLINE_MS,
-    DEFAULT_FIX_OFFER_MICRO_USDC,
+    DispatchOutcome, FixOutcome, JobRequest, PriceQuote, PurchaseBook, PurchaseEntry, SwarmArgs,
+    VaultKeyring, DEFAULT_AGENT_DEADLINE_MS, DEFAULT_AGENT_OFFER_MICRO_USDC,
+    DEFAULT_FIX_DEADLINE_MS, DEFAULT_FIX_OFFER_MICRO_USDC, SWARM_MODEL,
 };
 use covenant_compute_protocol::{
     chat_input, generation_input, lease_input, parse_assistant_output, parse_embedding_output,
@@ -60,6 +60,7 @@ Usage:
   covenant-compute transcribe --audio <path>    buy one speech-to-text transcription
   covenant-compute speak <text>                 buy one text-to-speech clip ('-' reads stdin)
   covenant-compute run <command>                buy one batch command ('-' reads stdin)
+  covenant-compute swarm --action <a> --body <json|@file|->   buy work from the IMD swarm through a swarm operator
   covenant-compute receipts                     your verified job history
   covenant-compute output <job-id>              re-read a past job's verified output
   covenant-compute verify <job-id>              hold the chain to a job's payout
@@ -122,6 +123,14 @@ Lease flags (lease open):
   --wait-secs <n>       how long to wait for the machine to come up (default 240)
   --no-wait             return as soon as the lease is placed, before the machine answers
   --gpu-class, --min-vram-gb, --min-reputation-bps   constrain supply as for a buy
+Swarm flags (swarm):
+  --action <a>          job.open, job.continue, or oracle.request
+  --body <v>            the action's body as IMD's docs describe it: inline JSON, @path to a
+                        JSON file, or '-' for stdin. Launch and delivery fields are refused.
+                        The body is public: IMD workers read it and it is written to a chain.
+  --price, --deadline-ms, --min-reputation-bps, --idempotency-key, --dry-run   as for a buy;
+                        the deadline defaults to two hours, since the swarm answers in
+                        minutes to hours
 Agent flags (agent, fix):
   --repo <path|url>     a local git repository (sent as a bundle) or a public https URL
   --commit <sha>        the commit to work from; defaults to the local repository's HEAD
@@ -309,6 +318,58 @@ async fn main() -> anyhow::Result<()> {
                 min_reputation_bps,
                 price,
                 deadline_ms,
+                json_out,
+                false,
+                idempotency_key,
+                dry_run,
+            )
+            .await
+        }
+        "swarm" => {
+            let action = take_flag_value(&mut args, "--action")
+                .context("--action is required: job.open, job.continue or oracle.request")?;
+            let body_arg = take_flag_value(&mut args, "--body")
+                .context("--body is required: inline JSON, @path, or '-' for stdin")?;
+            let body_text = if let Some(path) = body_arg.strip_prefix('@') {
+                std::fs::read_to_string(path).with_context(|| format!("read {path}"))?
+            } else {
+                resolve_text(body_arg)?
+            };
+            let body: serde_json::Value =
+                serde_json::from_str(&body_text).context("--body must be JSON")?;
+            let min_reputation_bps: Option<u32> = take_number(
+                &mut args,
+                "--min-reputation-bps",
+                "a whole number of basis points (8000 = 80%)",
+            )?;
+            let price = take_price(&mut args)?;
+            let deadline_ms = take_flag_value(&mut args, "--deadline-ms")
+                .map(|v| v.parse())
+                .transpose()
+                .context("--deadline-ms must be a whole number of milliseconds")?;
+            let idempotency_key = take_flag_value(&mut args, "--idempotency-key");
+            let dry_run = take_flag(&mut args, "--dry-run");
+            reject_stray_flags(&mut args)?;
+            let swarm = SwarmArgs {
+                action,
+                body,
+                min_reputation_bps,
+                price_micro_usdc: price,
+                deadline_ms,
+                idempotency_key: idempotency_key.clone(),
+                dry_run,
+            };
+            let input = swarm.input().map_err(|e| anyhow::anyhow!(e))?;
+            cmd_buy(
+                &load_ctx()?,
+                JobKind::BatchJob,
+                input,
+                Some(SWARM_MODEL.to_string()),
+                None,
+                None,
+                min_reputation_bps,
+                price,
+                Some(swarm.deadline_ms()),
                 json_out,
                 false,
                 idempotency_key,

@@ -135,6 +135,31 @@ OpenAI-compatible backend as `image_url` content parts.
   spend plus the coordinator's markup when the work passes, and the check
   price for every check it completes. Seats on one task never share a
   stake owner.
+- **`imd`** — sells the IMD agent swarm's work (identity.md, api.imd.fun)
+  as `batch_job` jobs under the model label `imd-swarm`. The node runs
+  nothing itself: for each job it buys the same work from IMD with one
+  transaction through IMD's Intake contract (0.5 IMD, the payment and the
+  ask in one call, on Robinhood Chain by default), follows the order on
+  IMD's control plane, and relays the accepted files as the job's output
+  under its own signed receipt. Buyers send a swarm order (`compute.swarm`,
+  or `swarm` on the CLI): a research report, an audit of a public
+  repository, an image, a website, a contract project, or an oracle
+  question. Launches and workflows are not sold, since the wallet that
+  pays IMD would own what they deploy. IMD refunds nothing, so the node
+  pays only after IMD's free check passes, refuses any offer below the
+  live cost of 0.5 IMD plus its margin (read from a price feed, or fixed
+  with `COVENANT_COMPUTE_IMD_PRICE_USD`), refuses deadlines under its floor,
+  and writes every payment to `imd-orders.jsonl` before broadcasting it, so
+  a node that dies mid-job resumes the same order on recovery instead of
+  paying twice. A job IMD refuses, blocks or cancels fails here and refunds
+  the buyer; the 0.5 IMD is the operator's loss. Needs the wallet's key in
+  the file named by `COVENANT_COMPUTE_IMD_KEY_FILE`, funded with the chain's
+  native coin for gas and with IMD; the boot probe and every health check
+  confirm the control plane answers, the chain is the configured one, the
+  wallet is funded and the price is under the ceiling, and the node reports
+  offline until all four hold. Set the ask with
+  `COVENANT_COMPUTE_NODE_PRICE_MICRO_USDC` (5,000,000, five dollars, is the
+  reference ask while IMD trades near seven dollars).
 - **`echo`** — a loopback for wiring tests.
 - **`lease-stub`** — serves `lease_session` jobs like `broker` but rents
   no machine. It hands back a placeholder address and holds the lease
@@ -149,7 +174,10 @@ it (`COVENANT_COMPUTE_NODE_SKIP_BENCHMARK=1` opts out for loopback
 rigs). A lease is the exception, whether served by `broker` or
 `lease-stub`. A lease has no known answer, and the only way to
 demonstrate one at boot would be to rent a machine before a buyer has
-paid, so a lease's capacity is proven per rental instead.
+paid, so a lease's capacity is proven per rental instead. A swarm order
+is the other exception, for the same reason: its only self-test is a
+paid order on IMD, so the `imd` executor proves what it can for free at
+boot (plane, chain, wallet, price) and the order itself when a buyer pays.
 Admission is fail-closed — a job that doesn't match the declared
 profile, price or deadline is rejected before it executes.
 
@@ -285,15 +313,38 @@ rather than refusing to start, so check the boot log after changing one.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `COVENANT_COMPUTE_NODE_EXECUTOR` | `subprocess` | `ollama`, `openai-compat`, `whisper`, `say`, `container`, `subprocess`, `broker`, `echo`, or `lease-stub`. |
+| `COVENANT_COMPUTE_NODE_EXECUTOR` | `subprocess` | `ollama`, `openai-compat`, `whisper`, `say`, `container`, `subprocess`, `broker`, `agent`, `imd`, `echo`, or `lease-stub`. |
 | `COVENANT_COMPUTE_NODE_HARDWARE` | `cpu` | Hardware class advertised. A GPU (NVIDIA, or Apple Silicon on macOS) is auto-detected when this is unset. |
 | `COVENANT_COMPUTE_NODE_VRAM_GB` | `0` | Advertised VRAM, for jobs that require a minimum. An override of the width only: setting it does not suppress GPU detection, so a GPU box that sets just this still advertises its detected card. |
 | `COVENANT_COMPUTE_NODE_MODELS` | (backend's list) | Models advertised. An inference backend reports its own served models when this is unset. |
-| `COVENANT_COMPUTE_NODE_JOB_KINDS` | inference or batch | `inference_call` for the inference executors, `batch_job` otherwise. Set `embedding` to serve embeddings from an inference backend that hosts an embedding model (or pass `setup --job-kinds embedding`), and the boot benchmark proves that claim with a real embedding rather than a chat probe. Comma-separated to serve several. The boot fails if a kind isn't servable by the executor (inference and embedding need `ollama`/`openai-compat`; transcription needs `whisper`; speech synthesis needs `say`; batch needs `subprocess`/`container`; a lease session needs `broker` or `lease-stub`), so a node never sells compute it would mis-execute. |
+| `COVENANT_COMPUTE_NODE_JOB_KINDS` | inference or batch | `inference_call` for the inference executors, `batch_job` otherwise. Set `embedding` to serve embeddings from an inference backend that hosts an embedding model (or pass `setup --job-kinds embedding`), and the boot benchmark proves that claim with a real embedding rather than a chat probe. Comma-separated to serve several. The boot fails if a kind isn't servable by the executor (inference and embedding need `ollama`/`openai-compat`; transcription needs `whisper`; speech synthesis needs `say`; batch needs `subprocess`/`container`/`imd`; a lease session needs `broker` or `lease-stub`), so a node never sells compute it would mis-execute. |
 | `COVENANT_COMPUTE_NODE_PRICE_MICRO_USDC` | `1000` | This node's ask. |
 | `COVENANT_COMPUTE_NODE_PRICE_UNIT` | `per_job` | `per_job`, `per_million_tokens`, `per_gpu_second`, or `per_lease_hour`. |
 | `COVENANT_COMPUTE_NODE_MAX_FEE_BPS` | (unbounded) | Refuse to serve a coordinator whose disclosed marketplace fee exceeds this. |
 | `COVENANT_COMPUTE_REFERRAL_CODE` | (none) | Signed into registration so the partner who onboarded this node earns their fee share. |
+
+**IMD swarm executor** (`COVENANT_COMPUTE_NODE_EXECUTOR=imd`)
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `COVENANT_COMPUTE_IMD_RPC_URL` | (required) | JSON-RPC endpoint of the chain the node pays IMD on. |
+| `COVENANT_COMPUTE_IMD_KEY_FILE` | (required) | File holding the hex private key of the wallet that pays IMD. Owner-only permissions; never logged. Fund it with the chain's native coin for gas and with IMD. |
+| `COVENANT_COMPUTE_IMD_CHAIN_ID` | `4663` | The chain: Robinhood Chain `4663`, Ethereum `1`, or Sepolia `11155111` (oracle questions only there). |
+| `COVENANT_COMPUTE_IMD_INTAKE` | `0xa43e6f75ee006411f79ac1c84120606c2330de82` | IMD's Intake v2, the same address on every chain it serves. |
+| `COVENANT_COMPUTE_IMD_TOKEN` | the chain's IMD | The IMD token the Intake pulls. Known for the three chains above; required elsewhere. |
+| `COVENANT_COMPUTE_IMD_PRICE_WEI` | `500000000000000000` | What one action costs, in atomic IMD (0.5 IMD). |
+| `COVENANT_COMPUTE_IMD_PRICE_USD` | (feed) | A fixed IMD price in USD instead of the feed, for rigs and tests. |
+| `COVENANT_COMPUTE_IMD_PRICE_SOURCE_URL` | DexScreener, the token on this chain | Where the IMD price is read when it is not fixed; the deepest pool on the chain wins. Read every ten minutes. |
+| `COVENANT_COMPUTE_IMD_MAX_COST_MICRO_USDC` | `4500000` | The most one action may cost at the live price. Above it the node reports offline rather than serve at a loss. |
+| `COVENANT_COMPUTE_IMD_MIN_MARGIN_MICRO_USDC` | `500000` | What an offer must carry above the live cost; a lower offer is refused at admission and re-matched elsewhere. |
+| `COVENANT_COMPUTE_IMD_MIN_DEADLINE_SECS` | `1800` | The least time a job may have left. IMD answers in minutes to hours. |
+| `COVENANT_COMPUTE_IMD_ACTIONS` | `job.open,job.continue,oracle.request` | The actions this node sells. Launches and workflows cannot be named here. |
+| `COVENANT_COMPUTE_IMD_API_URL` | `https://api.imd.fun` | IMD's control plane. |
+| `COVENANT_COMPUTE_IMD_EXPLORER_URL` | `https://explorer.imd.fun` | The explorer linked in every result. |
+| `COVENANT_COMPUTE_IMD_POLL_SECS` | `15` | How often the node asks the plane about an order. Public reads are capped at 120 a minute per address. |
+| `COVENANT_COMPUTE_IMD_TX_TIMEOUT_SECS` | `180` | How long a payment transaction may take to mine before the job fails. |
+| `COVENANT_COMPUTE_IMD_MAX_INLINE_BYTES` | `1048576` | Text artifacts up to this size ride back inline, hash-checked; larger or binary ones by URL and hash. |
+| `COVENANT_COMPUTE_IMD_MIN_GAS_WEI` | `100000000000000` | The least native balance the wallet must hold for gas before the node serves. |
 
 **Ollama executor**
 

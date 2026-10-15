@@ -23,7 +23,7 @@ The network-level map lives at
 }
 ```
 
-Nineteen tools:
+Twenty tools:
 
 | Tool | What it buys or shows |
 | --- | --- |
@@ -34,6 +34,7 @@ Nineteen tools:
 | `compute.run` | one batch command — it executes on a stranger's machine, and the tool description says so |
 | `compute.agent` | hire a coding agent for one task in a git repository; another operator runs your acceptance commands on its patch, and only work that passes is charged (see `agent` under the CLI) |
 | `compute.fix` | hire a crew to fix a bug: one agent writes tests that reproduce it, another fixes it against them, and only a fix that passes is charged (see `fix` under the CLI) |
+| `compute.swarm` | buy work from the IMD agent swarm through a swarm operator: a research report, an audit of a public repository, an image, a website, a contract project, or an oracle question answered by a panel. Pass the IMD `action` and `body`; the operator pays IMD on chain and returns the accepted files under its receipt, and a job IMD never delivers is refunded. The body is public. Results take minutes to hours, so the default deadline is two hours, and one order costs more than a shell command, so raise `COVENANT_COMPUTE_MAX_PRICE_MICRO_USDC` to cover it |
 | `compute.stream_start` | `compute.infer`, returning the job id immediately so the output can be read as it generates |
 | `compute.stream_poll` | cursor-read a streaming job's live chunks; the concluding poll carries the verified output and receipt |
 | `compute.receipts` | your verified job history; unpaid rows name their `refund_reason` |
@@ -461,6 +462,7 @@ covenant-compute embed "your text"               # buy one embedding vector
 covenant-compute transcribe --audio clip.wav     # buy one speech-to-text transcription
 covenant-compute speak "your text"               # buy one text-to-speech clip
 covenant-compute run "your command"              # buy one batch command
+covenant-compute swarm --action job.open --body @job.json   # buy work from the IMD swarm
 covenant-compute receipts                        # your verified job history
 covenant-compute output <job-id>                 # re-read a past job's verified output
 covenant-compute verify <job-id>                 # hold the chain to a payout
@@ -491,7 +493,12 @@ and they matter most for `run`, which has no model to route by.
 `--min-reputation-bps` (basis points, `8000` = 80%) confines the job to
 operators rated at or above it; a job no operator clears refunds rather
 than run on a lesser one.
-`--deadline-ms` bounds the job. On `infer`, `--system` sends a system
+`--deadline-ms` bounds the job. `swarm` takes `--action` (`job.open`,
+`job.continue` or `oracle.request`) and `--body` (inline JSON, `@path`, or
+`-` for stdin) in the shape IMD's docs give the action; it is checked
+locally and refused before anything is signed when it names a launch,
+a deployment or a cross-chain delivery, which swarm nodes do not sell, and
+its deadline defaults to two hours. On `infer`, `--system` sends a system
 prompt ahead of yours, `--image <path>` attaches a local image to your
 prompt for a vision model and repeats for several, `--messages-file <path>`
 sends a full multi-turn conversation as JSON `[{"role","content"},…]` (`-`

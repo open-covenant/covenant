@@ -35,11 +35,11 @@ use covenant_compute_node::{
     audit_paid_entry, ollama, openai_compat, reconcile_paid_rows, run_benchmark, AgentConfig,
     AgentCredential, AgentExecutor, BenchmarkSpec, BrokerConfig, BrokerSessionBackend, ChunkSink,
     ContainerConfig, ContainerJobExecutor, Coordinator, EarningsLedger, EarningsStatus,
-    EchoExecutor, ExecutionOutcome, ExecutorError, HttpCoordinatorClient, JobExecutor,
-    JsonlEarningsLedger, LeaseControl, LeaseExecutor, Node, NodeConfig, NodeError, OfferNotes,
-    OllamaExecutor, OpenAiCompatExecutor, SayExecutor, StubSessionBackend, SubprocessJobExecutor,
-    WhisperExecutor, DEFAULT_SAY_BIN, DEFAULT_WHISPER_BIN, READY_POLL_INTERVAL, READY_TIMEOUT,
-    SERVICE_USAGE, SETUP_USAGE,
+    EchoExecutor, ExecutionOutcome, ExecutorError, HttpCoordinatorClient, ImdConfig, ImdExecutor,
+    JobExecutor, JsonlEarningsLedger, LeaseControl, LeaseExecutor, Node, NodeConfig, NodeError,
+    OfferNotes, OllamaExecutor, OpenAiCompatExecutor, SayExecutor, StubSessionBackend,
+    SubprocessJobExecutor, WhisperExecutor, DEFAULT_SAY_BIN, DEFAULT_WHISPER_BIN,
+    READY_POLL_INTERVAL, READY_TIMEOUT, SERVICE_USAGE, SETUP_USAGE,
 };
 use covenant_compute_protocol::{
     canonical_model, coordinator_reason, payout_transaction_rpc_request, speech_input,
@@ -413,7 +413,7 @@ fn kind_label(kind: JobKind) -> &'static str {
 fn servable_kinds(executor_kind: &str) -> Option<&'static [JobKind]> {
     match executor_kind {
         "ollama" | "openai-compat" => Some(&[JobKind::InferenceCall, JobKind::Embedding]),
-        "subprocess" | "container" => Some(&[JobKind::BatchJob]),
+        "subprocess" | "container" | "imd" => Some(&[JobKind::BatchJob]),
         "whisper" => Some(&[JobKind::Transcription]),
         "say" => Some(&[JobKind::SpeechSynthesis]),
         "broker" | "lease-stub" => Some(&[JobKind::LeaseSession]),
@@ -637,6 +637,12 @@ async fn resolve_models_served(executor_kind: &str) -> anyhow::Result<Vec<String
             models.extend(agent_check_images());
             Ok(models)
         }
+        // A swarm node serves one thing, the IMD swarm, under the label a
+        // buyer's swarm order requires; `any` would pull shell commands
+        // onto a node that pays IMD for every job it accepts.
+        Err(_) if executor_kind == "imd" => {
+            Ok(vec![covenant_compute_protocol::SWARM_MODEL.to_string()])
+        }
         Err(_) => Ok(vec!["any".into()]),
     }
 }
@@ -664,6 +670,7 @@ enum NodeExecutor {
     Say(SayExecutor),
     Lease(LeaseExecutor),
     Agent(Box<AgentExecutor>),
+    Imd(Box<ImdExecutor>),
 }
 
 #[async_trait]
@@ -683,6 +690,7 @@ impl JobExecutor for NodeExecutor {
             NodeExecutor::Say(e) => e.execute(job, deadline).await,
             NodeExecutor::Lease(e) => e.execute(job, deadline).await,
             NodeExecutor::Agent(e) => e.execute(job, deadline).await,
+            NodeExecutor::Imd(e) => e.execute(job, deadline).await,
         }
     }
 
@@ -706,6 +714,25 @@ impl JobExecutor for NodeExecutor {
             NodeExecutor::Say(e) => e.execute_streaming(job, deadline, sink).await,
             NodeExecutor::Lease(e) => e.execute_streaming(job, deadline, sink).await,
             NodeExecutor::Agent(e) => e.execute_streaming(job, deadline, sink).await,
+            NodeExecutor::Imd(e) => e.execute_streaming(job, deadline, sink).await,
+        }
+    }
+
+    // Same rule again: a swarm node's refusals (an unaffordable offer, a
+    // shell command, a launch) live in its own `admit`, and the enum must
+    // carry them or the default would accept every batch job.
+    fn admit(&self, job: &JobEnvelopePayload, remaining: Duration) -> Result<(), String> {
+        match self {
+            NodeExecutor::Echo(e) => e.admit(job, remaining),
+            NodeExecutor::Subprocess(e) => e.admit(job, remaining),
+            NodeExecutor::Container(e) => e.admit(job, remaining),
+            NodeExecutor::Ollama(e) => e.admit(job, remaining),
+            NodeExecutor::OpenAiCompat(e) => e.admit(job, remaining),
+            NodeExecutor::Whisper(e) => e.admit(job, remaining),
+            NodeExecutor::Say(e) => e.admit(job, remaining),
+            NodeExecutor::Lease(e) => e.admit(job, remaining),
+            NodeExecutor::Agent(e) => e.admit(job, remaining),
+            NodeExecutor::Imd(e) => e.admit(job, remaining),
         }
     }
 
@@ -722,6 +749,7 @@ impl JobExecutor for NodeExecutor {
             NodeExecutor::Say(e) => e.health().await,
             NodeExecutor::Lease(e) => e.health().await,
             NodeExecutor::Agent(e) => e.health().await,
+            NodeExecutor::Imd(e) => e.health().await,
         }
     }
 }
@@ -2928,12 +2956,36 @@ async fn main() -> anyhow::Result<()> {
             executor.ensure_images_present().await;
             NodeExecutor::Agent(Box::new(executor))
         }
+        "imd" => {
+            // The swarm node runs nothing: it pays IMD for each job and
+            // relays the result. Its wallet, chain and price guards are
+            // read here; the key never leaves the executor.
+            let config = ImdConfig::from_environment(&home)?;
+            let executor = ImdExecutor::new(config)?;
+            let config = executor.config();
+            tracing::info!(
+                api = %config.api_url,
+                chain_id = config.chain_id,
+                wallet = %executor.wallet(),
+                intake = %config.intake,
+                token = %config.token,
+                price_wei = config.price_wei,
+                max_cost_micro_usdc = config.max_cost_micro_usdc,
+                min_margin_micro_usdc = config.min_margin_micro_usdc,
+                min_deadline_secs = config.min_deadline.as_secs(),
+                actions = ?config.actions,
+                orders = %config.orders_path.display(),
+                "executor: imd (buys each job from the IMD swarm through its Intake contract and \
+                 relays the result)"
+            );
+            NodeExecutor::Imd(Box::new(executor))
+        }
         // A typo must not silently run strangers' code with LESS
         // isolation than the operator configured.
         other => anyhow::bail!(
             "COVENANT_COMPUTE_NODE_EXECUTOR must be one of \
-             echo|subprocess|container|ollama|openai-compat|whisper|say|broker|lease-stub|agent, \
-             got {other:?}"
+             echo|subprocess|container|ollama|openai-compat|whisper|say|broker|lease-stub|agent|\
+             imd, got {other:?}"
         ),
     };
 
@@ -2978,6 +3030,22 @@ async fn main() -> anyhow::Result<()> {
         // capability to demonstrate. The build-time warning already told
         // the operator the endpoint is a placeholder.
         tracing::info!("lease-stub executor: no capability benchmark — the stub rents no machine");
+    } else if executor_kind == "imd" {
+        // A swarm job's only self-test is a paid order on IMD. The health
+        // probe below proves what can be proven for free: the control
+        // plane answers, the chain is the configured one, the wallet holds
+        // gas and IMD, and the price feed reads. An unhealthy node still
+        // registers and reports offline until the probe passes.
+        match executor.health().await {
+            Ok(()) => tracing::info!(
+                "imd executor: no capability benchmark — an order is proven when a buyer pays \
+                 for it; the control plane, chain, wallet and price feed probe passed"
+            ),
+            Err(e) => tracing::warn!(
+                error = %e,
+                "imd executor: the boot probe failed; the node reports offline until it passes"
+            ),
+        }
     } else {
         let nonce = format!("compute-benchmark-{}", epoch_ms());
         let specs = benchmark_specs(&executor_kind, &profile.job_kinds, nonce);

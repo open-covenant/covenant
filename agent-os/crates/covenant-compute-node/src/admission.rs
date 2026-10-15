@@ -52,6 +52,8 @@ pub enum AdmissionError {
         in_flight: usize,
         max_in_flight: usize,
     },
+    #[error("executor refused the offer: {0}")]
+    ExecutorRefused(String),
 }
 
 pub struct AdmissionContext<'a> {

@@ -13,7 +13,48 @@ permissions:
   contents: read
 
 jobs:
+  # Which parts of the repository a change touches. A change confined to the
+  # website (landing/) skips the jobs that build and test everything else: a
+  # job skipped by its condition reports success, so branch protection still
+  # passes. Pushes to main, any change this cannot read, and a failure of this
+  # job itself all run everything.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          code=true
+          if [ "$REF" != "refs/heads/main" ]; then
+            if [ "$EVENT" = "pull_request" ]; then
+              base="$PR_BASE"
+            else
+              base=$(git merge-base origin/main HEAD 2>/dev/null || true)
+            fi
+            # --no-renames lists both sides of a move, so a file moved into
+            # landing/ from elsewhere still counts as a change elsewhere.
+            if [ -n "$base" ] && files=$(git diff --no-renames --name-only "$base" HEAD) && [ -n "$files" ] \
+              && ! printf '%s\n' "$files" | grep -qv '^landing/'; then
+              code=false
+            fi
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "jobs outside the website run: $code"
+
   rust:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     defaults:
@@ -37,6 +78,8 @@ jobs:
       - run: ./scripts/validate.sh
 
   evm:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -63,6 +106,8 @@ jobs:
       - run: forge test -vv
 
   timeline-release:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:

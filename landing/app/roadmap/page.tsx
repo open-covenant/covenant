@@ -44,7 +44,7 @@ const MILESTONES: Milestone[] = [
     intro:
       "A local control plane: software on your own machine that lets engineers and researchers build and run autonomous agents within permissions and budgets they set.",
     bullets: [
-      "A local daemon you control from the command line, a terminal interface, a web console, or an HTTP gateway on your machine",
+      "A local daemon you control from the command line, an interactive terminal app, a web console, or an HTTP gateway on your machine",
       "Built into the daemon: agent identity, permissions, durable memory, an append-only activity log, agent-to-agent messaging, a Model Context Protocol (MCP) bridge, a budget ledger, and local receipts for the resources agents use",
       "A process runtime that stops a run as soon as it is projected to overspend its budget or reaches a hard time limit, with optional Linux sandboxing",
       "Signed permission lifecycle with grant, scope check, expiry, and revocation",
@@ -123,7 +123,7 @@ const MILESTONES: Milestone[] = [
     intro:
       "Deeper integration with the host operating system, on the desktop and on mobile.",
     bullets: [
-      "Compositor v1 with native Wayland integration",
+      "A first version of Covenant's compositor, the part that draws windows on screen, with native Wayland integration on Linux",
       "Orchestrator agent",
       "Memory compaction across the working, episodic, and long-term tiers",
       "First-run onboarding experience",

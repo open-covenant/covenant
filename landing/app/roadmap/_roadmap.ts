@@ -182,7 +182,7 @@ export const TRACKS: Track[] = [
       },
       {
         name: "macOS installer",
-        body: "Covenant Compute's tools in a macOS installer (.dmg), so you no longer build them from source.",
+        body: "A macOS installer (.dmg) for Covenant Compute's tools, so you no longer have to build them from source.",
         state: "next",
       },
       {

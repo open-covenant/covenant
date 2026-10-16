@@ -180,6 +180,16 @@ export const TRACKS: Track[] = [
         body: "Pay for a single job through x402, an open standard for payments over HTTP, without an account or a deposit.",
         state: "next",
       },
+      {
+        name: "macOS installer",
+        body: "Covenant Compute's tools in a macOS installer (.dmg), so you no longer build them from source.",
+        state: "next",
+      },
+      {
+        name: "Desktop app",
+        body: "An official Covenant Compute app for macOS and Linux.",
+        state: "planned",
+      },
     ],
   },
   {

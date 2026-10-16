@@ -50,7 +50,7 @@ database_names = %w[
 image_repository = 'ghcr.io/open-covenant/covenant/mizuki'
 image_reference = /\A#{Regexp.escape(image_repository)}@sha256:[0-9a-f]{64}\z/
 
-abort 'Mizuki workflow check names drift' unless mizuki_workflow.fetch('jobs').keys.sort == %w[application escrow escrow-release]
+abort 'Mizuki workflow check names drift' unless mizuki_workflow.fetch('jobs').keys.sort == %w[application changes escrow escrow-release]
 abort 'CI workflow check names drift' unless %w[landing rust].all? { |job| ci_workflow.fetch('jobs').key?(job) }
 mizuki_triggers = mizuki_workflow['on'] || mizuki_workflow[true] || {}
 ci_triggers = ci_workflow['on'] || ci_workflow[true] || {}
@@ -70,7 +70,7 @@ abort 'escrow release permission drift' unless release_job.fetch('permissions') 
   'attestations' => 'write',
   'artifact-metadata' => 'write'
 }
-abort 'read-only jobs gained permissions' if %w[application escrow].any? { |job| workflow_jobs.fetch(job).key?('permissions') }
+abort 'read-only jobs gained permissions' if %w[application changes escrow].any? { |job| workflow_jobs.fetch(job).key?('permissions') }
 abort 'main workflow can discard protected-main evidence' unless mizuki_workflow.dig('concurrency', 'group').include?('github.sha')
 abort 'escrow release uses a step-only context at job scope' if release_job.fetch('env').values.any? { |value| value.include?('runner.temp') }
 

@@ -160,7 +160,7 @@ export default function RoadmapPage() {
           </div>
           <p className="max-w-[46rem] text-[14px] leading-[1.7] text-fg-soft md:pb-1">
             Covenant spans everything from the software that runs on your own machine to a compute network on Solana
-            mainnet. Here is where each part stands today. Nothing is marked Live until it has shipped.
+            mainnet. Here is where each part stands today. No item is marked Live until it has shipped.
           </p>
         </header>
         <RoadmapMap />

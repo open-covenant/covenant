@@ -85,16 +85,11 @@ export const TRACKS: Track[] = [
       },
       {
         name: "Settlement program",
-        body: "It runs on Solana mainnet and handles buying credits with CVNT to pay for the resources agents use, staking, slashing, and anchoring receipts onchain.",
+        body: "Covenant's settlement program runs on Solana mainnet and handles staking, slashing, anchoring receipts onchain, and buying credits with CVNT to pay for the resources agents use.",
       },
       {
         name: "Identity on Base",
-        body: "Covenant's agent is registered on Base under ERC-8004, with a deployed bond-receipt verifier, a reputation schema on the Ethereum Attestation Service (EAS), and ENS name resolution, all pointing back to its canonical Solana identity and verifiable with a single signature check. CVNT never leaves Solana.",
-      },
-      {
-        name: "Payments on Robinhood Chain",
-        body: "A USDG payment over x402, an open standard for payments over HTTP, has settled on Robinhood Chain mainnet (chain 4663). Identity stays canonical on Solana.",
-        href: "/robinhood",
+        body: "Covenant's own agent is registered on Base under ERC-8004, with a deployed bond-receipt verifier, a reputation schema on the Ethereum Attestation Service (EAS), and ENS name resolution, all pointing back to its canonical Solana identity and verifiable with a single signature check. CVNT never leaves Solana.",
       },
       {
         name: "TypeScript SDK",
@@ -104,7 +99,7 @@ export const TRACKS: Track[] = [
       { name: "Open source", body: "Covenant's source code is licensed under Apache 2.0." },
       {
         name: "Settlement from the daemon",
-        body: "The daemon will settle the resources agents use through the settlement program on Solana.",
+        body: "The daemon will pay for the resources agents use through the settlement program on Solana.",
         state: "planned",
       },
       {
@@ -113,8 +108,14 @@ export const TRACKS: Track[] = [
         state: "planned",
       },
       {
+        name: "Payments on Robinhood Chain",
+        body: "Agents will pay in USDG over x402, an open standard for payments over HTTP, on Robinhood Chain mainnet (chain 4663), where a first payment has already settled.",
+        state: "planned",
+        href: "/robinhood",
+      },
+      {
         name: "Spend escrow on Robinhood Chain",
-        body: "Agents spend from an onchain grant with a per-call ceiling and a provider allowlist, and providers are paid only for output that passes. Blocking an overspend, paying out, and refunding are already proven onchain.",
+        body: "Agents will spend from an onchain grant with a per-call ceiling and a provider allowlist, and providers will be paid only for output that passes its checks. Blocking an overspend, paying out, and refunding have already been proven onchain.",
         state: "planned",
       },
     ],
@@ -145,7 +146,7 @@ export const TRACKS: Track[] = [
         body: "One agent writes tests that reproduce the bug, a second agent from a different operator fixes it, and nothing is charged unless the fix passes.",
       },
       {
-        name: "Verdicts on chain",
+        name: "Verdicts onchain",
         body: "Every operator who checks the work signs a verdict, and each verdict is counted on the MagicBlock rollup and recorded on Solana before anyone is paid.",
       },
       {
@@ -191,7 +192,7 @@ export const TRACKS: Track[] = [
       { name: "Incorporation", body: "Incorporating Covenant as a company." },
       {
         name: "Verified on X",
-        body: "Verified Organization status on X, so the gold checkmark shows that @OpenCovenant is the official account.",
+        body: "Verified Organization status on X, so the gold checkmark lets you tell the official @OpenCovenant account from impersonators.",
       },
     ],
   },
@@ -271,7 +272,10 @@ export const TRACKS: Track[] = [
     state: "planned",
     intro: "A formal commitment to long-term API stability.",
     items: [
-      { name: "Stable v1 formats", body: "Stable v1 wire formats for IPC, permissions, and agent manifests." },
+      {
+        name: "Stable v1 formats",
+        body: "The v1 wire formats for IPC, permissions, and agent manifests, covered by the formal commitment to long-term API stability.",
+      },
       { name: "Long-term support", body: "A long-term support release line." },
       { name: "Bug bounty", body: "Rewards for security researchers who find and report vulnerabilities in Covenant." },
       { name: "Complete documentation", body: "Across all primitives and public APIs." },

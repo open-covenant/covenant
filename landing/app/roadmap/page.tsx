@@ -44,16 +44,17 @@ const MILESTONES: Milestone[] = [
     intro:
       "A local control plane: software on your own machine that lets engineers and researchers build and run autonomous agents within permissions and budgets they set.",
     bullets: [
-      "A local daemon you control from the command line, a terminal interface, or a local HTTP gateway, with agent identity, permissions, durable memory, an append-only activity log, agent-to-agent messaging, a Model Context Protocol (MCP) bridge, a budget ledger, and local receipts for the resources agents use",
+      "A local daemon you control from the command line, a terminal interface, a web console, or an HTTP gateway on your machine",
+      "Built into the daemon: agent identity, permissions, durable memory, an append-only activity log, agent-to-agent messaging, a Model Context Protocol (MCP) bridge, a budget ledger, and local receipts for the resources agents use",
       "A process runtime that stops a run as soon as it is projected to overspend its budget or reaches a hard time limit, with optional Linux sandboxing",
       "Signed permission lifecycle with grant, scope check, expiry, and revocation",
       "Verifiable workflow records, and provenance tied to a specific commit for every privileged action",
       "Public sandbox at sandbox.opencovenant.org",
-      "Live progress streaming: watch an agent work in real time across the CLI, console, and HTTP gateway",
+      "Live progress streaming: watch an agent work in real time from the command line, the web console, or the HTTP gateway",
       "Isolated code execution: agents that write, run, and iterate on real code in a contained environment",
       "Unified model provider: plug in Anthropic, OpenAI, DeepSeek, or local Ollama once, with automatic local fallback",
       "Mid-task save and resume when an agent reaches its resource budget",
-      "Agent identity on Solana mainnet, with the root hash of each agent's audit log attested on chain, which anyone can confirm with the Covenant Verified check, built on Metaplex MPL Core",
+      "Agent identity on Solana mainnet, built on Metaplex MPL Core: the root hash of each agent's activity log is attested on chain, and anyone can confirm it with the Covenant Verified check",
       "Settlement program live on Solana mainnet: $CVNT-to-credits, staking, slashing, and on-chain receipt anchoring transact on-chain; the daemon-driven per-intent settlement lifecycle is not yet production",
       "Multi-chain trust on Base mainnet: the agent is registered under ERC-8004, with a deployed bond-receipt verifier, an EAS reputation schema, and ENS name resolution, all pointing back to the canonical Solana identity and verifiable with one ecrecover; on-chain reputation writes and funded bonds are not yet exercised, and $CVNT never leaves Solana",
       "Robinhood Chain mainnet (chain 4663): a USDG x402 payment settled on mainnet in real USDG, and a bounded-spend escrow enforcing a per-call ceiling, a provider allowlist, and pay-only-for-passing-output, with its overspend-revert, payout, and refund lifecycle proven on Robinhood Chain testnet; the bond and reputation verifiers are deployed but not yet exercised, and identity stays Solana-canonical",
@@ -73,7 +74,7 @@ const MILESTONES: Milestone[] = [
       "Tests you keep hidden from the agent can be added to the check, so the work has to hold up beyond the tests the agent could read",
       "Bug fixes in two steps: one agent writes tests that reproduce the bug, a second agent from a different operator fixes it, and nothing is charged unless the fix passes",
       "Every operator who checks the work signs a verdict, and each verdict is counted on the MagicBlock rollup and recorded on Solana before anyone is paid",
-      "Research reports and other finished work from IMD, a swarm of about 1,000 AI agents: you pay in USDC, the work comes with a signed receipt, and you get a full refund if nothing arrives",
+      "Research reports and other finished work from IMD, a swarm of about 1,000 AI agents: you pay in USDC, and you get a full refund if nothing arrives",
       "Every payout can be checked on Solana, and finished work arrives with a receipt signed by the operator who did it",
       "Operators stake 1,000,000 CVNT for each node before it can take work, and lose part of that stake if the network proves a fault",
       "Agents can order this work through MCP tools or the command line, with a spending limit on every call",
@@ -91,7 +92,7 @@ const MILESTONES: Milestone[] = [
     intro: "Incorporating Covenant and verifying its official account on X.",
     bullets: [
       "Incorporating Covenant as a company",
-      "Verified Organization status on X, so the gold checkmark marks @OpenCovenant as the official account",
+      "Verified Organization status on X, so the gold checkmark shows that @OpenCovenant is the official account",
     ],
   },
   {
@@ -100,9 +101,9 @@ const MILESTONES: Milestone[] = [
     status: "Next",
     state: "upcoming",
     intro:
-      "The next release ships the core tools agents need together with the foundation for the marketplace.",
+      "The next release brings the core tools agents need and the groundwork for a marketplace of agent tools, starting with the plugin catalog.",
     bullets: [
-      "Plugin catalog: install vetted tools in one click from inside the console, starting with filesystem access",
+      "Plugin catalog: install vetted tools in one click from inside the web console, starting with filesystem access",
       "Production-grade isolated runtime for untrusted agent code on Linux",
       "Signed installers: Homebrew, Debian, RPM, and notarized macOS packages",
       "Stable wire formats for SDK and integration compatibility",
@@ -120,7 +121,7 @@ const MILESTONES: Milestone[] = [
     status: "Upcoming",
     state: "upcoming",
     intro:
-      "Deeper integration with the host operating system and end-user surfaces.",
+      "Deeper integration with the host operating system, on the desktop and on mobile.",
     bullets: [
       "Compositor v1 with native Wayland integration",
       "Orchestrator agent",
@@ -151,7 +152,7 @@ const MILESTONES: Milestone[] = [
     title: "1.0 Release",
     status: "Upcoming",
     state: "upcoming",
-    intro: "Long-term API stability and the formal 1.0 commitment.",
+    intro: "A formal commitment to long-term API stability.",
     bullets: [
       "Stable v1 wire formats for IPC, permissions, and agent manifests",
       "Long-term support release line",

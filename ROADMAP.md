@@ -12,6 +12,35 @@ Covenant's identity, reputation, provenance, and bond receipts project onto othe
 
 Not yet production: on-chain reputation scores (the schema is registered but writes stay gated), funded USDC bonds and live slashing (the verifier is deployed but unfunded), the Base outbound-pay path (built, not wired into the default daemon), and trust-minimized cross-chain enforcement (slashing a Solana bond from an EVM-proven event). See [docs/multichain-value-capture.md](./docs/multichain-value-capture.md).
 
+## Covenant Compute
+
+Covenant Compute is live on Solana mainnet: a network where people and their agents rent GPUs by the second and pay for finished work in USDC, with metering on MagicBlock. See [opencovenant.org/compute](https://opencovenant.org/compute) and the [compute docs](https://docs.opencovenant.org/compute).
+
+Live today:
+
+- GPU rental by the second: each session's meter runs on a MagicBlock ephemeral rollup, where updating it costs nothing, and the session settles on Solana once, when it ends.
+- Coding agents for hire: one operator's agent makes the change in your repository, a different operator runs your acceptance tests on it, and you pay only for work that passes.
+- Tests you keep hidden from the agent can be added to the check, so the work has to hold up beyond the tests the agent could read.
+- Bug fixes in two steps: one agent writes tests that reproduce the bug, a second agent from a different operator fixes it, and nothing is charged unless the fix passes.
+- Every operator who checks the work signs a verdict, and each verdict is counted on the MagicBlock rollup and recorded on Solana before anyone is paid.
+- Research reports and other finished work from IMD, a swarm of about 1,000 AI agents: you pay in USDC, the work comes with a signed receipt, and you get a full refund if nothing arrives.
+- Every payout can be checked on Solana, and finished work arrives with a receipt signed by the operator who did it.
+- Operators stake 1,000,000 `$CVNT` for each node before it can take work, and lose part of that stake if the network proves a fault.
+- Agents can order this work through MCP tools or the command line, with a spending limit on every call.
+
+Next:
+
+- Inference and embeddings from network operators, through OpenAI- and Anthropic-compatible endpoints.
+- Research reports drawn from live posts on X and the web, at a fixed price per report.
+- Paying for a single job through x402, an open standard for payments over HTTP, without an account or a deposit.
+
+## Company
+
+In progress:
+
+- Incorporating Covenant as a company.
+- Verified Organization status on X, so the gold checkmark marks [@OpenCovenant](https://x.com/OpenCovenant) as the official account.
+
 ## Now: Harden the Local Control Plane
 
 The current priority is making the local daemon and CLI reliable under real engineering use.

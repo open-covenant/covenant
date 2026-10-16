@@ -676,6 +676,145 @@
   background-image: linear-gradient(115deg, var(--color-violet), var(--color-blue), var(--color-mint));
 }
 
+/* ── Roadmap ────────────────────────────────────────────────────────────────
+   State glyphs drawn from the mark, a module and its core: live is the solid
+   module, in progress the core forming in the gradient inside its module, next
+   the module's outline in blue, planned a faint outline. On the overview map
+   the modules grow into place row by row, and an item reached from the map
+   lights up briefly. */
+
+.rm-mark {
+  position: relative;
+  display: inline-block;
+  flex: none;
+  width: var(--rm-size, 11px);
+  height: var(--rm-size, 11px);
+  border-radius: 18%;
+}
+
+.rm-mark[data-state="live"] {
+  background: var(--color-mint);
+}
+
+.rm-mark[data-state="progress"] {
+  background: rgb(160 59 240 / 0.16);
+  box-shadow: inset 0 0 0 1px rgb(160 59 240 / 0.9);
+}
+
+.rm-mark[data-state="progress"]::after {
+  content: "";
+  position: absolute;
+  inset: 27%;
+  border-radius: 18%;
+  background: linear-gradient(115deg, var(--color-violet), var(--color-blue), var(--color-mint));
+  background-size: 260% 260%;
+  animation: rm-core 3.2s ease-in-out infinite alternate;
+}
+
+.rm-mark[data-state="next"] {
+  background: rgb(76 127 222 / 0.12);
+  box-shadow: inset 0 0 0 1.5px var(--color-blue);
+}
+
+.rm-mark[data-state="planned"] {
+  box-shadow: inset 0 0 0 1px var(--color-line-strong);
+}
+
+@keyframes rm-core {
+  from {
+    background-position: 0% 50%;
+  }
+  to {
+    background-position: 100% 50%;
+  }
+}
+
+/* The in-progress chip's hairline is the gradient: painted on the border box
+   under a ground fill on the padding box. */
+.rm-chip-ramp {
+  border-color: transparent;
+  background:
+    linear-gradient(var(--color-ground), var(--color-ground)) padding-box,
+    linear-gradient(115deg, var(--color-violet), var(--color-blue), var(--color-mint)) border-box;
+}
+
+/* The overview's proportion bar: one segment per state, sized by its count. */
+.rm-bar {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  transform-origin: left center;
+}
+
+.rm-bar[data-state="live"] {
+  background: var(--color-mint);
+}
+
+.rm-bar[data-state="progress"] {
+  background: linear-gradient(115deg, var(--color-violet), var(--color-blue), var(--color-mint));
+}
+
+.rm-bar[data-state="next"] {
+  background: var(--color-blue);
+}
+
+.rm-bar[data-state="planned"] {
+  background: var(--color-line-strong);
+}
+
+.site-motion .rm-map .rm-bar {
+  transform: scaleX(0);
+  transition: transform 1.1s cubic-bezier(0.16, 1, 0.3, 1);
+  transition-delay: var(--rm-delay, 0s);
+}
+
+.site-motion .rm-map.is-in .rm-bar {
+  transform: none;
+}
+
+.rm-map .rm-mark[data-state="live"] {
+  box-shadow: 0 0 12px rgb(29 227 174 / 0.28);
+}
+
+.rm-cell {
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.rm-cell:hover,
+.rm-cell:focus-visible {
+  transform: scale(1.32);
+}
+
+.site-motion .rm-map .rm-cell .rm-mark {
+  opacity: 0;
+  transform: scale(0.24);
+  border-radius: 46%;
+  transition:
+    opacity 0.5s cubic-bezier(0.16, 1, 0.3, 1),
+    transform 0.72s cubic-bezier(0.16, 1, 0.3, 1),
+    border-radius 0.72s cubic-bezier(0.16, 1, 0.3, 1);
+  transition-delay: var(--rm-delay, 0s);
+}
+
+.site-motion .rm-map.is-in .rm-cell .rm-mark {
+  opacity: 1;
+  transform: none;
+  border-radius: 18%;
+}
+
+.rm-item:target {
+  animation: rm-target 2.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes rm-target {
+  from {
+    background-color: rgb(76 127 222 / 0.16);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   html {
     scroll-behavior: auto;
@@ -702,6 +841,24 @@
   .brand-run,
   .brand-module {
     animation: none;
+  }
+
+  .rm-mark[data-state="progress"]::after,
+  .rm-item:target {
+    animation: none;
+  }
+
+  .site-motion .rm-map .rm-bar {
+    transform: none;
+    transition: none;
+  }
+
+  .rm-cell,
+  .site-motion .rm-map .rm-cell .rm-mark {
+    opacity: 1;
+    transform: none;
+    border-radius: 18%;
+    transition: none;
   }
 }
 

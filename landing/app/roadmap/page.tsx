@@ -1,7 +1,14 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { pageMetadata } from "@/app/_metadata";
+import { FieldSeam } from "../FieldSeam";
 import { SiteFooter } from "../SiteFooter";
 import { SiteHeader } from "../SiteHeader";
+import { SiteMotion } from "../SiteMotion";
+import { RoadmapMap } from "./RoadmapMap";
+import { RoadmapNav } from "./RoadmapNav";
+import { StateChip, StateMark } from "./_marks";
+import { STATE_LABEL, TRACKS, groupsOf, itemId, orderedItems, tally, type Track } from "./_roadmap";
 
 export const metadata: Metadata = pageMetadata("/roadmap", { title: "Roadmap" }, {
   title: "Development Roadmap: Covenant",
@@ -25,219 +32,189 @@ export const metadata: Metadata = pageMetadata("/roadmap", { title: "Roadmap" },
   },
 });
 
-type Milestone = {
-  code?: string;
-  title: string;
-  status: string;
-  state: "live" | "progress" | "upcoming";
-  intro: string;
-  bullets: string[];
-  next?: string[];
-};
+const eyebrow = "font-mono text-[10px] font-medium uppercase tracking-[0.28em] text-muted";
+const kicker = "font-mono text-[10px] font-medium uppercase tracking-[0.24em] text-muted-2";
+const trackTitle = "type-display text-[clamp(1.35rem,2.1vw,1.75rem)] text-fg";
+const trackTitleLong = "type-display text-[clamp(1.2rem,1.7vw,1.4rem)] text-fg";
 
-const MILESTONES: Milestone[] = [
+const FOLLOW = [
   {
-    code: "M0",
-    title: "Foundation",
-    status: "Available",
-    state: "live",
-    intro:
-      "A local control plane: software on your own machine that lets engineers and researchers build and run autonomous agents within permissions and budgets they set.",
-    bullets: [
-      "A local daemon you control from the command line, an interactive terminal app, a web console, or an HTTP gateway on your machine",
-      "Built into the daemon: agent identity, permissions, durable memory, an append-only activity log, agent-to-agent messaging, a Model Context Protocol (MCP) bridge, a budget ledger, and local receipts for the resources agents use",
-      "A process runtime that stops a run as soon as it is projected to overspend its budget or reaches a hard time limit, with optional Linux sandboxing",
-      "Signed permission lifecycle with grant, scope check, expiry, and revocation",
-      "Verifiable workflow records, and provenance tied to a specific commit for every privileged action",
-      "Public sandbox at sandbox.opencovenant.org",
-      "Live progress streaming: watch an agent work in real time from the command line, the web console, or the HTTP gateway",
-      "Isolated code execution: agents that write, run, and iterate on real code in a contained environment",
-      "Unified model provider: plug in Anthropic, OpenAI, DeepSeek, or local Ollama once, with automatic local fallback",
-      "Mid-task save and resume when an agent reaches its resource budget",
-      "Agent identity on Solana mainnet, built on Metaplex MPL Core: the root hash of each agent's activity log is attested on chain, and anyone can confirm it with the Covenant Verified check",
-      "Settlement program live on Solana mainnet: $CVNT-to-credits, staking, slashing, and on-chain receipt anchoring transact on-chain; the daemon-driven per-intent settlement lifecycle is not yet production",
-      "Multi-chain trust on Base mainnet: the agent is registered under ERC-8004, with a deployed bond-receipt verifier, an EAS reputation schema, and ENS name resolution, all pointing back to the canonical Solana identity and verifiable with one ecrecover; on-chain reputation writes and funded bonds are not yet exercised, and $CVNT never leaves Solana",
-      "Robinhood Chain mainnet (chain 4663): a USDG x402 payment settled on mainnet in real USDG, and a bounded-spend escrow enforcing a per-call ceiling, a provider allowlist, and pay-only-for-passing-output, with its overspend-revert, payout, and refund lifecycle proven on Robinhood Chain testnet; the bond and reputation verifiers are deployed but not yet exercised, and identity stays Solana-canonical",
-      "TypeScript SDK on npm (@covenant-org/sdk): signed settlement, staking, and receipt-anchor instructions built from the on-chain program IDLs",
-      "Apache 2.0 core",
-    ],
+    title: "Changelog",
+    body: "What shipped in each tagged release, with signed artifacts.",
+    href: "/changelog",
   },
   {
-    title: "Covenant Compute",
-    status: "Live",
-    state: "live",
-    intro:
-      "A network where people and their agents rent GPUs by the second and pay for finished work in USDC. It runs on Solana mainnet, with metering on MagicBlock.",
-    bullets: [
-      "GPU rental by the second: each session's meter runs on a MagicBlock ephemeral rollup, where updating it costs nothing, and the session settles on Solana once, when it ends",
-      "Coding agents for hire: one operator's agent makes the change in your repository, a different operator runs your acceptance tests on it, and you pay only for work that passes",
-      "Tests you keep hidden from the agent can be added to the check, so the work has to hold up beyond the tests the agent could read",
-      "Bug fixes in two steps: one agent writes tests that reproduce the bug, a second agent from a different operator fixes it, and nothing is charged unless the fix passes",
-      "Every operator who checks the work signs a verdict, and each verdict is counted on the MagicBlock rollup and recorded on Solana before anyone is paid",
-      "Research reports and other finished work from IMD, a swarm of about 1,000 AI agents: you pay in USDC, and you get a full refund if nothing arrives",
-      "Every payout can be checked on Solana, and finished work arrives with a receipt signed by the operator who did it",
-      "Operators stake 1,000,000 CVNT for each node before it can take work, and lose part of that stake if the network proves a fault",
-      "Agents can order this work through MCP tools or the command line, with a spending limit on every call",
-    ],
-    next: [
-      "Inference and embeddings from network operators, through OpenAI- and Anthropic-compatible endpoints",
-      "Research reports drawn from live posts on X and the web, at a fixed price per report",
-      "Paying for a single job through x402, an open standard for payments over HTTP, without an account or a deposit",
-    ],
+    title: "Live build",
+    body: "Each commit to Covenant as it lands, made under a signed permission grant and recorded with a receipt.",
+    href: "/live",
   },
   {
-    title: "Company",
-    status: "In progress",
-    state: "progress",
-    intro: "Incorporating Covenant and verifying its official account on X.",
-    bullets: [
-      "Incorporating Covenant as a company",
-      "Verified Organization status on X, so the gold checkmark shows that @OpenCovenant is the official account",
-    ],
-  },
-  {
-    code: "M1",
-    title: "Production, Tools, and Marketplace Foundation",
-    status: "Next",
-    state: "upcoming",
-    intro:
-      "The next release brings the core tools agents need and the groundwork for a marketplace of agent tools, starting with the plugin catalog.",
-    bullets: [
-      "Plugin catalog: install vetted tools in one click from inside the web console, starting with filesystem access",
-      "Production-grade isolated runtime for untrusted agent code on Linux",
-      "Signed installers: Homebrew, Debian, RPM, and notarized macOS packages",
-      "Stable wire formats for SDK and integration compatibility",
-      "Browser tool: agents that navigate, click, and read pages",
-      "Git host integration: read repositories, comment on issues, propose pull requests",
-      "Replay and state debugger: pick any moment from the activity log, see full state, re-run from there",
-      "SDKs published to PyPI and crates.io",
-      "Editor integration for Visual Studio Code",
-      "Adapters for existing agent frameworks: LangGraph and CrewAI",
-    ],
-  },
-  {
-    code: "M2",
-    title: "Native Integration",
-    status: "Upcoming",
-    state: "upcoming",
-    intro:
-      "Deeper integration with the host operating system, on the desktop and on mobile.",
-    bullets: [
-      "A first version of Covenant's compositor, the part that draws windows on screen, with native Wayland integration on Linux",
-      "Orchestrator agent",
-      "Memory compaction across the working, episodic, and long-term tiers",
-      "First-run onboarding experience",
-      "Read-only mobile companion application",
-    ],
-  },
-  {
-    code: "M3",
-    title: "Distributed",
-    status: "Upcoming",
-    state: "upcoming",
-    intro:
-      "Multi-host operation, federated identity, and cross-organization workflows.",
-    bullets: [
-      "Multi-host operation with name@host.tld resolution for agent teams across machines",
-      "Public agent registry with one-line install and signed manifests",
-      "Microvm-grade isolation",
-      "Multi-device memory synchronization for a single identity",
-      "Agent migration across hosts",
-      "Trust flows for cross-organization marketplace transactions",
-      "Cross-chain enforcement: slash a Solana bond from an EVM-proven event, with an objective fault definition and a challenge window",
-    ],
-  },
-  {
-    code: "M4",
-    title: "1.0 Release",
-    status: "Upcoming",
-    state: "upcoming",
-    intro: "A formal commitment to long-term API stability.",
-    bullets: [
-      "Stable v1 wire formats for IPC, permissions, and agent manifests",
-      "Long-term support release line",
-      "Bug bounty program",
-      "Comprehensive documentation across all primitives and public APIs",
-      "Conformance suite for third-party covenant-compatible runtimes",
-    ],
+    title: "Source",
+    body: "The source code on GitHub, licensed under Apache 2.0.",
+    href: "https://github.com/open-covenant/covenant",
   },
 ];
 
-// live: filled mint · in progress: mint ring · upcoming: grey ring
-const DOT: Record<Milestone["state"], string> = {
-  live: "bg-mint",
-  progress: "border border-mint bg-ground",
-  upcoming: "border border-line-strong bg-ground",
-};
-
-function Points({ items }: { items: string[] }) {
+// One track: its heading, state and progress on the left (sticky from xl up),
+// its items on the right in a hairline grid, grouped by state when a track has
+// items in more than one.
+function TrackSection({ track: t }: { track: Track }) {
+  const groups = groupsOf(t);
   return (
-    <ul className="space-y-2">
-      {items.map((b) => (
-        <li key={b} className="flex gap-3 text-[13px] leading-relaxed text-fg-soft sm:text-[14px]">
-          <span aria-hidden="true" className="select-none text-faint">
-            ·
-          </span>
-          <span>{b}</span>
-        </li>
-      ))}
-    </ul>
+    <section
+      id={t.id}
+      data-track={t.id}
+      aria-labelledby={`${t.id}-title`}
+      className="scroll-mt-[calc(var(--header-h)+64px)] border-t border-line py-12 first:border-t-0 md:py-16 lg:scroll-mt-[calc(var(--header-h)+16px)]"
+    >
+      <div className="grid gap-9 xl:grid-cols-[minmax(0,17rem)_minmax(0,1fr)] xl:gap-12">
+        <header className="xl:sticky xl:top-[calc(var(--header-h)+40px)] xl:self-start">
+          <p className={kicker}>
+            {t.code ? (
+              <>
+                <span className="tabular-nums text-faint">Milestone {t.code.slice(1)}</span>
+                <span aria-hidden> · </span>
+              </>
+            ) : null}
+            {t.kicker}
+          </p>
+          <h2
+            id={`${t.id}-title`}
+            className={`${t.title.length > 30 ? trackTitleLong : trackTitle} mt-3`}
+          >
+            {t.title}
+          </h2>
+          <StateChip state={t.state} className="mt-5" />
+          <p className="mt-5 max-w-[34rem] text-[12.5px] leading-[1.75] text-fg-soft">{t.intro}</p>
+          <div className="mt-7 flex max-w-[17rem] flex-wrap gap-[5px]" aria-hidden>
+            {orderedItems(t).map(({ item, state }) => (
+              <StateMark key={item.name} state={state} size="md" />
+            ))}
+          </div>
+          <p className="mt-3 font-mono text-[10px] uppercase tracking-[0.2em] text-muted-2">{tally(t)}</p>
+        </header>
+
+        <div className="min-w-0">
+          {groups.map((g, gi) => (
+            <div key={g.state} className={gi > 0 ? "mt-12" : ""}>
+              {groups.length > 1 ? (
+                <p className="mb-4 flex items-center gap-2.5 font-mono text-[10px] font-medium uppercase tracking-[0.22em] text-fg-2">
+                  <StateMark state={g.state} size="sm" />
+                  {STATE_LABEL[g.state]}
+                  <span className="tabular-nums text-faint">· {String(g.items.length).padStart(2, "0")}</span>
+                </p>
+              ) : null}
+              <ol className="grid border-t border-line sm:grid-cols-2">
+                {g.items.map(({ item, n, state }) => (
+                  <li
+                    key={item.name}
+                    id={itemId(t, item)}
+                    className="rm-item reveal scroll-mt-[calc(var(--header-h)+96px)] border-b border-line p-5 sm:p-6 sm:[&:nth-child(odd)]:border-r sm:[&:nth-child(odd):last-child]:border-r-0 lg:scroll-mt-[calc(var(--header-h)+40px)]"
+                  >
+                    <div className="flex items-center gap-3">
+                      <StateMark state={state} size="md" />
+                      <span className="font-mono text-[10px] tabular-nums text-faint">{String(n).padStart(2, "0")}</span>
+                    </div>
+                    <h3 className="mt-4 font-mono text-[11.5px] font-semibold uppercase leading-snug tracking-[0.16em] text-fg">
+                      {item.href ? (
+                        <a
+                          href={item.href}
+                          {...(item.href.startsWith("http") ? { target: "_blank", rel: "noopener noreferrer" } : {})}
+                          className="group inline-flex items-baseline gap-2 underline decoration-line-strong decoration-1 underline-offset-[5px] transition-colors hover:decoration-mint"
+                        >
+                          {item.name}
+                          <span aria-hidden className="text-faint transition-colors group-hover:text-mint">
+                            {item.href.startsWith("http") ? "↗" : "→"}
+                          </span>
+                        </a>
+                      ) : (
+                        item.name
+                      )}
+                    </h3>
+                    {item.body ? <p className="mt-2.5 text-[12.5px] leading-[1.7] text-muted">{item.body}</p> : null}
+                  </li>
+                ))}
+              </ol>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
   );
 }
 
 export default function RoadmapPage() {
   return (
-    <main id="main-content" className="relative min-h-screen overflow-x-hidden bg-ground">
+    <main id="main-content" className="relative min-h-screen overflow-x-clip bg-ground">
+      <SiteMotion />
       <SiteHeader />
 
-      <div className="page-container">
-        <h1 className="mb-16 text-[11px] uppercase tracking-[0.4em] text-muted sm:mb-24">
-          Roadmap
-        </h1>
-
-        <ol className="relative">
-          {MILESTONES.map((m, i) => {
-            const isLast = i === MILESTONES.length - 1;
-            return (
-              <li
-                key={m.title}
-                className={`relative border-l border-line/80 pl-8 sm:pl-12 ${isLast ? "" : "pb-14 sm:pb-16"}`}
-              >
-                <span aria-hidden="true" className={`absolute -left-[5px] top-[7px] h-[9px] w-[9px] rounded-full ${DOT[m.state]}`} />
-                <div className="mb-3 flex flex-wrap items-baseline gap-x-4 gap-y-1">
-                  {m.code ? (
-                    <span className="font-mono text-[11px] uppercase tracking-[0.3em] text-muted">
-                      {m.code}
-                    </span>
-                  ) : null}
-                  <h2 className="text-[13px] uppercase tracking-[0.25em] text-fg sm:text-[14px]">
-                    {m.title}
-                  </h2>
-                  <span
-                    className={`ml-auto text-[10px] uppercase tracking-[0.25em] ${m.state === "upcoming" ? "text-muted" : "text-fg-2"}`}
-                  >
-                    {m.status}
-                  </span>
-                </div>
-                <p className="mb-4 text-[13px] leading-relaxed text-muted sm:text-[14px]">
-                  {m.intro}
-                </p>
-                <Points items={m.bullets} />
-                {m.next ? (
-                  <>
-                    <h3 className="mb-3 mt-6 font-mono text-[11px] uppercase tracking-[0.3em] text-muted">
-                      Next
-                    </h3>
-                    <Points items={m.next} />
-                  </>
-                ) : null}
-              </li>
-            );
-          })}
-        </ol>
+      <div
+        id="top"
+        className="mx-auto w-full max-w-[90rem] px-5 pt-[calc(var(--header-h)+40px+env(safe-area-inset-top))] sm:px-8 lg:pt-[calc(var(--header-h)+72px)]"
+      >
+        <header className="grid gap-8 md:grid-cols-[minmax(0,1fr)_minmax(280px,30rem)] md:items-end md:gap-16">
+          <div>
+            <p className={eyebrow}>Built in the open</p>
+            <h1 className="page-title mt-5 text-fg">Roadmap</h1>
+          </div>
+          <p className="max-w-[46rem] text-[14px] leading-[1.7] text-fg-soft md:pb-1">
+            Covenant spans everything from the software that runs on your own machine to a compute network on Solana
+            mainnet. Here is where each part stands today. Nothing is marked Live until it has shipped.
+          </p>
+        </header>
+        <RoadmapMap />
       </div>
 
-      <SiteFooter className="pb-8" />
+      <FieldSeam seed={2.2} className="mt-14 md:mt-20" />
+
+      <div className="mx-auto w-full max-w-[90rem] px-5 sm:px-8 lg:grid lg:grid-cols-[14rem_minmax(0,1fr)] lg:gap-14 xl:gap-20">
+        <RoadmapNav />
+        <div className="min-w-0 pb-24 lg:pt-4">
+          {TRACKS.map((t) => (
+            <TrackSection key={t.id} track={t} />
+          ))}
+
+          <section aria-labelledby="follow-title" className="border-t border-line pt-12 md:pt-16">
+            <p id="follow-title" className={eyebrow}>
+              Follow the build
+            </p>
+            <ul className="mt-6 grid gap-3 md:grid-cols-3">
+              {FOLLOW.map((f) => {
+                const external = f.href.startsWith("http");
+                const inner = (
+                  <>
+                    <span className="flex items-center justify-between font-mono text-[11.5px] font-semibold uppercase tracking-[0.16em] text-fg">
+                      {f.title}
+                      <span aria-hidden className="text-faint transition-colors group-hover:text-mint">
+                        {external ? "↗" : "→"}
+                      </span>
+                    </span>
+                    <span className="mt-3 block text-[12.5px] leading-[1.7] text-muted">{f.body}</span>
+                  </>
+                );
+                const cls =
+                  "group block h-full rounded-[4px] border border-line bg-raised/50 p-6 transition-colors hover:border-line-strong hover:bg-raised";
+                return (
+                  <li key={f.href}>
+                    {external ? (
+                      <a href={f.href} target="_blank" rel="noopener noreferrer" className={cls}>
+                        {inner}
+                      </a>
+                    ) : (
+                      <Link href={f.href} className={cls}>
+                        {inner}
+                      </Link>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        </div>
+      </div>
+
+      <SiteFooter />
     </main>
   );
 }

@@ -9,7 +9,7 @@ use base64::Engine as _;
 use covenant_compute_protocol::{
     agent_task_input, parse_agent_task_output, AcceptanceSpec, AgentCheckVerdict, AgentRuntime,
     AgentSkill, AgentTaskOutput, AgentTaskSpec, CommandOutcome, HiddenChecks, HiddenFile, JobKind,
-    RepoSource, ReproductionRef, MAX_BUNDLE_B64_BYTES, MAX_STORED_BUNDLE_BYTES,
+    KaniCheckSpec, RepoSource, ReproductionRef, MAX_BUNDLE_B64_BYTES, MAX_STORED_BUNDLE_BYTES,
 };
 use covenant_identity::LocalIdentity;
 use covenant_mcp::ToolSpec;
@@ -70,6 +70,7 @@ pub struct AgentArgs {
     pub task: String,
     /// Commands the work must pass, run from the repository root with no
     /// network, in order.
+    #[serde(default)]
     pub accept: Vec<String>,
     #[serde(default)]
     pub check_image: Option<String>,
@@ -105,6 +106,12 @@ pub struct AgentArgs {
     /// Apply an accepted patch to the local repository's working tree.
     #[serde(default)]
     pub apply: bool,
+    #[serde(default)]
+    pub kani: Option<KaniCheckSpec>,
+    #[serde(default)]
+    pub dry_run: bool,
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
 }
 
 /// A task ready to sign: the spec the builder sees and the checks it
@@ -149,7 +156,7 @@ pub enum AgentOutcome {
 
 pub fn prepare_agent_task(args: &AgentArgs) -> Result<PreparedTask, BuyerError> {
     let invalid = |msg: String| BuyerError::Protocol(msg);
-    if args.accept.is_empty() {
+    if args.accept.is_empty() && args.kani.is_none() {
         return Err(invalid(
             "name at least one acceptance command: work with nothing to pass is accepted unseen"
                 .into(),
@@ -233,6 +240,7 @@ pub fn prepare_agent_task(args: &AgentArgs) -> Result<PreparedTask, BuyerError> 
             protected_paths: args.protect.clone(),
             hidden_sha256: hidden.as_ref().map(HiddenChecks::digest),
             setup,
+            kani: args.kani.clone(),
         },
         runtime: AgentRuntime::ClaudeCode,
         model: args.model.clone(),
@@ -255,25 +263,88 @@ pub async fn hire_agent(
     price_micro_usdc: u64,
     deadline_ms: u64,
 ) -> Result<AgentOutcome, BuyerError> {
-    if let Some(bundle) = &task.bundle {
-        store_bundle(http, config, buyer_identity, bundle).await?;
+    let request = agent_request(&task, price_micro_usdc, deadline_ms)?;
+    let envelope = crate::sign_envelope(config, buyer_identity, request)?;
+    hire_agent_signed(http, config, buyer_identity, task, envelope).await
+}
+
+fn agent_request(
+    task: &PreparedTask,
+    price: u64,
+    deadline_ms: u64,
+) -> Result<JobRequest, BuyerError> {
+    let needed = u64::from(task.spec.acceptance.timeout_secs) * 1_000
+        + covenant_compute_protocol::AGENT_CHECK_SLACK_MS
+        + 1_000;
+    if price == 0 || deadline_ms < needed {
+        return Err(BuyerError::Protocol(format!("agent offer must be positive and deadline must allow a build plus its check (at least {needed}ms)")));
     }
-    let input = agent_task_input(task.spec).map_err(|e| BuyerError::Protocol(e.to_string()))?;
-    let request = JobRequest {
+    let input =
+        agent_task_input(task.spec.clone()).map_err(|e| BuyerError::Protocol(e.to_string()))?;
+    Ok(JobRequest {
         kind: JobKind::AgentTask,
         input: vec![input],
-        model: Some(AgentRuntime::ClaudeCode.label().into()),
+        model: Some(task.spec.builder_model()),
         gpu_class: None,
         min_vram_gb: None,
         min_reputation_bps: None,
-        price_micro_usdc,
+        price_micro_usdc: price,
         deadline_ms,
-    };
-    let outcome = match dispatch_agent_task(
+    })
+}
+
+/// A preview never uploads a bundle, signs an order, or reserves budget.
+pub fn agent_preview(
+    task: &PreparedTask,
+    price: u64,
+    deadline_ms: u64,
+) -> Result<serde_json::Value, BuyerError> {
+    agent_request(task, price, deadline_ms)?;
+    Ok(
+        serde_json::json!({"dry_run":true,"spends_nothing":true,"kind":"agent_task",
+        "price_micro_usdc":price,"deadline_ms":deadline_ms,"commit":task.spec.repo.commit(),
+        "builder_model":task.spec.model,"runtime":task.spec.runtime,"capability_model":task.spec.builder_model(),
+        "checker_model":task.spec.acceptance.checker_model(),"acceptance":task.spec.acceptance,
+        "stored_bundle_bytes":task.bundle.as_ref().map_or(0,Vec::len)}),
+    )
+}
+
+/// Journal the exact signed source, task, proof requirements, hidden-check
+/// commitment, price and deadline before an upload or a paid submission.
+pub async fn hire_agent_idempotent(
+    http: &reqwest::Client,
+    config: &BuyerConfig,
+    buyer_identity: &LocalIdentity,
+    task: PreparedTask,
+    price: u64,
+    deadline_ms: u64,
+    key: &str,
+) -> Result<AgentOutcome, BuyerError> {
+    let purchase = crate::agent_purchase::AgentPurchase::open(config, buyer_identity, key)?;
+    let request = agent_request(&task, price, deadline_ms)?;
+    let envelope = purchase.resolve(config, buyer_identity, request, purchase.job_id())?;
+    let job_id = envelope.payload.job_id;
+    let outcome = hire_agent_signed(http, config, buyer_identity, task, envelope).await?;
+    purchase.settle(job_id)?;
+    Ok(outcome)
+}
+
+async fn hire_agent_signed(
+    http: &reqwest::Client,
+    config: &BuyerConfig,
+    buyer_identity: &LocalIdentity,
+    task: PreparedTask,
+    envelope: covenant_compute_protocol::SignedJobEnvelope,
+) -> Result<AgentOutcome, BuyerError> {
+    if let Some(bundle) = &task.bundle {
+        store_bundle(http, config, buyer_identity, bundle).await?;
+    }
+    let expected_commit = task.spec.repo.commit().to_string();
+    let outcome = match crate::dispatch_agent_signed(
         http,
         config,
         buyer_identity,
-        request,
+        envelope,
         task.hidden.as_ref(),
     )
     .await
@@ -299,6 +370,11 @@ pub async fn hire_agent(
     };
     let built = parse_agent_task_output(&outcome.output)
         .map_err(|e| BuyerError::Verification(format!("agent result: {e}")))?;
+    if built.base_commit != expected_commit {
+        return Err(BuyerError::Verification(
+            "agent output names a different base commit".into(),
+        ));
+    }
     let patch = base64::engine::general_purpose::STANDARD
         .decode(&built.patch_b64)
         .map_err(|e| BuyerError::Verification(format!("agent patch: {e}")))?;
@@ -1039,12 +1115,15 @@ pub fn agent_tool_spec(max_price_micro_usdc: u64) -> ToolSpec {
                     "type": "integer",
                     "description": "Deadline for the build and its check together. Default 1800000 (30 minutes)"
                 },
+                "kani": {"type":"object", "description":"Structured Kani plan, immutable checker image and explicit resource/price requirements"},
+                "dry_run": {"type":"boolean", "description":"Preview only; never upload, sign or spend"},
+                "idempotency_key": {"type":"string", "description":"Persist and replay the exact agent order; a changed order under the same key refuses"},
                 "apply": {
                     "type": "boolean",
                     "description": "Apply an accepted patch to the local repository's working tree"
                 }
             },
-            "required": ["repo", "task", "accept"]
+            "required": ["repo", "task"]
         }),
     }
 }
@@ -1131,6 +1210,9 @@ mod tests {
             price_micro_usdc: None,
             deadline_ms: None,
             apply: false,
+            kani: None,
+            dry_run: false,
+            idempotency_key: None,
         }
     }
 

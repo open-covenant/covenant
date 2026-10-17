@@ -22,6 +22,8 @@ pub enum DasError {
 
 /// The read surface the daemon's tools call. A trait so tests (and a
 /// future native indexer client) can stand in without HTTP.
+// async_trait adds #[must_use] to already-must-use boxed futures.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait DasClient: Send + Sync {
     /// `getAsset`: one asset (NFT / cNFT / fungible) by id.

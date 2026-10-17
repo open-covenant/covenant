@@ -150,6 +150,10 @@ pub fn router(state: CoordinatorState) -> Router {
             post(push_stream).get(job_stream),
         )
         .route("/federation/jobs/:job_id/receipt", get(job_status))
+        .route(
+            "/federation/jobs/:job_id/evidence",
+            get(crate::agent_evidence::evidence),
+        )
         .route("/federation/jobs/:job_id/dispute", post(dispute_job))
         .route("/federation/jobs/:job_id/cancel", post(cancel_job))
         .route("/federation/jobs/:job_id/close", post(close_lease))
@@ -659,7 +663,7 @@ fn check_admin(state: &CoordinatorState, headers: &HeaderMap) -> Result<(), ApiE
 /// caller must present a fresh signature over exactly `path` by
 /// `expected_pubkey_b58` (see `read_auth` in the protocol crate).
 /// Everything short of that is a 401.
-fn verify_signed_read(
+pub(crate) fn verify_signed_read(
     headers: &HeaderMap,
     expected_pubkey_b58: &str,
     path: &str,
@@ -990,15 +994,27 @@ async fn submit_job(
         .validate_input()
         .map_err(|e| ApiError::BadRequest(format!("job input malformed: {e}")))?;
 
-    // Agent work is opened to buyers by deployment policy, and a check is
-    // only ever ordered by the coordinator itself: a buyer-posted check
-    // would be a verdict nobody's settlement waits on.
+    // Authorship and verification use the same deployment admission policy.
+    // A directly purchased check is a bounded execution service: its receipt
+    // pays for execution, even when the checked property is false. It cannot
+    // name another job or take part in that job's authoring settlement.
     match envelope.payload.kind {
         JobKind::AgentTask => {
             let buyer = envelope.payload.buyer.pubkey_base58();
             match &state.config().agent {
                 Some(policy) if policy.admits(&buyer) => {
-                    let least = policy.least_offer_micro_usdc();
+                    let spec = covenant_compute_protocol::parse_agent_task(&envelope.payload.input)
+                        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+                    let least = spec.acceptance.kani.as_ref().map_or_else(
+                        || policy.least_offer_micro_usdc(),
+                        |kani| {
+                            kani.check_price_micro_usdc.saturating_add(
+                                policy
+                                    .build_floor_micro_usdc
+                                    .max(covenant_compute_protocol::LEAST_AGENT_OFFER_MICRO_USDC),
+                            )
+                        },
+                    );
                     if envelope.payload.price_micro_usdc < least {
                         return Err(ApiError::BadRequest(format!(
                             "an agent task pays the build and at least one check, so offer \
@@ -1020,9 +1036,37 @@ async fn submit_job(
             }
         }
         JobKind::AgentCheck => {
-            return Err(ApiError::BadRequest(
-                "agent checks are ordered by the coordinator, not bought".into(),
-            ))
+            let buyer = envelope.payload.buyer.pubkey_base58();
+            let policy = state.config().agent.as_ref().ok_or_else(|| {
+                ApiError::BadRequest("this coordinator does not take verification orders".into())
+            })?;
+            if !policy.admits(&buyer) {
+                return Err(ApiError::Unauthorized(
+                    "verification is not open to this buyer".into(),
+                ));
+            }
+            let spec = covenant_compute_protocol::parse_agent_check(&envelope.payload.input)
+                .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+            if spec.task_job_id != envelope.payload.job_id
+                || spec.acceptance.skill != covenant_compute_protocol::AgentSkill::CodeChange
+                || spec.reproduction.is_some()
+            {
+                return Err(ApiError::BadRequest(
+                    "a buyer verification order must be a self-named code.change check".into(),
+                ));
+            }
+            let needed = u64::from(spec.acceptance.timeout_secs) * 1_000
+                + covenant_compute_protocol::AGENT_CHECK_SLACK_MS;
+            if envelope.payload.deadline_ms < needed {
+                return Err(ApiError::BadRequest(
+                    "verification deadline must cover execution plus settlement slack".into(),
+                ));
+            }
+            if let Some(sha256) = crate::agent::missing_bundle(&state, &envelope.payload.input) {
+                return Err(ApiError::BadRequest(format!(
+                    "store repository bundle {sha256} before verification"
+                )));
+            }
         }
         _ => {}
     }
@@ -1602,6 +1646,15 @@ async fn submit_result(
         return Err(ApiError::BadRequest(
             "output does not hash to the receipt's result_hash_hex".into(),
         ));
+    }
+    if record.envelope.payload.kind == JobKind::AgentCheck
+        && msg.receipt.receipt.status == A2ATaskStatus::Ok
+    {
+        covenant_compute_protocol::validate_kani_check_output(
+            &record.envelope.payload,
+            &msg.output,
+        )
+        .map_err(|e| ApiError::BadRequest(format!("invalid proof execution evidence: {e}")))?;
     }
 
     // The deadline is the buyer's SLA and the refund trigger

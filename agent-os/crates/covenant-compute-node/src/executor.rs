@@ -202,6 +202,8 @@ pub(crate) fn ensure_logprobs_delivered(
     Ok(())
 }
 
+// async_trait adds #[must_use] to already-must-use boxed futures.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait JobExecutor: Send + Sync {
     /// Runs `job`, hard-bounded by `deadline`. Implementations must not

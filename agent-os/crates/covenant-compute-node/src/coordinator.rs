@@ -27,6 +27,8 @@ pub enum CoordinatorError {
 /// long-poll to the coordinator service; see
 /// `build-notes-phase1-foundation.md` for the exact endpoints this trait
 /// stands in for.
+// async_trait adds #[must_use] to already-must-use boxed futures.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait Coordinator: Send + Sync {
     async fn register(&self, req: RegisterRequest) -> Result<RegisterResponse, CoordinatorError>;

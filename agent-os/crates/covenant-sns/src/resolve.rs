@@ -30,6 +30,8 @@ pub struct ResolvedDomain {
     pub key: String,
 }
 
+// async_trait adds #[must_use] to already-must-use boxed futures.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait SnsResolver: Send + Sync {
     /// Forward: a `.sol` name to its owner wallet pubkey.

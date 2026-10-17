@@ -41,6 +41,8 @@ const WRITE_SLUGS: &[&str] = &["attest.audit_root", "identity.register"];
 /// The write side of the profile: hand a built request to whatever holds
 /// the minting key. The daemon's implementation drives the
 /// `covenant-metaplex-signer` subprocess; tests can stand in.
+// async_trait adds #[must_use] to already-must-use boxed futures.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait MetaplexSigner: Send + Sync {
     async fn sign(&self, request: SignerRequest) -> Result<SignerResponse, String>;

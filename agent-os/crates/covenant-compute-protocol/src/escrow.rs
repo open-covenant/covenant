@@ -238,6 +238,8 @@ pub enum EscrowError {
 /// verified [`SignedWorkReceipt`] or a passed deadline instead of the
 /// unilateral `has_one = client` release at
 /// `programs/settlement/src/lib.rs:931` (design-02 §3.4, §6).
+// async_trait adds #[must_use] to already-must-use boxed futures.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait FederationEscrow: Send + Sync {
     async fn hold(

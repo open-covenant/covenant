@@ -517,6 +517,8 @@ fn assert_lease_match(
 /// Per-agent inbox. Tasks land in `recv_task`; results for tasks the agent
 /// itself dispatched land in `recv_result`. Both `recv_*` are async and
 /// resolve when something is available; impl is responsible for fairness.
+// async_trait adds #[must_use] to already-must-use boxed futures.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait Mailbox: Send + Sync {
     async fn send_task(&self, task: A2ATask) -> Result<(), A2AError>;

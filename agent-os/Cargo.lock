@@ -1350,6 +1350,7 @@ dependencies = [
  "covenant-mcp",
  "covenant-runtime",
  "covenant-types",
+ "flate2",
  "k256",
  "parking_lot",
  "reqwest 0.12.28",
@@ -1373,12 +1374,14 @@ name = "covenant-compute-protocol"
 version = "0.2.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "bs58",
  "chacha20poly1305",
  "covenant-a2a",
  "covenant-identity",
  "covenant-mcp",
  "covenant-types",
+ "flate2",
  "rand 0.9.4",
  "serde",
  "serde_json",

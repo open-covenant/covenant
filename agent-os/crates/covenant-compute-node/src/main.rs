@@ -90,22 +90,67 @@ fn node_home() -> anyhow::Result<PathBuf> {
 /// routes only by its own labels. Every other executor serves one model set
 /// for all its kinds. An explicit `COVENANT_COMPUTE_NODE_MODELS` keeps the
 /// single set.
-fn agent_kind_models(executor_kind: &str) -> Vec<KindModels> {
+fn agent_kind_models(
+    executor_kind: &str,
+    kani_profiles: &[covenant_compute_node::kani::KaniProfile],
+    kani_author: bool,
+    job_kinds: &[JobKind],
+) -> Vec<KindModels> {
     if executor_kind != "agent" || std::env::var("COVENANT_COMPUTE_NODE_MODELS").is_ok() {
         return Vec::new();
     }
     vec![
         KindModels {
             kind: JobKind::AgentTask,
-            models: vec![covenant_compute_protocol::AgentRuntime::ClaudeCode
-                .label()
-                .to_string()],
+            models: agent_builder_models(kani_author),
         },
         KindModels {
             kind: JobKind::AgentCheck,
-            models: agent_check_images(),
+            models: agent_check_images()
+                .into_iter()
+                .chain(kani_profiles.iter().map(|p| p.label()))
+                .collect(),
         },
     ]
+    .into_iter()
+    .filter(|set| job_kinds.contains(&set.kind))
+    .collect()
+}
+
+fn agent_builder_models(kani_author: bool) -> Vec<String> {
+    let mut models = vec![covenant_compute_protocol::AgentRuntime::ClaudeCode
+        .label()
+        .to_string()];
+    if kani_author {
+        models.push("claude-code:kani-v1".into());
+    }
+    models
+}
+
+fn validate_kani_author(
+    flag: &str,
+    executor: &str,
+    builder: &str,
+    models_override: bool,
+) -> anyhow::Result<bool> {
+    let enabled = match flag.trim() {
+        "" | "false" => false,
+        "true" => true,
+        _ => anyhow::bail!("COVENANT_COMPUTE_AGENT_KANI_AUTHOR must be true or false"),
+    };
+    anyhow::ensure!(
+        !enabled || executor == "agent",
+        "Kani authoring requires the agent executor"
+    );
+    anyhow::ensure!(
+        !enabled || matches!(builder.trim(), "" | "host"),
+        "Kani authoring is only supported by the host builder"
+    );
+    anyhow::ensure!(
+        !enabled || !models_override,
+        "Kani authoring cannot be combined with COVENANT_COMPUTE_NODE_MODELS"
+    );
+    Ok(enabled)
 }
 
 /// The images an agent node runs checks in, from
@@ -2488,7 +2533,46 @@ async fn main() -> anyhow::Result<()> {
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty());
-    let models_served = resolve_models_served(&executor_kind).await?;
+    let kani_author = validate_kani_author(
+        &std::env::var("COVENANT_COMPUTE_AGENT_KANI_AUTHOR").unwrap_or_default(),
+        &executor_kind,
+        &std::env::var("COVENANT_COMPUTE_AGENT_BUILDER").unwrap_or_default(),
+        std::env::var("COVENANT_COMPUTE_NODE_MODELS").is_ok(),
+    )?;
+    let kani_profiles = covenant_compute_node::kani::parse_profiles(
+        &std::env::var("COVENANT_COMPUTE_KANI_PROFILES").unwrap_or_default(),
+    )
+    .map_err(anyhow::Error::msg)?;
+    if !kani_profiles.is_empty() {
+        anyhow::ensure!(
+            executor_kind == "agent",
+            "Kani profiles require the agent executor"
+        );
+        anyhow::ensure!(std::env::var("COVENANT_COMPUTE_NODE_MODELS").is_err(),
+            "Kani profiles cannot be combined with COVENANT_COMPUTE_NODE_MODELS: profile labels must route exactly");
+        let runtime = std::env::var("COVENANT_COMPUTE_NODE_CONTAINER_RUNTIME")
+            .unwrap_or_else(|_| "docker".into());
+        covenant_compute_node::kani::validate_startup(&runtime, &kani_profiles)
+            .await
+            .map_err(anyhow::Error::msg)?;
+    }
+    let max_in_flight = env_or(
+        "COVENANT_COMPUTE_NODE_MAX_IN_FLIGHT",
+        if kani_profiles.is_empty() {
+            2usize
+        } else {
+            1usize
+        },
+    );
+    anyhow::ensure!(
+        kani_profiles.is_empty() || max_in_flight == 1,
+        "Kani profiles require COVENANT_COMPUTE_NODE_MAX_IN_FLIGHT=1 to reserve proof resources"
+    );
+    let mut models_served = resolve_models_served(&executor_kind).await?;
+    models_served.extend(kani_profiles.iter().map(|p| p.label()));
+    if kani_author {
+        models_served.push("claude-code:kani-v1".into());
+    }
     let default_job_kinds = default_kinds(&executor_kind);
 
     let price_micro_usdc = env_or(
@@ -2553,6 +2637,7 @@ async fn main() -> anyhow::Result<()> {
         );
     }
     let (hardware, vram_gb) = resolve_hardware().await;
+    let kind_models = agent_kind_models(&executor_kind, &kani_profiles, kani_author, &job_kinds);
     let profile = CapabilityProfile {
         operator: identity.agent_id(),
         hardware,
@@ -2570,7 +2655,7 @@ async fn main() -> anyhow::Result<()> {
         kind_prices: parse_kind_prices(
             &std::env::var("COVENANT_COMPUTE_NODE_KIND_PRICES").unwrap_or_default(),
         )?,
-        kind_models: agent_kind_models(&executor_kind),
+        kind_models,
     };
     // A lease settles by meter over its window, and only a per-hour ask is
     // scaled to that window (a per-job ask floors flat on it). A lease node
@@ -2925,6 +3010,7 @@ async fn main() -> anyhow::Result<()> {
                 check_cpus: std::env::var("COVENANT_COMPUTE_AGENT_CHECK_CPUS")
                     .unwrap_or_else(|_| "2".into()),
                 check_pids: env_or("COVENANT_COMPUTE_AGENT_CHECK_PIDS", 512u32),
+                kani_profiles: kani_profiles.clone(),
                 instance_tag: identity
                     .agent_id()
                     .pubkey_base58()
@@ -3224,7 +3310,7 @@ async fn main() -> anyhow::Result<()> {
             audit,
             NodeConfig {
                 coordinator_pubkey_b58,
-                max_in_flight: env_or("COVENANT_COMPUTE_NODE_MAX_IN_FLIGHT", 2usize),
+                max_in_flight,
                 preempt_grace: Duration::from_secs(2),
                 fee_bps,
             },
@@ -3455,6 +3541,41 @@ mod tests {
     use super::*;
     use covenant_compute_protocol::RegisterResponse;
     use std::sync::atomic::{AtomicU32, Ordering};
+
+    #[test]
+    fn kani_check_only_advertising_omits_authoring_kind() {
+        let profile = covenant_compute_node::kani::KaniProfile {
+            image: format!("sha256:{}", "a".repeat(64)),
+            memory_mib: 8192,
+            cpus: 4,
+            scratch_mib: 1024,
+        };
+        let sets = agent_kind_models(
+            "agent",
+            std::slice::from_ref(&profile),
+            false,
+            &[JobKind::AgentCheck],
+        );
+        assert_eq!(sets.len(), 1);
+        assert_eq!(sets[0].kind, JobKind::AgentCheck);
+        assert!(sets[0].models.contains(&profile.label()));
+        assert!(!sets[0].models.contains(&"claude-code:kani-v1".into()));
+    }
+
+    #[test]
+    fn kani_author_advertising_requires_explicit_host_opt_in() {
+        assert!(!validate_kani_author("", "agent", "host", false).unwrap());
+        assert!(validate_kani_author("true", "agent", "host", false).unwrap());
+        assert!(validate_kani_author("true", "agent", "container", false).is_err());
+        assert!(validate_kani_author("true", "echo", "host", false).is_err());
+        assert!(validate_kani_author("true", "agent", "host", true).is_err());
+        assert!(validate_kani_author("yes", "agent", "host", false).is_err());
+        assert_eq!(agent_builder_models(false), vec!["claude-code"]);
+        assert_eq!(
+            agent_builder_models(true),
+            vec!["claude-code", "claude-code:kani-v1"]
+        );
+    }
 
     #[test]
     fn parse_price_unit_maps_known_units_and_falls_back_on_the_rest() {
@@ -3973,6 +4094,8 @@ mod tests {
             axum::routing::post(move || {
                 let remaining = remaining.clone();
                 async move {
+                    // try_update is unavailable on the Rust 1.90 image build toolchain.
+                    #[allow(deprecated)]
                     if remaining
                         .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
                         .is_ok()

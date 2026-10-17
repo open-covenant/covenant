@@ -32,6 +32,7 @@
 
 pub mod accounts;
 pub mod agent;
+mod agent_evidence;
 pub mod attempts;
 pub mod bond;
 pub mod bundles;

@@ -87,6 +87,8 @@ pub enum ProviderError {
     Truncated { max_tokens: u32, partial: String },
 }
 
+// async_trait adds #[must_use] to already-must-use boxed futures.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait Provider: Send + Sync {
     /// Provider tag for logs / metrics.
@@ -551,6 +553,8 @@ pub async fn pick_provider(secrets_path: &Path) -> Box<dyn Provider> {
 
 // ---------- Embeddings ----------
 
+// async_trait adds #[must_use] to already-must-use boxed futures.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait Embedder: Send + Sync {
     fn name(&self) -> &'static str;

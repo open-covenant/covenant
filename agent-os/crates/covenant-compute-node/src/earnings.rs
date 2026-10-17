@@ -68,6 +68,8 @@ pub enum EarningsError {
     Persist(String),
 }
 
+// async_trait adds #[must_use] to already-must-use boxed futures.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait EarningsLedger: Send + Sync {
     /// Credits a completed job. Idempotent on `job_id`: crediting the

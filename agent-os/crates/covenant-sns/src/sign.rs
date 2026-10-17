@@ -38,6 +38,8 @@ pub struct SignerResponse {
 
 /// The write side of the profile: hand a built request to whatever holds the
 /// parent-domain key. The daemon drives the sidecar subprocess; tests stand in.
+// async_trait adds #[must_use] to already-must-use boxed futures.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait SnsSigner: Send + Sync {
     async fn sign(&self, request: SignerRequest) -> Result<SignerResponse, String>;

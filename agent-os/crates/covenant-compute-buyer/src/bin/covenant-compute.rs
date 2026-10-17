@@ -23,23 +23,24 @@ use std::time::Duration;
 use anyhow::Context;
 use base64::Engine as _;
 use covenant_compute_buyer::{
-    apply_patch, cancel_job, capacity, cheapest_matching_ask, claim_deposit, close_lease,
-    describe_reworks, describe_round, describe_verdict, dispatch_and_verify, dispatch_signed,
-    dispatch_streaming, dispute_job, fetch_job_output, funds_with_deposit_info, hire_agent,
-    hire_fix, http_client, lease_view, list_verified_jobs, list_withdrawals, prepare_agent_task,
-    prepare_fix_order, preview_value, sign_envelope, submit_streaming, vault_delete, vault_fetch,
-    vault_list, vault_store, verify_payout, withdraw, AgentArgs, AgentOutcome, BuyerConfig,
-    DispatchOutcome, FixOutcome, JobRequest, PriceQuote, PurchaseBook, PurchaseEntry, SwarmArgs,
-    VaultKeyring, DEFAULT_AGENT_DEADLINE_MS, DEFAULT_AGENT_OFFER_MICRO_USDC,
-    DEFAULT_FIX_DEADLINE_MS, DEFAULT_FIX_OFFER_MICRO_USDC, SWARM_MODEL,
+    agent_preview, apply_patch, cancel_job, capacity, cheapest_matching_ask, check_pinned_task,
+    check_preview, claim_deposit, close_lease, describe_reworks, describe_round, describe_verdict,
+    dispatch_and_verify, dispatch_signed, dispatch_streaming, dispute_job, fetch_job_output,
+    funds_with_deposit_info, hire_agent, hire_agent_idempotent, hire_fix, http_client, lease_view,
+    list_verified_jobs, list_withdrawals, prepare_agent_task, prepare_fix_order, preview_value,
+    sign_envelope, submit_streaming, vault_delete, vault_fetch, vault_list, vault_store,
+    verify_payout, withdraw, AgentArgs, AgentOutcome, BuyerConfig, DispatchOutcome, FixOutcome,
+    JobRequest, PriceQuote, PurchaseBook, PurchaseEntry, SwarmArgs, VaultKeyring,
+    DEFAULT_AGENT_DEADLINE_MS, DEFAULT_AGENT_OFFER_MICRO_USDC, DEFAULT_FIX_DEADLINE_MS,
+    DEFAULT_FIX_OFFER_MICRO_USDC, SWARM_MODEL,
 };
 use covenant_compute_protocol::{
     chat_input, generation_input, lease_input, parse_assistant_output, parse_embedding_output,
     parse_speech_output, parse_transcription_output, speech_input, tools_input,
-    transcription_input, AgentRuntime, AssistantReply, ChatMessage, FinishReason, GenerationParams,
-    JobKind, LeaseTerms, LeaseView, NamedFunction, NamedToolChoice, PriceUnit, ResponseFormat,
-    SpeechInput, SpeechResult, ToolChoice, ToolChoiceMode, ToolDefinition, ToolKind,
-    TranscriptionInput, VaultKey, LEASE_DEADLINE_SLACK_MS,
+    transcription_input, AssistantReply, ChatMessage, FinishReason, GenerationParams, JobKind,
+    LeaseTerms, LeaseView, NamedFunction, NamedToolChoice, PriceUnit, ResponseFormat, SpeechInput,
+    SpeechResult, ToolChoice, ToolChoiceMode, ToolDefinition, ToolKind, TranscriptionInput,
+    VaultKey, LEASE_DEADLINE_SLACK_MS,
 };
 use covenant_identity::LocalIdentity;
 use covenant_mcp::Content;
@@ -63,11 +64,14 @@ Usage:
   covenant-compute swarm --action <a> --body <json|@file|->   buy work from the IMD swarm through a swarm operator
   covenant-compute receipts                     your verified job history
   covenant-compute output <job-id>              re-read a past job's verified output
+  covenant-compute evidence <job-id>            verify a paid agent task's full checker evidence
   covenant-compute verify <job-id>              hold the chain to a job's payout
   covenant-compute withdraw <micro-usdc> <to>   move unspent balance to a wallet
   covenant-compute withdrawals                  your withdrawal history
   covenant-compute dispute <job-id> <reason>    file a signed dispute of a job
   covenant-compute cancel <job-id>              refund a job no operator took yet
+  covenant-compute check --repo <path|url> --price <micro-usdc> --accept <cmd>  buy a signed verification run
+  covenant-compute budget status|reconcile       inspect the persistent spend ceiling
   covenant-compute agent --repo <path|url> --accept <cmd> <task>   hire a coding agent; pay only if its work passes
   covenant-compute fix --repo <path|url> --accept <cmd> <bug>      hire a crew to reproduce and fix a bug; pay only if the fix passes
   covenant-compute lease open --minutes N --rate R    rent a whole GPU for a window
@@ -131,6 +135,14 @@ Swarm flags (swarm):
   --price, --deadline-ms, --min-reputation-bps, --idempotency-key, --dry-run   as for a buy;
                         the deadline defaults to two hours, since the swarm answers in
                         minutes to hours
+Verification flags (check, or agent with a Kani acceptance):
+  --kani-plan <file>    a structured covenant.kani.plan.v1 JSON plan; no --accept shell commands
+  --memory-mib <n> --cpus <n> --scratch-mib <n>   explicit Kani resource requirements
+  --check-image <id>    immutable Kani image digest; --check-timeout includes the plan timeout
+  --check-price <n>     Kani checker offer in micro-USDC; required for agent, equals --price for check
+  --patch <file>        check only: verify this patch; omit to check the pinned source unchanged
+  --dry-run --idempotency-key <key>   preview or durably replay one check; mutually exclusive
+  Checks pay for execution even when the requested property fails.
 Agent flags (agent, fix):
   --repo <path|url>     a local git repository (sent as a bundle) or a public https URL
   --commit <sha>        the commit to work from; defaults to the local repository's HEAD
@@ -152,7 +164,10 @@ Agent flags (agent, fix):
                         commit; only checkers see it; repeatable
   --model <id>          the model the agent should drive; the operator's default otherwise
   --out <path>          where to write the accepted patch (default agent-<job-id>.patch)
-  --price, --deadline-ms   as for a buy; the deadline defaults to 30 minutes
+  --price, --deadline-ms, --dry-run, --idempotency-key   agent purchases; default 30 minutes
+  COVENANT_COMPUTE_DAILY_BUDGET_MICRO_USDC sets a shared rolling 24-hour ceiling;
+  pending orders remain reserved until verified terminal evidence arrives.
+  fix supports --dry-run; keyed two-stage fix orders currently refuse
   fix takes the same flags but --skill and --fix: one agent writes tests that reproduce the
   bug, another fixes it against them, and the order's --price (default 1.00 USDC) and
   --deadline-ms (default 60 minutes) cover both
@@ -524,6 +539,32 @@ async fn main() -> anyhow::Result<()> {
             let job_id = parse_job_id(&args, 0)?;
             cmd_output(&load_ctx()?, job_id, json_out).await
         }
+        "evidence" => {
+            let ctx = load_ctx()?;
+            let job_id = parse_job_id(&args, 0)?;
+            let evidence = covenant_compute_buyer::fetch_agent_evidence(
+                &ctx.http,
+                &ctx.config,
+                &ctx.identity,
+                job_id,
+            )
+            .await?;
+            if json_out {
+                println!("{}", serde_json::to_string_pretty(&evidence)?);
+            } else {
+                println!(
+                    "job {job_id}: {}/{} checker receipts verified; final patch accepted",
+                    evidence
+                        .checks
+                        .iter()
+                        .filter(|c| c.receipt_verified)
+                        .count(),
+                    evidence.checks.len()
+                );
+                println!("Payouts and completeness of the check inventory are not independently verified.");
+            }
+            Ok(())
+        }
         "verify" => {
             let mut ctx = load_ctx()?;
             if let Some(url) = take_flag_value(&mut args, "--rpc-url") {
@@ -552,6 +593,24 @@ async fn main() -> anyhow::Result<()> {
         "cancel" => {
             let job_id = parse_job_id(&args, 0)?;
             cmd_cancel(&load_ctx()?, job_id, json_out).await
+        }
+        "check" => cmd_check(&load_ctx()?, &mut args, json_out).await,
+        "budget" => {
+            let reconcile = args.first().map(String::as_str) == Some("reconcile");
+            anyhow::ensure!(
+                args.is_empty() || args == ["status"] || args == ["reconcile"],
+                "use budget status|reconcile"
+            );
+            let ctx = load_ctx()?;
+            let v = covenant_compute_buyer::durable_budget::describe(
+                &ctx.http,
+                &ctx.config,
+                &ctx.identity,
+                reconcile,
+            )
+            .await?;
+            println!("{}", serde_json::to_string_pretty(&v)?);
+            Ok(())
         }
         "agent" => cmd_agent(&load_ctx()?, &mut args, json_out).await,
         "fix" => cmd_fix(&load_ctx()?, &mut args, json_out).await,
@@ -1308,6 +1367,108 @@ async fn preview_buy(
     Ok(())
 }
 
+fn take_kani(
+    args: &mut Vec<String>,
+    check_price: Option<u64>,
+) -> anyhow::Result<Option<covenant_compute_protocol::KaniCheckSpec>> {
+    let Some(file) = take_flag_value(args, "--kani-plan") else {
+        return Ok(None);
+    };
+    let plan = serde_json::from_slice(
+        &std::fs::read(&file).with_context(|| format!("read Kani plan {file}"))?,
+    )?;
+    let memory_mib = take_number(args, "--memory-mib", "MiB as a positive integer")?
+        .context("--memory-mib is required for Kani")?;
+    let cpus = take_number(args, "--cpus", "a positive integer")?
+        .context("--cpus is required for Kani")?;
+    let scratch_mib = take_number(args, "--scratch-mib", "MiB as a positive integer")?
+        .context("--scratch-mib is required for Kani")?;
+    let check_price_micro_usdc =
+        take_number(args, "--check-price", "micro-USDC as a positive integer")?
+            .or(check_price)
+            .context("--check-price is required for an agent's Kani check")?;
+    Ok(Some(covenant_compute_protocol::KaniCheckSpec {
+        plan,
+        memory_mib,
+        cpus,
+        scratch_mib,
+        check_price_micro_usdc,
+    }))
+}
+
+async fn cmd_check(ctx: &Ctx, args: &mut Vec<String>, _json_out: bool) -> anyhow::Result<()> {
+    let price = take_price(args)?.context("--price is required for verification-only execution")?;
+    anyhow::ensure!(
+        price <= ctx.max_price_micro_usdc,
+        "check offer exceeds the per-call price ceiling"
+    );
+    let patch = take_flag_value(args, "--patch")
+        .map(std::fs::read)
+        .transpose()?
+        .unwrap_or_default();
+    let check_args = AgentArgs {
+        repo: take_flag_value(args, "--repo").context("--repo is required")?,
+        commit: take_flag_value(args, "--commit"),
+        task: "Verify the pinned repository".into(),
+        accept: take_flag_values(args, "--accept"),
+        setup: take_flag_values(args, "--setup"),
+        check_image: take_flag_value(args, "--check-image"),
+        check_timeout_secs: take_number(args, "--check-timeout", "seconds as an integer")?,
+        protect: Vec::new(),
+        hidden: Vec::new(),
+        hidden_accept: Vec::new(),
+        fix: Vec::new(),
+        skill: None,
+        model: None,
+        apply: false,
+        price_micro_usdc: Some(price),
+        deadline_ms: take_number(args, "--deadline-ms", "milliseconds as an integer")?,
+        kani: take_kani(args, Some(price))?,
+        dry_run: take_flag(args, "--dry-run"),
+        idempotency_key: take_flag_value(args, "--idempotency-key"),
+    };
+    reject_stray_flags(args)?;
+    anyhow::ensure!(args.is_empty(), "check takes named options only");
+    anyhow::ensure!(
+        !(check_args.dry_run && check_args.idempotency_key.is_some()),
+        "a dry run takes no idempotency key"
+    );
+    let task = prepare_agent_task(&check_args)?;
+    let deadline = check_args
+        .deadline_ms
+        .unwrap_or((u64::from(task.spec.acceptance.timeout_secs) + 300) * 1000);
+    if check_args.dry_run {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&check_preview(&task, &patch, price, deadline)?)?
+        );
+        return Ok(());
+    }
+    let result = check_pinned_task(
+        &ctx.http,
+        &ctx.config,
+        &ctx.identity,
+        task,
+        &patch,
+        price,
+        deadline,
+        check_args.idempotency_key.as_deref(),
+    )
+    .await
+    .map_err(with_funding_hint)?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(
+            &serde_json::json!({"job_id":result.execution.envelope.payload.job_id,"receipt_verified":true,"acceptance_passed":result.verdict.passed,"payment_basis":"checker execution","envelope":result.execution.envelope,"receipt":result.execution.receipt,"output":result.execution.output,"check":result.verdict,"payout":result.execution.payout})
+        )?
+    );
+    anyhow::ensure!(
+        result.verdict.passed,
+        "checker execution completed, but the requested acceptance did not pass"
+    );
+    Ok(())
+}
+
 /// Hires a coding agent for a task against a repository. The task pays
 /// only once a second operator applies the agent's patch to a fresh copy
 /// of the commit and every acceptance command passes, so a failed run
@@ -1330,9 +1491,17 @@ async fn cmd_agent(ctx: &Ctx, args: &mut Vec<String>, json_out: bool) -> anyhow:
         price_micro_usdc: take_price(args)?,
         deadline_ms: take_number(args, "--deadline-ms", "a whole number of milliseconds")?,
         apply: take_flag(args, "--apply"),
+        kani: take_kani(args, None)?,
+        dry_run: take_flag(args, "--dry-run"),
+        idempotency_key: take_flag_value(args, "--idempotency-key"),
         task: String::new(),
     };
     let out = take_flag_value(args, "--out");
+    reject_stray_flags(args)?;
+    anyhow::ensure!(
+        !(agent_args.dry_run && agent_args.idempotency_key.is_some()),
+        "a dry run takes no idempotency key"
+    );
     let agent_args = AgentArgs {
         task: resolve_text(rest_joined(args, "task")?)?,
         ..agent_args
@@ -1341,7 +1510,7 @@ async fn cmd_agent(ctx: &Ctx, args: &mut Vec<String>, json_out: bool) -> anyhow:
     if !json_out {
         announce_toolchain(&task.spec.acceptance);
     }
-    let runtime = AgentRuntime::ClaudeCode.label().to_string();
+    let runtime = task.spec.builder_model().to_string();
     let price = resolve_price(
         ctx,
         JobKind::AgentTask,
@@ -1357,6 +1526,13 @@ async fn cmd_agent(ctx: &Ctx, args: &mut Vec<String>, json_out: bool) -> anyhow:
     )
     .await?;
     let deadline_ms = agent_args.deadline_ms.unwrap_or(DEFAULT_AGENT_DEADLINE_MS);
+    if agent_args.dry_run {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&agent_preview(&task, price, deadline_ms)?)?
+        );
+        return Ok(());
+    }
     if !json_out {
         eprintln!(
             "offering up to {}: if the work passes you pay what the build spent plus its \
@@ -1366,15 +1542,31 @@ async fn cmd_agent(ctx: &Ctx, args: &mut Vec<String>, json_out: bool) -> anyhow:
             deadline_ms / 60_000
         );
     }
-    let outcome = hire_agent(
-        &ctx.http,
-        &ctx.config,
-        &ctx.identity,
-        task,
-        price,
-        deadline_ms,
-    )
-    .await
+    let outcome = match agent_args.idempotency_key.as_deref() {
+        Some(key) => {
+            hire_agent_idempotent(
+                &ctx.http,
+                &ctx.config,
+                &ctx.identity,
+                task,
+                price,
+                deadline_ms,
+                key,
+            )
+            .await
+        }
+        None => {
+            hire_agent(
+                &ctx.http,
+                &ctx.config,
+                &ctx.identity,
+                task,
+                price,
+                deadline_ms,
+            )
+            .await
+        }
+    }
     .map_err(with_funding_hint)?;
     match outcome {
         AgentOutcome::NotPaid {
@@ -1740,9 +1932,18 @@ async fn cmd_fix(ctx: &Ctx, args: &mut Vec<String>, json_out: bool) -> anyhow::R
         price_micro_usdc: take_price(args)?,
         deadline_ms: take_number(args, "--deadline-ms", "a whole number of milliseconds")?,
         apply: take_flag(args, "--apply"),
+        kani: take_kani(args, None)?,
+        dry_run: take_flag(args, "--dry-run"),
+        idempotency_key: take_flag_value(args, "--idempotency-key"),
         task: String::new(),
     };
     let out = take_flag_value(args, "--out");
+    reject_stray_flags(args)?;
+    anyhow::ensure!(fix_args.idempotency_key.is_none(), "fix does not yet support keyed two-stage orders; agent and check support --idempotency-key");
+    anyhow::ensure!(
+        fix_args.kani.is_none(),
+        "Kani currently supports agent/check code.change orders"
+    );
     let fix_args = AgentArgs {
         task: resolve_text(rest_joined(args, "bug")?)?,
         ..fix_args
@@ -1755,6 +1956,19 @@ async fn cmd_fix(ctx: &Ctx, args: &mut Vec<String>, json_out: bool) -> anyhow::R
         .price_micro_usdc
         .unwrap_or(DEFAULT_FIX_OFFER_MICRO_USDC);
     let deadline_ms = fix_args.deadline_ms.unwrap_or(DEFAULT_FIX_DEADLINE_MS);
+    anyhow::ensure!(
+        price <= ctx.max_price_micro_usdc,
+        "fix offer exceeds the per-call price ceiling"
+    );
+    if fix_args.dry_run {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(
+                &serde_json::json!({"dry_run":true,"spends_nothing":true,"kind":"fix_order","price_micro_usdc":price,"deadline_ms":deadline_ms,"reproduction":agent_preview(&order.reproduction,price*2/5,deadline_ms)?,"fix":agent_preview(&order.fix,price-price*2/5,deadline_ms)?})
+            )?
+        );
+        return Ok(());
+    }
     if !json_out {
         eprintln!(
             "offering up to {} for the fix: one agent reproduces the bug as a failing test, \
@@ -3278,6 +3492,139 @@ fn unit_label(unit: PriceUnit) -> &'static str {
 mod tests {
     use super::with_funding_hint;
     use covenant_compute_buyer::BuyerError;
+
+    #[tokio::test]
+    async fn large_local_agent_and_check_previews_never_upload() {
+        let repo = tempfile::tempdir().unwrap();
+        let mut state = 0x934512abu32;
+        let bytes = (0..3_000_000)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                state as u8
+            })
+            .collect::<Vec<_>>();
+        std::fs::write(repo.path().join("fixture.bin"), bytes).unwrap();
+        for args in [
+            vec!["init", "-q"],
+            vec!["add", "fixture.bin"],
+            vec![
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@invalid",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-qm",
+                "fixture",
+            ],
+        ] {
+            assert!(std::process::Command::new("git")
+                .arg("-C")
+                .arg(repo.path())
+                .args(args)
+                .status()
+                .unwrap()
+                .success());
+        }
+        let ctx = super::Ctx {
+            http: reqwest::Client::new(),
+            config: covenant_compute_buyer::BuyerConfig {
+                coordinator_url: "http://127.0.0.1:1".into(),
+                poll_interval: std::time::Duration::from_millis(1),
+                referral_code: None,
+                rpc_url: None,
+            },
+            identity: covenant_identity::LocalIdentity::generate("buyer@preview-test"),
+            max_price_micro_usdc: 1_000_000,
+        };
+        let mut agent: Vec<String> = [
+            "--repo",
+            repo.path().to_str().unwrap(),
+            "--accept",
+            "true",
+            "--price",
+            "700000",
+            "--dry-run",
+            "inspect fixture",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        super::cmd_agent(&ctx, &mut agent, true).await.unwrap();
+        let mut check: Vec<String> = [
+            "--repo",
+            repo.path().to_str().unwrap(),
+            "--accept",
+            "true",
+            "--price",
+            "100000",
+            "--dry-run",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        super::cmd_check(&ctx, &mut check, true).await.unwrap();
+        let (_, stored) = covenant_compute_buyer::local_bundle(repo.path(), None).unwrap();
+        assert!(
+            stored.is_some(),
+            "fixture must exercise the separate upload path"
+        );
+    }
+
+    #[tokio::test]
+    async fn agent_and_check_refuse_unknown_paid_flags_before_network() {
+        let ctx = super::Ctx {
+            http: reqwest::Client::new(),
+            config: covenant_compute_buyer::BuyerConfig {
+                coordinator_url: "http://127.0.0.1:1".into(),
+                poll_interval: std::time::Duration::from_millis(1),
+                referral_code: None,
+                rpc_url: None,
+            },
+            identity: covenant_identity::LocalIdentity::generate("buyer@cli-test"),
+            max_price_micro_usdc: 1_000_000,
+        };
+        let mut args: Vec<String> = [
+            "--repo",
+            "https://github.com/example/repo",
+            "--commit",
+            &"a".repeat(40),
+            "--accept",
+            "true",
+            "--dry-rnu",
+            "prove route",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        let error = super::cmd_agent(&ctx, &mut args, true)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("unknown flag"), "{error}");
+        let mut args: Vec<String> = [
+            "--repo",
+            "https://github.com/example/repo",
+            "--commit",
+            &"a".repeat(40),
+            "--accept",
+            "true",
+            "--price",
+            "1000",
+            "--dry-rnu",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        let error = super::cmd_check(&ctx, &mut args, true)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("unknown flag"), "{error}");
+    }
 
     #[test]
     fn an_underfunded_refusal_names_the_deposit_path() {

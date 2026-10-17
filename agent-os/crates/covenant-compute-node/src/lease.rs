@@ -91,6 +91,8 @@ impl LeaseControl {
 /// today. A backend that cannot come up should fail `open` rather than
 /// hold a box the buyer is paying for and cannot use; a failed lease
 /// refunds them whole.
+// async_trait adds #[must_use] to already-must-use boxed futures.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait SessionBackend: Send + Sync {
     /// Brings a session up and returns where it can be reached.
@@ -137,6 +139,8 @@ impl SessionBackend for StubSessionBackend {
 /// Where a node learns that a buyer closed a session. The coordinator
 /// records the close; the serving node has to go and see it, because
 /// nothing pushes to a node that only ever dials out.
+// async_trait adds #[must_use] to already-must-use boxed futures.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait LeaseCloseSource: Send + Sync {
     async fn is_closed(&self, job_id: Uuid) -> bool;

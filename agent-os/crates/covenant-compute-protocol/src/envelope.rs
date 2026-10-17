@@ -176,8 +176,8 @@ impl JobEnvelopePayload {
             // them, or a builder that used its window is refunded unpaid.
             JobKind::AgentTask => {
                 let spec = crate::agent::parse_agent_task(&self.input)?;
-                let label = spec.runtime.label();
-                if self.capability_requirement.model_id.as_deref() != Some(label) {
+                let label = spec.builder_model();
+                if self.capability_requirement.model_id.as_deref() != Some(label.as_str()) {
                     return Err(ProtocolError::Invalid(format!(
                         "an agent task for {label} must require model {label:?}, got {:?}",
                         self.capability_requirement.model_id
@@ -198,8 +198,40 @@ impl JobEnvelopePayload {
             // A check routes by the image it runs in, for the same reason.
             JobKind::AgentCheck => {
                 let spec = crate::agent::parse_agent_check(&self.input)?;
+                if spec
+                    .acceptance
+                    .kani
+                    .as_ref()
+                    .is_some_and(|kani| kani.check_price_micro_usdc != self.price_micro_usdc)
+                {
+                    return Err(ProtocolError::Invalid(
+                        "Kani check price must equal the signed execution offer".into(),
+                    ));
+                }
+                if spec.task_job_id == self.job_id {
+                    if spec.acceptance.skill != crate::agent::AgentSkill::CodeChange
+                        || spec.reproduction.is_some()
+                    {
+                        return Err(ProtocolError::Invalid(
+                            "direct verification requires code.change without a reproduction"
+                                .into(),
+                        ));
+                    }
+                    let needed = u64::from(spec.acceptance.timeout_secs) * 1_000
+                        + crate::agent::AGENT_CHECK_SLACK_MS;
+                    if self.deadline_ms < needed {
+                        return Err(ProtocolError::Invalid(
+                            "verification deadline must cover the check and settlement slack"
+                                .into(),
+                        ));
+                    }
+                } else if spec.patch_b64.is_empty() {
+                    return Err(ProtocolError::Invalid(
+                        "only self-named direct verification may omit the patch".into(),
+                    ));
+                }
                 if self.capability_requirement.model_id.as_deref()
-                    != Some(spec.acceptance.image.as_str())
+                    != Some(spec.acceptance.checker_model().as_str())
                 {
                     return Err(ProtocolError::Invalid(format!(
                         "an agent check in {} must require that image as its model, got {:?}",

@@ -17,6 +17,8 @@ use crate::{types::PaymentRequirements, Result};
 /// transaction (typically a SPL token transfer to
 /// `requirements.pay_to`), sign it, and return the base64-encoded
 /// payment payload the x402 spec expects in the header.
+// async_trait adds #[must_use] to already-must-use boxed futures.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait Signer: Send + Sync {
     async fn build_payment(&self, requirements: &PaymentRequirements) -> Result<String>;

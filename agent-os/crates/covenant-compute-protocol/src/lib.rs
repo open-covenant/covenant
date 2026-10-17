@@ -12,6 +12,7 @@
 
 mod address;
 mod agent;
+mod agent_evidence;
 mod bond;
 mod cancel;
 mod capability;
@@ -22,6 +23,7 @@ mod envelope;
 mod escrow;
 mod fees;
 mod generation;
+mod kani;
 mod lease;
 mod lease_close;
 mod logprobs;
@@ -55,6 +57,9 @@ pub use agent::{
     MAX_REWORK_FEEDBACK_BYTES, MAX_STORED_BUNDLE_BYTES, MAX_SUMMARY_BYTES, MAX_TASK_BYTES,
     MIN_BUILD_BUDGET_MICRO_USD,
 };
+pub use agent_evidence::{
+    AgentEvidenceBundle, AgentEvidenceMetadata, AgentEvidencePayout, AgentJobEvidence,
+};
 pub use bond::{
     bond_memo_for, bond_refund_memo_for, parse_bond_refund_memo, UnbondRequest, BOND_MEMO_PREFIX,
     BOND_REFUND_MEMO_PREFIX, UNBOND_MAX_SKEW_MS,
@@ -81,6 +86,11 @@ pub use fees::{fee_take_micro_usdc, MarketplaceFee, MAX_FEE_BPS};
 pub use generation::{
     generation_input, parse_generation_params, GenerationParams, ResponseFormat, MAX_SCHEMA_BYTES,
     MAX_SCHEMA_NAME_BYTES, MAX_STOP_SEQUENCES, MAX_STOP_SEQUENCE_BYTES, MAX_TOP_LOGPROBS,
+};
+pub use kani::{
+    kani_artifacts, kani_checker_model, kani_command_label, validate_kani_check_output,
+    validate_kani_evidence, KaniCheckSpec, KaniPlan, MAX_KANI_COMPRESSED_BYTES, MAX_KANI_RAW_BYTES,
+    MAX_KANI_TIMEOUT_SECS,
 };
 pub use lease::{
     lease_input, parse_lease_terms, LeaseTerms, LEASE_DEADLINE_SLACK_MS, MAX_CLIENT_KEY_BYTES,

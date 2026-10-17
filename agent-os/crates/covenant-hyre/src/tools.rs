@@ -65,6 +65,8 @@ pub struct PaidResponse {
 /// The daemon's paid-call seam. Implemented over the x402 client +
 /// signer sidecar + settlement accounting; mocked in this crate's
 /// tests.
+// async_trait adds #[must_use] to already-must-use boxed futures.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait PaidExecutor: Send + Sync {
     async fn execute(&self, req: PaidRequest) -> std::result::Result<PaidResponse, String>;

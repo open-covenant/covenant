@@ -24,6 +24,7 @@ reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
@@ -35,4 +36,3 @@ async-trait = { workspace = true }
 covenant-audit = { path = "../covenant-audit" }
 covenant-compute-coordinator = { path = "../covenant-compute-coordinator" }
 covenant-compute-node = { path = "../covenant-compute-node" }
-tempfile = { workspace = true }

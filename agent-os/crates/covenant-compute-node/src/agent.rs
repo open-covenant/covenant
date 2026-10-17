@@ -97,6 +97,8 @@ pub struct AgentConfig {
     pub check_memory: String,
     pub check_cpus: String,
     pub check_pids: u32,
+    /// Typed proof profiles, admitted at boot and again before execution.
+    pub kani_profiles: Vec<crate::kani::KaniProfile>,
     /// Distinguishes this node's containers on a shared engine.
     pub instance_tag: String,
     /// The node key, which signs each check's vote so the coordinator can
@@ -169,6 +171,7 @@ pub struct AgentExecutor {
     config: AgentConfig,
     tracker: Arc<SubprocessTracker>,
     preempt_grace: Duration,
+    kani_lock: tokio::sync::Mutex<()>,
 }
 
 /// What a finished build run reported.
@@ -189,6 +192,7 @@ impl AgentExecutor {
             config,
             tracker,
             preempt_grace,
+            kani_lock: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -496,7 +500,7 @@ impl AgentExecutor {
         }
         let budget = build_budget(
             &self.config.budget_usd,
-            job.price_micro_usdc,
+            spec.build_offer_micro_usdc(job.price_micro_usdc),
             rework.as_ref().map(|r| r.budget_micro_usd),
         )
         .map_err(ExecutorError::Failed)?;
@@ -705,7 +709,28 @@ impl AgentExecutor {
     ) -> Result<Vec<Content>, ExecutorError> {
         let spec = parse_agent_check(&job.input).map_err(invalid)?;
         let acceptance = &spec.acceptance;
-        if !self.config.check_images.contains(&acceptance.image) {
+        let finish_before_proof = |verdict| finish_preproof(verdict, acceptance.kani.is_some());
+        if let Some(kani) = &acceptance.kani {
+            if acceptance.setup.iter().any(|s| s != "cargo fetch --locked")
+                || spec.hidden.as_ref().is_some_and(|h| !h.commands.is_empty())
+            {
+                return Err(ExecutorError::Failed(
+                    "Kani accepts only typed proof plans and optional cargo fetch --locked setup"
+                        .into(),
+                ));
+            }
+            if !self
+                .config
+                .kani_profiles
+                .iter()
+                .any(|p| p.matches(&acceptance.image, kani))
+            {
+                return Err(ExecutorError::Failed(
+                    "this node does not admit the ordered Kani image/resource profile".into(),
+                ));
+            }
+        }
+        if acceptance.kani.is_none() && !self.config.check_images.contains(&acceptance.image) {
             return Err(ExecutorError::Failed(format!(
                 "this node does not run checks in {}",
                 acceptance.image
@@ -776,7 +801,7 @@ impl AgentExecutor {
         };
         if !baseline.iter().all(CommandOutcome::passed) {
             tracing::info!(job_id = %job.job_id, "the suite fails before the new tests; nothing to catch");
-            return finish(verdict(true, Vec::new(), Vec::new(), Vec::new()));
+            return finish_before_proof(verdict(true, Vec::new(), Vec::new(), Vec::new()));
         }
 
         // code.fix: the reproduction goes in first and must catch the bug on
@@ -791,14 +816,19 @@ impl AgentExecutor {
                     Ok(committed) => committed,
                     Err(e) => {
                         tracing::info!(job_id = %job.job_id, error = %e, "the reproduction does not apply");
-                        return finish(verdict(false, Vec::new(), Vec::new(), Vec::new()));
+                        return finish_before_proof(verdict(
+                            false,
+                            Vec::new(),
+                            Vec::new(),
+                            Vec::new(),
+                        ));
                     }
                 };
                 let outcomes = self
                     .run_phase(job, 100, acceptance, &tree, &visible, deps, budget_end)
                     .await?;
                 if outcomes.last().is_none_or(|o| !o.caught()) {
-                    return finish(verdict(true, Vec::new(), outcomes, Vec::new()));
+                    return finish_before_proof(verdict(true, Vec::new(), outcomes, Vec::new()));
                 }
                 self.reset(&git_dir, &tree, &base, until).await?;
                 (base, reproduced, outcomes)
@@ -806,17 +836,22 @@ impl AgentExecutor {
             None => (commit.to_string(), Vec::new(), Vec::new()),
         };
 
-        let applied = self
-            .git(
+        let applied = if patch.is_empty() && spec.task_job_id == job.job_id {
+            // A directly purchased verification checks the immutable base
+            // without manufacturing a report-file patch.
+            Ok(Vec::new())
+        } else {
+            self.git(
                 &git_dir,
                 Some(&tree),
                 &["apply", "--index", "--whitespace=nowarn", &patch_arg],
                 until,
             )
-            .await;
+            .await
+        };
         if let Err(e) = applied {
             tracing::info!(job_id = %job.job_id, error = %e, "patch does not apply");
-            return finish(verdict(false, Vec::new(), caught_first, Vec::new()));
+            return finish_before_proof(verdict(false, Vec::new(), caught_first, Vec::new()));
         }
         let violations: Vec<String> = self
             .changed_paths(&git_dir, &tree, &base, until)
@@ -825,7 +860,7 @@ impl AgentExecutor {
             .filter(|p| acceptance.protects(p) || reproduced.contains(p))
             .collect();
         if !violations.is_empty() {
-            return finish(verdict(true, violations, caught_first, Vec::new()));
+            return finish_before_proof(verdict(true, violations, caught_first, Vec::new()));
         }
 
         // code.tests and code.repro: the new tests must fail on the commit's
@@ -835,7 +870,7 @@ impl AgentExecutor {
                 .run_phase(job, 100, acceptance, &tree, &visible, deps, budget_end)
                 .await?;
             if outcomes.last().is_none_or(|o| !o.caught()) || skill == AgentSkill::CodeRepro {
-                return finish(verdict(true, Vec::new(), outcomes, Vec::new()));
+                return finish_before_proof(verdict(true, Vec::new(), outcomes, Vec::new()));
             }
             outcomes
         } else {
@@ -845,8 +880,58 @@ impl AgentExecutor {
         if let Some(hidden) = &spec.hidden {
             if let Err(e) = place_hidden_files(&tree, hidden) {
                 tracing::info!(job_id = %job.job_id, error = %e, "hidden checks could not be placed");
-                return finish(verdict(false, Vec::new(), caught, Vec::new()));
+                return finish_before_proof(verdict(false, Vec::new(), caught, Vec::new()));
             }
+        }
+
+        if let Some(kani) = &acceptance.kani {
+            // A fresh profile has one proof slot. Ordinary node concurrency is
+            // also constrained at startup, so another task cannot steal RAM.
+            let _slot = self.kani_lock.lock().await;
+            let setup: Vec<&str> = acceptance.setup.iter().map(String::as_str).collect();
+            let mut outcomes = self
+                .run_phase(job, 200, acceptance, &tree, &setup, deps, budget_end)
+                .await?;
+            if outcomes.iter().any(|o| !o.passed()) {
+                return finish_before_proof(verdict(true, Vec::new(), outcomes, Vec::new()));
+            }
+            // Hidden files are part of the effective proof source, including
+            // ignored paths. Fetch ran against a read-only source mount, so
+            // no build/dependency artifacts can enter this source tree.
+            self.git(
+                &git_dir,
+                Some(&tree),
+                &["add", "--force", "--all", "--", "."],
+                until,
+            )
+            .await?;
+            let tree_hash = self
+                .git(&git_dir, Some(&tree), &["write-tree"], until)
+                .await?;
+            let tree_hash = String::from_utf8_lossy(&tree_hash).trim().to_string();
+            let name = format!("compute-kani-{}-{}", self.config.instance_tag, job.job_id);
+            let proof = crate::kani::run(crate::kani::KaniRequest {
+                runtime: &self.config.container_runtime,
+                image: &acceptance.image,
+                profiles: &self.config.kani_profiles,
+                spec: kani,
+                tree: &tree,
+                work_dir: &self.config.work_dir,
+                deps_volume: deps.map(|d| d.volume.as_str()),
+                name: &name,
+                job_id: job.job_id,
+                task_job_id: spec.task_job_id,
+                repo_commit: spec.repo.commit(),
+                tree_hash: &tree_hash,
+                patch_sha256: &spec.patch_sha256,
+                hidden_sha256: acceptance.hidden_sha256.as_deref(),
+                until: budget_end,
+            })
+            .await?;
+            outcomes.push(proof.outcome);
+            let mut output = finish(verdict(true, Vec::new(), outcomes, Vec::new()))?;
+            output.push(proof.evidence);
+            return Ok(output);
         }
 
         let commands = check_commands(acceptance, spec.hidden.as_ref());
@@ -1350,7 +1435,18 @@ impl AgentExecutor {
             .args(["--security-opt", "no-new-privileges"])
             .args(["--tmpfs", "/tmp:rw,nosuid,size=256m"])
             .args(["--user", &owner])
-            .args(["-v", &format!("{}:/work:rw", tree.display())])
+            .args([
+                "-v",
+                &format!(
+                    "{}:/work:{}",
+                    tree.display(),
+                    if acceptance.kani.is_some() {
+                        "ro"
+                    } else {
+                        "rw"
+                    }
+                ),
+            ])
             .args([
                 "-w",
                 "/work",
@@ -1373,9 +1469,17 @@ impl AgentExecutor {
             script.push_str(&format!("export PATH=\"{DEPS_PATH}:$PATH\"\n"));
         }
         script.push_str(command);
-        cmd.arg(&acceptance.image)
-            .args(["sh", "-c", &script])
-            .stdin(Stdio::null())
+        if acceptance.kani.is_some() {
+            if setup {
+                cmd.args(["-e", "CARGO_NET_OFFLINE=false"]);
+            }
+            cmd.args(["--entrypoint", "/bin/sh"])
+                .arg(&acceptance.image)
+                .args(["-c", &script]);
+        } else {
+            cmd.arg(&acceptance.image).args(["sh", "-c", &script]);
+        }
+        cmd.stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
@@ -1536,6 +1640,16 @@ fn decode_patch(patch: &AgentPatch) -> Result<Vec<u8>, ExecutorError> {
         ));
     }
     Ok(bytes)
+}
+
+fn finish_preproof(verdict: AgentCheckVerdict, kani: bool) -> Result<Vec<Content>, ExecutorError> {
+    if kani {
+        Err(ExecutorError::Failed(
+            "Kani pre-proof source or dependency setup failed; no proof was executed".into(),
+        ))
+    } else {
+        finish(verdict)
+    }
 }
 
 fn finish(verdict: AgentCheckVerdict) -> Result<Vec<Content>, ExecutorError> {
@@ -1826,6 +1940,24 @@ fn truncate_utf8(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn kani_preproof_setup_failure_cannot_return_a_completed_verdict() {
+        let verdict = covenant_compute_protocol::AgentCheckVerdict::new(
+            uuid::Uuid::new_v4(),
+            "ab".repeat(32),
+            true,
+            vec![],
+            vec![covenant_compute_protocol::CommandOutcome {
+                command: "cargo fetch --locked".into(),
+                exit_code: 1,
+                duration_ms: 10,
+                timed_out: false,
+                output_tail: "registry unavailable".into(),
+            }],
+        );
+        assert!(super::finish_preproof(verdict.clone(), true).is_err());
+        assert!(super::finish_preproof(verdict, false).is_ok());
+    }
+    #[test]
     fn a_build_spends_inside_the_offer() {
         assert_eq!(build_budget("0.50", 700_000, None).unwrap(), "0.437500");
         assert_eq!(build_budget("0.50", 10_000_000, None).unwrap(), "0.500000");
@@ -1891,6 +2023,7 @@ mod tests {
                 commit: "0123456789abcdef0123456789abcdef01234567".into(),
             },
             acceptance: AcceptanceSpec {
+                kani: None,
                 skill: AgentSkill::CodeChange,
                 image: "python:3.12-slim".into(),
                 commands: vec!["python -m unittest".into()],

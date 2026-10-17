@@ -176,6 +176,49 @@ boot (plane, chain, wallet, price) and the order itself when a buyer pays.
 Admission is fail-closed — a job that doesn't match the declared
 profile, price or deadline is rejected before it executes.
 
+## Typed Kani checks
+
+Typed Kani acceptance is an opt-in extension of `agent_check`. Configure
+`COVENANT_COMPUTE_KANI_PROFILES` as a JSON array of
+`{"image":"registry/image@sha256:<digest>","memory_mib":12288,"cpus":4,"scratch_mib":1024}`.
+The image must already exist locally and contain the reviewed runner at
+`/opt/covenant/kani/runner.py`. The node advertises a hash of the immutable
+image reference and these resource limits; generic Rust image support does
+not advertise proof capacity. Profiles require a Linux cgroup-v2 Docker host,
+actual available memory plus 2 GiB host headroom, sufficient CPUs, and
+`COVENANT_COMPUTE_NODE_MAX_IN_FLIGHT=1` (the default when profiles are enabled).
+Do not combine profiles with an explicit `COVENANT_COMPUTE_NODE_MODELS` override.
+
+Proof execution uses read-only source and dependency mounts, no network or
+swap, and bounded scratch/evidence tmpfs. Setup is limited to
+`cargo fetch --locked`; the resulting dependency volume is read-only during
+verification. The node invokes the pinned Python runner with a typed plan,
+checks its complete report and raw Kani export, and returns the full original
+logs/export as bounded gzip evidence in a separate `kani_execution` output
+block covered by the work receipt. The limits are 16 MiB of original artifacts
+and 4 MiB compressed; exceeding either cannot produce an accepted proof.
+Timeout, out-of-memory, tool errors and inconclusive results are separate
+from proven/refuted property outcomes. The receipt authenticates the
+operator's execution report; it does not attest hardware or prove that two
+operator identities have different beneficial owners.
+
+The initial proof workflow uses reviewed, pinned source trees and locked, reviewed
+dependencies, including dependencies that use procedural macros. Cargo can run
+compile-time code with the compiler's permissions; a hostile repository or
+dependency could tamper with evidence within the container. The receipt therefore
+authenticates the operator's report and does not establish proof integrity for
+arbitrary malicious source. Separate trusted-driver and compile-process isolation
+is required before expanding that claim. Container resource and network limits
+still apply to every invocation.
+
+Kani-aware authoring uses the separate `claude-code:kani-v1` task label so
+older builders cannot accidentally accept its new schema. It is advertised only
+when `COVENANT_COMPUTE_AGENT_KANI_AUTHOR=true` and the builder is `host`; an
+operator enables it only after preparing and validating that host's authoring
+toolchain. Container builders and explicit `NODE_MODELS` overrides cannot enable
+it. Ordinary agent authoring followed by typed Kani verification remains available
+without that authoring opt-in.
+
 ## Outages and shutdown
 
 The serve loop never takes work its backend cannot serve: every pass

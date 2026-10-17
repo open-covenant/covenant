@@ -11212,7 +11212,7 @@ async fn hostile_wire_garbage_gets_4xx_moves_no_money_and_the_service_keeps_serv
         std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/http.rs")).unwrap();
     assert_eq!(
         router_source.matches(".route(").count(),
-        47,
+        48,
         "the route table changed — teach the hostile-wire barrage the new route first"
     );
 
@@ -11358,6 +11358,7 @@ async fn hostile_wire_garbage_gets_4xx_moves_no_money_and_the_service_keeps_serv
             (format!("/federation/operators/{hp}/jobs"), false),
             (format!("/federation/operators/{hp}/bond"), false),
             (format!("/federation/jobs/{hp}/receipt"), false),
+            (format!("/federation/jobs/{hp}/evidence"), false),
             (format!("/proof/receipts/{hp}"), false),
             (format!("/prices/proofs/{hp}"), false),
             (format!("/proof/batch/{hp}"), false),
@@ -11511,15 +11512,17 @@ async fn hostile_wire_garbage_gets_4xx_moves_no_money_and_the_service_keeps_serv
         &mut violations,
     )
     .await;
-    assert_wire_answer(
-        http.get(format!("{base_url}/federation/jobs/{before_job}/receipt"))
-            .header(covenant_compute_protocol::READ_SIGNED_AT_HEADER, "%%%")
-            .header(covenant_compute_protocol::READ_SIGNATURE_HEADER, "%%%"),
-        false,
-        "GET receipt (real job, garbage read signature)".to_string(),
-        &mut violations,
-    )
-    .await;
+    for view in ["receipt", "evidence"] {
+        assert_wire_answer(
+            http.get(format!("{base_url}/federation/jobs/{before_job}/{view}"))
+                .header(covenant_compute_protocol::READ_SIGNED_AT_HEADER, "%%%")
+                .header(covenant_compute_protocol::READ_SIGNATURE_HEADER, "%%%"),
+            false,
+            format!("GET {view} (real job, garbage read signature)"),
+            &mut violations,
+        )
+        .await;
+    }
 
     // Wrong methods bounce off the router itself.
     assert_wire_answer(

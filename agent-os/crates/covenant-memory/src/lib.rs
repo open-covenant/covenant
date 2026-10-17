@@ -80,6 +80,8 @@ pub const MEMORY_BACKFILL_SAVEPOINT_NAME: &str = "backfill_receipt_correlation";
 /// stable, audit-grade label for each transactional boundary.
 pub const MEMORY_COMPACT_SAVEPOINT_NAME: &str = "compact_apply";
 
+// async_trait adds #[must_use] to already-must-use boxed futures.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait MemoryStore: Send + Sync {
     async fn put(&self, record: MemoryRecord) -> Result<(), MemoryError>;
@@ -744,7 +746,7 @@ impl SqliteStore {
         b.as_chunks::<4>()
             .0
             .iter()
-            .map(|c| f32::from_le_bytes(*c))
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect()
     }
 
@@ -1907,7 +1909,7 @@ mod tests {
         // 4-byte chunks with no length prefix, no version byte, no
         // padding — embedding_to_bytes writes f32::to_le_bytes()
         // back-to-back; embedding_from_bytes reads via
-        // fixed four-byte chunks, discarding any trailing partial
+        // chunks_exact(4) which silently drops any trailing partial
         // chunk.
         //
         // sqlite_roundtrip and sqlite_recent_orders_by_created_at_desc

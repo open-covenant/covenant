@@ -2482,7 +2482,9 @@ async fn embeddings_base64_encoding_packs_little_endian_floats() {
         .decode(encoded)
         .expect("valid base64");
     let decoded: Vec<f32> = bytes
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
     assert_eq!(decoded, EMBED_VECTOR.to_vec());

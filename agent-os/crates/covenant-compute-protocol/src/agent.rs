@@ -156,6 +156,9 @@ impl RepoSource {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AcceptanceSpec {
+    /// A typed proof request. No buyer shell commands can stand in for Kani.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kani: Option<crate::KaniCheckSpec>,
     /// What the work is, which decides how a check reads the commands.
     /// Omitted for `code.change`, so nodes that predate skills still read
     /// those tasks.
@@ -306,16 +309,40 @@ pub fn check_commands<'a>(
 }
 
 impl AcceptanceSpec {
+    pub fn checker_model(&self) -> String {
+        match &self.kani {
+            Some(k) => crate::kani_checker_model(&self.image, k.memory_mib, k.cpus, k.scratch_mib),
+            None => self.image.clone(),
+        }
+    }
+
     pub fn validate(&self) -> Result<(), ProtocolError> {
         validate_image(&self.image)?;
-        if self.commands.is_empty() {
+        if let Some(kani) = &self.kani {
+            kani.validate(&self.image, self.timeout_secs)?;
+            if self
+                .setup
+                .iter()
+                .any(|command| command != "cargo fetch --locked")
+            {
+                return Err(ProtocolError::Invalid(
+                    "typed Kani setup only permits cargo fetch --locked".into(),
+                ));
+            }
+            if self.skill != AgentSkill::CodeChange || !self.commands.is_empty() {
+                return Err(ProtocolError::Invalid(
+                    "typed Kani checks use code.change and no shell acceptance commands".into(),
+                ));
+            }
+        }
+        if self.commands.is_empty() && self.kani.is_none() {
             return Err(ProtocolError::Invalid(
                 "acceptance needs at least one command: work with nothing to pass is \
                  accepted unseen"
                     .into(),
             ));
         }
-        validate_commands("acceptance", &self.commands, false)?;
+        validate_commands("acceptance", &self.commands, self.kani.is_some())?;
         validate_commands("setup", &self.setup, true)?;
         if let Some(digest) = &self.hidden_sha256 {
             validate_sha256_hex("hidden_sha256", digest)?;
@@ -333,9 +360,14 @@ impl AcceptanceSpec {
                     .into(),
             ));
         }
-        if self.timeout_secs == 0 || self.timeout_secs > MAX_ACCEPTANCE_TIMEOUT_SECS {
+        let maximum = if self.kani.is_some() {
+            crate::MAX_KANI_TIMEOUT_SECS
+        } else {
+            MAX_ACCEPTANCE_TIMEOUT_SECS
+        };
+        if self.timeout_secs == 0 || self.timeout_secs > maximum {
             return Err(ProtocolError::Invalid(format!(
-                "acceptance timeout_secs {} is outside 1..={MAX_ACCEPTANCE_TIMEOUT_SECS}",
+                "acceptance timeout_secs {} is outside 1..={maximum}",
                 self.timeout_secs
             )));
         }
@@ -354,6 +386,11 @@ impl AcceptanceSpec {
     /// Whether these hidden checks can serve this acceptance: `code.tests`
     /// needs the fix among them as files.
     pub fn admits_hidden(&self, hidden: &HiddenChecks) -> Result<(), ProtocolError> {
+        if self.kani.is_some() && !hidden.commands.is_empty() {
+            return Err(ProtocolError::Invalid(
+                "typed Kani checks do not execute hidden shell commands".into(),
+            ));
+        }
         if self.skill == AgentSkill::CodeTests && hidden.files.is_empty() {
             return Err(ProtocolError::Invalid(
                 "code.tests needs the fix among the hidden checks as files".into(),
@@ -418,6 +455,25 @@ impl AgentPatch {
 }
 
 impl AgentTaskSpec {
+    /// Reserve the explicit proof offer before sizing the authoring budget.
+    pub fn build_offer_micro_usdc(&self, total: u64) -> u64 {
+        total.saturating_sub(
+            self.acceptance
+                .kani
+                .as_ref()
+                .map_or(0, |kani| kani.check_price_micro_usdc),
+        )
+    }
+
+    /// New acceptance contracts require an explicitly upgraded builder.
+    pub fn builder_model(&self) -> String {
+        if self.acceptance.kani.is_some() {
+            "claude-code:kani-v1".into()
+        } else {
+            self.runtime.label().into()
+        }
+    }
+
     pub fn validate(&self) -> Result<(), ProtocolError> {
         if self.task.trim().is_empty() {
             return Err(ProtocolError::Invalid("an agent task needs a task".into()));
@@ -554,7 +610,19 @@ impl AgentCheckSpec {
     pub fn validate(&self) -> Result<(), ProtocolError> {
         self.repo.validate()?;
         self.acceptance.validate()?;
-        validate_b64("patch", &self.patch_b64, MAX_PATCH_B64_BYTES)?;
+        // Verification-only orders may check the pinned tree unchanged. The
+        // empty patch has an explicit digest; authored AgentTaskOutput still
+        // requires a nonempty patch. Envelope admission distinguishes a direct
+        // verification order from a coordinator-ordered child check.
+        if self.patch_b64.is_empty() {
+            if self.patch_sha256 != sha256_hex(b"") {
+                return Err(ProtocolError::Invalid(
+                    "an empty verification patch must name the empty SHA-256 digest".into(),
+                ));
+            }
+        } else {
+            validate_b64("patch", &self.patch_b64, MAX_PATCH_B64_BYTES)?;
+        }
         validate_sha256_hex("patch_sha256", &self.patch_sha256)?;
         match (self.acceptance.skill, &self.reproduction) {
             (AgentSkill::CodeFix, Some(reproduction)) => reproduction.validate()?,
@@ -1113,6 +1181,7 @@ mod tests {
 
     fn acceptance() -> AcceptanceSpec {
         AcceptanceSpec {
+            kani: None,
             skill: AgentSkill::CodeChange,
             image: "python:3.12-slim".into(),
             commands: vec!["python -m unittest -v".into()],
@@ -1148,6 +1217,41 @@ mod tests {
             spend_micro_usd: 41_000,
             guard_run_id: Some("run-1".into()),
         }
+    }
+
+    #[test]
+    fn kani_authorship_requires_explicit_builder_and_reserves_proof_price() {
+        let mut t = task();
+        assert_eq!(t.builder_model(), "claude-code");
+        assert_eq!(t.build_offer_micro_usdc(200_000), 200_000);
+        t.acceptance.image = format!("sha256:{}", "a".repeat(64));
+        t.acceptance.commands.clear();
+        t.acceptance.kani = Some(crate::KaniCheckSpec {
+            plan: crate::KaniPlan {
+                schema: "covenant.kani.plan.v1".into(),
+                harness: "proof".into(),
+                manifest_path: "Cargo.toml".into(),
+                features: vec![],
+                tests: false,
+                timeout_secs: 60,
+                unwind: None,
+                expected_outcome: "proven".into(),
+                expected_assertion: None,
+                required_covers: vec!["route reached".into()],
+            },
+            memory_mib: 2048,
+            cpus: 1,
+            scratch_mib: 512,
+            check_price_micro_usdc: 100_000,
+        });
+        assert_eq!(t.builder_model(), "claude-code:kani-v1");
+        assert_eq!(t.build_offer_micro_usdc(200_000), 100_000);
+        assert_eq!(t.build_offer_micro_usdc(50_000), 0);
+        t.validate().unwrap();
+        t.acceptance.setup.push("cargo fetch --locked".into());
+        t.validate().unwrap();
+        t.acceptance.setup.push("cargo test".into());
+        assert!(t.validate().is_err());
     }
 
     fn passing(command: &str) -> CommandOutcome {
@@ -1412,6 +1516,7 @@ mod tests {
     #[test]
     fn code_tests_needs_the_fix_as_hidden_files() {
         let mut acceptance = AcceptanceSpec {
+            kani: None,
             skill: AgentSkill::CodeTests,
             image: "python:3.12-slim".into(),
             commands: vec!["python -m unittest".into()],

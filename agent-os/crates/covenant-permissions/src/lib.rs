@@ -1202,6 +1202,8 @@ pub fn verify_with_clock_and_trust_root(
     verify_with_clock(signed, now_ms)
 }
 
+// async_trait adds #[must_use] to already-must-use boxed futures.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait CapabilityStore: Send + Sync {
     async fn record(&self, signed: SignedCapability) -> Result<(), PermissionError>;

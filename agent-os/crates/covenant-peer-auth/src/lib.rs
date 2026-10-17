@@ -219,6 +219,8 @@ pub enum RevokeOutcome {
     SelfRevokeForbidden(PeerSummary),
 }
 
+// async_trait adds #[must_use] to already-must-use boxed futures.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait PeerRegistry: Send + Sync {
     async fn register(&self, entry: PeerEntry) -> Result<(), PeerError>;

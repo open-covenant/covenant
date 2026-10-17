@@ -197,6 +197,8 @@ pub fn router_with_origins(state: HttpState, origins: Vec<HeaderValue>) -> Route
         .layer(cors_layer(origins))
 }
 
+// Axum middleware returns the complete rejection response without changing its body.
+#[allow(clippy::result_large_err)]
 async fn require_bearer(
     State(s): State<HttpState>,
     mut req: AxumRequest,

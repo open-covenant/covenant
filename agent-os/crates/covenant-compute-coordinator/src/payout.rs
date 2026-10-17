@@ -87,6 +87,8 @@ fn epoch_ms() -> u64 {
 /// operator pushing, never the operator holding funds or signing
 /// anything on-chain — build-notes-phase1-foundation.md §1.6 step 7 /
 /// §5's node-stays-solana-free recommendation).
+// async_trait adds #[must_use] to already-must-use boxed futures.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait Payout: Send + Sync {
     async fn pay(

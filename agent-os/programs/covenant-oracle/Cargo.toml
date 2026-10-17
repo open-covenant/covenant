@@ -19,3 +19,11 @@ idl-build = ["anchor-lang/idl-build"]
 
 [dependencies]
 anchor-lang = "0.31.1"
+
+[lints.rust]
+# Anchor/Solana macros inspect these cfg values during host-side CI builds.
+# Keep unexpected_cfgs enabled for every other undeclared value.
+unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(feature, values("custom-heap", "custom-panic", "anchor-debug"))',
+    'cfg(target_os, values("solana"))',
+] }

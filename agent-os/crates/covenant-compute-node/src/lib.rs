@@ -41,6 +41,7 @@ pub mod executor;
 pub mod gpu;
 pub mod http_client;
 pub mod imd;
+pub mod kani;
 pub mod lease;
 pub mod node;
 pub mod ollama;

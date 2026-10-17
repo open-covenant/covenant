@@ -182,6 +182,7 @@ fn spec() -> AgentTaskSpec {
             commit: COMMIT.into(),
         },
         acceptance: AcceptanceSpec {
+            kani: None,
             skill: AgentSkill::CodeChange,
             image: "python:3.12-slim".into(),
             commands: vec![COMMAND.into()],
@@ -281,6 +282,243 @@ async fn submit(
         resp.text().await.unwrap()
     );
     resp.json().await.unwrap()
+}
+
+fn verification_envelope(
+    buyer: &LocalIdentity,
+    parent: Option<Uuid>,
+    deadline: u64,
+) -> SignedJobEnvelope {
+    let id = Uuid::new_v4();
+    let empty = parent.is_none();
+    let spec = covenant_compute_protocol::AgentCheckSpec {
+        task_job_id: parent.unwrap_or(id),
+        repo: spec().repo,
+        acceptance: spec().acceptance,
+        patch_b64: if empty {
+            String::new()
+        } else {
+            "ZGlmZg==".into()
+        },
+        patch_sha256: if empty {
+            sha256_hex(b"")
+        } else {
+            sha256_hex(b"diff")
+        },
+        hidden: None,
+        reproduction: None,
+    };
+    SignedJobEnvelope::sign(
+        JobEnvelopePayload {
+            job_id: id,
+            buyer: buyer.agent_id(),
+            kind: JobKind::AgentCheck,
+            capability_requirement: CapabilityRequirement {
+                gpu_class: None,
+                min_vram_gb: None,
+                model_id: Some("python:3.12-slim".into()),
+                kind: JobKind::AgentCheck,
+                max_duration_secs: 120,
+                min_reputation_bps: None,
+            },
+            input: vec![covenant_compute_protocol::agent_check_input(spec).unwrap()],
+            price_micro_usdc: 1000,
+            deadline_ms: deadline,
+            idempotency: A2AIdempotency::new(A2ADuplicateSafety::Idempotent, id.to_string()),
+            issued_at_ms: epoch_ms(),
+            referral_code: None,
+            stream: false,
+        },
+        buyer,
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn direct_verification_pays_for_completed_check_even_when_property_is_false() {
+    let rig = rig().await;
+    let checker = register(&rig, "verification@checker", 11);
+    let buyer = LocalIdentity::generate("verification@buyer");
+    let envelope = verification_envelope(&buyer, None, 600_000);
+    let id = envelope.payload.job_id;
+    let response = rig
+        .http
+        .post(format!("{}/federation/jobs", rig.url))
+        .json(&envelope)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        reqwest::StatusCode::ACCEPTED,
+        "{}",
+        response.text().await.unwrap()
+    );
+    assert_eq!(rig.state.jobs().get(id).unwrap().checks_task, None);
+    let result = submit(&rig, id, &checker, verdict(id, &sha256_hex(b""), 1)).await;
+    assert_eq!(result.settled, ResultSettlement::Released);
+    assert_eq!(rig.state.jobs().get(id).unwrap().phase, JobPhase::Completed);
+    assert!(rig.state.jobs().get(id).unwrap().check_jobs.is_empty());
+    let output = rig.state.jobs().get(id).unwrap().output.unwrap();
+    assert!(
+        !covenant_compute_protocol::parse_agent_check_verdict(&output)
+            .unwrap()
+            .passed
+    );
+}
+
+#[tokio::test]
+async fn typed_kani_success_without_solver_evidence_cannot_release_escrow() {
+    let rig = rig().await;
+    let checker = register(&rig, "kani@checker", 12);
+    let buyer = LocalIdentity::generate("kani@buyer");
+    let mut payload = verification_envelope(&buyer, None, 600_000).payload;
+    let id = payload.job_id;
+    let mut check = parse_agent_check(&payload.input).unwrap();
+    let cases: serde_json::Value = serde_json::from_str(include_str!(
+        "../../covenant-compute-protocol/tests/fixtures/kani-0.68-cases.json"
+    ))
+    .unwrap();
+    let kani = covenant_compute_protocol::KaniCheckSpec {
+        plan: serde_json::from_value(cases[0]["plan"].clone()).unwrap(),
+        memory_mib: 28672,
+        cpus: 6,
+        scratch_mib: 8192,
+        check_price_micro_usdc: 100_000,
+    };
+    let command = covenant_compute_protocol::kani_command_label(&kani.plan);
+    check.acceptance.kani = Some(kani);
+    check.acceptance.image = format!("sha256:{}", "a".repeat(64));
+    check.acceptance.commands.clear();
+    let model = check.acceptance.checker_model();
+    payload.capability_requirement.model_id = Some(model.clone());
+    payload.input = vec![covenant_compute_protocol::agent_check_input(check).unwrap()];
+    payload.price_micro_usdc = 100_000;
+    let envelope = SignedJobEnvelope::sign(payload, &buyer).unwrap();
+    let registered = rig
+        .state
+        .registry()
+        .record(&checker.agent_id().pubkey_base58())
+        .unwrap();
+    let mut profile = registered.profile;
+    profile
+        .kind_models
+        .iter_mut()
+        .find(|m| m.kind == JobKind::AgentCheck)
+        .unwrap()
+        .models
+        .push(model);
+    rig.state
+        .registry()
+        .register(
+            &RegisterRequest::sign(profile, registered.payout_address, &checker).unwrap(),
+            epoch_ms(),
+            None,
+            false,
+        )
+        .unwrap();
+    // HTTP buyers must commit to the same execution price as native buyers;
+    // a generic checker ask must not turn a 100k proof order into a 1k run.
+    let mut mismatched = envelope.payload.clone();
+    mismatched.price_micro_usdc = 1_000;
+    let mismatched = SignedJobEnvelope::sign(mismatched, &buyer).unwrap();
+    let refused = rig
+        .http
+        .post(format!("{}/federation/jobs", rig.url))
+        .json(&mismatched)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert!(rig.state.jobs().get(id).is_none());
+    assert!(rig.payout.records().is_empty());
+    let response = rig
+        .http
+        .post(format!("{}/federation/jobs", rig.url))
+        .json(&envelope)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        reqwest::StatusCode::ACCEPTED,
+        "{}",
+        response.text().await.unwrap()
+    );
+    assert_eq!(
+        rig.state.escrow().status(id).await.unwrap(),
+        EscrowStatus::Held
+    );
+    let output = verdict_over(id, &sha256_hex(b""), &[&command], 0);
+    let receipt = SignedWorkReceipt::sign(
+        WorkReceiptPayload {
+            job_id: id,
+            operator: checker.agent_id(),
+            job_hash_hex: sha256_hex(envelope.payload_json.as_bytes()),
+            result_hash_hex: covenant_compute_protocol::output_hash_hex(&output),
+            meter: JobMeter {
+                wall_ms: 5,
+                tokens_in: None,
+                tokens_out: None,
+                gpu_seconds: None,
+                finish_reason: None,
+            },
+            price_micro_usdc: 100_000,
+            status: A2ATaskStatus::Ok,
+            executed_at_ms: epoch_ms(),
+            node_audit_root_hex: "cc".repeat(32),
+        },
+        &checker,
+    )
+    .unwrap();
+    let response = rig
+        .http
+        .post(format!("{}/federation/jobs/{id}/result", rig.url))
+        .json(&JobResultMessage { receipt, output })
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert!(response
+        .text()
+        .await
+        .unwrap()
+        .contains("exactly one evidence block"));
+    assert_eq!(
+        rig.state.escrow().status(id).await.unwrap(),
+        EscrowStatus::Held
+    );
+    assert!(rig.payout.records().is_empty());
+    let record = rig.state.jobs().get(id).unwrap();
+    assert!(record.receipt.is_none());
+    assert!(record.output.is_none());
+}
+
+#[tokio::test]
+async fn buyer_check_cannot_forge_parent_link_or_spend_with_short_deadline() {
+    let rig = rig().await;
+    register(&rig, "verification@checker", 11);
+    let buyer = LocalIdentity::generate("verification@buyer");
+    for envelope in [
+        verification_envelope(&buyer, Some(Uuid::new_v4()), 600_000),
+        verification_envelope(&buyer, None, 120_000),
+    ] {
+        let id = envelope.payload.job_id;
+        let response = rig
+            .http
+            .post(format!("{}/federation/jobs", rig.url))
+            .json(&envelope)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            reqwest::StatusCode::BAD_REQUEST,
+            "{}",
+            response.text().await.unwrap()
+        );
+        assert!(rig.state.jobs().get(id).is_none());
+    }
 }
 
 fn patch_spending(spend_micro_usd: u64) -> AgentTaskOutput {

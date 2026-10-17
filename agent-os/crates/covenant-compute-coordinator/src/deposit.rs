@@ -81,6 +81,8 @@ pub enum RailError {
     Backend(String),
 }
 
+// async_trait adds #[must_use] to already-must-use boxed futures.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait InboundRail: Send + Sync {
     async fn verify_deposit(&self, claim: &DepositClaim) -> Result<VerifiedDeposit, RailError>;

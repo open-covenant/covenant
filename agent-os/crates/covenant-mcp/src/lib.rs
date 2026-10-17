@@ -82,6 +82,8 @@ pub enum ToolError {
     Failed(String),
 }
 
+// async_trait adds #[must_use] to already-must-use boxed futures.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;

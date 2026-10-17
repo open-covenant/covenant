@@ -58,6 +58,8 @@ pub struct RoundRecord {
     pub votes: Vec<CountedVote>,
 }
 
+// async_trait adds #[must_use] to already-must-use boxed futures.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait VoteRounds: Send + Sync {
     /// Runs one task's round to the end: open, every vote, close, settle.

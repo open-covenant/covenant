@@ -260,10 +260,19 @@ pub async fn order_check(state: &CoordinatorState, task_id: Uuid) -> Result<Uuid
             exclusions.stake_owners.extend(record.stake_owners);
         }
     }
+    let check_price = spec
+        .acceptance
+        .kani
+        .as_ref()
+        .map(|k| k.check_price_micro_usdc)
+        .unwrap_or(policy.check_price_micro_usdc);
+    if check_price >= task.envelope.payload.price_micro_usdc {
+        return Err("the task offer leaves no budget beyond its proof check".into());
+    }
     let requirement = CapabilityRequirement {
         gpu_class: None,
         min_vram_gb: None,
-        model_id: Some(spec.acceptance.image.clone()),
+        model_id: Some(spec.acceptance.checker_model()),
         kind: JobKind::AgentCheck,
         max_duration_secs: u32::try_from(window_ms / 1_000).unwrap_or(u32::MAX),
         min_reputation_bps: None,
@@ -274,7 +283,7 @@ pub async fn order_check(state: &CoordinatorState, task_id: Uuid) -> Result<Uuid
         state.reputation(),
         state.bonds(),
         &requirement,
-        policy.check_price_micro_usdc,
+        check_price,
         now_ms,
         config.operator_liveness_timeout,
         config.min_operator_score_bps,
@@ -302,7 +311,7 @@ pub async fn order_check(state: &CoordinatorState, task_id: Uuid) -> Result<Uuid
         kind: JobKind::AgentCheck,
         capability_requirement: requirement,
         input: vec![input],
-        price_micro_usdc: policy.check_price_micro_usdc,
+        price_micro_usdc: check_price,
         // The check's own window, not the task's remainder: a checker that
         // stalls times out while there is still room to order another.
         deadline_ms: window_ms.min(left_ms - CHECK_MARGIN_MS),
@@ -321,7 +330,7 @@ pub async fn order_check(state: &CoordinatorState, task_id: Uuid) -> Result<Uuid
         .hold_with_source(
             check_id,
             &identity.agent_id(),
-            policy.check_price_micro_usdc,
+            check_price,
             FundingSource::Bootstrap,
         )
         .await
@@ -402,7 +411,7 @@ pub async fn order_check(state: &CoordinatorState, task_id: Uuid) -> Result<Uuid
         .record_audit(AuditKind::ComputeJobOffered {
             job_id: check_id,
             operator_pubkey_b58: checker.clone(),
-            price_micro_usdc: policy.check_price_micro_usdc,
+            price_micro_usdc: check_price,
             funding_source: "bootstrap".into(),
         })
         .await;
@@ -615,7 +624,8 @@ pub fn holds_bundle(state: &CoordinatorState, operator: &str, sha256: &str) -> b
 /// The stored bundle an agent task names that this coordinator does not
 /// hold. A seat given that task could only fail it.
 pub fn missing_bundle(state: &CoordinatorState, input: &[Content]) -> Option<String> {
-    let named = stored_bundle(JobKind::AgentTask, input)?;
+    let named = stored_bundle(JobKind::AgentTask, input)
+        .or_else(|| stored_bundle(JobKind::AgentCheck, input))?;
     let held = state
         .config()
         .bundles
@@ -915,7 +925,9 @@ async fn rework(
         .as_ref()
         .map_or(0, |r| r.prior_spend_micro_usd)
         .saturating_add(built.spend_micro_usd);
-    let budget = build_spend_cap(task.envelope.payload.price_micro_usdc).saturating_sub(spent);
+    let budget =
+        build_spend_cap(spec.build_offer_micro_usdc(task.envelope.payload.price_micro_usdc))
+            .saturating_sub(spent);
     if budget < MIN_BUILD_BUDGET_MICRO_USD {
         tracing::info!(%task_id, spent_micro_usd = spent, "the offer has too little left for a rework");
         return false;
@@ -1157,6 +1169,22 @@ fn judge(task: &JobRecord, check: &JobRecord) -> Result<AgentCheckVerdict, Strin
     }
     if verdict.skill != spec.acceptance.skill {
         return Err("verdict judges another skill than the task asked for".into());
+    }
+    if spec.acceptance.kani.is_some() {
+        let ordered =
+            parse_agent_check(&check.envelope.payload.input).map_err(|e| e.to_string())?;
+        if ordered.acceptance != spec.acceptance
+            || ordered.repo != spec.repo
+            || ordered.patch_sha256 != built.patch_sha256
+        {
+            return Err("Kani check differs from its signed parent contract".into());
+        }
+        covenant_compute_protocol::validate_kani_check_output(
+            &check.envelope.payload,
+            check.output.as_deref().unwrap_or_default(),
+        )
+        .map_err(|e| e.to_string())?;
+        return Ok(verdict);
     }
     if verdict.passed {
         let ran = |outcomes: &[covenant_compute_protocol::CommandOutcome]| -> Vec<String> {

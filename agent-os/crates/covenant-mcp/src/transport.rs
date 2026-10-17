@@ -177,6 +177,8 @@ where
     deserializer.deserialize_any(IdVisitor)
 }
 
+// async_trait adds #[must_use] to already-must-use boxed futures.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait McpClient: Send + Sync {
     /// Send a JSON-RPC request and await its response.

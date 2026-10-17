@@ -209,6 +209,8 @@ pub struct LeaseSettlement {
 /// own ledger: a second open is refused, a tick on a lease that is
 /// concluding or already settled is skipped, and a second conclude
 /// returns the first settlement instead of settling twice.
+// async_trait adds #[must_use] to already-must-use boxed futures.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait LeaseMeter: Send + Sync {
     /// Opens the escrow vault for an accepted lease and delegates it to

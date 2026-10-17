@@ -231,11 +231,12 @@ impl CapabilityProfile {
             }
         }
         if let Some(model_id) = &req.model_id {
-            if !self
-                .models_for(req.kind)
-                .iter()
-                .any(|m| m == "any" || canonical_model(m) == canonical_model(model_id))
-            {
+            if !self.models_for(req.kind).iter().any(|m| {
+                (m == "any"
+                    && !model_id.starts_with("kani-v1:")
+                    && model_id != "claude-code:kani-v1")
+                    || canonical_model(m) == canonical_model(model_id)
+            }) {
                 return false;
             }
         }
@@ -686,6 +687,21 @@ mod tests {
         let mut req = requirement();
         req.model_id = Some("whatever".into());
         assert!(p.satisfies(&req));
+    }
+
+    #[test]
+    fn kani_builder_and_checker_require_explicit_capabilities() {
+        let checker =
+            crate::kani_checker_model(&format!("sha256:{}", "a".repeat(64)), 28672, 6, 8192);
+        for model in ["claude-code:kani-v1".to_string(), checker] {
+            let mut p = profile();
+            p.models_served = vec!["any".into(), "claude-code".into()];
+            let mut req = requirement();
+            req.model_id = Some(model.clone());
+            assert!(!p.satisfies(&req), "generic capabilities matched {model}");
+            p.models_served.push(model);
+            assert!(p.satisfies(&req));
+        }
     }
 
     /// The `:latest` rule both ways: Ollama advertises `name:latest`

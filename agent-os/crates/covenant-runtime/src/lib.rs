@@ -261,6 +261,8 @@ pub enum RunnerError {
     RunCancelled,
 }
 
+// async_trait adds #[must_use] to already-must-use boxed futures.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait Runner: Send + Sync {
     async fn run(&self, card: &AgentCard, intent: &Intent) -> Result<AgentResult, RunnerError>;

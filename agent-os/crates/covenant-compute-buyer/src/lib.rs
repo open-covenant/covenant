@@ -45,14 +45,24 @@ pub use covenant_compute_protocol::{
 };
 
 mod agent;
+mod agent_purchase;
+pub use agent_purchase::agent_purchase_recorded;
+mod check;
+pub use check::{check_pinned_task, check_preview, CheckOutcome};
+pub mod durable_budget;
 pub use agent::{
-    agent_tool_spec, apply_patch, describe_reworks, describe_round, describe_verdict,
-    fix_tool_spec, hire_agent, hire_fix, local_bundle, prepare_agent_task, prepare_fix_order,
-    read_hidden_checks, AgentArgs, AgentOutcome, FixOrder, FixOutcome, PreparedTask, AGENT_TOOL,
-    DEFAULT_AGENT_DEADLINE_MS, DEFAULT_AGENT_OFFER_MICRO_USDC, DEFAULT_FIX_DEADLINE_MS,
-    DEFAULT_FIX_OFFER_MICRO_USDC, FIX_TOOL,
+    agent_preview, agent_tool_spec, apply_patch, describe_reworks, describe_round,
+    describe_verdict, fix_tool_spec, hire_agent, hire_agent_idempotent, hire_fix, local_bundle,
+    prepare_agent_task, prepare_fix_order, read_hidden_checks, AgentArgs, AgentOutcome, FixOrder,
+    FixOutcome, PreparedTask, AGENT_TOOL, DEFAULT_AGENT_DEADLINE_MS,
+    DEFAULT_AGENT_OFFER_MICRO_USDC, DEFAULT_FIX_DEADLINE_MS, DEFAULT_FIX_OFFER_MICRO_USDC,
+    FIX_TOOL,
 };
+mod agent_evidence;
 mod purchases;
+pub use agent_evidence::{
+    fetch_agent_evidence, verify_agent_evidence, VerifiedAgentCheck, VerifiedAgentEvidence,
+};
 pub use purchases::{PurchaseBook, PurchaseEntry, PurchaseError};
 
 mod vault;
@@ -2844,8 +2854,18 @@ pub async fn dispatch_agent_task(
     request: JobRequest,
     hidden: Option<&covenant_compute_protocol::HiddenChecks>,
 ) -> Result<DispatchOutcome, BuyerError> {
-    let envelope =
-        sign_and_submit(http, config, buyer_identity, request, false, Uuid::new_v4()).await?;
+    let envelope = sign_envelope(config, buyer_identity, request)?;
+    dispatch_agent_signed(http, config, buyer_identity, envelope, hidden).await
+}
+
+pub(crate) async fn dispatch_agent_signed(
+    http: &reqwest::Client,
+    config: &BuyerConfig,
+    buyer_identity: &LocalIdentity,
+    envelope: SignedJobEnvelope,
+    hidden: Option<&covenant_compute_protocol::HiddenChecks>,
+) -> Result<DispatchOutcome, BuyerError> {
+    submit_envelope(http, config, buyer_identity, &envelope).await?;
     if let Some(hidden) = hidden {
         post_hidden_checks(http, config, envelope.payload.job_id, hidden).await?;
     }
@@ -3715,7 +3735,7 @@ pub async fn dispatch_signed(
     buyer_identity: &LocalIdentity,
     envelope: SignedJobEnvelope,
 ) -> Result<DispatchOutcome, BuyerError> {
-    submit_envelope(http, config, &envelope).await?;
+    submit_envelope(http, config, buyer_identity, &envelope).await?;
     poll_receipt_and_verify(http, config, buyer_identity, envelope).await
 }
 
@@ -3728,11 +3748,27 @@ async fn sign_and_submit(
     job_id: Uuid,
 ) -> Result<SignedJobEnvelope, BuyerError> {
     let envelope = build_envelope(config, buyer_identity, request, stream, job_id)?;
-    submit_envelope(http, config, &envelope).await?;
+    submit_envelope(http, config, buyer_identity, &envelope).await?;
     Ok(envelope)
 }
 
 async fn submit_envelope(
+    http: &reqwest::Client,
+    config: &BuyerConfig,
+    buyer_identity: &LocalIdentity,
+    envelope: &SignedJobEnvelope,
+) -> Result<(), BuyerError> {
+    let budget = durable_budget::before_submit(http, config, buyer_identity, envelope).await?;
+    let result = submit_envelope_http(http, config, envelope).await;
+    if let (Some(budget), Err(BuyerError::SubmitRefused { .. })) = (&budget, &result) {
+        budget
+            .submit_refused(envelope.payload.job_id, epoch_ms())
+            .map_err(|e| BuyerError::Protocol(e.to_string()))?;
+    }
+    result
+}
+
+async fn submit_envelope_http(
     http: &reqwest::Client,
     config: &BuyerConfig,
     envelope: &SignedJobEnvelope,
@@ -3803,6 +3839,24 @@ const SUBMIT_RETRY_MAX_BACKOFF: Duration = Duration::from_secs(4);
 /// read (fresh timestamp each attempt — the loop can outlive the skew
 /// window).
 async fn poll_receipt_and_verify(
+    http: &reqwest::Client,
+    config: &BuyerConfig,
+    buyer_identity: &LocalIdentity,
+    envelope: SignedJobEnvelope,
+) -> Result<DispatchOutcome, BuyerError> {
+    let result = poll_receipt_and_verify_inner(http, config, buyer_identity, envelope).await;
+    if let Some(budget) = durable_budget::DurableBudget::from_env(
+        &buyer_identity.agent_id().pubkey_base58(),
+        &config.coordinator_url,
+    )
+    .map_err(|e| BuyerError::Protocol(e.to_string()))?
+    {
+        durable_budget::reconcile(&budget, http, config, buyer_identity).await?;
+    }
+    result
+}
+
+async fn poll_receipt_and_verify_inner(
     http: &reqwest::Client,
     config: &BuyerConfig,
     buyer_identity: &LocalIdentity,

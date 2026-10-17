@@ -26,7 +26,7 @@ or see the other [install options](https://docs.opencovenant.org/compute#install
 }
 ```
 
-Twenty tools:
+Twenty-one tools:
 
 | Tool | What it buys or shows |
 | --- | --- |
@@ -43,6 +43,7 @@ Twenty tools:
 | `compute.receipts` | your verified job history; unpaid rows name their `refund_reason` |
 | `compute.output` | re-read a past job's output and its locally re-verified receipt, so an answer bought once survives a lost session |
 | `compute.balance` | deposited / charged / withdrawn / available funds |
+| `compute.budget` | inspect the shared persistent budget; `reconcile: true` reads signed job evidence without submitting work |
 | `compute.capacity` | the live directory: what (kind, model) rows are purchasable right now, operator counts, and the ask range a price must reach to match |
 | `compute.deposit` | claim an on-chain deposit against this deployment's rail |
 | `compute.withdraw` | move unspent balance back out to a wallet you name |
@@ -631,6 +632,110 @@ reproduction only adds tests. `--price` covers the whole order (1.00 USDC
 by default, at least 0.20), two fifths for the reproduction and three for
 the fix, and each step is charged its builds' spend plus the markup and
 its checks. Nothing is charged unless the fix passes.
+
+## Authorship and Kani verification with receipts
+
+`agent --dry-run` and `check --dry-run` prepare and validate the order
+locally. A large local repository is packed, but no bundle is uploaded,
+no order is signed, and no money is reserved or spent. Unknown flags fail
+before dispatch. A dry run cannot carry an idempotency key.
+
+For a real `agent` or `check` order, choose a stable `--idempotency-key`.
+The buyer journals the exact signed envelope before uploading or submitting;
+a retry reuses its job ID, source, acceptance, offer and deadline. Changing
+any signed input under that key is refused. Failed jobs keep their keys too:
+choose a new key deliberately to buy a new attempt. Concurrent use of the same
+key refuses while the first process holds it. Preserve the buyer home,
+including its `agent-purchases/` directory, across restarts.
+
+```sh
+export COVENANT_COMPUTE_MAX_PRICE_MICRO_USDC=2500000
+export COVENANT_COMPUTE_DAILY_BUDGET_MICRO_USDC=5000000
+covenant-compute budget status
+covenant-compute budget reconcile
+```
+
+The optional daily ceiling is shared by CLI, MCP and library submissions
+for the same buyer and canonical coordinator URL, across processes. Its
+state lives under `COVENANT_COMPUTE_BUDGET_HOME`, defaulting to
+`~/.covenant-compute-budgets`. Every process sharing that identity and
+endpoint must use the same persisted ceiling. Pending and uncertain orders
+reserve their entire offer indefinitely; restarting does not release them.
+Verified successful jobs conservatively consume their full offer for 24
+hours because the coordinator's metered charge field is not a signed charge
+statement. Verified error receipts with a reported zero charge release their
+holds; unsigned refund/rejection statuses do not. This conservative budget
+accounting is separate from the actual charge shown by `balance`.
+
+`check` buys verification of pinned source, optionally with `--patch FILE`.
+It is a direct `agent_check` job: no model-authored patch is required.
+The signed receipt pays for checker execution, including a failed property.
+A failed acceptance prints its signed result and exits nonzero. `verify`
+continues to mean verification of an on-chain payout.
+
+A Kani order supplies a structured plan rather than a shell acceptance
+command. For example, save the following as `route-plan.json`, replacing
+the harness and cover description with the exact names in your source:
+
+```json
+{
+  "schema": "covenant.kani.plan.v1",
+  "harness": "proofs::route_proof",
+  "manifest_path": "Cargo.toml",
+  "features": ["fuzz"],
+  "tests": false,
+  "timeout_secs": 1800,
+  "unwind": null,
+  "expected_outcome": "proven",
+  "expected_assertion": null,
+  "required_covers": ["cover condition: route reachable"]
+}
+```
+
+Use an immutable image digest offered by compatible capacity and resources
+that that checker advertises. `REPO`, `COMMIT` and `CHECK_IMAGE` below are
+your pinned repository, full commit SHA and immutable Kani image reference.
+
+```sh
+covenant-compute capacity --json
+covenant-compute check --repo "$REPO" --commit "$COMMIT" \
+  --kani-plan route-plan.json --check-image "$CHECK_IMAGE" \
+  --memory-mib 32768 --cpus 4 --scratch-mib 4096 \
+  --check-timeout 1900 --deadline-ms 2200000 --price 250000 --dry-run
+```
+
+After reviewing the preview, replace `--dry-run` with
+`--idempotency-key route-proof-v1` and save the JSON output. Kani orders
+permit no shell `--accept` commands; the optional dependency setup is the
+exact command `--setup 'cargo fetch --locked'`. The proof requires its named
+covers to be reached. A regression control uses a separate plan with
+`expected_outcome: "refuted"` and its exact `expected_assertion`. A timeout,
+OOM, unwind failure, compiler error or missing cover does not prove the
+property and does not establish the expected regression.
+
+For a complete development workload, first buy authorship with `agent`,
+retain the accepted patch and authenticated `evidence JOB_ID --json`, then
+buy `check` against the exact resulting source and a separate regression
+control against the buggy base. Gate publication on the authored patch hash,
+all signed input/output hashes, the exact plans, and accepted proof/control
+outcomes. A verification rerun of existing work establishes verification
+provenance; it does not establish network authorship of that work.
+
+An authoring order can instead include these Kani flags plus
+`--check-price` to make Kani its acceptance directly. It routes only to the
+versioned `claude-code:kani-v1` builder capability; ordinary `claude-code`
+capacity cannot accept it. During a mixed-version rollout, generic Rust
+acceptance for authorship followed by a separate native Kani check is the
+compatible workflow. Both routes require the coordinator's agent-buyer
+admission policy and available matching operators.
+
+The direct checker output includes its buyer envelope, operator receipt,
+verdict and complete receipt-covered Kani evidence. The buyer validates the
+raw solver export and exact job/source/patch/image/plan binding before
+reporting success. Authorship `evidence` verifies the builder and linked
+checker receipts locally; inventory completeness and payout settlement
+remain separate checks. These artifacts authenticate execution reports;
+they do not attest the operator's hardware.
 
 ## As a library
 

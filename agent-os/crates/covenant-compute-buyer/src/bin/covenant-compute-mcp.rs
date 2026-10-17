@@ -33,11 +33,12 @@ use std::time::Duration;
 
 use anyhow::Context;
 use covenant_compute_buyer::{
-    agent_tool_spec, apply_patch, balance_tool_spec, cancel_job, cancel_tool_spec, capacity,
-    capacity_tool_spec, cheapest_matching_ask, claim_deposit, deposit_tool_spec, describe_reworks,
-    describe_round, describe_verdict, dispatch_and_verify, dispatch_signed, dispute_job,
-    dispute_tool_spec, embed_tool_spec, fetch_job_output, fix_tool_spec, funds_with_deposit_info,
-    hire_agent, hire_fix, infer_tool_spec, list_verified_jobs, list_withdrawals, output_tool_spec,
+    agent_preview, agent_purchase_recorded, agent_tool_spec, apply_patch, balance_tool_spec,
+    cancel_job, cancel_tool_spec, capacity, capacity_tool_spec, cheapest_matching_ask,
+    claim_deposit, deposit_tool_spec, describe_reworks, describe_round, describe_verdict,
+    dispatch_and_verify, dispatch_signed, dispute_job, dispute_tool_spec, embed_tool_spec,
+    fetch_job_output, fix_tool_spec, funds_with_deposit_info, hire_agent, hire_agent_idempotent,
+    hire_fix, infer_tool_spec, list_verified_jobs, list_withdrawals, output_tool_spec,
     prepare_agent_task, prepare_fix_order, preview_value, quote_price, receipts_tool_spec,
     run_tool_spec, save_speech_clip, sign_envelope, speak_tool_spec, stream_and_verify,
     stream_poll_tool_spec, stream_start_tool_spec, submit_streaming, swarm_tool_spec,
@@ -239,6 +240,21 @@ async fn call_fix(state: &ServerState, id: Value, arguments: Value) -> Value {
         Ok(args) => args,
         Err(e) => return error(id, -32602, format!("invalid arguments: {e}")),
     };
+    if args.idempotency_key.is_some() {
+        return error(
+            id,
+            -32602,
+            "fix does not yet support keyed two-stage orders; use compute.agent for a keyed task"
+                .into(),
+        );
+    }
+    if args.kani.is_some() {
+        return error(
+            id,
+            -32602,
+            "Kani checks currently support code.change agent tasks".into(),
+        );
+    }
     let order = match prepare_fix_order(&args) {
         Ok(order) => order,
         Err(e) => return tool_error(id, e.to_string()),
@@ -250,10 +266,24 @@ async fn call_fix(state: &ServerState, id: Value, arguments: Value) -> Value {
     if let Some(refusal) = state.caps.per_call_refusal(price) {
         return tool_error(id, refusal);
     }
+    let deadline_ms = args.deadline_ms.unwrap_or(DEFAULT_FIX_DEADLINE_MS);
+    if args.dry_run {
+        let reproduction = match agent_preview(&order.reproduction, price * 2 / 5, deadline_ms) {
+            Ok(v) => v,
+            Err(e) => return tool_error(id, e.to_string()),
+        };
+        let fix = match agent_preview(&order.fix, price - price * 2 / 5, deadline_ms) {
+            Ok(v) => v,
+            Err(e) => return tool_error(id, e.to_string()),
+        };
+        return response(
+            id,
+            json!({"content":[{"type":"text","text":json!({"dry_run":true,"spends_nothing":true,"kind":"fix_order","price_micro_usdc":price,"deadline_ms":deadline_ms,"reproduction":reproduction,"fix":fix}).to_string()}],"isError":false}),
+        );
+    }
     if let Some(refusal) = session_cap_refusal(state, price) {
         return tool_error(id, refusal);
     }
-    let deadline_ms = args.deadline_ms.unwrap_or(DEFAULT_FIX_DEADLINE_MS);
     let outcome = match hire_fix(
         &state.http,
         &state.buyer,
@@ -369,6 +399,9 @@ async fn call_agent(state: &ServerState, id: Value, arguments: Value) -> Value {
         Ok(args) => args,
         Err(e) => return error(id, -32602, format!("invalid arguments: {e}")),
     };
+    if args.dry_run && args.idempotency_key.is_some() {
+        return error(id, -32602, "a dry run takes no idempotency_key".into());
+    }
     let task = match prepare_agent_task(&args) {
         Ok(task) => task,
         Err(e) => return tool_error(id, e.to_string()),
@@ -383,20 +416,55 @@ async fn call_agent(state: &ServerState, id: Value, arguments: Value) -> Value {
     if let Some(refusal) = state.caps.per_call_refusal(price) {
         return tool_error(id, refusal);
     }
-    if let Some(refusal) = session_cap_refusal(state, price) {
-        return tool_error(id, refusal);
-    }
     let deadline_ms = args.deadline_ms.unwrap_or(DEFAULT_AGENT_DEADLINE_MS);
-    let outcome = match hire_agent(
-        &state.http,
-        &state.buyer,
-        &state.identity,
-        task,
-        price,
-        deadline_ms,
-    )
-    .await
-    {
+    if args.dry_run {
+        let preview = match agent_preview(&task, price, deadline_ms) {
+            Ok(v) => v,
+            Err(e) => return tool_error(id, e.to_string()),
+        };
+        return response(
+            id,
+            json!({"content":[{"type":"text","text":preview.to_string()}],"isError":false}),
+        );
+    }
+    let replayed = match args.idempotency_key.as_deref() {
+        Some(key) => match agent_purchase_recorded(&state.buyer, &state.identity, key) {
+            Ok(v) => v,
+            Err(e) => return tool_error(id, e.to_string()),
+        },
+        None => false,
+    };
+    if !replayed {
+        if let Some(refusal) = session_cap_refusal(state, price) {
+            return tool_error(id, refusal);
+        }
+    }
+    let dispatched = match args.idempotency_key.as_deref() {
+        Some(key) => {
+            hire_agent_idempotent(
+                &state.http,
+                &state.buyer,
+                &state.identity,
+                task,
+                price,
+                deadline_ms,
+                key,
+            )
+            .await
+        }
+        None => {
+            hire_agent(
+                &state.http,
+                &state.buyer,
+                &state.identity,
+                task,
+                price,
+                deadline_ms,
+            )
+            .await
+        }
+    };
+    let outcome = match dispatched {
         Ok(outcome) => outcome,
         Err(e) => return dispatch_failed(id, e),
     };
@@ -437,7 +505,9 @@ async fn call_agent(state: &ServerState, id: Value, arguments: Value) -> Value {
             reworks,
         } => {
             let charged = charged_micro_usdc.unwrap_or(outcome.envelope.payload.price_micro_usdc);
-            state.caps.record_spend(charged);
+            if !replayed {
+                state.caps.record_spend(charged);
+            }
             let job_id = outcome.receipt.receipt.job_id;
             let dir = state.clips_dir.with_file_name("agent-patches");
             let path = dir.join(format!("{job_id}.patch"));
@@ -1492,6 +1562,7 @@ async fn handle_line(state: &Arc<ServerState>, line: &str) -> Option<Value> {
                 deposit_tool_spec(),
                 balance_tool_spec(),
                 capacity_tool_spec(),
+                covenant_compute_buyer::durable_budget::tool_spec(),
                 withdraw_tool_spec(),
                 withdrawals_tool_spec(),
                 dispute_tool_spec(),
@@ -1518,6 +1589,31 @@ async fn handle_line(state: &Arc<ServerState>, line: &str) -> Option<Value> {
                 DEPOSIT_TOOL => Some(call_deposit(state, id, arguments).await),
                 BALANCE_TOOL => Some(call_balance(state, id).await),
                 CAPACITY_TOOL => Some(call_capacity(state, id).await),
+                covenant_compute_buyer::durable_budget::BUDGET_TOOL => {
+                    #[derive(Deserialize)]
+                    #[serde(deny_unknown_fields)]
+                    struct BudgetArgs {
+                        #[serde(default)]
+                        reconcile: bool,
+                    }
+                    Some(match serde_json::from_value::<BudgetArgs>(arguments) {
+                        Err(e) => error(id, -32602, e.to_string()),
+                        Ok(args) => match covenant_compute_buyer::durable_budget::describe(
+                            &state.http,
+                            &state.buyer,
+                            &state.identity,
+                            args.reconcile,
+                        )
+                        .await
+                        {
+                            Ok(value) => response(
+                                id,
+                                json!({"content":[{"type":"text","text":value.to_string()}],"isError":false}),
+                            ),
+                            Err(e) => tool_error(id, e.to_string()),
+                        },
+                    })
+                }
                 WITHDRAW_TOOL => Some(call_withdraw(state, id, arguments).await),
                 WITHDRAWALS_TOOL => Some(call_withdrawals(state, id).await),
                 DISPUTE_TOOL => Some(call_dispute(state, id, arguments).await),
@@ -1734,6 +1830,36 @@ mod tests {
         })
     }
 
+    #[tokio::test]
+    async fn agent_preview_is_offline_and_does_not_consume_a_session_cap() {
+        let state = test_state(1_000_000, Some(1));
+        let args = json!({"repo":"https://github.com/example/repo","commit":"a".repeat(40),"task":"prove the route","accept":["true"],"price_micro_usdc":700000,"dry_run":true});
+        let result = call_agent(&state, Value::from(1), args.clone()).await;
+        assert_eq!(result["result"]["isError"], false, "{result}");
+        let preview: Value =
+            serde_json::from_str(result["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(preview["dry_run"], true);
+        assert_eq!(preview["price_micro_usdc"], 700000);
+        let mut invalid = args.clone();
+        invalid["deadline_ms"] = json!(1000);
+        assert_eq!(
+            call_agent(&state, Value::from(2), invalid).await["result"]["isError"],
+            true
+        );
+        let mut unknown = args.clone();
+        unknown["dryrun"] = json!(true);
+        assert_eq!(
+            call_agent(&state, Value::from(3), unknown).await["error"]["code"],
+            -32602
+        );
+        let mut keyed = args;
+        keyed["idempotency_key"] = json!("no-journal-for-preview");
+        assert_eq!(
+            call_agent(&state, Value::from(4), keyed).await["error"]["code"],
+            -32602
+        );
+    }
+
     #[test]
     fn an_underfunded_dispatch_names_the_deposit_tools() {
         let v = dispatch_failed(
@@ -1935,6 +2061,7 @@ mod tests {
                 DEPOSIT_TOOL,
                 BALANCE_TOOL,
                 CAPACITY_TOOL,
+                covenant_compute_buyer::durable_budget::BUDGET_TOOL,
                 WITHDRAW_TOOL,
                 WITHDRAWALS_TOOL,
                 DISPUTE_TOOL,

@@ -191,6 +191,8 @@ impl ReputationStats {
     }
 }
 
+// async_trait adds #[must_use] to already-must-use boxed futures.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait ReputationSource: Send + Sync {
     /// Higher is better. No fixed scale is contractual — the matcher

@@ -231,6 +231,8 @@ struct CheckpointState {
     resumed_at_ms: Option<u64>,
 }
 
+// async_trait adds #[must_use] to already-must-use boxed futures.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait BudgetLedger: Send + Sync {
     /// Provision `agent` with a budget of `credits_per_hour`. Initial

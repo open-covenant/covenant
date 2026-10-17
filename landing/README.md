@@ -40,6 +40,12 @@ sets them over a field background with the site's type (`app/og/_card.tsx`,
 fonts and backgrounds in `app/og/_assets`). Cards are cached in memory and by
 the CDN for a day.
 
+The runtime admits at most eight distinct pending cards and renders one at a
+time; requests for the same card share the work. Cached PNGs are limited to
+64 entries and 8 MiB, with least-recently-used eviction. The native rasterizer
+uses one worker and a 4 MiB cache. Excess work returns a retryable 503 so
+crawler bursts cannot start unbounded rasterization in the website process.
+
 `pnpm build` runs `check:cards` and fails when a page doesn't use the helper or a built page's
 `og:image` doesn't point at its own card, so a new page can't ship without
 one. The home page keeps its rendered share card (`app/opengraph-image.jpg`).

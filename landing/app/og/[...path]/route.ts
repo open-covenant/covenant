@@ -1,6 +1,7 @@
 import { renderCard } from "../_card";
 import { fetchPage, readCardData } from "../_page";
 import { computePageUrl, fetchComputePage } from "../_compute";
+import { CardPipeline, CardQueueFull } from "../_pipeline";
 
 // /og/<page path>.png: the social card for any page on the site, drawn from the
 // title and section the page declares (see app/_metadata.ts). New pages get a
@@ -15,9 +16,8 @@ const SEGMENT = /^[\w.-]{1,80}$/;
 const LEGACY: Record<string, string> = {
   "/covenant-is-now-multichain": "/blog/covenant-is-now-multichain",
 };
-const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
-const CACHE_MAX = 300;
-const cache = new Map<string, { png: ArrayBuffer; at: number }>();
+const pipeline = new CardPipeline();
+class CardNotFound extends Error {}
 
 const notFound = () => new Response("Not found", { status: 404, headers: { "cache-control": "public, max-age=300" } });
 
@@ -43,9 +43,6 @@ export async function GET(req: Request, { params }: { params: Promise<{ path: st
   const computeUrl = computeSegments ? computePageUrl(computeSegments) : null;
   if (computeSegments && !computeUrl) return notFound();
 
-  const hit = cache.get(pagePath);
-  if (hit && Date.now() - hit.at < CACHE_TTL_MS) return png(hit.png);
-
   const host = (req.headers.get("x-forwarded-host") ?? req.headers.get("host") ?? "opencovenant.org").replace(
     /^(www|docs|stake|legacy-stake)\./i,
     "",
@@ -55,32 +52,32 @@ export async function GET(req: Request, { params }: { params: Promise<{ path: st
   // speaks plain http.
   const proto = req.headers.get("x-forwarded-proto") === "http" ? "http" : "https";
 
-  let page;
   try {
-    page = computeSegments
-      ? await fetchComputePage(computeSegments)
-      : await fetchPage(port, host, pagePath, proto);
+    const body = await pipeline.getOrRender(pagePath, async () => {
+      const page = computeSegments
+        ? await fetchComputePage(computeSegments)
+        : await fetchPage(port, host, pagePath, proto);
+      if (page.status === 404 || page.status === 410) throw new CardNotFound();
+      if (page.status !== 200) throw new Error(`Card source returned ${page.status}`);
+      const data = readCardData(page.html);
+      if (!data) throw new CardNotFound();
+
+      const image = await renderCard({
+        title: computeSegments ? data.title.replace(/\s*[|:·—–]\s*Covenant Compute\s*$/i, "") : data.title,
+        section: data.section ?? (computeSegments ? "Compute" : undefined),
+        // The public source cannot substitute another canonical address on a card.
+        url: computeUrl ?? data.url ?? `https://${page.host}${page.path}`,
+        key: pagePath,
+      });
+      return image.arrayBuffer();
+    });
+    return png(body);
   } catch (err) {
+    if (err instanceof CardNotFound) return notFound();
+    if (err instanceof CardQueueFull) return new Response("Card renderer is busy; retry shortly", {
+      status: 503, headers: { "cache-control": "no-store", "retry-after": "2" },
+    });
     console.error(`[og] could not read ${pagePath}:`, err);
     return new Response("Card unavailable", { status: 503, headers: { "cache-control": "no-store" } });
   }
-  if (page.status === 404 || page.status === 410) return notFound();
-  if (page.status !== 200) {
-    return new Response("Card unavailable", { status: 503, headers: { "cache-control": "no-store" } });
-  }
-  const data = readCardData(page.html);
-  if (!data) return notFound();
-
-  const image = await renderCard({
-    title: computeSegments ? data.title.replace(/\s*[|:·—–]\s*Covenant Compute\s*$/i, "") : data.title,
-    section: data.section ?? (computeSegments ? "Compute" : undefined),
-    // The public source cannot substitute another canonical address on a card.
-    url: computeUrl ?? data.url ?? `https://${page.host}${page.path}`,
-    key: pagePath,
-  });
-  const body = await image.arrayBuffer();
-
-  if (cache.size >= CACHE_MAX) cache.delete(cache.keys().next().value!);
-  cache.set(pagePath, { png: body, at: Date.now() });
-  return png(body);
 }

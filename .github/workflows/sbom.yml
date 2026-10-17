@@ -33,7 +33,7 @@ jobs:
         run: bash scripts/sbom.sh
 
       - name: Upload SBOM as workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: covenant-sbom-spdx
           path: dist/covenant-sbom.spdx.json

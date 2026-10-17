@@ -111,6 +111,7 @@ export default function ComputePage() {
         <p className={`${paragraph} mt-6 max-w-2xl text-muted`}>
           Compare sampled provider quotes and settled rental rates in the{" "}
           <a className={link} href="/compute-prices">public GPU price history</a>, with timestamps and sample counts.
+          {" "}View capacity, settlement checks and reviewed incidents on the <a className={link} href="/compute-status">Compute status page</a>.
         </p>
 
         <section className="mt-12">

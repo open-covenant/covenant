@@ -122,6 +122,7 @@ export const FOOTER_COLUMNS: { title: string; links: FooterColumnLink[] }[] = [
     links: [
       { label: "Guard", href: "/guard" },
       { label: "Trading", href: "/trading" },
+      { label: "Compute", href: "/compute" },
       { label: "Sandbox", href: "https://sandbox.opencovenant.org", external: true },
       { label: "Agents", href: "/agents" },
       { label: "Arena", href: "/arena" },
@@ -145,6 +146,7 @@ export const FOOTER_COLUMNS: { title: string; links: FooterColumnLink[] }[] = [
     links: [
       { label: "Docs", href: "https://docs.opencovenant.org", external: true },
       { label: "API Reference", href: "/docs/http-api" },
+      { label: "Compute status", href: "/compute-status" },
       { label: "SDK", href: "/sdk" },
       { label: "GitHub", href: GITHUB_URL, external: true },
     ],

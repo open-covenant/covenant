@@ -19,6 +19,7 @@ export default function ComputePricesPage() {
         <p className="mt-6 max-w-2xl text-pretty text-[15px] leading-[1.7] text-fg-soft sm:text-base">
           Compare sampled provider quotes with settled rental costs. Every series shows its source, sample count and price per GPU-hour.
         </p>
+        <a href="/compute-status" className="mt-5 inline-block text-[12px] text-muted underline decoration-line-strong underline-offset-4 transition-colors hover:text-fg">View Compute status</a>
         <PriceHistoryView />
       </div>
       <SiteFooter className="pb-8" />

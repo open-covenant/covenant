@@ -71,6 +71,17 @@ unavailable and displays an explicit error instead of stale prices. Public HTML
 route handlers elsewhere must use `applyPageMetadata()` and remain included in
 the build's card guard.
 
+`/compute-status` uses the same shared layout and automatic card metadata. It
+reads `/compute-status/data`, a credential-free, fixed-origin proxy for Compute's
+public `/status` JSON. Both fetches bypass caches; proxy responses are private
+and no-store, capped at 1 MiB and eight seconds, and reconstructed from a
+validated public schema to discard unexpected upstream details. Failures never
+become healthy or empty-capacity reports. The client refreshes every minute,
+marks snapshots older than three minutes as outdated, applies the observer's
+separate freshness window, and labels retained data after a failed refresh.
+An empty scan, no available operators, unreviewed findings and reviewed incidents
+remain distinct. The status page does not initiate jobs or financial actions.
+
 ## Identity
 
 The site has a dark theme only: light text on a black background

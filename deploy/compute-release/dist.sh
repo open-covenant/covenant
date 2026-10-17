@@ -34,6 +34,11 @@ bins=(covenant-compute covenant-compute-mcp covenant-compute-node)
 
 version="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$workspace/crates/covenant-compute-buyer/Cargo.toml")"
 [ -n "$version" ] || { echo "dist.sh: no version in covenant-compute-buyer/Cargo.toml" >&2; exit 1; }
+# The README links to the command reference at this release's tag.
+if grep -o -E 'compute-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?' "$here/README.md" | grep -q -v -x -F "compute-v$version"; then
+  echo "dist.sh: README.md links to another release than compute-v$version" >&2
+  exit 1
+fi
 
 export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-11.0}"
 export CARGO_PROFILE_RELEASE_STRIP=symbols

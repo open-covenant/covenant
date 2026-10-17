@@ -14,30 +14,35 @@ Or with the install script, which checks the download against a pinned checksum 
 curl -fsSL https://opencovenant.org/install/compute.sh | sh
 ```
 
-The archives below hold the same four commands for Apple silicon and Intel Macs, and for x86-64 and ARM64 Linux. The Linux builds are statically linked, so they run on any distribution.
+The archives below contain the four commands that Homebrew and the install script give you, built for Apple silicon and Intel Macs and for x86-64 and ARM64 Linux. The Linux builds are statically linked, so they run on any distribution.
 
 | Command | What it does |
 | --- | --- |
-| `covenant-compute` | Rents a GPU by the second, hires coding agents, orders work from IMD (a swarm of about 1,000 AI agents) and manages your balance. |
-| `covenant-compute-mcp` | Lets any Model Context Protocol (MCP) client hire coding agents, order work from IMD and manage your balance, with a spending limit on every call. |
-| `covenant-compute-node` | Runs a node that earns USDC by serving jobs. |
-| `covenant-compute-stake` | Stakes CVNT, Covenant's token, for your node. |
+| `covenant-compute` | Rents a GPU by the second, hires coding agents, manages your balance, and buys research reports and other finished work from [IMD](https://imd.fun), a swarm of about 1,000 AI agents. |
+| `covenant-compute-mcp` | Lets any Model Context Protocol (MCP) client hire coding agents, buy work from IMD, and check, top up and withdraw your balance. |
+| `covenant-compute-node` | Runs a node that earns USDC for paid work such as GPU rentals and coding-agent tasks. |
+| `covenant-compute-stake` | Stakes CVNT, Covenant's token, which a node needs before it can take work. |
 
-The [Compute guide](https://docs.opencovenant.org/compute) covers funding a balance, renting a GPU and running a node.
+Both `covenant-compute` and `covenant-compute-mcp` refuse any single lease, task or purchase that would cost more than your spending cap, which is 1 USDC unless you raise `COVENANT_COMPUTE_MAX_PRICE_MICRO_USDC`.
+
+The [Compute guide](https://docs.opencovenant.org/compute) covers funding a balance, renting a GPU, hiring a coding agent and running a node.
 
 ## New since 0.1.0
 
-- `covenant-compute agent` hires one operator's agent to change your repository while a different operator runs your acceptance tests on the result, and you pay only if they pass. Test files passed with `--hidden` count in the check but are never shown to the agent.
-- `covenant-compute fix` has one agent write tests that reproduce a bug and a second agent, from a different operator, fix it. You are charged only if the fix passes.
-- Every operator who checks the work signs a verdict. Each verdict is counted on a MagicBlock rollup, which runs alongside Solana, and recorded on Solana before anyone is paid.
-- `covenant-compute swarm` and the `compute.swarm` tool for MCP clients buy research reports and other finished work from IMD, a swarm of about 1,000 AI agents. If nothing arrives, you get a full refund.
-- An agent task installs your project's dependencies from the public package registries, then runs your checks with no network access.
-- A node installed with Homebrew and run with `covenant-compute-node service install` keeps working through `brew upgrade`.
-- `covenant-compute-stake` responds to `--version`, like the other commands.
+- `covenant-compute agent` hires a coding agent from one operator to change your repository, then has a different operator run your acceptance tests on the result. You pay only if the tests pass, and you get the accepted change as a patch. Test files you give with `--hidden` count toward the check, but the agent never sees them.
+- `covenant-compute fix` has one agent write tests that reproduce a bug and a second agent, from a different operator, fix it. You are charged only if your acceptance tests pass with the new tests and the fix in place.
+- Every operator who checks the work signs a verdict. A failing check is confirmed by a second operator, and some passing ones are checked again. If two operators disagree, a third checks the work and the majority decides. The verdicts are counted on a MagicBlock rollup, which runs alongside Solana, and recorded on Solana before anyone is paid.
+- `covenant-compute swarm` and the `compute.swarm` tool for MCP clients buy research reports and other finished work from IMD. Each order has a deadline, two hours unless you set another, and if nothing is delivered by then, you get a full refund.
+- Agent tasks install your project's dependencies from PyPI, npm, crates.io or the Go module proxy, then run your checks with no network access.
+- If you install a node with Homebrew and set it up as a service with `covenant-compute-node service install`, it keeps running across `brew upgrade`.
+
+## Fixes
+
+- `covenant-compute-stake --version` now prints its version, as the other commands do.
 
 ## Verify a download
 
-Each archive and `checksums.txt` carries a cosign signature (`.sig`) and certificate (`.pem`) issued to this release's workflow:
+Each archive and `checksums.txt` has a cosign signature (`.sig`) and a certificate (`.pem`) issued to the GitHub Actions workflow that built this release. To verify the Apple silicon archive, for example:
 
 ```sh
 cosign verify-blob \

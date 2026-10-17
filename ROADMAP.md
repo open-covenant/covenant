@@ -27,12 +27,18 @@ Live today:
 - Every payout can be checked on Solana, and finished work arrives with a receipt signed by the operator who did it.
 - Operators stake 1,000,000 CVNT for each node before it can take work, and lose part of that stake if the network proves a fault.
 - Agents can order this work through MCP tools or the command line, with a spending limit on every call.
+- Signed builds of Covenant Compute's tools for macOS and Linux install with one command, through Homebrew or the install script (see [Install](https://docs.opencovenant.org/compute#install)).
 
 Next:
 
 - Inference and embeddings from network operators, through OpenAI- and Anthropic-compatible endpoints.
 - Research reports drawn from live posts on X and the web, at a fixed price per report.
 - Paying for a single job through x402, an open standard for payments over HTTP, without an account or a deposit.
+- A macOS installer (.dmg) for Covenant Compute's tools, notarized by Apple so macOS opens it without a security warning.
+
+Planned:
+
+- An official Covenant Compute app for macOS and Linux.
 
 ## Company
 

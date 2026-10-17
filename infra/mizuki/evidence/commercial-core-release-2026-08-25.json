@@ -1,0 +1,32 @@
+{
+  "kind": "mizuki_commercial_core_release",
+  "sourceCommit": "ba5e38e71fa2ef94804c2e2c041e2a8be2ae2bce",
+  "releaseTag": "mizuki-image-ba5e38e71fa2ef94804c2e2c041e2a8be2ae2bce",
+  "releaseUrl": "https://github.com/open-covenant/covenant/releases/tag/mizuki-image-ba5e38e71fa2ef94804c2e2c041e2a8be2ae2bce",
+  "image": {
+    "reference": "ghcr.io/open-covenant/covenant/mizuki@sha256:c3a5c49dd893f6b296941db134d39e632f4fc765431103d36c710c54c381dd62",
+    "digest": "sha256:c3a5c49dd893f6b296941db134d39e632f4fc765431103d36c710c54c381dd62",
+    "platform": "linux/amd64",
+    "manifestUrl": "https://github.com/open-covenant/covenant/releases/download/mizuki-image-ba5e38e71fa2ef94804c2e2c041e2a8be2ae2bce/manifest.oci.json"
+  },
+  "promotion": {
+    "shadowVerified": true,
+    "productionDeploymentId": "dep-da6j010u01pc7389jjjg",
+    "websiteDeploymentId": "dep-da6j2ln10e5c73bt4ajg",
+    "websiteCommit": "ba5e38e71fa2ef94804c2e2c041e2a8be2ae2bce",
+    "websiteCompletedAt": "2026-08-25T06:10:48.347Z"
+  },
+  "verification": {
+    "releaseImmutable": true,
+    "checksumsVerified": true,
+    "imageAttestationVerified": true,
+    "runtimeReady": true,
+    "failedDependencies": [],
+    "intakeEnabledDuringPromotion": false,
+    "claimsEnabledDuringPromotion": false,
+    "admissionRevision": 31,
+    "activeJobsDuringPromotion": 0,
+    "nonterminalSignerOperations": 0,
+    "undischargedDeliveryBoundLiabilities": 0
+  }
+}

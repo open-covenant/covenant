@@ -27,6 +27,7 @@ export const metadata: Metadata = pageMetadata("/compute", { title: "Covenant Co
 });
 
 const DOCS = "https://docs.opencovenant.org/compute";
+const RELEASE = "https://github.com/open-covenant/covenant/releases/tag/compute-v0.2.0";
 const PROGRAM = "3dTtXH7rah8YyWTsAfSg6qC3iqrJXWGEhAx57uUHXZff";
 const FIRST_PAYOUT =
   "35Wdz2k2U1QatsiSVsty3edFnmqUESe9C3Dy6xVpNaKByBi9knFieApuyvrZJgQN9DLmQ4LPqH4xJfm4zw2ou7xR";
@@ -70,8 +71,9 @@ export default function ComputePage() {
           Covenant Compute
         </h1>
         <p className={`${paragraph} mt-5 max-w-2xl`}>
-          Rent a GPU by the second and pay in USDC. You pay for the time you use, and the rest of your
-          deposit comes back when the session closes. Live on Solana mainnet.
+          Rent a GPU by the second and pay in USDC. When you open a session, the most it can cost is
+          held from your balance. You pay only for the seconds from when an operator accepts it until
+          it closes, and the rest goes back to your balance. Live on Solana mainnet.
         </p>
 
         <video
@@ -82,6 +84,23 @@ export default function ComputePage() {
           playsInline
           preload="metadata"
         />
+
+        <section className="mt-12">
+          <p className={eyebrow}>install &middot; macos and linux</p>
+          <code className={`${cmdBlock} mt-3`}>{`brew install open-covenant/tap/covenant-compute`}</code>
+          <p className={`${paragraph} mt-3 text-muted-2`}>Or use the install script:</p>
+          <code className={`${cmdBlock} mt-3`}>
+            {`curl -fsSL https://opencovenant.org/install/compute.sh | sh`}
+          </code>
+          <p className={`${paragraph} mt-3 text-muted-2`}>
+            Either way you get the command-line tools built for your machine, for Apple silicon and
+            Intel Macs and for x86-64 and ARM64 Linux. Every release archive is signed, and the{" "}
+            <a className={link} href={RELEASE}>
+              release page
+            </a>{" "}
+            shows how to verify it.
+          </p>
+        </section>
 
         <section className="mt-12">
           <p className={eyebrow}>rent a gpu &middot; from the command line</p>

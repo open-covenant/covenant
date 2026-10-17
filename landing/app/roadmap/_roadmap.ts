@@ -166,6 +166,11 @@ export const TRACKS: Track[] = [
         body: "Agents can order this work through MCP tools or the command line, with a spending limit on every call.",
       },
       {
+        name: "One-command install",
+        body: "Signed builds of Covenant Compute's tools for macOS and Linux, installed through Homebrew or the install script.",
+        href: "https://docs.opencovenant.org/compute#install",
+      },
+      {
         name: "Inference and embeddings",
         body: "From network operators, through OpenAI- and Anthropic-compatible endpoints.",
         state: "next",
@@ -182,7 +187,7 @@ export const TRACKS: Track[] = [
       },
       {
         name: "macOS installer",
-        body: "A macOS installer (.dmg) for Covenant Compute's tools, so you no longer have to build them from source.",
+        body: "A macOS installer (.dmg) for Covenant Compute's tools, notarized by Apple so macOS opens it without a security warning.",
         state: "next",
       },
       {

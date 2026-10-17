@@ -8,7 +8,7 @@ const META_ARGS = [
 export const metadata = buildDocsMetadata(...META_ARGS);
 
 const REPO = "https://github.com/open-covenant/covenant";
-const TAG = "compute-v0.1.0";
+const TAG = "compute-v0.2.0";
 
 export default function ComputePage() {
   return (
@@ -19,9 +19,11 @@ export default function ComputePage() {
       />
       <h1>Compute</h1>
       <p>
-        Covenant Compute rents GPUs by the second. You pay in USDC for the time a session runs, and
-        whatever you held back for it and did not use comes back when it closes. Operators earn USDC
-        for the same seconds and stake CVNT to take work. It runs on Solana mainnet.
+        Covenant Compute rents GPUs by the second. You pay in USDC for the time a session runs. The
+        most it can cost is set aside from your balance when it opens, and whatever it does not use
+        goes back to your balance when it closes. Operators earn USDC for those same seconds, and they
+        stake CVNT, Covenant&apos;s token, to take work. It runs on Solana mainnet. The same network
+        also hires out coding agents, and you pay only for work that passes your tests.
       </p>
 
       <h2>How a session settles</h2>
@@ -32,8 +34,9 @@ export default function ComputePage() {
         </li>
         <li>
           While the machine runs, the session&apos;s meter lives in a MagicBlock ephemeral rollup (a
-          short-lived Solana execution environment that writes back to mainnet). The coordinator
-          ticks it with the elapsed time every five seconds, at no cost per tick.
+          short-lived Solana execution environment that writes back to mainnet). The coordinator,
+          the service at compute-api.opencovenant.org that matches work to operators, updates it with
+          the elapsed time every five seconds, and the updates cost nothing.
         </li>
         <li>
           When you close the lease, the meter commits to Solana in one write and the vault pays the
@@ -104,19 +107,41 @@ export default function ComputePage() {
         and at what price.
       </p>
 
-      <h2>Install</h2>
-      <p>The tools build from source with a Rust toolchain:</p>
+      <h2 id="install">Install</h2>
+      <p>With Homebrew, on macOS or Linux:</p>
+      <pre>
+        <code>brew install open-covenant/tap/covenant-compute</code>
+      </pre>
+      <p>
+        Or with the install script, which checks the download against a pinned checksum and puts the
+        commands in <code>~/.local/bin</code>:
+      </p>
+      <pre>
+        <code>curl -fsSL https://opencovenant.org/install/compute.sh | sh</code>
+      </pre>
+      <p>
+        Either way you get four commands. <code>covenant-compute</code> rents GPUs and hires coding
+        agents, and it buys research reports and other finished work from{" "}
+        <a href="https://imd.fun">IMD</a>, a swarm of about 1,000 AI agents.{" "}
+        <code>covenant-compute-mcp</code> lets any MCP client hire coding agents, buy work from IMD,
+        and check, top up and withdraw your balance. Both tools refuse any single lease, task or
+        purchase that would cost more than your spending cap, which is 1 USDC unless you raise it.
+        For operators,{" "}
+        <code>covenant-compute-node</code> runs a node that earns USDC for paid work such as GPU
+        rentals and coding-agent tasks, and <code>covenant-compute-stake</code>{" "}
+        stakes the CVNT, Covenant&apos;s token, that a node needs before it can take work. The{" "}
+        <a href={`${REPO}/releases/tag/${TAG}`}>release page</a> has signed archives for Apple silicon
+        and Intel Macs and for x86-64 and ARM64 Linux.
+      </p>
+      <p>To build from source instead, with a Rust toolchain:</p>
       <pre>
         <code>{`git clone --depth 1 --branch ${TAG} ${REPO}
 cd covenant/agent-os
-cargo install --locked --path crates/covenant-compute-buyer
+cargo install --locked --path crates/covenant-compute-buyer --bin covenant-compute --bin covenant-compute-mcp
 cargo install --locked --path crates/covenant-compute-node
 cargo install --locked --path crates/covenant-compute-lease-signer --bin covenant-compute-stake`}</code>
       </pre>
-      <p>
-        <code>covenant-compute-buyer</code> installs the <code>covenant-compute</code> command. Operators
-        also need <code>covenant-compute-node</code> and <code>covenant-compute-stake</code>.
-      </p>
+      <p>These lines install the same four commands.</p>
 
       <h2>Rent a GPU</h2>
       <pre>
@@ -124,6 +149,12 @@ cargo install --locked --path crates/covenant-compute-lease-signer --bin covenan
 covenant-compute whoami      # your buyer key, kept in ~/.covenant-compute-mcp
 covenant-compute balance     # funds, and where to send a top-up`}</code>
       </pre>
+      <p>
+        Your buyer key identifies your balance, and <code>covenant-compute</code> and{" "}
+        <code>covenant-compute-mcp</code> share it. Back up{" "}
+        <code>~/.covenant-compute-mcp/identity.json</code> and keep it private: without it you lose
+        access to your balance, and anyone with a copy can spend it.
+      </p>
       <p>
         To fund your balance, send USDC to the deposit address that <code>balance</code> prints, with
         the memo <code>compute-buyer:&lt;your buyer key&gt;</code>, then claim the transfer:
@@ -139,17 +170,63 @@ covenant-compute lease view <job-id>
 covenant-compute lease close <job-id>`}</code>
       </pre>
       <p>
-        <code>lease open</code> waits up to four minutes for the machine and prints its SSH address.
-        The rate must meet an operator&apos;s ask, which <code>capacity</code> shows per lease hour.
-        The whole ceiling must also fit under your per-call spend cap,{" "}
-        <code>COVENANT_COMPUTE_MAX_PRICE_MICRO_USDC</code>, which defaults to $1: at 334 micro-USDC a
-        second that is just under 50 minutes. Raise it for longer windows.
+        <code>lease open</code>{" "}
+        waits up to four minutes for the machine and prints its SSH address.{" "}
+        <code>--rate</code> is in micro-USDC per second and must meet an operator&apos;s ask, which{" "}
+        <code>capacity</code> shows per hour: 334 micro-USDC a second is about 1.20 USDC an hour. The
+        whole ceiling must also fit under your spending cap, the most that any single lease, task or
+        purchase can cost. It is set with <code>COVENANT_COMPUTE_MAX_PRICE_MICRO_USDC</code> and
+        defaults to 1000000 micro-USDC (1 USDC), which at 334 micro-USDC a second covers just under 50
+        minutes. Raise it for longer windows, for example to 5000000 for 5 USDC.
       </p>
       <p>
         After a lease closes, <code>covenant-compute verify &lt;job-id&gt;</code> reads the payout back
         from Solana through your own RPC (<code>--rpc-url</code>).{" "}
         <code>covenant-compute withdraw &lt;micro-usdc&gt; &lt;wallet&gt;</code> moves unspent balance
         out; each withdrawal can move up to $100.
+      </p>
+
+      <h2 id="hire-a-coding-agent">Hire a coding agent</h2>
+      <pre>
+        <code>{`covenant-compute agent --repo . --accept "python -m unittest" "fix the slug bug"
+covenant-compute fix --repo . --accept "python -m unittest" "slugify drops accents"`}</code>
+      </pre>
+      <p>
+        <code>agent</code>{" "}
+        gives a task and your repository to a coding agent run by one operator. A different
+        operator applies the agent&apos;s patch to a clean copy and runs your{" "}
+        <code>--accept</code> commands with no network access, and you pay only if they pass. Each
+        checker signs its verdict, and the verdicts are recorded on Solana before anyone is paid. A
+        failing check is confirmed by a second operator, and some passing ones are checked again. If
+        two operators disagree, a third checks the work and the majority decides. The accepted patch
+        is saved as <code>agent-&lt;job-id&gt;.patch</code>, and <code>--apply</code>{" "}
+        also applies it to your repository.
+      </p>
+      <p>
+        <code>fix</code> takes on a bug in two steps. One agent writes tests that reproduce it, and
+        another operator confirms that they fail on your current code. A second agent, from a
+        different operator, then fixes the bug against those tests. You receive the
+        tests and the fix as one patch, and nothing is charged unless your <code>--accept</code>{" "}
+        commands pass with the new tests and the fix in place.
+      </p>
+      <p>
+        Only the files in your current commit are sent, without its history, so commit what the agent
+        should see and keep secrets out. Your code goes only to the coordinator and to the operators
+        who work on and check the task, and anything published about the task contains only hashes
+        of your code. Before the checks
+        run, your project&apos;s dependencies are installed from PyPI, npm, crates.io or the Go module
+        proxy, based on its lockfile or manifest. Test files you pass with <code>--hidden</code> count
+        toward the check, but the agent never sees them.
+      </p>
+      <p>
+        <code>--price</code> is the most you will pay: 0.70 USDC by default for <code>agent</code>{" "}
+        and 1.00 for <code>fix</code>, from the same balance as a lease. It cannot be more than your
+        spending cap, which defaults to 1 USDC. The{" "}
+        <a href={`${REPO}/tree/${TAG}/agent-os/crates/covenant-compute-buyer#readme`}>
+          command reference
+        </a>{" "}
+        covers the other options and shows how to add <code>covenant-compute-mcp</code> to an MCP
+        client, where <code>agent</code> and <code>fix</code> are available as tools.
       </p>
 
       <h2 id="run-a-node">Run a node</h2>

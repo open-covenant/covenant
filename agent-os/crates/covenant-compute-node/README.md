@@ -6,6 +6,9 @@ coordinator, matched by capability and price, paid per verified receipt.
 The network-level map lives at
 [docs/compute-network.md](../../../docs/compute-network.md).
 
+Install the prebuilt tools with `brew install open-covenant/tap/covenant-compute`,
+or see the other [install options](https://docs.opencovenant.org/compute#install).
+
 ```sh
 covenant-compute-node setup      # one-time: anchors, executor, pricing -> node.env
 covenant-compute-node            # serve jobs in the foreground
@@ -269,10 +272,14 @@ plus the deployment's dispute window, so it stops counting shortly
 before it unlocks. To keep winning work, stake again from a second
 wallet before that point.
 
-`service install` pins the current binary, the node home and PATH into
-a launchd agent (macOS) or systemd user unit (Linux): crashed nodes
-restart, deliberate exits stand, and `service uninstall` removes the
-manager entry without touching identity or earnings.
+`service install` sets the node up as a launchd agent on macOS or a
+systemd user unit on Linux, recording the current binary, the node home
+and your PATH in it. A node that crashes is restarted, and a node that
+exits on purpose stays stopped. `service uninstall` removes the service
+entry and leaves the node's identity and earnings untouched. For a node
+installed with Homebrew, the service uses the formula's `opt` link
+instead of a versioned path, so it keeps working through `brew upgrade`
+and runs the new version from its next restart.
 
 A node left running for months has to keep its own logs in check. On
 macOS the agent points `COVENANT_COMPUTE_NODE_LOG_DIR` at `<home>/logs`,

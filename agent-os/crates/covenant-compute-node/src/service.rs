@@ -167,8 +167,43 @@ fn user_home() -> Result<PathBuf, String> {
         .map_err(|_| "HOME not set".to_string())
 }
 
-fn current_exe() -> Result<PathBuf, String> {
-    std::env::current_exe().map_err(|e| format!("resolve current executable: {e}"))
+fn service_exe() -> Result<PathBuf, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("resolve current executable: {e}"))?;
+    Ok(stable_exe(exe))
+}
+
+/// The path a service should pin for `exe`. A Homebrew install runs from a
+/// versioned keg, `<prefix>/Cellar/<formula>/<version>/bin/<name>`, which
+/// `brew upgrade` deletes; the formula's `opt` link always points at the
+/// installed version, so a service pinned to it survives upgrades. The link is
+/// used only while it still resolves to `exe`.
+fn stable_exe(exe: PathBuf) -> PathBuf {
+    match homebrew_opt_link(&exe) {
+        Some(link) if same_file(&link, &exe) => link,
+        _ => exe,
+    }
+}
+
+fn homebrew_opt_link(exe: &Path) -> Option<PathBuf> {
+    let bin = exe.parent()?;
+    let keg = bin.parent()?;
+    let formula = keg.parent()?;
+    let cellar = formula.parent()?;
+    if bin.file_name()? != "bin" || cellar.file_name()? != "Cellar" {
+        return None;
+    }
+    Some(
+        cellar
+            .parent()?
+            .join("opt")
+            .join(formula.file_name()?)
+            .join("bin")
+            .join(exe.file_name()?),
+    )
+}
+
+fn same_file(a: &Path, b: &Path) -> bool {
+    matches!((a.canonicalize(), b.canonicalize()), (Ok(a), Ok(b)) if a == b)
 }
 
 fn run(cmd: &mut Command) -> Result<String, String> {
@@ -228,7 +263,7 @@ fn launchd(home: &Path, action: ServiceAction, out: &mut impl Write) -> Result<(
             ensure_configured(home)?;
             let (uid, target) = launchd_target()?;
             let loaded = launchd_loaded(&target);
-            let exe = current_exe()?;
+            let exe = service_exe()?;
             let path_var = std::env::var("PATH").unwrap_or_default();
             if let Some(dir) = plist_path.parent() {
                 std::fs::create_dir_all(dir)
@@ -314,7 +349,7 @@ fn systemd(home: &Path, action: ServiceAction, out: &mut impl Write) -> Result<(
     match action {
         ServiceAction::Install => {
             ensure_configured(home)?;
-            let exe = current_exe()?;
+            let exe = service_exe()?;
             let path_var = std::env::var("PATH").unwrap_or_default();
             if let Some(dir) = unit_path.parent() {
                 std::fs::create_dir_all(dir)
@@ -453,6 +488,38 @@ mod tests {
             unit.contains("Environment=\"PATH=/usr/bin:/opt/pct%%20dir:/bin\""),
             "a literal percent must be doubled for systemd: {unit}"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_homebrew_keg_is_pinned_through_its_opt_link() {
+        let prefix = tempfile::tempdir().unwrap();
+        let keg_bin = prefix.path().join("Cellar/covenant-compute/0.2.0/bin");
+        std::fs::create_dir_all(&keg_bin).unwrap();
+        let exe = keg_bin.join("covenant-compute-node");
+        std::fs::write(&exe, "").unwrap();
+        std::fs::create_dir(prefix.path().join("opt")).unwrap();
+        let opt = prefix.path().join("opt/covenant-compute");
+        std::os::unix::fs::symlink("../Cellar/covenant-compute/0.2.0", &opt).unwrap();
+        assert_eq!(
+            stable_exe(exe.clone()),
+            opt.join("bin/covenant-compute-node")
+        );
+
+        // With the opt link gone, the keg path is kept.
+        std::fs::remove_file(&opt).unwrap();
+        assert_eq!(stable_exe(exe.clone()), exe);
+    }
+
+    #[test]
+    fn a_path_outside_a_homebrew_keg_is_pinned_as_it_is() {
+        for path in [
+            "/opt/homebrew/bin/covenant-compute-node",
+            "/home/op/.local/bin/covenant-compute-node",
+            "/usr/local/Cellar/covenant-compute-node",
+        ] {
+            assert_eq!(stable_exe(PathBuf::from(path)), PathBuf::from(path));
+        }
     }
 
     #[test]

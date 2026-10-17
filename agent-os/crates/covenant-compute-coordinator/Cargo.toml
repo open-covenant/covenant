@@ -1,6 +1,6 @@
 [package]
 name = "covenant-compute-coordinator"
-version = "0.1.0"
+version = "0.2.0"
 description = "Coordinator service for the Covenant compute network: operator registry, capability/price/reputation matchmaker, coordinator-custodial FederationEscrow v1, and the axum long-poll wire server both sides of covenant-compute-protocol dial into."
 edition.workspace = true
 license.workspace = true

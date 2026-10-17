@@ -16,6 +16,7 @@ pub mod hyre;
 pub mod metaplex;
 pub mod reputation;
 pub mod robinhood;
+pub mod rwa;
 pub mod secret;
 pub mod sns;
 pub mod spend_authz;
@@ -1393,6 +1394,10 @@ pub struct Server {
     /// surface off; `Some` lets the daemon sign the release/refund verdict a
     /// call's escrowed hold is gated on. Enabled via `Server::with_spend_grant`.
     spend_grant: Option<Arc<spend_grant::SpendGrantConfig>>,
+    /// Deployed `RwaTradeGuard` + `GuardedTradeExecutor` on one EVM chain.
+    /// `None` (default) leaves the tokenized-equity trading surface off.
+    /// Enabled via `Server::with_rwa`.
+    rwa: Option<Arc<rwa::RwaConfig>>,
     /// Facilitator ledger for in-flight `SpendGrantEscrow` calls: maps the
     /// on-chain `call_id` (a job uuid's 128 bits) to the `spec_id`/`deadline`
     /// the daemon charged it with, so a later settle gates the release on the
@@ -1462,6 +1467,7 @@ impl Server {
             sns: None,
             acedata: None,
             spend_grant: None,
+            rwa: None,
             robinhood: None,
             sap_bridge: None,
             intent_outcomes: Arc::new(std::sync::Mutex::new(OutcomeStore::default())),
@@ -1648,6 +1654,18 @@ impl Server {
     /// attestor for one deployed `SpendGrantEscrow` and can sign the
     /// release/refund verdict a call's hold is gated on; `None` (default)
     /// leaves the surface off.
+    /// Attach the tokenized-equity trading leg: one deployed guard and executor
+    /// the daemon judges against and trades through.
+    pub fn with_rwa(mut self, config: rwa::RwaConfig) -> Self {
+        self.rwa = Some(Arc::new(config));
+        self
+    }
+
+    /// The configured trading leg, if the surface is on.
+    pub fn rwa(&self) -> Option<&rwa::RwaConfig> {
+        self.rwa.as_deref()
+    }
+
     pub fn with_spend_grant(mut self, config: spend_grant::SpendGrantConfig) -> Self {
         self.spend_grant = Some(Arc::new(config));
         self
@@ -2779,6 +2797,37 @@ impl Server {
                     peer,
                 )
                 .await
+            }
+            Request::RwaTrade {
+                asset,
+                side,
+                max_in,
+                min_out,
+                quoted_price_usd_e8,
+                router,
+                swap_data,
+            } => {
+                self.rwa_trade(
+                    asset,
+                    side,
+                    max_in,
+                    min_out,
+                    quoted_price_usd_e8,
+                    router,
+                    swap_data,
+                    peer,
+                )
+                .await
+            }
+            Request::RwaPreview {
+                asset,
+                side,
+                max_in,
+                min_out,
+                quoted_price_usd_e8,
+            } => {
+                self.rwa_preview(asset, side, max_in, min_out, quoted_price_usd_e8, peer)
+                    .await
             }
             Request::SpendGrantCharge {
                 grant_id,
@@ -7605,6 +7654,233 @@ impl Server {
             },
             Err(e) => Response::Error {
                 message: format!("escrow completion proof failed: {e}"),
+            },
+        }
+    }
+
+    /// Parse the shared parts of a trading request into a [`rwa::TradeRequest`].
+    /// Every field is validated before anything is signed or read, so a
+    /// malformed request costs an RPC round trip at most.
+    fn rwa_request(
+        asset: &str,
+        side: &str,
+        max_in: &str,
+        min_out: &str,
+        quoted_price_usd_e8: &str,
+        router: &str,
+        swap_data: &str,
+    ) -> Result<rwa::TradeRequest, String> {
+        let side = match side.trim().to_ascii_lowercase().as_str() {
+            "buy" => rwa::Side::Buy,
+            "sell" => rwa::Side::Sell,
+            other => {
+                return Err(format!(
+                    "invalid side (want \"buy\" or \"sell\"): {other:?}"
+                ))
+            }
+        };
+        let asset = decode_evm_addr(asset).map_err(|e| format!("invalid asset address: {e}"))?;
+        let router = decode_evm_addr(router).map_err(|e| format!("invalid router address: {e}"))?;
+        let max_in = max_in
+            .parse::<u128>()
+            .map_err(|_| format!("invalid max_in (want a decimal u128): {max_in:?}"))?;
+        let min_out = min_out
+            .parse::<u128>()
+            .map_err(|_| format!("invalid min_out (want a decimal u128): {min_out:?}"))?;
+        let quoted_price_usd_e8 = quoted_price_usd_e8.parse::<u128>().map_err(|_| {
+            format!("invalid quoted_price_usd_e8 (want a decimal u128): {quoted_price_usd_e8:?}")
+        })?;
+        let body = swap_data
+            .trim()
+            .strip_prefix("0x")
+            .unwrap_or(swap_data.trim());
+        if !body.len().is_multiple_of(2) {
+            return Err(format!("invalid swap_data (odd-length hex): {swap_data:?}"));
+        }
+        let swap_data = (0..body.len() / 2)
+            .map(|i| u8::from_str_radix(&body[i * 2..i * 2 + 2], 16))
+            .collect::<Result<Vec<u8>, _>>()
+            .map_err(|_| format!("invalid swap_data (not hex): {swap_data:?}"))?;
+        Ok(rwa::TradeRequest {
+            asset,
+            side,
+            max_in,
+            min_out,
+            quoted_price_usd_e8,
+            router,
+            swap_data,
+        })
+    }
+
+    fn now_secs() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    }
+
+    /// Trade a tokenized equity under the deployed firewall. The daemon judges
+    /// the trade against the guard's own bounds and the asset's live oracle
+    /// context first, so a refusal costs nothing; the executor calls the guard
+    /// again inside the transaction, so the bound holds on chain regardless of
+    /// what this daemon decided. Gated by `wallet.trade.authorize`. The bounds
+    /// themselves live on the guard rather than in the capability scope, so
+    /// raising a limit is an owner transaction, not a re-grant.
+    #[allow(clippy::too_many_arguments)]
+    async fn rwa_trade(
+        &self,
+        asset: String,
+        side: String,
+        max_in: String,
+        min_out: String,
+        quoted_price_usd_e8: String,
+        router: String,
+        swap_data: String,
+        peer: &AgentId,
+    ) -> Response {
+        let check = self
+            .check_capabilities(
+                "rwa:trade".into(),
+                vec!["wallet.trade.authorize".into()],
+                peer,
+            )
+            .await;
+        if !check.passed {
+            return Response::Error {
+                message: "tokenized-equity trading requires capability \
+                          \"wallet.trade.authorize\". Grant it with \
+                          `covenant capabilities grant wallet.trade.authorize`."
+                    .into(),
+            };
+        }
+
+        let Some(config) = self.rwa.clone() else {
+            return Response::Error {
+                message: "the tokenized-equity trading surface is not configured on this daemon. \
+                          Wire it via Server::with_rwa and restart."
+                    .into(),
+            };
+        };
+
+        let req = match Self::rwa_request(
+            &asset,
+            &side,
+            &max_in,
+            &min_out,
+            &quoted_price_usd_e8,
+            &router,
+            &swap_data,
+        ) {
+            Ok(r) => r,
+            Err(message) => return Response::Error { message },
+        };
+        let side_label = match req.side {
+            rwa::Side::Buy => "buy",
+            rwa::Side::Sell => "sell",
+        };
+
+        match config.trade(&req, Self::now_secs()).await {
+            Ok(receipt) => Response::RwaTraded {
+                side: side_label.into(),
+                tx_hash: format!("0x{}", hex::encode(receipt.tx_hash)),
+                block_number: receipt.block_number,
+            },
+            Err(e) => Response::Error {
+                message: format!("rwa trade refused: {e}"),
+            },
+        }
+    }
+
+    /// The read-only twin of [`Self::rwa_trade`]: the guard's own verdict for a
+    /// proposed trade, with nothing signed and no gas spent.
+    async fn rwa_preview(
+        &self,
+        asset: String,
+        side: String,
+        max_in: String,
+        min_out: String,
+        quoted_price_usd_e8: String,
+        peer: &AgentId,
+    ) -> Response {
+        let check = self
+            .check_capabilities(
+                "rwa:preview".into(),
+                vec!["wallet.trade.authorize".into()],
+                peer,
+            )
+            .await;
+        if !check.passed {
+            return Response::Error {
+                message: "tokenized-equity trading requires capability \
+                          \"wallet.trade.authorize\". Grant it with \
+                          `covenant capabilities grant wallet.trade.authorize`."
+                    .into(),
+            };
+        }
+
+        let Some(config) = self.rwa.clone() else {
+            return Response::Error {
+                message: "the tokenized-equity trading surface is not configured on this daemon. \
+                          Wire it via Server::with_rwa and restart."
+                    .into(),
+            };
+        };
+
+        let req = match Self::rwa_request(
+            &asset,
+            &side,
+            &max_in,
+            &min_out,
+            &quoted_price_usd_e8,
+            "0x0000000000000000000000000000000000000000",
+            "0x",
+        ) {
+            Ok(r) => r,
+            Err(message) => return Response::Error { message },
+        };
+
+        let live = match config.live_context(req.asset, Self::now_secs()).await {
+            Ok(l) => l,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("rwa preview failed: {e}"),
+                }
+            }
+        };
+        match config.judge(&req, &live) {
+            Ok(()) => {
+                let trade = covenant_rwa_firewall::RwaTrade {
+                    asset: req.asset,
+                    side: match req.side {
+                        rwa::Side::Buy => covenant_rwa_firewall::Side::Buy,
+                        rwa::Side::Sell => covenant_rwa_firewall::Side::Sell,
+                    },
+                    raw_amount: match req.side {
+                        rwa::Side::Buy => req.min_out,
+                        rwa::Side::Sell => req.max_in,
+                    },
+                    quoted_price_usd_e8: req.quoted_price_usd_e8,
+                };
+                match live.policy.evaluate(&trade, &live.context) {
+                    Ok(v) => Response::RwaPreviewed {
+                        allowed: true,
+                        notional_usd_e8: v.notional_usd_e8.to_string(),
+                        shares_e18: v.shares_e18.to_string(),
+                        reason: None,
+                    },
+                    Err(denial) => Response::RwaPreviewed {
+                        allowed: false,
+                        notional_usd_e8: "0".into(),
+                        shares_e18: "0".into(),
+                        reason: Some(denial.to_string()),
+                    },
+                }
+            }
+            Err(e) => Response::RwaPreviewed {
+                allowed: false,
+                notional_usd_e8: "0".into(),
+                shares_e18: "0".into(),
+                reason: Some(e.to_string()),
             },
         }
     }
@@ -18110,10 +18386,12 @@ required = {caps:?}
             | Request::FlushReceipts { .. }
             | Request::SignAttestation { .. }
             | Request::SpendGrantCharge { .. }
+            | Request::RwaTrade { .. }
             | Request::SendA2ATask { .. }
             | Request::PostA2AResult { .. }
             | Request::CompactA2A => AuthorizationAudited,
             Request::Authenticate { .. }
+            | Request::RwaPreview { .. }
             | Request::SapPublishAgent { .. }
             | Request::SapPublishAuditRoot { .. }
             | Request::SapPublishAttestation { .. } => Unaudited,

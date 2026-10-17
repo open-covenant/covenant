@@ -439,6 +439,21 @@ async fn main() -> Result<()> {
         None => server,
     };
 
+    let server = match covenantd::rwa::RwaConfig::from_env() {
+        Some(cfg) => {
+            let guard: String = cfg.guard().iter().map(|b| format!("{b:02x}")).collect();
+            let executor: String = cfg.executor().iter().map(|b| format!("{b:02x}")).collect();
+            info!(
+                chain_id = cfg.chain_id(),
+                guard = %format!("0x{guard}"),
+                executor = %format!("0x{executor}"),
+                "tokenized-equity trading enabled"
+            );
+            server.with_rwa(cfg)
+        }
+        None => server,
+    };
+
     let server = {
         let providers = er_providers_from_env();
         if providers.is_empty() {

@@ -88,6 +88,8 @@ const EXPECTED_RESPONSE_KINDS: &[&str] = &[
     "spend_authorized",
     "spend_settled",
     "completion_proven",
+    "rwa_traded",
+    "rwa_previewed",
     "spend_grant_charged",
     "spend_grant_settled",
     "escrow_released",
@@ -352,6 +354,19 @@ fn golden_response_vectors() -> Vec<Response> {
             worker_address: "Worker11111111111111111111111111111111111".into(),
             issued_at: "2026-07-12T00:00:00Z".into(),
         },
+        Response::RwaTraded {
+            side: "buy".into(),
+            tx_hash: format!("0x{}", "ae".repeat(32)),
+            block_number: 45_749_401,
+        },
+        Response::RwaPreviewed {
+            allowed: false,
+            notional_usd_e8: "0".into(),
+            shares_e18: "0".into(),
+            reason: Some(
+                "notional 3101268706220 exceeds the per-trade cap 25000000000 (USD*1e8)".into(),
+            ),
+        },
         Response::SpendGrantCharged {
             call_id: (0x5E11_1ED0_0000_0000_0000_0000_0000_0005u128).to_string(),
             tx_hash: format!("0x{}", "c0".repeat(32)),
@@ -452,6 +467,8 @@ fn assert_response_variant_coverage(res: &Response) {
         | Response::SpendAuthorized { .. }
         | Response::SpendSettled { .. }
         | Response::CompletionProven { .. }
+        | Response::RwaTraded { .. }
+        | Response::RwaPreviewed { .. }
         | Response::SpendGrantCharged { .. }
         | Response::SpendGrantSettled { .. }
         | Response::EscrowReleased { .. }

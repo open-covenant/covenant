@@ -1,0 +1,8 @@
+{
+  "kind": "rwa_preview",
+  "asset": "0xafafafafafafafafafafafafafafafafafafafaf",
+  "side": "sell",
+  "max_in": "963328227165637",
+  "min_out": "299790",
+  "quoted_price_usd_e8": "31054000000"
+}

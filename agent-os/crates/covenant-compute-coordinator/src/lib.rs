@@ -52,6 +52,7 @@ pub mod redundancy;
 pub mod registry;
 pub mod reputation;
 pub mod rounds;
+pub mod social;
 pub mod stake;
 pub mod state;
 pub mod stream;

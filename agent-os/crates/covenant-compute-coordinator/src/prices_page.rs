@@ -3,9 +3,22 @@ use crate::CoordinatorState;
 use axum::{
     extract::State,
     http::{header, HeaderMap, HeaderValue, StatusCode},
-    response::Html,
+    response::{Html, Redirect},
 };
 
+/// Preserve shared links while keeping the public experience on the main site.
+pub async fn redirect(
+    State(state): State<CoordinatorState>,
+) -> Result<Redirect, (StatusCode, &'static str)> {
+    if !state.config().public_price_history {
+        return Err((StatusCode::NOT_FOUND, "public price history is disabled"));
+    }
+    Ok(Redirect::permanent(
+        "https://opencovenant.org/compute-prices",
+    ))
+}
+
+/// Public source document consumed by the main site's same-origin page proxy.
 pub async fn page(
     State(state): State<CoordinatorState>,
 ) -> Result<(HeaderMap, Html<&'static str>), (StatusCode, &'static str)> {

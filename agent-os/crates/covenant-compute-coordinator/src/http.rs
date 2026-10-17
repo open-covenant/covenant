@@ -116,7 +116,8 @@ const MAX_INLINE_BODY_BYTES: usize = 8 * 1024 * 1024;
 pub fn router(state: CoordinatorState) -> Router {
     Router::new()
         .route("/health", get(health))
-        .route("/prices", get(crate::prices_page::page))
+        .route("/prices", get(crate::prices_page::redirect))
+        .route("/prices/page", get(crate::prices_page::page))
         .route("/prices/history", get(crate::prices::history))
         .route("/prices/proofs/:job_id", get(crate::prices::scoped_proof))
         .route("/metrics", get(metrics))
@@ -193,6 +194,9 @@ pub fn router(state: CoordinatorState) -> Router {
             state.clone(),
             version_gate,
         ))
+        // Apply once to the whole router so new public HTML pages inherit
+        // their sharing card without a per-route metadata checklist.
+        .layer(axum::middleware::from_fn(crate::social::metadata))
         .with_state(state)
 }
 

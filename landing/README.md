@@ -54,14 +54,16 @@ public 200 HTML, and is capped at 1 MiB and eight seconds. A source page cannot
 override the trusted address printed on its card. JSON API routes do not need
 social cards.
 
-The public GPU price page lives at `/compute-prices`. It serves the coordinator's
-`/prices/page` HTML with the shared `applyPageMetadata()` serializer, preserving
-the UI and CSP while assigning the main-site canonical URL and generated card.
-Until the source endpoint is deployed, a 404 alone falls back to the old
-`/prices` source. Same-origin GET routes proxy only `/prices/history` (validated
-time bounds) and `/prices/proofs/<UUID>` from the fixed Compute origin; no
-credentials or redirects are forwarded. Public HTML route handlers must use
-`applyPageMetadata()` and are included in the build's card guard.
+The public GPU price page lives at `/compute-prices`. It is a native Next page
+using the shared site header, footer, typography and `pageMetadata()` contract.
+Its React charts read the same-origin `/prices/history` endpoint and retain the
+source's separate USD quotes, USDC settlements, exact decimal prices and proof
+links. Same-origin GET routes proxy only `/prices/history` (validated time
+bounds) and `/prices/proofs/<UUID>` from the fixed Compute origin; no credentials
+or redirects are forwarded. The page remains available when the data source is
+unavailable and displays an explicit error instead of stale prices. Public HTML
+route handlers elsewhere must use `applyPageMetadata()` and remain included in
+the build's card guard.
 
 ## Identity
 

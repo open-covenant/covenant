@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ImageResponse } from "next/og";
+import sharp from "sharp";
 import { fitTitle, TITLE_LEADING, TITLE_TRACKING, wordSpacing } from "./_fit";
 
 // The page card: Covenant lockup top left, the page's section top right, the
@@ -20,6 +21,16 @@ const TITLE_WIDTH = CARD_WIDTH - MARGIN * 2;
 
 type Assets = { display: Buffer; mono: Buffer; mark: string; fields: string[] };
 let assets: Promise<Assets> | null = null;
+let rasterizerConfigured = false;
+
+function configureRasterizer() {
+  if (rasterizerConfigured) return;
+  // Next's Node ImageResponse uses this Sharp instance when installed. Bound
+  // libvips' worker count and native operation cache alongside the JS queue.
+  sharp.concurrency(1);
+  sharp.cache({ memory: 4, files: 0, items: 16 });
+  rasterizerConfigured = true;
+}
 
 function loadAssets(): Promise<Assets> {
   assets ??= (async () => {
@@ -54,6 +65,7 @@ export function displayUrl(url: string): string {
 }
 
 export async function renderCard({ title, section, url, key }: { title: string; section?: string; url: string; key: string }) {
+  configureRasterizer();
   const { display, mono, mark, fields } = await loadAssets();
   const fitted = fitTitle(title, { width: TITLE_WIDTH });
   const label = { fontFamily: "JetBrains Mono", fontSize: 14, letterSpacing: 3.4, textTransform: "uppercase" as const };

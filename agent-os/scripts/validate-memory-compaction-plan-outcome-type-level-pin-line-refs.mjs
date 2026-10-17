@@ -46,8 +46,9 @@ import { fileURLToPath } from "node:url";
 //     memory_compacted outcome bullets contain.
 //   - The expected_receipt_changes docsRegex anchors on the bullet-
 //     specific phrase "a forward-compatibility placeholder pinned by
-//     the schema test at `main.rs:6702`", which uniquely identifies
-//     this bullet versus the sibling outcome bullet at line 561 (both
+//     the schema test at `main.rs:N`", which uniquely identifies
+//     this bullet; the context test declaration is source-derived and checked.
+//     This distinguishes the sibling outcome bullet at line 561 (both
 //     bullets share the trailing "Pinned as a structured object by
 //     `main.rs:N-M` — never a string blob." template, so anchoring on
 //     the leading prose is critical).
@@ -84,7 +85,8 @@ const targets = [
     field: "expected_receipt_changes",
     selector: 'value["expected_receipt_changes"].is_object(),',
     docsRegex:
-      /- `expected_receipt_changes` \(object\): a forward-compatibility placeholder pinned by the schema test at `main\.rs:7691` \(`memory_compaction_plan_json_pins_expected_receipt_changes_schema`\)\. The block has exactly three keys today and is currently a no-claim stub; consumers must validate the inner shape rather than dispatch directly to apply-mode logic\. Pinned as a structured object by `main\.rs:(\d+)-(\d+)` — never a string blob\./,
+      /- `expected_receipt_changes` \(object\): a forward-compatibility placeholder pinned by the schema test at `main\.rs:(\d+)` \(`memory_compaction_plan_json_pins_expected_receipt_changes_schema`\)\. The block has exactly three keys today and is currently a no-claim stub; consumers must validate the inner shape rather than dispatch directly to apply-mode logic\. Pinned as a structured object by `main\.rs:(\d+)-(\d+)` — never a string blob\./,
+    contextFn: "memory_compaction_plan_json_pins_expected_receipt_changes_schema",
     docsLabel:
       "memory_compaction_plan.expected_receipt_changes type-level pin citation",
     docsTemplate:
@@ -202,9 +204,18 @@ if (docs) {
       );
       continue;
     }
+    let rangeGroup = 1;
+    if (target.contextFn) {
+      const contextMatches = source?.split("\n")
+        .flatMap((line, index) => new RegExp(`^\\s+fn\\s+${target.contextFn}\\s*\\(`).test(line) ? [index + 1] : []) ?? [];
+      if (contextMatches.length !== 1 || Number(match[1]) !== contextMatches[0]) {
+        fail(`${docsPath}: ${target.contextFn} context citation must identify its unique current declaration (found ${contextMatches.join(", ")}); remediation: cite the current declaration line`);
+      }
+      rangeGroup = 2;
+    }
     if (target.startLine !== undefined && target.endLine !== undefined) {
-      const citedStart = parseInt(match[1], 10);
-      const citedEnd = parseInt(match[2], 10);
+      const citedStart = parseInt(match[rangeGroup], 10);
+      const citedEnd = parseInt(match[rangeGroup + 1], 10);
       if (citedStart !== target.startLine || citedEnd !== target.endLine) {
         fail(
           `${docsPath}: the ${target.docsLabel} cites main.rs:${citedStart}-${citedEnd} but the ${target.field} type-level assertion spans :${target.startLine}-${target.endLine}; remediation: update the citation to :${target.startLine}-${target.endLine}`,

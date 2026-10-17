@@ -30,7 +30,8 @@ import { fileURLToPath } from "node:url";
 // "resumed" phrase, and cites the unsuffixed CLI's main.rs:2075
 // `println!("{text}")` site. The regex anchors on the colon-and-
 // "the result text the daemon returned." prefix plus the unique
-// `main.rs:2075` CLI cite, then captures the Pinned-as line ref.
+// source-derived intent CLI print cite, then captures the Pinned-as line ref.
+// Both citations are checked against source, including their distinct scopes.
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..");
@@ -47,10 +48,10 @@ const selector =
   'assert!(value["text"].is_string(), "text must be a string: {value}");';
 
 const docsRegex =
-  /- `text` \(string\): the result text the daemon returned\. The unsuffixed CLI prints this value directly at `main\.rs:2075`[^\n]*Pinned as a string by `main\.rs:(\d+)` — never an object or array\./;
+  /- `text` \(string\): the result text the daemon returned\. The unsuffixed CLI prints this value directly at `main\.rs:(\d+)`[^\n]*Pinned as a string by `main\.rs:(\d+)` — never an object or array\./;
 const docsLabel = "intent_result.text type-level pin citation";
 const docsTemplate =
-  '- `text` (string): the result text the daemon returned. The unsuffixed CLI prints this value directly at `main.rs:2075` … Pinned as a string by `main.rs:N` — never an object or array.';
+  '- `text` (string): the result text the daemon returned. The unsuffixed CLI prints this value directly at `main.rs:N` … Pinned as a string by `main.rs:N` — never an object or array.';
 
 const errors = [];
 const fail = (message) => errors.push(message);
@@ -88,8 +89,19 @@ function scanBraceBalance(lines, openerLine) {
 }
 
 let selectorLine = null;
+let printLine = null;
 if (source) {
   const lines = source.split("\n");
+  const intentArms = lines.flatMap((line, index) => line === '        "intent" => {' ? [index + 1] : []);
+  if (intentArms.length !== 1) {
+    fail(`${sourcePath}: expected one intent CLI arm for the direct-print context`);
+  } else {
+    const armEnd = scanBraceBalance(lines, intentArms[0]);
+    const prints = armEnd === null ? [] : lines.slice(intentArms[0], armEnd)
+      .flatMap((line, index) => line.trim() === 'println!("{text}");' ? [intentArms[0] + index + 1] : []);
+    if (prints.length !== 1) fail(`${sourcePath}: expected one direct text print inside the intent CLI arm`);
+    else printLine = prints[0];
+  }
   const testOpenerRegex = new RegExp(`^\\s+fn\\s+${testFnName}\\s*\\(`);
   const testMatches = [];
   for (let index = 0; index < lines.length; index += 1) {
@@ -133,7 +145,10 @@ if (docs) {
       `${docsPath}: missing the ${docsLabel} ("${docsTemplate}"); remediation: restore the citation that records the text type-level pin line`,
     );
   } else if (selectorLine !== null) {
-    const citedLine = parseInt(match[1], 10);
+    if (printLine === null || Number(match[1]) !== printLine) {
+      fail(`${docsPath}: intent direct-print context must cite main.rs:${printLine}; remediation: update the direct-print citation`);
+    }
+    const citedLine = parseInt(match[2], 10);
     if (citedLine !== selectorLine) {
       fail(
         `${docsPath}: the ${docsLabel} cites main.rs:${citedLine} but the text type-level assertion lives at :${selectorLine}; remediation: update the citation to :${selectorLine}`,

@@ -134,6 +134,12 @@ async fn protected_route_rejects_without_bearer() {
     let s = spawn_test_server().await;
     let r = reqwest::get(format!("{}/tools", s.base)).await.unwrap();
     assert_eq!(r.status(), 401);
+    assert_eq!(
+        r.json::<serde_json::Value>().await.unwrap(),
+        json!({
+            "kind": "error", "message": "missing Authorization header"
+        })
+    );
 }
 
 #[tokio::test]
@@ -147,6 +153,12 @@ async fn protected_route_rejects_with_unknown_token() {
         .await
         .unwrap();
     assert_eq!(r.status(), 401);
+    assert_eq!(
+        r.json::<serde_json::Value>().await.unwrap(),
+        json!({
+            "kind": "error", "message": "unknown or revoked token"
+        })
+    );
 }
 
 #[tokio::test]
@@ -247,6 +259,36 @@ async fn intent_rejects_when_capabilities_missing() {
         .unwrap();
     assert_eq!(r["kind"], "error");
     assert!(r["message"].as_str().unwrap().contains("memory.write"));
+}
+
+#[tokio::test]
+async fn sse_capability_refusals_preserve_buffered_json_responses() {
+    let s = spawn_test_server().await;
+    let client = reqwest::Client::new();
+    for path in ["/intent", "/memory/recent"] {
+        let request = || {
+            if path == "/intent" {
+                client
+                    .post(format!("{}{path}", s.base))
+                    .json(&json!({"text": "find recent papers on agent memory"}))
+            } else {
+                client.get(format!("{}{path}", s.base))
+            }
+            .bearer_auth(&s.token)
+        };
+        let buffered = request().send().await.unwrap();
+        let streamed = request()
+            .header("Accept", "text/event-stream")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(streamed.status(), buffered.status());
+        assert_eq!(streamed.headers()["content-type"], "application/json");
+        let buffered: serde_json::Value = buffered.json().await.unwrap();
+        let streamed: serde_json::Value = streamed.json().await.unwrap();
+        assert_eq!(streamed, buffered);
+        assert_eq!(streamed["kind"], "error");
+    }
 }
 
 #[tokio::test]

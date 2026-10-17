@@ -741,8 +741,10 @@ impl SqliteStore {
     }
 
     fn embedding_from_bytes(b: &[u8]) -> Vec<f32> {
-        b.chunks_exact(4)
-            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        b.as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| f32::from_le_bytes(*c))
             .collect()
     }
 
@@ -1905,7 +1907,7 @@ mod tests {
         // 4-byte chunks with no length prefix, no version byte, no
         // padding — embedding_to_bytes writes f32::to_le_bytes()
         // back-to-back; embedding_from_bytes reads via
-        // chunks_exact(4) which silently drops any trailing partial
+        // fixed four-byte chunks, discarding any trailing partial
         // chunk.
         //
         // sqlite_roundtrip and sqlite_recent_orders_by_created_at_desc

@@ -201,33 +201,33 @@ async fn require_bearer(
     State(s): State<HttpState>,
     mut req: AxumRequest,
     next: Next,
-) -> Result<AxumResponse, AxumResponse> {
+) -> AxumResponse {
     let header = match req
         .headers()
         .get(AUTHORIZATION)
         .and_then(|h| h.to_str().ok())
     {
         Some(h) => h,
-        None => return Err(reject(&s, "missing Authorization header").await),
+        None => return reject(&s, "missing Authorization header").await,
     };
     // RFC 7235 §2.1: scheme is case-insensitive.
     let (scheme, token_b58) = match header.split_once(' ') {
         Some(parts) => parts,
-        None => return Err(reject(&s, "expected `Authorization: Bearer <token>`").await),
+        None => return reject(&s, "expected `Authorization: Bearer <token>`").await,
     };
     if !scheme.eq_ignore_ascii_case("bearer") {
-        return Err(reject(&s, "expected `Authorization: Bearer <token>`").await);
+        return reject(&s, "expected `Authorization: Bearer <token>`").await;
     }
     let token = match PeerToken::from_b58(token_b58.trim()) {
         Ok(t) => t,
-        Err(_) => return Err(reject(&s, "malformed bearer token").await),
+        Err(_) => return reject(&s, "malformed bearer token").await,
     };
     match s.server.peers.resolve(&token).await {
         Ok(Some(agent_id)) => {
             req.extensions_mut().insert(agent_id);
-            Ok(next.run(req).await)
+            next.run(req).await
         }
-        Ok(None) => Err(reject(&s, "unknown or revoked token").await),
+        Ok(None) => reject(&s, "unknown or revoked token").await,
         Err(e) => {
             // Storage outage on the peer-registry read — distinct from
             // a credential probe. The underlying error (file path,
@@ -241,14 +241,14 @@ async fn require_bearer(
                 .server
                 .record_auth_failure("http", "peer registry unavailable")
                 .await;
-            Err((
+            (
                 StatusCode::SERVICE_UNAVAILABLE,
                 Json(serde_json::json!({
                     "kind": "error",
                     "message": "peer registry unavailable",
                 })),
             )
-                .into_response())
+                .into_response()
         }
     }
 }

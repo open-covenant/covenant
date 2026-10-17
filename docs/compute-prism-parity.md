@@ -177,3 +177,13 @@ documentation validators passed. A read-only public-mainnet RPC rehearsal found
 two retained settled leases; the intentionally empty harness journal correctly
 reported two settled orphans. This rehearsal did not compare production journal
 contents, send transactions, or activate notification delivery.
+
+Release validation also repairs inherited documentation citations and aligns CI
+with the signed Compute release's Rust 1.98.1 toolchain. Separate compatibility
+repairs use fixed-size embedding chunks, checked reputation division, direct HTTP
+authentication responses, and boxed fallback responses in the three SSE helpers.
+They preserve embedding truncation, authentication status/body, stream ordering,
+and public IPC/HTTP JSON; the shared `Response` enum and settlement code do not
+change. All warning and test gates remain enabled. Full workspace validation in
+Ubuntu CI remains required; the local macOS environment lacks the OpenSSL
+development prerequisite for the workspace's Solana dependency tree.

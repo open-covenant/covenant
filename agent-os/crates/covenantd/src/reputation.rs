@@ -79,11 +79,9 @@ pub async fn compute_reputation(
         })
         .count() as u64;
 
-    let completion_rate_bps = if proofs_total == 0 {
-        0
-    } else {
-        ((validations_passed * 10_000) / proofs_total) as u32
-    };
+    let completion_rate_bps = (validations_passed * 10_000)
+        .checked_div(proofs_total)
+        .unwrap_or(0) as u32;
 
     let report = audit.verify_integrity().await?;
 

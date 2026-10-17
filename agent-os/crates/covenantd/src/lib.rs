@@ -5909,11 +5909,11 @@ impl Server {
         limit: usize,
         peer: &AgentId,
         connection_id: Uuid,
-    ) -> Result<Vec<StreamEnvelope>, Response> {
+    ) -> Result<Vec<StreamEnvelope>, Box<Response>> {
         let response = self.recent_memory(tier, limit, peer).await;
         let records = match response {
             Response::Memories { records } => records,
-            other => return Err(other),
+            other => return Err(Box::new(other)),
         };
 
         let stream_id = Uuid::new_v4();
@@ -5937,9 +5937,9 @@ impl Server {
                 Ok(v) => v,
                 Err(e) => {
                     self.stream_tracker.unregister(connection_id, stream_id);
-                    return Err(Response::Error {
+                    return Err(Box::new(Response::Error {
                         message: format!("memory stream serialize: {e}"),
-                    });
+                    }));
                 }
             };
             envelopes.push(StreamEnvelope::StreamChunk {
@@ -6035,11 +6035,11 @@ impl Server {
         since_ms: Option<u64>,
         peer: &AgentId,
         connection_id: Uuid,
-    ) -> Result<Vec<StreamEnvelope>, Response> {
+    ) -> Result<Vec<StreamEnvelope>, Box<Response>> {
         let response = self.recent_audit(limit, since_ms, peer).await;
         let events = match response {
             Response::AuditEvents { events } => events,
-            other => return Err(other),
+            other => return Err(Box::new(other)),
         };
 
         let stream_id = Uuid::new_v4();
@@ -6063,9 +6063,9 @@ impl Server {
                 Ok(v) => v,
                 Err(e) => {
                     self.stream_tracker.unregister(connection_id, stream_id);
-                    return Err(Response::Error {
+                    return Err(Box::new(Response::Error {
                         message: format!("audit stream serialize: {e}"),
-                    });
+                    }));
                 }
             };
             envelopes.push(StreamEnvelope::StreamChunk {
@@ -6192,7 +6192,7 @@ impl Server {
         text: String,
         peer: &AgentId,
         connection_id: Uuid,
-    ) -> Result<Vec<StreamEnvelope>, Response> {
+    ) -> Result<Vec<StreamEnvelope>, Box<Response>> {
         let response = self.dispatch_intent(Uuid::new_v4(), text, peer, true).await;
         let (result, summary) = match response {
             Response::IntentResult {
@@ -6215,7 +6215,7 @@ impl Server {
                 });
                 (result, summary)
             }
-            other => return Err(other),
+            other => return Err(Box::new(other)),
         };
 
         let stream_id = Uuid::new_v4();
@@ -6238,9 +6238,9 @@ impl Server {
             Ok(v) => v,
             Err(e) => {
                 self.stream_tracker.unregister(connection_id, stream_id);
-                return Err(Response::Error {
+                return Err(Box::new(Response::Error {
                     message: format!("intent stream serialize: {e}"),
-                });
+                }));
             }
         };
         envelopes.push(StreamEnvelope::StreamChunk {
@@ -54241,7 +54241,7 @@ required = {caps:?}
             .recent_memory_envelopes(None, 10, &me, connection_id)
             .await
             .expect_err("missing memory.read scope must produce Err(Response::Error)");
-        match err {
+        match *err {
             Response::Error { message } => {
                 assert!(
                     message.contains("memory read requires"),
@@ -54697,7 +54697,7 @@ required = {caps:?}
             )
             .await
             .expect_err("missing capability must produce Err(Response)");
-        match err {
+        match *err {
             Response::IntentResult { .. } => {
                 panic!(
                     "Err arm must NOT carry Response::IntentResult — that's the streamable variant"

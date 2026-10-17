@@ -1273,7 +1273,24 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("shutdown signal received; draining in-flight requests");
     };
 
-    axum::serve(listener, router(state))
+    // The observer has no signing credentials and never changes settlement.
+    let observer = covenant_compute_coordinator::observer::ObserverConfig::from_env()
+        .map_err(anyhow::Error::msg)?
+        .map(|config| {
+            covenant_compute_coordinator::observer::ChainObserver::persistent(
+                config,
+                home.join("observer-alert-state.json"),
+            )
+        })
+        .transpose()
+        .map_err(anyhow::Error::msg)?
+        .map(Arc::new);
+    let mut app = router(state.clone());
+    if let Some(observer) = observer {
+        covenant_compute_coordinator::observer::spawn_periodic_observer(state, observer.clone());
+        app = app.layer(axum::Extension(observer));
+    }
+    axum::serve(listener, app)
         .with_graceful_shutdown(shutdown)
         .await
         .context("coordinator server exited")

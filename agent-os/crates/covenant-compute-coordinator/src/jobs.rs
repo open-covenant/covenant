@@ -1230,6 +1230,27 @@ impl JobBook {
         Ok(true)
     }
 
+    /// Public status needs only a timestamp. Never clone historical payloads,
+    /// outputs or receipts just to compute this aggregate.
+    pub fn latest_recorded_lease_payout_at_ms(&self) -> Option<u64> {
+        self.jobs
+            .lock()
+            .values()
+            .filter(|record| {
+                record.phase == JobPhase::Completed
+                    && record.envelope.payload.kind
+                        == covenant_compute_protocol::JobKind::LeaseSession
+            })
+            .filter_map(|record| {
+                record
+                    .payout
+                    .as_ref()
+                    .filter(|payout| payout.tx_signature.is_some())
+                    .map(|payout| payout.recorded_at_ms)
+            })
+            .max()
+    }
+
     /// Lease sessions the coordinator currently observes as running —
     /// the on-chain meter's tick worklist. Accepted, so a `t0` exists,
     /// and metered from that stamp until a receipt or a sweep concludes

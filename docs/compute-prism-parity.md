@@ -1,9 +1,10 @@
 # Compute: Prism adoption ledger
 
-Release branch: `codex/compute-price-history-release`, based on Covenant
-`deploy/compute-coordinator` at `5b023331575da656da77edc8554213f58e99ad90`.
+Release branch: `codex/compute-observer-release`, based on Covenant
+`deploy/compute-coordinator` at `8e2faf72eab6d6b62c0afc643f1afb1bcc9cf30a`.
+The original adoption audit used Covenant `5b023331575da656da77edc8554213f58e99ad90`.
 Comparison: Prism `main` at `4e32eb5eb1398fd9d11dcd29aa5a96e3f2f646ec`.
-This release contains package 1 only. Packages 2–20 remain separate on
+This release contains packages 1 and 2. Packages 3–20 remain separate on
 `codex/compute-prism-parity`; their presence there is not production evidence.
 
 Solana USDC settlement, CVNT staking, admission and existing fees are unchanged.
@@ -12,7 +13,7 @@ Provider market sampling is read-only and cannot create rentals or move funds.
 | # | Earliest upstream change | Local implementation | Local validation | Production evidence |
 |---|---|---|---|---|
 | 1 | Aug 12 [GPU prices](https://github.com/prismnetwork-tech/prism/pull/142) | Durable hourly provider samples, provisioning quotes, bound settled rates, public page/API | 1,395 affected-crate tests + 280 protocol tests; local provider/restart rehearsal; renderer and docs checks | Live 2026-10-17; public image pulls, provider samples and restart acceptance verified |
-| 2 | Aug 13 [observer](https://github.com/prismnetwork-tech/prism/pull/160), [status](https://github.com/prismnetwork-tech/prism/pull/164) | Not included in this release | Separate parity branch | Not activated here |
+| 2 | Aug 13 [observer](https://github.com/prismnetwork-tech/prism/pull/160), [status](https://github.com/prismnetwork-tech/prism/pull/164) | Read-only pinned chain observer, public status and reviewed incidents, durable confirmed/recovery alerts | Focused negative controls and full coordinator tests; see observer release evidence | Pending promotion and live acceptance |
 | 3 | Aug 14 [workspaces](https://github.com/prismnetwork-tech/prism/pull/179) | Not included in this release | Separate parity branch | Not activated here |
 | 4 | Aug 14 [canary](https://github.com/prismnetwork-tech/prism/pull/180) | Not included in this release | Separate parity branch | Not activated here |
 | 5 | Aug 14–15 [SDKs](https://github.com/prismnetwork-tech/prism/pull/182) | Not included in this release | Separate parity branch | Not activated here |
@@ -148,3 +149,31 @@ while existing settlement and cleanup workers continue. Preserve the history
 files and additive journal metadata. Do not replace the financial journal with
 an older snapshot during rollback. No bounty, paid canary or later adoption
 package is activated by this release.
+
+## 2. Independent reconciliation and public status
+
+The chain-first observer scans pinned Solana lease accounts independently of the
+coordinator job list, compares retained journal and escrow evidence, and reports
+aggregate findings through `/status` and `/metrics`. Empty scans, failed RPC,
+stale reports, zero capacity and demonstrated discrepancies remain distinct.
+Three observations confirm an alert, three complete clean scans confirm recovery;
+a separate durable queue retains notification IDs across restart. Cloudflare Email Service email
+or HTTPS webhook delivery is optional. No automatic financial repairs occur.
+
+Configuration, interpretation, scope limitations and read-only acceptance are in
+[compute-observer.md](compute-observer.md). The new endpoint excludes buyer/job
+identities and secrets; reviewed incident narratives remain versioned source.
+This package does not enable later parity features or change lease settlement.
+Production evidence is recorded only after the deployed revision and alert path
+are verified, separately from local test results.
+
+Package 2 local validation (2026-10-17): 495 coordinator tests passed across all
+targets (one existing opt-in test ignored), including 23 observer tests. Checks
+cover wrong genesis/program/validator, old and future RPC data, chain orphans,
+missing local settlement evidence, queue overflow, durable retry/restart and
+confirmed recovery, Cloudflare recipient acceptance, privacy and hostile HTTP.
+Coordinator all-target Clippy with warnings denied, formatting, and both Compute
+documentation validators passed. A read-only public-mainnet RPC rehearsal found
+two retained settled leases; the intentionally empty harness journal correctly
+reported two settled orphans. This rehearsal did not compare production journal
+contents, send transactions, or activate notification delivery.

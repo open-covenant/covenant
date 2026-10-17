@@ -116,6 +116,7 @@ const MAX_INLINE_BODY_BYTES: usize = 8 * 1024 * 1024;
 pub fn router(state: CoordinatorState) -> Router {
     Router::new()
         .route("/health", get(health))
+        .route("/status", get(crate::observer::public_status))
         .route("/prices", get(crate::prices_page::redirect))
         .route("/prices/page", get(crate::prices_page::page))
         .route("/prices/history", get(crate::prices::history))
@@ -298,7 +299,10 @@ fn sample(out: &mut String, name: &str, help: &str, kind: &str, value: impl std:
 /// already public through a JSON view (the subsidy and fee endpoints)
 /// or an anonymous count; no per-buyer, per-operator or per-partner
 /// figure appears, so the open posture of those views carries over.
-async fn metrics(State(state): State<CoordinatorState>) -> impl IntoResponse {
+async fn metrics(
+    State(state): State<CoordinatorState>,
+    observer: Option<axum::Extension<std::sync::Arc<crate::observer::ChainObserver>>>,
+) -> impl IntoResponse {
     use std::fmt::Write;
 
     let now_ms = crate::epoch_ms();
@@ -312,7 +316,8 @@ async fn metrics(State(state): State<CoordinatorState>) -> impl IntoResponse {
     let (fees_captured, fee_jobs) = state.jobs().fees_captured();
     let subsidy = state.escrow().subsidy_status();
 
-    let mut out = String::with_capacity(2048);
+    let mut out = String::with_capacity(4096);
+    crate::observer::append_metrics(&mut out, observer.as_ref().map(|o| o.0.as_ref()), now_ms);
     let _ = writeln!(out, "# HELP compute_build_info Coordinator build metadata.");
     let _ = writeln!(out, "# TYPE compute_build_info gauge");
     let _ = writeln!(

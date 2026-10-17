@@ -11212,7 +11212,7 @@ async fn hostile_wire_garbage_gets_4xx_moves_no_money_and_the_service_keeps_serv
         std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/http.rs")).unwrap();
     assert_eq!(
         router_source.matches(".route(").count(),
-        45,
+        47,
         "the route table changed — teach the hostile-wire barrage the new route first"
     );
 
@@ -11303,6 +11303,7 @@ async fn hostile_wire_garbage_gets_4xx_moves_no_money_and_the_service_keeps_serv
     // is a legitimate answer; a 5xx or a hang never is.
     for path in [
         "/health",
+        "/status",
         "/metrics",
         "/federation/deposit-info",
         "/federation/bond-info",
@@ -11317,6 +11318,7 @@ async fn hostile_wire_garbage_gets_4xx_moves_no_money_and_the_service_keeps_serv
         // Price history has an independent publication gate, off in
         // this fixture; malformed queries must never move funds.
         "/prices",
+        "/prices/page",
         "/prices/history",
         // Admin-gated: hostile queries with no bearer land on the
         // fail-closed 401, never a 5xx or a list.

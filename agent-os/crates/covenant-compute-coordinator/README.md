@@ -329,3 +329,16 @@ naming the variable rather than starting on the wrong setting.
 | `COVENANT_COMPUTE_REDUNDANCY_MIRRORS` | `2` | How many other operators re-run a sampled job. Minimum 2 when sampling is enabled: a strict majority needs the source plus two mirrors, so fewer can never fault a divergent operator. |
 | `COVENANT_COMPUTE_REDUNDANCY_MAX_PRICE_MICRO_USDC` | `10000` | Ceiling on what a mirror re-buy offers. |
 | `COVENANT_COMPUTE_REDUNDANCY_INFERENCE` | off | `1` also samples deterministic (temperature-0, seeded) inference, asserting the pool returns byte-identical output. |
+
+## Read-only chain observation
+
+`COVENANT_COMPUTE_OBSERVER=1` enables independent, chain-first reconciliation
+with explicit network/program/service pins. It does not change settlement or
+enable the lease meter. Public `/status` JSON distinguishes missing visibility,
+stale observations, empty capacity and actual discrepancies. Alerts require
+three observations, persist across restart and include confirmed recovery;
+optional email delivery uses the deployment's existing Cloudflare Email Service account.
+
+See [observer configuration and acceptance](../../../../docs/compute-observer.md)
+for every pin, delivery variable, scope limitation and the read-only live-RPC
+harness. Reviewed incidents are source-controlled and expose no buyer/job data.

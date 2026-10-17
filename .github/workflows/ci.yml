@@ -16,6 +16,10 @@ jobs:
   rust:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      # Match signed Compute releases for reproducible validation. Upgrade
+      # deliberately with compute-release.yml, reviewing new compiler lints.
+      RUSTUP_TOOLCHAIN: "1.98.1"
     defaults:
       run:
         working-directory: agent-os
@@ -27,8 +31,7 @@ jobs:
 
       - name: install rust
         run: |
-          rustup toolchain install stable --profile minimal --component clippy --component rustfmt
-          rustup default stable
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component clippy --component rustfmt
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.8.1
         with:

@@ -108,6 +108,11 @@ export default function ComputePage() {
           ))}
         </section>
 
+        <p className={`${paragraph} mt-6 max-w-2xl text-muted`}>
+          Compare sampled provider quotes and settled rental rates in the{" "}
+          <a className={link} href="/compute-prices">public GPU price history</a>, with timestamps and sample counts.
+        </p>
+
         <section className="mt-12">
           <p className={eyebrow}>run a node</p>
           <p className={`${paragraph} mt-3 max-w-2xl`}>

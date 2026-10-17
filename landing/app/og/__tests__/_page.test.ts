@@ -28,6 +28,12 @@ describe("readCardData", () => {
   it("returns null when the page has no title at all", () => {
     expect(readCardData("<html><head></head><body></body></html>")).toBeNull();
   });
+
+  it("reads and decodes the description, preferring social metadata", () => {
+    const html = head('<meta name="description" content="Fallback"/><meta property="og:description" content="Quotes &amp; settled rates"/>');
+    expect(readCardData(html)?.description).toBe("Quotes & settled rates");
+    expect(readCardData(head('<meta name="description" content="Hourly quotes"/>'))?.description).toBe("Hourly quotes");
+  });
 });
 
 describe("decodeEntities", () => {

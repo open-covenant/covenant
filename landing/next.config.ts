@@ -73,6 +73,16 @@ const config: NextConfig = {
         ],
       },
       { source: "/:path*", headers: securityHeaders },
+      {
+        // This self-contained Compute page uses inline code/data fonts and
+        // only the same-origin public price-data routes. Keep its stricter
+        // source policy: Next's configured headers override handler headers.
+        source: "/compute-prices",
+        headers: [
+          { key: "Content-Security-Policy", value: "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; font-src data:; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" },
+          { key: "Referrer-Policy", value: "no-referrer" },
+        ],
+      },
     ];
   },
 };

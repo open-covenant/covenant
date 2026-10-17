@@ -9,6 +9,7 @@ import { request } from "node:http";
 
 export type PageCardData = {
   title: string;
+  description?: string;
   section?: string;
   url?: string;
 };
@@ -104,6 +105,7 @@ export function readCardData(html: string): PageCardData | null {
   if (!title?.trim()) return null;
   return {
     title: title.trim(),
+    description: (meta.get("og:description") ?? meta.get("description"))?.trim() || undefined,
     section: meta.get("covenant:card-section")?.trim() || undefined,
     url: meta.get("og:url")?.trim() || undefined,
   };

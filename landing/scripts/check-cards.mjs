@@ -40,7 +40,16 @@ function routeOf(file) {
 
 // 1. Source
 let pages = 0;
+let htmlRoutes = 0;
 walk(APP, (file) => {
+  if (/[\\/]route\.(tsx|ts|jsx|js)$/.test(file)) {
+    const source = readFileSync(file, "utf8");
+    if (/text\/html|<!doctype\s+html/i.test(source)) {
+      htmlRoutes++;
+      if (!/\bapplyPageMetadata\(/.test(source)) failures.push(`${relative(ROOT, file)}: public HTML route handlers must use applyPageMetadata() from app/_html-metadata.ts`);
+    }
+    return;
+  }
   if (!/[\\/]page\.(tsx|ts|jsx|js|mdx)$/.test(file)) return;
   pages++;
   const route = routeOf(file);
@@ -97,4 +106,4 @@ if (failures.length) {
   console.error("\nEvery page needs its own social card. See app/_metadata.ts.");
   process.exit(1);
 }
-console.log(`check-cards: ${pages} pages use generated cards; ${checked} prerendered pages carry the right image tags.`);
+console.log(`check-cards: ${pages} pages and ${htmlRoutes} HTML route handlers use generated cards; ${checked} prerendered pages carry the right image tags.`);

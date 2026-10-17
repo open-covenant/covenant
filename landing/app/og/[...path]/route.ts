@@ -1,5 +1,6 @@
 import { renderCard } from "../_card";
 import { fetchPage, readCardData } from "../_page";
+import { computePageUrl, fetchComputePage } from "../_compute";
 
 // /og/<page path>.png: the social card for any page on the site, drawn from the
 // title and section the page declares (see app/_metadata.ts). New pages get a
@@ -31,11 +32,16 @@ function png(body: ArrayBuffer) {
 
 export async function GET(req: Request, { params }: { params: Promise<{ path: string[] }> }) {
   const segments = [...(await params).path];
-  if (segments.length > 8 || !segments.every((s) => SEGMENT.test(s))) return notFound();
+  const maxSegments = segments[0] === "compute-api" ? 9 : 8;
+  if (!segments.length || segments.length > maxSegments) return notFound();
+  if (segments[0] !== "compute-api" && !segments.every((s) => SEGMENT.test(s))) return notFound();
   segments[segments.length - 1] = segments[segments.length - 1].replace(/\.(png|jpe?g)$/i, "");
-  if (!segments[segments.length - 1]) return notFound();
+  if (!segments.every((s) => SEGMENT.test(s))) return notFound();
   const requested = `/${segments.join("/")}`;
   const pagePath = LEGACY[requested] ?? requested;
+  const computeSegments = segments[0] === "compute-api" ? segments.slice(1) : null;
+  const computeUrl = computeSegments ? computePageUrl(computeSegments) : null;
+  if (computeSegments && !computeUrl) return notFound();
 
   const hit = cache.get(pagePath);
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return png(hit.png);
@@ -51,7 +57,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ path: st
 
   let page;
   try {
-    page = await fetchPage(port, host, pagePath, proto);
+    page = computeSegments
+      ? await fetchComputePage(computeSegments)
+      : await fetchPage(port, host, pagePath, proto);
   } catch (err) {
     console.error(`[og] could not read ${pagePath}:`, err);
     return new Response("Card unavailable", { status: 503, headers: { "cache-control": "no-store" } });
@@ -64,9 +72,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ path: st
   if (!data) return notFound();
 
   const image = await renderCard({
-    title: data.title,
-    section: data.section,
-    url: data.url ?? `https://${page.host}${page.path}`,
+    title: computeSegments ? data.title.replace(/\s*[|:·—–]\s*Covenant Compute\s*$/i, "") : data.title,
+    section: data.section ?? (computeSegments ? "Compute" : undefined),
+    // The public source cannot substitute another canonical address on a card.
+    url: computeUrl ?? data.url ?? `https://${page.host}${page.path}`,
     key: pagePath,
   });
   const body = await image.arrayBuffer();

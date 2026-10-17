@@ -1,6 +1,6 @@
 [package]
 name = "covenant-compute-protocol"
-version = "0.1.0"
+version = "0.2.0"
 description = "Wire protocol for the Covenant compute network: the signed job envelope, GPU capability-profile schema, WorkReceipt, coordinator<->operator long-poll messages, and the FederationEscrow trait. Pure types and signing helpers, no I/O."
 edition.workspace = true
 license.workspace = true

@@ -1,0 +1,154 @@
+name: compute-release
+
+# A compute-v* tag builds the Covenant Compute tools for macOS and Linux, signs
+# them and publishes the release. Pull requests that touch the release inputs
+# build the same archives without releasing them.
+on:
+  push:
+    tags:
+      - "compute-v*"
+  pull_request:
+    paths:
+      - ".github/workflows/compute-release.yml"
+      - "deploy/compute-release/**"
+      - "agent-os/Cargo.lock"
+      - "agent-os/crates/covenant-compute-lease-signer/Cargo.lock"
+      - "rust-toolchain.toml"
+
+concurrency:
+  group: compute-release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  RUSTUP_TOOLCHAIN: "1.98.1"
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            target: aarch64-apple-darwin
+          - os: macos-15
+            target: x86_64-apple-darwin
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+    env:
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: check the tag
+        if: startsWith(github.ref, 'refs/tags/compute-v')
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' agent-os/crates/covenant-compute-buyer/Cargo.toml)"
+          if [ "compute-v${version}" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match the crate version ${version}"
+            exit 1
+          fi
+          if [ ! -f "deploy/compute-release/notes/${GITHUB_REF_NAME}.md" ]; then
+            echo "::error::deploy/compute-release/notes/${GITHUB_REF_NAME}.md is missing"
+            exit 1
+          fi
+
+      - name: install musl
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -q && sudo apt-get install -y -q musl-tools
+
+      - name: install the Rust toolchain
+        run: rustup toolchain install "${RUSTUP_TOOLCHAIN}" --profile minimal --target "${TARGET}"
+
+      - name: build and check
+        env:
+          CC_aarch64_unknown_linux_musl: musl-gcc
+        run: deploy/compute-release/dist.sh "${TARGET}"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: sign and release
+    if: startsWith(github.ref, 'refs/tags/compute-v')
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      attestations: write # build provenance for each archive
+      contents: write # create and publish the release
+      id-token: write # keyless signing for cosign and the provenance
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      # Published releases are immutable here, so a tag is released once. The
+      # releases/tags endpoint does not return drafts, hence the listing.
+      - name: check the tag has no release
+        run: |
+          existing="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            --jq '.[] | select(.tag_name == env.GITHUB_REF_NAME) | .id')"
+          if [ -n "${existing}" ]; then
+            echo "::error::${GITHUB_REF_NAME} already has a release (id ${existing}); delete a failed draft before re-running"
+            exit 1
+          fi
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: checksums
+        working-directory: dist
+        run: |
+          sha256sum -- *.tar.gz > checksums.txt
+          cat checksums.txt
+
+      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        with:
+          subject-path: dist/*.tar.gz
+
+      - uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
+        with:
+          cosign-release: v2.4.1
+
+      - name: sign
+        working-directory: dist
+        run: |
+          for f in *.tar.gz checksums.txt; do
+            cosign sign-blob --yes --output-signature "${f}.sig" --output-certificate "${f}.pem" "${f}"
+          done
+
+      # Upload everything to a draft, then publish it, so a failed upload never
+      # leaves a published release with assets missing.
+      - name: release
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "Covenant Compute ${GITHUB_REF_NAME#compute-v}" \
+            --notes-file "deploy/compute-release/notes/${GITHUB_REF_NAME}.md" \
+            --verify-tag \
+            --draft
+          id="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            --jq '.[] | select(.tag_name == env.GITHUB_REF_NAME) | .id')"
+          if [ -z "${id}" ] || [ "$(printf '%s\n' "${id}" | wc -l)" -ne 1 ]; then
+            echo "::error::expected one draft for ${GITHUB_REF_NAME}, found: ${id:-none}"
+            exit 1
+          fi
+          gh api -X PATCH "repos/${GITHUB_REPOSITORY}/releases/${id}" -F draft=false -f make_latest=true --jq .html_url

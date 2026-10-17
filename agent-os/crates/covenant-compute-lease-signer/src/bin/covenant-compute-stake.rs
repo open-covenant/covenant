@@ -52,6 +52,7 @@ const USAGE: &str = "usage:
   covenant-compute-stake extend  <node> [--add <cvnt>] [--lock-days <days>] --keypair <wallet>
   covenant-compute-stake unstake <node> --keypair <wallet>
   covenant-compute-stake slash   <node> <base units> --reason <sha256 hex> --keypair <slash authority>
+  covenant-compute-stake --version
 options: --rpc <url>  --program <settlement program id>";
 const DEFAULT_RPC: &str = "https://api.mainnet-beta.solana.com";
 const PRIORITY_MICRO_LAMPORTS: u64 = 100_000;
@@ -68,6 +69,18 @@ const AGENT_ACTIVE_OFFSET: usize = 8 + 32 * 4 + 8 + 8;
 async fn main() -> ExitCode {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let answers_in_json = argv.first().map(String::as_str) == Some("slash");
+    // `slash` always answers with one JSON line, so help and version are
+    // only offered to the other commands.
+    if !answers_in_json {
+        if argv.is_empty() || argv[0] == "help" || argv.iter().any(|a| a == "-h" || a == "--help") {
+            println!("{USAGE}");
+            return ExitCode::SUCCESS;
+        }
+        if matches!(argv[0].as_str(), "-V" | "--version" | "version") {
+            println!("{} {}", env!("CARGO_BIN_NAME"), env!("CARGO_PKG_VERSION"));
+            return ExitCode::SUCCESS;
+        }
+    }
     match run(argv).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(failure) => {
@@ -127,7 +140,6 @@ fn parse(argv: Vec<String>) -> Result<Args, String> {
             "--lock-days" => &mut args.lock_days,
             "--add" => &mut args.add,
             "--reason" => &mut args.reason,
-            "-h" | "--help" => return Err(USAGE.into()),
             flag if flag.starts_with("--") => {
                 return Err(format!("unknown option {flag}\n{USAGE}"))
             }

@@ -8,6 +8,9 @@ MCP client can buy compute with zero Covenant plumbing.
 The network-level map lives at
 [docs/compute-network.md](../../../docs/compute-network.md).
 
+Install the prebuilt tools with `brew install open-covenant/tap/covenant-compute`,
+or see the other [install options](https://docs.opencovenant.org/compute#install).
+
 ## As an MCP server
 
 ```jsonc

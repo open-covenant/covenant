@@ -52,8 +52,9 @@ That rehearsal did not compare the production journal or submit transactions.
 ## Isolated Cloudflare acceptance
 
 On 2026-10-17, 22:14:33–22:15:15 UTC, the actual Cloudflare adapter accepted a
-firing email and a recovery email for `alert@opencovenant.org` in an isolated
-rehearsal. This proves provider acceptance, not inbox delivery.
+firing email and a recovery email to the existing verified mailbox used by
+`alert@opencovenant.org` routing in an isolated rehearsal. This proves provider
+acceptance, not inbox delivery.
 
 Three failed observations produced one durable `rpc_unavailable` event. Reopening
 the state file preserved the same pending event ID. Three complete live-mainnet

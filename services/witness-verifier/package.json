@@ -4,7 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "vitest run"
+    "create:enforcement": "node create-enforcement-witness.mjs",
+    "generate:enforcement-keys": "node generate-enforcement-keys.mjs",
+    "record:devnet": "node record-devnet-transaction.mjs",
+    "test": "vitest run",
+    "upgrade:enforcement-record": "node upgrade-enforcement-record.mjs",
+    "verify:enforcement": "node verify-enforcement.mjs"
   },
   "devDependencies": {
     "vitest": "^4.1.5"

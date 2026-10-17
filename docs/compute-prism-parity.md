@@ -1,19 +1,24 @@
 # Compute: Prism adoption ledger
 
-Release branch: `codex/compute-observer-release`, based on Covenant
-`deploy/compute-coordinator` at `8e2faf72eab6d6b62c0afc643f1afb1bcc9cf30a`.
+Observer release: [PR #323](https://github.com/open-covenant/covenant/pull/323),
+merged at `28cff590ca5764dfddcc07d729f1e92ed5e8761e`. The release branch was
+originally based on `deploy/compute-coordinator` at
+`8e2faf72eab6d6b62c0afc643f1afb1bcc9cf30a` and incorporated deployment base
+`b0d5910b60be2a4c370f356fdec6dc221c7a9378` before promotion.
 The original adoption audit used Covenant `5b023331575da656da77edc8554213f58e99ad90`.
 Comparison: Prism `main` at `4e32eb5eb1398fd9d11dcd29aa5a96e3f2f646ec`.
-This release contains packages 1 and 2. Packages 3–20 remain separate on
-`codex/compute-prism-parity`; their presence there is not production evidence.
+The adoption work delivered here covers packages 1 and 2. The broader
+`codex/compute-prism-parity` implementation and any overlap in independent
+deployment-base changes are not acceptance evidence for packages 3–20.
 
-Solana USDC settlement, CVNT staking, admission and existing fees are unchanged.
+Packages 1 and 2 preserve Solana USDC settlement, CVNT staking, admission and
+existing fees.
 Provider market sampling is read-only and cannot create rentals or move funds.
 
 | # | Earliest upstream change | Local implementation | Local validation | Production evidence |
 |---|---|---|---|---|
 | 1 | Aug 12 [GPU prices](https://github.com/prismnetwork-tech/prism/pull/142) | Durable hourly provider samples, provisioning quotes, bound settled rates, public page/API | 1,395 affected-crate tests + 280 protocol tests; local provider/restart rehearsal; renderer and docs checks | Live 2026-10-17; public image pulls, provider samples and restart acceptance verified |
-| 2 | Aug 13 [observer](https://github.com/prismnetwork-tech/prism/pull/160), [status](https://github.com/prismnetwork-tech/prism/pull/164) | Read-only pinned chain observer, public status and reviewed incidents, durable confirmed/recovery alerts | Focused negative controls and full coordinator tests; see observer release evidence | Pending promotion and live acceptance |
+| 2 | Aug 13 [observer](https://github.com/prismnetwork-tech/prism/pull/160), [status](https://github.com/prismnetwork-tech/prism/pull/164) | Read-only pinned chain observer, public status and reviewed incidents, durable confirmed/recovery alerts | 495 pre-merge coordinator tests; 23 final observer tests and 48-route integration; [release evidence](compute-observer-release-evidence.md) | Live 2026-10-17; 55 public checks passed after restart, two leases reconciled without findings, durable alerts and unchanged financial metrics verified, X card rendered |
 | 3 | Aug 14 [workspaces](https://github.com/prismnetwork-tech/prism/pull/179) | Not included in this release | Separate parity branch | Not activated here |
 | 4 | Aug 14 [canary](https://github.com/prismnetwork-tech/prism/pull/180) | Not included in this release | Separate parity branch | Not activated here |
 | 5 | Aug 14–15 [SDKs](https://github.com/prismnetwork-tech/prism/pull/182) | Not included in this release | Separate parity branch | Not activated here |
@@ -178,12 +183,33 @@ two retained settled leases; the intentionally empty harness journal correctly
 reported two settled orphans. This rehearsal did not compare production journal
 contents, send transactions, or activate notification delivery.
 
+On the final merge tree, all 23 observer tests and the combined 48-route
+hostile-wire integration test passed. An isolated Cloudflare rehearsal preserved
+a pending event across restart and received provider acceptance for firing and
+recovery emails after three failed and three clean observations. Provider
+acceptance does not establish inbox receipt.
+
+Production was verified on 2026-10-17 at 22:54 UTC at the exact merged revision.
+All 55 public page/API/card checks passed; the observer compared two retained
+leases against the durable writable production journal with no findings. Email
+alerts were configured with healthy persistence, zero active alerts and zero
+pending deliveries. Financial and job metrics remained unchanged. The X composer
+rendered the public card correctly. A controlled restart at 22:55 UTC preserved
+the production alert state under `/data/mainnet`, advanced its observation time,
+and left job/financial metrics and journal size unchanged. All 55 public checks
+passed again at 22:57:09.672 UTC. Final website revision
+`fa411e14027d531a94475cab797e866390847c5c` was live with the shared page layout,
+refreshing status and a verified mobile viewport. Full identifiers and evidence
+boundaries are in [compute-observer-release-evidence.md](compute-observer-release-evidence.md).
+
 Release validation also repairs inherited documentation citations and aligns CI
 with the signed Compute release's Rust 1.98.1 toolchain. Separate compatibility
 repairs use fixed-size embedding chunks, checked reputation division, direct HTTP
 authentication responses, and boxed fallback responses in the three SSE helpers.
 They preserve embedding truncation, authentication status/body, stream ordering,
 and public IPC/HTTP JSON; the shared `Response` enum and settlement code do not
-change. All warning and test gates remain enabled. Full workspace validation in
-Ubuntu CI remains required; the local macOS environment lacks the OpenSSL
-development prerequisite for the workspace's Solana dependency tree.
+change. All warning and test checks remain enabled. The release owner explicitly
+approved promotion after focused validation without waiting for full-workspace
+CI; those results are tracked separately and are not asserted green here. The
+local macOS environment lacks the OpenSSL development prerequisite for the
+workspace's Solana dependency tree.

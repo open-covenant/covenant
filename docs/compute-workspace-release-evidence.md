@@ -77,10 +77,11 @@ of an expired reservation using the same upload ID.
 
 ## Remaining public-release gates
 
-1. Enroll Covenant's Cloudflare account in R2 only after approval of its usage
-   terms. Read-only inspection found enrollment absent and the saved token
-   unable to list R2 buckets. The intended isolated private bucket is
-   `covenant-compute-workspaces`, Standard class, with scoped object credentials.
+1. Finish enrollment of Covenant's Cloudflare account in R2. The account owner
+   approved R2 with application limits; checkout still requires their payment
+   method and billing address. The saved token cannot list R2 buckets. The
+   intended isolated private bucket is `covenant-compute-workspaces`, Standard
+   class, with scoped object credentials. No bucket or credential exists yet.
 2. Run the opt-in `workspace-storage-acceptance` example against that provider.
    Require immutable-write, checksum, private-read, exact-byte, expiration and
    deletion verdicts. Unknown write outcomes retain explicit cleanup keys until
@@ -97,6 +98,7 @@ of an expired reservation using the same upload ID.
    verify their live revision and X-facing metadata, then supply the launch post
    and visual. Do not announce this candidate as live before those checks pass.
 
-See [operation, CLI and backup instructions](compute-workspaces.md). Presigned
+See [deployment and recovery steps](compute-workspace-deployment.md) and
+[operation, CLI and backup instructions](compute-workspaces.md). Presigned
 URLs, keys, real checkpoint contents and provider credentials must not appear in
 public release evidence.

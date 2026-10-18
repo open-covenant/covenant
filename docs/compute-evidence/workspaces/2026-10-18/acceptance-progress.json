@@ -15,10 +15,13 @@
     "financial_prefix_preserved": true,
     "provider_inflight_fence_race": true,
     "synthetic_checkpoint_payload_fenced": true,
-    "current_coordinator_deletion_state_verified": true,
     "cross_lease_verified": true,
     "public_announcement_accepted": false,
-    "cross_lease_checkpoint_final_cleanup": false
+    "cross_lease_checkpoint_final_cleanup": true,
+    "temporary_acceptance_configuration_removed": true,
+    "backend_release_accepted": true,
+    "public_page_verified": false,
+    "standalone_post_restart_deletion_state_verified": true
   },
   "release": {
     "tag": "compute-v0.3.0",
@@ -239,9 +242,7 @@
     "approved_campaign_cap_micro_usdc": 10000000
   },
   "pending": [
-    "Cross-lease checkpoint deletion, verified exact-object empty fence and durable cleanup state",
-    "Temporary acceptance host-hook removal and broker idle/outbox confirmation",
-    "Public page, sharing-card and final launch acceptance"
+    "Public website deployment, sharing-card and final announcement acceptance"
   ],
   "input_report_hashes": {
     "installed-client-acceptance.json": "b68db27b05be3735635ca1d9adb66607d926ef51d3a1b20091ea5408ea71c4bd",
@@ -262,7 +263,7 @@
   },
   "cross_lease_evidence": {
     "path": "cross-lease-acceptance.json",
-    "sha256": "d1204d16b17fcbf04190bdfb7121df60376c92a4caaf002f71e2dcd7f619d6be",
+    "sha256": "6d767c82cdbc157634c04b7db038fb105b15bb2b16adcfce36764c3bb82a37a6",
     "restore_verified": true,
     "two_signed_receipts_verified": true,
     "two_onchain_payouts_verified": true,
@@ -271,6 +272,9 @@
     "available_buyer_balance_micro_usdc": 441741,
     "distinct_instances": true,
     "same_physical_machine": true,
-    "checkpoint_cleanup_verified": false
-  }
+    "checkpoint_cleanup_verified": true
+  },
+  "backend_release_accepted": true,
+  "public_release_accepted": true,
+  "acceptance_scope": "Deployed encrypted-workspace backend and released-client acceptance; public website deployment and sharing-card verification are recorded separately."
 }

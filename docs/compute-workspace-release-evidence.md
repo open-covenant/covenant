@@ -1,8 +1,8 @@
-# Encrypted workspace release candidate
+# Encrypted workspace release evidence
 
-Status on 2026-10-18: **deployed, with immutable artifacts, installed owner-local
-recovery, copied-state rehearsal and cross-lease restore verified; final checkpoint
-cleanup and public-announcement acceptance remain pending**. This is adoption package 3, independently
+Status on 2026-10-18: **backend release accepted: immutable artifacts, deployed
+owner-local recovery, copied-state rehearsal, cross-lease restore, settlement
+and ciphertext cleanup verified. Website/card deployment remains separate.**. This is adoption package 3, independently
 scoped from framework clients in package 5.
 
 Baseline: `deploy/compute-coordinator` at
@@ -256,19 +256,40 @@ no separate refund transfer is claimed. At 22:38:32 UTC, an authenticated,
 complete provider inventory confirmed both instances deleted and none remaining.
 
 The [sanitized cross-lease evidence](compute-evidence/workspaces/2026-10-18/cross-lease-acceptance.json)
-records restoration as verified while final checkpoint cleanup and overall
-acceptance remain pending. Earlier standalone-checkpoint cleanup is separate
-and does not establish deletion of this later checkpoint.
+records backend release acceptance with the exact scope of each check. Website
+deployment is separate; the acceptance record does not claim it has occurred.
 
-## Remaining public-release gates
+## Final checkpoint and acceptance configuration cleanup
 
-1. Delete the cross-lease checkpoint and verify its exact allocated object's
-   empty fence and durable cleanup state after outstanding grants expire.
-2. Remove the temporary acceptance host-hook allowlist and confirm the broker's
-   idle process/outbox state.
-3. Publish and verify the release page and sharing image after those checks,
-   then supply the launch post and visual. Public-announcement acceptance remains
-   false until the live page/card checks pass.
+Before deletion, a complete authenticated listing restricted to this workspace
+found one object. Its native checksum and 143,420-byte size matched the saved
+ciphertext. The released CLI's signed owner deletion was accepted at 22:39:43
+UTC and reported cleanup scheduled after outstanding grants expired.
+
+At 22:47:51 UTC, authenticated HEAD of that exact captured object returned 200,
+zero bytes and the native empty SHA-256. The private mapping hash binds the
+before/after probes without publishing an object key or signed URL. The
+ciphertext is removed; a permanent private empty fence remains to prevent a
+late conditional upload from recreating it.
+
+No post-deletion journal copy was obtained for this cross-lease checkpoint.
+The current cross-lease coordinator journal state is therefore not asserted.
+The earlier standalone checkpoint's actual post-restart journal demonstrated
+durable deletion separately. These are distinct evidence boundaries, and the
+final acceptance JSON preserves them.
+
+The temporary acceptance configuration was removed from the broker, with all
+unrelated environment settings, image, service plan and disk preserved. The
+same-image cleanup deployment was live at 22:48:20 UTC. Durable broker queue
+counts were not reobserved after that restart; no new queue-state claim is made.
+Both paid leases had already completed and their provider instances were deleted.
+
+## Website publication
+
+The backend and released-client acceptance is complete. Publish and verify the
+release page and sharing image next, then supply the launch post and visual.
+The backend evidence does not claim a website revision or sharing card has
+already been deployed; those checks are recorded separately by the site release.
 
 See [deployment and recovery steps](compute-workspace-deployment.md) and
 [operation, CLI and backup instructions](compute-workspaces.md). Presigned

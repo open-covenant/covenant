@@ -3,8 +3,8 @@
 This runbook covers adoption package 3. R2 provider acceptance, immutable
 publication, deployment, installed owner-local recovery and an actual copied-state
 rehearsal have passed. Cross-lease restore, both on-chain payouts and provider
-teardown have also passed; final checkpoint cleanup and public-release acceptance
-remain pending. See the separate
+teardown and exact-object ciphertext cleanup have also passed. Backend acceptance
+is complete; website/card deployment is recorded separately. See the separate
 [evidence record](compute-workspace-release-evidence.md).
 
 ## Existing service and storage

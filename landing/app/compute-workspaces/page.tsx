@@ -9,7 +9,7 @@ export const metadata: Metadata = pageMetadata(
   { title: "Encrypted Compute workspaces", section: "Compute" },
   {
     title: "Encrypted workspaces: Covenant Compute",
-    description: "Save encrypted, versioned checkpoints independently of a GPU lease. Keep the encryption key on your client and restore the exact saved snapshot for another machine.",
+    description: "Save encrypted, versioned checkpoints independently of a GPU lease. Keep the encryption key on your client and restore the exact saved snapshot for a later lease.",
     ...(!release.accepted ? { robots: { index: false, follow: false } } : {}),
   },
 );
@@ -59,13 +59,13 @@ function CodeBlock({ label, children }: { label: string; children: string }) {
 }
 
 export default function ComputeWorkspacesPage() {
-  const accepted = release.accepted && release.acceptance?.crossLeaseVerified && release.acceptance;
+  const accepted = release.accepted && release.acceptance?.crossLeaseVerified && release.acceptance.cleanupVerified && release.acceptance;
   return <main id="main-content" className="relative min-h-screen overflow-x-hidden bg-ground">
     <SiteHeader />
     <div className="page-container">
       <p className="mb-10 text-[11px] uppercase tracking-[0.4em] text-muted sm:mb-14">Compute</p>
       <h1 className="type-display max-w-3xl text-balance text-[2.2rem] text-fg sm:text-[2.6rem]">Encrypted checkpoints for Covenant Compute.</h1>
-      <p className="mt-6 max-w-2xl text-pretty text-[15px] leading-[1.7] text-fg-soft sm:text-base">Save a checkpoint before closing your GPU lease. Restore the same file for your next machine. Your client encrypts the snapshot, and you retain the key.</p>
+      <p className="mt-6 max-w-2xl text-pretty text-[15px] leading-[1.7] text-fg-soft sm:text-base">Save a checkpoint before closing your GPU lease. Restore the same file for your next lease. Your client encrypts the snapshot, and you retain the key.</p>
       <div className="mt-7 flex flex-wrap items-center gap-x-7 gap-y-2"><a href="#workflow" className={`inline-flex min-h-11 items-center text-[13px] text-fg ${link}`}>See the workflow <span aria-hidden="true" className="ml-2">↓</span></a><a href="#verification" className="inline-flex min-h-11 items-center text-[13px] text-muted transition-colors hover:text-fg">Inspect the evidence <span aria-hidden="true" className="ml-2">↓</span></a></div>
       {!release.accepted && <aside className="mt-8 max-w-3xl border-l border-line-strong pl-5" aria-label="Unpublished release preview"><p className={eyebrow}>Release preview · not published</p><p className={`mt-2 ${paragraph}`}>Implementation is prepared. Storage acceptance, released-client recovery and a verified transfer between real GPU leases are required before public release.</p></aside>}
       <div className="mt-10 flex flex-wrap gap-x-6 gap-y-3 border-y border-line/80 py-5 text-[12px] text-muted sm:mt-14"><span>Client-side encryption</span><span>Versioned snapshots</span><span>Persistent recovery</span></div>
@@ -93,9 +93,11 @@ export default function ComputeWorkspacesPage() {
       <section id="verification" aria-labelledby="verification-heading" className="mt-14 scroll-mt-28 border-t border-line/80 pt-9 sm:mt-20 sm:pt-11">
         <h2 id="verification-heading" className={heading}>Release evidence</h2>
         {accepted ? <>
-          <p className={`mt-5 max-w-2xl ${paragraph}`}>The acceptance run copied a checkpoint from one GPU lease, saved its encrypted snapshot, restarted the client and restored the same archive for a later lease. The evidence records the separate machine identities, plaintext archive digest, ciphertext digest and cleanup results.</p>
+          <p className={`mt-5 max-w-2xl ${paragraph}`}>A synthetic checkpoint was created on an NVIDIA L40S lease, copied to the client, encrypted and saved. After that lease closed, the client restored the archive and transferred it to a second rented instance. Its SHA-256 digest matched exactly. Both instances used the same physical L40S host.</p>
+          <p className={`mt-4 max-w-2xl ${paragraph}`}>A separate recovery test interrupted the released client during save, then committed the original ciphertext and upload identity after restart. Both leases settled on Solana, their rented instances were removed, and cleanup replaced the stored ciphertext with verified empty markers. These tests establish file persistence and recovery; they do not demonstrate a resumed training run or hardware attestation.</p>
           <dl className="mt-7 divide-y divide-line/80 border-y border-line/80">{[["Verified",accepted.checkedAt],["Storage",accepted.storageProvider],["Source lease",accepted.sourceLeaseId],["Later lease",accepted.targetLeaseId],["Archive SHA-256",accepted.archiveSha256],["Ciphertext SHA-256",accepted.ciphertextSha256]].map(([name,value])=><div key={name} className="grid gap-2 py-4 sm:grid-cols-[180px_1fr] sm:gap-7"><dt className="text-[12px] text-muted">{name}</dt><dd className="break-all font-mono text-[12px] leading-[1.8] text-fg-soft">{value}</dd></div>)}</dl>
           <a href={accepted.evidenceUrl} className={`mt-4 inline-flex min-h-11 items-center text-[13px] ${link}`}>Inspect the acceptance record ↗</a>
+          <a href="/compute/workspaces/cross-lease-acceptance.json" className={`ml-6 mt-4 inline-flex min-h-11 items-center text-[13px] ${link}`}>Raw acceptance data ↗</a>
         </> : <p className={`mt-5 max-w-2xl border-l border-line-strong pl-5 ${paragraph}`}>Production acceptance is pending. This section will link the provider’s immutable-write and checksum checks, released-client save and recovery, matching archive digests, verified lease access and cleanup. Local tests alone do not establish these production results.</p>}
       </section>
 
@@ -119,7 +121,7 @@ export default function ComputeWorkspacesPage() {
 
       <section aria-labelledby="limits-heading" className="mt-14 border-t border-line/80 pt-9 sm:mt-20 sm:pt-11">
         <h2 id="limits-heading" className={heading}>Snapshot limits</h2>
-        <dl className="mt-7 divide-y divide-line/80 border-y border-line/80">{[["Snapshot", "One file per saved version; archive directories before saving"],["Format maximum", "4 GiB of plaintext, subject to deployment capacity"],["Capacity", "The deployment byte ceiling includes encrypted objects, pending uploads and unconfirmed cleanup"],["Object quota", "Every allocated object counts toward the deployment’s lifetime limit, including retained cleanup markers"],["Versions", "Restore the latest committed snapshot pinned by your client"],["Transfer", "Client-managed copying over authenticated SSH"]].map(([name,value])=><div key={name} className="grid gap-2 py-4 sm:grid-cols-[180px_1fr] sm:gap-7"><dt className="text-[12px] text-muted">{name}</dt><dd className="text-[13px] leading-[1.8] text-fg-soft">{value}</dd></div>)}</dl>
+        <dl className="mt-7 divide-y divide-line/80 border-y border-line/80">{[["Snapshot", "One file per saved version; archive directories before saving"],["Current capacity", "1 GiB shared across the deployment, including ciphertext overhead, pending uploads and unconfirmed cleanup"],["Object quota", "4,096 lifetime object allocations across the deployment, including retained cleanup markers; retries reuse their allocation"],["Versions", "Restore the latest committed snapshot pinned by your client"],["Transfer", "Client-managed copying over authenticated SSH"]].map(([name,value])=><div key={name} className="grid gap-2 py-4 sm:grid-cols-[180px_1fr] sm:gap-7"><dt className="text-[12px] text-muted">{name}</dt><dd className="text-[13px] leading-[1.8] text-fg-soft">{value}</dd></div>)}</dl>
       </section>
       <div className="mt-14 flex flex-wrap gap-x-6 gap-y-3 border-t border-line/80 pt-7 sm:mt-20">{[{label:"Compute",href:"/compute"},{label:"Compute prices",href:"/compute-prices"},{label:"Compute status",href:"/compute-status"},...(release.documentationUrl?[{label:"Workspace documentation",href:release.documentationUrl}]:[]),...(release.sourceUrl?[{label:"Implementation source",href:release.sourceUrl}]:[])].map(({label,href})=><a key={href} href={href} className="inline-flex min-h-11 items-center text-[11px] uppercase tracking-[0.2em] text-muted transition-colors hover:text-fg">{label}<span aria-hidden="true" className="ml-2">→</span></a>)}</div>
     </div><SiteFooter className="pb-8" />

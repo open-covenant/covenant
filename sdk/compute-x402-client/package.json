@@ -1,0 +1,33 @@
+{
+  "name": "@covenant/compute-x402-client",
+  "version": "0.1.0",
+  "description": "Bounded x402 V2 Solana inference purchases through Coinbase AgentKit",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "exports": {
+    ".": "./index.mjs",
+    "./agentkit": "./agentkit.mjs"
+  },
+  "files": [
+    "*.mjs",
+    "README.md",
+    "LICENSE",
+    "npm-shrinkwrap.json"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "demo": "node demo.mjs"
+  },
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@coinbase/agentkit": "0.10.4",
+    "@solana/kit": "8.5.0",
+    "@solana/web3.js": "1.98.4",
+    "@x402/core": "2.28.0",
+    "@x402/svm": "2.28.0",
+    "bs58": "6.0.0",
+    "zod": "3.25.76"
+  }
+}

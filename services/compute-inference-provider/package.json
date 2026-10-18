@@ -1,0 +1,9 @@
+{
+  "name": "@covenant/compute-inference-provider",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24.0.0" },
+  "scripts": { "start": "node server.mjs", "test": "node --test test.mjs" },
+  "license": "Apache-2.0"
+}

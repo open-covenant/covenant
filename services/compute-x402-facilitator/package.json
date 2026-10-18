@@ -1,0 +1,9 @@
+{
+  "name": "@covenant/compute-x402-facilitator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": { "start": "node server.mjs", "test": "node --test" },
+  "dependencies": { "@x402/svm": "2.28.0", "@x402/core": "2.28.0", "@solana/kit": "5.5.1" }
+}

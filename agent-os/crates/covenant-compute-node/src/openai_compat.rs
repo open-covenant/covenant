@@ -30,6 +30,7 @@ use covenant_compute_protocol::{
 };
 use covenant_mcp::Content;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 use crate::executor::{ChunkSink, ExecutionOutcome, ExecutorError, JobExecutor};
 
@@ -149,6 +150,23 @@ struct ModelsResponse {
 #[derive(Debug, Deserialize)]
 struct ModelEntry {
     id: String,
+}
+
+/// Stable across retries and worker restarts, distinct for each buyer and job.
+/// Keeping the body out of the key makes a changed request for the same purchase
+/// conflict at the provider rather than authorize another bill. Benchmark jobs
+/// already have fresh UUIDs, so each new probe really exercises the provider.
+fn provider_idempotency_key(job: &JobEnvelopePayload) -> String {
+    let mut hash = Sha256::new();
+    hash.update(b"covenant-openai-provider-job-v1\0");
+    hash.update(job.buyer.pubkey);
+    hash.update(job.job_id.as_bytes());
+    let digest = hash
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("covenant-job-v1-{digest}")
 }
 
 impl OpenAiCompatExecutor {
@@ -423,8 +441,11 @@ impl OpenAiCompatExecutor {
                         .into(),
                 )
             })?;
+        let provider_key = provider_idempotency_key(job);
         if job.kind == JobKind::Embedding {
-            return self.embed(&model, &job.input, deadline).await;
+            return self
+                .embed(&model, &job.input, deadline, &provider_key)
+                .await;
         }
         // A chat-shaped job that fails to parse must fail here, not
         // fall through to the raw-prompt path with misread paid input —
@@ -486,7 +507,9 @@ impl OpenAiCompatExecutor {
         if let Some(params) = generation {
             apply_generation(&mut body, &params);
         }
-        let resp = self.post("/chat/completions", body, deadline).await?;
+        let resp = self
+            .post("/chat/completions", body, deadline, &provider_key)
+            .await?;
 
         let (text, tokens_in, tokens_out, finish_reason, tool_calls, logprobs) =
             match effective_sink {
@@ -575,11 +598,14 @@ impl OpenAiCompatExecutor {
         model: &str,
         input: &[Content],
         deadline: Duration,
+        provider_key: &str,
     ) -> Result<ExecutionOutcome, ExecutorError> {
         let texts = embedding_texts(input).map_err(|e| ExecutorError::Failed(e.to_string()))?;
         let started = Instant::now();
         let body = serde_json::json!({ "model": model, "input": texts });
-        let resp = self.post("/embeddings", body, deadline).await?;
+        let resp = self
+            .post("/embeddings", body, deadline, provider_key)
+            .await?;
         let raw =
             crate::executor::read_body_capped(resp, MAX_STREAM_OUTPUT_BYTES, deadline).await?;
         let mut parsed: EmbeddingsResponse = serde_json::from_slice(&raw)
@@ -618,10 +644,12 @@ impl OpenAiCompatExecutor {
         path: &str,
         body: serde_json::Value,
         deadline: Duration,
+        provider_key: &str,
     ) -> Result<reqwest::Response, ExecutorError> {
         let mut req = self
             .http
             .post(format!("{}{path}", self.base_url))
+            .header("Idempotency-Key", provider_key)
             .timeout(deadline)
             .json(&body);
         if let Some(key) = &self.api_key {
@@ -855,6 +883,111 @@ mod tests {
             });
         }
         body.to_string()
+    }
+
+    #[tokio::test]
+    async fn provider_idempotency_is_stable_across_restarts_and_unique_per_job() {
+        let keys = Arc::new(Mutex::new(Vec::<String>::new()));
+        let captured = keys.clone();
+        let base = spawn(Router::new().route(
+            "/chat/completions",
+            post(move |headers: axum::http::HeaderMap| {
+                let captured = captured.clone();
+                async move {
+                    captured.lock().await.push(
+                        headers
+                            .get("Idempotency-Key")
+                            .unwrap()
+                            .to_str()
+                            .unwrap()
+                            .to_string(),
+                    );
+                    completion_json("a real response", Some((4, 3)))
+                }
+            }),
+        ))
+        .await;
+        let original = job("same prompt", Some("model"));
+        OpenAiCompatExecutor::new(base.clone(), None, None)
+            .execute(&original, Duration::from_secs(2))
+            .await
+            .unwrap();
+        let restarted = OpenAiCompatExecutor::new(base, None, None);
+        restarted
+            .execute(&original, Duration::from_secs(2))
+            .await
+            .unwrap();
+        restarted
+            .execute(&job("same prompt", Some("model")), Duration::from_secs(2))
+            .await
+            .unwrap();
+        let mut another_buyer = original.clone();
+        another_buyer.buyer.pubkey = [2u8; 32];
+        restarted
+            .execute(&another_buyer, Duration::from_secs(2))
+            .await
+            .unwrap();
+        let keys = keys.lock().await;
+        assert_eq!(keys[0], keys[1], "a retry belongs to the original purchase");
+        assert_ne!(
+            keys[0], keys[2],
+            "identical prompts in distinct jobs run independently"
+        );
+        assert_ne!(
+            keys[0], keys[3],
+            "another buyer cannot reuse a purchase identity"
+        );
+        assert!(keys[0].starts_with("covenant-job-v1-"));
+        assert_eq!(keys[0].len(), 80);
+    }
+
+    #[tokio::test]
+    async fn each_capability_probe_uses_a_distinct_provider_idempotency_key() {
+        let keys = Arc::new(Mutex::new(Vec::<String>::new()));
+        let captured = keys.clone();
+        let base = spawn(Router::new().route(
+            "/chat/completions",
+            post(move |headers: axum::http::HeaderMap| {
+                let captured = captured.clone();
+                async move {
+                    captured.lock().await.push(
+                        headers
+                            .get("Idempotency-Key")
+                            .unwrap()
+                            .to_str()
+                            .unwrap()
+                            .to_string(),
+                    );
+                    completion_json("probe response", Some((4, 3)))
+                }
+            }),
+        ))
+        .await;
+        let executor = OpenAiCompatExecutor::new(base, None, None);
+        let operator = AgentId::new("operator", [3u8; 32]);
+        let spec = crate::benchmark::BenchmarkSpec {
+            input: vec![Content::text("probe")],
+            expect_contains: None,
+            per_model: true,
+            kind: JobKind::InferenceCall,
+        };
+        for _ in 0..2 {
+            let result = crate::benchmark::run_benchmark(
+                &executor,
+                &operator,
+                &["model".to_string()],
+                &spec,
+                Duration::from_secs(2),
+            )
+            .await;
+            assert!(result[0].passed());
+        }
+        let keys = keys.lock().await;
+        assert_eq!(keys.len(), 2);
+        assert_ne!(
+            keys[0], keys[1],
+            "a new paid probe must exercise the provider again"
+        );
     }
 
     #[tokio::test]

@@ -29,6 +29,7 @@ members = [
     "crates/covenant-compute-node",
     "crates/covenant-compute-coordinator",
     "crates/covenant-compute-buyer",
+    "crates/covenant-compute-gateway",
     "crates/covenant-compute-vast",
     "crates/covenant-compute-control",
     "crates/covenantd",

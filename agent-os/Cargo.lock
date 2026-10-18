@@ -1316,15 +1316,18 @@ dependencies = [
  "covenant-identity",
  "covenant-mcp",
  "covenant-types",
+ "hmac 0.12.1",
  "http-body 1.0.1",
  "parking_lot",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "sha2 0.11.0",
  "subtle",
  "tempfile",
  "thiserror 1.0.69",
+ "time",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -1405,9 +1408,11 @@ dependencies = [
  "covenant-mcp",
  "covenant-types",
  "flate2",
+ "hkdf",
  "rand 0.9.4",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "sha2 0.11.0",
  "thiserror 1.0.69",
  "uuid",
@@ -2923,6 +2928,15 @@ name = "histogram"
 version = "0.6.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "12cb882ccb290b8646e554b157ab0b71e64e8d5bef775cd66b6531e52d302669"
+
+[[package]]
+name = "hkdf"
+version = "0.12.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b5f8eb2ad728638ea2c7d47a21db23b7b58a72ed6a38256b8a1849f15fbbdf7"
+dependencies = [
+ "hmac 0.12.1",
+]
 
 [[package]]
 name = "hmac"

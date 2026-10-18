@@ -342,3 +342,23 @@ optional email delivery uses the deployment's existing Cloudflare Email Service 
 See [observer configuration and acceptance](../../../../docs/compute-observer.md)
 for every pin, delivery variable, scope limitation and the read-only live-RPC
 harness. Reviewed incidents are source-controlled and expose no buyer/job data.
+
+## Encrypted workspace storage
+
+The optional `/workspaces/:owner` API keeps durable encrypted checkpoint metadata
+separate from existing secret vaults, jobs and payment journals. Clients upload
+ciphertext directly through short-lived conditional-write S3 grants and retain
+their own encryption keys. See [workspace operation and acceptance](../../../docs/compute-workspaces.md).
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `COVENANT_COMPUTE_WORKSPACE_S3_ENDPOINT` | unset | HTTPS S3 origin; unset disables workspace routes. HTTP only on loopback for tests. |
+| `COVENANT_COMPUTE_WORKSPACE_S3_REGION` | required when enabled | SigV4 region; R2 uses `auto`. |
+| `COVENANT_COMPUTE_WORKSPACE_S3_BUCKET` | required when enabled | Private bucket with verified SHA-256 and conditional PUT support. |
+| `COVENANT_COMPUTE_WORKSPACE_S3_ACCESS_KEY` | required when enabled | Scoped object-store access key from the deployment secret store. |
+| `COVENANT_COMPUTE_WORKSPACE_S3_SECRET_KEY` | required when enabled | Corresponding secret; never included in API or logs. |
+| `COVENANT_COMPUTE_WORKSPACE_S3_PREFIX` | `covenant-workspaces` | Isolated object prefix. |
+| `COVENANT_COMPUTE_WORKSPACE_S3_SESSION_TOKEN` | unset | Optional temporary object credential. |
+| `COVENANT_COMPUTE_WORKSPACE_MAX_OWNERS` | `1024` | Positive limit on owner identities. |
+| `COVENANT_COMPUTE_WORKSPACE_MAX_BYTES` | `1073741824` | Positive global ciphertext reservation limit including pending writes and garbage. |
+| `COVENANT_COMPUTE_WORKSPACE_WRITES_ENABLED` | `false` | Admit new workspaces/uploads only after provider acceptance; disabling preserves recovery, reads and cleanup. |

@@ -809,3 +809,12 @@ configuration, never the coordinator's suggestion.
 
 Money is integer micro-USDC end to end; jobs are refused, not
 truncated, when a price ceiling or balance can't cover them.
+
+## Durable encrypted workspaces
+
+`covenant-compute workspace create|save|retry|restore|delete` stores client-encrypted
+checkpoint files independently of a GPU lease. The existing buyer identity signs
+metadata requests; a separate locally held key encrypts the data. Snapshot pins
+and pending ciphertext survive process restart. See the [CLI workflow, backup
+and release gates](../../../docs/compute-workspaces.md) before enabling storage.
+A workspace save does not rent a machine or spend the buyer's Compute balance.

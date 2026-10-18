@@ -30,6 +30,7 @@
 
 #![deny(unsafe_code)]
 
+pub mod workspace;
 pub mod accounts;
 pub mod agent;
 mod agent_evidence;

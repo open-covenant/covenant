@@ -1285,7 +1285,15 @@ async fn main() -> anyhow::Result<()> {
         .transpose()
         .map_err(anyhow::Error::msg)?
         .map(Arc::new);
+    let workspace = covenant_compute_coordinator::workspace::build_from_env(
+        state.clone(),
+        &home.join("journal.jsonl"),
+    )?;
     let mut app = router(state.clone());
+    if let Some(workspace) = workspace {
+        covenant_compute_coordinator::workspace::spawn_cleanup(workspace.clone());
+        app = app.merge(covenant_compute_coordinator::workspace::router(workspace));
+    }
     if let Some(observer) = observer {
         covenant_compute_coordinator::observer::spawn_periodic_observer(state, observer.clone());
         app = app.layer(axum::Extension(observer));

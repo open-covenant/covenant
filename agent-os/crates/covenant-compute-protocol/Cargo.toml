@@ -8,6 +8,8 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+hkdf = "0.12"
+sha2_10 = { package = "sha2", version = "0.10" }
 base64 = "0.22"
 flate2 = "1"
 covenant-types = { path = "../covenant-types" }

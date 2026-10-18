@@ -20,7 +20,7 @@ futures = { workspace = true }
 subtle = { workspace = true }
 libc = { workspace = true }
 parking_lot = { workspace = true }
-reqwest = { workspace = true }
+reqwest = { workspace = true, features = ["stream"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

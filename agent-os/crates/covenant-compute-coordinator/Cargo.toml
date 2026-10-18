@@ -12,6 +12,9 @@ name = "covenant-compute-coordinator"
 path = "src/main.rs"
 
 [dependencies]
+hmac = "0.12"
+sha2_10 = { package = "sha2", version = "0.10" }
+time = { version = "0.3", features = ["formatting"] }
 base64 = "0.22"
 http-body = "1"
 covenant-compute-protocol = { path = "../covenant-compute-protocol" }

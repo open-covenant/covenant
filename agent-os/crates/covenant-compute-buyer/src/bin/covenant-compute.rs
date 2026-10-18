@@ -47,6 +47,9 @@ use covenant_mcp::Content;
 use serde_json::Value;
 use uuid::Uuid;
 
+#[path = "../workspace_cli.rs"]
+mod workspace_cli;
+
 const USAGE: &str = "\
 covenant-compute — buy compute from the Covenant network, and manage the
 wallet that pays for it
@@ -78,6 +81,14 @@ Usage:
   covenant-compute lease open --minutes N --rate R    rent a whole GPU for a window
   covenant-compute lease view <job-id>          a live lease's endpoint, meter and cost
   covenant-compute lease close <job-id>         end a running lease and settle the meter
+  covenant-compute workspace create <name> [--id UUID] [--trust open]  create an encrypted workspace
+  covenant-compute workspace list|status <id>   list remote metadata or inspect a local pin
+  covenant-compute workspace save <id> <file>   encrypt and commit a checkpoint file
+  covenant-compute workspace retry <id>          reconcile an interrupted snapshot
+  covenant-compute workspace restore <id> <file> [--lease UUID]  restore the pinned snapshot locally
+  covenant-compute workspace delete <id>         tombstone and schedule ciphertext cleanup
+  covenant-compute workspace backup <id> <file>  export a private key and pinned-version backup
+  covenant-compute workspace import <file>       import a private backup for this buyer and endpoint
   covenant-compute vault put <label> [value]    store a secret, sealed under a key only you hold
   covenant-compute vault get <label>            fetch and open a secret (raw bytes to stdout)
   covenant-compute vault ls                     your stored secrets, and which you can open here
@@ -687,6 +698,7 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        "workspace" => workspace_cli::run(&load_ctx()?, &mut args, json_out).await,
         "vault" => {
             let action = positional(&args, 0, "action (put|get|ls|rm|key)")?;
             let mut rest = args.split_off(1);

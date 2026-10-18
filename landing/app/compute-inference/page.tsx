@@ -14,9 +14,9 @@ export const metadata: Metadata = pageMetadata(
 );
 
 const CLIENT_SOURCE =
-  "https://github.com/open-covenant/covenant/tree/deploy/compute-coordinator/sdk/compute-x402-client";
+  "https://github.com/open-covenant/covenant/tree/codex/compute-x402-release/sdk/compute-x402-client";
 const GATEWAY_SOURCE =
-  "https://github.com/open-covenant/covenant/tree/deploy/compute-coordinator/services/compute-x402-facilitator";
+  "https://github.com/open-covenant/covenant/tree/codex/compute-x402-release/agent-os/crates/covenant-compute-gateway";
 const eyebrow = "font-mono text-[11px] uppercase tracking-[0.3em] text-muted";
 const heading = "text-[13px] uppercase tracking-[0.25em] text-fg sm:text-[14px]";
 const paragraph = "text-[13px] leading-[1.8] text-fg-soft sm:text-[14px]";

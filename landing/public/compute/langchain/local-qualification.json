@@ -1,0 +1,11 @@
+{
+  "clientVersion": "0.2.0",
+  "packageSha256": "77ef86146f982432f75a83d227afb8c7a8f36049bb23d4eba29ae0da0cb606cf",
+  "sourceTests": 32,
+  "installedTests": 32,
+  "packagedBytesMatchSourceAndInstalled": true,
+  "langchainVersion": "1.5.18",
+  "langgraphVersion": "1.5.1",
+  "langchainCoreVersion": "1.2.18",
+  "nodeMajorVersion": 24
+}

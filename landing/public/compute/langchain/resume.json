@@ -1,0 +1,17 @@
+{
+  "checkpointId": "1f1cb058-f710-65e0-8001-f0ec1777b1db",
+  "requestId": "ab510efd-d01e-45b1-b490-242b9d1a8549",
+  "purchaseIdentical": true,
+  "jobId": "ed4fc8c9-0781-40d1-b45a-3987e9ddc91f",
+  "payment": "2UQMqsZvHs1o1XYocySKkRNX9h3dNLnvkeXSH9obBsaqSvZ3saneaoB83hkS5F8opEvz8bh269oWZH3EW5AX16QQ",
+  "outputSha256": "a17d6f509cfd2395735678eb7401e9ace3f93fa29ced2b7f1cfc799b245fd424",
+  "counters": {
+    "walletSignatures": 0,
+    "gatewayQuotePosts": 0,
+    "gatewayPaidPosts": 0,
+    "rpcCalls": 0,
+    "plannerDispatches": 0,
+    "plannerCached": 0
+  },
+  "additionalCustomerChargeMicroUsdc": 0
+}

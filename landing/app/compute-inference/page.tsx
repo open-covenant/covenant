@@ -173,7 +173,7 @@ export default function ComputeInferencePage() {
           <div><h2 className={heading}>Know what the receipt verifies</h2><p className={`mt-5 ${paragraph}`}>The receipt binds the operator, job and exact output. It does not establish the quality of an answer or attest to the operator&apos;s hardware. Built with the open-source Coinbase AgentKit and x402 SDKs.</p></div>
         </section>
         <div className="mt-14 flex flex-wrap gap-x-6 gap-y-3 border-t border-line/80 pt-7 sm:mt-20">{[
-          { label: "Compute status", href: "/compute-status" }, { label: "Compute", href: "/compute" }, { label: "Gateway source", href: GATEWAY_SOURCE },
+          { label: "LangChain + LangGraph", href: "/compute-langchain" }, { label: "Compute status", href: "/compute-status" }, { label: "Compute", href: "/compute" }, { label: "Gateway source", href: GATEWAY_SOURCE },
         ].map(({label,href})=><a key={href} href={href} className="inline-flex min-h-11 items-center text-[11px] uppercase tracking-[0.2em] text-muted transition-colors hover:text-fg">{label}<span aria-hidden="true" className="ml-2">→</span></a>)}</div>
       </div>
       <SiteFooter className="pb-8" />

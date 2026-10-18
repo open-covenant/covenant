@@ -1,0 +1,38 @@
+{
+  "checkedAt": "2026-10-18T15:08:25.918Z",
+  "requestId": "ab510efd-d01e-45b1-b490-242b9d1a8549",
+  "requestSha256": "b861a35af8890a1d0b7bb234bed586c50fe95271e686b5f6f35d17419679e55c",
+  "jobId": "ed4fc8c9-0781-40d1-b45a-3987e9ddc91f",
+  "quoteId": "ab510efd-d01e-45b1-b490-242b9d1a8549",
+  "transaction": "2UQMqsZvHs1o1XYocySKkRNX9h3dNLnvkeXSH9obBsaqSvZ3saneaoB83hkS5F8opEvz8bh269oWZH3EW5AX16QQ",
+  "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+  "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+  "payer": "7rozFdk421fc7DT3MpPJnD4ndXY81hBY6DzmKauZgzTB",
+  "merchant": "52Ca4rDuLd4RuxA2sZC7GJoGVnPrE77Z6nXEFDTnvtqw",
+  "amountMicroUsdc": 50000,
+  "payerDeltaMicroUsdc": "-50000",
+  "merchantDeltaMicroUsdc": "50000",
+  "walletBalanceMicroUsdc": "350000",
+  "confirmationStatus": "finalized",
+  "slot": 458478907,
+  "feeLamports": 10001,
+  "computeUnits": 43642,
+  "nativePriceMicroUsdc": 30000,
+  "outputSha256": "a17d6f509cfd2395735678eb7401e9ace3f93fa29ced2b7f1cfc799b245fd424",
+  "textSha256": "b74298900d071066b5662df655ba828b1ddf09b21da8fc34e1d7cba897133914",
+  "signatureVerified": true,
+  "exactTransactionMessageVerified": true,
+  "replay": {
+    "purchaseIdentical": true,
+    "counters": {
+      "walletSignatures": 0,
+      "gatewayQuotePosts": 0,
+      "gatewayPaidPosts": 0,
+      "rpcCalls": 0,
+      "plannerDispatches": 0,
+      "plannerCached": 0
+    },
+    "additionalCustomerChargeMicroUsdc": 0
+  },
+  "receiptCaveat": "The signature binds output and request; it does not establish answer correctness."
+}

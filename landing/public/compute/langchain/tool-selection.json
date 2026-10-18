@@ -1,0 +1,1162 @@
+{
+  "sampleTicket": "Sample support ticket: I switched to the annual plan yesterday, but my billing page shows both a monthly charge and an annual charge. I also cannot download the invoice. Our finance team needs it by Friday. Can you help?",
+  "plannerInstructionMode": "tool_choice:auto",
+  "selection": {
+    "type": "ai",
+    "content": "I'll use the covenant_inference tool to produce a professional triage analysis and draft reply for this ticket.",
+    "tool_calls": [
+      {
+        "name": "covenant_inference",
+        "args": {
+          "prompt": "You are a support triage specialist. Analyze this customer support ticket and provide:\n\n1. **Category**: Assign one primary category (e.g., Billing, Technical, Account, Feature Request, etc.)\n2. **Priority**: Assign priority level (Low, Medium, High, Urgent) with a brief reason\n3. **Evidence to Request**: List 2-3 specific pieces of information the support agent should gather before escalating\n4. **Draft Reply**: Write a concise, empathetic response (2-3 sentences) that acknowledges the issue, validates urgency, and sets next steps without promising a specific resolution time or confirming a refund\n\n**Ticket:**\n\"I switched to the annual plan yesterday, but my billing page shows both a monthly charge and an annual charge. I also cannot download the invoice. Our finance team needs it by Friday. Can you help?\"\n\nProvide only these four sections in a clear, structured format."
+        },
+        "type": "tool_call",
+        "id": "toolu_bdrk_01X3o1X8sjyfMMgBAwiZK9ds"
+      }
+    ],
+    "usage": {
+      "output_tokens": 280,
+      "input_tokens": 899,
+      "total_tokens": 1179,
+      "input_token_details": {
+        "audio": 0,
+        "cache_read": 0,
+        "cache_creation": 0
+      },
+      "output_token_details": {
+        "audio": 0,
+        "reasoning": 0
+      }
+    }
+  },
+  "checkpoint": "1f1cb058-f710-65e0-8001-f0ec1777b1db",
+  "requestId": "ab510efd-d01e-45b1-b490-242b9d1a8549",
+  "toolNode": "tools",
+  "finalPlannerMessage": {
+    "type": "ai",
+    "content": "## Triage Summary\n\n**Category:** Billing\n\n**Priority:** High  \n*Reason:* Potential duplicate charges combined with a time-sensitive business need (finance team deadline Friday) warrant prompt investigation.\n\n**Evidence to Request:**\n- Screenshots of the billing page showing both charges (with dates, amounts, and plan names visible)\n- Exact date/time the annual plan switch was initiated\n- Details about the invoice download failure (error message, button behavior, etc.)\n\n---\n\n## Draft Reply for Human Agent Review\n\n\"I understand how concerning it is to see duplicate charges, especially with your finance team's Friday deadline. To help our billing agent investigate this quickly, could you share screenshots of your billing page showing both charges, along with details about when you switched plans and any error messages you saw when trying to download the invoice? A human billing agent will review this to clarify what happened and get you the documentation you need.\"\n\n---\n\n**Next Steps:** Route to Billing team with the evidence request. Do not confirm a refund or promise a specific resolution time until the billing agent verifies the account state.",
+    "usage": {
+      "output_tokens": 238,
+      "input_tokens": 875,
+      "total_tokens": 1113,
+      "input_token_details": {
+        "audio": 0,
+        "cache_read": 0,
+        "cache_creation": 0
+      },
+      "output_token_details": {
+        "audio": 0,
+        "reasoning": 0
+      }
+    }
+  },
+  "phases": {
+    "plan": {
+      "phase": "plan",
+      "observedAt": "2026-10-18T15:06:56.710Z",
+      "packageRoot": "/tmp/covenant-langchain-accepted-lmglpy2z/node_modules/@covenant/compute-x402-client",
+      "packageVersion": "0.2.0",
+      "identity": {
+        "requestId": "ab510efd-d01e-45b1-b490-242b9d1a8549",
+        "threadId": "covenant-langgraph-support-5174d32c-8689-4bb9-addb-cd3c24583df9"
+      },
+      "counters": {
+        "walletSignatures": 0,
+        "gatewayQuotePosts": 0,
+        "gatewayPaidPosts": 0,
+        "rpcCalls": 0,
+        "plannerDispatches": 1,
+        "plannerCached": 0
+      },
+      "before": {
+        "provider": {
+          "lifetime": 607026,
+          "daily": 607026,
+          "unresolved": 0
+        },
+        "customer": {
+          "purchases": 3,
+          "reservedMicroUsdc": 150000,
+          "completed": 2
+        }
+      },
+      "after": {
+        "provider": {
+          "lifetime": 610475,
+          "daily": 610475,
+          "unresolved": 0
+        },
+        "customer": {
+          "purchases": 3,
+          "reservedMicroUsdc": 150000,
+          "completed": 2
+        }
+      },
+      "result": {
+        "phase": "plan",
+        "startedAt": "2026-10-18T15:06:50.790Z",
+        "finishedAt": "2026-10-18T15:06:56.708Z",
+        "identity": {
+          "requestId": "ab510efd-d01e-45b1-b490-242b9d1a8549",
+          "threadId": "covenant-langgraph-support-5174d32c-8689-4bb9-addb-cd3c24583df9",
+          "model": "claude-haiku-4.5",
+          "ticketSha256": "c556f390d0a6cb7132d6c68bd93f5c216d34a38bb378256d37344bc10e3d3efb",
+          "version": 1
+        },
+        "next": [
+          "tools"
+        ],
+        "messages": [
+          {
+            "type": "human",
+            "content": "Sample support ticket: I switched to the annual plan yesterday, but my billing page shows both a monthly charge and an annual charge. I also cannot download the invoice. Our finance team needs it by Friday. Can you help?"
+          },
+          {
+            "type": "ai",
+            "content": "I'll use the covenant_inference tool to produce a professional triage analysis and draft reply for this ticket.",
+            "tool_calls": [
+              {
+                "name": "covenant_inference",
+                "args": {
+                  "prompt": "You are a support triage specialist. Analyze this customer support ticket and provide:\n\n1. **Category**: Assign one primary category (e.g., Billing, Technical, Account, Feature Request, etc.)\n2. **Priority**: Assign priority level (Low, Medium, High, Urgent) with a brief reason\n3. **Evidence to Request**: List 2-3 specific pieces of information the support agent should gather before escalating\n4. **Draft Reply**: Write a concise, empathetic response (2-3 sentences) that acknowledges the issue, validates urgency, and sets next steps without promising a specific resolution time or confirming a refund\n\n**Ticket:**\n\"I switched to the annual plan yesterday, but my billing page shows both a monthly charge and an annual charge. I also cannot download the invoice. Our finance team needs it by Friday. Can you help?\"\n\nProvide only these four sections in a clear, structured format."
+                },
+                "type": "tool_call",
+                "id": "toolu_bdrk_01X3o1X8sjyfMMgBAwiZK9ds"
+              }
+            ],
+            "usage": {
+              "output_tokens": 280,
+              "input_tokens": 899,
+              "total_tokens": 1179,
+              "input_token_details": {
+                "audio": 0,
+                "cache_read": 0,
+                "cache_creation": 0
+              },
+              "output_token_details": {
+                "audio": 0,
+                "reasoning": 0
+              }
+            }
+          }
+        ],
+        "checkpoint": {
+          "configurable": {
+            "thread_id": "covenant-langgraph-support-5174d32c-8689-4bb9-addb-cd3c24583df9",
+            "checkpoint_ns": "",
+            "checkpoint_id": "1f1cb058-f710-65e0-8001-f0ec1777b1db"
+          }
+        }
+      }
+    },
+    "purchase": {
+      "phase": "purchase",
+      "observedAt": "2026-10-18T15:07:45.272Z",
+      "packageRoot": "/tmp/covenant-langchain-accepted-lmglpy2z/node_modules/@covenant/compute-x402-client",
+      "packageVersion": "0.2.0",
+      "identity": {
+        "requestId": "ab510efd-d01e-45b1-b490-242b9d1a8549",
+        "threadId": "covenant-langgraph-support-5174d32c-8689-4bb9-addb-cd3c24583df9"
+      },
+      "counters": {
+        "walletSignatures": 0,
+        "gatewayQuotePosts": 0,
+        "gatewayPaidPosts": 1,
+        "rpcCalls": 2,
+        "plannerDispatches": 0,
+        "plannerCached": 0
+      },
+      "before": {
+        "provider": {
+          "lifetime": 610475,
+          "daily": 610475,
+          "unresolved": 0
+        },
+        "customer": {
+          "purchases": 4,
+          "reservedMicroUsdc": 200000,
+          "completed": 2
+        }
+      },
+      "after": {
+        "provider": {
+          "lifetime": 610475,
+          "daily": 610475,
+          "unresolved": 0
+        },
+        "customer": {
+          "purchases": 4,
+          "reservedMicroUsdc": 200000,
+          "completed": 3
+        }
+      },
+      "result": {
+        "phase": "purchase",
+        "startedAt": "2026-10-18T15:07:44.990Z",
+        "finishedAt": "2026-10-18T15:07:45.271Z",
+        "identity": {
+          "requestId": "ab510efd-d01e-45b1-b490-242b9d1a8549",
+          "threadId": "covenant-langgraph-support-5174d32c-8689-4bb9-addb-cd3c24583df9",
+          "model": "claude-haiku-4.5",
+          "ticketSha256": "c556f390d0a6cb7132d6c68bd93f5c216d34a38bb378256d37344bc10e3d3efb",
+          "version": 1
+        },
+        "next": [
+          "agent"
+        ],
+        "messages": [
+          {
+            "type": "human",
+            "content": "Sample support ticket: I switched to the annual plan yesterday, but my billing page shows both a monthly charge and an annual charge. I also cannot download the invoice. Our finance team needs it by Friday. Can you help?"
+          },
+          {
+            "type": "ai",
+            "content": "I'll use the covenant_inference tool to produce a professional triage analysis and draft reply for this ticket.",
+            "tool_calls": [
+              {
+                "name": "covenant_inference",
+                "args": {
+                  "prompt": "You are a support triage specialist. Analyze this customer support ticket and provide:\n\n1. **Category**: Assign one primary category (e.g., Billing, Technical, Account, Feature Request, etc.)\n2. **Priority**: Assign priority level (Low, Medium, High, Urgent) with a brief reason\n3. **Evidence to Request**: List 2-3 specific pieces of information the support agent should gather before escalating\n4. **Draft Reply**: Write a concise, empathetic response (2-3 sentences) that acknowledges the issue, validates urgency, and sets next steps without promising a specific resolution time or confirming a refund\n\n**Ticket:**\n\"I switched to the annual plan yesterday, but my billing page shows both a monthly charge and an annual charge. I also cannot download the invoice. Our finance team needs it by Friday. Can you help?\"\n\nProvide only these four sections in a clear, structured format."
+                },
+                "type": "tool_call",
+                "id": "toolu_bdrk_01X3o1X8sjyfMMgBAwiZK9ds"
+              }
+            ],
+            "usage": {
+              "output_tokens": 280,
+              "input_tokens": 899,
+              "total_tokens": 1179,
+              "input_token_details": {
+                "audio": 0,
+                "cache_read": 0,
+                "cache_creation": 0
+              },
+              "output_token_details": {
+                "audio": 0,
+                "reasoning": 0
+              }
+            }
+          },
+          {
+            "type": "tool",
+            "content": "{\"status\":\"completed\",\"requestId\":\"ab510efd-d01e-45b1-b490-242b9d1a8549\",\"text\":\"# Support Ticket Analysis\\n\\n## 1. Category\\n**Billing**\\n\\n## 2. Priority\\n**High** – Customer reports duplicate charges on their account and has a time-sensitive business requirement (invoice needed by Friday for finance team reconciliation).\\n\\n## 3. Evidence to Request\\n- Screenshots of the billing page showing both the monthly and annual charges (dates, amounts, and plan names)\\n- Confirmation of the exact date/time the plan switch was initiated\\n- Any error messages or details about the invoice download failure (e.g., \\\"file won't load,\\\" \\\"button unresponsive,\\\" etc.)\\n\\n## 4. Draft Reply\\nI understand how concerning it is to see duplicate charges, especially with your finance team's Friday deadline. To help our billing agent investigate this quickly, could you share screenshots of your billing page showing both charges, along with details about when you switched plans and any error messages you saw when trying to download the invoice? A human billing agent will review this to clarify what happened and get you the documentation you need.\",\"amountMicroUsdc\":50000,\"transaction\":\"2UQMqsZvHs1o1XYocySKkRNX9h3dNLnvkeXSH9obBsaqSvZ3saneaoB83hkS5F8opEvz8bh269oWZH3EW5AX16QQ\",\"receiptVerified\":true}",
+            "tool_call_id": "toolu_bdrk_01X3o1X8sjyfMMgBAwiZK9ds",
+            "name": "covenant_inference",
+            "artifact": {
+              "status": "completed",
+              "requestId": "ab510efd-d01e-45b1-b490-242b9d1a8549",
+              "requestSha256": "b861a35af8890a1d0b7bb234bed586c50fe95271e686b5f6f35d17419679e55c",
+              "amountMicroUsdc": 50000,
+              "settlement": {
+                "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+                "payer": "7rozFdk421fc7DT3MpPJnD4ndXY81hBY6DzmKauZgzTB",
+                "success": true,
+                "transaction": "2UQMqsZvHs1o1XYocySKkRNX9h3dNLnvkeXSH9obBsaqSvZ3saneaoB83hkS5F8opEvz8bh269oWZH3EW5AX16QQ"
+              },
+              "text": "# Support Ticket Analysis\n\n## 1. Category\n**Billing**\n\n## 2. Priority\n**High** – Customer reports duplicate charges on their account and has a time-sensitive business requirement (invoice needed by Friday for finance team reconciliation).\n\n## 3. Evidence to Request\n- Screenshots of the billing page showing both the monthly and annual charges (dates, amounts, and plan names)\n- Confirmation of the exact date/time the plan switch was initiated\n- Any error messages or details about the invoice download failure (e.g., \"file won't load,\" \"button unresponsive,\" etc.)\n\n## 4. Draft Reply\nI understand how concerning it is to see duplicate charges, especially with your finance team's Friday deadline. To help our billing agent investigate this quickly, could you share screenshots of your billing page showing both charges, along with details about when you switched plans and any error messages you saw when trying to download the invoice? A human billing agent will review this to clarify what happened and get you the documentation you need.",
+              "result": {
+                "choices": [
+                  {
+                    "finish_reason": "stop",
+                    "index": 0,
+                    "message": {
+                      "content": "# Support Ticket Analysis\n\n## 1. Category\n**Billing**\n\n## 2. Priority\n**High** – Customer reports duplicate charges on their account and has a time-sensitive business requirement (invoice needed by Friday for finance team reconciliation).\n\n## 3. Evidence to Request\n- Screenshots of the billing page showing both the monthly and annual charges (dates, amounts, and plan names)\n- Confirmation of the exact date/time the plan switch was initiated\n- Any error messages or details about the invoice download failure (e.g., \"file won't load,\" \"button unresponsive,\" etc.)\n\n## 4. Draft Reply\nI understand how concerning it is to see duplicate charges, especially with your finance team's Friday deadline. To help our billing agent investigate this quickly, could you share screenshots of your billing page showing both charges, along with details about when you switched plans and any error messages you saw when trying to download the invoice? A human billing agent will review this to clarify what happened and get you the documentation you need.",
+                      "role": "assistant"
+                    }
+                  }
+                ],
+                "covenant": {
+                  "envelope": {
+                    "payload": {
+                      "buyer": {
+                        "display": "compute-gateway@local",
+                        "pubkey": "F9KjruGNU9f9tr5RXiBZfENeD6f8qAMUX5LQDEt9qdn1"
+                      },
+                      "capability_requirement": {
+                        "gpu_class": null,
+                        "kind": "inference_call",
+                        "max_duration_secs": 45,
+                        "min_reputation_bps": null,
+                        "min_vram_gb": null,
+                        "model_id": "claude-haiku-4.5"
+                      },
+                      "deadline_ms": 45000,
+                      "idempotency": {
+                        "duplicate_safety": "idempotent",
+                        "key": "ed4fc8c9-0781-40d1-b45a-3987e9ddc91f"
+                      },
+                      "input": [
+                        {
+                          "type": "json",
+                          "value": {
+                            "messages": [
+                              {
+                                "content": "This is a draft for a human support agent to review, not an action on a customer account. You have not accessed any account, flagged a case, escalated a ticket, issued a refund, restored access, or contacted anyone. Never claim those actions happened. Do not promise a reply or action today or confirm that a charge is a duplicate. Acknowledge the reported problem, ask for the evidence needed, and say that a human billing agent can review it. Keep the customer reply to two or three sentences.",
+                                "role": "system"
+                              },
+                              {
+                                "content": "You are a support triage specialist. Analyze this customer support ticket and provide:\n\n1. **Category**: Assign one primary category (e.g., Billing, Technical, Account, Feature Request, etc.)\n2. **Priority**: Assign priority level (Low, Medium, High, Urgent) with a brief reason\n3. **Evidence to Request**: List 2-3 specific pieces of information the support agent should gather before escalating\n4. **Draft Reply**: Write a concise, empathetic response (2-3 sentences) that acknowledges the issue, validates urgency, and sets next steps without promising a specific resolution time or confirming a refund\n\n**Ticket:**\n\"I switched to the annual plan yesterday, but my billing page shows both a monthly charge and an annual charge. I also cannot download the invoice. Our finance team needs it by Friday. Can you help?\"\n\nProvide only these four sections in a clear, structured format.",
+                                "role": "user"
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "type": "json",
+                          "value": {
+                            "generation": {
+                              "max_tokens": 2048,
+                              "temperature": 0.2
+                            }
+                          }
+                        }
+                      ],
+                      "issued_at_ms": 1792336042937,
+                      "job_id": "ed4fc8c9-0781-40d1-b45a-3987e9ddc91f",
+                      "kind": "inference_call",
+                      "price_micro_usdc": 30000
+                    },
+                    "payload_json": "{\"job_id\":\"ed4fc8c9-0781-40d1-b45a-3987e9ddc91f\",\"buyer\":{\"display\":\"compute-gateway@local\",\"pubkey\":\"F9KjruGNU9f9tr5RXiBZfENeD6f8qAMUX5LQDEt9qdn1\"},\"kind\":\"inference_call\",\"capability_requirement\":{\"gpu_class\":null,\"min_vram_gb\":null,\"model_id\":\"claude-haiku-4.5\",\"kind\":\"inference_call\",\"max_duration_secs\":45,\"min_reputation_bps\":null},\"input\":[{\"type\":\"json\",\"value\":{\"messages\":[{\"content\":\"This is a draft for a human support agent to review, not an action on a customer account. You have not accessed any account, flagged a case, escalated a ticket, issued a refund, restored access, or contacted anyone. Never claim those actions happened. Do not promise a reply or action today or confirm that a charge is a duplicate. Acknowledge the reported problem, ask for the evidence needed, and say that a human billing agent can review it. Keep the customer reply to two or three sentences.\",\"role\":\"system\"},{\"content\":\"You are a support triage specialist. Analyze this customer support ticket and provide:\\n\\n1. **Category**: Assign one primary category (e.g., Billing, Technical, Account, Feature Request, etc.)\\n2. **Priority**: Assign priority level (Low, Medium, High, Urgent) with a brief reason\\n3. **Evidence to Request**: List 2-3 specific pieces of information the support agent should gather before escalating\\n4. **Draft Reply**: Write a concise, empathetic response (2-3 sentences) that acknowledges the issue, validates urgency, and sets next steps without promising a specific resolution time or confirming a refund\\n\\n**Ticket:**\\n\\\"I switched to the annual plan yesterday, but my billing page shows both a monthly charge and an annual charge. I also cannot download the invoice. Our finance team needs it by Friday. Can you help?\\\"\\n\\nProvide only these four sections in a clear, structured format.\",\"role\":\"user\"}]}},{\"type\":\"json\",\"value\":{\"generation\":{\"max_tokens\":2048,\"temperature\":0.2}}}],\"price_micro_usdc\":30000,\"deadline_ms\":45000,\"idempotency\":{\"duplicate_safety\":\"idempotent\",\"key\":\"ed4fc8c9-0781-40d1-b45a-3987e9ddc91f\"},\"issued_at_ms\":1792336042937}",
+                    "signature_b58": "qRJAkasMTQANNrCVM8oGLpjyLzRww4KvQmheCUUrCroQZxtqdqSv6mk8gxpmFUV5DQZ5V86ujt99c4ghPGdCAyv",
+                    "signer_pubkey_b58": "F9KjruGNU9f9tr5RXiBZfENeD6f8qAMUX5LQDEt9qdn1"
+                  },
+                  "job_id": "ed4fc8c9-0781-40d1-b45a-3987e9ddc91f",
+                  "output": [
+                    {
+                      "text": "# Support Ticket Analysis\n\n## 1. Category\n**Billing**\n\n## 2. Priority\n**High** – Customer reports duplicate charges on their account and has a time-sensitive business requirement (invoice needed by Friday for finance team reconciliation).\n\n## 3. Evidence to Request\n- Screenshots of the billing page showing both the monthly and annual charges (dates, amounts, and plan names)\n- Confirmation of the exact date/time the plan switch was initiated\n- Any error messages or details about the invoice download failure (e.g., \"file won't load,\" \"button unresponsive,\" etc.)\n\n## 4. Draft Reply\nI understand how concerning it is to see duplicate charges, especially with your finance team's Friday deadline. To help our billing agent investigate this quickly, could you share screenshots of your billing page showing both charges, along with details about when you switched plans and any error messages you saw when trying to download the invoice? A human billing agent will review this to clarify what happened and get you the documentation you need.",
+                      "type": "text"
+                    },
+                    {
+                      "type": "json",
+                      "value": {
+                        "model_mapping": "usepod-openrouter-haiku-4.5-v1",
+                        "provider_pin": "openrouter",
+                        "provider_reported": "openrouter",
+                        "reported_model": "anthropic/claude-haiku-4.5",
+                        "requested_model": "claude-haiku-4.5",
+                        "route_reported": "centralized",
+                        "type": "provider_identity",
+                        "upstream": "usepod",
+                        "upstream_requested_model": "anthropic/claude-haiku-4.5",
+                        "upstream_response_sha256": "904eb9659e1951991b5a69dfbcfbd84d4bab9d703ea73b2be4e870c1a666a520",
+                        "version": 1
+                      }
+                    }
+                  ],
+                  "output_json": "[{\"type\":\"text\",\"text\":\"# Support Ticket Analysis\\n\\n## 1. Category\\n**Billing**\\n\\n## 2. Priority\\n**High** – Customer reports duplicate charges on their account and has a time-sensitive business requirement (invoice needed by Friday for finance team reconciliation).\\n\\n## 3. Evidence to Request\\n- Screenshots of the billing page showing both the monthly and annual charges (dates, amounts, and plan names)\\n- Confirmation of the exact date/time the plan switch was initiated\\n- Any error messages or details about the invoice download failure (e.g., \\\"file won't load,\\\" \\\"button unresponsive,\\\" etc.)\\n\\n## 4. Draft Reply\\nI understand how concerning it is to see duplicate charges, especially with your finance team's Friday deadline. To help our billing agent investigate this quickly, could you share screenshots of your billing page showing both charges, along with details about when you switched plans and any error messages you saw when trying to download the invoice? A human billing agent will review this to clarify what happened and get you the documentation you need.\"},{\"type\":\"json\",\"value\":{\"model_mapping\":\"usepod-openrouter-haiku-4.5-v1\",\"provider_pin\":\"openrouter\",\"provider_reported\":\"openrouter\",\"reported_model\":\"anthropic/claude-haiku-4.5\",\"requested_model\":\"claude-haiku-4.5\",\"route_reported\":\"centralized\",\"type\":\"provider_identity\",\"upstream\":\"usepod\",\"upstream_requested_model\":\"anthropic/claude-haiku-4.5\",\"upstream_response_sha256\":\"904eb9659e1951991b5a69dfbcfbd84d4bab9d703ea73b2be4e870c1a666a520\",\"version\":1}}]",
+                  "quote_id": "ab510efd-d01e-45b1-b490-242b9d1a8549",
+                  "receipt": {
+                    "receipt": {
+                      "executed_at_ms": 1792336046784,
+                      "job_hash_hex": "2d39f18a846e32123a37f6fe120cb45af04f51792f482b06b70211132ac3c0e0",
+                      "job_id": "ed4fc8c9-0781-40d1-b45a-3987e9ddc91f",
+                      "meter": {
+                        "finish_reason": "stop",
+                        "gpu_seconds": null,
+                        "tokens_in": 318,
+                        "tokens_out": 224,
+                        "wall_ms": 3550
+                      },
+                      "node_audit_root_hex": "aab305e8df82a688453e078e0819a38ab80de00e66781b6157b7b953a5cf3f0b",
+                      "operator": {
+                        "display": "operator@compute",
+                        "pubkey": "9fefASd52qfR2Q8P81yXtkHu9E4q9KvW58x2ixBAAvLR"
+                      },
+                      "price_micro_usdc": 30000,
+                      "result_hash_hex": "a17d6f509cfd2395735678eb7401e9ace3f93fa29ced2b7f1cfc799b245fd424",
+                      "status": "ok"
+                    },
+                    "receipt_json": "{\"job_id\":\"ed4fc8c9-0781-40d1-b45a-3987e9ddc91f\",\"operator\":{\"display\":\"operator@compute\",\"pubkey\":\"9fefASd52qfR2Q8P81yXtkHu9E4q9KvW58x2ixBAAvLR\"},\"job_hash_hex\":\"2d39f18a846e32123a37f6fe120cb45af04f51792f482b06b70211132ac3c0e0\",\"result_hash_hex\":\"a17d6f509cfd2395735678eb7401e9ace3f93fa29ced2b7f1cfc799b245fd424\",\"meter\":{\"wall_ms\":3550,\"tokens_in\":318,\"tokens_out\":224,\"gpu_seconds\":null,\"finish_reason\":\"stop\"},\"price_micro_usdc\":30000,\"status\":\"ok\",\"executed_at_ms\":1792336046784,\"node_audit_root_hex\":\"aab305e8df82a688453e078e0819a38ab80de00e66781b6157b7b953a5cf3f0b\"}",
+                    "signature_b58": "4ebKPrF1qKt8ixR7xJAQyrqCou3G7AXE52nPqBeHhn4USzFVnoG9kqqMZvFPVGgTB4LeB21RFHCpZNYr6cxfhYwj",
+                    "signer_pubkey_b58": "9fefASd52qfR2Q8P81yXtkHu9E4q9KvW58x2ixBAAvLR"
+                  },
+                  "request_sha256": "b861a35af8890a1d0b7bb234bed586c50fe95271e686b5f6f35d17419679e55c"
+                },
+                "created": 1792336047,
+                "id": "chatcmpl-ed4fc8c9-0781-40d1-b45a-3987e9ddc91f",
+                "model": "claude-haiku-4.5",
+                "object": "chat.completion"
+              }
+            }
+          }
+        ],
+        "checkpoint": {
+          "configurable": {
+            "thread_id": "covenant-langgraph-support-5174d32c-8689-4bb9-addb-cd3c24583df9",
+            "checkpoint_ns": "",
+            "checkpoint_id": "1f1cb05a-c634-6d20-8003-5d001a5d0703"
+          }
+        },
+        "purchase": {
+          "status": "completed",
+          "requestId": "ab510efd-d01e-45b1-b490-242b9d1a8549",
+          "requestSha256": "b861a35af8890a1d0b7bb234bed586c50fe95271e686b5f6f35d17419679e55c",
+          "amountMicroUsdc": 50000,
+          "settlement": {
+            "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+            "payer": "7rozFdk421fc7DT3MpPJnD4ndXY81hBY6DzmKauZgzTB",
+            "success": true,
+            "transaction": "2UQMqsZvHs1o1XYocySKkRNX9h3dNLnvkeXSH9obBsaqSvZ3saneaoB83hkS5F8opEvz8bh269oWZH3EW5AX16QQ"
+          },
+          "text": "# Support Ticket Analysis\n\n## 1. Category\n**Billing**\n\n## 2. Priority\n**High** – Customer reports duplicate charges on their account and has a time-sensitive business requirement (invoice needed by Friday for finance team reconciliation).\n\n## 3. Evidence to Request\n- Screenshots of the billing page showing both the monthly and annual charges (dates, amounts, and plan names)\n- Confirmation of the exact date/time the plan switch was initiated\n- Any error messages or details about the invoice download failure (e.g., \"file won't load,\" \"button unresponsive,\" etc.)\n\n## 4. Draft Reply\nI understand how concerning it is to see duplicate charges, especially with your finance team's Friday deadline. To help our billing agent investigate this quickly, could you share screenshots of your billing page showing both charges, along with details about when you switched plans and any error messages you saw when trying to download the invoice? A human billing agent will review this to clarify what happened and get you the documentation you need.",
+          "result": {
+            "choices": [
+              {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {
+                  "content": "# Support Ticket Analysis\n\n## 1. Category\n**Billing**\n\n## 2. Priority\n**High** – Customer reports duplicate charges on their account and has a time-sensitive business requirement (invoice needed by Friday for finance team reconciliation).\n\n## 3. Evidence to Request\n- Screenshots of the billing page showing both the monthly and annual charges (dates, amounts, and plan names)\n- Confirmation of the exact date/time the plan switch was initiated\n- Any error messages or details about the invoice download failure (e.g., \"file won't load,\" \"button unresponsive,\" etc.)\n\n## 4. Draft Reply\nI understand how concerning it is to see duplicate charges, especially with your finance team's Friday deadline. To help our billing agent investigate this quickly, could you share screenshots of your billing page showing both charges, along with details about when you switched plans and any error messages you saw when trying to download the invoice? A human billing agent will review this to clarify what happened and get you the documentation you need.",
+                  "role": "assistant"
+                }
+              }
+            ],
+            "covenant": {
+              "envelope": {
+                "payload": {
+                  "buyer": {
+                    "display": "compute-gateway@local",
+                    "pubkey": "F9KjruGNU9f9tr5RXiBZfENeD6f8qAMUX5LQDEt9qdn1"
+                  },
+                  "capability_requirement": {
+                    "gpu_class": null,
+                    "kind": "inference_call",
+                    "max_duration_secs": 45,
+                    "min_reputation_bps": null,
+                    "min_vram_gb": null,
+                    "model_id": "claude-haiku-4.5"
+                  },
+                  "deadline_ms": 45000,
+                  "idempotency": {
+                    "duplicate_safety": "idempotent",
+                    "key": "ed4fc8c9-0781-40d1-b45a-3987e9ddc91f"
+                  },
+                  "input": [
+                    {
+                      "type": "json",
+                      "value": {
+                        "messages": [
+                          {
+                            "content": "This is a draft for a human support agent to review, not an action on a customer account. You have not accessed any account, flagged a case, escalated a ticket, issued a refund, restored access, or contacted anyone. Never claim those actions happened. Do not promise a reply or action today or confirm that a charge is a duplicate. Acknowledge the reported problem, ask for the evidence needed, and say that a human billing agent can review it. Keep the customer reply to two or three sentences.",
+                            "role": "system"
+                          },
+                          {
+                            "content": "You are a support triage specialist. Analyze this customer support ticket and provide:\n\n1. **Category**: Assign one primary category (e.g., Billing, Technical, Account, Feature Request, etc.)\n2. **Priority**: Assign priority level (Low, Medium, High, Urgent) with a brief reason\n3. **Evidence to Request**: List 2-3 specific pieces of information the support agent should gather before escalating\n4. **Draft Reply**: Write a concise, empathetic response (2-3 sentences) that acknowledges the issue, validates urgency, and sets next steps without promising a specific resolution time or confirming a refund\n\n**Ticket:**\n\"I switched to the annual plan yesterday, but my billing page shows both a monthly charge and an annual charge. I also cannot download the invoice. Our finance team needs it by Friday. Can you help?\"\n\nProvide only these four sections in a clear, structured format.",
+                            "role": "user"
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "type": "json",
+                      "value": {
+                        "generation": {
+                          "max_tokens": 2048,
+                          "temperature": 0.2
+                        }
+                      }
+                    }
+                  ],
+                  "issued_at_ms": 1792336042937,
+                  "job_id": "ed4fc8c9-0781-40d1-b45a-3987e9ddc91f",
+                  "kind": "inference_call",
+                  "price_micro_usdc": 30000
+                },
+                "payload_json": "{\"job_id\":\"ed4fc8c9-0781-40d1-b45a-3987e9ddc91f\",\"buyer\":{\"display\":\"compute-gateway@local\",\"pubkey\":\"F9KjruGNU9f9tr5RXiBZfENeD6f8qAMUX5LQDEt9qdn1\"},\"kind\":\"inference_call\",\"capability_requirement\":{\"gpu_class\":null,\"min_vram_gb\":null,\"model_id\":\"claude-haiku-4.5\",\"kind\":\"inference_call\",\"max_duration_secs\":45,\"min_reputation_bps\":null},\"input\":[{\"type\":\"json\",\"value\":{\"messages\":[{\"content\":\"This is a draft for a human support agent to review, not an action on a customer account. You have not accessed any account, flagged a case, escalated a ticket, issued a refund, restored access, or contacted anyone. Never claim those actions happened. Do not promise a reply or action today or confirm that a charge is a duplicate. Acknowledge the reported problem, ask for the evidence needed, and say that a human billing agent can review it. Keep the customer reply to two or three sentences.\",\"role\":\"system\"},{\"content\":\"You are a support triage specialist. Analyze this customer support ticket and provide:\\n\\n1. **Category**: Assign one primary category (e.g., Billing, Technical, Account, Feature Request, etc.)\\n2. **Priority**: Assign priority level (Low, Medium, High, Urgent) with a brief reason\\n3. **Evidence to Request**: List 2-3 specific pieces of information the support agent should gather before escalating\\n4. **Draft Reply**: Write a concise, empathetic response (2-3 sentences) that acknowledges the issue, validates urgency, and sets next steps without promising a specific resolution time or confirming a refund\\n\\n**Ticket:**\\n\\\"I switched to the annual plan yesterday, but my billing page shows both a monthly charge and an annual charge. I also cannot download the invoice. Our finance team needs it by Friday. Can you help?\\\"\\n\\nProvide only these four sections in a clear, structured format.\",\"role\":\"user\"}]}},{\"type\":\"json\",\"value\":{\"generation\":{\"max_tokens\":2048,\"temperature\":0.2}}}],\"price_micro_usdc\":30000,\"deadline_ms\":45000,\"idempotency\":{\"duplicate_safety\":\"idempotent\",\"key\":\"ed4fc8c9-0781-40d1-b45a-3987e9ddc91f\"},\"issued_at_ms\":1792336042937}",
+                "signature_b58": "qRJAkasMTQANNrCVM8oGLpjyLzRww4KvQmheCUUrCroQZxtqdqSv6mk8gxpmFUV5DQZ5V86ujt99c4ghPGdCAyv",
+                "signer_pubkey_b58": "F9KjruGNU9f9tr5RXiBZfENeD6f8qAMUX5LQDEt9qdn1"
+              },
+              "job_id": "ed4fc8c9-0781-40d1-b45a-3987e9ddc91f",
+              "output": [
+                {
+                  "text": "# Support Ticket Analysis\n\n## 1. Category\n**Billing**\n\n## 2. Priority\n**High** – Customer reports duplicate charges on their account and has a time-sensitive business requirement (invoice needed by Friday for finance team reconciliation).\n\n## 3. Evidence to Request\n- Screenshots of the billing page showing both the monthly and annual charges (dates, amounts, and plan names)\n- Confirmation of the exact date/time the plan switch was initiated\n- Any error messages or details about the invoice download failure (e.g., \"file won't load,\" \"button unresponsive,\" etc.)\n\n## 4. Draft Reply\nI understand how concerning it is to see duplicate charges, especially with your finance team's Friday deadline. To help our billing agent investigate this quickly, could you share screenshots of your billing page showing both charges, along with details about when you switched plans and any error messages you saw when trying to download the invoice? A human billing agent will review this to clarify what happened and get you the documentation you need.",
+                  "type": "text"
+                },
+                {
+                  "type": "json",
+                  "value": {
+                    "model_mapping": "usepod-openrouter-haiku-4.5-v1",
+                    "provider_pin": "openrouter",
+                    "provider_reported": "openrouter",
+                    "reported_model": "anthropic/claude-haiku-4.5",
+                    "requested_model": "claude-haiku-4.5",
+                    "route_reported": "centralized",
+                    "type": "provider_identity",
+                    "upstream": "usepod",
+                    "upstream_requested_model": "anthropic/claude-haiku-4.5",
+                    "upstream_response_sha256": "904eb9659e1951991b5a69dfbcfbd84d4bab9d703ea73b2be4e870c1a666a520",
+                    "version": 1
+                  }
+                }
+              ],
+              "output_json": "[{\"type\":\"text\",\"text\":\"# Support Ticket Analysis\\n\\n## 1. Category\\n**Billing**\\n\\n## 2. Priority\\n**High** – Customer reports duplicate charges on their account and has a time-sensitive business requirement (invoice needed by Friday for finance team reconciliation).\\n\\n## 3. Evidence to Request\\n- Screenshots of the billing page showing both the monthly and annual charges (dates, amounts, and plan names)\\n- Confirmation of the exact date/time the plan switch was initiated\\n- Any error messages or details about the invoice download failure (e.g., \\\"file won't load,\\\" \\\"button unresponsive,\\\" etc.)\\n\\n## 4. Draft Reply\\nI understand how concerning it is to see duplicate charges, especially with your finance team's Friday deadline. To help our billing agent investigate this quickly, could you share screenshots of your billing page showing both charges, along with details about when you switched plans and any error messages you saw when trying to download the invoice? A human billing agent will review this to clarify what happened and get you the documentation you need.\"},{\"type\":\"json\",\"value\":{\"model_mapping\":\"usepod-openrouter-haiku-4.5-v1\",\"provider_pin\":\"openrouter\",\"provider_reported\":\"openrouter\",\"reported_model\":\"anthropic/claude-haiku-4.5\",\"requested_model\":\"claude-haiku-4.5\",\"route_reported\":\"centralized\",\"type\":\"provider_identity\",\"upstream\":\"usepod\",\"upstream_requested_model\":\"anthropic/claude-haiku-4.5\",\"upstream_response_sha256\":\"904eb9659e1951991b5a69dfbcfbd84d4bab9d703ea73b2be4e870c1a666a520\",\"version\":1}}]",
+              "quote_id": "ab510efd-d01e-45b1-b490-242b9d1a8549",
+              "receipt": {
+                "receipt": {
+                  "executed_at_ms": 1792336046784,
+                  "job_hash_hex": "2d39f18a846e32123a37f6fe120cb45af04f51792f482b06b70211132ac3c0e0",
+                  "job_id": "ed4fc8c9-0781-40d1-b45a-3987e9ddc91f",
+                  "meter": {
+                    "finish_reason": "stop",
+                    "gpu_seconds": null,
+                    "tokens_in": 318,
+                    "tokens_out": 224,
+                    "wall_ms": 3550
+                  },
+                  "node_audit_root_hex": "aab305e8df82a688453e078e0819a38ab80de00e66781b6157b7b953a5cf3f0b",
+                  "operator": {
+                    "display": "operator@compute",
+                    "pubkey": "9fefASd52qfR2Q8P81yXtkHu9E4q9KvW58x2ixBAAvLR"
+                  },
+                  "price_micro_usdc": 30000,
+                  "result_hash_hex": "a17d6f509cfd2395735678eb7401e9ace3f93fa29ced2b7f1cfc799b245fd424",
+                  "status": "ok"
+                },
+                "receipt_json": "{\"job_id\":\"ed4fc8c9-0781-40d1-b45a-3987e9ddc91f\",\"operator\":{\"display\":\"operator@compute\",\"pubkey\":\"9fefASd52qfR2Q8P81yXtkHu9E4q9KvW58x2ixBAAvLR\"},\"job_hash_hex\":\"2d39f18a846e32123a37f6fe120cb45af04f51792f482b06b70211132ac3c0e0\",\"result_hash_hex\":\"a17d6f509cfd2395735678eb7401e9ace3f93fa29ced2b7f1cfc799b245fd424\",\"meter\":{\"wall_ms\":3550,\"tokens_in\":318,\"tokens_out\":224,\"gpu_seconds\":null,\"finish_reason\":\"stop\"},\"price_micro_usdc\":30000,\"status\":\"ok\",\"executed_at_ms\":1792336046784,\"node_audit_root_hex\":\"aab305e8df82a688453e078e0819a38ab80de00e66781b6157b7b953a5cf3f0b\"}",
+                "signature_b58": "4ebKPrF1qKt8ixR7xJAQyrqCou3G7AXE52nPqBeHhn4USzFVnoG9kqqMZvFPVGgTB4LeB21RFHCpZNYr6cxfhYwj",
+                "signer_pubkey_b58": "9fefASd52qfR2Q8P81yXtkHu9E4q9KvW58x2ixBAAvLR"
+              },
+              "request_sha256": "b861a35af8890a1d0b7bb234bed586c50fe95271e686b5f6f35d17419679e55c"
+            },
+            "created": 1792336047,
+            "id": "chatcmpl-ed4fc8c9-0781-40d1-b45a-3987e9ddc91f",
+            "model": "claude-haiku-4.5",
+            "object": "chat.completion"
+          }
+        }
+      }
+    },
+    "replay": {
+      "phase": "replay",
+      "observedAt": "2026-10-18T15:08:12.657Z",
+      "packageRoot": "/tmp/covenant-langchain-accepted-lmglpy2z/node_modules/@covenant/compute-x402-client",
+      "packageVersion": "0.2.0",
+      "identity": {
+        "requestId": "ab510efd-d01e-45b1-b490-242b9d1a8549",
+        "threadId": "covenant-langgraph-support-5174d32c-8689-4bb9-addb-cd3c24583df9"
+      },
+      "counters": {
+        "walletSignatures": 0,
+        "gatewayQuotePosts": 0,
+        "gatewayPaidPosts": 0,
+        "rpcCalls": 0,
+        "plannerDispatches": 0,
+        "plannerCached": 0
+      },
+      "before": {
+        "provider": {
+          "lifetime": 610475,
+          "daily": 610475,
+          "unresolved": 0
+        },
+        "customer": {
+          "purchases": 4,
+          "reservedMicroUsdc": 200000,
+          "completed": 3
+        }
+      },
+      "after": {
+        "provider": {
+          "lifetime": 610475,
+          "daily": 610475,
+          "unresolved": 0
+        },
+        "customer": {
+          "purchases": 4,
+          "reservedMicroUsdc": 200000,
+          "completed": 3
+        }
+      },
+      "result": {
+        "phase": "replay",
+        "startedAt": "2026-10-18T15:08:12.638Z",
+        "finishedAt": "2026-10-18T15:08:12.656Z",
+        "identity": {
+          "requestId": "ab510efd-d01e-45b1-b490-242b9d1a8549",
+          "threadId": "covenant-langgraph-support-5174d32c-8689-4bb9-addb-cd3c24583df9",
+          "model": "claude-haiku-4.5",
+          "ticketSha256": "c556f390d0a6cb7132d6c68bd93f5c216d34a38bb378256d37344bc10e3d3efb",
+          "version": 1
+        },
+        "next": [
+          "agent"
+        ],
+        "messages": [
+          {
+            "type": "human",
+            "content": "Sample support ticket: I switched to the annual plan yesterday, but my billing page shows both a monthly charge and an annual charge. I also cannot download the invoice. Our finance team needs it by Friday. Can you help?"
+          },
+          {
+            "type": "ai",
+            "content": "I'll use the covenant_inference tool to produce a professional triage analysis and draft reply for this ticket.",
+            "tool_calls": [
+              {
+                "name": "covenant_inference",
+                "args": {
+                  "prompt": "You are a support triage specialist. Analyze this customer support ticket and provide:\n\n1. **Category**: Assign one primary category (e.g., Billing, Technical, Account, Feature Request, etc.)\n2. **Priority**: Assign priority level (Low, Medium, High, Urgent) with a brief reason\n3. **Evidence to Request**: List 2-3 specific pieces of information the support agent should gather before escalating\n4. **Draft Reply**: Write a concise, empathetic response (2-3 sentences) that acknowledges the issue, validates urgency, and sets next steps without promising a specific resolution time or confirming a refund\n\n**Ticket:**\n\"I switched to the annual plan yesterday, but my billing page shows both a monthly charge and an annual charge. I also cannot download the invoice. Our finance team needs it by Friday. Can you help?\"\n\nProvide only these four sections in a clear, structured format."
+                },
+                "type": "tool_call",
+                "id": "toolu_bdrk_01X3o1X8sjyfMMgBAwiZK9ds"
+              }
+            ],
+            "usage": {
+              "output_tokens": 280,
+              "input_tokens": 899,
+              "total_tokens": 1179,
+              "input_token_details": {
+                "audio": 0,
+                "cache_read": 0,
+                "cache_creation": 0
+              },
+              "output_token_details": {
+                "audio": 0,
+                "reasoning": 0
+              }
+            }
+          },
+          {
+            "type": "tool",
+            "content": "{\"status\":\"completed\",\"requestId\":\"ab510efd-d01e-45b1-b490-242b9d1a8549\",\"text\":\"# Support Ticket Analysis\\n\\n## 1. Category\\n**Billing**\\n\\n## 2. Priority\\n**High** – Customer reports duplicate charges on their account and has a time-sensitive business requirement (invoice needed by Friday for finance team reconciliation).\\n\\n## 3. Evidence to Request\\n- Screenshots of the billing page showing both the monthly and annual charges (dates, amounts, and plan names)\\n- Confirmation of the exact date/time the plan switch was initiated\\n- Any error messages or details about the invoice download failure (e.g., \\\"file won't load,\\\" \\\"button unresponsive,\\\" etc.)\\n\\n## 4. Draft Reply\\nI understand how concerning it is to see duplicate charges, especially with your finance team's Friday deadline. To help our billing agent investigate this quickly, could you share screenshots of your billing page showing both charges, along with details about when you switched plans and any error messages you saw when trying to download the invoice? A human billing agent will review this to clarify what happened and get you the documentation you need.\",\"amountMicroUsdc\":50000,\"transaction\":\"2UQMqsZvHs1o1XYocySKkRNX9h3dNLnvkeXSH9obBsaqSvZ3saneaoB83hkS5F8opEvz8bh269oWZH3EW5AX16QQ\",\"receiptVerified\":true}",
+            "tool_call_id": "toolu_bdrk_01X3o1X8sjyfMMgBAwiZK9ds",
+            "name": "covenant_inference",
+            "artifact": {
+              "status": "completed",
+              "requestId": "ab510efd-d01e-45b1-b490-242b9d1a8549",
+              "requestSha256": "b861a35af8890a1d0b7bb234bed586c50fe95271e686b5f6f35d17419679e55c",
+              "amountMicroUsdc": 50000,
+              "settlement": {
+                "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+                "payer": "7rozFdk421fc7DT3MpPJnD4ndXY81hBY6DzmKauZgzTB",
+                "success": true,
+                "transaction": "2UQMqsZvHs1o1XYocySKkRNX9h3dNLnvkeXSH9obBsaqSvZ3saneaoB83hkS5F8opEvz8bh269oWZH3EW5AX16QQ"
+              },
+              "text": "# Support Ticket Analysis\n\n## 1. Category\n**Billing**\n\n## 2. Priority\n**High** – Customer reports duplicate charges on their account and has a time-sensitive business requirement (invoice needed by Friday for finance team reconciliation).\n\n## 3. Evidence to Request\n- Screenshots of the billing page showing both the monthly and annual charges (dates, amounts, and plan names)\n- Confirmation of the exact date/time the plan switch was initiated\n- Any error messages or details about the invoice download failure (e.g., \"file won't load,\" \"button unresponsive,\" etc.)\n\n## 4. Draft Reply\nI understand how concerning it is to see duplicate charges, especially with your finance team's Friday deadline. To help our billing agent investigate this quickly, could you share screenshots of your billing page showing both charges, along with details about when you switched plans and any error messages you saw when trying to download the invoice? A human billing agent will review this to clarify what happened and get you the documentation you need.",
+              "result": {
+                "choices": [
+                  {
+                    "finish_reason": "stop",
+                    "index": 0,
+                    "message": {
+                      "content": "# Support Ticket Analysis\n\n## 1. Category\n**Billing**\n\n## 2. Priority\n**High** – Customer reports duplicate charges on their account and has a time-sensitive business requirement (invoice needed by Friday for finance team reconciliation).\n\n## 3. Evidence to Request\n- Screenshots of the billing page showing both the monthly and annual charges (dates, amounts, and plan names)\n- Confirmation of the exact date/time the plan switch was initiated\n- Any error messages or details about the invoice download failure (e.g., \"file won't load,\" \"button unresponsive,\" etc.)\n\n## 4. Draft Reply\nI understand how concerning it is to see duplicate charges, especially with your finance team's Friday deadline. To help our billing agent investigate this quickly, could you share screenshots of your billing page showing both charges, along with details about when you switched plans and any error messages you saw when trying to download the invoice? A human billing agent will review this to clarify what happened and get you the documentation you need.",
+                      "role": "assistant"
+                    }
+                  }
+                ],
+                "covenant": {
+                  "envelope": {
+                    "payload": {
+                      "buyer": {
+                        "display": "compute-gateway@local",
+                        "pubkey": "F9KjruGNU9f9tr5RXiBZfENeD6f8qAMUX5LQDEt9qdn1"
+                      },
+                      "capability_requirement": {
+                        "gpu_class": null,
+                        "kind": "inference_call",
+                        "max_duration_secs": 45,
+                        "min_reputation_bps": null,
+                        "min_vram_gb": null,
+                        "model_id": "claude-haiku-4.5"
+                      },
+                      "deadline_ms": 45000,
+                      "idempotency": {
+                        "duplicate_safety": "idempotent",
+                        "key": "ed4fc8c9-0781-40d1-b45a-3987e9ddc91f"
+                      },
+                      "input": [
+                        {
+                          "type": "json",
+                          "value": {
+                            "messages": [
+                              {
+                                "content": "This is a draft for a human support agent to review, not an action on a customer account. You have not accessed any account, flagged a case, escalated a ticket, issued a refund, restored access, or contacted anyone. Never claim those actions happened. Do not promise a reply or action today or confirm that a charge is a duplicate. Acknowledge the reported problem, ask for the evidence needed, and say that a human billing agent can review it. Keep the customer reply to two or three sentences.",
+                                "role": "system"
+                              },
+                              {
+                                "content": "You are a support triage specialist. Analyze this customer support ticket and provide:\n\n1. **Category**: Assign one primary category (e.g., Billing, Technical, Account, Feature Request, etc.)\n2. **Priority**: Assign priority level (Low, Medium, High, Urgent) with a brief reason\n3. **Evidence to Request**: List 2-3 specific pieces of information the support agent should gather before escalating\n4. **Draft Reply**: Write a concise, empathetic response (2-3 sentences) that acknowledges the issue, validates urgency, and sets next steps without promising a specific resolution time or confirming a refund\n\n**Ticket:**\n\"I switched to the annual plan yesterday, but my billing page shows both a monthly charge and an annual charge. I also cannot download the invoice. Our finance team needs it by Friday. Can you help?\"\n\nProvide only these four sections in a clear, structured format.",
+                                "role": "user"
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "type": "json",
+                          "value": {
+                            "generation": {
+                              "max_tokens": 2048,
+                              "temperature": 0.2
+                            }
+                          }
+                        }
+                      ],
+                      "issued_at_ms": 1792336042937,
+                      "job_id": "ed4fc8c9-0781-40d1-b45a-3987e9ddc91f",
+                      "kind": "inference_call",
+                      "price_micro_usdc": 30000
+                    },
+                    "payload_json": "{\"job_id\":\"ed4fc8c9-0781-40d1-b45a-3987e9ddc91f\",\"buyer\":{\"display\":\"compute-gateway@local\",\"pubkey\":\"F9KjruGNU9f9tr5RXiBZfENeD6f8qAMUX5LQDEt9qdn1\"},\"kind\":\"inference_call\",\"capability_requirement\":{\"gpu_class\":null,\"min_vram_gb\":null,\"model_id\":\"claude-haiku-4.5\",\"kind\":\"inference_call\",\"max_duration_secs\":45,\"min_reputation_bps\":null},\"input\":[{\"type\":\"json\",\"value\":{\"messages\":[{\"content\":\"This is a draft for a human support agent to review, not an action on a customer account. You have not accessed any account, flagged a case, escalated a ticket, issued a refund, restored access, or contacted anyone. Never claim those actions happened. Do not promise a reply or action today or confirm that a charge is a duplicate. Acknowledge the reported problem, ask for the evidence needed, and say that a human billing agent can review it. Keep the customer reply to two or three sentences.\",\"role\":\"system\"},{\"content\":\"You are a support triage specialist. Analyze this customer support ticket and provide:\\n\\n1. **Category**: Assign one primary category (e.g., Billing, Technical, Account, Feature Request, etc.)\\n2. **Priority**: Assign priority level (Low, Medium, High, Urgent) with a brief reason\\n3. **Evidence to Request**: List 2-3 specific pieces of information the support agent should gather before escalating\\n4. **Draft Reply**: Write a concise, empathetic response (2-3 sentences) that acknowledges the issue, validates urgency, and sets next steps without promising a specific resolution time or confirming a refund\\n\\n**Ticket:**\\n\\\"I switched to the annual plan yesterday, but my billing page shows both a monthly charge and an annual charge. I also cannot download the invoice. Our finance team needs it by Friday. Can you help?\\\"\\n\\nProvide only these four sections in a clear, structured format.\",\"role\":\"user\"}]}},{\"type\":\"json\",\"value\":{\"generation\":{\"max_tokens\":2048,\"temperature\":0.2}}}],\"price_micro_usdc\":30000,\"deadline_ms\":45000,\"idempotency\":{\"duplicate_safety\":\"idempotent\",\"key\":\"ed4fc8c9-0781-40d1-b45a-3987e9ddc91f\"},\"issued_at_ms\":1792336042937}",
+                    "signature_b58": "qRJAkasMTQANNrCVM8oGLpjyLzRww4KvQmheCUUrCroQZxtqdqSv6mk8gxpmFUV5DQZ5V86ujt99c4ghPGdCAyv",
+                    "signer_pubkey_b58": "F9KjruGNU9f9tr5RXiBZfENeD6f8qAMUX5LQDEt9qdn1"
+                  },
+                  "job_id": "ed4fc8c9-0781-40d1-b45a-3987e9ddc91f",
+                  "output": [
+                    {
+                      "text": "# Support Ticket Analysis\n\n## 1. Category\n**Billing**\n\n## 2. Priority\n**High** – Customer reports duplicate charges on their account and has a time-sensitive business requirement (invoice needed by Friday for finance team reconciliation).\n\n## 3. Evidence to Request\n- Screenshots of the billing page showing both the monthly and annual charges (dates, amounts, and plan names)\n- Confirmation of the exact date/time the plan switch was initiated\n- Any error messages or details about the invoice download failure (e.g., \"file won't load,\" \"button unresponsive,\" etc.)\n\n## 4. Draft Reply\nI understand how concerning it is to see duplicate charges, especially with your finance team's Friday deadline. To help our billing agent investigate this quickly, could you share screenshots of your billing page showing both charges, along with details about when you switched plans and any error messages you saw when trying to download the invoice? A human billing agent will review this to clarify what happened and get you the documentation you need.",
+                      "type": "text"
+                    },
+                    {
+                      "type": "json",
+                      "value": {
+                        "model_mapping": "usepod-openrouter-haiku-4.5-v1",
+                        "provider_pin": "openrouter",
+                        "provider_reported": "openrouter",
+                        "reported_model": "anthropic/claude-haiku-4.5",
+                        "requested_model": "claude-haiku-4.5",
+                        "route_reported": "centralized",
+                        "type": "provider_identity",
+                        "upstream": "usepod",
+                        "upstream_requested_model": "anthropic/claude-haiku-4.5",
+                        "upstream_response_sha256": "904eb9659e1951991b5a69dfbcfbd84d4bab9d703ea73b2be4e870c1a666a520",
+                        "version": 1
+                      }
+                    }
+                  ],
+                  "output_json": "[{\"type\":\"text\",\"text\":\"# Support Ticket Analysis\\n\\n## 1. Category\\n**Billing**\\n\\n## 2. Priority\\n**High** – Customer reports duplicate charges on their account and has a time-sensitive business requirement (invoice needed by Friday for finance team reconciliation).\\n\\n## 3. Evidence to Request\\n- Screenshots of the billing page showing both the monthly and annual charges (dates, amounts, and plan names)\\n- Confirmation of the exact date/time the plan switch was initiated\\n- Any error messages or details about the invoice download failure (e.g., \\\"file won't load,\\\" \\\"button unresponsive,\\\" etc.)\\n\\n## 4. Draft Reply\\nI understand how concerning it is to see duplicate charges, especially with your finance team's Friday deadline. To help our billing agent investigate this quickly, could you share screenshots of your billing page showing both charges, along with details about when you switched plans and any error messages you saw when trying to download the invoice? A human billing agent will review this to clarify what happened and get you the documentation you need.\"},{\"type\":\"json\",\"value\":{\"model_mapping\":\"usepod-openrouter-haiku-4.5-v1\",\"provider_pin\":\"openrouter\",\"provider_reported\":\"openrouter\",\"reported_model\":\"anthropic/claude-haiku-4.5\",\"requested_model\":\"claude-haiku-4.5\",\"route_reported\":\"centralized\",\"type\":\"provider_identity\",\"upstream\":\"usepod\",\"upstream_requested_model\":\"anthropic/claude-haiku-4.5\",\"upstream_response_sha256\":\"904eb9659e1951991b5a69dfbcfbd84d4bab9d703ea73b2be4e870c1a666a520\",\"version\":1}}]",
+                  "quote_id": "ab510efd-d01e-45b1-b490-242b9d1a8549",
+                  "receipt": {
+                    "receipt": {
+                      "executed_at_ms": 1792336046784,
+                      "job_hash_hex": "2d39f18a846e32123a37f6fe120cb45af04f51792f482b06b70211132ac3c0e0",
+                      "job_id": "ed4fc8c9-0781-40d1-b45a-3987e9ddc91f",
+                      "meter": {
+                        "finish_reason": "stop",
+                        "gpu_seconds": null,
+                        "tokens_in": 318,
+                        "tokens_out": 224,
+                        "wall_ms": 3550
+                      },
+                      "node_audit_root_hex": "aab305e8df82a688453e078e0819a38ab80de00e66781b6157b7b953a5cf3f0b",
+                      "operator": {
+                        "display": "operator@compute",
+                        "pubkey": "9fefASd52qfR2Q8P81yXtkHu9E4q9KvW58x2ixBAAvLR"
+                      },
+                      "price_micro_usdc": 30000,
+                      "result_hash_hex": "a17d6f509cfd2395735678eb7401e9ace3f93fa29ced2b7f1cfc799b245fd424",
+                      "status": "ok"
+                    },
+                    "receipt_json": "{\"job_id\":\"ed4fc8c9-0781-40d1-b45a-3987e9ddc91f\",\"operator\":{\"display\":\"operator@compute\",\"pubkey\":\"9fefASd52qfR2Q8P81yXtkHu9E4q9KvW58x2ixBAAvLR\"},\"job_hash_hex\":\"2d39f18a846e32123a37f6fe120cb45af04f51792f482b06b70211132ac3c0e0\",\"result_hash_hex\":\"a17d6f509cfd2395735678eb7401e9ace3f93fa29ced2b7f1cfc799b245fd424\",\"meter\":{\"wall_ms\":3550,\"tokens_in\":318,\"tokens_out\":224,\"gpu_seconds\":null,\"finish_reason\":\"stop\"},\"price_micro_usdc\":30000,\"status\":\"ok\",\"executed_at_ms\":1792336046784,\"node_audit_root_hex\":\"aab305e8df82a688453e078e0819a38ab80de00e66781b6157b7b953a5cf3f0b\"}",
+                    "signature_b58": "4ebKPrF1qKt8ixR7xJAQyrqCou3G7AXE52nPqBeHhn4USzFVnoG9kqqMZvFPVGgTB4LeB21RFHCpZNYr6cxfhYwj",
+                    "signer_pubkey_b58": "9fefASd52qfR2Q8P81yXtkHu9E4q9KvW58x2ixBAAvLR"
+                  },
+                  "request_sha256": "b861a35af8890a1d0b7bb234bed586c50fe95271e686b5f6f35d17419679e55c"
+                },
+                "created": 1792336047,
+                "id": "chatcmpl-ed4fc8c9-0781-40d1-b45a-3987e9ddc91f",
+                "model": "claude-haiku-4.5",
+                "object": "chat.completion"
+              }
+            }
+          }
+        ],
+        "checkpoint": {
+          "configurable": {
+            "thread_id": "covenant-langgraph-support-5174d32c-8689-4bb9-addb-cd3c24583df9",
+            "checkpoint_ns": "",
+            "checkpoint_id": "1f1cb05b-cb66-60e0-8003-56748e737b23"
+          }
+        },
+        "purchase": {
+          "status": "completed",
+          "requestId": "ab510efd-d01e-45b1-b490-242b9d1a8549",
+          "requestSha256": "b861a35af8890a1d0b7bb234bed586c50fe95271e686b5f6f35d17419679e55c",
+          "amountMicroUsdc": 50000,
+          "settlement": {
+            "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+            "payer": "7rozFdk421fc7DT3MpPJnD4ndXY81hBY6DzmKauZgzTB",
+            "success": true,
+            "transaction": "2UQMqsZvHs1o1XYocySKkRNX9h3dNLnvkeXSH9obBsaqSvZ3saneaoB83hkS5F8opEvz8bh269oWZH3EW5AX16QQ"
+          },
+          "text": "# Support Ticket Analysis\n\n## 1. Category\n**Billing**\n\n## 2. Priority\n**High** – Customer reports duplicate charges on their account and has a time-sensitive business requirement (invoice needed by Friday for finance team reconciliation).\n\n## 3. Evidence to Request\n- Screenshots of the billing page showing both the monthly and annual charges (dates, amounts, and plan names)\n- Confirmation of the exact date/time the plan switch was initiated\n- Any error messages or details about the invoice download failure (e.g., \"file won't load,\" \"button unresponsive,\" etc.)\n\n## 4. Draft Reply\nI understand how concerning it is to see duplicate charges, especially with your finance team's Friday deadline. To help our billing agent investigate this quickly, could you share screenshots of your billing page showing both charges, along with details about when you switched plans and any error messages you saw when trying to download the invoice? A human billing agent will review this to clarify what happened and get you the documentation you need.",
+          "result": {
+            "choices": [
+              {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {
+                  "content": "# Support Ticket Analysis\n\n## 1. Category\n**Billing**\n\n## 2. Priority\n**High** – Customer reports duplicate charges on their account and has a time-sensitive business requirement (invoice needed by Friday for finance team reconciliation).\n\n## 3. Evidence to Request\n- Screenshots of the billing page showing both the monthly and annual charges (dates, amounts, and plan names)\n- Confirmation of the exact date/time the plan switch was initiated\n- Any error messages or details about the invoice download failure (e.g., \"file won't load,\" \"button unresponsive,\" etc.)\n\n## 4. Draft Reply\nI understand how concerning it is to see duplicate charges, especially with your finance team's Friday deadline. To help our billing agent investigate this quickly, could you share screenshots of your billing page showing both charges, along with details about when you switched plans and any error messages you saw when trying to download the invoice? A human billing agent will review this to clarify what happened and get you the documentation you need.",
+                  "role": "assistant"
+                }
+              }
+            ],
+            "covenant": {
+              "envelope": {
+                "payload": {
+                  "buyer": {
+                    "display": "compute-gateway@local",
+                    "pubkey": "F9KjruGNU9f9tr5RXiBZfENeD6f8qAMUX5LQDEt9qdn1"
+                  },
+                  "capability_requirement": {
+                    "gpu_class": null,
+                    "kind": "inference_call",
+                    "max_duration_secs": 45,
+                    "min_reputation_bps": null,
+                    "min_vram_gb": null,
+                    "model_id": "claude-haiku-4.5"
+                  },
+                  "deadline_ms": 45000,
+                  "idempotency": {
+                    "duplicate_safety": "idempotent",
+                    "key": "ed4fc8c9-0781-40d1-b45a-3987e9ddc91f"
+                  },
+                  "input": [
+                    {
+                      "type": "json",
+                      "value": {
+                        "messages": [
+                          {
+                            "content": "This is a draft for a human support agent to review, not an action on a customer account. You have not accessed any account, flagged a case, escalated a ticket, issued a refund, restored access, or contacted anyone. Never claim those actions happened. Do not promise a reply or action today or confirm that a charge is a duplicate. Acknowledge the reported problem, ask for the evidence needed, and say that a human billing agent can review it. Keep the customer reply to two or three sentences.",
+                            "role": "system"
+                          },
+                          {
+                            "content": "You are a support triage specialist. Analyze this customer support ticket and provide:\n\n1. **Category**: Assign one primary category (e.g., Billing, Technical, Account, Feature Request, etc.)\n2. **Priority**: Assign priority level (Low, Medium, High, Urgent) with a brief reason\n3. **Evidence to Request**: List 2-3 specific pieces of information the support agent should gather before escalating\n4. **Draft Reply**: Write a concise, empathetic response (2-3 sentences) that acknowledges the issue, validates urgency, and sets next steps without promising a specific resolution time or confirming a refund\n\n**Ticket:**\n\"I switched to the annual plan yesterday, but my billing page shows both a monthly charge and an annual charge. I also cannot download the invoice. Our finance team needs it by Friday. Can you help?\"\n\nProvide only these four sections in a clear, structured format.",
+                            "role": "user"
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "type": "json",
+                      "value": {
+                        "generation": {
+                          "max_tokens": 2048,
+                          "temperature": 0.2
+                        }
+                      }
+                    }
+                  ],
+                  "issued_at_ms": 1792336042937,
+                  "job_id": "ed4fc8c9-0781-40d1-b45a-3987e9ddc91f",
+                  "kind": "inference_call",
+                  "price_micro_usdc": 30000
+                },
+                "payload_json": "{\"job_id\":\"ed4fc8c9-0781-40d1-b45a-3987e9ddc91f\",\"buyer\":{\"display\":\"compute-gateway@local\",\"pubkey\":\"F9KjruGNU9f9tr5RXiBZfENeD6f8qAMUX5LQDEt9qdn1\"},\"kind\":\"inference_call\",\"capability_requirement\":{\"gpu_class\":null,\"min_vram_gb\":null,\"model_id\":\"claude-haiku-4.5\",\"kind\":\"inference_call\",\"max_duration_secs\":45,\"min_reputation_bps\":null},\"input\":[{\"type\":\"json\",\"value\":{\"messages\":[{\"content\":\"This is a draft for a human support agent to review, not an action on a customer account. You have not accessed any account, flagged a case, escalated a ticket, issued a refund, restored access, or contacted anyone. Never claim those actions happened. Do not promise a reply or action today or confirm that a charge is a duplicate. Acknowledge the reported problem, ask for the evidence needed, and say that a human billing agent can review it. Keep the customer reply to two or three sentences.\",\"role\":\"system\"},{\"content\":\"You are a support triage specialist. Analyze this customer support ticket and provide:\\n\\n1. **Category**: Assign one primary category (e.g., Billing, Technical, Account, Feature Request, etc.)\\n2. **Priority**: Assign priority level (Low, Medium, High, Urgent) with a brief reason\\n3. **Evidence to Request**: List 2-3 specific pieces of information the support agent should gather before escalating\\n4. **Draft Reply**: Write a concise, empathetic response (2-3 sentences) that acknowledges the issue, validates urgency, and sets next steps without promising a specific resolution time or confirming a refund\\n\\n**Ticket:**\\n\\\"I switched to the annual plan yesterday, but my billing page shows both a monthly charge and an annual charge. I also cannot download the invoice. Our finance team needs it by Friday. Can you help?\\\"\\n\\nProvide only these four sections in a clear, structured format.\",\"role\":\"user\"}]}},{\"type\":\"json\",\"value\":{\"generation\":{\"max_tokens\":2048,\"temperature\":0.2}}}],\"price_micro_usdc\":30000,\"deadline_ms\":45000,\"idempotency\":{\"duplicate_safety\":\"idempotent\",\"key\":\"ed4fc8c9-0781-40d1-b45a-3987e9ddc91f\"},\"issued_at_ms\":1792336042937}",
+                "signature_b58": "qRJAkasMTQANNrCVM8oGLpjyLzRww4KvQmheCUUrCroQZxtqdqSv6mk8gxpmFUV5DQZ5V86ujt99c4ghPGdCAyv",
+                "signer_pubkey_b58": "F9KjruGNU9f9tr5RXiBZfENeD6f8qAMUX5LQDEt9qdn1"
+              },
+              "job_id": "ed4fc8c9-0781-40d1-b45a-3987e9ddc91f",
+              "output": [
+                {
+                  "text": "# Support Ticket Analysis\n\n## 1. Category\n**Billing**\n\n## 2. Priority\n**High** – Customer reports duplicate charges on their account and has a time-sensitive business requirement (invoice needed by Friday for finance team reconciliation).\n\n## 3. Evidence to Request\n- Screenshots of the billing page showing both the monthly and annual charges (dates, amounts, and plan names)\n- Confirmation of the exact date/time the plan switch was initiated\n- Any error messages or details about the invoice download failure (e.g., \"file won't load,\" \"button unresponsive,\" etc.)\n\n## 4. Draft Reply\nI understand how concerning it is to see duplicate charges, especially with your finance team's Friday deadline. To help our billing agent investigate this quickly, could you share screenshots of your billing page showing both charges, along with details about when you switched plans and any error messages you saw when trying to download the invoice? A human billing agent will review this to clarify what happened and get you the documentation you need.",
+                  "type": "text"
+                },
+                {
+                  "type": "json",
+                  "value": {
+                    "model_mapping": "usepod-openrouter-haiku-4.5-v1",
+                    "provider_pin": "openrouter",
+                    "provider_reported": "openrouter",
+                    "reported_model": "anthropic/claude-haiku-4.5",
+                    "requested_model": "claude-haiku-4.5",
+                    "route_reported": "centralized",
+                    "type": "provider_identity",
+                    "upstream": "usepod",
+                    "upstream_requested_model": "anthropic/claude-haiku-4.5",
+                    "upstream_response_sha256": "904eb9659e1951991b5a69dfbcfbd84d4bab9d703ea73b2be4e870c1a666a520",
+                    "version": 1
+                  }
+                }
+              ],
+              "output_json": "[{\"type\":\"text\",\"text\":\"# Support Ticket Analysis\\n\\n## 1. Category\\n**Billing**\\n\\n## 2. Priority\\n**High** – Customer reports duplicate charges on their account and has a time-sensitive business requirement (invoice needed by Friday for finance team reconciliation).\\n\\n## 3. Evidence to Request\\n- Screenshots of the billing page showing both the monthly and annual charges (dates, amounts, and plan names)\\n- Confirmation of the exact date/time the plan switch was initiated\\n- Any error messages or details about the invoice download failure (e.g., \\\"file won't load,\\\" \\\"button unresponsive,\\\" etc.)\\n\\n## 4. Draft Reply\\nI understand how concerning it is to see duplicate charges, especially with your finance team's Friday deadline. To help our billing agent investigate this quickly, could you share screenshots of your billing page showing both charges, along with details about when you switched plans and any error messages you saw when trying to download the invoice? A human billing agent will review this to clarify what happened and get you the documentation you need.\"},{\"type\":\"json\",\"value\":{\"model_mapping\":\"usepod-openrouter-haiku-4.5-v1\",\"provider_pin\":\"openrouter\",\"provider_reported\":\"openrouter\",\"reported_model\":\"anthropic/claude-haiku-4.5\",\"requested_model\":\"claude-haiku-4.5\",\"route_reported\":\"centralized\",\"type\":\"provider_identity\",\"upstream\":\"usepod\",\"upstream_requested_model\":\"anthropic/claude-haiku-4.5\",\"upstream_response_sha256\":\"904eb9659e1951991b5a69dfbcfbd84d4bab9d703ea73b2be4e870c1a666a520\",\"version\":1}}]",
+              "quote_id": "ab510efd-d01e-45b1-b490-242b9d1a8549",
+              "receipt": {
+                "receipt": {
+                  "executed_at_ms": 1792336046784,
+                  "job_hash_hex": "2d39f18a846e32123a37f6fe120cb45af04f51792f482b06b70211132ac3c0e0",
+                  "job_id": "ed4fc8c9-0781-40d1-b45a-3987e9ddc91f",
+                  "meter": {
+                    "finish_reason": "stop",
+                    "gpu_seconds": null,
+                    "tokens_in": 318,
+                    "tokens_out": 224,
+                    "wall_ms": 3550
+                  },
+                  "node_audit_root_hex": "aab305e8df82a688453e078e0819a38ab80de00e66781b6157b7b953a5cf3f0b",
+                  "operator": {
+                    "display": "operator@compute",
+                    "pubkey": "9fefASd52qfR2Q8P81yXtkHu9E4q9KvW58x2ixBAAvLR"
+                  },
+                  "price_micro_usdc": 30000,
+                  "result_hash_hex": "a17d6f509cfd2395735678eb7401e9ace3f93fa29ced2b7f1cfc799b245fd424",
+                  "status": "ok"
+                },
+                "receipt_json": "{\"job_id\":\"ed4fc8c9-0781-40d1-b45a-3987e9ddc91f\",\"operator\":{\"display\":\"operator@compute\",\"pubkey\":\"9fefASd52qfR2Q8P81yXtkHu9E4q9KvW58x2ixBAAvLR\"},\"job_hash_hex\":\"2d39f18a846e32123a37f6fe120cb45af04f51792f482b06b70211132ac3c0e0\",\"result_hash_hex\":\"a17d6f509cfd2395735678eb7401e9ace3f93fa29ced2b7f1cfc799b245fd424\",\"meter\":{\"wall_ms\":3550,\"tokens_in\":318,\"tokens_out\":224,\"gpu_seconds\":null,\"finish_reason\":\"stop\"},\"price_micro_usdc\":30000,\"status\":\"ok\",\"executed_at_ms\":1792336046784,\"node_audit_root_hex\":\"aab305e8df82a688453e078e0819a38ab80de00e66781b6157b7b953a5cf3f0b\"}",
+                "signature_b58": "4ebKPrF1qKt8ixR7xJAQyrqCou3G7AXE52nPqBeHhn4USzFVnoG9kqqMZvFPVGgTB4LeB21RFHCpZNYr6cxfhYwj",
+                "signer_pubkey_b58": "9fefASd52qfR2Q8P81yXtkHu9E4q9KvW58x2ixBAAvLR"
+              },
+              "request_sha256": "b861a35af8890a1d0b7bb234bed586c50fe95271e686b5f6f35d17419679e55c"
+            },
+            "created": 1792336047,
+            "id": "chatcmpl-ed4fc8c9-0781-40d1-b45a-3987e9ddc91f",
+            "model": "claude-haiku-4.5",
+            "object": "chat.completion"
+          }
+        }
+      }
+    },
+    "finish": {
+      "phase": "finish",
+      "observedAt": "2026-10-18T15:08:22.899Z",
+      "packageRoot": "/tmp/covenant-langchain-accepted-lmglpy2z/node_modules/@covenant/compute-x402-client",
+      "packageVersion": "0.2.0",
+      "identity": {
+        "requestId": "ab510efd-d01e-45b1-b490-242b9d1a8549",
+        "threadId": "covenant-langgraph-support-5174d32c-8689-4bb9-addb-cd3c24583df9"
+      },
+      "counters": {
+        "walletSignatures": 0,
+        "gatewayQuotePosts": 0,
+        "gatewayPaidPosts": 0,
+        "rpcCalls": 0,
+        "plannerDispatches": 1,
+        "plannerCached": 0
+      },
+      "before": {
+        "provider": {
+          "lifetime": 610475,
+          "daily": 610475,
+          "unresolved": 0
+        },
+        "customer": {
+          "purchases": 4,
+          "reservedMicroUsdc": 200000,
+          "completed": 3
+        }
+      },
+      "after": {
+        "provider": {
+          "lifetime": 613573,
+          "daily": 613573,
+          "unresolved": 0
+        },
+        "customer": {
+          "purchases": 4,
+          "reservedMicroUsdc": 200000,
+          "completed": 3
+        }
+      },
+      "result": {
+        "phase": "finish",
+        "startedAt": "2026-10-18T15:08:20.088Z",
+        "finishedAt": "2026-10-18T15:08:22.897Z",
+        "identity": {
+          "requestId": "ab510efd-d01e-45b1-b490-242b9d1a8549",
+          "threadId": "covenant-langgraph-support-5174d32c-8689-4bb9-addb-cd3c24583df9",
+          "model": "claude-haiku-4.5",
+          "ticketSha256": "c556f390d0a6cb7132d6c68bd93f5c216d34a38bb378256d37344bc10e3d3efb",
+          "version": 1
+        },
+        "next": [],
+        "messages": [
+          {
+            "type": "human",
+            "content": "Sample support ticket: I switched to the annual plan yesterday, but my billing page shows both a monthly charge and an annual charge. I also cannot download the invoice. Our finance team needs it by Friday. Can you help?"
+          },
+          {
+            "type": "ai",
+            "content": "I'll use the covenant_inference tool to produce a professional triage analysis and draft reply for this ticket.",
+            "tool_calls": [
+              {
+                "name": "covenant_inference",
+                "args": {
+                  "prompt": "You are a support triage specialist. Analyze this customer support ticket and provide:\n\n1. **Category**: Assign one primary category (e.g., Billing, Technical, Account, Feature Request, etc.)\n2. **Priority**: Assign priority level (Low, Medium, High, Urgent) with a brief reason\n3. **Evidence to Request**: List 2-3 specific pieces of information the support agent should gather before escalating\n4. **Draft Reply**: Write a concise, empathetic response (2-3 sentences) that acknowledges the issue, validates urgency, and sets next steps without promising a specific resolution time or confirming a refund\n\n**Ticket:**\n\"I switched to the annual plan yesterday, but my billing page shows both a monthly charge and an annual charge. I also cannot download the invoice. Our finance team needs it by Friday. Can you help?\"\n\nProvide only these four sections in a clear, structured format."
+                },
+                "type": "tool_call",
+                "id": "toolu_bdrk_01X3o1X8sjyfMMgBAwiZK9ds"
+              }
+            ],
+            "usage": {
+              "output_tokens": 280,
+              "input_tokens": 899,
+              "total_tokens": 1179,
+              "input_token_details": {
+                "audio": 0,
+                "cache_read": 0,
+                "cache_creation": 0
+              },
+              "output_token_details": {
+                "audio": 0,
+                "reasoning": 0
+              }
+            }
+          },
+          {
+            "type": "tool",
+            "content": "{\"status\":\"completed\",\"requestId\":\"ab510efd-d01e-45b1-b490-242b9d1a8549\",\"text\":\"# Support Ticket Analysis\\n\\n## 1. Category\\n**Billing**\\n\\n## 2. Priority\\n**High** – Customer reports duplicate charges on their account and has a time-sensitive business requirement (invoice needed by Friday for finance team reconciliation).\\n\\n## 3. Evidence to Request\\n- Screenshots of the billing page showing both the monthly and annual charges (dates, amounts, and plan names)\\n- Confirmation of the exact date/time the plan switch was initiated\\n- Any error messages or details about the invoice download failure (e.g., \\\"file won't load,\\\" \\\"button unresponsive,\\\" etc.)\\n\\n## 4. Draft Reply\\nI understand how concerning it is to see duplicate charges, especially with your finance team's Friday deadline. To help our billing agent investigate this quickly, could you share screenshots of your billing page showing both charges, along with details about when you switched plans and any error messages you saw when trying to download the invoice? A human billing agent will review this to clarify what happened and get you the documentation you need.\",\"amountMicroUsdc\":50000,\"transaction\":\"2UQMqsZvHs1o1XYocySKkRNX9h3dNLnvkeXSH9obBsaqSvZ3saneaoB83hkS5F8opEvz8bh269oWZH3EW5AX16QQ\",\"receiptVerified\":true}",
+            "tool_call_id": "toolu_bdrk_01X3o1X8sjyfMMgBAwiZK9ds",
+            "name": "covenant_inference",
+            "artifact": {
+              "status": "completed",
+              "requestId": "ab510efd-d01e-45b1-b490-242b9d1a8549",
+              "requestSha256": "b861a35af8890a1d0b7bb234bed586c50fe95271e686b5f6f35d17419679e55c",
+              "amountMicroUsdc": 50000,
+              "settlement": {
+                "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+                "payer": "7rozFdk421fc7DT3MpPJnD4ndXY81hBY6DzmKauZgzTB",
+                "success": true,
+                "transaction": "2UQMqsZvHs1o1XYocySKkRNX9h3dNLnvkeXSH9obBsaqSvZ3saneaoB83hkS5F8opEvz8bh269oWZH3EW5AX16QQ"
+              },
+              "text": "# Support Ticket Analysis\n\n## 1. Category\n**Billing**\n\n## 2. Priority\n**High** – Customer reports duplicate charges on their account and has a time-sensitive business requirement (invoice needed by Friday for finance team reconciliation).\n\n## 3. Evidence to Request\n- Screenshots of the billing page showing both the monthly and annual charges (dates, amounts, and plan names)\n- Confirmation of the exact date/time the plan switch was initiated\n- Any error messages or details about the invoice download failure (e.g., \"file won't load,\" \"button unresponsive,\" etc.)\n\n## 4. Draft Reply\nI understand how concerning it is to see duplicate charges, especially with your finance team's Friday deadline. To help our billing agent investigate this quickly, could you share screenshots of your billing page showing both charges, along with details about when you switched plans and any error messages you saw when trying to download the invoice? A human billing agent will review this to clarify what happened and get you the documentation you need.",
+              "result": {
+                "choices": [
+                  {
+                    "finish_reason": "stop",
+                    "index": 0,
+                    "message": {
+                      "content": "# Support Ticket Analysis\n\n## 1. Category\n**Billing**\n\n## 2. Priority\n**High** – Customer reports duplicate charges on their account and has a time-sensitive business requirement (invoice needed by Friday for finance team reconciliation).\n\n## 3. Evidence to Request\n- Screenshots of the billing page showing both the monthly and annual charges (dates, amounts, and plan names)\n- Confirmation of the exact date/time the plan switch was initiated\n- Any error messages or details about the invoice download failure (e.g., \"file won't load,\" \"button unresponsive,\" etc.)\n\n## 4. Draft Reply\nI understand how concerning it is to see duplicate charges, especially with your finance team's Friday deadline. To help our billing agent investigate this quickly, could you share screenshots of your billing page showing both charges, along with details about when you switched plans and any error messages you saw when trying to download the invoice? A human billing agent will review this to clarify what happened and get you the documentation you need.",
+                      "role": "assistant"
+                    }
+                  }
+                ],
+                "covenant": {
+                  "envelope": {
+                    "payload": {
+                      "buyer": {
+                        "display": "compute-gateway@local",
+                        "pubkey": "F9KjruGNU9f9tr5RXiBZfENeD6f8qAMUX5LQDEt9qdn1"
+                      },
+                      "capability_requirement": {
+                        "gpu_class": null,
+                        "kind": "inference_call",
+                        "max_duration_secs": 45,
+                        "min_reputation_bps": null,
+                        "min_vram_gb": null,
+                        "model_id": "claude-haiku-4.5"
+                      },
+                      "deadline_ms": 45000,
+                      "idempotency": {
+                        "duplicate_safety": "idempotent",
+                        "key": "ed4fc8c9-0781-40d1-b45a-3987e9ddc91f"
+                      },
+                      "input": [
+                        {
+                          "type": "json",
+                          "value": {
+                            "messages": [
+                              {
+                                "content": "This is a draft for a human support agent to review, not an action on a customer account. You have not accessed any account, flagged a case, escalated a ticket, issued a refund, restored access, or contacted anyone. Never claim those actions happened. Do not promise a reply or action today or confirm that a charge is a duplicate. Acknowledge the reported problem, ask for the evidence needed, and say that a human billing agent can review it. Keep the customer reply to two or three sentences.",
+                                "role": "system"
+                              },
+                              {
+                                "content": "You are a support triage specialist. Analyze this customer support ticket and provide:\n\n1. **Category**: Assign one primary category (e.g., Billing, Technical, Account, Feature Request, etc.)\n2. **Priority**: Assign priority level (Low, Medium, High, Urgent) with a brief reason\n3. **Evidence to Request**: List 2-3 specific pieces of information the support agent should gather before escalating\n4. **Draft Reply**: Write a concise, empathetic response (2-3 sentences) that acknowledges the issue, validates urgency, and sets next steps without promising a specific resolution time or confirming a refund\n\n**Ticket:**\n\"I switched to the annual plan yesterday, but my billing page shows both a monthly charge and an annual charge. I also cannot download the invoice. Our finance team needs it by Friday. Can you help?\"\n\nProvide only these four sections in a clear, structured format.",
+                                "role": "user"
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "type": "json",
+                          "value": {
+                            "generation": {
+                              "max_tokens": 2048,
+                              "temperature": 0.2
+                            }
+                          }
+                        }
+                      ],
+                      "issued_at_ms": 1792336042937,
+                      "job_id": "ed4fc8c9-0781-40d1-b45a-3987e9ddc91f",
+                      "kind": "inference_call",
+                      "price_micro_usdc": 30000
+                    },
+                    "payload_json": "{\"job_id\":\"ed4fc8c9-0781-40d1-b45a-3987e9ddc91f\",\"buyer\":{\"display\":\"compute-gateway@local\",\"pubkey\":\"F9KjruGNU9f9tr5RXiBZfENeD6f8qAMUX5LQDEt9qdn1\"},\"kind\":\"inference_call\",\"capability_requirement\":{\"gpu_class\":null,\"min_vram_gb\":null,\"model_id\":\"claude-haiku-4.5\",\"kind\":\"inference_call\",\"max_duration_secs\":45,\"min_reputation_bps\":null},\"input\":[{\"type\":\"json\",\"value\":{\"messages\":[{\"content\":\"This is a draft for a human support agent to review, not an action on a customer account. You have not accessed any account, flagged a case, escalated a ticket, issued a refund, restored access, or contacted anyone. Never claim those actions happened. Do not promise a reply or action today or confirm that a charge is a duplicate. Acknowledge the reported problem, ask for the evidence needed, and say that a human billing agent can review it. Keep the customer reply to two or three sentences.\",\"role\":\"system\"},{\"content\":\"You are a support triage specialist. Analyze this customer support ticket and provide:\\n\\n1. **Category**: Assign one primary category (e.g., Billing, Technical, Account, Feature Request, etc.)\\n2. **Priority**: Assign priority level (Low, Medium, High, Urgent) with a brief reason\\n3. **Evidence to Request**: List 2-3 specific pieces of information the support agent should gather before escalating\\n4. **Draft Reply**: Write a concise, empathetic response (2-3 sentences) that acknowledges the issue, validates urgency, and sets next steps without promising a specific resolution time or confirming a refund\\n\\n**Ticket:**\\n\\\"I switched to the annual plan yesterday, but my billing page shows both a monthly charge and an annual charge. I also cannot download the invoice. Our finance team needs it by Friday. Can you help?\\\"\\n\\nProvide only these four sections in a clear, structured format.\",\"role\":\"user\"}]}},{\"type\":\"json\",\"value\":{\"generation\":{\"max_tokens\":2048,\"temperature\":0.2}}}],\"price_micro_usdc\":30000,\"deadline_ms\":45000,\"idempotency\":{\"duplicate_safety\":\"idempotent\",\"key\":\"ed4fc8c9-0781-40d1-b45a-3987e9ddc91f\"},\"issued_at_ms\":1792336042937}",
+                    "signature_b58": "qRJAkasMTQANNrCVM8oGLpjyLzRww4KvQmheCUUrCroQZxtqdqSv6mk8gxpmFUV5DQZ5V86ujt99c4ghPGdCAyv",
+                    "signer_pubkey_b58": "F9KjruGNU9f9tr5RXiBZfENeD6f8qAMUX5LQDEt9qdn1"
+                  },
+                  "job_id": "ed4fc8c9-0781-40d1-b45a-3987e9ddc91f",
+                  "output": [
+                    {
+                      "text": "# Support Ticket Analysis\n\n## 1. Category\n**Billing**\n\n## 2. Priority\n**High** – Customer reports duplicate charges on their account and has a time-sensitive business requirement (invoice needed by Friday for finance team reconciliation).\n\n## 3. Evidence to Request\n- Screenshots of the billing page showing both the monthly and annual charges (dates, amounts, and plan names)\n- Confirmation of the exact date/time the plan switch was initiated\n- Any error messages or details about the invoice download failure (e.g., \"file won't load,\" \"button unresponsive,\" etc.)\n\n## 4. Draft Reply\nI understand how concerning it is to see duplicate charges, especially with your finance team's Friday deadline. To help our billing agent investigate this quickly, could you share screenshots of your billing page showing both charges, along with details about when you switched plans and any error messages you saw when trying to download the invoice? A human billing agent will review this to clarify what happened and get you the documentation you need.",
+                      "type": "text"
+                    },
+                    {
+                      "type": "json",
+                      "value": {
+                        "model_mapping": "usepod-openrouter-haiku-4.5-v1",
+                        "provider_pin": "openrouter",
+                        "provider_reported": "openrouter",
+                        "reported_model": "anthropic/claude-haiku-4.5",
+                        "requested_model": "claude-haiku-4.5",
+                        "route_reported": "centralized",
+                        "type": "provider_identity",
+                        "upstream": "usepod",
+                        "upstream_requested_model": "anthropic/claude-haiku-4.5",
+                        "upstream_response_sha256": "904eb9659e1951991b5a69dfbcfbd84d4bab9d703ea73b2be4e870c1a666a520",
+                        "version": 1
+                      }
+                    }
+                  ],
+                  "output_json": "[{\"type\":\"text\",\"text\":\"# Support Ticket Analysis\\n\\n## 1. Category\\n**Billing**\\n\\n## 2. Priority\\n**High** – Customer reports duplicate charges on their account and has a time-sensitive business requirement (invoice needed by Friday for finance team reconciliation).\\n\\n## 3. Evidence to Request\\n- Screenshots of the billing page showing both the monthly and annual charges (dates, amounts, and plan names)\\n- Confirmation of the exact date/time the plan switch was initiated\\n- Any error messages or details about the invoice download failure (e.g., \\\"file won't load,\\\" \\\"button unresponsive,\\\" etc.)\\n\\n## 4. Draft Reply\\nI understand how concerning it is to see duplicate charges, especially with your finance team's Friday deadline. To help our billing agent investigate this quickly, could you share screenshots of your billing page showing both charges, along with details about when you switched plans and any error messages you saw when trying to download the invoice? A human billing agent will review this to clarify what happened and get you the documentation you need.\"},{\"type\":\"json\",\"value\":{\"model_mapping\":\"usepod-openrouter-haiku-4.5-v1\",\"provider_pin\":\"openrouter\",\"provider_reported\":\"openrouter\",\"reported_model\":\"anthropic/claude-haiku-4.5\",\"requested_model\":\"claude-haiku-4.5\",\"route_reported\":\"centralized\",\"type\":\"provider_identity\",\"upstream\":\"usepod\",\"upstream_requested_model\":\"anthropic/claude-haiku-4.5\",\"upstream_response_sha256\":\"904eb9659e1951991b5a69dfbcfbd84d4bab9d703ea73b2be4e870c1a666a520\",\"version\":1}}]",
+                  "quote_id": "ab510efd-d01e-45b1-b490-242b9d1a8549",
+                  "receipt": {
+                    "receipt": {
+                      "executed_at_ms": 1792336046784,
+                      "job_hash_hex": "2d39f18a846e32123a37f6fe120cb45af04f51792f482b06b70211132ac3c0e0",
+                      "job_id": "ed4fc8c9-0781-40d1-b45a-3987e9ddc91f",
+                      "meter": {
+                        "finish_reason": "stop",
+                        "gpu_seconds": null,
+                        "tokens_in": 318,
+                        "tokens_out": 224,
+                        "wall_ms": 3550
+                      },
+                      "node_audit_root_hex": "aab305e8df82a688453e078e0819a38ab80de00e66781b6157b7b953a5cf3f0b",
+                      "operator": {
+                        "display": "operator@compute",
+                        "pubkey": "9fefASd52qfR2Q8P81yXtkHu9E4q9KvW58x2ixBAAvLR"
+                      },
+                      "price_micro_usdc": 30000,
+                      "result_hash_hex": "a17d6f509cfd2395735678eb7401e9ace3f93fa29ced2b7f1cfc799b245fd424",
+                      "status": "ok"
+                    },
+                    "receipt_json": "{\"job_id\":\"ed4fc8c9-0781-40d1-b45a-3987e9ddc91f\",\"operator\":{\"display\":\"operator@compute\",\"pubkey\":\"9fefASd52qfR2Q8P81yXtkHu9E4q9KvW58x2ixBAAvLR\"},\"job_hash_hex\":\"2d39f18a846e32123a37f6fe120cb45af04f51792f482b06b70211132ac3c0e0\",\"result_hash_hex\":\"a17d6f509cfd2395735678eb7401e9ace3f93fa29ced2b7f1cfc799b245fd424\",\"meter\":{\"wall_ms\":3550,\"tokens_in\":318,\"tokens_out\":224,\"gpu_seconds\":null,\"finish_reason\":\"stop\"},\"price_micro_usdc\":30000,\"status\":\"ok\",\"executed_at_ms\":1792336046784,\"node_audit_root_hex\":\"aab305e8df82a688453e078e0819a38ab80de00e66781b6157b7b953a5cf3f0b\"}",
+                    "signature_b58": "4ebKPrF1qKt8ixR7xJAQyrqCou3G7AXE52nPqBeHhn4USzFVnoG9kqqMZvFPVGgTB4LeB21RFHCpZNYr6cxfhYwj",
+                    "signer_pubkey_b58": "9fefASd52qfR2Q8P81yXtkHu9E4q9KvW58x2ixBAAvLR"
+                  },
+                  "request_sha256": "b861a35af8890a1d0b7bb234bed586c50fe95271e686b5f6f35d17419679e55c"
+                },
+                "created": 1792336047,
+                "id": "chatcmpl-ed4fc8c9-0781-40d1-b45a-3987e9ddc91f",
+                "model": "claude-haiku-4.5",
+                "object": "chat.completion"
+              }
+            }
+          },
+          {
+            "type": "ai",
+            "content": "## Triage Summary\n\n**Category:** Billing\n\n**Priority:** High  \n*Reason:* Potential duplicate charges combined with a time-sensitive business need (finance team deadline Friday) warrant prompt investigation.\n\n**Evidence to Request:**\n- Screenshots of the billing page showing both charges (with dates, amounts, and plan names visible)\n- Exact date/time the annual plan switch was initiated\n- Details about the invoice download failure (error message, button behavior, etc.)\n\n---\n\n## Draft Reply for Human Agent Review\n\n\"I understand how concerning it is to see duplicate charges, especially with your finance team's Friday deadline. To help our billing agent investigate this quickly, could you share screenshots of your billing page showing both charges, along with details about when you switched plans and any error messages you saw when trying to download the invoice? A human billing agent will review this to clarify what happened and get you the documentation you need.\"\n\n---\n\n**Next Steps:** Route to Billing team with the evidence request. Do not confirm a refund or promise a specific resolution time until the billing agent verifies the account state.",
+            "usage": {
+              "output_tokens": 238,
+              "input_tokens": 875,
+              "total_tokens": 1113,
+              "input_token_details": {
+                "audio": 0,
+                "cache_read": 0,
+                "cache_creation": 0
+              },
+              "output_token_details": {
+                "audio": 0,
+                "reasoning": 0
+              }
+            }
+          }
+        ],
+        "checkpoint": {
+          "configurable": {
+            "thread_id": "covenant-langgraph-support-5174d32c-8689-4bb9-addb-cd3c24583df9",
+            "checkpoint_ns": "",
+            "checkpoint_id": "1f1cb05c-2d0b-69d0-8004-2b97fb0a2f18"
+          }
+        }
+      }
+    }
+  },
+  "caveat": "Sample support ticket only. No customer system was changed. Planner calls are separate paid provider requests."
+}

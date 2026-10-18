@@ -1,0 +1,15 @@
+# Support Ticket Analysis
+
+## 1. Category
+**Billing**
+
+## 2. Priority
+**High** – Customer reports duplicate charges on their account and has a time-sensitive business requirement (invoice needed by Friday for finance team reconciliation).
+
+## 3. Evidence to Request
+- Screenshots of the billing page showing both the monthly and annual charges (dates, amounts, and plan names)
+- Confirmation of the exact date/time the plan switch was initiated
+- Any error messages or details about the invoice download failure (e.g., "file won't load," "button unresponsive," etc.)
+
+## 4. Draft Reply
+I understand how concerning it is to see duplicate charges, especially with your finance team's Friday deadline. To help our billing agent investigate this quickly, could you share screenshots of your billing page showing both charges, along with details about when you switched plans and any error messages you saw when trying to download the invoice? A human billing agent will review this to clarify what happened and get you the documentation you need.

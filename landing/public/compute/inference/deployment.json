@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "status": "production_acceptance",
+  "status": "live",
   "sourceRevision": "63f46b9e5ece8c6a078ef8f5055bdb8e1d950802",
   "gatewayUrl": "https://compute-inference.opencovenant.org",
   "endpoint": "https://compute-inference.opencovenant.org/v1/chat/completions",
@@ -23,15 +23,40 @@
   "x402Version": 2,
   "x402SdkVersion": "2.28.0",
   "providerQualifiedAt": "2026-10-18",
-  "qualificationNote": "Provider qualification passed. Public gateway payment, result delivery and replay acceptance are pending.",
+  "qualificationNote": "Provider qualification, one verified Solana mainnet purchase, post-restart server replay and installed-client replay passed.",
   "identityChecks": "The client enforces merchant, gateway buyer and approved operator identities. Fee payer and coordinator are published deployment identities; this client release does not accept separate configuration pins for them.",
   "gatewayRevision": "e52e2a790e1dbabf9a7e5018cdca99e82cdcea9e",
-  "gatewayRevisionStatus": "candidate",
+  "gatewayRevisionStatus": "deployed",
   "clientPackage": {
     "version": "0.1.0",
     "url": "https://github.com/open-covenant/covenant/releases/download/codex-compute-x402-client-v0.1.0/covenant-compute-x402-client-0.1.0.tgz",
     "filename": "covenant-compute-x402-client-0.1.0.tgz",
     "sha256": "d38eddc61c035255744e8ac8193033daf4015fd191227f117b6f6476b7ac08a6",
-    "published": false
-  }
+    "published": true
+  },
+  "acceptance": {
+    "evidenceUrl": "/compute/inference/acceptance.json",
+    "evidenceSha256": "fb1ce797bbb12337bc410e109589a6f8f589206de754af3b272378300a4a4162",
+    "startedAt": "2026-10-18T01:13:42.773Z",
+    "completedAt": "2026-10-18T01:14:10.394Z",
+    "elapsedSeconds": 27.619176959,
+    "requestId": "765dd8ae-6e4d-4081-9b98-22c63f1f26b2",
+    "requestSha256": "a1d427f12556a6b203d4af9666a8f4f986108e9f11a69c4fafc2bda90d187162",
+    "jobId": "9674ccc2-e340-4531-8bd5-4707e1a1a43d",
+    "paymentTransaction": "2vpMX8KUdGoqiMZFdZrvDiUWNAv4Z2KCKqHxG6PFZk8tMaJMaHdnaqPz7fvnrJMaYDTXyPxXJW8YnnAGRPzcP5SG",
+    "wallet": "7rozFdk421fc7DT3MpPJnD4ndXY81hBY6DzmKauZgzTB",
+    "customerPaymentMicroUsdc": 50000,
+    "interactionVerified": true,
+    "verificationNote": "Installed AgentKit action completed; client verified native job and operator signatures, exact output and confirmed Solana customer payment. The unchanged returned HTML passed Start, Pause, input-change and Reset browser checks.",
+    "restartReplay": {
+      "verifiedAt": "2026-10-18T01:17:33.920Z",
+      "samePaymentTransaction": true,
+      "sameJob": true,
+      "sameResponse": true,
+      "noAdditionalProviderDispatch": true,
+      "noAdditionalPayment": true
+    }
+  },
+  "resultRedeliverySeconds": 300,
+  "resultRetention": "The gateway redelivers completed output for five minutes. The client retains its completed result and receipt locally. Payment replay records remain after gateway output expires."
 }

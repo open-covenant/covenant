@@ -96,8 +96,8 @@ export default function ComputeInferencePage() {
           <a href={CLIENT_SOURCE} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-11 items-center text-[13px] text-muted transition-colors hover:text-fg">View source <span aria-hidden="true" className="ml-2">↗</span></a>
         </div>
         <div className="mt-8 max-w-3xl border-l border-line-strong pl-5">
-          <p className={eyebrow}>Production acceptance in progress</p>
-          <p className={`mt-2 ${paragraph}`}>The provider passed qualification on 18 October 2026. The public gateway payment, result delivery and replay checks are still in progress. The configuration below prepares your client for the release.</p>
+          <p className={eyebrow}>Verified on Solana mainnet</p>
+          <p className={`mt-2 ${paragraph}`}>The first purchase and post-restart replay are verified. Inspect the signed result and customer payment below.</p>
         </div>
         <div className="mt-10 flex flex-wrap gap-x-6 gap-y-3 border-y border-line/80 py-5 text-[12px] text-muted sm:mt-14">
           <span>Coinbase AgentKit</span><span>x402 V2</span><span>USDC on Solana</span>
@@ -115,6 +115,23 @@ export default function ComputeInferencePage() {
             ].map(([label, value]) => <div key={label} className="grid gap-2 py-4 sm:grid-cols-[180px_1fr] sm:gap-7"><dt className="text-[12px] text-muted">{label}</dt><dd className="break-words font-mono text-[12px] leading-[1.8] text-fg-soft [overflow-wrap:anywhere]">{value}</dd></div>)}
           </dl>
           <p className={`mt-5 max-w-2xl ${paragraph}`}>The input limit includes JSON framing and escaping. The customer price is separate from the operator&apos;s Compute payment. Your wallet checks the actual x402 quote before signing.</p>
+        </section>
+
+        <section aria-labelledby="purchase-heading" className="mt-14 border-t border-line/80 pt-9 sm:mt-20 sm:pt-11">
+          <h2 id="purchase-heading" className={heading}>One verified purchase</h2>
+          <p className={`mt-5 max-w-2xl ${paragraph}`}>An AgentKit wallet requested a meeting-cost calculator. The returned HTML ran unchanged: Start, Pause and Reset worked, and changing the inputs recalculated the cost.</p>
+          <dl className="mt-7 grid gap-6 sm:grid-cols-3">
+            {[
+              ["Customer payment", `${(deployment.acceptance.customerPaymentMicroUsdc / 1_000_000).toFixed(2)} USDC`],
+              ["End to end", `${deployment.acceptance.elapsedSeconds.toFixed(1)} seconds`],
+              ["Completed", "18 October 2026 · 01:14 UTC"],
+            ].map(([label, value]) => <div key={label}><dt className="text-[12px] text-muted">{label}</dt><dd className="mt-2 font-mono text-[14px] text-fg">{value}</dd></div>)}
+          </dl>
+          <div className="mt-6 flex flex-wrap gap-x-7 gap-y-2">
+            <a href={deployment.acceptance.evidenceUrl} className={`inline-flex min-h-11 items-center text-[13px] ${link}`}>Read the signed purchase record <span aria-hidden="true" className="ml-2">↗</span></a>
+            <a href={`https://explorer.solana.com/tx/${deployment.acceptance.paymentTransaction}`} target="_blank" rel="noopener noreferrer" className={`inline-flex min-h-11 items-center text-[13px] ${link}`}>View the USDC payment <span aria-hidden="true" className="ml-2">↗</span></a>
+          </div>
+          <p className={`mt-3 max-w-2xl ${paragraph}`}>The timing covers wallet initialization, quoting, execution and verification for this purchase.</p>
         </section>
 
         <section aria-labelledby="flow-heading" className="mt-14 sm:mt-20">
@@ -139,7 +156,7 @@ export default function ComputeInferencePage() {
           <p className={`mt-4 max-w-2xl ${paragraph}`}>Generate a UUID once with <code className="font-mono text-[12px]">node -e &apos;console.log(crypto.randomUUID())&apos;</code>, replace the request ID below and save it as <code className="font-mono text-[12px]">request.json</code>. Keep that file unchanged when resuming an interrupted purchase.</p>
           <CodeBlock label="Saved request · JSON">{request}</CodeBlock>
           <CodeBlock label="Run the installed demo · terminal">{"node node_modules/@covenant/compute-x402-client/demo.mjs config.private.json request.json ./purchase-evidence"}</CodeBlock>
-          <p className={`mt-5 max-w-2xl ${paragraph}`}>The demo invokes the registered AgentKit action and saves the verified response, payment details and signed receipt. HTML responses also produce a local preview.</p>
+          <p className={`mt-5 max-w-2xl ${paragraph}`}>The demo invokes the registered AgentKit action and saves the verified response, payment details and signed receipt. HTML responses also produce a local preview. The gateway redelivers completed output for five minutes; your client retains the result and receipt locally. Payment records remain after the gateway output expires.</p>
           <details className="mt-7 border-y border-line/80 py-4"><summary className="cursor-pointer text-[13px] text-fg-soft">Add the action to an existing AgentKit application</summary><CodeBlock label="AgentKit registration · JavaScript">{registration}</CodeBlock></details>
         </section>
 

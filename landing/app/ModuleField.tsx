@@ -1,7 +1,7 @@
 "use client";
 
 import { type RefObject, useEffect, useRef } from "react";
-import { createFieldProgram, FIELD_GLSL, fieldCellSize } from "./_field";
+import { createFieldProgram, FIELD_GLSL, fieldCellSize, MARK_GLSL } from "./_field";
 
 // The hero field, drawn as a grid of rounded squares — the mark's own module.
 // As in the seams between sections, a cell lights only when enough ribbon
@@ -37,34 +37,7 @@ float hash(vec2 p) {
   return fract(p.x * p.y);
 }
 
-// A box with a radius of its own at each corner, in the mark's y-down module
-// space: r.x top left, r.y top right, r.z bottom right, r.w bottom left.
-float cornerBox(vec2 p, vec2 c, vec2 b, vec4 r) {
-  vec2 q = p - c;
-  float rad = q.x < 0.0 ? (q.y < 0.0 ? r.x : r.w) : (q.y < 0.0 ? r.y : r.z);
-  vec2 d = abs(q) - b + rad;
-  return min(max(d.x, d.y), 0.0) + length(max(d, 0.0)) - rad;
-}
-
-// A union that rounds the inside corner where two edges meet at a right angle
-// with an exact circular fillet of radius r.
-float filletUnion(float a, float b, float r) {
-  vec2 u = max(vec2(r - a, r - b), vec2(0.0));
-  return max(r, min(a, b)) - length(u);
-}
-
-// The mark, in 210-unit module space (4 x 5): a top bar, a stem and a bottom
-// bar with 38-unit outer corners, square where they meet, then joined by
-// 38-unit circular fillets on both sides of each junction, exactly as the
-// drawn mark is. The core stays a separate min: it never touches.
-float markDist(vec2 mu) {
-  float r = 38.0 / 210.0;
-  float top = cornerBox(mu, vec2(2.5, 0.5), vec2(1.5, 0.5), vec4(r, r, r, 0.0));
-  float stem = cornerBox(mu, vec2(0.5, 2.5), vec2(0.5, 1.5), vec4(r, 0.0, 0.0, r));
-  float bottom = cornerBox(mu, vec2(2.5, 4.5), vec2(1.5, 0.5), vec4(0.0, r, r, r));
-  float d = filletUnion(filletUnion(top, stem, r), bottom, r);
-  return min(d, cornerBox(mu, vec2(2.5, 2.5), vec2(140.0 / 210.0), vec4(47.0 / 210.0)));
-}
+${MARK_GLSL}
 
 // gl_FragCoord is y-up; the mark is defined y-down, so the axis is flipped.
 vec2 toMark(vec2 px) {
@@ -200,6 +173,8 @@ export function ModuleField({
     let frame = 0;
     let visible = true;
     const started = performance.now();
+    // The opening (ModuleCurtain) reads this to draw the same field.
+    canvas.dataset.clock = String(started);
     // The pointer's swell fades in while it is over the hero and out after.
     let torch = 0;
     let torchTarget = 0;

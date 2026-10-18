@@ -24,7 +24,7 @@ const DURATIONS = [
   { what: "Header border", value: "200 ms", detail: "Appears below the header once the page scrolls." },
   { what: "Reveal", value: "700 ms", detail: "Content fades in and rises 18 px as it enters." },
   { what: "Word reveal", value: "780 ms", detail: "Headline words rise into view, 55 ms apart." },
-  { what: "Opening animation", value: "620 ms", detail: "Per square; the sweep crosses the screen in about 0.9 s." },
+  { what: "Opening animation", value: "1.9 s", detail: "The mark holds for 0.5 s. The dark screen then clears square by square from top left to bottom right: the squares start clearing one after another over the next 0.75 s, and each takes no more than 0.6 s to clear." },
   { what: "Forming the mark", value: "Scroll", detail: "Follows the scroll of the home page, eased at both ends." },
   { what: "Field", value: "Continuous", detail: "A slow, steady drift; each shape grows and fades at its own pace." },
   { what: "Section bands", value: "Continuous", detail: "Move with the scroll and respond to its speed." },
@@ -68,8 +68,8 @@ export default function BrandMotion() {
         intro={
           <p>
             Every Covenant animation has a destination. The field comes together to form the mark, words rise
-            into place and a grid of squares clears to reveal the page. Motion shows where something came from
-            and where it belongs, and it is never there for show.
+            into place and the dark opening screen clears to reveal the page. Motion shows where something came
+            from and where it belongs, and it is never there for show.
           </p>
         }
       >
@@ -94,8 +94,10 @@ export default function BrandMotion() {
               content in.
             </>,
             <>
-              <strong>Built from the mark.</strong> Motion uses the same squares as the logo: a grid clearing,
-              shapes growing, the field drifting. Never a spin, a bounce or a 3D flip.
+              <strong>Built from the mark.</strong> The field is made of the same squares as the logo. Each square
+              stays in place and changes only in size, brightness and color. When the field seems to drift or
+              gather into the mark, what you see is that change passing from square to square. Nothing spins,
+              bounces or flips in 3D.
             </>,
             <>
               <strong>Nothing plays unseen.</strong> Animations pause when they are out of view or the tab is
@@ -197,9 +199,12 @@ export default function BrandMotion() {
         title="Opening animation"
         text={
           <p>
-            The home page opens on a grid of squares with the mark at its center. After half a second, the
-            squares shrink, round off and clear diagonally from top left to bottom right, in the direction of
-            the gradient. It plays once, on the home page only.
+            The home page opens on a dark screen with the mark at its center. After half a second, the mark
+            breaks into its squares and the dark screen starts to clear, square by square, from top left to
+            bottom right in the direction of the gradient. As each square clears, it shrinks and lights up in the
+            Covenant colors, glowing brightest where the field will appear. Most of the squares disappear to reveal
+            the page, and the rest become the field behind the headline. The opening plays every time the home
+            page loads in full, but not when you return to it from another page on the site.
           </p>
         }
       >

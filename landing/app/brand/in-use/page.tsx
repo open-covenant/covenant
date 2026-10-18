@@ -71,9 +71,9 @@ export default function BrandInUse() {
         text={
           <>
             <p>
-              On the home page, a grid of squares clears to reveal the page, and the field moves behind the
-              headline and comes together to form the mark as you scroll. A band of the field separates each
-              section from the next.
+              On the home page, the opening animation clears the dark screen to reveal the page and leaves the
+              field drifting behind the headline. As you scroll, the field comes together to form the mark. A band of the field
+              separates each section from the next.
             </p>
             <p>
               <Link href="/" className="text-fg underline decoration-line-strong underline-offset-[3px] hover:decoration-blue">

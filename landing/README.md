@@ -106,9 +106,10 @@ The mark is inline (`CovenantMark` and `CovenantLockup` in `app/_brand.tsx`).
 The hero animation (`ModuleField`) and the section dividers (`FieldSeam`) are
 WebGL fields of small rounded squares drawn from the mark. They respond to
 scroll and pointer, and the hero comes together into the mark as the page
-scrolls. The intro transition (`ModuleCurtain`) and the reveal and cursor
-script (`SiteMotion`) use the same shape. The shared GLSL and WebGL setup live
-in `app/_field.ts`.
+scrolls. The opening (`ModuleCurtain`) starts from a solid sheet of the same
+modules with the mark at its centre and dissolves into the hero's field. The
+reveal and cursor script (`SiteMotion`) uses the same shape. The shared GLSL
+(the field and the mark's outline) and WebGL setup live in `app/_field.ts`.
 
 ## Brand guidelines
 

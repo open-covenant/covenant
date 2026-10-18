@@ -1,14 +1,12 @@
 "use client";
 
 // Live demos for the brand guidelines: the field resolving into the mark, the
-// word reveal, the entry curtain and a type tester. Each uses the site's own
+// word reveal, the opening and a type tester. Each uses the site's own
 // components or the exact values the site animates with.
 
 import { useEffect, useRef, useState } from "react";
+import { FieldCurtain } from "../ModuleCurtain";
 import { ModuleField } from "../ModuleField";
-import { CovenantMark } from "../_brand";
-
-const EASE = "cubic-bezier(0.16, 1, 0.3, 1)";
 
 const easeInOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
 
@@ -132,17 +130,14 @@ export function WordRevealDemo({ text }: { text: string }) {
   );
 }
 
-/** The entry curtain in miniature, over a page that has already loaded. */
+/** The opening in miniature, over a page that has already loaded, landing on its own field. */
 export function CurtainDemo() {
-  const cols = 12;
-  const rows = 7;
-  const [state, setState] = useState<"holding" | "clearing" | "done">("holding");
   const [run, setRun] = useState(0);
   const [inView, setInView] = useState(false);
   const host = useRef<HTMLDivElement>(null);
   const reduced = useReducedMotion();
 
-  // Hold the curtain until the demo is on screen, so it plays where it is seen.
+  // Hold the cover until the demo is on screen, so it plays where it is seen.
   useEffect(() => {
     const el = host.current;
     if (!el) return;
@@ -159,60 +154,26 @@ export function CurtainDemo() {
     return () => observer.disconnect();
   }, []);
 
-  useEffect(() => {
-    setState("holding");
-    if (reduced) {
-      setState("done");
-      return;
-    }
-    if (!inView) return;
-    const clear = window.setTimeout(() => setState("clearing"), 700);
-    const finish = window.setTimeout(() => setState("done"), 2200);
-    return () => {
-      window.clearTimeout(clear);
-      window.clearTimeout(finish);
-    };
-  }, [run, reduced, inView]);
-
-  const clearing = state !== "holding";
   return (
     <div ref={host} className="relative aspect-[16/9] w-full overflow-hidden">
+      <div data-opening-field className="absolute inset-0">
+        <ModuleField className="absolute inset-0 [&>canvas]:block [&>canvas]:h-full [&>canvas]:w-full" />
+      </div>
       <div className="absolute inset-0 flex flex-col justify-end gap-3 p-6">
         <span className="font-mono text-[9px] uppercase tracking-[0.2em] text-muted">Covenant · open agent-native operating layer</span>
         <span className="type-display text-[clamp(1.4rem,3.2vw,2.4rem)] text-fg">An operating system</span>
       </div>
-      {state !== "done" ? (
-        <div className="absolute inset-0" aria-hidden>
-          <div className="grid h-full w-full" style={{ gridTemplateColumns: `repeat(${cols}, 1fr)`, gridTemplateRows: `repeat(${rows}, 1fr)` }}>
-            {Array.from({ length: cols * rows }, (_, i) => {
-              const col = i % cols;
-              const row = Math.floor(i / cols);
-              const delay = (col / cols) * 0.55 + (row / rows) * 0.35;
-              return (
-                <span
-                  key={i}
-                  className="block bg-raised"
-                  style={{
-                    transition: `transform 0.62s ${EASE}, opacity 0.62s ${EASE}, border-radius 0.62s ${EASE}`,
-                    transitionDelay: `${delay.toFixed(3)}s`,
-                    transform: clearing ? "scale(0.24)" : "none",
-                    borderRadius: clearing ? "22%" : 0,
-                    opacity: clearing ? 0 : 1,
-                  }}
-                />
-              );
-            })}
-          </div>
-          <div className="absolute inset-0 grid place-items-center">
-            <span
-              className="flex h-[22%]"
-              style={{ transition: `opacity 0.4s ease, transform 0.6s ${EASE}`, opacity: clearing ? 0 : 1, transform: clearing ? "scale(0.82)" : "none" }}
-            >
-              <CovenantMark className="h-full w-auto" />
-            </span>
-          </div>
-        </div>
-      ) : null}
+      {reduced ? null : (
+        // A larger mark than the home page's (about 6% of the width), so it
+        // reads at this size.
+        <FieldCurtain
+          key={run}
+          play={inView}
+          alignTo="[data-opening-field] canvas"
+          clearLeft
+          className="[--curtain-mark:9.9%]"
+        />
+      )}
       <button type="button" onClick={() => setRun((r) => r + 1)} className={`${replayButton} absolute bottom-4 right-4`}>
         Replay <span aria-hidden>↺</span>
       </button>

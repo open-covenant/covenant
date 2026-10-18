@@ -12,9 +12,9 @@ funded AgentKit acceptance, production restart/replay, client publication and
 public page/card checks on 2026-10-18. The broader `codex/compute-prism-parity`
 implementation and overlap in independent deployment-base changes are not
 acceptance evidence for the remaining packages.
-Package 5 now has a separately qualified JavaScript LangChain/LangGraph
-candidate over the accepted x402 client. Its funded acceptance and checkpoint
-replay passed on 2026-10-18; publication remains separately tracked in its
+Package 5 now has a separately released JavaScript LangChain/LangGraph
+integration over the accepted x402 client. Funded acceptance, checkpoint replay,
+immutable publication and public page/card checks passed on 2026-10-18 in its
 [release record](compute-langchain-release-evidence.md).
 This is partial package-5 coverage, not completion of the full SDK/framework set.
 
@@ -28,7 +28,7 @@ Provider market sampling is read-only and cannot create rentals or move funds.
 | 2 | Aug 13 [observer](https://github.com/prismnetwork-tech/prism/pull/160), [status](https://github.com/prismnetwork-tech/prism/pull/164) | Read-only pinned chain observer, public status and reviewed incidents, durable confirmed/recovery alerts | 495 pre-merge coordinator tests; 23 final observer tests and 48-route integration; [release evidence](compute-observer-release-evidence.md) | Live 2026-10-17; 55 public checks passed after restart, two leases reconciled without findings, durable alerts and unchanged financial metrics verified, X card rendered |
 | 3 | Aug 14 [workspaces](https://github.com/prismnetwork-tech/prism/pull/179) | Not included in this release | Separate parity branch | Not activated here |
 | 4 | Aug 14 [canary](https://github.com/prismnetwork-tech/prism/pull/180) | Not included in this release | Separate parity branch | Not activated here |
-| 5 | Aug 14–15 [SDKs](https://github.com/prismnetwork-tech/prism/pull/182) | Partial: official JavaScript LangChain tool and persistent LangGraph demo over the existing x402 client; other clients/frameworks remain separate | 32 source and 32 installed-package tests; exact signed policy, receipt verification, concurrent/restart recovery and checkpoint replay; [release record](compute-langchain-release-evidence.md) | Funded live-model selection and 0.05-USDC purchase passed 2026-10-18; pending recovery reused the original authorization and completed checkpoint replay made no network calls. Package publication and public-page checks pending |
+| 5 | Aug 14–15 [SDKs](https://github.com/prismnetwork-tech/prism/pull/182) | Partial: official JavaScript LangChain tool and persistent LangGraph demo over the existing x402 client; other clients/frameworks remain separate | 32 source and 32 installed-package tests; exact signed policy, receipt verification, concurrent/restart recovery and checkpoint replay; [release record](compute-langchain-release-evidence.md) | Live 2026-10-18: model-selected 0.05-USDC purchase finalized; pending recovery reused the original authorization and checkpoint replay made no network calls. Immutable v0.2.0 package downloads matched accepted bytes; deployed page, evidence links and crawler-facing card verified |
 | 6 | Aug 15 [x402 seller](https://github.com/prismnetwork-tech/prism/pull/187) | Official x402 V2 Solana seller, durable reserve/replay state, real AgentKit wallet client, bounded provider operator | Focused gateway, official SDK, installed client and provider recovery tests; [release record](compute-x402-release-evidence.md) | Deployed 2026-10-18; funded AgentKit purchase finalized for 0.05 USDC with a verified native result and 0.03 USDC gross native Compute charge before marketplace fees. Production restart and original-authorization replay passed without another purchase; immutable client, public page and crawler-facing sharing card verified |
 | 7 | Aug 15 [bounty](https://github.com/prismnetwork-tech/prism/pull/186) | Not included in this release | Separate parity branch | Not activated here |
 | 8 | Aug 16 [tariffs](https://github.com/prismnetwork-tech/prism/pull/191) | Not included in this release | Separate parity branch | Not activated here |

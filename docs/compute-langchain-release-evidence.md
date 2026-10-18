@@ -148,8 +148,45 @@ nor spending ceiling was reset for the corrected run.
 
 ## Publication and public page
 
-Publication and public-page checks are pending. Acceptance of the candidate does
-not itself establish public availability. Before declaring the integration live,
-verify anonymous access to the exact immutable tarball/checksum, installable
-contents, the launch page and its crawler-facing Open Graph/Twitter image. The
-earlier immutable `0.1.0` AgentKit release remains available and unchanged.
+[PR #338](https://github.com/open-covenant/covenant/pull/338) merged the integration
+at `75b50d60d72f9502850559f48371dd8f95c8b294`. The accepted package source is
+`9e53e687b0ed483dca9b66328e70c43f0c9aecdf`.
+
+The [v0.2.0 release](https://github.com/open-covenant/covenant/releases/tag/codex-compute-x402-client-v0.2.0)
+is published with GitHub release immutability enabled. Anonymous HTTP downloads
+of all three assets returned 200 and matched their recorded SHA-256 digests:
+
+| Asset | SHA-256 |
+| --- | --- |
+| `covenant-compute-x402-client-0.2.0.tgz` | `77ef86146f982432f75a83d227afb8c7a8f36049bb23d4eba29ae0da0cb606cf` |
+| `langchain-mainnet-acceptance.tar.gz` | `5da8fb7938c22f9a62520a324bbfbd974afea3ecef3b2a32725d367fcea38337` |
+| `SHA256SUMS` | `029dc7287ad1adbbcb59f3184e18ee2c8aaccea0e90cbdd7f908f65fee1dab3a` |
+
+The public package is byte-identical to the installed candidate tested above.
+The acceptance archive contains the actual model-selected tool call, signed
+purchase and output, checkpoint replay and independent finalized-payment check.
+It contains no wallet key, authorization journal, provider credential or private
+RPC configuration. The earlier immutable `0.1.0` AgentKit release is unchanged.
+
+[PR #339](https://github.com/open-covenant/covenant/pull/339) published the
+[integration page](https://opencovenant.org/compute-langchain). Render service
+`srv-d7ud5idb910c73aov88g`, deployment `dep-dbae8k9srm7s73abshag`, reported
+**Deploy succeeded | Live** for website revision
+`096439598f8d22e4fdd6631ebbd88c9ab47ef8c0` at 15:25:32 UTC on 2026-10-18.
+The production build passed its generated-card checks for 79 pages.
+
+At 15:26 UTC, ordinary and `Twitterbot/1.0` requests both returned HTTP 200,
+the correct canonical URL, `summary_large_image`, and the same generated
+Open Graph/Twitter image URL. The PNG returned HTTP 200 at 1200 × 630, SHA-256
+`3381b5382732daf1428448dca2e007adbc9765831c78f6404d42f03c4d3a000e`.
+All six published evidence files matched the accepted local bytes, and the route
+was present in the sitemap. This verifies the crawler-facing page and image,
+not an actual X post or a guarantee about X's cache.
+
+Production browser checks at 1440 × 1000 and 390 × 844 found no horizontal
+page overflow or JavaScript console errors. Setup/workflow anchors, internal
+code scrolling and the optional-dependencies disclosure worked at both sizes.
+
+The live gateway still reported healthy admissions and its previously accepted
+revision `e52e2a790e1dbabf9a7e5018cdca99e82cdcea9e`. This client release did not
+replace that service or require another funded gateway reserve.

@@ -1,0 +1,122 @@
+{
+  "package": {
+    "url": "https://github.com/open-covenant/covenant/releases/tag/codex-compute-x402-client-v0.2.0",
+    "immutable": true,
+    "assets": [
+      {
+        "name": "covenant-compute-x402-client-0.2.0.tgz",
+        "sha256": "77ef86146f982432f75a83d227afb8c7a8f36049bb23d4eba29ae0da0cb606cf",
+        "httpStatus": 200,
+        "authenticated": false
+      },
+      {
+        "name": "langchain-mainnet-acceptance.tar.gz",
+        "sha256": "5da8fb7938c22f9a62520a324bbfbd974afea3ecef3b2a32725d367fcea38337",
+        "httpStatus": 200,
+        "authenticated": false
+      },
+      {
+        "name": "SHA256SUMS",
+        "sha256": "029dc7287ad1adbbcb59f3184e18ee2c8aaccea0e90cbdd7f908f65fee1dab3a",
+        "httpStatus": 200,
+        "authenticated": false
+      }
+    ]
+  },
+  "website": {
+    "checkedAt": "2026-10-18T15:26:18.876325+00:00",
+    "url": "https://opencovenant.org/compute-langchain",
+    "websiteRevision": "096439598f8d22e4fdd6631ebbd88c9ab47ef8c0",
+    "renderService": "srv-d7ud5idb910c73aov88g",
+    "renderDeploy": "dep-dbae8k9srm7s73abshag",
+    "agents": [
+      {
+        "userAgent": "Covenant-Public-Release-Check",
+        "status": 200,
+        "canonical": "https://opencovenant.org/compute-langchain",
+        "title": "Covenant Compute for LangChain and LangGraph",
+        "card": "summary_large_image",
+        "image": "https://opencovenant.org/og/compute-langchain.png",
+        "htmlSha256": "57bb9c37bf0a22c26b39c8f5c9c01245b9d2f7d00b276c1cd04a6f16fe4b580c"
+      },
+      {
+        "userAgent": "Twitterbot/1.0",
+        "status": 200,
+        "canonical": "https://opencovenant.org/compute-langchain",
+        "title": "Covenant Compute for LangChain and LangGraph",
+        "card": "summary_large_image",
+        "image": "https://opencovenant.org/og/compute-langchain.png",
+        "htmlSha256": "57bb9c37bf0a22c26b39c8f5c9c01245b9d2f7d00b276c1cd04a6f16fe4b580c"
+      }
+    ],
+    "image": {
+      "status": 200,
+      "width": 1200,
+      "height": 630,
+      "bytes": 105334,
+      "sha256": "3381b5382732daf1428448dca2e007adbc9765831c78f6404d42f03c4d3a000e",
+      "contentType": "image/png"
+    },
+    "evidenceFiles": [
+      {
+        "name": "local-qualification.json",
+        "status": 200,
+        "sha256": "5c0434d8aa4634e963ebe653d409523a6eed8ea8079da4baab56796bf4e449fc"
+      },
+      {
+        "name": "purchase.json",
+        "status": 200,
+        "sha256": "aaa459a1b0c4bb8f776dd3b7d07476a22646be2af3235d61e802c8c665f514ce"
+      },
+      {
+        "name": "reconciliation.json",
+        "status": 200,
+        "sha256": "2a96aba8e1cb67470256f0b2ecab9f3a11494a4864f2d396b18ae88a00d7e45e"
+      },
+      {
+        "name": "response.txt",
+        "status": 200,
+        "sha256": "b74298900d071066b5662df655ba828b1ddf09b21da8fc34e1d7cba897133914"
+      },
+      {
+        "name": "resume.json",
+        "status": 200,
+        "sha256": "411662c70552138b2cc5ded8912afdfc9b2faedeac7cede6e6dbe24baa5d75f9"
+      },
+      {
+        "name": "tool-selection.json",
+        "status": 200,
+        "sha256": "54b55e6124bba211357b4d9e231b3d2b305bf951843108f3cde3dd4440b7e4e5"
+      }
+    ],
+    "gateway": {
+      "admissions_enabled": true,
+      "protocol": "x402-v2",
+      "revision": "e52e2a790e1dbabf9a7e5018cdca99e82cdcea9e",
+      "service": "covenant-compute-x402",
+      "status": "ok"
+    },
+    "status": "passed",
+    "scope": "Public page, crawler metadata, generated image, published evidence and active gateway. This is not an actual X post or an X cache guarantee."
+  },
+  "browser": {
+    "checkedAt": "2026-10-18T15:27:05.812Z",
+    "url": "https://opencovenant.org/compute-langchain",
+    "desktop": {
+      "h1": "Add Covenant Compute to LangChain.",
+      "headingFont": "Archivo, \"Archivo Fallback\", \"Arial Black\", ui-sans-serif, sans-serif",
+      "pageWidth": 1440,
+      "url": "https://opencovenant.org/compute-langchain",
+      "viewport": 1440
+    },
+    "mobile": {
+      "width": 390,
+      "height": 844,
+      "pageWidth": 390
+    },
+    "workflowAnchor": true,
+    "setupAnchor": true,
+    "optionalDependenciesExpanded": true,
+    "productionErrors": []
+  }
+}

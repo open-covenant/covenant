@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "status": "production_acceptance",
-  "sourceRevision": "ccf1fc350760868deb9dd181c47882874e14289f",
+  "sourceRevision": "63f46b9e5ece8c6a078ef8f5055bdb8e1d950802",
   "gatewayUrl": "https://compute-inference.opencovenant.org",
   "endpoint": "https://compute-inference.opencovenant.org/v1/chat/completions",
   "model": "claude-haiku-4.5",

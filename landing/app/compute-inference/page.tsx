@@ -11,12 +11,13 @@ export const metadata: Metadata = pageMetadata(
   {
     title: "Inference with Coinbase AgentKit · Covenant Compute",
     description:
-      "Configure a Coinbase AgentKit wallet for Covenant inference with x402 and Solana USDC. Source installation, exact pricing, spending limits and public deployment identities.",
+      "Configure a Coinbase AgentKit wallet for Covenant inference with x402 and Solana USDC. Client installation, exact pricing, spending limits and public deployment identities.",
   },
 );
 
 const SOURCE = `https://github.com/open-covenant/covenant/tree/${deployment.sourceRevision}`;
 const CLIENT_SOURCE = `${SOURCE}/sdk/compute-x402-client`;
+const GATEWAY_SOURCE = `https://github.com/open-covenant/covenant/tree/${deployment.gatewayRevision}/agent-os/crates/covenant-compute-gateway`;
 const eyebrow = "font-mono text-[11px] uppercase tracking-[0.3em] text-muted";
 const heading = "text-[13px] uppercase tracking-[0.25em] text-fg sm:text-[14px]";
 const paragraph = "text-[13px] leading-[1.8] text-fg-soft sm:text-[14px]";
@@ -29,7 +30,15 @@ const steps = [
   { number: "03", title: "Verify the completed purchase", body: "Covenant runs the request from its funded reserve, then settles the customer payment before releasing the result. The client checks the signed job, operator receipt, exact output and confirmed payment." },
 ];
 
-const install = `git clone --filter=blob:none https://github.com/open-covenant/covenant.git
+const packageInstall = `mkdir covenant-inference &&
+cd covenant-inference &&
+npm init -y &&
+curl --fail --location --output ${deployment.clientPackage.filename} \\
+  ${deployment.clientPackage.url} &&
+echo "${deployment.clientPackage.sha256}  ${deployment.clientPackage.filename}" | shasum -a 256 -c - &&
+npm install --ignore-scripts ./${deployment.clientPackage.filename}`;
+
+const sourceInstall = `git clone --filter=blob:none https://github.com/open-covenant/covenant.git
 cd covenant
 git fetch origin ${deployment.sourceRevision}
 git checkout --detach ${deployment.sourceRevision}
@@ -58,7 +67,7 @@ const request = `{
   "model": "${deployment.model}",
   "messages": [{
     "role": "user",
-    "content": "Return a self-contained HTML meeting cost calculator, with CSS and JavaScript inline. No external resources. Return HTML only."
+    "content": "Return a complete, compact HTML meeting cost calculator under 1000 tokens. Include working inputs for attendees, hourly rate and meeting minutes. Inline CSS and JavaScript; no external resources. Return HTML only, ending with </html>."
   }],
   "max_tokens": ${deployment.maxOutputTokens},
   "temperature": 0.2
@@ -117,9 +126,11 @@ export default function ComputeInferencePage() {
         </section>
 
         <section id="agentkit" aria-labelledby="agentkit-heading" className="mt-16 scroll-mt-28 border-t border-line/80 pt-9 sm:mt-24 sm:pt-11">
-          <h2 id="agentkit-heading" className={heading}>Install the client from source</h2>
-          <p className={`mt-5 max-w-2xl ${paragraph}`}>Requires Node.js 24 or later. This release uses AgentKit {deployment.agentKitVersion} and the official x402 SDK {deployment.x402SdkVersion}. Install the pinned source revision and its locked dependencies:</p>
-          <CodeBlock label="Source installation · terminal">{install}</CodeBlock>
+          <h2 id="agentkit-heading" className={heading}>Install the client</h2>
+          <p className={`mt-5 max-w-2xl ${paragraph}`}>Requires Node.js 24 or later. This release uses AgentKit {deployment.agentKitVersion} and the official x402 SDK {deployment.x402SdkVersion}. Download the versioned release package, verify its checksum and install it with its locked dependencies:</p>
+          {!deployment.clientPackage.published && <p className={`mt-4 max-w-2xl ${paragraph}`}>The release package will be published after production acceptance. The source installation below is available now.</p>}
+          <CodeBlock label="Release package installation · terminal">{packageInstall}</CodeBlock>
+          <details className="mt-5 border-y border-line/80 py-4"><summary className="cursor-pointer text-[13px] text-fg-soft">Install the pinned source instead</summary><CodeBlock label="Source installation · terminal">{sourceInstall}</CodeBlock><p className={`mt-4 ${paragraph}`}>For this source checkout, run <code className="font-mono text-[12px]">node demo.mjs config.private.json request.json ./purchase-evidence</code> from the client directory.</p></details>
           <h3 className="mt-10 text-[15px] text-fg">Configure your wallet and spending limits</h3>
           <p className={`mt-4 max-w-2xl ${paragraph}`}>Download the example, save it as config.private.json and replace its wallet-file placeholder with your own private Solana keypair file. Keep that file on your machine with mode 0600. The example caps each payment at {price} and cumulative spending at 0.50 USDC. Use a persistent purchase journal and a wallet funded with Solana USDC.</p>
           <a className={`mt-4 inline-flex min-h-11 items-center text-[13px] ${link}`} href="/compute/inference/agentkit-config.example.json" download>Download client configuration <span aria-hidden="true" className="ml-2">↓</span></a>
@@ -127,7 +138,7 @@ export default function ComputeInferencePage() {
           <h3 className="mt-10 text-[15px] text-fg">Save one request, then run the demo</h3>
           <p className={`mt-4 max-w-2xl ${paragraph}`}>Generate a UUID once with <code className="font-mono text-[12px]">node -e &apos;console.log(crypto.randomUUID())&apos;</code>, replace the request ID below and save it as <code className="font-mono text-[12px]">request.json</code>. Keep that file unchanged when resuming an interrupted purchase.</p>
           <CodeBlock label="Saved request · JSON">{request}</CodeBlock>
-          <CodeBlock label="Run the installed demo · terminal">{"node demo.mjs config.private.json request.json ./purchase-evidence"}</CodeBlock>
+          <CodeBlock label="Run the installed demo · terminal">{"node node_modules/@covenant/compute-x402-client/demo.mjs config.private.json request.json ./purchase-evidence"}</CodeBlock>
           <p className={`mt-5 max-w-2xl ${paragraph}`}>The demo invokes the registered AgentKit action and saves the verified response, payment details and signed receipt. HTML responses also produce a local preview.</p>
           <details className="mt-7 border-y border-line/80 py-4"><summary className="cursor-pointer text-[13px] text-fg-soft">Add the action to an existing AgentKit application</summary><CodeBlock label="AgentKit registration · JavaScript">{registration}</CodeBlock></details>
         </section>
@@ -145,7 +156,7 @@ export default function ComputeInferencePage() {
           <div><h2 className={heading}>Know what the receipt verifies</h2><p className={`mt-5 ${paragraph}`}>The receipt binds the operator, job and exact output. It does not establish the quality of an answer or attest to the operator&apos;s hardware. Built with the open-source Coinbase AgentKit and x402 SDKs.</p></div>
         </section>
         <div className="mt-14 flex flex-wrap gap-x-6 gap-y-3 border-t border-line/80 pt-7 sm:mt-20">{[
-          { label: "Compute status", href: "/compute-status" }, { label: "Compute", href: "/compute" }, { label: "Gateway source", href: `${SOURCE}/agent-os/crates/covenant-compute-gateway` },
+          { label: "Compute status", href: "/compute-status" }, { label: "Compute", href: "/compute" }, { label: "Gateway source", href: GATEWAY_SOURCE },
         ].map(({label,href})=><a key={href} href={href} className="inline-flex min-h-11 items-center text-[11px] uppercase tracking-[0.2em] text-muted transition-colors hover:text-fg">{label}<span aria-hidden="true" className="ml-2">→</span></a>)}</div>
       </div>
       <SiteFooter className="pb-8" />

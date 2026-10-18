@@ -10,8 +10,7 @@ and the separately configured planner chooses when to call the Covenant tool.
 Implementation, local qualification, funded acceptance, immutable package
 publication and public page/card deployment passed on 2026-10-18. The
 [Microsoft Agent Framework integration page](https://opencovenant.org/compute-agent-framework)
-is live. Final interactive production-browser review remains to be recorded
-before merging this evidence update.
+is live, and interactive production-browser review passed on desktop and mobile.
 
 The client-only release builds on Compute deployment branch
 `b2662878a4c4aaa10ee6dcd3a05a3ef1e22615de` and the accepted x402 gateway
@@ -82,8 +81,15 @@ Production readback at 19:49:04 UTC on 2026-10-18 verified:
 
 These checks verify the public crawler-facing metadata and image. They do not
 claim an actual X post, an X cache refresh, or a guaranteed card rendering in a
-particular X client. Final production desktop/mobile browser interaction review
-is a remaining documentation gate before this evidence update is merged.
+particular X client.
+
+Interactive production review in Brave passed at 19:50:37 UTC on 2026-10-18:
+desktop 1440×1000 and mobile 390×844 both retained the shared site layout without
+horizontal page overflow or JavaScript console errors. Setup navigation and the
+planner-cost disclosure worked; all nine evidence links and the response review
+notes were visible. Code blocks kept overflow within their own containers, and
+no pending-release banner remained. The temporary viewport and QA tab were
+restored/closed without changing existing browser tabs or source files.
 
 ## Local qualification
 

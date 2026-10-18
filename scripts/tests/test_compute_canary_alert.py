@@ -22,9 +22,14 @@ ENV = {
     "COVENANT_CANARY_ALERT_CLOUDFLARE_API_TOKEN": "fixture-only-token",
     "COVENANT_CANARY_ALERT_CLOUDFLARE_ACCOUNT_ID": "a" * 32,
     "COVENANT_CANARY_ALERT_FROM": "compute-alerts@opencovenant.org",
-    "COVENANT_CANARY_ALERT_TO": "alert@opencovenant.org",
+    "COVENANT_CANARY_ALERT_TO": "verified-fixture@example.net",
 }
 
+
+RECIPIENT = ENV["COVENANT_CANARY_ALERT_TO"]
+
+def provider_accepts(value, recipient=RECIPIENT):
+    return ALERT.cloudflare_accepted(value, recipient)
 
 def payload():
     return {"schema": 1, "type": ALERT.MISSING, "state": {
@@ -38,7 +43,7 @@ def payload():
 
 def accepted():
     return {"success": True, "errors": [], "result": {
-        "delivered": [ALERT.RECIPIENT], "queued": [], "permanent_bounces": [],
+        "delivered": [RECIPIENT], "queued": [], "permanent_bounces": [],
     }}
 
 
@@ -109,7 +114,7 @@ class AlertTests(unittest.TestCase):
         self.assertEqual(headers["Idempotency-Key"], event_id)
         self.assertEqual(headers["Accept-Encoding"], "identity")
         self.assertEqual(json.loads(body), email)
-        self.assertEqual(email["to"], ALERT.RECIPIENT)
+        self.assertEqual(email["to"], RECIPIENT)
         self.assertEqual(email["headers"]["X-Covenant-Event-ID"], event_id)
         self.assertNotIn("must-not-be-in-email", email["text"])
         self.assertNotIn("untrusted text", email["text"])
@@ -144,18 +149,18 @@ class AlertTests(unittest.TestCase):
         for field in ("delivered", "queued"):
             value = accepted()
             value["result"]["delivered"] = []
-            value["result"][field] = [ALERT.RECIPIENT]
-            self.assertTrue(ALERT.cloudflare_accepted(value))
+            value["result"][field] = [RECIPIENT]
+            self.assertTrue(provider_accepts(value))
             value["result"]["permanent_bounces"] = ["somebody-else@example.com"]
-            self.assertTrue(ALERT.cloudflare_accepted(value))
+            self.assertTrue(provider_accepts(value))
 
     def test_permanent_bounces_and_suppression_override_acceptance(self):
         for field in ("permanent_bounces", "suppressed_recipients"):
             for disposition in ("delivered", "queued"):
                 value = accepted()
-                value["result"][disposition] = [ALERT.RECIPIENT]
-                value["result"][field] = [ALERT.RECIPIENT]
-                self.assertFalse(ALERT.cloudflare_accepted(value))
+                value["result"][disposition] = [RECIPIENT]
+                value["result"][field] = [RECIPIENT]
+                self.assertFalse(provider_accepts(value))
 
     def test_malformed_provider_contract_is_never_accepted(self):
         invalids = [None, [], {}, {"success": True}, {"success": False, "errors": [], "result": accepted()["result"]}]
@@ -166,7 +171,7 @@ class AlertTests(unittest.TestCase):
                 candidate[field] = value
                 invalids.append(candidate)
         for field in ("delivered", "queued", "permanent_bounces", "suppressed_recipients"):
-            for value in (None, "", {}, [1], [ALERT.RECIPIENT, False]):
+            for value in (None, "", {}, [1], [RECIPIENT, False]):
                 candidate = accepted()
                 candidate["result"][field] = value
                 invalids.append(candidate)
@@ -176,13 +181,28 @@ class AlertTests(unittest.TestCase):
             invalids.append(candidate)
         for candidate in invalids:
             with self.subTest(value=candidate):
-                self.assertFalse(ALERT.cloudflare_accepted(candidate))
+                self.assertFalse(provider_accepts(candidate))
 
     def test_other_recipient_or_similar_case_does_not_acknowledge(self):
-        for recipient in ("other@example.com", "Alert@opencovenant.org", ALERT.RECIPIENT + " "):
+        for recipient in ("other@example.com", "alert@opencovenant.org", RECIPIENT.upper(), RECIPIENT + " "):
             value = accepted()
             value["result"]["delivered"] = [recipient]
-            self.assertFalse(ALERT.cloudflare_accepted(value))
+            self.assertFalse(provider_accepts(value))
+
+    def test_configured_verified_destination_is_used_and_must_match_provider_exactly(self):
+        recipient = "another.verified+alerts@example.org"
+        config = ALERT.load_config({**ENV, "COVENANT_CANARY_ALERT_TO": recipient})
+        event_id, email = ALERT.email_event(payload(), config)
+        self.assertEqual(email["to"], recipient)
+        with self.assertRaises(ALERT.Refusal):
+            ALERT.deliver(config, event_id, email)  # fixture accepts a different mailbox
+        value = accepted()
+        value["result"]["delivered"] = []
+        value["result"]["queued"] = [recipient]
+        self.connection.response = Response(body=json.dumps(value).encode())
+        ALERT.deliver(config, event_id, email)
+        value["result"]["suppressed_recipients"] = [recipient]
+        self.assertFalse(provider_accepts(value, recipient))
 
     def test_200_false_is_nonzero_without_provider_detail(self):
         self.connection.response = Response(body=json.dumps({"success": False, "errors": ["secret-provider-body"]}).encode())
@@ -304,7 +324,7 @@ class AlertTests(unittest.TestCase):
             "COVENANT_CANARY_ALERT_CLOUDFLARE_API_TOKEN": ["", "x\r\nAuthorization: x", "x\x00", " space ", "x" * 4097],
             "COVENANT_CANARY_ALERT_CLOUDFLARE_ACCOUNT_ID": ["a" * 31, "g" * 32, "../../attacker", "a" * 32 + "/"],
             "COVENANT_CANARY_ALERT_FROM": ["Name <mail@example.com>", "a@example.com\nBcc:x@y.com", "a@example.com,b@example.com", "a b@example.com"],
-            "COVENANT_CANARY_ALERT_TO": ["attacker@example.com", ALERT.RECIPIENT + "\r\n", ALERT.RECIPIENT.upper()],
+            "COVENANT_CANARY_ALERT_TO": ["", RECIPIENT + "\r\n", "a@example.com,b@example.com", "Name <a@example.com>", "a..b@example.com", ".a@example.com", "a@-example.com", "a@example..com", "a\n@example.com", "a" * 65 + "@example.com"],
         }
         for field, values in bad.items():
             for value in values:

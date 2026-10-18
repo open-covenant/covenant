@@ -3,7 +3,7 @@
 
 Input: {"schema": 1, "type": "rental_canary_missing_or_unsuccessful" or
 "rental_canary_recovered", "state": <sanitized public monitor snapshot>}.
-Exit 0 means Cloudflare explicitly delivered or queued alert@opencovenant.org;
+Exit 0 means Cloudflare explicitly delivered or queued the configured recipient;
 every other outcome exits 1. No provider response or input body is printed.
 
 The runner owns durable delivery bookkeeping under monitor.lock. UUIDv5 event
@@ -14,7 +14,8 @@ does not claim exactly-once delivery beyond the provider's idempotency contract.
 
 Required environment: COVENANT_CANARY_ALERT_CLOUDFLARE_API_TOKEN,
 COVENANT_CANARY_ALERT_CLOUDFLARE_ACCOUNT_ID, COVENANT_CANARY_ALERT_FROM,
-COVENANT_CANARY_ALERT_TO (must be alert@opencovenant.org). Only an explicit
+COVENANT_CANARY_ALERT_TO (the verified destination behind the approved alert
+route, pinned by deployment against current routing evidence). Only an explicit
 invocation sends mail; import and tests are offline. Like the runner, requires
 Unix for the five-second whole-request deadline.
 """
@@ -32,7 +33,6 @@ import uuid
 
 HOST = "api.cloudflare.com"
 ORIGIN = "https://" + HOST
-RECIPIENT = "alert@opencovenant.org"
 WINDOW_SECONDS = 6 * 60 * 60
 MAX_INPUT_BYTES = 128 * 1024
 MAX_RESPONSE_BYTES = 16 * 1024
@@ -74,6 +74,17 @@ def natural(value):
     return type(value) is int and 0 <= value <= 2**53 - 1
 
 
+def plain_mailbox(value):
+    if not isinstance(value, str) or len(value) > 254 or value.count("@") != 1:
+        return False
+    local, domain = value.split("@")
+    return (0 < len(local) <= 64
+            and re.fullmatch(r"[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*", local) is not None
+            and len(domain.split(".")) >= 2
+            and all(re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", label)
+                    for label in domain.split(".")))
+
+
 def load_config(environ):
     token = environ.get("COVENANT_CANARY_ALERT_CLOUDFLARE_API_TOKEN")
     account = environ.get("COVENANT_CANARY_ALERT_CLOUDFLARE_ACCOUNT_ID")
@@ -84,10 +95,8 @@ def load_config(environ):
     require(isinstance(account, str) and re.fullmatch(r"[0-9a-fA-F]{32}", account),
             "invalid alert account")
     # A single ASCII mailbox, not an arbitrary RFC5322 header or recipient list.
-    require(isinstance(sender, str) and len(sender) <= 254
-            and re.fullmatch(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?", sender),
-            "invalid alert sender")
-    require(recipient == RECIPIENT, "invalid alert recipient")
+    require(plain_mailbox(sender), "invalid alert sender")
+    require(plain_mailbox(recipient), "invalid alert recipient")
     return {"token": token, "account": account, "from": sender, "to": recipient}
 
 
@@ -133,9 +142,9 @@ def email_event(payload, config):
                       "text": body, "headers": {"X-Covenant-Event-ID": event_id}}
 
 
-def cloudflare_accepted(value, recipient=RECIPIENT):
+def cloudflare_accepted(value, recipient):
     """Match the coordinator observer's strict per-recipient acceptance rule."""
-    if not isinstance(value, dict) or value.get("success") is not True or value.get("errors") != []:
+    if not plain_mailbox(recipient) or not isinstance(value, dict) or value.get("success") is not True or value.get("errors") != []:
         return False
     result = value.get("result")
     if not isinstance(result, dict):

@@ -1,3 +1,4 @@
+import {verifyImageProvenance} from './smoke.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
@@ -53,4 +54,13 @@ test('fixture CLI is reachable by Node fetch on the configured smoke port',{time
 test('diagnostics refuse to inspect or log the private app container',async()=>{
  await assert.rejects(fixtureDiagnostics('covenant-gateway-012345abcdef'),/Fixture-only/);
  await assert.rejects(fixtureDiagnostics('arbitrary-container'),/Fixture-only/);
+});
+
+test('observer overlay provenance keeps image source separate from accepted binary source',()=>{
+ const binary='e'.repeat(40),observer='a'.repeat(40),base='sha256:'+'b'.repeat(64);
+ verifyImageProvenance({'org.opencontainers.image.revision':binary},binary);
+ const labels={'org.opencontainers.image.revision':observer,'io.covenant.runtime.revision':binary,'io.covenant.observer.revision':observer,'org.opencontainers.image.base.digest':base};
+ verifyImageProvenance(labels,binary,observer);
+ for(const key of Object.keys(labels)){const bad={...labels};delete bad[key];assert.throws(()=>verifyImageProvenance(bad,binary,observer));}
+ assert.throws(()=>verifyImageProvenance({...labels,'io.covenant.runtime.revision':observer},binary,observer));
 });

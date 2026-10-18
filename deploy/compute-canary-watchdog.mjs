@@ -9,20 +9,28 @@ import {spawn} from 'node:child_process';
 export const ENDPOINT='https://compute-api.opencovenant.org/rental-checks';
 export const OUTAGE_SECONDS=3*6*60*60;
 export const PROBE_SECONDS=60;
-const MAX_BODY=256*1024, MAX_STATE=128*1024, RECIPIENT='alert@opencovenant.org';
+const MAX_BODY=256*1024, MAX_STATE=128*1024;
 const ALERT_KEYS=['COVENANT_CANARY_ALERT_CLOUDFLARE_API_TOKEN','COVENANT_CANARY_ALERT_CLOUDFLARE_ACCOUNT_ID','COVENANT_CANARY_ALERT_FROM','COVENANT_CANARY_ALERT_TO'];
 const object=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
 const natural=v=>Number.isSafeInteger(v)&&v>=0;
 const nullableTime=v=>v===null||natural(v);
 const uuid=v=>typeof v==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(v);
 function requireValue(ok){if(!ok)throw Error('Watchdog state or configuration invalid');}
+function plainMailbox(value){
+  if(typeof value!=='string'||value.length>254||/[^\x21-\x7e]/.test(value))return false;
+  const parts=value.split('@');if(parts.length!==2)return false;
+  const [local,domain]=parts,labels=domain.split('.');
+  return local.length>0&&local.length<=64&&/^[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*$/.test(local)
+    &&labels.length>=2&&labels.every(label=>/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/.test(label));
+}
 
 export function alertConfig(env){
   const token=env[ALERT_KEYS[0]], account=env[ALERT_KEYS[1]], from=env[ALERT_KEYS[2]], to=env[ALERT_KEYS[3]];
   requireValue(typeof token==='string'&&token.length>0&&token.length<=4096&&/^[\x21-\x7e]+$/.test(token));
   requireValue(typeof account==='string'&&/^[0-9a-fA-F]{32}$/.test(account));
-  requireValue(typeof from==='string'&&from.length<=254&&/^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/.test(from));
-  requireValue(to===RECIPIENT);
+  // Deployment pins the verified destination behind the approved alert route.
+  // A single configured mailbox never authorizes another response recipient.
+  requireValue(plainMailbox(from)&&plainMailbox(to));
   return {token,account,from,to};
 }
 
@@ -141,13 +149,13 @@ export async function boundedJson(url,{method='GET',headers={},body,limit=MAX_BO
     }catch{finish(true);}
   });
 }
-export function cloudflareAccepted(value){
+export function cloudflareAccepted(value,recipient){
   const r=value?.result;
-  return object(value)&&value.success===true&&Array.isArray(value.errors)&&value.errors.length===0&&object(r)
+  return plainMailbox(recipient)&&object(value)&&value.success===true&&Array.isArray(value.errors)&&value.errors.length===0&&object(r)
     &&['delivered','queued','permanent_bounces'].every(k=>Array.isArray(r[k])&&r[k].every(v=>typeof v==='string'))
     &&(!('suppressed_recipients' in r)||Array.isArray(r.suppressed_recipients)&&r.suppressed_recipients.every(v=>typeof v==='string'))
-    &&!r.permanent_bounces.includes(RECIPIENT)&&!(r.suppressed_recipients??[]).includes(RECIPIENT)
-    &&(r.delivered.includes(RECIPIENT)||r.queued.includes(RECIPIENT));
+    &&!r.permanent_bounces.includes(recipient)&&!(r.suppressed_recipients??[]).includes(recipient)
+    &&(r.delivered.includes(recipient)||r.queued.includes(recipient));
 }
 export function emailFor(event,config){
   requireValue(uuid(event.id)&&['missing','restored'].includes(event.kind)&&natural(event.observed_at_unix)&&natural(event.first_missing_at_unix));
@@ -164,7 +172,7 @@ export async function deliver(event,config,transport=boundedJson){
   const value=await transport(`https://api.cloudflare.com/client/v4/accounts/${config.account}/email/sending/send`,{
     method:'POST',headers:{authorization:`Bearer ${config.token}`,'content-type':'application/json','idempotency-key':event.id},
     body:JSON.stringify(emailFor(event,config)),limit:16*1024,timeoutMs:5000});
-  requireValue(cloudflareAccepted(value));
+  requireValue(cloudflareAccepted(value,config.to));
 }
 export async function tick({journal,config,now=Math.floor(Date.now()/1000),transport=boundedJson,send=deliver}){
   const previous=journal.read(now);let fresh=false;

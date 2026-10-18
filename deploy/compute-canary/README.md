@@ -149,7 +149,11 @@ rental verdict are separate facts.
 The alert adapter receives `{schema:1,type,state}` with `type` either
 `rental_canary_missing_or_unsuccessful` or `rental_canary_recovered`, and returns
 zero only after delivery. Failed alerts retry on later ticks; successful
-failure alerts are limited to once per six-hour window. Explicit budget pauses
+failure alerts are limited to once per six-hour window. Email uses the configured
+verified destination behind the approved alert route. Deployment pins that
+single mailbox against current Cloudflare routing evidence; the private address
+is not part of source or public status. Only an exact delivered or queued match
+for that configured mailbox acknowledges delivery. Explicit budget pauses
 disable new admissions. `--monitor --disabled` publishes intentional shutdown.
 The systemd examples are optional for compatible hosts; Render uses its own
 supervisor. Source files alone install, fund, and activate nothing.
@@ -188,8 +192,9 @@ and delivered alerts.
 The opt-in coordinator supervisor requires the existing coordinator journal at
 `/data/mainnet`. It never relocates or reinterprets a journal. The mount root is
 owned by root with traversal allowed; coordinator and canary homes are separate
-0700 directories owned by their respective Unix users. Signing keys must remain
-beneath the coordinator's private home. The canary receives only its own buyer,
+0700 directories owned by their respective Unix users. Existing signing-key
+paths are preserved; key files are mode 0600 and owned by the coordinator user.
+The canary receives only its own buyer,
 SSH identity, read-only provider evidence credential and approved alert settings.
 
 `COVENANT_CANARY_MODE` selects `preflight`, `once`, `scheduled` or `disabled`.

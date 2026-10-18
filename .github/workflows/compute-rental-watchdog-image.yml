@@ -1,0 +1,106 @@
+name: compute-rental-watchdog-image
+on:
+  push:
+    branches: [codex/compute-rental-canary-acceptance, deploy/compute-coordinator]
+    paths:
+      - .github/workflows/compute-rental-watchdog-image.yml
+      - deploy/Dockerfile.compute-rental-watchdog
+      - deploy/compute-canary-watchdog*
+      - deploy/compute-x402/supervisor.mjs
+      - deploy/compute-x402/smoke*
+  workflow_dispatch:
+concurrency:
+  group: compute-rental-watchdog-${{ github.ref }}
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  image:
+    if: github.repository == 'open-covenant/covenant'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    env:
+      DOCKER_BUILD_RECORD_UPLOAD: false
+      DOCKER_BUILD_SUMMARY: false
+      BASE_IMAGE: ghcr.io/open-covenant/covenant/compute-node-public@sha256:aef10b2661b20d35202ffdbc68ab3efb249c8e9f45c9c2953eccfa69cf5f3882
+      BASE_REVISION: e52e2a790e1dbabf9a7e5018cdca99e82cdcea9e
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 24.20.0
+      - name: Verify observer isolation and existing supervisor contracts
+        run: |
+          npm ci --omit=dev --ignore-scripts --prefix services/compute-x402-facilitator
+          node --test deploy/compute-canary-watchdog.test.mjs deploy/compute-x402/runtime.test.mjs deploy/compute-x402/smoke.test.mjs
+          node --check deploy/compute-x402/supervisor.mjs
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+        with:
+          cache-binary: false
+          version: v0.36.1
+          driver-opts: image=moby/buildkit:v0.32.2@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@601a80b39c9405e50806ae38af30926f9d957c47
+        id: image
+        with:
+          context: .
+          file: deploy/Dockerfile.compute-rental-watchdog
+          build-args: COVENANT_OBSERVER_REVISION=${{ github.sha }}
+          platforms: linux/amd64
+          provenance: false
+          pull: true
+          push: true
+          sbom: false
+          tags: ghcr.io/open-covenant/covenant/compute-node-public:rental-watchdog-${{ github.sha }}
+      - name: Verify preserved runtime and exact observer source
+        env:
+          OVERLAY_IMAGE: ghcr.io/open-covenant/covenant/compute-node-public@${{ steps.image.outputs.digest }}
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+          import {execFileSync} from 'node:child_process';
+          const docker=args=>execFileSync('docker',args,{encoding:'utf8',timeout:180000,maxBuffer:2*1024*1024}).trim();
+          const base=process.env.BASE_IMAGE,overlay=process.env.OVERLAY_IMAGE;
+          for(const image of [base,overlay])docker(['pull','--quiet',image]);
+          const inspect=image=>JSON.parse(docker(['image','inspect','--format','{{json .Config}}',image]));
+          const old=inspect(base),next=inspect(overlay);
+          assert.equal(old.Labels['org.opencontainers.image.revision'],process.env.BASE_REVISION);
+          assert.equal(next.Labels['org.opencontainers.image.revision'],process.env.GITHUB_SHA);
+          assert.equal(next.Labels['io.covenant.observer.revision'],process.env.GITHUB_SHA);
+          assert.equal(next.Labels['io.covenant.runtime.revision'],process.env.BASE_REVISION);
+          assert.equal(next.Labels['org.opencontainers.image.base.digest'],base.split('@')[1]);
+          for(const field of ['Entrypoint','Cmd','Env','User','WorkingDir','ExposedPorts','Volumes'])assert.deepEqual(next[field],old[field],field+' changed');
+          const hashScript=`const fs=require('fs'),crypto=require('crypto');const paths=['/usr/local/bin/covenant-compute-gateway','/usr/local/bin/covenant-compute-node','/opt/covenant/deploy/compute-x402/runtime.mjs','/opt/covenant/deploy/compute-x402/entrypoint.sh'];for(const dir of ['/opt/covenant/services/compute-x402-facilitator','/opt/covenant/services/compute-inference-provider'])for(const name of fs.readdirSync(dir).sort())if(name.endsWith('.mjs')||name==='package.json'||name==='package-lock.json')paths.push(dir+'/'+name);const hashes=Object.fromEntries(paths.map(p=>[p,crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex')]));console.log(JSON.stringify(hashes));`;
+          const run=(image,script)=>docker(['run','--rm','--network','none','--read-only','--cap-drop','ALL','--security-opt','no-new-privileges','--entrypoint','node',image,'-e',script]);
+          assert.deepEqual(JSON.parse(run(overlay,hashScript)),JSON.parse(run(base,hashScript)),'accepted runtime bytes changed');
+          for(const file of ['deploy/compute-canary-watchdog.mjs','deploy/compute-x402/supervisor.mjs']){
+            const expected=crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+            const actual=run(overlay,`const fs=require('fs'),crypto=require('crypto');console.log(crypto.createHash('sha256').update(fs.readFileSync('/opt/covenant/'+${JSON.stringify(file)})).digest('hex'));`);
+            assert.equal(actual,expected,'observer source mismatch');
+          }
+          console.log(JSON.stringify({runtime_revision:process.env.BASE_REVISION,observer_revision:process.env.GITHUB_SHA,base_image:base,overlay_image:overlay,runtime_bytes_preserved:true,observer_source_verified:true}));
+          JS
+      - name: Qualify immutable overlay with persistent volume and no paid dispatch
+        timeout-minutes: 10
+        env:
+          SMOKE_IMAGE: ghcr.io/open-covenant/covenant/compute-node-public@${{ steps.image.outputs.digest }}
+          SMOKE_REVISION: e52e2a790e1dbabf9a7e5018cdca99e82cdcea9e
+          SMOKE_IMAGE_REVISION: ${{ github.sha }}
+        run: node deploy/compute-x402/smoke.mjs
+      - name: Record immutable observer image
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          echo "Observer image: ghcr.io/open-covenant/covenant/compute-node-public@${IMAGE_DIGEST}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Observer source: ${GITHUB_SHA}; preserved runtime: ${BASE_REVISION}; base: ${BASE_IMAGE}" >> "$GITHUB_STEP_SUMMARY"

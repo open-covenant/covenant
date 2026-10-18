@@ -21,6 +21,7 @@ write_key() {
     mkdir -p "$(dirname "$path")"
     (umask 077 && printf '%s' "$json" > "$path")
     chown covenant:covenant "$path"
+    chmod 600 "$path"
 }
 
 write_key COVENANT_X402_FUNDING_KEYPAIR COVENANT_X402_FUNDING_KEYPAIR_JSON

@@ -161,7 +161,9 @@ existing `/data/rental-watchdog` directory and no additional service. The child
 receives only its journal path and the four `COVENANT_CANARY_ALERT_*` email
 settings documented in `environment.example`; no buyer, operator or provider
 credentials are passed to it. Its only network operations are a bounded public
-GET and Cloudflare's email-sending API for `alert@opencovenant.org`.
+GET and Cloudflare's email-sending API for the configured verified destination
+behind the approved alert route. Deployment pins that destination to current
+routing evidence; only an exact recipient match acknowledges delivery.
 
 After 18 continuous hours without a current heartbeat, it queues one reporting
 outage notification. A current disabled or budget-paused heartbeat remains

@@ -15,6 +15,14 @@ export function validateImage(image,revision){
   assert(typeof image==='string'&&image.startsWith(IMAGE_PREFIX)&&/^[a-f0-9]{64}$/.test(image.slice(IMAGE_PREFIX.length)),'Immutable Covenant image digest required');
   assert(/^[a-f0-9]{40}$/.test(revision),'Full expected source revision required');
 }
+export function verifyImageProvenance(labels,revision,imageRevision=revision){
+  assert.equal(labels?.['org.opencontainers.image.revision'],imageRevision,'Unexpected image source');
+  if(imageRevision!==revision){
+    assert.equal(labels?.['io.covenant.runtime.revision'],revision,'Unexpected preserved runtime source');
+    assert.equal(labels?.['io.covenant.observer.revision'],imageRevision,'Unexpected observer source');
+    assert(/^sha256:[a-f0-9]{64}$/.test(labels?.['org.opencontainers.image.base.digest']??''),'Pinned base digest required');
+  }
+}
 export function smokeEnvironment(){
   const buyer=crypto.randomBytes(32),fee=crypto.randomBytes(32),merchant=crypto.randomBytes(32),operator=crypto.randomBytes(32);
   const privateKey=crypto.createPrivateKey({key:Buffer.concat([Buffer.from('302e020100300506032b657004220420','hex'),fee]),format:'der',type:'pkcs8'});
@@ -72,8 +80,8 @@ async function mainnetObservation(){
   assert(response.ok,'Read-only mainnet genesis RPC unavailable');const result=await response.json();
   assert.equal(result.result,MAINNET_GENESIS,'Unexpected mainnet genesis');return result.result;
 }
-export async function smoke(image,revision){
-  validateImage(image,revision);process.umask(0o077);
+export async function smoke(image,revision,imageRevision=revision){
+  validateImage(image,revision);validateImage(image,imageRevision);process.umask(0o077);
   const genesis=await mainnetObservation(),temporary=await fs.mkdtemp(path.join(os.tmpdir(),'covenant-x402-smoke-'));
   const suffix=crypto.randomBytes(6).toString('hex'),network=`covenant-smoke-${suffix}`,volume=`covenant-smoke-${suffix}`,app=`covenant-gateway-${suffix}`,rpc=`covenant-rpc-${suffix}`;
   const envFile=path.join(temporary,'private.env');
@@ -92,7 +100,7 @@ export async function smoke(image,revision){
   };
   try{
     await docker(['pull','--quiet',image],'immutable image pull');
-    assert.equal(await docker(['image','inspect','--format','{{index .Config.Labels "org.opencontainers.image.revision"}}',image],'image revision'),revision);
+    verifyImageProvenance(JSON.parse(await docker(['image','inspect','--format','{{json .Config.Labels}}',image],'image provenance')),revision,imageRevision);
     await docker(['network','create','--internal',network],'isolated network creation');
     await docker(['volume','create',volume],'persistent volume creation');
     await docker(['run','--detach','--name',rpc,'--network',network,'--network-alias','smoke-rpc','--read-only','--cap-drop','ALL','--security-opt','no-new-privileges',
@@ -109,7 +117,7 @@ export async function smoke(image,revision){
     await docker(['exec','--user','node',app,'node','/smoke/state.mjs','compare'],'private state continuity');
     const audit=await http('http://smoke-rpc:14045/audit');
     assert.equal(audit.status,200);assert(audit.body.genesis>=2);assert.equal(audit.body.refused,0);assert.equal(audit.body.coordinator,0);
-    const result={image,revision,mainnet_genesis_checked:true,isolated_network:true,gateway_memory_limit_mib:512,admissions_enabled:false,operator_cli_contract_verified:true,restart_state_preserved:true,job_entries:0,paid_dispatches:0};
+    const result={image,revision,image_revision:imageRevision,mainnet_genesis_checked:true,isolated_network:true,gateway_memory_limit_mib:512,admissions_enabled:false,operator_cli_contract_verified:true,restart_state_preserved:true,job_entries:0,paid_dispatches:0};
     if(process.env.GITHUB_STEP_SUMMARY)await fs.appendFile(process.env.GITHUB_STEP_SUMMARY,`\nContainer smoke passed: \`${image}\`\n\nExpected revision \`${revision}\`; 512MiB gateway cap; admissions disabled; persistent keys, seal and journal preserved across restart; zero paid dispatches.\n`);
     return result;
   }catch(error){
@@ -124,6 +132,6 @@ export async function smoke(image,revision){
   }
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
-  try{console.log(JSON.stringify(await smoke(process.env.SMOKE_IMAGE,process.env.SMOKE_REVISION)));}
+  try{console.log(JSON.stringify(await smoke(process.env.SMOKE_IMAGE,process.env.SMOKE_REVISION,process.env.SMOKE_IMAGE_REVISION??process.env.SMOKE_REVISION)));}
   catch(error){process.stderr.write(`${error instanceof assert.AssertionError?'Container smoke assertion failed':error.message}\n`);process.exitCode=1;}
 }

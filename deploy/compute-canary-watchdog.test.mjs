@@ -7,10 +7,10 @@ import {EventEmitter} from 'node:events';
 import {PassThrough} from 'node:stream';
 import {ENDPOINT,OUTAGE_SECONDS,initialState,observe,freshFeed,Journal,tick,alertConfig,cloudflareAccepted,emailFor,deliver,boundedJson,isolatedEnvironment,startWatchdog} from './compute-canary-watchdog.mjs';
 const NOW=1_792_366_400;
-const env={COVENANT_CANARY_ALERT_CLOUDFLARE_API_TOKEN:'offline-fixture-token',COVENANT_CANARY_ALERT_CLOUDFLARE_ACCOUNT_ID:'1'.repeat(32),COVENANT_CANARY_ALERT_FROM:'compute-alerts@opencovenant.org',COVENANT_CANARY_ALERT_TO:'alert@opencovenant.org'};
+const env={COVENANT_CANARY_ALERT_CLOUDFLARE_API_TOKEN:'offline-fixture-token',COVENANT_CANARY_ALERT_CLOUDFLARE_ACCOUNT_ID:'1'.repeat(32),COVENANT_CANARY_ALERT_FROM:'compute-alerts@opencovenant.org',COVENANT_CANARY_ALERT_TO:'verified-fixture@example.net'};
 const config=alertConfig(env);
 const good=()=>({schema:1,server_time_unix:NOW,generated_at_unix:NOW-1,stale_after_seconds:180,observed_state_age_seconds:1,is_stale:false,feed_status:'fresh',enabled:true,cadence_seconds:21600,next_due_at_unix:null,pause_reason:null,budget:null,monitor:null,latest:null,history:[]});
-const accepted={success:true,errors:[],result:{delivered:[],queued:['alert@opencovenant.org'],permanent_bounces:[]}};
+const accepted={success:true,errors:[],result:{delivered:[],queued:['verified-fixture@example.net'],permanent_bounces:[]}};
 function temporary(t){const dir=fs.mkdtempSync(path.join(os.tmpdir(),'covenant-watchdog-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));return dir;}
 function outage(){return observe(observe(initialState(NOW),false,NOW),false,NOW+OUTAGE_SECONDS);}
 
@@ -80,14 +80,29 @@ test('outbox exists on disk before any delivery attempt',async t=>{
   assert.equal(journal.read(NOW).outbox.length,0);
 });
 test('malformed and recipient-mismatched Cloudflare results do not acknowledge delivery',()=>{
-  assert.equal(cloudflareAccepted(accepted),true);
-  for(const value of [null,{}, {...accepted,success:false},{...accepted,errors:[{}]}, {...accepted,result:{...accepted.result,queued:['elsewhere@example.com']}},{...accepted,result:{...accepted.result,permanent_bounces:['alert@opencovenant.org']}},{...accepted,result:{...accepted.result,suppressed_recipients:['alert@opencovenant.org']}},{...accepted,result:{...accepted.result,suppressed_recipients:'invalid'}}])assert.equal(cloudflareAccepted(value),false);
+  assert.equal(cloudflareAccepted(accepted,config.to),true);
+  for(const value of [null,{}, {...accepted,success:false},{...accepted,errors:[{}]}, {...accepted,result:{...accepted.result,queued:['elsewhere@example.com']}},{...accepted,result:{...accepted.result,permanent_bounces:['verified-fixture@example.net']}},{...accepted,result:{...accepted.result,suppressed_recipients:['verified-fixture@example.net']}},{...accepted,result:{...accepted.result,suppressed_recipients:'invalid'}}])assert.equal(cloudflareAccepted(value,config.to),false);
 });
 test('delivery uses fixed email endpoint, exact idempotency key and rejects vague success',async()=>{
   const event=outage().outbox[0];let seen;
   await deliver(event,config,async(url,opts)=>{seen={url,opts};return accepted;});
   assert.equal(seen.url,`https://api.cloudflare.com/client/v4/accounts/${config.account}/email/sending/send`);assert.equal(seen.opts.method,'POST');assert.equal(seen.opts.headers['idempotency-key'],event.id);
-  assert.equal(JSON.parse(seen.opts.body).to,'alert@opencovenant.org');await assert.rejects(()=>deliver(event,config,async()=>({success:true})));
+  assert.equal(JSON.parse(seen.opts.body).to,'verified-fixture@example.net');await assert.rejects(()=>deliver(event,config,async()=>({success:true})));
+});
+test('configured verified destination must exactly match provider acceptance',async()=>{
+  const to='another.verified+alerts@example.org', alternate=alertConfig({...env,COVENANT_CANARY_ALERT_TO:to});
+  const event=outage().outbox[0];
+  assert.equal(emailFor(event,alternate).to,to);
+  await assert.rejects(()=>deliver(event,alternate,async()=>accepted));
+  const matching={success:true,errors:[],result:{delivered:[],queued:[to],permanent_bounces:[]}};
+  await deliver(event,alternate,async()=>matching);
+  for(const recipient of [config.to,'alert@opencovenant.org',to.toUpperCase(),undefined])assert.equal(cloudflareAccepted(matching,recipient),false);
+  assert.equal(cloudflareAccepted({...matching,result:{...matching.result,suppressed_recipients:[to]}},to),false);
+});
+test('mailboxes reject header injection, lists, display names and malformed addresses',()=>{
+  for(const key of ['COVENANT_CANARY_ALERT_FROM','COVENANT_CANARY_ALERT_TO']){
+    for(const value of ['',null,'Name <a@example.com>','a@example.com,b@example.com','a@example.com; b@example.com','a@example.com\r\nBcc:other@example.com','a\n@example.com','a..b@example.com','.a@example.com','a@-example.com','a@example..com','a@localhost','a'.repeat(65)+'@example.com','a@'+'b'.repeat(64)+'.com'])assert.throws(()=>alertConfig({...env,[key]:value}));
+  }
 });
 function fakeRequest({status=200,headers={'content-type':'application/json'},body='{}',hang=false}={}){
   return (_url,_opts,callback)=>{

@@ -1,0 +1,12 @@
+# Preserve the accepted x402 payment binaries, provider bridge, dependencies and
+# runtime. This overlay adds only the observer and its isolated supervisor hook.
+FROM ghcr.io/open-covenant/covenant/compute-node-public@sha256:aef10b2661b20d35202ffdbc68ab3efb249c8e9f45c9c2953eccfa69cf5f3882
+ARG COVENANT_OBSERVER_REVISION
+LABEL org.opencontainers.image.source="https://github.com/open-covenant/covenant" \
+      org.opencontainers.image.revision="${COVENANT_OBSERVER_REVISION}" \
+      org.opencontainers.image.base.name="ghcr.io/open-covenant/covenant/compute-node-public" \
+      org.opencontainers.image.base.digest="sha256:aef10b2661b20d35202ffdbc68ab3efb249c8e9f45c9c2953eccfa69cf5f3882" \
+      io.covenant.runtime.revision="e52e2a790e1dbabf9a7e5018cdca99e82cdcea9e" \
+      io.covenant.observer.revision="${COVENANT_OBSERVER_REVISION}"
+COPY deploy/compute-canary-watchdog.mjs /opt/covenant/deploy/compute-canary-watchdog.mjs
+COPY deploy/compute-x402/supervisor.mjs /opt/covenant/deploy/compute-x402/supervisor.mjs

@@ -1,8 +1,10 @@
 # Encrypted workspace deployment
 
-This runbook prepares adoption package 3. The implementation is locally
-qualified and R2 provider acceptance passed; deployment, copied-state recovery,
-installed-client acceptance and a real cross-lease demonstration remain pending. See the separate
+This runbook covers adoption package 3. R2 provider acceptance, immutable
+publication, deployment, installed owner-local recovery and an actual copied-state
+rehearsal have passed. Cross-lease restore, both on-chain payouts and provider
+teardown have also passed; final checkpoint cleanup and public-release acceptance
+remain pending. See the separate
 [evidence record](compute-workspace-release-evidence.md).
 
 ## Existing service and storage
@@ -88,7 +90,8 @@ cleanup obligations, then reports aggregate counts and the source digest without
 owner identifiers, names, keys or object paths. Its object adapter refuses every
 operation; it constructs an in-memory coordinator without starting any worker.
 The input has a 256 MiB rehearsal ceiling. Keep the source snapshot private and
-untouched. Rehearsal against an actual copied production checkpoint is pending.
+untouched. Rehearsal against an actual copied production checkpoint passed on 2026-10-18;
+see the evidence record for its source digest and state counts.
 
 Do not launch the full coordinator against copied financial state with
 production provider, payout or chain credentials: startup workers can perform
@@ -109,8 +112,9 @@ deployment state rather than resubmitting blindly.
 The CLI release workflow is `.github/workflows/compute-release.yml`. A new
 `compute-v*` tag must match the packaged commands' versions and have matching
 release notes. `deploy/compute-release/dist.sh` builds and checks four macOS/Linux
-archives. This candidate prepares 0.3.0 versions, lockfiles and release notes;
-the existing 0.2.0 assets remain immutable. Do not overwrite an existing release.
+archives. The immutable `compute-v0.3.0` release was published from `97550b2`;
+its downloads, signatures, provenance and installed commands were verified.
+The existing 0.2.0 assets remain immutable. Do not overwrite an existing release.
 Verify downloaded signatures, provenance,
 checksums, version and workspace help before installed-client acceptance.
 
@@ -124,12 +128,12 @@ and ciphertext for an uncertain retry; a new save must not bypass it.
 
 ## Cross-lease acceptance
 
-The approved acceptance allocation uses two 1200-second leases at a ceiling of
-334 micro-USDC/second: 0.4008 USDC per lease and 0.8016 USDC in total purchases.
-Prefund the dedicated buyer with at most 0.810 USDC; this includes the purchases
+The approved acceptance allocation uses two 900-second leases at a ceiling of
+334 micro-USDC/second: 0.3006 USDC per lease and 0.6012 USDC in total purchases.
+Prefund the dedicated buyer with at most 0.610 USDC; this includes the purchases
 and is not an additional charge. Reserve at most 1.50 USDC-equivalent for the
 backing provider and 0.10 USDC-equivalent for network fees. Including the prior
-7.00 USDC allocation, the conservative total is 9.41 of the shared 10.00 USDC
+7.00 USDC allocation, the conservative total is 9.21 of the shared 10.00 USDC
 cap. Refresh capacity and quotes before dispatch and refuse any action that
 exceeds these ceilings; unknown outcomes remain reserved until reconciled.
 

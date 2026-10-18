@@ -1,7 +1,8 @@
 # Encrypted workspace release candidate
 
-Status on 2026-10-18: **implemented, locally qualified and accepted by R2; not deployed or
-accepted for public announcement**. This is adoption package 3, independently
+Status on 2026-10-18: **deployed, with immutable artifacts, installed owner-local
+recovery, copied-state rehearsal and cross-lease restore verified; final checkpoint
+cleanup and public-announcement acceptance remain pending**. This is adoption package 3, independently
 scoped from framework clients in package 5.
 
 Baseline: `deploy/compute-coordinator` at
@@ -63,7 +64,7 @@ recovery and host-hook changes have the focused qualification recorded below.
 | Protocol workspace crypto tests | 4 passed, included in the protocol total |
 | Scoped Clippy, warnings denied | Passed for affected libraries, CLI and provider acceptance example |
 | Both Compute documentation validators | Passed |
-| Offline copied-state rehearsal harness | Two synthetic qualification tests passed; scoped Clippy passed; production copy still pending |
+| Offline copied-state rehearsal harness | Two synthetic qualification tests passed; scoped Clippy passed; actual production-copy rehearsal passed; see deployed evidence below |
 
 The child-process integration uses the actual CLI and coordinator router with
 a local conditional-write object fixture. It simulates a committed PUT whose
@@ -153,19 +154,121 @@ Final hardening qualification (current candidate):
 | Both Compute documentation validators | Passed: 206 knobs; 18 tools, 6 routes, 11 protocol knobs |
 | Scoped Clippy with warnings denied | Passed for changed libraries, buyer/node binaries and both workspace examples |
 
+## Published artifacts and deployed owner-local acceptance
+
+[PR #344](https://github.com/open-covenant/covenant/pull/344) merged at
+`97550b20f256469d0b58e7b2a35e22cc0745b7fd`. The immutable
+[compute-v0.3.0 release](https://github.com/open-covenant/covenant/releases/tag/compute-v0.3.0)
+uses that exact source. Anonymous downloads, archive checksums, five signature
+checks and four source-provenance checks passed. Four installed native commands
+reported 0.3.0 and the buyer's workspace command help passed. Both public images
+were downloaded anonymously in full: nine coordinator layers and six node
+layers, with every layer, manifest and config hash verified against the revision.
+
+| Component | Verified immutable digest |
+| --- | --- |
+| Coordinator | `sha256:d9ec5e8e12ea8582f85c2f9d11c546dfb68c692e65958d5c3d6e5f1788c7a156` |
+| Node | `sha256:473a1a911cb5784936e2f57184f5f3fabb1f5892626ec7147cbd6348fb1fe8b0` |
+
+The coordinator was deployed with writes disabled, then enabled on the same
+image after R2 qualification. At 22:15 UTC on 2026-10-18, the released buyer saved
+and recovered a 7,424-byte synthetic archive through the live API and R2. The
+7,484-byte encrypted snapshot committed as version 1. A process interruption
+preserved the pending upload and ciphertext; a later process reused them.
+Same-buyer backup/import and exact-byte restore passed. Wrong-owner import and
+download, stale local/remote versions, invalid leases, overwriting an existing
+output and starting a second save while an upload was pending were refused.
+This establishes owner-local storage recovery, not transfer to another GPU.
+
+The actual copied production workspace journal was replayed twice and with a
+torn trailing record by the workspace-only offline harness. Complete state
+matched, the source copy remained unchanged, and no provider or financial worker
+ran. It contained one committed snapshot and one allocated object, 7,484
+reserved ciphertext bytes, no pending uploads and no garbage at capture time.
+Separately, the original 19,239,073-byte financial journal prefix retained the
+same SHA-256 after deployment. This proves prefix preservation; it does not
+assert that no legitimate later financial records can be appended.
+
+The initial installed-client record requested deletion while cleanup remained
+pending. At 22:24:52 UTC, a later authenticated R2 HEAD covered every allocation
+in that copied journal and verified the stored object had zero bytes and the
+native empty SHA-256. The private empty fence remains permanently. This proves
+removal of that synthetic encrypted payload. A separate authenticated production
+journal read at 22:31:49 UTC, after coordinator restart, confirmed durable
+deletion: one retained fence, no current object, no pending upload, no garbage
+and zero reserved ciphertext bytes. The 558-byte journal copy matched the
+accepted checkpoint identity and ciphertext hash. Its SHA-256 is
+`98a71e375f6611eea9fc303727fb7909c6cfaa2c20837efd0f849e6eee61acbe`.
+The earlier provider and installed-client reports remain unchanged; this later
+record supplies the independent durable-state check.
+The [sanitized acceptance progress](compute-evidence/workspaces/2026-10-18/acceptance-progress.json)
+keeps these dated checks separate; public-release acceptance remains pending.
+
+## Separate RPC incident
+
+During rollout, the previously configured Helius account-read requests returned
+HTTP 429 with `max usage reached`, although health and slot requests still
+succeeded. Restart cleared the in-memory stake verdict, so the unchanged stake
+gate kept operators unmatchable until a fresh chain read could succeed. The
+broker's active stake was independently verified; the gate was not weakened.
+The separate incident repair changes five L1 RPC settings to the official Solana
+endpoint while preserving ER endpoints and financial identities. This is a
+temporary availability fallback: [Solana's public RPC](https://solana.com/docs/references/clusters)
+is rate limited and is not intended as permanent production infrastructure.
+At 22:27:04 UTC, the same coordinator revision and image were live after that
+repair. The broker was staked, live and matchable, all seven registered operators
+were matchable, and the observer completed its two-lease scan with no findings.
+This is a dated availability check, not a workspace storage guarantee or evidence
+of a successful new paid rental. Alert-recovery delivery is not claimed here.
+
+## Cross-lease restoration and settlement
+
+The real acceptance used two 900-second maximum leases with the released 0.3.0
+buyer. On the first authenticated L40S instance, the runner created and fetched
+a synthetic 143,360-byte checkpoint archive. The client encrypted it into a
+143,420-byte version-1 snapshot in private R2 storage. The first lease completed,
+its signed receipt and on-chain payout were verified, and the complete provider
+inventory was empty before the later lease was admitted.
+
+The released buyer restored using the second lease's authorization. The restored
+archive and its explicit SSH copy on the later instance matched the source
+SHA-256 `5be69dd8664560c210e9a629b18fb73d5de501e5f8ee2be0188af78978ce50eb`.
+The ciphertext SHA-256 was
+`036fedf977fd837c95156449609d0a0c580b2595b5731678ad9a323b1cccb524`.
+Both SSH sessions pinned host keys from authenticated provider evidence.
+
+The instances were distinct (`56628067` then `56628918`) but used the same
+physical L40S machine (`39312`). This demonstrates recovery in a later lease,
+not migration between different physical hosts. The archive was transferred and
+hashed, not extracted; no training run, automatic synchronization or
+hardware-attested confidential execution is claimed.
+
+| Lease | Final charge | Verification |
+| --- | --- | --- |
+| First | 0.118562 USDC | Signed receipt and [on-chain payout](https://explorer.solana.com/tx/4ob7prU3o9Zfy59qsT9QjssURTeJKqFfiRbqTjTNytidT61vQd8Z83tCchNcsDRXyWumqrjRKrKpJWVFZXgwoFxk) verified |
+| Later | 0.049697 USDC | Signed receipt and [on-chain payout](https://explorer.solana.com/tx/34KJ13Y5VofFMAmx2rnCprkT6BDuRxnM3AZUiJy6nHnZXLjDRqiDBidpwj7XDWTtPiaptWvh3eTvqTGewxV7nM3R) verified |
+
+The total charge was 0.168259 USDC. The final buyer ledger reconciled 0.610000
+USDC deposited, 0.168259 charged, zero withdrawn and 0.441741 available. The
+0.432941 unused portion of the combined lease ceilings plus the additional
+0.008800 prefunding equals that available balance. This is unspent buyer credit;
+no separate refund transfer is claimed. At 22:38:32 UTC, an authenticated,
+complete provider inventory confirmed both instances deleted and none remaining.
+
+The [sanitized cross-lease evidence](compute-evidence/workspaces/2026-10-18/cross-lease-acceptance.json)
+records restoration as verified while final checkpoint cleanup and overall
+acceptance remain pending. Earlier standalone-checkpoint cleanup is separate
+and does not establish deletion of this later checkpoint.
+
 ## Remaining public-release gates
 
-1. Rehearse copied metadata recovery, publish immutable coordinator/client
-   artifacts, verify anonymous downloads and deploy the accepted coordinator
-   revision with admissions off before storage qualification.
-2. Use the released CLI for a real provider save/restart/retry/restore. A
-   cross-lease launch story additionally requires real authenticated SSH access,
-   archive hashes on the first and later machine, lease authorization checks and
-   confirmed teardown. Only the root release task can allocate the shared
-   approved test budget; this implementation created no paid job or transfer.
-3. Enable admissions only after acceptance, publish the page and sharing image,
-   verify their live revision and X-facing metadata, then supply the launch post
-   and visual. Do not announce this candidate as live before those checks pass.
+1. Delete the cross-lease checkpoint and verify its exact allocated object's
+   empty fence and durable cleanup state after outstanding grants expire.
+2. Remove the temporary acceptance host-hook allowlist and confirm the broker's
+   idle process/outbox state.
+3. Publish and verify the release page and sharing image after those checks,
+   then supply the launch post and visual. Public-announcement acceptance remains
+   false until the live page/card checks pass.
 
 See [deployment and recovery steps](compute-workspace-deployment.md) and
 [operation, CLI and backup instructions](compute-workspaces.md). Presigned

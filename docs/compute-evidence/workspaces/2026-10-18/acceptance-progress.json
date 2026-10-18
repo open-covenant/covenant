@@ -1,0 +1,276 @@
+{
+  "schema": "covenant.workspace.acceptance-progress.v1",
+  "assembled_at": "2026-10-18T22:33:10.630716+00:00",
+  "source": {
+    "revision": "97550b20f256469d0b58e7b2a35e22cc0745b7fd",
+    "pull_request": "https://github.com/open-covenant/covenant/pull/344",
+    "merged": true
+  },
+  "gates": {
+    "source_merged": true,
+    "immutable_artifacts_verified": true,
+    "coordinator_deployed": true,
+    "installed_owner_local_recovery": true,
+    "copied_journal_rehearsal": true,
+    "financial_prefix_preserved": true,
+    "provider_inflight_fence_race": true,
+    "synthetic_checkpoint_payload_fenced": true,
+    "current_coordinator_deletion_state_verified": true,
+    "cross_lease_verified": true,
+    "public_announcement_accepted": false,
+    "cross_lease_checkpoint_final_cleanup": false
+  },
+  "release": {
+    "tag": "compute-v0.3.0",
+    "source_sha": "97550b20f256469d0b58e7b2a35e22cc0745b7fd",
+    "checked_at": "2026-10-18T22:12:24.242494+00:00",
+    "immutable": true,
+    "checksum_manifest_matches": true,
+    "workspace_help": true,
+    "url": "https://github.com/open-covenant/covenant/releases/tag/compute-v0.3.0",
+    "anonymous_asset_downloads": 15,
+    "cosign_checks": 5,
+    "source_provenance_checks": 4,
+    "installed_binaries": [
+      {
+        "name": "covenant-compute",
+        "version": "0.3.0",
+        "sha256": "096ce41446a4f396f9a6c405eece358f7ce7bed1967c40f951a7edaceb27fe17"
+      },
+      {
+        "name": "covenant-compute-mcp",
+        "version": "0.3.0",
+        "sha256": "7647bea3dc70202fc11afbea537add9af22223bc722abba7a4bb79e5f08b5820"
+      },
+      {
+        "name": "covenant-compute-node",
+        "version": "0.3.0",
+        "sha256": "0fdac3cc2d2f2346976f524a990320b1c24acb236b772bd4cb53e360468bd7dd"
+      },
+      {
+        "name": "covenant-compute-stake",
+        "version": "0.3.0",
+        "sha256": "96a194123d100cd11d2dd3084f66a90e4c38e44e7b363fbf2ee677f95ef90ceb"
+      }
+    ]
+  },
+  "images": [
+    {
+      "component": "coordinator",
+      "repository": "ghcr.io/open-covenant/covenant/compute-coordinator-public",
+      "manifest_digest": "sha256:d9ec5e8e12ea8582f85c2f9d11c546dfb68c692e65958d5c3d6e5f1788c7a156",
+      "completed_at": "2026-10-18T22:11:20.001996+00:00",
+      "total_layer_bytes": 47640755,
+      "source_revision": "97550b20f256469d0b58e7b2a35e22cc0745b7fd",
+      "anonymous_full_layer_hashes_verified": true,
+      "layer_count": 9
+    },
+    {
+      "component": "node",
+      "repository": "ghcr.io/open-covenant/covenant/compute-node-public",
+      "manifest_digest": "sha256:473a1a911cb5784936e2f57184f5f3fabb1f5892626ec7147cbd6348fb1fe8b0",
+      "completed_at": "2026-10-18T22:08:34.718731+00:00",
+      "total_layer_bytes": 37403212,
+      "source_revision": "97550b20f256469d0b58e7b2a35e22cc0745b7fd",
+      "anonymous_full_layer_hashes_verified": true,
+      "layer_count": 6
+    }
+  ],
+  "deployment": {
+    "checked_at": "2026-10-18T22:15:05.750702+00:00",
+    "revision": "97550b20f256469d0b58e7b2a35e22cc0745b7fd",
+    "coordinator_digest": "sha256:d9ec5e8e12ea8582f85c2f9d11c546dfb68c692e65958d5c3d6e5f1788c7a156",
+    "status": "live",
+    "workspace_admissions_enabled": true
+  },
+  "installed_owner_local_recovery": {
+    "checked_at": "2026-10-18T22:15:28.513437+00:00",
+    "archive": {
+      "sha256": "239c946ac12d6cfbd93139eff9bfe45c4cdb3f307ec1a1479fd0ef4266e9d537",
+      "bytes": 7424
+    },
+    "checks": {
+      "installed_cli_roundtrip_verified": true,
+      "same_buyer_import_verified": true,
+      "wrong_owner_import_refused": true,
+      "wrong_owner_download_refused": true,
+      "stale_local_pin_refused": true,
+      "stale_remote_version_refused": true,
+      "invalid_lease_refused": true,
+      "existing_destination_preserved": true,
+      "persisted_pending_interruption_verified": true,
+      "same_upload_and_ciphertext_after_restart": true,
+      "second_save_while_pending_refused": true
+    },
+    "ciphertext": {
+      "version": 1,
+      "sha256": "12e0a36392d516a6ed1c7f1b9f93a17c377e4acc4e11736613dc72cf0a74e013",
+      "bytes": 7484
+    },
+    "deletion_requested": true,
+    "initial_cleanup_verdict": false,
+    "scope": "Released CLI against deployed API and private R2. No paid lease or GPU transfer."
+  },
+  "copied_journal_rehearsal": {
+    "accepted": true,
+    "checks": {
+      "first_replay_matches": true,
+      "input_unchanged": true,
+      "offline_no_workers": true,
+      "second_replay_matches": true,
+      "torn_tail_recovery_matches": true
+    },
+    "counts": {
+      "allocated_objects": 1,
+      "committed_snapshots": 1,
+      "committed_version_total": 1,
+      "current_ciphertext_bytes": 7484,
+      "garbage_ciphertext_bytes": 0,
+      "garbage_objects": 0,
+      "latest_usage_day": 20744,
+      "object_actions_all_retained_days": 5,
+      "object_actions_latest_day": 5,
+      "owners": 1,
+      "pending_ciphertext_bytes": 0,
+      "pending_uploads": 0,
+      "permanent_empty_fences": 0,
+      "reserved_ciphertext_bytes": 7484,
+      "rows": 1,
+      "tombstones": 0
+    },
+    "source_bytes": 4968,
+    "source_sha256": "77047aa9c27323611abab1442a4caa578aa48f03643c76b0f372a2f75224792d"
+  },
+  "financial_prefix": {
+    "accepted": true,
+    "checked_at": "2026-10-18T22:20:05.372280+00:00",
+    "existing_prefix_bytes": 19239073,
+    "before_sha256": "be51ee66a667ee97661c7497f026b502d360c758ac2962abd830864d56d1c836",
+    "after_sha256": "be51ee66a667ee97661c7497f026b502d360c758ac2962abd830864d56d1c836",
+    "scope": "Exact pre-release financial journal prefix preserved after workspace deployment; no financial workers run against copied state"
+  },
+  "provider_fence_race": {
+    "accepted": true,
+    "checked_at_ms": 1792360438172,
+    "checks": {
+      "checksum_rejection": true,
+      "cleanup": true,
+      "empty_fence_verified": true,
+      "get_exact_bytes": true,
+      "grant_expiry": true,
+      "head_verified_checksum": true,
+      "immutable_put": true,
+      "inflight_put_rejected_after_fence": true,
+      "no_ciphertext_resurrection": true,
+      "private_object": true,
+      "put": true
+    },
+    "unknown_put": false,
+    "run_id": "121434f7-fe23-446d-a53e-e38d5627e1f1"
+  },
+  "synthetic_checkpoint_cleanup": {
+    "accepted": true,
+    "checked_at": "2026-10-18T22:24:52.043792+00:00",
+    "journal_sha256": "77047aa9c27323611abab1442a4caa578aa48f03643c76b0f372a2f75224792d",
+    "allocation_coverage_complete": true,
+    "target_count": 1,
+    "network_requests": 1,
+    "proves_current_coordinator_deletion_state": false,
+    "objects": [
+      {
+        "content_length": 0,
+        "empty_fence_verified": true,
+        "http_status": 200,
+        "native_checksum_verified": true,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "scope": "HEAD proof for every allocation in the supplied pre-deletion production journal copy; ciphertext removed, permanent private empty fence remains."
+  },
+  "operational_limitation": {
+    "incident": "Configured Helius L1 RPC usage exhausted; account methods returned HTTP429 max usage reached while health/slot calls passed.",
+    "remediation": "Separate temporary five-setting L1 RPC fallback to official Solana public RPC; ER endpoints and all financial identities/gates retained.",
+    "scope": "Operational availability limitation, not a workspace encryption or storage guarantee. Public RPC is rate limited and not intended as permanent production infrastructure.",
+    "reference": "https://solana.com/docs/references/clusters",
+    "verified_after_repair": {
+      "checked_at": "2026-10-18T22:27:04.051267+00:00",
+      "same_revision": "97550b20f256469d0b58e7b2a35e22cc0745b7fd",
+      "same_coordinator_digest": "sha256:d9ec5e8e12ea8582f85c2f9d11c546dfb68c692e65958d5c3d6e5f1788c7a156",
+      "broker": {
+        "staked": true,
+        "live": true,
+        "matchable": true,
+        "stake_required": 1000000000000
+      },
+      "matchable_operators": 7,
+      "chain_observer": {
+        "status": "healthy",
+        "scan_complete": true,
+        "scanned_leases": 2,
+        "finding_counts": {},
+        "observed_at_ms": 1792362398280
+      }
+    }
+  },
+  "durable_synthetic_checkpoint_deletion": {
+    "accepted": true,
+    "checked_at": "2026-10-18T22:31:49.365772+00:00",
+    "deleted": true,
+    "fenced_objects": 1,
+    "reserved_bytes": 0,
+    "source": "Authenticated production workspace journal observed after coordinator restart",
+    "source_bytes": 558,
+    "source_sha256": "98a71e375f6611eea9fc303727fb7909c6cfaa2c20837efd0f849e6eee61acbe",
+    "current_object_absent": true,
+    "pending_upload_absent": true,
+    "garbage_count": 0,
+    "matches_accepted_checkpoint": true
+  },
+  "pending_cross_lease_allocation": {
+    "max_duration_secs": 900,
+    "rate_micro_usdc_per_sec": 334,
+    "per_lease_ceiling_micro_usdc": 300600,
+    "total_lease_ceiling_micro_usdc": 601200,
+    "prefund_micro_usdc": 610000,
+    "provider_reservation_micro_usdc": 1500000,
+    "fee_reservation_micro_usdc": 100000,
+    "prior_reserved_allocation_micro_usdc": 7000000,
+    "total_allocated_micro_usdc": 9210000,
+    "approved_campaign_cap_micro_usdc": 10000000
+  },
+  "pending": [
+    "Cross-lease checkpoint deletion, verified exact-object empty fence and durable cleanup state",
+    "Temporary acceptance host-hook removal and broker idle/outbox confirmation",
+    "Public page, sharing-card and final launch acceptance"
+  ],
+  "input_report_hashes": {
+    "installed-client-acceptance.json": "b68db27b05be3735635ca1d9adb66607d926ef51d3a1b20091ea5408ea71c4bd",
+    "production-state-rehearsal.json": "cdeef043a6af42209bbbd69b56c99c04e7b49cbd944bec9dfd602cc0ac7631a0",
+    "financial-journal-preservation.json": "62e1a75f5636fbca079806e367d554a2983941c1f980c1f05ff581dbb7791ddc",
+    "standalone-r2-fence-report-after-window.json": "ce7ec2d96fe6a4dc17ccb92336dc77a545e4ac4aa77e46855b73b01499cdcaf8",
+    "provider-fence-acceptance.json": "9aa8c8151f4013b441bec1a34b00dc557a122896f97f2bfc2876a2afb3032b80",
+    "cli-v0.3.0-verified/verification.json": "667212179305ef844a32ffbcd684edb4e7a10aa1a035ed0f1fbcadfe6630e31b",
+    "image-verification/coordinator.json": "67cc0530ab3fcfb3cb80b3dded48e936bb84ab19c7dd70d16c2367fd2e497b7a",
+    "image-verification/node.json": "15c2f47ba944e438e34f0c0c6e05468dd7ff7c53c21cffe1301576e27d910e5a",
+    "coordinator-enabled-deploy/latest-status.json": "80e1bbeff0f074f23d1e9d33467609c6e6cfc01e087835dd289bc2588fdca5b2",
+    "merge-pr344-response.json": "453d28efcc6403aabf31777802e5e8e380121482404ad69f3ca9352b03cc528f",
+    "rpc-repair-live-acceptance.json": "50efafe9845a38a954574ad4ba23be9e8c445fead9451a0d3322f347a0c167db",
+    "coordinator-rpc-repair-deploy/latest-status.json": "d7bba89abece3776df2b83456031d8a024d93c30f5850db11d248b0fc4e0b672",
+    "lease-acceptance/identity-plan.public.json": "13f73f7c1fd8423156e09b47e8f2da6ebbe4c355aff4d0403bfc54381e7907fc",
+    "standalone-durable-cleanup.json": "cde5d4d05d134d94750c0b2ad8f130500fd2a6fb24483e52f7371c519aac944b",
+    "production-workspaces-standalone-deleted.jsonl": "98a71e375f6611eea9fc303727fb7909c6cfaa2c20837efd0f849e6eee61acbe"
+  },
+  "cross_lease_evidence": {
+    "path": "cross-lease-acceptance.json",
+    "sha256": "d1204d16b17fcbf04190bdfb7121df60376c92a4caaf002f71e2dcd7f619d6be",
+    "restore_verified": true,
+    "two_signed_receipts_verified": true,
+    "two_onchain_payouts_verified": true,
+    "both_instances_deleted": true,
+    "total_charged_micro_usdc": 168259,
+    "available_buyer_balance_micro_usdc": 441741,
+    "distinct_instances": true,
+    "same_physical_machine": true,
+    "checkpoint_cleanup_verified": false
+  }
+}

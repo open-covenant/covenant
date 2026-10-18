@@ -1,12 +1,62 @@
-//! Opt-in acceptance against the configured private S3 provider. Writes two
+//! Opt-in acceptance against the configured private S3 provider. Writes three
 //! tiny, uniquely named synthetic objects, then removes them after known writes.
-//! Unknown PUT outcomes retain cleanup keys until every grant has expired.
+//! Unknown PUT outcomes retain cleanup keys; expiry alone cannot retire them.
 //! Does not provision a bucket, make a Compute purchase, or print signed URLs.
 use covenant_compute_coordinator::workspace::{
     S3WorkspaceConfig, S3WorkspaceObjects, WorkspaceObjects,
 };
 use covenant_compute_protocol::workspace::{sha256_hex, ObjectGrant, WorkspaceUpload};
 use std::{collections::BTreeMap, sync::Arc};
+
+// Send the beginning of a real HTTP PUT while withholding the remainder until
+// the coordinator has installed its empty fence. No signed URL is printed.
+struct PausedBody {
+    first: Option<axum::body::Bytes>,
+    rest: Option<axum::body::Bytes>,
+    entered: Option<tokio::sync::oneshot::Sender<()>>,
+    release: tokio::sync::oneshot::Receiver<()>,
+    length: u64,
+}
+impl http_body::Body for PausedBody {
+    type Data = axum::body::Bytes;
+    type Error = std::io::Error;
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+        use std::{future::Future, task::Poll};
+        if let Some(bytes) = self.first.take() {
+            self.length -= bytes.len() as u64;
+            if let Some(entered) = self.entered.take() {
+                let _ = entered.send(());
+            }
+            return Poll::Ready(Some(Ok(http_body::Frame::data(bytes))));
+        }
+        if self.rest.is_none() {
+            return Poll::Ready(None);
+        }
+        match std::pin::Pin::new(&mut self.release).poll(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Err(_)) => {
+                Poll::Ready(Some(Err(std::io::Error::other("acceptance cancelled"))))
+            }
+            Poll::Ready(Ok(())) => {
+                self.length = 0;
+                Poll::Ready(
+                    self.rest
+                        .take()
+                        .map(|bytes| Ok(http_body::Frame::data(bytes))),
+                )
+            }
+        }
+    }
+    fn size_hint(&self) -> http_body::SizeHint {
+        http_body::SizeHint::with_exact(self.length)
+    }
+    fn is_end_stream(&self) -> bool {
+        self.first.is_none() && self.rest.is_none()
+    }
+}
 
 fn now() -> u64 {
     std::time::SystemTime::now()
@@ -59,6 +109,7 @@ async fn main() -> anyhow::Result<()> {
     let run = uuid::Uuid::new_v4();
     let first = format!("acceptance/{run}/valid");
     let wrong = format!("acceptance/{run}/bad-checksum");
+    let slow = format!("acceptance/{run}/inflight-fence");
     let mut checks = BTreeMap::new();
     let mut unknown_put = false;
     let mut cleanup_not_before_ms = 0u64;
@@ -150,17 +201,64 @@ async fn main() -> anyhow::Result<()> {
             "expired grant unexpectedly accepted"
         );
         checks.insert("grant_expiry", true);
+        let slow_grant = objects.put_grant(&slow, &upload, now())?;
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let body = PausedBody {
+            first: Some(bytes[..8].to_vec().into()),
+            rest: Some(bytes[8..].to_vec().into()),
+            entered: Some(entered_tx),
+            release: release_rx,
+            length: bytes.len() as u64,
+        };
+        let mut slow_request = client.put(&slow_grant.url).body(reqwest::Body::wrap(body));
+        for (key, value) in slow_grant.headers {
+            slow_request = slow_request.header(key, value);
+        }
+        unknown_put = true;
+        let inflight = tokio::spawn(async move {
+            slow_request
+                .send()
+                .await
+                .map_err(|_| anyhow::anyhow!("delayed PUT outcome unknown"))
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(10), entered_rx).await??;
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        anyhow::ensure!(
+            !inflight.is_finished(),
+            "PUT did not remain in flight before fencing"
+        );
+        objects.fence(&slow, now()).await?;
+        checks.insert("empty_fence_verified", true);
+        release_tx
+            .send(())
+            .map_err(|_| anyhow::anyhow!("delayed body receiver disappeared"))?;
+        let late_status = inflight.await??.status();
+        unknown_put = late_status.is_server_error();
+        anyhow::ensure!(
+            late_status == reqwest::StatusCode::PRECONDITION_FAILED,
+            "in-flight conditional PUT after fence must return412; got {late_status}"
+        );
+        let fenced = objects.head(&slow, now()).await?;
+        anyhow::ensure!(
+            fenced.ciphertext_bytes == 0 && fenced.ciphertext_sha256 == sha256_hex(b""),
+            "delayed PUT resurrected ciphertext after fence"
+        );
+        checks.insert("inflight_put_rejected_after_fence", true);
+        checks.insert("no_ciphertext_resurrection", true);
         Ok(())
     }
     .await;
     let mut cleanup_ok = !unknown_put;
     if !unknown_put {
-        for key in [&first, &wrong] {
+        // Synthetic requests are now definitively complete; only this isolated
+        // acceptance may remove its fence. Production never removes fences.
+        for key in [&first, &wrong, &slow] {
             cleanup_ok &= objects.delete(key, now()).await.is_ok();
         }
     }
     checks.insert("cleanup", cleanup_ok);
-    let report = serde_json::json!({"schema":"covenant.workspace.storage-acceptance.v1","run_id":run,"checked_at_ms":now(),"accepted":outcome.is_ok() && cleanup_ok,"checks":checks,"error":outcome.as_ref().err().map(ToString::to_string),"cleanup_not_before_ms":if unknown_put {Some(cleanup_not_before_ms)} else {None},"cleanup_keys":if cleanup_ok {vec![]} else {vec![first,wrong]}});
+    let report = serde_json::json!({"schema":"covenant.workspace.storage-acceptance.v2","run_id":run,"checked_at_ms":now(),"accepted":outcome.is_ok() && cleanup_ok,"checks":checks,"error":outcome.as_ref().err().map(ToString::to_string),"cleanup_keys":if cleanup_ok {vec![]} else {vec![first,wrong,slow]},"unknown_put":unknown_put,"earliest_grant_expiry_ms":cleanup_not_before_ms,"cleanup_requires_fence_or_definitive_put_outcome":unknown_put});
     println!("{}", serde_json::to_string_pretty(&report)?);
     anyhow::ensure!(
         outcome.is_ok() && cleanup_ok,

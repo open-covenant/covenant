@@ -33,6 +33,8 @@ COVENANT_COMPUTE_WORKSPACE_WRITES_ENABLED=false
 ```
 
 The 1 GiB ceiling counts committed ciphertext, pending uploads and garbage.
+The 4096 lifetime object-allocation cap also counts permanent empty fences;
+restart and workspace deletion do not reset it.
 Issuance/HEAD limits are 256 per owner and 4096 globally per UTC day. Valid
 signed URLs can be reused until expiry, so these are application limits, not a
 hard provider bill cap. Do not set a session token unless the provider issued
@@ -47,12 +49,14 @@ cargo run --locked -p covenant-compute-coordinator \
   --example workspace-storage-acceptance -- --allow-synthetic-storage-writes
 ```
 
-This writes two tiny synthetic keys and records a sanitized JSON verdict.
+This writes three tiny synthetic keys and records a sanitized JSON verdict.
 Require duplicate conditional PUT rejection, corrupt checksum rejection,
 provider-verified HEAD checksum and size, anonymous read rejection, exact GET
-bytes, expired-grant rejection and deletion. Unknown write outcomes retain
-cleanup keys until every possible write grant expires; reconcile them before
-calling cleanup complete. Missing verified-checksum support blocks release;
+bytes, expired-grant rejection and cleanup. The delayed-body test must complete
+a conditional PUT only after an empty fence is installed, receive 412 and verify
+the empty checksum/size. Unknown write outcomes retain full cleanup obligations;
+expiry alone does not prove completion. Production removes encrypted payloads
+using permanent private empty fences and must never delete those fences. Missing verified-checksum support blocks release;
 ETag or caller-written metadata is not a substitute.
 
 ## Additive state and recovery
@@ -155,3 +159,26 @@ acceptance, publish the page and sharing image, verify their live revision and X
 metadata, then prepare the launch post. Until then, describe this as a release
 candidate. Do not claim automatic synchronization, attested hardware or restored
 training progress without separate evidence.
+
+## Scoped host identity evidence for acceptance
+
+Before funding the two acceptance jobs, persist their UUIDs and independent
+32-byte random challenges. Set the broker-only
+`COVENANT_COMPUTE_BROKER_HOST_KEY_EVIDENCE_JOBS` to
+`uuid:64lowercasehex,uuid:64lowercasehex`. At most two unique nonnil UUIDs are
+accepted; invalid configuration refuses broker startup. Only these exact jobs
+receive a Vast `onstart` hook, which waits at most 60 seconds for the existing
+`/etc/ssh/ssh_host_ed25519_key.pub`, then emits:
+
+```text
+COVENANT_SSH_HOST_KEY_V1 <job-uuid> <challenge> ssh-ed25519 <public-key-base64>
+```
+
+The hook never generates keys, reads a private key, changes SSH settings or
+emits environment variables. Default launches have no hook. Retrieve startup
+logs through the authenticated provider API, validate the instance ID, job
+label, machine ID and endpoint, then validate and pin the public key for strict
+SSH. Log download URLs need an explicit provider-host allowlist, no redirects
+and no forwarded bearer credential. A startup marker alone is not hardware
+attestation or full adoption-package-16 host-identity support. Remove the
+allowlist after acceptance; normal rentals remain unchanged.

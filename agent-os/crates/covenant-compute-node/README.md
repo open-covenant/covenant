@@ -468,6 +468,7 @@ The advertised model name is `say-1` unless `COVENANT_COMPUTE_NODE_MODELS` sets 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `COVENANT_VAST_API_KEY` | (required) | The market account the broker rents against; `COVENANT_VAST_API_KEY_FILE` reads it from a file instead. Without one the executor refuses to start. Never logged. |
+| `COVENANT_COMPUTE_BROKER_HOST_KEY_EVIDENCE_JOBS` | (empty) | Optional acceptance-only allowlist of at most two `UUID:64lowercasehex` pairs, comma-separated. Exact jobs emit existing public Ed25519 host-key evidence in provider startup logs; normal launches have no hook. Invalid configuration refuses startup. See [workspace acceptance](../../../docs/compute-workspace-deployment.md#scoped-host-identity-evidence-for-acceptance). |
 | `COVENANT_COMPUTE_BROKER_IMAGE` | (required) | The digest-pinned image every rented session runs (e.g. `docker.io/nvidia/cuda@sha256:...`). Pin by digest so the machine a buyer gets is the machine that was measured. |
 | `COVENANT_VAST_MAX_HOURLY_MICROS` | `1000000` | The most the broker pays per hour for one machine, in micro-USDC. Bounds the operator's loss on a single lease and filters the offer book. |
 | `COVENANT_VAST_GPU_MODELS` | `L40S,L40,RTX 6000Ada,RTX A6000,A40,A100 PCIE,A100 SXM4` | GPU models the broker will rent, comma-separated. |

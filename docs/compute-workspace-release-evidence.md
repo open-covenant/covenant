@@ -34,9 +34,11 @@ than merging the broader parity branch. The original upstream reference is
   recovery and atomic compaction. Existing lease, balance and settlement records
   are not rewritten. Tombstones, quota counters and cleanup obligations survive
   restart. Cleanup waits out outstanding write grants and retains reservations
-  until provider deletion succeeds.
+  until a zero-byte fence is checksum-verified. The private empty fence remains
+  permanently and blocks delayed conditional PUTs from recreating ciphertext.
 - The default global ciphertext ceiling is 1 GiB, including pending objects and
-  garbage. Issuance/HEAD checks are limited to 256 per owner and 4096 globally per
+  garbage. A separate 4096 lifetime object-allocation cap includes permanent
+  fences and survives restart. Issuance/HEAD checks are limited to 256 per owner and 4096 globally per
   UTC day, durably across restarts and backward clock changes. These application
   limits do not constitute a provider bill cap: valid signed URLs can be reused
   until they expire.
@@ -47,6 +49,8 @@ than merging the broader parity branch. The original upstream reference is
 ## Local evidence
 
 All commands ran in the dedicated `codex/compute-workspace-release` worktree.
+The following full-suite figures describe the initial implementation; the final
+recovery and host-hook changes have the focused qualification recorded below.
 
 | Check | Result |
 | --- | --- |
@@ -101,6 +105,53 @@ The compiled provider example used source
 written. No buyer checkpoint, paid Compute job or production configuration was
 used. This is provider acceptance, not deployment, installed-client acceptance
 or a real GPU restore demonstration.
+
+## Final recovery hardening and provider fence qualification
+
+The final review identified two crash/recovery gaps before deployment. Prepared
+CLI state is now published as a complete fsynced directory by atomic rename;
+committed pending state is atomically retired before recursive deletion.
+Interrupted local stages are cleaned under the buyer/endpoint process lock.
+
+Cleanup now installs an unconditional zero-byte object instead of DELETE. R2
+[checks conditional writes atomically at commit](https://developers.cloudflare.com/r2/reference/consistency/),
+so an already-started client `If-None-Match: *` PUT cannot recreate ciphertext
+after the fence. A successful fence requires PUT 200 and HEAD proof of zero
+bytes with the empty SHA-256. Unknown outcomes retain full byte reservations.
+Each new object is reserved before its grant escapes; retries consume no new
+allocation. The global lifetime ceiling of 4096 includes current objects,
+pending uploads, garbage and permanent fences. Old journal records default the
+new fence counter to zero while deriving existing allocations from their rows.
+
+A second real R2 probe at `2026-10-18T21:53:58.172000+00:00` held a conditional PUT body in flight,
+installed and verified its empty fence, then finished the PUT. R2 returned 412;
+HEAD still proved zero bytes and the empty checksum. All eleven checks passed,
+with no unknown PUTs or outstanding cleanup. This isolated test removed its
+three synthetic keys only after all writes definitively completed; production
+never removes fences. Run ID: `121434f7-fe23-446d-a53e-e38d5627e1f1`.
+Probe executable SHA-256: `a3bf9ce455b3b9f14633abc014680af5426d7355af7205a0cc9a398adc15cdb6`.
+The [sanitized fence verdict](compute-evidence/workspaces/2026-10-18/provider-fence-acceptance.json)
+has SHA-256 `9aa8c8151f4013b441bec1a34b00dc557a122896f97f2bfc2876a2afb3032b80`.
+
+The broker also has an opt-in host-public-key startup marker for at most two
+preselected acceptance UUIDs and fresh challenges. Its default launch JSON is
+unchanged. It reads an existing public Ed25519 key, never creates a key or
+changes SSH; provider-log identity validation and strict pinning remain required
+by the acceptance runner. This is not a hardware-attestation or generic host
+identity release. See the deployment instructions for its exact configuration.
+
+Final hardening qualification (current candidate):
+
+| Check | Result |
+| --- | --- |
+| Vast adapter library, including unchanged default launch payload and opt-in hook | 55 passed |
+| Broker unit and market lifecycle tests | 15 passed |
+| Coordinator workspace tests, including unknown fence/replay/allocation ceiling | 12 passed |
+| Buyer interrupted preparation and retired-state cleanup tests | 2 passed |
+| CLI child-process save/retry/restore/backup/deletion-fence integration | 1 passed |
+| Offline copied-journal rehearsal tests with additive fence counters | 2 passed |
+| Both Compute documentation validators | Passed: 206 knobs; 18 tools, 6 routes, 11 protocol knobs |
+| Scoped Clippy with warnings denied | Passed for changed libraries, buyer/node binaries and both workspace examples |
 
 ## Remaining public-release gates
 

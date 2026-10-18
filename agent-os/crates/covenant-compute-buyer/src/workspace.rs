@@ -40,17 +40,23 @@ impl PreparedWorkspaceSnapshot {
     /// Preserve ciphertext and reservation before any remote write. This state
     /// contains no plaintext or encryption key. Keep it until commit is known.
     pub fn persist(mut self, directory: &Path) -> Result<Self, BuyerError> {
-        std::fs::create_dir(directory).map_err(protocol)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))
-                .map_err(protocol)?;
+        let parent = directory
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        if directory.exists() {
+            return Err(protocol("snapshot pending directory already exists"));
         }
-        let destination = directory.join("ciphertext");
+        // An incomplete copy is never authoritative retry state. A crash can
+        // leave only an ignored private staging directory, never half a manifest.
+        let staging = tempfile::Builder::new()
+            .prefix(".workspace-preparing-")
+            .tempdir_in(parent)
+            .map_err(protocol)?;
+        let destination = staging.path().join("ciphertext");
         if let Some(file) = self._temporary.take() {
             // Persist by copy permits a state directory on another filesystem.
-            let mut out = tempfile::NamedTempFile::new_in(directory).map_err(protocol)?;
+            let mut out = tempfile::NamedTempFile::new_in(staging.path()).map_err(protocol)?;
             std::io::copy(&mut file.reopen().map_err(protocol)?, out.as_file_mut())
                 .map_err(protocol)?;
             out.as_file_mut().sync_all().map_err(protocol)?;
@@ -63,22 +69,21 @@ impl PreparedWorkspaceSnapshot {
             workspace: self.workspace.clone(),
             upload: self.upload.clone(),
         };
-        let mut file = tempfile::NamedTempFile::new_in(directory).map_err(protocol)?;
+        let mut file = tempfile::NamedTempFile::new_in(staging.path()).map_err(protocol)?;
         use std::io::Write;
         file.write_all(&serde_json::to_vec(&manifest).map_err(protocol)?)
             .map_err(protocol)?;
         file.as_file_mut().sync_all().map_err(protocol)?;
-        file.persist_noclobber(directory.join("manifest.json"))
+        file.persist_noclobber(staging.path().join("manifest.json"))
             .map_err(protocol)?;
-        std::fs::File::open(directory)
+        std::fs::File::open(staging.path())
             .and_then(|f| f.sync_all())
             .map_err(protocol)?;
-        if let Some(parent) = directory.parent() {
-            std::fs::File::open(parent)
-                .and_then(|f| f.sync_all())
-                .map_err(protocol)?;
-        }
-        self.file = destination;
+        std::fs::rename(staging.path(), directory).map_err(protocol)?;
+        std::fs::File::open(parent)
+            .and_then(|f| f.sync_all())
+            .map_err(protocol)?;
+        self.file = directory.join("ciphertext");
         Ok(self)
     }
 
@@ -580,4 +585,68 @@ fn validate_grant(grant: &ObjectGrant) -> Result<(), BuyerError> {
         return Err(protocol("storage grant is expired or does not use HTTPS"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod persistence_tests {
+    use super::*;
+    use std::io::Write;
+
+    fn prepared() -> PreparedWorkspaceSnapshot {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        let bytes = vec![7; ciphertext_len(0).unwrap() as usize];
+        file.write_all(&bytes).unwrap();
+        PreparedWorkspaceSnapshot {
+            workspace: WorkspaceView {
+                id: Uuid::new_v4(),
+                owner: "owner".into(),
+                name: "test".into(),
+                trust_floor: WorkspaceTrustFloor::Open,
+                version: 0,
+                snapshot: None,
+            },
+            file: file.path().to_path_buf(),
+            _temporary: Some(file),
+            upload: WorkspaceUpload {
+                upload_id: Uuid::new_v4(),
+                expected_version: 0,
+                plaintext_bytes: 0,
+                ciphertext_bytes: bytes.len() as u64,
+                ciphertext_sha256: sha256_hex(&bytes),
+            },
+        }
+    }
+
+    #[test]
+    fn interrupted_preparation_never_publishes_unloadable_pending_state() {
+        let directory = tempfile::tempdir().unwrap();
+        let pending = directory.path().join("test.pending");
+        let broken = prepared();
+        // Fail after staging-directory creation, at the ciphertext copy step.
+        std::fs::remove_file(&broken.file).unwrap();
+        assert!(broken.persist(&pending).is_err());
+        assert!(!pending.exists());
+        // A process killed before publication may leave an ignored stage.
+        let abandoned = directory.path().join(".workspace-preparing-interrupted");
+        std::fs::create_dir(&abandoned).unwrap();
+        std::fs::write(abandoned.join("ciphertext"), b"partial").unwrap();
+        let original = prepared();
+        let id = original.upload.upload_id;
+        original.persist(&pending).unwrap();
+        assert_eq!(
+            PreparedWorkspaceSnapshot::load(&pending)
+                .unwrap()
+                .upload
+                .upload_id,
+            id
+        );
+        assert!(prepared().persist(&pending).is_err());
+        assert_eq!(
+            PreparedWorkspaceSnapshot::load(&pending)
+                .unwrap()
+                .upload
+                .upload_id,
+            id
+        );
+    }
 }

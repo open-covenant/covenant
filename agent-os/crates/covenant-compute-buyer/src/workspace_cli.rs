@@ -54,6 +54,20 @@ impl LocalStore {
         let lock = options.open(path.join("state.lock"))?;
         lock.try_lock()
             .context("another workspace command is using this buyer and endpoint")?;
+        // Under the writer lock, these reserved private names can only be
+        // unfinished local preparation (never dispatched) or already-retired
+        // committed state. They are not authoritative retry directories.
+        for entry in std::fs::read_dir(&path)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if entry.file_type()?.is_dir()
+                && (name.starts_with(".workspace-preparing-")
+                    || name.starts_with(".workspace-retired-"))
+            {
+                std::fs::remove_dir_all(entry.path())?;
+            }
+        }
         Ok(Self {
             path,
             endpoint,
@@ -108,11 +122,22 @@ impl LocalStore {
         // The verified pin is durable before pending ciphertext can be removed.
         let pending = self.pending_path(committed.id);
         if pending.exists() {
-            std::fs::remove_dir_all(pending)?;
+            // Retire the whole authoritative state atomically before recursive
+            // deletion. Interrupted cleanup cannot turn a valid retry into a
+            // pending directory with missing ciphertext or manifest.
+            let retired = retire_pending(&pending, &self.path)?;
+            std::fs::remove_dir_all(retired)?;
         }
         std::fs::File::open(&self.path)?.sync_all()?;
         Ok(committed)
     }
+}
+
+fn retire_pending(pending: &Path, parent: &Path) -> Result<PathBuf> {
+    let retired = parent.join(format!(".workspace-retired-{}", Uuid::new_v4()));
+    std::fs::rename(pending, &retired)?;
+    std::fs::File::open(parent)?.sync_all()?;
+    Ok(retired)
 }
 
 pub async fn run(ctx: &Ctx, args: &mut Vec<String>, json_out: bool) -> Result<()> {
@@ -323,4 +348,29 @@ fn parse_id(args: &[String], expected: usize) -> Result<Uuid> {
         "wrong workspace arguments; run --help for usage"
     );
     Ok(positional(args, 0, "workspace UUID")?.parse()?)
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+
+    #[test]
+    fn interrupted_retired_directory_removal_cannot_corrupt_authoritative_pending() {
+        let home = tempfile::tempdir().unwrap();
+        let pending = home.path().join("checkpoint.pending");
+        std::fs::create_dir(&pending).unwrap();
+        std::fs::write(pending.join("manifest.json"), b"manifest").unwrap();
+        std::fs::write(pending.join("ciphertext"), b"ciphertext").unwrap();
+        let retired = retire_pending(&pending, home.path()).unwrap();
+        // Model process interruption halfway through recursive removal.
+        std::fs::remove_file(retired.join("manifest.json")).unwrap();
+        assert!(!pending.exists());
+        std::fs::create_dir(&pending).unwrap();
+        std::fs::write(pending.join("manifest.json"), b"new manifest").unwrap();
+        std::fs::remove_dir_all(retired).unwrap();
+        assert_eq!(
+            std::fs::read(pending.join("manifest.json")).unwrap(),
+            b"new manifest"
+        );
+    }
 }

@@ -41,6 +41,11 @@ impl WorkspaceObjects for NoObjects {
             "offline rehearsal forbids object actions".into(),
         ))
     }
+    async fn fence(&self, _: &str, _: u64) -> Result<(), WorkspaceError> {
+        Err(WorkspaceError::Config(
+            "offline rehearsal forbids object actions".into(),
+        ))
+    }
 }
 
 type Rows = BTreeMap<(String, String), Value>;
@@ -60,6 +65,7 @@ fn latest_rows(bytes: &[u8]) -> anyhow::Result<Rows> {
         object.entry("schema_version").or_insert(json!(1));
         object.entry("usage_day").or_insert(json!(0));
         object.entry("object_actions").or_insert(json!(0));
+        object.entry("fenced_objects").or_insert(json!(0));
         let owner = row["view"]["owner"]
             .as_str()
             .ok_or_else(|| anyhow!("missing owner"))?
@@ -112,6 +118,7 @@ fn summary(rows: &Rows) -> anyhow::Result<Value> {
     let mut committed = 0;
     let mut pending = 0;
     let mut garbage = 0;
+    let mut fences = 0;
     let mut current_bytes = 0;
     let mut pending_bytes = 0;
     let mut garbage_bytes = 0;
@@ -122,6 +129,7 @@ fn summary(rows: &Rows) -> anyhow::Result<Value> {
     let mut owners = std::collections::BTreeSet::new();
     for ((owner, _), row) in rows {
         owners.insert(owner);
+        add(&mut fences, number(&row["fenced_objects"])?)?;
         add(&mut versions, number(&row["view"]["version"])?)?;
         add(&mut actions, number(&row["object_actions"])?)?;
         if number(&row["usage_day"])? == latest_day {
@@ -162,6 +170,7 @@ fn summary(rows: &Rows) -> anyhow::Result<Value> {
         "owners":owners.len(),"rows":rows.len(),"tombstones":tombstones,
         "committed_snapshots":committed,"committed_version_total":versions,
         "pending_uploads":pending,"garbage_objects":garbage,
+        "permanent_empty_fences":fences,"allocated_objects":committed+pending+garbage+fences,
         "current_ciphertext_bytes":current_bytes,"pending_ciphertext_bytes":pending_bytes,
         "garbage_ciphertext_bytes":garbage_bytes,"reserved_ciphertext_bytes":reserved_bytes,
         "object_actions_all_retained_days":actions,"latest_usage_day":latest_day,

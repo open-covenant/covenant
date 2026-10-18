@@ -8,6 +8,7 @@ struct FakeObjects {
     pause_head: std::sync::atomic::AtomicBool,
     head_entered: tokio::sync::Notify,
     head_continue: tokio::sync::Notify,
+    fail_fence: std::sync::atomic::AtomicBool,
 }
 
 #[async_trait]
@@ -49,6 +50,20 @@ impl WorkspaceObjects for FakeObjects {
     }
     async fn delete(&self, key: &str, _now: u64) -> Result<(), WorkspaceError> {
         self.objects.lock().remove(key);
+        self.deleted.lock().push(key.into());
+        Ok(())
+    }
+    async fn fence(&self, key: &str, _now: u64) -> Result<(), WorkspaceError> {
+        self.objects.lock().insert(
+            key.into(),
+            ObjectMetadata {
+                ciphertext_bytes: 0,
+                ciphertext_sha256: sha256_hex(b""),
+            },
+        );
+        if self.fail_fence.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(WorkspaceError::Storage("uncertain fence".into()));
+        }
         self.deleted.lock().push(key.into());
         Ok(())
     }
@@ -125,7 +140,7 @@ async fn delayed_commit_cannot_adopt_replaced_same_id_reservation_or_orphan_it()
         .unwrap();
     assert_eq!(committed.version, 1);
     service.cleanup(later + CLEANUP_SKEW_MS).await.unwrap();
-    assert!(!objects.objects.lock().contains_key(&old.grant.url));
+    assert_eq!(objects.objects.lock()[&old.grant.url].ciphertext_bytes, 0);
     assert!(objects.objects.lock().contains_key(&new.grant.url));
     let download = service
         .download(
@@ -598,8 +613,55 @@ async fn abandoned_upload_cleanup_is_durable_and_waits_out_all_grants() {
             .unwrap(),
         1
     );
-    assert!(!objects.objects.lock().contains_key(&grant.grant.url));
+    assert_eq!(objects.objects.lock()[&grant.grant.url].ciphertext_bytes, 0);
     assert_eq!(service.cleanup(2_000_000).await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn unknown_fence_keeps_bytes_and_lifetime_allocation_survives_replay() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("book");
+    let objects = Arc::new(FakeObjects::default());
+    let service = WorkspaceService::open(&path, objects.clone(), coordinator(), 4).unwrap();
+    let workspace = service
+        .create("owner", create_request(WorkspaceTrustFloor::Open))
+        .unwrap();
+    service
+        .upload("owner", workspace.id, upload_request(0), 1000)
+        .unwrap();
+    let cleanup_at = 1000 + UPLOAD_WINDOW_MS + CLEANUP_SKEW_MS;
+    objects
+        .fail_fence
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    assert!(service.cleanup(cleanup_at).await.is_err());
+    assert_eq!(service.book.lock().reserved_bytes(), 60);
+    assert_eq!(service.book.lock().allocated_objects(), 1);
+    drop(service);
+    let service = WorkspaceService::open(&path, objects.clone(), coordinator(), 4).unwrap();
+    assert_eq!(service.book.lock().reserved_bytes(), 60);
+    objects
+        .fail_fence
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(service.cleanup(cleanup_at + 1).await.unwrap(), 1);
+    assert_eq!(service.cleanup(cleanup_at + 2).await.unwrap(), 0);
+    assert_eq!(service.book.lock().reserved_bytes(), 0);
+    assert_eq!(service.book.lock().allocated_objects(), 1);
+    {
+        let mut book = service.book.lock();
+        let mut row = book.row("owner", workspace.id).unwrap().clone();
+        row.fenced_objects = MAX_ALLOCATED_OBJECTS;
+        book.persist(row).unwrap();
+    }
+    drop(service);
+    let service = WorkspaceService::open(&path, objects, coordinator(), 4).unwrap();
+    assert_eq!(
+        service.book.lock().allocated_objects(),
+        MAX_ALLOCATED_OBJECTS
+    );
+    assert!(matches!(
+        service.upload("owner", workspace.id, upload_request(0), cleanup_at + 3),
+        Err(WorkspaceError::Capacity)
+    ));
 }
 
 async fn accepted_lease(state: &CoordinatorState, buyer: &LocalIdentity, now: u64) -> Uuid {
@@ -732,7 +794,8 @@ async fn s3_put(
 ) -> StatusCode {
     use base64::Engine;
     let expected = base64::engine::general_purpose::STANDARD.encode(sha2_10::Sha256::digest(&body));
-    if headers.get("if-none-match").and_then(|v| v.to_str().ok()) != Some("*")
+    let conditional = headers.get("if-none-match").and_then(|v| v.to_str().ok()) == Some("*");
+    if (!conditional && !body.is_empty())
         || headers
             .get("x-amz-checksum-sha256")
             .and_then(|v| v.to_str().ok())
@@ -741,7 +804,7 @@ async fn s3_put(
         return StatusCode::BAD_REQUEST;
     }
     let mut entries = objects.0.lock();
-    if entries.contains_key(&key) {
+    if conditional && entries.contains_key(&key) {
         return StatusCode::PRECONDITION_FAILED;
     }
     entries.insert(key, body.to_vec());

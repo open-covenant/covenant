@@ -369,6 +369,65 @@ pub struct LaunchRequest {
     pub required_offer: OfferQuote,
 }
 
+/// Opt-in public SSH host-key evidence for a specific acceptance lease. This
+/// reads an existing public key; it does not configure SSH or attest hardware.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostKeyEvidence {
+    job_id: String,
+    challenge: String,
+}
+
+impl HostKeyEvidence {
+    pub fn new(job_id: &str, challenge: &str) -> Result<Self> {
+        let canonical_uuid = job_id.len() == 36
+            && job_id.bytes().enumerate().all(|(i, b)| {
+                if [8, 13, 18, 23].contains(&i) {
+                    b == b'-'
+                } else {
+                    b.is_ascii_digit() || (b'a'..=b'f').contains(&b)
+                }
+            })
+            && job_id.bytes().any(|b| b != b'0' && b != b'-');
+        if !canonical_uuid
+            || challenge.len() != 64
+            || !challenge
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            || challenge.bytes().all(|b| b == b'0')
+        {
+            return Err(VastError::InvalidRequest("host-key evidence needs a nonnil canonical UUID and a nonzero 32-byte lowercase hex challenge"));
+        }
+        Ok(Self {
+            job_id: job_id.into(),
+            challenge: challenge.into(),
+        })
+    }
+
+    pub fn onstart_script(&self) -> String {
+        format!(
+            r#"(
+n=0
+while [ "$n" -lt 60 ]; do
+  if [ -s /etc/ssh/ssh_host_ed25519_key.pub ]; then
+    read -r algorithm public_key ignored < /etc/ssh/ssh_host_ed25519_key.pub
+    if [ "$algorithm" = ssh-ed25519 ]; then
+      case "$public_key" in ''|*[!A-Za-z0-9+/=]*) exit 1;; esac
+      [ "${{#public_key}}" -le 256 ] || exit 1
+      printf 'COVENANT_SSH_HOST_KEY_V1 %s %s %s %s\n' '{}' '{}' "$algorithm" "$public_key"
+      exit 0
+    fi
+  fi
+  n=$((n + 1))
+  sleep 1
+done
+printf 'COVENANT_SSH_HOST_KEY_V1 unavailable\n' >&2
+exit 1
+)"#,
+            self.job_id, self.challenge
+        )
+    }
+}
+
 impl LaunchRequest {
     fn validate(&self) -> Result<()> {
         workspace_label(&self.workload_id)?;
@@ -638,7 +697,20 @@ impl VastClient {
     }
 
     pub async fn launch(&self, request: LaunchRequest) -> Result<Launch> {
+        self.launch_with_host_key_evidence(request, None).await
+    }
+
+    pub async fn launch_with_host_key_evidence(
+        &self,
+        request: LaunchRequest,
+        evidence: Option<&HostKeyEvidence>,
+    ) -> Result<Launch> {
         request.validate()?;
+        if evidence.is_some_and(|e| e.job_id != request.workload_id) {
+            return Err(VastError::InvalidRequest(
+                "host-key evidence belongs to another workload",
+            ));
+        }
         let offer = self
             .confirm_offer(
                 &request.required_offer,
@@ -647,7 +719,10 @@ impl VastClient {
             )
             .await?;
         let label = workspace_label(&request.workload_id)?;
-        let instance_id = self.create(offer.id, &request.image, &label).await?;
+        let onstart = evidence.map(HostKeyEvidence::onstart_script);
+        let instance_id = self
+            .create(offer.id, &request.image, &label, onstart.as_deref())
+            .await?;
         if let Err(attachment) = self
             .attach_ssh_key(instance_id, &request.ssh_public_key)
             .await
@@ -826,7 +901,13 @@ impl VastClient {
         .await
     }
 
-    async fn create(&self, offer_id: u64, image: &str, label: &str) -> Result<u64> {
+    async fn create(
+        &self,
+        offer_id: u64,
+        image: &str,
+        label: &str,
+        onstart: Option<&str>,
+    ) -> Result<u64> {
         if offer_id == 0 {
             return Err(VastError::InvalidRequest("offer ID is zero"));
         }
@@ -841,6 +922,7 @@ impl VastClient {
                 disk: self.config.disk_gb,
                 runtype: "ssh_direct",
                 cancel_unavail: true,
+                onstart,
             });
         self.create_instance(request, "instance creation", label)
             .await
@@ -1172,6 +1254,8 @@ struct CreateRequest<'a> {
     disk: u32,
     runtype: &'static str,
     cancel_unavail: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    onstart: Option<&'a str>,
 }
 
 #[derive(Serialize)]

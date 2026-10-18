@@ -305,6 +305,37 @@ impl WorkspaceObjects for S3WorkspaceObjects {
             response.status().as_u16()
         )))
     }
+
+    async fn fence(&self, key: &str, now_ms: u64) -> Result<(), WorkspaceError> {
+        let empty_sha = hex(&Sha256::digest([]));
+        // This coordinator-only unconditional write removes ciphertext and
+        // leaves an existing key against which all client If-None-Match PUTs
+        // fail. Never DELETE a fence or reuse its key.
+        let response = self
+            .request(self.presign(
+                "PUT",
+                key,
+                BTreeMap::from([
+                    ("content-length".into(), "0".into()),
+                    ("x-amz-checksum-sha256".into(), digest_b64(&empty_sha)?),
+                ]),
+                now_ms,
+            )?)
+            .await?;
+        if response.status() != reqwest::StatusCode::OK {
+            return Err(WorkspaceError::Storage(format!(
+                "S3 fence PUT returned {}",
+                response.status().as_u16()
+            )));
+        }
+        let metadata = self.head(key, now_ms).await?;
+        if metadata.ciphertext_bytes != 0 || metadata.ciphertext_sha256 != empty_sha {
+            return Err(WorkspaceError::Storage(
+                "S3 fence did not verify as empty".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

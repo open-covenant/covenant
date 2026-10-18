@@ -13,6 +13,84 @@ const TOKEN: &str = "vast-test-token-not-a-real-secret";
 const SSH_KEY: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMockedPublicKeyMaterial test";
 const IMAGE: &str = WORKSPACE_IMAGE;
 
+#[test]
+fn host_key_evidence_is_read_only_bounded_and_rejects_script_injection() {
+    let job = "10000000-0000-4000-8000-000000000001";
+    let challenge = "ab".repeat(32);
+    for bad in [
+        "",
+        "job_123",
+        "00000000-0000-0000-0000-000000000000",
+        "$(id)",
+    ] {
+        assert!(HostKeyEvidence::new(bad, &challenge).is_err());
+    }
+    for bad in ["", "abcd", "$(id)", &"00".repeat(32), &"AB".repeat(32)] {
+        assert!(HostKeyEvidence::new(job, bad).is_err());
+    }
+    let evidence = HostKeyEvidence::new(job, &challenge).unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let public = directory.path().join("ssh_host_ed25519_key.pub");
+    let private = directory.path().join("ssh_host_ed25519_key");
+    std::fs::write(&public, SSH_KEY).unwrap();
+    std::fs::write(&private, b"private sentinel never emitted").unwrap();
+    let script = evidence.onstart_script();
+    assert!(script.contains("while [ \"$n\" -lt 60 ]"));
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(script.replace(
+            "/etc/ssh/ssh_host_ed25519_key.pub",
+            public.to_str().unwrap(),
+        ))
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), format!("COVENANT_SSH_HOST_KEY_V1 {job} {challenge} ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMockedPublicKeyMaterial\n"));
+    assert_eq!(std::fs::read(&public).unwrap(), SSH_KEY.as_bytes());
+    assert_eq!(
+        std::fs::read(&private).unwrap(),
+        b"private sentinel never emitted"
+    );
+}
+
+#[tokio::test]
+async fn host_key_evidence_adds_onstart_only_for_matching_workload() {
+    let server = MockServer::start().await;
+    let job = "10000000-0000-4000-8000-000000000001";
+    let evidence = HostKeyEvidence::new(job, &"ab".repeat(32)).unwrap();
+    let mut request = launch_request(640_000, quoted_offer(7, 70, 590_000));
+    assert!(matches!(
+        client(&server, 640_000)
+            .launch_with_host_key_evidence(request.clone(), Some(&evidence))
+            .await,
+        Err(VastError::InvalidRequest(_))
+    ));
+    assert!(server.received_requests().await.unwrap().is_empty());
+    request.workload_id = job.into();
+    Mock::given(method("POST"))
+        .and(path("/api/v0/bundles/"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"offers":[offer(7,70,0.59)]})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT")).and(path("/api/v0/asks/7/"))
+        .and(body_json(json!({"image":IMAGE,"label":format!("covenant-workload-{job}"),"disk":16,"runtype":"ssh_direct","cancel_unavail":true,"onstart":evidence.onstart_script()})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"new_contract":99}))).expect(1).mount(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/api/v0/instances/99/ssh/"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+    client(&server, 640_000)
+        .launch_with_host_key_evidence(request, Some(&evidence))
+        .await
+        .unwrap();
+    server.verify().await;
+}
+
 fn client(server: &MockServer, max_hourly_micros: u64) -> VastClient {
     VastClient::new(
         VastConfig {
@@ -1249,7 +1327,7 @@ async fn a_create_connect_failure_created_nothing_and_is_not_uncertain() {
     .unwrap();
 
     let error = client
-        .create(7, IMAGE, "covenant-workload-job_123")
+        .create(7, IMAGE, "covenant-workload-job_123", None)
         .await
         .unwrap_err();
     assert!(

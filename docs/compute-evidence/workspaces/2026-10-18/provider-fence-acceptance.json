@@ -1,0 +1,24 @@
+{
+  "accepted": true,
+  "checked_at_ms": 1792360438172,
+  "checks": {
+    "checksum_rejection": true,
+    "cleanup": true,
+    "empty_fence_verified": true,
+    "get_exact_bytes": true,
+    "grant_expiry": true,
+    "head_verified_checksum": true,
+    "immutable_put": true,
+    "inflight_put_rejected_after_fence": true,
+    "no_ciphertext_resurrection": true,
+    "private_object": true,
+    "put": true
+  },
+  "cleanup_keys": [],
+  "cleanup_requires_fence_or_definitive_put_outcome": false,
+  "earliest_grant_expiry_ms": 1792360854346,
+  "error": null,
+  "run_id": "121434f7-fe23-446d-a53e-e38d5627e1f1",
+  "schema": "covenant.workspace.storage-acceptance.v2",
+  "unknown_put": false
+}

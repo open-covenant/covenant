@@ -194,6 +194,7 @@ async fn main() {
             max_hourly_micros: MAX_HOURLY_MICROS,
             ready_timeout: Duration::from_secs(420),
             ready_poll_interval: Duration::from_secs(5),
+            host_key_evidence_jobs: Default::default(),
         },
     ));
     let node = Node::new(

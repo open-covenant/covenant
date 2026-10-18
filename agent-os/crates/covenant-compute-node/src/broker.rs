@@ -44,7 +44,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use covenant_compute_protocol::{JobEnvelopePayload, LeaseAccess};
-use covenant_compute_vast::{Launch, LaunchRequest, OfferSurvey, VastClient, VastError};
+use covenant_compute_vast::{
+    HostKeyEvidence, Launch, LaunchRequest, OfferSurvey, VastClient, VastError,
+};
 use parking_lot::Mutex;
 use uuid::Uuid;
 
@@ -108,6 +110,35 @@ pub struct BrokerConfig {
     pub max_hourly_micros: u64,
     pub ready_timeout: Duration,
     pub ready_poll_interval: Duration,
+    /// At most two explicitly selected acceptance jobs. Normal rentals never
+    /// receive a startup hook. Challenges must be recorded before funding.
+    pub host_key_evidence_jobs: std::collections::BTreeMap<Uuid, HostKeyEvidence>,
+}
+
+impl BrokerConfig {
+    pub fn parse_host_key_evidence_jobs(
+        value: &str,
+    ) -> Result<std::collections::BTreeMap<Uuid, HostKeyEvidence>, VastError> {
+        let mut jobs = std::collections::BTreeMap::new();
+        if value.is_empty() {
+            return Ok(jobs);
+        }
+        for pair in value.split(',') {
+            let (job, challenge) = pair.split_once(':').ok_or(VastError::Configuration(
+                "host-key evidence jobs must be UUID:64hex pairs",
+            ))?;
+            let evidence = HostKeyEvidence::new(job, challenge)?;
+            let id = job
+                .parse::<Uuid>()
+                .map_err(|_| VastError::Configuration("invalid host-key evidence job UUID"))?;
+            if jobs.len() >= 2 || jobs.insert(id, evidence).is_some() {
+                return Err(VastError::Configuration(
+                    "host-key evidence allows at most two unique jobs",
+                ));
+            }
+        }
+        Ok(jobs)
+    }
 }
 
 /// One live rented instance, kept so close can find it.
@@ -288,17 +319,20 @@ impl SessionBackend for BrokerSessionBackend {
                 );
                 let launch = match self
                     .client
-                    .launch(LaunchRequest {
-                        workload_id: job.job_id.to_string(),
-                        image: self.config.image.clone(),
-                        max_hourly_micros: self.config.max_hourly_micros,
-                        ssh_public_key: ssh_public_key.clone(),
-                        // Everything already lost this open, so the
-                        // market cannot sell us the same dead host under
-                        // a second offer ID.
-                        rejected_machine_ids: rejected.clone(),
-                        required_offer: offer.quote(),
-                    })
+                    .launch_with_host_key_evidence(
+                        LaunchRequest {
+                            workload_id: job.job_id.to_string(),
+                            image: self.config.image.clone(),
+                            max_hourly_micros: self.config.max_hourly_micros,
+                            ssh_public_key: ssh_public_key.clone(),
+                            // Everything already lost this open, so the
+                            // market cannot sell us the same dead host under
+                            // a second offer ID.
+                            rejected_machine_ids: rejected.clone(),
+                            required_offer: offer.quote(),
+                        },
+                        self.config.host_key_evidence_jobs.get(&job.job_id),
+                    )
                     .await
                 {
                     Ok(launch) => launch,
@@ -447,6 +481,29 @@ mod tests {
             max_hourly_micros: 600_000,
             ready_timeout: Duration::from_millis(50),
             ready_poll_interval: Duration::from_millis(10),
+            host_key_evidence_jobs: Default::default(),
+        }
+    }
+
+    #[test]
+    fn host_key_evidence_allowlist_is_explicit_bounded_and_fail_closed() {
+        assert!(BrokerConfig::parse_host_key_evidence_jobs("")
+            .unwrap()
+            .is_empty());
+        let a = format!("10000000-0000-4000-8000-000000000001:{}", "ab".repeat(32));
+        let b = format!("10000000-0000-4000-8000-000000000002:{}", "cd".repeat(32));
+        let c = format!("10000000-0000-4000-8000-000000000003:{}", "ef".repeat(32));
+        let jobs = BrokerConfig::parse_host_key_evidence_jobs(&format!("{a},{b}")).unwrap();
+        assert_eq!(jobs.len(), 2);
+        assert!(!jobs.contains_key(&Uuid::new_v4()));
+        for invalid in [
+            format!("{a},{a}"),
+            format!("{a},{b},{c}"),
+            format!("{a},"),
+            format!(" {a}"),
+            "bad:$(id)".into(),
+        ] {
+            assert!(BrokerConfig::parse_host_key_evidence_jobs(&invalid).is_err());
         }
     }
 
@@ -676,6 +733,7 @@ mod market_tests {
             max_hourly_micros: 900_000,
             ready_timeout: Duration::from_secs(2),
             ready_poll_interval: Duration::from_millis(20),
+            host_key_evidence_jobs: Default::default(),
         }
     }
 

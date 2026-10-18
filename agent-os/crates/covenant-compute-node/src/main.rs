@@ -2920,6 +2920,14 @@ async fn main() -> anyhow::Result<()> {
             // single lease independently of what the buyer paid.
             let config = BrokerConfig {
                 image,
+                host_key_evidence_jobs: BrokerConfig::parse_host_key_evidence_jobs(
+                    &match std::env::var("COVENANT_COMPUTE_BROKER_HOST_KEY_EVIDENCE_JOBS") {
+                        Ok(value) => value,
+                        Err(std::env::VarError::NotPresent) => String::new(),
+                        Err(error) => return Err(error.into()),
+                    },
+                )
+                .context("invalid broker host-key evidence allowlist")?,
                 max_hourly_micros: vast.config().max_hourly_micros,
                 ready_timeout: Duration::from_secs(env_or(
                     "COVENANT_COMPUTE_BROKER_READY_TIMEOUT_SECS",

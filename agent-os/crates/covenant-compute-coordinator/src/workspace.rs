@@ -31,6 +31,7 @@ const UPLOAD_WINDOW_MS: u64 = 900_000;
 const CLEANUP_SKEW_MS: u64 = 120_000;
 const OBJECT_ACTIONS_PER_OWNER_DAY: u64 = 256;
 const OBJECT_ACTIONS_PER_DAY: u64 = 4096;
+const MAX_ALLOCATED_OBJECTS: u64 = 4096;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkspaceError {
@@ -93,7 +94,12 @@ pub trait WorkspaceObjects: Send + Sync {
     fn get_grant(&self, key: &str, now_ms: u64, ttl_ms: u64)
         -> Result<ObjectGrant, WorkspaceError>;
     async fn head(&self, key: &str, now_ms: u64) -> Result<ObjectMetadata, WorkspaceError>;
+    /// Only for isolated test objects whose writers have definitively ended.
+    /// Production cleanup uses `fence` and must never delete a fenced key.
     async fn delete(&self, key: &str, now_ms: u64) -> Result<(), WorkspaceError>;
+    /// Replace retired ciphertext with a permanent empty object. A successful
+    /// fence must prevent every previously issued conditional PUT committing.
+    async fn fence(&self, key: &str, now_ms: u64) -> Result<(), WorkspaceError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -118,6 +124,8 @@ struct WorkspaceRow {
     usage_day: u64,
     #[serde(default)]
     object_actions: u64,
+    #[serde(default)]
+    fenced_objects: u64,
     view: WorkspaceView,
     current_key: Option<String>,
     committed_upload_id: Option<Uuid>,
@@ -269,6 +277,16 @@ impl WorkspaceBook {
                 total.saturating_add(current).saturating_add(pending),
                 |sum, garbage| sum.saturating_add(garbage.bytes),
             )
+        })
+    }
+
+    fn allocated_objects(&self) -> u64 {
+        self.rows.values().fold(0u64, |total, row| {
+            total
+                .saturating_add(row.fenced_objects)
+                .saturating_add(u64::from(row.current_key.is_some()))
+                .saturating_add(u64::from(row.pending.is_some()))
+                .saturating_add(row.garbage.len() as u64)
         })
     }
 
@@ -473,6 +491,7 @@ impl WorkspaceService {
             schema_version: 1,
             usage_day: 0,
             object_actions: 0,
+            fenced_objects: 0,
             view: view.clone(),
             current_key: None,
             committed_upload_id: None,
@@ -574,6 +593,7 @@ impl WorkspaceService {
             .reserved_bytes()
             .saturating_add(request.ciphertext_bytes)
             > book.max_bytes
+            || book.allocated_objects() >= MAX_ALLOCATED_OBJECTS
         {
             return Err(WorkspaceError::Capacity);
         }
@@ -788,8 +808,10 @@ impl WorkspaceService {
     }
 
     /// Expired reservations and superseded snapshots are durable cleanup work.
-    /// Deletion precedes the cleanup acknowledgement, so retry after crash is
-    /// safe. Delay until every issued URL expires to prevent upload resurrection.
+    /// Wait out grants, then replace ciphertext with permanent empty fences.
+    /// Expiry alone cannot stop an in-flight PUT: its signed If-None-Match
+    /// condition must encounter the fence when it tries to commit. Unknown
+    /// outcomes keep the full byte reservation; retrying a fence is idempotent.
     pub async fn cleanup(&self, now_ms: u64) -> Result<usize, WorkspaceError> {
         let candidates = {
             let mut book = self.book.lock();
@@ -821,10 +843,14 @@ impl WorkspaceService {
         };
         let mut deleted = 0;
         for (owner_key, object_key) in candidates {
-            self.objects.delete(&object_key, now_ms).await?;
+            self.objects.fence(&object_key, now_ms).await?;
             let mut book = self.book.lock();
             let mut row = book.rows[&owner_key].clone();
+            let before = row.garbage.len();
             row.garbage.retain(|g| g.key != object_key);
+            row.fenced_objects = row
+                .fenced_objects
+                .saturating_add((before - row.garbage.len()) as u64);
             book.persist(row)?;
             deleted += 1;
         }

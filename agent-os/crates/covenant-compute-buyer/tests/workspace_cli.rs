@@ -38,7 +38,8 @@ async fn object_put(
 ) -> StatusCode {
     objects.put_count.fetch_add(1, Ordering::SeqCst);
     let digest = base64::engine::general_purpose::STANDARD.encode(Sha256::digest(&body));
-    if headers.get("if-none-match").and_then(|v| v.to_str().ok()) != Some("*")
+    let conditional = headers.get("if-none-match").and_then(|v| v.to_str().ok()) == Some("*");
+    if (!conditional && !body.is_empty())
         || headers
             .get("x-amz-checksum-sha256")
             .and_then(|v| v.to_str().ok())
@@ -47,7 +48,7 @@ async fn object_put(
         return StatusCode::BAD_REQUEST;
     }
     let mut entries = objects.entries.lock();
-    if entries.contains_key(&key) {
+    if conditional && entries.contains_key(&key) {
         return StatusCode::PRECONDITION_FAILED;
     }
     entries.insert(key, body.to_vec());
@@ -268,7 +269,8 @@ async fn cli_save_restart_retry_restore_and_private_backup_preserve_one_version(
         .unwrap()
         .as_millis() as u64;
     service.cleanup(now + 500_000).await.unwrap();
-    assert!(objects.entries.lock().is_empty());
+    assert!(!objects.entries.lock().is_empty());
+    assert!(objects.entries.lock().values().all(Vec::is_empty));
     server_task.abort();
     storage_task.abort();
 }

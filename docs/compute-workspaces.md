@@ -28,7 +28,7 @@ workspace routes. Enabling it requires all of:
 | `COVENANT_COMPUTE_WORKSPACE_S3_PREFIX` | Optional prefix; defaults to `covenant-workspaces`. |
 | `COVENANT_COMPUTE_WORKSPACE_S3_SESSION_TOKEN` | Optional session credential. |
 | `COVENANT_COMPUTE_WORKSPACE_WRITES_ENABLED` | Defaults to `false`; set `true` only after storage acceptance. Disabling new admissions preserves commit recovery, reads and cleanup. |
-| `COVENANT_COMPUTE_WORKSPACE_MAX_BYTES` | Positive global ciphertext ceiling, including current objects, pending reservations and garbage until deletion succeeds. Defaults to 1 GiB. |
+| `COVENANT_COMPUTE_WORKSPACE_MAX_BYTES` | Positive global ciphertext ceiling, including current objects, pending reservations and garbage until a verified empty fence replaces the ciphertext. Defaults to 1 GiB. |
 | `COVENANT_COMPUTE_WORKSPACE_MAX_OWNERS` | Positive metadata-owner limit; defaults to 1024. |
 
 The bucket must enforce conditional `PUT` with `If-None-Match: *`, validate
@@ -38,12 +38,15 @@ ETag or caller-written metadata value is not accepted as a checksum. Grant
 signatures bind the immutable-write condition, object length and checksum.
 URLs expire after five minutes. Pending uploads expire after fifteen minutes.
 
-Use an unversioned bucket, or configure provider lifecycle deletion for
-noncurrent versions: an S3 DELETE against a versioned bucket otherwise creates
-a delete marker and retains billable previous bytes. Block public access and
+Use an unversioned bucket: retirement overwrites ciphertext with a permanent
+zero-byte fence, and versioning would retain the previous encrypted payload.
+Do not configure lifecycle rules that delete these fences. Block public access and
 deny independent writes to the prefix. Enforce provider storage quotas as a
 separate backstop; one owner can hold sixteen active workspaces. Deleted IDs
 remain tombstoned, with a separate ceiling of 1024 total IDs per owner.
+A deployment permits at most 4096 lifetime object allocations, counting current
+objects, pending uploads, garbage and permanent fences. Retries reuse their
+allocation. At this cap, new uploads fail closed; restart does not reset it.
 
 Issuance of upload/download grants and commit HEAD checks is durably limited to
 256 per owner and 4096 globally per UTC day; moving the clock backward does not
@@ -54,8 +57,12 @@ by saving a snapshot.
 
 Durable metadata resides in `workspaces.jsonl` beside the coordinator journal.
 An exclusive lock prevents concurrent coordinator writers. Its versioned journal is additive: existing job, payment and lease journals are unchanged. A failed commit never advances the visible version. Cleanup runs each minute
-and removes abandoned uploads and superseded snapshots only after outstanding
-grants expire. Cleanup obligations survive a coordinator restart. The metadata
+and retires abandoned uploads and superseded snapshots after outstanding grants
+expire. It replaces ciphertext with a verified empty object that remains
+permanently: the existence check on every conditional client PUT prevents an
+in-flight upload from recreating deleted ciphertext. Unknown fence outcomes
+retain the full byte reservation. Cleanup obligations and fence counters survive
+a coordinator restart. The metadata
 and object store both need backups; a lost buyer key cannot be recovered.
 
 ## Client and HTTP interfaces
@@ -120,7 +127,9 @@ authorization but does not upload plaintext to the machine.
 
 Local pins and keys are scoped by coordinator endpoint and buyer identity,
 written atomically with private file permissions and protected by a process
-lock. Save refuses if an earlier operation is uncertain. Restore never silently
+lock. Prepared ciphertext and its manifest are fsynced in a private staging
+directory, then published together by atomic rename before dispatch. Completed
+pending state is atomically retired before recursive removal. Save refuses if an earlier operation is uncertain. Restore never silently
 adopts a different server version or overwrites an existing destination. A
 private backup contains the encryption key and exact version pin; store it
 privately. On another client with the same buyer identity and endpoint, use
@@ -134,17 +143,20 @@ On 2026-10-18, after the account owner approved R2 with application limits and
 completed billing setup, the private Standard bucket
 `covenant-compute-workspaces` was created. Its object credential is restricted
 to that bucket and stored privately. Actual provider acceptance passed all
-checks below, with both synthetic keys deleted. This qualifies the storage
+checks below, with the isolated synthetic keys deleted after their writes
+definitively completed. This qualifies the storage
 adapter; it does not establish a deployed workspace API or real cross-lease
 restoration. The [evidence record](compute-workspace-release-evidence.md)
 separates those remaining gates. An account's free allowance is not an unlimited
 spending authorization.
 
 Run the opt-in `workspace-storage-acceptance` example with the configured S3
-environment and `--allow-synthetic-storage-writes`. It writes two tiny synthetic
-objects and emits a JSON verdict after cleanup. An unknown PUT outcome emits
-cleanup keys and an earliest safe deletion time instead of claiming deletion;
-reconcile those keys only after every possible write grant expires. Required evidence includes
+environment and `--allow-synthetic-storage-writes`. It writes three tiny
+synthetic objects and emits a JSON verdict after cleanup. It holds a conditional
+PUT body in flight, installs and verifies an empty fence, then completes the PUT
+and requires 412 with no ciphertext resurrection. An unknown PUT outcome retains
+cleanup keys: expiry alone never establishes a safe deletion time. Reconcile
+with a verified permanent fence or a definitively completed write. Required evidence includes
 conditional-write rejection, checksum rejection, verified HEAD checksum,
 private object reads, exact download bytes, expiration and successful cleanup.
 No URL or provider credential appears in its report.

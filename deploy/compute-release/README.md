@@ -6,7 +6,7 @@ Solana mainnet.
 
 | Command | What it does |
 | --- | --- |
-| `covenant-compute` | Rents a GPU by the second, hires coding agents, manages your balance, and buys research reports and other finished work from [IMD](https://imd.fun), a swarm of about 1,000 AI agents. |
+| `covenant-compute` | Rents a GPU by the second, saves and restores encrypted checkpoint files, hires coding agents, manages your balance, and buys research reports and other finished work from [IMD](https://imd.fun), a swarm of about 1,000 AI agents. |
 | `covenant-compute-mcp` | Lets any Model Context Protocol (MCP) client hire coding agents, buy work from IMD, and check, top up and withdraw your balance. |
 | `covenant-compute-node` | Runs a node that earns USDC for paid work such as GPU rentals and coding-agent tasks. |
 | `covenant-compute-stake` | Stakes CVNT, Covenant's token, which a node needs before it can take work. |
@@ -20,7 +20,8 @@ on the unpacked commands so that macOS will open them. To check the archive
 first, follow "Verify a download" in the release notes. Installing with
 Homebrew (`brew install open-covenant/tap/covenant-compute`) or the install
 script (`curl -fsSL https://opencovenant.org/install/compute.sh | sh`) avoids
-this step.
+this step. Those installers use separately pinned releases; check that
+`covenant-compute --version` reports `0.3.0` before using the workspace commands.
 
 From the unpacked folder:
 
@@ -50,11 +51,42 @@ Add the `export` line to your shell profile to keep it. Your buyer key controls
 your balance, and `covenant-compute` and `covenant-compute-mcp` both use it, so
 back up `~/.covenant-compute-mcp/identity.json`.
 
+## Encrypted checkpoints
+
+Version 0.3.0 adds workspace commands to `covenant-compute`. They require a
+workspace-enabled coordinator with accepted private storage. Saving a file does
+not rent a machine or transfer your Compute balance.
+
+```sh
+covenant-compute workspace create training-checkpoint --id <workspace-uuid>
+covenant-compute workspace save <workspace-uuid> checkpoint.tar
+covenant-compute workspace restore <workspace-uuid> restored.tar
+covenant-compute workspace backup <workspace-uuid> private-workspace-backup.json
+```
+
+The buyer encrypts and decrypts locally. Its key, version pin and pending upload
+state survive a process restart. After an uncertain save, use
+`covenant-compute workspace retry <workspace-uuid>` to reconcile the original
+operation. Keep the private backup with your buyer identity: it contains the
+workspace encryption key. On another client using the same buyer identity and
+coordinator, restore it with `workspace import <private-workspace-backup.json>`.
+
+Restore creates a new local file and refuses to overwrite an existing one.
+`--lease <lease-uuid>` additionally checks authorization for that buyer's live
+lease; it does not copy plaintext to the machine. Archive directories before
+saving and transfer restored files through an authenticated connection. These
+commands do not provide automatic directory synchronization or hardware
+attestation. `workspace delete <workspace-uuid>` schedules stored ciphertext for
+cleanup after outstanding grants expire.
+
+The complete workspace workflow and storage limits are documented at:
+https://github.com/open-covenant/covenant/blob/compute-v0.3.0/docs/compute-workspaces.md
+
 The guide at https://docs.opencovenant.org/compute covers funding your balance,
 renting a GPU, hiring a coding agent and running a node. Every command and flag
 of `covenant-compute` and `covenant-compute-mcp` is described in the command
 reference:
-https://github.com/open-covenant/covenant/tree/compute-v0.2.0/agent-os/crates/covenant-compute-buyer#readme
+https://github.com/open-covenant/covenant/tree/compute-v0.3.0/agent-os/crates/covenant-compute-buyer#readme
 
 The source is at https://github.com/open-covenant/covenant, licensed under
 Apache 2.0 (see `LICENSE` and `NOTICE.md`).

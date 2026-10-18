@@ -34,6 +34,15 @@ bins=(covenant-compute covenant-compute-mcp covenant-compute-node)
 
 version="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$workspace/crates/covenant-compute-buyer/Cargo.toml")"
 [ -n "$version" ] || { echo "dist.sh: no version in covenant-compute-buyer/Cargo.toml" >&2; exit 1; }
+for manifest in "$workspace/crates/covenant-compute-node/Cargo.toml" "$stake_workspace/Cargo.toml"; do
+  packaged_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$manifest")"
+  if [ "$packaged_version" != "$version" ]; then
+    echo "dist.sh: $manifest has version $packaged_version, expected $version" >&2
+    exit 1
+  fi
+done
+notes="$here/notes/compute-v$version.md"
+[ -f "$notes" ] || { echo "dist.sh: release notes missing: $notes" >&2; exit 1; }
 # The README links to the command reference at this release's tag.
 if grep -o -E 'compute-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?' "$here/README.md" | grep -q -v -x -F "compute-v$version"; then
   echo "dist.sh: README.md links to another release than compute-v$version" >&2
@@ -75,6 +84,7 @@ for bin in "${bins[@]}"; do
 done
 install -m 0755 "$stake_bin_dir/covenant-compute-stake" "$stage/"
 install -m 0644 "$root/LICENSE" "$root/NOTICE.md" "$here/README.md" "$stage/"
+install -m 0644 "$notes" "$stage/RELEASE_NOTES.md"
 
 if tar --version | grep -q 'GNU tar'; then
   tar_flags=(--owner=0 --group=0 --numeric-owner)
@@ -110,6 +120,34 @@ for bin in "${bins[@]}" covenant-compute-stake; do
     exit 1
   fi
 done
+
+# A version string alone cannot establish that the published buyer contains the
+# workspace interface. Exercise the extracted command's help before any buyer
+# identity or endpoint is configured; none of these checks may create state.
+buyer="$work/check/$asset/covenant-compute"
+help_home="$work/help-only-buyer"
+workspace_help="$(COVENANT_COMPUTE_MCP_HOME="$help_home" \
+  COVENANT_COMPUTE_COORDINATOR_URL=http://127.0.0.1:1 \
+  run_packed "$buyer" workspace --help)"
+for command in create 'list|status' save retry restore delete backup import; do
+  if ! grep -Fq "covenant-compute workspace $command " <<< "$workspace_help"; then
+    echo "dist.sh: packed buyer help is missing workspace $command" >&2
+    exit 1
+  fi
+done
+if ! grep -Fq '[--lease UUID]' <<< "$workspace_help"; then
+  echo "dist.sh: packed buyer help is missing lease-bound workspace restore" >&2
+  exit 1
+fi
+for command in create list status save retry restore delete backup import; do
+  COVENANT_COMPUTE_MCP_HOME="$help_home" \
+    COVENANT_COMPUTE_COORDINATOR_URL=http://127.0.0.1:1 \
+    run_packed "$buyer" workspace "$command" --help >/dev/null
+done
+if [ -e "$help_home" ]; then
+  echo "dist.sh: workspace help unexpectedly created buyer state" >&2
+  exit 1
+fi
 
 mkdir -p "$root/dist"
 mv "$archive" "$root/dist/"

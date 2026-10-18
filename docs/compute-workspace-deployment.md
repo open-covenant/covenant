@@ -1,8 +1,8 @@
 # Encrypted workspace deployment
 
 This runbook prepares adoption package 3. The implementation is locally
-qualified; provider acceptance, deployment, installed-client acceptance and a
-real cross-lease demonstration remain pending. See the separate
+qualified and R2 provider acceptance passed; deployment, copied-state recovery,
+installed-client acceptance and a real cross-lease demonstration remain pending. See the separate
 [evidence record](compute-workspace-release-evidence.md).
 
 ## Existing service and storage
@@ -12,10 +12,9 @@ metadata goes in `workspaces.jsonl` beside its existing `journal.jsonl`; no new
 Compute service or disk is required. Do not alter settlement, payout, staking or
 other service configuration as part of this release.
 
-The approved provider is Covenant's Cloudflare R2 account. Enrollment still
-requires the account owner's payment method and billing address. After that
-step, create the dedicated private Standard bucket
-`covenant-compute-workspaces`, with bucket-scoped object credentials. Keep public
+The approved provider is Covenant's Cloudflare R2 account. Enrollment is complete
+and the dedicated private Standard bucket `covenant-compute-workspaces` exists,
+with bucket-scoped object credentials. Keep public
 development URLs and custom-domain exposure disabled. Store credentials only in
 the private credential store and the coordinator's deployment secrets.
 
@@ -70,10 +69,22 @@ cargo test --locked -p covenant-compute-coordinator --lib \
 
 That check uses synthetic state. It does not establish recovery of a production
 copy. After the first synthetic provider checkpoint, copy the workspace journal
-privately and rehearse opening it twice with a workspace-only harness and a
-no-network object adapter. Verify committed views, pending uploads, tombstones,
-quota counters and cleanup obligations, including a torn trailing record.
-Keep the original copy untouched. This copied-state rehearsal is still pending.
+privately and run the workspace-only harness:
+
+```sh
+cargo run --locked -p covenant-compute-coordinator \
+  --example workspace-state-rehearsal -- \
+  --copied-journal /private/copy/workspaces.jsonl
+```
+
+The source file is read only. Actual workspace replay/compaction opens a private
+temporary copy twice and a separate copy with an interrupted trailing record.
+It compares complete committed views, pending uploads, tombstones, counters and
+cleanup obligations, then reports aggregate counts and the source digest without
+owner identifiers, names, keys or object paths. Its object adapter refuses every
+operation; it constructs an in-memory coordinator without starting any worker.
+The input has a 256 MiB rehearsal ceiling. Keep the source snapshot private and
+untouched. Rehearsal against an actual copied production checkpoint is pending.
 
 Do not launch the full coordinator against copied financial state with
 production provider, payout or chain credentials: startup workers can perform
@@ -94,9 +105,9 @@ deployment state rather than resubmitting blindly.
 The CLI release workflow is `.github/workflows/compute-release.yml`. A new
 `compute-v*` tag must match the packaged commands' versions and have matching
 release notes. `deploy/compute-release/dist.sh` builds and checks four macOS/Linux
-archives. Current 0.2.0 assets already exist; choose a fresh version and update
-the packaged buyer, node and stake versions and their lockfiles together. Do
-not overwrite an existing release. Verify downloaded signatures, provenance,
+archives. This candidate prepares 0.3.0 versions, lockfiles and release notes;
+the existing 0.2.0 assets remain immutable. Do not overwrite an existing release.
+Verify downloaded signatures, provenance,
 checksums, version and workspace help before installed-client acceptance.
 
 Deploy the accepted coordinator with workspace writes disabled. Confirm its

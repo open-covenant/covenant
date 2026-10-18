@@ -1,6 +1,6 @@
 # Encrypted workspace release candidate
 
-Status on 2026-10-18: **implemented and locally qualified; not deployed or
+Status on 2026-10-18: **implemented, locally qualified and accepted by R2; not deployed or
 accepted for public announcement**. This is adoption package 3, independently
 scoped from framework clients in package 5.
 
@@ -59,6 +59,7 @@ All commands ran in the dedicated `codex/compute-workspace-release` worktree.
 | Protocol workspace crypto tests | 4 passed, included in the protocol total |
 | Scoped Clippy, warnings denied | Passed for affected libraries, CLI and provider acceptance example |
 | Both Compute documentation validators | Passed |
+| Offline copied-state rehearsal harness | Two synthetic qualification tests passed; scoped Clippy passed; production copy still pending |
 
 The child-process integration uses the actual CLI and coordinator router with
 a local conditional-write object fixture. It simulates a committed PUT whose
@@ -75,26 +76,43 @@ leases; unsupported trust floors; schema mismatch; concurrent journal writers;
 quota exhaustion across restarts; and a delayed HEAD racing with replacement
 of an expired reservation using the same upload ID.
 
+## Isolated Cloudflare R2 acceptance
+
+Following the account owner's approval of R2 with application limits and their
+completion of billing setup, the private Standard bucket
+`covenant-compute-workspaces` was created on 2026-10-18. Public access is disabled.
+An account credential is restricted to object read/write access in that bucket;
+it has no bucket-administration permissions and is stored privately.
+
+The real provider probe at 21:15:37 UTC on 2026-10-18 passed
+all eight checks: initial PUT, rejection of a duplicate conditional PUT (412),
+rejection of a corrupt SHA-256 (400), provider-verified HEAD checksum and size,
+anonymous object-read rejection, exact authenticated GET bytes, expired-grant
+rejection and deletion of both synthetic keys. It returned `accepted: true`,
+exit status 0 and no pending cleanup keys. Run ID:
+`a0fbdaca-9634-4abe-9eed-41fab33de505`.
+
+The [sanitized verdict](compute-evidence/workspaces/2026-10-18/provider-acceptance.json)
+has SHA-256
+`1e92edfaf5b0c9631b7011c21015c44eb33be191160fcc34ed8a415633ffb52e`.
+
+The compiled provider example used source
+`be040340bb14f6152cd27df262e8dbab4b7c3917`. Only tiny synthetic test content was
+written. No buyer checkpoint, paid Compute job or production configuration was
+used. This is provider acceptance, not deployment, installed-client acceptance
+or a real GPU restore demonstration.
+
 ## Remaining public-release gates
 
-1. Finish enrollment of Covenant's Cloudflare account in R2. The account owner
-   approved R2 with application limits; checkout still requires their payment
-   method and billing address. The saved token cannot list R2 buckets. The
-   intended isolated private bucket is `covenant-compute-workspaces`, Standard
-   class, with scoped object credentials. No bucket or credential exists yet.
-2. Run the opt-in `workspace-storage-acceptance` example against that provider.
-   Require immutable-write, checksum, private-read, exact-byte, expiration and
-   deletion verdicts. Unknown write outcomes retain explicit cleanup keys until
-   their grants expire; they do not count as successful cleanup.
-3. Rehearse copied metadata recovery, publish immutable coordinator/client
+1. Rehearse copied metadata recovery, publish immutable coordinator/client
    artifacts, verify anonymous downloads and deploy the accepted coordinator
    revision with admissions off before storage qualification.
-4. Use the released CLI for a real provider save/restart/retry/restore. A
+2. Use the released CLI for a real provider save/restart/retry/restore. A
    cross-lease launch story additionally requires real authenticated SSH access,
    archive hashes on the first and later machine, lease authorization checks and
    confirmed teardown. Only the root release task can allocate the shared
    approved test budget; this implementation created no paid job or transfer.
-5. Enable admissions only after acceptance, publish the page and sharing image,
+3. Enable admissions only after acceptance, publish the page and sharing image,
    verify their live revision and X-facing metadata, then supply the launch post
    and visual. Do not announce this candidate as live before those checks pass.
 

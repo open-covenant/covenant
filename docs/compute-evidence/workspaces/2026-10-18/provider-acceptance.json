@@ -1,0 +1,20 @@
+{
+  "accepted": true,
+  "checked_at_ms": 1792358137214,
+  "checks": {
+    "checksum_rejection": true,
+    "cleanup": true,
+    "get_exact_bytes": true,
+    "grant_expiry": true,
+    "head_verified_checksum": true,
+    "immutable_put": true,
+    "private_object": true,
+    "put": true
+  },
+  "cleanup_keys": [],
+  "cleanup_not_before_ms": null,
+  "error": null,
+  "run_id": "a0fbdaca-9634-4abe-9eed-41fab33de505",
+  "schema": "covenant.workspace.storage-acceptance.v1",
+  "exit_code": 0
+}

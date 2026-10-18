@@ -23,7 +23,7 @@ workspace routes. Enabling it requires all of:
 | `COVENANT_COMPUTE_WORKSPACE_S3_ENDPOINT` | HTTPS S3-compatible origin, without a path; HTTP is allowed only on loopback for testing. |
 | `COVENANT_COMPUTE_WORKSPACE_S3_REGION` | Region used for SigV4 signing. |
 | `COVENANT_COMPUTE_WORKSPACE_S3_BUCKET` | Private bucket. |
-| `COVENANT_COMPUTE_WORKSPACE_S3_ACCESS_KEY` | Credential with access only to the workspace prefix. |
+| `COVENANT_COMPUTE_WORKSPACE_S3_ACCESS_KEY` | Credential limited to the dedicated workspace bucket, and to its prefix if the provider supports that restriction. |
 | `COVENANT_COMPUTE_WORKSPACE_S3_SECRET_KEY` | Corresponding secret, supplied through the deployment's secret store. |
 | `COVENANT_COMPUTE_WORKSPACE_S3_PREFIX` | Optional prefix; defaults to `covenant-workspaces`. |
 | `COVENANT_COMPUTE_WORKSPACE_S3_SESSION_TOKEN` | Optional session credential. |
@@ -130,12 +130,15 @@ ciphertext for deletion after outstanding grants expire.
 
 ## Provider acceptance and promotion
 
-The Cloudflare account inspection on 2026-10-18 found R2 not enrolled, and the
-saved API token lacked R2 bucket access. No bucket, new subscription or provider
-credential was created during local implementation. The intended private
-bucket is `covenant-compute-workspaces`, Standard class. R2 enrollment and a
-bucket-scoped object credential are production prerequisites; an account's
-free allowance is not an unlimited spending authorization.
+On 2026-10-18, after the account owner approved R2 with application limits and
+completed billing setup, the private Standard bucket
+`covenant-compute-workspaces` was created. Its object credential is restricted
+to that bucket and stored privately. Actual provider acceptance passed all
+checks below, with both synthetic keys deleted. This qualifies the storage
+adapter; it does not establish a deployed workspace API or real cross-lease
+restoration. The [evidence record](compute-workspace-release-evidence.md)
+separates those remaining gates. An account's free allowance is not an unlimited
+spending authorization.
 
 Run the opt-in `workspace-storage-acceptance` example with the configured S3
 environment and `--allow-synthetic-storage-writes`. It writes two tiny synthetic

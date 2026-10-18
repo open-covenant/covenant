@@ -1,0 +1,26 @@
+{
+  "attempts": [
+    {
+      "job_id": "ac6a8b30-1003-4b2a-9558-b580aa590812",
+      "outcome": "tool_error",
+      "accepted": false,
+      "signed_price_micro_usdc": 100000,
+      "coordinator_charge_micro_usdc": 100000,
+      "reason": "Dependency build scripts could not execute on scratch; no proof export.",
+      "archive_inventory_sha256": "e45e484093bd11eda6784f3b13b73b4d352bdf77263a9512f457ea25cface48d",
+      "relative_archive": "../e45e484093bd11eda6784f3b13b73b4d352bdf77263a9512f457ea25cface48d/README.md"
+    },
+    {
+      "job_id": "360eba3e-43a0-43e7-a0d7-aa3ca57e4174",
+      "outcome": "tool_error",
+      "accepted": false,
+      "signed_price_micro_usdc": 50000,
+      "coordinator_charge_micro_usdc": 50000,
+      "reason": "Corrected scratch execution; all-tests target selection required fuzz; no proof export.",
+      "archive_inventory_sha256": "97e7fd29b7390e08298e6ec24d86e4e6ef4e3cb93f1dd189835d21fd41d3196d",
+      "relative_archive": "../97e7fd29b7390e08298e6ec24d86e4e6ef4e3cb93f1dd189835d21fd41d3196d/README.md"
+    }
+  ],
+  "earlier_signed_records_replaced": false,
+  "settlement_verified": false
+}

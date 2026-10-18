@@ -1,0 +1,24 @@
+tree 6de5571b649dcd572a15a73341206e75e24c016b
+parent 4db11a8cb0053815e23a35d3a7d3edc265d8d866
+author Mizuki Hayashi <mizuki@kamiyo.ai> 1792125365 +0200
+committer Mizuki Hayashi <mizuki@kamiyo.ai> 1792224974 +0200
+
+fix(v16): refuse fresh backing withdrawal from a lapsed bucket
+
+withdraw_fresh_counterparty_backing_not_atomic never compared the bucket's
+expiry with the current slot, so a provider could withdraw unliened
+principal from a Fresh bucket at or past its expiry slot. Expiry forfeits
+that principal to the junior pool, and validate_source_domain_ledger_current
+already refuses the same state with Stale before a credit-rate read. In a
+resolved market, withdrawing first left a haircut receipt paid 1 of 4
+instead of 4 of 4.
+
+Return Stale before any mutation when the bucket is Fresh and
+expiry_slot <= current_slot. Other statuses keep their LockActive refusal.
+
+The percolator-prog wrapper has refused this at its WithdrawBackingBucket
+boundary since fe64fb71 (AUDIT-063), but the engine route itself was open,
+so any other caller of the public API inherited the gap. The engine now
+enforces it directly.
+
+Fixes #240.

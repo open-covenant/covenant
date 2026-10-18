@@ -1,0 +1,15 @@
+{
+  "jobs": [
+    {
+      "job_id": "001980a8-6442-49c0-9081-983def87331d",
+      "operator_receipt_signer_pubkey": "HuTP2kfzhns9p3ZvmuZxGzcgYan7z4LaZVytgcG9VVuh",
+      "signed_model_requirement": "native-empty-v1:cdad5a4434fff84420f52b6baea16c1094e93b5eb2bb3cc1b8526822cc63b950"
+    },
+    {
+      "job_id": "97fbf4a1-a86c-4ca7-ab63-f44e3a7ffeed",
+      "operator_receipt_signer_pubkey": "HuTP2kfzhns9p3ZvmuZxGzcgYan7z4LaZVytgcG9VVuh",
+      "signed_model_requirement": "kani-v1:e9b92565e08b926e6d036d7f25ef9ca9e2f6f0ce8d80f76d4a45aacc82501d13"
+    }
+  ],
+  "trust": "Receipt signer identities are verified; operator ownership and hardware isolation are not established."
+}

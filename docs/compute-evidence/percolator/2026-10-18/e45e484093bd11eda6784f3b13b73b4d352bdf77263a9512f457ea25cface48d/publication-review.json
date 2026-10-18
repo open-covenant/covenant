@@ -1,0 +1,22 @@
+{
+  "schema": "covenant.public-evidence-review.v1",
+  "archive_inventory_sha256": "e45e484093bd11eda6784f3b13b73b4d352bdf77263a9512f457ea25cface48d",
+  "reviewer": "Codex receipt_product_path agent",
+  "reviewed_at": "2026-10-17T23:33:07.420902+00:00",
+  "reviewed_all_source_patch_and_raw_logs": true,
+  "contains_no_private_credentials_or_capabilities": true,
+  "publication_status": "Local public-only staging, no remote publication.",
+  "expires_at_ms": 1792281876101,
+  "review_scope": [
+    "Exact signed envelope, receipt, full returned content and raw logs retained without edits.",
+    "Source bundle is byte-identical to independently reviewed generic canary bundle with29packed source blobs; original/snapshot tree equality verified.",
+    "Full stderr demonstrates dependency build-script launch failures; no Kani proof export was present.",
+    "No private buyer config, identity keys, journals or machine environment copied.",
+    "Outcome and charge documented as failed paid execution; no proof or retry claim."
+  ],
+  "settlement_verified": false,
+  "inventory_completeness_verified": false,
+  "credentials_and_private_assets_absent": true,
+  "expiry_gate_pending": false,
+  "expiry_gate_completed_at": "2026-10-18T00:04:36.226376+00:00"
+}

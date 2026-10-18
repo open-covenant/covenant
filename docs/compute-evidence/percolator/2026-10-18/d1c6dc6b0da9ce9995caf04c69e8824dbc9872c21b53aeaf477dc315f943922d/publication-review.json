@@ -1,0 +1,90 @@
+{
+  "schema": "covenant.public-evidence-review.v1",
+  "archive_inventory_sha256": "d1c6dc6b0da9ce9995caf04c69e8824dbc9872c21b53aeaf477dc315f943922d",
+  "reviewer": "Codex receipt_product_path agent",
+  "reviewed_at": "2026-10-17T23:31:46.850658+00:00",
+  "reviewed_all_source_patch_and_raw_logs": true,
+  "contains_no_private_credentials_or_capabilities": true,
+  "publication_status": "Local public-only staging, no remote publication.",
+  "review_scope": [
+    "Exact signed native envelopes, receipts and output; no redaction.",
+    "Source bundles scanned across every packed blob; history-free original/snapshot tree equality independently verified.",
+    "Readable source, original commit objects, complete Kani JSON export, result.json and untrimmed stdout/stderr reviewed.",
+    "No buyer identities, signing keys, purchase journals, API tokens or machine configuration included.",
+    "Only public Percolator source author metadata, local bootstrap fixture identity, public signing keys and container paths are retained.",
+    "Only expired signed execution orders may be exported; collection does not require expiry."
+  ],
+  "source_inventory": [
+    {
+      "label": "native-generic-canary",
+      "all_packed_blobs_scanned": 29,
+      "tracked_source_paths": [
+        ".cargo/config.toml",
+        ".gitignore",
+        "Cargo.lock",
+        "Cargo.toml",
+        "LICENSE",
+        "README.md",
+        "kani-list.json",
+        "scripts/contracts_runner.sh",
+        "scripts/isolated_full_audit.sh",
+        "scripts/isolated_retry.sh",
+        "scripts/isolated_runner.sh",
+        "scripts/kani_audit_certified.tsv",
+        "scripts/kernel_results.tsv",
+        "spec.md",
+        "src/lib.rs",
+        "src/v16.rs",
+        "src/v16_kani_api.rs",
+        "src/v16_proofs.rs",
+        "src/wide_math.rs",
+        "tests/backing_double_claim_fuzz.proptest-regressions",
+        "tests/backing_double_claim_fuzz.rs",
+        "tests/proofs_v16.rs",
+        "tests/proofs_v16_arithmetic.rs",
+        "tests/reference_model_conformance.rs",
+        "tests/resolved_insolvent_fuzz.rs",
+        "tests/rounding_residue_fuzz.proptest-regressions",
+        "tests/rounding_residue_fuzz.rs",
+        "tests/v16_fuzzing.rs",
+        "tests/v16_spec_tests.rs"
+      ],
+      "hidden_or_reproduction_overlay": false,
+      "source_bundle_sha256": "4c3120a9604e62af97155a0becfd035112547a63a72ce1d48ddee02b569e5709"
+    },
+    {
+      "label": "native-kani-proven-canary",
+      "all_packed_blobs_scanned": 3,
+      "tracked_source_paths": [
+        "Cargo.lock",
+        "Cargo.toml",
+        "src/lib.rs"
+      ],
+      "hidden_or_reproduction_overlay": false,
+      "source_bundle_sha256": "11b3300ac6df43fb529608c502f0b1afe153976c9718719d24d40c8baeda27d2"
+    }
+  ],
+  "settlement_verified": false,
+  "inventory_completeness_verified": false,
+  "original_evidence_unchanged": true,
+  "credentials_and_private_assets_absent": true,
+  "expiry_gate_pending": false,
+  "tamper_controls": [
+    {
+      "alteration": "readable_raw_log",
+      "inventory_recomputed": true,
+      "rejected": true
+    },
+    {
+      "alteration": "source_bundle",
+      "inventory_recomputed": true,
+      "rejected": true
+    },
+    {
+      "alteration": "signed_kani_report",
+      "inventory_recomputed": true,
+      "rejected": true
+    }
+  ],
+  "expiry_gate_completed_at": "2026-10-17T23:39:11.078218+00:00"
+}

@@ -1,0 +1,24 @@
+{
+  "schema": "covenant.public-evidence-review.v1",
+  "archive_inventory_sha256": "97e7fd29b7390e08298e6ec24d86e4e6ef4e3cb93f1dd189835d21fd41d3196d",
+  "reviewer": "Codex receipt_product_path agent",
+  "reviewed_at": "2026-10-18T00:02:55.916274+00:00",
+  "reviewed_all_source_patch_and_raw_logs": true,
+  "contains_no_private_credentials_or_capabilities": true,
+  "credentials_and_private_assets_absent": true,
+  "expiry_gate_pending": false,
+  "publication_status": "Local public-only staging, no remote publication.",
+  "expires_at_ms": 1792283586006,
+  "expires_at_utc": "2026-10-18T00:33:06.006000+00:00",
+  "review_scope": [
+    "Complete signed record and raw result/stdout/stderr preserved and independently validated.",
+    "Source bundle identical to previously reviewed public Percolator bundle; original/snapshot tree equality verified.",
+    "Every stdout/stderr message inspected; only tool/compiler diagnostics, public source symbols and /work paths. No private credentials, buyer configuration, machine environment or unrelated files copied.",
+    "Actual failure, absent proof export,50k signed/API charge and unavailable payout documented separately.",
+    "Actual4dd node image/source and unchanged buyer/verifier provenance recorded without relabelling prior983 archives."
+  ],
+  "settlement_verified": false,
+  "inventory_completeness_verified": false,
+  "previous_inventory_before_typography_only_fix": "942efde0264c1ca1de49f5ddeb8002a5cfc9c2e4852738cd803d59e34541933a",
+  "expiry_gate_completed_at": "2026-10-18T00:33:06.120735+00:00"
+}

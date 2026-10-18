@@ -1,0 +1,73 @@
+{
+  "jobs": [
+    {
+      "label": "pr241-at-expiry",
+      "job_id": "b7a20990-a245-486e-ac4b-44d1331c272a",
+      "harness": "proof_v16_public_counterparty_backing_withdraw_rejects_lapsed_bucket_at_expiry",
+      "accepted": true,
+      "outcome": "proven",
+      "checks": {
+        "Success": 6321,
+        "Unreachable": 163,
+        "Satisfied": 1
+      },
+      "required_cover": {
+        "id": 136,
+        "function": "public_counterparty_backing_withdraw_lapsed_is_rejected",
+        "status": "Satisfied",
+        "description": "withdrawal from lapsed backing under a live claim is refused",
+        "location": {
+          "file": "tests/proofs_v16.rs",
+          "line": "8243",
+          "column": "5"
+        },
+        "category": "cover"
+      },
+      "raw_artifact_bytes": 5225549,
+      "runner_duration_ms": 561736,
+      "export_verification_duration_ms": 546514,
+      "export_sha256": "b0fc40aaf3050946a6f87cfe9c58aef041f99f6c87adcd4c55d5753c1791f27a",
+      "signed_price_micro_usdc": 50000,
+      "receipt_price_micro_usdc": 50000,
+      "coordinator_charge_micro_usdc": 50000,
+      "expires_at_ms": 1792283787232
+    },
+    {
+      "label": "pr241-after-expiry",
+      "job_id": "0425f25b-83bc-45ee-8fb9-cdcbc94d7b09",
+      "harness": "proof_v16_public_counterparty_backing_withdraw_rejects_lapsed_bucket_after_expiry",
+      "accepted": true,
+      "outcome": "proven",
+      "checks": {
+        "Success": 6321,
+        "Unreachable": 163,
+        "Satisfied": 1
+      },
+      "required_cover": {
+        "id": 191,
+        "function": "public_counterparty_backing_withdraw_lapsed_is_rejected",
+        "status": "Satisfied",
+        "description": "withdrawal from lapsed backing under a live claim is refused",
+        "location": {
+          "file": "tests/proofs_v16.rs",
+          "line": "8243",
+          "column": "5"
+        },
+        "category": "cover"
+      },
+      "raw_artifact_bytes": 5225578,
+      "runner_duration_ms": 563394,
+      "export_verification_duration_ms": 548084,
+      "export_sha256": "5ae26e823db39ed31b76ed3c5c233ca85feb3d79e10c405ba080e241fb3ace0d",
+      "signed_price_micro_usdc": 50000,
+      "receipt_price_micro_usdc": 50000,
+      "coordinator_charge_micro_usdc": 50000,
+      "expires_at_ms": 1792284394322
+    }
+  ],
+  "total_raw_artifact_bytes": 10451127,
+  "max_envelope_expiry_ms": 1792284394322,
+  "max_envelope_expiry_utc": "2026-10-18T00:46:34.322000+00:00",
+  "settlement_verified": false,
+  "scope": "Only these two bounded harnesses on the exact signed source tree."
+}

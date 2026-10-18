@@ -1,0 +1,3775 @@
+[
+  {
+    "name": "proven_with_reachable_required_cover",
+    "plan": {
+      "schema": "covenant.kani.plan.v1",
+      "harness": "proofs::route_proof",
+      "manifest_path": "Cargo.toml",
+      "tests": false,
+      "features": [
+        "fuzz"
+      ],
+      "timeout_secs": 60,
+      "unwind": null,
+      "expected_outcome": "proven",
+      "expected_assertion": null,
+      "required_covers": [
+        "cover condition: route reachable"
+      ]
+    },
+    "document": {
+      "metadata": {
+        "version": "1.0",
+        "kani_version": "0.68.0",
+        "target": "x86_64-unknown-linux-gnu",
+        "timestamp": "2026-10-17T00:00:00Z",
+        "build_mode": "release"
+      },
+      "tools": {
+        "kani": "0.68.0",
+        "rustc": "rustc 1.100.0-nightly (8925ea358 2026-08-20)",
+        "cbmc": "6.11.0 (cbmc-6.11.0)"
+      },
+      "harness_metadata": [
+        {
+          "pretty_name": "proofs::route_proof",
+          "attributes": {
+            "kind": "Proof",
+            "should_panic": false
+          }
+        }
+      ],
+      "verification_results": {
+        "summary": {
+          "total_harnesses": 1,
+          "executed": 1,
+          "status": "completed",
+          "successful": 1,
+          "failed": 0,
+          "duration_ms": 4
+        },
+        "results": [
+          {
+            "harness_id": "proofs::route_proof",
+            "status": "Success",
+            "duration_ms": 4,
+            "checks": [
+              {
+                "id": 1,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "assertion failed: balance_is_conserved",
+                "category": "assertion",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "12",
+                  "column": "5"
+                }
+              },
+              {
+                "id": 2,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "unwinding assertion loop 0",
+                "category": "unwind",
+                "location": {
+                  "file": "src/lib.rs",
+                  "line": "8",
+                  "column": "1"
+                }
+              },
+              {
+                "id": 3,
+                "function": "proofs::route_proof",
+                "status": "Satisfied",
+                "description": "cover condition: route reachable",
+                "category": "cover",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "10",
+                  "column": "5"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "error_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "has_errors": false
+        }
+      ],
+      "property_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "property_details": {
+            "passed": 2,
+            "failed": 0,
+            "unreachable": 0,
+            "undetermined": 0,
+            "solver_error": 0,
+            "satisfied": 1,
+            "unsatisfiable": 0,
+            "covered": 0,
+            "uncovered": 0,
+            "total_properties": 3
+          }
+        }
+      ]
+    },
+    "execution": {
+      "returncode": 0,
+      "timed_out": false,
+      "oom_killed": false
+    },
+    "expected": "proven"
+  },
+  {
+    "name": "legitimate_unreachable_internal_assertion_with_route_cover",
+    "plan": {
+      "schema": "covenant.kani.plan.v1",
+      "harness": "proofs::route_proof",
+      "manifest_path": "Cargo.toml",
+      "tests": false,
+      "features": [
+        "fuzz"
+      ],
+      "timeout_secs": 60,
+      "unwind": null,
+      "expected_outcome": "proven",
+      "expected_assertion": null,
+      "required_covers": [
+        "cover condition: route reachable"
+      ]
+    },
+    "document": {
+      "metadata": {
+        "version": "1.0",
+        "kani_version": "0.68.0",
+        "target": "x86_64-unknown-linux-gnu",
+        "timestamp": "2026-10-17T00:00:00Z",
+        "build_mode": "release"
+      },
+      "tools": {
+        "kani": "0.68.0",
+        "rustc": "rustc 1.100.0-nightly (8925ea358 2026-08-20)",
+        "cbmc": "6.11.0 (cbmc-6.11.0)"
+      },
+      "harness_metadata": [
+        {
+          "pretty_name": "proofs::route_proof",
+          "attributes": {
+            "kind": "Proof",
+            "should_panic": false
+          }
+        }
+      ],
+      "verification_results": {
+        "summary": {
+          "total_harnesses": 1,
+          "executed": 1,
+          "status": "completed",
+          "successful": 1,
+          "failed": 0,
+          "duration_ms": 4
+        },
+        "results": [
+          {
+            "harness_id": "proofs::route_proof",
+            "status": "Success",
+            "duration_ms": 4,
+            "checks": [
+              {
+                "id": 1,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "assertion failed: balance_is_conserved",
+                "category": "assertion",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "12",
+                  "column": "5"
+                }
+              },
+              {
+                "id": 2,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "unwinding assertion loop 0",
+                "category": "unwind",
+                "location": {
+                  "file": "src/lib.rs",
+                  "line": "8",
+                  "column": "1"
+                }
+              },
+              {
+                "id": 3,
+                "function": "proofs::route_proof",
+                "status": "Satisfied",
+                "description": "cover condition: route reachable",
+                "category": "cover",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "10",
+                  "column": "5"
+                }
+              },
+              {
+                "id": 4,
+                "function": "proofs::route_proof",
+                "status": "Unreachable",
+                "description": "assertion failed: untaken internal error branch",
+                "category": "assertion",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "12",
+                  "column": "5"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "error_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "has_errors": false
+        }
+      ],
+      "property_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "property_details": {
+            "passed": 2,
+            "failed": 0,
+            "unreachable": 1,
+            "undetermined": 0,
+            "solver_error": 0,
+            "satisfied": 1,
+            "unsatisfiable": 0,
+            "covered": 0,
+            "uncovered": 0,
+            "total_properties": 4
+          }
+        }
+      ]
+    },
+    "execution": {
+      "returncode": 0,
+      "timed_out": false,
+      "oom_killed": false
+    },
+    "expected": "proven"
+  },
+  {
+    "name": "expected_assertion_counterexample",
+    "plan": {
+      "schema": "covenant.kani.plan.v1",
+      "harness": "proofs::route_proof",
+      "manifest_path": "Cargo.toml",
+      "tests": false,
+      "features": [
+        "fuzz"
+      ],
+      "timeout_secs": 60,
+      "unwind": null,
+      "expected_outcome": "refuted",
+      "expected_assertion": "assertion failed: balance_is_conserved",
+      "required_covers": [
+        "cover condition: route reachable"
+      ]
+    },
+    "document": {
+      "metadata": {
+        "version": "1.0",
+        "kani_version": "0.68.0",
+        "target": "x86_64-unknown-linux-gnu",
+        "timestamp": "2026-10-17T00:00:00Z",
+        "build_mode": "release"
+      },
+      "tools": {
+        "kani": "0.68.0",
+        "rustc": "rustc 1.100.0-nightly (8925ea358 2026-08-20)",
+        "cbmc": "6.11.0 (cbmc-6.11.0)"
+      },
+      "harness_metadata": [
+        {
+          "pretty_name": "proofs::route_proof",
+          "attributes": {
+            "kind": "Proof",
+            "should_panic": false
+          }
+        }
+      ],
+      "verification_results": {
+        "summary": {
+          "total_harnesses": 1,
+          "executed": 1,
+          "status": "completed",
+          "successful": 0,
+          "failed": 1,
+          "duration_ms": 4
+        },
+        "results": [
+          {
+            "harness_id": "proofs::route_proof",
+            "status": "Failure",
+            "duration_ms": 4,
+            "checks": [
+              {
+                "id": 1,
+                "function": "proofs::route_proof",
+                "status": "Failure",
+                "description": "assertion failed: balance_is_conserved",
+                "category": "assertion",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "12",
+                  "column": "5"
+                }
+              },
+              {
+                "id": 2,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "unwinding assertion loop 0",
+                "category": "unwind",
+                "location": {
+                  "file": "src/lib.rs",
+                  "line": "8",
+                  "column": "1"
+                }
+              },
+              {
+                "id": 3,
+                "function": "proofs::route_proof",
+                "status": "Satisfied",
+                "description": "cover condition: route reachable",
+                "category": "cover",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "10",
+                  "column": "5"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "error_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "has_errors": true,
+          "error_type": "assertion_failure",
+          "failed_properties_type": "PanicsOnly",
+          "exit_status": "properties_failed"
+        }
+      ],
+      "property_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "property_details": {
+            "passed": 1,
+            "failed": 1,
+            "unreachable": 0,
+            "undetermined": 0,
+            "solver_error": 0,
+            "satisfied": 1,
+            "unsatisfiable": 0,
+            "covered": 0,
+            "uncovered": 0,
+            "total_properties": 3
+          }
+        }
+      ]
+    },
+    "execution": {
+      "returncode": 1,
+      "timed_out": false,
+      "oom_killed": false
+    },
+    "expected": "refuted"
+  },
+  {
+    "name": "wrong_assertion_failure_is_not_requested_counterexample",
+    "plan": {
+      "schema": "covenant.kani.plan.v1",
+      "harness": "proofs::route_proof",
+      "manifest_path": "Cargo.toml",
+      "tests": false,
+      "features": [
+        "fuzz"
+      ],
+      "timeout_secs": 60,
+      "unwind": null,
+      "expected_outcome": "refuted",
+      "expected_assertion": "assertion failed: balance_is_conserved",
+      "required_covers": [
+        "cover condition: route reachable"
+      ]
+    },
+    "document": {
+      "metadata": {
+        "version": "1.0",
+        "kani_version": "0.68.0",
+        "target": "x86_64-unknown-linux-gnu",
+        "timestamp": "2026-10-17T00:00:00Z",
+        "build_mode": "release"
+      },
+      "tools": {
+        "kani": "0.68.0",
+        "rustc": "rustc 1.100.0-nightly (8925ea358 2026-08-20)",
+        "cbmc": "6.11.0 (cbmc-6.11.0)"
+      },
+      "harness_metadata": [
+        {
+          "pretty_name": "proofs::route_proof",
+          "attributes": {
+            "kind": "Proof",
+            "should_panic": false
+          }
+        }
+      ],
+      "verification_results": {
+        "summary": {
+          "total_harnesses": 1,
+          "executed": 1,
+          "status": "completed",
+          "successful": 0,
+          "failed": 1,
+          "duration_ms": 4
+        },
+        "results": [
+          {
+            "harness_id": "proofs::route_proof",
+            "status": "Failure",
+            "duration_ms": 4,
+            "checks": [
+              {
+                "id": 1,
+                "function": "proofs::route_proof",
+                "status": "Failure",
+                "description": "assertion failed: unrelated",
+                "category": "assertion",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "12",
+                  "column": "5"
+                }
+              },
+              {
+                "id": 2,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "unwinding assertion loop 0",
+                "category": "unwind",
+                "location": {
+                  "file": "src/lib.rs",
+                  "line": "8",
+                  "column": "1"
+                }
+              },
+              {
+                "id": 3,
+                "function": "proofs::route_proof",
+                "status": "Satisfied",
+                "description": "cover condition: route reachable",
+                "category": "cover",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "10",
+                  "column": "5"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "error_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "has_errors": true,
+          "error_type": "assertion_failure",
+          "failed_properties_type": "PanicsOnly",
+          "exit_status": "properties_failed"
+        }
+      ],
+      "property_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "property_details": {
+            "passed": 1,
+            "failed": 1,
+            "unreachable": 0,
+            "undetermined": 0,
+            "solver_error": 0,
+            "satisfied": 1,
+            "unsatisfiable": 0,
+            "covered": 0,
+            "uncovered": 0,
+            "total_properties": 3
+          }
+        }
+      ]
+    },
+    "execution": {
+      "returncode": 1,
+      "timed_out": false,
+      "oom_killed": false
+    },
+    "expected": "inconclusive"
+  },
+  {
+    "name": "unwind_failure_is_not_counterexample",
+    "plan": {
+      "schema": "covenant.kani.plan.v1",
+      "harness": "proofs::route_proof",
+      "manifest_path": "Cargo.toml",
+      "tests": false,
+      "features": [
+        "fuzz"
+      ],
+      "timeout_secs": 60,
+      "unwind": null,
+      "expected_outcome": "refuted",
+      "expected_assertion": "assertion failed: balance_is_conserved",
+      "required_covers": [
+        "cover condition: route reachable"
+      ]
+    },
+    "document": {
+      "metadata": {
+        "version": "1.0",
+        "kani_version": "0.68.0",
+        "target": "x86_64-unknown-linux-gnu",
+        "timestamp": "2026-10-17T00:00:00Z",
+        "build_mode": "release"
+      },
+      "tools": {
+        "kani": "0.68.0",
+        "rustc": "rustc 1.100.0-nightly (8925ea358 2026-08-20)",
+        "cbmc": "6.11.0 (cbmc-6.11.0)"
+      },
+      "harness_metadata": [
+        {
+          "pretty_name": "proofs::route_proof",
+          "attributes": {
+            "kind": "Proof",
+            "should_panic": false
+          }
+        }
+      ],
+      "verification_results": {
+        "summary": {
+          "total_harnesses": 1,
+          "executed": 1,
+          "status": "completed",
+          "successful": 0,
+          "failed": 1,
+          "duration_ms": 4
+        },
+        "results": [
+          {
+            "harness_id": "proofs::route_proof",
+            "status": "Failure",
+            "duration_ms": 4,
+            "checks": [
+              {
+                "id": 1,
+                "function": "proofs::route_proof",
+                "status": "Failure",
+                "description": "unwinding assertion loop 0",
+                "category": "unwind",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "12",
+                  "column": "5"
+                }
+              },
+              {
+                "id": 2,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "unwinding assertion loop 0",
+                "category": "unwind",
+                "location": {
+                  "file": "src/lib.rs",
+                  "line": "8",
+                  "column": "1"
+                }
+              },
+              {
+                "id": 3,
+                "function": "proofs::route_proof",
+                "status": "Satisfied",
+                "description": "cover condition: route reachable",
+                "category": "cover",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "10",
+                  "column": "5"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "error_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "has_errors": true,
+          "error_type": "verification_failure",
+          "failed_properties_type": "Other",
+          "exit_status": "properties_failed"
+        }
+      ],
+      "property_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "property_details": {
+            "passed": 1,
+            "failed": 1,
+            "unreachable": 0,
+            "undetermined": 0,
+            "solver_error": 0,
+            "satisfied": 1,
+            "unsatisfiable": 0,
+            "covered": 0,
+            "uncovered": 0,
+            "total_properties": 3
+          }
+        }
+      ]
+    },
+    "execution": {
+      "returncode": 1,
+      "timed_out": false,
+      "oom_killed": false
+    },
+    "expected": "inconclusive"
+  },
+  {
+    "name": "outer_timeout_overrides_success",
+    "plan": {
+      "schema": "covenant.kani.plan.v1",
+      "harness": "proofs::route_proof",
+      "manifest_path": "Cargo.toml",
+      "tests": false,
+      "features": [
+        "fuzz"
+      ],
+      "timeout_secs": 60,
+      "unwind": null,
+      "expected_outcome": "proven",
+      "expected_assertion": null,
+      "required_covers": [
+        "cover condition: route reachable"
+      ]
+    },
+    "document": {
+      "metadata": {
+        "version": "1.0",
+        "kani_version": "0.68.0",
+        "target": "x86_64-unknown-linux-gnu",
+        "timestamp": "2026-10-17T00:00:00Z",
+        "build_mode": "release"
+      },
+      "tools": {
+        "kani": "0.68.0",
+        "rustc": "rustc 1.100.0-nightly (8925ea358 2026-08-20)",
+        "cbmc": "6.11.0 (cbmc-6.11.0)"
+      },
+      "harness_metadata": [
+        {
+          "pretty_name": "proofs::route_proof",
+          "attributes": {
+            "kind": "Proof",
+            "should_panic": false
+          }
+        }
+      ],
+      "verification_results": {
+        "summary": {
+          "total_harnesses": 1,
+          "executed": 1,
+          "status": "completed",
+          "successful": 1,
+          "failed": 0,
+          "duration_ms": 4
+        },
+        "results": [
+          {
+            "harness_id": "proofs::route_proof",
+            "status": "Success",
+            "duration_ms": 4,
+            "checks": [
+              {
+                "id": 1,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "assertion failed: balance_is_conserved",
+                "category": "assertion",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "12",
+                  "column": "5"
+                }
+              },
+              {
+                "id": 2,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "unwinding assertion loop 0",
+                "category": "unwind",
+                "location": {
+                  "file": "src/lib.rs",
+                  "line": "8",
+                  "column": "1"
+                }
+              },
+              {
+                "id": 3,
+                "function": "proofs::route_proof",
+                "status": "Satisfied",
+                "description": "cover condition: route reachable",
+                "category": "cover",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "10",
+                  "column": "5"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "error_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "has_errors": false
+        }
+      ],
+      "property_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "property_details": {
+            "passed": 2,
+            "failed": 0,
+            "unreachable": 0,
+            "undetermined": 0,
+            "solver_error": 0,
+            "satisfied": 1,
+            "unsatisfiable": 0,
+            "covered": 0,
+            "uncovered": 0,
+            "total_properties": 3
+          }
+        }
+      ]
+    },
+    "execution": {
+      "returncode": -9,
+      "timed_out": true,
+      "oom_killed": false
+    },
+    "expected": "timeout"
+  },
+  {
+    "name": "container_oom_overrides_success",
+    "plan": {
+      "schema": "covenant.kani.plan.v1",
+      "harness": "proofs::route_proof",
+      "manifest_path": "Cargo.toml",
+      "tests": false,
+      "features": [
+        "fuzz"
+      ],
+      "timeout_secs": 60,
+      "unwind": null,
+      "expected_outcome": "proven",
+      "expected_assertion": null,
+      "required_covers": [
+        "cover condition: route reachable"
+      ]
+    },
+    "document": {
+      "metadata": {
+        "version": "1.0",
+        "kani_version": "0.68.0",
+        "target": "x86_64-unknown-linux-gnu",
+        "timestamp": "2026-10-17T00:00:00Z",
+        "build_mode": "release"
+      },
+      "tools": {
+        "kani": "0.68.0",
+        "rustc": "rustc 1.100.0-nightly (8925ea358 2026-08-20)",
+        "cbmc": "6.11.0 (cbmc-6.11.0)"
+      },
+      "harness_metadata": [
+        {
+          "pretty_name": "proofs::route_proof",
+          "attributes": {
+            "kind": "Proof",
+            "should_panic": false
+          }
+        }
+      ],
+      "verification_results": {
+        "summary": {
+          "total_harnesses": 1,
+          "executed": 1,
+          "status": "completed",
+          "successful": 1,
+          "failed": 0,
+          "duration_ms": 4
+        },
+        "results": [
+          {
+            "harness_id": "proofs::route_proof",
+            "status": "Success",
+            "duration_ms": 4,
+            "checks": [
+              {
+                "id": 1,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "assertion failed: balance_is_conserved",
+                "category": "assertion",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "12",
+                  "column": "5"
+                }
+              },
+              {
+                "id": 2,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "unwinding assertion loop 0",
+                "category": "unwind",
+                "location": {
+                  "file": "src/lib.rs",
+                  "line": "8",
+                  "column": "1"
+                }
+              },
+              {
+                "id": 3,
+                "function": "proofs::route_proof",
+                "status": "Satisfied",
+                "description": "cover condition: route reachable",
+                "category": "cover",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "10",
+                  "column": "5"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "error_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "has_errors": false
+        }
+      ],
+      "property_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "property_details": {
+            "passed": 2,
+            "failed": 0,
+            "unreachable": 0,
+            "undetermined": 0,
+            "solver_error": 0,
+            "satisfied": 1,
+            "unsatisfiable": 0,
+            "covered": 0,
+            "uncovered": 0,
+            "total_properties": 3
+          }
+        }
+      ]
+    },
+    "execution": {
+      "returncode": 137,
+      "timed_out": false,
+      "oom_killed": true
+    },
+    "expected": "out_of_memory"
+  },
+  {
+    "name": "signal_kill_without_oom_evidence_is_tool_error",
+    "plan": {
+      "schema": "covenant.kani.plan.v1",
+      "harness": "proofs::route_proof",
+      "manifest_path": "Cargo.toml",
+      "tests": false,
+      "features": [
+        "fuzz"
+      ],
+      "timeout_secs": 60,
+      "unwind": null,
+      "expected_outcome": "proven",
+      "expected_assertion": null,
+      "required_covers": [
+        "cover condition: route reachable"
+      ]
+    },
+    "document": {
+      "metadata": {
+        "version": "1.0",
+        "kani_version": "0.68.0",
+        "target": "x86_64-unknown-linux-gnu",
+        "timestamp": "2026-10-17T00:00:00Z",
+        "build_mode": "release"
+      },
+      "tools": {
+        "kani": "0.68.0",
+        "rustc": "rustc 1.100.0-nightly (8925ea358 2026-08-20)",
+        "cbmc": "6.11.0 (cbmc-6.11.0)"
+      },
+      "harness_metadata": [
+        {
+          "pretty_name": "proofs::route_proof",
+          "attributes": {
+            "kind": "Proof",
+            "should_panic": false
+          }
+        }
+      ],
+      "verification_results": {
+        "summary": {
+          "total_harnesses": 1,
+          "executed": 1,
+          "status": "completed",
+          "successful": 1,
+          "failed": 0,
+          "duration_ms": 4
+        },
+        "results": [
+          {
+            "harness_id": "proofs::route_proof",
+            "status": "Success",
+            "duration_ms": 4,
+            "checks": [
+              {
+                "id": 1,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "assertion failed: balance_is_conserved",
+                "category": "assertion",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "12",
+                  "column": "5"
+                }
+              },
+              {
+                "id": 2,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "unwinding assertion loop 0",
+                "category": "unwind",
+                "location": {
+                  "file": "src/lib.rs",
+                  "line": "8",
+                  "column": "1"
+                }
+              },
+              {
+                "id": 3,
+                "function": "proofs::route_proof",
+                "status": "Satisfied",
+                "description": "cover condition: route reachable",
+                "category": "cover",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "10",
+                  "column": "5"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "error_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "has_errors": false
+        }
+      ],
+      "property_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "property_details": {
+            "passed": 2,
+            "failed": 0,
+            "unreachable": 0,
+            "undetermined": 0,
+            "solver_error": 0,
+            "satisfied": 1,
+            "unsatisfiable": 0,
+            "covered": 0,
+            "uncovered": 0,
+            "total_properties": 3
+          }
+        }
+      ]
+    },
+    "execution": {
+      "returncode": -9,
+      "timed_out": false,
+      "oom_killed": false
+    },
+    "expected": "tool_error"
+  },
+  {
+    "name": "nonzero_exit_cannot_prove",
+    "plan": {
+      "schema": "covenant.kani.plan.v1",
+      "harness": "proofs::route_proof",
+      "manifest_path": "Cargo.toml",
+      "tests": false,
+      "features": [
+        "fuzz"
+      ],
+      "timeout_secs": 60,
+      "unwind": null,
+      "expected_outcome": "proven",
+      "expected_assertion": null,
+      "required_covers": [
+        "cover condition: route reachable"
+      ]
+    },
+    "document": {
+      "metadata": {
+        "version": "1.0",
+        "kani_version": "0.68.0",
+        "target": "x86_64-unknown-linux-gnu",
+        "timestamp": "2026-10-17T00:00:00Z",
+        "build_mode": "release"
+      },
+      "tools": {
+        "kani": "0.68.0",
+        "rustc": "rustc 1.100.0-nightly (8925ea358 2026-08-20)",
+        "cbmc": "6.11.0 (cbmc-6.11.0)"
+      },
+      "harness_metadata": [
+        {
+          "pretty_name": "proofs::route_proof",
+          "attributes": {
+            "kind": "Proof",
+            "should_panic": false
+          }
+        }
+      ],
+      "verification_results": {
+        "summary": {
+          "total_harnesses": 1,
+          "executed": 1,
+          "status": "completed",
+          "successful": 1,
+          "failed": 0,
+          "duration_ms": 4
+        },
+        "results": [
+          {
+            "harness_id": "proofs::route_proof",
+            "status": "Success",
+            "duration_ms": 4,
+            "checks": [
+              {
+                "id": 1,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "assertion failed: balance_is_conserved",
+                "category": "assertion",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "12",
+                  "column": "5"
+                }
+              },
+              {
+                "id": 2,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "unwinding assertion loop 0",
+                "category": "unwind",
+                "location": {
+                  "file": "src/lib.rs",
+                  "line": "8",
+                  "column": "1"
+                }
+              },
+              {
+                "id": 3,
+                "function": "proofs::route_proof",
+                "status": "Satisfied",
+                "description": "cover condition: route reachable",
+                "category": "cover",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "10",
+                  "column": "5"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "error_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "has_errors": false
+        }
+      ],
+      "property_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "property_details": {
+            "passed": 2,
+            "failed": 0,
+            "unreachable": 0,
+            "undetermined": 0,
+            "solver_error": 0,
+            "satisfied": 1,
+            "unsatisfiable": 0,
+            "covered": 0,
+            "uncovered": 0,
+            "total_properties": 3
+          }
+        }
+      ]
+    },
+    "execution": {
+      "returncode": 101,
+      "timed_out": false,
+      "oom_killed": false
+    },
+    "expected": "tool_error"
+  },
+  {
+    "name": "wrong_kani_version",
+    "plan": {
+      "schema": "covenant.kani.plan.v1",
+      "harness": "proofs::route_proof",
+      "manifest_path": "Cargo.toml",
+      "tests": false,
+      "features": [
+        "fuzz"
+      ],
+      "timeout_secs": 60,
+      "unwind": null,
+      "expected_outcome": "proven",
+      "expected_assertion": null,
+      "required_covers": [
+        "cover condition: route reachable"
+      ]
+    },
+    "document": {
+      "metadata": {
+        "version": "1.0",
+        "kani_version": "0.67.0",
+        "target": "x86_64-unknown-linux-gnu",
+        "timestamp": "2026-10-17T00:00:00Z",
+        "build_mode": "release"
+      },
+      "tools": {
+        "kani": "0.68.0",
+        "rustc": "rustc 1.100.0-nightly (8925ea358 2026-08-20)",
+        "cbmc": "6.11.0 (cbmc-6.11.0)"
+      },
+      "harness_metadata": [
+        {
+          "pretty_name": "proofs::route_proof",
+          "attributes": {
+            "kind": "Proof",
+            "should_panic": false
+          }
+        }
+      ],
+      "verification_results": {
+        "summary": {
+          "total_harnesses": 1,
+          "executed": 1,
+          "status": "completed",
+          "successful": 1,
+          "failed": 0,
+          "duration_ms": 4
+        },
+        "results": [
+          {
+            "harness_id": "proofs::route_proof",
+            "status": "Success",
+            "duration_ms": 4,
+            "checks": [
+              {
+                "id": 1,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "assertion failed: balance_is_conserved",
+                "category": "assertion",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "12",
+                  "column": "5"
+                }
+              },
+              {
+                "id": 2,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "unwinding assertion loop 0",
+                "category": "unwind",
+                "location": {
+                  "file": "src/lib.rs",
+                  "line": "8",
+                  "column": "1"
+                }
+              },
+              {
+                "id": 3,
+                "function": "proofs::route_proof",
+                "status": "Satisfied",
+                "description": "cover condition: route reachable",
+                "category": "cover",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "10",
+                  "column": "5"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "error_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "has_errors": false
+        }
+      ],
+      "property_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "property_details": {
+            "passed": 2,
+            "failed": 0,
+            "unreachable": 0,
+            "undetermined": 0,
+            "solver_error": 0,
+            "satisfied": 1,
+            "unsatisfiable": 0,
+            "covered": 0,
+            "uncovered": 0,
+            "total_properties": 3
+          }
+        }
+      ]
+    },
+    "execution": {
+      "returncode": 0,
+      "timed_out": false,
+      "oom_killed": false
+    },
+    "expected": "tool_error"
+  },
+  {
+    "name": "wrong_harness",
+    "plan": {
+      "schema": "covenant.kani.plan.v1",
+      "harness": "proofs::route_proof",
+      "manifest_path": "Cargo.toml",
+      "tests": false,
+      "features": [
+        "fuzz"
+      ],
+      "timeout_secs": 60,
+      "unwind": null,
+      "expected_outcome": "proven",
+      "expected_assertion": null,
+      "required_covers": [
+        "cover condition: route reachable"
+      ]
+    },
+    "document": {
+      "metadata": {
+        "version": "1.0",
+        "kani_version": "0.68.0",
+        "target": "x86_64-unknown-linux-gnu",
+        "timestamp": "2026-10-17T00:00:00Z",
+        "build_mode": "release"
+      },
+      "tools": {
+        "kani": "0.68.0",
+        "rustc": "rustc 1.100.0-nightly (8925ea358 2026-08-20)",
+        "cbmc": "6.11.0 (cbmc-6.11.0)"
+      },
+      "harness_metadata": [
+        {
+          "pretty_name": "proofs::route_proof",
+          "attributes": {
+            "kind": "Proof",
+            "should_panic": false
+          }
+        }
+      ],
+      "verification_results": {
+        "summary": {
+          "total_harnesses": 1,
+          "executed": 1,
+          "status": "completed",
+          "successful": 1,
+          "failed": 0,
+          "duration_ms": 4
+        },
+        "results": [
+          {
+            "harness_id": "proofs::other",
+            "status": "Success",
+            "duration_ms": 4,
+            "checks": [
+              {
+                "id": 1,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "assertion failed: balance_is_conserved",
+                "category": "assertion",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "12",
+                  "column": "5"
+                }
+              },
+              {
+                "id": 2,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "unwinding assertion loop 0",
+                "category": "unwind",
+                "location": {
+                  "file": "src/lib.rs",
+                  "line": "8",
+                  "column": "1"
+                }
+              },
+              {
+                "id": 3,
+                "function": "proofs::route_proof",
+                "status": "Satisfied",
+                "description": "cover condition: route reachable",
+                "category": "cover",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "10",
+                  "column": "5"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "error_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "has_errors": false
+        }
+      ],
+      "property_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "property_details": {
+            "passed": 2,
+            "failed": 0,
+            "unreachable": 0,
+            "undetermined": 0,
+            "solver_error": 0,
+            "satisfied": 1,
+            "unsatisfiable": 0,
+            "covered": 0,
+            "uncovered": 0,
+            "total_properties": 3
+          }
+        }
+      ]
+    },
+    "execution": {
+      "returncode": 0,
+      "timed_out": false,
+      "oom_killed": false
+    },
+    "expected": "tool_error"
+  },
+  {
+    "name": "empty_results",
+    "plan": {
+      "schema": "covenant.kani.plan.v1",
+      "harness": "proofs::route_proof",
+      "manifest_path": "Cargo.toml",
+      "tests": false,
+      "features": [
+        "fuzz"
+      ],
+      "timeout_secs": 60,
+      "unwind": null,
+      "expected_outcome": "proven",
+      "expected_assertion": null,
+      "required_covers": [
+        "cover condition: route reachable"
+      ]
+    },
+    "document": {
+      "metadata": {
+        "version": "1.0",
+        "kani_version": "0.68.0",
+        "target": "x86_64-unknown-linux-gnu",
+        "timestamp": "2026-10-17T00:00:00Z",
+        "build_mode": "release"
+      },
+      "tools": {
+        "kani": "0.68.0",
+        "rustc": "rustc 1.100.0-nightly (8925ea358 2026-08-20)",
+        "cbmc": "6.11.0 (cbmc-6.11.0)"
+      },
+      "harness_metadata": [
+        {
+          "pretty_name": "proofs::route_proof",
+          "attributes": {
+            "kind": "Proof",
+            "should_panic": false
+          }
+        }
+      ],
+      "verification_results": {
+        "summary": {
+          "total_harnesses": 1,
+          "executed": 1,
+          "status": "completed",
+          "successful": 1,
+          "failed": 0,
+          "duration_ms": 4
+        },
+        "results": []
+      },
+      "error_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "has_errors": false
+        }
+      ],
+      "property_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "property_details": {
+            "passed": 2,
+            "failed": 0,
+            "unreachable": 0,
+            "undetermined": 0,
+            "solver_error": 0,
+            "satisfied": 1,
+            "unsatisfiable": 0,
+            "covered": 0,
+            "uncovered": 0,
+            "total_properties": 3
+          }
+        }
+      ]
+    },
+    "execution": {
+      "returncode": 0,
+      "timed_out": false,
+      "oom_killed": false
+    },
+    "expected": "tool_error"
+  },
+  {
+    "name": "duplicate_results",
+    "plan": {
+      "schema": "covenant.kani.plan.v1",
+      "harness": "proofs::route_proof",
+      "manifest_path": "Cargo.toml",
+      "tests": false,
+      "features": [
+        "fuzz"
+      ],
+      "timeout_secs": 60,
+      "unwind": null,
+      "expected_outcome": "proven",
+      "expected_assertion": null,
+      "required_covers": [
+        "cover condition: route reachable"
+      ]
+    },
+    "document": {
+      "metadata": {
+        "version": "1.0",
+        "kani_version": "0.68.0",
+        "target": "x86_64-unknown-linux-gnu",
+        "timestamp": "2026-10-17T00:00:00Z",
+        "build_mode": "release"
+      },
+      "tools": {
+        "kani": "0.68.0",
+        "rustc": "rustc 1.100.0-nightly (8925ea358 2026-08-20)",
+        "cbmc": "6.11.0 (cbmc-6.11.0)"
+      },
+      "harness_metadata": [
+        {
+          "pretty_name": "proofs::route_proof",
+          "attributes": {
+            "kind": "Proof",
+            "should_panic": false
+          }
+        }
+      ],
+      "verification_results": {
+        "summary": {
+          "total_harnesses": 1,
+          "executed": 1,
+          "status": "completed",
+          "successful": 1,
+          "failed": 0,
+          "duration_ms": 4
+        },
+        "results": [
+          {
+            "harness_id": "proofs::route_proof",
+            "status": "Success",
+            "duration_ms": 4,
+            "checks": [
+              {
+                "id": 1,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "assertion failed: balance_is_conserved",
+                "category": "assertion",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "12",
+                  "column": "5"
+                }
+              },
+              {
+                "id": 2,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "unwinding assertion loop 0",
+                "category": "unwind",
+                "location": {
+                  "file": "src/lib.rs",
+                  "line": "8",
+                  "column": "1"
+                }
+              },
+              {
+                "id": 3,
+                "function": "proofs::route_proof",
+                "status": "Satisfied",
+                "description": "cover condition: route reachable",
+                "category": "cover",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "10",
+                  "column": "5"
+                }
+              }
+            ]
+          },
+          {
+            "harness_id": "proofs::route_proof",
+            "status": "Success",
+            "duration_ms": 4,
+            "checks": [
+              {
+                "id": 1,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "assertion failed: balance_is_conserved",
+                "category": "assertion",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "12",
+                  "column": "5"
+                }
+              },
+              {
+                "id": 2,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "unwinding assertion loop 0",
+                "category": "unwind",
+                "location": {
+                  "file": "src/lib.rs",
+                  "line": "8",
+                  "column": "1"
+                }
+              },
+              {
+                "id": 3,
+                "function": "proofs::route_proof",
+                "status": "Satisfied",
+                "description": "cover condition: route reachable",
+                "category": "cover",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "10",
+                  "column": "5"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "error_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "has_errors": false
+        }
+      ],
+      "property_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "property_details": {
+            "passed": 2,
+            "failed": 0,
+            "unreachable": 0,
+            "undetermined": 0,
+            "solver_error": 0,
+            "satisfied": 1,
+            "unsatisfiable": 0,
+            "covered": 0,
+            "uncovered": 0,
+            "total_properties": 3
+          }
+        }
+      ]
+    },
+    "execution": {
+      "returncode": 0,
+      "timed_out": false,
+      "oom_killed": false
+    },
+    "expected": "tool_error"
+  },
+  {
+    "name": "summary_count_mismatch",
+    "plan": {
+      "schema": "covenant.kani.plan.v1",
+      "harness": "proofs::route_proof",
+      "manifest_path": "Cargo.toml",
+      "tests": false,
+      "features": [
+        "fuzz"
+      ],
+      "timeout_secs": 60,
+      "unwind": null,
+      "expected_outcome": "proven",
+      "expected_assertion": null,
+      "required_covers": [
+        "cover condition: route reachable"
+      ]
+    },
+    "document": {
+      "metadata": {
+        "version": "1.0",
+        "kani_version": "0.68.0",
+        "target": "x86_64-unknown-linux-gnu",
+        "timestamp": "2026-10-17T00:00:00Z",
+        "build_mode": "release"
+      },
+      "tools": {
+        "kani": "0.68.0",
+        "rustc": "rustc 1.100.0-nightly (8925ea358 2026-08-20)",
+        "cbmc": "6.11.0 (cbmc-6.11.0)"
+      },
+      "harness_metadata": [
+        {
+          "pretty_name": "proofs::route_proof",
+          "attributes": {
+            "kind": "Proof",
+            "should_panic": false
+          }
+        }
+      ],
+      "verification_results": {
+        "summary": {
+          "total_harnesses": 1,
+          "executed": 0,
+          "status": "completed",
+          "successful": 1,
+          "failed": 0,
+          "duration_ms": 4
+        },
+        "results": [
+          {
+            "harness_id": "proofs::route_proof",
+            "status": "Success",
+            "duration_ms": 4,
+            "checks": [
+              {
+                "id": 1,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "assertion failed: balance_is_conserved",
+                "category": "assertion",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "12",
+                  "column": "5"
+                }
+              },
+              {
+                "id": 2,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "unwinding assertion loop 0",
+                "category": "unwind",
+                "location": {
+                  "file": "src/lib.rs",
+                  "line": "8",
+                  "column": "1"
+                }
+              },
+              {
+                "id": 3,
+                "function": "proofs::route_proof",
+                "status": "Satisfied",
+                "description": "cover condition: route reachable",
+                "category": "cover",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "10",
+                  "column": "5"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "error_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "has_errors": false
+        }
+      ],
+      "property_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "property_details": {
+            "passed": 2,
+            "failed": 0,
+            "unreachable": 0,
+            "undetermined": 0,
+            "solver_error": 0,
+            "satisfied": 1,
+            "unsatisfiable": 0,
+            "covered": 0,
+            "uncovered": 0,
+            "total_properties": 3
+          }
+        }
+      ]
+    },
+    "execution": {
+      "returncode": 0,
+      "timed_out": false,
+      "oom_killed": false
+    },
+    "expected": "tool_error"
+  },
+  {
+    "name": "partial_summary",
+    "plan": {
+      "schema": "covenant.kani.plan.v1",
+      "harness": "proofs::route_proof",
+      "manifest_path": "Cargo.toml",
+      "tests": false,
+      "features": [
+        "fuzz"
+      ],
+      "timeout_secs": 60,
+      "unwind": null,
+      "expected_outcome": "proven",
+      "expected_assertion": null,
+      "required_covers": [
+        "cover condition: route reachable"
+      ]
+    },
+    "document": {
+      "metadata": {
+        "version": "1.0",
+        "kani_version": "0.68.0",
+        "target": "x86_64-unknown-linux-gnu",
+        "timestamp": "2026-10-17T00:00:00Z",
+        "build_mode": "release"
+      },
+      "tools": {
+        "kani": "0.68.0",
+        "rustc": "rustc 1.100.0-nightly (8925ea358 2026-08-20)",
+        "cbmc": "6.11.0 (cbmc-6.11.0)"
+      },
+      "harness_metadata": [
+        {
+          "pretty_name": "proofs::route_proof",
+          "attributes": {
+            "kind": "Proof",
+            "should_panic": false
+          }
+        }
+      ],
+      "verification_results": {
+        "summary": {
+          "total_harnesses": 1,
+          "executed": 1,
+          "status": "completed_with_fail_fast",
+          "successful": 1,
+          "failed": 0,
+          "duration_ms": 4
+        },
+        "results": [
+          {
+            "harness_id": "proofs::route_proof",
+            "status": "Success",
+            "duration_ms": 4,
+            "checks": [
+              {
+                "id": 1,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "assertion failed: balance_is_conserved",
+                "category": "assertion",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "12",
+                  "column": "5"
+                }
+              },
+              {
+                "id": 2,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "unwinding assertion loop 0",
+                "category": "unwind",
+                "location": {
+                  "file": "src/lib.rs",
+                  "line": "8",
+                  "column": "1"
+                }
+              },
+              {
+                "id": 3,
+                "function": "proofs::route_proof",
+                "status": "Satisfied",
+                "description": "cover condition: route reachable",
+                "category": "cover",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "10",
+                  "column": "5"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "error_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "has_errors": false
+        }
+      ],
+      "property_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "property_details": {
+            "passed": 2,
+            "failed": 0,
+            "unreachable": 0,
+            "undetermined": 0,
+            "solver_error": 0,
+            "satisfied": 1,
+            "unsatisfiable": 0,
+            "covered": 0,
+            "uncovered": 0,
+            "total_properties": 3
+          }
+        }
+      ]
+    },
+    "execution": {
+      "returncode": 0,
+      "timed_out": false,
+      "oom_killed": false
+    },
+    "expected": "inconclusive"
+  },
+  {
+    "name": "should_panic_cannot_prove",
+    "plan": {
+      "schema": "covenant.kani.plan.v1",
+      "harness": "proofs::route_proof",
+      "manifest_path": "Cargo.toml",
+      "tests": false,
+      "features": [
+        "fuzz"
+      ],
+      "timeout_secs": 60,
+      "unwind": null,
+      "expected_outcome": "proven",
+      "expected_assertion": null,
+      "required_covers": [
+        "cover condition: route reachable"
+      ]
+    },
+    "document": {
+      "metadata": {
+        "version": "1.0",
+        "kani_version": "0.68.0",
+        "target": "x86_64-unknown-linux-gnu",
+        "timestamp": "2026-10-17T00:00:00Z",
+        "build_mode": "release"
+      },
+      "tools": {
+        "kani": "0.68.0",
+        "rustc": "rustc 1.100.0-nightly (8925ea358 2026-08-20)",
+        "cbmc": "6.11.0 (cbmc-6.11.0)"
+      },
+      "harness_metadata": [
+        {
+          "pretty_name": "proofs::route_proof",
+          "attributes": {
+            "kind": "Proof",
+            "should_panic": true
+          }
+        }
+      ],
+      "verification_results": {
+        "summary": {
+          "total_harnesses": 1,
+          "executed": 1,
+          "status": "completed",
+          "successful": 1,
+          "failed": 0,
+          "duration_ms": 4
+        },
+        "results": [
+          {
+            "harness_id": "proofs::route_proof",
+            "status": "Success",
+            "duration_ms": 4,
+            "checks": [
+              {
+                "id": 1,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "assertion failed: balance_is_conserved",
+                "category": "assertion",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "12",
+                  "column": "5"
+                }
+              },
+              {
+                "id": 2,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "unwinding assertion loop 0",
+                "category": "unwind",
+                "location": {
+                  "file": "src/lib.rs",
+                  "line": "8",
+                  "column": "1"
+                }
+              },
+              {
+                "id": 3,
+                "function": "proofs::route_proof",
+                "status": "Satisfied",
+                "description": "cover condition: route reachable",
+                "category": "cover",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "10",
+                  "column": "5"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "error_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "has_errors": false
+        }
+      ],
+      "property_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "property_details": {
+            "passed": 2,
+            "failed": 0,
+            "unreachable": 0,
+            "undetermined": 0,
+            "solver_error": 0,
+            "satisfied": 1,
+            "unsatisfiable": 0,
+            "covered": 0,
+            "uncovered": 0,
+            "total_properties": 3
+          }
+        }
+      ]
+    },
+    "execution": {
+      "returncode": 0,
+      "timed_out": false,
+      "oom_killed": false
+    },
+    "expected": "inconclusive"
+  },
+  {
+    "name": "missing_error_details",
+    "plan": {
+      "schema": "covenant.kani.plan.v1",
+      "harness": "proofs::route_proof",
+      "manifest_path": "Cargo.toml",
+      "tests": false,
+      "features": [
+        "fuzz"
+      ],
+      "timeout_secs": 60,
+      "unwind": null,
+      "expected_outcome": "proven",
+      "expected_assertion": null,
+      "required_covers": [
+        "cover condition: route reachable"
+      ]
+    },
+    "document": {
+      "metadata": {
+        "version": "1.0",
+        "kani_version": "0.68.0",
+        "target": "x86_64-unknown-linux-gnu",
+        "timestamp": "2026-10-17T00:00:00Z",
+        "build_mode": "release"
+      },
+      "tools": {
+        "kani": "0.68.0",
+        "rustc": "rustc 1.100.0-nightly (8925ea358 2026-08-20)",
+        "cbmc": "6.11.0 (cbmc-6.11.0)"
+      },
+      "harness_metadata": [
+        {
+          "pretty_name": "proofs::route_proof",
+          "attributes": {
+            "kind": "Proof",
+            "should_panic": false
+          }
+        }
+      ],
+      "verification_results": {
+        "summary": {
+          "total_harnesses": 1,
+          "executed": 1,
+          "status": "completed",
+          "successful": 1,
+          "failed": 0,
+          "duration_ms": 4
+        },
+        "results": [
+          {
+            "harness_id": "proofs::route_proof",
+            "status": "Success",
+            "duration_ms": 4,
+            "checks": [
+              {
+                "id": 1,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "assertion failed: balance_is_conserved",
+                "category": "assertion",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "12",
+                  "column": "5"
+                }
+              },
+              {
+                "id": 2,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "unwinding assertion loop 0",
+                "category": "unwind",
+                "location": {
+                  "file": "src/lib.rs",
+                  "line": "8",
+                  "column": "1"
+                }
+              },
+              {
+                "id": 3,
+                "function": "proofs::route_proof",
+                "status": "Satisfied",
+                "description": "cover condition: route reachable",
+                "category": "cover",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "10",
+                  "column": "5"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "property_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "property_details": {
+            "passed": 2,
+            "failed": 0,
+            "unreachable": 0,
+            "undetermined": 0,
+            "solver_error": 0,
+            "satisfied": 1,
+            "unsatisfiable": 0,
+            "covered": 0,
+            "uncovered": 0,
+            "total_properties": 3
+          }
+        }
+      ]
+    },
+    "execution": {
+      "returncode": 0,
+      "timed_out": false,
+      "oom_killed": false
+    },
+    "expected": "tool_error"
+  },
+  {
+    "name": "duplicated_error_detail",
+    "plan": {
+      "schema": "covenant.kani.plan.v1",
+      "harness": "proofs::route_proof",
+      "manifest_path": "Cargo.toml",
+      "tests": false,
+      "features": [
+        "fuzz"
+      ],
+      "timeout_secs": 60,
+      "unwind": null,
+      "expected_outcome": "proven",
+      "expected_assertion": null,
+      "required_covers": [
+        "cover condition: route reachable"
+      ]
+    },
+    "document": {
+      "metadata": {
+        "version": "1.0",
+        "kani_version": "0.68.0",
+        "target": "x86_64-unknown-linux-gnu",
+        "timestamp": "2026-10-17T00:00:00Z",
+        "build_mode": "release"
+      },
+      "tools": {
+        "kani": "0.68.0",
+        "rustc": "rustc 1.100.0-nightly (8925ea358 2026-08-20)",
+        "cbmc": "6.11.0 (cbmc-6.11.0)"
+      },
+      "harness_metadata": [
+        {
+          "pretty_name": "proofs::route_proof",
+          "attributes": {
+            "kind": "Proof",
+            "should_panic": false
+          }
+        }
+      ],
+      "verification_results": {
+        "summary": {
+          "total_harnesses": 1,
+          "executed": 1,
+          "status": "completed",
+          "successful": 1,
+          "failed": 0,
+          "duration_ms": 4
+        },
+        "results": [
+          {
+            "harness_id": "proofs::route_proof",
+            "status": "Success",
+            "duration_ms": 4,
+            "checks": [
+              {
+                "id": 1,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "assertion failed: balance_is_conserved",
+                "category": "assertion",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "12",
+                  "column": "5"
+                }
+              },
+              {
+                "id": 2,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "unwinding assertion loop 0",
+                "category": "unwind",
+                "location": {
+                  "file": "src/lib.rs",
+                  "line": "8",
+                  "column": "1"
+                }
+              },
+              {
+                "id": 3,
+                "function": "proofs::route_proof",
+                "status": "Satisfied",
+                "description": "cover condition: route reachable",
+                "category": "cover",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "10",
+                  "column": "5"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "error_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "has_errors": false
+        },
+        {
+          "harness_id": "proofs::route_proof",
+          "has_errors": false
+        }
+      ],
+      "property_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "property_details": {
+            "passed": 2,
+            "failed": 0,
+            "unreachable": 0,
+            "undetermined": 0,
+            "solver_error": 0,
+            "satisfied": 1,
+            "unsatisfiable": 0,
+            "covered": 0,
+            "uncovered": 0,
+            "total_properties": 3
+          }
+        }
+      ]
+    },
+    "execution": {
+      "returncode": 0,
+      "timed_out": false,
+      "oom_killed": false
+    },
+    "expected": "tool_error"
+  },
+  {
+    "name": "counter_total_mismatch",
+    "plan": {
+      "schema": "covenant.kani.plan.v1",
+      "harness": "proofs::route_proof",
+      "manifest_path": "Cargo.toml",
+      "tests": false,
+      "features": [
+        "fuzz"
+      ],
+      "timeout_secs": 60,
+      "unwind": null,
+      "expected_outcome": "proven",
+      "expected_assertion": null,
+      "required_covers": [
+        "cover condition: route reachable"
+      ]
+    },
+    "document": {
+      "metadata": {
+        "version": "1.0",
+        "kani_version": "0.68.0",
+        "target": "x86_64-unknown-linux-gnu",
+        "timestamp": "2026-10-17T00:00:00Z",
+        "build_mode": "release"
+      },
+      "tools": {
+        "kani": "0.68.0",
+        "rustc": "rustc 1.100.0-nightly (8925ea358 2026-08-20)",
+        "cbmc": "6.11.0 (cbmc-6.11.0)"
+      },
+      "harness_metadata": [
+        {
+          "pretty_name": "proofs::route_proof",
+          "attributes": {
+            "kind": "Proof",
+            "should_panic": false
+          }
+        }
+      ],
+      "verification_results": {
+        "summary": {
+          "total_harnesses": 1,
+          "executed": 1,
+          "status": "completed",
+          "successful": 1,
+          "failed": 0,
+          "duration_ms": 4
+        },
+        "results": [
+          {
+            "harness_id": "proofs::route_proof",
+            "status": "Success",
+            "duration_ms": 4,
+            "checks": [
+              {
+                "id": 1,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "assertion failed: balance_is_conserved",
+                "category": "assertion",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "12",
+                  "column": "5"
+                }
+              },
+              {
+                "id": 2,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "unwinding assertion loop 0",
+                "category": "unwind",
+                "location": {
+                  "file": "src/lib.rs",
+                  "line": "8",
+                  "column": "1"
+                }
+              },
+              {
+                "id": 3,
+                "function": "proofs::route_proof",
+                "status": "Satisfied",
+                "description": "cover condition: route reachable",
+                "category": "cover",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "10",
+                  "column": "5"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "error_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "has_errors": false
+        }
+      ],
+      "property_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "property_details": {
+            "passed": 2,
+            "failed": 0,
+            "unreachable": 0,
+            "undetermined": 0,
+            "solver_error": 0,
+            "satisfied": 1,
+            "unsatisfiable": 0,
+            "covered": 0,
+            "uncovered": 0,
+            "total_properties": 99
+          }
+        }
+      ]
+    },
+    "execution": {
+      "returncode": 0,
+      "timed_out": false,
+      "oom_killed": false
+    },
+    "expected": "tool_error"
+  },
+  {
+    "name": "assertion_status_unreachable",
+    "plan": {
+      "schema": "covenant.kani.plan.v1",
+      "harness": "proofs::route_proof",
+      "manifest_path": "Cargo.toml",
+      "tests": false,
+      "features": [
+        "fuzz"
+      ],
+      "timeout_secs": 60,
+      "unwind": null,
+      "expected_outcome": "proven",
+      "expected_assertion": null,
+      "required_covers": [
+        "cover condition: route reachable"
+      ]
+    },
+    "document": {
+      "metadata": {
+        "version": "1.0",
+        "kani_version": "0.68.0",
+        "target": "x86_64-unknown-linux-gnu",
+        "timestamp": "2026-10-17T00:00:00Z",
+        "build_mode": "release"
+      },
+      "tools": {
+        "kani": "0.68.0",
+        "rustc": "rustc 1.100.0-nightly (8925ea358 2026-08-20)",
+        "cbmc": "6.11.0 (cbmc-6.11.0)"
+      },
+      "harness_metadata": [
+        {
+          "pretty_name": "proofs::route_proof",
+          "attributes": {
+            "kind": "Proof",
+            "should_panic": false
+          }
+        }
+      ],
+      "verification_results": {
+        "summary": {
+          "total_harnesses": 1,
+          "executed": 1,
+          "status": "completed",
+          "successful": 1,
+          "failed": 0,
+          "duration_ms": 4
+        },
+        "results": [
+          {
+            "harness_id": "proofs::route_proof",
+            "status": "Success",
+            "duration_ms": 4,
+            "checks": [
+              {
+                "id": 1,
+                "function": "proofs::route_proof",
+                "status": "Unreachable",
+                "description": "assertion failed: balance_is_conserved",
+                "category": "assertion",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "12",
+                  "column": "5"
+                }
+              },
+              {
+                "id": 2,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "unwinding assertion loop 0",
+                "category": "unwind",
+                "location": {
+                  "file": "src/lib.rs",
+                  "line": "8",
+                  "column": "1"
+                }
+              },
+              {
+                "id": 3,
+                "function": "proofs::route_proof",
+                "status": "Satisfied",
+                "description": "cover condition: route reachable",
+                "category": "cover",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "10",
+                  "column": "5"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "error_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "has_errors": false
+        }
+      ],
+      "property_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "property_details": {
+            "passed": 1,
+            "failed": 0,
+            "unreachable": 1,
+            "undetermined": 0,
+            "solver_error": 0,
+            "satisfied": 1,
+            "unsatisfiable": 0,
+            "covered": 0,
+            "uncovered": 0,
+            "total_properties": 3
+          }
+        }
+      ]
+    },
+    "execution": {
+      "returncode": 0,
+      "timed_out": false,
+      "oom_killed": false
+    },
+    "expected": "inconclusive"
+  },
+  {
+    "name": "assertion_status_undetermined",
+    "plan": {
+      "schema": "covenant.kani.plan.v1",
+      "harness": "proofs::route_proof",
+      "manifest_path": "Cargo.toml",
+      "tests": false,
+      "features": [
+        "fuzz"
+      ],
+      "timeout_secs": 60,
+      "unwind": null,
+      "expected_outcome": "proven",
+      "expected_assertion": null,
+      "required_covers": [
+        "cover condition: route reachable"
+      ]
+    },
+    "document": {
+      "metadata": {
+        "version": "1.0",
+        "kani_version": "0.68.0",
+        "target": "x86_64-unknown-linux-gnu",
+        "timestamp": "2026-10-17T00:00:00Z",
+        "build_mode": "release"
+      },
+      "tools": {
+        "kani": "0.68.0",
+        "rustc": "rustc 1.100.0-nightly (8925ea358 2026-08-20)",
+        "cbmc": "6.11.0 (cbmc-6.11.0)"
+      },
+      "harness_metadata": [
+        {
+          "pretty_name": "proofs::route_proof",
+          "attributes": {
+            "kind": "Proof",
+            "should_panic": false
+          }
+        }
+      ],
+      "verification_results": {
+        "summary": {
+          "total_harnesses": 1,
+          "executed": 1,
+          "status": "completed",
+          "successful": 1,
+          "failed": 0,
+          "duration_ms": 4
+        },
+        "results": [
+          {
+            "harness_id": "proofs::route_proof",
+            "status": "Success",
+            "duration_ms": 4,
+            "checks": [
+              {
+                "id": 1,
+                "function": "proofs::route_proof",
+                "status": "Undetermined",
+                "description": "assertion failed: balance_is_conserved",
+                "category": "assertion",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "12",
+                  "column": "5"
+                }
+              },
+              {
+                "id": 2,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "unwinding assertion loop 0",
+                "category": "unwind",
+                "location": {
+                  "file": "src/lib.rs",
+                  "line": "8",
+                  "column": "1"
+                }
+              },
+              {
+                "id": 3,
+                "function": "proofs::route_proof",
+                "status": "Satisfied",
+                "description": "cover condition: route reachable",
+                "category": "cover",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "10",
+                  "column": "5"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "error_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "has_errors": false
+        }
+      ],
+      "property_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "property_details": {
+            "passed": 1,
+            "failed": 0,
+            "unreachable": 0,
+            "undetermined": 1,
+            "solver_error": 0,
+            "satisfied": 1,
+            "unsatisfiable": 0,
+            "covered": 0,
+            "uncovered": 0,
+            "total_properties": 3
+          }
+        }
+      ]
+    },
+    "execution": {
+      "returncode": 0,
+      "timed_out": false,
+      "oom_killed": false
+    },
+    "expected": "inconclusive"
+  },
+  {
+    "name": "assertion_status_unknown",
+    "plan": {
+      "schema": "covenant.kani.plan.v1",
+      "harness": "proofs::route_proof",
+      "manifest_path": "Cargo.toml",
+      "tests": false,
+      "features": [
+        "fuzz"
+      ],
+      "timeout_secs": 60,
+      "unwind": null,
+      "expected_outcome": "proven",
+      "expected_assertion": null,
+      "required_covers": [
+        "cover condition: route reachable"
+      ]
+    },
+    "document": {
+      "metadata": {
+        "version": "1.0",
+        "kani_version": "0.68.0",
+        "target": "x86_64-unknown-linux-gnu",
+        "timestamp": "2026-10-17T00:00:00Z",
+        "build_mode": "release"
+      },
+      "tools": {
+        "kani": "0.68.0",
+        "rustc": "rustc 1.100.0-nightly (8925ea358 2026-08-20)",
+        "cbmc": "6.11.0 (cbmc-6.11.0)"
+      },
+      "harness_metadata": [
+        {
+          "pretty_name": "proofs::route_proof",
+          "attributes": {
+            "kind": "Proof",
+            "should_panic": false
+          }
+        }
+      ],
+      "verification_results": {
+        "summary": {
+          "total_harnesses": 1,
+          "executed": 1,
+          "status": "completed",
+          "successful": 1,
+          "failed": 0,
+          "duration_ms": 4
+        },
+        "results": [
+          {
+            "harness_id": "proofs::route_proof",
+            "status": "Success",
+            "duration_ms": 4,
+            "checks": [
+              {
+                "id": 1,
+                "function": "proofs::route_proof",
+                "status": "Unknown",
+                "description": "assertion failed: balance_is_conserved",
+                "category": "assertion",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "12",
+                  "column": "5"
+                }
+              },
+              {
+                "id": 2,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "unwinding assertion loop 0",
+                "category": "unwind",
+                "location": {
+                  "file": "src/lib.rs",
+                  "line": "8",
+                  "column": "1"
+                }
+              },
+              {
+                "id": 3,
+                "function": "proofs::route_proof",
+                "status": "Satisfied",
+                "description": "cover condition: route reachable",
+                "category": "cover",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "10",
+                  "column": "5"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "error_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "has_errors": false
+        }
+      ],
+      "property_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "property_details": {
+            "passed": 1,
+            "failed": 0,
+            "unreachable": 0,
+            "undetermined": 1,
+            "solver_error": 0,
+            "satisfied": 1,
+            "unsatisfiable": 0,
+            "covered": 0,
+            "uncovered": 0,
+            "total_properties": 3
+          }
+        }
+      ]
+    },
+    "execution": {
+      "returncode": 0,
+      "timed_out": false,
+      "oom_killed": false
+    },
+    "expected": "inconclusive"
+  },
+  {
+    "name": "assertion_status_error",
+    "plan": {
+      "schema": "covenant.kani.plan.v1",
+      "harness": "proofs::route_proof",
+      "manifest_path": "Cargo.toml",
+      "tests": false,
+      "features": [
+        "fuzz"
+      ],
+      "timeout_secs": 60,
+      "unwind": null,
+      "expected_outcome": "proven",
+      "expected_assertion": null,
+      "required_covers": [
+        "cover condition: route reachable"
+      ]
+    },
+    "document": {
+      "metadata": {
+        "version": "1.0",
+        "kani_version": "0.68.0",
+        "target": "x86_64-unknown-linux-gnu",
+        "timestamp": "2026-10-17T00:00:00Z",
+        "build_mode": "release"
+      },
+      "tools": {
+        "kani": "0.68.0",
+        "rustc": "rustc 1.100.0-nightly (8925ea358 2026-08-20)",
+        "cbmc": "6.11.0 (cbmc-6.11.0)"
+      },
+      "harness_metadata": [
+        {
+          "pretty_name": "proofs::route_proof",
+          "attributes": {
+            "kind": "Proof",
+            "should_panic": false
+          }
+        }
+      ],
+      "verification_results": {
+        "summary": {
+          "total_harnesses": 1,
+          "executed": 1,
+          "status": "completed",
+          "successful": 1,
+          "failed": 0,
+          "duration_ms": 4
+        },
+        "results": [
+          {
+            "harness_id": "proofs::route_proof",
+            "status": "Success",
+            "duration_ms": 4,
+            "checks": [
+              {
+                "id": 1,
+                "function": "proofs::route_proof",
+                "status": "Error",
+                "description": "assertion failed: balance_is_conserved",
+                "category": "assertion",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "12",
+                  "column": "5"
+                }
+              },
+              {
+                "id": 2,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "unwinding assertion loop 0",
+                "category": "unwind",
+                "location": {
+                  "file": "src/lib.rs",
+                  "line": "8",
+                  "column": "1"
+                }
+              },
+              {
+                "id": 3,
+                "function": "proofs::route_proof",
+                "status": "Satisfied",
+                "description": "cover condition: route reachable",
+                "category": "cover",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "10",
+                  "column": "5"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "error_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "has_errors": false
+        }
+      ],
+      "property_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "property_details": {
+            "passed": 1,
+            "failed": 0,
+            "unreachable": 0,
+            "undetermined": 0,
+            "solver_error": 1,
+            "satisfied": 1,
+            "unsatisfiable": 0,
+            "covered": 0,
+            "uncovered": 0,
+            "total_properties": 3
+          }
+        }
+      ]
+    },
+    "execution": {
+      "returncode": 0,
+      "timed_out": false,
+      "oom_killed": false
+    },
+    "expected": "tool_error"
+  },
+  {
+    "name": "required_cover_unreachable",
+    "plan": {
+      "schema": "covenant.kani.plan.v1",
+      "harness": "proofs::route_proof",
+      "manifest_path": "Cargo.toml",
+      "tests": false,
+      "features": [
+        "fuzz"
+      ],
+      "timeout_secs": 60,
+      "unwind": null,
+      "expected_outcome": "proven",
+      "expected_assertion": null,
+      "required_covers": [
+        "cover condition: route reachable"
+      ]
+    },
+    "document": {
+      "metadata": {
+        "version": "1.0",
+        "kani_version": "0.68.0",
+        "target": "x86_64-unknown-linux-gnu",
+        "timestamp": "2026-10-17T00:00:00Z",
+        "build_mode": "release"
+      },
+      "tools": {
+        "kani": "0.68.0",
+        "rustc": "rustc 1.100.0-nightly (8925ea358 2026-08-20)",
+        "cbmc": "6.11.0 (cbmc-6.11.0)"
+      },
+      "harness_metadata": [
+        {
+          "pretty_name": "proofs::route_proof",
+          "attributes": {
+            "kind": "Proof",
+            "should_panic": false
+          }
+        }
+      ],
+      "verification_results": {
+        "summary": {
+          "total_harnesses": 1,
+          "executed": 1,
+          "status": "completed",
+          "successful": 1,
+          "failed": 0,
+          "duration_ms": 4
+        },
+        "results": [
+          {
+            "harness_id": "proofs::route_proof",
+            "status": "Success",
+            "duration_ms": 4,
+            "checks": [
+              {
+                "id": 1,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "assertion failed: balance_is_conserved",
+                "category": "assertion",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "12",
+                  "column": "5"
+                }
+              },
+              {
+                "id": 2,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "unwinding assertion loop 0",
+                "category": "unwind",
+                "location": {
+                  "file": "src/lib.rs",
+                  "line": "8",
+                  "column": "1"
+                }
+              },
+              {
+                "id": 3,
+                "function": "proofs::route_proof",
+                "status": "Unreachable",
+                "description": "cover condition: route reachable",
+                "category": "cover",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "10",
+                  "column": "5"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "error_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "has_errors": false
+        }
+      ],
+      "property_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "property_details": {
+            "passed": 2,
+            "failed": 0,
+            "unreachable": 1,
+            "undetermined": 0,
+            "solver_error": 0,
+            "satisfied": 0,
+            "unsatisfiable": 0,
+            "covered": 0,
+            "uncovered": 0,
+            "total_properties": 3
+          }
+        }
+      ]
+    },
+    "execution": {
+      "returncode": 0,
+      "timed_out": false,
+      "oom_killed": false
+    },
+    "expected": "inconclusive"
+  },
+  {
+    "name": "required_cover_unsatisfiable",
+    "plan": {
+      "schema": "covenant.kani.plan.v1",
+      "harness": "proofs::route_proof",
+      "manifest_path": "Cargo.toml",
+      "tests": false,
+      "features": [
+        "fuzz"
+      ],
+      "timeout_secs": 60,
+      "unwind": null,
+      "expected_outcome": "proven",
+      "expected_assertion": null,
+      "required_covers": [
+        "cover condition: route reachable"
+      ]
+    },
+    "document": {
+      "metadata": {
+        "version": "1.0",
+        "kani_version": "0.68.0",
+        "target": "x86_64-unknown-linux-gnu",
+        "timestamp": "2026-10-17T00:00:00Z",
+        "build_mode": "release"
+      },
+      "tools": {
+        "kani": "0.68.0",
+        "rustc": "rustc 1.100.0-nightly (8925ea358 2026-08-20)",
+        "cbmc": "6.11.0 (cbmc-6.11.0)"
+      },
+      "harness_metadata": [
+        {
+          "pretty_name": "proofs::route_proof",
+          "attributes": {
+            "kind": "Proof",
+            "should_panic": false
+          }
+        }
+      ],
+      "verification_results": {
+        "summary": {
+          "total_harnesses": 1,
+          "executed": 1,
+          "status": "completed",
+          "successful": 1,
+          "failed": 0,
+          "duration_ms": 4
+        },
+        "results": [
+          {
+            "harness_id": "proofs::route_proof",
+            "status": "Success",
+            "duration_ms": 4,
+            "checks": [
+              {
+                "id": 1,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "assertion failed: balance_is_conserved",
+                "category": "assertion",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "12",
+                  "column": "5"
+                }
+              },
+              {
+                "id": 2,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "unwinding assertion loop 0",
+                "category": "unwind",
+                "location": {
+                  "file": "src/lib.rs",
+                  "line": "8",
+                  "column": "1"
+                }
+              },
+              {
+                "id": 3,
+                "function": "proofs::route_proof",
+                "status": "Unsatisfiable",
+                "description": "cover condition: route reachable",
+                "category": "cover",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "10",
+                  "column": "5"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "error_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "has_errors": false
+        }
+      ],
+      "property_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "property_details": {
+            "passed": 2,
+            "failed": 0,
+            "unreachable": 0,
+            "undetermined": 0,
+            "solver_error": 0,
+            "satisfied": 0,
+            "unsatisfiable": 1,
+            "covered": 0,
+            "uncovered": 0,
+            "total_properties": 3
+          }
+        }
+      ]
+    },
+    "execution": {
+      "returncode": 0,
+      "timed_out": false,
+      "oom_killed": false
+    },
+    "expected": "inconclusive"
+  },
+  {
+    "name": "required_cover_undetermined",
+    "plan": {
+      "schema": "covenant.kani.plan.v1",
+      "harness": "proofs::route_proof",
+      "manifest_path": "Cargo.toml",
+      "tests": false,
+      "features": [
+        "fuzz"
+      ],
+      "timeout_secs": 60,
+      "unwind": null,
+      "expected_outcome": "proven",
+      "expected_assertion": null,
+      "required_covers": [
+        "cover condition: route reachable"
+      ]
+    },
+    "document": {
+      "metadata": {
+        "version": "1.0",
+        "kani_version": "0.68.0",
+        "target": "x86_64-unknown-linux-gnu",
+        "timestamp": "2026-10-17T00:00:00Z",
+        "build_mode": "release"
+      },
+      "tools": {
+        "kani": "0.68.0",
+        "rustc": "rustc 1.100.0-nightly (8925ea358 2026-08-20)",
+        "cbmc": "6.11.0 (cbmc-6.11.0)"
+      },
+      "harness_metadata": [
+        {
+          "pretty_name": "proofs::route_proof",
+          "attributes": {
+            "kind": "Proof",
+            "should_panic": false
+          }
+        }
+      ],
+      "verification_results": {
+        "summary": {
+          "total_harnesses": 1,
+          "executed": 1,
+          "status": "completed",
+          "successful": 1,
+          "failed": 0,
+          "duration_ms": 4
+        },
+        "results": [
+          {
+            "harness_id": "proofs::route_proof",
+            "status": "Success",
+            "duration_ms": 4,
+            "checks": [
+              {
+                "id": 1,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "assertion failed: balance_is_conserved",
+                "category": "assertion",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "12",
+                  "column": "5"
+                }
+              },
+              {
+                "id": 2,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "unwinding assertion loop 0",
+                "category": "unwind",
+                "location": {
+                  "file": "src/lib.rs",
+                  "line": "8",
+                  "column": "1"
+                }
+              },
+              {
+                "id": 3,
+                "function": "proofs::route_proof",
+                "status": "Undetermined",
+                "description": "cover condition: route reachable",
+                "category": "cover",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "10",
+                  "column": "5"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "error_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "has_errors": false
+        }
+      ],
+      "property_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "property_details": {
+            "passed": 2,
+            "failed": 0,
+            "unreachable": 0,
+            "undetermined": 1,
+            "solver_error": 0,
+            "satisfied": 0,
+            "unsatisfiable": 0,
+            "covered": 0,
+            "uncovered": 0,
+            "total_properties": 3
+          }
+        }
+      ]
+    },
+    "execution": {
+      "returncode": 0,
+      "timed_out": false,
+      "oom_killed": false
+    },
+    "expected": "inconclusive"
+  },
+  {
+    "name": "required_cover_missing",
+    "plan": {
+      "schema": "covenant.kani.plan.v1",
+      "harness": "proofs::route_proof",
+      "manifest_path": "Cargo.toml",
+      "tests": false,
+      "features": [
+        "fuzz"
+      ],
+      "timeout_secs": 60,
+      "unwind": null,
+      "expected_outcome": "proven",
+      "expected_assertion": null,
+      "required_covers": [
+        "cover condition: route reachable"
+      ]
+    },
+    "document": {
+      "metadata": {
+        "version": "1.0",
+        "kani_version": "0.68.0",
+        "target": "x86_64-unknown-linux-gnu",
+        "timestamp": "2026-10-17T00:00:00Z",
+        "build_mode": "release"
+      },
+      "tools": {
+        "kani": "0.68.0",
+        "rustc": "rustc 1.100.0-nightly (8925ea358 2026-08-20)",
+        "cbmc": "6.11.0 (cbmc-6.11.0)"
+      },
+      "harness_metadata": [
+        {
+          "pretty_name": "proofs::route_proof",
+          "attributes": {
+            "kind": "Proof",
+            "should_panic": false
+          }
+        }
+      ],
+      "verification_results": {
+        "summary": {
+          "total_harnesses": 1,
+          "executed": 1,
+          "status": "completed",
+          "successful": 1,
+          "failed": 0,
+          "duration_ms": 4
+        },
+        "results": [
+          {
+            "harness_id": "proofs::route_proof",
+            "status": "Success",
+            "duration_ms": 4,
+            "checks": [
+              {
+                "id": 1,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "assertion failed: balance_is_conserved",
+                "category": "assertion",
+                "location": {
+                  "file": "tests/proofs.rs",
+                  "line": "12",
+                  "column": "5"
+                }
+              },
+              {
+                "id": 2,
+                "function": "proofs::route_proof",
+                "status": "Success",
+                "description": "unwinding assertion loop 0",
+                "category": "unwind",
+                "location": {
+                  "file": "src/lib.rs",
+                  "line": "8",
+                  "column": "1"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "error_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "has_errors": false
+        }
+      ],
+      "property_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "property_details": {
+            "passed": 2,
+            "failed": 0,
+            "unreachable": 0,
+            "undetermined": 0,
+            "solver_error": 0,
+            "satisfied": 0,
+            "unsatisfiable": 0,
+            "covered": 0,
+            "uncovered": 0,
+            "total_properties": 2
+          }
+        }
+      ]
+    },
+    "execution": {
+      "returncode": 0,
+      "timed_out": false,
+      "oom_killed": false
+    },
+    "expected": "inconclusive"
+  },
+  {
+    "name": "empty_checks_cannot_prove",
+    "plan": {
+      "schema": "covenant.kani.plan.v1",
+      "harness": "proofs::route_proof",
+      "manifest_path": "Cargo.toml",
+      "tests": false,
+      "features": [
+        "fuzz"
+      ],
+      "timeout_secs": 60,
+      "unwind": null,
+      "expected_outcome": "proven",
+      "expected_assertion": null,
+      "required_covers": [
+        "cover condition: route reachable"
+      ]
+    },
+    "document": {
+      "metadata": {
+        "version": "1.0",
+        "kani_version": "0.68.0",
+        "target": "x86_64-unknown-linux-gnu",
+        "timestamp": "2026-10-17T00:00:00Z",
+        "build_mode": "release"
+      },
+      "tools": {
+        "kani": "0.68.0",
+        "rustc": "rustc 1.100.0-nightly (8925ea358 2026-08-20)",
+        "cbmc": "6.11.0 (cbmc-6.11.0)"
+      },
+      "harness_metadata": [
+        {
+          "pretty_name": "proofs::route_proof",
+          "attributes": {
+            "kind": "Proof",
+            "should_panic": false
+          }
+        }
+      ],
+      "verification_results": {
+        "summary": {
+          "total_harnesses": 1,
+          "executed": 1,
+          "status": "completed",
+          "successful": 1,
+          "failed": 0,
+          "duration_ms": 4
+        },
+        "results": [
+          {
+            "harness_id": "proofs::route_proof",
+            "status": "Success",
+            "duration_ms": 4,
+            "checks": []
+          }
+        ]
+      },
+      "error_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "has_errors": false
+        }
+      ],
+      "property_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "property_details": {
+            "passed": 0,
+            "failed": 0,
+            "unreachable": 0,
+            "undetermined": 0,
+            "solver_error": 0,
+            "satisfied": 0,
+            "unsatisfiable": 0,
+            "covered": 0,
+            "uncovered": 0,
+            "total_properties": 0
+          }
+        }
+      ]
+    },
+    "execution": {
+      "returncode": 0,
+      "timed_out": false,
+      "oom_killed": false
+    },
+    "expected": "inconclusive"
+  },
+  {
+    "name": "cbmc_timeout",
+    "plan": {
+      "schema": "covenant.kani.plan.v1",
+      "harness": "proofs::route_proof",
+      "manifest_path": "Cargo.toml",
+      "tests": false,
+      "features": [
+        "fuzz"
+      ],
+      "timeout_secs": 60,
+      "unwind": null,
+      "expected_outcome": "proven",
+      "expected_assertion": null,
+      "required_covers": [
+        "cover condition: route reachable"
+      ]
+    },
+    "document": {
+      "metadata": {
+        "version": "1.0",
+        "kani_version": "0.68.0",
+        "target": "x86_64-unknown-linux-gnu",
+        "timestamp": "2026-10-17T00:00:00Z",
+        "build_mode": "release"
+      },
+      "tools": {
+        "kani": "0.68.0",
+        "rustc": "rustc 1.100.0-nightly (8925ea358 2026-08-20)",
+        "cbmc": "6.11.0 (cbmc-6.11.0)"
+      },
+      "harness_metadata": [
+        {
+          "pretty_name": "proofs::route_proof",
+          "attributes": {
+            "kind": "Proof",
+            "should_panic": false
+          }
+        }
+      ],
+      "verification_results": {
+        "summary": {
+          "total_harnesses": 1,
+          "executed": 1,
+          "status": "completed",
+          "successful": 0,
+          "failed": 1,
+          "duration_ms": 4
+        },
+        "results": [
+          {
+            "harness_id": "proofs::route_proof",
+            "status": "Failure",
+            "duration_ms": 4,
+            "checks": []
+          }
+        ]
+      },
+      "error_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "has_errors": true,
+          "error_type": "unknown_failure",
+          "failed_properties_type": "None",
+          "exit_status": "timeout"
+        }
+      ],
+      "property_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "property_details": {
+            "passed": null,
+            "failed": null,
+            "unreachable": null,
+            "undetermined": null,
+            "solver_error": null,
+            "satisfied": null,
+            "unsatisfiable": null,
+            "covered": null,
+            "uncovered": null,
+            "total_properties": null
+          }
+        }
+      ]
+    },
+    "execution": {
+      "returncode": 1,
+      "timed_out": false,
+      "oom_killed": false
+    },
+    "expected": "timeout"
+  },
+  {
+    "name": "cbmc_out_of_memory",
+    "plan": {
+      "schema": "covenant.kani.plan.v1",
+      "harness": "proofs::route_proof",
+      "manifest_path": "Cargo.toml",
+      "tests": false,
+      "features": [
+        "fuzz"
+      ],
+      "timeout_secs": 60,
+      "unwind": null,
+      "expected_outcome": "proven",
+      "expected_assertion": null,
+      "required_covers": [
+        "cover condition: route reachable"
+      ]
+    },
+    "document": {
+      "metadata": {
+        "version": "1.0",
+        "kani_version": "0.68.0",
+        "target": "x86_64-unknown-linux-gnu",
+        "timestamp": "2026-10-17T00:00:00Z",
+        "build_mode": "release"
+      },
+      "tools": {
+        "kani": "0.68.0",
+        "rustc": "rustc 1.100.0-nightly (8925ea358 2026-08-20)",
+        "cbmc": "6.11.0 (cbmc-6.11.0)"
+      },
+      "harness_metadata": [
+        {
+          "pretty_name": "proofs::route_proof",
+          "attributes": {
+            "kind": "Proof",
+            "should_panic": false
+          }
+        }
+      ],
+      "verification_results": {
+        "summary": {
+          "total_harnesses": 1,
+          "executed": 1,
+          "status": "completed",
+          "successful": 0,
+          "failed": 1,
+          "duration_ms": 4
+        },
+        "results": [
+          {
+            "harness_id": "proofs::route_proof",
+            "status": "Failure",
+            "duration_ms": 4,
+            "checks": []
+          }
+        ]
+      },
+      "error_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "has_errors": true,
+          "error_type": "unknown_failure",
+          "failed_properties_type": "None",
+          "exit_status": "out_of_memory"
+        }
+      ],
+      "property_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "property_details": {
+            "passed": null,
+            "failed": null,
+            "unreachable": null,
+            "undetermined": null,
+            "solver_error": null,
+            "satisfied": null,
+            "unsatisfiable": null,
+            "covered": null,
+            "uncovered": null,
+            "total_properties": null
+          }
+        }
+      ]
+    },
+    "execution": {
+      "returncode": 1,
+      "timed_out": false,
+      "oom_killed": false
+    },
+    "expected": "out_of_memory"
+  },
+  {
+    "name": "cbmc_exit_code_137",
+    "plan": {
+      "schema": "covenant.kani.plan.v1",
+      "harness": "proofs::route_proof",
+      "manifest_path": "Cargo.toml",
+      "tests": false,
+      "features": [
+        "fuzz"
+      ],
+      "timeout_secs": 60,
+      "unwind": null,
+      "expected_outcome": "proven",
+      "expected_assertion": null,
+      "required_covers": [
+        "cover condition: route reachable"
+      ]
+    },
+    "document": {
+      "metadata": {
+        "version": "1.0",
+        "kani_version": "0.68.0",
+        "target": "x86_64-unknown-linux-gnu",
+        "timestamp": "2026-10-17T00:00:00Z",
+        "build_mode": "release"
+      },
+      "tools": {
+        "kani": "0.68.0",
+        "rustc": "rustc 1.100.0-nightly (8925ea358 2026-08-20)",
+        "cbmc": "6.11.0 (cbmc-6.11.0)"
+      },
+      "harness_metadata": [
+        {
+          "pretty_name": "proofs::route_proof",
+          "attributes": {
+            "kind": "Proof",
+            "should_panic": false
+          }
+        }
+      ],
+      "verification_results": {
+        "summary": {
+          "total_harnesses": 1,
+          "executed": 1,
+          "status": "completed",
+          "successful": 0,
+          "failed": 1,
+          "duration_ms": 4
+        },
+        "results": [
+          {
+            "harness_id": "proofs::route_proof",
+            "status": "Failure",
+            "duration_ms": 4,
+            "checks": []
+          }
+        ]
+      },
+      "error_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "has_errors": true,
+          "error_type": "unknown_failure",
+          "failed_properties_type": "None",
+          "exit_status": "exit_code_137"
+        }
+      ],
+      "property_details": [
+        {
+          "harness_id": "proofs::route_proof",
+          "property_details": {
+            "passed": null,
+            "failed": null,
+            "unreachable": null,
+            "undetermined": null,
+            "solver_error": null,
+            "satisfied": null,
+            "unsatisfiable": null,
+            "covered": null,
+            "uncovered": null,
+            "total_properties": null
+          }
+        }
+      ]
+    },
+    "execution": {
+      "returncode": 1,
+      "timed_out": false,
+      "oom_killed": false
+    },
+    "expected": "tool_error"
+  }
+]

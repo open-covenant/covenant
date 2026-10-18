@@ -1,0 +1,13 @@
+{
+  "acceptance_passed": true,
+  "agent_final_patch_accepted": null,
+  "buyer_pubkey": "5jhfhR4THAkC8GVJZDTP579KCdSnMdejw2oEcXZoZGnJ",
+  "envelope_signature_verified": true,
+  "exact_envelope_output_hashes_verified": true,
+  "inventory_completeness_verified": false,
+  "job_id": "001980a8-6442-49c0-9081-983def87331d",
+  "kani": null,
+  "receipt_execution_status": "ok",
+  "receipt_signature_verified": true,
+  "settlement_verified": false
+}

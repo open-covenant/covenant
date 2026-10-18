@@ -1,0 +1,24 @@
+{
+  "jobs": [
+    {
+      "label": "native-generic-canary",
+      "job_id": "001980a8-6442-49c0-9081-983def87331d",
+      "signed_offer_micro_usdc": 100000,
+      "signed_receipt_price_micro_usdc": 100000,
+      "api_reported_charge_micro_usdc": 100000,
+      "api_reported_payout_micro_usdc": 90000,
+      "settlement_verified": false
+    },
+    {
+      "label": "native-kani-proven-canary",
+      "job_id": "97fbf4a1-a86c-4ca7-ab63-f44e3a7ffeed",
+      "signed_offer_micro_usdc": 100000,
+      "signed_receipt_price_micro_usdc": 100000,
+      "api_reported_charge_micro_usdc": 100000,
+      "api_reported_payout_micro_usdc": 90000,
+      "settlement_verified": false
+    }
+  ],
+  "combined_api_reported_charge_micro_usdc": 200000,
+  "trust": "Signed offer/receipt values and coordinator API accounting are separate claims. Settlement transactions have not been independently checked."
+}

@@ -1,0 +1,9 @@
+{
+  "runtime_node_source_commit": "4dd036a4d59612326095768ff4b4f272aa48562d",
+  "coordinator_source_commit": "983172ddd04ac2de70136125e2088f22c6edf505",
+  "kani_image": "ghcr.io/open-covenant/covenant/compute-node-public@sha256:5648c867341b054aebf3570266200cd49766caea7f5119d2735dc437fcfe3f7d",
+  "resolved_image_id": "sha256:5648c867341b054aebf3570266200cd49766caea7f5119d2735dc437fcfe3f7d",
+  "source_mapping_trust": "Campaign release/deployment record identifies source; signed proof output binds the exact image digest and resolved image ID. The operator signature alone does not prove image-to-source reproducibility.",
+  "runner_sha256": "f74b26a6881d3090c930db2132bc5db64ba82222476afa60bc3ccaeb42d59ab7",
+  "outcome": "Actual completed paid check with accepted=false/tool_error; not a proof."
+}

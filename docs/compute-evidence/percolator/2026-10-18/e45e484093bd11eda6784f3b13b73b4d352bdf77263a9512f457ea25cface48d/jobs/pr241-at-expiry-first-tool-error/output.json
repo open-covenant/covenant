@@ -1,0 +1,120 @@
+[
+  {
+    "type": "json",
+    "value": {
+      "agent_check_verdict": {
+        "applied": true,
+        "commands": [
+          {
+            "command": "cargo fetch --locked",
+            "duration_ms": 1312,
+            "exit_code": 0,
+            "output_tail": "    Updating crates.io index\n Downloading crates ...\n  Downloaded errno v0.3.14\n  Downloaded num-traits v0.2.19\n  Downloaded cfg-if v1.0.4\n  Downloaded lazy_static v1.5.0\n  Downloaded quick-error v1.2.3\n  Downloaded rand_xorshift v0.4.0\n  Downloaded unarray v0.1.4\n  Downloaded bit-set v0.8.0\n  Downloaded fastrand v2.3.0\n  Downloaded windows-link v0.2.1\n  Downloaded wait-timeout v0.2.1\n  Downloaded fnv v1.0.7\n  Downloaded bytemuck_derive v1.10.2\n  Downloaded rusty-fork v0.3.1\n  Downloaded rand_core v0.9.3\n  Downloaded rand_chacha v0.9.0\n  Downloaded bit-vec v0.8.0\n  Downloaded quote v1.0.41\n  Downloaded autocfg v1.5.0\n  Downloaded tempfile v3.23.0\n  Downloaded once_cell v1.21.3\n  Downloaded ppv-lite86 v0.2.21\n  Downloaded bitflags v2.9.4\n  Downloaded unicode-ident v1.0.19\n  Downloaded getrandom v0.3.4\n  Downloaded wit-bindgen v0.46.0\n  Downloaded r-efi v5.3.0\n  Downloaded bytemuck v1.25.0\n  Downloaded proc-macro2 v1.0.101\n  Downloaded zerocopy-derive v0.8.27\n  Downloaded rand v0.9.2\n  Downloaded proptest v1.8.0\n  Downloaded wasip2 v1.0.1+wasi-0.2.4\n  Downloaded zerocopy v0.8.27\n  Downloaded syn v2.0.107\n  Downloaded regex-syntax v0.8.8\n  Downloaded rustix v1.1.2\n  Downloaded libc v0.2.177\n  Downloaded windows-sys v0.61.2\n  Downloaded linux-raw-sys v0.11.0\n",
+            "timed_out": false
+          },
+          {
+            "command": "covenant-kani-v1 proof_v16_public_counterparty_backing_withdraw_rejects_lapsed_bucket_at_expiry 1493a023b38ba11e70bffc6ef9bc64885ea7c056db9648481729046020513d07",
+            "duration_ms": 1244,
+            "exit_code": 1,
+            "output_tail": "{\"accepted\":false,\"outcome\":\"tool_error\",\"reason\":\"export is not a JSON object\"}",
+            "timed_out": false
+          }
+        ],
+        "passed": false,
+        "patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "task_job_id": "ac6a8b30-1003-4b2a-9558-b580aa590812",
+        "vote_signature_b58": "26TNNRbvkymNyAicTzQThH4a4vktVc1kzet2NksKkohPm2FxqnTu4gXDTt1Hes1ypX1rLs5gVBLeVxSh2b836Aik"
+      }
+    }
+  },
+  {
+    "type": "json",
+    "value": {
+      "kani_execution": {
+        "artifacts_gzip_b64": "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",
+        "artifacts_sha256": "97bce9ddc0b17ed574d2827c449b61e1fdc4f03bf2cdfe203e303fd6c53c34c1",
+        "cpus": 6,
+        "hidden_sha256": null,
+        "image": "ghcr.io/open-covenant/covenant/compute-node-public@sha256:1ac3419ac2c070b464d753b5b78094725733740c8b136505b3a38cae759345bd",
+        "image_id": "sha256:1ac3419ac2c070b464d753b5b78094725733740c8b136505b3a38cae759345bd",
+        "job_id": "ac6a8b30-1003-4b2a-9558-b580aa590812",
+        "memory_mib": 27648,
+        "patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "plan": {
+          "expected_assertion": null,
+          "expected_outcome": "proven",
+          "features": [],
+          "harness": "proof_v16_public_counterparty_backing_withdraw_rejects_lapsed_bucket_at_expiry",
+          "manifest_path": "Cargo.toml",
+          "required_covers": [
+            "withdrawal from lapsed backing under a live claim is refused"
+          ],
+          "schema": "covenant.kani.plan.v1",
+          "tests": true,
+          "timeout_secs": 1200,
+          "unwind": null
+        },
+        "raw_bytes": 2474,
+        "repo_commit": "7cbc0004b0e47b09187471054219fb7fb9cb0184",
+        "report": {
+          "accepted": false,
+          "argv": [
+            "/usr/local/cargo/bin/cargo-kani",
+            "kani",
+            "-Z",
+            "unstable-options",
+            "--exact",
+            "--harness",
+            "proof_v16_public_counterparty_backing_withdraw_rejects_lapsed_bucket_at_expiry",
+            "--export-json",
+            "/evidence/kani-export.json",
+            "--manifest-path",
+            "Cargo.toml",
+            "--output-format",
+            "regular",
+            "--harness-timeout",
+            "1200s",
+            "--tests"
+          ],
+          "artifacts": [
+            {
+              "bytes": 343,
+              "name": "stdout.log",
+              "sha256": "97c78275d8c0d3f71d0461d32c2a57335662febce052277e9e447d7d63e27b9d"
+            },
+            {
+              "bytes": 1040,
+              "name": "stderr.log",
+              "sha256": "3f1b2eb3e04e4b0d60238f10240f6eed70a2fff32c50ec4e8154ce2919c9739d"
+            }
+          ],
+          "duration_ms": 755,
+          "evidence_overflow": false,
+          "exit_code": 1,
+          "harness": "proof_v16_public_counterparty_backing_withdraw_rejects_lapsed_bucket_at_expiry",
+          "oom_killed": false,
+          "outcome": "tool_error",
+          "reason": "export is not a JSON object",
+          "schema": "covenant.kani.result.v1",
+          "timed_out": false,
+          "tool": {
+            "cargo_kani": "/usr/local/cargo/bin/cargo-kani",
+            "cbmc": "6.11.0",
+            "kani": "0.68.0",
+            "rustc": "rustc 1.100.0-nightly (8925ea358 2026-08-20)",
+            "toolchain": "nightly-2026-08-21"
+          }
+        },
+        "schema": "covenant.kani.execution.v1",
+        "scratch_mib": 8192,
+        "task_job_id": "ac6a8b30-1003-4b2a-9558-b580aa590812",
+        "tool_pin": {
+          "cbmc": "6.11.0",
+          "kani": "0.68.0",
+          "rust_toolchain": "nightly-2026-08-21-x86_64-unknown-linux-gnu"
+        },
+        "tree_hash": "6de5571b649dcd572a15a73341206e75e24c016b"
+      }
+    }
+  }
+]

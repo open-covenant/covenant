@@ -1,0 +1,1207 @@
+diff --git a/deploy/kani-check/Dockerfile b/deploy/kani-check/Dockerfile
+new file mode 100644
+index 0000000..dd9ce63
+--- /dev/null
++++ b/deploy/kani-check/Dockerfile
+@@ -0,0 +1,43 @@
++# Covenant Kani verifier image. BASE_IMAGE is mandatory and must be digest-pinned
++# (repo@sha256:...). Authoring note: this file has NOT been built by its author.
++ARG BASE_IMAGE
++FROM ${BASE_IMAGE}
++
++ARG KANI_VERSION=0.68.0
++ARG RUST_TOOLCHAIN=nightly-2026-08-21
++
++ENV RUSTUP_HOME=/usr/local/rustup \
++    CARGO_HOME=/usr/local/cargo \
++    KANI_HOME=/opt/kani \
++    PATH=/usr/local/cargo/bin:/usr/local/bin:/usr/bin:/bin \
++    HOME=/tmp \
++    CARGO_NET_OFFLINE=true \
++    CARGO_TERM_COLOR=never
++
++# Network is only used at build time. Fail the build if the base is not digest-pinned.
++RUN case "${BASE_IMAGE}" in *@sha256:????????????????????????????????????????????????????????????????) ;; \
++      *) echo "BASE_IMAGE must be digest pinned" >&2; exit 1;; esac \
++ && apt-get update \
++ && apt-get install -y --no-install-recommends python3 ca-certificates \
++ && rm -rf /var/lib/apt/lists/* \
++ && rustup toolchain install "${RUST_TOOLCHAIN}" --profile minimal \
++ && rustup default "${RUST_TOOLCHAIN}" \
++ && CARGO_NET_OFFLINE=false cargo install --locked kani-verifier --version "${KANI_VERSION}" \
++ && CARGO_NET_OFFLINE=false cargo-kani setup \
++ && chmod -R a+rX /opt/kani /usr/local/cargo /usr/local/rustup
++
++COPY --chmod=0444 runner.py /opt/covenant/kani/runner.py
++
++RUN mkdir -p /opt/covenant/kani /work /evidence /scratch \
++ && chmod 0777 /work /evidence /scratch \
++ && { echo "kani=$(cargo-kani --version)"; \
++      echo "cbmc=$(/opt/kani/kani-${KANI_VERSION}/bin/cbmc --version 2>&1 | head -n1)"; \
++      echo "rustc=$(rustc --version)"; \
++      echo "python=$(python3 --version)"; \
++      echo "base_image=${BASE_IMAGE}"; } > /opt/covenant/kani/versions.txt \
++ && chmod 0444 /opt/covenant/kani/versions.txt
++
++WORKDIR /work
++# Any numeric UID may run this image; rootfs may be read-only; no network needed.
++ENTRYPOINT ["python3", "/opt/covenant/kani/runner.py"]
++CMD ["run", "--plan", "/request/plan.json", "--workdir", "/work", "--outdir", "/evidence"]
+diff --git a/deploy/kani-check/README.md b/deploy/kani-check/README.md
+new file mode 100644
+index 0000000..4d5f0c4
+--- /dev/null
++++ b/deploy/kani-check/README.md
+@@ -0,0 +1,72 @@
++# deploy/kani-check — Covenant Kani verifier runner
++
++`runner.py` (Python stdlib only) validates a `covenant.kani.plan.v1` plan, runs the pinned
++`/usr/local/cargo/bin/cargo-kani` directly (no cargo plugin discovery, no shell) with a fixed argv,
++captures raw stdout/stderr/Kani export as files, and classifies the export into
++`covenant.kani.result.v1` (`proven`, `refuted`, `timeout`, `out_of_memory`, `tool_error`,
++`inconclusive`). `accepted` is true only when the outcome equals the plan's `expected_outcome`;
++the CLI exits 0 only then. The final report is one JSON document on stdout; diagnostics go to stderr.
++
++```
++python3 /opt/covenant/kani/runner.py run --plan /request/plan.json --workdir /work --outdir /evidence
++```
++
++Pinned toolchain on the build host: Kani 0.68.0, CBMC 6.11.0, nightly-2026-08-21
++(rustc 1.100.0-nightly 8925ea358). Kani 0.68 has no `--test <target>`; only `--tests` is supported.
++
++## Behaviour and bounds
++
++- Rejected before running: unknown/oversized plan fields, manifests outside `/work` (symlinks resolved),
++  any `.cargo/config[.toml]` between the manifest and `/work` or elsewhere in it, unsafe
++  `[package|workspace.metadata.kani.flags]` (`no-*`, `only-codegen`, `prove-safety-only`,
++  `ignore-global-asm`, `cbmc-args`, ...), and environment overriding `RUSTC*`/`RUSTFLAGS`/`CARGO_TARGET_*`.
++- Environment: `PATH=/usr/local/cargo/bin:/usr/local/bin:/usr/bin:/bin`, `RUSTUP_HOME=/usr/local/rustup`,
++  `KANI_HOME=/opt/kani`, `HOME=/tmp`, `CARGO_NET_OFFLINE=true`, colors off,
++  `CARGO_TARGET_DIR=/scratch/target`, `TMPDIR=/scratch/tmp`, `CARGO_HOME=/deps/cargo` if present.
++- Evidence (`stdout.log`, `stderr.log`, `kani-export.json`, `result.json`) is written to `--outdir`;
++  stale files are removed first and symlinks are never followed. Artifact entries carry `{name,bytes,sha256}`
++  over the original bytes; nothing is truncated. More than 16 MiB of raw evidence kills the process group
++  and yields `tool_error`. Wall timeout is `timeout_secs` plus a 300 s build grace; the process group is
++  killed and reaped.
++- Memory, CPU, PID, network and mount limits are enforced by the node/Docker, not by this runner. The node
++  supplies authoritative OOM information. The report is not itself cryptographic proof: the node embeds
++  the complete artifact bytes in its signed output (4 MiB compressed cap). Full evidence is not stored on chain.
++
++## Build (operator, needs network; not performed by the author)
++
++The inspected host base is `rust@sha256:81015672d6939b0265f09adf96d5de125482bb1330106076956b0518e74edc90`.
++The operator must first verify that this digest resolves in the registry for the target platform
++(e.g. `docker buildx imagetools inspect rust@sha256:8101...edc90`); a tag is not an immutability claim.
++
++```
++docker build --build-arg BASE_IMAGE=rust@sha256:81015672d6939b0265f09adf96d5de125482bb1330106076956b0518e74edc90 \
++  --build-arg KANI_VERSION=0.68.0 --iidfile kani-check.iid -t covenant-kani-check:build deploy/kani-check
++IMAGE="covenant-kani-check@$(cat kani-check.iid)"   # immutable image ID
++# after pushing: record the registry digest, never the tag
++docker push <registry>/covenant-kani-check:build
++docker inspect --format '{{index .RepoDigests 0}}' <registry>/covenant-kani-check:build
++```
++
++## Offline bounded smoke tests (operator)
++
++```
++docker run --rm --network none --read-only --user 12345:12345 --memory 2g --pids-limit 256 --cpus 2 \
++  --tmpfs /tmp --mount type=tmpfs,dst=/scratch,tmpfs-mode=1777 \
++  --mount type=bind,src=$PWD/fixture,dst=/work,readonly \
++  --mount type=bind,src=$PWD/req,dst=/request,readonly --mount type=bind,src=$PWD/evidence,dst=/evidence \
++  "$IMAGE"
++docker run --rm --network none --read-only --entrypoint cat "$IMAGE" /opt/covenant/kani/versions.txt
++```
++
++Wrap with `timeout 900`. `/evidence` must be writable by the chosen UID.
++
++## Tests
++
++```
++python3 .covenant-kani-acceptance/acceptance_test.py
++python3 -m unittest discover -s deploy/kani-check/tests -v
++```
++
++These validate the classifier against synthetic, source-derived fixtures and the runner against stub
++subprocesses. They are fixture validation only: the Docker image build and live Kani/CBMC runs have not
++been performed, and prior Percolator proofs and buyer fixtures are not claimed as Covenant authorship.
+diff --git a/deploy/kani-check/runner.py b/deploy/kani-check/runner.py
+new file mode 100644
+index 0000000..f1b17ab
+--- /dev/null
++++ b/deploy/kani-check/runner.py
+@@ -0,0 +1,709 @@
++#!/usr/bin/env python3
++"""Covenant Kani verifier runner (Python standard library only).
++
++Validates a covenant.kani.plan.v1 plan, runs the pinned cargo-kani with a fixed
++argv inside a sanitized environment, captures raw evidence as files and
++classifies the Kani 0.68.0 JSON export fail-closed into
++covenant.kani.result.v1. Resource limits (memory, CPU, network, mounts) are
++enforced by the outer node/Docker, not by this module.
++"""
++import hashlib
++import json
++import os
++import re
++import signal
++import stat
++import subprocess
++import sys
++import threading
++import time
++
++PLAN_SCHEMA = 'covenant.kani.plan.v1'
++RESULT_SCHEMA = 'covenant.kani.result.v1'
++CARGO_KANI = '/usr/local/cargo/bin/cargo-kani'
++KANI_VERSION = '0.68.0'
++EXPORT_VERSION = '1.0'
++TOOL_PIN = {
++    'cargo_kani': CARGO_KANI,
++    'kani': KANI_VERSION,
++    'cbmc': '6.11.0',
++    'toolchain': 'nightly-2026-08-21',
++    'rustc': 'rustc 1.100.0-nightly (8925ea358 2026-08-20)',
++}
++MAX_EVIDENCE_BYTES = 16 * 1024 * 1024
++WALL_GRACE_SECS = 300
++MAX_STR = 1024
++MAX_LIST = 64
++MAX_UNWIND = 1000000
++EXPORT_NAME = 'kani-export.json'
++ARTIFACT_NAMES = ('stdout.log', 'stderr.log', EXPORT_NAME)
++OUTCOMES = ('proven', 'refuted', 'timeout', 'out_of_memory', 'tool_error', 'inconclusive')
++
++PLAN_KEYS = {'schema', 'harness', 'manifest_path', 'features', 'tests', 'timeout_secs',
++             'unwind', 'expected_outcome', 'expected_assertion', 'required_covers'}
++HARNESS_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*(::[A-Za-z_][A-Za-z0-9_]*)*$')
++FEATURE_RE = re.compile(r'^[A-Za-z0-9_][A-Za-z0-9_.+-]{0,63}$')
++PATH_RE = re.compile(r'^[A-Za-z0-9_][A-Za-z0-9_.-]*(/[A-Za-z0-9_][A-Za-z0-9_.-]*)*$')
++
++UNSAFE_ENV = re.compile(r'^(RUSTC.*|RUSTDOC.*|RUSTFLAGS|CARGO_ENCODED_RUSTFLAGS|CARGO_BUILD_RUSTC.*|'
++                        r'CARGO_BUILD_RUSTDOC.*|CARGO_BUILD_RUSTFLAGS|CARGO_TARGET_.*|CARGO_BUILD_TARGET_DIR|'
++                        r'CARGO_ALIAS_.*|CARGO_BUILD_JOBS|KANI_.*|CBMC.*)$')
++UNSAFE_KANI_FLAGS = {'only-codegen', 'prove-safety-only', 'ignore-global-asm', 'cbmc-args',
++                     'no-assert-contracts', 'no-codegen', 'no-assertion-reach-checks'}
++
++
++def _is_int(v):
++    return isinstance(v, int) and not isinstance(v, bool)
++
++
++def _safe_str(v, name, allow_empty=False):
++    if not isinstance(v, str):
++        raise ValueError('%s must be a string' % name)
++    if len(v) > MAX_STR or '\x00' in v:
++        raise ValueError('%s too long or contains NUL' % name)
++    if not v and not allow_empty:
++        raise ValueError('%s must be nonempty' % name)
++    return v
++
++
++def _str_list(v, name):
++    if not isinstance(v, list) or len(v) > MAX_LIST:
++        raise ValueError('%s must be a list of at most %d items' % (name, MAX_LIST))
++    return v
++
++
++def validate_plan(plan):
++    if not isinstance(plan, dict):
++        raise ValueError('plan must be an object')
++    extra = set(plan) - PLAN_KEYS
++    missing = PLAN_KEYS - set(plan)
++    if extra:
++        raise ValueError('unknown plan keys: %s' % sorted(map(str, extra)))
++    if missing:
++        raise ValueError('missing plan keys: %s' % sorted(missing))
++    if plan['schema'] != PLAN_SCHEMA:
++        raise ValueError('bad plan schema')
++    h = _safe_str(plan['harness'], 'harness')
++    if len(h) > 256 or not HARNESS_RE.match(h):
++        raise ValueError('invalid harness name')
++    m = _safe_str(plan['manifest_path'], 'manifest_path')
++    if len(m) > 256 or not PATH_RE.match(m) or any(p in ('.', '..') for p in m.split('/')):
++        raise ValueError('manifest_path must be a relative safe path')
++    if m.split('/')[-1] != 'Cargo.toml':
++        raise ValueError('manifest_path must end in Cargo.toml')
++    feats = _str_list(plan['features'], 'features')
++    for f in feats:
++        if not isinstance(f, str) or not FEATURE_RE.match(f):
++            raise ValueError('invalid feature name')
++    if len(set(feats)) != len(feats):
++        raise ValueError('duplicate features')
++    if not isinstance(plan['tests'], bool):
++        raise ValueError('tests must be bool')
++    t = plan['timeout_secs']
++    if not _is_int(t) or not 1 <= t <= 7200:
++        raise ValueError('timeout_secs must be an integer in 1..7200')
++    u = plan['unwind']
++    if u is not None and (not _is_int(u) or not 1 <= u <= MAX_UNWIND):
++        raise ValueError('unwind must be null or a positive integer')
++    covers = _str_list(plan['required_covers'], 'required_covers')
++    for c in covers:
++        _safe_str(c, 'required cover')
++    if len(set(covers)) != len(covers):
++        raise ValueError('duplicate required_covers')
++    outcome = plan['expected_outcome']
++    if outcome == 'proven':
++        if plan['expected_assertion'] is not None:
++            raise ValueError('expected_assertion must be null for proven')
++        if not covers:
++            raise ValueError('proven plan requires nonempty required_covers')
++    elif outcome == 'refuted':
++        _safe_str(plan['expected_assertion'], 'expected_assertion')
++    else:
++        raise ValueError('expected_outcome must be proven or refuted')
++    return plan
++
++
++def build_command(plan, export_path):
++    validate_plan(plan)
++    if not isinstance(export_path, str) or not os.path.isabs(export_path) or '\x00' in export_path:
++        raise ValueError('export_path must be an absolute path')
++    argv = [CARGO_KANI, 'kani', '-Z', 'unstable-options', '--exact',
++            '--harness', plan['harness'],
++            '--export-json', export_path,
++            '--manifest-path', plan['manifest_path'],
++            '--output-format', 'regular',
++            '--harness-timeout', '%ds' % plan['timeout_secs']]
++    if plan['features']:
++        argv += ['--features', ','.join(plan['features'])]
++    if plan['tests']:
++        argv.append('--tests')
++    if plan['unwind'] is not None:
++        argv += ['--unwind', str(plan['unwind'])]
++    return argv
++
++
++# ---------------------------------------------------------------- classifier
++
++class _Verdict(Exception):
++    def __init__(self, outcome, reason):
++        Exception.__init__(self, reason)
++        self.outcome = outcome
++        self.reason = reason
++
++
++def _fail(outcome, reason):
++    raise _Verdict(outcome, reason)
++
++
++def _result(plan, outcome, reason):
++    harness = plan.get('harness') if isinstance(plan, dict) else None
++    expected = plan.get('expected_outcome') if isinstance(plan, dict) else None
++    return {'schema': RESULT_SCHEMA,
++            'harness': harness if isinstance(harness, str) else '',
++            'outcome': outcome,
++            'accepted': bool(outcome == expected and outcome in ('proven', 'refuted')),
++            'reason': reason or 'no reason'}
++
++
++def _one(records, key, harness, what):
++    if not isinstance(records, list):
++        _fail('tool_error', '%s is not a list' % what)
++    if len(records) != 1:
++        _fail('tool_error', '%s must contain exactly one record, found %d' % (what, len(records)))
++    rec = records[0]
++    if not isinstance(rec, dict) or rec.get(key) != harness:
++        _fail('tool_error', '%s record does not match harness' % what)
++    return rec
++
++
++COUNTER_STATUS = {'Success': 'passed', 'Failure': 'failed', 'Unreachable': 'unreachable',
++                  'Undetermined': 'undetermined', 'Unknown': 'undetermined', 'Error': 'solver_error',
++                  'Satisfied': 'satisfied', 'Unsatisfiable': 'unsatisfiable',
++                  'Covered': 'covered', 'Uncovered': 'uncovered'}
++COUNTER_KEYS = ('passed', 'failed', 'unreachable', 'undetermined', 'solver_error', 'satisfied',
++                'unsatisfiable', 'covered', 'uncovered', 'total_properties')
++
++
++def _classify(plan, document, execution):
++    try:
++        validate_plan(plan)
++    except ValueError as e:
++        _fail('tool_error', 'invalid plan: %s' % e)
++    if not isinstance(execution, dict) or not _is_int(execution.get('returncode')) \
++            or not isinstance(execution.get('timed_out'), bool) \
++            or not isinstance(execution.get('oom_killed'), bool):
++        _fail('tool_error', 'invalid execution record')
++    rc = execution['returncode']
++    if execution['timed_out']:
++        _fail('timeout', 'outer timeout expired')
++    if execution['oom_killed']:
++        _fail('out_of_memory', 'outer node reported OOM kill')
++    if rc < 0:
++        _fail('tool_error', 'process terminated by signal %d without OOM evidence' % -rc)
++    if not isinstance(document, dict):
++        _fail('tool_error', 'export is not a JSON object')
++    harness = plan['harness']
++    meta = document.get('metadata')
++    if not isinstance(meta, dict) or meta.get('version') != EXPORT_VERSION:
++        _fail('tool_error', 'unsupported export metadata version')
++    if meta.get('kani_version') != KANI_VERSION:
++        _fail('tool_error', 'unexpected Kani version')
++    hmeta = _one(document.get('harness_metadata'), 'pretty_name', harness, 'harness_metadata')
++    vr = document.get('verification_results')
++    if not isinstance(vr, dict):
++        _fail('tool_error', 'verification_results missing')
++    res = _one(vr.get('results'), 'harness_id', harness, 'results')
++    errd = _one(document.get('error_details'), 'harness_id', harness, 'error_details')
++    prop = _one(document.get('property_details'), 'harness_id', harness, 'property_details')
++    summ = vr.get('summary')
++    if not isinstance(summ, dict):
++        _fail('tool_error', 'summary missing')
++    for k in ('total_harnesses', 'executed', 'successful', 'failed'):
++        if not _is_int(summ.get(k)):
++            _fail('tool_error', 'summary.%s is not an integer' % k)
++    if summ['total_harnesses'] != 1 or summ['executed'] != 1 \
++            or summ['successful'] + summ['failed'] != 1:
++        _fail('tool_error', 'summary counters inconsistent with one executed harness')
++    rstatus = res.get('status')
++    if rstatus not in ('Success', 'Failure'):
++        _fail('tool_error', 'unknown result status')
++    if (summ['successful'] == 1) != (rstatus == 'Success'):
++        _fail('tool_error', 'summary disagrees with result status')
++    if summ.get('status') != 'completed':
++        _fail('inconclusive', 'summary status is %r, not completed' % (summ.get('status'),))
++    has_errors = errd.get('has_errors')
++    if not isinstance(has_errors, bool):
++        _fail('tool_error', 'error_details.has_errors is not bool')
++    exit_status = errd.get('exit_status')
++    if has_errors and exit_status == 'timeout':
++        _fail('timeout', 'CBMC reported timeout in error_details')
++    if has_errors and exit_status == 'out_of_memory':
++        _fail('out_of_memory', 'CBMC reported out of memory in error_details')
++    attrs = hmeta.get('attributes')
++    if not isinstance(attrs, dict) or not isinstance(attrs.get('should_panic'), bool):
++        _fail('tool_error', 'harness attributes.should_panic missing')
++    if attrs['should_panic']:
++        _fail('inconclusive', 'should_panic harness cannot be proven or refuted here')
++    checks = res.get('checks')
++    if not isinstance(checks, list):
++        _fail('tool_error', 'checks is not a list')
++    seen_ids = set()
++    counts = dict.fromkeys(COUNTER_KEYS, 0)
++    for c in checks:
++        if not isinstance(c, dict) or not isinstance(c.get('description'), str) \
++                or not isinstance(c.get('category'), str):
++            _fail('tool_error', 'malformed check')
++        if c.get('status') not in COUNTER_STATUS:
++            _fail('tool_error', 'unrecognized check status %r' % (c.get('status'),))
++        cid = c.get('id')
++        if not _is_int(cid) or cid in seen_ids:
++            _fail('tool_error', 'missing or duplicate check id')
++        seen_ids.add(cid)
++        counts[COUNTER_STATUS[c['status']]] += 1
++        counts['total_properties'] += 1
++    pd = prop.get('property_details')
++    if not isinstance(pd, dict):
++        _fail('tool_error', 'property_details missing')
++    for k in COUNTER_KEYS:
++        if not _is_int(pd.get(k)):
++            _fail('tool_error', 'property counter %s missing or not an integer' % k)
++        if pd[k] != counts[k]:
++            _fail('tool_error', 'property counter %s disagrees with checks' % k)
++    if not checks:
++        _fail('inconclusive', 'no checks were reported')
++    if not any(c['category'] == 'assertion' for c in checks):
++        _fail('inconclusive', 'no assertion check was reported')
++    if counts['solver_error']:
++        _fail('tool_error', 'solver error reported by property')
++    noncover = [c for c in checks if c['category'] != 'cover']
++    covers = [c for c in checks if c['category'] == 'cover']
++    required = plan['required_covers']
++
++    # consistency with the process exit code
++    if rstatus == 'Success' and rc != 0:
++        _fail('tool_error', 'Success report with nonzero exit code %d' % rc)
++    if rstatus == 'Failure' and rc == 0:
++        _fail('tool_error', 'Failure report with zero exit code')
++
++    if any(c['status'] in ('Undetermined', 'Unknown') for c in noncover):
++        _fail('inconclusive', 'undetermined property')
++    fails = [c for c in checks if c['status'] == 'Failure']
++    if rstatus == 'Failure' or fails:
++        if rstatus != 'Failure' or not fails or not has_errors:
++            _fail('tool_error', 'failure evidence inconsistent')
++        if any(c['category'] == 'unwind' or c['description'].startswith('unwinding assertion')
++               for c in fails):
++            _fail('inconclusive', 'unwinding assertion failed')
++        expected = plan['expected_assertion']
++        if expected is None:
++            _fail('inconclusive', 'failure observed but plan has no expected assertion')
++        if errd.get('error_type') != 'assertion_failure' \
++                or errd.get('failed_properties_type') != 'PanicsOnly' \
++                or exit_status != 'properties_failed':
++            _fail('inconclusive', 'failure is not an assertion/PanicsOnly/properties_failed counterexample')
++        if any(c['category'] != 'assertion' or c['description'] != expected for c in fails):
++            _fail('inconclusive', 'failing property is not the expected assertion')
++        return 'refuted', 'expected assertion failed with a completed counterexample'
++
++    # success path
++    if has_errors:
++        _fail('tool_error', 'has_errors set on a successful report')
++    all_covered = bool(required)
++    for desc in required:
++        matches = [c for c in covers if c['description'] == desc]
++        if len(matches) > 1:
++            _fail('tool_error', 'required cover appears more than once: %s' % desc)
++        if not matches:
++            _fail('inconclusive', 'required cover missing: %s' % desc)
++        if matches[0]['status'] != 'Satisfied':
++            _fail('inconclusive', 'required cover not satisfied: %s' % desc)
++    if not any(c['category'] == 'assertion' and c['status'] == 'Success' for c in checks):
++        _fail('inconclusive', 'no reachable successful assertion')
++    for c in noncover:
++        if c['status'] == 'Success':
++            continue
++        if c['status'] == 'Unreachable' and all_covered:
++            continue
++        _fail('inconclusive', 'property %r has status %s' % (c['description'], c['status']))
++    return 'proven', 'all properties verified and required covers satisfied'
++
++
++def classify(plan, document, execution):
++    try:
++        outcome, reason = _classify(plan, document, execution)
++    except _Verdict as v:
++        outcome, reason = v.outcome, v.reason
++    except Exception as e:  # fail closed
++        outcome, reason = 'tool_error', 'classifier error: %s' % type(e).__name__
++    return _result(plan, outcome, reason)
++
++
++# ------------------------------------------------------------ input checking
++
++def _pairs_hook(pairs):
++    d = {}
++    for k, v in pairs:
++        if k in d:
++            raise ValueError('duplicate JSON key %r' % k)
++        d[k] = v
++    return d
++
++
++def _no_const(name):
++    raise ValueError('invalid JSON constant %s' % name)
++
++
++def parse_json_strict(data):
++    if isinstance(data, bytes):
++        data = data.decode('utf-8')
++    return json.loads(data, object_pairs_hook=_pairs_hook, parse_constant=_no_const)
++
++
++def check_environment(environ):
++    bad = sorted(k for k in environ if UNSAFE_ENV.match(k))
++    if bad:
++        raise ValueError('unsafe environment variables: %s' % bad)
++
++
++def _inside(root, path):
++    return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
++
++
++def resolve_manifest(plan, workdir):
++    root = os.path.realpath(workdir)
++    path = os.path.realpath(os.path.join(root, plan['manifest_path']))
++    if not _inside(root, path):
++        raise ValueError('manifest resolves outside workdir')
++    if not os.path.isfile(path):
++        raise ValueError('manifest is not a regular file')
++    return root, path
++
++
++def _check_flags(table, where):
++    if not isinstance(table, dict):
++        raise ValueError('%s must be a table' % where)
++    for key in table:
++        norm = str(key).replace('_', '-')
++        if norm in UNSAFE_KANI_FLAGS or norm.startswith('no-'):
++            raise ValueError('unsafe Kani flag %r in %s' % (key, where))
++    return True
++
++
++def check_manifest_file(path):
++    import tomllib
++    with open(path, 'rb') as f:
++        try:
++            doc = tomllib.load(f)
++        except Exception as e:
++            raise ValueError('cannot parse %s: %s' % (path, e))
++    for sect in ('package', 'workspace'):
++        s = doc.get(sect)
++        if not isinstance(s, dict):
++            continue
++        kani = (s.get('metadata') or {}).get('kani') if isinstance(s.get('metadata'), dict) else None
++        if kani is None:
++            continue
++        if not isinstance(kani, dict):
++            raise ValueError('%s.metadata.kani must be a table' % sect)
++        if 'flags' in kani:
++            _check_flags(kani['flags'], '%s.metadata.kani.flags' % sect)
++
++
++def scan_workdir(workdir, manifest, limit=20000):
++    """Reject Cargo configs and unsafe Kani manifest flags anywhere in workdir."""
++    root = os.path.realpath(workdir)
++    # ancestors of the manifest inside workdir
++    d = os.path.dirname(manifest)
++    while True:
++        for name in ('config', 'config.toml'):
++            if os.path.lexists(os.path.join(d, '.cargo', name)):
++                raise ValueError('cargo config present: %s' % os.path.join(d, '.cargo', name))
++        if d == root:
++            break
++        d = os.path.dirname(d)
++    count = 0
++    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
++        dirnames[:] = [x for x in dirnames if x not in ('.git', 'target')]
++        count += len(dirnames) + len(filenames)
++        if count > limit:
++            raise ValueError('workdir too large to scan')
++        if os.path.basename(dirpath) == '.cargo':
++            for name in filenames + dirnames:
++                if name in ('config', 'config.toml'):
++                    raise ValueError('cargo config present: %s' % os.path.join(dirpath, name))
++        for name in filenames:
++            if name == 'Cargo.toml':
++                full = os.path.join(dirpath, name)
++                if os.path.islink(full):
++                    raise ValueError('symlinked manifest: %s' % full)
++                check_manifest_file(full)
++    check_manifest_file(manifest)
++
++
++# ---------------------------------------------------------------- execution
++
++def sanitized_env(scratch, cargo_home=None):
++    target = os.path.join(scratch, 'target')
++    tmp = os.path.join(scratch, 'tmp')
++    os.makedirs(target, exist_ok=True)
++    os.makedirs(tmp, exist_ok=True)
++    if cargo_home is None:
++        cargo_home = '/deps/cargo' if os.path.isdir('/deps/cargo') else os.path.join(scratch, 'cargo')
++    return {
++        'PATH': '/usr/local/cargo/bin:/usr/local/bin:/usr/bin:/bin',
++        'HOME': '/tmp',
++        'RUSTUP_HOME': '/usr/local/rustup',
++        'KANI_HOME': '/opt/kani',
++        'CARGO_HOME': cargo_home,
++        'CARGO_TARGET_DIR': target,
++        'TMPDIR': tmp,
++        'CARGO_NET_OFFLINE': 'true',
++        'CARGO_TERM_COLOR': 'never',
++        'NO_COLOR': '1',
++        'LANG': 'C.UTF-8',
++    }
++
++
++def _prepare_outdir(outdir):
++    if os.path.islink(outdir) or not os.path.isdir(outdir):
++        raise ValueError('outdir must be an existing real directory')
++    for name in ARTIFACT_NAMES + ('result.json',):
++        p = os.path.join(outdir, name)
++        if os.path.lexists(p):
++            if os.path.isdir(p) and not os.path.islink(p):
++                raise ValueError('evidence path is a directory: %s' % name)
++            os.unlink(p)
++
++
++def _open_new(path):
++    return os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
++
++
++class _Budget:
++    def __init__(self, limit):
++        self.limit = limit
++        self.used = 0
++        self.overflow = False
++        self.lock = threading.Lock()
++
++    def take(self, n):
++        with self.lock:
++            if self.used + n > self.limit:
++                self.overflow = True
++                return False
++            self.used += n
++            return True
++
++
++def _pump(fd, out_fd, budget, stop):
++    try:
++        while True:
++            chunk = os.read(fd, 65536)
++            if not chunk:
++                return
++            if not budget.take(len(chunk)):
++                stop.set()
++                return
++            view = memoryview(chunk)
++            while view:
++                n = os.write(out_fd, view)
++                view = view[n:]
++    except OSError:
++        pass
++
++
++def _killpg(pgid):
++    try:
++        os.killpg(pgid, signal.SIGKILL)
++    except (ProcessLookupError, PermissionError):
++        pass
++
++
++def execute(argv, cwd, env, outdir, wall_timeout, max_bytes=MAX_EVIDENCE_BYTES):
++    """Run argv in its own process group with bounded capture.
++
++    Returns dict(returncode, timed_out, oom_killed, overflow)."""
++    budget = _Budget(max_bytes)
++    stop = threading.Event()
++    out_fd = _open_new(os.path.join(outdir, 'stdout.log'))
++    err_fd = _open_new(os.path.join(outdir, 'stderr.log'))
++    try:
++        proc = subprocess.Popen(argv, cwd=cwd, env=env, shell=False, stdin=subprocess.DEVNULL,
++                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
++                                start_new_session=True, close_fds=True)
++    except OSError as e:
++        os.write(err_fd, ('failed to start: %s\n' % e).encode())
++        os.close(out_fd)
++        os.close(err_fd)
++        return {'returncode': 127, 'timed_out': False, 'oom_killed': False, 'overflow': False}
++    pgid = proc.pid
++    threads = [threading.Thread(target=_pump, args=(proc.stdout.fileno(), out_fd, budget, stop), daemon=True),
++               threading.Thread(target=_pump, args=(proc.stderr.fileno(), err_fd, budget, stop), daemon=True)]
++    for t in threads:
++        t.start()
++    deadline = time.monotonic() + wall_timeout
++    timed_out = False
++    while True:
++        if proc.poll() is not None:
++            break
++        if stop.is_set():
++            break
++        if time.monotonic() >= deadline:
++            timed_out = True
++            break
++        time.sleep(0.02)
++    if proc.poll() is None:
++        _killpg(pgid)
++    rc = proc.wait()
++    _killpg(pgid)  # reap any descendants still in the group
++    for t in threads:
++        t.join(5)
++    proc.stdout.close()
++    proc.stderr.close()
++    os.close(out_fd)
++    os.close(err_fd)
++    return {'returncode': rc, 'timed_out': timed_out, 'oom_killed': False,
++            'overflow': budget.overflow, 'used': budget.used}
++
++
++def _read_regular(path, limit):
++    """Read a regular, non-symlink file without following links; None if absent."""
++    try:
++        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
++    except FileNotFoundError:
++        return None
++    with os.fdopen(fd, 'rb') as f:
++        st = os.fstat(f.fileno())
++        if not stat.S_ISREG(st.st_mode):
++            raise ValueError('not a regular file')
++        if st.st_size > limit:
++            raise OverflowError('too large')
++        data = f.read(limit + 1)
++        if len(data) > limit:
++            raise OverflowError('too large')
++        return data
++
++
++def _hash_file(path):
++    """Stream-hash the original bytes of a regular, non-symlink file."""
++    try:
++        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
++    except FileNotFoundError:
++        return None
++    h = hashlib.sha256()
++    total = 0
++    with os.fdopen(fd, 'rb') as f:
++        if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
++            raise ValueError('not a regular file')
++        for chunk in iter(lambda: f.read(1 << 20), b''):
++            h.update(chunk)
++            total += len(chunk)
++    return {'bytes': total, 'sha256': h.hexdigest()}
++
++
++def run_job(plan, workdir, outdir, scratch='/scratch', wall_timeout=None,
++            max_bytes=MAX_EVIDENCE_BYTES, argv_fn=None, environ=None):
++    """Run one job and return the result dict (also written to outdir/result.json)."""
++    start = time.monotonic()
++    argv = []
++    execution = {'returncode': -1, 'timed_out': False, 'oom_killed': False}
++    export = None
++    overflow = False
++    try:
++        validate_plan(plan)
++        check_environment(os.environ if environ is None else environ)
++        _prepare_outdir(outdir)
++        root, manifest = resolve_manifest(plan, workdir)
++        scan_workdir(root, manifest)
++        env = sanitized_env(scratch)
++        outdir_abs = os.path.realpath(outdir)
++        export_path = os.path.join(outdir_abs, EXPORT_NAME)
++        argv = (argv_fn or build_command)(plan, export_path)
++        if wall_timeout is None:
++            wall_timeout = plan['timeout_secs'] + WALL_GRACE_SECS
++        ex = execute(argv, root, env, outdir_abs, wall_timeout, max_bytes)
++        overflow = ex['overflow']
++        execution = {k: ex[k] for k in ('returncode', 'timed_out', 'oom_killed')}
++        used = ex.get('used', 0)
++        document = None
++        if not overflow:
++            try:
++                export = _read_regular(export_path, max_bytes - used)
++            except OverflowError:
++                overflow = True
++            except ValueError as e:
++                raise _Verdict('tool_error', 'unsafe export file: %s' % e)
++        if overflow:
++            result = _result(plan, 'tool_error', 'raw evidence exceeded %d bytes' % max_bytes)
++        else:
++            try:
++                document = parse_json_strict(export) if export is not None else None
++            except (ValueError, RecursionError) as e:
++                document = None
++                if not (execution['timed_out'] or execution['oom_killed']):
++                    result = _result(plan, 'tool_error', 'export is not valid JSON: %s' % e)
++                    document = False
++            if document is not False:
++                result = classify(plan, document, execution)
++    except _Verdict as v:
++        result = _result(plan, v.outcome, v.reason)
++    except (ValueError, OSError) as e:
++        result = _result(plan, 'tool_error', 'rejected: %s' % e)
++    artifacts = []
++    for name in ARTIFACT_NAMES:
++        try:
++            entry = _hash_file(os.path.join(outdir, name))
++        except (ValueError, OSError):
++            entry = None
++        if entry:
++            artifacts.append(dict(entry, name=name))
++    report = dict(result)
++    report.update({
++        'argv': argv,
++        'tool': dict(TOOL_PIN),
++        'duration_ms': int((time.monotonic() - start) * 1000),
++        'exit_code': execution['returncode'],
++        'timed_out': execution['timed_out'],
++        'oom_killed': execution['oom_killed'],
++        'evidence_overflow': overflow,
++        'artifacts': artifacts,
++    })
++    try:
++        fd = _open_new(os.path.join(outdir, 'result.json'))
++        with os.fdopen(fd, 'w') as f:
++            json.dump(report, f, sort_keys=True)
++    except OSError as e:
++        print('cannot write result.json: %s' % e, file=sys.stderr)
++    return report
++
++
++def main(argv=None):
++    import argparse
++    p = argparse.ArgumentParser(prog='runner.py')
++    sub = p.add_subparsers(dest='cmd', required=True)
++    r = sub.add_parser('run')
++    r.add_argument('--plan', required=True)
++    r.add_argument('--workdir', required=True)
++    r.add_argument('--outdir', required=True)
++    r.add_argument('--scratch', default='/scratch')
++    args = p.parse_args(argv)
++    try:
++        with open(args.plan, 'rb') as f:
++            plan = parse_json_strict(f.read(1 << 20))
++        validate_plan(plan)
++    except (OSError, ValueError) as e:
++        print('invalid plan: %s' % e, file=sys.stderr)
++        report = {'schema': RESULT_SCHEMA, 'harness': '', 'outcome': 'tool_error', 'accepted': False,
++                  'reason': 'invalid plan: %s' % e, 'argv': [], 'tool': dict(TOOL_PIN), 'duration_ms': 0,
++                  'exit_code': -1, 'timed_out': False, 'oom_killed': False, 'artifacts': []}
++        sys.stdout.write(json.dumps(report, sort_keys=True) + '\n')
++        return 2
++    report = run_job(plan, args.workdir, args.outdir, scratch=args.scratch)
++    print('outcome=%s accepted=%s: %s' % (report['outcome'], report['accepted'], report['reason']),
++          file=sys.stderr)
++    sys.stdout.write(json.dumps(report, sort_keys=True) + '\n')
++    return 0 if report['accepted'] else 1
++
++
++if __name__ == '__main__':
++    sys.exit(main())
+diff --git a/deploy/kani-check/tests/test_runner.py b/deploy/kani-check/tests/test_runner.py
+new file mode 100644
+index 0000000..6f92af6
+--- /dev/null
++++ b/deploy/kani-check/tests/test_runner.py
+@@ -0,0 +1,359 @@
++import copy
++import hashlib
++import importlib.util
++import json
++import os
++import shutil
++import stat
++import sys
++import tempfile
++import unittest
++from pathlib import Path
++
++HERE = Path(__file__).resolve().parent
++spec = importlib.util.spec_from_file_location('kani_runner_under_test', HERE.parent / 'runner.py')
++runner = importlib.util.module_from_spec(spec)
++spec.loader.exec_module(runner)
++
++PLAN = {
++    'schema': 'covenant.kani.plan.v1', 'harness': 'proofs::route_proof', 'manifest_path': 'Cargo.toml',
++    'tests': False, 'features': ['fuzz'], 'timeout_secs': 60, 'unwind': None,
++    'expected_outcome': 'proven', 'expected_assertion': None,
++    'required_covers': ['cover condition: route reachable'],
++}
++OK = {'returncode': 0, 'timed_out': False, 'oom_killed': False}
++H = PLAN['harness']
++
++
++def chk(i, status, desc, cat):
++    return {'id': i, 'function': H, 'status': status, 'description': desc, 'category': cat,
++            'location': {'file': 'a.rs', 'line': '1', 'column': '1'}}
++
++
++def doc(checks=None, status='Success', **over):
++    checks = checks if checks is not None else [
++        chk(1, 'Success', 'assertion failed: x', 'assertion'),
++        chk(2, 'Satisfied', 'cover condition: route reachable', 'cover')]
++    counts = {k: 0 for k in runner.COUNTER_KEYS}
++    for c in checks:
++        counts[runner.COUNTER_STATUS[c['status']]] += 1
++        counts['total_properties'] += 1
++    ok = status == 'Success'
++    d = {'metadata': {'version': '1.0', 'kani_version': '0.68.0', 'extra': 1},
++         'harness_metadata': [{'pretty_name': H, 'attributes': {'should_panic': False}}],
++         'verification_results': {'summary': {'total_harnesses': 1, 'executed': 1, 'status': 'completed',
++                                              'successful': int(ok), 'failed': int(not ok)},
++                                  'results': [{'harness_id': H, 'status': status, 'checks': checks}]},
++         'error_details': [{'harness_id': H, 'has_errors': not ok}],
++         'property_details': [{'harness_id': H, 'property_details': counts}]}
++    d.update(over)
++    return d
++
++
++class Classify(unittest.TestCase):
++    def test_proven(self):
++        r = runner.classify(PLAN, doc(), OK)
++        self.assertEqual((r['outcome'], r['accepted']), ('proven', True))
++
++    def test_outer_flags_override(self):
++        self.assertEqual(runner.classify(PLAN, doc(), dict(OK, timed_out=True))['outcome'], 'timeout')
++        self.assertEqual(runner.classify(PLAN, doc(), dict(OK, oom_killed=True))['outcome'], 'out_of_memory')
++        self.assertEqual(runner.classify(PLAN, doc(), dict(OK, returncode=-9))['outcome'], 'tool_error')
++        self.assertEqual(runner.classify(PLAN, doc(), dict(OK, returncode=137))['outcome'], 'tool_error')
++
++    def test_bad_execution(self):
++        for ex in [None, {}, dict(OK, returncode=True), dict(OK, timed_out=0)]:
++            self.assertEqual(runner.classify(PLAN, doc(), ex)['outcome'], 'tool_error')
++
++    def test_invalid_plan_fails_closed(self):
++        r = runner.classify({}, doc(), OK)
++        self.assertEqual((r['outcome'], r['accepted']), ('tool_error', False))
++
++    def refuted_plan(self):
++        return dict(PLAN, expected_outcome='refuted', expected_assertion='assertion failed: x')
++
++    def refuted_doc(self, desc='assertion failed: x', cat='assertion', etype='assertion_failure'):
++        d = doc([chk(1, 'Failure', desc, cat)], status='Failure')
++        d['error_details'][0].update(error_type=etype, failed_properties_type='PanicsOnly',
++                                     exit_status='properties_failed')
++        return d
++
++    def test_refuted(self):
++        ex = dict(OK, returncode=1)
++        r = runner.classify(self.refuted_plan(), self.refuted_doc(), ex)
++        self.assertEqual((r['outcome'], r['accepted']), ('refuted', True))
++        self.assertEqual(runner.classify(self.refuted_plan(), self.refuted_doc('other'), ex)['outcome'],
++                         'inconclusive')
++        # exit code zero with a failure report is inconsistent
++        self.assertEqual(runner.classify(self.refuted_plan(), self.refuted_doc(), OK)['outcome'], 'tool_error')
++        # a proven plan is never accepted on a counterexample
++        self.assertFalse(runner.classify(PLAN, self.refuted_doc(), ex)['accepted'])
++
++    def test_refuted_plan_with_proof_not_accepted(self):
++        r = runner.classify(self.refuted_plan(), doc(), OK)
++        self.assertEqual((r['outcome'], r['accepted']), ('proven', False))
++
++    def test_nonzero_exit_with_success_doc(self):
++        self.assertEqual(runner.classify(PLAN, doc(), dict(OK, returncode=1))['outcome'], 'tool_error')
++
++    def test_duplicate_and_mismatched_records(self):
++        d = doc()
++        d['property_details'].append(copy.deepcopy(d['property_details'][0]))
++        self.assertEqual(runner.classify(PLAN, d, OK)['outcome'], 'tool_error')
++        d = doc()
++        d['harness_metadata'][0]['pretty_name'] = 'other'
++        self.assertEqual(runner.classify(PLAN, d, OK)['outcome'], 'tool_error')
++        d = doc()
++        d['error_details'] = []
++        self.assertEqual(runner.classify(PLAN, d, OK)['outcome'], 'tool_error')
++
++    def test_counter_inconsistency_and_null(self):
++        d = doc()
++        d['property_details'][0]['property_details']['passed'] = 5
++        self.assertEqual(runner.classify(PLAN, d, OK)['outcome'], 'tool_error')
++        d = doc()
++        d['property_details'][0]['property_details']['total_properties'] = None
++        self.assertEqual(runner.classify(PLAN, d, OK)['outcome'], 'tool_error')
++
++    def test_unknown_status_is_tool_error(self):
++        d = doc()
++        d['verification_results']['results'][0]['checks'][0]['status'] = 'Weird'
++        self.assertEqual(runner.classify(PLAN, d, OK)['outcome'], 'tool_error')
++
++    def test_duplicate_required_cover(self):
++        checks = [chk(1, 'Success', 'a', 'assertion'), chk(2, 'Satisfied', 'cover condition: route reachable', 'cover'),
++                  chk(3, 'Satisfied', 'cover condition: route reachable', 'cover')]
++        self.assertEqual(runner.classify(PLAN, doc(checks), OK)['outcome'], 'tool_error')
++
++    def test_unrequired_cover_may_be_unsatisfiable(self):
++        checks = [chk(1, 'Success', 'a', 'assertion'), chk(2, 'Satisfied', 'cover condition: route reachable', 'cover'),
++                  chk(3, 'Unsatisfiable', 'other cover', 'cover')]
++        self.assertEqual(runner.classify(PLAN, doc(checks), OK)['outcome'], 'proven')
++
++    def test_no_assertion_is_inconclusive(self):
++        checks = [chk(1, 'Success', 'u', 'unwind'), chk(2, 'Satisfied', 'cover condition: route reachable', 'cover')]
++        self.assertEqual(runner.classify(PLAN, doc(checks), OK)['outcome'], 'inconclusive')
++
++    def test_unreachable_other_property_needs_covers(self):
++        checks = [chk(1, 'Success', 'a', 'assertion'), chk(2, 'Unreachable', 'b', 'assertion'),
++                  chk(3, 'Satisfied', 'cover condition: route reachable', 'cover')]
++        self.assertEqual(runner.classify(PLAN, doc(checks), OK)['outcome'], 'proven')
++        rp = dict(PLAN, expected_outcome='refuted', expected_assertion='z', required_covers=[])
++        self.assertEqual(runner.classify(rp, doc(checks), OK)['outcome'], 'inconclusive')
++
++    def test_summary_partial(self):
++        d = doc()
++        d['verification_results']['summary']['status'] = 'completed_with_fail_fast'
++        self.assertEqual(runner.classify(PLAN, d, OK)['outcome'], 'inconclusive')
++
++    def test_malformed_documents(self):
++        for raw in [None, 3, [], {}, {'metadata': {}}, {'verification_results': None}]:
++            self.assertEqual(runner.classify(PLAN, raw, OK)['outcome'], 'tool_error')
++
++    def test_solver_error_tool_error(self):
++        checks = [chk(1, 'Error', 'a', 'assertion'), chk(2, 'Satisfied', 'cover condition: route reachable', 'cover')]
++        self.assertEqual(runner.classify(PLAN, doc(checks), OK)['outcome'], 'tool_error')
++
++
++class PlanAndCommand(unittest.TestCase):
++    def bad(self, **kw):
++        with self.assertRaises(ValueError):
++            runner.validate_plan(dict(PLAN, **kw))
++
++    def test_rejections(self):
++        self.bad(extra=1)
++        self.bad(features=['a,b'])
++        self.bad(features='x')
++        self.bad(manifest_path='a/../Cargo.toml')
++        self.bad(manifest_path='a\\Cargo.toml')
++        self.bad(manifest_path='Cargo.lock')
++        self.bad(unwind=True)
++        self.bad(timeout_secs=7201)
++        self.bad(required_covers=[])
++        self.bad(required_covers=[''])
++        self.bad(required_covers=['x'] * 100)
++        self.bad(expected_assertion='x')
++        self.bad(harness='a' * 300)
++        self.bad(schema='other')
++        p = dict(PLAN)
++        del p['features']
++        with self.assertRaises(ValueError):
++            runner.validate_plan(p)
++        with self.assertRaises(ValueError):
++            runner.validate_plan(dict(PLAN, expected_outcome='refuted', expected_assertion=''))
++
++    def test_command_exact(self):
++        argv = runner.build_command(PLAN, '/e/kani-export.json')
++        self.assertEqual(argv, ['/usr/local/cargo/bin/cargo-kani', 'kani', '-Z', 'unstable-options', '--exact',
++                                '--harness', H, '--export-json', '/e/kani-export.json', '--manifest-path',
++                                'Cargo.toml', '--output-format', 'regular', '--harness-timeout', '60s',
++                                '--features', 'fuzz'])
++        argv = runner.build_command(dict(PLAN, tests=True, unwind=5, features=['a', 'b']), '/e/x.json')
++        self.assertIn('--tests', argv)
++        self.assertEqual(argv[argv.index('--unwind') + 1], '5')
++        self.assertEqual(argv[argv.index('--features') + 1], 'a,b')
++        self.assertNotIn('--jobs', argv)
++        with self.assertRaises(ValueError):
++            runner.build_command(PLAN, 'relative.json')
++
++
++class Fs(unittest.TestCase):
++    def setUp(self):
++        self.tmp = tempfile.mkdtemp()
++        self.addCleanup(shutil.rmtree, self.tmp, True)
++        self.work = os.path.join(self.tmp, 'work')
++        self.out = os.path.join(self.tmp, 'out')
++        self.scratch = os.path.join(self.tmp, 'scratch')
++        for d in (self.work, self.out, self.scratch):
++            os.mkdir(d)
++        Path(self.work, 'Cargo.toml').write_text('[package]\nname="x"\nversion="0.1.0"\n')
++
++    def stub(self, code):
++        def fn(plan, export_path):
++            return [sys.executable, '-c', code, export_path]
++        return fn
++
++    def run_job(self, code, plan=PLAN, **kw):
++        return runner.run_job(plan, self.work, self.out, scratch=self.scratch, argv_fn=self.stub(code),
++                              environ={}, **kw)
++
++
++class Execution(Fs):
++    def test_success_hashes_and_artifacts(self):
++        d = json.dumps(doc())
++        code = 'import sys;print("log text {\\"outcome\\":\\"proven\\"}");open(sys.argv[1],"w").write(%r)' % d
++        rep = self.run_job(code)
++        self.assertEqual(rep['outcome'], 'proven')
++        self.assertTrue(rep['accepted'])
++        names = [a['name'] for a in rep['artifacts']]
++        self.assertEqual(names, ['stdout.log', 'stderr.log', 'kani-export.json'])
++        for a in rep['artifacts']:
++            data = Path(self.out, a['name']).read_bytes()
++            self.assertEqual(a['bytes'], len(data))
++            self.assertEqual(a['sha256'], hashlib.sha256(data).hexdigest())
++        self.assertEqual(json.loads(Path(self.out, 'result.json').read_text())['outcome'], 'proven')
++
++    def test_offline_environment(self):
++        code = ('import os,sys,json;e=dict(os.environ);open(sys.argv[1],"w").write("{}");'
++                'print(json.dumps(e));print(os.getcwd())')
++        rep = self.run_job(code)
++        out = Path(self.out, 'stdout.log').read_text().splitlines()
++        env = json.loads(out[0])
++        self.assertEqual(env['CARGO_NET_OFFLINE'], 'true')
++        self.assertEqual(env['CARGO_TERM_COLOR'], 'never')
++        self.assertEqual(env['PATH'], '/usr/local/cargo/bin:/usr/local/bin:/usr/bin:/bin')
++        self.assertEqual(env['CARGO_TARGET_DIR'], os.path.join(self.scratch, 'target'))
++        self.assertEqual(env['TMPDIR'], os.path.join(self.scratch, 'tmp'))
++        self.assertEqual(env['KANI_HOME'], '/opt/kani')
++        self.assertEqual(env['HOME'], '/tmp')
++        self.assertTrue(os.path.isdir(env['TMPDIR']) and os.path.isdir(env['CARGO_TARGET_DIR']))
++        self.assertEqual(out[1], os.path.realpath(self.work))
++        self.assertEqual(rep['outcome'], 'tool_error')
++
++    def test_timeout_kills_group(self):
++        code = ('import subprocess,sys,time;'
++                'subprocess.Popen([sys.executable,"-c","import time;time.sleep(60)"]);time.sleep(60)')
++        rep = self.run_job(code, wall_timeout=0.5)
++        self.assertEqual(rep['outcome'], 'timeout')
++        self.assertTrue(rep['timed_out'])
++        self.assertFalse(rep['accepted'])
++
++    def test_overflow_is_tool_error(self):
++        code = 'import sys;sys.stdout.write("x"*5000000)'
++        rep = self.run_job(code, max_bytes=100000)
++        self.assertEqual(rep['outcome'], 'tool_error')
++        self.assertTrue(rep['evidence_overflow'])
++        self.assertLessEqual(os.path.getsize(os.path.join(self.out, 'stdout.log')), 100000)
++
++    def test_export_overflow(self):
++        code = 'import sys;open(sys.argv[1],"w").write("x"*5000)'
++        rep = self.run_job(code, max_bytes=1000)
++        self.assertEqual(rep['outcome'], 'tool_error')
++        self.assertTrue(rep['evidence_overflow'])
++
++    def test_stale_export_not_reused(self):
++        Path(self.out, 'kani-export.json').write_text(json.dumps(doc()))
++        rep = self.run_job('pass')
++        self.assertEqual(rep['outcome'], 'tool_error')
++        self.assertNotIn('kani-export.json', [a['name'] for a in rep['artifacts']])
++
++    def test_export_symlink_rejected(self):
++        target = os.path.join(self.tmp, 'target.json')
++        Path(target).write_text(json.dumps(doc()))
++        code = 'import os,sys;os.symlink(%r,sys.argv[1])' % target
++        rep = self.run_job(code)
++        self.assertEqual(rep['outcome'], 'tool_error')
++        self.assertFalse(rep['accepted'])
++
++    def test_invalid_json_and_duplicate_keys(self):
++        rep = self.run_job('import sys;open(sys.argv[1],"w").write(\'{"a":1,"a":2}\')')
++        self.assertEqual(rep['outcome'], 'tool_error')
++        with self.assertRaises(ValueError):
++            runner.parse_json_strict('{"a":1,"a":2}')
++        with self.assertRaises(ValueError):
++            runner.parse_json_strict('{"a":NaN}')
++
++    def test_missing_executable(self):
++        rep = runner.run_job(PLAN, self.work, self.out, scratch=self.scratch, environ={},
++                             argv_fn=lambda p, e: ['/nonexistent/cargo-kani'])
++        self.assertEqual(rep['outcome'], 'tool_error')
++
++    def test_nonzero_exit_without_export(self):
++        rep = self.run_job('import sys;sys.exit(3)')
++        self.assertEqual((rep['outcome'], rep['exit_code']), ('tool_error', 3))
++
++
++class Rejections(Fs):
++    def reject(self):
++        rep = self.run_job('open(__import__("sys").argv[1],"w").write("{}")')
++        self.assertEqual(rep['outcome'], 'tool_error')
++        self.assertIn('rejected', rep['reason'])
++        self.assertFalse(Path(self.out, 'stdout.log').exists())
++
++    def test_cargo_config(self):
++        os.mkdir(os.path.join(self.work, '.cargo'))
++        Path(self.work, '.cargo', 'config.toml').write_text('[build]\nrustc-wrapper="x"\n')
++        self.reject()
++
++    def test_unsafe_flags(self):
++        for sect in ('package', 'workspace'):
++            for flag in ('no-unwinding-checks', 'only-codegen', 'cbmc-args', 'prove_safety_only'):
++                Path(self.work, 'Cargo.toml').write_text(
++                    '[%s]\n[%s.metadata.kani.flags]\n%s = true\n' % (sect, sect, flag))
++                with self.subTest(sect=sect, flag=flag):
++                    self.reject()
++
++    def test_manifest_symlink_escape(self):
++        os.unlink(os.path.join(self.work, 'Cargo.toml'))
++        outside = os.path.join(self.tmp, 'Cargo.toml')
++        Path(outside).write_text('[package]\nname="x"\n')
++        os.symlink(outside, os.path.join(self.work, 'Cargo.toml'))
++        self.reject()
++
++    def test_unsafe_env(self):
++        rep = runner.run_job(PLAN, self.work, self.out, scratch=self.scratch,
++                             environ={'RUSTFLAGS': '-C x'}, argv_fn=self.stub('pass'))
++        self.assertEqual(rep['outcome'], 'tool_error')
++        self.assertIn('RUSTFLAGS', rep['reason'])
++
++    def test_safe_flags_allowed(self):
++        Path(self.work, 'Cargo.toml').write_text(
++            '[package]\nname="x"\n[package.metadata.kani.flags]\ndefault-unwind = 3\n')
++        runner.scan_workdir(self.work, os.path.join(os.path.realpath(self.work), 'Cargo.toml'))
++
++
++class Cli(Fs):
++    def test_plan_with_duplicate_keys_rejected(self):
++        p = os.path.join(self.tmp, 'plan.json')
++        Path(p).write_text('{"schema":"covenant.kani.plan.v1","schema":"x"}')
++        import contextlib
++        import io
++        buf = io.StringIO()
++        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
++            rc = runner.main(['run', '--plan', p, '--workdir', self.work, '--outdir', self.out])
++        self.assertNotEqual(rc, 0)
++        self.assertEqual(json.loads(buf.getvalue())['outcome'], 'tool_error')
++
++
++if __name__ == '__main__':
++    unittest.main()

@@ -1,0 +1,6 @@
+{
+  "canonical_source_commit": "983172ddd04ac2de70136125e2088f22c6edf505",
+  "kani_image": "ghcr.io/open-covenant/covenant/compute-node-public@sha256:1ac3419ac2c070b464d753b5b78094725733740c8b136505b3a38cae759345bd",
+  "runner_sha256": "f74b26a6881d3090c930db2132bc5db64ba82222476afa60bc3ccaeb42d59ab7",
+  "status": "Image resolved and registry metadata verified; this file alone does not establish deployment or a completed proof job."
+}

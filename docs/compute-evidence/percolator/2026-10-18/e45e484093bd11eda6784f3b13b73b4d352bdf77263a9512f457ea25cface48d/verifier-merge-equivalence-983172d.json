@@ -1,0 +1,58 @@
+{
+  "schema": "covenant.scoped-source-equivalence.v1",
+  "verified_at": "2026-10-17T23:12:36.899499+00:00",
+  "actual_verifier_build_commit": "d997bb6436569d8dc96f963aaf72259b92ccb5ba",
+  "canonical_merge_commit": "983172ddd04ac2de70136125e2088f22c6edf505",
+  "actual_complete_tree": "59dc7a4905be7e54735b38a7e6a7ce2b51f83471",
+  "canonical_complete_tree": "f053b9d4f8bb626ed844cbbd0def77e8b68063d5",
+  "whole_tree_equal": false,
+  "all_changed_paths": [
+    "deploy/compute-release/README.md",
+    "deploy/compute-release/dist.sh",
+    "deploy/compute-release/notes/compute-v0.2.0.md",
+    "docs/compute-observer-release-evidence.md",
+    "docs/compute-prism-parity.md"
+  ],
+  "unchanged_scopes": {
+    "agent-os": {
+      "actual_build_object": "c4bb110ac3475103be8e90cff22c3b9ae8bf1d9f",
+      "canonical_merge_object": "c4bb110ac3475103be8e90cff22c3b9ae8bf1d9f",
+      "identical": true
+    },
+    "deploy/kani-check": {
+      "actual_build_object": "8611385ec47441935fe6364c0d1fb1752084d598",
+      "canonical_merge_object": "8611385ec47441935fe6364c0d1fb1752084d598",
+      "identical": true
+    },
+    ".github": {
+      "actual_build_object": "7fbb8e1ccfa7766c1a4841a7fe964ac694b5f441",
+      "canonical_merge_object": "7fbb8e1ccfa7766c1a4841a7fe964ac694b5f441",
+      "identical": true
+    },
+    "deploy/Dockerfile.compute-coordinator": {
+      "actual_build_object": "544df06e587a5ad8b02703305564c38626d65869",
+      "canonical_merge_object": "544df06e587a5ad8b02703305564c38626d65869",
+      "identical": true
+    },
+    "deploy/Dockerfile.compute-node": {
+      "actual_build_object": "a708b5c03934ef1aac4ceb09e69e6bd257db7920",
+      "canonical_merge_object": "a708b5c03934ef1aac4ceb09e69e6bd257db7920",
+      "identical": true
+    },
+    "deploy/compute-coordinator-entrypoint.sh": {
+      "actual_build_object": "1c5714e8d0bcdfed61c2d95b8eea814fa76016d5",
+      "canonical_merge_object": "1c5714e8d0bcdfed61c2d95b8eea814fa76016d5",
+      "identical": true
+    },
+    "deploy/compute-node-entrypoint.sh": {
+      "actual_build_object": "e883d690b6db746d04caaec57594066a47664f4a",
+      "canonical_merge_object": "e883d690b6db746d04caaec57594066a47664f4a",
+      "identical": true
+    }
+  },
+  "equivalence_claim": "Exact tracked Git objects match for all agent-os source, Cargo manifests/lock/config, Kani runner image context, listed compute Dockerfiles/entrypoints, and CI definitions. Only the five listed release-documentation/packaging paths differ. This is scoped input equivalence, not whole-repository tree equality.",
+  "verifier_inputs": "Standalone helper source, generated Cargo.lock and existing binary hashes match the actual d997 build record; all in-repository Cargo path-dependency inputs under agent-os are byte-identical at the merge. No rebuild or relabelling of the existing binary occurred.",
+  "preserve_buyer_actual_build_commit": "6502c3bb406b757c80410bf30014b08dc448e882",
+  "buyer_note": "This record does not relabel or rebuild the separately pinned buyer CLI.",
+  "ci_boundary": "Final merged-commit CI and container image publication are separate run results; source equivalence alone is not a claim of their completion."
+}

@@ -1,0 +1,148 @@
+{
+  "metadata": {
+    "version": "1.0",
+    "timestamp": "2026-10-17T23:28:58.597060866Z",
+    "kani_version": "0.68.0",
+    "target": "x86_64-unknown-linux-gnu",
+    "build_mode": "release"
+  },
+  "project": {
+    "crate_name": [
+      "covenant_kani_smoke"
+    ],
+    "workspace_root": "/work",
+    "output_dir": "/scratch/target/kani/x86_64-unknown-linux-gnu/debug/build/covenant_kani_smoke/eeede8e01274d79c/out"
+  },
+  "tools": {
+    "kani": "0.68.0",
+    "rustc": "rustc 1.100.0-nightly (8925ea358 2026-08-20)",
+    "cbmc": "6.11.0 (cbmc-6.11.0)",
+    "goto_cc": "gcc (goto-cc 6.11.0 (cbmc-6.11.0)) 14.2.0",
+    "goto_instrument": "6.11.0 (cbmc-6.11.0)",
+    "solvers": [
+      {
+        "name": "cadical",
+        "version": null
+      }
+    ]
+  },
+  "harness_metadata": [
+    {
+      "pretty_name": "receipt_smoke",
+      "mangled_name": "_RNvCsguYO9eED87Z_19covenant_kani_smoke13receipt_smoke",
+      "crate_name": "covenant_kani_smoke",
+      "source": {
+        "file": "src/lib.rs",
+        "start_line": 3,
+        "end_line": 8
+      },
+      "goto_file": "/scratch/target/kani/x86_64-unknown-linux-gnu/debug/build/covenant_kani_smoke/eeede8e01274d79c/out/covenant_kani_smoke-eeede8e01274d79c__RNvCsguYO9eED87Z_19covenant_kani_smoke13receipt_smoke.symtab.out",
+      "attributes": {
+        "kind": "Proof",
+        "should_panic": false
+      },
+      "contract": {
+        "contracted_function_name": null,
+        "recursion_tracker": null
+      },
+      "has_loop_contracts": false,
+      "is_automatically_generated": false,
+      "is_bounded": false,
+      "is_ctor_based": false
+    }
+  ],
+  "error_details": [
+    {
+      "harness_id": "receipt_smoke",
+      "has_errors": false
+    }
+  ],
+  "property_details": [
+    {
+      "harness_id": "receipt_smoke",
+      "property_details": {
+        "total_properties": 2,
+        "passed": 1,
+        "failed": 0,
+        "unreachable": 0,
+        "undetermined": 0,
+        "solver_error": 0,
+        "satisfied": 1,
+        "unsatisfiable": 0,
+        "covered": 0,
+        "uncovered": 0
+      }
+    }
+  ],
+  "cbmc": [
+    {
+      "harness_id": "receipt_smoke",
+      "cbmc_metadata": {
+        "version": "6.11.0",
+        "os_info": "x86_64 linux unix"
+      },
+      "configuration": {
+        "object_bits": 16,
+        "solver": "cadical"
+      },
+      "cbmc_stats": {
+        "runtime_symex_s": 0.00788591,
+        "size_program_expression": 144,
+        "slicing_removed_assignments": 67,
+        "vccs_generated": 4,
+        "vccs_remaining": 4,
+        "runtime_postprocess_equation_s": 0.00006553,
+        "runtime_convert_ssa_s": 0.00143972,
+        "runtime_post_process_s": 0.00001149,
+        "runtime_solver_s": 0.00003198,
+        "runtime_decision_procedure_s": 0.00006548
+      }
+    }
+  ],
+  "verification_results": {
+    "summary": {
+      "total_harnesses": 1,
+      "executed": 1,
+      "status": "completed",
+      "successful": 1,
+      "failed": 0,
+      "duration_ms": 85
+    },
+    "results": [
+      {
+        "harness_id": "receipt_smoke",
+        "status": "Success",
+        "duration_ms": 85,
+        "checks": [
+          {
+            "id": 1,
+            "function": "receipt_smoke",
+            "status": "Satisfied",
+            "description": "smoke reachable",
+            "location": {
+              "file": "src/lib.rs",
+              "line": "6",
+              "column": "5"
+            },
+            "category": "cover"
+          },
+          {
+            "id": 2,
+            "function": "receipt_smoke",
+            "status": "Success",
+            "description": "assertion failed: value < 10",
+            "location": {
+              "file": "src/lib.rs",
+              "line": "7",
+              "column": "5"
+            },
+            "category": "assertion"
+          }
+        ]
+      }
+    ]
+  },
+  "coverage": {
+    "enabled": false
+  }
+}

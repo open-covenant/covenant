@@ -1,0 +1,8 @@
+{
+  "job_id": "360eba3e-43a0-43e7-a0d7-aa3ca57e4174",
+  "status": "completed",
+  "charged_micro_usdc": 50000,
+  "payout": null,
+  "refund_reason": null,
+  "trust": "Coordinator-reported accounting; signatures do not independently establish payment or complete check inventory."
+}

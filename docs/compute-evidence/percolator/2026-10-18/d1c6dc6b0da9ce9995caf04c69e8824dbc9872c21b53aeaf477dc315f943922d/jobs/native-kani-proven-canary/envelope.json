@@ -1,0 +1,70 @@
+{
+  "payload": {
+    "job_id": "97fbf4a1-a86c-4ca7-ab63-f44e3a7ffeed",
+    "buyer": {
+      "display": "buyer@compute",
+      "pubkey": "5jhfhR4THAkC8GVJZDTP579KCdSnMdejw2oEcXZoZGnJ"
+    },
+    "kind": "agent_check",
+    "capability_requirement": {
+      "gpu_class": null,
+      "min_vram_gb": null,
+      "model_id": "kani-v1:e9b92565e08b926e6d036d7f25ef9ca9e2f6f0ce8d80f76d4a45aacc82501d13",
+      "kind": "agent_check",
+      "max_duration_secs": 600,
+      "min_reputation_bps": null
+    },
+    "input": [
+      {
+        "type": "json",
+        "value": {
+          "agent_check": {
+            "acceptance": {
+              "commands": [],
+              "image": "ghcr.io/open-covenant/covenant/compute-node-public@sha256:1ac3419ac2c070b464d753b5b78094725733740c8b136505b3a38cae759345bd",
+              "kani": {
+                "check_price_micro_usdc": 100000,
+                "cpus": 6,
+                "memory_mib": 27648,
+                "plan": {
+                  "expected_assertion": null,
+                  "expected_outcome": "proven",
+                  "features": [],
+                  "harness": "receipt_smoke",
+                  "manifest_path": "Cargo.toml",
+                  "required_covers": [
+                    "smoke reachable"
+                  ],
+                  "schema": "covenant.kani.plan.v1",
+                  "tests": false,
+                  "timeout_secs": 30,
+                  "unwind": null
+                },
+                "scratch_mib": 8192
+              },
+              "timeout_secs": 300
+            },
+            "patch_b64": "",
+            "patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "repo": {
+              "bundle_b64": "IyB2MiBnaXQgYnVuZGxlCmM0NDFjYjYyYzUwNmVmNGUyOTIxYWI0OTQ0YTg3MTQ5MzIwOTc3ZjUgcmVmcy9jb3ZlbmFudC9zbmFwc2hvdAoKUEFDSwAAAAIAAAAGnwx4nJWLSwrDIBBA957CfaH4mTEOlNCrODqSQKMlsTl/u8kB+paP98YuomN2nGIUsRUNo4fgCEzxlSoKAk7sLeXAKn3G0ned+ykttaEfR0vvY+njean72s70Wsusjb6ZHyr3bVvHkD83dTW6Vx2APXqGKRECOaRsoRQ2RpxEy0y2Zks+qC8vs0F6qgZ4nDM0MDAzMVFwTixKz9fLyU/OZrjwt8ZwPaeVU3vMTLFpjnXeew4KvzREVlWSn5vDsPwBWzJTzbZQ5pk+m4WXaJYFNU/tMjEAAoXiomQGqf8NbUpeSnUzm7JLVM6YxCs+CcgGANy8JrOzCnicTYuxCsMwDAV3f4VwdpNC1kKhU/duIQQ1UVwRWyqOEsjf1906Hbx718DzzRssnAgqcTfNaDxhSifcIgkVNJrhdcIdS9TgGnjY7ypaIUYyV71ogYyyYwKa2VhicAeVjVXgCp1zff/BacVIw+AEM9XVT3qQoNi4ovC4ZV3J/1W+DZfQevcFBdw2sbQEeJyLLkhMzk5MT43lykvMTbVVSs4vS81LzCuJz07My4wvzs3PTlXiKkstKs7Mz7NVMtAz1DNQ4kpNySwB840MjAyVuABIJBZTogJ4nDM0MDAzMVHIyUzSKypm4G60X+e49/irSaWxS1f9lZ5UMjejGQDLOw4bvhZ4nK2OTQuCQBCG7/6KUS8KHQw6hOVBbA8RaaREECKbjCV+sq5CRP+9bfPirUNzGub9mEe/pNnNKGidm7GiXz6LbbesabJYyWpgmGLe8qSrmgINE54KiCmRw0DLHm3ol+DAN0Xrh2GupGE8dF1foSGdsIa5NVHTZkCmjqrjwGIGmnwjntL0Tq8lamNAFCHj6rTppQjen+AZZj3/G/0URoBbAtwLTsR3/SgJ98GOJOR8IF5ENokbhuQYbQNfk8Rvd4pt6Lp7WHCnM57ppC5RIA6zhxBo0UNz",
+              "commit": "c441cb62c506ef4e2921ab4944a87149320977f5",
+              "source": "bundle"
+            },
+            "task_job_id": "97fbf4a1-a86c-4ca7-ab63-f44e3a7ffeed"
+          }
+        }
+      }
+    ],
+    "price_micro_usdc": 100000,
+    "deadline_ms": 600000,
+    "idempotency": {
+      "duplicate_safety": "idempotent",
+      "key": "97fbf4a1-a86c-4ca7-ab63-f44e3a7ffeed"
+    },
+    "issued_at_ms": 1792279736622
+  },
+  "payload_json": "{\"job_id\":\"97fbf4a1-a86c-4ca7-ab63-f44e3a7ffeed\",\"buyer\":{\"display\":\"buyer@compute\",\"pubkey\":\"5jhfhR4THAkC8GVJZDTP579KCdSnMdejw2oEcXZoZGnJ\"},\"kind\":\"agent_check\",\"capability_requirement\":{\"gpu_class\":null,\"min_vram_gb\":null,\"model_id\":\"kani-v1:e9b92565e08b926e6d036d7f25ef9ca9e2f6f0ce8d80f76d4a45aacc82501d13\",\"kind\":\"agent_check\",\"max_duration_secs\":600,\"min_reputation_bps\":null},\"input\":[{\"type\":\"json\",\"value\":{\"agent_check\":{\"acceptance\":{\"commands\":[],\"image\":\"ghcr.io/open-covenant/covenant/compute-node-public@sha256:1ac3419ac2c070b464d753b5b78094725733740c8b136505b3a38cae759345bd\",\"kani\":{\"check_price_micro_usdc\":100000,\"cpus\":6,\"memory_mib\":27648,\"plan\":{\"expected_assertion\":null,\"expected_outcome\":\"proven\",\"features\":[],\"harness\":\"receipt_smoke\",\"manifest_path\":\"Cargo.toml\",\"required_covers\":[\"smoke reachable\"],\"schema\":\"covenant.kani.plan.v1\",\"tests\":false,\"timeout_secs\":30,\"unwind\":null},\"scratch_mib\":8192},\"timeout_secs\":300},\"patch_b64\":\"\",\"patch_sha256\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"repo\":{\"bundle_b64\":\"IyB2MiBnaXQgYnVuZGxlCmM0NDFjYjYyYzUwNmVmNGUyOTIxYWI0OTQ0YTg3MTQ5MzIwOTc3ZjUgcmVmcy9jb3ZlbmFudC9zbmFwc2hvdAoKUEFDSwAAAAIAAAAGnwx4nJWLSwrDIBBA957CfaH4mTEOlNCrODqSQKMlsTl/u8kB+paP98YuomN2nGIUsRUNo4fgCEzxlSoKAk7sLeXAKn3G0ned+ykttaEfR0vvY+njean72s70Wsusjb6ZHyr3bVvHkD83dTW6Vx2APXqGKRECOaRsoRQ2RpxEy0y2Zks+qC8vs0F6qgZ4nDM0MDAzMVFwTixKz9fLyU/OZrjwt8ZwPaeVU3vMTLFpjnXeew4KvzREVlWSn5vDsPwBWzJTzbZQ5pk+m4WXaJYFNU/tMjEAAoXiomQGqf8NbUpeSnUzm7JLVM6YxCs+CcgGANy8JrOzCnicTYuxCsMwDAV3f4VwdpNC1kKhU/duIQQ1UVwRWyqOEsjf1906Hbx718DzzRssnAgqcTfNaDxhSifcIgkVNJrhdcIdS9TgGnjY7ypaIUYyV71ogYyyYwKa2VhicAeVjVXgCp1zff/BacVIw+AEM9XVT3qQoNi4ovC4ZV3J/1W+DZfQevcFBdw2sbQEeJyLLkhMzk5MT43lykvMTbVVSs4vS81LzCuJz07My4wvzs3PTlXiKkstKs7Mz7NVMtAz1DNQ4kpNySwB840MjAyVuABIJBZTogJ4nDM0MDAzMVHIyUzSKypm4G60X+e49/irSaWxS1f9lZ5UMjejGQDLOw4bvhZ4nK2OTQuCQBCG7/6KUS8KHQw6hOVBbA8RaaREECKbjCV+sq5CRP+9bfPirUNzGub9mEe/pNnNKGidm7GiXz6LbbesabJYyWpgmGLe8qSrmgINE54KiCmRw0DLHm3ol+DAN0Xrh2GupGE8dF1foSGdsIa5NVHTZkCmjqrjwGIGmnwjntL0Tq8lamNAFCHj6rTppQjen+AZZj3/G/0URoBbAtwLTsR3/SgJ98GOJOR8IF5ENokbhuQYbQNfk8Rvd4pt6Lp7WHCnM57ppC5RIA6zhxBo0UNz\",\"commit\":\"c441cb62c506ef4e2921ab4944a87149320977f5\",\"source\":\"bundle\"},\"task_job_id\":\"97fbf4a1-a86c-4ca7-ab63-f44e3a7ffeed\"}}}],\"price_micro_usdc\":100000,\"deadline_ms\":600000,\"idempotency\":{\"duplicate_safety\":\"idempotent\",\"key\":\"97fbf4a1-a86c-4ca7-ab63-f44e3a7ffeed\"},\"issued_at_ms\":1792279736622}",
+  "signature_b58": "5PcY3D6XQqGZF6hVdswdhC8S86pDDRYasLhjt8nMioyUMZhfBJeLYkMszJp4GyHgULEApxQtGafDN4oXh2HPKf24",
+  "signer_pubkey_b58": "5jhfhR4THAkC8GVJZDTP579KCdSnMdejw2oEcXZoZGnJ"
+}

@@ -1,0 +1,22 @@
+{
+  "public_repo_url": null,
+  "original_commit": "64b353b47a9549259c14ddb00e2e81bb91fc1936",
+  "signed_repo_commit": "c441cb62c506ef4e2921ab4944a87149320977f5",
+  "tree_hash": "8c2ba88ee1f50b53462940d3f9f5e5457b319c6b",
+  "tree_equality_checked": true,
+  "source_files": [
+    {
+      "path": "Cargo.toml",
+      "sha256": "67af75bb2f718dc707c033966ddb036fe9b950960779fabe1c174c09760bb0ee"
+    },
+    {
+      "path": "Cargo.lock",
+      "sha256": "655f87147dca214309d19dec3fe50eecd6478b2767e028a444ad3fc45d1329bc"
+    },
+    {
+      "path": "src/lib.rs",
+      "sha256": "5219e10dc3a9bf672d376dec7fe651f24ac4e6c34400ba6381eefba780f9e924"
+    }
+  ],
+  "bundle_sha256": "11b3300ac6df43fb529608c502f0b1afe153976c9718719d24d40c8baeda27d2"
+}

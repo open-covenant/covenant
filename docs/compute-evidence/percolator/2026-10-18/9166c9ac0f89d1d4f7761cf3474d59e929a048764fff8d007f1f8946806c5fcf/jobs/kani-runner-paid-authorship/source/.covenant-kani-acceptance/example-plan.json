@@ -1,0 +1,16 @@
+{
+  "schema": "covenant.kani.plan.v1",
+  "harness": "proofs::route_proof",
+  "manifest_path": "Cargo.toml",
+  "tests": false,
+  "features": [
+    "fuzz"
+  ],
+  "timeout_secs": 60,
+  "unwind": null,
+  "expected_outcome": "proven",
+  "expected_assertion": null,
+  "required_covers": [
+    "cover condition: route reachable"
+  ]
+}

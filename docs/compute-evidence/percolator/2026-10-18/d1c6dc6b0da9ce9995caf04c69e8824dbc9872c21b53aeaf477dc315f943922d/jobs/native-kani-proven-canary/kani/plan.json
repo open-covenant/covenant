@@ -1,0 +1,14 @@
+{
+  "expected_assertion": null,
+  "expected_outcome": "proven",
+  "features": [],
+  "harness": "receipt_smoke",
+  "manifest_path": "Cargo.toml",
+  "required_covers": [
+    "smoke reachable"
+  ],
+  "schema": "covenant.kani.plan.v1",
+  "tests": false,
+  "timeout_secs": 30,
+  "unwind": null
+}

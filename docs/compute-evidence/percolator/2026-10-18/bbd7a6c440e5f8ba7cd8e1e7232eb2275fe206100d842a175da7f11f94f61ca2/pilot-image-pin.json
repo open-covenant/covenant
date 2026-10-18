@@ -1,0 +1,20 @@
+{
+  "canonical_node_source_commit": "4dd036a4d59612326095768ff4b4f272aa48562d",
+  "coordinator_source_commit": "983172ddd04ac2de70136125e2088f22c6edf505",
+  "kani_image": "ghcr.io/open-covenant/covenant/compute-node-public@sha256:5648c867341b054aebf3570266200cd49766caea7f5119d2735dc437fcfe3f7d",
+  "node_image": "ghcr.io/open-covenant/covenant/compute-node-public@sha256:497176eb0a3247a0bc71e8dcd3674dd7393aaba6471f09276fdd8ce10732e560",
+  "runner_sha256": "f74b26a6881d3090c930db2132bc5db64ba82222476afa60bc3ccaeb42d59ab7",
+  "kani_model": "kani-v1:f40d465cf554fc3644eb31ed948d5c1d6f7eb35c71c1551b1a374911ec04a83d",
+  "resources": {
+    "memory_mib": 27648,
+    "cpus": 6,
+    "scratch_mib": 8192
+  },
+  "image_verified_at": "2026-10-17T23:54:52.815256+00:00",
+  "deployment_observed_at": "2026-10-17T23:57:48.256012+00:00",
+  "node_binary_sha256": "a5eba3e1e5a65953ee1b450d43558b8c0a3a370555a447bdc42991a5147a797c",
+  "image_verification_record_sha256": "b47d984b2cfac2ee4144904d914d2ddc764a79b707cb27e79b0b84ecb626d2c4",
+  "upgrade_summary_record_sha256": "e774166d372c7aa896f13210e1ca07e22d11b4e4d1e0d8497e003262bc1462f1",
+  "status": "Immutable images verified; node4dd rollout observed in the campaign deployment record. Actual signed job output independently binds image identifiers. Historical983 receipts retain their original image.",
+  "trust": "Deployment observations and OCI revision labels are provenance records, not independent reproducible-build or settlement proofs."
+}

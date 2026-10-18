@@ -1,0 +1,25 @@
+{
+  "receipt": {
+    "job_id": "b7a20990-a245-486e-ac4b-44d1331c272a",
+    "operator": {
+      "display": "operator@compute",
+      "pubkey": "HuTP2kfzhns9p3ZvmuZxGzcgYan7z4LaZVytgcG9VVuh"
+    },
+    "job_hash_hex": "6899fadbf7828c2e15ee541d995567cb692118802bafdfe9d2036f756146a21b",
+    "result_hash_hex": "6c557054cb0f4c7a9c3c7fd4367b18b4e906c0d7b41849c2993b99281a6ed03d",
+    "meter": {
+      "wall_ms": 565547,
+      "tokens_in": null,
+      "tokens_out": null,
+      "gpu_seconds": null,
+      "finish_reason": null
+    },
+    "price_micro_usdc": 50000,
+    "status": "ok",
+    "executed_at_ms": 1792282253291,
+    "node_audit_root_hex": "08e8566798c4f8e48e08c645e2dad6a47714edc037206053531de0b917e3a2ed"
+  },
+  "receipt_json": "{\"job_id\":\"b7a20990-a245-486e-ac4b-44d1331c272a\",\"operator\":{\"display\":\"operator@compute\",\"pubkey\":\"HuTP2kfzhns9p3ZvmuZxGzcgYan7z4LaZVytgcG9VVuh\"},\"job_hash_hex\":\"6899fadbf7828c2e15ee541d995567cb692118802bafdfe9d2036f756146a21b\",\"result_hash_hex\":\"6c557054cb0f4c7a9c3c7fd4367b18b4e906c0d7b41849c2993b99281a6ed03d\",\"meter\":{\"wall_ms\":565547,\"tokens_in\":null,\"tokens_out\":null,\"gpu_seconds\":null,\"finish_reason\":null},\"price_micro_usdc\":50000,\"status\":\"ok\",\"executed_at_ms\":1792282253291,\"node_audit_root_hex\":\"08e8566798c4f8e48e08c645e2dad6a47714edc037206053531de0b917e3a2ed\"}",
+  "signature_b58": "2jHoyVikeYT6qozhfNxp4PRoAwVsQUp4mLZHo1au9WvELqhbLtLsBbbS7pzFeoj8URNRyFDjXuhB7Z8gasxcjf3b",
+  "signer_pubkey_b58": "HuTP2kfzhns9p3ZvmuZxGzcgYan7z4LaZVytgcG9VVuh"
+}

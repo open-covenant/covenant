@@ -1,0 +1,6 @@
+tree ce66dbd4769e01f34bde2a7f01673e630275eee8
+parent 8f96c26911e310f93546666643fe79dbc2fdab66
+author Covenant Buyer <buyer@covenant.invalid> 1792271807 +0200
+committer Covenant Buyer <buyer@covenant.invalid> 1792271807 +0200
+
+Require direct pinned Kani plugin invocation

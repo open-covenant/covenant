@@ -1,0 +1,394 @@
+Kani Rust Verifier 0.68.0 (cargo plugin)
+CBMC 6.11.0
+warning: use of an unstable feature
+ --> <crate attribute>:1:12
+  |
+1 | #![feature(register_tool)]
+  |            ^^^^^^^^^^^^^
+  |
+  = note: requested on the command line with `--force-warn unstable-features`
+
+warning: use of an unstable feature
+ --> <crate attribute>:1:12
+  |
+1 | #![feature(register_tool)]
+  |            ^^^^^^^^^^^^^
+  |
+  = note: requested on the command line with `--force-warn unstable-features`
+
+warning: use of an unstable feature
+ --> <crate attribute>:1:12
+  |
+1 | #![feature(register_tool)]
+  |            ^^^^^^^^^^^^^
+  |
+  = note: requested on the command line with `--force-warn unstable-features`
+
+warning: use of an unstable feature
+ --> <crate attribute>:1:12
+  |
+1 | #![feature(register_tool)]
+  |            ^^^^^^^^^^^^^
+  |
+  = note: requested on the command line with `--force-warn unstable-features`
+
+warning: use of an unstable feature
+ --> <crate attribute>:1:12
+  |
+1 | #![feature(register_tool)]
+  |            ^^^^^^^^^^^^^
+  |
+  = note: requested on the command line with `--force-warn unstable-features`
+
+warning: use of an unstable feature
+ --> <crate attribute>:1:12
+  |
+1 | #![feature(register_tool)]
+  |            ^^^^^^^^^^^^^
+  |
+  = note: requested on the command line with `--force-warn unstable-features`
+
+warning: use of an unstable feature
+ --> <crate attribute>:1:12
+  |
+1 | #![feature(register_tool)]
+  |            ^^^^^^^^^^^^^
+  |
+  = note: requested on the command line with `--force-warn unstable-features`
+
+warning: use of an unstable feature
+ --> <crate attribute>:1:12
+  |
+1 | #![feature(register_tool)]
+  |            ^^^^^^^^^^^^^
+  |
+  = note: requested on the command line with `--force-warn unstable-features`
+
+warning: use of an unstable feature
+ --> <crate attribute>:1:12
+  |
+1 | #![feature(register_tool)]
+  |            ^^^^^^^^^^^^^
+  |
+  = note: requested on the command line with `--force-warn unstable-features`
+
+warning: use of an unstable feature
+ --> <crate attribute>:1:12
+  |
+1 | #![feature(register_tool)]
+  |            ^^^^^^^^^^^^^
+  |
+  = note: requested on the command line with `--force-warn unstable-features`
+
+warning: use of an unstable feature
+ --> <crate attribute>:1:12
+  |
+1 | #![feature(register_tool)]
+  |            ^^^^^^^^^^^^^
+  |
+  = note: requested on the command line with `--force-warn unstable-features`
+
+warning: use of an unstable feature
+ --> <crate attribute>:1:12
+  |
+1 | #![feature(register_tool)]
+  |            ^^^^^^^^^^^^^
+  |
+  = note: requested on the command line with `--force-warn unstable-features`
+
+warning: use of an unstable feature
+ --> <crate attribute>:1:12
+  |
+1 | #![feature(register_tool)]
+  |            ^^^^^^^^^^^^^
+  |
+  = note: requested on the command line with `--force-warn unstable-features`
+
+warning: use of an unstable feature
+ --> <crate attribute>:1:12
+  |
+1 | #![feature(register_tool)]
+  |            ^^^^^^^^^^^^^
+  |
+  = note: requested on the command line with `--force-warn unstable-features`
+
+warning: use of an unstable feature
+ --> <crate attribute>:1:12
+  |
+1 | #![feature(register_tool)]
+  |            ^^^^^^^^^^^^^
+  |
+  = note: requested on the command line with `--force-warn unstable-features`
+
+warning: use of an unstable feature
+ --> <crate attribute>:1:12
+  |
+1 | #![feature(register_tool)]
+  |            ^^^^^^^^^^^^^
+  |
+  = note: requested on the command line with `--force-warn unstable-features`
+
+warning: use of an unstable feature
+ --> <crate attribute>:1:12
+  |
+1 | #![feature(register_tool)]
+  |            ^^^^^^^^^^^^^
+  |
+  = note: requested on the command line with `--force-warn unstable-features`
+
+warning: use of an unstable feature
+ --> <crate attribute>:1:12
+  |
+1 | #![feature(register_tool)]
+  |            ^^^^^^^^^^^^^
+  |
+  = note: requested on the command line with `--force-warn unstable-features`
+
+warning: use of an unstable feature
+ --> <crate attribute>:1:12
+  |
+1 | #![feature(register_tool)]
+  |            ^^^^^^^^^^^^^
+  |
+  = note: requested on the command line with `--force-warn unstable-features`
+
+warning: use of an unstable feature
+ --> <crate attribute>:1:12
+  |
+1 | #![feature(register_tool)]
+  |            ^^^^^^^^^^^^^
+  |
+  = note: requested on the command line with `--force-warn unstable-features`
+
+warning: use of an unstable feature
+ --> <crate attribute>:1:12
+  |
+1 | #![feature(register_tool)]
+  |            ^^^^^^^^^^^^^
+  |
+  = note: requested on the command line with `--force-warn unstable-features`
+
+warning: use of an unstable feature
+ --> <crate attribute>:1:12
+  |
+1 | #![feature(register_tool)]
+  |            ^^^^^^^^^^^^^
+  |
+  = note: requested on the command line with `--force-warn unstable-features`
+
+warning: use of an unstable feature
+ --> <crate attribute>:1:12
+  |
+1 | #![feature(register_tool)]
+  |            ^^^^^^^^^^^^^
+  |
+  = note: requested on the command line with `--force-warn unstable-features`
+
+warning: use of an unstable feature
+ --> <crate attribute>:1:12
+  |
+1 | #![feature(register_tool)]
+  |            ^^^^^^^^^^^^^
+  |
+  = note: requested on the command line with `--force-warn unstable-features`
+
+warning: use of an unstable feature
+ --> <crate attribute>:1:12
+  |
+1 | #![feature(register_tool)]
+  |            ^^^^^^^^^^^^^
+  |
+  = note: requested on the command line with `--force-warn unstable-features`
+
+warning: use of an unstable feature
+ --> <crate attribute>:1:12
+  |
+1 | #![feature(register_tool)]
+  |            ^^^^^^^^^^^^^
+  |
+  = note: requested on the command line with `--force-warn unstable-features`
+
+warning: use of an unstable feature
+ --> <crate attribute>:1:12
+  |
+1 | #![feature(register_tool)]
+  |            ^^^^^^^^^^^^^
+  |
+  = note: requested on the command line with `--force-warn unstable-features`
+
+warning: associated functions `select_progress_witness`, `kernel_resolved_close_progress`, `kernel_trade_admit`, `kernel_economically_valid_trade_admits`, `kernel_trade_preflight_admits`, and `build_resolved_close_rank` are never used
+    --> src/v16_kani_api.rs:2360:19
+     |
+2316 | impl V16Core {
+     | ------------ associated functions in this implementation
+...
+2360 |     pub(crate) fn select_progress_witness(
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^
+...
+2403 |     pub(crate) fn kernel_resolved_close_progress(
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+2451 |     pub(crate) fn kernel_trade_admit(
+     |                   ^^^^^^^^^^^^^^^^^^
+...
+2494 |     pub(crate) fn kernel_economically_valid_trade_admits(
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+2519 |     pub(crate) fn kernel_trade_preflight_admits(
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+2548 |     pub(crate) fn build_resolved_close_rank(
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: use of an unstable feature
+ --> <crate attribute>:1:12
+  |
+1 | #![feature(register_tool)]
+  |            ^^^^^^^^^^^^^
+  |
+  = note: requested on the command line with `--force-warn unstable-features`
+
+warning: associated functions `select_progress_witness`, `kernel_resolved_close_progress`, `kernel_trade_admit`, `kernel_economically_valid_trade_admits`, `kernel_trade_preflight_admits`, and `build_resolved_close_rank` are never used
+    --> src/v16_kani_api.rs:2360:19
+     |
+2316 | impl V16Core {
+     | ------------ associated functions in this implementation
+...
+2360 |     pub(crate) fn select_progress_witness(
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^
+...
+2403 |     pub(crate) fn kernel_resolved_close_progress(
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+2451 |     pub(crate) fn kernel_trade_admit(
+     |                   ^^^^^^^^^^^^^^^^^^
+...
+2494 |     pub(crate) fn kernel_economically_valid_trade_admits(
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+2519 |     pub(crate) fn kernel_trade_preflight_admits(
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+2548 |     pub(crate) fn build_resolved_close_rank(
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: use of an unstable feature
+ --> <crate attribute>:1:12
+  |
+1 | #![feature(register_tool)]
+  |            ^^^^^^^^^^^^^
+  |
+  = note: requested on the command line with `--force-warn unstable-features`
+
+warning: use of an unstable feature
+ --> <crate attribute>:1:12
+  |
+1 | #![feature(register_tool)]
+  |            ^^^^^^^^^^^^^
+  |
+  = note: requested on the command line with `--force-warn unstable-features`
+
+warning: associated functions `select_progress_witness`, `kernel_resolved_close_progress`, `kernel_trade_admit`, `kernel_economically_valid_trade_admits`, `kernel_trade_preflight_admits`, and `build_resolved_close_rank` are never used
+    --> src/v16_kani_api.rs:2360:19
+     |
+2316 | impl V16Core {
+     | ------------ associated functions in this implementation
+...
+2360 |     pub(crate) fn select_progress_witness(
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^
+...
+2403 |     pub(crate) fn kernel_resolved_close_progress(
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+2451 |     pub(crate) fn kernel_trade_admit(
+     |                   ^^^^^^^^^^^^^^^^^^
+...
+2494 |     pub(crate) fn kernel_economically_valid_trade_admits(
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+2519 |     pub(crate) fn kernel_trade_preflight_admits(
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+2548 |     pub(crate) fn build_resolved_close_rank(
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: use of an unstable feature
+ --> <crate attribute>:1:12
+  |
+1 | #![feature(register_tool)]
+  |            ^^^^^^^^^^^^^
+  |
+  = note: requested on the command line with `--force-warn unstable-features`
+
+warning: unused import: `MarketGroupV16View`
+  --> tests/proofs_v16.rs:35:80
+   |
+35 |     InsuranceCreditReservationV16Account, Market, MarketGroupV16HeaderAccount, MarketGroupV16View,
+   |                                                                                ^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: use of an unstable feature
+ --> <crate attribute>:1:12
+  |
+1 | #![feature(register_tool)]
+  |            ^^^^^^^^^^^^^
+  |
+  = note: requested on the command line with `--force-warn unstable-features`
+
+warning: Found the following unsupported constructs:
+             - caller_location (1)
+             - foreign function (1)
+         
+         Verification will fail if one or more of these constructs is reachable.
+         See https://model-checking.github.io/kani/rust-feature-support.html for more details.
+
+warning: associated functions `select_progress_witness`, `kernel_resolved_close_progress`, `kernel_trade_admit`, `kernel_economically_valid_trade_admits`, `kernel_trade_preflight_admits`, and `build_resolved_close_rank` are never used
+    --> src/v16_kani_api.rs:2360:19
+     |
+2316 | impl V16Core {
+     | ------------ associated functions in this implementation
+...
+2360 |     pub(crate) fn select_progress_witness(
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^
+...
+2403 |     pub(crate) fn kernel_resolved_close_progress(
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+2451 |     pub(crate) fn kernel_trade_admit(
+     |                   ^^^^^^^^^^^^^^^^^^
+...
+2494 |     pub(crate) fn kernel_economically_valid_trade_admits(
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+2519 |     pub(crate) fn kernel_trade_preflight_admits(
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+2548 |     pub(crate) fn build_resolved_close_rank(
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: use of an unstable feature
+ --> <crate attribute>:1:12
+  |
+1 | #![feature(register_tool)]
+  |            ^^^^^^^^^^^^^
+  |
+  = note: requested on the command line with `--force-warn unstable-features`
+
+warning: use of an unstable feature
+ --> <crate attribute>:1:12
+  |
+1 | #![feature(register_tool)]
+  |            ^^^^^^^^^^^^^
+  |
+  = note: requested on the command line with `--force-warn unstable-features`
+
+error: Failed to execute cargo (exit status: 101). Found 0 compilation errors.

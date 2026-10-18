@@ -1,0 +1,9 @@
+{
+  "checkout_commit": "d997bb6436569d8dc96f963aaf72259b92ccb5ba",
+  "repository": "https://github.com/open-covenant/covenant",
+  "offline_runtime": true,
+  "actual_build_commit": "d997bb6436569d8dc96f963aaf72259b92ccb5ba",
+  "canonical_merge_commit": "983172ddd04ac2de70136125e2088f22c6edf505",
+  "source_equivalence": "verifier-merge-equivalence-983172d.json",
+  "whole_tree_equal": false
+}

@@ -1,0 +1,76 @@
+{
+  "schema": "covenant.percolator.public-evidence.v1",
+  "status": "collected_private_not_published",
+  "entries": [
+    {
+      "label": "pr241-at-expiry-first-tool-error",
+      "role": "verification",
+      "origin": "The Percolator fix and harness predate this paid attempt. This is a charged Covenant verification attempt that failed during dependency compilation, not a proof or Covenant authorship.",
+      "purpose": "First paid #241 at-expiry verification attempt. Completed checker execution, but accepted=false/tool_error before a proof result; preserve full failure evidence.",
+      "source_mapping": {
+        "public_repo_url": "https://github.com/mizuki0x/percolator.git",
+        "original_commit": "035d4cb25eff1fce25d0a385ab92b700d8da3469",
+        "signed_repo_commit": "7cbc0004b0e47b09187471054219fb7fb9cb0184",
+        "tree_hash": "6de5571b649dcd572a15a73341206e75e24c016b",
+        "tree_equality_checked": true,
+        "source_files": [
+          {
+            "path": "Cargo.toml",
+            "sha256": "26cf3e9510aa9192b97c7244d6c61b29d919aa7fa216d29a166eef2e48e973b6"
+          },
+          {
+            "path": "Cargo.lock",
+            "sha256": "189914a39b7a41adfae9493479145e2f8d78d4e1f76e114766d433c274a3a7a7"
+          },
+          {
+            "path": "src/v16.rs",
+            "sha256": "57dc0e3adf988efc670d0b90d9fb1614dea32f83ee03b7e8747da853e2ee8df3"
+          },
+          {
+            "path": "tests/proofs_v16.rs",
+            "sha256": "7c6234c13e74b5954d402d8982d6650f4840dace4630cba6c0b3acfa36e5c4d2"
+          }
+        ],
+        "bundle_sha256": "4c3120a9604e62af97155a0becfd035112547a63a72ce1d48ddee02b569e5709"
+      },
+      "job_id": "ac6a8b30-1003-4b2a-9558-b580aa590812",
+      "signed_price_micro_usdc": 100000,
+      "receipt_price_micro_usdc": 100000,
+      "issued_at_ms": 1792279776101,
+      "envelope_expires_at_ms": 1792281876101,
+      "verifier": {
+        "acceptance_passed": false,
+        "agent_final_patch_accepted": null,
+        "buyer_pubkey": "5jhfhR4THAkC8GVJZDTP579KCdSnMdejw2oEcXZoZGnJ",
+        "envelope_signature_verified": true,
+        "exact_envelope_output_hashes_verified": true,
+        "inventory_completeness_verified": false,
+        "job_id": "ac6a8b30-1003-4b2a-9558-b580aa590812",
+        "kani": {
+          "accepted": false,
+          "cpus": 6,
+          "harness": "proof_v16_public_counterparty_backing_withdraw_rejects_lapsed_bucket_at_expiry",
+          "image": "ghcr.io/open-covenant/covenant/compute-node-public@sha256:1ac3419ac2c070b464d753b5b78094725733740c8b136505b3a38cae759345bd",
+          "image_id": "sha256:1ac3419ac2c070b464d753b5b78094725733740c8b136505b3a38cae759345bd",
+          "memory_mib": 27648,
+          "outcome": "tool_error",
+          "scratch_mib": 8192,
+          "tool_pin": {
+            "cbmc": "6.11.0",
+            "kani": "0.68.0",
+            "rust_toolchain": "nightly-2026-08-21-x86_64-unknown-linux-gnu"
+          }
+        },
+        "receipt_execution_status": "ok",
+        "receipt_signature_verified": true,
+        "settlement_verified": false
+      },
+      "published": false
+    }
+  ],
+  "limitations": [
+    "Signed receipts authenticate operator claims; they do not independently prove hardware isolation, payment, or complete job inventory.",
+    "Kani proven means the selected harness passed its stated bounds and toolchain; timeout/OOM/error is not a proof.",
+    "Authored patch provenance excludes later local integration edits unless separately enumerated."
+  ]
+}

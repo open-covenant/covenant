@@ -1,0 +1,10 @@
+{
+  "parent_job_id": "da35b756-1289-458e-8604-25072f0ddf8b",
+  "parent_receipt_signer_pubkey": "HuTP2kfzhns9p3ZvmuZxGzcgYan7z4LaZVytgcG9VVuh",
+  "child_job_id": "0f26776e-cfdf-46b4-a194-2c1c19bbb9c7",
+  "child_receipt_signer_pubkey": "8N238CskW3qA8uAyJNYpMMovoedsSKycXhkZLmFLsi7m",
+  "distinct_signed_operator_keys": true,
+  "stake_owner_separation_verified": false,
+  "independent_infrastructure_ownership_verified": false,
+  "trust": "The verified receipts identify different operator signing keys. This does not establish distinct beneficial stake owners or independently owned provider infrastructure."
+}

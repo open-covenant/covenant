@@ -1,0 +1,23 @@
+[
+  {
+    "type": "json",
+    "value": {
+      "agent_check_verdict": {
+        "applied": true,
+        "commands": [
+          {
+            "command": "test -f Cargo.toml && test -f src/v16.rs",
+            "duration_ms": 372,
+            "exit_code": 0,
+            "output_tail": "",
+            "timed_out": false
+          }
+        ],
+        "passed": true,
+        "patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "task_job_id": "001980a8-6442-49c0-9081-983def87331d",
+        "vote_signature_b58": "5A6FhtipmwRvw968CuDxshteJ4jJQ5V8CE9WJpvM1mHeajP8GmdHe86aufNnNwGZiob6NpXRLf69kVAFK1fBJtHr"
+      }
+    }
+  }
+]

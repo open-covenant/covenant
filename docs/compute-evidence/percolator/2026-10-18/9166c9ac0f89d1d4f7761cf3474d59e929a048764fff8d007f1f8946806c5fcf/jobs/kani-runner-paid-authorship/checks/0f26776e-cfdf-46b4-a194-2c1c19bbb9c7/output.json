@@ -1,0 +1,30 @@
+[
+  {
+    "type": "json",
+    "value": {
+      "agent_check_verdict": {
+        "applied": true,
+        "commands": [
+          {
+            "command": "python3 .covenant-kani-acceptance/acceptance_test.py",
+            "duration_ms": 372,
+            "exit_code": 0,
+            "output_tail": "....\n----------------------------------------------------------------------\nRan 4 tests in 0.001s\n\nOK\n",
+            "timed_out": false
+          },
+          {
+            "command": "python3 -m unittest discover -s deploy/kani-check/tests -v",
+            "duration_ms": 1017,
+            "exit_code": 0,
+            "output_tail": "test_bad_execution (test_runner.Classify.test_bad_execution) ... ok\ntest_counter_inconsistency_and_null (test_runner.Classify.test_counter_inconsistency_and_null) ... ok\ntest_duplicate_and_mismatched_records (test_runner.Classify.test_duplicate_and_mismatched_records) ... ok\ntest_duplicate_required_cover (test_runner.Classify.test_duplicate_required_cover) ... ok\ntest_invalid_plan_fails_closed (test_runner.Classify.test_invalid_plan_fails_closed) ... ok\ntest_malformed_documents (test_runner.Classify.test_malformed_documents) ... ok\ntest_no_assertion_is_inconclusive (test_runner.Classify.test_no_assertion_is_inconclusive) ... ok\ntest_nonzero_exit_with_success_doc (test_runner.Classify.test_nonzero_exit_with_success_doc) ... ok\ntest_outer_flags_override (test_runner.Classify.test_outer_flags_override) ... ok\ntest_proven (test_runner.Classify.test_proven) ... ok\ntest_refuted (test_runner.Classify.test_refuted) ... ok\ntest_refuted_plan_with_proof_not_accepted (test_runner.Classify.test_refuted_plan_with_proof_not_accepted) ... ok\ntest_solver_error_tool_error (test_runner.Classify.test_solver_error_tool_error) ... ok\ntest_summary_partial (test_runner.Classify.test_summary_partial) ... ok\ntest_unknown_status_is_tool_error (test_runner.Classify.test_unknown_status_is_tool_error) ... ok\ntest_unreachable_other_property_needs_covers (test_runner.Classify.test_unreachable_other_property_needs_covers) ... ok\ntest_unrequired_cover_may_be_unsatisfiable (test_runner.Classify.test_unrequired_cover_may_be_unsatisfiable) ... ok\ntest_plan_with_duplicate_keys_rejected (test_runner.Cli.test_plan_with_duplicate_keys_rejected) ... ok\ntest_export_overflow (test_runner.Execution.test_export_overflow) ... ok\ntest_export_symlink_rejected (test_runner.Execution.test_export_symlink_rejected) ... ok\ntest_invalid_json_and_duplicate_keys (test_runner.Execution.test_invalid_json_and_duplicate_keys) ... ok\ntest_missing_executable (test_runner.Execution.test_missing_executable) ... ok\ntest_nonzero_exit_without_export (test_runner.Execution.test_nonzero_exit_without_export) ... ok\ntest_offline_environment (test_runner.Execution.test_offline_environment) ... ok\ntest_overflow_is_tool_error (test_runner.Execution.test_overflow_is_tool_error) ... ok\ntest_stale_export_not_reused (test_runner.Execution.test_stale_export_not_reused) ... ok\ntest_success_hashes_and_artifacts (test_runner.Execution.test_success_hashes_and_artifacts) ... ok\ntest_timeout_kills_group (test_runner.Execution.test_timeout_kills_group) ... ok\ntest_command_exact (test_runner.PlanAndCommand.test_command_exact) ... ok\ntest_rejections (test_runner.PlanAndCommand.test_rejections) ... ok\ntest_cargo_config (test_runner.Rejections.test_cargo_config) ... ok\ntest_manifest_symlink_escape (test_runner.Rejections.test_manifest_symlink_escape) ... ok\ntest_safe_flags_allowed (test_runner.Rejections.test_safe_flags_allowed) ... ok\ntest_unsafe_env (test_runner.Rejections.test_unsafe_env) ... ok\ntest_unsafe_flags (test_runner.Rejections.test_unsafe_flags) ... ok\n\n----------------------------------------------------------------------\nRan 35 tests in 0.744s\n\nOK\n",
+            "timed_out": false
+          }
+        ],
+        "passed": true,
+        "patch_sha256": "64fa5cbeb83f162eff65cbeee41f10ef225d1da4491eafd20e7de16575ef29a4",
+        "task_job_id": "da35b756-1289-458e-8604-25072f0ddf8b",
+        "vote_signature_b58": "255Ab9Q8Lsnb3BuGEfTxcAMcMohn6YvPuDfoYphxMizTcYgLwU6wdH4MmtfF6TQfA6SYhctKKt4k81h2xzeN53T6"
+      }
+    }
+  }
+]

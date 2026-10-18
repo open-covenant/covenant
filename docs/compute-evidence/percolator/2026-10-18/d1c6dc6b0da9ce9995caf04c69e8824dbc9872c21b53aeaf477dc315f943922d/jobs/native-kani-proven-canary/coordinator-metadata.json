@@ -1,0 +1,13 @@
+{
+  "job_id": "97fbf4a1-a86c-4ca7-ab63-f44e3a7ffeed",
+  "status": "completed",
+  "charged_micro_usdc": 100000,
+  "payout": {
+    "amount_micro_usdc": 90000,
+    "tx_signature": "5RhUGZcyz94d8q3PqH1L2hpMrrhTy5kNzP1UXd2Lg4qZxsKWN438GZ8LRpQPAJhsC7uTBfqSjf1f1DxpA6NFqm3V",
+    "memo": "compute-payout:v1:97fbf4a1-a86c-4ca7-ab63-f44e3a7ffeed:3UZeZTCVDY6kebDkuDwGpGYq8mFJHvTdDNL6CxxYSmbuhdhpFPj7nM2V156FP6kStS9WoEC1wa9qP2sRjZ9Hcsiz",
+    "recorded_at_ms": 1792279740072
+  },
+  "refund_reason": null,
+  "trust": "Coordinator-reported accounting; signatures do not independently establish payment or complete check inventory."
+}

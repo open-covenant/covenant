@@ -1,0 +1,18 @@
+{
+  "schema": "covenant.runner-accounting-disclosure.v1",
+  "parent_job_id": "da35b756-1289-458e-8604-25072f0ddf8b",
+  "parent_signed_offer_micro_usdc": 2000000,
+  "parent_signed_receipt_price_micro_usdc": 2000000,
+  "parent_price_interpretation": "Agreed ceiling, not proof of actual debit or settled payment.",
+  "parent_api_reported_charged_micro_usdc": 1039880,
+  "parent_api_reported_payout_micro_usdc": 931392,
+  "child_job_id": "0f26776e-cfdf-46b4-a194-2c1c19bbb9c7",
+  "child_signed_offer_and_receipt_micro_usdc": 5000,
+  "child_api_reported_charge_micro_usdc": 5000,
+  "child_api_reported_payout_micro_usdc": 4500,
+  "aggregation": "The parent accounting includes the checker charge; do not add the child amount to the parent reported charge.",
+  "builder_reported_model_spend_micro_usd": 862400,
+  "model_spend_interpretation": "Signed builder output metadata; distinct from the coordinator charge and settlement.",
+  "settlement_verified": false,
+  "trust": "Receipt signatures authenticate signed claims. Coordinator-reported charge and payout transaction identifiers have not been independently reconciled to chain settlement."
+}

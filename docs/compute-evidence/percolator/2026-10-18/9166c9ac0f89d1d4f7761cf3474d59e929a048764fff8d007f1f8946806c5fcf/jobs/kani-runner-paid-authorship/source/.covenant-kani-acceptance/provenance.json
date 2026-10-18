@@ -1,0 +1,25 @@
+{
+  "origin": "Locally prepared buyer task, acceptance contract and source-derived fixtures; not Covenant-authored product code. No remote state changes or paid jobs.",
+  "sources": [
+    {
+      "source": "https://raw.githubusercontent.com/model-checking/kani/kani-0.68.0/kani-driver/src/frontend/schema_utils.rs",
+      "sha256": "5d1d22214db198ed42c2dd6290feca6fc62a86e7565a3d0c4ce4ac21144c59c1",
+      "file": "upstream/kani-driver__src__frontend__schema_utils.rs"
+    },
+    {
+      "source": "https://raw.githubusercontent.com/model-checking/kani/kani-0.68.0/kani-driver/src/call_cbmc.rs",
+      "sha256": "103ec8f6de68ab1271eac112f1078e358cbca54d15f0e979d62cf8d8109045e3",
+      "file": "upstream/kani-driver__src__call_cbmc.rs"
+    },
+    {
+      "source": "https://raw.githubusercontent.com/model-checking/kani/kani-0.68.0/kani-driver/src/harness_runner.rs",
+      "sha256": "9eb7e56a6ab6cda9f90f12738de384c4260f18acd2f32fff78693a9c19c49125",
+      "file": "upstream/kani-driver__src__harness_runner.rs"
+    },
+    {
+      "source": "https://raw.githubusercontent.com/model-checking/kani/kani-0.68.0/tests/json-handler/schema-validation/kani_json_schema.json",
+      "sha256": "8bb2b1dc15173ff817ce47fc0aed237adb0145d0c1f3a72864b7deb17d112a8e",
+      "file": "upstream/tests__json-handler__schema-validation__kani_json_schema.json"
+    }
+  ]
+}

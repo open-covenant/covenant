@@ -1,0 +1,49 @@
+{
+  "schema": "covenant.public-evidence-review.v1",
+  "archive_inventory_sha256": "9166c9ac0f89d1d4f7761cf3474d59e929a048764fff8d007f1f8946806c5fcf",
+  "reviewer": "Codex receipt_product_path agent",
+  "reviewed_at": "2026-10-17T23:12:37.001171+00:00",
+  "reviewed_all_source_patch_and_raw_logs": true,
+  "contains_no_private_credentials_or_capabilities": true,
+  "review_scope": [
+    "All signed parent and child envelope, receipt, output and coordinator metadata content; standalone copies equal full chain.",
+    "All nine source bundle blobs, including packed unreachable objects; original commit object and nine readable source files.",
+    "Exact accepted four-file patch, its reconstructed files, local follow-up delta and six final integrated files.",
+    "Python acceptance and unit-test output tails; this authorship job contains no raw Kani execution artifacts.",
+    "Original source fixtures retain public upstream URLs and matching SHA-256 hashes.",
+    "All public archive documentation, helper code and build provenance; local absolute paths excluded from the unsigned raw build log.",
+    "Rechecked both signed receipt_json operator keys and signer equality; distinct keys do not establish infrastructure ownership.",
+    "Canonical merge Git object mapping reviewed: exactly five changed release/documentation paths; all specified verifier/runtime/Kani objects identical.",
+    "Portable follow-up checker compares the canonical merged tree when supplied, while preserving the original paid/local-delta provenance."
+  ],
+  "excluded_private_material": [
+    "Buyer identity and signing keys",
+    "Funded buyer journals, API authentication material and temporary source-access credentials",
+    "Local job submission manifest and machine configuration",
+    "Raw verifier build log containing local filesystem paths"
+  ],
+  "both_signed_execution_windows_expired": true,
+  "capability_scope": "Only expired signed execution envelopes are staged. No hidden source overlays or active private capabilities are present.",
+  "verification": "Offline signature and semantic verifier accepted the full parent-child chain and final patch; source and integration mapping independently recomputed.",
+  "local_followup_tamper_controls": [
+    {
+      "changed_file": "jobs/kani-runner-paid-authorship/authored.patch",
+      "rejected": true
+    },
+    {
+      "changed_file": "local-integration/follow-up.patch",
+      "rejected": true
+    },
+    {
+      "changed_file": "local-integration/integrated-source/deploy/kani-check/runner.py",
+      "rejected": true
+    }
+  ],
+  "settlement_verified": false,
+  "inventory_completeness_verified": false,
+  "publication_status": "Local staging only; not published.",
+  "revision": "v3: canonical merge mapped with exact scoped input equivalence; whole-tree inequality explicit, actual d997 build and signed evidence unchanged.",
+  "distinct_signed_operator_keys_verified": true,
+  "stake_owner_separation_verified": false,
+  "independent_infrastructure_ownership_verified": false
+}

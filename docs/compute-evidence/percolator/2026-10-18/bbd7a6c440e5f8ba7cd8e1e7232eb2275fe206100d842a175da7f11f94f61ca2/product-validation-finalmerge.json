@@ -1,0 +1,346 @@
+{
+  "schema": "covenant.product-validation.v1",
+  "repository": "open-covenant/covenant",
+  "pull_request": 322,
+  "merge_commit": "b0d5910b60be2a4c370f356fdec6dc221c7a9378",
+  "ci_tested_head_commit": "ec7c328db58df4f44da9ed611b40b08471c3be18",
+  "source_tree": "9f5718efca50a84a6492fe4e84092b62d7131d32",
+  "merge_and_tested_head_trees_equal": true,
+  "ci_jobs": [
+    {
+      "id": 117519965410,
+      "run_id": 39074903456,
+      "name": "rust",
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "ec7c328db58df4f44da9ed611b40b08471c3be18",
+      "html_url": "https://github.com/open-covenant/covenant/actions/runs/39074903456/job/117519965410",
+      "started_at": "2026-10-17T22:24:14Z",
+      "completed_at": "2026-10-17T22:35:17Z",
+      "event": "pull_request",
+      "run_attempt": 1,
+      "log_sha256": "0afdc7e27a26e994759237de7713d3231c255cbc4347f7fb4f912766cd0a864e",
+      "log_bytes": 885926,
+      "rust_test_summary_lines": 270,
+      "rust_tests_passed": 4078,
+      "rust_tests_failed": 0,
+      "rust_tests_explicit_ignored": 431,
+      "steps": [
+        {
+          "number": 1,
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-10-17T22:24:15Z",
+          "completed_at": "2026-10-17T22:24:16Z"
+        },
+        {
+          "number": 2,
+          "name": "Run actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-10-17T22:24:16Z",
+          "completed_at": "2026-10-17T22:24:21Z"
+        },
+        {
+          "number": 3,
+          "name": "install rust",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-10-17T22:24:21Z",
+          "completed_at": "2026-10-17T22:24:30Z"
+        },
+        {
+          "number": 4,
+          "name": "Run Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-10-17T22:24:30Z",
+          "completed_at": "2026-10-17T22:24:30Z"
+        },
+        {
+          "number": 5,
+          "name": "Run ./scripts/validate.sh",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-10-17T22:24:30Z",
+          "completed_at": "2026-10-17T22:34:54Z"
+        },
+        {
+          "number": 9,
+          "name": "Post Run Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-10-17T22:34:54Z",
+          "completed_at": "2026-10-17T22:35:15Z"
+        },
+        {
+          "number": 10,
+          "name": "Post Run actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-10-17T22:35:15Z",
+          "completed_at": "2026-10-17T22:35:16Z"
+        },
+        {
+          "number": 11,
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-10-17T22:35:16Z",
+          "completed_at": "2026-10-17T22:35:16Z"
+        }
+      ],
+      "api_auth_forwarded_to_download_host": false,
+      "rustc": "1.99.1 (58cf8f9c3 2026-10-13)",
+      "validation_command": "./scripts/validate.sh",
+      "cargo_commands": [
+        "cargo fmt --check",
+        "cargo build --workspace --exclude covenant-settlement-program --exclude covenant-stake-program --locked",
+        "cargo clippy --workspace --all-targets --exclude covenant-settlement-program --exclude covenant-stake-program --locked -- -D warnings",
+        "cargo test --workspace --exclude covenant-settlement-program --exclude covenant-stake-program --locked"
+      ],
+      "script_command_count": 223,
+      "count_scope": "Sum of Rust test-result lines emitted once by this full workspace validate.sh job; includes doc-test targets, with ignored tests counted separately."
+    },
+    {
+      "id": 117519950024,
+      "run_id": 39074899583,
+      "name": "rust",
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "ec7c328db58df4f44da9ed611b40b08471c3be18",
+      "html_url": "https://github.com/open-covenant/covenant/actions/runs/39074899583/job/117519950024",
+      "started_at": "2026-10-17T22:24:11Z",
+      "completed_at": "2026-10-17T22:35:07Z",
+      "event": "push",
+      "run_attempt": 1,
+      "log_sha256": "b2400c03b6b6f9e5a6c0b3d79516a2018261909d0cd199646064cf297cd8d847",
+      "log_bytes": 883909,
+      "rust_test_summary_lines": 270,
+      "rust_tests_passed": 4078,
+      "rust_tests_failed": 0,
+      "rust_tests_explicit_ignored": 431,
+      "steps": [
+        {
+          "number": 1,
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-10-17T22:24:12Z",
+          "completed_at": "2026-10-17T22:24:12Z"
+        },
+        {
+          "number": 2,
+          "name": "Run actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-10-17T22:24:12Z",
+          "completed_at": "2026-10-17T22:24:18Z"
+        },
+        {
+          "number": 3,
+          "name": "install rust",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-10-17T22:24:18Z",
+          "completed_at": "2026-10-17T22:24:27Z"
+        },
+        {
+          "number": 4,
+          "name": "Run Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-10-17T22:24:27Z",
+          "completed_at": "2026-10-17T22:24:27Z"
+        },
+        {
+          "number": 5,
+          "name": "Run ./scripts/validate.sh",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-10-17T22:24:27Z",
+          "completed_at": "2026-10-17T22:34:41Z"
+        },
+        {
+          "number": 9,
+          "name": "Post Run Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-10-17T22:34:41Z",
+          "completed_at": "2026-10-17T22:35:05Z"
+        },
+        {
+          "number": 10,
+          "name": "Post Run actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-10-17T22:35:05Z",
+          "completed_at": "2026-10-17T22:35:05Z"
+        },
+        {
+          "number": 11,
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-10-17T22:35:05Z",
+          "completed_at": "2026-10-17T22:35:05Z"
+        }
+      ],
+      "api_auth_forwarded_to_download_host": false,
+      "rustc": "1.99.1 (58cf8f9c3 2026-10-13)",
+      "validation_command": "./scripts/validate.sh",
+      "cargo_commands": [
+        "cargo fmt --check",
+        "cargo build --workspace --exclude covenant-settlement-program --exclude covenant-stake-program --locked",
+        "cargo clippy --workspace --all-targets --exclude covenant-settlement-program --exclude covenant-stake-program --locked -- -D warnings",
+        "cargo test --workspace --exclude covenant-settlement-program --exclude covenant-stake-program --locked"
+      ],
+      "script_command_count": 223,
+      "count_scope": "Sum of Rust test-result lines emitted once by this full workspace validate.sh job; includes doc-test targets, with ignored tests counted separately."
+    }
+  ],
+  "head_checks": [
+    {
+      "id": 117521052237,
+      "name": "sign and release",
+      "status": "completed",
+      "conclusion": "skipped",
+      "head_sha": "ec7c328db58df4f44da9ed611b40b08471c3be18",
+      "html_url": "https://github.com/open-covenant/covenant/actions/runs/39074903434/job/117521052237",
+      "started_at": "2026-10-17T22:29:30Z",
+      "completed_at": "2026-10-17T22:29:30Z"
+    },
+    {
+      "id": 117519991788,
+      "name": "Socket Security: Pull Request Alerts",
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "ec7c328db58df4f44da9ed611b40b08471c3be18",
+      "html_url": "https://github.com/open-covenant/covenant/runs/117519991788",
+      "started_at": "2026-10-17T22:24:18Z",
+      "completed_at": "2026-10-17T22:24:32Z"
+    },
+    {
+      "id": 117519973430,
+      "name": "build aarch64-apple-darwin",
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "ec7c328db58df4f44da9ed611b40b08471c3be18",
+      "html_url": "https://github.com/open-covenant/covenant/actions/runs/39074903434/job/117519973430",
+      "started_at": "2026-10-17T22:24:23Z",
+      "completed_at": "2026-10-17T22:29:13Z"
+    },
+    {
+      "id": 117519973378,
+      "name": "build x86_64-apple-darwin",
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "ec7c328db58df4f44da9ed611b40b08471c3be18",
+      "html_url": "https://github.com/open-covenant/covenant/actions/runs/39074903434/job/117519973378",
+      "started_at": "2026-10-17T22:24:24Z",
+      "completed_at": "2026-10-17T22:29:30Z"
+    },
+    {
+      "id": 117519973377,
+      "name": "build aarch64-unknown-linux-musl",
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "ec7c328db58df4f44da9ed611b40b08471c3be18",
+      "html_url": "https://github.com/open-covenant/covenant/actions/runs/39074903434/job/117519973377",
+      "started_at": "2026-10-17T22:24:19Z",
+      "completed_at": "2026-10-17T22:27:20Z"
+    },
+    {
+      "id": 117519973243,
+      "name": "build x86_64-unknown-linux-musl",
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "ec7c328db58df4f44da9ed611b40b08471c3be18",
+      "html_url": "https://github.com/open-covenant/covenant/actions/runs/39074903434/job/117519973243",
+      "started_at": "2026-10-17T22:24:16Z",
+      "completed_at": "2026-10-17T22:27:24Z"
+    },
+    {
+      "id": 117519965410,
+      "name": "rust",
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "ec7c328db58df4f44da9ed611b40b08471c3be18",
+      "html_url": "https://github.com/open-covenant/covenant/actions/runs/39074903456/job/117519965410",
+      "started_at": "2026-10-17T22:24:14Z",
+      "completed_at": "2026-10-17T22:35:17Z"
+    },
+    {
+      "id": 117519965220,
+      "name": "landing",
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "ec7c328db58df4f44da9ed611b40b08471c3be18",
+      "html_url": "https://github.com/open-covenant/covenant/actions/runs/39074903456/job/117519965220",
+      "started_at": "2026-10-17T22:24:14Z",
+      "completed_at": "2026-10-17T22:25:09Z"
+    },
+    {
+      "id": 117519950024,
+      "name": "rust",
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "ec7c328db58df4f44da9ed611b40b08471c3be18",
+      "html_url": "https://github.com/open-covenant/covenant/actions/runs/39074899583/job/117519950024",
+      "started_at": "2026-10-17T22:24:11Z",
+      "completed_at": "2026-10-17T22:35:07Z"
+    },
+    {
+      "id": 117519949851,
+      "name": "landing",
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "ec7c328db58df4f44da9ed611b40b08471c3be18",
+      "html_url": "https://github.com/open-covenant/covenant/actions/runs/39074899583/job/117519949851",
+      "started_at": "2026-10-17T22:24:09Z",
+      "completed_at": "2026-10-17T22:25:02Z"
+    },
+    {
+      "id": 117519924847,
+      "name": "Socket Security: Project Report",
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "ec7c328db58df4f44da9ed611b40b08471c3be18",
+      "html_url": "https://github.com/open-covenant/covenant/runs/117519924847",
+      "started_at": "2026-10-17T22:23:58Z",
+      "completed_at": "2026-10-17T22:24:18Z"
+    },
+    {
+      "id": 117519911059,
+      "name": "verify",
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "ec7c328db58df4f44da9ed611b40b08471c3be18",
+      "html_url": "https://github.com/open-covenant/covenant/actions/runs/39074903529/job/117519911059",
+      "started_at": "2026-10-17T22:23:58Z",
+      "completed_at": "2026-10-17T22:25:27Z"
+    },
+    {
+      "id": 117519910787,
+      "name": "gvisor-live",
+      "status": "completed",
+      "conclusion": "failure",
+      "head_sha": "ec7c328db58df4f44da9ed611b40b08471c3be18",
+      "html_url": "https://github.com/open-covenant/covenant/actions/runs/39074903420/job/117519910787",
+      "started_at": "2026-10-17T22:23:58Z",
+      "completed_at": "2026-10-17T22:24:08Z"
+    }
+  ],
+  "interpretation": "Successful full Rust jobs cover their recorded CI command scopes. Explicit ignores remain skipped; product validation is separate from paid Covenant job execution and Kani proof outcomes.",
+  "local_validation": {
+    "rustc": "1.98.1",
+    "buyer_passed": 464,
+    "buyer_explicit_ignored": 13,
+    "core_passed": 1163,
+    "core_explicit_ignored": 28,
+    "script_guards": 223,
+    "fmt_check": "passed"
+  },
+  "log_collection": "API auth used only at api.github.com; temporary log download used a fresh unauthenticated request. Public summary excludes the temporary URL and raw CI logs."
+}

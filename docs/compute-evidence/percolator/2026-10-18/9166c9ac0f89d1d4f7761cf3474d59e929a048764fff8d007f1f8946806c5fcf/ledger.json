@@ -1,0 +1,82 @@
+{
+  "schema": "covenant.percolator.public-evidence.v1",
+  "status": "collected_private_not_published",
+  "entries": [
+    {
+      "label": "kani-runner-paid-authorship",
+      "role": "authorship",
+      "origin": "Covenant paid agent job produced the exact signed returned runner patch, and the linked checker accepted that same patch. Subsequent local integration and repairs are recorded separately and are not attributed to this agent job.",
+      "purpose": "Archive the original runner authorship and signed acceptance chain; this is not a receipt for proving a Percolator harness or executing Kani.",
+      "source_mapping": {
+        "public_repo_url": null,
+        "original_commit": "dac921312a9e6533c30ba9a9b68cc59ff71a863a",
+        "signed_repo_commit": "d2a4a720185ae8bf7e0d732b314a061873dfcfe5",
+        "tree_hash": "ce66dbd4769e01f34bde2a7f01673e630275eee8",
+        "tree_equality_checked": true,
+        "source_files": [
+          {
+            "path": ".covenant-kani-acceptance/acceptance_test.py",
+            "sha256": "07c3fd55f70b905ca9041eb6505cdda1d561892f28dace9025c3e0f9d5801265"
+          },
+          {
+            "path": ".covenant-kani-acceptance/classifier-cases.json",
+            "sha256": "ba28fe6aeaccba3779adaaa24ef1bd2edd0d074d64426d15ba86859369e5d00e"
+          },
+          {
+            "path": ".covenant-kani-acceptance/example-plan.json",
+            "sha256": "6ecd687d3c16a76cd8decf6a88d0d5d43f0a4c62ee7a35d9ff2bb98186c6bb54"
+          },
+          {
+            "path": ".covenant-kani-acceptance/provenance.json",
+            "sha256": "cd13d8ba9f086945db8c22c00a021d20af6bcc6e7f7265491868c733973ecd3e"
+          },
+          {
+            "path": ".covenant-kani-acceptance/upstream/kani-driver__src__call_cbmc.rs",
+            "sha256": "103ec8f6de68ab1271eac112f1078e358cbca54d15f0e979d62cf8d8109045e3"
+          },
+          {
+            "path": ".covenant-kani-acceptance/upstream/kani-driver__src__frontend__schema_utils.rs",
+            "sha256": "5d1d22214db198ed42c2dd6290feca6fc62a86e7565a3d0c4ce4ac21144c59c1"
+          },
+          {
+            "path": ".covenant-kani-acceptance/upstream/kani-driver__src__harness_runner.rs",
+            "sha256": "9eb7e56a6ab6cda9f90f12738de384c4260f18acd2f32fff78693a9c19c49125"
+          },
+          {
+            "path": ".covenant-kani-acceptance/upstream/tests__json-handler__schema-validation__kani_json_schema.json",
+            "sha256": "8bb2b1dc15173ff817ce47fc0aed237adb0145d0c1f3a72864b7deb17d112a8e"
+          },
+          {
+            "path": "README.md",
+            "sha256": "e841cccbb0bf72fc44b2d94665d5f37f52bf5135fa2db0d11aaf9b799f1807ab"
+          }
+        ],
+        "bundle_sha256": "0e196b8d31d5a2e62127a868a2587570bc078dd6984e30f37475a9f27e92ec21"
+      },
+      "job_id": "da35b756-1289-458e-8604-25072f0ddf8b",
+      "signed_price_micro_usdc": 2000000,
+      "receipt_price_micro_usdc": 2000000,
+      "issued_at_ms": 1792271808518,
+      "envelope_expires_at_ms": 1792273608518,
+      "verifier": {
+        "acceptance_passed": null,
+        "agent_final_patch_accepted": true,
+        "buyer_pubkey": "5jhfhR4THAkC8GVJZDTP579KCdSnMdejw2oEcXZoZGnJ",
+        "envelope_signature_verified": true,
+        "exact_envelope_output_hashes_verified": true,
+        "inventory_completeness_verified": false,
+        "job_id": "da35b756-1289-458e-8604-25072f0ddf8b",
+        "kani": null,
+        "receipt_execution_status": "ok",
+        "receipt_signature_verified": true,
+        "settlement_verified": false
+      },
+      "published": false
+    }
+  ],
+  "limitations": [
+    "Signed receipts authenticate operator claims; they do not independently prove hardware isolation, payment, or complete job inventory.",
+    "Kani proven means the selected harness passed its stated bounds and toolchain; timeout/OOM/error is not a proof.",
+    "Authored patch provenance excludes later local integration edits unless separately enumerated."
+  ]
+}

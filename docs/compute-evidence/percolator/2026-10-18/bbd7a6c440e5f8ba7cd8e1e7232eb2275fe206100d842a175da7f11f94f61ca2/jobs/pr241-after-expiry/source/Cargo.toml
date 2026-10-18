@@ -1,0 +1,66 @@
+[package]
+name = "percolator"
+version = "0.1.1"
+edition = "2021"
+license = "Apache-2.0"
+
+[lib]
+name = "percolator"
+path = "src/lib.rs"
+
+[dependencies]
+bytemuck = { version = "1.23", default-features = false, features = ["derive"] }
+
+[dev-dependencies]
+proptest = "1.4"
+
+[features]
+default = []
+stress = []  # Reserved for stress/audit harnesses
+fuzz = []  # Enable fuzzing tests over the production zero-copy view path.
+audit-scan = []  # Enable full account-table invariant scans on public exits
+closure = []  # Kani inductive-closure layer (plain proofs, no -Z needed); see scripts/contracts_runner.sh
+contracts = []  # Kani function-contract layer; build with: cargo kani -Z function-contracts --features fuzz,contracts (see scripts/contracts_runner.sh)
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+opt-level = 3
+overflow-checks = true
+
+[profile.sbf]
+inherits = "release"
+panic = "abort"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(kani)',
+    'cfg(target_os, values("solana"))',
+] }
+
+[workspace.metadata.kani]
+flags = { tests = true }
+unstable = { stubbing = true }
+
+[[workspace.metadata.kani.proof]]
+harness = ".*"
+unwind = 70
+
+[[test]]
+name = "v16_spec_tests"
+path = "tests/v16_spec_tests.rs"
+
+[[test]]
+name = "v16_fuzzing"
+path = "tests/v16_fuzzing.rs"
+required-features = ["fuzz"]
+
+[[test]]
+name = "rounding_residue_fuzz"
+path = "tests/rounding_residue_fuzz.rs"
+required-features = ["fuzz"]
+
+[[test]]
+name = "reference_model_conformance"
+path = "tests/reference_model_conformance.rs"
+required-features = ["fuzz"]

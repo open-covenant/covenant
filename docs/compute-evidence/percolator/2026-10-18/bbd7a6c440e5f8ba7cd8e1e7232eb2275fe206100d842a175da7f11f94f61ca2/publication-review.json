@@ -1,0 +1,24 @@
+{
+  "schema": "covenant.public-evidence-review.v1",
+  "archive_inventory_sha256": "bbd7a6c440e5f8ba7cd8e1e7232eb2275fe206100d842a175da7f11f94f61ca2",
+  "reviewer": "Codex receipt_product_path agent",
+  "reviewed_at": "2026-10-18T00:28:28.886794+00:00",
+  "reviewed_all_source_patch_and_raw_logs": true,
+  "contains_no_private_credentials_or_capabilities": true,
+  "credentials_and_private_assets_absent": true,
+  "expiry_gate_pending": false,
+  "publication_status": "Local public-only staging, no remote publication.",
+  "expires_at_ms": 1792284394322,
+  "expires_at_utc": "2026-10-18T00:46:34.322000+00:00",
+  "review_scope": [
+    "Both complete signed records revalidated by the Rust verifier, with exact original/snapshot tree equality and byte-identical previously reviewed public source bundle.",
+    "All10,451,127 raw artifact bytes preserved and credential-scanned; complete parsed check/status inventories, cover assertions and source-location sets reviewed; compiler diagnostics and solver summaries inspected.",
+    "Raw locations refer only to public Percolator source and pinned image toolchain paths; URLs are public Rust/Kani references. No buyer identity, private configuration, journal or unrelated machine assets included.",
+    "Readable provenance distinguishes two accepted checks, two prior failures, actual builder/verifier revisions, paid verification versus original authorship, and independently unverified settlement.",
+    "CI metadata keeps historical Rust1.99.1 runs separate from subsequent pinned1.98.1 jobs; raw CI download credentials/URLs are absent.",
+    "Failure links use exact immutable inventory-directory names; single accepted preservation archive remains private."
+  ],
+  "settlement_verified": false,
+  "inventory_completeness_verified": false,
+  "expiry_gate_completed_at": "2026-10-18T00:46:34.461553+00:00"
+}

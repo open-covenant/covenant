@@ -1,0 +1,30 @@
+   Compiling libc v0.2.177
+   Compiling getrandom v0.3.4
+   Compiling cfg-if v1.0.4
+   Compiling proc-macro2 v1.0.101
+   Compiling zerocopy v0.8.27
+   Compiling quote v1.0.41
+   Compiling unicode-ident v1.0.19
+   Compiling rustix v1.1.2
+error: failed to run custom build command for `quote v1.0.41`
+
+Caused by:
+  could not execute process `/scratch/target/kani/debug/build/quote/0d1ebf847eeca6b5/out/build_script_build` (never executed)
+
+Caused by:
+  Permission denied (os error 13)
+warning: build failed, waiting for other jobs to finish...
+error: failed to run custom build command for `getrandom v0.3.4`
+
+Caused by:
+  could not execute process `/scratch/target/kani/debug/build/getrandom/bbd7a4e97bff6a8b/out/build_script_build` (never executed)
+
+Caused by:
+  Permission denied (os error 13)
+error: failed to run custom build command for `libc v0.2.177`
+
+Caused by:
+  could not execute process `/scratch/target/kani/debug/build/libc/991e34048ade5ab6/out/build_script_build` (never executed)
+
+Caused by:
+  Permission denied (os error 13)

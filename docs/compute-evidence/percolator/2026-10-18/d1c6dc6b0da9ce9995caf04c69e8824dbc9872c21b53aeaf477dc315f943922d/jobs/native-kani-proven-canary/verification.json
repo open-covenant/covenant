@@ -1,0 +1,27 @@
+{
+  "acceptance_passed": true,
+  "agent_final_patch_accepted": null,
+  "buyer_pubkey": "5jhfhR4THAkC8GVJZDTP579KCdSnMdejw2oEcXZoZGnJ",
+  "envelope_signature_verified": true,
+  "exact_envelope_output_hashes_verified": true,
+  "inventory_completeness_verified": false,
+  "job_id": "97fbf4a1-a86c-4ca7-ab63-f44e3a7ffeed",
+  "kani": {
+    "accepted": true,
+    "cpus": 6,
+    "harness": "receipt_smoke",
+    "image": "ghcr.io/open-covenant/covenant/compute-node-public@sha256:1ac3419ac2c070b464d753b5b78094725733740c8b136505b3a38cae759345bd",
+    "image_id": "sha256:1ac3419ac2c070b464d753b5b78094725733740c8b136505b3a38cae759345bd",
+    "memory_mib": 27648,
+    "outcome": "proven",
+    "scratch_mib": 8192,
+    "tool_pin": {
+      "cbmc": "6.11.0",
+      "kani": "0.68.0",
+      "rust_toolchain": "nightly-2026-08-21-x86_64-unknown-linux-gnu"
+    }
+  },
+  "receipt_execution_status": "ok",
+  "receipt_signature_verified": true,
+  "settlement_verified": false
+}

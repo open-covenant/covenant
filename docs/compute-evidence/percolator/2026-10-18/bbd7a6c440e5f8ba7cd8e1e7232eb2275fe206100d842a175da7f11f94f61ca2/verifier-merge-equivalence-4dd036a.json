@@ -1,0 +1,91 @@
+{
+  "schema": "covenant.scoped-source-equivalence.v1",
+  "verified_at": "2026-10-17T23:52:22.355077+00:00",
+  "actual_verifier_build_commit": "d997bb6436569d8dc96f963aaf72259b92ccb5ba",
+  "actual_buyer_build_commit": "6502c3bb406b757c80410bf30014b08dc448e882",
+  "canonical_merge_commit": "4dd036a4d59612326095768ff4b4f272aa48562d",
+  "previous_runtime_merge": "983172ddd04ac2de70136125e2088f22c6edf505",
+  "coordinator_deployed_source_commit": "983172ddd04ac2de70136125e2088f22c6edf505",
+  "node_intended_source_commit": "4dd036a4d59612326095768ff4b4f272aa48562d",
+  "node_deployment_status": "pending rollout; source mapping is not deployment evidence",
+  "tested_node_head": "59fc351a74311e3084755695166d784d3213e839",
+  "tested_head_tree": "69f45572b3118969835d8bae35e119a0a301e7bc",
+  "canonical_complete_tree": "69f45572b3118969835d8bae35e119a0a301e7bc",
+  "tested_head_whole_tree_equal_to_merge": true,
+  "actual_verifier_complete_tree": "59dc7a4905be7e54735b38a7e6a7ce2b51f83471",
+  "actual_verifier_whole_tree_equal_to_merge": false,
+  "all_agent_os_equal_to_previous_runtime": false,
+  "changed_paths_since_previous_runtime": [
+    "agent-os/crates/covenant-compute-node/README.md",
+    "agent-os/crates/covenant-compute-node/src/kani.rs"
+  ],
+  "unchanged_buyer_and_verifier_inputs": {
+    "agent-os/Cargo.toml": {
+      "buyer_actual_build": "b6ac6204fe5fae6689500a2f87066e76c8cf77ab",
+      "verifier_actual_build": "b6ac6204fe5fae6689500a2f87066e76c8cf77ab",
+      "canonical_merge": "b6ac6204fe5fae6689500a2f87066e76c8cf77ab",
+      "identical": true
+    },
+    "agent-os/Cargo.lock": {
+      "buyer_actual_build": "e7ef9a431eb9b5f8973b6bb1b0374281a5ec87c6",
+      "verifier_actual_build": "e7ef9a431eb9b5f8973b6bb1b0374281a5ec87c6",
+      "canonical_merge": "e7ef9a431eb9b5f8973b6bb1b0374281a5ec87c6",
+      "identical": true
+    },
+    "agent-os/vendor": {
+      "buyer_actual_build": "bc146daeea779dc8ab02aba19cdad63a799f3240",
+      "verifier_actual_build": "bc146daeea779dc8ab02aba19cdad63a799f3240",
+      "canonical_merge": "bc146daeea779dc8ab02aba19cdad63a799f3240",
+      "identical": true
+    },
+    "agent-os/crates/covenant-compute-buyer": {
+      "buyer_actual_build": "45467c2169d863faa4151fc77215aca90457d7cb",
+      "verifier_actual_build": "45467c2169d863faa4151fc77215aca90457d7cb",
+      "canonical_merge": "45467c2169d863faa4151fc77215aca90457d7cb",
+      "identical": true
+    },
+    "agent-os/crates/covenant-compute-protocol": {
+      "buyer_actual_build": "6eba7a09feb635d623f17dfeb30e86f5861a9e5b",
+      "verifier_actual_build": "6eba7a09feb635d623f17dfeb30e86f5861a9e5b",
+      "canonical_merge": "6eba7a09feb635d623f17dfeb30e86f5861a9e5b",
+      "identical": true
+    },
+    "agent-os/crates/covenant-identity": {
+      "buyer_actual_build": "462ebe44704041ba9f08addc151ba1f4dbd51ddc",
+      "verifier_actual_build": "462ebe44704041ba9f08addc151ba1f4dbd51ddc",
+      "canonical_merge": "462ebe44704041ba9f08addc151ba1f4dbd51ddc",
+      "identical": true
+    },
+    "agent-os/crates/covenant-mcp": {
+      "buyer_actual_build": "29497c36a40bd5626dfa8a5c91973d3a0c4d02c8",
+      "verifier_actual_build": "29497c36a40bd5626dfa8a5c91973d3a0c4d02c8",
+      "canonical_merge": "29497c36a40bd5626dfa8a5c91973d3a0c4d02c8",
+      "identical": true
+    },
+    "agent-os/crates/covenant-a2a": {
+      "buyer_actual_build": "74de509dafbfd81fe30786ffe280c97463bc191e",
+      "verifier_actual_build": "74de509dafbfd81fe30786ffe280c97463bc191e",
+      "canonical_merge": "74de509dafbfd81fe30786ffe280c97463bc191e",
+      "identical": true
+    },
+    "agent-os/crates/covenant-types": {
+      "buyer_actual_build": "43e709a82ccaa66fa75f46c33944c4e209a2e6ce",
+      "verifier_actual_build": "43e709a82ccaa66fa75f46c33944c4e209a2e6ce",
+      "canonical_merge": "43e709a82ccaa66fa75f46c33944c4e209a2e6ce",
+      "identical": true
+    }
+  },
+  "buyer_recorded_file_hashes_checked": 77,
+  "buyer_binary_sha256": "b2fc00d2dcb5010b316afc907187e95d7d71f68d9cf51205265acc0827c225cf",
+  "verifier_binary_sha256": "1d683d32bf0e600c9747b679fcbf7d03a51e05c896869b0951a768ea17be9edf",
+  "helper_source_sha256": "557c6b9815ddcf21e32808065aab513f67764c423d699291c8aec25b83a548cf",
+  "helper_lock_sha256": "940f56123a159c66fcb0674bf3358dfa1138217baa70dca7f28711e2b942d863",
+  "kani_runner_context": {
+    "path": "deploy/kani-check",
+    "previous_object": "8611385ec47441935fe6364c0d1fb1752084d598",
+    "canonical_object": "8611385ec47441935fe6364c0d1fb1752084d598",
+    "identical": true
+  },
+  "equivalence_claim": "Exact tracked Git objects match for buyer, protocol, all recursive normal local path dependencies, workspace Cargo manifests/lock and vendored dependencies. The node Kani executor changed, so neither all-agent-os nor whole-runtime equality is claimed. The existing buyer and offline verifier binaries retain their actual build provenance.",
+  "excluded_from_equivalence": "Node runtime/build-script scratch execution and its documentation changed. Container image identity and live rollout require separate records. Coordinator continues at 983172d."
+}

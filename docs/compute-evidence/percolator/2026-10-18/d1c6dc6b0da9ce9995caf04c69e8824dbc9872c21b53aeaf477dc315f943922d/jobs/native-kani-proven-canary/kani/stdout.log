@@ -1,0 +1,72 @@
+Kani Rust Verifier 0.68.0 (cargo plugin)
+CBMC 6.11.0
+warning: use of an unstable feature
+ --> <crate attribute>:1:12
+  |
+1 | #![feature(register_tool)]
+  |            ^^^^^^^^^^^^^
+  |
+  = note: requested on the command line with `--force-warn unstable-features`
+
+Checking harness receipt_smoke...
+CBMC 6.11.0 (cbmc-6.11.0)
+CBMC version 6.11.0 (cbmc-6.11.0) 64-bit x86_64 linux
+Reading GOTO program from file /scratch/target/kani/x86_64-unknown-linux-gnu/debug/build/covenant_kani_smoke/eeede8e01274d79c/out/covenant_kani_smoke-eeede8e01274d79c__RNvCsguYO9eED87Z_19covenant_kani_smoke13receipt_smoke.out
+Generating GOTO Program
+Adding CPROVER library (x86_64)
+Removal of function pointers and virtual functions
+Generic Property Instrumentation
+Running with 16 object bits, 48 offset bits (user-specified)
+Starting Bounded Model Checking
+Runtime Symex: 0.00788591s
+size of program expression: 144 steps
+slicing removed 67 assignments
+Generated 4 VCC(s), 4 remaining after simplification
+Runtime Postprocess Equation: 6.553e-05s
+Passing problem to propositional reduction
+converting SSA
+Runtime Convert SSA: 0.00143972s
+Running propositional reduction
+Post-processing
+Runtime Post-process: 1.149e-05s
+Solving with CaDiCaL 3.0.0
+25 variables, 43 clauses
+SAT checker: instance is SATISFIABLE
+Runtime Solver: 0.00017305s
+Runtime decision procedure: 0.00173359s
+Running propositional reduction
+Solving with CaDiCaL 3.0.0
+26 variables, 44 clauses
+SAT checker: instance is SATISFIABLE
+Runtime Solver: 5.634e-05s
+Runtime decision procedure: 0.00010288s
+Running propositional reduction
+Solving with CaDiCaL 3.0.0
+27 variables, 45 clauses
+SAT checker: instance is UNSATISFIABLE
+Runtime Solver: 3.198e-05s
+Runtime decision procedure: 6.548e-05s
+
+RESULTS:
+Check 1: receipt_smoke.cover.1
+	 - Status: SATISFIED
+	 - Description: "smoke reachable"
+	 - Location: src/lib.rs:6:5 in function receipt_smoke
+
+Check 2: receipt_smoke.assertion.1
+	 - Status: SUCCESS
+	 - Description: "assertion failed: value < 10"
+	 - Location: src/lib.rs:7:5 in function receipt_smoke
+
+
+SUMMARY:
+ ** 0 of 1 failed
+
+ ** 1 of 1 cover properties satisfied
+
+
+VERIFICATION:- SUCCESSFUL
+Verification Time: 0.08539785s
+
+Manual Harness Summary:
+Complete - 1 successfully verified harnesses, 0 failures, 1 total.

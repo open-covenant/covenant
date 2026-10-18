@@ -1,0 +1,23 @@
+{
+  "schema": "covenant.pilot-resource-adjustment.v1",
+  "recorded_at": "2026-10-17T23:27:27.188928+00:00",
+  "host_tier": "ccx33 / 32 GB host",
+  "observed_mem_available_mib": 30704.6953125,
+  "old_requested_memory_mib": 28672,
+  "reserved_memory_mib": 2048,
+  "old_shortfall_mib": 15.3046875,
+  "old_profile_purchased": false,
+  "new_requested_memory_mib": 27648,
+  "proof_memory_limit_gib": 27,
+  "cpus": 6,
+  "scratch_mib": 8192,
+  "remaining_measured_startup_margin_mib": 1008.6953125,
+  "post_stepdown_profile": {
+    "memory_mib": 12288,
+    "cpus": 6,
+    "scratch_mib": 4096
+  },
+  "capacity_block_record_sha256": "3c2ed6862c5e2d1916a93750188f8f9009db471b44d36d2b8cdf0caff99718a5",
+  "source": "Read-only deployment capacity measurement; original private block record preserved. New profile authorized before any new paid job.",
+  "scope": "Pending pilot narrative only. No signed public archive fields changed. No new purchase or proof result is claimed."
+}

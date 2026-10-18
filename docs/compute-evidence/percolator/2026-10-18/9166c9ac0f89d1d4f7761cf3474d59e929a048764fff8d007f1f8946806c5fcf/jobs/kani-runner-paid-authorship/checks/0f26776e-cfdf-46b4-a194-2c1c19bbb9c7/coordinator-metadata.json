@@ -1,0 +1,13 @@
+{
+  "reported": {
+    "assigned_operator": "8N238CskW3qA8uAyJNYpMMovoedsSKycXhkZLmFLsi7m",
+    "phase": "completed",
+    "charged_micro_usdc": 5000,
+    "payout": {
+      "amount_micro_usdc": 4500,
+      "tx_signature": "59pzrtHJwRSwPD9cyYgCWLS8v5RGLGQcYZBFvTWd4TVVefFDpnMDcTqU3V6dHUYWQNQpkEUG62YJRDRARMNAVEPb",
+      "memo": "compute-payout:v1:0f26776e-cfdf-46b4-a194-2c1c19bbb9c7:2n9GCWh2K7f9Xi6oWFDZ9z6NSabT7ah5aTrvruGTK4aFzLZNMRGSMQenP6m8mBRcBb9d1L8sNQEzM3ZN6Arrmxgf"
+    }
+  },
+  "trust": "Unsigned coordinator API metadata; not independent settlement verification."
+}

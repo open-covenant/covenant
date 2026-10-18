@@ -1,0 +1,16 @@
+{
+  "expected_assertion": null,
+  "expected_outcome": "proven",
+  "features": [
+    "fuzz"
+  ],
+  "harness": "proof_v16_public_counterparty_backing_withdraw_rejects_lapsed_bucket_after_expiry",
+  "manifest_path": "Cargo.toml",
+  "required_covers": [
+    "withdrawal from lapsed backing under a live claim is refused"
+  ],
+  "schema": "covenant.kani.plan.v1",
+  "tests": true,
+  "timeout_secs": 1200,
+  "unwind": null
+}

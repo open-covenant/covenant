@@ -1,0 +1,26 @@
+{
+  "schema": "covenant.public-verifier-build.v1",
+  "actual_checkout_commit": "d997bb6436569d8dc96f963aaf72259b92ccb5ba",
+  "source_tree": "59dc7a4905be7e54735b38a7e6a7ce2b51f83471",
+  "checkout_clean": true,
+  "canonical_merge_commit": "983172ddd04ac2de70136125e2088f22c6edf505",
+  "canonical_merge_status": "merged; scoped verifier/runtime/Kani inputs identical; complete repository trees differ",
+  "built": true,
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "helper_source_sha256": "557c6b9815ddcf21e32808065aab513f67764c423d699291c8aec25b83a548cf",
+  "helper_lock_sha256": "940f56123a159c66fcb0674bf3358dfa1138217baa70dca7f28711e2b942d863",
+  "binary_sha256": "1d683d32bf0e600c9747b679fcbf7d03a51e05c896869b0951a768ea17be9edf",
+  "validation": {
+    "public_evidence_tests": 17,
+    "recovered_paid_parent_child_chain_verified": true,
+    "child_tamper_controls_rejected": 3,
+    "settlement_verified": false,
+    "inventory_completeness_verified": false
+  },
+  "build_log": "Retained privately; raw log contains local filesystem paths. Compiler, commit, lockfile, helper and binary hashes above are preserved.",
+  "tests_log": "verifier-d997-tests.log",
+  "origin": "Locally built offline verification helper. Paid Covenant runner patch is a separate artifact.",
+  "private_build_log_sha256": "5e9f379069c2e3817648212c3e2da57228f36b191b8dc6c25a9e08885dab7a7c",
+  "source_equivalence": "verifier-merge-equivalence-983172d.json",
+  "whole_tree_equal": false
+}

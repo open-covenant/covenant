@@ -1,0 +1,202 @@
+{
+  "README.md": {
+    "bytes": 6788,
+    "sha256": "8dc383d23eab2c07a4210bb4dbc312598e98ba88ae1162e9f994421f456fda96"
+  },
+  "accounting.json": {
+    "bytes": 1143,
+    "sha256": "a58688884859f6346dd80ad3bcab83f93a76e13995fd00c472f714d92755e7a8"
+  },
+  "build-verifier.py": {
+    "bytes": 1383,
+    "sha256": "1ea6b75c8880de07f2c127f58d29202bab9d594dea791831777b7184a12aa21f"
+  },
+  "jobs/kani-runner-paid-authorship/agent-evidence.json": {
+    "bytes": 425338,
+    "sha256": "aa6ac8842b497327566dbc1b3ce9887f7df4912fd43460e2b7da03cd9a9d1c94"
+  },
+  "jobs/kani-runner-paid-authorship/authored-source/deploy/kani-check/Dockerfile": {
+    "bytes": 1946,
+    "sha256": "76a50e1be12ba49b67e8652b640445064d001dd95e24457f732e4c95575a067f"
+  },
+  "jobs/kani-runner-paid-authorship/authored-source/deploy/kani-check/README.md": {
+    "bytes": 4255,
+    "sha256": "fab0e8c12fe1f5ec72b8cd9d47e276a672be4a362e543c5e5460b38e24edab6f"
+  },
+  "jobs/kani-runner-paid-authorship/authored-source/deploy/kani-check/runner.py": {
+    "bytes": 28773,
+    "sha256": "fcf674f567f63b7c6b6e417361c89274e174172ee069d3dc53fc4268839995fe"
+  },
+  "jobs/kani-runner-paid-authorship/authored-source/deploy/kani-check/tests/test_runner.py": {
+    "bytes": 17230,
+    "sha256": "eed5552db811df54b96983d835fa9be69756e0410f31c99017a57a3e7a4419e5"
+  },
+  "jobs/kani-runner-paid-authorship/authored.patch": {
+    "bytes": 54145,
+    "sha256": "64fa5cbeb83f162eff65cbeee41f10ef225d1da4491eafd20e7de16575ef29a4"
+  },
+  "jobs/kani-runner-paid-authorship/checks/0f26776e-cfdf-46b4-a194-2c1c19bbb9c7/coordinator-metadata.json": {
+    "bytes": 574,
+    "sha256": "425fbb8362ffd0f72d3a70ca228f4a0486dd3e7f366421de719c8a0003451023"
+  },
+  "jobs/kani-runner-paid-authorship/checks/0f26776e-cfdf-46b4-a194-2c1c19bbb9c7/envelope.json": {
+    "bytes": 232593,
+    "sha256": "6161f05cdac3a3cc2e667a2eaff82aeda537a5c2961cfd00d66c7a28de88997b"
+  },
+  "jobs/kani-runner-paid-authorship/checks/0f26776e-cfdf-46b4-a194-2c1c19bbb9c7/output.json": {
+    "bytes": 4185,
+    "sha256": "59a87626088107d0e4d6f6418f10edf2681b7a1d1bcb65af7e56c4dfa0557fc9"
+  },
+  "jobs/kani-runner-paid-authorship/checks/0f26776e-cfdf-46b4-a194-2c1c19bbb9c7/receipt.json": {
+    "bytes": 1535,
+    "sha256": "c38dd854e1cd9a8952ac1a9911dbb0dd95ebd09cb6fc026404329f7743010ddb"
+  },
+  "jobs/kani-runner-paid-authorship/coordinator-metadata.json": {
+    "bytes": 622,
+    "sha256": "493f087880297ef9b6c0366309d2837c85f8a8439dcdeb9ec1d28ceb8c661e76"
+  },
+  "jobs/kani-runner-paid-authorship/envelope.json": {
+    "bytes": 108194,
+    "sha256": "9540a40094028158aee139b5c5b9bb276fc8fdb26ad5b892cc182014cbb57638"
+  },
+  "jobs/kani-runner-paid-authorship/original-commit.raw": {
+    "bytes": 271,
+    "sha256": "20aade485568c9d74189df62f4613b7b7b4a9235c507636f2d33f752ceb9e631"
+  },
+  "jobs/kani-runner-paid-authorship/output.json": {
+    "bytes": 75042,
+    "sha256": "62900f8bded3c4628d7a0338b1ea51a2a7a3c1c52a6ae770df0052f24e0c8287"
+  },
+  "jobs/kani-runner-paid-authorship/provenance.json": {
+    "bytes": 3175,
+    "sha256": "46cbb6dfb22ff79aa41439eb28e6c798d214f3947c91d460abb8bc70ff0452f0"
+  },
+  "jobs/kani-runner-paid-authorship/receipt.json": {
+    "bytes": 1545,
+    "sha256": "b08acc1305afaadf0259cf85ad1ca5746cc23a644baa49bbf5e2db307ec5c015"
+  },
+  "jobs/kani-runner-paid-authorship/record.json": {
+    "bytes": 611196,
+    "sha256": "9f08071e502e7c872a3e67838350b78acf7a5396ffc33ccfcde9d6d87bec9087"
+  },
+  "jobs/kani-runner-paid-authorship/source/.covenant-kani-acceptance/acceptance_test.py": {
+    "bytes": 3325,
+    "sha256": "07c3fd55f70b905ca9041eb6505cdda1d561892f28dace9025c3e0f9d5801265"
+  },
+  "jobs/kani-runner-paid-authorship/source/.covenant-kani-acceptance/classifier-cases.json": {
+    "bytes": 101938,
+    "sha256": "ba28fe6aeaccba3779adaaa24ef1bd2edd0d074d64426d15ba86859369e5d00e"
+  },
+  "jobs/kani-runner-paid-authorship/source/.covenant-kani-acceptance/example-plan.json": {
+    "bytes": 328,
+    "sha256": "6ecd687d3c16a76cd8decf6a88d0d5d43f0a4c62ee7a35d9ff2bb98186c6bb54"
+  },
+  "jobs/kani-runner-paid-authorship/source/.covenant-kani-acceptance/provenance.json": {
+    "bytes": 1353,
+    "sha256": "cd13d8ba9f086945db8c22c00a021d20af6bcc6e7f7265491868c733973ecd3e"
+  },
+  "jobs/kani-runner-paid-authorship/source/.covenant-kani-acceptance/upstream/kani-driver__src__call_cbmc.rs": {
+    "bytes": 37051,
+    "sha256": "103ec8f6de68ab1271eac112f1078e358cbca54d15f0e979d62cf8d8109045e3"
+  },
+  "jobs/kani-runner-paid-authorship/source/.covenant-kani-acceptance/upstream/kani-driver__src__frontend__schema_utils.rs": {
+    "bytes": 23634,
+    "sha256": "5d1d22214db198ed42c2dd6290feca6fc62a86e7565a3d0c4ce4ac21144c59c1"
+  },
+  "jobs/kani-runner-paid-authorship/source/.covenant-kani-acceptance/upstream/kani-driver__src__harness_runner.rs": {
+    "bytes": 22694,
+    "sha256": "9eb7e56a6ab6cda9f90f12738de384c4260f18acd2f32fff78693a9c19c49125"
+  },
+  "jobs/kani-runner-paid-authorship/source/.covenant-kani-acceptance/upstream/tests__json-handler__schema-validation__kani_json_schema.json": {
+    "bytes": 3754,
+    "sha256": "8bb2b1dc15173ff817ce47fc0aed237adb0145d0c1f3a72864b7deb17d112a8e"
+  },
+  "jobs/kani-runner-paid-authorship/source/README.md": {
+    "bytes": 285,
+    "sha256": "e841cccbb0bf72fc44b2d94665d5f37f52bf5135fa2db0d11aaf9b799f1807ab"
+  },
+  "jobs/kani-runner-paid-authorship/source-mapping.json": {
+    "bytes": 1885,
+    "sha256": "285ddd35535324dd262ed24fceedec12bccc63937922ae35d01167a52749af6c"
+  },
+  "jobs/kani-runner-paid-authorship/source.bundle": {
+    "bytes": 31971,
+    "sha256": "0e196b8d31d5a2e62127a868a2587570bc078dd6984e30f37475a9f27e92ec21"
+  },
+  "jobs/kani-runner-paid-authorship/verification.json": {
+    "bytes": 442,
+    "sha256": "0f961328f3adb41f7c66d46e22f5d2c65d03dbe09b068c6083586483447dc1d9"
+  },
+  "ledger.json": {
+    "bytes": 3969,
+    "sha256": "41d4ea9720645015cbcc571b0856c6b4ae20fd4d09ce31f1be41e5bad1872386"
+  },
+  "local-integration/follow-up.patch": {
+    "bytes": 14605,
+    "sha256": "f2e084e1266f97a5725d2b748469b5a880fa6ddf92482cf657d8f57075d42150"
+  },
+  "local-integration/integrated-source/deploy/kani-check/.dockerignore": {
+    "bytes": 39,
+    "sha256": "c06b355ce56a5c3d9ef0f3f582a41608964ed1c5154858f9efcbc67bad62c6a2"
+  },
+  "local-integration/integrated-source/deploy/kani-check/.gitignore": {
+    "bytes": 19,
+    "sha256": "862263fa1f46c20f0d1e4dac5ffcc75abd55c08211b2c3864c5f8764b9d87793"
+  },
+  "local-integration/integrated-source/deploy/kani-check/Dockerfile": {
+    "bytes": 1994,
+    "sha256": "c657b3992f020f7fb092672a3420eebb4b31e2b9f51007c63761a4f711b37960"
+  },
+  "local-integration/integrated-source/deploy/kani-check/README.md": {
+    "bytes": 4892,
+    "sha256": "4223b8828adc7930c6a57ed0f86ffe81d05e4fad5c462edd485f070ece7ea335"
+  },
+  "local-integration/integrated-source/deploy/kani-check/runner.py": {
+    "bytes": 30402,
+    "sha256": "f74b26a6881d3090c930db2132bc5db64ba82222476afa60bc3ccaeb42d59ab7"
+  },
+  "local-integration/integrated-source/deploy/kani-check/tests/test_runner.py": {
+    "bytes": 19862,
+    "sha256": "e5477c5495f42b9cba29713f4af5a0a2476ad7651f701dd4f66027a077310413"
+  },
+  "local-integration/provenance.json": {
+    "bytes": 3252,
+    "sha256": "9580381ee90f0c634b6523fe9389c0b71ee6166f25b0a63441faff02678acb69"
+  },
+  "operator-identities.json": {
+    "bytes": 609,
+    "sha256": "4f6e615a84d704863f3bb2e4776cf8ea872cdd7386b04e0755f8f9a2549391ae"
+  },
+  "verifier-build.json": {
+    "bytes": 393,
+    "sha256": "366ec7c7030f98f9cdbaaa10ae9d5f0e0a4fbaf09ec86880af6397f5329147cd"
+  },
+  "verifier-d997-build.json": {
+    "bytes": 1472,
+    "sha256": "c09327592266055d0ab25688b239a553e6a7c68b22c7bfcd470b28cd22ae2f4f"
+  },
+  "verifier-d997-tests.log": {
+    "bytes": 116,
+    "sha256": "8fa6ab79438e951aa0b5e85f7e95209bd51a84eee839379f836f57ce85956fa9"
+  },
+  "verifier-merge-equivalence-983172d.json": {
+    "bytes": 3169,
+    "sha256": "241c5953111301e4eac403bf0c8f77b49a1d16b4daa0b44ee5025c8bdb5912db"
+  },
+  "verifier.Cargo.lock": {
+    "bytes": 64291,
+    "sha256": "940f56123a159c66fcb0674bf3358dfa1138217baa70dca7f28711e2b942d863"
+  },
+  "verify-archive.py": {
+    "bytes": 5044,
+    "sha256": "1faa0883c4d08dacbff736e6824d9c52813464795dfc8ff5d7d75076d3335214"
+  },
+  "verify-followup.py": {
+    "bytes": 4453,
+    "sha256": "5b6b012860d06b2da3b0ed84f26023021cdd7682171b667b911421ceb9d70433"
+  },
+  "verify.rs": {
+    "bytes": 5300,
+    "sha256": "557c6b9815ddcf21e32808065aab513f67764c423d699291c8aec25b83a548cf"
+  }
+}

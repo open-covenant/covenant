@@ -1,0 +1,75 @@
+{
+  "schema": "covenant.runner-local-followup.v1",
+  "origin": "Local review, security and compatibility repairs after the original paid runner patch. This delta is not attributed to the Covenant authorship job.",
+  "paid_job_id": "da35b756-1289-458e-8604-25072f0ddf8b",
+  "signed_patch_sha256": "64fa5cbeb83f162eff65cbeee41f10ef225d1da4491eafd20e7de16575ef29a4",
+  "signed_patch_applies_to_signed_source": true,
+  "original_snapshot_commit": "d2a4a720185ae8bf7e0d732b314a061873dfcfe5",
+  "authored_complete_tree": "7591cf959d343d85c3cea92f90e7ea25b04dce2f",
+  "authored_runner_tree": "1f3fd7277f4211c0d8e76edc32d06cbd30fdbd57",
+  "integrated_covenant_commit": "d997bb6436569d8dc96f963aaf72259b92ccb5ba",
+  "integrated_covenant_complete_tree": "59dc7a4905be7e54735b38a7e6a7ce2b51f83471",
+  "integrated_runner_tree": "8611385ec47441935fe6364c0d1fb1752084d598",
+  "followup_patch_sha256": "f2e084e1266f97a5725d2b748469b5a880fa6ddf92482cf657d8f57075d42150",
+  "followup_patch_bytes": 14605,
+  "reverse_and_reapply_checked": true,
+  "scope": "deploy/kani-check only. Protocol, coordinator, node, buyer and receipt transport are separate local bootstrap work, not included in the paid patch or this component delta.",
+  "paid_authored_files": [
+    {
+      "path": "deploy/kani-check/Dockerfile",
+      "git_mode": "100644",
+      "sha256": "76a50e1be12ba49b67e8652b640445064d001dd95e24457f732e4c95575a067f"
+    },
+    {
+      "path": "deploy/kani-check/README.md",
+      "git_mode": "100644",
+      "sha256": "fab0e8c12fe1f5ec72b8cd9d47e276a672be4a362e543c5e5460b38e24edab6f"
+    },
+    {
+      "path": "deploy/kani-check/runner.py",
+      "git_mode": "100644",
+      "sha256": "fcf674f567f63b7c6b6e417361c89274e174172ee069d3dc53fc4268839995fe"
+    },
+    {
+      "path": "deploy/kani-check/tests/test_runner.py",
+      "git_mode": "100644",
+      "sha256": "eed5552db811df54b96983d835fa9be69756e0410f31c99017a57a3e7a4419e5"
+    }
+  ],
+  "local_integrated_files": [
+    {
+      "path": "deploy/kani-check/.dockerignore",
+      "git_mode": "100644",
+      "sha256": "c06b355ce56a5c3d9ef0f3f582a41608964ed1c5154858f9efcbc67bad62c6a2"
+    },
+    {
+      "path": "deploy/kani-check/.gitignore",
+      "git_mode": "100644",
+      "sha256": "862263fa1f46c20f0d1e4dac5ffcc75abd55c08211b2c3864c5f8764b9d87793"
+    },
+    {
+      "path": "deploy/kani-check/Dockerfile",
+      "git_mode": "100644",
+      "sha256": "c657b3992f020f7fb092672a3420eebb4b31e2b9f51007c63761a4f711b37960"
+    },
+    {
+      "path": "deploy/kani-check/README.md",
+      "git_mode": "100644",
+      "sha256": "4223b8828adc7930c6a57ed0f86ffe81d05e4fad5c462edd485f070ece7ea335"
+    },
+    {
+      "path": "deploy/kani-check/runner.py",
+      "git_mode": "100644",
+      "sha256": "f74b26a6881d3090c930db2132bc5db64ba82222476afa60bc3ccaeb42d59ab7"
+    },
+    {
+      "path": "deploy/kani-check/tests/test_runner.py",
+      "git_mode": "100644",
+      "sha256": "e5477c5495f42b9cba29713f4af5a0a2476ad7651f701dd4f66027a077310413"
+    }
+  ],
+  "canonical_covenant_commit": "983172ddd04ac2de70136125e2088f22c6edf505",
+  "canonical_runner_tree": "8611385ec47441935fe6364c0d1fb1752084d598",
+  "canonical_component_identical": true,
+  "source_equivalence": "verifier-merge-equivalence-983172d.json"
+}

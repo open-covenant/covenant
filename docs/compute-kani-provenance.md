@@ -25,3 +25,7 @@ Two earlier attempts reached model-spend caps and produced no paid patch: runner
 5. Amend an external PR only when the source/patch/receipt chain and proof/control verdicts match. Publishing, deployment, network authorship, verification and on-chain settlement are separate facts.
 
 This checkpoint records bootstrap provenance; it does not claim deployment completion, live Kani acceptance, external PR amendment or complete payer settlement. Later local compatibility/security repairs to the network-authored runner must be identified as local follow-up changes instead of attributed to its original paid patch.
+
+## Subsequent live evidence
+
+[The Percolator receipt ledger](compute-evidence/percolator/2026-10-18/README.md) records the completed paid runner authorship, native canaries, both accepted #241 proof checks and the earlier failed attempts. It preserves the distinction between original local work and subsequent Covenant execution.

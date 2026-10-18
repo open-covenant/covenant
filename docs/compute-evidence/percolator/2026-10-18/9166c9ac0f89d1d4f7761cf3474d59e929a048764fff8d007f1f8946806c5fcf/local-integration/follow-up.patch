@@ -1,0 +1,278 @@
+diff --git a/deploy/kani-check/.dockerignore b/deploy/kani-check/.dockerignore
+new file mode 100644
+index 0000000..6f33baf
+--- /dev/null
++++ b/deploy/kani-check/.dockerignore
+@@ -0,0 +1,4 @@
++__pycache__
++**/__pycache__
++tests
++*.pyc
+diff --git a/deploy/kani-check/.gitignore b/deploy/kani-check/.gitignore
+new file mode 100644
+index 0000000..7a60b85
+--- /dev/null
++++ b/deploy/kani-check/.gitignore
+@@ -0,0 +1,2 @@
++__pycache__/
++*.pyc
+diff --git a/deploy/kani-check/Dockerfile b/deploy/kani-check/Dockerfile
+index dd9ce63..9ba1e96 100644
+--- a/deploy/kani-check/Dockerfile
++++ b/deploy/kani-check/Dockerfile
+@@ -2,6 +2,7 @@
+ # (repo@sha256:...). Authoring note: this file has NOT been built by its author.
+ ARG BASE_IMAGE
+ FROM ${BASE_IMAGE}
++ARG BASE_IMAGE
+ 
+ ARG KANI_VERSION=0.68.0
+ ARG RUST_TOOLCHAIN=nightly-2026-08-21
+@@ -26,9 +27,10 @@ RUN case "${BASE_IMAGE}" in *@sha256:???????????????????????????????????????????
+  && CARGO_NET_OFFLINE=false cargo-kani setup \
+  && chmod -R a+rX /opt/kani /usr/local/cargo /usr/local/rustup
+ 
+-COPY --chmod=0444 runner.py /opt/covenant/kani/runner.py
++COPY runner.py /opt/covenant/kani/runner.py
+ 
+-RUN mkdir -p /opt/covenant/kani /work /evidence /scratch \
++RUN chmod 0444 /opt/covenant/kani/runner.py \
++ && mkdir -p /opt/covenant/kani /work /evidence /scratch \
+  && chmod 0777 /work /evidence /scratch \
+  && { echo "kani=$(cargo-kani --version)"; \
+       echo "cbmc=$(/opt/kani/kani-${KANI_VERSION}/bin/cbmc --version 2>&1 | head -n1)"; \
+diff --git a/deploy/kani-check/README.md b/deploy/kani-check/README.md
+index 4d5f0c4..a9812f9 100644
+--- a/deploy/kani-check/README.md
++++ b/deploy/kani-check/README.md
+@@ -17,7 +17,7 @@ Pinned toolchain on the build host: Kani 0.68.0, CBMC 6.11.0, nightly-2026-08-21
+ ## Behaviour and bounds
+ 
+ - Rejected before running: unknown/oversized plan fields, manifests outside `/work` (symlinks resolved),
+-  any `.cargo/config[.toml]` between the manifest and `/work` or elsewhere in it, unsafe
++  `.cargo/config[.toml]` outside the exact parsed allowlist `{env: {RUST_MIN_STACK: "8388608"}}`, unsafe
+   `[package|workspace.metadata.kani.flags]` (`no-*`, `only-codegen`, `prove-safety-only`,
+   `ignore-global-asm`, `cbmc-args`, ...), and environment overriding `RUSTC*`/`RUSTFLAGS`/`CARGO_TARGET_*`.
+ - Environment: `PATH=/usr/local/cargo/bin:/usr/local/bin:/usr/bin:/bin`, `RUSTUP_HOME=/usr/local/rustup`,
+@@ -41,7 +41,7 @@ The operator must first verify that this digest resolves in the registry for the
+ ```
+ docker build --build-arg BASE_IMAGE=rust@sha256:81015672d6939b0265f09adf96d5de125482bb1330106076956b0518e74edc90 \
+   --build-arg KANI_VERSION=0.68.0 --iidfile kani-check.iid -t covenant-kani-check:build deploy/kani-check
+-IMAGE="covenant-kani-check@$(cat kani-check.iid)"   # immutable image ID
++IMAGE="$(cat kani-check.iid)"   # immutable local image ID (sha256:...)
+ # after pushing: record the registry digest, never the tag
+ docker push <registry>/covenant-kani-check:build
+ docker inspect --format '{{index .RepoDigests 0}}' <registry>/covenant-kani-check:build
+@@ -70,3 +70,14 @@ python3 -m unittest discover -s deploy/kani-check/tests -v
+ These validate the classifier against synthetic, source-derived fixtures and the runner against stub
+ subprocesses. They are fixture validation only: the Docker image build and live Kani/CBMC runs have not
+ been performed, and prior Percolator proofs and buyer fixtures are not claimed as Covenant authorship.
++
++## Integration review
++
++The network-authored source is retained with its paid job patch. Local bootstrap
++review corrected the Docker build ARG scope, allowed the exact fixed node/image
++environment values, and ensured rejected invocations preserve empty output streams.
++The initial workflow uses reviewed, pinned trees and locked, reviewed dependencies,
++including procedural macros. Arbitrary hostile compile-time code shares the
++compiler's writable paths and requires further driver isolation; a receipt
++authenticates the operator's statement rather than providing independent trusted
++execution of malicious repositories.
+diff --git a/deploy/kani-check/runner.py b/deploy/kani-check/runner.py
+index f1b17ab..6debfc0 100644
+--- a/deploy/kani-check/runner.py
++++ b/deploy/kani-check/runner.py
+@@ -279,6 +279,15 @@ def _classify(plan, document, execution):
+     covers = [c for c in checks if c['category'] == 'cover']
+     required = plan['required_covers']
+ 
++    for desc in required:
++        matches = [c for c in covers if c['description'] == desc]
++        if len(matches) > 1:
++            _fail('tool_error', 'required cover appears more than once: %s' % desc)
++        if not matches:
++            _fail('inconclusive', 'required cover missing: %s' % desc)
++        if matches[0]['status'] != 'Satisfied':
++            _fail('inconclusive', 'required cover not satisfied: %s' % desc)
++
+     # consistency with the process exit code
+     if rstatus == 'Success' and rc != 0:
+         _fail('tool_error', 'Success report with nonzero exit code %d' % rc)
+@@ -309,14 +318,6 @@ def _classify(plan, document, execution):
+     if has_errors:
+         _fail('tool_error', 'has_errors set on a successful report')
+     all_covered = bool(required)
+-    for desc in required:
+-        matches = [c for c in covers if c['description'] == desc]
+-        if len(matches) > 1:
+-            _fail('tool_error', 'required cover appears more than once: %s' % desc)
+-        if not matches:
+-            _fail('inconclusive', 'required cover missing: %s' % desc)
+-        if matches[0]['status'] != 'Satisfied':
+-            _fail('inconclusive', 'required cover not satisfied: %s' % desc)
+     if not any(c['category'] == 'assertion' and c['status'] == 'Success' for c in checks):
+         _fail('inconclusive', 'no reachable successful assertion')
+     for c in noncover:
+@@ -360,7 +361,14 @@ def parse_json_strict(data):
+ 
+ 
+ def check_environment(environ):
+-    bad = sorted(k for k in environ if UNSAFE_ENV.match(k))
++    # The immutable image and node provide these exact fixed values. They
++    # cannot redirect a compiler or weaken a check; sanitized_env rebuilds
++    # the child environment regardless. Other matching variables are refused.
++    fixed = {'KANI_HOME': '/opt/kani', 'CARGO_TARGET_DIR': '/scratch/target',
++             'RUSTFLAGS': '', 'CARGO_ENCODED_RUSTFLAGS': '', 'RUSTDOCFLAGS': '',
++             'RUSTC_WRAPPER': '', 'RUSTC_WORKSPACE_WRAPPER': ''}
++    bad = sorted(k for k, v in environ.items()
++                 if UNSAFE_ENV.match(k) and (k not in fixed or v != fixed[k]))
+     if bad:
+         raise ValueError('unsafe environment variables: %s' % bad)
+ 
+@@ -409,15 +417,32 @@ def check_manifest_file(path):
+             _check_flags(kani['flags'], '%s.metadata.kani.flags' % sect)
+ 
+ 
++def check_cargo_config(path):
++    """Only Percolator's pinned stack-size setting is admitted, by parsed value."""
++    import tomllib
++    if os.path.islink(path) or not os.path.isfile(path):
++        raise ValueError('unsafe cargo config path: %s' % path)
++    with open(path, 'rb') as stream:
++        try:
++            doc = tomllib.load(stream)
++        except Exception as exc:
++            raise ValueError('cannot parse cargo config: %s' % exc)
++    if doc != {'env': {'RUST_MIN_STACK': '8388608'}}:
++        raise ValueError('cargo config is outside the fixed stack-size allowlist: %s' % path)
++
++
+ def scan_workdir(workdir, manifest, limit=20000):
+-    """Reject Cargo configs and unsafe Kani manifest flags anywhere in workdir."""
++    """Reject unsafe Cargo config and Kani manifest flags anywhere in workdir."""
+     root = os.path.realpath(workdir)
++    manifest = os.path.realpath(manifest)
++    if not _inside(root, manifest):
++        raise ValueError('manifest resolves outside workdir')
+     # ancestors of the manifest inside workdir
+     d = os.path.dirname(manifest)
+     while True:
+         for name in ('config', 'config.toml'):
+             if os.path.lexists(os.path.join(d, '.cargo', name)):
+-                raise ValueError('cargo config present: %s' % os.path.join(d, '.cargo', name))
++                check_cargo_config(os.path.join(d, '.cargo', name))
+         if d == root:
+             break
+         d = os.path.dirname(d)
+@@ -430,7 +455,7 @@ def scan_workdir(workdir, manifest, limit=20000):
+         if os.path.basename(dirpath) == '.cargo':
+             for name in filenames + dirnames:
+                 if name in ('config', 'config.toml'):
+-                    raise ValueError('cargo config present: %s' % os.path.join(dirpath, name))
++                    check_cargo_config(os.path.join(dirpath, name))
+         for name in filenames:
+             if name == 'Cargo.toml':
+                 full = os.path.join(dirpath, name)
+@@ -649,6 +674,16 @@ def run_job(plan, workdir, outdir, scratch='/scratch', wall_timeout=None,
+         result = _result(plan, v.outcome, v.reason)
+     except (ValueError, OSError) as e:
+         result = _result(plan, 'tool_error', 'rejected: %s' % e)
++    # A rejected plan/source starts no subprocess and has empty output.
++    # Preserve those empty streams so the signed evidence package remains
++    # complete even for a pre-execution tool_error.
++    for name in ('stdout.log', 'stderr.log'):
++        path = os.path.join(outdir, name)
++        if not os.path.lexists(path):
++            try:
++                os.close(_open_new(path))
++            except OSError:
++                pass
+     artifacts = []
+     for name in ARTIFACT_NAMES:
+         try:
+diff --git a/deploy/kani-check/tests/test_runner.py b/deploy/kani-check/tests/test_runner.py
+index 6f92af6..8d994a0 100644
+--- a/deploy/kani-check/tests/test_runner.py
++++ b/deploy/kani-check/tests/test_runner.py
+@@ -70,7 +70,7 @@ class Classify(unittest.TestCase):
+         self.assertEqual((r['outcome'], r['accepted']), ('tool_error', False))
+ 
+     def refuted_plan(self):
+-        return dict(PLAN, expected_outcome='refuted', expected_assertion='assertion failed: x')
++        return dict(PLAN, expected_outcome='refuted', expected_assertion='assertion failed: x', required_covers=[])
+ 
+     def refuted_doc(self, desc='assertion failed: x', cat='assertion', etype='assertion_failure'):
+         d = doc([chk(1, 'Failure', desc, cat)], status='Failure')
+@@ -89,6 +89,17 @@ class Classify(unittest.TestCase):
+         # a proven plan is never accepted on a counterexample
+         self.assertFalse(runner.classify(PLAN, self.refuted_doc(), ex)['accepted'])
+ 
++    def test_refuted_requires_requested_cover(self):
++        plan = dict(self.refuted_plan(), required_covers=PLAN['required_covers'])
++        ex = dict(OK, returncode=1)
++        self.assertEqual(runner.classify(plan, self.refuted_doc(), ex)['outcome'], 'inconclusive')
++        checks = [chk(1, 'Failure', 'assertion failed: x', 'assertion'),
++                  chk(2, 'Satisfied', PLAN['required_covers'][0], 'cover')]
++        covered = doc(checks, status='Failure')
++        covered['error_details'][0].update(error_type='assertion_failure', failed_properties_type='PanicsOnly',
++                                          exit_status='properties_failed')
++        self.assertEqual(runner.classify(plan, covered, ex)['outcome'], 'refuted')
++
+     def test_refuted_plan_with_proof_not_accepted(self):
+         r = runner.classify(self.refuted_plan(), doc(), OK)
+         self.assertEqual((r['outcome'], r['accepted']), ('proven', False))
+@@ -308,13 +319,29 @@ class Rejections(Fs):
+         rep = self.run_job('open(__import__("sys").argv[1],"w").write("{}")')
+         self.assertEqual(rep['outcome'], 'tool_error')
+         self.assertIn('rejected', rep['reason'])
+-        self.assertFalse(Path(self.out, 'stdout.log').exists())
++        self.assertEqual(Path(self.out, 'stdout.log').read_bytes(), b'')
++        self.assertEqual(Path(self.out, 'stderr.log').read_bytes(), b'')
+ 
+     def test_cargo_config(self):
+         os.mkdir(os.path.join(self.work, '.cargo'))
+         Path(self.work, '.cargo', 'config.toml').write_text('[build]\nrustc-wrapper="x"\n')
+         self.reject()
+ 
++    def test_exact_stack_config_allowlist(self):
++        directory = Path(self.work, '.cargo')
++        directory.mkdir()
++        config = directory / 'config.toml'
++        config.write_text('[env]\nRUST_MIN_STACK = "8388608"\n')
++        runner.scan_workdir(self.work, os.path.join(self.work, 'Cargo.toml'))
++        for content in ('[env]\nRUST_MIN_STACK = "1"\n',
++                        '[env]\nRUST_MIN_STACK = { value="8388608", force=true }\n',
++                        '[env]\nRUST_MIN_STACK = { value="8388608", relative=true }\n',
++                        '[env]\nRUST_MIN_STACK = "8388608"\nRUSTC="evil"\n',
++                        '[env]\nRUST_MIN_STACK = "8388608"\n[build]\nrustc="evil"\n'):
++            config.write_text(content)
++            with self.subTest(content=content), self.assertRaises(ValueError):
++                runner.scan_workdir(self.work, os.path.join(self.work, 'Cargo.toml'))
++
+     def test_unsafe_flags(self):
+         for sect in ('package', 'workspace'):
+             for flag in ('no-unwinding-checks', 'only-codegen', 'cbmc-args', 'prove_safety_only'):
+@@ -330,11 +357,23 @@ class Rejections(Fs):
+         os.symlink(outside, os.path.join(self.work, 'Cargo.toml'))
+         self.reject()
+ 
++    def test_node_fixed_environment_is_accepted(self):
++        runner.check_environment({'KANI_HOME': '/opt/kani', 'CARGO_TARGET_DIR': '/scratch/target',
++                                  'RUSTFLAGS': '', 'CARGO_ENCODED_RUSTFLAGS': '',
++                                  'RUSTC_WRAPPER': '', 'RUSTC_WORKSPACE_WRAPPER': '', 'RUSTDOCFLAGS': ''})
++        for environ in ({'KANI_HOME': '/work/fake'}, {'CARGO_TARGET_DIR': '/work/fake'},
++                        {'CARGO_ALIAS_KANI': 'evil'}, {'RUSTC': '/work/compiler'}):
++            with self.subTest(environ=environ), self.assertRaises(ValueError):
++                runner.check_environment(environ)
++
+     def test_unsafe_env(self):
+         rep = runner.run_job(PLAN, self.work, self.out, scratch=self.scratch,
+                              environ={'RUSTFLAGS': '-C x'}, argv_fn=self.stub('pass'))
+         self.assertEqual(rep['outcome'], 'tool_error')
+         self.assertIn('RUSTFLAGS', rep['reason'])
++        self.assertEqual(Path(self.out, 'stdout.log').read_bytes(), b'')
++        self.assertEqual(Path(self.out, 'stderr.log').read_bytes(), b'')
++        self.assertEqual({a['name'] for a in rep['artifacts']}, {'stdout.log', 'stderr.log'})
+ 
+     def test_safe_flags_allowed(self):
+         Path(self.work, 'Cargo.toml').write_text(

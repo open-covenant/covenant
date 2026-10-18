@@ -1,0 +1,194 @@
+{
+  "README.md": {
+    "bytes": 6821,
+    "sha256": "b549dc3036eda628e28036e05d17a06af33a42fc04f3bfdfd95fb7bec211a840"
+  },
+  "accounting.json": {
+    "bytes": 889,
+    "sha256": "44a8a2004d125e2dc950510db0a4a54080ef037b9b4b86258a4635c0decf2b0a"
+  },
+  "build-verifier.py": {
+    "bytes": 1383,
+    "sha256": "1ea6b75c8880de07f2c127f58d29202bab9d594dea791831777b7184a12aa21f"
+  },
+  "jobs/native-generic-canary/coordinator-metadata.json": {
+    "bytes": 621,
+    "sha256": "a5a891672a693f30d1898bb5aea700a6ce27a2e1a4ca887d892944d8ee95e51e"
+  },
+  "jobs/native-generic-canary/envelope.json": {
+    "bytes": 1222471,
+    "sha256": "8279c269e7f36067f65ffbc11de921c3105ee97c023c588cd161887b448cc5f7"
+  },
+  "jobs/native-generic-canary/original-commit.raw": {
+    "bytes": 1130,
+    "sha256": "591030ee800afd22d2f18e6d06562256be5f63d900e42543819bd79e5618d351"
+  },
+  "jobs/native-generic-canary/output.json": {
+    "bytes": 663,
+    "sha256": "2bfe34184797f41f3c6e883b901db5367defc0a2e901ff316fe1e14515ee3685"
+  },
+  "jobs/native-generic-canary/provenance.json": {
+    "bytes": 2025,
+    "sha256": "f846e00a35e05983ff1ffaf43d5099a3c3713ed56bff42ee639f841403957fe4"
+  },
+  "jobs/native-generic-canary/receipt.json": {
+    "bytes": 1537,
+    "sha256": "e0cfa866fc0ba7096ece9bade3cd914b4900e7df5b74666ba81bad89ac0b1804"
+  },
+  "jobs/native-generic-canary/record.json": {
+    "bytes": 1225273,
+    "sha256": "9ffb2518d34001c0a09c472ce3bc5f0685f50544619f901c73a712be45d4a213"
+  },
+  "jobs/native-generic-canary/source/Cargo.lock": {
+    "bytes": 9152,
+    "sha256": "189914a39b7a41adfae9493479145e2f8d78d4e1f76e114766d433c274a3a7a7"
+  },
+  "jobs/native-generic-canary/source/Cargo.toml": {
+    "bytes": 1554,
+    "sha256": "26cf3e9510aa9192b97c7244d6c61b29d919aa7fa216d29a166eef2e48e973b6"
+  },
+  "jobs/native-generic-canary/source/src/v16.rs": {
+    "bytes": 867949,
+    "sha256": "57dc0e3adf988efc670d0b90d9fb1614dea32f83ee03b7e8747da853e2ee8df3"
+  },
+  "jobs/native-generic-canary/source/tests/proofs_v16.rs": {
+    "bytes": 793487,
+    "sha256": "7c6234c13e74b5954d402d8982d6650f4840dace4630cba6c0b3acfa36e5c4d2"
+  },
+  "jobs/native-generic-canary/source-mapping.json": {
+    "bytes": 911,
+    "sha256": "e351a13977c4bb9c14fdfe7ab6c7e69e37d5db2d1dd399c6d6e15c0e4e89b940"
+  },
+  "jobs/native-generic-canary/source.bundle": {
+    "bytes": 457401,
+    "sha256": "4c3120a9604e62af97155a0becfd035112547a63a72ce1d48ddee02b569e5709"
+  },
+  "jobs/native-generic-canary/verification.json": {
+    "bytes": 442,
+    "sha256": "6e17ed89c3c82b6feb92e64c1d359112c171d58e8f38a3336c299c998dc97186"
+  },
+  "jobs/native-kani-proven-canary/coordinator-metadata.json": {
+    "bytes": 621,
+    "sha256": "022e4322912292a73d2159c8ec53537b3b7a05ea5b26e821157eddbe7b341e60"
+  },
+  "jobs/native-kani-proven-canary/envelope.json": {
+    "bytes": 6055,
+    "sha256": "87aba6a580d882b9d0b8532752cfddca306d7599185f8ba6dab98e9bf800147d"
+  },
+  "jobs/native-kani-proven-canary/kani/artifacts.json.gz": {
+    "bytes": 4254,
+    "sha256": "11d62b813216a1de961d5036cea61a4fac38fbe7e49304952731581a4bca3cff"
+  },
+  "jobs/native-kani-proven-canary/kani/kani-export.json": {
+    "bytes": 3863,
+    "sha256": "21d3273ec1970cfbcba02383f6b7c2384c63e183a69bc2355227090012f45fd6"
+  },
+  "jobs/native-kani-proven-canary/kani/plan.json": {
+    "bytes": 291,
+    "sha256": "68b0db286dc0eee1dfcd3b5ef5504af1fa922de6e8bbe073c6d6ec8d4c96227f"
+  },
+  "jobs/native-kani-proven-canary/kani/result.json": {
+    "bytes": 1093,
+    "sha256": "3c5f4fa6dd62942baf0443244242653ab62ed9b8bea0285af6c449512509228d"
+  },
+  "jobs/native-kani-proven-canary/kani/stderr.log": {
+    "bytes": 120,
+    "sha256": "6befde304b9c2cef2919e40f31d16ddf4a809821b67ac0aae5ae4eef7b35f294"
+  },
+  "jobs/native-kani-proven-canary/kani/stdout.log": {
+    "bytes": 2264,
+    "sha256": "091fe7535267f4d0e9c82ab2a8869312e809ec21be8aa801276f5bcb263a2eeb"
+  },
+  "jobs/native-kani-proven-canary/original-commit.raw": {
+    "bytes": 244,
+    "sha256": "e166f5063d8ecad24dbfb3780ab9a398da07c1ab8693e4ff0742c4dbba4fb435"
+  },
+  "jobs/native-kani-proven-canary/output.json": {
+    "bytes": 9789,
+    "sha256": "c6dfceb15929372f94b3d5400f7ffe020b2f5497b2afeaf63ba270d6056b8000"
+  },
+  "jobs/native-kani-proven-canary/provenance.json": {
+    "bytes": 2437,
+    "sha256": "ae1653e604ff57a704ae0fdcf694b75e3cfa2dc8810f7c0987237d067f456095"
+  },
+  "jobs/native-kani-proven-canary/receipt.json": {
+    "bytes": 1539,
+    "sha256": "b66ff8465849b5fd453885ad46aca6eef9fbe6d27df2deb236b67650ee7dade3"
+  },
+  "jobs/native-kani-proven-canary/record.json": {
+    "bytes": 18209,
+    "sha256": "d5d77cca1f56b82ed8029c6a446cb0303fc4dc2fc769453570d98ad268a2b435"
+  },
+  "jobs/native-kani-proven-canary/source/Cargo.lock": {
+    "bytes": 163,
+    "sha256": "655f87147dca214309d19dec3fe50eecd6478b2767e028a444ad3fc45d1329bc"
+  },
+  "jobs/native-kani-proven-canary/source/Cargo.toml": {
+    "bytes": 68,
+    "sha256": "67af75bb2f718dc707c033966ddb036fe9b950960779fabe1c174c09760bb0ee"
+  },
+  "jobs/native-kani-proven-canary/source/src/lib.rs": {
+    "bytes": 366,
+    "sha256": "5219e10dc3a9bf672d376dec7fe651f24ac4e6c34400ba6381eefba780f9e924"
+  },
+  "jobs/native-kani-proven-canary/source-mapping.json": {
+    "bytes": 738,
+    "sha256": "c5fb3d03407e6920b2e93006d5fff8cf8ae843d7962b112e016d85070084aec9"
+  },
+  "jobs/native-kani-proven-canary/source.bundle": {
+    "bytes": 813,
+    "sha256": "11b3300ac6df43fb529608c502f0b1afe153976c9718719d24d40c8baeda27d2"
+  },
+  "jobs/native-kani-proven-canary/verification.json": {
+    "bytes": 959,
+    "sha256": "9794c03db26bda3910a632192869df3562681e680c02d42f7476757f28dbba8a"
+  },
+  "ledger.json": {
+    "bytes": 5421,
+    "sha256": "ab332fe7cd2f8fe2ed6d8f75e8c545bf85daa41d5f0537039d64a2aeeff661df"
+  },
+  "native-rerun-command.py": {
+    "bytes": 3170,
+    "sha256": "b364a425a7a10193509db9b68b0badc0d13e2a1c6bb74e9d66e550ef044bc694"
+  },
+  "operator-identities.json": {
+    "bytes": 676,
+    "sha256": "35a2d30668c06b41ef871d57951c6c51e583cf9bc3105042e98b75c8e3144c34"
+  },
+  "pilot-cli-provenance.json": {
+    "bytes": 12196,
+    "sha256": "f545d7d540f9243be4dd835d578fe528ea239f85cdefe20efc189388c9f5af41"
+  },
+  "pilot-image-pin.json": {
+    "bytes": 439,
+    "sha256": "a83a612f49bcb39a6d9678d6210a9e71b8740585c9032e2e15f03872285c5689"
+  },
+  "pilot-resource-adjustment.json": {
+    "bytes": 968,
+    "sha256": "14a7c0bf4cc863673c2dff3461e8af5aab816a36fba56db74b61998d35d258bf"
+  },
+  "verifier-build.json": {
+    "bytes": 324,
+    "sha256": "9ac0b8897a3f6d1937a36424c01e4371729b36db74b390ce98748f402f76e24b"
+  },
+  "verifier-d997-build.json": {
+    "bytes": 1450,
+    "sha256": "6daf6e61a9e5321288c525c601800970c80e0ff3ec6ee047cdf3c199522389e6"
+  },
+  "verifier-merge-equivalence-983172d.json": {
+    "bytes": 3169,
+    "sha256": "241c5953111301e4eac403bf0c8f77b49a1d16b4daa0b44ee5025c8bdb5912db"
+  },
+  "verifier.Cargo.lock": {
+    "bytes": 64291,
+    "sha256": "940f56123a159c66fcb0674bf3358dfa1138217baa70dca7f28711e2b942d863"
+  },
+  "verify-archive.py": {
+    "bytes": 5044,
+    "sha256": "1faa0883c4d08dacbff736e6824d9c52813464795dfc8ff5d7d75076d3335214"
+  },
+  "verify.rs": {
+    "bytes": 5300,
+    "sha256": "557c6b9815ddcf21e32808065aab513f67764c423d699291c8aec25b83a548cf"
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "schema": "covenant.explicit-plan-correction.v1",
+  "status": "Both corrected plan jobs completed and independently verified proven",
+  "job_id": "b7a20990-a245-486e-ac4b-44d1331c272a",
+  "source_commit": "035d4cb25eff1fce25d0a385ab92b700d8da3469",
+  "source_tree": "6de5571b649dcd572a15a73341206e75e24c016b",
+  "plans": [
+    {
+      "purpose": "at-expiry",
+      "original_plan_sha256": "46cf0a47a7bea0accd7a5efad05e922a12b9d4ac3d11ea912af43d4a82d29fa6",
+      "corrected_plan_sha256": "a9536ff7cf339bb20d304810aa5ddc03b4059d4aaad2d9b262324c6d50402246",
+      "changed_fields": [
+        "features"
+      ],
+      "features": [
+        "fuzz"
+      ],
+      "source_and_harness_unchanged": true
+    },
+    {
+      "purpose": "after-expiry",
+      "original_plan_sha256": "90a3f1b1a16d38aaed1e2a5b638e6506b7932bb3c0e3d52bd2084926b55cc4f7",
+      "corrected_plan_sha256": "c0a2ed6513c0842f29bfee20082737664e346f634070faec1949a56ac91bb6a0",
+      "changed_fields": [
+        "features"
+      ],
+      "features": [
+        "fuzz"
+      ],
+      "source_and_harness_unchanged": true
+    }
+  ],
+  "root_decision_sha256": "3dd3db77fbbba6577c7c7352703a96c5cbe5b41b031c4450ccc02b5393c6e8a1",
+  "origin": "Local buyer verification-contract correction after two signed terminal failures; no Percolator source or proof logic edit.",
+  "rationale": "fuzz=[]; all src feature=fuzz gates OR with cfg(kani); no fuzz gate in proof file; existing isolated proof scripts use --features fuzz",
+  "preserve_prior_attempts": [
+    "ac6a8b30-1003-4b2a-9558-b580aa590812",
+    "360eba3e-43a0-43e7-a0d7-aa3ca57e4174"
+  ],
+  "outcome": "proven",
+  "accepted": true,
+  "after_expiry_job_id": "0425f25b-83bc-45ee-8fb9-cdcbc94d7b09",
+  "after_expiry_outcome": "proven",
+  "after_expiry_accepted": true
+}

@@ -1,0 +1,45 @@
+# INCIDENT REVIEW
+**Payment Service Deployment – Checkout Error Spike**
+
+---
+
+## 1. OBSERVED IMPACT
+- Checkout error rate increased from 0.2% to 8% (40x spike) between 09:10–09:18 UTC
+- Duration: ~13 minutes from detection to rollback completion
+- Recovery: Error rate returned to 0.3% within 5 minutes of rollback
+- User-facing effect: Estimated 7.8% of checkout attempts failed during the incident window
+- Financial impact: No duplicate charges confirmed to date; potential revenue loss from failed transactions not yet quantified
+
+---
+
+## 2. LIKELY CAUSE WITH UNCERTAINTY
+**Probable cause:** The payment-service deployment at 09:05 introduced a retry mechanism that aggressively retries upstream timeouts without exponential backoff, causing cascading load on downstream services and timeout exhaustion.
+
+**Uncertainty acknowledged:**
+- Whether timeouts originated from a specific upstream dependency or multiple services
+- Whether the retry logic was newly added or a configuration change to existing logic
+- Whether the spike was driven by retry amplification, increased latency, or both
+- Why database latency remained normal despite the error spike
+
+---
+
+## 3. EVIDENCE STILL NEEDED
+- Application logs from the new payment-service version showing retry counts and upstream timeout patterns (09:05–09:18)
+- Upstream service metrics (latency, error rates, request volume) during the incident window
+- Code diff between previous and deployed versions, specifically retry/timeout configuration
+- Distributed trace samples from failed checkout requests to identify which service(s) timed out
+- Comparison of request volume and latency patterns before/after 09:05
+
+---
+
+## 4. RECOMMENDED FOLLOW-UP
+**Investigation:**
+- Review the payment-service deployment change log and code diff for retry logic modifications
+- Analyze upstream service behavior during 09:05–09:18 to determine if they were the source of timeouts or victims of retry amplification
+- Examine whether similar retry patterns exist in other services
+
+**Prevention:**
+- Implement pre-deployment testing for retry behavior under simulated upstream latency/timeout conditions
+- Add circuit breaker or adaptive backoff to retry logic to prevent cascading failures
+- Establish alerting on retry rates and upstream timeout frequency to catch similar patterns earlier
+- Consider canary deployment for payment-service changes to limit blast radius

@@ -1,0 +1,13 @@
+{
+  "summary": "# Summary for Human Reviewer\n\nA payment service deployment at 09:05 UTC triggered a 40x spike in checkout errors (0.2% to 8%) for ~13 minutes, affecting 7.8% of checkout attempts, likely caused by an aggressive retry mechanism without exponential backoff that cascaded load on downstream services—though the specific source of initial timeouts, whether the retry logic was newly added or reconfigured, and whether retry amplification or increased latency drove the spike remain uncertain. Recovery was swift (error rate returned to baseline within 5 minutes of rollback), but investigation should obtain application logs, upstream service metrics, code diffs, and distributed traces to confirm the root cause, while prevention requires pre-deployment retry testing, circuit breakers, retry rate alerting, and canary deployments for payment service changes.",
+  "counters": {
+    "walletSignatures": 0,
+    "gatewayQuotePosts": 0,
+    "gatewayPaidPosts": 0,
+    "rpcCalls": 0,
+    "plannerDispatches": 1,
+    "plannerCached": 0
+  },
+  "separatelyMetered": true,
+  "planAndFinishProviderCostMicroUsdc": 6192
+}

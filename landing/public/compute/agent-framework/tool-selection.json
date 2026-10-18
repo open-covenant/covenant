@@ -1,0 +1,30 @@
+{
+  "observedAt": "2026-10-18T19:35:45.128037+00:00",
+  "workflowId": "covenant-maf-incident-b45975d7-be78-4f21-8f46-56c2603ba21b",
+  "requestId": "eca14dce-99db-4a1a-9597-6b17402f094e",
+  "checkpointId": "fca2f5a7-2fb9-4c85-a536-a49f178a2be8",
+  "requestEventId": "fade9af3-c0f2-44bb-ac7e-927933209f20",
+  "toolChoice": "auto",
+  "sampleTask": "Sample incident report: At 09:10 UTC, checkout errors rose from 0.2% to 8%. A payment-service deployment completed at 09:05. Database latency remained normal. The new version retried upstream timeouts three times without backoff. At 09:18, the on-call engineer rolled back; errors returned to 0.3% by 09:23. No duplicate charges have been confirmed. Prepare a concise incident review: observed impact, likely cause with uncertainty, evidence still needed, and recommended follow-up. Do not claim the investigation is complete or that any follow-up was performed.",
+  "selection": {
+    "name": "covenant_inference",
+    "callId": "toolu_bdrk_01NMYHHy2VYDYkw83zPzaGUf",
+    "arguments": {
+      "prompt": "Prepare a concise incident review for the following incident:\n\nINCIDENT SUMMARY:\n- Time: 09:10 UTC, checkout errors rose from 0.2% to 8%\n- Trigger event: Payment-service deployment completed at 09:05\n- Database latency: remained normal\n- Root cause indicator: New version retried upstream timeouts three times without backoff\n- Resolution: On-call engineer rolled back at 09:18; errors returned to 0.3% by 09:23\n- No duplicate charges have been confirmed\n\nDELIVERABLE REQUIRED:\nProvide a concise incident review with the following sections:\n1. Observed Impact - quantify the user-facing effect\n2. Likely Cause with Uncertainty - identify the probable root cause and acknowledge what is not yet certain\n3. Evidence Still Needed - list specific data points needed to confirm the hypothesis\n4. Recommended Follow-up - suggest investigation and preventive steps\n\nImportant constraints:\n- Do not claim the investigation is complete\n- Do not report any follow-up actions as performed\n- Keep the review concise and actionable"
+    }
+  },
+  "applicationConfiguration": {
+    "model": "claude-haiku-4.5",
+    "maxTokens": 2048,
+    "temperature": 0.2,
+    "systemPrompt": "You prepare incident reviews for human review. Distinguish supplied observations from hypotheses. Do not invent evidence, assign confirmed root cause without proof, or claim you changed systems, contacted people, or completed recommended work."
+  },
+  "counters": {
+    "walletSignatures": 0,
+    "gatewayQuotePosts": 0,
+    "gatewayPaidPosts": 0,
+    "rpcCalls": 0,
+    "plannerDispatches": 1,
+    "plannerCached": 0
+  }
+}

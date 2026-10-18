@@ -131,7 +131,7 @@ npm install --ignore-scripts ./covenant-compute-x402-client-${release.version}.t
         <p className={`mt-5 max-w-2xl ${paragraph}`}>The receipt identifies the operator and binds the job to its exact output. Review generated answers before using them; a signature does not establish their accuracy.</p>
         <p className={`mt-4 max-w-2xl ${paragraph}`}>This is an independent integration using the open-source LangChain and LangGraph frameworks.</p>
       </section>
-      <div className="mt-14 flex flex-wrap gap-x-6 gap-y-3 border-t border-line/80 pt-7 sm:mt-20">{[{label:"Inference service",href:"/compute-inference"},{label:"Compute status",href:"/compute-status"},{label:"Compute",href:"/compute"},...(release.sourceUrl?[{label:"Integration source",href:release.sourceUrl}]:[])].map(({label,href})=><a key={href} href={href} className="inline-flex min-h-11 items-center text-[11px] uppercase tracking-[0.2em] text-muted transition-colors hover:text-fg">{label}<span aria-hidden="true" className="ml-2">→</span></a>)}</div>
+      <div className="mt-14 flex flex-wrap gap-x-6 gap-y-3 border-t border-line/80 pt-7 sm:mt-20">{[{label:"Inference service",href:"/compute-inference"},{label:"Microsoft Agent Framework",href:"/compute-agent-framework"},{label:"Compute status",href:"/compute-status"},{label:"Compute",href:"/compute"},...(release.sourceUrl?[{label:"Integration source",href:release.sourceUrl}]:[])].map(({label,href})=><a key={href} href={href} className="inline-flex min-h-11 items-center text-[11px] uppercase tracking-[0.2em] text-muted transition-colors hover:text-fg">{label}<span aria-hidden="true" className="ml-2">→</span></a>)}</div>
     </div><SiteFooter className="pb-8" />
   </main>;
 }

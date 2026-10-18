@@ -1,0 +1,19 @@
+{
+  "observedAt": "2026-10-18T19:36:56.878409+00:00",
+  "workflowId": "covenant-maf-incident-b45975d7-be78-4f21-8f46-56c2603ba21b",
+  "requestId": "eca14dce-99db-4a1a-9597-6b17402f094e",
+  "sameSavedPrePurchaseCheckpoint": true,
+  "purchaseIdentical": true,
+  "jobId": "b3ec6d09-7087-4a60-80a2-4d1898e8dcac",
+  "transaction": "5vqFrcJq25P7hDmdfuivuvsN7o8EfGSv53s4anttMoDUzf5LvVLze6CQQ4vNcxWn5r3kk1attctt2iVP1ZmwPj92",
+  "responseSha256": "d6ac7b1099c3b3cf0effd079fb525b4f1e59daf3d3cedece72aed1f045132e45",
+  "counters": {
+    "walletSignatures": 0,
+    "gatewayQuotePosts": 0,
+    "gatewayPaidPosts": 0,
+    "rpcCalls": 0,
+    "plannerDispatches": 0,
+    "plannerCached": 0
+  },
+  "additionalCustomerChargeMicroUsdc": 0
+}

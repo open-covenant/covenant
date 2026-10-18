@@ -1,0 +1,52 @@
+{
+  "package": "covenant-compute-x402",
+  "version": "0.1.0",
+  "python": "3.12.14",
+  "sourceTests": 71,
+  "installedTests": 71,
+  "installedOutsideCheckout": true,
+  "cleanInstall": true,
+  "pipCheck": "No broken requirements found.",
+  "wheel": {
+    "name": "covenant_compute_x402-0.1.0-py3-none-any.whl",
+    "sha256": "0613775ced5316871b2248fd9942b523cee548e8e53e8222e8db614165023325",
+    "bytes": 26945
+  },
+  "sdist": {
+    "name": "covenant_compute_x402-0.1.0.tar.gz",
+    "sha256": "6606fbb919acb5e9dcb4a45114eb26a9235ea08a08d1d3f9711e642161ce9eb7",
+    "bytes": 39705
+  },
+  "wheelSourceBytesIdentical": true,
+  "wheelModules": [
+    "covenant_compute_x402/__init__.py",
+    "covenant_compute_x402/agent_framework.py",
+    "covenant_compute_x402/client.py",
+    "covenant_compute_x402/journal.py",
+    "covenant_compute_x402/payment.py",
+    "covenant_compute_x402/proof.py",
+    "covenant_compute_x402/py.typed",
+    "covenant_compute_x402/workflow_demo.py"
+  ],
+  "sdistTestFixturesAndLockIncluded": true,
+  "qualifiedVersions": {
+    "x402": "2.25.0",
+    "solders": "0.27.1",
+    "solana": "0.39.0",
+    "agent-framework-core": "1.22.0",
+    "agent-framework-openai": "1.17.0",
+    "openai": "3.35.1",
+    "jcs": "0.2.1",
+    "httpx2": "2.14.0"
+  },
+  "crossLanguage": {
+    "ecmaCanonicalAndSha256Vectors": true,
+    "nativeRustSignedReceiptFixture": true,
+    "pythonNodeConcurrentSharedBudget": true,
+    "nodePendingAndCompletedRecovery": true,
+    "nodeLegacy20kUnchangedRecovery": true,
+    "pythonCompletedNodeReadback": true,
+    "actualFacilitatorDryVerifyNoBroadcast": true,
+    "paymentHeaderIntegerLexicalTypes": true
+  }
+}

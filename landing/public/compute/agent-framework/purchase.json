@@ -1,0 +1,136 @@
+{
+  "status": "completed",
+  "requestId": "eca14dce-99db-4a1a-9597-6b17402f094e",
+  "requestSha256": "eb2737c40bb9cf1132b903466e0a8b35ecff4b3e5ac7f49828f1e2199a633c39",
+  "amountMicroUsdc": 50000,
+  "settlement": {
+    "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+    "payer": "7rozFdk421fc7DT3MpPJnD4ndXY81hBY6DzmKauZgzTB",
+    "success": true,
+    "transaction": "5vqFrcJq25P7hDmdfuivuvsN7o8EfGSv53s4anttMoDUzf5LvVLze6CQQ4vNcxWn5r3kk1attctt2iVP1ZmwPj92"
+  },
+  "text": "# INCIDENT REVIEW\n**Payment Service Deployment – Checkout Error Spike**\n\n---\n\n## 1. OBSERVED IMPACT\n- Checkout error rate increased from 0.2% to 8% (40x spike) between 09:10–09:18 UTC\n- Duration: ~13 minutes from detection to rollback completion\n- Recovery: Error rate returned to 0.3% within 5 minutes of rollback\n- User-facing effect: Estimated 7.8% of checkout attempts failed during the incident window\n- Financial impact: No duplicate charges confirmed to date; potential revenue loss from failed transactions not yet quantified\n\n---\n\n## 2. LIKELY CAUSE WITH UNCERTAINTY\n**Probable cause:** The payment-service deployment at 09:05 introduced a retry mechanism that aggressively retries upstream timeouts without exponential backoff, causing cascading load on downstream services and timeout exhaustion.\n\n**Uncertainty acknowledged:**\n- Whether timeouts originated from a specific upstream dependency or multiple services\n- Whether the retry logic was newly added or a configuration change to existing logic\n- Whether the spike was driven by retry amplification, increased latency, or both\n- Why database latency remained normal despite the error spike\n\n---\n\n## 3. EVIDENCE STILL NEEDED\n- Application logs from the new payment-service version showing retry counts and upstream timeout patterns (09:05–09:18)\n- Upstream service metrics (latency, error rates, request volume) during the incident window\n- Code diff between previous and deployed versions, specifically retry/timeout configuration\n- Distributed trace samples from failed checkout requests to identify which service(s) timed out\n- Comparison of request volume and latency patterns before/after 09:05\n\n---\n\n## 4. RECOMMENDED FOLLOW-UP\n**Investigation:**\n- Review the payment-service deployment change log and code diff for retry logic modifications\n- Analyze upstream service behavior during 09:05–09:18 to determine if they were the source of timeouts or victims of retry amplification\n- Examine whether similar retry patterns exist in other services\n\n**Prevention:**\n- Implement pre-deployment testing for retry behavior under simulated upstream latency/timeout conditions\n- Add circuit breaker or adaptive backoff to retry logic to prevent cascading failures\n- Establish alerting on retry rates and upstream timeout frequency to catch similar patterns earlier\n- Consider canary deployment for payment-service changes to limit blast radius",
+  "result": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0.0,
+        "message": {
+          "content": "# INCIDENT REVIEW\n**Payment Service Deployment – Checkout Error Spike**\n\n---\n\n## 1. OBSERVED IMPACT\n- Checkout error rate increased from 0.2% to 8% (40x spike) between 09:10–09:18 UTC\n- Duration: ~13 minutes from detection to rollback completion\n- Recovery: Error rate returned to 0.3% within 5 minutes of rollback\n- User-facing effect: Estimated 7.8% of checkout attempts failed during the incident window\n- Financial impact: No duplicate charges confirmed to date; potential revenue loss from failed transactions not yet quantified\n\n---\n\n## 2. LIKELY CAUSE WITH UNCERTAINTY\n**Probable cause:** The payment-service deployment at 09:05 introduced a retry mechanism that aggressively retries upstream timeouts without exponential backoff, causing cascading load on downstream services and timeout exhaustion.\n\n**Uncertainty acknowledged:**\n- Whether timeouts originated from a specific upstream dependency or multiple services\n- Whether the retry logic was newly added or a configuration change to existing logic\n- Whether the spike was driven by retry amplification, increased latency, or both\n- Why database latency remained normal despite the error spike\n\n---\n\n## 3. EVIDENCE STILL NEEDED\n- Application logs from the new payment-service version showing retry counts and upstream timeout patterns (09:05–09:18)\n- Upstream service metrics (latency, error rates, request volume) during the incident window\n- Code diff between previous and deployed versions, specifically retry/timeout configuration\n- Distributed trace samples from failed checkout requests to identify which service(s) timed out\n- Comparison of request volume and latency patterns before/after 09:05\n\n---\n\n## 4. RECOMMENDED FOLLOW-UP\n**Investigation:**\n- Review the payment-service deployment change log and code diff for retry logic modifications\n- Analyze upstream service behavior during 09:05–09:18 to determine if they were the source of timeouts or victims of retry amplification\n- Examine whether similar retry patterns exist in other services\n\n**Prevention:**\n- Implement pre-deployment testing for retry behavior under simulated upstream latency/timeout conditions\n- Add circuit breaker or adaptive backoff to retry logic to prevent cascading failures\n- Establish alerting on retry rates and upstream timeout frequency to catch similar patterns earlier\n- Consider canary deployment for payment-service changes to limit blast radius",
+          "role": "assistant"
+        }
+      }
+    ],
+    "covenant": {
+      "envelope": {
+        "payload": {
+          "buyer": {
+            "display": "compute-gateway@local",
+            "pubkey": "F9KjruGNU9f9tr5RXiBZfENeD6f8qAMUX5LQDEt9qdn1"
+          },
+          "capability_requirement": {
+            "gpu_class": null,
+            "kind": "inference_call",
+            "max_duration_secs": 45.0,
+            "min_reputation_bps": null,
+            "min_vram_gb": null,
+            "model_id": "claude-haiku-4.5"
+          },
+          "deadline_ms": 45000.0,
+          "idempotency": {
+            "duplicate_safety": "idempotent",
+            "key": "b3ec6d09-7087-4a60-80a2-4d1898e8dcac"
+          },
+          "input": [
+            {
+              "type": "json",
+              "value": {
+                "messages": [
+                  {
+                    "content": "You prepare incident reviews for human review. Distinguish supplied observations from hypotheses. Do not invent evidence, assign confirmed root cause without proof, or claim you changed systems, contacted people, or completed recommended work.",
+                    "role": "system"
+                  },
+                  {
+                    "content": "Prepare a concise incident review for the following incident:\n\nINCIDENT SUMMARY:\n- Time: 09:10 UTC, checkout errors rose from 0.2% to 8%\n- Trigger event: Payment-service deployment completed at 09:05\n- Database latency: remained normal\n- Root cause indicator: New version retried upstream timeouts three times without backoff\n- Resolution: On-call engineer rolled back at 09:18; errors returned to 0.3% by 09:23\n- No duplicate charges have been confirmed\n\nDELIVERABLE REQUIRED:\nProvide a concise incident review with the following sections:\n1. Observed Impact - quantify the user-facing effect\n2. Likely Cause with Uncertainty - identify the probable root cause and acknowledge what is not yet certain\n3. Evidence Still Needed - list specific data points needed to confirm the hypothesis\n4. Recommended Follow-up - suggest investigation and preventive steps\n\nImportant constraints:\n- Do not claim the investigation is complete\n- Do not report any follow-up actions as performed\n- Keep the review concise and actionable",
+                    "role": "user"
+                  }
+                ]
+              }
+            },
+            {
+              "type": "json",
+              "value": {
+                "generation": {
+                  "max_tokens": 2048.0,
+                  "temperature": 0.2
+                }
+              }
+            }
+          ],
+          "issued_at_ms": 1792352175208.0,
+          "job_id": "b3ec6d09-7087-4a60-80a2-4d1898e8dcac",
+          "kind": "inference_call",
+          "price_micro_usdc": 30000.0
+        },
+        "payload_json": "{\"job_id\":\"b3ec6d09-7087-4a60-80a2-4d1898e8dcac\",\"buyer\":{\"display\":\"compute-gateway@local\",\"pubkey\":\"F9KjruGNU9f9tr5RXiBZfENeD6f8qAMUX5LQDEt9qdn1\"},\"kind\":\"inference_call\",\"capability_requirement\":{\"gpu_class\":null,\"min_vram_gb\":null,\"model_id\":\"claude-haiku-4.5\",\"kind\":\"inference_call\",\"max_duration_secs\":45,\"min_reputation_bps\":null},\"input\":[{\"type\":\"json\",\"value\":{\"messages\":[{\"content\":\"You prepare incident reviews for human review. Distinguish supplied observations from hypotheses. Do not invent evidence, assign confirmed root cause without proof, or claim you changed systems, contacted people, or completed recommended work.\",\"role\":\"system\"},{\"content\":\"Prepare a concise incident review for the following incident:\\n\\nINCIDENT SUMMARY:\\n- Time: 09:10 UTC, checkout errors rose from 0.2% to 8%\\n- Trigger event: Payment-service deployment completed at 09:05\\n- Database latency: remained normal\\n- Root cause indicator: New version retried upstream timeouts three times without backoff\\n- Resolution: On-call engineer rolled back at 09:18; errors returned to 0.3% by 09:23\\n- No duplicate charges have been confirmed\\n\\nDELIVERABLE REQUIRED:\\nProvide a concise incident review with the following sections:\\n1. Observed Impact - quantify the user-facing effect\\n2. Likely Cause with Uncertainty - identify the probable root cause and acknowledge what is not yet certain\\n3. Evidence Still Needed - list specific data points needed to confirm the hypothesis\\n4. Recommended Follow-up - suggest investigation and preventive steps\\n\\nImportant constraints:\\n- Do not claim the investigation is complete\\n- Do not report any follow-up actions as performed\\n- Keep the review concise and actionable\",\"role\":\"user\"}]}},{\"type\":\"json\",\"value\":{\"generation\":{\"max_tokens\":2048,\"temperature\":0.2}}}],\"price_micro_usdc\":30000,\"deadline_ms\":45000,\"idempotency\":{\"duplicate_safety\":\"idempotent\",\"key\":\"b3ec6d09-7087-4a60-80a2-4d1898e8dcac\"},\"issued_at_ms\":1792352175208}",
+        "signature_b58": "2oa6dyfqK8L38epXTRm3ADkjpgsRjGHH4AtoDZsSroHnyrd48cRJpnbZgD3isc3PzqrrmNuSuxhzrDYTorcCMmqC",
+        "signer_pubkey_b58": "F9KjruGNU9f9tr5RXiBZfENeD6f8qAMUX5LQDEt9qdn1"
+      },
+      "job_id": "b3ec6d09-7087-4a60-80a2-4d1898e8dcac",
+      "output": [
+        {
+          "text": "# INCIDENT REVIEW\n**Payment Service Deployment – Checkout Error Spike**\n\n---\n\n## 1. OBSERVED IMPACT\n- Checkout error rate increased from 0.2% to 8% (40x spike) between 09:10–09:18 UTC\n- Duration: ~13 minutes from detection to rollback completion\n- Recovery: Error rate returned to 0.3% within 5 minutes of rollback\n- User-facing effect: Estimated 7.8% of checkout attempts failed during the incident window\n- Financial impact: No duplicate charges confirmed to date; potential revenue loss from failed transactions not yet quantified\n\n---\n\n## 2. LIKELY CAUSE WITH UNCERTAINTY\n**Probable cause:** The payment-service deployment at 09:05 introduced a retry mechanism that aggressively retries upstream timeouts without exponential backoff, causing cascading load on downstream services and timeout exhaustion.\n\n**Uncertainty acknowledged:**\n- Whether timeouts originated from a specific upstream dependency or multiple services\n- Whether the retry logic was newly added or a configuration change to existing logic\n- Whether the spike was driven by retry amplification, increased latency, or both\n- Why database latency remained normal despite the error spike\n\n---\n\n## 3. EVIDENCE STILL NEEDED\n- Application logs from the new payment-service version showing retry counts and upstream timeout patterns (09:05–09:18)\n- Upstream service metrics (latency, error rates, request volume) during the incident window\n- Code diff between previous and deployed versions, specifically retry/timeout configuration\n- Distributed trace samples from failed checkout requests to identify which service(s) timed out\n- Comparison of request volume and latency patterns before/after 09:05\n\n---\n\n## 4. RECOMMENDED FOLLOW-UP\n**Investigation:**\n- Review the payment-service deployment change log and code diff for retry logic modifications\n- Analyze upstream service behavior during 09:05–09:18 to determine if they were the source of timeouts or victims of retry amplification\n- Examine whether similar retry patterns exist in other services\n\n**Prevention:**\n- Implement pre-deployment testing for retry behavior under simulated upstream latency/timeout conditions\n- Add circuit breaker or adaptive backoff to retry logic to prevent cascading failures\n- Establish alerting on retry rates and upstream timeout frequency to catch similar patterns earlier\n- Consider canary deployment for payment-service changes to limit blast radius",
+          "type": "text"
+        },
+        {
+          "type": "json",
+          "value": {
+            "model_mapping": "usepod-openrouter-haiku-4.5-v1",
+            "provider_pin": "openrouter",
+            "provider_reported": "openrouter",
+            "reported_model": "anthropic/claude-haiku-4.5",
+            "requested_model": "claude-haiku-4.5",
+            "route_reported": "centralized",
+            "type": "provider_identity",
+            "upstream": "usepod",
+            "upstream_requested_model": "anthropic/claude-haiku-4.5",
+            "upstream_response_sha256": "61fc8390fec8669370bcd649856d42526b9279a51f721b138ce37c266d71921a",
+            "version": 1.0
+          }
+        }
+      ],
+      "output_json": "[{\"type\":\"text\",\"text\":\"# INCIDENT REVIEW\\n**Payment Service Deployment – Checkout Error Spike**\\n\\n---\\n\\n## 1. OBSERVED IMPACT\\n- Checkout error rate increased from 0.2% to 8% (40x spike) between 09:10–09:18 UTC\\n- Duration: ~13 minutes from detection to rollback completion\\n- Recovery: Error rate returned to 0.3% within 5 minutes of rollback\\n- User-facing effect: Estimated 7.8% of checkout attempts failed during the incident window\\n- Financial impact: No duplicate charges confirmed to date; potential revenue loss from failed transactions not yet quantified\\n\\n---\\n\\n## 2. LIKELY CAUSE WITH UNCERTAINTY\\n**Probable cause:** The payment-service deployment at 09:05 introduced a retry mechanism that aggressively retries upstream timeouts without exponential backoff, causing cascading load on downstream services and timeout exhaustion.\\n\\n**Uncertainty acknowledged:**\\n- Whether timeouts originated from a specific upstream dependency or multiple services\\n- Whether the retry logic was newly added or a configuration change to existing logic\\n- Whether the spike was driven by retry amplification, increased latency, or both\\n- Why database latency remained normal despite the error spike\\n\\n---\\n\\n## 3. EVIDENCE STILL NEEDED\\n- Application logs from the new payment-service version showing retry counts and upstream timeout patterns (09:05–09:18)\\n- Upstream service metrics (latency, error rates, request volume) during the incident window\\n- Code diff between previous and deployed versions, specifically retry/timeout configuration\\n- Distributed trace samples from failed checkout requests to identify which service(s) timed out\\n- Comparison of request volume and latency patterns before/after 09:05\\n\\n---\\n\\n## 4. RECOMMENDED FOLLOW-UP\\n**Investigation:**\\n- Review the payment-service deployment change log and code diff for retry logic modifications\\n- Analyze upstream service behavior during 09:05–09:18 to determine if they were the source of timeouts or victims of retry amplification\\n- Examine whether similar retry patterns exist in other services\\n\\n**Prevention:**\\n- Implement pre-deployment testing for retry behavior under simulated upstream latency/timeout conditions\\n- Add circuit breaker or adaptive backoff to retry logic to prevent cascading failures\\n- Establish alerting on retry rates and upstream timeout frequency to catch similar patterns earlier\\n- Consider canary deployment for payment-service changes to limit blast radius\"},{\"type\":\"json\",\"value\":{\"model_mapping\":\"usepod-openrouter-haiku-4.5-v1\",\"provider_pin\":\"openrouter\",\"provider_reported\":\"openrouter\",\"reported_model\":\"anthropic/claude-haiku-4.5\",\"requested_model\":\"claude-haiku-4.5\",\"route_reported\":\"centralized\",\"type\":\"provider_identity\",\"upstream\":\"usepod\",\"upstream_requested_model\":\"anthropic/claude-haiku-4.5\",\"upstream_response_sha256\":\"61fc8390fec8669370bcd649856d42526b9279a51f721b138ce37c266d71921a\",\"version\":1}}]",
+      "quote_id": "eca14dce-99db-4a1a-9597-6b17402f094e",
+      "receipt": {
+        "receipt": {
+          "executed_at_ms": 1792352182964.0,
+          "job_hash_hex": "5309f7d28302e3bd115780422da19d0c5f7e449d4b2fb668f6b985fee036ac09",
+          "job_id": "b3ec6d09-7087-4a60-80a2-4d1898e8dcac",
+          "meter": {
+            "finish_reason": "stop",
+            "gpu_seconds": null,
+            "tokens_in": 295.0,
+            "tokens_out": 539.0,
+            "wall_ms": 7342.0
+          },
+          "node_audit_root_hex": "c01e26a9149f28b7f17d1fe0fd11024254d15d48de93a45b3f12eab983dc6a96",
+          "operator": {
+            "display": "operator@compute",
+            "pubkey": "9fefASd52qfR2Q8P81yXtkHu9E4q9KvW58x2ixBAAvLR"
+          },
+          "price_micro_usdc": 30000.0,
+          "result_hash_hex": "6f4d6670a34b772230df3d3dd804e834d1f6eb01816673e603614044486b082a",
+          "status": "ok"
+        },
+        "receipt_json": "{\"job_id\":\"b3ec6d09-7087-4a60-80a2-4d1898e8dcac\",\"operator\":{\"display\":\"operator@compute\",\"pubkey\":\"9fefASd52qfR2Q8P81yXtkHu9E4q9KvW58x2ixBAAvLR\"},\"job_hash_hex\":\"5309f7d28302e3bd115780422da19d0c5f7e449d4b2fb668f6b985fee036ac09\",\"result_hash_hex\":\"6f4d6670a34b772230df3d3dd804e834d1f6eb01816673e603614044486b082a\",\"meter\":{\"wall_ms\":7342,\"tokens_in\":295,\"tokens_out\":539,\"gpu_seconds\":null,\"finish_reason\":\"stop\"},\"price_micro_usdc\":30000,\"status\":\"ok\",\"executed_at_ms\":1792352182964,\"node_audit_root_hex\":\"c01e26a9149f28b7f17d1fe0fd11024254d15d48de93a45b3f12eab983dc6a96\"}",
+        "signature_b58": "4EJsiEQEt4Eedg6RPqfX5r9ffYTfhtkPFD3fDp72aEadYziaspXTdKTdk58zdEbEcKmBbTwXEzLAzrF73uZfJyAQ",
+        "signer_pubkey_b58": "9fefASd52qfR2Q8P81yXtkHu9E4q9KvW58x2ixBAAvLR"
+      },
+      "request_sha256": "eb2737c40bb9cf1132b903466e0a8b35ecff4b3e5ac7f49828f1e2199a633c39"
+    },
+    "created": 1792352183.0,
+    "id": "chatcmpl-b3ec6d09-7087-4a60-80a2-4d1898e8dcac",
+    "model": "claude-haiku-4.5",
+    "object": "chat.completion"
+  }
+}

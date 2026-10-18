@@ -2,9 +2,10 @@ import type { Metadata } from "next";
 import { pageMetadata } from "@/app/_metadata";
 import { SiteFooter } from "../SiteFooter";
 import { SiteHeader } from "../SiteHeader";
+import { agentFrameworkRelease } from "../compute-agent-framework/_release";
 
 const DESCRIPTION =
-  "Covenant release notes. What shipped in each tagged version, with signed artifacts and the full changelog on GitHub.";
+  "Covenant release notes. What shipped in each tagged version, with versioned artifacts and the full changelog on GitHub.";
 
 export const metadata: Metadata = pageMetadata("/changelog", { title: "Changelog" }, {
   title: "Changelog: Covenant",
@@ -31,10 +32,27 @@ type Release = {
   dateISO: string;
   href: string;
   summary: string;
+  artifactLabel?: string;
   groups: { label: string; items: string[] }[];
 };
 
 const RELEASES: Release[] = [
+  ...(agentFrameworkRelease.accepted && agentFrameworkRelease.releaseUrl ? [{
+    version: `Compute Python ${agentFrameworkRelease.version}`,
+    date: "October 18, 2026",
+    dateISO: "2026-10-18",
+    href: agentFrameworkRelease.releaseUrl,
+    artifactLabel: "Verified package",
+    summary: "Python agents built with Microsoft Agent Framework can use Covenant as a paid inference tool, with Solana USDC payments and verified Compute receipts.",
+    groups: [{
+      label: "Added",
+      items: [
+        "Native Python x402 client with persistent purchase reservations, spending limits and signed-result verification.",
+        "Official Agent Framework FunctionTool with prompt-only model arguments. Wallet, model and spending policy remain application-controlled.",
+        "A persistent incident-review workflow that checkpoints before payment and reuses the same completed purchase after a restart.",
+      ],
+    }],
+  }] : []),
   {
     version: "0.1.0-alpha.1",
     date: "May 28, 2026",
@@ -93,7 +111,7 @@ export default function ChangelogPage() {
         </h2>
 
         <p className="mt-6 max-w-2xl text-pretty text-[15px] leading-[1.7] text-fg-soft sm:text-base">
-          Tagged releases with signed artifacts. The full, technical changelog
+          Tagged releases with versioned artifacts. The full, technical changelog
           and the live commit stream both live in the open.
         </p>
 
@@ -120,7 +138,7 @@ export default function ChangelogPage() {
                     rel="noopener noreferrer"
                     className="ml-auto text-[11px] uppercase tracking-[0.2em] text-muted transition-colors hover:text-fg"
                   >
-                    Signed release →
+                    {r.artifactLabel ?? "Signed release"} →
                   </a>
                 </div>
                 <p className={`mb-6 max-w-2xl ${paragraph}`}>{r.summary}</p>

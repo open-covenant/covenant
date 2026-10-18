@@ -14,6 +14,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
     { url: `${SITE}/blog`, lastModified, changeFrequency: "weekly", priority: 0.6 },
     { url: `${SITE}/compute`, lastModified, changeFrequency: "weekly", priority: 0.9 },
     { url: `${SITE}/compute-langchain`, lastModified, changeFrequency: "weekly", priority: 0.8 },
+    { url: `${SITE}/compute-agent-framework`, lastModified, changeFrequency: "weekly", priority: 0.8 },
     { url: `${SITE}/compute-inference`, lastModified, changeFrequency: "weekly", priority: 0.8 },
     { url: `${SITE}/compute-prices`, lastModified, changeFrequency: "hourly", priority: 0.8 },
     { url: `${SITE}/compute-status`, lastModified, changeFrequency: "hourly", priority: 0.8 },

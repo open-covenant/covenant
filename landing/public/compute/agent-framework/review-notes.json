@@ -1,0 +1,11 @@
+{
+  "sample": true,
+  "generatedOutputUnedited": true,
+  "humanReviewRequired": true,
+  "knownOutputErrors": [
+    "The supplied timeline has 8 minutes from detection to rollback and 13 minutes from detection to recovery. The draft labels 13 minutes as detection to rollback completion.",
+    "The error rate reached 8%; 7.8 percentage points is the increase from 0.2%, not the total share of failed checkout attempts.",
+    "Deployment timing and recovery after rollback support a hypothesis; the sample does not establish root cause. The final planner summary states causality too strongly."
+  ],
+  "verificationScope": "Payment, request binding, operator signature, exact response bytes and replay safety. No claim of answer correctness or independently verified model weights."
+}

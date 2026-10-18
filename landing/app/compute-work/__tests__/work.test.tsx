@@ -49,7 +49,7 @@ describe("public work presentation", () => {
     expect(snapshotCurrent(fixture(), NOW, true)).toBe(false);
     expect(render(fixture(), NOW + 180001)).toContain("Current funding state is unknown");
     expect(render(fixture(), NOW, true)).toContain("The latest refresh failed");
-    const data = fixture(); data.pool = { address: "1".repeat(32), position_address: "2".repeat(32), active: false, finalized_slot: null, observed_at_ms: NOW - 180001, fee_bps: 65, range: "custom", cvnt_raw: "12345", nvdax_raw: "123", nvdax_multiplier: "1.25", volume_usdc_micros: null, lp_value_usdc_micros: "2000000", hold_value_usdc_micros: "2500000" };
+    const data = fixture(); data.pool = { address: "1".repeat(32), position_address: "2".repeat(32), active: false, finalized_slot: null, observed_at_ms: NOW - 180001, fee_bps: 65, range: "custom", cvnt_raw: "12345", nvdax_raw: "123", nvdax_multiplier: "1.25", cvnt_fees_owed_raw: "1", nvdax_fees_owed_raw: "0", volume_usdc_micros: null, lp_value_usdc_micros: "2000000", hold_value_usdc_micros: "2500000" };
     const html = render(validateSnapshot(data));
     expect(html).toContain("observation stale"); expect(html).toContain("0.65%"); expect(html).toContain("differ from the pilot default");
     expect(html).not.toContain("Current funding state is unknown");

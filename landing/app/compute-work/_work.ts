@@ -18,6 +18,7 @@ export type Work = {
 export type Pool = {
   address: string; position_address: string; active: boolean; finalized_slot: number | null; observed_at_ms: number;
   fee_bps: number; range: "full" | "custom"; cvnt_raw: string; nvdax_raw: string; nvdax_multiplier: string;
+  cvnt_fees_owed_raw: string; nvdax_fees_owed_raw: string;
   volume_usdc_micros: string | null; lp_value_usdc_micros: string | null; hold_value_usdc_micros: string | null;
 };
 export type WorkSnapshot = {
@@ -101,6 +102,7 @@ export function validateSnapshot(value: unknown): WorkSnapshot {
     if (!/^(0|[1-9][0-9]{0,38})(\.[0-9]{1,38})?$/.test(multiplier) || Number(multiplier) <= 0) invalid();
     pool = { address: address(p.address), position_address: address(p.position_address), active: boolean(p.active), finalized_slot: p.finalized_slot === null ? null : integer(p.finalized_slot), observed_at_ms: time(p.observed_at_ms),
       fee_bps: integer(p.fee_bps), range: choice(p.range, ["full", "custom"]), cvnt_raw: amount(p.cvnt_raw), nvdax_raw: amount(p.nvdax_raw), nvdax_multiplier: multiplier,
+      cvnt_fees_owed_raw: amount(p.cvnt_fees_owed_raw), nvdax_fees_owed_raw: amount(p.nvdax_fees_owed_raw),
       volume_usdc_micros: nullableAmount(p.volume_usdc_micros), lp_value_usdc_micros: nullableAmount(p.lp_value_usdc_micros), hold_value_usdc_micros: nullableAmount(p.hold_value_usdc_micros) };
     if (pool.observed_at_ms > base.generated_at_ms || pool.fee_bps > 10000) invalid();
   }

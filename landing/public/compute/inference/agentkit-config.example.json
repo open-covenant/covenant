@@ -1,0 +1,15 @@
+{
+  "gatewayUrl": "https://compute-inference.opencovenant.org",
+  "rpcUrl": "https://api.mainnet-beta.solana.com",
+  "payTo": "52Ca4rDuLd4RuxA2sZC7GJoGVnPrE77Z6nXEFDTnvtqw",
+  "gatewayBuyer": "F9KjruGNU9f9tr5RXiBZfENeD6f8qAMUX5LQDEt9qdn1",
+  "operators": [
+    "9fefASd52qfR2Q8P81yXtkHu9E4q9KvW58x2ixBAAvLR"
+  ],
+  "maxPaymentMicroUsdc": 50000,
+  "maxTotalMicroUsdc": 500000,
+  "maxInputBytes": 4096,
+  "timeoutMs": 120000,
+  "keypairPath": "/absolute/path/to/your-private-solana-keypair.json",
+  "journalPath": "./state/purchases.sqlite"
+}

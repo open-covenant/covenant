@@ -1,0 +1,29 @@
+[Unit]
+Description=Covenant production GPU rental canary
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=covenant-canary
+Group=covenant-canary
+StateDirectory=covenant-compute-canary
+StateDirectoryMode=0700
+UMask=0077
+EnvironmentFile=-/etc/covenant-compute-canary/credentials.env
+ExecStart=/usr/bin/python3 /opt/covenant/scripts/compute-rental-canary.py --config /etc/covenant-compute-canary/config.json --state-dir /var/lib/covenant-compute-canary --once
+# Bounds a hung adapter as well as normal polling. SIGTERM records a verdict
+# and attempts cleanup; active.json survives a forced kill for the next run.
+TimeoutStartSec=20min
+TimeoutStopSec=10min
+KillMode=mixed
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/covenant-compute-canary
+# Adjust public_state_path to this separately provisioned directory when using systemd.
+ReadWritePaths=/var/lib/covenant-compute-canary-public
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+

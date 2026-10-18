@@ -1,9 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import {startWatchdog} from '../compute-canary-watchdog.mjs';
 import {privateDirectory,seed,latch,missing,clearStartingLatch,explicitBoolean,operatorPubkey,startInferenceOperator,ProcessGroup,waitFor} from './runtime.mjs';
 
 process.umask(0o077);
-let group;
+let group,stopWatchdog=()=>{};
 try{
   const data=process.env.COVENANT_X402_DATA;
   if(!data||!path.isAbsolute(data))throw Error('Persistent directory required');
@@ -15,9 +16,12 @@ try{
   latch(starting,'Startup is not yet ready');
   group=new ProcessGroup({
     onOptionalFailure:reason=>latch(disabled,reason),
-    onBeforeStop:()=>latch(starting,'Shutdown in progress'),
+    onBeforeStop:()=>{stopWatchdog();latch(starting,'Shutdown in progress');},
   });
   for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>group.stop(0));
+  // Start independently before coordinator-dependent optional operator startup.
+  // Configuration or observer failure never changes financial worker behavior.
+  try{stopWatchdog=startWatchdog(process.env,data);}catch{process.stderr.write('External rental observer unavailable; check observer configuration.\n');}
   seed(path.join(gateway,'identity.key'),process.env.COVENANT_GATEWAY_IDENTITY_B64,32);
   seed(path.join(gateway,'fee-payer.json'),process.env.COVENANT_GATEWAY_FEE_PAYER_KEY_B64);
   // This key authenticates persisted payment seals: rotating it strands recovery.
@@ -58,6 +62,7 @@ try{
     }
   }
 }catch{
+  stopWatchdog();
   process.stderr.write('Gateway supervisor refused startup; check private configuration and persistent volume.\n');
   if(group)group.stop(1);else process.exitCode=1;
 }

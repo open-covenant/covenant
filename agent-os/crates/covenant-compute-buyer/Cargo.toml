@@ -1,6 +1,6 @@
 [package]
 name = "covenant-compute-buyer"
-version = "0.3.0"
+version = "0.3.1"
 description = "Buyer-side client for the Covenant compute network: sign a job envelope, dispatch it to a coordinator, poll the receipt, and re-verify every operator commitment locally. Ships the covenant-compute-mcp stdio server so any MCP client can buy compute."
 edition.workspace = true
 license.workspace = true

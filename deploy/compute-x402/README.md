@@ -152,3 +152,35 @@ reference and `smoke_revision` set to its embedded 40-character source revision.
 This runs only the `smoke-existing` job; the build job is skipped. The harness is
 checked out from the dispatched ref, so fixture fixes can qualify an older image.
 Smoke-only runs use a separate concurrency group from image builds.
+
+## External rental-check observer
+
+The optional `COVENANT_CANARY_WATCHDOG_ENABLED=true` process observes the separate
+coordinator's fixed public `/rental-checks` endpoint every 60 seconds. It uses the
+existing `/data/rental-watchdog` directory and no additional service. The child
+receives only its journal path and the four `COVENANT_CANARY_ALERT_*` email
+settings documented in `environment.example`; no buyer, operator or provider
+credentials are passed to it. Its only network operations are a bounded public
+GET and Cloudflare's email-sending API for `alert@opencovenant.org`.
+
+After 18 continuous hours without a current heartbeat, it queues one reporting
+outage notification. A current disabled or budget-paused heartbeat remains
+visible. A stale disabled snapshot, absent configured feed, invalid response or
+network failure does not suppress an outage. Set the observer's own explicit
+switch to `false` to stop observing intentionally. This checks feed availability;
+the coordinator's monitor separately counts failed or missed rental windows.
+
+Reporting restoration queues a separate notice. It never describes a fresh
+heartbeat as a passed GPU check. The private journal and exact outbox event are
+synced before email delivery. An unknown outcome retries the same event ID and
+message; provider idempotency governs duplicate delivery. The outbox retains up
+to 32 undelivered events and refuses to discard them automatically. Corrupt or
+unreadable state is not reset. Inspect and preserve this journal during recovery.
+
+The observer is protected by a crash-releasing process lock and restarted
+separately from the financial worker group. Observer failure cannot lock
+admissions, kill settlement workers, or repeat a paid qualification probe. This
+provides a different instance from the coordinator; a failure affecting both
+Render services or their shared infrastructure can still prevent observation.
+Before enabling, confirm fresh journal timestamps and exercise delivery with
+isolated fixtures. No paid rental is needed to qualify this observer.

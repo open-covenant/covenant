@@ -8,6 +8,10 @@ on:
       - agent-os/**
       - deploy/Dockerfile.compute-coordinator
       - deploy/compute-coordinator-entrypoint.sh
+      - deploy/compute-canary-supervisor.py
+      - deploy/compute-canary/**
+      - scripts/compute-rental-canary.py
+      - scripts/compute-canary-*.py
       - deploy/Dockerfile.compute-node
       - deploy/compute-node-entrypoint.sh
       - deploy/kani-check/**

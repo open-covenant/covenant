@@ -1241,7 +1241,7 @@ dependencies = [
 
 [[package]]
 name = "covenant-compute-buyer"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1359,7 +1359,7 @@ dependencies = [
 
 [[package]]
 name = "covenant-compute-node"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "async-trait",

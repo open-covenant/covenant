@@ -48,6 +48,7 @@ use covenant_compute_vast::{
     HostKeyEvidence, Launch, LaunchRequest, OfferSurvey, VastClient, VastError,
 };
 use parking_lot::Mutex;
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::executor::ExecutorError;
@@ -110,12 +111,86 @@ pub struct BrokerConfig {
     pub max_hourly_micros: u64,
     pub ready_timeout: Duration,
     pub ready_poll_interval: Duration,
-    /// At most two explicitly selected acceptance jobs. Normal rentals never
-    /// receive a startup hook. Challenges must be recorded before funding.
+    /// At most two explicitly selected acceptance jobs. Challenges must be
+    /// recorded before funding. Overlap with the recurring buyer fails closed.
     pub host_key_evidence_jobs: std::collections::BTreeMap<Uuid, HostKeyEvidence>,
+    /// One dedicated canary buyer, disabled unless explicitly configured.
+    /// Other buyers receive no recurring host-key startup hook.
+    pub host_key_evidence_buyer: Option<String>,
+}
+
+/// Deterministic challenge for a recurring canary's authenticated provider log.
+/// SHA-256 over ASCII `covenant.compute.canary.host-key.v1\n`, then the buyer's
+/// raw 32-byte Ed25519 public key, then the UUID's 16 network-order bytes.
+/// Output is 64 lowercase hex characters. No JSON, NUL, separator or trailing
+/// newline is added. Both identities come from the verified signed job.
+/// This public binding is not authentication by itself: consumers must still
+/// authenticate provider inventory/logs and bind the instance and SSH endpoint.
+pub fn canary_host_key_challenge(buyer: &str, job_id: Uuid) -> Result<String, VastError> {
+    let key = canonical_evidence_buyer(buyer)?;
+    if job_id.is_nil() {
+        return Err(VastError::Configuration("canary host-key job UUID is nil"));
+    }
+    let mut digest = Sha256::new();
+    digest.update(b"covenant.compute.canary.host-key.v1\n");
+    digest.update(key);
+    digest.update(job_id.as_bytes());
+    Ok(digest
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect())
+}
+
+fn canonical_evidence_buyer(value: &str) -> Result<[u8; 32], VastError> {
+    let bytes = bs58::decode(value).into_vec().map_err(|_| {
+        VastError::Configuration(
+            "host-key evidence buyer must be one canonical nonzero 32-byte base58 public key",
+        )
+    })?;
+    let bytes: [u8; 32] = bytes.try_into().map_err(|_| {
+        VastError::Configuration(
+            "host-key evidence buyer must be one canonical nonzero 32-byte base58 public key",
+        )
+    })?;
+    if bytes == [0; 32] || bs58::encode(bytes).into_string() != value {
+        return Err(VastError::Configuration(
+            "host-key evidence buyer is not canonical or is zero",
+        ));
+    }
+    Ok(bytes)
 }
 
 impl BrokerConfig {
+    pub fn parse_host_key_evidence_buyer(value: Option<&str>) -> Result<Option<String>, VastError> {
+        value
+            .map(|value| {
+                canonical_evidence_buyer(value)?;
+                Ok(value.to_owned())
+            })
+            .transpose()
+    }
+
+    pub fn host_key_evidence_for_job(
+        &self,
+        job: &JobEnvelopePayload,
+    ) -> Result<Option<HostKeyEvidence>, VastError> {
+        let manual = self.host_key_evidence_jobs.get(&job.job_id);
+        let buyer = job.buyer.pubkey_base58();
+        let recurring = self.host_key_evidence_buyer.as_deref() == Some(buyer.as_str());
+        if recurring && manual.is_some() {
+            return Err(VastError::Configuration("job matches both recurring and manual host-key evidence; remove the overlapping manual override"));
+        }
+        if recurring {
+            return HostKeyEvidence::new(
+                &job.job_id.to_string(),
+                &canary_host_key_challenge(&buyer, job.job_id)?,
+            )
+            .map(Some);
+        }
+        Ok(manual.cloned())
+    }
+
     pub fn parse_host_key_evidence_jobs(
         value: &str,
     ) -> Result<std::collections::BTreeMap<Uuid, HostKeyEvidence>, VastError> {
@@ -264,6 +339,12 @@ impl BrokerSessionBackend {
 #[async_trait]
 impl SessionBackend for BrokerSessionBackend {
     async fn open(&self, job: &JobEnvelopePayload) -> Result<LeaseAccess, ExecutorError> {
+        let host_key_evidence = self
+            .config
+            .host_key_evidence_for_job(job)
+            .map_err(|e| ExecutorError::Failed(format!("host-key evidence refused: {e}")))?;
+        let canary_buyer = self.config.host_key_evidence_buyer.as_deref()
+            == Some(job.buyer.pubkey_base58().as_str());
         let terms = covenant_compute_protocol::parse_lease_terms(&job.input)
             .map_err(|e| ExecutorError::Failed(format!("lease terms unreadable: {e}")))?
             .ok_or_else(|| ExecutorError::Failed("lease carries no terms".into()))?;
@@ -331,12 +412,20 @@ impl SessionBackend for BrokerSessionBackend {
                             rejected_machine_ids: rejected.clone(),
                             required_offer: offer.quote(),
                         },
-                        self.config.host_key_evidence_jobs.get(&job.job_id),
+                        host_key_evidence.as_ref(),
                     )
                     .await
                 {
                     Ok(launch) => launch,
-                    Err(e) if lost_the_race(&e) => {
+                    // An attachment failure has already created and cleaned up
+                    // a billing instance. The canary reserves one creation's
+                    // image-transfer cost, so it must not buy a replacement.
+                    // Refused offers that never created an instance can still
+                    // walk the market; ordinary buyers keep their old behavior.
+                    Err(e)
+                        if lost_the_race(&e)
+                            && !(canary_buyer && matches!(&e, VastError::SshKeyAttachment(_))) =>
+                    {
                         tracing::info!(
                             job_id = %job.job_id,
                             attempt = attempts,
@@ -482,6 +571,7 @@ mod tests {
             ready_timeout: Duration::from_millis(50),
             ready_poll_interval: Duration::from_millis(10),
             host_key_evidence_jobs: Default::default(),
+            host_key_evidence_buyer: None,
         }
     }
 
@@ -505,6 +595,67 @@ mod tests {
         ] {
             assert!(BrokerConfig::parse_host_key_evidence_jobs(&invalid).is_err());
         }
+    }
+
+    #[test]
+    fn recurring_evidence_requires_exactly_one_canonical_buyer() {
+        let buyer = "4wBqpZM9xaSheZzJSMawUKKwhdpChKbZ5eu5ky4Vigw";
+        assert_eq!(
+            BrokerConfig::parse_host_key_evidence_buyer(None).unwrap(),
+            None
+        );
+        assert_eq!(
+            BrokerConfig::parse_host_key_evidence_buyer(Some(buyer)).unwrap(),
+            Some(buyer.into())
+        );
+        for invalid in [
+            "",
+            " ",
+            "0",
+            "11111111111111111111111111111111",
+            &format!(" {buyer}"),
+            &format!("{buyer},{buyer}"),
+            &format!("{buyer}\n"),
+        ] {
+            assert!(
+                BrokerConfig::parse_host_key_evidence_buyer(Some(invalid)).is_err(),
+                "{invalid:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn canary_challenge_matches_independent_python_vector_and_binds_buyer_and_job() {
+        let buyer = "4wBqpZM9xaSheZzJSMawUKKwhdpChKbZ5eu5ky4Vigw";
+        let id = "10000000-0000-4000-8000-000000000001".parse().unwrap();
+        let expected = "6b5947310f148030fa86cd51ba0cbebb5e82b93c2e09993cace83c01b7c6fca1";
+        assert_eq!(canary_host_key_challenge(buyer, id).unwrap(), expected);
+        assert_ne!(
+            canary_host_key_challenge(buyer, Uuid::new_v4()).unwrap(),
+            expected
+        );
+        assert_ne!(
+            canary_host_key_challenge(&bs58::encode([7; 32]).into_string(), id).unwrap(),
+            expected
+        );
+        assert!(canary_host_key_challenge(buyer, Uuid::nil()).is_err());
+    }
+
+    #[test]
+    fn recurring_evidence_is_buyer_scoped_and_manual_collision_fails_closed() {
+        let job = lease_job(None);
+        let other = lease_job(None);
+        let mut config = config();
+        assert!(config.host_key_evidence_for_job(&job).unwrap().is_none());
+        config.host_key_evidence_buyer = Some(job.buyer.pubkey_base58());
+        let evidence = config.host_key_evidence_for_job(&job).unwrap().unwrap();
+        let challenge = canary_host_key_challenge(&job.buyer.pubkey_base58(), job.job_id).unwrap();
+        assert!(evidence.onstart_script().contains(&challenge));
+        assert!(config.host_key_evidence_for_job(&other).unwrap().is_none());
+        config.host_key_evidence_jobs.insert(job.job_id, evidence);
+        assert!(config.host_key_evidence_for_job(&job).is_err());
+        config.host_key_evidence_buyer = None;
+        assert!(config.host_key_evidence_for_job(&job).unwrap().is_some());
     }
 
     #[tokio::test]
@@ -734,6 +885,7 @@ mod market_tests {
             ready_timeout: Duration::from_secs(2),
             ready_poll_interval: Duration::from_millis(20),
             host_key_evidence_jobs: Default::default(),
+            host_key_evidence_buyer: None,
         }
     }
 
@@ -776,6 +928,57 @@ mod market_tests {
 
     fn rented_instance(broker: &BrokerSessionBackend, job_id: Uuid) -> Option<u64> {
         broker.live.lock().get(&job_id).map(|r| r.instance_id)
+    }
+
+    #[tokio::test]
+    async fn recurring_host_key_hook_and_provider_label_are_bound_to_the_allowed_job() {
+        for allowed in [true, false] {
+            let server = market(true).await;
+            let job = lease_job(Some(buyer_key()));
+            let mut config = market_config();
+            config.host_key_evidence_buyer = Some(if allowed {
+                job.buyer.pubkey_base58()
+            } else {
+                lease_job(None).buyer.pubkey_base58()
+            });
+            let broker = BrokerSessionBackend::new(market_client(&server), config);
+            broker.open(&job).await.unwrap();
+            let requests = server.received_requests().await.unwrap();
+            let take = requests
+                .iter()
+                .find(|r| {
+                    r.method == wiremock::http::Method::PUT && r.url.path() == "/api/v0/asks/7/"
+                })
+                .unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&take.body).unwrap();
+            assert_eq!(body["label"], format!("covenant-workload-{}", job.job_id));
+            if allowed {
+                let expected = HostKeyEvidence::new(
+                    &job.job_id.to_string(),
+                    &canary_host_key_challenge(&job.buyer.pubkey_base58(), job.job_id).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(body["onstart"], expected.onstart_script());
+            } else {
+                assert!(body.get("onstart").is_none());
+            }
+            broker.close(job.job_id).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn manual_and_recurring_host_key_collision_never_touches_the_provider() {
+        let server = market(true).await;
+        let job = lease_job(Some(buyer_key()));
+        let mut config = market_config();
+        config.host_key_evidence_buyer = Some(job.buyer.pubkey_base58());
+        config.host_key_evidence_jobs.insert(
+            job.job_id,
+            HostKeyEvidence::new(&job.job_id.to_string(), &"ab".repeat(32)).unwrap(),
+        );
+        let broker = BrokerSessionBackend::new(market_client(&server), config);
+        assert!(broker.open(&job).await.is_err());
+        assert!(server.received_requests().await.unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -946,6 +1149,73 @@ mod market_tests {
             0,
             "the live session is not destroyed"
         );
+    }
+
+    #[tokio::test]
+    async fn only_the_canary_buyer_stops_after_one_created_instance_loses_the_key() {
+        for canary in [true, false] {
+            let server = MockServer::start().await;
+            book_turns_over(
+                &server,
+                &[vec![offer_row(7, 70, 0.50), offer_row(8, 80, 0.60)]],
+            )
+            .await;
+            host_that_drops_the_key(&server, 7, 70, 99).await;
+            host(&server, 8, 80, 98, true).await;
+            let job = lease_job(Some(buyer_key()));
+            let mut config = market_config();
+            config.host_key_evidence_buyer = Some(if canary {
+                job.buyer.pubkey_base58()
+            } else {
+                lease_job(None).buyer.pubkey_base58()
+            });
+            let broker = BrokerSessionBackend::new(market_client(&server), config);
+            let result = broker.open(&job).await;
+            assert_eq!(result.is_err(), canary);
+            assert_eq!(takes(&server, 7).await, 1);
+            assert_eq!(takes(&server, 8).await, usize::from(!canary));
+            assert_eq!(
+                calls(
+                    &server,
+                    wiremock::http::Method::DELETE,
+                    "/api/v0/instances/99/"
+                )
+                .await,
+                1,
+                "the first created instance is still cleaned up"
+            );
+            assert_eq!(
+                rented_instance(&broker, job.job_id),
+                if canary { None } else { Some(98) }
+            );
+            broker.close(job.job_id).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn the_canary_can_retry_a_market_refusal_before_any_instance_was_created() {
+        let server = MockServer::start().await;
+        book_turns_over(
+            &server,
+            &[vec![offer_row(7, 70, 0.50), offer_row(8, 80, 0.60)]],
+        )
+        .await;
+        host_already_taken(&server, 7).await;
+        host(&server, 8, 80, 98, true).await;
+        let job = lease_job(Some(buyer_key()));
+        let mut config = market_config();
+        config.host_key_evidence_buyer = Some(job.buyer.pubkey_base58());
+        let broker = BrokerSessionBackend::new(market_client(&server), config);
+        broker
+            .open(&job)
+            .await
+            .expect("a refused offer created no billable instance");
+        assert_eq!(takes(&server, 7).await, 1);
+        assert_eq!(takes(&server, 8).await, 1);
+        assert_eq!(destroys(&server).await, 0);
+        assert_eq!(rented_instance(&broker, job.job_id), Some(98));
+        broker.close(job.job_id).await;
+        assert_eq!(destroys(&server).await, 1);
     }
 
     #[tokio::test]

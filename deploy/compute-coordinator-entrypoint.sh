@@ -28,4 +28,16 @@ write_key COVENANT_COMPUTE_LEASE_KEYPAIR COVENANT_COMPUTE_LEASE_KEYPAIR_JSON
 write_key COVENANT_COMPUTE_LEASE_COORDINATOR_KEYPAIR COVENANT_COMPUTE_LEASE_COORDINATOR_KEYPAIR_JSON
 write_key COVENANT_COMPUTE_STAKE_SLASH_KEYPAIR COVENANT_COMPUTE_STAKE_SLASH_KEYPAIR_JSON
 
+if [ -n "${COVENANT_CANARY_MODE:-}" ]; then
+    # Opt-in supervisor runs the two processes under different Unix identities.
+    # A configured `disabled` mode stops admissions but still recovers old jobs.
+    if [ "$home" != /data/mainnet ]; then
+        echo 'canary requires existing coordinator home /data/mainnet; journal was not moved' >&2
+        exit 1
+    fi
+    chown root:root /data
+    chmod 755 /data
+    chmod 700 "$home"
+    exec python3 /opt/covenant/compute-canary-supervisor.py "$@"
+fi
 exec setpriv --reuid=covenant --regid=covenant --init-groups -- covenant-compute-coordinator "$@"

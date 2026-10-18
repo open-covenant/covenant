@@ -41,15 +41,19 @@ RUN cargo build --release \
 
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl \
+ && apt-get install -y --no-install-recommends ca-certificates curl python3 openssh-client \
  && rm -rf /var/lib/apt/lists/*
 
 RUN useradd --create-home --shell /bin/bash covenant
+RUN useradd --system --no-create-home --shell /usr/sbin/nologin covenant-canary
 COPY --from=builder /src/agent-os/target/release/covenant-compute-coordinator /usr/local/bin/covenant-compute-coordinator
 COPY --from=builder /src/agent-os/crates/covenant-x402-signer/target/release/covenant-x402-signer /usr/local/bin/covenant-x402-signer
 COPY --from=builder /src/agent-os/crates/covenant-compute-lease-signer/target/release/covenant-compute-lease-signer /usr/local/bin/covenant-compute-lease-signer
 COPY --from=builder /src/agent-os/crates/covenant-compute-lease-signer/target/release/covenant-compute-stake /usr/local/bin/covenant-compute-stake
 COPY deploy/compute-coordinator-entrypoint.sh /usr/local/bin/compute-coordinator-entrypoint
+COPY deploy/compute-canary-supervisor.py /opt/covenant/compute-canary-supervisor.py
+COPY deploy/compute-canary/config.example.json /opt/covenant/config.example.json
+COPY scripts/compute-rental-canary.py scripts/compute-canary-vast.py scripts/compute-canary-alert.py /opt/covenant/scripts/
 
 ENV COVENANT_COMPUTE_COORDINATOR_HOME=/data
 ENV COVENANT_COMPUTE_COORDINATOR_BIND_ADDR=0.0.0.0

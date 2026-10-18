@@ -195,6 +195,7 @@ async fn main() {
             ready_timeout: Duration::from_secs(420),
             ready_poll_interval: Duration::from_secs(5),
             host_key_evidence_jobs: Default::default(),
+            host_key_evidence_buyer: None,
         },
     ));
     let node = Node::new(

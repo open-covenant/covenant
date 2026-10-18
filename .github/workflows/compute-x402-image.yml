@@ -6,6 +6,7 @@ on:
       - .github/workflows/compute-x402-image.yml
       - deploy/Dockerfile.compute-x402
       - deploy/compute-x402/**
+      - deploy/compute-canary-watchdog*
       - services/compute-x402-facilitator/**
       - services/compute-inference-provider/**
       - sdk/compute-x402-client/**
@@ -48,7 +49,7 @@ jobs:
           npm ci --omit=dev --ignore-scripts --prefix services/compute-x402-facilitator
           npm test --prefix services/compute-x402-facilitator
           npm test --prefix services/compute-inference-provider
-          node --test deploy/compute-x402/runtime.test.mjs deploy/compute-x402/smoke.test.mjs
+          node --test deploy/compute-canary-watchdog.test.mjs deploy/compute-x402/runtime.test.mjs deploy/compute-x402/smoke.test.mjs
           node --check deploy/compute-x402/supervisor.mjs
           sh -n deploy/compute-x402/entrypoint.sh
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f

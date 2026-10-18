@@ -49,8 +49,8 @@ mod agent_purchase;
 pub use agent_purchase::agent_purchase_recorded;
 mod check;
 pub use check::{check_pinned_task, check_preview, CheckOutcome};
-pub mod workspace;
 pub mod durable_budget;
+pub mod workspace;
 pub use agent::{
     agent_preview, agent_tool_spec, apply_patch, describe_reworks, describe_round,
     describe_verdict, fix_tool_spec, hire_agent, hire_agent_idempotent, hire_fix, local_bundle,
@@ -243,6 +243,12 @@ pub fn http_client() -> reqwest::Client {
 /// in time to unwind its own state on a stall, instead of being cut off
 /// mid-call when that outer deadline drops the task.
 pub fn http_client_with_timeout(call_timeout: Duration) -> reqwest::Client {
+    http_client_builder(call_timeout)
+        .build()
+        .expect("reqwest client builds with default TLS backend")
+}
+
+fn http_client_builder(call_timeout: Duration) -> reqwest::ClientBuilder {
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(
         reqwest::header::HeaderName::from_static(
@@ -254,8 +260,28 @@ pub fn http_client_with_timeout(call_timeout: Duration) -> reqwest::Client {
         .connect_timeout(Duration::from_secs(10))
         .timeout(call_timeout)
         .default_headers(headers)
-        .build()
-        .expect("reqwest client builds with default TLS backend")
+}
+
+/// Transport for one-attempt purchases. Redirects and reqwest's internal
+/// retries are disabled as well as the buyer's application retry loop.
+/// The wrapped client is private so callers cannot enable either implicitly.
+#[derive(Clone, Debug)]
+pub struct SingleAttemptClient(reqwest::Client);
+impl SingleAttemptClient {
+    pub fn new(call_timeout: Duration) -> Self {
+        Self(
+            http_client_builder(call_timeout)
+                .redirect(reqwest::redirect::Policy::none())
+                .retry(reqwest::retry::never())
+                .build()
+                .expect("one-attempt HTTP client builds with default TLS backend"),
+        )
+    }
+}
+impl Default for SingleAttemptClient {
+    fn default() -> Self {
+        Self::new(Duration::from_secs(30))
+    }
 }
 
 /// Coordinator endpoint + polling cadence — everything the network path
@@ -3387,6 +3413,48 @@ pub async fn submit_streaming(
     sign_and_submit(http, config, buyer_identity, request, true, job_id).await
 }
 
+/// Submit a caller-persisted job ID with exactly one HTTP POST attempt.
+/// A configured durable daily budget is required. Its atomic reservation is
+/// fsynced before dispatch and rejects every previously reserved ID, even an
+/// identical envelope or an explicitly refused job. Timeout/5xx keeps the
+/// reservation; callers must use signed reads to reconcile the original ID.
+/// The envelope uses the existing signing format and streaming semantics.
+pub async fn submit_streaming_once(
+    http: &SingleAttemptClient,
+    config: &BuyerConfig,
+    buyer_identity: &LocalIdentity,
+    job_id: Uuid,
+    request: JobRequest,
+) -> Result<SignedJobEnvelope, BuyerError> {
+    if job_id.is_nil() {
+        return Err(BuyerError::Protocol(
+            "one-attempt submission needs a nonnil job UUID".into(),
+        ));
+    }
+    let budget = durable_budget::DurableBudget::from_env(
+        &buyer_identity.agent_id().pubkey_base58(),
+        &config.coordinator_url,
+    )
+    .map_err(|e| BuyerError::Protocol(e.to_string()))?
+    .ok_or_else(|| BuyerError::Protocol(
+        "--job-id requires COVENANT_COMPUTE_DAILY_BUDGET_MICRO_USDC and a durable budget journal".into(),
+    ))?;
+    let http = &http.0;
+    let envelope = build_envelope(config, buyer_identity, request, true, job_id)?;
+    durable_budget::reconcile(&budget, http, config, buyer_identity).await?;
+    budget
+        .reserve_new(&envelope, epoch_ms())
+        .map_err(|e| BuyerError::Protocol(e.to_string()))?;
+    let result = submit_envelope_http_attempts(http, config, &envelope, 1).await;
+    if let Err(BuyerError::SubmitRefused { .. }) = &result {
+        budget
+            .submit_refused(job_id, epoch_ms())
+            .map_err(|e| BuyerError::Protocol(e.to_string()))?;
+    }
+    result?;
+    Ok(envelope)
+}
+
 /// Like [`dispatch_and_verify`], additionally draining the job's live
 /// output feed while it runs: every relayed text delta reaches
 /// `on_chunk` in order, and the final receipt is then verified exactly
@@ -3774,6 +3842,15 @@ async fn submit_envelope_http(
     config: &BuyerConfig,
     envelope: &SignedJobEnvelope,
 ) -> Result<(), BuyerError> {
+    submit_envelope_http_attempts(http, config, envelope, SUBMIT_TRANSPORT_ATTEMPTS).await
+}
+
+async fn submit_envelope_http_attempts(
+    http: &reqwest::Client,
+    config: &BuyerConfig,
+    envelope: &SignedJobEnvelope,
+    max_attempts: u32,
+) -> Result<(), BuyerError> {
     let job_id = envelope.payload.job_id;
     // Re-submitting the same signed envelope is safe by design — the
     // coordinator refuses a duplicate job_id under its escrow lock and
@@ -3795,6 +3872,11 @@ async fn submit_envelope_http(
                     return Ok(());
                 }
                 let body = resp.text().await.unwrap_or_default();
+                if max_attempts == 1 && status.is_redirection() {
+                    return Err(BuyerError::Coordinator(
+                        "one-attempt submission was redirected; authorization was not forwarded and its original outcome remains uncertain".into(),
+                    ));
+                }
                 if !status.is_server_error() && status != reqwest::StatusCode::TOO_MANY_REQUESTS {
                     return Err(BuyerError::SubmitRefused {
                         status: status.as_u16(),
@@ -3806,7 +3888,7 @@ async fn submit_envelope_http(
             // The last transport failure names the down coordinator
             // rather than reqwest's URL echo; a lingering 5xx stays a
             // Coordinator error, since the service did answer.
-            Err(e) if attempt + 1 >= SUBMIT_TRANSPORT_ATTEMPTS => {
+            Err(e) if attempt + 1 >= max_attempts => {
                 return Err(BuyerError::unreachable(
                     &config.coordinator_url,
                     "submit this job",
@@ -3816,7 +3898,7 @@ async fn submit_envelope_http(
             Err(e) => format!("submit: {e}"),
         };
         attempt += 1;
-        if attempt >= SUBMIT_TRANSPORT_ATTEMPTS {
+        if attempt >= max_attempts {
             return Err(BuyerError::Coordinator(failure));
         }
         tracing::debug!(%job_id, attempt, error = %failure, "submit failed transiently; retrying the same envelope");
@@ -4072,6 +4154,59 @@ mod tests {
         second.settle();
         assert_eq!(caps.spent_micro_usdc(), 500);
         assert!(caps.try_reserve(1).is_err());
+    }
+
+    #[tokio::test]
+    async fn a_one_attempt_submit_timeout_never_retries_the_paid_post() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let hits = Arc::new(AtomicUsize::new(0));
+        let seen = hits.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let app = axum::Router::new().route(
+            "/federation/jobs",
+            axum::routing::post(move || {
+                let seen = seen.clone();
+                async move {
+                    seen.fetch_add(1, Ordering::SeqCst);
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    axum::http::StatusCode::ACCEPTED
+                }
+            }),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let identity = LocalIdentity::generate("one-attempt@test");
+        let config = BuyerConfig {
+            coordinator_url: endpoint,
+            poll_interval: Duration::from_millis(1),
+            referral_code: None,
+            rpc_url: None,
+        };
+        let envelope = sign_envelope(
+            &config,
+            &identity,
+            JobRequest {
+                kind: JobKind::InferenceCall,
+                input: vec![],
+                model: None,
+                gpu_class: None,
+                min_vram_gb: None,
+                min_reputation_bps: None,
+                price_micro_usdc: 1,
+                deadline_ms: 10_000,
+            },
+        )
+        .unwrap();
+        let result = submit_envelope_http_attempts(
+            &SingleAttemptClient::new(Duration::from_millis(50)).0,
+            &config,
+            &envelope,
+            1,
+        )
+        .await;
+        assert!(matches!(result, Err(BuyerError::Unreachable { .. })));
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        server.abort();
     }
 
     #[test]

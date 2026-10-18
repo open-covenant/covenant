@@ -51,6 +51,7 @@ pub mod prices;
 pub mod prices_page;
 pub mod provider_prices;
 pub mod recover;
+pub mod rental_checks;
 pub mod redundancy;
 pub mod registry;
 pub mod reputation;

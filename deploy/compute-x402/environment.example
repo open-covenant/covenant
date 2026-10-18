@@ -48,3 +48,12 @@ COVENANT_INFERENCE_PROVIDER_UPSTREAM_TIMEOUT_MS=40000
 # COVENANT_COMPUTE_PAYOUT_ADDRESS
 
 COVENANT_GATEWAY_APPROVED_OPERATOR_PUBKEYS=9fefASd52qfR2Q8P81yXtkHu9E4q9KvW58x2ixBAAvLR
+
+# Optional external observer of the separate coordinator rental-check feed.
+# Uses this service's existing disk; no rental/provider/payment permissions.
+COVENANT_CANARY_WATCHDOG_ENABLED=false
+# Required only when enabled; provision using the deployment secret store:
+# COVENANT_CANARY_ALERT_CLOUDFLARE_API_TOKEN
+# COVENANT_CANARY_ALERT_CLOUDFLARE_ACCOUNT_ID
+# COVENANT_CANARY_ALERT_FROM
+# COVENANT_CANARY_ALERT_TO=alert@opencovenant.org

@@ -117,6 +117,7 @@ pub fn router(state: CoordinatorState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/status", get(crate::observer::public_status))
+        .route("/rental-checks", get(crate::rental_checks::public_status))
         .route("/prices", get(crate::prices_page::redirect))
         .route("/prices/page", get(crate::prices_page::page))
         .route("/prices/history", get(crate::prices::history))

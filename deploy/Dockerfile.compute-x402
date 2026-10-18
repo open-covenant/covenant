@@ -17,6 +17,7 @@ COPY services/compute-inference-provider/*.mjs ./services/compute-inference-prov
 COPY --from=builder /src/agent-os/target/release/covenant-compute-gateway /usr/local/bin/
 COPY --from=builder /src/agent-os/target/release/covenant-compute-node /usr/local/bin/
 COPY deploy/compute-x402/ ./deploy/compute-x402/
+COPY deploy/compute-canary-watchdog.mjs ./deploy/compute-canary-watchdog.mjs
 RUN mkdir -p /data && chown node:node /data && chmod 700 /data
 ENV COVENANT_X402_DATA=/data
 EXPOSE 10000

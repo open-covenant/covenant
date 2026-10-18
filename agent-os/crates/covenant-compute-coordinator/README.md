@@ -352,6 +352,7 @@ their own encryption keys. See [workspace operation and acceptance](../../../doc
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
+| `COVENANT_COMPUTE_RENTAL_CHECKS_FILE` | unset | Local sanitized canary snapshot served read-only at `/rental-checks`. Missing, invalid and stale snapshots are explicit unavailable states. This endpoint cannot start rentals or affect the financial journal. |
 | `COVENANT_COMPUTE_WORKSPACE_S3_ENDPOINT` | unset | HTTPS S3 origin; unset disables workspace routes. HTTP only on loopback for tests. |
 | `COVENANT_COMPUTE_WORKSPACE_S3_REGION` | required when enabled | SigV4 region; R2 uses `auto`. |
 | `COVENANT_COMPUTE_WORKSPACE_S3_BUCKET` | required when enabled | Private bucket with verified SHA-256 and conditional PUT support. |

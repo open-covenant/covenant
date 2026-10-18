@@ -126,6 +126,13 @@ done
 # identity or endpoint is configured; none of these checks may create state.
 buyer="$work/check/$asset/covenant-compute"
 help_home="$work/help-only-buyer"
+lease_help="$(COVENANT_COMPUTE_MCP_HOME="$help_home" \
+  COVENANT_COMPUTE_COORDINATOR_URL=http://127.0.0.1:1 \
+  run_packed "$buyer" lease open --help)"
+if ! grep -Fq -- '--job-id UUID' <<< "$lease_help"; then
+  echo "dist.sh: packed buyer help is missing durable explicit rental IDs" >&2
+  exit 1
+fi
 workspace_help="$(COVENANT_COMPUTE_MCP_HOME="$help_home" \
   COVENANT_COMPUTE_COORDINATOR_URL=http://127.0.0.1:1 \
   run_packed "$buyer" workspace --help)"

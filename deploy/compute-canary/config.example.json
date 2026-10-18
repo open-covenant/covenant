@@ -1,0 +1,35 @@
+{
+  "coordinator_url": "https://compute-api.opencovenant.org",
+  "rpc_url": "https://REPLACE-WITH-INDEPENDENT-SOLANA-RPC",
+  "cli": [
+    "/opt/covenant/bin/covenant-compute"
+  ],
+  "buyer_home": "/data/canary-private/buyer",
+  "ssh_private_key": "/data/canary-private/ssh/id_ed25519",
+  "ssh_public_key": "/data/canary-private/ssh/id_ed25519.pub",
+  "max_spend_micro_usdc": 120240,
+  "rate_micro_usdc_per_sec": 334,
+  "duration_secs": 360,
+  "readiness_timeout_secs": 240,
+  "settlement_timeout_secs": 180,
+  "cleanup_timeout_secs": 180,
+  "command_timeout_secs": 45,
+  "poll_secs": 5,
+  "min_vram_gb": 40,
+  "evidence_command": [
+    "/opt/covenant/bin/REPLACE-WITH-AUTHENTICATED-EVIDENCE-ADAPTER"
+  ],
+  "alert_command": [
+    "/opt/covenant/bin/REPLACE-WITH-APPROVED-ALERT-ADAPTER"
+  ],
+  "expected_cli_version": "0.3.1",
+  "public_state_path": "/data/canary-public/state.json",
+  "daily_limit_micro_usd": 2000000,
+  "pilot_limit_micro_usd": 20000000,
+  "provider_reservation_micro_usd": 350000,
+  "fee_reservation_micro_usd": 20000,
+  "storage_reservation_micro_usd": 1000,
+  "min_gpu_memory_mib": 40960,
+  "gpu_class": "L40S",
+  "expected_gpu_model": "NVIDIA L40S"
+}

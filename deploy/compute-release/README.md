@@ -80,13 +80,13 @@ attestation. `workspace delete <workspace-uuid>` schedules stored ciphertext for
 cleanup after outstanding grants expire.
 
 The complete workspace workflow and storage limits are documented at:
-https://github.com/open-covenant/covenant/blob/compute-v0.3.0/docs/compute-workspaces.md
+https://github.com/open-covenant/covenant/blob/compute-v0.3.1/docs/compute-workspaces.md
 
 The guide at https://docs.opencovenant.org/compute covers funding your balance,
 renting a GPU, hiring a coding agent and running a node. Every command and flag
 of `covenant-compute` and `covenant-compute-mcp` is described in the command
 reference:
-https://github.com/open-covenant/covenant/tree/compute-v0.3.0/agent-os/crates/covenant-compute-buyer#readme
+https://github.com/open-covenant/covenant/tree/compute-v0.3.1/agent-os/crates/covenant-compute-buyer#readme
 
 The source is at https://github.com/open-covenant/covenant, licensed under
 Apache 2.0 (see `LICENSE` and `NOTICE.md`).

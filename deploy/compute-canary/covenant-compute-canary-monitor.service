@@ -1,0 +1,20 @@
+[Unit]
+Description=Publish Covenant rental check heartbeat and missing-window alerts
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=covenant-canary
+Group=covenant-canary
+UMask=0077
+EnvironmentFile=-/etc/covenant-compute-canary/credentials.env
+ExecStart=/usr/bin/python3 /opt/covenant/scripts/compute-rental-canary.py --config /etc/covenant-compute-canary/config.json --state-dir /var/lib/covenant-compute-canary --monitor
+TimeoutStartSec=55
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/covenant-compute-canary /var/lib/covenant-compute-canary-public
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true

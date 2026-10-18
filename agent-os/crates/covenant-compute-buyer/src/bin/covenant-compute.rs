@@ -28,11 +28,11 @@ use covenant_compute_buyer::{
     dispatch_and_verify, dispatch_signed, dispatch_streaming, dispute_job, fetch_job_output,
     funds_with_deposit_info, hire_agent, hire_agent_idempotent, hire_fix, http_client, lease_view,
     list_verified_jobs, list_withdrawals, prepare_agent_task, prepare_fix_order, preview_value,
-    sign_envelope, submit_streaming, vault_delete, vault_fetch, vault_list, vault_store,
-    verify_payout, withdraw, AgentArgs, AgentOutcome, BuyerConfig, DispatchOutcome, FixOutcome,
-    JobRequest, PriceQuote, PurchaseBook, PurchaseEntry, SwarmArgs, VaultKeyring,
-    DEFAULT_AGENT_DEADLINE_MS, DEFAULT_AGENT_OFFER_MICRO_USDC, DEFAULT_FIX_DEADLINE_MS,
-    DEFAULT_FIX_OFFER_MICRO_USDC, SWARM_MODEL,
+    sign_envelope, submit_streaming, submit_streaming_once, vault_delete, vault_fetch, vault_list,
+    vault_store, verify_payout, withdraw, AgentArgs, AgentOutcome, BuyerConfig, DispatchOutcome,
+    FixOutcome, JobRequest, PriceQuote, PurchaseBook, PurchaseEntry, SingleAttemptClient,
+    SwarmArgs, VaultKeyring, DEFAULT_AGENT_DEADLINE_MS, DEFAULT_AGENT_OFFER_MICRO_USDC,
+    DEFAULT_FIX_DEADLINE_MS, DEFAULT_FIX_OFFER_MICRO_USDC, SWARM_MODEL,
 };
 use covenant_compute_protocol::{
     chat_input, generation_input, lease_input, parse_assistant_output, parse_embedding_output,
@@ -132,6 +132,7 @@ Sampling flags (infer only; unset means the operator's backend default):
   --logprobs <n>        return per-token log probabilities with n alternatives
                         each (0..=20; 0 = the chosen token only)
 Lease flags (lease open):
+  --job-id UUID                  pre-recorded canonical UUID; one POST attempt, durable daily budget required
   --minutes <n>         the window to rent, in minutes (or --duration-secs <n>)
   --rate <micro-usdc>   price per second; the window's ceiling (rate x duration) is escrowed
                         up front and billed by the second, the rest refunded on close
@@ -652,6 +653,9 @@ async fn main() -> anyhow::Result<()> {
             let mut rest = args.split_off(1);
             match action.as_str() {
                 "open" => {
+                    let job_id = take_flag_value(&mut rest, "--job-id")
+                        .map(|value| parse_explicit_lease_job_id(&value))
+                        .transpose()?;
                     let minutes: Option<u64> =
                         take_number(&mut rest, "--minutes", "a whole number of minutes")?;
                     let duration_secs: Option<u64> =
@@ -677,6 +681,7 @@ async fn main() -> anyhow::Result<()> {
                     cmd_lease_open(
                         &load_ctx()?,
                         LeaseOpenArgs {
+                            job_id,
                             minutes,
                             duration_secs,
                             rate,
@@ -2581,6 +2586,7 @@ async fn cmd_cancel(ctx: &Ctx, job_id: Uuid, json_out: bool) -> anyhow::Result<(
 /// The flags of `lease open`, gathered so the command's own signature
 /// stays readable.
 struct LeaseOpenArgs {
+    job_id: Option<Uuid>,
     minutes: Option<u64>,
     duration_secs: Option<u64>,
     rate: Option<u64>,
@@ -2649,15 +2655,19 @@ async fn cmd_lease_open(ctx: &Ctx, args: LeaseOpenArgs, json_out: bool) -> anyho
         price_micro_usdc: price,
         deadline_ms,
     };
-    let envelope = submit_streaming(
-        &ctx.http,
-        &ctx.config,
-        &ctx.identity,
-        Uuid::new_v4(),
-        request,
-    )
-    .await
-    .map_err(with_funding_hint)?;
+    let job_id = args.job_id.unwrap_or_else(Uuid::new_v4);
+    let envelope = if args.job_id.is_some() {
+        submit_streaming_once(&SingleAttemptClient::default(), &ctx.config, &ctx.identity, job_id, request)
+            .await
+            .map_err(with_funding_hint)
+            .with_context(|| format!(
+                "lease {job_id}: no automatic resubmission; reconcile this ID with lease view, receipts or verify before further action"
+            ))?
+    } else {
+        submit_streaming(&ctx.http, &ctx.config, &ctx.identity, job_id, request)
+            .await
+            .map_err(with_funding_hint)?
+    };
     let job_id = envelope.payload.job_id;
     eprintln!(
         "lease {job_id} opened — {} escrowed for up to {max_duration_secs}s at \
@@ -3115,6 +3125,17 @@ fn positional(args: &[String], index: usize, name: &str) -> anyhow::Result<Strin
         .filter(|v| !v.trim().is_empty())
         .cloned()
         .with_context(|| format!("missing <{name}> — run `--help` for usage"))
+}
+
+fn parse_explicit_lease_job_id(value: &str) -> anyhow::Result<Uuid> {
+    let id: Uuid = value
+        .parse()
+        .context("--job-id must be a nonnil lowercase hyphenated UUID")?;
+    anyhow::ensure!(
+        !id.is_nil() && id.to_string() == value,
+        "--job-id must be a nonnil lowercase hyphenated UUID"
+    );
+    Ok(id)
 }
 
 fn parse_job_id(args: &[String], index: usize) -> anyhow::Result<Uuid> {

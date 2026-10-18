@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the Covenant rental canary every six hours
+
+[Timer]
+OnCalendar=*-*-* 00,06,12,18:00:00 UTC
+Persistent=true
+RandomizedDelaySec=5min
+Unit=covenant-compute-canary.service
+
+[Install]
+WantedBy=timers.target

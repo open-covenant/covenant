@@ -2928,6 +2928,15 @@ async fn main() -> anyhow::Result<()> {
                     },
                 )
                 .context("invalid broker host-key evidence allowlist")?,
+                host_key_evidence_buyer: BrokerConfig::parse_host_key_evidence_buyer(
+                    match std::env::var("COVENANT_COMPUTE_BROKER_HOST_KEY_EVIDENCE_BUYER") {
+                        Ok(value) => Some(value),
+                        Err(std::env::VarError::NotPresent) => None,
+                        Err(error) => return Err(error.into()),
+                    }
+                    .as_deref(),
+                )
+                .context("invalid recurring broker host-key evidence buyer")?,
                 max_hourly_micros: vast.config().max_hourly_micros,
                 ready_timeout: Duration::from_secs(env_or(
                     "COVENANT_COMPUTE_BROKER_READY_TIMEOUT_SECS",

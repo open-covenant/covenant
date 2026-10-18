@@ -237,6 +237,20 @@ impl DurableBudget {
         Ok((pending, spent))
     }
     pub fn reserve(&self, envelope: &SignedJobEnvelope, now: u64) -> Result<()> {
+        self.reserve_inner(envelope, now, false)
+    }
+    /// Reserve a job exactly once, including across processes and restarts.
+    /// Even an explicitly refused or settled ID remains spent as an identifier:
+    /// callers reconcile it by reading, never authorize another submission.
+    pub fn reserve_new(&self, envelope: &SignedJobEnvelope, now: u64) -> Result<()> {
+        self.reserve_inner(envelope, now, true)
+    }
+    fn reserve_inner(
+        &self,
+        envelope: &SignedJobEnvelope,
+        now: u64,
+        require_new: bool,
+    ) -> Result<()> {
         envelope
             .verify()
             .map_err(|e| BudgetError::Refused(format!("invalid envelope: {e}")))?;
@@ -248,6 +262,7 @@ impl DurableBudget {
         let ceiling = envelope.payload.price_micro_usdc;
         self.transact(now,|state| {
             if let Some(row)=state.entries.get(&job_id) {
+                if require_new {return Err(BudgetError::Refused("job id was already reserved; use read-only reconciliation, never submit it again".into()));}
                 if row.request_sha256!=digest || row.ceiling_micro_usdc!=ceiling {return Err(BudgetError::Refused("job id is bound to another request".into()));}
                 if row.state!=ReservationState::Unsubmitted {return Ok(());}
             }
@@ -533,6 +548,29 @@ mod tests {
         std::fs::write(book.directory.join("budget.json"), b"{torn").unwrap();
         assert!(book.reserve(&env, 200).is_err());
     }
+    #[test]
+    fn a_single_attempt_id_is_never_reserved_again_even_after_refusal_or_settlement() {
+        let dir = tempfile::tempdir().unwrap();
+        let identity = LocalIdentity::generate("single-attempt@local");
+        let buyer = identity.agent_id().pubkey_base58();
+        let book = DurableBudget::open(dir.path(), &buyer, "https://compute.example", 100).unwrap();
+        let first = envelope(&identity, 40);
+        book.reserve_new(&first, 100).unwrap();
+        assert!(book.reserve_new(&first, 101).is_err());
+        book.submit_refused(first.payload.job_id, 102).unwrap();
+        assert!(book.reserve_new(&first, 103).is_err());
+        let second = envelope(&identity, 40);
+        book.reserve_new(&second, 104).unwrap();
+        book.settle(second.payload.job_id, 20, 105).unwrap();
+        let reopened =
+            DurableBudget::open(dir.path(), &buyer, "https://compute.example", 100).unwrap();
+        assert!(reopened.reserve_new(&second, DAY_MS * 2).is_err());
+        assert_eq!(
+            reopened.status(DAY_MS * 2).unwrap().remaining_micro_usdc,
+            100
+        );
+    }
+
     #[test]
     fn explicit_submit_refusal_must_reserve_again_but_terminal_replay_never_recharges() {
         let dir = tempfile::tempdir().unwrap();

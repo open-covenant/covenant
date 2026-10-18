@@ -3,15 +3,16 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { LOOP_AUTHOR } from "@/lib/repoHistory.mjs";
 
-// GET /api/stats is the public HUD source: it tracks origin/main's head sha and
-// commit total straight from GitHub (per_page=1 for the head, the Link header's
-// last page for the total) plus the README test/crate metrics, and falls back to
-// the deployed checkout's git and a build-time snapshot when GitHub is
-// unreachable — never letting the count regress below what it already knows. The
-// module memoizes the body for a TTL. These tests pin the GitHub-primary path,
-// the git+README fallback, the snapshot floor, and the cache short-circuit. The
-// module-level cache is reset between arms by re-importing the route fresh.
+// GET /api/stats is the public HUD source: it reads main's commit total (the
+// Link header's last page) and the loop's latest commit from GitHub, plus the
+// README test/crate metrics. When GitHub refuses, it falls back to its last
+// reading, the deployed checkout's git and a build-time snapshot, never letting
+// the count regress below what it already knows. The module memoizes the body
+// for a TTL. These tests pin the GitHub-primary path, each fallback, the
+// snapshot floor and the cache short-circuit. The module-level state is reset
+// between arms by re-importing the route fresh.
 
 const tmps: string[] = [];
 
@@ -43,7 +44,7 @@ function makeRepo() {
     sh("commit", "-q", "-m", msg);
     return sh("rev-parse", "--short", "HEAD");
   };
-  return { root, commit, count: () => Number(sh("rev-list", "--count", "HEAD")) };
+  return { root, sh, commit, count: () => Number(sh("rev-list", "--count", "HEAD")) };
 }
 
 function ghResponse(linkPage: number, sha: string) {
@@ -54,6 +55,10 @@ function ghResponse(linkPage: number, sha: string) {
     }),
     json: async () => [{ sha }],
   };
+}
+
+function ghRefused() {
+  return { ok: false, status: 403, headers: new Headers(), json: async () => ({}) };
 }
 
 const README = "28 Rust crates, ~237k lines, 3197 source-discovered Rust tests including 464 live boundary tests.";
@@ -95,8 +100,11 @@ describe("stats route GET", () => {
   });
 
   it("falls back to the local checkout's git and README when GitHub is unreachable", async () => {
-    const { root, commit, count } = makeRepo();
+    // The header links the loop's own latest commit, so the second commit is
+    // authored as the loop.
+    const { root, sh, commit, count } = makeRepo();
     const head = commit("one");
+    sh("config", "user.email", LOOP_AUTHOR);
     const head2 = commit("two");
     writeFileSync(join(root, "README.md"), "12 Rust crates, 77 source-discovered Rust tests including 9 live boundary tests.");
     vi.spyOn(process, "cwd").mockReturnValue(root);
@@ -131,6 +139,67 @@ describe("stats route GET", () => {
     expect(body.commits).toBe(99999);
   });
 
+  it("names the loop's latest commit from the snapshot when GitHub refuses", async () => {
+    // No checkout here, as on a shallow deploy, so only the snapshot knows the sha.
+    const dir = makeTmp();
+    mkdirSync(join(dir, "public"), { recursive: true });
+    writeFileSync(join(dir, "public", "agent-stream.json"), JSON.stringify({ totalCommits: 3741, head: "0e9b873" }));
+    vi.spyOn(process, "cwd").mockReturnValue(dir);
+    stubFetch((url) =>
+      url.includes("api.github.com")
+        ? ghRefused()
+        : { ok: true, text: async () => README },
+    );
+
+    const GET = await freshGet();
+    const body = await (await GET()).json();
+    expect(body.head).toBe("0e9b873");
+    expect(body.commits).toBe(3741);
+  });
+
+  it("never links the tip when only the loop's read is refused", async () => {
+    // At the edge of the rate limit one of the two reads can fail alone. The
+    // tip may be a human or merge commit, so the snapshot names the loop's.
+    const dir = makeTmp();
+    mkdirSync(join(dir, "public"), { recursive: true });
+    writeFileSync(join(dir, "public", "agent-stream.json"), JSON.stringify({ totalCommits: 10, head: "0e9b873" }));
+    vi.spyOn(process, "cwd").mockReturnValue(dir);
+    stubFetch((url) => {
+      if (!url.includes("api.github.com")) return { ok: true, text: async () => README };
+      return url.includes("author=")
+        ? ghRefused()
+        : ghResponse(4321, "fffffff1234567");
+    });
+
+    const GET = await freshGet();
+    const body = await (await GET()).json();
+    expect(body.head).toBe("0e9b873");
+    expect(body.commits).toBe(4321);
+  });
+
+  it("keeps the last GitHub reading through a later refusal", async () => {
+    vi.spyOn(process, "cwd").mockReturnValue(makeTmp());
+    let refuse = false;
+    stubFetch((url) => {
+      if (!url.includes("api.github.com")) return { ok: true, text: async () => README };
+      return refuse
+        ? ghRefused()
+        : ghResponse(4321, "abcdef1234567");
+    });
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+
+    const GET = await freshGet();
+    const first = await (await GET()).json();
+    expect(first.head).toBe("abcdef1");
+
+    // Past the TTL, so the route asks GitHub again and is refused.
+    refuse = true;
+    now.mockReturnValue(1_000_000 + 10 * 60_000);
+    const second = await (await GET()).json();
+    expect(second.head).toBe("abcdef1");
+    expect(second.commits).toBe(4321);
+  });
+
   it("serves the memoized body within the TTL without re-fetching", async () => {
     vi.spyOn(process, "cwd").mockReturnValue(makeTmp());
     const f = stubFetch((url) =>
@@ -142,7 +211,8 @@ describe("stats route GET", () => {
     const second = await (await GET()).json();
 
     expect(second).toEqual(first);
-    // Two GET calls, but githubHead+githubMetrics fired exactly once (first call).
-    expect(f).toHaveBeenCalledTimes(2);
+    // Two GET calls, but only the first fetched: githubHead's two reads (the
+    // commit total and the loop's latest commit) plus githubMetrics' README.
+    expect(f).toHaveBeenCalledTimes(3);
   });
 });

@@ -1,0 +1,135 @@
+{
+  "request": {
+    "max_tokens": 64,
+    "messages": [
+      {
+        "content": "Be precise.",
+        "role": "system"
+      },
+      {
+        "content": "Explain a rainbow.",
+        "role": "user"
+      }
+    ],
+    "model": "fixture-model",
+    "temperature": 0.25
+  },
+  "response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "message": {
+          "content": "Light separates into colors.\nVerified fixture.",
+          "role": "assistant"
+        }
+      }
+    ],
+    "covenant": {
+      "envelope": {
+        "payload": {
+          "buyer": {
+            "display": "fixture-buyer@local",
+            "pubkey": "FYQA9zemmoGFJsjBnvjofcqHMyHaWL3hKULEBfreBscc"
+          },
+          "capability_requirement": {
+            "gpu_class": null,
+            "kind": "inference_call",
+            "max_duration_secs": 45,
+            "min_reputation_bps": null,
+            "min_vram_gb": null,
+            "model_id": "fixture-model"
+          },
+          "deadline_ms": 45000,
+          "idempotency": {
+            "duplicate_safety": "idempotent",
+            "key": "0d1a5de6-15d7-4ead-9fff-2434654a7f90"
+          },
+          "input": [
+            {
+              "type": "json",
+              "value": {
+                "messages": [
+                  {
+                    "content": "Be precise.",
+                    "role": "system"
+                  },
+                  {
+                    "content": "Explain a rainbow.",
+                    "role": "user"
+                  }
+                ]
+              }
+            },
+            {
+              "type": "json",
+              "value": {
+                "generation": {
+                  "max_tokens": 64,
+                  "temperature": 0.25
+                }
+              }
+            }
+          ],
+          "issued_at_ms": 1792280502148,
+          "job_id": "0d1a5de6-15d7-4ead-9fff-2434654a7f90",
+          "kind": "inference_call",
+          "price_micro_usdc": 10
+        },
+        "payload_json": "{\"job_id\":\"0d1a5de6-15d7-4ead-9fff-2434654a7f90\",\"buyer\":{\"display\":\"fixture-buyer@local\",\"pubkey\":\"FYQA9zemmoGFJsjBnvjofcqHMyHaWL3hKULEBfreBscc\"},\"kind\":\"inference_call\",\"capability_requirement\":{\"gpu_class\":null,\"min_vram_gb\":null,\"model_id\":\"fixture-model\",\"kind\":\"inference_call\",\"max_duration_secs\":45,\"min_reputation_bps\":null},\"input\":[{\"type\":\"json\",\"value\":{\"messages\":[{\"content\":\"Be precise.\",\"role\":\"system\"},{\"content\":\"Explain a rainbow.\",\"role\":\"user\"}]}},{\"type\":\"json\",\"value\":{\"generation\":{\"max_tokens\":64,\"temperature\":0.25}}}],\"price_micro_usdc\":10,\"deadline_ms\":45000,\"idempotency\":{\"duplicate_safety\":\"idempotent\",\"key\":\"0d1a5de6-15d7-4ead-9fff-2434654a7f90\"},\"issued_at_ms\":1792280502148}",
+        "signature_b58": "5LMjwGahzDQeKNM6U8xq8qfifmp38qVSfewhyDwPe1YsdLZKGn1NKWXtDTrK2hHrbGFtgPWMwaZY4Yqk5KyUxbBy",
+        "signer_pubkey_b58": "FYQA9zemmoGFJsjBnvjofcqHMyHaWL3hKULEBfreBscc"
+      },
+      "job_id": "0d1a5de6-15d7-4ead-9fff-2434654a7f90",
+      "output": [
+        {
+          "text": "Light separates into colors.",
+          "type": "text"
+        },
+        {
+          "type": "json",
+          "value": {
+            "confidence": 0.125,
+            "count": 1
+          }
+        },
+        {
+          "text": "Verified fixture.",
+          "type": "text"
+        }
+      ],
+      "output_json": "[{\"type\":\"text\",\"text\":\"Light separates into colors.\"},{\"type\":\"json\",\"value\":{\"confidence\":0.125,\"count\":1}},{\"type\":\"text\",\"text\":\"Verified fixture.\"}]",
+      "quote_id": "00000000-0000-4000-8000-000000000001",
+      "receipt": {
+        "receipt": {
+          "executed_at_ms": 1792280502149,
+          "job_hash_hex": "032da68220da786b534b7329445261065447010615abf964d5e39c1413e8b3b2",
+          "job_id": "0d1a5de6-15d7-4ead-9fff-2434654a7f90",
+          "meter": {
+            "finish_reason": null,
+            "gpu_seconds": null,
+            "tokens_in": 12,
+            "tokens_out": 9,
+            "wall_ms": 5
+          },
+          "node_audit_root_hex": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "operator": {
+            "display": "fixture-operator@local",
+            "pubkey": "3VkdbQMh3uBpmt9r59yXeWjA5r9QiAqJJYxxZ2RbtSeV"
+          },
+          "price_micro_usdc": 10,
+          "result_hash_hex": "c34d8c2a18386bf2df5761bd5a9592725d3b5429f27b2d5914902ff48b94f453",
+          "status": "ok"
+        },
+        "receipt_json": "{\"job_id\":\"0d1a5de6-15d7-4ead-9fff-2434654a7f90\",\"operator\":{\"display\":\"fixture-operator@local\",\"pubkey\":\"3VkdbQMh3uBpmt9r59yXeWjA5r9QiAqJJYxxZ2RbtSeV\"},\"job_hash_hex\":\"032da68220da786b534b7329445261065447010615abf964d5e39c1413e8b3b2\",\"result_hash_hex\":\"c34d8c2a18386bf2df5761bd5a9592725d3b5429f27b2d5914902ff48b94f453\",\"meter\":{\"wall_ms\":5,\"tokens_in\":12,\"tokens_out\":9,\"gpu_seconds\":null,\"finish_reason\":null},\"price_micro_usdc\":10,\"status\":\"ok\",\"executed_at_ms\":1792280502149,\"node_audit_root_hex\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\"}",
+        "signature_b58": "4VpFGiGRDs8UandRuFZwX8HLSEPYxY5X5eJQWSqVqzZQNC3vaAKFdAQP9gPDXM1D8WrKq4P3WLKWGSxtXQfChCh2",
+        "signer_pubkey_b58": "3VkdbQMh3uBpmt9r59yXeWjA5r9QiAqJJYxxZ2RbtSeV"
+      },
+      "request_sha256": "62587f6c04c3765be4eb11949def7153e2bf91c207417421d1e30a21c293819a"
+    },
+    "created": 1792280502,
+    "id": "chatcmpl-0d1a5de6-15d7-4ead-9fff-2434654a7f90",
+    "model": "fixture-model",
+    "object": "chat.completion"
+  }
+}

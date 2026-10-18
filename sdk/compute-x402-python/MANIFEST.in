@@ -1,0 +1,2 @@
+include requirements-lock.txt
+recursive-include tests *.py *.json

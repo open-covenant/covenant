@@ -124,12 +124,14 @@ and ciphertext for an uncertain retry; a new save must not bypass it.
 
 ## Cross-lease acceptance
 
-The release owner allocates this demonstration from the remaining shared test
-budget. On 2026-10-18, public capacity advertised an L40S with 48 GB VRAM at
-1.20 USDC/hour. Two five-minute windows at a maximum 334 micro-USDC/second would
-reserve 0.2004 USDC total. This is a planning estimate, not a current quote or
-availability guarantee. Refresh the quote and enforce the ceiling before any
-spend; separately account for backing-provider charges and network fees.
+The approved acceptance allocation uses two 1200-second leases at a ceiling of
+334 micro-USDC/second: 0.4008 USDC per lease and 0.8016 USDC in total purchases.
+Prefund the dedicated buyer with at most 0.810 USDC; this includes the purchases
+and is not an additional charge. Reserve at most 1.50 USDC-equivalent for the
+backing provider and 0.10 USDC-equivalent for network fees. Including the prior
+7.00 USDC allocation, the conservative total is 9.41 of the shared 10.00 USDC
+cap. Refresh capacity and quotes before dispatch and refuse any action that
+exceeds these ceilings; unknown outcomes remain reserved until reconciled.
 
 1. Rent a bounded first lease and verify SSH host identity through an
    independently authenticated source. Create a synthetic checkpoint archive,

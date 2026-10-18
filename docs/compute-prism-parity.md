@@ -7,10 +7,11 @@ originally based on `deploy/compute-coordinator` at
 `b0d5910b60be2a4c370f356fdec6dc221c7a9378` before promotion.
 The original adoption audit used Covenant `5b023331575da656da77edc8554213f58e99ad90`.
 Comparison: Prism `main` at `4e32eb5eb1398fd9d11dcd29aa5a96e3f2f646ec`.
-The accepted live releases here cover packages 1 and 2. Package 6 now has a
-separate implementation and acceptance record; it is not yet promoted. The broader
-`codex/compute-prism-parity` implementation and any overlap in independent
-deployment-base changes are not acceptance evidence for packages 3–20.
+The accepted public releases here cover packages 1, 2 and 6. Package 6 completed
+funded AgentKit acceptance, production restart/replay, client publication and
+public page/card checks on 2026-10-18. The broader `codex/compute-prism-parity`
+implementation and overlap in independent deployment-base changes are not
+acceptance evidence for the remaining packages.
 
 Packages 1 and 2 preserve Solana USDC settlement, CVNT staking, admission and
 existing fees.
@@ -23,7 +24,7 @@ Provider market sampling is read-only and cannot create rentals or move funds.
 | 3 | Aug 14 [workspaces](https://github.com/prismnetwork-tech/prism/pull/179) | Not included in this release | Separate parity branch | Not activated here |
 | 4 | Aug 14 [canary](https://github.com/prismnetwork-tech/prism/pull/180) | Not included in this release | Separate parity branch | Not activated here |
 | 5 | Aug 14–15 [SDKs](https://github.com/prismnetwork-tech/prism/pull/182) | Not included in this release | Separate parity branch | Not activated here |
-| 6 | Aug 15 [x402 seller](https://github.com/prismnetwork-tech/prism/pull/187) | Official x402 V2 Solana seller, durable reserve/replay state, real AgentKit wallet client, bounded provider operator | Focused gateway, official SDK, installed client and provider recovery tests; [release record](compute-x402-release-evidence.md) | Operator stake confirmed; provider and funded end-to-end acceptance pending. Not announced or active |
+| 6 | Aug 15 [x402 seller](https://github.com/prismnetwork-tech/prism/pull/187) | Official x402 V2 Solana seller, durable reserve/replay state, real AgentKit wallet client, bounded provider operator | Focused gateway, official SDK, installed client and provider recovery tests; [release record](compute-x402-release-evidence.md) | Deployed 2026-10-18; funded AgentKit purchase finalized for 0.05 USDC with a verified native result and 0.03 USDC gross native Compute charge before marketplace fees. Production restart and original-authorization replay passed without another purchase; immutable client, public page and crawler-facing sharing card verified |
 | 7 | Aug 15 [bounty](https://github.com/prismnetwork-tech/prism/pull/186) | Not included in this release | Separate parity branch | Not activated here |
 | 8 | Aug 16 [tariffs](https://github.com/prismnetwork-tech/prism/pull/191) | Not included in this release | Separate parity branch | Not activated here |
 | 9 | Aug 16 [discovery](https://github.com/prismnetwork-tech/prism/pull/192) | Not included in this release | Separate parity branch | Not activated here |

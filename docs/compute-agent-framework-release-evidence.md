@@ -7,14 +7,18 @@ and the separately configured planner chooses when to call the Covenant tool.
 
 ## Release state
 
-Implementation, local qualification and funded acceptance passed on 2026-10-18.
-Immutable package publication and public page/card deployment are still pending;
-this record does not yet claim a public release.
+Implementation, local qualification, funded acceptance, immutable package
+publication and public page/card deployment passed on 2026-10-18. The
+[Microsoft Agent Framework integration page](https://opencovenant.org/compute-agent-framework)
+is live. Final interactive production-browser review remains to be recorded
+before merging this evidence update.
 
 The client-only release builds on Compute deployment branch
 `b2662878a4c4aaa10ee6dcd3a05a3ef1e22615de` and the accepted x402 gateway
 `e52e2a790e1dbabf9a7e5018cdca99e82cdcea9e`. It changes no server economics,
 operator staking requirements, settlement program or active service image.
+The source was merged through [PR #342](https://github.com/open-covenant/covenant/pull/342)
+at `d85a26e6acaa36e8ed521c922a82f9fc04f8e93b`.
 
 ## Qualified package
 
@@ -33,6 +37,53 @@ official `FunctionTool`, `Agent`, `WorkflowBuilder`, `FileCheckpointStorage` and
 The same frozen wheel was installed for funded acceptance. All eight packaged
 module files match the qualified source bytes. The source archive includes the
 test helpers, native receipt fixture and exact qualification dependency lock.
+
+## Immutable publication
+
+The [Python v0.1.0 release](https://github.com/open-covenant/covenant/releases/tag/codex-compute-x402-python-v0.1.0)
+was published at 19:41:15 UTC on 2026-10-18. GitHub reported release ID
+`416662698`, `immutable: true`, and target commit
+`d85a26e6acaa36e8ed521c922a82f9fc04f8e93b`. This is a GitHub-hosted wheel/source
+release; no PyPI registry publication is claimed.
+
+All four release assets returned HTTP 200 on anonymous downloads. Their downloaded
+bytes matched the accepted local checksums, including the wheel used for funded
+acceptance and the source archive in the qualified-package table above.
+
+| Additional published asset | SHA256 | Bytes |
+|---|---|---:|
+| `agent-framework-mainnet-acceptance.tar.gz` | `579ce8b1daa9c9176671fdc443e3da912f7c506bfba0898253941217254d865d` | 7,148 |
+| `SHA256SUMS` | `2195577d8401d6b7e80718f539785403f5f6969deb6ca44a126e4a7e072db033` | 320 |
+
+## Public website and sharing card
+
+The website was merged through [PR #343](https://github.com/open-covenant/covenant/pull/343)
+at `9b2da6eb013bc33a4a510e93c9a920eddebdad63`. Render service
+`srv-d7ud5idb910c73aov88g`, deployment `dep-dbai3mu1egvs73dntvqg`, reported
+`Live` for that exact revision. TypeScript, generated-card checks and local
+desktop/mobile layout checks passed before promotion.
+
+Production readback at 19:49:04 UTC on 2026-10-18 verified:
+
+- Both the normal release-check client and `Twitterbot/1.0` received HTTP 200 at
+  `https://opencovenant.org/compute-agent-framework`, with the same HTML SHA256
+  `d414c15eba8307a7486702d4c1a63ce6b8945342d3ada9c4f38eaf27d2d5b959`.
+- The page is indexable, uses its own canonical URL, advertises
+  `summary_large_image`, and is included in the sitemap.
+- The [generated sharing image](https://opencovenant.org/og/compute-agent-framework.png)
+  returned HTTP 200 as a 1200×630 PNG, 108,415 bytes, with SHA256
+  `2335b392fbd20b2090306dc9edab8e94b8e1776e5e1f86ee06edb9a471b421be`.
+- All nine published evidence/configuration files returned HTTP 200 and matched
+  the accepted local bytes: client configuration, local qualification, planner
+  summary, purchase, reconciliation, raw response, resume, review notes and tool
+  selection.
+- The unchanged x402 gateway still reported healthy with admissions enabled at
+  revision `e52e2a790e1dbabf9a7e5018cdca99e82cdcea9e`.
+
+These checks verify the public crawler-facing metadata and image. They do not
+claim an actual X post, an X cache refresh, or a guaranteed card rendering in a
+particular X client. Final production desktop/mobile browser interaction review
+is a remaining documentation gate before this evidence update is merged.
 
 ## Local qualification
 

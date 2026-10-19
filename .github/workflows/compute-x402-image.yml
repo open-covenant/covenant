@@ -49,6 +49,7 @@ jobs:
           npm ci --omit=dev --ignore-scripts --prefix services/compute-x402-facilitator
           npm test --prefix services/compute-x402-facilitator
           npm ci --ignore-scripts --prefix sdk/compute-x402-client
+          npm rebuild better-sqlite3 --prefix sdk/compute-x402-client
           COVENANT_X402_BRIDGE_PATH="$PWD/services/compute-x402-facilitator/bridge.mjs" \
             node --test sdk/compute-x402-client/test/*.test.mjs
           npm test --prefix services/compute-inference-provider

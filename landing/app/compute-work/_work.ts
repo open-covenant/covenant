@@ -15,11 +15,21 @@ export type Work = {
   transactions: { kind: "harvest" | "conversion" | "deposit" | "settlement"; signature: string }[];
   attempts: { id: string; status: "active" | "failed" | "completed"; cost_usdc_micros: string; summary: string }[];
 };
+export type MarketObservation = {
+  source: "orca_public_api"; observed_at_ms: number; source_updated_at_ms: number;
+  source_updated_slot: number; window_seconds: 86400;
+};
+export type ValuationObservation = {
+  source: "operator_reviewed_marks"; observed_at_ms: number; baseline_at_ms: number;
+  baseline_slot: number; baseline_sha256: string; marks_sha256: string;
+  price_basis: "unscaled_token"; cvnt_price_usdc: string; nvdax_price_usdc: string;
+};
 export type Pool = {
   address: string; position_address: string; active: boolean; finalized_slot: number | null; observed_at_ms: number;
   fee_bps: number; range: "full" | "custom"; cvnt_raw: string; nvdax_raw: string; nvdax_multiplier: string;
   cvnt_fees_owed_raw: string; nvdax_fees_owed_raw: string;
   volume_usdc_micros: string | null; lp_value_usdc_micros: string | null; hold_value_usdc_micros: string | null;
+  market?: MarketObservation | null; valuation?: ValuationObservation | null;
 };
 export type WorkSnapshot = {
   schema_version: 1; generated_at_ms: number; mode: Mode; pool: Pool | null;
@@ -48,6 +58,11 @@ function list(value: unknown, max = 100): unknown[] { return Array.isArray(value
 function boolean(value: unknown): boolean { return typeof value === "boolean" ? value : invalid(); }
 function amount(value: unknown): string { return typeof value === "string" && /^(0|[1-9][0-9]{0,38})$/.test(value) ? value : invalid(); }
 function nullableAmount(value: unknown): string | null { return value === null ? null : amount(value); }
+function positiveDecimal(value: unknown): string {
+  const s = text(value, 80);
+  return /^(0|[1-9][0-9]{0,38})(\.[0-9]{1,38})?$/.test(s) && Number(s) > 0 ? s : invalid();
+}
+function hash(value: unknown): string { const s = text(value, 64); return /^[a-f0-9]{64}$/.test(s) ? s : invalid(); }
 function identifier(value: unknown): string { const id = text(value, 80); return WORK_ID.test(id) ? id : invalid(); }
 function address(value: unknown): string { const s = text(value, 44); return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(s) ? s : invalid(); }
 function sourceUrl(value: unknown): string | null {
@@ -98,13 +113,36 @@ export function validateSnapshot(value: unknown): WorkSnapshot {
   const { report, ...base } = envelope(value), fees = object(report.fees), budget = object(report.budget);
   let pool: Pool | null = null;
   if (report.pool !== null) {
-    const p = object(report.pool), multiplier = text(p.nvdax_multiplier, 80);
-    if (!/^(0|[1-9][0-9]{0,38})(\.[0-9]{1,38})?$/.test(multiplier) || Number(multiplier) <= 0) invalid();
+    const p = object(report.pool), multiplier = positiveDecimal(p.nvdax_multiplier);
     pool = { address: address(p.address), position_address: address(p.position_address), active: boolean(p.active), finalized_slot: p.finalized_slot === null ? null : integer(p.finalized_slot), observed_at_ms: time(p.observed_at_ms),
       fee_bps: integer(p.fee_bps), range: choice(p.range, ["full", "custom"]), cvnt_raw: amount(p.cvnt_raw), nvdax_raw: amount(p.nvdax_raw), nvdax_multiplier: multiplier,
       cvnt_fees_owed_raw: amount(p.cvnt_fees_owed_raw), nvdax_fees_owed_raw: amount(p.nvdax_fees_owed_raw),
       volume_usdc_micros: nullableAmount(p.volume_usdc_micros), lp_value_usdc_micros: nullableAmount(p.lp_value_usdc_micros), hold_value_usdc_micros: nullableAmount(p.hold_value_usdc_micros) };
     if (pool.observed_at_ms > base.generated_at_ms || pool.fee_bps > 10000) invalid();
+    if (p.market != null) {
+      const m = object(p.market);
+      if (m.window_seconds !== 86400) invalid();
+      pool.market = { source: choice(m.source, ["orca_public_api"]), observed_at_ms: time(m.observed_at_ms),
+        source_updated_at_ms: time(m.source_updated_at_ms), source_updated_slot: integer(m.source_updated_slot), window_seconds: 86400 };
+      const market = pool.market;
+      if (market.observed_at_ms > pool.observed_at_ms || market.source_updated_at_ms > market.observed_at_ms ||
+          base.generated_at_ms - market.source_updated_at_ms > WORK_FRESH_MS ||
+          pool.finalized_slot === null || market.source_updated_slot <= 0 || market.source_updated_slot > pool.finalized_slot) invalid();
+    } else pool.market = null;
+    if (p.valuation != null) {
+      const v = object(p.valuation);
+      pool.valuation = { source: choice(v.source, ["operator_reviewed_marks"]), observed_at_ms: time(v.observed_at_ms),
+        baseline_at_ms: time(v.baseline_at_ms), baseline_slot: integer(v.baseline_slot), baseline_sha256: hash(v.baseline_sha256),
+        marks_sha256: hash(v.marks_sha256), price_basis: choice(v.price_basis, ["unscaled_token"]),
+        cvnt_price_usdc: positiveDecimal(v.cvnt_price_usdc), nvdax_price_usdc: positiveDecimal(v.nvdax_price_usdc) };
+      const valuation = pool.valuation;
+      if (valuation.observed_at_ms > pool.observed_at_ms || base.generated_at_ms - valuation.observed_at_ms > WORK_FRESH_MS ||
+          valuation.baseline_at_ms > valuation.observed_at_ms || pool.finalized_slot === null ||
+          valuation.baseline_slot <= 0 || valuation.baseline_slot > pool.finalized_slot) invalid();
+    } else pool.valuation = null;
+    if ((pool.volume_usdc_micros !== null) !== !!pool.market ||
+        (pool.lp_value_usdc_micros !== null) !== !!pool.valuation ||
+        (pool.hold_value_usdc_micros !== null) !== !!pool.valuation) invalid();
   }
   const work = list(report.work, 200).map(w => validateWork(w, base.generated_at_ms));
   if (new Set(work.map(w => w.id)).size !== work.length || work.filter(w => ["approved", "active"].includes(w.status)).length > 3) invalid();

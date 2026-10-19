@@ -28,7 +28,9 @@ const render = (data = fixture(), now = NOW, failed = false) => renderToStaticMa
 describe("public work presentation", () => {
   it("uses the shared layout and its own generated social card", () => {
     const html = renderToStaticMarkup(<ComputeWorkPage />);
-    expect(html).toContain("Shared site header"); expect(html).toContain("Shared site footer"); expect(html).toContain("Inspectable work");
+    expect(html).toContain("Shared site header"); expect(html).toContain("Shared site footer"); expect(html).toContain("Useful software");
+    expect(html).toContain("We’re testing whether CVNT/NVDAx trading fees can pay for useful software work.");
+    expect(html).toContain("NVDAx is a token linked to NVIDIA stock.");
     expect(metadata.alternates?.canonical).toBe("https://opencovenant.org/compute-work");
     expect(metadata.openGraph).toMatchObject({ images: [{ url: "https://opencovenant.org/og/compute-work.png", width: 1200, height: 630 }] });
   });
@@ -39,9 +41,9 @@ describe("public work presentation", () => {
   });
   it("distinguishes an observed zero budget, an unfunded pilot, and unknown pool data", () => {
     const html = render(validateSnapshot(fixture()));
-    expect(html).toContain("Pilot not funded"); expect(html).toContain("0.00");
+    expect(html).toContain("Awaiting funding"); expect(html).toContain("0.00");
     expect(html).toContain("Pool inventory and trading activity have not been observed");
-    expect(html).toContain("Candidate · not approved"); expect(html).toContain("No contribution is claimed as fee-funded");
+    expect(html).toContain("Candidate · not approved"); expect(html).toContain("Budget not approved"); expect(html).toContain("No contribution is claimed as fee-funded");
   });
   it("ages the snapshot and pool observations independently and marks failed refreshes", () => {
     expect(snapshotCurrent(fixture(), NOW + 180001)).toBe(false);
@@ -49,7 +51,7 @@ describe("public work presentation", () => {
     expect(snapshotCurrent(fixture(), NOW, true)).toBe(false);
     expect(render(fixture(), NOW + 180001)).toContain("Current funding state is unknown");
     expect(render(fixture(), NOW, true)).toContain("The latest refresh failed");
-    const data = fixture(); data.pool = { address: "1".repeat(32), position_address: "2".repeat(32), active: false, finalized_slot: null, observed_at_ms: NOW - 180001, fee_bps: 65, range: "custom", cvnt_raw: "12345", nvdax_raw: "123", nvdax_multiplier: "1.25", cvnt_fees_owed_raw: "1", nvdax_fees_owed_raw: "0", volume_usdc_micros: null, lp_value_usdc_micros: "2000000", hold_value_usdc_micros: "2500000" };
+    const data = fixture(); data.pool = { address: "1".repeat(32), position_address: "2".repeat(32), active: false, finalized_slot: null, observed_at_ms: NOW - 180001, fee_bps: 65, range: "custom", cvnt_raw: "12345", nvdax_raw: "123", nvdax_multiplier: "1.25", cvnt_fees_owed_raw: "1", nvdax_fees_owed_raw: "0", volume_usdc_micros: null, lp_value_usdc_micros: null, hold_value_usdc_micros: null };
     const html = render(validateSnapshot(data));
     expect(html).toContain("observation stale"); expect(html).toContain("0.65%"); expect(html).toContain("differ from the pilot default");
     expect(html).not.toContain("Current funding state is unknown");

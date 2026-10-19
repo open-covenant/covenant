@@ -17,11 +17,10 @@ describe("public pilot launch phase", () => {
     const html = renderToStaticMarkup(<ComputeWorkPage />);
     expect(launch.liveView).not.toHaveBeenCalled();
     expect(html).toContain("Awaiting funding");
-    expect(html).toContain("Pool funding is pending");
-    expect(html).toContain("existing CVNT and NVDAx tokens");
-    expect(html).toContain("an Orca pool on Solana");
-    expect(html).toContain("not launching a new project token");
-    expect(html).toContain("operator approval and a budget");
+    expect(html).toContain("The pool is not funded yet");
+    expect(html).toContain("uses existing CVNT and NVDAx");
+    expect(html).toContain("preparing a CVNT/NVDAx pool on Orca");
+    expect(html).toContain("tasks we approve in advance, each with a fixed budget");
     expect(html).not.toContain("0.00");
     expect(html).not.toContain("/compute-work/data");
     expect(html).not.toContain("Refresh");
@@ -35,8 +34,8 @@ describe("public pilot launch phase", () => {
     const html = renderToStaticMarkup(<ComputeWorkPage />);
     expect(launch.liveView).toHaveBeenCalledOnce();
     expect(html).toContain("Live reporting component");
-    expect(html).toContain("Our Orca pool on Solana");
+    expect(html).toContain("Our CVNT/NVDAx pool on Orca");
     expect(html).not.toContain("Awaiting funding");
-    expect(html).not.toContain("Pool funding is pending");
+    expect(html).not.toContain("The pool is not funded yet");
   });
 });

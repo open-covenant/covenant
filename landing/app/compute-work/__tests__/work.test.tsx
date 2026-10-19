@@ -29,8 +29,8 @@ describe("public work presentation", () => {
   it("uses the shared layout and its own generated social card", () => {
     const html = renderToStaticMarkup(<ComputeWorkPage />);
     expect(html).toContain("Shared site header"); expect(html).toContain("Shared site footer"); expect(html).toContain("Useful software");
-    expect(html).toContain("We’re testing whether CVNT/NVDAx trading fees can pay for useful software work.");
-    expect(html).toContain("NVDAx is a token linked to NVIDIA stock.");
+    expect(html).toContain("fund public bug fixes, tests and small tools through Covenant Compute");
+    expect(html).toContain("code, cost and funding receipts open for anyone to inspect");
     expect(metadata.alternates?.canonical).toBe("https://opencovenant.org/compute-work");
     expect(metadata.openGraph).toMatchObject({ images: [{ url: "https://opencovenant.org/og/compute-work.png", width: 1200, height: 630 }] });
   });

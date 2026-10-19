@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { pageMetadata } from "@/app/_metadata";
 import { SiteFooter } from "../SiteFooter";
 import { SiteHeader } from "../SiteHeader";
+import { workspaceRelease } from "../compute-workspaces/_release";
 
 const TITLE = "Covenant Compute: rent a GPU by the second";
 const DESCRIPTION =
@@ -27,7 +28,7 @@ export const metadata: Metadata = pageMetadata("/compute", { title: "Covenant Co
 });
 
 const DOCS = "https://docs.opencovenant.org/compute";
-const RELEASE = "https://github.com/open-covenant/covenant/releases/tag/compute-v0.2.0";
+const RELEASE = "https://github.com/open-covenant/covenant/releases/tag/compute-v0.3.0";
 const PROGRAM = "3dTtXH7rah8YyWTsAfSg6qC3iqrJXWGEhAx57uUHXZff";
 const FIRST_PAYOUT =
   "35Wdz2k2U1QatsiSVsty3edFnmqUESe9C3Dy6xVpNaKByBi9knFieApuyvrZJgQN9DLmQ4LPqH4xJfm4zw2ou7xR";
@@ -132,6 +133,12 @@ export default function ComputePage() {
           <a className={link} href="/compute-prices">public GPU price history</a>, with timestamps and sample counts.
           {" "}View capacity, settlement checks and reviewed incidents on the <a className={link} href="/compute-status">Compute status page</a>.
         </p>
+
+        {workspaceRelease.accepted && <section className="mt-12 max-w-2xl">
+          <h2 className={eyebrow}>Encrypted workspaces</h2>
+          <p className={`${paragraph} mt-3`}>Save an encrypted checkpoint before closing a GPU lease, then restore the same file for a later lease. The key stays on your client.</p>
+          <a className={`${link} mt-3 inline-flex min-h-11 items-center text-[13px]`} href="/compute-workspaces">Workspace workflow and release evidence →</a>
+        </section>}
 
         <section className="mt-12">
           <p className={eyebrow}>run a node</p>

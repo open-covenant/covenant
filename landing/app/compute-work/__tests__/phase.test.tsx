@@ -19,7 +19,7 @@ describe("public pilot launch phase", () => {
     expect(html).toContain("Awaiting funding");
     expect(html).toContain("Pool funding is pending");
     expect(html).toContain("existing CVNT and NVDAx tokens");
-    expect(html).toContain("new pool on Orca, on Solana");
+    expect(html).toContain("an Orca pool on Solana");
     expect(html).toContain("not launching a new project token");
     expect(html).toContain("operator approval and a budget");
     expect(html).not.toContain("0.00");

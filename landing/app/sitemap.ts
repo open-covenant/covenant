@@ -1,5 +1,6 @@
 import type { MetadataRoute } from "next";
 import { SITE_BUILD_DATE } from "./_brand";
+import { workspaceRelease } from "./compute-workspaces/_release";
 
 const SITE = "https://opencovenant.org";
 
@@ -13,6 +14,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
     { url: `${SITE}/about`, lastModified, changeFrequency: "monthly", priority: 0.8 },
     { url: `${SITE}/blog`, lastModified, changeFrequency: "weekly", priority: 0.6 },
     { url: `${SITE}/compute`, lastModified, changeFrequency: "weekly", priority: 0.9 },
+    ...(workspaceRelease.accepted ? [{ url: `${SITE}/compute-workspaces`, lastModified, changeFrequency: "weekly" as const, priority: 0.8 }] : []),
     { url: `${SITE}/compute-langchain`, lastModified, changeFrequency: "weekly", priority: 0.8 },
     { url: `${SITE}/compute-agent-framework`, lastModified, changeFrequency: "weekly", priority: 0.8 },
     { url: `${SITE}/compute-inference`, lastModified, changeFrequency: "weekly", priority: 0.8 },

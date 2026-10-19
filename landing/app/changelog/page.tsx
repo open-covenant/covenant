@@ -3,6 +3,7 @@ import { pageMetadata } from "@/app/_metadata";
 import { SiteFooter } from "../SiteFooter";
 import { SiteHeader } from "../SiteHeader";
 import { agentFrameworkRelease } from "../compute-agent-framework/_release";
+import { workspaceRelease } from "../compute-workspaces/_release";
 
 const DESCRIPTION =
   "Covenant release notes. What shipped in each tagged version, with versioned artifacts and the full changelog on GitHub.";
@@ -37,6 +38,22 @@ type Release = {
 };
 
 const RELEASES: Release[] = [
+  ...(workspaceRelease.accepted && workspaceRelease.releaseUrl ? [{
+    version: "Compute 0.3.0",
+    date: "October 18, 2026",
+    dateISO: "2026-10-18",
+    href: workspaceRelease.releaseUrl,
+    artifactLabel: "Verified release",
+    summary: "Encrypted workspace snapshots preserve files independently of a GPU lease. Buyers keep their keys, pin the saved version and restore a checkpoint for a later rental.",
+    groups: [{
+      label: "Added",
+      items: [
+        "Client-side encryption, signed workspace requests and versioned commits with provider-native checksum verification.",
+        "Persistent interrupted-upload recovery, private key backups and exact-version restores that preserve existing destination files.",
+        "Public acceptance evidence for a synthetic checkpoint restored across two rented L40S instances, settled leases and verified ciphertext cleanup.",
+      ],
+    }],
+  }] : []),
   ...(agentFrameworkRelease.accepted && agentFrameworkRelease.releaseUrl ? [{
     version: `Compute Python ${agentFrameworkRelease.version}`,
     date: "October 18, 2026",

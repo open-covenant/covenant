@@ -1,6 +1,7 @@
 import type { MetadataRoute } from "next";
 import { SITE_BUILD_DATE } from "./_brand";
 import { workspaceRelease } from "./compute-workspaces/_release";
+import { rentalChecksRelease } from "./compute-rental-checks/_release";
 
 const SITE = "https://opencovenant.org";
 
@@ -20,6 +21,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
     { url: `${SITE}/compute-inference`, lastModified, changeFrequency: "weekly", priority: 0.8 },
     { url: `${SITE}/compute-prices`, lastModified, changeFrequency: "hourly", priority: 0.8 },
     { url: `${SITE}/compute-status`, lastModified, changeFrequency: "hourly", priority: 0.8 },
+    ...(rentalChecksRelease.accepted ? [{ url: `${SITE}/compute-rental-checks`, lastModified, changeFrequency: "hourly" as const, priority: 0.8 }] : []),
     { url: `${SITE}/compute-work`, lastModified, changeFrequency: "hourly", priority: 0.8 },
     { url: `${SITE}/blog/compute`, lastModified, changeFrequency: "monthly", priority: 0.6 },
     { url: `${SITE}/blog/covenant-payai`, lastModified, changeFrequency: "monthly", priority: 0.6 },

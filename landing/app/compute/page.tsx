@@ -3,6 +3,7 @@ import { pageMetadata } from "@/app/_metadata";
 import { SiteFooter } from "../SiteFooter";
 import { SiteHeader } from "../SiteHeader";
 import { workspaceRelease } from "../compute-workspaces/_release";
+import { rentalChecksRelease } from "../compute-rental-checks/_release";
 
 const TITLE = "Covenant Compute: rent a GPU by the second";
 const DESCRIPTION =
@@ -133,6 +134,12 @@ export default function ComputePage() {
           <a className={link} href="/compute-prices">public GPU price history</a>, with timestamps and sample counts.
           {" "}View capacity, settlement checks and reviewed incidents on the <a className={link} href="/compute-status">Compute status page</a>.
         </p>
+
+        {rentalChecksRelease.accepted && <section className="mt-12 max-w-2xl">
+          <h2 className={eyebrow}>Real GPU rental checks</h2>
+          <p className={`${paragraph} mt-3`}>A six-hourly check follows a real rental through funding, authenticated SSH, GPU inspection, settlement and provider cleanup. Results and remaining work are public.</p>
+          <a className={`${link} mt-3 inline-flex min-h-11 items-center text-[13px]`} href="/compute-rental-checks">Rental results and recent history →</a>
+        </section>}
 
         {workspaceRelease.accepted && <section className="mt-12 max-w-2xl">
           <h2 className={eyebrow}>Encrypted workspaces</h2>

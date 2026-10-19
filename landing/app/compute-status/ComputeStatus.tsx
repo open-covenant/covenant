@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { rentalChecksRelease } from "../compute-rental-checks/_release";
 import { fetchStatus, labelKind, observerState, snapshotCurrent, STATUS_PATH, utcTime, type ComputeStatus, type ObserverState } from "./_status";
 
 const heading = "text-[13px] uppercase tracking-[0.25em] text-fg sm:text-[14px]";
@@ -112,6 +113,6 @@ export function ComputeStatusView() {
     {error && <p role="status" className="mt-5 border border-line p-5 text-[13px] leading-[1.8] text-warn">{error} The page will retry automatically, or you can refresh now.</p>}
     <noscript><p className="mt-5 border border-line p-5 text-[13px] text-muted">Enable JavaScript for current observations, or <a href={STATUS_PATH} className={link}>read the status report as JSON</a>.</p></noscript>
     {data ? <StatusReport data={data} nowMs={nowMs} requestFailed={error !== null} /> : <div className="mt-8 border-y border-line py-8"><h2 className={heading}>{loading ? "Loading status report" : "Status report unavailable"}</h2><p className={`mt-4 max-w-2xl ${paragraph}`}>{loading ? "Journal, capacity and chain observations will appear when the status service responds." : "No current service state can be confirmed from this page. Try again shortly or check the source endpoint."}</p></div>}
-    <nav aria-label="Compute resources" className="mt-10 flex flex-wrap gap-x-6 gap-y-3 text-[12px] text-muted"><a href={STATUS_PATH} className={link}>Status data (JSON) ↗</a><a href="/compute-prices" className={link}>GPU price history</a><a href="/compute" className={link}>Covenant Compute</a><a href="https://docs.opencovenant.org/compute" className={link}>Compute documentation ↗</a></nav>
+    <nav aria-label="Compute resources" className="mt-10 flex flex-wrap gap-x-6 gap-y-3 text-[12px] text-muted"><a href={STATUS_PATH} className={link}>Status data (JSON) ↗</a><a href="/compute-prices" className={link}>GPU price history</a>{rentalChecksRelease.accepted && <a href="/compute-rental-checks" className={link}>GPU rental checks</a>}<a href="/compute" className={link}>Covenant Compute</a><a href="https://docs.opencovenant.org/compute" className={link}>Compute documentation ↗</a></nav>
   </div>;
 }

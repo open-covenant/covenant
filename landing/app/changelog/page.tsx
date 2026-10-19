@@ -4,6 +4,7 @@ import { SiteFooter } from "../SiteFooter";
 import { SiteHeader } from "../SiteHeader";
 import { agentFrameworkRelease } from "../compute-agent-framework/_release";
 import { workspaceRelease } from "../compute-workspaces/_release";
+import { rentalChecksRelease } from "../compute-rental-checks/_release";
 
 const DESCRIPTION =
   "Covenant release notes. What shipped in each tagged version, with versioned artifacts and the full changelog on GitHub.";
@@ -38,6 +39,19 @@ type Release = {
 };
 
 const RELEASES: Release[] = [
+  ...(rentalChecksRelease.accepted && rentalChecksRelease.releaseUrl && rentalChecksRelease.acceptedAt ? [{
+    version: "GPU rental checks",
+    date: new Date(rentalChecksRelease.acceptedAt).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric", timeZone: "UTC" }),
+    dateISO: rentalChecksRelease.acceptedAt.slice(0, 10),
+    href: rentalChecksRelease.releaseUrl,
+    artifactLabel: "Verified release",
+    summary: "Scheduled real GPU rentals check funding, authenticated SSH, GPU inspection, settlement and provider cleanup. The latest result and recent history are public.",
+    groups: [{ label: "Added", items: [
+      "Six-hour rental schedule with durable reservations and explicit pending, blocked, failed and recovery outcomes.",
+      "A reporting heartbeat separate from the rental cadence, with monitoring for missed or unsuccessful windows.",
+      "Public results and bounded pilot admissions, including deliberate pauses when the approved budget is exhausted.",
+    ] }],
+  }] : []),
   ...(workspaceRelease.accepted && workspaceRelease.releaseUrl ? [{
     version: "Compute 0.3.0",
     date: "October 18, 2026",

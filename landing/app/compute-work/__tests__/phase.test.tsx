@@ -13,18 +13,19 @@ vi.mock("../../SiteFooter", () => ({ SiteFooter: () => <footer>Shared footer</fo
 afterEach(() => { launch.phase = "awaiting_funding"; launch.liveView.mockClear(); });
 
 describe("public pilot launch phase", () => {
-  it("renders the waiting launch without mounting the live snapshot poller or fabricating records", () => {
+  it("renders the unfunded operator pilot without mounting the fee-funded view or fabricating records", () => {
     const html = renderToStaticMarkup(<ComputeWorkPage />);
     expect(launch.liveView).not.toHaveBeenCalled();
-    expect(html).toContain("Awaiting funding");
-    expect(html).toContain("The pool is not funded yet");
-    expect(html).toContain("uses existing CVNT and NVDAx");
-    expect(html).toContain("preparing a CVNT/NVDAx pool on Orca");
-    expect(html).toContain("tasks we approve in advance, each with a fixed budget");
+    expect(html).toContain("Unfunded pilot");
+    expect(html).toContain("The pool is not funded.");
+    expect(html).toContain("Operated with Compute.");
+    expect(html).toContain("preparing a small CVNT/NVDAx pool on Orca");
+    expect(html).toContain("The owner approves every transaction.");
+    expect(html).toContain("Loading the latest public checks");
+    expect(html).toContain("$850");
     expect(html).not.toContain("0.00");
     expect(html).not.toContain("/compute-work/data");
-    expect(html).not.toContain("Refresh");
-    expect(html).not.toContain("Report generated");
+    expect(html).not.toContain("Awaiting liquidity");
     expect(html).not.toContain("Live reporting component");
     expect(html).not.toContain("fees paid for this contribution");
   });
@@ -35,7 +36,7 @@ describe("public pilot launch phase", () => {
     expect(launch.liveView).toHaveBeenCalledOnce();
     expect(html).toContain("Live reporting component");
     expect(html).toContain("Our CVNT/NVDAx pool on Orca");
-    expect(html).not.toContain("Awaiting funding");
-    expect(html).not.toContain("The pool is not funded yet");
+    expect(html).not.toContain("Unfunded pilot");
+    expect(html).not.toContain("The pool is not funded.");
   });
 });

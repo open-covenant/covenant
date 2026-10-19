@@ -28,9 +28,9 @@ const render = (data = fixture(), now = NOW, failed = false) => renderToStaticMa
 describe("public work presentation", () => {
   it("uses the shared layout and its own generated social card", () => {
     const html = renderToStaticMarkup(<ComputeWorkPage />);
-    expect(html).toContain("Shared site header"); expect(html).toContain("Shared site footer"); expect(html).toContain("Useful software");
-    expect(html).toContain("fund public bug fixes, tests and small tools through Covenant Compute");
-    expect(html).toContain("code, costs and receipts anyone can inspect");
+    expect(html).toContain("Shared site header"); expect(html).toContain("Shared site footer"); expect(html).toContain("Operated with Compute");
+    expect(html).toContain("checking the market and recommending how to manage its liquidity");
+    expect(html).toContain("Publish the checks, decisions, costs and receipts");
     expect(metadata.alternates?.canonical).toBe("https://opencovenant.org/compute-work");
     expect(metadata.openGraph).toMatchObject({ images: [{ url: "https://opencovenant.org/og/compute-work.png", width: 1200, height: 630 }] });
   });

@@ -82,12 +82,24 @@ separate freshness window, and labels retained data after a failed refresh.
 An empty scan, no available operators, unreviewed findings and reviewed incidents
 remain distinct. The status page does not initiate jobs or financial actions.
 
-`/compute-work` launches as a static explanation with an explicit "Awaiting
-funding" state. Its compile-time phase lives in `app/compute-work/_phase.ts`.
-Switch to `live` only after funding and the coordinator's public reporting
-endpoint have been deployed and verified. The waiting phase does not mount the
-live poller or invent balances. The prepared dashboard, credential-free data
-proxy and evidence views remain available for that later activation.
+`/compute-work` explains the unfunded CVNT/NVDAx operator pilot. Its fixed-origin,
+credential-free `/compute-work/operator-data` proxy reads `/pool-operator` on the
+Compute coordinator. The v1 allowlist exposes readiness gates, quote observation
+provenance, explicitly published analyst evidence and attributed operating costs.
+It never exposes buyer APIs, signed submission requests or authentication data.
+The page refreshes every 60 seconds and marks reports and observations older than
+180 seconds as outdated. Quote freshness uses capture start time independently
+of report generation; a publisher cannot refresh an old quote by republishing it.
+
+Only a current report with all five preparation gates passed, an accepted analyst
+and current complete quote observations can say “Awaiting liquidity.” Everything
+in this v1 view remains explicitly unfunded. Historical quotes imply no fills,
+demand, earned fees or strategy return. Evidence and observation links are confined
+to content-addressed public resources on the fixed coordinator origin.
+
+The old fee-funded work dashboard remains behind `app/compute-work/_phase.ts`.
+Do not switch it to `live` until actual funding and its separate reporting endpoint
+are deployed and verified; it is not the operator-readiness endpoint.
 
 ## Identity
 

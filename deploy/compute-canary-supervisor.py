@@ -31,6 +31,10 @@ WINDOW = 21600
 MAX_ARCHIVE = 256 * 1024 * 1024
 ASSET = 'covenant-compute-linux-x86_64'
 URL = f'https://github.com/open-covenant/covenant/releases/download/compute-v{VERSION}/{ASSET}.tar.gz'
+PUBLIC_HEALTH = 'https://compute-api.opencovenant.org/health'
+HEALTH_INTERVAL = 5
+HEALTH_TIMEOUT = 3
+MAX_HEALTH = 4096
 
 
 def require(value):
@@ -254,6 +258,79 @@ def unresolved(state):
         return True
 
 
+class NoHealthRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def local_health_url(env):
+    port = env.get('COVENANT_COMPUTE_COORDINATOR_PORT', '8720')
+    require(isinstance(port, str) and re.fullmatch('[0-9]{1,5}', port)
+            and 1 <= int(port) <= 65535)
+    return 'http://127.0.0.1:' + str(int(port)) + '/health'
+
+
+def health_revision(url):
+    require(url == PUBLIC_HEALTH or re.fullmatch(r'http://127\.0\.0\.1:[0-9]{1,5}/health', url))
+    request = urllib.request.Request(url, headers={
+        'User-Agent': 'Covenant-Rental-Canary/0.3.1', 'Accept': 'application/json',
+        'Accept-Encoding': 'identity', 'Cache-Control': 'no-cache'})
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoHealthRedirect())
+
+    def expired(*_):
+        raise TimeoutError('coordinator readiness timeout')
+
+    # The socket timeout alone is not a total deadline for a slowly streamed
+    # response. This supervisor runs on Unix in its main thread; bound headers,
+    # TLS and the complete body too, without affecting child processes.
+    previous = signal.signal(signal.SIGALRM, expired)
+    signal.setitimer(signal.ITIMER_REAL, HEALTH_TIMEOUT)
+    try:
+        with opener.open(request, timeout=HEALTH_TIMEOUT) as response:
+            require(response.status == 200 and response.geturl() == url)
+            require(response.headers.get('Content-Type', '').split(';')[0].strip() == 'application/json'
+                    and response.headers.get('Content-Encoding', 'identity') == 'identity')
+            length = response.headers.get('Content-Length')
+            require(length is None or re.fullmatch('[0-9]+', length) and int(length) <= MAX_HEALTH)
+            data = response.read(MAX_HEALTH + 1)
+            require(len(data) <= MAX_HEALTH and (length is None or len(data) == int(length)))
+            value = json.loads(data.decode('utf-8'))
+            require(isinstance(value, dict) and value.get('status') == 'ok'
+                    and re.fullmatch('[0-9a-f]{40}', value.get('revision', '')))
+            return value['revision']
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+class AdmissionReadiness:
+    """Two recent observations before new work; never a recovery prerequisite."""
+    def __init__(self, env):
+        self.env = env
+        self.next_probe = 0
+        self.last_probe = None
+        self.revision = None
+        self.observations = 0
+
+    def ready(self):
+        now = time.monotonic()
+        if now < self.next_probe:
+            return self.observations >= 2
+        if self.last_probe is None or now - self.last_probe > 2 * HEALTH_INTERVAL:
+            self.revision, self.observations = None, 0
+        self.last_probe = now
+        self.next_probe = now + HEALTH_INTERVAL
+        try:
+            local = health_revision(local_health_url(self.env))
+            require(health_revision(PUBLIC_HEALTH) == local)
+        except Exception:
+            self.revision, self.observations = None, 0
+            return False
+        self.observations = self.observations + 1 if self.revision == local else 1
+        self.revision = local
+        return self.observations >= 2
+
+
 def scheduling_action(mode, journal, pending, now):
     """Pure decision; markers are synced by caller BEFORE starting a subprocess."""
     if pending:
@@ -297,6 +374,7 @@ def main():
     require(mode in {'disabled', 'preflight', 'once', 'scheduled'})
     coordinator_owner, owner = pwd.getpwnam('covenant'), pwd.getpwnam('covenant-canary')
     coordinator_env, canary_env = environments(os.environ)
+    admission = AdmissionReadiness(coordinator_env)
     coordinator = subprocess.Popen(['covenant-compute-coordinator', *sys.argv[1:]],
         env=coordinator_env, user=coordinator_owner.pw_uid, group=coordinator_owner.pw_gid,
         extra_groups=[], start_new_session=True)
@@ -345,6 +423,17 @@ def main():
                             journal = json.loads(write_path.read_text()) if write_path.exists() else {'schema': 1}
                             require(type(journal.get('recovery_attempt_at', 0)) is int)
                         action = scheduling_action(mode, journal, pending, now)
+                        # A released client can be installed before Render has
+                        # routed the public endpoint to this coordinator. Do
+                        # not consume a one-shot/window grant during that gap.
+                        # Recovery and the separately spawned monitor bypass it.
+                        if action in {'preflight', 'rent'}:
+                            if not admission.ready() or stopping or coordinator.poll() is not None:
+                                action = None
+                            else:
+                                # Probes may cross a UTC scheduling boundary.
+                                now = int(time.time())
+                                action = scheduling_action(mode, journal, pending, now)
                         if action:
                             if action == 'recover': journal['recovery_attempt_at'] = now
                             elif action == 'preflight': journal['preflight_attempted'] = True

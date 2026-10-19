@@ -203,6 +203,13 @@ prevents new admissions but continues recovery of unresolved rentals. The
 supervisor durably records a schedule attempt before launching the runner;
 recovery uses `--recover-only` and cannot become a fresh purchase.
 
+Before recording a new preflight or rental attempt, the supervisor requires two
+healthy observations at least five seconds apart from both the local coordinator
+and its public `/health` endpoint. Their source revisions must match. Startup
+failures and an unready public route leave the one-shot and window grants unused;
+probes retry every five seconds with bounded requests. Monitoring and recovery
+of an existing rental do not depend on this admission gate.
+
 The supervisor installs the anonymous immutable Compute 0.3.1 archive whose
 SHA-256 is pinned in `COVENANT_CANARY_RELEASE_SHA256`. Promotion must first
 verify its signature, provenance and installed contents. A root-only persistent

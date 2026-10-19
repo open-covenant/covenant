@@ -325,7 +325,8 @@ class ScheduleTests(TemporaryTests):
 
 
 class LoopTests(TemporaryTests):
-    def run_loop(self, mode, journal=None, ledger=None, corrupt_schedule=False, persistence_fails=False):
+    def run_loop(self, mode, journal=None, ledger=None, corrupt_schedule=False, persistence_fails=False,
+                 ready=True):
         state = self.root / 'state'
         state.mkdir(exist_ok=True)
         path = self.root / 'supervisor.json'
@@ -357,12 +358,19 @@ class LoopTests(TemporaryTests):
                 self.assertEqual(saved['last_window'], 20)
             dispatched.append(argv)
             return types.SimpleNamespace(poll=lambda: 0, returncode=0, pid=123457)
+        readiness = Mock()
+        if callable(ready):
+            readiness.ready.side_effect = ready
+        else:
+            readiness.ready.return_value = ready
+        self.readiness = readiness
         with patch.object(MODULE, 'ROOT', self.root), patch.dict(MODULE.os.environ, {'COVENANT_CANARY_MODE': mode}, clear=True), \
              patch.object(MODULE.pwd, 'getpwnam', return_value=self.owner), patch.object(MODULE.subprocess, 'Popen', return_value=coordinator), \
              patch.object(MODULE, 'install_client'), patch.object(MODULE, 'prepare'), patch.object(MODULE, 'verify_identity'), patch.object(MODULE, 'spawn', side_effect=spawn), \
              patch.object(MODULE.time, 'time', return_value=20 * MODULE.WINDOW), patch.object(MODULE.time, 'sleep', side_effect=sleep), \
              patch.object(MODULE.signal, 'signal'), patch.object(MODULE.os, 'fchown'), patch.object(MODULE.sys, 'argv', ['supervisor']), \
-             patch.object(MODULE, 'atomic', side_effect=persist), patch('builtins.print'):
+             patch.object(MODULE, 'atomic', side_effect=persist), \
+             patch.object(MODULE, 'AdmissionReadiness', return_value=readiness), patch('builtins.print'):
             self.assertEqual(MODULE.main(), 0)
         return dispatched
 
@@ -393,6 +401,114 @@ class LoopTests(TemporaryTests):
         self.assertEqual(sum('--recover-only' in call for call in calls), 1)
         self.assertEqual((self.root / 'supervisor.json').read_text(), 'corrupt; preserve me')
         self.assertTrue((self.root / 'recovery-supervisor.json').exists())
+
+    def test_unready_public_route_never_consumes_preflight_once_or_window(self):
+        for mode in ('preflight', 'once', 'scheduled'):
+            with self.subTest(mode=mode):
+                calls = self.run_loop(mode, ready=False)
+                self.assertFalse(any('--once' in call or '--preflight' in call for call in calls))
+                self.assertFalse((self.root / 'supervisor.json').exists())
+                self.assertTrue(any('--monitor' in call for call in calls))
+
+    def test_later_readiness_admits_once_with_marker_durable_before_spawn(self):
+        observations = iter([False, False, True])
+        def ready():
+            self.assertFalse((self.root / 'supervisor.json').exists())
+            return next(observations)
+        calls = self.run_loop('once', ready=ready)
+        self.assertEqual(sum('--once' in call for call in calls), 1)
+        self.assertEqual(self.readiness.ready.call_count, 3)
+
+    def test_public_readiness_is_not_consulted_for_recovery(self):
+        calls = self.run_loop('once', journal={'schema': 1},
+                              ledger={'entries': [{'resolved_at_unix': None}]}, ready=False)
+        self.assertEqual(sum('--recover-only' in call for call in calls), 1)
+        self.assertTrue(any('--monitor' in call for call in calls))
+        self.readiness.ready.assert_not_called()
+
+
+class ReadinessTests(unittest.TestCase):
+    def response(self, value=None, **changes):
+        data = json.dumps(value or {'status': 'ok', 'revision': 'a' * 40}).encode()
+        response = io.BytesIO(data)
+        response.status = changes.get('status', 200)
+        response.headers = changes.get('headers', {'Content-Type': 'application/json', 'Content-Length': str(len(data))})
+        response.geturl = lambda: changes.get('url', MODULE.PUBLIC_HEALTH)
+        return response
+
+    def read(self, response):
+        opener = Mock()
+        opener.open.return_value = response
+        with patch.object(MODULE.urllib.request, 'build_opener', return_value=opener) as build, \
+                patch.object(MODULE.signal, 'signal'), patch.object(MODULE.signal, 'setitimer') as timer:
+            value = MODULE.health_revision(MODULE.PUBLIC_HEALTH)
+        request = opener.open.call_args.args[0]
+        self.assertEqual(request.get_header('User-agent'), 'Covenant-Rental-Canary/0.3.1')
+        self.assertEqual(request.get_header('Accept-encoding'), 'identity')
+        self.assertNotIn('Authorization', request.headers)
+        self.assertEqual(opener.open.call_args.kwargs['timeout'], MODULE.HEALTH_TIMEOUT)
+        self.assertEqual(build.call_args.args[0].proxies, {})
+        self.assertIsInstance(build.call_args.args[1], MODULE.NoHealthRedirect)
+        self.assertEqual(timer.call_args_list[-1].args, (MODULE.signal.ITIMER_REAL, 0))
+        return value
+
+    def test_health_checks_use_fixed_public_origin_custom_agent_and_no_proxies(self):
+        self.assertEqual(self.read(self.response()), 'a' * 40)
+        self.assertIsNone(MODULE.NoHealthRedirect().redirect_request(None, None, 302, None, None, 'https://elsewhere.test'))
+        with self.assertRaises(ValueError):
+            MODULE.health_revision('https://compute-api.opencovenant.org.evil.test/health')
+
+    def test_local_port_is_same_validated_coordinator_setting(self):
+        self.assertEqual(MODULE.local_health_url({}), 'http://127.0.0.1:8720/health')
+        self.assertEqual(MODULE.local_health_url({'COVENANT_COMPUTE_COORDINATOR_PORT': '10000'}), 'http://127.0.0.1:10000/health')
+        for port in ('0', '65536', '-1', '8720/path', '127.0.0.1:8720', ' 8720', ''):
+            with self.subTest(port=port), self.assertRaises(ValueError):
+                MODULE.local_health_url({'COVENANT_COMPUTE_COORDINATOR_PORT': port})
+
+    def test_bad_status_revision_encoding_length_or_redirect_fails(self):
+        cases = [self.response(status=503), self.response({'status': 'degraded', 'revision': 'a' * 40}),
+                 self.response({'status': 'ok', 'revision': 'development'}), self.response(url='https://elsewhere.test/health'),
+                 self.response(headers={'Content-Type': 'text/html'}),
+                 self.response(headers={'Content-Type': 'application/json', 'Content-Encoding': 'gzip'}),
+                 self.response(headers={'Content-Type': 'application/json', 'Content-Length': '4097'}),
+                 self.response(headers={'Content-Type': 'application/json', 'Content-Length': '1'}),
+                 self.response({'status': 'ok', 'revision': 'a' * 40, 'padding': 'x' * 4096})]
+        for response in cases:
+            with self.subTest(response=response), self.assertRaises(ValueError):
+                self.read(response)
+
+    def test_total_deadline_is_cleared_after_failure(self):
+        opener = Mock()
+        opener.open.side_effect = TimeoutError()
+        with patch.object(MODULE.urllib.request, 'build_opener', return_value=opener), \
+                patch.object(MODULE.signal, 'signal'), patch.object(MODULE.signal, 'setitimer') as timer, \
+                self.assertRaises(TimeoutError):
+            MODULE.health_revision(MODULE.PUBLIC_HEALTH)
+        self.assertEqual(timer.call_args_list[-1].args, (MODULE.signal.ITIMER_REAL, 0))
+
+    def test_two_matching_observations_at_least_five_seconds_apart(self):
+        gate = MODULE.AdmissionReadiness({})
+        with patch.object(MODULE.time, 'monotonic', side_effect=[0, 1, 4, 5, 6]), \
+                patch.object(MODULE, 'health_revision', return_value='a' * 40) as health:
+            self.assertEqual([gate.ready() for _ in range(5)], [False, False, False, True, True])
+        self.assertEqual(health.call_count, 4)
+        self.assertEqual(health.call_args_list[0].args, ('http://127.0.0.1:8720/health',))
+        self.assertEqual(health.call_args_list[1].args, (MODULE.PUBLIC_HEALTH,))
+
+    def test_unavailable_or_mismatched_routes_reset_consecutive_observations(self):
+        for failure in (TimeoutError(), 'b' * 40):
+            gate = MODULE.AdmissionReadiness({})
+            with self.subTest(failure=failure), \
+                    patch.object(MODULE.time, 'monotonic', side_effect=[0, 5, 10, 15]), \
+                    patch.object(MODULE, 'health_revision', side_effect=['a' * 40, 'a' * 40, 'a' * 40, failure,
+                                                                      'a' * 40, 'a' * 40, 'a' * 40, 'a' * 40]):
+                self.assertEqual([gate.ready() for _ in range(4)], [False, False, False, True])
+
+    def test_previous_window_readiness_cannot_authorize_later_window(self):
+        gate = MODULE.AdmissionReadiness({})
+        with patch.object(MODULE.time, 'monotonic', side_effect=[0, 5, 21600, 21605]), \
+                patch.object(MODULE, 'health_revision', return_value='a' * 40):
+            self.assertEqual([gate.ready() for _ in range(4)], [False, True, False, True])
 
 
 if __name__ == '__main__':

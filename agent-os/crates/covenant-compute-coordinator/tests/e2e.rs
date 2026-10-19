@@ -11215,6 +11215,86 @@ async fn assert_wire_answer(
 /// which route it hides behind.
 #[tokio::test]
 async fn hostile_wire_garbage_gets_4xx_moves_no_money_and_the_service_keeps_serving() {
+    // Publication handlers read their directories from the process environment.
+    // Run this one barrage in a child process with real, empty publications so
+    // the GET handlers are exercised without racing other tests' environment.
+    const CHILD: &str = "COVENANT_TEST_HOSTILE_WIRE_PUBLICATIONS";
+    const POOL_TOKEN: &str = "hostile-wire-test-pool-token-not-for-production";
+    const WORK_TOKEN: &str = "hostile-wire-test-work-token-not-for-production";
+    if std::env::var_os(CHILD).is_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let pool_dir = root.join("pool");
+        let work_dir = root.join("work");
+        std::fs::create_dir(&pool_dir).unwrap();
+        std::fs::create_dir(&work_dir).unwrap();
+        let readiness = [
+            "analyst",
+            "pool_rehearsal",
+            "conversion_route",
+            "operator_approval",
+            "shadow_trial",
+        ]
+        .map(|id| {
+            serde_json::json!({
+                "id": id, "status": "pending", "checked_at_ms": null
+            })
+        });
+        let pool = serde_json::json!({
+            "schema_version": 1, "generated_at_ms": epoch_ms(),
+            "pool_funded": false, "stage": "preparing", "quote_observation": null,
+            "readiness": readiness,
+            "analyst": {"status": "pending", "evidence_manifest_url": null,
+                "source_sha256": null},
+            "costs": {"reserved_usdc_micros": "0",
+                "coordinator_reported_charge_usdc_micros": "0", "settlement": "unresolved"}
+        });
+        let work = serde_json::json!({
+            "schema_version": 1, "generated_at_ms": epoch_ms(), "mode": "unfunded",
+            "pool": null, "work": [],
+            "fees": {"cvnt_retained_raw": "0", "nvdax_collected_raw": "0",
+                "nvdax_converted_raw": "0"},
+            "budget": {"available_usdc_micros": "0", "reserved_usdc_micros": "0",
+                "spent_usdc_micros": "0", "subsidy_usdc_micros": "0"}
+        });
+        for (path, value) in [(&pool_dir, pool), (&work_dir, work)] {
+            std::fs::write(
+                path.join("snapshot.json"),
+                serde_json::to_vec(&value).unwrap(),
+            )
+            .unwrap();
+            // Authenticated uploads take this lock before payload validation.
+            std::fs::write(path.join(".publish.lock"), b"").unwrap();
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "hostile_wire_garbage_gets_4xx_moves_no_money_and_the_service_keeps_serving",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env("COVENANT_POOL_OPERATOR_DIR", &pool_dir)
+            .env("COVENANT_COMPUTE_WORK_DIR", &work_dir)
+            .env("COVENANT_POOL_OPERATOR_PUBLISH_TOKEN", POOL_TOKEN)
+            .env("COVENANT_COMPUTE_WORK_PUBLISH_TOKEN", WORK_TOKEN)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "isolated hostile-wire barrage failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let publications_before: Vec<_> = ["COVENANT_POOL_OPERATOR_DIR", "COVENANT_COMPUTE_WORK_DIR"]
+        .map(|key| {
+            let path = std::path::PathBuf::from(std::env::var_os(key).unwrap());
+            let bytes = std::fs::read(path.join("snapshot.json")).unwrap();
+            (path, bytes)
+        })
+        .into_iter()
+        .collect();
     let (state, _payout) = new_coordinator_state(Duration::from_millis(200));
     let state_handle = state.clone();
     let coordinator_pubkey_b58 = state.coordinator_pubkey_b58();
@@ -11227,7 +11307,7 @@ async fn hostile_wire_garbage_gets_4xx_moves_no_money_and_the_service_keeps_serv
         std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/http.rs")).unwrap();
     assert_eq!(
         router_source.matches(".route(").count(),
-        49,
+        59,
         "the route table changed — teach the hostile-wire barrage the new route first"
     );
 
@@ -11321,6 +11401,9 @@ async fn hostile_wire_garbage_gets_4xx_moves_no_money_and_the_service_keeps_serv
         "/status",
         // The rental observer feed is input-less even when disabled.
         "/rental-checks",
+        // Real empty publications are configured in the isolated child.
+        "/pool-operator",
+        "/community-work",
         "/metrics",
         "/federation/deposit-info",
         "/federation/bond-info",
@@ -11404,6 +11487,18 @@ async fn hostile_wire_garbage_gets_4xx_moves_no_money_and_the_service_keeps_serv
             // Bundles: a fetch opens only to a signed seat holding a task
             // that names the bundle, so an unsigned one is a 401.
             (format!("/federation/bundles/{hp}"), false),
+            // Public publication reads reject invalid ids, digests, kinds,
+            // filenames and deposit signatures without touching private books.
+            (format!("/pool-operator/{hp}/{hp}"), false),
+            (format!("/pool-operator/artifacts/{hp}.json"), false),
+            (
+                format!("/pool-operator/{hp}/{}.json", "a".repeat(64)),
+                false,
+            ),
+            (format!("/community-work/deposits/{hp}"), false),
+            (format!("/community-work/artifacts/{hp}.json"), false),
+            (format!("/community-work/{hp}/manifest"), false),
+            (format!("/community-work/{hp}"), false),
         ] {
             assert_wire_answer(
                 http.get(format!("{base_url}{path}")),
@@ -11467,6 +11562,98 @@ async fn hostile_wire_garbage_gets_4xx_moves_no_money_and_the_service_keeps_serv
             )
             .await;
         }
+    }
+
+    // Publication writes have dedicated PUT routes and distinct credentials.
+    // Reach each JSON/bytes extractor with garbage and forged authorization;
+    // include plausible resource names as well as traversal-shaped segments.
+    let publication_put_paths = [
+        "/admin/pool-operator".to_string(),
+        format!("/admin/pool-operator/artifacts/{}.json", "a".repeat(64)),
+        format!("/admin/pool-operator/{0}/{0}", hostile_params[1]),
+        "/admin/community-work/snapshots/snapshot.json".to_string(),
+        format!("/admin/community-work/{0}/{0}", hostile_params[1]),
+    ];
+    for path in &publication_put_paths {
+        let valid_token = if path.starts_with("/admin/pool-operator") {
+            POOL_TOKEN
+        } else {
+            WORK_TOKEN
+        };
+        for (class, body, content_type) in garbage_bodies {
+            // Valid test auth plus an exact body digest also exercises the
+            // upload parser behind auth; malformed bytes remain unacceptable.
+            for (auth_label, token) in [
+                ("missing", None),
+                ("forged", Some("forged-publication-token")),
+                ("valid test credential", Some(valid_token)),
+            ] {
+                let mut req = http
+                    .put(format!("{base_url}{path}"))
+                    .header("content-type", content_type)
+                    .header(
+                        "x-publication-review-sha256",
+                        covenant_compute_protocol::sha256_hex(body),
+                    )
+                    .body(body.to_vec());
+                if let Some(token) = token {
+                    req = req.header("authorization", format!("Bearer {token}"));
+                }
+                assert_wire_answer(
+                    req,
+                    false,
+                    format!("PUT {path} ({class}, {auth_label})"),
+                    &mut violations,
+                )
+                .await;
+            }
+        }
+        assert_wire_answer(
+            http.put(format!("{base_url}{path}"))
+                .header("content-type", "application/json")
+                .header("authorization", "Bearer forged-publication-token")
+                .body(format!(
+                    r#"{{"payload":"{}"}}"#,
+                    "x".repeat(2 * 1024 * 1024)
+                )),
+            false,
+            format!("PUT {path} (2MiB body)"),
+            &mut violations,
+        )
+        .await;
+    }
+    // A schema-valid pool publication reaches the handler's auth check instead
+    // of stopping at JSON shape validation, and must still fail closed.
+    let pool_snapshot: serde_json::Value =
+        serde_json::from_slice(&publications_before[0].1).unwrap();
+    assert_wire_answer(
+        http.put(format!("{base_url}/admin/pool-operator"))
+            .header("authorization", "Bearer forged-publication-token")
+            .json(&serde_json::json!({"snapshot": pool_snapshot, "observation": null})),
+        false,
+        "PUT /admin/pool-operator (valid shape, forged bearer)".to_string(),
+        &mut violations,
+    )
+    .await;
+    for path in ["/pool-operator", "/community-work"] {
+        assert_wire_answer(
+            http.get(format!("{base_url}{path}")).header(
+                covenant_compute_protocol::PROTOCOL_VERSION_HEADER,
+                "garbage",
+            ),
+            false,
+            format!("GET {path} (malformed protocol header)"),
+            &mut violations,
+        )
+        .await;
+        assert_wire_answer(
+            http.post(format!("{base_url}{path}"))
+                .json(&serde_json::json!({})),
+            false,
+            format!("POST {path} (read-only publication)"),
+            &mut violations,
+        )
+        .await;
     }
 
     // A bundle upload with no signature, or to a coordinator storing none,
@@ -11585,6 +11772,16 @@ async fn hostile_wire_garbage_gets_4xx_moves_no_money_and_the_service_keeps_serv
         books_before, books_after,
         "a garbage barrage must not move any book"
     );
+
+    // Refused publication writes leave the reviewed files byte-for-byte
+    // unchanged and create no artifacts, staging files or publication locks.
+    for (path, bytes) in publications_before {
+        assert_eq!(std::fs::read(path.join("snapshot.json")).unwrap(), bytes);
+        assert!(std::fs::read(path.join(".publish.lock"))
+            .unwrap()
+            .is_empty());
+        assert_eq!(std::fs::read_dir(&path).unwrap().count(), 2);
+    }
 
     // And the service it hit is still the service: a real paid job
     // settles end to end afterwards.

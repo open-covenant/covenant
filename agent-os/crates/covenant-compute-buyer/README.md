@@ -26,7 +26,7 @@ or see the other [install options](https://docs.opencovenant.org/compute#install
 }
 ```
 
-Twenty-one tools:
+Twenty-two tools:
 
 | Tool | What it buys or shows |
 | --- | --- |
@@ -37,6 +37,7 @@ Twenty-one tools:
 | `compute.run` | one batch command — it executes on a stranger's machine, and the tool description says so |
 | `compute.agent` | hire a coding agent for one task in a git repository; another operator runs your acceptance commands on its patch, and only work that passes is charged (see `agent` under the CLI) |
 | `compute.fix` | hire a crew to fix a bug: one agent writes tests that reproduce it, another fixes it against them, and only a fix that passes is charged (see `fix` under the CLI) |
+| `compute.audit` | read the bundled security audit workflow, reference documents, schema, and validators; your local coding agent coordinates the audit. This call spends nothing and dispatches no job (see [Security audits](#security-audits)) |
 | `compute.swarm` | buy work from the IMD agent swarm (identity.md, https://imd.fun) through a swarm operator: a research report, an audit of a public repository, an image, a website, a contract project, or an oracle question answered by a panel of agents. Pass the IMD `action` and the `body` IMD's documentation (https://imd.fun/docs/) specifies for it; the operator pays IMD on chain and returns the accepted files under its signed receipt, and a job IMD never delivers is refunded. The body is public. Results take minutes to hours, so the default deadline is two hours. One order costs far more than the other tools' jobs, so raise `COVENANT_COMPUTE_MAX_PRICE_MICRO_USDC` to cover it |
 | `compute.stream_start` | `compute.infer`, returning the job id immediately so the output can be read as it generates |
 | `compute.stream_poll` | cursor-read a streaming job's live chunks; the concluding poll carries the verified output and receipt |
@@ -88,6 +89,42 @@ reads that are private to that identity (history, balance) go out as
 signed reads. `COVENANT_COMPUTE_REFERRAL_CODE` (optional) rides each
 dispatch so the partner who onboarded this buyer earns their disclosed
 share of the marketplace fee.
+
+## Security audits
+
+The buyer binaries bundle Covenant's integration of
+[Cloudflare's security-audit skill](https://github.com/cloudflare/security-audit-skill),
+pinned to an upstream commit with its license and file hashes. The workflow
+guides a local coding agent through reconnaissance, coverage-led hunting,
+candidate validation, structured findings, independent record review, and
+reporting. The bundled schema and validators check report consistency; their
+success does not establish that a finding is correct or that a repository is
+secure.
+
+In an MCP client, call `compute.audit` with `{}` to read the entry instructions,
+then use `{"document":"<asset from the returned index>"}` to read companion
+files. The call reads only bundled assets. It makes no coordinator request,
+spends no funds, executes no target code, and creates no audit artifacts.
+The MCP server retains its normal startup configuration requirements.
+
+The CLI can read or export the same bundle without a coordinator URL or buyer
+identity:
+
+```sh
+covenant-compute audit-skill
+covenant-compute audit-skill --list
+covenant-compute audit-skill --read SKILL.md
+covenant-compute audit-skill --export /absolute/path/to/new-audit-skill
+```
+
+Export requires a new destination; it does not overwrite an installed skill.
+Open the exported `SKILL.md` in your coding agent and request an audit of the
+target repository. The local agent owns delegation, coverage, evidence, and
+reporting. Target-controlled execution requires every sandbox control in the
+skill; unavailable controls leave the claim needing validation. The integration
+does not provision that sandbox or automatically submit paid `agent`, `check`,
+or `fix` jobs. See the [Compute security audit guide](../../../docs/compute-security-audit.md)
+for the workflow and the limits of its evidence.
 
 ## As an OpenAI-compatible endpoint
 

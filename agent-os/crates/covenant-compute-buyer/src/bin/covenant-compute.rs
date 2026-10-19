@@ -10,7 +10,8 @@
 //! identity under `$COVENANT_COMPUTE_MCP_HOME` (default
 //! `$HOME/.covenant-compute-mcp`), so a wallet funded here buys jobs
 //! there and the other way round. `COVENANT_COMPUTE_COORDINATOR_URL`
-//! is required for everything but `whoami`. `COVENANT_COMPUTE_RPC_URL`
+//! is required for network commands. `whoami` and `audit-skill` work offline.
+//! `COVENANT_COMPUTE_RPC_URL`
 //! (this buyer's own Solana RPC, never the coordinator's suggestion)
 //! backs `verify`'s on-chain read-back.
 //!
@@ -56,6 +57,10 @@ wallet that pays for it
 
 Usage:
   covenant-compute whoami                       this buyer's pubkey and home
+  covenant-compute audit-skill                  read the bundled security-audit workflow (free, offline)
+  covenant-compute audit-skill --list            list bundled audit documents and their hashes
+  covenant-compute audit-skill --read <asset>     read a named bundled audit document
+  covenant-compute audit-skill --export <dir>     install the complete skill in a new directory
   covenant-compute balance                      funds and how to top up
   covenant-compute capacity                     what is purchasable right now
   covenant-compute deposit <tx-signature>       claim an on-chain top-up (the transfer's signature)
@@ -194,8 +199,9 @@ Other flags:
   --withdrawal-id <id>  withdraw: reuse an id to retry the same withdrawal safely
   --json                print the underlying JSON record instead of a summary
 
-COVENANT_COMPUTE_COORDINATOR_URL is required for every command but
-whoami. The buyer identity lives under COVENANT_COMPUTE_MCP_HOME
+COVENANT_COMPUTE_COORDINATOR_URL is required for network commands.
+whoami and audit-skill work offline; audit-skill never creates a buyer identity.
+The buyer identity lives under COVENANT_COMPUTE_MCP_HOME
 (default ~/.covenant-compute-mcp), shared with covenant-compute-mcp.
 Vault keys live there too, in vault-keys.json — the coordinator stores
 only ciphertext, so back that file up: lose it and its secrets cannot be
@@ -258,6 +264,7 @@ async fn main() -> anyhow::Result<()> {
     // that needs it, so an unknown command refuses cleanly instead of
     // failing on a missing HOME first.
     match command.as_str() {
+        "audit-skill" => cmd_audit_skill(&args, json_out),
         "whoami" => cmd_whoami(json_out).await,
         "balance" => cmd_balance(&load_ctx()?, json_out).await,
         "capacity" => cmd_capacity(&load_ctx()?, json_out).await,
@@ -800,6 +807,49 @@ enum BudgetAction {
     Status,
     Reconcile,
     SetLimit { new: u64, expected: u64 },
+}
+
+fn cmd_audit_skill(args: &[String], json_out: bool) -> anyhow::Result<()> {
+    use covenant_compute_buyer::audit::{self, AuditArgs};
+
+    let names: Vec<&str> = args.iter().map(String::as_str).collect();
+    match names.as_slice() {
+        ["--export", destination] => {
+            let path = audit::export_skill(Path::new(destination))
+                .context("export audit skill to a new, user-owned directory")?;
+            if json_out {
+                let mut result = audit::catalog();
+                result["exported_to"] = serde_json::json!(path);
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("Exported security-audit skill to {}", path.display());
+            }
+        }
+        ["--list"] => {
+            if json_out {
+                println!("{}", serde_json::to_string_pretty(&audit::catalog())?);
+            } else {
+                for asset in audit::DOCUMENTS {
+                    println!("{}", asset.name);
+                }
+            }
+        }
+        [] | ["--read", _] => {
+            let name = names.get(1).copied().unwrap_or("SKILL.md");
+            if json_out {
+                let result = audit::read_document(&AuditArgs {
+                    document: Some(name.into()),
+                })?;
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                print!("{}", audit::document(name)?.content);
+            }
+        }
+        _ => anyhow::bail!(
+            "usage: audit-skill [--list | --read <asset> | --export <new-directory>] [--json]"
+        ),
+    }
+    Ok(())
 }
 
 fn parse_budget_action(args: &[String]) -> anyhow::Result<BudgetAction> {

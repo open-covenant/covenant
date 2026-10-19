@@ -32,6 +32,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
+use covenant_compute_buyer::audit::{self, AuditArgs, AUDIT_TOOL};
 use covenant_compute_buyer::{
     agent_preview, agent_purchase_recorded, agent_tool_spec, apply_patch, balance_tool_spec,
     cancel_job, cancel_tool_spec, capacity, capacity_tool_spec, cheapest_matching_ask,
@@ -112,6 +113,25 @@ fn tool_error(id: Value, message: String) -> Value {
         id,
         json!({ "content": [{ "type": "text", "text": message }], "isError": true }),
     )
+}
+
+/// Read a bundled audit document. The handler takes no server state: it
+/// cannot contact the coordinator, sign a purchase, or change a spend cap.
+fn call_audit(id: Value, arguments: Value) -> Value {
+    let args: AuditArgs = match serde_json::from_value(arguments) {
+        Ok(args) => args,
+        Err(e) => return error(id, -32602, format!("invalid arguments: {e}")),
+    };
+    match audit::read_document(&args) {
+        Ok(document) => response(
+            id,
+            json!({
+                "content": [{ "type": "text", "text": document.to_string() }],
+                "isError": false,
+            }),
+        ),
+        Err(e) => tool_error(id, format!("audit document unavailable: {e}")),
+    }
 }
 
 /// A dispatch failure as a tool error. When the coordinator refused for
@@ -1597,6 +1617,7 @@ async fn handle_line(state: &Arc<ServerState>, line: &str) -> Option<Value> {
                 agent_tool_spec(state.caps.max_price_micro_usdc()),
                 fix_tool_spec(state.caps.max_price_micro_usdc()),
                 swarm_tool_spec(state.caps.max_price_micro_usdc()),
+                audit::tool_spec(),
             ] }),
         )),
         "tools/call" => {
@@ -1648,6 +1669,7 @@ async fn handle_line(state: &Arc<ServerState>, line: &str) -> Option<Value> {
                 AGENT_TOOL => Some(call_agent(state, id, arguments).await),
                 FIX_TOOL => Some(call_fix(state, id, arguments).await),
                 SWARM_TOOL => Some(call_swarm(state, id, arguments).await),
+                AUDIT_TOOL => Some(call_audit(id, arguments)),
                 _ => Some(error(id, -32602, format!("unknown tool: {name}"))),
             }
         }
@@ -2095,9 +2117,54 @@ mod tests {
                 OUTPUT_TOOL,
                 AGENT_TOOL,
                 FIX_TOOL,
-                SWARM_TOOL
+                SWARM_TOOL,
+                AUDIT_TOOL
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn audit_documents_are_available_offline_with_no_spend_headroom() {
+        let state = test_state(0, Some(0));
+        let identity = state.identity.pubkey_bytes();
+        let reply = handle_line(
+            &state,
+            r#"{"jsonrpc":"2.0","id":42,"method":"tools/call","params":{"name":"compute.audit","arguments":{}}}"#,
+        )
+        .await
+        .unwrap();
+        assert_eq!(reply["result"]["isError"], false, "{reply}");
+        let document: Value =
+            serde_json::from_str(reply["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            document,
+            audit::read_document(&AuditArgs { document: None }).unwrap()
+        );
+        assert_eq!(state.identity.pubkey_bytes(), identity);
+        assert_eq!(state.caps.spent_micro_usdc(), 0);
+        assert_eq!(state.caps.session_refusal(0, 0), None);
+        assert_eq!(state.streams.active_committed(STREAM_OWNER), 0);
+        assert!(!state.clips_dir.exists());
+    }
+
+    #[tokio::test]
+    async fn audit_refuses_unknown_documents_and_purchase_arguments() {
+        let state = test_state(0, Some(0));
+        let invalid_document = handle_line(
+            &state,
+            r#"{"jsonrpc":"2.0","id":43,"method":"tools/call","params":{"name":"compute.audit","arguments":{"document":"../../identity.json"}}}"#,
+        )
+        .await
+        .unwrap();
+        assert_eq!(invalid_document["result"]["isError"], true);
+        let invalid_argument = handle_line(
+            &state,
+            r#"{"jsonrpc":"2.0","id":44,"method":"tools/call","params":{"name":"compute.audit","arguments":{"price_micro_usdc":1}}}"#,
+        )
+        .await
+        .unwrap();
+        assert_eq!(invalid_argument["error"]["code"], -32602);
+        assert_eq!(state.caps.spent_micro_usdc(), 0);
     }
 
     #[tokio::test]

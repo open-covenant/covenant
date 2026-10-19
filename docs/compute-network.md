@@ -13,6 +13,14 @@ and no emission schedule.
 This page is the map. Each crate's README is the operating manual for
 its side of the wire.
 
+The buyer tools also include a [security audit workflow](compute-security-audit.md)
+adapted from Cloudflare's pinned `security-audit` skill. `compute.audit` on the
+MCP server reads its bundled instructions and reference assets for your local
+coding agent; `covenant-compute audit-skill --export <new-directory>` exports
+the complete bundle. These operations make no paid job or security guarantee.
+The local agent runs the six-phase workflow, with target execution limited to
+the skill's required sandbox and unresolved claims recorded as needing validation.
+
 ## Crates
 
 | Crate | Role |

@@ -84,6 +84,7 @@ for bin in "${bins[@]}"; do
 done
 install -m 0755 "$stake_bin_dir/covenant-compute-stake" "$stage/"
 install -m 0644 "$root/LICENSE" "$root/NOTICE.md" "$here/README.md" "$stage/"
+install -m 0644 "$workspace/crates/covenant-compute-buyer/skills/security-audit/upstream/LICENSE" "$stage/SECURITY_AUDIT_LICENSE"
 install -m 0644 "$notes" "$stage/RELEASE_NOTES.md"
 
 if tar --version | grep -q 'GNU tar'; then
@@ -126,6 +127,16 @@ done
 # identity or endpoint is configured; none of these checks may create state.
 buyer="$work/check/$asset/covenant-compute"
 help_home="$work/help-only-buyer"
+# The skill and its attribution must survive packaging and remain usable offline.
+COVENANT_COMPUTE_MCP_HOME="$help_home" \
+  COVENANT_COMPUTE_COORDINATOR_URL=http://127.0.0.1:1 \
+  run_packed "$buyer" audit-skill --read upstream/LICENSE > "$work/audit-license"
+cmp "$work/audit-license" "$work/check/$asset/SECURITY_AUDIT_LICENSE"
+COVENANT_COMPUTE_MCP_HOME="$help_home" \
+  COVENANT_COMPUTE_COORDINATOR_URL=http://127.0.0.1:1 \
+  run_packed "$buyer" audit-skill --list > "$work/audit-documents"
+grep -Fxq 'upstream/validate-findings.cjs' "$work/audit-documents"
+grep -Fxq 'upstream/validate-coverage-ledger.cjs' "$work/audit-documents"
 lease_help="$(COVENANT_COMPUTE_MCP_HOME="$help_home" \
   COVENANT_COMPUTE_COORDINATOR_URL=http://127.0.0.1:1 \
   run_packed "$buyer" lease open --help)"

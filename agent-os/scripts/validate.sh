@@ -58,6 +58,7 @@ run node ./scripts/validate-chain-cli-envelope-fields.mjs
 run node ./scripts/validate-crate-groups-coverage.mjs
 run node ./scripts/validate-compute-readme-env-knobs.mjs
 run node ./scripts/validate-compute-network-doc.mjs
+run node --test ./crates/covenant-compute-buyer/skills/security-audit/upstream/validate-findings.test.cjs ./crates/covenant-compute-buyer/skills/security-audit/upstream/validate-coverage-ledger.test.cjs
 run node ./scripts/validate-chain-tx-test-line-refs.mjs
 run node ./scripts/validate-receipt-list-line-refs.mjs
 run node ./scripts/validate-receipt-onchain-fallback-line-refs.mjs

@@ -369,6 +369,45 @@ async fn the_stdio_binary_speaks_and_saves_a_clip_rather_than_returning_base64()
 }
 
 #[tokio::test]
+async fn bundled_audit_reads_leave_the_buyer_home_unchanged_without_a_coordinator() {
+    let home = tempfile::tempdir().unwrap();
+    let mut mcp = Mcp::spawn_with(
+        "http://127.0.0.1:1",
+        home.path(),
+        &[
+            ("COVENANT_COMPUTE_MAX_PRICE_MICRO_USDC", "0"),
+            ("COVENANT_COMPUTE_MAX_TOTAL_MICRO_USDC", "0"),
+        ],
+    )
+    .await;
+    initialize(&mut mcp).await;
+    let snapshot = || {
+        std::fs::read_dir(home.path())
+            .unwrap()
+            .map(|entry| {
+                let entry = entry.unwrap();
+                (entry.file_name(), std::fs::read(entry.path()).unwrap())
+            })
+            .collect::<std::collections::BTreeMap<_, _>>()
+    };
+    let before = snapshot();
+    let document = last_block_json(&mcp.call_tool(2, "compute.audit", json!({})).await);
+    assert!(document.to_string().contains("security-audit"));
+    mcp.refused(
+        3,
+        "compute.audit",
+        json!({"document": "../../identity.json"}),
+    )
+    .await;
+    assert_eq!(
+        snapshot(),
+        before,
+        "reading a skill must not alter buyer state"
+    );
+    mcp.shutdown().await;
+}
+
+#[tokio::test]
 async fn the_stdio_binary_buys_replays_and_survives_restart_against_a_real_coordinator() {
     let rig = Rig::launch().await;
 
@@ -392,7 +431,7 @@ async fn the_stdio_binary_buys_replays_and_survives_restart_against_a_real_coord
         .await
         .unwrap();
     let tools = listed["result"]["tools"].as_array().unwrap().clone();
-    assert_eq!(tools.len(), 21, "the whole buyer surface is advertised");
+    assert_eq!(tools.len(), 22, "the whole buyer surface is advertised");
     assert!(tools.iter().any(|t| t["name"] == "compute.infer"));
     assert!(tools.iter().any(|t| t["name"] == "compute.swarm"));
     assert!(tools.iter().any(|t| t["name"] == "compute.agent"));
@@ -403,6 +442,7 @@ async fn the_stdio_binary_buys_replays_and_survives_restart_against_a_real_coord
     assert!(tools.iter().any(|t| t["name"] == "compute.output"));
     assert!(tools.iter().any(|t| t["name"] == "compute.withdrawals"));
     assert!(tools.iter().any(|t| t["name"] == "compute.budget"));
+    assert!(tools.iter().any(|t| t["name"] == "compute.audit"));
 
     // Discovery before spending: the directory shows the rig's one
     // node as a purchasable row — the model id and price floor the

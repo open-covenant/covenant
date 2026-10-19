@@ -45,6 +45,7 @@ pub use covenant_compute_protocol::{
 };
 
 mod agent;
+pub mod audit;
 mod agent_purchase;
 pub use agent_purchase::agent_purchase_recorded;
 mod check;
@@ -85,6 +86,7 @@ pub use gemini::gemini_router;
 mod responses;
 
 pub const INFER_TOOL: &str = "compute.infer";
+pub const AUDIT_TOOL: &str = "compute.audit";
 pub const EMBED_TOOL: &str = "compute.embed";
 pub const TRANSCRIBE_TOOL: &str = "compute.transcribe";
 pub const SPEAK_TOOL: &str = "compute.speak";

@@ -28,7 +28,7 @@ export default function ComputeWorkPage() {
       <section className="mt-8 max-w-2xl" aria-labelledby="pairing-rationale-title">
         <h2 id="pairing-rationale-title" className="text-[12px] uppercase tracking-[0.2em] text-fg">Why this pair?</h2>
         <p className="mt-4 text-[13px] leading-[1.8] text-fg-soft sm:text-[14px]">NVIDIA builds AI hardware. Covenant runs agent jobs. The pair connects those two sides of compute and gives our agents a focused market to help operate.</p>
-        <p className="mt-4 text-[13px] leading-[1.8] text-muted sm:text-[14px]">Traders still need a good price. We’re comparing $5, $10 and $25 swaps with existing routes before adding liquidity. The goal is a useful direct route whose fees can help cover the cost of running it.</p>
+        <p className="mt-4 text-[13px] leading-[1.8] text-muted sm:text-[14px]">Traders still need a good price. We compare $5, $10 and $25 swaps with other routes to check whether the pool can be useful. Its fees could help cover the cost of running it.</p>
       </section>
       {phase === "awaiting_funding" ? <WaitingPilot /> : <><ComputeWorkView /><div className="mt-12"><OperatorStatus archive /></div></>}
     </div>

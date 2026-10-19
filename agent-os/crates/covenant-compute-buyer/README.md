@@ -92,6 +92,9 @@ share of the marketplace fee.
 
 ## Security audits
 
+Available in buyer version **0.4.1** or later. Check `covenant-compute --version`
+after upgrading, and restart an existing MCP server to expose the new tool.
+
 The buyer binaries bundle Covenant's integration of
 [Cloudflare's security-audit skill](https://github.com/cloudflare/security-audit-skill),
 pinned to an upstream commit with its license and file hashes. The workflow

@@ -1,6 +1,6 @@
 [package]
 name = "covenant-compute-node"
-version = "0.4.0"
+version = "0.4.1"
 description = "Operator node core for the Covenant compute network: registration/heartbeat against a coordinator, fail-closed job admission, sandboxed metered execution, WorkReceipt signing, and the EarningsLedger."
 edition.workspace = true
 license.workspace = true

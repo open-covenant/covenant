@@ -119,14 +119,35 @@ pub fn router(state: CoordinatorState) -> Router {
         .route("/status", get(crate::observer::public_status))
         .route("/rental-checks", get(crate::rental_checks::public_status))
         .route("/pool-operator", get(crate::pool_operator::snapshot))
-        .route("/pool-operator/:kind/:filename", get(crate::pool_operator::artifact))
-        .route("/admin/pool-operator", put(crate::pool_operator::publish).layer(DefaultBodyLimit::max(512 * 1024)))
-        .route("/admin/pool-operator/:kind/:filename", put(crate::pool_operator::publish_artifact).layer(DefaultBodyLimit::max(512 * 1024)))
+        .route(
+            "/pool-operator/:kind/:filename",
+            get(crate::pool_operator::artifact),
+        )
+        .route(
+            "/admin/pool-operator",
+            put(crate::pool_operator::publish).layer(DefaultBodyLimit::max(512 * 1024)),
+        )
+        .route(
+            "/admin/pool-operator/:kind/:filename",
+            put(crate::pool_operator::publish_artifact).layer(DefaultBodyLimit::max(512 * 1024)),
+        )
         .route("/community-work", get(crate::community_work::snapshot))
-        .route("/admin/community-work/:kind/:filename", put(crate::community_work::upload).layer(DefaultBodyLimit::max(1024 * 1024)))
-        .route("/community-work/deposits/:signature", get(crate::community_work::deposit))
-        .route("/community-work/artifacts/:filename", get(crate::community_work::artifact))
-        .route("/community-work/:id/manifest", get(crate::community_work::manifest))
+        .route(
+            "/admin/community-work/:kind/:filename",
+            put(crate::community_work::upload).layer(DefaultBodyLimit::max(1024 * 1024)),
+        )
+        .route(
+            "/community-work/deposits/:signature",
+            get(crate::community_work::deposit),
+        )
+        .route(
+            "/community-work/artifacts/:filename",
+            get(crate::community_work::artifact),
+        )
+        .route(
+            "/community-work/:id/manifest",
+            get(crate::community_work::manifest),
+        )
         .route("/community-work/:id", get(crate::community_work::detail))
         .route("/prices", get(crate::prices_page::redirect))
         .route("/prices/page", get(crate::prices_page::page))

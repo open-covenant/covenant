@@ -21,7 +21,7 @@ first, follow "Verify a download" in the release notes. Installing with
 Homebrew (`brew install open-covenant/tap/covenant-compute`) or the install
 script (`curl -fsSL https://opencovenant.org/install/compute.sh | sh`) avoids
 this step. Those installers use separately pinned releases; check that
-`covenant-compute --version` reports `0.4.0` before using this release's tariff
+`covenant-compute --version` reports `0.4.1` before using this release's audit
 commands.
 
 From the unpacked folder:
@@ -52,6 +52,31 @@ Add the `export` line to your shell profile to keep it. Your buyer key controls
 your balance, and `covenant-compute` and `covenant-compute-mcp` both use it, so
 back up `~/.covenant-compute-mcp/identity.json`.
 
+## Security audit workflow
+
+Version 0.4.1 bundles Cloudflare's security-audit skill, including its six-phase
+workflow, report schema, Node.js validators, and MIT license. Inspect it or install
+it in the current repository's agent skill directory without a network connection:
+
+```sh
+covenant-compute audit-skill --list
+covenant-compute audit-skill --read SKILL.md
+mkdir -p .agents/skills
+covenant-compute audit-skill --export .agents/skills/covenant-compute-security-audit
+```
+
+Export requires a new destination and refuses to overwrite an existing one. In
+an MCP client, `compute.audit` with `{}` reads the entrypoint; a `document` field
+selects another bundled file. Restart an existing MCP server after upgrading its
+binary so clients discover the new tool.
+
+Loading or exporting the skill spends nothing and dispatches no work. The calling
+agent coordinates the audit, independent reviews, filesystem access, and required
+sandbox. These tools do not execute the workflow or add a remote audit job kind.
+The bundle includes Cloudflare's unchanged upstream documents and license at
+commit `c1c8a8c1471069fb0e188eeaff69b8e8db6564a8` with a hash manifest. The full guide is:
+https://github.com/open-covenant/covenant/blob/compute-v0.4.1/docs/compute-security-audit.md
+
 ## Upfront model prices
 
 Version 0.4.0 adds opt-in inference tariffs. Read `capacity` for a currently
@@ -71,7 +96,7 @@ reduce the agreed charge. `covenant-compute-mcp` exposes the same choice through
 Tariffs require a compatible coordinator and an operator advertising the exact
 offer. Installing the client does not activate a tariff on the network. Requests
 without a tariff ID retain their existing pricing behavior. The tariff guide is:
-https://github.com/open-covenant/covenant/blob/compute-v0.4.0/docs/compute-inference-tariffs.md
+https://github.com/open-covenant/covenant/blob/compute-v0.4.1/docs/compute-inference-tariffs.md
 
 ## Encrypted checkpoints
 
@@ -102,13 +127,13 @@ attestation. `workspace delete <workspace-uuid>` schedules stored ciphertext for
 cleanup after outstanding grants expire.
 
 The complete workspace workflow and storage limits are documented at:
-https://github.com/open-covenant/covenant/blob/compute-v0.4.0/docs/compute-workspaces.md
+https://github.com/open-covenant/covenant/blob/compute-v0.4.1/docs/compute-workspaces.md
 
 The guide at https://docs.opencovenant.org/compute covers funding your balance,
 renting a GPU, hiring a coding agent and running a node. Every command and flag
 of `covenant-compute` and `covenant-compute-mcp` is described in the command
 reference:
-https://github.com/open-covenant/covenant/tree/compute-v0.4.0/agent-os/crates/covenant-compute-buyer#readme
+https://github.com/open-covenant/covenant/tree/compute-v0.4.1/agent-os/crates/covenant-compute-buyer#readme
 
 The source is at https://github.com/open-covenant/covenant, licensed under
 Apache 2.0 (see `LICENSE` and `NOTICE.md`).

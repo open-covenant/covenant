@@ -45,8 +45,8 @@ pub use covenant_compute_protocol::{
 };
 
 mod agent;
-pub mod audit;
 mod agent_purchase;
+pub mod audit;
 pub use agent_purchase::agent_purchase_recorded;
 mod check;
 pub use check::{check_pinned_task, check_preview, CheckOutcome};

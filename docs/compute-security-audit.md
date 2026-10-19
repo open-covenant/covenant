@@ -1,5 +1,10 @@
 # Security audits with Covenant Compute
 
+Available in `covenant-compute` and `covenant-compute-mcp` version **0.4.1** or
+later. Check `covenant-compute --version` after upgrading; Homebrew and the website
+installer pin their releases separately. Restart an existing MCP server after
+upgrading its binary so clients can discover `compute.audit`.
+
 Covenant Compute bundles Cloudflare's security-audit skill as a local workflow for
 the calling agent. It provides source-guided reconnaissance, coverage-led hunting,
 independent candidate review, machine-readable findings, and reports. The buyer

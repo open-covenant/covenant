@@ -30,7 +30,7 @@ describe("public work presentation", () => {
     const html = renderToStaticMarkup(<ComputeWorkPage />);
     expect(html).toContain("Shared site header"); expect(html).toContain("Shared site footer"); expect(html).toContain("Useful software");
     expect(html).toContain("fund public bug fixes, tests and small tools through Covenant Compute");
-    expect(html).toContain("code, cost and funding receipts open for anyone to inspect");
+    expect(html).toContain("code, costs and receipts anyone can inspect");
     expect(metadata.alternates?.canonical).toBe("https://opencovenant.org/compute-work");
     expect(metadata.openGraph).toMatchObject({ images: [{ url: "https://opencovenant.org/og/compute-work.png", width: 1200, height: 630 }] });
   });

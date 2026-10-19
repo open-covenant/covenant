@@ -2,8 +2,9 @@
 //! discovered or copied here. Unknown JSON fields are discarded on serialization.
 use crate::{http::ApiError, state::CoordinatorState};
 use axum::{
+    body::Bytes,
     extract::{Path, State},
-    http::{header, HeaderValue},
+    http::{header, HeaderMap, HeaderValue},
     response::{IntoResponse, Response},
     Json,
 };
@@ -12,16 +13,19 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
-    fs::File,
-    io::Read,
+    fs::{self, File, OpenOptions},
+    io::{Read, Write},
     path::{Path as FsPath, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
 };
+use subtle::ConstantTimeEq;
 
 const MAX_BYTES: u64 = 1024 * 1024;
 const MAX_TIME: u64 = 8_640_000_000_000_000;
 const MAX_SLOT: u64 = 9_007_199_254_740_991;
 const MAX_REPORT_AGE_MS: u64 = 180_000;
 const ENV: &str = "COVENANT_COMPUTE_WORK_DIR";
+const PUBLISH_TOKEN: &str = "COVENANT_COMPUTE_WORK_PUBLISH_TOKEN";
 fn unavailable() -> ApiError {
     ApiError::ServiceUnavailable("Public work data is unavailable".into())
 }
@@ -495,7 +499,7 @@ impl Manifest {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct Adoption {
     schema_version: u32,
     work_id: String,
@@ -739,10 +743,734 @@ pub async fn deposit(
     ))
 }
 
+// The transport receives only the explicit public output of publish.py. It has
+// no access to the private journal and never changes account credits. Exact
+// reviewed bytes (including the publisher's final newline) are retained.
+fn invalid_upload() -> ApiError {
+    ApiError::BadRequest("Invalid reviewed public work publication".into())
+}
+fn upload_require(ok: bool) -> Result<(), ApiError> {
+    if ok {
+        Ok(())
+    } else {
+        Err(invalid_upload())
+    }
+}
+fn typed_upload<T: DeserializeOwned + Serialize>(value: &serde_json::Value) -> Result<T, ApiError> {
+    let typed: T = serde_json::from_value(value.clone()).map_err(|_| invalid_upload())?;
+    // Reads remain backwards compatible. Uploads reject, rather than store,
+    // unknown fields that might contain private operational data.
+    upload_require(serde_json::to_value(&typed).map_err(|_| invalid_upload())? == *value)?;
+    Ok(typed)
+}
+fn ordered_json(value: &serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+    match value {
+        Value::Object(map) => {
+            let mut pairs: Vec<_> = map.iter().collect();
+            pairs.sort_by(|a, b| a.0.cmp(b.0));
+            let mut result = serde_json::Map::new();
+            for (key, child) in pairs {
+                result.insert(key.clone(), ordered_json(child));
+            }
+            Value::Object(result)
+        }
+        Value::Array(rows) => Value::Array(rows.iter().map(ordered_json).collect()),
+        _ => value.clone(),
+    }
+}
+fn upload_json(bytes: &[u8]) -> Result<serde_json::Value, ApiError> {
+    upload_require(!bytes.is_empty() && bytes.len() as u64 <= MAX_BYTES)?;
+    let value: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| invalid_upload())?;
+    // The generated publication format is canonical JSON plus one newline.
+    // This also refuses duplicate keys, floats and ambiguous alternate parses.
+    fn bounded(v: &serde_json::Value, depth: usize) -> bool {
+        if depth > 48 {
+            return false;
+        }
+        match v {
+            serde_json::Value::Array(a) => {
+                a.len() <= 10_000 && a.iter().all(|x| bounded(x, depth + 1))
+            }
+            serde_json::Value::Object(m) => {
+                m.len() <= 1000 && m.values().all(|x| bounded(x, depth + 1))
+            }
+            serde_json::Value::Number(n) => n.is_i64() || n.is_u64(),
+            _ => true,
+        }
+    }
+    upload_require(value.is_object() && bounded(&value, 0))?;
+    let mut canonical = serde_json::to_vec(&ordered_json(&value)).map_err(|_| invalid_upload())?;
+    canonical.push(b'\n');
+    upload_require(canonical == bytes)?;
+    Ok(value)
+}
+fn upload_components<'a>(kind: &'a str, filename: &'a str) -> Result<Vec<&'a str>, ApiError> {
+    let stem = filename.strip_suffix(".json").ok_or_else(invalid_upload)?;
+    let valid = match kind {
+        "snapshots" => filename == "snapshot.json",
+        "works" | "manifests" | "adoption" => id(stem),
+        "deposits" => base58(stem, 64, 88),
+        "artifacts" => digest(stem),
+        _ => false,
+    };
+    upload_require(valid)?;
+    Ok(if kind == "snapshots" {
+        vec![filename]
+    } else {
+        vec![kind, filename]
+    })
+}
+fn publication_root(root: &FsPath) -> Result<(), ApiError> {
+    upload_require(root.is_absolute())?;
+    for ancestor in root.ancestors() {
+        let metadata = fs::symlink_metadata(ancestor).map_err(|_| unavailable())?;
+        upload_require(metadata.is_dir() && !metadata.file_type().is_symlink())?;
+    }
+    Ok(())
+}
+fn staged_write(
+    root: &FsPath,
+    components: &[&str],
+    bytes: &[u8],
+    immutable: bool,
+) -> Result<(), ApiError> {
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+    let mut parent = root.to_path_buf();
+    for component in &components[..components.len() - 1] {
+        parent.push(component);
+        match fs::DirBuilder::new().mode(0o700).create(&parent) {
+            Ok(()) => {
+                File::open(parent.parent().ok_or_else(unavailable)?)
+                    .and_then(|f| f.sync_all())
+                    .map_err(|_| unavailable())?;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(_) => return Err(unavailable()),
+        }
+        publication_root(&parent)?;
+    }
+    let path = parent.join(components.last().ok_or_else(invalid_upload)?);
+    if let Ok(metadata) = fs::symlink_metadata(&path) {
+        upload_require(metadata.is_file() && !metadata.file_type().is_symlink())?;
+    }
+    let temporary = parent.join(format!(".work-upload-{}", uuid::Uuid::new_v4()));
+    let result = (|| {
+        let mut f = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temporary)
+            .map_err(|_| unavailable())?;
+        f.write_all(bytes)
+            .and_then(|_| f.sync_all())
+            .map_err(|_| unavailable())?;
+        if immutable {
+            match fs::hard_link(&temporary, &path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    upload_require(
+                        Publication {
+                            root: root.to_path_buf(),
+                        }
+                        .bytes(components)?
+                            == bytes,
+                    )?;
+                }
+                Err(_) => return Err(unavailable()),
+            }
+        } else {
+            fs::rename(&temporary, &path).map_err(|_| unavailable())?;
+        }
+        Ok(())
+    })();
+    let _ = fs::remove_file(&temporary);
+    result?;
+    File::open(parent)
+        .and_then(|f| f.sync_all())
+        .map_err(|_| unavailable())?;
+    Ok(())
+}
+fn optional_bytes(p: &Publication, components: &[&str]) -> Result<Option<Vec<u8>>, ApiError> {
+    match p.bytes(components) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(ApiError::NotFound(_)) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+fn manifest_dependencies(p: &Publication, m: &Manifest) -> Result<(), ApiError> {
+    for item in &m.files {
+        let bytes = p.bytes(&["artifacts", &format!("{}.json", item.sha256)])?;
+        upload_require(bytes.len() as u64 == item.bytes && sha256_hex(&bytes) == item.sha256)?;
+        upload_json(&bytes)?;
+    }
+    Ok(())
+}
+fn funding_shape(value: &serde_json::Value) -> bool {
+    fn keys(v: &serde_json::Value, expected: &[&str]) -> bool {
+        v.as_object().is_some_and(|m| {
+            m.len() == expected.len() && expected.iter().all(|k| m.contains_key(*k))
+        })
+    }
+    fn rows(v: &serde_json::Value, expected: &[&str]) -> bool {
+        v.as_array()
+            .is_some_and(|a| a.iter().all(|row| keys(row, expected)))
+    }
+    keys(
+        value,
+        &[
+            "schema_version",
+            "kind",
+            "work_id",
+            "contract_sha256",
+            "max_budget_usdc_micros",
+            "agent_evidence_sha256",
+            "accepted_patch_sha256",
+            "public_config",
+            "harvests",
+            "conversions",
+            "deposit_lots",
+            "attempts",
+            "limitations",
+        ],
+    ) && keys(
+        &value["public_config"],
+        &[
+            "pool_address",
+            "position_address",
+            "owner_address",
+            "whirlpools_config",
+            "cvnt_account",
+            "stock_account",
+            "usdc_account",
+            "deposit_account",
+            "position_token_account",
+            "cvnt_mint",
+            "stock_mint",
+            "usdc_mint",
+            "buyer",
+            "max_slippage_bps",
+            "stock_multiplier",
+        ],
+    ) && rows(
+        &value["harvests"],
+        &[
+            "id",
+            "signature",
+            "position_address",
+            "stock_raw",
+            "cvnt_raw",
+            "stock_multiplier",
+            "finalized_slot",
+            "block_time_s",
+        ],
+    ) && rows(
+        &value["conversions"],
+        &[
+            "id",
+            "harvest_id",
+            "signature",
+            "stock_raw",
+            "usdc_micros",
+            "finalized_slot",
+            "block_time_s",
+        ],
+    ) && rows(
+        &value["deposit_lots"],
+        &[
+            "id",
+            "source",
+            "deposit_signature",
+            "credited_usdc_micros",
+            "conversion_id",
+            "coordinator_credit",
+            "finalized_slot",
+            "block_time_s",
+        ],
+    ) && rows(
+        &value["attempts"],
+        &[
+            "id",
+            "job_id",
+            "status",
+            "outcome",
+            "coordinator_charge_usdc_micros",
+            "charge_source",
+            "allocations",
+            "settlement_signature",
+            "settled_gross_usdc_micros",
+            "job_payload_sha256",
+            "signed_parent_receipt_sha256",
+            "job_issued_at_ms",
+            "executed_at_ms",
+            "finalized_slot",
+            "block_time_s",
+        ],
+    ) && value["attempts"].as_array().is_some_and(|a| {
+        a.iter().all(|row| {
+            rows(
+                &row["allocations"],
+                &["lot_id", "spent_usdc_micros", "reserved_usdc_micros"],
+            )
+        })
+    })
+}
+fn upload_file(root: &FsPath, kind: &str, filename: &str, bytes: &[u8]) -> Result<(), ApiError> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let components = upload_components(kind, filename)?;
+    publication_root(root)?;
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(root.join(".publish.lock"))
+        .map_err(|_| unavailable())?;
+    upload_require(lock.metadata().map_err(|_| unavailable())?.is_file())?;
+    lock.lock().map_err(|_| unavailable())?;
+    let p = Publication {
+        root: root.to_path_buf(),
+    };
+    let value = upload_json(bytes)?;
+    let stem = filename.strip_suffix(".json").ok_or_else(invalid_upload)?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let previous = optional_bytes(&p, &components)?;
+    let mut immutable = matches!(kind, "artifacts" | "manifests" | "deposits");
+    match kind {
+        "snapshots" => {
+            let s: Snapshot = typed_upload(&value)?;
+            s.validate()?;
+            upload_require(s.mode != Mode::Rehearsal && s.generated_at_ms <= now + 30_000)?;
+            if s.mode == Mode::Unfunded {
+                upload_require(
+                    s.pool.is_none()
+                        && [
+                            &s.fees.cvnt_retained_raw,
+                            &s.fees.nvdax_collected_raw,
+                            &s.fees.nvdax_converted_raw,
+                            &s.budget.available_usdc_micros,
+                            &s.budget.reserved_usdc_micros,
+                            &s.budget.spent_usdc_micros,
+                            &s.budget.subsidy_usdc_micros,
+                        ]
+                        .iter()
+                        .all(|x| x.as_str() == "0")
+                        && s.work.iter().all(|w| {
+                            matches!(w.status, WorkStatus::Candidate | WorkStatus::Ineligible)
+                                && w.settlement == Settlement::Unfunded
+                                && w.evidence_status == EvidenceStatus::Unpublished
+                                && w.attempts.is_empty()
+                                && w.transactions.is_empty()
+                                && [
+                                    &w.max_budget_usdc_micros,
+                                    &w.cost_usdc_micros,
+                                    &w.fee_funded_usdc_micros,
+                                    &w.subsidy_usdc_micros,
+                                ]
+                                .iter()
+                                .all(|x| x.as_str() == "0")
+                        }),
+                )?;
+            }
+            if let Some(old) = &previous {
+                let old: Snapshot = serde_json::from_slice(old).map_err(|_| unavailable())?;
+                old.validate()?;
+                upload_require(
+                    s.generated_at_ms >= old.generated_at_ms
+                        && (s.generated_at_ms != old.generated_at_ms
+                            || previous.as_deref() == Some(bytes))
+                        && !(old.mode == Mode::Live && s.mode != Mode::Live)
+                        && old
+                            .work
+                            .iter()
+                            .all(|w| s.work.iter().any(|next| next.id == w.id)),
+                )?;
+            }
+            for w in &s.work {
+                let detail: Detail = p.json(&["works", &format!("{}.json", w.id)])?;
+                detail.work.validate(detail.generated_at_ms)?;
+                upload_require(
+                    detail.schema_version == 1
+                        && detail.mode == s.mode
+                        && detail.generated_at_ms <= s.generated_at_ms,
+                )?;
+                let mut actual = detail.work;
+                if let Some(bytes) = optional_bytes(&p, &["adoption", &format!("{}.json", w.id)])? {
+                    let adoption: Adoption =
+                        serde_json::from_slice(&bytes).map_err(|_| unavailable())?;
+                    adoption.validate(&w.id)?;
+                    actual.upstream_status = adoption.status;
+                    actual.upstream_url = Some(adoption.url);
+                }
+                upload_require(
+                    serde_json::to_value(actual).map_err(|_| unavailable())?
+                        == serde_json::to_value(w).map_err(|_| unavailable())?,
+                )?;
+                if w.evidence_status != EvidenceStatus::Unpublished {
+                    let manifest: Manifest = p.json(&["manifests", &format!("{}.json", w.id)])?;
+                    manifest.validate(&w.id)?;
+                    manifest_dependencies(&p, &manifest)?;
+                }
+            }
+        }
+        "works" => {
+            let d: Detail = typed_upload(&value)?;
+            upload_require(
+                d.schema_version == 1
+                    && d.work.id == stem
+                    && time(d.generated_at_ms)
+                    && d.generated_at_ms <= now + 30_000
+                    && d.mode != Mode::Rehearsal,
+            )?;
+            d.work.validate(d.generated_at_ms)?;
+            if let Some(old) = &previous {
+                let old: Detail = serde_json::from_slice(old).map_err(|_| unavailable())?;
+                upload_require(
+                    d.generated_at_ms >= old.generated_at_ms
+                        && !(old.mode == Mode::Live && d.mode != Mode::Live),
+                )?;
+                immutable = old.work.status == WorkStatus::Completed
+                    && old.work.evidence_status == EvidenceStatus::Verified;
+            }
+            if d.work.evidence_status == EvidenceStatus::Verified {
+                upload_require(
+                    d.mode == Mode::Live
+                        && d.work.status == WorkStatus::Completed
+                        && d.work.settlement == Settlement::Settled,
+                )?;
+                let m: Manifest = p.json(&["manifests", filename])?;
+                m.validate(stem)?;
+                upload_require(
+                    m.generated_at_ms == d.generated_at_ms
+                        && !m.files.is_empty()
+                        && m.verification.work == VerificationStatus::Verified
+                        && m.verification.funding == VerificationStatus::Verified,
+                )?;
+                manifest_dependencies(&p, &m)?;
+            }
+        }
+        "manifests" => {
+            let m: Manifest = typed_upload(&value)?;
+            m.validate(stem)?;
+            upload_require(m.generated_at_ms <= now + 30_000)?;
+            manifest_dependencies(&p, &m)?;
+        }
+        "adoption" => {
+            let a: Adoption = typed_upload(&value)?;
+            a.validate(stem)?;
+            let d: Detail = p.json(&["works", filename])?;
+            upload_require(
+                d.work.id == stem
+                    && d.work.status == WorkStatus::Completed
+                    && d.work.evidence_status == EvidenceStatus::Verified,
+            )?;
+            if let Some(old) = &previous {
+                let old: Adoption = serde_json::from_slice(old).map_err(|_| unavailable())?;
+                old.validate(stem)?;
+                upload_require(
+                    old.url == a.url
+                        && !(old.status == UpstreamStatus::Merged
+                            && a.status != UpstreamStatus::Merged),
+                )?;
+            }
+        }
+        "deposits" => {
+            upload_require(value == serde_json::json!({"deposit_id":stem}))?;
+        }
+        "artifacts" => {
+            upload_require(sha256_hex(bytes) == stem)?;
+            // Only the two public artifact families emitted by publish.py.
+            // Signed payload/output text still needs the explicit human review;
+            // this transport cannot determine whether those strings are private.
+            if value.get("kind").and_then(serde_json::Value::as_str)
+                == Some("covenant.community-work.funding")
+            {
+                upload_require(funding_shape(&value) && value["schema_version"] == 1)?;
+            } else {
+                let bundle: covenant_compute_protocol::AgentEvidenceBundle = typed_upload(&value)?;
+                upload_require(bundle.schema_version == 1)?;
+            }
+        }
+        _ => return Err(invalid_upload()),
+    }
+    staged_write(root, &components, bytes, immutable)
+}
+pub async fn upload(
+    Path((kind, filename)): Path<(String, String)>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, ApiError> {
+    let secret = std::env::var(PUBLISH_TOKEN)
+        .map_err(|_| ApiError::Unauthorized("Work publication disabled".into()))?;
+    let supplied = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .unwrap_or("");
+    if secret.len() < 32 || !bool::from(secret.as_bytes().ct_eq(supplied.as_bytes())) {
+        return Err(ApiError::Unauthorized("Work publication denied".into()));
+    }
+    upload_require(body.len() as u64 <= MAX_BYTES)?;
+    let hash = sha256_hex(&body);
+    upload_require(
+        headers
+            .get("x-publication-review-sha256")
+            .and_then(|v| v.to_str().ok())
+            == Some(hash.as_str()),
+    )?;
+    let root = Publication::configured()?.root;
+    tokio::task::spawn_blocking(move || upload_file(&root, &kind, &filename, &body))
+        .await
+        .map_err(|_| unavailable())??;
+    Ok(public_response(
+        serde_json::json!({"published_sha256":hash}),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+    fn upload_bytes(value: &serde_json::Value) -> Vec<u8> {
+        let mut bytes = serde_json::to_vec(&ordered_json(value)).unwrap();
+        bytes.push(b'\n');
+        bytes
+    }
+    fn empty_snapshot(at: u64) -> serde_json::Value {
+        json!({"schema_version":1,"generated_at_ms":at,"mode":"unfunded","pool":null,
+            "fees":{"cvnt_retained_raw":"0","nvdax_collected_raw":"0","nvdax_converted_raw":"0"},
+            "budget":{"available_usdc_micros":"0","reserved_usdc_micros":"0","spent_usdc_micros":"0","subsidy_usdc_micros":"0"},"work":[]})
+    }
+    fn funding_fixture() -> serde_json::Value {
+        let mut config = serde_json::Map::new();
+        for key in [
+            "pool_address",
+            "position_address",
+            "owner_address",
+            "whirlpools_config",
+            "cvnt_account",
+            "stock_account",
+            "usdc_account",
+            "deposit_account",
+            "position_token_account",
+            "cvnt_mint",
+            "stock_mint",
+            "usdc_mint",
+            "buyer",
+        ] {
+            config.insert(key.into(), json!("1".repeat(32)));
+        }
+        config.insert("max_slippage_bps".into(), json!(50));
+        config.insert("stock_multiplier".into(), json!("1"));
+        json!({"schema_version":1,"kind":"covenant.community-work.funding","work_id":"first-work",
+            "contract_sha256":"a".repeat(64),"max_budget_usdc_micros":"0","agent_evidence_sha256":"b".repeat(64),
+            "accepted_patch_sha256":"c".repeat(64),"public_config":config,"harvests":[],"conversions":[],"deposit_lots":[],"attempts":[],"limitations":["Synthetic transport fixture, not funding evidence."]})
+    }
+    #[test]
+    fn upload_empty_snapshot_retries_monotonically_and_refuses_private_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let original = upload_bytes(&empty_snapshot(1000));
+        upload_file(&root, "snapshots", "snapshot.json", &original).unwrap();
+        upload_file(&root, "snapshots", "snapshot.json", &original).unwrap();
+        assert_eq!(
+            Publication { root: root.clone() }
+                .bytes(&["snapshot.json"])
+                .unwrap(),
+            original
+        );
+        let mut invalid = empty_snapshot(1001);
+        invalid["private_buyer"] = json!("must not persist");
+        assert!(upload_file(&root, "snapshots", "snapshot.json", &upload_bytes(&invalid)).is_err());
+        let mut invalid = empty_snapshot(1001);
+        invalid["budget"]["available_usdc_micros"] = json!("1");
+        assert!(upload_file(&root, "snapshots", "snapshot.json", &upload_bytes(&invalid)).is_err());
+        assert!(upload_file(
+            &root,
+            "snapshots",
+            "snapshot.json",
+            &upload_bytes(&empty_snapshot(999))
+        )
+        .is_err());
+        let mut changed = empty_snapshot(1000);
+        changed["mode"] = json!("live");
+        assert!(upload_file(&root, "snapshots", "snapshot.json", &upload_bytes(&changed)).is_err());
+        upload_file(
+            &root,
+            "snapshots",
+            "snapshot.json",
+            &upload_bytes(&empty_snapshot(1001)),
+        )
+        .unwrap();
+    }
+    #[test]
+    fn upload_paths_json_and_newline_hashes_are_strict() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let bytes = upload_bytes(&funding_fixture());
+        let sha = sha256_hex(&bytes);
+        assert_ne!(sha, sha256_hex(&bytes[..bytes.len() - 1]));
+        upload_file(&root, "artifacts", &format!("{sha}.json"), &bytes).unwrap();
+        assert_eq!(
+            Publication { root: root.clone() }
+                .bytes(&["artifacts", &format!("{sha}.json")])
+                .unwrap(),
+            bytes
+        );
+        for (kind, file) in [
+            ("private", "snapshot.json"),
+            ("works", "../secret.json"),
+            ("artifacts", "BAD.json"),
+            ("snapshots", "other.json"),
+        ] {
+            assert!(upload_file(&root, kind, file, &bytes).is_err());
+        }
+        assert!(upload_file(
+            &root,
+            "artifacts",
+            &format!("{}.json", "a".repeat(64)),
+            &bytes
+        )
+        .is_err());
+        assert!(upload_json(b"{\"x\":1,\"x\":2}\n").is_err());
+        assert!(upload_json(b"{\"x\":1.0}\n").is_err());
+        assert!(upload_json(&vec![b' '; MAX_BYTES as usize + 1]).is_err());
+        let mut private = funding_fixture();
+        private["public_config"]["private_path"] = json!("secret");
+        let private = upload_bytes(&private);
+        let hash = sha256_hex(&private);
+        assert!(upload_file(&root, "artifacts", &format!("{hash}.json"), &private).is_err());
+    }
+    #[test]
+    fn upload_completed_evidence_is_immutable_and_snapshot_waits_for_dependencies() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let mut w = serde_json::to_value(serde_json::from_value::<Work>(work()).unwrap()).unwrap();
+        w["status"] = json!("completed");
+        w["completed_at_ms"] = json!(900);
+        w["settlement"] = json!("settled");
+        w["evidence_status"] = json!("verified");
+        let d = json!({"schema_version":1,"generated_at_ms":1000,"mode":"live","work":w});
+        let mut snapshot = empty_snapshot(1000);
+        snapshot["mode"] = json!("live");
+        snapshot["work"] = json!([w]);
+        assert!(upload_file(
+            &root,
+            "snapshots",
+            "snapshot.json",
+            &upload_bytes(&snapshot)
+        )
+        .is_err());
+        assert!(upload_file(&root, "works", "first-work.json", &upload_bytes(&d)).is_err());
+        let artifact = upload_bytes(&funding_fixture());
+        let sha = sha256_hex(&artifact);
+        let m = json!({"schema_version":1,"work_id":"first-work","generated_at_ms":1000,"files":[{"name":"funding.json","sha256":sha,"bytes":artifact.len(),"download_url":format!("https://compute-api.opencovenant.org/community-work/artifacts/{sha}.json")}],"verification":{"work":"verified","funding":"verified"},"limitations":["Transport fixture only"]});
+        assert!(upload_file(&root, "manifests", "first-work.json", &upload_bytes(&m)).is_err());
+        upload_file(&root, "artifacts", &format!("{sha}.json"), &artifact).unwrap();
+        upload_file(&root, "manifests", "first-work.json", &upload_bytes(&m)).unwrap();
+        upload_file(&root, "works", "first-work.json", &upload_bytes(&d)).unwrap();
+        upload_file(
+            &root,
+            "snapshots",
+            "snapshot.json",
+            &upload_bytes(&snapshot),
+        )
+        .unwrap();
+        upload_file(&root, "works", "first-work.json", &upload_bytes(&d)).unwrap();
+        let mut changed = d.clone();
+        changed["work"]["summary"] = json!("changed after acceptance");
+        assert!(upload_file(&root, "works", "first-work.json", &upload_bytes(&changed)).is_err());
+        let mut changed = m.clone();
+        changed["limitations"] = json!([]);
+        assert!(upload_file(
+            &root,
+            "manifests",
+            "first-work.json",
+            &upload_bytes(&changed)
+        )
+        .is_err());
+        let mut removed = snapshot.clone();
+        removed["generated_at_ms"] = json!(1001);
+        removed["work"] = json!([]);
+        assert!(upload_file(&root, "snapshots", "snapshot.json", &upload_bytes(&removed)).is_err());
+        let p = Publication { root };
+        assert_eq!(p.artifact(&sha).unwrap(), artifact);
+    }
+    #[test]
+    fn upload_deposit_only_stages_allowlist_and_interrupted_staging_is_retryable() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let signature = "1".repeat(64);
+        let name = format!("{signature}.json");
+        let bytes = upload_bytes(&json!({"deposit_id":signature}));
+        fs::write(root.join(".work-upload-interrupted"), b"partial").unwrap();
+        upload_file(&root, "deposits", &name, &bytes).unwrap();
+        upload_file(&root, "deposits", &name, &bytes).unwrap();
+        let accounts = crate::accounts::BuyerAccounts::new();
+        assert!(Publication { root: root.clone() }
+            .deposit_record(&signature, &accounts)
+            .is_err());
+        assert!(!accounts.has_deposit(&signature));
+        fs::remove_file(root.join("deposits").join(&name)).unwrap();
+        std::os::unix::fs::symlink("/nonexistent", root.join("deposits").join(&name)).unwrap();
+        assert!(upload_file(&root, "deposits", &name, &bytes).is_err());
+    }
+    #[tokio::test]
+    async fn upload_requires_dedicated_auth_and_exact_explicit_review_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::env::set_var(ENV, &root);
+        std::env::set_var(PUBLISH_TOKEN, "x".repeat(32));
+        let body = Bytes::from(upload_bytes(&empty_snapshot(1000)));
+        let mut headers = HeaderMap::new();
+        assert!(upload(
+            Path(("snapshots".into(), "snapshot.json".into())),
+            headers.clone(),
+            body.clone()
+        )
+        .await
+        .is_err());
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"),
+        );
+        assert!(upload(
+            Path(("snapshots".into(), "snapshot.json".into())),
+            headers.clone(),
+            body.clone()
+        )
+        .await
+        .is_err());
+        headers.insert(
+            "x-publication-review-sha256",
+            HeaderValue::from_str(&"a".repeat(64)).unwrap(),
+        );
+        assert!(upload(
+            Path(("snapshots".into(), "snapshot.json".into())),
+            headers.clone(),
+            body.clone()
+        )
+        .await
+        .is_err());
+        headers.insert(
+            "x-publication-review-sha256",
+            HeaderValue::from_str(&sha256_hex(&body)).unwrap(),
+        );
+        assert!(upload(
+            Path(("snapshots".into(), "snapshot.json".into())),
+            headers,
+            body
+        )
+        .await
+        .is_ok());
+        std::env::remove_var(ENV);
+        std::env::remove_var(PUBLISH_TOKEN);
+    }
     fn work() -> serde_json::Value {
         json!({"id":"first-work","title":"Fix a bug","summary":"Public work","status":"candidate","max_budget_usdc_micros":"0","acceptance":[],"source_url":null,"completed_at_ms":null,"cost_usdc_micros":"0","fee_funded_usdc_micros":"0","subsidy_usdc_micros":"0","settlement":"unfunded","evidence_status":"unchecked","before":null,"after":null,"patch_url":null,"upstream_status":"not_submitted","upstream_url":null,"checks":[],"transactions":[],"attempts":[],"private_buyer":"must disappear"})
     }

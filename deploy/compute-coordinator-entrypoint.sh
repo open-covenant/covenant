@@ -21,6 +21,17 @@ if [ -n "${COVENANT_POOL_OPERATOR_DIR:-}" ]; then
     chmod 700 /data/pool-operator
 fi
 
+if [ -n "${COVENANT_COMPUTE_WORK_DIR:-}" ]; then
+    if [ "$COVENANT_COMPUTE_WORK_DIR" != /data/community-work-public ] \
+        || [ -L /data ] || [ -L /data/community-work-public ]; then
+        echo 'invalid public community-work directory' >&2
+        exit 1
+    fi
+    mkdir -p /data/community-work-public
+    chown covenant:covenant /data/community-work-public
+    chmod 700 /data/community-work-public
+fi
+
 # write_key PATH_VAR JSON_VAR: writes $JSON_VAR to the file $PATH_VAR names,
 # readable by the service user only, and keeps the key out of the
 # coordinator's own environment.

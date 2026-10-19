@@ -123,6 +123,7 @@ pub fn router(state: CoordinatorState) -> Router {
         .route("/admin/pool-operator", put(crate::pool_operator::publish).layer(DefaultBodyLimit::max(512 * 1024)))
         .route("/admin/pool-operator/:kind/:filename", put(crate::pool_operator::publish_artifact).layer(DefaultBodyLimit::max(512 * 1024)))
         .route("/community-work", get(crate::community_work::snapshot))
+        .route("/admin/community-work/:kind/:filename", put(crate::community_work::upload).layer(DefaultBodyLimit::max(1024 * 1024)))
         .route("/community-work/deposits/:signature", get(crate::community_work::deposit))
         .route("/community-work/artifacts/:filename", get(crate::community_work::artifact))
         .route("/community-work/:id/manifest", get(crate::community_work::manifest))

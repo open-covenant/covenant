@@ -123,37 +123,35 @@ fn read(path: &FsPath) -> Result<Vec<u8>, ApiError> {
 fn write(path: &FsPath, bytes: &[u8], immutable: bool) -> Result<(), ApiError> {
     use std::os::unix::fs::OpenOptionsExt;
     need(bytes.len() <= MAX)?;
-    if immutable {
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(path)
-        {
-            Ok(mut f) => {
-                f.write_all(bytes)
-                    .and_then(|_| f.sync_all())
-                    .map_err(|_| unavailable())?;
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                need(read(path)? == bytes)?;
-            }
-            Err(_) => return Err(unavailable()),
-        }
-    } else {
-        let temp = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4()));
+    // Never expose the destination name until all bytes are durable. A crash
+    // before publication can leave only an unreachable temporary file; retrying
+    // the same content still works without replacing immutable evidence.
+    let temp = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4()));
+    let result = (|| {
         let mut f = OpenOptions::new()
             .write(true)
             .create_new(true)
             .mode(0o600)
             .open(&temp)
             .map_err(|_| unavailable())?;
-        if f.write_all(bytes).and_then(|_| f.sync_all()).is_err() {
-            let _ = fs::remove_file(&temp);
-            return Err(unavailable());
+        f.write_all(bytes)
+            .and_then(|_| f.sync_all())
+            .map_err(|_| unavailable())?;
+        if immutable {
+            match fs::hard_link(&temp, path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    need(read(path)? == bytes)?;
+                }
+                Err(_) => return Err(unavailable()),
+            }
+        } else {
+            fs::rename(&temp, path).map_err(|_| unavailable())?;
         }
-        fs::rename(&temp, path).map_err(|_| unavailable())?;
-    }
+        Ok(())
+    })();
+    let _ = fs::remove_file(&temp);
+    result?;
     fs::File::open(path.parent().ok_or_else(unavailable)?)
         .and_then(|d| d.sync_all())
         .map_err(|_| unavailable())?;
@@ -743,5 +741,18 @@ mod tests {
         std::os::unix::fs::symlink(&p, &link).unwrap();
         assert!(read(&link).is_err());
         assert!(write(&link, b"one", true).is_err());
+    }
+    #[test]
+    fn interrupted_staging_does_not_poison_an_immutable_retry() {
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("artifacts-complete.json");
+        // Simulate process death during staging, before the atomic link.
+        let abandoned = destination.with_extension("tmp-interrupted");
+        fs::write(&abandoned, b"partial").unwrap();
+        assert!(!destination.exists());
+        write(&destination, b"complete", true).unwrap();
+        assert_eq!(read(&destination).unwrap(), b"complete");
+        write(&destination, b"complete", true).unwrap();
+        assert_eq!(fs::read(abandoned).unwrap(), b"partial");
     }
 }

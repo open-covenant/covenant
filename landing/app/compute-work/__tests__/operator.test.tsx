@@ -88,6 +88,15 @@ describe("public operator schema and readiness", () => {
     expect(rendered).toContain("A reported zero charge does not release a reservation");
     expect(rendered).toContain("pool is still unfunded");
   });
+  it("retains accepted evidence in the live view without making an unfunded claim", () => {
+    const rendered = renderToStaticMarkup(<OperatorStatusView snapshot={validateOperatorSnapshot(ready())} nowMs={NOW} archive />);
+    expect(rendered).toContain("Preparation evidence");
+    expect(rendered).toContain("Inspect the accepted analyst evidence");
+    expect(rendered).toContain("Inspect this observation");
+    expect(rendered).not.toContain("Unfunded pilot");
+    expect(rendered).not.toContain("Awaiting liquidity");
+    expect(rendered).not.toContain("pool is still unfunded");
+  });
 });
 
 describe("operator public proxy", () => {

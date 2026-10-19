@@ -97,9 +97,21 @@ in this v1 view remains explicitly unfunded. Historical quotes imply no fills,
 demand, earned fees or strategy return. Evidence and observation links are confined
 to content-addressed public resources on the fixed coordinator origin.
 
-The old fee-funded work dashboard remains behind `app/compute-work/_phase.ts`.
-Do not switch it to `live` until actual funding and its separate reporting endpoint
-are deployed and verified; it is not the operator-readiness endpoint.
+The funded work dashboard is controlled by the server environment setting
+`COVENANT_COMPUTE_WORK_PHASE`. Missing or invalid values default to
+`awaiting_funding`; only the exact value `live` enables the funded view. The page
+reads the setting on each server request. It requires no source edit or rebuild.
+Keep the setting unset until the owner-approved position is finalized, the
+funding ledger is reconciled, and `/community-work` plus the site's data proxy
+return a current validated report for that position. Then set the existing
+`covenant-web` Render service variable to `live` and restart/apply the environment.
+Verify the page against the current report before announcing launch. Returning
+the setting to `awaiting_funding` restores the preparation view. The flag changes
+presentation only; it never funds the pool or bypasses ledger verification.
+
+The live view retains the analyst/observation links under “Preparation evidence.”
+That separate v1 report remains explicitly pre-funding data; it cannot establish
+current pool funding or performance and does not relabel the funded view as unfunded.
 
 ## Identity
 

@@ -5,7 +5,7 @@ import type { WorkPilotPhase } from "../_phase";
 import ComputeWorkPage from "../page";
 
 const launch = vi.hoisted(() => ({ phase: "awaiting_funding" as WorkPilotPhase, liveView: vi.fn() }));
-vi.mock("../_phase", () => ({ get WORK_PILOT_PHASE() { return launch.phase; } }));
+vi.mock("../_phase", () => ({ workPilotPhase: () => launch.phase }));
 vi.mock("../ComputeWork", () => ({ ComputeWorkView: () => { launch.liveView(); return <div>Live reporting component</div>; } }));
 vi.mock("../../SiteHeader", () => ({ SiteHeader: () => <header>Shared header</header> }));
 vi.mock("../../SiteFooter", () => ({ SiteFooter: () => <footer>Shared footer</footer> }));
@@ -36,6 +36,8 @@ describe("public pilot launch phase", () => {
     expect(launch.liveView).toHaveBeenCalledOnce();
     expect(html).toContain("Live reporting component");
     expect(html).toContain("Our CVNT/NVDAx pool on Orca");
+    expect(html).toContain("Preparation evidence");
+    expect(html).toContain("do not establish the pool’s current funding or performance");
     expect(html).not.toContain("Unfunded pilot");
     expect(html).not.toContain("The pool is not funded.");
   });

@@ -4,8 +4,8 @@ Status: repaired gateway live on 19 October 2026. Installed JavaScript and Pytho
 tariff purchases, original-result recovery, finalized customer and native
 transfers, offline replay, and final accounting are verified. Immutable JavaScript
 0.3.0 and Python 0.2.0 releases are published and their public downloads verified.
-The signed native `compute-v0.4.0` release and public page/card publication remain
-pending.
+The immutable native `compute-v0.4.0` release, signatures, provenance, and public
+archives are verified. Public page/card publication remains a separate step.
 
 ## Decision and customer behavior
 
@@ -328,8 +328,9 @@ The native buyer, node, and lease-signer manifests are aligned at `0.4.0`.
 The archive README references only `compute-v0.4.0`, and matching notes exist at
 `deploy/compute-release/notes/compute-v0.4.0.md`, satisfying the packaging metadata
 preflight. All four platform build jobs passed for the reviewed PR source;
-tag-triggered signing and publication remain pending. The installed candidates
-below retain these exact package bytes; no package was published by these checks.
+the tag-triggered release workflow later passed as recorded below. The installed
+SDK candidates below retain these exact package bytes; these local checks did
+not themselves publish packages.
 
 ## Paid acceptance and publication gates
 
@@ -532,6 +533,48 @@ Private verification reports are retained in
 `anonymous-javascript-release-20261019T125058316450Z/verification.json` and
 `anonymous-python-release-20261019T125111685975Z/verification.json`.
 
-The signed native `compute-v0.4.0` release remains unpublished at this snapshot;
-its public archives, signatures, and provenance must be verified after
-publication. Public page/card publication is a separate remaining step.
+### Native release publication
+
+The [native `compute-v0.4.0` release](https://github.com/open-covenant/covenant/releases/tag/compute-v0.4.0)
+was published at **2026-10-19T12:59:34Z** from exact tag source
+`db8345c482ef7586ae3827ca8cd4d09488cba32c`. Its complete tree
+`16ae82706acf63db01f90203e02f3f7491136400` equals the accepted documentation merge
+`c4f16027b78936ec42c29f44a7b2934aedc30905` from
+[PR #359](https://github.com/open-covenant/covenant/pull/359). This native release
+source includes the acceptance record; the separately deployed inference image
+and SDK sources remain identified above.
+
+All four platform builds and the signing/publication job passed in
+[release workflow 39255648382](https://github.com/open-covenant/covenant/actions/runs/39255648382)
+(signing job `118072225891`). Independent verification completed at
+**13:00:59 UTC** with `accepted: true`, confirming public release `417295213`
+is immutable and the tag still resolves to the exact source above.
+
+All **15 assets** were downloaded anonymously and matched their API digests.
+The four archive hashes also matched the signed checksum manifest. **Five cosign signatures** verified the four
+archives and manifest against the exact workflow, tag, source, issuer, and
+transparency record. **Four GitHub provenance attestations** matched the same
+source/tag/workflow and hosted runners.
+
+| Public archive | SHA-256 |
+|---|---|
+| `covenant-compute-darwin-arm64.tar.gz` | `23f973e394fae14f83a97824bb2eca7db929e80bf76279cbf40f6fcf68e3138e` |
+| `covenant-compute-darwin-x86_64.tar.gz` | `516f4bb785a42e5ec8714dd919d62d2565b17fe7911c69edd16c11aadcb9432c` |
+| `covenant-compute-linux-arm64.tar.gz` | `b55c483ceec39937bf699163b31fc755b516389b3f9990509d639387114223d0` |
+| `covenant-compute-linux-x86_64.tar.gz` | `cdf91493b9b5e10071b33d3c525ef4ec351fd9e4b994aa64c0f469d740aa1d9e` |
+
+All four archives passed member/path, executable-mode, and exact source-document
+checks. The verified Darwin ARM64 archive's four commands passed `--version`
+and `--help`, and buyer `infer --help` exposed the tariff options. These local
+checks used an isolated home and created no buyer state. Other-platform
+execution is established by the workflow's checks, not by local execution.
+Artifact verification made no payment or provider dispatch.
+
+The private report is `native-v0.4.0-verified/verification.json`, SHA-256
+`707d73288d7023b7649788032dced81075e6844a41f861d23cc3915757e01550`.
+A separate public deployment read at **13:00:56 UTC** still confirmed the
+qualified inference image and revision, enabled admissions, and exact tariff
+catalog in `post-release-public-deployment-evidence.json`. Release verification
+establishes artifact and source identity; the paid acceptance evidence above
+establishes production behavior. Public page/card publication remains a
+separate step.

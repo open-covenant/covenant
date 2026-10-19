@@ -97,5 +97,5 @@ export async function fixture(options = {}) {
   class Wallet extends CovenantSolanaKeypairWalletProvider { async signTransaction(tx) {signatures++;return super.signTransaction(tx);} }
   const walletProvider=new Wallet({keypair:key.secretKey,rpcUrl:base+'/rpc',genesisHash:SOLANA_GENESIS});
   const config={gatewayUrl:base,rpcUrl:base+'/rpc',payTo:seller.publicKey.toBase58(),gatewayBuyer:buyer.publicKey.toBase58(),operators:[operator.publicKey.toBase58()],walletProvider,journalPath:join(home,'purchases.sqlite'),maxPaymentMicroUsdc:1000,maxTotalMicroUsdc:2000,allowLocalhost:true};
-  return {config,walletProvider,walletKeypair:Array.from(key.secretKey),counts:()=>({requests,signatures,quotes,sends,payments}),cleanup:async()=>{await new Promise(resolve=>server.close(resolve));rmSync(home,{recursive:true,force:true});}};
+  return {config,walletProvider,walletKeypair:Array.from(key.secretKey),feeKeypair:Array.from(fee.secretKey),counts:()=>({requests,signatures,quotes,sends,payments}),cleanup:async()=>{await new Promise(resolve=>server.close(resolve));rmSync(home,{recursive:true,force:true});}};
 }

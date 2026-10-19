@@ -4,6 +4,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { createKeyPairSignerFromBytes } from '@solana/kit';
 import { toFacilitatorSvmSigner } from '@x402/svm';
 import { createBridge, Rejected } from './bridge.mjs';
+import { readTariffConfig } from './pricing.mjs';
 
 function required(name) { const value = process.env[name]; if (!value) throw new Error(`${name} required`); return value; }
 const secret = required('COVENANT_GATEWAY_BRIDGE_SECRET');
@@ -19,6 +20,7 @@ const config = {
   network: required('COVENANT_GATEWAY_NETWORK'), asset: required('COVENANT_GATEWAY_ASSET'),
   payTo: required('COVENANT_GATEWAY_PAY_TO'), feePayer: required('COVENANT_GATEWAY_FEE_PAYER'),
   resourceUrl: required('COVENANT_GATEWAY_RESOURCE_URL'), priceAtomic: required('COVENANT_GATEWAY_PRICE_MICRO_USDC'), secret,
+  ...await readTariffConfig(process.env.COVENANT_GATEWAY_TARIFFS_FILE),
 };
 if (keypair.address !== config.feePayer) throw new Error('fee payer key mismatch');
 const signer = toFacilitatorSvmSigner(keypair, { defaultRpcUrl: rpcUrl });

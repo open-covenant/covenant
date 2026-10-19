@@ -1,8 +1,10 @@
 # Model-specific inference pricing: evidence and release gates
 
-Status: release candidate with local validation, researched on 19 October 2026.
-Production pricing has not been changed by this work. The final source revision,
-deployment image, and paid acceptance must each be recorded separately.
+Status: initial deployment completed on 19 October 2026; new admissions are
+temporarily paused after tariff acceptance exposed a payment-verifier gap.
+The repair, paid acceptance, and package publication remain pending. The initial
+discovery and boot-probe evidence below do not establish a completed customer
+purchase.
 
 ## Decision and customer behavior
 
@@ -101,7 +103,7 @@ No claim of net profitability is made. Prior customer settlement evidence record
 operational costs have not been allocated to the proposed price. The samples do
 not establish rates for other models, longer inputs, tools, images, or streaming.
 
-## Read-only production baseline
+## Historical production baseline
 
 At approximately 00:40 UTC on 19 October 2026, authenticated Render GETs showed:
 
@@ -110,21 +112,20 @@ At approximately 00:40 UTC on 19 October 2026, authenticated Render GETs showed:
 | Inference/x402 `srv-dba12mu1egvs738v5no0` | `dep-dbalu6k9v7es7391j2gg` | `sha256:d95c659e209829640c67ff7930fcfd66b2bd330c5e8c50f2542e6e155114a1ac` | 50 environment keys; watchdog enabled; no pending deploy |
 | Coordinator `srv-d9agfv7aqgkc739jpcn0` | `dep-dbam8rs9v7es7392pb0g` | `sha256:046b7ce0bcea4b9814452908201a699b6b0ef0a828eec6a57d06b53a2c9682f8` | 78 environment keys; canary mode `once`; no pending deploy |
 
-The public inference `/health` still reports core revision
+The public inference `/health` then reported core revision
 `e52e2a790e1dbabf9a7e5018cdca99e82cdcea9e`; the newer immutable image includes the
 watchdog overlay. Image identity and the core health revision are different
 evidence. Reusing the earlier x402 image would discard the overlay. At this
 baseline `/v1/models` returned 404, so the new gateway catalog was not yet live.
 
-Both services use one Frankfurt image-runtime instance and an existing `/data`
-disk. A pricing deployment must preserve their current environment, plans, disk,
-watchdog, and concurrent rental-canary work. Refresh this baseline immediately
-before any deployment because another chat is operating these services.
+Both services used one Frankfurt image-runtime instance and an existing `/data`
+disk. This historical snapshot preceded the subsequent rental-canary release;
+the activation evidence below records the later deployment.
 
 Existing private rollout helpers use authenticated Render GET snapshots, exact
 environment-digest checks, an immutable image digest, and a durable intent before
 one deployment POST. Ambiguous POST outcomes are reconciled through GETs, never
-blindly submitted again. This research made no Render mutations.
+blindly submitted again. The historical research reads made no Render mutations.
 
 ## Historical acceptance headroom
 
@@ -162,6 +163,61 @@ paid requests. Read the production provider ledger and reconcile every unresolve
 payment/provider outcome first. Never recycle the two uncertain customer IDs,
 reset a ledger, or raise a budget as part of tariff activation.
 
+## Deployed source and activation
+
+[PR #353](https://github.com/open-covenant/covenant/pull/353) was reviewed at
+`54a1b2dac8bcfade63da3fc08816596cb606edd6` and merged at
+`367199ad3bfa85c2a77ce2d06b391350d16c7e22`. The merge includes the separately
+accepted rental-canary documentation from PR #356. Its runtime, deployment,
+service, SDK, and workflow files match the reviewed source; the complete trees
+differ only in `docs/compute-prism-parity.md`. Post-merge CI passed.
+
+| Service | Source revision | Immutable image | Render deployment and live time (UTC) |
+|---|---|---|---|
+| Coordinator | `367199ad3bfa85c2a77ce2d06b391350d16c7e22` | `ghcr.io/open-covenant/covenant/compute-coordinator-public@sha256:1f5e084b252f15be1910b261f3e34c885726956d0f4084cae3fbee01c7b7cc4e` | `dep-dbb00hmq1p3s73db02e0`; 2026-10-19T11:35:11.639702Z |
+| Inference/x402 | `54a1b2dac8bcfade63da3fc08816596cb606edd6` | `ghcr.io/open-covenant/covenant/compute-node-public@sha256:030483a9b1cbcb2d19dfba6084802856494ae4d4e741d95d583a7482fe174086` | `dep-dbb01bvbtjjs738rbmd0`; 2026-10-19T11:36:45.914467Z |
+
+Authenticated Render readback confirmed both exact images were live. Anonymous
+health reads confirmed the coordinator revision at 11:35:22 UTC and the inference
+revision with admissions enabled at 11:37:31 UTC. The inference image includes
+the existing watchdog. The coordinator retained scheduled rental checks, with
+no active or unresolved canary entry at the post-deployment observation.
+
+At 11:37:31 UTC, the public
+[`/v1/models`](https://compute-inference.opencovenant.org/v1/models) catalog
+returned HTTP 200 with `Cache-Control: no-store`, the Haiku model, and its retail
+tariff. Public
+[`/federation/capacity`](https://compute-api.opencovenant.org/federation/capacity)
+advertised the matching native tariff alongside the existing 30,000-micro flat
+ask. Both tariffs use schema 1, revision 1, and a 2,048-token maximum:
+
+| Tariff ID | Base micro-USDC | Output-cap rate per million | Valid from (inclusive, UTC) | Valid until (exclusive, UTC) |
+|---|---:|---:|---|---|
+| `covenant-haiku-4.5-native` | 10,000 | 7,500,000 | 2026-10-19T11:35:00Z | 2026-11-18T11:35:00Z |
+| `covenant-haiku-4.5-retail` | 12,000 | 9,000,000 | 2026-10-19T11:35:00Z | 2026-11-18T11:35:00Z |
+
+The startup qualification made one provider call, completed at
+2026-10-19T11:36:46.890Z, with 13 input and 5 output tokens. It added **58
+micro-USDC** of conservative provider accounting. It was a boot probe, not a
+tariff customer purchase. The post-activation provider ledger held 11 calls,
+335,408 micro-USDC of lifetime accounting, and zero unresolved calls. Both
+provider ceilings remained 1,000,000 micro-USDC; the prior 315,360-micro abandoned
+loss remained counted.
+
+The gateway journal migrated from version 2 to 3 and retained the observed
+aggregate of five entries (four complete, one failed) and the 3,000,000-micro
+reserve. Exact historical entry hashes were first captured after migration;
+aggregate agreement does not prove every old entry was semantically unchanged.
+At the separate coordinator readback, the gateway buyer still had 2,880,000
+micro-USDC available and zero unsettled jobs. These are timestamped state
+observations, not an additional spending authorization.
+
+Sanitized private readbacks are retained in
+`model-pricing-launch/public-deployment-evidence.json`,
+`coordinator-runtime-after-deployment.json`, and
+`inference-runtime-after-activation.json`. The public readback SHA-256 is
+`8ead271e034829c73911b4eae1d6ecb9ff73d9fbecd97071c6dcd0227c59c3c0`.
+
 ## Local validation and package candidates
 
 The release work validated the working tree locally on 19 October 2026. The
@@ -172,9 +228,10 @@ client suites passed with the real local Solana facilitator bridge enabled:
 | Native protocol, buyer, coordinator, and node library checks | 1,244 passed, 0 failed, 20 ignored | Buyer 250/1 ignored; coordinator 369/0; node 322/19; protocol 303/0 |
 | Gateway unit suite | 19 passed, 0 failed, 0 ignored | Local quote, payment-state, gateway behavior, freshness margin, and public safe-integer bounds |
 | Actual gateway binary startup/recovery test | 1 passed, 0 failed, 0 ignored | Malformed-tariff recovery-only startup, version-2 journal migration, and settlement using the same transaction through a local mock payment service |
+| Payment facilitator repair | 11 passed, 0 skipped | Independent tariff/legacy admission, exact transfer and sponsorship bounds, retained sealed-payment recovery, and malformed configuration |
 | x402 runtime and smoke helpers | 16 passed | Local runtime configuration and smoke-check behavior |
-| JavaScript x402 client | 55 passed, 0 skipped | Local fixtures, signature/quote checks, payment journal and replay |
-| Python x402 client | 90 passed | Local fixtures, signature/quote checks, payment journal and replay |
+| JavaScript x402 client | 56 passed, 0 skipped | Local fixtures, signature/quote checks, payment journal and replay; includes the verifier-repair regression below |
+| Python x402 client | 90 passed | Local fixtures, signature/quote checks, payment journal and replay; includes the verifier-repair regression below |
 
 Commands used for these suites (the Rust invocations reuse the existing local
 build cache through `CARGO_TARGET_DIR`):
@@ -237,28 +294,75 @@ tariff. Rust-generated signed fixtures exercise both client verifiers.
 The native buyer, node, and lease-signer manifests are aligned at `0.4.0`.
 The archive README references only `compute-v0.4.0`, and matching notes exist at
 `deploy/compute-release/notes/compute-v0.4.0.md`, satisfying the packaging metadata
-preflight. This does not establish that all platform archives have been built,
-signed, uploaded, or installed. No package was published by these checks.
+preflight. All four platform build jobs passed for the reviewed PR source;
+tag-triggered signing and publication remain pending. No package was published
+by these checks.
 
-## Required release evidence
+## Paid acceptance and publication gates
 
-1. Validate the final source: exact rounding; separate retail/native prices;
-   explicit opt-in; unchanged flat requests; client quote/receipt verification;
-   tariff expiry; idempotent retries; mismatched mode/model/cap rejection; and
-   persistent-state compatibility. Record checks and the tested revision.
-2. Inspect the final immutable image and its source metadata. Preserve the current
-   watchdog overlay and verify the actual provider and gateway configuration;
-   do not infer deployment from source presence or an image build.
-3. Before deployment, refresh the read-only runtime totals, existing journals,
-   pending work, service/image/environment baseline, and the approved spending
-   allowance. Record exact tariff IDs, revisions, and validity windows.
-4. After deployment, verify unpaid discovery and quote amounts for at least two
-   caps, legacy flat quotes, unknown models, malformed/unsupported pricing modes,
-   and over-limit caps. An unpaid quote is not provider acceptance.
-5. Within the explicitly authorized allowance, complete the minimum paid
-   acceptance needed to verify a tariff receipt, exact customer transfer/native
-   settlement, and unchanged replay. Record genuine production hashes and chain
-   finality. A release announcement must distinguish this from local tests.
+The first installed JavaScript acceptance attempt at 11:39:26 UTC received a
+14,304-micro quote for a 256-token cap, then stopped before signing. The original
+child outcome was not captured, so the cause of that stop is not established.
+It produced no payment authorization or paid gateway submission;
+the provider ledger was unchanged by that attempt. Its reserved client row and
+one-attempt record remain retained. This is an incomplete acceptance attempt,
+not a successful purchase or an uncertain on-chain payment.
+Read-only local state is retained in `js-attempt-readonly-state.json` and
+`acceptance-runners/failure-diagnostics/sqlite-diagnosis.json` under the private
+release evidence directory.
 
-No deployment, paid pricing request, budget increase, or publication is recorded
-in this evidence draft.
+A second attempt stopped before a payment submission: the private JavaScript
+harness erased a byte array retained by its signing key, producing an invalid
+signature. The unchanged installed SDK rejected that signature. The harness
+was corrected separately; disposable-key checks verified both exact wallet
+adapters with the installed payment validators, without live keys or network
+calls. Both earlier attempt records and unpaid reservations remain retained.
+
+The corrected JavaScript harness then made one authorization-bearing request
+for 14,304 micro-USDC. Production returned HTTP 402 with
+`payment rejected: authorization rejected by payment verifier`. The deployed
+facilitator still admitted only its independently configured 50,000-micro flat
+price, despite the gateway advertising valid tariff quotes. This exposed a gap
+in the earlier local bridge test, which had copied its configured price from
+the test payment. The saved authorization and reservation remain retained;
+this is not a successful customer purchase and must not be blindly reposted.
+At 11:54:08 UTC, a read-only finalized Solana check at slot 458823836 still
+reported the customer's 300,000-micro-USDC balance and no finalized account
+activity since that attempt. The observation is retained in
+`signing-diagnostics/v3-readonly-balance-1792410848995.json`.
+
+At 2026-10-19T11:56:23.954511Z, public readback confirmed the inference service
+remained healthy at revision `54a1b2dac8bcfade63da3fc08816596cb606edd6` with
+`admissions_enabled: false` and an empty model catalog. This temporary pause
+protects new purchases while the facilitator repair is qualified. The
+coordinator deployment is unchanged. Evidence is retained in
+`repair-admissions-paused.json` and
+`acceptance-runners-v3/javascript/paid-response.json`.
+
+The prepared repair loads the same paired tariff configuration into the
+facilitator and admits exact integer-cap retail prices alongside the fixed
+legacy price. It refuses nonmember amounts before sponsor signing and preserves
+recovery of sealed original authorizations after expiry, rotation, or invalid
+optional pricing configuration. JavaScript and Python regressions now send
+14,304-, 30,432-, and 50,000-micro authorizations through one real facilitator
+with an independently configured policy. Nonmember prices, changed accepted
+terms, and mismatched transfers are rejected before sponsor signing; the tests
+perform no broadcast. The JavaScript regression fails against the original
+deployed bridge. These local checks do not establish deployment of the repair.
+
+| Installed client | Requested output cap | Expected retail / native micro-USDC | Current evidence |
+|---|---:|---:|---|
+| JavaScript 0.3.0 | 256 | 14,304 / 11,920 | Two unpaid harness attempts retained; corrected harness reached verifier rejection; acceptance pending repair |
+| Python 0.2.0 | 2,048 | 30,432 / 25,360 | Paid acceptance pending |
+
+Before declaring the release accepted, record the completed tariff receipts,
+finalized customer transfers and native settlement, actual provider accounting,
+and exact saved-completion replay without a new purchase. Preserve the original
+customer journal, its uncertain entries, and all spending ceilings. Complete
+unpaid legacy/invalid-request controls separately from paid provider acceptance.
+First qualify and deploy the repaired inference image, reconcile retained
+attempts without reposting them, and verify admissions and actual pricing again.
+
+Immutable SDK assets and the signed `compute-v0.4.0` native release remain
+unpublished. Public page/card publication is a separate step. No paid tariff
+completion or increased budget is claimed in this record.

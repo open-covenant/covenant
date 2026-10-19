@@ -48,6 +48,9 @@ jobs:
         run: |
           npm ci --omit=dev --ignore-scripts --prefix services/compute-x402-facilitator
           npm test --prefix services/compute-x402-facilitator
+          npm ci --ignore-scripts --prefix sdk/compute-x402-client
+          COVENANT_X402_BRIDGE_PATH="$PWD/services/compute-x402-facilitator/bridge.mjs" \
+            node --test sdk/compute-x402-client/test/*.test.mjs
           npm test --prefix services/compute-inference-provider
           node --test deploy/compute-canary-watchdog.test.mjs deploy/compute-x402/runtime.test.mjs deploy/compute-x402/supervisor.test.mjs deploy/compute-x402/smoke.test.mjs
           node --check deploy/compute-x402/supervisor.mjs

@@ -21,6 +21,9 @@ passed local and funded acceptance, immutable package publication and public
 page/card deployment on 2026-10-18, as recorded in the
 [Agent Framework release record](compute-agent-framework-release-evidence.md).
 This is partial package-5 coverage, not completion of the full SDK/framework set.
+Package 4 passed installed-client production acceptance and was enabled on its
+six-hour schedule on 2026-10-19. The backend evidence below separates that
+acceptance from website/card publication and from future scheduled results.
 
 Packages 1 and 2 preserve Solana USDC settlement, CVNT staking, admission and
 existing fees.
@@ -31,7 +34,7 @@ Provider market sampling is read-only and cannot create rentals or move funds.
 | 1 | Aug 12 [GPU prices](https://github.com/prismnetwork-tech/prism/pull/142) | Durable hourly provider samples, provisioning quotes, bound settled rates, public page/API | 1,395 affected-crate tests + 280 protocol tests; local provider/restart rehearsal; renderer and docs checks | Live 2026-10-17; public image pulls, provider samples and restart acceptance verified |
 | 2 | Aug 13 [observer](https://github.com/prismnetwork-tech/prism/pull/160), [status](https://github.com/prismnetwork-tech/prism/pull/164) | Read-only pinned chain observer, public status and reviewed incidents, durable confirmed/recovery alerts | 495 pre-merge coordinator tests; 23 final observer tests and 48-route integration; [release evidence](compute-observer-release-evidence.md) | Live 2026-10-17; 55 public checks passed after restart, two leases reconciled without findings, durable alerts and unchanged financial metrics verified, X card rendered |
 | 3 | Aug 14 [workspaces](https://github.com/prismnetwork-tech/prism/pull/179) | Separate encrypted workspace release: HKDF-separated client encryption, immutable direct storage grants, durable version pins/retryable CLI, trust/ownership gates, bounded cleanup and permanent empty fences | Local crypto/recovery/CLI checks plus real private R2 checksum, expiry, conditional-write and in-flight fence-race acceptance; [release record](compute-workspace-release-evidence.md) | Source PR #344 and immutable compute-v0.3.0 published; coordinator deployed at 97550b2; released-client owner-local recovery, actual copied-journal replay, financial-prefix preservation and synthetic-payload fence verified. Cross-lease restore in distinct instances on one physical host, both on-chain payouts, provider teardown and exact-object empty-fence cleanup passed; backend release accepted, website/card publication tracked separately |
-| 4 | Aug 14 [canary](https://github.com/prismnetwork-tech/prism/pull/180) | Installed-client six-hour GPU rental checks; durable $2/day and $20 pilot reservations; authenticated SSH/provider deletion; settlement/refund checks; sanitized public feed and alerts | Focused restart, concurrency, budget, host identity, provider and monitor tests; [operations guide](../deploy/compute-canary/README.md) | Release preparation only; live acceptance and recurring activation remain pending |
+| 4 | Aug 14 [canary](https://github.com/prismnetwork-tech/prism/pull/180) | Installed-client six-hour GPU rental checks; durable $2/day and $20 pilot reservations; authenticated SSH/provider deletion; settlement/refund checks; sanitized public feed and alerts | Focused restart, concurrency, budget, host identity, provider and monitor tests; immutable CLI provenance and installed negative controls; [operations guide](../deploy/compute-canary/README.md) | Backend accepted and schedule enabled 2026-10-19 at 5f0f006: released CLI verified SSH identity, inspected an L40S, closed, verified settlement/balance and provider deletion. Earlier failed rental remains recorded and counted. Actual restart preserved both resolved entries; fresh public feed verified. Website/card publication is tracked separately |
 | 5 | Aug 14–15 [SDKs](https://github.com/prismnetwork-tech/prism/pull/182) | Partial: JavaScript LangChain/LangGraph integration; native Python x402 client and official Microsoft Agent Framework tool/workflow. Other clients/frameworks remain separate | LangChain: 32 source + 32 installed-package tests. Python/Agent Framework: 71 source + 71 installed-wheel tests, canonical/signature vectors, shared Node/Python journal and budget, recovery and official registration; [Python release record](compute-agent-framework-release-evidence.md) | LangChain live 2026-10-18 with immutable v0.2.0 package and public page/card verified. Agent Framework live 2026-10-18: one 0.05-USDC payment finalized, original-authorization pending recovery and zero-call replay passed; immutable Python v0.1.0 assets matched accepted bytes. Exact website revision deployed; nine evidence/config files, sitemap, crawler-facing card and interactive desktop/mobile review verified |
 | 6 | Aug 15 [x402 seller](https://github.com/prismnetwork-tech/prism/pull/187) | Official x402 V2 Solana seller, durable reserve/replay state, real AgentKit wallet client, bounded provider operator | Focused gateway, official SDK, installed client and provider recovery tests; [release record](compute-x402-release-evidence.md) | Deployed 2026-10-18; funded AgentKit purchase finalized for 0.05 USDC with a verified native result and 0.03 USDC gross native Compute charge before marketplace fees. Production restart and original-authorization replay passed without another purchase; immutable client, public page and crawler-facing sharing card verified |
 | 7 | Aug 15 [bounty](https://github.com/prismnetwork-tech/prism/pull/186) | Not included in this release | Separate parity branch | Not activated here |
@@ -224,3 +227,99 @@ approved promotion after focused validation without waiting for full-workspace
 CI; those results are tracked separately and are not asserted green here. The
 local macOS environment lacks the OpenSSL development prerequisite for the
 workspace's Solana dependency tree.
+
+## 4. Production rental checks
+
+The installed-client check and deployment controls were introduced in
+[PR #348](https://github.com/open-covenant/covenant/pull/348). The accepted
+coordinator source is
+[`5f0f006aaca4150a79f5fb56f8b5f25ba3eacdf9`](https://github.com/open-covenant/covenant/commit/5f0f006aaca4150a79f5fb56f8b5f25ba3eacdf9),
+including the bounded provider-log readiness and acceptance-retry corrections
+in [PR #351](https://github.com/open-covenant/covenant/pull/351).
+The [operations guide](../deploy/compute-canary/README.md) describes fixed-ID
+dispatch, durable reservations, strict SSH host identity, exact settlement and
+balance checks, provider deletion, recovery, public status, and alerts. This is
+a sampled rental check, not hardware attestation or certification of every
+operator. It does not complete the separate general-purpose packages 16–18.
+
+Local and artifact qualification are separate from live acceptance. The final
+Python correction passed 61 runner tests and 45 provider-adapter tests, both
+Compute documentation validators, and independent review. Tests cover bounded
+log readiness, substituted or conflicting host evidence, failure diagnostics,
+preserved financial history, refused/reused retry authorization, crash recovery,
+and concurrent admission. The immutable
+[compute-v0.3.1 release](https://github.com/open-covenant/covenant/releases/tag/compute-v0.3.1)
+remains based on `8ee0a9c48ec68d475065612d439bd24a37751ebc`; later Python
+coordinator corrections did not replace its assets. All 15 release assets were
+downloaded anonymously and hash checked, five signed blobs were verified, and
+all four archives had provenance bound to that source. The release workflow
+checked extracted commands on all four platforms. Native installed CLI checks
+also passed without network requests or creating a new buyer identity.
+
+On 2026-10-19 at 01:03:46–01:04:46 UTC, run
+`74499d51-acd1-450d-bbec-5f97b4fe7b61`, job
+`1e8517f4-737e-470b-80c6-5f83e0ba1003`, used the released Linux CLI to open a
+bounded rental, authenticate its SSH host key through provider evidence, and
+inspect one NVIDIA L40S with the fixed GPU probe. Close, on-chain settlement,
+exact buyer-balance reconciliation, and authenticated provider deletion all
+passed. The buyer charge was **0.017766 USDC**, with **0.102474 USDC** of unused
+escrow credited internally; this credit is not another on-chain refund.
+The released verifier accepted the
+[settlement transaction](https://explorer.solana.com/tx/2tZEJ8tSdoRPh4bMjfJnTFXqaYVsqV9UWZTL91X3hwLa3x2i6SGn3fXzh2r1pGYUXxtUqTfuFtcEQhvVFDu3iRMH).
+
+The earlier paid job `44c56847-1e0f-4e5c-98d9-4a5724c9efc1` failed before SSH
+identity verification. Its original adapter error was not retained, so the
+precise cause is not asserted. It still settled for **0.013010 USDC**, reconciled
+the buyer balance, and verified provider deletion. Its failed verdict and costs
+remain in the history and monetary journal. The successful check used the
+explicit, single-use acceptance retry after that prior job was fully resolved;
+the regular scheduler does not use this exception.
+
+A rehearsal copied the actual two-entry production state and confirmed that
+both consumed one-shot admission and same-window scheduled admission remained
+blocked. The copies and originals were unchanged, with zero paid or recovery
+dispatches. This was a supervisor admission replay with process creation,
+network, bootstrap, and monitoring mocked. Separately, the actual production
+restart into scheduled mode preserved the installation, supervisor, latest
+result, and budget hashes; both entries remained resolved, with no active or
+pending rental. Fresh signed lease/balance reads and authenticated provider
+readback again verified settlement, exact balance, and deletion after that restart.
+
+Render deployment `dep-dbams6uq1p3s73c9umtg` became live at
+2026-10-19T01:11:25Z with mode `scheduled`, the same service plan and disk, and
+the exact coordinator image
+`ghcr.io/open-covenant/covenant/compute-coordinator-public@sha256:e702d919cb16c91d190398e28906052962ae963452f314024534c38738d93637`.
+The installed Linux x86-64 CLI archive SHA-256 is
+`37cc3946c5d2f6a87a911138e6cc162ddeb2b6b8b31490f43efa100dcb261eb1`.
+At 01:15:48 UTC, anonymous checks of
+[/health](https://compute-api.opencovenant.org/health) and
+[/rental-checks](https://compute-api.opencovenant.org/rental-checks) reported the
+accepted revision, a healthy service, and a fresh enabled six-hour feed with
+all five success checks true. The next regular window was 06:00 UTC; no result
+from that future window is claimed. Website and sharing-card publication remain
+a separate release step.
+
+A controlled alert test was accepted by Cloudflare for the configured verified
+destination behind the approved alert route. This establishes provider
+acceptance, not inbox receipt or an observed three-window production outage.
+The private destination is excluded from source and public status.
+
+New-spend admission is capped at **$2 per rolling 24 hours and $20 for the
+pilot**. At acceptance, both rentals counted **$0.772776** against those limits,
+including retained conservative provider, fee, and storage allocations. Actual
+buyer charges totaled **0.030776 USDC**. The **8 USDC** deposited into the
+dedicated buyer is prefunding, not spend; **7.969224 USDC** remained available.
+Unknown outcomes retain their full reservation and block new rentals. These
+admission limits are not a guarantee on external provider invoices: deletion
+outages can increase provider charges beyond the planning allocation.
+
+The release operator retains the actual private evidence under
+`~/.config/covenant/rental-canary-launch/`: immutable-client qualification in
+`cli-v0.3.1-verified/qualification-summary.json`, funded acceptance in
+`successful-retry-mode-proof.json`, copied-state replay in
+`successful-retry-copied-rehearsal.json`, deployment readback in
+`coordinator-scheduled-5f0f006/latest-status.json`, actual restart evidence in
+`scheduled-post-restart-proof.json`, and public readback in
+`parity-doc-public-check.json`. Alert provider acceptance is retained in
+`email-verified-route-test-result.json`. Private provider credentials, SSH
+details, and alert destination configuration are not part of this public record.

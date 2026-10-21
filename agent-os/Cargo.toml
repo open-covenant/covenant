@@ -28,6 +28,7 @@ members = [
     "crates/covenant-stake-keeper",
     "crates/covenant-compute-protocol",
     "crates/covenant-compute-attestation",
+    "crates/covenant-compute-key-broker",
     "crates/covenant-compute-node",
     "crates/covenant-compute-coordinator",
     "crates/covenant-compute-buyer",

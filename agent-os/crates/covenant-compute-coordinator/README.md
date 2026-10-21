@@ -264,6 +264,7 @@ naming the variable rather than starting on the wrong setting.
 | `COVENANT_COMPUTE_PUBLIC_PROOF_FEED` | `0` | Serve the public settlement proof feed at `/proof`. On, and settling on a chain, each settled job's signed receipt and its on-chain payout are published for anyone to verify. |
 | `COVENANT_COMPUTE_WORK_DIR` | unset | Directory of explicitly reviewed public exports for `/community-work`; checked on each read. Unset or invalid data returns unavailable. It does not discover or publish private buyer evidence. |
 | `COVENANT_COMPUTE_WORK_PUBLISH_TOKEN` | unset | Bearer token for explicit public work uploads under `/admin/community-work`. Unset disables publication; keep separate from buyer credentials. |
+| `COVENANT_COMPUTE_KEY_BROKER_IDS` | unset (disabled) | Comma-separated allowlist of up to 32 application-key broker IDs. Enables buyer-signed `/federation/key-broker/:job/lease-assertion` requests only with a healthy durable journal and hardware service. Assertions bind the current funded native Phala lease and verified hardware for at most 30 seconds; broker key policy and production custody qualification remain separate. |
 
 **Money, fees and funding source**
 

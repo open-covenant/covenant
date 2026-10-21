@@ -97,6 +97,173 @@ fn remaining(verdict: &HardwareVerdict, scope: &HardwareScope) -> Result<Duratio
 }
 
 impl SshClient {
+    /// Isolated application-key diagnostic on this lease's single SSH stream.
+    /// The signed key stays inside the guest; only its delivery receipt returns.
+    /// Every failure consumes this attempt and closes the original relay.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn deliver_phala_key(
+        &self,
+        hardware: &HardwareClient<'_>,
+        coordinator: &crate::key_broker::KeyBrokerClient<'_>,
+        buyer: &covenant_identity::LocalIdentity,
+        envelope: &covenant_compute_protocol::SignedJobEnvelope,
+        view: &covenant_compute_protocol::LeaseView,
+        private_key: &Path,
+        broker_origin: &str,
+    ) -> Result<crate::key_delivery::KeyDeliveryReceipt, BuyerError> {
+        use crate::key_delivery::{BrokerGateway, DeliveryContext};
+        use covenant_compute_attestation::binding::{self, GuestEvidence, HardwareProfile};
+        // Validate public configuration before consuming the relay stream.
+        let gateway = BrokerGateway::new(broker_origin)?;
+        let scope = crate::hardware::scope_for_phala_lease(
+            envelope,
+            view,
+            &buyer.agent_id().pubkey_base58(),
+            crate::epoch_ms(),
+        )?;
+        if scope.profile != HardwareProfile::PhalaEphemeralDstack061 {
+            return Err(invalid(
+                "application keys require the explicit ephemeral profile",
+            ));
+        }
+        let spec = covenant_compute_protocol::phala::parse_phala_ephemeral_lease_spec(
+            &envelope.payload.input,
+        )
+        .map_err(invalid)?
+        .ok_or_else(|| invalid("ephemeral workload missing"))?;
+        if spec.application_key_recipient.is_none() {
+            return Err(invalid("signed lease does not opt into application keys"));
+        }
+        let access = scoped_access(&scope)?;
+        private_key_path(private_key)?;
+        let verdict = hardware.verify_lease(&scope, TrustClass::Open).await?;
+        let saved: crate::hardware::HardwareEvidenceResponse = hardware
+            .request(
+                reqwest::Method::GET,
+                &format!("/federation/hardware/{}/verdict", scope.job_id),
+                Vec::new(),
+            )
+            .await?;
+        // Reuse only Intel collateral from the SAME independently verified
+        // evidence. The fresh recipient quote is verified again on both ends.
+        binding::verify_saved_verdict_for_profile(
+            &saved.evidence,
+            &verdict,
+            &scope,
+            crate::epoch_ms(),
+            scope.profile,
+        )
+        .map_err(invalid)?;
+        let collateral = match saved.evidence.guest {
+            GuestEvidence::Tdx {
+                collateral_json, ..
+            } => collateral_json,
+            _ => return Err(invalid("TDX collateral required")),
+        };
+        let identity = verdict
+            .phala_identity
+            .as_ref()
+            .ok_or_else(|| invalid("verified Phala identity missing"))?;
+        let duration = remaining(&verdict, &scope)?;
+        let relay = RelaySession::authorize(hardware, &scope, &verdict).await?;
+        let context = DeliveryContext {
+            buyer,
+            envelope,
+            view,
+            identity,
+            coordinator,
+            gateway: &gateway,
+            collateral_json: &collateral,
+        };
+        let result = tokio::time::timeout(duration, async {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await.map_err(invalid)?;
+            let port = listener.local_addr().map_err(invalid)?.port();
+            tokio::try_join!(
+                self.run_key_recipient(&access, private_key, port, &context),
+                relay.pump(listener),
+            )
+            .map(|(receipt, ())| receipt)
+        })
+        .await
+        .map_err(|_| invalid("application-key channel deadline expired; do not retry"))
+        .and_then(|result| result);
+        let closed = relay.close().await;
+        match result {
+            Ok(receipt) => {
+                closed?;
+                Ok(receipt)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn run_key_recipient(
+        &self,
+        access: &SshAccess,
+        private_key: &Path,
+        port: u16,
+        context: &crate::key_delivery::DeliveryContext<'_>,
+    ) -> Result<crate::key_delivery::KeyDeliveryReceipt, BuyerError> {
+        use tokio::io::BufReader;
+        let private_key = private_key_path(private_key)?;
+        let mut known_hosts = tempfile::NamedTempFile::new().map_err(invalid)?;
+        known_hosts
+            .write_all(access.known_hosts().map_err(invalid)?.as_bytes())
+            .map_err(invalid)?;
+        known_hosts.flush().map_err(invalid)?;
+        // Only compiled source becomes a remote command, never a broker URL,
+        // tenant, provider-supplied command, or any other runtime string.
+        let command_text = format!(
+            "python3 -I -c '{}'",
+            crate::key_delivery::SSH_BRIDGE.replace('\'', "'\"'\"'")
+        );
+        let mut command = ssh_command(access, "127.0.0.1", port, &private_key, known_hosts.path())?;
+        command
+            .arg(command_text)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        let mut child = command.spawn().map_err(invalid)?;
+        let mut input = child
+            .stdin
+            .take()
+            .ok_or_else(|| invalid("missing recipient stdin"))?;
+        let mut output = BufReader::new(
+            child
+                .stdout
+                .take()
+                .ok_or_else(|| invalid("missing recipient stdout"))?,
+        );
+        let errors = child
+            .stderr
+            .take()
+            .ok_or_else(|| invalid("missing recipient stderr"))?;
+        let result = tokio::try_join!(
+            async {
+                let receipt =
+                    crate::key_delivery::exchange(context, &mut input, &mut output).await?;
+                let mut extra = [0u8; 1];
+                if output.read(&mut extra).await.map_err(invalid)? != 0 {
+                    return Err(invalid("unexpected recipient trailing output"));
+                }
+                Ok(receipt)
+            },
+            bounded_output(errors),
+            async { child.wait().await.map_err(invalid) },
+        );
+        match result {
+            Ok((receipt, _, status)) if status.success() => Ok(receipt),
+            Ok(_) => Err(invalid(
+                "recipient SSH failed; key outcome may be unknown, do not retry",
+            )),
+            Err(error) => {
+                let _ = child.kill().await;
+                Err(error)
+            }
+        }
+    }
+
     /// Fetch the CURRENT lease verdict and re-run vendor verification locally,
     /// then perform an authenticated, noninteractive id/pwd probe. No saved
     /// verdict or runtime verification bypass is accepted by this API.

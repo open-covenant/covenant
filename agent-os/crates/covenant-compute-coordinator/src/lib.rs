@@ -44,6 +44,7 @@ pub mod hardware;
 pub mod http;
 pub mod jobs;
 pub mod journal;
+pub mod key_broker;
 pub mod matcher;
 pub mod observer;
 pub mod onchain_meter;

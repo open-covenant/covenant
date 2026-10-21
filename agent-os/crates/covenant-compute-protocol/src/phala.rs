@@ -18,6 +18,8 @@ pub const PHALA_EPHEMERAL_PRE_LAUNCH_SHA256: &str =
     "7a343993a5c15903b17198f7da721512be98f5dd553583ded861ce300c1fdfa3";
 const COMPOSE_TEMPLATE: &str = include_str!("phala-compose.template.yaml");
 const EPHEMERAL_COMPOSE_TEMPLATE: &str = include_str!("phala-ephemeral-compose.template.yaml");
+const KEY_RECIPIENT_COMPOSE_TEMPLATE: &str =
+    include_str!("phala-key-recipient-compose.template.yaml");
 /// Retained public v3 wrapper with the reviewed provider pre-launch script.
 /// Its per-lease Docker Compose is generated below, never reused across jobs.
 pub fn reviewed_phala_wrapper() -> Value {
@@ -363,6 +365,56 @@ pub struct PhalaEphemeralLeaseSpec {
     pub lease_expires_at_ms: u64,
     pub workload_sha256: String,
     pub relay: PhalaRelayConfig,
+    /// Explicit buyer opt-in. Omission preserves every historical wire byte
+    /// and workload recipe; application custody is never enabled implicitly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub application_key_recipient: Option<ApplicationKeyRecipient>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApplicationKeyRecipient {
+    pub protocol_version: u32,
+    pub broker_id: String,
+    pub broker_response_pubkey_b58: String,
+    pub tenant_id: String,
+    pub key_id: String,
+    pub key_version: u64,
+    pub purpose: String,
+    /// A separately qualified recipient image, never an implicit mutable tag.
+    pub recipient_image_digest: String,
+}
+
+impl ApplicationKeyRecipient {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        let valid_identifier = |value: &str| {
+            !value.is_empty()
+                && value.len() <= 128
+                && value
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"_-.:/".contains(&b))
+        };
+        if self.protocol_version != 1
+            || self.key_version == 0
+            || self.key_version > (1_u64 << 53) - 1
+            || ![
+                &self.broker_id,
+                &self.tenant_id,
+                &self.key_id,
+                &self.purpose,
+            ]
+            .into_iter()
+            .all(|value| valid_identifier(value))
+            || self
+                .recipient_image_digest
+                .strip_prefix("sha256:")
+                .is_none_or(|value| !hex_digest(value))
+        {
+            return Err(invalid("invalid application-key recipient policy"));
+        }
+        crate::validate_address_b58("application key broker", &self.broker_response_pubkey_b58)?;
+        Ok(())
+    }
 }
 
 /// Provider deletion confirmation is separate from guest access and billing.
@@ -387,7 +439,9 @@ pub fn validate_phala_ephemeral_admission(job: &JobEnvelopePayload) -> Result<()
         .checked_add(job.deadline_ms)
         .ok_or_else(|| invalid("ephemeral Phala result deadline overflow"))?;
     if deadline < required {
-        return Err(invalid("new ephemeral Phala lease requires 300s cleanup and 60s result-delivery slack beyond its unchanged guest expiry"));
+        return Err(invalid(
+            "new ephemeral Phala lease requires 300s cleanup and 60s result-delivery slack beyond its unchanged guest expiry",
+        ));
     }
     Ok(())
 }
@@ -395,6 +449,9 @@ pub fn validate_phala_ephemeral_admission(job: &JobEnvelopePayload) -> Result<()
 impl PhalaEphemeralLeaseSpec {
     pub fn validate(&self) -> Result<(), ProtocolError> {
         self.relay.validate()?;
+        if let Some(recipient) = &self.application_key_recipient {
+            recipient.validate()?;
+        }
         if self.schema_version != 1
             || self.job_id.is_nil()
             || self.lease_generation != format!("phala-ephemeral-{}-1", self.job_id)
@@ -545,6 +602,26 @@ pub fn phala_ephemeral_workload(
     image_digest: &str,
     relay: &PhalaRelayConfig,
 ) -> Result<(String, PhalaEphemeralLeaseSpec), ProtocolError> {
+    phala_ephemeral_workload_with_recipient(
+        job,
+        operator,
+        wrapper_template,
+        image_digest,
+        relay,
+        None,
+    )
+}
+
+/// Explicit application-key opt-in. Both this function and the key broker use
+/// the same compiled recipe, so caller-supplied Compose cannot widen custody.
+pub fn phala_ephemeral_workload_with_recipient(
+    job: &JobEnvelopePayload,
+    operator: &str,
+    wrapper_template: &Value,
+    image_digest: &str,
+    relay: &PhalaRelayConfig,
+    recipient: Option<&ApplicationKeyRecipient>,
+) -> Result<(String, PhalaEphemeralLeaseSpec), ProtocolError> {
     reviewed_ephemeral_wrapper(wrapper_template)?;
     let digest = image_digest
         .strip_prefix("sha256:")
@@ -567,6 +644,7 @@ pub fn phala_ephemeral_workload(
             .ok_or_else(|| invalid("lease expiry overflow"))?,
         workload_sha256: "0".repeat(64),
         relay: relay.clone(),
+        application_key_recipient: recipient.cloned(),
     };
     spec.validate_for_job(job)?;
     let policy = json!({
@@ -580,13 +658,41 @@ pub fn phala_ephemeral_workload(
     });
     let encoded = STANDARD
         .encode(serde_json::to_vec(&policy).map_err(|_| invalid("policy serialization failed"))?);
-    let compose = EPHEMERAL_COMPOSE_TEMPLATE
+    let template = if recipient.is_some() {
+        KEY_RECIPIENT_COMPOSE_TEMPLATE
+    } else {
+        EPHEMERAL_COMPOSE_TEMPLATE
+    };
+    let mut compose = template
         .replace("__IMAGE_DIGEST__", digest)
         .replace("__LEASE_POLICY_B64__", &encoded)
         .replace("__JOB_ID__", &job.job_id.to_string());
+    if let Some(recipient) = recipient {
+        let key_policy = json!({
+            "protocol_version": recipient.protocol_version,
+            "broker_id": recipient.broker_id,
+            "broker_response_pubkey_b58": recipient.broker_response_pubkey_b58,
+            "tenant_id": recipient.tenant_id, "key_id": recipient.key_id,
+            "key_version": recipient.key_version, "purpose": recipient.purpose,
+            "lease_id": job.job_id.to_string(),
+        });
+        let encoded = STANDARD.encode(
+            serde_json::to_vec(&key_policy)
+                .map_err(|_| invalid("key policy serialization failed"))?,
+        );
+        compose = compose.replace("__KEY_POLICY_B64__", &encoded).replace(
+            "__RECIPIENT_IMAGE_DIGEST__",
+            recipient
+                .recipient_image_digest
+                .strip_prefix("sha256:")
+                .ok_or_else(|| invalid("recipient image digest missing"))?,
+        );
+    }
     if compose.contains("__IMAGE_DIGEST__")
         || compose.contains("__LEASE_POLICY_B64__")
         || compose.contains("__JOB_ID__")
+        || compose.contains("__KEY_POLICY_B64__")
+        || compose.contains("__RECIPIENT_IMAGE_DIGEST__")
     {
         return Err(invalid("unresolved ephemeral Phala workload template"));
     }
@@ -606,8 +712,14 @@ pub fn render_phala_ephemeral_manifest(
     image_digest: &str,
 ) -> Result<String, ProtocolError> {
     spec.validate_for_job(job)?;
-    let (exact, computed) =
-        phala_ephemeral_workload(job, operator, wrapper_template, image_digest, &spec.relay)?;
+    let (exact, computed) = phala_ephemeral_workload_with_recipient(
+        job,
+        operator,
+        wrapper_template,
+        image_digest,
+        &spec.relay,
+        spec.application_key_recipient.as_ref(),
+    )?;
     if &computed != spec {
         return Err(invalid(
             "rendered ephemeral Phala workload differs from the buyer-signed pin",
@@ -1045,6 +1157,147 @@ mod tests {
             config.session_id = session;
             assert!(config.validate().is_err());
         }
+    }
+
+    #[test]
+    fn application_key_recipient_is_explicit_and_none_preserves_legacy_wire() {
+        let job = ephemeral_job();
+        let wrapper = reviewed_phala_ephemeral_wrapper();
+        let relay = relay(&job);
+        let (legacy, spec) =
+            phala_ephemeral_workload(&job, &operator(), &wrapper, &image(), &relay).unwrap();
+        let (without, again) = phala_ephemeral_workload_with_recipient(
+            &job,
+            &operator(),
+            &wrapper,
+            &image(),
+            &relay,
+            None,
+        )
+        .unwrap();
+        assert_eq!(legacy, without);
+        assert_eq!(spec, again);
+        let wire = serde_json::to_value(&spec).unwrap();
+        assert!(wire.get("application_key_recipient").is_none());
+        assert_eq!(
+            serde_json::from_value::<PhalaEphemeralLeaseSpec>(wire).unwrap(),
+            spec
+        );
+        assert!(!legacy.contains("key-recipient"));
+        assert!(!legacy.contains("key-broker-io"));
+    }
+
+    #[test]
+    fn application_key_recipient_manifest_binds_policy_image_and_guarded_ipc() {
+        let mut job = ephemeral_job();
+        let config = ApplicationKeyRecipient {
+            protocol_version: 1,
+            broker_id: "covenant-test".into(),
+            broker_response_pubkey_b58: operator(),
+            tenant_id: "tenant-1".into(),
+            key_id: "application-1".into(),
+            key_version: 1,
+            purpose: "workspace".into(),
+            recipient_image_digest: format!("sha256:{}", "cd".repeat(32)),
+        };
+        let (manifest, spec) = phala_ephemeral_workload_with_recipient(
+            &job,
+            &operator(),
+            &reviewed_phala_ephemeral_wrapper(),
+            &image(),
+            &relay(&job),
+            Some(&config),
+        )
+        .unwrap();
+        job.input
+            .push(phala_ephemeral_lease_input(spec.clone()).unwrap());
+        assert_eq!(
+            render_phala_ephemeral_manifest(
+                &job,
+                &operator(),
+                &spec,
+                &reviewed_phala_ephemeral_wrapper(),
+                &image()
+            )
+            .unwrap(),
+            manifest
+        );
+        let wrapper: Value = serde_json::from_str(&manifest).unwrap();
+        let compose = wrapper["docker_compose_file"].as_str().unwrap();
+        assert!(compose.contains(&format!(
+            "compute-key-recipient-candidate@{}",
+            config.recipient_image_digest
+        )));
+        assert_eq!(compose.matches("target: /key-broker-io").count(), 2);
+        assert!(compose.contains("command: [\"serve\"]"));
+        assert!(compose.contains("network_mode: none"));
+        assert!(compose.contains("noswap,size=1m,mode=700,uid=10001,gid=10001"));
+        let encoded = compose
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("COVENANT_KEY_POLICY_B64: \""))
+            .unwrap()
+            .trim_end_matches('"');
+        let policy: Value = serde_json::from_slice(&STANDARD.decode(encoded).unwrap()).unwrap();
+        assert_eq!(policy["lease_id"], job.job_id.to_string());
+        assert_eq!(
+            policy["broker_response_pubkey_b58"],
+            config.broker_response_pubkey_b58
+        );
+        assert_eq!(policy["key_id"], config.key_id);
+        assert!(!compose.contains("__"));
+        for field in [
+            "key_id",
+            "tenant_id",
+            "purpose",
+            "broker_id",
+            "recipient_image_digest",
+        ] {
+            let mut changed = serde_json::to_value(&spec).unwrap();
+            changed["application_key_recipient"][field] = if field == "recipient_image_digest" {
+                json!(format!("sha256:{}", "ef".repeat(32)))
+            } else {
+                json!("changed")
+            };
+            let changed: PhalaEphemeralLeaseSpec = serde_json::from_value(changed).unwrap();
+            assert!(
+                render_phala_ephemeral_manifest(
+                    &job,
+                    &operator(),
+                    &changed,
+                    &reviewed_phala_ephemeral_wrapper(),
+                    &image()
+                )
+                .is_err(),
+                "{field}"
+            );
+        }
+    }
+
+    #[test]
+    fn key_recipient_template_matches_source_and_refuses_unpinned_images() {
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../deploy/compute-key-broker/guest/compose.candidate.template.yaml");
+        if source.exists() {
+            assert_eq!(
+                std::fs::read_to_string(source).unwrap(),
+                KEY_RECIPIENT_COMPOSE_TEMPLATE
+            );
+        }
+        let mut config = ApplicationKeyRecipient {
+            protocol_version: 1,
+            broker_id: "covenant-test".into(),
+            broker_response_pubkey_b58: operator(),
+            tenant_id: "tenant-1".into(),
+            key_id: "application-1".into(),
+            key_version: 1,
+            purpose: "workspace".into(),
+            recipient_image_digest: "latest".into(),
+        };
+        assert!(config.validate().is_err());
+        config.recipient_image_digest = format!("sha256:{}", "ab".repeat(32));
+        assert!(config.validate().is_ok());
+        config.key_version = 0;
+        assert!(config.validate().is_err());
     }
 
     #[test]

@@ -7,10 +7,10 @@ use covenant_compute_protocol::{
     lease_input,
     phala::{
         parse_phala_ephemeral_lease_spec, parse_phala_lease_spec, phala_ephemeral_lease_input,
-        phala_ephemeral_workload, phala_lease_input, phala_workload,
+        phala_ephemeral_workload_with_recipient, phala_lease_input, phala_workload,
         reviewed_phala_ephemeral_wrapper, reviewed_phala_wrapper,
-        validate_phala_ephemeral_admission, PhalaRelayConfig, PHALA_CPU_MODEL,
-        PHALA_EPHEMERAL_CPU_MODEL, PHALA_EPHEMERAL_RESULT_SLACK_MS,
+        validate_phala_ephemeral_admission, ApplicationKeyRecipient, PhalaRelayConfig,
+        PHALA_CPU_MODEL, PHALA_EPHEMERAL_CPU_MODEL, PHALA_EPHEMERAL_RESULT_SLACK_MS,
     },
     CapabilityRequirement, JobEnvelopePayload, JobKind, LeaseTerms, SignedJobEnvelope,
     JOB_FRESHNESS_WINDOW_MS, LEASE_DEADLINE_SLACK_MS,
@@ -64,6 +64,25 @@ fn prepare_profile_at(
     max_price_micro_usdc: u64,
     now: u64,
 ) -> Result<PreparedPhala, BuyerError> {
+    prepare_profile_with_recipient_at(buyer, args, relay, None, max_price_micro_usdc, now)
+}
+
+pub(crate) fn prepare_profile_with_recipient_at(
+    buyer: &LocalIdentity,
+    args: &PreparePhala,
+    relay: Option<&PhalaRelayConfig>,
+    recipient: Option<&ApplicationKeyRecipient>,
+    max_price_micro_usdc: u64,
+    now: u64,
+) -> Result<PreparedPhala, BuyerError> {
+    if let Some(recipient) = recipient {
+        recipient.validate().map_err(invalid)?;
+        if relay.is_none() {
+            return Err(invalid(
+                "application-key recipients require an explicit ephemeral Phala relay lease",
+            ));
+        }
+    }
     if args.job_id.is_nil() || !(1..=3600).contains(&args.duration_secs) {
         return Err(invalid(
             "Phala preparation requires a nonnil UUID and 1..3600 seconds",
@@ -115,12 +134,13 @@ fn prepare_profile_at(
         stream: true,
     };
     let workload = if let Some(relay) = relay {
-        let (workload, spec) = phala_ephemeral_workload(
+        let (workload, spec) = phala_ephemeral_workload_with_recipient(
             &payload,
             &args.operator_pubkey_b58,
             &reviewed_phala_ephemeral_wrapper(),
             &args.image_digest,
             relay,
+            recipient,
         )
         .map_err(invalid)?;
         payload
@@ -167,10 +187,31 @@ pub fn prepare_ephemeral_to_directory(
     max_price_micro_usdc: u64,
     output: &Path,
 ) -> Result<PreparedPhala, BuyerError> {
-    let prepared = prepare_profile_at(
+    prepare_ephemeral_with_recipient_to_directory(
+        buyer,
+        args,
+        relay,
+        None,
+        max_price_micro_usdc,
+        output,
+    )
+}
+
+/// Optional buyer-signed application custody. None preserves the original
+/// no-KMS recipe and envelope bytes; preparation itself never releases a key.
+pub fn prepare_ephemeral_with_recipient_to_directory(
+    buyer: &LocalIdentity,
+    args: &PreparePhala,
+    relay: &PhalaRelayConfig,
+    recipient: Option<&ApplicationKeyRecipient>,
+    max_price_micro_usdc: u64,
+    output: &Path,
+) -> Result<PreparedPhala, BuyerError> {
+    let prepared = prepare_profile_with_recipient_at(
         buyer,
         args,
         Some(relay),
+        recipient,
         max_price_micro_usdc,
         crate::epoch_ms(),
     )?;
@@ -225,6 +266,15 @@ pub fn read_public_key(path: &Path) -> Result<String, BuyerError> {
     String::from_utf8(bytes)
         .map(|text| text.trim().to_owned())
         .map_err(invalid)
+}
+
+/// Read an explicit recipient configuration before creating any authorization.
+/// A mutable image tag, unknown JSON field, symlink or oversized file fails closed.
+pub fn read_application_key_recipient(path: &Path) -> Result<ApplicationKeyRecipient, BuyerError> {
+    let bytes = read_regular_bounded(path, 16 * 1024)?;
+    let recipient: ApplicationKeyRecipient = serde_json::from_slice(&bytes).map_err(invalid)?;
+    recipient.validate().map_err(invalid)?;
+    Ok(recipient)
 }
 
 pub fn read_prepared_envelope(path: &Path) -> Result<SignedJobEnvelope, BuyerError> {
@@ -509,6 +559,100 @@ mod tests {
         unsigned.capability_requirement.model_id = Some(PHALA_CPU_MODEL.into());
         let mixed = SignedJobEnvelope::sign(unsigned, &buyer).unwrap();
         assert!(validate_prepared(&mixed, &owner, 1200, 1_000_000).is_err());
+    }
+
+    #[test]
+    fn optional_recipient_none_preserves_exact_legacy_bytes_and_opt_in_is_signed() {
+        let buyer = LocalIdentity::generate("recipient@buyer");
+        let args = args();
+        let relay = PhalaRelayConfig {
+            url: "https://relay.example.com".into(),
+            session_id: args.job_id.to_string(),
+        };
+        let legacy = prepare_profile_at(&buyer, &args, Some(&relay), 1200, 1_000_000).unwrap();
+        let none =
+            prepare_profile_with_recipient_at(&buyer, &args, Some(&relay), None, 1200, 1_000_000)
+                .unwrap();
+        assert_eq!(legacy.workload.as_bytes(), none.workload.as_bytes());
+        assert_eq!(
+            serde_json::to_vec(&legacy.envelope).unwrap(),
+            serde_json::to_vec(&none.envelope).unwrap()
+        );
+        let recipient = ApplicationKeyRecipient {
+            protocol_version: 1,
+            broker_id: "covenant-broker-test".into(),
+            broker_response_pubkey_b58: LocalIdentity::generate("broker")
+                .agent_id()
+                .pubkey_base58(),
+            tenant_id: "tenant-test".into(),
+            key_id: "workspace-test".into(),
+            key_version: 1,
+            purpose: "workspace".into(),
+            recipient_image_digest: format!("sha256:{}", "cd".repeat(32)),
+        };
+        let opted = prepare_profile_with_recipient_at(
+            &buyer,
+            &args,
+            Some(&relay),
+            Some(&recipient),
+            1200,
+            1_000_000,
+        )
+        .unwrap();
+        opted.envelope.verify().unwrap();
+        opted.envelope.payload.validate_input().unwrap();
+        assert_eq!(
+            parse_phala_ephemeral_lease_spec(&opted.envelope.payload.input)
+                .unwrap()
+                .unwrap()
+                .application_key_recipient,
+            Some(recipient.clone())
+        );
+        assert_ne!(legacy.workload, opted.workload);
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("opted");
+        persist(&opted, &output).unwrap();
+        assert_eq!(
+            read_prepared_envelope(&output.join(ENVELOPE_FILENAME)).unwrap(),
+            opted.envelope
+        );
+        assert!(prepare_profile_with_recipient_at(
+            &buyer,
+            &args,
+            None,
+            Some(&recipient),
+            1200,
+            1_000_000
+        )
+        .is_err());
+        let mut invalid = recipient;
+        invalid.recipient_image_digest = "latest".into();
+        assert!(prepare_profile_with_recipient_at(
+            &buyer,
+            &args,
+            Some(&relay),
+            Some(&invalid),
+            1200,
+            1_000_000
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn recipient_file_is_bounded_strict_and_never_follows_symlinks() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("recipient.json");
+        std::fs::write(&file, b"{}").unwrap();
+        assert!(read_application_key_recipient(&file).is_err());
+        std::fs::write(&file, vec![b' '; 16 * 1024 + 1]).unwrap();
+        assert!(read_application_key_recipient(&file).is_err());
+        assert!(read_application_key_recipient(directory.path()).is_err());
+        #[cfg(unix)]
+        {
+            let link = directory.path().join("link.json");
+            std::os::unix::fs::symlink(&file, &link).unwrap();
+            assert!(read_application_key_recipient(&link).is_err());
+        }
     }
 
     #[tokio::test]

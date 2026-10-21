@@ -570,6 +570,24 @@ impl HardwareService {
         let permit = self.read_permit(job, actor)?;
         self.evidence_admitted(job, actor, now, permit)
     }
+    /// Current durable lease scope, for the key broker's final post-verification
+    /// check. This is not an attestation verdict and cannot authorize a release.
+    pub(crate) fn key_broker_live_scope(
+        &self,
+        job: Uuid,
+        buyer: &str,
+        now: u64,
+    ) -> Result<HardwareScope> {
+        let scope = self.scope(job, 0, now)?;
+        if scope.buyer_pubkey_b58 != buyer
+            || scope.profile != HardwareProfile::PhalaEphemeralDstack061
+        {
+            return Err(rejected(
+                "key release requires this buyer's ephemeral lease",
+            ));
+        }
+        Ok(scope)
+    }
     /// Relay access requires a fresh independently reverified coordinator
     /// verdict and the original operator-provisioned application/instance pins.
     /// Run on a bounded blocking worker, never under the relay-state lock.

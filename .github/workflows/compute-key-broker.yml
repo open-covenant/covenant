@@ -1,0 +1,68 @@
+name: compute-key-broker
+on:
+  pull_request:
+    paths:
+      - 'agent-os/crates/covenant-compute-key-broker/**'
+      - 'agent-os/crates/covenant-compute-attestation/**'
+      - 'agent-os/crates/covenant-compute-buyer/**'
+      - 'agent-os/crates/covenant-compute-coordinator/**'
+      - 'agent-os/crates/covenant-compute-protocol/**'
+      - 'agent-os/Cargo.*'
+      - 'deploy/compute-key-broker/**'
+      - '.github/workflows/compute-key-broker.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install 1.98.1 --profile minimal --component clippy --component rustfmt
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        with:
+          workspaces: agent-os
+      - name: Broker, real verifier and Nitro API compile (no hardware claim)
+        working-directory: agent-os
+        run: |
+          cargo +1.98.1 fmt --check
+          cargo +1.98.1 test --locked -p covenant-compute-key-broker --all-features
+          cargo +1.98.1 test --locked -p covenant-compute-attestation
+          cargo +1.98.1 test --locked -p covenant-compute-protocol phala::tests
+          cargo +1.98.1 test --locked -p covenant-compute-coordinator key_broker
+          cargo +1.98.1 test --locked -p covenant-compute-buyer
+          cargo +1.98.1 clippy --locked -p covenant-compute-key-broker --all-features --all-targets -- -D warnings
+          cargo +1.98.1 clippy --locked -p covenant-compute-buyer --all-targets -- -D warnings
+      - name: Guest and policy tests (synthetic hardware only)
+        run: |
+          python3 -m venv /tmp/key-broker-tests
+          /tmp/key-broker-tests/bin/pip install --require-hashes --only-binary=:all: -r deploy/compute-key-broker/guest/requirements.txt
+          /tmp/key-broker-tests/bin/python -m unittest discover -s deploy/compute-key-broker/guest -p 'test_*.py'
+          python3 -m unittest discover -s deploy/compute-key-broker -p 'test_*.py'
+          python3 -m unittest discover -s deploy/compute-key-broker/aws -p 'test_*.py'
+          python3 -m venv /tmp/key-enrollment-tests
+          /tmp/key-enrollment-tests/bin/pip install --require-hashes --only-binary=:all: -r deploy/compute-key-broker/enrollment/requirements.txt
+          /tmp/key-enrollment-tests/bin/python -m unittest discover -s deploy/compute-key-broker/enrollment -p 'test_*.py'
+  images:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Build candidate images without publishing or cloud credentials
+        run: |
+          cp deploy/compute-key-broker/test-build-policy.json broker-policy.json
+          docker build --platform linux/amd64 -f deploy/compute-key-broker/Dockerfile -t covenant-broker-test .
+          docker run --rm --entrypoint covenant-compute-key-broker covenant-broker-test check-policy /opt/covenant/broker-policy.json
+          if docker run --rm --entrypoint covenant-compute-key-broker covenant-broker-test serve; then
+            echo 'Broker incorrectly started outside Nitro hardware' >&2
+            exit 1
+          fi
+          docker build --platform linux/amd64 -f deploy/compute-key-broker/guest/Dockerfile -t covenant-recipient-test .

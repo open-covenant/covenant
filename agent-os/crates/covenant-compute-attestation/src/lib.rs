@@ -757,6 +757,8 @@ mod tests {
 }
 
 pub mod binding;
+/// Raw report-data verification for the separately qualified application key broker.
+pub mod key_broker;
 /// Covenant bindings and release gating live separately from vendor verification.
 pub mod vendor_types;
 

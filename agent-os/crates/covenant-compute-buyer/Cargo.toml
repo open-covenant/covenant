@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 covenant-compute-attestation = { path = "../covenant-compute-attestation" }
+covenant-compute-key-broker = { path = "../covenant-compute-key-broker" }
 covenant-compute-protocol = { path = "../covenant-compute-protocol" }
 covenant-a2a = { path = "../covenant-a2a" }
 covenant-identity = { path = "../covenant-identity" }

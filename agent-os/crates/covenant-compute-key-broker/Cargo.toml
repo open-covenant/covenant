@@ -1,0 +1,38 @@
+[package]
+name = "covenant-compute-key-broker"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[features]
+default = []
+nitro = ["dep:aws-sdk-kms", "dep:openssl", "dep:aws-nitro-enclaves-nsm-api"]
+
+[dependencies]
+async-trait = "0.1"
+base64 = "0.22"
+bs58 = "0.5"
+covenant-compute-attestation = { path = "../covenant-compute-attestation" }
+covenant-compute-protocol = { path = "../covenant-compute-protocol" }
+ed25519-dalek = "2"
+hex = "0.4"
+rand = "0.8"
+rsa = { version = "0.9", features = ["sha2"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_jcs = "0.2"
+sha2 = "0.10"
+thiserror = "2"
+uuid = { version = "1", features = ["serde", "v4"] }
+zeroize = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util", "time"] }
+aws-sdk-kms = { version = "=1.124.0", optional = true }
+openssl = { version = "=0.10.81", optional = true, features = ["vendored"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+aws-nitro-enclaves-nsm-api = { version = "=0.5.2", optional = true }
+
+[dev-dependencies]
+covenant-a2a = { path = "../covenant-a2a" }
+covenant-identity = { path = "../covenant-identity" }
+tokio = { version = "1", features = ["rt", "macros"] }

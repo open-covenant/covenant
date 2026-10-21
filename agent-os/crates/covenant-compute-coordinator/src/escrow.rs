@@ -352,6 +352,21 @@ impl CustodialEscrow {
         bs58::encode(self.identity.pubkey_bytes()).into_string()
     }
 
+    /// Restricted signing domain for the opt-in live-lease key broker adapter.
+    /// Its caller must have checked current durable lease and hardware state.
+    pub(crate) fn sign_key_broker_claims(
+        &self,
+        claims: covenant_compute_key_broker::LeaseAssertionClaims,
+    ) -> covenant_compute_key_broker::Result<covenant_compute_key_broker::SignedLeaseAssertion>
+    {
+        let bytes = covenant_compute_key_broker::lease_assertion_bytes(&claims)?;
+        Ok(covenant_compute_key_broker::SignedLeaseAssertion {
+            coordinator_pubkey_b58: self.coordinator_pubkey_b58(),
+            claims,
+            signature_b58: bs58::encode(self.identity.sign(&bytes).to_bytes()).into_string(),
+        })
+    }
+
     pub fn agent_id(&self) -> AgentId {
         self.identity.agent_id()
     }

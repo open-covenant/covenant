@@ -637,6 +637,7 @@ mod tests {
         wrapper["docker_compose_file"] = json!("disposable-http-fixture");
         plan.manifest = wrapper.to_string();
         plan.ephemeral_spec = Some(PhalaEphemeralLeaseSpec {
+            application_key_recipient: None,
             schema_version: 1,
             job_id: plan.job_id,
             operator_pubkey_b58: old.operator_pubkey_b58,

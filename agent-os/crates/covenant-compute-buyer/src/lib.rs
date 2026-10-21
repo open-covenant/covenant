@@ -52,6 +52,8 @@ mod check;
 pub use check::{check_pinned_task, check_preview, CheckOutcome};
 pub mod durable_budget;
 pub mod hardware;
+pub mod key_broker;
+pub mod key_delivery;
 pub mod phala;
 mod relay;
 pub mod ssh;

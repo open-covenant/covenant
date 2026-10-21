@@ -1299,12 +1299,19 @@ async fn main() -> anyhow::Result<()> {
         hardware.clone(),
         &home.join("journal.jsonl"),
     )?;
+    let key_broker = covenant_compute_coordinator::key_broker::build_from_env(
+        Arc::new(state.clone()),
+        hardware.clone(),
+    )?;
     let mut app = router(state.clone());
     if let Some(hardware) = hardware {
         app = app.merge(covenant_compute_coordinator::hardware::router(hardware));
     }
     if let Some(relay) = relay {
         app = app.merge(covenant_compute_coordinator::relay::router(relay));
+    }
+    if let Some(key_broker) = key_broker {
+        app = app.merge(covenant_compute_coordinator::key_broker::router(key_broker));
     }
     if let Some(workspace) = workspace {
         covenant_compute_coordinator::workspace::spawn_cleanup(workspace.clone());

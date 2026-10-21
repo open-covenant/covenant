@@ -580,6 +580,7 @@ mod tests {
     fn spec() -> phala::PhalaEphemeralLeaseSpec {
         let id = Uuid::new_v4();
         phala::PhalaEphemeralLeaseSpec {
+            application_key_recipient: None,
             schema_version: 1,
             job_id: id,
             operator_pubkey_b58: bs58::encode([1; 32]).into_string(),

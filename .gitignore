@@ -18,6 +18,9 @@ artifacts/
 .env.local
 .env.*.local
 
+# Private, measured KMS tenant policy supplied only to an isolated image build.
+/broker-policy.json
+
 docs/*.pdf
 reports/
 scripts/commit-as.sh

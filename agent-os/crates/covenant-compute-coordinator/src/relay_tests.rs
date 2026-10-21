@@ -29,6 +29,7 @@ fn fixture() -> (
     let key =
         STANDARD.encode([b"\0\0\0\x0bssh-ed25519\0\0\0\x20".as_slice(), &[0x9e; 32]].concat());
     let spec = PhalaEphemeralLeaseSpec {
+        application_key_recipient: None,
         schema_version: 1,
         job_id: job,
         operator_pubkey_b58: operator.agent_id().pubkey_base58(),

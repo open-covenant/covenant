@@ -1,0 +1,30 @@
+{
+  "broker": {
+    "broker_id": "synthetic-build-only",
+    "coordinator_pubkey_b58": "46Kq4hASUdvUbwR7s7Pie3x8f4HRB3NLay7Z9jh9eZsB",
+    "challenge_ttl_ms": 60000,
+    "max_pending_challenges": 2,
+    "keys": [
+      {
+        "tenant_id": "synthetic",
+        "key_id": "build-only",
+        "key_version": 1,
+        "purpose": "test-only",
+        "owner_pubkey_b58": "46Kq4hASUdvUbwR7s7Pie3x8f4HRB3NLay7Z9jh9eZsB",
+        "workload": {
+          "mode": "native_template",
+          "guest_image_digest": "sha256:abababababababababababababababababababababababababababababababab",
+          "recipient_image_digest": "sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+          "broker_response_pubkey_b58": "EVNwqfgkUnJoMqBqiHgDfa3TLZPQocX1hpcbAXbpcSLv"
+        },
+        "kms_key_arn": "arn:aws:kms:eu-north-1:000000000000:key/00000000-0000-0000-0000-000000000001",
+        "wrapped_key_base64": "c3ludGhldGljLW5vdC1hLWttcy1jaXBoZXJ0ZXh0"
+      }
+    ]
+  },
+  "signing": {
+    "kms_key_arn": "arn:aws:kms:eu-north-1:000000000000:key/00000000-0000-0000-0000-000000000001",
+    "wrapped_key_base64": "c3ludGhldGljLW5vdC1hLWttcy1jaXBoZXJ0ZXh0",
+    "public_key_b58": "EVNwqfgkUnJoMqBqiHgDfa3TLZPQocX1hpcbAXbpcSLv"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "account_id": null,
+  "approved_pcr0": null,
+  "broker_id": null,
+  "dynamodb_prefix_list_id": null,
+  "eif_sha256": null,
+  "ingress_security_group_id": null,
+  "key_admin_role_arn": null,
+  "name": null,
+  "parent_ami_id": null,
+  "parent_instance_type": null,
+  "parent_role_name": null,
+  "policy_phase": null,
+  "private_route_table_ids": null,
+  "private_subnet_ids": null,
+  "provisioning_role_arn": null,
+  "purpose": null,
+  "region": null,
+  "s3_prefix_list_id": null,
+  "vpc_id": null
+}

@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 covenant-compute-attestation = { path = "../covenant-compute-attestation" }
+covenant-compute-key-broker = { path = "../covenant-compute-key-broker" }
 tempfile = { workspace = true }
 hmac = "0.12"
 sha2_10 = { package = "sha2", version = "0.10" }

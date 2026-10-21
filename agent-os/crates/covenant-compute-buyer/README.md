@@ -859,6 +859,96 @@ and pending ciphertext survive process restart. See the [CLI workflow, backup
 and release gates](../../../docs/compute-workspaces.md) before enabling storage.
 A workspace save does not rent a machine or spend the buyer's Compute balance.
 
+See the [Phala lease lifecycle](../../../docs/compute-phala-lease-lifecycle.md)
+for offline preparation, one-time submission and provider qualification gates.
+The explicit ephemeral profile prepares a fresh Phala CPU VM with no hosted
+KMS. The buyer signs the immutable image digest and canonical relay origin:
+
+```sh
+covenant-compute lease prepare-phala-ephemeral \
+  --job-id UUID --operator OPERATOR_PUBLIC_KEY --image-digest sha256:IMAGE_DIGEST \
+  --duration-secs 600 --rate MICRO_USDC_PER_SECOND --ssh-key /private/buyer_ssh.pub \
+  --output /private/new-preparation --relay-origin https://coordinator.example.com
+covenant-compute lease submit-phala --envelope /private/new-preparation/originalsignedenvelope.json
+```
+
+Preparation is offline; submission uses the original authorization and existing
+durable budget. It never refreshes an expired window, replaces a job UUID, or
+retries an uncertain purchase. The coordinator and node must explicitly enable
+the ephemeral profile. Its released trust ceiling remains **Open**.
+
+The native outbound relay uses buyer-signed HTTPS requests to the signed origin.
+Before SSH, the buyer independently verifies the full hardware quote and checks
+its authenticated application/instance against the original provision record.
+It then pins that instance and the exact quoted SSH host key. The relay carries
+SSH ciphertext; transport routing and TLS certificates do not establish hardware
+identity. No Python proxy or buyer bearer credential is required.
+
+The original quote's opening grant lasts at most 120 seconds. It must still be
+live before any snapshot download/decryption and when opening the connection;
+the saved verdict's longer lifetime does not extend that opening grant. Once
+opened, the stream retains its separate bounded operation/lease deadline. An expired
+grant fails closed and requires fresh evidence for the same lease, never an
+automatic new purchase.
+
+Each ephemeral lease permits **one SSH connection**. `lease probe-phala` consumes
+it, so do not probe before a workspace restore or transfer. Closing the SSH
+stream does not close the paid lease: run `covenant-compute lease close JOB_UUID`
+to stop further billing, or it continues until the signed expiry. A bounded diagnostic
+transfer performs upload and returns a guest JSON receipt containing UID, path,
+byte count and SHA-256 in that same connection:
+
+```sh
+covenant-compute lease transfer-phala --envelope originalsignedenvelope.json \
+  --ssh-key /private/buyer_ssh --source /private/synthetic.bin --basename synthetic.bin
+```
+
+For a ready Phala lease whose original signed purchase pins the workload:
+
+```sh
+covenant-compute workspace restore-to-lease WORKSPACE_UUID \
+  --job-envelope original-signed-lease.json --ssh-key /private/buyer_ssh
+```
+
+This command checks the current lease, independently verifies its hardware
+evidence, restores the pinned snapshot into a private local temporary file,
+then checks the lease and evidence again before uploading plaintext. It uses
+the workspace's existing trust floor; the current `Open` release ceiling still
+rejects higher floors. Neither a valid TLS certificate nor an observed SSH key
+raises that ceiling.
+
+The structured `{ "kind": "tls" }` SSH transport validates the exact gateway
+hostname with rustls/webPKI before starting OpenSSH. A single-use local relay
+carries SSH; OpenSSH still requires the exact hardware-bound host key for the
+original gateway endpoint. Provider strings never become `ProxyCommand` or
+local shell commands. OpenSSH must be installed, and the supplied private key
+must have mode `0600` or stricter on Unix. An absent transport field preserves
+the existing direct TCP protocol and serialized bytes.
+
+The destination is `/workspace/covenant-WORKSPACE_UUID-vVERSION.snapshot`.
+Uploads are limited to 64 MiB on direct/TLS channels, or 8 MiB of plaintext
+on the ephemeral relay (within its 16 MiB total ciphertext budget). The smaller
+ephemeral limit and stronger trust-floor refusal apply before snapshot download
+or decryption. All channels use the shorter of 120 seconds or the live
+verdict/lease deadline. They never overwrite or automatically retry. A timeout
+or failed upload can leave a partial file at that exact destination; reconcile
+it before retrying. The file remains an archive/snapshot and is not unpacked or
+executed. Workspace encryption keys stay local.
+
+The transport tests include real local TLS certificate rejection. To additionally
+exercise a real local SSH server, correct and wrong host keys, wrong buyer
+authentication, upload, overwrite rejection and deadline cleanup:
+
+```sh
+cd agent-os
+cargo test -p covenant-compute-buyer --lib ssh::
+cargo test -p covenant-compute-buyer --lib ssh::tests::openssh -- --ignored
+```
+
+The second command requires `/usr/sbin/sshd`, `/usr/bin/ssh`, and
+`/usr/bin/ssh-keygen` on Unix and contacts loopback only. These tests do not
+establish provider lifecycle acceptance or production attested availability.
+
 ### Versioned inference pricing
 
 Use `infer --tariff-id ID --model MODEL --max-tokens N` to request an advertised

@@ -1,0 +1,104 @@
+name: compute-attested-cpu-image
+
+on:
+  push:
+    branches: [deploy/compute-coordinator, codex/compute-hardware-attestation]
+    paths:
+      - .github/workflows/compute-attested-cpu-image.yml
+      - deploy/compute-attested-cpu/**
+  pull_request:
+    paths:
+      - .github/workflows/compute-attested-cpu-image.yml
+      - deploy/compute-attested-cpu/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: compute-attested-cpu-image-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  image:
+    if: github.repository == 'open-covenant/covenant'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    env:
+      # The existing public node package also carries separately tagged Kani
+      # images. This tag is a diagnostic CPU guest, not a production promotion.
+      IMAGE_NAME: ghcr.io/open-covenant/covenant/compute-node-public
+      DOCKER_BUILD_RECORD_UPLOAD: false
+      DOCKER_BUILD_SUMMARY: false
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: test collector and SSH configuration
+        run: |
+          test -f deploy/compute-attested-cpu/test_collector.py
+          python3 -m venv "$RUNNER_TEMP/covenant-kms-tests"
+          "$RUNNER_TEMP/covenant-kms-tests/bin/pip" install 'cryptography==50.0.2'
+          "$RUNNER_TEMP/covenant-kms-tests/bin/python" -m unittest discover -s deploy/compute-attested-cpu -p 'test_*.py' -v
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        with:
+          cache-binary: false
+          version: v0.36.1
+          driver-opts: image=moby/buildkit:v0.32.2@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/deploy/compute-coordinator' || github.ref == 'refs/heads/codex/compute-hardware-attestation')
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: build diagnostic image
+        id: image
+        uses: docker/build-push-action@601a80b39c9405e50806ae38af30926f9d957c47 # v6.19.2
+        with:
+          context: .
+          file: deploy/compute-attested-cpu/Dockerfile
+          platforms: linux/amd64
+          pull: true
+          push: false
+          load: true
+          provenance: false
+          sbom: false
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/open-covenant/covenant
+            org.opencovenant.compute.role=attested-cpu-diagnostic
+          tags: ${{ env.IMAGE_NAME }}:attested-cpu-${{ github.sha }}
+
+      - name: verify real SSH, SFTP and collector isolation
+        run: |
+          # This disposable runner must satisfy the production guest's strict
+          # checks. Do not add a bypass to the image or alter any live guest.
+          sudo swapoff -a
+          test "$(wc -l < /proc/swaps)" -eq 1
+          # Piped handlers can ignore RLIMIT_CORE. A non-piped handler respects
+          # the core=0:0 limit required by each tested container.
+          sudo sysctl -w kernel.core_pattern=core
+          test "$(cat /proc/sys/kernel/core_pattern)" = core
+          python3 deploy/compute-attested-cpu/runtime_smoke.py --image "${IMAGE_NAME}:attested-cpu-${GITHUB_SHA}"
+
+      - name: publish tested diagnostic image
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/deploy/compute-coordinator' || github.ref == 'refs/heads/codex/compute-hardware-attestation')
+        run: docker push "${IMAGE_NAME}:attested-cpu-${GITHUB_SHA}"
+
+      - name: record immutable image identity
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/deploy/compute-coordinator' || github.ref == 'refs/heads/codex/compute-hardware-attestation')
+        env:
+          COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          IMAGE_REF=$(docker image inspect "${IMAGE_NAME}:attested-cpu-${COMMIT}" --format '{{index .RepoDigests 0}}')
+          echo "${IMAGE_NAME}:attested-cpu-${COMMIT}" >> "$GITHUB_STEP_SUMMARY"
+          echo "${IMAGE_REF}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Diagnostic artifact only. No attested capacity is activated." >> "$GITHUB_STEP_SUMMARY"

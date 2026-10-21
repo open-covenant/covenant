@@ -44,7 +44,7 @@ use crate::bond::{BondPostOutcome, SlashRecord, UnbondOutcome, UnbondState};
 use crate::deposit::{BondClaim, DepositClaim, RailError};
 use crate::escrow::WithdrawOutcome;
 use crate::jobs::{JobError, JobPhase, JobRecord, ReleaseCharges};
-use crate::matcher::{cheapest_capable_ask_above_offer, select_operator};
+use crate::matcher::{cheapest_capable_ask_above_offer, select_operator_for_job};
 use crate::registry::RegistryError;
 use crate::state::{BuyerFunds, CoordinatorState};
 
@@ -1121,6 +1121,9 @@ async fn submit_job(
         ));
     }
 
+    covenant_compute_protocol::phala::validate_phala_ephemeral_admission(&envelope.payload)
+        .map_err(|error| ApiError::BadRequest(error.to_string()))?;
+
     // An envelope already past its own deadline is refused here for the
     // same reason malformed input is: matched, it charges the OPERATOR.
     // A job whose `issued_at_ms + deadline_ms` has passed is swept to a
@@ -1260,12 +1263,11 @@ async fn submit_job(
             .await
         }
         None => {
-            select_operator(
+            select_operator_for_job(
                 state.registry(),
                 state.reputation(),
                 state.bonds(),
-                &envelope.payload.capability_requirement,
-                envelope.payload.price_micro_usdc,
+                &envelope.payload,
                 now_ms,
                 state.config().operator_liveness_timeout,
                 state.config().min_operator_score_bps,
@@ -1604,6 +1606,10 @@ async fn submit_result(
         .verify()
         .map_err(|e| ApiError::BadRequest(format!("receipt does not verify: {e}")))?;
 
+    // Capture the metering endpoint before the record snapshot. A close
+    // accepted before this instant is then visible in the snapshot; a close
+    // racing after it cannot make this result bill beyond that close.
+    let now_ms = crate::epoch_ms();
     let record = state
         .jobs()
         .get(job_id)
@@ -1698,7 +1704,6 @@ async fn submit_result(
     // operator, so the outcome is deterministic; the late receipt is
     // kept as evidence that work was delivered, only too late to count.
     // `AlreadySettled` means the sweep already reached the same verdict.
-    let now_ms = crate::epoch_ms();
     if record
         .envelope
         .payload
@@ -1887,12 +1892,7 @@ async fn submit_result(
     // sizes the bill. A lease that concluded without an accept has no
     // meter to read and bills nothing.
     let metered_elapsed_ms = match record.envelope.payload.kind {
-        JobKind::LeaseSession => Some(
-            record
-                .accepted_at_ms
-                .map(|started| now_ms.saturating_sub(started))
-                .unwrap_or(0),
-        ),
+        JobKind::LeaseSession => Some(record.live_lease_elapsed_ms(now_ms)),
         _ => None,
     };
     let metered_used = match (metered_elapsed_ms, lease_terms.as_ref()) {

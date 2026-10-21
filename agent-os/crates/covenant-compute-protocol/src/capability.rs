@@ -134,10 +134,10 @@ impl PriceAsk {
 /// matched against a buyer's requirement by
 /// [`CapabilityProfile::satisfies`] but never verified, and
 /// `tee_capable` is recorded without bearing on routing or pricing in
-/// v1. No hardware-attestation verifier exists anywhere in this codebase:
-/// nothing checks a CPU/TD-host quote or an NVIDIA GPU attestation, so a
-/// `tee_capable` claim is as self-declared as the rest and every operator
-/// is untrusted-hardware tier at launch regardless of the flag.
+/// v1. The separate hardware-evidence verifier binds diagnostics to a live
+/// lease; it does not promote registration claims or change matching. Its
+/// released trust ceiling remains Open, so `tee_capable` remains self-declared
+/// and every operator remains in the untrusted-hardware tier.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CapabilityProfile {
     /// Explicit, versioned fixed-price output-cap tariffs. Empty preserves legacy pricing.

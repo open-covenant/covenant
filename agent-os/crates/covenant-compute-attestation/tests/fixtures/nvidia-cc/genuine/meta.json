@@ -1,0 +1,7 @@
+{
+ "nonce": "cbdf4b72ab42e74b6aaa46cff67692f15b7b70b74d08aee2bb3a8ce39f7c4650",
+ "driver": "580.95.05",
+ "source": "RedPill gpt-oss-20b single-GPU, Phala H100/H200 CC, captured 2026-08-24",
+ "feature_flag": "SPT(0)",
+ "protected_pcie": "0x55"
+}

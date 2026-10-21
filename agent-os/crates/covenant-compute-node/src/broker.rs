@@ -281,6 +281,7 @@ impl BrokerSessionBackend {
                         ));
                     };
                     return Ok(LeaseAccess {
+                        ssh: None,
                         source_price: Some(covenant_compute_protocol::price_history::SourcePrice {
                             version: 1,
                             provider: "vast.ai".into(),

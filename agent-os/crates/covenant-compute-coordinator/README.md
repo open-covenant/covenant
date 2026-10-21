@@ -341,7 +341,7 @@ stale observations, empty capacity and actual discrepancies. Alerts require
 three observations, persist across restart and include confirmed recovery;
 optional email delivery uses the deployment's existing Cloudflare Email Service account.
 
-See [observer configuration and acceptance](../../../../docs/compute-observer.md)
+See [observer configuration and acceptance](../../../docs/compute-observer.md)
 for every pin, delivery variable, scope limitation and the read-only live-RPC
 harness. Reviewed incidents are source-controlled and expose no buyer/job data.
 
@@ -365,3 +365,50 @@ their own encryption keys. See [workspace operation and acceptance](../../../doc
 | `COVENANT_COMPUTE_WORKSPACE_MAX_OWNERS` | `1024` | Positive limit on owner identities. |
 | `COVENANT_COMPUTE_WORKSPACE_MAX_BYTES` | `1073741824` | Positive global ciphertext reservation limit including pending writes and garbage. |
 | `COVENANT_COMPUTE_WORKSPACE_WRITES_ENABLED` | `false` | Admit new workspaces/uploads only after provider acceptance; disabling preserves recovery, reads and cleanup. |
+
+## Hardware attestation modes
+
+`COVENANT_COMPUTE_HARDWARE_LEASE_PINS=1` enables authenticated
+`/federation/hardware/:job/{challenge,evidence,verdict}` routes using each
+buyer's signed Phala workload/operator/generation/expiry pin. There is no
+global-pin fallback for unsigned legacy jobs. The separate diagnostic mode
+uses `COVENANT_COMPUTE_HARDWARE_WORKLOAD_SHA256`, a reviewed 64-character
+lowercase hash. The modes are mutually exclusive and disabled by default.
+Changing modes or a fixed diagnostic pin requires a reviewed journal namespace;
+never delete existing evidence or financial state to force a configuration.
+
+The accepted current lease must contain the exact structured endpoint,
+transport and observed host key. Observation alone never authenticates that
+key; the buyer independently verifies raw vendor evidence. Phala metering and
+hardware access stop at the original signed expiry, without extending it at
+acceptance or readiness. Served trust remains `Open`, including workspace
+grants. See the [verification contract](../../../docs/compute-hardware-attestation.md),
+[Phala lifecycle](../../../docs/compute-phala-lease-lifecycle.md) and
+[acceptance gates](../../../docs/compute-hardware-acceptance.md).
+
+
+## Ephemeral Phala relay
+
+`COVENANT_COMPUTE_EPHEMERAL_RELAY=1` enables the native outbound relay only
+with `COVENANT_COMPUTE_HARDWARE_LEASE_PINS=1` and
+`COVENANT_COMPUTE_EPHEMERAL_RELAY_ORIGIN` set to this coordinator's canonical
+public HTTPS origin. It adds `/v1/relay` and buyer/operator-authenticated
+`/federation/hardware/:job/relay` metadata. Operators and buyers sign exact
+requests with their existing identities; no shared buyer bearer token or
+credential enters the guest manifest.
+
+The assigned operator records its original provisioned app before creating
+the guest. The independent verifier derives app/instance identities from the
+replayed TDX boot log. Opening a stream requires the current buyer, accepted
+coordinator evidence, exact challenge and immutable app/instance pins. Every
+operation checks the original signed lease, buyer close, wall-clock rollback
+and absolute expiry. Phala metering stops at the earlier of buyer close and
+signed guest expiry; provider cleanup remains a separately durable obligation.
+
+The initial bounds are eight active sessions, sixteen control operations,
+eight quotes and one SSH stream per lease, with a 300-second and 16-MiB stream
+ceiling. Keep the persistent `journal.relay.json` journal: restart invalidates
+all in-memory sessions and preserves their tombstones, so the node must clean
+up the original VM instead of silently adopting or replacing it. 16,384
+historical session IDs are retained; exhaustion fails closed. This does not
+change the served `Open` trust ceiling or qualify persistent-secret custody.

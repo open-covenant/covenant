@@ -32,7 +32,7 @@ permissions:
 
 jobs:
   build:
-    if: github.repository == 'open-covenant/covenant' && github.ref == 'refs/heads/deploy/compute-coordinator'
+    if: github.repository == 'open-covenant/covenant' && (github.ref == 'refs/heads/deploy/compute-coordinator' || (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/codex/')))
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
@@ -88,7 +88,7 @@ jobs:
           echo "${PUBLIC_IMAGE_NAME}@${IMAGE_DIGEST}" >> "$GITHUB_STEP_SUMMARY"
 
   node:
-    if: github.repository == 'open-covenant/covenant' && github.ref == 'refs/heads/deploy/compute-coordinator'
+    if: github.repository == 'open-covenant/covenant' && (github.ref == 'refs/heads/deploy/compute-coordinator' || (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/codex/')))
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:

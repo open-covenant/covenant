@@ -1,0 +1,36 @@
+[package]
+name = "covenant-compute-attestation"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[features]
+test-vectors = []
+
+[dependencies]
+base64 = "0.22"
+bs58 = "0.5"
+covenant-compute-protocol = { path = "../covenant-compute-protocol" }
+covenant-identity = { path = "../covenant-identity" }
+ed25519-dalek = "2"
+serde_jcs = "0.2"
+chrono = { version = "0.4", features = ["serde"] }
+dcap-qvl = { path = "vendor/dcap-qvl", version = "=0.6.1", default-features = false, features = ["std", "rustcrypto", "default-x509"] }
+hex = "0.4"
+p384 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
+rsa = { version = "0.9", features = ["sha2"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+x509-parser = "0.18"
+uuid = { version = "1", features = ["serde", "v4"] }
+
+[dev-dependencies]
+anyhow = "1"
+covenant-compute-attestation = { path = ".", features = ["test-vectors"] }
+dcap-qvl = { path = "vendor/dcap-qvl", version = "=0.6.1", default-features = false, features = ["std", "rustcrypto", "default-x509", "report"] }
+rand = "0.8"
+rcgen = { version = "0.14", features = ["pem", "x509-parser"] }
+reqwest = { version = "0.13.2", default-features = false, features = ["rustls", "hickory-dns"] }
+tokio = { version = "1", features = ["rt", "macros", "time"] }

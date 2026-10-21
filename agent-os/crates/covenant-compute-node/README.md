@@ -111,6 +111,20 @@ OpenAI-compatible backend as `image_url` content parts.
   (`COVENANT_COMPUTE_BROKER_IMAGE`); the account bounds its own spend.
   Provisioning and teardown are the operator's cost, never the buyer's:
   billing runs from the coordinator's accept, not from boot.
+- **`phala-cpu`** — a separate production-dstack CPU lease path for
+  `phala-cpu-dstack061`. It reproduces the buyer-signed workload, preserves the
+  original expiry, journals provision/create/delete outcomes and collects
+  hardware evidence for the actual guest key and typed TLS channel. It
+  requires one in-flight slot and retains unresolved cleanup obligations.
+  Creation is disabled by default, and served trust remains `Open`; see the
+  [Phala lifecycle and acceptance gates](../../../docs/compute-phala-lease-lifecycle.md).
+- **`knowledge`** — deterministic knowledge compilation for non-streaming
+  `batch_job` requests. The compiler image must be installed and digest-pinned
+  through `COVENANT_COMPUTE_KNOWLEDGE_IMAGE`; the node advertises only
+  `knowledge-compile-v1:<image-sha256>`. It compiles the bounded inline source
+  in a restricted container, with no network, automatic image pull or
+  buyer-supplied shell command. Startup checks the installed image and removes
+  only this operator's interrupted compiler containers.
 - **`agent`**: builds and checks paid coding tasks. A build runs Claude
   Code under covguard, which holds the model key, meters the spend and
   stops the run at its cap (`COVENANT_COMPUTE_AGENT_BUDGET_USD`, lowered
@@ -481,6 +495,53 @@ The advertised model name is `say-1` unless `COVENANT_COMPUTE_NODE_MODELS` sets 
 | `COVENANT_COMPUTE_BROKER_READY_TIMEOUT_SECS` | `240` | How long a rented machine may take to answer before the broker gives up and the buyer is refunded. Raise it for a large image that pulls slowly. |
 | `COVENANT_COMPUTE_BROKER_READY_POLL_SECS` | `5` | How often the broker asks whether a launching machine is up. |
 | `COVENANT_COMPUTE_LEASE_STUB_ENDPOINT` | `stub://no-machine` | The placeholder address the `lease-stub` executor returns. No machine is behind it; the access grant says so. |
+
+**Knowledge compiler executor**
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `COVENANT_COMPUTE_KNOWLEDGE_IMAGE` | (required) | Installed compiler image as `name@sha256:<64-lowercase-hex>`; its digest determines the exact model advertised and accepted. No automatic pull. |
+
+Uses `COVENANT_COMPUTE_NODE_CONTAINER_RUNTIME` (`docker` by default). Omit
+`COVENANT_COMPUTE_NODE_MODELS` for the digest-derived model, or supply exactly
+that one model. The executor accepts only `batch_job`; general container or
+wildcard capacity cannot satisfy its compiler contract.
+
+**Phala CPU executor** (creation disabled pending policy and paid acceptance)
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `COVENANT_PHALA_API_KEY_FILE` | (required) | Owner-only management API key file, at most 4 KiB. Its contents must not appear in logs or evidence. |
+| `COVENANT_PHALA_TEEPOD_ID` | (required) | Positive live-selected legacy `Teepod.id`, not the newer `node_id`; the returned provision placement must match. |
+| `COVENANT_PHALA_OS_IMAGE` | (required) | Exact reviewed production OS identifier; provisioning explicitly refuses development preference. |
+| `COVENANT_PHALA_KMS_ID` | (required) | Exact reviewed KMS identifier, checked against the provision response. |
+| `COVENANT_PHALA_GUEST_IMAGE_DIGEST` | (required) | Qualified `sha256:` guest image digest, matching the buyer's signed workload. |
+| `COVENANT_PHALA_ALLOW_EPHEMERAL_CREATION` | `0` | Enables the separate single-boot no-KMS model only with a valid creation allowance. |
+| `COVENANT_PHALA_EXPECTED_DEVICE_ID` | (required for ephemeral) | Independently selected 64-character lowercase hardware device pin; provider placement must match. |
+| `COVENANT_PHALA_RELAY_ORIGIN` | (required for ephemeral) | Canonical public HTTPS coordinator origin, matching the buyer-signed workload. |
+| `COVENANT_PHALA_ALLOW_MANAGED_KMS_CREATION` | `0` | `1` explicitly enables the creation gate; it is not KMS policy qualification or a trust promotion. Keep disabled until review. |
+| `COVENANT_PHALA_CREATION_ALLOWANCE_FILE` | (unset) | Reviewed one-use allowance JSON, at most 16 KiB; required in addition to the creation switch. Its USD reserve is not a provider invoice cap. |
+
+Set `COVENANT_COMPUTE_NODE_MAX_IN_FLIGHT=1`. Executor `phala-cpu` serves
+`phala-cpu-dstack061`; explicit executor `phala-cpu-ephemeral` serves only
+`phala-cpu-ephemeral-dstack061` and does not read a managed KMS identifier.
+The ephemeral path creates a new VM/disk, verifies a fresh TDX quote against
+the original provisioned app before publishing access, and then submits a
+second coordinator-issued challenge. The buyer independently verifies that
+evidence before opening its single bounded SSH stream. Recovery of the original journal-owned resource precedes
+fresh admission and does not depend on enabling new creation. Preserve
+`<node-home>/phala-leases` and `<node-home>/phala-evidence`. The account health
+check is read-only; startup does not create a benchmark CVM. Current source
+`6598fe15` passed image qualification. Across two native paid attempts, guest
+admission and client upload passed, but deletion-confirmation deadlines failed. Both
+VMs were later confirmed absent and both Compute escrows fully returned; paid
+lifecycle qualification remains failed. The local follow-up persists the first
+DELETE outcome and reconciles with GET only, including after restart or a lost
+acknowledgement. It preserves the original resource and cleanup cutoff and is
+not deployed. Both one-use allowances are consumed; no third attempt or standing
+capacity is authorized. The
+[lifecycle guide](../../../docs/compute-phala-lease-lifecycle.md) defines the
+allowance, separate KMS decision, exact buyer commands and cleanup proof.
 
 **Registration, verification and lifecycle**
 

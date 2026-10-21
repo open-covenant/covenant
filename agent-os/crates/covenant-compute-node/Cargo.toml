@@ -9,6 +9,9 @@ repository.workspace = true
 
 [dependencies]
 covenant-compute-protocol = { path = "../covenant-compute-protocol" }
+covenant-compute-attestation = { path = "../covenant-compute-attestation" }
+dcap-qvl = { path = "../covenant-compute-attestation/vendor/dcap-qvl", default-features = false, features = ["std", "rustcrypto", "default-x509", "report"] }
+hex = "0.4"
 covenant-compute-vast = { path = "../covenant-compute-vast" }
 covenant-a2a = { path = "../covenant-a2a" }
 covenant-audit = { path = "../covenant-audit" }
@@ -24,6 +27,7 @@ bs58 = { workspace = true }
 k256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
 parking_lot = { workspace = true }
 reqwest = { workspace = true }
+ring = "0.17"
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
@@ -37,6 +41,7 @@ tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 wiremock = "0.6"
 url = "2"
 axum = { workspace = true }

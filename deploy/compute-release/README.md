@@ -21,7 +21,7 @@ first, follow "Verify a download" in the release notes. Installing with
 Homebrew (`brew install open-covenant/tap/covenant-compute`) or the install
 script (`curl -fsSL https://opencovenant.org/install/compute.sh | sh`) avoids
 this step. Those installers use separately pinned releases; check that
-`covenant-compute --version` reports `0.4.1` before using this release's audit
+`covenant-compute --version` reports `0.5.0` before using this release's lease
 commands.
 
 From the unpacked folder:
@@ -54,7 +54,7 @@ back up `~/.covenant-compute-mcp/identity.json`.
 
 ## Security audit workflow
 
-Version 0.4.1 bundles Cloudflare's security-audit skill, including its six-phase
+Since version 0.4.1, the tools bundle Cloudflare's security-audit skill, including its six-phase
 workflow, report schema, Node.js validators, and MIT license. Inspect it or install
 it in the current repository's agent skill directory without a network connection:
 
@@ -75,7 +75,7 @@ agent coordinates the audit, independent reviews, filesystem access, and require
 sandbox. These tools do not execute the workflow or add a remote audit job kind.
 The bundle includes Cloudflare's unchanged upstream documents and license at
 commit `c1c8a8c1471069fb0e188eeaff69b8e8db6564a8` with a hash manifest. The full guide is:
-https://github.com/open-covenant/covenant/blob/compute-v0.4.1/docs/compute-security-audit.md
+https://github.com/open-covenant/covenant/blob/compute-v0.5.0/docs/compute-security-audit.md
 
 ## Upfront model prices
 
@@ -96,7 +96,7 @@ reduce the agreed charge. `covenant-compute-mcp` exposes the same choice through
 Tariffs require a compatible coordinator and an operator advertising the exact
 offer. Installing the client does not activate a tariff on the network. Requests
 without a tariff ID retain their existing pricing behavior. The tariff guide is:
-https://github.com/open-covenant/covenant/blob/compute-v0.4.1/docs/compute-inference-tariffs.md
+https://github.com/open-covenant/covenant/blob/compute-v0.5.0/docs/compute-inference-tariffs.md
 
 ## Encrypted checkpoints
 
@@ -127,13 +127,13 @@ attestation. `workspace delete <workspace-uuid>` schedules stored ciphertext for
 cleanup after outstanding grants expire.
 
 The complete workspace workflow and storage limits are documented at:
-https://github.com/open-covenant/covenant/blob/compute-v0.4.1/docs/compute-workspaces.md
+https://github.com/open-covenant/covenant/blob/compute-v0.5.0/docs/compute-workspaces.md
 
 The guide at https://docs.opencovenant.org/compute covers funding your balance,
 renting a GPU, hiring a coding agent and running a node. Every command and flag
 of `covenant-compute` and `covenant-compute-mcp` is described in the command
 reference:
-https://github.com/open-covenant/covenant/tree/compute-v0.4.1/agent-os/crates/covenant-compute-buyer#readme
+https://github.com/open-covenant/covenant/tree/compute-v0.5.0/agent-os/crates/covenant-compute-buyer#readme
 
 The source is at https://github.com/open-covenant/covenant, licensed under
 Apache 2.0 (see `LICENSE` and `NOTICE.md`).

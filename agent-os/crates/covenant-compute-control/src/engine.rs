@@ -572,6 +572,7 @@ mod tests {
         view.status = "accepted".into();
         view.close_requested = false;
         view.access = Some(LeaseAccess {
+            ssh: None,
             source_price: None,
             job_id: Uuid::nil(),
             endpoint: "ssh renter@203.0.113.7 -p 2222".into(),
@@ -597,6 +598,7 @@ mod tests {
         view.status = "accepted".into();
         view.close_requested = true;
         view.access = Some(LeaseAccess {
+            ssh: None,
             source_price: None,
             job_id: Uuid::nil(),
             endpoint: "ssh renter@203.0.113.7 -p 2222".into(),

@@ -100,6 +100,25 @@ impl JobEnvelopePayload {
                 self.kind, self.capability_requirement.kind
             )));
         }
+        if let Some(spec) = crate::phala::parse_phala_lease_spec(&self.input)? {
+            spec.validate_for_job(self)?;
+        } else if self.capability_requirement.model_id.as_deref()
+            == Some(crate::phala::PHALA_CPU_MODEL)
+        {
+            return Err(ProtocolError::Invalid(
+                "the Phala CPU profile requires a buyer-signed workload pin".into(),
+            ));
+        }
+        if let Some(spec) = crate::phala::parse_phala_ephemeral_lease_spec(&self.input)? {
+            spec.validate_for_job(self)?;
+        } else if self.capability_requirement.model_id.as_deref()
+            == Some(crate::phala::PHALA_EPHEMERAL_CPU_MODEL)
+        {
+            return Err(ProtocolError::Invalid(
+                "the ephemeral Phala CPU profile requires a buyer-signed workload and relay pin"
+                    .into(),
+            ));
+        }
         let quote = crate::parse_tariff_input(&self.input)?;
         if quote != self.capability_requirement.inference_tariff {
             return Err(ProtocolError::Invalid(

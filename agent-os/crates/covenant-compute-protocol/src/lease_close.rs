@@ -127,10 +127,16 @@ pub struct LeaseAccess {
     /// Sampled provider quote, persisted with this lease; not a provider invoice.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_price: Option<crate::price_history::SourcePrice>,
+    /// Observed endpoint/key metadata, not hardware authentication by itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh: Option<crate::ssh::SshAccess>,
 }
 
 impl LeaseAccess {
     pub fn validate(&self) -> Result<(), ProtocolError> {
+        if let Some(ssh) = &self.ssh {
+            ssh.validate()?;
+        }
         if let Some(source) = &self.source_price {
             source.validate()?;
         }
@@ -217,12 +223,25 @@ mod tests {
 
     fn access(job_id: Uuid) -> LeaseAccess {
         LeaseAccess {
+            ssh: None,
             source_price: None,
             job_id,
             endpoint: "ssh renter@203.0.113.7 -p 2222".into(),
             ready_at_ms: 1_700_000_000_000,
             note: Some("session ends when you close the lease".into()),
         }
+    }
+
+    #[test]
+    fn legacy_access_bytes_are_unchanged_without_structured_ssh() {
+        let original = format!(
+            r#"{{"job_id":"{}","endpoint":"ssh renter@203.0.113.7 -p 2222","ready_at_ms":1700000000000,"note":"session ends when you close the lease"}}"#,
+            Uuid::nil()
+        );
+        let decoded: LeaseAccess = serde_json::from_str(&original).unwrap();
+        assert!(decoded.ssh.is_none());
+        decoded.validate().unwrap();
+        assert_eq!(serde_json::to_string(&decoded).unwrap(), original);
     }
 
     #[test]

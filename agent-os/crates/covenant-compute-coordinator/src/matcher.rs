@@ -176,6 +176,7 @@ pub async fn select_operator(
     let exclusions = Exclusions {
         operators: exclude_operator.map(str::to_string).into_iter().collect(),
         stake_owners: Vec::new(),
+        required_operator: None,
     };
     select_operator_excluding(
         registry,
@@ -183,6 +184,48 @@ pub async fn select_operator(
         bonds,
         requirement,
         offered_micro_usdc,
+        now_ms,
+        liveness_cutoff,
+        min_score_bps,
+        bond,
+        &exclusions,
+    )
+    .await
+}
+
+/// A measured workload embeds one operator identity. Preserve that buyer-signed
+/// identity on initial dispatch and every recovery/reoffer; never substitute a
+/// cheaper operator whose guest would necessarily have a different workload.
+#[allow(clippy::too_many_arguments)]
+pub async fn select_operator_for_job(
+    registry: &OperatorRegistry,
+    reputation: &dyn ReputationSource,
+    bonds: &OperatorBonds,
+    job: &covenant_compute_protocol::JobEnvelopePayload,
+    now_ms: u64,
+    liveness_cutoff: Duration,
+    min_score_bps: u32,
+    bond: BondFloor,
+    exclude_operator: Option<&str>,
+) -> Option<String> {
+    let window = covenant_compute_protocol::phala::phala_lease_window(job).ok()?;
+    let mut exclusions = Exclusions {
+        operators: exclude_operator.map(str::to_string).into_iter().collect(),
+        stake_owners: Vec::new(),
+        required_operator: None,
+    };
+    if let Some((operator, expires_at_ms)) = window {
+        if now_ms < job.issued_at_ms || now_ms >= expires_at_ms {
+            return None;
+        }
+        exclusions.required_operator = Some(operator);
+    }
+    select_operator_excluding(
+        registry,
+        reputation,
+        bonds,
+        &job.capability_requirement,
+        job.price_micro_usdc,
         now_ms,
         liveness_cutoff,
         min_score_bps,
@@ -200,11 +243,15 @@ pub async fn select_operator(
 pub struct Exclusions {
     pub operators: Vec<String>,
     pub stake_owners: Vec<String>,
+    pub required_operator: Option<String>,
 }
 
 impl Exclusions {
     fn excludes(&self, key: &str, record: &crate::registry::OperatorRecord) -> bool {
-        self.operators.iter().any(|o| o == key)
+        self.required_operator
+            .as_ref()
+            .is_some_and(|required| required != key)
+            || self.operators.iter().any(|o| o == key)
             || record
                 .stake_owners
                 .iter()
@@ -1879,6 +1926,189 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(winner, cheap, "the cheaper GPU-hour rate wins the lease");
+    }
+
+    async fn assert_phala_signed_operator(ephemeral: bool) {
+        use base64::Engine as _;
+        use covenant_a2a::{A2ADuplicateSafety, A2AIdempotency};
+        use covenant_compute_protocol::{
+            lease_input, phala::*, HeartbeatRequest, JobEnvelopePayload, LeaseTerms,
+            SignedJobEnvelope, LEASE_DEADLINE_SLACK_MS,
+        };
+
+        let now = 1_000;
+        let model = if ephemeral {
+            PHALA_EPHEMERAL_CPU_MODEL
+        } else {
+            PHALA_CPU_MODEL
+        };
+        let registry = OperatorRegistry::new();
+        let add = |name: &str, hourly_price| {
+            let identity = LocalIdentity::generate(name);
+            let mut profile = priced_profile(PriceUnit::PerLeaseHour, hourly_price);
+            profile.operator = identity.agent_id();
+            profile.models_served = vec![model.into()];
+            registry
+                .register(
+                    &RegisterRequest::sign(profile, payout_for(name), &identity).unwrap(),
+                    now,
+                    None,
+                    false,
+                )
+                .unwrap();
+            identity
+        };
+        let cheap = add("cheaper-phala@local", 3_600);
+        let target = add("signed-phala@local", 7_200);
+        let cheap_key = cheap.agent_id().pubkey_base58();
+        let target_key = target.agent_id().pubkey_base58();
+        let buyer = LocalIdentity::generate("buyer-phala@local");
+        let job_id = uuid::Uuid::new_v4();
+        let buyer_ssh = base64::engine::general_purpose::STANDARD
+            .encode([b"\0\0\0\x0bssh-ed25519\0\0\0\x20".as_slice(), &[7; 32]].concat());
+        let mut job = JobEnvelopePayload {
+            job_id,
+            buyer: buyer.agent_id(),
+            kind: JobKind::LeaseSession,
+            capability_requirement: CapabilityRequirement {
+                gpu_class: Some("cpu".into()),
+                model_id: Some(model.into()),
+                ..lease_requirement(10)
+            },
+            input: vec![lease_input(LeaseTerms {
+                max_duration_secs: 10,
+                rate_micro_usdc_per_sec: 2,
+                client_public_key: Some(format!("ssh-ed25519 {buyer_ssh}")),
+            })
+            .unwrap()],
+            price_micro_usdc: 20,
+            deadline_ms: 10_000 + LEASE_DEADLINE_SLACK_MS,
+            idempotency: A2AIdempotency::new(A2ADuplicateSafety::Idempotent, job_id.to_string()),
+            issued_at_ms: now,
+            referral_code: None,
+            stream: true,
+        };
+        let expiry = if ephemeral {
+            let relay = PhalaRelayConfig {
+                url: "https://relay.example.com".into(),
+                session_id: job_id.to_string(),
+            };
+            let (_, spec) = phala_ephemeral_workload(
+                &job,
+                &target_key,
+                &reviewed_phala_ephemeral_wrapper(),
+                &format!("sha256:{}", "ab".repeat(32)),
+                &relay,
+            )
+            .unwrap();
+            let expiry = spec.lease_expires_at_ms;
+            job.input.push(phala_ephemeral_lease_input(spec).unwrap());
+            expiry
+        } else {
+            let (_, spec) = phala_workload(
+                &job,
+                &target_key,
+                &reviewed_phala_wrapper(),
+                &format!("sha256:{}", "ab".repeat(32)),
+            )
+            .unwrap();
+            let expiry = spec.lease_expires_at_ms;
+            job.input.push(phala_lease_input(spec).unwrap());
+            expiry
+        };
+        job.validate_input().unwrap();
+        let envelope = SignedJobEnvelope::sign(job, &buyer).unwrap();
+        envelope.verify().unwrap();
+        let bonds = OperatorBonds::new();
+        let choose = |at, exclude_target| {
+            select_operator_for_job(
+                &registry,
+                &NoReputation,
+                &bonds,
+                &envelope.payload,
+                at,
+                Duration::from_secs(45),
+                0,
+                BondFloor::OPEN,
+                if exclude_target {
+                    Some(target_key.as_str())
+                } else {
+                    None
+                },
+            )
+        };
+
+        // Exercise the real registry snapshot/ranking path with two affordable,
+        // compatible nodes. The buyer's signed identity overrides price ranking.
+        assert_eq!(registry.snapshot().len(), 2);
+        assert_eq!(choose(now, false).await, Some(target_key.clone()));
+        assert!(
+            choose(now, true).await.is_none(),
+            "reoffer must not substitute"
+        );
+        assert!(choose(now - 1, false).await.is_none(), "future issuance");
+        assert!(choose(expiry, false).await.is_none(), "exact expiry");
+        assert_eq!(choose(expiry - 1, false).await, Some(target_key.clone()));
+
+        // Without a Phala block, the shared entry point retains ordinary price
+        // selection. Both registrations are still live throughout these checks.
+        let mut legacy = envelope.payload.clone();
+        legacy.input.truncate(1);
+        legacy.capability_requirement.model_id = None;
+        legacy.validate_input().unwrap();
+        assert_eq!(
+            select_operator_for_job(
+                &registry,
+                &NoReputation,
+                &bonds,
+                &legacy,
+                now,
+                Duration::from_secs(45),
+                0,
+                BondFloor::OPEN,
+                None,
+            )
+            .await,
+            Some(cheap_key.clone())
+        );
+
+        registry
+            .heartbeat(
+                &HeartbeatRequest::sign(
+                    target.agent_id(),
+                    OperatorStatus::Offline,
+                    0,
+                    now + 1,
+                    &target,
+                )
+                .unwrap(),
+                now + 1,
+            )
+            .unwrap();
+        assert!(choose(now + 1, false).await.is_none(), "offline target");
+        assert_eq!(
+            select(
+                &registry,
+                &NoReputation,
+                &legacy.capability_requirement,
+                legacy.price_micro_usdc,
+                now + 1,
+                Duration::from_secs(45),
+                0,
+            )
+            .await,
+            Some(cheap_key),
+            "the refusal is the signed pin, not a lack of compatible supply"
+        );
+    }
+
+    #[tokio::test]
+    async fn phala_signed_operator_never_falls_back_to_a_cheaper_compatible_node() {
+        assert_phala_signed_operator(false).await;
+    }
+    #[tokio::test]
+    async fn ephemeral_signed_operator_never_falls_back_to_a_cheaper_compatible_node() {
+        assert_phala_signed_operator(true).await;
     }
 
     #[tokio::test]

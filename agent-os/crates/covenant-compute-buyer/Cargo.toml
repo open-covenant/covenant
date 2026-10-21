@@ -1,6 +1,6 @@
 [package]
 name = "covenant-compute-buyer"
-version = "0.4.1"
+version = "0.5.0"
 description = "Buyer-side client for the Covenant compute network: sign a job envelope, dispatch it to a coordinator, poll the receipt, and re-verify every operator commitment locally. Ships the covenant-compute-mcp stdio server so any MCP client can buy compute."
 edition.workspace = true
 license.workspace = true
@@ -8,6 +8,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+covenant-compute-attestation = { path = "../covenant-compute-attestation" }
 covenant-compute-protocol = { path = "../covenant-compute-protocol" }
 covenant-a2a = { path = "../covenant-a2a" }
 covenant-identity = { path = "../covenant-identity" }
@@ -21,6 +22,9 @@ subtle = { workspace = true }
 libc = { workspace = true }
 parking_lot = { workspace = true }
 reqwest = { workspace = true, features = ["stream"] }
+rustls = { version = "0.23.40", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring", "tls12"] }
+webpki-roots = "1.0.7"
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
@@ -33,6 +37,8 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 async-trait = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
+rcgen = "0.14.10"
 covenant-audit = { path = "../covenant-audit" }
 covenant-compute-coordinator = { path = "../covenant-compute-coordinator" }
 covenant-compute-node = { path = "../covenant-compute-node" }

@@ -48,6 +48,8 @@ pub mod node;
 pub mod ollama;
 pub mod openai_compat;
 pub mod outbox;
+pub mod phala;
+pub mod phala_evidence;
 pub mod service;
 pub mod setup;
 pub mod tts;

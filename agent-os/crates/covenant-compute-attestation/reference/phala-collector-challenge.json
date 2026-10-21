@@ -1,0 +1,25 @@
+{
+  "challenge_id": "b61bf342-b2ea-4012-8946-6bd69c6f333d",
+  "expires_at_ms": 1792540920000,
+  "issued_at_ms": 1792540800000,
+  "nonce_hex": "4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d",
+  "schema_version": 1,
+  "scope": {
+    "buyer_pubkey_b58": "11111111111111111111111111111112",
+    "guest_channel_key": {
+      "algorithm": "ssh-ed25519",
+      "key_base64": "AAAAC3NzaC1lZDI1NTE5AAAAIJ6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6e"
+    },
+    "host": "2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b-1022.dstack-pha-prod5.phala.network",
+    "job_id": "05446ce4-557a-4ee0-9e47-f47228bb703c",
+    "lease_expires_at_ms": 1792541400000,
+    "lease_generation": "cvm-acceptance-1",
+    "operator_pubkey_b58": "11111111111111111111111111111111",
+    "port": 443,
+    "transport": {
+      "kind": "tls"
+    },
+    "username": "covenant",
+    "workload_sha256": "3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c"
+  }
+}

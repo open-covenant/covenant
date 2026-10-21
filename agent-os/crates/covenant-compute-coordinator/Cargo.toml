@@ -12,6 +12,8 @@ name = "covenant-compute-coordinator"
 path = "src/main.rs"
 
 [dependencies]
+covenant-compute-attestation = { path = "../covenant-compute-attestation" }
+tempfile = { workspace = true }
 hmac = "0.12"
 sha2_10 = { package = "sha2", version = "0.10" }
 time = { version = "0.3", features = ["formatting"] }
@@ -45,4 +47,3 @@ covenant-compute-node = { path = "../covenant-compute-node" }
 covenant-compute-buyer = { path = "../covenant-compute-buyer" }
 reqwest = { workspace = true }
 sha2 = { workspace = true }
-tempfile = { workspace = true }

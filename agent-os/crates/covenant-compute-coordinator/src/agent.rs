@@ -242,6 +242,7 @@ pub async fn order_check(state: &CoordinatorState, task_id: Uuid) -> Result<Uuid
     }
 
     let mut exclusions = Exclusions {
+        required_operator: None,
         operators: vec![task.operator_pubkey_b58.clone()],
         stake_owners: state
             .registry()
@@ -712,6 +713,7 @@ pub fn admit_fix(
     Ok(Some(FixAdmission {
         reproduction: named.task_job_id,
         exclusions: Exclusions {
+            required_operator: None,
             operators: vec![record.operator_pubkey_b58.clone()],
             stake_owners,
         },

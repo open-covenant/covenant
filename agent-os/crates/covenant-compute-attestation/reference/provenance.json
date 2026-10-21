@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "note": "What every pinned artifact in this crate actually is. `placeholder` means the file was generated in this repository and matches nothing real; `vendor-published` means it came from the vendor that signs it; `captured` means it was read off our own hardware; `empty-refuses-all` is a reference set with no entries, which anchors nothing and refuses everything. A placeholder so evidence from genuine hardware fails closed against it. The trust ceiling in prism_protocol::MAX_VERIFIABLE_TRUST_CLASS may not sit above a rung whose artifacts are still placeholders, and tests in this crate fail the build if it does. The confidential rung adds no new pinned file: it reuses roots/nvidia-device-identity-root.der and reference/h100-measurements.json (both listed at isolated) and reads the confidential-mode flag from the report itself. Its real-evidence proof is the checked-in genuine NVIDIA CC vector under tests/fixtures/nvidia-cc/genuine, a single-GPU H100 CC report captured from confidential silicon whose signature chains to the root above and whose feature flag names a single-GPU confidential mode.",
+  "artifacts": [
+    {
+      "path": "roots/nvidia-device-identity-root.der",
+      "rung": "isolated",
+      "state": "vendor-published",
+      "captured_from": "NVIDIA/nvtrust, guest_tools/gpu_verifiers/local_gpu_verifier/src/verifier/certs/verifier_device_root.pem, fetched 2026-08-17",
+      "subject": "CN=NVIDIA Device Identity CA, O=NVIDIA",
+      "sha256_der": "102bf659d5419614c9d8e6aecebc80454eb26b1df6a769ac720b9a690b167b48",
+      "self_signed_verified": true,
+      "caveat": "Taken from NVIDIA's own verifier repository rather than from an NVIDIA PKI endpoint. Confirm against a second NVIDIA-published copy before treating the pin as authoritative."
+    },
+    {
+      "path": "reference/h100-measurements.json",
+      "rung": "isolated",
+      "state": "vendor-published",
+      "captured_from": "NVIDIA RIM service, /v1/rim/NV_GPU_DRIVER_GH100_580.173.02, fetched 2026-08-17",
+      "rim_sha256": "62d8b2371976b15b9fa49dcfdfec8cd730efa42df39a5f7cd97127b1963173e3",
+      "caveat": "Golden digests NVIDIA publishes for this driver, not values read off our own card, so they say what an H100 running this driver should report. The RIM is an XML-signed document and this verifier does not check that signature yet, so their integrity rests on the transport."
+    },
+    {
+      "path": "roots/amd-ark-genoa.der",
+      "rung": "attested",
+      "state": "vendor-published",
+      "captured_from": "AMD KDS, https://kdsintf.amd.com/vcek/v1/Genoa/cert_chain, fetched 2026-08-17",
+      "subject": "CN=ARK-Genoa, O=Advanced Micro Devices",
+      "sha256_der": "4c6598d19c18719c5dfd4a7d335f674e5bfe1d8f800cea2cf270c10d103db2f1",
+      "self_signed_verified": true,
+      "ask_chains_to_it": true
+    },
+    {
+      "path": "reference/snp-platform.json",
+      "rung": "attested",
+      "state": "captured",
+      "captured_from": "TCB observed on prism-node-01 in an AMD-signed SNP report, 2026-08-17",
+      "replaced_by": "the ARK digest that follows from the real root, and a TCB floor taken from AMD's published Genoa TCB and the Dallas platform"
+    },
+    {
+      "path": "reference/snp-launch-measurements.json",
+      "rung": "attested",
+      "state": "captured",
+      "captured_from": "computed by sev-snp-measure from recorded boot inputs, confirmed byte-equal to a live SNP report from prism-node-01, 2026-08-17",
+      "replaced_by": "measurements tools/snp-measure computes from the recorded firmware, kernel, initrd and cmdline, reproduced by someone who did not build the image"
+    },
+    {
+      "path": "reference/tdx-launch-measurements.json",
+      "rung": "attested",
+      "state": "captured",
+      "captured_from": "computed by dstack-mr (Dstack-TEE/dstack @ 38f544a550590eb5a281cf5ee6a5d9fd75bee7cd) from dstack OS 0.5.9-dev as published at download.dstack.org (mr_de9c74f0....tar.gz, sha256 1e11a1bc94e3069eef19f30457c2e92bfd70cb30fa9d134092de453f9ec6f205), flags --cpu 1 --memory 2G --two-pass-add-pages true --pic true; all four registers equal a live quote taken from a CVM on Phala teepod prod9, 2026-08-24",
+      "caveat": "The original entry is Phala's dev-rootfs build of 0.5.9 and remains a distinct legacy profile. The production dstack 0.6.1 entry below does not inherit its runtime semantics. os-image-hash is sha256 of the image's sha256sum.txt.",
+      "production_computation": {
+        "image_version": "dstack-0.6.1",
+        "os_image_hash": "ec43cb8c5e04b6bb6c53b33b16076a01d83d01f7f4b703f2f78a0d947d6247e6",
+        "source": "Dstack-TEE/dstack @ 7f143148cc49f4a09799958835d310e050137cb3",
+        "computed_at": "2026-10-20",
+        "method": "Independently verify the official release manifest and measurement.tdx.cbor, recompute ACPI hashes from the exact public VmConfig, and call tdx_measurements_from_measurement_document. The four expected registers are derived before comparing to the live node's diagnostic Info.",
+        "vm_config_sha256": "54761adccb41b44292be2c41a655d338bf96b9897b0b6c67b61e0ba8d3fa2742",
+        "caveat": "Matching diagnostic Info is not Intel-signed evidence acceptance. Runtime verification still requires Intel-valid quote/collateral, strict TCB/debug policy, the complete pinned tuple, runtime replay, boot identities, and scope-bound report data."
+      }
+    }
+  ]
+}

@@ -31,6 +31,8 @@ use async_trait::async_trait;
 use base64::Engine as _;
 use covenant_audit::{AuditEvent, AuditKind, AuditLog, JsonlAuditLog};
 use covenant_compute_node::build_container::{self, Builder, ContainerBuilds};
+use covenant_compute_node::phala::{PhalaCloud, PhalaConfig, PhalaExecutor, PhalaSessionBackend};
+use covenant_compute_node::phala_evidence::PhalaEvidenceClient;
 use covenant_compute_node::{
     audit_paid_entry, ollama, openai_compat, reconcile_paid_rows, run_benchmark, AgentConfig,
     AgentCredential, AgentExecutor, BenchmarkSpec, BrokerConfig, BrokerSessionBackend, ChunkSink,
@@ -471,7 +473,9 @@ fn servable_kinds(executor_kind: &str) -> Option<&'static [JobKind]> {
         "subprocess" | "container" | "imd" | "knowledge" => Some(&[JobKind::BatchJob]),
         "whisper" => Some(&[JobKind::Transcription]),
         "say" => Some(&[JobKind::SpeechSynthesis]),
-        "broker" | "lease-stub" => Some(&[JobKind::LeaseSession]),
+        "broker" | "lease-stub" | "phala-cpu" | "phala-cpu-ephemeral" => {
+            Some(&[JobKind::LeaseSession])
+        }
         "agent" => Some(&[JobKind::AgentTask, JobKind::AgentCheck]),
         _ => None,
     }
@@ -485,7 +489,10 @@ fn servable_kinds(executor_kind: &str) -> Option<&'static [JobKind]> {
 /// openai-compat) route each job to any of their advertised models, and
 /// the generic backends serve `any`, so several names is honest there.
 fn serves_single_model(executor_kind: &str) -> bool {
-    matches!(executor_kind, "whisper" | "say" | "knowledge")
+    matches!(
+        executor_kind,
+        "whisper" | "say" | "phala-cpu" | "phala-cpu-ephemeral" | "knowledge"
+    )
 }
 
 /// The job kinds advertised when `COVENANT_COMPUTE_NODE_JOB_KINDS` is
@@ -498,7 +505,7 @@ fn default_kinds(executor_kind: &str) -> &'static str {
         "ollama" | "openai-compat" => "inference_call",
         "whisper" => "transcription",
         "say" => "speech_synthesis",
-        "broker" | "lease-stub" => "lease_session",
+        "broker" | "lease-stub" | "phala-cpu" | "phala-cpu-ephemeral" => "lease_session",
         "agent" => "agent_task,agent_check",
         _ => "batch_job",
     }
@@ -701,6 +708,14 @@ async fn resolve_models_served(executor_kind: &str) -> anyhow::Result<Vec<String
         Err(_) if executor_kind == "imd" => {
             Ok(vec![covenant_compute_protocol::SWARM_MODEL.to_string()])
         }
+        Err(_) if matches!(executor_kind, "phala-cpu" | "phala-cpu-ephemeral") => {
+            Ok(vec![(if executor_kind == "phala-cpu-ephemeral" {
+                covenant_compute_protocol::phala::PHALA_EPHEMERAL_CPU_MODEL
+            } else {
+                covenant_compute_protocol::phala::PHALA_CPU_MODEL
+            })
+            .into()])
+        }
         Err(_) => Ok(vec!["any".into()]),
     }
 }
@@ -727,6 +742,7 @@ enum NodeExecutor {
     Whisper(WhisperExecutor),
     Say(SayExecutor),
     Lease(LeaseExecutor),
+    Phala(PhalaExecutor),
     Agent(Box<AgentExecutor>),
     Imd(Box<ImdExecutor>),
     Knowledge(KnowledgeExecutor),
@@ -748,6 +764,7 @@ impl JobExecutor for NodeExecutor {
             NodeExecutor::Whisper(e) => e.execute(job, deadline).await,
             NodeExecutor::Say(e) => e.execute(job, deadline).await,
             NodeExecutor::Lease(e) => e.execute(job, deadline).await,
+            NodeExecutor::Phala(e) => e.execute(job, deadline).await,
             NodeExecutor::Agent(e) => e.execute(job, deadline).await,
             NodeExecutor::Imd(e) => e.execute(job, deadline).await,
             NodeExecutor::Knowledge(e) => e.execute(job, deadline).await,
@@ -773,6 +790,7 @@ impl JobExecutor for NodeExecutor {
             NodeExecutor::Whisper(e) => e.execute_streaming(job, deadline, sink).await,
             NodeExecutor::Say(e) => e.execute_streaming(job, deadline, sink).await,
             NodeExecutor::Lease(e) => e.execute_streaming(job, deadline, sink).await,
+            NodeExecutor::Phala(e) => e.execute_streaming(job, deadline, sink).await,
             NodeExecutor::Agent(e) => e.execute_streaming(job, deadline, sink).await,
             NodeExecutor::Imd(e) => e.execute_streaming(job, deadline, sink).await,
             NodeExecutor::Knowledge(e) => e.execute_streaming(job, deadline, sink).await,
@@ -792,6 +810,7 @@ impl JobExecutor for NodeExecutor {
             NodeExecutor::Whisper(e) => e.admit(job, remaining),
             NodeExecutor::Say(e) => e.admit(job, remaining),
             NodeExecutor::Lease(e) => e.admit(job, remaining),
+            NodeExecutor::Phala(e) => e.admit(job, remaining),
             NodeExecutor::Agent(e) => e.admit(job, remaining),
             NodeExecutor::Imd(e) => e.admit(job, remaining),
             NodeExecutor::Knowledge(e) => e.admit(job, remaining),
@@ -810,6 +829,7 @@ impl JobExecutor for NodeExecutor {
             NodeExecutor::Whisper(e) => e.health().await,
             NodeExecutor::Say(e) => e.health().await,
             NodeExecutor::Lease(e) => e.health().await,
+            NodeExecutor::Phala(e) => e.health().await,
             NodeExecutor::Agent(e) => e.health().await,
             NodeExecutor::Imd(e) => e.health().await,
             NodeExecutor::Knowledge(e) => e.health().await,
@@ -2583,7 +2603,9 @@ async fn main() -> anyhow::Result<()> {
     }
     let max_in_flight = env_or(
         "COVENANT_COMPUTE_NODE_MAX_IN_FLIGHT",
-        if kani_profiles.is_empty() {
+        if kani_profiles.is_empty()
+            && !matches!(executor_kind.as_str(), "phala-cpu" | "phala-cpu-ephemeral")
+        {
             2usize
         } else {
             1usize
@@ -2592,6 +2614,10 @@ async fn main() -> anyhow::Result<()> {
     anyhow::ensure!(
         kani_profiles.is_empty() || max_in_flight == 1,
         "Kani profiles require COVENANT_COMPUTE_NODE_MAX_IN_FLIGHT=1 to reserve proof resources"
+    );
+    anyhow::ensure!(
+        !matches!(executor_kind.as_str(), "phala-cpu" | "phala-cpu-ephemeral") || max_in_flight == 1,
+        "phala-cpu requires COVENANT_COMPUTE_NODE_MAX_IN_FLIGHT=1; unresolved leases retain capacity"
     );
     let mut models_served = resolve_models_served(&executor_kind).await?;
     models_served.extend(kani_profiles.iter().map(|p| p.label()));
@@ -2661,7 +2687,22 @@ async fn main() -> anyhow::Result<()> {
                 .unwrap_or_default(),
         );
     }
-    let (hardware, vram_gb) = resolve_hardware().await;
+    let (hardware, vram_gb) =
+        if matches!(executor_kind.as_str(), "phala-cpu" | "phala-cpu-ephemeral") {
+            anyhow::ensure!(
+                models_served
+                    == vec![(if executor_kind == "phala-cpu-ephemeral" {
+                        covenant_compute_protocol::phala::PHALA_EPHEMERAL_CPU_MODEL
+                    } else {
+                        covenant_compute_protocol::phala::PHALA_CPU_MODEL
+                    })
+                    .to_string()],
+                "Phala executor serves only its explicitly selected pinned profile"
+            );
+            (HardwareClass::CpuOnly, 0)
+        } else {
+            resolve_hardware().await
+        };
     let kind_models = agent_kind_models(&executor_kind, &kani_profiles, kani_author, &job_kinds);
     let profile = CapabilityProfile {
         inference_tariffs: match std::env::var("COVENANT_COMPUTE_NODE_TARIFFS_FILE") {
@@ -2726,6 +2767,7 @@ async fn main() -> anyhow::Result<()> {
     // polls this same client for the close the coordinator recorded.
     let client = Arc::new(HttpCoordinatorClient::new(coordinator_url.clone()));
 
+    let mut phala_shutdown_backend = None;
     let executor = match executor_kind.as_str() {
         "echo" => {
             tracing::warn!("executor: echo (returns job input verbatim — smoke tests only)");
@@ -2995,6 +3037,76 @@ async fn main() -> anyhow::Result<()> {
                 LeaseExecutor::new(backend, LeaseControl::new()).watching(client.clone()),
             )
         }
+        "phala-cpu" | "phala-cpu-ephemeral" => {
+            let ephemeral = executor_kind == "phala-cpu-ephemeral";
+            let key_path = PathBuf::from(required("COVENANT_PHALA_API_KEY_FILE")?);
+            let metadata = std::fs::metadata(&key_path).context("inspect Phala API key file")?;
+            anyhow::ensure!(metadata.is_file() && metadata.len() <= 4096, "invalid Phala API key file");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                anyhow::ensure!(
+                    metadata.permissions().mode() & 0o077 == 0,
+                    "Phala API key file must be owner-only"
+                );
+            }
+            let api_key = std::fs::read_to_string(&key_path)
+                .context("read Phala API key file")?.trim().to_string();
+            let teepod_id = required("COVENANT_PHALA_TEEPOD_ID")?.parse().context("Phala teepod ID must be a positive integer")?;
+            let os_image = required("COVENANT_PHALA_OS_IMAGE")?;
+            let cloud = Arc::new(if ephemeral {
+                PhalaCloud::new_ephemeral(api_key, teepod_id, os_image, required("COVENANT_PHALA_EXPECTED_DEVICE_ID")?)?
+            } else {
+                PhalaCloud::new(api_key, teepod_id, os_image, required("COVENANT_PHALA_KMS_ID")?)?
+            });
+            let creation_name = if ephemeral { "COVENANT_PHALA_ALLOW_EPHEMERAL_CREATION" } else { "COVENANT_PHALA_ALLOW_MANAGED_KMS_CREATION" };
+            let creation = match std::env::var(creation_name).as_deref() {
+                Ok("1") => true,
+                Ok("0") | Err(std::env::VarError::NotPresent) => false,
+                _ => anyhow::bail!("{creation_name} must be 0 or 1"),
+            };
+            let config = PhalaConfig {
+                operator_pubkey_b58: identity.agent_id().pubkey_base58(),
+                wrapper_template: if ephemeral { covenant_compute_protocol::phala::reviewed_phala_ephemeral_wrapper() } else { covenant_compute_protocol::phala::reviewed_phala_wrapper() },
+                image_digest: required("COVENANT_PHALA_GUEST_IMAGE_DIGEST")?,
+                allow_managed_kms_creation: !ephemeral && creation,
+                allow_ephemeral_creation: ephemeral && creation,
+                creation_allowance: match std::env::var("COVENANT_PHALA_CREATION_ALLOWANCE_FILE") {
+                    Ok(path) => {
+                        let bytes = std::fs::read(path).context("read reviewed Phala creation allowance")?;
+                        anyhow::ensure!(bytes.len() <= 16 * 1024, "Phala creation allowance exceeds 16 KiB");
+                        Some(serde_json::from_slice(&bytes).context("parse reviewed Phala creation allowance")?)
+                    }
+                    Err(std::env::VarError::NotPresent) => None,
+                    Err(error) => return Err(error.into()),
+                },
+                ready_timeout: Duration::from_secs(300),
+                poll_interval: Duration::from_secs(5),
+            };
+            let evidence_identity = Arc::new(
+                LocalIdentity::load_or_create(&home.join("identity.json"), "operator@compute")
+                    .context("reload existing Phala evidence identity")?,
+            );
+            anyhow::ensure!(
+                evidence_identity.agent_id() == identity.agent_id(),
+                "Phala evidence identity changed while opening the existing key"
+            );
+            let evidence = PhalaEvidenceClient::new(
+                &coordinator_url, evidence_identity, home.join("phala-evidence"),
+            )?;
+            let evidence = Arc::new(if ephemeral {
+                evidence.with_ephemeral_relay_origin(required("COVENANT_PHALA_RELAY_ORIGIN")?)?
+            } else { evidence });
+            let backend = PhalaSessionBackend::open_journal(
+                cloud, config, &home.join("phala-leases"), client.clone(), evidence,
+            )?;
+            phala_shutdown_backend = Some(backend.clone());
+            tracing::warn!(
+                new_leases_enabled = creation, ephemeral,
+                "Phala CPU: explicit profile, served tier Open, durable recovery enabled"
+            );
+            NodeExecutor::Phala(PhalaExecutor::new(backend, client.clone()))
+        }
         "lease-stub" => {
             // A stub broker for smoke tests: it rents no machine and points
             // the buyer at a placeholder endpoint, so the whole lease
@@ -3147,7 +3259,7 @@ async fn main() -> anyhow::Result<()> {
         // isolation than the operator configured.
         other => anyhow::bail!(
             "COVENANT_COMPUTE_NODE_EXECUTOR must be one of \
-             echo|subprocess|container|ollama|openai-compat|whisper|say|broker|lease-stub|agent|\
+             echo|subprocess|container|ollama|openai-compat|whisper|say|broker|phala-cpu|phala-cpu-ephemeral|lease-stub|agent|\
              imd|knowledge, got {other:?}"
         ),
     };
@@ -3175,7 +3287,9 @@ async fn main() -> anyhow::Result<()> {
             .await
             .context("verify pinned knowledge compiler image")?;
         tracing::info!("knowledge compiler image present; compilation is deterministic and receipt-bound per job");
-    } else if executor_kind == "broker" {
+    } else if executor_kind == "broker"
+        || matches!(executor_kind.as_str(), "phala-cpu" | "phala-cpu-ephemeral")
+    {
         // A lease has no known-answer self-test, and the only way to
         // demonstrate one at boot would be to rent a real machine —
         // spending the operator's money before a single buyer has paid.
@@ -3500,6 +3614,8 @@ async fn main() -> anyhow::Result<()> {
     let backend_retry =
         Duration::from_secs(env_or("COVENANT_COMPUTE_NODE_BACKEND_RETRY_SECS", 5u64).max(1));
     let serve_node = node.clone();
+    let recover_phala_before_admission =
+        matches!(executor_kind.as_str(), "phala-cpu" | "phala-cpu-ephemeral");
     let serve = async move {
         let mut boot_recovery_done = false;
         loop {
@@ -3510,6 +3626,19 @@ async fn main() -> anyhow::Result<()> {
             serve_node.drain_outbox().await;
             if serve_node.draining() {
                 break;
+            }
+            // Phala health gates NEW resources. An owned lease or consumed
+            // allowance intentionally makes it offline; that must not prevent
+            // re-serving the original accepted signed envelope after restart.
+            if recover_phala_before_admission && !boot_recovery_done {
+                boot_recovery_done = true;
+                let recovered = serve_node.recover_accepted().await;
+                if recovered > 0 {
+                    tracing::info!(
+                        recovered,
+                        "interrupted Phala leases reconciled before admission"
+                    );
+                }
             }
             // Never take work the backend can't serve: a dead model
             // server pauses intake right here (and reports Offline)
@@ -3573,6 +3702,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let mut serve = std::pin::pin!(serve);
+    let mut drained = false;
     tokio::select! {
         _ = &mut serve => {}
         _ = shutdown_signal() => {
@@ -3587,7 +3717,7 @@ async fn main() -> anyhow::Result<()> {
             node.begin_drain().await;
             tokio::select! {
                 _ = &mut serve => {
-                    tracing::info!("drained clean");
+                    drained = true;
                 }
                 _ = shutdown_signal() => {
                     tracing::info!(
@@ -3596,6 +3726,27 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
+    }
+    if let Some(backend) = phala_shutdown_backend {
+        let status = backend.shutdown_status();
+        if !status.is_resolved() {
+            tracing::error!(
+                pending_leases = status.pending_leases,
+                unknown_creates = status.unknown_creates,
+                pending_deletes = status.pending_deletes,
+                journal_poisoned = status.journal_poisoned,
+                "shutdown retains unresolved Phala obligations; provider billing may continue; \
+                 restart with the same node home to resume reconciliation"
+            );
+            anyhow::bail!(
+                "Phala cleanup is unresolved; preserve and restart the same node home ({}) \
+                 to continue recovery; creation may remain disabled",
+                home.display()
+            );
+        }
+    }
+    if drained {
+        tracing::info!("drained clean");
     }
     Ok(())
 }

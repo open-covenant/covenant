@@ -320,12 +320,26 @@ impl JobRecord {
             return metered;
         }
         if self.phase == JobPhase::Accepted {
-            return self
-                .accepted_at_ms
-                .map(|started| now_ms.saturating_sub(started))
-                .unwrap_or(0);
+            return self.live_lease_elapsed_ms(now_ms);
         }
         0
+    }
+
+    /// Acceptance remains the start of billing; a buyer-signed guest expiry
+    /// bounds the end even if evidence collection or provider deletion is slow.
+    /// Persisted settlement stamps are handled separately and never repriced.
+    pub fn live_lease_elapsed_ms(&self, now_ms: u64) -> u64 {
+        let cutoff =
+            match covenant_compute_protocol::phala::phala_lease_window(&self.envelope.payload) {
+                Ok(Some((_, expires_at_ms))) => now_ms
+                    .min(expires_at_ms)
+                    .min(self.close_requested_at_ms.unwrap_or(now_ms)),
+                Ok(None) => now_ms,
+                Err(_) => return 0,
+            };
+        self.accepted_at_ms
+            .map(|started| cutoff.saturating_sub(started))
+            .unwrap_or(0)
     }
 
     /// The micro-USDC a lease view reports as charged as of `now_ms`, given
@@ -1798,6 +1812,7 @@ mod tests {
         );
         row.phase = JobPhase::Accepted;
         let access = covenant_compute_protocol::LeaseAccess {
+            ssh: None,
             job_id: id,
             endpoint: "ssh root@example.invalid".into(),
             ready_at_ms: 100,
@@ -1834,6 +1849,7 @@ mod tests {
             client_public_key: None,
         };
         let access = covenant_compute_protocol::LeaseAccess {
+            ssh: None,
             source_price: None,
             job_id: Uuid::nil(),
             endpoint: "ssh root@203.0.113.9 -p 22".into(),
@@ -2315,6 +2331,7 @@ mod tests {
         });
         row.fee_micro_usdc = 10;
         row.lease_access = Some(covenant_compute_protocol::LeaseAccess {
+            ssh: None,
             job_id: id,
             endpoint: "PRIVATE_SSH_ENDPOINT".into(),
             ready_at_ms: source_at,

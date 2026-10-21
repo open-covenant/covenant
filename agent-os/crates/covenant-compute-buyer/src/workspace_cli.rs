@@ -144,7 +144,7 @@ pub async fn run(ctx: &Ctx, args: &mut Vec<String>, json_out: bool) -> Result<()
     let action = positional(
         args,
         0,
-        "workspace action (create|list|status|save|retry|restore|delete|backup|import)",
+        "workspace action (create|list|status|save|retry|restore|restore-to-lease|delete|backup|import)",
     )?;
     args.remove(0);
     let client = WorkspaceClient::new(&ctx.http, &ctx.config, &ctx.identity);
@@ -275,6 +275,36 @@ pub async fn run(ctx: &Ctx, args: &mut Vec<String>, json_out: bool) -> Result<()
                 .await?;
             serde_json::json!({ "workspace_id": id, "version": local.workspace.version, "restored": args[1], "lease_job_id": lease })
         }
+        "restore-to-lease" => {
+            let envelope_path = take_flag_value(args, "--job-envelope")
+                .context("restore-to-lease requires --job-envelope <original-signed-job.json>")?;
+            let ssh_key = take_flag_value(args, "--ssh-key")
+                .context("restore-to-lease requires --ssh-key <private-key-file>")?;
+            let id = parse_id(args, 1)?;
+            let local = store.load(id)?;
+            anyhow::ensure!(!local.deleted, "workspace is deleted");
+            // An explicit original signed purchase is the workload pin. Do not
+            // adopt a scope or workload digest supplied by the provider.
+            let bytes = read_signed_job_file(Path::new(&envelope_path))?;
+            let envelope: covenant_compute_protocol::SignedJobEnvelope =
+                serde_json::from_slice(&bytes)?;
+            envelope.verify()?;
+            let destination = client
+                .restore_to_lease(
+                    &local.workspace,
+                    &VaultKey::from_b58(&local.key_b58)?,
+                    &envelope,
+                    Path::new(&ssh_key),
+                )
+                .await?;
+            serde_json::json!({
+                "workspace_id": id,
+                "version": local.workspace.version,
+                "lease_job_id": envelope.payload.job_id,
+                "remote_path": destination,
+                "trust_floor": local.workspace.trust_floor,
+            })
+        }
         "delete" => {
             let id = parse_id(args, 1)?;
             let mut local = store.load(id)?;
@@ -350,9 +380,48 @@ fn parse_id(args: &[String], expected: usize) -> Result<Uuid> {
     Ok(positional(args, 0, "workspace UUID")?.parse()?)
 }
 
+fn read_signed_job_file(path: &Path) -> Result<Vec<u8>> {
+    use std::io::Read;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let mut file = options
+        .open(path)
+        .context("read the original signed lease envelope")?;
+    anyhow::ensure!(
+        file.metadata()?.is_file(),
+        "signed lease envelope must be a regular file"
+    );
+    let mut bytes = Vec::new();
+    (&mut file).take(1024 * 1024 + 1).read_to_end(&mut bytes)?;
+    anyhow::ensure!(
+        bytes.len() <= 1024 * 1024,
+        "signed lease envelope exceeds the 1 MiB limit"
+    );
+    Ok(bytes)
+}
+
 #[cfg(test)]
 mod recovery_tests {
     use super::*;
+
+    #[test]
+    fn signed_job_file_is_bounded_before_parsing() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("envelope.json");
+        std::fs::write(&path, vec![b' '; 1024 * 1024 + 1]).unwrap();
+        assert!(read_signed_job_file(&path)
+            .unwrap_err()
+            .to_string()
+            .contains("1 MiB"));
+        std::fs::write(&path, b"{}").unwrap();
+        assert_eq!(read_signed_job_file(&path).unwrap(), b"{}");
+        assert!(read_signed_job_file(directory.path()).is_err());
+    }
 
     #[test]
     fn interrupted_retired_directory_removal_cannot_corrupt_authoritative_pending() {

@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "provenance": "computed-and-confirmed",
+  "note": "Each sha384 is computed by sev-snp-measure from the recorded inputs below, then confirmed equal to what the hardware reported in a live SNP report. The computation is the source; the hardware reading is only the confirmation, because a measurement read off the machine being attested would certify whatever happened to boot. Reproduce with: sev-snp-measure --mode snp --vcpus=<vcpu_count> --vcpu-type=EPYC-v4 --ovmf=<ovmf> --kernel=<kernel> --append=<cmdline>.",
+  "measurements": [
+    {
+      "image_version": "kata-nvidia-gpu-confidential-6.18.35-200",
+      "vcpu_count": 1,
+      "cpu": {
+        "family": 23,
+        "model": 1,
+        "stepping": 2
+      },
+      "vcpu_type": "EPYC-v4",
+      "sha384": "ad5f5a7ac41dc19528cdd1327f85744fd84b34f347877725e6d0358da3851a5e6bde523cd4e4477edaf5f52e1e15a856",
+      "inputs": {
+        "ovmf": "sha256:d9bbf4c9279c89e4dfc7b90d8a1d42440bc9b8022a9cdb86ab4d5449b51892a7",
+        "kernel": "sha256:08064a9b3f3240bf5ba9e2917c2003bc57e2527b26b039c9b0f5f6d07d22a4f4",
+        "initrd": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "cmdline": "sha256:2b2e757b1fff5914fb0bb9b528476b687f4b743e18a18a79cb6bbbcd036f1730"
+      },
+      "confirmed_against": "prism-node-01 SNP report v3, VMPL0, 2026-08-17"
+    }
+  ]
+}

@@ -1285,11 +1285,27 @@ async fn main() -> anyhow::Result<()> {
         .transpose()
         .map_err(anyhow::Error::msg)?
         .map(Arc::new);
+    let hardware = covenant_compute_coordinator::hardware::build_from_env(
+        Arc::new(state.clone()),
+        &home.join("journal.jsonl"),
+    )?;
     let workspace = covenant_compute_coordinator::workspace::build_from_env(
         state.clone(),
         &home.join("journal.jsonl"),
+        hardware.clone(),
+    )?;
+    let relay = covenant_compute_coordinator::relay::build_from_env(
+        Arc::new(state.clone()),
+        hardware.clone(),
+        &home.join("journal.jsonl"),
     )?;
     let mut app = router(state.clone());
+    if let Some(hardware) = hardware {
+        app = app.merge(covenant_compute_coordinator::hardware::router(hardware));
+    }
+    if let Some(relay) = relay {
+        app = app.merge(covenant_compute_coordinator::relay::router(relay));
+    }
     if let Some(workspace) = workspace {
         covenant_compute_coordinator::workspace::spawn_cleanup(workspace.clone());
         app = app.merge(covenant_compute_coordinator::workspace::router(workspace));

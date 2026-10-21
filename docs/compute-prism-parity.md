@@ -34,6 +34,35 @@ and local command checks passed. Public page/card publication remains separate i
 Package 9 is live as of 2026-10-19: public discovery and unpaid quote parity passed,
 with retained financial state and a 58-micro-USDC startup probe in its
 [release record](compute-discovery-release-evidence.md).
+Package 10's dashboard is deferred. Package 11 now includes a locally implemented
+[Phala CPU lease lifecycle](compute-phala-lease-lifecycle.md), signed per-lease
+workload/expiry pins, automatic hardware evidence, typed TLS/SSH access and buyer
+prepare, submit, probe and workspace-restore commands. The served trust ceiling
+remains `Open`, and new managed-KMS creation remains disabled. The earlier
+user-created production Phala guest passed strict TDX verification, SSH/SFTP,
+isolation, replay/binding negatives and original-expiry shutdown; its
+[diagnostic evidence](compute-hardware-diagnostic-evidence.md) is separate from
+the new integrated flow. The updated image also passed Docker storage/SSH
+checks and a [fresh TDX-bound live memory/swap diagnostic](compute-memory-diagnostic-evidence.md)
+on the same VM. Management API access is verified. KMS production qualification
+was rejected: all 18 surveyed managed/Base/Ethereum endpoints, including the
+account-selected endpoint, report `os_image_verification=false`. A separate
+[ephemeral no-KMS profile](compute-ephemeral-phala-acceptance.md) now uses a
+fresh VM/disk per lease and outbound attested SSH. Genuine no-KMS TDX evidence,
+strict SSH, memory/swap controls and real-quote tamper refusals passed; the
+report records isolation, expiry and cleanup separately. Native relay, buyer
+admission, cancellation and confirmed-teardown settlement are implemented, with
+creation disabled by default. The coordinator integration is deployed at
+`6598fe15`. Both [native paid attempts](compute-native-phala-acceptance.md)
+passed attestation and client upload, but failed provider-deletion confirmation:
+the first exceeded its 60-second gate, and the October 21 retry exceeded its
+fixed 300-second cutoff by 18.926 seconds. Both original VMs were confirmed
+absent, buyer credit fully restored, and original escrow refunds finalized.
+The test operator is stopped with both one-use allowances consumed. The
+cleanup/result-deadline repair is deployed; a subsequent poll-only deletion
+repair remains local. No third attempt is approved. A successful separately
+authorized paid acceptance and standing bounded operator policy remain required
+before general production activation.
 
 Packages 1 and 2 preserve Solana USDC settlement, CVNT staking, admission and
 existing fees.
@@ -51,7 +80,7 @@ Provider market sampling is read-only and cannot create rentals or move funds.
 | 8 | Aug 16 [tariffs](https://github.com/prismnetwork-tech/prism/pull/191) | Explicit model-specific fixed output-cap pricing; signed native tariff snapshots, frozen x402 quotes, native/SDK verification and recovery | 1,244 native checks; 19 gateway unit checks and one binary recovery check; 11 facilitator, 56 JavaScript and 90 Python checks, including independent real-facilitator pricing regressions; [release record](compute-model-pricing-release-evidence.md) | PR #358 repair source 1f181bb4 live 2026-10-19 at 12:18 UTC. Installed JavaScript 256-token and Python 2,048-token purchases verified retail/native gross of 14,304/11,920 and 30,432/25,360 micro-USDC. Both recovered original completed results after HTTP 202 without reposting; signed authenticated-journal evidence, finalized transfers and zero-call replay passed. Final allowance use 82,300 of 750,000 micro-USDC. Immutable [JavaScript 0.3.0](https://github.com/open-covenant/covenant/releases/tag/codex-compute-x402-client-v0.3.0) and [Python 0.2.0](https://github.com/open-covenant/covenant/releases/tag/codex-compute-x402-python-v0.2.0) public downloads verified; [native compute-v0.4.0](https://github.com/open-covenant/covenant/releases/tag/compute-v0.4.0) published with 15 public assets, five signatures, four provenance attestations and local command checks verified. Public page/card publication remains separate |
 | 9 | Aug 16 [discovery](https://github.com/prismnetwork-tech/prism/pull/192) | Live x402 V2 manifest and model catalog using current capacity, exact retail/native tariffs, verifier policy and affordable caps; [contract](compute-discovery.md) | Real HTTP quote parity, read-only journal/budget checks, availability/expiry/rail failures and original-payment recovery tests | Live 2026-10-19 at source 21925eb644; manifest/catalog and four unpaid quote variants passed. Retained financial records and budgets preserved; one startup provider probe cost 58 micro-USDC. [Release evidence](compute-discovery-release-evidence.md) |
 | 10 | Aug 16 [dashboard](https://github.com/prismnetwork-tech/prism/pull/193) | Not included in this release | Separate parity branch | Not activated here |
-| 11 | Aug 17–24 [hardware trust](https://github.com/prismnetwork-tech/prism/commit/a066e1de717bd299a8ce942704f344bda8c31909) | Not included in this release | Separate parity branch | Not activated here |
+| 11 | Aug 17–24 [hardware trust](https://github.com/prismnetwork-tech/prism/commit/a066e1de717bd299a8ce942704f344bda8c31909) | Cryptographic hardware verification; durable Phala CPU lifecycle, signed workload/operator/expiry pins, independent buyer verification, memory-backed workspaces, and a separate single-boot no-KMS allocation/outbound profile; [contract](compute-hardware-attestation.md), [lifecycle](compute-phala-lease-lifecycle.md) | Focused Rust checks, 75 Python tests, real Docker SSH/SFTP/outbound smoke and repository guards passed; deployed source passed exact-head CI, release/image builds and anonymous image checks. Local poll-only repair passed 69 focused node tests, strict node Clippy and 224 repository guards | Coordinator integration deployed at `6598fe15`. Both [native paid attempts](compute-native-phala-acceptance.md) passed independent attestation and client upload, then failed their deletion gates; the second confirmed absence 18.926 seconds after its fixed 300-second cutoff. Both VMs deleted; full buyer credit and finalized escrow returns verified; no operator payout. Test operator stopped, both allowances consumed, no third attempt approved. Poll-only repair remains local and paid qualification remains failed. Managed-KMS qualification remains rejected; served ceiling stays `Open` |
 | 12 | Aug 24 [batches](https://github.com/prismnetwork-tech/prism/commit/c5efc2823916a09b78008ec286b76029934136d0) | Not included in this release | Separate parity branch | Not activated here |
 | 13 | Aug 24 [warm pool](https://github.com/prismnetwork-tech/prism/commit/4e52ebb42fd31f7f2f7b207ff7050b1a22d82ca6) | Not included in this release | Separate parity branch | Not activated here |
 | 14 | Aug 25 [confidential inference](https://github.com/prismnetwork-tech/prism/commit/e7307a8e493eca00375f04c7d08ad565dc3e0008) and follow-up fixes | Not included in this release | Separate parity branch | Not activated here |

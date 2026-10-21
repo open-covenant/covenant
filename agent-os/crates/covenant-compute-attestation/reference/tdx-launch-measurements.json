@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "note": "Launch identities a TDX quote may present: MRTD plus the three boot-time runtime registers, taken together as one entry. Each entry records the image and machine shape it was computed from so someone who did not build it can reproduce it: dstack-mr against the published image, with the QEMU flags listed, must land on these exact values.",
+  "launch_measurements": [
+    {
+      "image_version": "dstack-0.5.9-dev, os-image-hash de9c74f0c85d0820ce075cb4a99f8e39f7b681be632907c5bf8bdc95ea72feb9, tarball sha256 1e11a1bc94e3069eef19f30457c2e92bfd70cb30fa9d134092de453f9ec6f205, 1 vCPU 2G, two-pass-add-pages, pic",
+      "mr_td": "f06dfda6dce1cf904d4e2bab1dc370634cf95cefa2ceb2de2eee127c9382698090d7a4a13e14c536ec6c9c3c8fa87077",
+      "rtmr0": "68102e7b524af310f7b7d426ce75481e36c40f5d513a9009c046e9d37e31551f0134d954b496a3357fd61d03f07ffe96",
+      "rtmr1": "07e6f51aa763abfe75c3ddfbf4f425fe3f0ceff66d807a75e049303dce9addf68e7218729bd419638af63a370f65878c",
+      "rtmr2": "a2a58c9a959a4fa44bd6da0c97a2270c051faf12084cfe91ae900e4fdff6cdd4f69a82005e04ee920f231497894d677f"
+    },
+    {
+      "image_version": "dstack-0.6.1 production, 1 vCPU 2 GiB, QEMU 8.2.2, pre202505 OVMF, TDX lite",
+      "runtime_profile": "dstack_0_6_1",
+      "os_image_hash": "ec43cb8c5e04b6bb6c53b33b16076a01d83d01f7f4b703f2f78a0d947d6247e6",
+      "mr_td": "2a674327c50218dba880066b349b8d559d749ed68dce33fd651c184a877d084b07a9e583767a7ad5da13ed91deec2b70",
+      "rtmr0": "68102e7b524af310f7b7d426ce75481e36c40f5d513a9009c046e9d37e31551f0134d954b496a3357fd61d03f07ffe96",
+      "rtmr1": "89ef86c5125b986c325f0a94acfa87718a4ef3a4d4f237dbb72dda3cf777fd2c054555fb4407eb53338d7d67329a7333",
+      "rtmr2": "e9000e338f33233e8f51b7fd031e1c158bdcf8572eab041c0bc8eb7fef48b23259a6a556e6c8e2af99999fc39c793179",
+      "derivation": {
+        "source": "https://github.com/Dstack-TEE/dstack/tree/7f143148cc49f4a09799958835d310e050137cb3",
+        "method": "Verify official checksum manifest and measurement.tdx.cbor; recompute expected_rtmr0_acpi_hashes from VmConfig, then tdx_measurements_from_measurement_document. No quoted register or reported ACPI digest is an expected-value input.",
+        "vm_config_sha256": "54761adccb41b44292be2c41a655d338bf96b9897b0b6c67b61e0ba8d3fa2742",
+        "qemu_single_pass_add_pages": true,
+        "pic": true,
+        "hotplug_off": false,
+        "hugepages": false,
+        "num_gpus": 0,
+        "num_nvswitches": 0,
+        "num_nics": 1,
+        "host_share_mode": "9p"
+      }
+    }
+  ]
+}

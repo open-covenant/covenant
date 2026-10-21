@@ -13,7 +13,7 @@ use covenant_compute_protocol::{FederationEscrow, JobOffer, RefundReason};
 use uuid::Uuid;
 
 use crate::jobs::JobPhase;
-use crate::matcher::select_operator;
+use crate::matcher::select_operator_for_job;
 use crate::state::CoordinatorState;
 
 /// Refunds every `Offered`/`Accepted` job whose deadline has passed as
@@ -148,12 +148,11 @@ pub async fn sweep_stale_offers(state: &CoordinatorState, now_ms: u64) -> Vec<Uu
         let assignee_ignoring_it = state
             .registry()
             .queue_holds(&record.operator_pubkey_b58, job_id);
-        let Some(winner) = select_operator(
+        let Some(winner) = select_operator_for_job(
             state.registry(),
             state.reputation(),
             state.bonds(),
-            &record.envelope.payload.capability_requirement,
-            record.envelope.payload.price_micro_usdc,
+            &record.envelope.payload,
             now_ms,
             config.operator_liveness_timeout,
             config.min_operator_score_bps,
@@ -275,12 +274,11 @@ pub async fn reoffer_offline(
         if !state.registry().queue_holds(operator_pubkey_b58, job_id) {
             continue;
         }
-        let Some(winner) = select_operator(
+        let Some(winner) = select_operator_for_job(
             state.registry(),
             state.reputation(),
             state.bonds(),
-            &record.envelope.payload.capability_requirement,
-            record.envelope.payload.price_micro_usdc,
+            &record.envelope.payload,
             now_ms,
             config.operator_liveness_timeout,
             config.min_operator_score_bps,

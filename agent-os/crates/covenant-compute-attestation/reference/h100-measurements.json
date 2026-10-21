@@ -1,0 +1,167 @@
+{
+  "schema_version": 2,
+  "device": "nvidia-h100-pcie-80gb",
+  "provenance": "vendor-published",
+  "source": "NVIDIA RIM service, https://rim.attestation.nvidia.com/v1/rim/NV_GPU_DRIVER_GH100_580.173.02, fetched 2026-08-17",
+  "rim_id": "NV_GPU_DRIVER_GH100_580.173.02",
+  "rim_sha256": "62d8b2371976b15b9fa49dcfdfec8cd730efa42df39a5f7cd97127b1963173e3",
+  "driver_version": "580.173.02",
+  "note": "Golden digests NVIDIA publishes for this driver, not values read off our own card, so they say what an H100 running this driver should report. A slot may carry more than one valid digest; collapsing those to one would reject genuine reports. Only active slots with a non-zero digest are listed, because an inactive slot measures nothing. The RIM is an XML-signed document and this verifier does not yet check that signature, so the integrity of these values rests on the transport they arrived over.",
+  "measurements": [
+    {
+      "name": "Measurement_7",
+      "index": 7,
+      "sha384": [
+        "3292ac26b8e5ff38316082758489115e7f1de0b4b48a60ecabfb01b557a233ab019f9b9da1c9c891f4c672cc58cff3c9"
+      ]
+    },
+    {
+      "name": "MixedMeasurement_21",
+      "index": 21,
+      "sha384": [
+        "802da836f8481935a94c04637a70bb2f228adbb6f8837b10858e511382f1f7648129429868e967ef4771549c6976be46"
+      ]
+    },
+    {
+      "name": "MixedMeasurement_22",
+      "index": 22,
+      "sha384": [
+        "3a0f1fdd7b9a65035abb9cc94864da3eb354e0676f54eb5e9168cbdcc8e245931e40761ff62215362951f439ee27cfc9"
+      ]
+    },
+    {
+      "name": "MixedMeasurement_23",
+      "index": 23,
+      "sha384": [
+        "a4a6668aa2598641ebf510ea9beb6854e3de6468b53b5cae08024c58ff4a67ff969e473d8b079eb76939156bcbb0b16f"
+      ]
+    },
+    {
+      "name": "MixedMeasurement_24",
+      "index": 24,
+      "sha384": [
+        "51a0595892d9f2753e52bb0c26e1931daa916939906fd33f81cf4bbddd4f62baec6d2a352caa52fea36d4ff784c521e5"
+      ]
+    },
+    {
+      "name": "MixedMeasurement_25",
+      "index": 25,
+      "sha384": [
+        "2371ddf9e0dcf9dd47718ad3810628379859c3535b2aa6a54545ed74903b7bbc8ccd0318bb988751d87b2663469e783f"
+      ]
+    },
+    {
+      "name": "MixedMeasurement_26",
+      "index": 26,
+      "sha384": [
+        "e18bb7c3bc62b1f3a2a0a7dc50c157adeb6f9ee497f05ea6af0a80916bcc58ceec229c10e65fd3caea413c091d087595"
+      ]
+    },
+    {
+      "name": "MixedMeasurement_27",
+      "index": 27,
+      "sha384": [
+        "180656cd20c7d71e0ed8d64e4d19612b19d5a9b626fbbbdf2a6efbbff38efafe62b399ece753dcda69341c5657412fb8"
+      ]
+    },
+    {
+      "name": "MixedMeasurement_29",
+      "index": 29,
+      "sha384": [
+        "480314d58900126e1e8ef34facaac0a063341b9203fb9b742427511ef9d79767c4a9395ce4d1d1dc5948e4dfbfefec07"
+      ]
+    },
+    {
+      "name": "MixedMeasurement_30",
+      "index": 30,
+      "sha384": [
+        "4cdeb293c79d089d7ba8ccf305baa670e885cc4cdf7c2be0c66ef44f5a4575c70c87377d9f7da6ac063f6f1f5a55a029"
+      ]
+    },
+    {
+      "name": "MixedMeasurement_31",
+      "index": 31,
+      "sha384": [
+        "80fb1951f2e5695de2a47e2875c7bcd7637945811319e6c06893fb489e1d4f34d92a9eb38cb5f6eca42acb670b658aea"
+      ]
+    },
+    {
+      "name": "HashedMeasurement_32_GSP",
+      "index": 32,
+      "sha384": [
+        "9f976e82fa30fcc6f82bce2c942ad4707c3df6b76e6295ce4c95cf9bb62a08392571e9fb787f19b31bf0f3f04ba887a6",
+        "ec056c2b9e3a568261d0092b8aa1dadb19377382174ba5503a3059cabd2dd1ea82bef1b905ab8a3769832092ddefd30d"
+      ]
+    },
+    {
+      "name": "HashedMeasurement_33_GSP",
+      "index": 33,
+      "sha384": [
+        "198b81d9c0cefe0b33ad65de3fad238a5461d8ee32487bf70fc1926041408cb114624b8ca6b0d5fc97028b58d9cdb78d",
+        "e28a36cdc648795fec9640d10173c9d43a0ee845546b92c20664f068427313593465c04bf282f4e5ace96cc53c6e2cb6"
+      ]
+    },
+    {
+      "name": "MixedHashedMeasurement_34",
+      "index": 34,
+      "sha384": [
+        "07bbc504d3327cb76d4c4f3b3f1daf8779e40cc31d60826cb11dcc5d09dc59a83bf693f0fb9b1f0b5e58ed4cdc3a580f",
+        "2625aca7b14d7b842e8837604c14d14c40500dd87155cd808b94da5a01ac8d9cc3d1d619007f81be4d1e2f682e466bb9"
+      ]
+    },
+    {
+      "name": "Measurement_35",
+      "index": 35,
+      "sha384": [
+        "909cabeb46f75ccde1d0a4b0f26c7f891b5daa2c3681b14cd7be9addc3266a0cb93be11034e0b1fafe8dff7285e6acba",
+        "261148337ccf08ed5351584a95557b245326cbc5ef511ca5b22bc162b9932529fc118f0fe6939dd214545c9388158781",
+        "5af2810f7de5e1f8573ff70f7b6caf2eeeca9bc4920fbd97915d8ab34944de10aed02d6678762f09bffacf60cf0b3b92",
+        "c0962ed90316ecea959dd0b6632d0c4f4d3bfbf72c4cd9031efe48154ed9ca59b41cd20ce06a7f9ca5cd8b0687cf1258"
+      ]
+    },
+    {
+      "name": "HashedMeasurement_36_GSP",
+      "index": 36,
+      "sha384": [
+        "10570f642e274cfc2b9f1c955fab0aa56b6193d5c5ea271a74eb9764334865695921456dc1ca383d7edf9e67760937ca",
+        "e33b54c263b9bd7af1be5eafc87ead7ee0b5f952f1fd234f4ee33b5cc7b7bc0ee386f9b3fd9e9e1e159757c1d296c2e9",
+        "c3cbc9cb8c6164d9f37e2116555618e3d5dd1c89dc732c550e3516a72160623fd62fdd3b1f240032388e3f1b3024aaf1"
+      ]
+    },
+    {
+      "name": "HashedMeasurement_37_GSP",
+      "index": 37,
+      "sha384": [
+        "fccd6efa76267f5b43fc4a7647ce843a3912f0944a9bcc907456408c368ad5e85bec4512d9d9aedebab31c3b80950627"
+      ]
+    },
+    {
+      "name": "HashedMeasurement_38_GSP",
+      "index": 38,
+      "sha384": [
+        "c7ea135dca389918789454861bb593095dc44f8ad39035665daa81fa02cf6fbd3a18227b6224dced70288b9fd3161cc0"
+      ]
+    },
+    {
+      "name": "MixedMeasurement_39",
+      "index": 39,
+      "sha384": [
+        "4d19feb0fbafacb1db03818cd204ecff3fa313e8cb86b8def6062e19d11264e457858eb591bf71c0316433a5a26ff074"
+      ]
+    },
+    {
+      "name": "MixedMeasurement_40",
+      "index": 40,
+      "sha384": [
+        "8620af613a2f0cabea390f354d850840b1d45d1c5d9168b03329c4b9c36c1078b27ce35416dd9d25f3ee51ab2a6c570e"
+      ]
+    },
+    {
+      "name": "MixedMeasurement_41",
+      "index": 41,
+      "sha384": [
+        "11baaa3599e7a7b70151cf427c62fc95556d9102a9f87499085b3ec122ba64c35b78d505ce847e8b7b1bd90e0c59dcce"
+      ]
+    }
+  ]
+}

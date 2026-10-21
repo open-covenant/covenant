@@ -4,7 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // Compute README <-> env-knob binding guard. Each compute crate's
-// README names the operator-facing COVENANT_COMPUTE_* knobs; the code
+// README names the operator-facing COVENANT_COMPUTE_* / COVENANT_PHALA_* knobs; the code
 // reads a larger set (internal tuning, wizard-written anchors). Both
 // sets are pinned here and re-extracted from the committed files on
 // every run, so all four drift directions fail loud:
@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 //     regression, not a silent shrink;
 //   - the protocol crate starts reading env at all -> its wire types
 //     are deliberately environment-free.
-// Inventory truth is every quoted COVENANT_COMPUTE_* / COVENANT_COMPUTE_*
+// Inventory truth is every quoted COVENANT_COMPUTE_* / COVENANT_PHALA_*
 // literal under the crate's src/ (reads and the setup wizard's node.env
 // template alike; the COMPUTE prefix is the covenant-compute-mcp server's
 // buyer-facing family); examples/ and tests/ are deliberately out of scope.
@@ -23,8 +23,8 @@ import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const agentOsRoot = resolve(here, "..");
 
-const KNOB_LITERAL = /"(COVENANT_(?:COMPUTE|COMPUTE)[A-Z0-9_]*)"/g;
-const KNOB_MENTION = /COVENANT_(?:COMPUTE|COMPUTE)[A-Z0-9_]*/g;
+const KNOB_LITERAL = /"(COVENANT_(?:COMPUTE|PHALA)[A-Z0-9_]*)"/g;
+const KNOB_MENTION = /COVENANT_(?:COMPUTE|PHALA)[A-Z0-9_]*/g;
 
 const CRATES = {
   "covenant-compute-protocol": {
@@ -86,6 +86,7 @@ const CRATES = {
       "COVENANT_COMPUTE_IMD_TOKEN",
       "COVENANT_COMPUTE_IMD_TX_TIMEOUT_SECS",
       "COVENANT_COMPUTE_KANI_PROFILES",
+      "COVENANT_COMPUTE_KNOWLEDGE_IMAGE",
       "COVENANT_COMPUTE_LEASE_STUB_ENDPOINT",
       "COVENANT_COMPUTE_NODE_BACKEND_RETRY_SECS",
       "COVENANT_COMPUTE_NODE_CONTAINER_CPUS",
@@ -129,6 +130,16 @@ const CRATES = {
       "COVENANT_COMPUTE_TEST_WHISPER_MODEL",
       "COVENANT_COMPUTE_WHISPER_BIN",
       "COVENANT_COMPUTE_WHISPER_MODEL",
+      "COVENANT_PHALA_ALLOW_EPHEMERAL_CREATION",
+      "COVENANT_PHALA_EXPECTED_DEVICE_ID",
+      "COVENANT_PHALA_RELAY_ORIGIN",
+      "COVENANT_PHALA_ALLOW_MANAGED_KMS_CREATION",
+      "COVENANT_PHALA_API_KEY_FILE",
+      "COVENANT_PHALA_CREATION_ALLOWANCE_FILE",
+      "COVENANT_PHALA_GUEST_IMAGE_DIGEST",
+      "COVENANT_PHALA_KMS_ID",
+      "COVENANT_PHALA_OS_IMAGE",
+      "COVENANT_PHALA_TEEPOD_ID",
     ],
     documented: [
       "COVENANT_COMPUTE_AGENT_AUTH_TOKEN_FILE",
@@ -164,6 +175,7 @@ const CRATES = {
       "COVENANT_COMPUTE_IMD_TOKEN",
       "COVENANT_COMPUTE_IMD_TX_TIMEOUT_SECS",
       "COVENANT_COMPUTE_KANI_PROFILES",
+      "COVENANT_COMPUTE_KNOWLEDGE_IMAGE",
       "COVENANT_COMPUTE_LEASE_STUB_ENDPOINT",
       "COVENANT_COMPUTE_NODE_BACKEND_RETRY_SECS",
       "COVENANT_COMPUTE_NODE_CONTAINER_CPUS",
@@ -203,6 +215,16 @@ const CRATES = {
       "COVENANT_COMPUTE_SAY_VOICE",
       "COVENANT_COMPUTE_WHISPER_BIN",
       "COVENANT_COMPUTE_WHISPER_MODEL",
+      "COVENANT_PHALA_ALLOW_EPHEMERAL_CREATION",
+      "COVENANT_PHALA_EXPECTED_DEVICE_ID",
+      "COVENANT_PHALA_RELAY_ORIGIN",
+      "COVENANT_PHALA_ALLOW_MANAGED_KMS_CREATION",
+      "COVENANT_PHALA_API_KEY_FILE",
+      "COVENANT_PHALA_CREATION_ALLOWANCE_FILE",
+      "COVENANT_PHALA_GUEST_IMAGE_DIGEST",
+      "COVENANT_PHALA_KMS_ID",
+      "COVENANT_PHALA_OS_IMAGE",
+      "COVENANT_PHALA_TEEPOD_ID",
     ],
   },
   "covenant-compute-coordinator": {
@@ -210,6 +232,10 @@ const CRATES = {
       "COVENANT_COMPUTE_WORK_DIR",
       "COVENANT_COMPUTE_WORK_PUBLISH_TOKEN",
       "COVENANT_COMPUTE_RENTAL_CHECKS_FILE",
+      "COVENANT_COMPUTE_EPHEMERAL_RELAY",
+      "COVENANT_COMPUTE_EPHEMERAL_RELAY_ORIGIN",
+      "COVENANT_COMPUTE_HARDWARE_LEASE_PINS",
+      "COVENANT_COMPUTE_HARDWARE_WORKLOAD_SHA256",
       "COVENANT_COMPUTE_WORK_DIR",
       "COVENANT_COMPUTE_WORK_PUBLISH_TOKEN",
       "COVENANT_COMPUTE_WORKSPACE_MAX_BYTES",
@@ -316,6 +342,10 @@ const CRATES = {
       "COVENANT_COMPUTE_WORK_DIR",
       "COVENANT_COMPUTE_WORK_PUBLISH_TOKEN",
       "COVENANT_COMPUTE_RENTAL_CHECKS_FILE",
+      "COVENANT_COMPUTE_EPHEMERAL_RELAY",
+      "COVENANT_COMPUTE_EPHEMERAL_RELAY_ORIGIN",
+      "COVENANT_COMPUTE_HARDWARE_LEASE_PINS",
+      "COVENANT_COMPUTE_HARDWARE_WORKLOAD_SHA256",
       "COVENANT_COMPUTE_WORKSPACE_MAX_BYTES",
       "COVENANT_COMPUTE_WORKSPACE_MAX_OWNERS",
       "COVENANT_COMPUTE_WORKSPACE_S3_ACCESS_KEY",

@@ -113,6 +113,19 @@ pub fn admit_job(
         .payload
         .validate_input()
         .map_err(|e| AdmissionError::MalformedInput(e.to_string()))?;
+    if let Some(spec) =
+        covenant_compute_protocol::phala::parse_phala_lease_spec(&envelope.payload.input)
+            .map_err(|e| AdmissionError::MalformedInput(e.to_string()))?
+    {
+        if spec.operator_pubkey_b58 != ctx.local_profile.operator.pubkey_base58()
+            || ctx.now_ms < envelope.payload.issued_at_ms
+            || ctx.now_ms >= spec.lease_expires_at_ms
+        {
+            return Err(AdmissionError::ExecutorRefused(
+                "Phala lease targets another operator or has expired".into(),
+            ));
+        }
+    }
 
     // The receipt will price this job at the envelope's offer, so an
     // offer below the declared ask is a pay cut — reject it here even

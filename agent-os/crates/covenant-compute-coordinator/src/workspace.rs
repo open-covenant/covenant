@@ -392,6 +392,7 @@ pub struct WorkspaceService {
     objects: Arc<dyn WorkspaceObjects>,
     coordinator: CoordinatorState,
     writes_enabled: bool,
+    hardware: Option<Arc<crate::hardware::HardwareService>>,
 }
 
 impl WorkspaceService {
@@ -411,7 +412,16 @@ impl WorkspaceService {
             objects,
             coordinator,
             writes_enabled: true,
+            hardware: None,
         })
+    }
+
+    pub fn with_hardware(
+        mut self,
+        hardware: Option<Arc<crate::hardware::HardwareService>>,
+    ) -> Self {
+        self.hardware = hardware;
+        self
     }
 
     /// Counts committed ciphertext, outstanding upload reservations and garbage
@@ -769,9 +779,23 @@ impl WorkspaceService {
                 ));
             }
             if row.view.trust_floor > WorkspaceTrustFloor::Open {
-                return Err(WorkspaceError::Forbidden(
-                    "verified hardware trust is unavailable on this deployment".into(),
-                ));
+                use covenant_compute_attestation::vendor_types::TrustClass;
+                let floor = match row.view.trust_floor {
+                    WorkspaceTrustFloor::Open => TrustClass::Open,
+                    WorkspaceTrustFloor::Isolated => TrustClass::Isolated,
+                    WorkspaceTrustFloor::Attested => TrustClass::Attested,
+                    WorkspaceTrustFloor::Confidential => TrustClass::Confidential,
+                };
+                self.hardware
+                    .as_ref()
+                    .ok_or_else(|| {
+                        WorkspaceError::Forbidden(
+                            "hardware verification is disabled; stronger workspace trust is unavailable"
+                                .into(),
+                        )
+                    })?
+                    .require_floor(job_id, owner, floor, now_ms)
+                    .map_err(|e| WorkspaceError::Forbidden(e.to_string()))?;
             }
         }
         book.reserve_object_action(owner, id, now_ms)?;
@@ -868,6 +892,7 @@ fn now_ms() -> u64 {
 pub fn build_from_env(
     coordinator: CoordinatorState,
     journal_path: &Path,
+    hardware: Option<Arc<crate::hardware::HardwareService>>,
 ) -> Result<Option<Arc<WorkspaceService>>, WorkspaceError> {
     let endpoint = match std::env::var("COVENANT_COMPUTE_WORKSPACE_S3_ENDPOINT") {
         Ok(value) if !value.trim().is_empty() => value,
@@ -923,6 +948,7 @@ pub fn build_from_env(
             max_owners,
         )?
         .with_byte_limit(max_bytes)?
+        .with_hardware(hardware)
         .with_writes_enabled(writes_enabled),
     )))
 }

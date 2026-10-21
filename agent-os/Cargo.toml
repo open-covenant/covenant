@@ -1,5 +1,6 @@
 [workspace]
 resolver = "2"
+exclude = ["crates/covenant-compute-attestation/vendor/dcap-qvl"]
 members = [
     "crates/covenant-types",
     "crates/covenant-manifest",
@@ -26,6 +27,7 @@ members = [
     "crates/covenant-sap-bridge",
     "crates/covenant-stake-keeper",
     "crates/covenant-compute-protocol",
+    "crates/covenant-compute-attestation",
     "crates/covenant-compute-node",
     "crates/covenant-compute-coordinator",
     "crates/covenant-compute-buyer",

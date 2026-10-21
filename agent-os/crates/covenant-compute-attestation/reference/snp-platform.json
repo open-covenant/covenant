@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "product_line": "genoa",
+  "provenance": "captured",
+  "note": "ark_sha256 is the digest of roots/amd-ark-genoa.der, the real ARK-Genoa from AMD KDS, verified self-signed with the ASK chaining to it. The TCB floor is the level observed on prism-node-01 (EPYC 9124, Genoa) in a signed report whose VCEK AMD issued for that exact chip. A platform below this floor is refused. A mismatch between this digest and the compiled root is a build mistake and panics at load.",
+  "ark_sha256": "4c6598d19c18719c5dfd4a7d335f674e5bfe1d8f800cea2cf270c10d103db2f1",
+  "required_vmpl": 0,
+  "guest_policy": {
+    "debug": false,
+    "migrate_ma": false,
+    "smt": true,
+    "single_socket": false
+  },
+  "tcb_floor": {
+    "bootloader": 7,
+    "tee": 0,
+    "snp": 23,
+    "microcode": 72
+  },
+  "ark_subject": "CN=ARK-Genoa, O=Advanced Micro Devices",
+  "ark_source": "https://kdsintf.amd.com/vcek/v1/Genoa/cert_chain, fetched 2026-08-17",
+  "tcb_floor_source": "prism-node-01 reported_tcb 0x4817000000000007, VCEK issued by AMD KDS for chip a93b917d\u2026"
+}

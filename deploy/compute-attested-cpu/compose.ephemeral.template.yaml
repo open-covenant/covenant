@@ -1,0 +1,96 @@
+# Ephemeral keyless profile: no published ports, no sealed environment.
+services:
+  ssh:
+    image: ghcr.io/open-covenant/covenant/compute-node-public@sha256:__IMAGE_DIGEST__
+    command: ["ssh"]
+    user: "0:0"
+    cgroup: private
+    read_only: true
+    restart: "no"
+    cap_drop: ["ALL"]
+    cap_add: ["CHOWN", "SETUID", "SETGID", "SYS_CHROOT"]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      COVENANT_LEASE_POLICY_B64: "__LEASE_POLICY_B64__"
+    volumes:
+      - type: volume
+        source: ssh-run-memory-__JOB_ID__
+        target: /run
+        volume: {nocopy: true}
+      - type: volume
+        source: ssh-tmp-memory-__JOB_ID__
+        target: /tmp
+        volume: {nocopy: true}
+      - type: volume
+        source: workspace-memory-__JOB_ID__
+        target: /workspace
+        volume: {nocopy: true}
+      - type: volume
+        source: host-public-memory-v1-__JOB_ID__
+        target: /host-public
+        volume: {nocopy: true}
+    pids_limit: 128
+    mem_limit: 768m
+    memswap_limit: 768m
+    ulimits:
+      core: {soft: 0, hard: 0}
+    logging:
+      driver: json-file
+      options: {max-size: "1m", max-file: "2"}
+  collector:
+    image: ghcr.io/open-covenant/covenant/compute-node-public@sha256:__IMAGE_DIGEST__
+    command: ["outbound"]
+    user: "10002:10002"
+    cgroup: private
+    read_only: true
+    restart: "no"
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      COVENANT_LEASE_POLICY_B64: "__LEASE_POLICY_B64__"
+    volumes:
+      - /var/run/dstack.sock:/var/run/dstack.sock:ro
+      - type: volume
+        source: host-public-memory-v1-__JOB_ID__
+        target: /host-public
+        read_only: true
+        volume: {nocopy: true}
+      - collector-state-__JOB_ID__:/state
+    pids_limit: 16
+    mem_limit: 256m
+    memswap_limit: 256m
+    ulimits:
+      core: {soft: 0, hard: 0}
+    logging:
+      driver: json-file
+      options: {max-size: "1m", max-file: "2"}
+volumes:
+  # Use the local driver: Docker's service/--tmpfs option parser rejects noswap
+  # before the kernel sees it. Each job gets separate whole tmpfs instances.
+  # nocopy prevents populating them from the image's on-disk directory tree.
+  ssh-run-memory-__JOB_ID__:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "rw,nosuid,nodev,noexec,noswap,size=8m,mode=755"
+  ssh-tmp-memory-__JOB_ID__:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "rw,nosuid,nodev,noexec,noswap,size=16m,mode=1777"
+  workspace-memory-__JOB_ID__:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "rw,nosuid,nodev,noswap,size=128m,mode=700,uid=10001,gid=10001"
+  # New name also avoids reuse of a pre-hardening disk-backed public volume.
+  host-public-memory-v1-__JOB_ID__:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "rw,nosuid,nodev,noexec,noswap,size=1m,mode=755"
+  collector-state-__JOB_ID__:

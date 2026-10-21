@@ -1,0 +1,8 @@
+Prism Network
+Copyright 2026 Prism Network
+
+This product includes software developed by Prism Network contributors.
+
+sdk/vendor/aci-verifier is a JavaScript port of clients/verifier-ts from
+Dstack-TEE/private-ai-gateway at commit b6b5c1b, used under the Apache License,
+Version 2.0.

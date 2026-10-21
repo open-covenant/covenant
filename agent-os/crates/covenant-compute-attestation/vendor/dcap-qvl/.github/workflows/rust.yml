@@ -1,0 +1,281 @@
+name: Rust
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v7
+    - name: Build
+      run: cargo build --verbose
+    - name: Run tests
+      run: cargo test --verbose
+
+  build-json-core:
+    name: Build & test with json-core feature
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+    - name: Build
+      run: cargo build --verbose --features json-core,default-x509,ring,rustcrypto,report
+    - name: Run tests
+      run: cargo test --verbose --features json-core,default-x509,ring,rustcrypto,report
+
+  python-bindings:
+    name: Build & Test Python bindings (unit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.10"
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Install Python test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install maturin pytest pytest-asyncio
+
+      - name: Build & install Python package (editable)
+        run: |
+          python -m pip install -e python-bindings
+
+      - name: Run Python unit tests (no network)
+        run: |
+          pytest -q python-bindings/tests
+
+  golang-bindings:
+    name: Build & Test Go bindings (unit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.21"
+
+      - name: Build Rust static library for Go bindings
+        run: |
+          cargo build --release --features go
+
+      - name: Run Go unit tests
+        working-directory: golang-bindings
+        env:
+          CGO_LDFLAGS: -L${{ github.workspace }}/target/release
+        run: go test ./...
+
+  golang-bindings-integration:
+    name: Build & Test Go bindings (integration)
+    runs-on: ubuntu-latest
+    needs: golang-bindings
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.21"
+
+      - name: Build Rust static library for Go bindings
+        run: |
+          cargo build --release --features go
+
+      - name: Run Go integration tests
+        working-directory: golang-bindings
+        env:
+          CGO_LDFLAGS: -L${{ github.workspace }}/target/release
+        run: go test -tags integration -count=1 ./...
+
+  mobile-bindings-rust:
+    name: Build & Test mobile bindings (Rust)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: cargo test
+        working-directory: dcap-qvl-mobile
+        run: cargo test --verbose
+
+  mobile-bindings-android:
+    name: Build Android AAR + run JVM unit tests
+    runs-on: ubuntu-latest
+    needs: mobile-bindings-rust
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Setup Android NDK
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26b
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          target: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      - name: Build Android AAR
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: ./dcap-qvl-mobile/scripts/build_android.sh
+
+      - name: Run JVM unit tests
+        working-directory: dcap-qvl-mobile/android
+        run: gradle --no-daemon test
+
+  mobile-bindings-android-emulator:
+    name: Android emulator runtime test
+    runs-on: ubuntu-latest
+    # Gated behind the cheap build+unit-test job: the emulator (the most
+    # expensive minutes here) only spins up once the AAR builds and the
+    # instrumented test is known to compile + package.
+    needs: mobile-bindings-android
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Setup Android NDK
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26b
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          target: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      - name: Build Android AAR + stage instrumented-test fixtures
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: ./dcap-qvl-mobile/scripts/build_android.sh
+
+      # GitHub-hosted ubuntu runners expose nested virtualization; enabling
+      # KVM lets the emulator boot fast (vs. ~4 min software emulation).
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run instrumented tests on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          arch: x86_64
+          target: default
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-audio -no-boot-anim
+          disable-animations: true
+          script: cd dcap-qvl-mobile/android && gradle --no-daemon :connectedDebugAndroidTest
+
+  mobile-bindings-ios:
+    name: Build iOS XCFramework + run Swift tests
+    runs-on: macos-14
+    needs: mobile-bindings-rust
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          target: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+
+      - name: Build XCFramework + Swift sources
+        run: ./dcap-qvl-mobile/scripts/build_ios.sh
+
+      - name: swift test
+        working-directory: dcap-qvl-mobile/ios
+        run: swift test
+
+  wasm:
+    name: Check WebAssembly target
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Add wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+      - name: Check wasm32 build
+        run: cargo check --target wasm32-unknown-unknown --features js
+
+  format:
+    name: Format code
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Format code
+        run: cargo fmt --all -- --check
+
+  clippy:
+    name: Check code with clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check code with clippy
+        run: cargo clippy -- -D warnings
+
+  clippy-cli:
+    name: Check cli code with clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check cli code with clippy
+        run: cd cli && cargo clippy -- -D warnings

@@ -25,10 +25,10 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^0.460.0",
-    "next": "16.2.6",
-    "react": "19.2.6",
-    "react-dom": "19.2.6",
-    "sharp": "0.34.5",
+    "next": "16.4.2",
+    "react": "19.2.9",
+    "react-dom": "19.2.9",
+    "sharp": "0.35.5",
     "tailwind-merge": "^3.6.0"
   },
   "devDependencies": {
@@ -40,5 +40,28 @@
     "tailwindcss": "^4.3.0",
     "typescript": "6.0.3",
     "vitest": "^4.1.5"
+  },
+  "pnpm": {
+    "overrides": {
+      "axios": "1.20.0",
+      "browserslist": "4.28.7",
+      "follow-redirects": "1.16.1",
+      "image-size": "2.0.3",
+      "ip-address": "10.3.1",
+      "lodash": "4.18.1",
+      "protobufjs": "7.6.6",
+      "shell-quote": "1.11.0",
+      "socket.io-parser": "4.2.7",
+      "source-map-js": "1.2.2",
+      "toml": "5.0.1",
+      "ws@8.18.0": "8.21.0",
+      "ws@8.20.1": "8.21.0"
+    },
+    "auditConfig": {
+      "ignoreGhsas": [
+        "GHSA-3gc7-fjrx-p6mg",
+        "GHSA-vfj7-8cjw-p6xm"
+      ]
+    }
   }
 }

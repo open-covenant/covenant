@@ -66,7 +66,10 @@ export interface GpuRunnerDeps {
   record: (outputs: GpuOutput[]) => void;
   connect?: (
     accessUrl: string,
-  ) => Pick<WorkspaceClient, 'makeDirectory' | 'upload' | 'download' | 'execute' | 'close'>;
+  ) => Pick<
+    WorkspaceClient,
+    'waitUntilServing' | 'makeDirectory' | 'upload' | 'download' | 'execute' | 'close'
+  >;
   now?: () => number;
   pollMs?: number;
 }

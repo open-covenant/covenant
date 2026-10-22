@@ -46,6 +46,7 @@ function setup(
       : `__covenant__${JSON.stringify({ stdout: 'ok', stderr: '', sizes: { 'report.json': 13 } })}`,
   }));
   const client = {
+    waitUntilServing: vi.fn(async () => {}),
     makeDirectory: vi.fn(async () => {}),
     upload: vi.fn(async () => {}),
     download: vi.fn(async (path: string) =>

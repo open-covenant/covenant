@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   MAX_OUTPUT_BYTES,
+  WorkspaceClient,
   WorkspaceError,
   parseWorkspaceUrl,
   runWorkspaceJob,
@@ -25,6 +26,7 @@ function fakeWorkspace(options: {
   let polls = 0;
   const executed: string[] = [];
   const client = {
+    waitUntilServing: vi.fn(async () => {}),
     makeDirectory: vi.fn(async (path: string) => {
       directories.add(path);
     }),
@@ -191,5 +193,47 @@ describe('runWorkspaceJob', () => {
         deadlineMs: Date.now() + 1_000,
       }),
     ).rejects.toThrow(/start failed: OSError/);
+  });
+});
+
+describe('waiting for Jupyter to accept connections', () => {
+  const endpoint = { origin: 'https://203.0.113.7:41234', token: 't'.repeat(32) };
+  function client(responses: Array<number | string>) {
+    const c = new WorkspaceClient(endpoint);
+    const json = vi.spyOn(c, 'json').mockImplementation(async () => {
+      const next = responses.shift() ?? 200;
+      if (typeof next === 'string') throw new WorkspaceError(`request failed: ${next}`, next);
+      return { status: next, body: null };
+    });
+    return { c, json };
+  }
+
+  it('retries while the port refuses connections, then proceeds', async () => {
+    const { c, json } = client(['ECONNREFUSED', 'ECONNRESET', 502, 200]);
+    await c.waitUntilServing(Date.now() + 5_000, { pollMs: 1 });
+    expect(json).toHaveBeenCalledTimes(4);
+    c.close();
+  });
+
+  it('fails at once on a certificate or token problem', async () => {
+    const tls = client(['UNABLE_TO_VERIFY_LEAF_SIGNATURE']);
+    await expect(tls.c.waitUntilServing(Date.now() + 5_000, { pollMs: 1 })).rejects.toThrow(
+      /UNABLE_TO_VERIFY_LEAF_SIGNATURE/,
+    );
+    expect(tls.json).toHaveBeenCalledOnce();
+    const token = client([403]);
+    await expect(token.c.waitUntilServing(Date.now() + 5_000, { pollMs: 1 })).rejects.toThrow(
+      /refused its token/,
+    );
+    tls.c.close();
+    token.c.close();
+  });
+
+  it('gives up with the last failure at its deadline', async () => {
+    const { c } = client(Array(100).fill('ECONNREFUSED'));
+    await expect(c.waitUntilServing(Date.now() + 30, { pollMs: 5 })).rejects.toThrow(
+      /ECONNREFUSED/,
+    );
+    c.close();
   });
 });

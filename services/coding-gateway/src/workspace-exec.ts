@@ -52,7 +52,30 @@ with open('covenant-exit.tmp', 'w') as f:
 os.replace('covenant-exit.tmp', 'covenant-exit.json')
 `;
 
-export class WorkspaceError extends Error {}
+export class WorkspaceError extends Error {
+  constructor(
+    message: string,
+    /** Network error code, when the request never got an HTTP response. */
+    readonly code?: string,
+  ) {
+    super(message);
+  }
+}
+
+// Compute reports a workspace ready once its ports and token exist, which can be
+// before Jupyter accepts connections. Only these failures mean "not up yet";
+// a certificate or token problem fails at once.
+const NOT_LISTENING = new Set([
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'EPIPE',
+  'TIMEOUT',
+]);
+const SERVING_WAIT_MS = 120_000;
+const SERVING_POLL_MS = 3_000;
 
 export interface WorkspaceEndpoint {
   origin: string;
@@ -181,13 +204,18 @@ export class WorkspaceClient {
           res.on('error', reject);
         },
       );
-      req.on('timeout', () => req.destroy(new WorkspaceError(`GPU workspace ${method} timed out`)));
+      req.on('timeout', () =>
+        req.destroy(new WorkspaceError(`GPU workspace ${method} timed out`, 'TIMEOUT')),
+      );
       // Socket and TLS errors can name the host; report the failure without it.
       req.on('error', (cause) =>
         reject(
           cause instanceof WorkspaceError
             ? cause
-            : new WorkspaceError(`GPU workspace request failed: ${errorCode(cause)}`),
+            : new WorkspaceError(
+                `GPU workspace request failed: ${errorCode(cause)}`,
+                errorCode(cause),
+              ),
         ),
       );
       req.end(payload);
@@ -199,6 +227,31 @@ export class WorkspaceClient {
     if (!ok.includes(response.status))
       throw new WorkspaceError(`GPU workspace ${method} returned HTTP ${response.status}`);
     return response.body;
+  }
+
+  /** Waits until Jupyter answers an authenticated request, up to `untilMs`. */
+  async waitUntilServing(
+    untilMs: number,
+    options: { signal?: AbortSignal; pollMs?: number } = {},
+  ): Promise<void> {
+    for (;;) {
+      let failure: WorkspaceError;
+      try {
+        const response = await this.json('GET', '/api/status');
+        if (response.status === 401 || response.status === 403)
+          throw new WorkspaceError(`GPU workspace refused its token (HTTP ${response.status})`);
+        if (response.status < 500) return;
+        failure = new WorkspaceError(`GPU workspace returned HTTP ${response.status}`);
+      } catch (cause) {
+        if (!(cause instanceof WorkspaceError) || !NOT_LISTENING.has(cause.code ?? '')) throw cause;
+        failure = cause;
+      }
+      const remaining = untilMs - Date.now();
+      if (remaining <= 0 || options.signal?.aborted) throw failure;
+      await delay(Math.min(options.pollMs ?? SERVING_POLL_MS, remaining), undefined, {
+        signal: options.signal,
+      }).catch(() => undefined);
+    }
   }
 
   async makeDirectory(path: string): Promise<void> {
@@ -450,13 +503,19 @@ export interface WorkspaceJobOutcome {
 }
 
 export async function runWorkspaceJob(
-  client: Pick<WorkspaceClient, 'makeDirectory' | 'upload' | 'download' | 'execute'>,
+  client: Pick<
+    WorkspaceClient,
+    'waitUntilServing' | 'makeDirectory' | 'upload' | 'download' | 'execute'
+  >,
   spec: WorkspaceJobSpec,
   options: { signal?: AbortSignal; now?: () => number; pollMs?: number } = {},
 ): Promise<WorkspaceJobOutcome> {
   const now = options.now ?? Date.now;
   const id = randomUUID();
   const dir = `${JOB_ROOT}/${id}`;
+  await client.waitUntilServing(Math.min(now() + SERVING_WAIT_MS, spec.deadlineMs), {
+    signal: options.signal,
+  });
   await client.makeDirectory(JOB_ROOT);
   await client.makeDirectory(dir);
   for (const file of spec.files) {

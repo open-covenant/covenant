@@ -172,12 +172,22 @@ pub(super) fn document(
 impl Gateway {
     pub async fn discovery_openapi(&self) -> Result<Value> {
         let live = self.live_discovery_offers(true).await?;
-        document(
+        let mut document = document(
             self.rail.resource_url(),
             live.observed,
             &live.offers,
             !live.alternates.is_empty(),
-        )
+        )?;
+        if let Some(jobs) = self.jobs.as_ref().filter(|_| self.admissions_open()) {
+            let paths = jobs.openapi_paths(live.observed).await;
+            if !paths.is_empty() {
+                document["x-covenant-available"] = json!(true);
+            }
+            for (path, item) in paths {
+                document["paths"][path] = item;
+            }
+        }
+        Ok(document)
     }
 }
 

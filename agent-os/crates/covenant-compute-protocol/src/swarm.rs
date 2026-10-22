@@ -368,4 +368,11 @@ mod tests {
         assert!(err.to_string().contains("16384"), "{err}");
         assert!(research().compact_body().unwrap().len() < 400);
     }
+
+    #[test]
+    fn a_swarm_order_matches_only_a_swarm_node() {
+        assert!(crate::model_matches(SWARM_MODEL, SWARM_MODEL));
+        assert!(!crate::model_matches("any", SWARM_MODEL));
+        assert!(crate::model_matches("any", "llama3"));
+    }
 }

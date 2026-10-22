@@ -468,10 +468,12 @@ pub fn canonical_model(reference: &str) -> &str {
 }
 
 /// Match an advertised model without widening versioned execution contracts to
-/// a legacy wildcard. Native empty checks also require an exact image label.
+/// a legacy wildcard. Native empty checks also require an exact image label,
+/// and a swarm order must reach a swarm node, never a shell-command node.
 pub fn model_matches(served: &str, required: &str) -> bool {
     if required.starts_with(crate::NATIVE_EMPTY_CHECK_MODEL_PREFIX)
         || required.starts_with(crate::knowledge::KNOWLEDGE_MODEL_PREFIX)
+        || required == crate::SWARM_MODEL
     {
         return served == required;
     }

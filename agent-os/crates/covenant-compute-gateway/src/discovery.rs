@@ -271,6 +271,10 @@ impl Gateway {
             payments.extend(alternates.iter().map(|rail| record(rail.as_ref())));
         }
         let mut endpoints = vec![json!({"path":"/v1/models","method":"GET","price":"free"})];
+        let jobs = match &self.jobs {
+            Some(jobs) if self.admissions_open() => jobs.manifest_endpoints(observed).await,
+            _ => Vec::new(),
+        };
         for offer in &offers {
             let mut endpoint = json!({"path":"/v1/chat/completions","url":self.rail.resource_url(),"method":"POST",
                 "description":"Request a fresh HTTP 402 quote, then submit the identical body with Payment-Signature. Prices are fixed upfront; availability is an observation, not a reservation.",
@@ -283,6 +287,8 @@ impl Gateway {
             }
             endpoints.push(endpoint);
         }
+        let available = !offers.is_empty() || !jobs.is_empty();
+        endpoints.extend(jobs);
         let description = if payments.len() > 1 {
             "Available text inference and its current exact USDC payment terms on Solana and Base."
         } else {
@@ -291,7 +297,7 @@ impl Gateway {
         Ok(
             json!({"schemaVersion":1,"x402Version":2,"name":"Covenant Compute",
             "description":description,
-            "observedAtMs":observed,"available":!offers.is_empty(),"models":model_records(&offers),"endpoints":endpoints}),
+            "observedAtMs":observed,"available":available,"models":model_records(&offers),"endpoints":endpoints}),
         )
     }
     pub async fn discovery_models(&self) -> Result<Value> {

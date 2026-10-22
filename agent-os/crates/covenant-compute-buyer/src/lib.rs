@@ -3830,6 +3830,19 @@ pub async fn dispatch_signed(
     poll_receipt_and_verify(http, config, buyer_identity, envelope).await
 }
 
+/// [`dispatch_signed`] for a seller that submits a job only after its own
+/// customer's payment for it has settled. The spend is already covered, so the
+/// durable daily budget is neither reserved nor reconciled.
+pub async fn dispatch_signed_prepaid(
+    http: &reqwest::Client,
+    config: &BuyerConfig,
+    buyer_identity: &LocalIdentity,
+    envelope: SignedJobEnvelope,
+) -> Result<DispatchOutcome, BuyerError> {
+    submit_envelope_http(http, config, &envelope).await?;
+    poll_receipt_and_verify_inner(http, config, buyer_identity, envelope).await
+}
+
 async fn sign_and_submit(
     http: &reqwest::Client,
     config: &BuyerConfig,

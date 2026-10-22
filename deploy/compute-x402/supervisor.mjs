@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import {startWatchdog} from '../compute-canary-watchdog.mjs';
@@ -5,12 +6,20 @@ import * as runtime from './runtime.mjs';
 const {privateDirectory,seed,latch,missing,clearStartingLatch,explicitBoolean,operatorPubkey,startInferenceOperator,ProcessGroup,waitFor}=runtime;
 
 const BASE58='123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
-/** The Solana address of a keypair given as base64 of its 64-byte JSON array. */
+const ED25519_PKCS8_PREFIX=Buffer.from('302e020100300506032b657004220420','hex');
+/**
+ * The Solana address of a keypair given as base64 of its 64-byte JSON array.
+ * The public half must be the one the secret half derives, so a key that the
+ * verifier would refuse is never persisted.
+ */
 function keypairAddress(encoded){
   let bytes;
-  try{bytes=JSON.parse(Buffer.from(encoded,'base64').toString('utf8'));}catch{throw Error('Invalid fee payer key');}
-  if(!Array.isArray(bytes)||bytes.length!==64||bytes.some(b=>!Number.isInteger(b)||b<0||b>255))throw Error('Invalid fee payer key');
+  try{bytes=JSON.parse(Buffer.from(encoded,'base64').toString('utf8'));}catch{throw Error('Invalid keypair');}
+  if(!Array.isArray(bytes)||bytes.length!==64||bytes.some(b=>!Number.isInteger(b)||b<0||b>255))throw Error('Invalid keypair');
+  const secret=crypto.createPrivateKey({key:Buffer.concat([ED25519_PKCS8_PREFIX,Buffer.from(bytes.slice(0,32))]),format:'der',type:'pkcs8'});
+  const derived=crypto.createPublicKey(secret).export({format:'der',type:'spki'}).subarray(-32);
   const key=bytes.slice(32);
+  if(!derived.equals(Buffer.from(key)))throw Error('Invalid keypair');
   let n=key.reduce((value,b)=>value*256n+BigInt(b),0n),address='';
   while(n>0n){address=BASE58[Number(n%58n)]+address;n/=58n;}
   for(const b of key){if(b!==0)break;address='1'+address;}
@@ -53,6 +62,21 @@ try{
   const bridgeSecret=process.env.COVENANT_GATEWAY_BRIDGE_SECRET;
   if(typeof bridgeSecret!=='string'||bridgeSecret.length<32)throw Error('Persistent bridge secret required');
   seed(path.join(gateway,'bridge-secret'),Buffer.from(bridgeSecret).toString('base64'));
+  // Paid jobs have their own merchant wallet, which refunds failed jobs, and
+  // their own coordinator buyer. The merchant key is checked against its
+  // address before anything is written, and only the verifier reads it.
+  const jobsPayTo=process.env.COVENANT_GATEWAY_JOBS_PAY_TO;
+  let jobsMerchantFile;
+  if(jobsPayTo){
+    if(!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(jobsPayTo))throw Error('Jobs merchant address invalid');
+    const merchantKey=process.env.COVENANT_GATEWAY_JOBS_MERCHANT_KEY_B64;
+    if(merchantKey!==undefined&&keypairAddress(merchantKey)!==jobsPayTo)throw Error('Jobs merchant key does not match its address');
+    const verifier=path.join(data,'verifier');
+    privateDirectory(verifier);
+    jobsMerchantFile=path.join(verifier,`jobs-merchant-${jobsPayTo}.json`);
+    seed(jobsMerchantFile,merchantKey);
+    seed(path.join(gateway,'jobs-identity.key'),process.env.COVENANT_GATEWAY_JOBS_IDENTITY_B64,32);
+  }
   let tariffFiles={};
   const supportsTariffs=typeof runtime.materializeTariffs==='function';
   try{
@@ -74,10 +98,12 @@ try{
     COVENANT_COMPUTE_OPENAI_URL:'http://127.0.0.1:4044/v1',
     COVENANT_COMPUTE_OPENAI_API_KEY:process.env.COVENANT_INFERENCE_PROVIDER_BEARER_TOKEN};
   delete env.COVENANT_GATEWAY_IDENTITY_B64;delete env.COVENANT_COMPUTE_NODE_IDENTITY_B64;delete env.COVENANT_GATEWAY_FEE_PAYER_KEY_B64;
+  delete env.COVENANT_GATEWAY_JOBS_MERCHANT_KEY_B64;delete env.COVENANT_GATEWAY_JOBS_IDENTITY_B64;
+  if(jobsMerchantFile)env.COVENANT_GATEWAY_JOBS_MERCHANT_KEY_FILE=jobsMerchantFile;
   delete env.COVENANT_GATEWAY_TARIFFS_JSON;
   // Base facilitator credentials and the Base RPC URL, which may carry a
   // provider key, are for the verifier only.
-  const verifierOnly=['CDP_API_KEY_ID','CDP_API_KEY_SECRET','COVENANT_GATEWAY_BASE_RPC','COVENANT_GATEWAY_BASE_FACILITATOR_URL','COVENANT_GATEWAY_SOLANA_FACILITATOR_URL'];
+  const verifierOnly=['CDP_API_KEY_ID','CDP_API_KEY_SECRET','COVENANT_GATEWAY_BASE_RPC','COVENANT_GATEWAY_BASE_FACILITATOR_URL','COVENANT_GATEWAY_SOLANA_FACILITATOR_URL','COVENANT_GATEWAY_JOBS_MERCHANT_KEY_FILE'];
   const verifierEnv=Object.fromEntries(verifierOnly.filter(key=>env[key]!==undefined).map(key=>[key,env[key]]));
   for(const key of verifierOnly)delete env[key];
   group.start('payment verifier',process.execPath,['services/compute-x402-facilitator/server.mjs'],{...env,...verifierEnv});

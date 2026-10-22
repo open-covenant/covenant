@@ -147,6 +147,47 @@ pub struct Bridge {
     pay_to: String,
     fee_payer: String,
     resource_url: String,
+    /// Sells paid jobs to its own merchant, and refunds the ones that fail.
+    jobs: bool,
+}
+
+/// What the verifier returns when asked to refund a payment.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RefundBuild {
+    /// A signed refund, sealed by the verifier, to store before it is sent.
+    Built {
+        transaction_id: String,
+        encoded: String,
+    },
+    /// The payment was already refunded by this transaction.
+    AlreadyRefunded { transaction_id: String },
+}
+
+/// What the verifier says about a stored refund.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RefundStatus {
+    Pending,
+    Finalized {
+        transaction_id: String,
+    },
+    /// It expired or failed on chain. No money moved, and it never can, so a
+    /// new refund may be built.
+    Void,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct JobReadiness {
+    schema_version: u32,
+    observed_at_ms: u64,
+    pricing_valid: bool,
+    scheme: String,
+    network: String,
+    asset: String,
+    asset_decimals: u8,
+    pay_to: String,
+    fee_payer: String,
+    job_prices: std::collections::BTreeMap<String, String>,
 }
 impl Bridge {
     fn checked_client(url: &str, secret: &str, resource_url: &str) -> Result<reqwest::Client> {
@@ -208,6 +249,7 @@ impl Bridge {
             pay_to,
             fee_payer: String::new(),
             resource_url,
+            jobs: false,
         })
     }
     /// USDC on Solana, with Covenant's fee payer sponsoring the transaction.
@@ -253,6 +295,24 @@ impl Bridge {
             pay_to,
             fee_payer,
             resource_url,
+            jobs: false,
+        })
+    }
+    /// USDC on Solana for paid jobs, paid to the jobs merchant. `resource_url`
+    /// is the inference resource; each job kind is sold at `/v1/jobs/<kind>`
+    /// on the same origin.
+    pub fn solana_jobs(
+        url: String,
+        secret: String,
+        network: String,
+        asset: String,
+        pay_to: String,
+        fee_payer: String,
+        resource_url: String,
+    ) -> Result<Self> {
+        Ok(Self {
+            jobs: true,
+            ..Self::solana(url, secret, network, asset, pay_to, fee_payer, resource_url)?
         })
     }
     async fn readiness(&self, now: u64) -> Result<(Readiness, u64)> {
@@ -320,10 +380,120 @@ impl Bridge {
         Ok((snapshot, now))
     }
     fn prefix(&self) -> &'static str {
-        match self.family {
-            Family::Solana => "",
-            Family::Base => "/evm",
+        match (self.family, self.jobs) {
+            (Family::Solana, false) => "",
+            (Family::Solana, true) => "/jobs",
+            (Family::Base, _) => "/evm",
         }
+    }
+    /// Fails unless the verifier will admit a payment of `amount` for the job
+    /// sold at `resource_url`, to this rail's merchant.
+    pub async fn check_job_price(&self, resource_url: &str, amount: u64, now: u64) -> Result<()> {
+        let unavailable =
+            || GatewayError::Unavailable("payment bridge readiness unavailable".into());
+        if !self.jobs {
+            return Err(unavailable());
+        }
+        let started = Instant::now();
+        let response = self
+            .http
+            .get(format!("{}/jobs/readiness", self.url))
+            .bearer_auth(&self.secret)
+            .timeout(Duration::from_secs(3))
+            .send()
+            .await
+            .map_err(|_| unavailable())?;
+        if !response.status().is_success()
+            || response
+                .content_length()
+                .is_some_and(|n| n > MAX_READINESS_BYTES as u64)
+        {
+            return Err(unavailable());
+        }
+        let body = response.bytes().await.map_err(|_| unavailable())?;
+        if body.len() > MAX_READINESS_BYTES {
+            return Err(unavailable());
+        }
+        let snapshot: JobReadiness = serde_json::from_slice(&body).map_err(|_| unavailable())?;
+        let now = crate::after_wait(now, started);
+        if snapshot.schema_version != 1
+            || !snapshot.pricing_valid
+            || snapshot.observed_at_ms.abs_diff(now) > 5_000
+            || snapshot.scheme != "exact"
+            || snapshot.asset_decimals != 6
+            || snapshot.network != self.network
+            || snapshot.asset != self.asset
+            || snapshot.pay_to != self.pay_to
+            || snapshot.fee_payer != self.fee_payer
+        {
+            return Err(unavailable());
+        }
+        if snapshot.job_prices.get(resource_url) != Some(&amount.to_string()) {
+            return Err(GatewayError::Unavailable(
+                "job price is not configured for admission".into(),
+            ));
+        }
+        Ok(())
+    }
+    /// A signed refund of a finalized job payment, sealed by the verifier, or
+    /// the refund that already returned it. The caller stores a new refund
+    /// before asking for its status, which broadcasts it.
+    pub async fn refund(
+        &self,
+        payment: &VerifiedPayment,
+        terms: &PaymentTerms,
+    ) -> Result<RefundBuild> {
+        let value = self
+            .call(
+                "/refund",
+                json!({"payment":payment,"paymentRequirements":terms.accepted()}),
+            )
+            .await?;
+        let text = |key: &str| {
+            value[key]
+                .as_str()
+                .filter(|text| !text.is_empty())
+                .map(str::to_owned)
+        };
+        match (
+            value["status"].as_str(),
+            text("transaction_id"),
+            text("encoded_refund"),
+        ) {
+            (Some("built"), Some(transaction_id), Some(encoded)) => Ok(RefundBuild::Built {
+                transaction_id,
+                encoded,
+            }),
+            (Some("refunded"), Some(transaction_id), None) => {
+                Ok(RefundBuild::AlreadyRefunded { transaction_id })
+            }
+            _ => Err(GatewayError::Unavailable(
+                "invalid payment bridge response".into(),
+            )),
+        }
+    }
+    pub async fn refund_status(
+        &self,
+        payment: &VerifiedPayment,
+        terms: &PaymentTerms,
+        refund: &str,
+    ) -> Result<RefundStatus> {
+        let value = self
+            .call(
+                "/refund-status",
+                json!({"payment":payment,"paymentRequirements":terms.accepted(),"refund":refund}),
+            )
+            .await?;
+        Ok(match value["status"].as_str() {
+            Some("finalized") => match value["transaction_id"].as_str() {
+                Some(id) if !id.is_empty() => RefundStatus::Finalized {
+                    transaction_id: id.into(),
+                },
+                _ => RefundStatus::Pending,
+            },
+            Some("expired" | "failed") => RefundStatus::Void,
+            _ => RefundStatus::Pending,
+        })
     }
     async fn call(&self, path: &str, body: Value) -> Result<Value> {
         let response = self

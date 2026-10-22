@@ -13,6 +13,10 @@ const MAX_BYTES = 262144;
 const CLOCK_SKEW_MS = 5000;
 // Native freshness (120s) less the 45s delivery margin caps a new quote at 75s.
 const QUOTE_LIFETIME_MS = 75000;
+const ICON_PATH = '/brand/covenant-icon-02026997.png';
+/** Paid job kinds and the request each one's unsigned quote check sends. */
+const JOB_KINDS = ['research'];
+const JOB_QUOTE_REQUESTS = {research: {objective: 'Discovery quote check; do not submit payment. This request only asks for a price.'}};
 const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
 const fail = message => { throw new Error(message); };
 const requireThat = (condition, message) => { if (!condition) fail(message); };
@@ -102,10 +106,18 @@ export function tariffPrice(tariff, cap) {
   return Number(amount);
 }
 export function validateExpected(expected, now = Date.now()) {
-  const base = plain(expected) && Object.hasOwn(expected, 'basePayTo') ? ['basePayTo'] : [];
-  keys(expected, ['payTo', 'feePayer', 'model', 'legacyAmount', 'maxInputBytes', 'maxOutputTokens', 'tariff', ...base], 'expected policy');
+  const optional = ['basePayTo', 'jobs'].filter(key => plain(expected) && Object.hasOwn(expected, key));
+  keys(expected, ['payTo', 'feePayer', 'model', 'legacyAmount', 'maxInputBytes', 'maxOutputTokens', 'tariff', ...optional], 'expected policy');
   requireThat(address(expected.payTo) && address(expected.feePayer), 'expected payment addresses');
-  if (base.length) requireThat(typeof expected.basePayTo === 'string' && /^0x[0-9a-fA-F]{40}$/.test(expected.basePayTo), 'expected Base merchant');
+  if (optional.includes('basePayTo')) requireThat(typeof expected.basePayTo === 'string' && /^0x[0-9a-fA-F]{40}$/.test(expected.basePayTo), 'expected Base merchant');
+  if (optional.includes('jobs')) {
+    requireThat(Array.isArray(expected.jobs) && expected.jobs.length >= 1 && expected.jobs.length <= JOB_KINDS.length
+      && new Set(expected.jobs.map(job => job?.kind)).size === expected.jobs.length, 'expected jobs');
+    for (const job of expected.jobs) {
+      keys(job, ['kind', 'amount', 'payTo'], 'expected job');
+      requireThat(JOB_KINDS.includes(job.kind) && integer(job.amount, 1) && address(job.payTo), 'expected job');
+    }
+  }
   requireThat(typeof expected.model === 'string' && /^[a-zA-Z0-9._:/-]{1,128}$/.test(expected.model), 'expected model');
   requireThat(integer(expected.legacyAmount, 1) && expected.maxInputBytes === 4096
     && expected.maxOutputTokens === 2048, 'expected release limits');
@@ -156,6 +168,23 @@ export function expectedRecords(expected, origin) {
   }))];
   return {models, endpoints};
 }
+/** The paid-job manifest entries, checked field by field against the expected prices and merchant. */
+export function validateJobEndpoints(endpoints, expected, origin) {
+  const jobs = expected.jobs ?? [];
+  requireThat(endpoints.length === jobs.length, 'manifest: job endpoints');
+  for (const job of jobs) {
+    const endpoint = endpoints.find(e => e.path === `/v1/jobs/${job.kind}`);
+    keys(endpoint, ['path', 'url', 'method', 'description', 'payment', 'price', 'inputSchema', 'statusPath', 'statusMethod',
+      'paymentRequiredHeader', 'paymentSignatureHeader'], 'manifest job endpoint');
+    requireThat(typeof endpoint.description === 'string' && endpoint.description.length > 0 && plain(endpoint.inputSchema), 'manifest job endpoint');
+    const {description, inputSchema, ...rest} = endpoint;
+    equal(rest, {path: `/v1/jobs/${job.kind}`, url: `${origin}/v1/jobs/${job.kind}`, method: 'POST',
+      payment: {scheme: 'exact', network: NETWORK, asset: ASSET, assetDecimals: 6, payTo: job.payTo, feePayer: expected.feePayer},
+      price: {currency: 'USDC', unit: 'micro_usdc', billing: 'fixed_job', price_micro_usdc: job.amount},
+      statusPath: '/v1/jobs/{id}', statusMethod: 'GET',
+      paymentRequiredHeader: 'Payment-Required', paymentSignatureHeader: 'Payment-Signature'}, 'manifest job endpoint');
+  }
+}
 export function validateSnapshot({health, manifest, catalog}, {expected, origin, revision, started, ended}) {
   requireThat(/^[a-f0-9]{40}$/.test(revision), 'full source revision required');
   validateExpected(expected, ended);
@@ -165,7 +194,10 @@ export function validateSnapshot({health, manifest, catalog}, {expected, origin,
   requireThat(integer(manifest.observedAtMs) && manifest.observedAtMs >= started - CLOCK_SKEW_MS
     && manifest.observedAtMs <= ended + CLOCK_SKEW_MS, 'manifest observation is not fresh');
   const records = expectedRecords(expected, origin);
-  equal(manifest, {schemaVersion: 1, x402Version: 2, name: 'Covenant Compute',
+  requireThat(Array.isArray(manifest.endpoints), 'manifest: endpoints');
+  const jobEndpoints = manifest.endpoints.filter(e => typeof e?.path === 'string' && e.path.startsWith('/v1/jobs/'));
+  validateJobEndpoints(jobEndpoints, expected, origin);
+  equal({...manifest, endpoints: manifest.endpoints.filter(e => !jobEndpoints.includes(e))}, {schemaVersion: 1, x402Version: 2, name: 'Covenant Compute',
     description: expected.basePayTo ? 'Available text inference and its current exact USDC payment terms on Solana and Base.'
       : 'Available text inference and its current exact Solana USDC payment terms.',
     observedAtMs: manifest.observedAtMs, available: true, ...records}, 'manifest');
@@ -203,8 +235,13 @@ export function validateQuote(body, header, {request, id, expected, origin, ende
   requireThat(integer(expires, 1) && expires > ended
     && expires <= ended + QUOTE_LIFETIME_MS + CLOCK_SKEW_MS, 'quote expiry');
   if (request.pricing) requireThat(expires <= expected.tariff.valid_until_ms - 45000, 'quote tariff delivery margin');
-  equal(body, {x402Version: 2, resource: {url: `${origin}/v1/chat/completions`,
-    description: 'Covenant inference with a verified operator receipt', mimeType: 'application/json'},
+  // A single request also declares Bazaar discovery, checked for shape only.
+  const {extensions, ...quote} = body ?? {};
+  requireThat(plain(extensions) && Object.keys(extensions).join() === 'bazaar' && plain(extensions.bazaar)
+    && plain(extensions.bazaar.info) && plain(extensions.bazaar.schema), 'payment quote: Bazaar declaration');
+  equal(quote, {x402Version: 2, resource: {url: `${origin}/v1/chat/completions`,
+    description: 'Text inference for AI agents, with a receipt signed by the operator who ran it.', mimeType: 'application/json',
+    serviceName: 'Covenant Compute', tags: ['inference', 'llm', 'ai', 'receipts'], iconUrl: `${origin}${ICON_PATH}`},
   accepts: [{scheme: 'exact', network: NETWORK, asset: ASSET, amount: String(amount), payTo: expected.payTo,
     maxTimeoutSeconds: 90, extra: {feePayer: expected.feePayer, memo: shortMemo(id, hash),
       quoteId: id, requestSha256: hash, expiresAtMs: expires}},
@@ -213,6 +250,28 @@ export function validateQuote(body, header, {request, id, expected, origin, ende
       quoteId: id, requestSha256: hash, expiresAtMs: expires}}] : [])]}, 'payment quote');
   return {pricing: request.pricing ?? 'legacy', max_tokens: request.max_tokens, quote_id: id,
     request_sha256: hash, amount_micro_usdc: amount, expires_at_ms: expires};
+}
+
+/** An unsigned quote for a paid job: its fixed price, the jobs merchant and a v3 memo bound to the request. */
+export function validateJobQuote(body, header, {job, request, expected, origin, ended}) {
+  requireThat(typeof header === 'string' && header.length <= MAX_BYTES, 'Payment-Required encoding');
+  const decoded = Buffer.from(header, 'base64');
+  requireThat(decoded.toString('base64') === header, 'Payment-Required canonical base64');
+  equal(strictJson(new TextDecoder('utf-8', {fatal: true}).decode(decoded)), body, 'Payment-Required header/body');
+  const {extensions, resource, ...quote} = body ?? {};
+  requireThat(plain(extensions) && Object.keys(extensions).join() === 'bazaar' && plain(extensions.bazaar), 'job quote: Bazaar declaration');
+  keys(resource, ['url', 'description', 'mimeType', 'serviceName', 'tags', 'iconUrl'], 'job quote resource');
+  requireThat(resource.url === `${origin}/v1/jobs/${job.kind}` && resource.serviceName === 'Covenant Compute'
+    && resource.iconUrl === `${origin}${ICON_PATH}`, 'job quote resource');
+  const extra = quote.accepts?.[0]?.extra;
+  const hash = sha256(request);
+  requireThat(integer(extra?.expiresAtMs, 1) && extra.expiresAtMs > ended
+    && extra.expiresAtMs <= ended + 90000 + CLOCK_SKEW_MS, 'job quote expiry');
+  requireThat(typeof extra?.quoteId === 'string' && /^[0-9a-f-]{36}$/.test(extra.quoteId), 'job quote identity');
+  equal(quote, {x402Version: 2, accepts: [{scheme: 'exact', network: NETWORK, asset: ASSET, amount: String(job.amount),
+    payTo: job.payTo, maxTimeoutSeconds: 90, extra: {feePayer: expected.feePayer, memo: shortMemo(extra.quoteId, hash),
+      quoteId: extra.quoteId, requestSha256: hash, expiresAtMs: extra.expiresAtMs}}]}, 'job quote');
+  return {kind: job.kind, quote_id: extra.quoteId, request_sha256: hash, amount_micro_usdc: job.amount, expires_at_ms: extra.expiresAtMs};
 }
 
 export async function acceptDiscovery({base, revision, expected, quotes = false, fetchImpl = fetch, now = Date.now}) {
@@ -254,6 +313,11 @@ export async function acceptDiscovery({base, revision, expected, quotes = false,
       const response = await http('/v1/chat/completions', 'POST', request, id);
       checkedQuotes.push(validateQuote(response.body, response.paymentRequired,
         {request, id, expected, origin, ended: now()}));
+    }
+    for (const job of expected.jobs ?? []) {
+      const request = JOB_QUOTE_REQUESTS[job.kind];
+      const response = await http(`/v1/jobs/${job.kind}`, 'POST', request, randomUUID());
+      checkedQuotes.push(validateJobQuote(response.body, response.paymentRequired, {job, request, expected, origin, ended: now()}));
     }
   }
   const after = quotes ? await snapshot() : null;

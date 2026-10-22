@@ -4,6 +4,19 @@ import {startWatchdog} from '../compute-canary-watchdog.mjs';
 import * as runtime from './runtime.mjs';
 const {privateDirectory,seed,latch,missing,clearStartingLatch,explicitBoolean,operatorPubkey,startInferenceOperator,ProcessGroup,waitFor}=runtime;
 
+const BASE58='123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+/** The Solana address of a keypair given as base64 of its 64-byte JSON array. */
+function keypairAddress(encoded){
+  let bytes;
+  try{bytes=JSON.parse(Buffer.from(encoded,'base64').toString('utf8'));}catch{throw Error('Invalid fee payer key');}
+  if(!Array.isArray(bytes)||bytes.length!==64||bytes.some(b=>!Number.isInteger(b)||b<0||b>255))throw Error('Invalid fee payer key');
+  const key=bytes.slice(32);
+  let n=key.reduce((value,b)=>value*256n+BigInt(b),0n),address='';
+  while(n>0n){address=BASE58[Number(n%58n)]+address;n/=58n;}
+  for(const b of key){if(b!==0)break;address='1'+address;}
+  return address;
+}
+
 process.umask(0o077);
 let group,stopWatchdog=()=>{};
 try{
@@ -25,14 +38,17 @@ try{
   try{stopWatchdog=startWatchdog(process.env,data);}catch{process.stderr.write('External rental observer unavailable; check observer configuration.\n');}
   seed(path.join(gateway,'identity.key'),process.env.COVENANT_GATEWAY_IDENTITY_B64,32);
   // One key file per fee payer address, so rotating the fee payer seeds a new
-  // file instead of colliding with the old persisted key. A volume seeded
-  // before this layout keeps its single file until a new key is supplied.
+  // file instead of colliding with the old persisted key. A key is checked
+  // against the address before anything is written. A volume seeded before
+  // this layout is read from its single file while no key is supplied.
   const feePayer=process.env.COVENANT_GATEWAY_FEE_PAYER;
   if(typeof feePayer!=='string'||!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(feePayer))throw Error('Fee payer address required');
+  const feePayerKey=process.env.COVENANT_GATEWAY_FEE_PAYER_KEY_B64;
+  if(feePayerKey!==undefined&&keypairAddress(feePayerKey)!==feePayer)throw Error('Fee payer key does not match its address');
   const legacyFeePayerFile=path.join(gateway,'fee-payer.json');
   let feePayerFile=path.join(gateway,`fee-payer-${feePayer}.json`);
-  if(process.env.COVENANT_GATEWAY_FEE_PAYER_KEY_B64===undefined&&!fs.existsSync(feePayerFile)&&fs.existsSync(legacyFeePayerFile))feePayerFile=legacyFeePayerFile;
-  seed(feePayerFile,process.env.COVENANT_GATEWAY_FEE_PAYER_KEY_B64);
+  if(feePayerKey===undefined&&!fs.existsSync(feePayerFile)&&fs.existsSync(legacyFeePayerFile))feePayerFile=legacyFeePayerFile;
+  seed(feePayerFile,feePayerKey);
   // This key authenticates persisted payment seals: rotating it strands recovery.
   const bridgeSecret=process.env.COVENANT_GATEWAY_BRIDGE_SECRET;
   if(typeof bridgeSecret!=='string'||bridgeSecret.length<32)throw Error('Persistent bridge secret required');
@@ -61,7 +77,7 @@ try{
   delete env.COVENANT_GATEWAY_TARIFFS_JSON;
   // Base facilitator credentials and the Base RPC URL, which may carry a
   // provider key, are for the verifier only.
-  const verifierOnly=['CDP_API_KEY_ID','CDP_API_KEY_SECRET','COVENANT_GATEWAY_BASE_RPC','COVENANT_GATEWAY_BASE_FACILITATOR_URL'];
+  const verifierOnly=['CDP_API_KEY_ID','CDP_API_KEY_SECRET','COVENANT_GATEWAY_BASE_RPC','COVENANT_GATEWAY_BASE_FACILITATOR_URL','COVENANT_GATEWAY_SOLANA_FACILITATOR_URL'];
   const verifierEnv=Object.fromEntries(verifierOnly.filter(key=>env[key]!==undefined).map(key=>[key,env[key]]));
   for(const key of verifierOnly)delete env[key];
   group.start('payment verifier',process.execPath,['services/compute-x402-facilitator/server.mjs'],{...env,...verifierEnv});

@@ -1,5 +1,6 @@
 // Official x402 static SVM verification, with durable settlement owned by the
-// Rust gateway. No call to the SDK's in-memory settlement cache can broadcast.
+// Rust gateway. The SDK's settlement path never runs here; the stored bytes are
+// broadcast directly or by a facilitator holding the same fee payer key.
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { getTransactionDecoder, getSignatureFromTransaction, assertIsFullySignedTransaction } from '@solana/kit';
@@ -37,6 +38,8 @@ function decode(wire) {
 }
 /** One facilitator submission per payment at a time, repeated at most this often while the signature is unseen. */
 export const RESUBMIT_MS = 20_000;
+/** How long a facilitator call may run before the same bytes are also sent from here. */
+export const FACILITATOR_GRACE_MS = 4_000;
 
 export function createBridge({ signer, config, rpc, now = Date.now, verifier, facilitator, log = () => {} }) {
   const { network, asset, payTo, feePayer, resourceUrl, secret } = config;
@@ -60,11 +63,16 @@ export function createBridge({ signer, config, rpc, now = Date.now, verifier, fa
   }
   function seal(value) { return createHmac('sha256', secret).update(canonical(value)).digest('hex'); }
   const submissions = new Map();
-  /** True while the facilitator is handling this payment; false once it has failed to, so the caller sends the bytes itself. */
+  /**
+   * Whether to leave the broadcast to the facilitator for now: during a young
+   * call, or for a while after one returned. A slow, failed or declined call
+   * hands it back, so a payment never waits on the facilitator to expire.
+   */
   function submit(ev, terms) {
     const last = submissions.get(ev.transactionId);
     if (last?.failed) return false;
-    if (last && (last.running || now() - last.at < RESUBMIT_MS)) return true;
+    if (last?.running) return now() - last.at < FACILITATOR_GRACE_MS;
+    if (last && now() - last.at < RESUBMIT_MS) return true;
     const attempt = { running: true, at: now(), failed: false };
     submissions.set(ev.transactionId, attempt);
     (async () => {
@@ -74,6 +82,7 @@ export function createBridge({ signer, config, rpc, now = Date.now, verifier, fa
         else if (result.transaction !== ev.transactionId) { attempt.failed = true; log('facilitator settled another signature'); }
       } catch {
         attempt.failed = true;
+        log('facilitator settle unavailable; sending directly');
       } finally { attempt.running = false; }
     })();
     return true;

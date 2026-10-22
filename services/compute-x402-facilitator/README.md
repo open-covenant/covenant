@@ -36,10 +36,11 @@ Verifier only:
   64-byte Solana keypair; no group/world permissions. Never put this in a repo.
 - `COVENANT_GATEWAY_SOLANA_FACILITATOR_URL`: optional HTTPS URL of an x402
   facilitator that holds the same fee payer key, for example
-  `https://facilitator.opencovenant.org`. The verifier still signs, stores and
-  confirms each Solana payment; the facilitator broadcasts it. Its signature
-  over the same message is identical, so it sends exactly the stored bytes. If
-  it is unreachable or declines, the verifier sends them itself.
+  `https://facilitator.opencovenant.org`. The verifier still signs and
+  confirms each Solana payment and the gateway stores it; the facilitator
+  broadcasts it. Its signature over the same message is identical, so it sends
+  exactly the stored bytes. If it is unreachable, slow or declines, the
+  verifier sends them itself.
 - `COVENANT_GATEWAY_BRIDGE_PORT`: optional, default `4043`.
 
 Every request to the verifier needs the header

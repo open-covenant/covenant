@@ -6,7 +6,7 @@ import { getSetComputeUnitLimitInstruction, getSetComputeUnitPriceInstruction } 
 import { toFacilitatorSvmSigner } from '@x402/svm';
 import { x402Client } from '@x402/core/client';
 import { ExactSvmScheme as OfficialClientScheme } from '@x402/svm/exact/client';
-import { createBridge, RAILS, Rejected, shortMemo } from './bridge.mjs';
+import { createBridge, FACILITATOR_GRACE_MS, RAILS, Rejected, shortMemo } from './bridge.mjs';
 import { batchPricingTotal, createPricingPolicy, readTariffConfig } from './pricing.mjs';
 import { mkdtemp, writeFile, symlink, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -518,5 +518,23 @@ test('payments stored before the facilitator was configured are sent directly', 
   assert.equal((await withFacilitator.settle({ payment, paymentRequirements: plain.terms })).status, 'pending');
   assert.equal(called, 0);
   assert.equal(plain.state.sends.length, 1);
+});
+
+test('a facilitator that hangs gets a few seconds before the bytes are sent from here', async () => {
+  const f = await setup({ facilitator: { settle: () => new Promise(() => {}) } });
+  const payment = await f.verify();
+  f.state.signature = payment.transaction_id;
+  let clock = 1000;
+  const bridge = createBridge({ signer: toFacilitatorSvmSigner(f.feePayerKey), config: f.config,
+    rpc: async (method, params) => method === 'getGenesisHash' ? RAILS[f.config.network].genesis
+      : method === 'getSignatureStatuses' ? { value: [null] } : (f.state.sends.push(params[0]), payment.transaction_id),
+    now: () => clock, facilitator: { settle: () => new Promise(() => {}) } });
+  assert.equal((await bridge.settle({ payment, paymentRequirements: f.terms })).status, 'pending');
+  clock += FACILITATOR_GRACE_MS - 1;
+  assert.equal((await bridge.settle({ payment, paymentRequirements: f.terms })).status, 'pending');
+  assert.equal(f.state.sends.length, 0);
+  clock += 1;
+  assert.equal((await bridge.settle({ payment, paymentRequirements: f.terms })).status, 'pending');
+  assert.deepEqual(f.state.sends, [JSON.parse(payment.encoded_transaction).evidence.transaction]);
 });
 

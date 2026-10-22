@@ -25,7 +25,7 @@ function boot(t,{tariffRuntime=false,env={}}={}){
  `);
  const result=spawnSync(process.execPath,[path.join(source,'supervisor.mjs')],{encoding:'utf8',timeout:5000,env:{
   TEST_CALLS:calls,COVENANT_X402_DATA:data,COVENANT_X402_OPERATOR_ENABLED:'false',COVENANT_GATEWAY_ADMISSIONS_ENABLED:'false',
-  COVENANT_GATEWAY_IDENTITY_B64:Buffer.alloc(32,7).toString('base64'),COVENANT_GATEWAY_FEE_PAYER_KEY_B64:Buffer.from('[1,2,3]').toString('base64'),
+  COVENANT_GATEWAY_IDENTITY_B64:Buffer.alloc(32,7).toString('base64'),COVENANT_GATEWAY_FEE_PAYER_KEY_B64:Buffer.from(JSON.stringify([...Array(32).fill(1),...Array(32).fill(0)])).toString('base64'),COVENANT_GATEWAY_FEE_PAYER:'1'.repeat(32),
   COVENANT_GATEWAY_BRIDGE_SECRET:'test-secret-'.repeat(4),...env,
  }});
  assert.equal(result.error,undefined);
@@ -68,3 +68,22 @@ test('Base facilitator credentials and RPC reach only the payment verifier',t=>{
  for(const [key,value] of Object.entries(secrets)){assert.equal(verifier.env[key],value);assert.equal(Object.hasOwn(gateway.env,key),false);}
  assert.equal(gateway.env.COVENANT_GATEWAY_BASE_PAY_TO,'0x5fA1d0C0bfFE257a20027C523093F941834f5D66');
 });
+
+test('a fee payer key that does not match its address is refused before anything is written',t=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'covenant-supervisor-fee-payer-'));
+ t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const data=path.join(dir,'data');
+ const result=spawnSync(process.execPath,[new URL('./supervisor.mjs',import.meta.url).pathname],{encoding:'utf8',timeout:5000,env:{
+  COVENANT_X402_DATA:data,COVENANT_X402_OPERATOR_ENABLED:'false',COVENANT_GATEWAY_ADMISSIONS_ENABLED:'false',
+  COVENANT_GATEWAY_IDENTITY_B64:Buffer.alloc(32,7).toString('base64'),
+  COVENANT_GATEWAY_FEE_PAYER_KEY_B64:Buffer.from(JSON.stringify([...Array(32).fill(1),...Array(32).fill(2)])).toString('base64'),
+  COVENANT_GATEWAY_FEE_PAYER:'1'.repeat(32),COVENANT_GATEWAY_BRIDGE_SECRET:'test-secret-'.repeat(4),
+ }});
+ assert.notEqual(result.status,0);
+ // Startup stopped at the fee payer: the identity seeded just before it exists,
+ // and neither a fee payer file nor the bridge secret seeded after it does.
+ const written=fs.readdirSync(path.join(data,'gateway'));
+ assert.ok(written.includes('identity.key'));
+ assert.deepEqual(written.filter(name=>name.startsWith('fee-payer')||name==='bridge-secret'),[]);
+});
+

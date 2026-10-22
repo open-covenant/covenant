@@ -44,10 +44,17 @@ const jsonRpc = (url, timeoutMs = 15_000) => async (method, params) => {
 };
 const rpc = jsonRpc(rpcUrl);
 // Optionally an x402 facilitator holding the same fee payer key broadcasts
-// Solana payments; this process still signs, journals and confirms them.
+// Solana payments; this process still signs and confirms them.
 const solanaFacilitator = process.env.COVENANT_GATEWAY_SOLANA_FACILITATOR_URL
-  ? new HTTPFacilitatorClient({ url: httpsUrl('COVENANT_GATEWAY_SOLANA_FACILITATOR_URL'), timeoutMs: 20_000 })
+  ? new HTTPFacilitatorClient({ url: httpsUrl('COVENANT_GATEWAY_SOLANA_FACILITATOR_URL'), timeoutMs: 5_000 })
   : undefined;
+// A facilitator that does not list this fee payer declines every payment, and
+// each one is then sent directly; say so once rather than per payment.
+solanaFacilitator?.getSupported().then(supported => {
+  const listed = supported?.kinds?.some(kind => kind.network === config.network && kind.extra?.feePayer === config.feePayer)
+    || supported?.signers?.['solana:*']?.includes(config.feePayer);
+  if (!listed) console.log('Solana facilitator does not list this fee payer; payments will be sent directly');
+}).catch(() => console.log('Solana facilitator unreachable at startup; payments are sent directly until it answers'));
 const bridge = createBridge({ signer, config, rpc, facilitator: solanaFacilitator, log: message => console.log(message) });
 await bridge.assertNetwork();
 // Optional USDC on Base once a Base merchant is set: CDP credentials for

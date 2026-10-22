@@ -2,19 +2,19 @@
 //! the payment settles before any work starts, and a free status URL reports
 //! progress and then the result. A job that fails after it was paid is
 //! refunded in full, from the merchant wallet that received the payment, to
-//! the address that paid.
+//! the account that paid.
 //!
 //! Every state that money or work depends on is written to disk before the
 //! step it guards: the verified payment before it is broadcast, the signed
 //! coordinator job before it is submitted, and the signed refund before it is
 //! sent. A restart resumes from the same bytes.
 use crate::{
-    bridge::RefundStatus, GatewayError, MemoBinding, PaymentTerms, Result, SettlementStatus,
-    VerifiedPayment,
+    bridge::{RefundBuild, RefundStatus},
+    GatewayError, MemoBinding, PaymentTerms, Result, SettlementStatus, VerifiedPayment,
 };
 use async_trait::async_trait;
 use axum::{
-    extract::{Path as UrlPath, State as Shared},
+    extract::{Path as UrlPath, Query, State as Shared},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
@@ -26,12 +26,14 @@ use covenant_identity::LocalIdentity;
 use covenant_mcp::Content;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{File, OpenOptions},
+    io::Write,
     path::{Path, PathBuf},
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -40,14 +42,27 @@ use uuid::Uuid;
 const QUOTE_TTL_MS: u64 = 90_000;
 /// Unpaid quotes held in memory at once.
 const MAX_QUOTES: usize = 1024;
-/// Jobs kept on disk, including finished ones kept as replay records.
-const MAX_RECORDS: usize = 100_000;
-/// How long a finished job's result can be fetched.
+/// Jobs on disk before new quotes stop. Finished jobs are deleted after
+/// [`RESULT_RETENTION_MS`], so this is reached only under abuse.
+const MAX_RECORDS: usize = 50_000;
+/// Payments being confirmed at once, in total and from one payer. A payment
+/// that never lands holds its place for a few minutes.
+const MAX_PAYING: usize = 16;
+const MAX_PAYING_PER_PAYER: usize = 2;
+/// How long a finished job's result can be fetched, and its record is kept.
 pub const RESULT_RETENTION_MS: u64 = 7 * 24 * 3600 * 1000;
+/// How long a payment given up as unpaid is still watched in case it lands.
+const UNPAID_WATCH_MS: u64 = 24 * 3600 * 1000;
+/// How long past its coordinator deadline a job may stay unresolved before
+/// the customer is refunded.
+const RUN_GRACE_MS: u64 = 24 * 3600 * 1000;
 /// The largest result stored for a job.
 const MAX_RESULT_BYTES: usize = 4 * 1024 * 1024;
-/// How long to wait before retrying a job whose last attempt was inconclusive.
-const RETRY_AFTER: Duration = Duration::from_secs(30);
+/// How often each kind of pending work is retried.
+const RUN_RETRY: Duration = Duration::from_secs(30);
+const REFUND_POLL: Duration = Duration::from_secs(15);
+const REFUND_REBUILD: Duration = Duration::from_secs(120);
+const UNPAID_POLL: Duration = Duration::from_secs(300);
 
 /// A kind of job sold at `/v1/jobs/<kind>`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -155,6 +170,15 @@ pub struct Offer {
     pub max_running: usize,
 }
 
+/// The parts of an offer a paid job keeps, so it finishes on the terms it
+/// was sold on even if the offer changes or stops.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Purchase {
+    pub offer_micro_usdc: u64,
+    pub deadline_ms: u64,
+    pub approved_operators: Vec<String>,
+}
+
 /// Payment, settlement and refunds for paid jobs.
 #[async_trait]
 pub trait JobsRail: Send + Sync {
@@ -170,12 +194,7 @@ pub trait JobsRail: Send + Sync {
         payment: &VerifiedPayment,
         terms: &PaymentTerms,
     ) -> Result<SettlementStatus>;
-    /// A signed refund for a finalized payment, as (transaction id, sealed bytes).
-    async fn refund(
-        &self,
-        payment: &VerifiedPayment,
-        terms: &PaymentTerms,
-    ) -> Result<(String, String)>;
+    async fn refund(&self, payment: &VerifiedPayment, terms: &PaymentTerms) -> Result<RefundBuild>;
     async fn refund_status(
         &self,
         payment: &VerifiedPayment,
@@ -214,11 +233,7 @@ impl JobsRail for crate::bridge::Bridge {
     ) -> Result<SettlementStatus> {
         crate::PaymentRail::settle(self, payment, terms).await
     }
-    async fn refund(
-        &self,
-        payment: &VerifiedPayment,
-        terms: &PaymentTerms,
-    ) -> Result<(String, String)> {
+    async fn refund(&self, payment: &VerifiedPayment, terms: &PaymentTerms) -> Result<RefundBuild> {
         crate::bridge::Bridge::refund(self, payment, terms).await
     }
     async fn refund_status(
@@ -242,8 +257,8 @@ pub struct RunOutput {
 /// Why a run did not produce a result.
 #[derive(Debug)]
 pub enum RunFailure {
-    /// The job ended without a usable result: the coordinator refunded it, or
-    /// it could not be delivered. The customer is refunded.
+    /// The job ended without a usable result: the coordinator refused or
+    /// refunded it, or it could not be delivered. The customer is refunded.
     Refund(String),
     /// The outcome is not known yet (the coordinator was unreachable, or the
     /// receipt is late). The same signed job is tried again later.
@@ -253,8 +268,11 @@ pub enum RunFailure {
 /// Buys a paid job's work on the Compute coordinator.
 #[async_trait]
 pub trait JobRunner: Send + Sync {
+    /// Whether only approved kinds of operator can win this job right now:
+    /// at least one serves it, and no generic operator could take it.
+    async fn available(&self, kind: Kind, offer_micro_usdc: u64) -> Result<bool>;
     /// Signs the coordinator job for a paid request without submitting it.
-    fn sign(&self, offer: &Offer, request: &Value) -> Result<SignedJobEnvelope>;
+    fn sign(&self, kind: Kind, purchase: &Purchase, request: &Value) -> Result<SignedJobEnvelope>;
     /// Submits the signed job (repeating it is safe) and waits for its
     /// verified result.
     async fn run(&self, envelope: &SignedJobEnvelope)
@@ -271,8 +289,30 @@ pub struct CoordinatorRunner {
 
 #[async_trait]
 impl JobRunner for CoordinatorRunner {
-    fn sign(&self, offer: &Offer, request: &Value) -> Result<SignedJobEnvelope> {
-        let job = match offer.kind {
+    async fn available(&self, kind: Kind, offer_micro_usdc: u64) -> Result<bool> {
+        let model = match kind {
+            Kind::Research => SWARM_MODEL,
+        };
+        let view = covenant_compute_buyer::capacity(&self.http, &self.config)
+            .await
+            .map_err(|e| GatewayError::Unavailable(e.to_string()))?;
+        let mut served = false;
+        for row in view.entries.iter().filter(|row| {
+            row.kind == JobKind::BatchJob
+                && row.operators > 0
+                && row.min_ask_micro_usdc <= offer_micro_usdc
+        }) {
+            // The coordinator lets a generic batch node take any model, so
+            // while one could win this job, it is not sold.
+            if row.model == "any" {
+                return Ok(false);
+            }
+            served |= row.model == model;
+        }
+        Ok(served)
+    }
+    fn sign(&self, kind: Kind, purchase: &Purchase, request: &Value) -> Result<SignedJobEnvelope> {
+        let job = match kind {
             Kind::Research => JobRequest {
                 kind: JobKind::BatchJob,
                 input: swarm_input(&research_order(request)),
@@ -280,8 +320,8 @@ impl JobRunner for CoordinatorRunner {
                 gpu_class: None,
                 min_vram_gb: None,
                 min_reputation_bps: None,
-                price_micro_usdc: offer.offer_micro_usdc,
-                deadline_ms: offer.deadline_ms,
+                price_micro_usdc: purchase.offer_micro_usdc,
+                deadline_ms: purchase.deadline_ms,
             },
         };
         covenant_compute_buyer::sign_envelope(&self.config, &self.identity, job)
@@ -299,13 +339,18 @@ impl JobRunner for CoordinatorRunner {
         )
         .await
         .map_err(|error| match &error {
-            // A refused submission never landed; an unserved job was refunded
-            // to this buyer. Either way the customer gets the payment back.
-            BuyerError::SubmitRefused { .. } | BuyerError::NotServed { .. } => {
-                RunFailure::Refund(error.to_string())
-            }
+            // The coordinator refunded this buyer: the job was not served.
+            BuyerError::NotServed { .. } => RunFailure::Refund(error.to_string()),
+            // The coordinator's verdict on the job itself: malformed, not
+            // fundable, not allowed or conflicting. It never landed.
+            BuyerError::SubmitRefused {
+                status: 400 | 402 | 403 | 409 | 422,
+                ..
+            } => RunFailure::Refund(error.to_string()),
             // The coordinator charged for a result that does not verify.
             BuyerError::Verification(_) => RunFailure::Refund(error.to_string()),
+            // Anything else, a redirect or an intermediary's refusal
+            // included, may have landed; the same job is submitted again.
             _ => RunFailure::Retry(error.to_string()),
         })?;
         Ok(RunOutput {
@@ -316,7 +361,7 @@ impl JobRunner for CoordinatorRunner {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 struct StoredRefund {
     transaction_id: String,
     encoded: String,
@@ -336,13 +381,13 @@ enum State {
     Running {
         payment: VerifiedPayment,
         transaction_id: String,
-        envelope: SignedJobEnvelope,
+        envelope: Box<SignedJobEnvelope>,
+        started_at_ms: u64,
     },
+    /// The result is in the job's result file until the retention ends.
     Completed {
         payer: String,
         transaction_id: String,
-        /// Dropped once the retention period ends.
-        result: Option<Value>,
         completed_at_ms: u64,
     },
     /// The payment is owed back in full.
@@ -358,8 +403,12 @@ enum State {
         reason: String,
         refund_transaction_id: String,
     },
-    /// The payment can no longer land. Nothing was taken and nothing ran.
-    Unpaid,
+    /// The payment was judged unable to land, so nothing was charged and
+    /// nothing ran. It is watched for a day in case it lands after all.
+    Unpaid {
+        payment: Option<VerifiedPayment>,
+        since_ms: u64,
+    },
 }
 impl State {
     fn name(&self) -> &'static str {
@@ -369,14 +418,27 @@ impl State {
             State::Completed { .. } => "completed",
             State::Refunding { .. } => "refunding",
             State::Refunded { .. } => "refunded",
-            State::Unpaid => "unpaid",
+            State::Unpaid { .. } => "unpaid",
         }
     }
-    fn in_progress(&self) -> bool {
+    /// Paid for and owed work or money.
+    fn open(&self) -> bool {
         matches!(
             self,
-            State::Paying { .. } | State::Paid { .. } | State::Running { .. }
+            State::Paying { .. }
+                | State::Paid { .. }
+                | State::Running { .. }
+                | State::Refunding { .. }
+        ) || matches!(
+            self,
+            State::Unpaid {
+                payment: Some(_),
+                ..
+            }
         )
+    }
+    fn working(&self) -> bool {
+        matches!(self, State::Paid { .. } | State::Running { .. })
     }
 }
 
@@ -389,6 +451,8 @@ struct Record {
     request_sha256: String,
     /// Kept after the job ends so a reused payment is still recognized.
     authorization_id: String,
+    payer: String,
+    purchase: Purchase,
     terms: PaymentTerms,
     created_at_ms: u64,
     updated_at_ms: u64,
@@ -402,6 +466,7 @@ struct Quote {
 }
 
 /// One file per job, each replaced atomically and fsynced with its directory.
+/// A finished job's result is a file of its own, read outside the lock.
 struct Store {
     directory: PathBuf,
     _lock: File,
@@ -415,63 +480,140 @@ impl Store {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))?;
         }
-        let mut options = OpenOptions::new();
-        options.read(true).write(true).create(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let lock = options.open(directory.join("lock"))?;
+        let lock = private_file(&directory.join("lock"), false)?;
         lock.try_lock()
             .map_err(|_| GatewayError::Unavailable("job store already open".into()))?;
-        let mut records = BTreeMap::new();
-        for entry in std::fs::read_dir(directory)? {
-            let path = entry?.path();
-            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-                continue;
-            };
-            let Some(id) = name
-                .strip_suffix(".json")
-                .and_then(|stem| Uuid::parse_str(stem).ok())
-            else {
-                continue;
-            };
-            if records.len() >= MAX_RECORDS {
-                return Err(GatewayError::Unavailable("job store is full".into()));
-            }
-            // A record that does not read back may hold a payment; refuse to
-            // start rather than lose it.
-            let record: Record = serde_json::from_slice(&std::fs::read(&path)?)?;
-            if record.id != id {
-                return Err(GatewayError::Unavailable(format!(
-                    "job record {name} names another job"
-                )));
-            }
-            records.insert(id, record);
-        }
         Ok(Self {
             directory: directory.into(),
             _lock: lock,
-            records,
+            records: read_records(directory)?,
         })
     }
-    fn save(&mut self, record: Record) -> Result<()> {
+    fn write(&self, name: &str, bytes: &[u8]) -> Result<()> {
         let mut file = tempfile::NamedTempFile::new_in(&self.directory)?;
-        serde_json::to_writer(file.as_file_mut(), &record)?;
+        file.as_file_mut().write_all(bytes)?;
         file.as_file().sync_all()?;
-        file.persist(self.directory.join(format!("{}.json", record.id)))
+        file.persist(self.directory.join(name))
             .map_err(|e| e.error)?;
         File::open(&self.directory)?.sync_all()?;
+        Ok(())
+    }
+    fn save(&mut self, record: Record) -> Result<()> {
+        self.write(
+            &format!("{}.json", record.id),
+            &serde_json::to_vec(&record)?,
+        )?;
         self.records.insert(record.id, record);
         Ok(())
     }
-    fn running(&self, kind: Kind) -> usize {
+    fn result_path(&self, id: Uuid) -> PathBuf {
+        self.directory.join(format!("{id}.result"))
+    }
+    fn remove(&mut self, id: Uuid) -> Result<()> {
+        for path in [
+            self.directory.join(format!("{id}.json")),
+            self.result_path(id),
+        ] {
+            match std::fs::remove_file(path) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+                _ => {}
+            }
+        }
+        File::open(&self.directory)?.sync_all()?;
+        self.records.remove(&id);
+        Ok(())
+    }
+    fn working(&self, kind: Kind) -> usize {
         self.records
             .values()
-            .filter(|r| r.kind == kind && r.state.in_progress())
+            .filter(|r| r.kind == kind && r.state.working())
             .count()
     }
+}
+
+fn private_file(path: &Path, truncate: bool) -> Result<File> {
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(truncate);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    Ok(options.open(path)?)
+}
+
+/// Every job record in a store directory. A record that does not read back
+/// may hold a payment, so it stops the gateway rather than being skipped.
+fn read_records(directory: &Path) -> Result<BTreeMap<Uuid, Record>> {
+    let mut records = BTreeMap::new();
+    for entry in std::fs::read_dir(directory)? {
+        let path = entry?.path();
+        let Some(id) = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.strip_suffix(".json"))
+            .and_then(|stem| Uuid::parse_str(stem).ok())
+        else {
+            continue;
+        };
+        let record: Record = serde_json::from_slice(&std::fs::read(&path)?)?;
+        if record.id != id {
+            return Err(GatewayError::Unavailable(format!(
+                "job record {id} names another job"
+            )));
+        }
+        records.insert(id, record);
+    }
+    Ok(records)
+}
+
+/// Fails if a job store holds paid work or money owed. Jobs can then only
+/// be turned off by finishing them, never by dropping their configuration.
+pub fn require_no_open_jobs(directory: &Path) -> Result<()> {
+    if !directory.exists() {
+        return Ok(());
+    }
+    if let Some(record) = read_records(directory)?.values().find(|r| r.state.open()) {
+        return Err(GatewayError::Unavailable(format!(
+            "job {} is still open; configure the jobs merchant to finish it",
+            record.id
+        )));
+    }
+    Ok(())
+}
+
+/// The status URL's token for a job: only the payer is given it.
+fn status_token(key: &[u8; 32], id: Uuid) -> String {
+    let mut hash = Sha256::new();
+    hash.update(key);
+    hash.update(b"covenant.job.status\0");
+    hash.update(id.as_bytes());
+    hash.finalize()[..16]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// The key status tokens are derived from, created once per store.
+fn status_key(directory: &Path) -> Result<[u8; 32]> {
+    let path = directory.join("status.key");
+    if let Ok(bytes) = std::fs::read(&path) {
+        return bytes
+            .try_into()
+            .map_err(|_| GatewayError::Unavailable("job status key is damaged".into()));
+    }
+    let mut key = [0u8; 32];
+    key[..16].copy_from_slice(Uuid::new_v4().as_bytes());
+    key[16..].copy_from_slice(Uuid::new_v4().as_bytes());
+    let mut file = private_file(&path, true)?;
+    file.write_all(&key)?;
+    file.sync_all()?;
+    File::open(directory)?.sync_all()?;
+    Ok(key)
 }
 
 /// What a request to a job endpoint gets back.
@@ -492,16 +634,21 @@ pub struct Jobs {
     offers: BTreeMap<Kind, Offer>,
     /// `https://host` the job endpoints are served from.
     origin: String,
+    status_key: [u8; 32],
     store: Mutex<Store>,
     quotes: Mutex<BTreeMap<Uuid, (Quote, u64)>>,
-    /// Jobs with a run in progress in this process, and when each may be
-    /// retried after an inconclusive attempt.
+    quote_checks: tokio::sync::Semaphore,
+    /// Jobs with a run in progress in this process.
     active: Mutex<BTreeSet<Uuid>>,
-    retry_at: Mutex<BTreeMap<Uuid, std::time::Instant>>,
+    /// When each job's next attempt at pending work is due.
+    due: Mutex<BTreeMap<Uuid, Instant>>,
     settlement_wait: Duration,
 }
 
 impl Jobs {
+    /// Opens the job store. Every open job must be on the configured rail:
+    /// one paid to another merchant, or sponsored by another fee payer,
+    /// could never settle or be refunded here.
     pub fn open(
         directory: &Path,
         origin: &str,
@@ -528,15 +675,31 @@ impl Jobs {
                 return Err(GatewayError::Invalid("invalid job offer".into()));
             }
         }
+        let store = Store::open(directory)?;
+        for record in store.records.values().filter(|r| r.state.open()) {
+            let terms = &record.terms;
+            if terms.network != rail.network()
+                || terms.asset != rail.asset()
+                || terms.pay_to != rail.pay_to()
+                || terms.fee_payer != rail.fee_payer()
+            {
+                return Err(GatewayError::Unavailable(format!(
+                    "job {} has an open payment on another payment rail",
+                    record.id
+                )));
+            }
+        }
         Ok(Self {
             rail,
             runner,
             offers: by_kind,
             origin: parsed.as_str().trim_end_matches('/').into(),
-            store: Mutex::new(Store::open(directory)?),
+            status_key: status_key(directory)?,
+            store: Mutex::new(store),
             quotes: Mutex::new(BTreeMap::new()),
+            quote_checks: tokio::sync::Semaphore::new(4),
             active: Mutex::new(BTreeSet::new()),
-            retry_at: Mutex::new(BTreeMap::new()),
+            due: Mutex::new(BTreeMap::new()),
             settlement_wait: Duration::ZERO,
         })
     }
@@ -553,19 +716,41 @@ impl Jobs {
         format!("{}/v1/jobs/{}", self.origin, kind.name())
     }
     fn status_url(&self, id: Uuid) -> String {
-        format!("{}/v1/jobs/{id}", self.origin)
+        format!(
+            "{}/v1/jobs/{id}?token={}",
+            self.origin,
+            status_token(&self.status_key, id)
+        )
     }
 
-    /// The offers whose prices the payment verifier will admit right now.
+    /// Whether a job can be sold right now: the payment verifier admits its
+    /// price, and only operators that are meant to run it could win it.
+    async fn sellable(&self, offer: &Offer, now: u64) -> Result<()> {
+        let url = self.resource_url(offer.kind);
+        let ready = async {
+            self.rail.check_price(&url, offer.price_atomic, now).await?;
+            if !self
+                .runner
+                .available(offer.kind, offer.offer_micro_usdc)
+                .await?
+            {
+                return Err(GatewayError::Unavailable(format!(
+                    "no {} operator is available right now",
+                    offer.kind.name()
+                )));
+            }
+            Ok(())
+        };
+        tokio::time::timeout(Duration::from_secs(5), ready)
+            .await
+            .map_err(|_| GatewayError::Unavailable("job readiness timed out".into()))?
+    }
+
+    /// The offers on sale right now.
     async fn available(&self, now: u64) -> Vec<&Offer> {
         let mut available = Vec::new();
         for offer in self.offers.values() {
-            let url = self.resource_url(offer.kind);
-            let check = self.rail.check_price(&url, offer.price_atomic, now);
-            if matches!(
-                tokio::time::timeout(Duration::from_secs(5), check).await,
-                Ok(Ok(()))
-            ) {
+            if self.sellable(offer, now).await.is_ok() {
                 available.push(offer);
             }
         }
@@ -673,38 +858,39 @@ impl Jobs {
         payment_header: Option<&str>,
         now: u64,
     ) -> Result<JobReply> {
-        let offer = self
-            .offers
-            .get(&kind)
-            .ok_or_else(|| {
-                GatewayError::Invalid(format!("{} jobs are not sold here", kind.name()))
-            })?
-            .clone();
         let Some(header) = payment_header else {
-            return self.quote(&offer, request, now).await;
+            let offer = self.offers.get(&kind).ok_or_else(|| {
+                GatewayError::Invalid(format!("{} jobs are not sold here", kind.name()))
+            })?;
+            return self.quote(offer, request, now).await;
         };
         let quote_id = crate::payment_payload(header)?["accepted"]["extra"]["quoteId"]
             .as_str()
             .and_then(|id| Uuid::parse_str(id).ok())
             .ok_or_else(|| GatewayError::Payment("invalid payment quote".into()))?;
         // A repeated paid request reports on the job it started.
-        if let Some(record) = self.store.lock().await.records.get(&quote_id).cloned() {
+        let existing = self.store.lock().await.records.get(&quote_id).cloned();
+        if let Some(record) = existing {
             if record.kind != kind
                 || record.authorization_id != self.rail.authorization_id(header)?
             {
                 return Err(GatewayError::Payment("authorization changed".into()));
             }
-            return Ok(self.status_reply(&record));
+            return Ok(self.status_reply(&record).await);
         }
-        self.pay(&offer, request, header, quote_id, now).await
+        self.pay(kind, request, header, quote_id, now).await
     }
 
     async fn quote(&self, offer: &Offer, request: Value, now: u64) -> Result<JobReply> {
         offer.kind.validate(&request)?;
         let digest = crate::request_digest(&request)?;
+        let _check = self
+            .quote_checks
+            .try_acquire()
+            .map_err(|_| GatewayError::Unavailable("quote admission busy".into()))?;
         {
             let store = self.store.lock().await;
-            if store.running(offer.kind) >= offer.max_running {
+            if store.working(offer.kind) >= offer.max_running {
                 return Err(GatewayError::Unavailable(format!(
                     "{} jobs are at capacity; try again in a few minutes",
                     offer.kind.name()
@@ -714,10 +900,10 @@ impl Jobs {
                 return Err(GatewayError::Unavailable("job store is full".into()));
             }
         }
-        let resource_url = self.resource_url(offer.kind);
-        self.rail
-            .check_price(&resource_url, offer.price_atomic, now)
-            .await?;
+        if self.quotes.lock().await.len() >= MAX_QUOTES {
+            return Err(GatewayError::Unavailable("quote admission busy".into()));
+        }
+        self.sellable(offer, now).await?;
         let terms = PaymentTerms {
             quote_id: Uuid::new_v4(),
             request_sha256: digest,
@@ -728,7 +914,7 @@ impl Jobs {
             asset_decimals: 6,
             expires_at_ms: now.saturating_add(QUOTE_TTL_MS),
             fee_payer: self.rail.fee_payer().into(),
-            resource_url,
+            resource_url: self.resource_url(offer.kind),
             batch_pricing: None,
             memo_binding: MemoBinding::V3,
             token_domain: None,
@@ -739,15 +925,16 @@ impl Jobs {
         if quotes.len() >= MAX_QUOTES {
             return Err(GatewayError::Unavailable("quote admission busy".into()));
         }
+        let expires = terms.expires_at_ms;
         quotes.insert(
             terms.quote_id,
             (
                 Quote {
                     kind: offer.kind,
                     request,
-                    terms: terms.clone(),
+                    terms,
                 },
-                terms.expires_at_ms,
+                expires,
             ),
         );
         Ok(JobReply::PaymentRequired(challenge))
@@ -755,14 +942,14 @@ impl Jobs {
 
     async fn pay(
         self: &Arc<Self>,
-        offer: &Offer,
+        kind: Kind,
         request: Value,
         header: &str,
         quote_id: Uuid,
         now: u64,
     ) -> Result<JobReply> {
-        let started = std::time::Instant::now();
-        let (kind, terms, quoted_request) = {
+        let started = Instant::now();
+        let (quoted_kind, terms, quoted_request) = {
             let quotes = self.quotes.lock().await;
             let (quote, expires) = quotes
                 .get(&quote_id)
@@ -772,11 +959,14 @@ impl Jobs {
             }
             (quote.kind, quote.terms.clone(), quote.request.clone())
         };
-        if kind != offer.kind || terms.request_sha256 != crate::request_digest(&request)? {
+        if quoted_kind != kind || terms.request_sha256 != crate::request_digest(&request)? {
             return Err(GatewayError::Invalid(
                 "quote bound to another request".into(),
             ));
         }
+        let offer = self.offers.get(&kind).ok_or_else(|| {
+            GatewayError::Invalid(format!("{} jobs are not sold here", kind.name()))
+        })?;
         // The resource and extensions a payment echoes are not signed, and a
         // facilitator catalogs them. Send the ones this gateway issued.
         let issued = issued_header(header, &self.challenge(kind, &terms))?;
@@ -794,7 +984,19 @@ impl Jobs {
             if store.records.contains_key(&quote_id) {
                 return Err(GatewayError::Payment("quote already paid".into()));
             }
-            if store.running(kind) >= offer.max_running {
+            let paying = store
+                .records
+                .values()
+                .filter(|r| matches!(r.state, State::Paying { .. }));
+            let (all, mine) = paying.fold((0, 0), |(all, mine), r| {
+                (all + 1, mine + usize::from(r.payer == payment.payer))
+            });
+            if all >= MAX_PAYING || mine >= MAX_PAYING_PER_PAYER {
+                return Err(GatewayError::Unavailable(
+                    "too many payments are being confirmed; try again in a minute".into(),
+                ));
+            }
+            if store.working(kind) >= offer.max_running {
                 return Err(GatewayError::Unavailable(format!(
                     "{} jobs are at capacity; try again in a few minutes",
                     kind.name()
@@ -806,6 +1008,12 @@ impl Jobs {
                 request: Some(quoted_request),
                 request_sha256: terms.request_sha256.clone(),
                 authorization_id: payment.authorization_id.clone(),
+                payer: payment.payer.clone(),
+                purchase: Purchase {
+                    offer_micro_usdc: offer.offer_micro_usdc,
+                    deadline_ms: offer.deadline_ms,
+                    approved_operators: offer.approved_operators.clone(),
+                },
                 terms,
                 created_at_ms: now,
                 updated_at_ms: now,
@@ -822,13 +1030,11 @@ impl Jobs {
             if matches!(record.state, State::Paid { .. }) {
                 self.start(quote_id).await;
             }
-            if !matches!(record.state, State::Paying { .. })
-                || std::time::Instant::now() >= deadline
-            {
-                if matches!(record.state, State::Unpaid) {
+            if !matches!(record.state, State::Paying { .. }) || Instant::now() >= deadline {
+                if matches!(record.state, State::Unpaid { .. }) {
                     return Err(GatewayError::Payment("payment did not land".into()));
                 }
-                return Ok(self.status_reply(&record));
+                return Ok(self.status_reply(&record).await);
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
@@ -845,7 +1051,12 @@ impl Jobs {
     }
 
     /// Writes `state` if the job's current state is one `from` accepts.
-    async fn transition(&self, id: Uuid, from: fn(&State) -> bool, state: State) -> Result<bool> {
+    async fn transition(
+        &self,
+        id: Uuid,
+        from: impl Fn(&State) -> bool,
+        state: State,
+    ) -> Result<bool> {
         let mut store = self.store.lock().await;
         let Some(record) = store.records.get(&id).cloned() else {
             return Ok(false);
@@ -853,7 +1064,7 @@ impl Jobs {
         if !from(&record.state) {
             return Ok(false);
         }
-        let ended = !state.in_progress() && !matches!(state, State::Refunding { .. });
+        let ended = !state.open();
         store.save(Record {
             request: if ended { None } else { record.request },
             updated_at_ms: crate::now_ms().max(record.updated_at_ms),
@@ -861,6 +1072,17 @@ impl Jobs {
             ..record
         })?;
         Ok(true)
+    }
+
+    /// Whether pending work on this job is due, marking the next attempt.
+    async fn due(&self, id: Uuid, every: Duration) -> bool {
+        let mut due = self.due.lock().await;
+        let now = Instant::now();
+        if due.get(&id).is_some_and(|at| now < *at) {
+            return false;
+        }
+        due.insert(id, now + every);
+        true
     }
 
     /// Moves one job forward as far as it can go without waiting on work.
@@ -879,6 +1101,10 @@ impl Jobs {
                 self.refund(&record, payment, transaction_id, reason, refund.as_ref())
                     .await
             }
+            State::Unpaid {
+                payment: Some(payment),
+                since_ms,
+            } => self.watch_unpaid(&record, payment, *since_ms).await,
             _ => Ok(()),
         };
         if let Err(error) = result {
@@ -887,27 +1113,68 @@ impl Jobs {
     }
 
     async fn settle(&self, record: &Record, payment: &VerifiedPayment) -> Result<()> {
+        let paying = |s: &State| matches!(s, State::Paying { .. });
         match self.rail.settle(payment, &record.terms).await? {
             SettlementStatus::Finalized { transaction_id } => {
-                self.transition(
-                    record.id,
-                    |s| matches!(s, State::Paying { .. }),
-                    State::Paid {
-                        payment: payment.clone(),
-                        transaction_id,
-                    },
-                )
-                .await?;
+                let paid = State::Paid {
+                    payment: payment.clone(),
+                    transaction_id,
+                };
+                self.transition(record.id, paying, paid).await?;
             }
             SettlementStatus::Failed => {
-                self.transition(
-                    record.id,
-                    |s| matches!(s, State::Paying { .. }),
-                    State::Unpaid,
-                )
-                .await?;
+                let unpaid = State::Unpaid {
+                    payment: Some(payment.clone()),
+                    since_ms: crate::now_ms(),
+                };
+                self.transition(record.id, paying, unpaid).await?;
             }
             SettlementStatus::Pending => {}
+        }
+        Ok(())
+    }
+
+    /// A payment judged unable to land is checked again for a day. If it
+    /// landed after all, the customer was charged for a job that never ran,
+    /// so it is refunded.
+    async fn watch_unpaid(
+        &self,
+        record: &Record,
+        payment: &VerifiedPayment,
+        since_ms: u64,
+    ) -> Result<()> {
+        let unpaid = |s: &State| {
+            matches!(
+                s,
+                State::Unpaid {
+                    payment: Some(_),
+                    ..
+                }
+            )
+        };
+        if crate::now_ms().saturating_sub(since_ms) > UNPAID_WATCH_MS {
+            let settled = State::Unpaid {
+                payment: None,
+                since_ms,
+            };
+            self.transition(record.id, unpaid, settled).await?;
+            return Ok(());
+        }
+        if !self.due(record.id, UNPAID_POLL).await {
+            return Ok(());
+        }
+        if let SettlementStatus::Finalized { transaction_id } =
+            self.rail.settle(payment, &record.terms).await?
+        {
+            let refunding = State::Refunding {
+                payment: payment.clone(),
+                transaction_id,
+                reason: "The payment landed after the job had been given up.".into(),
+                refund: None,
+            };
+            if self.transition(record.id, unpaid, refunding).await? {
+                self.due.lock().await.remove(&record.id);
+            }
         }
         Ok(())
     }
@@ -926,62 +1193,58 @@ impl Jobs {
             reason: reason.into(),
             refund,
         };
-        let Some(refund) = refund else {
-            let (id, encoded) = self.rail.refund(payment, &record.terms).await?;
-            self.transition(
-                record.id,
-                |s| matches!(s, State::Refunding { refund: None, .. }),
-                refunding(Some(StoredRefund {
-                    transaction_id: id,
+        let refunded = |refund_transaction_id: String| State::Refunded {
+            payer: payment.payer.clone(),
+            transaction_id: transaction_id.into(),
+            reason: reason.into(),
+            refund_transaction_id,
+        };
+        let Some(stored) = refund.cloned() else {
+            if !self.due(record.id, REFUND_POLL).await {
+                return Ok(());
+            }
+            let unbuilt = |s: &State| matches!(s, State::Refunding { refund: None, .. });
+            let next = match self.rail.refund(payment, &record.terms).await? {
+                RefundBuild::Built {
+                    transaction_id,
+                    encoded,
+                } => refunding(Some(StoredRefund {
+                    transaction_id,
                     encoded,
                 })),
-            )
-            .await?;
+                RefundBuild::AlreadyRefunded { transaction_id } => refunded(transaction_id),
+            };
+            if self.transition(record.id, unbuilt, next).await? {
+                // Check the new refund on the next pass, not a poll later.
+                self.due.lock().await.remove(&record.id);
+            }
             return Ok(());
         };
+        if !self.due(record.id, REFUND_POLL).await {
+            return Ok(());
+        }
+        let this = stored.clone();
+        let current =
+            move |s: &State| matches!(s, State::Refunding { refund: Some(r), .. } if *r == this);
         match self
             .rail
-            .refund_status(payment, &record.terms, &refund.encoded)
+            .refund_status(payment, &record.terms, &stored.encoded)
             .await?
         {
-            RefundStatus::Finalized {
-                transaction_id: refund_transaction_id,
-            } => {
-                self.transition(
-                    record.id,
-                    |s| {
-                        matches!(
-                            s,
-                            State::Refunding {
-                                refund: Some(_),
-                                ..
-                            }
-                        )
-                    },
-                    State::Refunded {
-                        payer: payment.payer.clone(),
-                        transaction_id: transaction_id.into(),
-                        reason: reason.into(),
-                        refund_transaction_id,
-                    },
-                )
-                .await?;
+            RefundStatus::Finalized { transaction_id } => {
+                self.transition(record.id, current, refunded(transaction_id))
+                    .await?;
             }
             RefundStatus::Void => {
-                self.transition(
-                    record.id,
-                    |s| {
-                        matches!(
-                            s,
-                            State::Refunding {
-                                refund: Some(_),
-                                ..
-                            }
-                        )
-                    },
-                    refunding(None),
-                )
-                .await?;
+                // Build the next one after a pause, so a refund that cannot
+                // land (an empty merchant wallet, a closed account) is not
+                // rebuilt every few seconds.
+                if self.transition(record.id, current, refunding(None)).await? {
+                    self.due
+                        .lock()
+                        .await
+                        .insert(record.id, Instant::now() + REFUND_REBUILD);
+                }
             }
             RefundStatus::Pending => {}
         }
@@ -991,27 +1254,14 @@ impl Jobs {
     /// Runs a paid job to its end: signs it if it has not been signed, then
     /// submits it and waits for the result.
     async fn run(self: Arc<Self>, id: Uuid) {
-        let outcome = self.run_once(id).await;
-        if let Err(error) = &outcome {
+        if let Err(error) = self.run_once(id).await {
             eprintln!("job {id}: {error}");
-        }
-        if !matches!(outcome, Ok(true)) {
-            self.retry_at
-                .lock()
-                .await
-                .insert(id, std::time::Instant::now() + RETRY_AFTER);
         }
         self.active.lock().await.remove(&id);
     }
 
-    /// Whether the job reached an end.
-    async fn run_once(&self, id: Uuid) -> Result<bool> {
+    async fn run_once(&self, id: Uuid) -> Result<()> {
         let record = self.record(id).await?;
-        let offer = self
-            .offers
-            .get(&record.kind)
-            .ok_or_else(|| GatewayError::Unavailable("job kind no longer offered".into()))?
-            .clone();
         let refund =
             |payment: VerifiedPayment, transaction_id: String, reason: String| State::Refunding {
                 payment,
@@ -1019,110 +1269,137 @@ impl Jobs {
                 reason,
                 refund: None,
             };
-        let (payment, transaction_id, envelope) = match record.state {
+        let paid = |s: &State| matches!(s, State::Paid { .. });
+        let running = |s: &State| matches!(s, State::Running { .. });
+        let (payment, transaction_id, envelope, started_at_ms) = match record.state {
             State::Paid {
                 payment,
                 transaction_id,
             } => {
-                let request = record.request.clone().unwrap_or_default();
-                match self.runner.sign(&offer, &request) {
-                    Ok(envelope) => {
-                        let paid = |s: &State| matches!(s, State::Paid { .. });
-                        let running = State::Running {
-                            payment: payment.clone(),
-                            transaction_id: transaction_id.clone(),
-                            envelope: envelope.clone(),
-                        };
-                        if !self.transition(id, paid, running).await? {
-                            return Ok(true);
-                        }
-                        (payment, transaction_id, envelope)
-                    }
-                    Err(error) => {
-                        let reason = format!("the job could not be prepared: {error}");
-                        let paid = |s: &State| matches!(s, State::Paid { .. });
+                // Nothing is spent yet, so a job no approved operator can
+                // win is refunded rather than sold to whoever is cheapest.
+                match self
+                    .runner
+                    .available(record.kind, record.purchase.offer_micro_usdc)
+                    .await
+                {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        let reason = "No operator that runs this job was available.".to_string();
                         self.transition(id, paid, refund(payment, transaction_id, reason))
                             .await?;
-                        return Ok(true);
+                        return Ok(());
                     }
+                    Err(error) => return Err(error),
                 }
+                let request = record.request.clone().unwrap_or_default();
+                let envelope = match self.runner.sign(record.kind, &record.purchase, &request) {
+                    Ok(envelope) => envelope,
+                    Err(error) => {
+                        let reason = format!("The job could not be prepared: {error}");
+                        self.transition(id, paid, refund(payment, transaction_id, reason))
+                            .await?;
+                        return Ok(());
+                    }
+                };
+                let started_at_ms = crate::now_ms();
+                let signed = State::Running {
+                    payment: payment.clone(),
+                    transaction_id: transaction_id.clone(),
+                    envelope: Box::new(envelope.clone()),
+                    started_at_ms,
+                };
+                if !self.transition(id, paid, signed).await? {
+                    return Ok(());
+                }
+                (payment, transaction_id, envelope, started_at_ms)
             }
             State::Running {
                 payment,
                 transaction_id,
                 envelope,
-            } => (payment, transaction_id, envelope),
-            _ => return Ok(true),
+                started_at_ms,
+            } => (payment, transaction_id, *envelope, started_at_ms),
+            _ => return Ok(()),
         };
         let state = match self.runner.run(&envelope).await {
-            Ok(output) if !offer.approved_operators.contains(&output.operator) => refund(
-                payment,
-                transaction_id,
-                "the result came from an operator this gateway does not deliver from".into(),
-            ),
+            Ok(output)
+                if !record
+                    .purchase
+                    .approved_operators
+                    .contains(&output.operator) =>
+            {
+                refund(
+                    payment,
+                    transaction_id,
+                    "The result came from an operator this gateway does not deliver from.".into(),
+                )
+            }
             Ok(output) => {
-                let result = present(record.kind, output);
-                if serde_json::to_vec(&result).map_or(true, |bytes| bytes.len() > MAX_RESULT_BYTES)
-                {
+                let result = serde_json::to_vec(&present(record.kind, output))?;
+                if result.len() > MAX_RESULT_BYTES {
                     refund(
                         payment,
                         transaction_id,
-                        "the result is too large to deliver".into(),
+                        "The result was too large to deliver.".into(),
                     )
                 } else {
+                    // The result is on disk before the job says it is done.
+                    let store = self.store.lock().await;
+                    store.write(&format!("{id}.result"), &result)?;
+                    drop(store);
                     State::Completed {
                         payer: payment.payer,
                         transaction_id,
-                        result: Some(result),
                         completed_at_ms: crate::now_ms(),
                     }
                 }
             }
             Err(RunFailure::Refund(reason)) => refund(payment, transaction_id, reason),
             Err(RunFailure::Retry(reason)) => {
-                return Err(GatewayError::Unavailable(reason));
+                // A job that stays unresolved long past its deadline is
+                // refunded; the coordinator has refunded or paid it by then.
+                let limit = started_at_ms
+                    .saturating_add(envelope.payload.deadline_ms)
+                    .saturating_add(RUN_GRACE_MS);
+                if crate::now_ms() <= limit {
+                    return Err(GatewayError::Unavailable(reason));
+                }
+                refund(
+                    payment,
+                    transaction_id,
+                    "The job did not finish in time.".into(),
+                )
             }
         };
-        self.transition(id, |s| matches!(s, State::Running { .. }), state)
-            .await?;
-        Ok(true)
+        self.transition(id, running, state).await?;
+        Ok(())
     }
 
-    /// One pass over every unfinished job. Run it every few seconds.
+    /// One pass over every job. Run it every few seconds.
     pub async fn tick(self: &Arc<Self>, now: u64) {
         self.quotes
             .lock()
             .await
             .retain(|_, (_, expires)| *expires > now);
-        let records: Vec<Record> = self.store.lock().await.records.values().cloned().collect();
-        for record in records {
-            match &record.state {
-                State::Paying { .. } | State::Refunding { .. } => self.advance(record.id).await,
-                State::Paid { .. } | State::Running { .. } => self.start(record.id).await,
-                State::Completed {
-                    payer,
-                    transaction_id,
-                    result: Some(_),
-                    completed_at_ms,
-                } if now.saturating_sub(*completed_at_ms) > RESULT_RETENTION_MS => {
-                    let expired = State::Completed {
-                        payer: payer.clone(),
-                        transaction_id: transaction_id.clone(),
-                        result: None,
-                        completed_at_ms: *completed_at_ms,
-                    };
-                    let kept = |s: &State| {
-                        matches!(
-                            s,
-                            State::Completed {
-                                result: Some(_),
-                                ..
-                            }
-                        )
-                    };
-                    if let Err(error) = self.transition(record.id, kept, expired).await {
-                        eprintln!("job {}: {error}", record.id);
+        let jobs: Vec<(Uuid, &'static str, bool, u64)> = self
+            .store
+            .lock()
+            .await
+            .records
+            .values()
+            .map(|r| (r.id, r.state.name(), r.state.open(), r.updated_at_ms))
+            .collect();
+        for (id, state, open, updated_at_ms) in jobs {
+            match state {
+                "paying" | "refunding" | "unpaid" if open => self.advance(id).await,
+                "running" => self.start(id).await,
+                _ if !open && now.saturating_sub(updated_at_ms) > RESULT_RETENTION_MS => {
+                    let removed = self.store.lock().await.remove(id);
+                    if let Err(error) = removed {
+                        eprintln!("job {id}: {error}");
                     }
+                    self.due.lock().await.remove(&id);
                 }
                 _ => {}
             }
@@ -1132,94 +1409,82 @@ impl Jobs {
     /// Starts a run for a paid job unless one is in progress or waiting out
     /// its retry delay.
     async fn start(self: &Arc<Self>, id: Uuid) {
-        if let Some(at) = self.retry_at.lock().await.get(&id) {
-            if std::time::Instant::now() < *at {
-                return;
-            }
-        }
-        if !self.active.lock().await.insert(id) {
+        if self.active.lock().await.contains(&id) || !self.due(id, RUN_RETRY).await {
             return;
         }
-        self.retry_at.lock().await.remove(&id);
-        tokio::spawn(self.clone().run(id));
+        if self.active.lock().await.insert(id) {
+            tokio::spawn(self.clone().run(id));
+        }
     }
 
-    fn status_reply(&self, record: &Record) -> JobReply {
+    async fn status_reply(&self, record: &Record) -> JobReply {
         let settlement = match &record.state {
-            State::Paid { payment, transaction_id }
-            | State::Running { payment, transaction_id, .. }
-            | State::Refunding { payment, transaction_id, .. } => Some((payment.payer.as_str(), transaction_id.as_str())),
-            State::Completed { payer, transaction_id, .. }
-            | State::Refunded { payer, transaction_id, .. } => Some((payer.as_str(), transaction_id.as_str())),
+            State::Paid { transaction_id, .. }
+            | State::Running { transaction_id, .. }
+            | State::Refunding { transaction_id, .. }
+            | State::Completed { transaction_id, .. }
+            | State::Refunded { transaction_id, .. } => Some(transaction_id.as_str()),
             _ => None,
         }
-        .map(|(payer, transaction)| json!({"success":true,"transaction":transaction,"network":record.terms.network,"payer":payer}));
+        .map(|transaction| json!({"success":true,"transaction":transaction,"network":record.terms.network,"payer":record.payer}));
         JobReply::Status {
-            view: self.view(record),
+            view: self.view(record).await,
             settlement,
         }
     }
 
     /// The job as its status URL shows it.
-    fn view(&self, record: &Record) -> Value {
+    async fn view(&self, record: &Record) -> Value {
         let mut view = json!({"id":record.id,"object":"covenant.job","kind":record.kind.name(),
             "status":record.state.name(),"status_url":self.status_url(record.id),
             "created_at_ms":record.created_at_ms,"updated_at_ms":record.updated_at_ms,
             "price":{"amount":record.terms.amount_atomic.to_string(),"asset":record.terms.asset,
                 "network":record.terms.network,"decimals":6}});
+        let payment = |transaction: &str| json!({"transaction":transaction,"payer":record.payer});
         match &record.state {
             State::Paying { .. } => {
                 view["message"] =
                     json!("The payment is being confirmed. The job starts once it is final.");
             }
-            State::Paid {
-                payment,
-                transaction_id,
-            }
-            | State::Running {
-                payment,
-                transaction_id,
-                ..
-            } => {
-                view["payment"] = json!({"transaction":transaction_id,"payer":payment.payer});
+            State::Paid { transaction_id, .. } | State::Running { transaction_id, .. } => {
+                view["payment"] = payment(transaction_id);
                 view["message"] = json!("The job is running. Check this URL again in a minute.");
             }
-            State::Completed {
-                payer,
-                transaction_id,
-                result,
-                ..
-            } => {
-                view["payment"] = json!({"transaction":transaction_id,"payer":payer});
-                match result {
-                    Some(result) => view["result"] = result.clone(),
+            State::Completed { transaction_id, .. } => {
+                view["payment"] = payment(transaction_id);
+                let path = self.store.lock().await.result_path(record.id);
+                match tokio::fs::read(path)
+                    .await
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+                {
+                    Some(result) => view["result"] = result,
                     None => view["message"] = json!("The result is no longer kept."),
                 }
             }
             State::Refunding {
-                payment,
                 transaction_id,
                 reason,
                 ..
             } => {
-                view["payment"] = json!({"transaction":transaction_id,"payer":payment.payer});
+                view["payment"] = payment(transaction_id);
                 view["message"] = json!(format!(
                     "The job did not complete, so the payment is being returned. {reason}"
                 ));
             }
             State::Refunded {
-                payer,
                 transaction_id,
                 reason,
                 refund_transaction_id,
+                ..
             } => {
-                view["payment"] = json!({"transaction":transaction_id,"payer":payer});
+                view["payment"] = payment(transaction_id);
                 view["refund"] = json!({"transaction":refund_transaction_id,"amount":record.terms.amount_atomic.to_string()});
                 view["message"] = json!(format!(
                     "The job did not complete and the payment was returned. {reason}"
                 ));
             }
-            State::Unpaid => {
+            State::Unpaid { .. } => {
                 view["message"] = json!(
                     "The payment never landed, so nothing was charged and the job did not run."
                 );
@@ -1228,9 +1493,20 @@ impl Jobs {
         view
     }
 
-    pub async fn status(&self, id: Uuid) -> Option<Value> {
-        let store = self.store.lock().await;
-        store.records.get(&id).map(|record| self.view(record))
+    /// The job's status for a holder of its status token.
+    pub async fn status(&self, id: Uuid, token: &str) -> Option<Value> {
+        let expected = status_token(&self.status_key, id);
+        let matches = expected.len() == token.len()
+            && expected
+                .bytes()
+                .zip(token.bytes())
+                .fold(0u8, |diff, (a, b)| diff | (a ^ b))
+                == 0;
+        if !matches {
+            return None;
+        }
+        let record = self.store.lock().await.records.get(&id).cloned()?;
+        Some(self.view(&record).await)
     }
 }
 
@@ -1351,12 +1627,19 @@ pub(crate) async fn post_http(
     }
 }
 
+#[derive(Deserialize)]
+pub(crate) struct StatusQuery {
+    token: Option<String>,
+}
+
+/// A job's status, for whoever holds the token its status URL carries.
 pub(crate) async fn status_http(
     Shared(gateway): Shared<Arc<crate::Gateway>>,
     UrlPath(id): UrlPath<String>,
+    Query(query): Query<StatusQuery>,
 ) -> Response {
-    let found = match (gateway.jobs.as_ref(), Uuid::parse_str(&id)) {
-        (Some(jobs), Ok(id)) => jobs.status(id).await,
+    let found = match (gateway.jobs.as_ref(), Uuid::parse_str(&id), query.token) {
+        (Some(jobs), Ok(id), Some(token)) => jobs.status(id, &token).await,
         _ => None,
     };
     let mut response = match found {

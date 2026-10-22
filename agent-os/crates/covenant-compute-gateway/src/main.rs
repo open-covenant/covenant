@@ -37,7 +37,7 @@ fn tariff_configuration_latch(directory: &Path) -> anyhow::Result<()> {
 
 /// Paid jobs, once a jobs merchant is set. They are bought on the coordinator
 /// with their own identity and balance, and each kind is sold only when its
-/// price is set.
+/// price is set. Jobs can only be switched off once none is open.
 fn jobs(
     directory: &Path,
     coordinator: &str,
@@ -47,7 +47,10 @@ fn jobs(
 ) -> anyhow::Result<Option<Arc<Jobs>>> {
     let pay_to = match std::env::var("COVENANT_GATEWAY_JOBS_PAY_TO") {
         Ok(pay_to) if !pay_to.is_empty() => pay_to,
-        Ok(_) | Err(std::env::VarError::NotPresent) => return Ok(None),
+        Ok(_) | Err(std::env::VarError::NotPresent) => {
+            jobs::require_no_open_jobs(&directory.join("jobs"))?;
+            return Ok(None);
+        }
         Err(_) => anyhow::bail!("COVENANT_GATEWAY_JOBS_PAY_TO must be valid Unicode"),
     };
     let mut offers = Vec::new();
@@ -67,10 +70,7 @@ fn jobs(
             max_running: 3,
         });
     }
-    anyhow::ensure!(
-        !offers.is_empty(),
-        "a jobs merchant needs at least one job price"
-    );
+    // With no price set, nothing new is sold, but open jobs still finish.
     let rail = Arc::new(Bridge::solana_jobs(
         bridge_url.into(),
         bridge_secret.into(),

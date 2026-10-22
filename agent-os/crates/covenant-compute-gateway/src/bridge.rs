@@ -151,6 +151,18 @@ pub struct Bridge {
     jobs: bool,
 }
 
+/// What the verifier returns when asked to refund a payment.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RefundBuild {
+    /// A signed refund, sealed by the verifier, to store before it is sent.
+    Built {
+        transaction_id: String,
+        encoded: String,
+    },
+    /// The payment was already refunded by this transaction.
+    AlreadyRefunded { transaction_id: String },
+}
+
 /// What the verifier says about a stored refund.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RefundStatus {
@@ -423,25 +435,37 @@ impl Bridge {
         }
         Ok(())
     }
-    /// A signed refund of a finalized job payment, sealed by the verifier. The
-    /// caller stores it before asking for its status, which broadcasts it.
+    /// A signed refund of a finalized job payment, sealed by the verifier, or
+    /// the refund that already returned it. The caller stores a new refund
+    /// before asking for its status, which broadcasts it.
     pub async fn refund(
         &self,
         payment: &VerifiedPayment,
         terms: &PaymentTerms,
-    ) -> Result<(String, String)> {
+    ) -> Result<RefundBuild> {
         let value = self
             .call(
                 "/refund",
                 json!({"payment":payment,"paymentRequirements":terms.accepted()}),
             )
             .await?;
+        let text = |key: &str| {
+            value[key]
+                .as_str()
+                .filter(|text| !text.is_empty())
+                .map(str::to_owned)
+        };
         match (
-            value["transaction_id"].as_str(),
-            value["encoded_refund"].as_str(),
+            value["status"].as_str(),
+            text("transaction_id"),
+            text("encoded_refund"),
         ) {
-            (Some(id), Some(encoded)) if !id.is_empty() && !encoded.is_empty() => {
-                Ok((id.into(), encoded.into()))
+            (Some("built"), Some(transaction_id), Some(encoded)) => Ok(RefundBuild::Built {
+                transaction_id,
+                encoded,
+            }),
+            (Some("refunded"), Some(transaction_id), None) => {
+                Ok(RefundBuild::AlreadyRefunded { transaction_id })
             }
             _ => Err(GatewayError::Unavailable(
                 "invalid payment bridge response".into(),

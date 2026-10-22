@@ -1,7 +1,7 @@
 // Paid-job lifecycle tests against a scripted payment rail and coordinator.
 use super::*;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex as Script;
 
 const ORIGIN: &str = "https://jobs.example";
@@ -21,6 +21,8 @@ struct Rail {
     refund_statuses: Script<VecDeque<RefundStatus>>,
     verified: Script<Vec<Value>>,
     refunds: AtomicUsize,
+    already_refunded: AtomicBool,
+    pay_to: Option<&'static str>,
 }
 #[async_trait]
 impl JobsRail for Rail {
@@ -31,7 +33,7 @@ impl JobsRail for Rail {
         "USDC"
     }
     fn pay_to(&self) -> &str {
-        "jobs-merchant"
+        self.pay_to.unwrap_or("jobs-merchant")
     }
     fn fee_payer(&self) -> &str {
         "fee-payer"
@@ -74,9 +76,17 @@ impl JobsRail for Rail {
                 transaction_id: payment.transaction_id.clone(),
             }))
     }
-    async fn refund(&self, _: &VerifiedPayment, _: &PaymentTerms) -> Result<(String, String)> {
+    async fn refund(&self, _: &VerifiedPayment, _: &PaymentTerms) -> Result<RefundBuild> {
+        if self.already_refunded.load(Ordering::SeqCst) {
+            return Ok(RefundBuild::AlreadyRefunded {
+                transaction_id: "earlier-refund".into(),
+            });
+        }
         let n = self.refunds.fetch_add(1, Ordering::SeqCst) + 1;
-        Ok((format!("refund-{n}"), format!("sealed-refund-{n}")))
+        Ok(RefundBuild::Built {
+            transaction_id: format!("refund-{n}"),
+            encoded: format!("sealed-refund-{n}"),
+        })
     }
     async fn refund_status(
         &self,
@@ -104,6 +114,7 @@ enum Outcome {
 }
 struct Runner {
     identity: LocalIdentity,
+    available: AtomicBool,
     signs: AtomicUsize,
     runs: Script<Vec<Uuid>>,
     outcomes: Script<VecDeque<Outcome>>,
@@ -112,6 +123,7 @@ impl Runner {
     fn new(outcomes: &[Outcome]) -> Self {
         Self {
             identity: LocalIdentity::generate("jobs-test@local"),
+            available: AtomicBool::new(true),
             signs: AtomicUsize::new(0),
             runs: Script::new(Vec::new()),
             outcomes: Script::new(outcomes.iter().copied().collect()),
@@ -120,7 +132,10 @@ impl Runner {
 }
 #[async_trait]
 impl JobRunner for Runner {
-    fn sign(&self, offer: &Offer, request: &Value) -> Result<SignedJobEnvelope> {
+    async fn available(&self, _: Kind, _: u64) -> Result<bool> {
+        Ok(self.available.load(Ordering::SeqCst))
+    }
+    fn sign(&self, _: Kind, purchase: &Purchase, request: &Value) -> Result<SignedJobEnvelope> {
         self.signs.fetch_add(1, Ordering::SeqCst);
         let config = BuyerConfig {
             coordinator_url: "https://coordinator.example".into(),
@@ -138,8 +153,8 @@ impl JobRunner for Runner {
                 gpu_class: None,
                 min_vram_gb: None,
                 min_reputation_bps: None,
-                price_micro_usdc: offer.offer_micro_usdc,
-                deadline_ms: offer.deadline_ms,
+                price_micro_usdc: purchase.offer_micro_usdc,
+                deadline_ms: purchase.deadline_ms,
             },
         )
         .map_err(|e| GatewayError::Invalid(e.to_string()))
@@ -222,20 +237,36 @@ fn job_id(challenge: &Value) -> Uuid {
     )
     .unwrap()
 }
-/// The job's status once it stops changing, ticking the worker meanwhile.
+/// The job's status, read with its token.
+async fn status(jobs: &Arc<Jobs>, id: Uuid) -> Option<Value> {
+    jobs.status(id, &status_token(&jobs.status_key, id)).await
+}
+/// The job's status once it reaches `until`. The worker ticks meanwhile,
+/// with every retry delay waived.
 async fn settled(jobs: &Arc<Jobs>, id: Uuid, until: &str) -> Value {
     for _ in 0..200 {
-        let view = jobs.status(id).await.unwrap();
+        let view = status(jobs, id).await.unwrap();
         if view["status"] == until {
             return view;
         }
+        jobs.due.lock().await.clear();
         jobs.tick(crate::now_ms()).await;
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
     panic!(
         "job never reached {until}: {}",
-        jobs.status(id).await.unwrap()
+        status(jobs, id).await.unwrap()
     );
+}
+/// Waits until no run is in progress.
+async fn idle(jobs: &Arc<Jobs>) {
+    for _ in 0..200 {
+        if jobs.active.lock().await.is_empty() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    panic!("a run never finished");
 }
 
 #[tokio::test]
@@ -280,6 +311,20 @@ async fn requests_that_would_fail_after_payment_are_refused_before_a_quote() {
 }
 
 #[tokio::test]
+async fn nothing_is_sold_while_a_generic_operator_could_win_the_job() {
+    let dir = tempfile::tempdir().unwrap();
+    let runner = Arc::new(Runner::new(&[]));
+    runner.available.store(false, Ordering::SeqCst);
+    let jobs = open(dir.path(), Arc::default(), runner);
+    assert!(matches!(
+        jobs.handle(Kind::Research, request(), None, crate::now_ms())
+            .await,
+        Err(GatewayError::Unavailable(_))
+    ));
+    assert!(jobs.manifest_endpoints(crate::now_ms()).await.is_empty());
+}
+
+#[tokio::test]
 async fn a_paid_job_settles_then_runs_and_its_status_returns_the_report() {
     let dir = tempfile::tempdir().unwrap();
     let rail = Arc::new(Rail::default());
@@ -290,9 +335,10 @@ async fn a_paid_job_settles_then_runs_and_its_status_returns_the_report() {
     let JobReply::Status { view, settlement } = pay(&jobs, &challenge, "tx1").await.unwrap() else {
         panic!("expected a status");
     };
+    let token = status_token(&jobs.status_key, id);
     assert_eq!(
         view["status_url"],
-        format!("https://jobs.example/v1/jobs/{id}")
+        format!("https://jobs.example/v1/jobs/{id}?token={token}")
     );
     assert_eq!(settlement.unwrap()["transaction"], "sig-tx1");
     let done = settled(&jobs, id, "completed").await;
@@ -320,6 +366,26 @@ async fn a_paid_job_settles_then_runs_and_its_status_returns_the_report() {
 }
 
 #[tokio::test]
+async fn the_status_is_readable_only_with_the_token_the_payer_was_given() {
+    let dir = tempfile::tempdir().unwrap();
+    let jobs = open(dir.path(), Arc::default(), Arc::new(Runner::new(&[])));
+    let challenge = quote(&jobs).await;
+    let id = job_id(&challenge);
+    pay(&jobs, &challenge, "tx1").await.unwrap();
+    settled(&jobs, id, "completed").await;
+    // The quote id is in the 402 anyone could see; it is not enough.
+    assert!(jobs.status(id, "").await.is_none());
+    assert!(jobs.status(id, &"0".repeat(32)).await.is_none());
+    assert!(jobs.status(id, &id.to_string()).await.is_none());
+    let elsewhere = tempfile::tempdir().unwrap();
+    let other = open(elsewhere.path(), Arc::default(), Arc::new(Runner::new(&[])));
+    assert!(jobs
+        .status(id, &status_token(&other.status_key, id))
+        .await
+        .is_none());
+}
+
+#[tokio::test]
 async fn the_issued_listing_replaces_whatever_the_payment_echoes() {
     let dir = tempfile::tempdir().unwrap();
     let rail = Arc::new(Rail::default());
@@ -335,25 +401,30 @@ async fn the_issued_listing_replaces_whatever_the_payment_echoes() {
 }
 
 #[tokio::test]
-async fn a_payment_that_never_lands_runs_nothing() {
+async fn a_payment_that_never_lands_runs_nothing_and_is_refunded_if_it_lands_later() {
     let dir = tempfile::tempdir().unwrap();
     let rail = Arc::new(Rail::default());
     rail.settles
         .lock()
         .unwrap()
-        .push_back(SettlementStatus::Failed);
+        .extend([SettlementStatus::Failed, SettlementStatus::Pending]);
     let runner = Arc::new(Runner::new(&[]));
-    let jobs = open(dir.path(), rail, runner.clone());
+    let jobs = open(dir.path(), rail.clone(), runner.clone());
     let challenge = quote(&jobs).await;
+    let id = job_id(&challenge);
     assert!(matches!(
         pay(&jobs, &challenge, "tx1").await,
         Err(GatewayError::Payment(_))
     ));
-    assert_eq!(
-        jobs.status(job_id(&challenge)).await.unwrap()["status"],
-        "unpaid"
-    );
+    assert_eq!(status(&jobs, id).await.unwrap()["status"], "unpaid");
+    // Still watched: once it lands, the customer is refunded and nothing runs.
+    let refunded = settled(&jobs, id, "refunded").await;
+    assert!(refunded["message"]
+        .as_str()
+        .unwrap()
+        .contains("landed after"));
     assert_eq!(runner.signs.load(Ordering::SeqCst), 0);
+    assert_eq!(rail.refunds.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
@@ -392,6 +463,7 @@ async fn a_job_the_coordinator_refunds_is_refunded_to_the_payer_once() {
     assert_eq!(refunded["refund"]["amount"], "5000000");
     assert!(refunded["message"].as_str().unwrap().contains("returned"));
     for _ in 0..5 {
+        jobs.due.lock().await.clear();
         jobs.tick(crate::now_ms()).await;
     }
     assert_eq!(rail.refunds.load(Ordering::SeqCst), 1);
@@ -418,6 +490,23 @@ async fn a_refund_that_expires_is_rebuilt_and_only_a_finalized_one_ends_it() {
 }
 
 #[tokio::test]
+async fn a_payment_the_verifier_reports_as_already_refunded_ends_as_refunded() {
+    let dir = tempfile::tempdir().unwrap();
+    let rail = Arc::new(Rail::default());
+    rail.already_refunded.store(true, Ordering::SeqCst);
+    let jobs = open(
+        dir.path(),
+        rail.clone(),
+        Arc::new(Runner::new(&[Outcome::Refund])),
+    );
+    let challenge = quote(&jobs).await;
+    pay(&jobs, &challenge, "tx1").await.unwrap();
+    let refunded = settled(&jobs, job_id(&challenge), "refunded").await;
+    assert_eq!(refunded["refund"]["transaction"], "earlier-refund");
+    assert_eq!(rail.refunds.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
 async fn a_result_from_an_unapproved_operator_is_refunded_not_delivered() {
     let dir = tempfile::tempdir().unwrap();
     let jobs = open(
@@ -432,6 +521,23 @@ async fn a_result_from_an_unapproved_operator_is_refunded_not_delivered() {
 }
 
 #[tokio::test]
+async fn a_paid_job_no_approved_operator_can_win_is_refunded_before_any_spend() {
+    let dir = tempfile::tempdir().unwrap();
+    let rail = Arc::new(Rail::default());
+    rail.settles
+        .lock()
+        .unwrap()
+        .push_back(SettlementStatus::Pending);
+    let runner = Arc::new(Runner::new(&[]));
+    let jobs = open(dir.path(), rail, runner.clone());
+    let challenge = quote(&jobs).await;
+    pay(&jobs, &challenge, "tx1").await.unwrap();
+    runner.available.store(false, Ordering::SeqCst);
+    settled(&jobs, job_id(&challenge), "refunded").await;
+    assert_eq!(runner.signs.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
 async fn an_inconclusive_run_retries_the_same_signed_job_after_a_delay() {
     let dir = tempfile::tempdir().unwrap();
     let runner = Arc::new(Runner::new(&[Outcome::Retry, Outcome::Report]));
@@ -439,25 +545,40 @@ async fn an_inconclusive_run_retries_the_same_signed_job_after_a_delay() {
     let challenge = quote(&jobs).await;
     let id = job_id(&challenge);
     pay(&jobs, &challenge, "tx1").await.unwrap();
-    for _ in 0..50 {
-        if !runner.runs.lock().unwrap().is_empty() && jobs.active.lock().await.is_empty() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
+    idle(&jobs).await;
     jobs.tick(crate::now_ms()).await;
     assert_eq!(
         runner.runs.lock().unwrap().len(),
         1,
         "retried before its delay"
     );
-    assert_eq!(jobs.status(id).await.unwrap()["status"], "running");
-    jobs.retry_at.lock().await.clear();
+    assert_eq!(status(&jobs, id).await.unwrap()["status"], "running");
     settled(&jobs, id, "completed").await;
     let runs = runner.runs.lock().unwrap().clone();
     assert_eq!(runs.len(), 2);
     assert_eq!(runs[0], runs[1]);
     assert_eq!(runner.signs.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn a_job_unresolved_long_past_its_deadline_is_refunded() {
+    let dir = tempfile::tempdir().unwrap();
+    let runner = Arc::new(Runner::new(&[Outcome::Retry, Outcome::Retry]));
+    let jobs = open(dir.path(), Arc::default(), runner);
+    let challenge = quote(&jobs).await;
+    let id = job_id(&challenge);
+    pay(&jobs, &challenge, "tx1").await.unwrap();
+    idle(&jobs).await;
+    {
+        let mut store = jobs.store.lock().await;
+        let mut record = store.records[&id].clone();
+        let State::Running { started_at_ms, .. } = &mut record.state else {
+            panic!("expected a running job");
+        };
+        *started_at_ms = 0;
+        store.save(record).unwrap();
+    }
+    settled(&jobs, id, "refunded").await;
 }
 
 #[tokio::test]
@@ -468,30 +589,68 @@ async fn a_restart_resumes_a_running_job_with_its_stored_signed_job() {
     let challenge = quote(&jobs).await;
     let id = job_id(&challenge);
     pay(&jobs, &challenge, "tx1").await.unwrap();
-    for _ in 0..50 {
-        if !first.runs.lock().unwrap().is_empty() && jobs.active.lock().await.is_empty() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
+    idle(&jobs).await;
     let signed = first.runs.lock().unwrap()[0];
+    let key = jobs.status_key;
     drop(jobs);
     let second = Arc::new(Runner::new(&[Outcome::Report]));
     let jobs = open(dir.path(), Arc::default(), second.clone());
+    // The same status URL keeps working after a restart.
+    assert_eq!(jobs.status_key, key);
     settled(&jobs, id, "completed").await;
     assert_eq!(second.signs.load(Ordering::SeqCst), 0);
     assert_eq!(second.runs.lock().unwrap()[0], signed);
 }
 
 #[tokio::test]
-async fn quotes_stop_while_the_kind_is_at_capacity() {
+async fn an_open_job_keeps_its_rail_and_keeps_jobs_switched_on() {
     let dir = tempfile::tempdir().unwrap();
     let rail = Arc::new(Rail::default());
     rail.settles
         .lock()
         .unwrap()
-        .extend([SettlementStatus::Pending, SettlementStatus::Pending]);
+        .push_back(SettlementStatus::Pending);
     let jobs = open(dir.path(), rail, Arc::new(Runner::new(&[])));
+    let challenge = quote(&jobs).await;
+    pay(&jobs, &challenge, "tx1").await.unwrap();
+    drop(jobs);
+    assert!(require_no_open_jobs(dir.path()).is_err());
+    let moved = Arc::new(Rail {
+        pay_to: Some("another-merchant"),
+        ..Rail::default()
+    });
+    assert!(Jobs::open(
+        dir.path(),
+        ORIGIN,
+        moved,
+        Arc::new(Runner::new(&[])),
+        vec![offer()]
+    )
+    .is_err());
+    // With no kind on sale, the open job still finishes.
+    let jobs = Arc::new(
+        Jobs::open(
+            dir.path(),
+            ORIGIN,
+            Arc::<Rail>::default(),
+            Arc::new(Runner::new(&[])),
+            vec![],
+        )
+        .unwrap(),
+    );
+    settled(&jobs, job_id(&challenge), "completed").await;
+    drop(jobs);
+    assert!(require_no_open_jobs(dir.path()).is_ok());
+}
+
+#[tokio::test]
+async fn paid_work_holds_capacity_and_unconfirmed_payments_are_capped_per_payer() {
+    let dir = tempfile::tempdir().unwrap();
+    let jobs = open(
+        dir.path(),
+        Arc::default(),
+        Arc::new(Runner::new(&[Outcome::Retry, Outcome::Retry])),
+    );
     for tx in ["tx1", "tx2"] {
         let challenge = quote(&jobs).await;
         pay(&jobs, &challenge, tx).await.unwrap();
@@ -499,6 +658,24 @@ async fn quotes_stop_while_the_kind_is_at_capacity() {
     assert!(matches!(
         jobs.handle(Kind::Research, request(), None, crate::now_ms())
             .await,
+        Err(GatewayError::Unavailable(_))
+    ));
+
+    let dir = tempfile::tempdir().unwrap();
+    let rail = Arc::new(Rail::default());
+    rail.settles
+        .lock()
+        .unwrap()
+        .extend([SettlementStatus::Pending, SettlementStatus::Pending]);
+    let jobs = open(dir.path(), rail, Arc::new(Runner::new(&[])));
+    let mut challenges = Vec::new();
+    for _ in 0..3 {
+        challenges.push(quote(&jobs).await);
+    }
+    pay(&jobs, &challenges[0], "tx1").await.unwrap();
+    pay(&jobs, &challenges[1], "tx2").await.unwrap();
+    assert!(matches!(
+        pay(&jobs, &challenges[2], "tx3").await,
         Err(GatewayError::Unavailable(_))
     ));
 }
@@ -528,7 +705,7 @@ async fn a_payment_cannot_start_two_jobs_or_pay_for_another_request() {
 }
 
 #[tokio::test]
-async fn a_result_is_dropped_after_its_retention_but_the_job_is_remembered() {
+async fn a_finished_job_is_deleted_with_its_result_after_the_retention() {
     let dir = tempfile::tempdir().unwrap();
     let jobs = open(
         dir.path(),
@@ -539,12 +716,12 @@ async fn a_result_is_dropped_after_its_retention_but_the_job_is_remembered() {
     let id = job_id(&challenge);
     pay(&jobs, &challenge, "tx1").await.unwrap();
     settled(&jobs, id, "completed").await;
+    assert!(jobs.store.lock().await.records[&id].request.is_none());
+    assert!(dir.path().join(format!("{id}.result")).exists());
     jobs.tick(crate::now_ms() + RESULT_RETENTION_MS + 1).await;
-    let view = jobs.status(id).await.unwrap();
-    assert_eq!(view["status"], "completed");
-    assert!(view.get("result").is_none());
-    let record = &jobs.store.lock().await.records[&id];
-    assert!(record.request.is_none());
+    assert!(status(&jobs, id).await.is_none());
+    assert!(!dir.path().join(format!("{id}.result")).exists());
+    assert!(!dir.path().join(format!("{id}.json")).exists());
 }
 
 #[tokio::test]

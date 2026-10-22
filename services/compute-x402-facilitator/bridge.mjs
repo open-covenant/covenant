@@ -3,10 +3,11 @@
 // broadcast directly or by a facilitator holding the same fee payer key.
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import { address, getCompiledTransactionMessageDecoder, getTransactionDecoder, getSignatureFromTransaction, assertIsFullySignedTransaction } from '@solana/kit';
+import { getCompiledTransactionMessageDecoder, getTransactionDecoder, getSignatureFromTransaction, assertIsFullySignedTransaction } from '@solana/kit';
 import { ExactSvmScheme } from '@x402/svm/exact/facilitator';
 import { batchPricingTotal, createPricingPolicy, validPaymentAmount } from './pricing.mjs';
-import { buildRefund } from './refunds.mjs';
+import { buildRefund, MEMO_PROGRAM, refundMarker, refundMemo } from './refunds.mjs';
+import { findAssociatedTokenPda, TOKEN_PROGRAM_ADDRESS } from '@solana-program/token';
 
 export const RAILS = Object.freeze({
   'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp': {
@@ -46,6 +47,8 @@ export const FACILITATOR_GRACE_MS = 4_000;
  * a quote expired is checked for expiry until this long after it.
  */
 export const EXPIRY_MARGIN_MS = 180_000;
+/** The token program's TransferChecked instruction. */
+const TRANSFER_CHECKED = 12;
 
 /** The paid job kinds a gateway can sell, each at `/v1/jobs/<kind>`. */
 export const JOB_KINDS = Object.freeze(['research', 'knowledge', 'agent', 'fix']);
@@ -156,12 +159,16 @@ export function createBridge({ signer, config, rpc, now = Date.now, verifier, fa
   async function expired(wire, signature, issuedBefore) {
     if (now() < issuedBefore + EXPIRY_MARGIN_MS) return false;
     const { lifetimeToken } = getCompiledTransactionMessageDecoder().decode(decode(wire).tx.messageBytes);
-    for (const commitment of ['processed', 'finalized']) {
-      const valid = await rpc('isBlockhashValid', [lifetimeToken, { commitment }]);
-      if (valid?.value !== false) return false;
-    }
+    const processed = await rpc('isBlockhashValid', [lifetimeToken, { commitment: 'processed' }]);
+    if (processed?.value !== false) return false;
+    const finalized = await rpc('isBlockhashValid', [lifetimeToken, { commitment: 'finalized' }]);
+    if (finalized?.value !== false) return false;
+    // Each later read must come from a node at least as far along as the
+    // finalized one, or a lagging node behind a load balancer could miss it.
+    const floor = finalized.context?.slot;
+    if (!Number.isSafeInteger(floor) || !(processed.context?.slot >= floor)) return false;
     const statuses = await rpc('getSignatureStatuses', [[signature], { searchTransactionHistory: true }]);
-    return statuses?.value?.[0] == null;
+    return statuses?.value?.[0] == null && statuses?.context?.slot >= floor;
   }
   return {
     readiness() {
@@ -178,6 +185,7 @@ export function createBridge({ signer, config, rpc, now = Date.now, verifier, fa
       const { bytes } = decode(payload.payload?.transaction);
       const verified = await verifier.verify(payload, terms);
       if (!verified.isValid || !verified.payer) throw new Rejected(verified.invalidReason ?? 'invalid payment');
+      if (jobs) await paymentTransfer(payload.payload.transaction, verified.payer);
       // Signing is local. The Rust journal must persist these exact bytes before
       // /settle may be invoked, so a lost send response cannot create a new tx.
       const signed = await signer.signTransaction(payload.payload.transaction, feePayer, network);
@@ -223,26 +231,77 @@ export function createBridge({ signer, config, rpc, now = Date.now, verifier, fa
     assertNetwork,
   };
   /**
+   * The payment's single USDC transfer, which must come from the payer's own
+   * account and go to the merchant's. A delegate or another owner's account
+   * is refused, so a refund always returns to the account that paid.
+   */
+  async function paymentTransfer(wire, payer) {
+    const message = getCompiledTransactionMessageDecoder().decode(decode(wire).tx.messageBytes);
+    const keys = message.staticAccounts;
+    const transfers = message.instructions.filter(ix => keys[ix.programAddressIndex] === TOKEN_PROGRAM_ADDRESS);
+    if (transfers.length !== 1) throw new Rejected('a job payment makes one token transfer');
+    const data = Buffer.from(transfers[0].data ?? []);
+    const accounts = (transfers[0].accountIndices ?? []).map(index => keys[index]);
+    if (data.length !== 10 || data[0] !== TRANSFER_CHECKED || accounts.length !== 4 || accounts.includes(undefined)) throw new Rejected('a job payment is a checked token transfer');
+    const [source, mint, destination, authority] = accounts;
+    const [payerAccount] = await findAssociatedTokenPda({ owner: payer, mint: asset, tokenProgram: TOKEN_PROGRAM_ADDRESS });
+    const [merchantAccount] = await findAssociatedTokenPda({ owner: payTo, mint: asset, tokenProgram: TOKEN_PROGRAM_ADDRESS });
+    if (authority !== payer || source !== payerAccount || mint !== asset || destination !== merchantAccount) throw new Rejected("a job is paid from the payer's own USDC account");
+    return { source, destination, amount: data.readBigUInt64LE(1) };
+  }
+  /** The payment as it landed: these exact bytes, finalized and successful, for the quoted amount. */
+  async function landedTransfer(ev, terms) {
+    const status = (await rpc('getSignatureStatuses', [[ev.transactionId], { searchTransactionHistory: true }]))?.value?.[0];
+    if (status?.confirmationStatus !== 'finalized' || status.err !== null) throw new Rejected('only a finalized payment is refunded');
+    const landed = await rpc('getTransaction', [ev.transactionId, { encoding: 'base64', commitment: 'finalized', maxSupportedTransactionVersion: 0 }]);
+    if (!landed || landed.meta?.err !== null || landed.transaction?.[0] !== ev.transaction) throw new Rejected('payment readback does not match');
+    const transfer = await paymentTransfer(ev.transaction, ev.payer);
+    if (transfer.amount !== BigInt(terms.amount)) throw new Rejected('payment readback does not match');
+    return transfer;
+  }
+  /**
+   * The refund that claimed this payment's marker, once one has: the oldest
+   * successful transaction on the marker that carries this quote's refund memo.
+   */
+  async function claimedRefund(marker, quoteId) {
+    const account = (await rpc('getAccountInfo', [marker, { encoding: 'base64', commitment: 'finalized' }]))?.value;
+    if (account?.owner !== MEMO_PROGRAM) return null;
+    const history = await rpc('getSignaturesForAddress', [marker, { limit: 50, commitment: 'finalized' }]);
+    for (const entry of [...(history ?? [])].reverse()) {
+      if (entry.err !== null) continue;
+      const landed = await rpc('getTransaction', [entry.signature, { encoding: 'base64', commitment: 'finalized', maxSupportedTransactionVersion: 0 }]);
+      const bytes = Buffer.from(landed?.transaction?.[0] ?? '', 'base64');
+      if (bytes.includes(Buffer.from(refundMemo(quoteId)))) return entry.signature;
+    }
+    return 'unrecorded';
+  }
+  /**
    * A signed refund of a finalized job payment, sealed for the gateway to
-   * store before anything is broadcast. The amount and payer come from the
-   * sealed payment, never from the caller.
+   * store before anything is broadcast. The payment is read back from chain,
+   * so the amount and accounts come from what landed, never from the caller.
+   * A payment already refunded reports that refund instead.
    */
   async function refund({ payment, paymentRequirements: terms }) {
     const ev = storedPayment(payment, terms);
     await assertNetwork();
-    const status = (await rpc('getSignatureStatuses', [[ev.transactionId], { searchTransactionHistory: true }]))?.value?.[0];
-    if (status?.confirmationStatus !== 'finalized' || status.err !== null) throw new Rejected('only a finalized payment is refunded');
+    const transfer = await landedTransfer(ev, terms);
+    const marker = await refundMarker(feePayer, ev.transactionId);
+    const claimed = await claimedRefund(marker, terms.extra.quoteId);
+    if (claimed) return { status: 'refunded', transaction_id: claimed };
     const latest = (await rpc('getLatestBlockhash', [{ commitment: 'confirmed' }]))?.value;
-    if (typeof latest?.blockhash !== 'string' || !Number.isSafeInteger(latest.lastValidBlockHeight)) throw new Error('RPC blockhash unavailable');
-    const built = await buildRefund({ ...refundSigners, mint: asset, payer: address(ev.payer), amount: BigInt(terms.amount),
-      quoteId: terms.extra.quoteId, blockhash: latest.blockhash, lastValidBlockHeight: latest.lastValidBlockHeight });
-    const evidence = { kind: 'refund', transaction: built.transaction, signature: built.signature,
+    const markerLamports = await rpc('getMinimumBalanceForRentExemption', [1]);
+    if (typeof latest?.blockhash !== 'string' || !Number.isSafeInteger(latest.lastValidBlockHeight) || !Number.isSafeInteger(markerLamports)) throw new Error('RPC unavailable');
+    const built = await buildRefund({ ...refundSigners, mint: asset, source: transfer.destination, destination: transfer.source,
+      amount: transfer.amount, quoteId: terms.extra.quoteId, paymentSignature: ev.transactionId, markerLamports,
+      blockhash: latest.blockhash, lastValidBlockHeight: latest.lastValidBlockHeight });
+    const evidence = { kind: 'refund', transaction: built.transaction, signature: built.signature, marker,
       lastValidBlockHeight: latest.lastValidBlockHeight, paymentTransactionId: ev.transactionId };
-    return { transaction_id: built.signature, encoded_refund: JSON.stringify({ evidence, seal: seal(evidence) }) };
+    return { status: 'built', transaction_id: built.signature, encoded_refund: JSON.stringify({ evidence, seal: seal(evidence) }) };
   }
   /**
-   * Where a stored refund stands. `expired` and `failed` both mean no money
-   * moved and it never can, so the gateway may build a new one.
+   * Where a stored refund stands. `expired` and `failed` mean this refund
+   * moved nothing and never can, so the gateway may build another; the
+   * marker stops that one from paying twice if this verdict is ever wrong.
    */
   async function refundStatus({ payment, paymentRequirements: terms, refund: encoded }) {
     const ev = storedPayment(payment, terms);
@@ -251,18 +310,26 @@ export function createBridge({ signer, config, rpc, now = Date.now, verifier, fa
     const { tx } = decode(saved.transaction);
     if (getSignatureFromTransaction(tx) !== saved.signature) throw new Rejected('signature changed');
     await assertNetwork();
-    // Height first: once the finalized chain is past the refund's last valid
-    // height, a status read made after it is conclusive.
-    const height = await rpc('getBlockHeight', [{ commitment: 'finalized' }]);
-    const status = (await rpc('getSignatureStatuses', [[saved.signature], { searchTransactionHistory: true }]))?.value?.[0];
-    if (status?.confirmationStatus === 'finalized') return status.err === null ? { status: 'finalized', transaction_id: saved.signature } : { status: 'failed' };
-    if (status) return { status: 'pending' };
-    if (Number.isSafeInteger(height) && height > saved.lastValidBlockHeight) return { status: 'expired' };
+    // Finality first, and a status read from a node at least that far along:
+    // past the refund's last valid height, a missing status is conclusive.
+    const finalized = await rpc('getEpochInfo', [{ commitment: 'finalized' }]);
+    const statuses = await rpc('getSignatureStatuses', [[saved.signature], { searchTransactionHistory: true }]);
+    const status = statuses?.value?.[0];
+    if (status?.confirmationStatus === 'finalized' && status.err === null) return { status: 'finalized', transaction_id: saved.signature };
+    if (status && status.confirmationStatus !== 'finalized') return { status: 'pending' };
+    // Another refund of this payment may have landed (one built before a
+    // restart, say); the marker shows it, and this one can never land.
+    const claimed = await claimedRefund(saved.marker, terms.extra.quoteId);
+    if (claimed) return { status: 'finalized', transaction_id: claimed };
+    if (status) return { status: 'failed' };
+    if (Number.isSafeInteger(finalized?.blockHeight) && finalized.blockHeight > saved.lastValidBlockHeight
+      && statuses?.context?.slot >= finalized.absoluteSlot) return { status: 'expired' };
     try {
       await rpc('sendTransaction', [saved.transaction, { encoding: 'base64', skipPreflight: false, preflightCommitment: 'confirmed', maxRetries: 0 }]);
-    } catch (error) {
-      // Usually an empty merchant account. The refund stays owed and is retried.
-      log(`refund broadcast refused: ${String(error?.message ?? error).slice(0, 200)}`);
+    } catch {
+      // Usually an empty merchant account or a closed payer account. The
+      // refund stays owed and is tried again.
+      log('refund broadcast refused; it stays owed and will be retried');
     }
     return { status: 'pending' };
   }

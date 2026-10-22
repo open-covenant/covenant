@@ -22,7 +22,9 @@ async function readKeypair(name) {
   const file = required(name);
   const metadata = await stat(file);
   if ((metadata.mode & 0o077) !== 0) throw new Error(`${name} must be private`);
-  const bytes = JSON.parse(await readFile(file, 'utf8'));
+  // A parse error would quote the file, so it is replaced with a plain one.
+  let bytes;
+  try { bytes = JSON.parse(await readFile(file, 'utf8')); } catch { throw new Error(`${name} is not a keypair`); }
   if (!Array.isArray(bytes) || bytes.length !== 64 || bytes.some(n => !Number.isInteger(n) || n < 0 || n > 255)) throw new Error(`${name} is not a keypair`);
   const keypair = await createKeyPairSignerFromBytes(Uint8Array.from(bytes));
   bytes.fill(0);
@@ -65,6 +67,8 @@ await bridge.assertNetwork();
 // Prices are fixed per job kind; an unset price leaves that kind unsold.
 let jobsRail = null;
 if (process.env.COVENANT_GATEWAY_JOBS_PAY_TO) {
+  // A shared merchant would let a served inference payment be refunded as a job.
+  if (process.env.COVENANT_GATEWAY_JOBS_PAY_TO === config.payTo) throw new Error('paid jobs need their own merchant wallet');
   const jobPrices = Object.fromEntries(JOB_KINDS
     .filter(kind => process.env[`COVENANT_GATEWAY_JOBS_${kind.toUpperCase()}_PRICE_MICRO_USDC`])
     .map(kind => [new URL(`/v1/jobs/${kind}`, config.resourceUrl).href, process.env[`COVENANT_GATEWAY_JOBS_${kind.toUpperCase()}_PRICE_MICRO_USDC`]]));

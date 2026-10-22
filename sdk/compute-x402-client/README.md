@@ -2,7 +2,7 @@
 
 Buy inference from Covenant with Solana USDC using standard x402 V2. The package provides a Coinbase AgentKit action and an official LangChain tool usable in LangGraph agents. Both use the same payment journal, spending limits and signed-result verification. The configured Solana wallet signs the actual SPL-token transfer through `walletProvider.signTransaction`.
 
-Version 0.1.0 completed funded AgentKit acceptance and is available as an immutable [GitHub release](https://github.com/open-covenant/covenant/releases/tag/codex-compute-x402-client-v0.1.0). Version 0.2.0 added LangChain/LangGraph support. Version 0.3.0 added model tariffs. Version 0.4.0 is the release candidate for quotes with a 32-character payment memo, which earlier versions refuse before signing; its local qualification does not establish production deployment or funded acceptance. Compatibility does not imply a partnership or endorsement.
+Version 0.1.0 completed funded AgentKit acceptance and is available as an immutable [GitHub release](https://github.com/open-covenant/covenant/releases/tag/compute-x402-client-v0.1.0). Version 0.2.0 added LangChain/LangGraph support. Version 0.3.0 added model tariffs. Version 0.4.0 is the release candidate for quotes with a 32-character payment memo, which earlier versions refuse before signing; its local qualification does not establish production deployment or funded acceptance. Compatibility does not imply a partnership or endorsement.
 
 ## Install
 

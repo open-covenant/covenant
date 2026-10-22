@@ -39,7 +39,7 @@ test helpers, native receipt fixture and exact qualification dependency lock.
 
 ## Immutable publication
 
-The [Python v0.1.0 release](https://github.com/open-covenant/covenant/releases/tag/codex-compute-x402-python-v0.1.0)
+The [Python v0.1.0 release](https://github.com/open-covenant/covenant/releases/tag/compute-x402-python-v0.1.0)
 was published at 19:41:15 UTC on 2026-10-18. GitHub reported release ID
 `416662698`, `immutable: true`, and target commit
 `d85a26e6acaa36e8ed521c922a82f9fc04f8e93b`. This is a GitHub-hosted wheel/source

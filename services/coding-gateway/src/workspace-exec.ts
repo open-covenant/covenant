@@ -39,10 +39,14 @@ export const MAX_OUTPUT_FILES = 8;
 export const MAX_OUTPUT_BYTES = 32 * 1024 * 1024;
 
 // Python, because the Jupyter kernel guarantees an interpreter and nothing else.
-const RUN_SCRIPT = `import json, os, subprocess, time
+// The command sees that interpreter first on PATH, so python3 and pip are the
+// kernel's even when the image's own Python is missing or different.
+const RUN_SCRIPT = `import json, os, subprocess, sys, time
+env = dict(os.environ, PYTHONUNBUFFERED='1', PIP_DISABLE_PIP_VERSION_CHECK='1', PIP_NO_INPUT='1')
+env['PATH'] = os.path.dirname(sys.executable) + os.pathsep + env.get('PATH', '/usr/bin:/bin')
 started = time.monotonic()
 with open('covenant-stdout.log', 'wb') as out, open('covenant-stderr.log', 'wb') as err:
-    code = subprocess.call(['bash', 'covenant-command.sh'], stdin=subprocess.DEVNULL, stdout=out, stderr=err)
+    code = subprocess.call(['bash', 'covenant-command.sh'], stdin=subprocess.DEVNULL, stdout=out, stderr=err, env=env)
 with open('covenant-exit.tmp', 'w') as f:
     json.dump({'exit_code': code, 'duration_ms': round((time.monotonic() - started) * 1000)}, f)
 os.replace('covenant-exit.tmp', 'covenant-exit.json')

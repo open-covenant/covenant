@@ -6,6 +6,9 @@
 # on the workspace image's CUDA 12.4 libraries; 1.21 and later need 12.8. The
 # image already ships cuBLAS, so cuDNN is installed without its own copy.
 set -euo pipefail
+# Images with an externally managed Python refuse plain pip installs; this
+# machine is rented for this job alone.
+export PIP_BREAK_SYSTEM_PACKAGES=1
 pip_install() {
   python3 -m pip install --quiet --disable-pip-version-check --no-cache-dir "$@"
 }

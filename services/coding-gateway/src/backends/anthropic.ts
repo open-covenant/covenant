@@ -129,8 +129,9 @@ export function gpuWorkspaceTool(cfg: ComputeConfig): Anthropic.Tool {
       `maximum ${cfg.maxDurationSecs}s); the booked time starts once the GPU is ready. ` +
       'action=run executes a shell command on a GPU you launched. It waits for the GPU to finish ' +
       'starting, so call it right after launch instead of polling status. The command runs with ' +
-      'bash in a fresh working directory on the GPU machine and has internet access; install ' +
-      'what it needs with pip. files copies files from this sandbox into that directory first. ' +
+      'bash in a fresh working directory on the GPU machine and has internet access. python3 is ' +
+      'first on PATH; install packages with python3 -m pip, and download with python3 because ' +
+      'curl may be missing. files copies files from this sandbox into that directory first. ' +
       'outputs lists result files, relative to that directory, to bring back: each returns with ' +
       'its size and SHA-256, small text files return in full, and every output is published ' +
       'with a download link in the final result automatically. The command must finish within ' +

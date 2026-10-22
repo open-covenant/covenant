@@ -20,7 +20,14 @@ import { UpstreamError } from '../core/errors.js';
 import { quantity, type Address, type Hex32, type Pool, type Quantity } from '../core/types.js';
 import { poolKeyAbi, stateViewAbi } from './abis.js';
 import type { ContractCall, DeskChainClient } from './client.js';
-import { chunkRange, isRangeTooWideError, splitRange, type BlockRange } from './logs.js';
+import {
+  chunkRange,
+  isRangeTooWideError,
+  rangeSize,
+  spanLimitOf,
+  splitRange,
+  type BlockRange,
+} from './logs.js';
 import { currentFeeBps, sqrtPriceX96ToPrice } from './price.js';
 import type { DeskRegistry } from './registry.js';
 import type { DeskTokenReader } from './tokens.js';
@@ -384,9 +391,10 @@ interface RawLog {
 /**
  * Read one block range, halving it whenever the node refuses.
  *
- * The node answers a query matching more than 10,000 logs, or one that runs too
- * long, with a refusal rather than a partial result. Both are answered by
- * splitting, which is why the span is a starting guess and not a limit.
+ * The node answers a query matching more than 10,000 logs, one that runs too
+ * long, or one spanning more blocks than the filter allows, with a refusal
+ * rather than a partial result. All three are answered by splitting, which is
+ * why the span is a starting guess and not a limit.
  */
 async function scanRange(
   client: DeskChainClient,
@@ -412,6 +420,17 @@ async function scanRange(
       ]);
       onLogs(logs);
     } catch (error) {
+      // A span refusal names the span the node allows, so cut to it directly
+      // rather than halving down through refusals.
+      const allowed = spanLimitOf(error);
+      if (allowed !== undefined && rangeSize(current.range) > allowed) {
+        const pieces = chunkRange(current.range.from, current.range.to, allowed);
+        for (let index = pieces.length - 1; index >= 0; index -= 1) {
+          const piece = pieces[index];
+          if (piece) pending.push({ range: piece, tries: 0 });
+        }
+        continue;
+      }
       const halves = isRangeTooWideError(error) ? splitRange(current.range) : null;
       if (halves) {
         pending.push({ range: halves[1], tries: 0 }, { range: halves[0], tries: 0 });

@@ -113,11 +113,11 @@ export default function BuildWithX402Page() {
         </li>
       </ul>
       <p>
-        x402 in one paragraph: a client calls your endpoint, gets HTTP <code>402</code> with the
+        Here is how x402 works: a client calls your endpoint, gets HTTP <code>402</code> with the
         price and where to pay, signs a payment, and calls again with that payment in a header. Your
         server asks a facilitator to verify and settle the payment, then answers. Any x402 v2 client
-        can pay, including agent wallets. Payments settle on the chain the buyer pays from, so a
-        product whose own economy runs on another chain can still accept them.
+        can pay, including agent wallets. Payments settle in USDC on Solana or Base, so a product
+        whose own economy runs on a different chain can still accept them.
       </p>
 
       <h2 id="facilitator">Accept payments through the Covenant facilitator</h2>
@@ -221,9 +221,12 @@ https://facilitator.opencovenant.org/discovery/search?query=your+words`}</code>
         Each listing is tied to your URL together with your receiving address, so another seller
         cannot overwrite it. A later paid request with an updated declaration updates your listing;
         to remove one, write to{" "}
-        <a href="mailto:partnerships@opencovenant.org">partnerships@opencovenant.org</a>. Coinbase
-        runs its own catalog, the x402 Bazaar, which lists endpoints whose payments Coinbase&apos;s
-        facilitator settles; that is a separate setup.
+        <a href="mailto:partnerships@opencovenant.org">partnerships@opencovenant.org</a>.
+      </p>
+      <p>
+        The Bazaar extension is a shared x402 format. Declaring it lists you in Covenant&apos;s
+        catalog, not in Coinbase&apos;s x402 Bazaar. Coinbase&apos;s catalog lists only endpoints
+        that its own facilitator settles, so getting listed there is a separate setup.
       </p>
 
       <h3>Limits</h3>
@@ -237,8 +240,8 @@ https://facilitator.opencovenant.org/discovery/search?query=your+words`}</code>
         <li>
           Each receiving address can settle up to 500 payments per network per UTC day. Across all
           sellers, the facilitator settles at most 2,000 payments per network per UTC day. When a cap
-          is reached, settlement answers <code>pay_to_daily_limit_reached</code> or{" "}
-          <code>facilitator_daily_limit_reached</code>, your middleware refuses that request, and the
+          is reached, the facilitator returns the error <code>pay_to_daily_limit_reached</code> or{" "}
+          <code>facilitator_daily_limit_reached</code>, your middleware refuses the request, and the
           buyer is not charged. The counts reset at midnight UTC. The facilitator does not publish
           how much of the shared daily cap is left.
         </li>
@@ -381,8 +384,8 @@ https://facilitator.opencovenant.org/discovery/search?query=your+words`}</code>
         </li>
         <li>
           Optional: add an <code>Idempotency-Key</code> header containing a UUID. If you resend the
-          same body with the same key before paying, you get the same <code>402</code> offer back
-          instead of a new one.
+          same body with the same key before paying, you get the same <code>402</code> offer back,
+          so a retry keeps the original price and payment details.
         </li>
         <li>
           Covenant does not limit requests per wallet. When the service is at capacity it answers{" "}
@@ -537,8 +540,8 @@ https://facilitator.opencovenant.org/discovery/search?query=your+words`}</code>
       <h2>Links</h2>
       <ul>
         <li>
-          <Link href="/x402">Covenant x402</Link>: how Covenant agents pay for and sell services over
-          x402.
+          <Link href="/x402">Covenant x402</Link>: how agents built on Covenant pay for and sell
+          services over x402.
         </li>
         <li>
           Covenant Compute also offers GPU rental and coding agents; see{" "}

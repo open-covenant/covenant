@@ -11,9 +11,9 @@
   },
   "dependencies": {
     "highlight.js": "^11.11.1",
-    "next": "15.0.3",
-    "react": "19.2.5",
-    "react-dom": "19.2.5",
+    "next": "15.5.28",
+    "react": "19.2.9",
+    "react-dom": "19.2.9",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1"
   },
@@ -22,5 +22,10 @@
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
     "typescript": "6.0.3"
+  },
+  "pnpm": {
+    "overrides": {
+      "sharp": "^0.35.5"
+    }
   }
 }

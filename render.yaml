@@ -295,8 +295,9 @@ services:
     autoDeploy: false
     numInstances: 1
     healthCheckPath: /healthz
-    buildCommand: corepack enable && pnpm install --frozen-lockfile --filter @covenant/x402-facilitator... && pnpm --filter @covenant/x402-facilitator build
-    startCommand: pnpm --filter @covenant/x402-facilitator start
+    # Render's Node 24 image keeps /usr/bin read-only, so call pnpm through corepack.
+    buildCommand: corepack pnpm install --frozen-lockfile --filter @covenant/x402-facilitator... && corepack pnpm --filter @covenant/x402-facilitator build
+    startCommand: node services/x402-facilitator/dist/index.js
     disk:
       name: x402-facilitator-data
       mountPath: /var/data

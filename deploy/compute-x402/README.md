@@ -19,8 +19,10 @@ build; no Docker socket or GPU access is required for this provider-backed node.
 
 Run one instance with a persistent volume at `/data`. The supervisor creates
 separate gateway, operator, buyer-budget and provider directories, with private
-permissions. Identity seeds are restored only onto an empty volume; conflicting
-buyer/fee-payer seeds refuse startup. A conflicting optional operator seed locks
+permissions. Identity seeds are restored only onto an empty volume; a conflicting
+buyer seed refuses startup. Fee payer keys are kept one file per address, so a
+new fee payer seeds a new file; a key that does not match
+`COVENANT_GATEWAY_FEE_PAYER` refuses startup before anything is written. A conflicting optional operator seed locks
 new admissions while payment recovery stays available. Fee-payer keys and all existing monetary journals must
 survive redeployment. Do not scale this container to multiple independent disks.
 
@@ -145,7 +147,9 @@ closed while recovery remains available.
 The private bridge authentication/seal secret is pinned in
 `/data/gateway/bridge-secret` with mode 0600. Keep its configured value identical
 across revisions: existing pending payments carry seals made with that key.
-Changing it refuses startup, just like changing the buyer or fee-payer key.
+Changing it refuses startup, just like changing the buyer key. The fee payer
+may change only when no open payment, including a result still held for
+retries, used the old one; otherwise the gateway refuses to start.
 
 ## Immutable-container smoke qualification
 

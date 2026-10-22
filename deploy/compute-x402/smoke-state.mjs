@@ -5,13 +5,14 @@ import assert from 'node:assert/strict';
 const root='/data/gateway';
 const hash=value=>crypto.createHash('sha256').update(value).digest('hex');
 const snapshot={};
-for(const name of ['identity.key','fee-payer.json','bridge-secret']){
+const feePayerFile=`fee-payer-${process.env.COVENANT_GATEWAY_FEE_PAYER}.json`;
+for(const name of ['identity.key',feePayerFile,'bridge-secret']){
   const file=`${root}/${name}`,metadata=fs.lstatSync(file),bytes=fs.readFileSync(file);
   assert(metadata.isFile()&&!metadata.isSymbolicLink());
   assert.equal(metadata.mode&0o777,0o600);assert.equal(metadata.uid,process.getuid());
   snapshot[name]={hash:hash(bytes),inode:metadata.ino};
   if(name==='identity.key')assert.deepEqual(bytes,Buffer.from(process.env.COVENANT_GATEWAY_IDENTITY_B64,'base64'));
-  if(name==='fee-payer.json')assert.deepEqual(bytes,Buffer.from(process.env.COVENANT_GATEWAY_FEE_PAYER_KEY_B64,'base64'));
+  if(name===feePayerFile)assert.deepEqual(bytes,Buffer.from(process.env.COVENANT_GATEWAY_FEE_PAYER_KEY_B64,'base64'));
   if(name==='bridge-secret')assert.equal(bytes.toString(),process.env.COVENANT_GATEWAY_BRIDGE_SECRET);
 }
 assert.equal(fs.statSync('/data').mode&0o777,0o700);

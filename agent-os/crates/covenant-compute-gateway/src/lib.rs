@@ -492,7 +492,7 @@ impl Disk {
             Err(e) => return Err(e.into()),
         };
         if !matches!(journal.version, 2..=6)
-            || journal.namespace != namespace
+            || !same_but_fee_payer(&journal.namespace, &namespace)
             || reserve < journal.reserve_micro_usdc
             || (reserve > journal.reserve_micro_usdc && !allow_reserve_increase)
         {
@@ -500,6 +500,7 @@ impl Disk {
                 "journal identity/rail/reserve configuration changed".into(),
             ));
         }
+        journal.namespace = namespace.clone();
         // v3 freezes tariffs; v4 preserves memo forms; production v5 preserves
         // Base payment options. The unreleased batch candidate also used v5.
         // v6 retains both independent fields and stops either older binary
@@ -1132,7 +1133,7 @@ impl Gateway {
                     .map(|manifest| manifest.batch_id),
             )?;
             // The Settling record was fsynced before any broadcast. Unknown
-            // sends stay here; the rail reconciles the same signature first.
+            // sends stay here; the rail reconciles the same payment first.
             // Startup refuses a journal whose open payments lack their rail;
             // nothing is ever settled on another one.
             let Ok(rail) = self.rail_for(&terms) else {
@@ -1180,7 +1181,7 @@ impl Gateway {
         })
     }
     /// Reconcile persisted work even if the HTTP client has disconnected. A
-    /// restart uses the same signed jobs and exact signed payment bytes.
+    /// restart uses the same signed jobs and the same stored payment.
     pub async fn recover_pending(&self, now: u64) -> Result<()> {
         let started = std::time::Instant::now();
         let mut disk = self.disk.lock().await;
@@ -1265,6 +1266,21 @@ pub fn router(gateway: Arc<Gateway>) -> Router {
         .route("/health", get(|State(gateway): State<Arc<Gateway>>| async move { Json(json!({"status":"ok", "service":"covenant-compute-x402", "protocol":"x402-v2", "admissions_enabled":gateway.admissions_open(), "revision":option_env!("COVENANT_BUILD_REVISION").unwrap_or("unknown")})) }))
         .layer(DefaultBodyLimit::max(64 * 1024))
         .with_state(gateway)
+}
+/// Journal namespaces end with the primary rail's network, asset, merchant,
+/// fee payer, resource and price. Only the fee payer may change between runs:
+/// each entry keeps its own terms, and `check_open_payments` refuses to start
+/// while an open payment needs a fee payer no configured rail has.
+fn same_but_fee_payer(stored: &str, configured: &str) -> bool {
+    let stored: Vec<_> = stored.split('\0').collect();
+    let configured: Vec<_> = configured.split('\0').collect();
+    stored.len() == configured.len()
+        && stored.len() >= 6
+        && stored
+            .iter()
+            .zip(&configured)
+            .enumerate()
+            .all(|(index, (a, b))| index == stored.len() - 3 || a == b)
 }
 fn payment_payload(header: &str) -> Result<Value> {
     if header.len() > 16_384 {

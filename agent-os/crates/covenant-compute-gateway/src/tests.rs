@@ -2945,3 +2945,106 @@ fn second_rail_on_a_configured_network_is_refused() {
         .with_alternate_rail(primary)
         .is_err());
 }
+
+/// The primary rail under another fee payer, as after a rotation.
+struct RotatedRail {
+    inner: Rail,
+    fee_payer: &'static str,
+    pay_to: &'static str,
+}
+#[async_trait]
+impl PaymentRail for RotatedRail {
+    fn network(&self) -> &str {
+        self.inner.network()
+    }
+    fn asset(&self) -> &str {
+        self.inner.asset()
+    }
+    fn pay_to(&self) -> &str {
+        self.pay_to
+    }
+    fn fee_payer(&self) -> &str {
+        self.fee_payer
+    }
+    fn authorization_id(&self, header: &str) -> Result<String> {
+        self.inner.authorization_id(header)
+    }
+    async fn verify(&self, header: &str, terms: &PaymentTerms) -> Result<VerifiedPayment> {
+        self.inner.verify(header, terms).await
+    }
+    async fn settle(&self, p: &VerifiedPayment, terms: &PaymentTerms) -> Result<SettlementStatus> {
+        self.inner.settle(p, terms).await
+    }
+}
+
+#[tokio::test]
+async fn fee_payer_rotates_only_once_no_payment_needs_the_old_one() {
+    let directory = tempfile::tempdir().unwrap();
+    let open = |fee_payer: &'static str, pay_to: &'static str| {
+        Gateway::open(
+            directory.path(),
+            "rotation",
+            30,
+            12,
+            Arc::new(RotatedRail {
+                inner: Rail {
+                    settles: AtomicUsize::new(0),
+                    finalized: std::sync::atomic::AtomicBool::new(true),
+                },
+                fee_payer,
+                pay_to,
+            }),
+            Arc::new(Execute {
+                identity: LocalIdentity::generate("rotation@local"),
+                calls: AtomicUsize::new(0),
+            }),
+        )
+    };
+    let gateway = open("old-fee-payer", "merchant").unwrap();
+    let request = json!({"prompt":"rotate"});
+    let GatewayReply::PaymentRequired(quote) = gateway
+        .handle(
+            request.clone(),
+            None,
+            None,
+            fixture_now(&gateway, 1000).await,
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("expected a quote")
+    };
+    assert_eq!(quote.terms.fee_payer, "old-fee-payer");
+    let paid_at = fixture_now(&gateway, 1001).await;
+    assert!(matches!(
+        gateway
+            .handle(request, Some(quote.terms.quote_id), Some("tx-old"), paid_at)
+            .await
+            .unwrap(),
+        GatewayReply::Complete { .. }
+    ));
+    drop(gateway);
+
+    // Another merchant is a different journal; another fee payer is not.
+    assert!(open("old-fee-payer", "another-merchant").is_err());
+    let rotated = open("new-fee-payer", "merchant").unwrap();
+    // The buyer can still fetch the result paid under the old fee payer.
+    assert!(rotated.check_open_payments(paid_at + 1).await.is_err());
+    rotated
+        .check_open_payments(paid_at + OUTPUT_RETENTION_MS + 1)
+        .await
+        .unwrap();
+    let GatewayReply::PaymentRequired(fresh) = rotated
+        .handle(
+            json!({"prompt":"after"}),
+            None,
+            None,
+            fixture_now(&rotated, paid_at + OUTPUT_RETENTION_MS + 2).await,
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("expected a quote")
+    };
+    assert_eq!(fresh.terms.fee_payer, "new-fee-payer");
+}

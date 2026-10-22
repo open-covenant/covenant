@@ -49,6 +49,7 @@ COVENANT_INFERENCE_PROVIDER_UPSTREAM_TIMEOUT_MS=40000
 # COVENANT_GATEWAY_IDENTITY_B64: base64 of the dedicated buyer's raw32-byte seed.
 # COVENANT_COMPUTE_NODE_IDENTITY_B64: base64 of the operator's raw32-byte seed.
 # COVENANT_GATEWAY_FEE_PAYER_KEY_B64: base64 of JSON64-byte Solana keypair.
+# COVENANT_GATEWAY_SOLANA_FACILITATOR_URL: optional HTTPS x402 facilitator holding the same fee payer key; it broadcasts Solana payments.
 # COVENANT_GATEWAY_BRIDGE_SECRET: persistent random32-byte secret encoded hex.
 # COVENANT_INFERENCE_PROVIDER_BEARER_TOKEN: random32-byte secret encoded hex.
 # USEPOD_TOKEN: authorized provider credential.

@@ -179,7 +179,7 @@ describe('daily caps', () => {
 describe('Bazaar catalog', () => {
   it('catalogs a settled payment that declares a valid listing', async () => {
     const { store, gate: instance } = gate();
-    const terms = requirements();
+    const terms = requirements({ extra: { name: 'USDC', version: '2', quoteId: 'q-1', requestSha256: 'ab'.repeat(32) } });
     const outcome = await instance.settle(payload(terms, { bazaar }), terms);
     expect(outcome.bazaar).toEqual({ status: 'success' });
     const [item] = store.catalog({}, page).items;
@@ -187,7 +187,7 @@ describe('Bazaar catalog', () => {
       resource: 'https://compute-inference.opencovenant.org/v1/chat/completions',
       type: 'http',
       serviceName: 'Covenant Compute',
-      accepts: [terms],
+      accepts: [{ ...terms, extra: { name: 'USDC', version: '2' } }],
       extensions: { bazaar },
     });
   });

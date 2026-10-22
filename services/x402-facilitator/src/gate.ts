@@ -25,7 +25,13 @@ type Log = (event: Record<string, unknown>) => void;
 const VERIFIED_TTL_MS = 5 * 60_000;
 const MAX_VERIFIED = 10_000;
 const MAX_CATALOG_ITEM_BYTES = 32 * 1024;
-const REQUIREMENT_FIELDS = ['scheme', 'network', 'asset', 'amount', 'payTo', 'maxTimeoutSeconds', 'extra'] as const;
+const REQUIREMENT_FIELDS = ['scheme', 'network', 'asset', 'amount', 'payTo', 'maxTimeoutSeconds'] as const;
+/**
+ * The parts of `extra` a buyer needs to pay again. Sellers also put per-quote
+ * data there (quote ids, request hashes, expiry), which has no place in a
+ * public catalog.
+ */
+const CATALOG_EXTRA_FIELDS = ['feePayer', 'name', 'version'] as const;
 
 /**
  * The checks a public facilitator needs before it spends its own gas: the
@@ -213,9 +219,12 @@ export class Gate {
         return { status: 'rejected', rejectedReason: 'resource URL must be http or https' };
       }
       const input = found.discoveryInfo.input as { type: string; method?: unknown; toolName?: unknown };
-      const accepted = Object.fromEntries(
+      const accepted: Record<string, unknown> = Object.fromEntries(
         REQUIREMENT_FIELDS.filter((field) => requirements[field] !== undefined).map((field) => [field, requirements[field]]),
       );
+      const extra = (requirements.extra ?? {}) as Record<string, unknown>;
+      const kept = Object.fromEntries(CATALOG_EXTRA_FIELDS.filter((field) => typeof extra[field] === 'string').map((field) => [field, extra[field]]));
+      if (Object.keys(kept).length > 0) accepted.extra = kept;
       const item: CatalogItem = {
         resource: found.resourceUrl,
         type: input.type,

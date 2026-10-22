@@ -53,6 +53,7 @@ The 6 integration deliverables for the Hatcher team: [`docs/hatcher-handoff.md`]
 | `HATCHER_PAIRING_CODE` | no | — |
 | `HATCHER_AGENT_ID` | no | — |
 | `HATCHER_GPU_ENABLED` | no (requires full `HATCHER_AGENT_ID` when enabled) | `false` |
+| `HATCHER_ARTIFACT_ORIGIN` | no (private coding-gateway origin; enables `GET /artifacts/:token/:name`) | — |
 | `PORT` | no | `8790` |
 
 ## Bounded GPU smoke dispatch
@@ -89,6 +90,11 @@ terminal result, including through `stopping` and missing/failed result reads.
 At a deadline it requests the same workload stop. An unconfirmed stop or timeout
 emits `cleanup_pending`, retains the slot, and never fabricates a cancelled
 receipt. An ambiguous submit timeout also retains its slot for reconciliation.
+
+GPU jobs can return files. The coding gateway keeps them on its private disk
+and links them at this service's `/artifacts/:token/:name`, which forwards to
+`HATCHER_ARTIFACT_ORIGIN` and streams the file back with its SHA-256 in
+`x-content-sha256`. The random token in the path is the only authorization.
 
 `/healthz` separately reports `mesh.socket`, `mesh.authentication` (unverified
 until a documented acknowledgement exists), reconnect attempts, and whether GPU

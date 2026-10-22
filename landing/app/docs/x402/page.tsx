@@ -25,6 +25,11 @@ export default function X402Page() {
         paid resources to other agents.
       </p>
       <p>
+        To accept x402 payments in your own product, or to buy AI inference for your agents, see{" "}
+        <Link href="/build-with-x402">Build with x402</Link>. This page covers how the Covenant
+        daemon itself pays and sells.
+      </p>
+      <p>
         Both directions run through one accounting path. Settlement, budgeting,
         audit, and attestation are shared, so a paid call is a first-class,
         capability-gated, audited action rather than a side channel.

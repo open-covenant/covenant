@@ -7,9 +7,9 @@ const source = "https://github.com/open-covenant/covenant/blob/9e53e687b0ed483dc
 export const langchainRelease = {
   accepted: true,
   version: "0.2.0",
-  packageUrl: "https://github.com/open-covenant/covenant/releases/download/codex-compute-x402-client-v0.2.0/covenant-compute-x402-client-0.2.0.tgz",
+  packageUrl: "https://github.com/open-covenant/covenant/releases/download/compute-x402-client-v0.2.0/covenant-compute-x402-client-0.2.0.tgz",
   packageSha256: "77ef86146f982432f75a83d227afb8c7a8f36049bb23d4eba29ae0da0cb606cf",
-  releaseUrl: "https://github.com/open-covenant/covenant/releases/tag/codex-compute-x402-client-v0.2.0",
+  releaseUrl: "https://github.com/open-covenant/covenant/releases/tag/compute-x402-client-v0.2.0",
   sourceUrl: `${source}/sdk/compute-x402-client/langchain.mjs`,
   documentationUrl: `${source}/sdk/compute-x402-client/README.md#register-with-langchain-or-langgraph`,
   demoSourceUrl: `${source}/sdk/compute-x402-client/langgraph-demo.mjs`,

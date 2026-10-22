@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { buildDocsMetadata, buildDocsJsonLd } from "../_meta";
 
 const META_ARGS = [
@@ -24,6 +25,10 @@ export default function ComputePage() {
         goes back to your balance when it closes. Operators earn USDC for those same seconds, and they
         stake CVNT, Covenant&apos;s token, to take work. It runs on Solana mainnet. The same network
         also hires out coding agents, and you pay only for work that passes your tests.
+      </p>
+      <p>
+        Agents can also buy AI inference per request over x402, paying in USDC on Solana or Base
+        with no account. See <Link href="/build-with-x402#compute">Build with x402</Link>.
       </p>
 
       <h2>How a session settles</h2>

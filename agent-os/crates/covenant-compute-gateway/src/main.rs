@@ -1,7 +1,12 @@
 //! Explicitly configured, standalone inbound gateway. Running this executable
 //! without all reserve/budget/rail settings fails closed; no default network.
 use covenant_compute_buyer::{durable_budget::DurableBudget, BuyerConfig};
-use covenant_compute_gateway::{bridge::Bridge, buyer::BuyerExecutor, Gateway};
+use covenant_compute_gateway::{
+    bridge::Bridge,
+    buyer::BuyerExecutor,
+    jobs::{self, CoordinatorRunner, Jobs, Kind, Offer},
+    Gateway,
+};
 use covenant_identity::LocalIdentity;
 use std::{
     io::Write,
@@ -28,6 +33,77 @@ fn tariff_configuration_latch(directory: &Path) -> anyhow::Result<()> {
         Err(error) => return Err(error.into()),
     }
     Ok(())
+}
+
+/// Paid jobs, once a jobs merchant is set. They are bought on the coordinator
+/// with their own identity and balance, and each kind is sold only when its
+/// price is set.
+fn jobs(
+    directory: &Path,
+    coordinator: &str,
+    bridge_url: &str,
+    bridge_secret: &str,
+    resource_url: &str,
+) -> anyhow::Result<Option<Arc<Jobs>>> {
+    let pay_to = match std::env::var("COVENANT_GATEWAY_JOBS_PAY_TO") {
+        Ok(pay_to) if !pay_to.is_empty() => pay_to,
+        Ok(_) | Err(std::env::VarError::NotPresent) => return Ok(None),
+        Err(_) => anyhow::bail!("COVENANT_GATEWAY_JOBS_PAY_TO must be valid Unicode"),
+    };
+    let mut offers = Vec::new();
+    if let Ok(price) = std::env::var("COVENANT_GATEWAY_JOBS_RESEARCH_PRICE_MICRO_USDC") {
+        offers.push(Offer {
+            kind: Kind::Research,
+            price_atomic: price.parse()?,
+            offer_micro_usdc: required("COVENANT_GATEWAY_JOBS_RESEARCH_OFFER_MICRO_USDC")?
+                .parse()?,
+            // IMD's swarm takes minutes to an hour; its operator refuses less than 30.
+            deadline_ms: 2 * 3600 * 1000,
+            approved_operators: required("COVENANT_GATEWAY_JOBS_RESEARCH_OPERATORS")?
+                .split(',')
+                .map(|key| key.trim().to_owned())
+                .filter(|key| !key.is_empty())
+                .collect(),
+            max_running: 3,
+        });
+    }
+    anyhow::ensure!(
+        !offers.is_empty(),
+        "a jobs merchant needs at least one job price"
+    );
+    let rail = Arc::new(Bridge::solana_jobs(
+        bridge_url.into(),
+        bridge_secret.into(),
+        required("COVENANT_GATEWAY_NETWORK")?,
+        required("COVENANT_GATEWAY_ASSET")?,
+        pay_to,
+        required("COVENANT_GATEWAY_FEE_PAYER")?,
+        resource_url.into(),
+    )?);
+    let runner = Arc::new(CoordinatorRunner {
+        config: BuyerConfig {
+            coordinator_url: coordinator.into(),
+            poll_interval: Duration::from_secs(5),
+            referral_code: None,
+            rpc_url: None,
+        },
+        identity: Arc::new(LocalIdentity::load_or_create(
+            &directory.join("jobs-identity.key"),
+            "compute-gateway-jobs@local",
+        )?),
+        http: covenant_compute_buyer::http_client(),
+    });
+    let mut origin = reqwest::Url::parse(resource_url)?;
+    origin.set_path("/");
+    let jobs = Jobs::open(
+        &directory.join("jobs"),
+        origin.as_str(),
+        rail,
+        runner,
+        offers,
+    )?
+    .with_settlement_wait(covenant_compute_gateway::SETTLEMENT_WAIT);
+    Ok(Some(Arc::new(jobs)))
 }
 
 fn required(name: &str) -> anyhow::Result<String> {
@@ -93,6 +169,13 @@ async fn main() -> anyhow::Result<()> {
         required("COVENANT_GATEWAY_FEE_PAYER")?,
         resource_url.clone(),
     )?);
+    let jobs = jobs(
+        &directory,
+        &coordinator,
+        &bridge_url,
+        &bridge_secret,
+        &resource_url,
+    )?;
     // USDC on Base is offered beside Solana once a Base merchant is set. The
     // verifier must be configured for the same network and merchant.
     let base = match std::env::var("COVENANT_GATEWAY_BASE_PAY_TO") {
@@ -173,6 +256,10 @@ async fn main() -> anyhow::Result<()> {
     .with_settlement_wait(covenant_compute_gateway::SETTLEMENT_WAIT);
     if let Some(base) = base {
         gateway = gateway.with_alternate_rail(base)?;
+    }
+    if let Some(jobs) = jobs {
+        let _worker = jobs::spawn_worker(jobs.clone());
+        gateway = gateway.with_jobs(jobs);
     }
     gateway
         .check_open_payments(covenant_compute_gateway::now_ms())

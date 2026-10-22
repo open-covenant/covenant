@@ -3,9 +3,10 @@
 // broadcast directly or by a facilitator holding the same fee payer key.
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import { getTransactionDecoder, getSignatureFromTransaction, assertIsFullySignedTransaction } from '@solana/kit';
+import { address, getCompiledTransactionMessageDecoder, getTransactionDecoder, getSignatureFromTransaction, assertIsFullySignedTransaction } from '@solana/kit';
 import { ExactSvmScheme } from '@x402/svm/exact/facilitator';
 import { batchPricingTotal, createPricingPolicy, validPaymentAmount } from './pricing.mjs';
+import { buildRefund } from './refunds.mjs';
 
 export const RAILS = Object.freeze({
   'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp': {
@@ -40,28 +41,83 @@ function decode(wire) {
 export const RESUBMIT_MS = 20_000;
 /** How long a facilitator call may run before the same bytes are also sent from here. */
 export const FACILITATOR_GRACE_MS = 4_000;
+/**
+ * A blockhash lives about 60 to 90 seconds, so no transaction signed before
+ * a quote expired is checked for expiry until this long after it.
+ */
+export const EXPIRY_MARGIN_MS = 180_000;
 
-export function createBridge({ signer, config, rpc, now = Date.now, verifier, facilitator, log = () => {} }) {
+/** The paid job kinds a gateway can sell, each at `/v1/jobs/<kind>`. */
+export const JOB_KINDS = Object.freeze(['research', 'knowledge', 'agent', 'fix']);
+
+/**
+ * Job prices by resource URL, for the rail that sells paid jobs. Each URL is
+ * an https `/v1/jobs/<kind>` path and each price a positive atomic amount.
+ */
+export function jobPriceTable(prices) {
+  if (prices === null || typeof prices !== 'object' || Array.isArray(prices)) throw new Error('invalid job prices');
+  const table = new Map(Object.entries(prices));
+  if (table.size < 1 || table.size > 8) throw new Error('invalid job prices');
+  for (const [url, amount] of table) {
+    let parsed;
+    try { parsed = new URL(url); } catch { throw new Error('invalid job prices'); }
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.search || parsed.hash
+      || parsed.href !== url || !JOB_KINDS.some(kind => parsed.pathname === `/v1/jobs/${kind}`) || !validPaymentAmount(amount)) throw new Error('invalid job prices');
+  }
+  return table;
+}
+
+export function createBridge({ signer, config, rpc, now = Date.now, verifier, facilitator, refundSigners, log = () => {} }) {
   const { network, asset, payTo, feePayer, resourceUrl, secret } = config;
   if (!RAILS[network] || asset !== RAILS[network].asset || secret.length < 32) throw new Error('invalid rail configuration');
-  const pricing = createPricingPolicy(config);
-  const batchResourceUrl = new URL('/v1/inference/batches', resourceUrl).href;
+  // A jobs rail sells fixed-price jobs to its own merchant and never inference.
+  // It refunds a failed job from that merchant, so it holds the merchant's key.
+  const jobs = config.jobPrices === undefined ? null : jobPriceTable(config.jobPrices);
+  if (jobs && (refundSigners?.merchant?.address !== payTo || refundSigners?.feePayer?.address !== feePayer)) throw new Error('jobs rail requires the merchant and fee payer keys');
+  const pricing = jobs ? null : createPricingPolicy(config);
+  const batchResourceUrl = jobs ? null : new URL('/v1/inference/batches', resourceUrl).href;
   // A v3 payment from the official client uses about 13k of its 20k CU; the
   // 60k ceiling admits v2 memos (43,642 CU) signed by earlier Covenant clients.
   // Bound sponsorship: <= 2 signatures, 60k CU and 1000 microlamports/CU.
   // This bounds fees to 10,060 lamports per admitted authorization.
   verifier ??= new ExactSvmScheme(signer, undefined, { enableSmartWalletVerification: false, maxRequiredSignatures: 2, maxComputeUnits: 60_000, maxPriorityFeeMicroLamports: 1_000 });
-  function requirements(terms, fresh) {
+  /** The resource a payment for these terms must name. `url` is the one a fresh job payment claims. */
+  function requirements(terms, fresh, url) {
     const extra = terms?.extra;
     if (terms?.scheme !== 'exact' || terms.network !== network || terms.asset !== asset || terms.payTo !== payTo || extra?.feePayer !== feePayer || !validPaymentAmount(terms.amount) || terms.maxTimeoutSeconds !== 90) throw new Rejected('payment rail or amount mismatch');
     const batch = Object.hasOwn(extra, 'batchPricing');
-    if (batch && batchPricingTotal(extra.batchPricing) !== BigInt(terms.amount)) throw new Rejected('invalid batch pricing binding');
-    if (fresh && !(batch ? pricing.allowsBatch(extra.batchPricing, terms.amount, now()) : pricing.allows(terms.amount, now()))) throw new Rejected('payment amount is not configured for admission');
+    if (batch && (jobs || batchPricingTotal(extra.batchPricing) !== BigInt(terms.amount))) throw new Rejected('invalid batch pricing binding');
+    const allowed = jobs ? jobs.get(url) === terms.amount
+      : batch ? pricing.allowsBatch(extra.batchPricing, terms.amount, now()) : pricing.allows(terms.amount, now());
+    if (fresh && !allowed) throw new Rejected('payment amount is not configured for admission');
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(extra.quoteId) || !/^[0-9a-f]{64}$/.test(extra.requestSha256) || !validMemo(extra) || !Number.isSafeInteger(extra.expiresAtMs)) throw new Rejected('invalid quote binding');
     if (fresh && (now() > extra.expiresAtMs || extra.expiresAtMs > now() + 90_000)) throw new Rejected('quote expired');
-    return batch ? batchResourceUrl : resourceUrl;
+    return jobs ? url : batch ? batchResourceUrl : resourceUrl;
   }
   function seal(value) { return createHmac('sha256', secret).update(canonical(value)).digest('hex'); }
+  /** The evidence of a record this process sealed, refused if anything in it changed. */
+  function unseal(encoded, what) {
+    let saved;
+    try { saved = JSON.parse(encoded); } catch { throw new Rejected(`invalid stored ${what}`); }
+    if (saved?.evidence === null || typeof saved?.evidence !== 'object') throw new Rejected(`invalid stored ${what}`);
+    const expectedSeal = seal(saved.evidence);
+    if (typeof saved.seal !== 'string' || saved.seal.length !== expectedSeal.length || !timingSafeEqual(Buffer.from(saved.seal), Buffer.from(expectedSeal))) throw new Rejected(`stored ${what} changed`);
+    return saved.evidence;
+  }
+  /**
+   * A verified payment as the gateway stored it. Recovery follows the sealed
+   * original quote, even after its tariff has expired/rotated or optional
+   * pricing configuration becomes unreadable.
+   */
+  function storedPayment(payment, terms) {
+    requirements(terms, false);
+    const ev = unseal(payment?.encoded_transaction, 'authorization');
+    if (!isDeepStrictEqual(ev.terms, terms) || payment.transaction_id !== ev.transactionId || payment.authorization_id !== ev.authorizationId || payment.payer !== ev.payer) throw new Rejected('stored payment binding changed');
+    const { tx } = decode(ev.transaction);
+    assertIsFullySignedTransaction(tx);
+    if (getSignatureFromTransaction(tx) !== payment.transaction_id) throw new Rejected('signature changed');
+    return ev;
+  }
   const submissions = new Map();
   /**
    * Whether to leave the broadcast to the facilitator for now: during a young
@@ -91,16 +147,32 @@ export function createBridge({ signer, config, rpc, now = Date.now, verifier, fa
     const genesis = await rpc('getGenesisHash', []);
     if (genesis !== RAILS[network].genesis) throw new Error('RPC network mismatch');
   }
+  /**
+   * Whether a transaction never landed and never can. Its blockhash must have
+   * aged out of the newest bank (so it is old, not merely newer than the
+   * finalized one) and of the finalized bank, which puts every block that
+   * could hold it behind finality. Only then is a missing status conclusive.
+   */
+  async function expired(wire, signature, issuedBefore) {
+    if (now() < issuedBefore + EXPIRY_MARGIN_MS) return false;
+    const { lifetimeToken } = getCompiledTransactionMessageDecoder().decode(decode(wire).tx.messageBytes);
+    for (const commitment of ['processed', 'finalized']) {
+      const valid = await rpc('isBlockhashValid', [lifetimeToken, { commitment }]);
+      if (valid?.value !== false) return false;
+    }
+    const statuses = await rpc('getSignatureStatuses', [[signature], { searchTransactionHistory: true }]);
+    return statuses?.value?.[0] == null;
+  }
   return {
     readiness() {
       const observedAtMs = now();
-      if (!pricing.valid || !Number.isSafeInteger(observedAtMs) || observedAtMs < 0) throw new Error('payment pricing unavailable');
+      if (!(jobs || pricing.valid) || !Number.isSafeInteger(observedAtMs) || observedAtMs < 0) throw new Error('payment pricing unavailable');
       // A read of loaded policy only: no verifier, RPC, signature or broadcast.
-      return { schemaVersion: 1, observedAtMs, pricingValid: true, scheme: 'exact',
-        network, asset, assetDecimals: 6, payTo, feePayer, resourceUrl, ...pricing.snapshot() };
+      const base = { schemaVersion: 1, observedAtMs, pricingValid: true, scheme: 'exact', network, asset, assetDecimals: 6, payTo, feePayer };
+      return jobs ? { ...base, jobPrices: Object.fromEntries(jobs) } : { ...base, resourceUrl, ...pricing.snapshot() };
     },
     async verify({ paymentPayload: payload, paymentRequirements: terms, resourceUrl: url }) {
-      const expectedResource = requirements(terms, true);
+      const expectedResource = requirements(terms, true, url);
       if (url !== expectedResource || payload?.resource?.url !== expectedResource || payload?.x402Version !== 2 || !isDeepStrictEqual(payload.accepted, terms)) throw new Rejected('payment payload does not match quote');
       await assertNetwork();
       const { bytes } = decode(payload.payload?.transaction);
@@ -118,18 +190,7 @@ export function createBridge({ signer, config, rpc, now = Date.now, verifier, fa
       return { payer: verified.payer, authorization_id: authorizationId, transaction_id: transactionId, encoded_transaction: JSON.stringify({ evidence, seal: seal(evidence) }) };
     },
     async settle({ payment, paymentRequirements: terms }) {
-      // Recovery follows the sealed original quote, even after its tariff has
-      // expired/rotated or optional pricing configuration becomes unreadable.
-      requirements(terms, false);
-      let saved;
-      try { saved = JSON.parse(payment.encoded_transaction); } catch { throw new Rejected('invalid stored authorization'); }
-      const expectedSeal = seal(saved.evidence);
-      if (typeof saved.seal !== 'string' || saved.seal.length !== expectedSeal.length || !timingSafeEqual(Buffer.from(saved.seal), Buffer.from(expectedSeal))) throw new Rejected('stored authorization changed');
-      const ev = saved.evidence;
-      if (!isDeepStrictEqual(ev.terms, terms) || payment.transaction_id !== ev.transactionId || payment.authorization_id !== ev.authorizationId || payment.payer !== ev.payer) throw new Rejected('stored payment binding changed');
-      const { tx } = decode(ev.transaction);
-      assertIsFullySignedTransaction(tx);
-      if (getSignatureFromTransaction(tx) !== payment.transaction_id) throw new Rejected('signature changed');
+      const ev = storedPayment(payment, terms);
       await assertNetwork();
       const signature = payment.transaction_id;
       const statuses = await rpc('getSignatureStatuses', [[signature], { searchTransactionHistory: true }]);
@@ -143,6 +204,9 @@ export function createBridge({ signer, config, rpc, now = Date.now, verifier, fa
         return { status: 'finalized', transaction_id: signature };
       }
       if (status) return { status: 'pending' };
+      // A job waits on its payment before any work starts, so a payment that
+      // can no longer land must end as unpaid rather than wait forever.
+      if (jobs && await expired(ev.transaction, signature, terms.extra.expiresAtMs)) return { status: 'failed' };
       // A facilitator signs the same message with the same fee payer key, and
       // Ed25519 signatures are deterministic, so it broadcasts exactly these
       // bytes. If it is unreachable or declines, they are sent from here.
@@ -155,6 +219,51 @@ export function createBridge({ signer, config, rpc, now = Date.now, verifier, fa
       } catch { return { status: 'pending' }; }
       return { status: 'pending' };
     },
+    ...(jobs ? { refund, refundStatus } : {}),
     assertNetwork,
   };
+  /**
+   * A signed refund of a finalized job payment, sealed for the gateway to
+   * store before anything is broadcast. The amount and payer come from the
+   * sealed payment, never from the caller.
+   */
+  async function refund({ payment, paymentRequirements: terms }) {
+    const ev = storedPayment(payment, terms);
+    await assertNetwork();
+    const status = (await rpc('getSignatureStatuses', [[ev.transactionId], { searchTransactionHistory: true }]))?.value?.[0];
+    if (status?.confirmationStatus !== 'finalized' || status.err !== null) throw new Rejected('only a finalized payment is refunded');
+    const latest = (await rpc('getLatestBlockhash', [{ commitment: 'confirmed' }]))?.value;
+    if (typeof latest?.blockhash !== 'string' || !Number.isSafeInteger(latest.lastValidBlockHeight)) throw new Error('RPC blockhash unavailable');
+    const built = await buildRefund({ ...refundSigners, mint: asset, payer: address(ev.payer), amount: BigInt(terms.amount),
+      quoteId: terms.extra.quoteId, blockhash: latest.blockhash, lastValidBlockHeight: latest.lastValidBlockHeight });
+    const evidence = { kind: 'refund', transaction: built.transaction, signature: built.signature,
+      lastValidBlockHeight: latest.lastValidBlockHeight, paymentTransactionId: ev.transactionId };
+    return { transaction_id: built.signature, encoded_refund: JSON.stringify({ evidence, seal: seal(evidence) }) };
+  }
+  /**
+   * Where a stored refund stands. `expired` and `failed` both mean no money
+   * moved and it never can, so the gateway may build a new one.
+   */
+  async function refundStatus({ payment, paymentRequirements: terms, refund: encoded }) {
+    const ev = storedPayment(payment, terms);
+    const saved = unseal(encoded, 'refund');
+    if (saved.kind !== 'refund' || saved.paymentTransactionId !== ev.transactionId) throw new Rejected('stored refund binding changed');
+    const { tx } = decode(saved.transaction);
+    if (getSignatureFromTransaction(tx) !== saved.signature) throw new Rejected('signature changed');
+    await assertNetwork();
+    // Height first: once the finalized chain is past the refund's last valid
+    // height, a status read made after it is conclusive.
+    const height = await rpc('getBlockHeight', [{ commitment: 'finalized' }]);
+    const status = (await rpc('getSignatureStatuses', [[saved.signature], { searchTransactionHistory: true }]))?.value?.[0];
+    if (status?.confirmationStatus === 'finalized') return status.err === null ? { status: 'finalized', transaction_id: saved.signature } : { status: 'failed' };
+    if (status) return { status: 'pending' };
+    if (Number.isSafeInteger(height) && height > saved.lastValidBlockHeight) return { status: 'expired' };
+    try {
+      await rpc('sendTransaction', [saved.transaction, { encoding: 'base64', skipPreflight: false, preflightCommitment: 'confirmed', maxRetries: 0 }]);
+    } catch (error) {
+      // Usually an empty merchant account. The refund stays owed and is retried.
+      log(`refund broadcast refused: ${String(error?.message ?? error).slice(0, 200)}`);
+    }
+    return { status: 'pending' };
+  }
 }

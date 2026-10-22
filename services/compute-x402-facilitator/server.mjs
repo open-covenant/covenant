@@ -4,7 +4,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { createKeyPairSignerFromBytes } from '@solana/kit';
 import { toFacilitatorSvmSigner } from '@x402/svm';
 import { HTTPFacilitatorClient } from '@x402/core/server';
-import { createBridge, Rejected } from './bridge.mjs';
+import { createBridge, JOB_KINDS, Rejected } from './bridge.mjs';
 import { createEvmRail } from './evm.mjs';
 import { readTariffConfig } from './pricing.mjs';
 
@@ -18,13 +18,17 @@ function httpsUrl(name) {
 }
 const secret = required('COVENANT_GATEWAY_BRIDGE_SECRET');
 const rpcUrl = required('COVENANT_GATEWAY_SOLANA_RPC');
-const keyFile = required('COVENANT_GATEWAY_FEE_PAYER_KEY_FILE');
-const metadata = await stat(keyFile);
-if ((metadata.mode & 0o077) !== 0) throw new Error('fee payer key file must be private');
-const bytes = JSON.parse(await readFile(keyFile, 'utf8'));
-if (!Array.isArray(bytes) || bytes.length !== 64 || bytes.some(n => !Number.isInteger(n) || n < 0 || n > 255)) throw new Error('invalid key file');
-const keypair = await createKeyPairSignerFromBytes(Uint8Array.from(bytes));
-bytes.fill(0);
+async function readKeypair(name) {
+  const file = required(name);
+  const metadata = await stat(file);
+  if ((metadata.mode & 0o077) !== 0) throw new Error(`${name} must be private`);
+  const bytes = JSON.parse(await readFile(file, 'utf8'));
+  if (!Array.isArray(bytes) || bytes.length !== 64 || bytes.some(n => !Number.isInteger(n) || n < 0 || n > 255)) throw new Error(`${name} is not a keypair`);
+  const keypair = await createKeyPairSignerFromBytes(Uint8Array.from(bytes));
+  bytes.fill(0);
+  return keypair;
+}
+const keypair = await readKeypair('COVENANT_GATEWAY_FEE_PAYER_KEY_FILE');
 const config = {
   network: required('COVENANT_GATEWAY_NETWORK'), asset: required('COVENANT_GATEWAY_ASSET'),
   payTo: required('COVENANT_GATEWAY_PAY_TO'), feePayer: required('COVENANT_GATEWAY_FEE_PAYER'),
@@ -57,6 +61,17 @@ solanaFacilitator?.getSupported().then(supported => {
 }).catch(() => console.log('Solana facilitator unreachable at startup; payments are sent directly until it answers'));
 const bridge = createBridge({ signer, config, rpc, facilitator: solanaFacilitator, log: message => console.log(message) });
 await bridge.assertNetwork();
+// Paid jobs settle to their own merchant wallet, which refunds a failed job.
+// Prices are fixed per job kind; an unset price leaves that kind unsold.
+let jobsRail = null;
+if (process.env.COVENANT_GATEWAY_JOBS_PAY_TO) {
+  const jobPrices = Object.fromEntries(JOB_KINDS
+    .filter(kind => process.env[`COVENANT_GATEWAY_JOBS_${kind.toUpperCase()}_PRICE_MICRO_USDC`])
+    .map(kind => [new URL(`/v1/jobs/${kind}`, config.resourceUrl).href, process.env[`COVENANT_GATEWAY_JOBS_${kind.toUpperCase()}_PRICE_MICRO_USDC`]]));
+  const merchant = await readKeypair('COVENANT_GATEWAY_JOBS_MERCHANT_KEY_FILE');
+  jobsRail = createBridge({ signer, config: { ...config, payTo: required('COVENANT_GATEWAY_JOBS_PAY_TO'), jobPrices }, rpc,
+    facilitator: solanaFacilitator, refundSigners: { feePayer: keypair, merchant }, log: message => console.log(`jobs: ${message}`) });
+}
 // Optional USDC on Base once a Base merchant is set: CDP credentials for
 // Coinbase's facilitator, or any other by URL. The chain and facilitator are
 // first checked on readiness, so a Base outage at boot leaves Solana running.
@@ -83,15 +98,18 @@ const server = createServer(async (req, res) => {
   const auth = Buffer.from(req.headers.authorization ?? '');
   if (auth.length !== expectedAuth.length || !timingSafeEqual(auth, expectedAuth)) return reply(401, { error: 'unauthorized' });
   if (req.method === 'GET' && req.url === '/health') return reply(200, {status:'ready'});
-  // Base routes carry an /evm prefix and exist only when Base is configured.
-  const rail = req.url?.startsWith('/evm/') ? evm : bridge;
-  const route = req.url?.startsWith('/evm/') ? req.url.slice(4) : req.url;
+  // Base routes carry an /evm prefix and paid-job routes a /jobs prefix; each
+  // exists only when configured.
+  const prefix = ['/evm', '/jobs'].find(p => req.url?.startsWith(`${p}/`));
+  const rail = { '/evm': evm, '/jobs': jobsRail }[prefix] ?? (prefix ? null : bridge);
+  const route = prefix ? req.url.slice(prefix.length) : req.url;
   if (!rail) return reply(404, { error: 'not found' });
   if (req.method === 'GET' && route === '/readiness') {
     try { return reply(200, await rail.readiness()); }
     catch { return reply(503, { error: rail === evm ? 'Base payments unavailable' : 'payment pricing unavailable' }); }
   }
-  if (req.method !== 'POST' || !['/verify', '/settle'].includes(route)) return reply(404, { error: 'not found' });
+  const method = { '/verify': 'verify', '/settle': 'settle', '/refund': 'refund', '/refund-status': 'refundStatus' }[route];
+  if (req.method !== 'POST' || !method || !rail[method]) return reply(404, { error: 'not found' });
   try {
     let size = 0; const chunks = [];
     // A 32-child manifest appears in both accepted terms and sealed evidence.
@@ -99,7 +117,7 @@ const server = createServer(async (req, res) => {
     for await (const chunk of req) { size += chunk.length; if (size > 131_072) throw new Rejected('request too large'); chunks.push(chunk); }
     const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
     if (typeof body !== 'object' || body === null || Array.isArray(body)) throw new Rejected('invalid request');
-    reply(200, await rail[route.slice(1)](body));
+    reply(200, await rail[method](body));
   } catch (error) {
     // No transaction payloads, RPC credentials or private keys in logs/errors.
     if (error instanceof Rejected || error instanceof SyntaxError) return reply(400, { error: error instanceof Rejected ? error.message : 'invalid JSON' });
@@ -109,4 +127,4 @@ const server = createServer(async (req, res) => {
 server.requestTimeout = 30_000;
 server.headersTimeout = 10_000;
 const port = Number(process.env.COVENANT_GATEWAY_BRIDGE_PORT ?? 4043);
-server.listen(port, '127.0.0.1', () => console.log(`Covenant x402 verifier listening on loopback port ${port}; Solana broadcast ${solanaFacilitator ? 'through a facilitator' : 'direct'}; Base ${evm ? `on ${evm.network}` : 'off'}`));
+server.listen(port, '127.0.0.1', () => console.log(`Covenant x402 verifier listening on loopback port ${port}; Solana broadcast ${solanaFacilitator ? 'through a facilitator' : 'direct'}; Base ${evm ? `on ${evm.network}` : 'off'}; paid jobs ${jobsRail ? 'on' : 'off'}`));

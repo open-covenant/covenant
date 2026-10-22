@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
 import {acceptDiscovery, ASSET, BASE_ASSET, BASE_NETWORK, NETWORK, baseUrl, expectedRecords, inputSchema, parseArgs,
-  sha256, shortMemo, stable, strictJson, tariffPrice, validateExpected, validateQuote, validateSnapshot} from './accept-discovery.mjs';
+  sha256, shortMemo, stable, strictJson, tariffPrice, validateExpected, validateJobQuote, validateQuote, validateSnapshot} from './accept-discovery.mjs';
 
 const now = 1800000000000;
 const revision = 'a'.repeat(40);
@@ -27,10 +27,28 @@ function quote(request, id, url = origin, serverNow = now) {
   const hash = sha256(request);
   const amount = request.pricing ? tariffPrice(expected.tariff, request.max_tokens) : 50000;
   return {x402Version: 2, resource: {url: `${url}/v1/chat/completions`,
-    description: 'Covenant inference with a verified operator receipt', mimeType: 'application/json'},
+    description: 'Text inference for AI agents, with a receipt signed by the operator who ran it.', mimeType: 'application/json',
+    serviceName: 'Covenant Compute', tags: ['inference', 'llm', 'ai', 'receipts'], iconUrl: `${url}/brand/covenant-icon-02026997.png`},
   accepts: [{scheme: 'exact', network: NETWORK, asset: ASSET, amount: String(amount), payTo: expected.payTo,
     maxTimeoutSeconds: 90, extra: {feePayer: expected.feePayer, memo: shortMemo(id, hash),
-      quoteId: id, requestSha256: hash, expiresAtMs: serverNow + 75000}}]};
+      quoteId: id, requestSha256: hash, expiresAtMs: serverNow + 75000}}],
+  extensions: {bazaar: {info: {input: {type: 'http'}}, schema: {type: 'object'}}}};
+}
+const JOBS_MERCHANT = 'SysvarRent111111111111111111111111111111111';
+function jobEndpoint(url = origin) {
+  return {path: '/v1/jobs/research', url: `${url}/v1/jobs/research`, method: 'POST', description: 'A sourced research report.',
+    payment: {scheme: 'exact', network: NETWORK, asset: ASSET, assetDecimals: 6, payTo: JOBS_MERCHANT, feePayer: ASSET},
+    price: {currency: 'USDC', unit: 'micro_usdc', billing: 'fixed_job', price_micro_usdc: 5000000},
+    inputSchema: {type: 'object'}, statusPath: '/v1/jobs/{id}', statusMethod: 'GET',
+    paymentRequiredHeader: 'Payment-Required', paymentSignatureHeader: 'Payment-Signature'};
+}
+function jobQuote(request, url = origin, serverNow = now) {
+  const hash = sha256(request), id = '5b0e8a52-2f7e-4c55-9a2d-6c0b0f3e9a11';
+  return {x402Version: 2, resource: {url: `${url}/v1/jobs/research`, description: 'A sourced research report.', mimeType: 'application/json',
+    serviceName: 'Covenant Compute', tags: ['research'], iconUrl: `${url}/brand/covenant-icon-02026997.png`},
+  accepts: [{scheme: 'exact', network: NETWORK, asset: ASSET, amount: '5000000', payTo: JOBS_MERCHANT, maxTimeoutSeconds: 90,
+    extra: {feePayer: ASSET, memo: shortMemo(id, hash), quoteId: id, requestSha256: hash, expiresAtMs: serverNow + 90000}}],
+  extensions: {bazaar: {info: {}, schema: {}}}};
 }
 const encoded = body => Buffer.from(JSON.stringify(body)).toString('base64');
 const context = {expected: policy(), origin, revision, started: now, ended: now};
@@ -260,5 +278,35 @@ test('a Base merchant in the policy requires Base in the manifest and in every q
   for (const changed of [reordered, ...[o => { o.payTo = '0x0000000000000000000000000000000000000001'; }, o => { o.amount = '50001'; },
     o => { o.extra.name = 'USDC'; }].map(change => { const copy = structuredClone(body); change(copy.accepts[1]); return copy; })]) {
     assert.throws(() => validateQuote(changed, encoded(changed), ctx), /payment quote/);
+  }
+});
+
+test('paid jobs in the manifest must match the expected price and merchant exactly', () => {
+  const expected = {...policy(), jobs: [{kind: 'research', amount: 5000000, payTo: JOBS_MERCHANT}]};
+  const withJobs = snapshot();
+  withJobs.manifest.endpoints.push(jobEndpoint());
+  validateSnapshot(withJobs, {...context, expected});
+  assert.throws(() => validateSnapshot(withJobs, context), /job endpoints/);
+  assert.throws(() => validateSnapshot(snapshot(), {...context, expected}), /job endpoints/);
+  for (const change of [e => { e.price.price_micro_usdc = 4000000; }, e => { e.payment.payTo = ASSET; }, e => { e.url = 'https://other.example/v1/jobs/research'; },
+    e => { e.extra = true; }, e => { delete e.statusPath; }, e => { e.description = ''; }]) {
+    const changed = snapshot(); const endpoint = jobEndpoint(); change(endpoint); changed.manifest.endpoints.push(endpoint);
+    assert.throws(() => validateSnapshot(changed, {...context, expected}));
+  }
+  for (const jobs of [[], [{kind: 'other', amount: 1, payTo: JOBS_MERCHANT}], [{kind: 'research', amount: 0, payTo: JOBS_MERCHANT}],
+    [{kind: 'research', amount: 1, payTo: JOBS_MERCHANT}, {kind: 'research', amount: 1, payTo: JOBS_MERCHANT}]]) {
+    assert.throws(() => validateExpected({...policy(), jobs}, now), /expected job/);
+  }
+});
+test('a job quote binds its fixed price, the jobs merchant and the request', () => {
+  const job = {kind: 'research', amount: 5000000, payTo: JOBS_MERCHANT};
+  const request = {objective: 'Discovery quote check; do not submit payment. This request only asks for a price.'};
+  const body = jobQuote(request);
+  const ctx = {job, request, expected: policy(), origin, ended: now};
+  assert.equal(validateJobQuote(body, encoded(body), ctx).amount_micro_usdc, 5000000);
+  for (const change of [b => { b.accepts[0].amount = '4000000'; }, b => { b.accepts[0].payTo = ASSET; }, b => { b.accepts[0].extra.memo = 'x'.repeat(32); },
+    b => { b.accepts[0].extra.requestSha256 = 'c'.repeat(64); }, b => { b.resource.url = `${origin}/v1/chat/completions`; },
+    b => { delete b.extensions; }, b => { b.accepts.push(b.accepts[0]); }, b => { b.accepts[0].extra.expiresAtMs = now + 200000; }]) {
+    const b = structuredClone(body); change(b); assert.throws(() => validateJobQuote(b, encoded(b), ctx));
   }
 });

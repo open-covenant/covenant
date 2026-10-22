@@ -7,6 +7,7 @@ mod branding;
 pub mod bridge;
 pub mod buyer;
 pub mod discovery;
+pub mod jobs;
 pub mod pricing;
 
 use async_trait::async_trait;
@@ -592,6 +593,7 @@ pub struct Gateway {
     discovery_reads: tokio::sync::Semaphore,
     settlement_wait: std::time::Duration,
     settlement_waiters: tokio::sync::Semaphore,
+    jobs: Option<Arc<jobs::Jobs>>,
 }
 #[derive(Debug)]
 pub enum GatewayReply {
@@ -662,7 +664,13 @@ impl Gateway {
             discovery_reads: tokio::sync::Semaphore::new(4),
             settlement_wait: std::time::Duration::ZERO,
             settlement_waiters: tokio::sync::Semaphore::new(16),
+            jobs: None,
         })
+    }
+    /// Sell paid jobs beside inference, at `/v1/jobs/<kind>`.
+    pub fn with_jobs(mut self, jobs: Arc<jobs::Jobs>) -> Self {
+        self.jobs = Some(jobs);
+        self
     }
     pub fn with_admissions_enabled(mut self, enabled: bool) -> Self {
         self.admissions_enabled = enabled;
@@ -1217,7 +1225,7 @@ impl Gateway {
     }
 }
 
-fn after_wait(now: u64, started: std::time::Instant) -> u64 {
+pub(crate) fn after_wait(now: u64, started: std::time::Instant) -> u64 {
     now.saturating_add(started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64)
 }
 
@@ -1260,6 +1268,11 @@ pub fn router(gateway: Arc<Gateway>) -> Router {
         .merge(branding::router())
         .route("/v1/chat/completions", post(handle_single_http))
         .route("/v1/inference/batches", post(handle_batch_http))
+        // A job is started by POSTing to its kind and read by GETting its id.
+        .route(
+            "/v1/jobs/:job",
+            post(jobs::post_http).get(jobs::status_http),
+        )
         .route("/.well-known/x402.json", get(discovery::manifest_http))
         .route("/openapi.json", get(discovery::openapi_http))
         .route("/v1/models", get(discovery::models_http))
@@ -1282,7 +1295,7 @@ fn same_but_fee_payer(stored: &str, configured: &str) -> bool {
             .enumerate()
             .all(|(index, (a, b))| index == stored.len() - 3 || a == b)
 }
-fn payment_payload(header: &str) -> Result<Value> {
+pub(crate) fn payment_payload(header: &str) -> Result<Value> {
     if header.len() > 16_384 {
         return Err(GatewayError::Payment("payment header too large".into()));
     }

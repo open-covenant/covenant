@@ -87,3 +87,39 @@ test('a fee payer key that does not match its address is refused before anything
  assert.deepEqual(written.filter(name=>name.startsWith('fee-payer')||name==='bridge-secret'),[]);
 });
 
+
+test('paid jobs seed their merchant key for the verifier alone and their own buyer identity',t=>{
+ const merchantKey=Buffer.from(JSON.stringify([...Array(32).fill(3),...Array(32).fill(0)])).toString('base64');
+ const jobsIdentity=Buffer.alloc(32,9).toString('base64');
+ const {data,workers}=boot(t,{env:{COVENANT_GATEWAY_JOBS_PAY_TO:'1'.repeat(32),
+  COVENANT_GATEWAY_JOBS_MERCHANT_KEY_B64:merchantKey,COVENANT_GATEWAY_JOBS_IDENTITY_B64:jobsIdentity,
+  COVENANT_GATEWAY_JOBS_RESEARCH_PRICE_MICRO_USDC:'5000000'}});
+ const [verifier,gateway]=workers;
+ const merchantFile=path.join(data,'gateway',`jobs-merchant-${'1'.repeat(32)}.json`);
+ assert.equal(verifier.env.COVENANT_GATEWAY_JOBS_MERCHANT_KEY_FILE,merchantFile);
+ assert.equal(fs.readFileSync(merchantFile).toString('base64'),merchantKey);
+ assert.equal(Object.hasOwn(gateway.env,'COVENANT_GATEWAY_JOBS_MERCHANT_KEY_FILE'),false);
+ assert.deepEqual(fs.readFileSync(path.join(data,'gateway','jobs-identity.key')),Buffer.alloc(32,9));
+ for(const {env} of workers){
+  assert.equal(Object.hasOwn(env,'COVENANT_GATEWAY_JOBS_MERCHANT_KEY_B64'),false);
+  assert.equal(Object.hasOwn(env,'COVENANT_GATEWAY_JOBS_IDENTITY_B64'),false);
+  assert.equal(env.COVENANT_GATEWAY_JOBS_RESEARCH_PRICE_MICRO_USDC,'5000000');
+ }
+});
+
+test('a jobs merchant key that does not match its address is refused before it is written',t=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'covenant-supervisor-jobs-'));
+ t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const data=path.join(dir,'data');
+ const result=spawnSync(process.execPath,[new URL('./supervisor.mjs',import.meta.url).pathname],{encoding:'utf8',timeout:5000,env:{
+  COVENANT_X402_DATA:data,COVENANT_X402_OPERATOR_ENABLED:'false',COVENANT_GATEWAY_ADMISSIONS_ENABLED:'false',
+  COVENANT_GATEWAY_IDENTITY_B64:Buffer.alloc(32,7).toString('base64'),
+  COVENANT_GATEWAY_FEE_PAYER_KEY_B64:Buffer.from(JSON.stringify([...Array(32).fill(1),...Array(32).fill(0)])).toString('base64'),
+  COVENANT_GATEWAY_FEE_PAYER:'1'.repeat(32),COVENANT_GATEWAY_BRIDGE_SECRET:'test-secret-'.repeat(4),
+  COVENANT_GATEWAY_JOBS_PAY_TO:'1'.repeat(32),COVENANT_GATEWAY_JOBS_IDENTITY_B64:Buffer.alloc(32,9).toString('base64'),
+  COVENANT_GATEWAY_JOBS_MERCHANT_KEY_B64:Buffer.from(JSON.stringify([...Array(32).fill(3),...Array(32).fill(4)])).toString('base64'),
+ }});
+ assert.notEqual(result.status,0);
+ const written=fs.readdirSync(path.join(data,'gateway'));
+ assert.deepEqual(written.filter(name=>name.startsWith('jobs-')),[]);
+});

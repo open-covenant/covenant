@@ -11,6 +11,7 @@ import { HttpDaemonClient } from './daemon.js';
 import { Connector } from './connector.js';
 import { WsTransport } from './wsTransport.js';
 import { parseManifest, type ManifestCapability } from './manifest.js';
+import { registerArtifactProxy } from './artifacts.js';
 
 async function main(): Promise<void> {
   const log = pino({ level: process.env.LOG_LEVEL ?? 'info' });
@@ -62,6 +63,7 @@ async function main(): Promise<void> {
     const daemonUp = await daemon.health();
     return { status: daemonUp && transport.connectionState.socket === 'open' ? 'ok' : 'degraded', daemon: daemonUp, mesh: transport.connectionState, gpu_enabled: cfg.gpuEnabled, in_flight: connector.inFlight };
   });
+  if (cfg.artifactOrigin) registerArtifactProxy(app, cfg.artifactOrigin);
   await app.listen({ port: cfg.port, host: '0.0.0.0' });
 
   // Connect to the mesh in the background so boot doesn't block on mesh availability;

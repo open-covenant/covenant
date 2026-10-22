@@ -2,6 +2,8 @@
 // The connector holds the LOCAL daemon bearer token and dials OUT to Hatcher,
 // so the daemon never listens on a public interface (see docs/hatcher-connector-design.md §2).
 
+import { artifactOrigin } from './artifacts.js';
+
 export interface Config {
   // Health/metrics server (local only — Render health check, not the Hatcher channel).
   port: number;
@@ -29,6 +31,8 @@ export interface Config {
   // Admission limits applied before any dispatch reaches the daemon.
   maxConcurrentDispatch: number;
   defaultDeadlineMs: number;
+  // Private coding-gateway origin whose GPU outputs /artifacts/:token/:name serves.
+  artifactOrigin?: string;
 }
 
 function required(name: string): string {
@@ -78,5 +82,6 @@ export function loadConfig(): Config {
     manifestPath: optional('HATCHER_MANIFEST'),
     maxConcurrentDispatch: int('HATCHER_MAX_CONCURRENT_DISPATCH', 4),
     defaultDeadlineMs: int('HATCHER_DEFAULT_DEADLINE_MS', 1_800_000),
+    artifactOrigin: artifactOrigin(process.env.HATCHER_ARTIFACT_ORIGIN),
   };
 }

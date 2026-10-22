@@ -269,7 +269,11 @@ commits roughly 190000. So $0.20 funds exactly one launch, with headroom up to
 400000 micro-USDC per GPU-hour. Raising `COMPUTE_MAX_LAUNCHES` alone changes
 nothing: raise the budget with it, or shorten the booking window. When no offer
 fits what is left, the launch is refused with the remaining budget and the model
-is told to try a shorter `duration_secs`.
+is told to try a shorter `duration_secs`. A launch the provider refuses outright, which the
+control plane settles with a zero-charge receipt, starts nothing and does not
+use up the launch allowance: the gateway retries it on the next-cheapest
+machine, at most twice, and each attempt's booking maximum still counts
+against the budget.
 
 **GPU spend counts against the run.** Committed GPU spend is added to the run's
 `costUsd` on both the completed and failed paths, so it lands in the same daily

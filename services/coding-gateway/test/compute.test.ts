@@ -56,6 +56,7 @@ type WireJob = Record<string, any>;
 function mockMarket(
   options: {
     rate?: number;
+    offers?: WireJob[];
     post?: (plan: WireJob, key: string) => unknown | Promise<unknown>;
     cancel?: (job: WireJob) => unknown | Promise<unknown>;
     cancelByKey?: (key: string) => unknown | Promise<unknown>;
@@ -66,7 +67,8 @@ function mockMarket(
   const plans: WireJob[] = [];
   const keys: string[] = [];
   const fetch = mockFetch(async (url, init) => {
-    if (url.endsWith('/v1/offers')) return [offer('a', options.rate ?? 1_200_000)];
+    if (url.endsWith('/v1/offers'))
+      return options.offers ?? [offer('a', options.rate ?? 1_200_000)];
     if (url.includes('/v1/jobs/by-key/') && init?.method === 'DELETE') {
       const key = decodeURIComponent(url.split('/').pop()!);
       if (options.cancelByKey) return options.cancelByKey(key);
@@ -445,6 +447,91 @@ describe('bounded durable ComputeSession', () => {
     const session = new ComputeSession(journalConfig(), { runKey: 'bad-job' });
     await expect(session.launch()).rejects.toThrow('malformed job');
     expect(session.inspect().pendingJobIds).toEqual(['known-malformed']);
+  });
+});
+
+describe('launches the provider refuses', () => {
+  const refused = (plan: WireJob, id: string) => ({
+    id,
+    status: 'failed',
+    offer_id: plan.offer.id,
+    maximum_usdc_micros: plan.maximum_usdc_micros,
+    access_url: null,
+    error: 'provider_rejected',
+    receipt: {
+      job_id: id,
+      runtime_secs: 0,
+      charged_usdc_micros: 0,
+      refunded_usdc_micros: plan.maximum_usdc_micros,
+      provider: 'control-plane',
+      commitment: `control-plane:launch-rejected:${id}`,
+    },
+  });
+  const offers = [
+    offer('a', 404_445),
+    offer('b', 407_408),
+    offer('c', 407_408),
+    offer('d', 611_112),
+  ];
+
+  it('moves to the next machine without using the launch allowance', async () => {
+    let posts = 0;
+    const market = mockMarket({
+      offers,
+      post: (plan) =>
+        ++posts === 1
+          ? refused(plan, 'declined-1')
+          : {
+              id: 'accepted-2',
+              status: 'provisioning',
+              offer_id: plan.offer.id,
+              maximum_usdc_micros: plan.maximum_usdc_micros,
+              access_url: null,
+              error: null,
+              receipt: null,
+            },
+    });
+    const session = new ComputeSession(journalConfig(), { runKey: 'refused-once' });
+    const job = await session.launch(300);
+    expect(job).toMatchObject({ id: 'accepted-2', offer_id: 'b', status: 'provisioning' });
+    expect(market.plans.map((plan) => plan.offer.id)).toEqual(['a', 'b']);
+    expect(new Set(market.keys).size).toBe(2);
+    expect(session.inspect()).toMatchObject({ pendingJobIds: ['accepted-2'], settled: [] });
+    // The accepted launch is the run's one launch.
+    await expect(session.launch(300)).rejects.toThrow(/launch cap reached/);
+  });
+
+  it('stops after two refusals and reports the last one', async () => {
+    const market = mockMarket({
+      offers,
+      post: (plan, key) => refused(plan, `declined-${key.slice(-1)}`),
+    });
+    const session = new ComputeSession(journalConfig(), { runKey: 'refused-always' });
+    const job = await session.launch(300);
+    expect(job.status).toBe('failed');
+    expect(market.plans.map((plan) => plan.offer.id)).toEqual(['a', 'b', 'c']);
+    expect(session.inspect().settled).toHaveLength(1);
+    expect(session.inspect().settled[0]!.receipt.charged_usdc_micros).toBe(0);
+    await expect(session.launch(300)).rejects.toThrow(/launch cap reached/);
+    expect(market.plans).toHaveLength(3);
+  });
+
+  it('does not retry a failure that charged anything', async () => {
+    const market = mockMarket({
+      offers,
+      post: (plan) => ({
+        ...refused(plan, 'charged-1'),
+        receipt: {
+          ...refused(plan, 'charged-1').receipt,
+          provider: 'vast',
+          charged_usdc_micros: 100,
+          refunded_usdc_micros: plan.maximum_usdc_micros - 100,
+        },
+      }),
+    });
+    const session = new ComputeSession(journalConfig(), { runKey: 'charged-failure' });
+    expect((await session.launch(300)).status).toBe('failed');
+    expect(market.plans).toHaveLength(1);
   });
 });
 

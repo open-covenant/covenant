@@ -233,6 +233,17 @@ interface JournalRun {
   reservations: Reservation[];
 }
 
+// A launch the provider refuses outright starts nothing and charges nothing, so
+// it does not use up the run's launch allowance; up to this many such refusals
+// are retried on the next-cheapest machine.
+const MAX_DECLINED_LAUNCHES = 2;
+const launched = (run: JournalRun): number => run.reservations.filter((r) => !r.rejected).length;
+const declinedByProvider = (job: ComputeJob): boolean =>
+  job.status === 'failed' &&
+  job.receipt?.provider === 'control-plane' &&
+  job.receipt.charged_usdc_micros === 0 &&
+  job.receipt.refunded_usdc_micros === job.maximum_usdc_micros;
+
 const quoteMaximum = (ratePerHour: number, durationSecs: number): number =>
   Math.ceil((ratePerHour * durationSecs) / 3_600);
 const whole = (n: unknown): n is number =>
@@ -313,7 +324,8 @@ function validRun(value: unknown): value is JournalRun {
     whole(v.maxLaunches) &&
     v.maxLaunches > 0 &&
     Array.isArray(v.reservations) &&
-    v.reservations.length <= v.maxLaunches &&
+    launched(v) <= v.maxLaunches &&
+    v.reservations.length <= v.maxLaunches + MAX_DECLINED_LAUNCHES &&
     v.reservations.every(
       (r) =>
         typeof r.key === 'string' &&
@@ -524,15 +536,12 @@ export class ComputeSession {
     return this.locked(async () => {
       if (this.signal?.aborted)
         throw new ComputeError('GPU run was aborted; no new booking is allowed');
-      let run = this.current();
+      const run = this.current();
       if (run.closed) throw new ComputeError('GPU run is closed; no further bookings are allowed');
       const uncertain = run.reservations.find((r) => !r.jobId && !r.rejected);
       if (uncertain) {
         const committed = run.reservations.reduce((sum, r) => sum + r.plan.maximum_usdc_micros, 0);
-        if (
-          committed > this.options.maxUsdcMicros ||
-          run.reservations.length > this.options.maxLaunches
-        ) {
+        if (committed > this.options.maxUsdcMicros || launched(run) > this.options.maxLaunches) {
           throw new ComputeError(
             'GPU reservation exceeds the current run authorization; reconciliation is required',
           );
@@ -548,48 +557,70 @@ export class ComputeSession {
         return this.submit(uncertain);
       }
       const maxLaunches = Math.min(run.maxLaunches, this.options.maxLaunches);
-      if (run.reservations.length >= maxLaunches)
-        throw new ComputeError(
-          `launch cap reached: this run may launch ${workspaceCount(maxLaunches)}`,
-        );
-      const committed = run.reservations.reduce((sum, r) => sum + r.plan.maximum_usdc_micros, 0);
-      const remaining = Math.min(run.maxUsdcMicros, this.options.maxUsdcMicros) - committed;
-      const offer = (await this.offers()).find(
-        (o) => quoteMaximum(o.rate_usdc_micros_per_hour, duration) <= remaining,
-      );
-      if (!offer)
-        throw new ComputeError(
-          `no offer fits the ${remaining} micro-USDC left in this run's GPU budget for ${duration}s`,
-        );
-      let reservation!: Reservation;
-      run = this.update((current) => {
-        // Recheck atomically after the non-billable offer request.
-        if (this.signal?.aborted)
-          throw new ComputeError('GPU run was aborted; no new booking is allowed');
-        if (current.closed || current.reservations.length >= maxLaunches)
-          throw new ComputeError('GPU run is closed or its launch cap is reached');
-        const maximum = quoteMaximum(offer.rate_usdc_micros_per_hour, duration);
-        const committed = current.reservations.reduce(
-          (sum, r) => sum + r.plan.maximum_usdc_micros,
-          0,
-        );
-        if (committed + maximum > Math.min(current.maxUsdcMicros, this.options.maxUsdcMicros))
-          throw new ComputeError('GPU run budget is fully committed');
-        reservation = {
-          key: `gpu-${this.journalKey}-${current.reservations.length}`,
-          plan: {
-            app: GPU_WORKSPACE_APP,
-            offer,
-            duration_secs: duration,
-            maximum_usdc_micros: maximum,
-          },
-          deadline: Date.now() + duration * 1_000,
-        };
-        current.reservations.push(reservation);
-      });
-      // The disk transaction above completes (including fsync) before this POST.
-      return this.submit(reservation);
+      for (;;) {
+        const job = await this.launchOnce(duration, maxLaunches);
+        const attempts = this.current().reservations.length;
+        if (!declinedByProvider(job) || attempts >= run.maxLaunches + MAX_DECLINED_LAUNCHES)
+          return job;
+        // Nothing started and nothing was charged: try the next machine.
+        this.update((current) => {
+          current.reservations.find((r) => r.jobId === job.id)!.rejected = true;
+        });
+      }
     });
+  }
+
+  private async launchOnce(duration: number, maxLaunches: number): Promise<ComputeJob> {
+    const run = this.current();
+    if (launched(run) >= maxLaunches)
+      throw new ComputeError(
+        `launch cap reached: this run may launch ${workspaceCount(maxLaunches)}`,
+      );
+    const declined = new Set(
+      run.reservations.filter((r) => r.rejected).map((r) => r.plan.offer.id),
+    );
+    const committed = run.reservations.reduce((sum, r) => sum + r.plan.maximum_usdc_micros, 0);
+    const remaining = Math.min(run.maxUsdcMicros, this.options.maxUsdcMicros) - committed;
+    const offer = (await this.offers()).find(
+      (o) =>
+        !declined.has(o.id) && quoteMaximum(o.rate_usdc_micros_per_hour, duration) <= remaining,
+    );
+    if (!offer)
+      throw new ComputeError(
+        `no offer fits the ${remaining} micro-USDC left in this run's GPU budget for ${duration}s`,
+      );
+    let reservation!: Reservation;
+    this.update((current) => {
+      // Recheck atomically after the non-billable offer request.
+      if (this.signal?.aborted)
+        throw new ComputeError('GPU run was aborted; no new booking is allowed');
+      if (
+        current.closed ||
+        launched(current) >= maxLaunches ||
+        current.reservations.length >= current.maxLaunches + MAX_DECLINED_LAUNCHES
+      )
+        throw new ComputeError('GPU run is closed or its launch cap is reached');
+      const maximum = quoteMaximum(offer.rate_usdc_micros_per_hour, duration);
+      const committed = current.reservations.reduce(
+        (sum, r) => sum + r.plan.maximum_usdc_micros,
+        0,
+      );
+      if (committed + maximum > Math.min(current.maxUsdcMicros, this.options.maxUsdcMicros))
+        throw new ComputeError('GPU run budget is fully committed');
+      reservation = {
+        key: `gpu-${this.journalKey}-${current.reservations.length}`,
+        plan: {
+          app: GPU_WORKSPACE_APP,
+          offer,
+          duration_secs: duration,
+          maximum_usdc_micros: maximum,
+        },
+        deadline: Date.now() + duration * 1_000,
+      };
+      current.reservations.push(reservation);
+    });
+    // The disk transaction above completes (including fsync) before this POST.
+    return this.submit(reservation);
   }
 
   private async submit(reservation: Reservation): Promise<ComputeJob> {

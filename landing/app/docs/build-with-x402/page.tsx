@@ -101,8 +101,8 @@ export default function BuildWithX402Page() {
       <ul>
         <li>
           <strong>A free, public facilitator.</strong> If you sell anything over HTTP, such as an
-          API, game data or a service an agent calls, it checks and settles USDC payments for you on
-          Solana and Base. You need no account and no API key, and Covenant pays the network fees
+          API, game data or a service an agent calls, the facilitator checks and settles USDC
+          payments for you on Solana and Base. You need no account and no API key, and Covenant pays the network fees
           from its own wallets.
         </li>
         <li>
@@ -161,10 +161,10 @@ export default function BuildWithX402Page() {
             </td>
           </tr>
           <tr>
-            <td>Source and limits</td>
+            <td>Source</td>
             <td>
               <a href="https://github.com/open-covenant/covenant/tree/main/services/x402-facilitator">
-                services/x402-facilitator
+                github.com/open-covenant/covenant/tree/main/services/x402-facilitator
               </a>
             </td>
           </tr>
@@ -200,16 +200,17 @@ export default function BuildWithX402Page() {
           works in any of them.
         </li>
         <li>
-          If the facilitator cannot be reached, or a settlement fails, the middleware answers{" "}
-          <code>502</code> (or <code>402</code>) and does not send your route&apos;s response, so
-          nothing is served without payment.
+          If the facilitator cannot be reached, the middleware answers <code>502</code>; if a
+          settlement fails, it answers <code>402</code>. In both cases your route&apos;s response is
+          not sent, so nothing is served without payment.
         </li>
       </ul>
 
       <h3>Get listed so agents can find you</h3>
       <p>
         If your route declares the Bazaar discovery extension (the{" "}
-        <code>declareDiscoveryExtension</code> block above), the facilitator adds your endpoint to
+        <code>declareDiscoveryExtension</code>{" "}
+        block above), the facilitator adds your endpoint to
         Covenant&apos;s public catalog after its first settled payment:
       </p>
       <pre>
@@ -238,7 +239,8 @@ https://facilitator.opencovenant.org/discovery/search?query=your+words`}</code>
           sellers, the facilitator settles at most 2,000 payments per network per UTC day. When a cap
           is reached, settlement answers <code>pay_to_daily_limit_reached</code> or{" "}
           <code>facilitator_daily_limit_reached</code>, your middleware refuses that request, and the
-          buyer is not charged. The counts reset at midnight UTC.
+          buyer is not charged. The counts reset at midnight UTC. The facilitator does not publish
+          how much of the shared daily cap is left.
         </li>
         <li>
           On Solana, a payment may ask for at most 100,000 compute units at a priority fee of at most
@@ -459,8 +461,9 @@ https://facilitator.opencovenant.org/discovery/search?query=your+words`}</code>
         </tbody>
       </table>
       <p>
-        This page lists the current keys and is updated when they change. For a complete reference
-        implementation, see{" "}
+        When a key changes, the new key is listed here with the date it took effect, and the
+        previous key stays listed so earlier receipts can still be checked. For a complete
+        reference implementation, see{" "}
         <a href="https://github.com/open-covenant/covenant/blob/deploy/compute-coordinator/sdk/compute-x402-client/proof.mjs">
           proof.mjs
         </a>{" "}
@@ -486,25 +489,29 @@ https://facilitator.opencovenant.org/discovery/search?query=your+words`}</code>
       </p>
       <ul>
         <li>
-          <strong>Agents that pay for their own thinking.</strong> Each agent wallet holds a little
+          <strong>Agents that pay for their own thinking.</strong>{" "}
+          Each agent wallet holds a little
           USDC and buys its reasoning per call: choosing a move, solving a daily puzzle, answering a
           challenge. You don&apos;t hand out API keys or carry one large inference bill. Five puzzle
           attempts a day at a 512-token cap cost about $0.08 per agent per day.
         </li>
         <li>
-          <strong>Receipts as proof of play.</strong> A tournament can ask agents to submit the
+          <strong>Receipts as proof of play.</strong>{" "}
+          A tournament can ask agents to submit the
           receipt behind an answer, then check the operator&apos;s signature and that the
           receipt&apos;s result hash matches the submitted answer. That shows the operator signed for
           this answer at a given time and that it hasn&apos;t been edited since. It does not show
           that the agent had no other help, or that this was its only attempt.
         </li>
         <li>
-          <strong>Game-run characters with a record.</strong> The game&apos;s own server can buy
+          <strong>Game-run characters with a record.</strong>{" "}
+          The game&apos;s own server can buy
           inference for its host characters, broadcasts or clues, and publish each receipt, so
           players can see the text came from a signed model run.
         </li>
         <li>
-          <strong>Selling to agents.</strong> If the game wants agents to pay for something, such as
+          <strong>Selling to agents.</strong>{" "}
+          If the game wants agents to pay for something, such as
           premium data, hints or entry to side events, it can put x402 on those API routes with the
           seller setup above. Agents pay in USDC on Base or Solana with no account, and the routes
           appear in the facilitator&apos;s catalog for other agents to find.
@@ -530,10 +537,12 @@ https://facilitator.opencovenant.org/discovery/search?query=your+words`}</code>
       <h2>Links</h2>
       <ul>
         <li>
-          <Link href="/x402">Covenant x402</Link>: how the Covenant daemon pays and sells over x402.
+          <Link href="/x402">Covenant x402</Link>: how Covenant agents pay for and sell services over
+          x402.
         </li>
         <li>
-          <Link href="/compute">Compute</Link>: GPU rental and coding agents on Covenant Compute.
+          Covenant Compute also offers GPU rental and coding agents; see{" "}
+          <Link href="/compute">Compute</Link>.
         </li>
         <li>
           <a href="https://opencovenant.org/compute-status">Compute status</a>,{" "}

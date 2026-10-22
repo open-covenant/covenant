@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getTransactionDecoder, getCompiledTransactionMessageDecoder, generateKeyPairSigner, getBase58Decoder, pipe, createTransactionMessage, setTransactionMessageFeePayer, setTransactionMessageLifetimeUsingBlockhash, appendTransactionMessageInstructions, partiallySignTransactionMessageWithSigners, getBase64EncodedWireTransaction } from '@solana/kit';
+import { getTransactionDecoder, getCompiledTransactionMessageDecoder, getSignatureFromTransaction, generateKeyPairSigner, getBase58Decoder, pipe, createTransactionMessage, setTransactionMessageFeePayer, setTransactionMessageLifetimeUsingBlockhash, appendTransactionMessageInstructions, partiallySignTransactionMessageWithSigners, getBase64EncodedWireTransaction } from '@solana/kit';
 import { findAssociatedTokenPda, TOKEN_PROGRAM_ADDRESS, getTransferCheckedInstruction } from '@solana-program/token';
 import { getSetComputeUnitLimitInstruction, getSetComputeUnitPriceInstruction } from '@solana-program/compute-budget';
 import { toFacilitatorSvmSigner } from '@x402/svm';
 import { x402Client } from '@x402/core/client';
 import { ExactSvmScheme as OfficialClientScheme } from '@x402/svm/exact/client';
-import { createBridge, RAILS, Rejected, shortMemo } from './bridge.mjs';
+import { createBridge, FACILITATOR_GRACE_MS, RAILS, Rejected, shortMemo } from './bridge.mjs';
 import { batchPricingTotal, createPricingPolicy, readTariffConfig } from './pricing.mjs';
 import { mkdtemp, writeFile, symlink, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -55,10 +55,10 @@ async function setup(options = {}) {
     if (method === 'sendTransaction') { state.sends.push(params[0]); if (state.loseResponse) throw new Error('lost RPC response'); return state.signature; }
     throw new Error(`unexpected RPC ${method}`);
   };
-  const reopen = (changes = {}, clock = 1000) => createBridge({ signer, config: { ...config, ...changes }, rpc, now: () => clock });
+  const reopen = (changes = {}, clock = 1000) => createBridge({ signer, config: { ...config, ...changes }, rpc, now: () => clock, facilitator: options.facilitator });
   const bridge = reopen();
   const verify = async (overrides = {}) => bridge.verify({ paymentPayload: await payload(overrides), paymentRequirements: terms, resourceUrl });
-  return { bridge, verify, terms, state, payload, config, reopen, resourceUrl, payer, simulations: () => simulations, signatures: () => signatures };
+  return { bridge, verify, terms, state, payload, config, reopen, resourceUrl, payer, feePayerKey: facilitator, simulations: () => simulations, signatures: () => signatures };
 }
 
 function tariffs() {
@@ -461,3 +461,80 @@ test('server tariff file loader uses the configured regular file and closes fres
     await writeFile(file, ' '.repeat(262145)); assert.deepEqual(await readTariffConfig(file), { tariffConfigError: true });
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
+
+test('a facilitator holding the same key broadcasts exactly the journaled bytes', async () => {
+  const calls = [];
+  let reply = async () => ({ success: true });
+  const replies = [];
+  const facilitator = { settle: async (payload, terms) => { calls.push({ payload, terms }); const r = reply(payload, terms); replies.push(r); return r; } };
+  const f = await setup({ facilitator });
+  // The facilitator signs the payer-signed payload with the same fee payer key.
+  const own = toFacilitatorSvmSigner(f.feePayerKey);
+  reply = async (payload, terms) => {
+    const signed = await own.signTransaction(payload.payload.transaction, terms.extra.feePayer, terms.network);
+    return { success: true, transaction: getSignatureFromTransaction(getTransactionDecoder().decode(Buffer.from(signed, 'base64'))) };
+  };
+  const payment = await f.verify();
+  f.state.signature = payment.transaction_id;
+  assert.equal((await f.bridge.settle({ payment, paymentRequirements: f.terms })).status, 'pending');
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].terms, f.terms);
+  // Ed25519 is deterministic: the facilitator's transaction is the journaled one.
+  assert.equal((await replies[0]).transaction, payment.transaction_id);
+  assert.equal(f.state.sends.length, 0);
+  // While the facilitator holds it, retries neither resubmit nor send.
+  assert.equal((await f.bridge.settle({ payment, paymentRequirements: f.terms })).status, 'pending');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls.length, 1);
+  assert.equal(f.state.sends.length, 0);
+  const saved = JSON.parse(payment.encoded_transaction).evidence;
+  f.state.status = { confirmationStatus: 'finalized', err: null };
+  f.state.readback = { meta: { err: null }, transaction: [saved.transaction, 'base64'] };
+  assert.deepEqual(await f.bridge.settle({ payment, paymentRequirements: f.terms }), { status: 'finalized', transaction_id: payment.transaction_id });
+});
+
+test('a facilitator that declines, is unreachable or settles another signature leaves the broadcast to the verifier', async () => {
+  for (const reply of [async () => ({ success: false, errorReason: 'facilitator_daily_limit_reached' }), async () => { throw new Error('unreachable'); }, async () => ({ success: true, transaction: '1'.repeat(64) })]) {
+    const f = await setup({ facilitator: { settle: reply } });
+    const payment = await f.verify();
+    f.state.signature = payment.transaction_id;
+    assert.equal((await f.bridge.settle({ payment, paymentRequirements: f.terms })).status, 'pending');
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(f.state.sends.length, 0);
+    assert.equal((await f.bridge.settle({ payment, paymentRequirements: f.terms })).status, 'pending');
+    assert.equal(f.state.sends.length, 1);
+    assert.equal(f.state.sends[0], JSON.parse(payment.encoded_transaction).evidence.transaction);
+  }
+});
+
+test('payments stored before the facilitator was configured are sent directly', async () => {
+  const plain = await setup();
+  const payment = await plain.verify();
+  assert.equal(JSON.parse(payment.encoded_transaction).evidence.payload, undefined);
+  let called = 0;
+  const withFacilitator = createBridge({ signer: toFacilitatorSvmSigner(plain.feePayerKey), config: plain.config,
+    rpc: async (method, params) => method === 'getGenesisHash' ? RAILS[plain.config.network].genesis : method === 'getSignatureStatuses' ? { value: [null] } : (plain.state.sends.push(params[0]), payment.transaction_id),
+    now: () => 1000, facilitator: { settle: async () => { called++; return { success: true }; } } });
+  assert.equal((await withFacilitator.settle({ payment, paymentRequirements: plain.terms })).status, 'pending');
+  assert.equal(called, 0);
+  assert.equal(plain.state.sends.length, 1);
+});
+
+test('a facilitator that hangs gets a few seconds before the bytes are sent from here', async () => {
+  const f = await setup({ facilitator: { settle: () => new Promise(() => {}) } });
+  const payment = await f.verify();
+  f.state.signature = payment.transaction_id;
+  let clock = 1000;
+  const bridge = createBridge({ signer: toFacilitatorSvmSigner(f.feePayerKey), config: f.config,
+    rpc: async (method, params) => method === 'getGenesisHash' ? RAILS[f.config.network].genesis
+      : method === 'getSignatureStatuses' ? { value: [null] } : (f.state.sends.push(params[0]), payment.transaction_id),
+    now: () => clock, facilitator: { settle: () => new Promise(() => {}) } });
+  assert.equal((await bridge.settle({ payment, paymentRequirements: f.terms })).status, 'pending');
+  clock += FACILITATOR_GRACE_MS - 1;
+  assert.equal((await bridge.settle({ payment, paymentRequirements: f.terms })).status, 'pending');
+  assert.equal(f.state.sends.length, 0);
+  clock += 1;
+  assert.equal((await bridge.settle({ payment, paymentRequirements: f.terms })).status, 'pending');
+  assert.deepEqual(f.state.sends, [JSON.parse(payment.encoded_transaction).evidence.transaction]);
+});
+

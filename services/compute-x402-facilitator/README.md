@@ -20,7 +20,10 @@ Shared environment:
   `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp` (devnet available for rehearsal).
 - `COVENANT_GATEWAY_ASSET`: exact official USDC mint for the selected network.
 - `COVENANT_GATEWAY_PAY_TO`: merchant wallet address, with its USDC ATA created.
-- `COVENANT_GATEWAY_FEE_PAYER`: dedicated funded facilitator public key.
+- `COVENANT_GATEWAY_FEE_PAYER`: dedicated funded fee payer public key. It can
+  change between deployments only when no open payment, including a result
+  still held for retries, used the old one; otherwise the gateway refuses to
+  start.
 - `COVENANT_GATEWAY_RESOURCE_URL`: canonical public HTTPS URL ending in
   `/v1/chat/completions`.
 - `COVENANT_GATEWAY_PRICE_MICRO_USDC`: fixed customer price, positive integer.
@@ -31,6 +34,13 @@ Verifier only:
   checked at startup and before each verification/settlement.
 - `COVENANT_GATEWAY_FEE_PAYER_KEY_FILE`: private absolute JSON file containing the
   64-byte Solana keypair; no group/world permissions. Never put this in a repo.
+- `COVENANT_GATEWAY_SOLANA_FACILITATOR_URL`: optional HTTPS URL of an x402
+  facilitator that holds the same fee payer key, for example
+  `https://facilitator.opencovenant.org`. The verifier still signs and
+  confirms each Solana payment and the gateway stores it; the facilitator
+  broadcasts it. Its signature over the same message is identical, so it sends
+  exactly the stored bytes. If it is unreachable, slow or declines, the
+  verifier sends them itself.
 - `COVENANT_GATEWAY_BRIDGE_PORT`: optional, default `4043`.
 
 Every request to the verifier needs the header

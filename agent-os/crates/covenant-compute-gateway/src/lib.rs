@@ -165,9 +165,17 @@ impl PaymentTerms {
         accepted
     }
     pub fn requirements(&self) -> Value {
-        json!({"x402Version":2,"resource":{"url":self.resource_url,
-            "description":"Covenant inference with a verified operator receipt","mimeType":"application/json"},
-            "accepts":[self.accepted()]})
+        // serviceName, tags and iconUrl are what Bazaar catalogs show for the seller.
+        let mut resource = json!({"url":self.resource_url,
+            "description":"Text inference for AI agents, with a receipt signed by the operator who ran it.",
+            "mimeType":"application/json","serviceName":"Covenant Compute",
+            "tags":["inference","llm","ai","receipts"]});
+        if let Ok(mut icon) = reqwest::Url::parse(&self.resource_url) {
+            icon.set_path(branding::ICON_PATH);
+            icon.set_query(None);
+            resource["iconUrl"] = json!(icon.as_str());
+        }
+        json!({"x402Version":2,"resource":resource,"accepts":[self.accepted()]})
     }
 }
 
@@ -183,6 +191,15 @@ impl Quote {
         let mut required = self.terms.requirements();
         if let Some(accepts) = required["accepts"].as_array_mut() {
             accepts.extend(self.alternates.iter().map(PaymentTerms::accepted));
+        }
+        required
+    }
+    /// The 402 body. Batches are not advertised, so only single requests
+    /// carry the Bazaar declaration that facilitators catalog.
+    pub fn challenge(&self, bazaar: Option<Value>) -> Value {
+        let mut required = self.requirements();
+        if let (None, Some(bazaar)) = (&self.terms.batch_pricing, bazaar) {
+            required["extensions"] = json!({"bazaar":bazaar});
         }
         required
     }
@@ -475,7 +492,7 @@ impl Disk {
             Err(e) => return Err(e.into()),
         };
         if !matches!(journal.version, 2..=6)
-            || journal.namespace != namespace
+            || !same_but_fee_payer(&journal.namespace, &namespace)
             || reserve < journal.reserve_micro_usdc
             || (reserve > journal.reserve_micro_usdc && !allow_reserve_increase)
         {
@@ -483,6 +500,7 @@ impl Disk {
                 "journal identity/rail/reserve configuration changed".into(),
             ));
         }
+        journal.namespace = namespace.clone();
         // v3 freezes tariffs; v4 preserves memo forms; production v5 preserves
         // Base payment options. The unreleased batch candidate also used v5.
         // v6 retains both independent fields and stops either older binary
@@ -905,6 +923,8 @@ impl Gateway {
                 "quote bound to another request".into(),
             ));
         }
+        let issued = payment_header.and_then(|header| issued_payment(header, &entry, &request));
+        let payment_header = issued.as_deref().or(payment_header);
         let mut terms = entry.terms.clone();
         let mut phase = entry.phase.clone();
         if matches!(phase, Phase::Quoted) {
@@ -1113,7 +1133,7 @@ impl Gateway {
                     .map(|manifest| manifest.batch_id),
             )?;
             // The Settling record was fsynced before any broadcast. Unknown
-            // sends stay here; the rail reconciles the same signature first.
+            // sends stay here; the rail reconciles the same payment first.
             // Startup refuses a journal whose open payments lack their rail;
             // nothing is ever settled on another one.
             let Ok(rail) = self.rail_for(&terms) else {
@@ -1161,7 +1181,7 @@ impl Gateway {
         })
     }
     /// Reconcile persisted work even if the HTTP client has disconnected. A
-    /// restart uses the same signed jobs and exact signed payment bytes.
+    /// restart uses the same signed jobs and the same stored payment.
     pub async fn recover_pending(&self, now: u64) -> Result<()> {
         let started = std::time::Instant::now();
         let mut disk = self.disk.lock().await;
@@ -1247,6 +1267,21 @@ pub fn router(gateway: Arc<Gateway>) -> Router {
         .layer(DefaultBodyLimit::max(64 * 1024))
         .with_state(gateway)
 }
+/// Journal namespaces end with the primary rail's network, asset, merchant,
+/// fee payer, resource and price. Only the fee payer may change between runs:
+/// each entry keeps its own terms, and `check_open_payments` refuses to start
+/// while an open payment needs a fee payer no configured rail has.
+fn same_but_fee_payer(stored: &str, configured: &str) -> bool {
+    let stored: Vec<_> = stored.split('\0').collect();
+    let configured: Vec<_> = configured.split('\0').collect();
+    stored.len() == configured.len()
+        && stored.len() >= 6
+        && stored
+            .iter()
+            .zip(&configured)
+            .enumerate()
+            .all(|(index, (a, b))| index == stored.len() - 3 || a == b)
+}
 fn payment_payload(header: &str) -> Result<Value> {
     if header.len() > 16_384 {
         return Err(GatewayError::Payment("payment header too large".into()));
@@ -1256,6 +1291,32 @@ fn payment_payload(header: &str) -> Result<Value> {
         .map_err(|_| GatewayError::Payment("invalid payment header encoding".into()))?;
     serde_json::from_slice(&bytes)
         .map_err(|_| GatewayError::Payment("invalid payment payload".into()))
+}
+/// A facilitator catalogs the `resource` and `extensions` that a payment
+/// echoes, and neither is covered by the buyer's signature. Replace both with
+/// what this gateway issued, so a buyer cannot rewrite Covenant's listing. A
+/// header that does not decode is left as it is for the rail to refuse.
+fn issued_payment(header: &str, entry: &Entry, request: &Value) -> Option<String> {
+    let mut payload = payment_payload(header).ok()?;
+    let fields = payload.as_object_mut()?;
+    let network = fields
+        .get("accepted")
+        .and_then(|accepted| accepted["network"].as_str());
+    let terms = std::iter::once(&entry.terms)
+        .chain(&entry.alternates)
+        .find(|offer| Some(offer.network.as_str()) == network)
+        .unwrap_or(&entry.terms);
+    let quote = Quote {
+        terms: terms.clone(),
+        alternates: vec![],
+    };
+    let mut challenge = quote.challenge(discovery::bazaar(request));
+    fields.insert("resource".into(), challenge["resource"].take());
+    match challenge.get_mut("extensions") {
+        Some(extensions) => fields.insert("extensions".into(), extensions.take()),
+        None => fields.remove("extensions"),
+    };
+    Some(base64::engine::general_purpose::STANDARD.encode(serde_json::to_vec(&payload).ok()?))
 }
 async fn handle_single_http(
     state: State<Arc<Gateway>>,
@@ -1329,9 +1390,10 @@ async fn handle_http(
     } else {
         None
     };
+    let bazaar = discovery::bazaar(&request);
     match gateway.handle(request, id, payment, now_ms()).await {
         Ok(GatewayReply::PaymentRequired(quote)) => {
-            let requirements = quote.requirements();
+            let requirements = quote.challenge(bazaar);
             let encoded = base64::engine::general_purpose::STANDARD
                 .encode(serde_json::to_vec(&requirements).unwrap());
             let mut response = (StatusCode::PAYMENT_REQUIRED, Json(requirements)).into_response();

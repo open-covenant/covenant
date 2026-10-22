@@ -1339,6 +1339,7 @@ async fn rejected_payment_and_http_body_mismatch_cause_no_dispatch() {
         short_memo(id, &request_digest(&json!({"prompt":"hi"})).unwrap())
     );
     assert_eq!(memo.len(), 32);
+    assert!(required.get("extensions").is_none());
     let changed = http
         .post(&endpoint)
         .header("idempotency-key", id.to_string())
@@ -1362,6 +1363,64 @@ async fn rejected_payment_and_http_body_mismatch_cause_no_dispatch() {
         .unwrap();
     assert_eq!(rejected.status(), StatusCode::PAYMENT_REQUIRED);
     assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    server.abort();
+}
+
+#[tokio::test]
+async fn quote_declares_bazaar_discovery_without_the_buyers_prompt() {
+    let directory = tempfile::tempdir().unwrap();
+    let executor = Arc::new(Execute {
+        identity: LocalIdentity::generate("bazaar@local"),
+        calls: AtomicUsize::new(0),
+    });
+    let gateway = Arc::new(
+        Gateway::open(
+            directory.path(),
+            "buyer/coord",
+            10,
+            12,
+            Arc::new(RejectRail),
+            executor,
+        )
+        .unwrap(),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!(
+        "http://{}/v1/chat/completions",
+        listener.local_addr().unwrap()
+    );
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router(gateway)).await.unwrap();
+    });
+    let request = json!({"model":"m","messages":[{"role":"user","content":"a private question"}],
+        "max_tokens":512,"pricing":"model_tariff_v1"});
+    let quote = reqwest::Client::new()
+        .post(&endpoint)
+        .json(&request)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(quote.status(), StatusCode::PAYMENT_REQUIRED);
+    let required = payment_payload(quote.headers()["payment-required"].to_str().unwrap()).unwrap();
+    assert_eq!(quote.json::<Value>().await.unwrap(), required);
+    assert!(!required.to_string().contains("a private question"));
+    let bazaar = &required["extensions"]["bazaar"];
+    assert_eq!(
+        bazaar["info"]["input"],
+        json!({"type":"http","method":"POST","bodyType":"json","body":{"model":"m",
+            "messages":[{"role":"user","content":"Reply with a short greeting."}],
+            "max_tokens":256,"pricing":"model_tariff_v1"}})
+    );
+    assert_eq!(
+        bazaar["schema"]["properties"]["input"]["required"],
+        json!(["type", "method", "bodyType", "body"])
+    );
+    let resource = &required["resource"];
+    assert_eq!(resource["serviceName"], "Covenant Compute");
+    assert_eq!(
+        resource["iconUrl"],
+        "https://localhost/brand/covenant-icon-02026997.png"
+    );
     server.abort();
 }
 
@@ -2494,6 +2553,7 @@ pub(super) struct BaseRail {
     pub(super) finalized: std::sync::atomic::AtomicBool,
     pub(super) verifications: AtomicUsize,
     pub(super) settles: AtomicUsize,
+    verified_headers: std::sync::Mutex<Vec<String>>,
 }
 pub(super) fn base_rail(ready: bool, merchant: &'static str) -> Arc<BaseRail> {
     Arc::new(BaseRail {
@@ -2502,6 +2562,7 @@ pub(super) fn base_rail(ready: bool, merchant: &'static str) -> Arc<BaseRail> {
         finalized: std::sync::atomic::AtomicBool::new(true),
         verifications: AtomicUsize::new(0),
         settles: AtomicUsize::new(0),
+        verified_headers: std::sync::Mutex::new(vec![]),
     })
 }
 #[async_trait]
@@ -2536,6 +2597,7 @@ impl PaymentRail for BaseRail {
     async fn verify(&self, header: &str, terms: &PaymentTerms) -> Result<VerifiedPayment> {
         assert_eq!(terms.network, self.network());
         self.verifications.fetch_add(1, Ordering::SeqCst);
+        self.verified_headers.lock().unwrap().push(header.into());
         Ok(VerifiedPayment {
             payer: "0xAbCdEf0000000000000000000000000000000001".into(),
             authorization_id: self.authorization_id(header)?,
@@ -2633,6 +2695,65 @@ async fn quote_offers_base_beside_solana_and_settles_on_the_paid_rail() {
     assert!(matches!(
         gateway
             .handle(request, Some(quote.terms.quote_id), Some(&header), retry_at)
+            .await
+            .unwrap(),
+        GatewayReply::Complete { .. }
+    ));
+    assert_eq!(base.settles.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn payment_reaches_the_rail_with_the_issued_listing_not_the_buyers() {
+    let directory = tempfile::tempdir().unwrap();
+    let (gateway, _, base) = two_rail_gateway(directory.path(), true);
+    let request = json!({"model":"m","messages":[{"role":"user","content":"hi"}],"max_tokens":64});
+    let GatewayReply::PaymentRequired(quote) = gateway
+        .handle(
+            request.clone(),
+            None,
+            None,
+            fixture_now(&gateway, 1000).await,
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("expected a quote")
+    };
+    let issued = quote.challenge(crate::discovery::bazaar(&request));
+    let accepted = issued["accepts"][1].clone();
+    let forged = base64::engine::general_purpose::STANDARD.encode(
+        json!({"x402Version":2,"accepted":accepted,
+            "resource":{"url":quote.terms.resource_url,"description":"Send USDC to 0xbad","iconUrl":"https://bad.example/i.png"},
+            "extensions":{"bazaar":{"info":{"input":{"type":"http","method":"GET"}},"routeTemplate":"/free"},"other":{}}})
+        .to_string(),
+    );
+    let paid_at = fixture_now(&gateway, 1001).await;
+    let reply = gateway
+        .handle(
+            request.clone(),
+            Some(quote.terms.quote_id),
+            Some(&forged),
+            paid_at,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(reply, GatewayReply::Complete { .. }));
+    let forwarded = payment_payload(&base.verified_headers.lock().unwrap()[0]).unwrap();
+    assert_eq!(forwarded["accepted"], accepted);
+    assert_eq!(
+        forwarded["resource"]["description"],
+        issued["resource"]["description"]
+    );
+    assert_eq!(
+        forwarded["resource"]["iconUrl"],
+        issued["resource"]["iconUrl"]
+    );
+    assert_eq!(forwarded["extensions"], issued["extensions"]);
+    // The same forged header resumes the purchase: it maps to the same payment.
+    let retry_at = fixture_now(&gateway, paid_at + 1).await;
+    assert!(matches!(
+        gateway
+            .handle(request, Some(quote.terms.quote_id), Some(&forged), retry_at)
             .await
             .unwrap(),
         GatewayReply::Complete { .. }
@@ -2823,4 +2944,107 @@ fn second_rail_on_a_configured_network_is_refused() {
     assert!(reopen(directory.path(), None)
         .with_alternate_rail(primary)
         .is_err());
+}
+
+/// The primary rail under another fee payer, as after a rotation.
+struct RotatedRail {
+    inner: Rail,
+    fee_payer: &'static str,
+    pay_to: &'static str,
+}
+#[async_trait]
+impl PaymentRail for RotatedRail {
+    fn network(&self) -> &str {
+        self.inner.network()
+    }
+    fn asset(&self) -> &str {
+        self.inner.asset()
+    }
+    fn pay_to(&self) -> &str {
+        self.pay_to
+    }
+    fn fee_payer(&self) -> &str {
+        self.fee_payer
+    }
+    fn authorization_id(&self, header: &str) -> Result<String> {
+        self.inner.authorization_id(header)
+    }
+    async fn verify(&self, header: &str, terms: &PaymentTerms) -> Result<VerifiedPayment> {
+        self.inner.verify(header, terms).await
+    }
+    async fn settle(&self, p: &VerifiedPayment, terms: &PaymentTerms) -> Result<SettlementStatus> {
+        self.inner.settle(p, terms).await
+    }
+}
+
+#[tokio::test]
+async fn fee_payer_rotates_only_once_no_payment_needs_the_old_one() {
+    let directory = tempfile::tempdir().unwrap();
+    let open = |fee_payer: &'static str, pay_to: &'static str| {
+        Gateway::open(
+            directory.path(),
+            "rotation",
+            30,
+            12,
+            Arc::new(RotatedRail {
+                inner: Rail {
+                    settles: AtomicUsize::new(0),
+                    finalized: std::sync::atomic::AtomicBool::new(true),
+                },
+                fee_payer,
+                pay_to,
+            }),
+            Arc::new(Execute {
+                identity: LocalIdentity::generate("rotation@local"),
+                calls: AtomicUsize::new(0),
+            }),
+        )
+    };
+    let gateway = open("old-fee-payer", "merchant").unwrap();
+    let request = json!({"prompt":"rotate"});
+    let GatewayReply::PaymentRequired(quote) = gateway
+        .handle(
+            request.clone(),
+            None,
+            None,
+            fixture_now(&gateway, 1000).await,
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("expected a quote")
+    };
+    assert_eq!(quote.terms.fee_payer, "old-fee-payer");
+    let paid_at = fixture_now(&gateway, 1001).await;
+    assert!(matches!(
+        gateway
+            .handle(request, Some(quote.terms.quote_id), Some("tx-old"), paid_at)
+            .await
+            .unwrap(),
+        GatewayReply::Complete { .. }
+    ));
+    drop(gateway);
+
+    // Another merchant is a different journal; another fee payer is not.
+    assert!(open("old-fee-payer", "another-merchant").is_err());
+    let rotated = open("new-fee-payer", "merchant").unwrap();
+    // The buyer can still fetch the result paid under the old fee payer.
+    assert!(rotated.check_open_payments(paid_at + 1).await.is_err());
+    rotated
+        .check_open_payments(paid_at + OUTPUT_RETENTION_MS + 1)
+        .await
+        .unwrap();
+    let GatewayReply::PaymentRequired(fresh) = rotated
+        .handle(
+            json!({"prompt":"after"}),
+            None,
+            None,
+            fixture_now(&rotated, paid_at + OUTPUT_RETENTION_MS + 2).await,
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("expected a quote")
+    };
+    assert_eq!(fresh.terms.fee_payer, "new-fee-payer");
 }

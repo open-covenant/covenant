@@ -309,24 +309,28 @@ pub fn bazaar(request: &Value) -> Option<Value> {
     let mut body = json!({"model":model,
         "messages":[{"role":"user","content":"Reply with a short greeting."}],
         "max_tokens":request["max_tokens"].as_u64().map_or(256, |cap| cap.min(256))});
-    if request["pricing"] == "model_tariff_v1" {
-        body["pricing"] = json!("model_tariff_v1");
-    }
-    let body_schema = json!({"type":"object","required":["model","messages","max_tokens"],"properties":{
-        "model":{"type":"string","description":"A model id from GET /v1/models."},
-        "messages":{"type":"array","minItems":1,"maxItems":32,"items":{"type":"object",
+    let mut body_schema = json!({"type":"object","additionalProperties":false,
+        "required":["model","messages","max_tokens"],"properties":{
+        "model":{"type":"string","const":model},
+        "messages":{"type":"array","minItems":1,"maxItems":32,"items":{"type":"object","additionalProperties":false,
             "required":["role","content"],"properties":{
                 "role":{"enum":["system","user","assistant"]},"content":{"type":"string","minLength":1}}}},
-        "max_tokens":{"type":"integer","minimum":1,"description":"Output cap. The price is fixed by this cap before payment."},
+        "max_tokens":{"type":"integer","minimum":1,
+            "description":"Output cap. The price is fixed by this cap before payment; GET /v1/models lists the maximum."},
         "temperature":{"type":"number","minimum":0,"maximum":2},
-        "pricing":{"const":"model_tariff_v1"}}});
+        "stream":{"const":false}}});
+    if request["pricing"] == "model_tariff_v1" {
+        body["pricing"] = json!("model_tariff_v1");
+        body_schema["required"] = json!(["model", "messages", "max_tokens", "pricing"]);
+        body_schema["properties"]["pricing"] = json!({"const":"model_tariff_v1"});
+    }
     let example = json!({"id":"chatcmpl-0824019d-746e-492d-9736-4b113dc63857","object":"chat.completion",
         "created":1792611886,"model":model,
         "choices":[{"index":0,"message":{"role":"assistant","content":"Hello! How can I help?"},"finish_reason":"stop"}],
         "covenant":{"job_id":"0824019d-746e-492d-9736-4b113dc63857","receipt":{
-            "receipt":{"job_id":"0824019d-746e-492d-9736-4b113dc63857","status":"ok","price_micro_usdc":11920},
-            "signature_b58":"2w9DNi8PVvFowbCVUjLSqhTgxu6X1ELDcDZe8oZbwZSGfK782LNAARnEmtdnqzqp8xfRsheC3z3rRRG4LEa3sKrP",
-            "signer_pubkey_b58":"9fefASd52qfR2Q8P81yXtkHu9E4q9KvW58x2ixBAAvLR"}}});
+            "receipt_json":"<the signed receipt, as JSON text>",
+            "signature_b58":"<operator signature over receipt_json>",
+            "signer_pubkey_b58":"<operator public key>"}}});
     Some(json!({
         "info":{"input":{"type":"http","method":"POST","bodyType":"json","body":body},
             "output":{"type":"json","example":example}},

@@ -194,7 +194,7 @@ impl Quote {
         }
         required
     }
-    /// The 402 body. Batches are not public yet, so only single requests
+    /// The 402 body. Batches are not advertised, so only single requests
     /// carry the Bazaar declaration that facilitators catalog.
     pub fn challenge(&self, bazaar: Option<Value>) -> Value {
         let mut required = self.requirements();
@@ -922,6 +922,8 @@ impl Gateway {
                 "quote bound to another request".into(),
             ));
         }
+        let issued = payment_header.and_then(|header| issued_payment(header, &entry, &request));
+        let payment_header = issued.as_deref().or(payment_header);
         let mut terms = entry.terms.clone();
         let mut phase = entry.phase.clone();
         if matches!(phase, Phase::Quoted) {
@@ -1273,6 +1275,32 @@ fn payment_payload(header: &str) -> Result<Value> {
         .map_err(|_| GatewayError::Payment("invalid payment header encoding".into()))?;
     serde_json::from_slice(&bytes)
         .map_err(|_| GatewayError::Payment("invalid payment payload".into()))
+}
+/// A facilitator catalogs the `resource` and `extensions` that a payment
+/// echoes, and neither is covered by the buyer's signature. Replace both with
+/// what this gateway issued, so a buyer cannot rewrite Covenant's listing. A
+/// header that does not decode is left as it is for the rail to refuse.
+fn issued_payment(header: &str, entry: &Entry, request: &Value) -> Option<String> {
+    let mut payload = payment_payload(header).ok()?;
+    let fields = payload.as_object_mut()?;
+    let network = fields
+        .get("accepted")
+        .and_then(|accepted| accepted["network"].as_str());
+    let terms = std::iter::once(&entry.terms)
+        .chain(&entry.alternates)
+        .find(|offer| Some(offer.network.as_str()) == network)
+        .unwrap_or(&entry.terms);
+    let quote = Quote {
+        terms: terms.clone(),
+        alternates: vec![],
+    };
+    let mut challenge = quote.challenge(discovery::bazaar(request));
+    fields.insert("resource".into(), challenge["resource"].take());
+    match challenge.get_mut("extensions") {
+        Some(extensions) => fields.insert("extensions".into(), extensions.take()),
+        None => fields.remove("extensions"),
+    };
+    Some(base64::engine::general_purpose::STANDARD.encode(serde_json::to_vec(&payload).ok()?))
 }
 async fn handle_single_http(
     state: State<Arc<Gateway>>,

@@ -117,7 +117,7 @@ pub(super) fn document(
         "openapi":"3.1.0",
         "info":{
             "title":"Covenant Compute", "version":"1.0.0",
-            "description":format!("Text inference paid with {paid_with} through x402 v2. Any x402 v2 client can pay; the Covenant SDKs for JavaScript and Python also verify the signed receipt. Discovery is read-only and reports current availability; it does not reserve capacity or execute inference.")
+            "description":format!("Text inference paid with {paid_with} through x402 v2. Any x402 v2 client can pay; Covenant's client SDK also verifies the signed receipt. Discovery is read-only and reports current availability; it does not reserve capacity or execute inference.")
         },
         "externalDocs":{"description":"Covenant x402 client SDK, which verifies receipts","url":"https://github.com/open-covenant/covenant/tree/deploy/compute-coordinator/sdk/compute-x402-client"},
         "servers":[{"url":resource.origin().ascii_serialization()}],

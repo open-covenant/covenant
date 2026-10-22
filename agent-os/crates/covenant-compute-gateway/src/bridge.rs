@@ -117,6 +117,13 @@ fn is_evm_address(value: &str) -> bool {
         && value[2..].bytes().any(|b| b != b'0')
 }
 
+/// A Solana transaction signature: 64 bytes in base58.
+fn is_solana_signature(value: &str) -> bool {
+    bs58::decode(value)
+        .into_vec()
+        .is_ok_and(|bytes| bytes.len() == 64)
+}
+
 fn is_transaction_hash(value: &str) -> bool {
     value.len() == 66
         && value.starts_with("0x")
@@ -493,8 +500,23 @@ impl PaymentRail for Bridge {
             )
             .await?;
         Ok(match value["status"].as_str() {
-            // Solana's signature is known before broadcast; Base's transaction
-            // hash only once the facilitator has submitted the authorization.
+            // A self-settled Solana payment's signature is known before
+            // broadcast. Through a facilitator, as on Base, the transaction id
+            // exists only once the facilitator has signed and submitted it, and
+            // the authorization id stands in for it until then.
+            Some("finalized")
+                if self.family == Family::Solana
+                    && payment.transaction_id == payment.authorization_id =>
+            {
+                match value["transaction_id"].as_str() {
+                    Some(signature) if is_solana_signature(signature) => {
+                        SettlementStatus::Finalized {
+                            transaction_id: signature.into(),
+                        }
+                    }
+                    _ => SettlementStatus::Pending,
+                }
+            }
             Some("finalized")
                 if self.family == Family::Solana
                     && value["transaction_id"] == payment.transaction_id =>
@@ -911,6 +933,77 @@ mod tests {
         assert_eq!(
             bridge.settle(&payment, &terms).await.unwrap(),
             SettlementStatus::Failed
+        );
+        task.abort();
+    }
+    #[tokio::test]
+    async fn solana_through_a_facilitator_finalizes_on_the_reported_signature() {
+        let reply = Arc::new(Mutex::new(json!({})));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let served = reply.clone();
+        let app = Router::new().route(
+            "/settle",
+            axum::routing::post(move || {
+                let served = served.clone();
+                async move { Json(served.lock().await.clone()) }
+            }),
+        );
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let bridge = bridge(url, RESOURCE).unwrap();
+        // Until the facilitator signs, the authorization id stands in for the signature.
+        let payment = VerifiedPayment {
+            payer: ADDRESS.into(),
+            authorization_id: "b".repeat(64),
+            transaction_id: "b".repeat(64),
+            encoded_transaction: "{}".into(),
+        };
+        let terms = PaymentTerms {
+            batch_pricing: None,
+            quote_id: uuid::Uuid::nil(),
+            request_sha256: "a".repeat(64),
+            network: NETWORK.into(),
+            asset: ASSET.into(),
+            pay_to: ADDRESS.into(),
+            amount_atomic: 1200,
+            asset_decimals: 6,
+            expires_at_ms: 90_000,
+            fee_payer: ADDRESS.into(),
+            resource_url: RESOURCE.into(),
+            memo_binding: crate::MemoBinding::V3,
+            token_domain: None,
+        };
+        let signature = bs58::encode([7u8; 64]).into_string();
+        *reply.lock().await = json!({"status":"finalized","transaction_id":signature});
+        assert_eq!(
+            bridge.settle(&payment, &terms).await.unwrap(),
+            SettlementStatus::Finalized {
+                transaction_id: signature.clone()
+            }
+        );
+        for bad in [
+            bs58::encode([7u8; 32]).into_string(),
+            "b".repeat(64),
+            "0OIl".into(),
+        ] {
+            *reply.lock().await = json!({"status":"finalized","transaction_id":bad});
+            assert_eq!(
+                bridge.settle(&payment, &terms).await.unwrap(),
+                SettlementStatus::Pending
+            );
+        }
+        // A self-settled payment still finalizes only on its own known signature.
+        let own = VerifiedPayment {
+            transaction_id: signature.clone(),
+            ..payment
+        };
+        *reply.lock().await =
+            json!({"status":"finalized","transaction_id":bs58::encode([9u8; 64]).into_string()});
+        assert_eq!(
+            bridge.settle(&own, &terms).await.unwrap(),
+            SettlementStatus::Pending
         );
         task.abort();
     }

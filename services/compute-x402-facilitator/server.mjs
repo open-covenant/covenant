@@ -5,6 +5,7 @@ import { createKeyPairSignerFromBytes } from '@solana/kit';
 import { toFacilitatorSvmSigner } from '@x402/svm';
 import { HTTPFacilitatorClient } from '@x402/core/server';
 import { createBridge, Rejected } from './bridge.mjs';
+import { createRemoteSvmRail } from './remote-svm.mjs';
 import { createEvmRail } from './evm.mjs';
 import { readTariffConfig } from './pricing.mjs';
 
@@ -18,13 +19,6 @@ function httpsUrl(name) {
 }
 const secret = required('COVENANT_GATEWAY_BRIDGE_SECRET');
 const rpcUrl = required('COVENANT_GATEWAY_SOLANA_RPC');
-const keyFile = required('COVENANT_GATEWAY_FEE_PAYER_KEY_FILE');
-const metadata = await stat(keyFile);
-if ((metadata.mode & 0o077) !== 0) throw new Error('fee payer key file must be private');
-const bytes = JSON.parse(await readFile(keyFile, 'utf8'));
-if (!Array.isArray(bytes) || bytes.length !== 64 || bytes.some(n => !Number.isInteger(n) || n < 0 || n > 255)) throw new Error('invalid key file');
-const keypair = await createKeyPairSignerFromBytes(Uint8Array.from(bytes));
-bytes.fill(0);
 const config = {
   network: required('COVENANT_GATEWAY_NETWORK'), asset: required('COVENANT_GATEWAY_ASSET'),
   payTo: required('COVENANT_GATEWAY_PAY_TO'), feePayer: required('COVENANT_GATEWAY_FEE_PAYER'),
@@ -32,8 +26,6 @@ const config = {
   batchEnabled: process.env.COVENANT_GATEWAY_BATCH_ENABLED === 'true',
   ...await readTariffConfig(process.env.COVENANT_GATEWAY_TARIFFS_FILE),
 };
-if (keypair.address !== config.feePayer) throw new Error('fee payer key mismatch');
-const signer = toFacilitatorSvmSigner(keypair, { defaultRpcUrl: rpcUrl });
 let rpcId = 0;
 const jsonRpc = (url, timeoutMs = 15_000) => async (method, params) => {
   const response = await fetch(url, { method: 'POST', redirect: 'error', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: ++rpcId, method, params }), signal: AbortSignal.timeout(timeoutMs) });
@@ -43,7 +35,24 @@ const jsonRpc = (url, timeoutMs = 15_000) => async (method, params) => {
   return data.result;
 };
 const rpc = jsonRpc(rpcUrl);
-const bridge = createBridge({ signer, config, rpc });
+// Solana settles through an x402 facilitator when one is named, which then
+// pays the fees; otherwise this process co-signs with its own fee payer key.
+let bridge;
+if (process.env.COVENANT_GATEWAY_SOLANA_FACILITATOR_URL) {
+  bridge = createRemoteSvmRail({ config, rpc,
+    facilitator: new HTTPFacilitatorClient({ url: httpsUrl('COVENANT_GATEWAY_SOLANA_FACILITATOR_URL'), timeoutMs: 10_000 }),
+    log: message => console.log(message) });
+} else {
+  const keyFile = required('COVENANT_GATEWAY_FEE_PAYER_KEY_FILE');
+  const metadata = await stat(keyFile);
+  if ((metadata.mode & 0o077) !== 0) throw new Error('fee payer key file must be private');
+  const bytes = JSON.parse(await readFile(keyFile, 'utf8'));
+  if (!Array.isArray(bytes) || bytes.length !== 64 || bytes.some(n => !Number.isInteger(n) || n < 0 || n > 255)) throw new Error('invalid key file');
+  const keypair = await createKeyPairSignerFromBytes(Uint8Array.from(bytes));
+  bytes.fill(0);
+  if (keypair.address !== config.feePayer) throw new Error('fee payer key mismatch');
+  bridge = createBridge({ signer: toFacilitatorSvmSigner(keypair, { defaultRpcUrl: rpcUrl }), config, rpc });
+}
 await bridge.assertNetwork();
 // Optional USDC on Base once a Base merchant is set: CDP credentials for
 // Coinbase's facilitator, or any other by URL. The chain and facilitator are
@@ -97,4 +106,4 @@ const server = createServer(async (req, res) => {
 server.requestTimeout = 30_000;
 server.headersTimeout = 10_000;
 const port = Number(process.env.COVENANT_GATEWAY_BRIDGE_PORT ?? 4043);
-server.listen(port, '127.0.0.1', () => console.log(`Covenant x402 verifier listening on loopback port ${port}; Base ${evm ? `on ${evm.network}` : 'off'}`));
+server.listen(port, '127.0.0.1', () => console.log(`Covenant x402 verifier listening on loopback port ${port}; Solana ${process.env.COVENANT_GATEWAY_SOLANA_FACILITATOR_URL ? 'through a facilitator' : 'self-settled'}; Base ${evm ? `on ${evm.network}` : 'off'}`));

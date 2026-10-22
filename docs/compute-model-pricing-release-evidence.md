@@ -516,8 +516,8 @@ section; they are distinct from these two paid production acceptance calls.
 
 ### Published SDK assets
 
-The immutable [JavaScript 0.3.0 release](https://github.com/open-covenant/covenant/releases/tag/codex-compute-x402-client-v0.3.0)
-and [Python 0.2.0 release](https://github.com/open-covenant/covenant/releases/tag/codex-compute-x402-python-v0.2.0)
+The immutable [JavaScript 0.3.0 release](https://github.com/open-covenant/covenant/releases/tag/compute-x402-client-v0.3.0)
+and [Python 0.2.0 release](https://github.com/open-covenant/covenant/releases/tag/compute-x402-python-v0.2.0)
 are published. Anonymous verification at **12:50:59 UTC** and **12:51:13 UTC**,
 respectively, confirmed their public immutable status, reviewed release bodies,
 and exact source revision `54a1b2dac8bcfade63da3fc08816596cb606edd6`. That SDK
@@ -527,7 +527,7 @@ All three JavaScript release assets and all four Python assets were downloaded
 without credentials. The archive, wheel, and source distribution matched the
 accepted package SHA-256 values recorded above; each release's `SHA256SUMS`
 matched its reviewed bytes. Both include the same sanitized
-[`model-pricing-mainnet-acceptance.json`](https://github.com/open-covenant/covenant/releases/download/codex-compute-x402-client-v0.3.0/model-pricing-mainnet-acceptance.json),
+[`model-pricing-mainnet-acceptance.json`](https://github.com/open-covenant/covenant/releases/download/compute-x402-client-v0.3.0/model-pricing-mainnet-acceptance.json),
 SHA-256 `333a6f20f090ce2dd67b93ea224cb5b7024e14415f90c9f964f31df9b94199a5`.
 Private verification reports are retained in
 `anonymous-javascript-release-20261019T125058316450Z/verification.json` and

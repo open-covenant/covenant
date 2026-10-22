@@ -152,7 +152,7 @@ nor spending ceiling was reset for the corrected run.
 at `75b50d60d72f9502850559f48371dd8f95c8b294`. The accepted package source is
 `9e53e687b0ed483dca9b66328e70c43f0c9aecdf`.
 
-The [v0.2.0 release](https://github.com/open-covenant/covenant/releases/tag/codex-compute-x402-client-v0.2.0)
+The [v0.2.0 release](https://github.com/open-covenant/covenant/releases/tag/compute-x402-client-v0.2.0)
 is published with GitHub release immutability enabled. Anonymous HTTP downloads
 of all three assets returned 200 and matched their recorded SHA-256 digests:
 

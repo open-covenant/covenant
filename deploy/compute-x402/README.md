@@ -5,6 +5,10 @@ contains the Rust gateway, the official x402 verifier, a normal Covenant Compute
 operator and its private inference provider adapter. Only the gateway binds the
 public port. It uses the existing coordinator and staking/settlement rules.
 
+The [batch inference candidate](../../docs/compute-inference-batches.md) is a
+separate opt-in. It uses journal v6, so rollback must retain the capable binary
+and disable batch admissions rather than downgrade the financial journal.
+
 Build `deploy/Dockerfile.compute-x402` from the repository root. The dedicated
 image workflow publishes an immutable `x402-<revision>` tag inside the existing
 public Compute node package. Deploy its resolved digest only after an anonymous
@@ -15,8 +19,10 @@ build; no Docker socket or GPU access is required for this provider-backed node.
 
 Run one instance with a persistent volume at `/data`. The supervisor creates
 separate gateway, operator, buyer-budget and provider directories, with private
-permissions. Identity seeds are restored only onto an empty volume; conflicting
-buyer/fee-payer seeds refuse startup. A conflicting optional operator seed locks
+permissions. Identity seeds are restored only onto an empty volume; a conflicting
+buyer seed refuses startup. Fee payer keys are kept one file per address, so a
+new fee payer seeds a new file; a key that does not match
+`COVENANT_GATEWAY_FEE_PAYER` refuses startup before anything is written. A conflicting optional operator seed locks
 new admissions while payment recovery stays available. Fee-payer keys and all existing monetary journals must
 survive redeployment. Do not scale this container to multiple independent disks.
 
@@ -141,7 +147,9 @@ closed while recovery remains available.
 The private bridge authentication/seal secret is pinned in
 `/data/gateway/bridge-secret` with mode 0600. Keep its configured value identical
 across revisions: existing pending payments carry seals made with that key.
-Changing it refuses startup, just like changing the buyer or fee-payer key.
+Changing it refuses startup, just like changing the buyer key. The fee payer
+may change only when no open payment, including a result still held for
+retries, used the old one; otherwise the gateway refuses to start.
 
 ## Immutable-container smoke qualification
 
@@ -237,17 +245,13 @@ latches new admissions off while the essential gateway and payment verifier
 continue recovery. Repair configuration and review the latch before clearing it;
 do not reset identities, budgets or journals.
 
-The gateway upgrades journals at versions 2, 3 and 4 to version 5 and keeps
-their namespace, financial entries and signed records exactly as they were. Each
-version exists so that an older binary refuses the journal instead of misreading
-it. Version 3 stops it from treating a tariff quote as a flat-price job. Version
-4 stops it from rebuilding a 32-character payment memo in the 118-byte format,
-which would leave that payment unable to settle. Version 5 stops it from
-dropping the Base terms of a quote or payment. Once the journal is upgraded, you
-cannot go back to an older binary. To stop taking work, set
-`COVENANT_GATEWAY_ADMISSIONS_ENABLED=false` on the new binary. It then accepts no
-new jobs and finishes settling and cleaning up the ones it has. Do not deploy a
-gateway that reads only versions 2 to 4, or restore an old monetary snapshot
-over the new journal.
+The gateway upgrades journals from versions 2 through 5 to version 6, preserving
+the namespace, financial entries, signed records, original memo form and Base
+payment options. Version 3 freezes tariffs; version 4 preserves the short or long
+payment memo; production version 5 preserves Base quotes and payments. The batch
+candidate also used version 5 before deployment. Version 6 preserves both feature
+fields and prevents either older binary from discarding recovery state. To stop
+taking work, disable new admissions on this binary and retain settlement recovery.
+Do not deploy an older binary or restore an old monetary snapshot over the journal.
 See [pricing and limits](../../docs/compute-inference-tariffs.md) and the
 [release evidence](../../docs/compute-model-pricing-release-evidence.md).

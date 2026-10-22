@@ -50,8 +50,8 @@ def test_node_python_concurrent_budget_one_winner(tmp_path):
     assert sorted(outputs) == ["refused", "reserved"]
 
 
-@pytest.mark.parametrize("pending,legacy,tariff", [(True, False, False), (False, False, False), (True, True, False), (True, False, True), (False, False, True)])
-async def test_python_resumes_real_node_journal_without_resigning(pending, legacy, tariff):
+@pytest.mark.parametrize("pending,legacy,tariff,batch", [(True, False, False, False), (False, False, False, False), (True, True, False, False), (True, False, True, False), (False, False, True, False), (True, False, True, True), (False, False, True, True), (True, True, True, True), (False, True, True, True)])
+async def test_python_resumes_real_node_journal_without_resigning(pending, legacy, tariff, batch):
     code = f"""
       import{{fixture,input}}from {json.dumps((JS/'test/fixtures/mock-gateway.mjs').as_uri())};
       import{{CovenantX402Client}}from {json.dumps((JS/'index.mjs').as_uri())};
@@ -59,8 +59,11 @@ async def test_python_resumes_real_node_journal_without_resigning(pending, legac
       import{{ExactSvmScheme}}from '@x402/svm/exact/client';
       import{{getTransactionEncoder}}from '@solana/kit';
       import{{VersionedTransaction}}from '@solana/web3.js';
-      const f=await fixture({{pendingFirst:{str(pending).lower()},expectedUnits:{60000 if legacy else 20000},legacyMemo:{str(legacy).lower()}}});const c=new CovenantX402Client(f.config),r=input();
+      const f=await fixture({{pendingFirst:{str(pending).lower()},expectedUnits:{60000 if legacy else 20000},legacyMemo:{str(legacy).lower()}}});
+      if({str(batch).lower()}){{f.config.maxPaymentMicroUsdc=10000;f.config.maxTotalMicroUsdc=20000;}}
+      const c=new CovenantX402Client(f.config);let r=input();
       if({str(tariff).lower()})r.pricing='model_tariff_v1';
+      if({str(batch).lower()}){{const{{requestId,...child}}=r;r={{requestId,version:1,requests:[child,{{...child,max_tokens:128}}]}};}}
       if({str(legacy).lower()}){{
         // A v2 quote paid at 60k CU by a client from before v3 memos.
         const payer=f.walletProvider.getAddress();
@@ -72,7 +75,7 @@ async def test_python_resumes_real_node_journal_without_resigning(pending, legac
         }}))}};
         c.http=new x402HTTPClient(new x402Client().register('solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',new ExactSvmScheme(signer,{{rpcUrl:f.config.rpcUrl}})));
       }}
-      const result=await c.purchase(r);c.close();
+      const result=await c.{'purchaseBatch' if batch else 'purchase'}(r);c.close();
       console.log(JSON.stringify({{config:f.config,key:f.walletKeypair,request:r,result}}));
       for await(const chunk of process.stdin){{console.log(JSON.stringify(f.counts()));break;}}
       await f.cleanup();
@@ -93,7 +96,7 @@ async def test_python_resumes_real_node_journal_without_resigning(pending, legac
         req = dict(data["request"]); req["request_id"] = req.pop("requestId")
         async with CovenantX402Client(**config) as client:
             before = client.journal.get(req["request_id"])
-            result = await client.purchase(**req)
+            result = await (client.purchase_batch(**req) if batch else client.purchase(**req))
             after = client.journal.get(req["request_id"])
             assert result["status"] == "completed"
             assert before["payment"] == after["payment"] and before["amount"] == after["amount"]
@@ -112,21 +115,39 @@ async def test_python_resumes_real_node_journal_without_resigning(pending, legac
         assert process.returncode == 0, process.stderr.read()
 
 
-@pytest.mark.parametrize("tariff", [False, True])
-async def test_node_reads_python_completed_journal_without_network(tmp_path, tariff):
+@pytest.mark.parametrize("tariff,batch,largest", [(False, False, False), (True, False, False), (False, True, False), (True, True, False), (True, True, True)])
+async def test_node_reads_python_completed_journal_without_network(tmp_path, tariff, batch, largest):
     from fixture import Fixture, request
-    f, req = Fixture(tmp_path), request()
-    if tariff:
+    from batch_fixture import BatchFixture, batch_request
+    f, req = (BatchFixture(tmp_path), batch_request()) if batch else (Fixture(tmp_path), request())
+    if largest:
+        req = batch_request(32)
+        for child in req["requests"]:
+            child.update(model="\\"*128, max_tokens=8192)
+    if tariff and not batch:
         req["pricing"] = "model_tariff_v1"
+    if batch and not tariff:
+        for child in req["requests"]:
+            child.pop("pricing", None)
     async with f.client() as client:
-        result = await client.purchase(**req)
-    config = {"gatewayUrl": f.config["gateway_url"], "rpcUrl": f.config["rpc_url"], "payTo": f.config["pay_to"], "gatewayBuyer": f.config["gateway_buyer"], "operators": f.config["operators"], "journalPath": f.config["journal_path"], "maxPaymentMicroUsdc": 1000, "maxTotalMicroUsdc": 2000, "payer": f.wallet.address}
+        if largest:
+            with pytest.raises(CovenantError, match="fresh_batch_size_exceeded"):
+                await client.purchase_batch(**req)
+            assert not f.calls
+            await f.seed_historical_authorization(client, req)
+        result = await (client.purchase_batch(**req) if batch else client.purchase(**req))
+        if largest:
+            from fixture import encode
+            row = client.journal.get(req["request_id"])
+            assert len(f.payments[0]) < 65_536
+            assert len(encode(strict_json(row["quote"]))) < 65_536
+    config = {"gatewayUrl": f.config["gateway_url"], "rpcUrl": f.config["rpc_url"], "payTo": f.config["pay_to"], "gatewayBuyer": f.config["gateway_buyer"], "operators": f.config["operators"], "journalPath": f.config["journal_path"], "maxPaymentMicroUsdc": f.config["max_payment_micro_usdc"], "maxTotalMicroUsdc": f.config["max_total_micro_usdc"], "payer": f.wallet.address}
     js_request = {**req}; js_request["requestId"] = js_request.pop("request_id")
     code = f"""import{{CovenantX402Client,SOLANA_GENESIS}}from {json.dumps((JS/'index.mjs').as_uri())};
     const config=JSON.parse(process.argv[1]),request=JSON.parse(process.argv[2]);
     const walletProvider={{getNetwork:()=>({{protocolFamily:'svm',chainId:SOLANA_GENESIS}}),getAddress:()=>config.payer,signTransaction:()=>{{throw Error('must_not_sign')}}}};
     const c=new CovenantX402Client({{...config,walletProvider,fetchImpl:()=>{{throw Error('must_not_fetch')}}}});
-    try{{console.log(JSON.stringify(await c.purchase(request)))}}finally{{c.close()}};"""
+    try{{console.log(JSON.stringify(await c.{'purchaseBatch' if batch else 'purchase'}(request)))}}finally{{c.close()}};"""
     assert json.loads(node(code, json.dumps(config), json.dumps(js_request))) == result
 
 

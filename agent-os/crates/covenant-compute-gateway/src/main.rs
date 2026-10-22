@@ -152,6 +152,11 @@ async fn main() -> anyhow::Result<()> {
         executor.model,
         executor.max_tokens
     );
+    let executor = Arc::new(covenant_compute_gateway::batch::BatchExecutor {
+        inner: executor,
+        directory: directory.join("batches"),
+        enabled: std::env::var("COVENANT_GATEWAY_BATCH_ENABLED").as_deref() == Ok("true"),
+    });
     let mut gateway = Gateway::open_with_reserve_increase(
         &directory,
         &namespace,

@@ -2,21 +2,36 @@
 # Builds the Covenant Compute command-line tools for one target, packs them
 # into dist/<asset>.tar.gz and runs every packed binary once.
 #
-#   deploy/compute-release/dist.sh <target>
+#   deploy/compute-release/dist.sh [--snapshot] <target>
 #
-# The release workflow runs this for each target; it runs the same way on a
-# workstation. Linux builds are static (musl), so one archive runs on any
-# distribution.
+# Tags use strict release mode; PRs explicitly select a nonpublishing candidate
+# snapshot that may contain different crate versions. Both build and test every
+# packed binary. The same modes work on a workstation. Linux builds are static
+# (musl), so one archive runs on any distribution.
 set -euo pipefail
 
-target="${1:-}"
+mode=release
+if [ "${1:-}" = --snapshot ]; then
+  mode=snapshot
+  shift
+fi
+if [ "$#" -ne 1 ]; then
+  echo "usage: dist.sh [--snapshot] <target>" >&2
+  exit 2
+fi
+if [ "$mode" = snapshot ] && { [[ "${GITHUB_REF:-}" == refs/tags/* ]] || [ "${GITHUB_REF_TYPE:-}" = tag ]; }; then
+  echo "dist.sh: candidate snapshot mode is forbidden for tag refs" >&2
+  exit 2
+fi
+
+target="$1"
 case "$target" in
   aarch64-apple-darwin) asset=covenant-compute-darwin-arm64 ;;
   x86_64-apple-darwin) asset=covenant-compute-darwin-x86_64 ;;
   x86_64-unknown-linux-musl) asset=covenant-compute-linux-x86_64 ;;
   aarch64-unknown-linux-musl) asset=covenant-compute-linux-arm64 ;;
   *)
-    echo "usage: dist.sh <aarch64-apple-darwin | x86_64-apple-darwin | x86_64-unknown-linux-musl | aarch64-unknown-linux-musl>" >&2
+    echo "usage: dist.sh [--snapshot] <aarch64-apple-darwin | x86_64-apple-darwin | x86_64-unknown-linux-musl | aarch64-unknown-linux-musl>" >&2
     exit 2
     ;;
 esac
@@ -32,21 +47,50 @@ workspace="$root/agent-os"
 stake_workspace="$workspace/crates/covenant-compute-lease-signer"
 bins=(covenant-compute covenant-compute-mcp covenant-compute-node)
 
-version="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$workspace/crates/covenant-compute-buyer/Cargo.toml")"
-[ -n "$version" ] || { echo "dist.sh: no version in covenant-compute-buyer/Cargo.toml" >&2; exit 1; }
-for manifest in "$workspace/crates/covenant-compute-node/Cargo.toml" "$stake_workspace/Cargo.toml"; do
-  packaged_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$manifest")"
-  if [ "$packaged_version" != "$version" ]; then
-    echo "dist.sh: $manifest has version $packaged_version, expected $version" >&2
+manifest_version() {
+  local value
+  value="$(sed -n 's/^version = "\([^" ]*\)"$/\1/p' "$1")"
+  if ! [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$ ]]; then
+    echo "dist.sh: missing or invalid package version in $1" >&2
     exit 1
   fi
-done
-notes="$here/notes/compute-v$version.md"
-[ -f "$notes" ] || { echo "dist.sh: release notes missing: $notes" >&2; exit 1; }
-# The README links to the command reference at this release's tag.
-if grep -o -E 'compute-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?' "$here/README.md" | grep -q -v -x -F "compute-v$version"; then
-  echo "dist.sh: README.md links to another release than compute-v$version" >&2
-  exit 1
+  printf '%s\n' "$value"
+}
+version="$(manifest_version "$workspace/crates/covenant-compute-buyer/Cargo.toml")"
+node_version="$(manifest_version "$workspace/crates/covenant-compute-node/Cargo.toml")"
+stake_version="$(manifest_version "$stake_workspace/Cargo.toml")"
+expected_version() {
+  case "$1" in
+    covenant-compute|covenant-compute-mcp) printf '%s\n' "$version" ;;
+    covenant-compute-node) printf '%s\n' "$node_version" ;;
+    covenant-compute-stake) printf '%s\n' "$stake_version" ;;
+    *) return 1 ;;
+  esac
+}
+
+if [ "$mode" = release ]; then
+  for manifest in "$workspace/crates/covenant-compute-node/Cargo.toml" "$stake_workspace/Cargo.toml"; do
+    packaged_version="$(manifest_version "$manifest")"
+    if [ "$packaged_version" != "$version" ]; then
+      echo "dist.sh: $manifest has version $packaged_version, expected $version" >&2
+      exit 1
+    fi
+  done
+  notes="$here/notes/compute-v$version.md"
+  [ -f "$notes" ] || { echo "dist.sh: release notes missing: $notes" >&2; exit 1; }
+  # The README links to the command reference at this release's tag.
+  if grep -o -E 'compute-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?' "$here/README.md" | grep -q -v -x -F "compute-v$version"; then
+    echo "dist.sh: README.md links to another release than compute-v$version" >&2
+    exit 1
+  fi
+else
+  source_commit="$(git -C "$root" rev-parse --verify HEAD)"
+  source_tree="$(git -C "$root" rev-parse 'HEAD^{tree}')"
+  source_dirty=false
+  if [ -n "$(git -C "$root" status --porcelain --untracked-files=normal)" ]; then
+    source_dirty=true
+  fi
+  asset="candidate-snapshot-${source_commit:0:12}-$asset"
 fi
 
 export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-11.0}"
@@ -83,9 +127,39 @@ for bin in "${bins[@]}"; do
   install -m 0755 "$bin_dir/$bin" "$stage/"
 done
 install -m 0755 "$stake_bin_dir/covenant-compute-stake" "$stage/"
-install -m 0644 "$root/LICENSE" "$root/NOTICE.md" "$here/README.md" "$stage/"
+install -m 0644 "$root/LICENSE" "$root/NOTICE.md" "$stage/"
 install -m 0644 "$workspace/crates/covenant-compute-buyer/skills/security-audit/upstream/LICENSE" "$stage/SECURITY_AUDIT_LICENSE"
-install -m 0644 "$notes" "$stage/RELEASE_NOTES.md"
+if [ "$mode" = release ]; then
+  install -m 0644 "$here/README.md" "$stage/README.md"
+  install -m 0644 "$notes" "$stage/RELEASE_NOTES.md"
+else
+  cat > "$stage/README.md" <<EOF
+# Covenant Compute candidate snapshot
+
+This is an unreleased build for pull-request review and local qualification.
+It is not a versioned release, published installer, or production activation.
+The included tools may have different manifest versions. Run each tool with
+\`--version\` and \`--help\` before use.
+
+Source commit: $source_commit
+Committed tree: $source_tree
+Working tree had local changes: $source_dirty
+Target: $target
+
+SNAPSHOT_PROVENANCE.txt records the source identity, each expected manifest
+version, and SHA-256 of each packed binary. It is informational build metadata,
+not a signed release attestation. A dirty snapshot is not identified by its
+commit alone. Review the PR and retain its diff when evaluating that snapshot.
+EOF
+  {
+    printf 'schema_version=1\nartifact_kind=unreleased_candidate_snapshot\n'
+    printf 'source_commit=%s\nsource_tree=%s\nsource_dirty=%s\ntarget=%s\n' "$source_commit" "$source_tree" "$source_dirty" "$target"
+    for bin in "${bins[@]}" covenant-compute-stake; do
+      printf '%s.manifest_version=%s\n' "$bin" "$(expected_version "$bin")"
+      printf '%s.sha256=%s\n' "$bin" "$(shasum -a 256 "$stage/$bin" | awk '{print $1}')"
+    done
+  } > "$stage/SNAPSHOT_PROVENANCE.txt"
+fi
 
 if tar --version | grep -q 'GNU tar'; then
   tar_flags=(--owner=0 --group=0 --numeric-owner)
@@ -111,8 +185,9 @@ tar -C "$work/check" -xzf "$archive"
 for bin in "${bins[@]}" covenant-compute-stake; do
   path="$work/check/$asset/$bin"
   got="$(run_packed "$path" --version)"
-  if [ "$got" != "$bin $version" ]; then
-    echo "dist.sh: $bin --version printed '$got', expected '$bin $version'" >&2
+  expected="$(expected_version "$bin")"
+  if [ "$got" != "$bin $expected" ]; then
+    echo "dist.sh: $bin --version printed '$got', expected '$bin $expected'" >&2
     exit 1
   fi
   run_packed "$path" --help >/dev/null

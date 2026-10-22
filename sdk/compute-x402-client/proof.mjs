@@ -91,8 +91,14 @@ function verifyTariff(job, request, blocks) {
 }
 
 export function verifyComputeResult(result, { request, requestSha256, quoteId, gatewayBuyer, operators }) {
+  return verifyNativeResult(result, { request, gatewayBuyer, operators, requestSha256, quoteId });
+}
+
+// Batch children are authenticated by the ordered aggregate proof and signed
+// native envelope rather than single-purchase gateway metadata.
+export function verifyNativeResult(result, { request, requestSha256, quoteId, gatewayBuyer, operators, batchChild = false }) {
   const proof = result.covenant;
-  assert(proof?.request_sha256 === requestSha256 && proof.quote_id === quoteId, 'result_request_binding_mismatch');
+  assert(proof && (batchChild || (proof.request_sha256 === requestSha256 && proof.quote_id === quoteId)), 'result_request_binding_mismatch');
   const job = signed(proof.envelope, 'payload', 'covenant.compute.job.v1\n', 'buyer');
   const receipt = signed(proof.receipt, 'receipt', 'covenant.compute.receipt.v1\n', 'operator');
   assert(job.buyer.pubkey === gatewayBuyer, 'unexpected_gateway_buyer');

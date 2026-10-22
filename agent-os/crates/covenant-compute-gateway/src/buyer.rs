@@ -184,6 +184,7 @@ impl Executor for BuyerExecutor {
             );
         }
         Ok(ExecutionQuote {
+            batch_pricing: None,
             prepared,
             amount_atomic,
             expires_at_ms,
@@ -217,6 +218,19 @@ impl Executor for BuyerExecutor {
         }
         Ok(())
     }
+    fn validate_batch_budget(&self, amount: u64, now: u64) -> Result<()> {
+        let remaining = self
+            .budget
+            .snapshot(now)
+            .map_err(|_| GatewayError::Unavailable("durable budget unavailable".into()))?
+            .remaining_micro_usdc;
+        if amount > remaining {
+            return Err(GatewayError::Unavailable(
+                "batch exceeds remaining daily buyer budget".into(),
+            ));
+        }
+        Ok(())
+    }
     fn models(&self, now: u64, legacy_price: u64) -> Vec<Value> {
         self.tariffs.as_ref().map(|book| book.models(now)).unwrap_or_else(|| vec![json!({
             "id":self.model,"object":"model","owned_by":"covenant",
@@ -234,6 +248,7 @@ impl Executor for BuyerExecutor {
         };
         if prepared.buyer != self.identity.agent_id().pubkey_base58()
             || prepared.coordinator != self.config.coordinator_url
+            || prepared.operation.is_some()
             || prepared.job_envelopes.len() != 1
         {
             return Err(uncertain("persisted execution identity mismatch".into()));
@@ -419,6 +434,7 @@ impl BuyerExecutor {
         )
         .map_err(|e| GatewayError::Invalid(e.to_string()))?;
         Ok(PreparedExecution {
+            operation: None,
             buyer: self.identity.agent_id().pubkey_base58(),
             coordinator: self.config.coordinator_url.clone(),
             job_envelopes: vec![envelope],

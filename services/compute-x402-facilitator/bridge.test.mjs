@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getTransactionDecoder, getCompiledTransactionMessageDecoder, generateKeyPairSigner, getBase58Decoder, pipe, createTransactionMessage, setTransactionMessageFeePayer, setTransactionMessageLifetimeUsingBlockhash, appendTransactionMessageInstructions, partiallySignTransactionMessageWithSigners, getBase64EncodedWireTransaction } from '@solana/kit';
+import { getTransactionDecoder, getCompiledTransactionMessageDecoder, getSignatureFromTransaction, generateKeyPairSigner, getBase58Decoder, pipe, createTransactionMessage, setTransactionMessageFeePayer, setTransactionMessageLifetimeUsingBlockhash, appendTransactionMessageInstructions, partiallySignTransactionMessageWithSigners, getBase64EncodedWireTransaction } from '@solana/kit';
 import { findAssociatedTokenPda, TOKEN_PROGRAM_ADDRESS, getTransferCheckedInstruction } from '@solana-program/token';
 import { getSetComputeUnitLimitInstruction, getSetComputeUnitPriceInstruction } from '@solana-program/compute-budget';
 import { toFacilitatorSvmSigner } from '@x402/svm';
 import { x402Client } from '@x402/core/client';
 import { ExactSvmScheme as OfficialClientScheme } from '@x402/svm/exact/client';
-import { createBridge, RAILS, Rejected, shortMemo } from './bridge.mjs';
-import { createPricingPolicy, readTariffConfig } from './pricing.mjs';
+import { createBridge, FACILITATOR_GRACE_MS, RAILS, Rejected, shortMemo } from './bridge.mjs';
+import { batchPricingTotal, createPricingPolicy, readTariffConfig } from './pricing.mjs';
 import { mkdtemp, writeFile, symlink, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -25,6 +25,8 @@ async function setup(options = {}) {
   const quoteId = '00000000-0000-4000-8000-000000000001';
   const requestSha256 = 'a'.repeat(64);
   const terms = { scheme: 'exact', network, asset: config.asset, payTo: config.payTo, amount: options.amount ?? '1200', maxTimeoutSeconds: 90, extra: { feePayer: config.feePayer, memo: options.legacyMemo ? `covenant.x402.v2:${quoteId}:${requestSha256}` : shortMemo(quoteId, requestSha256), quoteId, requestSha256, expiresAtMs: 90_000 } };
+  if (options.batchPricing !== undefined) terms.extra.batchPricing = options.batchPricing;
+  const resourceUrl = options.batchPricing === undefined ? config.resourceUrl : new URL('/v1/inference/batches', config.resourceUrl).href;
   const source = (await findAssociatedTokenPda({ mint: config.asset, owner: payer.address, tokenProgram: TOKEN_PROGRAM_ADDRESS }))[0];
   const destination = (await findAssociatedTokenPda({ mint: config.asset, owner: merchant.address, tokenProgram: TOKEN_PROGRAM_ADDRESS }))[0];
   async function payload(overrides = {}) {
@@ -38,7 +40,7 @@ async function setup(options = {}) {
         { programAddress: 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr', accounts: [], data: new TextEncoder().encode(overrides.memo ?? terms.extra.memo) },
       ], m));
     const signed = await partiallySignTransactionMessageWithSigners(tx);
-    return { x402Version: 2, resource: { url: config.resourceUrl }, accepted: structuredClone(terms), payload: { transaction: getBase64EncodedWireTransaction(signed) } };
+    return { x402Version: 2, resource: { url: overrides.resourceUrl ?? resourceUrl }, accepted: structuredClone(terms), payload: { transaction: getBase64EncodedWireTransaction(signed) } };
   }
   const signer = toFacilitatorSvmSigner(facilitator);
   let simulations = 0; signer.simulateTransaction = async () => { simulations++; };
@@ -53,10 +55,10 @@ async function setup(options = {}) {
     if (method === 'sendTransaction') { state.sends.push(params[0]); if (state.loseResponse) throw new Error('lost RPC response'); return state.signature; }
     throw new Error(`unexpected RPC ${method}`);
   };
-  const reopen = (changes = {}, clock = 1000) => createBridge({ signer, config: { ...config, ...changes }, rpc, now: () => clock });
+  const reopen = (changes = {}, clock = 1000) => createBridge({ signer, config: { ...config, ...changes }, rpc, now: () => clock, facilitator: options.facilitator });
   const bridge = reopen();
-  const verify = async (overrides = {}) => bridge.verify({ paymentPayload: await payload(overrides), paymentRequirements: terms, resourceUrl: config.resourceUrl });
-  return { bridge, verify, terms, state, payload, config, reopen, payer, simulations: () => simulations, signatures: () => signatures };
+  const verify = async (overrides = {}) => bridge.verify({ paymentPayload: await payload(overrides), paymentRequirements: terms, resourceUrl });
+  return { bridge, verify, terms, state, payload, config, reopen, resourceUrl, payer, feePayerKey: facilitator, simulations: () => simulations, signatures: () => signatures };
 }
 
 function tariffs() {
@@ -65,11 +67,88 @@ function tariffs() {
   return [{ native, retail: { ...native, id: 'covenant-haiku-4.5-retail', base_micro_usdc: 12000, output_cap_micro_usdc_per_million: 9000000 } }];
 }
 
+function batchManifest() {
+  return { version: 1, batch_id: '00000000-0000-4000-8000-000000000002', children: [256, 2048].map((cap, i) => ({
+    job_id: `00000000-0000-4000-8000-00000000000${i + 3}`, model: 'claude-haiku-4.5', max_output_tokens: cap,
+    pricing: 'model_tariff_v1', amount_atomic: 12000 + cap * 9,
+  })) };
+}
+
+test('batch policy authorizes exact ordered child prices, with opt-in and bounded identities', () => {
+  const policy = createPricingPolicy({ priceAtomic: '50000', tariffRows: tariffs(), batchEnabled: true });
+  const manifest = batchManifest();
+  assert.equal(batchPricingTotal(manifest), 44736n);
+  assert.equal(policy.allowsBatch(manifest, '44736', 1000), true);
+  assert.equal(policy.allowsBatch(manifest, '44737', 1000), false);
+  assert.equal(policy.allowsBatch(manifest, '44736', 200000), false);
+  assert.equal(createPricingPolicy({ priceAtomic: '50000', tariffRows: tariffs() }).allowsBatch(manifest, '44736', 1000), false);
+  for (const mutate of [
+    m => { m.version = 2; }, m => { m.batch_id = 'bad'; }, m => { m.batch_id = '00000000-0000-0000-0000-000000000000'; },
+    m => { m.children = []; }, m => { m.children = Array(33).fill(m.children[0]); },
+    m => { m.children[1].job_id = m.children[0].job_id; }, m => { m.children[0].job_id = 'bad'; },
+    m => { m.children[0].max_output_tokens = 0; }, m => { m.children[0].max_output_tokens = 32769; },
+    m => { m.children[0].max_output_tokens = 257; }, m => { m.children[0].model = 'other'; },
+    m => { m.children[0].model = 'any'; }, m => { m.children[0].amount_atomic++; m.children[1].amount_atomic--; },
+    m => { m.children[0].amount_atomic = Number.MAX_SAFE_INTEGER; }, m => { m.children[0].pricing = 'unknown'; },
+    m => { m.children[0].extra = true; }, m => { m.extra = true; },
+  ]) {
+    const changed = structuredClone(manifest); mutate(changed);
+    assert.equal(policy.allowsBatch(changed, '44736', 1000), false);
+  }
+  const legacy = structuredClone(manifest); delete legacy.children[0].pricing; legacy.children[0].amount_atomic = 50000;
+  assert.equal(policy.allowsBatch(legacy, '80432', 1000), true);
+  legacy.children[0].pricing = null;
+  assert.equal(policy.allowsBatch(legacy, '80432', 1000), true);
+  const three = batchManifest();
+  three.children.push({ ...three.children[0], job_id: '00000000-0000-4000-8000-000000000099' });
+  assert.equal(batchPricingTotal(three), 59040n, 'recovery format retains its protocol bound');
+  assert.equal(policy.allowsBatch(three, '59040', 1000), false, 'first release admits at most two children');
+});
+
+test('one official SVM authorization covers the batch sum and survives disabled or rotated admission', async () => {
+  const f = await setup({ config: { priceAtomic: '50000', tariffRows: tariffs(), batchEnabled: true }, batchPricing: batchManifest(), amount: '44736' });
+  assert.equal(f.bridge.readiness().batchEnabled, true);
+  await assert.rejects(f.verify({ resourceUrl: f.config.resourceUrl }), Rejected);
+  assert.equal(f.signatures(), 0); assert.deepEqual(f.state.rpcCalls, []);
+  const payment = await f.verify();
+  assert.equal(f.signatures(), 1); assert.equal(f.simulations(), 1); assert.deepEqual(f.state.sends, []);
+  f.state.signature = payment.transaction_id;
+  for (const changes of [{ batchEnabled: false }, { priceAtomic: '60000', tariffRows: undefined }, { tariffConfigError: true }]) {
+    const recovered = f.reopen(changes, 300000);
+    await assert.rejects(recovered.verify({ paymentPayload: await f.payload(), paymentRequirements: f.terms, resourceUrl: f.resourceUrl }), Rejected);
+    assert.equal((await recovered.settle({ payment, paymentRequirements: f.terms })).status, 'pending');
+  }
+  assert.equal(f.state.sends.length, 3); assert.equal(new Set(f.state.sends).size, 1);
+  f.state.status = { confirmationStatus: 'finalized', err: null };
+  f.state.readback = { meta: { err: null }, transaction: [f.state.sends[0], 'base64'] };
+  assert.deepEqual(await f.reopen({ batchEnabled: false }, 300000).settle({ payment, paymentRequirements: f.terms }), { status: 'finalized', transaction_id: payment.transaction_id });
+  const changed = structuredClone(f.terms); changed.extra.batchPricing.children.reverse();
+  await assert.rejects(f.bridge.settle({ payment, paymentRequirements: changed }), Rejected);
+  assert.equal(f.signatures(), 1, 'recovery never replaces the signed transaction');
+});
+
+test('disabled or malformed batches stop before RPC, simulation, signing and broadcast', async () => {
+  for (const options of [
+    { config: { batchEnabled: false }, batchPricing: batchManifest(), amount: '44736' },
+    { batchPricing: null, amount: '44736' },
+    { batchPricing: batchManifest(), amount: '44737' },
+    { batchPricing: { ...batchManifest(), children: [] }, amount: '50000' },
+  ]) {
+    const f = await setup({ ...options, config: { priceAtomic: '50000', tariffRows: tariffs(), batchEnabled: true, ...options.config } });
+    await assert.rejects(f.verify(), Rejected);
+    assert.equal(f.signatures(), 0); assert.equal(f.simulations(), 0); assert.deepEqual(f.state.rpcCalls, []); assert.deepEqual(f.state.sends, []);
+  }
+  const single = await setup({ config: { batchEnabled: true } });
+  await single.verify();
+  const payload = await single.payload({ resourceUrl: new URL('/v1/inference/batches', single.config.resourceUrl).href });
+  await assert.rejects(single.bridge.verify({ paymentPayload: payload, paymentRequirements: single.terms, resourceUrl: payload.resource.url }), Rejected);
+});
+
 test('readiness binds the loaded rail and complete pricing policy without payment activity', async () => {
   const f = await setup({ config: { priceAtomic: '50000', tariffRows: tariffs() } });
   const expected = { schemaVersion: 1, observedAtMs: 1000, pricingValid: true, scheme: 'exact',
     network: f.config.network, asset: f.config.asset, assetDecimals: 6, payTo: f.config.payTo,
-    feePayer: f.config.feePayer, resourceUrl: f.config.resourceUrl, legacyPriceAtomic: '50000', retailTariffs: [tariffs()[0].retail] };
+    feePayer: f.config.feePayer, resourceUrl: f.config.resourceUrl, legacyPriceAtomic: '50000', retailTariffs: [tariffs()[0].retail], batchEnabled: false };
   assert.deepEqual(f.bridge.readiness(), expected);
   const changed = f.bridge.readiness(); changed.retailTariffs[0].base_micro_usdc++;
   f.config.tariffRows[0].retail.revision++;
@@ -147,6 +226,11 @@ test('authenticated server readiness fails closed while malformed-policy recover
       const body = await response.json();
       if (valid) { assert.equal(body.legacyPriceAtomic, '50000'); assert.deepEqual(body.retailTariffs, [tariffs()[0].retail]); }
       else assert.deepEqual(body, { error: 'payment pricing unavailable' });
+      for (const [size, expected] of [[70000, 'payment rail or amount mismatch'], [131073, 'request too large']]) {
+        const response = await fetch(`${base}/verify`, { method: 'POST', headers, body: JSON.stringify({ padding: 'x'.repeat(size) }) });
+        assert.equal(response.status, 400);
+        assert.equal((await response.json()).error, expected);
+      }
       const evm = await fetch(`${base}/evm/readiness`, { headers });
       if (mode === 'Base unreachable') assert.deepEqual([evm.status, await evm.json()], [503, { error: 'Base payments unavailable' }]);
       else assert.equal(evm.status, 404);
@@ -179,8 +263,8 @@ test('short memo matches the published vector', () => {
   assert.equal(shortMemo('00000000-0000-4000-8000-000000000001', 'a'.repeat(64)), '8bfb7fde3cb99c6b0f16b7a18d83a0e1');
 });
 
-test('verifier accepts a v3 payment built by the stock x402 client at 20,000 CU', async () => {
-  const f = await setup();
+for (const batch of [false, true]) test(`verifier accepts a v3 ${batch ? 'batch' : 'single'} payment built by the stock x402 client at 20,000 CU`, async () => {
+  const f = await setup(batch ? { config: { priceAtomic: '50000', tariffRows: tariffs(), batchEnabled: true }, batchPricing: batchManifest(), amount: '44736' } : {});
   assert.equal(f.terms.extra.memo.length, 32);
   // The stock client reads the mint and a blockhash; nothing else leaves the test.
   const mint = Buffer.alloc(82); mint[44] = 6; mint[45] = 1;
@@ -196,14 +280,14 @@ test('verifier accepts a v3 payment built by the stock x402 client at 20,000 CU'
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   try {
     const client = new x402Client().register(f.terms.network, new OfficialClientScheme(f.payer, { rpcUrl: `http://127.0.0.1:${server.address().port}` }));
-    const paymentPayload = await client.createPaymentPayload({ x402Version: 2, resource: { url: f.config.resourceUrl }, accepts: [f.terms] });
+    const paymentPayload = await client.createPaymentPayload({ x402Version: 2, resource: { url: f.resourceUrl }, accepts: [f.terms] });
     const message = getCompiledTransactionMessageDecoder().decode(getTransactionDecoder().decode(Buffer.from(paymentPayload.payload.transaction, 'base64')).messageBytes);
     const program = instruction => message.staticAccounts[instruction.programAddressIndex];
     const limit = message.instructions.find(i => program(i) === 'ComputeBudget111111111111111111111111111111' && i.data[0] === 2);
     assert.equal(Buffer.from(limit.data).readUInt32LE(1), 20_000);
     const memo = message.instructions.find(i => program(i) === 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr');
     assert.equal(Buffer.from(memo.data).toString(), f.terms.extra.memo);
-    const payment = await f.bridge.verify({ paymentPayload, paymentRequirements: f.terms, resourceUrl: f.config.resourceUrl });
+    const payment = await f.bridge.verify({ paymentPayload, paymentRequirements: f.terms, resourceUrl: f.resourceUrl });
     assert.ok(payment.transaction_id);
     assert.equal(f.signatures(), 1);
   } finally { server.close(); }
@@ -377,3 +461,80 @@ test('server tariff file loader uses the configured regular file and closes fres
     await writeFile(file, ' '.repeat(262145)); assert.deepEqual(await readTariffConfig(file), { tariffConfigError: true });
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
+
+test('a facilitator holding the same key broadcasts exactly the journaled bytes', async () => {
+  const calls = [];
+  let reply = async () => ({ success: true });
+  const replies = [];
+  const facilitator = { settle: async (payload, terms) => { calls.push({ payload, terms }); const r = reply(payload, terms); replies.push(r); return r; } };
+  const f = await setup({ facilitator });
+  // The facilitator signs the payer-signed payload with the same fee payer key.
+  const own = toFacilitatorSvmSigner(f.feePayerKey);
+  reply = async (payload, terms) => {
+    const signed = await own.signTransaction(payload.payload.transaction, terms.extra.feePayer, terms.network);
+    return { success: true, transaction: getSignatureFromTransaction(getTransactionDecoder().decode(Buffer.from(signed, 'base64'))) };
+  };
+  const payment = await f.verify();
+  f.state.signature = payment.transaction_id;
+  assert.equal((await f.bridge.settle({ payment, paymentRequirements: f.terms })).status, 'pending');
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].terms, f.terms);
+  // Ed25519 is deterministic: the facilitator's transaction is the journaled one.
+  assert.equal((await replies[0]).transaction, payment.transaction_id);
+  assert.equal(f.state.sends.length, 0);
+  // While the facilitator holds it, retries neither resubmit nor send.
+  assert.equal((await f.bridge.settle({ payment, paymentRequirements: f.terms })).status, 'pending');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls.length, 1);
+  assert.equal(f.state.sends.length, 0);
+  const saved = JSON.parse(payment.encoded_transaction).evidence;
+  f.state.status = { confirmationStatus: 'finalized', err: null };
+  f.state.readback = { meta: { err: null }, transaction: [saved.transaction, 'base64'] };
+  assert.deepEqual(await f.bridge.settle({ payment, paymentRequirements: f.terms }), { status: 'finalized', transaction_id: payment.transaction_id });
+});
+
+test('a facilitator that declines, is unreachable or settles another signature leaves the broadcast to the verifier', async () => {
+  for (const reply of [async () => ({ success: false, errorReason: 'facilitator_daily_limit_reached' }), async () => { throw new Error('unreachable'); }, async () => ({ success: true, transaction: '1'.repeat(64) })]) {
+    const f = await setup({ facilitator: { settle: reply } });
+    const payment = await f.verify();
+    f.state.signature = payment.transaction_id;
+    assert.equal((await f.bridge.settle({ payment, paymentRequirements: f.terms })).status, 'pending');
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(f.state.sends.length, 0);
+    assert.equal((await f.bridge.settle({ payment, paymentRequirements: f.terms })).status, 'pending');
+    assert.equal(f.state.sends.length, 1);
+    assert.equal(f.state.sends[0], JSON.parse(payment.encoded_transaction).evidence.transaction);
+  }
+});
+
+test('payments stored before the facilitator was configured are sent directly', async () => {
+  const plain = await setup();
+  const payment = await plain.verify();
+  assert.equal(JSON.parse(payment.encoded_transaction).evidence.payload, undefined);
+  let called = 0;
+  const withFacilitator = createBridge({ signer: toFacilitatorSvmSigner(plain.feePayerKey), config: plain.config,
+    rpc: async (method, params) => method === 'getGenesisHash' ? RAILS[plain.config.network].genesis : method === 'getSignatureStatuses' ? { value: [null] } : (plain.state.sends.push(params[0]), payment.transaction_id),
+    now: () => 1000, facilitator: { settle: async () => { called++; return { success: true }; } } });
+  assert.equal((await withFacilitator.settle({ payment, paymentRequirements: plain.terms })).status, 'pending');
+  assert.equal(called, 0);
+  assert.equal(plain.state.sends.length, 1);
+});
+
+test('a facilitator that hangs gets a few seconds before the bytes are sent from here', async () => {
+  const f = await setup({ facilitator: { settle: () => new Promise(() => {}) } });
+  const payment = await f.verify();
+  f.state.signature = payment.transaction_id;
+  let clock = 1000;
+  const bridge = createBridge({ signer: toFacilitatorSvmSigner(f.feePayerKey), config: f.config,
+    rpc: async (method, params) => method === 'getGenesisHash' ? RAILS[f.config.network].genesis
+      : method === 'getSignatureStatuses' ? { value: [null] } : (f.state.sends.push(params[0]), payment.transaction_id),
+    now: () => clock, facilitator: { settle: () => new Promise(() => {}) } });
+  assert.equal((await bridge.settle({ payment, paymentRequirements: f.terms })).status, 'pending');
+  clock += FACILITATOR_GRACE_MS - 1;
+  assert.equal((await bridge.settle({ payment, paymentRequirements: f.terms })).status, 'pending');
+  assert.equal(f.state.sends.length, 0);
+  clock += 1;
+  assert.equal((await bridge.settle({ payment, paymentRequirements: f.terms })).status, 'pending');
+  assert.deepEqual(f.state.sends, [JSON.parse(payment.encoded_transaction).evidence.transaction]);
+});
+

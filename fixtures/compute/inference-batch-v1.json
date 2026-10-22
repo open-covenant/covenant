@@ -1,0 +1,61 @@
+{
+  "result": {
+    "version": 1,
+    "batch_id": "12345678-1234-4234-8234-123456789abc",
+    "request_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "tree_size": 3,
+    "merkle_root": "f81158443e19c69e573f9f5b1f777365f503fc9045c7ef0b5a69c149d05557e0",
+    "items": [
+      {
+        "leaf": {
+          "version": 1,
+          "batch_id": "12345678-1234-4234-8234-123456789abc",
+          "request_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "index": 0,
+          "job_id": "00000000-0000-0000-0000-000000000001",
+          "result_sha256": "62acb1e0e9d8c9f65f98d3d9e074d8548cc02dfe1deae7d857e3a95b8fcf3675"
+        },
+        "output": {
+          "text": "答案 0"
+        },
+        "audit_path": [
+          "0018f8663a0c0dfa113cc726e6c41fd7c10bc9869d0dbe9d7603bcdc236fd200",
+          "773cb6bb7bc50681c5c08ed1ef592f0456023af9c8d2cf9196ca937c3bdfba6c"
+        ]
+      },
+      {
+        "leaf": {
+          "version": 1,
+          "batch_id": "12345678-1234-4234-8234-123456789abc",
+          "request_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "index": 1,
+          "job_id": "00000000-0000-0000-0000-000000000002",
+          "result_sha256": "aa5057f369a84c71366fcfe2b525724a4b27fc50ef9f9eed49f51b1eb4170f69"
+        },
+        "output": {
+          "text": "答案 1"
+        },
+        "audit_path": [
+          "b020c86d662b21d06f0418053371be6fc8c630fef4878133c32d317c91e1661a",
+          "773cb6bb7bc50681c5c08ed1ef592f0456023af9c8d2cf9196ca937c3bdfba6c"
+        ]
+      },
+      {
+        "leaf": {
+          "version": 1,
+          "batch_id": "12345678-1234-4234-8234-123456789abc",
+          "request_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "index": 2,
+          "job_id": "00000000-0000-0000-0000-000000000003",
+          "result_sha256": "86deb1e898cbc07e7feed6db6d5fa15b546fc599eddf98010e5178f47835e5ae"
+        },
+        "output": {
+          "text": "答案 2"
+        },
+        "audit_path": [
+          "10d45d793e220867ce497502886e200f2f5f3e5e3cc6e28ff1495d42b7682068"
+        ]
+      }
+    ]
+  }
+}

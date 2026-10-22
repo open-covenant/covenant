@@ -82,3 +82,62 @@ test('SDK tariff and legacy payments pass one independently configured real faci
     await f.cleanup();
   }
 });
+
+
+for (const legacyMemo of [false, true]) test(`official SVM ${legacyMemo ? 'legacy long' : 'standard short'} memo batch payment passes independent facilitator policy before signed batch completion`, {
+  skip: !process.env.COVENANT_X402_BRIDGE_PATH,
+}, async () => {
+  const { createBridge, Rejected } = await import(pathToFileURL(process.env.COVENANT_X402_BRIDGE_PATH).href);
+  let bridge, verified, sponsorSignatures = 0, simulations = 0;
+  const f = await fixture({
+    legacyMemo, expectedUnits: legacyMemo ? 60_000 : 20_000,
+    childPrice: request => 12000 + 9 * request.max_tokens,
+    verifyPayment: async (paymentPayload, resourceUrl) => {
+      verified = await bridge.verify({ paymentPayload, paymentRequirements: paymentPayload.accepted, resourceUrl });
+    },
+  });
+  const client = new CovenantX402Client({ ...f.config, maxPaymentMicroUsdc: 50000, maxTotalMicroUsdc: 50000 });
+  try {
+    const now = Date.now();
+    const tariff = { schema_version: 1, revision: 1, model: 'claude-haiku-4.5', max_output_tokens: 2048,
+      valid_from_ms: now - 60000, valid_until_ms: now + 3600000 };
+    const config = { network: NETWORK, asset: USDC, payTo: f.config.payTo,
+      feePayer: Keypair.fromSecretKey(Uint8Array.from(f.feeKeypair)).publicKey.toBase58(),
+      resourceUrl: f.config.gatewayUrl + '/v1/chat/completions', priceAtomic: '50000', batchEnabled: true,
+      secret: 'unfunded-test-secret-with-more-than-32-chars', tariffRows: [{
+        native: { ...tariff, id: 'fixture-native', base_micro_usdc: 10000, output_cap_micro_usdc_per_million: 7500000 },
+        retail: { ...tariff, id: 'fixture-retail', base_micro_usdc: 12000, output_cap_micro_usdc_per_million: 9000000 },
+      }] };
+    const signer = toFacilitatorSvmSigner(await createKeyPairSignerFromBytes(Uint8Array.from(f.feeKeypair)));
+    const signTransaction = signer.signTransaction.bind(signer);
+    signer.signTransaction = async (...args) => { sponsorSignatures++; return signTransaction(...args); };
+    signer.simulateTransaction = async () => { simulations++; };
+    bridge = createBridge({ signer, config, rpc: async method => {
+      assert.equal(method, 'getGenesisHash', 'verification must never broadcast'); return SOLANA_GENESIS;
+    } });
+    const { requestId, ...request } = input();
+    const purchase = { requestId, version: 1, requests: [256, 2048].map(max_tokens => ({
+      ...request, model: 'claude-haiku-4.5', max_tokens, pricing: 'model_tariff_v1',
+    })) };
+    const complete = await client.purchaseBatch(purchase);
+    assert.equal(complete.status, 'completed'); assert.equal(complete.amountMicroUsdc, 44736);
+    assert.equal(complete.texts.length, 2);
+    const payment = JSON.parse(Buffer.from(f.counts().payments[0], 'base64'));
+    assert.equal(payment.resource.url, f.config.gatewayUrl + '/v1/inference/batches');
+    assert.deepEqual(payment.accepted.extra.batchPricing.children.map(child => child.amount_atomic), [14304, 30432]);
+    assert.equal(verified.payer, f.walletProvider.getAddress());
+    assert.equal(verified.authorization_id, sha256(Buffer.from(payment.payload.transaction, 'base64')));
+    assert.equal(sponsorSignatures, 1); assert.equal(simulations, 1); assert.equal(f.counts().signatures, 1);
+    const before = f.counts().requests;
+    assert.equal((await client.purchaseBatch(purchase)).status, 'completed');
+    assert.equal(f.counts().requests, before);
+    for (const mutation of [
+      value => { value.accepted.extra.batchPricing.children.reverse(); },
+      value => { value.resource.url = config.resourceUrl; },
+    ]) {
+      const changed = structuredClone(payment); mutation(changed);
+      await assert.rejects(bridge.verify({ paymentPayload: changed, paymentRequirements: payment.accepted, resourceUrl: payment.resource.url }), Rejected);
+      assert.equal(sponsorSignatures, 1); assert.equal(simulations, 1);
+    }
+  } finally { client.close(); await f.cleanup(); }
+});

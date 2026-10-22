@@ -136,10 +136,15 @@ def _verify_tariff(job: dict, request: dict, blocks: list) -> None:
 
 
 def verify_compute_result(result: dict, *, request: dict, request_sha256: str,
-                          quote_id: str, gateway_buyer: str, operators: list[str]) -> dict:
+                          quote_id: str, gateway_buyer: str, operators: list[str],
+                          _batch_child: bool = False) -> dict:
     try:
         proof = result["covenant"]
-        require(proof.get("request_sha256") == request_sha256 and proof.get("quote_id") == quote_id, "result_request_binding_mismatch")
+        # Native batch children predate x402 metadata. Their ordered leaf, full
+        # output hash and original request are checked by verify_batch_result.
+        # Ordinary single requests always require their direct quote binding.
+        if not _batch_child:
+            require(proof.get("request_sha256") == request_sha256 and proof.get("quote_id") == quote_id, "result_request_binding_mismatch")
         job = _signed(proof["envelope"], "payload", "covenant.compute.job.v1\n", "buyer")
         receipt = _signed(proof["receipt"], "receipt", "covenant.compute.receipt.v1\n", "operator")
         require(job["buyer"]["pubkey"] == gateway_buyer, "unexpected_gateway_buyer")

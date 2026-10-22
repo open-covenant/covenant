@@ -6,10 +6,10 @@ quote binding, and the confirmed payment transaction before returning a complete
 result. The Python package supports Microsoft Agent Framework through an optional
 adapter; this is an integration, not a Microsoft affiliation or endorsement.
 
-Version 0.2.0 added model tariffs. Version 0.3.0 is the release candidate for
-quotes with a 32-character payment memo, which earlier versions refuse before
-signing. Local tests and package builds do not establish production deployment or
-funded acceptance.
+Version 0.2.0 added model tariffs. Version 0.3.0 supports quotes with a
+32-character payment memo, which earlier versions refuse before signing.
+This source also includes candidate batch support; its deployment, funded
+acceptance, and package publication require separate release evidence.
 
 Python 3.11 or later is required. Install the immutable release wheel with its
 published SHA256. For framework tools, use the `agent-framework` extra. The `demo`
@@ -49,6 +49,55 @@ result must carry the same native tariff snapshot in its signed input and routin
 requirement. The client checks its model, revision, validity at job issue time,
 requested cap and exact rounded native job price. Missing tariff evidence is
 refused. The x402 customer payment is checked separately from the operator price.
+
+## Batch inference
+
+`purchase_batch` submits 1–2 independent text chat requests in their original
+order to `/v1/inference/batches`. The source candidate supports a mix of legacy
+fixed-price and `model_tariff_v1` requests. Deployment and funded acceptance must
+be established separately before using this endpoint in production.
+
+```python
+result = await client.purchase_batch(
+    request_id=stable_batch_uuid,
+    version=1,
+    requests=[
+        {"model": approved_model, "pricing": "model_tariff_v1",
+         "messages": [{"role": "user", "content": prompt}], "max_tokens": 256}
+        for prompt in approved_prompts
+    ],
+)
+if result["status"] == "completed":
+    drafts = result["texts"]  # same order as approved_prompts
+```
+
+There is one upfront USDC payment and one cumulative budget reservation for the
+whole batch. The accepted quote includes a frozen `batchPricing` manifest with
+the batch ID, ordered job IDs, model, output cap, pricing mode and retail amount
+of every child. The client checks those fields against the request and aggregate
+payment before signing. Native operator prices can differ from the retail price.
+
+A completed result requires every child’s trusted buyer signature, operator
+receipt, exact output bytes, original input and native tariff, plus an ordered
+RFC6962 inclusion proof. The root binds the full child response; it does not
+establish answer correctness. The client separately confirms the aggregate
+payment transaction. Results use `texts` and `result`; single purchases continue
+to use `text` and `result`.
+
+Resume with the same UUID, ordered requests, wallet, gateway and private journal.
+Pending responses, partial failures and unknown outcomes retain the original
+authorization and full reservation. No replacement payment or partial rebuy is
+automatic. A missing or failed child never becomes a completed batch. The same
+journal scope shares the existing ceiling across single requests, batches, Node
+and Python; creating a separate batch journal would lose that shared ceiling.
+Offline completed replay revalidates every proof against the current trust pins.
+The proof format supports 32 children; this candidate limits fresh purchases to
+two so sequential execution fits the existing native job deadline. An already
+signed larger batch remains recoverable under its original journal identity;
+this does not authorize a new larger batch or replacement payment.
+Each child retains the configured `max_input_bytes` limit, and the entire
+canonical request is limited to 128,000 bytes. Streaming, tools, nested batches
+and unknown child fields are rejected before reservation or network access.
 
 A pending response is not a completed inference. Unknown outcomes retain their
 authorization and budget reservation. The client never automatically changes or

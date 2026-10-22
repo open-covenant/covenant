@@ -29,6 +29,7 @@ mod tariff;
 pub use tariff::{
     parse_tariff_input, tariff_input, InferenceTariff, InferenceTariffOffer, InferenceTariffQuote,
 };
+pub mod inference_batch;
 mod lease;
 mod lease_close;
 mod logprobs;

@@ -2,7 +2,7 @@
 
 Buy inference from Covenant with Solana USDC using standard x402 V2. The package provides a Coinbase AgentKit action and an official LangChain tool usable in LangGraph agents. Both use the same payment journal, spending limits and signed-result verification. The configured Solana wallet signs the actual SPL-token transfer through `walletProvider.signTransaction`.
 
-Version 0.1.0 completed funded AgentKit acceptance and is available as an immutable [GitHub release](https://github.com/open-covenant/covenant/releases/tag/compute-x402-client-v0.1.0). Version 0.2.0 added LangChain/LangGraph support. Version 0.3.0 added model tariffs. Version 0.4.0 is the release candidate for quotes with a 32-character payment memo, which earlier versions refuse before signing; its local qualification does not establish production deployment or funded acceptance. Compatibility does not imply a partnership or endorsement.
+Version 0.1.0 completed funded AgentKit acceptance and is available as an immutable [GitHub release](https://github.com/open-covenant/covenant/releases/tag/compute-x402-client-v0.1.0). Version 0.2.0 added LangChain/LangGraph support. Version 0.3.0 added model tariffs. Version 0.4.0 supports quotes with a 32-character payment memo, which earlier versions refuse before signing. This branch also contains the unpublished batch candidate described below; the package version does not establish batch deployment or funded acceptance. Compatibility does not imply a partnership or endorsement.
 
 ## Install
 
@@ -137,6 +137,42 @@ The client returns `completed` only after verifying:
 - the confirmed payment transaction from the configured RPC against the exact authorized transaction message.
 
 Customer payment and operator receipt amounts are separate: the former is the gateway's USDC charge, the latter is the Compute job's operator price. An operator receipt does not independently prove model quality or the operator's hardware.
+
+## Batch inference candidate
+
+The source candidate adds `client.purchaseBatch()` at `/v1/inference/batches`. It is not a released or funded-accepted batch client. The existing `purchase()`, AgentKit action and LangChain/LangGraph tool retain their single-request behavior.
+
+```js
+const result = await client.purchaseBatch({
+  requestId: durablePurchaseUuid,
+  version: 1,
+  requests: [
+    {
+      model: 'configured-model',
+      messages: [{ role: 'user', content: 'Classify this first support ticket: ...' }],
+      max_tokens: 128,
+      pricing: 'model_tariff_v1',
+    },
+    {
+      model: 'configured-model',
+      messages: [{ role: 'user', content: 'Classify this second support ticket: ...' }],
+      max_tokens: 256,
+      pricing: 'model_tariff_v1',
+    },
+  ],
+});
+if (result.status === 'completed') {
+  console.log(result.texts); // Request order; complete native evidence in result.result.
+}
+```
+
+This first sequential-operator candidate admits 1–2 independent supported text-chat requests per new purchase. The proof format and recovery of already-signed historical authorizations retain the 32-child bound. Each child may opt into `model_tariff_v1`; omitting it retains that child's legacy fixed-price behavior. Nested batches and unsupported generation parameters are refused. The configured input-byte limit applies to each child's messages, with a 128,000-byte bound on the complete canonical request. The complete batch response is limited to 10 MiB; single responses retain their 4 MiB limit.
+
+The gateway offers one aggregate USDC payment. Its accepted `extra.batchPricing` freezes the batch ID and each ordered job ID, model, output cap, pricing mode and retail amount. The client validates that manifest against the original request and exact aggregate charge before signing. Fresh short memos use the official 20,000-unit transaction; saved long memos retain their original authorization and 60,000-unit compatibility path. Both memo forms bind the aggregate quote ID and ordered request digest, including during standalone batch verification. Both the per-payment ceiling and cumulative ceiling apply to the whole batch; single and batch purchases share the same existing journal and cumulative budget.
+
+A completed batch requires every child result, its original native job and operator receipt signatures, its model tariff when requested, and the ordered RFC6962 inclusion proofs. The paid quote's frozen batch and job IDs prevent substituting valid results from another purchase. Native operator tariffs remain separate from retail customer charges. Merkle consistency alone is not a signature or proof of model quality.
+
+A `pending` response, partial result, failed child or uncertain transport outcome does not release the reservation or authorize another payment. Resume the exact original ordered request under its original UUID; the saved quote and authorization are reused even after prices change. This client does not purchase missing children individually or claim automatic refunds. Changing order, model, cap, pricing mode or content requires a separate purchase identity after accounting for any unresolved original purchase.
 
 ## Retry and spending semantics
 

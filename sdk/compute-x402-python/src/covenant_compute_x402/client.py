@@ -15,6 +15,7 @@ from solders.transaction import VersionedTransaction
 from x402.mechanisms.svm.utils import derive_ata
 
 from .journal import Journal, now_ms
+from .batch import validate_batch_pricing, verify_batch_result
 from .payment import (NETWORK, SOLANA_GENESIS, USDC, TOKEN_PROGRAM, create_payment,
                       decode64, short_memo, solana_quote, validate_transaction, wallet_address)
 from .proof import (CovenantError, compact, require, safe_integer, sha256, stable,
@@ -69,6 +70,7 @@ class CovenantX402Client:
         gateway = urlsplit(_url(gateway_url, allow_localhost))
         require(gateway.path == "/" and not gateway.query, "gateway_origin_required")
         self.endpoint = urlunsplit((gateway.scheme, gateway.netloc, "/v1/chat/completions", "", ""))
+        self.batch_endpoint = urlunsplit((gateway.scheme, gateway.netloc, "/v1/inference/batches", "", ""))
         self.rpc_url = _url(rpc_url, allow_localhost)
         Pubkey.from_string(pay_to); Pubkey.from_string(gateway_buyer)
         require(isinstance(operators, list) and len(operators) > 0, "trusted_operator_keys_required")
@@ -85,13 +87,13 @@ class CovenantX402Client:
         self.http = httpx.AsyncClient(timeout=timeout_ms / 1000, follow_redirects=False, transport=transport, trust_env=False)
         self.journal = Journal(journal_path, sha256(stable({"payer": self.payer, "endpoint": self.endpoint, "network": NETWORK, "asset": USDC})), self.max_total)
 
-    async def _response(self, url: str, headers: dict, body: str):
+    async def _response(self, url: str, headers: dict, body: str, *, max_response_bytes=4 * 1024 * 1024):
         # Stream with a bound before parsing; no redirects with payment headers.
         async with self.http.stream("POST", url, headers=headers, content=body.encode("utf-8")) as response:
             chunks, size = [], 0
             async for chunk in response.aiter_bytes():
                 size += len(chunk)
-                require(size <= 4 * 1024 * 1024, "response_too_large")
+                require(size <= max_response_bytes, "response_too_large")
                 chunks.append(chunk)
             return response.status_code, response.headers, b"".join(chunks)
 
@@ -102,14 +104,16 @@ class CovenantX402Client:
         require(isinstance(parsed, dict) and not parsed.get("error") and "result" in parsed, "rpc_error")
         return parsed["result"]
 
-    async def post(self, request_id: str, body: str, payment=None):
+    async def post(self, request_id: str, body: str, payment=None, *, batch=False):
         headers = {"content-type": "application/json", "idempotency-key": request_id}
         if payment:
             headers["PAYMENT-SIGNATURE"] = payment
-        return await self._response(self.endpoint, headers, body)
+        return await self._response(self.batch_endpoint if batch else self.endpoint, headers, body,
+                                    max_response_bytes=(10 if batch else 4) * 1024 * 1024)
 
-    def validate_quote(self, required: dict, digest: str, expired_allowed=False) -> tuple[dict, int]:
-        require(isinstance(required, dict) and required.get("x402Version") == 2 and required.get("resource", {}).get("url") == self.endpoint, "untrusted_payment_resource")
+    def validate_quote(self, required: dict, digest: str, expired_allowed=False, *, batch_request=None) -> tuple[dict, int]:
+        endpoint = self.batch_endpoint if batch_request is not None else self.endpoint
+        require(isinstance(required, dict) and required.get("x402Version") == 2 and required.get("resource", {}).get("url") == endpoint, "untrusted_payment_resource")
         quote = solana_quote(required)
         require(quote.get("scheme") == "exact" and quote.get("network") == NETWORK and quote.get("asset") == USDC and quote.get("payTo") == self.pay_to, "untrusted_payment_rail")
         require(isinstance(quote.get("amount"), str) and re.fullmatch(r"[1-9][0-9]*", quote["amount"]) and len(quote["amount"]) <= 16, "invalid_payment_amount")
@@ -121,6 +125,10 @@ class CovenantX402Client:
         require(extra.get("memo") in (short_memo(extra["quoteId"], digest), f"covenant.x402.v2:{extra['quoteId']}:{digest}"), "quote_memo_mismatch")
         Pubkey.from_string(extra["feePayer"])
         require(extra["feePayer"] != self.payer, "buyer_must_not_pay_solana_fees")
+        if batch_request is not None:
+            validate_batch_pricing(extra, batch_request["requests"], price)
+        else:
+            require("batchPricing" not in extra, "unexpected_batch_pricing")
         return quote, price
 
     async def _create_payment(self, required: dict) -> str:
@@ -160,15 +168,25 @@ class CovenantX402Client:
         validate_transaction(VersionedTransaction.from_bytes(decode64(authorization["payload"]["transaction"])), quote, self.payer, legacy_allowed=True)
         return authorization
 
-    def _cached_result(self, row: dict, request: dict, request_id: str, digest: str) -> dict:
+    def _verify_result(self, result, request, digest, quote, batch):
+        if batch:
+            return verify_batch_result(result, request=request, request_sha256=digest,
+                                       gateway_buyer=self.gateway_buyer, operators=self.operators,
+                                       quote=quote)
+        return verify_compute_result(result, request=request, request_sha256=digest,
+                                     quote_id=quote["extra"]["quoteId"], gateway_buyer=self.gateway_buyer,
+                                     operators=self.operators)
+
+    def _cached_result(self, row: dict, request: dict, request_id: str, digest: str, *, batch=False) -> dict:
         required = strict_json(row["quote"])
-        quote, price = self.validate_quote(required, digest, expired_allowed=True)
+        quote, price = self.validate_quote(required, digest, expired_allowed=True, batch_request=request if batch else None)
         self._authorization(row["payment"], quote)
         complete = strict_json(row["result"])
         require(complete.get("status") == "completed" and complete.get("requestId") == request_id and complete.get("requestSha256") == digest, "cached_request_mismatch")
         require(complete.get("amountMicroUsdc") == row["amount"] == price, "cached_amount_mismatch")
-        verified = verify_compute_result(complete["result"], request=request, request_sha256=digest, quote_id=quote["extra"]["quoteId"], gateway_buyer=self.gateway_buyer, operators=self.operators)
-        require(complete.get("text") == verified["text"], "cached_text_mismatch")
+        verified = self._verify_result(complete["result"], request, digest, quote, batch)
+        text_field = "texts" if batch else "text"
+        require(complete.get(text_field) == verified[text_field], "cached_text_mismatch")
         settlement = complete.get("settlement", {})
         require(settlement.get("success") is True and settlement.get("network") == NETWORK and settlement.get("payer") == self.payer, "settlement_identity_mismatch")
         try:
@@ -178,47 +196,74 @@ class CovenantX402Client:
         return complete
 
     async def purchase(self, *, request_id: str, model: str, messages: list[dict], max_tokens: int, temperature=None, pricing=None) -> dict:
-        require(isinstance(request_id, str) and UUID_PATTERN.fullmatch(request_id), "stable_uuid_request_id_required")
         request = validate_request(model, messages, max_tokens, temperature, pricing)
         require(len(compact(request["messages"]).encode("utf-8")) <= self.max_input_bytes, "input_byte_limit_exceeded")
+        return await self._purchase(request_id, request)
+
+    async def purchase_batch(self, *, request_id: str, requests: list[dict], version=1) -> dict:
+        """Purchase 1..2 ordered chat requests with one durable authorization.
+
+        Retry only the original UUID and ordered body. A partial/failed batch
+        retains its authorization and reservation; this method never rebuys.
+        """
+        require(safe_integer(version) and version == 1, "invalid_batch_version")
+        require(isinstance(requests, list) and 1 <= len(requests) <= 32, "invalid_batch_size")
+        clean = []
+        for child in requests:
+            require(isinstance(child, dict) and {"model", "messages", "max_tokens"} <= set(child)
+                    and set(child) <= {"model", "messages", "max_tokens", "temperature", "pricing"}, "invalid_batch_request_fields")
+            normalized = validate_request(**child)
+            require(len(compact(normalized["messages"]).encode("utf-8")) <= self.max_input_bytes, "input_byte_limit_exceeded")
+            clean.append(normalized)
+        return await self._purchase(request_id, {"version": 1, "requests": clean}, batch=True)
+
+    async def _purchase(self, request_id: str, request: dict, *, batch=False) -> dict:
+        require(isinstance(request_id, str) and UUID_PATTERN.fullmatch(request_id), "stable_uuid_request_id_required")
         body = stable(request)
         require(len(body.encode("utf-8")) <= 128_000, "request_too_large")
         digest = sha256(body)
+        if batch and len(request["requests"]) > 2:
+            # Protocol proofs support 32, but fresh admission is deliberately
+            # limited to qualified sequential capacity. Existing signed larger
+            # batches remain recoverable without a replacement authorization.
+            saved = self.journal.get(request_id)
+            require(saved and saved["payment"], "fresh_batch_size_exceeded")
         row = self.journal.claim(request_id, body, digest)
         if row["result"]:
-            return self._cached_result(row, request, request_id, digest)
+            return self._cached_result(row, request, request_id, digest, batch=batch)
         owner = row["owner"]
         try:
             require(await self.rpc("getGenesisHash") == SOLANA_GENESIS, "rpc_network_mismatch")
             if not row["quote"]:
-                status, headers, _ = await self.post(request_id, body)
+                status, headers, _ = await self.post(request_id, body, batch=batch)
                 require(status == 402, f"quote_http_{status}")
                 header = headers.get("PAYMENT-REQUIRED")
-                require(isinstance(header, str) and len(header) < 16_384, "missing_payment_required")
+                require(isinstance(header, str) and len(header) < (65_536 if batch else 16_384), "missing_payment_required")
                 required = strict_json(decode64(header))
-                _, price = self.validate_quote(required, digest)
+                _, price = self.validate_quote(required, digest, batch_request=request if batch else None)
                 self.journal.reserve(request_id, owner, required, price)
                 row = self.journal.get(request_id)
             required = strict_json(row["quote"])
-            quote, price = self.validate_quote(required, digest, bool(row["payment"]))
+            quote, price = self.validate_quote(required, digest, bool(row["payment"]), batch_request=request if batch else None)
             require(row["amount"] == price, "reserved_amount_mismatch")
             if not row["payment"]:
                 payment = await self._create_payment(required)
-                self.validate_quote(required, digest)
+                self.validate_quote(required, digest, batch_request=request if batch else None)
                 self.journal.signed(request_id, owner, payment)
                 row = self.journal.get(request_id)
             # Also validate authorizations originally saved by Node; never change
             # their compute limit, blockhash, signature, header, or spend reserve.
             self._authorization(row["payment"], quote)
             self.journal.check(request_id, owner)
-            status, headers, response = await self.post(request_id, body, row["payment"])
+            status, headers, response = await self.post(request_id, body, row["payment"], batch=batch)
             if status == 202:
                 return {"status": "pending", "requestId": request_id, "requestSha256": digest}
             require(status == 200, f"paid_http_{status}_authorization_retained")
             result = strict_json(response)
-            verified = verify_compute_result(result, request=request, request_sha256=digest, quote_id=quote["extra"]["quoteId"], gateway_buyer=self.gateway_buyer, operators=self.operators)
+            verified = self._verify_result(result, request, digest, quote, batch)
             settlement = await self.verify_settlement(headers.get("PAYMENT-RESPONSE"), row["payment"])
-            complete = {"status": "completed", "requestId": request_id, "requestSha256": digest, "amountMicroUsdc": row["amount"], "settlement": settlement, "text": verified["text"], "result": result}
+            text_field = "texts" if batch else "text"
+            complete = {"status": "completed", "requestId": request_id, "requestSha256": digest, "amountMicroUsdc": row["amount"], "settlement": settlement, text_field: verified[text_field], "result": result}
             self.journal.complete(request_id, owner, compact(complete))
             return complete
         finally:

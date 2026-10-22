@@ -1,0 +1,292 @@
+{
+  "description": "Unfunded loopback test fixture. Ephemeral Ed25519 keys sign native payloads; synthetic RPC settlement. No private keys or funded acceptance.",
+  "request": {
+    "version": 1,
+    "requests": [
+      {
+        "model": "fixture-small-model",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Build a useful counter webpage."
+          }
+        ],
+        "max_tokens": 512,
+        "temperature": 0.25,
+        "pricing": "model_tariff_v1"
+      },
+      {
+        "model": "fixture-legacy-model",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Build a useful counter webpage."
+          }
+        ],
+        "max_tokens": 128,
+        "temperature": 0.25
+      }
+    ]
+  },
+  "response": {
+    "version": 1,
+    "batch_id": "26497835-87fb-4a29-a596-303aff56b633",
+    "request_sha256": "d61ab246c9a6d348b35801ade9931797d875217f7715b1e5ce9e96abf6ea5308",
+    "tree_size": 2,
+    "merkle_root": "8ef18303c447178e290a571d378efa506ebb380a7e67937389705196046254db",
+    "items": [
+      {
+        "leaf": {
+          "version": 1,
+          "batch_id": "26497835-87fb-4a29-a596-303aff56b633",
+          "request_sha256": "d61ab246c9a6d348b35801ade9931797d875217f7715b1e5ce9e96abf6ea5308",
+          "index": 0,
+          "job_id": "2c94e575-dd77-4225-9ad2-dcd075fdaa03",
+          "result_sha256": "8ccd06489a132c4ccf4bc177e301ded69a4ffc968a1fd4afcaea76e9c95de2e5"
+        },
+        "output": {
+          "choices": [
+            {
+              "message": {
+                "role": "assistant",
+                "content": "<!doctype html><button onclick=\"this.textContent=Number(this.textContent)+1\">0</button>"
+              }
+            }
+          ],
+          "covenant": {
+            "envelope": {
+              "payload": {
+                "job_id": "2c94e575-dd77-4225-9ad2-dcd075fdaa03",
+                "kind": "inference_call",
+                "capability_requirement": {
+                  "kind": "inference_call",
+                  "model_id": "fixture-small-model",
+                  "inference_tariff": {
+                    "tariff": {
+                      "schema_version": 1,
+                      "id": "fixture-tariff",
+                      "revision": 1,
+                      "model": "fixture-small-model",
+                      "base_micro_usdc": 500,
+                      "output_cap_micro_usdc_per_million": 1001,
+                      "max_output_tokens": 8192,
+                      "valid_from_ms": 1792602933750,
+                      "valid_until_ms": 1792603024750
+                    },
+                    "requested_output_cap": 512,
+                    "price_micro_usdc": 501
+                  }
+                },
+                "input": [
+                  {
+                    "type": "json",
+                    "value": {
+                      "messages": [
+                        {
+                          "content": "Build a useful counter webpage.",
+                          "role": "user"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "type": "json",
+                    "value": {
+                      "generation": {
+                        "max_tokens": 512,
+                        "temperature": 0.25
+                      }
+                    }
+                  },
+                  {
+                    "type": "json",
+                    "value": {
+                      "inference_tariff": {
+                        "tariff": {
+                          "schema_version": 1,
+                          "id": "fixture-tariff",
+                          "revision": 1,
+                          "model": "fixture-small-model",
+                          "base_micro_usdc": 500,
+                          "output_cap_micro_usdc_per_million": 1001,
+                          "max_output_tokens": 8192,
+                          "valid_from_ms": 1792602933750,
+                          "valid_until_ms": 1792603024750
+                        },
+                        "requested_output_cap": 512,
+                        "price_micro_usdc": 501
+                      }
+                    }
+                  }
+                ],
+                "price_micro_usdc": 501,
+                "issued_at_ms": 1792602934750,
+                "buyer": {
+                  "display": "buyer",
+                  "pubkey": "GwQnyjAE4KtEA9oH2v41FsxuHCR95BguZcD8U8XM35Z7"
+                }
+              },
+              "payload_json": "{\"buyer\":{\"display\":\"buyer\",\"pubkey\":\"GwQnyjAE4KtEA9oH2v41FsxuHCR95BguZcD8U8XM35Z7\"},\"capability_requirement\":{\"inference_tariff\":{\"price_micro_usdc\":501,\"requested_output_cap\":512,\"tariff\":{\"base_micro_usdc\":500,\"id\":\"fixture-tariff\",\"max_output_tokens\":8192,\"model\":\"fixture-small-model\",\"output_cap_micro_usdc_per_million\":1001,\"revision\":1,\"schema_version\":1,\"valid_from_ms\":1792602933750,\"valid_until_ms\":1792603024750}},\"kind\":\"inference_call\",\"model_id\":\"fixture-small-model\"},\"input\":[{\"type\":\"json\",\"value\":{\"messages\":[{\"content\":\"Build a useful counter webpage.\",\"role\":\"user\"}]}},{\"type\":\"json\",\"value\":{\"generation\":{\"max_tokens\":512,\"temperature\":0.25}}},{\"type\":\"json\",\"value\":{\"inference_tariff\":{\"price_micro_usdc\":501,\"requested_output_cap\":512,\"tariff\":{\"base_micro_usdc\":500,\"id\":\"fixture-tariff\",\"max_output_tokens\":8192,\"model\":\"fixture-small-model\",\"output_cap_micro_usdc_per_million\":1001,\"revision\":1,\"schema_version\":1,\"valid_from_ms\":1792602933750,\"valid_until_ms\":1792603024750}}}}],\"issued_at_ms\":1792602934750,\"job_id\":\"2c94e575-dd77-4225-9ad2-dcd075fdaa03\",\"kind\":\"inference_call\",\"price_micro_usdc\":501}",
+              "signer_pubkey_b58": "GwQnyjAE4KtEA9oH2v41FsxuHCR95BguZcD8U8XM35Z7",
+              "signature_b58": "3tmqeEswzpwrsaNsTsArWn2osjmF7CNGMZ2TR4wHCsQP7ECBdDo1hRdGSrDG6yaykofcrCEw7hN3hM7BxwdZ3nuN"
+            },
+            "receipt": {
+              "receipt": {
+                "job_id": "2c94e575-dd77-4225-9ad2-dcd075fdaa03",
+                "job_hash_hex": "4c251b80f04fe2e5047e3a01648c780f7558370b73cea6393554ababba56d6b1",
+                "result_hash_hex": "309cbd72cbc5feddf85965cfccdb5beaf053dd5daef8e40b0a4a2dc4b4bf419f",
+                "price_micro_usdc": 501,
+                "status": "ok",
+                "operator": {
+                  "display": "operator",
+                  "pubkey": "C2wW3RY8tdzh845UsfoNmQETn9xyjC7thG9Ukt1TTyNt"
+                }
+              },
+              "receipt_json": "{\"job_hash_hex\":\"4c251b80f04fe2e5047e3a01648c780f7558370b73cea6393554ababba56d6b1\",\"job_id\":\"2c94e575-dd77-4225-9ad2-dcd075fdaa03\",\"operator\":{\"display\":\"operator\",\"pubkey\":\"C2wW3RY8tdzh845UsfoNmQETn9xyjC7thG9Ukt1TTyNt\"},\"price_micro_usdc\":501,\"result_hash_hex\":\"309cbd72cbc5feddf85965cfccdb5beaf053dd5daef8e40b0a4a2dc4b4bf419f\",\"status\":\"ok\"}",
+              "signer_pubkey_b58": "C2wW3RY8tdzh845UsfoNmQETn9xyjC7thG9Ukt1TTyNt",
+              "signature_b58": "4xYPAv9i11n8m29omzXQDenU66Joj9J1EW2JP3vuFDY1kuKHtQpD6NY4RFH6y51UxMwEKTyEvFxymfejxSwzCaos"
+            },
+            "output": [
+              {
+                "type": "text",
+                "text": "<!doctype html><button onclick=\"this.textContent=Number(this.textContent)+1\">0</button>"
+              }
+            ],
+            "output_json": "[{\"text\":\"<!doctype html><button onclick=\\\"this.textContent=Number(this.textContent)+1\\\">0</button>\",\"type\":\"text\"}]",
+            "job_id": "2c94e575-dd77-4225-9ad2-dcd075fdaa03"
+          }
+        },
+        "audit_path": [
+          "ee25a996a4b02ecad5c2bb232855b94a342475a79c06155d4afac9f1b6fdb9af"
+        ]
+      },
+      {
+        "leaf": {
+          "version": 1,
+          "batch_id": "26497835-87fb-4a29-a596-303aff56b633",
+          "request_sha256": "d61ab246c9a6d348b35801ade9931797d875217f7715b1e5ce9e96abf6ea5308",
+          "index": 1,
+          "job_id": "c9f5c557-ac1d-4c70-8b9a-ce8440e7a211",
+          "result_sha256": "df1f8af551a768544ba6653e0aaea55058600814979e172c31608770fc21d2e0"
+        },
+        "output": {
+          "choices": [
+            {
+              "message": {
+                "role": "assistant",
+                "content": "<!doctype html><button onclick=\"this.textContent=Number(this.textContent)+1\">0</button>"
+              }
+            }
+          ],
+          "covenant": {
+            "envelope": {
+              "payload": {
+                "job_id": "c9f5c557-ac1d-4c70-8b9a-ce8440e7a211",
+                "kind": "inference_call",
+                "capability_requirement": {
+                  "kind": "inference_call",
+                  "model_id": "fixture-legacy-model"
+                },
+                "input": [
+                  {
+                    "type": "json",
+                    "value": {
+                      "messages": [
+                        {
+                          "content": "Build a useful counter webpage.",
+                          "role": "user"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "type": "json",
+                    "value": {
+                      "generation": {
+                        "max_tokens": 128,
+                        "temperature": 0.25
+                      }
+                    }
+                  }
+                ],
+                "price_micro_usdc": 900,
+                "buyer": {
+                  "display": "buyer",
+                  "pubkey": "GwQnyjAE4KtEA9oH2v41FsxuHCR95BguZcD8U8XM35Z7"
+                }
+              },
+              "payload_json": "{\"buyer\":{\"display\":\"buyer\",\"pubkey\":\"GwQnyjAE4KtEA9oH2v41FsxuHCR95BguZcD8U8XM35Z7\"},\"capability_requirement\":{\"kind\":\"inference_call\",\"model_id\":\"fixture-legacy-model\"},\"input\":[{\"type\":\"json\",\"value\":{\"messages\":[{\"content\":\"Build a useful counter webpage.\",\"role\":\"user\"}]}},{\"type\":\"json\",\"value\":{\"generation\":{\"max_tokens\":128,\"temperature\":0.25}}}],\"job_id\":\"c9f5c557-ac1d-4c70-8b9a-ce8440e7a211\",\"kind\":\"inference_call\",\"price_micro_usdc\":900}",
+              "signer_pubkey_b58": "GwQnyjAE4KtEA9oH2v41FsxuHCR95BguZcD8U8XM35Z7",
+              "signature_b58": "42Sr1w2gXpQWCDm39B5ypDsJw6cPB57pEfc8cWsetL5jgra3fDRGSxY5LJTGPbvHkc3eFXKo8p2UmsNF6mvDd4jP"
+            },
+            "receipt": {
+              "receipt": {
+                "job_id": "c9f5c557-ac1d-4c70-8b9a-ce8440e7a211",
+                "job_hash_hex": "543ed6e3f8d8eaa9d7bc6c6b5862d80f049a623941e9210c08baa8c33b523dab",
+                "result_hash_hex": "309cbd72cbc5feddf85965cfccdb5beaf053dd5daef8e40b0a4a2dc4b4bf419f",
+                "price_micro_usdc": 900,
+                "status": "ok",
+                "operator": {
+                  "display": "operator",
+                  "pubkey": "C2wW3RY8tdzh845UsfoNmQETn9xyjC7thG9Ukt1TTyNt"
+                }
+              },
+              "receipt_json": "{\"job_hash_hex\":\"543ed6e3f8d8eaa9d7bc6c6b5862d80f049a623941e9210c08baa8c33b523dab\",\"job_id\":\"c9f5c557-ac1d-4c70-8b9a-ce8440e7a211\",\"operator\":{\"display\":\"operator\",\"pubkey\":\"C2wW3RY8tdzh845UsfoNmQETn9xyjC7thG9Ukt1TTyNt\"},\"price_micro_usdc\":900,\"result_hash_hex\":\"309cbd72cbc5feddf85965cfccdb5beaf053dd5daef8e40b0a4a2dc4b4bf419f\",\"status\":\"ok\"}",
+              "signer_pubkey_b58": "C2wW3RY8tdzh845UsfoNmQETn9xyjC7thG9Ukt1TTyNt",
+              "signature_b58": "2QNZKbS7c5mjbh7CQcjkSfQxuxUQVEYwTiYpKaUtHcJcCRb6aD3DBrhnssK41iQm5TKKDjaaqSCpBpb7cUBkxqso"
+            },
+            "output": [
+              {
+                "type": "text",
+                "text": "<!doctype html><button onclick=\"this.textContent=Number(this.textContent)+1\">0</button>"
+              }
+            ],
+            "output_json": "[{\"text\":\"<!doctype html><button onclick=\\\"this.textContent=Number(this.textContent)+1\\\">0</button>\",\"type\":\"text\"}]",
+            "job_id": "c9f5c557-ac1d-4c70-8b9a-ce8440e7a211"
+          }
+        },
+        "audit_path": [
+          "bfc2e163df34ff16498c9deb7886bed594de337605ff07083c58ffb8bad70407"
+        ]
+      }
+    ]
+  },
+  "quote": {
+    "scheme": "exact",
+    "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+    "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "amount": "2640",
+    "payTo": "8zyYc7B8SbASFDciGfTiNkv8FJYeKAoGq9qQMkhvJ69m",
+    "maxTimeoutSeconds": 90,
+    "extra": {
+      "feePayer": "2nPN2gjxt9aMV5XdYrnYe7qLqTWj7DhZFnrVcu27aEM5",
+      "quoteId": "7a1b352b-83d1-4979-8259-d3674783f0e9",
+      "requestSha256": "d61ab246c9a6d348b35801ade9931797d875217f7715b1e5ce9e96abf6ea5308",
+      "expiresAtMs": 1792603024716,
+      "memo": "covenant.x402.v2:7a1b352b-83d1-4979-8259-d3674783f0e9:d61ab246c9a6d348b35801ade9931797d875217f7715b1e5ce9e96abf6ea5308",
+      "batchPricing": {
+        "version": 1,
+        "batch_id": "26497835-87fb-4a29-a596-303aff56b633",
+        "children": [
+          {
+            "job_id": "2c94e575-dd77-4225-9ad2-dcd075fdaa03",
+            "model": "fixture-small-model",
+            "max_output_tokens": 512,
+            "pricing": "model_tariff_v1",
+            "amount_atomic": 1512
+          },
+          {
+            "job_id": "c9f5c557-ac1d-4c70-8b9a-ce8440e7a211",
+            "model": "fixture-legacy-model",
+            "max_output_tokens": 128,
+            "amount_atomic": 1128
+          }
+        ]
+      }
+    }
+  },
+  "gatewayBuyer": "GwQnyjAE4KtEA9oH2v41FsxuHCR95BguZcD8U8XM35Z7",
+  "operators": [
+    "C2wW3RY8tdzh845UsfoNmQETn9xyjC7thG9Ukt1TTyNt"
+  ]
+}

@@ -2,7 +2,7 @@ name: compute-release
 
 # A compute-v* tag builds the Covenant Compute tools for macOS and Linux, signs
 # them and publishes the release. Pull requests that touch the release inputs
-# build the same archives without releasing them.
+# build explicitly named candidate snapshots without releasing them.
 on:
   push:
     tags:
@@ -26,8 +26,20 @@ env:
   RUSTUP_TOOLCHAIN: "1.98.1"
 
 jobs:
+  packaging-checks:
+    name: packaging mode checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: exercise release and snapshot packaging policy
+        run: deploy/compute-release/test-dist.sh
+
   build:
     name: build ${{ matrix.target }}
+    needs: packaging-checks
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
@@ -50,7 +62,7 @@ jobs:
           persist-credentials: false
 
       - name: check the tag
-        if: startsWith(github.ref, 'refs/tags/compute-v')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/compute-v')
         run: |
           version="$(sed -n 's/^version = "\(.*\)"$/\1/p' agent-os/crates/covenant-compute-buyer/Cargo.toml)"
           if [ "compute-v${version}" != "${GITHUB_REF_NAME}" ]; then
@@ -72,18 +84,23 @@ jobs:
       - name: build and check
         env:
           CC_aarch64_unknown_linux_musl: musl-gcc
-        run: deploy/compute-release/dist.sh "${TARGET}"
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = pull_request ]; then
+            deploy/compute-release/dist.sh --snapshot "${TARGET}"
+          else
+            deploy/compute-release/dist.sh "${TARGET}"
+          fi
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ${{ matrix.target }}
+          name: ${{ github.event_name == 'pull_request' && format('candidate-snapshot-{0}', matrix.target) || matrix.target }}
           path: dist/*.tar.gz
           if-no-files-found: error
           retention-days: 7
 
   release:
     name: sign and release
-    if: startsWith(github.ref, 'refs/tags/compute-v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/compute-v')
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -117,6 +134,16 @@ jobs:
       - name: checksums
         working-directory: dist
         run: |
+          # Candidate snapshots are never eligible for release publication.
+          for archive in *.tar.gz; do
+            case "$archive" in
+              covenant-compute-darwin-arm64.tar.gz|covenant-compute-darwin-x86_64.tar.gz|covenant-compute-linux-x86_64.tar.gz|covenant-compute-linux-arm64.tar.gz) ;;
+              *) echo "::error::unexpected release archive: $archive"; exit 1 ;;
+            esac
+          done
+          for platform in darwin-arm64 darwin-x86_64 linux-x86_64 linux-arm64; do
+            test -f "covenant-compute-${platform}.tar.gz"
+          done
           sha256sum -- *.tar.gz > checksums.txt
           cat checksums.txt
 

@@ -6,6 +6,8 @@ import bs58 from 'bs58';
 import { z } from 'zod';
 import { assert, sha256, stable, strictJson, verifyComputeResult } from './proof.mjs';
 import { Journal } from './journal.mjs';
+import { verifyBatchResult, verifyBatchQuote } from './batch.mjs';
+export { verifyBatchResult } from './batch.mjs';
 import { validatePaymentTransaction } from './payment.mjs';
 
 export const SOLANA_GENESIS = '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d';
@@ -18,6 +20,7 @@ export const requestSchema = z.object({
   temperature: z.number().finite().min(0).max(2).multipleOf(0.01).optional(),
   pricing: z.literal('model_tariff_v1').optional(),
 }).strict();
+export const batchRequestSchema = z.object({ version: z.literal(1), requests: z.array(requestSchema).min(1).max(32) }).strict();
 const amount = value => { assert(Number.isSafeInteger(value) && value > 0, 'invalid_spend_cap'); return value; };
 function url(value, local = false) {
   const u = new URL(value);
@@ -93,7 +96,7 @@ export class CovenantX402Client {
     maxPaymentMicroUsdc, maxTotalMicroUsdc, maxInputBytes = 4096, timeoutMs = 30_000, fetchImpl = fetch, allowLocalhost = false }) {
     const gateway = url(gatewayUrl, allowLocalhost);
     assert(gateway.pathname === '/' && !gateway.search, 'gateway_origin_required');
-    this.endpoint = gateway.origin + '/v1/chat/completions'; this.rpcUrl = url(rpcUrl, allowLocalhost).href;
+    this.endpoint = gateway.origin + '/v1/chat/completions'; this.batchEndpoint = gateway.origin + '/v1/inference/batches'; this.rpcUrl = url(rpcUrl, allowLocalhost).href;
     address(payTo); address(gatewayBuyer);
     assert(Array.isArray(operators) && operators.length > 0, 'trusted_operator_keys_required'); operators.forEach(address);
     this.payTo = payTo; this.gatewayBuyer = gatewayBuyer; this.operators = [...operators]; this.wallet = walletProvider;
@@ -113,18 +116,19 @@ export class CovenantX402Client {
     assert(response.ok, 'rpc_unavailable'); const parsed = strictJson(await bodyText(response));
     assert(!parsed.error && Object.hasOwn(parsed, 'result'), 'rpc_error'); return parsed.result;
   }
-  async post(id, body, payment) {
-    return this.fetch(this.endpoint, { method: 'POST', body, redirect: 'error', signal: AbortSignal.timeout(this.timeoutMs),
+  async post(id, body, payment, endpoint = this.endpoint) {
+    return this.fetch(endpoint, { method: 'POST', body, redirect: 'error', signal: AbortSignal.timeout(this.timeoutMs),
       headers: { 'content-type': 'application/json', 'idempotency-key': id, ...(payment ? { 'PAYMENT-SIGNATURE': payment } : {}) } });
   }
-  validateQuote(required, digest, expiredAllowed = false) {
-    assert(required.x402Version === 2 && required.resource?.url === this.endpoint, 'untrusted_payment_resource');
+  validateQuote(required, digest, expiredAllowed = false, endpoint = this.endpoint) {
+    assert(required.x402Version === 2 && required.resource?.url === endpoint, 'untrusted_payment_resource');
     const quote = solanaQuote(required);
     assert(quote.scheme === 'exact' && quote.network === NETWORK && quote.asset === USDC && quote.payTo === this.payTo, 'untrusted_payment_rail');
     assert(typeof quote.amount === 'string' && /^[1-9][0-9]*$/.test(quote.amount), 'invalid_payment_amount');
     const price = BigInt(quote.amount); assert(price <= BigInt(this.maxPayment), 'per_payment_cap_exceeded');
     const extra = quote.extra;
     assert(extra && /^[0-9a-f-]{36}$/.test(extra.quoteId) && extra.requestSha256 === digest, 'quote_request_mismatch');
+    if (endpoint === this.endpoint) assert(!Object.hasOwn(extra, 'batchPricing'), 'unexpected_batch_pricing');
     assert(Number.isSafeInteger(extra.expiresAtMs) && (expiredAllowed || extra.expiresAtMs > Date.now() + 5000), 'quote_expired');
     assert(extra.memo === shortMemo(extra.quoteId, digest) || extra.memo === `covenant.x402.v2:${extra.quoteId}:${digest}`, 'quote_memo_mismatch');
     address(extra.feePayer); assert(extra.feePayer !== this.payer, 'buyer_must_not_pay_solana_fees');
@@ -136,15 +140,17 @@ export class CovenantX402Client {
     validatePaymentTransaction(VersionedTransaction.deserialize(Buffer.from(authorization.payload.transaction, 'base64')), quote, this.payer);
     return authorization;
   }
-  cachedResult(row, request, requestId, digest) {
+  cachedResult(row, request, requestId, digest, batch = false) {
+    const endpoint = batch ? this.batchEndpoint : this.endpoint;
     const required = strictJson(row.quote);
-    const { quote, price } = this.validateQuote(required, digest, true);
+    const { quote, price } = this.validateQuote(required, digest, true, endpoint);
+    if (batch) verifyBatchQuote(quote, request);
     this.validateAuthorization(row.payment, quote);
     const complete = strictJson(row.result);
     assert(complete.status === 'completed' && complete.requestId === requestId && complete.requestSha256 === digest, 'cached_request_mismatch');
     assert(complete.amountMicroUsdc === row.amount && row.amount === price, 'cached_amount_mismatch');
-    const verified = verifyComputeResult(complete.result, { request, requestSha256: digest, quoteId: quote.extra.quoteId, gatewayBuyer: this.gatewayBuyer, operators: this.operators });
-    assert(complete.text === verified.text, 'cached_text_mismatch');
+    const verified = (batch ? verifyBatchResult : verifyComputeResult)(complete.result, { request, requestSha256: digest, quoteId: quote.extra.quoteId, quote, gatewayBuyer: this.gatewayBuyer, operators: this.operators });
+    assert(batch ? stable(complete.texts) === stable(verified.texts) : complete.text === verified.text, 'cached_text_mismatch');
     const settlement = complete.settlement;
     assert(settlement?.success === true && settlement.network === NETWORK && settlement.payer === this.payer, 'settlement_identity_mismatch');
     assert(typeof settlement.transaction === 'string' && bs58.decode(settlement.transaction).length === 64, 'invalid_settlement_signature');
@@ -170,41 +176,63 @@ export class CovenantX402Client {
     for (const optional of ['temperature', 'pricing']) if (request[optional] === undefined) delete request[optional];
     const messages = request.messages.map(({ role, content }) => ({ role, content }));
     assert(Buffer.byteLength(JSON.stringify(messages)) <= this.maxInputBytes, 'input_byte_limit_exceeded');
+    return this.#purchasePrepared(requestId, request, false);
+  }
+  async purchaseBatch({ requestId, ...input }) {
+    assert(typeof requestId === 'string' && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(requestId), 'stable_uuid_request_id_required');
+    const request = batchRequestSchema.parse(input);
+    // The first sequential-operator rollout admits at most two fresh jobs.
+    // Historical signed authorizations still reconcile their original 1..32
+    // children; neither an empty row nor an unsigned quote permits new spend.
+    assert(request.requests.length <= 2 || this.journal.get(requestId)?.payment, 'fresh_batch_size_exceeded');
+    for (const child of request.requests) {
+      for (const optional of ['temperature', 'pricing']) if (child[optional] === undefined) delete child[optional];
+      const messages = child.messages.map(({ role, content }) => ({ role, content }));
+      assert(Buffer.byteLength(JSON.stringify(messages)) <= this.maxInputBytes, 'input_byte_limit_exceeded');
+    }
+    return this.#purchasePrepared(requestId, request, true);
+  }
+  async #purchasePrepared(requestId, request, batch) {
+    const endpoint = batch ? this.batchEndpoint : this.endpoint;
     const body = stable(request); assert(Buffer.byteLength(body) <= 128_000, 'request_too_large');
+    // The original journal scope is shared by single and batch purchases: moving
+    // between endpoints cannot reset cumulative spend or reuse a purchase UUID.
     const digest = sha256(body); let row = this.journal.claim(requestId, body, digest);
-    if (row.result) return this.cachedResult(row, request, requestId, digest);
+    if (row.result) return this.cachedResult(row, request, requestId, digest, batch);
     const owner = row.owner;
     try {
       assert(await this.rpc('getGenesisHash') === SOLANA_GENESIS, 'rpc_network_mismatch');
       if (!row.quote) {
-        const response = await this.post(requestId, body);
+        const response = await this.post(requestId, body, undefined, endpoint);
         assert(response.status === 402, `quote_http_${response.status}`);
         const header = response.headers.get('PAYMENT-REQUIRED'); await response.body?.cancel();
         assert(header && header.length < 16_384, 'missing_payment_required');
         const required = strictJson(Buffer.from(header, 'base64').toString('utf8'));
-        const { price } = this.validateQuote(required, digest);
+        const { quote, price } = this.validateQuote(required, digest, false, endpoint);
+        if (batch) verifyBatchQuote(quote, request);
         this.journal.reserve(requestId, owner, required, price); row = this.journal.get(requestId);
       }
-      const required = strictJson(row.quote); const { quote, price } = this.validateQuote(required, digest, Boolean(row.payment));
+      const required = strictJson(row.quote); const { quote, price } = this.validateQuote(required, digest, Boolean(row.payment), endpoint);
+      if (batch) verifyBatchQuote(quote, request);
       assert(row.amount === price, 'reserved_amount_mismatch');
       if (!row.payment) {
         const payload = await this.http.createPaymentPayload({ ...required, accepts: [quote] });
         assert(payload.x402Version === 2 && stable(payload.accepted) === stable(quote), 'sdk_changed_payment_requirements');
         const headers = this.http.encodePaymentSignatureHeader(payload);
         const payment = new Headers(headers).get('PAYMENT-SIGNATURE'); assert(payment, 'missing_payment_signature');
-        this.validateQuote(required, digest);
+        this.validateQuote(required, digest, false, endpoint);
         this.journal.signed(requestId, owner, payment); row = this.journal.get(requestId);
       }
       this.validateAuthorization(row.payment, quote);
       this.journal.check(requestId, owner);
-      const response = await this.post(requestId, body, row.payment);
+      const response = await this.post(requestId, body, row.payment, endpoint);
       if (response.status === 202) { await response.body?.cancel(); return { status: 'pending', requestId, requestSha256: digest }; }
       assert(response.status === 200, `paid_http_${response.status}_authorization_retained`);
-      const result = strictJson(await bodyText(response));
-      const verified = verifyComputeResult(result, { request, requestSha256: digest, quoteId: quote.extra.quoteId, gatewayBuyer: this.gatewayBuyer, operators: this.operators });
+      const result = strictJson(await bodyText(response, (batch ? 10 : 4) * 1024 * 1024));
+      const verified = (batch ? verifyBatchResult : verifyComputeResult)(result, { request, requestSha256: digest, quoteId: quote.extra.quoteId, quote, gatewayBuyer: this.gatewayBuyer, operators: this.operators });
       const settlement = await this.verifySettlement(response.headers.get('PAYMENT-RESPONSE'), row.payment);
       const complete = { status: 'completed', requestId, requestSha256: digest, amountMicroUsdc: row.amount, settlement,
-        text: verified.text, result };
+        ...(batch ? { texts: verified.texts } : { text: verified.text }), result };
       this.journal.complete(requestId, owner, JSON.stringify(complete)); return complete;
     } finally { this.journal.release(requestId, owner); }
   }

@@ -1,10 +1,11 @@
 // Official x402 static SVM verification, with durable settlement owned by the
-// Rust gateway. No call to the SDK's in-memory settlement cache can broadcast.
+// Rust gateway. The SDK's settlement path never runs here; the stored bytes are
+// broadcast directly or by a facilitator holding the same fee payer key.
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { getTransactionDecoder, getSignatureFromTransaction, assertIsFullySignedTransaction } from '@solana/kit';
 import { ExactSvmScheme } from '@x402/svm/exact/facilitator';
-import { createPricingPolicy, validPaymentAmount } from './pricing.mjs';
+import { batchPricingTotal, createPricingPolicy, validPaymentAmount } from './pricing.mjs';
 
 export const RAILS = Object.freeze({
   'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp': {
@@ -35,10 +36,16 @@ function decode(wire) {
   if (!bytes.length || bytes.length > 1232 || bytes.toString('base64') !== wire) throw new Rejected('invalid transaction encoding');
   return { bytes, tx: getTransactionDecoder().decode(bytes) };
 }
-export function createBridge({ signer, config, rpc, now = Date.now, verifier }) {
+/** One facilitator submission per payment at a time, repeated at most this often while the signature is unseen. */
+export const RESUBMIT_MS = 20_000;
+/** How long a facilitator call may run before the same bytes are also sent from here. */
+export const FACILITATOR_GRACE_MS = 4_000;
+
+export function createBridge({ signer, config, rpc, now = Date.now, verifier, facilitator, log = () => {} }) {
   const { network, asset, payTo, feePayer, resourceUrl, secret } = config;
   if (!RAILS[network] || asset !== RAILS[network].asset || secret.length < 32) throw new Error('invalid rail configuration');
   const pricing = createPricingPolicy(config);
+  const batchResourceUrl = new URL('/v1/inference/batches', resourceUrl).href;
   // A v3 payment from the official client uses about 13k of its 20k CU; the
   // 60k ceiling admits v2 memos (43,642 CU) signed by earlier Covenant clients.
   // Bound sponsorship: <= 2 signatures, 60k CU and 1000 microlamports/CU.
@@ -47,11 +54,39 @@ export function createBridge({ signer, config, rpc, now = Date.now, verifier }) 
   function requirements(terms, fresh) {
     const extra = terms?.extra;
     if (terms?.scheme !== 'exact' || terms.network !== network || terms.asset !== asset || terms.payTo !== payTo || extra?.feePayer !== feePayer || !validPaymentAmount(terms.amount) || terms.maxTimeoutSeconds !== 90) throw new Rejected('payment rail or amount mismatch');
-    if (fresh && !pricing.allows(terms.amount, now())) throw new Rejected('payment amount is not configured for admission');
+    const batch = Object.hasOwn(extra, 'batchPricing');
+    if (batch && batchPricingTotal(extra.batchPricing) !== BigInt(terms.amount)) throw new Rejected('invalid batch pricing binding');
+    if (fresh && !(batch ? pricing.allowsBatch(extra.batchPricing, terms.amount, now()) : pricing.allows(terms.amount, now()))) throw new Rejected('payment amount is not configured for admission');
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(extra.quoteId) || !/^[0-9a-f]{64}$/.test(extra.requestSha256) || !validMemo(extra) || !Number.isSafeInteger(extra.expiresAtMs)) throw new Rejected('invalid quote binding');
     if (fresh && (now() > extra.expiresAtMs || extra.expiresAtMs > now() + 90_000)) throw new Rejected('quote expired');
+    return batch ? batchResourceUrl : resourceUrl;
   }
   function seal(value) { return createHmac('sha256', secret).update(canonical(value)).digest('hex'); }
+  const submissions = new Map();
+  /**
+   * Whether to leave the broadcast to the facilitator for now: during a young
+   * call, or for a while after one returned. A slow, failed or declined call
+   * hands it back, so a payment never waits on the facilitator to expire.
+   */
+  function submit(ev, terms) {
+    const last = submissions.get(ev.transactionId);
+    if (last?.failed) return false;
+    if (last?.running) return now() - last.at < FACILITATOR_GRACE_MS;
+    if (last && now() - last.at < RESUBMIT_MS) return true;
+    const attempt = { running: true, at: now(), failed: false };
+    submissions.set(ev.transactionId, attempt);
+    (async () => {
+      try {
+        const result = await facilitator.settle(ev.payload, terms);
+        if (!result?.success) { attempt.failed = true; log(`facilitator settle declined: ${result?.errorReason ?? 'no reason'}`); }
+        else if (result.transaction !== ev.transactionId) { attempt.failed = true; log('facilitator settled another signature'); }
+      } catch {
+        attempt.failed = true;
+        log('facilitator settle unavailable; sending directly');
+      } finally { attempt.running = false; }
+    })();
+    return true;
+  }
   async function assertNetwork() {
     const genesis = await rpc('getGenesisHash', []);
     if (genesis !== RAILS[network].genesis) throw new Error('RPC network mismatch');
@@ -65,8 +100,8 @@ export function createBridge({ signer, config, rpc, now = Date.now, verifier }) 
         network, asset, assetDecimals: 6, payTo, feePayer, resourceUrl, ...pricing.snapshot() };
     },
     async verify({ paymentPayload: payload, paymentRequirements: terms, resourceUrl: url }) {
-      requirements(terms, true);
-      if (url !== resourceUrl || payload?.resource?.url !== resourceUrl || payload?.x402Version !== 2 || !isDeepStrictEqual(payload.accepted, terms)) throw new Rejected('payment payload does not match quote');
+      const expectedResource = requirements(terms, true);
+      if (url !== expectedResource || payload?.resource?.url !== expectedResource || payload?.x402Version !== 2 || !isDeepStrictEqual(payload.accepted, terms)) throw new Rejected('payment payload does not match quote');
       await assertNetwork();
       const { bytes } = decode(payload.payload?.transaction);
       const verified = await verifier.verify(payload, terms);
@@ -78,7 +113,8 @@ export function createBridge({ signer, config, rpc, now = Date.now, verifier }) 
       assertIsFullySignedTransaction(tx);
       const authorizationId = digest(bytes);
       const transactionId = getSignatureFromTransaction(tx);
-      const evidence = { transaction: signed, authorizationId, transactionId, payer: verified.payer, terms };
+      // The original payload lets a facilitator broadcast this same transaction.
+      const evidence = { transaction: signed, authorizationId, transactionId, payer: verified.payer, terms, ...(facilitator ? { payload } : {}) };
       return { payer: verified.payer, authorization_id: authorizationId, transaction_id: transactionId, encoded_transaction: JSON.stringify({ evidence, seal: seal(evidence) }) };
     },
     async settle({ payment, paymentRequirements: terms }) {
@@ -99,6 +135,7 @@ export function createBridge({ signer, config, rpc, now = Date.now, verifier }) 
       const statuses = await rpc('getSignatureStatuses', [[signature], { searchTransactionHistory: true }]);
       const status = statuses?.value?.[0];
       if (status?.confirmationStatus === 'finalized') {
+        submissions.delete(signature);
         if (status.err !== null) return { status: 'failed' };
         const transaction = await rpc('getTransaction', [signature, { encoding: 'base64', commitment: 'finalized', maxSupportedTransactionVersion: 0 }]);
         if (!transaction) return { status: 'pending' };
@@ -106,6 +143,10 @@ export function createBridge({ signer, config, rpc, now = Date.now, verifier }) 
         return { status: 'finalized', transaction_id: signature };
       }
       if (status) return { status: 'pending' };
+      // A facilitator signs the same message with the same fee payer key, and
+      // Ed25519 signatures are deterministic, so it broadcasts exactly these
+      // bytes. If it is unreachable or declines, they are sent from here.
+      if (facilitator && ev.payload && submit(ev, terms)) return { status: 'pending' };
       // Re-broadcast the original signed transaction only. Expiry, RPC errors,
       // and lost responses are uncertain, never permission to create a new one.
       try {

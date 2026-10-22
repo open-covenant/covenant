@@ -34,6 +34,11 @@ and local command checks passed. Public page/card publication remains separate i
 Package 9 is live as of 2026-10-19: public discovery and unpaid quote parity passed,
 with retained financial state and a 58-micro-USDC startup probe in its
 [release record](compute-discovery-release-evidence.md).
+Package 12 passed one installed-client production batch acceptance on 2026-10-21.
+Both signed children and all three transfers verified; saved-response recovery
+and zero-call JavaScript/Python cache verification passed. Production admissions
+are enabled; public batch SDK publication and discovery remain
+separate in the [batch release record](compute-inference-batches-release-evidence.md).
 
 Packages 1 and 2 preserve Solana USDC settlement, CVNT staking, admission and
 existing fees.
@@ -52,7 +57,7 @@ Provider market sampling is read-only and cannot create rentals or move funds.
 | 9 | Aug 16 [discovery](https://github.com/prismnetwork-tech/prism/pull/192) | Live x402 V2 manifest and model catalog using current capacity, exact retail/native tariffs, verifier policy and affordable caps; [contract](compute-discovery.md) | Real HTTP quote parity, read-only journal/budget checks, availability/expiry/rail failures and original-payment recovery tests | Live 2026-10-19 at source 21925eb644; manifest/catalog and four unpaid quote variants passed. Retained financial records and budgets preserved; one startup provider probe cost 58 micro-USDC. [Release evidence](compute-discovery-release-evidence.md) |
 | 10 | Aug 16 [dashboard](https://github.com/prismnetwork-tech/prism/pull/193) | Not included in this release | Separate parity branch | Not activated here |
 | 11 | Aug 17–24 [hardware trust](https://github.com/prismnetwork-tech/prism/commit/a066e1de717bd299a8ce942704f344bda8c31909) | Not included in this release | Separate parity branch | Not activated here |
-| 12 | Aug 24 [batches](https://github.com/prismnetwork-tech/prism/commit/c5efc2823916a09b78008ec286b76029934136d0) | Not included in this release | Separate parity branch | Not activated here |
+| 12 | Aug 24 [batches](https://github.com/prismnetwork-tech/prism/commit/c5efc2823916a09b78008ec286b76029934136d0) | One x402 payment for up to two independently priced text requests, frozen child IDs, durable recovery, native receipts and ordered proofs; [contract](compute-inference-batches.md) | Combined gateway/verifier/JavaScript/Python suites, exact-source CI, immutable image and installed-client paid acceptance passed; [release record](compute-inference-batches-release-evidence.md) | Source 8ed36c4 deployed 2026-10-21; one 28,608-micro-USDC two-child purchase and both native payouts finalized. Original saved-response recovery and zero-call cache replay passed after a private harness logging failure. Accounted use 52,608 micro-USDC and 20,001 lamports. Production admissions enabled; batch SDK publication/discovery remain separate. Optional live restart/direct server replay not run |
 | 13 | Aug 24 [warm pool](https://github.com/prismnetwork-tech/prism/commit/4e52ebb42fd31f7f2f7b207ff7050b1a22d82ca6) | Not included in this release | Separate parity branch | Not activated here |
 | 14 | Aug 25 [confidential inference](https://github.com/prismnetwork-tech/prism/commit/e7307a8e493eca00375f04c7d08ad565dc3e0008) and follow-up fixes | Not included in this release | Separate parity branch | Not activated here |
 | 15 | Aug 29–30 [reproduction](https://github.com/prismnetwork-tech/prism/commit/740364facff6d07d1c9579881e39cbc014fcecc4) | Not included in this release | Separate parity branch | Not activated here |

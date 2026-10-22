@@ -35,6 +35,8 @@ struct Readiness {
     resource_url: String,
     legacy_price_atomic: String,
     retail_tariffs: Vec<InferenceTariff>,
+    #[serde(default)]
+    batch_enabled: bool,
 }
 
 impl Readiness {
@@ -63,6 +65,31 @@ impl Readiness {
             let last = variable * 1_000_000 / rate;
             first <= last && first <= u128::from(tariff.max_output_tokens) && last >= 1
         })
+    }
+    fn allows_batch(&self, manifest: &crate::batch::BatchPricingManifest, now: u64) -> bool {
+        self.batch_enabled
+            && manifest.children.len() <= 2
+            && manifest.total().is_ok()
+            && manifest.children.iter().all(|child| {
+                if child.model.trim().is_empty()
+                    || child.model == "any"
+                    || child.model.len() > 128
+                    || child.model.chars().any(char::is_control)
+                    || child.max_output_tokens > 32_768
+                {
+                    return false;
+                }
+                match child.pricing.as_deref() {
+                    None => Some(child.amount_atomic) == self.legacy_price(),
+                    Some("model_tariff_v1") => self.retail_tariffs.iter().any(|tariff| {
+                        tariff.model == child.model
+                            && tariff.valid_at(now)
+                            && tariff.price(child.max_output_tokens).ok()
+                                == Some(child.amount_atomic)
+                    }),
+                    Some(_) => false,
+                }
+            })
     }
 }
 
@@ -380,6 +407,24 @@ impl PaymentRail for Bridge {
         }
         Ok(())
     }
+    async fn check_batch_price(
+        &self,
+        manifest: &crate::batch::BatchPricingManifest,
+        now: u64,
+    ) -> Result<()> {
+        if self.family != Family::Solana {
+            return Err(GatewayError::Unavailable(
+                "batches require the Solana payment rail".into(),
+            ));
+        }
+        let (snapshot, now) = self.readiness(now).await?;
+        if !snapshot.allows_batch(manifest, now) {
+            return Err(GatewayError::Unavailable(
+                "batch pricing is not configured for admission".into(),
+            ));
+        }
+        Ok(())
+    }
     fn authorization_id(&self, header: &str) -> Result<String> {
         let payload = payment_payload(header)?;
         if self.family == Family::Base {
@@ -601,6 +646,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn batch_readiness_requires_opt_in_and_each_exact_child_price() {
+        use crate::batch::{BatchPrice, BatchPricingManifest};
+        let (bridge, state, task) = fixture().await;
+        let manifest = BatchPricingManifest {
+            version: 1,
+            batch_id: uuid::Uuid::new_v4(),
+            children: [256, 2048]
+                .map(|cap| BatchPrice {
+                    job_id: uuid::Uuid::new_v4(),
+                    model: "haiku".into(),
+                    max_output_tokens: cap,
+                    pricing: Some("model_tariff_v1".into()),
+                    amount_atomic: tariff().price(cap).unwrap(),
+                })
+                .into(),
+        };
+        assert!(bridge.check_batch_price(&manifest, 1000).await.is_err());
+        state.value.lock().await["batchEnabled"] = json!(true);
+        bridge.check_batch_price(&manifest, 1000).await.unwrap();
+        let mut changed = manifest.clone();
+        changed.children[0].amount_atomic += 1;
+        changed.children[1].amount_atomic -= 1;
+        assert_eq!(changed.total().unwrap(), manifest.total().unwrap());
+        assert!(bridge.check_batch_price(&changed, 1000).await.is_err());
+        for field in ["model", "max_output_tokens", "job_id", "amount_atomic"] {
+            let mut changed = serde_json::to_value(&manifest).unwrap();
+            changed["children"][0][field] = match field {
+                "model" => json!("other"),
+                "max_output_tokens" => json!(257),
+                "job_id" => changed["children"][1][field].clone(),
+                _ => json!(0),
+            };
+            let changed = serde_json::from_value(changed).unwrap();
+            assert!(
+                bridge.check_batch_price(&changed, 1000).await.is_err(),
+                "accepted {field}"
+            );
+        }
+        let mut legacy = manifest.clone();
+        legacy.children[0].pricing = None;
+        legacy.children[0].amount_atomic = 50_000;
+        bridge.check_batch_price(&legacy, 1000).await.unwrap();
+        assert_eq!(legacy.total().unwrap(), 80_432);
+        task.abort();
+    }
+
+    #[tokio::test]
     async fn readiness_refuses_identity_drift_malformed_stale_or_oversized_policy() {
         let (bridge, state, task) = fixture().await;
         for (field, value) in [
@@ -782,6 +874,7 @@ mod tests {
             encoded_transaction: "{}".into(),
         };
         let terms = PaymentTerms {
+            batch_pricing: None,
             quote_id: uuid::Uuid::nil(),
             request_sha256: "a".repeat(64),
             network: BASE.into(),

@@ -5,7 +5,7 @@ import { createServer } from 'node:http';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createPrivateKey, sign, randomUUID, createPublicKey, verify } from 'node:crypto';
+import { createPrivateKey, sign, randomUUID, createPublicKey, verify, createHash } from 'node:crypto';
 import { Keypair, VersionedTransaction } from '@solana/web3.js';
 import bs58 from 'bs58';
 import { SOLANA_GENESIS, NETWORK, USDC, PAYMENT_COMPUTE_UNITS, shortMemo } from '../../index.mjs';
@@ -41,12 +41,17 @@ export async function fixture(options = {}) {
         else throw new Error('Unexpected RPC '+body.method);
         res.end(JSON.stringify({jsonrpc:'2.0',id:body.id,result}));return;
       }
-      assert.equal(req.url,'/v1/chat/completions'); const digest=sha256(stable(body));const quoteId=req.headers['idempotency-key'];
+      assert.ok(['/v1/chat/completions', '/v1/inference/batches'].includes(req.url)); const batch = req.url === '/v1/inference/batches'; const digest=sha256(stable(body));const quoteId=req.headers['idempotency-key'];
       const quote=savedQuotes.get(quoteId)??{scheme:'exact',network:NETWORK,asset:USDC,amount:String(options.price?.(body)??1000),payTo:seller.publicKey.toBase58(),maxTimeoutSeconds:90,extra:{feePayer:fee.publicKey.toBase58(),quoteId,requestSha256:digest,expiresAtMs:Date.now()+90000,memo:options.legacyMemo?`covenant.x402.v2:${quoteId}:${digest}`:shortMemo(quoteId,digest)}};
+      if (batch && !quote.extra.batchPricing) {
+        quote.extra.batchPricing = {version:1,batch_id:randomUUID(),children:body.requests.map(child=>({job_id:randomUUID(),model:child.model,max_output_tokens:child.max_tokens,...(child.pricing ? {pricing:child.pricing} : {}),amount_atomic:options.childPrice?.(child)??1000}))};
+        quote.amount = String(quote.extra.batchPricing.children.reduce((sum, child) => sum + child.amount_atomic, 0));
+      }
       if(!req.headers['payment-signature']) {
         quotes++; if(options.badQuote) options.badQuote(quote);
         savedQuotes.set(quoteId,quote);
-        const required={x402Version:2,resource:{url:base+'/v1/chat/completions',description:'Covenant inference',mimeType:'application/json'},accepts:options.offers?options.offers(quote):[quote]};
+        const required={x402Version:2,resource:{url:base+req.url,description:'Covenant inference',mimeType:'application/json'},accepts:options.offers?options.offers(quote):[quote]};
+        if(options.badRequired)options.badRequired(required);
         res.statusCode=402;res.setHeader('PAYMENT-REQUIRED',encode(required));res.end('{}');return;
       }
       sends++;payments.push(req.headers['payment-signature']);
@@ -63,6 +68,7 @@ export async function fixture(options = {}) {
         const verified=await bridge.verify({paymentPayload:payment,paymentRequirements:payment.accepted,resourceUrl:base+'/v1/chat/completions'});
         assert.equal(verified.payer,key.publicKey.toBase58());assert.equal(verified.authorization_id,sha256(Buffer.from(payment.payload.transaction,'base64')));
       }
+      if(options.verifyPayment)await options.verifyPayment(payment,base+req.url);
       const limit=transaction.message.compiledInstructions[0];
       assert.equal(transaction.message.staticAccountKeys[limit.programIdIndex].toBase58(),'ComputeBudget111111111111111111111111111111');
       assert.equal(Buffer.from(limit.data).readUInt32LE(1),options.expectedUnits??PAYMENT_COMPUTE_UNITS);
@@ -75,8 +81,9 @@ export async function fixture(options = {}) {
       confirmed.set(txid,{meta:{err:null},transaction:[Buffer.from(transaction.serialize()).toString('base64'),'base64']});
       if(firstFailure){firstFailure=false;res.statusCode=503;res.end('{}');return;}
       if(firstPending){firstPending=false;res.statusCode=202;res.end('{}');return;}
-      const output=[{type:'text',text:'<!doctype html><button onclick="this.textContent=Number(this.textContent)+1">0</button>'}];
-      const job={job_id:quoteId,kind:'inference_call',capability_requirement:{kind:'inference_call',model_id:body.model},input:[{type:'json',value:{messages:body.messages}},{type:'json',value:{generation:{max_tokens:body.max_tokens,temperature:body.temperature}}}],price_micro_usdc:900};
+      const makeResult = (body, childId, index) => {
+      const output=[{type:'text',text:options.outputText??'<!doctype html><button onclick="this.textContent=Number(this.textContent)+1">0</button>'}];
+      const job={job_id:childId,kind:'inference_call',capability_requirement:{kind:'inference_call',model_id:body.model},input:[{type:'json',value:{messages:body.messages}},{type:'json',value:{generation:{max_tokens:body.max_tokens,...(body.temperature !== undefined ? {temperature:body.temperature} : {})}}}],price_micro_usdc:900};
       if(body.pricing==='model_tariff_v1') {
         const issued=Date.now();
         const tariff={schema_version:1,id:'fixture-tariff',revision:1,model:body.model,base_micro_usdc:500,output_cap_micro_usdc_per_million:1001,max_output_tokens:8192,valid_from_ms:issued-1000,valid_until_ms:issued+90000};
@@ -85,10 +92,16 @@ export async function fixture(options = {}) {
         job.input.push({type:'json',value:{inference_tariff:nativeQuote}});
         job.price_micro_usdc=nativeQuote.price_micro_usdc; job.issued_at_ms=issued;
       }
-      if(options.badJob)options.badJob(job);
+      if(options.badJob)options.badJob(job,index);
       const envelope=signature(buyer,'covenant.compute.job.v1\n',job,'payload','buyer');
-      const receipt=signature(operator,'covenant.compute.receipt.v1\n',{job_id:quoteId,job_hash_hex:sha256(envelope.payload_json),result_hash_hex:sha256(stable(output)),price_micro_usdc:job.price_micro_usdc,status:'ok'},'receipt','operator');
-      const result={choices:[{message:{role:'assistant',content:output[0].text}}],covenant:{envelope,receipt,output,output_json:stable(output),request_sha256:digest,quote_id:quoteId,job_id:quoteId}};
+      const receiptFields={job_id:childId,job_hash_hex:sha256(envelope.payload_json),result_hash_hex:sha256(stable(output)),price_micro_usdc:job.price_micro_usdc,status:'ok'};
+      if(options.badReceipt)options.badReceipt(receiptFields,index);
+      const receipt=signature(operator,'covenant.compute.receipt.v1\n',receiptFields,'receipt','operator');
+      const result={choices:[{message:{role:'assistant',content:output[0].text}}],covenant:{envelope,receipt,output,output_json:stable(output),...(batch ? {} : {request_sha256:digest,quote_id:quoteId}),job_id:childId}};
+      if(options.badChild)options.badChild(result,index);
+      return result;
+      };
+      const result = batch ? batchProof(quote.extra.batchPricing.batch_id, digest, body.requests.map((child,index)=>makeResult(child,quote.extra.batchPricing.children[index].job_id,index))) : makeResult(body,quoteId,0);
       if(options.badResult)options.badResult(result);
       res.setHeader('PAYMENT-RESPONSE',encode({success:true,network:NETWORK,payer:key.publicKey.toBase58(),transaction:txid}));res.end(JSON.stringify(result));
     } catch(error) { res.statusCode=500;res.end(JSON.stringify({error:error.message})); }
@@ -98,4 +111,21 @@ export async function fixture(options = {}) {
   const walletProvider=new Wallet({keypair:key.secretKey,rpcUrl:base+'/rpc',genesisHash:SOLANA_GENESIS});
   const config={gatewayUrl:base,rpcUrl:base+'/rpc',payTo:seller.publicKey.toBase58(),gatewayBuyer:buyer.publicKey.toBase58(),operators:[operator.publicKey.toBase58()],walletProvider,journalPath:join(home,'purchases.sqlite'),maxPaymentMicroUsdc:1000,maxTotalMicroUsdc:2000,allowLocalhost:true};
   return {config,walletProvider,walletKeypair:Array.from(key.secretKey),feeKeypair:Array.from(fee.secretKey),counts:()=>({requests,signatures,quotes,sends,payments}),cleanup:async()=>{await new Promise(resolve=>server.close(resolve));rmSync(home,{recursive:true,force:true});}};
+}
+
+// Test-only independent recursive RFC6962 builder. The shipped verifier uses the
+// iterative audit-path algorithm and is also checked against the Rust fixture.
+export function batchProof(batchId, digest, outputs) {
+  const hash = value => createHash('sha256').update(value).digest();
+  const items = outputs.map((output,index)=>({leaf:{version:1,batch_id:batchId,request_sha256:digest,index,job_id:output.covenant.job_id,result_sha256:sha256(stable(output))},output,audit_path:[]}));
+  const leaves = items.map(item=>hash(Buffer.concat([Buffer.from([0]),Buffer.from('covenant.compute.inference-batch.leaf.v1\n'+stable(item.leaf))])));
+  const split = size => 2 ** Math.floor(Math.log2(size - 1));
+  const root = values => values.length === 1 ? values[0] : hash(Buffer.concat([Buffer.from([1]),root(values.slice(0,split(values.length))),root(values.slice(split(values.length)))]));
+  const path = (values,index) => {
+    if(values.length === 1)return [];
+    const k=split(values.length);
+    return index<k ? [...path(values.slice(0,k),index),root(values.slice(k)).toString('hex')] : [...path(values.slice(k),index-k),root(values.slice(0,k)).toString('hex')];
+  };
+  items.forEach((item,index)=>{item.audit_path=path(leaves,index);});
+  return {version:1,batch_id:batchId,request_sha256:digest,tree_size:items.length,merkle_root:root(leaves).toString('hex'),items};
 }

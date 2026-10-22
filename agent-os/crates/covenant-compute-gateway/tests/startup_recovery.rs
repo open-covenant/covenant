@@ -152,7 +152,7 @@ async fn invalid_tariff_configuration_keeps_existing_settlement_recovery_alive()
     }
     let journal = completed.expect("the saved settlement did not recover");
     let saved = &journal["entries"][quote_id]["phase"];
-    assert_eq!(journal["version"], 5);
+    assert_eq!(journal["version"], 6);
     assert_eq!(journal["namespace"], namespace);
     assert_eq!(journal["reserve_micro_usdc"], 100);
     assert_eq!(saved["transaction_id"], transaction);

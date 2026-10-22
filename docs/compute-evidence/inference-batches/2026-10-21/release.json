@@ -1,0 +1,189 @@
+{
+  "schema": "covenant.compute-inference-batches-release.v1",
+  "recorded_at": "2026-10-21T20:48:25.605Z",
+  "source_revision": "8ed36c4fe075bb097e90bfe8a009ca638083f0f3",
+  "source_is_deployed_code_revision_not_later_documentation_commit": true,
+  "status": "production_enabled_paid_acceptance_verified",
+  "admissions_enabled": true,
+  "prism_package": 12,
+  "pull_request": "https://github.com/open-covenant/covenant/pull/371",
+  "deployment": {
+    "provider": "Render",
+    "deployment_id": "dep-dbci3ro473hc73eaj69g",
+    "finished_at": "2026-10-21T20:35:55.620858Z",
+    "image": "ghcr.io/open-covenant/covenant/compute-node-public@sha256:5c55c1d79d6d65730b5eda683bece27f0ee86c6d977edc91e0129fe72fc6a466",
+    "gateway_journal_version": 6,
+    "preserved_existing_environment_values": 57,
+    "environment_values_after": 58,
+    "instance_count": 1,
+    "persistent_volume_preserved": true,
+    "prior_financial_rows_preserved": true
+  },
+  "qualification": {
+    "exact_source_ci_run": 39669114521,
+    "pull_request_ci_run": 39669124615,
+    "cli_snapshot_run": 39669124801,
+    "image_run": 39669114455,
+    "all_expected_checks_succeeded": true,
+    "anonymous_linux_amd64_image_verified": true,
+    "image_layer_count": 16,
+    "isolated_restart_smoke_passed": true,
+    "restart_smoke_paid_dispatches": 0
+  },
+  "paid_acceptance": {
+    "request_id": "39911a3d-a733-4f6b-8b43-fb79364b5e53",
+    "request_sha256": "82f20be7e835857e8ecd8383f2b4c13039023d2fc5ee5ff27c2a0fcbeb608ada",
+    "batch_id": "3d61f297-23e2-4667-b7a9-ea14d7217f8b",
+    "native_job_ids": [
+      "1ceb4f92-af74-41cd-b163-c83b63fafab9",
+      "4238cf02-bdd1-4e77-a7b7-38bbe9a817cf"
+    ],
+    "children": 2,
+    "model": "claude-haiku-4.5",
+    "output_cap_per_child": 256,
+    "pricing": "model_tariff_v1",
+    "verified_texts": [
+      "A",
+      "B"
+    ],
+    "merkle_root": "c5d4a2960562e1b4a725a90b60be7110718ca52cd8b10b52ca950eda3d163418",
+    "result_sha256": "432513ae44c9703d567d2fc2d22d34030f7e6460518e3c3cf12b4924fb6d74c2",
+    "original_payment_sha256": "e1c1f8593dcf391d24123909c1e582c51662f77b7510bdf5b55fddb81008664f",
+    "original_authorization_count": 1,
+    "external_paid_posts": 1,
+    "wallet_signatures": 1,
+    "http_status": 200,
+    "paid_post_intent_at": "2026-10-21T20:37:06.005Z",
+    "http_response_saved_at": "2026-10-21T20:37:12.089Z",
+    "observed_paid_post_latency_ms": 6084,
+    "retail_finalized": {
+      "transaction": "doo4sr72NEnnUBbbhTrootR7KdYthLjueKgYr81mB5822tFDqFJhF22eTGMS3Emqa2cv4Nxn7JyQX7r68sN4sMh",
+      "slot": 459766703,
+      "fee_lamports": 10001,
+      "retail_micro_usdc": 28608
+    },
+    "native_finalized": [
+      {
+        "job_id": "1ceb4f92-af74-41cd-b163-c83b63fafab9",
+        "transaction": "1yjwYgCa6L5ArDK296sNc9rDsaMH1yqLByLB3JMyyfbzLCfwzgsJAF7aesBPPiEbuz735XVHGeM5BSBiMUcM1ZS",
+        "slot": 459766689,
+        "finalized": true,
+        "native_gross_micro_usdc": 11920,
+        "operator_net_micro_usdc": 10728,
+        "protocol_fee_micro_usdc": 1192,
+        "fee_lamports": 5000,
+        "rent_lamports": 0
+      },
+      {
+        "job_id": "4238cf02-bdd1-4e77-a7b7-38bbe9a817cf",
+        "transaction": "5ezKjqrWfz4gHJHSy6SuZ3vnPHUib5UY7NN3XBwwY7q6iJPs9tEiLD8big7vUVLpqYaHnF8ypyLyWrm986bPxwsk",
+        "slot": 459766699,
+        "finalized": true,
+        "native_gross_micro_usdc": 11920,
+        "operator_net_micro_usdc": 10728,
+        "protocol_fee_micro_usdc": 1192,
+        "fee_lamports": 5000,
+        "rent_lamports": 0
+      }
+    ],
+    "accounting": {
+      "provider_accounted_micro_usdc": 160,
+      "retail_micro_usdc": 28608,
+      "native_gross_micro_usdc": 23840,
+      "aggregate_accounted_micro_usdc": 52608,
+      "provider_new_calls": 3,
+      "provider_2048_cap_calls": 1,
+      "provider_256_cap_calls": 2,
+      "provider_reservations_counted_as_additional_charges": false,
+      "native_net_or_protocol_fee_added_again": false,
+      "actual_provider_invoice_verified": false
+    },
+    "total_fee_lamports": 20001,
+    "rent_lamports": 0,
+    "approved_aggregate_accounted_ceiling_micro_usdc": 750000,
+    "approved_fee_ceiling_lamports": 50000
+  },
+  "client_recovery": {
+    "initial_runner_result": "stopped_after_http200_saved",
+    "error": "event_log_corrupt",
+    "cause": "Private harness paid-post sequence string overwrote the numeric append-only event sequence; next event validation stopped before SDK completion.",
+    "original_events_preserved": true,
+    "original_response_and_payment_preserved": true,
+    "recovered_via": "Installed candidate SDK consuming only saved original HTTP200 and finalized original transaction evidence; normal journal claim/complete/release.",
+    "completed": true,
+    "external_network_calls": 0,
+    "new_quotes": 0,
+    "wallet_signatures": 0,
+    "paid_posts": 0,
+    "new_request_ids": 0,
+    "customer_rows_after": 13,
+    "historical_customer_rows_preserved": 12,
+    "cached_replay_verified": true,
+    "cached_replay_at": "2026-10-21T20:44:11Z",
+    "cached_replay_external_calls": 0,
+    "cached_replay_journal_unchanged": true,
+    "python_cached_verification": true,
+    "python_cached_verification_at": "2026-10-21T20:44:49Z",
+    "python_cached_network_calls": 0
+  },
+  "artifacts": {
+    "published": false,
+    "status": "Unpublished batch candidate archives retain their base package version numbers.",
+    "javascript_version": "0.4.0",
+    "python_version": "0.3.0",
+    "sdk_trees": {
+      "javascript": "33281e192b687f21e48f871ff8fa0f52ead6c1f4",
+      "python": "0d04faa7cd40cb6e55c844978af704c8401ae344"
+    },
+    "packages": [
+      {
+        "name": "covenant-compute-x402-client-0.4.0.tgz",
+        "bytes": 138348,
+        "sha256": "13316140f515fef2ef928ad445456b7423e11145dae8fbe34cb0658c9de79330"
+      },
+      {
+        "name": "covenant_compute_x402-0.3.0-py3-none-any.whl",
+        "bytes": 33545,
+        "sha256": "b3727fa5a87b3ed51242a9317e58ad2b1bb7f9fedf958b6b6f54f722ef302dc4"
+      },
+      {
+        "name": "covenant_compute_x402-0.3.0.tar.gz",
+        "bytes": 60698,
+        "sha256": "93084839ea9a6de4109934e5000deb623520d04b45372d1d148bf9b132b09869"
+      }
+    ]
+  },
+  "evidence_sha256": {
+    "finalized_verification": "5c2fcbdc569ada87ef4788be3d61b931c17f76f71b257c9f6ec4c01c7ac0417e",
+    "original_retail_transaction": "a5767490c6d7bcdc0cddca025ad98bfbca921d435d02ccadb8e2afb018394ec7",
+    "recovery_manifest": "2a8f598445a0360bb7f27ba3fd4048e747e54e14ad3db30d6970f3836e76b5b2",
+    "recovery_report": "8f5202c6a6ac10477818bb5596b1670a145bc8c4eb7b4fc2d9860974f8745a3c",
+    "cached_replay_report": "a81bc7c54cd0ff2474820827a3c75acc9426d6634a12705687bd45f4cc791619",
+    "artifact_manifest": "f19b54f2078c456d1b7f425783136a9e61deaa0ecceacebed406cf5435aa4278",
+    "python_cached_verification": "13e1e048747c450b9dd6b7a55ec09d9ccd9cb7e6685799f3bc359d58df18c7a1",
+    "admission_restored": "62aa183574177c7986c00f333f7a1c0bbd80fa7ed102c60bfaaf73ce1a9645f9",
+    "public_health_after_recovery": "a1b742c4f89186c480e6f0535e569b952a21d9b106dcf5c370c6e767f6ac5b97"
+  },
+  "not_established": {
+    "public_batch_discovery_or_indexing": true,
+    "batch_sdk_publication": true,
+    "optional_live_restart_or_direct_server_replay": true,
+    "provider_invoice_reconciliation": true,
+    "larger_than_two_fresh_children": true,
+    "parallel_throughput": true
+  },
+  "secret_material_included": false,
+  "admission_restored": {
+    "observed_at": "2026-10-21T20:48:11.985Z",
+    "original_manual_hold_archived": true,
+    "same_processes_preserved": 5,
+    "restart_count": 0,
+    "new_payments": 0,
+    "financial_writes": 0,
+    "original_payment_replaced": false,
+    "public_health_checked_at": "2026-10-21T20:48:25.605Z",
+    "public_health_http_status": 200,
+    "public_health_revision": "8ed36c4fe075bb097e90bfe8a009ca638083f0f3",
+    "public_admissions_enabled": true
+  }
+}

@@ -29,6 +29,7 @@ const config = {
   network: required('COVENANT_GATEWAY_NETWORK'), asset: required('COVENANT_GATEWAY_ASSET'),
   payTo: required('COVENANT_GATEWAY_PAY_TO'), feePayer: required('COVENANT_GATEWAY_FEE_PAYER'),
   resourceUrl: required('COVENANT_GATEWAY_RESOURCE_URL'), priceAtomic: required('COVENANT_GATEWAY_PRICE_MICRO_USDC'), secret,
+  batchEnabled: process.env.COVENANT_GATEWAY_BATCH_ENABLED === 'true',
   ...await readTariffConfig(process.env.COVENANT_GATEWAY_TARIFFS_FILE),
 };
 if (keypair.address !== config.feePayer) throw new Error('fee payer key mismatch');
@@ -42,7 +43,19 @@ const jsonRpc = (url, timeoutMs = 15_000) => async (method, params) => {
   return data.result;
 };
 const rpc = jsonRpc(rpcUrl);
-const bridge = createBridge({ signer, config, rpc });
+// Optionally an x402 facilitator holding the same fee payer key broadcasts
+// Solana payments; this process still signs and confirms them.
+const solanaFacilitator = process.env.COVENANT_GATEWAY_SOLANA_FACILITATOR_URL
+  ? new HTTPFacilitatorClient({ url: httpsUrl('COVENANT_GATEWAY_SOLANA_FACILITATOR_URL'), timeoutMs: 5_000 })
+  : undefined;
+// A facilitator that does not list this fee payer declines every payment, and
+// each one is then sent directly; say so once rather than per payment.
+solanaFacilitator?.getSupported().then(supported => {
+  const listed = supported?.kinds?.some(kind => kind.network === config.network && kind.extra?.feePayer === config.feePayer)
+    || supported?.signers?.['solana:*']?.includes(config.feePayer);
+  if (!listed) console.log('Solana facilitator does not list this fee payer; payments will be sent directly');
+}).catch(() => console.log('Solana facilitator unreachable at startup; payments are sent directly until it answers'));
+const bridge = createBridge({ signer, config, rpc, facilitator: solanaFacilitator, log: message => console.log(message) });
 await bridge.assertNetwork();
 // Optional USDC on Base once a Base merchant is set: CDP credentials for
 // Coinbase's facilitator, or any other by URL. The chain and facilitator are
@@ -81,7 +94,9 @@ const server = createServer(async (req, res) => {
   if (req.method !== 'POST' || !['/verify', '/settle'].includes(route)) return reply(404, { error: 'not found' });
   try {
     let size = 0; const chunks = [];
-    for await (const chunk of req) { size += chunk.length; if (size > 32_768) throw new Rejected('request too large'); chunks.push(chunk); }
+    // A 32-child manifest appears in both accepted terms and sealed evidence.
+    // Bound the entire private request while allowing worst-case JSON escaping.
+    for await (const chunk of req) { size += chunk.length; if (size > 131_072) throw new Rejected('request too large'); chunks.push(chunk); }
     const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
     if (typeof body !== 'object' || body === null || Array.isArray(body)) throw new Rejected('invalid request');
     reply(200, await rail[route.slice(1)](body));
@@ -94,4 +109,4 @@ const server = createServer(async (req, res) => {
 server.requestTimeout = 30_000;
 server.headersTimeout = 10_000;
 const port = Number(process.env.COVENANT_GATEWAY_BRIDGE_PORT ?? 4043);
-server.listen(port, '127.0.0.1', () => console.log(`Covenant x402 verifier listening on loopback port ${port}; Base ${evm ? `on ${evm.network}` : 'off'}`));
+server.listen(port, '127.0.0.1', () => console.log(`Covenant x402 verifier listening on loopback port ${port}; Solana broadcast ${solanaFacilitator ? 'through a facilitator' : 'direct'}; Base ${evm ? `on ${evm.network}` : 'off'}`));

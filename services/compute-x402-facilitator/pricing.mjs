@@ -9,6 +9,32 @@ const INTEGER_FIELDS = FIELDS.filter(key => !['id', 'model'].includes(key));
 const keysAre = (value, fields) => value && typeof value === 'object' && !Array.isArray(value)
   && Object.keys(value).sort().join(',') === [...fields].sort().join(',');
 const require = condition => { if (!condition) throw new Error('invalid pricing configuration'); };
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const uuid = value => typeof value === 'string' && UUID.test(value) && value !== '00000000-0000-0000-0000-000000000000';
+const model = value => typeof value === 'string' && value.trim() && value !== 'any'
+  && Buffer.byteLength(value) <= 128 && !/[\u0000-\u001f\u007f-\u009f]/u.test(value);
+
+// Structural validation also applies to sealed-payment recovery, independently
+// of current tariff configuration. Every child identity and price is frozen.
+export function batchPricingTotal(manifest) {
+  if (!keysAre(manifest, ['version', 'batch_id', 'children']) || manifest.version !== 1
+    || !uuid(manifest.batch_id) || !Array.isArray(manifest.children)
+    || manifest.children.length < 1 || manifest.children.length > 32) return undefined;
+  let total = 0n;
+  const ids = new Set();
+  for (const child of manifest.children) {
+    if (!(keysAre(child, ['job_id', 'model', 'max_output_tokens', 'amount_atomic'])
+        || keysAre(child, ['job_id', 'model', 'max_output_tokens', 'amount_atomic', 'pricing']))
+      || !uuid(child.job_id) || ids.has(child.job_id) || !model(child.model)
+      || !Number.isSafeInteger(child.max_output_tokens) || child.max_output_tokens < 1 || child.max_output_tokens > 32_768
+      || !Number.isSafeInteger(child.amount_atomic) || child.amount_atomic < 1
+      || (child.pricing != null && child.pricing !== 'model_tariff_v1')) return undefined;
+    ids.add(child.job_id);
+    total += BigInt(child.amount_atomic);
+    if (total > MAX_SAFE) return undefined;
+  }
+  return total;
+}
 
 // Saved sealed payments may predate public SDK-safe tariff configuration.
 // Their amount is still a canonical positive u64, never a coerced JS number.
@@ -45,7 +71,7 @@ function hasPrice(tariff, amount) {
   return first <= last && first <= tariff.cap && last >= 1n;
 }
 
-export function createPricingPolicy({ priceAtomic, tariffRows, tariffConfigError = false }) {
+export function createPricingPolicy({ priceAtomic, tariffRows, tariffConfigError = false, batchEnabled = false }) {
   try {
     require(!tariffConfigError && validPaymentAmount(priceAtomic) && BigInt(priceAtomic) <= MAX_SAFE);
     const legacy = BigInt(priceAtomic), retail = [], definitions = [], models = new Set();
@@ -63,17 +89,26 @@ export function createPricingPolicy({ priceAtomic, tariffRows, tariffConfigError
     return {
       valid: true,
       // Return a copy of the policy actually loaded, never caller-owned config.
-      snapshot: () => ({ legacyPriceAtomic: priceAtomic, retailTariffs: structuredClone(definitions) }),
+      snapshot: () => ({ legacyPriceAtomic: priceAtomic, retailTariffs: structuredClone(definitions), batchEnabled: batchEnabled === true }),
       allows(amount, now) {
         if (!validPaymentAmount(amount) || !Number.isSafeInteger(now) || now < 0) return false;
         const value = BigInt(amount);
         return value === legacy || retail.some(t => t.from <= now && now < t.until && hasPrice(t, value));
       },
+      allowsBatch(manifest, amount, now) {
+        if (batchEnabled !== true || !validPaymentAmount(amount) || !Number.isSafeInteger(now) || now < 0
+          || batchPricingTotal(manifest) !== BigInt(amount) || manifest.children.length > 2) return false;
+        return manifest.children.every(child => child.pricing == null
+          ? BigInt(child.amount_atomic) === legacy
+          : retail.some(t => t.model === child.model && t.from <= now && now < t.until
+            && BigInt(child.max_output_tokens) <= t.cap
+            && price(t, BigInt(child.max_output_tokens)) === BigInt(child.amount_atomic)));
+      },
     };
   } catch {
     // Bad optional configuration closes fresh authorization, not recovery of
     // an already sealed payment whose original terms remain authoritative.
-    return { valid: false, allows: () => false };
+    return { valid: false, allows: () => false, allowsBatch: () => false };
   }
 }
 

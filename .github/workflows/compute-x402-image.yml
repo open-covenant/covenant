@@ -1,7 +1,7 @@
 name: compute-x402-image
 on:
   push:
-    branches: [codex/compute-x402-release, deploy/compute-coordinator]
+    branches: [codex/compute-x402-release, codex/compute-inference-batches, deploy/compute-coordinator]
     paths:
       - .github/workflows/compute-x402-image.yml
       - deploy/Dockerfile.compute-x402
@@ -10,6 +10,8 @@ on:
       - services/compute-x402-facilitator/**
       - services/compute-inference-provider/**
       - sdk/compute-x402-client/**
+      - sdk/compute-x402-python/**
+      - fixtures/compute/**
       - agent-os/**
   workflow_dispatch:
     inputs:
@@ -44,6 +46,9 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version: 24.20.0
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: '3.12'
       - name: Verify payment and provider boundaries
         run: |
           npm ci --omit=dev --ignore-scripts --prefix services/compute-x402-facilitator
@@ -52,6 +57,8 @@ jobs:
           npm rebuild better-sqlite3 --prefix sdk/compute-x402-client
           COVENANT_X402_BRIDGE_PATH="$PWD/services/compute-x402-facilitator/bridge.mjs" \
             node --test sdk/compute-x402-client/test/*.test.mjs
+          python -m pip install './sdk/compute-x402-python[test,agent-framework,demo]'
+          python -m pytest sdk/compute-x402-python/tests -q
           npm test --prefix services/compute-inference-provider
           node --test deploy/compute-canary-watchdog.test.mjs deploy/compute-x402/runtime.test.mjs deploy/compute-x402/supervisor.test.mjs deploy/compute-x402/smoke.test.mjs
           node --test deploy/compute-x402/accept-discovery.test.mjs

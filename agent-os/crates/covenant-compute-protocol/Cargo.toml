@@ -21,6 +21,7 @@ bs58 = { workspace = true }
 chacha20poly1305 = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
+serde_jcs = { workspace = true }
 # float_roundtrip: parse JSON floats to the nearest f64 so a number
 # serialized then parsed back is bit-identical. WorkReceipt binds the job
 # output by hash (`result_hash_hex`), and an embedding output is a block of

@@ -516,6 +516,38 @@ describe('launches the provider refuses', () => {
     expect(market.plans).toHaveLength(3);
   });
 
+  it('moves past a stale quote the control plane refuses before booking', async () => {
+    let posts = 0;
+    const market = mockMarket({
+      offers,
+      post: (plan) =>
+        ++posts === 1
+          ? new Response(JSON.stringify({ error: { code: 'stale_offer' } }), { status: 409 })
+          : {
+              id: 'accepted-after-stale',
+              status: 'provisioning',
+              offer_id: plan.offer.id,
+              maximum_usdc_micros: plan.maximum_usdc_micros,
+              access_url: null,
+              error: null,
+              receipt: null,
+            },
+    });
+    const session = new ComputeSession(journalConfig(), { runKey: 'stale-once' });
+    expect((await session.launch(300)).offer_id).toBe('b');
+    expect(market.plans.map((plan) => plan.offer.id)).toEqual(['a', 'b']);
+  });
+
+  it('gives up on stale quotes after two retries', async () => {
+    const market = mockMarket({
+      offers,
+      post: () => new Response(JSON.stringify({ error: { code: 'stale_offer' } }), { status: 409 }),
+    });
+    const session = new ComputeSession(journalConfig(), { runKey: 'stale-always' });
+    await expect(session.launch(300)).rejects.toThrow(/stale_offer/);
+    expect(market.plans).toHaveLength(3);
+  });
+
   it('does not retry a failure that charged anything', async () => {
     const market = mockMarket({
       offers,

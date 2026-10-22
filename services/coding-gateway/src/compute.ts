@@ -233,9 +233,9 @@ interface JournalRun {
   reservations: Reservation[];
 }
 
-// A launch the provider refuses outright starts nothing and charges nothing, so
-// it does not use up the run's launch allowance; up to this many such refusals
-// are retried on the next-cheapest machine.
+// A launch refused outright, by the provider or as a stale quote, starts nothing
+// and charges nothing, so it does not use up the run's launch allowance; up to
+// this many refusals are retried on the next-cheapest machine.
 const MAX_DECLINED_LAUNCHES = 2;
 const launched = (run: JournalRun): number => run.reservations.filter((r) => !r.rejected).length;
 const declinedByProvider = (job: ComputeJob): boolean =>
@@ -558,10 +558,18 @@ export class ComputeSession {
       }
       const maxLaunches = Math.min(run.maxLaunches, this.options.maxLaunches);
       for (;;) {
-        const job = await this.launchOnce(duration, maxLaunches);
-        const attempts = this.current().reservations.length;
-        if (!declinedByProvider(job) || attempts >= run.maxLaunches + MAX_DECLINED_LAUNCHES)
-          return job;
+        const exhausted = () =>
+          this.current().reservations.length >= run.maxLaunches + MAX_DECLINED_LAUNCHES;
+        let job: ComputeJob;
+        try {
+          job = await this.launchOnce(duration, maxLaunches);
+        } catch (error) {
+          // A stale quote is refused before any booking; submit() marked it declined.
+          if (error instanceof ComputeError && error.code === 'stale_offer' && !exhausted())
+            continue;
+          throw error;
+        }
+        if (!declinedByProvider(job) || exhausted()) return job;
         // Nothing started and nothing was charged: try the next machine.
         this.update((current) => {
           current.reservations.find((r) => r.jobId === job.id)!.rejected = true;

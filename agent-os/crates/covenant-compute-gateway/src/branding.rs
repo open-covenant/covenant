@@ -13,6 +13,7 @@ use std::sync::Arc;
 const PAGE: &str = include_str!("branding/index.html");
 const STYLE: &[u8] = include_bytes!("branding/style.css");
 const ICON: &[u8] = include_bytes!("branding/covenant-icon-02026997.png");
+pub(crate) const ICON_PATH: &str = "/brand/covenant-icon-02026997.png";
 const FAVICON: &[u8] = include_bytes!("branding/favicon.ico");
 const BANNER: &[u8] = include_bytes!("branding/covenant-banner-4b58cf6c.png");
 const REVALIDATE: &str = "public, max-age=300";
@@ -82,7 +83,7 @@ pub(crate) fn router() -> Router<Arc<Gateway>> {
             get(|| async { asset(FAVICON, "image/x-icon", REVALIDATE) }),
         )
         .route(
-            "/brand/covenant-icon-02026997.png",
+            ICON_PATH,
             get(|| async { asset(ICON, "image/png", IMMUTABLE) }),
         )
         .route(

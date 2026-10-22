@@ -300,6 +300,46 @@ impl Gateway {
     }
 }
 
+/// The x402 `bazaar` declaration for a single inference quote. The body is a
+/// fixed sample: a buyer's own prompt must never reach a facilitator's catalog.
+pub fn bazaar(request: &Value) -> Option<Value> {
+    let model = request["model"]
+        .as_str()
+        .filter(|model| model.len() <= 128)?;
+    let mut body = json!({"model":model,
+        "messages":[{"role":"user","content":"Reply with a short greeting."}],
+        "max_tokens":request["max_tokens"].as_u64().map_or(256, |cap| cap.min(256))});
+    if request["pricing"] == "model_tariff_v1" {
+        body["pricing"] = json!("model_tariff_v1");
+    }
+    let body_schema = json!({"type":"object","required":["model","messages","max_tokens"],"properties":{
+        "model":{"type":"string","description":"A model id from GET /v1/models."},
+        "messages":{"type":"array","minItems":1,"maxItems":32,"items":{"type":"object",
+            "required":["role","content"],"properties":{
+                "role":{"enum":["system","user","assistant"]},"content":{"type":"string","minLength":1}}}},
+        "max_tokens":{"type":"integer","minimum":1,"description":"Output cap. The price is fixed by this cap before payment."},
+        "temperature":{"type":"number","minimum":0,"maximum":2},
+        "pricing":{"const":"model_tariff_v1"}}});
+    let example = json!({"id":"chatcmpl-0824019d-746e-492d-9736-4b113dc63857","object":"chat.completion",
+        "created":1792611886,"model":model,
+        "choices":[{"index":0,"message":{"role":"assistant","content":"Hello! How can I help?"},"finish_reason":"stop"}],
+        "covenant":{"job_id":"0824019d-746e-492d-9736-4b113dc63857","receipt":{
+            "receipt":{"job_id":"0824019d-746e-492d-9736-4b113dc63857","status":"ok","price_micro_usdc":11920},
+            "signature_b58":"2w9DNi8PVvFowbCVUjLSqhTgxu6X1ELDcDZe8oZbwZSGfK782LNAARnEmtdnqzqp8xfRsheC3z3rRRG4LEa3sKrP",
+            "signer_pubkey_b58":"9fefASd52qfR2Q8P81yXtkHu9E4q9KvW58x2ixBAAvLR"}}});
+    Some(json!({
+        "info":{"input":{"type":"http","method":"POST","bodyType":"json","body":body},
+            "output":{"type":"json","example":example}},
+        "schema":{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","required":["input"],
+            "properties":{
+                "input":{"type":"object","additionalProperties":false,"required":["type","method","bodyType","body"],
+                    "properties":{"type":{"type":"string","const":"http"},"method":{"type":"string","enum":["POST"]},
+                        "bodyType":{"type":"string","enum":["json"]},"body":body_schema}},
+                "output":{"type":"object","required":["type"],"properties":{"type":{"type":"string"},
+                    "example":{"type":"object","required":["choices","covenant"]}}}}}
+    }))
+}
+
 fn respond(result: Result<Value>) -> Response {
     let mut response = match result {
         Ok(value) => Json(value).into_response(),

@@ -165,9 +165,17 @@ impl PaymentTerms {
         accepted
     }
     pub fn requirements(&self) -> Value {
-        json!({"x402Version":2,"resource":{"url":self.resource_url,
-            "description":"Covenant inference with a verified operator receipt","mimeType":"application/json"},
-            "accepts":[self.accepted()]})
+        // serviceName, tags and iconUrl are what Bazaar catalogs show for the seller.
+        let mut resource = json!({"url":self.resource_url,
+            "description":"Text inference for AI agents, with a receipt signed by the operator who ran it.",
+            "mimeType":"application/json","serviceName":"Covenant Compute",
+            "tags":["inference","llm","ai","receipts"]});
+        if let Ok(mut icon) = reqwest::Url::parse(&self.resource_url) {
+            icon.set_path(branding::ICON_PATH);
+            icon.set_query(None);
+            resource["iconUrl"] = json!(icon.as_str());
+        }
+        json!({"x402Version":2,"resource":resource,"accepts":[self.accepted()]})
     }
 }
 
@@ -183,6 +191,15 @@ impl Quote {
         let mut required = self.terms.requirements();
         if let Some(accepts) = required["accepts"].as_array_mut() {
             accepts.extend(self.alternates.iter().map(PaymentTerms::accepted));
+        }
+        required
+    }
+    /// The 402 body. Batches are not public yet, so only single requests
+    /// carry the Bazaar declaration that facilitators catalog.
+    pub fn challenge(&self, bazaar: Option<Value>) -> Value {
+        let mut required = self.requirements();
+        if let (None, Some(bazaar)) = (&self.terms.batch_pricing, bazaar) {
+            required["extensions"] = json!({"bazaar":bazaar});
         }
         required
     }
@@ -1329,9 +1346,10 @@ async fn handle_http(
     } else {
         None
     };
+    let bazaar = discovery::bazaar(&request);
     match gateway.handle(request, id, payment, now_ms()).await {
         Ok(GatewayReply::PaymentRequired(quote)) => {
-            let requirements = quote.requirements();
+            let requirements = quote.challenge(bazaar);
             let encoded = base64::engine::general_purpose::STANDARD
                 .encode(serde_json::to_vec(&requirements).unwrap());
             let mut response = (StatusCode::PAYMENT_REQUIRED, Json(requirements)).into_response();

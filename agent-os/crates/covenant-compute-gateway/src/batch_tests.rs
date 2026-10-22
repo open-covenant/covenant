@@ -795,6 +795,10 @@ async fn mixed_v5_base_payment_and_batch_migrate_to_v6_without_cross_rail_or_dup
             .len(),
         1
     );
+    assert!(batch_quote
+        .challenge(Some(json!({"info":{}})))
+        .get("extensions")
+        .is_none());
     let terms = batch_quote.terms;
     let child_ids: Vec<_> = terms
         .batch_pricing

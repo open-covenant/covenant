@@ -445,7 +445,14 @@ fn x402scan_contract_fixture_uses_the_real_quote_serializer() {
     // Public, unpayable fixtures can be extracted with --nocapture for an
     // isolated run of the pinned indexer's parser. No wallet or network is used.
     println!("OPENAPI_FIXTURE_JSON={document}");
-    println!("PAYMENT_FIXTURE_JSON={}", terms.requirements());
+    let quote = crate::Quote {
+        terms,
+        alternates: vec![],
+    };
+    println!(
+        "PAYMENT_FIXTURE_JSON={}",
+        quote.challenge(crate::discovery::bazaar(request))
+    );
 }
 
 #[tokio::test]

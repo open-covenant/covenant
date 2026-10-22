@@ -1339,6 +1339,7 @@ async fn rejected_payment_and_http_body_mismatch_cause_no_dispatch() {
         short_memo(id, &request_digest(&json!({"prompt":"hi"})).unwrap())
     );
     assert_eq!(memo.len(), 32);
+    assert!(required.get("extensions").is_none());
     let changed = http
         .post(&endpoint)
         .header("idempotency-key", id.to_string())
@@ -1362,6 +1363,64 @@ async fn rejected_payment_and_http_body_mismatch_cause_no_dispatch() {
         .unwrap();
     assert_eq!(rejected.status(), StatusCode::PAYMENT_REQUIRED);
     assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    server.abort();
+}
+
+#[tokio::test]
+async fn quote_declares_bazaar_discovery_without_the_buyers_prompt() {
+    let directory = tempfile::tempdir().unwrap();
+    let executor = Arc::new(Execute {
+        identity: LocalIdentity::generate("bazaar@local"),
+        calls: AtomicUsize::new(0),
+    });
+    let gateway = Arc::new(
+        Gateway::open(
+            directory.path(),
+            "buyer/coord",
+            10,
+            12,
+            Arc::new(RejectRail),
+            executor,
+        )
+        .unwrap(),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!(
+        "http://{}/v1/chat/completions",
+        listener.local_addr().unwrap()
+    );
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router(gateway)).await.unwrap();
+    });
+    let request = json!({"model":"m","messages":[{"role":"user","content":"a private question"}],
+        "max_tokens":512,"pricing":"model_tariff_v1"});
+    let quote = reqwest::Client::new()
+        .post(&endpoint)
+        .json(&request)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(quote.status(), StatusCode::PAYMENT_REQUIRED);
+    let required = payment_payload(quote.headers()["payment-required"].to_str().unwrap()).unwrap();
+    assert_eq!(quote.json::<Value>().await.unwrap(), required);
+    assert!(!required.to_string().contains("a private question"));
+    let bazaar = &required["extensions"]["bazaar"];
+    assert_eq!(
+        bazaar["info"]["input"],
+        json!({"type":"http","method":"POST","bodyType":"json","body":{"model":"m",
+            "messages":[{"role":"user","content":"Reply with a short greeting."}],
+            "max_tokens":256,"pricing":"model_tariff_v1"}})
+    );
+    assert_eq!(
+        bazaar["schema"]["properties"]["input"]["required"],
+        json!(["type", "method", "bodyType", "body"])
+    );
+    let resource = &required["resource"];
+    assert_eq!(resource["serviceName"], "Covenant Compute");
+    assert_eq!(
+        resource["iconUrl"],
+        "https://localhost/brand/covenant-icon-02026997.png"
+    );
     server.abort();
 }
 

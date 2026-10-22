@@ -36,6 +36,13 @@ carries the V2 requirements. An optional UUID `Idempotency-Key` identifies an
 unpaid quote. A discovery document contains no payment authorization, quote ID,
 native envelope, customer identity, prompt, private endpoint, or credentials.
 
+Each chat quote also carries the x402 `bazaar` extension, so a facilitator that
+catalogs resources (Coinbase's CDP facilitator does, when it settles a Base
+payment) can list the endpoint with a request example, an input schema and a
+sample response. The `resource` object adds `serviceName`, `tags` and `iconUrl`
+for catalog display. The request example is fixed; a buyer's prompt is never
+placed in it. Batch quotes carry no `bazaar` extension.
+
 Only text chat is advertised: one configured model, 1–32 nonempty system/user/
 assistant messages, the configured normalized JSON message-byte limit, bounded
 output tokens, optional temperature, and no streaming, tools, vision, or batches.

@@ -43,7 +43,12 @@ const jsonRpc = (url, timeoutMs = 15_000) => async (method, params) => {
   return data.result;
 };
 const rpc = jsonRpc(rpcUrl);
-const bridge = createBridge({ signer, config, rpc });
+// Optionally an x402 facilitator holding the same fee payer key broadcasts
+// Solana payments; this process still signs, journals and confirms them.
+const solanaFacilitator = process.env.COVENANT_GATEWAY_SOLANA_FACILITATOR_URL
+  ? new HTTPFacilitatorClient({ url: httpsUrl('COVENANT_GATEWAY_SOLANA_FACILITATOR_URL'), timeoutMs: 20_000 })
+  : undefined;
+const bridge = createBridge({ signer, config, rpc, facilitator: solanaFacilitator, log: message => console.log(message) });
 await bridge.assertNetwork();
 // Optional USDC on Base once a Base merchant is set: CDP credentials for
 // Coinbase's facilitator, or any other by URL. The chain and facilitator are
@@ -97,4 +102,4 @@ const server = createServer(async (req, res) => {
 server.requestTimeout = 30_000;
 server.headersTimeout = 10_000;
 const port = Number(process.env.COVENANT_GATEWAY_BRIDGE_PORT ?? 4043);
-server.listen(port, '127.0.0.1', () => console.log(`Covenant x402 verifier listening on loopback port ${port}; Base ${evm ? `on ${evm.network}` : 'off'}`));
+server.listen(port, '127.0.0.1', () => console.log(`Covenant x402 verifier listening on loopback port ${port}; Solana broadcast ${solanaFacilitator ? 'through a facilitator' : 'direct'}; Base ${evm ? `on ${evm.network}` : 'off'}`));

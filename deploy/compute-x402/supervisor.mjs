@@ -24,7 +24,15 @@ try{
   // Configuration or observer failure never changes financial worker behavior.
   try{stopWatchdog=startWatchdog(process.env,data);}catch{process.stderr.write('External rental observer unavailable; check observer configuration.\n');}
   seed(path.join(gateway,'identity.key'),process.env.COVENANT_GATEWAY_IDENTITY_B64,32);
-  seed(path.join(gateway,'fee-payer.json'),process.env.COVENANT_GATEWAY_FEE_PAYER_KEY_B64);
+  // One key file per fee payer address, so rotating the fee payer seeds a new
+  // file instead of colliding with the old persisted key. A volume seeded
+  // before this layout keeps its single file until a new key is supplied.
+  const feePayer=process.env.COVENANT_GATEWAY_FEE_PAYER;
+  if(typeof feePayer!=='string'||!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(feePayer))throw Error('Fee payer address required');
+  const legacyFeePayerFile=path.join(gateway,'fee-payer.json');
+  let feePayerFile=path.join(gateway,`fee-payer-${feePayer}.json`);
+  if(process.env.COVENANT_GATEWAY_FEE_PAYER_KEY_B64===undefined&&!fs.existsSync(feePayerFile)&&fs.existsSync(legacyFeePayerFile))feePayerFile=legacyFeePayerFile;
+  seed(feePayerFile,process.env.COVENANT_GATEWAY_FEE_PAYER_KEY_B64);
   // This key authenticates persisted payment seals: rotating it strands recovery.
   const bridgeSecret=process.env.COVENANT_GATEWAY_BRIDGE_SECRET;
   if(typeof bridgeSecret!=='string'||bridgeSecret.length<32)throw Error('Persistent bridge secret required');
@@ -45,7 +53,7 @@ try{
     COVENANT_GATEWAY_HOME:gateway,COVENANT_COMPUTE_NODE_HOME:operator,COVENANT_COMPUTE_BUDGET_HOME:budget,
     COVENANT_GATEWAY_LISTEN:`0.0.0.0:${process.env.PORT??'10000'}`,
     COVENANT_GATEWAY_BRIDGE_URL:'http://127.0.0.1:4043',COVENANT_GATEWAY_BRIDGE_PORT:'4043',
-    COVENANT_GATEWAY_FEE_PAYER_KEY_FILE:path.join(gateway,'fee-payer.json'),
+    COVENANT_GATEWAY_FEE_PAYER_KEY_FILE:feePayerFile,
     COVENANT_INFERENCE_PROVIDER_PORT:'4044',COVENANT_INFERENCE_PROVIDER_DB_PATH:path.join(data,'provider','calls.sqlite'),
     COVENANT_COMPUTE_OPENAI_URL:'http://127.0.0.1:4044/v1',
     COVENANT_COMPUTE_OPENAI_API_KEY:process.env.COVENANT_INFERENCE_PROVIDER_BEARER_TOKEN};

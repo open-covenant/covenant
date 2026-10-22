@@ -49,6 +49,7 @@ export const DOCS_NAV: DocsSection[] = [
   {
     title: "Integrations",
     items: [
+      { href: "/build-with-x402", label: "Build with x402" },
       { href: "/x402", label: "x402 payments" },
       { href: "/zauth", label: "zauth provider hub" },
     ],

@@ -26,9 +26,9 @@ const source = "https://github.com/open-covenant/covenant/blob/d85a26e6acaa36e8e
 export const agentFrameworkRelease: AgentFrameworkRelease = {
   accepted: true,
   version: "0.1.0",
-  packageUrl: "https://github.com/open-covenant/covenant/releases/download/codex-compute-x402-python-v0.1.0/covenant_compute_x402-0.1.0-py3-none-any.whl",
+  packageUrl: "https://github.com/open-covenant/covenant/releases/download/compute-x402-python-v0.1.0/covenant_compute_x402-0.1.0-py3-none-any.whl",
   packageSha256: "0613775ced5316871b2248fd9942b523cee548e8e53e8222e8db614165023325",
-  releaseUrl: "https://github.com/open-covenant/covenant/releases/tag/codex-compute-x402-python-v0.1.0",
+  releaseUrl: "https://github.com/open-covenant/covenant/releases/tag/compute-x402-python-v0.1.0",
   sourceUrl: `${source}/sdk/compute-x402-python/src/covenant_compute_x402/agent_framework.py`,
   documentationUrl: `${source}/sdk/compute-x402-python/README.md#microsoft-agent-framework`,
   demoSourceUrl: `${source}/sdk/compute-x402-python/src/covenant_compute_x402/workflow_demo.py`,

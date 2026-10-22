@@ -29,7 +29,7 @@
   "gatewayRevisionStatus": "deployed",
   "clientPackage": {
     "version": "0.1.0",
-    "url": "https://github.com/open-covenant/covenant/releases/download/codex-compute-x402-client-v0.1.0/covenant-compute-x402-client-0.1.0.tgz",
+    "url": "https://github.com/open-covenant/covenant/releases/download/compute-x402-client-v0.1.0/covenant-compute-x402-client-0.1.0.tgz",
     "filename": "covenant-compute-x402-client-0.1.0.tgz",
     "sha256": "d38eddc61c035255744e8ac8193033daf4015fd191227f117b6f6476b7ac08a6",
     "published": true

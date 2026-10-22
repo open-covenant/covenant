@@ -84,10 +84,10 @@ const answer = await response.json();
 console.log(answer.choices[0].message.content);`;
 
 const sdkInstall = `# JavaScript 0.4.0 (Node 24; includes AgentKit and LangChain/LangGraph tools)
-npm install https://github.com/open-covenant/covenant/releases/download/codex-compute-x402-client-v0.4.0/covenant-compute-x402-client-0.4.0.tgz
+npm install https://github.com/open-covenant/covenant/releases/download/compute-x402-client-v0.4.0/covenant-compute-x402-client-0.4.0.tgz
 
 # Python 0.3.0
-pip install https://github.com/open-covenant/covenant/releases/download/codex-compute-x402-python-v0.3.0/covenant_compute_x402-0.3.0-py3-none-any.whl`;
+pip install https://github.com/open-covenant/covenant/releases/download/compute-x402-python-v0.3.0/covenant_compute_x402-0.3.0-py3-none-any.whl`;
 
 export default function BuildWithX402Page() {
   return (

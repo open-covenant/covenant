@@ -377,6 +377,9 @@ export class ComputeSession {
   private readonly lockKey: string;
   private readonly options: Omit<Required<ComputeSessionOptions>, 'signal'>;
   private readonly signal?: AbortSignal;
+  // When this gateway first saw each job running. Compute starts the booking
+  // clock at readiness, which is never later than this observation.
+  private readonly readySince = new Map<string, number>();
 
   constructor(
     private readonly cfg: ComputeConfig,
@@ -669,7 +672,38 @@ export class ComputeSession {
       entry.status = job.status;
       if (TERMINAL.has(job.status) && job.receipt) entry.receipt = safeReceipt(job.receipt);
     });
+    if (job.status === 'running' && job.access_url && !this.readySince.has(job.id))
+      this.readySince.set(job.id, Date.now());
     return job;
+  }
+
+  /**
+   * Waits for a job this run launched to accept work. Returns its workspace
+   * address, which stays inside the gateway, and the booked window left.
+   */
+  async awaitRunning(
+    jobId: string,
+    untilMs: number,
+    pollMs = 5_000,
+  ): Promise<{ accessUrl: string; readySinceMs: number; durationSecs: number }> {
+    const durationSecs = this.owned(jobId).plan.duration_secs;
+    for (;;) {
+      const job = await this.status(jobId);
+      if (job.status === 'running' && job.access_url)
+        return {
+          accessUrl: job.access_url,
+          readySinceMs: this.readySince.get(job.id) ?? Date.now(),
+          durationSecs,
+        };
+      if (!['funding', 'provisioning'].includes(job.status))
+        throw new ComputeError(`GPU job ${jobId} is ${job.status} and cannot run commands`);
+      const remaining = untilMs - Date.now();
+      if (remaining <= 0 || this.signal?.aborted)
+        throw new ComputeError(`GPU job ${jobId} is still ${job.status}; try again shortly`);
+      await delay(Math.min(pollMs, remaining), undefined, { signal: this.signal }).catch(
+        () => undefined,
+      );
+    }
   }
 
   async status(jobId: string): Promise<ComputeJob> {

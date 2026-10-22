@@ -1,0 +1,195 @@
+import { describe, expect, it, vi } from 'vitest';
+import {
+  MAX_OUTPUT_BYTES,
+  WorkspaceError,
+  parseWorkspaceUrl,
+  runWorkspaceJob,
+  safeRelativePath,
+  type KernelResult,
+} from '../src/workspace-exec.js';
+
+const result = (body: unknown): KernelResult => ({
+  ok: true,
+  stdout: `noise\n__covenant__${JSON.stringify(body)}\n`,
+});
+
+/** In-memory Jupyter: files by path, and kernels that understand the three control snippets. */
+function fakeWorkspace(options: {
+  exitAfterPolls?: number;
+  exit?: { exit_code: number; duration_ms: number };
+  produce?: Record<string, Buffer>;
+  sizes?: Record<string, number | null>;
+}) {
+  const files = new Map<string, Buffer>();
+  const directories = new Set<string>();
+  let polls = 0;
+  const executed: string[] = [];
+  const client = {
+    makeDirectory: vi.fn(async (path: string) => {
+      directories.add(path);
+    }),
+    upload: vi.fn(async (path: string, bytes: Buffer) => {
+      files.set(path, bytes);
+    }),
+    download: vi.fn(async (path: string) => {
+      if (path.endsWith('/covenant-exit.json')) {
+        polls++;
+        if (options.exitAfterPolls === undefined || polls < options.exitAfterPolls) return null;
+        return Buffer.from(JSON.stringify(options.exit ?? { exit_code: 0, duration_ms: 1234 }));
+      }
+      const name = path.split('/').slice(2).join('/');
+      return options.produce?.[name] ?? null;
+    }),
+    execute: vi.fn(async (code: string) => {
+      if (code.includes('covenant-run.py')) {
+        executed.push('start');
+        return result({ pid: 4242 });
+      }
+      if (code.includes('killpg')) {
+        executed.push('kill');
+        return result({});
+      }
+      executed.push('collect');
+      const sizes =
+        options.sizes ??
+        Object.fromEntries(
+          Object.entries(options.produce ?? {}).map(([name, bytes]) => [name, bytes.length]),
+        );
+      return result({ stdout: 'out tail', stderr: 'err tail', sizes });
+    }),
+  };
+  return { client, files, directories, executed };
+}
+
+describe('workspace address', () => {
+  it('accepts the Jupyter address Compute returns', () => {
+    expect(parseWorkspaceUrl(`https://203.0.113.7:41234/lab?token=${'a'.repeat(32)}`)).toEqual({
+      origin: 'https://203.0.113.7:41234',
+      token: 'a'.repeat(32),
+    });
+    expect(parseWorkspaceUrl(`https://[2001:db8::1]:8080/lab?token=${'b'.repeat(16)}`).origin).toBe(
+      'https://[2001:db8::1]:8080',
+    );
+  });
+
+  it.each([
+    `http://203.0.113.7:41234/lab?token=${'a'.repeat(32)}`,
+    `https://gpu.example:41234/lab?token=${'a'.repeat(32)}`,
+    `https://203.0.113.7/lab?token=${'a'.repeat(32)}`,
+    'https://203.0.113.7:41234/lab?token=short',
+    `https://user:pass@203.0.113.7:41234/lab?token=${'a'.repeat(32)}`,
+    'not a url',
+  ])('rejects %s', (raw) => {
+    expect(() => parseWorkspaceUrl(raw)).toThrow(WorkspaceError);
+  });
+});
+
+describe('job paths', () => {
+  it.each(['embed.py', 'input/lines.txt', 'out/embeddings.npy'])('accepts %s', (path) => {
+    expect(safeRelativePath(path, 'output')).toBe(path);
+  });
+
+  it.each([
+    '../etc/passwd',
+    '/etc/passwd',
+    '.env',
+    'out/.hidden',
+    'a//b',
+    'covenant-exit.json',
+    'name with spaces',
+    '',
+    'x'.repeat(129),
+    42,
+  ])('rejects %j', (path) => {
+    expect(() => safeRelativePath(path, 'output')).toThrow(WorkspaceError);
+  });
+});
+
+describe('runWorkspaceJob', () => {
+  it('uploads, starts detached, polls for completion and brings outputs back', async () => {
+    const embeddings = Buffer.alloc(3_000, 7);
+    const workspace = fakeWorkspace({
+      exitAfterPolls: 3,
+      produce: { 'out/embeddings.npy': embeddings },
+    });
+    const outcome = await runWorkspaceJob(
+      workspace.client,
+      {
+        command: 'python3 embed.py',
+        files: [{ path: 'input/lines.txt', bytes: Buffer.from('a\nb\n') }],
+        outputs: ['out/embeddings.npy', 'report.json'],
+        deadlineMs: Date.now() + 10_000,
+      },
+      { pollMs: 1 },
+    );
+    expect(outcome).toMatchObject({
+      exitCode: 0,
+      timedOut: false,
+      durationMs: 1234,
+      stdoutTail: 'out tail',
+      stderrTail: 'err tail',
+      missing: ['report.json'],
+      skipped: [],
+    });
+    expect(outcome.outputs).toEqual([{ path: 'out/embeddings.npy', bytes: embeddings }]);
+    expect(workspace.executed).toEqual(['start', 'collect']);
+    const uploaded = [...workspace.files.keys()].map((path) => path.split('/').slice(2).join('/'));
+    expect(uploaded).toEqual(['input/lines.txt', 'covenant-command.sh', 'covenant-run.py']);
+    // Parent directories of nested files exist before the upload.
+    expect([...workspace.directories].some((dir) => dir.endsWith('/input'))).toBe(true);
+    expect(String(workspace.files.get([...workspace.files.keys()][1]!))).toBe('python3 embed.py\n');
+  });
+
+  it('stops the whole process group at the deadline and reports a timeout', async () => {
+    const workspace = fakeWorkspace({});
+    const outcome = await runWorkspaceJob(
+      workspace.client,
+      { command: 'sleep 999', files: [], outputs: [], deadlineMs: Date.now() + 20 },
+      { pollMs: 5 },
+    );
+    expect(outcome).toMatchObject({ exitCode: null, timedOut: true });
+    expect(workspace.executed).toEqual(['start', 'kill', 'collect']);
+  });
+
+  it('stops the command and fails when the run is aborted', async () => {
+    const workspace = fakeWorkspace({});
+    const abort = new AbortController();
+    const job = runWorkspaceJob(
+      workspace.client,
+      { command: 'sleep 999', files: [], outputs: [], deadlineMs: Date.now() + 60_000 },
+      { pollMs: 5, signal: abort.signal },
+    );
+    setTimeout(() => abort.abort(), 20);
+    await expect(job).rejects.toThrow(/aborted/);
+    expect(workspace.executed).toEqual(['start', 'kill']);
+  });
+
+  it('skips outputs beyond the size cap and drops files that changed after sizing', async () => {
+    const workspace = fakeWorkspace({
+      exitAfterPolls: 1,
+      produce: { 'a.bin': Buffer.alloc(10), 'b.bin': Buffer.alloc(4) },
+      sizes: { 'a.bin': 11, 'b.bin': MAX_OUTPUT_BYTES + 1 },
+    });
+    const outcome = await runWorkspaceJob(
+      workspace.client,
+      { command: 'true', files: [], outputs: ['a.bin', 'b.bin'], deadlineMs: Date.now() + 1_000 },
+      { pollMs: 1 },
+    );
+    expect(outcome.outputs).toEqual([]);
+    expect(outcome.missing).toEqual(['a.bin']);
+    expect(outcome.skipped).toEqual(['b.bin']);
+  });
+
+  it('fails when a control snippet reports a kernel error', async () => {
+    const workspace = fakeWorkspace({});
+    workspace.client.execute.mockResolvedValueOnce({ ok: false, stdout: '', error: 'OSError: x' });
+    await expect(
+      runWorkspaceJob(workspace.client, {
+        command: 'true',
+        files: [],
+        outputs: [],
+        deadlineMs: Date.now() + 1_000,
+      }),
+    ).rejects.toThrow(/start failed: OSError/);
+  });
+});

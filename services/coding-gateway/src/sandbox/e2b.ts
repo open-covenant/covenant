@@ -39,6 +39,10 @@ class E2bSandbox implements ISandbox {
     return this.sbx.files.read(workspacePath(path));
   }
 
+  async readBytes(path: string): Promise<Uint8Array> {
+    return this.sbx.files.read(workspacePath(path), { format: 'bytes' });
+  }
+
   async writeFile(path: string, content: string): Promise<void> {
     await this.sbx.files.write(workspacePath(path), content);
   }

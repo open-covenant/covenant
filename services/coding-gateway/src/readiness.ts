@@ -251,7 +251,7 @@ export async function verifyE2bTariff(
   expected: E2bTariffExpectation,
   fetcher: typeof fetch = fetch,
   now: () => number = Date.now,
-): Promise<{ validUntilMs: number }> {
+): Promise<{ validUntilMs: number; listUsdPerSec: number }> {
   const reference = new URL(expected.reference);
   const digest = reference.hash.match(/^#sha256=([a-f0-9]{64})$/i)?.[1]?.toLowerCase();
   if (reference.protocol !== 'https:' || !digest) {
@@ -320,7 +320,7 @@ export async function verifyE2bTariff(
       'configured sandbox worst-case tariff does not cover the verified rate formula',
     );
   }
-  return { validUntilMs: validUntil };
+  return { validUntilMs: validUntil, listUsdPerSec: baseRate };
 }
 
 function isE2bTariffEvidence(value: unknown): value is E2bTariffEvidence {

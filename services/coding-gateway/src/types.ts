@@ -10,6 +10,7 @@
  */
 
 import type { ComputeCleanupReport, ComputeConfig, ComputeSession } from './compute.js';
+import type { GpuRunner } from './gpu-run.js';
 
 export interface GpuPolicy {
   max_usdc_micros: 200000;
@@ -138,6 +139,8 @@ export interface CodingBackend {
     /** Only constructed after an authenticated, explicit dispatch grant. */
     computeSession?: ComputeSession;
     computeConfig?: ComputeConfig;
+    /** Runs commands on a workspace the session launched; present with computeSession. */
+    gpuRunner?: GpuRunner;
     recordProviderRequest?: () => void | Promise<void>;
     recordProviderReceipt?: (receipt: ProviderReceipt) => void | Promise<void>;
     /**
@@ -170,6 +173,8 @@ export interface SandboxSpec {
 
 export interface Sandbox {
   readFile(path: string): Promise<string>;
+  /** Raw bytes, for copying non-text files to a GPU workspace. */
+  readBytes?(path: string): Promise<Uint8Array>;
   writeFile(path: string, content: string): Promise<void>;
   exec(cmd: string, opts?: { timeoutMs?: number }): Promise<ExecResult>;
   /** Public URL serving a port inside the sandbox. Used to preview a built

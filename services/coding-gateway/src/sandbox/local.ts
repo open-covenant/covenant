@@ -26,6 +26,10 @@ class LocalSandbox implements Sandbox {
     return readFile(this.safe(p), 'utf8');
   }
 
+  async readBytes(p: string): Promise<Uint8Array> {
+    return readFile(this.safe(p));
+  }
+
   async writeFile(p: string, content: string): Promise<void> {
     const abs = this.safe(p);
     await mkdir(dirname(abs), { recursive: true });

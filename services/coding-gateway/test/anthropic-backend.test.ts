@@ -264,19 +264,23 @@ describe('gpu_workspace tool gating', () => {
     );
   });
 
-  it('tells the model to wait between status polls', () => {
-    // Seven back-to-back polls in 25s, each a full model turn re-sending the
-    // whole transcript, on a provider that takes minutes to provision.
-    expect(gpuWorkspaceTool(COMPUTE_CFG).description).toMatch(/sleep 25/);
+  it('tells the model to run right after launch instead of polling', () => {
+    // Every poll is a full model turn re-sending the whole transcript, on a
+    // provider that takes minutes to provision; run waits server-side instead.
+    const description = gpuWorkspaceTool(COMPUTE_CFG).description!;
+    expect(description).toMatch(/call it right after launch instead of polling status/);
+    expect(description).not.toMatch(/access_url|access URL/);
   });
 
-  it('tells the model it cannot reach the workspace and that the URL is a credential', () => {
-    // Sandbox egress is restricted to package registries, so an agent that
-    // believes it can drive the GPU itself spends real USDC on nothing.
-    const description = gpuWorkspaceTool(COMPUTE_CFG).description!;
-    expect(description).toMatch(/cannot use the workspace yourself/);
-    expect(description).toMatch(/package registries/);
-    expect(description).toMatch(/live credential/);
+  it('describes the run contract the gateway enforces', () => {
+    const tool = gpuWorkspaceTool(COMPUTE_CFG);
+    expect(tool.input_schema.properties).toMatchObject({
+      action: { enum: ['launch', 'run', 'status', 'cancel'] },
+      command: { type: 'string' },
+      files: { type: 'array' },
+      outputs: { type: 'array' },
+    });
+    expect(tool.description).toMatch(/download link in the final result/);
   });
 });
 
@@ -364,7 +368,7 @@ describe('execTool gpu_workspace', () => {
     expect(JSON.parse(String(post.init!.body)).duration_secs).toBe(600);
   });
 
-  it('returns the access URL, error and receipt on status', async () => {
+  it('reports readiness without the workspace address on status', async () => {
     mockMarket({ status: 'running', access_url: 'https://gpu.test/lab?token=secret' });
     const compute = new ComputeSession(COMPUTE_CFG);
     await execTool(toolUse('gpu_workspace', { action: 'launch' }), memSandbox(), () => {}, compute);
@@ -374,11 +378,18 @@ describe('execTool gpu_workspace', () => {
       () => {},
       compute,
     );
-    expect(JSON.parse(out)).toMatchObject({
-      job_id: 'j1',
-      status: 'running',
-      access_url: 'https://gpu.test/lab?token=secret',
-    });
+    expect(JSON.parse(out)).toMatchObject({ job_id: 'j1', status: 'running', ready: true });
+    expect(out).not.toContain('secret');
+  });
+
+  it('refuses run when the gateway supplied no runner', async () => {
+    const call = execTool(
+      toolUse('gpu_workspace', { action: 'run', job_id: 'j1', command: 'nvidia-smi' }),
+      memSandbox(),
+      () => {},
+      new ComputeSession(COMPUTE_CFG),
+    );
+    await expect(call).rejects.toThrow(/not enabled/);
   });
 
   it('refuses a job id that walks out of the jobs route', async () => {
@@ -402,7 +413,7 @@ describe('execTool gpu_workspace', () => {
       () => {},
       new ComputeSession(COMPUTE_CFG),
     );
-    await expect(call).rejects.toThrow(/must be launch, status, or cancel/);
+    await expect(call).rejects.toThrow(/must be launch, run, status, or cancel/);
   });
 
   it('requires a job id for status and cancel', async () => {

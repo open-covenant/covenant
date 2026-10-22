@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -52,6 +53,7 @@ afterEach(async () => {
     '../src/backends/index.js',
     '../src/sandbox/e2b.js',
     '../src/run-store.js',
+    '../src/workspace-exec.js',
   ])
     vi.doUnmock(path);
   vi.unstubAllEnvs();
@@ -75,6 +77,12 @@ async function boot(
     computeFetch?: (url: string, init?: RequestInit) => unknown | Promise<unknown>;
     backendFailure?: boolean;
     backendOutput?: string;
+    /** Verified sandbox list price per second; unset leaves the tariff unverified. */
+    tariffUsdPerSec?: number;
+    /** Runs inside the mocked backend after launch, with the real GPU runner. */
+    gpuCommand?: (opts: RunOptions) => Promise<unknown>;
+    /** What the GPU workspace returns for a command; no Jupyter is contacted. */
+    workspaceOutcome?: import('../src/workspace-exec.js').WorkspaceJobOutcome;
   } = {},
 ) {
   vi.resetModules();
@@ -100,7 +108,11 @@ async function boot(
     COMPUTE_MAX_DURATION_SECS: '300',
     COMPUTE_MAX_LAUNCHES: '1',
     CODER_IP_MAX_PER_IP: '0',
-    E2B_TEMPLATE_ID: '',
+    E2B_TEMPLATE_ID: options.tariffUsdPerSec ? 'tpl_lifecycle_test' : '',
+    CODER_E2B_TARIFF_REF: options.tariffUsdPerSec
+      ? `https://evidence.invalid/e2b.json#sha256=${'a'.repeat(64)}`
+      : undefined,
+    COMPUTE_ARTIFACT_BASE_URL: 'https://connector.invalid/artifacts',
   }))
     vi.stubEnv(name, value);
   if (options.stored) writeFileSync(runPath, JSON.stringify(options.stored));
@@ -153,6 +165,13 @@ async function boot(
           reap() {
             return reap(this.key);
           }
+          async awaitRunning() {
+            return {
+              accessUrl: `https://127.0.0.1:9/lab?token=${'t'.repeat(32)}`,
+              readySinceMs: Date.now(),
+              durationSecs: 300,
+            };
+          }
           static async recover() {
             return { runs: [] };
           }
@@ -167,10 +186,23 @@ async function boot(
   }));
   vi.doMock('../src/readiness.js', () => ({
     GatewayReadiness: class {
-      check = check;
+      constructor(private readonly opts: { tariff?: { check: () => Promise<unknown> } }) {}
+      check = async () => {
+        await this.opts.tariff?.check();
+        return check();
+      };
     },
-    verifyE2bTariff: vi.fn(async () => {}),
+    verifyE2bTariff: vi.fn(async () => ({
+      validUntilMs: Date.now() + 3_600_000,
+      listUsdPerSec: options.tariffUsdPerSec,
+    })),
   }));
+  const runWorkspaceJob = vi.fn(async () => options.workspaceOutcome!);
+  if (options.workspaceOutcome)
+    vi.doMock('../src/workspace-exec.js', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('../src/workspace-exec.js')>()),
+      runWorkspaceJob,
+    }));
   const sandbox = {
     exec: vi.fn(async () => ({ stdout: '', stderr: '', exitCode: 0 })),
     readFile: vi.fn(async () => ''),
@@ -192,6 +224,7 @@ async function boot(
         // The model can handle a failed GPU tool result and finish its E2B work.
         if (!options.computeFetch) throw error;
       });
+    if (options.gpuCommand) await options.gpuCommand(opts);
     if (options.backendFailure) {
       await opts.recordProviderRequest?.();
       throw new Error('model reply outcome unknown');
@@ -252,6 +285,7 @@ async function boot(
     backend,
     createSandbox,
     sandbox,
+    runWorkspaceJob,
     check,
     runPath,
     directory,
@@ -290,11 +324,13 @@ describe('GPU gateway authorization and lifecycle', () => {
     expect(final.output).toContain('[model output truncated]');
     expect(final.output).toContain('[gpu_workspace final receipts:');
     const accounting = JSON.parse(final.output.match(/\[run accounting: (.*)\]$/)[1]);
+    // Without verified tariff evidence the sandbox line stays at its reservation.
     expect(accounting).toMatchObject({
-      authoritativeBillingReceipt: false,
-      gpuSettledUsd: 0.01,
-      totalAccountedUsd: 0.13045,
-      sandbox: { method: 'maximum_reservation_not_invoice' },
+      version: 2,
+      final: false,
+      gpu: { usd: 0.01 },
+      totalUsd: 0.13045,
+      sandbox: { basis: 'maximum_reservation' },
     });
     const saved = JSON.parse(readFileSync(gateway.runPath, 'utf8'))[0];
     expect(saved.output).toBe(final.output);
@@ -407,21 +443,18 @@ describe('GPU gateway authorization and lifecycle', () => {
     expect(final.output).toContain('gpu_workspace final receipts');
     const accounting = JSON.parse(final.output.match(/\[run accounting: (.*)\]$/)[1]);
     expect(accounting).toMatchObject({
-      version: 1,
-      authoritativeBillingReceipt: false,
+      version: 2,
+      final: false,
       model: {
-        method: 'usage_estimate',
-        estimatedUsd: 0.00045,
+        usd: 0.00045,
+        basis: 'usage_at_list_price',
+        name: 'claude-sonnet-4-6',
         usage: { inputTokens: 100, outputTokens: 10 },
       },
-      sandbox: {
-        provider: 'e2b',
-        method: 'maximum_reservation_not_invoice',
-        maximumUsd: 0.12,
-        accountedUsd: 0.12,
-      },
-      gpuSettledUsd: 0.01,
-      totalAccountedUsd: 0.13045,
+      sandbox: { usd: 0.12, basis: 'maximum_reservation', seconds: 600 },
+      gpu: { usd: 0.01, runtimeSecs: 30, jobs: ['accepted-before-response-loss'] },
+      coveredByCovenant: { gpuProvisioningUsd: 0.006667, gpuProvisioningSecs: 20 },
+      totalUsd: 0.13045,
     });
     const saved = JSON.parse(readFileSync(gateway.runPath, 'utf8'))[0];
     expect(saved.nonComputeUsd).toBeCloseTo(0.12045, 6);
@@ -455,21 +488,88 @@ describe('GPU gateway authorization and lifecycle', () => {
     await gateway.reconcileCompute();
     const final = await untilStatus(gateway, run_id, 'failed');
     const accounting = JSON.parse(final.output.match(/\[run accounting: (.*)\]$/)[1]);
-    expect(accounting.model).toEqual({
-      method: 'conservative_hold',
-      usage: null,
-      estimatedUsd: null,
-      accountedUsd: 0.18,
-    });
-    expect(accounting.sandbox).toMatchObject({
-      method: 'maximum_reservation_not_invoice',
-      maximumUsd: 0.12,
-      accountedUsd: 0.12,
-    });
-    expect(accounting.nonComputeUsd).toBe(0.3);
-    expect(accounting.totalAccountedUsd).toBe(0.31);
+    expect(accounting.model).toEqual({ usd: 0.18, basis: 'conservative_hold', usage: null });
+    expect(accounting.sandbox).toMatchObject({ usd: 0.12, basis: 'maximum_reservation' });
+    expect(accounting.final).toBe(false);
+    expect(accounting.totalUsd).toBe(0.31);
     expect(final.costUsd).toBe(0.31);
     expect(gateway.sandbox.destroy).toHaveBeenCalledOnce();
+  });
+
+  it('publishes GPU outputs as download links and reports a final metered receipt', async () => {
+    const embeddings = Buffer.from(Array.from({ length: 2_048 }, (_, i) => i % 251));
+    const report = Buffer.from('{"rows":1000,"gpu":"NVIDIA L40S"}');
+    let toolResult: Record<string, any> = {};
+    const gateway = await boot({
+      tariffUsdPerSec: 0.00003025,
+      workspaceOutcome: {
+        exitCode: 0,
+        timedOut: false,
+        durationMs: 41_200,
+        stdoutTail: 'embedded 1000 lines',
+        stderrTail: '',
+        outputs: [
+          { path: 'out/embeddings.npy', bytes: embeddings },
+          { path: 'report.json', bytes: report },
+        ],
+        missing: [],
+        skipped: [],
+      },
+      gpuCommand: async (opts) => {
+        toolResult = JSON.parse(
+          await opts.gpuRunner!.run(
+            {
+              job_id: 'smoke-job',
+              command: 'python3 embed.py',
+              outputs: ['out/embeddings.npy', 'report.json'],
+            },
+            opts.sandbox,
+          ),
+        );
+      },
+    });
+    const { run_id } = (await (await gateway.post(request('gpu-outputs'))).json()) as {
+      run_id: string;
+    };
+    await untilStatus(gateway, run_id, 'stopping');
+    gateway.reports.set('gpu-outputs', settled('gpu-outputs'));
+    await gateway.reconcileCompute();
+    const final = await untilStatus(gateway, run_id, 'completed');
+
+    expect(toolResult).toMatchObject({ exit_code: 0, timed_out: false, duration_secs: 41.2 });
+    // Small text outputs come back to the model in full; binaries only by hash.
+    expect(toolResult.outputs[1]).toMatchObject({ path: 'report.json', text: report.toString() });
+    expect(toolResult.outputs[0].text).toBeUndefined();
+
+    const outputs = JSON.parse(final.output.match(/\[gpu_workspace outputs: (.*)\]\n/)[1]);
+    expect(outputs).toHaveLength(2);
+    expect(outputs[0]).toMatchObject({
+      job_id: 'smoke-job',
+      path: 'out/embeddings.npy',
+      bytes: embeddings.length,
+      sha256: createHash('sha256').update(embeddings).digest('hex'),
+    });
+    const link = new URL(outputs[0].url);
+    expect(link.origin).toBe('https://connector.invalid');
+    const download = await nativeFetch(`${gateway.origin}${link.pathname}`);
+    expect(download.status).toBe(200);
+    expect(download.headers.get('x-content-sha256')).toBe(outputs[0].sha256);
+    expect(Buffer.from(await download.arrayBuffer()).equals(embeddings)).toBe(true);
+    const guessed = link.pathname.replace(/\/artifacts\/[^/]+\//, `/artifacts/${'A'.repeat(32)}/`);
+    expect((await nativeFetch(`${gateway.origin}${guessed}`)).status).toBe(404);
+
+    const accounting = JSON.parse(final.output.match(/\[run accounting: (.*)\]$/)[1]);
+    expect(accounting).toMatchObject({
+      final: true,
+      gpu: { usd: 0.01 },
+      model: { usd: 0.00045, basis: 'usage_at_list_price' },
+      sandbox: { basis: 'metered_at_list_price', usdPerSec: 0.00003025 },
+    });
+    expect(accounting.sandbox.seconds).toBeGreaterThanOrEqual(1);
+    expect(accounting.totalUsd).toBe(Number((0.01 + 0.00045 + accounting.sandbox.usd).toFixed(9)));
+    const saved = JSON.parse(readFileSync(gateway.runPath, 'utf8'))[0];
+    expect(saved.gpuOutputs).toEqual(outputs);
+    expect(gateway.runWorkspaceJob).toHaveBeenCalledOnce();
   });
 
   it('rejects every different run key before readiness, reservation, or provider work', async () => {

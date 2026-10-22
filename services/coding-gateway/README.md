@@ -202,9 +202,41 @@ set: with no token the agent's tool list is exactly `read_file`, `write_file`,
 bounds in force.
 
 The gateway enforces the bounds and holds the control-plane token, which never
-enters the sandbox. The sandbox's egress allowlist does not include the
-workspace either, so the agent books a GPU for the person who asked and cannot
-use it itself.
+enters the sandbox. The workspace address carries a live Jupyter token, so it
+never leaves the gateway either: the model sees whether a job is ready, not
+where it is.
+
+**Running commands.** `action=run` executes a shell command on a workspace the
+run launched. The gateway waits for the workspace to become ready, copies up to
+8 sandbox files (4 MB) into a fresh directory on it, starts the command
+detached, and polls for its exit over Jupyter's contents API, so a long command
+does not depend on one open connection. It then collects up to 8 declared
+output files (32 MB in total) and returns the exit code, the last 2,000
+characters of stdout and stderr, and each output's size and SHA-256; text
+outputs up to 4 KB are returned in full so the model can read them. TLS to the
+workspace is verified against Vast's Jupyter CA (`src/vast-jupyter-ca.ts`).
+The chain is checked and the host name is not, because instances are addressed
+by IP.
+
+Compute starts the booking clock when the workspace becomes ready, so a command
+gets the booked duration less a 45-second margin for collection, counted from
+when the gateway first saw the workspace running. It is also stopped 45 seconds
+before the run's own wall clock. A command still running at its deadline is
+killed with its whole process group and reported as `timed_out`.
+
+**Outputs.** Each output is stored on the gateway's disk behind a random
+192-bit token and listed in the run's final output as
+`[gpu_workspace outputs: [...]]`, with its path, size, SHA-256, expiry and a
+download link. `GET /artifacts/{token}/{name}` serves the file without a bearer
+token; the gateway stays private, and a public service (the Hatcher connector)
+forwards that path to it.
+
+| Env var                      | Default                              | Meaning                                                                                                           |
+| ---------------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| `COMPUTE_ARTIFACT_BASE_URL`  | _(none)_                             | Public `https` prefix for download links, such as `https://connector.example/artifacts`. Unset leaves `url` null. |
+| `COMPUTE_ARTIFACT_DIR`       | `artifacts/` beside `RUN_STORE_PATH` | Where outputs are kept. Must be absolute.                                                                         |
+| `COMPUTE_ARTIFACT_TTL_HOURS` | `168`                                | How long a link works, 1 to 720 hours.                                                                            |
+| `COMPUTE_ARTIFACT_MAX_MB`    | `512`                                | Disk budget for all stored outputs. A save that would exceed it fails until older ones expire.                    |
 
 | Env var                     | Default                            | Meaning                                                                                                                                                                       |
 | --------------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -266,10 +298,30 @@ accepting runs, because renting a GPU is optional. A `gpu_workspace` call made
 while the control plane is down fails on its own and reports why.
 
 The `tool.started` frame for a `gpu_workspace` call carries the action and its
-outcome (job id, offer id, and booked maximum on launch; charged and refunded on
-cancel), which is what the daemon folds into audit. It never carries
-`access_url`: that is a live credential for the workspace, and it belongs only
-in the run's final answer.
+outcome (job id, offer id, and booked maximum on launch; exit code and output
+count on run; charged and refunded on cancel), which is what the daemon folds
+into audit.
+
+**The run receipt.** A GPU run's final output ends with
+`[run accounting: {...}]`, version 2. It has one line each for the GPU, the
+model and the sandbox, and `final: true` when every line is an amount charged
+rather than an estimate or a reservation; the lines then add up to `totalUsd`.
+
+- `gpu`: the sum of the control plane's settled receipts (`compute_receipt`).
+  Start-up time before the workspace was ready is listed separately under
+  `coveredByCovenant` and is not part of the total.
+- `model`: token usage reported by Anthropic for every request, priced at the
+  list prices recorded with the run (`usage_at_list_price`). A run whose last
+  request has no reported usage holds the model reservation
+  (`conservative_hold`) instead.
+- `sandbox`: whole seconds from just before the sandbox was created until E2B
+  confirmed it destroyed, at the list price from the verified tariff evidence
+  (`metered_at_list_price`). Without verified evidence, or without a confirmed
+  destroy, it is the worst-case reservation (`maximum_reservation`).
+
+When any line is not final, `totalUsd` is the conservative amount the spend
+ledger holds. The ledger itself always charges the sandbox at the worst-case
+rate, so its daily and monthly figures can be higher than the receipts.
 
 ## Production contract
 

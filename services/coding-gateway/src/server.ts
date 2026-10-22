@@ -1,3 +1,4 @@
+import { createReadStream } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import type {
@@ -15,7 +16,9 @@ import type {
 import { selectBackend } from './backends/index.js';
 import { LocalSandboxProvider } from './sandbox/local.js';
 import { E2bSandboxProvider } from './sandbox/e2b.js';
-import { config } from './config.js';
+import { config, PRICING } from './config.js';
+import { ArtifactStore, artifactConfigFromEnv } from './artifacts.js';
+import { GpuRunner } from './gpu-run.js';
 import {
   ComputeSession,
   computeConfig,
@@ -133,6 +136,11 @@ const provider: SandboxProvider = process.env.E2B_API_KEY
   ? new E2bSandboxProvider(process.env.E2B_API_KEY, e2bIdentity, config.e2bEgressAllowlist)
   : new LocalSandboxProvider();
 
+// List price per sandbox second from the last verified tariff evidence. Runs
+// admitted without it report their sandbox at the reservation, never a guess.
+let sandboxListRate: { usdPerSec: number; ref: string } | undefined;
+const artifacts = new ArtifactStore(artifactConfigFromEnv());
+
 const PORT = listenPort();
 const modelProbe = modelProbeConfig();
 const readiness = new GatewayReadiness({
@@ -141,12 +149,15 @@ const readiness = new GatewayReadiness({
   balance: balanceProbeConfig(),
   tariff: e2bIdentity
     ? {
-        check: () =>
-          verifyE2bTariff({
+        check: async () => {
+          const verified = await verifyE2bTariff({
             reference: config.sandboxTariffRef,
             ...e2bIdentity,
             worstCaseUsdPerSec: config.sandboxWorstCaseUsdPerSec,
-          }),
+          });
+          sandboxListRate = { usdPerSec: verified.listUsdPerSec, ref: config.sandboxTariffRef };
+          return verified;
+        },
       }
     : undefined,
   compute: computeProbeConfig(),
@@ -288,6 +299,9 @@ function startRun(
         maximumUsd: maximumSandboxCostUsd(),
         usdPerSec: config.sandboxWorstCaseUsdPerSec,
         maximumSeconds: config.wallMs / 1_000,
+        ...(provider.id === 'e2b' && sandboxListRate
+          ? { listUsdPerSec: sandboxListRate.usdPerSec, tariffRef: sandboxListRate.ref }
+          : {}),
       },
       model: { method: 'unknown' },
     },
@@ -338,6 +352,7 @@ function startRun(
       if (run.abort.signal.aborted) throw new Error('aborted before sandbox create');
       sandboxCreateAttempted = true;
       run.accountingBasis!.sandbox.attempted = true;
+      run.accountingBasis!.sandbox.startedAtMs = Date.now();
       persistRun(run);
       sandbox = await provider.create({
         runId: id,
@@ -365,6 +380,20 @@ function startRun(
         maxProviderCostUsd: providerBudgetUsd(reservedMax, request.gpu?.max_usdc_micros ?? 0),
         computeSession: compute,
         computeConfig: compute && computeConfig ? smokeComputeConfig(computeConfig) : undefined,
+        gpuRunner: compute
+          ? new GpuRunner({
+              compute,
+              store: artifacts,
+              signal: run.abort.signal,
+              runDeadlineMs: startedAt + config.wallMs,
+              recorded: () => run.gpuOutputs?.length ?? 0,
+              record: (outputs) => {
+                run.gpuOutputs = [...(run.gpuOutputs ?? []), ...outputs];
+                run.updatedAt = new Date().toISOString();
+                persistRun(run);
+              },
+            })
+          : undefined,
         recordProviderRequest: () => {
           const previous = run.providerRequestCount ?? 0;
           run.providerRequestCount = previous + 1;
@@ -427,7 +456,13 @@ function startRun(
       if (modelUsd !== undefined && Number.isFinite(modelUsd) && modelUsd >= 0)
         run.accountingBasis!.model = {
           method: config.backend === 'usepod' ? 'provider_receipt' : 'usage_estimate',
-          ...(config.backend === 'usepod' ? {} : { estimatedUsd: modelUsd }),
+          ...(config.backend === 'usepod'
+            ? {}
+            : {
+                estimatedUsd: modelUsd,
+                name: config.model,
+                prices: { ...PRICING[config.model]! },
+              }),
         };
       console.log(
         `run ${id} completed (${Math.round(seconds * 1000)}ms, ${run.files?.length ?? 0} files, ${run.events.length} events)`,
@@ -469,7 +504,14 @@ function startRun(
     } finally {
       clearTimeout(wall);
       unsubscribeKill();
-      if (sandbox) await sandbox.destroy().catch(() => {});
+      if (sandbox) {
+        // Metering stops only once the provider has confirmed the sandbox is gone.
+        const destroyed = await sandbox.destroy().then(
+          () => true,
+          () => false,
+        );
+        if (destroyed) run.accountingBasis!.sandbox.endedAtMs = Date.now();
+      }
       if (!exempt) ipBucket.release(sourceIpStr);
       run.desiredStatus = desiredStatus;
       try {
@@ -542,19 +584,23 @@ function finishRun(run: Run): void {
       ? run.reservedMax // Crash recovery retains conservative total accounting.
       : run.nonComputeUsd + (run.compute ? computeChargedUsd(run.compute) : 0);
   if (run.compute) {
-    const accounting = runAccounting(
-      run.accountingBasis,
-      run.usage,
-      run.nonComputeUsd,
-      computeChargedUsd(run.compute),
-      run.costUsd ?? run.reservedMax ?? 0,
-    );
+    const accounting = runAccounting({
+      basis: run.accountingBasis,
+      usage: run.usage,
+      nonComputeUsd: run.nonComputeUsd,
+      compute: run.compute,
+      conservativeTotalUsd: run.costUsd ?? run.reservedMax ?? 0,
+    });
     // Reserve room for the complete fixed evidence in both the status response
     // and the bounded terminal SSE event. Only model prose may be truncated.
     const suffix =
+      (run.gpuOutputs?.length
+        ? `\n[gpu_workspace outputs: ${JSON.stringify(run.gpuOutputs)}]`
+        : '') +
       (run.compute.settled.length
         ? `\n[gpu_workspace final receipts: ${JSON.stringify(run.compute.settled)}]`
-        : '') + `\n[run accounting: ${JSON.stringify(accounting)}]`;
+        : '') +
+      `\n[run accounting: ${JSON.stringify(accounting)}]`;
     const marker = '\n[model output truncated]\n';
     const allowance = MAX_EVENT_TEXT - suffix.length;
     if (allowance < marker.length) throw new Error('GPU settlement evidence exceeds output limit');
@@ -1066,6 +1112,29 @@ export const server = createServer(async (req, res) => {
       });
     }
 
+    // Capability links for GPU outputs. The gateway is private; a public proxy
+    // forwards these paths, and the unguessable token is the authorization.
+    if (req.method === 'GET' && parts[0] === 'artifacts' && parts.length === 3) {
+      let name = '';
+      try {
+        name = decodeURIComponent(parts[2]!);
+      } catch {
+        // A malformed escape cannot name a stored artifact.
+      }
+      const found = artifacts.open(parts[1]!, name);
+      if (!found) return json(res, 404, { error: 'not found' });
+      res.writeHead(200, {
+        'content-type': 'application/octet-stream',
+        'content-length': found.meta.bytes,
+        'content-disposition': `attachment; filename="${found.meta.name}"`,
+        'x-content-sha256': found.meta.sha256,
+        'cache-control': 'private, no-store',
+        'x-content-type-options': 'nosniff',
+      });
+      createReadStream(found.file).pipe(res);
+      return;
+    }
+
     if (req.method === 'GET' && url.pathname === '/readyz') {
       if (!authorized(req, config.authToken)) return json(res, 401, { error: 'unauthorized' });
       const report = await readiness.check();
@@ -1309,6 +1378,8 @@ if (process.env.NODE_ENV !== 'test') {
     void reconcileCompute();
   }, 15_000);
   cleanupTimer.unref();
+  artifacts.prune();
+  setInterval(() => artifacts.prune(), 3_600_000).unref();
   process.on('SIGTERM', () => {
     ledger.kill();
     server.close();
